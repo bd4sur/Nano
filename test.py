@@ -9,11 +9,9 @@ from contextlib import nullcontext
 import torch
 from model import GPTConfig, GPT
 
-# -----------------------------------------------------------------------------
 data_dir = "data"
-init_from = 'resume' # either 'resume' (from an ckpt_dir) or a gpt2 variant (e.g. 'gpt2-xl')
-ckpt_dir = 'ckpt' # ignored if init_from is not 'resume'
-start = "\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+ckpt_dir = 'ckpt'
+prompt = "12345"
 num_samples = 10 # number of samples to draw
 max_new_tokens = 500 # number of tokens generated in each sample
 temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
@@ -21,9 +19,7 @@ top_k = 200 # retain only the top_k most likely tokens, clamp others to have 0 p
 seed = 1337
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
-compile = False # use PyTorch 2.0 to compile the model to be faster
-# exec(open('configurator.py').read()) # overrides from command line or config file
-# -----------------------------------------------------------------------------
+is_compile = False # use PyTorch 2.0 to compile the model to be faster
 
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
@@ -34,7 +30,7 @@ ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torc
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 # init from a model saved in a specific directory
-ckpt_path = os.path.join(ckpt_dir, 'ckpt.pt')
+ckpt_path = os.path.join(os.path.dirname(__file__), ckpt_dir, 'ckpt.pt')
 checkpoint = torch.load(ckpt_path, map_location=device)
 gptconf = GPTConfig(**checkpoint['model_args'])
 model = GPT(gptconf)
@@ -47,11 +43,10 @@ model.load_state_dict(state_dict)
 
 model.eval()
 model.to(device)
-if compile:
+if is_compile:
     model = torch.compile(model) # requires PyTorch 2.0 (optional)
 
 # look for the meta pickle in case it is available in the dataset folder
-
 meta_path = os.path.join(os.path.dirname(__file__), data_dir, 'meta.pkl')
 print(f"Loading meta from {meta_path}...")
 with open(meta_path, 'rb') as f:
@@ -62,8 +57,8 @@ encode = lambda s: [stoi[c] for c in s]
 decode = lambda l: ''.join([itos[i] for i in l])
 
 # encode the beginning of the prompt
-start_ids = encode("大他者")
-x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
+prompt_ids = encode(prompt)
+x = (torch.tensor(prompt_ids, dtype=torch.long, device=device)[None, ...])
 
 # run generation
 with torch.no_grad():

@@ -33,9 +33,9 @@ from model import GPTConfig, GPT
 # === Global configuation begin ==========================
 config = {
     "ckpt_dir": 'ckpt',
-    "eval_interval": 50,
+    "eval_interval": 100,
     "log_interval": 1,
-    "eval_iters": 50,
+    "eval_iters": 5,
     "init_from": 'pretrain', # 'pretrain' or 'finetune'
     # data
     "data_dir": 'data',
@@ -62,9 +62,16 @@ config = {
     "min_lr": 6e-5, # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
     # DDP settings
     "backend": 'nccl', # 'nccl', 'gloo', etc.
-    # system
+
+    # 选择`scaled_dot_product_attention`所使用的kernel
+    #   较早的GPU最好选择"math"
+    "sdp_kernel": "math", # "flash" || "mem_efficient" || "math"
     "device": 'cuda', # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
     "dtype": 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16', # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
+    # 模型编译？
+    #   较早的GPU，如P100和P40，不支持，报错如下：
+    #   RuntimeError: Found Tesla P40 which is too old to be supported by the triton GPU compiler, which is used as the backend.
+    #   Triton only supports devices of CUDA Capability >= 7.0, but your device is of CUDA capability 6.1
     "is_compile": False # use PyTorch 2.0 to compile the model to be faster
 }
 # === Global configuation end ============================
@@ -100,6 +107,7 @@ class TrainGPT():
         self.warmup_iters = config["warmup_iters"]
         self.lr_decay_iters = config["lr_decay_iters"]
         self.min_lr = config["min_lr"]
+        self.sdp_kernel = config["sdp_kernel"]
         self.backend = config["backend"]
         self.device = config["device"]
         self.dtype = config["dtype"]
@@ -126,7 +134,9 @@ class TrainGPT():
         with open(meta_path, "rb") as f:
             meta = pickle.load(f)
         self.vocab_size = meta['vocab_size']
-        print(f"vocab_size = {self.vocab_size} (inside {meta_path})")
+        print(f"# Train set = {len(self.train_data)}")
+        print(f"# Val set = {len(self.val_data)}")
+        print(f"# Vocab size = {self.vocab_size}")
 
     def init_ddp(self):
         # various inits, derived attributes, I/O setup
@@ -149,11 +159,17 @@ class TrainGPT():
             self.is_master_process = True
             _seed_offset = 0
             _ddp_world_size = 1
+
         tokens_per_iter = self.gradient_accumulation_steps * _ddp_world_size * self.batch_size * self.block_size
-        print(f"tokens per iteration will be: {tokens_per_iter:,}")
+        print(f"Is DDP? {self.is_ddp}")
+        print(f"Tokens per iteration = {tokens_per_iter:,}")
 
         if self.is_master_process:
             os.makedirs(os.path.join(os.path.dirname(__file__), self.ckpt_dir), exist_ok=True)
+
+        torch.backends.cuda.enable_flash_sdp(self.sdp_kernel == "flash")
+        torch.backends.cuda.enable_mem_efficient_sdp(self.sdp_kernel == "mem_efficient")
+        torch.backends.cuda.enable_math_sdp(self.sdp_kernel == "math")
 
         torch.manual_seed(1337 + _seed_offset)
         torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
@@ -180,6 +196,7 @@ class TrainGPT():
             print("Initializing a new model for pretrain")
             _gptconf = GPTConfig(**(self.model_args))
             self.model = GPT(_gptconf)
+            print("# Parameters = %.2fM" % (self.model.get_num_params()/1e6,))
         # resume training from a checkpoint.
         elif self.init_from == 'finetune':
             print(f"Resuming training from {self.ckpt_dir}")
@@ -193,6 +210,7 @@ class TrainGPT():
             # create the model
             _gptconf = GPTConfig(**(self.model_args))
             self.model = GPT(_gptconf)
+            print("# Parameters = %.2fM" % (self.model.get_num_params()/1e6,))
             _state_dict = _checkpoint['model']
             # fix the keys of the state dictionary :(
             # honestly no idea how checkpoints sometimes get this prefix, have to debug more
@@ -222,7 +240,7 @@ class TrainGPT():
 
         # compile the model
         if self.is_compile:
-            print("compiling the model... (takes a ~minute)")
+            print("Compiling the model... (takes a ~minute)")
             _unoptimized_model = self.model
             self.model = torch.compile(self.model) # requires PyTorch 2.0
 
@@ -282,11 +300,14 @@ class TrainGPT():
         tb_writer = SummaryWriter(log_dir="log", comment='train')
 
         # training loop
+        best_val_loss = 1e9
         X, Y = self.get_batch('train') # fetch the very first batch
         t0 = time.time()
         local_iter_num = 0 # number of iterations in the lifetime of this process
         raw_model = self.model.module if self.is_ddp else self.model # unwrap DDP container if needed
         running_mfu = -1.0
+
+        print(f"Start training from iteration #{self.iter_num}!")
 
         for iter in range(self.max_iters):
 
@@ -300,9 +321,10 @@ class TrainGPT():
             # evaluate the loss on train/val sets and write checkpoints
             if iter % self.eval_interval == 0 and self.is_master_process:
                 losses = self.estimate_loss()
-                print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                print(f"Iteration #{iter}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, Best val loss {best_val_loss:.4f}")
 
-                if iter > 0:
+                if iter > 0 and losses['val'] < best_val_loss:
+                    best_val_loss = losses['val']
                     _checkpoint = {
                         "model":      raw_model.state_dict(),
                         "optimizer":  self.optimizer.state_dict(),
@@ -310,7 +332,7 @@ class TrainGPT():
                         "iter_num":   iter,
                         "config":     self.config,
                     }
-                    print(f"saving checkpoint to {self.ckpt_dir}")
+                    print(f"Saving checkpoint to {self.ckpt_dir}/ckpt.pt")
                     torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), self.ckpt_dir, 'ckpt.pt'))
 
             # forward backward update, with optional gradient accumulation to simulate larger batch size
@@ -350,7 +372,7 @@ class TrainGPT():
                 if local_iter_num >= 5: # let the training loop settle a bit
                     mfu = raw_model.estimate_mfu(self.batch_size * self.gradient_accumulation_steps, dt)
                     running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-                print(f"iter {iter}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+                print(f"Iteration #{iter}: Train loss = {lossf:.4f}, Duration = {dt*1000:.0f} ms, MFU = {running_mfu*100:.2f}% ({312 * running_mfu:.2f} TFLOPS)")
                 tb_writer.add_scalar('loss@trainset', loss.item(), iter)
 
             self.iter_num += 1
@@ -360,6 +382,7 @@ class TrainGPT():
             destroy_process_group()
 
 def main():
+    print(f"PyTorch version: {torch.__version__}")
     trainer = TrainGPT(config)
     trainer.start()
 
