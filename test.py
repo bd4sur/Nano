@@ -11,8 +11,6 @@ from model import GPTConfig, GPT
 
 data_dir = "data"
 ckpt_dir = 'ckpt'
-prompt = "12345"
-num_samples = 10 # number of samples to draw
 max_new_tokens = 500 # number of tokens generated in each sample
 temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 top_k = 200 # retain only the top_k most likely tokens, clamp others to have 0 probability
@@ -56,14 +54,17 @@ stoi, itos = meta['stoi'], meta['itos']
 encode = lambda s: [stoi[c] for c in s]
 decode = lambda l: ''.join([itos[i] for i in l])
 
-# encode the beginning of the prompt
-prompt_ids = encode(prompt)
-x = (torch.tensor(prompt_ids, dtype=torch.long, device=device)[None, ...])
+def typewriter(token_tensor):
+    print(decode(token_tensor[0].tolist()), end="", flush=True)
 
-# run generation
 with torch.no_grad():
     with ctx:
-        for k in range(num_samples):
-            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
-            print(decode(y[0].tolist()))
-            print('---------------')
+        while True:
+            try:
+                prompt = input("Prompt: ")
+            except EOFError:
+                break
+            x = torch.tensor(encode(prompt), dtype=torch.long, device=device)[None, ...]
+            print(prompt, end="", flush=True)
+            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k, callback=typewriter)
+            print("\n")

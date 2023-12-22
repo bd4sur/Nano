@@ -40,17 +40,17 @@ config = {
     # data
     "data_dir": 'data',
     "gradient_accumulation_steps": 2,
-    "batch_size": 64,
-    "block_size": 512,
+    "batch_size": 128,
+    "block_size": 256,
     # model
-    "n_layer": 8,
-    "n_head": 8,
-    "n_embd": 512,
+    "n_layer": 6,
+    "n_head": 6,
+    "n_embd": 384,
     "dropout": 0.0, # for pretraining 0 is good, for finetuning try 0.1+
     "bias": False, # do we use bias inside LayerNorm and Linear layers?
     # adamw optimizer
     "learning_rate": 6e-4, # max learning rate
-    "max_iters": 2000, # total number of training iterations
+    "max_iters": 10000, # total number of training iterations
     "weight_decay": 1e-1,
     "beta1": 0.9,
     "beta2": 0.99,
@@ -58,7 +58,7 @@ config = {
     # learning rate decay settings
     "decay_lr": True, # whether to decay the learning rate
     "warmup_iters": 300, # how many steps to warm up for
-    "lr_decay_iters": 2000, # should be ~= max_iters per Chinchilla
+    "lr_decay_iters": 10000, # should be ~= max_iters per Chinchilla
     "min_lr": 6e-5, # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
     # DDP settings
     "backend": 'nccl', # 'nccl', 'gloo', etc.
@@ -372,7 +372,7 @@ class TrainGPT():
                 if local_iter_num >= 5: # let the training loop settle a bit
                     mfu = raw_model.estimate_mfu(self.batch_size * self.gradient_accumulation_steps, dt)
                     running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-                print(f"Iteration #{iter}: Train loss = {lossf:.4f}, Duration = {dt*1000:.0f} ms, MFU = {running_mfu*100:.2f}% ({312 * running_mfu:.2f} TFLOPS)")
+                print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} Iteration #{iter}: Train loss = {lossf:.4f}, Duration = {dt*1000:.0f} ms, MFU = {running_mfu*100:.2f}% ({312 * running_mfu:.2f} TFLOPS)")
                 tb_writer.add_scalar('loss@trainset', loss.item(), iter)
 
             self.iter_num += 1

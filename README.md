@@ -3,30 +3,57 @@
 
 ![ ](./nano.jpg)
 
-经典NLP学习项目 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) 的简化复刻版本，供个人学习和测试炼丹炉之用。
+经典NLP学习项目 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) 的简化复刻版本，是生成式大规模语言模型在原理上的完备最小集，供个人赏玩/魔改和炼丹炉煲机之用。
+
+- [Attn] A Vaswani, N Shazeer, N Parmar, et al. [Attention Is All You Need](https://arxiv.org/abs/1706.03762) [J]. Advances in Neural Information Processing Systems, 2017, 30.
+- [GPT-1] A Radford, K Narasimhan, T Salimans, et al. [Improving Language Understanding by Generative Pre-Training](https://s3-us-west-2.amazonaws.com/openai-assets/research-covers/language-unsupervised/language_understanding_paper.pdf) [J]. 2018.
+- [bbycroft] [GPT可视化](https://bbycroft.net/llm)
 
 ## 使用方法
 
-首先安装依赖，建议在虚拟环境中安装。然后准备数据、训练模型、测试模型。
+首先安装依赖，建议在虚拟环境中安装。
 
 ```
-# Install dependencies
+# 建议在虚拟环境中玩耍，例如：
+conda create -n nanogpt python=3.11 pysocks -y
+conda activate nanogpt
+# 然后在虚拟环境中安装依赖
 pip install -r requirements.txt
+```
 
-# Tokenize the raw corpus text
+准备训练数据。
+
+```
 python tokenizer.py
+```
 
-# (optional) Start TensorBoard
+启动TensorBoard以观察损失函数变化情况。（可选）
+
+```
 tensorboard --logdir .
+```
 
-# Start pre-training (DDP)
+预训练：以分布式数据并行（DDP）方式启动训练。
+
+```
 CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node 2 train.py
-# or train on CPU/single-GPU
-python train.py
+```
 
-# Test the DDP pre-trained model
+或者单机单卡或CPU训练（注意将`train.py`中的`device`选项设为`"cpu"`）。
+
+```
+python train.py
+```
+
+交互式文本生成：如果是以DDP方式训练的模型，则执行以下命令。
+
+```
 python -m torch.distributed.run test.py
-# or test the CPU/single-GPU trained model
+```
+
+如果是单机单卡或者CPU训练的模型，则执行以下命令。
+
+```
 python test.py
 ```
 
@@ -39,7 +66,7 @@ python test.py
 - GPU0 (cuda:0)：Nvidia Tesla P100 PCIE 16GB
 - GPU1 (cuda:1)：Nvidia Tesla P40 (24GB)
 
-**实验：多头注意力算子`scaled_dot_product_attention`的性能**
+**多头注意力算子`scaled_dot_product_attention`的性能**
 
 PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135) 的多头注意力计算加速。目前有3种kernel，但是不支持较旧的GPU。分别启用3种kernel，实测相对性能如下：
 
@@ -56,9 +83,12 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 - https://github.com/vllm-project/vllm
 - https://github.com/Dao-AILab/flash-attention
 
-**改造：流式输出**
+**微调和下游任务适配（详见[GPT-1]）**
 
-TODO
+- 分类
+- 后承（蕴涵）
+- 相似度
+- 多选
 
 **魔改：服务于文本嵌入和检索任务**
 
