@@ -10,17 +10,18 @@ import pickle
 
 import numpy as np
 import torch
+import deepspeed
 
 from model import GPTConfig, GPT
 
 # === Global configuation begin ==========================
 config = {
     # GPT Model Args
-    "block_size": 512,
+    "block_size": 256,
     "vocab_size": 10000,
     "n_layer": 12,
     "n_head": 12,
-    "n_embd": 576,
+    "n_embd": 720,
     "dropout": 0.0, # for pretraining 0 is good, for finetuning try 0.1+
     "bias": False, # do we use bias inside LayerNorm and Linear layers?
 
@@ -49,7 +50,7 @@ config = {
     # Misc
     "backend": 'nccl', # 'nccl', 'gloo', etc.
     "sdp_kernel": "math", # 选择`scaled_dot_product_attention`所使用的kernel "flash" || "mem_efficient" || "math"
-    "device": 'cuda:1', # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+    "device": 'cuda', # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 }
 # === Global configuation end ============================
 
@@ -99,6 +100,8 @@ class TrainGPT():
         self.train_data = None
         self.val_data = None
 
+        self.model_engine = None
+
     def log(self, logstr):
         print(logstr)
 
@@ -116,6 +119,8 @@ class TrainGPT():
         self.log(f"# Vocab size = {self.vocab_size}")
 
     def init(self):
+        deepspeed.init_distributed(dist_backend=self.backend)
+
         os.makedirs(os.path.join(os.path.dirname(__file__), self.ckpt_dir), exist_ok=True)
         torch.backends.cuda.enable_flash_sdp(self.sdp_kernel == "flash")
         torch.backends.cuda.enable_mem_efficient_sdp(self.sdp_kernel == "mem_efficient")
@@ -155,14 +160,10 @@ class TrainGPT():
             self.model.load_state_dict(_checkpoint['model'])
             self.iter_num = _checkpoint['iter_num']
 
-        self.model.to(self.device)
+        deepspeed.runtime.zero.stage_1_and_2.estimate_zero2_model_states_mem_needs_all_live(self.model, num_gpus_per_node=2, num_nodes=1, additional_buffer_factor=1.5)
 
-        # optimizer
-        _device_type = 'cuda' if 'cuda' in self.device else 'cpu'
-        self.optimizer = self.model.configure_optimizers(self.weight_decay, self.learning_rate, (self.beta1, self.beta2), _device_type)
-        if self.init_from == 'finetune':
-            self.optimizer.load_state_dict(_checkpoint['optimizer'])
-        _checkpoint = None # free up memory
+        config_path = os.path.join(os.path.dirname(__file__), 'ds_config.json')
+        self.model_engine, self.optimizer, _, _ = deepspeed.initialize(model=self.model, config=config_path)
 
     def get_batch(self, phase):
         dataset = self.train_data if phase == 'train' else self.val_data
@@ -236,13 +237,13 @@ class TrainGPT():
                         "config":     self.config,
                     }
                     self.log(f"Saving checkpoint to {self.ckpt_dir}/ckpt.pt")
-                    torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), self.ckpt_dir, 'ckpt.pt'))
+                    # torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), self.ckpt_dir, 'ckpt.pt'))
+                    self.model_engine.save_checkpoint(os.path.join(os.path.dirname(__file__), self.ckpt_dir, 'ckpt_ds.pt'))
 
             _, loss = self.model(X, Y)
             X, Y = self.get_batch('train')
-            loss.backward()
-            self.optimizer.step()
-            self.optimizer.zero_grad(set_to_none=True)
+            self.model_engine.backward(loss)
+            self.model_engine.step()
 
             # timing and logging
             t1 = time.time()

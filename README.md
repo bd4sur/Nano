@@ -33,10 +33,12 @@ python tokenizer.py
 tensorboard --logdir .
 ```
 
+### 数据并行训练
+
 预训练：以分布式数据并行（DDP）方式启动训练。
 
 ```
-CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node 2 train.py
+CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node 2 train_ddp.py
 ```
 
 或者单机单卡或CPU训练（注意将`train.py`中的`device`选项设为`"cpu"`）。
@@ -45,7 +47,15 @@ CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 python -m torch.distributed.run --npr
 python train.py
 ```
 
-交互式文本生成：如果是以DDP方式训练的模型，则执行以下命令。
+### 基于DeepSpeed的ZeRO存储优化训练
+
+```
+deepspeed --num_nodes=1 --num_gpus=2 train_ds.py --deepspeed --deepspeed_config ds_config.json
+```
+
+### 交互式文本生成
+
+如果是以DDP方式训练的模型，则执行以下命令。
 
 ```
 python -m torch.distributed.run test.py
@@ -57,14 +67,25 @@ python -m torch.distributed.run test.py
 python test.py
 ```
 
+如果是DeepSpeed训练的模型，则执行：
+
+```
+TODO
+```
+
 ## 研究笔记
 
 炼丹炉配置：
 
-- CPU：Intel Xeon E5-2686 v4 @ 2.30GHz
-- Mem：128GB DDR4 2400Mtps
-- GPU0 (cuda:0)：Nvidia Tesla P100 PCIE 16GB
-- GPU1 (cuda:1)：Nvidia Tesla P40 (24GB)
+```
+OS: Ubuntu 20.04.6 LTS x86_64
+Host: PowerEdge R730
+Kernel: 5.4.0-169-generic
+CPU: Intel Xeon E5-2686 v4 (72) @ 3.000GHz
+GPU: NVIDIA Tesla P100 PCIe 16GB
+GPU: NVIDIA Tesla P40
+Memory: 128806MiB
+```
 
 **多头注意力算子`scaled_dot_product_attention`的性能**
 

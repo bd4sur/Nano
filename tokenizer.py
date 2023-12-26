@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import numpy as np
+from tqdm import tqdm
 
 # === configuation begin ==========================
 data_dir = "data"
@@ -20,7 +21,7 @@ print(f"length of dataset in characters: {len(fulltext):,}")
 
 chars = sorted(list(set(fulltext)))
 vocab_size = len(chars)
-print("all the unique characters:", ''.join(chars))
+# print("all the unique characters:", ''.join(chars))
 print(f"vocab size: {vocab_size:,}")
 
 # create a mapping from characters to integers
@@ -33,19 +34,16 @@ def decode(l):
 
 # 按行切成句子，并按句子随机分成测试集和验证集
 # 建议对数据集作预处理：一行一句
-train_text = ""
-val_text = ""
+train_ids = []
+val_ids = []
 all_sentences = fulltext.split("\n")
 line_indexes = list(range(len(all_sentences)))
 random.shuffle(line_indexes)
-for li in range(0, int(len(all_sentences) * 0.9)):
-    train_text = train_text + all_sentences[line_indexes[li]]
-for li in range(int(len(all_sentences) * 0.9), len(all_sentences)):
-    val_text = val_text + all_sentences[line_indexes[li]]
+for li in tqdm(range(0, int(len(all_sentences) * 0.9))):
+    train_ids.extend(encode(all_sentences[line_indexes[li]]))
+for li in tqdm(range(int(len(all_sentences) * 0.9), len(all_sentences))):
+    val_ids.extend(encode(all_sentences[line_indexes[li]]))
 
-# encode both to integers
-train_ids = encode(train_text)
-val_ids = encode(val_text)
 print(f"train has {len(train_ids):,} tokens")
 print(f"val has {len(val_ids):,} tokens")
 
