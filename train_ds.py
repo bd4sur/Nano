@@ -7,6 +7,7 @@ import os
 import time
 import math
 import pickle
+import json
 
 import numpy as np
 import torch
@@ -17,7 +18,7 @@ from model import GPTConfig, GPT
 # === Global configuation begin ==========================
 config = {
     # GPT Model Args
-    "block_size": 256,
+    "block_size": 300,
     "vocab_size": 10000,
     "n_layer": 12,
     "n_head": 12,
@@ -229,16 +230,10 @@ class TrainGPT():
 
                 if iter > 0 and losses['val'] < best_val_loss:
                     best_val_loss = losses['val']
-                    _checkpoint = {
-                        "model":      self.model.state_dict(),
-                        "optimizer":  self.optimizer.state_dict(),
-                        "model_args": self.model_args,
-                        "iter_num":   iter,
-                        "config":     self.config,
-                    }
-                    self.log(f"Saving checkpoint to {self.ckpt_dir}/ckpt.pt")
-                    # torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), self.ckpt_dir, 'ckpt.pt'))
-                    self.model_engine.save_checkpoint(os.path.join(os.path.dirname(__file__), self.ckpt_dir, 'ckpt_ds.pt'))
+                    self.log(f"Saving checkpoint to {self.ckpt_dir}/ds")
+                    self.model_engine.save_checkpoint(os.path.join(os.path.dirname(__file__), self.ckpt_dir, 'ds'))
+                    with open(os.path.join(os.path.dirname(__file__), self.ckpt_dir, 'ds/model_args_ds.json'), "w", encoding="utf-8") as f:
+                        json.dump(self.model_args, f)
 
             _, loss = self.model(X, Y)
             X, Y = self.get_batch('train')

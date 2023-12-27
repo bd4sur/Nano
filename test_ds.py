@@ -5,13 +5,14 @@ BD4SUR 2023.12
 
 import os
 import pickle
+import json
 import torch
 from model import GPTConfig, GPT
 
 data_dir = "data"
-ckpt_dir = 'ckpt'
+ckpt_dir = 'ckpt/ds'
 max_new_tokens = 500
-temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+temperature = 0.8
 top_k = 200
 seed = 1337
 device = 'cuda'
@@ -21,11 +22,14 @@ torch.cuda.manual_seed(seed)
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-ckpt_path = os.path.join(os.path.dirname(__file__), ckpt_dir, 'ckpt.pt')
+# init from a model saved in a specific directory
+ckpt_path = os.path.join(os.path.dirname(__file__), ckpt_dir, 'ckpt_ds.pt')
 checkpoint = torch.load(ckpt_path, map_location=device)
-gptconf = GPTConfig(**checkpoint['model_args'])
+with open(os.path.join(os.path.dirname(__file__), ckpt_dir, 'model_args_ds.json')) as f:
+    model_args = json.load(f)
+gptconf = GPTConfig(**model_args)
 model = GPT(gptconf)
-model.load_state_dict(checkpoint['model'])
+model.load_state_dict(checkpoint)
 
 model.eval()
 model.to(device)

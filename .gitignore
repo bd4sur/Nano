@@ -3,6 +3,8 @@
 .ipynb_checkpoints/
 .vscode
 __pycache__/
+ckpt/
+data/
 *.bin
 *.pkl
 *.pt

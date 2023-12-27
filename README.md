@@ -8,6 +8,8 @@
 - [Attn] A Vaswani, N Shazeer, N Parmar, et al. [Attention Is All You Need](https://arxiv.org/abs/1706.03762) [J]. Advances in Neural Information Processing Systems, 2017, 30.
 - [GPT-1] A Radford, K Narasimhan, T Salimans, et al. [Improving Language Understanding by Generative Pre-Training](https://s3-us-west-2.amazonaws.com/openai-assets/research-covers/language-unsupervised/language_understanding_paper.pdf) [J]. 2018.
 - [bbycroft] [GPT可视化](https://bbycroft.net/llm)
+- [2001.08361] [Scaling Laws for Neural Language Models](https://arxiv.org/abs/2001.08361)
+- [Chinchilla] [Training Compute-Optimal Large Language Models](https://arxiv.org/abs/2203.15556)
 
 ## 使用方法
 
@@ -33,44 +35,43 @@ python tokenizer.py
 tensorboard --logdir .
 ```
 
-### 数据并行训练
+### 单机单卡或者分布式数据并行训练
 
-预训练：以分布式数据并行（DDP）方式启动训练。
+以分布式数据并行（DDP）方式启动训练：
 
 ```
 CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node 2 train_ddp.py
 ```
 
-或者单机单卡或CPU训练（注意将`train.py`中的`device`选项设为`"cpu"`）。
+或者单机单卡或CPU训练（注意将`train.py`中的`device`选项设为`"cpu"`）：
 
 ```
 python train.py
 ```
 
-### 基于DeepSpeed的ZeRO存储优化训练
+### 基于DeepSpeed的3D并行训练
+
+可以修改`ds_config.json`以优化训练效果。这里默认是采用ZeRO3-Offload方式训练。以本人炼丹炉的资源，实测发现，最多可以预训练约85M参数的模型。
 
 ```
 deepspeed --num_nodes=1 --num_gpus=2 train_ds.py --deepspeed --deepspeed_config ds_config.json
 ```
 
-### 交互式文本生成
+### 电子鹦鹉：交互式文本生成
 
-如果是以DDP方式训练的模型，则执行以下命令。
-
-```
-python -m torch.distributed.run test.py
-```
-
-如果是单机单卡或者CPU训练的模型，则执行以下命令。
+如果是以DDP方式或者单机单卡或者CPU训练的模型，则执行以下命令。
 
 ```
 python test.py
 ```
 
-如果是DeepSpeed训练的模型，则执行：
+如果是DeepSpeed训练的模型，则需要先执行`ckpt/ds`目录中的转换脚本，将其转化为PyTorch能够接受的state_dict格式，再执行推理脚本：
 
 ```
-TODO
+cd nano-gpt/ckpt/ds
+python zero_to_fp32.py . ckpt_ds.pt
+cd nano-gpt
+python test_ds.py
 ```
 
 ## 研究笔记
