@@ -51,10 +51,17 @@ python train.py
 
 ### 基于DeepSpeed的3D并行训练
 
-可以修改`ds_config.json`以优化训练效果。这里默认是采用ZeRO3-Offload方式训练。以本人炼丹炉的资源，实测发现，最多可以预训练约85M参数的模型。
+可以修改`ds_config.json`以优化训练效果。注意：根据[文档](https://www.deepspeed.ai/docs/config-json/)，`train_batch_size` must be equal to `train_micro_batch_size_per_gpu` * `gradient_accumulation` * number of GPUs。这里采用2节点4卡ZeRO3-Offload方式训练。以本人炼丹炉的资源，实测发现，最多可以预训练约85M参数的模型。
 
 ```
-deepspeed --num_nodes=1 --num_gpus=2 train_ds.py --deepspeed --deepspeed_config ds_config.json
+deepspeed --hostfile=hostfile.txt train_ds.py --deepspeed --deepspeed_config ds_config.json
+```
+
+其中`hostfile.txt`的内容如下：
+
+```
+192.168.10.52 slots=2
+192.168.10.61 slots=2
 ```
 
 ### 电子鹦鹉：交互式文本生成
@@ -76,17 +83,24 @@ python test_ds.py
 
 ## 研究笔记
 
-炼丹炉配置：
+炼丹炉（集群，嘿嘿）配置：
 
-```
-OS: Ubuntu 20.04.6 LTS x86_64
-Host: PowerEdge R730
-Kernel: 5.4.0-169-generic
-CPU: Intel Xeon E5-2686 v4 (72) @ 3.000GHz
-GPU: NVIDIA Tesla P100 PCIe 16GB
-GPU: NVIDIA Tesla P40
-Memory: 128806MiB
-```
+||0号机|1号机|
+|--|--|--|
+|集群内IP|192.168.10.52|192.168.10.61|
+|机器型号|PowerEdge R730|PowerEdge R730|
+|OS|Ubuntu 20.04.6 LTS|Ubuntu 20.04.6 LTS|
+|内核|5.4.0-169|5.15.0-91|
+|CPU|双路 Xeon E5-2686 v4|双路 Xeon E5-2680 v4|
+|内存|128GB|32GB|
+|GPU驱动版本|545.23.08|545.23.08|
+|CUDA版本|12.3|12.3|
+|GPU 0|Tesla P100 PCIe 16GB|Tesla P100 PCIe 16GB|
+|GPU 1|Tesla P100 PCIe 16GB|Tesla P40|
+|PyTorch|2.1.2+cu121|2.1.2+cu121|
+|DeepSpeed|0.12.6|0.13.1|
+
+两机之间通过 Cisco Catalyst 4948E 交换机的两个10GbE的SFP+光口进行通信，通过iperf3测速，可以跑满10Gbps。
 
 **多头注意力算子`scaled_dot_product_attention`的性能**
 

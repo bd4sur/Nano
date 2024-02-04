@@ -252,6 +252,11 @@ class TrainGPT():
             self.iter_num += 1
 
 def main():
+    # 多机分布式训练情况下，为每个节点设置环境变量
+    ds_env = os.environ.copy()
+    ds_env["PATH"] = "/home/bd4sur/anaconda3/envs/nanogpt/bin:" + ds_env["PATH"]
+    os.environ.update(ds_env)
+
     print(f"PyTorch version: {torch.__version__}")
     trainer = TrainGPT(config)
     trainer.start()

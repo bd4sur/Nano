@@ -35,7 +35,7 @@ config = {
     # GPT Model Args
     "block_size": 512,
     "vocab_size": 10000,
-    "n_layer": 12,
+    "n_layer": 10,
     "n_head": 12,
     "n_embd": 576,
     "dropout": 0.0, # for pretraining 0 is good, for finetuning try 0.1+
