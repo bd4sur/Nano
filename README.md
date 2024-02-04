@@ -1,7 +1,7 @@
 
 # nano-gpt
 
-![ ](./nano.jpg)
+![ ](./nano-sakamoto.gif)
 
 经典NLP学习项目 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) 的简化复刻版本，是生成式大规模语言模型在原理上的完备最小集，供个人赏玩/魔改和炼丹炉煲机之用。
 
