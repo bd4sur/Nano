@@ -81,6 +81,10 @@ cd nano-gpt
 python test_ds.py
 ```
 
+## 解决Q问题
+
+带后缀的py文件。
+
 ## 研究笔记
 
 炼丹炉（集群，嘿嘿）配置：
