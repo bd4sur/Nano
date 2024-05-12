@@ -118,6 +118,40 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
+@dataclass
+class ModelConfig:
+    # GPT Model Args
+    block_size: int = 128
+    vocab_size: int = 10000
+    n_layer: int = 8
+    n_head: int = 8
+    n_embd: int = 128
+    dropout: int = 0.0
+    bias: bool = False
+    # AdamW Optimizer Args
+    learning_rate: float = 6e-4
+    max_iters: int = 100000
+    weight_decay: float = 1e-1
+    beta1: float = 0.9
+    beta2: float = 0.99
+    # Learning Rate Scheduler
+    decay_lr: bool = True
+    warmup_iters: int = 300
+    lr_decay_iters: int = 100000
+    min_lr: float = 6e-5
+    # Training Task
+    init_from: str = "pretrain"
+    batch_size: int = 600
+    random_seed: int = 114514
+    data_dir: str = "dataset"
+    ckpt_dir: str = "checkpoint"
+    eval_interval: int = 100
+    log_interval: int = 1
+    eval_iters: int = 5
+    # Misc
+    backend: str = "nccl"
+    device: str = "cuda:0"
+
 class GPT(nn.Module):
 
     def __init__(self, config):
@@ -182,11 +216,10 @@ class GPT(nn.Module):
         x = self.transformer.ln_f(x)
 
         if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            a = logits[:, -1, :]# 一个batch中每句话最后一个token的embd
-            t = targets.view(-1) # 一个batch中
-            loss = F.cross_entropy(a, t, ignore_index=-1)
+            # NOTE 此处有变化：target.shape=(BatchSize)即训练集中每句话的下一个token
+            logits = self.lm_head(x) # shape=(BatchSize, BlockSize, EmbeddingLen)
+            a = logits[:, -1, :] # shape=(BatchSize, EmbeddingLen)一个batch中每句话最后一个token的嵌入向量
+            loss = F.cross_entropy(a, targets, ignore_index=-1)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
