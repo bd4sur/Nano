@@ -3,13 +3,33 @@
 
 ![ ](./nano-sakamoto.gif)
 
-经典NLP学习项目 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) 的简化复刻版本，是生成式大规模语言模型在原理上的完备最小集，供个人赏玩/魔改和炼丹炉煲机之用。
+经典NLP学习项目 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) 的简化复刻版本，供个人赏玩、魔改和炼丹炉煲机之用。
 
 - [Attn] A Vaswani, N Shazeer, N Parmar, et al. [Attention Is All You Need](https://arxiv.org/abs/1706.03762) [J]. Advances in Neural Information Processing Systems, 2017, 30.
 - [GPT-1] A Radford, K Narasimhan, T Salimans, et al. [Improving Language Understanding by Generative Pre-Training](https://s3-us-west-2.amazonaws.com/openai-assets/research-covers/language-unsupervised/language_understanding_paper.pdf) [J]. 2018.
 - [bbycroft] [GPT可视化](https://bbycroft.net/llm)
 - [2001.08361] [Scaling Laws for Neural Language Models](https://arxiv.org/abs/2001.08361)
 - [Chinchilla] [Training Compute-Optimal Large Language Models](https://arxiv.org/abs/2203.15556)
+
+## 使用方法（新）
+
+### 玩法1：人类的本质是复读机！
+
+- 数据预处理：`data.py`主函数中调用`generate_text`，执行。
+- 训练模型：`train.py`中，修改`block_size`为适当值，修改`eval_only_last_token_loss`为`False`。
+- 测试模型：`test.py`中，主函数`test(False)`。
+
+注：仓库中增加了来自[hhiim/Lacan](https://github.com/hhiim/Lacan)的精神分析黑话数据集，特此致谢。
+
+### 玩法2：丘成桐先生也答不出的Q问题
+
+所谓“Q问题”，是《鲁豫有约》20150902期节目中，主持人给丘成桐出的一道脑筋急转弯题。
+
+![ ](./q.jpg)
+
+- 数据预处理：`data.py`主函数中调用`generate_q`，执行。
+- 训练模型：`train.py`中，修改`block_size`为`q_digits() + 1`，修改`eval_only_last_token_loss`为`True`（不改也行，但是有点奇怪）。
+- 测试模型：`test.py`中，主函数`test(True)`。
 
 ## 使用方法
 
@@ -81,10 +101,6 @@ cd nano-gpt
 python test_ds.py
 ```
 
-## 解决Q问题
-
-带后缀的py文件。
-
 ## 研究笔记
 
 炼丹炉（集群，嘿嘿）配置：
@@ -129,12 +145,3 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 - 后承（蕴涵）
 - 相似度
 - 多选
-
-**魔改：服务于文本嵌入和检索任务**
-
-为什么我认为检索问题极端重要？因为许多问题不在于“不知道”，而在于“不知道知道”。大模型知道一切，但是我们不知道祂知道什么，祂自己也不知道。想要“知道知道”，就要靠检索。
-
-文本生成任务，也可以理解成在prompt的触发下检索出相关信息的检索过程。
-
-- https://github.com/Muennighoff/sgpt
-- https://www.zhihu.com/question/510987022/answer/2697787852

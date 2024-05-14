@@ -109,16 +109,6 @@ class Block(nn.Module):
         return x
 
 @dataclass
-class GPTConfig:
-    block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    dropout: float = 0.0
-    bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-
-@dataclass
 class ModelConfig:
     # GPT Model Args
     block_size: int = 128
@@ -143,6 +133,7 @@ class ModelConfig:
     init_from: str = "pretrain"
     batch_size: int = 600
     random_seed: int = 114514
+    eval_only_last_token_loss: bool = False
     data_dir: str = "dataset"
     ckpt_dir: str = "checkpoint"
     eval_interval: int = 100
@@ -201,7 +192,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, eval_only_last_token_loss=False):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -215,11 +206,17 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
 
-        if targets is not None:
-            # NOTE 此处有变化：target.shape=(BatchSize)即训练集中每句话的下一个token
+        # 计算损失：分成两种情况，一种是计算所有tokens的损失（用于文本生成任务），另一种是只计算最后一个字符的损失（用于Q问题）
+        if targets is not None: # target.shape=(BatchSize, BlockSize)
             logits = self.lm_head(x) # shape=(BatchSize, BlockSize, EmbeddingLen)
-            a = logits[:, -1, :] # shape=(BatchSize, EmbeddingLen)一个batch中每句话最后一个token的嵌入向量
-            loss = F.cross_entropy(a, targets, ignore_index=-1)
+            if eval_only_last_token_loss:
+                a = logits[:, -1, :] # shape=(BatchSize, EmbeddingLen) batch中每句话最后一个token的嵌入向量
+                b = targets[:, -1] # shape(BatchSize) batch中每句话最后一个token的code
+                loss = F.cross_entropy(a, b, ignore_index=-1)
+            else:
+                a = logits.view(-1, logits.size(-1)) # shape=(BatchSize*BlockSize, EmbeddingLen)
+                b = targets.view(-1) # shape=(BatchSize*BlockSize)
+                loss = F.cross_entropy(a, b, ignore_index=-1)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim

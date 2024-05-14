@@ -6,16 +6,17 @@ import pickle
 import numpy as np
 import torch
 
+from qfunc import q_digits
 from model import ModelConfig, GPT
 
 # === Global configuation begin ==========================
 config = {
     # GPT Model Args
-    "block_size": 9,
+    "block_size": 128, # 如果是Q问题，则为 q_digits() + 1,
     "vocab_size": 10000,
-    "n_layer": 2,
-    "n_head": 2,
-    "n_embd": 32,
+    "n_layer": 4,
+    "n_head": 4,
+    "n_embd": 64,
     "dropout": 0.0, # for pretraining 0 is good, for finetuning try 0.1+
     "bias": False, # do we use bias inside LayerNorm and Linear layers?
 
@@ -36,6 +37,7 @@ config = {
     "init_from": 'pretrain', # 'pretrain' or 'finetune'
     "batch_size": 100,
     "random_seed": 114514,
+    "eval_only_last_token_loss": False, # 如果是Q问题，则为True；如果是NLG问题，则为False
     "data_dir": 'data_q',
     "ckpt_dir": 'ckpt_q',
     "eval_interval": 100,
@@ -81,29 +83,23 @@ class TrainGPT():
     def init(self):
         os.makedirs(os.path.join(os.path.dirname(__file__), self.config.ckpt_dir), exist_ok=True)
         torch.manual_seed(self.config.random_seed)
-
-        # init a new model
+        # init a new model from scratch
         self.log("Initializing a new model for pretrain")
         self.model = GPT(self.config)
-        self.log("# Parameters = %.2fM" % (self.model.get_num_params()/1e6,))
-
         self.model.to(self.config.device)
-
+        self.log("# Parameters = %.2fM" % (self.model.get_num_params()/1e6,))
         # optimizer
         _device_type = 'cuda' if 'cuda' in self.config.device else 'cpu'
         self.optimizer = self.model.configure_optimizers(self.config.weight_decay, self.config.learning_rate, (self.config.beta1, self.config.beta2), _device_type)
-        if self.config.init_from == 'finetune':
-            self.optimizer.load_state_dict(_checkpoint['optimizer'])
-        _checkpoint = None # free up memory
 
     def get_batch(self, phase):
         dataset = self.train_data if phase == 'train' else self.val_data
-        # 随机的行起始位置
-        ix = torch.randint(int(len(dataset) / 11), (self.config.batch_size,))
-        # 随机取出一行（88888888-x\n），但是只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
-        x = torch.stack([torch.from_numpy((dataset[i*11 : i*11+self.config.block_size]).astype(np.int64)) for i in ix])
-        # 取出欲生成的token，构成tensor，shape=(batch_size)
-        y = torch.from_numpy(np.array([dataset[i*11+self.config.block_size] for i in ix]).astype(np.int64))
+        # 随机选一批训练数据项
+        ix = torch.randint(len(dataset), (self.config.batch_size,))
+        # 取出一批数据，每条数据只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
+        x = torch.stack([torch.from_numpy((dataset[i][0 : self.config.block_size]).astype(np.int64)) for i in ix])
+        # 这批数据每一条都右移一个字符，作为预测目标
+        y = torch.stack([torch.from_numpy((dataset[i][1 : self.config.block_size + 1]).astype(np.int64)) for i in ix])
         x, y = x.to(self.config.device), y.to(self.config.device)
         return x, y
 
@@ -116,7 +112,7 @@ class TrainGPT():
             losses = torch.zeros(self.config.eval_iters)
             for k in range(self.config.eval_iters):
                 X, Y = self.get_batch(phase)
-                _, loss = self.model(X, Y)
+                _, loss = self.model(X, Y, self.config.eval_only_last_token_loss)
                 losses[k] = loss.item()
             loss_value[phase] = losses.mean()
         self.model.train()
@@ -172,7 +168,7 @@ class TrainGPT():
                     self.log(f"Saving checkpoint to {self.config.ckpt_dir}/ckpt.pt")
                     torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), self.config.ckpt_dir, 'ckpt.pt'))
 
-            _, loss = self.model(X, Y)
+            _, loss = self.model(X, Y, self.config.eval_only_last_token_loss)
             X, Y = self.get_batch('train')
             loss.backward()
             self.optimizer.step()

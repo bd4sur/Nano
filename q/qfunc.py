@@ -1,4 +1,7 @@
 
+def q_digits():
+    return 8
+
 # Q函数：一串数字中有多少个圈儿
 def q_function(number: int, num_digits: int) -> int:
     """
