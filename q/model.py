@@ -18,6 +18,43 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+@dataclass
+class ModelConfig:
+    # GPT Model Args
+    block_size: int = 128
+    vocab_size: int = 10000
+    n_layer: int = 8
+    n_head: int = 8
+    n_embd: int = 128
+    dropout: int = 0.0
+    bias: bool = False
+    is_causal: bool = True
+    # AdamW Optimizer Args
+    learning_rate: float = 6e-4
+    max_iters: int = 100000
+    weight_decay: float = 1e-1
+    beta1: float = 0.9
+    beta2: float = 0.99
+    # Learning Rate Scheduler
+    decay_lr: bool = True
+    warmup_iters: int = 300
+    lr_decay_iters: int = 100000
+    min_lr: float = 6e-5
+    # Training Task
+    init_from: str = "pretrain"
+    batch_size: int = 600
+    random_seed: int = 114514
+    eval_only_last_token_loss: bool = False
+    data_dir: str = "dataset"
+    ckpt_dir: str = "checkpoint"
+    eval_interval: int = 100
+    log_interval: int = 1
+    eval_iters: int = 5
+    # Misc
+    backend: str = "nccl"
+    device: str = "cuda:0"
+
+
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
@@ -29,7 +66,7 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
-class CausalSelfAttention(nn.Module):
+class MaskedSelfAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
@@ -44,13 +81,16 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+        # is causal self attention?
+        self.is_causal = config.is_causal
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
+            if self.is_causal:
+                # causal mask to ensure that attention is only applied to the left in the input sequence
+                self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                                .view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
@@ -64,7 +104,7 @@ class CausalSelfAttention(nn.Module):
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=self.is_causal)
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -99,7 +139,7 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CausalSelfAttention(config)
+        self.attn = MaskedSelfAttention(config)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
@@ -108,40 +148,6 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x
 
-@dataclass
-class ModelConfig:
-    # GPT Model Args
-    block_size: int = 128
-    vocab_size: int = 10000
-    n_layer: int = 8
-    n_head: int = 8
-    n_embd: int = 128
-    dropout: int = 0.0
-    bias: bool = False
-    # AdamW Optimizer Args
-    learning_rate: float = 6e-4
-    max_iters: int = 100000
-    weight_decay: float = 1e-1
-    beta1: float = 0.9
-    beta2: float = 0.99
-    # Learning Rate Scheduler
-    decay_lr: bool = True
-    warmup_iters: int = 300
-    lr_decay_iters: int = 100000
-    min_lr: float = 6e-5
-    # Training Task
-    init_from: str = "pretrain"
-    batch_size: int = 600
-    random_seed: int = 114514
-    eval_only_last_token_loss: bool = False
-    data_dir: str = "dataset"
-    ckpt_dir: str = "checkpoint"
-    eval_interval: int = 100
-    log_interval: int = 1
-    eval_iters: int = 5
-    # Misc
-    backend: str = "nccl"
-    device: str = "cuda:0"
 
 class GPT(nn.Module):
 
@@ -218,10 +224,12 @@ class GPT(nn.Module):
                 b = targets.view(-1) # shape=(BatchSize*BlockSize)
                 loss = F.cross_entropy(a, b, ignore_index=-1)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            if self.config.is_causal:
+                # inference-time mini-optimization: only forward the lm_head on the very last position
+                logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            else:
+                logits = self.lm_head(x)
             loss = None
-
         return logits, loss
 
     def crop_block_size(self, block_size):
@@ -324,3 +332,17 @@ class GPT(nn.Module):
         # sample from the distribution
         idx_next = torch.multinomial(probs, num_samples=1)
         return idx_next
+
+    @torch.no_grad()
+    def generate_sequence(self, idx, temperature=1.0, top_k=None):
+        idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+        logits, _ = self(idx_cond)
+        output_idx = []
+        for i in range(logits.size(1)):
+            lg = logits[:, i, :] / temperature
+            if top_k is not None:
+                v, _ = torch.topk(lg, min(top_k, lg.size(-1)))
+                lg[lg < v[:, [-1]]] = -float('Inf')
+            probs = F.softmax(lg, dim=-1)
+            output_idx.append(torch.multinomial(probs, num_samples=1))
+        return output_idx

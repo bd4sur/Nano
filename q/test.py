@@ -9,7 +9,7 @@ data_dir = "data_q"
 ckpt_dir = 'ckpt_q'
 device = 'cuda'
 
-def test(is_q=False):
+def test(scene="q"):
 
     # 读取模型检查点和训练配置
     ckpt_path = os.path.join(os.path.dirname(__file__), ckpt_dir, 'ckpt.pt')
@@ -41,7 +41,7 @@ def test(is_q=False):
 
     # 开始推理
     with torch.no_grad():
-        if is_q:
+        if scene == "q":
             ok_count = 0
             total_count = 0
             label = ""
@@ -58,6 +58,27 @@ def test(is_q=False):
                     ok_count += 1
                     label = "√"
                 print(f"({int(ok_count / total_count * 100)}%) [{label}] {prompt}{qval}")
+        elif scene == "sorting":
+            ok_count = 0
+            total_count = 0
+            label = ""
+            qdigits = q_digits()
+            for i in range(0, 100000):
+                n = random.randint(0, 10 ** qdigits)
+                input_seq = f"{n + 10 ** qdigits}"[1:]
+                target_seq = "".join(sorted(list(input_seq)))
+                x = torch.tensor(encode(input_seq), dtype=torch.long, device=device)[None, ...]
+                y = model.generate_sequence(x, temperature=1, top_k=1)
+                output_list = []
+                for t in range(len(y)):
+                    output_list.append(decode(y[t][0].tolist()))
+                output_seq = "".join(output_list)
+                label = "×"
+                total_count += 1
+                if target_seq == output_seq:
+                    ok_count += 1
+                    label = "√"
+                print(f"({int(ok_count / total_count * 100)}%) [{label}] {input_seq} - {output_seq}")
         else:
             while True:
                 try:
@@ -70,7 +91,7 @@ def test(is_q=False):
                 print("\n")
 
 def main():
-    test(False)
+    test("")
 
 if __name__ == "__main__":
     main()

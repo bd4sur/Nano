@@ -16,8 +16,8 @@
 ### 玩法1：人类的本质是复读机！
 
 - 数据预处理：`data.py`主函数中调用`generate_text`，执行。
-- 训练模型：`train.py`中，修改`block_size`为适当值，修改`eval_only_last_token_loss`为`False`。
-- 测试模型：`test.py`中，主函数`test(False)`。
+- 训练模型：`train.py`中，修改`block_size`为适当值，修改`is_causal`为`True`，修改`eval_only_last_token_loss`为`False`。
+- 测试模型：`test.py`中，主函数`test()`。
 
 注：仓库中增加了来自[hhiim/Lacan](https://github.com/hhiim/Lacan)的精神分析黑话数据集，特此致谢。
 
@@ -27,9 +27,15 @@
 
 ![ ](./q.jpg)
 
-- 数据预处理：`data.py`主函数中调用`generate_q`，执行。
-- 训练模型：`train.py`中，修改`block_size`为`q_digits() + 1`，修改`eval_only_last_token_loss`为`True`（不改也行，但是有点奇怪）。
-- 测试模型：`test.py`中，主函数`test(True)`。
+- 数据预处理：`data.py`主函数中调用`generate_problem_q`，执行。
+- 训练模型：`train.py`中，修改`block_size`为`q_digits() + 1`，修改`is_causal`为`True`，修改`eval_only_last_token_loss`为`True`（不改也行，但是有点奇怪）。
+- 测试模型：`test.py`中，主函数`test("q")`。
+
+### 玩法3：排序
+
+- 数据预处理：`data.py`主函数中调用`generate_sorting`，执行。
+- 训练模型：`train.py`中，修改`block_size`为`q_digits()`，修改`is_causal`为`False`，修改`eval_only_last_token_loss`为`False`。
+- 测试模型：`test.py`中，主函数`test("sorting")`。
 
 ## 使用方法
 

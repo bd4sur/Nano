@@ -14,11 +14,12 @@ config = {
     # GPT Model Args
     "block_size": 128, # 如果是Q问题，则为 q_digits() + 1,
     "vocab_size": 10000,
-    "n_layer": 4,
+    "n_layer": 2,
     "n_head": 4,
     "n_embd": 64,
     "dropout": 0.0, # for pretraining 0 is good, for finetuning try 0.1+
     "bias": False, # do we use bias inside LayerNorm and Linear layers?
+    "is_causal": True, # 如果是排序问题，则为False
 
     # AdamW Optimizer Args
     "learning_rate": 6e-4, # max learning rate
@@ -35,7 +36,7 @@ config = {
 
     # Training Task
     "init_from": 'pretrain', # 'pretrain' or 'finetune'
-    "batch_size": 100,
+    "batch_size": 300,
     "random_seed": 114514,
     "eval_only_last_token_loss": False, # 如果是Q问题，则为True；如果是NLG问题，则为False
     "data_dir": 'data_q',
@@ -96,12 +97,20 @@ class TrainGPT():
         dataset = self.train_data if phase == 'train' else self.val_data
         # 随机选一批训练数据项
         ix = torch.randint(len(dataset), (self.config.batch_size,))
-        # 取出一批数据，每条数据只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
-        x = torch.stack([torch.from_numpy((dataset[i][0 : self.config.block_size]).astype(np.int64)) for i in ix])
-        # 这批数据每一条都右移一个字符，作为预测目标
-        y = torch.stack([torch.from_numpy((dataset[i][1 : self.config.block_size + 1]).astype(np.int64)) for i in ix])
-        x, y = x.to(self.config.device), y.to(self.config.device)
-        return x, y
+        if self.config.is_causal:
+            # 取出一批数据，每条数据只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
+            x = torch.stack([torch.from_numpy((dataset[i][0 : self.config.block_size]).astype(np.int64)) for i in ix])
+            # 这批数据每一条都右移一个字符，作为预测目标，shape=(batch_size, block_size)
+            y = torch.stack([torch.from_numpy((dataset[i][1 : self.config.block_size + 1]).astype(np.int64)) for i in ix])
+            x, y = x.to(self.config.device), y.to(self.config.device)
+            return x, y
+        else:
+            # 取出一批数据，每条数据只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
+            x = torch.stack([torch.from_numpy((dataset[i][0 : self.config.block_size]).astype(np.int64)) for i in ix])
+            # 取出后面剩余的block_size个token，作为预测目标，shape=(batch_size, block_size)
+            y = torch.stack([torch.from_numpy((dataset[i][self.config.block_size : self.config.block_size * 2]).astype(np.int64)) for i in ix])
+            x, y = x.to(self.config.device), y.to(self.config.device)
+            return x, y
 
     # helps estimate an arbitrarily accurate loss over either split using many batches
     @torch.no_grad()
