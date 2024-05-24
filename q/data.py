@@ -183,8 +183,8 @@ def generate_sorting(data_dir="data_q"):
 
 
 def main():
-    generate_text("psycho.txt", data_dir="data_q", block_size=128, overlap_ratio=0.1)
-    # generate_problem_q("data_q")
+    # generate_text("psycho.txt", data_dir="data_q", block_size=128, overlap_ratio=0.1)
+    generate_problem_q("data_q")
     # generate_sorting("data_q")
 
 if __name__ == "__main__":

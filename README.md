@@ -13,6 +13,48 @@
 
 ## 使用方法（新）
 
+```json
+{
+    # GPT Model Args
+    "block_size": 128, # 如果是Q问题，则为 q_digits() + 1,
+    "vocab_size": 10000,
+    "n_layer": 2,
+    "n_head": 4,
+    "n_embd": 64,
+    "dropout": 0.0, # for pretraining 0 is good, for finetuning try 0.1+
+    "bias": False, # do we use bias inside LayerNorm and Linear layers?
+    "is_causal": True, # 如果是排序问题，则为False
+
+    # AdamW Optimizer Args
+    "learning_rate": 6e-4, # max learning rate
+    "max_iters": 100000, # total number of training iterations
+    "weight_decay": 1e-1,
+    "beta1": 0.9,
+    "beta2": 0.99,
+
+    # Learning Rate Scheduler
+    "decay_lr": True, # whether to decay the learning rate
+    "warmup_iters": 300, # how many steps to warm up for
+    "lr_decay_iters": 100000, # should be ~= max_iters per Chinchilla
+    "min_lr": 6e-5, # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+
+    # Training Task
+    "init_from": 'pretrain', # 'pretrain' or 'finetune'
+    "batch_size": 300,
+    "random_seed": 114514,
+    "eval_only_last_token_loss": False, # 如果是Q问题，则为True；如果是NLG问题，则为False
+    "data_dir": 'data_q',
+    "ckpt_dir": 'ckpt_q',
+    "eval_interval": 100,
+    "log_interval": 10,
+    "eval_iters": 5,
+
+    # Misc
+    "backend": 'nccl', # 'nccl', 'gloo', etc.
+    "device": 'cuda:0', # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+}
+```
+
 ### 玩法1：人类的本质是复读机！
 
 - 数据预处理：`data.py`主函数中调用`generate_text`，执行。

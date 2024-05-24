@@ -91,7 +91,7 @@ def test(scene="q"):
                 print("\n")
 
 def main():
-    test("")
+    test("q")
 
 if __name__ == "__main__":
     main()
