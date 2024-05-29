@@ -1,10 +1,12 @@
+import os
 import numpy as np
 import torch
 import clip
 from PIL import Image
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model, preprocess = clip.load("ViT-B/32", device=device)
+# model, preprocess = clip.load("ViT-B/32", device=device)
+model, preprocess = clip.load(os.path.join(os.path.dirname(__file__), "model/ViT-B-32.pt"), device=device)
 
 input_resolution = model.visual.input_resolution
 context_length = model.context_length

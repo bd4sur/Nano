@@ -24,7 +24,8 @@ def load_demo_image(image_size, device):
 image_size = 384
 image = load_demo_image(image_size=image_size, device=device)
 
-model_url = 'https://storage.googleapis.com/sfr-vision-language-research/BLIP/models/model_base_capfilt_large.pth'
+# model_url = 'https://storage.googleapis.com/sfr-vision-language-research/BLIP/models/model_base_capfilt_large.pth'
+model_url = os.path.join(os.path.dirname(__file__), "model/model_base_capfilt_large.pth")
 
 model = blip_decoder(pretrained=model_url, image_size=image_size, vit='base')
 model.eval()
@@ -34,7 +35,7 @@ with torch.no_grad():
     # beam search
     caption = model.generate(image, sample=False, num_beams=1, max_length=1000, min_length=50)
     # nucleus sampling
-    # caption = model.generate(image, sample=True, top_p=0.9, max_length=20, min_length=5)
+    # caption = model.generate(image, sample=True, top_p=0.9, max_length=1000, min_length=50)
     print('caption: ' + caption[0])
 
 
@@ -44,6 +45,7 @@ image_size = 480
 image = load_demo_image(image_size=image_size, device=device)
 
 model_url = 'https://storage.googleapis.com/sfr-vision-language-research/BLIP/models/model_base_vqa_capfilt_large.pth'
+model_url = os.path.join(os.path.dirname(__file__), "model/model_base_vqa_capfilt_large.pth")
 
 model = blip_vqa(pretrained=model_url, image_size=image_size, vit='base')
 model.eval()
