@@ -1,7 +1,11 @@
 
-# nano-gpt
+# Nano
 
-![ ](./nano-sakamoto.gif)
+大模型，小玩具。
+
+![ ](./nano.jpg)
+
+## NLP
 
 经典NLP学习项目 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) 的简化复刻版本，供个人赏玩、魔改和炼丹炉煲机之用。
 
@@ -10,8 +14,6 @@
 - [bbycroft] [GPT可视化](https://bbycroft.net/llm)
 - [2001.08361] [Scaling Laws for Neural Language Models](https://arxiv.org/abs/2001.08361)
 - [Chinchilla] [Training Compute-Optimal Large Language Models](https://arxiv.org/abs/2203.15556)
-
-## 使用方法（新）
 
 ```json
 {
@@ -79,7 +81,7 @@
 - 训练模型：`train.py`中，修改`block_size`为`q_digits()`，修改`is_causal`为`False`，修改`eval_only_last_token_loss`为`False`。
 - 测试模型：`test.py`中，主函数`test("sorting")`。
 
-## 使用方法
+### 使用方法
 
 首先安装依赖，建议在虚拟环境中安装。
 
@@ -149,7 +151,7 @@ cd nano-gpt
 python test_ds.py
 ```
 
-## 研究笔记
+### 研究笔记
 
 炼丹炉（集群，嘿嘿）配置：
 
@@ -193,3 +195,7 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 - 后承（蕴涵）
 - 相似度
 - 多选
+
+## CV
+
+## Audio

@@ -170,6 +170,8 @@ class TrainGPT():
         x = torch.stack([torch.from_numpy((dataset[i : i+self.block_size]).astype(np.int64)) for i in ix])
         y = torch.stack([torch.from_numpy((dataset[i+1 : i+1+self.block_size]).astype(np.int64)) for i in ix])
         x, y = x.to(self.device), y.to(self.device)
+        print(x)
+        print(y)
         return x, y
 
     # helps estimate an arbitrarily accurate loss over either split using many batches

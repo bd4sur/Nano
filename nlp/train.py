@@ -7,13 +7,14 @@ import pickle
 import numpy as np
 import torch
 
+from tokenizer import Tokenizer
 from model import ModelConfig, GPT
 
-CONFIG_JSON = "train_q.json"
+CONFIG_JSON = "train_nlg.json"
 
 class TrainGPT():
 
-    def __init__(self, config) -> None:
+    def __init__(self, config, max_iters=100000) -> None:
 
         self.config = ModelConfig(**(config))
 
@@ -23,6 +24,7 @@ class TrainGPT():
         self.iter_num = 0
         self.train_data = None
         self.val_data = None
+        self.max_iters = max_iters
 
     def log(self, logstr):
         print(logstr)
@@ -33,13 +35,18 @@ class TrainGPT():
         with open(dataset_path, 'rb') as f:
             dataset = pickle.load(f)
 
-        self.config.vocab_size = dataset['vocab_size']
+        tokenizer_path = os.path.join(os.path.dirname(__file__), self.config.data_dir, 'tokenizer.json')
+        print(f"Loading dataset from {tokenizer_path}...")
+        tokenizer = Tokenizer()
+        tokenizer.load_from_config(tokenizer_path)
+
+        self.config.vocab_size = tokenizer.vocab_size
         self.train_data = np.array(dataset["train_ids"], dtype=np.uint16) # np.memmap(os.path.join(os.path.dirname(__file__), self.data_dir, 'train.bin'), dtype=np.uint16, mode='r')
         self.val_data = np.array(dataset["val_ids"], dtype=np.uint16) # np.memmap(os.path.join(os.path.dirname(__file__), self.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
 
-        self.log(f"# Train set = {len(self.train_data)}")
-        self.log(f"# Val set = {len(self.val_data)}")
-        self.log(f"# Vocab size = {self.config.vocab_size}")
+        self.log(f"Size of Train set      = {len(self.train_data)}")
+        self.log(f"Size of Validation set = {len(self.val_data)}")
+        self.log(f"Size of vocabulary     = {self.config.vocab_size}")
 
     def init(self):
         os.makedirs(os.path.join(os.path.dirname(__file__), self.config.ckpt_dir), exist_ok=True)
@@ -48,7 +55,7 @@ class TrainGPT():
         self.log("Initializing a new model for pretrain")
         self.model = GPT(self.config)
         self.model.to(self.config.device)
-        self.log("# Parameters = %.2fM" % (self.model.get_num_params()/1e6,))
+        self.log("Number of Parameters = %.2fM" % (self.model.get_num_params()/1e6,))
         # optimizer
         _device_type = 'cuda' if 'cuda' in self.config.device else 'cpu'
         self.optimizer = self.model.configure_optimizers(self.config.weight_decay, self.config.learning_rate, (self.config.beta1, self.config.beta2), _device_type)
@@ -154,11 +161,14 @@ class TrainGPT():
                 self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} Iteration #{iter}: Train loss = {lossf:.4f}, Duration = {dt*1000:.0f} ms, MFU = {running_mfu*100:.2f}% ({312 * running_mfu:.2f} TFLOPS)")
             self.iter_num += 1
 
+            if iter > self.max_iters:
+                break
+
 def main():
     print(f"PyTorch version: {torch.__version__}")
     with open(os.path.join(os.path.dirname(__file__), CONFIG_JSON), "r", encoding="utf-8") as f:
         config = json.load(f)
-        trainer = TrainGPT(config)
+        trainer = TrainGPT(config, max_iters=100000)
         trainer.start()
 
 if __name__ == "__main__":
