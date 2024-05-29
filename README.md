@@ -198,4 +198,8 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 
 ## CV
 
+### CLIP：开集图像分类
+
+### BLIP：视觉理解和语言生成
+
 ## Audio

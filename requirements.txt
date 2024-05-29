@@ -1,6 +1,13 @@
+ftfy
+regex
 torch>2
+torchvision
 numpy
 tqdm
 tensorboard
 packaging
 deepspeed
+timm
+transformers
+fairscale
+pycocoevalcap
