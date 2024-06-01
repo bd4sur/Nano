@@ -14,17 +14,17 @@ CONFIG_JSON = "train_nlg.json"
 
 class TrainGPT():
 
-    def __init__(self, config, max_iters=100000) -> None:
+    def __init__(self, config, is_from_pretraind=False) -> None:
 
         self.config = ModelConfig(**(config))
 
         # Internal states
         self.model = None
         self.optimizer = None
-        self.iter_num = 0
+        self.iter_count = 0
         self.train_data = None
         self.val_data = None
-        self.max_iters = max_iters
+        self.is_from_pretrained = is_from_pretraind
 
     def log(self, logstr):
         print(logstr)
@@ -36,7 +36,7 @@ class TrainGPT():
             dataset = pickle.load(f)
 
         tokenizer_path = os.path.join(os.path.dirname(__file__), self.config.data_dir, 'tokenizer.json')
-        print(f"Loading dataset from {tokenizer_path}...")
+        print(f"Loading tokenizer from {tokenizer_path}...")
         tokenizer = Tokenizer()
         tokenizer.load_from_config(tokenizer_path)
 
@@ -44,21 +44,47 @@ class TrainGPT():
         self.train_data = np.array(dataset["train_ids"], dtype=np.uint16) # np.memmap(os.path.join(os.path.dirname(__file__), self.data_dir, 'train.bin'), dtype=np.uint16, mode='r')
         self.val_data = np.array(dataset["val_ids"], dtype=np.uint16) # np.memmap(os.path.join(os.path.dirname(__file__), self.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
 
-        self.log(f"Size of Train set      = {len(self.train_data)}")
+        self.log(f"Size of Train set = {len(self.train_data)}")
         self.log(f"Size of Validation set = {len(self.val_data)}")
-        self.log(f"Size of vocabulary     = {self.config.vocab_size}")
+        self.log(f"Size of vocabulary = {self.config.vocab_size}")
 
     def init(self):
         os.makedirs(os.path.join(os.path.dirname(__file__), self.config.ckpt_dir), exist_ok=True)
         torch.manual_seed(self.config.random_seed)
-        # init a new model from scratch
-        self.log("Initializing a new model for pretrain")
-        self.model = GPT(self.config)
-        self.model.to(self.config.device)
-        self.log("Number of Parameters = %.2fM" % (self.model.get_num_params()/1e6,))
-        # optimizer
+        # Model
+        if self.is_from_pretrained:
+            _ckpt_path = os.path.join(os.path.dirname(__file__), self.config.ckpt_dir, 'ckpt.pt')
+            self.log(f"Resuming training from {_ckpt_path}")
+            _checkpoint = torch.load(_ckpt_path, map_location=self.config.device)
+            # 从Checkpoint中恢复部分模型结构参数
+            _config = _checkpoint["config"]
+            _config.block_size = self.config.block_size
+            _config.vocab_size = self.config.vocab_size
+            _config.n_layer = self.config.n_layer
+            _config.n_head = self.config.n_head
+            _config.n_embd = self.config.n_embd
+            _config.bias = self.config.bias
+            self.model = GPT(self.config)
+            self.model.to(self.config.device)
+            self.log("Number of Parameters = %.2fM" % (self.model.get_num_params()/1e6,))
+            # 恢复模型参数
+            self.model.load_state_dict(_checkpoint["model"])
+            self.iter_count = _checkpoint["iter_count"]
+        else:
+            # init a new model from scratch
+            self.log("Initializing a new model for pretrain")
+            self.model = GPT(self.config)
+            self.model.to(self.config.device)
+            self.log("Number of Parameters = %.2fM" % (self.model.get_num_params()/1e6,))
+
+        # Optimizer
         _device_type = 'cuda' if 'cuda' in self.config.device else 'cpu'
         self.optimizer = self.model.configure_optimizers(self.config.weight_decay, self.config.learning_rate, (self.config.beta1, self.config.beta2), _device_type)
+        if self.is_from_pretrained:
+            self.optimizer.load_state_dict(_checkpoint["optimizer"]) # 恢复优化器状态
+
+        _checkpoint = None # free up memory
+
 
     def get_batch(self, phase):
         dataset = self.train_data if phase == 'train' else self.val_data
@@ -116,13 +142,11 @@ class TrainGPT():
         best_val_loss = 1e9
         X, Y = self.get_batch('train') # fetch the very first batch
         t0 = time.time()
-        running_mfu = -1.0
-        self.log(f"Start training from iteration #{self.iter_num}!")
+        self.log(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Start training from iteration #{self.iter_count}")
 
-        for iter in range(self.config.max_iters):
+        iter = self.iter_count
 
-            iter = self.iter_num
-
+        while iter < self.config.max_iters:
             # determine and set the learning rate for this iteration
             lr = self.update_learning_rate(iter) if self.config.decay_lr else self.config.learning_rate
             for param_group in self.optimizer.param_groups:
@@ -131,17 +155,17 @@ class TrainGPT():
             # evaluate the loss on train/val sets and write checkpoints
             if iter % self.config.eval_interval == 0:
                 losses = self.estimate_loss()
-                self.log(f"Iteration #{iter}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, Best val loss {best_val_loss:.4f}")
+                self.log(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Eval @ iteration #{iter} | Train loss {losses['train']:.4f} | Val loss {losses['val']:.4f} | Best val loss {best_val_loss:.4f}")
 
                 if iter > 0 and losses['val'] < best_val_loss:
                     best_val_loss = losses['val']
                     _checkpoint = {
                         "model":      self.model.state_dict(),
                         "optimizer":  self.optimizer.state_dict(),
-                        "iter_num":   iter,
+                        "iter_count": iter,
                         "config":     self.config,
                     }
-                    self.log(f"Saving checkpoint to {self.config.ckpt_dir}/ckpt.pt")
+                    self.log(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Saving checkpoint to {self.config.ckpt_dir}/ckpt.pt")
                     torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), self.config.ckpt_dir, 'ckpt.pt'))
 
             _, loss = self.model(X, Y, self.config.eval_only_last_token_loss)
@@ -156,19 +180,17 @@ class TrainGPT():
             t0 = t1
             if iter % self.config.log_interval == 0:
                 lossf = loss.item()
-                mfu = self.model.estimate_mfu(self.config.batch_size, dt)
-                running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
-                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} Iteration #{iter}: Train loss = {lossf:.4f}, Duration = {dt*1000:.0f} ms, MFU = {running_mfu*100:.2f}% ({312 * running_mfu:.2f} TFLOPS)")
-            self.iter_num += 1
+                flops = self.model.estimate_flops(self.config.batch_size, dt)
+                self.log(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Train iteration #{iter} | Loss {lossf:.4f} | {dt*1000:.0f} ms | {flops / 1e9:.2f} GFLOPS")
 
-            if iter > self.max_iters:
-                break
+            iter += 1
+            self.iter_count = iter
 
 def main():
     print(f"PyTorch version: {torch.__version__}")
     with open(os.path.join(os.path.dirname(__file__), CONFIG_JSON), "r", encoding="utf-8") as f:
         config = json.load(f)
-        trainer = TrainGPT(config, max_iters=100000)
+        trainer = TrainGPT(config, is_from_pretraind=False)
         trainer.start()
 
 if __name__ == "__main__":

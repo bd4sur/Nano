@@ -18,3 +18,4 @@ log/
 *.egg-info
 .pytest_cache
 thumbs.db
+nlp/dataset/xxqg.txt

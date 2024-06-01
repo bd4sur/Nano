@@ -1,9 +1,9 @@
 {
     "block_size": 128,
     "vocab_size": 10000,
-    "n_layer": 2,
+    "n_layer": 4,
     "n_head": 4,
-    "n_embd": 64,
+    "n_embd": 256,
     "dropout": 0.0,
     "bias": false,
     "is_causal": true,
