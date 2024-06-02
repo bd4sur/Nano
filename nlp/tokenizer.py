@@ -25,7 +25,7 @@ class Tokenizer:
     def build_from_text(self, text, config_path):
         chars = sorted(list(set(text)))
         self.vocab_size = len(chars)
-        print(f"vocab size: {self.vocab_size:,}")
+        print(f"  Vocab size: {self.vocab_size:,}")
         # create a mapping from characters to integers
         self.stoi = { ch:i for i,ch in enumerate(chars) }
         self.itos = { i:ch for i,ch in enumerate(chars) }

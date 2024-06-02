@@ -1,5 +1,5 @@
 {
-    "block_size": 128,
+    "block_size": 512,
     "vocab_size": 10000,
     "n_layer": 4,
     "n_head": 4,
