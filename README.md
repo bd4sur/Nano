@@ -19,8 +19,48 @@ conda activate nano
 pip install -r requirements.txt
 ```
 
+### 数据预处理
 
-```json
+执行以下命令，注意修改代码中文本文件的路径。
+
+```
+python data.py
+```
+
+注：仓库中增加了来自[hhiim/Lacan](https://github.com/hhiim/Lacan)的精神分析黑话数据集，特此致谢。
+
+### 训练
+
+[B站视频](https://www.bilibili.com/video/BV1uv42127qP)
+
+单机单卡或CPU训练（注意将`train_config.json`中的`device`选项设为`"cpu"`）：
+
+```
+python train.py
+```
+
+或者以分布式数据并行（DDP）方式启动训练（注意：`train_config.json`中的`gradient_accumulation_steps`应为显卡数的倍数）：
+
+```
+CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node 4 train_ddp.py
+```
+
+或者基于DeepSpeed使用ZeRO零冗余优化器训练更大的模型。可以修改`ds_config.json`以优化训练效果。注意：根据[文档](https://www.deepspeed.ai/docs/config-json/)，`train_batch_size` must be equal to `train_micro_batch_size_per_gpu` * `gradient_accumulation` * number of GPUs。这里采用2节点4卡ZeRO3-Offload方式训练。以本人炼丹炉的资源，实测发现，最多可以预训练约85M参数的模型。
+
+```
+deepspeed --hostfile=hostfile.txt train_ds.py --deepspeed --deepspeed_config ds_config.json
+```
+
+其中`hostfile.txt`的内容如下：
+
+```
+192.168.10.52 slots=2
+192.168.10.61 slots=2
+```
+
+所有场景通用的训练配置参数说明：
+
+```
 {
     // GPT Model Args
     "block_size": 128, // 如果是Q问题，则为 q_digits() + 1,
@@ -59,77 +99,46 @@ pip install -r requirements.txt
     // Misc
     "backend": "nccl", // "nccl", "gloo", etc.
     "device": "cuda:0", // "cpu", "cuda", "cuda:0", etc.
+    "sdp_kernel": "math", // 选择`scaled_dot_product_attention`所使用的kernel "flash" || "mem_efficient" || "math"
+    "dtype": "float16", // if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16', # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
+    "grad_clip": 1.0, // clip gradients at this value, or disable if == 0.0
+    "gradient_accumulation_steps": 4
 }
 ```
 
-### 玩法1：人类的本质是复读机！
-
-- 数据预处理：`data.py`主函数中调用`generate_text`，执行。
-- 训练模型：`train.py`中，修改`block_size`为适当值，修改`is_causal`为`True`，修改`eval_only_last_token_loss`为`False`。
-- 测试模型：`test.py`中，主函数`test()`。
-
-注：仓库中增加了来自[hhiim/Lacan](https://github.com/hhiim/Lacan)的精神分析黑话数据集，特此致谢。
-
-### 玩法2：丘成桐先生也答不出的Q问题
-
-所谓“Q问题”，是《鲁豫有约》20150902期节目中，主持人给丘成桐出的一道脑筋急转弯题。
-
-![ ](./q.jpg)
-
-- 数据预处理：`data.py`主函数中调用`generate_problem_q`，执行。
-- 训练模型：`train.py`中，修改`block_size`为`q_digits() + 1`，修改`is_causal`为`True`，修改`eval_only_last_token_loss`为`True`（不改也行，但是有点奇怪）。
-- 测试模型：`test.py`中，主函数`test("q")`。
-
-### 玩法3：排序
-
-- 数据预处理：`data.py`主函数中调用`generate_sorting`，执行。
-- 训练模型：`train.py`中，修改`block_size`为`q_digits()`，修改`is_causal`为`False`，修改`eval_only_last_token_loss`为`False`。
-- 测试模型：`test.py`中，主函数`test("sorting")`。
-
-### 单机单卡或者分布式数据并行训练
-
-以分布式数据并行（DDP）方式启动训练：
-
-```
-CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node 2 train_ddp.py
-```
-
-或者单机单卡或CPU训练（注意将`train.py`中的`device`选项设为`"cpu"`）：
-
-```
-python train.py
-```
-
-### 基于DeepSpeed的3D并行训练
-
-可以修改`ds_config.json`以优化训练效果。注意：根据[文档](https://www.deepspeed.ai/docs/config-json/)，`train_batch_size` must be equal to `train_micro_batch_size_per_gpu` * `gradient_accumulation` * number of GPUs。这里采用2节点4卡ZeRO3-Offload方式训练。以本人炼丹炉的资源，实测发现，最多可以预训练约85M参数的模型。
-
-```
-deepspeed --hostfile=hostfile.txt train_ds.py --deepspeed --deepspeed_config ds_config.json
-```
-
-其中`hostfile.txt`的内容如下：
-
-```
-192.168.10.52 slots=2
-192.168.10.61 slots=2
-```
-
-### 推理（文本生成）
+### 推理
 
 如果是以DDP方式或者单机单卡或者CPU训练的模型，则执行以下命令。
 
 ```
-python test.py
+python inference.py
 ```
 
 如果是DeepSpeed训练的模型，则需要先执行`ckpt/ds`目录中的转换脚本，将其转化为PyTorch能够接受的state_dict格式，再执行推理脚本：
 
 ```
-cd nano-gpt/ckpt/ds
+cd Nano/nlp/checkpoint/ds
 python zero_to_fp32.py . ckpt_ds.pt
-cd nano-gpt
-python test_ds.py
+cd Nano/nlp
+python inference_ds.py
+```
+
+### 其他玩法①：丘成桐先生也答不出的Q问题
+
+所谓“Q问题”，是《鲁豫有约》20150902期节目中，主持人给丘成桐出的一道脑筋急转弯题。
+
+![ ](./q.jpg)
+
+```
+python q.py
+```
+
+### 其他玩法②：排序，但是GPT
+
+[B站视频](https://www.bilibili.com/video/BV1XZ421s7bM)
+
+```
+python sorting.py
 ```
 
 ### 研究笔记

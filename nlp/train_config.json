@@ -3,7 +3,7 @@
     "vocab_size": 10000,
     "n_layer": 4,
     "n_head": 4,
-    "n_embd": 256,
+    "n_embd": 512,
     "dropout": 0.0,
     "bias": false,
     "is_causal": true,
@@ -20,7 +20,7 @@
     "min_lr": 6e-5,
 
     "init_from": "pretrain",
-    "batch_size": 300,
+    "batch_size": 320,
     "random_seed": 114514,
     "eval_only_last_token_loss": false,
     "data_dir": "dataset",
@@ -30,5 +30,9 @@
     "eval_iters": 5,
 
     "backend": "nccl",
-    "device": "cuda:0"
+    "device": "cuda:0",
+    "sdp_kernel": "math",
+    "dtype": "float16",
+    "grad_clip": 1.0,
+    "gradient_accumulation_steps": 4
 }

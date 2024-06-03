@@ -3,7 +3,6 @@ import random
 import torch
 from tokenizer import Tokenizer
 from model import GPT
-from qfunc import q_function, q_digits
 
 class InferenceGPT:
 
@@ -37,52 +36,7 @@ class InferenceGPT:
     def typewriter(self, token_tensor):
         print(self.tokenizer.decode(token_tensor[0].tolist()), end="", flush=True)
 
-
-    def inference_q(self):
-        with torch.no_grad():
-            ok_count = 0
-            total_count = 0
-            label = ""
-            qdigits = q_digits()
-            for i in range(99900000, 99999999):
-                n = random.randint(0, 10 ** qdigits)
-                prompt = f"{n + 10 ** qdigits}-"[1:]
-                x = torch.tensor(self.tokenizer.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
-                y = self.model.predict_next_token(x, temperature=1, top_k=1)
-                qval = self.tokenizer.decode(y[0].tolist())
-                label = "×"
-                total_count += 1
-                if qval == q_function(n, qdigits):
-                    ok_count += 1
-                    label = "√"
-                print(f"({int(ok_count / total_count * 100)}%) [{label}] {prompt}{qval}")
-
-
-    def inference_sorting(self):
-        with torch.no_grad():
-            ok_count = 0
-            total_count = 0
-            label = ""
-            qdigits = q_digits()
-            for i in range(0, 100000):
-                n = random.randint(0, 10 ** qdigits)
-                input_seq = f"{n + 10 ** qdigits}"[1:]
-                target_seq = "".join(sorted(list(input_seq)))
-                x = torch.tensor(self.tokenizer.encode(input_seq), dtype=torch.long, device=self.device)[None, ...]
-                y = self.model.generate_sequence(x, temperature=1, top_k=1)
-                output_list = []
-                for t in range(len(y)):
-                    output_list.append(self.tokenizer.decode(y[t][0].tolist()))
-                output_seq = "".join(output_list)
-                label = "×"
-                total_count += 1
-                if target_seq == output_seq:
-                    ok_count += 1
-                    label = "√"
-                print(f"({int(ok_count / total_count * 100)}%) [{label}] {input_seq} - {output_seq}")
-
-
-    def inference_nlg(self):
+    def generate(self):
         with torch.no_grad():
             while True:
                 try:
@@ -96,7 +50,7 @@ class InferenceGPT:
 
 def main():
     infer = InferenceGPT("dataset", "checkpoint", "cuda")
-    infer.inference_nlg()
+    infer.generate()
 
 if __name__ == "__main__":
     main()

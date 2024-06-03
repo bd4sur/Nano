@@ -50,9 +50,13 @@ class ModelConfig:
     eval_interval: int = 100
     log_interval: int = 1
     eval_iters: int = 5
-    # Misc
+    # Misc & DDP config
     backend: str = "nccl"
     device: str = "cuda:0"
+    sdp_kernel: str = "math"
+    dtype: str = "float16"
+    grad_clip: float = 1.0
+    gradient_accumulation_steps: int = 2
 
 
 class LayerNorm(nn.Module):

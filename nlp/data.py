@@ -4,7 +4,6 @@ import pickle
 import numpy as np
 from tqdm import tqdm
 from tokenizer import Tokenizer
-from qfunc import q_function, q_digits
 
 def generate_nlg_dataset(input_file, data_dir="dataset", is_build_tokenizer=True, block_size=512, overlap_ratio=0.5):
     print(f"Reading raw text file...")
