@@ -143,9 +143,9 @@ python sorting.py
 
 ### 研究笔记
 
-**多头注意力算子`scaled_dot_product_attention`的性能**
+**注意力算子`scaled_dot_product_attention`的性能**
 
-PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135) 的多头注意力计算加速。目前有3种kernel，但是不支持较旧的GPU。分别启用3种kernel，实测相对性能如下：
+PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135) 的注意力算子计算加速。目前有3种kernel，但是不支持较旧的GPU。分别启用3种kernel，实测相对性能如下：
 
 |Kernel|flash_sdp|mem_efficient_sdp|math_sdp|
 |------|------|----|--|

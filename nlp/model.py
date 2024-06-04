@@ -169,10 +169,6 @@ class GPT(nn.Module):
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
         # init all weights
@@ -260,8 +256,8 @@ class GPT(nn.Module):
             {'params': decay_params, 'weight_decay': weight_decay},
             {'params': nodecay_params, 'weight_decay': 0.0}
         ]
-        num_decay_params = sum(p.numel() for p in decay_params)
-        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+        # num_decay_params = sum(p.numel() for p in decay_params)
+        # num_nodecay_params = sum(p.numel() for p in nodecay_params)
         # print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
         # print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
         # Create AdamW optimizer and use the fused version if it is available
@@ -279,11 +275,11 @@ class GPT(nn.Module):
         N = self.get_num_params()
         cfg = self.config
         L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.block_size
-        flops_per_token = 6*N + 12*L*H*Q*T
-        flops_per_fwdbwd = flops_per_token * T
-        flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
-        flops_achieved = flops_per_iter * (1.0/dt) # per second
-        return flops_achieved
+        flop_per_token = 6*N + 12*L*H*Q*T
+        flop_per_fwdbwd = flop_per_token * T
+        flop_per_iter = flop_per_fwdbwd * fwdbwd_per_iter
+        flops = flop_per_iter * (1.0/dt) # per second
+        return flops
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, callback=None):
