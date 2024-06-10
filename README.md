@@ -48,7 +48,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 python -m torch.distributed.run -
 或者基于DeepSpeed使用ZeRO零冗余优化器训练更大的模型。可以修改`ds_config.json`以优化训练效果。注意：根据[文档](https://www.deepspeed.ai/docs/config-json/)，`train_batch_size` must be equal to `train_micro_batch_size_per_gpu` * `gradient_accumulation` * number of GPUs。这里采用2节点4卡ZeRO3-Offload方式训练。以本人炼丹炉的资源，实测发现，最多可以预训练约85M参数的模型。
 
 ```
-deepspeed --hostfile=hostfile.txt train_ds.py --deepspeed --deepspeed_config ds_config.json
+deepspeed train_deepspeed.py --deepspeed --deepspeed_config deepspeed_config.json --hostfile=hostfile.txt 
 ```
 
 其中`hostfile.txt`的内容如下：
