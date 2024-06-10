@@ -17,7 +17,7 @@ config = {
     "vocab_size": 10000,
     "n_layer": 2,
     "n_head": 2,
-    "n_embd": 32,
+    "n_embd": 24,
     "dropout": 0.0,
     "bias": False,
     "is_causal": False,
@@ -34,8 +34,8 @@ config = {
     "min_lr": 6e-5,
 
     "init_from": "pretrain",
-    "batch_size": 300,
-    "random_seed": 114514,
+    "batch_size": 500,
+    "random_seed": 1314,
     "eval_only_last_token_loss": False,
     "data_dir": "dataset",
     "ckpt_dir": "checkpoint",
@@ -47,6 +47,14 @@ config = {
     "device": "cuda:0"
 }
 
+CHAR_LIST = [
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+
+def random_string():
+    ranstr = "".join([chr(ord("a")+random.randint(0,25)) for _ in range(0, random.randint(1, INPUT_LENGTH))])
+    return ("-----------------"+ranstr)[-INPUT_LENGTH:]
 
 def generate_palindromic_dataset(data_dir="dataset"):
     os.makedirs(os.path.join(os.path.dirname(__file__), data_dir), exist_ok=True)
@@ -54,6 +62,11 @@ def generate_palindromic_dataset(data_dir="dataset"):
     text = []
     for i in tqdm(range(10 ** INPUT_LENGTH)):
         origin_str = ("-----------------"+str(i))[-INPUT_LENGTH:]
+        reversed_str = origin_str[::-1]
+        line = f"{origin_str}{reversed_str}"
+        text.append(line)
+    for _ in tqdm(range(10 ** (INPUT_LENGTH-1))):
+        origin_str = random_string()
         reversed_str = origin_str[::-1]
         line = f"{origin_str}{reversed_str}"
         text.append(line)
@@ -68,9 +81,9 @@ def generate_palindromic_dataset(data_dir="dataset"):
     val_ids = []
     line_indexes = list(range(len(text)))
     random.shuffle(line_indexes)
-    for li in tqdm(range(0, int(len(text) * 0.4))):
+    for li in tqdm(range(0, int(len(text) * 0.2))):
         train_ids.append(tokenizer.encode(text[line_indexes[li]]))
-    for li in tqdm(range(int(len(text) * 0.4), len(text))):
+    for li in tqdm(range(int(len(text) * 0.2), len(text))):
         val_ids.append(tokenizer.encode(text[line_indexes[li]]))
 
     train_ids = np.array(train_ids, dtype=np.uint16)
@@ -114,7 +127,7 @@ def inference_palindrome_gpt(config):
         ok_count = 0
         total_count = 0
         label = ""
-        for i in range(0, 100000):
+        for i in range(0, 1000):
             n = random.randint(0, 10 ** INPUT_LENGTH)
             input_seq = ("-----------------"+str(n))[-INPUT_LENGTH:]
             target_seq = input_seq[::-1]
