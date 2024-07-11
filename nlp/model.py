@@ -13,6 +13,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -28,35 +29,35 @@ class ModelConfig:
     n_embd: int = 128
     dropout: int = 0.0
     bias: bool = False
-    is_causal: bool = True
+    is_causal: Optional[bool] = True
     # AdamW Optimizer Args
-    learning_rate: float = 6e-4
-    max_iters: int = 100000
-    weight_decay: float = 1e-1
-    beta1: float = 0.9
-    beta2: float = 0.99
+    learning_rate: Optional[float] = 6e-4
+    max_iters: Optional[int] = 100000
+    weight_decay: Optional[float] = 1e-1
+    beta1: Optional[float] = 0.9
+    beta2: Optional[float] = 0.99
     # Learning Rate Scheduler
-    decay_lr: bool = True
-    warmup_iters: int = 300
-    lr_decay_iters: int = 100000
-    min_lr: float = 6e-5
+    decay_lr: Optional[bool] = True
+    warmup_iters: Optional[int] = 300
+    lr_decay_iters: Optional[int] = 100000
+    min_lr: Optional[float] = 6e-5
     # Training Task
-    init_from: str = "pretrain"
-    batch_size: int = 600
-    random_seed: int = 114514
-    eval_only_last_token_loss: bool = False
-    data_dir: str = "dataset"
-    ckpt_dir: str = "checkpoint"
-    eval_interval: int = 100
-    log_interval: int = 1
-    eval_iters: int = 5
+    init_from: Optional[str] = "pretrain"
+    batch_size: Optional[int] = 600
+    random_seed: Optional[int] = 114514
+    eval_only_last_token_loss: Optional[bool] = False
+    data_dir: Optional[str] = "dataset"
+    ckpt_dir: Optional[str] = "checkpoint"
+    eval_interval: Optional[int] = 100
+    log_interval: Optional[int] = 1
+    eval_iters: Optional[int] = 5
     # Misc & DDP config
-    backend: str = "nccl"
-    device: str = "cuda:0"
-    sdp_kernel: str = "math"
-    dtype: str = "float16"
-    grad_clip: float = 1.0
-    gradient_accumulation_steps: int = 2
+    backend: Optional[str] = "nccl"
+    device: Optional[str] = "cuda:0"
+    sdp_kernel: Optional[str] = "math"
+    dtype: Optional[str] = "float16"
+    grad_clip: Optional[float] = 1.0
+    gradient_accumulation_steps: Optional[int] = 2
 
 
 class LayerNorm(nn.Module):
@@ -280,6 +281,62 @@ class GPT(nn.Module):
         flop_per_iter = flop_per_fwdbwd * fwdbwd_per_iter
         flops = flop_per_iter * (1.0/dt) # per second
         return flops
+
+    @classmethod
+    def from_pretrained(cls, model_type, override_args=None):
+        assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
+        override_args = override_args or {} # default to empty dict
+        # only dropout can be overridden see more notes below
+        assert all(k == 'dropout' for k in override_args)
+        from transformers import GPT2LMHeadModel
+        print("  Loading weights from pretrained gpt: %s" % model_type)
+
+        # n_layer, n_head and n_embd are determined from model_type
+        gpt_model_config = {
+            'gpt2':         dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
+            'gpt2-medium':  dict(n_layer=24, n_head=16, n_embd=1024), # 350M params
+            'gpt2-large':   dict(n_layer=36, n_head=20, n_embd=1280), # 774M params
+            'gpt2-xl':      dict(n_layer=48, n_head=25, n_embd=1600), # 1558M params
+        }[model_type]
+        print("  Forcing vocab_size=50257, block_size=1024, bias=True")
+        gpt_model_config['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
+        gpt_model_config['block_size'] = 1024 # always 1024 for GPT model checkpoints
+        gpt_model_config['bias'] = True # always True for GPT model checkpoints
+        # we can override the dropout rate, if desired
+        if 'dropout' in override_args:
+            print(f"overriding dropout rate to {override_args['dropout']}")
+            gpt_model_config['dropout'] = override_args['dropout']
+        # create a from-scratch initialized minGPT model
+        config = ModelConfig(**gpt_model_config)
+        model = GPT(config)
+        sd = model.state_dict()
+        sd_keys = sd.keys()
+        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
+
+        # init a huggingface/transformers model
+        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
+        sd_hf = model_hf.state_dict()
+
+        # copy while ensuring all of the parameters are aligned and match in names and shapes
+        sd_keys_hf = sd_hf.keys()
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
+        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
+        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
+        # this means that we have to transpose these weights when we import them
+        assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+        for k in sd_keys_hf:
+            if any(k.endswith(w) for w in transposed):
+                # special treatment for the Conv1D weights we need to transpose
+                assert sd_hf[k].shape[::-1] == sd[k].shape
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k].t())
+            else:
+                # vanilla copy over the other parameters
+                assert sd_hf[k].shape == sd[k].shape
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k])
+        return model
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, callback=None):
