@@ -12,7 +12,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Optional
 
 import torch
@@ -21,36 +21,47 @@ from torch.nn import functional as F
 
 @dataclass
 class ModelConfig:
-    # GPT Model Args
     block_size: int = 128
     vocab_size: int = 10000
     n_layer: int = 8
     n_head: int = 8
     n_embd: int = 128
-    dropout: int = 0.0
+    dropout: float = 0.0
     bias: bool = False
-    is_causal: Optional[bool] = True
+    is_causal: bool = True
+    eval_only_last_token_loss: bool = False
+
+
+
+@dataclass(init=False)
+class TrainConfig:
+    # GPT Model Args (Overrided)
+    dropout: Optional[float] = 0.0
+
     # AdamW Optimizer Args
     learning_rate: Optional[float] = 6e-4
     max_iters: Optional[int] = 100000
     weight_decay: Optional[float] = 1e-1
     beta1: Optional[float] = 0.9
     beta2: Optional[float] = 0.99
+
     # Learning Rate Scheduler
     decay_lr: Optional[bool] = True
     warmup_iters: Optional[int] = 300
     lr_decay_iters: Optional[int] = 100000
     min_lr: Optional[float] = 6e-5
+
     # Training Task
+    dataset_path: Optional[str] = "dataset/dataset.pkl"
+    tokenizer_path: Optional[str] = "dataset/tokenizer.json"
+    checkpoint_path: Optional[str] = "checkpoint/ckpt.pt"
     init_from: Optional[str] = "pretrain"
     batch_size: Optional[int] = 600
     random_seed: Optional[int] = 114514
-    eval_only_last_token_loss: Optional[bool] = False
-    data_dir: Optional[str] = "dataset"
-    ckpt_dir: Optional[str] = "checkpoint"
     eval_interval: Optional[int] = 100
     log_interval: Optional[int] = 1
     eval_iters: Optional[int] = 5
+
     # Misc & DDP config
     backend: Optional[str] = "nccl"
     device: Optional[str] = "cuda:0"
@@ -58,6 +69,12 @@ class ModelConfig:
     dtype: Optional[str] = "float16"
     grad_clip: Optional[float] = 1.0
     gradient_accumulation_steps: Optional[int] = 2
+
+    def __init__(self, **kwargs):
+        names = set([f.name for f in fields(self)])
+        for k, v in kwargs.items():
+            if k in names:
+                setattr(self, k, v)
 
 
 class LayerNorm(nn.Module):

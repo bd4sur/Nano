@@ -1,5 +1,4 @@
 import os
-import random
 import tiktoken
 import torch
 from tokenizer import Tokenizer
@@ -7,9 +6,9 @@ from model import GPT
 
 class InferenceGPT:
 
-    def __init__(self, data_dir="dataset", ckpt_dir="checkpoint", device="cuda"):
-        self.data_dir = data_dir
-        self.ckpt_dir = ckpt_dir
+    def __init__(self, tokenizer_path="dataset/tokenizer.json", checkpoint_path="checkpoint/ckpt.pt", device="cuda"):
+        self.tokenizer_path = tokenizer_path
+        self.checkpoint_path = checkpoint_path
         self.device = device
 
         self.model = None
@@ -17,9 +16,9 @@ class InferenceGPT:
         self.encode = None
         self.decode = None
 
-        if ckpt_dir in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}:
+        if self.checkpoint_path in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}:
             # 加载GPT模型权重
-            self.model = GPT.from_pretrained(ckpt_dir)
+            self.model = GPT.from_pretrained(self.checkpoint_path)
             self.model.eval()
             self.model.to(device)
             self.tokenizer = tiktoken.get_encoding("gpt2")
@@ -36,26 +35,27 @@ class InferenceGPT:
 
         else:
             # 读取模型检查点和训练配置
-            ckpt_path = os.path.join(os.path.dirname(__file__), ckpt_dir, 'ckpt.pt')
+            ckpt_path = os.path.join(os.path.dirname(__file__), self.checkpoint_path)
             print(f"Loading checkpoint from {ckpt_path}...")
             checkpoint = torch.load(ckpt_path, map_location=device)
-            config = checkpoint['config']
+            train_config = checkpoint['train_config']
+            model_config = checkpoint['model_config']
 
             # 设置随机种子与训练设置一致
-            torch.manual_seed(config.random_seed)
-            torch.cuda.manual_seed(config.random_seed)
+            torch.manual_seed(train_config.random_seed)
+            torch.cuda.manual_seed(train_config.random_seed)
 
             # 加载模型权重
-            self.model = GPT(config)
+            self.model = GPT(model_config)
             self.model.load_state_dict(checkpoint['model'])
             self.model.eval()
             self.model.to(device)
 
             # 读取分词器
-            tokenizer_path = os.path.join(os.path.dirname(__file__), data_dir, 'tokenizer.json')
-            print(f"Loading tokenizer from {tokenizer_path}...")
+            tk_path = os.path.join(os.path.dirname(__file__), self.tokenizer_path)
+            print(f"Loading tokenizer from {tk_path}...")
             self.tokenizer = Tokenizer()
-            self.tokenizer.load_from_config(tokenizer_path)
+            self.tokenizer.load_from_config(tk_path)
             self.encode = lambda s: self.tokenizer.encode(s)
             self.decode = lambda l: self.tokenizer.decode(l)
 
@@ -76,7 +76,7 @@ class InferenceGPT:
 
 def main():
     # infer = InferenceGPT("dataset", "gpt2", "cuda")
-    infer = InferenceGPT("dataset", "checkpoint", "cuda")
+    infer = InferenceGPT("dataset/tokenizer.json", "checkpoint/ckpt.pt", "cuda")
     infer.generate()
 
 if __name__ == "__main__":

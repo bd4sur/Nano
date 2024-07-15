@@ -9,8 +9,8 @@ __pycache__/
 *.pth
 *.pyc
 input.txt
-tokenizer.json
-checkpoint/
+nlp/dataset/*.json
+nlp/checkpoint/
 log/
 *.log
 *.py[cod]

@@ -9,8 +9,8 @@ from tokenizer import Tokenizer
 from model import GPT
 from train import TrainGPT
 
-MAX_ITERS = 5000
-Q_DIGITS = 8
+MAX_ITERS = 3000
+Q_DIGITS = 6
 
 config = {
     "block_size": Q_DIGITS + 1,
@@ -37,8 +37,9 @@ config = {
     "batch_size": 300,
     "random_seed": 114514,
     "eval_only_last_token_loss": True,
-    "data_dir": "dataset",
-    "ckpt_dir": "checkpoint",
+    "dataset_path": "dataset/q.pkl",
+    "tokenizer_path": "dataset/q.json",
+    "checkpoint_path": "checkpoint/q.pt",
     "eval_interval": 100,
     "log_interval": 10,
     "eval_iters": 5,
@@ -66,8 +67,9 @@ def q_function(number: int, num_digits: int) -> int:
     return res_map[qv]
 
 
-def generate_q_dataset(data_dir="dataset"):
-    os.makedirs(os.path.join(os.path.dirname(__file__), data_dir), exist_ok=True)
+def generate_q_dataset(dataset_path, tokenizer_path):
+    os.makedirs(os.path.join(os.path.dirname(__file__), os.path.dirname(dataset_path)), exist_ok=True)
+    os.makedirs(os.path.join(os.path.dirname(__file__), os.path.dirname(tokenizer_path)), exist_ok=True)
 
     print(f"Generating Q data...")
     text = []
@@ -78,7 +80,7 @@ def generate_q_dataset(data_dir="dataset"):
 
     print(f"Building tokenizer...")
     tokenizer = Tokenizer()
-    tokenizer.build_from_text(fulltext, os.path.join(os.path.dirname(__file__), data_dir, 'tokenizer.json'))
+    tokenizer.build_from_text(fulltext, os.path.join(os.path.dirname(__file__), tokenizer_path))
 
     print(f"Shuffling and encoding data blocks...")
     train_ids = []
@@ -97,36 +99,35 @@ def generate_q_dataset(data_dir="dataset"):
         "train_ids": train_ids,
         "val_ids": val_ids
     }
-    with open(os.path.join(os.path.dirname(__file__), data_dir, 'dataset.pkl'), 'wb') as f:
+    with open(os.path.join(os.path.dirname(__file__), dataset_path), 'wb') as f:
         pickle.dump(dataset, f)
 
 
 def inference_q(config):
-    data_dir = config["data_dir"]
-    ckpt_dir = config["ckpt_dir"]
-    device   = config["device"]
+    device = config["device"]
 
     # 读取模型检查点和训练配置
-    ckpt_path = os.path.join(os.path.dirname(__file__), ckpt_dir, 'ckpt.pt')
+    ckpt_path = os.path.join(os.path.dirname(__file__), config["checkpoint_path"])
     print(f"Loading checkpoint from {ckpt_path}...")
     checkpoint = torch.load(ckpt_path, map_location=device)
-    config = checkpoint['config']
+    train_config = checkpoint['train_config']
+    model_config = checkpoint['model_config']
 
     # 设置随机种子与训练设置一致
-    torch.manual_seed(config.random_seed)
-    torch.cuda.manual_seed(config.random_seed)
+    torch.manual_seed(train_config.random_seed)
+    torch.cuda.manual_seed(train_config.random_seed)
 
     # 加载模型权重
-    model = GPT(config)
+    model = GPT(model_config)
     model.load_state_dict(checkpoint['model'])
     model.eval()
     model.to(device)
 
     # 读取分词器
-    tokenizer_path = os.path.join(os.path.dirname(__file__), data_dir, 'tokenizer.json')
-    print(f"Loading tokenizer from {tokenizer_path}...")
+    tk_path = os.path.join(os.path.dirname(__file__), config["tokenizer_path"])
+    print(f"Loading tokenizer from {tk_path}...")
     tokenizer = Tokenizer()
-    tokenizer.load_from_config(tokenizer_path)
+    tokenizer.load_from_config(tk_path)
 
     with torch.no_grad():
         ok_count = 0
@@ -148,9 +149,9 @@ def inference_q(config):
 def main():
     print(f"PyTorch version: {torch.__version__}")
 
-    generate_q_dataset(config["data_dir"])
+    generate_q_dataset(config["dataset_path"], config["tokenizer_path"])
 
-    trainer = TrainGPT(config, is_from_pretraind=False)
+    trainer = TrainGPT(config, is_from_pretrained=False)
     trainer.start()
 
     inference_q(config)
