@@ -1,15 +1,13 @@
 
 # Nano
 
-大模型，小玩具。本仓库收集了一些经典的、极简的、可以实际运行的人工智能算法实现案例，供个人赏玩、研究、魔改和炼丹炉煲机之用。
+大模型，小玩具。本仓库复刻自[karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)，是Transformer语言模型的简单实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。
 
 ![ ](./nano.jpg)
 
 Nano（東雲名乃）是动画《日常》中的角色，其角色设定是机器人。作品中另外一个角色“坂本”（Sakamoto），是一只会说话的黑猫，只不过必须戴上红色的围巾才会说话。
 
-## 自然语言处理（NLP）
-
-复刻自 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)。
+## 基本玩法：语言模型
 
 首先安装依赖，建议在虚拟环境中安装。
 
@@ -123,7 +121,7 @@ cd Nano/nlp
 python inference_ds.py
 ```
 
-### 其他玩法①：丘成桐先生也答不出的Q问题
+## 其他玩法①：丘成桐先生也答不出的Q问题
 
 所谓“Q问题”，是《鲁豫有约》20150902期节目中，主持人给丘成桐出的一道脑筋急转弯题。
 
@@ -133,7 +131,7 @@ python inference_ds.py
 python q.py
 ```
 
-### 其他玩法②：排序，但是GPT
+## 其他玩法②：排序，但是GPT
 
 [B站视频](https://www.bilibili.com/video/BV1XZ421s7bM)
 
@@ -141,9 +139,13 @@ python q.py
 python sorting.py
 ```
 
-### 研究笔记
+## 研究笔记
 
-**注意力算子`scaled_dot_product_attention`的性能**
+### 训练性能
+
+- 同等参数下，单卡P40训练性能可以达到6.5TFLOPS。训练参数：BlockSize=512,VocabSize=2114,L=2,H=4,E=512,BatchSize=100
+
+### 算子`scaled_dot_product_attention`的性能
 
 PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135) 的注意力算子计算加速。目前有3种kernel，但是不支持较旧的GPU。分别启用3种kernel，实测相对性能如下：
 
@@ -152,22 +154,10 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 |相对时间|(不支持)|2.75|1(基准)|
 |相对显存|(不支持)|0.78|1(基准)|
 
-### 参考文献
+## 参考文献
 
 - A Vaswani, N Shazeer, N Parmar, et al. [Attention Is All You Need](https://arxiv.org/abs/1706.03762) [J]. Advances in Neural Information Processing Systems, 2017, 30.
 - A Radford, K Narasimhan, T Salimans, et al. [Improving Language Understanding by Generative Pre-Training](https://s3-us-west-2.amazonaws.com/openai-assets/research-covers/language-unsupervised/language_understanding_paper.pdf) [J]. 2018.
 - [GPT可视化](https://bbycroft.net/llm)
 - [论文分享：新型注意力算法FlashAttention](https://www.bilibili.com/video/BV1zs4y1J7tb/)
 - https://huggingface.co/docs/text-generation-inference/conceptual/flash_attention
-
-## 机器视觉和语言-图像多模态联觉
-
-### CLIP：开集图像分类
-
-复刻自 [openai/CLIP](https://github.com/openai/CLIP)。
-
-### BLIP：视觉-语言联合理解与文本生成
-
-复刻自 [salesforce/BLIP](https://github.com/salesforce/BLIP)。
-
-## 音频和语音

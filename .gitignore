@@ -9,8 +9,8 @@ __pycache__/
 *.pth
 *.pyc
 input.txt
-nlp/dataset/*.json
-nlp/checkpoint/
+dataset/*.json
+checkpoint/
 log/
 *.log
 *.py[cod]
@@ -18,4 +18,4 @@ log/
 *.egg-info
 .pytest_cache
 thumbs.db
-nlp/dataset/xxqg.txt
+dataset/xxqg.txt
