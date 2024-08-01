@@ -134,7 +134,7 @@ def inference_palindrome_gpt(config):
             input_seq = ("-----------------"+str(n))[-INPUT_LENGTH:]
             target_seq = input_seq[::-1]
             x = torch.tensor(tokenizer.encode(input_seq), dtype=torch.long, device=device)[None, ...]
-            y = model.generate_sequence(x, temperature=1, top_k=1)
+            y = model.non_auto_regressive_generate(x, temperature=1, top_k=1)
             output_list = []
             for t in range(len(y)):
                 output_list.append(tokenizer.decode(y[t][0].tolist()))

@@ -143,7 +143,7 @@ python sorting.py
 
 ### 训练性能
 
-- 同等参数下，单卡P40训练性能可以达到6.0TFLOPS；单卡P100可以达到6.3TFLOPS；E5-2680v4/E5-2686v4可以达到700~900GFLOPS。训练参数：BlockSize=512,VocabSize=2114,L=2,H=4,E=512,BatchSize=10
+- 同等参数下，单卡P40训练性能可以达到6.0TFLOPS；单卡P100可以达到6.3TFLOPS；E5-2680v4/E5-2686v4可以达到700~900GFLOPS；i5-8259U可以达到120~140GFLOPS。训练参数：BlockSize=512,VocabSize=2114,L=2,H=4,E=512,BatchSize=10
 
 ### 算子`scaled_dot_product_attention`的性能
 

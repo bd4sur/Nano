@@ -121,7 +121,7 @@ def inference_sorting_gpt(config):
             input_seq = f"{n + 10 ** SORTING_LENGTH}"[1:]
             target_seq = "".join(sorted(list(input_seq)))
             x = torch.tensor(tokenizer.encode(input_seq), dtype=torch.long, device=device)[None, ...]
-            y = model.generate_sequence(x, temperature=1, top_k=1)
+            y = model.non_auto_regressive_generate(x, temperature=1, top_k=1)
             output_list = []
             for t in range(len(y)):
                 output_list.append(tokenizer.decode(y[t][0].tolist()))

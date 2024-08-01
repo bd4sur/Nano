@@ -137,7 +137,7 @@ def inference_q(config):
             n = random.randint(0, 10 ** Q_DIGITS)
             prompt = f"{n + 10 ** Q_DIGITS}-"[1:]
             x = torch.tensor(tokenizer.encode(prompt), dtype=torch.long, device=device)[None, ...]
-            y = model.predict_next_token(x, temperature=1, top_k=1)
+            y = model.generate_next_token(x, temperature=1, top_k=1)
             qval = tokenizer.decode(y[0].tolist())
             label = "×"
             total_count += 1

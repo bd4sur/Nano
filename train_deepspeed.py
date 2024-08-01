@@ -57,13 +57,13 @@ class TrainGPT():
         tokenizer = Tokenizer()
         tokenizer.load_from_config(tokenizer_path)
 
-        self.train_config.vocab_size = tokenizer.vocab_size
+        self.model_config.vocab_size = tokenizer.vocab_size
         self.train_data = np.array(dataset["train_ids"], dtype=np.uint16) # np.memmap(os.path.join(os.path.dirname(__file__), self.dataset_path, 'train.bin'), dtype=np.uint16, mode='r')
         self.val_data = np.array(dataset["val_ids"], dtype=np.uint16) # np.memmap(os.path.join(os.path.dirname(__file__), self.dataset_path, 'val.bin'), dtype=np.uint16, mode='r')
 
         self.log(f"  Size of Train set = {len(self.train_data)}")
         self.log(f"  Size of Validation set = {len(self.val_data)}")
-        self.log(f"  Size of Vocabulary = {self.train_config.vocab_size}")
+        self.log(f"  Size of Vocabulary = {self.model_config.vocab_size}")
 
     def init(self):
         deepspeed.init_distributed(dist_backend=self.train_config.backend)

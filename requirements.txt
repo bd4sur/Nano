@@ -1,5 +1,6 @@
 tqdm
 matplotlib
+PyQt6
 numpy==1.26.4
 torch==2.3.0
 tensorboard

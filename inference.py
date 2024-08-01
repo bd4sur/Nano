@@ -71,7 +71,7 @@ class InferenceGPT:
                     break
                 x = torch.tensor(self.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
                 print(prompt, end="", flush=True)
-                y = self.model.generate(x, 200, temperature=1, top_k=10, callback=self.typewriter)
+                y = self.model.auto_regressive_generate(x, 200, temperature=1, top_k=10, callback=self.typewriter)
                 print("\n")
 
 def main():
