@@ -216,8 +216,8 @@ class GPT(nn.Module):
         pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
 
         # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+        tok_emb = self.transformer.wte(idx) # token embeddings of shape (BatchSize, BlockSize, n_embd)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (BlockSize, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
         for block in self.transformer.h:
             x = block(x)
@@ -225,18 +225,18 @@ class GPT(nn.Module):
 
         # 计算损失：分成两种情况，一种是计算所有tokens的损失（用于文本生成任务），另一种是只计算最后一个字符的损失（用于Q问题）
         if targets is not None: # target.shape=(BatchSize, BlockSize)
-            logits = self.lm_head(x) # shape=(BatchSize, BlockSize, EmbeddingLen)
+            logits = self.lm_head(x) # logits.shape=(BatchSize, BlockSize, VocabSize)
             if eval_only_last_token_loss:
-                a = logits[:, -1, :] # shape=(BatchSize, EmbeddingLen) batch中每句话最后一个token的嵌入向量
+                a = logits[:, -1, :] # shape=(BatchSize, VocabSize) batch中每句话最后一个token的logits
                 b = targets[:, -1] # shape(BatchSize) batch中每句话最后一个token的code
                 loss = F.cross_entropy(a, b, ignore_index=-1)
             else:
-                a = logits.view(-1, logits.size(-1)) # shape=(BatchSize*BlockSize, EmbeddingLen)
+                a = logits.view(-1, logits.size(-1)) # shape=(BatchSize*BlockSize, VocabSize)
                 b = targets.view(-1) # shape=(BatchSize*BlockSize)
                 loss = F.cross_entropy(a, b, ignore_index=-1)
         else:
+            # inference-time mini-optimization: only forward the lm_head on the very last position
             if self.config.is_causal:
-                # inference-time mini-optimization: only forward the lm_head on the very last position
                 logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             else:
                 logits = self.lm_head(x)

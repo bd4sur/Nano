@@ -7,7 +7,7 @@
 
 Nano（東雲名乃）是动画《日常》中的角色，其角色设定是机器人。作品中另外一个角色“坂本”（Sakamoto），是一只会说话的黑猫，只不过必须戴上红色的围巾才会说话。
 
-## 基本玩法：语言模型
+## 基本玩法：自回归语言模型
 
 首先安装依赖，建议在虚拟环境中安装。
 
@@ -121,7 +121,7 @@ cd Nano/nlp
 python inference_ds.py
 ```
 
-## 其他玩法①：丘成桐先生也答不出的Q问题
+## 其他玩法1：丘成桐先生也答不出的Q问题
 
 所谓“Q问题”，是《鲁豫有约》20150902期节目中，主持人给丘成桐出的一道脑筋急转弯题。
 
@@ -131,19 +131,35 @@ python inference_ds.py
 python q.py
 ```
 
-## 其他玩法②：排序，但是GPT
+## 其他玩法2：排序，但是GPT
 
 [B站视频](https://www.bilibili.com/video/BV1XZ421s7bM)
 
 ```
-python sorting.py
+python sort.py
+```
+
+## 其他玩法3：回文序列
+
+```
+python palindrome.py
 ```
 
 ## 研究笔记
 
 ### 训练性能
 
-- 同等参数下，单卡P40训练性能可以达到6.0TFLOPS；单卡P100可以达到6.3TFLOPS；E5-2680v4/E5-2686v4可以达到700~900GFLOPS；i5-8259U可以达到120~140GFLOPS。训练参数：BlockSize=512,VocabSize=2114,L=2,H=4,E=512,BatchSize=10
+训练参数：FP32, BlockSize=512, VocabSize=2114, L=2, H=4, E=512, BatchSize=100（参数量13.67M，显存占用9045MiB）
+
+|设备|速度|
+|----|----|
+|单卡P40 (24GB)|6.4～6.5TFLOPS|
+|单卡P100 (16GB)|--TFLOPS|
+|Jetson Orin NX (16GB)|--TFLOPS|
+|双路E5-2680v4 (64GB)|--GFLOPS|
+|双路E5-2686v4 (128GB)|550～650GFLOPS|
+|Ryzen 7 5800H (16GB)|200～210GFLOPS|
+|Core i5-8259U (16GB)|150～180GFLOPS|
 
 ### 算子`scaled_dot_product_attention`的性能
 
