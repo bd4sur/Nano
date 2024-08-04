@@ -155,7 +155,7 @@ python palindrome.py
 |----|----|
 |单卡P40 (24GB)|6.4～6.5TFLOPS|
 |单卡P100 (16GB)|--TFLOPS|
-|Jetson Orin NX (16GB)|--TFLOPS|
+|Jetson Orin NX (16GB)|1.1TFLOPS|
 |双路E5-2680v4 (64GB)|--GFLOPS|
 |双路E5-2686v4 (128GB)|550～650GFLOPS|
 |Ryzen 7 5800H (16GB)|200～210GFLOPS|
