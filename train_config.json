@@ -32,8 +32,8 @@
 
     "backend": "nccl",
     "device": "cuda",
-    "sdp_kernel": "math",
-    "dtype": "float16",
+    "sdp_kernel": "flash",
+    "dtype": "bfloat16",
     "grad_clip": 1.0,
     "gradient_accumulation_steps": 4
 }

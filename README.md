@@ -37,6 +37,12 @@ python data.py
 python train.py
 ```
 
+对于 Jetson Orin NX 16GB（Ampere架构，计算能力8.7）这样的新设备，可以使用自动混合精度技术和 Flash Attention 技术加速训练。在`train_config.json`中，将`sdp_kernel`设置为`flash`，将`dtype`设置为`bfloat16`，然后执行：
+
+```
+python train_amp.py
+```
+
 或者以分布式数据并行（DDP）方式启动训练（注意：`train_config.json`中的`gradient_accumulation_steps`应为显卡数的倍数）：
 
 ```
@@ -149,17 +155,18 @@ python palindrome.py
 
 ### 训练性能
 
-训练参数：FP32, BlockSize=512, VocabSize=2114, L=2, H=4, E=512, BatchSize=100（参数量13.67M，显存占用9045MiB）
+训练参数：BlockSize=512, VocabSize=2114, L=2, H=4, E=512, BatchSize=100（参数量13.67M，显存占用9045MiB）
 
-|设备|速度|
-|----|----|
-|单卡P40 (24GB)|6.4～6.5TFLOPS|
-|单卡P100 (16GB)|--TFLOPS|
-|Jetson Orin NX (16GB)|1.1TFLOPS|
-|双路E5-2680v4 (64GB)|--GFLOPS|
-|双路E5-2686v4 (128GB)|550～650GFLOPS|
-|Ryzen 7 5800H (16GB)|200～210GFLOPS|
-|Core i5-8259U (16GB)|150～180GFLOPS|
+|设备|设置|速度|
+|----|----|----|
+|单卡P40 (24GB)|FP32, no AMP|6.4～6.5TFLOPS|
+|单卡P100 (16GB)|FP32, no AMP|--TFLOPS|
+|Jetson Orin NX (16GB)|BF16, AMP, FlashAttn|6.2～6.3TFLOPS|
+|Jetson Orin NX (16GB)|FP32, no AMP|1.1～1.3TFLOPS|
+|双路E5-2680v4 (64GB)|FP32, no AMP|--GFLOPS|
+|双路E5-2686v4 (128GB)|FP32, no AMP|550～650GFLOPS|
+|Ryzen 7 5800H (16GB)|FP32, no AMP|200～210GFLOPS|
+|Core i5-8259U (16GB)|FP32, no AMP|150～180GFLOPS|
 
 ### 算子`scaled_dot_product_attention`的性能
 
