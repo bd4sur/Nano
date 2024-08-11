@@ -159,14 +159,16 @@ python palindrome.py
 
 |设备|设置|速度|
 |----|----|----|
-|单卡P40 (24GB)|FP32, no AMP|6.4～6.5TFLOPS|
-|单卡P100 (16GB)|FP32, no AMP|--TFLOPS|
-|Jetson Orin NX (16GB)|BF16, AMP, FlashAttn|6.2～6.3TFLOPS|
-|Jetson Orin NX (16GB)|FP32, no AMP|1.1～1.3TFLOPS|
-|双路E5-2680v4 (64GB)|FP32, no AMP|--GFLOPS|
-|双路E5-2686v4 (128GB)|FP32, no AMP|550～650GFLOPS|
-|Ryzen 7 5800H (16GB)|FP32, no AMP|200～210GFLOPS|
-|Core i5-8259U (16GB)|FP32, no AMP|150～180GFLOPS|
+|Jetson AGX Orin (64GB)|BF16, AMP, FlashAttn|30～32TFLOPS|
+|Jetson AGX Orin (64GB)|FP32, w/o AMP|8.7~8.9TFLOPS|
+|Jetson Orin NX (16GB)|BF16, AMP, FlashAttn|12～13TFLOPS|
+|Jetson Orin NX (16GB)|FP32, w/o AMP|3.0～3.3TFLOPS|
+|单卡P40 (24GB)|FP32, w/o AMP|6.4～6.5TFLOPS|
+|单卡P100 (16GB)|FP32, w/o AMP|--TFLOPS|
+|双路E5-2680v4 (64GB)|FP32, w/o AMP|--GFLOPS|
+|双路E5-2686v4 (128GB)|FP32, w/o AMP|550～650GFLOPS|
+|Ryzen 7 5800H (16GB)|FP32, w/o AMP|200～210GFLOPS|
+|Core i5-8259U (16GB)|FP32, w/o AMP|150～180GFLOPS|
 
 ### 算子`scaled_dot_product_attention`的性能
 
