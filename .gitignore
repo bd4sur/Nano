@@ -12,6 +12,7 @@ input.txt
 dataset/*.json
 checkpoint/
 log/
+model/
 *.log
 *.py[cod]
 *$py.class
