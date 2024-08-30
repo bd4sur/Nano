@@ -11,3 +11,6 @@ deepspeed==0.14.2
 ftfy
 regex
 torchvision
+
+timm
+fairscale
