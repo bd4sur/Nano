@@ -6,6 +6,7 @@
     "n_embd": 512,
     "dropout": 0.0,
     "bias": false,
+    "norm_eps": 1e-5,
     "is_causal": true,
     "eval_only_last_token_loss": false,
 

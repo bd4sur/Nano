@@ -21,6 +21,7 @@ class ModelConfig:
     n_embd: int = 128
     dropout: float = 0.0
     bias: bool = False
+    norm_eps: float = 1e-5
     is_causal: bool = True
     eval_only_last_token_loss: bool = False
 
@@ -70,6 +71,29 @@ class TrainConfig:
                 setattr(self, k, v)
 
 
+def precompute_pos_cis(dim: int, end: int, theta: float = 10000.0):
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end, device=freqs.device)
+    freqs = torch.outer(t, freqs).float()
+    pos_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
+    return pos_cis
+
+
+def apply_rotary_emb(xq, xk, pos_cis):
+    def unite_shape(pos_cis, x):
+        ndim = x.ndim
+        assert 0 <= 1 < ndim
+        assert pos_cis.shape == (x.shape[1], x.shape[-1])
+        shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
+        return pos_cis.view(*shape)
+    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+    pos_cis = unite_shape(pos_cis, xq_)
+    xq_out = torch.view_as_real(xq_ * pos_cis).flatten(3)
+    xk_out = torch.view_as_real(xk_ * pos_cis).flatten(3)
+    return xq_out.type_as(xq), xk_out.type_as(xk)
+
+
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
@@ -80,6 +104,21 @@ class LayerNorm(nn.Module):
 
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+
+
+class RMSNorm(torch.nn.Module):
+    def __init__(self, dim: int, eps: float):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float()).type_as(x)
+        return output * self.weight
+
 
 class MaskedSelfAttention(nn.Module):
 
@@ -107,14 +146,20 @@ class MaskedSelfAttention(nn.Module):
                 self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                                 .view(1, 1, config.block_size, config.block_size))
 
-    def forward(self, x):
+    def forward(self, x, pos_cis):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        k = k.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
+
+        q, k = apply_rotary_emb(q, k, pos_cis)
+
+        k = k.transpose(1, 2) # (B, nh, T, hs)
+        q = q.transpose(1, 2) # (B, nh, T, hs)
+        v = v.transpose(1, 2) # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -153,13 +198,15 @@ class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        # self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_1 = RMSNorm(config.n_embd, eps=config.norm_eps)
         self.attn = MaskedSelfAttention(config)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        # self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_2 = RMSNorm(config.n_embd, eps=config.norm_eps)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+    def forward(self, x, pos_cis):
+        x = x + self.attn(self.ln_1(x), pos_cis)
         x = x + self.mlp(self.ln_2(x))
         return x
 
@@ -181,6 +228,10 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+
+        # RoPE relative positional embeddings
+        pos_cis = precompute_pos_cis(config.n_embd // config.n_head, config.block_size)
+        self.register_buffer("pos_cis", pos_cis, persistent=False)
 
         # init all weights
         self.apply(self._init_weights)
@@ -210,17 +261,24 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None, eval_only_last_token_loss=False):
-        device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
 
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (BatchSize, BlockSize, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (BlockSize, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
+        # token embeddings of shape (BatchSize, BlockSize, n_embd)
+        tok_emb = self.transformer.wte(idx)
+
+        # RoPE
+        pos_cis = self.pos_cis[:t]
+        x = self.transformer.drop(tok_emb)
+
+        # Trained position embedding
+        # device = idx.device
+        # pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
+        # pos_emb = self.transformer.wpe(pos) # position embeddings of shape (BlockSize, n_embd)
+        # x = self.transformer.drop(tok_emb + pos_emb)
+
         for block in self.transformer.h:
-            x = block(x)
+            x = block(x, pos_cis)
         x = self.transformer.ln_f(x)
 
         # 计算损失：分成两种情况，一种是计算所有tokens的损失（用于文本生成任务），另一种是只计算最后一个字符的损失（用于Q问题）
