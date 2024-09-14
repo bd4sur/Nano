@@ -17,35 +17,43 @@ def generate_nlg_dataset(input_file, data_dir="dataset", is_build_tokenizer=True
         print(f"Loading tokenizer...")
         tokenizer.load_from_config(tokenizer_path)
 
-    print(f"Reading raw text file...")
-    with open(input_file_path, "r", encoding="utf-8") as f:
-        fulltext = f.read()
-    print(f"  Length of dataset in characters: {len(fulltext):,}")
+    print(f"Reading and encoding raw text file...")
+    def read_chunk(filepath, chunk_size=65536):
+        with open(filepath, mode="r", encoding="utf-8") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    return
+                yield chunk
 
-    print(f"Slicing raw text into blocks...")
-    text_slices = []
-    i = 0
-    while i < len(fulltext):
-        tslice = fulltext[i : i + block_size + 1]
+    all_tokens = []
+    text_iterator = read_chunk(input_file_path, chunk_size=16777216)
+    for chunk in tqdm(text_iterator):
+        tokens = tokenizer.encode(chunk)
+        all_tokens.extend(tokens)
+    print(f"  Length of tokens: {len(all_tokens):,}")
+
+    # print(f"Encoding full text...")
+    # all_tokens = tokenizer.encode(fulltext)
+
+    print(f"Slicing all tokens into blocks...")
+    blocks = []
+    for i in tqdm(range(0, len(all_tokens), int(block_size * overlap_ratio))):
+        tslice = all_tokens[i : i + block_size + 1]
         if len(tslice) == block_size + 1:
-            text_slices.append(tslice) # 每一条数据都比block_size多一个，用于预测下一字符的训练
-        i += int(block_size * overlap_ratio)
+            blocks.append(tslice) # 每一条数据都比block_size多一个，用于预测下一字符的训练
 
-    del fulltext
-
-    print(f"Encoding text blocks...")
-    for i in tqdm(range(len(text_slices))):
-        text_slices[i] = tokenizer.encode(text_slices[i])
+    del all_tokens
 
     print(f"Shuffling text blocks...")
     train_ids = []
     val_ids = []
-    line_indexes = list(range(len(text_slices)))
+    line_indexes = list(range(len(blocks)))
     random.shuffle(line_indexes)
-    for li in tqdm(range(0, int(len(text_slices) * 0.9))):
-        train_ids.append(text_slices[line_indexes[li]])
-    for li in tqdm(range(int(len(text_slices) * 0.9), len(text_slices))):
-        val_ids.append(text_slices[line_indexes[li]])
+    for li in tqdm(range(0, int(len(blocks) * 0.9))):
+        train_ids.append(blocks[line_indexes[li]])
+    for li in tqdm(range(int(len(blocks) * 0.9), len(blocks))):
+        val_ids.append(blocks[line_indexes[li]])
 
     print(f"Cast to numpy array...")
     train_ids = np.array(train_ids, dtype=np.uint16)
@@ -62,7 +70,7 @@ def generate_nlg_dataset(input_file, data_dir="dataset", is_build_tokenizer=True
     print(f"Done.")
 
 def main():
-    generate_nlg_dataset("psycho.txt", data_dir="dataset", block_size=512, overlap_ratio=0.5)
+    generate_nlg_dataset("input.txt", data_dir="dataset", block_size=512, overlap_ratio=0.5)
 
 if __name__ == "__main__":
     main()

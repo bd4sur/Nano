@@ -1,4 +1,5 @@
 tqdm
+blobfile
 matplotlib
 PyQt6
 numpy==1.26.4

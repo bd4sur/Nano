@@ -76,7 +76,8 @@ class InferenceGPT:
 
 def main():
     # infer = InferenceGPT("dataset", "gpt2", "cuda")
-    infer = InferenceGPT("dataset/tokenizer.json", "checkpoint/ckpt.pt", "cuda")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    infer = InferenceGPT("dataset/tokenizer.json", "checkpoint/ckpt.pt", device)
     infer.generate()
 
 if __name__ == "__main__":
