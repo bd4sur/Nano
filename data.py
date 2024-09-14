@@ -62,7 +62,7 @@ def generate_nlg_dataset(input_file, data_dir="dataset", is_build_tokenizer=True
     print(f"Done.")
 
 def main():
-    generate_nlg_dataset("input.txt", data_dir="dataset", block_size=512, overlap_ratio=0.5)
+    generate_nlg_dataset("psycho.txt", data_dir="dataset", block_size=512, overlap_ratio=0.5)
 
 if __name__ == "__main__":
     main()

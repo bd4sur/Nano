@@ -1,5 +1,4 @@
 import json
-import functools
 from tqdm import tqdm
 
 class Tokenizer:
@@ -9,12 +8,10 @@ class Tokenizer:
         self.vocab_size = 0
 
     # encoder: take a string, output a list of integers
-    @functools.lru_cache
     def encode(self, text):
         return [(self.stoi[c] if (c in self.stoi) else (self.vocab_size - 1)) for c in text]
 
     # decoder: take a list of integers, output a string
-    @functools.lru_cache
     def decode(self, code_list):
         return ''.join([self.itos[i] for i in code_list])
 

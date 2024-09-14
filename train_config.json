@@ -22,7 +22,7 @@
 
     "init_from": "pretrain",
     "batch_size": 100,
-    "random_seed": 114514,
+    "random_seed": 39,
     "dataset_path": "dataset/dataset.pkl",
     "tokenizer_path": "dataset/tokenizer.json",
     "checkpoint_path": "checkpoint/ckpt.pt",

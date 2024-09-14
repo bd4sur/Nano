@@ -39,6 +39,8 @@ class TrainGPT():
         self.val_data = None
         self.is_from_pretrained = is_from_pretrained
 
+        self.trainset_count = 0
+
         self.scaler = None
         self.ctx = None
 
@@ -113,9 +115,16 @@ class TrainGPT():
         self.ctx = nullcontext() if _device_type == 'cpu' else torch.amp.autocast(device_type=_device_type, dtype=_ptdtype)
 
     def get_batch(self, phase):
-        dataset = self.train_data if phase == 'train' else self.val_data
-        # 随机选一批训练数据项
-        ix = torch.randint(len(dataset), (self.train_config.batch_size,))
+        if phase == "train":
+            dataset = self.train_data
+            ix = range(self.trainset_count, self.trainset_count + self.train_config.batch_size)
+            self.trainset_count += self.train_config.batch_size
+            if self.trainset_count >= len(dataset) - self.train_config.batch_size:
+                self.trainset_count = 0
+        else:
+            dataset = self.val_data
+            ix = torch.randint(len(dataset), (self.train_config.batch_size,))
+
         if self.model_config.is_causal:
             # 取出一批数据，每条数据只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
             x = torch.stack([torch.from_numpy((dataset[i][0 : self.model_config.block_size]).astype(np.int64)) for i in ix])
@@ -134,18 +143,15 @@ class TrainGPT():
     # helps estimate an arbitrarily accurate loss over either split using many batches
     @torch.no_grad()
     def estimate_loss(self):
-        loss_value = {}
         self.model.eval()
-        for phase in ['train', 'val']:
-            losses = torch.zeros(self.train_config.eval_iters)
-            for k in range(self.train_config.eval_iters):
-                X, Y = self.get_batch(phase)
-                with self.ctx:
-                    _, loss = self.model(X, Y, self.model_config.eval_only_last_token_loss)
-                losses[k] = loss.item()
-            loss_value[phase] = losses.mean()
+        losses = torch.zeros(self.train_config.eval_iters)
+        for k in range(self.train_config.eval_iters):
+            X, Y = self.get_batch("val")
+            with self.ctx:
+                _, loss = self.model(X, Y, self.model_config.eval_only_last_token_loss)
+            losses[k] = loss.item()
         self.model.train()
-        return loss_value
+        return losses.mean()
 
     # learning rate decay scheduler (cosine with warmup)
     def update_learning_rate(self, it):
@@ -181,10 +187,10 @@ class TrainGPT():
 
             # evaluate the loss on train/val sets and write checkpoints
             if iter > 0 and iter % self.train_config.eval_interval == 0:
-                losses = self.estimate_loss()
-                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Phase: Validation | Step: {iter} | Train_loss: {losses['train']:.3f} | Val_loss: {losses['val']:.3f} | Best_val_loss: {best_val_loss:.4f}")
+                val_loss = self.estimate_loss()
+                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Phase: Validation | Step: {iter} | Val_loss: {val_loss:.3f} | Best_val_loss: {best_val_loss:.4f}")
 
-                if iter > 0 and losses['val'] < best_val_loss:
+                if iter > 0 and val_loss < best_val_loss:
                     self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving checkpoint to {self.train_config.checkpoint_path}")
                     _checkpoint = {
                         "model":        self.model.state_dict(),
@@ -193,7 +199,7 @@ class TrainGPT():
                         "train_config": self.train_config,
                         "model_config": self.model_config
                     }
-                    best_val_loss = losses['val']
+                    best_val_loss = val_loss
                     torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), self.train_config.checkpoint_path))
 
             t0 = time.time()
@@ -218,7 +224,7 @@ class TrainGPT():
             if iter % self.train_config.log_interval == 0:
                 lossf = loss.item()
                 flops = self.model.estimate_flops(self.train_config.batch_size, dt)
-                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Phase: Train | Step: {iter} | Loss: {lossf:.3f} | Time: {dt*1000:.0f} ms | Speed: {flops / 1e9:.2f} GFLOP/s")
+                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Phase: Train | Step: {iter} | TrainDataPos: {self.trainset_count} | Loss: {lossf:.3f} | Time: {dt*1000:.0f} ms | Speed: {flops / 1e9:.2f} GFLOP/s")
 
             iter += 1
             self.iter_count = iter
