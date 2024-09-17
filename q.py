@@ -15,9 +15,9 @@ Q_DIGITS = 6
 config = {
     "block_size": Q_DIGITS + 1,
     "vocab_size": 10000,
-    "n_layer": 1,
+    "n_layer": 2,
     "n_head": 2,
-    "n_embd": 16,
+    "n_embd": 64,
     "dropout": 0.0,
     "bias": False,
     "is_causal": True,
@@ -35,8 +35,8 @@ config = {
 
     "init_from": "pretrain",
     "batch_size": 300,
-    "random_seed": 114514,
-    "eval_only_last_token_loss": True,
+    "random_seed": 39,
+    "loss_mask": [Q_DIGITS, Q_DIGITS],
     "dataset_path": "dataset/q.pkl",
     "tokenizer_path": "dataset/q.json",
     "checkpoint_path": "checkpoint/q.pt",
@@ -45,7 +45,7 @@ config = {
     "eval_iters": 5,
 
     "backend": "nccl",
-    "device": "cuda:0"
+    "device": "cuda" if torch.cuda.is_available() else "cpu"
 }
 
 

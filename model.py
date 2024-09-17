@@ -23,7 +23,6 @@ class ModelConfig:
     bias: bool = False
     norm_eps: float = 1e-5
     is_causal: bool = True
-    eval_only_last_token_loss: bool = False
 
 
 
@@ -31,6 +30,7 @@ class ModelConfig:
 class TrainConfig:
     # GPT Model Args (Overrided)
     dropout: Optional[float] = 0.0
+    loss_mask: Optional[list[int]] = None
 
     # AdamW Optimizer Args
     learning_rate: Optional[float] = 6e-4
@@ -260,7 +260,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, eval_only_last_token_loss=False):
+    def forward(self, idx, targets=None, loss_mask=None):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
@@ -281,17 +281,19 @@ class GPT(nn.Module):
             x = block(x, pos_cis)
         x = self.transformer.ln_f(x)
 
-        # 计算损失：分成两种情况，一种是计算所有tokens的损失（用于文本生成任务），另一种是只计算最后一个字符的损失（用于Q问题）
+        # 计算损失
         if targets is not None: # target.shape=(BatchSize, BlockSize)
             logits = self.lm_head(x) # logits.shape=(BatchSize, BlockSize, VocabSize)
-            if eval_only_last_token_loss:
-                a = logits[:, -1, :] # shape=(BatchSize, VocabSize) batch中每句话最后一个token的logits
-                b = targets[:, -1] # shape(BatchSize) batch中每句话最后一个token的code
-                loss = F.cross_entropy(a, b, ignore_index=-1)
-            else:
-                a = logits.view(-1, logits.size(-1)) # shape=(BatchSize*BlockSize, VocabSize)
-                b = targets.view(-1) # shape=(BatchSize*BlockSize)
-                loss = F.cross_entropy(a, b, ignore_index=-1)
+            # if eval_only_last_token_loss:
+            #     a = logits[:, -1, :] # shape=(BatchSize, VocabSize) batch中每句话最后一个token的logits
+            #     b = targets[:, -1] # shape(BatchSize) batch中每句话最后一个token的code
+            #     loss = F.cross_entropy(a, b, ignore_index=-1)
+            # else:
+            a = logits.view(-1, logits.size(-1)) # shape=(BatchSize*BlockSize, VocabSize)
+            b = targets.view(-1) # shape=(BatchSize*BlockSize)
+            lm = loss_mask.view(-1) # shape=(BatchSize*BlockSize)
+            loss = F.cross_entropy(a, b, ignore_index=-1)
+            loss = torch.sum(loss * lm) / lm.sum()
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             if self.config.is_causal:

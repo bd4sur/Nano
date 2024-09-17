@@ -15,7 +15,7 @@ SORTING_LENGTH = 7
 config = {
     "block_size": SORTING_LENGTH,
     "vocab_size": 10000,
-    "n_layer": 1,
+    "n_layer": 2,
     "n_head": 2,
     "n_embd": 32,
     "dropout": 0.0,
@@ -35,8 +35,8 @@ config = {
 
     "init_from": "pretrain",
     "batch_size": 300,
-    "random_seed": 114514,
-    "eval_only_last_token_loss": False,
+    "random_seed": 39,
+    "loss_mask": [0, SORTING_LENGTH-1],
     "dataset_path": "dataset/sort.pkl",
     "tokenizer_path": "dataset/sort.json",
     "checkpoint_path": "checkpoint/sort.pt",
@@ -45,7 +45,7 @@ config = {
     "eval_iters": 5,
 
     "backend": "nccl",
-    "device": "cuda:0"
+    "device": "cuda" if torch.cuda.is_available() else "cpu"
 }
 
 

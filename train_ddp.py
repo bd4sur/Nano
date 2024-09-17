@@ -30,7 +30,6 @@ class TrainGPT():
             "n_embd": config_dict["n_embd"],
             "dropout": config_dict["dropout"],
             "is_causal": config_dict["is_causal"],
-            "eval_only_last_token_loss": config_dict["eval_only_last_token_loss"],
         })
 
         # Internal states
@@ -40,6 +39,8 @@ class TrainGPT():
         self.train_data = None
         self.val_data = None
         self.is_from_pretrained = is_from_pretrained
+        assert self.train_config.loss_mask[0] <= self.train_config.loss_mask[1]
+        self.loss_mask_array = None
         self.trainset_count = 0
         # DDP
         self.current_device = ""
@@ -141,6 +142,18 @@ class TrainGPT():
 
         self.log("  Number of Parameters = %.2fM" % (self.model.get_num_params() / 1e6,))
 
+
+        self.loss_mask_array = torch.stack(
+            [
+                torch.from_numpy(np.array(
+                    [
+                        1 if pos >= self.train_config.loss_mask[0] and pos <= self.train_config.loss_mask[1] else 0
+                        for pos in range(self.model_config.block_size)
+                    ]).astype(np.int64))
+                for _ in range(self.train_config.batch_size)
+            ]
+        ).to(self.current_device)
+
         # initialize a GradScaler. If enabled=False scaler is a no-op
         self.scaler = torch.cuda.amp.GradScaler(enabled=(self.train_config.dtype == "float16"))
 
@@ -196,7 +209,7 @@ class TrainGPT():
         for k in range(self.train_config.eval_iters):
             X, Y = self.get_batch("val")
             with self.ctx:
-                _, loss = self.model(X, Y, self.model_config.eval_only_last_token_loss)
+                _, loss = self.model(X, Y, self.loss_mask_array)
             losses[k] = loss.item()
         self.model.train()
         return losses.mean()
@@ -266,7 +279,7 @@ class TrainGPT():
                     # looking at the source of that context manager, it just toggles this variable
                     self.model.require_backward_grad_sync = (micro_step == self.gradient_accumulation_steps - 1)
                 with self.ctx:
-                    _, loss = self.model(X, Y)
+                    _, loss = self.model(X, Y, self.loss_mask_array)
                     loss = loss / self.gradient_accumulation_steps # scale the loss to account for gradient accumulation
                 # immediately async prefetch next batch while model is doing the forward pass on the GPU
                 X, Y = self.get_batch('train')

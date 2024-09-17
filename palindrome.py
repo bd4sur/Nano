@@ -36,7 +36,7 @@ config = {
     "init_from": "pretrain",
     "batch_size": 500,
     "random_seed": 1314,
-    "eval_only_last_token_loss": False,
+    "loss_mask": [0, INPUT_LENGTH-1],
     "dataset_path": "dataset/palindrome.pkl",
     "tokenizer_path": "dataset/palindrome.json",
     "checkpoint_path": "checkpoint/palindrome.pt",
@@ -45,7 +45,7 @@ config = {
     "eval_iters": 5,
 
     "backend": "nccl",
-    "device": "cuda:0"
+    "device": "cuda" if torch.cuda.is_available() else "cpu"
 }
 
 CHAR_LIST = [

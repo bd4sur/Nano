@@ -5,7 +5,9 @@ import numpy as np
 from tqdm import tqdm
 from tokenizer import Tokenizer
 
-def generate_nlg_dataset(input_file, data_dir="dataset", is_build_tokenizer=True, block_size=512, overlap_ratio=0.5):
+
+
+def build_tokenizer(input_file, data_dir="dataset", is_build_tokenizer=True):
     input_file_path = os.path.join(os.path.dirname(__file__), data_dir, input_file)
     tokenizer_path = os.path.join(os.path.dirname(__file__), data_dir, 'tokenizer.json')
 
@@ -16,6 +18,10 @@ def generate_nlg_dataset(input_file, data_dir="dataset", is_build_tokenizer=True
     else:
         print(f"Loading tokenizer...")
         tokenizer.load_from_config(tokenizer_path)
+    return tokenizer
+
+def generate_pretrain_dataset(input_file, data_dir="dataset", tokenizer=None, block_size=512, overlap_ratio=0.5):
+    input_file_path = os.path.join(os.path.dirname(__file__), data_dir, input_file)
 
     print(f"Reading and encoding raw text file...")
     def read_chunk(filepath, chunk_size=65536):
@@ -64,13 +70,62 @@ def generate_nlg_dataset(input_file, data_dir="dataset", is_build_tokenizer=True
         "train_ids": train_ids,
         "val_ids": val_ids
     }
-    with open(os.path.join(os.path.dirname(__file__), data_dir, 'dataset.pkl'), 'wb') as f:
+    with open(os.path.join(os.path.dirname(__file__), data_dir, 'pretrain.pkl'), 'wb') as f:
         pickle.dump(dataset, f)
 
     print(f"Done.")
 
+def generate_sft_dataset(input_file, data_dir="dataset", tokenizer=None, block_size=512):
+    input_file_path = os.path.join(os.path.dirname(__file__), data_dir, input_file)
+    all_lines = []
+    with open(input_file_path, mode="r", encoding="utf-8") as f:
+        while True:
+            line = f.readline()
+            if not line:
+                break
+            all_lines.append(line[0: block_size])
+
+    print(f"Shuffling sft blocks...")
+    train_ids = []
+    val_ids = []
+    line_indexes = list(range(len(all_lines)))
+    random.shuffle(line_indexes)
+    for li in tqdm(range(0, int(len(all_lines) * 0.9))):
+        ids = tokenizer.encode(all_lines[line_indexes[li]])
+        ids = [ids[i] if i < len(ids) else 0 for i in range(block_size+1)]
+        train_ids.append(ids)
+    for li in tqdm(range(int(len(all_lines) * 0.9), len(all_lines))):
+        ids = tokenizer.encode(all_lines[line_indexes[li]])
+        ids = [ids[i] if i < len(ids) else 0 for i in range(block_size+1)]
+        val_ids.append(ids)
+
+    print(f"Cast to numpy array...")
+    train_ids = np.array(train_ids, dtype=np.uint16)
+    val_ids = np.array(val_ids, dtype=np.uint16)
+
+    print(f"Saving pickel file...")
+    dataset = {
+        "train_ids": train_ids,
+        "val_ids": val_ids
+    }
+    with open(os.path.join(os.path.dirname(__file__), data_dir, 'sft.pkl'), 'wb') as f:
+        pickle.dump(dataset, f)
+
+    print(f"Done.")
+
+
+
+
+
+
+
 def main():
-    generate_nlg_dataset("input.txt", data_dir="dataset", block_size=512, overlap_ratio=0.5)
+    BLOCK_SIZE = 512
+    PRETRAIN_DATASET = "psycho.txt"
+    SFT_DATASET = "sft.txt"
+    tokenizer = build_tokenizer(PRETRAIN_DATASET, data_dir="dataset", is_build_tokenizer=True)
+    generate_pretrain_dataset(PRETRAIN_DATASET, data_dir="dataset", tokenizer=tokenizer, block_size=BLOCK_SIZE, overlap_ratio=0.5)
+    generate_sft_dataset(SFT_DATASET, data_dir="dataset", tokenizer=tokenizer, block_size=BLOCK_SIZE)
 
 if __name__ == "__main__":
     main()

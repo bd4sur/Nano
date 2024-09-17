@@ -28,7 +28,6 @@ class TrainGPT():
             "n_embd": config_dict["n_embd"],
             "dropout": config_dict["dropout"],
             "is_causal": config_dict["is_causal"],
-            "eval_only_last_token_loss": config_dict["eval_only_last_token_loss"],
         })
 
         # Internal states
@@ -38,7 +37,8 @@ class TrainGPT():
         self.train_data = None
         self.val_data = None
         self.is_from_pretrained = is_from_pretrained
-
+        assert self.train_config.loss_mask[0] <= self.train_config.loss_mask[1]
+        self.loss_mask_array = None
         self.trainset_count = 0
 
         self.scaler = None
@@ -74,6 +74,17 @@ class TrainGPT():
         torch.backends.cuda.enable_flash_sdp(self.train_config.sdp_kernel == "flash")
         torch.backends.cuda.enable_mem_efficient_sdp(self.train_config.sdp_kernel == "mem_efficient")
         torch.backends.cuda.enable_math_sdp(self.train_config.sdp_kernel == "math")
+
+        self.loss_mask_array = torch.stack(
+            [
+                torch.from_numpy(np.array(
+                    [
+                        1 if pos >= self.train_config.loss_mask[0] and pos <= self.train_config.loss_mask[1] else 0
+                        for pos in range(self.model_config.block_size)
+                    ]).astype(np.int64))
+                for _ in range(self.train_config.batch_size)
+            ]
+        ).to(self.train_config.device)
 
         # Model
         if self.is_from_pretrained:
@@ -148,7 +159,7 @@ class TrainGPT():
         for k in range(self.train_config.eval_iters):
             X, Y = self.get_batch("val")
             with self.ctx:
-                _, loss = self.model(X, Y, self.model_config.eval_only_last_token_loss)
+                _, loss = self.model(X, Y, self.loss_mask_array)
             losses[k] = loss.item()
         self.model.train()
         return losses.mean()
@@ -205,7 +216,7 @@ class TrainGPT():
             t0 = time.time()
 
             with self.ctx:
-                _, loss = self.model(X, Y, self.model_config.eval_only_last_token_loss)
+                _, loss = self.model(X, Y, self.loss_mask_array)
             X, Y = self.get_batch('train')
             self.scaler.scale(loss).backward()
             # clip the gradient

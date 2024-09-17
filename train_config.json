@@ -8,7 +8,7 @@
     "bias": false,
     "norm_eps": 1e-5,
     "is_causal": true,
-    "eval_only_last_token_loss": false,
+    "loss_mask": [0, 511],
 
     "learning_rate": 6e-4,
     "max_iters": 100000,
@@ -24,7 +24,7 @@
     "init_from": "pretrain",
     "batch_size": 100,
     "random_seed": 39,
-    "dataset_path": "dataset/dataset.pkl",
+    "dataset_path": "dataset/pretrain.pkl",
     "tokenizer_path": "dataset/tokenizer.json",
     "checkpoint_path": "checkpoint/ckpt.pt",
     "eval_interval": 100,

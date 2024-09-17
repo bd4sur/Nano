@@ -28,7 +28,6 @@ class TrainGPT():
             "n_embd": config_dict["n_embd"],
             "dropout": config_dict["dropout"],
             "is_causal": config_dict["is_causal"],
-            "eval_only_last_token_loss": config_dict["eval_only_last_token_loss"],
         })
 
         # Internal states
@@ -38,6 +37,8 @@ class TrainGPT():
         self.train_data = None
         self.val_data = None
         self.is_from_pretrained = is_from_pretrained
+        assert self.train_config.loss_mask[0] <= self.train_config.loss_mask[1]
+        self.loss_mask_array = None
         self.trainset_count = 0
 
         # DeepSpeed
@@ -78,6 +79,18 @@ class TrainGPT():
         torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
         torch.manual_seed(self.train_config.random_seed)
+
+        self.loss_mask_array = torch.stack(
+            [
+                torch.from_numpy(np.array(
+                    [
+                        1 if pos >= self.train_config.loss_mask[0] and pos <= self.train_config.loss_mask[1] else 0
+                        for pos in range(self.model_config.block_size)
+                    ]).astype(np.int64))
+                for _ in range(self.train_config.batch_size)
+            ]
+        ).to(self.train_config.device)
+
         # Model
         if self.is_from_pretrained:
             _ckpt_path = os.path.join(os.path.dirname(__file__), self.train_config.checkpoint_path)
@@ -149,7 +162,7 @@ class TrainGPT():
         for k in range(self.train_config.eval_iters):
             X, Y = self.get_batch("val")
             with self.ctx:
-                _, loss = self.model(X, Y, self.model_config.eval_only_last_token_loss)
+                _, loss = self.model(X, Y, self.loss_mask_array)
             losses[k] = loss.item()
         self.model.train()
         return losses.mean()
@@ -201,7 +214,7 @@ class TrainGPT():
                     #     }, f)
                     best_val_loss = val_loss
             t0 = time.time()
-            _, loss = self.model(X, Y, self.model_config.eval_only_last_token_loss)
+            _, loss = self.model(X, Y, self.loss_mask_array)
             X, Y = self.get_batch('train')
             self.model_engine.backward(loss)
             self.model_engine.step()
