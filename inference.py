@@ -69,6 +69,7 @@ class InferenceGPT:
                     prompt = input("Prompt: ")
                 except EOFError:
                     break
+                prompt = f"\u1337{prompt}\u1338\u1339"
                 x = torch.tensor(self.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
                 print(prompt, end="", flush=True)
                 y = self.model.auto_regressive_generate(x, 200, temperature=1, top_k=10, callback=self.typewriter)

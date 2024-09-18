@@ -14,11 +14,9 @@ from model import TrainConfig, ModelConfig, GPT
 
 logger = logging.getLogger(__name__)
 
-CONFIG_JSON = "train_config.json"
-
 class TrainGPT():
 
-    def __init__(self, config_dict, is_from_pretrained=False) -> None:
+    def __init__(self, config_dict, is_from_pretrained=False, task="pretrain") -> None:
         self.train_config = TrainConfig(**(config_dict))
         self.model_config = ModelConfig(**{
             "block_size": config_dict["block_size"],
@@ -36,9 +34,12 @@ class TrainGPT():
         self.iter_count = 0
         self.train_data = None
         self.val_data = None
+        self.train_masks = None
+        self.val_masks = None
         self.is_from_pretrained = is_from_pretrained
+        self.task = task
         assert self.train_config.loss_mask[0] <= self.train_config.loss_mask[1]
-        self.loss_mask_array = None
+        self.global_loss_mask = None
         self.trainset_count = 0
 
         self.scaler = None
@@ -60,8 +61,11 @@ class TrainGPT():
         tokenizer.load_from_config(tokenizer_path)
 
         self.model_config.vocab_size = tokenizer.vocab_size
-        self.train_data = np.array(dataset["train_ids"], dtype=np.uint16) # np.memmap(os.path.join(os.path.dirname(__file__), self.dataset_path, 'train.bin'), dtype=np.uint16, mode='r')
-        self.val_data = np.array(dataset["val_ids"], dtype=np.uint16) # np.memmap(os.path.join(os.path.dirname(__file__), self.dataset_path, 'val.bin'), dtype=np.uint16, mode='r')
+        self.train_data = np.array(dataset["train_ids"], dtype=np.uint16)
+        self.val_data = np.array(dataset["val_ids"], dtype=np.uint16)
+        if self.task == "sft":
+            self.train_masks = np.array(dataset["train_masks"], dtype=np.uint16)
+            self.val_masks = np.array(dataset["val_masks"], dtype=np.uint16)
 
         self.log(f"  Size of Train set = {len(self.train_data)}")
         self.log(f"  Size of Validation set = {len(self.val_data)}")
@@ -75,7 +79,7 @@ class TrainGPT():
         torch.backends.cuda.enable_mem_efficient_sdp(self.train_config.sdp_kernel == "mem_efficient")
         torch.backends.cuda.enable_math_sdp(self.train_config.sdp_kernel == "math")
 
-        self.loss_mask_array = torch.stack(
+        self.global_loss_mask = torch.stack(
             [
                 torch.from_numpy(np.array(
                     [
@@ -84,7 +88,7 @@ class TrainGPT():
                     ]).astype(np.int64))
                 for _ in range(self.train_config.batch_size)
             ]
-        ).to(self.train_config.device)
+        ).to(self.train_config.device, non_blocking=True)
 
         # Model
         if self.is_from_pretrained:
@@ -128,12 +132,16 @@ class TrainGPT():
     def get_batch(self, phase):
         if phase == "train":
             dataset = self.train_data
+            if self.task == "sft":
+                masks = self.train_masks
             ix = range(self.trainset_count, self.trainset_count + self.train_config.batch_size)
             self.trainset_count += self.train_config.batch_size
             if self.trainset_count >= len(dataset) - self.train_config.batch_size:
                 self.trainset_count = 0
         else:
             dataset = self.val_data
+            if self.task == "sft":
+                masks = self.train_masks
             ix = torch.randint(len(dataset), (self.train_config.batch_size,))
 
         if self.model_config.is_causal:
@@ -141,15 +149,20 @@ class TrainGPT():
             x = torch.stack([torch.from_numpy((dataset[i][0 : self.model_config.block_size]).astype(np.int64)) for i in ix])
             # 这批数据每一条都右移一个字符，作为预测目标，shape=(batch_size, block_size)
             y = torch.stack([torch.from_numpy((dataset[i][1 : self.model_config.block_size + 1]).astype(np.int64)) for i in ix])
-            x, y = x.to(self.train_config.device), y.to(self.train_config.device)
-            return x, y
+            if self.task == "pretrain":
+                x, y = x.to(self.train_config.device, non_blocking=True), y.to(self.train_config.device, non_blocking=True)
+                return x, y, self.global_loss_mask
+            elif self.task == "sft":
+                mask = torch.stack([torch.from_numpy((masks[i][1 : self.model_config.block_size + 1]).astype(np.int64)) for i in ix])
+                x, y, mask = x.to(self.train_config.device, non_blocking=True), y.to(self.train_config.device, non_blocking=True), mask.to(self.train_config.device, non_blocking=True)
+                return x, y, mask
         else:
             # 取出一批数据，每条数据只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
             x = torch.stack([torch.from_numpy((dataset[i][0 : self.model_config.block_size]).astype(np.int64)) for i in ix])
             # 取出后面剩余的block_size个token，作为预测目标，shape=(batch_size, block_size)
             y = torch.stack([torch.from_numpy((dataset[i][self.model_config.block_size : self.model_config.block_size * 2]).astype(np.int64)) for i in ix])
-            x, y = x.to(self.train_config.device), y.to(self.train_config.device)
-            return x, y
+            x, y = x.to(self.train_config.device, non_blocking=True), y.to(self.train_config.device, non_blocking=True)
+            return x, y, self.global_loss_mask
 
     # helps estimate an arbitrarily accurate loss over either split using many batches
     @torch.no_grad()
@@ -157,9 +170,9 @@ class TrainGPT():
         self.model.eval()
         losses = torch.zeros(self.train_config.eval_iters)
         for k in range(self.train_config.eval_iters):
-            X, Y = self.get_batch("val")
+            X, Y, mask = self.get_batch("val")
             with self.ctx:
-                _, loss = self.model(X, Y, self.loss_mask_array)
+                _, loss = self.model(X, Y, mask)
             losses[k] = loss.item()
         self.model.train()
         return losses.mean()
@@ -184,7 +197,7 @@ class TrainGPT():
         self.init()
 
         best_val_loss = 1e9
-        X, Y = self.get_batch('train') # fetch the very first batch
+        X, Y, mask = self.get_batch('train') # fetch the very first batch
 
         self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Start training from iteration #{self.iter_count}")
 
@@ -216,8 +229,8 @@ class TrainGPT():
             t0 = time.time()
 
             with self.ctx:
-                _, loss = self.model(X, Y, self.loss_mask_array)
-            X, Y = self.get_batch('train')
+                _, loss = self.model(X, Y, mask)
+            X, Y, mask = self.get_batch('train')
             self.scaler.scale(loss).backward()
             # clip the gradient
             if self.train_config.grad_clip != 0.0:
@@ -243,9 +256,12 @@ class TrainGPT():
 def main():
     logging.basicConfig(filename='train.log', filemode="w", level=logging.INFO)
     print(f"PyTorch version: {torch.__version__}")
+    # CONFIG_JSON = "train_config.json"
+    CONFIG_JSON = "sft_config.json"
     with open(os.path.join(os.path.dirname(__file__), CONFIG_JSON), "r", encoding="utf-8") as f:
         config = json.load(f)
-        trainer = TrainGPT(config, is_from_pretrained=False)
+        # trainer = TrainGPT(config, is_from_pretrained=False, task="pretrain")
+        trainer = TrainGPT(config, is_from_pretrained=True, task="sft")
         trainer.start()
 
 if __name__ == "__main__":

@@ -230,6 +230,10 @@ class Tokenizer:
         # self.bpe_tokenizer.dump(config_path)
         chars = sorted(list(set(text)))
         chars.append("<|undefined|>")
+        chars.append("\u1337") # User prompt begin
+        chars.append("\u1338") # User prompt end
+        chars.append("\u1339") # Assistant begin
+        chars.append("\u1340") # Assistant end
         self.vocab_size = len(chars)
         print(f"  Vocab size: {self.vocab_size:,}")
         # create a mapping from characters to integers
@@ -259,6 +263,10 @@ class Tokenizer:
             vocab = vocab.union(set(chunk))
         vocab = list(vocab)
         vocab.append("<|undefined|>")
+        vocab.append("\u1337") # User prompt begin
+        vocab.append("\u1338") # User prompt end
+        vocab.append("\u1339") # Assistant begin
+        vocab.append("\u1340") # Assistant end
         self.vocab_size = len(vocab)
         print(f"  Vocab size: {self.vocab_size:,}")
         # create a mapping from characters to integers

@@ -78,35 +78,58 @@ def generate_pretrain_dataset(input_file, data_dir="dataset", tokenizer=None, bl
 def generate_sft_dataset(input_file, data_dir="dataset", tokenizer=None, block_size=512):
     input_file_path = os.path.join(os.path.dirname(__file__), data_dir, input_file)
     all_lines = []
+    all_masks = []
+    current_question = ""
     with open(input_file_path, mode="r", encoding="utf-8") as f:
         while True:
             line = f.readline()
             if not line:
                 break
-            all_lines.append(line[0: block_size])
+            line = line.strip()
+            if line.startswith("[Q]"):
+                current_question = line[3:]
+            elif line.startswith("[A]"):
+                answer = line[3:]
+                item = f"\u1337{current_question}\u1338\u1339{answer}\u1340"
+                all_lines.append(item[0: block_size + 1])
+                mask = [0] * (1 + len(current_question) + 2) + [1] * len(answer) + [1] * 1
+                all_masks.append(mask[0: block_size + 1])
+                current_question = ""
 
     print(f"Shuffling sft blocks...")
     train_ids = []
     val_ids = []
+    train_masks = []
+    val_masks = []
     line_indexes = list(range(len(all_lines)))
     random.shuffle(line_indexes)
     for li in tqdm(range(0, int(len(all_lines) * 0.9))):
         ids = tokenizer.encode(all_lines[line_indexes[li]])
-        ids = [ids[i] if i < len(ids) else 0 for i in range(block_size+1)]
+        ids = [ids[i] if i < len(ids) else 0 for i in range(block_size + 1)]
         train_ids.append(ids)
+        mask = all_masks[line_indexes[li]]
+        mask = [mask[i] if i < len(mask) else 0 for i in range(block_size + 1)]
+        train_masks.append(mask)
     for li in tqdm(range(int(len(all_lines) * 0.9), len(all_lines))):
         ids = tokenizer.encode(all_lines[line_indexes[li]])
-        ids = [ids[i] if i < len(ids) else 0 for i in range(block_size+1)]
+        ids = [ids[i] if i < len(ids) else 0 for i in range(block_size + 1)]
         val_ids.append(ids)
+        mask = all_masks[line_indexes[li]]
+        mask = [mask[i] if i < len(mask) else 0 for i in range(block_size + 1)]
+        val_masks.append(mask)
 
     print(f"Cast to numpy array...")
     train_ids = np.array(train_ids, dtype=np.uint16)
     val_ids = np.array(val_ids, dtype=np.uint16)
+    train_masks = np.array(train_masks, dtype=np.uint16)
+    val_masks = np.array(val_masks, dtype=np.uint16)
 
     print(f"Saving pickel file...")
     dataset = {
         "train_ids": train_ids,
-        "val_ids": val_ids
+        "val_ids": val_ids,
+        "train_masks": train_masks,
+        "val_masks": val_masks
     }
     with open(os.path.join(os.path.dirname(__file__), data_dir, 'sft.pkl'), 'wb') as f:
         pickle.dump(dataset, f)
