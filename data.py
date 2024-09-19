@@ -90,9 +90,10 @@ def generate_sft_dataset(input_file, data_dir="dataset", tokenizer=None, block_s
                 current_question = line[3:]
             elif line.startswith("[A]"):
                 answer = line[3:]
-                item = f"\u1337{current_question}\u1338\u1339{answer}\u1340"
+                # answer = "人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！"
+                item = f"\u1341{current_question}\u1342{answer}\u1337"
                 all_lines.append(item[0: block_size + 1])
-                mask = [0] * (1 + len(current_question) + 2) + [1] * len(answer) + [1] * 1
+                mask = [0] * (1 + len(current_question) + 1) + [1] * len(answer)
                 all_masks.append(mask[0: block_size + 1])
                 current_question = ""
 
@@ -105,14 +106,14 @@ def generate_sft_dataset(input_file, data_dir="dataset", tokenizer=None, block_s
     random.shuffle(line_indexes)
     for li in tqdm(range(0, int(len(all_lines) * 0.9))):
         ids = tokenizer.encode(all_lines[line_indexes[li]])
-        ids = [ids[i] if i < len(ids) else 0 for i in range(block_size + 1)]
+        ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(block_size + 1)]
         train_ids.append(ids)
         mask = all_masks[line_indexes[li]]
         mask = [mask[i] if i < len(mask) else 0 for i in range(block_size + 1)]
         train_masks.append(mask)
     for li in tqdm(range(int(len(all_lines) * 0.9), len(all_lines))):
         ids = tokenizer.encode(all_lines[line_indexes[li]])
-        ids = [ids[i] if i < len(ids) else 0 for i in range(block_size + 1)]
+        ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(block_size + 1)]
         val_ids.append(ids)
         mask = all_masks[line_indexes[li]]
         mask = [mask[i] if i < len(mask) else 0 for i in range(block_size + 1)]

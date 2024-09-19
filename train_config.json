@@ -1,8 +1,8 @@
 {
     "block_size": 512,
     "vocab_size": 10000,
-    "n_layer": 6,
-    "n_head": 8,
+    "n_layer": 4,
+    "n_head": 4,
     "n_embd": 512,
     "dropout": 0.0,
     "bias": false,
@@ -22,12 +22,12 @@
     "min_lr": 6e-5,
 
     "init_from": "pretrain",
-    "batch_size": 20,
+    "batch_size": 10,
     "random_seed": 39,
     "dataset_path": "dataset/pretrain.pkl",
     "tokenizer_path": "dataset/tokenizer.json",
     "checkpoint_path": "checkpoint/ckpt.pt",
-    "eval_interval": 100,
+    "eval_interval": 10,
     "log_interval": 1,
     "eval_iters": 5,
 

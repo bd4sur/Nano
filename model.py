@@ -291,9 +291,10 @@ class GPT(nn.Module):
             # else:
             a = logits.view(-1, logits.size(-1)) # shape=(BatchSize*BlockSize, VocabSize)
             b = targets.view(-1) # shape=(BatchSize*BlockSize)
-            lm = loss_mask.view(-1) # shape=(BatchSize*BlockSize)
-            loss = F.cross_entropy(a, b, ignore_index=-1)
-            loss = torch.sum(loss * lm) / lm.sum()
+            loss = F.cross_entropy(a, b)
+            if loss_mask is not None:
+                lm = loss_mask.view(-1) # shape=(BatchSize*BlockSize)
+                loss = torch.sum(loss * lm) / lm.sum()
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             if self.config.is_causal:
@@ -440,7 +441,9 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
             if callback is not None:
-                callback(idx_next)
+                res = callback(idx_next)
+                if res == False:
+                    return idx
 
         return idx
 

@@ -60,7 +60,14 @@ class InferenceGPT:
             self.decode = lambda l: self.tokenizer.decode(l)
 
     def typewriter(self, token_tensor):
-        print(self.decode(token_tensor[0].tolist()), end="", flush=True)
+        token_list = token_tensor[0].tolist()
+        chars = self.decode(token_list)
+        if '\u1337' in chars:
+            print(chars.split("\u1337")[0], end="", flush=True)
+            return False
+        else:
+            print(chars, end="", flush=True)
+            return True
 
     def generate(self):
         with torch.no_grad():
@@ -69,7 +76,7 @@ class InferenceGPT:
                     prompt = input("Prompt: ")
                 except EOFError:
                     break
-                prompt = f"\u1337{prompt}\u1338\u1339"
+                prompt = f"\u1341{prompt}\u1342"
                 x = torch.tensor(self.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
                 print(prompt, end="", flush=True)
                 y = self.model.auto_regressive_generate(x, 200, temperature=1, top_k=10, callback=self.typewriter)

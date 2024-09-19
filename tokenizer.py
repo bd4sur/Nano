@@ -202,13 +202,25 @@ class Tokenizer:
         # self.bpe_tokenizer = BPE_Tokenizer.load(os.path.join(os.path.dirname(__file__), 'dataset/cl100k_base.txt'))
         # self.bpe_tokenizer = tiktoken.get_encoding("cl100k_base")
         self.stoi = {}
-        self.itos = {}
+        self.itos = []
         self.vocab_size = 0 # self.bpe_tokenizer.vocab_size
+        self.padding_char = "\u1337"
+        self.padding_token = 0
+        self.unknown_char = "\u1338"
+        self.unknown_token = 0
+        self.bos_char = "\u1339"
+        self.bos_token = 0
+        self.eos_char = "\u1340"
+        self.eos_token = 0
+        self.instruct_mark_char = "\u1341"
+        self.instruct_mark_token = 0
+        self.response_mark_char = "\u1342"
+        self.response_mark_token = 0
 
     # encoder: take a string, output a list of integers
     def encode(self, text):
         # return self.bpe_tokenizer.encode(text)
-        return [(self.stoi[c] if (c in self.stoi) else (self.vocab_size - 1)) for c in text]
+        return [(self.stoi[c] if (c in self.stoi) else (self.unknown_token)) for c in text]
 
     # decoder: take a list of integers, output a string
     def decode(self, token_list):
@@ -221,24 +233,33 @@ class Tokenizer:
             config = json.load(f)
             self.vocab_size = config["vocab_size"]
             self.stoi = config["stoi"]
-            self.itos = { int(i):config["itos"][i] for i in config["itos"] }
+            self.itos = config["itos"]
 
     # 根据已有文本建立编码器，并保存到配置文件
     def build_from_text(self, text, config_path):
         # gpt2_pattern = (r"""'s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}]+| ?[\p{N}]+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
         # self.bpe_tokenizer = BPE_Tokenizer.train(text, vocab_size=300, pat_str=gpt2_pattern)
         # self.bpe_tokenizer.dump(config_path)
-        chars = sorted(list(set(text)))
-        chars.append("<|undefined|>")
-        chars.append("\u1337") # User prompt begin
-        chars.append("\u1338") # User prompt end
-        chars.append("\u1339") # Assistant begin
-        chars.append("\u1340") # Assistant end
-        self.vocab_size = len(chars)
+        vocab = sorted(list(set(text)))
+        offset = len(vocab)
+        vocab.append(self.padding_char)
+        self.padding_token = offset
+        vocab.append(self.unknown_char)
+        self.unknown_token = offset + 1
+        vocab.append(self.bos_char)
+        self.bos_token = offset + 2
+        vocab.append(self.eos_char)
+        self.eos_token = offset + 3
+        vocab.append(self.instruct_mark_char)
+        self.instruct_mark_token = offset + 4
+        vocab.append(self.response_mark_char)
+        self.response_mark_token = offset + 5
+
+        self.vocab_size = len(vocab)
         print(f"  Vocab size: {self.vocab_size:,}")
-        # create a mapping from characters to integers
-        self.stoi = { ch:i for i,ch in enumerate(chars) }
-        self.itos = { i:ch for i,ch in enumerate(chars) }
+
+        self.itos = vocab
+        self.stoi = { ch:i for i,ch in enumerate(vocab) }
         config = {
             "vocab_size": self.vocab_size,
             "stoi": self.stoi,
@@ -262,16 +283,26 @@ class Tokenizer:
         for chunk in tqdm(text_iterator):
             vocab = vocab.union(set(chunk))
         vocab = list(vocab)
-        vocab.append("<|undefined|>")
-        vocab.append("\u1337") # User prompt begin
-        vocab.append("\u1338") # User prompt end
-        vocab.append("\u1339") # Assistant begin
-        vocab.append("\u1340") # Assistant end
+        offset = len(vocab)
+        vocab.append(self.padding_char)
+        self.padding_token = offset
+        vocab.append(self.unknown_char)
+        self.unknown_token = offset + 1
+        vocab.append(self.bos_char)
+        self.bos_token = offset + 2
+        vocab.append(self.eos_char)
+        self.eos_token = offset + 3
+        vocab.append(self.instruct_mark_char)
+        self.instruct_mark_token = offset + 4
+        vocab.append(self.response_mark_char)
+        self.response_mark_token = offset + 5
+
         self.vocab_size = len(vocab)
         print(f"  Vocab size: {self.vocab_size:,}")
-        # create a mapping from characters to integers
+
+        self.itos = vocab
         self.stoi = { ch:i for i,ch in enumerate(vocab) }
-        self.itos = { i:ch for i,ch in enumerate(vocab) }
+
         config = {
             "vocab_size": self.vocab_size,
             "stoi": self.stoi,
