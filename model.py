@@ -30,7 +30,6 @@ class ModelConfig:
 class TrainConfig:
     # GPT Model Args (Overrided)
     dropout: Optional[float] = 0.0
-    loss_mask: Optional[list[int]] = None
 
     # AdamW Optimizer Args
     learning_rate: Optional[float] = 6e-4
@@ -46,7 +45,8 @@ class TrainConfig:
     min_lr: Optional[float] = 6e-5
 
     # Training Task
-    dataset_path: Optional[str] = "dataset/dataset.pkl"
+    train_dataset_path: Optional[str] = "dataset/sft_train.base64"
+    val_dataset_path: Optional[str] = "dataset/sft_val.base64"
     tokenizer_path: Optional[str] = "dataset/tokenizer.json"
     checkpoint_path: Optional[str] = "checkpoint/ckpt.pt"
     init_from: Optional[str] = "pretrain"

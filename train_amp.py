@@ -2,7 +2,6 @@ import os
 import time
 import math
 import json
-import pickle
 import logging
 from contextlib import nullcontext
 
@@ -10,13 +9,14 @@ import numpy as np
 import torch
 
 from tokenizer import Tokenizer
+from dataloader import DataLoader
 from model import TrainConfig, ModelConfig, GPT
 
 logger = logging.getLogger(__name__)
 
 class TrainGPT():
 
-    def __init__(self, config_dict, is_from_pretrained=False, task="pretrain") -> None:
+    def __init__(self, config_dict, from_checkpoint=None) -> None:
         self.train_config = TrainConfig(**(config_dict))
         self.model_config = ModelConfig(**{
             "block_size": config_dict["block_size"],
@@ -32,15 +32,11 @@ class TrainGPT():
         self.model = None
         self.optimizer = None
         self.iter_count = 0
+
         self.train_data = None
         self.val_data = None
-        self.train_masks = None
-        self.val_masks = None
-        self.is_from_pretrained = is_from_pretrained
-        self.task = task
-        assert self.train_config.loss_mask[0] <= self.train_config.loss_mask[1]
-        self.global_loss_mask = None
-        self.trainset_count = 0
+
+        self.from_checkpoint = from_checkpoint
 
         self.scaler = None
         self.ctx = None
@@ -50,25 +46,20 @@ class TrainGPT():
         print(logstr)
 
     def load_data(self):
-        dataset_path = os.path.join(os.path.dirname(__file__), self.train_config.dataset_path)
-        self.log(f"Loading dataset from {dataset_path}...")
-        with open(dataset_path, 'rb') as f:
-            dataset = pickle.load(f)
+        train_dataset_path = os.path.join(os.path.dirname(__file__), self.train_config.train_dataset_path)
+        val_dataset_path = os.path.join(os.path.dirname(__file__), self.train_config.val_dataset_path)
+        self.log(f"Loading dataset from {train_dataset_path} and {val_dataset_path}...")
+        self.train_data = DataLoader(train_dataset_path)
+        self.val_data = DataLoader(val_dataset_path)
 
         tokenizer_path = os.path.join(os.path.dirname(__file__), self.train_config.tokenizer_path)
         self.log(f"Loading tokenizer from {tokenizer_path}...")
         tokenizer = Tokenizer()
         tokenizer.load_from_config(tokenizer_path)
-
         self.model_config.vocab_size = tokenizer.vocab_size
-        self.train_data = np.array(dataset["train_ids"], dtype=np.uint16)
-        self.val_data = np.array(dataset["val_ids"], dtype=np.uint16)
-        if self.task == "sft":
-            self.train_masks = np.array(dataset["train_masks"], dtype=np.uint16)
-            self.val_masks = np.array(dataset["val_masks"], dtype=np.uint16)
 
-        self.log(f"  Size of Train set = {len(self.train_data)}")
-        self.log(f"  Size of Validation set = {len(self.val_data)}")
+        self.log(f"  Size of Train set = {self.train_data.line_num}")
+        self.log(f"  Size of Validation set = {self.val_data.line_num}")
         self.log(f"  Size of Vocabulary = {self.model_config.vocab_size}")
 
     def init(self):
@@ -79,20 +70,9 @@ class TrainGPT():
         torch.backends.cuda.enable_mem_efficient_sdp(self.train_config.sdp_kernel == "mem_efficient")
         torch.backends.cuda.enable_math_sdp(self.train_config.sdp_kernel == "math")
 
-        self.global_loss_mask = torch.stack(
-            [
-                torch.from_numpy(np.array(
-                    [
-                        1 if pos >= self.train_config.loss_mask[0] and pos <= self.train_config.loss_mask[1] else 0
-                        for pos in range(self.model_config.block_size)
-                    ]).astype(np.int64))
-                for _ in range(self.train_config.batch_size)
-            ]
-        ).to(self.train_config.device, non_blocking=True)
-
         # Model
-        if self.is_from_pretrained:
-            _ckpt_path = os.path.join(os.path.dirname(__file__), self.train_config.checkpoint_path)
+        if self.from_checkpoint is not None:
+            _ckpt_path = os.path.join(os.path.dirname(__file__), self.train_config.checkpoint_path, self.from_checkpoint)
             self.log(f"Resuming training from {_ckpt_path}")
             # self.log(f"  Model architecture arguments 'block_size', 'vocab_size', 'n_layer', 'n_head', 'n_embd', 'is_causal' in training configuration file are ignored. Their values in checkpoint are being used instead.")
             # self.log(f"  Argument 'dropout' in checkpoint is overrided by the value in training configuration file.")
@@ -116,7 +96,7 @@ class TrainGPT():
         # Optimizer
         _device_type = 'cuda' if 'cuda' in self.train_config.device else 'cpu'
         self.optimizer = self.model.configure_optimizers(self.train_config.weight_decay, self.train_config.learning_rate, (self.train_config.beta1, self.train_config.beta2), _device_type)
-        if self.is_from_pretrained:
+        if self.from_checkpoint is not None:
             self.optimizer.load_state_dict(_checkpoint["optimizer"]) # 恢复优化器状态
 
         _checkpoint = None # free up memory
@@ -132,37 +112,13 @@ class TrainGPT():
     def get_batch(self, phase):
         if phase == "train":
             dataset = self.train_data
-            if self.task == "sft":
-                masks = self.train_masks
-            ix = range(self.trainset_count, self.trainset_count + self.train_config.batch_size)
-            self.trainset_count += self.train_config.batch_size
-            if self.trainset_count >= len(dataset) - self.train_config.batch_size:
-                self.trainset_count = 0
         else:
             dataset = self.val_data
-            if self.task == "sft":
-                masks = self.train_masks
-            ix = torch.randint(len(dataset), (self.train_config.batch_size,))
 
         if self.model_config.is_causal:
-            # 取出一批数据，每条数据只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
-            x = torch.stack([torch.from_numpy((dataset[i][0 : self.model_config.block_size]).astype(np.int64)) for i in ix])
-            # 这批数据每一条都右移一个字符，作为预测目标，shape=(batch_size, block_size)
-            y = torch.stack([torch.from_numpy((dataset[i][1 : self.model_config.block_size + 1]).astype(np.int64)) for i in ix])
-            if self.task == "pretrain":
-                x, y = x.to(self.train_config.device, non_blocking=True), y.to(self.train_config.device, non_blocking=True)
-                return x, y, self.global_loss_mask
-            elif self.task == "sft":
-                mask = torch.stack([torch.from_numpy((masks[i][1 : self.model_config.block_size + 1]).astype(np.int64)) for i in ix])
-                x, y, mask = x.to(self.train_config.device, non_blocking=True), y.to(self.train_config.device, non_blocking=True), mask.to(self.train_config.device, non_blocking=True)
-                return x, y, mask
-        else:
-            # 取出一批数据，每条数据只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
-            x = torch.stack([torch.from_numpy((dataset[i][0 : self.model_config.block_size]).astype(np.int64)) for i in ix])
-            # 取出后面剩余的block_size个token，作为预测目标，shape=(batch_size, block_size)
-            y = torch.stack([torch.from_numpy((dataset[i][self.model_config.block_size : self.model_config.block_size * 2]).astype(np.int64)) for i in ix])
-            x, y = x.to(self.train_config.device, non_blocking=True), y.to(self.train_config.device, non_blocking=True)
-            return x, y, self.global_loss_mask
+            x, y, mask = dataset.get_batch(self.train_config.batch_size, self.model_config.block_size)
+            x, y, mask = x.to(self.train_config.device, non_blocking=True), y.to(self.train_config.device, non_blocking=True), mask.to(self.train_config.device, non_blocking=True)
+            return x, y, mask
 
     # helps estimate an arbitrarily accurate loss over either split using many batches
     @torch.no_grad()
@@ -215,7 +171,8 @@ class TrainGPT():
                 self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Phase: Validation | Step: {iter} | Val_loss: {val_loss:.3f} | Best_val_loss: {best_val_loss:.4f}")
 
                 if iter > 0 and val_loss < best_val_loss:
-                    self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving checkpoint to {self.train_config.checkpoint_path}")
+                    checkpoint_file_name = f"checkpoint_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt"
+                    self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving checkpoint to {self.train_config.checkpoint_path}/{checkpoint_file_name}")
                     _checkpoint = {
                         "model":        self.model.state_dict(),
                         "optimizer":    self.optimizer.state_dict(),
@@ -224,7 +181,7 @@ class TrainGPT():
                         "model_config": self.model_config
                     }
                     best_val_loss = val_loss
-                    torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), self.train_config.checkpoint_path))
+                    torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), self.train_config.checkpoint_path, checkpoint_file_name))
 
             t0 = time.time()
 
@@ -248,7 +205,7 @@ class TrainGPT():
             if iter % self.train_config.log_interval == 0:
                 lossf = loss.item()
                 flops = self.model.estimate_flops(self.train_config.batch_size, dt)
-                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Phase: Train | Step: {iter} | TrainDataPos: {self.trainset_count} | Loss: {lossf:.3f} | Time: {dt*1000:.0f} ms | Speed: {flops / 1e9:.2f} GFLOP/s")
+                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Phase: Train | Step: {iter} | TrainDataPos: {self.train_data.line_pos} | Loss: {lossf:.3f} | Time: {dt*1000:.0f} ms | Speed: {flops / 1e9:.2f} GFLOP/s")
 
             iter += 1
             self.iter_count = iter
@@ -256,13 +213,22 @@ class TrainGPT():
 def main():
     logging.basicConfig(filename='train.log', filemode="w", level=logging.INFO)
     print(f"PyTorch version: {torch.__version__}")
-    # CONFIG_JSON = "train_config.json"
-    CONFIG_JSON = "sft_config.json"
-    with open(os.path.join(os.path.dirname(__file__), CONFIG_JSON), "r", encoding="utf-8") as f:
-        config = json.load(f)
-        # trainer = TrainGPT(config, is_from_pretrained=False, task="pretrain")
-        trainer = TrainGPT(config, is_from_pretrained=True, task="sft")
-        trainer.start()
+
+    # TRAIN_TASK = "pretrain"
+    TRAIN_TASK = "sft"
+
+    if TRAIN_TASK == "pretrain":
+        CONFIG_JSON = "train_config.json"
+        with open(os.path.join(os.path.dirname(__file__), CONFIG_JSON), "r", encoding="utf-8") as f:
+            config = json.load(f)
+            trainer = TrainGPT(config)
+            trainer.start()
+    elif TRAIN_TASK == "sft":
+        CONFIG_JSON = "sft_config.json"
+        with open(os.path.join(os.path.dirname(__file__), CONFIG_JSON), "r", encoding="utf-8") as f:
+            config = json.load(f)
+            trainer = TrainGPT(config, "checkpoint_20240921_020326_step_2700.pt")
+            trainer.start()
 
 if __name__ == "__main__":
     main()

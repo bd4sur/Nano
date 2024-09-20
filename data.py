@@ -1,6 +1,8 @@
 import os
 import random
 import pickle
+import base64
+import json
 import numpy as np
 from tqdm import tqdm
 from tokenizer import Tokenizer
@@ -8,11 +10,10 @@ from tokenizer import Tokenizer
 
 
 def build_tokenizer(input_file, data_dir="dataset", is_build_tokenizer=True):
-    input_file_path = os.path.join(os.path.dirname(__file__), data_dir, input_file)
     tokenizer_path = os.path.join(os.path.dirname(__file__), data_dir, 'tokenizer.json')
-
     tokenizer = Tokenizer()
     if is_build_tokenizer:
+        input_file_path = os.path.join(os.path.dirname(__file__), data_dir, input_file)
         print(f"Building tokenizer from raw text file...")
         tokenizer.build_from_file(input_file_path, tokenizer_path)
     else:
@@ -51,27 +52,24 @@ def generate_pretrain_dataset(input_file, data_dir="dataset", tokenizer=None, bl
 
     del all_tokens
 
-    print(f"Shuffling text blocks...")
-    train_ids = []
-    val_ids = []
+    # 巨大数据集的打乱算法
+
+    print(f"Shuffling text blocks and write to file...")
     line_indexes = list(range(len(blocks)))
     random.shuffle(line_indexes)
-    for li in tqdm(range(0, int(len(blocks) * 0.9))):
-        train_ids.append(blocks[line_indexes[li]])
-    for li in tqdm(range(int(len(blocks) * 0.9), len(blocks))):
-        val_ids.append(blocks[line_indexes[li]])
 
-    print(f"Cast to numpy array...")
-    train_ids = np.array(train_ids, dtype=np.uint16)
-    val_ids = np.array(val_ids, dtype=np.uint16)
+    train_path = os.path.join(os.path.dirname(__file__), data_dir, 'pretrain_train.base64')
+    val_path   = os.path.join(os.path.dirname(__file__), data_dir, 'pretrain_val.base64')
 
-    print(f"Saving pickel file...")
-    dataset = {
-        "train_ids": train_ids,
-        "val_ids": val_ids
-    }
-    with open(os.path.join(os.path.dirname(__file__), data_dir, 'pretrain.pkl'), 'wb') as f:
-        pickle.dump(dataset, f)
+    with open(train_path, "w", encoding="utf-8") as f_train:
+        for li in tqdm(range(0, int(len(blocks) * 0.9))):
+            train_block = pickle.dumps([blocks[line_indexes[li]], None])
+            f_train.writelines(str(base64.b64encode(train_block), encoding="utf-8") + "\n")
+
+    with open(val_path, "w", encoding="utf-8") as f_val:
+        for li in tqdm(range(int(len(blocks) * 0.9), len(blocks))):
+            val_block = pickle.dumps([blocks[line_indexes[li]], None])
+            f_val.writelines(str(base64.b64encode(val_block), encoding="utf-8") + "\n")
 
     print(f"Done.")
 
@@ -91,60 +89,42 @@ def generate_sft_dataset(input_file, data_dir="dataset", tokenizer=None, block_s
             elif line.startswith("[A]"):
                 answer = line[3:]
                 # answer = "人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！"
-                item = f"\u1341{current_question}\u1342{answer}\u1337"
+                item = f"{tokenizer.instruct_mark_char}{current_question}{tokenizer.response_mark_char}{answer}\u1337\u1337"
                 all_lines.append(item[0: block_size + 1])
-                mask = [0] * (1 + len(current_question) + 1) + [1] * len(answer)
+                mask = [0] * (1 + len(current_question) + 1) + [1] * (len(answer) + 2)
                 all_masks.append(mask[0: block_size + 1])
                 current_question = ""
 
-    print(f"Shuffling sft blocks...")
-    train_ids = []
-    val_ids = []
-    train_masks = []
-    val_masks = []
+    train_path = os.path.join(os.path.dirname(__file__), data_dir, 'sft_train.base64')
+    val_path   = os.path.join(os.path.dirname(__file__), data_dir, 'sft_val.base64')
+
+    print(f"Shuffling sft blocks and write to file ...")
     line_indexes = list(range(len(all_lines)))
     random.shuffle(line_indexes)
-    for li in tqdm(range(0, int(len(all_lines) * 0.9))):
-        ids = tokenizer.encode(all_lines[line_indexes[li]])
-        ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(block_size + 1)]
-        train_ids.append(ids)
-        mask = all_masks[line_indexes[li]]
-        mask = [mask[i] if i < len(mask) else 0 for i in range(block_size + 1)]
-        train_masks.append(mask)
-    for li in tqdm(range(int(len(all_lines) * 0.9), len(all_lines))):
-        ids = tokenizer.encode(all_lines[line_indexes[li]])
-        ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(block_size + 1)]
-        val_ids.append(ids)
-        mask = all_masks[line_indexes[li]]
-        mask = [mask[i] if i < len(mask) else 0 for i in range(block_size + 1)]
-        val_masks.append(mask)
 
-    print(f"Cast to numpy array...")
-    train_ids = np.array(train_ids, dtype=np.uint16)
-    val_ids = np.array(val_ids, dtype=np.uint16)
-    train_masks = np.array(train_masks, dtype=np.uint16)
-    val_masks = np.array(val_masks, dtype=np.uint16)
+    with open(train_path, "w", encoding="utf-8") as f_train:
+        for li in tqdm(range(0, int(len(all_lines) * 0.9))):
+            ids = tokenizer.encode(all_lines[line_indexes[li]])
+            ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(block_size + 1)]
+            mask = all_masks[line_indexes[li]]
+            mask = [mask[i] if i < len(mask) else 0 for i in range(block_size + 1)]
+            train_data = pickle.dumps([ids, mask])
+            f_train.writelines(str(base64.b64encode(train_data), encoding="utf-8") + "\n")
 
-    print(f"Saving pickel file...")
-    dataset = {
-        "train_ids": train_ids,
-        "val_ids": val_ids,
-        "train_masks": train_masks,
-        "val_masks": val_masks
-    }
-    with open(os.path.join(os.path.dirname(__file__), data_dir, 'sft.pkl'), 'wb') as f:
-        pickle.dump(dataset, f)
+    with open(val_path, "w", encoding="utf-8") as f_val:
+        for li in tqdm(range(int(len(all_lines) * 0.9), len(all_lines))):
+            ids = tokenizer.encode(all_lines[line_indexes[li]])
+            ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(block_size + 1)]
+            mask = all_masks[line_indexes[li]]
+            mask = [mask[i] if i < len(mask) else 0 for i in range(block_size + 1)]
+            val_data = pickle.dumps([ids, mask])
+            f_val.writelines(str(base64.b64encode(val_data), encoding="utf-8") + "\n")
 
     print(f"Done.")
 
 
-
-
-
-
-
 def main():
-    BLOCK_SIZE = 512
+    BLOCK_SIZE = 256
     PRETRAIN_DATASET = "psycho.txt"
     SFT_DATASET = "sft.txt"
     tokenizer = build_tokenizer(PRETRAIN_DATASET, data_dir="dataset", is_build_tokenizer=True)
