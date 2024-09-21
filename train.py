@@ -198,6 +198,7 @@ class TrainGPT():
             if self.use_amp:
                 with self.ctx:
                     _, loss = self.model(X, Y, mask)
+                X, Y, mask = self.get_batch('train') # immediately async prefetch next batch while model is doing the forward pass on the GPU
                 self.scaler.scale(loss).backward()
                 # clip the gradient
                 if self.train_config.grad_clip != 0.0:
@@ -208,11 +209,11 @@ class TrainGPT():
                 self.scaler.update()
             else:
                 _, loss = self.model(X, Y, mask)
+                X, Y, mask = self.get_batch('train') # immediately async prefetch next batch while model is doing the forward pass on the GPU
                 loss.backward()
                 self.optimizer.step()
 
             self.optimizer.zero_grad(set_to_none=True)
-            X, Y, mask = self.get_batch('train')
 
             t1 = time.time_ns()
             dt = (t1 - t0) / 1e9

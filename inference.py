@@ -73,12 +73,12 @@ class InferenceGPT:
         with torch.no_grad():
             while True:
                 try:
-                    prompt = input("Prompt: ")
+                    prompt = input("User: ")
                 except EOFError:
                     break
                 prompt = f"{self.tokenizer.instruct_mark_char}{prompt}{self.tokenizer.response_mark_char}"
                 x = torch.tensor(self.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
-                print(prompt, end="", flush=True)
+                print("Nano: ", end="", flush=True)
                 y = self.model.auto_regressive_generate(x, 200, temperature=1, top_k=10, callback=self.typewriter)
                 print("\n")
 
