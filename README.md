@@ -1,15 +1,32 @@
 
 # Nano
 
-大模型，小玩具。本仓库复刻自[karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)，是Transformer语言模型的简单实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。
+大模型，小玩具。本仓库主要复刻自 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)，并借鉴了多个开源模型实现和学习项目，是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。
+
+本仓库期望：
+
+- 用尽可能少的依赖，实现一个具体而微的Transformer语言模型。
+- 完整实现数据预处理、词元化、预训练、监督微调、推理过程。
+- 能够加载GPT-2等公开的模型权重，并实现推理、微调。
+- 研究模型训练的动力学、训推加速、模型架构改进等问题，形成研究笔记。
+- 研究Transformer模型在NLP以外的各类问题上的潜能。
+
+本仓库**不打算**：
+
+- 从头训练并实现一个堪用的大语言模型。
+
+为什么叫“Nano”：
+
+- 東雲なの（Shinonome **Nano**）和坂本是动画《日常》的角色。なの是博士创造的女高中生机器人，而坂本是一只会说话的黑猫。
+- 致(chao)敬(xi) Karpathy大佬的nanoGPT项目。
 
 ![ ](./nano.jpg)
 
-Nano（東雲名乃）是动画《日常》中的角色，其角色设定是机器人。作品中另外一个角色“坂本”（Sakamoto），是一只会说话的黑猫，只不过必须戴上红色的围巾才会说话。
+## 立刻开始
 
-## 基本玩法：自回归语言模型
+[B站视频](https://www.bilibili.com/video/BV1uv42127qP)
 
-首先安装依赖，建议在虚拟环境中安装。
+**1️⃣ 安装依赖**：建议在conda虚拟环境中安装。
 
 ```
 conda create -n nano python=3.11 pysocks -y
@@ -17,39 +34,33 @@ conda activate nano
 pip install -r requirements.txt
 ```
 
-### 数据预处理
+**2️⃣ 数据预处理**
 
-执行以下命令，注意修改代码中文本文件的路径。
+执行`python data.py`，对预训练和监督微调数据作预处理，包含文本分块、数据集划分、随机打乱、SFT模板组装、词元化等处理步骤。TODO 注意修改代码中语料文本文件的路径。
 
-```
-python data.py
-```
+**词元编码**：本仓库使用最简单的字符映射作为词元编码算法，也就是给语料中所有包含的Unicode字符赋予唯一整数编号，作为词元编号。因此词元实际上就等于是Unicode字符。仓库中同时包含了tiktoken提供的一个BPE词元编码算法，由于速度很慢，并不实用，因此仅作为文档用途。
 
-注：仓库中增加了来自[hhiim/Lacan](https://github.com/hhiim/Lacan)的精神分析黑话数据集，特此致谢。
+**预训练数据格式**：原则上讲，随便什么文本都可以，没有任何的格式要求。但是要注意“垃圾进、垃圾出”喔！因此，如果想获得比较好的模型，就务必重视预训练数据的处理工作。
 
-### 训练
+**监督微调（指令微调）数据格式**：本仓库所使用的指令模板格式是`<|InstructMark|>提示语…<|ResponseMark|>期望的答复…<|Padding|>*`，填充至上下文长度。仓库现有的数据预处理代码，从业余无线电操作技术能力验证题库中抽取问题和正确答案，拼接成指令模板，形成SFT数据集。
 
-[B站视频](https://www.bilibili.com/video/BV1uv42127qP)
+**预置数据**：仓库中增加了来自[hhiim/Lacan](https://github.com/hhiim/Lacan)的精神分析黑话数据集，特此致谢。
 
-单机单卡或CPU训练（注意将`train_config.json`中的`device`选项设为`"cpu"`）：
+**3️⃣ 预训练和监督微调**
 
-```
-python train.py
-```
+单机单卡或CPU训练：执行`python train.py`即可。注意：
 
-对于 Jetson Orin NX 16GB（Ampere架构，计算能力8.7）这样的新设备，可以使用自动混合精度技术和 Flash Attention 技术加速训练。在`train_config.json`中，将`sdp_kernel`设置为`flash`，将`dtype`设置为`bfloat16`，然后执行：
+- 若使用CPU训练，最好将`train_config.json`中的`device`选项设为`"cpu"`。
+- 对于 Jetson Orin NX 16GB、Jetson AGX Orin 64GB（均为Ampere架构，计算能力8.7）这样的比较新的设备，可以使用自动混合精度（AMP）技术和 Flash Attention 技术加速训练。在`train_config.json`中，可以将`sdp_kernel`设置为`flash`，将`dtype`设置为`bfloat16`。
+- 对于P40、P100这样的比较老旧的设备，由于 compute capability 较低，不支持BF16等数据类型和flash_sdp等高效算子，训练效率可能会比较低。
 
-```
-python train_amp.py
-```
-
-或者以分布式数据并行（DDP）方式启动训练（注意：`train_config.json`中的`gradient_accumulation_steps`应为显卡数的倍数）：
+单机多卡或多机多卡DDP训练：在主节点上执行以下命令（以单机4卡为例）。注意：`train_config.json`中的`gradient_accumulation_steps`应为显卡数的倍数。
 
 ```
 CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node 4 train_ddp.py
 ```
 
-或者基于DeepSpeed使用ZeRO零冗余优化器训练更大的模型。可以修改`ds_config.json`以优化训练效果。注意：根据[文档](https://www.deepspeed.ai/docs/config-json/)，`train_batch_size` must be equal to `train_micro_batch_size_per_gpu` * `gradient_accumulation` * number of GPUs。这里采用2节点4卡ZeRO3-Offload方式训练。
+基于DeepSpeed框架，使用ZeRO（零冗余优化）技术训练更大的模型。可以修改`ds_config.json`以优化训练效果。注意：根据[文档](https://www.deepspeed.ai/docs/config-json/)，`train_batch_size`必须等于`train_micro_batch_size_per_gpu` * `gradient_accumulation` * GPU数量。这里采用2节点4卡ZeRO3-Offload方式训练。
 
 ```
 deepspeed train_deepspeed.py --deepspeed --deepspeed_config deepspeed_config.json --hostfile=hostfile.txt
@@ -62,68 +73,50 @@ deepspeed train_deepspeed.py --deepspeed --deepspeed_config deepspeed_config.jso
 192.168.10.61 slots=2
 ```
 
-所有场景通用的训练配置参数说明：
+**参数说明**
+
+|参数|类型|默认值|说明|
+|-|-|-|-|
+|block_size|int|256|上下文（窗口）长度|
+|vocab_size|int|10000|词典长度（实际取决于词元编码器）|
+|n_layer|int|4|模型深度，即Transformer模型层数|
+|n_head|int|4|注意力头数|
+|n_embd|int|256|模型宽度：内部表示向量的维度|
+|dropout|float|0.0|随机丢弃层的丢弃概率|
+|bias|bool|False|线性变换层加偏置？|
+|attn_mask|?|?|注意力掩模矩阵（待定）|
+|learning_rate|float|6e-4|初始学习率|
+|weight_decay|float|1e-1|权重衰减|
+|beta1|float|0.9|AdamW优化器的参数|
+|beta2|float|0.99|AdamW优化器的参数|
+|decay_lr|bool|True|学习率调节器（衰减）？|
+|warmup_iters|int|300|学习率预热步数|
+|lr_decay_iters|int|100000|学习率衰减步数|
+|min_lr|float|6e-5|最小学习率|
+|batch_size|int|100|训练批大小|
+|random_seed|int|1337|随机数初始化种子|
+|train_dataset_path|str|"dataset/sft_train.base64"|训练数据集|
+|val_dataset_path|str|"dataset/sft_val.base64"|验证数据集|
+|eval_interval|int|100|验证间隔步数|
+|log_interval|int|1|日志间隔步数|
+|eval_iters|int|5|每次验证需要用几批数据|
+|backend|str|"nccl"|分布式通信后端|
+|device|str|"cuda"|计算设备|
+|sdp_kernel|str|"flash"|缩放点积注意力实现|
+|dtype|str|"bfloat16"|训练数据类型|
+|grad_clip|float|1.0|梯度压限|
+|gradient_accumulation_steps|int|4|梯度累加步数|
+
+**4️⃣ 推理（问答式文本生成）**
+
+如果是以DDP方式或者单机单卡或者CPU训练的模型，直接执行`python inference.py`。
+
+如果是DeepSpeed训练的模型，则需要先执行`checkpoint/ds`目录中的转换脚本，将其转化为PyTorch能够接受的state_dict格式，再执行推理脚本：
 
 ```
-{
-    // GPT Model Args
-    "block_size": 128, // 如果是Q问题，则为 q_digits() + 1,
-    "vocab_size": 10000,
-    "n_layer": 2,
-    "n_head": 4,
-    "n_embd": 64,
-    "dropout": 0.0, // for pretraining 0 is good, for finetuning try 0.1+
-    "bias": false, // do we use bias inside LayerNorm and Linear layers?
-    "is_causal": true, // 如果是排序问题，则为False
-
-    // AdamW Optimizer Args
-    "learning_rate": 6e-4, // max learning rate
-    "max_iters": 100000, // total number of training iterations
-    "weight_decay": 1e-1,
-    "beta1": 0.9,
-    "beta2": 0.99,
-
-    // Learning Rate Scheduler
-    "decay_lr": true, // whether to decay the learning rate
-    "warmup_iters": 300, // how many steps to warm up for
-    "lr_decay_iters": 100000, // should be ~= max_iters per Chinchilla
-    "min_lr": 6e-5, // minimum learning rate, should be ~= learning_rate/10 per Chinchilla
-
-    // Training Task
-    "init_from": "pretrain", // "pretrain" or "finetune"
-    "batch_size": 300,
-    "random_seed": 114514,
-    "eval_only_last_token_loss": false, // 如果是Q问题，则为True；如果是NLG问题，则为False
-    "data_dir": "dataset",
-    "ckpt_dir": "checkpoint",
-    "eval_interval": 100,
-    "log_interval": 10,
-    "eval_iters": 5,
-
-    // Misc
-    "backend": "nccl", // "nccl", "gloo", etc.
-    "device": "cuda:0", // "cpu", "cuda", "cuda:0", etc.
-    "sdp_kernel": "math", // 选择`scaled_dot_product_attention`所使用的kernel "flash" || "mem_efficient" || "math"
-    "dtype": "float16", // if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16', # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-    "grad_clip": 1.0, // clip gradients at this value, or disable if == 0.0
-    "gradient_accumulation_steps": 4
-}
-```
-
-### 推理
-
-如果是以DDP方式或者单机单卡或者CPU训练的模型，则执行以下命令。
-
-```
-python inference.py
-```
-
-如果是DeepSpeed训练的模型，则需要先执行`ckpt/ds`目录中的转换脚本，将其转化为PyTorch能够接受的state_dict格式，再执行推理脚本：
-
-```
-cd Nano/nlp/checkpoint/ds
+cd Nano/checkpoint/ds
 python zero_to_fp32.py . ckpt_ds.pt
-cd Nano/nlp
+cd Nano
 python inference_ds.py
 ```
 
@@ -184,5 +177,5 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 - A Vaswani, N Shazeer, N Parmar, et al. [Attention Is All You Need](https://arxiv.org/abs/1706.03762) [J]. Advances in Neural Information Processing Systems, 2017, 30.
 - A Radford, K Narasimhan, T Salimans, et al. [Improving Language Understanding by Generative Pre-Training](https://s3-us-west-2.amazonaws.com/openai-assets/research-covers/language-unsupervised/language_understanding_paper.pdf) [J]. 2018.
 - [GPT可视化](https://bbycroft.net/llm)
-- [论文分享：新型注意力算法FlashAttention](https://www.bilibili.com/video/BV1zs4y1J7tb/)
-- https://huggingface.co/docs/text-generation-inference/conceptual/flash_attention
+- [minimind](https://github.com/jingyaogong/minimind)
+- [LLMs-from-scratch](https://github.com/rasbt/LLMs-from-scratch)
