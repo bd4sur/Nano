@@ -33,7 +33,6 @@ class TrainConfig:
 
     # AdamW Optimizer Args
     learning_rate: Optional[float] = 6e-4
-    max_iters: Optional[int] = 100000
     weight_decay: Optional[float] = 1e-1
     beta1: Optional[float] = 0.9
     beta2: Optional[float] = 0.99

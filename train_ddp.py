@@ -20,7 +20,7 @@ CONFIG_JSON = "train_config.json"
 
 class TrainGPT():
 
-    def __init__(self, config_dict, from_checkpoint=None, use_amp=True) -> None:
+    def __init__(self, config_dict, from_checkpoint=None, use_amp=True, max_steps=1e10) -> None:
         self.train_config = TrainConfig(**(config_dict))
         self.model_config = ModelConfig(**{
             "block_size": config_dict["block_size"],
@@ -36,6 +36,7 @@ class TrainGPT():
         self.model = None
         self.optimizer = None
         self.iter_count = 0
+        self.max_steps = max_steps
 
         self.train_data = None
         self.val_data = None
@@ -224,7 +225,7 @@ class TrainGPT():
 
         iter = start_step
 
-        while iter < self.train_config.max_iters:
+        while iter < self.max_steps:
             # determine and set the learning rate for this iteration
             lr = self.update_learning_rate(iter) if self.train_config.decay_lr else self.train_config.learning_rate
             for param_group in self.optimizer.param_groups:
@@ -309,13 +310,13 @@ def main():
     # TRAIN_TASK = "sft"
 
     if TRAIN_TASK == "pretrain":
-        CONFIG_JSON = "train_config.json"
+        CONFIG_JSON = "config_pretrain.json"
         with open(os.path.join(os.path.dirname(__file__), CONFIG_JSON), "r", encoding="utf-8") as f:
             config = json.load(f)
             trainer = TrainGPT(config, use_amp=USE_AMP)
             trainer.start()
     elif TRAIN_TASK == "sft":
-        CONFIG_JSON = "sft_config.json"
+        CONFIG_JSON = "config_sft.json"
         with open(os.path.join(os.path.dirname(__file__), CONFIG_JSON), "r", encoding="utf-8") as f:
             config = json.load(f)
             trainer = TrainGPT(config, "checkpoint_20240921_024033_step_500.pt", use_amp=USE_AMP)
