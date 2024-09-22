@@ -9,8 +9,8 @@ def update_loss():
         lines = fulltext.split("\n")
         for line in lines:
             fields = line.split("|")
-            if len(fields) >= 4 and fields[3].strip()[0:5] == "Loss:":
-                loss = float(fields[3].strip()[6:])
+            if len(fields) >= 4 and fields[4].strip()[0:5] == "Loss:":
+                loss = float(fields[4].strip()[6:])
                 losses.append(loss)
     x = np.array(list(range(0, len(losses))))
     y = np.array(losses)
