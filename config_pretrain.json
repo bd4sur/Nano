@@ -1,13 +1,13 @@
 {
-    "block_size": 256,
-    "vocab_size": 10000,
-    "n_layer": 6,
-    "n_head": 8,
-    "n_embd": 512,
+    "from_checkpoint": "",
+    "train_dataset_path": "dataset/pretrain_train.base64",
+    "val_dataset_path": "dataset/pretrain_val.base64",
+    "tokenizer_path": "dataset/tokenizer.json",
+
+    "random_seed": 39,
+    "batch_size": 100,
+
     "dropout": 0.0,
-    "bias": false,
-    "norm_eps": 1e-5,
-    "is_causal": true,
 
     "learning_rate": 6e-4,
     "weight_decay": 1e-1,
@@ -19,13 +19,6 @@
     "lr_decay_iters": 100000,
     "min_lr": 6e-5,
 
-    "init_from": "pretrain",
-    "batch_size": 100,
-    "random_seed": 39,
-    "train_dataset_path": "dataset/pretrain_train.base64",
-    "val_dataset_path": "dataset/pretrain_val.base64",
-    "tokenizer_path": "dataset/tokenizer.json",
-    "checkpoint_path": "checkpoint",
     "eval_interval": 100,
     "log_interval": 1,
     "eval_iters": 5,

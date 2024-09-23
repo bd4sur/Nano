@@ -1,26 +1,35 @@
 
-# Nano
+# Nano：大模型，小玩具
 
-大模型，小玩具。本仓库主要复刻自 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)，并借鉴了多个开源模型实现和学习项目，是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。
+本仓库：
 
-本仓库期望：
+- 是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。
+- 主要复刻自 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)，并借鉴了多个开源模型实现和学习项目。
+
+期望：
 
 - 用尽可能少的依赖，实现一个具体而微的Transformer语言模型。
 - 完整实现数据预处理、词元化、预训练、监督微调、推理过程。
-- 能够加载GPT-2等公开的模型权重，并实现推理、微调。
-- 研究模型训练的动力学、训推加速、模型架构改进等问题，形成研究笔记。
-- 研究Transformer模型在NLP以外的各类问题上的潜能。
+- 在廉价硬件上从头训练一个千万量级参数的模型，可用于演示。
+- 研究模型训练的动力学、训/推加速、算法改进等问题，形成研究笔记。
+- 探索Transformer模型在自然语言处理以外的问题上的潜能。
 
-本仓库**不打算**：
+**不**打算：
 
 - 从头训练并实现一个堪用的大语言模型。
+
+为了玩得开心，在下建议读者：
+
+- 掌握基本的机器学习、深度学习知识，及其工程实现技能，如Python语言等。
+- 自备计算设备和环境。当然多多益善，但是丰俭由人。以计算能力7.0+的英伟达GPU为宜，如果有多卡甚至多机多卡环境最好；不过CPU也可以运行。
+- 将绝大多数工作投入到数据处理上。数据质量对于模型质量有决定性的影响。
 
 为什么叫“Nano”：
 
 - 東雲なの（Shinonome **Nano**）和坂本是动画《日常》的角色。なの是博士创造的女高中生机器人，而坂本是一只会说话的黑猫。
 - 致(chao)敬(xi) Karpathy大佬的nanoGPT项目。
 
-![ ](./nano.jpg)
+![ ](./doc/nano.jpg)
 
 ## 立刻开始
 
@@ -44,11 +53,9 @@ pip install -r requirements.txt
 
 **监督微调（指令微调）数据格式**：本仓库所使用的指令模板格式是`<|InstructMark|>提示语…<|ResponseMark|>期望的答复…<|Padding|>*`，填充至上下文长度。仓库现有的数据预处理代码，从业余无线电操作技术能力验证题库中抽取问题和正确答案，拼接成指令模板，形成SFT数据集。
 
-**预置数据**：仓库中增加了来自[hhiim/Lacan](https://github.com/hhiim/Lacan)的精神分析黑话数据集，特此致谢。
-
 **3️⃣ 预训练和监督微调**
 
-单机单卡或CPU训练：执行`python train.py`即可。注意：
+单机单卡或CPU训练：执行`python train.py -t "pretrain" (or "sft")`即可。注意：
 
 - 若使用CPU训练，最好将`train_config.json`中的`device`选项设为`"cpu"`。
 - 对于 Jetson Orin NX 16GB、Jetson AGX Orin 64GB（均为Ampere架构，计算能力8.7）这样的比较新的设备，可以使用自动混合精度（AMP）技术和 Flash Attention 技术加速训练。在`train_config.json`中，可以将`sdp_kernel`设置为`flash`，将`dtype`设置为`bfloat16`。
@@ -73,7 +80,7 @@ deepspeed train_deepspeed.py --deepspeed --deepspeed_config deepspeed_config.jso
 192.168.10.61 slots=2
 ```
 
-**参数说明**
+**模型结构参数**
 
 |参数|类型|默认值|说明|
 |-|-|-|-|
@@ -84,7 +91,15 @@ deepspeed train_deepspeed.py --deepspeed --deepspeed_config deepspeed_config.jso
 |n_embd|int|256|模型宽度：内部表示向量的维度|
 |dropout|float|0.0|随机丢弃层的丢弃概率|
 |bias|bool|False|线性变换层加偏置？|
-|attn_mask|?|?|注意力掩模矩阵（待定）|
+|use_rope|bool|True|使用RoPE位置编码？反之使用训练位置编码|
+|norm_eps|float|1e-5|均方根标准化层参数|
+|is_causal|bool|True|因果注意力？|
+
+**训练参数**
+
+|参数|类型|默认值|说明|
+|-|-|-|-|
+|dropout|float|0.0|随机丢弃层的丢弃概率，覆盖模型参数|
 |learning_rate|float|6e-4|初始学习率|
 |weight_decay|float|1e-1|权重衰减|
 |beta1|float|0.9|AdamW优化器的参数|
@@ -124,10 +139,10 @@ python inference_ds.py
 
 所谓“Q问题”，是《鲁豫有约》20150902期节目中，主持人给丘成桐出的一道脑筋急转弯题。
 
-![ ](./q.jpg)
+![ ](./doc/q.jpg)
 
 ```
-python q.py
+python problem_q.py
 ```
 
 ## 其他玩法2：排序，但是GPT
@@ -135,13 +150,13 @@ python q.py
 [B站视频](https://www.bilibili.com/video/BV1XZ421s7bM)
 
 ```
-python sort.py
+python problem_sort.py
 ```
 
 ## 其他玩法3：回文序列
 
 ```
-python palindrome.py
+python problem_palindrome.py
 ```
 
 ## 研究笔记
@@ -179,3 +194,24 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 - [GPT可视化](https://bbycroft.net/llm)
 - [minimind](https://github.com/jingyaogong/minimind)
 - [LLMs-from-scratch](https://github.com/rasbt/LLMs-from-scratch)
+
+## 权利声明
+
+版权所有 © 2024 BD4SUR，保留所有权利。
+
+本系统“按原样”提供，采用MIT协议授权。本系统为作者个人以学习和自用目的所创作的作品。作者不对本系统的质量作任何承诺。作者不保证提供有关本系统的任何形式的解释、维护或支持。作者不为任何人使用此系统所造成的任何正面的或负面的后果负责。
+
+**以部分或全部代码形式集成的开源软件**
+
+- [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)
+- [jingyaogong/minimind](https://github.com/jingyaogong/minimind)
+- [openai/tiktoken](https://github.com/openai/tiktoken)
+
+**数据集来源**
+
+- 精神分析黑话数据集：来自[hhiim/Lacan](https://github.com/hhiim/Lacan)。
+- 业余无线电操作技术能力验证试题。
+- 国际电联《无线电规则》《频谱监测手册》等。
+- 中国无线电相关法规。
+- 商用大模型生成的问答类内容。
+- 其他公开数据集。

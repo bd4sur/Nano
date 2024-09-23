@@ -1,0 +1,12 @@
+{
+    "block_size": 256,
+    "vocab_size": 10000,
+    "n_layer": 6,
+    "n_head": 8,
+    "n_embd": 512,
+    "dropout": 0.0,
+    "bias": false,
+    "use_rope": true,
+    "norm_eps": 1e-5,
+    "is_causal": true
+}

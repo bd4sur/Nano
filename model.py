@@ -21,6 +21,7 @@ class ModelConfig:
     n_embd: int = 128
     dropout: float = 0.0
     bias: bool = False
+    use_rope: bool = True
     norm_eps: float = 1e-5
     is_causal: bool = True
 
@@ -44,11 +45,11 @@ class TrainConfig:
     min_lr: Optional[float] = 6e-5
 
     # Training Task
+    from_checkpoint: Optional[str] = ""
     train_dataset_path: Optional[str] = "dataset/sft_train.base64"
     val_dataset_path: Optional[str] = "dataset/sft_val.base64"
     tokenizer_path: Optional[str] = "dataset/tokenizer.json"
-    checkpoint_path: Optional[str] = "checkpoint/ckpt.pt"
-    init_from: Optional[str] = "pretrain"
+    
     batch_size: Optional[int] = 600
     random_seed: Optional[int] = 114514
     eval_interval: Optional[int] = 100
@@ -154,7 +155,8 @@ class MaskedSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
         v = v.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
 
-        q, k = apply_rotary_emb(q, k, pos_cis)
+        if pos_cis is not None:
+            q, k = apply_rotary_emb(q, k, pos_cis)
 
         k = k.transpose(1, 2) # (B, nh, T, hs)
         q = q.transpose(1, 2) # (B, nh, T, hs)
@@ -212,7 +214,7 @@ class Block(nn.Module):
 
 class GPT(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config: ModelConfig):
         super().__init__()
         assert config.vocab_size is not None
         assert config.block_size is not None
@@ -220,7 +222,7 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            # wpe = nn.Embedding(config.block_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size, config.n_embd) if not self.config.use_rope else None,
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
@@ -229,7 +231,7 @@ class GPT(nn.Module):
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
         # RoPE relative positional embeddings
-        pos_cis = precompute_pos_cis(config.n_embd // config.n_head, config.block_size)
+        pos_cis = precompute_pos_cis(config.n_embd // config.n_head, config.block_size) if self.config.use_rope else None
         self.register_buffer("pos_cis", pos_cis, persistent=False)
 
         # init all weights
@@ -247,8 +249,8 @@ class GPT(nn.Module):
         params are actually used as weights in the final layer, so we include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        # if non_embedding:
-        #     n_params -= self.transformer.wpe.weight.numel()
+        if non_embedding and not self.config.use_rope:
+            n_params -= self.transformer.wpe.weight.numel()
         return n_params
 
     def _init_weights(self, module):
@@ -267,14 +269,16 @@ class GPT(nn.Module):
         tok_emb = self.transformer.wte(idx)
 
         # RoPE
-        pos_cis = self.pos_cis[:t]
-        x = self.transformer.drop(tok_emb)
-
+        if self.config.use_rope:
+            pos_cis = self.pos_cis[:t]
         # Trained position embedding
-        # device = idx.device
-        # pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
-        # pos_emb = self.transformer.wpe(pos) # position embeddings of shape (BlockSize, n_embd)
-        # x = self.transformer.drop(tok_emb + pos_emb)
+        else:
+            pos_cis = None
+            pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
+            pos_emb = self.transformer.wpe(pos) # position embeddings of shape (BlockSize, n_embd)
+            tok_emb = tok_emb + pos_emb
+
+        x = self.transformer.drop(tok_emb)
 
         for block in self.transformer.h:
             x = block(x, pos_cis)
@@ -283,11 +287,6 @@ class GPT(nn.Module):
         # 计算损失
         if targets is not None: # target.shape=(BatchSize, BlockSize)
             logits = self.lm_head(x) # logits.shape=(BatchSize, BlockSize, VocabSize)
-            # if eval_only_last_token_loss:
-            #     a = logits[:, -1, :] # shape=(BatchSize, VocabSize) batch中每句话最后一个token的logits
-            #     b = targets[:, -1] # shape(BatchSize) batch中每句话最后一个token的code
-            #     loss = F.cross_entropy(a, b, ignore_index=-1)
-            # else:
             a = logits.view(-1, logits.size(-1)) # shape=(BatchSize*BlockSize, VocabSize)
             b = targets.view(-1) # shape=(BatchSize*BlockSize)
             loss = F.cross_entropy(a, b)
@@ -309,7 +308,7 @@ class GPT(nn.Module):
         # but want to use a smaller block size for some smaller, simpler model
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
-        # self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
+        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size]) if not self.config.use_rope else None
         for block in self.transformer.h:
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
@@ -352,61 +351,6 @@ class GPT(nn.Module):
         flops = flop_per_iter * (1.0/dt) # per second
         return flops
 
-    @classmethod
-    def from_pretrained(cls, model_type, override_args=None):
-        assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
-        override_args = override_args or {} # default to empty dict
-        # only dropout can be overridden see more notes below
-        assert all(k == 'dropout' for k in override_args)
-        from transformers import GPT2LMHeadModel
-        print("  Loading weights from pretrained gpt: %s" % model_type)
-
-        # n_layer, n_head and n_embd are determined from model_type
-        gpt_model_config = {
-            'gpt2':         dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
-            'gpt2-medium':  dict(n_layer=24, n_head=16, n_embd=1024), # 350M params
-            'gpt2-large':   dict(n_layer=36, n_head=20, n_embd=1280), # 774M params
-            'gpt2-xl':      dict(n_layer=48, n_head=25, n_embd=1600), # 1558M params
-        }[model_type]
-        print("  Forcing vocab_size=50257, block_size=1024, bias=True")
-        gpt_model_config['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
-        gpt_model_config['block_size'] = 1024 # always 1024 for GPT model checkpoints
-        gpt_model_config['bias'] = True # always True for GPT model checkpoints
-        # we can override the dropout rate, if desired
-        if 'dropout' in override_args:
-            print(f"overriding dropout rate to {override_args['dropout']}")
-            gpt_model_config['dropout'] = override_args['dropout']
-        # create a from-scratch initialized minGPT model
-        config = ModelConfig(**gpt_model_config)
-        model = GPT(config)
-        sd = model.state_dict()
-        sd_keys = sd.keys()
-        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
-
-        # init a huggingface/transformers model
-        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
-        sd_hf = model_hf.state_dict()
-
-        # copy while ensuring all of the parameters are aligned and match in names and shapes
-        sd_keys_hf = sd_hf.keys()
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
-        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
-        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
-        # this means that we have to transpose these weights when we import them
-        assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
-        for k in sd_keys_hf:
-            if any(k.endswith(w) for w in transposed):
-                # special treatment for the Conv1D weights we need to transpose
-                assert sd_hf[k].shape[::-1] == sd[k].shape
-                with torch.no_grad():
-                    sd[k].copy_(sd_hf[k].t())
-            else:
-                # vanilla copy over the other parameters
-                assert sd_hf[k].shape == sd[k].shape
-                with torch.no_grad():
-                    sd[k].copy_(sd_hf[k])
-        return model
 
     @torch.no_grad()
     def generate_next_token(self, idx, temperature=1.0, top_k=None):

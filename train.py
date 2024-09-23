@@ -3,9 +3,8 @@ import time
 import math
 import json
 import logging
+import argparse
 from contextlib import nullcontext
-
-import numpy as np
 import torch
 
 from tokenizer import Tokenizer
@@ -16,28 +15,23 @@ logger = logging.getLogger(__name__)
 
 class TrainGPT():
 
-    def __init__(self, config_dict, from_checkpoint=None, use_amp=True, max_steps=1e10) -> None:
-        self.train_config = TrainConfig(**(config_dict))
-        self.model_config = ModelConfig(**{
-            "block_size": config_dict["block_size"],
-            "vocab_size": config_dict["vocab_size"],
-            "n_layer": config_dict["n_layer"],
-            "n_head": config_dict["n_head"],
-            "n_embd": config_dict["n_embd"],
-            "dropout": config_dict["dropout"],
-            "is_causal": config_dict["is_causal"],
-        })
+    def __init__(self, model_config_dict, train_config_dict, use_amp=True, max_steps=1e10, ckpt_filename=None) -> None:
+        self.train_config = TrainConfig(**(train_config_dict))
+        self.model_config = ModelConfig(**(model_config_dict))
 
         # Internal states
         self.model = None
         self.optimizer = None
-        self.iter_count = 0
+        self.step_count = 0
         self.max_steps = max_steps
+        self.ckpt_filename = ckpt_filename
 
+        self.tokenizer = None
         self.train_data = None
         self.val_data = None
 
-        self.from_checkpoint = from_checkpoint
+        self.from_checkpoint = self.train_config.from_checkpoint
+        self.from_checkpoint = self.from_checkpoint if len(self.from_checkpoint) > 0 else None
         self.use_amp = use_amp
 
         # AMP
@@ -57,16 +51,16 @@ class TrainGPT():
 
         tokenizer_path = os.path.join(os.path.dirname(__file__), self.train_config.tokenizer_path)
         self.log(f"Loading tokenizer from {tokenizer_path}...")
-        tokenizer = Tokenizer()
-        tokenizer.load_from_config(tokenizer_path)
-        self.model_config.vocab_size = tokenizer.vocab_size
+        self.tokenizer = Tokenizer()
+        self.tokenizer.load_from_config_file(tokenizer_path)
+        self.model_config.vocab_size = self.tokenizer.vocab_size
 
         self.log(f"  Size of Train set = {self.train_data.line_num}")
         self.log(f"  Size of Validation set = {self.val_data.line_num}")
         self.log(f"  Size of Vocabulary = {self.model_config.vocab_size}")
 
     def init(self):
-        os.makedirs(os.path.join(os.path.dirname(__file__), os.path.dirname(self.train_config.checkpoint_path)), exist_ok=True)
+        os.makedirs(os.path.join(os.path.dirname(__file__), "checkpoint"), exist_ok=True)
         torch.manual_seed(self.train_config.random_seed)
 
         self.log(f"Is using AMP = {self.use_amp}")
@@ -78,10 +72,8 @@ class TrainGPT():
 
         # Model
         if self.from_checkpoint is not None:
-            _ckpt_path = os.path.join(os.path.dirname(__file__), self.train_config.checkpoint_path, self.from_checkpoint)
+            _ckpt_path = os.path.join(os.path.dirname(__file__), self.from_checkpoint)
             self.log(f"Resuming training from {_ckpt_path}")
-            # self.log(f"  Model architecture arguments 'block_size', 'vocab_size', 'n_layer', 'n_head', 'n_embd', 'is_causal' in training configuration file are ignored. Their values in checkpoint are being used instead.")
-            # self.log(f"  Argument 'dropout' in checkpoint is overrided by the value in training configuration file.")
             _checkpoint = torch.load(_ckpt_path, map_location=self.train_config.device)
             # 从Checkpoint中恢复部分模型结构参数
             _model_config = _checkpoint["model_config"]
@@ -90,7 +82,7 @@ class TrainGPT():
             self.model.to(self.train_config.device)
             # 恢复模型参数
             self.model.load_state_dict(_checkpoint["model"])
-            self.iter_count = _checkpoint["iter_count"]
+            self.step_count = _checkpoint["step_count"]
         else:
             # init a new model from scratch
             self.log("Initializing a new model for pre-train")
@@ -121,11 +113,10 @@ class TrainGPT():
             dataset = self.train_data
         else:
             dataset = self.val_data
-
-        if self.model_config.is_causal:
-            x, y, mask = dataset.get_batch(self.train_config.batch_size, self.model_config.block_size)
-            x, y, mask = x.to(self.train_config.device, non_blocking=True), y.to(self.train_config.device, non_blocking=True), mask.to(self.train_config.device, non_blocking=True)
-            return x, y, mask
+        device = self.train_config.device
+        x, y, mask = dataset.get_batch(self.train_config.batch_size, self.model_config.block_size, self.model_config.is_causal)
+        x, y, mask = x.to(device, non_blocking=True), y.to(device, non_blocking=True), mask.to(device, non_blocking=True)
+        return x, y, mask
 
     # helps estimate an arbitrarily accurate loss over either split using many batches
     @torch.no_grad()
@@ -165,12 +156,12 @@ class TrainGPT():
         best_val_loss = 1e9
         X, Y, mask = self.get_batch('train') # fetch the very first batch
 
-        start_step = self.iter_count
+        start_step = self.step_count
         self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Start training from iteration #{start_step}")
 
         iter = start_step
 
-        while iter < self.max_steps:
+        while iter <= self.max_steps:
             # determine and set the learning rate for this iteration
             lr = self.update_learning_rate(iter) if self.train_config.decay_lr else self.train_config.learning_rate
             for param_group in self.optimizer.param_groups:
@@ -182,17 +173,18 @@ class TrainGPT():
                 self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Phase: Validation | Step: {iter} | Val_loss: {val_loss:.3f} | Best_val_loss: {best_val_loss:.4f}")
 
                 if iter > 0 and iter > start_step and val_loss < best_val_loss:
-                    checkpoint_file_name = f"checkpoint_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt"
-                    self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving checkpoint to {self.train_config.checkpoint_path}/{checkpoint_file_name}")
+                    checkpoint_file_name = f"checkpoint_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt" if self.ckpt_filename is None else self.ckpt_filename
+                    self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving checkpoint to `checkpoint/{checkpoint_file_name}`")
                     _checkpoint = {
-                        "model":        self.model.state_dict(),
-                        "optimizer":    self.optimizer.state_dict(),
-                        "iter_count":   iter,
-                        "train_config": self.train_config,
-                        "model_config": self.model_config
+                        "model":            self.model.state_dict(),
+                        "optimizer":        self.optimizer.state_dict(),
+                        "step_count":       iter,
+                        "train_config":     self.train_config,
+                        "model_config":     self.model_config,
+                        "tokenizer_config": self.tokenizer.config
                     }
                     best_val_loss = val_loss
-                    torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), self.train_config.checkpoint_path, checkpoint_file_name))
+                    torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), "checkpoint", checkpoint_file_name))
 
             t0 = time.time_ns()
 
@@ -214,6 +206,7 @@ class TrainGPT():
                 loss.backward()
                 self.optimizer.step()
 
+            # flush the gradients as soon as we can, no need for this memory anymore
             self.optimizer.zero_grad(set_to_none=True)
 
             t1 = time.time_ns()
@@ -225,29 +218,29 @@ class TrainGPT():
                 self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Phase: Train | Step: {iter} | TrainDataPos: {self.train_data.line_pos} | Loss: {lossf:.3f} | Time: {dt*1000:.0f} ms | Speed: {flops / 1e9:.2f} GFLOP/s")
 
             iter += 1
-            self.iter_count = iter
+            self.step_count = iter
 
 def main():
     logging.basicConfig(filename='train.log', filemode="w", level=logging.INFO)
     print(f"PyTorch version: {torch.__version__}")
 
-    USE_AMP = True
+    parser = argparse.ArgumentParser(description="Train Nano model.")
+    parser.add_argument("-t", "--task", type=str, default="pretrain") # "pretrain" or "sft"
+    parser.add_argument("--no_amp", action="store_true")
+    args = parser.parse_args()
 
-    TRAIN_TASK = "pretrain"
-    # TRAIN_TASK = "sft"
+    if args.task == "pretrain":
+        train_config_path = "config_pretrain.json"
+    elif args.task == "sft":
+        train_config_path = "config_sft.json"
 
-    if TRAIN_TASK == "pretrain":
-        CONFIG_JSON = "config_pretrain.json"
-        with open(os.path.join(os.path.dirname(__file__), CONFIG_JSON), "r", encoding="utf-8") as f:
-            config = json.load(f)
-            trainer = TrainGPT(config, use_amp=USE_AMP)
-            trainer.start()
-    elif TRAIN_TASK == "sft":
-        CONFIG_JSON = "config_sft.json"
-        with open(os.path.join(os.path.dirname(__file__), CONFIG_JSON), "r", encoding="utf-8") as f:
-            config = json.load(f)
-            trainer = TrainGPT(config, "checkpoint.pt", use_amp=USE_AMP)
-            trainer.start()
+    with open(os.path.join(os.path.dirname(__file__), "model_config.json"), "r", encoding="utf-8") as f:
+        model_config = json.load(f)
+    with open(os.path.join(os.path.dirname(__file__), train_config_path), "r", encoding="utf-8") as f:
+        train_config = json.load(f)
+
+    trainer = TrainGPT(model_config, train_config, use_amp=(not args.no_amp))
+    trainer.start()
 
 if __name__ == "__main__":
     main()

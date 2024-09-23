@@ -201,6 +201,7 @@ class Tokenizer:
     def __init__(self):
         # self.bpe_tokenizer = BPE_Tokenizer.load(os.path.join(os.path.dirname(__file__), 'dataset/cl100k_base.txt'))
         # self.bpe_tokenizer = tiktoken.get_encoding("cl100k_base")
+        self.config = None
         self.stoi = {}
         self.itos = []
         self.vocab_size = 0 # self.bpe_tokenizer.vocab_size
@@ -227,13 +228,20 @@ class Tokenizer:
         # return self.bpe_tokenizer.decode(token_list)
         return ''.join([self.itos[i] for i in token_list])
 
-    def load_from_config(self, config_path):
+    def load_from_config_file(self, config_path):
         # self.bpe_tokenizer = BPE_Tokenizer.load(config_path)
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
+            self.config = config
             self.vocab_size = config["vocab_size"]
             self.stoi = config["stoi"]
             self.itos = config["itos"]
+
+    def load_from_config_dict(self, config_dict):
+        self.config = config_dict
+        self.vocab_size = config_dict["vocab_size"]
+        self.stoi = config_dict["stoi"]
+        self.itos = config_dict["itos"]
 
     # 根据已有文本建立编码器，并保存到配置文件
     def build_from_text(self, text, config_path):
@@ -260,13 +268,13 @@ class Tokenizer:
 
         self.itos = vocab
         self.stoi = { ch:i for i,ch in enumerate(vocab) }
-        config = {
+        self.config = {
             "vocab_size": self.vocab_size,
             "stoi": self.stoi,
             "itos": self.itos
         }
         with open(config_path, 'w') as f:
-            json.dump(config, f)
+            json.dump(self.config, f)
 
     def build_from_file(self, text_path, config_path):
         # with open(text_path, mode="r", encoding="utf-8") as f:
@@ -303,13 +311,13 @@ class Tokenizer:
         self.itos = vocab
         self.stoi = { ch:i for i,ch in enumerate(vocab) }
 
-        config = {
+        self.config = {
             "vocab_size": self.vocab_size,
             "stoi": self.stoi,
             "itos": self.itos
         }
         with open(config_path, 'w') as f:
-            json.dump(config, f)
+            json.dump(self.config, f)
 
 
 if __name__ == "__main__":

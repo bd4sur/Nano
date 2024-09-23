@@ -123,7 +123,7 @@ def inference_palindrome_gpt(config):
     tk_path = os.path.join(os.path.dirname(__file__), config["tokenizer_path"])
     print(f"Loading tokenizer from {tk_path}...")
     tokenizer = Tokenizer()
-    tokenizer.load_from_config(tk_path)
+    tokenizer.load_from_config_file(tk_path)
 
     with torch.no_grad():
         ok_count = 0

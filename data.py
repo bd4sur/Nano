@@ -18,7 +18,7 @@ def build_tokenizer(input_file, data_dir="dataset", is_build_tokenizer=True):
         tokenizer.build_from_file(input_file_path, tokenizer_path)
     else:
         print(f"Loading tokenizer...")
-        tokenizer.load_from_config(tokenizer_path)
+        tokenizer.load_from_config_file(tokenizer_path)
     return tokenizer
 
 def generate_pretrain_dataset(input_file, data_dir="dataset", tokenizer=None, block_size=512, overlap_ratio=0.5):
@@ -125,8 +125,8 @@ def generate_sft_dataset(input_file, data_dir="dataset", tokenizer=None, block_s
 
 def main():
     BLOCK_SIZE = 256
-    PRETRAIN_DATASET = "psycho.txt"
-    SFT_DATASET = "sft.txt"
+    PRETRAIN_DATASET = "pretrain-amateur-radio.txt"
+    SFT_DATASET = "sft-amateur-radio.txt"
     tokenizer = build_tokenizer(PRETRAIN_DATASET, data_dir="dataset", is_build_tokenizer=True)
     generate_pretrain_dataset(PRETRAIN_DATASET, data_dir="dataset", tokenizer=tokenizer, block_size=BLOCK_SIZE, overlap_ratio=0.5)
     generate_sft_dataset(SFT_DATASET, data_dir="dataset", tokenizer=tokenizer, block_size=BLOCK_SIZE)

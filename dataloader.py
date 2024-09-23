@@ -1,7 +1,6 @@
 import os
 import base64
 import pickle
-import numpy as np
 import torch
 
 class DataLoader:
@@ -25,7 +24,7 @@ class DataLoader:
                     return
                 yield line
 
-    def get_batch(self, batch_size, block_size):
+    def get_batch(self, batch_size, block_size, is_causal=True):
         batch = []
         for _ in range(batch_size):
             if self.line_pos == self.line_num:
@@ -40,25 +39,26 @@ class DataLoader:
             obj = pickle.loads(base64.b64decode(line))
             batch.append(obj)
             self.line_pos = self.line_pos + 1
-        # 取出一批数据，每条数据只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
-        x = torch.stack([torch.tensor(item[0][0 : block_size], dtype=torch.int64) for item in batch])
-        # 这批数据每一条都右移一个字符，作为预测目标，shape=(batch_size, block_size)
-        y = torch.stack([torch.tensor(item[0][1 : block_size + 1], dtype=torch.int64) for item in batch])
-        # Mask
-        mask = torch.stack([
-            torch.tensor([1 for _ in range(block_size)], dtype=torch.int64) if item[1] is None else # pretrain
-            torch.tensor(item[1][1 : block_size + 1], dtype=torch.int64) # SFT
-            for item in batch
-        ])
+        # 如果是因果语言模型：则 x,y = ("12345","2345x")，即构造预测下一个token的xy对，并保留mask信息（用于监督微调）
+        if is_causal:
+            # 取出一批数据，每条数据只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
+            x = torch.stack([torch.tensor(item[0][0 : block_size], dtype=torch.int64) for item in batch])
+            # 这批数据每一条都右移一个字符，作为预测目标，shape=(batch_size, block_size)
+            y = torch.stack([torch.tensor(item[0][1 : block_size + 1], dtype=torch.int64) for item in batch])
+            # Mask
+            mask = torch.stack([
+                torch.tensor([1 for _ in range(block_size)], dtype=torch.int64) if item[1] is None else # pretrain
+                torch.tensor(item[1][1 : block_size + 1], dtype=torch.int64) # SFT
+                for item in batch
+            ])
+        # 如果不是因果注意力模型，则将输入序列seq按照block_size一分为二：seq[0:block_size]和seq[block_size:]，后者截断为block_size长度（不足不填充）
+        else:
+            x = torch.stack([torch.tensor(item[0][0 : block_size], dtype=torch.int64) for item in batch])
+            y = torch.stack([torch.tensor(item[0][block_size : block_size * 2], dtype=torch.int64) for item in batch])
+            mask = torch.stack([
+                torch.tensor([1 for _ in range(block_size)], dtype=torch.int64) if item[1] is None else # pretrain
+                torch.tensor(item[1][0 : block_size], dtype=torch.int64) # SFT
+                for item in batch
+            ])
         return x, y, mask
 
-# def write_text_file(filepath):
-#     with open(filepath, "w", encoding="utf-8") as f:
-#         for i in range(10):
-#             obj = {
-#                 "index": i,
-#                 "ids": [j for j in range(10)],
-#                 "mask": [j for j in range(10)],
-#             }
-#             obj = pickle.dumps(obj)
-#             f.writelines(str(base64.b64encode(obj), encoding="utf-8") + "\n")

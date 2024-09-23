@@ -20,3 +20,4 @@ model/
 .pytest_cache
 thumbs.db
 dataset/xxqg.txt
+*.base64

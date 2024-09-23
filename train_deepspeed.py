@@ -57,7 +57,7 @@ class TrainGPT():
         tokenizer_path = os.path.join(os.path.dirname(__file__), self.train_config.tokenizer_path)
         self.log(f"Loading tokenizer from {tokenizer_path}...")
         tokenizer = Tokenizer()
-        tokenizer.load_from_config(tokenizer_path)
+        tokenizer.load_from_config_file(tokenizer_path)
 
         self.model_config.vocab_size = tokenizer.vocab_size
         self.train_data = np.array(dataset["train_ids"], dtype=np.uint16) # np.memmap(os.path.join(os.path.dirname(__file__), self.dataset_path, 'train.bin'), dtype=np.uint16, mode='r')

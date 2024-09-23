@@ -1,13 +1,12 @@
 import os
-import tiktoken
+import argparse
 import torch
 from tokenizer import Tokenizer
 from model import GPT
 
 class InferenceGPT:
 
-    def __init__(self, tokenizer_path="dataset/tokenizer.json", checkpoint_path="checkpoint/ckpt.pt", device="cuda"):
-        self.tokenizer_path = tokenizer_path
+    def __init__(self, checkpoint_path="checkpoint/ckpt.pt", device="cuda"):
         self.checkpoint_path = checkpoint_path
         self.device = device
 
@@ -16,48 +15,29 @@ class InferenceGPT:
         self.encode = None
         self.decode = None
 
-        if self.checkpoint_path in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}:
-            # 加载GPT模型权重
-            self.model = GPT.from_pretrained(self.checkpoint_path)
-            self.model.eval()
-            self.model.to(device)
-            self.tokenizer = tiktoken.get_encoding("gpt2")
-            self.encode = lambda s: self.tokenizer.encode(s, allowed_special={"<|endoftext|>"})
-            self.decode = lambda l: self.tokenizer.decode(l)
+        # 读取模型检查点和训练配置
+        ckpt_path = os.path.join(os.path.dirname(__file__), self.checkpoint_path)
+        print(f"Loading checkpoint from {ckpt_path}...")
+        checkpoint = torch.load(ckpt_path, map_location=device)
+        train_config = checkpoint['train_config']
+        model_config = checkpoint['model_config']
+        tokenizer_config = checkpoint['tokenizer_config']
 
-            _checkpoint = {
-                "model":      self.model.state_dict(),
-                "optimizer":  None,
-                "iter_count": 0,
-                "config":     self.model.config,
-            }
-            torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), 'gpt2-nano-ckpt.pt'))
+        # 设置随机种子与训练设置一致
+        torch.manual_seed(train_config.random_seed)
+        torch.cuda.manual_seed(train_config.random_seed)
 
-        else:
-            # 读取模型检查点和训练配置
-            ckpt_path = os.path.join(os.path.dirname(__file__), self.checkpoint_path)
-            print(f"Loading checkpoint from {ckpt_path}...")
-            checkpoint = torch.load(ckpt_path, map_location=device)
-            train_config = checkpoint['train_config']
-            model_config = checkpoint['model_config']
+        # 加载模型权重
+        self.model = GPT(model_config)
+        self.model.load_state_dict(checkpoint['model'])
+        self.model.eval()
+        self.model.to(device)
 
-            # 设置随机种子与训练设置一致
-            torch.manual_seed(train_config.random_seed)
-            torch.cuda.manual_seed(train_config.random_seed)
-
-            # 加载模型权重
-            self.model = GPT(model_config)
-            self.model.load_state_dict(checkpoint['model'])
-            self.model.eval()
-            self.model.to(device)
-
-            # 读取分词器
-            tk_path = os.path.join(os.path.dirname(__file__), self.tokenizer_path)
-            print(f"Loading tokenizer from {tk_path}...")
-            self.tokenizer = Tokenizer()
-            self.tokenizer.load_from_config(tk_path)
-            self.encode = lambda s: self.tokenizer.encode(s)
-            self.decode = lambda l: self.tokenizer.decode(l)
+        # 读取分词器
+        self.tokenizer = Tokenizer()
+        self.tokenizer.load_from_config_dict(tokenizer_config)
+        self.encode = lambda s: self.tokenizer.encode(s)
+        self.decode = lambda l: self.tokenizer.decode(l)
 
     def typewriter(self, token_tensor):
         token_list = token_tensor[0].tolist()
@@ -83,9 +63,13 @@ class InferenceGPT:
                 print("\n")
 
 def main():
+    parser = argparse.ArgumentParser(description="Sample (to inference) from Nano model for text generation and question answering.")
+    parser.add_argument("-m", "--model", type=str, default="checkpoint/ckpt.pt")
+    args = parser.parse_args()
+
     # infer = InferenceGPT("dataset", "gpt2", "cuda")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    infer = InferenceGPT("dataset/tokenizer.json", "checkpoint/ckpt.pt", device)
+    infer = InferenceGPT(args.model, device)
     infer.generate()
 
 if __name__ == "__main__":
