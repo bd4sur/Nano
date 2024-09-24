@@ -1,7 +1,7 @@
 {
-    "from_checkpoint": "checkpoint/checkpoint_20240924_010237_step_800.pt",
-    "train_dataset_path": "dataset/sft_train.base64",
-    "val_dataset_path": "dataset/sft_val.base64",
+    "from_checkpoint": "checkpoint/checkpoint_20240924_234134_step_2700.pt",
+    "train_dataset_path": ["dataset/sft_train.base64"],
+    "val_dataset_path": ["dataset/sft_val.base64"],
     "tokenizer_path": "dataset/tokenizer.json",
 
     "random_seed": 39,
@@ -15,8 +15,8 @@
     "beta2": 0.99,
 
     "decay_lr": false,
-    "warmup_iters": 300,
-    "lr_decay_iters": 100000,
+    "warmup_iters": 700,
+    "lr_decay_iters": 1e9,
     "min_lr": 1e-8,
 
     "eval_interval": 100,

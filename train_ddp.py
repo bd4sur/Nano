@@ -55,11 +55,19 @@ class TrainGPT():
             print(logstr)
 
     def load_data(self):
-        train_dataset_path = os.path.join(os.path.dirname(__file__), self.train_config.train_dataset_path)
-        val_dataset_path = os.path.join(os.path.dirname(__file__), self.train_config.val_dataset_path)
-        self.log(f"Loading dataset from {train_dataset_path} and {val_dataset_path}...")
-        self.train_data = DataLoader(train_dataset_path)
-        self.val_data = DataLoader(val_dataset_path)
+        train_curriculum = []
+        val_curriculum = []
+        for train_p in self.train_config.train_dataset_path:
+            train_path = os.path.join(os.path.dirname(__file__), train_p)
+            train_curriculum.append(train_path)
+        for val_p in self.train_config.val_dataset_path:
+            val_path = os.path.join(os.path.dirname(__file__), val_p)
+            val_curriculum.append(val_path)
+
+        self.log(f"Loading dataset...")
+
+        self.train_data = DataLoader(train_curriculum)
+        self.val_data = DataLoader(val_curriculum)
 
         tokenizer_path = os.path.join(os.path.dirname(__file__), self.train_config.tokenizer_path)
         self.log(f"Loading tokenizer from {tokenizer_path}...")
@@ -223,7 +231,7 @@ class TrainGPT():
             # evaluate the loss on train/val sets and write checkpoints
             if iter > 0 and iter % self.train_config.eval_interval == 0 and self.is_master_process:
                 val_loss = self.estimate_loss()
-                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Phase: Validation | Step: {iter} | Val_loss: {val_loss:.3f} | Best_val_loss: {best_val_loss:.4f}")
+                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Validation | Step: {iter} | Val_loss: {val_loss:.3f} | Best_val_loss: {best_val_loss:.4f}")
 
                 if iter > 0 and iter > start_step and val_loss < best_val_loss:
                     checkpoint_file_name = f"checkpoint_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt" if self.ckpt_filename is None else self.ckpt_filename
@@ -285,7 +293,7 @@ class TrainGPT():
             if iter % self.train_config.log_interval == 0:
                 lossf = loss.item()
                 flops = raw_model.estimate_flops(self.train_config.batch_size, dt)
-                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Phase: Train | Step: {iter} | TrainDataPos: {self.train_data.line_pos} | Loss: {lossf:.3f} | Time: {dt*1000:.0f} ms | Speed: {flops / 1e9:.2f} GFLOP/s")
+                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Train | Epoch-Step: {self.train_data.epoch}-{iter} | Curriculum: {self.train_data.current_course_index}-{self.train_data.current_line_pos[self.train_data.current_course_index]} | Loss: {lossf:.3f} | Time: {dt*1000:.0f} ms | Speed: {flops / 1e9:.2f} GFLOP/s")
 
             iter += 1
             self.step_count = iter

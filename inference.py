@@ -42,8 +42,8 @@ class InferenceGPT:
     def typewriter(self, token_tensor):
         token_list = token_tensor[0].tolist()
         chars = self.decode(token_list)
-        if self.tokenizer.padding_char in chars:
-            print(chars.split(self.tokenizer.padding_char)[0], end="", flush=True)
+        if "<|padding|>" in chars:
+            print(chars.split("<|padding|>")[0], end="", flush=True)
             return False
         else:
             print(chars, end="", flush=True)
@@ -56,7 +56,7 @@ class InferenceGPT:
                     prompt = input("User: ")
                 except EOFError:
                     break
-                prompt = f"{self.tokenizer.instruct_mark_char}{prompt}{self.tokenizer.response_mark_char}"
+                prompt = f"<|instruct_mark|>{prompt}<|response_mark|>"
                 x = torch.tensor(self.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
                 print("Nano: ", end="", flush=True)
                 y = self.model.auto_regressive_generate(x, 200, temperature=1, top_k=10, callback=self.typewriter)

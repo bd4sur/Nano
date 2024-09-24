@@ -4,17 +4,27 @@ import pickle
 import torch
 
 class DataLoader:
-    def __init__(self, filepath, buffer_size=10000):
-        self.filepath = filepath
-        self.line_iterator = self.get_line_iterator(filepath)
-        self.line_num = 0
-        self.line_pos = 0
-        self.buffer_size = buffer_size
-        self.buffer = []
-        with os.popen(f"wc -l {filepath}") as f:
-            res = f.readlines()[0]
-            self.line_num = int(res.split(" ")[0])
-        # print(f"Lines: {self.line_num}")
+    def __init__(self, filepath_list):
+        self.filepath_list = filepath_list
+        self.course_num = len(filepath_list)
+        self.current_course_index = 0
+
+        self.line_iterator = [0] * self.course_num
+        self.line_num = [0] * self.course_num
+        self.current_line_pos = [0] * self.course_num
+
+        self.epoch = 0
+
+        for index,fp in enumerate(filepath_list):
+            # 行迭代器
+            self.line_iterator[index] = self.get_line_iterator(fp)
+            # 当前行号
+            self.current_line_pos[index] = 0
+            # 行数统计
+            with os.popen(f"wc -l {fp}") as f:
+                res = f.readlines()[0]
+                self.line_num[index] = int(res.split(" ")[0])
+            # print(f"Lines: {self.line_num[index]}")
 
     def get_line_iterator(self, filepath):
         with open(filepath, mode="r", encoding="utf-8") as f:
@@ -27,18 +37,29 @@ class DataLoader:
     def get_batch(self, batch_size, block_size, is_causal=True):
         batch = []
         for _ in range(batch_size):
-            if self.line_pos == self.line_num:
-                # print("Reload dataset (epoch)")
-                self.line_iterator = self.get_line_iterator(self.filepath)
-                self.line_pos = 0
+            if self.current_line_pos[self.current_course_index] == self.line_num[self.current_course_index]:
+                # print("Next course")
+                fp = self.filepath_list[self.current_course_index]
+                self.line_iterator[self.current_course_index] = self.get_line_iterator(fp)
+                self.current_line_pos[self.current_course_index] = 0
+
+                self.current_course_index = self.current_course_index + 1
+                if self.current_course_index == self.course_num:
+                    # print("Return to first course")
+                    self.current_course_index = 0
+                    self.epoch = self.epoch + 1
+
+            current_line_iterator = self.line_iterator[self.current_course_index]
+
             try:
-                line = next(self.line_iterator)
+                line = next(current_line_iterator)
             except StopIteration:
                 print("StopIteration")
                 return batch
             obj = pickle.loads(base64.b64decode(line))
             batch.append(obj)
-            self.line_pos = self.line_pos + 1
+            self.current_line_pos[self.current_course_index] = self.current_line_pos[self.current_course_index] + 1
+
         # 如果是因果语言模型：则 x,y = ("12345","2345x")，即构造预测下一个token的xy对，并保留mask信息（用于监督微调）
         if is_causal:
             # 取出一批数据，每条数据只保留前block_size个token，构成tensor，shape=(batch_size, block_size)
@@ -61,4 +82,3 @@ class DataLoader:
                 for item in batch
             ])
         return x, y, mask
-

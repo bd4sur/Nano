@@ -19,4 +19,4 @@ with open("sft-amateur-radio.txt", mode="r", encoding="utf-8") as f:
 
 with open("sft-amateur-radio.jsonl", mode="w", encoding="utf-8") as f:
     for item in all_qa:
-        f.writelines(json.dumps(item) + "\n")
+        f.writelines(json.dumps(item, ensure_ascii=False) + "\n")

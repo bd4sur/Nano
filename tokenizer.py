@@ -6,7 +6,6 @@ import base64
 import regex
 import blobfile
 from tqdm import tqdm
-import tiktoken
 
 class BPE_Tokenizer:
     def __init__(self, *, pat_str: str, mergeable_ranks: dict[bytes, int], vocab_size: int) -> None:
@@ -180,7 +179,7 @@ def train_simple_encoding():
     gpt2_pattern = (
         r"""'s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}]+| ?[\p{N}]+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     )
-    with open("/home/bd4sur/ai/Nano/dataset/psycho.txt", "r") as f:
+    with open("/home/bd4sur/ai/Nano/dataset/pretrain-psycho.txt", "r") as f:
         data = f.read()
 
     enc = BPE_Tokenizer.train(data, vocab_size=4096, pat_str=gpt2_pattern)
@@ -198,13 +197,22 @@ def train_simple_encoding():
     return enc
 
 class Tokenizer:
-    def __init__(self):
+    def __init__(self, special_tokens=None):
         # self.bpe_tokenizer = BPE_Tokenizer.load(os.path.join(os.path.dirname(__file__), 'dataset/cl100k_base.txt'))
         # self.bpe_tokenizer = tiktoken.get_encoding("cl100k_base")
         self.config = None
         self.stoi = {}
         self.itos = []
         self.vocab_size = 0 # self.bpe_tokenizer.vocab_size
+        self.special_tokens = special_tokens if special_tokens is not None else {
+            "<|padding|>": 0,
+            "<|unknown|>": 1,
+            "<|bos|>": 2,
+            "<|eos|>": 3,
+            "<|instruct_mark|>": 4,
+            "<|response_mark|>": 5
+        }
+
         self.padding_char = "\u1337"
         self.padding_token = 0
         self.unknown_char = "\u1338"
@@ -221,7 +229,21 @@ class Tokenizer:
     # encoder: take a string, output a list of integers
     def encode(self, text):
         # return self.bpe_tokenizer.encode(text)
-        return [(self.stoi[c] if (c in self.stoi) else (self.unknown_token)) for c in text]
+        placeholder = [
+            "\ufff0", "\ufff1", "\ufff2", "\ufff3", "\ufff4", "\ufff5", "\ufff6", "\ufff7",
+            "\ufff8", "\ufff9", "\ufffa", "\ufffb", "\ufffc", "\ufffd", "\ufffe", "\uffff"
+        ]
+        for i,st in enumerate(self.special_tokens):
+            text = text.replace(st, placeholder[i])
+        tokens = []
+        for c in text:
+            if c in placeholder:
+                tokens.append(ord(c) - 65520) # 65520 == ord("\ufff0")
+            elif c in self.stoi:
+                tokens.append(self.stoi[c])
+            else:
+                tokens.append(self.special_tokens["<|unknown|>"])
+        return tokens
 
     # decoder: take a list of integers, output a string
     def decode(self, token_list):
@@ -236,49 +258,44 @@ class Tokenizer:
             self.vocab_size = config["vocab_size"]
             self.stoi = config["stoi"]
             self.itos = config["itos"]
+            self.special_tokens = config["special_tokens"]
 
     def load_from_config_dict(self, config_dict):
         self.config = config_dict
         self.vocab_size = config_dict["vocab_size"]
         self.stoi = config_dict["stoi"]
         self.itos = config_dict["itos"]
+        self.special_tokens = config_dict["special_tokens"]
 
     # 根据已有文本建立编码器，并保存到配置文件
     def build_from_text(self, text, config_path):
         # gpt2_pattern = (r"""'s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}]+| ?[\p{N}]+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
         # self.bpe_tokenizer = BPE_Tokenizer.train(text, vocab_size=300, pat_str=gpt2_pattern)
         # self.bpe_tokenizer.dump(config_path)
-        vocab = sorted(list(set(text)))
-        offset = len(vocab)
-        vocab.append(self.padding_char)
-        self.padding_token = offset
-        vocab.append(self.unknown_char)
-        self.unknown_token = offset + 1
-        vocab.append(self.bos_char)
-        self.bos_token = offset + 2
-        vocab.append(self.eos_char)
-        self.eos_token = offset + 3
-        vocab.append(self.instruct_mark_char)
-        self.instruct_mark_token = offset + 4
-        vocab.append(self.response_mark_char)
-        self.response_mark_token = offset + 5
+        charset = sorted(list(set(text)))
 
-        self.vocab_size = len(vocab)
-        print(f"  Vocab size: {self.vocab_size:,}")
+        itos = [0] * len(self.special_tokens)
+        for i,c in enumerate(self.special_tokens):
+            itos[i] = c
 
-        self.itos = vocab
-        self.stoi = { ch:i for i,ch in enumerate(vocab) }
+        itos = itos + sorted(list(charset))
+
+        self.vocab_size = len(itos)
+        print(f"  Vocab size: {self.vocab_size}")
+
+        self.itos = itos
+        self.stoi = { ch:i for i,ch in enumerate(itos) }
+
         self.config = {
             "vocab_size": self.vocab_size,
             "stoi": self.stoi,
-            "itos": self.itos
+            "itos": self.itos,
+            "special_tokens": self.special_tokens
         }
         with open(config_path, 'w') as f:
             json.dump(self.config, f)
 
-    def build_from_file(self, text_path, config_path):
-        # with open(text_path, mode="r", encoding="utf-8") as f:
-            # self.build_from_text(f.read(), config_path)
+    def build_from_files(self, text_path_list, config_path):
         def read_chunk(filepath, chunk_size=65536):
             with open(filepath, mode="r", encoding="utf-8") as f:
                 while True:
@@ -286,39 +303,57 @@ class Tokenizer:
                     if not chunk:
                         return
                     yield chunk
-        vocab = set({})
-        text_iterator = read_chunk(text_path, chunk_size=16777216)
-        for chunk in tqdm(text_iterator):
-            vocab = vocab.union(set(chunk))
-        vocab = list(vocab)
-        offset = len(vocab)
-        vocab.append(self.padding_char)
-        self.padding_token = offset
-        vocab.append(self.unknown_char)
-        self.unknown_token = offset + 1
-        vocab.append(self.bos_char)
-        self.bos_token = offset + 2
-        vocab.append(self.eos_char)
-        self.eos_token = offset + 3
-        vocab.append(self.instruct_mark_char)
-        self.instruct_mark_token = offset + 4
-        vocab.append(self.response_mark_char)
-        self.response_mark_token = offset + 5
 
-        self.vocab_size = len(vocab)
-        print(f"  Vocab size: {self.vocab_size:,}")
+        charset = set({})
+        chunk_size = 100000
 
-        self.itos = vocab
-        self.stoi = { ch:i for i,ch in enumerate(vocab) }
+        for textpath in text_path_list:
+            print(f"Processing `{textpath}`")
+            print(f"  Calculating character number ... ", end="")
+            with os.popen(f"wc -m {textpath}") as f:
+                res = f.readlines()[0]
+                char_num = int(res.split(" ")[0])
+            print(f"{char_num:,}")
+
+            print(f"  Collecting all unique Unicode characters in `{textpath}` ... ")
+            text_iterator = read_chunk(textpath, chunk_size=chunk_size)
+            for chunk in tqdm(text_iterator, total=int(char_num/chunk_size)):
+                charset = charset.union(set(chunk))
+
+        itos = [0] * len(self.special_tokens)
+        for i,c in enumerate(self.special_tokens):
+            itos[i] = c
+
+        itos = itos + sorted(list(charset))
+
+        self.vocab_size = len(itos)
+        print(f"  Vocab size: {self.vocab_size}")
+
+        self.itos = itos
+        self.stoi = { ch:i for i,ch in enumerate(itos) }
 
         self.config = {
             "vocab_size": self.vocab_size,
             "stoi": self.stoi,
-            "itos": self.itos
+            "itos": self.itos,
+            "special_tokens": self.special_tokens
         }
         with open(config_path, 'w') as f:
-            json.dump(self.config, f)
+            json.dump(self.config, f, ensure_ascii=True)
 
 
 if __name__ == "__main__":
-    train_simple_encoding()
+    # train_simple_encoding()
+
+    text_files = [
+        "/home/bd4sur/ai/Nano/dataset/pretrain-psycho.jsonl",
+        "/home/bd4sur/ai/Nano/dataset/pretrain-chinese-classic.txt",
+        "/home/bd4sur/ai/Nano/dataset/pretrain-amateur-radio.txt",
+    ]
+    tk = Tokenizer()
+    tk.build_from_files(text_files, "/home/bd4sur/ai/Nano/dataset/tk.json")
+
+    tokens = tk.encode("<|bos|><|instruct_mark|>人类的<|unknown|>本质是<|response_mark|>复读机！<|eos|><|padding|><|padding|>")
+    print(tokens)
+    txt = tk.decode(tokens)
+    print(txt)

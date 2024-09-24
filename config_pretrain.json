@@ -1,7 +1,17 @@
 {
     "from_checkpoint": "",
-    "train_dataset_path": "dataset/pretrain_train.base64",
-    "val_dataset_path": "dataset/pretrain_val.base64",
+    "train_dataset_path": [
+        "dataset/pt_train_0.base64",
+        "dataset/pt_train_1.base64",
+        "dataset/pt_train_2.base64",
+        "dataset/pt_train_3.base64"
+    ],
+    "val_dataset_path": [
+        "dataset/pt_val_0.base64",
+        "dataset/pt_val_1.base64",
+        "dataset/pt_val_2.base64",
+        "dataset/pt_val_3.base64"
+    ],
     "tokenizer_path": "dataset/tokenizer.json",
 
     "random_seed": 39,
@@ -15,8 +25,8 @@
     "beta2": 0.99,
 
     "decay_lr": true,
-    "warmup_iters": 300,
-    "lr_decay_iters": 100000,
+    "warmup_iters": 700,
+    "lr_decay_iters": 1e9,
     "min_lr": 6e-5,
 
     "eval_interval": 100,

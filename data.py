@@ -3,27 +3,25 @@ import random
 import pickle
 import base64
 import json
-import numpy as np
 from tqdm import tqdm
 from tokenizer import Tokenizer
 
 
 
-def build_tokenizer(input_file, data_dir="dataset", is_build_tokenizer=True):
-    tokenizer_path = os.path.join(os.path.dirname(__file__), data_dir, 'tokenizer.json')
+def build_tokenizer(input_path_list, output_path, is_build_tokenizer=True):
     tokenizer = Tokenizer()
     if is_build_tokenizer:
-        input_file_path = os.path.join(os.path.dirname(__file__), data_dir, input_file)
+        abs_paths = []
+        for p in input_path_list:
+            abs_paths.append(p)
         print(f"Building tokenizer from raw text file...")
-        tokenizer.build_from_file(input_file_path, tokenizer_path)
+        tokenizer.build_from_files(abs_paths, output_path)
     else:
         print(f"Loading tokenizer...")
-        tokenizer.load_from_config_file(tokenizer_path)
+        tokenizer.load_from_config_file(output_path)
     return tokenizer
 
-def generate_pretrain_dataset(input_file, data_dir="dataset", tokenizer=None, block_size=512, overlap_ratio=0.5):
-    input_file_path = os.path.join(os.path.dirname(__file__), data_dir, input_file)
-
+def generate_pretrain_dataset(input_path, train_output_path, val_output_path, tokenizer=None, block_size=512, overlap_ratio=0.5):
     print(f"Reading and encoding raw text file...")
     def read_chunk(filepath, chunk_size=65536):
         with open(filepath, mode="r", encoding="utf-8") as f:
@@ -34,14 +32,11 @@ def generate_pretrain_dataset(input_file, data_dir="dataset", tokenizer=None, bl
                 yield chunk
 
     all_tokens = []
-    text_iterator = read_chunk(input_file_path, chunk_size=16777216)
+    text_iterator = read_chunk(input_path, chunk_size=16777216)
     for chunk in tqdm(text_iterator):
         tokens = tokenizer.encode(chunk)
         all_tokens.extend(tokens)
     print(f"  Length of tokens: {len(all_tokens):,}")
-
-    # print(f"Encoding full text...")
-    # all_tokens = tokenizer.encode(fulltext)
 
     print(f"Slicing all tokens into blocks...")
     blocks = []
@@ -58,63 +53,52 @@ def generate_pretrain_dataset(input_file, data_dir="dataset", tokenizer=None, bl
     line_indexes = list(range(len(blocks)))
     random.shuffle(line_indexes)
 
-    train_path = os.path.join(os.path.dirname(__file__), data_dir, 'pretrain_train.base64')
-    val_path   = os.path.join(os.path.dirname(__file__), data_dir, 'pretrain_val.base64')
-
-    with open(train_path, "w", encoding="utf-8") as f_train:
+    with open(train_output_path, "w", encoding="utf-8") as f_train:
         for li in tqdm(range(0, int(len(blocks) * 0.9))):
             train_block = pickle.dumps([blocks[line_indexes[li]], None])
             f_train.writelines(str(base64.b64encode(train_block), encoding="utf-8") + "\n")
 
-    with open(val_path, "w", encoding="utf-8") as f_val:
+    with open(val_output_path, "w", encoding="utf-8") as f_val:
         for li in tqdm(range(int(len(blocks) * 0.9), len(blocks))):
             val_block = pickle.dumps([blocks[line_indexes[li]], None])
             f_val.writelines(str(base64.b64encode(val_block), encoding="utf-8") + "\n")
 
     print(f"Done.")
 
-def generate_sft_dataset(input_file, data_dir="dataset", tokenizer=None, block_size=512):
-    input_file_path = os.path.join(os.path.dirname(__file__), data_dir, input_file)
+def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path, tokenizer=None, block_size=512):
     all_lines = []
     all_masks = []
-    current_question = ""
-    with open(input_file_path, mode="r", encoding="utf-8") as f:
+    with open(input_jsonl_path, mode="r", encoding="utf-8") as f:
         while True:
             line = f.readline()
             if not line:
                 break
             line = line.strip()
-            if line.startswith("[Q]"):
-                current_question = line[3:]
-            elif line.startswith("[A]"):
-                answer = line[3:]
-                # answer = "人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！人类的本质是复读机！"
-                item = f"{tokenizer.instruct_mark_char}{current_question}{tokenizer.response_mark_char}{answer}\u1337\u1337"
-                all_lines.append(item[0: block_size + 1])
-                mask = [0] * (1 + len(current_question) + 1) + [1] * (len(answer) + 2)
-                all_masks.append(mask[0: block_size + 1])
-                current_question = ""
-
-    train_path = os.path.join(os.path.dirname(__file__), data_dir, 'sft_train.base64')
-    val_path   = os.path.join(os.path.dirname(__file__), data_dir, 'sft_val.base64')
+            qa = json.loads(line)
+            question = qa["question"]
+            answer = qa["answer"]
+            item = f"<|instruct_mark|>{question}<|response_mark|>{answer}<|padding|><|padding|>"
+            all_lines.append(item[0: block_size + 1])
+            mask = [0] * (1 + len(question) + 1) + [1] * (len(answer) + 2)
+            all_masks.append(mask[0: block_size + 1])
 
     print(f"Shuffling sft blocks and write to file ...")
     line_indexes = list(range(len(all_lines)))
     random.shuffle(line_indexes)
 
-    with open(train_path, "w", encoding="utf-8") as f_train:
+    with open(train_output_path, "w", encoding="utf-8") as f_train:
         for li in tqdm(range(0, int(len(all_lines) * 0.9))):
             ids = tokenizer.encode(all_lines[line_indexes[li]])
-            ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(block_size + 1)]
+            ids = [ids[i] if i < len(ids) else tokenizer.special_tokens["<|padding|>"] for i in range(block_size + 1)]
             mask = all_masks[line_indexes[li]]
             mask = [mask[i] if i < len(mask) else 0 for i in range(block_size + 1)]
             train_data = pickle.dumps([ids, mask])
             f_train.writelines(str(base64.b64encode(train_data), encoding="utf-8") + "\n")
 
-    with open(val_path, "w", encoding="utf-8") as f_val:
+    with open(val_output_path, "w", encoding="utf-8") as f_val:
         for li in tqdm(range(int(len(all_lines) * 0.9), len(all_lines))):
             ids = tokenizer.encode(all_lines[line_indexes[li]])
-            ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(block_size + 1)]
+            ids = [ids[i] if i < len(ids) else tokenizer.special_tokens["<|padding|>"] for i in range(block_size + 1)]
             mask = all_masks[line_indexes[li]]
             mask = [mask[i] if i < len(mask) else 0 for i in range(block_size + 1)]
             val_data = pickle.dumps([ids, mask])
@@ -124,12 +108,39 @@ def generate_sft_dataset(input_file, data_dir="dataset", tokenizer=None, block_s
 
 
 def main():
+
     BLOCK_SIZE = 256
-    PRETRAIN_DATASET = "pretrain-amateur-radio.txt"
-    SFT_DATASET = "sft-amateur-radio.txt"
-    tokenizer = build_tokenizer(PRETRAIN_DATASET, data_dir="dataset", is_build_tokenizer=True)
-    generate_pretrain_dataset(PRETRAIN_DATASET, data_dir="dataset", tokenizer=tokenizer, block_size=BLOCK_SIZE, overlap_ratio=0.5)
-    generate_sft_dataset(SFT_DATASET, data_dir="dataset", tokenizer=tokenizer, block_size=BLOCK_SIZE)
+    PRETRAIN_DATASETS = [
+        "dataset/pretrain-general.jsonl",
+        "dataset/pretrain-chinese-classic.txt",
+        "dataset/pretrain-psycho.txt",
+        "dataset/pretrain-amateur-radio.txt",
+    ]
+    SFT_DATASET = "dataset/sft-amateur-radio.jsonl"
+    TOKENIZER_PATH = "dataset/tokenizer.json"
+
+    base_path = os.path.dirname(__file__)
+
+    tokenizer = build_tokenizer(
+        PRETRAIN_DATASETS + [SFT_DATASET],
+        os.path.join(base_path, TOKENIZER_PATH),
+        is_build_tokenizer=True)
+
+    for index, pt in enumerate(PRETRAIN_DATASETS):
+        generate_pretrain_dataset(
+            os.path.join(base_path, pt),
+            os.path.join(base_path, f"dataset/pt_train_{index}.base64"),
+            os.path.join(base_path, f"dataset/pt_val_{index}.base64"),
+            tokenizer=tokenizer,
+            block_size=BLOCK_SIZE,
+            overlap_ratio=0.5)
+
+    generate_sft_dataset(
+        os.path.join(base_path, SFT_DATASET),
+        os.path.join(base_path, f"dataset/sft_train.base64"),
+        os.path.join(base_path, f"dataset/sft_val.base64"),
+        tokenizer=tokenizer,
+        block_size=BLOCK_SIZE)
 
 if __name__ == "__main__":
     main()

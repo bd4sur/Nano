@@ -10,11 +10,11 @@ from model import GPT
 from train import TrainGPT
 
 MAX_STEPS = 1000
-SORTING_LENGTH = 7
-CKPT_FILE_NAME = "problem_sort.pt"
+SEQ_LENGTH = 6
+CKPT_FILE_NAME = "problem_palindrome.pt"
 
 model_config = {
-    "block_size": SORTING_LENGTH,
+    "block_size": SEQ_LENGTH,
     "vocab_size": 10000,
     "n_layer": 2,
     "n_head": 2,
@@ -28,9 +28,9 @@ model_config = {
 
 train_config = {
     "from_checkpoint": "",
-    "train_dataset_path": ["dataset/problem_sort_train.base64"],
-    "val_dataset_path": ["dataset/problem_sort_val.base64"],
-    "tokenizer_path": "checkpoint/problem_sort_tokenizer.json",
+    "train_dataset_path": ["dataset/problem_palindrome_train.base64"],
+    "val_dataset_path": ["dataset/problem_palindrome_val.base64"],
+    "tokenizer_path": "checkpoint/problem_palindrome_tokenizer.json",
 
     "random_seed": 39,
     "batch_size": 1000,
@@ -62,21 +62,21 @@ train_config = {
 base_path = os.path.dirname(__file__)
 
 def generate_dataset():
-    print(f"Generating sort data...")
+    print(f"Generating palindrome data...")
     all_items = []
-    for i in tqdm(range(10 ** SORTING_LENGTH)):
-        origin_str = f"{i + 10 ** SORTING_LENGTH}"[1:]
-        sorted_str = "".join(sorted(list(origin_str)))
-        line = f"{origin_str}{sorted_str}"
+    for i in tqdm(range(10 ** SEQ_LENGTH)):
+        origin_str = f"{i + 10 ** SEQ_LENGTH}"[1:]
+        reversed_str = origin_str[::-1]
+        line = f"{origin_str}{reversed_str}"
         all_items.append(line)
     fulltext = "\n".join(all_items)
 
     print(f"Building tokenizer...")
     tokenizer = Tokenizer()
-    tokenizer.build_from_text(fulltext, os.path.join(base_path, "checkpoint/problem_sort_tokenizer.json"))
+    tokenizer.build_from_text(fulltext, os.path.join(base_path, "checkpoint/problem_palindrome_tokenizer.json"))
 
-    train_path = os.path.join(base_path, "dataset/problem_sort_train.base64")
-    val_path   = os.path.join(base_path, "dataset/problem_sort_val.base64")
+    train_path = os.path.join(base_path, "dataset/problem_palindrome_train.base64")
+    val_path   = os.path.join(base_path, "dataset/problem_palindrome_val.base64")
 
     print(f"Shuffling sft blocks and write to file ...")
     line_indexes = list(range(len(all_items)))
@@ -85,14 +85,14 @@ def generate_dataset():
     with open(train_path, "w", encoding="utf-8") as f_train:
         for li in tqdm(range(0, int(len(all_items) * 0.4))):
             ids = tokenizer.encode(all_items[line_indexes[li]])
-            ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(SORTING_LENGTH * 2)]
+            ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(SEQ_LENGTH * 2)]
             train_data = pickle.dumps([ids, None])
             f_train.writelines(str(base64.b64encode(train_data), encoding="utf-8") + "\n")
 
     with open(val_path, "w", encoding="utf-8") as f_val:
         for li in tqdm(range(int(len(all_items) * 0.4), len(all_items))):
             ids = tokenizer.encode(all_items[line_indexes[li]])
-            ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(SORTING_LENGTH * 2)]
+            ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(SEQ_LENGTH * 2)]
             val_data = pickle.dumps([ids, None])
             f_val.writelines(str(base64.b64encode(val_data), encoding="utf-8") + "\n")
 
@@ -127,9 +127,9 @@ def inference(checkpoint_path):
         total_count = 0
         label = ""
         for i in range(0, 100000):
-            n = random.randint(0, 10 ** SORTING_LENGTH)
-            input_seq = f"{n + 10 ** SORTING_LENGTH}"[1:]
-            target_seq = "".join(sorted(list(input_seq)))
+            n = random.randint(0, 10 ** SEQ_LENGTH)
+            input_seq = f"{n + 10 ** SEQ_LENGTH}"[1:]
+            target_seq = input_seq[::-1]
             x = torch.tensor(tokenizer.encode(input_seq), dtype=torch.long, device=device)[None, ...]
             y = model.non_auto_regressive_generate(x, temperature=1, top_k=1)
             output_list = []

@@ -28,8 +28,8 @@ model_config = {
 
 train_config = {
     "from_checkpoint": "",
-    "train_dataset_path": "dataset/problem_q_train.base64",
-    "val_dataset_path": "dataset/problem_q_val.base64",
+    "train_dataset_path": ["dataset/problem_q_train.base64"],
+    "val_dataset_path": ["dataset/problem_q_val.base64"],
     "tokenizer_path": "checkpoint/problem_q_tokenizer.json",
 
     "random_seed": 39,
@@ -59,6 +59,7 @@ train_config = {
     "gradient_accumulation_steps": 4
 }
 
+base_path = os.path.dirname(__file__)
 
 # Q函数：一串数字中有多少个圈儿
 def q_function(number: int, num_digits: int) -> int:
@@ -78,7 +79,7 @@ def q_function(number: int, num_digits: int) -> int:
     return res_map[qv]
 
 
-def generate_sft_dataset():
+def generate_dataset():
 
     print(f"Generating Q data...")
     # 9  ...  9           -         5
@@ -92,17 +93,17 @@ def generate_sft_dataset():
 
     print(f"Building tokenizer...")
     tokenizer = Tokenizer()
-    tokenizer.build_from_text(fulltext, os.path.join(os.path.dirname(__file__), "checkpoint/problem_q_tokenizer.json"))
+    tokenizer.build_from_text(fulltext, os.path.join(base_path, "checkpoint/problem_q_tokenizer.json"))
 
-    train_path = os.path.join(os.path.dirname(__file__), "dataset/problem_q_train.base64")
-    val_path   = os.path.join(os.path.dirname(__file__), "dataset/problem_q_val.base64")
+    train_path = os.path.join(base_path, "dataset/problem_q_train.base64")
+    val_path   = os.path.join(base_path, "dataset/problem_q_val.base64")
 
     print(f"Shuffling sft blocks and write to file ...")
     line_indexes = list(range(len(q_items)))
     random.shuffle(line_indexes)
 
     with open(train_path, "w", encoding="utf-8") as f_train:
-        for li in tqdm(range(0, int(len(q_items) * 0.9))):
+        for li in tqdm(range(0, int(len(q_items) * 0.4))):
             ids = tokenizer.encode(q_items[line_indexes[li]])
             ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(Q_DIGITS + 3)]
             mask = [1 if i == Q_DIGITS + 1 else 0 for i in range(Q_DIGITS + 3)]
@@ -110,7 +111,7 @@ def generate_sft_dataset():
             f_train.writelines(str(base64.b64encode(train_data), encoding="utf-8") + "\n")
 
     with open(val_path, "w", encoding="utf-8") as f_val:
-        for li in tqdm(range(int(len(q_items) * 0.9), len(q_items))):
+        for li in tqdm(range(int(len(q_items) * 0.4), len(q_items))):
             ids = tokenizer.encode(q_items[line_indexes[li]])
             ids = [ids[i] if i < len(ids) else tokenizer.padding_token for i in range(Q_DIGITS + 3)]
             mask = [1 if i == Q_DIGITS + 1 else 0 for i in range(Q_DIGITS + 3)]
@@ -119,11 +120,11 @@ def generate_sft_dataset():
 
     print(f"Done.")
 
-def inference_q(checkpoint_path):
+def inference(checkpoint_path):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # 读取模型检查点和训练配置
-    ckpt_path = os.path.join(os.path.dirname(__file__), checkpoint_path)
+    ckpt_path = os.path.join(base_path, checkpoint_path)
     print(f"Loading checkpoint from {ckpt_path}...")
     checkpoint = torch.load(ckpt_path, map_location=device)
     train_config = checkpoint['train_config']
@@ -164,12 +165,12 @@ def inference_q(checkpoint_path):
 def main():
     print(f"PyTorch version: {torch.__version__}")
 
-    generate_sft_dataset()
+    generate_dataset()
 
     trainer = TrainGPT(model_config, train_config, max_steps=MAX_STEPS, ckpt_filename=CKPT_FILE_NAME)
     trainer.start()
 
-    inference_q(checkpoint_path=f"checkpoint/{CKPT_FILE_NAME}")
+    inference(checkpoint_path=f"checkpoint/{CKPT_FILE_NAME}")
 
 if __name__ == "__main__":
     main()
