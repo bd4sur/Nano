@@ -10,13 +10,9 @@
 
 - 用尽可能少的依赖，实现一个具体而微的Transformer语言模型。
 - 完整实现数据预处理、词元化、预训练、监督微调、推理过程。
-- 在廉价硬件上从头训练一个千万量级参数的模型，可用于演示。
+- 在廉价硬件上从头训练一个千万量级参数的模型，用于演示。
 - 研究模型训练的动力学、训/推加速、算法改进等问题，形成研究笔记。
 - 探索Transformer模型在自然语言处理以外的问题上的潜能。
-
-**不**打算：
-
-- 从头训练并实现一个堪用的大语言模型。
 
 为了玩得开心，在下建议读者：
 
@@ -51,7 +47,7 @@ pip install -r requirements.txt
 
 **预训练数据格式**：原则上讲，随便什么文本都可以，没有任何的格式要求。但是要注意“垃圾进、垃圾出”喔！因此，如果想获得比较好的模型，就务必重视预训练数据的处理工作。
 
-**监督微调（指令微调）数据格式**：本仓库所使用的指令模板格式是`<|InstructMark|>提示语…<|ResponseMark|>期望的答复…<|Padding|>*`，填充至上下文长度。仓库现有的数据预处理代码，从业余无线电操作技术能力验证题库中抽取问题和正确答案，拼接成指令模板，形成SFT数据集。
+**监督微调（指令微调）数据格式**：本仓库所使用的指令模板格式是`<|InstructMark|>提示语<|ResponseMark|>期望的答复<|Padding|>*`，填充至上下文长度。仓库现有的数据预处理代码，从业余无线电操作技术能力验证题库中抽取问题和正确答案，拼接成指令模板，形成SFT数据集。
 
 **3️⃣ 预训练和监督微调**
 
@@ -110,8 +106,7 @@ deepspeed train_deepspeed.py --deepspeed --deepspeed_config deepspeed_config.jso
 |min_lr|float|6e-5|最小学习率|
 |batch_size|int|100|训练批大小|
 |random_seed|int|1337|随机数初始化种子|
-|train_dataset_path|str|"dataset/sft_train.base64"|训练数据集|
-|val_dataset_path|str|"dataset/sft_val.base64"|验证数据集|
+|dataset_path|[[str, str]]|None|数据集(相对于`train.py`的路径)|
 |eval_interval|int|100|验证间隔步数|
 |log_interval|int|1|日志间隔步数|
 |eval_iters|int|5|每次验证需要用几批数据|
@@ -135,35 +130,33 @@ cd Nano
 python inference_ds.py
 ```
 
-## 其他玩法1：丘成桐先生也答不出的Q问题
+## 其他玩法
+
+```
+python problem.py [q|sort|palindrome]
+```
+
+**玩法1：丘成桐先生也答不出的Q问题**
 
 所谓“Q问题”，是《鲁豫有约》20150902期节目中，主持人给丘成桐出的一道脑筋急转弯题。
 
 ![ ](./doc/q.jpg)
 
-```
-python problem_q.py
-```
-
-## 其他玩法2：排序，但是GPT
+**玩法2：排序，但是GPT**
 
 [B站视频](https://www.bilibili.com/video/BV1XZ421s7bM)
 
-```
-python problem_sort.py
-```
+eg. 114515 -> 111455
 
-## 其他玩法3：回文序列
+**玩法3：回文序列**
 
-```
-python problem_palindrome.py
-```
+eg. 123456 -> 654321
 
 ## 研究笔记
 
 ### 训练性能
 
-训练参数：BlockSize=512, VocabSize=2114, L=2, H=4, E=512, BatchSize=100（参数量13.67M，显存占用9045MiB）
+训练参数：BlockSize=512, VocabSize=2114, Layers=2, Heads=4, Embd=512, BatchSize=100（参数量13.67M，显存占用9045MiB）
 
 |设备|设置|速度|
 |----|----|----|

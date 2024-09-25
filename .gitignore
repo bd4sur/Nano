@@ -8,9 +8,9 @@ __pycache__/
 *.pt
 *.pth
 *.pyc
-input.txt
 dataset/*.json
 checkpoint/
+dataset_preprocessed/
 log/
 model/
 *.log

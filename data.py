@@ -111,13 +111,14 @@ def main():
 
     BLOCK_SIZE = 256
     PRETRAIN_DATASETS = [
-        "dataset/pretrain-general.jsonl",
+        # "dataset/pretrain-general.txt",
         "dataset/pretrain-chinese-classic.txt",
         "dataset/pretrain-psycho.txt",
         "dataset/pretrain-amateur-radio.txt",
     ]
-    SFT_DATASET = "dataset/sft-amateur-radio.jsonl"
-    TOKENIZER_PATH = "dataset/tokenizer.json"
+    SFT_DATASET = "dataset/sft-id.jsonl"
+
+    TOKENIZER_PATH = "dataset_preprocessed/tokenizer.json"
 
     base_path = os.path.dirname(__file__)
 
@@ -129,16 +130,16 @@ def main():
     for index, pt in enumerate(PRETRAIN_DATASETS):
         generate_pretrain_dataset(
             os.path.join(base_path, pt),
-            os.path.join(base_path, f"dataset/pt_train_{index}.base64"),
-            os.path.join(base_path, f"dataset/pt_val_{index}.base64"),
+            os.path.join(base_path, f"dataset_preprocessed/pt_train_{index}.base64"),
+            os.path.join(base_path, f"dataset_preprocessed/pt_val_{index}.base64"),
             tokenizer=tokenizer,
             block_size=BLOCK_SIZE,
             overlap_ratio=0.5)
 
     generate_sft_dataset(
         os.path.join(base_path, SFT_DATASET),
-        os.path.join(base_path, f"dataset/sft_train.base64"),
-        os.path.join(base_path, f"dataset/sft_val.base64"),
+        os.path.join(base_path, f"dataset_preprocessed/sft_train.base64"),
+        os.path.join(base_path, f"dataset_preprocessed/sft_val.base64"),
         tokenizer=tokenizer,
         block_size=BLOCK_SIZE)
 

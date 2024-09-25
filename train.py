@@ -45,11 +45,10 @@ class TrainGPT():
     def load_data(self):
         train_curriculum = []
         val_curriculum = []
-        for train_p in self.train_config.train_dataset_path:
-            train_path = os.path.join(os.path.dirname(__file__), train_p)
+        for ds_path in self.train_config.dataset_path:
+            train_path = os.path.join(os.path.dirname(__file__), ds_path[0])
+            val_path = os.path.join(os.path.dirname(__file__), ds_path[1])
             train_curriculum.append(train_path)
-        for val_p in self.train_config.val_dataset_path:
-            val_path = os.path.join(os.path.dirname(__file__), val_p)
             val_curriculum.append(val_path)
 
         self.log(f"Loading dataset...")
@@ -234,7 +233,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Train Nano model.")
     parser.add_argument("-t", "--task", type=str, default="pretrain") # "pretrain" or "sft"
-    parser.add_argument("--no_amp", action="store_true")
+    parser.add_argument("--no-amp", action="store_true")
     args = parser.parse_args()
 
     if args.task == "pretrain":

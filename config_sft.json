@@ -1,11 +1,12 @@
 {
-    "from_checkpoint": "checkpoint/checkpoint_20240924_234134_step_2700.pt",
-    "train_dataset_path": ["dataset/sft_train.base64"],
-    "val_dataset_path": ["dataset/sft_val.base64"],
-    "tokenizer_path": "dataset/tokenizer.json",
+    "from_checkpoint": "checkpoint/ckpt.pt",
+    "dataset_path": [
+        ["dataset_preprocessed/sft_train.base64", "dataset_preprocessed/sft_val.base64"]
+    ],
+    "tokenizer_path": "dataset_preprocessed/tokenizer.json",
 
     "random_seed": 39,
-    "batch_size": 20,
+    "batch_size": 10,
 
     "dropout": 0.2,
 

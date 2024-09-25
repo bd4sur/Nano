@@ -46,9 +46,8 @@ class TrainConfig:
 
     # Training Task
     from_checkpoint: Optional[str] = ""
-    train_dataset_path: Optional[str] = "dataset/sft_train.base64"
-    val_dataset_path: Optional[str] = "dataset/sft_val.base64"
-    tokenizer_path: Optional[str] = "dataset/tokenizer.json"
+    dataset_path: Optional[list[list[str]]] = None
+    tokenizer_path: Optional[str] = ""
     
     batch_size: Optional[int] = 600
     random_seed: Optional[int] = 114514

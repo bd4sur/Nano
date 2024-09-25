@@ -105,7 +105,7 @@ class TrainGPT():
         self.log(f"Tokens per iteration = {tokens_per_iter:,}")
 
         if self.is_master_process:
-            os.makedirs(os.path.join(os.path.dirname(__file__), os.path.dirname(self.train_config.checkpoint_path)), exist_ok=True)
+            os.makedirs(os.path.join(os.path.dirname(__file__), "checkpoint"), exist_ok=True)
 
         torch.manual_seed(self.train_config.random_seed + _seed_offset)
         torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul

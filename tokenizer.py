@@ -210,21 +210,9 @@ class Tokenizer:
             "<|bos|>": 2,
             "<|eos|>": 3,
             "<|instruct_mark|>": 4,
-            "<|response_mark|>": 5
+            "<|response_mark|>": 5,
+            "BD4SUR": 6
         }
-
-        self.padding_char = "\u1337"
-        self.padding_token = 0
-        self.unknown_char = "\u1338"
-        self.unknown_token = 0
-        self.bos_char = "\u1339"
-        self.bos_token = 0
-        self.eos_char = "\u1340"
-        self.eos_token = 0
-        self.instruct_mark_char = "\u1341"
-        self.instruct_mark_token = 0
-        self.response_mark_char = "\u1342"
-        self.response_mark_token = 0
 
     # encoder: take a string, output a list of integers
     def encode(self, text):
@@ -346,14 +334,14 @@ if __name__ == "__main__":
     # train_simple_encoding()
 
     text_files = [
-        "/home/bd4sur/ai/Nano/dataset/pretrain-psycho.jsonl",
+        "/home/bd4sur/ai/Nano/dataset/pretrain-psycho.txt",
         "/home/bd4sur/ai/Nano/dataset/pretrain-chinese-classic.txt",
         "/home/bd4sur/ai/Nano/dataset/pretrain-amateur-radio.txt",
     ]
     tk = Tokenizer()
-    tk.build_from_files(text_files, "/home/bd4sur/ai/Nano/dataset/tk.json")
+    tk.build_from_files(text_files, "/home/bd4sur/ai/Nano/tk.json")
 
-    tokens = tk.encode("<|bos|><|instruct_mark|>人类的<|unknown|>本质是<|response_mark|>复读机！<|eos|><|padding|><|padding|>")
+    tokens = tk.encode("<|bos|><|instruct_mark|>人类（包括BD4SUR的操作员）的<|unknown|>本质是<|response_mark|>复读机！<|eos|><|padding|><|padding|>")
     print(tokens)
     txt = tk.decode(tokens)
     print(txt)
