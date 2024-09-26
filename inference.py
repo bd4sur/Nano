@@ -42,8 +42,8 @@ class InferenceGPT:
     def typewriter(self, token_tensor):
         token_list = token_tensor[0].tolist()
         chars = self.decode(token_list)
-        if "<|padding|>" in chars:
-            print(chars.split("<|padding|>")[0], end="", flush=True)
+        if "<|eos|>" in chars:
+            print(chars.split("<|eos|>")[0], end="", flush=True)
             return False
         else:
             print(chars, end="", flush=True)

@@ -255,6 +255,10 @@ class Tokenizer:
         self.itos = config_dict["itos"]
         self.special_tokens = config_dict["special_tokens"]
 
+    def dump_config_file(self, config_path):
+        with open(config_path, 'w') as f:
+            json.dump(self.config, f)
+
     # 根据已有文本建立编码器，并保存到配置文件
     def build_from_text(self, text, config_path):
         # gpt2_pattern = (r"""'s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}]+| ?[\p{N}]+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")

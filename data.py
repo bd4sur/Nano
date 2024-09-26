@@ -74,13 +74,17 @@ def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path, t
             if not line:
                 break
             line = line.strip()
-            qa = json.loads(line)
-            question = qa["question"]
-            answer = qa["answer"]
-            item = f"<|instruct_mark|>{question}<|response_mark|>{answer}<|padding|><|padding|>"
-            all_lines.append(item[0: block_size + 1])
-            mask = [0] * (1 + len(question) + 1) + [1] * (len(answer) + 2)
-            all_masks.append(mask[0: block_size + 1])
+            try:
+                qa = json.loads(line)
+                question = qa["question"]
+                answer = qa["answer"]
+                item = f"<|instruct_mark|>{question}<|response_mark|>{answer}<|eos|>"
+                all_lines.append(item[0: block_size + 1])
+                mask = [0] * (1 + len(question) + 1) + [1] * (len(answer) + 1)
+                all_masks.append(mask[0: block_size + 1])
+            except:
+                print(line)
+                continue
 
     print(f"Shuffling sft blocks and write to file ...")
     line_indexes = list(range(len(all_lines)))
