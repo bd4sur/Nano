@@ -11,13 +11,13 @@ from train import TrainGPT
 # "q", "sort", "palindrome", "calculator"
 TASK_TAG = "calculator"
 
-MAX_STEPS = 1200
+MAX_STEPS = 5000
 SEQ_LENGTH = 6
 
-MIN_NUMBER = -1000
-MAX_NUMBER = 1000
-EXPR_MAX_DEPTH = 1
-EXPR_MAX_LENGTH = 16
+MIN_NUMBER = 0
+MAX_NUMBER = 1
+EXPR_MAX_DEPTH = 4
+EXPR_MAX_LENGTH = 64
 
 CHECKPOINT_FILE_NAME = f"problem_{TASK_TAG}.pt"
 TRAINSET_PATH        = f"dataset_preprocessed/problem_{TASK_TAG}_train.base64"
@@ -50,7 +50,7 @@ train_config = {
 
     "dropout": 0.0,
 
-    "learning_rate": 6e-4,
+    "learning_rate": 1e-3,
     "weight_decay": 1e-1,
     "beta1": 0.9,
     "beta2": 0.99,
@@ -98,7 +98,7 @@ elif TASK_TAG == "palindrome":
 
 elif TASK_TAG == "calculator":
     model_config["block_size"] = EXPR_MAX_LENGTH
-    model_config["n_layer"]    = 6
+    model_config["n_layer"]    = 16
     model_config["n_head"]     = 8
     model_config["n_embd"]     = 512
     model_config["use_rope"]   = False
@@ -148,24 +148,27 @@ def gen_expr(expr_depth, tokenizer):
     p = random.random()
     # number
     if p <= 0.2 or expr_depth >= EXPR_MAX_DEPTH:
-        value = random.randint(-100, 100)
+        value = random.randint(0, 1)
+        # value = random.randint(-3, 3)
         return [[tokenizer.stoi[str(value)]], value]
     # expr
     else:
-        op = ["+", "-", "*", "/"][random.randint(0, 3)]
+        op = ["+", "*", "-", "/"][random.randint(0, 1)]
         arg1 = gen_expr(expr_depth + 1, tokenizer)
         arg2 = gen_expr(expr_depth + 1, tokenizer)
         expr = [tokenizer.stoi["("], tokenizer.stoi[op]] + arg1[0] + arg2[0] + [tokenizer.stoi[")"]]
         if op == "+":
-            value = "inf" if arg1[1] == "inf" or arg2[1] == "inf" else arg1[1] + arg2[1]
-        elif op == "-":
-            value = "inf" if arg1[1] == "inf" or arg2[1] == "inf" else arg1[1] - arg2[1]
+            # value = "inf" if arg1[1] == "inf" or arg2[1] == "inf" else arg1[1] + arg2[1]
+            value = 1 if (arg1[1] == 1) or (arg2[1] == 1) else 0
+        # elif op == "-":
+            # value = "inf" if arg1[1] == "inf" or arg2[1] == "inf" else arg1[1] - arg2[1]
         elif op == "*":
-            value = "inf" if arg1[1] == "inf" or arg2[1] == "inf" else arg1[1] * arg2[1]
-        elif op == "/":
-            value = "inf" if arg1[1] == "inf" or arg2[1] == "inf" or arg2[1] == 0 else int(arg1[1] / arg2[1])
-        if value != "inf" and (value > MAX_NUMBER or value < MIN_NUMBER):
-            value = "inf"
+            # value = "inf" if arg1[1] == "inf" or arg2[1] == "inf" else arg1[1] * arg2[1]
+            value = 1 if (arg1[1] == 1) and (arg2[1] == 1) else 0
+        # elif op == "/":
+        #     value = "inf" if arg1[1] == "inf" or arg2[1] == "inf" or arg2[1] == 0 else int(arg1[1] / arg2[1])
+        # if value != "inf" and (value > MAX_NUMBER or value < MIN_NUMBER):
+        #     value = "inf"
         return [expr, value]
 
 
@@ -265,7 +268,7 @@ def generate_dataset():
         tk.dump_config_file(os.path.join(base_path, TOKENIZER_PATH))
 
         with open(train_path, "w", encoding="utf-8") as f_train:
-            for _ in tqdm(range(100000)):
+            for _ in tqdm(range(1000000)):
                 expr = gen_expr(0, tk)
                 equation_tokens = expr[0] + [tk.stoi["="], tk.stoi[str(expr[1])], tk.special_tokens["<|eos|>"]]
                 # print(equation_tokens)
@@ -275,7 +278,7 @@ def generate_dataset():
                 train_data = pickle.dumps([equation_tokens, mask])
                 f_train.writelines(str(base64.b64encode(train_data), encoding="utf-8") + "\n")
         with open(val_path, "w", encoding="utf-8") as f_val:
-            for _ in tqdm(range(10000)):
+            for _ in tqdm(range(100000)):
                 expr = gen_expr(0, tk)
                 equation_tokens = expr[0] + [tk.stoi["="], tk.stoi[str(expr[1])], tk.special_tokens["<|eos|>"]]
                 # print(equation_tokens)
@@ -368,7 +371,7 @@ def inference(checkpoint_path):
                 expr = gen_expr(0, tokenizer)
                 expr_str = decode_to_expr(expr[0], tokenizer)
                 x = torch.tensor(expr[0] + [tokenizer.stoi["="]], dtype=torch.long, device=device)[None, ...]
-                y = model.generate_next_token(x, temperature=1, top_k=1)
+                y = model.generate_next_token(x, temperature=1)
                 qval = tokenizer.decode(y[0].tolist())
                 label = "×"
                 total_count += 1
