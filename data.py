@@ -91,7 +91,8 @@ def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path, t
     random.shuffle(line_indexes)
 
     with open(train_output_path, "w", encoding="utf-8") as f_train:
-        for li in tqdm(range(0, int(len(all_lines) * 0.9))):
+        # for li in tqdm(range(0, int(len(all_lines) * 0.9))):
+        for li in tqdm(range(len(all_lines))):
             ids = tokenizer.encode(all_lines[line_indexes[li]])
             ids = [ids[i] if i < len(ids) else tokenizer.special_tokens["<|padding|>"] for i in range(block_size + 1)]
             mask = all_masks[line_indexes[li]]
@@ -100,7 +101,8 @@ def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path, t
             f_train.writelines(str(base64.b64encode(train_data), encoding="utf-8") + "\n")
 
     with open(val_output_path, "w", encoding="utf-8") as f_val:
-        for li in tqdm(range(int(len(all_lines) * 0.9), len(all_lines))):
+        # for li in tqdm(range(int(len(all_lines) * 0.9), len(all_lines))):
+        for li in tqdm(range(len(all_lines))):
             ids = tokenizer.encode(all_lines[line_indexes[li]])
             ids = [ids[i] if i < len(ids) else tokenizer.special_tokens["<|padding|>"] for i in range(block_size + 1)]
             mask = all_masks[line_indexes[li]]
@@ -115,12 +117,9 @@ def main():
 
     BLOCK_SIZE = 256
     PRETRAIN_DATASETS = [
-        # "dataset/pretrain-general.txt",
-        "dataset/pretrain-chinese-classic.txt",
-        "dataset/pretrain-psycho.txt",
-        "dataset/pretrain-amateur-radio.txt",
+        "dataset/pretrain.txt"
     ]
-    SFT_DATASET = "dataset/sft-id.jsonl"
+    SFT_DATASET = "dataset/sft-amateur-radio.jsonl"
 
     TOKENIZER_PATH = "dataset_preprocessed/tokenizer.json"
 

@@ -60,7 +60,9 @@ class TrainGPT():
         self.log(f"Loading tokenizer from {tokenizer_path}...")
         self.tokenizer = Tokenizer()
         self.tokenizer.load_from_config_file(tokenizer_path)
-        self.model_config.vocab_size = self.tokenizer.vocab_size
+
+        if self.tokenizer.vocab_size > self.model_config.vocab_size:
+            self.log("WARNING: tokenizer's vocab size is larger than model's vocab size.")
 
         self.log(f"  Size of Train set = {self.train_data.line_num}")
         self.log(f"  Size of Validation set = {self.val_data.line_num}")
@@ -179,7 +181,8 @@ class TrainGPT():
                 val_loss = self.estimate_loss()
                 self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Validation | Step: {iter} | Val_loss: {val_loss:.3f} | Best_val_loss: {best_val_loss:.4f}")
 
-                if iter > 0 and iter > start_step and val_loss < best_val_loss:
+                # 无论验证集损失是否下降，每1000步保存一个检查点
+                if iter > 0 and iter > start_step and (val_loss < best_val_loss or iter % 1000 == 0):
                     checkpoint_file_name = f"checkpoint_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt" if self.ckpt_filename is None else self.ckpt_filename
                     self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving checkpoint to `checkpoint/{checkpoint_file_name}`")
                     _checkpoint = {
@@ -190,7 +193,8 @@ class TrainGPT():
                         "model_config":     self.model_config,
                         "tokenizer_config": self.tokenizer.config
                     }
-                    best_val_loss = val_loss
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
                     torch.save(_checkpoint, os.path.join(os.path.dirname(__file__), "checkpoint", checkpoint_file_name))
 
             t0 = time.time_ns()

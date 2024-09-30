@@ -1,14 +1,12 @@
 {
     "from_checkpoint": "",
     "dataset_path": [
-        ["dataset_preprocessed/pt_train_0.base64", "dataset_preprocessed/pt_val_0.base64"],
-        ["dataset_preprocessed/pt_train_1.base64", "dataset_preprocessed/pt_val_1.base64"],
-        ["dataset_preprocessed/pt_train_2.base64", "dataset_preprocessed/pt_val_2.base64"]
+        ["dataset_preprocessed/pt_train_0.base64", "dataset_preprocessed/pt_val_0.base64"]
     ],
     "tokenizer_path": "dataset_preprocessed/tokenizer.json",
 
     "random_seed": 39,
-    "batch_size": 100,
+    "batch_size": 256,
 
     "dropout": 0.0,
 
@@ -18,7 +16,7 @@
     "beta2": 0.99,
 
     "decay_lr": true,
-    "warmup_iters": 700,
+    "warmup_iters": 1000,
     "lr_decay_iters": 1e9,
     "min_lr": 6e-5,
 

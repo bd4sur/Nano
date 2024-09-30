@@ -11,7 +11,7 @@ from train import TrainGPT
 # "q", "sort", "palindrome", "calculator"
 TASK_TAG = "calculator"
 
-MAX_STEPS = 5000
+MAX_STEPS = 500
 SEQ_LENGTH = 6
 
 MIN_NUMBER = 0
@@ -98,7 +98,7 @@ elif TASK_TAG == "palindrome":
 
 elif TASK_TAG == "calculator":
     model_config["block_size"] = EXPR_MAX_LENGTH
-    model_config["n_layer"]    = 16
+    model_config["n_layer"]    = 8
     model_config["n_head"]     = 8
     model_config["n_embd"]     = 512
     model_config["use_rope"]   = False

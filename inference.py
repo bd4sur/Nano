@@ -45,6 +45,9 @@ class InferenceGPT:
         if "<|eos|>" in chars:
             print(chars.split("<|eos|>")[0], end="", flush=True)
             return False
+        elif "<|padding|>" in chars:
+            print(chars.replace("<|padding|>", ""), end="", flush=True)
+            return False
         else:
             print(chars, end="", flush=True)
             return True
