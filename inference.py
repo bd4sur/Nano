@@ -56,16 +56,19 @@ class InferenceGPT:
         with torch.no_grad():
             while True:
                 try:
-                    prompt = input("User: ")
+                    prompt = input("\x1b[32;1mUser:\x1b[0m ")
                 except EOFError:
                     break
                 prompt = f"<|instruct_mark|>{prompt}<|response_mark|>"
                 x = torch.tensor(self.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
-                print("Nano: ", end="", flush=True)
-                y = self.model.auto_regressive_generate(x, 200, temperature=1, top_k=10, callback=self.typewriter)
+                print("\x1b[34;1mNano:\x1b[0m ", end="", flush=True)
+                y = self.model.auto_regressive_generate(x, 200, temperature=1, top_k=3, callback=self.typewriter)
                 print("\n")
 
 def main():
+    print(f"\x1b[36;1mNanoLM\x1b[0m - https://github.com/bd4sur/Nano")
+    print(f"PyTorch version: {torch.__version__}")
+
     parser = argparse.ArgumentParser(description="Sample (to inference) from Nano model for text generation and question answering.")
     parser.add_argument("-m", "--model", type=str, default="checkpoint/ckpt.pt")
     args = parser.parse_args()
