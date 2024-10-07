@@ -10,7 +10,7 @@
 
 - 用尽可能少的依赖，实现一个具体而微的Transformer语言模型。
 - 完整实现数据预处理、词元化、预训练、监督微调、推理过程。
-- 在廉价硬件上从头训练一个千万量级参数的模型，用于演示。
+- 在廉价硬件上从头训练一个[千万量级参数的模型](https://huggingface.co/bd4sur/ham_radio_nanolm_0930)，用于演示（[B站视频](https://www.bilibili.com/video/BV1MtxteUEge)）。
 - 研究模型训练的动力学、训/推加速、算法改进等问题，形成研究笔记。
 - 探索Transformer模型在自然语言处理以外的问题上的潜能。
 
