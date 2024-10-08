@@ -27,7 +27,7 @@ TOKENIZER_PATH       = f"dataset_preprocessed/problem_{TASK_TAG}_tokenizer.json"
 
 model_config = {
     "block_size": SEQ_LENGTH,
-    "vocab_size": 10000,
+    "vocab_size": 100,
     "n_layer": 2,
     "n_head": 2,
     "n_embd": 32,
@@ -56,7 +56,7 @@ train_config = {
     "beta2": 0.99,
 
     "decay_lr": True,
-    "warmup_iters": 300,
+    "warmup_iters": int(MAX_STEPS * 0.3),
     "lr_decay_iters": MAX_STEPS,
     "min_lr": 6e-5,
 
@@ -98,9 +98,9 @@ elif TASK_TAG == "palindrome":
 
 elif TASK_TAG == "calculator":
     model_config["block_size"] = EXPR_MAX_LENGTH
-    model_config["n_layer"]    = 8
-    model_config["n_head"]     = 8
-    model_config["n_embd"]     = 512
+    model_config["n_layer"]    = 10
+    model_config["n_head"]     = 64
+    model_config["n_embd"]     = 1024
     model_config["use_rope"]   = False
     model_config["is_causal"]  = True
 
@@ -140,6 +140,7 @@ def get_calculator_tokenizer(min_number, max_number):
     for index,tk in enumerate(tokenizer_config["itos"]):
         tokenizer_config["stoi"][tk] = index
     tokenizer_config["vocab_size"] = len(tokenizer_config["itos"])
+    model_config["vocab_size"] = tokenizer_config["vocab_size"]
     tk = Tokenizer()
     tk.load_from_config_dict(tokenizer_config)
     return tk
@@ -149,7 +150,7 @@ def gen_expr(expr_depth, tokenizer):
     # number
     if p <= 0.2 or expr_depth >= EXPR_MAX_DEPTH:
         value = random.randint(0, 1)
-        # value = random.randint(-3, 3)
+        # value = random.randint(-1, 1)
         return [[tokenizer.stoi[str(value)]], value]
     # expr
     else:
@@ -268,7 +269,7 @@ def generate_dataset():
         tk.dump_config_file(os.path.join(base_path, TOKENIZER_PATH))
 
         with open(train_path, "w", encoding="utf-8") as f_train:
-            for _ in tqdm(range(1000000)):
+            for _ in tqdm(range(MAX_STEPS * train_config["batch_size"])):
                 expr = gen_expr(0, tk)
                 equation_tokens = expr[0] + [tk.stoi["="], tk.stoi[str(expr[1])], tk.special_tokens["<|eos|>"]]
                 # print(equation_tokens)
@@ -278,7 +279,7 @@ def generate_dataset():
                 train_data = pickle.dumps([equation_tokens, mask])
                 f_train.writelines(str(base64.b64encode(train_data), encoding="utf-8") + "\n")
         with open(val_path, "w", encoding="utf-8") as f_val:
-            for _ in tqdm(range(100000)):
+            for _ in tqdm(range(10000)):
                 expr = gen_expr(0, tk)
                 equation_tokens = expr[0] + [tk.stoi["="], tk.stoi[str(expr[1])], tk.special_tokens["<|eos|>"]]
                 # print(equation_tokens)
