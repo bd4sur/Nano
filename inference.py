@@ -23,6 +23,14 @@ class InferenceGPT:
         model_config = checkpoint['model_config']
         tokenizer_config = checkpoint['tokenizer_config']
 
+        self.block_size = model_config.block_size
+
+        print(f"╭───────────┬───────────┬────────┬───────┬──────┬───────╮")
+        print(f"│ \x1b[1mBlockSize │ VocabSize │ Layers │ Heads │ Embd │ RoPE?\x1b[0m │")
+        print(f"├───────────┼───────────┼────────┼───────┼──────┼───────┤")
+        print(f"│{'{:^11d}'.format(model_config.block_size, end='')}│{'{:^11d}'.format(model_config.vocab_size, end='')}│{'{:^8d}'.format(model_config.n_layer, end='')}│{'{:^7d}'.format(model_config.n_head, end='')}│{'{:^6d}'.format(model_config.n_embd, end='')}│{'{:^7}'.format(str(model_config.use_rope))}│")
+        print(f"╰───────────┴───────────┴────────┴───────┴──────┴───────╯")
+
         # 设置随机种子与训练设置一致
         torch.manual_seed(train_config.random_seed)
         torch.cuda.manual_seed(train_config.random_seed)
@@ -56,13 +64,13 @@ class InferenceGPT:
         with torch.no_grad():
             while True:
                 try:
-                    prompt = input("\x1b[32;1mUser:\x1b[0m ")
+                    prompt = input("\x1b[32;1mHomo:\x1b[0m ")
                 except EOFError:
                     break
                 prompt = f"<|instruct_mark|>{prompt}<|response_mark|>"
                 x = torch.tensor(self.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
                 print("\x1b[34;1mNano:\x1b[0m ", end="", flush=True)
-                y = self.model.auto_regressive_generate(x, 200, temperature=1, top_k=3, callback=self.typewriter)
+                y = self.model.auto_regressive_generate(x, self.block_size, temperature=1.1, top_k=5, repetition_penalty=1.1, callback=self.typewriter)
                 print("\n")
 
 def main():
