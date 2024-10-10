@@ -1,10 +1,17 @@
 import os
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 
+parser = argparse.ArgumentParser(description="Plot train loss graph.")
+parser.add_argument("-n", "--filename", type=str, default="train.log")
+args = parser.parse_args()
+
+FILENAME = args.filename
+
 def update_loss():
     losses = []
-    with open(os.path.join(os.path.dirname(__file__), "train.log"), "r", encoding="utf-8") as f:
+    with open(os.path.join(os.path.dirname(__file__), args.filename), "r", encoding="utf-8") as f:
         fulltext = f.read()
         lines = fulltext.split("\n")
         for line in lines:
@@ -30,3 +37,5 @@ timer.add_callback(show_loss, ax)
 timer.start()
 
 plt.show()
+
+

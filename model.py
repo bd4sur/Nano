@@ -358,7 +358,7 @@ class GPT(nn.Module):
         # forward the model to get the logits for the index in the sequence
         logits, _ = self(idx_cond) # shape=(BatchSize, BlockSize, VocabSize)
         logits = logits[:, -1, :]  # shape=(BatchSize, VocabSize)
-        # repetition penalty
+        # repetition penalty: ref arxiv:1909.05858
         for token in set(idx_cond.tolist()[0]):
             logits[:, token] /= repetition_penalty
         # pluck the logits at the final step and scale by desired temperature

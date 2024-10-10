@@ -1,3 +1,8 @@
+# Nano Transformer
+# BD4SUR 2024
+# 
+# train.py - 单机单卡上的模型训练
+
 import os
 import time
 import math
@@ -232,7 +237,7 @@ class TrainGPT():
             self.step_count = iter
 
 def main():
-    logging.basicConfig(filename='train.log', filemode="w", level=logging.INFO)
+    logging.basicConfig(filename=f'train_{time.strftime('%Y-%m-%d_%H:%M:%S')}.log', filemode="w", level=logging.INFO)
     print(f"PyTorch version: {torch.__version__}")
 
     parser = argparse.ArgumentParser(description="Train Nano model.")

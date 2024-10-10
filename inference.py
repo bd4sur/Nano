@@ -6,7 +6,16 @@ from model import GPT
 
 class InferenceGPT:
 
-    def __init__(self, checkpoint_path="checkpoint/ckpt.pt", device="cuda"):
+    def __init__(
+            self,
+            checkpoint_path="checkpoint/ckpt.pt",
+            device="cuda",
+            is_instruct=True,
+            max_length=None,
+            temperature=1.0,
+            top_k=5,
+            repetition_penalty=1.2
+        ):
         self.checkpoint_path = checkpoint_path
         self.device = device
 
@@ -14,6 +23,12 @@ class InferenceGPT:
         self.tokenizer = None
         self.encode = None
         self.decode = None
+
+        self.is_instruct = is_instruct
+        self.max_length = max_length
+        self.temperature = temperature
+        self.top_k = top_k
+        self.repetition_penalty = repetition_penalty
 
         # 读取模型检查点和训练配置
         ckpt_path = os.path.join(os.path.dirname(__file__), self.checkpoint_path)
@@ -24,6 +39,7 @@ class InferenceGPT:
         tokenizer_config = checkpoint['tokenizer_config']
 
         self.block_size = model_config.block_size
+        self.max_length = self.block_size if self.max_length is None or self.max_length > self.block_size else self.max_length
 
         print(f"╭───────────┬───────────┬────────┬───────┬──────┬───────╮")
         print(f"│ \x1b[1mBlockSize │ VocabSize │ Layers │ Heads │ Embd │ RoPE?\x1b[0m │")
@@ -60,17 +76,19 @@ class InferenceGPT:
             print(chars, end="", flush=True)
             return True
 
-    def generate(self):
+    def run(self):
         with torch.no_grad():
             while True:
                 try:
                     prompt = input("\x1b[32;1mHomo:\x1b[0m ")
                 except EOFError:
                     break
-                prompt = f"<|instruct_mark|>{prompt}<|response_mark|>"
+                if self.is_instruct:
+                    prompt = f"<|instruct_mark|>{prompt}<|response_mark|>"
                 x = torch.tensor(self.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
                 print("\x1b[34;1mNano:\x1b[0m ", end="", flush=True)
-                y = self.model.auto_regressive_generate(x, self.block_size, temperature=1.1, top_k=5, repetition_penalty=1.1, callback=self.typewriter)
+                y = self.model.auto_regressive_generate(
+                    x, self.max_length, self.temperature, self.top_k, self.repetition_penalty, callback=self.typewriter)
                 print("\n")
 
 def main():
@@ -79,12 +97,23 @@ def main():
 
     parser = argparse.ArgumentParser(description="Sample (to inference) from Nano model for text generation and question answering.")
     parser.add_argument("-m", "--model", type=str, default="checkpoint/ckpt.pt")
+    parser.add_argument("-i", "--instruct", action="store_true")
+    parser.add_argument("-l", "--max_length", type=int, default=None)
+    parser.add_argument("-t", "--temperature", type=float, default=1.0)
+    parser.add_argument("-k", "--top_k", type=int, default=5)
+    parser.add_argument("-r", "--repetition_penalty", type=float, default=1.2)
     args = parser.parse_args()
 
-    # infer = InferenceGPT("dataset", "gpt2", "cuda")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    infer = InferenceGPT(args.model, device)
-    infer.generate()
+    infer = InferenceGPT(
+        args.model,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        is_instruct=args.instruct,
+        max_length=args.max_length,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        repetition_penalty=args.repetition_penalty
+    )
+    infer.run()
 
 if __name__ == "__main__":
     main()

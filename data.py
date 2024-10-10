@@ -43,6 +43,7 @@ def generate_pretrain_dataset(input_path, train_output_path, val_output_path, to
     for i in tqdm(range(0, len(all_tokens), int(block_size * overlap_ratio))):
         tslice = all_tokens[i : i + block_size + 1]
         if len(tslice) == block_size + 1:
+            # TODO 在<|eos|>处切割chunk
             blocks.append(tslice) # 每一条数据都比block_size多一个，用于预测下一字符的训练
 
     del all_tokens
@@ -54,12 +55,12 @@ def generate_pretrain_dataset(input_path, train_output_path, val_output_path, to
     random.shuffle(line_indexes)
 
     with open(train_output_path, "w", encoding="utf-8") as f_train:
-        for li in tqdm(range(0, int(len(blocks) * 0.9))):
+        for li in tqdm(range(len(blocks))):
             train_block = pickle.dumps([blocks[line_indexes[li]], None])
             f_train.writelines(str(base64.b64encode(train_block), encoding="utf-8") + "\n")
 
     with open(val_output_path, "w", encoding="utf-8") as f_val:
-        for li in tqdm(range(int(len(blocks) * 0.9), len(blocks))):
+        for li in tqdm(range(int(len(blocks) * 0.95), len(blocks))):
             val_block = pickle.dumps([blocks[line_indexes[li]], None])
             f_val.writelines(str(base64.b64encode(val_block), encoding="utf-8") + "\n")
 
@@ -78,8 +79,9 @@ def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path, t
                 qa = json.loads(line)
                 question = qa["question"]
                 answer = qa["answer"]
-                item = f"<|instruct_mark|>{question}<|response_mark|>{answer}<|eos|>"
-                all_lines.append(item[0: block_size + 1])
+                template = f"<|instruct_mark|>{question}<|response_mark|>{answer}<|eos|>"
+                # TODO 限制长度
+                all_lines.append(template[0: block_size + 1])
                 mask = [0] * (1 + len(question) + 1) + [1] * (len(answer) + 1)
                 all_masks.append(mask[0: block_size + 1])
             except:
@@ -91,7 +93,6 @@ def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path, t
     random.shuffle(line_indexes)
 
     with open(train_output_path, "w", encoding="utf-8") as f_train:
-        # for li in tqdm(range(0, int(len(all_lines) * 0.9))):
         for li in tqdm(range(len(all_lines))):
             ids = tokenizer.encode(all_lines[line_indexes[li]])
             ids = [ids[i] if i < len(ids) else tokenizer.special_tokens["<|padding|>"] for i in range(block_size + 1)]
@@ -101,8 +102,7 @@ def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path, t
             f_train.writelines(str(base64.b64encode(train_data), encoding="utf-8") + "\n")
 
     with open(val_output_path, "w", encoding="utf-8") as f_val:
-        # for li in tqdm(range(int(len(all_lines) * 0.9), len(all_lines))):
-        for li in tqdm(range(len(all_lines))):
+        for li in tqdm(range(int(len(all_lines) * 0.95), len(all_lines))):
             ids = tokenizer.encode(all_lines[line_indexes[li]])
             ids = [ids[i] if i < len(ids) else tokenizer.special_tokens["<|padding|>"] for i in range(block_size + 1)]
             mask = all_masks[line_indexes[li]]
@@ -119,11 +119,12 @@ def main():
     PRETRAIN_DATASETS = [
         "dataset/pretrain.txt"
     ]
-    SFT_DATASET = "dataset/sft-amateur-radio.jsonl"
+    SFT_DATASET = "dataset/sft.jsonl"
 
     TOKENIZER_PATH = "dataset_preprocessed/tokenizer.json"
 
     base_path = os.path.dirname(__file__)
+    os.makedirs(os.path.join(base_path, "dataset_preprocessed"), exist_ok=True)
 
     tokenizer = build_tokenizer(
         PRETRAIN_DATASETS + [SFT_DATASET],
