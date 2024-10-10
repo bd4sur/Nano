@@ -71,7 +71,6 @@ class TrainGPT():
 
         self.log(f"  Size of Train set = {self.train_data.line_num}")
         self.log(f"  Size of Validation set = {self.val_data.line_num}")
-        self.log(f"  Size of Vocabulary = {self.model_config.vocab_size}")
 
     def init(self):
         os.makedirs(os.path.join(os.path.dirname(__file__), "checkpoint"), exist_ok=True)
@@ -90,9 +89,9 @@ class TrainGPT():
             self.log(f"Resuming training from {_ckpt_path}")
             _checkpoint = torch.load(_ckpt_path, map_location=self.train_config.device)
             # 从Checkpoint中恢复部分模型结构参数
-            _model_config = _checkpoint["model_config"]
-            _model_config.dropout = self.model_config.dropout # Overrided by new training configuration
-            self.model = GPT(_model_config)
+            self.model_config = _checkpoint["model_config"]
+            self.model_config.dropout = self.model_config.dropout # Overrided by new training configuration
+            self.model = GPT(self.model_config)
             self.model.to(self.train_config.device)
             # 恢复模型参数
             self.model.load_state_dict(_checkpoint["model"])
@@ -103,7 +102,12 @@ class TrainGPT():
             self.model = GPT(self.model_config)
             self.model.to(self.train_config.device)
 
-        self.log("  Number of Parameters = %.2fM" % (self.model.get_num_params() / 1e6,))
+        self.log(f"  BlockSize = {self.model_config.block_size}")
+        self.log(f"  VocabSize = {self.model_config.vocab_size}")
+        self.log(f"  Layers = {self.model_config.n_layer}")
+        self.log(f"  Heads = {self.model_config.n_head}")
+        self.log(f"  Embed = {self.model_config.n_embd}")
+        self.log(f"    Parameters = {self.model.get_num_params() / 1e6}M")
 
         # Optimizer
         _device_type = 'cuda' if 'cuda' in self.train_config.device else 'cpu'
@@ -237,7 +241,7 @@ class TrainGPT():
             self.step_count = iter
 
 def main():
-    logging.basicConfig(filename=f'train_{time.strftime('%Y-%m-%d_%H:%M:%S')}.log', filemode="w", level=logging.INFO)
+    logging.basicConfig(filename=f"train_{time.strftime('%Y-%m-%d_%H:%M:%S')}.log", filemode="w", level=logging.INFO)
     print(f"PyTorch version: {torch.__version__}")
 
     parser = argparse.ArgumentParser(description="Train Nano model.")
