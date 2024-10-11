@@ -79,8 +79,11 @@ def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path, t
                 qa = json.loads(line)
                 question = qa["question"]
                 answer = qa["answer"]
+                if len(question) + len(answer) + 3 > block_size:
+                    answer = answer[0 : block_size - 3 - len(question)]
+                    print(f"超长QA对，裁剪：{answer}")
+                    continue
                 template = f"<|instruct_mark|>{question}<|response_mark|>{answer}<|eos|>"
-                # TODO 限制长度
                 all_lines.append(template[0: block_size + 1])
                 mask = [0] * (1 + len(question) + 1) + [1] * (len(answer) + 1)
                 all_masks.append(mask[0: block_size + 1])
@@ -126,10 +129,13 @@ def main():
     base_path = os.path.dirname(__file__)
     os.makedirs(os.path.join(base_path, "dataset_preprocessed"), exist_ok=True)
 
-    tokenizer = build_tokenizer(
-        PRETRAIN_DATASETS + [SFT_DATASET],
-        os.path.join(base_path, TOKENIZER_PATH),
-        is_build_tokenizer=True)
+    # tokenizer = build_tokenizer(
+    #     PRETRAIN_DATASETS + [SFT_DATASET],
+    #     os.path.join(base_path, TOKENIZER_PATH),
+    #     is_build_tokenizer=True)
+
+    tokenizer = Tokenizer()
+    tokenizer.load_from_config_file(os.path.join(base_path, TOKENIZER_PATH))
 
     for index, pt in enumerate(PRETRAIN_DATASETS):
         generate_pretrain_dataset(
