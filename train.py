@@ -179,6 +179,9 @@ class TrainGPT():
 
         iter = start_step
 
+        t0_total = (time.time_ns(), iter)
+        t1_total = None
+
         while iter <= self.max_steps:
             # determine and set the learning rate for this iteration
             lr = self.update_learning_rate(iter) if self.train_config.decay_lr else self.train_config.learning_rate
@@ -233,15 +236,17 @@ class TrainGPT():
             dt = (t1 - t0) / 1e9
 
             if iter % self.train_config.log_interval == 0:
-                lossf = loss.item()
+                t1_total = (time.time_ns(), iter)
+                lossf = loss.item() # NOTE 计算loss非常耗时
                 flops = self.model.estimate_flops(self.train_config.batch_size, dt)
-                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Train | Epoch-Step: {self.train_data.epoch}-{iter} | Curriculum: {self.train_data.current_course_index}-{self.train_data.current_line_pos[self.train_data.current_course_index]} | Loss: {lossf:.3f} | Time: {dt*1000:.0f} ms | Speed: {flops / 1e9:.2f} GFLOP/s")
-
+                throughput = self.train_config.batch_size * self.model_config.block_size * (t1_total[1] - t0_total[1]) / ((t1_total[0] - t0_total[0]) / 1e9)
+                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Epoch: {self.train_data.epoch} | Step: {iter} | Dataset: {self.train_data.current_course_index}-{self.train_data.current_line_pos[self.train_data.current_course_index]} | Loss: {lossf:.3f} | {dt*1000:.0f} ms/step , {flops / 1e9:.2f} GFLOP/s , {throughput:.1f} tokens/s")
+                t0_total = t1_total
             iter += 1
             self.step_count = iter
 
 def main():
-    logging.basicConfig(filename=f"train_{time.strftime('%Y-%m-%d_%H:%M:%S')}.log", filemode="w", level=logging.INFO)
+    logging.basicConfig(filename=f"train_{time.strftime('%Y%m%d_%H%M%S')}.log", filemode="w", level=logging.INFO)
     print(f"PyTorch version: {torch.__version__}")
 
     parser = argparse.ArgumentParser(description="Train Nano model.")

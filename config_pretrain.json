@@ -3,10 +3,10 @@
     "dataset_path": [
         ["dataset_preprocessed/pt_train_0.base64", "dataset_preprocessed/pt_val_0.base64"]
     ],
-    "tokenizer_path": "dataset_preprocessed/tokenizer_default.json",
+    "tokenizer_path": "tokenizer/tokenizer_16384.json",
 
     "random_seed": 39,
-    "batch_size": 256,
+    "batch_size": 128,
 
     "dropout": 0.0,
 
@@ -21,7 +21,7 @@
     "min_lr": 6e-5,
 
     "eval_interval": 100,
-    "log_interval": 1,
+    "log_interval": 10,
     "eval_iters": 5,
 
     "backend": "nccl",

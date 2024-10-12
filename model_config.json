@@ -1,7 +1,7 @@
 {
-    "block_size": 256,
-    "vocab_size": 32768,
-    "n_layer": 8,
+    "block_size": 512,
+    "vocab_size": 16384,
+    "n_layer": 12,
     "n_head": 16,
     "n_embd": 512,
     "dropout": 0.0,

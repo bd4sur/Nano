@@ -21,7 +21,7 @@ def build_tokenizer(input_path_list, output_path, is_build_tokenizer=True):
         tokenizer.load_from_config_file(output_path)
     return tokenizer
 
-def generate_pretrain_dataset(input_path, train_output_path, val_output_path, tokenizer=None, block_size=512, overlap_ratio=0.5):
+def generate_pretrain_dataset(input_path, train_output_path, val_output_path, tokenizer=None, block_size=512):
     print(f"Reading and encoding raw text file...")
     def read_chunk(filepath, chunk_size=65536):
         with open(filepath, mode="r", encoding="utf-8") as f:
@@ -31,20 +31,26 @@ def generate_pretrain_dataset(input_path, train_output_path, val_output_path, to
                     return
                 yield chunk
 
+    with os.popen(f"wc --chars {input_path}") as f:
+        res = f.readlines()[0]
+        charcount = int(res.split(" ")[0])
+
+    print(f"  Total char = {charcount}")
+
     all_tokens = []
-    text_iterator = read_chunk(input_path, chunk_size=16777216)
-    for chunk in tqdm(text_iterator):
+    chunk_size = 512
+    text_iterator = read_chunk(input_path, chunk_size=chunk_size)
+    for chunk in tqdm(text_iterator, total=int(charcount/chunk_size)):
         tokens = tokenizer.encode(chunk)
         all_tokens.extend(tokens)
     print(f"  Length of tokens: {len(all_tokens):,}")
 
     print(f"Slicing all tokens into blocks...")
     blocks = []
-    for i in tqdm(range(0, len(all_tokens), int(block_size * overlap_ratio))):
-        tslice = all_tokens[i : i + block_size + 1]
-        if len(tslice) == block_size + 1:
-            # TODO 在<|eos|>处切割chunk
-            blocks.append(tslice) # 每一条数据都比block_size多一个，用于预测下一字符的训练
+    for i in tqdm(range(0, int(len(all_tokens) / (block_size+1)) * (block_size+1), (block_size+1))):
+        tslice = all_tokens[i : i + (block_size+1)]
+        # TODO 在<|eos|>处切割chunk
+        blocks.append(tslice) # 每一条数据都比block_size多一个，用于预测下一字符的训练
 
     del all_tokens
 
@@ -118,21 +124,18 @@ def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path, t
 
 def main():
 
-    BLOCK_SIZE = 256
+    BLOCK_SIZE = 512
     PRETRAIN_DATASETS = [
-        "dataset/pretrain.txt"
+        "dataset/pretrain_20241013.txt"
     ]
     SFT_DATASET = "dataset/sft.jsonl"
 
-    TOKENIZER_PATH = "dataset_preprocessed/tokenizer.json"
+    TOKENIZER_PATH = "tokenizer/tokenizer_16384.json"
 
     base_path = os.path.dirname(__file__)
     os.makedirs(os.path.join(base_path, "dataset_preprocessed"), exist_ok=True)
 
-    # tokenizer = build_tokenizer(
-    #     PRETRAIN_DATASETS + [SFT_DATASET],
-    #     os.path.join(base_path, TOKENIZER_PATH),
-    #     is_build_tokenizer=True)
+    # tokenizer = build_tokenizer(PRETRAIN_DATASETS + [SFT_DATASET], os.path.join(base_path, TOKENIZER_PATH), is_build_tokenizer=True)
 
     tokenizer = Tokenizer()
     tokenizer.load_from_config_file(os.path.join(base_path, TOKENIZER_PATH))
@@ -143,8 +146,7 @@ def main():
             os.path.join(base_path, f"dataset_preprocessed/pt_train_{index}.base64"),
             os.path.join(base_path, f"dataset_preprocessed/pt_val_{index}.base64"),
             tokenizer=tokenizer,
-            block_size=BLOCK_SIZE,
-            overlap_ratio=0.5)
+            block_size=BLOCK_SIZE)
 
     generate_sft_dataset(
         os.path.join(base_path, SFT_DATASET),

@@ -38,8 +38,7 @@ class InferenceGPT:
         model_config = checkpoint['model_config']
         tokenizer_config = checkpoint['tokenizer_config']
 
-        self.block_size = model_config.block_size
-        self.max_length = self.block_size if self.max_length is None or self.max_length > self.block_size else self.max_length
+        self.max_length = model_config.block_size if self.max_length is None or self.max_length > model_config.block_size else self.max_length
 
         print(f"╭───────────┬───────────┬────────┬───────┬──────┬───────╮")
         print(f"│ \x1b[1mBlockSize │ VocabSize │ Layers │ Heads │ Embd │ RoPE?\x1b[0m │")
