@@ -251,6 +251,32 @@ Min = 0, Max = 1, Depth = 4, BlockSize = MaxLen = 64
 
 ### 训练性能
 
+**2024-10-14 预训练**
+
+|Block|Vocab|Layer|Head|Embd|RoPE|Batch| GA |  dtype  |
+|-----|-----|-----|----|----|----|-----|----|---------|
+| 512 |16384|  16 | 16 |512 |True| 220 | 1  | BF16 AMP|
+
+- 设备：租用单卡A800-80GB-PCIe
+- 软件：CUDA 12.4 / PyTorch 2.3.0
+- 显存占用：71.6GB
+- 平均FLOPS：79TFLOPS
+- 平均吞吐率：193k tokens/s
+
+**2024-10-14 监督微调**
+
+|Block|Vocab|Layer|Head|Embd|RoPE|Batch| GA |  dtype  |
+|-----|-----|-----|----|----|----|-----|----|---------|
+| 512 |16384|  16 | 16 |512 |True| 16  | 1  | BF16 AMP|
+
+- 设备：Jetson Orin NX 16GB (MAXN)
+- 软件：CUDA 12.2 / PyTorch 2.3.0
+- 显存占用：6.0GB
+- 平均FLOPS：3.2TFLOPS
+- 平均吞吐率：8k tokens/s
+
+**过往实验数据**
+
 训练参数：BlockSize=512, VocabSize=2114, Layers=2, Heads=4, Embd=512, BatchSize=100（参数量13.67M，显存占用9045MiB）
 
 |设备|设置|速度|
