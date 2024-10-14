@@ -1,12 +1,15 @@
 {
-    "from_checkpoint": "checkpoint/ckpt.pt",
+    "from_checkpoint": "/home/bd4sur/ai/Nano/checkpoint/checkpoint_20241014_002814_step_60000.pt",
+    "save_checkpoint_to": "/home/bd4sur/ai/Nano/checkpoint",
     "dataset_path": [
-        ["dataset_preprocessed/sft_train.base64", "dataset_preprocessed/sft_val.base64"]
+        ["/home/bd4sur/ai/Nano/dataset_preprocessed/sft_train.base64", "/home/bd4sur/ai/Nano/dataset_preprocessed/sft_val.base64"]
     ],
-    "tokenizer_path": "tokenizer/tokenizer_16384.json",
+    "tokenizer_path": "/home/bd4sur/ai/Nano/tokenizer/tokenizer_16384.json",
 
     "random_seed": 39,
-    "batch_size": 128,
+    "batch_size": 16,
+    "gradient_accumulation_steps": 1,
+    "grad_clip": 1.0,
 
     "dropout": 0.1,
 
@@ -21,13 +24,12 @@
     "min_lr": 1e-8,
 
     "eval_interval": 100,
-    "log_interval": 1,
+    "log_interval": 10,
     "eval_iters": 5,
 
     "backend": "nccl",
     "device": "cuda",
     "sdp_kernel": "flash",
     "dtype": "bfloat16",
-    "grad_clip": 1.0,
-    "gradient_accumulation_steps": 4
+    "use_amp": true
 }

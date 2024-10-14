@@ -58,15 +58,24 @@ python -m pip install -r requirements.txt
 - 若使用P40、P100等老旧设备，将`config_pretrain/sft.json`中的`sdp_kernel`字段设为`"math"`。
 - 首次运行，建议使用单机单卡或CPU进行验证性训练。若使用多机分布式训练，请先提前配置好分布式环境，例如无密码ssh认证等。
 
-**预训练**：执行`python train.py -t pretrain`。请注意：
+**预训练**：
+
+单机单卡或者CPU训练，执行`python train.py -t pretrain`。单机多卡或者多机多卡分布式数据并行（DDP）训练，以单机4卡为例，在主节点上执行以下命令：
+
+```
+CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node 4 train.py -t pretrain
+```
+
+请注意：
 
 - 训练没有最大步数限制。因此，需要自行决定何时中止训练。
 - 建议训练至少10轮（epoch），最好不要少于1轮，保证模型“见过”全部语料。
+- 如果使用DDP训练，`gradient_accumulation_steps`应设置为显卡数的整数倍。
 - 支持保存模型检查点。训练过程中，程序将按照模型保存策略，保存模型训练检查点到`checkpoint`目录。保存策略主要有三点：一是根据训练配置文件中规定的间隔，每隔一定的步数保存一个检查点；二是只有当验证集损失下降才会保存检查点；三是每隔1000步定期保存一次检查点。优先级：策略3 > 策略2 > 策略1。
 - 支持断点续训。如果预训练意外中止，可以将`config_pretrain.json`中的`from_checkpoint`字段设为上一个检查点的相对路径`"checkpoint/xxx.pt"`，然后重新启动训练。
 - 支持训练过程监控。每次训练，程序都会记录一个新的训练日志文件`train_xxx.log`，位于仓库根目录。执行`python plot_loss.py -n train_xxx.log`，绘制训练集损失曲线。
 
-**监督微调**：首先将`config_sft.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行`python train.py -t sft`。其余与预训练类似。需要指出的是，监督微调的训练轮数，应当根据实际情况灵活选择。一般来说，如果训练轮数过少，模型可能难以学习到指令跟随能力。而训练轮数过多，则可能遗忘预训练过程中获得的语言能力，以及在监督微调数据集上过拟合。
+**监督微调**：首先将`config_sft.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行`python train.py -t sft`（或者执行DDP训练的命令）。其余与预训练类似。需要指出的是，监督微调的训练轮数，应当根据实际情况灵活选择。一般来说，如果训练轮数过少，模型可能难以学习到指令跟随能力。而训练轮数过多，则可能遗忘预训练过程中获得的语言能力，以及在监督微调数据集上过拟合。
 
 **4️⃣ 推理**
 
@@ -141,7 +150,9 @@ python -m pip install -r requirements.txt
 |warmup_iters|int|300|学习率预热步数|
 |lr_decay_iters|int|100000|学习率衰减步数|
 |min_lr|float|6e-5|最小学习率|
-|batch_size|int|100|训练批大小|
+|batch_size|int|100|训练批大小。如果使用梯度累加技术，则实际批大小为batch_size * gradient_accumulation_steps|
+|grad_clip|float|1.0|梯度压限|
+|gradient_accumulation_steps|int|4|梯度累加步数|
 |random_seed|int|1337|随机数初始化种子|
 |dataset_path|[[str, str]]|None|数据集(相对于`train.py`的路径)|
 |eval_interval|int|100|验证间隔步数|
@@ -151,20 +162,11 @@ python -m pip install -r requirements.txt
 |device|str|"cuda"|计算设备|
 |sdp_kernel|str|"flash"|缩放点积注意力实现|
 |dtype|str|"bfloat16"|训练数据类型|
-|grad_clip|float|1.0|梯度压限|
-|gradient_accumulation_steps|int|4|梯度累加步数|
+|use_amp|bool|True|使用自动混合精度？|
 
 **分布式训练**
 
-Nano现在支持分布式数据并行（DDP）训练和基于DeepSpeed的零冗余优化（ZeRO）训练。
-
-DDP训练：以单机4卡为例，在主节点上执行以下命令。注意：`train_config.json`中的`gradient_accumulation_steps`应为显卡数的倍数。
-
-```
-CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node 4 train_ddp.py
-```
-
-基于DeepSpeed框架，使用ZeRO技术训练：以2节点4卡ZeRO3-Offload方式为例，在主节点上执行以下命令。可以修改`ds_config.json`以调整ZeRO设置。注意：根据[文档](https://www.deepspeed.ai/docs/config-json/)，`train_batch_size`必须等于`train_micro_batch_size_per_gpu` * `gradient_accumulation` * GPU数量。
+Nano支持基于DeepSpeed的零冗余优化（ZeRO）训练。以2节点4卡ZeRO3-Offload方式为例，在主节点上执行以下命令。可以修改`ds_config.json`以调整ZeRO设置。注意：根据[文档](https://www.deepspeed.ai/docs/config-json/)，`train_batch_size`必须等于`train_micro_batch_size_per_gpu` * `gradient_accumulation` * GPU数量。
 
 ```
 deepspeed train_deepspeed.py --deepspeed --deepspeed_config deepspeed_config.json --hostfile=hostfile.txt

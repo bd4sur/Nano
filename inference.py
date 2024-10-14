@@ -8,7 +8,7 @@ class InferenceGPT:
 
     def __init__(
             self,
-            checkpoint_path="checkpoint/ckpt.pt",
+            checkpoint_path=os.path.join(os.path.dirname(__file__), "checkpoint/checkpoint.pt"),
             device="cuda",
             is_instruct=True,
             max_length=None,
@@ -31,9 +31,8 @@ class InferenceGPT:
         self.repetition_penalty = repetition_penalty
 
         # 读取模型检查点和训练配置
-        ckpt_path = os.path.join(os.path.dirname(__file__), self.checkpoint_path)
-        print(f"Loading checkpoint from {ckpt_path}...")
-        checkpoint = torch.load(ckpt_path, map_location=device)
+        print(f"Loading checkpoint from {self.checkpoint_path}...")
+        checkpoint = torch.load(self.checkpoint_path, map_location=device)
         train_config = checkpoint['train_config']
         model_config = checkpoint['model_config']
         tokenizer_config = checkpoint['tokenizer_config']

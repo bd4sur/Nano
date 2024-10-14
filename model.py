@@ -46,10 +46,14 @@ class TrainConfig:
 
     # Training Task
     from_checkpoint: Optional[str] = ""
+    save_checkpoint_to: Optional[str] = ""
     dataset_path: Optional[list[list[str]]] = None
     tokenizer_path: Optional[str] = ""
     
-    batch_size: Optional[int] = 600
+    batch_size: Optional[int] = 128
+    gradient_accumulation_steps: Optional[int] = 4
+    grad_clip: Optional[float] = 1.0
+
     random_seed: Optional[int] = 114514
     eval_interval: Optional[int] = 100
     log_interval: Optional[int] = 1
@@ -60,8 +64,8 @@ class TrainConfig:
     device: Optional[str] = "cuda:0"
     sdp_kernel: Optional[str] = "math"
     dtype: Optional[str] = "float16"
-    grad_clip: Optional[float] = 1.0
-    gradient_accumulation_steps: Optional[int] = 2
+    use_amp: Optional[bool] = True
+
 
     def __init__(self, **kwargs):
         names = set([f.name for f in fields(self)])

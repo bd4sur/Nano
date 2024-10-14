@@ -87,7 +87,7 @@ def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path, t
                 answer = qa["answer"]
                 if len(question) + len(answer) + 3 > block_size:
                     answer = answer[0 : block_size - 3 - len(question)]
-                    print(f"超长QA对，裁剪：{answer}")
+                    # print(f"超长QA对，裁剪：{answer}")
                     continue
                 template = f"<|instruct_mark|>{question}<|response_mark|>{answer}<|eos|>"
                 all_lines.append(template[0: block_size + 1])

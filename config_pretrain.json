@@ -1,12 +1,15 @@
 {
     "from_checkpoint": "",
+    "save_checkpoint_to": "/home/bd4sur/ai/Nano/checkpoint",
     "dataset_path": [
-        ["dataset_preprocessed/pt_train_0.base64", "dataset_preprocessed/pt_val_0.base64"]
+        ["/home/bd4sur/ai/Nano/dataset_preprocessed/pt_train_0.base64", "/home/bd4sur/ai/Nano/dataset_preprocessed/pt_val_0.base64"]
     ],
-    "tokenizer_path": "tokenizer/tokenizer_16384.json",
+    "tokenizer_path": "/home/bd4sur/ai/Nano/tokenizer/tokenizer_16384.json",
 
     "random_seed": 39,
-    "batch_size": 128,
+    "batch_size": 16,
+    "gradient_accumulation_steps": 1,
+    "grad_clip": 1.0,
 
     "dropout": 0.0,
 
@@ -28,6 +31,5 @@
     "device": "cuda",
     "sdp_kernel": "flash",
     "dtype": "bfloat16",
-    "grad_clip": 1.0,
-    "gradient_accumulation_steps": 4
+    "use_amp": true
 }
