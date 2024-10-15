@@ -19,10 +19,12 @@ MAX_NUMBER = 1
 EXPR_MAX_DEPTH = 4
 EXPR_MAX_LENGTH = 64
 
+ROOT_PATH = "/home/bd4sur/ai/Nano"
+
 CHECKPOINT_FILE_NAME = f"problem_{TASK_TAG}.pt"
-TRAINSET_PATH        = f"dataset_preprocessed/problem_{TASK_TAG}_train.base64"
-VALSET_PATH          = f"dataset_preprocessed/problem_{TASK_TAG}_val.base64"
-TOKENIZER_PATH       = f"dataset_preprocessed/problem_{TASK_TAG}_tokenizer.json"
+TRAINSET_PATH        = f"{ROOT_PATH}/dataset_preprocessed/problem_{TASK_TAG}_train.base64"
+VALSET_PATH          = f"{ROOT_PATH}/dataset_preprocessed/problem_{TASK_TAG}_val.base64"
+TOKENIZER_PATH       = f"{ROOT_PATH}/dataset_preprocessed/problem_{TASK_TAG}_tokenizer.json"
 
 
 model_config = {
@@ -40,6 +42,7 @@ model_config = {
 
 train_config = {
     "from_checkpoint": "",
+    "save_checkpoint_to": f"{ROOT_PATH}/checkpoint",
     "dataset_path": [
         [TRAINSET_PATH, VALSET_PATH]
     ],
@@ -47,6 +50,8 @@ train_config = {
 
     "random_seed": 39,
     "batch_size": 100,
+    "gradient_accumulation_steps": 1,
+    "grad_clip": 1.0,
 
     "dropout": 0.0,
 
@@ -68,8 +73,7 @@ train_config = {
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     "sdp_kernel": "flash",
     "dtype": "bfloat16",
-    "grad_clip": 1.0,
-    "gradient_accumulation_steps": 4
+    "use_amp": True
 }
 
 if TASK_TAG == "q":
@@ -104,7 +108,6 @@ elif TASK_TAG == "calculator":
     model_config["use_rope"]   = False
     model_config["is_causal"]  = True
 
-base_path = os.path.dirname(__file__)
 
 
 
@@ -226,10 +229,10 @@ def generate_dataset():
     if TASK_TAG in ["q", "sort", "palindrome"]:
         print(f"Building tokenizer...")
         tokenizer = Tokenizer()
-        tokenizer.build_from_text(fulltext, os.path.join(base_path, TOKENIZER_PATH))
+        tokenizer.build_from_text(fulltext, TOKENIZER_PATH)
 
-        train_path = os.path.join(base_path, TRAINSET_PATH)
-        val_path   = os.path.join(base_path, VALSET_PATH)
+        train_path = TRAINSET_PATH
+        val_path   = VALSET_PATH
 
         print(f"Shuffling sft blocks and write to file ...")
         line_indexes = list(range(len(all_items)))
@@ -262,11 +265,11 @@ def generate_dataset():
     elif TASK_TAG == "calculator":
         print(f"Generating S-expr ...")
 
-        train_path = os.path.join(base_path, TRAINSET_PATH)
-        val_path   = os.path.join(base_path, VALSET_PATH)
+        train_path = TRAINSET_PATH
+        val_path   = VALSET_PATH
 
         tk = get_calculator_tokenizer(MIN_NUMBER, MAX_NUMBER)
-        tk.dump_config_file(os.path.join(base_path, TOKENIZER_PATH))
+        tk.dump_config_file(TOKENIZER_PATH)
 
         with open(train_path, "w", encoding="utf-8") as f_train:
             for _ in tqdm(range(MAX_STEPS * train_config["batch_size"])):
@@ -295,9 +298,8 @@ def inference(checkpoint_path):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # 读取模型检查点和训练配置
-    ckpt_path = os.path.join(base_path, checkpoint_path)
-    print(f"Loading checkpoint from {ckpt_path}...")
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    print(f"Loading checkpoint from {checkpoint_path}...")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
     train_config = checkpoint['train_config']
     model_config = checkpoint['model_config']
 
@@ -388,7 +390,7 @@ def main():
     trainer = TrainGPT(model_config, train_config, max_steps=MAX_STEPS, ckpt_filename=CHECKPOINT_FILE_NAME)
     trainer.start()
 
-    inference(checkpoint_path=f"checkpoint/{CHECKPOINT_FILE_NAME}")
+    inference(checkpoint_path=f"{ROOT_PATH}/checkpoint/{CHECKPOINT_FILE_NAME}")
 
 if __name__ == "__main__":
     main()
