@@ -12,6 +12,10 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+# NOTE KV-Cache仅为实验性实现，主要影响自回归生成。该标识通过forward逐层传递到Attn层，训练时默认不使用。
+#      KV-Cache可缓解长文本生成后期TPS大幅下降的问题，但是对于短文本的生成速度未必有改善（取决于SDPA算子的性能）。
+USE_KV_CACHE = True
+
 @dataclass
 class ModelConfig:
     block_size: int = 128
@@ -21,6 +25,7 @@ class ModelConfig:
     n_embd: int = 128
     dropout: float = 0.0
     bias: bool = False
+    # kv_cache: bool = True
     use_rope: bool = True
     norm_eps: float = 1e-5
     is_causal: bool = True
@@ -138,18 +143,22 @@ class MaskedSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+        self.block_size = config.block_size
+        # KV-Cache (experimental)
+        self.cache_k = None
+        self.cache_v = None
         # is causal self attention?
         self.is_causal = config.is_causal
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            if self.is_causal:
-                # causal mask to ensure that attention is only applied to the left in the input sequence
-                self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                                .view(1, 1, config.block_size, config.block_size))
+        # causal mask to ensure that attention is only applied to the left in the input sequence
+        if self.is_causal:
+            causal_mask = torch.triu(torch.full((1, 1, self.block_size, self.block_size), float('-inf')), diagonal=1).view(1, 1, config.block_size, config.block_size)
+            self.register_buffer("mask", causal_mask)
 
-    def forward(self, x, pos_cis):
+    def forward(self, x, pos_cis, start_pos, use_kv_cache=False):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -161,6 +170,17 @@ class MaskedSelfAttention(nn.Module):
         if pos_cis is not None:
             q, k = apply_rotary_emb(q, k, pos_cis)
 
+        if use_kv_cache and (not self.training):
+            if start_pos == 0 or (self.cache_k is None and self.cache_v is None):
+                self.cache_k = torch.zeros((B, self.block_size, self.n_head, C // self.n_head)).to(q.device)
+                self.cache_v = torch.zeros((B, self.block_size, self.n_head, C // self.n_head)).to(q.device)
+
+            self.cache_k[:B, start_pos : start_pos + T] = k
+            self.cache_v[:B, start_pos : start_pos + T] = v
+
+            k = self.cache_k[:B, : start_pos + T]
+            v = self.cache_v[:B, : start_pos + T]
+
         k = k.transpose(1, 2) # (B, nh, T, hs)
         q = q.transpose(1, 2) # (B, nh, T, hs)
         v = v.transpose(1, 2) # (B, nh, T, hs)
@@ -168,11 +188,26 @@ class MaskedSelfAttention(nn.Module):
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=self.is_causal)
+            if self.training or (not use_kv_cache):
+                # NOTE flash_attn尚不支持非None的attn_mask
+                # Ref. https://github.com/pytorch/pytorch/blob/753ba5d30a361be4f610cf7dde4fd63726ed8f86/aten/src/ATen/native/transformers/sdp_utils_cpp.h#L271
+                y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=self.is_causal)
+            else:
+                if self.is_causal:
+                    # NOTE 根据 github.com/pytorch/pytorch/issues/115262 和 108108，当Q长度为1时，需要手动传入注意力掩模，而不能简单设置is_causal
+                    #      此处参考了Llama3的代码：https://github.com/meta-llama/llama3/blob/11817d47e1ba7a4959b025eb1ca308572e0e3963/llama/model.py#L294
+                    mask = self.mask[:,:,:T,:T].contiguous().view(T, T)
+                    mask = torch.hstack([torch.zeros((T, min(start_pos, self.block_size)), device=q.device), mask]).type_as(q)
+                else:
+                    mask = None
+                y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=self.dropout if self.training else 0, is_causal=False)
         else:
-            # manual implementation of attention
+            if self.is_causal:
+                mask = self.mask[:,:,:T,:T]
+            else:
+                mask = torch.zeros(self.mask.shape, device=att.device)
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            att = att + mask
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -209,8 +244,8 @@ class Block(nn.Module):
         self.ln_2 = RMSNorm(config.n_embd, eps=config.norm_eps)
         self.mlp = MLP(config)
 
-    def forward(self, x, pos_cis):
-        x = x + self.attn(self.ln_1(x), pos_cis)
+    def forward(self, x, pos_cis, start_pos, use_kv_cache=False):
+        x = x + self.attn(self.ln_1(x), pos_cis, start_pos, use_kv_cache=use_kv_cache)
         x = x + self.mlp(self.ln_2(x))
         return x
 
@@ -264,7 +299,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, loss_mask=None):
+    def forward(self, idx, targets=None, loss_mask=None, start_pos=0, use_kv_cache=False):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
@@ -273,18 +308,19 @@ class GPT(nn.Module):
 
         # RoPE
         if self.config.use_rope:
-            pos_cis = self.pos_cis[:t]
+            self.pos_cis = self.pos_cis.to(tok_emb.device)
+            pos_cis = self.pos_cis[start_pos : start_pos + t]
         # Trained position embedding
         else:
             pos_cis = None
             pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
-            pos_emb = self.transformer.wpe(pos) # position embeddings of shape (BlockSize, n_embd)
+            pos_emb = self.transformer.wpe(pos)[start_pos : start_pos + t] # position embeddings of shape (BlockSize, n_embd)
             tok_emb = tok_emb + pos_emb
 
         x = self.transformer.drop(tok_emb)
 
         for block in self.transformer.h:
-            x = block(x, pos_cis)
+            x = block(x, pos_cis, start_pos, use_kv_cache=use_kv_cache)
         x = self.transformer.ln_f(x)
 
         # 计算损失
@@ -356,11 +392,15 @@ class GPT(nn.Module):
 
 
     @torch.no_grad()
-    def generate_next_token(self, idx, temperature=1.0, top_k=None, repetition_penalty=1.1):
+    def generate_next_token(self, idx, is_prefill=True, temperature=1.0, top_k=None, repetition_penalty=1.1):
         # if the sequence context is growing too long we must crop it at block_size
         idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
         # forward the model to get the logits for the index in the sequence
-        logits, _ = self(idx_cond) # shape=(BatchSize, BlockSize, VocabSize)
+        if (not USE_KV_CACHE) or is_prefill:
+            logits, _ = self(idx_cond, start_pos=0, use_kv_cache=USE_KV_CACHE) # shape=(BatchSize, BlockSize, VocabSize)
+        else:
+            start_pos = min(idx_cond.size(1) - 1, self.config.block_size)
+            logits, _ = self(idx_cond[:, -1:], start_pos=start_pos, use_kv_cache=True) # shape=(BatchSize, BlockSize, VocabSize)
         logits = logits[:, -1, :]  # shape=(BatchSize, VocabSize)
         # repetition penalty: ref arxiv:1909.05858
         for token in set(idx_cond.tolist()[0]):
@@ -385,11 +425,22 @@ class GPT(nn.Module):
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
-        for _ in range(max_new_tokens):
-            idx_next = self.generate_next_token(idx, temperature, top_k, repetition_penalty)
+        prompt_length = idx.size(1)
+        if prompt_length > self.config.block_size:
+            print(f"提示语太长了QAQ")
+            return idx
+        for i in range(max_new_tokens):
+            idx_next = self.generate_next_token(
+                idx,
+                is_prefill=(i == 0),
+                temperature=temperature,
+                top_k=top_k,
+                repetition_penalty=repetition_penalty)
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
-
+            if prompt_length + i >= self.config.block_size:
+                print("...\n(欲言又止..止言又欲..整理思路..忘了说啥 (●'◡'●))")
+                return idx
             if callback is not None:
                 res = callback(idx_next)
                 if res == False:

@@ -88,10 +88,9 @@ class TrainGPT():
         torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
         torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
-        if self.train_config.use_amp:
-            torch.backends.cuda.enable_flash_sdp(self.train_config.sdp_kernel == "flash")
-            torch.backends.cuda.enable_mem_efficient_sdp(self.train_config.sdp_kernel == "mem_efficient")
-            torch.backends.cuda.enable_math_sdp(self.train_config.sdp_kernel == "math")
+        torch.backends.cuda.enable_flash_sdp(self.train_config.sdp_kernel == "flash")
+        torch.backends.cuda.enable_mem_efficient_sdp(self.train_config.sdp_kernel == "mem_efficient")
+        torch.backends.cuda.enable_math_sdp(self.train_config.sdp_kernel == "math")
 
     def init_model(self):
         # 继续训练
@@ -109,7 +108,7 @@ class TrainGPT():
             # 恢复模型参数
             self.model = GPT(self.model_config)
             self.model.to(self.current_device)
-            self.model.load_state_dict(_checkpoint["model"])
+            self.model.load_state_dict(_checkpoint["model"], strict=False)
 
         # 从零开始训练（from scratch）
         else:

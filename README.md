@@ -89,6 +89,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 python -m torch.distributed.run -
 - `-t` or `--temperature`：浮点数，生成温度参数，默认值为1.0，越高则生成越随机。
 - `-k` or `--top_k`：整数，前k采样，默认值为5，越高则生成越多样。
 - `-r` or `--repetition_penalty`：浮点数，复读惩罚，默认值为1.2，越大则越抑制生成重复的词元。
+- `-p` or `--profile`：开关标识。若启用，则统计性能数据，包括首词元延迟、词元生成速率等。
 
 ## 技术要点简述
 
@@ -120,7 +121,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 python -m torch.distributed.run -
 - 模型结构以GPT（[karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)）为主要参考，加入了RoPE位置编码（同时兼容原有的训练位置编码），将LayerNorm替换为RMSNorm。
 - 可选择因果自注意力或完全的自注意力，前者用于语言模型，后者用于在其他任务上的探索。
 - 词元嵌入层（`wte`）与解码层（`lm_head`）共享权重。关于这个问题，可参考文献[]。
-- 后续计划加入分组查询注意力（GQA）和KV-Cache。
+- 支持KV-Cache。后续计划加入分组查询注意力（GQA）。
 
 模型结构参数`model_config.json`：
 

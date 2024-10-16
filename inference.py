@@ -1,4 +1,6 @@
 import os
+import time
+import readline
 import argparse
 import torch
 from tokenizer import Tokenizer
@@ -14,7 +16,8 @@ class InferenceGPT:
             max_length=None,
             temperature=1.0,
             top_k=5,
-            repetition_penalty=1.2
+            repetition_penalty=1.2,
+            profile=False
         ):
         self.checkpoint_path = checkpoint_path
         self.device = device
@@ -51,7 +54,7 @@ class InferenceGPT:
 
         # 加载模型权重
         self.model = GPT(model_config)
-        self.model.load_state_dict(checkpoint['model'])
+        self.model.load_state_dict(checkpoint['model'], strict=False)
         self.model.eval()
         self.model.to(device)
 
@@ -61,9 +64,30 @@ class InferenceGPT:
         self.encode = lambda s: self.tokenizer.encode(s)
         self.decode = lambda l: self.tokenizer.decode(l)
 
+        # 性能计时器
+        self.profile = profile
+        self.token_count = 0
+        self.times = []
+        self.tps_record = []
+
+    def measure(self, interval):
+        t = time.time_ns()
+        self.times.append(t)
+        if len(self.times) > 4:
+            self.times = self.times[1:]
+            t_avg = (self.times[3] - self.times[0]) / 3
+            return interval / (t_avg / 1e9)
+        else:
+            return False
+
     def typewriter(self, token_tensor):
         token_list = token_tensor[0].tolist()
         chars = self.decode(token_list)
+        self.token_count = self.token_count + 1
+        if self.profile and self.token_count % 4 == 0:
+            tps = self.measure(4)
+            if tps:
+                self.tps_record.append(tps)
         if "<|eos|>" in chars:
             print(chars.split("<|eos|>")[0], end="", flush=True)
             return False
@@ -85,9 +109,13 @@ class InferenceGPT:
                     prompt = f"<|instruct_mark|>{prompt}<|response_mark|>"
                 x = torch.tensor(self.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
                 print("\x1b[34;1mNano:\x1b[0m ", end="", flush=True)
-                y = self.model.auto_regressive_generate(
-                    x, self.max_length, self.temperature, self.top_k, self.repetition_penalty, callback=self.typewriter)
+                y = self.model.auto_regressive_generate(x, self.max_length, self.temperature, self.top_k, self.repetition_penalty, callback=self.typewriter)
                 print("\n")
+                if self.profile:
+                    print(f"TPS = {[round(tps) for tps in self.tps_record]}\n")
+                    self.times = []
+                    self.tps_record = []
+                    self.token_count = 0
 
 def main():
     print(f"\x1b[36;1mNanoLM\x1b[0m - https://github.com/bd4sur/Nano")
@@ -100,6 +128,7 @@ def main():
     parser.add_argument("-t", "--temperature", type=float, default=1.0)
     parser.add_argument("-k", "--top_k", type=int, default=5)
     parser.add_argument("-r", "--repetition_penalty", type=float, default=1.2)
+    parser.add_argument("-p", "--profile", action='store_true')
     args = parser.parse_args()
 
     infer = InferenceGPT(
@@ -109,7 +138,8 @@ def main():
         max_length=args.max_length,
         temperature=args.temperature,
         top_k=args.top_k,
-        repetition_penalty=args.repetition_penalty
+        repetition_penalty=args.repetition_penalty,
+        profile=args.profile
     )
     infer.run()
 
