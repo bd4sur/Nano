@@ -32,10 +32,14 @@ tokenizer = Tokenizer()
 tokenizer.load_from_config_file(os.path.join(base_path, TOKENIZER_PATH))
 
 
-def get_file_chunk_iterator(filepath, chunk_size=65536):
+def get_file_chunk_iterator(filepath, chunk_size=65536, offset=0, max_offset=1e12):
+    charpos = 0
     with open(filepath, mode="r", encoding="utf-8") as f:
-        while True:
+        f.read(offset)
+        charpos += offset
+        while charpos < max_offset:
             chunk = f.read(chunk_size)
+            charpos += chunk_size
             if not chunk:
                 return
             yield chunk
@@ -49,7 +53,6 @@ def get_file_line_iterator(filepath):
             yield line
 
 def generate_pretrain_dataset(input_path, train_output_path, val_output_path):
-    print(f"Reading and encoding raw text file...")
 
     with os.popen(f"wc --chars {input_path}") as f:
         res = f.readlines()[0]
@@ -57,47 +60,98 @@ def generate_pretrain_dataset(input_path, train_output_path, val_output_path):
 
     print(f"  Total char = {charcount}")
 
-    blocks = []
-    token_buffer = []
-    chunk_size = 1024
-    text_iterator = get_file_chunk_iterator(input_path, chunk_size=chunk_size)
+    BLOCKS_PER_PART = 32768
 
-    if USE_MP:
+    BLOCKS_PER_CHUNK = 8
+    CHUNK_LENGTH = BLOCKS_PER_CHUNK * (BLOCK_SIZE+1)
+    CHUNKS_PER_PART = BLOCKS_PER_PART // BLOCKS_PER_CHUNK
+    CHARS_PER_PART = CHUNK_LENGTH * CHUNKS_PER_PART
+    TOTAL_PARTS = charcount // CHARS_PER_PART + 1
+
+    print(f"Total parts = {TOTAL_PARTS}")
+
+    train_temp_file_paths = []
+    val_temp_file_paths = []
+
+    for part_index in range(TOTAL_PARTS):
+
+        print(f"Reading and encoding raw text file of Part {part_index}/{TOTAL_PARTS}...")
+
+        train_temp = os.path.join(base_path, f"dataset_preprocessed/train_temp_{part_index}.base64")
+        val_temp = os.path.join(base_path, f"dataset_preprocessed/val_temp_{part_index}.base64")
+
+        token_buffer = []
+        blocks = []
+
+        text_iterator = get_file_chunk_iterator(
+            input_path,
+            chunk_size=CHUNK_LENGTH,
+            offset=part_index * CHARS_PER_PART,
+            max_offset=(part_index+1) * CHARS_PER_PART,)
+
         pool = Pool(os.cpu_count())
         res = pool.imap(func=tokenizer.encode, iterable=text_iterator, chunksize=64)
-        for tokens in tqdm(res, total=int(charcount/chunk_size)):
+        for i, tokens in tqdm(enumerate(res), total=CHUNKS_PER_PART):
             token_buffer.extend(tokens)
-            while len(token_buffer) >= (BLOCK_SIZE+1):
-                # TODO 在<|eos|>处切割chunk
-                blocks.append(token_buffer[0 : (BLOCK_SIZE+1)])
-                # 每一条数据都比BLOCK_SIZE多一个，用于预测下一字符的训练
-                token_buffer = token_buffer[(BLOCK_SIZE+1) : ]
+            # if i > CHUNKS_PER_PART:
+            #     break
         pool.close()
         pool.join()
-    else:
-        for chunk in tqdm(text_iterator, total=int(charcount/chunk_size)):
-            tokens = tokenizer.encode(chunk)
-            token_buffer.extend(tokens)
-            while len(token_buffer) >= (BLOCK_SIZE+1):
-                blocks.append(token_buffer[0 : (BLOCK_SIZE+1)])
-                token_buffer = token_buffer[(BLOCK_SIZE+1) : ]
 
-    print(f"  Length of tokens: {len(token_buffer):,}")
+        del text_iterator
 
-    # 巨大数据集的打乱算法
-    print(f"Shuffling text blocks and write to file...")
-    line_indexes = list(range(len(blocks)))
-    random.shuffle(line_indexes)
+        print(f"  Split tokens into blocks ...")
+        for offset in range(0, len(token_buffer), (BLOCK_SIZE+1)):
+            # TODO 在<|eos|>处切割chunk
+            # 每一条数据都比BLOCK_SIZE多一个，用于预测下一字符的训练
+            blocks.append(token_buffer[offset : offset + (BLOCK_SIZE+1)])
 
+        del token_buffer
+
+        # 在part内部打乱，并写入临时文件
+        print(f"  Shuffling text blocks and write to file...")
+        line_indexes = list(range(len(blocks)))
+        random.shuffle(line_indexes)
+
+        with open(train_temp, "w", encoding="utf-8") as f_train:
+            for li in range(len(blocks)):
+                train_block = pickle.dumps([blocks[line_indexes[li]], None])
+                f_train.writelines(str(base64.b64encode(train_block), encoding="utf-8") + "\n")
+                # f_train.writelines(f"Block {line_indexes[li]} : " + tokenizer.decode(blocks[line_indexes[li]]) + "\n")
+
+        with open(val_temp, "w", encoding="utf-8") as f_val:
+            for li in range(int(len(blocks) * 0.95), len(blocks)):
+                val_block = pickle.dumps([blocks[line_indexes[li]], None])
+                f_val.writelines(str(base64.b64encode(val_block), encoding="utf-8") + "\n")
+
+        train_temp_file_paths.append(train_temp)
+        val_temp_file_paths.append(val_temp)
+
+    # 在part之间打乱，写入统一文件，并删除临时文件
+    print(f"Shuffling all parts and write to file...")
+    part_indexes = list(range(len(train_temp_file_paths)))
+
+    random.shuffle(part_indexes)
     with open(train_output_path, "w", encoding="utf-8") as f_train:
-        for li in tqdm(range(len(blocks))):
-            train_block = pickle.dumps([blocks[line_indexes[li]], None])
-            f_train.writelines(str(base64.b64encode(train_block), encoding="utf-8") + "\n")
+        for pindex in part_indexes:
+            p = train_temp_file_paths[pindex]
+            print(f"  Writing part {p}...")
+            with open(p, "r", encoding="utf-8") as tp:
+                lines = tp.read()
+            f_train.write(lines)
+            print(f"  Delete temp file {p}...")
+            os.remove(p)
 
+    random.shuffle(part_indexes)
     with open(val_output_path, "w", encoding="utf-8") as f_val:
-        for li in tqdm(range(int(len(blocks) * 0.95), len(blocks))):
-            val_block = pickle.dumps([blocks[line_indexes[li]], None])
-            f_val.writelines(str(base64.b64encode(val_block), encoding="utf-8") + "\n")
+        for pindex in part_indexes:
+            p = val_temp_file_paths[pindex]
+            print(f"  Writing part {p}...")
+            with open(p, "r", encoding="utf-8") as tp:
+                lines = tp.read()
+            f_val.write(lines)
+            print(f"  Delete temp file {p}...")
+            os.remove(p)
 
     print(f"Done.")
 

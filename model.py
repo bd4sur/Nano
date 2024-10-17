@@ -25,7 +25,6 @@ class ModelConfig:
     n_embd: int = 128
     dropout: float = 0.0
     bias: bool = False
-    # kv_cache: bool = True
     use_rope: bool = True
     norm_eps: float = 1e-5
     is_causal: bool = True

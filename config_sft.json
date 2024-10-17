@@ -1,5 +1,5 @@
 {
-    "from_checkpoint": "/home/bd4sur/ai/Nano/checkpoint/checkpoint_20241014_002814_step_60000.pt",
+    "from_checkpoint": "/home/bd4sur/ai/Nano/checkpoint/checkpoint_20241016_004057_step_264000.pt",
     "save_checkpoint_to": "/home/bd4sur/ai/Nano/checkpoint",
     "dataset_path": [
         ["/home/bd4sur/ai/Nano/dataset_preprocessed/sft_train.base64", "/home/bd4sur/ai/Nano/dataset_preprocessed/sft_val.base64"]
