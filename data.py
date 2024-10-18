@@ -31,18 +31,21 @@ TOKENIZER_PATH = "tokenizer/tokenizer_16384.json"
 tokenizer = Tokenizer()
 tokenizer.load_from_config_file(os.path.join(base_path, TOKENIZER_PATH))
 
-
-def get_file_chunk_iterator(filepath, chunk_size=65536, offset=0, max_offset=1e12):
-    charpos = 0
+def get_file_chunk_iterator(filepath, chunk_size=65536):
     with open(filepath, mode="r", encoding="utf-8") as f:
-        f.read(offset)
-        charpos += offset
-        while charpos < max_offset:
+        while True:
             chunk = f.read(chunk_size)
-            charpos += chunk_size
             if not chunk:
                 return
             yield chunk
+
+def get_some_chunks(iter, n_chunks=1):
+    for _ in range(n_chunks):
+        try:
+            c = next(iter)
+            yield c
+        except StopIteration:
+            return
 
 def get_file_line_iterator(filepath):
     with open(filepath, mode="r", encoding="utf-8") as f:
@@ -52,8 +55,10 @@ def get_file_line_iterator(filepath):
                 return
             yield line
 
+# 将数据集分为若干块，块内打乱，块间乱序拼接，以节约内存
 def generate_pretrain_dataset(input_path, train_output_path, val_output_path):
 
+    print(f"Counting character num...")
     with os.popen(f"wc --chars {input_path}") as f:
         res = f.readlines()[0]
         charcount = int(res.split(" ")[0])
@@ -73,9 +78,11 @@ def generate_pretrain_dataset(input_path, train_output_path, val_output_path):
     train_temp_file_paths = []
     val_temp_file_paths = []
 
+    text_iterator = get_file_chunk_iterator(input_path, chunk_size=CHUNK_LENGTH)
+
     for part_index in range(TOTAL_PARTS):
 
-        print(f"Reading and encoding raw text file of Part {part_index}/{TOTAL_PARTS}...")
+        print(f"Reading and encoding raw text file of Part {part_index+1}/{TOTAL_PARTS}...")
 
         train_temp = os.path.join(base_path, f"dataset_preprocessed/train_temp_{part_index}.base64")
         val_temp = os.path.join(base_path, f"dataset_preprocessed/val_temp_{part_index}.base64")
@@ -83,28 +90,24 @@ def generate_pretrain_dataset(input_path, train_output_path, val_output_path):
         token_buffer = []
         blocks = []
 
-        text_iterator = get_file_chunk_iterator(
-            input_path,
-            chunk_size=CHUNK_LENGTH,
-            offset=part_index * CHARS_PER_PART,
-            max_offset=(part_index+1) * CHARS_PER_PART,)
+        chunk_iterator = get_some_chunks(text_iterator, CHUNKS_PER_PART)
 
         pool = Pool(os.cpu_count())
-        res = pool.imap(func=tokenizer.encode, iterable=text_iterator, chunksize=64)
-        for i, tokens in tqdm(enumerate(res), total=CHUNKS_PER_PART):
+        res = pool.imap(func=tokenizer.encode, iterable=chunk_iterator, chunksize=64)
+        for tokens in tqdm(res, total=CHUNKS_PER_PART):
             token_buffer.extend(tokens)
-            # if i > CHUNKS_PER_PART:
-            #     break
         pool.close()
         pool.join()
-
-        del text_iterator
 
         print(f"  Split tokens into blocks ...")
         for offset in range(0, len(token_buffer), (BLOCK_SIZE+1)):
             # TODO 在<|eos|>处切割chunk
             # 每一条数据都比BLOCK_SIZE多一个，用于预测下一字符的训练
-            blocks.append(token_buffer[offset : offset + (BLOCK_SIZE+1)])
+            blk = token_buffer[offset : offset + (BLOCK_SIZE+1)]
+            # 如果长度不足(BLOCK_SIZE+1)，则放弃
+            if len(blk) < (BLOCK_SIZE+1):
+                continue
+            blocks.append(blk)
 
         del token_buffer
 
