@@ -55,6 +55,14 @@ def get_file_line_iterator(filepath):
                 return
             yield line
 
+def get_some_lines(iter, lines=1):
+    for _ in range(lines):
+        try:
+            c = next(iter)
+            yield c
+        except StopIteration:
+            return
+
 # 将数据集分为若干块，块内打乱，块间乱序拼接，以节约内存
 def generate_pretrain_dataset(input_path, train_output_path, val_output_path):
 
@@ -170,6 +178,8 @@ def apply_template_and_encode(line):
             return False
         template = f"<|instruct_mark|>{question}<|response_mark|>{answer}<|eos|>"
         ids = tokenizer.encode(template)
+        if len(ids) > BLOCK_SIZE:
+            return False
         ids = [ids[i] if i < len(ids) else tokenizer.special_tokens["<|padding|>"] for i in range(BLOCK_SIZE + 1)]
         mask = [0] * (1 + len(question) + 1) + [1] * (len(answer) + 1)
         mask = [mask[i] if i < len(mask) else 0 for i in range(BLOCK_SIZE + 1)]
@@ -179,50 +189,92 @@ def apply_template_and_encode(line):
         return False
 
 def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path):
-    all_items = []
 
+    print(f"Counting character num...")
     with os.popen(f"wc --lines {input_jsonl_path}") as f:
         res = f.readlines()[0]
         linecount = int(res.split(" ")[0])
     print(f"  Total lines = {linecount}")
 
-    line_iterator = get_file_line_iterator(input_jsonl_path)
+    LINES_PER_PART = 131072
+    TOTAL_PARTS = linecount // LINES_PER_PART + 1
 
-    if USE_MP:
+    print(f"Total parts = {TOTAL_PARTS}")
+
+    train_temp_file_paths = []
+    val_temp_file_paths = []
+
+    text_iterator = get_file_line_iterator(input_jsonl_path)
+
+    for part_index in range(TOTAL_PARTS):
+
+        print(f"Reading and encoding raw text file of Part {part_index+1}/{TOTAL_PARTS}...")
+
+        train_temp = os.path.join(base_path, f"dataset_preprocessed/sft_train_temp_{part_index}.base64")
+        val_temp = os.path.join(base_path, f"dataset_preprocessed/sft_val_temp_{part_index}.base64")
+
+        all_items = []
+
+        line_iterator = get_some_lines(text_iterator, LINES_PER_PART)
+
         pool = Pool(os.cpu_count())
         res = pool.imap(func=apply_template_and_encode, iterable=line_iterator, chunksize=64)
-        for item in tqdm(res, total=linecount):
+        for item in tqdm(res, total=LINES_PER_PART):
             if not item:
                 continue
             all_items.append(item)
         pool.close()
         pool.join()
-    else:
-        for line in tqdm(line_iterator, total=linecount):
-            item = apply_template_and_encode(line)
-            if not item:
-                continue
-            all_items.append(item)
 
-    print(f"Shuffling sft blocks and write to file ...")
-    line_indexes = list(range(len(all_items)))
-    random.shuffle(line_indexes)
+        # 在part内部打乱，并写入临时文件
+        print(f"  Shuffling SFT items and write to file...")
+        line_indexes = list(range(len(all_items)))
+        random.shuffle(line_indexes)
 
+        with open(train_temp, "w", encoding="utf-8") as f_train:
+            for i in range(len(all_items)):
+                item = all_items[i]
+                ids = item[0]
+                mask = item[1]
+                train_data = pickle.dumps([ids, mask])
+                f_train.writelines(str(base64.b64encode(train_data), encoding="utf-8") + "\n")
+
+        with open(val_temp, "w", encoding="utf-8") as f_val:
+            for i in range(int(len(all_items) * 0.95), len(all_items)):
+                item = all_items[i]
+                ids = item[0]
+                mask = item[1]
+                val_data = pickle.dumps([ids, mask])
+                f_val.writelines(str(base64.b64encode(val_data), encoding="utf-8") + "\n")
+
+        train_temp_file_paths.append(train_temp)
+        val_temp_file_paths.append(val_temp)
+
+    # 在part之间打乱，写入统一文件，并删除临时文件
+    print(f"Shuffling all parts and write to file...")
+    part_indexes = list(range(len(train_temp_file_paths)))
+
+    random.shuffle(part_indexes)
     with open(train_output_path, "w", encoding="utf-8") as f_train:
-        for i in tqdm(range(len(all_items))):
-            item = all_items[i]
-            ids = item[0]
-            mask = item[1]
-            train_data = pickle.dumps([ids, mask])
-            f_train.writelines(str(base64.b64encode(train_data), encoding="utf-8") + "\n")
+        for pindex in part_indexes:
+            p = train_temp_file_paths[pindex]
+            print(f"  Writing part {p}...")
+            with open(p, "r", encoding="utf-8") as tp:
+                lines = tp.read()
+            f_train.write(lines)
+            print(f"  Delete temp file {p}...")
+            os.remove(p)
 
+    random.shuffle(part_indexes)
     with open(val_output_path, "w", encoding="utf-8") as f_val:
-        for i in tqdm(range(int(len(all_items) * 0.95), len(all_items))):
-            item = all_items[i]
-            ids = item[0]
-            mask = item[1]
-            val_data = pickle.dumps([ids, mask])
-            f_val.writelines(str(base64.b64encode(val_data), encoding="utf-8") + "\n")
+        for pindex in part_indexes:
+            p = val_temp_file_paths[pindex]
+            print(f"  Writing part {p}...")
+            with open(p, "r", encoding="utf-8") as tp:
+                lines = tp.read()
+            f_val.write(lines)
+            print(f"  Delete temp file {p}...")
+            os.remove(p)
 
     print(f"Done.")
 
