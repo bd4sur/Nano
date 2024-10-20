@@ -1,6 +1,8 @@
 
 # Nano：大模型，小玩具
 
+![ ](doc/nano_58m_20241018_pt_demo.gif)
+
 本仓库：
 
 - 是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。
@@ -10,7 +12,7 @@
 
 - 用尽可能少的依赖，实现一个具体而微的Transformer语言模型。
 - 完整实现数据预处理、词元化、预训练、监督微调、推理过程。暂不打算实现高效微调（如LoRA）、人类对齐等过程。
-- 在廉价硬件上从头训练一个[千万量级参数的模型](https://huggingface.co/bd4sur/ham_radio_nanolm_0930)（[B站视频](https://www.bilibili.com/video/BV1MtxteUEge)）。
+- 在廉价硬件上从头训练一个[千万量级参数的模型](https://huggingface.co/bd4sur/Nano-58M-20241018)（[B站视频](https://www.bilibili.com/video/BV1MtxteUEge)）。
 - 研究模型训练的动力学、训/推加速、算法改进等问题。
 - 探索Transformer模型在自然语言处理以外的问题和模态上的潜能。
 
@@ -52,11 +54,13 @@ python -m pip install -r requirements.txt
 
 开始训练之前，请先确认几件事：
 
-- 训练可能耗费几小时乃至几天的时间！具体时间取决于训练设置和硬件。
-- 建议使用nvidia计算卡，以计算能力7.0+为宜，如V100、2080ti、3090、4090、A100等，如果有多卡甚至多机多卡环境最好。
+- 训练可能耗费几小时乃至几天的时间！具体时间取决于训练设置和硬件，参考下文。
+- 若长时间训练，**强烈建议使用 [GNU Screen](https://www.gnu.org/software/screen/) 等终端切换工具，保证训练进程不被意外杀掉**。
 - 若使用CPU训练，将`config_pretrain/sft.json`中的`device`字段设为`"cpu"`。
 - 若使用P40、P100等老旧设备，将`config_pretrain/sft.json`中的`sdp_kernel`字段设为`"math"`。
-- 首次运行，建议使用单机单卡或CPU进行验证性训练。若使用多机分布式训练，请先提前配置好分布式环境，例如无密码ssh认证等。
+- 若使用多机分布式训练，请先提前配置好分布式环境，例如无密码ssh认证等。
+
+> 简单估算训练时间：对58M参数的语言模型(L=16, H=16, E=512, BlockSize=512)作预训练，按照[文献](https://arxiv.org/abs/2204.02311)中提供的算法进行计算，每个词元所需计算量约为403MFlop。如果使用10亿(即1B=1e9)词元的语料进行一轮(epoch)预训练，则总计算量约为403PFlop。实际使用单卡A100进行训练，**实测耗时约5200秒（1.44小时）**，对应运算速度为78TFlop/s，是A100标称BF16算力312TFlop/s的25%，也即MFU为25%左右。
 
 **预训练**：
 

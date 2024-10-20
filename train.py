@@ -252,6 +252,15 @@ class TrainGPT():
         for i, line in enumerate(self.val_data.line_num):
             self.log(f"  Valid set {i} : {line} samples ({line * self.model_config.block_size} tokens)")
 
+        # DDP：每个rank用完全独立的DataLoader，间隔(rank-1)取批次，模拟各个rank交替从训练集中取batch
+        #   初始化阶段，让每个worker延迟 self.ddp_local_rank 次取batch。图示如下（等号代表初始延迟，减号代表每一步迭代中间的固定延迟）：
+        #   rank0  0---4---8---c
+        #   rank1  =1---5---9---
+        #   rank2  ==2---6---a--
+        #   rank3  ===3---7---b-
+        for _ in range(self.ddp_local_rank):
+            self.get_batch("train")
+
     def get_batch(self, phase):
         if phase == "train":
             dataset = self.train_data
@@ -383,6 +392,10 @@ class TrainGPT():
 
             t1 = time.time_ns()
             dt = (t1 - t0) / 1e9
+
+            # DDP：每个worker间隔(ddp_world_size-1)取batch，模拟各个rank交替从训练集中取batch
+            for _ in range(self.ddp_world_size - 1):
+                self.get_batch("train")
 
             if iter > 0 and iter % self.train_config.log_interval == 0:
                 t1_total = (time.time_ns(), iter)
