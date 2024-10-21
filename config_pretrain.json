@@ -7,7 +7,7 @@
     "tokenizer_path": "/home/bd4sur/ai/Nano/tokenizer/tokenizer_16384.json",
 
     "random_seed": 39,
-    "batch_size": 16,
+    "batch_size": 160,
     "gradient_accumulation_steps": 1,
     "grad_clip": 1.0,
 
@@ -19,7 +19,7 @@
     "beta2": 0.99,
 
     "decay_lr": true,
-    "warmup_iters": 1000,
+    "warmup_iters": 10000,
     "lr_decay_iters": 1e9,
     "min_lr": 6e-5,
 

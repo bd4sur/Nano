@@ -237,15 +237,15 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         # self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.ln_1 = RMSNorm(config.n_embd, eps=config.norm_eps)
+        self.norm_1 = RMSNorm(config.n_embd, eps=config.norm_eps)
         self.attn = MaskedSelfAttention(config)
         # self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        self.ln_2 = RMSNorm(config.n_embd, eps=config.norm_eps)
+        self.norm_2 = RMSNorm(config.n_embd, eps=config.norm_eps)
         self.mlp = MLP(config)
 
     def forward(self, x, pos_cis, start_pos, use_kv_cache=False):
-        x = x + self.attn(self.ln_1(x), pos_cis, start_pos, use_kv_cache=use_kv_cache)
-        x = x + self.mlp(self.ln_2(x))
+        x = x + self.attn(self.norm_1(x), pos_cis, start_pos, use_kv_cache=use_kv_cache)
+        x = x + self.mlp(self.norm_2(x))
         return x
 
 
@@ -262,7 +262,7 @@ class GPT(nn.Module):
             wpe = nn.Embedding(config.block_size, config.n_embd) if not self.config.use_rope else None,
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            norm_f = RMSNorm(config.n_embd, eps=config.norm_eps),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
@@ -320,7 +320,7 @@ class GPT(nn.Module):
 
         for block in self.transformer.h:
             x = block(x, pos_cis, start_pos, use_kv_cache=use_kv_cache)
-        x = self.transformer.ln_f(x)
+        x = self.transformer.norm_f(x)
 
         # 计算损失
         if targets is not None: # target.shape=(BatchSize, BlockSize)
