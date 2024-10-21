@@ -97,6 +97,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 python -m torch.distributed.run -
 
 ## 技术要点简述
 
+![ ](doc/nano-llm.png)
+
 **数据预处理**
 
 - 包含文本分块、数据集划分、随机打乱、SFT模板组装、词元化等处理步骤。
