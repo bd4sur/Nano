@@ -40,7 +40,8 @@ class DataLoader:
             # 当前行号
             self.current_line_pos[index] = 0
             # 行数统计
-            with os.popen(f"wc -l {fp}") as f:
+            cmd = f"powershell -Command (Get-Content {fp}).Count" if os.name == "nt" else f"wc -l {fp}"
+            with os.popen(cmd) as f:
                 res = f.readlines()[0]
                 self.line_num[index] = int(res.split(" ")[0])
             # print(f"Lines: {self.line_num[index]}")
@@ -165,6 +166,8 @@ class TrainGPT():
             self.ddp_world_size = 1
 
         if self.is_master_process:
+            if len(self.train_config.save_checkpoint_to) <= 0 or self.train_config.save_checkpoint_to is None:
+                self.train_config.save_checkpoint_to = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkpoint")
             os.makedirs(self.train_config.save_checkpoint_to, exist_ok=True)
 
         torch.manual_seed(self.train_config.random_seed + _seed_offset)

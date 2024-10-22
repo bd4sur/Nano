@@ -1,25 +1,18 @@
 
 # Nano：大模型，小玩具
 
+**Nano**是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。主要复刻自 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)，并借鉴了多个开源模型实现和学习项目。
+
 ![ ](doc/nano_58m_20241018_pt_demo.gif)
-
-本仓库：
-
-- 是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。
-- 主要复刻自 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)，并借鉴了多个开源模型实现和学习项目。
 
 期望：
 
-- 用尽可能少的依赖，实现一个具体而微的Transformer语言模型。
-- 完整实现数据预处理、词元化、预训练、监督微调、推理过程。暂不打算实现高效微调（如LoRA）、人类对齐等过程。
-- 在廉价硬件上从头训练一个[千万量级参数的模型](https://huggingface.co/bd4sur/Nano-58M-20241018)（[B站视频](https://www.bilibili.com/video/BV1MtxteUEge)）。
+- 用尽可能少的依赖，尤其不依赖🤗，实现一个具体而微的Transformer语言模型。
+- 完整实现数据处理、预训练、监督微调、推理过程。暂不实现高效微调（如LoRA）、人类对齐。
+- 从头训练一个会说人话的[50M级参数规模的语言模型](https://huggingface.co/bd4sur/Nano-58M-20241018)（[B站视频](https://www.bilibili.com/video/BV1MtxteUEge)）。
 - 研究模型训练的动力学、训/推加速、算法改进等问题。
 - 探索Transformer模型在自然语言处理以外的问题和模态上的潜能。
-
-建议读者：
-
-- 对语言模型的能力有合乎理性的预期，认识到大语言模型（的生产）是昂贵而复杂的系统工程。
-- 准备好计算资源，做好运维保障。大模型是个非常烧钱的东西，资源虽说多多益善，但终究还是丰俭由人。
+- 建立起关于大语言模型的合理预期和感性经验，对大语言模型技术祛魅。
 
 为什么叫“Nano”：
 
@@ -32,11 +25,13 @@
 
 [B站视频](https://www.bilibili.com/video/BV1uv42127qP)
 
-- 全流程速通，旨在无需设置任何参数即可“开箱即用”地跑通全部流程，直至训练出一个能用的语言模型。
+- 全流程速通，旨在“开箱即用”地跑通推理乃至训练流程。
 - 如果只是想体验推理效果，可直接执行第1、4步骤。
-- 尽管全流程速通不需要对Nano有任何了解，但我还是建议你对于深度学习的环境搭建和配置有一定的经验。
 
-**1️⃣ 安装依赖**：建议在conda虚拟环境中安装。
+**1️⃣ 安装依赖**
+
+- 硬件：建议使用英伟达GPU，以计算能力7.0以上的为宜，详见[英伟达官网](https://developer.nvidia.com/cuda-gpus)。若只有CPU也无妨。
+- 软件：建议使用Ubuntu等Linux操作系统，并且在conda虚拟环境中安装依赖：
 
 ```
 conda create -n nano python=3.11 pysocks -y
@@ -46,13 +41,25 @@ python -m pip install -r requirements.txt
 
 **2️⃣ 数据下载·预处理**
 
-- 下载本人整理的[数据集](https://huggingface.co/bd4sur/nano_dataset)，解压口令“`nano`”。
-- 解压得到`pretrain.txt`和`sft.jsonl`两个文件，将这两个文件移动到`dataset`目录下。
-- 执行`python data.py`，进行数据预处理。
+如果只是想跑通流程：
+
+- 直接执行`python data.py`，对预置的精神分析黑话语料作预处理。
+
+如果真的想让模型学会说人话：
+
+- 下载本人整理的[10B词元预训练数据集](https://huggingface.co/datasets/bd4sur/Nano-PT-10B)和[指令微调数据集]()，解压口令“`nano`”。
+- 解压得到`pretrain.txt`和`sft.jsonl`两个文件，移动到`dataset`目录下。
+- 将`data.py`中`PRETRAIN_DATASETS`和`SFT_DATASET`替换为刚刚下载的两个文件。
+- 执行`python data.py`，进行数据预处理。可能占用大量记忆和存储空间，请提前预留。
 
 **3️⃣ 预训练和监督微调**
 
-开始训练之前，请先确认几件事：
+如果只是想跑通流程：
+
+- 将`config_pretrain.json`中`dataset_path`和`tokenizer_path`改成实际的绝对路径。
+- 直接执行`bash start_pretrain.sh`。如果使用Windows，则执行`python train.py -m model_config.json -t config_pretrain.json`。
+
+如果真的想让模型学会说人话，开始训练之前，请先确认几件事：
 
 - 训练可能耗费几小时乃至几天的时间！具体时间取决于训练设置和硬件，参考下文。
 - 若长时间训练，**强烈建议使用 [GNU Screen](https://www.gnu.org/software/screen/) 等终端切换工具，保证训练进程不被意外杀掉**。
@@ -60,15 +67,30 @@ python -m pip install -r requirements.txt
 - 若使用P40、P100等老旧设备，将`config_pretrain/sft.json`中的`sdp_kernel`字段设为`"math"`。
 - 若使用多机分布式训练，请先提前配置好分布式环境，例如无密码ssh认证等。
 
-> 简单估算训练时间：对58M参数的语言模型(L=16, H=16, E=512, BlockSize=512)作预训练，按照[文献](https://arxiv.org/abs/2204.02311)中提供的算法进行计算，每个词元所需计算量约为403MFlop。如果使用10亿(即1B=1e9)词元的语料进行一轮(epoch)预训练，则总计算量约为403PFlop。实际使用单卡A100进行训练，**实测耗时约5200秒（1.44小时）**，对应运算速度为78TFlop/s，是A100标称BF16算力312TFlop/s的25%，也即MFU为25%左右。
+> 简单估算训练时间：对58M参数的语言模型(L=16, H=16, E=512, VocabSize=512)作预训练，按照[文献](https://arxiv.org/abs/2204.02311)中提供的算法进行计算，每个词元所需计算量约为403MFlop。如果使用10亿(即1B=1e9)词元的语料进行一轮(epoch)预训练，则总计算量约为403PFlop。实际使用单卡A100进行训练，**实测耗时约5200秒（1.44小时）**，对应运算速度为78TFlop/s，是A100标称BF16算力312TFlop/s的25%，也即MFU为25%左右。
 
 **预训练**：
 
-单机单卡或者CPU训练，执行`python train.py -t pretrain`。单机多卡或者多机多卡分布式数据并行（DDP）训练，以单机4卡为例，在主节点上执行以下命令：
+将`model_config.json`中的模型参数设置为：
 
+```json
+"block_size": 512,
+"vocab_size": 16384,
+"n_layer": 16,
+"n_head": 16,
+"n_embd": 512,
+"dropout": 0.0,
+"bias": false,
+"use_rope": true,
+"norm_eps": 1e-5,
+"is_causal": true
 ```
-CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node 4 train.py -t pretrain
-```
+
+将`config_pretrain.json`中的`batch_size`设置为一个能够充分利用显存的值。对于 AGX Orin (64GB)，可设置为160。
+
+单机单卡或者CPU训练，执行`bash start_pretrain.sh`。
+
+单机多卡或者多机多卡分布式数据并行（DDP）训练，在主节点上执行`bash start_pretrain_ddp.sh`，注意修改脚本中的卡数。
 
 请注意：
 
@@ -79,7 +101,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 python -m torch.distributed.run -
 - 支持断点续训。如果预训练意外中止，可以将`config_pretrain.json`中的`from_checkpoint`字段设为上一个检查点的相对路径`"checkpoint/xxx.pt"`，然后重新启动训练。
 - 支持训练过程监控。每次训练，程序都会记录一个新的训练日志文件`train_xxx.log`，位于仓库根目录。执行`python plot_loss.py -n train_xxx.log`，绘制训练集损失曲线。
 
-**监督微调**：首先将`config_sft.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行`python train.py -t sft`（或者执行DDP训练的命令）。其余与预训练类似。需要指出的是，监督微调的训练轮数，应当根据实际情况灵活选择。一般来说，如果训练轮数过少，模型可能难以学习到指令跟随能力。而训练轮数过多，则可能遗忘预训练过程中获得的语言能力，以及在监督微调数据集上过拟合。
+**监督微调**：首先将`config_sft.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行`bash start_sft.sh`（或者`bash start_sft_ddp.sh`）。其余与预训练类似。需要指出的是，监督微调的训练轮数，应当根据实际情况灵活选择。一般来说，如果训练轮数过少，模型可能难以学习到指令跟随能力。而训练轮数过多，则可能遗忘预训练过程中获得的语言能力，以及在监督微调数据集上过拟合。
 
 **4️⃣ 推理**
 
@@ -101,12 +123,13 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 python -m torch.distributed.run -
 
 **数据预处理**
 
-- 包含文本分块、数据集划分、随机打乱、SFT模板组装、词元化等处理步骤。
+- 包含文本分块、词元编码、数据集划分、随机打乱、SFT模板组装等处理步骤。
 - 在默认实现中，数据集划分实际上并未严格隔离训练集和验证集，验证集是从训练集中简单抽取5%得到。
 
 **词元编码**
 
 - Nano使用最简单的词元编码算法，也就是给语料中所有包含的独立Unicode字符，赋予唯一整数编号，作为词元编号。因此词元实际上就等于是Unicode字符。
+- 为了提升英文编码效率，在词表中手工添加了部分英文单词。
 - 仓库中同时包含了tiktoken提供的一个BPE词元编码算法，由于速度很慢，并不实用，因此仅作为文档，并不实际使用。
 - 之所以不使用额外的词元编码工具，例如tiktoken、Tokenizers等，一方面是为了最小化外部依赖，另一方面也是想探索不含（高效）词元编码的语言模型效果如何。
 

@@ -9,7 +9,7 @@ from tokenizer import Tokenizer
 
 BLOCK_SIZE = 512
 PRETRAIN_DATASETS = [
-    "dataset/pretrain.txt"
+    "dataset/pretrain_psycho.txt"
 ]
 SFT_DATASET = "dataset/sft-general.jsonl"
 
@@ -67,7 +67,8 @@ def get_some_lines(iter, lines=1):
 def generate_pretrain_dataset(input_path, train_output_path, val_output_path):
 
     print(f"Counting character num...")
-    with os.popen(f"wc --chars {input_path}") as f:
+    cmd = f"powershell -Command (Get-Content {input_path} -Raw).Length" if os.name == "nt" else f"wc --chars {input_path}"
+    with os.popen(cmd) as f:
         res = f.readlines()[0]
         charcount = int(res.split(" ")[0])
 
@@ -191,7 +192,8 @@ def apply_template_and_encode(line):
 def generate_sft_dataset(input_jsonl_path, train_output_path, val_output_path):
 
     print(f"Counting character num...")
-    with os.popen(f"wc --lines {input_jsonl_path}") as f:
+    cmd = f"powershell -Command (Get-Content {input_jsonl_path}).Count" if os.name == "nt" else f"wc -l {input_jsonl_path}"
+    with os.popen(cmd) as f:
         res = f.readlines()[0]
         linecount = int(res.split(" ")[0])
     print(f"  Total lines = {linecount}")

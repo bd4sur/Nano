@@ -19,7 +19,9 @@ MAX_NUMBER = 1
 EXPR_MAX_DEPTH = 4
 EXPR_MAX_LENGTH = 64
 
-ROOT_PATH = "/home/bd4sur/ai/Nano"
+ROOT_PATH = os.path.dirname(os.path.abspath(__file__))
+
+os.makedirs(os.path.join(ROOT_PATH, "dataset_preprocessed"), exist_ok=True)
 
 CHECKPOINT_FILE_NAME = f"problem_{TASK_TAG}.pt"
 TRAINSET_PATH        = f"{ROOT_PATH}/dataset_preprocessed/problem_{TASK_TAG}_train.base64"
