@@ -9,7 +9,7 @@
 
 - 用尽可能少的依赖，尤其不依赖🤗，实现一个具体而微的Transformer语言模型。
 - 完整实现数据处理、预训练、监督微调、推理过程。暂不实现高效微调（如LoRA）、人类对齐。
-- 从头训练一个会说人话的[50M级参数规模的语言模型](https://huggingface.co/bd4sur/Nano-58M-20241018)（[B站视频](https://www.bilibili.com/video/BV1MtxteUEge)）。
+- 从头训练一个会说人话的50M级参数规模的语言模型。
 - 研究模型训练的动力学、训/推加速、算法改进等问题。
 - 探索Transformer模型在自然语言处理以外的问题和模态上的潜能。
 - 建立起关于大语言模型的合理预期和感性经验，对大语言模型技术祛魅。
@@ -20,6 +20,14 @@
 - 致(chao)敬(xi) Karpathy大佬的nanoGPT项目。
 
 ![ ](./doc/nano.jpg)
+
+## 模型和数据
+
+|预训练模型|预训练数据|指令微调模型|指令微调数据|
+|---------|---------|-----------|-----------|
+|[Nano-58M-20241018](https://huggingface.co/bd4sur/Nano-58M-20241018)|[Nano-PT-10B](https://huggingface.co/datasets/bd4sur/Nano-PT-10B)|Nano-58M-Instruct|Nano-SFT|
+
+数据集为7z格式，解压口令“nano”。
 
 ## 全流程速通
 
@@ -47,7 +55,7 @@ python -m pip install -r requirements.txt
 
 如果真的想让模型学会说人话：
 
-- 下载本人整理的[10B词元预训练数据集](https://huggingface.co/datasets/bd4sur/Nano-PT-10B)和[指令微调数据集]()，解压口令“`nano`”。
+- 下载预训练数据集和指令微调数据集。
 - 解压得到`pretrain.txt`和`sft.jsonl`两个文件，移动到`dataset`目录下。
 - 将`data.py`中`PRETRAIN_DATASETS`和`SFT_DATASET`替换为刚刚下载的两个文件。
 - 执行`python data.py`，进行数据预处理。可能占用大量记忆和存储空间，请提前预留。
@@ -63,8 +71,6 @@ python -m pip install -r requirements.txt
 
 - 训练可能耗费几小时乃至几天的时间！具体时间取决于训练设置和硬件，参考下文。
 - 若长时间训练，**强烈建议使用 [GNU Screen](https://www.gnu.org/software/screen/) 等终端切换工具，保证训练进程不被意外杀掉**。
-- 若使用CPU训练，将`config_pretrain/sft.json`中的`device`字段设为`"cpu"`。
-- 若使用P40、P100等老旧设备，将`config_pretrain/sft.json`中的`sdp_kernel`字段设为`"math"`。
 - 若使用多机分布式训练，请先提前配置好分布式环境，例如无密码ssh认证等。
 
 > 简单估算训练时间：对58M参数的语言模型(L=16, H=16, E=512, VocabSize=512)作预训练，按照[文献](https://arxiv.org/abs/2204.02311)中提供的算法进行计算，每个词元所需计算量约为403MFlop。如果使用10亿(即1B=1e9)词元的语料进行一轮(epoch)预训练，则总计算量约为403PFlop。实际使用单卡A100进行训练，**实测耗时约5200秒（1.44小时）**，对应运算速度为78TFlop/s，是A100标称BF16算力312TFlop/s的25%，也即MFU为25%左右。
@@ -148,8 +154,9 @@ python -m pip install -r requirements.txt
 **Transformer模型结构**
 
 - 模型结构以GPT（[karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)）为主要参考，加入了RoPE位置编码（同时兼容原有的训练位置编码），将LayerNorm替换为RMSNorm。
+- 多层感知机层沿用GPT的结构，即4倍模型宽度（嵌入维度）的两层线性变换+GELU激活函数。
 - 可选择因果自注意力或完全的自注意力，前者用于语言模型，后者用于在其他任务上的探索。
-- 词元嵌入层（`wte`）与解码层（`lm_head`）共享权重。关于这个问题，可参考文献[]。
+- 词元嵌入层（`wte`）与解码层（`lm_head`）共享权重。关于这个问题，可参考[文献](https://spaces.ac.cn/archives/9698)。
 - 支持KV-Cache。后续计划加入分组查询注意力（GQA）。
 
 模型结构参数`model_config.json`：
@@ -169,30 +176,31 @@ python -m pip install -r requirements.txt
 
 **模型训练**
 
-|参数|类型|默认值|说明|
-|-|-|-|-|
-|dropout|float|0.0|随机丢弃层的丢弃概率，覆盖模型参数|
-|learning_rate|float|6e-4|初始学习率|
-|weight_decay|float|1e-1|权重衰减|
-|beta1|float|0.9|AdamW优化器的参数|
-|beta2|float|0.99|AdamW优化器的参数|
-|decay_lr|bool|True|学习率调节器（衰减）？|
-|warmup_iters|int|300|学习率预热步数|
-|lr_decay_iters|int|100000|学习率衰减步数|
-|min_lr|float|6e-5|最小学习率|
-|batch_size|int|100|训练批大小。如果使用梯度累加技术，则实际批大小为batch_size * gradient_accumulation_steps|
-|grad_clip|float|1.0|梯度压限|
-|gradient_accumulation_steps|int|4|梯度累加步数|
-|random_seed|int|1337|随机数初始化种子|
-|dataset_path|[[str, str]]|None|数据集(相对于`train.py`的路径)|
-|eval_interval|int|100|验证间隔步数|
-|log_interval|int|1|日志间隔步数|
-|eval_iters|int|5|每次验证需要用几批数据|
-|backend|str|"nccl"|分布式通信后端|
-|device|str|"cuda"|计算设备|
-|sdp_kernel|str|"flash"|缩放点积注意力实现|
-|dtype|str|"bfloat16"|训练数据类型|
-|use_amp|bool|True|使用自动混合精度？|
+- `from_checkpoint: str`：从哪个检查点继续训练。其值是绝对路径。说明：**训练选项中涉及的所有路径，都是绝对路径**。
+- `save_checkpoint_to: str`：检查点保存位置的绝对路径。其值必须是目录。默认值为仓库根目录下`checkpoint/`目录。
+- `dataset_path: [[str, str], ...]`：预处理后的数据集的绝对路径。该字段的值为列表，列表的每一项都是含有两个元素的子列表，子列表的第一个元素是训练集的绝对路径，第二个元素是验证集的绝对路径。
+- `tokenizer_path: str`：词表绝对路径。默认值为仓库根目录下`tokenizer/tokenizer_16384.json`。
+- `random_seed: int`：Torch的随机数种子。默认值为39。固定这个值，便于复现特定结果，利于调试。
+- `batch_size: int`：训练批大小。默认值为32。一般来说，批大小越大，越有利于模型收敛，也更能充分利用算力资源。但代价是成倍消耗显存。如果启用梯度累加，则实际等效批大小为`batch_size`乘以`gradient_accumulation_steps`。
+- `gradient_accumulation_steps: int`：梯度累加步数。默认值：1。在DDP场景下，梯度累积步数必须是GPU卡数的整数倍。梯度累加技术可以在有限的批次大小上模拟以较大批大小训练的效果，其原理是以时间换空间，根据偏导数的加法分配律，将几个小批次上多步迭代得到的梯度进行累加，使用累加后的梯度一次性更新参数，达到模拟较大批次的效果。
+- `grad_clip: float`：梯度压限系数，用于防止梯度爆炸。默认值：1.0。
+- `dropout: float`：随机丢弃层的丢弃概率，仅在训练阶段有效。默认值：0。预训练阶段一般设置为0，微调阶段一般为非0。
+- `learning_rate: float`：初始学习率。默认值：6e-4。
+- `weight_decay: float`：权重衰减系数。默认值：1e-1。
+- `beta1: float`：AdamW优化器参数，详见[文档](https://pytorch.org/docs/stable/generated/torch.optim.AdamW.html)。默认值：0.9。
+- `beta2: float`：AdamW优化器参数，详见[文档](https://pytorch.org/docs/stable/generated/torch.optim.AdamW.html)。默认值：0.99。
+- `decay_lr: bool`：是否启用学习率调度？若不启用，则为恒定学习率。默认值：true。
+- `warmup_iters: int`：学习率预热阶段的步数，仅当启用学习率调度时有效。默认值：10000。
+- `lr_decay_iters: int`：学习率调度的总步数，仅当启用学习率调度时有效。默认值：1e9。
+- `min_lr: float`：最小学习率，仅当启用学习率调度时有效。默认值：6e-5。
+- `eval_interval: int`：每隔几步在验证集上计算一次损失。默认值：100。说明：如果满足检查点保存条件，将保存检查点。
+- `log_interval: int`：每隔几步打印一次日志。默认值：10。注意：打印日志会计算损失值，比较耗时，因此不建议过于频繁地打印日志。
+- `eval_iters: int`：每次验证需要用几批数据。默认值：5。
+- `backend: str`：分布式通信后端。可选值：`nccl`等。用于DDP。
+- `device: str`：计算设备。可选值：`cuda`、`cuda:x`用于指定某个GPU、`cpu`、`mps`等。一般无需特别设置，除非：①设备无显卡，将自动回落到CPU；②DDP模式下将自动设置为某一块GPU。
+- `sdp_kernel: str`：缩放点积注意力的实现。可选值：`math`基础、`flash`高效（默认）、`mem_efficient`节省显存。其中`flash`仅支持FP16和BF16两种输入精度，且可能存在其他限制条件。
+- `dtype: str`：训练数据类型。可选值：`float32`单精度（E8M23）、`float16`半精度（E5M10）、`bfloat16`半精度（E8M7，默认）。一般而言，若使用Ampere及以上的GPU架构，建议使用BF16。
+- `use_amp: bool`：是否使用自动混合精度技术？仅当`dtype`设置为FP16和BF16时，才支持AMP。一般而言，启用AMP可节约显存占用，同时有助于训练稳定和收敛，也能够充分利用半精度运算所带来的速度增益。但是笔者实测发现，在 AGX Orin 和 Orin NX 等Ampere架构的GPU上，关闭AMP并使用BF16数据类型，性能更高，但代价是损失数值计算精度，可能带来模型难以收敛的风险。若AMP开启，默认同时启用TF32支持，以提升32位浮点数的运算性能。
 
 **分布式训练**
 

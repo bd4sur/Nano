@@ -124,6 +124,12 @@ class TrainGPT():
         self.from_checkpoint = self.train_config.from_checkpoint
         self.from_checkpoint = self.from_checkpoint if len(self.from_checkpoint) > 0 else None
 
+        self.torch_dtype = {
+            "float32": torch.float32,
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16
+        }[self.train_config.dtype]
+
         # AMP
         self.scaler = None
         self.ctx = None
@@ -141,8 +147,10 @@ class TrainGPT():
             logger.info(logstr)
             print(logstr)
 
-    def init_ddp(self):
+    def init_training(self):
+
         self.log(f"Initializing DDP settings...")
+
         self.is_ddp = int(os.environ.get('RANK', -1)) != -1
         self.log(f"  is_ddp = {self.is_ddp}")
 
@@ -171,17 +179,25 @@ class TrainGPT():
             os.makedirs(self.train_config.save_checkpoint_to, exist_ok=True)
 
         torch.manual_seed(self.train_config.random_seed + _seed_offset)
-        torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
-        torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
+
+        self.log(f"Initializing PyTorch settings...")
+
+        # 混合精度训练情况下，启用TF32以加速FP32运算（稍微牺牲精度）
+        torch.backends.cuda.matmul.allow_tf32 = self.train_config.use_amp
+        torch.backends.cudnn.allow_tf32 = self.train_config.use_amp
+
+        if not self.train_config.use_amp:
+            torch.set_default_dtype(self.torch_dtype)
 
         torch.backends.cuda.enable_flash_sdp(self.train_config.sdp_kernel == "flash")
         torch.backends.cuda.enable_mem_efficient_sdp(self.train_config.sdp_kernel == "mem_efficient")
         torch.backends.cuda.enable_math_sdp(self.train_config.sdp_kernel == "math")
 
-    def init_model(self):
+        self.log(f"Initializing models and optimizers...")
+
         # 继续训练
         if self.from_checkpoint is not None:
-            self.log(f"Resuming training from `{self.from_checkpoint}`...")
+            self.log(f"  Resuming training from `{self.from_checkpoint}`...")
             _checkpoint = torch.load(self.from_checkpoint, map_location=self.current_device)
             # 恢复模型配置
             self.model_config = _checkpoint["model_config"]
@@ -196,11 +212,11 @@ class TrainGPT():
             self.model.to(self.current_device)
             self.model.load_state_dict(_checkpoint["model"], strict=False)
 
-        # 从零开始训练（from scratch）
+        # 从零开始训练
         else:
-            self.log("Initializing a new model for pre-train...")
+            self.log("  Initializing a new model from scrach for pre-train...")
             # 从词表文件构建词元编码器
-            self.log(f"Loading tokenizer from {self.train_config.tokenizer_path}...")
+            self.log(f"  Loading tokenizer from {self.train_config.tokenizer_path}...")
             self.tokenizer = Tokenizer()
             self.tokenizer.load_from_config_file(self.train_config.tokenizer_path)
             if self.tokenizer.vocab_size > self.model_config.vocab_size:
@@ -217,12 +233,12 @@ class TrainGPT():
 
         _checkpoint = None # free up memory
 
-        self.log(f"  block_size = {self.model_config.block_size}")
-        self.log(f"  vocab_size = {self.model_config.vocab_size}")
-        self.log(f"  n_layer = {self.model_config.n_layer}")
-        self.log(f"  n_head = {self.model_config.n_head}")
-        self.log(f"  n_embd = {self.model_config.n_embd}")
-        self.log(f"  Model Size = {self.model.get_num_params() / 1e6}M ({self.model.get_num_params() / 1e9}B) parameters")
+        self.log(f"    block_size = {self.model_config.block_size}")
+        self.log(f"    vocab_size = {self.model_config.vocab_size}")
+        self.log(f"    n_layer    = {self.model_config.n_layer}")
+        self.log(f"    n_head     = {self.model_config.n_head}")
+        self.log(f"    n_embd     = {self.model_config.n_embd}")
+        self.log(f"    Parameters = {self.model.get_num_params():,} ({self.model.get_num_params() / 1e9}B)")
 
         if self.train_config.use_amp:
             # initialize a GradScaler. If enabled=False scaler is a no-op
@@ -230,8 +246,7 @@ class TrainGPT():
 
             _device_type = 'cuda' if 'cuda' in self.current_device else 'cpu'
             # note: float16 data type will automatically use a GradScaler
-            _ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[self.train_config.dtype]
-            self.ctx = nullcontext() if _device_type == 'cpu' else torch.amp.autocast(device_type=_device_type, dtype=_ptdtype)
+            self.ctx = nullcontext() if _device_type == 'cpu' else torch.amp.autocast(device_type=_device_type, dtype=self.torch_dtype)
 
         # wrap model into DDP container
         if self.is_ddp:
@@ -251,9 +266,9 @@ class TrainGPT():
         self.val_data = DataLoader(val_curriculum)
 
         for i, line in enumerate(self.train_data.line_num):
-            self.log(f"  Train set {i} : {line} samples ({line * self.model_config.block_size} tokens)")
+            self.log(f"  Train set {i} : {line:,} samples ({line * self.model_config.block_size:,} tokens)")
         for i, line in enumerate(self.val_data.line_num):
-            self.log(f"  Valid set {i} : {line} samples ({line * self.model_config.block_size} tokens)")
+            self.log(f"  Valid set {i} : {line:,} samples ({line * self.model_config.block_size:,} tokens)")
 
         # DDP：每个rank用完全独立的DataLoader，间隔(rank-1)取批次，模拟各个rank交替从训练集中取batch
         #   初始化阶段，让每个worker延迟 self.ddp_local_rank 次取batch。图示如下（等号代表初始延迟，减号代表每一步迭代中间的固定延迟）：
@@ -306,8 +321,7 @@ class TrainGPT():
 
 
     def start(self):
-        self.init_ddp()
-        self.init_model()
+        self.init_training()
         self.load_data()
 
         best_val_loss = math.log(self.model_config.vocab_size) * 2

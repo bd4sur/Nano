@@ -34,19 +34,13 @@ class InferenceGPT:
         self.repetition_penalty = repetition_penalty
 
         # 读取模型检查点和训练配置
-        print(f"Loading checkpoint from {self.checkpoint_path}...")
+        print(f"Loading model from `{self.checkpoint_path}`...")
         checkpoint = torch.load(self.checkpoint_path, map_location=device)
         train_config = checkpoint['train_config']
         model_config = checkpoint['model_config']
         tokenizer_config = checkpoint['tokenizer_config']
 
         self.max_length = model_config.block_size if self.max_length is None or self.max_length > model_config.block_size else self.max_length
-
-        print(f"╭───────────┬───────────┬────────┬───────┬──────┬───────╮")
-        print(f"│ \x1b[1mBlockSize │ VocabSize │ Layers │ Heads │ Embd │ RoPE?\x1b[0m │")
-        print(f"├───────────┼───────────┼────────┼───────┼──────┼───────┤")
-        print(f"│{'{:^11d}'.format(model_config.block_size, end='')}│{'{:^11d}'.format(model_config.vocab_size, end='')}│{'{:^8d}'.format(model_config.n_layer, end='')}│{'{:^7d}'.format(model_config.n_head, end='')}│{'{:^6d}'.format(model_config.n_embd, end='')}│{'{:^7}'.format(str(model_config.use_rope))}│")
-        print(f"╰───────────┴───────────┴────────┴───────┴──────┴───────╯")
 
         # 设置随机种子与训练设置一致
         torch.manual_seed(train_config.random_seed)
@@ -57,6 +51,12 @@ class InferenceGPT:
         self.model.load_state_dict(checkpoint['model'], strict=False)
         self.model.eval()
         self.model.to(device)
+
+        print(f"╭───────────┬───────────┬────────┬───────┬──────┬───────┬──────────────────╮")
+        print(f"│ \x1b[1mBlockSize │ VocabSize │ Layers │ Heads │ Embd │ RoPE? │    Parameters\x1b[0m    │")
+        print(f"├───────────┼───────────┼────────┼───────┼──────┼───────┼──────────────────┤")
+        print(f"│{'{:^11d}'.format(model_config.block_size, end='')}│{'{:^11d}'.format(model_config.vocab_size, end='')}│{'{:^8d}'.format(model_config.n_layer, end='')}│{'{:^7d}'.format(model_config.n_head, end='')}│{'{:^6d}'.format(model_config.n_embd, end='')}│{'{:^7}'.format(str(model_config.use_rope))}│{'{:^18,d}'.format(self.model.get_num_params(), end='')}│")
+        print(f"╰───────────┴───────────┴────────┴───────┴──────┴───────┴──────────────────╯")
 
         # 读取分词器
         self.tokenizer = Tokenizer()
@@ -118,8 +118,7 @@ class InferenceGPT:
                     self.token_count = 0
 
 def main():
-    print(f"\x1b[36;1mNanoLM\x1b[0m - https://github.com/bd4sur/Nano")
-    print(f"PyTorch version: {torch.__version__}")
+    print(f"\n\x1b[36;1mNano Language Model\x1b[0m - https://github.com/bd4sur/Nano")
 
     parser = argparse.ArgumentParser(description="Sample (to inference) from Nano model for text generation and question answering.")
     parser.add_argument("-m", "--model", type=str, default="checkpoint/ckpt.pt")
