@@ -6,7 +6,7 @@ BD4SUR 2023.12
 import math
 import inspect
 from dataclasses import dataclass, fields
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -18,13 +18,14 @@ USE_KV_CACHE = True
 
 @dataclass
 class ModelConfig:
-    block_size: int = 128
-    vocab_size: int = 10000
+    block_size: int = 512
+    vocab_size: int = 16384
     n_layer: int = 8
-    n_head: int = 8
-    n_embd: int = 128
+    n_embd: int = 512
+    n_head: int = 16
+    n_kv_head: Optional[int] = None
+    n_hidden: Optional[int] = 1408 # ((n_embd * 8 // 3) + 63) // 64 * 64
     dropout: float = 0.0
-    bias: bool = False
     use_rope: bool = True
     norm_eps: float = 1e-5
     is_causal: bool = True
@@ -78,39 +79,61 @@ class TrainConfig:
                 setattr(self, k, v)
 
 
-def precompute_pos_cis(dim: int, end: int, theta: float = 10000.0):
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end, device=freqs.device)
-    freqs = torch.outer(t, freqs).float()
-    pos_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
-    return pos_cis
+    t = torch.arange(end, device=freqs.device)  # type: ignore
+    freqs = torch.outer(t, freqs).float()  # type: ignore
+    freqs_cos = torch.cos(freqs)  # real part
+    freqs_sin = torch.sin(freqs)  # imaginary part
+    return freqs_cos, freqs_sin
 
 
-def apply_rotary_emb(xq, xk, pos_cis):
-    def unite_shape(pos_cis, x):
-        ndim = x.ndim
-        assert 0 <= 1 < ndim
-        assert pos_cis.shape == (x.shape[1], x.shape[-1])
-        shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
-        return pos_cis.view(*shape)
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    pos_cis = unite_shape(pos_cis, xq_)
-    xq_out = torch.view_as_real(xq_ * pos_cis).flatten(3)
-    xk_out = torch.view_as_real(xk_ * pos_cis).flatten(3)
+def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
+    ndim = x.ndim
+    assert 0 <= 1 < ndim
+    assert freqs_cis.shape == (x.shape[1], x.shape[-1])
+    shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
+    return freqs_cis.view(shape)
+
+
+def apply_rotary_emb(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    freqs_cos: torch.Tensor,
+    freqs_sin: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    # reshape xq and xk to match the complex representation
+    xq_r, xq_i = xq.float().reshape(xq.shape[:-1] + (-1, 2)).unbind(-1)
+    xk_r, xk_i = xk.float().reshape(xk.shape[:-1] + (-1, 2)).unbind(-1)
+
+    # reshape freqs_cos and freqs_sin for broadcasting
+    freqs_cos = reshape_for_broadcast(freqs_cos, xq_r)
+    freqs_sin = reshape_for_broadcast(freqs_sin, xq_r)
+
+    # apply rotation using real numbers
+    xq_out_r = xq_r * freqs_cos - xq_i * freqs_sin
+    xq_out_i = xq_r * freqs_sin + xq_i * freqs_cos
+    xk_out_r = xk_r * freqs_cos - xk_i * freqs_sin
+    xk_out_i = xk_r * freqs_sin + xk_i * freqs_cos
+
+    # flatten last two dimensions
+    xq_out = torch.stack([xq_out_r, xq_out_i], dim=-1).flatten(3)
+    xk_out = torch.stack([xk_out_r, xk_out_i], dim=-1).flatten(3)
+
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
 
-class LayerNorm(nn.Module):
-    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
-
-    def __init__(self, ndim, bias):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(ndim))
-        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
-
-    def forward(self, input):
-        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
+    """torch.repeat_interleave(x, dim=2, repeats=n_rep)"""
+    bs, slen, n_kv_head, head_dim = x.shape
+    if n_rep == 1:
+        return x
+    return (
+        x[:, :, :, None, :]
+        .expand(bs, slen, n_kv_head, n_rep, head_dim)
+        .reshape(bs, slen, n_kv_head * n_rep, head_dim)
+    )
 
 
 class RMSNorm(torch.nn.Module):
@@ -127,25 +150,39 @@ class RMSNorm(torch.nn.Module):
         return output * self.weight
 
 
-class MaskedSelfAttention(nn.Module):
+class Attention(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config: ModelConfig):
         super().__init__()
+        self.n_kv_head = config.n_head if config.n_kv_head is None else config.n_kv_head
         assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        assert config.n_head % self.n_kv_head == 0
+
+        model_parallel_size = 1
+        self.n_local_heads = config.n_head // model_parallel_size
+        self.n_local_kv_heads = self.n_kv_head // model_parallel_size
+        self.n_rep = self.n_local_heads // self.n_local_kv_heads
+        self.head_dim = config.n_embd // config.n_head
+
+        # query, key, value projections
+        self.wq = nn.Linear(config.n_embd, config.n_head * self.head_dim, bias=False)
+        self.wk = nn.Linear(config.n_embd, self.n_kv_head * self.head_dim, bias=False)
+        self.wv = nn.Linear(config.n_embd, self.n_kv_head * self.head_dim, bias=False)
         # output projection
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.wo = nn.Linear(config.n_head * self.head_dim, config.n_embd, bias=False)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        self.dropout = config.dropout
-        self.block_size = config.block_size
+
         # KV-Cache (experimental)
         self.cache_k = None
         self.cache_v = None
+
+        self.block_size = config.block_size
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.dropout = config.dropout
+
         # is causal self attention?
         self.is_causal = config.is_causal
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
@@ -157,138 +194,148 @@ class MaskedSelfAttention(nn.Module):
             causal_mask = torch.triu(torch.full((1, 1, self.block_size, self.block_size), float('-inf')), diagonal=1).view(1, 1, config.block_size, config.block_size)
             self.register_buffer("mask", causal_mask)
 
-    def forward(self, x, pos_cis, start_pos, use_kv_cache=False):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+    def forward(self, x, freqs_cos, freqs_sin, start_pos, use_kv_cache=False):
+        B, S, E = x.shape # batch size, sequence length, embedding dimensionality (n_embd)
 
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
+        # QKV
+        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+        xq = xq.view(B, S, self.n_local_heads, self.head_dim)    # (B, S, h, E//h)
+        xk = xk.view(B, S, self.n_local_kv_heads, self.head_dim) # (B, S, m, E//h)
+        xv = xv.view(B, S, self.n_local_kv_heads, self.head_dim) # (B, S, m, E//h)
 
-        if pos_cis is not None:
-            q, k = apply_rotary_emb(q, k, pos_cis)
+        # RoPE
+        if freqs_cos is not None and freqs_sin is not None:
+            xq, xk = apply_rotary_emb(xq, xk, freqs_cos, freqs_sin)
+
+        # grouped multiquery attention: expand out keys and values
+        xk = repeat_kv(xk, self.n_rep)  # (B, S, h, E//h)
+        xv = repeat_kv(xv, self.n_rep)  # (B, S, h, E//h)
 
         if use_kv_cache and (not self.training):
             if start_pos == 0 or (self.cache_k is None and self.cache_v is None):
-                self.cache_k = torch.zeros((B, self.block_size, self.n_head, C // self.n_head)).to(q.device)
-                self.cache_v = torch.zeros((B, self.block_size, self.n_head, C // self.n_head)).to(q.device)
+                self.cache_k = torch.zeros((B, self.block_size, self.n_local_heads, self.head_dim)).to(xq.device)
+                self.cache_v = torch.zeros((B, self.block_size, self.n_local_heads, self.head_dim)).to(xq.device)
 
-            self.cache_k[:B, start_pos : start_pos + T] = k
-            self.cache_v[:B, start_pos : start_pos + T] = v
+            self.cache_k[:B, start_pos : start_pos + S] = xk
+            self.cache_v[:B, start_pos : start_pos + S] = xv
 
-            k = self.cache_k[:B, : start_pos + T]
-            v = self.cache_v[:B, : start_pos + T]
+            xk = self.cache_k[:B, : start_pos + S]
+            xv = self.cache_v[:B, : start_pos + S]
 
-        k = k.transpose(1, 2) # (B, nh, T, hs)
-        q = q.transpose(1, 2) # (B, nh, T, hs)
-        v = v.transpose(1, 2) # (B, nh, T, hs)
+        # make heads into a batch dimension
+        xq = xq.transpose(1, 2)  # (B, h, S, E//h)
+        xk = xk.transpose(1, 2)  # (B, h, S, E//h)
+        xv = xv.transpose(1, 2)  # (B, h, S, E//h)
 
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        # causal self-attention; Self-attend: (B, h, S, E//h) x (B, h, E//h, S) -> (B, h, S, S)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
             if self.training or (not use_kv_cache):
                 # NOTE flash_attn尚不支持非None的attn_mask
                 # Ref. https://github.com/pytorch/pytorch/blob/753ba5d30a361be4f610cf7dde4fd63726ed8f86/aten/src/ATen/native/transformers/sdp_utils_cpp.h#L271
-                y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=self.is_causal)
+                output = torch.nn.functional.scaled_dot_product_attention(xq, xk, xv, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=self.is_causal)
             else:
                 if self.is_causal:
                     # NOTE 根据 github.com/pytorch/pytorch/issues/115262 和 108108，当Q长度为1时，需要手动传入注意力掩模，而不能简单设置is_causal
                     #      此处参考了Llama3的代码：https://github.com/meta-llama/llama3/blob/11817d47e1ba7a4959b025eb1ca308572e0e3963/llama/model.py#L294
-                    mask = self.mask[:,:,:T,:T].contiguous().view(T, T)
-                    mask = torch.hstack([torch.zeros((T, min(start_pos, self.block_size)), device=q.device), mask]).type_as(q)
+                    mask = self.mask[:,:,:S,:S].contiguous().view(S, S)
+                    mask = torch.hstack([torch.zeros((S, min(start_pos, self.block_size)), device=xq.device), mask]).type_as(xq)
                 else:
                     mask = None
-                y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=self.dropout if self.training else 0, is_causal=False)
+                output = torch.nn.functional.scaled_dot_product_attention(xq, xk, xv, attn_mask=mask, dropout_p=self.dropout if self.training else 0, is_causal=False)
         else:
             if self.is_causal:
-                mask = self.mask[:,:,:T,:T]
+                mask = self.mask[:,:,:S,:S]
             else:
                 mask = torch.zeros(self.mask.shape, device=att.device)
-            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            att = (xq @ xk.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            assert hasattr(self, "mask")
             att = att + mask
-            att = F.softmax(att, dim=-1)
+            att = F.softmax(att.float(), dim=-1).type_as(xq)
             att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+            output = att @ xv # (B, h, S, S) x (B, h, S, E//h) -> (B, h, S, E//h)
+
+        # re-assemble all head outputs side by side
+        output = output.transpose(1, 2).contiguous().view(B, S, -1)
 
         # output projection
-        y = self.resid_dropout(self.c_proj(y))
-        return y
+        output = self.resid_dropout(self.wo(output))
 
-class MLP(nn.Module):
+        return output
 
-    def __init__(self, config):
+
+class FeedForward(nn.Module):
+    def __init__(self, config: ModelConfig):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
-        self.gelu    = nn.GELU()
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        _multiple_of = 256
+        if config.n_hidden is None:
+            n_hid = int(8 * config.n_embd / 3)
+            n_hid = _multiple_of * ((n_hid + _multiple_of - 1) // _multiple_of)
+        else:
+            n_hid = config.n_hidden
+        self.w1 = nn.Linear(config.n_embd, n_hid, bias=False)
+        self.w2 = nn.Linear(n_hid, config.n_embd, bias=False)
+        self.w3 = nn.Linear(config.n_embd, n_hid, bias=False)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        x = self.c_fc(x)
-        x = self.gelu(x)
-        x = self.c_proj(x)
-        x = self.dropout(x)
-        return x
+        return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
 
-class Block(nn.Module):
 
-    def __init__(self, config):
+class TransformerBlock(nn.Module):
+    def __init__(self, config: ModelConfig, layer_id: int):
         super().__init__()
-        # self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.norm_1 = RMSNorm(config.n_embd, eps=config.norm_eps)
-        self.attn = MaskedSelfAttention(config)
-        # self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        self.norm_2 = RMSNorm(config.n_embd, eps=config.norm_eps)
-        self.mlp = MLP(config)
+        self.layer_id = layer_id
+        self.attention_norm = RMSNorm(config.n_embd, eps=config.norm_eps)
+        self.attention = Attention(config)
+        self.ffn_norm = RMSNorm(config.n_embd, eps=config.norm_eps)
+        self.feed_forward = FeedForward(config)
 
-    def forward(self, x, pos_cis, start_pos, use_kv_cache=False):
-        x = x + self.attn(self.norm_1(x), pos_cis, start_pos, use_kv_cache=use_kv_cache)
-        x = x + self.mlp(self.norm_2(x))
-        return x
+    def forward(self, x, freqs_cos, freqs_sin, start_pos, use_kv_cache=False):
+        h = x + self.attention.forward(self.attention_norm(x), freqs_cos, freqs_sin, start_pos, use_kv_cache=use_kv_cache)
+        out = h + self.feed_forward.forward(self.ffn_norm(h))
+        return out
 
 
 class GPT(nn.Module):
+    last_loss: Optional[torch.Tensor]
 
     def __init__(self, config: ModelConfig):
         super().__init__()
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
+        self.vocab_size = config.vocab_size
+        self.n_layer = config.n_layer
 
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd) if not self.config.use_rope else None,
-            drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            norm_f = RMSNorm(config.n_embd, eps=config.norm_eps),
-        ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        self.tok_embeddings = nn.Embedding(config.vocab_size, config.n_embd)
+        self.wpe = nn.Embedding(config.block_size, config.n_embd) if not self.config.use_rope else None
+        self.dropout = nn.Dropout(config.dropout)
+        self.layers = torch.nn.ModuleList()
+        for layer_id in range(config.n_layer):
+            self.layers.append(TransformerBlock(config, layer_id))
+        self.norm = RMSNorm(config.n_embd, eps=config.norm_eps)
+        self.output = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-        # RoPE relative positional embeddings
-        pos_cis = precompute_pos_cis(config.n_embd // config.n_head, config.block_size) if self.config.use_rope else None
-        self.register_buffer("pos_cis", pos_cis, persistent=False)
+        # share the unembedding parameters with the embedding parameters
+        self.tok_embeddings.weight = self.output.weight # https://paperswithcode.com/method/weight-tying
+
+        # precompute for the RoPE factors
+        if self.config.use_rope:
+            freqs_cos, freqs_sin = precompute_freqs_cis(self.config.n_embd // self.config.n_head, self.config.block_size)
+            self.register_buffer("freqs_cos", freqs_cos, persistent=False)
+            self.register_buffer("freqs_sin", freqs_sin, persistent=False)
 
         # init all weights
         self.apply(self._init_weights)
         # apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight'):
+            if pn.endswith('w3.weight') or pn.endswith('wo.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
-    def get_num_params(self, non_embedding=True):
-        """
-        Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
-        The token embeddings would too, except due to the parameter sharing these
-        params are actually used as weights in the final layer, so we include them.
-        """
-        n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding and not self.config.use_rope:
-            n_params -= self.transformer.wpe.weight.numel()
-        return n_params
+        # Initialize attribute for the loss of the last forward call. This will be set if the forward is called with a targets tensor.
+        self.last_loss = None
+
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -298,58 +345,49 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, loss_mask=None, start_pos=0, use_kv_cache=False):
-        b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
-        # token embeddings of shape (BatchSize, BlockSize, n_embd)
-        tok_emb = self.transformer.wte(idx)
+    def forward(self, idx, targets=None, loss_mask=None, start_pos=0, use_kv_cache=False):
+        B, S = idx.size()
+        assert S <= self.config.block_size, f"Cannot forward sequence of length {S}, block size is only {self.config.block_size}"
+
+        h = self.tok_embeddings(idx)
 
         # RoPE
         if self.config.use_rope:
-            self.pos_cis = self.pos_cis.to(tok_emb.device)
-            pos_cis = self.pos_cis[start_pos : start_pos + t]
-        # Trained position embedding
+            freqs_cos = self.freqs_cos[start_pos : start_pos + S].to(h.device)
+            freqs_sin = self.freqs_sin[start_pos : start_pos + S].to(h.device)
         else:
-            pos_cis = None
-            pos = torch.arange(0, t, dtype=torch.long, device=idx.device) # shape (t)
-            pos_emb = self.transformer.wpe(pos)[start_pos : start_pos + t] # position embeddings of shape (BlockSize, n_embd)
-            tok_emb = tok_emb + pos_emb
+            freqs_cos, freqs_sin = None, None
+            pos = torch.arange(0, S, dtype=torch.long, device=idx.device)
+            pos_emb = self.wpe(pos)[start_pos : start_pos + S] # position embeddings
+            h = h + pos_emb
 
-        x = self.transformer.drop(tok_emb)
+        h = self.dropout(h)
 
-        for block in self.transformer.h:
-            x = block(x, pos_cis, start_pos, use_kv_cache=use_kv_cache)
-        x = self.transformer.norm_f(x)
+        for layer in self.layers:
+            h = layer(h, freqs_cos, freqs_sin, start_pos, use_kv_cache=use_kv_cache)
+
+        h = self.norm(h)
 
         # 计算损失
-        if targets is not None: # target.shape=(BatchSize, BlockSize)
-            logits = self.lm_head(x) # logits.shape=(BatchSize, BlockSize, VocabSize)
-            a = logits.view(-1, logits.size(-1)) # shape=(BatchSize*BlockSize, VocabSize)
-            b = targets.view(-1) # shape=(BatchSize*BlockSize)
+        if targets is not None: # target.shape=(B, S)
+            logits = self.output(h) # logits.shape=(B, S, V)
+            a = logits.view(-1, logits.size(-1)) # shape=(B*S, V)
+            b = targets.view(-1) # shape=(B*S)
             loss = F.cross_entropy(a, b)
             if loss_mask is not None:
-                lm = loss_mask.view(-1) # shape=(BatchSize*BlockSize)
+                lm = loss_mask.view(-1) # shape=(B*S)
                 loss = torch.sum(loss * lm) / lm.sum()
+            self.last_loss = loss
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             if self.config.is_causal:
-                logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+                logits = self.output(h[:, [-1], :]) # note: using list [-1] to preserve the time dim
             else:
-                logits = self.lm_head(x)
-            loss = None
-        return logits, loss
+                logits = self.output(h)
+            self.last_loss = None
+        return logits, self.last_loss
 
-    def crop_block_size(self, block_size):
-        # model surgery to decrease the block size if necessary
-        # e.g. we may load the GPT2 pretrained model checkpoint (block size 1024)
-        # but want to use a smaller block size for some smaller, simpler model
-        assert block_size <= self.config.block_size
-        self.config.block_size = block_size
-        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size]) if not self.config.use_rope else None
-        for block in self.transformer.h:
-            if hasattr(block.attn, 'bias'):
-                block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         # start with all of the candidate parameters
@@ -376,6 +414,14 @@ class GPT(nn.Module):
         # print(f"using fused AdamW: {use_fused}")
 
         return optimizer
+
+
+    def get_num_params(self, non_embedding=True):
+        n_params = sum(p.numel() for p in self.parameters())
+        if non_embedding and not self.config.use_rope:
+            n_params -= self.wpe.weight.numel()
+        return n_params
+
 
     def estimate_flops(self, fwdbwd_per_iter, dt):
         # estimate the number of flops (float ops per second) we do per iteration.
@@ -416,6 +462,7 @@ class GPT(nn.Module):
         idx_next = torch.multinomial(probs, num_samples=1)
         return idx_next
 
+
     # 自回归解码（以自回归方式逐个生成token，构成所需序列）
     @torch.no_grad()
     def auto_regressive_generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, repetition_penalty=1.1, callback=None):
@@ -446,6 +493,7 @@ class GPT(nn.Module):
                     return idx
 
         return idx
+
 
     # 非自回归解码（一次性生成整个序列）
     @torch.no_grad()

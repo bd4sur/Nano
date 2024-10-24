@@ -1,6 +1,8 @@
 
 # Nano：大模型，小玩具
 
+**Pre-alpha · 正在积极开发**
+
 **Nano**是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。主要复刻自 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)，并借鉴了多个开源模型实现和学习项目。
 
 ![ ](doc/nano_58m_20241018_pt_demo.gif)
@@ -10,6 +12,7 @@
 - 用尽可能少的依赖，尤其不依赖🤗，实现一个具体而微的Transformer语言模型。
 - 完整实现数据处理、预训练、监督微调、推理过程。暂不实现高效微调（如LoRA）、人类对齐。
 - 从头训练一个会说人话的50M级参数规模的语言模型。
+- 实现Web浏览器上的推理（对话和文本生成）。
 - 研究模型训练的动力学、训/推加速、算法改进等问题。
 - 探索Transformer模型在自然语言处理以外的问题和模态上的潜能。
 - 建立起关于大语言模型的合理预期和感性经验，对大语言模型技术祛魅。
@@ -153,8 +156,9 @@ python -m pip install -r requirements.txt
 
 **Transformer模型结构**
 
-- 模型结构以GPT（[karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)）为主要参考，加入了RoPE位置编码（同时兼容原有的训练位置编码），将LayerNorm替换为RMSNorm。
-- 多层感知机层沿用GPT的结构，即4倍模型宽度（嵌入维度）的两层线性变换+GELU激活函数。
+- 模型结构以Llama2和GPT（[karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)）为主要参考。
+- 使用RoPE位置编码（可选用训练位置编码）和RMSNorm。
+- 使用SwiGLU，参考[文献](https://arxiv.org/pdf/2002.05202)。
 - 可选择因果自注意力或完全的自注意力，前者用于语言模型，后者用于在其他任务上的探索。
 - 词元嵌入层（`wte`）与解码层（`lm_head`）共享权重。关于这个问题，可参考[文献](https://spaces.ac.cn/archives/9698)。
 - 支持KV-Cache。后续计划加入分组查询注意力（GQA）。

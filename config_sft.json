@@ -16,7 +16,7 @@
     "learning_rate": 1e-6,
     "weight_decay": 1e-1,
     "beta1": 0.9,
-    "beta2": 0.99,
+    "beta2": 0.95,
 
     "decay_lr": false,
     "warmup_iters": 1000,

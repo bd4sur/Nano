@@ -236,8 +236,10 @@ class TrainGPT():
         self.log(f"    block_size = {self.model_config.block_size}")
         self.log(f"    vocab_size = {self.model_config.vocab_size}")
         self.log(f"    n_layer    = {self.model_config.n_layer}")
-        self.log(f"    n_head     = {self.model_config.n_head}")
         self.log(f"    n_embd     = {self.model_config.n_embd}")
+        self.log(f"    n_head     = {self.model_config.n_head}")
+        self.log(f"    n_kv_head  = {self.model_config.n_kv_head}")
+        self.log(f"    n_hidden   = {self.model_config.n_hidden}")
         self.log(f"    Parameters = {self.model.get_num_params():,} ({self.model.get_num_params() / 1e9}B)")
 
         if self.train_config.use_amp:
