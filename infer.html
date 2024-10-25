@@ -1,516 +1,757 @@
 <!DOCTYPE html>
+<html lang="zh-CN">
+<head>
 <meta charset="utf-8">
-<!-- https://github.com/epicure/llama2.js -->
-<!-- https://github.com/karpathy/llama2.c#notable-forks -->
-<title>llama2.js</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+<title>NanoLM - BD4SUR</title>
+
 <style>
-    body {
-        padding: 1em;
+@media(min-width:651px) { /* Desktop */
+    .Main {
+        width: 60%;
+        max-width: 650px;
+        margin: 50px auto;
+        font-size: 14px;
+        border-radius: 20px;
+        box-shadow: 0 0px #e5e5e5, 0 0 15px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.05);
     }
-    label, button {
-        margin: 0.5em;
+}
+@media(max-width:650px) { /* Mobile */
+    .Main {
+        width: 100%;
+        font-size: 14px;
     }
-    input {
-        width: 5em;
-    }
-    textarea {
-        padding: 1em;
-    }
+}
+
+.Header {
+    padding: 30px 30px 0 30px;
+    font-size: 20px;
+    color: #d2d6dd;
+}
+.Nano {
+    font-weight: bold;
+    background-image: -webkit-linear-gradient(320deg, #00e2ff, #003cff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.Center {
+    padding: 20px 30px;
+}
+.ValueFieldContainer {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 2px 4px;
+    margin: 2px;
+    border-radius: 3px;
+    background-color: #e9ebf0;
+}
+.ValueFieldTitle { margin: 3px 5px; font-size: 13px; }
+.ValueFieldInput { outline: none; border: none; width: 100%; }
+.ValueFieldInputContainer { width: 60%; }
+
+.InputTextField, .OutputTextField {
+    width: 100%;
+    letter-spacing: 1px;
+    font-family: system-ui;
+    line-height: 1.6;
+}
+
+.start_generation_button { border: none; background-color: #15e; color: #fff; border-radius: 3px; padding: 5px 10px; font-size: 14px; line-height: 1.5; }
+.start_generation_button:hover { background-color: #5180ed; color: #fff; }
+.start_generation_button:disabled { background-color: #dddfe5; color: #fff; }
+
+.Footer {
+    padding: 10px 30px 10px 30px;
+}
+.Copyright {
+    font-size: 12px;
+    text-align: center;
+    line-height: 3;
+    color: #9a9ea8;
+}
+
 </style>
 <body>
-    <div>
-        <div>
-            <textarea id="prompt" type="text" value="" cols="80" rows="1" placeholder="One day"></textarea>
+    <div class="Main">
+        <div class="Header">
+            <div><span class="Nano">NanoLM</span> Inference</div>
         </div>
-        <select id="model">
-            <option value="stories15m">stories15m</option>
-            <option value="stories42m">stories42m</option>
-            <option value="stories110m">stories110m</option>
-        </select>
 
-        <label>top-p</label><input id="top-p" type="number" value="1.0" step="0.1">
-        <label>temperature</label><input id="temperature" type="number" value="0.9" step="0.1">
-        <label>steps</label><input id="steps" type="number" value="100">
-        <button id="run">run</button>
+        <div class="Center" id="select_file">
+            <div style="position: relative; border: 1px dashed #ddd; text-align: center; margin: 10px 0; height: 300px; border-radius: 12px; background: linear-gradient(316deg, #f7f4ff, #f2fdff);">
+                <input type="file" id="model_file_selector" name="files[]" multiple style="position: absolute; top: 0; right: 0; width: 100%; height: 100%; opacity: 0;">
+                <div style="margin: 135px 0 0 0; font-size: 18px; color: #9a9ea8;">选择模型</div>
+            </div>
+        </div>
+
+        <div class="Center" id="infer" style="display: none;">
+
+            <div style="display: flex; flex-direction: row; justify-content: space-between;">
+                <div class="ValueFieldContainer">
+                    <div class="ValueFieldTitle">Top-P</div>
+                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="top-p" type="number" value="2.0" step="0.1"></div>
+                </div>
+                <div class="ValueFieldContainer">
+                    <div class="ValueFieldTitle">温度</div>
+                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="temperature" type="number" value="1.2" step="0.1"></div>
+                </div>
+                <div class="ValueFieldContainer">
+                    <div class="ValueFieldTitle">步数</div>
+                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="steps" type="number" value="500" step="0.1"></div>
+                </div>
+            </div>
+
+            <div style="display: flex;">
+                <textarea id="llm_output" class="OutputTextField" style="height: 200px;"></textarea>
+            </div>
+
+            <div class="ValueFieldTitle">Prompt</div>
+
+            <div style="display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; justify-content: space-between; margin: 10px 0;">
+                <div style="min-width: 300px; width: 80%;">
+                    <textarea id="prompt" class="InputTextField" style="height: 80px;">人类的本质是什么？</textarea>
+                </div>
+                <div style="min-width: 60px; width: 16%;">
+                    <button class="start_generation_button" id="run" style="width: 100%; height: 80px;">发射</button>
+                </div>
+            </div>
+
+            <div style="display: flex;">
+                <span id="tps">--</span><span> tokens/s</span>
+            </div>
+        </div>
+
+        <div class="Center">
+            <span>Status: </span><span id="status"></span>
+        </div>
+
+        <div class="Footer">
+            <div style="text-align: center;"><a style="border-bottom: none;" href="https://github.com/bd4sur/Aqua"><img alt="GitHub stars" src="https://img.shields.io/github/stars/bd4sur/Nano?style=social"></a></div>
+            <div class="Copyright">Copyright © 2023-2024 <a href="https://bd4sur.com" target="_blank">BD4SUR</a></div>
+        </div>
     </div>
-    <textarea id="output" rows="20" cols="80"></textarea>
-    <p><span>achieved tok/s: </span><span id="toks"></span></p>
+
 </body>
+
 <script>
-    // About this code
-    // This is a JavaScript port of llama2.c, a tiny neural net language model
+// https://github.com/epicure/llama2.js
+// https://github.com/karpathy/llama2.c#notable-forks
+// This is a JavaScript port of llama2.c, a tiny neural net language model
 
-    let config, vocab, vocab_scores, weights, tokenizer_config, run_state;
-    let is_generating = false;
 
-    // ----------------------------------------------------------------------------
-    // initialization: read from checkpoint
+// ===============================================================================
+// 全局状态和缓冲区
+// ===============================================================================
 
-    async function load_model(path) {
-        const response = await fetch(path);
-        const arrayBuffer = await response.arrayBuffer();
+let LLM = { config: {}, param: {} };
+let TOKENIZER = { config: {}, trie: {} };
+let FWD_BUFFER;
 
-        const SIZE_OF_DTYPE = 4;
-        const header_length = 256;
+let is_generating = false;
 
-        let offset = 0;
 
-        let header = new Int32Array(arrayBuffer.slice(0, header_length));
+// ===============================================================================
+// 读取并解析模型文件
+// ===============================================================================
 
-        let magic_number_0 = header[0];
-        let magic_number_1 = header[1];
+function parse_model(file_buffer) {
 
-        if(magic_number_0 !== 0x42443453 || magic_number_1 !== 0x55524c4d) {
-            console.error("Error: Corrupted or wrong model file!");
+    const SIZE_OF_DTYPE = 4;
+    const header_length = 256;
+
+    let offset = 0;
+
+    let header = new Int32Array(file_buffer.slice(0, header_length));
+
+    let magic_number_0 = header[0];
+    let magic_number_1 = header[1];
+
+    if(magic_number_0 !== 0x42443453 || magic_number_1 !== 0x55524c4d) {
+        console.error("Error: Corrupted or wrong model file!");
+        return false;
+    }
+
+    let major_version = header[2];
+    let minor_version = header[3];
+
+    console.info(`Model version: ${major_version}.${minor_version}`);
+
+    // 读取模型结构参数
+
+    LLM.config = {
+        block_size: 0,
+        vocab_size: 0,
+        n_layer: 0,
+        n_embd: 0,
+        n_head: 0,
+        n_kv_head: 0,
+        n_hidden: 0,
+        is_shared_classifier: 0
+    };
+
+    let cfg_keys = Object.keys(LLM.config);
+    header.slice(4, 4 + cfg_keys.length).forEach((v, i) => { LLM.config[cfg_keys[i]] = v; });
+
+    offset += header_length;
+
+    // 读取模型权重
+
+    const cfg = LLM.config;
+    const is_shared_weights = cfg.is_shared_classifier > 0 ? 1 : 0;
+    const head_dim = cfg.n_embd / cfg.n_head;
+
+    LLM.param = {
+        token_embedding: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.vocab_size * cfg.n_embd)),
+        rms_norm_attn:   new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd)),
+        wq:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_embd)),
+        wk:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_kv_head * head_dim)),
+        wv:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_kv_head * head_dim)),
+        wo:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_embd)),
+        rms_norm_ffn:    new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd)),
+        w1:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden)),
+        w2:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden)),
+        w3:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden)),
+        rms_norm_final:  new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_embd)),
+        token_classifier: null,
+        freq_cis_real:   new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.block_size * head_dim / 2)),
+        freq_cis_imag:   new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.block_size * head_dim / 2)),
+    };
+
+    LLM.param.token_classifier = is_shared_weights ? LLM.param.token_embedding : offset;
+
+    // 读取词表、构建词元编解码器
+
+    tk_length = new Uint32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE))[0];
+    tokenizer_config_json_base64 = new Uint8Array(file_buffer.slice(offset, offset += tk_length));
+    const text_decoder = new TextDecoder("utf-8");
+    TOKENIZER.config = JSON.parse(window.atob(text_decoder.decode(tokenizer_config_json_base64)));
+    TOKENIZER.trie = new TrieTree(TOKENIZER.config.itos);
+
+    let kv_dim = (cfg.n_embd * cfg.n_kv_head) / cfg.n_head;
+
+    // 构建前向传播数值的缓冲区
+
+    FWD_BUFFER = {
+        x:       new Float32Array(cfg.n_embd),   // activation at current time stamp (dim,)
+        xb:      new Float32Array(cfg.n_embd),   // same, but inside a residual branch (dim,)
+        xb2:     new Float32Array(cfg.n_embd),   // an additional buffer just for convenience (dim,)
+        hb:      new Float32Array(cfg.n_hidden), // buffer for hidden dimension in the ffn (hidden_dim,)
+        hb2:     new Float32Array(cfg.n_hidden), // buffer for hidden dimension in the ffn (hidden_dim,)
+        q:       new Float32Array(cfg.n_embd),   // query (dim,)
+    //  k:       new Float32Array(kv_dim),       // key (kv_dim,)
+    //  v:       new Float32Array(kv_dim),       // value (kv_dim,)
+        k_cache: new Float32Array(cfg.n_layer * cfg.block_size * kv_dim),   // key cache (layer, block_size, kv_dim)
+        v_cache: new Float32Array(cfg.n_layer * cfg.block_size * kv_dim),   // value cache (layer, block_size, kv_dim)
+        att:     new Float32Array(cfg.n_head * cfg.block_size), // buffer for scores/attention values (n_heads, block_size)
+        logits:  new Float32Array(cfg.vocab_size), // output logits
+    };
+}
+
+// ===============================================================================
+// 基础算子
+//   所有算子都是C风格的：函数本身不返回值，通过参数引用的buffer来传递计算结果。
+// ===============================================================================
+
+function accum(a, b, size) {
+    for (let i = 0; i < size; i++) {
+        a[i] += b[i];
+    }
+}
+
+function rms_norm(o, x, weight, size) {
+    // calculate sum of squares
+    let ss = 0.0;
+    for (let j = 0; j < size; j++) {
+        ss += x[j] * x[j];
+    }
+    ss /= size;
+    ss += 1e-5;
+    ss = 1.0 / Math.sqrt(ss);
+    // normalize and scale
+    for (let j = 0; j < size; j++) {
+        o[j] = weight[j] * (ss * x[j]);
+    }
+}
+
+function softmax(x, size) {
+    // find max value (for numerical stability)
+    let max_val = x[0];
+    for (let i = 1; i < size; i++) {
+        if (x[i] > max_val) {
+            max_val = x[i];
+        }
+    }
+    // exp and sum
+    let sum = 0.0;
+    for (let i = 0; i < size; i++) {
+        x[i] = Math.exp(x[i] - max_val);
+        sum += x[i];
+    }
+    // normalize
+    for (let i = 0; i < size; i++) {
+        x[i] /= sum;
+    }
+}
+
+function matmul(xout, x, w, n, d) {
+    // W (d,n) @ x (n,) -> xout (d,)
+    for (let i = 0; i < d; i++) {
+        let val = 0.0;
+        for (let j = 0; j < n; j++) {
+            val += w[i * n + j] * x[j];
+        }
+        xout[i] = val;
+    }
+}
+
+
+// ===============================================================================
+// 核心函数：语言模型前向传播
+//   Args:
+//     token - I   词元编码（在token_embedding中的列号，或者说词表中的编号）。
+//                 NOTE 为什么只输入1个词元？因为过往输入的词元已经被保存在KV-Cache中了。
+//     pos   - I   当前词元的位置，从0开始。
+//     llm   - I   语言模型对象，包括模型结构参数和权重等。
+//     buf   - IO  数据缓冲区，通过此缓冲区，张量在各层之间传播。
+//   Return:
+//     最后一层输出的logits。
+// ===============================================================================
+
+function llm_forward(token, pos, llm, buf) {
+
+    let cfg = llm.config;
+    let w = llm.param;
+    let s = buf;
+
+    let x = s.x;
+    const dim = cfg.n_embd; // Q的维度（每个注意力头的维度*h）
+    const kv_dim = dim * (cfg.n_kv_head / cfg.n_head); // KV的维度=每个注意力头的维度*m
+    const kv_mul = cfg.n_head / cfg.n_kv_head;
+    const hidden_dim = cfg.n_hidden;
+    const head_dim = dim / cfg.n_head; // 每个注意力头的维度，对于QKV都是相同的
+
+    // copy the token embedding into x
+    x.set(w.token_embedding.subarray(token * dim, (token + 1) * dim));
+    
+    // pluck out the "pos" row of freq_cis_real and freq_cis_imag
+    const freq_cis_real_row = w.freq_cis_real.subarray(pos * head_dim / 2, (pos + 1) * head_dim / 2);
+    const freq_cis_imag_row = w.freq_cis_imag.subarray(pos * head_dim / 2, (pos + 1) * head_dim / 2);
+
+    // forward all the layers
+    for(let l = 0; l < cfg.n_layer; l++) {
+        // attention rmsnorm
+        rms_norm(s.xb, x, w.rms_norm_attn.subarray(l * dim, (l + 1) * dim), dim);
+
+        // save key,value at this time step (pos) to our kv cache
+        const loff = l * cfg.block_size * kv_dim; // kv cache layer offset for convenience
+        s.k = s.k_cache.subarray(loff + pos * kv_dim, loff + (pos + 1) * kv_dim);
+        s.v = s.v_cache.subarray(loff + pos * kv_dim, loff + (pos + 1) * kv_dim);
+
+        // qkv matmuls for this position
+        matmul(s.q, s.xb, w.wq.subarray(l * dim * dim, (l + 1) * dim * dim), dim, dim);
+        matmul(s.k, s.xb, w.wk.subarray(l * dim * kv_dim, (l + 1) * dim * kv_dim), dim, kv_dim);
+        matmul(s.v, s.xb, w.wv.subarray(l * dim * kv_dim, (l + 1) * dim * kv_dim), dim, kv_dim);
+
+        // RoPE旋转位置编码实现方式1：使用模型提供的旋转系数
+        for (let h = 0; h < cfg.n_head; h++) {
+            const q = s.q.subarray(h * head_dim, (h + 1) * head_dim);
+            for (let i = 0; i < head_dim; i += 2) {
+                const q0 = q[i];
+                const q1 = q[i + 1];
+                const fcr = freq_cis_real_row[i / 2];
+                const fci = freq_cis_imag_row[i / 2];
+                q[i] = q0 * fcr - q1 * fci;
+                q[i + 1] = q0 * fci + q1 * fcr;
+            }
+        }
+        for (let m = 0; m < cfg.n_kv_head; m++) {
+            const k = s.k.subarray(m * head_dim, (m + 1) * head_dim);
+            for (let i = 0; i < head_dim; i += 2) {
+                const k0 = k[i];
+                const k1 = k[i + 1];
+                const fcr = freq_cis_real_row[i / 2];
+                const fci = freq_cis_imag_row[i / 2];
+                k[i] = k0 * fcr - k1 * fci;
+                k[i + 1] = k0 * fci + k1 * fcr;
+            }
+        }
+
+        /*
+        // RoPE旋转位置编码实现方式2：直接计算旋转系数
+        for (let i = 0; i < dim; i += 2) {
+            let ih = i % head_dim;
+            let freq = 1.0 / Math.pow(10000.0, ih / head_dim);
+            let val = pos * freq;
+            let fcr = Math.cos(val);
+            let fci = Math.sin(val);
+
+            if(i < kv_dim) {
+                let kr = s.k[i];
+                let ki = s.k[i+1];
+                s.k[i]   = kr * fcr - ki * fci;
+                s.k[i+1] = kr * fci + ki * fcr;
+            }
+            let qr = s.q[i];
+            let qi = s.q[i+1];
+            s.q[i]   = qr * fcr - qi * fci;
+            s.q[i+1] = qr * fci + qi * fcr;
+        }
+        */
+
+        // 分组查询多头注意力（GQA-MHA），遍历所有的Q注意力头
+        for (let h = 0; h < cfg.n_head; h++) {
+            // KV分组注意力头的序号
+            let m = ((h / kv_mul)^0);
+            // get the query vector for this head
+            const qh = s.q.subarray(h * head_dim, (h + 1) * head_dim);
+            // attention scores for this head
+            const att = s.att.subarray(h * cfg.block_size, (h + 1) * cfg.block_size);
+            // 计算因果自注意力，包括当前时间步 iterate over all timesteps, including the current one
+            for (let t = 0; t <= pos; t++) {
+                // get the key vector for this head and at this timestep
+                const kh = s.k_cache.subarray(loff + t * kv_dim + m * head_dim, loff + (t + 1) * kv_dim + m * head_dim);
+                // calculate the attention score as the dot product of q and k
+                let score = 0.0;
+                for (let i = 0; i < head_dim; i++) {
+                    score += qh[i] * kh[i];
+                }
+                score /= Math.sqrt(head_dim);
+                // save the score to the attention buffer
+                att[t] = score;
+            }
+
+            // softmax the scores to get attention weights, from 0..pos inclusively
+            softmax(att, pos + 1);
+
+            // weighted sum of the values, store back into xb
+            for (let i = 0; i < head_dim; i++) {
+                let val = 0.0;
+                for (let t = 0; t <= pos; t++) {
+                    const vh = s.v_cache.subarray(loff + t * kv_dim + m * head_dim, loff + (t + 1) * kv_dim + m * head_dim);
+                    val += att[t] * vh[i]; // NOTE bad locality
+                    // val += att[t] * s.v_cache[loff + t * kv_dim + m * head_dim + i]; // NOTE bad locality
+                }
+                s.xb[h * head_dim + i] = val;
+            }
+        }
+
+        // final matmul to get the output of the attention
+        matmul(s.xb2, s.xb, w.wo.subarray(l * dim * dim, (l + 1) * dim * dim), dim, dim);
+
+        // residual connection back into x
+        accum(x, s.xb2, dim);
+
+        // ffn rmsnorm
+        rms_norm(s.xb, x, w.rms_norm_ffn.subarray(l * dim, (l + 1) * dim), dim);
+
+        // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
+        matmul(s.hb, s.xb, w.w1.subarray(l * dim * hidden_dim, (l + 1) * dim * hidden_dim), dim, hidden_dim);
+        matmul(s.hb2, s.xb, w.w3.subarray(l * dim * hidden_dim, (l + 1) * dim * hidden_dim), dim, hidden_dim);
+
+        // SwiGLU non-linearity
+        for (let i = 0; i < hidden_dim; i++) {
+            let val = s.hb[i];
+            // silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
+            val *= (1.0 / (1.0 + Math.exp(-val)));
+            // elementwise multiply with w3(x)
+            val *= s.hb2[i];
+            s.hb[i] = val;
+        }
+
+        // final matmul to get the output of the ffn
+        matmul(s.xb, s.hb, w.w2.subarray(l * dim * hidden_dim, (l + 1) * dim * hidden_dim), hidden_dim, dim);
+
+        // residual connection
+        accum(x, s.xb, dim);
+    }
+
+    // final rmsnorm
+    rms_norm(x, x, w.rms_norm_final, dim);
+
+    // classifier into logits
+    matmul(s.logits, x, w.token_classifier, cfg.n_embd, cfg.vocab_size);
+
+    return s.logits;
+}
+
+// ===============================================================================
+// 词元编解码、分词器（基于Trie树）
+// ===============================================================================
+
+function TrieTree(vocab) {
+    this.root = {};
+    this.max_token_length = 0;
+    this.END_CHAR = "__end__";
+    for(let i = 0; i < vocab.length; i++) {
+        let word = vocab[i];
+        if(word.length > this.max_token_length) {
+            this.max_token_length = word.length;
+        }
+        let current_dict = this.root;
+        for(let j = 0; j < word.length; j++) {
+            c = word[j];
+            if(c in current_dict) {
+                current_dict = current_dict[c];
+            }
+            else {
+                current_dict[c] = {};
+                current_dict = current_dict[c];
+            }
+        }
+        current_dict[this.END_CHAR] = this.END_CHAR;
+    }
+}
+
+TrieTree.prototype.match = function(token) {
+    let current_dict = this.root;
+    for(let j = 0; j < token.length; j++) {
+        c = token[j];
+        if(c in current_dict !== true) {
             return false;
         }
-
-        let major_version = header[2];
-        let minor_version = header[3];
-
-        console.info(`Model version: ${major_version}.${minor_version}`);
-
-        let config = {
-            block_size: 0,
-            vocab_size: 0,
-            n_layer: 0,
-            n_embd: 0,
-            n_head: 0,
-            n_kv_head: 0,
-            n_hidden: 0,
-            is_shared_classifier: 0
-        };
-
-        let cfg_keys = Object.keys(config);
-        header.slice(4, 4 + cfg_keys.length).forEach((v, i) => {
-            config[cfg_keys[i]] = v;
-        });
-
-        offset += header_length;
-
-        const cfg = config;
-
-        const is_shared_weights = cfg.is_shared_classifier > 0 ? 1 : 0;
-
-        // initialization: read from checkpoint
-        const head_dim = cfg.n_embd / cfg.n_head;
-
-        // token embedding table
-        let token_embedding_table = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.vocab_size * cfg.n_embd));
-        // weights for rmsnorms
-        let rms_att_weight = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd));
-        // weights for matmuls
-        let wq = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_embd));
-        let wk = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_kv_head * head_dim));
-        let wv = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_kv_head * head_dim));
-        let wo = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_embd));
-        // weights for rmsnorms
-        let rms_ffn_weight = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd));
-        // weights for ffn
-        let w1 = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden));
-        let w2 = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden));
-        let w3 = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden));
-        // final rmsnorm
-        let rms_final_weight = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_embd));
-        // freq_cis for RoPE relatively positional embeddings
-        let freq_cis_real = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.block_size * head_dim / 2));
-        let freq_cis_imag = new Float32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.block_size * head_dim / 2));
-        // (optional) classifier weights for the logits, on the last layer
-        let wcls = null;
-
-        weights = {
-            token_embedding_table: token_embedding_table,
-            rms_att_weight: rms_att_weight,
-            wq: wq,
-            wk: wk,
-            wv: wv,
-            wo: wo,
-            rms_ffn_weight: rms_ffn_weight,
-            w1: w1,
-            w2: w2,
-            w3: w3,
-            rms_final_weight: rms_final_weight,
-            freq_cis_real: freq_cis_real,
-            freq_cis_imag: freq_cis_imag,
-            wcls: wcls
-        };
-        weights.wcls = is_shared_weights ? weights.token_embedding_table : offset;
-
-        tk_length_field = new Uint32Array(arrayBuffer.slice(offset, offset += SIZE_OF_DTYPE));
-        tk_length = tk_length_field[0];
-        tokenizer_config_json_base64 = new Uint8Array(arrayBuffer.slice(offset, offset += tk_length));
-        const text_decoder = new TextDecoder("utf-8");
-        tokenizer_config_json_base64_str = text_decoder.decode(tokenizer_config_json_base64);
-        tokenizer_config_json_str = window.atob(tokenizer_config_json_base64_str);
-        tokenizer_config = JSON.parse(tokenizer_config_json_str);
-        console.log(tokenizer_config);
-
-        run_state = {
-            // current wave of activations
-            x: new Float32Array(cfg.n_embd), // activation at current time stamp (dim,)
-            xb: new Float32Array(cfg.n_embd), // same, but inside a residual branch (dim,)
-            xb2: new Float32Array(cfg.n_embd), // an additional buffer just for convenience (dim,)
-            hb: new Float32Array(cfg.n_hidden), // buffer for hidden dimension in the ffn (hidden_dim,)
-            hb2: new Float32Array(cfg.n_hidden), // buffer for hidden dimension in the ffn (hidden_dim,)
-            q: new Float32Array(cfg.n_embd), // query (dim,)
-            k: new Float32Array(cfg.n_embd), // key (dim,)
-            v: new Float32Array(cfg.n_embd), // value (dim,)
-            att: new Float32Array(cfg.n_head * cfg.block_size), // buffer for scores/attention values (n_heads, seq_len)
-            logits: new Float32Array(cfg.vocab_size), // output logits
-            // kv cache
-            key_cache: new Float32Array(cfg.n_layer * cfg.block_size * cfg.n_embd),   // (layer, seq_len, dim)
-            value_cache: new Float32Array(cfg.n_layer * cfg.block_size * cfg.n_embd), // (layer, seq_len, dim)
-        };
+        current_dict = current_dict[c];
     }
+    return (this.END_CHAR in current_dict);
+};
 
-
-    // ----------------------------------------------------------------------------
-    // neural net blocks
-
-    function accum(a, b, size) {
-        for (let i = 0; i < size; i++) {
-            a[i] += b[i];
-        }
-    }
-
-    function rmsnorm(o, x, weight, size) {
-        // calculate sum of squares
-        let ss = 0.0;
-        for (let j = 0; j < size; j++) {
-            ss += x[j] * x[j];
-        }
-        ss /= size;
-        ss += 1e-5;
-        ss = 1.0 / Math.sqrt(ss);
-        // normalize and scale
-        for (let j = 0; j < size; j++) {
-            o[j] = weight[j] * (ss * x[j]);
-        }
-    }
-
-    function softmax(x, size) {
-        // find max value (for numerical stability)
-        let max_val = x[0];
-        for (let i = 1; i < size; i++) {
-            if (x[i] > max_val) {
-                max_val = x[i];
+TrieTree.prototype.tokenize = function(text) {
+    let tokens = [];
+    while(text.length > 0) {
+        for(let n = this.max_token_length; n > 0; n--) {
+            let prefix = text.slice(0, n);
+            if(n === 1 || this.match(prefix) === true) {
+                tokens.push(prefix);
+                text = text.slice(n);
+                break;
             }
         }
-        // exp and sum
-        let sum = 0.0;
-        for (let i = 0; i < size; i++) {
-            x[i] = Math.exp(x[i] - max_val);
-            sum += x[i];
+    }
+    return tokens;
+};
+
+// 字符串 → 词元编码序列
+function encode(text) {
+    let tlist = TOKENIZER.trie.tokenize(text);
+    let idlist = [];
+    let vocab = TOKENIZER.config.stoi;
+    for(let i = 0; i < tlist.length; i++) {
+        c = tlist[i];
+        if(c in vocab) {
+            idlist.push(vocab[c]);
         }
-        // normalize
-        for (let i = 0; i < size; i++) {
-            x[i] /= sum;
+        else {
+            idlist.push(1); // <|unknown|>
+        }
+    }
+    return idlist;
+}
+
+// 词元编码序列 → 字符串
+function decode(idlist) {
+    let tlist = [];
+    for(let i = 0; i < idlist.length; i++) {
+        id = idlist[i];
+        tlist.push(TOKENIZER.config.itos[id]);
+    }
+    return tlist.join("");
+}
+
+
+// ===============================================================================
+// 采样策略
+// ===============================================================================
+
+function sample_mult(probabilities, n) {
+    // sample index from probabilities, they must sum to 1
+    const r = Math.random();
+    // const r = 0.5; // TODO
+    let cdf = 0.0;
+    for (let i = 0; i < n; i++) {
+        cdf += probabilities[i];
+        if (r < cdf) {
+            return i;
+        }
+    }
+    return n - 1; // in case of rounding errors
+}
+
+function set_topk(logits, vs, k) {
+    let probindex = [];
+    for (let i = 0; i < vs; i++) {
+        probindex.push({index: i, prob: logits[i]});
+    }
+    probindex.sort((a, b) => b.prob - a.prob);
+    let top_tokens = probindex.slice(0, k);
+    let index_map = [];
+    for (let i = 0; i < vs; i++) {
+        index_map[i] = 0;
+    }
+    for (let j = 0; j < top_tokens.length; j++) {
+        top_index = top_tokens[j].index;
+        index_map[top_index] = 1;
+    }
+    for (let i = 0; i < vs; i++) {
+        if(index_map[i] === 0) {
+            logits[i] = Number.NEGATIVE_INFINITY;
+        }
+    }
+    return logits;
+}
+
+function sample_topp(probabilities, n, topp) {
+    const cutoff = (1.0 - topp) / (n - 1);
+    let n0 = 0;
+    let probindex = [];
+    for (let i = 0; i < n; i++) {
+        if (probabilities[i] >= cutoff) {
+            probindex.push({index: i, prob: probabilities[i]});
+            n0++;
+        }
+    }
+    probindex.sort((a, b) => b.prob - a.prob);
+
+    // truncate the list where cumulative probability exceeds topp
+    let cumulative_prob = 0.0;
+    let last_idx = n0 - 1; // in case of rounding errors consider all elements
+    for (let i = 0; i < n0; i++) {
+        cumulative_prob += probindex[i].prob;
+        if (cumulative_prob > topp) {
+            last_idx = i;
+            break; // we've exceeded topp by including last_idx
         }
     }
 
-    function matmul(xout, x, w, n, d) {
-        // W (d,n) @ x (n,) -> xout (d,)
-        for (let i = 0; i < d; i++) {
-            let val = 0.0;
-            for (let j = 0; j < n; j++) {
-                val += w[i * n + j] * x[j];
+    // sample from the truncated list
+    const r = Math.random() * cumulative_prob;
+    let cdf = 0.0;
+    for (let i = 0; i <= last_idx; i++) {
+        cdf += probindex[i].prob;
+        if (r < cdf) {
+            return probindex[i].index;
+        }
+    }
+    return probindex[last_idx].index; // in case of rounding errors
+}
+
+function sample_argmax(logits, vsize) {
+    // return argmax of logits in elements 0..vsize
+    let max_i = 0;
+    let max_p = logits[0];
+    for (let i = 1; i < vsize; i++) {
+        if (logits[i] > max_p) {
+            max_i = i;
+            max_p = logits[i];
+        }
+    }
+    return max_i;
+}
+
+async function generate() {
+    if(is_generating) {
+        return;
+    }
+    is_generating = true;
+    document.querySelector('#run').disabled = "true";
+
+    document.querySelector('#llm_output').textContent = '';
+    document.querySelector('#tps').textContent = '';
+
+    const temperature = parseFloat(document.querySelector('#temperature').value);
+    const topp = parseFloat(document.querySelector('#top-p').value);
+
+    let steps = parseInt(document.querySelector('#steps').value);
+    let elpased = [];
+
+    let pos = 0;
+
+    // right now we cannot run for more than cfg.block_size steps
+    if (steps <= 0 || steps > LLM.config.block_size) { steps = LLM.config.block_size; }
+    let next = 0;
+    let idlist = [];
+    let token = 0;
+
+    let prompt_string = `<|instruct_mark|>${document.querySelector('#prompt').value}<|response_mark|>`;
+    let prompt_tokens = encode(prompt_string);
+
+    while (pos < steps) {
+        const start = performance.now();
+        llm_forward(token, pos, LLM, FWD_BUFFER);
+
+        // Pre-fill: if we are still processing the input prompt, force the next prompt token
+        if(pos < prompt_tokens.length - 1) {
+            document.querySelector('#status').textContent = "Pre-filling...";
+            next = prompt_tokens[pos];
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        // Auto-regressive Decode
+        else {
+            document.querySelector('#status').textContent = "Decoding...";
+            // sample the next token
+            if(temperature == 0.0) {
+                // greedy argmax sampling
+                next = sample_argmax(FWD_BUFFER.logits, LLM.config.vocab_size);
             }
-            xout[i] = val;
-        }
-    }
-
-    function transformer(token, pos, cfg, s, w) {
-        // cfg = config, s = run_state, w = weights
-        // a few convenience variables
-        let x = s.x;
-        const dim = cfg.n_embd;
-        const hidden_dim = cfg.n_hidden;
-        const head_dim = dim / cfg.n_head;
-
-        // copy the token embedding into x
-        x.set(w.token_embedding_table.subarray(token * dim, (token + 1) * dim));
-        
-        // pluck out the "pos" row of freq_cis_real and freq_cis_imag
-        const freq_cis_real_row = w.freq_cis_real.subarray(pos * head_dim / 2, (pos + 1) * head_dim / 2);
-        const freq_cis_imag_row = w.freq_cis_imag.subarray(pos * head_dim / 2, (pos + 1) * head_dim / 2);
-        
-        // forward all the layers
-        for(let l = 0; l < cfg.n_layer; l++) {
-            // attention rmsnorm
-            rmsnorm(s.xb, x, w.rms_att_weight.subarray(l * dim, (l + 1) * dim), dim);
-
-            // qkv matmuls for this position
-            matmul(s.q, s.xb, w.wq.subarray(l * dim * dim, (l + 1) * dim * dim), dim, dim);
-            matmul(s.k, s.xb, w.wk.subarray(l * dim * dim, (l + 1) * dim * dim), dim, dim);
-            matmul(s.v, s.xb, w.wv.subarray(l * dim * dim, (l + 1) * dim * dim), dim, dim);
-
-            // apply RoPE rotation to the q and k vectors for each head
-            for (let h = 0; h < cfg.n_head; h++) {
-                // get the q and k vectors for this head
-                const q = s.q.subarray(h * head_dim, (h + 1) * head_dim);
-                const k = s.k.subarray(h * head_dim, (h + 1) * head_dim);
-                // rotate q and k by the freq_cis_real and freq_cis_imag
-                for (let i = 0; i < head_dim; i += 2) {
-                    const q0 = q[i];
-                    const q1 = q[i + 1];
-                    const k0 = k[i];
-                    const k1 = k[i + 1];
-                    const fcr = freq_cis_real_row[i / 2];
-                    const fci = freq_cis_imag_row[i / 2];
-                    q[i] = q0 * fcr - q1 * fci;
-                    q[i + 1] = q0 * fci + q1 * fcr;
-                    k[i] = k0 * fcr - k1 * fci;
-                    k[i + 1] = k0 * fci + k1 * fcr;
+            else {
+                for (let q = 0; q < LLM.config.vocab_size; q++) {
+                    FWD_BUFFER.logits[q] /= temperature;
                 }
+                set_topk(FWD_BUFFER.logits, LLM.config.vocab_size, 5);
+                softmax(FWD_BUFFER.logits, LLM.config.vocab_size);
+                next = sample_mult(FWD_BUFFER.logits, LLM.config.vocab_size);
+
+                // if (topp <= 0 || topp >= 1) {
+                //     next = sample_mult(FWD_BUFFER.logits, LLM.config.vocab_size);
+                // } else {
+                //     next = sample_topp(FWD_BUFFER.logits, LLM.config.vocab_size, topp);
+                // }
             }
+            await new Promise(resolve => setTimeout(resolve, 0));
 
-            // save key,value at this time step (pos) to our kv cache
-            const loff = l * cfg.block_size * dim; // kv cache layer offset for convenience
-            const key_cache_row = s.key_cache.subarray(loff + pos * dim, loff + (pos + 1) * dim);
-            const value_cache_row = s.value_cache.subarray(loff + pos * dim, loff + (pos + 1) * dim);
-            key_cache_row.set(s.k);
-            value_cache_row.set(s.v);
-
-            // multihead attention. iterate over all heads
-            for (let h = 0; h < cfg.n_head; h++) {
-                // get the query vector for this head
-                const q = s.q.subarray(h * head_dim, (h + 1) * head_dim);
-                // attention scores for this head
-                const att = s.att.subarray(h * cfg.block_size, (h + 1) * cfg.block_size);
-                // iterate over all timesteps, including the current one
-                for (let t = 0; t <= pos; t++) {
-                    // get the key vector for this head and at this timestep
-                    const k = s.key_cache.subarray(loff + t * dim + h * head_dim, loff + (t + 1) * dim + h * head_dim);
-                    // calculate the attention score as the dot product of q and k
-                    let score = 0.0;
-                    for (let i = 0; i < head_dim; i++) {
-                        score += q[i] * k[i];
-                    }
-                    score /= Math.sqrt(head_dim);
-                    // save the score to the attention buffer
-                    att[t] = score;
-                }
-
-                // softmax the scores to get attention weights, from 0..pos inclusively
-                softmax(att, pos + 1);
-
-                // weighted sum of the values, store back into xb
-                for (let i = 0; i < head_dim; i++) {
-                    let val = 0.0;
-                    for (let t = 0; t <= pos; t++) {
-                        val += att[t] * s.value_cache[loff + t * dim + h * head_dim + i]; // note bad locality
-                    }
-                    s.xb[h * head_dim + i] = val;
-                }
-            }
-
-            // final matmul to get the output of the attention
-            matmul(s.xb2, s.xb, w.wo.subarray(l * dim * dim, (l + 1) * dim * dim), dim, dim);
-
-            // residual connection back into x
-            accum(x, s.xb2, dim);
-
-            // ffn rmsnorm
-            rmsnorm(s.xb, x, w.rms_ffn_weight.subarray(l * dim, (l + 1) * dim), dim);
-
-            // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-            // first calculate self.w1(x) and self.w3(x)
-            matmul(s.hb, s.xb, w.w1.subarray(l * dim * hidden_dim, (l + 1) * dim * hidden_dim), dim, hidden_dim);
-            matmul(s.hb2, s.xb, w.w3.subarray(l * dim * hidden_dim, (l + 1) * dim * hidden_dim), dim, hidden_dim);
-
-            // F.silu; silu(x)=x*σ(x),where σ(x) is the logistic sigmoid
-            for (let i = 0; i < hidden_dim; i++) {
-                s.hb[i] = s.hb[i] * (1.0 / (1.0 + Math.exp(-s.hb[i])));
-            }
-
-            // elementwise multiply with w3(x)
-            for (let i = 0; i < hidden_dim; i++) {
-                s.hb[i] = s.hb[i] * s.hb2[i];
-            }
-
-            // final matmul to get the output of the ffn
-            matmul(s.xb, s.hb, w.w2.subarray(l * dim * hidden_dim, (l + 1) * dim * hidden_dim), hidden_dim, dim);
-
-            // residual connection
-            accum(x, s.xb, dim);
+            idlist.push(next);
+            document.querySelector('#llm_output').textContent = decode(idlist);
+            // document.querySelector('#llm_output').textContent = String(idlist);
         }
 
-        // final rmsnorm
-        rmsnorm(x, x, w.rms_final_weight, dim);
+        // <|eos|> or <|padding|>
+        if(next === 0 || next === 3) break;
 
-        // classifier into logits
-        matmul(s.logits, x, w.wcls, cfg.n_embd, cfg.vocab_size);
+        // advance forward
+        token = next;
+        pos++;
+
+        // report achieved tok/s
+        const end = performance.now();
+        elpased.push(1 / (end-start)*1000);
+        document.querySelector('#tps').textContent = elpased.slice(-1)[0].toFixed(2);
     }
 
-    // ----------------------------------------------------------------------------
-    // byte pair encoding (BPE) tokenizer, encodes strings into tokens so we can prompt
+    const avg = elpased.reduce((a, b) => a + b) / elpased.length;
+    document.querySelector('#tps').textContent = avg.toFixed(2);
 
-    function bpe_encode(text) {
-        let ids = [];
-        for(let i = 0; i < text.length; i++) {
-            ids.push(tokenizer_config.stoi[text[i]]);
-        }
-        return ids;
-    }
+    is_generating = false;
+    document.querySelector('#run').removeAttribute("disabled");
+    document.querySelector('#status').textContent = "Ready";
+}
 
-    // ----------------------------------------------------------------------------
 
-    function sample(probabilities, n) {
-        // sample index from probabilities, they must sum to 1
-        const r = Math.random();
-        let cdf = 0.0;
-        for (let i = 0; i < n; i++) {
-            cdf += probabilities[i];
-            if (r < cdf) {
-                return i;
-            }
-        }
-        return n - 1; // in case of rounding errors
-    }
+document.querySelector('#run').addEventListener('click', generate);
 
-    function sample_topp(probabilities, n, topp) {
-        // top-p sampling (or "nucleus sampling") samples from the smallest set of
-        // tokens that exceed probability topp. This way we never sample tokens that
-        // have very low probabilities and are less likely to go "off the rails".
+let model_file_selector = document.getElementById('model_file_selector');
+model_file_selector.onchange = () => {
+    let file = model_file_selector.files[0];
+    let Reader = new FileReader();
+    Reader.onloadend = () => {
+        document.querySelector('#status').textContent = "Loading...";
+        let file_buffer = Reader.result;
+        parse_model(file_buffer);
+        document.querySelector('#status').textContent = "Ready";
+        document.querySelector('#infer').style.display = "block";
+        document.querySelector('#select_file').style.display = "none";
+    };
+    Reader.readAsArrayBuffer(file);
+};
 
-        // quicksort indices in descending order of probabilities
-        // values smaller than (1 - topp) / (n - 1) cannot be part of the result
-        // so for efficiency we crop these out as candidates before sorting
-        const cutoff = (1.0 - topp) / (n - 1);
-        let n0 = 0;
-        let probindex = [];
-        for (let i = 0; i < n; i++) {
-            if (probabilities[i] >= cutoff) {
-                probindex.push({index: i, prob: probabilities[i]});
-                n0++;
-            }
-        }
-        probindex.sort((a, b) => b.prob - a.prob);
 
-        // truncate the list where cumulative probability exceeds topp
-        let cumulative_prob = 0.0;
-        let last_idx = n0 - 1; // in case of rounding errors consider all elements
-        for (let i = 0; i < n0; i++) {
-            cumulative_prob += probindex[i].prob;
-            if (cumulative_prob > topp) {
-                last_idx = i;
-                break; // we've exceeded topp by including last_idx
-            }
-        }
-
-        // sample from the truncated list
-        const r = Math.random() * cumulative_prob;
-        let cdf = 0.0;
-        for (let i = 0; i <= last_idx; i++) {
-            cdf += probindex[i].prob;
-            if (r < cdf) {
-                return probindex[i].index;
-            }
-        }
-        return probindex[last_idx].index; // in case of rounding errors
-    }
-
-    function argmax(v, n) {
-        // return argmax of v in elements 0..n
-        let max_i = 0;
-        let max_p = v[0];
-        for (let i = 1; i < n; i++) {
-            if (v[i] > max_p) {
-                max_i = i;
-                max_p = v[i];
-            }
-        }
-        return max_i;
-    }
-
-    async function generate() {
-        if(is_generating) {
-            return;
-        }
-        is_generating = true;
-        document.querySelector('#output').value = '';
-        document.querySelector('#toks').textContent = '';
-        const temperature = parseFloat(document.querySelector('#temperature').value);
-        let steps = parseInt(document.querySelector('#steps').value);
-        let elpased = [];
-
-        let pos = 0;
-        // right now we cannot run for more than cfg.block_size steps
-        if (steps <= 0 || steps > config.seq_len) { steps = config.seq_len; }
-        let next = 0;
-        let token = 1; // 1 = BOS token in Llama-2 sentencepiece
-        let topp = parseFloat(document.querySelector('#top-p').value);
-        document.querySelector('#output').value += "<s>\n"; // explicit print the initial BOS token (=1), stylistically symmetric
-
-        const prompt = document.querySelector('#prompt').value;
-        let num_prompt_tokens = 0;
-        let prompt_tokens;
-        if (prompt) {
-            prompt_tokens = bpe_encode(prompt);
-            num_prompt_tokens = prompt_tokens.length;
-            document.querySelector('#output').value += prompt;
-        }
-
-        while (pos < steps) {
-            const start = performance.now();
-            transformer(token, pos, config, run_state, weights);
-
-            if(pos < num_prompt_tokens) {
-                // if we are still processing the input prompt, force the next prompt token
-                next = prompt_tokens[pos];
-            } else {
-                // sample the next token
-                if(temperature == 0.0) {
-                    // greedy argmax sampling
-                    next = argmax(run_state.logits, config.vocab_size);
-                } else {
-                    // apply the temperature to the logits
-                    for (let q=0; q<config.vocab_size; q++) { run_state.logits[q] /= temperature; }
-                    // apply softmax to the logits to get the probabilities for next token
-                    softmax(run_state.logits, config.vocab_size);
-                    // we now want to sample from this distribution to get the next token
-                    //next = sample(run_state.logits, config.vocab_size);
-                    // we sample from this distribution to get the next token
-                    if (topp <= 0 || topp >= 1) {
-                        // simply sample from the predicted probability distribution
-                        next = sample(run_state.logits, config.vocab_size);
-                    } else {
-                        // top-p (nucleus) sampling, clamping the least likely tokens to zero
-                        next = sample_topp(run_state.logits, config.vocab_size, topp);
-                    }
-                }
-                await new Promise(resolve => setTimeout(resolve, 0));
-                // following BOS token (1), sentencepiece decoder strips any leading whitespace (see PR #89)
-                if (token == 1 && vocab[next][0] == ' ') {
-                    document.querySelector('#output').value += vocab[next].slice(1);
-                } else {
-                    document.querySelector('#output').value += vocab[next];
-                }
-            }
-            // advance forward
-            token = next;
-            pos++;
-            // report achieved tok/s
-            const end = performance.now();
-            elpased.push(1 / (end-start)*1000);
-            document.querySelector('#toks').textContent = elpased.slice(-1)[0].toFixed(4);
-        }
-        const avg = elpased.reduce((a, b) => a + b) / elpased.length;
-        document.querySelector('#toks').textContent = avg.toFixed(4);
-        is_generating = false;
-    }
-
-    async function init() {
-        await load_model('test.bin');
-        generate();
-    }
-
-    document.querySelector('#run').addEventListener('click', generate);
-    // select another model
-    document.querySelector('#model').addEventListener('change', async function() {
-        await load_model(this.value + '.bin');
-        generate();
-    });
-
-    init();
 </script>
