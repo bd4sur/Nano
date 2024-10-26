@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+<title>NanoLM - BD4SUR</title>
+
+<style>
+body {
+    margin: 0; padding: 0;
+}
+
+@media(min-width:651px) { /* Desktop */
+    .Main {
+        width: 60%;
+        max-width: 650px;
+        margin: 20px auto;
+        padding-top: 20px;
+        font-size: 14px;
+        border-radius: 20px;
+        box-shadow: 0 0px #e5e5e5, 0 0 15px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.05);
+        overflow: hidden;
+    }
+}
+@media(max-width:650px) { /* Mobile */
+    .Main {
+        width: 100%;
+        font-size: 14px;
+    }
+}
+
+.Top {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    padding: 10px 30px;
+    font-size: 20px;
+    color: #d2d6dd;
+    background-color: #fff;
+    border-radius: 20px 20px 0px 0px;
+    z-index: 99999;
+}
+.Nano {
+    font-weight: bold;
+    background-image: -webkit-linear-gradient(320deg, #00e2ff, #003cff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.Middle {
+    /* max-width: 700px; */
+    margin: 0 auto;
+    display: flex;
+    /* flex-direction: column;
+    align-items: center; */
+    overflow: hidden;
+}
+.ValueFieldContainer {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 2px 4px;
+    margin: 2px;
+    border-radius: 3px;
+    background-color: #e9ebf0;
+}
+.ValueFieldTitle { margin: 3px 5px; font-size: 13px; }
+.ValueFieldInput { outline: none; border: none; width: 100%; }
+.ValueFieldInputContainer { width: 60%; }
+
+.InputTextField, .OutputTextField {
+    width: 100%;
+    letter-spacing: 1px;
+    font-family: system-ui;
+    line-height: 1.6;
+}
+
+.start_generation_button { border: none; background-color: #15e; color: #fff; border-radius: 3px; padding: 5px 10px; font-size: 14px; line-height: 1.5; }
+.start_generation_button:hover { background-color: #5180ed; color: #fff; }
+.start_generation_button:disabled { background-color: #dddfe5; color: #fff; }
+
+.Footer {
+    padding: 10px 30px 10px 30px;
+}
+.Copyright {
+    font-size: 12px;
+    text-align: center;
+    line-height: 3;
+    color: #9a9ea8;
+}
+
+
+
+
+
+
+
+
+
+
+
+.Chat {
+    position: relative;
+    width: 100%;
+    overflow-y: auto;
+    background-color: #f3f5f8;
+}
+
+.ChatRecord {
+    padding: 10px 10px 30px 10px;
+    background-color: #f3f5f8;
+    min-height: calc(100% - 120px);
+    text-align: center;
+}
+.Guide {
+    display: flex;
+    margin: 20px 0;
+    flex-direction: column;
+    align-items: center;
+}
+.GuideIntro {
+    font-size: 18px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    margin: 20px 0;
+}
+.GuideQuestionContainer {
+    display: flex;
+    flex-wrap: wrap;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+}
+.GuideQuestion {
+    border-radius: 5px;
+    background-color: #fff;
+    margin: 5px;
+    padding: 10px;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+}
+.GuideQuestion:hover {
+    box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
+}
+.ChatInfo {
+    display: block;
+    font-size: 12px;
+    background-color: #e6e7eb;
+    color: #9b9fa6;
+    width: fit-content;
+    padding: 2px 10px;
+    margin: 5px auto;
+    border-radius: 20px;
+}
+
+.ChatRound { display: flex; align-items: flex-start; text-align: left; margin: 8px 0; }
+
+.UserRound { flex-direction: row; }
+.BotRound { flex-direction: row; }
+
+.ChatAvatarContainer {
+    width: 30px; height: 30px; overflow: hidden; border-radius: 30px; flex-shrink: 0;
+    border: 1px solid #fff;
+    box-sizing: border-box;
+    box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
+}
+.UserAvatarContainer {
+    margin-right: 10px;
+}
+.BotAvatarContainer {
+    margin-right: 10px;
+}
+.UserAvatarImage, .BotAvatarImage { width: 100%; height: 100%; }
+
+.ChatBubble {
+    font-size: 13px; line-height: 1.5; letter-spacing: 0.5px;
+    margin: 8px 0;
+    margin: 0px;
+    border-radius: 5px;
+    box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
+    overflow: hidden;
+}
+.UserBubble {
+    color: #ffffff;
+    background: linear-gradient(320deg, #28cdff, #678bff);
+}
+.BotBubble {
+    color: #383a40;
+    background: #fff;
+}
+.ChatContent {
+    padding: 10px 15px;
+}
+.ChatContent :first-of-type { margin-top: 0; }
+.ChatContent :last-of-type { margin-bottom: 0; }
+.ChatContent p {
+    font-size: 13px; line-height: 1.5; letter-spacing: 0.5px;
+    margin: 8px 0;
+}
+.UserBubbleFooter, .BotBubbleFooter {
+    display: flex;
+    justify-content: space-between;
+    padding: 0 5px 5px 15px;
+    align-items: center;
+}
+.UserBubbleFooter { color: #ffffffaa; }
+.BotBubbleFooter { color:#aaaeba; }
+
+.UserFooterInfo, .BotFooterInfo {
+    font-size: 10px;
+    margin-right: 10px;
+}
+.UserCopyBubble, .BotCopyBubble {
+    display: flex;
+    font-size: 11px;
+    line-height: 1;
+    flex-direction: row;
+    align-items: center;
+    background: none;
+    padding: 3px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.UserCopyBubble:hover { background: #ffffff50; }
+.BotCopyBubble:hover { background: #383a4010; }
+
+.ChatInput {
+    position: sticky;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    padding: 10px 0;
+    background: #f3f5f8;
+    text-align: center;
+}
+.ChatInputContainer {
+    display: flex;
+    margin: 10px;
+}
+.InputBoxContainer {
+    display: flex;
+    /* border: 2px solid #e5e9f2; */
+    border-radius: 6px;
+    background: #ffffff;
+    width: 100%;
+    padding: 4px 6px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    box-shadow: 2px 2px 6px 0px rgb(0 0 0 / 0.1);
+}
+.ButtonClear, .ButtonSetting, .ButtonAttachment, .ButtonTTS {
+    display: flex;
+    cursor: pointer;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 5px;
+}
+.ButtonHover, .ButtonClear:hover, .ButtonSetting:hover, .ButtonAttachment:hover, .ButtonTTS:hover {
+    background-color: #e5e9f2;
+}
+.ButtonClear {
+    margin: 0 6px 0 0;
+}
+.ButtonSetting {
+    margin: 0 0 0 6px;
+}
+.ButtonAttachment {
+    position: relative;
+    margin: 0 0 0 3px;
+}
+.ButtonTTS {
+    margin: 0 0 0 3px;
+}
+.ButtonClearContainer, .ButtonAttachmentContainer, .ButtonSettingContainer {
+    margin: 0;
+    width: 16px;
+    height: 16px;
+}
+.ButtonTTSContainer {
+    margin: 0;
+    width: 20px;
+    height: 20px;
+}
+
+.InputAttachment {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 28px;
+    opacity: 0;
+}
+
+.InputBox {
+    width: 100%;
+    border: none;
+    outline: none;
+    resize: none;
+    padding: 6px 0;
+    font-size: 13px;
+    font-family: inherit;
+    letter-spacing: 0.5px;
+    line-height: 1.5;
+    max-height: 200px;
+    min-height: 20px;
+    height: 20px;
+}
+.InputBox::placeholder {
+    color: #c3c8d1;
+}
+
+.ButtonSubmit {
+    border: none;
+    background: #15e;
+    border-radius: 6px;
+    color: #fff;
+    min-width: 50px;
+    flex-shrink: 0;
+    margin: 1px 0 1px 10px;
+    box-shadow: 2px 2px 6px 0px rgba(0, 0, 0, 0.1);
+}
+.ButtonSubmit:active {
+    background: #0038b9;
+    padding: 2px 0 0 2px;
+    box-shadow: inset 2px 2px 6px 0px rgba(0, 0, 0, 0.5);
+}
+.ButtonSubmit:disabled {
+    background: #babdc4;
+    color: #fff;
+    padding: 2px 0 0 2px;
+    box-shadow: none;
+}
+
+.ButtonInterrupt {
+    background-color: #b00000;
+    color: #ffffff;
+    box-shadow: 2px 2px 6px 0px rgb(0 0 0 / 25%);
+}
+.ButtonInterrupt:active {
+    background-color: #900000;
+    color: #ffffff;
+    padding: 3px 0 0 3px;
+    box-shadow: inset 2px 2px 6px 0px rgb(0 0 0 / 25%);
+}
+
+
+
+
+</style>
+<body>
+    <div class="Main">
+        <div class="Top">
+            <div><span class="Nano">NanoLM</span> <span>Inference</span></div>
+            <a style="border-bottom: none; display: flex;" href="https://github.com/bd4sur/Nano"><img alt="GitHub stars" src="https://img.shields.io/github/stars/bd4sur/Nano?style=social"></a>
+        </div>
+
+        <div>
+            <div style="display: flex; flex-direction: row; justify-content: space-between;">
+                <div class="ValueFieldContainer">
+                    <div class="ValueFieldTitle">Top-K</div>
+                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="top_k" type="number" value="0" step="1"></div>
+                </div>
+                <div class="ValueFieldContainer">
+                    <div class="ValueFieldTitle">Top-P</div>
+                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="top_p" type="number" value="0.5" step="0.1"></div>
+                </div>
+                <div class="ValueFieldContainer">
+                    <div class="ValueFieldTitle">温度</div>
+                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="temperature" type="number" value="1.1" step="0.1"></div>
+                </div>
+                <div class="ValueFieldContainer">
+                    <div class="ValueFieldTitle">复读惩罚</div>
+                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="repetition_penalty" type="number" value="1.1" step="0.1"></div>
+                </div>
+                <div class="ValueFieldContainer">
+                    <div class="ValueFieldTitle">步数</div>
+                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="max_seq_len" type="number" value="200" step="0.1"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="Middle">
+
+
+
+            <div class="Chat">
+
+                <div class="ChatRecord" id="ChatRecord">
+                    <div class="Guide">
+                        <div class="GuideIntro">你好啊，Homo！试试这些问题？🤪</div>
+                        <div class="GuideQuestionContainer">
+                            <div class="GuideQuestion" id="select_file" style="position: relative;">
+                                <input type="file" id="model_file_selector" name="files[]" multiple style="position: absolute; top: 0; right: 0; width: 100%; height: 100%; opacity: 0;">
+                                <div style="font-weight: bold;">选择模型...</div>
+                            </div>
+                            <div class="GuideQuestion GuideQuestionText">最深的深海有多深？</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ChatInput">
+                    <div class="ChatInputContainer">
+                        <div class="InputBoxContainer">
+                            <div class="ButtonClear" id="clear_input_box">
+                                <div class="ButtonClearContainer">
+                                    <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="16px" height="16px"><path d="M512 981.333333c259.2 0 469.333333-210.133333 469.333333-469.333333S771.2 42.666667 512 42.666667 42.666667 252.8 42.666667 512s210.133333 469.333333 469.333333 469.333333z m214.826667-261.845333a64 64 0 0 1-90.453334 1.578667l-122.794666-118.570667-118.570667 122.752A64 64 0 0 1 302.933333 636.330667l118.570667-122.752L298.666667 395.008A64 64 0 1 1 387.626667 302.933333l122.794666 118.570667 118.528-122.752A64 64 0 0 1 721.066667 387.669333l-118.613334 122.752 122.794667 118.570667a64 64 0 0 1 1.578667 90.453333z" fill="#383a40"></path></svg>
+                                </div>
+                            </div>
+                            <textarea class="InputBox" id="input" placeholder="Enter换行，Shift+Enter提交" style="height: 20px;">人类的本质是复读机吗？</textarea>
+
+                            <div class="ButtonAttachment">
+                                <div class="ButtonAttachmentContainer">
+                                    <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="16px" height="16px"><path d="M237.888 79.488l109.056 85.696a381.312 381.312 0 0 1 68.576-24.96L443.936 4.48a516.768 516.768 0 0 1 136.064 0l28.48 135.744c23.808 6.176 46.72 14.56 68.544 24.96l109.056-85.696a514.56 514.56 0 0 1 104.192 87.52L824.864 289.28c14.08 19.744 26.304 40.864 36.48 63.136l138.72 4.48c13.504 42.496 21.632 87.456 23.52 133.984l-128.768 51.616c-1.92 24.672-6.208 48.672-12.608 71.84L985.6 706.88a511.424 511.424 0 0 1-68.128 117.76l-131.84-43.2a385.824 385.824 0 0 1-55.808 46.848l19.712 137.408a508.352 508.352 0 0 1-127.872 46.528l-73.216-117.92a388.576 388.576 0 0 1-72.896 0l-73.216 117.92a508.352 508.352 0 0 1-127.84-46.528l19.68-137.408a385.888 385.888 0 0 1-55.808-46.88l-131.84 43.264A511.488 511.488 0 0 1 38.4 706.88l103.36-92.576c-6.368-23.168-10.624-47.168-12.576-71.84L0.416 490.88c1.92-46.528 9.984-91.488 23.52-134.016l138.688-4.48c10.208-22.24 22.432-43.36 36.512-63.104L133.696 167.04a514.56 514.56 0 0 1 104.192-87.52zM512 704a192 192 0 1 0 0-384 192 192 0 0 0 0 384z" fill="#383a40"></path></svg>
+                                </div>
+                                <input type="file" class="InputAttachment" id="imgfile">
+                            </div>
+
+                        </div>
+                        <button class="ButtonSubmit" id="submit" disabled>
+                            <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="18px" height="18px"><path d="M1008.00076 6.285714q18.857143 13.714286 15.428571 36.571429l-146.285714 877.714286q-2.857143 16.571429-18.285714 25.714285-8 4.571429-17.714286 4.571429-6.285714 0-13.714286-2.857143l-258.857142-105.714286-138.285715 168.571429q-10.285714 13.142857-28 13.142857-7.428571 0-12.571428-2.285714-10.857143-4-17.428572-13.428572T365.715046 987.428571v-199.428571l493.714285-605.142857-610.857142 528.571428-225.714286-92.571428q-21.142857-8-22.857143-31.428572-1.142857-22.857143 18.285714-33.714285L969.143617 5.142857q8.571429-5.142857 18.285714-5.142857 11.428571 0 20.571429 6.285714z" fill="#fff"></path></svg>
+                        </button>
+                    </div>
+                    <div style="display: flex; margin: 2px 10px; font-size: 10px; color: #9a9ea8; flex-direction: row; justify-content: center;">
+                        <div id="tps" style="margin-right: 10px;">--</div>
+                        <div style="margin: 0 10px;">Copyright © 2023-2024 <a href="https://bd4sur.com" target="_blank">BD4SUR</a></div>
+                        <div style="margin-left: 10px;"><span>Status: </span><span id="status"></span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</body>
+
+<object id="submit_icon">
+    <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="18px" height="18px"><path d="M1008.00076 6.285714q18.857143 13.714286 15.428571 36.571429l-146.285714 877.714286q-2.857143 16.571429-18.285714 25.714285-8 4.571429-17.714286 4.571429-6.285714 0-13.714286-2.857143l-258.857142-105.714286-138.285715 168.571429q-10.285714 13.142857-28 13.142857-7.428571 0-12.571428-2.285714-10.857143-4-17.428572-13.428572T365.715046 987.428571v-199.428571l493.714285-605.142857-610.857142 528.571428-225.714286-92.571428q-21.142857-8-22.857143-31.428572-1.142857-22.857143 18.285714-33.714285L969.143617 5.142857q8.571429-5.142857 18.285714-5.142857 11.428571 0 20.571429 6.285714z" fill="#fff"></path></svg>
+</object>
+
+<script src="./jquery.js"></script>
+<script src="./infer.js"></script>
+<script>
+
+
+
+
+let round_counter = 0;
+
+
+
+
+
+
+
+// 终端类型判断："Desktop" or "Mobile"
+function GetMediaType() {
+    return ($(window).width() >= 650) ? "Desktop" : "Mobile";
+}
+
+function layout_init() {
+    $("#submit").html($("#submit_icon").html());
+    // $(".ChatRecord").outerHeight($(".Right").height() - $(".ChatInput").outerHeight());
+}
+
+function layout_refresh(left_width) {
+    let clientHeight = window.innerHeight;
+    let clientWidth = window.innerWidth;
+
+    let main_width = $(".Main").width();
+    let main_height = $(".Main").height();
+    let top_height = $(".Top").height();
+    $(".Main").height(clientHeight - 100);
+    $(".Middle").height(main_height - 120);
+
+    $(".Left").width(left_width);
+    $(".Right").width(main_width - left_width);
+
+}
+
+function scroll_to_bottom() {
+    let scrollHeight = $(".Chat").prop("scrollHeight");
+    $(".Chat").animate({scrollTop:scrollHeight}, 0);
+}
+
+function switch_submit_button_state(state) {
+    if(state === "submit") {
+        $("#submit").removeClass("ButtonInterrupt");
+        $("#submit").html($("#submit_icon").html());
+        $("#input").removeAttr("disabled");
+    }
+    else if(state === "interrupt") {
+        $("#submit").addClass("ButtonInterrupt");
+        $("#submit").text("中断");
+        $("#input").attr("disabled", "disabled");
+    }
+}
+
+
+function append_user_bubble(markdown, round_counter, date_str) {
+    $("#ChatRecord").append(`
+        <div class="ChatRound UserRound">
+            <div class="ChatAvatarContainer UserAvatarContainer"><img class="UserAvatarImage" src="avatar_user.jpg"></div>
+            <div class="ChatBubble UserBubble">
+                <div class="ChatContent" id="user_${round_counter}">${markdown}</div>
+                <div class="UserBubbleFooter">
+                    <div class="UserFooterInfo"><b>You</b> ${date_str}</div>
+                    <div class="UserCopyBubble" onclick="navigator.clipboard.writeText($('#user_${round_counter}').text())">
+                        <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="12px" height="12px"><path d="M725.333333 469.333333h-85.333333v85.333334h-85.333333v-85.333334h-85.333334V384h85.333334V298.666667h85.333333v85.333333h85.333333v85.333333z m85.333334-256v426.666667H384V213.333333h426.666667m10.666666-85.333333H373.333333A74.666667 74.666667 0 0 0 298.666667 202.666667v448c0 41.216 33.450667 74.666667 74.666666 74.666666h448A74.666667 74.666667 0 0 0 896 650.666667V202.666667A74.666667 74.666667 0 0 0 821.333333 128M213.333333 298.666667H128v512a85.333333 85.333333 0 0 0 85.333333 85.333333h512v-85.333333H213.333333V298.666667z" fill="#ffffffaa"></path></svg>
+                        <span>复制</span>
+                    </div>
+                </div>
+            </div>
+        </div>`);
+}
+
+function append_bot_bubble(round_counter, date_str) {
+    $("#ChatRecord").append(`
+        <div class="ChatRound BotRound">
+            <div class="ChatAvatarContainer BotAvatarContainer"><img class="BotAvatarImage" src="avatar_bot.jpg"></div>
+            <div class="ChatBubble BotBubble">
+                <div class="ChatContent" id="bot_response_${round_counter}"><span style="color: #c9ced6;">思考中...</span></div>
+                <div class="BotBubbleFooter">
+                    <div class="BotFooterInfo" id="bot_footer_${round_counter}"><b>Bot</b> ${date_str}</div>
+                    <div class="BotCopyBubble" onclick="navigator.clipboard.writeText($('#bot_response_${round_counter}').text())">
+                        <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="12px" height="12px"><path d="M725.333333 469.333333h-85.333333v85.333334h-85.333333v-85.333334h-85.333334V384h85.333334V298.666667h85.333333v85.333333h85.333333v85.333333z m85.333334-256v426.666667H384V213.333333h426.666667m10.666666-85.333333H373.333333A74.666667 74.666667 0 0 0 298.666667 202.666667v448c0 41.216 33.450667 74.666667 74.666666 74.666666h448A74.666667 74.666667 0 0 0 896 650.666667V202.666667A74.666667 74.666667 0 0 0 821.333333 128M213.333333 298.666667H128v512a85.333333 85.333333 0 0 0 85.333333 85.333333h512v-85.333333H213.333333V298.666667z" fill="#aaaeba"></path></svg>
+                        <span>复制</span>
+                    </div>
+                </div>
+            </div>
+        </div>`);
+}
+
+function update_bot_bubble(markdown, round_counter) {
+    $(`#bot_response_${round_counter}`).html(markdown);
+}
+
+function update_bot_footer(text, round_counter) {
+    $(`#bot_footer_${round_counter}`).html(text);
+}
+
+function clear_chat_record() {
+    $("#ChatRecord").html("");
+}
+
+function append_chat_info(info) {
+    $("#ChatRecord").append(`<div class="ChatInfo">${info}</div>`);
+}
+
+function set_input_box(content) {
+    $("#input").val(content);
+    $("#input").trigger("change");
+}
+
+function get_current_time() {
+    let date_obj = new Date();
+    let hh = `00${date_obj.getHours()}`.slice(-2);
+    let mm = `00${date_obj.getMinutes()}`.slice(-2);
+    let ss = `00${date_obj.getSeconds()}`.slice(-2);
+    return `${hh}:${mm}:${ss}`;
+}
+
+
+
+
+
+
+
+
+$("#submit").click(function(event) {
+    if($('#submit').hasClass("ButtonInterrupt") === true) {
+        interrupt();
+        return false;
+    }
+    else {
+        submit();
+        return false;
+    }
+});
+
+$("#input").on("keydown", function(e) {
+    if(e.shiftKey && e.keyCode === 13) {
+        if($('#submit').hasClass("ButtonInterrupt") === true) {
+            interrupt();
+            return false;
+        }
+        else {
+            submit();
+            return false;
+        }
+    }
+});
+
+$("#input").on("input propertychange change keydown", function(e) {
+    $(this).innerHeight(10);
+    $(this).innerHeight(this.scrollHeight);
+});
+
+
+$("#clear_input_box").on("click", function() {
+    set_input_box("");
+});
+
+$(".GuideQuestionText").each(function(i, elem) {
+    $(elem).on("click", function(event) {
+        let question = $(this).text();
+        set_input_box(question);
+    });
+});
+
+
+let model_file_selector = document.getElementById('model_file_selector');
+model_file_selector.onchange = () => {
+    let file = model_file_selector.files[0];
+    let Reader = new FileReader();
+    Reader.onloadend = () => {
+        document.querySelector('#status').textContent = "Loading...";
+        let file_buffer = Reader.result;
+        parse_model(file_buffer);
+        document.querySelector('#status').textContent = "Ready";
+        document.querySelector('#submit').removeAttribute("disabled");
+        document.querySelector('#select_file').style.display = "none";
+    };
+    Reader.readAsArrayBuffer(file);
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function submit() {
+
+    let user_input = document.querySelector('#input').value;
+    let prompt = `<|instruct_mark|>${user_input}<|response_mark|>`;
+
+    append_user_bubble(user_input, round_counter, get_current_time());
+
+    let gen_args = {
+        top_p: parseFloat(document.querySelector('#top_p').value),
+        top_k: parseFloat(document.querySelector('#top_k').value),
+        temperature: parseFloat(document.querySelector('#temperature').value),
+        repetition_penalty: parseFloat(document.querySelector('#repetition_penalty').value),
+        max_seq_len: parseInt(document.querySelector('#max_seq_len').value)
+    }
+
+    generate(
+        prompt,
+        gen_args,
+        () => {
+            document.querySelector('#tps').textContent = '';
+            append_bot_bubble(round_counter, get_current_time());
+            scroll_to_bottom();
+        },
+        (text, status, tps) => {
+            if(status === "Decoding...") {
+                update_bot_bubble(text, round_counter);
+            }
+            switch_submit_button_state("interrupt");
+            scroll_to_bottom();
+            document.querySelector('#status').textContent = status;
+            document.querySelector('#tps').textContent = `${tps.toFixed(2)} tokens/s`;
+            // <|eos|> or <|padding|>
+            if(text.indexOf("<|eos|>") >= 0 || text.indexOf("<|padding|>") >= 0)
+                return false;
+            else return true;
+        },
+        (tps) => {
+            switch_submit_button_state("submit");
+            document.querySelector('#tps').textContent = `${tps.toFixed(2)} tokens/s`;
+            document.querySelector('#status').textContent = "Ready";
+            round_counter++;
+        }
+    );
+
+    switch_submit_button_state("interrupt");
+    set_input_box("");
+    scroll_to_bottom();
+}
+
+function interrupt() {
+    append_chat_info("手动中断");
+    is_generating = false;
+    scroll_to_bottom();
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+layout_init();
+
+let layoutObserver = new MutationObserver((mutations, observer) => {
+    let media_type = GetMediaType();
+    if(media_type === "Desktop") {
+        layout_refresh(300);
+    }
+    else if(media_type === "Mobile") {
+        layout_refresh(0);
+    }
+});
+layoutObserver.observe(document.getElementsByTagName('html')[0], {attributes: true, characterData: true, childList: true, subtree: true});
+
+
+
+</script>

@@ -1,141 +1,3 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
-<title>NanoLM - BD4SUR</title>
-
-<style>
-@media(min-width:651px) { /* Desktop */
-    .Main {
-        width: 60%;
-        max-width: 650px;
-        margin: 50px auto;
-        font-size: 14px;
-        border-radius: 20px;
-        box-shadow: 0 0px #e5e5e5, 0 0 15px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.05);
-    }
-}
-@media(max-width:650px) { /* Mobile */
-    .Main {
-        width: 100%;
-        font-size: 14px;
-    }
-}
-
-.Header {
-    padding: 30px 30px 0 30px;
-    font-size: 20px;
-    color: #d2d6dd;
-}
-.Nano {
-    font-weight: bold;
-    background-image: -webkit-linear-gradient(320deg, #00e2ff, #003cff);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-.Center {
-    padding: 20px 30px;
-}
-.ValueFieldContainer {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    padding: 2px 4px;
-    margin: 2px;
-    border-radius: 3px;
-    background-color: #e9ebf0;
-}
-.ValueFieldTitle { margin: 3px 5px; font-size: 13px; }
-.ValueFieldInput { outline: none; border: none; width: 100%; }
-.ValueFieldInputContainer { width: 60%; }
-
-.InputTextField, .OutputTextField {
-    width: 100%;
-    letter-spacing: 1px;
-    font-family: system-ui;
-    line-height: 1.6;
-}
-
-.start_generation_button { border: none; background-color: #15e; color: #fff; border-radius: 3px; padding: 5px 10px; font-size: 14px; line-height: 1.5; }
-.start_generation_button:hover { background-color: #5180ed; color: #fff; }
-.start_generation_button:disabled { background-color: #dddfe5; color: #fff; }
-
-.Footer {
-    padding: 10px 30px 10px 30px;
-}
-.Copyright {
-    font-size: 12px;
-    text-align: center;
-    line-height: 3;
-    color: #9a9ea8;
-}
-
-</style>
-<body>
-    <div class="Main">
-        <div class="Header">
-            <div><span class="Nano">NanoLM</span> Inference</div>
-        </div>
-
-        <div class="Center" id="select_file">
-            <div style="position: relative; border: 1px dashed #ddd; text-align: center; margin: 10px 0; height: 300px; border-radius: 12px; background: linear-gradient(316deg, #f7f4ff, #f2fdff);">
-                <input type="file" id="model_file_selector" name="files[]" multiple style="position: absolute; top: 0; right: 0; width: 100%; height: 100%; opacity: 0;">
-                <div style="margin: 135px 0 0 0; font-size: 18px; color: #9a9ea8;">选择模型</div>
-            </div>
-        </div>
-
-        <div class="Center" id="infer" style="display: none;">
-
-            <div style="display: flex; flex-direction: row; justify-content: space-between;">
-                <div class="ValueFieldContainer">
-                    <div class="ValueFieldTitle">Top-P</div>
-                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="top-p" type="number" value="2.0" step="0.1"></div>
-                </div>
-                <div class="ValueFieldContainer">
-                    <div class="ValueFieldTitle">温度</div>
-                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="temperature" type="number" value="1.2" step="0.1"></div>
-                </div>
-                <div class="ValueFieldContainer">
-                    <div class="ValueFieldTitle">步数</div>
-                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="steps" type="number" value="500" step="0.1"></div>
-                </div>
-            </div>
-
-            <div style="display: flex;">
-                <textarea id="llm_output" class="OutputTextField" style="height: 200px;"></textarea>
-            </div>
-
-            <div class="ValueFieldTitle">Prompt</div>
-
-            <div style="display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; justify-content: space-between; margin: 10px 0;">
-                <div style="min-width: 300px; width: 80%;">
-                    <textarea id="prompt" class="InputTextField" style="height: 80px;">人类的本质是什么？</textarea>
-                </div>
-                <div style="min-width: 60px; width: 16%;">
-                    <button class="start_generation_button" id="run" style="width: 100%; height: 80px;">发射</button>
-                </div>
-            </div>
-
-            <div style="display: flex;">
-                <span id="tps">--</span><span> tokens/s</span>
-            </div>
-        </div>
-
-        <div class="Center">
-            <span>Status: </span><span id="status"></span>
-        </div>
-
-        <div class="Footer">
-            <div style="text-align: center;"><a style="border-bottom: none;" href="https://github.com/bd4sur/Aqua"><img alt="GitHub stars" src="https://img.shields.io/github/stars/bd4sur/Nano?style=social"></a></div>
-            <div class="Copyright">Copyright © 2023-2024 <a href="https://bd4sur.com" target="_blank">BD4SUR</a></div>
-        </div>
-    </div>
-
-</body>
-
-<script>
 // https://github.com/epicure/llama2.js
 // https://github.com/karpathy/llama2.c#notable-forks
 // This is a JavaScript port of llama2.c, a tiny neural net language model
@@ -295,6 +157,7 @@ function softmax(x, size) {
     }
 }
 
+// 矩阵乘：绝大多数的计算量都花费在这个算子上面
 function matmul(xout, x, w, n, d) {
     // W (d,n) @ x (n,) -> xout (d,)
     for (let i = 0; i < d; i++) {
@@ -563,80 +426,8 @@ function decode(idlist) {
 // 采样策略
 // ===============================================================================
 
-function sample_mult(probabilities, n) {
-    // sample index from probabilities, they must sum to 1
-    const r = Math.random();
-    // const r = 0.5; // TODO
-    let cdf = 0.0;
-    for (let i = 0; i < n; i++) {
-        cdf += probabilities[i];
-        if (r < cdf) {
-            return i;
-        }
-    }
-    return n - 1; // in case of rounding errors
-}
-
-function set_topk(logits, vs, k) {
-    let probindex = [];
-    for (let i = 0; i < vs; i++) {
-        probindex.push({index: i, prob: logits[i]});
-    }
-    probindex.sort((a, b) => b.prob - a.prob);
-    let top_tokens = probindex.slice(0, k);
-    let index_map = [];
-    for (let i = 0; i < vs; i++) {
-        index_map[i] = 0;
-    }
-    for (let j = 0; j < top_tokens.length; j++) {
-        top_index = top_tokens[j].index;
-        index_map[top_index] = 1;
-    }
-    for (let i = 0; i < vs; i++) {
-        if(index_map[i] === 0) {
-            logits[i] = Number.NEGATIVE_INFINITY;
-        }
-    }
-    return logits;
-}
-
-function sample_topp(probabilities, n, topp) {
-    const cutoff = (1.0 - topp) / (n - 1);
-    let n0 = 0;
-    let probindex = [];
-    for (let i = 0; i < n; i++) {
-        if (probabilities[i] >= cutoff) {
-            probindex.push({index: i, prob: probabilities[i]});
-            n0++;
-        }
-    }
-    probindex.sort((a, b) => b.prob - a.prob);
-
-    // truncate the list where cumulative probability exceeds topp
-    let cumulative_prob = 0.0;
-    let last_idx = n0 - 1; // in case of rounding errors consider all elements
-    for (let i = 0; i < n0; i++) {
-        cumulative_prob += probindex[i].prob;
-        if (cumulative_prob > topp) {
-            last_idx = i;
-            break; // we've exceeded topp by including last_idx
-        }
-    }
-
-    // sample from the truncated list
-    const r = Math.random() * cumulative_prob;
-    let cdf = 0.0;
-    for (let i = 0; i <= last_idx; i++) {
-        cdf += probindex[i].prob;
-        if (r < cdf) {
-            return probindex[i].index;
-        }
-    }
-    return probindex[last_idx].index; // in case of rounding errors
-}
-
+// 贪心采样：返回概率最大的下标
 function sample_argmax(logits, vsize) {
-    // return argmax of logits in elements 0..vsize
     let max_i = 0;
     let max_p = logits[0];
     for (let i = 1; i < vsize; i++) {
@@ -648,110 +439,167 @@ function sample_argmax(logits, vsize) {
     return max_i;
 }
 
-async function generate() {
+// 概率采样（香草味的）
+function sample_multinomial(prob_dist, n) {
+    // sample index from prob_dist, they must sum to 1
+    const r = Math.random();
+    // const r = 0.5; // TODO
+    let cdf = 0.0;
+    for (let i = 0; i < n; i++) {
+        cdf += prob_dist[i];
+        if(cdf > r) {
+            return i;
+        }
+    }
+    return n - 1; // in case of rounding errors
+}
+
+// 概率采样之改进：Top-K采样，只在概率排名前K个词元中采样
+function sample_top_k(prob_dist, vsize, k) {
+    let probindex = [];
+    for (let i = 0; i < vsize; i++) {
+        probindex.push({index: i, prob: prob_dist[i]});
+    }
+    probindex.sort((a, b) => b.prob - a.prob);
+    let top_tokens = probindex.slice(0, k);
+    // 计算累积概率，用于归一化概率
+    let cumulative_prob = 0.0;
+    for (let i = 0; i < top_tokens.length; i++) {
+        cumulative_prob += top_tokens[i].prob;
+    }
+    // 在只有前K个词元的列表上执行概率采样
+    const r = Math.random() * cumulative_prob;
+    let cdf = 0.0;
+    for (let i = 0; i < top_tokens.length; i++) {
+        cdf += probindex[i].prob;
+        if(cdf > r) {
+            return probindex[i].index;
+        }
+    }
+    return vsize - 1; // in case of rounding errors
+}
+
+// Top-P采样（核采样）：只在累积概率达到p的概率最高的若干个词元中采样
+function sample_top_p(probabilities, n, top_p) {
+    const cutoff = (1.0 - top_p) / (n - 1);
+    let n0 = 0;
+    let probindex = [];
+    for (let i = 0; i < n; i++) {
+        if (probabilities[i] >= cutoff) {
+            probindex.push({index: i, prob: probabilities[i]});
+            n0++;
+        }
+    }
+    probindex.sort((a, b) => b.prob - a.prob);
+
+    // truncate the list where cumulative probability exceeds top_p
+    let cumulative_prob = 0.0;
+    let last_idx = n0 - 1; // in case of rounding errors consider all elements
+    for (let i = 0; i < n0; i++) {
+        cumulative_prob += probindex[i].prob;
+        if (cumulative_prob > top_p) {
+            last_idx = i;
+            break; // we've exceeded top_p by including last_idx
+        }
+    }
+
+    // sample from the truncated list
+    const r = Math.random() * cumulative_prob;
+    let cdf = 0.0;
+    for (let i = 0; i <= last_idx; i++) {
+        cdf += probindex[i].prob;
+        if(cdf > r) {
+            return probindex[i].index;
+        }
+    }
+    return probindex[last_idx].index; // in case of rounding errors
+}
+
+// ===============================================================================
+// 文本生成
+// ===============================================================================
+
+async function generate(prompt, args, on_ready, on_running, on_finished) {
     if(is_generating) {
         return;
     }
     is_generating = true;
-    document.querySelector('#run').disabled = "true";
 
-    document.querySelector('#llm_output').textContent = '';
-    document.querySelector('#tps').textContent = '';
+    on_ready();
 
-    const temperature = parseFloat(document.querySelector('#temperature').value);
-    const topp = parseFloat(document.querySelector('#top-p').value);
-
-    let steps = parseInt(document.querySelector('#steps').value);
     let elpased = [];
-
-    let pos = 0;
+    let status = "";
 
     // right now we cannot run for more than cfg.block_size steps
-    if (steps <= 0 || steps > LLM.config.block_size) { steps = LLM.config.block_size; }
-    let next = 0;
+    if (args.max_seq_len <= 0 || args.max_seq_len > LLM.config.block_size) {
+        args.max_seq_len = LLM.config.block_size;
+    }
+
     let idlist = [];
-    let token = 0;
+    let prompt_tokens = encode(prompt);
+    let next_token = prompt_tokens[0] || 0;
+    let pos = 0;
 
-    let prompt_string = `<|instruct_mark|>${document.querySelector('#prompt').value}<|response_mark|>`;
-    let prompt_tokens = encode(prompt_string);
-
-    while (pos < steps) {
-        const start = performance.now();
-        llm_forward(token, pos, LLM, FWD_BUFFER);
+    while (pos < args.max_seq_len) {
+        const t_0 = performance.now();
+        llm_forward(next_token, pos, LLM, FWD_BUFFER);
 
         // Pre-fill: if we are still processing the input prompt, force the next prompt token
         if(pos < prompt_tokens.length - 1) {
-            document.querySelector('#status').textContent = "Pre-filling...";
-            next = prompt_tokens[pos];
-            await new Promise(resolve => setTimeout(resolve, 0));
+            status = "Pre-filling...";
+            next_token = prompt_tokens[pos + 1];
         }
         // Auto-regressive Decode
         else {
-            document.querySelector('#status').textContent = "Decoding...";
-            // sample the next token
-            if(temperature == 0.0) {
+            status = "Decoding...";
+            // 复读惩罚：对过往出现过的词元施加惩罚，词元出现得越多，概率越低: ref arxiv:1909.05858
+            let tokenset = new Set(idlist);
+            for(tk of tokenset.keys()) {
+                FWD_BUFFER.logits[tk] /= args.repetition_penalty;
+            }
+
+            // 温度采样：当温度设为0时，退化为贪心采样
+            if(args.temperature == 0.0) {
                 // greedy argmax sampling
-                next = sample_argmax(FWD_BUFFER.logits, LLM.config.vocab_size);
+                next_token = sample_argmax(FWD_BUFFER.logits, LLM.config.vocab_size);
             }
             else {
                 for (let q = 0; q < LLM.config.vocab_size; q++) {
-                    FWD_BUFFER.logits[q] /= temperature;
+                    FWD_BUFFER.logits[q] /= args.temperature;
                 }
-                set_topk(FWD_BUFFER.logits, LLM.config.vocab_size, 5);
+
                 softmax(FWD_BUFFER.logits, LLM.config.vocab_size);
-                next = sample_mult(FWD_BUFFER.logits, LLM.config.vocab_size);
 
-                // if (topp <= 0 || topp >= 1) {
-                //     next = sample_mult(FWD_BUFFER.logits, LLM.config.vocab_size);
-                // } else {
-                //     next = sample_topp(FWD_BUFFER.logits, LLM.config.vocab_size, topp);
-                // }
+                if(args.top_p > 0 && args.top_p < 1) {
+                    next_token = sample_top_p(FWD_BUFFER.logits, LLM.config.vocab_size, args.top_p);
+                }
+                else if(args.top_k > 0) {
+                    next_token = sample_top_k(FWD_BUFFER.logits, LLM.config.vocab_size, args.top_k);
+                }
+                else {
+                    next_token = sample_multinomial(FWD_BUFFER.logits, LLM.config.vocab_size);
+                }
             }
-            await new Promise(resolve => setTimeout(resolve, 0));
 
-            idlist.push(next);
-            document.querySelector('#llm_output').textContent = decode(idlist);
-            // document.querySelector('#llm_output').textContent = String(idlist);
+            idlist.push(next_token);
         }
 
-        // <|eos|> or <|padding|>
-        if(next === 0 || next === 3) break;
-
-        // advance forward
-        token = next;
         pos++;
 
         // report achieved tok/s
-        const end = performance.now();
-        elpased.push(1 / (end-start)*1000);
-        document.querySelector('#tps').textContent = elpased.slice(-1)[0].toFixed(2);
+        const t_1 = performance.now();
+        elpased.push(1 / (t_1 - t_0) * 1000);
+        let tps_now = elpased.slice(-1)[0];
+
+        let is_continue = on_running(decode(idlist), status, tps_now);
+        if(is_continue !== true) break;
+
+        await new Promise(resolve => setTimeout(resolve, 0));
     }
 
-    const avg = elpased.reduce((a, b) => a + b) / elpased.length;
-    document.querySelector('#tps').textContent = avg.toFixed(2);
-
     is_generating = false;
-    document.querySelector('#run').removeAttribute("disabled");
-    document.querySelector('#status').textContent = "Ready";
+
+    const tps_avg = elpased.reduce((a, b) => a + b) / elpased.length;
+    on_finished(tps_avg);
 }
 
-
-document.querySelector('#run').addEventListener('click', generate);
-
-let model_file_selector = document.getElementById('model_file_selector');
-model_file_selector.onchange = () => {
-    let file = model_file_selector.files[0];
-    let Reader = new FileReader();
-    Reader.onloadend = () => {
-        document.querySelector('#status').textContent = "Loading...";
-        let file_buffer = Reader.result;
-        parse_model(file_buffer);
-        document.querySelector('#status').textContent = "Ready";
-        document.querySelector('#infer').style.display = "block";
-        document.querySelector('#select_file').style.display = "none";
-    };
-    Reader.readAsArrayBuffer(file);
-};
-
-
-</script>
