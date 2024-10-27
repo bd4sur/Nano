@@ -5,14 +5,12 @@
 
 **Nano**是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。主要复刻自 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)，并借鉴了多个开源模型实现和学习项目。
 
-![ ](doc/nano_58m_20241018_pt_demo.gif)
-
 期望：
 
 - 用尽可能少的依赖，尤其不依赖🤗，实现一个具体而微的Transformer语言模型。
 - 完整实现数据处理、预训练、监督微调、推理过程。暂不实现高效微调（如LoRA）、人类对齐。
 - 从头训练一个会说人话的50M级参数规模的语言模型。
-- 实现Web浏览器上的推理（对话和文本生成）。
+- 实现基于Web浏览器的、完全离线的端侧推理（[在线体验](https://bd4sur.com/Nano/infer)）。
 - 研究模型训练的动力学、训/推加速、算法改进等问题。
 - 探索Transformer模型在自然语言处理以外的问题和模态上的潜能。
 - 建立起关于大语言模型的合理预期和感性经验，对大语言模型技术祛魅。
@@ -28,7 +26,7 @@
 
 |预训练模型|预训练数据|指令微调模型|指令微调数据|
 |---------|---------|-----------|-----------|
-|[Nano-58M-20241018](https://huggingface.co/bd4sur/Nano-58M-20241018)|[Nano-PT-10B](https://huggingface.co/datasets/bd4sur/Nano-PT-10B)|Nano-58M-Instruct|Nano-SFT|
+|[Nano-56M-20241027](https://huggingface.co/bd4sur/Nano-56M-20241027)|[Nano-PT-10B](https://huggingface.co/datasets/bd4sur/Nano-PT-10B)|[Nano-56M-20241027-Instruct](https://huggingface.co/bd4sur/Nano-56M-20241027-Instruct)|Nano-SFT|
 
 数据集为7z格式，解压口令“nano”。
 
