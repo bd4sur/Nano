@@ -535,6 +535,10 @@ async function generate(prompt, args, on_ready, on_running, on_finished) {
         args.max_seq_len = LLM.config.block_size;
     }
 
+    if(args.repetition_penalty <= 0) {
+        args.repetition_penalty = 1;
+    }
+
     let idlist = [];
     let prompt_tokens = encode(prompt);
     let next_token = prompt_tokens[0] || 0;

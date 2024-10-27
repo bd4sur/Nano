@@ -1,0 +1,573 @@
+body {
+    margin: 0; padding: 0;
+    font-family: system-ui, Microsoft YaHei, "宋体", sans-serif;
+}
+a {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dotted #9fa1a8;
+}
+a:hover {
+    color: #15e;
+    text-decoration:none;
+    border-bottom: 1px solid #15e;
+}
+
+@media(min-width:651px) { /* Desktop */
+    .Main {
+        width: 70%;
+        max-width: 700px;
+        margin: 20px auto;
+        padding-top: 10px;
+        font-size: 14px;
+        border-radius: 20px;
+        box-shadow: 0 0px #e5e5e5, 0 0 15px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.05);
+        overflow: hidden;
+    }
+}
+@media(max-width:650px) { /* Mobile */
+    .Main {
+        width: 100%;
+        font-size: 14px;
+    }
+}
+
+.Top {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    height: 30px;
+    padding: 10px 30px;
+    font-size: 20px;
+    color: #d2d6dd;
+    background-color: #fff;
+    border-radius: 20px 20px 0px 0px;
+    z-index: 99999;
+}
+.Nano {
+    font-weight: bold;
+    background-image: -webkit-linear-gradient(320deg, #00e2ff, #003cff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.Middle {
+    /* max-width: 700px; */
+    margin: 0 auto;
+    display: flex;
+    /* flex-direction: column;
+    align-items: center; */
+    overflow: hidden;
+}
+
+
+.Footer {
+    padding: 10px 30px 10px 30px;
+}
+.Copyright {
+    font-size: 12px;
+    text-align: center;
+    line-height: 3;
+    color: #9a9ea8;
+}
+
+
+
+
+
+
+
+
+.ModalMask {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: #00000080;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 999;
+    display: none;
+}
+.Modal {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    max-width: 600px;
+    min-width: 360px;
+    width: 50%;
+    margin: 40px auto 0 auto;
+    padding: 0 0 10px 0;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
+    font-size: 13px;
+    overflow: hidden;
+    z-index: 1000;
+    display: none;
+}
+.ModalThrobberContainer {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: #ffffffcc;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    display: none;
+}
+.ModalBanner {
+    width: 100%; height: 150px;
+    background: linear-gradient(10deg, #92edff, #00aced, #005bcd, #000e8d, #101339, #000000, #0c0b10, #0f204e, #3673ad);
+    color: #c1f1ff;
+    /* border: 2px solid; */
+    /* border-image: linear-gradient(40deg, #bde5ff, #515f69, #78b4e8) 1; */
+    display: flex;
+    margin-bottom: 10px;
+    /* width: 100%;
+    height: 120px;
+    background-image: url(../res/banner.jpg);
+    background-size: cover;
+    background-position: center; */
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-end;
+}
+.ModalBannerTitle {
+    color: #ffffff;
+    text-shadow: 1px 1px 3px black;
+    font-size: 20px;
+    font-weight: bold;
+    margin: 20px;
+    letter-spacing: 1px;
+}
+.ModalTitle {
+    margin: 0;
+    padding: 0 0 0 20px;
+    font-size: 14px;
+    color: #383a40;
+    font-weight: bold;
+    letter-spacing: 2px;
+    line-height: 2;
+}
+.ModalContent {
+    padding: 10px 40px;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.ModelSelect {
+    font-size: 14px;
+    padding: 5px;
+    width: 100%;
+    outline: none;
+    border: 2px solid #d8dce4;
+    border-radius: 5px;
+    color: #383a40;
+}
+
+.SystemPromptList {
+    display: flex;
+}
+.SystemPrompt {
+    padding: 3px 8px;
+    margin-right: 3px;
+    font-size: 12px;
+    border-radius: 5px;
+    background: #eff0f5;
+    color: #383a40;
+    cursor: pointer;
+}
+
+.SystemPromptInput {
+    font-family: inherit;
+    box-sizing: border-box;
+    outline: none;
+    resize: none;
+    border: none;
+    border: 2px solid #d8dce4;
+    border-radius: 5px;
+    font-size: 13px;
+    line-height: 1.5;
+    height: 60px;
+    padding: 3px 5px;
+    margin: 9px 0 0 0;
+    width: 100%;
+}
+.SystemPromptInput::placeholder {
+    color: #c3c8d1;
+}
+
+.ModalConfirm {
+    display: inline-block;
+    margin: 5px;
+    padding: 5px 10px;
+    border: none;
+    color: #ffffff;
+    background: #15e;
+    border-radius: 5px;
+}
+.ModalConfirm:active {
+    background: #0038b9;
+    box-shadow: inset 1px 1px 3px 0px rgba(0, 0, 0, 0.5);
+}
+.ModalCancel {
+    display: inline-block;
+    margin: 5px;
+    padding: 5px 10px;
+    border: none;
+    color: #383a40;
+    background: #e6e9ef;
+    border-radius: 5px;
+}
+.ModalCancel:active {
+    background: #ced2da;
+    box-shadow: inset 1px 1px 3px 0px rgba(0, 0, 0, 0.5);
+}
+
+
+
+.SwitchButton {
+    display: flex;
+    font-size: 13px;
+}
+.SwitchButtonKey {
+    padding: 2px 5px;
+    margin: 3px;
+    color: #a8abba;
+    /* border: 1px dashed #c3c6cd; */
+    border-radius: 5px;
+    background: linear-gradient(180deg, #f6f7f9, #e0e2e7);
+    cursor: pointer;
+}
+.SwitchButtonKey:first-child {
+    margin: 3px 3px 3px 0;
+}
+.SwitchButtonKey:last-child {
+    margin: 3px 0 3px 3px;
+}
+.SwitchButtonKey.Active {
+    color: #fff;
+    background: linear-gradient(180deg, #66ccff, #15e);
+}
+
+.RangeInput {
+    display: flex;
+    align-items: center;
+    flex-direction: row;
+    justify-content: space-between;
+    width: 100%;
+    margin: 5px 0;
+    font-size: 13px;
+}
+.RangeInputTitle {
+    width: 8em;
+    margin-right: 10px;
+    flex-shrink: 0;
+}
+.RangeInputControl {
+    width: 100%;
+}
+.RangeInputValue {
+    display: inline-block;
+    width: 50px;
+    margin-left: 10px;
+    flex-shrink: 0;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+.Chat {
+    position: relative;
+    width: 100%;
+    overflow-y: auto;
+    background: linear-gradient(180deg, #ffffff, #f3f5f8 20%);
+}
+
+.ChatRecord {
+    padding: 10px 10px 30px 10px;
+    min-height: calc(100% - 120px);
+    text-align: center;
+}
+.Guide {
+    display: flex;
+    margin: 0 0 20px 0;
+    flex-direction: column;
+    align-items: center;
+}
+.GuideIntro {
+    font-size: 16px;
+    font-weight: bold;
+    /* letter-spacing: 1px; */
+    margin: 10px 0;
+}
+.GuidePrompt {
+    font-size: 12px;
+    color: #9fa1a8;
+    margin: 10px 0;
+    line-height: 1.6;
+    text-align: left;
+}
+.GuideQuestionContainer {
+    display: flex;
+    flex-wrap: wrap;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+}
+.GuideQuestion {
+    border-radius: 5px;
+    background-color: #fff;
+    margin: 5px;
+    padding: 6px 10px;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+}
+.GuideQuestion:hover {
+    box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
+}
+.ChatInfo {
+    display: block;
+    font-size: 12px;
+    background-color: #e6e7eb;
+    color: #9b9fa6;
+    width: fit-content;
+    padding: 2px 10px;
+    margin: 5px auto;
+    border-radius: 20px;
+}
+
+.ChatRound { display: flex; align-items: flex-start; text-align: left; margin: 8px 0; }
+
+.UserRound { flex-direction: row; }
+.BotRound { flex-direction: row; }
+
+.ChatAvatarContainer {
+    width: 30px; height: 30px; overflow: hidden; border-radius: 30px; flex-shrink: 0;
+    border: 1px solid #fff;
+    box-sizing: border-box;
+    box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
+}
+.UserAvatarContainer {
+    margin-right: 10px;
+}
+.BotAvatarContainer {
+    margin-right: 10px;
+}
+.UserAvatarImage, .BotAvatarImage { width: 100%; height: 100%; }
+
+.ChatBubble {
+    font-size: 13px; line-height: 1.5; letter-spacing: 0.5px;
+    margin: 8px 0;
+    margin: 0px;
+    border-radius: 5px;
+    box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
+    overflow: hidden;
+}
+.UserBubble {
+    color: #ffffff;
+    background: linear-gradient(320deg, #28cdff, #678bff);
+}
+.BotBubble {
+    color: #383a40;
+    background: #fff;
+}
+.ChatContent {
+    padding: 10px 15px;
+}
+.ChatContent :first-of-type { margin-top: 0; }
+.ChatContent :last-of-type { margin-bottom: 0; }
+.ChatContent p {
+    font-size: 13px; line-height: 1.5; letter-spacing: 0.5px;
+    margin: 8px 0;
+}
+.UserBubbleFooter, .BotBubbleFooter {
+    display: flex;
+    justify-content: space-between;
+    padding: 0 5px 5px 15px;
+    align-items: center;
+}
+.UserBubbleFooter { color: #ffffffaa; }
+.BotBubbleFooter { color:#aaaeba; }
+
+.UserFooterInfo, .BotFooterInfo {
+    font-size: 10px;
+    margin-right: 10px;
+}
+.UserCopyBubble, .BotCopyBubble {
+    display: flex;
+    font-size: 11px;
+    line-height: 1;
+    flex-direction: row;
+    align-items: center;
+    background: none;
+    padding: 3px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.UserCopyBubble:hover { background: #ffffff50; }
+.BotCopyBubble:hover { background: #383a4010; }
+
+.ModelSelector {
+    position: relative;
+    display: flex;
+    border-radius: 6px;
+    background: linear-gradient(320deg, #28cdff, #678bff);
+    color: #ffffff;
+    height: 40px;
+    margin: 10px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 2px 2px 6px 0px rgb(0 0 0 / 0.1);
+}
+.ModelSelector:hover {
+    background: linear-gradient(320deg, #009dcd, #002dc3);
+}
+.ChatInput {
+    position: sticky;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    padding: 10px 0;
+    background: #f3f5f8;
+    text-align: center;
+}
+.ChatInputContainer {
+    display: flex;
+    margin: 10px;
+}
+.InputBoxContainer {
+    display: flex;
+    /* border: 2px solid #e5e9f2; */
+    border-radius: 6px;
+    background: #ffffff;
+    width: 100%;
+    padding: 4px 6px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    box-shadow: 2px 2px 6px 0px rgb(0 0 0 / 0.1);
+}
+.ButtonClear, .ButtonSetting, .ButtonAttachment, .ButtonInstruct {
+    display: flex;
+    cursor: pointer;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 5px;
+}
+.ButtonHover, .ButtonClear:hover, .ButtonSetting:hover, .ButtonAttachment:hover, .ButtonInstruct:hover {
+    background-color: #e5e9f2;
+}
+.ButtonClear {
+    margin: 0 6px 0 0;
+}
+.ButtonSetting {
+    margin: 0 0 0 6px;
+}
+.ButtonAttachment {
+    position: relative;
+    margin: 0 0 0 3px;
+}
+.ButtonInstruct {
+    margin: 0 0 0 3px;
+}
+.ButtonClearContainer, .ButtonAttachmentContainer, .ButtonSettingContainer {
+    margin: 0;
+    width: 16px;
+    height: 16px;
+}
+.ButtonInstructContainer {
+    margin: 0;
+    width: 20px;
+    height: 20px;
+}
+
+.InputAttachment {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 28px;
+    opacity: 0;
+}
+
+.InputBox {
+    width: 100%;
+    border: none;
+    outline: none;
+    resize: none;
+    padding: 6px 0;
+    font-size: 13px;
+    font-family: inherit;
+    letter-spacing: 0.5px;
+    line-height: 1.5;
+    max-height: 200px;
+    min-height: 20px;
+    height: 20px;
+}
+.InputBox:disabled {
+    background-color: #ffffff;
+    color: #c3c8d1;
+}
+.InputBox::placeholder {
+    color: #c3c8d1;
+}
+
+.ButtonSubmit {
+    border: none;
+    background: #15e;
+    border-radius: 6px;
+    color: #fff;
+    min-width: 50px;
+    flex-shrink: 0;
+    margin: 1px 0 1px 10px;
+    box-shadow: 2px 2px 6px 0px rgba(0, 0, 0, 0.1);
+}
+.ButtonSubmit:active {
+    background: #0038b9;
+    padding: 2px 0 0 2px;
+    box-shadow: inset 2px 2px 6px 0px rgba(0, 0, 0, 0.5);
+}
+.ButtonSubmit:disabled {
+    background: #babdc4;
+    color: #fff;
+    padding: 2px 0 0 2px;
+    box-shadow: none;
+}
+
+.ButtonInterrupt {
+    background-color: #b00000;
+    color: #ffffff;
+    box-shadow: 2px 2px 6px 0px rgb(0 0 0 / 25%);
+}
+.ButtonInterrupt:active {
+    background-color: #900000;
+    color: #ffffff;
+    padding: 3px 0 0 3px;
+    box-shadow: inset 2px 2px 6px 0px rgb(0 0 0 / 25%);
+}
+
+

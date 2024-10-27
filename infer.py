@@ -52,11 +52,11 @@ class InferenceGPT:
         self.model.eval()
         self.model.to(device)
 
-        print(f"╭───────────┬───────────┬────────┬───────┬──────┬───────┬──────────────────╮")
-        print(f"│ \x1b[1mBlockSize │ VocabSize │ Layers │ Heads │ Embd │ RoPE? │    Parameters\x1b[0m    │")
-        print(f"├───────────┼───────────┼────────┼───────┼──────┼───────┼──────────────────┤")
-        print(f"│{'{:^11d}'.format(model_config.block_size, end='')}│{'{:^11d}'.format(model_config.vocab_size, end='')}│{'{:^8d}'.format(model_config.n_layer, end='')}│{'{:^7d}'.format(model_config.n_head, end='')}│{'{:^6d}'.format(model_config.n_embd, end='')}│{'{:^7}'.format(str(model_config.use_rope))}│{'{:^18,d}'.format(self.model.get_num_params(), end='')}│")
-        print(f"╰───────────┴───────────┴────────┴───────┴──────┴───────┴──────────────────╯")
+        print(f"╭───────────┬───────────┬────────┬──────┬─────────┬──────────┬────────┬──────────────────╮")
+        print(f"│ \x1b[1mBlockSize │ VocabSize │ Layers │ Embd │ Q_Heads │ KV_Heads │ Hidden │    Parameters\x1b[0m    │")
+        print(f"├───────────┼───────────┼────────┼──────┼─────────┼──────────┼────────┼──────────────────┤")
+        print(f"│{'{:^11d}'.format(model_config.block_size, end='')}│{'{:^11d}'.format(model_config.vocab_size, end='')}│{'{:^8d}'.format(model_config.n_layer, end='')}│{'{:^6d}'.format(model_config.n_embd, end='')}│{'{:^9d}'.format(model_config.n_head, end='')}│{'{:^10d}'.format(model_config.n_kv_head, end='')}│{'{:^8d}'.format(model_config.n_hidden, end='')}│{'{:^18,d}'.format(self.model.get_num_params(), end='')}│")
+        print(f"╰───────────┴───────────┴────────┴──────┴─────────┴──────────┴────────┴──────────────────╯")
 
         # 读取分词器
         self.tokenizer = Tokenizer()

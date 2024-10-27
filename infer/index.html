@@ -1,452 +1,134 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
-<title>NanoLM - BD4SUR</title>
-
-<style>
-body {
-    margin: 0; padding: 0;
-}
-
-@media(min-width:651px) { /* Desktop */
-    .Main {
-        width: 60%;
-        max-width: 650px;
-        margin: 20px auto;
-        padding-top: 20px;
-        font-size: 14px;
-        border-radius: 20px;
-        box-shadow: 0 0px #e5e5e5, 0 0 15px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.05);
-        overflow: hidden;
-    }
-}
-@media(max-width:650px) { /* Mobile */
-    .Main {
-        width: 100%;
-        font-size: 14px;
-    }
-}
-
-.Top {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    justify-content: space-between;
-    align-items: center;
-    position: sticky;
-    top: 0;
-    padding: 10px 30px;
-    font-size: 20px;
-    color: #d2d6dd;
-    background-color: #fff;
-    border-radius: 20px 20px 0px 0px;
-    z-index: 99999;
-}
-.Nano {
-    font-weight: bold;
-    background-image: -webkit-linear-gradient(320deg, #00e2ff, #003cff);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-
-.Middle {
-    /* max-width: 700px; */
-    margin: 0 auto;
-    display: flex;
-    /* flex-direction: column;
-    align-items: center; */
-    overflow: hidden;
-}
-.ValueFieldContainer {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    padding: 2px 4px;
-    margin: 2px;
-    border-radius: 3px;
-    background-color: #e9ebf0;
-}
-.ValueFieldTitle { margin: 3px 5px; font-size: 13px; }
-.ValueFieldInput { outline: none; border: none; width: 100%; }
-.ValueFieldInputContainer { width: 60%; }
-
-.InputTextField, .OutputTextField {
-    width: 100%;
-    letter-spacing: 1px;
-    font-family: system-ui;
-    line-height: 1.6;
-}
-
-.start_generation_button { border: none; background-color: #15e; color: #fff; border-radius: 3px; padding: 5px 10px; font-size: 14px; line-height: 1.5; }
-.start_generation_button:hover { background-color: #5180ed; color: #fff; }
-.start_generation_button:disabled { background-color: #dddfe5; color: #fff; }
-
-.Footer {
-    padding: 10px 30px 10px 30px;
-}
-.Copyright {
-    font-size: 12px;
-    text-align: center;
-    line-height: 3;
-    color: #9a9ea8;
-}
-
-
-
-
-
-
-
-
-
-
-
-.Chat {
-    position: relative;
-    width: 100%;
-    overflow-y: auto;
-    background-color: #f3f5f8;
-}
-
-.ChatRecord {
-    padding: 10px 10px 30px 10px;
-    background-color: #f3f5f8;
-    min-height: calc(100% - 120px);
-    text-align: center;
-}
-.Guide {
-    display: flex;
-    margin: 20px 0;
-    flex-direction: column;
-    align-items: center;
-}
-.GuideIntro {
-    font-size: 18px;
-    font-weight: bold;
-    letter-spacing: 1px;
-    margin: 20px 0;
-}
-.GuideQuestionContainer {
-    display: flex;
-    flex-wrap: wrap;
-    flex-direction: row;
-    align-items: center;
-    justify-content: center;
-}
-.GuideQuestion {
-    border-radius: 5px;
-    background-color: #fff;
-    margin: 5px;
-    padding: 10px;
-    font-size: 13px;
-    letter-spacing: 0.5px;
-    cursor: pointer;
-}
-.GuideQuestion:hover {
-    box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
-}
-.ChatInfo {
-    display: block;
-    font-size: 12px;
-    background-color: #e6e7eb;
-    color: #9b9fa6;
-    width: fit-content;
-    padding: 2px 10px;
-    margin: 5px auto;
-    border-radius: 20px;
-}
-
-.ChatRound { display: flex; align-items: flex-start; text-align: left; margin: 8px 0; }
-
-.UserRound { flex-direction: row; }
-.BotRound { flex-direction: row; }
-
-.ChatAvatarContainer {
-    width: 30px; height: 30px; overflow: hidden; border-radius: 30px; flex-shrink: 0;
-    border: 1px solid #fff;
-    box-sizing: border-box;
-    box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
-}
-.UserAvatarContainer {
-    margin-right: 10px;
-}
-.BotAvatarContainer {
-    margin-right: 10px;
-}
-.UserAvatarImage, .BotAvatarImage { width: 100%; height: 100%; }
-
-.ChatBubble {
-    font-size: 13px; line-height: 1.5; letter-spacing: 0.5px;
-    margin: 8px 0;
-    margin: 0px;
-    border-radius: 5px;
-    box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
-    overflow: hidden;
-}
-.UserBubble {
-    color: #ffffff;
-    background: linear-gradient(320deg, #28cdff, #678bff);
-}
-.BotBubble {
-    color: #383a40;
-    background: #fff;
-}
-.ChatContent {
-    padding: 10px 15px;
-}
-.ChatContent :first-of-type { margin-top: 0; }
-.ChatContent :last-of-type { margin-bottom: 0; }
-.ChatContent p {
-    font-size: 13px; line-height: 1.5; letter-spacing: 0.5px;
-    margin: 8px 0;
-}
-.UserBubbleFooter, .BotBubbleFooter {
-    display: flex;
-    justify-content: space-between;
-    padding: 0 5px 5px 15px;
-    align-items: center;
-}
-.UserBubbleFooter { color: #ffffffaa; }
-.BotBubbleFooter { color:#aaaeba; }
-
-.UserFooterInfo, .BotFooterInfo {
-    font-size: 10px;
-    margin-right: 10px;
-}
-.UserCopyBubble, .BotCopyBubble {
-    display: flex;
-    font-size: 11px;
-    line-height: 1;
-    flex-direction: row;
-    align-items: center;
-    background: none;
-    padding: 3px;
-    border-radius: 3px;
-    cursor: pointer;
-}
-.UserCopyBubble:hover { background: #ffffff50; }
-.BotCopyBubble:hover { background: #383a4010; }
-
-.ChatInput {
-    position: sticky;
-    left: 0;
-    bottom: 0;
-    width: 100%;
-    padding: 10px 0;
-    background: #f3f5f8;
-    text-align: center;
-}
-.ChatInputContainer {
-    display: flex;
-    margin: 10px;
-}
-.InputBoxContainer {
-    display: flex;
-    /* border: 2px solid #e5e9f2; */
-    border-radius: 6px;
-    background: #ffffff;
-    width: 100%;
-    padding: 4px 6px;
-    flex-direction: row;
-    align-items: center;
-    justify-content: flex-start;
-    box-shadow: 2px 2px 6px 0px rgb(0 0 0 / 0.1);
-}
-.ButtonClear, .ButtonSetting, .ButtonAttachment, .ButtonTTS {
-    display: flex;
-    cursor: pointer;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 5px;
-}
-.ButtonHover, .ButtonClear:hover, .ButtonSetting:hover, .ButtonAttachment:hover, .ButtonTTS:hover {
-    background-color: #e5e9f2;
-}
-.ButtonClear {
-    margin: 0 6px 0 0;
-}
-.ButtonSetting {
-    margin: 0 0 0 6px;
-}
-.ButtonAttachment {
-    position: relative;
-    margin: 0 0 0 3px;
-}
-.ButtonTTS {
-    margin: 0 0 0 3px;
-}
-.ButtonClearContainer, .ButtonAttachmentContainer, .ButtonSettingContainer {
-    margin: 0;
-    width: 16px;
-    height: 16px;
-}
-.ButtonTTSContainer {
-    margin: 0;
-    width: 20px;
-    height: 20px;
-}
-
-.InputAttachment {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 28px;
-    opacity: 0;
-}
-
-.InputBox {
-    width: 100%;
-    border: none;
-    outline: none;
-    resize: none;
-    padding: 6px 0;
-    font-size: 13px;
-    font-family: inherit;
-    letter-spacing: 0.5px;
-    line-height: 1.5;
-    max-height: 200px;
-    min-height: 20px;
-    height: 20px;
-}
-.InputBox::placeholder {
-    color: #c3c8d1;
-}
-
-.ButtonSubmit {
-    border: none;
-    background: #15e;
-    border-radius: 6px;
-    color: #fff;
-    min-width: 50px;
-    flex-shrink: 0;
-    margin: 1px 0 1px 10px;
-    box-shadow: 2px 2px 6px 0px rgba(0, 0, 0, 0.1);
-}
-.ButtonSubmit:active {
-    background: #0038b9;
-    padding: 2px 0 0 2px;
-    box-shadow: inset 2px 2px 6px 0px rgba(0, 0, 0, 0.5);
-}
-.ButtonSubmit:disabled {
-    background: #babdc4;
-    color: #fff;
-    padding: 2px 0 0 2px;
-    box-shadow: none;
-}
-
-.ButtonInterrupt {
-    background-color: #b00000;
-    color: #ffffff;
-    box-shadow: 2px 2px 6px 0px rgb(0 0 0 / 25%);
-}
-.ButtonInterrupt:active {
-    background-color: #900000;
-    color: #ffffff;
-    padding: 3px 0 0 3px;
-    box-shadow: inset 2px 2px 6px 0px rgb(0 0 0 / 25%);
-}
-
-
-
-
-</style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <title>NanoLM - BD4SUR</title>
+    <link rel="stylesheet" type="text/css" href="style.css" charset="utf-8"/>
+</head>
 <body>
-    <div class="Main">
-        <div class="Top">
-            <div><span class="Nano">NanoLM</span> <span>Inference</span></div>
-            <a style="border-bottom: none; display: flex;" href="https://github.com/bd4sur/Nano"><img alt="GitHub stars" src="https://img.shields.io/github/stars/bd4sur/Nano?style=social"></a>
+
+
+<div class="ModalMask" id="modal_mask">
+    <div class="Modal" id="modal">
+        <div class="ModalThrobberContainer">
+            <svg version="1" xmlns="http://www.w3.org/2000/svg" width="16" height="16" style="transform: scale(2.5);"><style>@keyframes rotate{0%{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes fillunfill{0%{stroke-dashoffset:32.3}50%{stroke-dashoffset:0}to{stroke-dashoffset:-31.9}}@keyframes rot{0%{transform:rotate(0deg)}to{transform:rotate(-360deg)}}@keyframes colors{0%,to{stroke:#15e}}</style><g style="animation-duration:1568.63ms;animation-iteration-count:infinite;animation-name:rotate;animation-timing-function:linear;transform-origin:50% 50%;width:16px;height:16px"><path fill="none" d="M8 1.125A6.875 6.875 0 1 1 1.125 8" stroke-width="2.25" stroke-linecap="butt" style="animation-duration:1333ms,5332ms,5332ms;animation-fill-mode:forwards;animation-iteration-count:infinite,infinite,infinite;animation-name:fillunfill,rot,colors;animation-play-state:running,running,running;animation-timing-function:cubic-bezier(.4,0,.2,1),steps(4),linear;transform-origin:50% 50%" stroke-dasharray="32.4" stroke-dashoffset="32.4"/></g></svg>
         </div>
-
-        <div>
-            <div style="display: flex; flex-direction: row; justify-content: space-between;">
-                <div class="ValueFieldContainer">
-                    <div class="ValueFieldTitle">Top-K</div>
-                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="top_k" type="number" value="0" step="1"></div>
-                </div>
-                <div class="ValueFieldContainer">
-                    <div class="ValueFieldTitle">Top-P</div>
-                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="top_p" type="number" value="0.5" step="0.1"></div>
-                </div>
-                <div class="ValueFieldContainer">
-                    <div class="ValueFieldTitle">温度</div>
-                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="temperature" type="number" value="1.1" step="0.1"></div>
-                </div>
-                <div class="ValueFieldContainer">
-                    <div class="ValueFieldTitle">复读惩罚</div>
-                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="repetition_penalty" type="number" value="1.1" step="0.1"></div>
-                </div>
-                <div class="ValueFieldContainer">
-                    <div class="ValueFieldTitle">步数</div>
-                    <div class="ValueFieldInputContainer"><input class="ValueFieldInput" id="max_seq_len" type="number" value="200" step="0.1"></div>
-                </div>
-            </div>
+        <div class="ModalBanner">
+            <div class="ModalBannerTitle">NanoLM 推理设置</div>
         </div>
+        <div class="ModalTitle">选择语言模型</div>
+        <div class="ModalContent"></div>
 
-        <div class="Middle">
+        <div class="ModalTitle">生成参数</div>
+        <div class="ModalContent">
+            <div id="top_k"></div>
+            <div id="top_p"></div>
+            <div id="temperature"></div>
+            <div id="repetition_penalty"></div>
+            <div id="max_seq_len"></div>
+        </div>
+        <div class="ModalContent" style="display: flex; justify-content: flex-end; padding-right: 20px;">
+            <button class="ModalCancel" id="modal_cancel">取消</button>
+            <button class="ModalConfirm" id="modal_confirm">确认</button>
+        </div>
+    </div>
+</div>
 
 
 
-            <div class="Chat">
 
-                <div class="ChatRecord" id="ChatRecord">
-                    <div class="Guide">
-                        <div class="GuideIntro">你好啊，Homo！试试这些问题？🤪</div>
-                        <div class="GuideQuestionContainer">
-                            <div class="GuideQuestion" id="select_file" style="position: relative;">
-                                <input type="file" id="model_file_selector" name="files[]" multiple style="position: absolute; top: 0; right: 0; width: 100%; height: 100%; opacity: 0;">
-                                <div style="font-weight: bold;">选择模型...</div>
+
+<div class="Main">
+    <div class="Top">
+        <div><span class="Nano">NanoLM</span><span style="margin-left: 10px; border-left: 1px solid #9fa1a8; padding-left: 10px; color: #000; font-weight: 100; font-size: smaller;">Inference</span></div>
+        <a style="border-bottom: none; display: flex;" href="https://github.com/bd4sur/Nano"><img alt="GitHub stars" src="https://img.shields.io/github/stars/bd4sur/Nano?style=social"></a>
+    </div>
+
+    <div class="Middle">
+
+        <div class="Chat">
+
+            <div class="ChatRecord" id="ChatRecord">
+                <div class="Guide">
+                    <div style="display: flex; flex-direction: row; border-bottom: 1px solid #cfd3dc; padding: 0; margin: 0 0 20px 10px;">
+                        <div style="display: flex; flex-direction: column; padding-top: 40px;">
+                            <div class="GuideIntro" style="text-align: left;">Web Browser Is All You Need!</div>
+                            <div class="GuidePrompt">
+                                <div>完全在浏览器内推理的(大)语言模型！</div>
+                                <ul style="padding-left: 16px; margin: 5px 0;">
+                                    <li>下载<a href="https://huggingface.co/bd4sur/Nano-56M-20241027" target="_blank">语言模型</a>。</li>
+                                    <li>点击“选择模型...”，等待加载。</li>
+                                    <li>输入问题，点击小飞机，开始生成！</li>
+                                </ul>
+                                <div>注意：现在还不支持多轮对话噢。</div>
+                                <div style="margin: 5px 0 0 0; font-size: smaller;">Illustration by <a href="https://x.com/ookiiayu/status/1633071773217607683" target="_blank">ookiiayu@X</a></div>
                             </div>
-                            <div class="GuideQuestion GuideQuestionText">最深的深海有多深？</div>
                         </div>
+                        <div style="height: 260px; width: 150px; background-image: url('nano.png'); background-size: contain; background-repeat: no-repeat; background-position-x: right;"></div>
                     </div>
-                </div>
-
-                <div class="ChatInput">
-                    <div class="ChatInputContainer">
-                        <div class="InputBoxContainer">
-                            <div class="ButtonClear" id="clear_input_box">
-                                <div class="ButtonClearContainer">
-                                    <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="16px" height="16px"><path d="M512 981.333333c259.2 0 469.333333-210.133333 469.333333-469.333333S771.2 42.666667 512 42.666667 42.666667 252.8 42.666667 512s210.133333 469.333333 469.333333 469.333333z m214.826667-261.845333a64 64 0 0 1-90.453334 1.578667l-122.794666-118.570667-118.570667 122.752A64 64 0 0 1 302.933333 636.330667l118.570667-122.752L298.666667 395.008A64 64 0 1 1 387.626667 302.933333l122.794666 118.570667 118.528-122.752A64 64 0 0 1 721.066667 387.669333l-118.613334 122.752 122.794667 118.570667a64 64 0 0 1 1.578667 90.453333z" fill="#383a40"></path></svg>
-                                </div>
-                            </div>
-                            <textarea class="InputBox" id="input" placeholder="Enter换行，Shift+Enter提交" style="height: 20px;">人类的本质是复读机吗？</textarea>
-
-                            <div class="ButtonAttachment">
-                                <div class="ButtonAttachmentContainer">
-                                    <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="16px" height="16px"><path d="M237.888 79.488l109.056 85.696a381.312 381.312 0 0 1 68.576-24.96L443.936 4.48a516.768 516.768 0 0 1 136.064 0l28.48 135.744c23.808 6.176 46.72 14.56 68.544 24.96l109.056-85.696a514.56 514.56 0 0 1 104.192 87.52L824.864 289.28c14.08 19.744 26.304 40.864 36.48 63.136l138.72 4.48c13.504 42.496 21.632 87.456 23.52 133.984l-128.768 51.616c-1.92 24.672-6.208 48.672-12.608 71.84L985.6 706.88a511.424 511.424 0 0 1-68.128 117.76l-131.84-43.2a385.824 385.824 0 0 1-55.808 46.848l19.712 137.408a508.352 508.352 0 0 1-127.872 46.528l-73.216-117.92a388.576 388.576 0 0 1-72.896 0l-73.216 117.92a508.352 508.352 0 0 1-127.84-46.528l19.68-137.408a385.888 385.888 0 0 1-55.808-46.88l-131.84 43.264A511.488 511.488 0 0 1 38.4 706.88l103.36-92.576c-6.368-23.168-10.624-47.168-12.576-71.84L0.416 490.88c1.92-46.528 9.984-91.488 23.52-134.016l138.688-4.48c10.208-22.24 22.432-43.36 36.512-63.104L133.696 167.04a514.56 514.56 0 0 1 104.192-87.52zM512 704a192 192 0 1 0 0-384 192 192 0 0 0 0 384z" fill="#383a40"></path></svg>
-                                </div>
-                                <input type="file" class="InputAttachment" id="imgfile">
-                            </div>
-
-                        </div>
-                        <button class="ButtonSubmit" id="submit" disabled>
-                            <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="18px" height="18px"><path d="M1008.00076 6.285714q18.857143 13.714286 15.428571 36.571429l-146.285714 877.714286q-2.857143 16.571429-18.285714 25.714285-8 4.571429-17.714286 4.571429-6.285714 0-13.714286-2.857143l-258.857142-105.714286-138.285715 168.571429q-10.285714 13.142857-28 13.142857-7.428571 0-12.571428-2.285714-10.857143-4-17.428572-13.428572T365.715046 987.428571v-199.428571l493.714285-605.142857-610.857142 528.571428-225.714286-92.571428q-21.142857-8-22.857143-31.428572-1.142857-22.857143 18.285714-33.714285L969.143617 5.142857q8.571429-5.142857 18.285714-5.142857 11.428571 0 20.571429 6.285714z" fill="#fff"></path></svg>
-                        </button>
-                    </div>
-                    <div style="display: flex; margin: 2px 10px; font-size: 10px; color: #9a9ea8; flex-direction: row; justify-content: center;">
-                        <div id="tps" style="margin-right: 10px;">--</div>
-                        <div style="margin: 0 10px;">Copyright © 2023-2024 <a href="https://bd4sur.com" target="_blank">BD4SUR</a></div>
-                        <div style="margin-left: 10px;"><span>Status: </span><span id="status"></span></div>
+                    <div class="GuideQuestionContainer" style="display: none;">
+                        <div class="GuideQuestion">人类的本质是什么？</div>
+                        <div class="GuideQuestion">你是谁？</div>
+                        <div class="GuideQuestion">讲个故事吧。</div>
+                        <div class="GuideQuestion">天空为什么是蓝色的？</div>
+                        <div class="GuideQuestion">最深的深海有多深？</div>
+                        <div class="GuideQuestion">帮我制定一个新疆自驾游的计划。</div>
+                        <div class="GuideQuestion">中国历史上的第一个皇帝是谁？</div>
+                        <div class="GuideQuestion">澳大利亚的首都在哪里？</div>
+                        <div class="GuideQuestion">频谱仪的分辨率带宽和扫描速度之间是什么关系？</div>
+                        
                     </div>
                 </div>
             </div>
         </div>
     </div>
+    <div class="ChatInput">
+        <div class="ModelSelector" id="select_file">
+            <input type="file" id="model_file_selector" name="files[]" multiple style="position: absolute; top: 0; right: 0; width: 100%; height: 100%; opacity: 0;">
+            <div id="model_selector_prompt" style="font-weight: bold;">选择模型...</div>
+        </div>
+        <div class="ChatInputContainer" style="display: none;">
+            <div class="InputBoxContainer">
+                <div class="ButtonClear" id="clear_input_box">
+                    <div class="ButtonClearContainer">
+                        <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="16px" height="16px"><path d="M512 981.333333c259.2 0 469.333333-210.133333 469.333333-469.333333S771.2 42.666667 512 42.666667 42.666667 252.8 42.666667 512s210.133333 469.333333 469.333333 469.333333z m214.826667-261.845333a64 64 0 0 1-90.453334 1.578667l-122.794666-118.570667-118.570667 122.752A64 64 0 0 1 302.933333 636.330667l118.570667-122.752L298.666667 395.008A64 64 0 1 1 387.626667 302.933333l122.794666 118.570667 118.528-122.752A64 64 0 0 1 721.066667 387.669333l-118.613334 122.752 122.794667 118.570667a64 64 0 0 1 1.578667 90.453333z" fill="#383a40"></path></svg>
+                    </div>
+                </div>
+                <textarea class="InputBox" id="input" placeholder="Enter换行，Shift+Enter提交" style="height: 20px;">人类的本质是复读机吗？</textarea>
+
+                <div class="ButtonSetting" id="setting">
+                    <div class="ButtonSettingContainer">
+                        <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="16px" height="16px"><path d="M237.888 79.488l109.056 85.696a381.312 381.312 0 0 1 68.576-24.96L443.936 4.48a516.768 516.768 0 0 1 136.064 0l28.48 135.744c23.808 6.176 46.72 14.56 68.544 24.96l109.056-85.696a514.56 514.56 0 0 1 104.192 87.52L824.864 289.28c14.08 19.744 26.304 40.864 36.48 63.136l138.72 4.48c13.504 42.496 21.632 87.456 23.52 133.984l-128.768 51.616c-1.92 24.672-6.208 48.672-12.608 71.84L985.6 706.88a511.424 511.424 0 0 1-68.128 117.76l-131.84-43.2a385.824 385.824 0 0 1-55.808 46.848l19.712 137.408a508.352 508.352 0 0 1-127.872 46.528l-73.216-117.92a388.576 388.576 0 0 1-72.896 0l-73.216 117.92a508.352 508.352 0 0 1-127.84-46.528l19.68-137.408a385.888 385.888 0 0 1-55.808-46.88l-131.84 43.264A511.488 511.488 0 0 1 38.4 706.88l103.36-92.576c-6.368-23.168-10.624-47.168-12.576-71.84L0.416 490.88c1.92-46.528 9.984-91.488 23.52-134.016l138.688-4.48c10.208-22.24 22.432-43.36 36.512-63.104L133.696 167.04a514.56 514.56 0 0 1 104.192-87.52zM512 704a192 192 0 1 0 0-384 192 192 0 0 0 0 384z" fill="#383a40"></path></svg>
+                    </div>
+                </div>
+
+                <div class="ButtonInstruct ButtonHover" id="instruct_switch">
+                    <div class="ButtonInstructContainer">
+                        <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="20px" height="26px"><path d="M336 741q-14 0-22.5-10t-8.5-26V604h-16q-78 0-119-41t-41-118V178q0-77 41-118t119-41h448q77 0 118 41t41 118v267q0 76-41 117.5T737 604H502L376 719q-13 12-21.5 17t-18.5 5z m57-415q0-21-15.5-36.5T341 274q-21 0-36.5 15.5t-15.5 36q0 20.5 15.5 36T341 377q21 0 36.5-15.5T393 326z m174 0q0-21-15.5-36.5T515 274q-21 0-36 15.5t-15 36q0 20.5 15.5 36t36 15.5q20.5 0 36-15.5T567 326z m174 0q0-21-15.5-36.5t-36-15.5q-20.5 0-36 15.5t-15.5 36q0 20.5 15.5 36T690 377q21 0 36-15.5t15-35.5z" fill="#383a40"></path></svg>
+                    </div>
+                </div>
+
+            </div>
+            <button class="ButtonSubmit" id="submit" disabled>
+                <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="18px" height="18px"><path d="M1008.00076 6.285714q18.857143 13.714286 15.428571 36.571429l-146.285714 877.714286q-2.857143 16.571429-18.285714 25.714285-8 4.571429-17.714286 4.571429-6.285714 0-13.714286-2.857143l-258.857142-105.714286-138.285715 168.571429q-10.285714 13.142857-28 13.142857-7.428571 0-12.571428-2.285714-10.857143-4-17.428572-13.428572T365.715046 987.428571v-199.428571l493.714285-605.142857-610.857142 528.571428-225.714286-92.571428q-21.142857-8-22.857143-31.428572-1.142857-22.857143 18.285714-33.714285L969.143617 5.142857q8.571429-5.142857 18.285714-5.142857 11.428571 0 20.571429 6.285714z" fill="#fff"></path></svg>
+            </button>
+        </div>
+        <div style="height: 20px; display: flex; margin: 0px 10px; font-size: 10px; color: #9a9ea8; flex-direction: row; justify-content: center; align-items: center;">
+            <div style="margin: 0 10px 0 5px;">Copyright © 2023-2024 <a href="https://bd4sur.com" target="_blank">BD4SUR</a></div>
+        </div>
+    </div>
+</div>
 
 </body>
 
-<object id="submit_icon">
+<object id="submit_icon" style="display: none;">
     <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="18px" height="18px"><path d="M1008.00076 6.285714q18.857143 13.714286 15.428571 36.571429l-146.285714 877.714286q-2.857143 16.571429-18.285714 25.714285-8 4.571429-17.714286 4.571429-6.285714 0-13.714286-2.857143l-258.857142-105.714286-138.285715 168.571429q-10.285714 13.142857-28 13.142857-7.428571 0-12.571428-2.285714-10.857143-4-17.428572-13.428572T365.715046 987.428571v-199.428571l493.714285-605.142857-610.857142 528.571428-225.714286-92.571428q-21.142857-8-22.857143-31.428572-1.142857-22.857143 18.285714-33.714285L969.143617 5.142857q8.571429-5.142857 18.285714-5.142857 11.428571 0 20.571429 6.285714z" fill="#fff"></path></svg>
 </object>
 
 <script src="./jquery.js"></script>
+<script src="./marked.min.js"></script>
+<script src="./components.js"></script>
 <script src="./infer.js"></script>
 <script>
 
@@ -454,9 +136,15 @@ body {
 
 
 let round_counter = 0;
+let is_instruct_enabled = true;
 
+let modal = new Modal("modal", "modal_mask");
 
-
+let top_k = new RangeInput("top_k", "Top K", 0, 100, 1, 0);
+let top_p = new RangeInput("top_p", "Top P", 0, 1, 0.1, 0.5);
+let temperature = new RangeInput("temperature", "温度", 0, 2, 0.1, 1.1);
+let repetition_penalty = new RangeInput("repetition_penalty", "复读惩罚", 0.5, 1.5, 0.1, 1.1);
+let max_seq_len= new RangeInput("max_seq_len", "最大序列长度", 1, 1024, 1, 511);
 
 
 
@@ -472,14 +160,23 @@ function layout_init() {
 }
 
 function layout_refresh(left_width) {
+    let media_type = GetMediaType();
+
     let clientHeight = window.innerHeight;
     let clientWidth = window.innerWidth;
 
+    if(media_type == "Desktop") {
+        $(".Main").height(clientHeight - 52);
+    }
+    else {
+        $(".Main").height(clientHeight);
+    }
+
     let main_width = $(".Main").width();
     let main_height = $(".Main").height();
-    let top_height = $(".Top").height();
-    $(".Main").height(clientHeight - 100);
-    $(".Middle").height(main_height - 120);
+    let chat_input_height = $(".ChatInput").outerHeight();
+    let top_height = $(".Top").outerHeight();
+    $(".Middle").height(main_height - top_height - chat_input_height);
 
     $(".Left").width(left_width);
     $(".Right").width(main_width - left_width);
@@ -522,12 +219,12 @@ function append_user_bubble(markdown, round_counter, date_str) {
         </div>`);
 }
 
-function append_bot_bubble(round_counter, date_str) {
+function append_bot_bubble(round_counter, date_str, tps) {
     $("#ChatRecord").append(`
         <div class="ChatRound BotRound">
             <div class="ChatAvatarContainer BotAvatarContainer"><img class="BotAvatarImage" src="avatar_bot.jpg"></div>
             <div class="ChatBubble BotBubble">
-                <div class="ChatContent" id="bot_response_${round_counter}"><span style="color: #c9ced6;">思考中...</span></div>
+                <div class="ChatContent" id="bot_response_${round_counter}"><span style="color: #c9ced6;">正在思考...</span></div>
                 <div class="BotBubbleFooter">
                     <div class="BotFooterInfo" id="bot_footer_${round_counter}"><b>Bot</b> ${date_str}</div>
                     <div class="BotCopyBubble" onclick="navigator.clipboard.writeText($('#bot_response_${round_counter}').text())">
@@ -604,17 +301,45 @@ $("#input").on("input propertychange change keydown", function(e) {
     $(this).innerHeight(this.scrollHeight);
 });
 
-
 $("#clear_input_box").on("click", function() {
     set_input_box("");
 });
 
-$(".GuideQuestionText").each(function(i, elem) {
+$("#setting").on("click", function() {
+    modal.toggle();
+});
+
+$(".GuideQuestion").each(function(i, elem) {
     $(elem).on("click", function(event) {
         let question = $(this).text();
         set_input_box(question);
     });
 });
+
+$("#modal_confirm").on("click", function() {
+    $(".ModalThrobberContainer").css("display", "flex");
+    // do something
+    modal.hide();
+    $(".ModalThrobberContainer").css("display", "none");
+});
+
+$("#modal_cancel").on("click", function() {
+    modal.hide();
+});
+
+$("#instruct_switch").on("click", function() {
+    if(is_instruct_enabled === true) {
+        is_instruct_enabled = false;
+        $("#instruct_switch").removeClass("ButtonHover");
+        append_chat_info("问答模式已关闭（启用文本续写）");
+    }
+    else {
+        is_instruct_enabled = true;
+        $("#instruct_switch").addClass("ButtonHover");
+        append_chat_info("问答模式已开启");
+    }
+});
+
 
 
 let model_file_selector = document.getElementById('model_file_selector');
@@ -622,14 +347,17 @@ model_file_selector.onchange = () => {
     let file = model_file_selector.files[0];
     let Reader = new FileReader();
     Reader.onloadend = () => {
-        document.querySelector('#status').textContent = "Loading...";
+        $('#model_selector_prompt').html("正在解析...");
         let file_buffer = Reader.result;
         parse_model(file_buffer);
-        document.querySelector('#status').textContent = "Ready";
         document.querySelector('#submit').removeAttribute("disabled");
-        document.querySelector('#select_file').style.display = "none";
+        $('#select_file').fadeOut(200, () => {
+            $(".ChatInputContainer").fadeIn(300);
+            $(".GuideQuestionContainer").fadeIn(300);
+        });
     };
     Reader.readAsArrayBuffer(file);
+    $('#model_selector_prompt').html("正在读取...");
 };
 
 
@@ -650,34 +378,32 @@ model_file_selector.onchange = () => {
 function submit() {
 
     let user_input = document.querySelector('#input').value;
-    let prompt = `<|instruct_mark|>${user_input}<|response_mark|>`;
+    let prompt = is_instruct_enabled ? `<|instruct_mark|>${user_input}<|response_mark|>` : user_input;
 
     append_user_bubble(user_input, round_counter, get_current_time());
 
     let gen_args = {
-        top_p: parseFloat(document.querySelector('#top_p').value),
-        top_k: parseFloat(document.querySelector('#top_k').value),
-        temperature: parseFloat(document.querySelector('#temperature').value),
-        repetition_penalty: parseFloat(document.querySelector('#repetition_penalty').value),
-        max_seq_len: parseInt(document.querySelector('#max_seq_len').value)
+        top_p:              Number(top_p.getValue()),
+        top_k:              Number(top_k.getValue()),
+        temperature:        Number(temperature.getValue()),
+        repetition_penalty: Number(repetition_penalty.getValue()),
+        max_seq_len:        Number(max_seq_len.getValue())
     }
 
     generate(
         prompt,
         gen_args,
         () => {
-            document.querySelector('#tps').textContent = '';
             append_bot_bubble(round_counter, get_current_time());
             scroll_to_bottom();
         },
         (text, status, tps) => {
             if(status === "Decoding...") {
-                update_bot_bubble(text, round_counter);
+                update_bot_bubble(marked.parse(text), round_counter);
             }
+            update_bot_footer(`<b>Bot</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
             switch_submit_button_state("interrupt");
             scroll_to_bottom();
-            document.querySelector('#status').textContent = status;
-            document.querySelector('#tps').textContent = `${tps.toFixed(2)} tokens/s`;
             // <|eos|> or <|padding|>
             if(text.indexOf("<|eos|>") >= 0 || text.indexOf("<|padding|>") >= 0)
                 return false;
@@ -685,8 +411,7 @@ function submit() {
         },
         (tps) => {
             switch_submit_button_state("submit");
-            document.querySelector('#tps').textContent = `${tps.toFixed(2)} tokens/s`;
-            document.querySelector('#status').textContent = "Ready";
+            update_bot_footer(`<b>Bot</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s on avg`, round_counter);
             round_counter++;
         }
     );
@@ -726,13 +451,7 @@ function interrupt() {
 layout_init();
 
 let layoutObserver = new MutationObserver((mutations, observer) => {
-    let media_type = GetMediaType();
-    if(media_type === "Desktop") {
-        layout_refresh(300);
-    }
-    else if(media_type === "Mobile") {
-        layout_refresh(0);
-    }
+    layout_refresh();
 });
 layoutObserver.observe(document.getElementsByTagName('html')[0], {attributes: true, characterData: true, childList: true, subtree: true});
 
