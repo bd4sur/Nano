@@ -21,6 +21,7 @@ from model import TrainConfig, ModelConfig, GPT
 
 logger = logging.getLogger(__name__)
 
+MODEL_VERSION = "2024.10"
 
 class DataLoader:
     def __init__(self, filepath_list):
@@ -195,9 +196,8 @@ class TrainGPT():
 
         self.log(f"Initializing models and optimizers...")
 
-        # 继续训练
+        # 继续训练（分为全参数微调/继续预训练（取决于数据mask）、LoRA微调两种情况）
         if self.from_checkpoint is not None:
-            self.log(f"  Resuming training from `{self.from_checkpoint}`...")
             _checkpoint = torch.load(self.from_checkpoint, map_location=self.current_device)
             # 恢复模型配置
             self.model_config = _checkpoint["model_config"]
@@ -205,14 +205,31 @@ class TrainGPT():
             # 恢复词表
             self.tokenizer = Tokenizer()
             self.tokenizer.load_from_config_dict(_checkpoint["tokenizer_config"])
-            # 恢复迭代步数
-            self.step_count = _checkpoint["step_count"]
-            # 恢复模型参数
-            self.model = GPT(self.model_config)
-            self.model.to(self.current_device)
-            self.model.load_state_dict(_checkpoint["model"], strict=False)
+            # LoRA
+            if self.train_config.use_lora:
+                self.log(f"  LoRA fine-tuning based on pre-trained model `{self.from_checkpoint}`...")
+                # 迭代步数从零开始
+                self.step_count = 0
+                # 加载预训练模型参数
+                self.model = GPT(self.model_config)
+                self.model.load_state_dict(_checkpoint["model"], strict=False)
+                # 将模型转为LoRA模型（外挂低秩适配层、冻结预训练参数）
+                self.model.to_lora(
+                    lora_rank=self.train_config.lora_rank,
+                    lora_alpha=self.train_config.lora_alpha,
+                    lora_dropout=self.train_config.lora_dropout)
+                self.model.to(self.current_device)
+            # 全参数微调/继续预训练
+            else:
+                self.log(f"  Resuming training from `{self.from_checkpoint}`...")
+                # 恢复迭代步数
+                self.step_count = _checkpoint["step_count"]
+                # 恢复模型参数
+                self.model = GPT(self.model_config)
+                self.model.load_state_dict(_checkpoint["model"], strict=False)
+                self.model.to(self.current_device)
 
-        # 从零开始训练
+        # 从零开始训练（忽略任何LoRA设置）
         else:
             self.log("  Initializing a new model from scrach for pre-train...")
             # 从词表文件构建词元编码器
@@ -228,7 +245,8 @@ class TrainGPT():
         # 初始化优化器/恢复优化器状态
         _device_type = 'cuda' if 'cuda' in self.current_device else 'cpu'
         self.optimizer = self.model.configure_optimizers(self.train_config.weight_decay, self.train_config.learning_rate, (self.train_config.beta1, self.train_config.beta2), _device_type)
-        if self.from_checkpoint is not None:
+        # 仅 全参数微调/继续预训练 涉及优化器状态的恢复
+        if self.from_checkpoint is not None and not self.train_config.use_lora:
             self.optimizer.load_state_dict(_checkpoint["optimizer"])
 
         _checkpoint = None # free up memory
@@ -240,7 +258,9 @@ class TrainGPT():
         self.log(f"    n_head     = {self.model_config.n_head}")
         self.log(f"    n_kv_head  = {self.model_config.n_kv_head}")
         self.log(f"    n_hidden   = {self.model_config.n_hidden}")
-        self.log(f"    Parameters = {self.model.get_num_params():,} ({self.model.get_num_params() / 1e9}B)")
+        self.log(f"    Parameters")
+        self.log(f"         Total = {self.model.get_num_params():,} ({self.model.get_num_params() / 1e9}B)")
+        self.log(f"         Train = {self.model.get_num_params_train():,} ({self.model.get_num_params_train() / self.model.get_num_params() * 100}%)")
 
         if self.train_config.use_amp:
             # initialize a GradScaler. If enabled=False scaler is a no-op
@@ -345,28 +365,6 @@ class TrainGPT():
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = lr
 
-            # evaluate the loss on train/val sets and write checkpoints
-            if iter > 0 and iter % self.train_config.eval_interval == 0 and self.is_master_process:
-                val_loss = self.estimate_loss()
-                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Validation | Step: {iter} | Val_loss: {val_loss:.3f} | Best_val_loss: {best_val_loss:.4f}")
-
-                # 无论验证集损失是否下降，每1000步保存一个检查点
-                if iter > 0 and iter > start_step and (val_loss < best_val_loss or iter % 1000 == 0):
-                    ckpt_name = f"checkpoint_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt" if self.ckpt_filename is None else self.ckpt_filename
-                    ckpt_path = os.path.join(self.train_config.save_checkpoint_to, ckpt_name)
-                    self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving checkpoint to `{ckpt_path}`")
-                    _checkpoint = {
-                        "model":            raw_model.state_dict(),
-                        "optimizer":        self.optimizer.state_dict(),
-                        "step_count":       iter,
-                        "train_config":     self.train_config,
-                        "model_config":     self.model_config,
-                        "tokenizer_config": self.tokenizer.config
-                    }
-                    if val_loss < best_val_loss:
-                        best_val_loss = val_loss
-                    torch.save(_checkpoint, ckpt_path)
-
             t0 = time.time_ns()
 
             # 使用自动混合精度技术（默认）
@@ -416,6 +414,7 @@ class TrainGPT():
             for _ in range(self.ddp_world_size - 1):
                 self.get_batch("train")
 
+            # 记录日志
             if iter > 0 and iter % self.train_config.log_interval == 0:
                 t1_total = (time.time_ns(), iter)
                 lossf = loss.item() * self.gradient_accumulation_steps # NOTE 计算loss非常耗时
@@ -423,6 +422,49 @@ class TrainGPT():
                 throughput = self.gradient_accumulation_steps * self.ddp_world_size * self.train_config.batch_size * self.model_config.block_size * (t1_total[1] - t0_total[1]) / ((t1_total[0] - t0_total[0]) / 1e9)
                 self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Epoch: {self.train_data.epoch} | Step: {iter} | Dataset: {self.train_data.current_course_index}-{self.train_data.current_line_pos[self.train_data.current_course_index]} | Loss: {lossf:.3f} | {dt*1000:.0f} ms/step , {flops / 1e9:.2f} GFLOP/s , {throughput:.1f} tokens/s")
                 t0_total = t1_total
+
+            # 计算验证集损失，保存检查点（分为全量和LoRA两类）
+            if iter > 0 and iter % self.train_config.eval_interval == 0 and self.is_master_process:
+                val_loss = self.estimate_loss()
+                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Validation | Step: {iter} | Val_loss: {val_loss:.3f} | Best_val_loss: {best_val_loss:.4f}")
+
+                # 保底策略：无论验证集损失是否下降，每1000步保存一个检查点
+                if iter > 0 and iter > start_step and (val_loss < best_val_loss or iter % 1000 == 0):
+                    # LoRA：保存LoRA模块
+                    if self.train_config.use_lora:
+                        ckpt_name = f"lora_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt" if self.ckpt_filename is None else self.ckpt_filename
+                        ckpt_path = os.path.join(self.train_config.save_checkpoint_to, ckpt_name)
+                        self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving LoRA checkpoint to `{ckpt_path}`")
+                        _checkpoint = {
+                            "version":          MODEL_VERSION,
+                            "is_lora":          True,
+                            "lora":             raw_model.get_lora_state_dict(),
+                            "model":            raw_model.state_dict(),            # TODO 后续去掉
+                            "optimizer":        self.optimizer.state_dict(),
+                            "step_count":       iter,
+                            "train_config":     self.train_config,
+                            "model_config":     self.model_config,
+                            "tokenizer_config": self.tokenizer.config              # TODO 后续去掉
+                        }
+                    # 预训练/继续与训练/全参数微调：保存模型全部参数和优化器状态
+                    else:
+                        ckpt_name = f"checkpoint_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt" if self.ckpt_filename is None else self.ckpt_filename
+                        ckpt_path = os.path.join(self.train_config.save_checkpoint_to, ckpt_name)
+                        self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving full-param checkpoint to `{ckpt_path}`")
+                        _checkpoint = {
+                            "version":          MODEL_VERSION,
+                            "is_lora":          False,
+                            "model":            raw_model.state_dict(),
+                            "optimizer":        self.optimizer.state_dict(),
+                            "step_count":       iter,
+                            "train_config":     self.train_config,
+                            "model_config":     self.model_config,
+                            "tokenizer_config": self.tokenizer.config
+                        }
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                    torch.save(_checkpoint, ckpt_path)
+
             iter += 1
             self.step_count = iter
 

@@ -49,12 +49,18 @@ class TrainConfig:
     lr_decay_iters: Optional[int] = 100000
     min_lr: Optional[float] = 6e-5
 
+    # LoRA settings
+    use_lora: Optional[bool] = False
+    lora_rank :Optional[int] = 16
+    lora_alpha :Optional[int] = 32
+    lora_dropout :Optional[float] = 0.0
+
     # Training Task
     from_checkpoint: Optional[str] = ""
     save_checkpoint_to: Optional[str] = ""
     dataset_path: Optional[list[list[str]]] = None
     tokenizer_path: Optional[str] = ""
-    
+
     batch_size: Optional[int] = 128
     gradient_accumulation_steps: Optional[int] = 4
     grad_clip: Optional[float] = 1.0
@@ -134,6 +140,25 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
         .expand(bs, slen, n_kv_head, n_rep, head_dim)
         .reshape(bs, slen, n_kv_head * n_rep, head_dim)
     )
+
+
+class LoRA(torch.nn.Module):
+    def __init__(self, target_module: torch.nn.Module, config: ModelConfig, lora_rank=16, lora_alpha=32, lora_dropout=0.0):
+        super().__init__()
+        self.lora_rank = lora_rank
+        self.lora_alpha = lora_alpha
+        self.lora_dropout = lora_dropout
+        self.w = target_module
+        self.lora_a = nn.Linear(self.w.in_features, self.lora_rank, bias=False)
+        self.lora_b = nn.Linear(self.lora_rank, self.w.out_features, bias=False)
+        self.lora_input_dropout = nn.Dropout(p=self.lora_dropout)
+        nn.init.kaiming_uniform_(self.lora_a.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_b.weight)
+
+    def forward(self, x):
+        out1 = self.w(x)
+        out2 = self.lora_b(self.lora_a(self.lora_input_dropout(x))) * (self.lora_alpha / self.lora_rank)
+        return out1 + out2
 
 
 class RMSNorm(torch.nn.Module):
@@ -308,6 +333,8 @@ class GPT(nn.Module):
         self.vocab_size = config.vocab_size
         self.n_layer = config.n_layer
 
+        self.is_lora = False
+
         self.tok_embeddings = nn.Embedding(config.vocab_size, config.n_embd)
         self.wpe = nn.Embedding(config.block_size, config.n_embd) if not self.config.use_rope else None
         self.dropout = nn.Dropout(config.dropout)
@@ -388,6 +415,40 @@ class GPT(nn.Module):
             self.last_loss = None
         return logits, self.last_loss
 
+    # 将模型转为LoRA模型（在wq、wk、wv、wo上附加低秩分解旁路并初始化，同时冻结除LoRA层之外所有其他参数）
+    def to_lora(self, lora_rank=16, lora_alpha=32, lora_dropout=0.0):
+        self.is_lora = True
+        for layer in self.layers:
+            layer.attention.wq = LoRA(layer.attention.wq, self.config, lora_rank=lora_rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout)
+            layer.attention.wk = LoRA(layer.attention.wk, self.config, lora_rank=lora_rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout)
+            layer.attention.wv = LoRA(layer.attention.wv, self.config, lora_rank=lora_rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout)
+            layer.attention.wo = LoRA(layer.attention.wo, self.config, lora_rank=lora_rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout)
+        for pname, p in self.named_parameters():
+            if "lora" in pname:
+                p.requires_grad = True
+            else:
+                p.requires_grad = False
+
+    # TODO 待实现：将LoRA模块的参数融合进基座，删除低秩适配分支，模型转回非LoRA模型
+    def merge_lora(self):
+        pass
+
+    # 获取LoRA模型的低秩适配层的参数
+    def get_lora_state_dict(self):
+        if not self.is_lora:
+            return False
+        lora_state_dict = {}
+        for k, v in self.state_dict().items():
+            if "lora" in k:
+                lora_state_dict[k] = v
+        return lora_state_dict
+
+    # 将LoRA模型的低秩适配层的参数，载入LoRA模型（基座模型保持不动）
+    def load_lora_state_dict(self, lora_state_dict):
+        if not self.is_lora:
+            return False
+        self.load_state_dict(lora_state_dict, strict=False, assign=False)
+
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         # start with all of the candidate parameters
@@ -415,13 +476,19 @@ class GPT(nn.Module):
 
         return optimizer
 
-
+    # 计算总参数量（含冻结参数）
     def get_num_params(self, non_embedding=True):
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding and not self.config.use_rope:
             n_params -= self.wpe.weight.numel()
         return n_params
 
+    # 计算参与训练的参数量（例如LoRA训练中只有LoRA层参与训练）
+    def get_num_params_train(self, non_embedding=True):
+        n_params_train = sum(p.numel() if p.requires_grad else 0 for p in self.parameters())
+        if non_embedding and not self.config.use_rope:
+            n_params_train -= self.wpe.weight.numel()
+        return n_params_train
 
     def estimate_flops(self, fwdbwd_per_iter, dt):
         # estimate the number of flops (float ops per second) we do per iteration.

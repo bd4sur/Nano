@@ -10,16 +10,18 @@ class InferenceGPT:
 
     def __init__(
             self,
-            checkpoint_path=os.path.join(os.path.dirname(__file__), "checkpoint/checkpoint.pt"),
+            model_path=os.path.join(os.path.dirname(__file__), "checkpoint/checkpoint.pt"),
+            lora_path=None,
             device="cuda",
             is_instruct=True,
-            max_length=None,
+            max_seq_length=None,
             temperature=1.0,
             top_k=5,
             repetition_penalty=1.2,
             profile=False
         ):
-        self.checkpoint_path = checkpoint_path
+        self.model_path = model_path
+        self.lora_path = lora_path
         self.device = device
 
         self.model = None
@@ -28,27 +30,40 @@ class InferenceGPT:
         self.decode = None
 
         self.is_instruct = is_instruct
-        self.max_length = max_length
+        self.max_seq_length = max_seq_length
         self.temperature = temperature
         self.top_k = top_k
         self.repetition_penalty = repetition_penalty
 
         # 读取模型检查点和训练配置
-        print(f"Loading model from `{self.checkpoint_path}`...")
-        checkpoint = torch.load(self.checkpoint_path, map_location=device)
+        print(f"Loading model from `{self.model_path}`...")
+        checkpoint = torch.load(self.model_path, map_location=device)
         train_config = checkpoint['train_config']
         model_config = checkpoint['model_config']
         tokenizer_config = checkpoint['tokenizer_config']
 
-        self.max_length = model_config.block_size if self.max_length is None or self.max_length > model_config.block_size else self.max_length
+        self.max_seq_length = model_config.block_size if self.max_seq_length is None or self.max_seq_length > model_config.block_size else self.max_seq_length
 
         # 设置随机种子与训练设置一致
         torch.manual_seed(train_config.random_seed)
         torch.cuda.manual_seed(train_config.random_seed)
 
-        # 加载模型权重
+        # 加载模型状态
         self.model = GPT(model_config)
         self.model.load_state_dict(checkpoint['model'], strict=False)
+
+        # 加载LoRA模块（若有）
+        if self.lora_path is not None:
+            print(f"Loading LoRA module from `{self.lora_path}`...")
+            lora_ckpt = torch.load(self.lora_path, map_location=device)
+            lora_train_config = lora_ckpt['train_config']
+            self.model.to_lora(
+                lora_rank=lora_train_config.lora_rank,
+                lora_alpha=lora_train_config.lora_alpha,
+                lora_dropout=lora_train_config.lora_dropout)
+            self.model.load_lora_state_dict(lora_ckpt["lora"])
+
+        # 设置为推理状态
         self.model.eval()
         self.model.to(device)
 
@@ -109,7 +124,7 @@ class InferenceGPT:
                     prompt = f"<|instruct_mark|>{prompt}<|response_mark|>"
                 x = torch.tensor(self.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
                 print("\x1b[34;1mNano:\x1b[0m ", end="", flush=True)
-                y = self.model.auto_regressive_generate(x, self.max_length, self.temperature, self.top_k, self.repetition_penalty, callback=self.typewriter)
+                y = self.model.auto_regressive_generate(x, self.max_seq_length, self.temperature, self.top_k, self.repetition_penalty, callback=self.typewriter)
                 print("\n")
                 if self.profile:
                     print(f"TPS = {[round(tps) for tps in self.tps_record]}\n")
@@ -122,8 +137,9 @@ def main():
 
     parser = argparse.ArgumentParser(description="Sample (to inference) from Nano model for text generation and question answering.")
     parser.add_argument("-m", "--model", type=str, default="checkpoint/ckpt.pt")
+    parser.add_argument("-l", "--lora", type=str, default=None)
     parser.add_argument("-i", "--instruct", action="store_true")
-    parser.add_argument("-l", "--max_length", type=int, default=None)
+    parser.add_argument("-s", "--max_seq_length", type=int, default=None)
     parser.add_argument("-t", "--temperature", type=float, default=1.0)
     parser.add_argument("-k", "--top_k", type=int, default=5)
     parser.add_argument("-r", "--repetition_penalty", type=float, default=1.2)
@@ -132,9 +148,10 @@ def main():
 
     infer = InferenceGPT(
         args.model,
+        args.lora,
         device="cuda" if torch.cuda.is_available() else "cpu",
         is_instruct=args.instruct,
-        max_length=args.max_length,
+        max_seq_length=args.max_seq_length,
         temperature=args.temperature,
         top_k=args.top_k,
         repetition_penalty=args.repetition_penalty,
