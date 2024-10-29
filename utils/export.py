@@ -1,6 +1,12 @@
-"""
-This script has functions and utilties for model export to .bin files to be read from and inferenced in C.
-"""
+# 
+# Nano Language Model
+#
+#   BD4SUR 2024-10
+#
+#   Forked from:
+#     - https://github.com/karpathy/llama2.c
+#
+
 import struct
 import base64
 import json
@@ -60,13 +66,9 @@ def quantize_q80(w, group_size):
 # -----------------------------------------------------------------------------
 # new version
 
-def version1_export(model, tokenizer_config, filepath):
-    """
-    Export the model weights in full float32 .bin file to be read from C.
-    This is same as legacy_export, but with a proper header.
-    """
-    major_version = 0
-    minor_version = 0
+def lora_export(lora_dict, lora_config, basemodel_config, filepath):
+    major_version = 2024
+    minor_version = 10
 
     out_file = open(filepath, 'wb')
 
@@ -82,7 +84,115 @@ def version1_export(model, tokenizer_config, filepath):
     out_file.write(struct.pack('i', minor_version))
     # --> 16 bytes
 
-    # 3) write the model config, which will be 8 ints (32 bytes)
+    # 3) write file type TODO  to be defined
+    out_file.write(struct.pack('i', 10))  # Model type: LoRA module
+    out_file.write(struct.pack('i', 32))  # Config Length: 32 bytes
+    # --> 24 bytes
+
+    # 4) write the LoRA config, which will be 8 ints (32 bytes)
+    out_file.write(struct.pack('i', lora_config["lora_rank"]))
+    out_file.write(struct.pack('i', lora_config["lora_alpha"]))
+    out_file.write(struct.pack('i', basemodel_config.n_layer))   # 用于校验
+    out_file.write(struct.pack('i', basemodel_config.n_embd))   # 用于校验
+    out_file.write(struct.pack('i', basemodel_config.n_head))    # 用于校验
+    out_file.write(struct.pack('i', basemodel_config.n_kv_head)) # 用于校验
+    out_file.write(struct.pack('i', basemodel_config.n_hidden))  # 用于校验
+    out_file.write(struct.pack('i', 0)) # 预留：用于控制LoRA用到哪些层
+    # --> 56 bytes
+
+    # 5) write some other flags (TODO)
+
+    # 6) pad rest with zeros; 'tell' returns current pos
+    pad = 256 - out_file.tell()
+    assert pad >= 0
+    out_file.write(b'\0' * pad)
+
+    # now let's write out all the LoRA parameters
+    weights = []
+    wq_lora_a, wq_lora_b = {}, {}
+    wk_lora_a, wk_lora_b = {}, {}
+    wv_lora_a, wv_lora_b = {}, {}
+    wo_lora_a, wo_lora_b = {}, {}
+
+    for k, v in lora_dict.items():
+        if "wq.lora_a" in k:
+            wq_lora_a[k] = v
+        elif "wq.lora_b" in k:
+            wq_lora_b[k] = v
+        elif "wk.lora_a" in k:
+            wk_lora_a[k] = v
+        elif "wk.lora_b" in k:
+            wk_lora_b[k] = v
+        elif "wv.lora_a" in k:
+            wv_lora_a[k] = v
+        elif "wv.lora_b" in k:
+            wv_lora_b[k] = v
+        elif "wo.lora_a" in k:
+            wo_lora_a[k] = v
+        elif "wo.lora_b" in k:
+            wo_lora_b[k] = v
+
+    keycmp = lambda k: int(k.split(".")[1]) # layer index
+
+    for k in sorted(wq_lora_a.keys(), key=keycmp):
+        weights.append(wq_lora_a[k])
+    for k in sorted(wq_lora_b.keys(), key=keycmp):
+        weights.append(wq_lora_b[k])
+    for k in sorted(wk_lora_a.keys(), key=keycmp):
+        weights.append(wk_lora_a[k])
+    for k in sorted(wk_lora_b.keys(), key=keycmp):
+        weights.append(wk_lora_b[k])
+    for k in sorted(wv_lora_a.keys(), key=keycmp):
+        weights.append(wv_lora_a[k])
+    for k in sorted(wv_lora_b.keys(), key=keycmp):
+        weights.append(wv_lora_b[k])
+    for k in sorted(wo_lora_a.keys(), key=keycmp):
+        weights.append(wo_lora_a[k])
+    for k in sorted(wo_lora_b.keys(), key=keycmp):
+        weights.append(wo_lora_b[k])
+
+    param_count = 0
+    for w in weights:
+        param_count += w.detach().cpu().view(-1).numel() * 4
+        serialize_fp32(out_file, w)
+
+    print(f"Params = {param_count}")
+    print(f"Total bin file length = {out_file.tell()}")
+
+    # write to binary file
+    out_file.close()
+    print(f"wrote {filepath}")
+
+
+
+def version1_export(model, tokenizer_config, filepath):
+    """
+    Export the model weights in full float32 .bin file to be read from C.
+    This is same as legacy_export, but with a proper header.
+    """
+    major_version = 2024
+    minor_version = 10
+
+    out_file = open(filepath, 'wb')
+
+    # first write out the header. the header will be 256 bytes
+
+    # 1) write magic, which will be two uint32 of "BD4SURLM" in ASCII
+    out_file.write(struct.pack('I', 0x42443453))
+    out_file.write(struct.pack('I', 0x55524c4d))
+    # --> 8 bytes
+
+    # 2) write version, which will be int
+    out_file.write(struct.pack('i', major_version))
+    out_file.write(struct.pack('i', minor_version))
+    # --> 16 bytes
+
+    # 3) write file type TODO  to be defined
+    out_file.write(struct.pack('i', 0))  # Model type: Base model
+    out_file.write(struct.pack('i', 32)) # Config Length: 32 bytes
+    # --> 24 bytes
+
+    # 4) write the model config, which will be 8 ints (32 bytes)
     cfg = model.config
     is_shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
     header = struct.pack(
@@ -97,11 +207,11 @@ def version1_export(model, tokenizer_config, filepath):
         int(is_shared_classifier)
     )
     out_file.write(header)
-    # --> 48 bytes
+    # --> 56 bytes
 
-    # 4) write some other flags (TODO)
+    # 5) write some other flags (TODO)
 
-    # 5) pad rest with zeros; 'tell' returns current pos
+    # 6) pad rest with zeros; 'tell' returns current pos
     pad = 256 - out_file.tell()
     assert pad >= 0
     out_file.write(b'\0' * pad)
@@ -243,6 +353,21 @@ def load_checkpoint(checkpoint):
     return model, tokenizer_config
 
 
+def load_lora(lora_path):
+    print(f"LoRA module file path: {lora_path}")
+    checkpoint_dict = torch.load(lora_path, map_location='cpu')
+    if checkpoint_dict["is_lora"]:
+        train_config = checkpoint_dict["train_config"]
+        model_config = checkpoint_dict["model_config"]
+        lora_config = {
+            "lora_rank": train_config.lora_rank,
+            "lora_alpha": train_config.lora_alpha,
+        }
+        return checkpoint_dict["lora"], lora_config, model_config
+    else:
+        return False
+
+
 # -----------------------------------------------------------------------------
 # API entrypoint
 
@@ -270,14 +395,18 @@ if __name__ == "__main__":
     parser.add_argument("--dtype", type=str, help="dtype of the model (fp16, fp32)", default="fp32")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--checkpoint", type=str, help="model checkpoint, .pt file")
+    group.add_argument("--lora", type=str, help="lora module, .pt file")
     args = parser.parse_args()
     dtype = {"fp16": torch.float16, "fp32": torch.float32}[args.dtype]
 
+    if args.lora:
+        lora_dict, lora_config, basemodel_config = load_lora(args.lora)
+        if lora_dict != False:
+            parser.error("Can't load input LoRA module!")
+        lora_export(lora_dict, lora_config, basemodel_config, args.filepath)
+
     if args.checkpoint:
         model, tokenizer_config = load_checkpoint(args.checkpoint)
-
-    if model is None or tokenizer_config is None:
-        parser.error("Can't load input model!")
-
-    # export
-    model_export(model, tokenizer_config, args.filepath, args.version, args.dtype)
+        if model is None or tokenizer_config is None:
+            parser.error("Can't load input model!")
+        model_export(model, tokenizer_config, args.filepath, args.version, args.dtype)

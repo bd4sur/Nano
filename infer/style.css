@@ -87,7 +87,7 @@ a:hover {
     position: absolute;
     top: 0; left: 0;
     width: 100%; height: 100%;
-    background: #00000080;
+    background: #ffffff80;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -313,18 +313,35 @@ a:hover {
     flex-direction: column;
     align-items: center;
 }
+.GuideIntroContainer {
+    display: flex;
+    flex-direction: row;
+    border-bottom: 1px solid #cfd3dc;
+    padding: 0; margin: 0 0 20px 10px;
+    background-image: url("nano.png");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position-x: right;
+}
 .GuideIntro {
-    font-size: 16px;
+    display: flex;
+    flex-direction: column;
+    padding: 30px 120px 10px 20px;
+}
+.GuideIntroTitle {
+    font-size: 18px;
     font-weight: bold;
     /* letter-spacing: 1px; */
-    margin: 10px 0;
+    margin: 10px 0px 10px -10px;
+    text-align: left;
 }
-.GuidePrompt {
+.GuideIntroContent {
     font-size: 12px;
-    color: #9fa1a8;
+    color: #626675;
     margin: 10px 0;
     line-height: 1.6;
     text-align: left;
+    letter-spacing: 0.5px;
 }
 .GuideQuestionContainer {
     display: flex;
@@ -468,52 +485,6 @@ a:hover {
     justify-content: flex-start;
     box-shadow: 2px 2px 6px 0px rgb(0 0 0 / 0.1);
 }
-.ButtonClear, .ButtonSetting, .ButtonAttachment, .ButtonInstruct {
-    display: flex;
-    cursor: pointer;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 5px;
-}
-.ButtonHover, .ButtonClear:hover, .ButtonSetting:hover, .ButtonAttachment:hover, .ButtonInstruct:hover {
-    background-color: #e5e9f2;
-}
-.ButtonClear {
-    margin: 0 6px 0 0;
-}
-.ButtonSetting {
-    margin: 0 0 0 6px;
-}
-.ButtonAttachment {
-    position: relative;
-    margin: 0 0 0 3px;
-}
-.ButtonInstruct {
-    margin: 0 0 0 3px;
-}
-.ButtonClearContainer, .ButtonAttachmentContainer, .ButtonSettingContainer {
-    margin: 0;
-    width: 16px;
-    height: 16px;
-}
-.ButtonInstructContainer {
-    margin: 0;
-    width: 20px;
-    height: 20px;
-}
-
-.InputAttachment {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 28px;
-    opacity: 0;
-}
-
 .InputBox {
     width: 100%;
     border: none;
@@ -535,6 +506,34 @@ a:hover {
 .InputBox::placeholder {
     color: #c3c8d1;
 }
+
+.ButtonClear, .ButtonSetting, .ButtonLoRA, .ButtonInstruct {
+    display: flex;
+    cursor: pointer;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 28px;
+    border-radius: 5px;
+}
+.ButtonHover, .ButtonClear:hover, .ButtonSetting:hover, .ButtonInstruct:hover {
+    background-color: #e5e9f2;
+}
+.ButtonLoRA:hover, .ButtonLoRAHover { background-color: #d7eac0; }
+
+.ButtonClear { margin: 0 6px 0 0; }
+.ButtonClearContainer { margin: 0; width: 16px; height: 16px; }
+
+.ButtonSetting { margin: 0 3px 0 0; }
+.ButtonSettingContainer { margin: 0; width: 20px; height: 20px; }
+
+.ButtonLoRA { position: relative; margin: 0 3px 0 0; }
+.ButtonLoRAContainer { margin: 0; width: 17px; height: 19px; }
+.LoRAFileInput { position: absolute; top: 0; left: 0; width: 100%; height: 28px; opacity: 0; }
+
+.ButtonInstruct { margin: 0; }
+.ButtonInstructContainer { margin: 0; width: 24px; height: 20px; }
 
 .ButtonSubmit {
     border: none;

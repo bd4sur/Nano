@@ -1,7 +1,12 @@
-// https://github.com/epicure/llama2.js
-// https://github.com/karpathy/llama2.c#notable-forks
-// This is a JavaScript port of llama2.c, a tiny neural net language model
-
+// 
+// Nano Language Model - Inference Engine on Web Browser
+//
+//   BD4SUR 2024-10
+//
+//   Forked from:
+//     - https://github.com/karpathy/llama2.c
+//     - https://github.com/epicure/llama2.js
+// 
 
 // ===============================================================================
 // 全局状态和缓冲区
@@ -9,6 +14,7 @@
 
 let LLM = { config: {}, param: {} };
 let TOKENIZER = { config: {}, trie: {} };
+let LoRA = null;
 let FWD_BUFFER;
 
 let is_generating = false;
@@ -18,7 +24,7 @@ let is_generating = false;
 // 读取并解析模型文件
 // ===============================================================================
 
-function parse_model(file_buffer) {
+function load_model(file_buffer) {
 
     const SIZE_OF_DTYPE = 4;
     const header_length = 256;
@@ -40,6 +46,11 @@ function parse_model(file_buffer) {
 
     console.info(`Model version: ${major_version}.${minor_version}`);
 
+    let model_type = header[4];
+    let config_length = header[5]; // 暂不使用
+
+    console.info(`Model type: ${model_type}`);
+
     // 读取模型结构参数
 
     LLM.config = {
@@ -54,7 +65,7 @@ function parse_model(file_buffer) {
     };
 
     let cfg_keys = Object.keys(LLM.config);
-    header.slice(4, 4 + cfg_keys.length).forEach((v, i) => { LLM.config[cfg_keys[i]] = v; });
+    header.slice(6, 6 + cfg_keys.length).forEach((v, i) => { LLM.config[cfg_keys[i]] = v; });
 
     offset += header_length;
 
@@ -62,7 +73,7 @@ function parse_model(file_buffer) {
 
     const cfg = LLM.config;
     const is_shared_weights = cfg.is_shared_classifier > 0 ? 1 : 0;
-    const head_dim = cfg.n_embd / cfg.n_head;
+    const head_dim = ((cfg.n_embd / cfg.n_head)^0);
 
     LLM.param = {
         token_embedding: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.vocab_size * cfg.n_embd)),
@@ -109,7 +120,109 @@ function parse_model(file_buffer) {
         att:     new Float32Array(cfg.n_head * cfg.block_size), // buffer for scores/attention values (n_heads, block_size)
         logits:  new Float32Array(cfg.vocab_size), // output logits
     };
+
+    return true;
 }
+
+
+function load_lora(file_buffer) {
+
+    const SIZE_OF_DTYPE = 4;
+    const header_length = 256;
+
+    let offset = 0;
+
+    let header = new Int32Array(file_buffer.slice(0, header_length));
+
+    let magic_number_0 = header[0];
+    let magic_number_1 = header[1];
+
+    if(magic_number_0 !== 0x42443453 || magic_number_1 !== 0x55524c4d) {
+        console.error("Error: Corrupted or wrong model file!");
+        return false;
+    }
+
+    let major_version = header[2];
+    let minor_version = header[3];
+
+    console.info(`Model version: ${major_version}.${minor_version}`);
+
+    let model_type = header[4];
+    let config_length = header[5]; // 暂不使用
+
+    console.info(`Model type: ${model_type}`);
+    if(model_type !== 10) {
+        console.error(`Error: Not a LoRA module!`);
+        return false;
+    }
+
+    // 读取LoRA参数
+
+    LoRA = { config: {}, param: {} };
+
+    LoRA.config = {
+        lora_rank: 0,
+        lora_alpha: 0,
+        n_layer: 0,     // 用于校验
+        n_embd: 0,     // 用于校验
+        n_head: 0,      // 用于校验
+        n_kv_head: 0,   // 用于校验
+        n_hidden: 0,    // 用于校验
+        lora_config: 0  // 预留：用于控制LoRA用到哪些层
+    };
+
+    let cfg_keys = Object.keys(LoRA.config);
+    header.slice(6, 6 + cfg_keys.length).forEach((v, i) => { LoRA.config[cfg_keys[i]] = v; });
+
+    offset += header_length;
+
+    // 读取LoRA参数
+
+    const llm_cfg  = LLM.config;
+    const lora_cfg = LoRA.config;
+    const head_dim = ((llm_cfg.n_embd / llm_cfg.n_head)^0);
+    const kv_dim = head_dim * llm_cfg.n_kv_head;
+
+    // 校验LoRA模块与基座模型是否匹配
+    if (llm_cfg.n_layer !== lora_cfg.n_layer ||
+        llm_cfg.n_embd !== lora_cfg.n_embd ||
+        llm_cfg.n_head !== lora_cfg.n_head ||
+        llm_cfg.n_kv_head !== lora_cfg.n_kv_head ||
+        llm_cfg.n_hidden !== lora_cfg.n_hidden) {
+        console.error(`Error: LoRA module does not fit the base model.`);
+        return false;
+    }
+
+    LoRA.param = {
+        wq_lora_a: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * lora_cfg.lora_rank * llm_cfg.n_embd)),
+        wq_lora_b: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * llm_cfg.n_embd * lora_cfg.lora_rank)),
+        wk_lora_a: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * lora_cfg.lora_rank * llm_cfg.n_embd)),
+        wk_lora_b: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * kv_dim * lora_cfg.lora_rank)),
+        wv_lora_a: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * lora_cfg.lora_rank * llm_cfg.n_embd)),
+        wv_lora_b: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * kv_dim * lora_cfg.lora_rank)),
+        wo_lora_a: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * lora_cfg.lora_rank * llm_cfg.n_embd)),
+        wo_lora_b: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * llm_cfg.n_embd * lora_cfg.lora_rank)),
+    };
+
+    // 初始化LoRA数值缓冲区
+    
+    FWD_BUFFER.q0 = new Float32Array(lora_cfg.lora_rank);   // query  LoRA branch (lora_cfg.lora_rank,)
+    FWD_BUFFER.k0 = new Float32Array(lora_cfg.lora_rank);   // key    LoRA branch (lora_cfg.lora_rank,)
+    FWD_BUFFER.v0 = new Float32Array(lora_cfg.lora_rank);   // value  LoRA branch (lora_cfg.lora_rank,)
+    FWD_BUFFER.o0 = new Float32Array(lora_cfg.lora_rank);   // output LoRA branch (lora_cfg.lora_rank,)
+    FWD_BUFFER.q1 = new Float32Array(llm_cfg.n_embd);           // query  LoRA branch (dim,)
+    FWD_BUFFER.k1 = new Float32Array(kv_dim);               // key    LoRA branch (kv_dim,)
+    FWD_BUFFER.v1 = new Float32Array(kv_dim);               // value  LoRA branch (kv_dim,)
+    FWD_BUFFER.o1 = new Float32Array(llm_cfg.n_embd);           // output LoRA branch (kv_dim,)
+
+    return true;
+}
+
+
+function unload_lora() {
+    LoRA = null;
+}
+
 
 // ===============================================================================
 // 基础算子
@@ -119,6 +232,12 @@ function parse_model(file_buffer) {
 function accum(a, b, size) {
     for (let i = 0; i < size; i++) {
         a[i] += b[i];
+    }
+}
+
+function scale(a, k, size) {
+    for (let i = 0; i < size; i++) {
+        a[i] *= k;
     }
 }
 
@@ -177,16 +296,28 @@ function matmul(xout, x, w, n, d) {
 //                 NOTE 为什么只输入1个词元？因为过往输入的词元已经被保存在KV-Cache中了。
 //     pos   - I   当前词元的位置，从0开始。
 //     llm   - I   语言模型对象，包括模型结构参数和权重等。
+//     lora  - I   LoRA模块对象。如果为null，则不使用LoRA。
 //     buf   - IO  数据缓冲区，通过此缓冲区，张量在各层之间传播。
 //   Return:
 //     最后一层输出的logits。
 // ===============================================================================
 
-function llm_forward(token, pos, llm, buf) {
+function llm_forward(token, pos, llm, lora, buf) {
 
     let cfg = llm.config;
     let w = llm.param;
     let s = buf;
+
+    // 使用LoRA？
+    let use_lora = (lora !== null);
+    let a = null;
+    let lora_rank = null;
+    let lora_alpha = null;
+    if(use_lora) {
+        a = lora.param;
+        lora_rank = lora.config.lora_rank;
+        lora_alpha = lora.config.lora_alpha;
+    }
 
     let x = s.x;
     const dim = cfg.n_embd; // Q的维度（每个注意力头的维度*h）
@@ -213,9 +344,28 @@ function llm_forward(token, pos, llm, buf) {
         s.v = s.v_cache.subarray(loff + pos * kv_dim, loff + (pos + 1) * kv_dim);
 
         // qkv matmuls for this position
-        matmul(s.q, s.xb, w.wq.subarray(l * dim * dim, (l + 1) * dim * dim), dim, dim);
+        matmul(s.q, s.xb, w.wq.subarray(l * dim * dim,    (l + 1) * dim * dim),    dim, dim);
         matmul(s.k, s.xb, w.wk.subarray(l * dim * kv_dim, (l + 1) * dim * kv_dim), dim, kv_dim);
         matmul(s.v, s.xb, w.wv.subarray(l * dim * kv_dim, (l + 1) * dim * kv_dim), dim, kv_dim);
+
+        // 计算QKV的低秩分解分支，并将其累加到原来的输出上
+        if(use_lora) {
+            matmul(s.q0, s.xb, a.wq_lora_a.subarray(l * lora_rank * dim, (l + 1) * lora_rank * dim), dim, lora_rank);
+            matmul(s.k0, s.xb, a.wk_lora_a.subarray(l * lora_rank * dim, (l + 1) * lora_rank * dim), dim, lora_rank);
+            matmul(s.v0, s.xb, a.wv_lora_a.subarray(l * lora_rank * dim, (l + 1) * lora_rank * dim), dim, lora_rank);
+
+            matmul(s.q1, s.q0, a.wq_lora_b.subarray(l * dim    * lora_rank, (l + 1) * dim    * lora_rank), lora_rank, dim);
+            matmul(s.k1, s.k0, a.wk_lora_b.subarray(l * kv_dim * lora_rank, (l + 1) * kv_dim * lora_rank), lora_rank, kv_dim);
+            matmul(s.v1, s.v0, a.wv_lora_b.subarray(l * kv_dim * lora_rank, (l + 1) * kv_dim * lora_rank), lora_rank, kv_dim);
+
+            scale(s.q1, (lora_alpha / lora_rank), dim);
+            scale(s.k1, (lora_alpha / lora_rank), kv_dim);
+            scale(s.v1, (lora_alpha / lora_rank), kv_dim);
+
+            accum(s.q, s.q1, dim);
+            accum(s.k, s.k1, kv_dim);
+            accum(s.v, s.v1, kv_dim);
+        }
 
         // RoPE旋转位置编码实现方式1：使用模型提供的旋转系数
         for (let h = 0; h < cfg.n_head; h++) {
@@ -302,6 +452,14 @@ function llm_forward(token, pos, llm, buf) {
 
         // final matmul to get the output of the attention
         matmul(s.xb2, s.xb, w.wo.subarray(l * dim * dim, (l + 1) * dim * dim), dim, dim);
+
+        // 计算output的低秩分解分支，并将其累加到原来的输出上
+        if(use_lora) {
+            matmul(s.o0, s.xb, a.wo_lora_a.subarray(l * lora_rank * dim, (l + 1) * lora_rank * dim), dim, lora_rank);
+            matmul(s.o1, s.o0, a.wo_lora_b.subarray(l * dim    * lora_rank, (l + 1) * dim    * lora_rank), lora_rank, dim);
+            scale(s.o1, (lora_alpha / lora_rank), dim);
+            accum(s.xb2, s.o1, dim);
+        }
 
         // residual connection back into x
         accum(x, s.xb2, dim);
@@ -545,8 +703,10 @@ async function generate(prompt, args, on_ready, on_running, on_finished) {
     let pos = 0;
 
     while (pos < args.max_seq_len) {
+        if(is_generating === false) break;
+
         const t_0 = performance.now();
-        llm_forward(next_token, pos, LLM, FWD_BUFFER);
+        llm_forward(next_token, pos, LLM, LoRA, FWD_BUFFER);
 
         // Pre-fill: if we are still processing the input prompt, force the next prompt token
         if(pos < prompt_tokens.length - 1) {

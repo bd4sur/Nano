@@ -17,10 +17,8 @@
         <div class="ModalBanner">
             <div class="ModalBannerTitle">NanoLM 推理设置</div>
         </div>
-        <div class="ModalTitle">选择语言模型</div>
-        <div class="ModalContent"></div>
 
-        <div class="ModalTitle">生成参数</div>
+        <div class="ModalTitle">采样参数</div>
         <div class="ModalContent">
             <div id="top_k"></div>
             <div id="top_p"></div>
@@ -51,10 +49,10 @@
 
             <div class="ChatRecord" id="ChatRecord">
                 <div class="Guide">
-                    <div style="display: flex; flex-direction: row; border-bottom: 1px solid #cfd3dc; padding: 0; margin: 0 0 20px 10px;">
-                        <div style="display: flex; flex-direction: column; padding-top: 40px;">
-                            <div class="GuideIntro" style="text-align: left;">Web Browser Is All You Need!</div>
-                            <div class="GuidePrompt">
+                    <div class="GuideIntroContainer">
+                        <div class="GuideIntro">
+                            <div class="GuideIntroTitle">Web Browser Is All You Need!</div>
+                            <div class="GuideIntroContent">
                                 <div>完全在浏览器内推理的(大)语言模型！</div>
                                 <ul style="padding-left: 16px; margin: 5px 0;">
                                     <li>下载<a href="https://huggingface.co/bd4sur/Nano-56M-20241027" target="_blank">语言模型</a>。</li>
@@ -65,7 +63,6 @@
                                 <div style="margin: 5px 0 0 0; font-size: smaller;">Illustration by <a href="https://x.com/ookiiayu/status/1633071773217607683" target="_blank">ookiiayu@X</a></div>
                             </div>
                         </div>
-                        <div style="height: 260px; width: 150px; background-image: url('nano.png'); background-size: contain; background-repeat: no-repeat; background-position-x: right;"></div>
                     </div>
                     <div class="GuideQuestionContainer" style="display: none;">
                         <div class="GuideQuestion">人类的本质是什么？</div>
@@ -77,7 +74,7 @@
                         <div class="GuideQuestion">中国历史上的第一个皇帝是谁？</div>
                         <div class="GuideQuestion">澳大利亚的首都在哪里？</div>
                         <div class="GuideQuestion">频谱仪的分辨率带宽和扫描速度之间是什么关系？</div>
-                        
+                        <div class="GuideQuestion">换一批</div>
                     </div>
                 </div>
             </div>
@@ -99,13 +96,20 @@
 
                 <div class="ButtonSetting" id="setting">
                     <div class="ButtonSettingContainer">
-                        <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="16px" height="16px"><path d="M237.888 79.488l109.056 85.696a381.312 381.312 0 0 1 68.576-24.96L443.936 4.48a516.768 516.768 0 0 1 136.064 0l28.48 135.744c23.808 6.176 46.72 14.56 68.544 24.96l109.056-85.696a514.56 514.56 0 0 1 104.192 87.52L824.864 289.28c14.08 19.744 26.304 40.864 36.48 63.136l138.72 4.48c13.504 42.496 21.632 87.456 23.52 133.984l-128.768 51.616c-1.92 24.672-6.208 48.672-12.608 71.84L985.6 706.88a511.424 511.424 0 0 1-68.128 117.76l-131.84-43.2a385.824 385.824 0 0 1-55.808 46.848l19.712 137.408a508.352 508.352 0 0 1-127.872 46.528l-73.216-117.92a388.576 388.576 0 0 1-72.896 0l-73.216 117.92a508.352 508.352 0 0 1-127.84-46.528l19.68-137.408a385.888 385.888 0 0 1-55.808-46.88l-131.84 43.264A511.488 511.488 0 0 1 38.4 706.88l103.36-92.576c-6.368-23.168-10.624-47.168-12.576-71.84L0.416 490.88c1.92-46.528 9.984-91.488 23.52-134.016l138.688-4.48c10.208-22.24 22.432-43.36 36.512-63.104L133.696 167.04a514.56 514.56 0 0 1 104.192-87.52zM512 704a192 192 0 1 0 0-384 192 192 0 0 0 0 384z" fill="#383a40"></path></svg>
+                        <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="20px" height="20px"><path d="M237.888 79.488l109.056 85.696a381.312 381.312 0 0 1 68.576-24.96L443.936 4.48a516.768 516.768 0 0 1 136.064 0l28.48 135.744c23.808 6.176 46.72 14.56 68.544 24.96l109.056-85.696a514.56 514.56 0 0 1 104.192 87.52L824.864 289.28c14.08 19.744 26.304 40.864 36.48 63.136l138.72 4.48c13.504 42.496 21.632 87.456 23.52 133.984l-128.768 51.616c-1.92 24.672-6.208 48.672-12.608 71.84L985.6 706.88a511.424 511.424 0 0 1-68.128 117.76l-131.84-43.2a385.824 385.824 0 0 1-55.808 46.848l19.712 137.408a508.352 508.352 0 0 1-127.872 46.528l-73.216-117.92a388.576 388.576 0 0 1-72.896 0l-73.216 117.92a508.352 508.352 0 0 1-127.84-46.528l19.68-137.408a385.888 385.888 0 0 1-55.808-46.88l-131.84 43.264A511.488 511.488 0 0 1 38.4 706.88l103.36-92.576c-6.368-23.168-10.624-47.168-12.576-71.84L0.416 490.88c1.92-46.528 9.984-91.488 23.52-134.016l138.688-4.48c10.208-22.24 22.432-43.36 36.512-63.104L133.696 167.04a514.56 514.56 0 0 1 104.192-87.52zM512 704a192 192 0 1 0 0-384 192 192 0 0 0 0 384z" fill="#383a40"></path></svg>
                     </div>
+                </div>
+
+                <div class="ButtonLoRA" id="lora_button">
+                    <div class="ButtonLoRAContainer">
+                        <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="18px" height="18px"><path id="lora_button_icon" d="M352.549303 54.857143h-264.630857a88.137143 88.137143 0 0 0-87.990857 87.990857v264.630857a88.137143 88.137143 0 0 0 87.990857 87.990857h264.630857a88.137143 88.137143 0 0 0 87.990857-87.990857v-264.630857a88.064 88.064 0 0 0-87.990857-87.990857m645.705143 157.988571l-187.172572-187.026285a88.064 88.064 0 0 0-124.416 0l-25.892571 25.892571-161.206857 161.133714a87.04 87.04 0 0 0-25.673143 62.025143c-0.146286 23.405714 9.142857 45.860571 25.673143 62.390857l25.892571 25.892572 135.314286 135.387428 25.892571 25.892572c34.377143 34.377143 90.038857 34.377143 124.416 0l161.206857-161.206857 25.892572-25.892572c34.377143-34.377143 34.377143-90.112 0.073143-124.489143m-645.705143 370.688h-264.630857a88.137143 88.137143 0 0 0-87.990857 87.917715v264.630857A88.064 88.064 0 0 0 87.918446 1024h264.630857a88.064 88.064 0 0 0 87.990857-87.917714v-264.630857a88.137143 88.137143 0 0 0-87.990857-87.917715m528.676571 0h-264.557714a88.137143 88.137143 0 0 0-87.990857 87.917715v264.630857A88.064 88.064 0 0 0 616.66816 1024h264.557714a88.064 88.064 0 0 0 87.990857-87.917714v-264.630857a88.137143 88.137143 0 0 0-87.990857-87.917715" fill="#383a40"></path></svg>
+                    </div>
+                    <input type="file" id="lora_file_selector" class="LoRAFileInput">
                 </div>
 
                 <div class="ButtonInstruct ButtonHover" id="instruct_switch">
                     <div class="ButtonInstructContainer">
-                        <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="20px" height="26px"><path d="M336 741q-14 0-22.5-10t-8.5-26V604h-16q-78 0-119-41t-41-118V178q0-77 41-118t119-41h448q77 0 118 41t41 118v267q0 76-41 117.5T737 604H502L376 719q-13 12-21.5 17t-18.5 5z m57-415q0-21-15.5-36.5T341 274q-21 0-36.5 15.5t-15.5 36q0 20.5 15.5 36T341 377q21 0 36.5-15.5T393 326z m174 0q0-21-15.5-36.5T515 274q-21 0-36 15.5t-15 36q0 20.5 15.5 36t36 15.5q20.5 0 36-15.5T567 326z m174 0q0-21-15.5-36.5t-36-15.5q-20.5 0-36 15.5t-15.5 36q0 20.5 15.5 36T690 377q21 0 36-15.5t15-35.5z" fill="#383a40"></path></svg>
+                        <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="24px" height="28px"><path d="M336 741q-14 0-22.5-10t-8.5-26V604h-16q-78 0-119-41t-41-118V178q0-77 41-118t119-41h448q77 0 118 41t41 118v267q0 76-41 117.5T737 604H502L376 719q-13 12-21.5 17t-18.5 5z m57-415q0-21-15.5-36.5T341 274q-21 0-36.5 15.5t-15.5 36q0 20.5 15.5 36T341 377q21 0 36.5-15.5T393 326z m174 0q0-21-15.5-36.5T515 274q-21 0-36 15.5t-15 36q0 20.5 15.5 36t36 15.5q20.5 0 36-15.5T567 326z m174 0q0-21-15.5-36.5t-36-15.5q-20.5 0-36 15.5t-15.5 36q0 20.5 15.5 36T690 377q21 0 36-15.5t15-35.5z" fill="#383a40"></path></svg>
                     </div>
                 </div>
 
@@ -137,6 +141,7 @@
 
 let round_counter = 0;
 let is_instruct_enabled = true;
+let is_lora_enabled = false;
 
 let modal = new Modal("modal", "modal_mask");
 
@@ -342,6 +347,8 @@ $("#instruct_switch").on("click", function() {
 
 
 
+
+// 读取模型文件
 let model_file_selector = document.getElementById('model_file_selector');
 model_file_selector.onchange = () => {
     let file = model_file_selector.files[0];
@@ -349,7 +356,7 @@ model_file_selector.onchange = () => {
     Reader.onloadend = () => {
         $('#model_selector_prompt').html("正在解析...");
         let file_buffer = Reader.result;
-        parse_model(file_buffer);
+        load_model(file_buffer);
         document.querySelector('#submit').removeAttribute("disabled");
         $('#select_file').fadeOut(200, () => {
             $(".ChatInputContainer").fadeIn(300);
@@ -361,6 +368,41 @@ model_file_selector.onchange = () => {
 };
 
 
+// 读取外挂LoRA模块
+$("#lora_file_selector").on("change", function(event) {
+    console.log("File");
+    let file = this.files[0];
+    let Reader = new FileReader();
+    Reader.onloadend = () => {
+        let file_buffer = Reader.result;
+        let res = load_lora(file_buffer);
+        if(res === false) {
+            append_chat_info(`LoRA模块加载失败：模块与基座不匹配QAQ`);
+        }
+        else {
+            is_lora_enabled = true;
+            $("#lora_button").addClass("ButtonLoRAHover");
+            $("#lora_button_icon").attr("fill", "#5c8e1f");
+            $("#lora_file_selector").hide();
+            append_chat_info(`已加载LoRA模块：${file.name}`);
+        }
+    };
+    Reader.readAsArrayBuffer(file);
+    event.stopPropagation();
+});
+
+$("#lora_button").on("click", function(e) {
+    console.log("Button");
+    if(is_lora_enabled === true) {
+        unload_lora();
+        is_lora_enabled = false;
+        $("#lora_button").removeClass("ButtonLoRAHover");
+        $("#lora_button_icon").attr("fill", "#383a40");
+        $("#lora_file_selector").val("");
+        $("#lora_file_selector").show();
+        append_chat_info("已卸载LoRA模块");
+    }
+});
 
 
 
@@ -398,16 +440,17 @@ function submit() {
             scroll_to_bottom();
         },
         (text, status, tps) => {
+            // <|eos|> or <|padding|>
+            if(text.indexOf("<|eos|>") >= 0 || text.indexOf("<|padding|>") >= 0) {
+                return false;
+            }
             if(status === "Decoding...") {
                 update_bot_bubble(marked.parse(text), round_counter);
             }
             update_bot_footer(`<b>Bot</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
             switch_submit_button_state("interrupt");
             scroll_to_bottom();
-            // <|eos|> or <|padding|>
-            if(text.indexOf("<|eos|>") >= 0 || text.indexOf("<|padding|>") >= 0)
-                return false;
-            else return true;
+            return true;
         },
         (tps) => {
             switch_submit_button_state("submit");

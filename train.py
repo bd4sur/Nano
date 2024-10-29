@@ -439,12 +439,12 @@ class TrainGPT():
                             "version":          MODEL_VERSION,
                             "is_lora":          True,
                             "lora":             raw_model.get_lora_state_dict(),
-                            "model":            raw_model.state_dict(),            # TODO 后续去掉
+                            # "model":            raw_model.state_dict(),            # TODO 后续去掉
                             "optimizer":        self.optimizer.state_dict(),
                             "step_count":       iter,
                             "train_config":     self.train_config,
                             "model_config":     self.model_config,
-                            "tokenizer_config": self.tokenizer.config              # TODO 后续去掉
+                            # "tokenizer_config": self.tokenizer.config              # TODO 后续去掉
                         }
                     # 预训练/继续与训练/全参数微调：保存模型全部参数和优化器状态
                     else:
