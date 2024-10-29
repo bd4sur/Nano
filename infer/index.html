@@ -64,18 +64,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="GuideQuestionContainer" style="display: none;">
-                        <div class="GuideQuestion">人类的本质是什么？</div>
-                        <div class="GuideQuestion">你是谁？</div>
-                        <div class="GuideQuestion">讲个故事吧。</div>
-                        <div class="GuideQuestion">天空为什么是蓝色的？</div>
-                        <div class="GuideQuestion">最深的深海有多深？</div>
-                        <div class="GuideQuestion">帮我制定一个新疆自驾游的计划。</div>
-                        <div class="GuideQuestion">中国历史上的第一个皇帝是谁？</div>
-                        <div class="GuideQuestion">澳大利亚的首都在哪里？</div>
-                        <div class="GuideQuestion">频谱仪的分辨率带宽和扫描速度之间是什么关系？</div>
-                        <div class="GuideQuestion">换一批</div>
-                    </div>
+                    <div class="GuideQuestionContainer" id="test_prompts" style="display: none;"></div>
                 </div>
             </div>
         </div>
@@ -137,6 +126,28 @@
 <script>
 
 
+const TEST_PROMPTS = [
+    "人类的本质是什么？",
+    "你是谁？",
+    "讲个故事吧。",
+    "天空为什么是蓝色的？",
+    "最深的深海有多深？",
+    "什么是“外部性”？",
+    "经济政策的基本原则有哪些？",
+    "帮我制定一个新疆自驾游的计划。",
+    "中国历史上的第一个皇帝是谁？",
+    "澳大利亚的首都在哪里？",
+    "频谱仪的分辨率带宽和扫描速度有什么关系？",
+    "如何目视判断全尺寸八木天线的发射方向？",
+    "请你推荐两款深度学习计算卡。",
+    "为什么陨石恰好落在陨石坑里？",
+    "燃烧室后面为什么要加涡轮？",
+    "用Python写一段快速排序。",
+    "9.9和9.11哪个大？",
+    "1+1=？"
+];
+
+
 
 
 let round_counter = 0;
@@ -161,7 +172,7 @@ function GetMediaType() {
 
 function layout_init() {
     $("#submit").html($("#submit_icon").html());
-    // $(".ChatRecord").outerHeight($(".Right").height() - $(".ChatInput").outerHeight());
+    refresh_prompts(5);
 }
 
 function layout_refresh(left_width) {
@@ -187,6 +198,37 @@ function layout_refresh(left_width) {
     $(".Right").width(main_width - left_width);
 
 }
+
+function refresh_prompts(n) {
+    function fisher_yates_shuffle(arr) {
+        for(let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const temp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = temp;
+        }
+        return arr;
+    }
+    let indexes = [];
+    for(let i = 0; i < TEST_PROMPTS.length; i++) {
+        indexes.push(i);
+    }
+    fisher_yates_shuffle(indexes);
+    $("#test_prompts").html("");
+    for(let i = 0; i < n; i++) {
+        pi = indexes[i];
+        $("#test_prompts").append(`<div class="GuideQuestion">${TEST_PROMPTS[pi]}</div>`);
+    }
+    //  onclick="set_input_box(TEST_PROMPTS[${pi}]);"
+    $(".GuideQuestion").each(function(i, elem) {
+        $(elem).on("click", function(event) {
+            let question = $(this).text();
+            set_input_box(question);
+        });
+    });
+    $("#test_prompts").append(`<div class="GuideQuestion" onclick="refresh_prompts(5);"><b>换一批</b></div>`);
+}
+
 
 function scroll_to_bottom() {
     let scrollHeight = $(".Chat").prop("scrollHeight");
@@ -312,13 +354,6 @@ $("#clear_input_box").on("click", function() {
 
 $("#setting").on("click", function() {
     modal.toggle();
-});
-
-$(".GuideQuestion").each(function(i, elem) {
-    $(elem).on("click", function(event) {
-        let question = $(this).text();
-        set_input_box(question);
-    });
 });
 
 $("#modal_confirm").on("click", function() {
