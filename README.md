@@ -28,7 +28,7 @@ https://github.com/user-attachments/assets/94181a6e-6016-42e2-b617-f8d6cbeb35ab
 
 |预训练模型|预训练数据|指令微调模型|指令微调数据|
 |---------|---------|-----------|-----------|
-|[Nano-56M-20241027](https://huggingface.co/bd4sur/Nano-56M-20241027)|[Nano-PT-10B](https://huggingface.co/datasets/bd4sur/Nano-PT-10B)|[Nano-56M-20241027-Instruct](https://huggingface.co/bd4sur/Nano-56M-20241027-Instruct)|Nano-SFT|
+|[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|[Nano-PT-10B](https://huggingface.co/datasets/bd4sur/Nano-PT-10B)|[Nano-56M-Instruct](https://huggingface.co/bd4sur/Nano-56M-Instruct)|Nano-SFT|
 
 数据集为7z格式，解压口令“nano”。
 
@@ -39,7 +39,7 @@ https://github.com/user-attachments/assets/94181a6e-6016-42e2-b617-f8d6cbeb35ab
 - 全流程速通，旨在“开箱即用”地跑通推理乃至训练流程。
 - 如果只是想体验推理效果，可直接执行第1、4步骤。
 
-**1️⃣ 安装依赖**
+### 1️⃣ 安装依赖
 
 - 硬件：建议使用英伟达GPU，以计算能力7.0以上的为宜，详见[英伟达官网](https://developer.nvidia.com/cuda-gpus)。若只有CPU也无妨。
 - 软件：建议使用Ubuntu等Linux操作系统，并且在conda虚拟环境中安装依赖：
@@ -50,7 +50,7 @@ conda activate nano
 python -m pip install -r requirements.txt
 ```
 
-**2️⃣ 数据下载·预处理**
+### 2️⃣ 数据下载·预处理
 
 如果只是想跑通流程：
 
@@ -63,7 +63,7 @@ python -m pip install -r requirements.txt
 - 将`data.py`中`PRETRAIN_DATASETS`和`SFT_DATASET`替换为刚刚下载的两个文件。
 - 执行`python data.py`，进行数据预处理。可能占用大量记忆和存储空间，请提前预留。
 
-**3️⃣ 预训练和监督微调**
+### 3️⃣ 预训练和监督微调
 
 如果只是想跑通流程：
 
@@ -110,9 +110,21 @@ python -m pip install -r requirements.txt
 - 支持断点续训。如果预训练意外中止，可以将`config_pretrain.json`中的`from_checkpoint`字段设为上一个检查点的相对路径`"checkpoint/xxx.pt"`，然后重新启动训练。
 - 支持训练过程监控。每次训练，程序都会记录一个新的训练日志文件`train_xxx.log`，位于仓库根目录。执行`python plot_loss.py -n train_xxx.log`，绘制训练集损失曲线。
 
-**监督微调**：首先将`config_sft.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行`bash start_sft.sh`（或者`bash start_sft_ddp.sh`）。其余与预训练类似。需要指出的是，监督微调的训练轮数，应当根据实际情况灵活选择。一般来说，如果训练轮数过少，模型可能难以学习到指令跟随能力。而训练轮数过多，则可能遗忘预训练过程中获得的语言能力，以及在监督微调数据集上过拟合。
+**监督微调（全参数）**：首先将`config_sft.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行`bash start_sft.sh`（或者`bash start_sft_ddp.sh`）。其余与预训练类似。需要指出的是，监督微调的训练轮数，应当根据实际情况灵活选择。一般来说，如果训练轮数过少，模型可能难以学习到指令跟随能力。而训练轮数过多，则可能遗忘预训练过程中获得的语言能力，以及在监督微调数据集上过拟合。
 
-**4️⃣ 推理**
+**监督微调（LoRA）**：TODO
+
+### 4️⃣ 推理
+
+**方式一：浏览器推理**
+
+- 访问[在线体验页面](https://bd4sur.com/Nano/infer)，或者用浏览器直接打开`Nano/infer/index.html`，按页面提示打开本地预先下载好的基座模型文件（扩展名为bin），模型下载地址见上文。
+- 可切换文本续写模式和指令问答模式，默认后者。推荐使用指令微调后的模型，在指令问答模式下体验。
+- 可随时加载或卸载LoRA插件。注意LoRA插件需要与某个预训练基座模型匹配。
+- 使用`export.py`将检查点文件转换为基座模型或者LoRA插件。
+- 所有推理过程均在本地浏览器内部进行。
+
+**方式二：PyTorch推理**
 
 如果只是想体验推理效果而不训练，首先下载[预训练或指令微调模型](https://huggingface.co/bd4sur/nano-1010)到`checkpoint`目录。
 
@@ -157,11 +169,13 @@ python -m pip install -r requirements.txt
 **Transformer模型结构**
 
 - 模型结构以Llama2和GPT（[karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)）为主要参考。
-- 使用RoPE位置编码（可选用训练位置编码）和RMSNorm。
+- 使用RoPE位置编码（可选用训练位置编码）和前置RMSNorm。
+- 使用分组查询注意力（GQA）。
 - 使用SwiGLU，参考[文献](https://arxiv.org/pdf/2002.05202)。
 - 可选择因果自注意力或完全的自注意力，前者用于语言模型，后者用于在其他任务上的探索。
-- 词元嵌入层（`wte`）与解码层（`lm_head`）共享权重。关于这个问题，可参考[文献](https://spaces.ac.cn/archives/9698)。
-- 支持KV-Cache。后续计划加入分组查询注意力（GQA）。
+- 词元嵌入层与分类层共享权重。关于这个问题，可参考[文献](https://spaces.ac.cn/archives/9698)。
+- 支持KV-Cache。
+- 支持插件化的低秩适配（LoRA）训练和推理。
 
 模型结构参数`model_config.json`：
 
@@ -170,7 +184,8 @@ python -m pip install -r requirements.txt
 |block_size|int|256|上下文（窗口）长度|
 |vocab_size|int|10000|词典长度（实际取决于词元编码器）|
 |n_layer|int|4|模型深度，即Transformer模型层数|
-|n_head|int|4|注意力头数|
+|n_head|int|4|Q注意力头数|
+|n_kv_head|int|4|KV注意力头数|
 |n_embd|int|256|模型宽度：内部表示向量的维度|
 |dropout|float|0.0|随机丢弃层的丢弃概率|
 |bias|bool|False|线性变换层加偏置？|
