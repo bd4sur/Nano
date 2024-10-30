@@ -495,7 +495,7 @@ function submit() {
                 return false;
             }
             if(status === "Decoding...") {
-                update_bot_bubble(marked.parse(text.replace("~", "～")), round_counter);
+                update_bot_bubble(marked.parse(text.replace(/~/gi, "～")), round_counter);
             }
             update_bot_footer(`<b>Bot</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
             switch_submit_button_state("interrupt");
