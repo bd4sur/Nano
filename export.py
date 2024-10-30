@@ -401,7 +401,7 @@ if __name__ == "__main__":
 
     if args.lora:
         lora_dict, lora_config, basemodel_config = load_lora(args.lora)
-        if lora_dict != False:
+        if lora_dict is None:
             parser.error("Can't load input LoRA module!")
         lora_export(lora_dict, lora_config, basemodel_config, args.filepath)
 

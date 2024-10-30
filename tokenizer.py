@@ -249,7 +249,7 @@ class Tokenizer:
             "<|eos|>": 3,
             "<|instruct_mark|>": 4,
             "<|response_mark|>": 5,
-            "BD4SUR": 6
+            "<|BD4SUR|>": 6
         }
         self.trie = None
 
