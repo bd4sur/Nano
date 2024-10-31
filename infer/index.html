@@ -54,9 +54,9 @@
                             <div class="GuideIntroTitle">Web Browser Is All You Need!</div>
                             <div class="GuideIntroContent">
                                 <div>完全在浏览器内推理的(大)语言模型！</div>
-                                <ul style="padding-left: 16px; margin: 5px 0;">
-                                    <li>下载<a href="https://huggingface.co/bd4sur/Nano-56M-20241027" target="_blank">语言模型</a>。</li>
-                                    <li>点击“选择模型...”，等待加载。</li>
+                                <ul style="padding-left: 22px; margin: 8px 0;">
+                                    <li>下载<a href="https://huggingface.co/bd4sur/Nano-56M" target="_blank">语言模型和LoRA插件</a>。</li>
+                                    <li>点击下方按钮，加载模型和LoRA模块。</li>
                                     <li>输入问题，点击小飞机，开始生成！</li>
                                 </ul>
                                 <div>注意：现在还不支持多轮对话噢。</div>
@@ -288,7 +288,7 @@ function append_bot_bubble(round_counter, date_str, tps) {
             <div class="ChatBubble BotBubble">
                 <div class="ChatContent" id="bot_response_${round_counter}"><span style="color: #c9ced6;">正在思考...</span></div>
                 <div class="BotBubbleFooter">
-                    <div class="BotFooterInfo" id="bot_footer_${round_counter}"><b>Bot</b> ${date_str}</div>
+                    <div class="BotFooterInfo" id="bot_footer_${round_counter}"><b>Nano</b> ${date_str}</div>
                     <div class="BotCopyBubble" onclick="navigator.clipboard.writeText($('#bot_response_${round_counter}').text())">
                         <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="12px" height="12px"><path d="M725.333333 469.333333h-85.333333v85.333334h-85.333333v-85.333334h-85.333334V384h85.333334V298.666667h85.333333v85.333333h85.333333v85.333333z m85.333334-256v426.666667H384V213.333333h426.666667m10.666666-85.333333H373.333333A74.666667 74.666667 0 0 0 298.666667 202.666667v448c0 41.216 33.450667 74.666667 74.666666 74.666666h448A74.666667 74.666667 0 0 0 896 650.666667V202.666667A74.666667 74.666667 0 0 0 821.333333 128M213.333333 298.666667H128v512a85.333333 85.333333 0 0 0 85.333333 85.333333h512v-85.333333H213.333333V298.666667z" fill="#aaaeba"></path></svg>
                         <span>复制</span>
@@ -497,14 +497,14 @@ function submit() {
             if(status === "Decoding...") {
                 update_bot_bubble(marked.parse(text.replace(/~/gi, "～")), round_counter);
             }
-            update_bot_footer(`<b>Bot</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
+            update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
             switch_submit_button_state("interrupt");
             scroll_to_bottom();
             return true;
         },
         (tps) => {
             switch_submit_button_state("submit");
-            update_bot_footer(`<b>Bot</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s on avg`, round_counter);
+            update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s on avg`, round_counter);
             round_counter++;
         }
     );

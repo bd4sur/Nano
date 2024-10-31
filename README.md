@@ -1,7 +1,7 @@
 
 # Nano：大模型，小玩具
 
-**Pre-alpha · 正在积极开发**
+**Pre-alpha · 正在积极开发，技术状态尚未固化，按原样呈现**
 
 **Nano**是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。主要复刻自 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)，并借鉴了多个开源模型实现和学习项目。
 
@@ -12,7 +12,7 @@ https://github.com/user-attachments/assets/94181a6e-6016-42e2-b617-f8d6cbeb35ab
 - 用尽可能少的依赖，尤其不依赖🤗，实现一个具体而微的Transformer语言模型。
 - 完整实现数据处理、预训练、监督微调（含LoRA）、推理过程。暂不实现人类对齐。
 - 从头训练一个会说人话的50M级参数规模的语言模型。
-- 实现基于Web浏览器的、完全离线的端侧推理（[在线体验](https://bd4sur.com/Nano/infer)）。
+- 实现完全离线的端侧推理，支持低秩适配插件（[在线体验](https://bd4sur.com/Nano/infer)）。
 - 研究模型训练的动力学、训/推加速、算法改进等问题。
 - 探索Transformer模型在自然语言处理以外的问题和模态上的潜能。
 - 建立起关于大语言模型的合理预期和感性经验，对大语言模型技术祛魅。
@@ -374,14 +374,13 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 **以部分或全部代码形式集成的开源软件**
 
 - [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)
-- [jingyaogong/minimind](https://github.com/jingyaogong/minimind)
+- [meta-llama/llama](https://github.com/meta-llama/llama)
+- [karpathy/llama2.c](https://github.com/karpathy/llama2.c)
+- [epicure/llama2.js](https://github.com/epicure/llama2.js)
 - [openai/tiktoken](https://github.com/openai/tiktoken)
 
-**数据集来源**
+**本仓库预置数据集来源**
 
 - 精神分析黑话数据集：来自[hhiim/Lacan](https://github.com/hhiim/Lacan)。
 - 业余无线电操作技术能力验证试题。
-- 国际电联《无线电规则》《频谱监测手册》等。
-- 中国无线电相关法规。
-- 商用大模型生成的问答类内容。
-- 其他公开数据集。
+- 使用其他商用/开源大模型生成的内容。
