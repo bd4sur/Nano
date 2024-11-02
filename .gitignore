@@ -21,3 +21,7 @@ model/
 thumbs.db
 dataset/xxqg.txt
 *.base64
+bin/
+*.o
+*.d
+*.a

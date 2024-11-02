@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <locale.h>
 
+#define MAX_TOKEN_LENGTH (17) // TODO 扫描词表得到该值
 #define VOCAB_SIZE (16384)
 #define uint32_t unsigned int
 
@@ -36,6 +37,7 @@ struct Token {
 
 struct Trie {
     struct Trie *children[VOCAB_SIZE];
+    uint32_t token_id;
     uint32_t is_end_of_token;
 };
 
@@ -57,12 +59,13 @@ struct Trie *new_trie(uint32_t is_end_of_token) {
         return NULL;
     }
     else {
+        pnode->token_id = 0;
         pnode->is_end_of_token = is_end_of_token;
         return pnode;
     }
 }
 
-int add_token(struct Trie *trie_node, uint32_t *token, uint32_t token_len) {
+int add_token(struct Trie *trie_node, uint32_t *token, uint32_t token_len, uint32_t token_id) {
     struct Trie *current_node = trie_node;
     for(uint32_t i = 0; i < token_len; i++) {
         uint32_t cid = token[i];
@@ -83,10 +86,11 @@ int add_token(struct Trie *trie_node, uint32_t *token, uint32_t token_len) {
         }
     }
     current_node->is_end_of_token = 1;
+    current_node->token_id = token_id;
     return 0;
 }
 
-int match_token(struct Trie *trie_node, uint32_t *pattern, uint32_t pattern_len) {
+int match_token(struct Trie *trie_node, uint32_t *pattern, uint32_t pattern_len, uint32_t *token_id) {
     struct Trie *current_node = trie_node;
     for(uint32_t i = 0; i < pattern_len; i++) {
         uint32_t cid = pattern[i];
@@ -97,6 +101,7 @@ int match_token(struct Trie *trie_node, uint32_t *pattern, uint32_t pattern_len)
         current_node = next_node;
         if(i == pattern_len - 1) {
             if(current_node->is_end_of_token == 1) {
+                *token_id = current_node->token_id;
                 return 0;
             }
             else {
@@ -106,22 +111,19 @@ int match_token(struct Trie *trie_node, uint32_t *pattern, uint32_t pattern_len)
     }
 }
 
-uint32_t tokenize(struct Trie *vocab_trie, struct Token **tokens, const uint32_t *text, uint32_t text_length, uint32_t max_token_length) {
+uint32_t tokenize(struct Trie *vocab_trie, uint32_t *output_token_ids, const uint32_t *input_char_ids, uint32_t input_length, uint32_t max_token_length) {
     uint32_t token_count = 0;
     uint32_t pos = 0;
-    while(pos < text_length) {
-        uint32_t available_max_token_length = (text_length - pos < max_token_length) ? (text_length - pos) : max_token_length;
+    while(pos < input_length) {
+        uint32_t available_max_token_length = (input_length - pos < max_token_length) ? (input_length - pos) : max_token_length;
         for(uint32_t n = available_max_token_length; n > 0; n--) {
             uint32_t *prefix = (uint32_t*)calloc(n, sizeof(uint32_t));
+            uint32_t tid = 0;
             for(uint32_t i = 0; i < n; i++) {
-                prefix[i] = text[pos + i];
+                prefix[i] = input_char_ids[pos + i];
             }
-            if(n == 1 || match_token(vocab_trie, prefix, n) == 0) {
-                struct Token *t = new_token(n);
-                tokens[token_count] = t;
-                for(uint32_t i = 0; i < n; i++) {
-                    t->ids[i] = prefix[i];
-                }
+            if(n == 1 || match_token(vocab_trie, prefix, n, &tid) == 0) {
+                output_token_ids[token_count] = (n == 1) ? prefix[0] : tid;
                 token_count++;
                 pos += n;
                 break;
@@ -202,12 +204,6 @@ uint32_t map_get(struct Map *m, uint32_t key) {
 /////////////////////////////////////////////////////
 
 
-struct Map *build_unicode_to_id_map() {
-    struct Map *map = new_map(VOCAB_SIZE);
-    uint32_t count = 0;
-    for(uint32_t i = 0; i < 9742; i++) { map_set(map, GB_CHAR[i][0], count); count++; }
-    return map;
-}
 
 
 uint32_t *string_to_ids(struct Map *unicode_to_id_map, wchar_t *utext) {
@@ -220,17 +216,47 @@ uint32_t *string_to_ids(struct Map *unicode_to_id_map, wchar_t *utext) {
 }
 
 
-struct Trie *build_vocab_trie(wchar_t **tokens, uint32_t token_num) {
-    struct Map *map = build_unicode_to_id_map();
-    struct Trie *vocab_trie = new_trie(0);
-    for(uint32_t i = 0; i < token_num; i++) {
-        wchar_t *token = tokens[i];
-        uint32_t len = wcslen(token);
-        uint32_t *ids = string_to_ids(map, token);
-        add_token(vocab_trie, ids, len);
+
+///////////////////////////////////////////////////
+
+
+typedef struct {
+    uint32_t vocab_size;
+    wchar_t *unicode_charset;
+    wchar_t **token_list;
+    struct Trie *vocab_trie;
+    struct Map *unicode_to_id_map;
+    struct Map *token_to_id_map;
+} Tokenizer;
+
+
+wchar_t *decode(Tokenizer *t, uint32_t *ids, uint32_t len) {
+    wchar_t *out = (wchar_t *)calloc(len * MAX_TOKEN_LENGTH + 1, sizeof(wchar_t));
+    uint32_t count = 0;
+    for(uint32_t i = 0; i < len; i++) {
+        wchar_t *utoken = t->token_list[ids[i]];
+        for(uint32_t j = 0; j < wcslen(utoken); j++) {
+            out[count] = utoken[j];
+            count++;
+        }
     }
-    return vocab_trie;
+    out[count] = 0;
+    return out;
 }
+
+uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens) {
+    uint32_t *input_ids = string_to_ids(t->unicode_to_id_map, text);
+    uint32_t *optput_ids = (uint32_t *)calloc(wcslen(text), sizeof(uint32_t *));
+    uint32_t token_count = tokenize(t->vocab_trie, optput_ids, input_ids, wcslen(text), MAX_TOKEN_LENGTH);
+    *n_tokens = token_count;
+    return optput_ids;
+}
+
+
+
+
+
+
 
 
 #endif

@@ -1,6 +1,6 @@
 # 变量定义
 CC = gcc
-CFLAGS = -O3 -march=native -ffast-math -fopenmp -lm
+CFLAGS = -O3 -march=native -ffast-math -fopenmp
 
 # 目标文件
 TARGET = infer
@@ -14,10 +14,10 @@ all: $(TARGET)
 
 # 链接目标
 $(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS) -lm
 
 # 依赖
-infer.o: infer.c trie.h
+infer.o: infer.c trie.h infer.h
 
 # 编译规则，%.o 是模式匹配，匹配所有的 .c 文件
 %.o: %.c

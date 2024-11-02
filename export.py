@@ -170,6 +170,9 @@ def version1_export(model, tokenizer_config, filepath):
     Export the model weights in full float32 .bin file to be read from C.
     This is same as legacy_export, but with a proper header.
     """
+
+    print("Writing header...")
+
     major_version = 2024
     minor_version = 10
 
@@ -216,6 +219,8 @@ def version1_export(model, tokenizer_config, filepath):
     assert pad >= 0
     out_file.write(b'\0' * pad)
 
+    print("Writing model parameters...")
+
     # now let's write out all the model parameters
     weights = [
         model.tok_embeddings.weight,
@@ -236,15 +241,63 @@ def version1_export(model, tokenizer_config, filepath):
         weights.append(model.output.weight)
     param_count = 0
     for w in weights:
-        param_count += w.detach().cpu().view(-1).numel() * 4
+        param_count += w.detach().cpu().view(-1).numel()
+
+    # 写入模型参数部分的字节长度（不含本字段的8个字节）
+    out_file.write(struct.pack('Q', param_count)) # unsigned long long - uint64_t
+
+    # 按照上面定义的维度顺序，将模型参数写入文件，没有其他定界符或填充数据
+    for w in weights:
         serialize_fp32(out_file, w)
 
+    # 写入词表
+    # 词表存储结构如下：
+    # uint32 I   tokenizer_field_bytes（不含本字段的4个字节）
+    # uint32 I   vocab_size
+    # struct     tokens (* vocab_size)
+    # uchar B      ├ token_length
+    # uchar B      ├ is_special
+    # uchar B      ├ reserved_0
+    # uchar B      ├ reserved_1
+    # uint32 I     ├ token_id
+    # uint32 I     ╰ unicode_char (* token_length)
+
+    print("Writing tokenizer...")
+
+    vocab = tokenizer_config["itos"]
+    vocab_size = tokenizer_config["vocab_size"]
+    special_tokens = tokenizer_config["special_tokens"]
+
+    tokenizer_field_bytes = 4
+    for i,t in enumerate(vocab):
+        tokenizer_field_bytes += (len(t) + 2) * 4  # 计算方法见上文注释
+
+    print(f"  Tokenizer field bytes = {tokenizer_field_bytes}")
+
+    out_file.write(struct.pack('I', tokenizer_field_bytes))  # 模型文件中词表部分的字节数（不含本字段的4个字节）
+    out_file.write(struct.pack('I', vocab_size))             # 词表长度
+    for i,t in enumerate(vocab):
+        token_length = len(t)
+        is_special = 1 if t in special_tokens else 0
+        # NOTE Little endian 小端序！如果按照uint32解析，顺序是 MSB(reserved_1 reserved_0 is_special token_length)LSB
+        out_file.write(struct.pack('B', token_length))
+        out_file.write(struct.pack('B', is_special))
+        out_file.write(struct.pack('B', 255)) # 预留
+        out_file.write(struct.pack('B', 255)) # 预留
+
+        out_file.write(struct.pack('I', i))
+
+        for chr in t:
+            out_file.write(struct.pack('I', ord(chr)))
+
+    """
     # write tokenizer config dict as base64 string
     tk_cfg_json_str = json.dumps(tokenizer_config, ensure_ascii=True)
     b64 = base64.b64encode(bytes(tk_cfg_json_str, encoding="utf-8"))
     out_file.write(struct.pack('I', len(b64)))
     print(f"Tokenizer config length = {len(b64)}")
     serialize_base64(out_file, b64)
+    """
 
     print(f"Params = {param_count}")
     print(f"Total bin file length = {out_file.tell()}")
