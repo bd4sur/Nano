@@ -626,6 +626,9 @@ void generate(LLM *llm, Tokenizer *tokenizer, Sampler *sampler, wchar_t *prompt,
     wchar_t *empty_prompt = L"";
     if (prompt == NULL) { prompt = empty_prompt; }
 
+    uint32_t *output_ids = (uint32_t *)calloc(steps+1, sizeof(uint32_t));
+    uint32_t output_count = 0;
+
     // encode the (string) prompt into tokens sequence
     uint32_t num_prompt_tokens = 0;
     uint32_t *prompt_tokens = encode(tokenizer, prompt, &num_prompt_tokens);
@@ -636,35 +639,37 @@ void generate(LLM *llm, Tokenizer *tokenizer, Sampler *sampler, wchar_t *prompt,
     }
 
     // start the main loop
-    uint32_t next;        // will store the next token in the sequence
-    uint32_t token = prompt_tokens[0]; // kick off with the first token in the prompt
+    uint32_t next_token = prompt_tokens[0]; // kick off with the first token in the prompt
     uint32_t pos = 0;     // position in the sequence
     while (pos < steps) {
 
         // forward the model to get logits for the next token
-        float* logits = forward(llm, token, pos);
+        float* logits = forward(llm, next_token, pos);
 
         // advance the state machine
         if (pos < num_prompt_tokens - 1) {
             // if we are still processing the input prompt, force the next prompt token
-            next = prompt_tokens[pos + 1];
+            next_token = prompt_tokens[pos + 1];
         } else {
             // otherwise sample the next token from the logits
-            next = sample(sampler, logits);
+            next_token = sample(sampler, logits);
+            output_ids[output_count++] = next_token;
+
+            uint32_t output_id[1];
+            output_id[0] = next_token;
+            wchar_t *out = decode(tokenizer, output_id, 1);
+            printf("%ls", out);
+            fflush(stdout);
         }
         pos++;
 
-        // data-dependent terminating condition: the BOS (=1) token delimits sequences
-        if (next == 1) { break; }
+        if(next_token == 0 || next_token == 3) break;
 
-        uint32_t output_id[1];
-        output_id[0] = next;
-        wchar_t *out = decode(tokenizer, output_id, 1);
-        printf("%ls", out);
-
-        token = next;
-
+        // wchar_t *out = decode(tokenizer, output_ids, output_count);
+        // printf("%ls", out);
+        // fflush(stdout);
     }
+    printf("\nTokens = %d", pos);
     printf("\n");
     free(prompt_tokens);
 }
@@ -679,13 +684,13 @@ int main(int argc, char **argv) {
     LLM llm;
     Tokenizer tokenizer;
     Sampler sampler;
-    build_transformer(&llm, &tokenizer, "/home/bd4sur/ai/Nano/test.bin");
-    build_sampler(&sampler, llm.config.vocab_size, 1.1, 0.9, (unsigned int)time(NULL));
+    build_transformer(&llm, &tokenizer, "/home/bd4sur/ai/Nano/checkpoint/1-通用对话模型-118000.bin");
+    build_sampler(&sampler, llm.config.vocab_size, 1.1, 0.5, (unsigned int)time(NULL));
 
-    wchar_t *prompt = L"Nano是BD4SUR开发的大模型，是一只电子鹦鹉";
+    wchar_t *prompt = L"<|instruct_mark|>Nano是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
     uint32_t token_count = 0;
 
-    generate(&llm, &tokenizer, &sampler, prompt, 100);
+    generate(&llm, &tokenizer, &sampler, prompt, 511);
 
     free_sampler(&sampler);
     free_transformer(&llm, &tokenizer);

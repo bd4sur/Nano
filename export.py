@@ -154,6 +154,11 @@ def lora_export(lora_dict, lora_config, basemodel_config, filepath):
     param_count = 0
     for w in weights:
         param_count += w.detach().cpu().view(-1).numel() * 4
+
+    # 写入模型参数数（本字段8个字节）
+    out_file.write(struct.pack('Q', param_count)) # unsigned long long - uint64_t
+
+    for w in weights:
         serialize_fp32(out_file, w)
 
     print(f"Params = {param_count}")
@@ -243,7 +248,7 @@ def version1_export(model, tokenizer_config, filepath):
     for w in weights:
         param_count += w.detach().cpu().view(-1).numel()
 
-    # 写入模型参数部分的字节长度（不含本字段的8个字节）
+    # 写入模型参数数（本字段8个字节）
     out_file.write(struct.pack('Q', param_count)) # unsigned long long - uint64_t
 
     # 按照上面定义的维度顺序，将模型参数写入文件，没有其他定界符或填充数据

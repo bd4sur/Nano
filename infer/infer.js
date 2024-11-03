@@ -75,6 +75,8 @@ function load_model(file_buffer) {
     const is_shared_weights = cfg.is_shared_classifier > 0 ? 1 : 0;
     const head_dim = ((cfg.n_embd / cfg.n_head)^0);
 
+    offset += 8; // param_count字段占用8个字节，仅用于C实现的推理引擎，这里不读取，直接跳过
+
     LLM.param = {
         token_embedding: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.vocab_size * cfg.n_embd)),
         rms_norm_attn:   new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd)),
@@ -96,11 +98,58 @@ function load_model(file_buffer) {
 
     // 读取词表、构建词元编解码器
 
-    tk_length = new Uint32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE))[0];
-    tokenizer_config_json_base64 = new Uint8Array(file_buffer.slice(offset, offset += tk_length));
-    const text_decoder = new TextDecoder("utf-8");
-    TOKENIZER.config = JSON.parse(window.atob(text_decoder.decode(tokenizer_config_json_base64)));
+    let byte_count = 0;
+
+    let stoi = {};
+    let itos = [];
+    let special_tokens = {};
+
+    let tokenizer_field_bytes = new Uint32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE))[0];
+    let vocab_size = new Uint32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE))[0];
+
+    while(byte_count < tokenizer_field_bytes - 4) { // 不含vocab_size字段的4个字节
+        let token_header = new Uint8Array(file_buffer.slice(offset, offset += 4));
+        byte_count += 4;
+        let token_id     = new Uint32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE))[0];
+        byte_count += 4;
+
+        let token_length = token_header[0];
+        let is_special   = token_header[1] === 1; // 0-false 1-true
+        let reserved_0   = token_header[2]; // 预留
+        let reserved_1   = token_header[3]; // 预留
+
+        let token = "";
+        for(let i = 0; i < token_length; i++) {
+            let unicode = new Uint32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE))[0];
+            byte_count += 4;
+            token += String.fromCodePoint(unicode);
+        }
+
+        stoi[token] = token_id;
+        itos[token_id] = token;
+
+        if(is_special) {
+            special_tokens[token] = token_id;
+        }
+    }
+
+    TOKENIZER.config = {
+        vocab_size: vocab_size,
+        stoi: stoi,
+        itos: itos,
+        special_tokens: special_tokens
+    };
+
+    console.log(TOKENIZER.config);
+
     TOKENIZER.trie = new TrieTree(TOKENIZER.config.itos);
+
+
+    // tk_length = new Uint32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE))[0];
+    // tokenizer_config_json_base64 = new Uint8Array(file_buffer.slice(offset, offset += tk_length));
+    // const text_decoder = new TextDecoder("utf-8");
+    // TOKENIZER.config = JSON.parse(window.atob(text_decoder.decode(tokenizer_config_json_base64)));
+    // TOKENIZER.trie = new TrieTree(TOKENIZER.config.itos);
 
     let kv_dim = (cfg.n_embd * cfg.n_kv_head) / cfg.n_head;
 
@@ -193,6 +242,8 @@ function load_lora(file_buffer) {
         return false;
     }
 
+    offset += 8; // param_count字段占用8个字节，仅用于C实现的推理引擎，这里不读取，直接跳过
+
     LoRA.param = {
         wq_lora_a: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * lora_cfg.lora_rank * llm_cfg.n_embd)),
         wq_lora_b: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * llm_cfg.n_embd * lora_cfg.lora_rank)),
@@ -205,7 +256,7 @@ function load_lora(file_buffer) {
     };
 
     // 初始化LoRA数值缓冲区
-    
+
     FWD_BUFFER.q0 = new Float32Array(lora_cfg.lora_rank);   // query  LoRA branch (lora_cfg.lora_rank,)
     FWD_BUFFER.k0 = new Float32Array(lora_cfg.lora_rank);   // key    LoRA branch (lora_cfg.lora_rank,)
     FWD_BUFFER.v0 = new Float32Array(lora_cfg.lora_rank);   // value  LoRA branch (lora_cfg.lora_rank,)
