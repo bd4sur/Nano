@@ -17,7 +17,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS) -lm
 
 # 依赖
-infer.o: infer.c tokenizer.h
+infer.o: infer.c
 
 # 编译规则，%.o 是模式匹配，匹配所有的 .c 文件
 %.o: %.c

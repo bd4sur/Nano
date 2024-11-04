@@ -6,6 +6,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <locale.h>
+#include <wchar.h>
 #if defined _WIN32
     #include "win.h"
 #else
@@ -13,7 +14,9 @@
     #include <sys/mman.h>
 #endif
 
-#include "tokenizer.h"
+#define uint32_t unsigned int
+#define MAX_TOKEN_LENGTH (17) // NOTE 虽然可以扫描词表得到该值，但是考虑到性能，设置为固定值（对于16384词表而言，至少17）
+
 
 // ===============================================================================
 // 数据结构定义
@@ -70,7 +73,7 @@ typedef struct {
 
 typedef struct {
     ModelConfig config;
-    ModelParam weights;
+    ModelParam params;
     FwdBuffer state;
     // some more state needed to properly clean up the memory mapping (sigh)
     int fd; // file descriptor for memory mapping
@@ -83,15 +86,251 @@ typedef struct {
 // 词元编解码、分词器（基于Trie树）
 // ===============================================================================
 
+// 散列表
 
+struct Entry {
+    uint32_t key;
+    uint32_t value;
+    struct Entry *next;
+};
 
+struct Map {
+    uint32_t bucket_num;
+    struct Entry **buckets;
+};
+
+struct Map *new_map(uint32_t bucket_num) {
+    struct Map *pm = (struct Map *)calloc(1, sizeof(struct Map));
+    pm->bucket_num = bucket_num;
+    pm->buckets = (struct Entry **)calloc(bucket_num, sizeof(struct Entry *));
+    for(uint32_t i = 0; i < bucket_num; i++) {
+        pm->buckets[i] = NULL;
+    }
+    return pm;
+}
+
+void free_map(struct Map *pm) {
+    for(uint32_t i = 0; i < pm->bucket_num; i++) {
+        struct Entry *current_entry = pm->buckets[i];
+        while(NULL != current_entry) {
+            struct Entry *next_entry = current_entry->next;
+            free(current_entry);
+            current_entry = next_entry;
+        }
+    }
+    free(pm);
+}
+
+struct Entry *new_entry(uint32_t key, uint32_t value) {
+    struct Entry *e = (struct Entry *)calloc(1, sizeof(struct Entry));
+    e->key = key;
+    e->value = value;
+    e->next = NULL;
+    return e;
+}
+
+uint32_t map_hash(uint32_t key, uint32_t bucket_num) {
+    // TODO 有巨大优化空间：大部分汉字是0x4e00~0xa000
+    return key % bucket_num;
+}
+
+uint32_t map_set(struct Map *m, uint32_t key, uint32_t value) {
+    uint32_t hashcode = map_hash(key, m->bucket_num);
+    struct Entry *e = m->buckets[hashcode];
+    if(NULL == e) {
+        m->buckets[hashcode] = new_entry(key, value);
+    }
+    else {
+        while(NULL != e->next) {
+            e = e->next;
+        }
+        e->next = new_entry(key, value);
+    }
+    return hashcode;
+}
+
+uint32_t map_get(struct Map *m, uint32_t key) {
+    uint32_t hashcode = map_hash(key, m->bucket_num);
+    struct Entry *e = m->buckets[hashcode];
+    if(NULL == e) {
+        return 0; // 等同于<|padding|>
+    }
+    else {
+        do {
+            if(e->key == key) {
+                return e->value;
+            }
+            e = e->next;
+        } while(NULL != e);
+    }
+    return 0;
+}
+
+// Trie树
+
+struct Trie {
+    struct Trie **children;
+    uint32_t vocab_size;
+    uint32_t token_id;
+    uint32_t is_end_of_token;
+};
+
+struct Trie *new_trie(uint32_t vocab_size, uint32_t is_end_of_token) {
+    struct Trie *pnode = (struct Trie *)calloc(1, sizeof(struct Trie));
+    if(NULL == pnode) {
+        return NULL;
+    }
+    else {
+        pnode->children = (struct Trie **)calloc(vocab_size, sizeof(struct Trie*));
+        pnode->vocab_size = vocab_size;
+        pnode->token_id = 0;
+        pnode->is_end_of_token = is_end_of_token;
+        return pnode;
+    }
+}
+
+void free_trie(struct Trie *t) {
+    if(NULL == t) {
+        return;
+    }
+    else {
+        for(uint32_t i = 0; i < t->vocab_size; i++) {
+            free_trie(t->children[i]);
+        }
+        free(t);
+    }
+}
+
+int add_token(struct Trie *trie_node, uint32_t *token, uint32_t token_len, uint32_t token_id) {
+    struct Trie *current_node = trie_node;
+    for(uint32_t i = 0; i < token_len; i++) {
+        uint32_t cid = token[i];
+        uint32_t is_eot = (i == token_len - 1) ? 1 : 0;
+        struct Trie *next_node = current_node->children[cid];
+        if(NULL == next_node) {
+            next_node = new_trie(trie_node->vocab_size, is_eot);
+            if(NULL == next_node) {
+                return -1;
+            }
+            else {
+                current_node->children[cid] = next_node;
+                current_node = next_node;
+            }
+        }
+        else {
+            current_node = next_node;
+        }
+    }
+    current_node->is_end_of_token = 1;
+    current_node->token_id = token_id;
+    return 0;
+}
+
+int match_token(struct Trie *trie_node, uint32_t *pattern, uint32_t pattern_len, uint32_t *token_id) {
+    struct Trie *current_node = trie_node;
+    for(uint32_t i = 0; i < pattern_len; i++) {
+        uint32_t cid = pattern[i];
+        struct Trie *next_node = current_node->children[cid];
+        if(NULL == next_node) {
+            return -1;
+        }
+        current_node = next_node;
+        if(i == pattern_len - 1) {
+            if(current_node->is_end_of_token == 1) {
+                *token_id = current_node->token_id;
+                return 0;
+            }
+            else {
+                return -1;
+            }
+        }
+    }
+}
+
+// 分词器和词元编解码
+
+typedef struct {
+    uint32_t vocab_size;
+    wchar_t *unicode_charset;
+    wchar_t **token_list;
+    struct Trie *vocab_trie;
+    struct Map *unicode_to_id_map;
+    struct Map *token_to_id_map;
+} Tokenizer;
+
+void free_tokenizer(Tokenizer *tk) {
+    for(uint32_t i = 0; i < tk->vocab_size; i++) {
+        if(NULL != tk->token_list[i])
+            free(tk->token_list[i]);
+    }
+    free(tk->unicode_charset);
+    free_trie(tk->vocab_trie);
+    free_map(tk->token_to_id_map);
+    free_map(tk->unicode_to_id_map);
+}
+
+uint32_t tokenize(struct Trie *vocab_trie, uint32_t *output_token_ids, const uint32_t *input_char_ids, uint32_t input_length, uint32_t max_token_length) {
+    uint32_t token_count = 0;
+    uint32_t pos = 0;
+    // uint32_t prefix[MAX_TOKEN_LENGTH];
+    while(pos < input_length) {
+        uint32_t available_max_token_length = (input_length - pos < max_token_length) ? (input_length - pos) : max_token_length;
+        for(uint32_t n = available_max_token_length; n > 0; n--) {
+            uint32_t *prefix = (uint32_t*)calloc(n, sizeof(uint32_t));
+            uint32_t tid = 0;
+            for(uint32_t i = 0; i < n; i++) {
+                prefix[i] = input_char_ids[pos + i];
+            }
+            if(n == 1 || match_token(vocab_trie, prefix, n, &tid) == 0) {
+                output_token_ids[token_count] = (n == 1) ? prefix[0] : tid;
+                token_count++;
+                pos += n;
+                break;
+            }
+            free(prefix);
+        }
+    }
+    return token_count;
+}
+
+uint32_t *string_to_ids(struct Map *unicode_to_id_map, wchar_t *utext) {
+    uint32_t len = wcslen(utext);
+    uint32_t *ids = calloc(len, sizeof(uint32_t));
+    for(uint32_t i = 0; i < wcslen(utext); i++) {
+        ids[i] = map_get(unicode_to_id_map, utext[i]);
+    }
+    return ids;
+}
+
+wchar_t *decode(Tokenizer *t, uint32_t *ids, uint32_t len) {
+    wchar_t *out = (wchar_t *)calloc(len * MAX_TOKEN_LENGTH + 1, sizeof(wchar_t));
+    uint32_t count = 0;
+    for(uint32_t i = 0; i < len; i++) {
+        wchar_t *utoken = t->token_list[ids[i]];
+        for(uint32_t j = 0; j < wcslen(utoken); j++) {
+            out[count] = utoken[j];
+            count++;
+        }
+    }
+    out[count] = 0;
+    return out;
+}
+
+uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens) {
+    uint32_t *input_ids = string_to_ids(t->unicode_to_id_map, text);
+    uint32_t *optput_ids = (uint32_t *)calloc(wcslen(text), sizeof(uint32_t *));
+    uint32_t token_count = tokenize(t->vocab_trie, optput_ids, input_ids, wcslen(text), MAX_TOKEN_LENGTH);
+    free(input_ids);
+    *n_tokens = token_count;
+    return optput_ids;
+}
 
 
 // ===============================================================================
 // 模型文件解析·内存管理
 // ===============================================================================
 
-void malloc_run_state(FwdBuffer* s, ModelConfig* p) {
+void malloc_fwd_buffer(FwdBuffer* s, ModelConfig* p) {
     // we calloc instead of malloc to keep valgrind happy
     int kv_dim = (p->n_embd * p->n_kv_head) / p->n_head;
     s->x = calloc(p->n_embd, sizeof(float));
@@ -113,7 +352,7 @@ void malloc_run_state(FwdBuffer* s, ModelConfig* p) {
 }
 
 
-void free_run_state(FwdBuffer* s) {
+void free_fwd_buffer(FwdBuffer* s) {
     free(s->x);
     free(s->xb);
     free(s->xb2);
@@ -127,7 +366,7 @@ void free_run_state(FwdBuffer* s) {
 }
 
 
-void memory_map_weights(ModelParam *w, ModelConfig* p, float* ptr, int shared_weights) {
+void memory_map_params(ModelParam *w, ModelConfig* p, float* ptr, int shared_weights) {
     int head_size = p->n_embd / p->n_head;
     // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
     unsigned long long n_layer = p->n_layer;
@@ -149,7 +388,7 @@ void memory_map_weights(ModelParam *w, ModelConfig* p, float* ptr, int shared_we
 }
 
 
-void read_checkpoint(char* checkpoint, ModelConfig* config, ModelParam* weights,
+void read_checkpoint(char* checkpoint, ModelConfig* config, ModelParam* params,
                      int* fd, float** data, ssize_t* file_size, Tokenizer *tk) {
     FILE *file = fopen(checkpoint, "rb");
     if (!file) { fprintf(stderr, "Couldn't open file %s\n", checkpoint); exit(EXIT_FAILURE); }
@@ -190,7 +429,7 @@ void read_checkpoint(char* checkpoint, ModelConfig* config, ModelParam* weights,
     *file_size = ftell(file); // get the file size, in bytes
     fclose(file);
 
-    // memory map the Transformer weights into the data pointer
+    // memory map the Transformer parameters into the data pointer
     *fd = open(checkpoint, O_RDONLY); // open in read only mode
     if (*fd == -1) { fprintf(stderr, "open failed!\n"); exit(EXIT_FAILURE); }
 
@@ -199,12 +438,12 @@ void read_checkpoint(char* checkpoint, ModelConfig* config, ModelParam* weights,
 
     // 解析模型参数
 
-    float* weights_ptr = *data + 2 + (header_byte_length / sizeof(float)); // NOTE "2"指的是param_count（uint64）占了两个uint32的位置
-    memory_map_weights(weights, config, weights_ptr, config->is_shared_classifier);
+    float* param_ptr = *data + 2 + (header_byte_length / sizeof(float)); // NOTE "2"指的是param_count（uint64）占了两个uint32的位置
+    memory_map_params(params, config, param_ptr, config->is_shared_classifier);
 
     // 解析词表，同时构建trie树和hashmap
 
-    uint32_t *tokenzier_ptr = (uint32_t *)(weights_ptr + param_num);
+    uint32_t *tokenzier_ptr = (uint32_t *)(param_ptr + param_num);
     uint32_t tokenizer_field_bytes = *tokenzier_ptr;
     uint32_t *vocab_ptr = tokenzier_ptr + 1;
 
@@ -256,16 +495,17 @@ void read_checkpoint(char* checkpoint, ModelConfig* config, ModelParam* weights,
 }
 
 void build_transformer(LLM *t, Tokenizer *tk, char* checkpoint_path) {
-    read_checkpoint(checkpoint_path, &t->config, &t->weights, &t->fd, &t->data, &t->file_size, tk);
-    malloc_run_state(&t->state, &t->config);
+    read_checkpoint(checkpoint_path, &t->config, &t->params, &t->fd, &t->data, &t->file_size, tk);
+    malloc_fwd_buffer(&t->state, &t->config);
 }
 
 void free_transformer(LLM* t, Tokenizer *tk) {
     // close the memory mapping
     if (t->data != MAP_FAILED) { munmap(t->data, t->file_size); }
     if (t->fd != -1) { close(t->fd); }
-    // free the FwdBuffer buffers
-    free_run_state(&t->state);
+
+    free_tokenizer(tk);
+    free_fwd_buffer(&t->state);
 }
 
 
@@ -343,7 +583,7 @@ float* forward(LLM* llm, int token, int pos) {
 
     // a few convenience variables
     ModelConfig* p = &llm->config;
-    ModelParam* w = &llm->weights;
+    ModelParam* w = &llm->params;
     FwdBuffer* s = &llm->state;
     float *x = s->x;
     int n_embd = p->n_embd;
@@ -691,6 +931,14 @@ int main(int argc, char **argv) {
     uint32_t token_count = 0;
 
     generate(&llm, &tokenizer, &sampler, prompt, 511);
+
+    // prompt = L"<|instruct_mark|>Nano是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
+    // token_count = 0;
+    // generate(&llm, &tokenizer, &sampler, prompt, 511);
+
+    // prompt = L"<|instruct_mark|>Nano是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
+    // token_count = 0;
+    // generate(&llm, &tokenizer, &sampler, prompt, 511);
 
     free_sampler(&sampler);
     free_transformer(&llm, &tokenizer);
