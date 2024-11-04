@@ -15,7 +15,10 @@
 #endif
 
 #define uint32_t unsigned int
-#define MAX_TOKEN_LENGTH (17) // NOTE 虽然可以扫描词表得到该值，但是考虑到性能，设置为固定值（对于16384词表而言，至少17）
+
+#define STATUS_PREFILLING (11)
+#define STATUS_DECODING   (12)
+#define MAX_TOKEN_LENGTH  (17) // NOTE 虽然可以扫描词表得到该值，但是考虑到性能，设置为固定值（对于16384词表而言，至少17）
 
 
 // ===============================================================================
@@ -859,12 +862,41 @@ int sample(Sampler* sampler, float* logits) {
 
 
 // ===============================================================================
-// 文本生成
+// 工具函数
 // ===============================================================================
 
-void generate(LLM *llm, Tokenizer *tokenizer, Sampler *sampler, wchar_t *prompt, int steps) {
+long time_in_ms() {
+    // return time in milliseconds, for benchmarking the model speed
+    struct timespec time;
+    clock_gettime(CLOCK_REALTIME, &time);
+    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
+}
+
+static uint32_t last_output_length = 0;
+void typewriter(wchar_t *output_text, uint32_t status) {
+    if(status == STATUS_DECODING) {
+        // printf("%ls", output_text);
+        uint32_t output_length = wcslen(output_text);
+        for(uint32_t i = last_output_length; i < output_length; i++) {
+            printf("%lc", output_text[i]);
+        }
+        fflush(stdout);
+        last_output_length = output_length;
+        free(output_text);
+    }
+}
+
+
+// ===============================================================================
+// 自回归文本生成
+// ===============================================================================
+
+void generate(LLM *llm, Tokenizer *tokenizer, Sampler *sampler, wchar_t *prompt, int steps, void (*on_running)(wchar_t*, uint32_t) ) {
     wchar_t *empty_prompt = L"";
     if (prompt == NULL) { prompt = empty_prompt; }
+
+    long t_0 = 0;
+    long t_1 = 0;
 
     uint32_t *output_ids = (uint32_t *)calloc(steps+1, sizeof(uint32_t));
     uint32_t output_count = 0;
@@ -890,29 +922,31 @@ void generate(LLM *llm, Tokenizer *tokenizer, Sampler *sampler, wchar_t *prompt,
         if (pos < num_prompt_tokens - 1) {
             // if we are still processing the input prompt, force the next prompt token
             next_token = prompt_tokens[pos + 1];
-        } else {
+            on_running(NULL, STATUS_PREFILLING);
+        }
+        else {
             // otherwise sample the next token from the logits
             next_token = sample(sampler, logits);
             output_ids[output_count++] = next_token;
 
-            uint32_t output_id[1];
-            output_id[0] = next_token;
-            wchar_t *out = decode(tokenizer, output_id, 1);
-            printf("%ls", out);
-            fflush(stdout);
+            wchar_t *output_text = decode(tokenizer, output_ids, output_count);
+            on_running(output_text, STATUS_DECODING);
         }
         pos++;
 
         if(next_token == 0 || next_token == 3) break;
 
-        // wchar_t *out = decode(tokenizer, output_ids, output_count);
-        // printf("%ls", out);
-        // fflush(stdout);
+        if (t_0 == 0) { t_0 = time_in_ms(); }
     }
-    printf("\nTokens = %d", pos);
+
+    if (pos > 1) {
+        t_1 = time_in_ms();
+        fprintf(stderr, "\nTPS = %f\n", (pos-1) / (double)(t_1 - t_0) * 1000);
+    }
     printf("\n");
     free(prompt_tokens);
 }
+
 
 
 int main(int argc, char **argv) {
@@ -927,18 +961,20 @@ int main(int argc, char **argv) {
     build_transformer(&llm, &tokenizer, "/home/bd4sur/ai/Nano/checkpoint/1-通用对话模型-118000.bin");
     build_sampler(&sampler, llm.config.vocab_size, 1.1, 0.5, (unsigned int)time(NULL));
 
+    last_output_length = 0;
     wchar_t *prompt = L"<|instruct_mark|>Nano是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
     uint32_t token_count = 0;
+    generate(&llm, &tokenizer, &sampler, prompt, 511, typewriter);
 
-    generate(&llm, &tokenizer, &sampler, prompt, 511);
+    last_output_length = 0;
+    prompt = L"<|instruct_mark|>Nano是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
+    token_count = 0;
+    generate(&llm, &tokenizer, &sampler, prompt, 511, typewriter);
 
-    // prompt = L"<|instruct_mark|>Nano是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
-    // token_count = 0;
-    // generate(&llm, &tokenizer, &sampler, prompt, 511);
-
-    // prompt = L"<|instruct_mark|>Nano是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
-    // token_count = 0;
-    // generate(&llm, &tokenizer, &sampler, prompt, 511);
+    last_output_length = 0;
+    prompt = L"<|instruct_mark|>Nano是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
+    token_count = 0;
+    generate(&llm, &tokenizer, &sampler, prompt, 511, typewriter);
 
     free_sampler(&sampler);
     free_transformer(&llm, &tokenizer);
