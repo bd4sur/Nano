@@ -18,6 +18,7 @@
 
 #define STATUS_PREFILLING (11)
 #define STATUS_DECODING   (12)
+#define STATUS_STOPPED    (21)
 #define MAX_TOKEN_LENGTH  (17) // NOTE 虽然可以扫描词表得到该值，但是考虑到性能，设置为固定值（对于16384词表而言，至少17）
 
 
@@ -34,11 +35,11 @@ typedef struct {
     uint32_t n_kv_head;
     uint32_t n_hidden;
     uint32_t is_shared_classifier;
-} ModelConfig;
+} LLM_Config;
 
 typedef struct {
     float* token_embedding;    // (vocab_size, n_embd)
-    float* rms_norm_attn; // (layer, n_embd) rmsnorm weights
+    float* rms_norm_attn;      // (layer, n_embd)
 
     float* wq; // (layer, n_embd, n_heads * head_size)
     float* wk; // (layer, n_embd, n_kv_heads * head_size)
@@ -56,34 +57,68 @@ typedef struct {
     float* token_classifier;
     float* freq_cis_real;
     float* freq_cis_imag;
-} ModelParam;
+} LLM_Param;
 
 typedef struct {
-    // current wave of activations
-    float *x; // activation at current time stamp (n_embd,)
-    float *xb; // same, but inside a residual branch (n_embd,)
-    float *xb2; // an additional buffer just for convenience (n_embd,)
-    float *hb; // buffer for hidden dimension in the ffn (n_hidden,)
-    float *hb2; // buffer for hidden dimension in the ffn (n_hidden,)
-    float *q; // query (n_embd,)
-    float *k; // key (kv_dim,)
-    float *v; // value (kv_dim,)
+    float *x;       // activation at current time stamp (n_embd,)
+    float *xb;      // same, but inside a residual branch (n_embd,)
+    float *xb2;     // an additional buffer just for convenience (n_embd,)
+    float *hb;      // buffer for hidden dimension in the ffn (n_hidden,)
+    float *hb2;     // buffer for hidden dimension in the ffn (n_hidden,)
+    float *q;       // query (n_embd,)
+    float *k;       // key (kv_dim,)
+    float *v;       // value (kv_dim,)
     float *k_cache; // (layer, block_size, kv_dim)
     float *v_cache; // (layer, block_size, kv_dim)
-    float *att; // buffer for scores/attention values (n_heads, block_size)
-    float *logits; // output logits
+    float *att;     // buffer for scores/attention values (n_heads, block_size)
+    float *logits;  // output logits
+
+    float *q0;      // query  LoRA branch (lora_cfg.lora_rank,)
+    float *k0;      // key    LoRA branch (lora_cfg.lora_rank,)
+    float *v0;      // value  LoRA branch (lora_cfg.lora_rank,)
+    float *o0;      // output LoRA branch (lora_cfg.lora_rank,)
+    float *q1;      // query  LoRA branch (dim,)
+    float *k1;      // key    LoRA branch (kv_dim,)
+    float *v1;      // value  LoRA branch (kv_dim,)
+    float *o1;      // output LoRA branch (kv_dim,)
 } FwdBuffer;
 
 typedef struct {
-    ModelConfig config;
-    ModelParam params;
+    LLM_Config config;
+    LLM_Param params;
     FwdBuffer state;
     // some more state needed to properly clean up the memory mapping (sigh)
-    int fd; // file descriptor for memory mapping
-    float* data; // memory mapped data pointer
+    int fd;            // file descriptor for memory mapping
+    float* data;       // memory mapped data pointer
     ssize_t file_size; // size of the checkpoint file in bytes
 } LLM;
 
+typedef struct {
+    uint32_t lora_rank;
+    uint32_t lora_alpha;
+    uint32_t n_layer;      // 用于校验
+    uint32_t n_embd;       // 用于校验
+    uint32_t n_head;       // 用于校验
+    uint32_t n_kv_head;    // 用于校验
+    uint32_t n_hidden;     // 用于校验
+    uint32_t lora_config;  // 预留：用于控制LoRA用到哪些层
+} LoRA_Config;
+
+typedef struct {
+    float *wq_lora_a;
+    float *wq_lora_b;
+    float *wk_lora_a;
+    float *wk_lora_b;
+    float *wv_lora_a;
+    float *wv_lora_b;
+    float *wo_lora_a;
+    float *wo_lora_b;
+} LoRA_Param;
+
+typedef struct {
+    LoRA_Config config;
+    LoRA_Param  params;
+} LoRA;
 
 // ===============================================================================
 // 词元编解码、分词器（基于Trie树）
@@ -248,6 +283,7 @@ int match_token(struct Trie *trie_node, uint32_t *pattern, uint32_t pattern_len,
             }
         }
     }
+    return -1;
 }
 
 // 分词器和词元编解码
@@ -333,22 +369,40 @@ uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens) {
 // 模型文件解析·内存管理
 // ===============================================================================
 
-void malloc_fwd_buffer(FwdBuffer* s, ModelConfig* p) {
-    // we calloc instead of malloc to keep valgrind happy
-    int kv_dim = (p->n_embd * p->n_kv_head) / p->n_head;
-    s->x = calloc(p->n_embd, sizeof(float));
-    s->xb = calloc(p->n_embd, sizeof(float));
-    s->xb2 = calloc(p->n_embd, sizeof(float));
-    s->hb = calloc(p->n_hidden, sizeof(float));
-    s->hb2 = calloc(p->n_hidden, sizeof(float));
-    s->q = calloc(p->n_embd, sizeof(float));
-    s->k_cache = calloc(p->n_layer * p->block_size * kv_dim, sizeof(float));
-    s->v_cache = calloc(p->n_layer * p->block_size * kv_dim, sizeof(float));
-    s->att = calloc(p->n_head * p->block_size, sizeof(float));
-    s->logits = calloc(p->vocab_size, sizeof(float));
+void malloc_fwd_buffer(FwdBuffer *s, LLM_Config *llm_cfg) {
+    uint32_t kv_dim = (llm_cfg->n_embd * llm_cfg->n_kv_head) / llm_cfg->n_head;
+    s->x       = calloc(llm_cfg->n_embd, sizeof(float));
+    s->xb      = calloc(llm_cfg->n_embd, sizeof(float));
+    s->xb2     = calloc(llm_cfg->n_embd, sizeof(float));
+    s->hb      = calloc(llm_cfg->n_hidden, sizeof(float));
+    s->hb2     = calloc(llm_cfg->n_hidden, sizeof(float));
+    s->q       = calloc(llm_cfg->n_embd, sizeof(float));
+    s->k_cache = calloc(llm_cfg->n_layer * llm_cfg->block_size * kv_dim, sizeof(float));
+    s->v_cache = calloc(llm_cfg->n_layer * llm_cfg->block_size * kv_dim, sizeof(float));
+    s->att     = calloc(llm_cfg->n_head * llm_cfg->block_size, sizeof(float));
+    s->logits  = calloc(llm_cfg->vocab_size, sizeof(float));
     // ensure all mallocs went fine
-    if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
-     || !s->k_cache || !s->v_cache || !s->att || !s->logits) {
+    if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q ||
+        !s->k_cache || !s->v_cache || !s->att || !s->logits) {
+        fprintf(stderr, "malloc failed!\n");
+        exit(EXIT_FAILURE);
+    }
+}
+
+
+void malloc_fwd_buffer_with_lora(FwdBuffer *s, LLM_Config *llm_cfg, LoRA_Config *lora_cfg) {
+    uint32_t kv_dim = (llm_cfg->n_embd * llm_cfg->n_kv_head) / llm_cfg->n_head;
+    s->q0 = calloc(lora_cfg->lora_rank, sizeof(float));
+    s->k0 = calloc(lora_cfg->lora_rank, sizeof(float));
+    s->v0 = calloc(lora_cfg->lora_rank, sizeof(float));
+    s->o0 = calloc(lora_cfg->lora_rank, sizeof(float));
+    s->q1 = calloc(llm_cfg->n_embd, sizeof(float));
+    s->k1 = calloc(kv_dim, sizeof(float));
+    s->v1 = calloc(kv_dim, sizeof(float));
+    s->o1 = calloc(llm_cfg->n_embd, sizeof(float));
+    // ensure all mallocs went fine
+    if (!s->q0 || !s->k0 || !s->v0 || !s->o0 ||
+        !s->q1 || !s->k1 || !s->v1 || !s->o1 ) {
         fprintf(stderr, "malloc failed!\n");
         exit(EXIT_FAILURE);
     }
@@ -366,10 +420,11 @@ void free_fwd_buffer(FwdBuffer* s) {
     free(s->logits);
     free(s->k_cache);
     free(s->v_cache);
+    // free(s->q0); free(s->k0); free(s->v0); free(s->o0);
+    // free(s->q1); free(s->k1); free(s->v1); free(s->o1);
 }
 
-
-void memory_map_params(ModelParam *w, ModelConfig* p, float* ptr, int shared_weights) {
+void memory_map_params(LLM_Param *w, LLM_Config* p, float* ptr, int shared_weights) {
     int head_size = p->n_embd / p->n_head;
     // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
     unsigned long long n_layer = p->n_layer;
@@ -391,10 +446,16 @@ void memory_map_params(ModelParam *w, ModelConfig* p, float* ptr, int shared_wei
 }
 
 
-void read_checkpoint(char* checkpoint, ModelConfig* config, ModelParam* params,
-                     int* fd, float** data, ssize_t* file_size, Tokenizer *tk) {
-    FILE *file = fopen(checkpoint, "rb");
-    if (!file) { fprintf(stderr, "Couldn't open file %s\n", checkpoint); exit(EXIT_FAILURE); }
+void read_model_file(char* model_path, LLM *llm, Tokenizer *tk) {
+    
+    LLM_Config *config = &(llm->config);
+    LLM_Param *params = &(llm->params);
+    int *fd = &(llm->fd);
+    float** data = &(llm->data);
+    ssize_t* file_size = &(llm->file_size);
+
+    FILE *file = fopen(model_path, "rb");
+    if (!file) { fprintf(stderr, "Couldn't open file %s\n", model_path); exit(EXIT_FAILURE); }
 
     // 读取文件头
     const uint32_t header_byte_length = 256;
@@ -433,7 +494,7 @@ void read_checkpoint(char* checkpoint, ModelConfig* config, ModelParam* params,
     fclose(file);
 
     // memory map the Transformer parameters into the data pointer
-    *fd = open(checkpoint, O_RDONLY); // open in read only mode
+    *fd = open(model_path, O_RDONLY); // open in read only mode
     if (*fd == -1) { fprintf(stderr, "open failed!\n"); exit(EXIT_FAILURE); }
 
     *data = mmap(NULL, *file_size, PROT_READ, MAP_PRIVATE, *fd, 0);
@@ -497,12 +558,96 @@ void read_checkpoint(char* checkpoint, ModelConfig* config, ModelParam* params,
     }
 }
 
-void build_transformer(LLM *t, Tokenizer *tk, char* checkpoint_path) {
-    read_checkpoint(checkpoint_path, &t->config, &t->params, &t->fd, &t->data, &t->file_size, tk);
-    malloc_fwd_buffer(&t->state, &t->config);
+void read_lora_file(char* lora_path, LoRA *lora, LLM *llm) {
+    LoRA_Config *lora_cfg    = &(lora->config);
+    LoRA_Param  *lora_params = &(lora->params);
+    LLM_Config  *llm_cfg     = &(llm->config);
+
+    FILE *file = fopen(lora_path, "rb");
+    if (!file) { fprintf(stderr, "Couldn't open LoRA module file %s\n", lora_path); exit(EXIT_FAILURE); }
+
+    // 读取文件头
+    const uint32_t header_byte_length = 256;
+    const uint32_t header_uint_length = header_byte_length / sizeof(uint32_t);
+    uint32_t *header = (uint32_t *)calloc(header_uint_length, sizeof(uint32_t));
+
+    if(fread(header, sizeof(uint32_t), header_uint_length, file) != header_uint_length) { exit(EXIT_FAILURE); }
+
+    uint32_t offset = 0;
+
+    uint32_t magic_number_0 = header[offset]; offset++;
+    uint32_t magic_number_1 = header[offset]; offset++;
+
+    uint32_t major_version  = header[offset]; offset++;
+    uint32_t minor_version  = header[offset]; offset++;
+
+    uint32_t model_type     = header[offset]; offset++;
+    uint32_t config_length  = header[offset]; offset++;
+
+    lora_cfg->lora_rank     = header[offset]; offset++;
+    lora_cfg->lora_alpha    = header[offset]; offset++;
+    lora_cfg->n_layer       = header[offset]; offset++;
+    lora_cfg->n_embd        = header[offset]; offset++;
+    lora_cfg->n_head        = header[offset]; offset++;
+    lora_cfg->n_kv_head     = header[offset]; offset++;
+    lora_cfg->n_hidden      = header[offset]; offset++;
+    lora_cfg->lora_config   = header[offset]; offset++;
+
+    // 校验LoRA模块与基座模型是否匹配
+    if (llm_cfg->n_layer != lora_cfg->n_layer ||
+        llm_cfg->n_embd != lora_cfg->n_embd ||
+        llm_cfg->n_head != lora_cfg->n_head ||
+        llm_cfg->n_kv_head != lora_cfg->n_kv_head ||
+        llm_cfg->n_hidden != lora_cfg->n_hidden) {
+        fprintf(stderr, "Error: LoRA module does not fit the base model.");
+        exit(EXIT_FAILURE);
+    }
+
+    // 读取参数部分的长度字段
+    unsigned long long param_num = 0;
+    if(fread(&param_num, sizeof(unsigned long long), 1, file) != 1) { exit(EXIT_FAILURE); }
+
+    // 读取LoRA模块参数到内存
+
+    uint32_t head_dim = llm_cfg->n_embd / llm_cfg->n_head;
+    uint32_t kv_dim = head_dim * llm_cfg->n_kv_head;
+
+    uint32_t wq_lora_a_len = llm_cfg->n_layer * lora_cfg->lora_rank * llm_cfg->n_embd;
+    uint32_t wq_lora_b_len = llm_cfg->n_layer * llm_cfg->n_embd * lora_cfg->lora_rank;
+    uint32_t wk_lora_a_len = llm_cfg->n_layer * lora_cfg->lora_rank * llm_cfg->n_embd;
+    uint32_t wk_lora_b_len = llm_cfg->n_layer * kv_dim * lora_cfg->lora_rank;
+    uint32_t wv_lora_a_len = llm_cfg->n_layer * lora_cfg->lora_rank * llm_cfg->n_embd;
+    uint32_t wv_lora_b_len = llm_cfg->n_layer * kv_dim * lora_cfg->lora_rank;
+    uint32_t wo_lora_a_len = llm_cfg->n_layer * lora_cfg->lora_rank * llm_cfg->n_embd;
+    uint32_t wo_lora_b_len = llm_cfg->n_layer * llm_cfg->n_embd * lora_cfg->lora_rank;
+
+    lora_params->wq_lora_a = (float *)calloc(wq_lora_a_len, sizeof(float));
+    lora_params->wq_lora_b = (float *)calloc(wq_lora_b_len, sizeof(float));
+    lora_params->wk_lora_a = (float *)calloc(wk_lora_a_len, sizeof(float));
+    lora_params->wk_lora_b = (float *)calloc(wk_lora_b_len, sizeof(float));
+    lora_params->wv_lora_a = (float *)calloc(wv_lora_a_len, sizeof(float));
+    lora_params->wv_lora_b = (float *)calloc(wv_lora_b_len, sizeof(float));
+    lora_params->wo_lora_a = (float *)calloc(wo_lora_a_len, sizeof(float));
+    lora_params->wo_lora_b = (float *)calloc(wo_lora_b_len, sizeof(float));
+
+    if(fread(lora_params->wq_lora_a, sizeof(float), wq_lora_a_len, file) != wq_lora_a_len) { exit(EXIT_FAILURE); }
+    if(fread(lora_params->wq_lora_b, sizeof(float), wq_lora_b_len, file) != wq_lora_b_len) { exit(EXIT_FAILURE); }
+    if(fread(lora_params->wk_lora_a, sizeof(float), wk_lora_a_len, file) != wk_lora_a_len) { exit(EXIT_FAILURE); }
+    if(fread(lora_params->wk_lora_b, sizeof(float), wk_lora_b_len, file) != wk_lora_b_len) { exit(EXIT_FAILURE); }
+    if(fread(lora_params->wv_lora_a, sizeof(float), wv_lora_a_len, file) != wv_lora_a_len) { exit(EXIT_FAILURE); }
+    if(fread(lora_params->wv_lora_b, sizeof(float), wv_lora_b_len, file) != wv_lora_b_len) { exit(EXIT_FAILURE); }
+    if(fread(lora_params->wo_lora_a, sizeof(float), wo_lora_a_len, file) != wo_lora_a_len) { exit(EXIT_FAILURE); }
+    if(fread(lora_params->wo_lora_b, sizeof(float), wo_lora_b_len, file) != wo_lora_b_len) { exit(EXIT_FAILURE); }
+
+    fclose(file);
 }
 
-void free_transformer(LLM* t, Tokenizer *tk) {
+void load_llm(LLM *llm, Tokenizer *tk, char *model_path) {
+    read_model_file(model_path, llm, tk);
+    malloc_fwd_buffer(&llm->state, &llm->config);
+}
+
+void free_llm(LLM* t, Tokenizer *tk) {
     // close the memory mapping
     if (t->data != MAP_FAILED) { munmap(t->data, t->file_size); }
     if (t->fd != -1) { close(t->fd); }
@@ -511,7 +656,27 @@ void free_transformer(LLM* t, Tokenizer *tk) {
     free_fwd_buffer(&t->state);
 }
 
+LoRA *load_lora(LLM *llm, char *lora_path) {
+    LoRA *p_lora = (LoRA *)calloc(1, sizeof(LoRA));
+    read_lora_file(lora_path, p_lora, llm);
+    malloc_fwd_buffer_with_lora(&llm->state, &llm->config, &p_lora->config);
+    return p_lora;
+}
 
+void free_lora(LLM *llm, LoRA *lora) {
+    free(&(lora->config));
+    free(lora->params.wq_lora_a);
+    free(lora->params.wq_lora_b);
+    free(lora->params.wk_lora_a);
+    free(lora->params.wk_lora_b);
+    free(lora->params.wv_lora_a);
+    free(lora->params.wv_lora_b);
+    free(lora->params.wo_lora_a);
+    free(lora->params.wo_lora_b);
+
+    free(llm->state.q0); free(llm->state.k0); free(llm->state.v0); free(llm->state.o0);
+    free(llm->state.q1); free(llm->state.k1); free(llm->state.v1); free(llm->state.o1);
+}
 
 
 // ===============================================================================
@@ -582,31 +747,46 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
 
 
 
-float* forward(LLM* llm, int token, int pos) {
+float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
 
     // a few convenience variables
-    ModelConfig* p = &llm->config;
-    ModelParam* w = &llm->params;
-    FwdBuffer* s = &llm->state;
+    LLM_Config *cfg = &llm->config;
+    LLM_Param *w = &llm->params;
+    FwdBuffer *s = &llm->state;
+
+    int use_lora = (NULL == lora) ? 0 : 1;
+    LoRA_Param *a;
+    uint32_t lora_rank;
+    uint32_t lora_alpha;
+    if(use_lora == 1) {
+        a = &(lora->params);
+        lora_rank = lora->config.lora_rank;
+        lora_alpha = lora->config.lora_alpha;
+    }
+
     float *x = s->x;
-    int n_embd = p->n_embd;
-    int kv_dim = (p->n_embd * p->n_kv_head) / p->n_head;
-    int kv_mul = p->n_head / p->n_kv_head; // integer multiplier of the kv sharing in multiquery
-    int n_hidden =  p->n_hidden;
-    int head_size = n_embd / p->n_head;
+    int n_embd = cfg->n_embd;
+    int kv_dim = (cfg->n_embd * cfg->n_kv_head) / cfg->n_head;
+    int kv_mul = cfg->n_head / cfg->n_kv_head; // integer multiplier of the kv sharing in multiquery
+    int n_hidden =  cfg->n_hidden;
+    int head_dim = n_embd / cfg->n_head;
 
     // copy the token embedding into x
     float* content_row = w->token_embedding + token * n_embd;
     memcpy(x, content_row, n_embd*sizeof(*x));
 
+    // pluck out the "pos" row of freq_cis_real and freq_cis_imag
+    float *freq_cis_real_row = w->freq_cis_real + pos * head_dim / 2;
+    float *freq_cis_imag_row = w->freq_cis_imag + pos * head_dim / 2;
+
     // forward all the layers
-    for(unsigned long long l = 0; l < p->n_layer; l++) {
+    for(unsigned long long l = 0; l < cfg->n_layer; l++) {
 
         // attention rmsnorm
         rmsnorm(s->xb, x, w->rms_norm_attn + l*n_embd, n_embd);
 
         // key and value point to the kv cache
-        int loff = l * p->block_size * kv_dim; // kv cache layer offset for convenience
+        int loff = l * cfg->block_size * kv_dim; // kv cache layer offset for convenience
         s->k = s->k_cache + loff + pos * kv_dim;
         s->v = s->v_cache + loff + pos * kv_dim;
 
@@ -615,10 +795,53 @@ float* forward(LLM* llm, int token, int pos) {
         matmul(s->k, s->xb, w->wk + l*n_embd*kv_dim, n_embd, kv_dim);
         matmul(s->v, s->xb, w->wv + l*n_embd*kv_dim, n_embd, kv_dim);
 
-        // RoPE relative positional encoding: complex-valued rotate q and k in each head
+        if(use_lora == 1) {
+            matmul(s->q0, s->xb, a->wq_lora_a + l * lora_rank * n_embd, n_embd, lora_rank);
+            matmul(s->k0, s->xb, a->wk_lora_a + l * lora_rank * n_embd, n_embd, lora_rank);
+            matmul(s->v0, s->xb, a->wv_lora_a + l * lora_rank * n_embd, n_embd, lora_rank);
+
+            matmul(s->q1, s->q0, a->wq_lora_b + l * n_embd * lora_rank, lora_rank, n_embd);
+            matmul(s->k1, s->k0, a->wk_lora_b + l * kv_dim * lora_rank, lora_rank, kv_dim);
+            matmul(s->v1, s->v0, a->wv_lora_b + l * kv_dim * lora_rank, lora_rank, kv_dim);
+
+            scale(s->q1, ((float)lora_alpha / (float)lora_rank), n_embd);
+            scale(s->k1, ((float)lora_alpha / (float)lora_rank), kv_dim);
+            scale(s->v1, ((float)lora_alpha / (float)lora_rank), kv_dim);
+
+            accum(s->q, s->q1, n_embd);
+            accum(s->k, s->k1, kv_dim);
+            accum(s->v, s->v1, kv_dim);
+        }
+
+        // RoPE旋转位置编码实现方式1：使用模型提供的旋转系数
+        for (int h = 0; h < cfg->n_head; h++) {
+            float *q = s->q + h * head_dim;
+            for (int i = 0; i < head_dim; i += 2) {
+                float q0 = q[i];
+                float q1 = q[i + 1];
+                float fcr = freq_cis_real_row[i / 2];
+                float fci = freq_cis_imag_row[i / 2];
+                q[i] = q0 * fcr - q1 * fci;
+                q[i + 1] = q0 * fci + q1 * fcr;
+            }
+        }
+        for (int m = 0; m < cfg->n_kv_head; m++) {
+            float *k = s->k + m * head_dim;
+            for (int i = 0; i < head_dim; i += 2) {
+                float k0 = k[i];
+                float k1 = k[i + 1];
+                float fcr = freq_cis_real_row[i / 2];
+                float fci = freq_cis_imag_row[i / 2];
+                k[i] = k0 * fcr - k1 * fci;
+                k[i + 1] = k0 * fci + k1 * fcr;
+            }
+        }
+
+        // RoPE旋转位置编码实现方式2：直接计算旋转系数
+        /*
         for (int i = 0; i < n_embd; i+=2) {
-            int head_dim = i % head_size;
-            float freq = 1.0f / powf(10000.0f, head_dim / (float)head_size);
+            int head_dim = i % head_dim;
+            float freq = 1.0f / powf(10000.0f, head_dim / (float)head_dim);
             float val = pos * freq;
             float fcr = cosf(val);
             float fci = sinf(val);
@@ -631,25 +854,26 @@ float* forward(LLM* llm, int token, int pos) {
                 vec[i+1] = v0 * fci + v1 * fcr;
             }
         }
+        */
 
         // multihead attention. iterate over all heads
         int h;
         #pragma omp parallel for private(h)
-        for (h = 0; h < p->n_head; h++) {
+        for (h = 0; h < cfg->n_head; h++) {
             // get the query vector for this head
-            float* q = s->q + h * head_size;
+            float* q = s->q + h * head_dim;
             // attention scores for this head
-            float* att = s->att + h * p->block_size;
+            float* att = s->att + h * cfg->block_size;
             // iterate over all timesteps, including the current one
             for (int t = 0; t <= pos; t++) {
                 // get the key vector for this head and at this timestep
-                float* k = s->k_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+                float* k = s->k_cache + loff + t * kv_dim + (h / kv_mul) * head_dim;
                 // calculate the attention score as the dot product of q and k
                 float score = 0.0f;
-                for (int i = 0; i < head_size; i++) {
+                for (int i = 0; i < head_dim; i++) {
                     score += q[i] * k[i];
                 }
-                score /= sqrtf(head_size);
+                score /= sqrtf(head_dim);
                 // save the score to the attention buffer
                 att[t] = score;
             }
@@ -658,15 +882,15 @@ float* forward(LLM* llm, int token, int pos) {
             softmax(att, pos + 1);
 
             // weighted sum of the values, store back into xb
-            float* xb = s->xb + h * head_size;
-            memset(xb, 0, head_size * sizeof(float));
+            float* xb = s->xb + h * head_dim;
+            memset(xb, 0, head_dim * sizeof(float));
             for (int t = 0; t <= pos; t++) {
                 // get the value vector for this head and at this timestep
-                float* v = s->v_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+                float* v = s->v_cache + loff + t * kv_dim + (h / kv_mul) * head_dim;
                 // get the attention weight for this timestep
                 float a = att[t];
                 // accumulate the weighted value into xb
-                for (int i = 0; i < head_size; i++) {
+                for (int i = 0; i < head_dim; i++) {
                     xb[i] += a * v[i];
                 }
             }
@@ -674,6 +898,14 @@ float* forward(LLM* llm, int token, int pos) {
 
         // final matmul to get the output of the attention
         matmul(s->xb2, s->xb, w->wo + l*n_embd*n_embd, n_embd, n_embd);
+
+        // 计算output的低秩分解分支，并将其累加到原来的输出上
+        if(use_lora == 1) {
+            matmul(s->o0, s->xb, a->wo_lora_a + l * lora_rank * n_embd, n_embd, lora_rank);
+            matmul(s->o1, s->o0, a->wo_lora_b + l * n_embd * lora_rank, lora_rank, n_embd);
+            scale(s->o1, ((float)lora_alpha / (float)lora_rank), n_embd);
+            accum(s->xb2, s->o1, n_embd);
+        }
 
         // residual connection back into x
         for (int i = 0; i < n_embd; i++) {
@@ -711,7 +943,7 @@ float* forward(LLM* llm, int token, int pos) {
     rmsnorm(x, x, w->rms_norm_final, n_embd);
 
     // classifier into logits
-    matmul(s->logits, x, w->token_classifier, p->n_embd, p->vocab_size);
+    matmul(s->logits, x, w->token_classifier, cfg->n_embd, cfg->vocab_size);
     return s->logits;
 }
 
@@ -729,11 +961,14 @@ typedef struct {
 typedef struct {
     int vocab_size;
     ProbIndex* probindex; // buffer used in top-p sampling
+    float repetition_penalty;
     float temperature;
-    float topp;
+    float top_p;
+    uint32_t top_k;
     unsigned long long rng_state;
 } Sampler;
 
+// 贪心采样：返回概率最大的下标
 int sample_argmax(float* probabilities, int n) {
     // return the index that has the highest probability
     int max_i = 0;
@@ -747,9 +982,10 @@ int sample_argmax(float* probabilities, int n) {
     return max_i;
 }
 
-int sample_mult(float* probabilities, int n, float coin) {
-    // sample index from probabilities (they must sum to 1!)
-    // coin is a random number in [0, 1), usually from random_f32()
+// 概率采样（香草味的）
+// sample index from probabilities (they must sum to 1!)
+// coin is a random number in [0, 1), usually from random_f32()
+int sample_multinomial(float* probabilities, int n, float coin) {
     float cdf = 0.0f;
     for (int i = 0; i < n; i++) {
         cdf += probabilities[i];
@@ -768,17 +1004,10 @@ int compare(const void* a, const void* b) {
     return 0;
 }
 
-int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, float coin) {
-    // top-p sampling (or "nucleus sampling") samples from the smallest set of
-    // tokens that exceed probability topp. This way we never sample tokens that
-    // have very low probabilities and are less likely to go "off the rails".
-    // coin is a random number in [0, 1), usually from random_f32()
-
+// Top-P采样（核采样）：只在累积概率达到p的概率最高的若干个词元中采样
+int sample_top_p(float* probabilities, int n, float top_p, ProbIndex* probindex, float coin) {
     int n0 = 0;
-    // quicksort indices in descending order of probabilities
-    // values smaller than (1 - topp) / (n - 1) cannot be part of the result
-    // so for efficiency we crop these out as candidates before sorting
-    const float cutoff = (1.0f - topp) / (n - 1);
+    const float cutoff = (1.0f - top_p) / (n - 1);
     for (int i = 0; i < n; i++) {
         if (probabilities[i] >= cutoff) {
             probindex[n0].index = i;
@@ -788,14 +1017,14 @@ int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, f
     }
     qsort(probindex, n0, sizeof(ProbIndex), compare);
 
-    // truncate the list where cumulative probability exceeds topp
+    // truncate the list where cumulative probability exceeds top_p
     float cumulative_prob = 0.0f;
     int last_idx = n0 - 1; // in case of rounding errors consider all elements
     for (int i = 0; i < n0; i++) {
         cumulative_prob += probindex[i].prob;
-        if (cumulative_prob > topp) {
+        if (cumulative_prob > top_p) {
             last_idx = i;
-            break; // we've exceeded topp by including last_idx
+            break; // we've exceeded top_p by including last_idx
         }
     }
 
@@ -811,13 +1040,17 @@ int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, f
     return probindex[last_idx].index; // in case of rounding errors
 }
 
-void build_sampler(Sampler* sampler, int vocab_size, float temperature, float topp, unsigned long long rng_seed) {
+Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long rng_seed) {
+    Sampler *sampler = (Sampler *)calloc(1, sizeof(Sampler));
     sampler->vocab_size = vocab_size;
+    sampler->repetition_penalty = repetition_penalty;
     sampler->temperature = temperature;
-    sampler->topp = topp;
+    sampler->top_p = top_p;
+    sampler->top_k = top_k;
     sampler->rng_state = rng_seed;
     // buffer only used with nucleus sampling; may not need but it's ~small
     sampler->probindex = malloc(sampler->vocab_size * sizeof(ProbIndex));
+    return sampler;
 }
 
 void free_sampler(Sampler* sampler) {
@@ -835,31 +1068,6 @@ float random_f32(unsigned long long *state) { // random float32 in [0,1)
     return (random_u32(state) >> 8) / 16777216.0f;
 }
 
-int sample(Sampler* sampler, float* logits) {
-    // sample the token given the logits and some hyperparameters
-    int next;
-    if (sampler->temperature == 0.0f) {
-        // greedy argmax sampling: take the token with the highest probability
-        next = sample_argmax(logits, sampler->vocab_size);
-    } else {
-        // apply the temperature to the logits
-        for (int q=0; q<sampler->vocab_size; q++) { logits[q] /= sampler->temperature; }
-        // apply softmax to the logits to get the probabilities for next token
-        softmax(logits, sampler->vocab_size);
-        // flip a (float) coin (this is our source of entropy for sampling)
-        float coin = random_f32(&sampler->rng_state);
-        // we sample from this distribution to get the next token
-        if (sampler->topp <= 0 || sampler->topp >= 1) {
-            // simply sample from the predicted probability distribution
-            next = sample_mult(logits, sampler->vocab_size, coin);
-        } else {
-            // top-p (nucleus) sampling, clamping the least likely tokens to zero
-            next = sample_topp(logits, sampler->vocab_size, sampler->topp, sampler->probindex, coin);
-        }
-    }
-    return next;
-}
-
 
 // ===============================================================================
 // 工具函数
@@ -873,7 +1081,7 @@ long time_in_ms() {
 }
 
 static uint32_t last_output_length = 0;
-void typewriter(wchar_t *output_text, uint32_t status) {
+uint32_t typewriter(wchar_t *output_text, uint32_t status) {
     if(status == STATUS_DECODING) {
         // printf("%ls", output_text);
         uint32_t output_length = wcslen(output_text);
@@ -882,8 +1090,13 @@ void typewriter(wchar_t *output_text, uint32_t status) {
         }
         fflush(stdout);
         last_output_length = output_length;
-        free(output_text);
     }
+    return 0;
+}
+
+uint32_t report(float tps, uint32_t status) {
+    printf("\nTPS = %f\n", tps);
+    return 0;
 }
 
 
@@ -891,17 +1104,34 @@ void typewriter(wchar_t *output_text, uint32_t status) {
 // 自回归文本生成
 // ===============================================================================
 
-void generate(LLM *llm, Tokenizer *tokenizer, Sampler *sampler, wchar_t *prompt, int steps, void (*on_running)(wchar_t*, uint32_t) ) {
+void generate(
+    LLM *llm,
+    LoRA *lora,
+    Tokenizer *tokenizer,
+
+    wchar_t *prompt,
+
+    float repetition_penalty,
+    float temperature,
+    float top_p,
+    uint32_t top_k,
+    uint32_t max_seq_len,
+
+    uint32_t (*on_running)(wchar_t*, uint32_t),
+    uint32_t (*on_finished)(float, uint32_t)
+) {
+
     wchar_t *empty_prompt = L"";
     if (prompt == NULL) { prompt = empty_prompt; }
 
     long t_0 = 0;
     long t_1 = 0;
 
-    uint32_t *output_ids = (uint32_t *)calloc(steps+1, sizeof(uint32_t));
+    Sampler *sampler = build_sampler(llm->config.vocab_size, repetition_penalty, temperature, top_p, top_k, (unsigned int)time(NULL));
+
+    uint32_t *output_ids = (uint32_t *)calloc(max_seq_len + 1, sizeof(uint32_t));
     uint32_t output_count = 0;
 
-    // encode the (string) prompt into tokens sequence
     uint32_t num_prompt_tokens = 0;
     uint32_t *prompt_tokens = encode(tokenizer, prompt, &num_prompt_tokens);
 
@@ -910,27 +1140,59 @@ void generate(LLM *llm, Tokenizer *tokenizer, Sampler *sampler, wchar_t *prompt,
         exit(EXIT_FAILURE);
     }
 
-    // start the main loop
     uint32_t next_token = prompt_tokens[0]; // kick off with the first token in the prompt
     uint32_t pos = 0;     // position in the sequence
-    while (pos < steps) {
 
-        // forward the model to get logits for the next token
-        float* logits = forward(llm, next_token, pos);
+    while (pos < max_seq_len) {
 
-        // advance the state machine
+        float* logits = llm_forward(next_token, pos, llm, lora);
+
+        // Pre-fill: if we are still processing the input prompt, force the next prompt token
         if (pos < num_prompt_tokens - 1) {
-            // if we are still processing the input prompt, force the next prompt token
             next_token = prompt_tokens[pos + 1];
             on_running(NULL, STATUS_PREFILLING);
         }
+        // Auto-regressive Decode
         else {
-            // otherwise sample the next token from the logits
-            next_token = sample(sampler, logits);
+            // 复读惩罚：对过往出现过的词元施加惩罚，词元出现得越多，概率越低: ref arxiv:1909.05858
+            uint32_t *tokenset = (uint32_t *)calloc(sampler->vocab_size, sizeof(uint32_t));
+            for(uint32_t i = 0; i < output_count; i++) {
+                tokenset[output_ids[i]] = 1;  // 1表示output_ids中出现了这个token
+            }
+            for(uint32_t id = 0; id < sampler->vocab_size; id++) {
+                if(tokenset[id] == 1) {
+                    logits[id] /= sampler->repetition_penalty;
+                }
+            }
+            free(tokenset);
+
+            // 温度采样：当温度设为0时，退化为贪心采样
+            if (sampler->temperature == 0.0f) {
+                next_token = sample_argmax(logits, sampler->vocab_size);
+            }
+            else {
+                for(uint32_t q = 0; q < sampler->vocab_size; q++) {
+                    logits[q] /= sampler->temperature;
+                }
+
+                softmax(logits, sampler->vocab_size);
+
+                // flip a (float) coin (this is our source of entropy for sampling)
+                float coin = random_f32(&sampler->rng_state);
+
+                if (sampler->top_p > 0 || sampler->top_p < 1) {
+                    next_token = sample_top_p(logits, sampler->vocab_size, sampler->top_p, sampler->probindex, coin);
+                }
+                else {
+                    next_token = sample_multinomial(logits, sampler->vocab_size, coin);
+                }
+            }
+
             output_ids[output_count++] = next_token;
 
             wchar_t *output_text = decode(tokenizer, output_ids, output_count);
             on_running(output_text, STATUS_DECODING);
+            free(output_text);
         }
         pos++;
 
@@ -939,12 +1201,13 @@ void generate(LLM *llm, Tokenizer *tokenizer, Sampler *sampler, wchar_t *prompt,
         if (t_0 == 0) { t_0 = time_in_ms(); }
     }
 
-    if (pos > 1) {
-        t_1 = time_in_ms();
-        fprintf(stderr, "\nTPS = %f\n", (pos-1) / (double)(t_1 - t_0) * 1000);
-    }
+    t_1 = time_in_ms();
+    float tps = (pos-1) / (double)(t_1 - t_0) * 1000;
+    on_finished(tps, STATUS_STOPPED);
+
     printf("\n");
     free(prompt_tokens);
+    free_sampler(sampler);
 }
 
 
@@ -955,28 +1218,24 @@ int main(int argc, char **argv) {
         return -1;
     }
 
+    char *MODEL_PATH = "/home/bd4sur/ai/Nano/checkpoint/1-基础模型-99000.bin";
+    char *LORA_PATH  = "/home/bd4sur/ai/Nano/checkpoint/2-插件-猫娘.bin";
+
     LLM llm;
     Tokenizer tokenizer;
-    Sampler sampler;
-    build_transformer(&llm, &tokenizer, "/home/bd4sur/ai/Nano/checkpoint/1-通用对话模型-118000.bin");
-    build_sampler(&sampler, llm.config.vocab_size, 1.1, 0.5, (unsigned int)time(NULL));
+    load_llm(&llm, &tokenizer, MODEL_PATH);
+
+    LoRA *p_lora = NULL;
+    p_lora = load_lora(&llm, LORA_PATH);
 
     last_output_length = 0;
-    wchar_t *prompt = L"<|instruct_mark|>Nano是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
+    wchar_t *prompt = L"<|instruct_mark|>你是Nano，是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
     uint32_t token_count = 0;
-    generate(&llm, &tokenizer, &sampler, prompt, 511, typewriter);
+    generate(&llm, p_lora, &tokenizer, prompt, 1.11, 1.1, 0.5, 0, 511, typewriter, report);
 
-    last_output_length = 0;
-    prompt = L"<|instruct_mark|>Nano是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
-    token_count = 0;
-    generate(&llm, &tokenizer, &sampler, prompt, 511, typewriter);
+    free_lora(&llm, p_lora);
 
-    last_output_length = 0;
-    prompt = L"<|instruct_mark|>Nano是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
-    token_count = 0;
-    generate(&llm, &tokenizer, &sampler, prompt, 511, typewriter);
+    free_llm(&llm, &tokenizer);
 
-    free_sampler(&sampler);
-    free_transformer(&llm, &tokenizer);
     return 0;
 }

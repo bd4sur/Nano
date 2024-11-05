@@ -1,18 +1,16 @@
 
-# Nano：大模型，小玩具
+# Nano : Large Model, Tiny Toy
 
 **Pre-alpha · 正在积极开发，技术状态尚未固化，按原样呈现**
 
-**Nano**是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。主要复刻自 [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)，并借鉴了多个开源模型实现和学习项目。
-
-https://github.com/user-attachments/assets/94181a6e-6016-42e2-b617-f8d6cbeb35ab
+**Nano**是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。
 
 期望：
 
 - 用尽可能少的依赖，尤其不依赖🤗，实现一个具体而微的Transformer语言模型。
 - 完整实现数据处理、预训练、监督微调（含LoRA）、推理过程。暂不实现人类对齐。
 - 从头训练一个会说人话的50M级参数规模的语言模型。
-- 实现完全离线的端侧推理，支持低秩适配插件（[在线体验](https://bd4sur.com/Nano/infer)）。
+- 实现低功耗端侧设备（如嵌入式开发板、手机）上的推理，支持低秩适配插件（[在线体验](https://bd4sur.com/Nano/infer)）。
 - 研究模型训练的动力学、训/推加速、算法改进等问题。
 - 探索Transformer模型在自然语言处理以外的问题和模态上的潜能。
 - 建立起关于大语言模型的合理预期和感性经验，对大语言模型技术祛魅。
@@ -20,7 +18,7 @@ https://github.com/user-attachments/assets/94181a6e-6016-42e2-b617-f8d6cbeb35ab
 为什么叫“Nano”：
 
 - 東雲なの（Shinonome **Nano**）和坂本是动画《日常》的角色。なの是博士创造的女高中生机器人，而坂本是一只会说话的黑猫。
-- 致(chao)敬(xi) Karpathy大佬的nanoGPT项目。
+- 本仓库主要复刻自Karpathy大佬的[nanoGPT](https://github.com/karpathy/nanoGPT)。取名Nano也是为了致(chao)敬(xi)nanoGPT。
 
 ![ ](./doc/nano.jpg)
 
@@ -32,17 +30,52 @@ https://github.com/user-attachments/assets/94181a6e-6016-42e2-b617-f8d6cbeb35ab
 
 数据集为7z格式，解压口令“nano”。
 
-## 全流程速通
+## 使用说明
 
-[B站视频](https://www.bilibili.com/video/BV1uv42127qP)
+### 0. 百闻不如一见：立刻体验推理效果
 
-- 全流程速通，旨在“开箱即用”地跑通推理乃至训练流程。
-- 如果只是想体验推理效果，可直接执行第1、4步骤。
+[B站视频：自制大模型在浏览器上推理，现已支持LoRA插件](https://www.bilibili.com/video/BV1FqShYXENu)
 
-### 1️⃣ 安装依赖
+**浏览器在线体验**
+
+- 访问[在线体验页面](https://bd4sur.com/Nano/infer)，或者用浏览器直接打开`Nano/infer/index.html`。
+- 按页面提示，下载基座模型、指令微调模型或LoRA插件（扩展名均为bin）。
+- 点击页面下方按钮，打开基座模型或指令微调模型。
+- 可切换文本续写模式和指令问答模式，默认后者。推荐使用指令微调后模型，在指令问答模式下体验。
+- 可随时加载或卸载LoRA插件。注意LoRA插件需要与某个预训练基座模型匹配。
+- 使用`export.py`将检查点文件转换为基座模型或者LoRA插件。
+- 所有推理过程均在本地浏览器内部进行。
+
+**纯C语言实现的推理**
+
+- 首先下载基座模型、指令微调模型或LoRA插件（扩展名均为bin）。
+- 将`Nano/infer_c/infer.c`中模型文件的路径修改为实际的绝对路径。
+- 在`Nano/infer_c`中执行`make`，编译得到可执行文件。默认启用OpenMP并行优化。
+- 执行`OMP_NUM_THREADS=<CPU线程数/2> ./infer`，开始推理。
+
+**基于PyTorch的推理**
+
+首先下载pt扩展名的基座模型、指令微调模型或LoRA插件到`checkpoint`目录。
+
+执行`python infer.py -i -m checkpoint/xxx.pt [-l lora.pt]`，其中`xxx.pt`是模型检查点文件，`lora.pt`是LoRA模块的检查点文件。可选的命令行参数如下：
+
+- `-m` or `--model`：字符串，模型相对路径。
+- `-l` or `--lora`：字符串，LoRA模块的相对路径。
+- `-i` or `--instruct`：开关标识。若启用，则对输入套用指令模板，以支持指令微调模型上的指令问答；若不启用，则为自回归式文本生成。
+- `-s` or `--max_seq_length`：整数，序列最大长度，默认为模型的上下文窗口长度。
+- `-t` or `--temperature`：浮点数，生成温度参数，默认值为1.0，越高则生成越随机。
+- `-k` or `--top_k`：整数，前k采样，默认值为5，越高则生成越多样。
+- `-r` or `--repetition_penalty`：浮点数，复读惩罚，默认值为1.2，越大则越抑制生成重复的词元。
+- `-p` or `--profile`：开关标识。若启用，则统计性能数据，包括首词元延迟、词元生成速率等。
+
+### 1. 安装依赖
+
+一般要求：
 
 - 硬件：建议使用英伟达GPU，以计算能力7.0以上的为宜，详见[英伟达官网](https://developer.nvidia.com/cuda-gpus)。若只有CPU也无妨。
-- 软件：建议使用Ubuntu等Linux操作系统，并且在conda虚拟环境中安装依赖：
+- 软件：建议使用Ubuntu等Linux操作系统，并安装Anaconda/Miniconda等环境管理工具。
+
+如果想基于PyTorch进行模型的训练、推理、数据清洗和开发等工作：
 
 ```
 conda create -n nano python=3.11 pysocks -y
@@ -50,29 +83,20 @@ conda activate nano
 python -m pip install -r requirements.txt
 ```
 
-### 2️⃣ 数据下载·预处理
+如果想基于Emscripten进行浏览器推理引擎的开发：参照[文档](https://emscripten.org/docs/getting_started/downloads.html)安装Emscripten工具链。
 
-如果只是想跑通流程：
+### 2. 数据下载·预处理
 
-- 直接执行`python data.py`，对预置的精神分析黑话语料作预处理。
-
-如果真的想让模型学会说人话：
-
-- 下载预训练数据集和指令微调数据集。
+- 自行准备或者下载笔者收集的预训练数据集和指令微调数据集。
 - 解压得到`pretrain.txt`和`sft.jsonl`两个文件，移动到`dataset`目录下。
 - 将`data.py`中`PRETRAIN_DATASETS`和`SFT_DATASET`替换为刚刚下载的两个文件。
 - 执行`python data.py`，进行数据预处理。可能占用大量记忆和存储空间，请提前预留。
 
-### 3️⃣ 预训练和监督微调
+### 3. 预训练和监督微调
 
-如果只是想跑通流程：
+大模型的训练非常昂贵，需要PFLOP甚至EFLOP量级的计算量。请勿低估让电脑说人话的成本。因此，开始训练之前，请先确认几件事：
 
-- 将`config_pretrain.json`中`dataset_path`和`tokenizer_path`改成实际的绝对路径。
-- 直接执行`bash start_pretrain.sh`。如果使用Windows，则执行`python train.py -m model_config.json -t config_pretrain.json`。
-
-如果真的想让模型学会说人话，开始训练之前，请先确认几件事：
-
-- 训练可能耗费几小时乃至几天的时间！具体时间取决于训练设置和硬件，参考下文。
+- 请做好训练过程随时会宕掉的心理准备，合理设置检查点保存策略。
 - 若长时间训练，**强烈建议使用 [GNU Screen](https://www.gnu.org/software/screen/) 等终端切换工具，保证训练进程不被意外杀掉**。
 - 若使用多机分布式训练，请先提前配置好分布式环境，例如无密码ssh认证等。
 
@@ -113,30 +137,6 @@ python -m pip install -r requirements.txt
 **监督微调（全参数）**：首先将`config_sft.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行`bash start_sft.sh`（或者`bash start_sft_ddp.sh`）。其余与预训练类似。需要指出的是，监督微调的训练轮数，应当根据实际情况灵活选择。一般来说，如果训练轮数过少，模型可能难以学习到指令跟随能力。而训练轮数过多，则可能遗忘预训练过程中获得的语言能力，以及在监督微调数据集上过拟合。
 
 **监督微调（LoRA）**：TODO
-
-### 4️⃣ 推理
-
-**方式一：浏览器推理**
-
-- 访问[在线体验页面](https://bd4sur.com/Nano/infer)，或者用浏览器直接打开`Nano/infer/index.html`，按页面提示打开本地预先下载好的基座模型文件（扩展名为bin），模型下载地址见上文。
-- 可切换文本续写模式和指令问答模式，默认后者。推荐使用指令微调后的模型，在指令问答模式下体验。
-- 可随时加载或卸载LoRA插件。注意LoRA插件需要与某个预训练基座模型匹配。
-- 使用`export.py`将检查点文件转换为基座模型或者LoRA插件。
-- 所有推理过程均在本地浏览器内部进行。
-
-**方式二：PyTorch推理**
-
-如果只是想体验推理效果而不训练，首先下载[预训练或指令微调模型](https://huggingface.co/bd4sur/nano-1010)到`checkpoint`目录。
-
-执行`python inference.py -i -m checkpoint/xxx.pt`，其中`xxx.pt`是模型检查点文件（下载的或者自己训练的）。可选的命令行参数如下：
-
-- `-m` or `--model`：字符串，模型相对路径。
-- `-i` or `--instruct`：开关标识。若启用，则对输入套用指令模板，以支持指令微调模型上的指令问答；若不启用，则为自回归式文本生成。
-- `-l` or `--max_length`：整数，序列最大长度，默认为模型的上下文窗口长度。
-- `-t` or `--temperature`：浮点数，生成温度参数，默认值为1.0，越高则生成越随机。
-- `-k` or `--top_k`：整数，前k采样，默认值为5，越高则生成越多样。
-- `-r` or `--repetition_penalty`：浮点数，复读惩罚，默认值为1.2，越大则越抑制生成重复的词元。
-- `-p` or `--profile`：开关标识。若启用，则统计性能数据，包括首词元延迟、词元生成速率等。
 
 ## 技术要点简述
 

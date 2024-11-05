@@ -213,7 +213,7 @@ function load_lora(file_buffer) {
         lora_rank: 0,
         lora_alpha: 0,
         n_layer: 0,     // 用于校验
-        n_embd: 0,     // 用于校验
+        n_embd: 0,      // 用于校验
         n_head: 0,      // 用于校验
         n_kv_head: 0,   // 用于校验
         n_hidden: 0,    // 用于校验
@@ -261,10 +261,10 @@ function load_lora(file_buffer) {
     FWD_BUFFER.k0 = new Float32Array(lora_cfg.lora_rank);   // key    LoRA branch (lora_cfg.lora_rank,)
     FWD_BUFFER.v0 = new Float32Array(lora_cfg.lora_rank);   // value  LoRA branch (lora_cfg.lora_rank,)
     FWD_BUFFER.o0 = new Float32Array(lora_cfg.lora_rank);   // output LoRA branch (lora_cfg.lora_rank,)
-    FWD_BUFFER.q1 = new Float32Array(llm_cfg.n_embd);           // query  LoRA branch (dim,)
+    FWD_BUFFER.q1 = new Float32Array(llm_cfg.n_embd);       // query  LoRA branch (dim,)
     FWD_BUFFER.k1 = new Float32Array(kv_dim);               // key    LoRA branch (kv_dim,)
     FWD_BUFFER.v1 = new Float32Array(kv_dim);               // value  LoRA branch (kv_dim,)
-    FWD_BUFFER.o1 = new Float32Array(llm_cfg.n_embd);           // output LoRA branch (kv_dim,)
+    FWD_BUFFER.o1 = new Float32Array(llm_cfg.n_embd);       // output LoRA branch (kv_dim,)
 
     return true;
 }
@@ -748,7 +748,7 @@ async function generate(prompt, args, on_ready, on_running, on_finished) {
         args.repetition_penalty = 1;
     }
 
-    let idlist = [];
+    let output_ids = [];
     let prompt_tokens = encode(prompt);
     let next_token = prompt_tokens[0] || 0;
     let pos = 0;
@@ -768,7 +768,7 @@ async function generate(prompt, args, on_ready, on_running, on_finished) {
         else {
             status = "Decoding...";
             // 复读惩罚：对过往出现过的词元施加惩罚，词元出现得越多，概率越低: ref arxiv:1909.05858
-            let tokenset = new Set(idlist);
+            let tokenset = new Set(output_ids);
             for(tk of tokenset.keys()) {
                 FWD_BUFFER.logits[tk] /= args.repetition_penalty;
             }
@@ -796,7 +796,7 @@ async function generate(prompt, args, on_ready, on_running, on_finished) {
                 }
             }
 
-            idlist.push(next_token);
+            output_ids.push(next_token);
         }
 
         pos++;
@@ -806,7 +806,7 @@ async function generate(prompt, args, on_ready, on_running, on_finished) {
         elpased.push(1 / (t_1 - t_0) * 1000);
         let tps_now = elpased.slice(-1)[0];
 
-        let is_continue = on_running(decode(idlist), status, tps_now);
+        let is_continue = on_running(decode(output_ids), status, tps_now);
         if(is_continue !== true) break;
 
         await new Promise(resolve => setTimeout(resolve, 0));
