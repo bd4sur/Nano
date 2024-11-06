@@ -2,30 +2,12 @@
 CC = gcc
 CFLAGS = -O3 -march=native -ffast-math -fopenmp
 
-# 目标文件
-TARGET = infer
+.PHONY: all
+all: infer.c
+	$(CC) $(CFLAGS) -o infer infer.c -lm
+	$(CC) $(CFLAGS) -o infer_q infer_q.c -lm
 
-# 源文件和对象文件
-SRCS = infer.c
-OBJS = $(SRCS:.c=.o)   # 把所有的 .c 文件替换为 .o 文件
-
-# 默认目标
-all: $(TARGET)
-
-# 链接目标
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS) -lm
-
-# 依赖
-infer.o: infer.c
-
-# 编译规则，%.o 是模式匹配，匹配所有的 .c 文件
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-# 清理目标
+# 清理
+.PHONY: clean
 clean:
-	rm -f $(OBJS) $(TARGET)
-
-# PHONY 目标声明，避免与同名文件冲突
-.PHONY: all clean
+	rm -f infer infer_q

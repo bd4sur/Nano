@@ -31,6 +31,9 @@ function load_model(file_buffer) {
 
     let offset = 0;
 
+    ////////////////////////////////////////////////////
+    // 读取文件头
+
     let header = new Int32Array(file_buffer.slice(0, header_length));
 
     let magic_number_0 = header[0];
@@ -51,6 +54,7 @@ function load_model(file_buffer) {
 
     console.info(`Model type: ${model_type}`);
 
+    ////////////////////////////////////////////////////
     // 读取模型结构参数
 
     LLM.config = {
@@ -69,33 +73,7 @@ function load_model(file_buffer) {
 
     offset += header_length;
 
-    // 读取模型权重
-
-    const cfg = LLM.config;
-    const is_shared_weights = cfg.is_shared_classifier > 0 ? 1 : 0;
-    const head_dim = ((cfg.n_embd / cfg.n_head)^0);
-
-    offset += 8; // param_count字段占用8个字节，仅用于C实现的推理引擎，这里不读取，直接跳过
-
-    LLM.param = {
-        token_embedding: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.vocab_size * cfg.n_embd)),
-        rms_norm_attn:   new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd)),
-        wq:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_embd)),
-        wk:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_kv_head * head_dim)),
-        wv:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_kv_head * head_dim)),
-        wo:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_embd)),
-        rms_norm_ffn:    new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd)),
-        w1:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden)),
-        w2:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden)),
-        w3:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden)),
-        rms_norm_final:  new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_embd)),
-        token_classifier: null,
-        freq_cis_real:   new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.block_size * head_dim / 2)),
-        freq_cis_imag:   new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.block_size * head_dim / 2)),
-    };
-
-    LLM.param.token_classifier = is_shared_weights ? LLM.param.token_embedding : offset;
-
+    ////////////////////////////////////////////////////
     // 读取词表、构建词元编解码器
 
     let byte_count = 0;
@@ -107,7 +85,7 @@ function load_model(file_buffer) {
     let tokenizer_field_bytes = new Uint32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE))[0];
     let vocab_size = new Uint32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE))[0];
 
-    while(byte_count < tokenizer_field_bytes - 4) { // 不含vocab_size字段的4个字节
+    while(byte_count < tokenizer_field_bytes - 8) { // 不含tokenizer_field_bytes和vocab_size字段的8个字节
         let token_header = new Uint8Array(file_buffer.slice(offset, offset += 4));
         byte_count += 4;
         let token_id     = new Uint32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE))[0];
@@ -144,16 +122,37 @@ function load_model(file_buffer) {
 
     TOKENIZER.trie = new TrieTree(TOKENIZER.config.itos);
 
+    ////////////////////////////////////////////////////
+    // 读取模型权重
 
-    // tk_length = new Uint32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE))[0];
-    // tokenizer_config_json_base64 = new Uint8Array(file_buffer.slice(offset, offset += tk_length));
-    // const text_decoder = new TextDecoder("utf-8");
-    // TOKENIZER.config = JSON.parse(window.atob(text_decoder.decode(tokenizer_config_json_base64)));
-    // TOKENIZER.trie = new TrieTree(TOKENIZER.config.itos);
+    const cfg = LLM.config;
+    const is_shared_weights = cfg.is_shared_classifier > 0 ? 1 : 0;
+    const head_dim = ((cfg.n_embd / cfg.n_head)^0);
+
+    LLM.param = {
+        token_embedding: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.vocab_size * cfg.n_embd)),
+        rms_norm_attn:   new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd)),
+        wq:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_embd)),
+        wk:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_kv_head * head_dim)),
+        wv:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_kv_head * head_dim)),
+        wo:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_embd)),
+        rms_norm_ffn:    new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd)),
+        w1:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden)),
+        w2:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden)),
+        w3:              new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_layer * cfg.n_embd * cfg.n_hidden)),
+        rms_norm_final:  new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.n_embd)),
+        token_classifier: null,
+        freq_cis_real:   new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.block_size * head_dim / 2)),
+        freq_cis_imag:   new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * cfg.block_size * head_dim / 2)),
+    };
+
+    LLM.param.token_classifier = is_shared_weights ? LLM.param.token_embedding : offset;
+
+
+    ////////////////////////////////////////////////////
+    // 构建前向传播数值的缓冲区
 
     let kv_dim = (cfg.n_embd * cfg.n_kv_head) / cfg.n_head;
-
-    // 构建前向传播数值的缓冲区
 
     FWD_BUFFER = {
         x:       new Float32Array(cfg.n_embd),   // activation at current time stamp (dim,)
@@ -181,6 +180,9 @@ function load_lora(file_buffer) {
 
     let offset = 0;
 
+    ////////////////////////////////////////////////////
+    // 读取文件头
+
     let header = new Int32Array(file_buffer.slice(0, header_length));
 
     let magic_number_0 = header[0];
@@ -205,7 +207,8 @@ function load_lora(file_buffer) {
         return false;
     }
 
-    // 读取LoRA参数
+    ////////////////////////////////////////////////////
+    // 读取LoRA超参数
 
     LoRA = { config: {}, param: {} };
 
@@ -225,7 +228,8 @@ function load_lora(file_buffer) {
 
     offset += header_length;
 
-    // 读取LoRA参数
+    ////////////////////////////////////////////////////
+    // 读取LoRA模型参数
 
     const llm_cfg  = LLM.config;
     const lora_cfg = LoRA.config;
@@ -242,7 +246,7 @@ function load_lora(file_buffer) {
         return false;
     }
 
-    offset += 8; // param_count字段占用8个字节，仅用于C实现的推理引擎，这里不读取，直接跳过
+    // offset += 8; // param_count字段占用8个字节，仅用于C实现的推理引擎，这里不读取，直接跳过
 
     LoRA.param = {
         wq_lora_a: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * lora_cfg.lora_rank * llm_cfg.n_embd)),
@@ -255,6 +259,7 @@ function load_lora(file_buffer) {
         wo_lora_b: new Float32Array(file_buffer.slice(offset, offset += SIZE_OF_DTYPE * llm_cfg.n_layer * llm_cfg.n_embd * lora_cfg.lora_rank)),
     };
 
+    ////////////////////////////////////////////////////
     // 初始化LoRA数值缓冲区
 
     FWD_BUFFER.q0 = new Float32Array(lora_cfg.lora_rank);   // query  LoRA branch (lora_cfg.lora_rank,)

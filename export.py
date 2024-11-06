@@ -43,7 +43,6 @@ def quantize_q80(w, group_size):
     i.e. symmetric quantization into int8, range [-127,127]
     """
     assert w.numel() % group_size == 0
-    ori_shape = w.shape
     w = w.float() # convert to float32
     w = w.reshape(-1, group_size)
     # find the max in each group
@@ -63,16 +62,63 @@ def quantize_q80(w, group_size):
     maxerr = err.max().item()
     return int8val, scale, maxerr
 
-# -----------------------------------------------------------------------------
-# new version
 
-def lora_export(lora_dict, lora_config, basemodel_config, filepath):
+# 写入词表
+def serialize_tokenizer(out_file, tokenizer_config):
+    """
+    词表序列化结构如下(BNF)：
+           tokenizer_config ::= tokenizer_field_bytes vocab_size tokens
+      tokenizer_field_bytes ::= uint32(I)(4B) 其值为整个tokenizer_config的字节长度
+                 vocab_size ::= uint32(I)(4B) 其值为tokens中token数目
+                     tokens ::= tokens token | token
+                      token ::= token_header token_id unicode_chars
+               token_header ::= token_length is_special reserved_0 reserved_1
+               token_length ::= uint8(B)(1B) 其值为unicode_chars中ucchar数目
+                 is_special ::= uint8(B)(1B) 1-True 0-False
+                 reserved_0 ::= uint8(B)(1B) 保留不用
+                 reserved_1 ::= uint8(B)(1B) 保留不用
+                   token_id ::= uint32(I)(4B)
+              unicode_chars ::= unicode_chars ucchar | ucchar
+                     ucchar ::= uint32(I)(4B)
+    """
+    vocab = tokenizer_config["itos"]
+    vocab_size = tokenizer_config["vocab_size"]
+    special_tokens = tokenizer_config["special_tokens"]
+
+    tokenizer_field_bytes = 4 + 4 # 对应tokenizer_field_bytes（本字段）和vocab_size字段
+    for i,t in enumerate(vocab):
+        tokenizer_field_bytes += (len(t) + 2) * 4  # 计算方法见上文注释
+
+    print(f"  Tokenizer field bytes = {tokenizer_field_bytes}")
+
+    out_file.write(struct.pack('I', tokenizer_field_bytes))  # 模型文件中词表部分的字节数（不含本字段的4个字节）
+    out_file.write(struct.pack('I', vocab_size))             # 词表长度
+    for i,t in enumerate(vocab):
+        token_length = len(t)
+        is_special = 1 if t in special_tokens else 0
+        # NOTE Little endian 小端序！如果按照uint32解析，顺序是 MSB(reserved_1 reserved_0 is_special token_length)LSB
+        out_file.write(struct.pack('B', token_length))
+        out_file.write(struct.pack('B', is_special))
+        out_file.write(struct.pack('B', 255)) # 预留
+        out_file.write(struct.pack('B', 255)) # 预留
+
+        out_file.write(struct.pack('I', i))
+
+        for chr in t:
+            out_file.write(struct.pack('I', ord(chr)))
+
+
+
+
+
+def export_lora(lora_dict, lora_config, basemodel_config, filepath):
     major_version = 2024
     minor_version = 10
 
     out_file = open(filepath, 'wb')
 
-    # first write out the header. the header will be 256 bytes
+    #########################################################
+    # 写入文件头（固定长度256B）
 
     # 1) write magic, which will be two uint32 of "BD4SURLM" in ASCII
     out_file.write(struct.pack('I', 0x42443453))
@@ -107,7 +153,9 @@ def lora_export(lora_dict, lora_config, basemodel_config, filepath):
     assert pad >= 0
     out_file.write(b'\0' * pad)
 
-    # now let's write out all the LoRA parameters
+    #########################################################
+    # 写入LoRA模型参数
+
     weights = []
     wq_lora_a, wq_lora_b = {}, {}
     wk_lora_a, wk_lora_b = {}, {}
@@ -155,8 +203,8 @@ def lora_export(lora_dict, lora_config, basemodel_config, filepath):
     for w in weights:
         param_count += w.detach().cpu().view(-1).numel() * 4
 
-    # 写入模型参数数（本字段8个字节）
-    out_file.write(struct.pack('Q', param_count)) # unsigned long long - uint64_t
+    # 【NOTE 不需要】写入模型参数数（本字段8个字节）
+    # out_file.write(struct.pack('Q', param_count)) # unsigned long long - uint64_t
 
     for w in weights:
         serialize_fp32(out_file, w)
@@ -164,26 +212,29 @@ def lora_export(lora_dict, lora_config, basemodel_config, filepath):
     print(f"Params = {param_count}")
     print(f"Total bin file length = {out_file.tell()}")
 
-    # write to binary file
+    #########################################################
+    # 写入并关闭文件
+
     out_file.close()
     print(f"wrote {filepath}")
 
 
 
-def version1_export(model, tokenizer_config, filepath):
+def export_model(model, tokenizer_config, filepath):
     """
     Export the model weights in full float32 .bin file to be read from C.
     This is same as legacy_export, but with a proper header.
     """
 
+    out_file = open(filepath, 'wb')
+
+    #########################################################
+    # 写入文件头（固定长度256B）
+
     print("Writing header...")
 
     major_version = 2024
     minor_version = 10
-
-    out_file = open(filepath, 'wb')
-
-    # first write out the header. the header will be 256 bytes
 
     # 1) write magic, which will be two uint32 of "BD4SURLM" in ASCII
     out_file.write(struct.pack('I', 0x42443453))
@@ -195,7 +246,7 @@ def version1_export(model, tokenizer_config, filepath):
     out_file.write(struct.pack('i', minor_version))
     # --> 16 bytes
 
-    # 3) write file type TODO  to be defined
+    # 3) write file type TODO to be defined
     out_file.write(struct.pack('i', 0))  # Model type: Base model
     out_file.write(struct.pack('i', 32)) # Config Length: 32 bytes
     # --> 24 bytes
@@ -224,9 +275,19 @@ def version1_export(model, tokenizer_config, filepath):
     assert pad >= 0
     out_file.write(b'\0' * pad)
 
+
+    #########################################################
+    # 写入词表
+
+    print("Writing tokenizer...")
+    serialize_tokenizer(out_file, tokenizer_config)
+
+
+    #########################################################
+    # 写入模型参数
+
     print("Writing model parameters...")
 
-    # now let's write out all the model parameters
     weights = [
         model.tok_embeddings.weight,
         *[layer.attention_norm.weight for layer in model.layers],
@@ -244,74 +305,30 @@ def version1_export(model, tokenizer_config, filepath):
     ]
     if not is_shared_classifier:
         weights.append(model.output.weight)
+
     param_count = 0
     for w in weights:
         param_count += w.detach().cpu().view(-1).numel()
 
-    # 写入模型参数数（本字段8个字节）
-    out_file.write(struct.pack('Q', param_count)) # unsigned long long - uint64_t
+    # 【NOTE 不需要】写入模型参数数（本字段8个字节）
+    # out_file.write(struct.pack('Q', param_count)) # unsigned long long - uint64_t
 
     # 按照上面定义的维度顺序，将模型参数写入文件，没有其他定界符或填充数据
     for w in weights:
         serialize_fp32(out_file, w)
 
-    # 写入词表
-    # 词表存储结构如下：
-    # uint32 I   tokenizer_field_bytes（不含本字段的4个字节）
-    # uint32 I   vocab_size
-    # struct     tokens (* vocab_size)
-    # uchar B      ├ token_length
-    # uchar B      ├ is_special
-    # uchar B      ├ reserved_0
-    # uchar B      ├ reserved_1
-    # uint32 I     ├ token_id
-    # uint32 I     ╰ unicode_char (* token_length)
-
-    print("Writing tokenizer...")
-
-    vocab = tokenizer_config["itos"]
-    vocab_size = tokenizer_config["vocab_size"]
-    special_tokens = tokenizer_config["special_tokens"]
-
-    tokenizer_field_bytes = 4
-    for i,t in enumerate(vocab):
-        tokenizer_field_bytes += (len(t) + 2) * 4  # 计算方法见上文注释
-
-    print(f"  Tokenizer field bytes = {tokenizer_field_bytes}")
-
-    out_file.write(struct.pack('I', tokenizer_field_bytes))  # 模型文件中词表部分的字节数（不含本字段的4个字节）
-    out_file.write(struct.pack('I', vocab_size))             # 词表长度
-    for i,t in enumerate(vocab):
-        token_length = len(t)
-        is_special = 1 if t in special_tokens else 0
-        # NOTE Little endian 小端序！如果按照uint32解析，顺序是 MSB(reserved_1 reserved_0 is_special token_length)LSB
-        out_file.write(struct.pack('B', token_length))
-        out_file.write(struct.pack('B', is_special))
-        out_file.write(struct.pack('B', 255)) # 预留
-        out_file.write(struct.pack('B', 255)) # 预留
-
-        out_file.write(struct.pack('I', i))
-
-        for chr in t:
-            out_file.write(struct.pack('I', ord(chr)))
-
-    """
-    # write tokenizer config dict as base64 string
-    tk_cfg_json_str = json.dumps(tokenizer_config, ensure_ascii=True)
-    b64 = base64.b64encode(bytes(tk_cfg_json_str, encoding="utf-8"))
-    out_file.write(struct.pack('I', len(b64)))
-    print(f"Tokenizer config length = {len(b64)}")
-    serialize_base64(out_file, b64)
-    """
-
     print(f"Params = {param_count}")
     print(f"Total bin file length = {out_file.tell()}")
 
-    # write to binary file
+    #########################################################
+    # 写入并关闭文件
+
     out_file.close()
     print(f"wrote {filepath}")
 
-def version2_export(model, tokenizer_config, filepath, group_size=64):
+
+
+def export_quantized(model, tokenizer_config, filepath, group_size=64):
     """
     Export the model weights in Q8_0 into .bin file to be read from C.
     That is:
@@ -319,12 +336,74 @@ def version2_export(model, tokenizer_config, filepath, group_size=64):
     - all other tensors (the rmsnorm params) are kept and exported in fp32
     - quantization is done in groups of group_size to reduce the effects of any outliers
     """
-    version = 2
 
-    # let's first do some validation for this export type
-    while model.params.dim % group_size != 0:
+    cfg = model.config
+    out_file = open(filepath, 'wb')
+
+    #########################################################
+    # 写入文件头（固定长度256B）
+
+    print("Writing header...")
+
+    major_version = 2024
+    minor_version = 10
+
+    # 1) write magic, which will be two uint32 of "BD4SURLM" in ASCII
+    out_file.write(struct.pack('I', 0x42443453))
+    out_file.write(struct.pack('I', 0x55524c4d))
+    # --> 8 bytes
+
+    # 2) write version, which will be int
+    out_file.write(struct.pack('i', major_version))
+    out_file.write(struct.pack('i', minor_version))
+    # --> 16 bytes
+
+    # 3) write file type TODO to be defined
+    out_file.write(struct.pack('i', 0))  # Model type: Base model
+    out_file.write(struct.pack('i', 32)) # Config Length: 32 bytes
+    # --> 24 bytes
+
+    # 4) write the model config, which will be 8 ints (32 bytes)
+    cfg = model.config
+    is_shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
+    header = struct.pack(
+        "iiiiiiii",
+        cfg.block_size,
+        cfg.vocab_size,
+        cfg.n_layer,
+        cfg.n_embd,
+        cfg.n_head,
+        cfg.n_kv_head if cfg.n_kv_head is not None else cfg.n_head,
+        cfg.n_hidden if cfg.n_hidden is not None else model.layers[0].feed_forward.w1.weight.shape[0],
+        int(is_shared_classifier)
+    )
+    out_file.write(header)
+    # --> 56 bytes
+
+    # 5) write some other flags
+    out_file.write(struct.pack('i', 800))        # 量化类型 TODO 待定义
+    out_file.write(struct.pack('i', group_size)) # 量化参数(分组长度)
+
+    # 6) pad rest with zeros; 'tell' returns current pos
+    pad = 256 - out_file.tell()
+    assert pad >= 0
+    out_file.write(b'\0' * pad)
+
+
+    #########################################################
+    # 写入词表
+
+    print("Writing tokenizer...")
+    serialize_tokenizer(out_file, tokenizer_config)
+
+
+    #########################################################
+    # 校验量化参数
+
+    while cfg.n_embd % group_size != 0:
         group_size //= 2
         print(f"BACKOFF: reducing group size to {group_size} to fit hidden_dim")
+
     weights = [
         model.tok_embeddings.weight,
         *[layer.attention.wq.weight for layer in model.layers],
@@ -341,27 +420,12 @@ def version2_export(model, tokenizer_config, filepath, group_size=64):
     for w in weights:
         assert w.numel() % group_size == 0, f"weight {i} has numel {w.numel()}, not a multiple of group_size {group_size}"
 
-    # write
-    out_file = open(filepath, 'wb')
-    # first write out the header. the header will be 256 bytes
-    # 1) write magic, which will be uint32 of "ak42" in ASCII
-    out_file.write(struct.pack('I', 0x616b3432))
-    # 2) write version, which will be int
-    out_file.write(struct.pack('i', version))
-    # 3) write the params, which will be 7 ints
-    p = model.params
-    hidden_dim = model.layers[0].feed_forward.w1.weight.shape[0]
-    n_kv_heads = p.n_heads if p.n_kv_heads is None else p.n_kv_heads
-    header = struct.pack('iiiiiii', p.dim, hidden_dim, p.n_layers, p.n_heads,
-                                    n_kv_heads, p.vocab_size, p.max_seq_len)
-    out_file.write(header)
-    # 4) write some other flags
-    out_file.write(struct.pack('B', int(shared_classifier)))
-    out_file.write(struct.pack('i', group_size)) # group size used for quantization
-    pad = 256 - out_file.tell() # pad rest with zeros; tell returns current pos
-    assert pad >= 0
-    out_file.write(b'\0' * pad)
-    # now that the header is done, let's write out the model
+
+    #########################################################
+    # 量化并写入模型参数
+    # NOTE 注意：与非量化的参数排列顺序不同！
+
+    print("Quantizing and writing model parameters...")
 
     # first let's write out all the params that we are keeping in fp32: the norms
     for layer in model.layers: # attention norms
@@ -374,12 +438,9 @@ def version2_export(model, tokenizer_config, filepath, group_size=64):
     # note we skip classifier weights, which are shared with the embedding
     ew = []
     for i, w in enumerate(weights):
-        # quantize this weight
         q, s, err = quantize_q80(w, group_size)
-        # save the int8 weights to file
         serialize_int8(out_file, q) # save the tensor in int8
         serialize_fp32(out_file, s) # save scale factors
-        # logging
         ew.append((err, w.shape))
         print(f"{i+1}/{len(weights)} quantized {tuple(w.shape)} to Q8_0 with max error {err}")
 
@@ -387,7 +448,14 @@ def version2_export(model, tokenizer_config, filepath, group_size=64):
     ew.sort(reverse=True)
     print(f"max quantization group error across all weights: {ew[0][0]}")
 
-    # write to binary file
+    # 最后写入RoPE参数
+    serialize_fp32(out_file, model.freqs_cos)
+    serialize_fp32(out_file, model.freqs_sin)
+
+
+    #########################################################
+    # 写入并关闭文件
+
     out_file.close()
     print(f"wrote {filepath}")
 
@@ -427,22 +495,6 @@ def load_lora(lora_path):
 
 
 # -----------------------------------------------------------------------------
-# API entrypoint
-
-def model_export(model, tokenizer_config, filepath, version, dtype=torch.float32):
-    """
-    v1: float32 export
-    v2: int8 quantized Q8_0 export, similar to llama.cpp, in groups
-    """
-    if version == 1:
-        version1_export(model, tokenizer_config, filepath)
-    elif version == 2:
-        version2_export(model, tokenizer_config, filepath)
-    else:
-        raise ValueError(f"unknown version {version}")
-
-
-# -----------------------------------------------------------------------------
 # CLI entrypoint
 
 if __name__ == "__main__":
@@ -453,6 +505,7 @@ if __name__ == "__main__":
     parser.add_argument("--dtype", type=str, help="dtype of the model (fp16, fp32)", default="fp32")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--checkpoint", type=str, help="model checkpoint, .pt file")
+    group.add_argument("--quant", type=str, help="model checkpoint, .pt file for exporting quantized model bin file")
     group.add_argument("--lora", type=str, help="lora module, .pt file")
     args = parser.parse_args()
     dtype = {"fp16": torch.float16, "fp32": torch.float32}[args.dtype]
@@ -461,10 +514,16 @@ if __name__ == "__main__":
         lora_dict, lora_config, basemodel_config = load_lora(args.lora)
         if lora_dict is None:
             parser.error("Can't load input LoRA module!")
-        lora_export(lora_dict, lora_config, basemodel_config, args.filepath)
+        export_lora(lora_dict, lora_config, basemodel_config, args.filepath)
+
+    if args.quant:
+        model, tokenizer_config = load_checkpoint(args.quant)
+        if model is None or tokenizer_config is None:
+            parser.error("Can't load input model!")
+        export_quantized(model, tokenizer_config, args.filepath, group_size=256)
 
     if args.checkpoint:
         model, tokenizer_config = load_checkpoint(args.checkpoint)
         if model is None or tokenizer_config is None:
             parser.error("Can't load input model!")
-        model_export(model, tokenizer_config, args.filepath, args.version, args.dtype)
+        export_model(model, tokenizer_config, args.filepath)

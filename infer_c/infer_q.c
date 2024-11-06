@@ -21,10 +21,17 @@
 #define STATUS_STOPPED    (21)
 #define MAX_TOKEN_LENGTH  (17) // NOTE 虽然可以扫描词表得到该值，但是考虑到性能，设置为固定值（对于16384词表而言，至少17）
 
+// group size global for quantization of the weights
+int GS = 0;
 
 // ===============================================================================
 // 数据结构定义
 // ===============================================================================
+
+typedef struct {
+    int8_t* q;    // quantized values
+    float* s;     // scaling factors
+} QuantizedTensor;
 
 typedef struct {
     uint32_t block_size;
@@ -38,25 +45,25 @@ typedef struct {
 } LLM_Config;
 
 typedef struct {
-    float* token_embedding;    // (vocab_size, n_embd)
-    float* rms_norm_attn;      // (layer, n_embd)
+    QuantizedTensor *q_tokens;           // (vocab_size, n_embd)
+    float           *token_embedding;    // (vocab_size, n_embd) dequantized
+    float           *rms_norm_attn;      // (layer, n_embd)
+    float           *rms_norm_ffn;       // (layer, n_embd)
+    float           *rms_norm_final;     // (n_embd,)
 
-    float* wq; // (layer, n_embd, n_heads * head_size)
-    float* wk; // (layer, n_embd, n_kv_heads * head_size)
-    float* wv; // (layer, n_embd, n_kv_heads * head_size)
-    float* wo; // (layer, n_heads * head_size, n_embd)
+    QuantizedTensor *wq; // (layer, n_embd, n_heads * head_size)
+    QuantizedTensor *wk; // (layer, n_embd, n_kv_heads * head_size)
+    QuantizedTensor *wv; // (layer, n_embd, n_kv_heads * head_size)
+    QuantizedTensor *wo; // (layer, n_heads * head_size, n_embd)
 
-    float* rms_norm_ffn; // (layer, n_embd)
+    QuantizedTensor *w1; // (layer, n_hidden, n_embd)
+    QuantizedTensor *w2; // (layer, n_embd, n_hidden)
+    QuantizedTensor *w3; // (layer, n_hidden, n_embd)
 
-    float* w1; // (layer, n_hidden, n_embd)
-    float* w2; // (layer, n_embd, n_hidden)
-    float* w3; // (layer, n_hidden, n_embd)
+    QuantizedTensor *token_classifier;
 
-    float* rms_norm_final; // (n_embd,)
-
-    float* token_classifier;
-    float* freq_cis_real;
-    float* freq_cis_imag;
+    float           *freq_cis_real;
+    float           *freq_cis_imag;
 } LLM_Param;
 
 typedef struct {
@@ -65,6 +72,8 @@ typedef struct {
     float *xb2;     // an additional buffer just for convenience (n_embd,)
     float *hb;      // buffer for hidden dimension in the ffn (n_hidden,)
     float *hb2;     // buffer for hidden dimension in the ffn (n_hidden,)
+    QuantizedTensor xq; // quantized x (dim,)
+    QuantizedTensor hq; // quantized hb (hidden_dim,)
     float *q;       // query (n_embd,)
     float *k;       // key (kv_dim,)
     float *v;       // value (kv_dim,)
@@ -366,6 +375,61 @@ uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens) {
 
 
 // ===============================================================================
+// 量化和反量化相关
+// ===============================================================================
+
+void dequantize(QuantizedTensor *qx, float* x, int n) {
+    for (int i = 0; i < n; i++) {
+        x[i] = qx->q[i] * qx->s[i / GS];
+    }
+}
+
+void quantize(QuantizedTensor *qx, float* x, int n) {
+    int num_groups = n / GS;
+    float Q_MAX = 127.0f;
+
+    for (int group = 0; group < num_groups; group++) {
+
+        // find the max absolute value in the current group
+        float wmax = 0.0;
+        for (int i = 0; i < GS; i++) {
+            float val = fabs(x[group * GS + i]);
+            if (val > wmax) {
+                wmax = val;
+            }
+        }
+
+        // calculate and write the scaling factor
+        float scale = wmax / Q_MAX;
+        qx->s[group] = scale;
+
+        // calculate and write the quantized values
+        for (int i = 0; i < GS; i++) {
+            float quant_value = x[group * GS + i] / scale; // scale
+            int8_t quantized = (int8_t) round(quant_value); // round and clamp
+            qx->q[group * GS + i] = quantized;
+        }
+    }
+}
+
+/* initialize `n` x quantized tensor (with `size_each` elements), starting from memory pointed at *ptr */
+QuantizedTensor *init_quantized_tensors(void **ptr, int n, int size_each) {
+    void *p = *ptr;
+    QuantizedTensor *res = malloc(n * sizeof(QuantizedTensor));
+    for(int i=0; i<n; i++) {
+        /* map quantized int8 values*/
+        res[i].q = (int8_t*)p;
+        p = (int8_t*)p + size_each;
+        /* map scale factors */
+        res[i].s = (float*)p;
+        p = (float*)p + size_each / GS;
+    }
+    *ptr = p; // advance ptr to current position
+    return res;
+}
+
+
+// ===============================================================================
 // 模型文件解析·内存管理
 // ===============================================================================
 
@@ -376,14 +440,18 @@ void malloc_fwd_buffer(FwdBuffer *s, LLM_Config *llm_cfg) {
     s->xb2     = calloc(llm_cfg->n_embd, sizeof(float));
     s->hb      = calloc(llm_cfg->n_hidden, sizeof(float));
     s->hb2     = calloc(llm_cfg->n_hidden, sizeof(float));
+    s->xq      = (QuantizedTensor) { .q = calloc(llm_cfg->n_embd, sizeof(int8_t)), .s = calloc(llm_cfg->n_embd, sizeof(float)) };
+    s->hq      = (QuantizedTensor) { .q = calloc(llm_cfg->n_hidden, sizeof(int8_t)), .s = calloc(llm_cfg->n_hidden, sizeof(float)) };
     s->q       = calloc(llm_cfg->n_embd, sizeof(float));
+    s->k       = calloc(kv_dim, sizeof(float));
+    s->v       = calloc(kv_dim, sizeof(float));
     s->k_cache = calloc(llm_cfg->n_layer * llm_cfg->block_size * kv_dim, sizeof(float));
     s->v_cache = calloc(llm_cfg->n_layer * llm_cfg->block_size * kv_dim, sizeof(float));
     s->att     = calloc(llm_cfg->n_head * llm_cfg->block_size, sizeof(float));
     s->logits  = calloc(llm_cfg->vocab_size, sizeof(float));
     // ensure all mallocs went fine
     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q ||
-        !s->k_cache || !s->v_cache || !s->att || !s->logits) {
+        !s->k || !s->v || !s->k_cache || !s->v_cache || !s->att || !s->logits) {
         fprintf(stderr, "malloc failed!\n");
         exit(EXIT_FAILURE);
     }
@@ -415,7 +483,13 @@ void free_fwd_buffer(FwdBuffer* s) {
     free(s->xb2);
     free(s->hb);
     free(s->hb2);
+    free(s->xq.q);
+    free(s->xq.s);
+    free(s->hq.q);
+    free(s->hq.s);
     free(s->q);
+    free(s->k);
+    free(s->v);
     free(s->att);
     free(s->logits);
     free(s->k_cache);
@@ -424,25 +498,35 @@ void free_fwd_buffer(FwdBuffer* s) {
     // free(s->q1); free(s->k1); free(s->v1); free(s->o1);
 }
 
-void memory_map_params(LLM_Param *w, LLM_Config* p, float* ptr, int shared_weights) {
+void memory_map_params(LLM_Param *w, LLM_Config* p, void* ptr, int shared_weights) {
     int head_size = p->n_embd / p->n_head;
     // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
     unsigned long long n_layer = p->n_layer;
 
-    w->token_embedding = ptr;ptr += p->vocab_size * p->n_embd;
-    w->rms_norm_attn = ptr;  ptr += n_layer * p->n_embd;
-    w->wq = ptr;             ptr += n_layer * p->n_embd * (p->n_head * head_size);
-    w->wk = ptr;             ptr += n_layer * p->n_embd * (p->n_kv_head * head_size);
-    w->wv = ptr;             ptr += n_layer * p->n_embd * (p->n_kv_head * head_size);
-    w->wo = ptr;             ptr += n_layer * (p->n_head * head_size) * p->n_embd;
-    w->rms_norm_ffn = ptr;   ptr += n_layer * p->n_embd;
-    w->w1 = ptr;             ptr += n_layer * p->n_embd * p->n_hidden;
-    w->w2 = ptr;             ptr += n_layer * p->n_hidden * p->n_embd;
-    w->w3 = ptr;             ptr += n_layer * p->n_embd * p->n_hidden;
-    w->rms_norm_final = ptr; ptr += p->n_embd;
+    float* fptr = (float*) ptr;
+    w->rms_norm_attn = fptr;  fptr += n_layer * p->n_embd;
+    w->rms_norm_ffn = fptr;   fptr += n_layer * p->n_embd;
+    w->rms_norm_final = fptr; fptr += p->n_embd;
+
+    ptr = (void*)fptr;
+
+    w->q_tokens = init_quantized_tensors(&ptr, 1, p->vocab_size * p->n_embd);
+    w->token_embedding = malloc(p->vocab_size * p->n_embd * sizeof(float));
+    dequantize(w->q_tokens, w->token_embedding, p->vocab_size * p->n_embd);
+
+    w->wq = init_quantized_tensors(&ptr, n_layer, p->n_embd * (p->n_head * head_size));
+    w->wk = init_quantized_tensors(&ptr, n_layer, p->n_embd * (p->n_kv_head * head_size));
+    w->wv = init_quantized_tensors(&ptr, n_layer, p->n_embd * (p->n_kv_head * head_size));
+    w->wo = init_quantized_tensors(&ptr, n_layer, (p->n_head * head_size) * p->n_embd);
+
+    w->w1 = init_quantized_tensors(&ptr, n_layer, p->n_embd * p->n_hidden);
+    w->w2 = init_quantized_tensors(&ptr, n_layer, p->n_hidden * p->n_embd);
+    w->w3 = init_quantized_tensors(&ptr, n_layer, p->n_embd * p->n_hidden);
+
+    w->token_classifier = shared_weights ? w->q_tokens : init_quantized_tensors(&ptr, 1, p->n_embd * p->vocab_size);
+
     w->freq_cis_real = ptr;  ptr += p->block_size * head_size / 2;
     w->freq_cis_imag = ptr;  ptr += p->block_size * head_size / 2;
-    w->token_classifier = shared_weights ? w->token_embedding : ptr;
 }
 
 
@@ -483,6 +567,12 @@ void read_model_file(char* model_path, LLM *llm, Tokenizer *tk) {
     config->n_kv_head       = header[offset]; offset++;
     config->n_hidden        = header[offset]; offset++;
     config->is_shared_classifier = header[offset]; offset++;
+
+    uint32_t quant_config   = header[offset]; offset++;
+                       GS   = header[offset]; offset++;
+
+    printf("quant_config = %d\n", quant_config);
+    printf("GS = %d\n", GS);
 
     // 读取参数部分的长度字段
     // unsigned long long param_num = 0;
@@ -555,7 +645,7 @@ void read_model_file(char* model_path, LLM *llm, Tokenizer *tk) {
 
     // 解析模型参数
 
-    float* param_ptr = (float*)(tokenzier_ptr + tokenizer_field_bytes/sizeof(uint32_t));
+    void* param_ptr = tokenzier_ptr + tokenizer_field_bytes/sizeof(uint32_t);
     memory_map_params(params, config, param_ptr, config->is_shared_classifier);
 
 }
@@ -606,8 +696,8 @@ void read_lora_file(char* lora_path, LoRA *lora, LLM *llm) {
     }
 
     // 读取参数部分的长度字段
-    // unsigned long long param_num = 0;
-    // if(fread(&param_num, sizeof(unsigned long long), 1, file) != 1) { exit(EXIT_FAILURE); }
+    unsigned long long param_num = 0;
+    if(fread(&param_num, sizeof(unsigned long long), 1, file) != 1) { exit(EXIT_FAILURE); }
 
     // 读取LoRA模块参数到内存
 
@@ -733,16 +823,29 @@ void softmax(float* x, int size) {
     }
 }
 
-void matmul(float* xout, float* x, float* w, int n, int d) {
+void matmul(float* xout, QuantizedTensor *x, QuantizedTensor *w, int n, int d) {
     // W (d,n) @ x (n,) -> xout (d,)
     // by far the most amount of time is spent inside this little function
+    // inputs to this function are both quantized
+
     int i;
     #pragma omp parallel for private(i)
     for (i = 0; i < d; i++) {
+
         float val = 0.0f;
-        for (int j = 0; j < n; j++) {
-            val += w[i * n + j] * x[j];
+        int32_t ival = 0;
+        int in = i * n;
+
+        // do the matmul in groups of GS
+        int j;
+        for (j = 0; j <= n - GS; j += GS) {
+            for (int k = 0; k < GS; k++) {
+                ival += ((int32_t) x->q[j + k]) * ((int32_t) w->q[in + j + k]);
+            }
+            val += ((float) ival) * w->s[(in + j) / GS] * x->s[j / GS];
+            ival = 0;
         }
+
         xout[i] = val;
     }
 }
@@ -793,10 +896,11 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
         s->v = s->v_cache + loff + pos * kv_dim;
 
         // qkv matmuls for this position
-        matmul(s->q, s->xb, w->wq + l*n_embd*n_embd, n_embd, n_embd);
-        matmul(s->k, s->xb, w->wk + l*n_embd*kv_dim, n_embd, kv_dim);
-        matmul(s->v, s->xb, w->wv + l*n_embd*kv_dim, n_embd, kv_dim);
-
+        quantize(&s->xq, s->xb, n_embd);
+        matmul(s->q, &s->xq, w->wq + l, n_embd, n_embd);
+        matmul(s->k, &s->xq, w->wk + l, n_embd, kv_dim);
+        matmul(s->v, &s->xq, w->wv + l, n_embd, kv_dim);
+/*
         if(use_lora == 1) {
             matmul(s->q0, s->xb, a->wq_lora_a + l * lora_rank * n_embd, n_embd, lora_rank);
             matmul(s->k0, s->xb, a->wk_lora_a + l * lora_rank * n_embd, n_embd, lora_rank);
@@ -814,7 +918,7 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
             accum(s->k, s->k1, kv_dim);
             accum(s->v, s->v1, kv_dim);
         }
-
+*/
         // RoPE旋转位置编码实现方式1：使用模型提供的旋转系数
         for (int h = 0; h < cfg->n_head; h++) {
             float *q = s->q + h * head_dim;
@@ -899,8 +1003,9 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
         }
 
         // final matmul to get the output of the attention
-        matmul(s->xb2, s->xb, w->wo + l*n_embd*n_embd, n_embd, n_embd);
-
+        quantize(&s->xq, s->xb, n_embd);
+        matmul(s->xb2, &s->xq, w->wo + l, n_embd, n_embd);
+/*
         // 计算output的低秩分解分支，并将其累加到原来的输出上
         if(use_lora == 1) {
             matmul(s->o0, s->xb, a->wo_lora_a + l * lora_rank * n_embd, n_embd, lora_rank);
@@ -908,7 +1013,7 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
             scale(s->o1, ((float)lora_alpha / (float)lora_rank), n_embd);
             accum(s->xb2, s->o1, n_embd);
         }
-
+*/
         // residual connection back into x
         for (int i = 0; i < n_embd; i++) {
             x[i] += s->xb2[i];
@@ -919,8 +1024,9 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
 
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
-        matmul(s->hb, s->xb, w->w1 + l*n_embd*n_hidden, n_embd, n_hidden);
-        matmul(s->hb2, s->xb, w->w3 + l*n_embd*n_hidden, n_embd, n_hidden);
+        quantize(&s->xq, s->xb, n_embd);
+        matmul(s->hb, &s->xq, w->w1 + l, n_embd, n_hidden);
+        matmul(s->hb2, &s->xq, w->w3 + l, n_embd, n_hidden);
 
         // SwiGLU non-linearity
         for (int i = 0; i < n_hidden; i++) {
@@ -933,7 +1039,8 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
         }
 
         // final matmul to get the output of the ffn
-        matmul(s->xb, s->hb, w->w2 + l*n_embd*n_hidden, n_hidden, n_embd);
+        quantize(&s->hq, s->hb, n_hidden);
+        matmul(s->xb, &s->hq, w->w2 + l, n_hidden, n_embd);
 
         // residual connection
         for (int i = 0; i < n_embd; i++) {
@@ -945,7 +1052,8 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
     rmsnorm(x, x, w->rms_norm_final, n_embd);
 
     // classifier into logits
-    matmul(s->logits, x, w->token_classifier, cfg->n_embd, cfg->vocab_size);
+    quantize(&s->xq, x, cfg->n_embd);
+    matmul(s->logits, &s->xq, w->token_classifier, cfg->n_embd, cfg->vocab_size);
     return s->logits;
 }
 
@@ -1220,7 +1328,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    char *MODEL_PATH = "/home/bd4sur/ai/Nano/checkpoint/1-基础模型-99000.bin";
+    char *MODEL_PATH = "/home/bd4sur/ai/Nano/99000_q.bin";
     char *LORA_PATH  = "/home/bd4sur/ai/Nano/checkpoint/2-插件-猫娘.bin";
 
     LLM llm;
@@ -1228,14 +1336,14 @@ int main(int argc, char **argv) {
     load_llm(&llm, &tokenizer, MODEL_PATH);
 
     LoRA *p_lora = NULL;
-    p_lora = load_lora(&llm, LORA_PATH);
+    // p_lora = load_lora(&llm, LORA_PATH);
 
     last_output_length = 0;
     wchar_t *prompt = L"<|instruct_mark|>你是Nano，是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
     uint32_t token_count = 0;
     generate(&llm, p_lora, &tokenizer, prompt, 1.11, 1.1, 0.5, 0, 511, typewriter, report);
 
-    free_lora(&llm, p_lora);
+    // free_lora(&llm, p_lora);
 
     free_llm(&llm, &tokenizer);
 
