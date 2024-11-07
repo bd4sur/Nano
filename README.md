@@ -10,7 +10,7 @@
 - 用尽可能少的依赖，尤其不依赖🤗，实现一个具体而微的Transformer语言模型。
 - 完整实现数据处理、预训练、监督微调（含LoRA）、推理过程。暂不实现人类对齐。
 - 从头训练一个会说人话的50M级参数规模的语言模型。
-- 实现低功耗端侧设备（如嵌入式开发板、手机）上的推理，支持低秩适配插件（[在线体验](https://bd4sur.com/Nano/infer)）。
+- 实现低功耗端侧设备（如单板机、手机）上的推理，并支持LoRA插件（[在线体验](https://bd4sur.com/Nano/infer)）。
 - 研究模型训练的动力学、训/推加速、算法改进等问题。
 - 探索Transformer模型在自然语言处理以外的问题和模态上的潜能。
 - 建立起关于大语言模型的合理预期和感性经验，对大语言模型技术祛魅。
@@ -36,14 +36,14 @@
 
 [B站视频：自制大模型在浏览器上推理，现已支持LoRA插件](https://www.bilibili.com/video/BV1FqShYXENu)
 
-**浏览器在线体验**
+**基于浏览器的推理**
 
 - 访问[在线体验页面](https://bd4sur.com/Nano/infer)，或者用浏览器直接打开`Nano/infer/index.html`。
 - 按页面提示，下载基座模型、指令微调模型或LoRA插件（扩展名均为bin）。
 - 点击页面下方按钮，打开基座模型或指令微调模型。
 - 可切换文本续写模式和指令问答模式，默认后者。推荐使用指令微调后模型，在指令问答模式下体验。
 - 可随时加载或卸载LoRA插件。注意LoRA插件需要与某个预训练基座模型匹配。
-- 使用`export.py`将检查点文件转换为基座模型或者LoRA插件。
+- 使用`export.py`将检查点文件转换为基座模型或者LoRA插件，详见下文。
 - 所有推理过程均在本地浏览器内部进行。
 
 **纯C语言实现的推理**
@@ -51,9 +51,9 @@
 - 首先下载基座模型、指令微调模型或LoRA插件（扩展名均为bin）。
 - 将`Nano/infer_c/infer.c`中模型文件的路径修改为实际的绝对路径。
 - 在`Nano/infer_c`中执行`make`，编译得到可执行文件。默认启用OpenMP并行优化。
-- 执行`OMP_NUM_THREADS=<CPU线程数/2> ./infer`，开始推理。
+- 执行`OMP_NUM_THREADS=<CPU线程数/2> ./infer <模型文件路径.bin> -i "提示语"`，开始推理。
 
-**基于PyTorch的推理**
+**基于PyTorch框架的推理**
 
 首先下载pt扩展名的基座模型、指令微调模型或LoRA插件到`checkpoint`目录。
 
@@ -90,7 +90,7 @@ python -m pip install -r requirements.txt
 - 自行准备或者下载笔者收集的预训练数据集和指令微调数据集。
 - 解压得到`pretrain.txt`和`sft.jsonl`两个文件，移动到`dataset`目录下。
 - 将`data.py`中`PRETRAIN_DATASETS`和`SFT_DATASET`替换为刚刚下载的两个文件。
-- 执行`python data.py`，进行数据预处理。可能占用大量记忆和存储空间，请提前预留。
+- 执行`python data.py`，进行数据预处理。可能占用大量记忆体和存储空间，请提前预留。
 
 ### 3. 预训练和监督微调
 
@@ -100,73 +100,113 @@ python -m pip install -r requirements.txt
 - 若长时间训练，**强烈建议使用 [GNU Screen](https://www.gnu.org/software/screen/) 等终端切换工具，保证训练进程不被意外杀掉**。
 - 若使用多机分布式训练，请先提前配置好分布式环境，例如无密码ssh认证等。
 
-> 简单估算训练时间：对58M参数的语言模型(L=16, H=16, E=512, VocabSize=512)作预训练，按照[文献](https://arxiv.org/abs/2204.02311)中提供的算法进行计算，每个词元所需计算量约为403MFlop。如果使用10亿(即1B=1e9)词元的语料进行一轮(epoch)预训练，则总计算量约为403PFlop。实际使用单卡A100进行训练，**实测耗时约5200秒（1.44小时）**，对应运算速度为78TFlop/s，是A100标称BF16算力312TFlop/s的25%，也即MFU为25%左右。
+> 简单估算训练时间：对58M参数的GPT语言模型(L=16, H=16, E=512, VocabSize=512)作预训练，按照[文献](https://arxiv.org/abs/2204.02311)中提供的算法进行计算，每个词元所需计算量约为403MFlop。如果使用10亿(即1B=1e9)词元的语料进行一轮(epoch)预训练，则总计算量约为403PFlop。实际使用单卡A100进行训练，**实测耗时约5200秒（1.44小时）**，对应运算速度为78TFlop/s，是A100标称BF16算力312TFlop/s的25%，也即MFU为25%左右。
 
 **预训练**：
 
-将`model_config.json`中的模型参数设置为：
+在预训练之前，首先根据规模扩展法则确定模型的规模、性能和算力预算，再确定模型的结构参数。作为参考，笔者训练的56M模型的参数如下（在`config/model_config.json`中设置）：
 
-```json
-"block_size": 512,
-"vocab_size": 16384,
-"n_layer": 16,
-"n_head": 16,
-"n_embd": 512,
-"dropout": 0.0,
-"bias": false,
-"use_rope": true,
-"norm_eps": 1e-5,
-"is_causal": true
+|block_size|vocab_size|n_layer|n_embd|n_head|n_kv_head|n_hidden|norm_eps|
+|----|----|----|----|----|----|----|----|
+|512|16384|16|512|16|8|1408|1e-5|
+
+默认使用RoPE，预训练阶段Dropout为0。后文讲解这些参数的具体含义。一般而言，对于小规模模型，模型的长宽比例应适当，在保证宽度（n_embd）的前提下，尽量加大深度（n_layer）。
+
+单卡或者CPU训练，执行
+
+```bash
+python train.py -m config/model_config.json -t config/config_pretrain.json
 ```
 
-将`config_pretrain.json`中的`batch_size`设置为一个能够充分利用显存的值。对于 AGX Orin (64GB)，可设置为160。
+分布式数据并行（DDP）训练，在主节点上执行以下命令。注意设置卡数。
 
-单机单卡或者CPU训练，执行`bash start_pretrain.sh`。
-
-单机多卡或者多机多卡分布式数据并行（DDP）训练，在主节点上执行`bash start_pretrain_ddp.sh`，注意修改脚本中的卡数。
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+OMP_NUM_THREADS=1 \
+python -m torch.distributed.run --nproc_per_node 4 \
+train.py -m config/model_config.json -t config/config_pretrain.json
+```
 
 请注意：
 
-- 训练没有最大步数限制。因此，需要自行决定何时中止训练。
-- 建议训练至少10轮（epoch），最好不要少于1轮，保证模型“见过”全部语料。
+- 训练参数的设置与训练任务和算力资源相关。将`config/config_pretrain.json`中的`batch_size`设置为一个能够充分利用显存的值。对于 AGX Orin (64GB)，训练56M模型，可设置为160。
+- 训练没有最大步数限制。因此，需要自行决定何时中止训练。建议不少于1轮（epoch），保证模型“见过”全部语料。
 - 如果使用DDP训练，`gradient_accumulation_steps`应设置为显卡数的整数倍。
 - 支持保存模型检查点。训练过程中，程序将按照模型保存策略，保存模型训练检查点到`checkpoint`目录。保存策略主要有三点：一是根据训练配置文件中规定的间隔，每隔一定的步数保存一个检查点；二是只有当验证集损失下降才会保存检查点；三是每隔1000步定期保存一次检查点。优先级：策略3 > 策略2 > 策略1。
-- 支持断点续训。如果预训练意外中止，可以将`config_pretrain.json`中的`from_checkpoint`字段设为上一个检查点的相对路径`"checkpoint/xxx.pt"`，然后重新启动训练。
+- 支持手动断点续训。如果预训练意外中止，可以将`config/config_pretrain.json`中的`from_checkpoint`字段设为上一个检查点的相对路径`"checkpoint/xxx.pt"`，然后重新启动训练。
 - 支持训练过程监控。每次训练，程序都会记录一个新的训练日志文件`train_xxx.log`，位于仓库根目录。执行`python plot_loss.py -n train_xxx.log`，绘制训练集损失曲线。
 
-**监督微调（全参数）**：首先将`config_sft.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行`bash start_sft.sh`（或者`bash start_sft_ddp.sh`）。其余与预训练类似。需要指出的是，监督微调的训练轮数，应当根据实际情况灵活选择。一般来说，如果训练轮数过少，模型可能难以学习到指令跟随能力。而训练轮数过多，则可能遗忘预训练过程中获得的语言能力，以及在监督微调数据集上过拟合。
+**监督微调（全参数）**
 
-**监督微调（LoRA）**：TODO
+监督微调一般是在某个预训练模型的基础上作继续训练，因而首先将`config/config_sft.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行下列命令：
+
+```bash
+# 单卡或CPU
+python train.py -m config/model_config.json -t config/config_sft.json
+
+# DDP
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+OMP_NUM_THREADS=1 \
+python -m torch.distributed.run --nproc_per_node 4 \
+train.py -m config/model_config.json -t config/config_sft.json
+```
+
+请注意：
+
+- 业界一般认为SFT并不能为模型注入新知识，SFT只是在海量的预训练先验知识中，建立起Q和A之间的关联，同时通过预训练阶段没有见过的特殊词元，引导模型建立指令跟随能力。
+- SFT阶段一般启用Dropout，一般设置为0.1。
+- 监督微调的训练轮数，应当根据实际情况灵活选择。一般来说，如果训练轮数过少，模型可能难以学习到指令跟随能力。而训练轮数过多，则可能遗忘预训练过程中获得的语言能力，以及在监督微调数据集上过拟合。
+
+**监督微调（LoRA）**
+
+[低秩适配（Low-rank adapter）技术]()是一种参数高效微调（PEFT）技术，旨在降低大模型微调的计算量。LoRA模型可以视为基座模型的“外挂”，训练过程中，基座模型被冻结，仅优化外挂LoRA模块的参数；而在推理过程中，LoRA模块可以灵活地从基座模型上挂载或卸载，不干扰基座模型本身。Nano支持LoRA模型的训练、Torch推理和端侧推理。
+
+LoRA微调在任务性质、优化目标上与全参数微调没有区别，但是在训练产物和训练过程的动力学性质上与全参数微调有比较大的差异，例如：
+
+- LoRA的训练产物是LoRA模块，其规模一般仅有基座模型的10%以内，尺寸很小。
+- LoRA模块并不能独立使用，必须挂载到训练时所依附的基座模型上才能发挥作用。
+- LoRA训练的计算量并不小，因为训练过程中还是需要完整进行基座模型的前向传播，并且LoRA模型训练收敛较慢甚至不收敛，且对超参设置非常敏感，需要多次实验才能找到合适的超参。
+- LoRA微调，或者说一切监督微调，都不是解决领域能力注入的银弹。LoRA更适合作语言风格微调这类与考试和事实性信息注入关系不大的任务，例如模仿某人的说话风格等等。
+
+与全参数微调类似，先将`config/config_lora.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行下列命令：
+
+```bash
+python train.py -m config/model_config.json -t config/config_lora.json
+```
+
+### 4. 模型转换
+
+模型转换的目的，是将Torch训练出的模型检查点（扩展名为pt）转换为端侧推理所需的模型文件（扩展名为bin），以及对模型进行量化、压缩，以缩减模型尺寸，便于分发、部署、推理加速。
+
+```bash
+python export.py model.bin [--checkpoint | --quant | --lora] checkpoint.pt
+```
+
+模型文件的格式参考了[karpathy/llama2.c](https://github.com/karpathy/llama2.c)，但是有不同之处。描述如下：
+
+```
+model_file
+  ├─header             (u32*64=256B定长)
+  │   ├─magic_number_0 (u32=4B) = 0x42443453
+  │   ├─magic_number_1 (u32=4B) = 0x55524c4d
+  │   ├─major_version  (u32=4B)
+  │   ├─minor_version  (u32=4B)
+  │   ├─model_type     (u32=4B)
+  │   ├─config_length  (u32=4B)
+  │   ├─model_config   (u32*config_length)
+  │   ├─quant_config   (u32*x) 量化相关参数，详见`export.py`中的实现
+  │   ╰─padding        (u8填充到256B)
+  ├─tokenizer_config   (不定长) 其详细定义见`export.py`中的注释，LoRA模块无此字段
+  ╰─model_params       (不定长) 其详细定义见`export.py`中的实现
+```
 
 ## 技术要点简述
 
-![ ](doc/nano-llm.png)
-
-**数据预处理**
-
-- 包含文本分块、词元编码、数据集划分、随机打乱、SFT模板组装等处理步骤。
-- 在默认实现中，数据集划分实际上并未严格隔离训练集和验证集，验证集是从训练集中简单抽取5%得到。
-
-**词元编码**
-
-- Nano使用最简单的词元编码算法，也就是给语料中所有包含的独立Unicode字符，赋予唯一整数编号，作为词元编号。因此词元实际上就等于是Unicode字符。
-- 为了提升英文编码效率，在词表中手工添加了部分英文单词。
-- 仓库中同时包含了tiktoken提供的一个BPE词元编码算法，由于速度很慢，并不实用，因此仅作为文档，并不实际使用。
-- 之所以不使用额外的词元编码工具，例如tiktoken、Tokenizers等，一方面是为了最小化外部依赖，另一方面也是想探索不含（高效）词元编码的语言模型效果如何。
-
-**预训练数据格式**
-
-- 原则上讲，随便什么文本都可以，没有任何的格式要求。
-- 建议在独立文章的前后加上定界用的特殊词元`<|bos|>`和`<|eos|>`。这有助于避免训练时将不相关的文本混淆到同一个上下文窗口中（目前暂未实现）。
-- 但是要注意“垃圾进、垃圾出”喔！因此，如果想获得比较好的模型，就务必重视预训练数据的处理工作。
-
-**监督微调（指令微调）数据格式**
-
-- Nano指令模板格式：`<|InstructMark|>提示语<|ResponseMark|>答复<|eos|><|Padding|>*`，填充至上下文长度。
-- SFT数据集是JSONL格式，每一行是一轮QA，格式为`{"question": "提示语", "answer": "答复"}`，在数据预处理阶段转换为指令模板的格式。
-- Nano现在不支持多轮对话，因多轮对话在原理上与单轮对话的SFT没有本质区别。后续可能会支持。
-
 **Transformer模型结构**
+
+Nano基本上沿用了Llama的模型结构设计，如下图所示。
+
+![ ](doc/nano-llm.png)
 
 - 模型结构以Llama2和GPT（[karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)）为主要参考。
 - 使用RoPE位置编码（可选用训练位置编码）和前置RMSNorm。
@@ -193,7 +233,32 @@ python -m pip install -r requirements.txt
 |norm_eps|float|1e-5|均方根标准化层参数|
 |is_causal|bool|True|因果注意力？|
 
-**模型训练**
+**数据预处理**
+
+- 包含文本分块、词元编码、数据集划分、随机打乱、SFT模板组装等处理步骤。
+- 为了在有限的记忆体内打乱巨大的数据集，将巨大数据集文件划分为一定大小的块，暂存在磁盘上，在块内进行随机打乱，然后将打乱后的各块按照乱序重新拼接起来。这样做的好处是能够在记忆体有限的机器上处理TB级数据集，坏处是无法在整个数据集的范围内彻底随机打乱，实际训练过程中可以看到loss的周期性尖峰，可能与此有关。这是一种权衡。
+- 考虑到大规模预训练过程中验证集损失的意义并不是决定性的，同时为了充分利用宝贵的数据资源，在默认实现中，数据集划分实际上并未严格隔离训练集和验证集，训练集等于100%的数据集，验证集是从训练集中简单抽取5%得到。
+
+**词元编码**
+
+- Nano使用简单的启发式词元编码，也就是给某个字符集中的独立字符、以及某个人工指定的词表中的每个词条，赋予唯一整数编号，作为词元编号。词元编码的输入是unicode码点序列（而非BPE的字节序列），输出是词元编码的序列。
+- 为了提升英文编码效率，在词表中手工添加了部分英文单词。
+- 词元编码器采用Trie树+最大前向匹配算法进行分词。
+- 仓库中同时包含了tiktoken提供的一个BPE词元编码算法，由于速度很慢，并不实用，因此仅作为参照，并不实际使用。之所以不使用BPE等词元编码工具，例如tiktoken、Tokenizers等，一方面是为了最小化外部依赖，另一方面也是想探索不含（高效）词元编码的语言模型效果如何。
+
+**预训练数据格式**
+
+- 原则上讲，随便什么文本都可以，没有任何的格式要求。
+- 建议在独立文章的前后加上定界用的特殊词元`<|bos|>`和`<|eos|>`。这有助于避免训练时将不相关的文本混淆到同一个上下文窗口中（目前暂未实现）。
+- 但是要注意“垃圾进、垃圾出”喔！因此，如果想获得比较好的模型，就务必重视预训练数据的处理工作。
+
+**监督微调（指令微调）数据格式**
+
+- Nano指令模板格式：`<|InstructMark|>提示语<|ResponseMark|>答复<|eos|><|Padding|>*`，填充至上下文长度。
+- SFT数据集是JSONL格式，每一行是一轮QA，格式为`{"question": "提示语", "answer": "答复"}`，在数据预处理阶段转换为指令模板的格式。
+- Nano现在不支持多轮对话，因多轮对话在原理上与单轮对话的SFT没有本质区别。后续可能会支持。
+
+**模型训练参数**
 
 - `from_checkpoint: str`：从哪个检查点继续训练。其值是绝对路径。说明：**训练选项中涉及的所有路径，都是绝对路径**。
 - `save_checkpoint_to: str`：检查点保存位置的绝对路径。其值必须是目录。默认值为仓库根目录下`checkpoint/`目录。
@@ -221,11 +286,16 @@ python -m pip install -r requirements.txt
 - `dtype: str`：训练数据类型。可选值：`float32`单精度（E8M23）、`float16`半精度（E5M10）、`bfloat16`半精度（E8M7，默认）。一般而言，若使用Ampere及以上的GPU架构，建议使用BF16。
 - `use_amp: bool`：是否使用自动混合精度技术？仅当`dtype`设置为FP16和BF16时，才支持AMP。一般而言，启用AMP可节约显存占用，同时有助于训练稳定和收敛，也能够充分利用半精度运算所带来的速度增益。但是笔者实测发现，在 AGX Orin 和 Orin NX 等Ampere架构的GPU上，关闭AMP并使用BF16数据类型，性能更高，但代价是损失数值计算精度，可能带来模型难以收敛的风险。若AMP开启，默认同时启用TF32支持，以提升32位浮点数的运算性能。
 
-**分布式训练**
+**解码策略**
+
+- Nano采用基于温度的随机采样策略，结合top-p、top-k采样和重复惩罚机制，从语言模型输出的概率分布中按照概率随机地采样出词元序列。若温度为0，则退化为贪心采样，即每次都选概率最大的词元。
+- Nano同时提供序列到序列的（非自回归）推理，用于NLP以外的其他问题的研究。
+
+**基于DeepSpeed的分布式训练（仅备忘）**
 
 Nano支持基于DeepSpeed的零冗余优化（ZeRO）训练。以2节点4卡ZeRO3-Offload方式为例，在主节点上执行以下命令。可以修改`ds_config.json`以调整ZeRO设置。注意：根据[文档](https://www.deepspeed.ai/docs/config-json/)，`train_batch_size`必须等于`train_micro_batch_size_per_gpu` * `gradient_accumulation` * GPU数量。
 
-```
+```bash
 deepspeed train_deepspeed.py --deepspeed --deepspeed_config deepspeed_config.json --hostfile=hostfile.txt
 ```
 
@@ -238,22 +308,19 @@ deepspeed train_deepspeed.py --deepspeed --deepspeed_config deepspeed_config.jso
 
 推理阶段注意：如果是DeepSpeed训练的模型，则需要先执行`checkpoint/ds`目录中的转换脚本，将其转化为PyTorch能够接受的state_dict格式，再执行推理脚本：
 
-```
+```bash
 cd Nano/checkpoint/ds
 python zero_to_fp32.py . ckpt_ds.pt
 cd Nano
 python inference_ds.py
 ```
 
-**解码策略**
-
-- Nano采用基于温度的采样策略，结合top-k采样和重复惩罚机制，从语言模型中自回归地采样出词元序列。
-- Nano同时提供序列到序列的（非自回归）推理，用于NLP以外的其他问题的研究。
-
 ## 其他玩法
 
-```
-python problem.py [q|sort|palindrome]
+笔者选取若干个自然语言处理之外的问题，试图探索Transformer模型在各类（机器学习）问题上的潜力。
+
+```bash
+python problem.py
 ```
 
 **玩法1：丘成桐先生也答不出的Q问题**
@@ -306,7 +373,30 @@ Min = 0, Max = 1, Depth = 4, BlockSize = MaxLen = 64
 |-----|-----|-----|----|----|----|
 | 256 |32768|  8  | 64 |512 |True|
 
-### 训练性能
+### 性能
+
+**推理性能天梯图**
+
+|设备|设置|速度(TPS)|
+|----|----|----|
+|Jetson Orin NX (16GB)|JetPack6.0/GCC***|***|
+
+**训练性能天梯图**
+
+训练参数：BlockSize=512, VocabSize=2114, Layers=2, Heads=4, Embd=512, BatchSize=100（参数量13.67M，显存占用9045MiB）
+
+|设备|设置|速度|
+|----|----|----|
+|Jetson AGX Orin (64GB)|BF16, AMP, FlashAttn|30～32TFLOPS|
+|Jetson AGX Orin (64GB)|FP32, w/o AMP|8.7~8.9TFLOPS|
+|Jetson Orin NX (16GB)|BF16, AMP, FlashAttn|12～13TFLOPS|
+|Jetson Orin NX (16GB)|FP32, w/o AMP|3.0～3.3TFLOPS|
+|单卡P40 (24GB)|FP32, w/o AMP|6.4～6.5TFLOPS|
+|单卡P100 (16GB)|FP32, w/o AMP|--TFLOPS|
+|双路E5-2680v4 (64GB)|FP32, w/o AMP|--GFLOPS|
+|双路E5-2686v4 (128GB)|FP32, w/o AMP|550～650GFLOPS|
+|Ryzen 7 5800H (16GB)|FP32, w/o AMP|200～210GFLOPS|
+|Core i5-8259U (16GB)|FP32, w/o AMP|150～180GFLOPS|
 
 **2024-10-14 预训练**
 
@@ -331,23 +421,6 @@ Min = 0, Max = 1, Depth = 4, BlockSize = MaxLen = 64
 - 显存占用：6.0GB
 - 平均FLOPS：3.2TFLOPS
 - 平均吞吐率：8k tokens/s
-
-**过往实验数据**
-
-训练参数：BlockSize=512, VocabSize=2114, Layers=2, Heads=4, Embd=512, BatchSize=100（参数量13.67M，显存占用9045MiB）
-
-|设备|设置|速度|
-|----|----|----|
-|Jetson AGX Orin (64GB)|BF16, AMP, FlashAttn|30～32TFLOPS|
-|Jetson AGX Orin (64GB)|FP32, w/o AMP|8.7~8.9TFLOPS|
-|Jetson Orin NX (16GB)|BF16, AMP, FlashAttn|12～13TFLOPS|
-|Jetson Orin NX (16GB)|FP32, w/o AMP|3.0～3.3TFLOPS|
-|单卡P40 (24GB)|FP32, w/o AMP|6.4～6.5TFLOPS|
-|单卡P100 (16GB)|FP32, w/o AMP|--TFLOPS|
-|双路E5-2680v4 (64GB)|FP32, w/o AMP|--GFLOPS|
-|双路E5-2686v4 (128GB)|FP32, w/o AMP|550～650GFLOPS|
-|Ryzen 7 5800H (16GB)|FP32, w/o AMP|200～210GFLOPS|
-|Core i5-8259U (16GB)|FP32, w/o AMP|150～180GFLOPS|
 
 ### 算子`scaled_dot_product_attention`的性能
 

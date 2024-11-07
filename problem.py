@@ -8,6 +8,9 @@ from tokenizer import Tokenizer
 from model import GPT
 from train import TrainGPT
 
+###################################################
+# 注意：先将`model.py`中的 `USE_KV_CACHE` 设为 False
+
 # "q", "sort", "palindrome", "calculator"
 TASK_TAG = "calculator"
 
@@ -33,10 +36,11 @@ model_config = {
     "block_size": SEQ_LENGTH,
     "vocab_size": 100,
     "n_layer": 2,
-    "n_head": 2,
     "n_embd": 32,
+    "n_head": 2,
+    "n_kv_head": 2,
+    "n_hidden": 16,
     "dropout": 0.0,
-    "bias": False,
     "use_rope": False,
     "norm_eps": 1e-5,
     "is_causal": False,
@@ -60,7 +64,7 @@ train_config = {
     "learning_rate": 1e-3,
     "weight_decay": 1e-1,
     "beta1": 0.9,
-    "beta2": 0.99,
+    "beta2": 0.95,
 
     "decay_lr": True,
     "warmup_iters": int(MAX_STEPS * 0.3),
@@ -81,32 +85,40 @@ train_config = {
 if TASK_TAG == "q":
     model_config["block_size"] = SEQ_LENGTH + 2
     model_config["n_layer"]    = 2
-    model_config["n_head"]     = 2
     model_config["n_embd"]     = 64
+    model_config["n_head"]     = 2
+    model_config["n_kv_head"]  = 2
+    model_config["n_hidden"]   = 32
     model_config["use_rope"]   = True
     model_config["is_causal"]  = True
 
 elif TASK_TAG == "sort":
     model_config["block_size"] = SEQ_LENGTH
     model_config["n_layer"]    = 2
-    model_config["n_head"]     = 2
     model_config["n_embd"]     = 32
+    model_config["n_head"]     = 2
+    model_config["n_kv_head"]  = 2
+    model_config["n_hidden"]   = 16
     model_config["use_rope"]   = False
     model_config["is_causal"]  = False
 
 elif TASK_TAG == "palindrome":
     model_config["block_size"] = SEQ_LENGTH
     model_config["n_layer"]    = 2
-    model_config["n_head"]     = 2
     model_config["n_embd"]     = 32
+    model_config["n_head"]     = 2
+    model_config["n_kv_head"]  = 2
+    model_config["n_hidden"]   = 16
     model_config["use_rope"]   = False
     model_config["is_causal"]  = False
 
 elif TASK_TAG == "calculator":
     model_config["block_size"] = EXPR_MAX_LENGTH
-    model_config["n_layer"]    = 10
-    model_config["n_head"]     = 64
-    model_config["n_embd"]     = 1024
+    model_config["n_layer"]    = 4
+    model_config["n_embd"]     = 2048
+    model_config["n_head"]     = 256
+    model_config["n_kv_head"]  = 64
+    model_config["n_hidden"]   = 4096
     model_config["use_rope"]   = False
     model_config["is_causal"]  = True
 

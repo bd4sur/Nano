@@ -1119,6 +1119,8 @@ void generate(
     uint32_t top_k,
     uint32_t max_seq_len,
 
+    uint32_t random_seed,
+
     uint32_t (*on_running)(wchar_t*, uint32_t),
     uint32_t (*on_finished)(float, uint32_t)
 ) {
@@ -1129,7 +1131,7 @@ void generate(
     long t_0 = 0;
     long t_1 = 0;
 
-    Sampler *sampler = build_sampler(llm->config.vocab_size, repetition_penalty, temperature, top_p, top_k, (unsigned int)time(NULL));
+    Sampler *sampler = build_sampler(llm->config.vocab_size, repetition_penalty, temperature, top_p, top_k, random_seed);
 
     uint32_t *output_ids = (uint32_t *)calloc(max_seq_len + 1, sizeof(uint32_t));
     uint32_t output_count = 0;
@@ -1213,6 +1215,24 @@ void generate(
 }
 
 
+void show_usage() {
+    fprintf(stderr, "NanoLM - Inference Engine\n");
+    fprintf(stderr, "  BD4SUR 2024-11\n");
+    fprintf(stderr, "  forked from github.com/karpathy/llama2.c\n\n");
+    fprintf(stderr, "Usage:   run <model_path> [options]\n");
+    fprintf(stderr, "Example: run model.bin -n 256 -i \"我是复读机，你是什么？\"\n");
+    fprintf(stderr, "Options:\n");
+    fprintf(stderr, "  -l <string> path to LoRA module file, default null\n");
+    fprintf(stderr, "  -r <float>  repetition penalty in (0,inf], default 1.11\n");
+    fprintf(stderr, "  -t <float>  temperature in [0,inf], default 1.0\n");
+    fprintf(stderr, "  -p <float>  p value in top-p (nucleus) sampling in (0,1) default 0.5\n");
+    fprintf(stderr, "  -k <int>    k value in top-k sampling in [0, vocab_size) default 0 (no use)\n");
+    fprintf(stderr, "  -n <int>    number of steps to run for, default 512. 0 = max_seq_len\n");
+    fprintf(stderr, "  -s <int>    random seed, default time(NULL)\n");
+    fprintf(stderr, "  -i <string> prompt (in chat/instruct mode)\n");
+    fprintf(stderr, "  -g <string> prompt (in text generation mode)\n");
+    exit(EXIT_FAILURE);
+}
 
 int main(int argc, char **argv) {
     if(!setlocale(LC_CTYPE, "")) {
@@ -1221,22 +1241,73 @@ int main(int argc, char **argv) {
     }
 
     char *MODEL_PATH = "/home/bd4sur/ai/Nano/checkpoint/1-基础模型-99000.bin";
-    char *LORA_PATH  = "/home/bd4sur/ai/Nano/checkpoint/2-插件-猫娘.bin";
+    char *LORA_PATH  = NULL; // "/home/bd4sur/ai/Nano/checkpoint/2-插件-猫娘.bin";
+
+    float rep_pnty = 1.11;
+    float temperature = 1.1;
+    float top_p = 0.5;
+    int   top_k = 0;
+    int   max_seq_len = 512;
+    int   random_seed = (unsigned int)time(NULL);
+
+    wchar_t *prompt = L"<|instruct_mark|>你是Nano，是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
+
+    if(argc >= 2) { MODEL_PATH = argv[1]; } else { show_usage(); }
+    for(int i = 2; i < argc; i += 2) {
+        // do some basic validation
+        if (i + 1 >= argc) { show_usage(); } // must have arg after flag
+        if (argv[i][0] != '-') { show_usage(); } // must start with dash
+        if (strlen(argv[i]) != 2) { show_usage(); } // must be -x (one dash, one letter)
+        // read in the args
+        if      (argv[i][1] == 'l') { LORA_PATH = argv[i + 1]; }
+        else if (argv[i][1] == 'r') { rep_pnty = atof(argv[i + 1]); }
+        else if (argv[i][1] == 't') { temperature = atof(argv[i + 1]); }
+        else if (argv[i][1] == 'p') { top_p = atof(argv[i + 1]); }
+        else if (argv[i][1] == 'k') { top_k = atoi(argv[i + 1]); }
+        else if (argv[i][1] == 'n') { max_seq_len = atoi(argv[i + 1]); }
+        else if (argv[i][1] == 's') { random_seed = atoi(argv[i + 1]); }
+
+        else if (argv[i][1] == 'i') {
+            wchar_t *winput = (wchar_t *)calloc(max_seq_len, sizeof(wchar_t));
+            uint32_t plen = mbstowcs(winput, argv[i + 1], max_seq_len);
+            wchar_t *prompt_template = L"<|instruct_mark|><|response_mark|>";
+            wchar_t *wprompt = (wchar_t *)calloc(plen + 35, sizeof(wchar_t));
+            for(uint32_t i = 0; i < plen + 35; i++) {
+                if(i >= 0 && i < 17) {
+                    wprompt[i] = prompt_template[i];
+                }
+                else if(i >= 17 && i < plen+17) {
+                    wprompt[i] = winput[i-17];
+                }
+                else if(i >= plen+17) {
+                    wprompt[i] = prompt_template[i - plen];
+                }
+            }
+            free(winput);
+            prompt = wprompt;
+        }
+        else if (argv[i][1] == 'g') {
+            prompt = (wchar_t *)argv[i + 1];
+        }
+
+        else { show_usage(); }
+    }
+    printf("Prompt > %ls\n", prompt);
 
     LLM llm;
     Tokenizer tokenizer;
     load_llm(&llm, &tokenizer, MODEL_PATH);
 
     LoRA *p_lora = NULL;
-    p_lora = load_lora(&llm, LORA_PATH);
+    if(NULL != LORA_PATH) p_lora = load_lora(&llm, LORA_PATH);
 
     last_output_length = 0;
-    wchar_t *prompt = L"<|instruct_mark|>你是Nano，是<|BD4SUR|>开发的大模型，是一只电子鹦鹉<|response_mark|>";
     uint32_t token_count = 0;
-    generate(&llm, p_lora, &tokenizer, prompt, 1.11, 1.1, 0.5, 0, 511, typewriter, report);
+    generate(&llm, p_lora, &tokenizer, prompt, rep_pnty, temperature, top_p, top_k, max_seq_len, random_seed, typewriter, report);
 
-    free_lora(&llm, p_lora);
+    if(NULL != LORA_PATH) free_lora(&llm, p_lora);
 
+    free(prompt);
     free_llm(&llm, &tokenizer);
 
     return 0;
