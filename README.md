@@ -127,6 +127,8 @@ python -m torch.distributed.run --nproc_per_node 4 \
 train.py -m config/model_config.json -t config/config_pretrain.json
 ```
 
+如果从某个检查点开始继续预训练，需要带上参数`-c`。
+
 请注意：
 
 - 训练参数的设置与训练任务和算力资源相关。将`config/config_pretrain.json`中的`batch_size`设置为一个能够充分利用显存的值。对于 AGX Orin (64GB)，训练56M模型，可设置为160。

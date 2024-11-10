@@ -107,7 +107,7 @@ class DataLoader:
 
 class TrainGPT():
 
-    def __init__(self, model_config_dict, train_config_dict, max_steps=1e10, ckpt_filename=None):
+    def __init__(self, model_config_dict, train_config_dict, max_steps=1e10, ckpt_filename=None, is_continued_pretrain=False):
         self.train_config = TrainConfig(**(train_config_dict))
         self.model_config = ModelConfig(**(model_config_dict))
 
@@ -124,6 +124,8 @@ class TrainGPT():
 
         self.from_checkpoint = self.train_config.from_checkpoint
         self.from_checkpoint = self.from_checkpoint if len(self.from_checkpoint) > 0 else None
+
+        self.is_continued_pretrain = is_continued_pretrain # 用于控制训练开始前是否跳过已经训练过的数据集：如果是预训练，则跳过
 
         self.torch_dtype = {
             "float32": torch.float32,
@@ -347,7 +349,6 @@ class TrainGPT():
         self.load_data()
 
         best_val_loss = math.log(self.model_config.vocab_size) * 2
-        X, Y, mask = self.get_batch('train') # fetch the very first batch
 
         start_step = self.step_count
         self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Start training from iteration #{start_step}")
@@ -355,6 +356,13 @@ class TrainGPT():
         raw_model = self.model.module if self.is_ddp else self.model # unwrap DDP container if needed
 
         iter = start_step
+
+        # 继续训练：跳过前面训练过的数据集
+        if self.is_continued_pretrain:
+            for _ in range(iter - 1):
+                self.get_batch("train")
+
+        X, Y, mask = self.get_batch('train') # fetch the very first batch
 
         t0_total = (time.time_ns(), iter)
         t1_total = None
@@ -478,6 +486,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train Nano model.")
     parser.add_argument("-t", "--train-config", type=str, default=os.path.join(os.path.dirname(__file__), "config_pretrain.json"))
     parser.add_argument("-m", "--model-config", type=str, default=os.path.join(os.path.dirname(__file__), "model_config.json"))
+    parser.add_argument("-c", "--continue_pretrain", action="store_true")
     args = parser.parse_args()
 
     with open(args.model_config, "r", encoding="utf-8") as f:
@@ -485,7 +494,7 @@ def main():
     with open(args.train_config, "r", encoding="utf-8") as f:
         train_config_dict = json.load(f)
 
-    trainer = TrainGPT(model_config_dict, train_config_dict)
+    trainer = TrainGPT(model_config_dict, train_config_dict, args.continue_pretrain)
     trainer.start()
 
 if __name__ == "__main__":
