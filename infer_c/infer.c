@@ -120,6 +120,37 @@ typedef struct {
     LoRA_Param  params;
 } LoRA;
 
+typedef struct {
+    uint32_t vocab_size;
+    wchar_t *unicode_charset;
+    wchar_t **token_list;
+    struct Trie *vocab_trie;
+    struct Map *unicode_to_id_map;
+    struct Map *token_to_id_map;
+} Tokenizer;
+
+typedef struct {
+    float prob;
+    int index;
+} ProbIndex; // struct used when sorting probabilities during top-p sampling
+
+typedef struct {
+    int vocab_size;
+    ProbIndex* probindex; // buffer used in top-p sampling
+    float repetition_penalty;
+    float temperature;
+    float top_p;
+    uint32_t top_k;
+    unsigned long long rng_state;
+} Sampler;
+
+typedef struct {
+    LLM *llm;
+    LoRA *lora;
+    Tokenizer *tokenizer;
+    Sampler *sampler;
+} Nano_Context;
+
 // ===============================================================================
 // 词元编解码、分词器（基于Trie树）
 // ===============================================================================
@@ -288,15 +319,6 @@ int match_token(struct Trie *trie_node, uint32_t *pattern, uint32_t pattern_len,
 
 // 分词器和词元编解码
 
-typedef struct {
-    uint32_t vocab_size;
-    wchar_t *unicode_charset;
-    wchar_t **token_list;
-    struct Trie *vocab_trie;
-    struct Map *unicode_to_id_map;
-    struct Map *token_to_id_map;
-} Tokenizer;
-
 void free_tokenizer(Tokenizer *tk) {
     for(uint32_t i = 0; i < tk->vocab_size; i++) {
         if(NULL != tk->token_list[i])
@@ -355,12 +377,12 @@ wchar_t *decode(Tokenizer *t, uint32_t *ids, uint32_t len) {
     return out;
 }
 
-uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens) {
+uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens_ptr) {
     uint32_t *input_ids = string_to_ids(t->unicode_to_id_map, text);
     uint32_t *optput_ids = (uint32_t *)calloc(wcslen(text), sizeof(uint32_t *));
     uint32_t token_count = tokenize(t->vocab_trie, optput_ids, input_ids, wcslen(text), MAX_TOKEN_LENGTH);
     free(input_ids);
-    *n_tokens = token_count;
+    *n_tokens_ptr = token_count;
     return optput_ids;
 }
 
@@ -446,8 +468,8 @@ void memory_map_params(LLM_Param *w, LLM_Config* p, float* ptr, int shared_weigh
 }
 
 
-void read_model_file(char* model_path, LLM *llm, Tokenizer *tk) {
-    
+void read_model_file_mmap(char* model_path, LLM *llm, Tokenizer *tk) {
+
     LLM_Config *config = &(llm->config);
     LLM_Param *params = &(llm->params);
     int *fd = &(llm->fd);
@@ -560,6 +582,106 @@ void read_model_file(char* model_path, LLM *llm, Tokenizer *tk) {
 
 }
 
+
+
+
+
+
+void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
+
+    LLM_Config *config = &(llm->config);
+    LLM_Param *params = &(llm->params);
+
+    // 读取文件头
+    const uint32_t header_byte_length = 256;
+    const uint32_t header_uint_length = header_byte_length / sizeof(uint32_t);
+    uint32_t *header = (uint32_t *)buffer;
+
+    uint32_t offset = 0;
+
+    uint32_t magic_number_0 = header[offset]; offset++;
+    uint32_t magic_number_1 = header[offset]; offset++;
+
+    uint32_t major_version  = header[offset]; offset++;
+    uint32_t minor_version  = header[offset]; offset++;
+
+    uint32_t model_type     = header[offset]; offset++;
+    uint32_t config_length  = header[offset]; offset++;
+
+    config->block_size      = header[offset]; offset++;
+    config->vocab_size      = header[offset]; offset++;
+    config->n_layer         = header[offset]; offset++;
+    config->n_embd          = header[offset]; offset++;
+    config->n_head          = header[offset]; offset++;
+    config->n_kv_head       = header[offset]; offset++;
+    config->n_hidden        = header[offset]; offset++;
+    config->is_shared_classifier = header[offset]; offset++;
+
+    // 解析词表，同时构建trie树和hashmap
+
+    uint32_t *tokenzier_ptr = (uint32_t *)(buffer) + (header_byte_length / sizeof(uint32_t));
+    uint32_t tokenizer_field_bytes = *tokenzier_ptr;
+    uint32_t *vocab_ptr = tokenzier_ptr + 1;
+
+    uint32_t byte_count = 0;
+    uint32_t char_count = 0;
+
+    tk->vocab_size = *vocab_ptr; vocab_ptr++;
+    printf("Vocab size = %d\n", tk->vocab_size);
+
+    tk->token_list        = (wchar_t **)calloc(tk->vocab_size, sizeof(wchar_t *));
+    tk->unicode_charset   = (wchar_t  *)calloc(tk->vocab_size, sizeof(wchar_t));
+    tk->unicode_to_id_map = new_map(tk->vocab_size);
+    tk->token_to_id_map   = new_map(tk->vocab_size);
+    tk->vocab_trie        = new_trie(tk->vocab_size, 0);
+
+    while(byte_count < tokenizer_field_bytes - 8) { // 不含tokenizer_field_bytes和vocab_size字段的8个字节
+        uint32_t token_header = *vocab_ptr; vocab_ptr++; byte_count += sizeof(uint32_t);
+        uint32_t token_id     = *vocab_ptr; vocab_ptr++; byte_count += sizeof(uint32_t);
+
+        // NOTE Little endian 小端序！如果按照uint32解析，顺序是 MSB(reserved_1 reserved_0 is_special token_length)LSB
+        uint32_t reserved_1   = (token_header & 0xff000000) >> 24;
+        uint32_t reserved_0   = (token_header & 0x00ff0000) >> 16;
+        uint32_t is_special   = (token_header & 0x0000ff00) >> 8;
+        uint32_t token_length = (token_header & 0x000000ff);
+
+        wchar_t *token = (wchar_t *)calloc(token_length+1, sizeof(wchar_t));
+        // 如果是单个字符，则加入unicode_charset
+        if(token_length == 1) {
+            tk->unicode_charset[char_count] = *vocab_ptr;
+            map_set(tk->unicode_to_id_map, *vocab_ptr, token_id);
+            char_count++;
+        }
+        for(uint32_t i = 0; i < token_length; i++) {
+            token[i] = *vocab_ptr; vocab_ptr++; byte_count += sizeof(uint32_t);
+        }
+        token[token_length] = 0;
+        tk->token_list[token_id] = token;
+    }
+
+    // 构建trie树
+    for(uint32_t i = 0; i < tk->vocab_size; i++) {
+        wchar_t *utoken = tk->token_list[i];
+        uint32_t len = wcslen(utoken);
+        if(len > 1) {
+            uint32_t *ids = string_to_ids(tk->unicode_to_id_map, utoken);
+            add_token(tk->vocab_trie, ids, len, i);
+        }
+    }
+
+
+    // 解析模型参数
+
+    float* param_ptr = (float*)(tokenzier_ptr + tokenizer_field_bytes/sizeof(uint32_t));
+    memory_map_params(params, config, param_ptr, config->is_shared_classifier);
+    printf("Finished\n");
+}
+
+
+
+
+
+
 void read_lora_file(char* lora_path, LoRA *lora, LLM *llm) {
     LoRA_Config *lora_cfg    = &(lora->config);
     LoRA_Param  *lora_params = &(lora->params);
@@ -645,7 +767,33 @@ void read_lora_file(char* lora_path, LoRA *lora, LLM *llm) {
 }
 
 void load_llm(LLM *llm, Tokenizer *tk, char *model_path) {
-    read_model_file(model_path, llm, tk);
+
+#ifdef NANO_USE_MMAP
+    read_model_file_mmap(model_path, llm, tk);
+#else
+    FILE *file = fopen(model_path, "rb");
+    if (!file) { fprintf(stderr, "Couldn't open LoRA module file %s\n", model_path); exit(EXIT_FAILURE); }
+
+    // 获取文件大小
+    fseek(file, 0, SEEK_END);
+    long long unsigned int file_size = ftell(file);
+    rewind(file);
+
+    char *buffer = (char *)malloc(file_size + 1);
+    if (!buffer)  { fprintf(stderr, "malloc failed.\n"); exit(EXIT_FAILURE); }
+
+    if(fread(buffer, sizeof(char), file_size, file) != file_size) { exit(EXIT_FAILURE); }
+
+    parse_model_file(buffer, llm, tk);
+
+    fclose(file);
+#endif
+
+    malloc_fwd_buffer(&llm->state, &llm->config);
+}
+
+void load_llm_from_buffer(LLM *llm, Tokenizer *tk, char *buffer) {
+    parse_model_file(buffer, llm, tk);
     malloc_fwd_buffer(&llm->state, &llm->config);
 }
 
@@ -954,22 +1102,6 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
 // 采样策略
 // ===============================================================================
 
-
-typedef struct {
-    float prob;
-    int index;
-} ProbIndex; // struct used when sorting probabilities during top-p sampling
-
-typedef struct {
-    int vocab_size;
-    ProbIndex* probindex; // buffer used in top-p sampling
-    float repetition_penalty;
-    float temperature;
-    float top_p;
-    uint32_t top_k;
-    unsigned long long rng_state;
-} Sampler;
-
 // 贪心采样：返回概率最大的下标
 int sample_argmax(float* probabilities, int n) {
     // return the index that has the highest probability
@@ -1106,24 +1238,81 @@ uint32_t report(float tps, uint32_t status) {
 // 自回归文本生成
 // ===============================================================================
 
+uint32_t generate_next_token(
+    Nano_Context ctx,
+    uint32_t *output_ids,
+    uint32_t pos,
+    int is_prefilling
+) {
+
+    LLM *llm = ctx.llm;
+    LoRA *lora = ctx.lora;
+    Tokenizer *tokenizer = ctx.tokenizer;
+    Sampler *sampler = ctx.sampler;
+
+    uint32_t next_token = output_ids[pos];
+
+    float* logits = llm_forward(next_token, pos, llm, lora);
+
+    // Pre-fill: if we are still processing the input prompt, force the next prompt token
+    if (is_prefilling == 1) {
+        next_token = output_ids[pos + 1];
+        return next_token;
+    }
+    // Auto-regressive Decode
+    else {
+        // 复读惩罚：对过往出现过的词元施加惩罚，词元出现得越多，概率越低: ref arxiv:1909.05858
+        uint32_t *tokenset = (uint32_t *)calloc(sampler->vocab_size, sizeof(uint32_t));
+        for(uint32_t i = 0; i < pos; i++) {
+            tokenset[output_ids[i]] = 1;  // 1表示output_ids中出现了这个token
+        }
+        for(uint32_t id = 0; id < sampler->vocab_size; id++) {
+            if(tokenset[id] == 1) {
+                logits[id] /= sampler->repetition_penalty;
+            }
+        }
+        free(tokenset);
+
+        // 温度采样：当温度设为0时，退化为贪心采样
+        if (sampler->temperature == 0.0f) {
+            next_token = sample_argmax(logits, sampler->vocab_size);
+        }
+        else {
+            for(uint32_t q = 0; q < sampler->vocab_size; q++) {
+                logits[q] /= sampler->temperature;
+            }
+
+            softmax(logits, sampler->vocab_size);
+
+            // flip a (float) coin (this is our source of entropy for sampling)
+            float coin = random_f32(&sampler->rng_state);
+
+            if (sampler->top_p > 0 || sampler->top_p < 1) {
+                next_token = sample_top_p(logits, sampler->vocab_size, sampler->top_p, sampler->probindex, coin);
+            }
+            else {
+                next_token = sample_multinomial(logits, sampler->vocab_size, coin);
+            }
+        }
+    }
+
+    return next_token;
+}
+
+
 void generate(
-    LLM *llm,
-    LoRA *lora,
-    Tokenizer *tokenizer,
+    Nano_Context ctx,
 
     wchar_t *prompt,
 
-    float repetition_penalty,
-    float temperature,
-    float top_p,
-    uint32_t top_k,
     uint32_t max_seq_len,
-
-    uint32_t random_seed,
 
     uint32_t (*on_running)(wchar_t*, uint32_t),
     uint32_t (*on_finished)(float, uint32_t)
 ) {
+
+    Tokenizer *tokenizer = ctx.tokenizer;
+    Sampler *sampler = ctx.sampler;
 
     wchar_t *empty_prompt = L"";
     if (prompt == NULL) { prompt = empty_prompt; }
@@ -1131,17 +1320,14 @@ void generate(
     long t_0 = 0;
     long t_1 = 0;
 
-    Sampler *sampler = build_sampler(llm->config.vocab_size, repetition_penalty, temperature, top_p, top_k, random_seed);
-
     uint32_t *output_ids = (uint32_t *)calloc(max_seq_len + 1, sizeof(uint32_t));
     uint32_t output_count = 0;
 
     uint32_t num_prompt_tokens = 0;
     uint32_t *prompt_tokens = encode(tokenizer, prompt, &num_prompt_tokens);
 
-    if (num_prompt_tokens < 1) {
-        fprintf(stderr, "something is wrong, expected at least 1 prompt token\n");
-        exit(EXIT_FAILURE);
+    for(int i = 0; i < num_prompt_tokens; i++) {
+        output_ids[i] = prompt_tokens[i];
     }
 
     uint32_t next_token = prompt_tokens[0]; // kick off with the first token in the prompt
@@ -1149,55 +1335,20 @@ void generate(
 
     while (pos < max_seq_len) {
 
-        float* logits = llm_forward(next_token, pos, llm, lora);
+        int is_prefilling = (pos < num_prompt_tokens - 1) ? 1 : 0;
 
-        // Pre-fill: if we are still processing the input prompt, force the next prompt token
-        if (pos < num_prompt_tokens - 1) {
-            next_token = prompt_tokens[pos + 1];
-            on_running(NULL, STATUS_PREFILLING);
-        }
-        // Auto-regressive Decode
-        else {
-            // 复读惩罚：对过往出现过的词元施加惩罚，词元出现得越多，概率越低: ref arxiv:1909.05858
-            uint32_t *tokenset = (uint32_t *)calloc(sampler->vocab_size, sizeof(uint32_t));
-            for(uint32_t i = 0; i < output_count; i++) {
-                tokenset[output_ids[i]] = 1;  // 1表示output_ids中出现了这个token
-            }
-            for(uint32_t id = 0; id < sampler->vocab_size; id++) {
-                if(tokenset[id] == 1) {
-                    logits[id] /= sampler->repetition_penalty;
-                }
-            }
-            free(tokenset);
+        next_token = generate_next_token(ctx, output_ids, pos, is_prefilling);
 
-            // 温度采样：当温度设为0时，退化为贪心采样
-            if (sampler->temperature == 0.0f) {
-                next_token = sample_argmax(logits, sampler->vocab_size);
-            }
-            else {
-                for(uint32_t q = 0; q < sampler->vocab_size; q++) {
-                    logits[q] /= sampler->temperature;
-                }
-
-                softmax(logits, sampler->vocab_size);
-
-                // flip a (float) coin (this is our source of entropy for sampling)
-                float coin = random_f32(&sampler->rng_state);
-
-                if (sampler->top_p > 0 || sampler->top_p < 1) {
-                    next_token = sample_top_p(logits, sampler->vocab_size, sampler->top_p, sampler->probindex, coin);
-                }
-                else {
-                    next_token = sample_multinomial(logits, sampler->vocab_size, coin);
-                }
-            }
-
-            output_ids[output_count++] = next_token;
-
-            wchar_t *output_text = decode(tokenizer, output_ids, output_count);
+        if(is_prefilling == 0) {
+            output_ids[num_prompt_tokens + output_count++] = next_token;
+            wchar_t *output_text = decode(tokenizer, output_ids + num_prompt_tokens, output_count);
             on_running(output_text, STATUS_DECODING);
             free(output_text);
         }
+        else if(is_prefilling == 0) {
+            on_running(NULL, STATUS_PREFILLING);
+        }
+
         pos++;
 
         if(next_token == 0 || next_token == 3) break;
@@ -1210,8 +1361,8 @@ void generate(
     on_finished(tps, STATUS_STOPPED);
 
     printf("\n");
+    free(output_ids);
     free(prompt_tokens);
-    free_sampler(sampler);
 }
 
 
@@ -1294,21 +1445,92 @@ int main(int argc, char **argv) {
     }
     printf("Prompt > %ls\n", prompt);
 
-    LLM llm;
-    Tokenizer tokenizer;
-    load_llm(&llm, &tokenizer, MODEL_PATH);
 
-    LoRA *p_lora = NULL;
-    if(NULL != LORA_PATH) p_lora = load_lora(&llm, LORA_PATH);
+    Nano_Context ctx;
+
+    ctx.llm = (LLM *)calloc(1, (sizeof(LLM)));
+    ctx.lora = NULL; // (LoRA *)calloc(1, (sizeof(LoRA *)));
+    ctx.tokenizer = (Tokenizer *)calloc(1, (sizeof(Tokenizer)));
+
+    load_llm(ctx.llm, ctx.tokenizer, MODEL_PATH);
+
+    ctx.sampler = build_sampler(ctx.llm->config.vocab_size, rep_pnty, temperature, top_p, top_k, random_seed);
+
+    if(NULL != LORA_PATH) ctx.lora = load_lora(ctx.llm, LORA_PATH);
 
     last_output_length = 0;
-    uint32_t token_count = 0;
-    generate(&llm, p_lora, &tokenizer, prompt, rep_pnty, temperature, top_p, top_k, max_seq_len, random_seed, typewriter, report);
+    generate(ctx, prompt, max_seq_len, typewriter, report);
 
-    if(NULL != LORA_PATH) free_lora(&llm, p_lora);
+    if(NULL != LORA_PATH) free_lora(ctx.llm, ctx.lora);
 
     free(prompt);
-    free_llm(&llm, &tokenizer);
+    free_llm(ctx.llm, ctx.tokenizer);
+    free_sampler(ctx.sampler);
 
     return 0;
 }
+
+
+//////////////////////////////////////////////////////////////////////////////
+
+
+static Nano_Context NANO_CTX;
+
+LLM *test_wasm() {
+    return NANO_CTX.llm;
+}
+
+int init_nano(char *buffer) {
+    if(!setlocale(LC_CTYPE, "")) {
+        fprintf(stderr, "Can't set the specified locale! Check LANG, LC_CTYPE, LC_ALL.\n");
+        return -1;
+    }
+
+    float rep_pnty = 1.11;
+    float temperature = 1.1;
+    float top_p = 0.5;
+    int   top_k = 0;
+    int   max_seq_len = 512;
+    int   random_seed = 0; // (unsigned int)time(NULL);
+
+    char *LORA_PATH  = NULL;
+
+    NANO_CTX.llm = (LLM *)calloc(1, (sizeof(LLM)));
+    NANO_CTX.lora = NULL; // (LoRA *)calloc(1, (sizeof(LoRA *)));
+    NANO_CTX.tokenizer = (Tokenizer *)calloc(1, (sizeof(Tokenizer)));
+
+    printf("wasm\n");
+    load_llm_from_buffer(NANO_CTX.llm, NANO_CTX.tokenizer, buffer);
+
+
+    // NANO_CTX.sampler = build_sampler(NANO_CTX.llm->config.vocab_size, rep_pnty, temperature, top_p, top_k, random_seed);
+
+    // if(NULL != LORA_PATH) NANO_CTX.lora = load_lora(NANO_CTX.llm, LORA_PATH);
+
+    // generate(NANO_CTX, prompt, max_seq_len, typewriter, report);
+
+    return 0;
+}
+
+uint32_t generate_next_token_external(uint32_t *ids, uint32_t pos, int is_prefilling) {
+    return generate_next_token(NANO_CTX, ids, pos, is_prefilling);
+}
+
+uint32_t *encode_external(wchar_t *text, uint32_t *n_tokens_ptr) {
+    return encode(NANO_CTX.tokenizer, text, n_tokens_ptr);
+}
+
+wchar_t *decode_external(uint32_t *ids, uint32_t len) {
+    return decode(NANO_CTX.tokenizer, ids, len);
+}
+
+int close_nano() {
+    free_llm(NANO_CTX.llm, NANO_CTX.tokenizer);
+    free_sampler(NANO_CTX.sampler);
+
+    char *LORA_PATH  = NULL;
+    if(NULL != LORA_PATH) free_lora(NANO_CTX.llm, NANO_CTX.lora);
+
+    return 0;
+}
+
