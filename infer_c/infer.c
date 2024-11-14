@@ -7,11 +7,17 @@
 #include <fcntl.h>
 #include <locale.h>
 #include <wchar.h>
+
+// 是否使用mmap？
+// #define NANO_USE_MMAP
+
 #if defined _WIN32
     #include "win.h"
 #else
     #include <unistd.h>
-    #include <sys/mman.h>
+    #if defined NANO_USE_MMAP
+        #include <sys/mman.h>
+    #endif
 #endif
 
 #define uint32_t unsigned int
@@ -467,7 +473,7 @@ void memory_map_params(LLM_Param *w, LLM_Config* p, float* ptr, int shared_weigh
     w->token_classifier = shared_weights ? w->token_embedding : ptr;
 }
 
-
+#ifdef NANO_USE_MMAP
 void read_model_file_mmap(char* model_path, LLM *llm, Tokenizer *tk) {
 
     LLM_Config *config = &(llm->config);
@@ -581,7 +587,7 @@ void read_model_file_mmap(char* model_path, LLM *llm, Tokenizer *tk) {
     memory_map_params(params, config, param_ptr, config->is_shared_classifier);
 
 }
-
+#endif
 
 
 
@@ -669,12 +675,10 @@ void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
         }
     }
 
-
     // 解析模型参数
 
     float* param_ptr = (float*)(tokenzier_ptr + tokenizer_field_bytes/sizeof(uint32_t));
     memory_map_params(params, config, param_ptr, config->is_shared_classifier);
-    printf("Finished\n");
 }
 
 
@@ -784,6 +788,8 @@ void load_llm(LLM *llm, Tokenizer *tk, char *model_path) {
 
     if(fread(buffer, sizeof(char), file_size, file) != file_size) { exit(EXIT_FAILURE); }
 
+    llm->data = (float*)buffer;
+
     parse_model_file(buffer, llm, tk);
 
     fclose(file);
@@ -797,13 +803,16 @@ void load_llm_from_buffer(LLM *llm, Tokenizer *tk, char *buffer) {
     malloc_fwd_buffer(&llm->state, &llm->config);
 }
 
-void free_llm(LLM* t, Tokenizer *tk) {
+void free_llm(LLM* llm, Tokenizer *tk) {
+#ifdef NANO_USE_MMAP
     // close the memory mapping
     if (t->data != MAP_FAILED) { munmap(t->data, t->file_size); }
     if (t->fd != -1) { close(t->fd); }
-
+#else
+    free(llm->data);
+#endif
     free_tokenizer(tk);
-    free_fwd_buffer(&t->state);
+    free_fwd_buffer(&llm->state);
 }
 
 LoRA *load_lora(LLM *llm, char *lora_path) {
@@ -1385,6 +1394,26 @@ void show_usage() {
     exit(EXIT_FAILURE);
 }
 
+wchar_t *apply_template_to_str(char *str, uint32_t max_seq_len) {
+    wchar_t *winput = (wchar_t *)calloc(max_seq_len, sizeof(wchar_t));
+    uint32_t plen = mbstowcs(winput, str, max_seq_len);
+    wchar_t *prompt_template = L"<|instruct_mark|><|response_mark|>";
+    wchar_t *wprompt = (wchar_t *)calloc(plen + 35, sizeof(wchar_t));
+    for(uint32_t i = 0; i < plen + 35; i++) {
+        if(i >= 0 && i < 17) {
+            wprompt[i] = prompt_template[i];
+        }
+        else if(i >= 17 && i < plen+17) {
+            wprompt[i] = winput[i-17];
+        }
+        else if(i >= plen+17) {
+            wprompt[i] = prompt_template[i - plen];
+        }
+    }
+    free(winput);
+    return wprompt;
+}
+
 int main(int argc, char **argv) {
     if(!setlocale(LC_CTYPE, "")) {
         fprintf(stderr, "Can't set the specified locale! Check LANG, LC_CTYPE, LC_ALL.\n");
@@ -1419,23 +1448,7 @@ int main(int argc, char **argv) {
         else if (argv[i][1] == 's') { random_seed = atoi(argv[i + 1]); }
 
         else if (argv[i][1] == 'i') {
-            wchar_t *winput = (wchar_t *)calloc(max_seq_len, sizeof(wchar_t));
-            uint32_t plen = mbstowcs(winput, argv[i + 1], max_seq_len);
-            wchar_t *prompt_template = L"<|instruct_mark|><|response_mark|>";
-            wchar_t *wprompt = (wchar_t *)calloc(plen + 35, sizeof(wchar_t));
-            for(uint32_t i = 0; i < plen + 35; i++) {
-                if(i >= 0 && i < 17) {
-                    wprompt[i] = prompt_template[i];
-                }
-                else if(i >= 17 && i < plen+17) {
-                    wprompt[i] = winput[i-17];
-                }
-                else if(i >= plen+17) {
-                    wprompt[i] = prompt_template[i - plen];
-                }
-            }
-            free(winput);
-            prompt = wprompt;
+            prompt = apply_template_to_str(argv[i + 1], max_seq_len);
         }
         else if (argv[i][1] == 'g') {
             prompt = (wchar_t *)argv[i + 1];
@@ -1443,7 +1456,7 @@ int main(int argc, char **argv) {
 
         else { show_usage(); }
     }
-    printf("Prompt > %ls\n", prompt);
+    // printf("Prompt > %ls\n", prompt);
 
 
     Nano_Context ctx;
@@ -1458,8 +1471,28 @@ int main(int argc, char **argv) {
 
     if(NULL != LORA_PATH) ctx.lora = load_lora(ctx.llm, LORA_PATH);
 
-    last_output_length = 0;
-    generate(ctx, prompt, max_seq_len, typewriter, report);
+    while(1) {
+        printf("\x1b[32;1mHomo:\x1b[0m ");
+        char prompt_str[1024] = "";
+        char line_buffer[1024] = "";
+        while (fgets(line_buffer, sizeof(line_buffer), stdin) != NULL) {
+            if (line_buffer[0] == '\n') {
+                break;
+            }
+            strcat(prompt_str, line_buffer);
+        }
+        prompt_str[strlen(prompt_str)-1] = 0; // 去掉最后一个换行符
+        // scanf("%s", prompt_str);
+
+        prompt = apply_template_to_str(prompt_str, max_seq_len);
+        // printf("Prompt = %ls\n", prompt);
+
+        printf("\x1b[34;1mNano:\x1b[0m ");
+        last_output_length = 0;
+        generate(ctx, prompt, max_seq_len, typewriter, report);
+
+        prompt_str[0] = 0;
+    }
 
     if(NULL != LORA_PATH) free_lora(ctx.llm, ctx.lora);
 
