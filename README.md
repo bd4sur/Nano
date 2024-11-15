@@ -452,6 +452,7 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 - [meta-llama/llama](https://github.com/meta-llama/llama)
 - [karpathy/llama2.c](https://github.com/karpathy/llama2.c)
 - [epicure/llama2.js](https://github.com/epicure/llama2.js)
+- [dmarcos/llama2.c-web](https://github.com/dmarcos/llama2.c-web)
 - [openai/tiktoken](https://github.com/openai/tiktoken)
 
 **本仓库预置数据集来源**

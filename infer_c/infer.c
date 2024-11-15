@@ -538,7 +538,7 @@ void read_model_file_mmap(char* model_path, LLM *llm, Tokenizer *tk) {
     uint32_t char_count = 0;
 
     tk->vocab_size = *vocab_ptr; vocab_ptr++;
-    printf("Vocab size = %d\n", tk->vocab_size);
+    // printf("Vocab size = %d\n", tk->vocab_size);
 
     tk->token_list        = (wchar_t **)calloc(tk->vocab_size, sizeof(wchar_t *));
     tk->unicode_charset   = (wchar_t  *)calloc(tk->vocab_size, sizeof(wchar_t));
@@ -633,7 +633,7 @@ void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
     uint32_t char_count = 0;
 
     tk->vocab_size = *vocab_ptr; vocab_ptr++;
-    printf("Vocab size = %d\n", tk->vocab_size);
+    // printf("Vocab size = %d\n", tk->vocab_size);
 
     tk->token_list        = (wchar_t **)calloc(tk->vocab_size, sizeof(wchar_t *));
     tk->unicode_charset   = (wchar_t  *)calloc(tk->vocab_size, sizeof(wchar_t));
@@ -1354,7 +1354,7 @@ void generate(
             on_running(output_text, STATUS_DECODING);
             free(output_text);
         }
-        else if(is_prefilling == 0) {
+        else if(is_prefilling == 1) {
             on_running(NULL, STATUS_PREFILLING);
         }
 
@@ -1509,38 +1509,21 @@ int main(int argc, char **argv) {
 
 static Nano_Context NANO_CTX;
 
-LLM *test_wasm() {
-    return NANO_CTX.llm;
-}
-
-int init_nano(char *buffer) {
-    if(!setlocale(LC_CTYPE, "")) {
-        fprintf(stderr, "Can't set the specified locale! Check LANG, LC_CTYPE, LC_ALL.\n");
-        return -1;
-    }
+int init_nano(char *buffer, uint32_t random_seed) {
 
     float rep_pnty = 1.11;
     float temperature = 1.1;
     float top_p = 0.5;
     int   top_k = 0;
     int   max_seq_len = 512;
-    int   random_seed = 0; // (unsigned int)time(NULL);
-
-    char *LORA_PATH  = NULL;
-
     NANO_CTX.llm = (LLM *)calloc(1, (sizeof(LLM)));
     NANO_CTX.lora = NULL; // (LoRA *)calloc(1, (sizeof(LoRA *)));
     NANO_CTX.tokenizer = (Tokenizer *)calloc(1, (sizeof(Tokenizer)));
 
-    printf("wasm\n");
     load_llm_from_buffer(NANO_CTX.llm, NANO_CTX.tokenizer, buffer);
 
 
-    // NANO_CTX.sampler = build_sampler(NANO_CTX.llm->config.vocab_size, rep_pnty, temperature, top_p, top_k, random_seed);
-
-    // if(NULL != LORA_PATH) NANO_CTX.lora = load_lora(NANO_CTX.llm, LORA_PATH);
-
-    // generate(NANO_CTX, prompt, max_seq_len, typewriter, report);
+    NANO_CTX.sampler = build_sampler(NANO_CTX.llm->config.vocab_size, rep_pnty, temperature, top_p, top_k, random_seed);
 
     return 0;
 }

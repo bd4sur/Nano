@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <title>NanoLM - BD4SUR</title>
+    <style>
+* {
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    height: 100%;
+    padding: 10px;
+    font-size: 25px;
+}
+
+#output {
+    font-size: 15px;
+    width: 100%;
+    max-width: 1000px;
+    margin-bottom: 10px;
+    line-break: auto;
+    text-wrap: wrap;
+}
+    </style>
+</head>
+
+<body>
+    <div>
+        <input type="file" id="model_file_selector" name="files[]">
+    </div>
+    <div id="chat" style="display: none;">
+        <textarea id="input">天空为什么是蓝色的？</textarea>
+        <button id="generate">开始</button>
+    </div>
+    <div>
+        <pre id="output"></pre>
+    </div>
+    <div>
+        TPS=<span id="tps"></span>
+    </div>
+</body>
+
+<script src="jquery.js"></script>
+<script type="module">
+
+let worker = new Worker('nano_worker.js', {type: 'module'});
+
+worker.addEventListener('message', function(event) {
+
+    let eventData = event.data;
+    if(eventData.eventType === 'SHOW') {
+        $("#output").html(eventData.eventData);
+    }
+    if(eventData.eventType === 'TPS') {
+        $("#tps").html(eventData.eventData);
+    }
+    if(eventData.eventType === 'INIT_FINISHED') {
+        $("#chat").show();
+    }
+
+});
+
+$("#generate").on("click", () => {
+    let prompt = $("#input").val();
+    console.log(`Send: ${prompt}`);
+    worker.postMessage({
+        eventType: "INPUT",
+        eventData: `<|instruct_mark|>${prompt}<|response_mark|>`
+    });
+});
+
+
+let model_file_selector = document.getElementById('model_file_selector');
+model_file_selector.onchange = () => {
+    let file = model_file_selector.files[0];
+    let Reader = new FileReader();
+    Reader.onloadend = () => {
+        let file_buffer = Reader.result;
+        worker.postMessage({
+            eventType: "MODEL_FILE",
+            eventData: file_buffer
+        });
+    };
+    Reader.readAsArrayBuffer(file);
+};
+
+</script>
+</html>
