@@ -56,12 +56,21 @@
                                 <div>完全在浏览器内推理的(大)语言模型！</div>
                                 <ul style="padding-left: 22px; margin: 8px 0;">
                                     <li>下载<a href="https://huggingface.co/bd4sur/Nano-56M" target="_blank">语言模型和LoRA插件</a>。</li>
-                                    <li>点击下方按钮，加载模型和LoRA模块。</li>
+                                    <li>点击按钮，加载模型和LoRA模块。</li>
                                     <li>输入问题，点击小飞机，开始生成！</li>
                                 </ul>
                                 <div>注意：现在还不支持多轮对话噢。</div>
                                 <div style="margin: 5px 0 0 0; font-size: smaller;">Illustration by <a href="https://x.com/ookiiayu/status/1633071773217607683" target="_blank">ookiiayu@X</a></div>
                             </div>
+                        </div>
+                    </div>
+                    <div class="backend_select">
+                        <div id="backend_switch">当前使用 <b>WASM</b> 推理引擎，点击切换为 JS</div>
+                        <div class="backend_select_prompt">
+                            <p>Nano现在支持两种推理引擎噢～</p>
+                            <p>你可以在加载模型前选择一种引擎</p>
+                            <p>WASM引擎速度快，但目前暂不支持LoRA模块</p>
+                            <p>JS引擎速度慢，支持随时加卸载LoRA模块</p>
                         </div>
                     </div>
                     <div class="GuideQuestionContainer" id="test_prompts" style="display: none;"></div>
@@ -125,6 +134,9 @@
 <script src="./infer.js"></script>
 <script>
 
+// 全局状态：使用哪种推理后端
+let NANO_INFER_BACKEND = "wasm"; // "js" or "wasm"
+
 
 const TEST_PROMPTS = [
     "人类的本质是什么？",
@@ -163,6 +175,10 @@ const TEST_PROMPTS = [
 ];
 
 
+
+
+
+let worker = new Worker('nano_worker.js', {type: 'module'});
 
 
 let round_counter = 0;
@@ -231,7 +247,7 @@ function refresh_prompts(n) {
     fisher_yates_shuffle(indexes);
     $("#test_prompts").html("");
     for(let i = 0; i < n; i++) {
-        pi = indexes[i];
+        let pi = indexes[i];
         $("#test_prompts").append(`<div class="GuideQuestion">${TEST_PROMPTS[pi]}</div>`);
     }
     //  onclick="set_input_box(TEST_PROMPTS[${pi}]);"
@@ -395,7 +411,16 @@ $("#instruct_switch").on("click", function() {
     }
 });
 
-
+$("#backend_switch").click(function(event) {
+    if(NANO_INFER_BACKEND === "js") {
+        NANO_INFER_BACKEND = "wasm";
+        $("#backend_switch").html(`当前使用 <b>WASM</b> 推理引擎，点击切换为 JS`);
+    }
+    else if(NANO_INFER_BACKEND === "wasm") {
+        NANO_INFER_BACKEND = "js";
+        $("#backend_switch").html(`当前使用 <b>JS</b> 推理引擎，点击切换为 WASM`);
+    }
+});
 
 
 // 读取模型文件
@@ -406,12 +431,22 @@ model_file_selector.onchange = () => {
     Reader.onloadend = () => {
         $('#model_selector_prompt').html("正在解析...");
         let file_buffer = Reader.result;
-        load_model(file_buffer);
-        document.querySelector('#submit').removeAttribute("disabled");
-        $('#select_file').fadeOut(200, () => {
-            $(".ChatInputContainer").fadeIn(300);
-            $(".GuideQuestionContainer").fadeIn(300);
-        });
+        if(NANO_INFER_BACKEND === "wasm") {
+            worker.postMessage({
+                eventType: "MODEL_FILE",
+                eventData: file_buffer
+            });
+        }
+        else if(NANO_INFER_BACKEND == "js") {
+            load_model(file_buffer);
+            document.querySelector('#submit').removeAttribute("disabled");
+            $('#select_file').fadeOut(300, () => {
+                $(".backend_select").fadeOut(300, () => {
+                    $(".ChatInputContainer").fadeIn(300);
+                    $(".GuideQuestionContainer").fadeIn(300);
+                });
+            });
+        }
     };
     Reader.readAsArrayBuffer(file);
     $('#model_selector_prompt').html("正在读取...");
@@ -460,6 +495,49 @@ $("#lora_button").on("click", function(e) {
 
 
 
+worker.addEventListener('message', function(event) {
+    let eventData = event.data;
+
+    // console.log(`Main RX: ${event.data.eventType}`);
+
+    if(eventData.eventType === 'INFO') {
+        console.log(`Main received from worker: ${eventData.eventData.message}`);
+    }
+
+    if(eventData.eventType === 'ON_RUNNING') {
+        let text = eventData.eventData.text;
+        let status = eventData.eventData.status;
+        let tps = eventData.eventData.tps;
+        if(text.indexOf("<|eos|>") >= 0 || text.indexOf("<|padding|>") >= 0) {
+            return false;
+        }
+        if(status === "Decoding...") {
+            update_bot_bubble(marked.parse(text.replace(/~/gi, "～")), round_counter);
+        }
+        update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
+        switch_submit_button_state("interrupt");
+        scroll_to_bottom();
+        return true;
+    }
+
+    if(eventData.eventType === 'ON_FINISHED') {
+        let tps = eventData.eventData.tps;
+        switch_submit_button_state("submit");
+        update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s on avg`, round_counter);
+        round_counter++;
+    }
+
+    if(eventData.eventType === 'INIT_FINISHED') {
+        document.querySelector('#submit').removeAttribute("disabled");
+        $('#select_file').fadeOut(300, () => {
+            $(".backend_select").fadeOut(300, () => {
+                $(".ChatInputContainer").fadeIn(300);
+                $(".GuideQuestionContainer").fadeIn(300);
+            });
+        });
+    }
+});
+
 
 
 
@@ -482,32 +560,48 @@ function submit() {
         max_seq_len:        Number(max_seq_len.getValue())
     }
 
-    generate(
-        prompt,
-        gen_args,
-        () => {
-            append_bot_bubble(round_counter, get_current_time());
-            scroll_to_bottom();
-        },
-        (text, status, tps) => {
-            // <|eos|> or <|padding|>
-            if(text.indexOf("<|eos|>") >= 0 || text.indexOf("<|padding|>") >= 0) {
-                return false;
+    if(NANO_INFER_BACKEND === "wasm") {
+        console.log(`Send: ${prompt}`);
+
+        append_bot_bubble(round_counter, get_current_time());
+        scroll_to_bottom();
+
+        worker.postMessage({
+            eventType: "INFER",
+            eventData: {
+                prompt: prompt,
+                args: gen_args
             }
-            if(status === "Decoding...") {
-                update_bot_bubble(marked.parse(text.replace(/~/gi, "～")), round_counter);
+        });
+    }
+    else if(NANO_INFER_BACKEND === "js") {
+        generate(
+            prompt,
+            gen_args,
+            () => {
+                append_bot_bubble(round_counter, get_current_time());
+                scroll_to_bottom();
+            },
+            (text, status, tps) => {
+                // <|eos|> or <|padding|>
+                if(text.indexOf("<|eos|>") >= 0 || text.indexOf("<|padding|>") >= 0) {
+                    return false;
+                }
+                if(status === "Decoding...") {
+                    update_bot_bubble(marked.parse(text.replace(/~/gi, "～")), round_counter);
+                }
+                update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
+                switch_submit_button_state("interrupt");
+                scroll_to_bottom();
+                return true;
+            },
+            (tps) => {
+                switch_submit_button_state("submit");
+                update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s on avg`, round_counter);
+                round_counter++;
             }
-            update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
-            switch_submit_button_state("interrupt");
-            scroll_to_bottom();
-            return true;
-        },
-        (tps) => {
-            switch_submit_button_state("submit");
-            update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s on avg`, round_counter);
-            round_counter++;
-        }
-    );
+        );
+    }
 
     switch_submit_button_state("interrupt");
     set_input_box("");
@@ -516,7 +610,15 @@ function submit() {
 
 function interrupt() {
     append_chat_info("手动中断");
-    is_generating = false;
+    if(NANO_INFER_BACKEND === "wasm") {
+        worker.postMessage({
+            eventType: "INTERRUPT",
+            eventData: ""
+        });
+    }
+    else if(NANO_INFER_BACKEND) {
+        is_generating = false;
+    }
     scroll_to_bottom();
 }
 

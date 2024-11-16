@@ -17,8 +17,8 @@ $LD --export-dynamic --allow-undefined --lto-O3 \
   -lc -lc++ -lc++abi ${WASI_SDK_PATH}/share/wasi-sysroot/lib/wasm32-wasi/crt1.o \
   --export=malloc \
   --export=free \
-  --export=test_wasm \
   --export=init_nano \
+  --export=set_sampler \
   --export=generate_next_token_external \
   --export=encode_external \
   --export=decode_external \
@@ -26,3 +26,13 @@ $LD --export-dynamic --allow-undefined --lto-O3 \
   --no-entry \
   --import-memory -L${BASE_PATH}/lib/wasi -lclang_rt.builtins-wasm32 infer.o -o infer.wasm \
 
+# 作为参考，用emscripten编译的选项如下
+if false; then
+/home/bd4sur/emsdk/upstream/emscripten/emcc -O3 -ffast-math \
+    ../infer_c/infer.c \
+    -o infer.wasm \
+    -s WASM=1 \
+    -s STANDALONE_WASM \
+    -s EXPORTED_FUNCTIONS="[_malloc, _free, _init_nano, _generate_next_token_external, _encode_external, _decode_external, _close_nano]" \
+    --no-entry
+fi

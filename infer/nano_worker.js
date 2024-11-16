@@ -1,43 +1,64 @@
-import { WASI } from "/wasi.js";
-
-let wasi_context;
 let memory;
 let wasm;
 
 let malloc;
 let free;
 let init_nano;
+let set_sampler;
 let encode_external;
 let decode_external;
 let generate_next_token_external;
 let close_nano;
 let HEAPU8;
 
-console.log("worker");
+let IS_RUNNING = false;
 
-function show(str) {
+console.log("Nano WASM worker start!");
+
+function send_info(message) {
     self.postMessage({
-        eventType: "SHOW",
-        eventData: str
+        eventType: "INFO",
+        eventData: {
+            message: message
+        }
     });
 }
 
-function report_tps(tps_str) {
+function on_running(text, status, tps) {
     self.postMessage({
-        eventType: "TPS",
-        eventData: tps_str
+        eventType: "ON_RUNNING",
+        eventData: {
+            text: text,
+            status: status,
+            tps: tps
+        }
+    });
+}
+
+function on_finished(tps) {
+    self.postMessage({
+        eventType: "ON_FINISHED",
+        eventData: {
+            tps: tps
+        }
     });
 }
 
 self.onmessage = function(event) {
-    console.log(`Event: ${event}`);
-    if(event.data.eventType === "INPUT") {
-        let prompt = event.data.eventData;
-        console.log(`INPUT: ${prompt}`);
-        generate(prompt);
+    console.log(`Worker RX: ${event.data.eventType}`);
+
+    if(event.data.eventType === "INFER") {
+        let prompt = event.data.eventData.prompt;
+        let args = event.data.eventData.args;
+        generate(prompt, args);
     }
-    else if(event.data.eventType === "MODEL_FILE") {
-        show("开始初始化LLM");
+
+    if(event.data.eventType === "INTERRUPT") {
+        IS_RUNNING = false;
+    }
+
+    if(event.data.eventType === "MODEL_FILE") {
+        send_info("开始初始化LLM");
         let model_file_buffer = new Uint8Array(event.data.eventData);
         init(model_file_buffer);
     }
@@ -67,23 +88,49 @@ function set_uint32(ptr, heap, value) {
 
 async function init(model_file_buffer) {
 
-    console.log("开始初始化WASM");
-
-    wasi_context = new WASI({
-        // args: ['infer', 'model.bin', "-l", "lora.bin", '-i', '人类的本质是什么？'],
-        args: ['infer.wasm'],
-        stdout: function(out) {
-            console.log(out);
-        }
-    });
-
     memory = new WebAssembly.Memory({ initial: 10, maximum: 65536 });
 
     wasm = await WebAssembly.instantiateStreaming(
         fetch('infer.wasm'),
         {
-            ...wasi_context.getImportObject(),
-            // ...wasi_context.getImports(),
+            wasi_snapshot_preview1: {
+                args_get: ()=>{},
+                args_sizes_get: ()=>{},
+                environ_get: ()=>{},
+                environ_sizes_get: ()=>{},
+                clock_time_get: ()=>{},
+                clock_res_get: ()=>{},
+                proc_exit: ()=>{ throw "End."; },
+
+                fd_advise: ()=>{},
+                fd_allocate: ()=>{},
+                fd_close: ()=>{},
+                fd_datasync: ()=>{},
+                fd_fdstat_get: ()=>{},
+                fd_fdstat_set_flags: ()=>{},
+                fd_fdstat_set_rights: ()=>{},
+                fd_filestat_get: ()=>{},
+                fd_filestat_set_size: ()=>{},
+                fd_filestat_set_times: ()=>{},
+                fd_pread: ()=>{},
+                fd_prestat_dir_name: ()=>{},
+                fd_prestat_get: ()=>{},
+                fd_pwrite: ()=>{},
+                fd_read: ()=>{},
+                fd_readdir: ()=>{},
+                fd_renumber: ()=>{},
+                fd_seek: ()=>{},
+                fd_sync: ()=>{},
+                fd_tell: ()=>{},
+                fd_write: ()=>{},
+
+                path_filestat_get: ()=>{},
+                path_filestat_set_times: ()=>{},
+                path_open: ()=>{},
+                path_rename: ()=>{},
+                path_unlink_file: ()=>{},
+                path_create_directory: ()=>{},
+            },
             env: { memory: memory }
         }
     );
@@ -91,6 +138,7 @@ async function init(model_file_buffer) {
     malloc = wasm.instance.exports.malloc;
     free = wasm.instance.exports.free;
     init_nano = wasm.instance.exports.init_nano;
+    set_sampler = wasm.instance.exports.set_sampler;
     encode_external = wasm.instance.exports.encode_external;
     decode_external = wasm.instance.exports.decode_external;
     generate_next_token_external = wasm.instance.exports.generate_next_token_external;
@@ -113,9 +161,19 @@ async function init(model_file_buffer) {
         eventType: "INIT_FINISHED",
         eventData: "LLM initialization finished."
     });
+
+    send_info("语言模型加载完毕，可以开始对话啦！\nCiallo～(∠·ω< )⌒★");
 }
 
-function generate(prompt) {
+async function generate(prompt, args) {
+
+    if(IS_RUNNING === true) {
+        return;
+    }
+    IS_RUNNING = true;
+
+    set_sampler(args.repetition_penalty, args.temperature, args.top_p, args.top_k);
+    HEAPU8 = new Uint8Array(memory.buffer);
 
     let input_text_ptr = malloc((prompt.length+1) * 4);
     let n_tokens_ptr = malloc(4);
@@ -132,7 +190,7 @@ function generate(prompt) {
     HEAPU8 = new Uint8Array(memory.buffer);
     let num_prompt_tokens = HEAPU8[n_tokens_ptr];
 
-    show(`Prompt tokens = ${num_prompt_tokens}`);
+    console.log(`Prompt tokens = ${num_prompt_tokens}`);
 
     for(let i = 0; i < num_prompt_tokens; i++) {
         let ch = get_uint32(prompt_ptr + i * 4, HEAPU8);
@@ -145,15 +203,17 @@ function generate(prompt) {
 
     let elpased = [];
 
-    while(pos < 512) {
+    while(pos < args.max_seq_len) {
 
         const t_0 = performance.now();
 
         let is_prefilling = (pos < num_prompt_tokens - 1) ? 1 : 0;
+        let status = (is_prefilling === 1) ? "Pre-filling..." : "Decoding...";
 
         next_token = generate_next_token_external(ids_ptr, pos, is_prefilling);
         HEAPU8 = new Uint8Array(memory.buffer);
 
+        let output_str = "";
         if(is_prefilling === 0) {
             set_uint32(ids_ptr + num_prompt_tokens * 4 + output_count * 4, HEAPU8, next_token);
             output_count += 1;
@@ -161,7 +221,6 @@ function generate(prompt) {
             let output_text_ptr = decode_external(ids_ptr + num_prompt_tokens * 4, output_count);
             HEAPU8 = new Uint8Array(memory.buffer);
 
-            let output_str = "";
             let index = 0;
             while(1) {
                 let ch = get_uint32(output_text_ptr + index * 4, HEAPU8);
@@ -169,25 +228,24 @@ function generate(prompt) {
                 output_str += String.fromCharCode(ch);
                 index += 1;
             }
-            show(output_str);
-
         }
-        // else if(is_prefilling == 1) {
-            
-        // }
 
         pos += 1;
 
         const t_1 = performance.now();
         elpased.push(1 / (t_1 - t_0) * 1000);
         let tps_now = elpased.slice(-1)[0];
-        report_tps(tps_now);
+        on_running(output_str, status, tps_now);
 
+        if(IS_RUNNING !== true) break;
         if(next_token == 0 || next_token == 3) break;
 
+        await new Promise(resolve => setTimeout(resolve, 0));
     }
+
+    IS_RUNNING = false;
+
+    const tps_avg = elpased.reduce((a, b) => a + b) / elpased.length;
+    on_finished(tps_avg);
 }
 
-
-
-// let result = wasi_context.start(wasm, { memory: memory });

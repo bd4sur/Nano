@@ -363,6 +363,36 @@ a:hover {
 .GuideQuestion:hover {
     box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
 }
+
+.backend_select {
+    display: flex;
+    flex-direction: column;
+    padding: 10px 10px 10px 10px;;
+}
+.backend_select_prompt {
+    font-size: 12px;
+    color: #626675;
+    line-height: 1.8;
+    text-align: left;
+    letter-spacing: 0.5px;
+}
+.backend_select_prompt p {
+    margin: 3px 0 3px 0;
+    line-height: 1.5;
+    text-align: center;
+}
+#backend_switch {
+    background-color: #000e8d;
+    width: fit-content;
+    color: #ffffff;
+    padding: 5px 10px;
+    border-radius: 3px;
+    margin: 0 0 10px 0;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+
 .ChatInfo {
     display: block;
     font-size: 12px;

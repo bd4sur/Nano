@@ -27,6 +27,8 @@
 #define STATUS_STOPPED    (21)
 #define MAX_TOKEN_LENGTH  (17) // NOTE 虽然可以扫描词表得到该值，但是考虑到性能，设置为固定值（对于16384词表而言，至少17）
 
+#define VOCAB_SIZE        (16384) // Trie树字符数。为效率考虑（避免动态内存分配），固定为16384。
+#define INITIAL_POOL_SIZE (16384) // 初始内存池大小。
 
 // ===============================================================================
 // 数据结构定义
@@ -155,6 +157,7 @@ typedef struct {
     LoRA *lora;
     Tokenizer *tokenizer;
     Sampler *sampler;
+    int random_seed;
 } Nano_Context;
 
 // ===============================================================================
@@ -243,82 +246,112 @@ uint32_t map_get(struct Map *m, uint32_t key) {
 
 // Trie树
 
-struct Trie {
-    struct Trie **children;
-    uint32_t vocab_size;
-    uint32_t token_id;
-    uint32_t is_end_of_token;
+// Trie树的节点结构
+struct TrieNode {
+    uint32_t is_end_of_token;  // 标记是否为词的结尾
+    uint32_t token_id;         // 保存词对应的ID
+    struct TrieNode *children[VOCAB_SIZE]; // 子节点指针
 };
 
+// Trie树结构
+struct Trie {
+    struct TrieNode *root;       // 根节点
+    struct TrieNode *node_pool;  // 内存池
+    uint32_t pool_size;          // 内存池大小
+    uint32_t next_free_node;     // 下一个可用节点的索引
+};
+
+// 扩展内存池
+void expand_memory_pool(struct Trie *trie) {
+    uint32_t new_pool_size = trie->pool_size * 2; // 新内存池大小
+    struct TrieNode *new_pool = (struct TrieNode *)calloc(new_pool_size, sizeof(struct TrieNode));
+    if (!new_pool) {
+        perror("Failed to allocate expanded memory pool");
+        exit(EXIT_FAILURE);
+    }
+
+    // 拷贝旧内存池的内容到新池中
+    memcpy(new_pool, trie->node_pool, trie->pool_size * sizeof(struct TrieNode));
+    free(trie->node_pool);
+
+    trie->node_pool = new_pool;
+    trie->pool_size = new_pool_size;
+    printf("Memory pool expanded to %u nodes\n", trie->pool_size);
+}
+
+// 初始化一个Trie树
+//   注：当前使用动态内存池的实现中，没有用到两个参数。仅为兼容性而保留。
 struct Trie *new_trie(uint32_t vocab_size, uint32_t is_end_of_token) {
-    struct Trie *pnode = (struct Trie *)calloc(1, sizeof(struct Trie));
-    if(NULL == pnode) {
-        return NULL;
+    struct Trie *trie = (struct Trie *)malloc(sizeof(struct Trie));
+    if (!trie) {
+        perror("Failed to allocate memory for Trie");
+        exit(EXIT_FAILURE);
     }
-    else {
-        pnode->children = (struct Trie **)calloc(vocab_size, sizeof(struct Trie*));
-        pnode->vocab_size = vocab_size;
-        pnode->token_id = 0;
-        pnode->is_end_of_token = is_end_of_token;
-        return pnode;
+
+    trie->pool_size = INITIAL_POOL_SIZE;
+    trie->node_pool = (struct TrieNode *)calloc(trie->pool_size, sizeof(struct TrieNode));
+    if (!trie->node_pool) {
+        perror("Failed to allocate initial memory pool for Trie nodes");
+        free(trie);
+        exit(EXIT_FAILURE);
+    }
+
+    trie->next_free_node = 0;
+    trie->root = &trie->node_pool[trie->next_free_node++];
+    return trie;
+}
+
+// 从内存池中分配一个新的Trie节点
+struct TrieNode *allocate_node(struct Trie *trie) {
+    if (trie->next_free_node >= trie->pool_size) {
+        expand_memory_pool(trie); // 扩展内存池
+    }
+    return &trie->node_pool[trie->next_free_node++];
+}
+
+// 释放Trie树
+void free_trie(struct Trie *trie) {
+    if (trie) {
+        free(trie->node_pool);
+        free(trie);
     }
 }
 
-void free_trie(struct Trie *t) {
-    if(NULL == t) {
-        return;
-    }
-    else {
-        for(uint32_t i = 0; i < t->vocab_size; i++) {
-            free_trie(t->children[i]);
-        }
-        free(t);
-    }
-}
+// 向Trie树中增加一个词
+int add_token(struct Trie *trie, uint32_t *token, uint32_t token_len, uint32_t token_id) {
+    if (!trie || !token || token_len == 0) return -1;
 
-int add_token(struct Trie *trie_node, uint32_t *token, uint32_t token_len, uint32_t token_id) {
-    struct Trie *current_node = trie_node;
-    for(uint32_t i = 0; i < token_len; i++) {
-        uint32_t cid = token[i];
-        uint32_t is_eot = (i == token_len - 1) ? 1 : 0;
-        struct Trie *next_node = current_node->children[cid];
-        if(NULL == next_node) {
-            next_node = new_trie(trie_node->vocab_size, is_eot);
-            if(NULL == next_node) {
-                return -1;
-            }
-            else {
-                current_node->children[cid] = next_node;
-                current_node = next_node;
-            }
+    struct TrieNode *node = trie->root;
+    for (uint32_t i = 0; i < token_len; ++i) {
+        uint32_t index = token[i];
+        if (index >= VOCAB_SIZE) return -1; // 超出VOCAB_SIZE范围
+
+        if (!node->children[index]) {
+            node->children[index] = allocate_node(trie);
         }
-        else {
-            current_node = next_node;
-        }
+        node = node->children[index];
     }
-    current_node->is_end_of_token = 1;
-    current_node->token_id = token_id;
+    if (node->is_end_of_token) return -1; // 防止重复添加
+
+    node->is_end_of_token = 1;
+    node->token_id = token_id;
     return 0;
 }
 
-int match_token(struct Trie *trie_node, uint32_t *pattern, uint32_t pattern_len, uint32_t *token_id) {
-    struct Trie *current_node = trie_node;
-    for(uint32_t i = 0; i < pattern_len; i++) {
-        uint32_t cid = pattern[i];
-        struct Trie *next_node = current_node->children[cid];
-        if(NULL == next_node) {
-            return -1;
-        }
-        current_node = next_node;
-        if(i == pattern_len - 1) {
-            if(current_node->is_end_of_token == 1) {
-                *token_id = current_node->token_id;
-                return 0;
-            }
-            else {
-                return -1;
-            }
-        }
+// 在Trie树中匹配一个词
+int match_token(struct Trie *trie, uint32_t *pattern, uint32_t pattern_len, uint32_t *token_id) {
+    if (!trie || !pattern || pattern_len == 0) return -1;
+
+    struct TrieNode *node = trie->root;
+    for (uint32_t i = 0; i < pattern_len; ++i) {
+        uint32_t index = pattern[i];
+        if (index >= VOCAB_SIZE || !node->children[index]) return -1;
+
+        node = node->children[index];
+    }
+    if (node->is_end_of_token) {
+        if (token_id) *token_id = node->token_id;
+        return 0;
     }
     return -1;
 }
@@ -1461,13 +1494,14 @@ int main(int argc, char **argv) {
 
     Nano_Context ctx;
 
+    ctx.random_seed = random_seed;
     ctx.llm = (LLM *)calloc(1, (sizeof(LLM)));
     ctx.lora = NULL; // (LoRA *)calloc(1, (sizeof(LoRA *)));
     ctx.tokenizer = (Tokenizer *)calloc(1, (sizeof(Tokenizer)));
 
     load_llm(ctx.llm, ctx.tokenizer, MODEL_PATH);
 
-    ctx.sampler = build_sampler(ctx.llm->config.vocab_size, rep_pnty, temperature, top_p, top_k, random_seed);
+    ctx.sampler = build_sampler(ctx.llm->config.vocab_size, rep_pnty, temperature, top_p, top_k, ctx.random_seed);
 
     if(NULL != LORA_PATH) ctx.lora = load_lora(ctx.llm, LORA_PATH);
 
@@ -1511,20 +1545,18 @@ static Nano_Context NANO_CTX;
 
 int init_nano(char *buffer, uint32_t random_seed) {
 
-    float rep_pnty = 1.11;
-    float temperature = 1.1;
-    float top_p = 0.5;
-    int   top_k = 0;
-    int   max_seq_len = 512;
+    NANO_CTX.random_seed = random_seed;
     NANO_CTX.llm = (LLM *)calloc(1, (sizeof(LLM)));
     NANO_CTX.lora = NULL; // (LoRA *)calloc(1, (sizeof(LoRA *)));
     NANO_CTX.tokenizer = (Tokenizer *)calloc(1, (sizeof(Tokenizer)));
 
     load_llm_from_buffer(NANO_CTX.llm, NANO_CTX.tokenizer, buffer);
 
+    return 0;
+}
 
-    NANO_CTX.sampler = build_sampler(NANO_CTX.llm->config.vocab_size, rep_pnty, temperature, top_p, top_k, random_seed);
-
+int set_sampler(float rep_pnty, float temperature, float top_p, int top_k) {
+    NANO_CTX.sampler = build_sampler(NANO_CTX.llm->config.vocab_size, rep_pnty, temperature, top_p, top_k, NANO_CTX.random_seed);
     return 0;
 }
 
