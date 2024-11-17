@@ -36,7 +36,7 @@
 
 [B站视频：自制大模型在浏览器上推理，现已支持LoRA插件](https://www.bilibili.com/video/BV1FqShYXENu)
 
-**基于浏览器的推理**
+**WASM/JS实现的基于浏览器CPU的推理**
 
 - 访问[在线体验页面](https://bd4sur.com/Nano/infer)，或者用浏览器直接打开`Nano/infer/index.html`。
 - 按页面提示，下载基座模型、指令微调模型或LoRA插件（扩展名均为bin）。
@@ -46,14 +46,18 @@
 - 使用`export.py`将检查点文件转换为基座模型或者LoRA插件，详见下文。
 - 所有推理过程均在本地浏览器内部进行。
 
-**纯C语言实现的推理**
+**C语言实现的CPU推理**
 
 - 首先下载基座模型、指令微调模型或LoRA插件（扩展名均为bin）。
 - 将`Nano/infer_c/infer.c`中模型文件的路径修改为实际的绝对路径。
 - 在`Nano/infer_c`中执行`make`，编译得到可执行文件。默认启用OpenMP并行优化。
 - 执行`OMP_NUM_THREADS=<CPU线程数/2> ./infer <模型文件路径.bin> -i "提示语"`，开始推理。
 
-**基于PyTorch框架的推理**
+**基于CUDA/cuBLAS实现的GPU推理**
+
+- 正在研究
+
+**基于PyTorch框架的CPU/GPU推理**
 
 首先下载pt扩展名的基座模型、指令微调模型或LoRA插件到`checkpoint`目录。
 
