@@ -22,6 +22,8 @@ $LD --export-dynamic --allow-undefined --lto-O3 \
   --export=generate_next_token_external \
   --export=encode_external \
   --export=decode_external \
+  --export=load_lora_external \
+  --export=unload_lora_external \
   --export=close_nano \
   --no-entry \
   --import-memory -L${BASE_PATH}/lib/wasi -lclang_rt.builtins-wasm32 infer.o -o infer.wasm \

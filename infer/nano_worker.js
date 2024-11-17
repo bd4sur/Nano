@@ -8,6 +8,8 @@ let set_sampler;
 let encode_external;
 let decode_external;
 let generate_next_token_external;
+let load_lora_external;
+let unload_lora_external;
 let close_nano;
 let HEAPU8;
 
@@ -61,6 +63,17 @@ self.onmessage = function(event) {
         send_info("开始初始化LLM");
         let model_file_buffer = new Uint8Array(event.data.eventData);
         init(model_file_buffer);
+    }
+
+    if(event.data.eventType === "LOAD_LORA") {
+        send_info("加载LoRA插件");
+        let model_file_buffer = new Uint8Array(event.data.eventData.file_buffer);
+        load_lora(model_file_buffer, event.data.eventData.file_name);
+    }
+
+    if(event.data.eventType === "UNLOAD_LORA") {
+        send_info("卸载LoRA插件");
+        unload_lora();
     }
 
 };
@@ -142,6 +155,8 @@ async function init(model_file_buffer) {
     encode_external = wasm.instance.exports.encode_external;
     decode_external = wasm.instance.exports.decode_external;
     generate_next_token_external = wasm.instance.exports.generate_next_token_external;
+    load_lora_external = wasm.instance.exports.load_lora_external;
+    unload_lora_external = wasm.instance.exports.unload_lora_external;
     close_nano = wasm.instance.exports.close_nano;
 
     HEAPU8 = new Uint8Array(memory.buffer);
@@ -172,7 +187,7 @@ async function generate(prompt, args) {
     }
     IS_RUNNING = true;
 
-    set_sampler(args.repetition_penalty, args.temperature, args.top_p, args.top_k);
+    set_sampler(args.repetition_penalty, args.temperature, args.top_p, args.top_k, Date.now() % 0xffffffff);
     HEAPU8 = new Uint8Array(memory.buffer);
 
     let input_text_ptr = malloc((prompt.length+1) * 4);
@@ -249,3 +264,31 @@ async function generate(prompt, args) {
     on_finished(tps_avg);
 }
 
+function load_lora(lora_file_buffer, lora_file_name) {
+    let buffer_ptr = malloc(lora_file_buffer.length);
+    HEAPU8 = new Uint8Array(memory.buffer);
+
+    HEAPU8.set(lora_file_buffer, buffer_ptr);
+
+    let res = load_lora_external(buffer_ptr);
+    HEAPU8 = new Uint8Array(memory.buffer);
+
+    self.postMessage({
+        eventType: "LORA_LOADED",
+        eventData: {
+            lora_file_name: lora_file_name
+        }
+    });
+
+    send_info("LoRA插件加载完毕！");
+}
+
+function unload_lora() {
+    let res = unload_lora_external();
+    HEAPU8 = new Uint8Array(memory.buffer);
+
+    self.postMessage({
+        eventType: "LORA_UNLOADED",
+        eventData: "LoRA module unloaded."
+    });
+}

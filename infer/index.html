@@ -460,16 +460,27 @@ $("#lora_file_selector").on("change", function(event) {
     let Reader = new FileReader();
     Reader.onloadend = () => {
         let file_buffer = Reader.result;
-        let res = load_lora(file_buffer);
-        if(res === false) {
-            append_chat_info(`LoRA模块加载失败：模块与基座不匹配QAQ`);
+        if(NANO_INFER_BACKEND === "wasm") {
+            worker.postMessage({
+                eventType: "LOAD_LORA",
+                eventData: {
+                    file_buffer: file_buffer,
+                    file_name: file.name
+                }
+            });
         }
         else {
-            is_lora_enabled = true;
-            $("#lora_button").addClass("ButtonLoRAHover");
-            $("#lora_button_icon").attr("fill", "#5c8e1f");
-            $("#lora_file_selector").hide();
-            append_chat_info(`已加载LoRA模块：${file.name}`);
+            let res = load_lora(file_buffer);
+            if(res === false) {
+                append_chat_info(`LoRA模块加载失败：模块与基座不匹配QAQ`);
+            }
+            else {
+                is_lora_enabled = true;
+                $("#lora_button").addClass("ButtonLoRAHover");
+                $("#lora_button_icon").attr("fill", "#5c8e1f");
+                $("#lora_file_selector").hide();
+                append_chat_info(`已加载LoRA模块：${file.name}`);
+            }
         }
     };
     Reader.readAsArrayBuffer(file);
@@ -479,13 +490,20 @@ $("#lora_file_selector").on("change", function(event) {
 $("#lora_button").on("click", function(e) {
     console.log("Button");
     if(is_lora_enabled === true) {
-        unload_lora();
-        is_lora_enabled = false;
-        $("#lora_button").removeClass("ButtonLoRAHover");
-        $("#lora_button_icon").attr("fill", "#383a40");
-        $("#lora_file_selector").val("");
-        $("#lora_file_selector").show();
-        append_chat_info("已卸载LoRA模块");
+        if(NANO_INFER_BACKEND === "wasm") {
+            worker.postMessage({
+                eventType: "UNLOAD_LORA",
+                eventData: "Unload LoRA module."
+            });
+        }
+        else if(NANO_INFER_BACKEND === "js") {
+            is_lora_enabled = false;
+            $("#lora_button").removeClass("ButtonLoRAHover");
+            $("#lora_button_icon").attr("fill", "#383a40");
+            $("#lora_file_selector").val("");
+            $("#lora_file_selector").show();
+            append_chat_info("已卸载LoRA模块");
+        }
     }
 });
 
@@ -536,6 +554,24 @@ worker.addEventListener('message', function(event) {
             });
         });
     }
+
+    if(eventData.eventType === 'LORA_LOADED') {
+        is_lora_enabled = true;
+        $("#lora_button").addClass("ButtonLoRAHover");
+        $("#lora_button_icon").attr("fill", "#5c8e1f");
+        $("#lora_file_selector").hide();
+        append_chat_info(`已加载LoRA模块：${eventData.eventData.lora_file_name}`);
+    }
+
+    if(eventData.eventType === 'LORA_UNLOADED') {
+        is_lora_enabled = false;
+        $("#lora_button").removeClass("ButtonLoRAHover");
+        $("#lora_button_icon").attr("fill", "#383a40");
+        $("#lora_file_selector").val("");
+        $("#lora_file_selector").show();
+        append_chat_info("已卸载LoRA模块");
+    }
+
 });
 
 

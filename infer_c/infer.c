@@ -97,7 +97,7 @@ typedef struct {
     FwdBuffer state;
     // some more state needed to properly clean up the memory mapping (sigh)
     int fd;            // file descriptor for memory mapping
-    float* data;       // memory mapped data pointer
+    float *data;       // memory mapped data pointer
     ssize_t file_size; // size of the checkpoint file in bytes
 } LLM;
 
@@ -126,6 +126,7 @@ typedef struct {
 typedef struct {
     LoRA_Config config;
     LoRA_Param  params;
+    float *data;
 } LoRA;
 
 typedef struct {
@@ -710,7 +711,7 @@ void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
 
     // 解析模型参数
 
-    float* param_ptr = (float*)(tokenzier_ptr + tokenizer_field_bytes/sizeof(uint32_t));
+    float *param_ptr = (float*)(tokenzier_ptr + tokenizer_field_bytes/sizeof(uint32_t));
     memory_map_params(params, config, param_ptr, config->is_shared_classifier);
 }
 
@@ -719,20 +720,15 @@ void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
 
 
 
-void read_lora_file(char* lora_path, LoRA *lora, LLM *llm) {
+void parse_lora_file(char* buffer, LoRA *lora, LLM *llm) {
     LoRA_Config *lora_cfg    = &(lora->config);
     LoRA_Param  *lora_params = &(lora->params);
     LLM_Config  *llm_cfg     = &(llm->config);
 
-    FILE *file = fopen(lora_path, "rb");
-    if (!file) { fprintf(stderr, "Couldn't open LoRA module file %s\n", lora_path); exit(EXIT_FAILURE); }
-
     // 读取文件头
     const uint32_t header_byte_length = 256;
     const uint32_t header_uint_length = header_byte_length / sizeof(uint32_t);
-    uint32_t *header = (uint32_t *)calloc(header_uint_length, sizeof(uint32_t));
-
-    if(fread(header, sizeof(uint32_t), header_uint_length, file) != header_uint_length) { exit(EXIT_FAILURE); }
+    uint32_t *header = (uint32_t *)buffer;
 
     uint32_t offset = 0;
 
@@ -764,11 +760,9 @@ void read_lora_file(char* lora_path, LoRA *lora, LLM *llm) {
         exit(EXIT_FAILURE);
     }
 
-    // 读取参数部分的长度字段
-    // unsigned long long param_num = 0;
-    // if(fread(&param_num, sizeof(unsigned long long), 1, file) != 1) { exit(EXIT_FAILURE); }
+    // 解析LoRA模块参数
 
-    // 读取LoRA模块参数到内存
+    float *lora_param_ptr = (float*)(buffer + header_byte_length);
 
     uint32_t head_dim = llm_cfg->n_embd / llm_cfg->n_head;
     uint32_t kv_dim = head_dim * llm_cfg->n_kv_head;
@@ -782,25 +776,14 @@ void read_lora_file(char* lora_path, LoRA *lora, LLM *llm) {
     uint32_t wo_lora_a_len = llm_cfg->n_layer * lora_cfg->lora_rank * llm_cfg->n_embd;
     uint32_t wo_lora_b_len = llm_cfg->n_layer * llm_cfg->n_embd * lora_cfg->lora_rank;
 
-    lora_params->wq_lora_a = (float *)calloc(wq_lora_a_len, sizeof(float));
-    lora_params->wq_lora_b = (float *)calloc(wq_lora_b_len, sizeof(float));
-    lora_params->wk_lora_a = (float *)calloc(wk_lora_a_len, sizeof(float));
-    lora_params->wk_lora_b = (float *)calloc(wk_lora_b_len, sizeof(float));
-    lora_params->wv_lora_a = (float *)calloc(wv_lora_a_len, sizeof(float));
-    lora_params->wv_lora_b = (float *)calloc(wv_lora_b_len, sizeof(float));
-    lora_params->wo_lora_a = (float *)calloc(wo_lora_a_len, sizeof(float));
-    lora_params->wo_lora_b = (float *)calloc(wo_lora_b_len, sizeof(float));
-
-    if(fread(lora_params->wq_lora_a, sizeof(float), wq_lora_a_len, file) != wq_lora_a_len) { exit(EXIT_FAILURE); }
-    if(fread(lora_params->wq_lora_b, sizeof(float), wq_lora_b_len, file) != wq_lora_b_len) { exit(EXIT_FAILURE); }
-    if(fread(lora_params->wk_lora_a, sizeof(float), wk_lora_a_len, file) != wk_lora_a_len) { exit(EXIT_FAILURE); }
-    if(fread(lora_params->wk_lora_b, sizeof(float), wk_lora_b_len, file) != wk_lora_b_len) { exit(EXIT_FAILURE); }
-    if(fread(lora_params->wv_lora_a, sizeof(float), wv_lora_a_len, file) != wv_lora_a_len) { exit(EXIT_FAILURE); }
-    if(fread(lora_params->wv_lora_b, sizeof(float), wv_lora_b_len, file) != wv_lora_b_len) { exit(EXIT_FAILURE); }
-    if(fread(lora_params->wo_lora_a, sizeof(float), wo_lora_a_len, file) != wo_lora_a_len) { exit(EXIT_FAILURE); }
-    if(fread(lora_params->wo_lora_b, sizeof(float), wo_lora_b_len, file) != wo_lora_b_len) { exit(EXIT_FAILURE); }
-
-    fclose(file);
+    lora_params->wq_lora_a = lora_param_ptr; lora_param_ptr += wq_lora_a_len;
+    lora_params->wq_lora_b = lora_param_ptr; lora_param_ptr += wq_lora_b_len;
+    lora_params->wk_lora_a = lora_param_ptr; lora_param_ptr += wk_lora_a_len;
+    lora_params->wk_lora_b = lora_param_ptr; lora_param_ptr += wk_lora_b_len;
+    lora_params->wv_lora_a = lora_param_ptr; lora_param_ptr += wv_lora_a_len;
+    lora_params->wv_lora_b = lora_param_ptr; lora_param_ptr += wv_lora_b_len;
+    lora_params->wo_lora_a = lora_param_ptr; lora_param_ptr += wo_lora_a_len;
+    lora_params->wo_lora_b = lora_param_ptr; lora_param_ptr += wo_lora_b_len;
 }
 
 void load_llm(LLM *llm, Tokenizer *tk, char *model_path) {
@@ -809,7 +792,7 @@ void load_llm(LLM *llm, Tokenizer *tk, char *model_path) {
     read_model_file_mmap(model_path, llm, tk);
 #else
     FILE *file = fopen(model_path, "rb");
-    if (!file) { fprintf(stderr, "Couldn't open LoRA module file %s\n", model_path); exit(EXIT_FAILURE); }
+    if (!file) { fprintf(stderr, "Couldn't open model file %s\n", model_path); exit(EXIT_FAILURE); }
 
     // 获取文件大小
     fseek(file, 0, SEEK_END);
@@ -849,9 +832,26 @@ void free_llm(LLM* llm, Tokenizer *tk) {
 }
 
 LoRA *load_lora(LLM *llm, char *lora_path) {
+    FILE *file = fopen(lora_path, "rb");
+    if (!file) { fprintf(stderr, "Couldn't open LoRA module file %s\n", lora_path); exit(EXIT_FAILURE); }
+
+    // 获取文件大小
+    fseek(file, 0, SEEK_END);
+    long long unsigned int file_size = ftell(file);
+    rewind(file);
+
+    char *lora_buffer = (char *)malloc(file_size + 1);
+    if (!lora_buffer)  { fprintf(stderr, "malloc failed.\n"); exit(EXIT_FAILURE); }
+
+    if(fread(lora_buffer, sizeof(char), file_size, file) != file_size) { exit(EXIT_FAILURE); }
     LoRA *p_lora = (LoRA *)calloc(1, sizeof(LoRA));
-    read_lora_file(lora_path, p_lora, llm);
+
+    p_lora->data = (float*)lora_buffer;
+
+    parse_lora_file(lora_buffer, p_lora, llm);
+
     malloc_fwd_buffer_with_lora(&llm->state, &llm->config, &p_lora->config);
+
     return p_lora;
 }
 
@@ -1555,7 +1555,9 @@ int init_nano(char *buffer, uint32_t random_seed) {
     return 0;
 }
 
-int set_sampler(float rep_pnty, float temperature, float top_p, int top_k) {
+// 仅当random_seed不为0时更新random_seed
+int set_sampler(float rep_pnty, float temperature, float top_p, int top_k, uint32_t random_seed) {
+    if(random_seed != 0) NANO_CTX.random_seed = random_seed;
     NANO_CTX.sampler = build_sampler(NANO_CTX.llm->config.vocab_size, rep_pnty, temperature, top_p, top_k, NANO_CTX.random_seed);
     return 0;
 }
@@ -1570,6 +1572,32 @@ uint32_t *encode_external(wchar_t *text, uint32_t *n_tokens_ptr) {
 
 wchar_t *decode_external(uint32_t *ids, uint32_t len) {
     return decode(NANO_CTX.tokenizer, ids, len);
+}
+
+int load_lora_external(char *lora_buffer) {
+    if(NULL != NANO_CTX.lora) return -1;
+
+    LLM *llm = NANO_CTX.llm;
+
+    LoRA *p_lora = (LoRA *)calloc(1, sizeof(LoRA));
+
+    p_lora->data = (float*)lora_buffer;
+
+    parse_lora_file(lora_buffer, p_lora, llm);
+
+    malloc_fwd_buffer_with_lora(&llm->state, &llm->config, &p_lora->config);
+
+    NANO_CTX.lora = p_lora;
+
+    return 0;
+}
+
+int unload_lora_external() {
+    if(NULL != NANO_CTX.lora) {
+        free(NANO_CTX.lora);
+        NANO_CTX.lora = NULL;
+    }
+    return 0;
 }
 
 int close_nano() {
