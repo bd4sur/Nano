@@ -650,7 +650,7 @@ function interrupt() {
             eventData: ""
         });
     }
-    else if(NANO_INFER_BACKEND) {
+    else if(NANO_INFER_BACKEND === "js") {
         is_generating = false;
     }
     scroll_to_bottom();
