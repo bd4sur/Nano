@@ -1,18 +1,18 @@
 
-# Nano : Large Model, Tiny Toy
+# Nano - Large Model, Tiny Toy
 
-**Pre-alpha · 正在积极开发，技术状态尚未固化，按原样呈现**
+[✨体验推理效果](https://bd4sur.com/Nano/infer) / 📺[B站视频：手机浏览器推理](https://www.bilibili.com/video/BV1ZcUiYZENc/) / 📺[B站视频：HomeLab炼丹](https://www.bilibili.com/video/BV1uv42127qP)
 
-**Nano**是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。
+**当前状态：Pre-alpha · 正在积极开发，技术状态尚未固化，按原样呈现**
 
-期望：
+**Nano**是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。期望：
 
-- 用尽可能少的依赖，尤其不依赖🤗，实现一个具体而微的Transformer语言模型。
-- 完整实现数据处理、预训练、监督微调（含LoRA）、推理过程。暂不实现人类对齐。
-- 从头训练一个会说人话的50M级参数规模的语言模型。
-- 实现低功耗端侧设备（如单板机、手机）上的推理，并支持LoRA插件（[在线体验](https://bd4sur.com/Nano/infer)）。
-- 研究模型训练的动力学、训/推加速、算法改进等问题。
-- 探索Transformer模型在自然语言处理以外的问题和模态上的潜能。
+- 基于PyTorch，实现一个具体而微的Transformer语言模型，不依赖🤗。
+- 实现模型的预训练、监督微调、推理过程。不实现人类反馈强化学习。
+- 从头训练出56M、168M参数的小规模语言模型。
+- 实现低功耗终端设备（如单板机、手机）上的推理，并支持LoRA插件。
+- 研究模型的动力学、训/推加速、部署优化、算法改进等问题。
+- 探索Transformer模型在自然语言处理以外的问题上的潜能。
 - 建立起关于大语言模型的合理预期和感性经验，对大语言模型技术祛魅。
 
 为什么叫“Nano”：
@@ -24,17 +24,23 @@
 
 ## 模型和数据
 
-|预训练模型|预训练数据|指令微调模型|指令微调数据|
-|---------|---------|-----------|-----------|
-|[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|[Nano-PT-10B](https://huggingface.co/datasets/bd4sur/Nano-PT-10B)|[Nano-56M-Instruct](https://huggingface.co/bd4sur/Nano-56M-Instruct)|Nano-SFT|
+模型（其中bin扩展名的模型可用于浏览器推理）：
+
+|规模|预训练模型|指令微调模型|LoRA插件|
+|----|---------|-----------|-------|
+|56M|[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|[Nano-56M-Instruct](https://huggingface.co/bd4sur/Nano-56M-Instruct)|（正在训练）|
+|168M|[Nano-168M](https://huggingface.co/bd4sur/Nano-168M)（正在训练）|Nano-168M-Instruct（正在训练）|（正在训练）|
+
+数据集：
+
+- 预训练数据：[Nano-PT-10B](https://huggingface.co/datasets/bd4sur/Nano-PT-10B)
+- 监督微调数据：正在整理。
 
 数据集为7z格式，解压口令“nano”。
 
 ## 使用说明
 
 ### 0. 百闻不如一见：立刻体验推理效果
-
-[B站视频：自制大模型在浏览器上推理，现已支持LoRA插件](https://www.bilibili.com/video/BV1FqShYXENu)
 
 **WASM/JS实现的基于浏览器CPU的推理**
 
@@ -52,10 +58,15 @@
 - 将`Nano/infer_c/infer.c`中模型文件的路径修改为实际的绝对路径。
 - 在`Nano/infer_c`中执行`make`，编译得到可执行文件。默认启用OpenMP并行优化。
 - 执行`OMP_NUM_THREADS=<CPU线程数/2> ./infer <模型文件路径.bin> -i "提示语"`，开始推理。
+- 正在研究模型量化。
 
 **基于CUDA/cuBLAS实现的GPU推理**
 
 - 正在研究
+
+**基于 WebGPU / ONNX Runtime Web 实现的GPU推理**
+
+- 正在研究（参考[WebLLM](https://webllm.mlc.ai/)）
 
 **基于PyTorch框架的CPU/GPU推理**
 
@@ -458,9 +469,11 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 - [epicure/llama2.js](https://github.com/epicure/llama2.js)
 - [dmarcos/llama2.c-web](https://github.com/dmarcos/llama2.c-web)
 - [openai/tiktoken](https://github.com/openai/tiktoken)
+- [jQuery](https://jquery.com/license/)
+- [marked.js](https://github.com/markedjs/marked)
 
 **本仓库预置数据集来源**
 
 - 精神分析黑话数据集：来自[hhiim/Lacan](https://github.com/hhiim/Lacan)。
 - 业余无线电操作技术能力验证试题。
-- 使用其他商用/开源大模型生成的内容。
+- 使用其他商用/开源大模型生成的内容。详见各数据集的自述文件。

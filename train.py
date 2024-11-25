@@ -494,7 +494,7 @@ def main():
     with open(args.train_config, "r", encoding="utf-8") as f:
         train_config_dict = json.load(f)
 
-    trainer = TrainGPT(model_config_dict, train_config_dict, args.continue_pretrain)
+    trainer = TrainGPT(model_config_dict, train_config_dict, is_continued_pretrain=args.continue_pretrain)
     trainer.start()
 
 if __name__ == "__main__":
