@@ -27,6 +27,7 @@
             <div id="max_seq_len"></div>
         </div>
         <div class="ModalContent" style="display: flex; justify-content: flex-end; padding-right: 20px;">
+            <button class="ModalCancel" id="modal_clearall">清除对话历史</button>
             <button class="ModalCancel" id="modal_cancel">取消</button>
             <button class="ModalConfirm" id="modal_confirm">确认</button>
         </div>
@@ -88,7 +89,7 @@
                         <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="16px" height="16px"><path d="M512 981.333333c259.2 0 469.333333-210.133333 469.333333-469.333333S771.2 42.666667 512 42.666667 42.666667 252.8 42.666667 512s210.133333 469.333333 469.333333 469.333333z m214.826667-261.845333a64 64 0 0 1-90.453334 1.578667l-122.794666-118.570667-118.570667 122.752A64 64 0 0 1 302.933333 636.330667l118.570667-122.752L298.666667 395.008A64 64 0 1 1 387.626667 302.933333l122.794666 118.570667 118.528-122.752A64 64 0 0 1 721.066667 387.669333l-118.613334 122.752 122.794667 118.570667a64 64 0 0 1 1.578667 90.453333z" fill="#383a40"></path></svg>
                     </div>
                 </div>
-                <textarea class="InputBox" id="input" placeholder="Enter换行，Shift+Enter提交" style="height: 20px;">人类的本质是复读机吗？</textarea>
+                <textarea class="InputBox" id="input" placeholder="Enter换行，Shift+Enter提交" style="height: 20px;"></textarea>
 
                 <div class="ButtonSetting" id="setting">
                     <div class="ButtonSettingContainer">
@@ -137,6 +138,7 @@ let NANO_INFER_BACKEND = "wasm"; // "js" or "wasm"
 
 
 const TEST_PROMPTS = [
+    "人类的本质是复读机吗？",
     "人类的本质是什么？",
     "你是谁？",
     "讲个关于大毛熊和小白兔的故事吧。",
@@ -390,7 +392,9 @@ function get_current_time() {
 
 
 
-
+$(".Top").click(() => {
+    $(".Chat").animate({ scrollTop: 0 }, "fast");
+});
 
 $("#submit").click(function(event) {
     if($('#submit').hasClass("ButtonInterrupt") === true) {
@@ -438,6 +442,12 @@ $("#modal_confirm").on("click", function() {
 
 $("#modal_cancel").on("click", function() {
     modal.hide();
+});
+
+$("#modal_clearall").on("click", function() {
+    modal.hide();
+    clear_chat_record();
+    append_chat_info("对话历史已清除");
 });
 
 $("#instruct_switch").on("click", function() {

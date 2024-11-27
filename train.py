@@ -373,6 +373,48 @@ class TrainGPT():
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = lr
 
+            # 计算验证集损失，保存检查点（分为全量和LoRA两类）
+            if iter > 0 and iter % self.train_config.eval_interval == 0 and self.is_master_process:
+                val_loss = self.estimate_loss()
+                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Validation | Step: {iter} | Val_loss: {val_loss:.3f} | Best_val_loss: {best_val_loss:.4f}")
+
+                # 保底策略：无论验证集损失是否下降，每1000步保存一个检查点
+                if iter > 0 and iter > start_step and (val_loss < best_val_loss or iter % 1000 == 0):
+                    # LoRA：保存LoRA模块
+                    if self.train_config.use_lora:
+                        ckpt_name = f"lora_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt" if self.ckpt_filename is None else self.ckpt_filename
+                        ckpt_path = os.path.join(self.train_config.save_checkpoint_to, ckpt_name)
+                        self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving LoRA checkpoint to `{ckpt_path}`")
+                        _checkpoint = {
+                            "version":          MODEL_VERSION,
+                            "is_lora":          True,
+                            "lora":             raw_model.get_lora_state_dict(),
+                            # "model":            raw_model.state_dict(),            # TODO 后续去掉
+                            "optimizer":        self.optimizer.state_dict(),
+                            "step_count":       iter,
+                            "train_config":     self.train_config,
+                            "model_config":     self.model_config,
+                            # "tokenizer_config": self.tokenizer.config              # TODO 后续去掉
+                        }
+                    # 预训练/继续与训练/全参数微调：保存模型全部参数和优化器状态
+                    else:
+                        ckpt_name = f"checkpoint_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt" if self.ckpt_filename is None else self.ckpt_filename
+                        ckpt_path = os.path.join(self.train_config.save_checkpoint_to, ckpt_name)
+                        self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving full-param checkpoint to `{ckpt_path}`")
+                        _checkpoint = {
+                            "version":          MODEL_VERSION,
+                            "is_lora":          False,
+                            "model":            raw_model.state_dict(),
+                            "optimizer":        self.optimizer.state_dict(),
+                            "step_count":       iter,
+                            "train_config":     self.train_config,
+                            "model_config":     self.model_config,
+                            "tokenizer_config": self.tokenizer.config
+                        }
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                    torch.save(_checkpoint, ckpt_path)
+
             t0 = time.time_ns()
 
             # 使用自动混合精度技术（默认）
@@ -430,48 +472,6 @@ class TrainGPT():
                 throughput = self.gradient_accumulation_steps * self.ddp_world_size * self.train_config.batch_size * self.model_config.block_size * (t1_total[1] - t0_total[1]) / ((t1_total[0] - t0_total[0]) / 1e9)
                 self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Epoch: {self.train_data.epoch} | Step: {iter} | Dataset: {self.train_data.current_course_index}-{self.train_data.current_line_pos[self.train_data.current_course_index]} | Loss: {lossf:.3f} | {dt*1000:.0f} ms/step , {flops / 1e9:.2f} GFLOP/s , {throughput:.1f} tokens/s")
                 t0_total = t1_total
-
-            # 计算验证集损失，保存检查点（分为全量和LoRA两类）
-            if iter > 0 and iter % self.train_config.eval_interval == 0 and self.is_master_process:
-                val_loss = self.estimate_loss()
-                self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Validation | Step: {iter} | Val_loss: {val_loss:.3f} | Best_val_loss: {best_val_loss:.4f}")
-
-                # 保底策略：无论验证集损失是否下降，每1000步保存一个检查点
-                if iter > 0 and iter > start_step and (val_loss < best_val_loss or iter % 1000 == 0):
-                    # LoRA：保存LoRA模块
-                    if self.train_config.use_lora:
-                        ckpt_name = f"lora_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt" if self.ckpt_filename is None else self.ckpt_filename
-                        ckpt_path = os.path.join(self.train_config.save_checkpoint_to, ckpt_name)
-                        self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving LoRA checkpoint to `{ckpt_path}`")
-                        _checkpoint = {
-                            "version":          MODEL_VERSION,
-                            "is_lora":          True,
-                            "lora":             raw_model.get_lora_state_dict(),
-                            # "model":            raw_model.state_dict(),            # TODO 后续去掉
-                            "optimizer":        self.optimizer.state_dict(),
-                            "step_count":       iter,
-                            "train_config":     self.train_config,
-                            "model_config":     self.model_config,
-                            # "tokenizer_config": self.tokenizer.config              # TODO 后续去掉
-                        }
-                    # 预训练/继续与训练/全参数微调：保存模型全部参数和优化器状态
-                    else:
-                        ckpt_name = f"checkpoint_{time.strftime('%Y%m%d_%H%M%S')}_step_{iter}.pt" if self.ckpt_filename is None else self.ckpt_filename
-                        ckpt_path = os.path.join(self.train_config.save_checkpoint_to, ckpt_name)
-                        self.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Saving full-param checkpoint to `{ckpt_path}`")
-                        _checkpoint = {
-                            "version":          MODEL_VERSION,
-                            "is_lora":          False,
-                            "model":            raw_model.state_dict(),
-                            "optimizer":        self.optimizer.state_dict(),
-                            "step_count":       iter,
-                            "train_config":     self.train_config,
-                            "model_config":     self.model_config,
-                            "tokenizer_config": self.tokenizer.config
-                        }
-                    if val_loss < best_val_loss:
-                        best_val_loss = val_loss
-                    torch.save(_checkpoint, ckpt_path)
 
             iter += 1
             self.step_count = iter

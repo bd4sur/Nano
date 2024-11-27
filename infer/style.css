@@ -152,7 +152,7 @@ a:hover {
     font-size: 14px;
     color: #383a40;
     font-weight: bold;
-    letter-spacing: 2px;
+    letter-spacing: 1px;
     line-height: 2;
 }
 .ModalContent {
@@ -410,16 +410,18 @@ a:hover {
 .BotRound { flex-direction: row; }
 
 .ChatAvatarContainer {
-    width: 30px; height: 30px; overflow: hidden; border-radius: 30px; flex-shrink: 0;
+    width: 30px; height: 30px; overflow: hidden; border-radius: 6px; flex-shrink: 0;
     border: 1px solid #fff;
     box-sizing: border-box;
     box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
 }
 .UserAvatarContainer {
     margin-right: 10px;
+    margin-top: 4px;
 }
 .BotAvatarContainer {
     margin-right: 10px;
+    margin-top: 4px;
 }
 .UserAvatarImage, .BotAvatarImage { width: 100%; height: 100%; }
 
@@ -479,17 +481,17 @@ a:hover {
     position: relative;
     display: flex;
     border-radius: 6px;
-    background: linear-gradient(320deg, #28cdff, #678bff);
+    background: #1155ee;
     color: #ffffff;
     height: 40px;
-    margin: 10px;
+    margin: 10px auto;
+    width: 39%;
     flex-direction: row;
     align-items: center;
     justify-content: center;
-    box-shadow: 2px 2px 6px 0px rgb(0 0 0 / 0.1);
 }
 .ModelSelector:hover {
-    background: linear-gradient(320deg, #009dcd, #002dc3);
+    background: #002dc3;
 }
 .ChatInput {
     position: sticky;
