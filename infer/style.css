@@ -299,7 +299,7 @@ a:hover {
     position: relative;
     width: 100%;
     overflow-y: auto;
-    background: linear-gradient(180deg, #ffffff, #f3f5f8 20%);
+    background: linear-gradient(180deg, #ffffff, #f4f6f9 50%);
 }
 
 .ChatRecord {
@@ -477,20 +477,29 @@ a:hover {
 .UserCopyBubble:hover { background: #ffffff50; }
 .BotCopyBubble:hover { background: #383a4010; }
 
-.ModelSelector {
+.LoadModel {
+    display: flex;
+    justify-content: center;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: nowrap;
+}
+
+.LoadModelButton {
     position: relative;
     display: flex;
     border-radius: 6px;
     background: #1155ee;
     color: #ffffff;
     height: 40px;
-    margin: 10px auto;
-    width: 39%;
+    margin: 10px;
+    padding: 0px 15px;
     flex-direction: row;
     align-items: center;
     justify-content: center;
+    cursor: default;
 }
-.ModelSelector:hover {
+.LoadModelButton:hover {
     background: #002dc3;
 }
 .ChatInput {
@@ -499,7 +508,7 @@ a:hover {
     bottom: 0;
     width: 100%;
     padding: 10px 0;
-    background: #f3f5f8;
+    background: #f4f6f9;
     text-align: center;
 }
 .ChatInputContainer {

@@ -56,9 +56,8 @@
                             <div class="GuideIntroContent">
                                 <div>完全在浏览器内推理的(大)语言模型！</div>
                                 <ul style="padding-left: 22px; margin: 8px 0;">
-                                    <li>下载<a href="https://huggingface.co/bd4sur/Nano-56M" target="_blank">语言模型和LoRA插件</a>。</li>
-                                    <li>点击按钮，加载模型和LoRA模块。</li>
-                                    <li>输入问题，点击小飞机，开始生成！</li>
+                                    <li>下载<a href="https://huggingface.co/bd4sur/Nano-56M" target="_blank">基础模型和LoRA模块</a>。</li>
+                                    <li>或者下载<a href="https://huggingface.co/bd4sur/Nano-56M-Instruct" target="_blank">对话模型</a>。</li>
                                 </ul>
                                 <div>注意：现在还不支持多轮对话噢。</div>
                                 <div style="margin: 5px 0 0 0; font-size: smaller;">Illustration by <a href="https://x.com/ookiiayu/status/1633071773217607683" target="_blank">ookiiayu@X</a></div>
@@ -78,9 +77,14 @@
         </div>
     </div>
     <div class="ChatInput">
-        <div class="ModelSelector" id="select_file">
-            <input type="file" id="model_file_selector" name="files[]" multiple style="position: absolute; top: 0; right: 0; width: 100%; height: 100%; opacity: 0;">
-            <div id="model_selector_prompt" style="font-weight: bold;">选择模型...</div>
+        <div class="LoadModel">
+            <div class="LoadModelButton" id="select_file">
+                <input type="file" id="model_file_selector" name="files[]" multiple style="position: absolute; top: 0; right: 0; width: 100%; height: 100%; opacity: 0;">
+                <div id="load_model_button_prompt" style="font-weight: bold;">选择本地模型...</div>
+            </div>
+            <div class="LoadModelButton" id="load_remote_model">
+                <div id="load_remote_model_prompt" style="font-weight: bold;">使用 Nano-56M 对话模型</div>
+            </div>
         </div>
         <div class="ChatInputContainer" style="display: none;">
             <div class="InputBoxContainer">
@@ -478,10 +482,11 @@ $("#backend_switch").click(function(event) {
 // 读取模型文件
 let model_file_selector = document.getElementById('model_file_selector');
 model_file_selector.onchange = () => {
+    $('#load_remote_model').hide();
     let file = model_file_selector.files[0];
     let Reader = new FileReader();
     Reader.onloadend = () => {
-        $('#model_selector_prompt').html("正在解析...");
+        $('#load_model_button_prompt').html("正在解析...");
         let file_buffer = Reader.result;
         if(NANO_INFER_BACKEND === "wasm") {
             worker.postMessage({
@@ -492,7 +497,7 @@ model_file_selector.onchange = () => {
         else if(NANO_INFER_BACKEND == "js") {
             load_model(file_buffer);
             document.querySelector('#submit').removeAttribute("disabled");
-            $('#select_file').fadeOut(300, () => {
+            $('.LoadModel').fadeOut(300, () => {
                 $(".backend_select").fadeOut(300, () => {
                     $(".ChatInputContainer").fadeIn(300);
                     $(".GuideQuestionContainer").fadeIn(300);
@@ -501,8 +506,61 @@ model_file_selector.onchange = () => {
         }
     };
     Reader.readAsArrayBuffer(file);
-    $('#model_selector_prompt').html("正在读取...");
+    $('#load_model_button_prompt').html("正在读取...");
 };
+
+
+
+
+$("#load_remote_model").on("click", async () => {
+    $('#load_remote_model').off("click");
+    $('#load_remote_model_prompt').html("请确保可访问 HuggingFace");
+    $('#select_file').hide();
+
+    const model_url = "https://huggingface.co/bd4sur/Nano-56M-Instruct/resolve/main/1-%E9%80%9A%E7%94%A8%E5%AF%B9%E8%AF%9D%E6%A8%A1%E5%9E%8B-229000.bin";
+    let remote_model_req = await fetch(model_url);
+    let content_length = remote_model_req.headers.get('Content-Length');
+    let response_length = 0;
+    let file_buffer = new Uint8Array(content_length);
+
+    async function* streamAsyncIterable(stream) {
+        const reader = stream.getReader();
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) return;
+                yield value;
+            }
+        }
+        finally {
+            reader.releaseLock();
+        }
+    }
+
+    for await (let chunk of streamAsyncIterable(remote_model_req.body)) {
+        file_buffer.set(chunk, response_length);
+        response_length += chunk.length;
+        $('#load_remote_model_prompt').html(`正在读取... ${(response_length / content_length * 100).toFixed(1)}%`);
+    }
+
+    $('#load_remote_model_prompt').html("正在解析...");
+    if(NANO_INFER_BACKEND === "wasm") {
+        worker.postMessage({
+            eventType: "MODEL_FILE",
+            eventData: file_buffer
+        });
+    }
+    else if(NANO_INFER_BACKEND == "js") {
+        load_model(file_buffer);
+        document.querySelector('#submit').removeAttribute("disabled");
+        $('.LoadModel').fadeOut(300, () => {
+            $(".backend_select").fadeOut(300, () => {
+                $(".ChatInputContainer").fadeIn(300);
+                $(".GuideQuestionContainer").fadeIn(300);
+            });
+        });
+    }
+});
 
 
 // 读取外挂LoRA模块
@@ -599,7 +657,7 @@ worker.addEventListener('message', function(event) {
 
     if(eventData.eventType === 'INIT_FINISHED') {
         document.querySelector('#submit').removeAttribute("disabled");
-        $('#select_file').fadeOut(300, () => {
+        $('.LoadModel').fadeOut(300, () => {
             $(".backend_select").fadeOut(300, () => {
                 $(".ChatInputContainer").fadeIn(300);
                 $(".GuideQuestionContainer").fadeIn(300);
