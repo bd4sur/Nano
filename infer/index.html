@@ -568,7 +568,8 @@ $(".LoadRemoteModelButton").on("click", async function () {
         }
 
         if(window.caches !== undefined && is_cached === false) {
-            const responseToCache = new Response(new Blob(file_buffer), {
+            let blob = new Blob([file_buffer]);
+            const responseToCache = new Response(blob, {
                 headers: { 'Content-Type': response.headers.get('content-type') }
             });
             await _cache.put(url, responseToCache);
