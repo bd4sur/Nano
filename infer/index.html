@@ -534,7 +534,7 @@ $(".LoadRemoteModelButton").on("click", async function () {
             else {
                 console.log(`模型 ${model_url} 尚未缓存过，从远程获取。`);
                 const model_response = await fetch(model_url);
-                await _cache.put(model_url, response.clone());
+                await _cache.put(model_url, model_response.clone());
                 response = model_response;
             }
         }
