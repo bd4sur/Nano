@@ -524,15 +524,41 @@ $(".LoadRemoteModelButton").on("click", async function () {
             const cachedResponse = await _cache.match(model_url);
             if(cachedResponse) {
                 console.log(`模型 ${model_url} 已缓存过，直接取缓存。`);
-                return cachedResponse;
+                return new Uint8Array(cachedResponse.arrayBuffer());
             }
         }
         console.log(`模型 ${model_url} 尚未缓存过，或者浏览器不支持 Cache API，从远程获取。`);
-        const response = await fetch(model_url);
+
+        const model_response = await fetch(model_url);
+        let content_length = model_response.headers.get('Content-Length');
+        let response_length = 0;
+        let file_buffer = new Uint8Array(content_length);
+
+        async function* streamAsyncIterable(stream) {
+            const reader = stream.getReader();
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) return;
+                    yield value;
+                }
+            }
+            finally {
+                reader.releaseLock();
+            }
+        }
+
+        for await (let chunk of streamAsyncIterable(model_response.body)) {
+            file_buffer.set(chunk, response_length);
+            response_length += chunk.length;
+            $('.LoadRemoteModelButtonPrompt').html(`正在读取... ${(response_length / content_length * 100).toFixed(1)}%`);
+        }
+
         if(window.caches !== undefined) {
             await _cache.put(model_url, response.clone());
         }
-        return response;
+
+        return file_buffer;
     }
 
     $('.LoadRemoteModelButton').off("click");
@@ -545,30 +571,7 @@ $(".LoadRemoteModelButton").on("click", async function () {
     $("#model_name").html(model_name);
 
     const model_url = $(this).attr("data-model-url");
-    let remote_model_req = await fetch_cache_model(model_url);
-    let content_length = remote_model_req.headers.get('Content-Length');
-    let response_length = 0;
-    let file_buffer = new Uint8Array(content_length);
-
-    async function* streamAsyncIterable(stream) {
-        const reader = stream.getReader();
-        try {
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) return;
-                yield value;
-            }
-        }
-        finally {
-            reader.releaseLock();
-        }
-    }
-
-    for await (let chunk of streamAsyncIterable(remote_model_req.body)) {
-        file_buffer.set(chunk, response_length);
-        response_length += chunk.length;
-        $('.LoadRemoteModelButtonPrompt').html(`正在读取... ${(response_length / content_length * 100).toFixed(1)}%`);
-    }
+    let file_buffer = await fetch_cache_model(model_url);
 
     $('.LoadRemoteModelButtonPrompt').html("正在解析...");
     if(NANO_INFER_BACKEND === "wasm") {
