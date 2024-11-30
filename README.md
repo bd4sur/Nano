@@ -1,7 +1,7 @@
 
 # Nano - Large Model, Tiny Toy
 
-[✨体验推理效果](https://bd4sur.com/Nano/infer) / 📺[B站视频：手机浏览器推理](https://www.bilibili.com/video/BV1ZcUiYZENc/) / 📺[B站视频：HomeLab炼丹](https://www.bilibili.com/video/BV1uv42127qP)
+✨[体验推理效果](https://bd4sur.com/Nano/infer) / 📺[B站视频：手机浏览器推理](https://www.bilibili.com/video/BV1ZcUiYZENc/) / 📺[B站视频：HomeLab炼丹](https://www.bilibili.com/video/BV1uv42127qP)
 
 **当前状态：Pre-alpha · 正在积极开发，技术状态尚未固化，按原样呈现**
 
@@ -24,16 +24,16 @@
 
 ## 模型和数据
 
-模型（其中bin扩展名的模型可用于浏览器推理）：
+预训练模型和问答模型（其中bin扩展名的模型可用于浏览器推理）：
 
-|规模|预训练模型|指令微调模型|LoRA插件|
-|----|---------|-----------|-------|
-|56M|[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|[Nano-56M-Instruct](https://huggingface.co/bd4sur/Nano-56M-Instruct)|（正在训练）|
-|168M|[Nano-168M](https://huggingface.co/bd4sur/Nano-168M)（正在训练）|Nano-168M-Instruct（正在训练）|（正在训练）|
+|规模|LoRA插件|
+|-----|-----------|
+|[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|（正在训练）|
+|[Nano-168M](https://huggingface.co/bd4sur/Nano-168M)|（正在训练）|
 
 数据集：
 
-- 预训练数据：[Nano-PT-10B](https://huggingface.co/datasets/bd4sur/Nano-PT-10B)
+- 预训练数据：[Nano-PT-10G](https://huggingface.co/datasets/bd4sur/Nano-PT-10G)
 - 监督微调数据：正在整理。
 
 数据集为7z格式，解压口令“nano”。
@@ -115,7 +115,7 @@ python -m pip install -r requirements.txt
 - 若长时间训练，**强烈建议使用 [GNU Screen](https://www.gnu.org/software/screen/) 等终端切换工具，保证训练进程不被意外杀掉**。
 - 若使用多机分布式训练，请先提前配置好分布式环境，例如无密码ssh认证等。
 
-> 简单估算训练时间：对58M参数的GPT语言模型(L=16, H=16, E=512, VocabSize=512)作预训练，按照[文献](https://arxiv.org/abs/2204.02311)中提供的算法进行计算，每个词元所需计算量约为403MFlop。如果使用10亿(即1B=1e9)词元的语料进行一轮(epoch)预训练，则总计算量约为403PFlop。实际使用单卡A100进行训练，**实测耗时约5200秒（1.44小时）**，对应运算速度为78TFlop/s，是A100标称BF16算力312TFlop/s的25%，也即MFU为25%左右。
+> 简单估算训练时间：对58M参数的GPT语言模型(L=16, H=16, E=512, VocabSize=512)作预训练，按照[文献](https://arxiv.org/abs/2204.02311)中提供的算法进行计算，每个词元所需计算量约为403MFlop。如果使用10亿词元的语料进行一轮(epoch)预训练，则总计算量约为403PFlop。实际使用单卡A100进行训练，**实测耗时约5200秒（1.44小时）**，对应运算速度为78TFlop/s，是A100标称BF16算力312TFlop/s的25%，也即MFU为25%左右。
 
 **预训练**：
 
@@ -146,7 +146,7 @@ train.py -m config/model_config.json -t config/config_pretrain.json
 
 请注意：
 
-- 训练参数的设置与训练任务和算力资源相关。将`config/config_pretrain.json`中的`batch_size`设置为一个能够充分利用显存的值。对于 AGX Orin (64GB)，训练56M模型，可设置为160。
+- 训练参数的设置与训练任务和算力资源相关。将`config/config_pretrain.json`中的`batch_size`设置为一个能够充分利用显存的值。对于 AGX Orin (64GiB)，训练56M模型，可设置为160。
 - 训练没有最大步数限制。因此，需要自行决定何时中止训练。建议不少于1轮（epoch），保证模型“见过”全部语料。
 - 如果使用DDP训练，`gradient_accumulation_steps`应设置为显卡数的整数倍。
 - 支持保存模型检查点。训练过程中，程序将按照模型保存策略，保存模型训练检查点到`checkpoint`目录。保存策略主要有三点：一是根据训练配置文件中规定的间隔，每隔一定的步数保存一个检查点；二是只有当验证集损失下降才会保存检查点；三是每隔1000步定期保存一次检查点。优先级：策略3 > 策略2 > 策略1。
@@ -396,7 +396,7 @@ Min = 0, Max = 1, Depth = 4, BlockSize = MaxLen = 64
 
 |设备|设置|速度(TPS)|
 |----|----|----|
-|Jetson Orin NX (16GB)|JetPack6.0/GCC***|***|
+|Jetson Orin NX (16GiB)|JetPack6.0/GCC***|***|
 
 **训练性能天梯图**
 
@@ -404,16 +404,16 @@ Min = 0, Max = 1, Depth = 4, BlockSize = MaxLen = 64
 
 |设备|设置|速度|
 |----|----|----|
-|Jetson AGX Orin (64GB)|BF16, AMP, FlashAttn|30～32TFLOPS|
-|Jetson AGX Orin (64GB)|FP32, w/o AMP|8.7~8.9TFLOPS|
-|Jetson Orin NX (16GB)|BF16, AMP, FlashAttn|12～13TFLOPS|
-|Jetson Orin NX (16GB)|FP32, w/o AMP|3.0～3.3TFLOPS|
-|单卡P40 (24GB)|FP32, w/o AMP|6.4～6.5TFLOPS|
-|单卡P100 (16GB)|FP32, w/o AMP|--TFLOPS|
-|双路E5-2680v4 (64GB)|FP32, w/o AMP|--GFLOPS|
-|双路E5-2686v4 (128GB)|FP32, w/o AMP|550～650GFLOPS|
-|Ryzen 7 5800H (16GB)|FP32, w/o AMP|200～210GFLOPS|
-|Core i5-8259U (16GB)|FP32, w/o AMP|150～180GFLOPS|
+|Jetson AGX Orin (64GiB)|BF16, AMP, FlashAttn|30～32TFLOPS|
+|Jetson AGX Orin (64GiB)|FP32, w/o AMP|8.7~8.9TFLOPS|
+|Jetson Orin NX (16GiB)|BF16, AMP, FlashAttn|12～13TFLOPS|
+|Jetson Orin NX (16GiB)|FP32, w/o AMP|3.0～3.3TFLOPS|
+|单卡P40 (24GiB)|FP32, w/o AMP|6.4～6.5TFLOPS|
+|单卡P100 (16GiB)|FP32, w/o AMP|--TFLOPS|
+|双路E5-2680v4 (64GiB)|FP32, w/o AMP|--GFLOPS|
+|双路E5-2686v4 (128GiB)|FP32, w/o AMP|550～650GFLOPS|
+|Ryzen 7 5800H (16GiB)|FP32, w/o AMP|200～210GFLOPS|
+|Core i5-8259U (16GiB)|FP32, w/o AMP|150～180GFLOPS|
 
 **2024-10-14 预训练**
 
@@ -423,7 +423,7 @@ Min = 0, Max = 1, Depth = 4, BlockSize = MaxLen = 64
 
 - 设备：租用单卡A800-80GB-PCIe
 - 软件：CUDA 12.4 / PyTorch 2.3.0
-- 显存占用：71.6GB
+- 显存占用：71.6GiB
 - 平均FLOPS：79TFLOPS
 - 平均吞吐率：193k tokens/s
 
@@ -435,7 +435,7 @@ Min = 0, Max = 1, Depth = 4, BlockSize = MaxLen = 64
 
 - 设备：Jetson Orin NX 16GB (MAXN)
 - 软件：CUDA 12.2 / PyTorch 2.3.0
-- 显存占用：6.0GB
+- 显存占用：6.0GiB
 - 平均FLOPS：3.2TFLOPS
 - 平均吞吐率：8k tokens/s
 

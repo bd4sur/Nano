@@ -40,7 +40,7 @@
 
 <div class="Main">
     <div class="Top">
-        <div><span class="Nano">NanoLM</span><span style="margin-left: 10px; border-left: 1px solid #9fa1a8; padding-left: 10px; color: #000; font-weight: 100; font-size: smaller;">Inference</span></div>
+        <div><span class="Nano">NanoLM</span><span style="margin-left: 10px; border-left: 1px solid #9fa1a8; padding-left: 10px; color: #000; font-weight: 100; font-size: smaller;"id="model_name">Inference</span></div>
         <a style="border-bottom: none; display: flex;" href="https://github.com/bd4sur/Nano"><img alt="GitHub stars" src="https://img.shields.io/github/stars/bd4sur/Nano?style=social"></a>
     </div>
 
@@ -67,8 +67,8 @@
                     <div class="backend_select">
                         <div id="backend_switch">当前使用 <b>WASM</b> 推理引擎，点击切换为 JS</div>
                         <div class="backend_select_prompt">
-                            <p>Nano现在支持两种推理引擎噢～</p>
-                            <p>你可以在加载模型前选择一种引擎</p>
+                            <p>Nano现在支持两种推理引擎</p>
+                            <p>后续可能引入 ONNX Runtime Web 等推理引擎</p>
                         </div>
                     </div>
                     <div class="GuideQuestionContainer" id="test_prompts" style="display: none;"></div>
@@ -80,10 +80,13 @@
         <div class="LoadModel">
             <div class="LoadModelButton" id="select_file">
                 <input type="file" id="model_file_selector" name="files[]" multiple style="position: absolute; top: 0; right: 0; width: 100%; height: 100%; opacity: 0;">
-                <div id="load_model_button_prompt" style="font-weight: bold;">选择本地模型...</div>
+                <div id="load_model_button_prompt" style="font-weight: bold;">打开本地模型...</div>
             </div>
-            <div class="LoadModelButton" id="load_remote_model">
-                <div id="load_remote_model_prompt" style="font-weight: bold;">使用 Nano-56M 对话模型</div>
+            <div class="LoadModelButton LoadRemoteModelButton" data-model-name="56M-QA" data-model-url="https://huggingface.co/bd4sur/Nano-56M/resolve/main/nano_56m_99000_sft_229000.bin">
+                <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-56M-QA</div>
+            </div>
+            <div class="LoadModelButton LoadRemoteModelButton" data-model-name="168M-QA" data-model-url="https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_307000_sft_379000.bin">
+                <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-168M-QA</div>
             </div>
         </div>
         <div class="ChatInputContainer" style="display: none;">
@@ -482,7 +485,7 @@ $("#backend_switch").click(function(event) {
 // 读取模型文件
 let model_file_selector = document.getElementById('model_file_selector');
 model_file_selector.onchange = () => {
-    $('#load_remote_model').hide();
+    $('.LoadRemoteModelButton').hide();
     let file = model_file_selector.files[0];
     let Reader = new FileReader();
     Reader.onloadend = () => {
@@ -512,13 +515,36 @@ model_file_selector.onchange = () => {
 
 
 
-$("#load_remote_model").on("click", async () => {
-    $('#load_remote_model').off("click");
-    $('#load_remote_model_prompt').html("请确保可访问 HuggingFace");
-    $('#select_file').hide();
+$(".LoadRemoteModelButton").on("click", async function () {
 
-    const model_url = "https://huggingface.co/bd4sur/Nano-56M-Instruct/resolve/main/1-%E9%80%9A%E7%94%A8%E5%AF%B9%E8%AF%9D%E6%A8%A1%E5%9E%8B-229000.bin";
-    let remote_model_req = await fetch(model_url);
+    async function fetch_cache_model(model_url) {
+        if(window.caches !== undefined) {
+            const cache = await window.caches.open("binaryFileCache");
+            const cachedResponse = await cache.match(model_url);
+            if(cachedResponse) {
+                console.log(`模型 ${model_url} 已缓存过，直接取缓存。`);
+                return cachedResponse;
+            }
+        }
+        console.log(`模型 ${model_url} 尚未缓存过，或者浏览器不支持 Cache API，从远程获取。`);
+        const response = await fetch(model_url);
+        if(window.caches !== undefined) {
+            await window.cache.put(model_url, response.clone());
+        }
+        return response;
+    }
+
+    $('.LoadRemoteModelButton').off("click");
+    $('.LoadRemoteModelButtonPrompt').html("正在连接HuggingFace...");
+    $('#select_file').hide();
+    $('.LoadModelButton').hide();
+    $(this).show();
+
+    const model_name = $(this).attr("data-model-name");
+    $("#model_name").html(model_name);
+
+    const model_url = $(this).attr("data-model-url");
+    let remote_model_req = await fetch_cache_model(model_url);
     let content_length = remote_model_req.headers.get('Content-Length');
     let response_length = 0;
     let file_buffer = new Uint8Array(content_length);
@@ -540,10 +566,10 @@ $("#load_remote_model").on("click", async () => {
     for await (let chunk of streamAsyncIterable(remote_model_req.body)) {
         file_buffer.set(chunk, response_length);
         response_length += chunk.length;
-        $('#load_remote_model_prompt').html(`正在读取... ${(response_length / content_length * 100).toFixed(1)}%`);
+        $('.LoadRemoteModelButtonPrompt').html(`正在读取... ${(response_length / content_length * 100).toFixed(1)}%`);
     }
 
-    $('#load_remote_model_prompt').html("正在解析...");
+    $('.LoadRemoteModelButtonPrompt').html("正在解析...");
     if(NANO_INFER_BACKEND === "wasm") {
         worker.postMessage({
             eventType: "MODEL_FILE",

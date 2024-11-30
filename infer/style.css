@@ -302,10 +302,20 @@ a:hover {
     background: linear-gradient(180deg, #ffffff, #f4f6f9 50%);
 }
 
-.ChatRecord {
-    padding: 10px 10px 30px 10px;
-    min-height: calc(100% - 120px);
-    text-align: center;
+
+@media(min-width:651px) { /* Desktop */
+    .ChatRecord {
+        padding: 10px 20px 30px 20px;
+        min-height: calc(100% - 120px);
+        text-align: center;
+    }
+}
+@media(max-width:650px) { /* Mobile */
+    .ChatRecord {
+        padding: 10px 10px 30px 10px;
+        min-height: calc(100% - 120px);
+        text-align: center;
+    }
 }
 .Guide {
     display: flex;
@@ -367,6 +377,7 @@ a:hover {
 .backend_select {
     display: flex;
     flex-direction: column;
+    align-items: center;
     padding: 10px 10px 10px 10px;;
 }
 .backend_select_prompt {
@@ -382,7 +393,7 @@ a:hover {
     text-align: center;
 }
 #backend_switch {
-    background-color: #000e8d;
+    background-color: #aeb7ca;
     width: fit-content;
     color: #ffffff;
     padding: 5px 10px;
@@ -492,12 +503,22 @@ a:hover {
     background: #1155ee;
     color: #ffffff;
     height: 40px;
-    margin: 10px;
-    padding: 0px 15px;
     flex-direction: row;
     align-items: center;
     justify-content: center;
     cursor: default;
+}
+@media(min-width:651px) { /* Desktop */
+    .LoadModelButton {
+        margin: 10px;
+        padding: 0px 15px;
+    }
+}
+@media(max-width:650px) { /* Mobile */
+    .LoadModelButton {
+        margin: 10px 6px;
+        padding: 0px 10px;
+    }
 }
 .LoadModelButton:hover {
     background: #002dc3;
@@ -511,10 +532,19 @@ a:hover {
     background: #f4f6f9;
     text-align: center;
 }
-.ChatInputContainer {
-    display: flex;
-    margin: 10px;
+@media(min-width:651px) { /* Desktop */
+    .ChatInputContainer {
+        display: flex;
+        margin: 10px 20px;
+    }
 }
+@media(max-width:650px) { /* Mobile */
+    .ChatInputContainer {
+        display: flex;
+        margin: 10px;
+    }
+}
+
 .InputBoxContainer {
     display: flex;
     /* border: 2px solid #e5e9f2; */
