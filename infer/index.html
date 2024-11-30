@@ -518,9 +518,10 @@ model_file_selector.onchange = () => {
 $(".LoadRemoteModelButton").on("click", async function () {
 
     async function fetch_cache_model(model_url) {
+        let _cache = undefined;
         if(window.caches !== undefined) {
-            const cache = await window.caches.open("binaryFileCache");
-            const cachedResponse = await cache.match(model_url);
+            _cache = await window.caches.open("binaryFileCache");
+            const cachedResponse = await _cache.match(model_url);
             if(cachedResponse) {
                 console.log(`模型 ${model_url} 已缓存过，直接取缓存。`);
                 return cachedResponse;
@@ -529,7 +530,7 @@ $(".LoadRemoteModelButton").on("click", async function () {
         console.log(`模型 ${model_url} 尚未缓存过，或者浏览器不支持 Cache API，从远程获取。`);
         const response = await fetch(model_url);
         if(window.caches !== undefined) {
-            await window.cache.put(model_url, response.clone());
+            await _cache.put(model_url, response.clone());
         }
         return response;
     }
