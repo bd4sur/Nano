@@ -519,18 +519,28 @@ $(".LoadRemoteModelButton").on("click", async function () {
 
     async function fetch_cache_model(model_url) {
         let _cache = undefined;
+        let response;
+
         if(window.caches !== undefined) {
             _cache = await window.caches.open("binaryFileCache");
             const cachedResponse = await _cache.match(model_url);
             if(cachedResponse) {
                 console.log(`模型 ${model_url} 已缓存过，直接取缓存。`);
-                return new Uint8Array(cachedResponse.arrayBuffer());
+                response = cachedResponse;
+            }
+            else {
+                console.log(`模型 ${model_url} 尚未缓存过，从远程获取。`);
+                const model_response = await fetch(model_url);
+                response = model_response;
             }
         }
-        console.log(`模型 ${model_url} 尚未缓存过，或者浏览器不支持 Cache API，从远程获取。`);
+        else {
+            console.log(`浏览器不支持 Cache API，从远程获取 ${model_url}。`);
+            const model_response = await fetch(model_url);
+            response = model_response;
+        }
 
-        const model_response = await fetch(model_url);
-        let content_length = model_response.headers.get('Content-Length');
+        let content_length = response.headers.get('Content-Length');
         let response_length = 0;
         let file_buffer = new Uint8Array(content_length);
 
@@ -548,7 +558,7 @@ $(".LoadRemoteModelButton").on("click", async function () {
             }
         }
 
-        for await (let chunk of streamAsyncIterable(model_response.body)) {
+        for await (let chunk of streamAsyncIterable(response.body)) {
             file_buffer.set(chunk, response_length);
             response_length += chunk.length;
             $('.LoadRemoteModelButtonPrompt').html(`正在读取... ${(response_length / content_length * 100).toFixed(1)}%`);
