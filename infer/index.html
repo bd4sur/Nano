@@ -534,6 +534,7 @@ $(".LoadRemoteModelButton").on("click", async function () {
             else {
                 console.log(`模型 ${model_url} 尚未缓存过，从远程获取。`);
                 const model_response = await fetch(model_url);
+                await _cache.put(model_url, response.clone());
                 response = model_response;
             }
         }
@@ -565,10 +566,6 @@ $(".LoadRemoteModelButton").on("click", async function () {
             file_buffer.set(chunk, response_length);
             response_length += chunk.length;
             $('.LoadRemoteModelButtonPrompt').html(`正在读取... ${(response_length / content_length * 100).toFixed(1)}%`);
-        }
-
-        if(window.caches !== undefined && is_cached === false) {
-            await _cache.put(model_url, response.clone());
         }
 
         return file_buffer;
