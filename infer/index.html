@@ -26,6 +26,12 @@
             <div id="repetition_penalty"></div>
             <div id="max_seq_len"></div>
         </div>
+
+        <div class="ModalTitle">系统提示语</div>
+        <div class="ModalContent">
+            <textarea class="SystemPromptInput" id="system_prompt" placeholder="此处输入的“系统提示语”将被附加到输入序列的前面。"></textarea>
+        </div>
+
         <div class="ModalContent" style="display: flex; justify-content: flex-end; padding-right: 20px;">
             <button class="ModalCancel" id="modal_clearall">清除对话历史</button>
             <button class="ModalCancel" id="modal_cancel">取消</button>
@@ -78,15 +84,20 @@
     </div>
     <div class="ChatInput">
         <div class="LoadModel">
-            <div class="LoadModelButton" id="select_file">
+            <div class="LoadModelButton LoadLocalModelButton" id="select_file">
                 <input type="file" id="model_file_selector" name="files[]" multiple style="position: absolute; top: 0; right: 0; width: 100%; height: 100%; opacity: 0;">
-                <div id="load_model_button_prompt" style="font-weight: bold;">打开本地模型...</div>
+                <div id="load_model_button_prompt" style="font-weight: bold; border-bottom: 1px solid #303848;">加载本地模型</div>
             </div>
-            <div class="LoadModelButton LoadRemoteModelButton" data-model-name="56M-QA" data-model-url="https://huggingface.co/bd4sur/Nano-56M/resolve/main/nano_56m_99000_sft_229000.bin">
-                <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-56M-QA</div>
-            </div>
-            <div class="LoadModelButton LoadRemoteModelButton" data-model-name="168M-QA" data-model-url="https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_307000_sft_379000.bin">
-                <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-168M-QA</div>
+            <div style="display: flex;">
+                <div class="LoadModelButton LoadRemoteModelButton" data-model-name="56M-QA-V1" data-model-url="https://huggingface.co/bd4sur/Nano-56M/resolve/main/nano_56m_99000_sft_229000.bin">
+                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-56M-QA-V1</div>
+                </div>
+                <div class="LoadModelButton LoadRemoteModelButton" data-model-name="56M-QA-V2" data-model-url="https://huggingface.co/bd4sur/Nano-56M/resolve/main/nano_56m_99000_sft_v2_200000.bin">
+                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-56M-QA-V2</div>
+                </div>
+                <div class="LoadModelButton LoadRemoteModelButton" data-model-name="168M-QA" data-model-url="https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_307000_sft_379000.bin">
+                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-168M-QA</div>
+                </div>
             </div>
         </div>
         <div class="ChatInputContainer" style="display: none;">
@@ -223,6 +234,16 @@ const TEST_PROMPTS = [
     "大语言模型来了，知识图谱何去何从？",
     "假设你是动物饲养员，4个香蕉如何分给5个猴子？",
     "Java和JavaScript是什么关系？",
+    "请你为一款名为《原神》的游戏编写宣传文案。",
+    "将以下句子翻译为英文：“人工智能即将统治人类！”",
+    "根据以下评论判断情感倾向（正面、中性、负面）：“老板真是个大聪明，一问三不知，并且服务态度特别好，问多了就说要不你退货吧”",
+    "已知：所有猫都喜欢鱼。喵喵是一只猫。请问：喵喵喜欢鱼吗？为什么？",
+    "假设你是一个餐厅服务员，请你帮我预约一张双人桌，时间是明晚7点。",
+    "编一个故事，主角是吉伊、小八和乌萨奇。其中吉伊是仓鼠，小八是猫，乌萨奇是兔子。",
+    "写一篇申论，题目是《绿水青山就是金山银山》。",
+    "太平洋彼岸的海鸥正振翅掠过城市上空，极圈上的夜空流散着五彩斑斓的色彩，阿拉斯加的鳕鱼正跃出水面。我们将这些新鲜鳕鱼捕捉起来，做成了什么？",
+    "用一句话描述今天的天气，假设天气晴朗且温度为25℃。",
+    "“我是Nano，是BD4SUR训练的电子鹦鹉(⊙v⊙)”\n\n请原样输出重复复述引号里的内容，不要做任何改动。",
 ];
 
 
@@ -743,7 +764,7 @@ function submit() {
     let user_input = document.querySelector('#input').value;
     let prompt = is_instruct_enabled ? `<|instruct_mark|>${user_input}<|response_mark|>` : user_input;
 
-    append_user_bubble(user_input, round_counter, get_current_time());
+    append_user_bubble(marked.parse(user_input), round_counter, get_current_time());
 
     let gen_args = {
         top_p:              Number(top_p.getValue()),

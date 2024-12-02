@@ -490,13 +490,29 @@ a:hover {
 
 .LoadModel {
     display: flex;
-    justify-content: center;
+    flex-direction: column;
+    align-items: center;
+}
+.LoadLocalModelButton {
+    position: relative;
+    display: flex;
+    border-radius: 6px;
+    background: transparent;
+    color: #ffffff;
+    font-size: 15px;
+    height: 30px;
+    padding: 0px 20px;
+    margin: 10px 0px;
     flex-direction: row;
     align-items: center;
-    flex-wrap: nowrap;
+    justify-content: center;
+    cursor: default;
+    color: #303848;
 }
-
-.LoadModelButton {
+.LoadLocalModelButton:hover {
+    background: #ffffff;
+}
+.LoadRemoteModelButton {
     position: relative;
     display: flex;
     border-radius: 6px;
@@ -509,18 +525,20 @@ a:hover {
     cursor: default;
 }
 @media(min-width:651px) { /* Desktop */
-    .LoadModelButton {
-        margin: 10px;
+    .LoadRemoteModelButton {
+        margin: 0px 5px 10px 5px;
         padding: 0px 15px;
+        font-size: 14px;
     }
 }
 @media(max-width:650px) { /* Mobile */
-    .LoadModelButton {
-        margin: 10px 6px;
+    .LoadRemoteModelButton {
+        margin: 0px 5px 10px 5px;
         padding: 0px 10px;
+        font-size: 12px;
     }
 }
-.LoadModelButton:hover {
+.LoadRemoteModelButton:hover {
     background: #002dc3;
 }
 .ChatInput {
