@@ -52,6 +52,10 @@ Modal.prototype.show = function() {
     this.maskNode.show();
     this.state = "flex";
     $(".Main").css("filter", "blur(10px)");
+
+    let clientHeight = window.innerHeight - 30;
+    let height = this.node.height();
+    this.node.css("top", clientHeight - height);
 }
 Modal.prototype.hide = function() {
     this.node.css("display", "none");
