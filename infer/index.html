@@ -1053,7 +1053,6 @@ function start_tts(text) {
         const speakerId = 0;
         tts_text_queue.push(text);
         let t = tts_text_queue.shift();
-        console.log(`TTS: ${t}`);
         piper_worker.postMessage({kind:"tts", input: t, speakerId});
         append_chat_info("正在转语音...");
     }

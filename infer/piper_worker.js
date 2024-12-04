@@ -1,3 +1,53 @@
+
+const dbName = "RequestCacheDB";
+const storeName = "requests";
+
+function initDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(dbName, 1);
+
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(storeName)) {
+                db.createObjectStore(storeName, { keyPath: "url" });
+            }
+        };
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = (event) => reject(event.target.error);
+    });
+}
+
+function saveToCache(db, url, data) {
+    console.log(`Save to cache ${url}`);
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(storeName, "readwrite");
+        const store = transaction.objectStore(storeName);
+        const request = store.put({ url, data, timestamp: Date.now() });
+
+        request.onsuccess = () => resolve(true);
+        request.onerror = (event) => reject(event.target.error);
+    });
+}
+
+function getFromCache(db, url) {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(storeName, "readonly");
+        const store = transaction.objectStore(storeName);
+        const request = store.get(url);
+
+        request.onsuccess = () => {
+            if (request.result) {
+                resolve(request.result);
+            } else {
+                resolve(null); // 没有找到数据
+            }
+        };
+        
+        request.onerror = (event) => reject(event.target.error);
+    });
+}
+
 self.addEventListener("message", event => {
     const data = event.data;
     if(data.kind === "init")
@@ -10,10 +60,23 @@ self.addEventListener("message", event => {
         tts(data);
 });
 
-const getBlob = async (url, blobs) => new Promise(resolve => {
+const getBlob = async (url, blobs) => new Promise(async (resolve) => {
     const cached = blobs[url];
     if(cached)
         return resolve(cached);
+
+    const db = await initDB();
+
+    // 检查缓存
+    const cachedData = await getFromCache(db, url);
+    if (cachedData) {
+        const isExpired = Date.now() - cachedData.timestamp > 3600000;
+        if (!isExpired) {
+            console.log("Serving from cache:", url);
+            return resolve(cachedData.data);
+        }
+    }
+
     const id = new Date().getTime();
     let xContentLength;
     self.postMessage({kind:"fetch", id, url});
@@ -22,7 +85,7 @@ const getBlob = async (url, blobs) => new Promise(resolve => {
     xhr.responseType = "blob";
     xhr.onprogress = event =>
         self.postMessage({kind:"fetch", id, url, total:xContentLength ?? event.total, loaded:event.loaded, is_done: false})
-    xhr.onreadystatechange = () => {
+    xhr.onreadystatechange = async () => {
         if(xhr.readyState >= xhr.HEADERS_RECEIVED
             && xContentLength === undefined
             && xhr.getAllResponseHeaders().includes("x-content-length"))
@@ -30,6 +93,7 @@ const getBlob = async (url, blobs) => new Promise(resolve => {
 
         if(xhr.readyState === xhr.DONE) {
             self.postMessage({kind:"fetch", id, url, blob:xhr.response, is_done: true});
+            await saveToCache(db, url, xhr.response);
             resolve(xhr.response);
         }
     }
@@ -57,8 +121,6 @@ async function init_piper(data) {
 
 async function tts(data) {
     const {input, speakerId} = data;
-
-    console.log(`Worker: ${input}`);
 
     const piperPhonemizeJsURL = URL.createObjectURL(piperPhonemizeJsBlob);
     const piperPhonemizeWasmURL = URL.createObjectURL(piperPhonemizeWasmBlob);
