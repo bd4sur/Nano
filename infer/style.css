@@ -407,6 +407,16 @@ a:hover {
     cursor: pointer;
 }
 
+#tts_init {
+    background-color: #aeb7ca;
+    width: fit-content;
+    color: #ffffff;
+    padding: 5px 10px;
+    border-radius: 3px;
+    margin: 0 0 10px 0;
+    font-size: 13px;
+    cursor: pointer;
+}
 
 .ChatInfo {
     display: block;
@@ -659,6 +669,22 @@ a:hover {
     color: #ffffff;
     padding: 3px 0 0 3px;
     box-shadow: inset 2px 2px 6px 0px rgb(0 0 0 / 25%);
+}
+
+.ButtonPTT {
+    border: none;
+    background: #87c800;
+    border-radius: 6px;
+    color: #fff;
+    min-width: 50px;
+    flex-shrink: 0;
+    margin: 1px 0 1px 10px;
+    box-shadow: 2px 2px 6px 0px rgba(0, 0, 0, 0.1);
+}
+.ButtonPTT:active, .ButtonPTT_Active {
+    background: #5f8f00;
+    padding: 1px 0 0 1px;
+    box-shadow: inset 2px 2px 6px 0px rgba(0, 0, 0, 0.5);
 }
 
 

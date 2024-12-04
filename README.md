@@ -471,6 +471,8 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 - [openai/tiktoken](https://github.com/openai/tiktoken)
 - [jQuery](https://jquery.com/license/)
 - [marked.js](https://github.com/markedjs/marked)
+- [rhasspy/piper](https://github.com/rhasspy/piper)
+- [wide-video/piper-wasm](https://github.com/wide-video/piper-wasm)
 
 **本仓库预置数据集来源**
 
