@@ -160,7 +160,10 @@
 <script src="./marked.min.js"></script>
 <script src="./components.js"></script>
 <script src="./infer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/t2cn.js"></script>
 <script>
+
+const opencc = OpenCC.Converter({ from: 'tw', to: 'cn' });
 
 // 全局状态：使用哪种推理后端
 let NANO_INFER_BACKEND = "wasm"; // "js" or "wasm"
@@ -1175,16 +1178,18 @@ function create_whisper_worker() {
                         console.log("typeof transcription is array");
                     }
                     else if (typeof e.data.transcript == 'object') {
-                        for(chunk of e.data.transcript.chunks) {
-                            $("#log").append(`<p>${chunk.timestamp[0]} - ${chunk.timestamp[1]} | ${chunk.text}</p>`);
-                        }
-                        console.info(e.data.transcript.text);
+                        // for(chunk of e.data.transcript.chunks) {
+                        //     $("#log").append(`<p>${chunk.timestamp[0]} - ${chunk.timestamp[1]} | ${chunk.text}</p>`);
+                        // }
 
-                        $("#input").val(e.data.transcript.text);
+                        let text = opencc(e.data.transcript.text);
+                        console.info(text);
+
+                        $("#input").val(text);
                         $("#submit").click();
-                        // if (typeof e.data.transcript.text == 'string') {
-                        //     $("#log").append(`<p>${e.data.transcript.text}</p>`);
-                        //     console.log("GOT TEXT: ", e.data.transcript.text);
+                        // if (typeof text == 'string') {
+                        //     $("#log").append(`<p>${text}</p>`);
+                        //     console.log("GOT TEXT: ", text);
                         // }
                     }
                 }
