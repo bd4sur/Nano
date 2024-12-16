@@ -307,7 +307,7 @@ a:hover {
 
 @media(min-width:651px) { /* Desktop */
     .ChatRecord {
-        padding: 10px 20px 30px 20px;
+        padding: 10px 30px 30px 30px;
         min-height: calc(100% - 120px);
         text-align: center;
     }
@@ -319,6 +319,21 @@ a:hover {
         text-align: center;
     }
 }
+
+.ButtonClearall {
+    display: flex;
+    cursor: pointer;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+}
+.ButtonClearall:hover {
+    background-color: #e5e9f2;
+}
+
 .Guide {
     display: flex;
     margin: 0 0 20px 0;
@@ -378,45 +393,18 @@ a:hover {
     background-color: #dee2e8;
 }
 
-.backend_select {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 10px 10px 10px 10px;;
-}
-.backend_select_prompt {
-    font-size: 12px;
-    color: #626675;
-    line-height: 1.8;
-    text-align: left;
-    letter-spacing: 0.5px;
-}
-.backend_select_prompt p {
-    margin: 3px 0 3px 0;
-    line-height: 1.5;
-    text-align: center;
-}
-#backend_switch {
-    background-color: #aeb7ca;
+
+#backend_switch, #tts_init {
+    background-color: #ccd3e0;
     width: fit-content;
     color: #ffffff;
-    padding: 5px 10px;
+    padding: 3px 8px;
     border-radius: 3px;
-    margin: 0 0 10px 0;
-    font-size: 13px;
+    margin: 0px;
+    font-size: 12px;
     cursor: pointer;
 }
 
-#tts_init {
-    background-color: #aeb7ca;
-    width: fit-content;
-    color: #ffffff;
-    padding: 5px 10px;
-    border-radius: 3px;
-    margin: 0 0 10px 0;
-    font-size: 13px;
-    cursor: pointer;
-}
 
 .ChatInfo {
     display: block;
@@ -472,7 +460,7 @@ a:hover {
 .ChatContent :first-of-type { margin-top: 0; }
 .ChatContent :last-of-type { margin-bottom: 0; }
 .ChatContent p {
-    font-size: 13px; line-height: 1.5; letter-spacing: 0.5px;
+    font-size: 13px; line-height: 1.5; /*letter-spacing: 0.5px;*/
     margin: 8px 0;
 }
 .UserBubbleFooter, .BotBubbleFooter {
@@ -565,7 +553,7 @@ a:hover {
 @media(min-width:651px) { /* Desktop */
     .ChatInputContainer {
         display: flex;
-        margin: 10px 20px;
+        margin: 10px 30px;
     }
 }
 @media(max-width:650px) { /* Mobile */
@@ -593,6 +581,7 @@ a:hover {
     outline: none;
     resize: none;
     padding: 6px 0;
+    margin: 0 0 0 6px;
     font-size: 13px;
     font-family: inherit;
     letter-spacing: 0.5px;
@@ -624,7 +613,6 @@ a:hover {
 }
 .ButtonLoRA:hover, .ButtonLoRAHover { background-color: #d7eac0; }
 
-.ButtonClear { margin: 0 6px 0 0; }
 .ButtonClearContainer { margin: 0; width: 16px; height: 16px; }
 
 .ButtonSetting { margin: 0 3px 0 0; }

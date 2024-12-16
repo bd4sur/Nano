@@ -13,6 +13,7 @@ checkpoint/
 dataset_preprocessed/
 log/
 model/
+whisper-base/
 *.log
 *.py[cod]
 *$py.class
