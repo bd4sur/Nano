@@ -1,19 +1,21 @@
 
 # Nano - Large Model, Tiny Toy
 
-✨[体验推理效果](https://bd4sur.com/Nano/infer) / 📺[B站视频：手机浏览器推理](https://www.bilibili.com/video/BV1ZcUiYZENc/) / 📺[B站视频：HomeLab炼丹](https://www.bilibili.com/video/BV1uv42127qP)
+✨[体验推理效果](https://bd4sur.com/Nano/infer) / 📺[B站视频：手机浏览器推理+ASR+TTS](https://www.bilibili.com/video/BV1NAieYiEFi) / 📺[B站视频：HomeLab炼丹](https://www.bilibili.com/video/BV1uv42127qP)
 
-**当前状态：Pre-alpha · 正在积极开发，技术状态尚未固化，按原样呈现**
+**当前状态：Pre-alpha · 正在训练168M问答模型，技术状态尚未固化，按原样呈现**
 
-**Nano**是Transformer语言模型的极简实现，供个人赏玩、研究、魔改和炼丹炉煲机之用。期望：
+![ ](./doc/nano-web.jpg)
+
+**Nano**是Transformer结构的自回归语言模型，供个人赏玩、研究、魔改和炼丹炉煲机之用。期望：
 
 - 基于PyTorch，实现一个具体而微的Transformer语言模型，不依赖🤗。
-- 实现模型的预训练、监督微调、推理过程。不实现人类反馈强化学习。
-- 从头训练出56M、168M参数的小规模语言模型。
-- 实现低功耗终端设备（如单板机、手机）上的推理，并支持LoRA插件。
-- 研究模型的动力学、训/推加速、部署优化、算法改进等问题。
-- 探索Transformer模型在自然语言处理以外的问题上的潜能。
-- 建立起关于大语言模型的合理预期和感性经验，对大语言模型技术祛魅。
+- 实现模型的预训练、监督微调过程。不实现人类反馈强化学习。
+- 从头训练出56M、168M参数的语言模型，以及配套的LoRA插件。
+- 实现各类计算设备上的推理，同时支持可插拔的LoRA插件。
+- 研究模型的动力学、训/推加速、模型和算法的优化提效等科学和工程问题。
+- 探索Transformer模型在自然语言处理以外的各类问题上的潜能。
+- 建立起关于语言模型的合理预期和感性经验，对大语言模型祛魅。
 
 为什么叫“Nano”：
 
@@ -29,20 +31,20 @@
 |规模|LoRA插件|
 |-----|-----------|
 |[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|（正在训练）|
-|[Nano-168M](https://huggingface.co/bd4sur/Nano-168M)|（正在训练）|
+|[Nano-168M](https://huggingface.co/bd4sur/Nano-168M)（中间产物，正在训练）|（正在训练）|
 
 数据集：
 
 - 预训练数据：[Nano-PT-10G](https://huggingface.co/datasets/bd4sur/Nano-PT-10G)
 - 监督微调数据：正在整理。
 
-数据集为7z格式，解压口令“nano”。
+数据集为7z压缩包，解压口令“nano”。
 
 ## 使用说明
 
 ### 0. 百闻不如一见：立刻体验推理效果
 
-**WASM/JS实现的基于浏览器CPU的推理**
+**WASM/JS实现的基于浏览器的CPU推理**
 
 - 访问[在线体验页面](https://bd4sur.com/Nano/infer)，或者用浏览器直接打开`Nano/infer/index.html`。
 - 按页面提示，下载基座模型、指令微调模型或LoRA插件（扩展名均为bin）。
@@ -50,7 +52,7 @@
 - 可切换文本续写模式和指令问答模式，默认后者。推荐使用指令微调后模型，在指令问答模式下体验。
 - 可随时加载或卸载LoRA插件。注意LoRA插件需要与某个预训练基座模型匹配。
 - 使用`export.py`将检查点文件转换为基座模型或者LoRA插件，详见下文。
-- 所有推理过程均在本地浏览器内部进行。
+- 所有推理过程（含ASR和TTS）均在本地浏览器内部进行。
 
 **C语言实现的CPU推理**
 
@@ -64,11 +66,15 @@
 
 - 正在研究
 
+**基于RKNN实现的NPU（瑞芯微）推理**
+
+- 正在研究
+
 **基于 WebGPU / ONNX Runtime Web 实现的GPU推理**
 
 - 正在研究（参考[WebLLM](https://webllm.mlc.ai/)）
 
-**基于PyTorch框架的CPU/GPU推理**
+**基于PyTorch的CPU/GPU推理**
 
 首先下载pt扩展名的基座模型、指令微调模型或LoRA插件到`checkpoint`目录。
 
@@ -458,6 +464,8 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 ## 权利声明
 
 版权所有 © 2024 BD4SUR，保留所有权利。
+
+作为统计语言模型，本模型的输出依赖于输入和采样方式。本人不对该模型所生成的任何内容负责。
 
 本系统“按原样”提供，采用MIT协议授权。本系统为作者个人以学习和自用目的所创作的作品。作者不对本系统的质量作任何承诺。作者不保证提供有关本系统的任何形式的解释、维护或支持。作者不为任何人使用此系统所造成的任何正面的或负面的后果负责。
 

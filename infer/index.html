@@ -57,7 +57,7 @@
         </div>
         <div class="TopRight ButtonClearall" id="clearall" style="display: none;">
             <div style="width: 24px; height: 24px;">
-                <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="24px" height="24px"><path d="M904 112a8 8 0 0 1 8 8v248c0 17.673-14.327 32-32 32H632a8 8 0 0 1-8-8v-48c0-8.837 7.163-16 16-16h143.568C724.571 241.095 624.953 184 512 184c-181.15 0-328 146.85-328 328s146.85 328 328 328c179.338 0 325.06-143.928 327.956-322.576L840 512h72c0 220.914-179.086 400-400 400S112 732.914 112 512s179.086-400 400-400c135.74 0 255.688 67.613 328.003 170.998L840 128c0-8.837 7.163-16 16-16h48z" fill="#383a40"></path></svg>
+                <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="24px" height="24px"><path d="M910.6 512c-24.3 0-44.8 18.1-47.6 42.1C842.1 728.7 693.6 864 513.4 864c-194.2 0-352-157.8-352-352 0-194.4 157.6-352 352-352 81.8 0 157 27.9 216.8 74.6L662.8 302c-30.2 30.2-8.8 81.9 33.9 81.9h198.2c26.5 0 48-21.5 48-48V137.8c0-42.8-51.7-64.2-81.9-33.9l-62.5 62.5C721.4 102.7 622.6 64.3 514.9 64 266.7 63.2 65.8 263 65.4 511.3 65 759 265.8 960 513.4 960c229.2 0 418.3-172.2 444.8-394.2 3.4-28.6-18.8-53.8-47.6-53.8z" fill="#383a40"></path></svg>
             </div>
         </div>
     </div>
@@ -73,12 +73,17 @@
                             <div class="GuideIntroTitle">Web Browser Is All You Need!</div>
                             <div class="GuideIntroContent">
                                 <div>完全<span style="font-weight: bold;">在浏览器内</span>推理的大语言模型！</div>
-                                <div>ASR/TTS需访问HuggingFace下载模型。</div>
-                                <div>现在仅支持单轮对话。</div>
                                 <div>请勿过度期待噢 (๑¯◡¯๑)</div>
-                                <div style="margin: 5px 0 0 0; font-size: smaller;">Illustration by <a href="https://x.com/ookiiayu/status/1633071773217607683" target="_blank">ookiiayu@X</a></div>
+                                <div style="color: #babbbf; margin: 5px 0 0 0; font-size: smaller;">Illustration by <a href="https://x.com/ookiiayu/status/1633071773217607683" target="_blank">ookiiayu@X</a></div>
                             </div>
                         </div>
+                    </div>
+                    <div style="color: #babbbf; line-height: 1.8; font-size: 11px; margin-bottom: 15px;">
+                        <div>语音识别基于 <a href="https://github.com/xenova/whisper-web" target="_blank">Whisper</a>，语音合成基于 <a href="https://github.com/rhasspy/piper" target="_blank">Piper</a>，均在浏览器内推理</div>
+                        <div>首次触发语音识别/合成时，自动访问HuggingFace下载模型</div>
+                        <div>本页面不发送任何用户输入到任何远端服务器，欢迎审查代码</div>
+                        <div style="font-weight: bold;">作者不对本系统所生成的任何内容负责，请读者慎思明辨</div>
+                        <div>现在仅支持单轮对话或文本续写</div>
                     </div>
                     <div class="GuideQuestionContainer" id="test_prompts" style="display: none;"></div>
                 </div>
@@ -87,6 +92,10 @@
     </div>
     <div class="ChatInput">
         <div class="LoadModel">
+            <div class="LoadModelPrompt" style="display: flex; align-items: center; flex-direction: column; margin: 0px 0 0px 0; font-size: 14px;">
+                <div style="color: #626675;">请下载并加载语言模型</div>
+                <div style="color: #9a9ea8; font-size: 11px; margin: 5px 0 0 0; font-weight: lighter;">（基座模型加载后，可按需挂载LoRA插件）</div>
+            </div>
             <div style="display: flex; align-items: center; flex-direction: row;">
                 <div class="LoadModelButton LoadLocalModelButton" id="download_model_button">
                     <div style="font-weight: bold;"><a href="https://huggingface.co/bd4sur" target="_blank">下载模型和LoRA插件</a></div>
@@ -96,6 +105,10 @@
                     <input type="file" id="model_file_selector" name="files[]" multiple style="position: absolute; top: 0; right: 0; width: 100%; height: 100%; opacity: 0;">
                     <div id="load_model_button_prompt" style="font-weight: bold;">加载本地模型</div>
                 </div>
+            </div>
+            <div class="LoadModelPrompt" style="display: flex; align-items: center; flex-direction: column; margin: 16px 0; font-size: 14px;">
+                <div style="color: #626675;">或者 体验下列单轮问答模型</div>
+                <div style="color: #9a9ea8; font-size: 11px; margin: 5px 0 0 0; font-weight: lighter;">（请确保HuggingFace可访问，模型最大约700MiB）</div>
             </div>
             <div style="display: flex;">
                 <div class="LoadModelButton LoadRemoteModelButton" data-model-name="56M-QA-V1" data-model-url="https://huggingface.co/bd4sur/Nano-56M/resolve/main/nano_56m_99000_sft_229000.bin">
@@ -146,7 +159,7 @@
             </button>
         </div>
         <div style="height: 20px; display: flex; margin: 0px 30px; padding: 6px 0px; font-size: 10px; color: #9a9ea8; flex-direction: row; justify-content: center; align-items: center;">
-            <div style="margin: 0 10px 0 5px;">Copyright © 2023-2024 <a href="https://bd4sur.com" target="_blank">BD4SUR</a></div>
+            <div style="margin: 0 10px 0 5px;">版权所有 © 2023-2024 <a href="https://bd4sur.com" target="_blank">BD4SUR</a></div>
             <a style="border-bottom: none; display: flex;" href="https://github.com/bd4sur/Nano"><img alt="GitHub stars" height="16px" style="margin-left: 6px; filter: opacity(0.5);" src="https://img.shields.io/github/stars/bd4sur/Nano?style=social"></a>
         </div>
     </div>
@@ -386,7 +399,7 @@ function switch_submit_button_state(state) {
 function append_user_bubble(markdown, round_counter, date_str) {
     $("#ChatRecord").append(`
         <div class="ChatRound UserRound">
-            <div class="ChatAvatarContainer UserAvatarContainer"><img class="UserAvatarImage" src="avatar_user.jpg"></div>
+            <div class="ChatAvatarContainer UserAvatarContainer"><img class="UserAvatarImage" src="https://bd4sur.com/favicon.ico"></div>
             <div class="ChatBubble UserBubble">
                 <div class="ChatContent" id="user_${round_counter}">${markdown}</div>
                 <div class="UserBubbleFooter">
@@ -537,6 +550,7 @@ $("#backend_switch").click(function(event) {
 let model_file_selector = document.getElementById('model_file_selector');
 model_file_selector.onchange = async () => {
     $('.LoadRemoteModelButton').hide();
+    $(".LoadModelPrompt").hide();
     $("#download_model_button").hide();
     $("#model_button_vert_bar").hide();
     let file = model_file_selector.files[0];
@@ -636,6 +650,7 @@ $(".LoadRemoteModelButton").on("click", async function () {
     $('.LoadRemoteModelButtonPrompt').html("正在连接HuggingFace...");
     $('#select_file').hide();
     $('.LoadModelButton').hide();
+    $(".LoadModelPrompt").hide();
     $(this).show();
 
     const model_name = $(this).attr("data-model-name");

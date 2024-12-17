@@ -336,7 +336,7 @@ a:hover {
 
 .Guide {
     display: flex;
-    margin: 0 0 20px 0;
+    margin: 9px 0 20px 0;
     flex-direction: column;
     align-items: center;
 }
@@ -426,7 +426,7 @@ a:hover {
     width: 30px; height: 30px; overflow: hidden; border-radius: 6px; flex-shrink: 0;
     border: 1px solid #fff;
     box-sizing: border-box;
-    box-shadow: 0 2px 5px 0 rgb(0 0 0 / 0.1);
+    box-shadow: 1px 1px 6px 0px rgb(0 0 0 / 0.5);
 }
 .UserAvatarContainer {
     margin-right: 10px;
@@ -509,7 +509,7 @@ a:hover {
     align-items: center;
     justify-content: center;
     cursor: default;
-    color: #303848;
+    color: #0b1221;
 }
 
 .LoadRemoteModelButton {
