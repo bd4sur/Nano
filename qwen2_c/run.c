@@ -746,37 +746,58 @@ long time_in_ms() {
 // ----------------------------------------------------------------------------
 // generation loop
 
+int *apply_chat_template(Tokenizer *t, char *system_prompt, char *user_prompt, int *prompt_length) {
+    int num_system_prompt_tokens = 0;
+    int *system_prompt_tokens = (int*)calloc(strlen(system_prompt), sizeof(int));
+    encode(t, system_prompt, system_prompt_tokens, &num_system_prompt_tokens);
+
+    int num_user_prompt_tokens = 0;
+    int *user_prompt_tokens = (int*)calloc(strlen(user_prompt), sizeof(int));
+    encode(t, user_prompt, user_prompt_tokens, &num_user_prompt_tokens);
+
+    int *prompt_tokens = (int*)calloc(num_system_prompt_tokens + num_user_prompt_tokens + 16, sizeof(int));
+
+    prompt_tokens[0] = 151644; // <|im_start|>
+    prompt_tokens[1] = 8948;   // system
+    prompt_tokens[2] = 198;    // \n
+    for(int i = 0; i < num_system_prompt_tokens; i++) *(prompt_tokens + 3 + i) = system_prompt_tokens[i];
+    prompt_tokens[3 + num_system_prompt_tokens] = 151645; // <|im_end|>
+    prompt_tokens[4 + num_system_prompt_tokens] = 198;    // \n
+    prompt_tokens[5 + num_system_prompt_tokens] = 151644; // <|im_start|>
+    prompt_tokens[6 + num_system_prompt_tokens] = 872;    // user
+    prompt_tokens[7 + num_system_prompt_tokens] = 198;    // \n
+    for(int i = 0; i < num_user_prompt_tokens; i++) *(prompt_tokens + 8 + num_system_prompt_tokens + i) = user_prompt_tokens[i];
+    prompt_tokens[8  + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
+    prompt_tokens[9  + num_system_prompt_tokens + num_user_prompt_tokens] = 151645; // <|im_end|>
+    prompt_tokens[10 + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
+    prompt_tokens[11 + num_system_prompt_tokens + num_user_prompt_tokens] = 151644; // <|im_start|>
+    prompt_tokens[12 + num_system_prompt_tokens + num_user_prompt_tokens] = 77091;  // assistant
+    prompt_tokens[13 + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
+    prompt_tokens[14 + num_system_prompt_tokens + num_user_prompt_tokens] = 0;
+
+    free(system_prompt_tokens);
+    free(user_prompt_tokens);
+
+    *prompt_length = 14 + num_system_prompt_tokens + num_user_prompt_tokens;
+
+    return prompt_tokens;
+}
+
 void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
     char *empty_prompt = "";
     if (prompt == NULL) { prompt = empty_prompt; }
 
     // encode the (string) prompt into tokens sequence
     int num_prompt_tokens = 0;
-    int* prompt_tokens = (int*)malloc((strlen(prompt)+14) * sizeof(int));
 
-    prompt_tokens[0] = 151644; // <|im_start|>
-    prompt_tokens[1] = 8948;   // system
-    prompt_tokens[2] = 198;    // crlf(\n)
-    prompt_tokens[3] = 151645; // <|im_end|>
-    prompt_tokens[4] = 198;    // crlf(\n)
-    prompt_tokens[5] = 151644; // <|im_start|>
-    prompt_tokens[6] = 872;    // user
-    prompt_tokens[7] = 198;    // crlf(\n)
+    char *system_prompt = "你是一只电子鹦鹉，你是人类的好朋友。\n";
 
-    encode(tokenizer, prompt, (prompt_tokens + 8), &num_prompt_tokens);
+    int* prompt_tokens = apply_chat_template(tokenizer, system_prompt, prompt, &num_prompt_tokens);
 
     if (num_prompt_tokens < 1) {
         fprintf(stderr, "something is wrong, expected at least 1 prompt token\n");
         exit(EXIT_FAILURE);
     }
-
-    prompt_tokens[num_prompt_tokens + 8 + 0] = 198;    // crlf(\n)
-    prompt_tokens[num_prompt_tokens + 8 + 1] = 151645; // <|im_end|>
-    prompt_tokens[num_prompt_tokens + 8 + 2] = 198;    // crlf(\n)
-    prompt_tokens[num_prompt_tokens + 8 + 3] = 151644; // <|im_start|>
-    prompt_tokens[num_prompt_tokens + 8 + 4] = 77091;  // assistant
-    prompt_tokens[num_prompt_tokens + 8 + 5] = 198;    // crlf(\n)
-    prompt_tokens[num_prompt_tokens + 8 + 6] = 0;
 
     // start the main loop
     long start = 0;  // used to time our code, only initialized after first iteration
@@ -792,7 +813,7 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
         float* logits = forward(transformer, token, pos);
 
         // advance the state machine
-        if (pos < num_prompt_tokens + 14 - 1) {
+        if (pos < num_prompt_tokens - 1) {
             // if we are still processing the input prompt, force the next prompt token
             next = prompt_tokens[pos + 1];
             is_decoding = 0;
