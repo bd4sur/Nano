@@ -3,8 +3,8 @@ import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transfo
 env.allowRemoteModels = true;
 env.allowLocalModels = false;
 // NOTE 仅本地调试用
-env.remoteHost = "https://192.168.10.52:8443/";
-env.remotePathTemplate = "{model}";
+// env.remoteHost = "https://192.168.10.52:8443/";
+// env.remotePathTemplate = "{model}";
 
 addEventListener('message', async (event) => {
 
