@@ -527,14 +527,14 @@ a:hover {
 @media(min-width:651px) { /* Desktop */
     .LoadRemoteModelButton {
         margin: 0px 5px 10px 5px;
-        padding: 0px 15px;
+        padding: 3px 15px;
         font-size: 14px;
     }
 }
 @media(max-width:650px) { /* Mobile */
     .LoadRemoteModelButton {
         margin: 0px 5px 10px 5px;
-        padding: 0px 8px;
+        padding: 2px 8px;
         font-size: 12px;
     }
 }

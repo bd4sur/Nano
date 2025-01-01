@@ -3,7 +3,7 @@
 
 ✨[体验推理效果](https://bd4sur.com/Nano/infer) / 📺[B站视频：手机浏览器推理+ASR+TTS](https://www.bilibili.com/video/BV1NAieYiEFi) / 📺[B站视频：HomeLab炼丹](https://www.bilibili.com/video/BV1uv42127qP)
 
-**当前状态：Pre-alpha · 正在训练168M问答模型，技术状态尚未固化，按原样呈现**
+**正在训练168M问答模型，预计2025年1月10日前后训练完成，并固化技术状态**
 
 ![ ](./doc/nano-web.jpg)
 
@@ -63,10 +63,6 @@
 - 正在研究模型量化。
 
 **基于CUDA/cuBLAS实现的GPU推理**
-
-- 正在研究
-
-**基于RKNN实现的NPU（瑞芯微）推理**
 
 - 正在研究
 
@@ -488,7 +484,7 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 
 ## 权利声明
 
-版权所有 © 2024 BD4SUR，保留所有权利。
+版权所有 © 2023～2025 BD4SUR，保留所有权利。
 
 作为统计语言模型，本模型的输出依赖于输入和采样方式。本人不对该模型所生成的任何内容负责。
 
