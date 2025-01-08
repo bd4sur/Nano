@@ -1,9 +1,7 @@
 
-# Nano - Large Model, Tiny Toy
+# Nano - Large Model, Cyber Parrot, Tiny Toy
 
-✨[体验推理效果](https://bd4sur.com/Nano/infer) / 📺[B站视频：手机浏览器推理+ASR+TTS](https://www.bilibili.com/video/BV1NAieYiEFi) / 📺[B站视频：HomeLab炼丹](https://www.bilibili.com/video/BV1uv42127qP)
-
-**正在训练168M问答模型，预计2025年1月10日前后训练完成，并固化技术状态**
+[体验推理效果](https://bd4sur.com/Nano/infer) // B站视频：[手机浏览器推理+ASR+TTS](https://www.bilibili.com/video/BV1NAieYiEFi) / [HomeLab炼丹](https://www.bilibili.com/video/BV1uv42127qP) / [通过业余无线电C证考试](https://www.bilibili.com/video/BV1vmrsYGERP)
 
 ![ ](./doc/nano-web.jpg)
 
@@ -28,15 +26,14 @@
 
 预训练模型和问答模型（其中bin扩展名的模型可用于浏览器推理）：
 
-|规模|LoRA插件|
-|-----|-----------|
-|[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|（正在训练）|
-|[Nano-168M](https://huggingface.co/bd4sur/Nano-168M)（中间产物，正在训练）|（正在训练）|
+|预训练模型|监督微调模型|LoRA插件|
+|---------|-----------|-------|
+|[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|无规划|无规划|
+|[Nano-168M](https://huggingface.co/bd4sur/Nano-168M)|[业余无线电操作证考试](https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_875000_amateur_radio_890000.bin)|暂无公开插件|
 
-数据集：
+公开数据集：
 
 - 预训练数据：[Nano-PT-10G](https://huggingface.co/datasets/bd4sur/Nano-PT-10G)
-- 监督微调数据：正在整理。
 
 数据集为7z压缩包，解压口令“nano”。
 
