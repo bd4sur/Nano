@@ -1,6 +1,6 @@
 body {
     margin: 0; padding: 0;
-    font-family: system-ui, Microsoft YaHei, "宋体", sans-serif;
+    font-family: 'Microsoft YaHei', sans-serif;
 }
 a {
     color: inherit;
@@ -150,7 +150,7 @@ a:hover {
     margin: 0;
     padding: 0 0 0 20px;
     font-size: 14px;
-    color: #383a40;
+    color: #2a2b2f;
     font-weight: bold;
     letter-spacing: 1px;
     line-height: 2;
@@ -168,7 +168,7 @@ a:hover {
     outline: none;
     border: 2px solid #d8dce4;
     border-radius: 5px;
-    color: #383a40;
+    color: #2a2b2f;
 }
 
 .SystemPromptList {
@@ -180,7 +180,7 @@ a:hover {
     font-size: 12px;
     border-radius: 5px;
     background: #eff0f5;
-    color: #383a40;
+    color: #2a2b2f;
     cursor: pointer;
 }
 
@@ -223,7 +223,7 @@ a:hover {
     padding: 8px 18px;
     font-size: 14px;
     border: none;
-    color: #383a40;
+    color: #2a2b2f;
     background: #e6e9ef;
     border-radius: 6px;
 }
@@ -301,7 +301,8 @@ a:hover {
     position: relative;
     width: 100%;
     overflow-y: auto;
-    background: linear-gradient(180deg, #ffffff 50%, #f9fbfe);
+    /* background: linear-gradient(180deg, #ffffff 50%, #f9fbfe); */
+    background: #ffffff;
 }
 
 
@@ -380,7 +381,7 @@ a:hover {
 }
 .GuideQuestion {
     border-radius: 5px;
-    background-color: #f0f3f7;
+    background: linear-gradient(0deg, #eff0f3, #ffffff);
     color: #656e83;
     margin: 5px;
     padding: 6px 10px;
@@ -390,7 +391,7 @@ a:hover {
     cursor: pointer;
 }
 .GuideQuestion:hover {
-    background-color: #dee2e8;
+    background: linear-gradient(0deg, #e3e5e9, #ffffff);
 }
 
 
@@ -423,6 +424,7 @@ a:hover {
 .BotRound { flex-direction: row; }
 
 .ChatAvatarContainer {
+    display: none;
     width: 30px; height: 30px; overflow: hidden; border-radius: 6px; flex-shrink: 0;
     border: 1px solid #fff;
     box-sizing: border-box;
@@ -439,20 +441,23 @@ a:hover {
 .UserAvatarImage, .BotAvatarImage { width: 100%; height: 100%; }
 
 .ChatBubble {
-    font-size: 13px; line-height: 1.5; letter-spacing: 0.5px;
+    font-size: 14px; line-height: 1.7; letter-spacing: 0.3px;
     margin: 8px 0;
     margin: 0px;
     border-radius: 6px;
-    box-shadow: 1px 1px 6px 0px rgb(0 0 0 / 0.16);
+    /* box-shadow: 1px 1px 6px 0px rgb(0 0 0 / 0.16); */
     overflow: hidden;
 }
 .UserBubble {
-    color: #ffffff;
-    background: linear-gradient(320deg, #50cfff, #678bff);
+    color: #2a2b2f;
+    /* background: linear-gradient(320deg, #50cfff, #678bff); */
+    background: #eff0f3;
+    margin: 15px 0 0 15px;
 }
 .BotBubble {
-    color: #383a40;
-    background: #fff;
+    color: #2a2b2f;
+    /* background: #fff; */
+    width: 100%;
 }
 .ChatContent {
     padding: 10px 15px;
@@ -460,8 +465,7 @@ a:hover {
 .ChatContent :first-of-type { margin-top: 0; }
 .ChatContent :last-of-type { margin-bottom: 0; }
 .ChatContent p {
-    font-size: 13px; line-height: 1.5; /*letter-spacing: 0.5px;*/
-    margin: 8px 0;
+    margin: 12px 0;
 }
 .UserBubbleFooter, .BotBubbleFooter {
     display: flex;
@@ -469,7 +473,7 @@ a:hover {
     padding: 0 5px 5px 15px;
     align-items: center;
 }
-.UserBubbleFooter { color: #ffffffaa; }
+.UserBubbleFooter { color: #aaaeba; }
 .BotBubbleFooter { color:#aaaeba; }
 
 .UserFooterInfo, .BotFooterInfo {
@@ -487,8 +491,8 @@ a:hover {
     border-radius: 3px;
     cursor: pointer;
 }
-.UserCopyBubble:hover { background: #ffffff50; }
-.BotCopyBubble:hover { background: #383a4010; }
+.UserCopyBubble:hover { background: #2a2b2f10; }
+.BotCopyBubble:hover { background: #2a2b2f10; }
 
 .LoadModel {
     display: flex;
@@ -547,7 +551,7 @@ a:hover {
     bottom: 0;
     width: 100%;
     padding: 10px 0;
-    background: #f9fbfe;
+    /* background: #f9fbfe; */
     text-align: center;
 }
 @media(min-width:651px) { /* Desktop */
@@ -582,7 +586,7 @@ a:hover {
     resize: none;
     padding: 6px 0;
     margin: 0 0 0 6px;
-    font-size: 13px;
+    font-size: 14px;
     font-family: inherit;
     letter-spacing: 0.5px;
     line-height: 1.5;
