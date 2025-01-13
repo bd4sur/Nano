@@ -203,7 +203,7 @@ async function generate(prompt, args) {
 
     let prompt_ptr = encode_external(input_text_ptr, n_tokens_ptr);
     HEAPU8 = new Uint8Array(memory.buffer);
-    let num_prompt_tokens = HEAPU8[n_tokens_ptr];
+    let num_prompt_tokens = get_uint32(n_tokens_ptr, HEAPU8);
 
     console.log(`Prompt tokens = ${num_prompt_tokens}`);
 

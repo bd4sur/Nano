@@ -419,11 +419,11 @@ wchar_t *decode(Tokenizer *t, uint32_t *ids, uint32_t len) {
 
 uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens_ptr) {
     uint32_t *input_ids = string_to_ids(t->unicode_to_id_map, text);
-    uint32_t *optput_ids = (uint32_t *)calloc(wcslen(text), sizeof(uint32_t *));
-    uint32_t token_count = tokenize(t->vocab_trie, optput_ids, input_ids, wcslen(text), MAX_TOKEN_LENGTH);
+    uint32_t *output_ids = (uint32_t *)calloc(wcslen(text), sizeof(uint32_t *));
+    uint32_t token_count = tokenize(t->vocab_trie, output_ids, input_ids, wcslen(text), MAX_TOKEN_LENGTH);
     free(input_ids);
     *n_tokens_ptr = token_count;
-    return optput_ids;
+    return output_ids;
 }
 
 

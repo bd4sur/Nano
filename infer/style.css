@@ -1,6 +1,6 @@
 body {
     margin: 0; padding: 0;
-    font-family: system-ui, Microsoft YaHei, sans-serif;;
+    font-family: Microsoft YaHei, system-ui, sans-serif;
 }
 a {
     color: inherit;
@@ -448,12 +448,24 @@ a:hover {
     /* box-shadow: 1px 1px 6px 0px rgb(0 0 0 / 0.16); */
     overflow: hidden;
 }
-.UserBubble {
-    color: #2a2b2f;
-    /* background: linear-gradient(320deg, #50cfff, #678bff); */
-    background: #eff0f3;
-    margin: 15px 0 0 15px;
+@media(min-width:651px) { /* Desktop */
+    .UserBubble {
+        color: #2a2b2f;
+        /* background: linear-gradient(320deg, #50cfff, #678bff); */
+        background: #eff0f3;
+        margin: 15px 0 0 0px;
+    }
 }
+@media(max-width:650px) { /* Mobile */
+    .UserBubble {
+        color: #2a2b2f;
+        /* background: linear-gradient(320deg, #50cfff, #678bff); */
+        background: #eff0f3;
+        margin: 15px 0 0 0px;
+        width: 100%;
+    }
+}
+
 .BotBubble {
     color: #2a2b2f;
     /* background: #fff; */
