@@ -430,7 +430,7 @@ function switch_submit_button_state(state) {
 function append_user_bubble(markdown, round_counter, date_str) {
     $("#ChatRecord").append(`
         <div class="ChatRound UserRound">
-            <div class="ChatAvatarContainer UserAvatarContainer"><img class="UserAvatarImage" src="https://bd4sur.com/favicon.ico"></div>
+            <!--div class="ChatAvatarContainer UserAvatarContainer"><img class="UserAvatarImage" src="https://bd4sur.com/favicon.ico"></div-->
             <div class="ChatBubble UserBubble">
                 <div class="ChatContent" id="user_${round_counter}">${markdown}</div>
                 <div class="UserBubbleFooter">
@@ -440,6 +440,7 @@ function append_user_bubble(markdown, round_counter, date_str) {
                         <span>复制</span>
                     </div>
                 </div>
+                <div class="UserBubbleProgressBar" id="prefill_progress_${round_counter}"></div>
             </div>
         </div>`);
 }
@@ -447,7 +448,7 @@ function append_user_bubble(markdown, round_counter, date_str) {
 function append_bot_bubble(round_counter, date_str, tps) {
     $("#ChatRecord").append(`
         <div class="ChatRound BotRound">
-            <div class="ChatAvatarContainer BotAvatarContainer"><img class="BotAvatarImage" src="avatar_bot.jpg"></div>
+            <!--div class="ChatAvatarContainer BotAvatarContainer"><img class="BotAvatarImage" src="avatar_bot.jpg"></div-->
             <div class="ChatBubble BotBubble">
                 <div class="ChatContent" id="bot_response_${round_counter}"><span style="color: #c9ced6;">正在思考...</span></div>
                 <div class="BotBubbleFooter">
@@ -788,7 +789,12 @@ worker.addEventListener('message', function(event) {
             return false;
         }
         if(status === "Decoding...") {
+            $(`#prefill_progress_${round_counter}`).fadeOut(300);
             update_bot_bubble(marked.parse(text.replace(/~/gi, "～")), round_counter);
+        }
+        else if(status === "Pre-filling...") {
+            let prefill_progress = (eventData.eventData.num_generated_tokens + 1) / eventData.eventData.num_prompt_tokens * 100;
+            $(`#prefill_progress_${round_counter}`).css("width", `${Math.min(prefill_progress, 100)}%`);
         }
         last_output_text = text;
         update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
@@ -880,13 +886,18 @@ function submit() {
                 append_bot_bubble(round_counter, get_current_time());
                 scroll_to_bottom();
             },
-            (text, status, tps) => {
+            (text, num_prompt_tokens, num_generated_tokens, status, tps) => {
                 // <|eos|> or <|padding|>
                 if(text.indexOf("<|eos|>") >= 0 || text.indexOf("<|padding|>") >= 0) {
                     return false;
                 }
                 if(status === "Decoding...") {
+                    $(`#prefill_progress_${round_counter}`).fadeOut(300);
                     update_bot_bubble(marked.parse(text.replace(/~/gi, "～")), round_counter);
+                }
+                else if(status === "Pre-filling...") {
+                    let prefill_progress = (num_generated_tokens + 1) / num_prompt_tokens * 100;
+                    $(`#prefill_progress_${round_counter}`).css("width", `${Math.min(prefill_progress, 100)}%`);
                 }
                 last_output_text = text;
                 update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);

@@ -506,6 +506,14 @@ a:hover {
 .UserCopyBubble:hover { background: #2a2b2f10; }
 .BotCopyBubble:hover { background: #2a2b2f10; }
 
+.UserBubbleProgressBar {
+    height: 2px;
+    width: 0%;
+    background-color: #15e;
+}
+
+
+
 .LoadModel {
     display: flex;
     flex-direction: column;

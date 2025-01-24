@@ -26,11 +26,13 @@ function send_info(message) {
     });
 }
 
-function on_running(text, status, tps) {
+function on_running(text, num_prompt_tokens, num_generated_tokens, status, tps) {
     self.postMessage({
         eventType: "ON_RUNNING",
         eventData: {
             text: text,
+            num_prompt_tokens: num_prompt_tokens,
+            num_generated_tokens: num_generated_tokens,
             status: status,
             tps: tps
         }
@@ -250,7 +252,7 @@ async function generate(prompt, args) {
         const t_1 = performance.now();
         elpased.push(1 / (t_1 - t_0) * 1000);
         let tps_now = elpased.slice(-1)[0];
-        on_running(output_str, status, tps_now);
+        on_running(output_str, num_prompt_tokens, pos, status, tps_now);
 
         if(IS_RUNNING !== true) break;
         if(next_token == 0 || next_token == 3) break;

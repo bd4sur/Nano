@@ -811,7 +811,7 @@ async function generate(prompt, args, on_ready, on_running, on_finished) {
         elpased.push(1 / (t_1 - t_0) * 1000);
         let tps_now = elpased.slice(-1)[0];
 
-        let is_continue = on_running(decode(output_ids), status, tps_now);
+        let is_continue = on_running(decode(output_ids), prompt_tokens.length, pos, status, tps_now);
         if(is_continue !== true) break;
 
         await new Promise(resolve => setTimeout(resolve, 0));
