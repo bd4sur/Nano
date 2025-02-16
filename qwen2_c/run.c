@@ -844,7 +844,7 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
         pos++;
 
         // data-dependent terminating condition: the <|im_end|> token delimits sequences
-        if (is_decoding && next == 151645) { break; }
+        if (is_decoding && (next == 151645 || next == 151643 /* DeepSeek-R1-Distill-Qwen */)) { break; }
 
         // print the token as string, decode it with the Tokenizer object
         char* piece = decode(tokenizer, token, next);
