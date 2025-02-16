@@ -746,7 +746,7 @@ long time_in_ms() {
 // ----------------------------------------------------------------------------
 // generation loop
 
-int *apply_chat_template(Tokenizer *t, char *system_prompt, char *user_prompt, int *prompt_length) {
+int *apply_chat_template(Tokenizer *t, char *system_prompt, char *user_prompt, int *prompt_length, int template_format) {
     int num_system_prompt_tokens = 0;
     int *system_prompt_tokens = (int*)calloc(strlen(system_prompt), sizeof(int));
     encode(t, system_prompt, system_prompt_tokens, &num_system_prompt_tokens);
@@ -757,42 +757,61 @@ int *apply_chat_template(Tokenizer *t, char *system_prompt, char *user_prompt, i
 
     int *prompt_tokens = (int*)calloc(num_system_prompt_tokens + num_user_prompt_tokens + 16, sizeof(int));
 
-    prompt_tokens[0] = 151644; // <|im_start|>
-    prompt_tokens[1] = 8948;   // system
-    prompt_tokens[2] = 198;    // \n
-    for(int i = 0; i < num_system_prompt_tokens; i++) *(prompt_tokens + 3 + i) = system_prompt_tokens[i];
-    prompt_tokens[3 + num_system_prompt_tokens] = 151645; // <|im_end|>
-    prompt_tokens[4 + num_system_prompt_tokens] = 198;    // \n
-    prompt_tokens[5 + num_system_prompt_tokens] = 151644; // <|im_start|>
-    prompt_tokens[6 + num_system_prompt_tokens] = 872;    // user
-    prompt_tokens[7 + num_system_prompt_tokens] = 198;    // \n
-    for(int i = 0; i < num_user_prompt_tokens; i++) *(prompt_tokens + 8 + num_system_prompt_tokens + i) = user_prompt_tokens[i];
-    prompt_tokens[8  + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
-    prompt_tokens[9  + num_system_prompt_tokens + num_user_prompt_tokens] = 151645; // <|im_end|>
-    prompt_tokens[10 + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
-    prompt_tokens[11 + num_system_prompt_tokens + num_user_prompt_tokens] = 151644; // <|im_start|>
-    prompt_tokens[12 + num_system_prompt_tokens + num_user_prompt_tokens] = 77091;  // assistant
-    prompt_tokens[13 + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
-    prompt_tokens[14 + num_system_prompt_tokens + num_user_prompt_tokens] = 0;
+    // 2 - DeepSeek-R1-Distill-Qwen
+    if(template_format == 2) {
+        prompt_tokens[0] = 151646; // <｜begin▁of▁sentence｜>
+        prompt_tokens[1] = 151644; // <｜User｜>
+        prompt_tokens[2] = 198;    // \n
+        for(int i = 0; i < num_user_prompt_tokens; i++) *(prompt_tokens + 2 + i) = user_prompt_tokens[i];
+        prompt_tokens[2  + num_user_prompt_tokens] = 151645; // <｜Assistant｜>
+        prompt_tokens[3 + num_user_prompt_tokens] = 0;
 
-    free(system_prompt_tokens);
-    free(user_prompt_tokens);
+        free(user_prompt_tokens);
 
-    *prompt_length = 14 + num_system_prompt_tokens + num_user_prompt_tokens;
+        *prompt_length = 3 + num_user_prompt_tokens;
 
-    return prompt_tokens;
+        return prompt_tokens;
+    }
+    // 1 or else - Qwen2.5
+    else {
+        prompt_tokens[0] = 151644; // <|im_start|>
+        prompt_tokens[1] = 8948;   // system
+        prompt_tokens[2] = 198;    // \n
+        for(int i = 0; i < num_system_prompt_tokens; i++) *(prompt_tokens + 3 + i) = system_prompt_tokens[i];
+        prompt_tokens[3 + num_system_prompt_tokens] = 151645; // <|im_end|>
+        prompt_tokens[4 + num_system_prompt_tokens] = 198;    // \n
+        prompt_tokens[5 + num_system_prompt_tokens] = 151644; // <|im_start|>
+        prompt_tokens[6 + num_system_prompt_tokens] = 872;    // user
+        prompt_tokens[7 + num_system_prompt_tokens] = 198;    // \n
+        for(int i = 0; i < num_user_prompt_tokens; i++) *(prompt_tokens + 8 + num_system_prompt_tokens + i) = user_prompt_tokens[i];
+        prompt_tokens[8  + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
+        prompt_tokens[9  + num_system_prompt_tokens + num_user_prompt_tokens] = 151645; // <|im_end|>
+        prompt_tokens[10 + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
+        prompt_tokens[11 + num_system_prompt_tokens + num_user_prompt_tokens] = 151644; // <|im_start|>
+        prompt_tokens[12 + num_system_prompt_tokens + num_user_prompt_tokens] = 77091;  // assistant
+        prompt_tokens[13 + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
+        prompt_tokens[14 + num_system_prompt_tokens + num_user_prompt_tokens] = 0;
+
+        free(system_prompt_tokens);
+        free(user_prompt_tokens);
+
+        *prompt_length = 14 + num_system_prompt_tokens + num_user_prompt_tokens;
+
+        return prompt_tokens;
+    }
+
 }
 
-void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
+void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps, int template_format) {
     char *empty_prompt = "";
     if (prompt == NULL) { prompt = empty_prompt; }
 
     // encode the (string) prompt into tokens sequence
     int num_prompt_tokens = 0;
 
-    char *system_prompt = "你是一只电子鹦鹉，你是人类的好朋友。\n";
+    char *system_prompt = "";
 
-    int* prompt_tokens = apply_chat_template(tokenizer, system_prompt, prompt, &num_prompt_tokens);
+    int* prompt_tokens = apply_chat_template(tokenizer, system_prompt, prompt, &num_prompt_tokens, template_format);
 
     if (num_prompt_tokens < 1) {
         fprintf(stderr, "something is wrong, expected at least 1 prompt token\n");
@@ -972,18 +991,24 @@ int main(int argc, char *argv[]) {
 
     // default parameters
     char *checkpoint_path = NULL;  // e.g. out/model.bin
-    char *tokenizer_path = "qwen25_tokenizer.bin";
-    float temperature = 0.7f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
+    char *tokenizer_path = NULL;
+    float temperature = 0.6f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
     float topp = 0.8f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
     int steps = 2048;           // number of steps to run for
     char *prompt = NULL;        // prompt string
     unsigned long long rng_seed = 0; // seed rng with time by default
     char *mode = "generate";    // generate|chat
     char *system_prompt = NULL; // the (optional) system prompt to use in chat mode
+    int template_format = 1;    // 1: Qwen2.5; 2: DeepSeek-R1-Qwen
 
     // poor man's C argparse so we can override the defaults above from the command line
-    if (argc >= 2) { checkpoint_path = argv[1]; } else { error_usage(); }
-    for (int i = 2; i < argc; i+=2) {
+    if (argc >= 3) {
+        checkpoint_path = argv[1];
+        tokenizer_path = argv[2];
+    }
+    else { error_usage(); }
+
+    for (int i = 3; i < argc; i+=2) {
         // do some basic validation
         if (i + 1 >= argc) { error_usage(); } // must have arg after flag
         if (argv[i][0] != '-') { error_usage(); } // must start with dash
@@ -997,6 +1022,18 @@ int main(int argc, char *argv[]) {
         else if (argv[i][1] == 'z') { tokenizer_path = argv[i + 1]; }
         else if (argv[i][1] == 'm') { mode = argv[i + 1]; }
         else if (argv[i][1] == 'y') { system_prompt = argv[i + 1]; }
+        else if (argv[i][1] == 'f') {
+            char *format = argv[i + 1];
+            if(!strcmp(format, "qwen")) {
+                template_format = 1;
+            }
+            else if(!strcmp(format, "dsqw")){
+                template_format = 2;
+            }
+            else {
+                template_format = 1;
+            }
+        }
         else { error_usage(); }
     }
 
@@ -1021,7 +1058,7 @@ int main(int argc, char *argv[]) {
 
     // run!
     if (strcmp(mode, "generate") == 0) {
-        generate(&transformer, &tokenizer, &sampler, prompt, steps);
+        generate(&transformer, &tokenizer, &sampler, prompt, steps, template_format);
     } else if (strcmp(mode, "chat") == 0) {
         chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, steps);
     } else {

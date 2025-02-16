@@ -25,7 +25,11 @@ make runomp
 Run:
 
 ```
-OMP_NUM_THREADS=4 ./run qwen25-0b5-instruct.bin -i "人类的本质是复读机吗？"
+# Qwen2.5-0.5B
+OMP_NUM_THREADS=4 ./run qwen25-0b5-instruct.bin qwen25_tokenizer.bin -f qwen -i "人类的本质是复读机吗？"
+
+# Or DeepSeek-R1-Distill-Qwen-1.5B
+OMP_NUM_THREADS=4 ./run deepseek-r1-qwen25-1b5.bin deepseek_qwen25_tokenizer.bin -f dsqw -i "射频功率-40dBm的一半是多少dBm？"
 ```
 
 Requirements:
