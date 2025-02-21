@@ -55,7 +55,7 @@ Modal.prototype.show = function() {
 
     let clientHeight = window.innerHeight - 30;
     let height = this.node.height();
-    this.node.css("top", clientHeight - height);
+    this.node.css("top", (clientHeight - height) / 2);
 }
 Modal.prototype.hide = function() {
     this.node.css("display", "none");

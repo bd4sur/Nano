@@ -492,7 +492,7 @@ a:hover {
     font-size: 10px;
     margin-right: 10px;
 }
-.UserCopyBubble, .BotCopyBubble {
+.UserCopyBubble, .BotCopyBubble, .BotTTSBubble {
     display: flex;
     font-size: 11px;
     line-height: 1;
@@ -500,11 +500,13 @@ a:hover {
     align-items: center;
     background: none;
     padding: 3px;
+    margin-left: 6px;
     border-radius: 3px;
     cursor: pointer;
 }
 .UserCopyBubble:hover { background: #2a2b2f10; }
 .BotCopyBubble:hover { background: #2a2b2f10; }
+.BotTTSBubble:hover { background: #2a2b2f10; }
 
 .UserBubbleProgressBar {
     height: 2px;
@@ -653,7 +655,7 @@ a:hover {
     height: 40px;
     border: none;
     background: #15e;
-    border-radius: 16px;
+    border-radius: 18px;
     color: #fff;
     min-width: 40px;
     flex-shrink: 0;
@@ -689,7 +691,7 @@ a:hover {
     height: 40px;
     border: none;
     background: #87c800;
-    border-radius: 16px;
+    border-radius: 18px;
     color: #fff;
     min-width: 40px;
     flex-shrink: 0;
