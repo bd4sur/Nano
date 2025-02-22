@@ -126,8 +126,7 @@ def predict(msg):
                     "llm_output": {"role": "assistant", "content": response}
                 })
 
-
-    print(f"LLM Response: {response}")
+    # print(f"LLM Response: {response}")
     emit("chat_response", {
         "timestamp": time.ctime(),
         "status": "end",
