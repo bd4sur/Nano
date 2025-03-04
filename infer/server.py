@@ -17,6 +17,7 @@ from llama_cpp import Llama
 # from transformers.generation import GenerationConfig
 # from transformers import TextIteratorStreamer
 
+USE_API = False
 USE_SSL = True
 
 SERVER_IP = '0.0.0.0'
@@ -153,13 +154,15 @@ if __name__ == '__main__':
     https_server_process = Process(target=start_https_server)
     https_server_process.daemon = True
     https_server_process.start()
-    # https_server_process.join()
 
-    # LLM Server (flask app)
-    llm_config = LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]
-    load_model(llm_config["model_type"], llm_config["model_path"], llm_config["context_length"])
+    if USE_API:
+        # LLM Server (flask app)
+        llm_config = LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]
+        load_model(llm_config["model_type"], llm_config["model_path"], llm_config["context_length"])
 
-    if USE_SSL:
-        socketio.run(app, host=SERVER_IP, port=API_PORT, debug=False, log_output=False, ssl_context=(SSL_CERT_PATH, SSL_PRIVATE_KEY_PATH))
+        if USE_SSL:
+            socketio.run(app, host=SERVER_IP, port=API_PORT, debug=False, log_output=False, ssl_context=(SSL_CERT_PATH, SSL_PRIVATE_KEY_PATH))
+        else:
+            socketio.run(app, host=SERVER_IP, port=API_PORT, debug=False, log_output=False)
     else:
-        socketio.run(app, host=SERVER_IP, port=API_PORT, debug=False, log_output=False)
+        https_server_process.join()

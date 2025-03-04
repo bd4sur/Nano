@@ -476,6 +476,47 @@ $("#enable_api").click(function(e) {
 });
 
 
+
+// LLM推理引擎事件处理
+
+function llm_on_running(round_counter, text, num_prompt_tokens, num_generated_tokens, status, tps) {
+    // <|eos|> or <|padding|>
+    if(text.indexOf("<|eos|>") >= 0 || text.indexOf("<|padding|>") >= 0) {
+        return false;
+    }
+    if(status === "Decoding...") {
+        $(`#prefill_progress_${round_counter}`).fadeOut(300);
+        update_bot_bubble(marked.parse(text.replace(/~/gi, "～")), round_counter);
+    }
+    else if(status === "Pre-filling...") {
+        let prefill_progress = (num_generated_tokens + 1) / num_prompt_tokens * 100;
+        $(`#prefill_progress_${round_counter}`).css("width", `${Math.min(prefill_progress, 100)}%`);
+    }
+    update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
+    switch_submit_button_state("interrupt");
+    scroll_to_bottom();
+    return true;
+}
+
+function llm_on_finished(round_counter, tps) {
+    switch_submit_button_state("submit");
+    update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s on avg`, round_counter);
+    return (round_counter + 1);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // 读取模型文件
 let model_file_selector = document.getElementById('model_file_selector');
 model_file_selector.onchange = async () => {
@@ -666,38 +707,22 @@ $("#lora_button").on("click", function(e) {
 nano_worker.addEventListener('message', function(event) {
     let eventData = event.data;
 
-    // console.log(`Main RX: ${event.data.eventType}`);
-
     if(eventData.eventType === 'INFO') {
         console.log(`Main received from worker: ${eventData.eventData.message}`);
     }
 
     if(eventData.eventType === 'ON_RUNNING') {
         let text = eventData.eventData.text;
+        let num_prompt_tokens = eventData.eventData.num_prompt_tokens;
+        let num_generated_tokens = eventData.eventData.num_generated_tokens;
         let status = eventData.eventData.status;
         let tps = eventData.eventData.tps;
-        if(text.indexOf("<|eos|>") >= 0 || text.indexOf("<|padding|>") >= 0) {
-            return false;
-        }
-        if(status === "Decoding...") {
-            $(`#prefill_progress_${round_counter}`).fadeOut(300);
-            update_bot_bubble(marked.parse(text.replace(/~/gi, "～")), round_counter);
-        }
-        else if(status === "Pre-filling...") {
-            let prefill_progress = (eventData.eventData.num_generated_tokens + 1) / eventData.eventData.num_prompt_tokens * 100;
-            $(`#prefill_progress_${round_counter}`).css("width", `${Math.min(prefill_progress, 100)}%`);
-        }
-        update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
-        switch_submit_button_state("interrupt");
-        scroll_to_bottom();
-        return true;
+
+        return llm_on_running(round_counter, text, num_prompt_tokens, num_generated_tokens, status, tps);
     }
 
     if(eventData.eventType === 'ON_FINISHED') {
-        let tps = eventData.eventData.tps;
-        switch_submit_button_state("submit");
-        update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s on avg`, round_counter);
-        round_counter++;
+        round_counter = llm_on_finished(round_counter, eventData.eventData.tps);
     }
 
     if(eventData.eventType === 'INIT_FINISHED') {
@@ -851,27 +876,10 @@ function submit() {
                 scroll_to_bottom();
             },
             (text, num_prompt_tokens, num_generated_tokens, status, tps) => {
-                // <|eos|> or <|padding|>
-                if(text.indexOf("<|eos|>") >= 0 || text.indexOf("<|padding|>") >= 0) {
-                    return false;
-                }
-                if(status === "Decoding...") {
-                    $(`#prefill_progress_${round_counter}`).fadeOut(300);
-                    update_bot_bubble(marked.parse(text.replace(/~/gi, "～")), round_counter);
-                }
-                else if(status === "Pre-filling...") {
-                    let prefill_progress = (num_generated_tokens + 1) / num_prompt_tokens * 100;
-                    $(`#prefill_progress_${round_counter}`).css("width", `${Math.min(prefill_progress, 100)}%`);
-                }
-                update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
-                switch_submit_button_state("interrupt");
-                scroll_to_bottom();
-                return true;
+                return llm_on_running(round_counter, text, num_prompt_tokens, num_generated_tokens, status, tps);
             },
             (tps) => {
-                switch_submit_button_state("submit");
-                update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s on avg`, round_counter);
-                round_counter++;
+                round_counter = llm_on_finished(round_counter, tps);
             }
         );
     }
