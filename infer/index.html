@@ -778,11 +778,14 @@ llm_socket.on("chat_response", function(msg) {
     else if(msg.status === "generating") {
         switch_submit_button_state("interrupt");
         let llm_output = msg.llm_output;
+        console.log(llm_output.content);
         let content = llm_output.content.replace(/\\\(/gi, "$")
                                         .replace(/\\\)/gi, "$")
                                         .replace(/\\\[/gi, "$$$")
                                         .replace(/\\\]/gi, "$$$")
-                                        .replace(/\~/gi, "～");
+                                        .replace(/\~/gi, "～")
+                                        .replace("<think>", "<blockquote><p style=\"font-weight: bold;\">思考中...</p>")
+                                        .replace("</think>", "</blockquote>");
         let md = marked.parse(content);
         char_count = content.length;
         update_bot_bubble(md, round_counter);

@@ -479,6 +479,12 @@ a:hover {
 .ChatContent p {
     margin: 12px 0;
 }
+.ChatContent blockquote {
+    margin: 12px 0 12px 0px;
+    border-left: 2px solid #ccd1db;
+    padding-left: 12px;
+    font-size: smaller;
+}
 .UserBubbleFooter, .BotBubbleFooter {
     display: flex;
     justify-content: space-between;

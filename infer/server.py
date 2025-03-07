@@ -17,7 +17,7 @@ from llama_cpp import Llama
 # from transformers.generation import GenerationConfig
 # from transformers import TextIteratorStreamer
 
-USE_API = False
+USE_API = True
 USE_SSL = True
 
 SERVER_IP = '0.0.0.0'
@@ -27,7 +27,7 @@ API_PORT = 5000
 SSL_CERT_PATH = "/home/bd4sur/bd4sur.crt"
 SSL_PRIVATE_KEY_PATH = "/home/bd4sur/key_unencrypted.pem"
 
-CURRENT_LLM_CONFIG_KEY = "DeepSeek-R1-Distill-Qwen-7B-Q4KM-16K"
+CURRENT_LLM_CONFIG_KEY = "QwQ-32B-Q4KM-64K"
 
 LLM_CONFIG = {
     "Qwen2.5-7B-Q4KM-16K": {
@@ -35,10 +35,15 @@ LLM_CONFIG = {
         "model_path": "/home/bd4sur/ai/_model/Qwen25/qwen2.5-7b-instruct-q4_k_m.gguf",
         "context_length": 16384
     },
-    "DeepSeek-R1-Distill-Qwen-7B-Q4KM-16K": {
+    "QwQ-32B-Q4KM-64K": {
         "model_type": "gguf",
-        "model_path": "/home/bd4sur/ai/_model/DeepSeek/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
-        "context_length": 16384
+        "model_path": "/home/bd4sur/ai/_model/QwQ/qwq-32b-q4_k_m.gguf",
+        "context_length": 65536
+    },
+    "QwQ-32B-Q80-64K": {
+        "model_type": "gguf",
+        "model_path": "/home/bd4sur/ai/_model/QwQ/qwq-32b-q8_0.gguf",
+        "context_length": 65536
     },
 }
 
@@ -65,7 +70,7 @@ def load_gguf_model(model_path, context_length=16384):
         model_path=model_path,
         chat_format="chatml",
         n_ctx=context_length,
-        n_threads=36,
+        n_threads=8,
         n_gpu_layers=-1,
         verbose=False
     )
