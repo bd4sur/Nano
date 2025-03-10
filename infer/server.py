@@ -27,23 +27,75 @@ API_PORT = 5000
 SSL_CERT_PATH = "/home/bd4sur/bd4sur.crt"
 SSL_PRIVATE_KEY_PATH = "/home/bd4sur/key_unencrypted.pem"
 
-CURRENT_LLM_CONFIG_KEY = "QwQ-32B-Q4KM-64K"
+NUM_GPU_LAYERS = -1 # 设为-1以加载全部层到GPU
+CURRENT_LLM_CONFIG_KEY = "QwQ-32B-Q5KM"
 
 LLM_CONFIG = {
-    "Qwen2.5-7B-Q4KM-16K": {
+    "Qwen2.5-7B-Q4KM": {
         "model_type": "gguf",
         "model_path": "/home/bd4sur/ai/_model/Qwen25/qwen2.5-7b-instruct-q4_k_m.gguf",
-        "context_length": 16384
+        "seed": 3407,
+        "context_length": 0,
+        "temperature": 1,
+        "top_p": 0.9,
+        "top_k": 40,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
     },
-    "QwQ-32B-Q4KM-64K": {
+    "Qwen2.5-72B-Q4KM": {
         "model_type": "gguf",
-        "model_path": "/home/bd4sur/ai/_model/QwQ/qwq-32b-q4_k_m.gguf",
-        "context_length": 65536
+        "model_path": "/home/bd4sur/ai/_model/Qwen25/qwen2.5-72b-instruct-q4_k_m.gguf",
+        "seed": 3407,
+        "context_length": 16384,
+        "temperature": 1,
+        "top_p": 0.9,
+        "top_k": 40,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
     },
-    "QwQ-32B-Q80-64K": {
+    "DeepSeek-R1-UD-IQ1S": {
         "model_type": "gguf",
-        "model_path": "/home/bd4sur/ai/_model/QwQ/qwq-32b-q8_0.gguf",
-        "context_length": 65536
+        "model_path": "/home/bd4sur/ai/_model/DeepSeek-R1/DeepSeek-R1-UD-IQ1_S.gguf",
+        "seed": 3407,
+        "context_length": 8192,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 40,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
+    },
+    "QwQ-32B-Q4KM": {
+        "model_type": "gguf",
+        "model_path": "/home/bd4sur/ai/_model/QwQ/qwq-32b-q4_k_m-unsloth.gguf",
+        "seed": 3407,
+        "context_length": 65536,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 40,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
+    },
+    "QwQ-32B-Q5KM": {
+        "model_type": "gguf",
+        "model_path": "/home/bd4sur/ai/_model/QwQ/qwq-32b-q5_k_m-unsloth.gguf",
+        "seed": 3407,
+        "context_length": 65536,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 40,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
+    },
+    "QwQ-32B-Q80": {
+        "model_type": "gguf",
+        "model_path": "/home/bd4sur/ai/_model/QwQ/qwq-32b-q8_0-unsloth.gguf",
+        "seed": 3407,
+        "context_length": 65536,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 40,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
     },
 }
 
@@ -67,12 +119,37 @@ def load_model(model_type, model_path, context_length=16384):
 def load_gguf_model(model_path, context_length=16384):
     print(f"Loading GGUF Model {model_path} ...")
     model = Llama(
-        model_path=model_path,
         chat_format="chatml",
-        n_ctx=context_length,
+        model_path=LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]["model_path"],
+        seed=LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]["seed"],
+        n_ctx=LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]["context_length"],
+        n_gpu_layers=NUM_GPU_LAYERS,
+        use_mmap=False,
+        use_mlock=True,
+        flash_attn=True,
         n_threads=8,
-        n_gpu_layers=-1,
-        verbose=False
+        split_mode=2,
+            # LLAMA_SPLIT_MODE_NONE  = 0, // single GPU
+            # LLAMA_SPLIT_MODE_LAYER = 1, // split layers and KV across GPUs
+            # LLAMA_SPLIT_MODE_ROW   = 2, // split rows across GPUs
+        numa=1,
+            # https://github.com/ggml-org/llama.cpp/blob/master/ggml/include/ggml-cpu.h
+            # GGML_NUMA_STRATEGY_DISABLED   = 0,
+            # GGML_NUMA_STRATEGY_DISTRIBUTE = 1,
+            # GGML_NUMA_STRATEGY_ISOLATE    = 2,
+            # GGML_NUMA_STRATEGY_NUMACTL    = 3,
+            # GGML_NUMA_STRATEGY_MIRROR     = 4
+        type_k=(2 if "DeepSeek" in CURRENT_LLM_CONFIG_KEY else 1),
+            # https://github.com/ggml-org/llama.cpp/blob/master/ggml/include/ggml.h
+            # GGML_TYPE_F32  = 0,
+            # GGML_TYPE_F16  = 1, (default)
+            # GGML_TYPE_Q4_0 = 2,
+            # GGML_TYPE_Q4_1 = 3,
+            # GGML_TYPE_Q5_0 = 6,
+            # GGML_TYPE_Q5_1 = 7,
+            # GGML_TYPE_Q8_0 = 8,
+            # GGML_TYPE_Q8_1 = 9,
+        verbose=True
     )
     print(f"Loaded GGUF Model {model_path}")
     return ("gguf", model, None, None)
@@ -116,7 +193,14 @@ def predict(msg):
             stream=True,
             temperature=msg["config"]["temperature"],
             top_p=msg["config"]["temperature"],
-            top_k=msg["config"]["top_k"]
+            top_k=msg["config"]["top_k"],
+            min_p=msg["config"]["min_p"],
+            repeat_penalty=msg["config"]["repetition_penalty"],
+            # temperature=LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]["temperature"],
+            # top_p=LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]["top_p"],
+            # top_k=LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]["top_k"],
+            # min_p=LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]["min_p"],
+            # repeat_penalty=LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]["repeat_penalty"],
         )
         for chunk in output:
             if IS_LLM_GENERATING == False:

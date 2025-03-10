@@ -97,7 +97,7 @@
         <div class="LoadModel">
             <div class="LoadModelPrompt" style="display: flex; align-items: center; flex-direction: column; margin: 0px 0 0px 0; font-size: 14px;">
                 <div class="LoadModelButton LoadLocalModelButton" id="enable_api">
-                    <div style="font-weight: bold;">调用API</div>
+                    <div style="font-weight: bold; background: deepskyblue; color: #fff; padding: 6px 20px; border-radius: 100px;">调用内网部署的模型API</div>
                 </div>
             </div>
             <div class="LoadModelPrompt" style="display: flex; align-items: center; flex-direction: column; margin: 0px 0 0px 0; font-size: 14px;">
@@ -192,10 +192,14 @@
     <svg style="margin: 1px 1px 0 0;" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="18px" height="18px"><path d="M1008.00076 6.285714q18.857143 13.714286 15.428571 36.571429l-146.285714 877.714286q-2.857143 16.571429-18.285714 25.714285-8 4.571429-17.714286 4.571429-6.285714 0-13.714286-2.857143l-258.857142-105.714286-138.285715 168.571429q-10.285714 13.142857-28 13.142857-7.428571 0-12.571428-2.285714-10.857143-4-17.428572-13.428572T365.715046 987.428571v-199.428571l493.714285-605.142857-610.857142 528.571428-225.714286-92.571428q-21.142857-8-22.857143-31.428572-1.142857-22.857143 18.285714-33.714285L969.143617 5.142857q8.571429-5.142857 18.285714-5.142857 11.428571 0 20.571429 6.285714z" fill="#fff"></path></svg>
 </object>
 
-<script src="./jquery.js"></script>
-<script src="./socket.io.js"></script>
-<script src="./marked.min.js"></script>
-<script src="./components.js"></script>
+<script>
+    MathJax = { tex: { inlineMath: [["$", "$"]] } };
+</script>
+<script src="./jslib/jquery.js"></script>
+<script id="MathJax-script" async src="./jslib/mathjax/tex-chtml-full.js"></script>
+<script src="./jslib/socket.io.js"></script>
+<script src="./jslib/marked.min.js"></script>
+<script src="./jslib/components.js"></script>
 <script src="./infer.js"></script>
 <script src="./prompt.js"></script>
 <script src="./tts.js"></script>
@@ -281,8 +285,8 @@ function layout_refresh(left_width) {
 
 
 function scroll_to_bottom() {
-    let scrollHeight = $(".Chat").prop("scrollHeight");
-    $(".Chat").animate({scrollTop:scrollHeight}, 0);
+    // let scrollHeight = $(".Chat").prop("scrollHeight");
+    // $(".Chat").animate({scrollTop:scrollHeight}, 0);
 }
 
 function switch_submit_button_state(state) {
@@ -441,6 +445,7 @@ $("#modal_cancel").on("click", function() {
 });
 
 $("#clearall").on("click", function() {
+    CHAT_HISTORY = [{"role": "system", "content": SYSTEM_PROMPT_CONTENT}];
     clear_chat_record();
     append_chat_info("对话历史已清除");
 });
@@ -471,6 +476,10 @@ $("#backend_switch").click(function(event) {
 
 $("#enable_api").click(function(e) {
     NANO_INFER_BACKEND = "api";
+    top_k.setValue(40);
+    top_p.setValue(0.95);
+    temperature.setValue(0.6);
+    repetition_penalty.setValue(1.0);
     get_current_llm_key();
     show_input_box();
 });
@@ -778,7 +787,6 @@ llm_socket.on("chat_response", function(msg) {
     else if(msg.status === "generating") {
         switch_submit_button_state("interrupt");
         let llm_output = msg.llm_output;
-        console.log(llm_output.content);
         let content = llm_output.content.replace(/\\\(/gi, "$")
                                         .replace(/\\\)/gi, "$")
                                         .replace(/\\\[/gi, "$$$")
@@ -790,7 +798,7 @@ llm_socket.on("chat_response", function(msg) {
         char_count = content.length;
         update_bot_bubble(md, round_counter);
         update_bot_footer(`<b>Nano</b> ${get_current_time()}`, round_counter);
-        // MathJax.startup.defaultPageReady();
+        MathJax.startup.defaultPageReady();
         scroll_to_bottom();
     }
     else if(msg.status === "end") {
@@ -850,6 +858,8 @@ function submit() {
                 "temperature": gen_args.temperature,
                 "top_p": gen_args.top_p,
                 "top_k": gen_args.top_k,
+                "repetition_penalty": gen_args.repetition_penalty,
+                "min_p": 0.0
             },
             "chatml": CHAT_HISTORY
         };
@@ -889,7 +899,7 @@ function submit() {
 
     switch_submit_button_state("interrupt");
     set_input_box("");
-    // MathJax.startup.defaultPageReady();
+    MathJax.startup.defaultPageReady();
     scroll_to_bottom();
 }
 

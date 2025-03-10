@@ -15,8 +15,8 @@ a:hover {
 
 @media(min-width:651px) { /* Desktop */
     .Main {
-        width: 70%;
-        max-width: 700px;
+        width: 80%;
+        max-width: 860px;
         margin: 32px auto;
         padding-top: 10px;
         font-size: 14px;
@@ -480,9 +480,13 @@ a:hover {
     margin: 12px 0;
 }
 .ChatContent blockquote {
-    margin: 12px 0 12px 0px;
+    margin: 0px 0 12px 0px !important;
     border-left: 2px solid #ccd1db;
     padding-left: 12px;
+    font-size: smaller;
+}
+.ChatContent pre {
+    overflow: auto;
     font-size: smaller;
 }
 .UserBubbleFooter, .BotBubbleFooter {

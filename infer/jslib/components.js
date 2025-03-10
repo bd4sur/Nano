@@ -40,6 +40,11 @@ RangeInput.prototype.getValue = function() {
     return $(`#RangeInputControl_${this.id}`).val();
 }
 
+RangeInput.prototype.setValue = function(v) {
+    $(`#RangeInputControl_${this.id}`).val(v);
+    $(`#RangeInputValue_${this.id}`).html(v);
+}
+
 function Modal(id, maskId) {
     this.id = id;
     this.maskId = maskId;
