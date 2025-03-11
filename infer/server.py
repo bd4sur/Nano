@@ -128,7 +128,7 @@ def load_gguf_model(model_path, context_length=16384):
         use_mlock=True,
         flash_attn=True,
         n_threads=8,
-        split_mode=2,
+        split_mode=1,
             # LLAMA_SPLIT_MODE_NONE  = 0, // single GPU
             # LLAMA_SPLIT_MODE_LAYER = 1, // split layers and KV across GPUs
             # LLAMA_SPLIT_MODE_ROW   = 2, // split rows across GPUs
@@ -185,6 +185,7 @@ def predict(msg):
     model_type = LLM[0]
 
     response = ""
+    is_interrupted = False
 
     if model_type == "gguf":
         model = LLM[1]
@@ -202,9 +203,11 @@ def predict(msg):
             # min_p=LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]["min_p"],
             # repeat_penalty=LLM_CONFIG[CURRENT_LLM_CONFIG_KEY]["repeat_penalty"],
         )
+
         for chunk in output:
             if IS_LLM_GENERATING == False:
                 print("已中断")
+                is_interrupted = True
                 break
             IS_LLM_GENERATING = True
             delta = chunk['choices'][0]['delta']
@@ -219,7 +222,7 @@ def predict(msg):
     # print(f"LLM Response: {response}")
     emit("chat_response", {
         "timestamp": time.ctime(),
-        "status": "end",
+        "status": "interrupted" if is_interrupted else "finished",
         "llm_output": {"role": "assistant", "content": response}
     })
     IS_LLM_GENERATING = False

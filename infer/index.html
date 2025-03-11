@@ -285,8 +285,10 @@ function layout_refresh(left_width) {
 
 
 function scroll_to_bottom() {
-    // let scrollHeight = $(".Chat").prop("scrollHeight");
-    // $(".Chat").animate({scrollTop:scrollHeight}, 0);
+    let scrollHeight = $(".Chat").prop("scrollHeight");
+    if ($(".Chat").prop("scrollTop") > scrollHeight - $(".Chat").prop("clientHeight") - 100) {
+        $(".Chat").animate({scrollTop:scrollHeight}, 0);
+    }
 }
 
 function switch_submit_button_state(state) {
@@ -801,9 +803,11 @@ llm_socket.on("chat_response", function(msg) {
         MathJax.startup.defaultPageReady();
         scroll_to_bottom();
     }
-    else if(msg.status === "end") {
+    else if(msg.status === "finished") {
         end_generating_timestamp = new Date().getTime();
-        CHAT_HISTORY.push(msg.llm_output)
+        // 去掉<think>标签包裹的思维链部分。思维链不加入上下文。
+        msg.llm_output.content = msg.llm_output.content.replace(/\<think\>[.\s\S]+\<\/think\>/gi, "").trim();
+        CHAT_HISTORY.push(msg.llm_output);
         switch_submit_button_state("submit");
         let cps = char_count / (end_generating_timestamp - start_generating_timestamp) * 1000;
         update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${cps.toFixed()} char/s on avg`, round_counter);
@@ -823,6 +827,14 @@ llm_socket.on("chat_response", function(msg) {
         }
         */
 
+        round_counter++; return;
+    }
+    else if(msg.status === "interrupted") {
+        CHAT_HISTORY.pop();
+        end_generating_timestamp = new Date().getTime();
+        switch_submit_button_state("submit");
+        let cps = char_count / (end_generating_timestamp - start_generating_timestamp) * 1000;
+        update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${cps.toFixed()} char/s on avg (已中断)`, round_counter);
         round_counter++; return;
     }
 });
