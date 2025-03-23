@@ -4,6 +4,7 @@ import gc
 import base64
 from multiprocessing import Process
 from threading import Thread
+import socket
 
 import ssl
 from http.server import socketserver, SimpleHTTPRequestHandler
@@ -36,6 +37,17 @@ LLM_CONFIG = {
         "model_path": "/home/bd4sur/ai/_model/Qwen25/qwen2.5-7b-instruct-q4_k_m.gguf",
         "seed": 3407,
         "context_length": 0,
+        "temperature": 1,
+        "top_p": 0.9,
+        "top_k": 40,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
+    },
+    "Qwen2.5-14B-1M-Q80": {
+        "model_type": "gguf",
+        "model_path": "/home/bd4sur/ai/_model/Qwen25/Qwen2.5-14B-Instruct-1M-Q8_0.gguf",
+        "seed": 3407,
+        "context_length": 131072,
         "temperature": 1,
         "top_p": 0.9,
         "top_k": 40,
@@ -229,9 +241,36 @@ def predict(msg):
 
 
 
+class IndexRequestHandler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/':
+            try:
+                with open('index.html', 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                modified_content = content.replace("{{SERVER_IP}}", self.headers.get("Host").split(':')[0])
+
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(modified_content.encode('utf-8'))
+                
+            except FileNotFoundError:
+                self.send_error(404, "File not found")
+        else:
+            super().do_GET()
+
+    def get_server_ip(self):
+        """获取本机真实IP地址"""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+
 
 def start_https_server():
-    httpd = socketserver.TCPServer((SERVER_IP, HTTPS_PORT), SimpleHTTPRequestHandler)
+    httpd = socketserver.TCPServer((SERVER_IP, HTTPS_PORT), IndexRequestHandler)
     if USE_SSL:
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(SSL_CERT_PATH, SSL_PRIVATE_KEY_PATH)

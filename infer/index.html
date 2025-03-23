@@ -208,9 +208,9 @@
 <script>
 
 
-const ASR_IP_PORT = "wss://ai.bd4sur.intra:10096";
-const LLM_IP_PORT = "https://ai.bd4sur.intra:5000"
-const TTS_IP_PORT = "https://ai.bd4sur.intra:5000"
+const ASR_IP_PORT = "wss://{{SERVER_IP}}:10096";
+const LLM_IP_PORT = "https://{{SERVER_IP}}:5000"
+const TTS_IP_PORT = "https://{{SERVER_IP}}:5000"
 
 let llm_socket = io.connect(`${LLM_IP_PORT}/chat`, {secure: true});
 let tts_socket = io.connect(`${TTS_IP_PORT}/tts`, {secure: true});
