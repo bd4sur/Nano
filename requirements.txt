@@ -1,17 +1,37 @@
+# General
 tqdm
 blobfile
-matplotlib
-PyQt6
+flask
+flask-socketio
 numpy==1.26.4
 torch==2.3.0
-tensorboard
-tiktoken
-transformers==4.41.1
-deepspeed==0.14.2
+transformers>4.45.0.dev0
+httpx[socks]
+pysocks
 
-ftfy
-regex
-torchvision
+# LLM Infer
+# llama-cpp-python
+# autoawq
+# optimum
+# auto-gptq
+# mdtex2html
+# accelerate
 
-timm
-fairscale
+# Optional
+# ftfy
+# regex
+# gradio==3.41.2
+# matplotlib
+# PyQt6
+
+# ChatTTS
+numba
+torchaudio
+vector_quantize_pytorch
+vocos
+pybase16384
+av
+pydub
+# pynini==2.1.5; sys_platform == 'linux'
+# WeTextProcessing; sys_platform == 'linux'
+# nemo_text_processing; sys_platform == 'linux'

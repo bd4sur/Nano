@@ -72,8 +72,7 @@
                         <div class="GuideIntro">
                             <div class="GuideIntroTitle">Web Browser Is All You Need!</div>
                             <div class="GuideIntroContent">
-                                <div>完全<span style="font-weight: bold;">在浏览器内</span>推理的大语言模型！</div>
-                                <div style="color: #babbbf; margin: 5px 0 0 0; font-size: smaller;">Illustration by <a href="https://x.com/ookiiayu/status/1633071773217607683" target="_blank">ookiiayu@X</a></div>
+                                <div>可<span style="font-weight: bold;">在浏览器内</span>推理的大语言模型！</div>
                             </div>
                         </div>
                     </div>
@@ -202,9 +201,16 @@
 <script src="./jslib/components.js"></script>
 <script src="./infer.js"></script>
 <script src="./prompt.js"></script>
+
 <script src="./tts.js"></script>
+
+<script src="./jslib/recorder-core.js"></script>
+<script src="./jslib/pcm.js"></script>
+<script src="./jslib/funasr.js"></script>
+
 <script src="https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/t2cn.js"></script>
 <script src="./asr.js"></script>
+
 <script>
 
 
@@ -218,6 +224,8 @@ let tts_socket = io.connect(`${TTS_IP_PORT}/tts`, {secure: true});
 
 // 全局状态：使用哪种推理后端
 let NANO_INFER_BACKEND = "wasm"; // "api", "js" or "wasm"
+// 全局状态：使用哪种ASR后端
+let ASR_BACKEND = "whisper"; // "funasr" or "whisper"
 
 let nano_worker = new Worker('nano_worker.js', {type: 'module'});
 
@@ -234,6 +242,12 @@ let CURRENT_MODEL = "qwen15-72b-16k";
 
 
 
+
+let funasr = new FunASR(ASR_IP_PORT, (text) => {
+    set_input_box(text);
+});
+
+funasr.get_recorder_permission();
 
 
 
@@ -284,9 +298,9 @@ function layout_refresh(left_width) {
 
 
 
-function scroll_to_bottom() {
+function scroll_to_bottom(is_force) {
     let scrollHeight = $(".Chat").prop("scrollHeight");
-    if ($(".Chat").prop("scrollTop") > scrollHeight - $(".Chat").prop("clientHeight") - 100) {
+    if (is_force === true || $(".Chat").prop("scrollTop") > scrollHeight - $(".Chat").prop("clientHeight") - 100) {
         $(".Chat").animate({scrollTop:scrollHeight}, 0);
     }
 }
@@ -478,6 +492,7 @@ $("#backend_switch").click(function(event) {
 
 $("#enable_api").click(function(e) {
     NANO_INFER_BACKEND = "api";
+    ASR_BACKEND = "funasr";
     top_k.setValue(40);
     top_p.setValue(0.95);
     temperature.setValue(0.6);
@@ -505,7 +520,7 @@ function llm_on_running(round_counter, text, num_prompt_tokens, num_generated_to
     }
     update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
     switch_submit_button_state("interrupt");
-    scroll_to_bottom();
+    scroll_to_bottom(false);
     return true;
 }
 
@@ -784,7 +799,7 @@ llm_socket.on("chat_response", function(msg) {
     if(msg.status === "start") {
         start_generating_timestamp = new Date().getTime();
         append_bot_bubble(round_counter, get_current_time());
-        scroll_to_bottom();
+        scroll_to_bottom(false);
     }
     else if(msg.status === "generating") {
         switch_submit_button_state("interrupt");
@@ -801,7 +816,7 @@ llm_socket.on("chat_response", function(msg) {
         update_bot_bubble(md, round_counter);
         update_bot_footer(`<b>Nano</b> ${get_current_time()}`, round_counter);
         MathJax.startup.defaultPageReady();
-        scroll_to_bottom();
+        scroll_to_bottom(false);
     }
     else if(msg.status === "finished") {
         end_generating_timestamp = new Date().getTime();
@@ -882,7 +897,7 @@ function submit() {
         console.log(`Send: ${prompt}`);
 
         append_bot_bubble(round_counter, get_current_time());
-        scroll_to_bottom();
+        scroll_to_bottom(true);
 
         nano_worker.postMessage({
             eventType: "INFER",
@@ -898,7 +913,7 @@ function submit() {
             gen_args,
             () => {
                 append_bot_bubble(round_counter, get_current_time());
-                scroll_to_bottom();
+                scroll_to_bottom(true);
             },
             (text, num_prompt_tokens, num_generated_tokens, status, tps) => {
                 return llm_on_running(round_counter, text, num_prompt_tokens, num_generated_tokens, status, tps);
@@ -912,7 +927,7 @@ function submit() {
     switch_submit_button_state("interrupt");
     set_input_box("");
     MathJax.startup.defaultPageReady();
-    scroll_to_bottom();
+    scroll_to_bottom(true);
 }
 
 function interrupt() {
@@ -929,7 +944,7 @@ function interrupt() {
     else if(NANO_INFER_BACKEND === "js") {
         is_generating = false;
     }
-    scroll_to_bottom();
+    scroll_to_bottom(false);
 }
 
 

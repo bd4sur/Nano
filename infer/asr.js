@@ -138,8 +138,8 @@ let mediaStream;
 let mediaStreamSource;
 let scriptProcessor;
 let lowPassFilter;
-let audioData = []; // 保存音频数据的数组
-let recording = false;
+let whisper_audioData = []; // 保存音频数据的数组
+let whisper_recording = false;
 
 // 初始化音频上下文和相关节点
 async function initAudio() {
@@ -164,7 +164,7 @@ async function initAudio() {
     scriptProcessor.connect(audioContext.destination);
 
     scriptProcessor.onaudioprocess = (event) => {
-        if (!recording) return;
+        if (!whisper_recording) return;
 
         // 获取输入缓冲区
 
@@ -190,7 +190,7 @@ async function initAudio() {
         const outputData = new Float32Array(inputBuffer.length);
         outputData.set(audio);
 
-        audioData.push(outputData); // 保存音频数据
+        whisper_audioData.push(outputData); // 保存音频数据
     };
 
     is_audio_initialized = true;
@@ -205,11 +205,17 @@ $("#ptt").on("mousedown touchstart", async function (event) {
     $("#ptt").addClass("ButtonPTT_Active");
     ptt_timestamp = new Date().getTime();
 
-    if (!audioContext) await initAudio();
-    audioData = [];
-    recording = true;
-    console.log("Recording started...");
-    $("#input").val("请按住讲话...");
+    if(ASR_BACKEND === "funasr") {
+        funasr.connect();
+        funasr.start_recording();
+    }
+    else if(ASR_BACKEND === "whisper") {
+        if (!audioContext) await initAudio();
+        whisper_audioData = [];
+        whisper_recording = true;
+        console.log("Recording started...");
+        $("#input").val("请按住讲话...");
+    }
 });
 
 $("#ptt").on("mouseup touchend", async function (event) {
@@ -219,25 +225,36 @@ $("#ptt").on("mouseup touchend", async function (event) {
         console.log("PTT按住时间短于1秒");
     }
 
-    recording = false;
-    console.log("Recording stopped...");
-    $("#input").val("正在识别...");
+    if(ASR_BACKEND === "funasr") {
+        funasr.disconnect();
+        funasr.stop_recording();
+        $("#submit").click();
+    }
+    else if(ASR_BACKEND === "whisper") {
+        whisper_recording = false;
+        console.log("Recording stopped...");
+        $("#input").val("正在识别...");
 
-    // 合并音频数据
-    const audioBuffer = mergeAudioData(audioData);
+        // 合并音频数据
+        const audioBuffer = mergeAudioData(whisper_audioData);
 
-    whisper_asr({
-        recorded_audio: audioBuffer,
-    }, "zh");
+        whisper_asr({
+            recorded_audio: audioBuffer,
+        }, "zh");
 
-    const audioBlob = await createAudioBlob(audioBuffer);
-    const audioUrl = URL.createObjectURL(audioBlob);
+        const audioBlob = await createAudioBlob(audioBuffer);
+        const audioUrl = URL.createObjectURL(audioBlob);
 
-    let whisper_playback_audio = new Audio();
-    whisper_playback_audio.src = audioUrl;
-    whisper_playback_audio.play();
+        let whisper_playback_audio = new Audio();
+        whisper_playback_audio.src = audioUrl;
+        whisper_playback_audio.play();
+    }
 
 });
+
+
+
+
 
 
 // 合并音频数据
@@ -316,6 +333,8 @@ function writeString(view, offset, string) {
 }
 
 $("body").on("click", async () => {
-    await initAudio();
+    if(ASR_BACKEND === "whisper") {
+        await initAudio();
+    }
 });
 
