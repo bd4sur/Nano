@@ -1,0 +1,41 @@
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+</head>
+
+<body>
+    <div class="cbi-section">
+        <input type="text" id="question" value="人类的本质是复读机吗？" style="width:300px;" />
+        <button onclick="sendQuestion()">Send</button>
+        <div id="response"></div>
+    </div>
+    <script>
+        let ws = null;
+        function sendQuestion() {
+            let question = document.getElementById('question').value.trim();
+            if (!question) return;
+            if (ws) {
+                ws.close();
+            }
+            document.getElementById('response').textContent = '';
+
+            ws = new WebSocket('ws://localhost:8080/');
+
+            ws.onopen = function () {
+                let prompt = `<|instruct_mark|>${question}<|response_mark|>`;
+                let prompt_len = `000${prompt.length}`.slice(-5);
+                let msg = `${prompt_len}|${prompt}`;
+                ws.send(msg);
+            };
+            ws.onmessage = function (event) {
+                document.getElementById('response').textContent = event.data;
+            };
+            ws.onerror = function (error) {
+                console.error('WebSocket Error:', error);
+            };
+        }
+    </script>
+</body>
+
+</html>

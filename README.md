@@ -54,10 +54,15 @@
 **C语言实现的CPU推理**
 
 - 首先下载基座模型、指令微调模型或LoRA插件（扩展名均为bin）。
-- 将`Nano/infer_c/infer.c`中模型文件的路径修改为实际的绝对路径。
-- 在`Nano/infer_c`中执行`make`，编译得到可执行文件。默认启用OpenMP并行优化。
-- 执行`OMP_NUM_THREADS=<CPU线程数/2> ./infer <模型文件路径.bin> -i "提示语"`，开始推理。
+- 在`Nano/infer_c`中执行`make nano_infer_shell`，编译得到可执行文件。默认启用OpenMP并行优化。
+- 执行`OMP_NUM_THREADS=<CPU线程数/2> ./nano_infer_shell <模型文件路径.bin> -n <上下文长度> -i "提示语"`，开始推理。
 - 正在研究模型量化。
+
+**基于OpenWrt/LuCI的推理GUI**
+
+- 在`Nano/infer_c`中执行`make nano_infer_ws_server`，编译得到可执行文件。默认启用OpenMP并行优化。
+- 执行`OMP_NUM_THREADS=<CPU线程数/2> ./nano_infer_ws_server <模型文件路径.bin> -n <上下文长度> -P <端口号=8080>`。
+- 打开`index.html`，开始对话。
 
 **基于CUDA/cuBLAS实现的GPU推理**
 
