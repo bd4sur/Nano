@@ -33,7 +33,7 @@ SSL_CERT_PATH = "/home/bd4sur/bd4sur.crt"
 SSL_PRIVATE_KEY_PATH = "/home/bd4sur/key_unencrypted.pem"
 
 NUM_GPU_LAYERS = -1 # 设为-1以加载全部层到GPU
-CURRENT_LLM_CONFIG_KEY = "QwQ-32B-Q5KM"
+CURRENT_LLM_CONFIG_KEY = "Qwen3-30B-A3B-Q80-64K"
 
 LLM_CONFIG = {
     "Qwen2.5-7B-Q4KM": {
@@ -117,6 +117,28 @@ LLM_CONFIG = {
         "model_type": "torch",
         "model_path": "/home/bd4sur/ai/_model/QwQ/QwQ-32B-AWQ",
         "context_length": 65536
+    },
+    "Qwen3-32B-Q80-64K": {
+        "model_type": "gguf",
+        "model_path": "/home/bd4sur/ai/_model/Qwen3/Qwen3-32B-Q8_0-unsloth.gguf",
+        "seed": 3407,
+        "context_length": 65536,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
+    },
+    "Qwen3-30B-A3B-Q80-64K": {
+        "model_type": "gguf",
+        "model_path": "/home/bd4sur/ai/_model/Qwen3/Qwen3-30B-A3B-Q8_0-unsloth.gguf",
+        "seed": 3407,
+        "context_length": 65536,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
     },
 }
 
