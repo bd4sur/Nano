@@ -19,7 +19,7 @@ class ModelArgs:
     vocab_size: int = 32000
     hidden_dim: Optional[int] = None
     multiple_of: int = 256  # MLP hidden layer size will be multiple of
-    norm_eps: float = 1e-5
+    norm_eps: float = 1e-6
     max_seq_len: int = 2048
     dropout: float = 0.0
 
@@ -38,7 +38,7 @@ class RMSNorm(torch.nn.Module):
         return output * self.weight
 
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
+def precompute_freqs_cis(dim: int, end: int, theta: float = 1000000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device)  # type: ignore
     freqs = torch.outer(t, freqs).float()  # type: ignore
@@ -100,11 +100,13 @@ class Attention(nn.Module):
         self.n_local_heads = args.n_heads // model_parallel_size
         self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
-        self.head_dim = args.dim // args.n_heads
-        self.wq = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=True)    # Qwen2: bias=True
-        self.wk = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=True) # Qwen2: bias=True
-        self.wv = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=True) # Qwen2: bias=True
+        self.head_dim = 128 # args.dim // args.n_heads # Qwen3
+        self.wq = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=False)
+        self.wk = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.wv = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
         self.wo = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=False)
+        self.q_norm = RMSNorm(self.head_dim, eps=args.norm_eps)
+        self.k_norm = RMSNorm(self.head_dim, eps=args.norm_eps)
         self.attn_dropout = nn.Dropout(args.dropout)
         self.resid_dropout = nn.Dropout(args.dropout)
         self.dropout = args.dropout
@@ -126,7 +128,7 @@ class Attention(nn.Module):
         bsz, seqlen, _ = x.shape
 
         # QKV
-        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+        xq, xk, xv = self.q_norm(self.wq(x)), self.k_norm(self.wk(x)), self.wv(x) # Qwen3
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
@@ -185,7 +187,7 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.n_heads = args.n_heads
         self.dim = args.dim
-        self.head_dim = args.dim // args.n_heads
+        self.head_dim = 128 # args.dim // args.n_heads # Qwen3
         self.attention = Attention(args)
         self.feed_forward = FeedForward(
             dim=args.dim,

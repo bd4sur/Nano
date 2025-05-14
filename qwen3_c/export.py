@@ -75,12 +75,18 @@ def legacy_export(model, filepath):
         serialize_fp32(out_file, layer.attention.wo.weight)
 
     # Qwen2
+    # for layer in model.layers:
+    #     serialize_fp32(out_file, layer.attention.wq.bias)
+    # for layer in model.layers:
+    #     serialize_fp32(out_file, layer.attention.wk.bias)
+    # for layer in model.layers:
+    #     serialize_fp32(out_file, layer.attention.wv.bias)
+
+    # Qwen3
     for layer in model.layers:
-        serialize_fp32(out_file, layer.attention.wq.bias)
+        serialize_fp32(out_file, layer.attention.q_norm.weight)
     for layer in model.layers:
-        serialize_fp32(out_file, layer.attention.wk.bias)
-    for layer in model.layers:
-        serialize_fp32(out_file, layer.attention.wv.bias)
+        serialize_fp32(out_file, layer.attention.k_norm.weight)
 
     # ffn weights
     for layer in model.layers:
@@ -99,11 +105,12 @@ def legacy_export(model, filepath):
 
     # final classifier weights
     if not shared_classifier:
+        print("not tied weights")
         serialize_fp32(out_file, model.output.weight)
 
     # write to binary file
     out_file.close()
-    print(f"wrote {filepath}")
+    print(f"wrote ver0 {filepath}")
 
 # -----------------------------------------------------------------------------
 # new version
@@ -146,9 +153,12 @@ def version1_export(model, filepath):
         *[layer.attention.wv.weight for layer in model.layers],
         *[layer.attention.wo.weight for layer in model.layers],
 
-        *[layer.attention.wq.bias for layer in model.layers], # Qwen2
-        *[layer.attention.wk.bias for layer in model.layers], # Qwen2
-        *[layer.attention.wv.bias for layer in model.layers], # Qwen2
+        # *[layer.attention.wq.bias for layer in model.layers], # Qwen2
+        # *[layer.attention.wk.bias for layer in model.layers], # Qwen2
+        # *[layer.attention.wv.bias for layer in model.layers], # Qwen2
+
+        *[layer.attention.q_norm.weight for layer in model.layers], # Qwen3
+        *[layer.attention.k_norm.weight for layer in model.layers], # Qwen3
 
         *[layer.feed_forward.w1.weight for layer in model.layers],
         *[layer.feed_forward.w2.weight for layer in model.layers],
@@ -161,7 +171,7 @@ def version1_export(model, filepath):
 
     # write to binary file
     out_file.close()
-    print(f"wrote {filepath}")
+    print(f"wrote ver1 {filepath}")
 
 
 # -----------------------------------------------------------------------------
@@ -197,12 +207,12 @@ def load_hf_model(model_path):
     model.tok_embeddings.weight = nn.Parameter(hf_dict['model.embed_tokens.weight'])
     model.norm.weight = nn.Parameter(hf_dict['model.norm.weight'])
 
-    head_dim = config.dim // config.n_heads
+    head_dim = 128 # config.dim // config.n_heads # Qwen3
 
     # huggingface permutes WQ and WK, this function reverses it
     # see https://github.com/huggingface/transformers/blob/b132c1703eb1c8bd9dfa4ad6a9be2bfd6ef819e9/src/transformers/models/llama/convert_llama_weights_to_hf.py#L122
     def permute_reverse(w, heads, rotary_dim):
-        head_dim = w.shape[0] // heads
+        head_dim = 128 # w.shape[0] // heads # Qwen3
         assert rotary_dim <= head_dim
         w = torch.unflatten(w, 0, (-1, head_dim))
         # wr is the rotary part, wk is the part kept unrotated
@@ -219,23 +229,40 @@ def load_hf_model(model_path):
     for layer in model.layers:
         i = layer.layer_id
         layer.attention_norm.weight = nn.Parameter(hf_dict[f'model.layers.{i}.input_layernorm.weight'])
+        print(f"Layer {i} attention_norm.shape = {layer.attention_norm.weight.shape}")
+
         layer.attention.wq.weight = nn.Parameter(permute_reverse(hf_dict[f'model.layers.{i}.self_attn.q_proj.weight'], config.n_heads, head_dim))
         layer.attention.wk.weight = nn.Parameter(permute_reverse(hf_dict[f'model.layers.{i}.self_attn.k_proj.weight'], config.n_kv_heads, head_dim))
         layer.attention.wv.weight = nn.Parameter(hf_dict[f'model.layers.{i}.self_attn.v_proj.weight'])
         layer.attention.wo.weight = nn.Parameter(hf_dict[f'model.layers.{i}.self_attn.o_proj.weight'])
+        print(f"Layer {i} wq.shape = {layer.attention.wq.weight.shape}")
+        print(f"Layer {i} wk.shape = {layer.attention.wk.weight.shape}")
+        print(f"Layer {i} wv.shape = {layer.attention.wv.weight.shape}")
+        print(f"Layer {i} wo.shape = {layer.attention.wo.weight.shape}")
 
         # Qwen2
-        layer.attention.wq.bias = nn.Parameter(permute_reverse(hf_dict[f'model.layers.{i}.self_attn.q_proj.bias'], config.n_heads, head_dim))
-        layer.attention.wk.bias = nn.Parameter(permute_reverse(hf_dict[f'model.layers.{i}.self_attn.k_proj.bias'], config.n_kv_heads, head_dim))
-        layer.attention.wv.bias = nn.Parameter(hf_dict[f'model.layers.{i}.self_attn.v_proj.bias'])
+        # layer.attention.wq.bias = nn.Parameter(permute_reverse(hf_dict[f'model.layers.{i}.self_attn.q_proj.bias'], config.n_heads, head_dim))
+        # layer.attention.wk.bias = nn.Parameter(permute_reverse(hf_dict[f'model.layers.{i}.self_attn.k_proj.bias'], config.n_kv_heads, head_dim))
+        # layer.attention.wv.bias = nn.Parameter(hf_dict[f'model.layers.{i}.self_attn.v_proj.bias'])
+
+        # Qwen3
+        layer.attention.q_norm.weight = nn.Parameter(hf_dict[f'model.layers.{i}.self_attn.q_norm.weight'])
+        layer.attention.k_norm.weight = nn.Parameter(hf_dict[f'model.layers.{i}.self_attn.k_norm.weight'])
+        print(f"Layer {i} q_norm.shape = {layer.attention.q_norm.weight.shape}")
+        print(f"Layer {i} k_norm.shape = {layer.attention.k_norm.weight.shape}")
 
         layer.ffn_norm.weight = nn.Parameter(hf_dict[f'model.layers.{i}.post_attention_layernorm.weight'])
         layer.feed_forward.w1.weight = nn.Parameter(hf_dict[f'model.layers.{i}.mlp.gate_proj.weight'])
         layer.feed_forward.w2.weight = nn.Parameter(hf_dict[f'model.layers.{i}.mlp.down_proj.weight'])
         layer.feed_forward.w3.weight = nn.Parameter(hf_dict[f'model.layers.{i}.mlp.up_proj.weight'])
+        print(f"Layer {i} ffn_norm.shape = {layer.ffn_norm.weight.shape}")
+        print(f"Layer {i} w1.shape = {layer.feed_forward.w1.weight.shape}")
+        print(f"Layer {i} w2.shape = {layer.feed_forward.w2.weight.shape}")
+        print(f"Layer {i} w3.shape = {layer.feed_forward.w3.weight.shape}")
 
     # final classifier
     model.output.weight = nn.Parameter(hf_dict['lm_head.weight'])
+    print(f"output.shape = {model.output.weight.shape}")
     model.eval()
     return model
 

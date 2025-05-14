@@ -15,7 +15,7 @@
 #endif
 
 #define ROPE_THETA   (1000000.0f)
-#define RMS_NORM_EPS (1e-06)
+#define RMS_NORM_EPS (1e-6)
 
 // ----------------------------------------------------------------------------
 // Transformer model
@@ -43,9 +43,13 @@ typedef struct {
     float* wo; // (layer, n_heads * head_size, dim)
 
     // Qwen2
-    float *bq; // (layer, n_heads * head_size)
-    float *bk; // (layer, n_kv_heads * head_size)
-    float *bv; // (layer, n_kv_heads * head_size)
+    // float *bq; // (layer, n_heads * head_size)
+    // float *bk; // (layer, n_kv_heads * head_size)
+    // float *bv; // (layer, n_kv_heads * head_size)
+
+    // Qwen3
+    float *q_norm; // (layer, head_size)
+    float *k_norm; // (layer, head_size)
 
     // weights for ffn
     float* w1; // (layer, hidden_dim, dim)
@@ -64,11 +68,14 @@ typedef struct {
     // current wave of activations
     float *x; // activation at current time stamp (dim,)
     float *xb; // same, but inside a residual branch (dim,)
+    float *xba; // same, but inside a residual branch (dim,)
     float *xb2; // an additional buffer just for convenience (dim,)
     float *hb; // buffer for hidden dimension in the ffn (hidden_dim,)
     float *hb2; // buffer for hidden dimension in the ffn (hidden_dim,)
     float *q; // query (dim,)
     float *k; // key (dim,)
+    float *qq; // (dim,)
+    float *kk; // (dim,)
     float *v; // value (dim,)
     float *att; // buffer for scores/attention values (n_heads, seq_len)
     float *logits; // output logits
@@ -89,13 +96,18 @@ typedef struct {
 
 void malloc_run_state(RunState* s, Config* p) {
     // we calloc instead of malloc to keep valgrind happy
-    int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
+    int head_size = 128;
+    int q_dim = p->n_heads * head_size;
+    int kv_dim = p->n_kv_heads * head_size;
     s->x = calloc(p->dim, sizeof(float));
     s->xb = calloc(p->dim, sizeof(float));
+    s->xba = calloc(q_dim, sizeof(float));
     s->xb2 = calloc(p->dim, sizeof(float));
     s->hb = calloc(p->hidden_dim, sizeof(float));
     s->hb2 = calloc(p->hidden_dim, sizeof(float));
-    s->q = calloc(p->dim, sizeof(float));
+    s->q = calloc(q_dim, sizeof(float));
+    s->qq = calloc(q_dim, sizeof(float));
+    s->kk = calloc(kv_dim, sizeof(float));
     s->key_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
     s->value_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
     s->att = calloc(p->n_heads * p->seq_len, sizeof(float));
@@ -111,10 +123,13 @@ void malloc_run_state(RunState* s, Config* p) {
 void free_run_state(RunState* s) {
     free(s->x);
     free(s->xb);
+    free(s->xba);
     free(s->xb2);
     free(s->hb);
     free(s->hb2);
     free(s->q);
+    free(s->qq);
+    free(s->kk);
     free(s->att);
     free(s->logits);
     free(s->key_cache);
@@ -122,7 +137,7 @@ void free_run_state(RunState* s) {
 }
 
 void memory_map_weights(TransformerWeights *w, Config* p, float* ptr, int shared_weights) {
-    int head_size = p->dim / p->n_heads;
+    int head_size = 128; // p->dim / p->n_heads; // Qwen
     // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
     unsigned long long n_layers = p->n_layers;
     w->token_embedding_table = ptr;
@@ -139,12 +154,18 @@ void memory_map_weights(TransformerWeights *w, Config* p, float* ptr, int shared
     ptr += n_layers * (p->n_heads * head_size) * p->dim;
 
     // Qwen2
-    w->bq = ptr;
-    ptr += n_layers * (p->n_heads * head_size);
-    w->bk = ptr;
-    ptr += n_layers * (p->n_kv_heads * head_size);
-    w->bv = ptr;
-    ptr += n_layers * (p->n_kv_heads * head_size);
+    // w->bq = ptr;
+    // ptr += n_layers * (p->n_heads * head_size);
+    // w->bk = ptr;
+    // ptr += n_layers * (p->n_kv_heads * head_size);
+    // w->bv = ptr;
+    // ptr += n_layers * (p->n_kv_heads * head_size);
+
+    // Qwen3
+    w->q_norm = ptr;
+    ptr += n_layers * head_size;
+    w->k_norm = ptr;
+    ptr += n_layers * head_size;
 
     w->rms_ffn_weight = ptr;
     ptr += n_layers * p->dim;
@@ -161,6 +182,7 @@ void memory_map_weights(TransformerWeights *w, Config* p, float* ptr, int shared
     w->freq_cis_imag = ptr; ptr += p->seq_len * head_size / 2;
 
     w->wcls = shared_weights ? w->token_embedding_table : ptr;
+    printf("Share weights? %d\n", shared_weights);
 }
 
 void read_checkpoint(char* checkpoint, Config* config, TransformerWeights* weights,
@@ -172,6 +194,15 @@ void read_checkpoint(char* checkpoint, Config* config, TransformerWeights* weigh
     // negative vocab size is hacky way of signaling unshared weights. bit yikes.
     int shared_weights = config->vocab_size > 0 ? 1 : 0;
     config->vocab_size = abs(config->vocab_size);
+
+    printf("dim = %d\n", config->dim);
+    printf("hidden_dim = %d\n", config->hidden_dim);
+    printf("n_layers = %d\n", config->n_layers);
+    printf("n_heads = %d\n", config->n_heads);
+    printf("n_kv_heads = %d\n", config->n_kv_heads);
+    printf("vocab_size = %d\n", config->vocab_size);
+    printf("seq_len = %d\n", config->seq_len);
+
     // figure out the file size
     fseek(file, 0, SEEK_END); // move file pointer to end of file
     *file_size = ftell(file); // get the file size, in bytes
@@ -238,7 +269,7 @@ void softmax(float* x, int size) {
     }
 }
 
-void matmul(float* xout, float* x, float* w, float *b, int n, int d) {
+void matmul(float* xout, float* x, float* w, int n, int d) {
     // W (d,n) @ x (n,) -> xout (d,)
     // by far the most amount of time is spent inside this little function
     int i;
@@ -247,9 +278,6 @@ void matmul(float* xout, float* x, float* w, float *b, int n, int d) {
         float val = 0.0f;
         for (int j = 0; j < n; j++) {
             val += w[i * n + j] * x[j];
-        }
-        if (b) {
-            val += b[i];
         }
         xout[i] = val;
     }
@@ -263,14 +291,19 @@ float* forward(Transformer* transformer, int token, int pos) {
     RunState* s = &transformer->state;
     float *x = s->x;
     int dim = p->dim;
-    int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
+    int head_size = 128; // dim / p->n_heads; // Qwen3
+    int q_dim = p->n_heads * head_size;
+    int kv_dim = p->n_kv_heads * head_size; // (p->dim * p->n_kv_heads) / p->n_heads;
     int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
     int hidden_dim =  p->hidden_dim;
-    int head_size = dim / p->n_heads;
 
     // copy the token embedding into x
     float* content_row = w->token_embedding_table + token * dim;
     memcpy(x, content_row, dim*sizeof(*x));
+
+    // pluck out the "pos" row of freq_cis_real and freq_cis_imag
+    float *freq_cis_real_row = w->freq_cis_real + pos * head_size / 2;
+    float *freq_cis_imag_row = w->freq_cis_imag + pos * head_size / 2;
 
     // forward all the layers
     for(unsigned long long l = 0; l < p->n_layers; l++) {
@@ -284,12 +317,29 @@ float* forward(Transformer* transformer, int token, int pos) {
         s->v = s->value_cache + loff + pos * kv_dim;
 
         // qkv matmuls for this position
-        matmul(s->q, s->xb, w->wq + l*dim*dim,    w->bq + l*dim,    dim, dim);
-        matmul(s->k, s->xb, w->wk + l*dim*kv_dim, w->bk + l*kv_dim, dim, kv_dim);
-        matmul(s->v, s->xb, w->wv + l*dim*kv_dim, w->bv + l*kv_dim, dim, kv_dim);
+        matmul(s->q, s->xb, w->wq + l*dim*q_dim,  dim, q_dim);
+        matmul(s->k, s->xb, w->wk + l*dim*kv_dim, dim, kv_dim);
+        matmul(s->v, s->xb, w->wv + l*dim*kv_dim, dim, kv_dim);
 
-        // RoPE relative positional encoding: complex-valued rotate q and k in each head
-        for (int i = 0; i < dim; i+=2) {
+        // printf("Layer %d Q_Norm = ", l);
+        // for (int i = 0; i < head_size; i++) {
+        //     printf("%.2f, ", *(w->q_norm + l*head_size + i));
+        // }
+        // printf("\n");
+
+        // Qwen3
+        for (int h = 0; h < p->n_heads; h++) {
+            float *q = s->q + h * head_size;
+            // float *qq = s->qq + h * head_size;
+            rmsnorm(q, q, w->q_norm + l*head_size, head_size);
+        }
+        for (int h = 0; h < p->n_kv_heads; h++) {
+            float *k = s->k + h * head_size;
+            // float *kk = s->kk + h * head_size;
+            rmsnorm(k, k, w->k_norm + l*head_size, head_size);
+        }
+
+        for (int i = 0; i < q_dim; i+=2) {
             int head_dim = i % head_size;
             float freq = 1.0f / powf(ROPE_THETA, head_dim / (float)head_size);
             float val = pos * freq;
@@ -330,23 +380,23 @@ float* forward(Transformer* transformer, int token, int pos) {
             // softmax the scores to get attention weights, from 0..pos inclusively
             softmax(att, pos + 1);
 
-            // weighted sum of the values, store back into xb
-            float* xb = s->xb + h * head_size;
-            memset(xb, 0, head_size * sizeof(float));
+            // weighted sum of the values, store into xba
+            float* xba = s->xba + h * head_size;
+            memset(xba, 0, head_size * sizeof(float));
             for (int t = 0; t <= pos; t++) {
                 // get the value vector for this head and at this timestep
                 float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
                 // get the attention weight for this timestep
                 float a = att[t];
-                // accumulate the weighted value into xb
+                // accumulate the weighted value into xba
                 for (int i = 0; i < head_size; i++) {
-                    xb[i] += a * v[i];
+                    xba[i] += a * v[i];
                 }
             }
         }
 
         // final matmul to get the output of the attention
-        matmul(s->xb2, s->xb, w->wo + l*dim*dim, NULL, dim, dim);
+        matmul(s->xb2, s->xba, w->wo + l*q_dim*dim, q_dim, dim);
 
         // residual connection back into x
         for (int i = 0; i < dim; i++) {
@@ -358,8 +408,8 @@ float* forward(Transformer* transformer, int token, int pos) {
 
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
-        matmul(s->hb, s->xb, w->w1 + l*dim*hidden_dim, NULL, dim, hidden_dim);
-        matmul(s->hb2, s->xb, w->w3 + l*dim*hidden_dim, NULL, dim, hidden_dim);
+        matmul(s->hb, s->xb, w->w1 + l*dim*hidden_dim, dim, hidden_dim);
+        matmul(s->hb2, s->xb, w->w3 + l*dim*hidden_dim, dim, hidden_dim);
 
         // SwiGLU non-linearity
         for (int i = 0; i < hidden_dim; i++) {
@@ -372,7 +422,7 @@ float* forward(Transformer* transformer, int token, int pos) {
         }
 
         // final matmul to get the output of the ffn
-        matmul(s->xb, s->hb, w->w2 + l*dim*hidden_dim, NULL, hidden_dim, dim);
+        matmul(s->xb, s->hb, w->w2 + l*dim*hidden_dim, hidden_dim, dim);
 
         // residual connection
         for (int i = 0; i < dim; i++) {
@@ -384,7 +434,7 @@ float* forward(Transformer* transformer, int token, int pos) {
     rmsnorm(x, x, w->rms_final_weight, dim);
 
     // classifier into logits
-    matmul(s->logits, x, w->wcls, NULL, p->dim, p->vocab_size);
+    matmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
     return s->logits;
 }
 
@@ -993,7 +1043,7 @@ int main(int argc, char *argv[]) {
     char *checkpoint_path = NULL;  // e.g. out/model.bin
     char *tokenizer_path = NULL;
     float temperature = 0.6f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
-    float topp = 0.8f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
+    float topp = 0.95f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
     int steps = 2048;           // number of steps to run for
     char *prompt = NULL;        // prompt string
     unsigned long long rng_seed = 0; // seed rng with time by default
@@ -1040,7 +1090,7 @@ int main(int argc, char *argv[]) {
     // parameter validation/overrides
     if (rng_seed <= 0) rng_seed = (unsigned int)time(NULL);
     if (temperature < 0.0) temperature = 0.0;
-    if (topp < 0.0 || 1.0 < topp) topp = 0.9;
+    if (topp < 0.0 || 1.0 < topp) topp = 0.6;
     if (steps < 0) steps = 0;
 
     // build the Transformer via the model .bin file
