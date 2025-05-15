@@ -74,8 +74,6 @@ typedef struct {
     float *hb2; // buffer for hidden dimension in the ffn (hidden_dim,)
     float *q; // query (dim,)
     float *k; // key (dim,)
-    float *qq; // (dim,)
-    float *kk; // (dim,)
     float *v; // value (dim,)
     float *att; // buffer for scores/attention values (n_heads, seq_len)
     float *logits; // output logits
@@ -106,8 +104,6 @@ void malloc_run_state(RunState* s, Config* p) {
     s->hb = calloc(p->hidden_dim, sizeof(float));
     s->hb2 = calloc(p->hidden_dim, sizeof(float));
     s->q = calloc(q_dim, sizeof(float));
-    s->qq = calloc(q_dim, sizeof(float));
-    s->kk = calloc(kv_dim, sizeof(float));
     s->key_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
     s->value_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
     s->att = calloc(p->n_heads * p->seq_len, sizeof(float));
@@ -128,8 +124,6 @@ void free_run_state(RunState* s) {
     free(s->hb);
     free(s->hb2);
     free(s->q);
-    free(s->qq);
-    free(s->kk);
     free(s->att);
     free(s->logits);
     free(s->key_cache);
@@ -321,38 +315,40 @@ float* forward(Transformer* transformer, int token, int pos) {
         matmul(s->k, s->xb, w->wk + l*dim*kv_dim, dim, kv_dim);
         matmul(s->v, s->xb, w->wv + l*dim*kv_dim, dim, kv_dim);
 
-        // printf("Layer %d Q_Norm = ", l);
-        // for (int i = 0; i < head_size; i++) {
-        //     printf("%.2f, ", *(w->q_norm + l*head_size + i));
-        // }
-        // printf("\n");
-
         // Qwen3
         for (int h = 0; h < p->n_heads; h++) {
             float *q = s->q + h * head_size;
-            // float *qq = s->qq + h * head_size;
             rmsnorm(q, q, w->q_norm + l*head_size, head_size);
         }
         for (int h = 0; h < p->n_kv_heads; h++) {
             float *k = s->k + h * head_size;
-            // float *kk = s->kk + h * head_size;
             rmsnorm(k, k, w->k_norm + l*head_size, head_size);
         }
 
-        for (int i = 0; i < q_dim; i+=2) {
-            int head_dim = i % head_size;
+        for (int i = 0; i < (q_dim/2); i++) {
+            int head_dim = i % head_size * 2;
             float freq = 1.0f / powf(ROPE_THETA, head_dim / (float)head_size);
             float val = pos * freq;
             float fcr = cosf(val);
             float fci = sinf(val);
-            int rotn = i < kv_dim ? 2 : 1; // how many vectors? 2 = q & k, 1 = q only
-            for (int v = 0; v < rotn; v++) {
-                float* vec = v == 0 ? s->q : s->k; // the vector to rotate (query or key)
-                float v0 = vec[i];
-                float v1 = vec[i+1];
-                vec[i]   = v0 * fcr - v1 * fci;
-                vec[i+1] = v0 * fci + v1 * fcr;
-            }
+            float* vec = s->q;
+            float v0 = vec[i];
+            float v1 = vec[i + (head_size/2)];
+            vec[i]   = v0 * fcr - v1 * fci;
+            vec[i + (head_size/2)] = v0 * fci + v1 * fcr;
+        }
+
+        for (int i = 0; i < (kv_dim/2); i++) {
+            int head_dim = i % head_size * 2;
+            float freq = 1.0f / powf(ROPE_THETA, head_dim / (float)head_size);
+            float val = pos * freq;
+            float fcr = cosf(val);
+            float fci = sinf(val);
+            float* vec = s->k;
+            float v0 = vec[i];
+            float v1 = vec[i + (head_size/2)];
+            vec[i]   = v0 * fcr - v1 * fci;
+            vec[i + (head_size/2)] = v0 * fci + v1 * fcr;
         }
 
         // multihead attention. iterate over all heads
@@ -758,13 +754,24 @@ float random_f32(unsigned long long *state) { // random float32 in [0,1)
     return (random_u32(state) >> 8) / 16777216.0f;
 }
 
-int sample(Sampler* sampler, float* logits) {
+int sample(Sampler* sampler, float* logits, int *output_ids, int pos) {
     // sample the token given the logits and some hyperparameters
     int next;
     if (sampler->temperature == 0.0f) {
         // greedy argmax sampling: take the token with the highest probability
         next = sample_argmax(logits, sampler->vocab_size);
     } else {
+        // 复读惩罚：对过往出现过的词元施加惩罚，词元出现得越多，概率越低: ref arxiv:1909.05858
+        int *tokenset = (int *)calloc(sampler->vocab_size, sizeof(int));
+        for(int i = 0; i < pos; i++) {
+            tokenset[output_ids[i]] = 1;  // 1表示output_ids中出现了这个token
+        }
+        for(int id = 0; id < sampler->vocab_size; id++) {
+            if(tokenset[id] == 1) {
+                logits[id] /= 1.5;
+            }
+        }
+        free(tokenset);
         // apply the temperature to the logits
         for (int q=0; q<sampler->vocab_size; q++) { logits[q] /= sampler->temperature; }
         // apply softmax to the logits to get the probabilities for next token
@@ -796,72 +803,54 @@ long time_in_ms() {
 // ----------------------------------------------------------------------------
 // generation loop
 
-int *apply_chat_template(Tokenizer *t, char *system_prompt, char *user_prompt, int *prompt_length, int template_format) {
-    int num_system_prompt_tokens = 0;
-    int *system_prompt_tokens = (int*)calloc(strlen(system_prompt), sizeof(int));
-    encode(t, system_prompt, system_prompt_tokens, &num_system_prompt_tokens);
-
+int *apply_chat_template(Tokenizer *t, char *system_prompt, char *user_prompt, int *prompt_length) {
     int num_user_prompt_tokens = 0;
     int *user_prompt_tokens = (int*)calloc(strlen(user_prompt), sizeof(int));
     encode(t, user_prompt, user_prompt_tokens, &num_user_prompt_tokens);
 
-    int *prompt_tokens = (int*)calloc(num_system_prompt_tokens + num_user_prompt_tokens + 16, sizeof(int));
+    int *prompt_tokens = (int*)calloc(num_user_prompt_tokens + 16, sizeof(int));
 
-    // 2 - DeepSeek-R1-Distill-Qwen
-    if(template_format == 2) {
-        prompt_tokens[0] = 151646; // <｜begin▁of▁sentence｜>
-        prompt_tokens[1] = 151644; // <｜User｜>
-        prompt_tokens[2] = 198;    // \n
-        for(int i = 0; i < num_user_prompt_tokens; i++) *(prompt_tokens + 2 + i) = user_prompt_tokens[i];
-        prompt_tokens[2  + num_user_prompt_tokens] = 151645; // <｜Assistant｜>
-        prompt_tokens[3 + num_user_prompt_tokens] = 0;
+    prompt_tokens[0] = 151644; // <|im_start|>
+    prompt_tokens[1] = 872;    // user
+    prompt_tokens[2] = 198;    // \n
+    for(int i = 0; i < num_user_prompt_tokens; i++) *(prompt_tokens + 3 + i) = user_prompt_tokens[i];
+    prompt_tokens[3 + num_user_prompt_tokens] = 151645; // <|im_end|>
+    prompt_tokens[4 + num_user_prompt_tokens] = 198;    // \n
+    prompt_tokens[5 + num_user_prompt_tokens] = 151644; // <|im_start|>
+    prompt_tokens[6 + num_user_prompt_tokens] = 77091;  // assistant
+    prompt_tokens[7 + num_user_prompt_tokens] = 198;    // \n
+    prompt_tokens[8 + num_user_prompt_tokens] = 151667;    // \n
+    prompt_tokens[9 + num_user_prompt_tokens] = 198;    // \n
+    prompt_tokens[10 + num_user_prompt_tokens] = 198;    // \n
+    prompt_tokens[11 + num_user_prompt_tokens] = 151668;    // \n
+    prompt_tokens[12 + num_user_prompt_tokens] = 198;    // \n
+    prompt_tokens[13 + num_user_prompt_tokens] = 198;    // \n
+    prompt_tokens[14 + num_user_prompt_tokens] = 0;
 
-        free(user_prompt_tokens);
+    free(user_prompt_tokens);
 
-        *prompt_length = 3 + num_user_prompt_tokens;
+    *prompt_length = 14 + num_user_prompt_tokens;
 
-        return prompt_tokens;
-    }
-    // 1 or else - Qwen2.5
-    else {
-        prompt_tokens[0] = 151644; // <|im_start|>
-        prompt_tokens[1] = 8948;   // system
-        prompt_tokens[2] = 198;    // \n
-        for(int i = 0; i < num_system_prompt_tokens; i++) *(prompt_tokens + 3 + i) = system_prompt_tokens[i];
-        prompt_tokens[3 + num_system_prompt_tokens] = 151645; // <|im_end|>
-        prompt_tokens[4 + num_system_prompt_tokens] = 198;    // \n
-        prompt_tokens[5 + num_system_prompt_tokens] = 151644; // <|im_start|>
-        prompt_tokens[6 + num_system_prompt_tokens] = 872;    // user
-        prompt_tokens[7 + num_system_prompt_tokens] = 198;    // \n
-        for(int i = 0; i < num_user_prompt_tokens; i++) *(prompt_tokens + 8 + num_system_prompt_tokens + i) = user_prompt_tokens[i];
-        prompt_tokens[8  + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
-        prompt_tokens[9  + num_system_prompt_tokens + num_user_prompt_tokens] = 151645; // <|im_end|>
-        prompt_tokens[10 + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
-        prompt_tokens[11 + num_system_prompt_tokens + num_user_prompt_tokens] = 151644; // <|im_start|>
-        prompt_tokens[12 + num_system_prompt_tokens + num_user_prompt_tokens] = 77091;  // assistant
-        prompt_tokens[13 + num_system_prompt_tokens + num_user_prompt_tokens] = 198;    // \n
-        prompt_tokens[14 + num_system_prompt_tokens + num_user_prompt_tokens] = 0;
-
-        free(system_prompt_tokens);
-        free(user_prompt_tokens);
-
-        *prompt_length = 14 + num_system_prompt_tokens + num_user_prompt_tokens;
-
-        return prompt_tokens;
-    }
-
+    return prompt_tokens;
 }
 
-void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps, int template_format) {
+void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
     char *empty_prompt = "";
     if (prompt == NULL) { prompt = empty_prompt; }
+
+    int *output_ids = (int *)calloc(1024, sizeof(int));
+    int output_count = 0;
 
     // encode the (string) prompt into tokens sequence
     int num_prompt_tokens = 0;
 
     char *system_prompt = "";
 
-    int* prompt_tokens = apply_chat_template(tokenizer, system_prompt, prompt, &num_prompt_tokens, template_format);
+    int* prompt_tokens = apply_chat_template(tokenizer, system_prompt, prompt, &num_prompt_tokens);
+
+    for(int i = 0; i < num_prompt_tokens; i++) {
+        output_ids[i] = prompt_tokens[i];
+    }
 
     if (num_prompt_tokens < 1) {
         fprintf(stderr, "something is wrong, expected at least 1 prompt token\n");
@@ -888,7 +877,8 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
             is_decoding = 0;
         } else {
             // otherwise sample the next token from the logits
-            next = sample(sampler, logits);
+            next = sample(sampler, logits, output_ids, pos);
+            output_ids[num_prompt_tokens + output_count++] = next;
             is_decoding = 1;
         }
         pos++;
@@ -927,96 +917,6 @@ void read_stdin(const char* guide, char* buffer, size_t bufsize) {
     }
 }
 
-// ----------------------------------------------------------------------------
-// chat loop
-// I manually inspected the tokens for a few chat conversations compared to
-// python reference and that seemed ok, but this was not thoroughly tested and
-// is not safely implemented, it's more a proof of concept atm.
-
-void chat(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler,
-          char *cli_user_prompt, char *cli_system_prompt, int steps) {
-
-    // buffers for reading the system prompt and user prompt from stdin
-    // you'll notice they are soomewhat haphazardly and unsafely set atm
-    char system_prompt[512];
-    char user_prompt[512];
-    char rendered_prompt[1152];
-    int num_prompt_tokens = 0;
-    int* prompt_tokens = (int*)malloc(1152 * sizeof(int));
-    int user_idx;
-
-    // start the main loop
-    int user_turn = 1; // user starts
-    int next;        // will store the next token in the sequence
-    int token;       // stores the current token to feed into the transformer
-    int prev_token;
-    int pos = 0;     // position in the sequence
-    while (pos < steps) {
-
-        // when it is the user's turn to contribute tokens to the dialog...
-        if (user_turn) {
-            // get the (optional) system prompt at position 0
-            if (pos == 0) {
-                // at position 0, the user can also contribute a system prompt
-                if (cli_system_prompt == NULL) {
-                    // system prompt was not passed in, attempt to get it from stdin
-                    read_stdin("Enter system prompt (optional): ", system_prompt, sizeof(system_prompt));
-                } else {
-                    // system prompt was passed in, use it
-                    strcpy(system_prompt, cli_system_prompt);
-                }
-            }
-            // get the user prompt
-            if (pos == 0 && cli_user_prompt != NULL) {
-                // user prompt for position 0 was passed in, use it
-                strcpy(user_prompt, cli_user_prompt);
-            } else {
-                // otherwise get user prompt from stdin
-                read_stdin("User: ", user_prompt, sizeof(user_prompt));
-            }
-            // render user/system prompts into the Llama 2 Chat schema
-            if (pos == 0 && system_prompt[0] != '\0') {
-                char system_template[] = "[INST] <<SYS>>\n%s\n<</SYS>>\n\n%s [/INST]";
-                sprintf(rendered_prompt, system_template, system_prompt, user_prompt);
-            } else {
-                char user_template[] = "[INST] %s [/INST]";
-                sprintf(rendered_prompt, user_template, user_prompt);
-            }
-            // encode the rendered prompt into tokens
-            encode(tokenizer, rendered_prompt, prompt_tokens, &num_prompt_tokens);
-            user_idx = 0; // reset the user index
-            user_turn = 0;
-            printf("Assistant: ");
-        }
-
-        // determine the token to pass into the transformer next
-        if (user_idx < num_prompt_tokens) {
-            // if we are still processing the input prompt, force the next prompt token
-            token = prompt_tokens[user_idx++];
-        } else {
-            // otherwise use the next token sampled from previous turn
-            token = next;
-        }
-        // EOS (=2) token ends the Assistant turn
-        if (token == 2) { user_turn = 1; }
-
-        // forward the transformer to get logits for the next token
-        float* logits = forward(transformer, token, pos);
-        next = sample(sampler, logits);
-        pos++;
-
-        if (user_idx >= num_prompt_tokens && next != 2) {
-            // the Assistant is responding, so print its output
-            char* piece = decode(tokenizer, token, next);
-            safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
-            fflush(stdout);
-        }
-        if (next == 2) { printf("\n"); }
-    }
-    printf("\n");
-    free(prompt_tokens);
-}
-
 
 // ----------------------------------------------------------------------------
 // CLI, include only if not testing
@@ -1042,14 +942,13 @@ int main(int argc, char *argv[]) {
     // default parameters
     char *checkpoint_path = NULL;  // e.g. out/model.bin
     char *tokenizer_path = NULL;
-    float temperature = 0.6f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
-    float topp = 0.95f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
+    float temperature = 0.7f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
+    float topp = 0.8f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
     int steps = 2048;           // number of steps to run for
     char *prompt = NULL;        // prompt string
     unsigned long long rng_seed = 0; // seed rng with time by default
     char *mode = "generate";    // generate|chat
     char *system_prompt = NULL; // the (optional) system prompt to use in chat mode
-    int template_format = 1;    // 1: Qwen2.5; 2: DeepSeek-R1-Qwen
 
     // poor man's C argparse so we can override the defaults above from the command line
     if (argc >= 3) {
@@ -1070,28 +969,12 @@ int main(int argc, char *argv[]) {
         else if (argv[i][1] == 'n') { steps = atoi(argv[i + 1]); }
         else if (argv[i][1] == 'i') { prompt = argv[i + 1]; }
         else if (argv[i][1] == 'z') { tokenizer_path = argv[i + 1]; }
-        else if (argv[i][1] == 'm') { mode = argv[i + 1]; }
         else if (argv[i][1] == 'y') { system_prompt = argv[i + 1]; }
-        else if (argv[i][1] == 'f') {
-            char *format = argv[i + 1];
-            if(!strcmp(format, "qwen")) {
-                template_format = 1;
-            }
-            else if(!strcmp(format, "dsqw")){
-                template_format = 2;
-            }
-            else {
-                template_format = 1;
-            }
-        }
         else { error_usage(); }
     }
 
     // parameter validation/overrides
-    if (rng_seed <= 0) rng_seed = (unsigned int)time(NULL);
-    if (temperature < 0.0) temperature = 0.0;
-    if (topp < 0.0 || 1.0 < topp) topp = 0.6;
-    if (steps < 0) steps = 0;
+    rng_seed = (unsigned int)time(NULL);
 
     // build the Transformer via the model .bin file
     Transformer transformer;
@@ -1100,21 +983,13 @@ int main(int argc, char *argv[]) {
 
     // build the Tokenizer via the tokenizer .bin file
     Tokenizer tokenizer;
-    build_tokenizer(&tokenizer, tokenizer_path, 151664); // NOTE transformer.config.vocab_size not equal to tokenizer's vocab_size
+    build_tokenizer(&tokenizer, tokenizer_path, 151669); // NOTE transformer.config.vocab_size not equal to tokenizer's vocab_size
 
     // build the Sampler
     Sampler sampler;
     build_sampler(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
 
-    // run!
-    if (strcmp(mode, "generate") == 0) {
-        generate(&transformer, &tokenizer, &sampler, prompt, steps, template_format);
-    } else if (strcmp(mode, "chat") == 0) {
-        chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, steps);
-    } else {
-        fprintf(stderr, "unknown mode: %s\n", mode);
-        error_usage();
-    }
+    generate(&transformer, &tokenizer, &sampler, prompt, steps);
 
     // memory and file handles cleanup
     free_sampler(&sampler);

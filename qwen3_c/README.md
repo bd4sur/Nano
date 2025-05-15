@@ -14,6 +14,7 @@ Export `qwen3-0b6.bin`:
 
 ```
 python export.py qwen3-0b6.bin --hf /home/bd4sur/ai/_model/Qwen3/Qwen3-0.6B
+python export.py qwen3-1b7.bin --hf /home/bd4sur/ai/_model/Qwen3/Qwen3-1.7B
 ```
 
 Compile:
@@ -26,7 +27,8 @@ Run:
 
 ```
 # Qwen3-0.6B
-OMP_NUM_THREADS=4 ./qwen3 qwen3-0b6.bin qwen3-tokenizer.bin -f qwen -i "人类的本质是复读机吗？"
+OMP_NUM_THREADS=4 ./qwen3 qwen3-0b6.bin qwen3-tokenizer.bin -i "人类的本质是复读机吗？"
+OMP_NUM_THREADS=4 ./qwen3 qwen3-1b7.bin qwen3-tokenizer.bin -i "人类的本质是复读机吗？"
 ```
 
 Requirements:
