@@ -27,8 +27,8 @@ Run:
 
 ```
 # Qwen3-0.6B
-OMP_NUM_THREADS=4 ./qwen3 qwen3-0b6.bin qwen3-tokenizer.bin -i "人类的本质是复读机吗？"
-OMP_NUM_THREADS=4 ./qwen3 qwen3-1b7.bin qwen3-tokenizer.bin -i "人类的本质是复读机吗？"
+OMP_NUM_THREADS=4 ./qwen3 qwen3-0b6.bin qwen3-tokenizer.bin -i "-9.9和-9.11哪个大？"
+OMP_NUM_THREADS=4 ./qwen3 qwen3-1b7.bin qwen3-tokenizer.bin -i "-9.9和-9.11哪个大？"
 ```
 
 Requirements:

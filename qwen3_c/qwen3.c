@@ -277,6 +277,18 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
     }
 }
 
+void rope(float *head, int head_size, int pos) {
+    for (int i = 0; i < head_size / 2; i++) {
+        float freq = 1.0f / powf(ROPE_THETA, (float)(i * 2) / (float)head_size);
+        float fcr = cosf(pos * freq);
+        float fci = sinf(pos * freq);
+        float v0 = head[i];
+        float v1 = head[i + head_size / 2];
+        head[        i        ] = v0 * fcr - v1 * fci;
+        head[i + head_size / 2] = v1 * fcr + v0 * fci;
+    }
+}
+
 float* forward(Transformer* transformer, int token, int pos) {
 
     // a few convenience variables
@@ -315,40 +327,16 @@ float* forward(Transformer* transformer, int token, int pos) {
         matmul(s->k, s->xb, w->wk + l*dim*kv_dim, dim, kv_dim);
         matmul(s->v, s->xb, w->wv + l*dim*kv_dim, dim, kv_dim);
 
-        // Qwen3
+        // Qwen3 - QK-Norm & RoPE
         for (int h = 0; h < p->n_heads; h++) {
             float *q = s->q + h * head_size;
             rmsnorm(q, q, w->q_norm + l*head_size, head_size);
+            rope(q, head_size, pos);
         }
         for (int h = 0; h < p->n_kv_heads; h++) {
             float *k = s->k + h * head_size;
             rmsnorm(k, k, w->k_norm + l*head_size, head_size);
-        }
-
-        for (int i = 0; i < (q_dim/2); i++) {
-            int head_dim = i % head_size * 2;
-            float freq = 1.0f / powf(ROPE_THETA, head_dim / (float)head_size);
-            float val = pos * freq;
-            float fcr = cosf(val);
-            float fci = sinf(val);
-            float* vec = s->q;
-            float v0 = vec[i];
-            float v1 = vec[i + (head_size/2)];
-            vec[i]   = v0 * fcr - v1 * fci;
-            vec[i + (head_size/2)] = v0 * fci + v1 * fcr;
-        }
-
-        for (int i = 0; i < (kv_dim/2); i++) {
-            int head_dim = i % head_size * 2;
-            float freq = 1.0f / powf(ROPE_THETA, head_dim / (float)head_size);
-            float val = pos * freq;
-            float fcr = cosf(val);
-            float fci = sinf(val);
-            float* vec = s->k;
-            float v0 = vec[i];
-            float v1 = vec[i + (head_size/2)];
-            vec[i]   = v0 * fcr - v1 * fci;
-            vec[i + (head_size/2)] = v0 * fci + v1 * fcr;
+            rope(k, head_size, pos);
         }
 
         // multihead attention. iterate over all heads
@@ -762,16 +750,16 @@ int sample(Sampler* sampler, float* logits, int *output_ids, int pos) {
         next = sample_argmax(logits, sampler->vocab_size);
     } else {
         // 复读惩罚：对过往出现过的词元施加惩罚，词元出现得越多，概率越低: ref arxiv:1909.05858
-        int *tokenset = (int *)calloc(sampler->vocab_size, sizeof(int));
-        for(int i = 0; i < pos; i++) {
-            tokenset[output_ids[i]] = 1;  // 1表示output_ids中出现了这个token
-        }
-        for(int id = 0; id < sampler->vocab_size; id++) {
-            if(tokenset[id] == 1) {
-                logits[id] /= 1.5;
-            }
-        }
-        free(tokenset);
+        // int *tokenset = (int *)calloc(sampler->vocab_size, sizeof(int));
+        // for(int i = 0; i < pos; i++) {
+        //     tokenset[output_ids[i]] = 1;  // 1表示output_ids中出现了这个token
+        // }
+        // for(int id = 0; id < sampler->vocab_size; id++) {
+        //     if(tokenset[id] == 1) {
+        //         logits[id] /= 1.5f;
+        //     }
+        // }
+        // free(tokenset);
         // apply the temperature to the logits
         for (int q=0; q<sampler->vocab_size; q++) { logits[q] /= sampler->temperature; }
         // apply softmax to the logits to get the probabilities for next token
@@ -819,17 +807,18 @@ int *apply_chat_template(Tokenizer *t, char *system_prompt, char *user_prompt, i
     prompt_tokens[5 + num_user_prompt_tokens] = 151644; // <|im_start|>
     prompt_tokens[6 + num_user_prompt_tokens] = 77091;  // assistant
     prompt_tokens[7 + num_user_prompt_tokens] = 198;    // \n
-    prompt_tokens[8 + num_user_prompt_tokens] = 151667;    // \n
-    prompt_tokens[9 + num_user_prompt_tokens] = 198;    // \n
-    prompt_tokens[10 + num_user_prompt_tokens] = 198;    // \n
-    prompt_tokens[11 + num_user_prompt_tokens] = 151668;    // \n
-    prompt_tokens[12 + num_user_prompt_tokens] = 198;    // \n
-    prompt_tokens[13 + num_user_prompt_tokens] = 198;    // \n
-    prompt_tokens[14 + num_user_prompt_tokens] = 0;
+    prompt_tokens[8 + num_user_prompt_tokens] = 0;
+    // prompt_tokens[8 + num_user_prompt_tokens] = 151667; // <think>
+    // prompt_tokens[9 + num_user_prompt_tokens] = 198;    // \n
+    // prompt_tokens[10 + num_user_prompt_tokens] = 198;    // \n
+    // prompt_tokens[11 + num_user_prompt_tokens] = 151668; // </think>
+    // prompt_tokens[12 + num_user_prompt_tokens] = 198;    // \n
+    // prompt_tokens[13 + num_user_prompt_tokens] = 198;    // \n
+    // prompt_tokens[14 + num_user_prompt_tokens] = 0;
 
     free(user_prompt_tokens);
 
-    *prompt_length = 14 + num_user_prompt_tokens;
+    *prompt_length = 8 + num_user_prompt_tokens;
 
     return prompt_tokens;
 }
@@ -942,8 +931,8 @@ int main(int argc, char *argv[]) {
     // default parameters
     char *checkpoint_path = NULL;  // e.g. out/model.bin
     char *tokenizer_path = NULL;
-    float temperature = 0.7f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
-    float topp = 0.8f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
+    float temperature = 0.6f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
+    float topp = 0.95f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
     int steps = 2048;           // number of steps to run for
     char *prompt = NULL;        // prompt string
     unsigned long long rng_seed = 0; // seed rng with time by default
