@@ -1,11 +1,13 @@
 
-# Nano - Large Model, Cyber Parrot, Tiny Toy
+# Nano - Cyber Parrot
 
-[体验推理效果](https://bd4sur.com/Nano/infer) // B站视频：[手机浏览器推理+ASR+TTS](https://www.bilibili.com/video/BV1NAieYiEFi) / [HomeLab炼丹](https://www.bilibili.com/video/BV1uv42127qP) / [通过业余无线电C证考试](https://www.bilibili.com/video/BV1vmrsYGERP)
+[**立即体验浏览器本地推理**](https://bd4sur.com/Nano/infer)
 
-![ ](./doc/nano-web.jpg)
+**B站视频**：[手机浏览器推理+ASR+TTS](https://www.bilibili.com/video/BV1NAieYiEFi) / [通过业余无线电C证考试](https://www.bilibili.com/video/BV1vmrsYGERP) / [路由器离线部署+键盘屏幕交互](https://www.bilibili.com/video/BV1mhVzzrEJf)
 
-**Nano**是Transformer结构的自回归语言模型，供个人赏玩、研究、魔改和炼丹炉煲机之用。期望：
+![ ](./doc/nano-web-2.png)
+
+**Nano**是Transformer结构的自回归语言模型，供个人赏玩、研究、炼丹炉煲机。期望：
 
 - 基于PyTorch，实现一个具体而微的Transformer语言模型，不依赖🤗。
 - 实现模型的预训练、监督微调过程。不实现人类反馈强化学习。
@@ -37,6 +39,8 @@
 
 数据集为7z压缩包，解压口令“nano”。
 
+用于端侧推理的Qwen2/Qwen3单文件模型：[bd4sur/Qwen3](https://huggingface.co/bd4sur/Qwen3)
+
 ## 使用说明
 
 ### 0. 百闻不如一见：立刻体验推理效果
@@ -50,27 +54,33 @@
 - 可随时加载或卸载LoRA插件。注意LoRA插件需要与某个预训练基座模型匹配。
 - 使用`export.py`将检查点文件转换为基座模型或者LoRA插件，详见下文。
 - 所有推理过程（含ASR和TTS）均在本地浏览器内部进行。
+- 作为WebUI，能够接入部署在本地服务器上的LLM/ASR/TTS接口，详见后文。
 
-**C语言实现的CPU推理**
+![ ](./doc/nano-web-1.jpg)
 
-- 首先下载基座模型、指令微调模型或LoRA插件（扩展名均为bin）。
-- 在`Nano/infer_c`中执行`make nano_infer_shell`，编译得到可执行文件。默认启用OpenMP并行优化。
-- 执行`OMP_NUM_THREADS=<CPU线程数/2> ./nano_infer_shell <模型文件路径.bin> -n <上下文长度> -i "提示语"`，开始推理。
-- 正在研究模型量化。
+**C语言实现的CPU推理，可部署于嵌入式设备**
+
+基于[karpathy/llama2.c](https://github.com/karpathy/llama2.c)实现的纯C语言推理引擎，几乎没有任何依赖。除了Nano，还适配了Qwen2-0.5B、Qwen3-0.6B/1.7B。
+
+提供3种形态：CLI、WebSocket服务端、功能完整的键盘屏幕交互对话（电子鹦鹉笼）。构建和运行方式如下：
+
+- CLI：`cd ./infer_marga && make cli && ./nano_cli`
+- WebSocket服务端：`cd ./infer_marga && make wss && ./nano_wss <模型文件路径.bin> -n <上下文长度> -P <端口号=8080>`，随后打开`index.html`，开始对话。
+- 电子鹦鹉笼：`cd ./infer_marga && make marga && ./nano_marga`
+
+根据实际情况启用OpenMP或者基于pthreads的多线程实现。如果启用OpenMP并行优化，可以在exe前面加上`OMP_NUM_THREADS=<线程数>`。最佳线程数需要通过实验确定。
+
+模型转换方式详见下文。可将Nano的pickle模型和Qwen2、Qwen3的HuggingFace模型转换为推理引擎可接受的二进制模型文件，文件内嵌词表。
+
+文档待补充。
+
+![ ](./doc/nano-marga.jpg)
 
 **基于OpenWrt/LuCI的推理GUI**
 
-- 在`Nano/infer_c`中执行`make nano_infer_ws_server`，编译得到可执行文件。默认启用OpenMP并行优化。
-- 执行`OMP_NUM_THREADS=<CPU线程数/2> ./nano_infer_ws_server <模型文件路径.bin> -n <上下文长度> -P <端口号=8080>`。
-- 打开`index.html`，开始对话。
+文档待补充。
 
-**基于CUDA/cuBLAS实现的GPU推理**
-
-- 正在研究
-
-**基于 WebGPU / ONNX Runtime Web 实现的GPU推理**
-
-- 正在研究（参考[WebLLM](https://webllm.mlc.ai/)）
+![ ](./doc/nano-openwrt-luci.jpg)
 
 **基于PyTorch的CPU/GPU推理**
 
@@ -339,8 +349,18 @@ python train.py -m config/model_config.json -t config/config_lora.json
 
 模型转换的目的，是将Torch训练出的模型检查点（扩展名为pt）转换为端侧推理所需的模型文件（扩展名为bin），以及对模型进行量化、压缩，以缩减模型尺寸，便于分发、部署、推理加速。
 
+Nano模型转换，执行以下命令：
+
 ```bash
 python export.py model.bin [--checkpoint | --quant | --lora] checkpoint.pt
+```
+
+Qwen2/Qwen3模型转换，执行以下命令：
+
+```bash
+python infer_marga/tools/export_qwen.py qwen3-0b6.bin --hf /home/bd4sur/ai/_model/Qwen3/Qwen3-0.6B
+
+python infer_marga/tools/export_qwen.py qwen3-1b7.bin --hf /home/bd4sur/ai/_model/Qwen3/Qwen3-1.7B
 ```
 
 模型文件的格式参考了[karpathy/llama2.c](https://github.com/karpathy/llama2.c)，但是有不同之处。描述如下：
