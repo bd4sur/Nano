@@ -3,47 +3,32 @@
 #include <wchar.h>
 #include <locale.h>
 #include <pthread.h>
-#include "nano_infer.h"
+#include "infer.h"
 
-struct session_data {
-    wchar_t *input;
-    uint32_t pos;
-    uint32_t max_seq_len;
-    uint32_t *output_ids;
-    uint32_t output_count;
-    uint32_t num_prompt_tokens;
-    uint32_t *prompt_tokens;
-    uint32_t next_token;
-    char *output_buffer;
-};
+static Nano_Context *g_llm_ctx;
 
-static Nano_Context ctx;
+static Nano_Session *g_llm_session;
 
-static uint32_t max_seq_len;
-
-void load_model(char *model_path, float repetition_penalty, float temperature, float top_p, unsigned int top_k, unsigned long long rng_seed) {
-    ctx.random_seed = rng_seed;
-    ctx.llm = (LLM *)calloc(1, (sizeof(LLM)));
-    ctx.lora = NULL; // (LoRA *)calloc(1, (sizeof(LoRA *)));
-    ctx.tokenizer = (Tokenizer *)calloc(1, (sizeof(Tokenizer)));
-    load_llm(ctx.llm, ctx.tokenizer, model_path);
-    ctx.sampler = build_sampler(ctx.llm->config.vocab_size, repetition_penalty, temperature, top_p, top_k, ctx.random_seed);
+int32_t on_prefilling(Nano_Session *session) {
+    // printf("Pre-filling...\n");
+    return LLM_RUNNING_IN_PREFILLING;
 }
 
-void unload_model() {
-    free_llm(ctx.llm, ctx.tokenizer);
-    free_sampler(ctx.sampler);
+int32_t on_decoding(Nano_Session *session) {
+    return LLM_RUNNING_IN_DECODING;
+}
+
+int32_t on_finished(Nano_Session *session) {
+    printf("\nTPS = %f\n", session->tps);
+    return LLM_STOPPED_NORMALLY;
 }
 
 static int callback_chat(struct lws *wsi, enum lws_callback_reasons reason,
                          void *user, void *in, size_t len)
 {
-    struct session_data *data = (struct session_data *)user;
-    
+
     switch (reason) {
     case LWS_CALLBACK_ESTABLISHED:
-        data->input = NULL;
-        data->pos = 0;
         break;
 
     case LWS_CALLBACK_RECEIVE:
@@ -59,64 +44,70 @@ static int callback_chat(struct lws *wsi, enum lws_callback_reasons reason,
             ((char)(w_input[3]) - '0') * 10 + \
             ((char)(w_input[4]) - '0');
 
-        data->input = (wchar_t *)calloc(prompt_char_length + 1, sizeof(wchar_t));
+        wchar_t *prompt = (wchar_t *)calloc(prompt_char_length + 1, sizeof(wchar_t));
         for(int i = 0; i < prompt_char_length; i++) {
-            data->input[i] = w_input[i+6];
+            prompt[i] = w_input[i+6];
         }
-        data->input[prompt_char_length] = 0;
+        prompt[prompt_char_length] = 0;
         free(w_input);
 
-        data->max_seq_len = max_seq_len;
-        data->output_ids = (uint32_t *)calloc(data->max_seq_len + 1, sizeof(uint32_t));
-        data->output_count = 0;
-    
-        data->num_prompt_tokens = 0;
-        data->output_buffer = (char *)calloc(data->max_seq_len * 4, sizeof(char));
-
-        data->prompt_tokens = encode(ctx.tokenizer, data->input, &(data->num_prompt_tokens));
-        for(int i = 0; i < data->num_prompt_tokens; i++) {
-            data->output_ids[i] = data->prompt_tokens[i];
-        }
-    
-        data->next_token = data->prompt_tokens[0];
-        data->pos = 0;
+        printf("Received prompt: %ls\n", prompt);
+        g_llm_session = llm_session_init(g_llm_ctx, prompt, 32768);
 
         lws_callback_on_writable(wsi);
 
         break;
 
     case LWS_CALLBACK_SERVER_WRITEABLE:
-        if (data->pos < data->max_seq_len) {
 
-            int is_prefilling = (data->pos < data->num_prompt_tokens - 1) ? 1 : 0;
-
-            data->next_token = generate_next_token(ctx, data->output_ids, data->pos, is_prefilling);
-
-            if (is_prefilling == 0) {
-                data->output_ids[data->num_prompt_tokens + (data->output_count)++] = data->next_token;
-                wchar_t *output_text = decode(ctx.tokenizer, data->output_ids + data->num_prompt_tokens, data->output_count);
-
-                size_t msg_len = wcstombs(data->output_buffer, output_text, data->max_seq_len * 4 * sizeof(char));
-                free(output_text);
-
-                unsigned char *pkt = malloc(LWS_PRE + msg_len);
-                memcpy(pkt + LWS_PRE, data->output_buffer, msg_len);
-                lws_write(wsi, pkt + LWS_PRE, msg_len, LWS_WRITE_TEXT);
-                free(pkt);
+        int32_t status = llm_session_step(g_llm_ctx, g_llm_session);
+        g_llm_session->tps = (g_llm_session->pos - 1) / (double)(time_in_ms() - g_llm_session->t_0) * 1000;
+        if (status == LLM_RUNNING_IN_PREFILLING) {
+            int32_t callback_flag = on_prefilling(g_llm_session);
+            // 外部被动中止
+            if (callback_flag == LLM_STOPPED_IN_PREFILLING) {
+                status = callback_flag;
             }
-            data->pos++;
-
-            if(data->next_token == 0 || data->next_token == 3) break;
-
-            lws_callback_on_writable(wsi);
+            else {
+                lws_callback_on_writable(wsi);
+            }
         }
+        else if (status == LLM_RUNNING_IN_DECODING) {
+            int32_t callback_flag = on_decoding(g_llm_session);
+
+            printf("%s", g_llm_ctx->tokenizer->vocab[g_llm_session->next_token]);
+            fflush(stdout);
+
+            char *output_buffer = calloc(g_llm_session->max_seq_len * 4, sizeof(char));
+            size_t msg_len = wcstombs(output_buffer, g_llm_session->output_text, g_llm_session->max_seq_len * 4 * sizeof(char));
+            free(g_llm_session->output_text);
+
+            unsigned char *pkt = malloc(LWS_PRE + msg_len);
+            memcpy(pkt + LWS_PRE, output_buffer, msg_len);
+            lws_write(wsi, pkt + LWS_PRE, msg_len, LWS_WRITE_TEXT);
+            free(pkt);
+
+            // 外部被动中止
+            if (callback_flag == LLM_STOPPED_IN_DECODING) {
+                status = callback_flag;
+            }
+            else {
+                lws_callback_on_writable(wsi);
+            }
+        }
+        else if (status == LLM_STOPPED_NORMALLY) {
+            g_llm_session->t_1 = time_in_ms();
+            g_llm_session->tps = (g_llm_session->pos - 1) / (double)(g_llm_session->t_1 - g_llm_session->t_0) * 1000;
+            status = on_finished(g_llm_session);
+        }
+        else {
+            status = LLM_STOPPED_WITH_ERROR;
+        }
+
         break;
 
     case LWS_CALLBACK_CLOSED:
-        if(data->input) free(data->input);
-        if(data->output_ids) free(data->output_ids);
-        if(data->prompt_tokens) free(data->prompt_tokens);
-        if(data->output_buffer) free(data->output_buffer);
+        llm_session_free(g_llm_session);
         break;
 
     default:
@@ -126,7 +117,7 @@ static int callback_chat(struct lws *wsi, enum lws_callback_reasons reason,
 }
 
 static struct lws_protocols protocols[] = {
-    {"chat", callback_chat, sizeof(struct session_data), 0},
+    {"chat", callback_chat, sizeof(Nano_Session), 0},
     {NULL, NULL, 0, 0}
 };
 
@@ -141,7 +132,6 @@ void show_usage() {
     fprintf(stderr, "  -t <float>  temperature in [0,inf], default 1.0\n");
     fprintf(stderr, "  -p <float>  p value in top-p (nucleus) sampling in (0,1) default 0.5\n");
     fprintf(stderr, "  -k <int>    k value in top-k sampling in [0, vocab_size) default 0 (no use)\n");
-    fprintf(stderr, "  -n <int>    number of steps to run for, default 512. 0 = max_seq_len\n");
     fprintf(stderr, "  -s <int>    random seed, default time(NULL)\n");
     fprintf(stderr, "  -P <int>    port number of WebSocket service\n");
     exit(EXIT_FAILURE);
@@ -153,10 +143,10 @@ int main(int argc, char **argv) {
 
     unsigned int port = 8080;
 
-    float repetition_penalty = 1.11;
-    float temperature = 1.0;
-    float top_p = 0.5;
-    unsigned int top_k = 0;
+    float repetition_penalty = 1.0f;
+    float temperature = 0.6f;
+    float top_p = 0.95f;
+    unsigned int top_k = 20;
     unsigned long long random_seed = (unsigned int)time(NULL);
 
     if(argc >= 2) { model_path = argv[1]; } else { show_usage(); }
@@ -170,14 +160,13 @@ int main(int argc, char **argv) {
         else if (argv[i][1] == 't') { temperature = atof(argv[i + 1]); }
         else if (argv[i][1] == 'p') { top_p = atof(argv[i + 1]); }
         else if (argv[i][1] == 'k') { top_k = atoi(argv[i + 1]); }
-        else if (argv[i][1] == 'n') { max_seq_len = atoi(argv[i + 1]); }
         else if (argv[i][1] == 's') { random_seed = atoi(argv[i + 1]); }
         else if (argv[i][1] == 'P') { port = atoi(argv[i + 1]); }
 
         else { show_usage(); }
     }
 
-    load_model(model_path, repetition_penalty, temperature, top_p, top_k, random_seed);
+    g_llm_ctx = llm_context_init(model_path, NULL, repetition_penalty, temperature, top_p, top_k, random_seed);
 
     if(!setlocale(LC_CTYPE, "")) return -1;
 
@@ -198,7 +187,11 @@ int main(int argc, char **argv) {
     
     lws_context_destroy(context);
 
-    unload_model();
+    llm_context_free(g_llm_ctx);
+
+#ifdef MATMUL_PTHREAD
+    matmul_pthread_cleanup();
+#endif
 
     return 0;
 }
