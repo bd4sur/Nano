@@ -1,28 +1,37 @@
 
 # Nano - Cyber Parrot
 
-[**立即体验浏览器本地推理**](https://bd4sur.com/Nano/infer)
+**B站视频演示**：
 
-**B站视频**：[手机浏览器推理+ASR+TTS](https://www.bilibili.com/video/BV1NAieYiEFi) / [通过业余无线电C证考试](https://www.bilibili.com/video/BV1vmrsYGERP) / [路由器离线部署+键盘屏幕交互](https://www.bilibili.com/video/BV1mhVzzrEJf)
+<div style="display: flex; justify-content: center; flex-direction: row;">
+  <div style="margin: 0 10px; text-align: center;">
+    <a href="https://www.bilibili.com/video/BV1NAieYiEFi" target="_blank"><img src="./doc/nano-video-webui.jpg"><br>手机浏览器推理+ASR+TTS</a>
+  </div>
+  <div style="margin: 0 10px; text-align: center;">
+    <a href="https://www.bilibili.com/video/BV1vmrsYGERP" target="_blank"><img src="./doc/nano-video-ar-class-c.jpg"><br>通过业余无线电C证考试</a>
+  </div>
+  <div style="margin: 0 10px; text-align: center;">
+    <a href="https://www.bilibili.com/video/BV1mhVzzrEJf" target="_blank"><img src="./doc/nano-video-marga.jpg"><br>路由器离线部署+键盘屏幕交互</a>
+  </div>
+</div>
+
+<div style="font-size: 17px; text-align: center; margin: 20px 0 0 0;"><a href="https://bd4sur.com/Nano/infer" target="_blank"><b>【立即体验浏览器本地推理】</b></a></div>
 
 ![ ](./doc/nano-web-2.png)
 
 **Nano**是Transformer结构的自回归语言模型，供个人赏玩、研究、炼丹炉煲机。期望：
 
-- 基于PyTorch，实现一个具体而微的Transformer语言模型，不依赖🤗。
-- 实现模型的预训练、监督微调过程。不实现人类反馈强化学习。
+- 基于PyTorch，实现一个具体而微的Transformer语言模型。
+- 实现模型的预训练、监督微调过程。不做后训练（强化学习等）。
 - 从头训练出56M、168M参数的语言模型，以及配套的LoRA插件。
-- 实现各类计算设备上的推理，同时支持可插拔的LoRA插件。
-- 研究模型的动力学、训/推加速、模型和算法的优化提效等科学和工程问题。
-- 探索Transformer模型在自然语言处理以外的各类问题上的潜能。
-- 建立起关于语言模型的合理预期和感性经验，对大语言模型祛魅。
+- 实现各类设备上的推理，例如浏览器、路由器等。
+- 研究模型的动力学、训/推加速等问题，以及解决其他模态和领域问题的潜能。
+- 对大语言模型祛魅，在实践中建立起对于LLM的感性经验和合理预期。
 
 为什么叫“Nano”：
 
 - 東雲なの（Shinonome **Nano**）和坂本是动画《日常》的角色。なの是博士创造的女高中生机器人，而坂本是一只会说话的黑猫。
 - 本仓库主要复刻自Karpathy大佬的[nanoGPT](https://github.com/karpathy/nanoGPT)。取名Nano也是为了致(chao)敬(xi)nanoGPT。
-
-![ ](./doc/nano.jpg)
 
 ## 模型和数据
 
@@ -55,6 +64,7 @@
 - 使用`export.py`将检查点文件转换为基座模型或者LoRA插件，详见下文。
 - 所有推理过程（含ASR和TTS）均在本地浏览器内部进行。
 - 作为WebUI，能够接入部署在本地服务器上的LLM/ASR/TTS接口，详见后文。
+- 构建方式：执行`bash infer_marga/build_wasm.sh`（工具链配置见注释），在`./infer`中生成`nano_infer.wasm`。
 
 ![ ](./doc/nano-web-1.jpg)
 
@@ -97,28 +107,7 @@
 - `-r` or `--repetition_penalty`：浮点数，复读惩罚，默认值为1.2，越大则越抑制生成重复的词元。
 - `-p` or `--profile`：开关标识。若启用，则统计性能数据，包括首词元延迟、词元生成速率等。
 
-### 1. 安装依赖
-
-一般要求：
-
-- 硬件：建议使用英伟达GPU，以计算能力7.0以上的为宜，详见[英伟达官网](https://developer.nvidia.com/cuda-gpus)。若只有CPU也无妨。
-- 软件：建议使用Ubuntu等Linux操作系统，并安装Anaconda/Miniconda等环境管理工具。
-
-如果想基于PyTorch进行模型的训练、推理、数据清洗和开发等工作：
-
-```
-conda create -n nano python=3.10 pysocks -y
-conda activate nano
-python -m pip install -r requirements.txt
-```
-
-如果想基于Emscripten进行浏览器推理引擎的开发：参照[文档](https://emscripten.org/docs/getting_started/downloads.html)安装Emscripten工具链。
-
-------
-
-![ ](./infer/mio-on-jetson.jpg)
-
-**适用于 Jetson AGX Orin 安装步骤**
+**Mio：适用于 Jetson AGX Orin 的实用化推理部署**
 
 Mio是多个LLM、VLM和TTS模型的缝合怪，各自的依赖相互冲突，因此需要做一点小小的魔改。本人主要在 Jetson AGX Orin 上开发并部署Mio，因此此处记载的信息仅供个人备忘。
 
@@ -253,6 +242,22 @@ nohup /bin/bash run_server_2pass.sh \
 - 视觉问答目前只支持针对一幅图片的连续问答。
 - 选用纯语言模型时，不要上传图片，否则可能会出错。
 
+![ ](./doc/mio-on-jetson.jpg)
+
+### 1. 安装依赖
+
+一般要求：
+
+- 硬件：建议使用英伟达GPU，以计算能力7.0以上的为宜，详见[英伟达官网](https://developer.nvidia.com/cuda-gpus)。若只有CPU也无妨。
+- 软件：建议使用Ubuntu等Linux操作系统，并安装Anaconda/Miniconda等环境管理工具。
+
+如果想基于PyTorch进行模型的训练、推理、数据清洗和开发等工作：
+
+```
+conda create -n nano python=3.10 pysocks -y
+conda activate nano
+python -m pip install -r requirements.txt
+```
 
 ### 2. 数据下载·预处理
 
@@ -472,7 +477,9 @@ Nano基本上沿用了Llama的模型结构设计，如下图所示。
 - Nano采用基于温度的随机采样策略，结合top-p、top-k采样和重复惩罚机制，从语言模型输出的概率分布中按照概率随机地采样出词元序列。若温度为0，则退化为贪心采样，即每次都选概率最大的词元。
 - Nano同时提供序列到序列的（非自回归）推理，用于NLP以外的其他问题的研究。
 
-**基于DeepSpeed的分布式训练（仅备忘）**
+**基于DeepSpeed的分布式训练（已废弃）**
+
+<details>
 
 Nano支持基于DeepSpeed的零冗余优化（ZeRO）训练。以2节点4卡ZeRO3-Offload方式为例，在主节点上执行以下命令。可以修改`ds_config.json`以调整ZeRO设置。注意：根据[文档](https://www.deepspeed.ai/docs/config-json/)，`train_batch_size`必须等于`train_micro_batch_size_per_gpu` * `gradient_accumulation` * GPU数量。
 
@@ -495,6 +502,8 @@ python zero_to_fp32.py . ckpt_ds.pt
 cd Nano
 python inference_ds.py
 ```
+
+</details>
 
 ## 其他玩法
 
