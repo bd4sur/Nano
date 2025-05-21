@@ -3,19 +3,10 @@
 
 **B站视频演示**：
 
-<div style="display: flex; justify-content: center; flex-direction: row;">
-  <div style="margin: 0 10px; text-align: center;">
-    <a href="https://www.bilibili.com/video/BV1NAieYiEFi" target="_blank"><img src="./doc/nano-video-webui.jpg"><br>手机浏览器推理+ASR+TTS</a>
-  </div>
-  <div style="margin: 0 10px; text-align: center;">
-    <a href="https://www.bilibili.com/video/BV1vmrsYGERP" target="_blank"><img src="./doc/nano-video-ar-class-c.jpg"><br>通过业余无线电C证考试</a>
-  </div>
-  <div style="margin: 0 10px; text-align: center;">
-    <a href="https://www.bilibili.com/video/BV1mhVzzrEJf" target="_blank"><img src="./doc/nano-video-marga.jpg"><br>路由器离线部署+键盘屏幕交互</a>
-  </div>
-</div>
+|<a href="https://www.bilibili.com/video/BV1NAieYiEFi" target="_blank"><img src="./doc/nano-video-webui.jpg" width="100%"><br>手机浏览器推理+ASR+TTS</a>|<a href="https://www.bilibili.com/video/BV1vmrsYGERP" target="_blank"><img src="./doc/nano-video-ar-class-c.jpg" width="100%"><br>通过业余无线电C证考试</a>|<a href="https://www.bilibili.com/video/BV1mhVzzrEJf" target="_blank"><img src="./doc/nano-video-marga.jpg" width="100%"><br>路由器离线部署+键盘屏幕交互</a>|
+|-|-|-|
 
-<div style="font-size: 17px; text-align: center; margin: 20px 0 0 0;"><a href="https://bd4sur.com/Nano/infer" target="_blank"><b>【立即体验浏览器本地推理】</b></a></div>
+### [【立即体验浏览器本地推理】](https://bd4sur.com/Nano/infer)
 
 ![ ](./doc/nano-web-2.png)
 
