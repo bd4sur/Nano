@@ -3,7 +3,7 @@
 # 工具链部署备忘：
 # 1）下载：https://github.com/WebAssembly/wasi-sdk/releases/tag/wasi-sdk-24
 # 2）解压到BASE_PATH
-# 3）下载clang_rt.builtins-wasm32.a（LLVM18）
+# 3）下载clang_rt.builtins-wasm32.a（LLVM18）：https://github.com/jedisct1/libclang_rt.builtins-wasm32.a
 # 3）放置到${WASI_SDK_PATH}/lib/wasi
 
 # 注意！
