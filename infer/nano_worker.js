@@ -106,7 +106,7 @@ async function init(model_file_buffer) {
     memory = new WebAssembly.Memory({ initial: 10, maximum: 65536 });
 
     wasm = await WebAssembly.instantiateStreaming(
-        fetch('infer.wasm'),
+        fetch('nano_infer.wasm'),
         {
             wasi_snapshot_preview1: {
                 args_get: ()=>{},

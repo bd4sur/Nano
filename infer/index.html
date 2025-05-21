@@ -520,6 +520,7 @@ function llm_on_running(round_counter, text, num_prompt_tokens, num_generated_to
     }
     update_bot_footer(`<b>Nano</b> ${get_current_time()} · ${tps.toFixed(2)} tokens/s · ${status}`, round_counter);
     switch_submit_button_state("interrupt");
+    MathJax.startup.defaultPageReady();
     scroll_to_bottom(false);
     return true;
 }

@@ -468,6 +468,14 @@ LoRA *load_lora(LLM *llm, char *lora_path) {
     return p_lora;
 }
 
+LoRA *load_lora_from_buffer(LLM *llm, char *buffer) {
+    LoRA *p_lora = (LoRA *)calloc(1, sizeof(LoRA));
+    p_lora->data = (float*)buffer;
+    parse_lora_file(buffer, p_lora, llm);
+    malloc_fwd_buffer_with_lora(llm, &p_lora->config);
+    return p_lora;
+}
+
 void free_lora(LLM *llm, LoRA *lora) {
     free(&(lora->config));
     free(lora->params.wq_lora_a);
