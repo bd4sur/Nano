@@ -80,7 +80,7 @@ int main() {
     OLED_Refresh();
     usleep(500*1000);
 
-    float repetition_penalty = 1.1f;
+    float repetition_penalty = 1.05f;
     float temperature = 1.0f;
     float top_p = 0.5f;
     unsigned int top_k = 0;
@@ -89,14 +89,16 @@ int main() {
 
     g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, repetition_penalty, temperature, top_p, top_k, random_seed);
 
+    show_splash_screen();
+
     ///////////////////////////////////////
     // 矩阵按键初始化与读取
 
     if(keyboard_init() < 0) return -1;
-    char prev_key = 0;
+    char prev_key = 16;
 
     // 全局状态标志
-    uint32_t STATE = 0;
+    int32_t STATE = -1;
 
     // 汉英数输入模式标志
     uint32_t ime_mode_flag = 0; // 0汉字 1英文 2数字
@@ -131,12 +133,10 @@ int main() {
     uint32_t alphabet_index = 0;
 
     // 按键状态
-    uint8_t  key_code = 0;  // 大于等于16为没有任何按键，0-15为按键
+    uint8_t  key_code = 16; // 大于等于16为没有任何按键，0-15为按键
     int8_t   key_edge = 0;  // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)
     uint32_t key_timer = 0; // 按下计时器
     uint8_t  key_mask = 0;  // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
-
-    show_splash_screen();
 
     while (1) {
         char key = keyboard_read_key();
@@ -196,7 +196,25 @@ int main() {
         switch(STATE) {
 
         /////////////////////////////////////////////
-STATE_0:// 初始状态：等待输入拼音/字母/数字，或者将文字输入缓冲区的内容提交给大模型
+STATE_M1:// 初始状态：欢迎屏幕。按任意键进入就绪状态
+        /////////////////////////////////////////////
+
+        case -1:
+
+            show_splash_screen();
+
+            // 按下任何键，不论长短按
+            if (key_edge < 0 && key_code < 16) {
+                STATE = 0;
+                // 软触发A键
+                key_code = 10;
+                goto STATE_0;
+            }
+
+            break;
+
+        /////////////////////////////////////////////
+STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输入缓冲区的内容提交给大模型
         /////////////////////////////////////////////
 
         case 0:

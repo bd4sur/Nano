@@ -1,14 +1,27 @@
+#include <stdio.h>
+#include <time.h>
+
 #include "ui.h"
 #include "oled.h"
 
 void show_splash_screen() {
     OLED_SoftClear();
 
-    // render_text(L" \n    Project MARGA!   \n  Powered by Nano LM\n   BD4SUR  2025-04   ", 0);
+    time_t rawtime;
+    struct tm *timeinfo;
+    char datetime_string_buffer[80];
+    wchar_t datetime_wcs_buffer[80];
+
+    time(&rawtime); // 获取当前时间戳
+    timeinfo = localtime(&rawtime); // 转换为本地时间
+    strftime(datetime_string_buffer, sizeof(datetime_string_buffer), "%Y-%m-%d %H:%M:%S", timeinfo); // 格式化输出
+    mbstowcs(datetime_wcs_buffer, datetime_string_buffer, 80);
+
     render_line(L"Project MARGA!", 24, 2, 1);
     render_line(L"完全离线电子鹦鹉", 16, 20, 1);
-    render_line(L"自研Nano模型强力驱动", 4, 34, 1);
-    render_line(L"BD4SUR 2025-4", 26, 50, 1);
+    // render_line(L"自研Nano模型强力驱动", 4, 34, 1);
+    render_line(datetime_wcs_buffer, 8, 34, 1);
+    render_line(L"(c) 2025 BD4SUR", 18, 50, 1);
 
     OLED_DrawLine(0, 0, 127, 0, 1);
     OLED_DrawLine(0, 15, 127, 15, 1);

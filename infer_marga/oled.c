@@ -395,9 +395,9 @@ void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
 
 // 返回值：文本折行后的行数（含换行符）
 int32_t render_text(wchar_t *text, int32_t line_shift) {
-    wchar_t wrapped[1024];
+    wchar_t wrapped[STRING_BUFFER_LENGTH];
     int32_t char_count = 0;
-    int32_t break_pos[1024];
+    int32_t break_pos[STRING_BUFFER_LENGTH];
     int32_t break_count = 0;
     int32_t line_x_pos = 0;
     for (char_count = 0; char_count < wcslen(text); char_count++) {
@@ -416,7 +416,7 @@ int32_t render_text(wchar_t *text, int32_t line_shift) {
 
     // 向上卷动 |line_shift| 行，注意line_shift非负。默认为0。
 
-    wchar_t wrapped_clipped[1024];
+    wchar_t wrapped_clipped[STRING_BUFFER_LENGTH];
 
     if (line_shift < 0) {
         line_shift = 0;
