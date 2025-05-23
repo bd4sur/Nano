@@ -1,3 +1,5 @@
+#include <signal.h>
+
 #include "avltree.h"
 #include "pinyin.h"
 #include "oled.h"
@@ -22,6 +24,34 @@ static char *MODEL_PATH_4 = "/emmc/_model/qwen3-0b6.bin";
 static float g_tps_of_last_session = 0.0f;
 static wchar_t g_output_of_last_session[OUTPUT_BUFFER_LENGTH];
 
+pid_t record_pid = 0;
+
+#define AUDIO_FILE_NAME "/tmp/nano_audio.wav"
+
+// 启动录音进程
+void start_recording() {
+    record_pid = fork();
+    if(record_pid == 0) {
+        char *argv[] = {"arecord", "-f", "dat", "-t", "wav", AUDIO_FILE_NAME, NULL};
+        execv("/usr/bin/arecord", argv);
+        exit(1);
+    }
+}
+
+// 停止录音
+void stop_recording() {
+    if(record_pid > 0) {
+        kill(record_pid, SIGTERM);  // 终止录音进程
+        record_pid = 0;
+    }
+}
+
+// 播放录音
+void play_recording() {
+    char command[1024];
+    snprintf(command, sizeof(command), "aplay %s", AUDIO_FILE_NAME);
+    system(command);
+}
 
 int32_t on_prefilling(Nano_Session *session) {
     // 按住A键中止推理
@@ -131,6 +161,9 @@ int main() {
     int32_t alphabet_countdown = -1; // 从ALPHABET_COUNTDOWN_MAX开始，每轮主循环后倒数减1，减到0时清除进度条，减到-1意味着英文字母输入状态结束
     char alphabet_current_key = 255;
     uint32_t alphabet_index = 0;
+
+    // 录音状态
+    int32_t is_recording = 0;
 
     // 按键状态
     uint8_t  key_code = 16; // 大于等于16为没有任何按键，0-15为按键
@@ -318,6 +351,18 @@ STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输�
             // 长+短按*：光标向左移动
             else if ((key_edge == -1 || key_edge == -2) && key_code == 14) {
                 
+            }
+
+            // 按下瞬间*：开始录音
+            else if (key_edge > 0 && key_code == 14) {
+                OLED_SoftClear();
+                render_text(L" \n \n     正在录音...", 0);
+                OLED_Refresh();
+                is_recording = 1;
+                start_recording();
+
+                STATE = 20;
+                goto STATE_20;
             }
 
             // 长+短按#键：（关于）光标向右移动
@@ -722,6 +767,33 @@ STATE_10: // 提交候选字到LLM，开始推理
             }
 
             break;
+
+        /////////////////////////////////////////////
+STATE_20: // 录音进行中
+        /////////////////////////////////////////////
+
+        case 20:
+
+            // 松开按钮，停止录音并播放
+            if (is_recording > 0 && key_edge == 0 && key_code == 16) {
+                is_recording = 0;
+
+                OLED_SoftClear();
+                render_text(L" \n \n     正在播放...", 0);
+                OLED_Refresh();
+
+                stop_recording();
+                play_recording();
+
+                STATE = 0;
+                // 软触发A键
+                key_edge = -1;
+                key_code = 10;
+                goto STATE_0;
+            }
+
+            break;
+
 
         default:
             break;
