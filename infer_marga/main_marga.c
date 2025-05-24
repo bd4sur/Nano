@@ -57,6 +57,8 @@ int32_t on_prefilling(Nano_Session *session) {
     // 按住A键中止推理
     char key = keyboard_read_key();
     if (key == 10) {
+        wcscpy(g_output_of_last_session, L"");
+        g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_PREFILLING;
     }
     render_text(L"Pre-filling...", 0);
@@ -73,6 +75,8 @@ int32_t on_decoding(Nano_Session *session) {
     // 按住A键中止推理
     char key = keyboard_read_key();
     if (key == 10) {
+        wcscpy(g_output_of_last_session, session->output_text);
+        g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_DECODING;
     }
     OLED_SoftClear();
@@ -137,7 +141,7 @@ int main() {
     wchar_t symbols[55] = L"，。、？！：；“”‘’（）《》…―～・【】 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 
     // 按键对应的字母列表
-    wchar_t alphabet[10][9] = {L"", L"", L"abcABC", L"defDEF", L"ghiGHI", L"jklJKL", L"mnoMNO", L"pqrsPRQS", L"tuvTUV", L"wxyzWXYZ"};
+    wchar_t alphabet[10][32] = {L"", L" .,;:?!-/+_=&\"*", L"abcABC", L"defDEF", L"ghiGHI", L"jklJKL", L"mnoMNO", L"pqrsPRQS", L"tuvTUV", L"wxyzWXYZ"};
 
     // 单字拼音键码暂存
     uint32_t pinyin_keys = 0;
@@ -263,20 +267,27 @@ STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输�
                 STATE = 3;
             }
 
-            // 短按0或1：数字输入模式下是直接输入1，其余模式无动作
-            else if (key_edge == -1 && (key_code == 0 || key_code == 1)) {
+            // 短按0：数字输入模式下是直接输入0，其余模式无动作
+            else if (key_edge == -1 && key_code == 0) {
                 if (ime_mode_flag == IME_MODE_NUMBER) {
-                    input_buffer[input_counter++] = (key_code == 0) ? L'0' : L'1';
+                    input_buffer[input_counter++] = L'0';
                     render_input_buffer(input_buffer, ime_mode_flag, 1);
                     STATE = 0;
                 }
             }
 
-            // 短按2-9：输入拼音/字母/数字，根据输入模式标志，转向不同的状态
-            else if (key_edge == -1 && (key_code >= 2 && key_code <= 9)) {
+            // 短按1-9：输入拼音/字母/数字，根据输入模式标志，转向不同的状态
+            else if (key_edge == -1 && (key_code >= 1 && key_code <= 9)) {
                 if (ime_mode_flag == IME_MODE_HANZI) {
-                    STATE = 1;
-                    goto STATE_1;
+                    if (key_code >= 2 && key_code <= 9) { // 仅响应按键2-9；1无动作
+                        STATE = 1;
+                        goto STATE_1;
+                    }
+                }
+                else if (ime_mode_flag == IME_MODE_NUMBER) {
+                    input_buffer[input_counter++] = L'0' + key_code;
+                    render_input_buffer(input_buffer, ime_mode_flag, 1);
+                    STATE = 0;
                 }
                 else if (ime_mode_flag == IME_MODE_ALPHABET) {
                     // 如果按键按下时，不是字母切换状态，则开始循环切换，并开始倒计时。
@@ -301,11 +312,6 @@ STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输�
                         x_pos += 8;
                     }
 
-                    STATE = 0;
-                }
-                else if (ime_mode_flag == IME_MODE_NUMBER) {
-                    input_buffer[input_counter++] = L'0' + key_code;
-                    render_input_buffer(input_buffer, ime_mode_flag, 1);
                     STATE = 0;
                 }
             }
@@ -368,7 +374,7 @@ STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输�
             // 长+短按#键：（关于）光标向右移动
             else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
                 OLED_SoftClear();
-                render_text(L"Project MARGA!\n基于Nano语言模型的\n端侧AI问答交互\nV2025.5\n(c) BD4SUR 2025年4月", 0);
+                render_text(L"Project MARGA!\nV2025.5\n电子鹦鹉笼\n\n(c) 2025 BD4SUR", 0);
                 OLED_Refresh();
 
                 STATE = 5;
@@ -384,15 +390,10 @@ STATE_1:// 拼音输入状态
 
             // 短按D键：开始选字
             if (key_edge == -1 && key_code == 13) {
-                render_pinyin_input(candidate_pages, pinyin_keys, current_page, candidate_page_num, 1);
-
-                // printf("  候选字列表（第%d页）：\n", current_page);
-                // for(int j = 0; j < 10; j++) {
-                //     uint32_t ch = candidate_pages[current_page][j];
-                //     printf("%lc, ", ch);
-                // }
-
-                STATE = 2;
+                if (candidate_pages) {
+                    render_pinyin_input(candidate_pages, pinyin_keys, current_page, candidate_page_num, 1);
+                    STATE = 2;
+                }
             }
 
             // 短按A键：取消输入拼音，清除已输入的所有按键，回到初始状态
@@ -409,7 +410,8 @@ STATE_1:// 拼音输入状态
                 pinyin_keys *= 10;
                 pinyin_keys += (uint32_t)key_code;
 
-                // printf("当前输入的数字：%d\n", pinyin_keys);
+                if (candidates) { free(candidates); candidates = NULL; }
+                free_candidate_pages(candidate_pages, candidate_page_num); candidate_pages = NULL;
 
                 candidates = candidate_hanzi_list(pinyin_keys, &candidate_num);
 
@@ -447,8 +449,8 @@ STATE_2:// 候选字选择状态
 
                 render_input_buffer(input_buffer, ime_mode_flag, 1);
 
-                free(candidates);
-                free_candidate_pages(candidate_pages, candidate_page_num);
+                free(candidates); candidates = NULL;
+                free_candidate_pages(candidate_pages, candidate_page_num); candidate_pages = NULL;
                 current_page = 0;
 
                 pinyin_keys = 0;
@@ -506,8 +508,8 @@ STATE_3:// 符号选择状态
 
                 render_input_buffer(input_buffer, ime_mode_flag, 1);
 
-                free(candidates);
-                free_candidate_pages(candidate_pages, candidate_page_num);
+                free(candidates); candidates = NULL;
+                free_candidate_pages(candidate_pages, candidate_page_num); candidate_pages = NULL;
                 current_page = 0;
 
                 pinyin_keys = 0;
@@ -659,12 +661,31 @@ STATE_10: // 提交候选字到LLM，开始推理
                 if (flag == LLM_STOPPED_IN_PREFILLING || flag == LLM_STOPPED_IN_DECODING) {
                     printf("推理中止。\n");
 
-                    OLED_SoftClear();
-                    render_text(L"推理中止 QAQ\n\n\n\n按[取消]键返回。", 0);
-                    OLED_Refresh();
-                    usleep(1000 * 1000);
+                    // 按键延时：等待（on_decoding回调中检测到的）按键松开，防止误触发
+                    usleep(500 * 1000);
 
-                    STATE = 0;
+                    // 计算提示语+生成内容的行数，绘制文本和滚动条
+                    OLED_SoftClear();
+
+                    wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
+                    wcscat(prompt_and_output, input_buffer);
+                    wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
+                    wcscat(prompt_and_output, g_output_of_last_session);
+                    wchar_t tps_wcstr[50];
+                    swprintf(tps_wcstr, 50, L"\n\n[Nano:推理中止]\n\n[平均速度%.1f词元/秒]", g_tps_of_last_session);
+                    wcscat(prompt_and_output, tps_wcstr);
+
+                    wcscpy(g_output_of_last_session, prompt_and_output);
+                    output_line_num = render_text(g_output_of_last_session, 0);
+                    render_scroll_bar(output_line_num, output_line_num - 5);
+                    OLED_Refresh();
+
+                    // OLED_SoftClear();
+                    // render_text(L"推理中止 QAQ\n\n\n\n按[取消]键返回。", 0);
+                    // OLED_Refresh();
+                    // usleep(1000 * 1000);
+
+                    STATE = 10;
                 }
                 else if (flag == LLM_STOPPED_NORMALLY) {
                     printf("推理自然结束。\n");
@@ -711,19 +732,12 @@ STATE_10: // 提交候选字到LLM，开始推理
                     // OLED_Refresh();
                     // usleep(1000 * 1000);
 
-                    STATE = 0;
+                    STATE = 10;
                 }
             }
 
-            // 短按A键：清屏，显示上一轮对话的TPS，回到初始状态
+            // 短按A键：清屏，清除输入缓冲区，回到初始状态
             else if (key_edge == -1 && key_code == 10) {
-                OLED_SoftClear();
-                wchar_t tps_wcstr[OUTPUT_BUFFER_LENGTH];
-                swprintf(tps_wcstr, OUTPUT_BUFFER_LENGTH, L"推理结束^_^\n\n平均速度%.1f词元/秒", g_tps_of_last_session);
-                render_text(tps_wcstr, 0);
-                OLED_Refresh();
-
-                usleep(600*1000);
 
                 input_buffer = refresh_input_buffer(input_buffer, &input_counter);
                 render_input_buffer(input_buffer, ime_mode_flag, 1);

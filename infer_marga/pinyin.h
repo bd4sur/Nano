@@ -54,6 +54,7 @@ uint32_t **candidate_paging(uint32_t *candidates, uint32_t candidate_num, uint32
 }
 
 void free_candidate_pages(uint32_t **candidate_pages, uint32_t pages) {
+    if (!candidate_pages) return;
     for (uint32_t i = 0; i < pages; i++) {
         free(candidate_pages[i]);
     }
