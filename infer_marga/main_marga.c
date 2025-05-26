@@ -61,6 +61,7 @@ int32_t on_prefilling(Nano_Session *session) {
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_PREFILLING;
     }
+    system("echo \"1\" > /sys/devices/platform/leds/leds/green:status/brightness");
     render_text(L"Pre-filling...", 0);
     OLED_DrawLine(0, 60, 128, 60, 1);
     OLED_DrawLine(0, 63, 128, 63, 1);
@@ -68,6 +69,7 @@ int32_t on_prefilling(Nano_Session *session) {
     OLED_DrawLine(0, 61, session->pos * 128 / (session->num_prompt_tokens - 2), 61, 1);
     OLED_DrawLine(0, 62, session->pos * 128 / (session->num_prompt_tokens - 2), 62, 1);
     OLED_Refresh();
+    system("echo \"0\" > /sys/devices/platform/leds/leds/green:status/brightness");
     return LLM_RUNNING_IN_PREFILLING;
 }
 
@@ -79,10 +81,12 @@ int32_t on_decoding(Nano_Session *session) {
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_DECODING;
     }
+    system("echo \"1\" > /sys/devices/platform/leds/leds/blue:status/brightness");
     OLED_SoftClear();
     int32_t line_num = render_text(session->output_text, 0);
     render_scroll_bar(line_num, line_num - 5);
     OLED_Refresh();
+    system("echo \"0\" > /sys/devices/platform/leds/leds/blue:status/brightness");
 
     free(session->output_text);
     return LLM_RUNNING_IN_DECODING;

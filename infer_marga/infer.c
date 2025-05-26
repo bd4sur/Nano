@@ -1005,10 +1005,10 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, unsigned int 
 
     session->num_prompt_tokens = 0;
     uint32_t *prompt_tokens;
-    if (ctx->llm->arch == LLM_ARCH_NANO || ctx->llm->arch == LLM_ARCH_QWEN2) {
+    if (ctx->llm->arch == LLM_ARCH_NANO) {
         prompt_tokens = encode(tokenizer, session->prompt, &(session->num_prompt_tokens));
     }
-    else if (ctx->llm->arch == LLM_ARCH_QWEN3) {
+    else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
         prompt_tokens = apply_qwen_chat_template(tokenizer, session->prompt, &(session->num_prompt_tokens), 1);
     }
     else {
