@@ -24,6 +24,8 @@ static char *MODEL_PATH_4 = "/emmc/_model/qwen3-0b6.bin";
 static float g_tps_of_last_session = 0.0f;
 static wchar_t g_output_of_last_session[OUTPUT_BUFFER_LENGTH];
 
+static wchar_t g_anniversory[OUTPUT_BUFFER_LENGTH] = L"我在博客中，一直回避谈我自己。原因一方面固然是隐私安全考虑，而更重要的原因是，在博客中谈我自己，相当于直面“我是谁”这个终极问题，而我难以回答这个问题，甚至在求索的过程中，只会看到自己的空虚和肤浅。\n\n诸君应该知道，佛经中经常出现“如是我闻”这四个字，意思是“我听说事情是这样的…”。于是我转而回答“我知道什么”，试图迂回说明“什么是我”“什么属于我”，而非径直回答“我是什么”。\n\n一方面，我将个人博客转型为业余电台网站，以电台为载体，来间接呈现它的OP也就是我自己的所见所闻、所思所想。这样的好处是，业余电台是一个比“我”简单得多的系统，介绍“我的电台”，比介绍“我”更容易。电台是一个具象的抓手，可以允许我免于直接回答“我是谁”这个困难的问题。\n\n另一方面，我尽力将我的精神世界区分为“事实”和“观点”两部分，将事实放在“博客”栏目，将观点放在“灵感”栏目。尽管实践中难以明确区分二者，但我依然认为，将思维的依据和思维的结果解耦开来，通过罗列“什么是我”“什么属于我”来渐进式地刻画出我的精神世界的面貌，有助于以超脱的视角来观测我自己，有助于我接近“我是谁”这个问题的答案。\n\n还有一种策略。既然“我是谁”这个问题难以回答，不妨退而求其次，试图回答退化的问题：“我想成为什么样的人”。这个问题实际上包含三个方面，分别是我“想”、我“能”和我“得”。这问题表面上看起来是反思自我，实际上却有很强烈的“外部性”，涉及人作为社会人的价值的评判。\n\n具体而言，为了深刻反思自我，就必须以人为镜，对标他人。想要对标他人，就要了解他人。了解他人，除了了解抽象的他人，还应该了解具体的他人。求解“他是谁”这个问题，似乎比求解“我是谁”这个问题简单一点。既然谈的是博客，那么阅读某人的博客，实际上就是阅读一个“具体的人”。\n\n有人认为，当今网友思维极端化，“二极管思维”盛行，擅长扣帽子、贴标签。但这责任，依我看，也要归咎于许多人并不懂得如何呈现“具体”的自己。许多人活得太抽象，不仅在认识他人的时候太抽象，认识自己的时候也太抽象。人与人之间，都习惯于通过标签和简单归纳来互相认识，这难免产生“二极管思维”。我尽力避免成为这样的人，因此我希望回答好“我是谁”这个问题，呈现一个“具体”的自己。\n\n然而，活得“具体”是很难的。我有个点子，那就是为了观察某人的“专业性”，可以要求他在十秒内说出一句包含很多专业术语的话。一方面，认识具体的人，难免要花不少的时间去与对方交流、相处，也包括阅读他的文章。另一方面，为了让自己活得具体，就要输入足量的具体的事实，输出足量的具体的观点。这也就是说，人要活得“具体”，首先要活得“丰富”。泡利还是谁说过，所谓专家，就是把他所在领域中所有能犯的错误都犯过一遍的人。有了足量的具体细节，才“有资格”发展出自己的“高观点”，从“真懂”到“真信”，实现“我有什么”到“我是什么”的飞跃。\n\n这实际上就是人的认识规律，而且是认识规律的很小但很重要的一方面。这提醒我，要“把手弄脏”，先谈问题，再谈主义。这既是认识他人和世界的方法，也是认识自我的途径。\n\n取乎上得乎中，取乎中得乎下。对标什么人，想成为什么人，能成为什么人，必须要成为什么人。这是人生观的大问题，不可不察。\n";
+
 pid_t record_pid = 0;
 
 #define AUDIO_FILE_NAME "/tmp/nano_audio.wav"
@@ -237,19 +239,101 @@ int main() {
         switch(STATE) {
 
         /////////////////////////////////////////////
-STATE_M1:// 初始状态：欢迎屏幕。按任意键进入就绪状态
+STATE_M1:// 初始状态：欢迎屏幕。按任意键进入主菜单
         /////////////////////////////////////////////
 
         case -1:
 
             show_splash_screen();
 
-            // 按下任何键，不论长短按
+            // 按下任何键，不论长短按，进入主菜单
             if (key_edge < 0 && key_code < 16) {
+                show_main_menu();
+                STATE = -2;
+            }
+
+            break;
+
+        /////////////////////////////////////////////
+STATE_M2:// 主菜单。
+        /////////////////////////////////////////////
+
+        case -2:
+
+            // 短按1键
+            if (key_edge == -1 && key_code == 1) {
+                // 先计算文本行数，不实际渲染
+                output_line_num = render_text(g_anniversory, 0);
+
+                // 文本卷到顶，渲染
+                OLED_SoftClear();
+                output_shift = (output_line_num - 5);
+                render_text(g_anniversory, output_shift);
+                render_scroll_bar(output_line_num, output_line_num - output_shift - 5);
+                OLED_Refresh();
+                STATE = -3;
+            }
+
+            // 短按2键：进入文本输入就绪状态
+            else if (key_edge == -1 && key_code == 2) {
+                input_buffer = refresh_input_buffer(input_buffer, &input_counter);
+                render_input_buffer(input_buffer, ime_mode_flag, 1);
                 STATE = 0;
-                // 软触发A键
-                key_code = 10;
-                goto STATE_0;
+            }
+
+            // 短按A键：回到splash
+            else if (key_edge == -1 && key_code == 10) {
+                key_code = 16; // 取消按键状态
+                STATE = -1;
+                goto STATE_M1;
+            }
+
+            break;
+
+        /////////////////////////////////////////////
+STATE_M3:// 文本显示状态
+        /////////////////////////////////////////////
+
+        case -3:
+
+            // 短按A键：回到主菜单
+            if (key_edge == -1 && key_code == 10) {
+                show_main_menu();
+                STATE = -2;
+            }
+
+            // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
+            else if ((key_edge == -1 || key_edge == -2) && key_code == 14) {
+                if (output_shift == (output_line_num - 5)) { // 卷到顶的卷动量
+                    output_shift = 0;
+                }
+                else {
+                    output_shift++;
+                }
+
+                OLED_SoftClear();
+                render_text(g_anniversory, output_shift);
+                render_scroll_bar(output_line_num, output_line_num - output_shift - 5);
+                OLED_Refresh();
+
+                STATE = -3;
+            }
+
+            // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
+            else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
+                if (output_shift == 0) {
+                    output_shift = (output_line_num - 5); // 卷到顶的卷动量
+                }
+                else {
+                    output_shift--;
+                }
+
+                OLED_SoftClear();
+                render_text(g_anniversory, output_shift);
+                render_scroll_bar(output_line_num, output_line_num - output_shift - 5);
+                OLED_Refresh();
+
+                STATE = -3;
             }
 
             break;
@@ -320,18 +404,18 @@ STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输�
                 }
             }
 
-            // 长+短按A键：删除一个字符
+            // 长+短按A键：删除一个字符；如果输入缓冲区为空，则回到主菜单
             else if ((key_edge == -1 || key_edge == -2) && key_code == 10) {
-                if (input_counter > 1) {
+                if (input_counter >= 1) {
                     input_buffer[--input_counter] = 0;
+                    render_input_buffer(input_buffer, ime_mode_flag, 1);
+                    STATE = 0;
                 }
                 else {
                     input_buffer = refresh_input_buffer(input_buffer, &input_counter);
+                    show_main_menu();
+                    STATE = -2;
                 }
-
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
-
-                STATE = 0;
             }
 
             // 短按B键：转到设置

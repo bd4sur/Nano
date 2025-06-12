@@ -32,6 +32,12 @@ void show_splash_screen() {
     OLED_Refresh();
 }
 
+void show_main_menu() {
+    OLED_SoftClear();
+    render_text(L"1.人类的本质\n2.电子鹦鹉\n3.设置", 0);
+    OLED_Refresh();
+}
+
 void render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, uint32_t is_show_cursor) {
     OLED_SoftClear();
     wchar_t text[INPUT_BUFFER_LENGTH] = L"请输入问题：     [";
