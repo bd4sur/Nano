@@ -77,6 +77,10 @@
 
 ![ ](./doc/nano-marga.jpg)
 
+**Scheme实现的、可在自研Scheme解释器上运行的推理**
+
+详见[Animac Playground](https://bd4sur.com/Animac)，[开源代码仓库](https://github.com/bd4sur/Animac)。
+
 **基于OpenWrt/LuCI的推理GUI**
 
 文档待补充。
