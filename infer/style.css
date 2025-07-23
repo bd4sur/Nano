@@ -345,22 +345,22 @@ a:hover {
     display: flex;
     flex-direction: row;
     border-bottom: 1px solid #cfd3dc;
-    padding: 0; margin: 0 0 20px 0;
-    /* background-image: url("nano.png");
+    padding: 0; margin: 0 0 20px 10px;
+    background-image: url("nano.png");
     background-size: contain;
     background-repeat: no-repeat;
-    background-position-x: right; */
+    background-position-x: right;
 }
 .GuideIntro {
     display: flex;
     flex-direction: column;
-    padding: 30px 10px 10px 10px;
+    padding: 30px 90px 10px 20px;
 }
 .GuideIntroTitle {
     font-size: 16px;
     font-weight: bold;
     /* letter-spacing: 1px; */
-    /* margin: 10px 0px 10px -10px; */
+    margin: 10px 0px 10px -10px;
     text-align: center;
     color: #394359;
 }
@@ -369,7 +369,7 @@ a:hover {
     color: #626675;
     margin: 10px 0;
     line-height: 1.8;
-    text-align: center;
+    text-align: left;
     letter-spacing: 0.5px;
 }
 .GuideQuestionContainer {

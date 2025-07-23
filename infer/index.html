@@ -72,7 +72,8 @@
                         <div class="GuideIntro">
                             <div class="GuideIntroTitle">Web Browser Is All You Need!</div>
                             <div class="GuideIntroContent">
-                                <div>可<span style="font-weight: bold;">在浏览器内</span>推理的大语言模型！</div>
+                                <div>完全<span style="font-weight: bold;">在浏览器内</span>推理的大语言模型！</div>
+                                <div style="color: #babbbf; margin: 5px 0 0 0; font-size: smaller;">Illustration by <a href="https://x.com/ookiiayu/status/1633071773217607683" target="_blank">ookiiayu@X</a></div>
                             </div>
                         </div>
                     </div>
@@ -95,13 +96,15 @@
     <div class="ChatInput">
         <div class="LoadModel">
             <div class="LoadModelPrompt" style="display: flex; align-items: center; flex-direction: column; margin: 0px 0 0px 0; font-size: 14px;">
-                <div class="LoadModelButton LoadLocalModelButton" id="enable_api">
-                    <div style="font-weight: bold; background: deepskyblue; color: #fff; padding: 6px 20px; border-radius: 100px;">调用内网部署的模型API</div>
+                <div style="color: #262628;">若已部署推理服务</div>
+                <div style="color: #26262866; font-size: 11px; margin: 5px 0 0 0;">（部署方式详见<a href="https://github.com/bd4sur/Nano/blob/master/README.md" target="_blank">文档</a>，支持Qwen等主流模型）</div>
+                <div class="LoadModelButton LoadLocalModelButton" id="enable_api" style="margin-bottom: 26px;">
+                    <div style="font-weight: bold; background: deepskyblue; color: #fff; padding: 6px 20px; border-radius: 100px;">调用推理服务API</div>
                 </div>
             </div>
             <div class="LoadModelPrompt" style="display: flex; align-items: center; flex-direction: column; margin: 0px 0 0px 0; font-size: 14px;">
-                <div style="color: #626675;">请下载并加载语言模型</div>
-                <div style="color: #62667533; font-size: 11px; margin: 5px 0 0 0;">（基座模型加载后，可按需挂载LoRA插件）</div>
+                <div style="color: #262628;">或者，下载并手动加载语言模型</div>
+                <div style="color: #26262866; font-size: 11px; margin: 5px 0 0 0;">（基座模型加载后，可按需挂载LoRA插件）</div>
             </div>
             <div style="display: flex; align-items: center; flex-direction: row;">
                 <div class="LoadModelButton LoadLocalModelButton" id="download_model_button">
@@ -114,8 +117,8 @@
                 </div>
             </div>
             <div class="LoadModelPrompt" style="display: flex; align-items: center; flex-direction: column; margin: 16px 0; font-size: 14px;">
-                <div style="color: #626675;">或者 体验下列单轮问答模型</div>
-                <div style="color: #62667533; font-size: 11px; margin: 5px 0 0 0;">（请确保HuggingFace可访问，模型最大约700MiB）</div>
+                <div style="color: #262628;">或者，直接拉取并体验下列模型</div>
+                <div style="color: #26262866; font-size: 11px; margin: 5px 0 0 0;">（请确保HuggingFace可访问，模型最大约700MiB）</div>
             </div>
             <div style="display: flex;">
                 <div class="LoadModelButton LoadRemoteModelButton" data-model-name="56M-QA-V1" data-model-url="https://huggingface.co/bd4sur/Nano-56M/resolve/main/nano_56m_99000_sft_229000.bin">
