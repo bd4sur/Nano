@@ -142,6 +142,69 @@ void matmul_pthread(float* xout, float* x, float* w, int n, int d) {
     sem_destroy(&sem);
 }
 
+// 任务处理函数
+void matmul_quant_task(void* arg) {
+    ThreadArgsQuant* args = (ThreadArgsQuant*)arg;
+    for (int i = args->start_i; i < args->end_i; i++) {
+        float val = 0.0f;
+        int32_t ival = 0;
+        int in = i * args->n;
+        for (int j = 0; j <= args->n - GS; j += GS) {
+            for (int k = 0; k < GS; k++) {
+                ival += ((int32_t) (args->x)->q[j + k]) * ((int32_t) (args->w)->q[in + j + k]);
+            }
+            val += ((float) ival) * (args->w)->s[(in + j) / GS] * (args->x)->s[j / GS];
+            ival = 0;
+        }
+
+        args->xout[i] = val;
+    }
+    sem_post(args->sem); // 标记任务完成
+    free(args);
+}
+
+void matmul_quant_pthread(float* xout, QuantizedTensor *x, QuantizedTensor *w, int n, int d) {
+    // 初始化全局线程池（首次调用时）
+    if (!g_threadpool) {
+        int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+        g_threadpool = threadpool_init(num_cores > 0 ? num_cores : 4);
+    }
+    
+    // 动态确定任务粒度（每个任务至少处理MIN_CHUNK_SIZE行）
+    const int min_chunk = MIN_CHUNK_SIZE;
+    int num_tasks = (d + min_chunk - 1) / min_chunk;
+    num_tasks = num_tasks > 0 ? num_tasks : 1;
+    
+    sem_t sem;
+    sem_init(&sem, 0, 0);
+    
+    int current_start = 0;
+    for (int t = 0; t < num_tasks; t++) {
+        int chunk_size = min_chunk;
+        if (t == num_tasks - 1) {
+            chunk_size = d - current_start;
+        }
+        
+        ThreadArgsQuant* args = (ThreadArgsQuant*)malloc(sizeof(ThreadArgsQuant));
+        args->xout = xout;
+        args->x = x;
+        args->w = w;
+        args->n = n;
+        args->start_i = current_start;
+        args->end_i = current_start + chunk_size;
+        args->sem = &sem;
+        
+        current_start += chunk_size;
+        threadpool_submit(g_threadpool, matmul_quant_task, args);
+    }
+    
+    // 等待所有任务完成
+    for (int t = 0; t < num_tasks; t++) {
+        sem_wait(&sem);
+    }
+    sem_destroy(&sem);
+}
+
 /* 程序结束时调用 */
 void matmul_pthread_cleanup() {
     if (g_threadpool) {
@@ -149,61 +212,3 @@ void matmul_pthread_cleanup() {
         g_threadpool = NULL;
     }
 }
-
-
-/*
-typedef struct {
-    float* xout;
-    float* x;
-    float* w;
-    int n;
-    int start_i;
-    int end_i;
-} ThreadArgs;
-
-void* matmul_thread(void* arg) {
-    ThreadArgs* args = (ThreadArgs*)arg;
-    for (int i = args->start_i; i < args->end_i; i++) {
-        float val = 0.0f;
-        for (int j = 0; j < args->n; j++) {
-            val += args->w[i * args->n + j] * args->x[j];
-        }
-        args->xout[i] = val;
-    }
-    return NULL;
-}
-
-void matmul(float* xout, float* x, float* w, int n, int d) {
-    // 获取系统核心数并确定实际线程数
-    int num_threads = sysconf(_SC_NPROCESSORS_ONLN);
-    num_threads = num_threads > 0 ? num_threads : 1;
-    num_threads = d < num_threads ? d : num_threads;
-
-    pthread_t threads[num_threads];
-    ThreadArgs args[num_threads];
-
-    // 任务分配算法
-    int base = d / num_threads;
-    int rem = d % num_threads;
-    int current_start = 0;
-
-    for (int t = 0; t < num_threads; t++) {
-        int chunk_size = base + (t < rem ? 1 : 0);
-        args[t] = (ThreadArgs){
-            .xout = xout,
-            .x = x,
-            .w = w,
-            .n = n,
-            .start_i = current_start,
-            .end_i = current_start + chunk_size
-        };
-        current_start += chunk_size;
-        pthread_create(&threads[t], NULL, matmul_thread, &args[t]);
-    }
-
-    // 等待所有线程完成
-    for (int t = 0; t < num_threads; t++) {
-        pthread_join(threads[t], NULL);
-    }
-}
-*/

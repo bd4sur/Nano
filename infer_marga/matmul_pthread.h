@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <stdlib.h>
 
+#include "quant.h"
+
 #define MIN_CHUNK_SIZE (102)
 
 // 线程池结构体
@@ -37,8 +39,18 @@ typedef struct {
     sem_t* sem; // 完成信号量
 } ThreadArgs;
 
+typedef struct {
+    float* xout;
+    QuantizedTensor* x;
+    QuantizedTensor* w;
+    int n;
+    int start_i;
+    int end_i;
+    sem_t* sem; // 完成信号量
+} ThreadArgsQuant;
 
 void matmul_pthread(float* xout, float* x, float* w, int n, int d);
+void matmul_quant_pthread(float* xout, QuantizedTensor *x, QuantizedTensor *w, int n, int d);
 void matmul_pthread_cleanup();
 
 #endif

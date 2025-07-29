@@ -6,17 +6,17 @@ all: marga
 
 marga: nano_marga
 
-nano_marga: main_marga.c oled.c ui.c avltree.c bpe.c hashmap.c trie.c matmul_pthread.c infer.c
+nano_marga: main_marga.c oled.c ui.c avltree.c bpe.c hashmap.c trie.c quant.c matmul_pthread.c infer.c
 	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 cli: nano_cli
 
-nano_cli: main_cli.c bpe.c hashmap.c trie.c matmul_pthread.c infer.c
+nano_cli: main_cli.c bpe.c hashmap.c trie.c quant.c matmul_pthread.c infer.c
 	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 wss: nano_wss
 
-nano_wss: main_wss.c bpe.c hashmap.c trie.c matmul_pthread.c infer.c
+nano_wss: main_wss.c bpe.c hashmap.c trie.c quant.c matmul_pthread.c infer.c
 	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lwebsockets
 
 install:

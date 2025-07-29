@@ -20,6 +20,7 @@
 #include <locale.h>
 #include <wchar.h>
 
+#include "quant.h"
 #include "hashmap.h"
 #include "trie.h"
 
@@ -79,10 +80,10 @@ typedef struct {
     float *token_embedding; // (vocab_size, n_embd)
     float *rms_norm_attn;   // (layer, n_embd)
 
-    float *wq;              // (layer, n_embd, n_heads * head_dim)
-    float *wk;              // (layer, n_embd, n_kv_heads * head_dim)
-    float *wv;              // (layer, n_embd, n_kv_heads * head_dim)
-    float *wo;              // (layer, n_heads * head_dim, n_embd)
+    QuantizedTensor *wq;    // (layer, n_embd, n_heads * head_dim)
+    QuantizedTensor *wk;    // (layer, n_embd, n_kv_heads * head_dim)
+    QuantizedTensor *wv;    // (layer, n_embd, n_kv_heads * head_dim)
+    QuantizedTensor *wo;    // (layer, n_heads * head_dim, n_embd)
 
     // Qwen2 only
     float *bq;              // (layer, n_heads * head_dim)
@@ -95,9 +96,9 @@ typedef struct {
 
     float *rms_norm_ffn;    // (layer, n_embd)
 
-    float *w1;              // (layer, n_hidden, n_embd)
-    float *w2;              // (layer, n_embd, n_hidden)
-    float *w3;              // (layer, n_hidden, n_embd)
+    QuantizedTensor *w1;    // (layer, n_hidden, n_embd)
+    QuantizedTensor *w2;    // (layer, n_embd, n_hidden)
+    QuantizedTensor *w3;    // (layer, n_hidden, n_embd)
 
     float *rms_norm_final;  // (n_embd,)
 
@@ -113,6 +114,9 @@ typedef struct {
     float *xb2;     // an additional buffer just for convenience (n_embd,)
     float *hb;      // buffer for hidden dimension in the ffn (n_hidden,)
     float *hb2;     // buffer for hidden dimension in the ffn (n_hidden,)
+    QuantizedTensor xq;   // quantized x/xb (n_embd,)
+    QuantizedTensor xbaq; // quantized xba (q_dim,)
+    QuantizedTensor hq;   // quantized hb (n_hidden,)
     float *q;       // query (q_dim,) q_dim = (n_embd if model == Nano||Qwen2 else (head_dim * n_head))
     float *k;       // key (kv_dim,)
     float *v;       // value (kv_dim,)
