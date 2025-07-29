@@ -2,7 +2,7 @@
 #define __NANO_INFER_QUANT_H__
 
 #include <stdlib.h>
-#include <ctype.h>
+#include <stdint.h>
 #include <math.h>
 
 // 量化相关
