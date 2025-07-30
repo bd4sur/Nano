@@ -8,7 +8,7 @@
 
 #include "quant.h"
 
-#define MIN_CHUNK_SIZE (102)
+#define MIN_CHUNK_SIZE (64)
 
 // 线程池结构体
 typedef struct {

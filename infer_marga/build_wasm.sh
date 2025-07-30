@@ -1,13 +1,13 @@
 #!/bin/bash
 
+# !!!【注意】!!!
+# 编译前，取消设置infer.h中的 `NANO_USE_MMAP` 和 `MATMUL_PTHREAD` 两个宏
+
 # 工具链部署备忘：
 # 1）下载：https://github.com/WebAssembly/wasi-sdk/releases/tag/wasi-sdk-24
 # 2）解压到BASE_PATH
 # 3）下载clang_rt.builtins-wasm32.a（LLVM18）：https://github.com/jedisct1/libclang_rt.builtins-wasm32.a
 # 3）放置到${WASI_SDK_PATH}/lib/wasi
-
-# 注意！
-# 编译前，取消设置infer.h中的 `NANO_USE_MMAP` 和 `MATMUL_PTHREAD` 两个宏
 
 export BASE_PATH=/home/bd4sur/app/wasi
 export WASI_VERSION=24.0
@@ -20,6 +20,7 @@ $CC --target=wasm32-wasi -O3 -I. -o obj_main_wasm.o -c main_wasm.c
 $CC --target=wasm32-wasi -O3 -I. -o obj_bpe.o -c bpe.c
 $CC --target=wasm32-wasi -O3 -I. -o obj_hashmap.o -c hashmap.c
 $CC --target=wasm32-wasi -O3 -I. -o obj_trie.o -c trie.c
+$CC --target=wasm32-wasi -O3 -I. -o obj_quant.o -c quant.c
 $CC --target=wasm32-wasi -O3 -I. -o obj_infer.o -c infer.c
 
 $LD --export-dynamic --allow-undefined --lto-O3 \
@@ -36,9 +37,9 @@ $LD --export-dynamic --allow-undefined --lto-O3 \
   --export=unload_lora_external \
   --export=close_nano \
   --no-entry \
-  --import-memory -L${WASI_SDK_PATH}/lib/wasi -lclang_rt.builtins-wasm32 obj_main_wasm.o obj_bpe.o obj_hashmap.o obj_trie.o obj_infer.o -o ../infer/nano_infer.wasm \
+  --import-memory -L${WASI_SDK_PATH}/lib/wasi -lclang_rt.builtins-wasm32 obj_main_wasm.o obj_bpe.o obj_hashmap.o obj_trie.o obj_quant.o obj_infer.o -o ../infer/nano_infer.wasm \
 
-rm -f obj_main_wasm.o obj_bpe.o obj_hashmap.o obj_trie.o obj_infer.o
+rm -f obj_main_wasm.o obj_bpe.o obj_hashmap.o obj_trie.o obj_quant.o obj_infer.o
 
 # 作为参考，用emscripten编译的选项如下
 if false; then

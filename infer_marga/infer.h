@@ -102,7 +102,7 @@ typedef struct {
 
     float *rms_norm_final;  // (n_embd,)
 
-    float *token_classifier;// (vocab_size, n_embd)
+    QuantizedTensor *token_classifier; // (vocab_size, n_embd)
     float *freq_cis_real;
     float *freq_cis_imag;
 } LLM_Param;

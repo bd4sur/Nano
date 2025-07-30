@@ -212,10 +212,30 @@ void memory_map_params(LLM *llm, float* ptr) {
     w->w3 = init_quantized_tensors(w3_fp32, n_layer, cfg->n_embd * cfg->n_hidden);
 
     w->rms_norm_final = ptr; ptr += cfg->n_embd;
-    w->freq_cis_real = ptr;  ptr += cfg->block_size * head_size / 2;
-    w->freq_cis_imag = ptr;  ptr += cfg->block_size * head_size / 2;
 
-    w->token_classifier = cfg->is_shared_classifier ? w->token_embedding : ptr;
+    if (llm->arch == LLM_ARCH_NANO || llm->arch == LLM_ARCH_QWEN2) {
+        w->freq_cis_real = ptr;  ptr += cfg->block_size * head_size / 2;
+        w->freq_cis_imag = ptr;  ptr += cfg->block_size * head_size / 2;
+    }
+    else if (llm->arch == LLM_ARCH_QWEN3) {
+        w->freq_cis_real = calloc(cfg->block_size * head_size / 2, sizeof(float));
+        w->freq_cis_imag = calloc(cfg->block_size * head_size / 2, sizeof(float));
+
+        for (uint32_t pos = 0; pos < cfg->block_size; pos++) {
+            for (uint32_t i = 0; i < head_size / 2; i++) {
+                float freq = 1.0f / powf(1000000.0f, (float)(i * 2) / (float)head_size); // QWEN3_ROPE_THETA = 1000000.0
+                float fcr = cosf(pos * freq);
+                float fci = sinf(pos * freq);
+                w->freq_cis_real[pos * head_size / 2 + i] = fcr;
+                w->freq_cis_imag[pos * head_size / 2 + i] = fci;
+            }
+        }
+        ptr += cfg->block_size * head_size / 2;
+        ptr += cfg->block_size * head_size / 2;
+    }
+
+    // w->token_classifier = cfg->is_shared_classifier ? w->token_embedding : ptr;
+    w->token_classifier = init_quantized_tensors(w->token_embedding, 1, cfg->n_embd * cfg->vocab_size);
 }
 
 
@@ -635,11 +655,15 @@ void matmul_quant(float* xout, QuantizedTensor *x, QuantizedTensor *w, int n, in
 #endif
 }
 
-void rope(float *head, uint32_t head_dim, uint32_t pos) {
+void rope(float *head, uint32_t head_dim, uint32_t pos, float *freq_cis_real_row, float *freq_cis_imag_row) {
     for (uint32_t i = 0; i < head_dim / 2; i++) {
-        float freq = 1.0f / powf(1000000.0f, (float)(i * 2) / (float)head_dim); // QWEN3_ROPE_THETA = 1000000.0
-        float fcr = cosf(pos * freq);
-        float fci = sinf(pos * freq);
+        // float freq = 1.0f / powf(1000000.0f, (float)(i * 2) / (float)head_dim); // QWEN3_ROPE_THETA = 1000000.0
+        // float fcr = cosf(pos * freq);
+        // float fci = sinf(pos * freq);
+
+        float fcr = freq_cis_real_row[i];
+        float fci = freq_cis_imag_row[i];
+
         float v0 = head[i];
         float v1 = head[i + head_dim / 2];
         head[       i        ] = v0 * fcr - v1 * fci;
@@ -784,12 +808,12 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
             for (int h = 0; h < cfg->n_head; h++) {
                 float *q = s->q + h * head_dim;
                 rmsnorm(q, q, w->q_norm + l*head_dim, head_dim);
-                rope(q, head_dim, pos);
+                rope(q, head_dim, pos, freq_cis_real_row, freq_cis_imag_row);
             }
             for (int h = 0; h < cfg->n_kv_head; h++) {
                 float *k = s->k + h * head_dim;
                 rmsnorm(k, k, w->k_norm + l*head_dim, head_dim);
-                rope(k, head_dim, pos);
+                rope(k, head_dim, pos, freq_cis_real_row, freq_cis_imag_row);
             }
         }
 
@@ -890,7 +914,11 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
     rmsnorm(x, x, w->rms_norm_final, n_embd);
 
     // classifier into logits
-    matmul(s->logits, x, w->token_classifier, cfg->n_embd, cfg->vocab_size);
+    // matmul(s->logits, x, w->token_classifier, cfg->n_embd, cfg->vocab_size);
+
+    quantize(&s->xq, x, cfg->n_embd);
+    matmul_quant(s->logits, &s->xq, w->token_classifier, cfg->n_embd, cfg->vocab_size);
+
     return s->logits;
 }
 

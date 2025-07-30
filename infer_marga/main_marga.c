@@ -11,6 +11,10 @@
 #define ALPHABET_COUNTDOWN_MAX (30)
 #define LONG_PRESS_THRESHOLD (360)
 
+#define PREFILL_LED_ON  system("echo \"1\" > /sys/devices/platform/leds/leds/green:status/brightness");
+#define PREFILL_LED_OFF system("echo \"0\" > /sys/devices/platform/leds/leds/green:status/brightness");
+#define DECODE_LED_ON   system("echo \"1\" > /sys/devices/platform/leds/leds/blue:status/brightness");
+#define DECODE_LED_OFF  system("echo \"0\" > /sys/devices/platform/leds/leds/blue:status/brightness");
 
 // 推理引擎实例（单例模式）
 static Nano_Context *g_llm_ctx;
@@ -63,7 +67,7 @@ int32_t on_prefilling(Nano_Session *session) {
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_PREFILLING;
     }
-    system("echo \"1\" > /sys/devices/platform/leds/leds/green:status/brightness");
+    // PREFILL_LED_ON
     render_text(L"Pre-filling...", 0);
     OLED_DrawLine(0, 60, 128, 60, 1);
     OLED_DrawLine(0, 63, 128, 63, 1);
@@ -71,7 +75,7 @@ int32_t on_prefilling(Nano_Session *session) {
     OLED_DrawLine(0, 61, session->pos * 128 / (session->num_prompt_tokens - 2), 61, 1);
     OLED_DrawLine(0, 62, session->pos * 128 / (session->num_prompt_tokens - 2), 62, 1);
     OLED_Refresh();
-    system("echo \"0\" > /sys/devices/platform/leds/leds/green:status/brightness");
+    // PREFILL_LED_OFF
     return LLM_RUNNING_IN_PREFILLING;
 }
 
@@ -83,12 +87,12 @@ int32_t on_decoding(Nano_Session *session) {
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_DECODING;
     }
-    system("echo \"1\" > /sys/devices/platform/leds/leds/blue:status/brightness");
+    // DECODE_LED_ON
     OLED_SoftClear();
     int32_t line_num = render_text(session->output_text, 0);
     render_scroll_bar(line_num, line_num - 5);
     OLED_Refresh();
-    system("echo \"0\" > /sys/devices/platform/leds/leds/blue:status/brightness");
+    // DECODE_LED_OFF
 
     free(session->output_text);
     return LLM_RUNNING_IN_DECODING;
