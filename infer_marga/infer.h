@@ -77,6 +77,7 @@ typedef struct {
 } LLM_Config;
 
 typedef struct {
+    QuantizedTensor *q_tokens;  // (vocab_size, n_embd) quantized
     float *token_embedding; // (vocab_size, n_embd)
     float *rms_norm_attn;   // (layer, n_embd)
 

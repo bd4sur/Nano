@@ -161,7 +161,7 @@ void free_fwd_buffer(FwdBuffer* s) {
     // free(s->q1); free(s->k1); free(s->v1); free(s->o1);
 }
 
-void memory_map_params(LLM *llm, float* ptr) {
+void memory_map_params(LLM *llm, void* ptr) {
     LLM_Param *w = &(llm->params);
     LLM_Config *cfg = &(llm->config);
 
@@ -177,10 +177,21 @@ void memory_map_params(LLM *llm, float* ptr) {
     // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
     unsigned long long n_layer = cfg->n_layer;
 
-    w->token_embedding = ptr;ptr += cfg->vocab_size * cfg->n_embd;
+    float* fptr = (float*) ptr;
 
-    w->rms_norm_attn = ptr;  ptr += n_layer * cfg->n_embd;
+    w->rms_norm_attn  = fptr;   fptr += n_layer * cfg->n_embd;
+    w->rms_norm_ffn   = fptr;   fptr += n_layer * cfg->n_embd;
+    w->rms_norm_final = fptr;   fptr += cfg->n_embd;
 
+    ptr = (void*)fptr;
+
+    // w->token_embedding = ptr;ptr += cfg->vocab_size * cfg->n_embd;
+
+    w->q_tokens = parse_quantized_tensors(&ptr, 1, cfg->vocab_size * cfg->n_embd);
+    w->token_embedding = malloc(cfg->vocab_size * cfg->n_embd * sizeof(float));
+    dequantize(w->q_tokens, w->token_embedding, cfg->vocab_size * cfg->n_embd);
+
+/*
     float *wq_fp32 = ptr;    ptr += n_layer * cfg->n_embd * (cfg->n_head * head_size);
     float *wk_fp32 = ptr;    ptr += n_layer * cfg->n_embd * (cfg->n_kv_head * head_size);
     float *wv_fp32 = ptr;    ptr += n_layer * cfg->n_embd * (cfg->n_kv_head * head_size);
@@ -190,19 +201,14 @@ void memory_map_params(LLM *llm, float* ptr) {
     w->wk = init_quantized_tensors(wk_fp32, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
     w->wv = init_quantized_tensors(wv_fp32, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
     w->wo = init_quantized_tensors(wo_fp32, n_layer, (cfg->n_head * head_size) * cfg->n_embd);
+*/
 
-    if (llm->arch == LLM_ARCH_QWEN2) {
-        w->bq = ptr;         ptr += n_layer * (cfg->n_head * head_size);
-        w->bk = ptr;         ptr += n_layer * (cfg->n_kv_head * head_size);
-        w->bv = ptr;         ptr += n_layer * (cfg->n_kv_head * head_size);
-    }
-    else if (llm->arch == LLM_ARCH_QWEN3) {
-        w->q_norm = ptr;     ptr += n_layer * head_size;
-        w->k_norm = ptr;     ptr += n_layer * head_size;
-    }
+    w->wq = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_head * head_size));
+    w->wk = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
+    w->wv = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
+    w->wo = parse_quantized_tensors(&ptr, n_layer, (cfg->n_head * head_size) * cfg->n_embd);
 
-    w->rms_norm_ffn = ptr;   ptr += n_layer * cfg->n_embd;
-
+/*
     float *w1_fp32 = ptr;    ptr += n_layer * cfg->n_embd * cfg->n_hidden;
     float *w2_fp32 = ptr;    ptr += n_layer * cfg->n_hidden * cfg->n_embd;
     float *w3_fp32 = ptr;    ptr += n_layer * cfg->n_embd * cfg->n_hidden;
@@ -210,12 +216,28 @@ void memory_map_params(LLM *llm, float* ptr) {
     w->w1 = init_quantized_tensors(w1_fp32, n_layer, cfg->n_embd * cfg->n_hidden);
     w->w2 = init_quantized_tensors(w2_fp32, n_layer, cfg->n_hidden * cfg->n_embd);
     w->w3 = init_quantized_tensors(w3_fp32, n_layer, cfg->n_embd * cfg->n_hidden);
+*/
 
-    w->rms_norm_final = ptr; ptr += cfg->n_embd;
+    w->w1 = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * cfg->n_hidden);
+    w->w2 = parse_quantized_tensors(&ptr, n_layer, cfg->n_hidden * cfg->n_embd);
+    w->w3 = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * cfg->n_hidden);
+
+
+    fptr = (float*)ptr;
+
+    if (llm->arch == LLM_ARCH_QWEN2) {
+        w->bq = fptr;         fptr += n_layer * (cfg->n_head * head_size);
+        w->bk = fptr;         fptr += n_layer * (cfg->n_kv_head * head_size);
+        w->bv = fptr;         fptr += n_layer * (cfg->n_kv_head * head_size);
+    }
+    else if (llm->arch == LLM_ARCH_QWEN3) {
+        w->q_norm = fptr;     fptr += n_layer * head_size;
+        w->k_norm = fptr;     fptr += n_layer * head_size;
+    }
 
     if (llm->arch == LLM_ARCH_NANO || llm->arch == LLM_ARCH_QWEN2) {
-        w->freq_cis_real = ptr;  ptr += cfg->block_size * head_size / 2;
-        w->freq_cis_imag = ptr;  ptr += cfg->block_size * head_size / 2;
+        w->freq_cis_real = fptr;  fptr += cfg->block_size * head_size / 2;
+        w->freq_cis_imag = fptr;  fptr += cfg->block_size * head_size / 2;
     }
     else if (llm->arch == LLM_ARCH_QWEN3) {
         w->freq_cis_real = calloc(cfg->block_size * head_size / 2, sizeof(float));
@@ -230,12 +252,14 @@ void memory_map_params(LLM *llm, float* ptr) {
                 w->freq_cis_imag[pos * head_size / 2 + i] = fci;
             }
         }
-        ptr += cfg->block_size * head_size / 2;
-        ptr += cfg->block_size * head_size / 2;
+        fptr += cfg->block_size * head_size / 2;
+        fptr += cfg->block_size * head_size / 2;
     }
 
+    ptr = (void*)fptr;
     // w->token_classifier = cfg->is_shared_classifier ? w->token_embedding : ptr;
-    w->token_classifier = init_quantized_tensors(w->token_embedding, 1, cfg->n_embd * cfg->vocab_size);
+    // w->token_classifier = init_quantized_tensors(w->token_embedding, 1, cfg->n_embd * cfg->vocab_size);
+    w->token_classifier = cfg->is_shared_classifier ? w->q_tokens : parse_quantized_tensors(&ptr, 1, cfg->n_embd * cfg->vocab_size);
 }
 
 
@@ -330,7 +354,7 @@ void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
 
     // 解析模型参数
 
-    float *param_ptr = (float*)((char*)tokenzier_ptr + tokenizer_field_bytes);
+    void *param_ptr = (float*)((char*)tokenzier_ptr + tokenizer_field_bytes);
     memory_map_params(llm, param_ptr);
 }
 

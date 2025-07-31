@@ -18,5 +18,6 @@ typedef struct {
 void dequantize(QuantizedTensor *qx, float* x, int n);
 void quantize(QuantizedTensor *qx, float* x, int n);
 QuantizedTensor *init_quantized_tensors(float *w, int n, int size_each);
+QuantizedTensor *parse_quantized_tensors(void **ptr, int n, int size_each);
 
 #endif

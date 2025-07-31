@@ -62,6 +62,11 @@ def quantize_q80(w, group_size):
     maxerr = err.max().item()
     return int8val, scale, maxerr
 
+def write_quantized_tensor(out_file, tensor, group_size):
+    q, s, err = quantize_q80(tensor, group_size)
+    serialize_int8(out_file, q) # save the tensor in int8
+    serialize_fp32(out_file, s) # save scale factors
+    print(f"Tensor quantized {tuple(tensor.shape)} to Q8_0 with max error {err}")
 
 # 写入词表
 def serialize_tokenizer(out_file, tokenizer_config):
@@ -247,7 +252,7 @@ def export_model(model, tokenizer_config, filepath):
     # --> 16 bytes
 
     # 3) write file type TODO to be defined
-    out_file.write(struct.pack('i', 0))  # Model type: Base model
+    out_file.write(struct.pack('i', 0))  # Model type: BD4SUR's Nano model
     out_file.write(struct.pack('i', 32)) # Config Length: 32 bytes
     # --> 24 bytes
 
@@ -345,8 +350,8 @@ def export_quantized(model, tokenizer_config, filepath, group_size=64):
 
     print("Writing header...")
 
-    major_version = 2024
-    minor_version = 10
+    major_version = 2025
+    minor_version = 8
 
     # 1) write magic, which will be two uint32 of "BD4SURLM" in ASCII
     out_file.write(struct.pack('I', 0x42443453))
@@ -359,7 +364,7 @@ def export_quantized(model, tokenizer_config, filepath, group_size=64):
     # --> 16 bytes
 
     # 3) write file type TODO to be defined
-    out_file.write(struct.pack('i', 0))  # Model type: Base model
+    out_file.write(struct.pack('i', 0))  # Model type: BD4SUR's Nano model
     out_file.write(struct.pack('i', 32)) # Config Length: 32 bytes
     # --> 24 bytes
 
@@ -398,13 +403,15 @@ def export_quantized(model, tokenizer_config, filepath, group_size=64):
 
 
     #########################################################
-    # 校验量化参数
+    # 量化并写入模型参数
+
+    print("Writing Q80 quantized model parameters...")
 
     while cfg.n_embd % group_size != 0:
         group_size //= 2
         print(f"BACKOFF: reducing group size to {group_size} to fit hidden_dim")
 
-    weights = [
+    quantized_weights = [
         model.tok_embeddings.weight,
         *[layer.attention.wq.weight for layer in model.layers],
         *[layer.attention.wk.weight for layer in model.layers],
@@ -414,43 +421,43 @@ def export_quantized(model, tokenizer_config, filepath, group_size=64):
         *[layer.feed_forward.w2.weight for layer in model.layers],
         *[layer.feed_forward.w3.weight for layer in model.layers],
     ]
-    shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
-    if not shared_classifier:
-        weights.append(model.output.weight)
-    for w in weights:
+
+    for w in quantized_weights:
         assert w.numel() % group_size == 0, f"weight {i} has numel {w.numel()}, not a multiple of group_size {group_size}"
 
 
     #########################################################
     # 量化并写入模型参数
-    # NOTE 注意：与非量化的参数排列顺序不同！
 
-    print("Quantizing and writing model parameters...")
+    # 首先写入不量化的各层参数
 
-    # first let's write out all the params that we are keeping in fp32: the norms
-    for layer in model.layers: # attention norms
+    for layer in model.layers:
         serialize_fp32(out_file, layer.attention_norm.weight)
-    for layer in model.layers: # MLP norms
+
+    for layer in model.layers:
         serialize_fp32(out_file, layer.ffn_norm.weight)
-    serialize_fp32(out_file, model.norm.weight) # final pre-classifier norm
 
-    # now let's write out all the params that we are quantizing to Q8_0
-    # note we skip classifier weights, which are shared with the embedding
-    ew = []
-    for i, w in enumerate(weights):
-        q, s, err = quantize_q80(w, group_size)
-        serialize_int8(out_file, q) # save the tensor in int8
-        serialize_fp32(out_file, s) # save scale factors
-        ew.append((err, w.shape))
-        print(f"{i+1}/{len(weights)} quantized {tuple(w.shape)} to Q8_0 with max error {err}")
+    serialize_fp32(out_file, model.norm.weight)
 
-    # print the highest error across all weights, should be very small, e.g. O(~0.001)
-    ew.sort(reverse=True)
-    print(f"max quantization group error across all weights: {ew[0][0]}")
+    # 写入量化的各层参数
 
-    # 最后写入RoPE参数
+    for i, w in enumerate(quantized_weights):
+        write_quantized_tensor(out_file, w, group_size)
+
+    # 写入RoPE参数
+
     serialize_fp32(out_file, model.freqs_cos)
     serialize_fp32(out_file, model.freqs_sin)
+
+    # 最后，如果token嵌入层不共享，则按需写入输出解码层
+
+    if not is_shared_classifier:
+        w = model.output.weight
+        assert w.numel() % group_size == 0, f"output.weight has numel {w.numel()}, not a multiple of group_size {group_size}"
+        write_quantized_tensor(out_file, w, group_size)
+
+
+
 
 
     #########################################################
@@ -520,7 +527,7 @@ if __name__ == "__main__":
         model, tokenizer_config = load_checkpoint(args.quant)
         if model is None or tokenizer_config is None:
             parser.error("Can't load input model!")
-        export_quantized(model, tokenizer_config, args.filepath, group_size=256)
+        export_quantized(model, tokenizer_config, args.filepath, group_size=128)
 
     if args.checkpoint:
         model, tokenizer_config = load_checkpoint(args.checkpoint)

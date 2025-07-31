@@ -19,11 +19,12 @@
 // 推理引擎实例（单例模式）
 static Nano_Context *g_llm_ctx;
 
-static char *MODEL_PATH_1 = "/emmc/_model/nano_168m_625000_sft_947000.bin";
-static char *MODEL_PATH_2 = "/emmc/_model/nano_56m_99000_sft_v2_200000.bin";
-static char *MODEL_PATH_3 = "/emmc/_model/1-基础模型-99000.bin";
+static char *MODEL_PATH_1 = "/emmc/_model/nano_168m_625000_sft_947000_q80.bin";
+static char *MODEL_PATH_2 = "/emmc/_model/nano_56m_99000_sft_v2_200000_q80.bin";
+static char *MODEL_PATH_3 = "/emmc/_model/1-基础模型-99000_q80.bin";
 static char *LORA_PATH_3  = "/emmc/_model/2-插件-猫娘.bin";
-static char *MODEL_PATH_4 = "/emmc/_model/qwen3-0b6.bin";
+static char *MODEL_PATH_4 = "/emmc/_model/qwen3-0b6-q80.bin";
+static char *MODEL_PATH_5 = "/emmc/_model/qwen3-1b7-q80.bin";
 
 static float g_tps_of_last_session = 0.0f;
 static wchar_t g_output_of_last_session[OUTPUT_BUFFER_LENGTH];
@@ -686,6 +687,18 @@ STATE_4:// 选择语言模型状态
                 llm_context_free(g_llm_ctx);
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...", 0); OLED_Refresh();
                 g_llm_ctx = llm_context_init(MODEL_PATH_4, NULL, 1.0, 0.6, 0.95, 20, random_seed);
+                OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
+                usleep(1000*1000);
+                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                current_page = 0;
+                STATE = 0;
+            }
+
+            // 短按5键
+            else if (key_edge == -1 && key_code == 5) {
+                llm_context_free(g_llm_ctx);
+                OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...", 0); OLED_Refresh();
+                g_llm_ctx = llm_context_init(MODEL_PATH_5, NULL, 1.0, 0.6, 0.95, 20, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
                 usleep(1000*1000);
                 render_input_buffer(input_buffer, ime_mode_flag, 1);

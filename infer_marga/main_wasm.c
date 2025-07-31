@@ -1,3 +1,4 @@
+#include "bpe.h"
 #include "infer.h"
 
 static Nano_Context *g_llm_ctx;
@@ -24,11 +25,25 @@ uint32_t generate_next_token_external(uint32_t *ids, uint32_t pos, int is_prefil
 }
 
 uint32_t *encode_external(wchar_t *text, uint32_t *n_tokens_ptr) {
-    return encode(g_llm_ctx->tokenizer, text, n_tokens_ptr);
+    // return encode(g_llm_ctx->tokenizer, text, n_tokens_ptr);
+    if (g_llm_ctx->llm->arch == LLM_ARCH_NANO) {
+        return encode(g_llm_ctx->tokenizer, text, n_tokens_ptr);
+    }
+    else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
+        return apply_qwen_chat_template(g_llm_ctx->tokenizer, text, n_tokens_ptr, 1);
+    }
+    else return NULL;
 }
 
 wchar_t *decode_external(uint32_t *ids, uint32_t len) {
-    return decode(g_llm_ctx->tokenizer, ids, len);
+    // return decode(g_llm_ctx->tokenizer, ids, len);
+    if (g_llm_ctx->llm->arch == LLM_ARCH_NANO) {
+        return decode(g_llm_ctx->tokenizer, ids, len);
+    }
+    else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
+        return decode_bpe(g_llm_ctx->tokenizer, ids, len);
+    }
+    else return NULL;
 }
 
 int load_lora_external(char *lora_buffer) {

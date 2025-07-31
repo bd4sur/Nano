@@ -334,7 +334,11 @@ def quantize_q80(w, group_size):
     maxerr = err.max().item()
     return int8val, scale, maxerr
 
-
+def write_quantized_tensor(out_file, tensor, group_size):
+    q, s, err = quantize_q80(tensor, group_size)
+    serialize_int8(out_file, q) # save the tensor in int8
+    serialize_fp32(out_file, s) # save scale factors
+    print(f"Tensor quantized {tuple(tensor.shape)} to Q8_0 with max error {err}")
 
 #########################################################
 #  BPE词元编解码器的序列化
@@ -435,7 +439,7 @@ def serialize_tokenizer(file):
 #  模型导出
 #########################################################
 
-def export_model(model, filepath):
+def export_model(model, filepath, group_size=0):
     """
     Export the model weights in full float32 .bin file to be read from C.
     This is same as legacy_export, but with a proper header.
@@ -449,7 +453,7 @@ def export_model(model, filepath):
     print("Writing header...")
 
     major_version = 2025
-    minor_version = 5
+    minor_version = 8
 
     # 1) write magic, which will be two uint32 of "BD4SURLM" in ASCII
     out_file.write(struct.pack('I', 0x42443453))
@@ -463,10 +467,10 @@ def export_model(model, filepath):
 
     # 3) write file type TODO to be defined
     out_file.write(struct.pack('i', 3))  # Model type: Qwen3
-    out_file.write(struct.pack('i', 36)) # Config Length: 32 bytes
+    out_file.write(struct.pack('i', 36)) # Config Length: 36 bytes
     # --> 24 bytes
 
-    # 4) write the model config, which will be 8 ints (32 bytes)
+    # 4) write the model config, which will be 9 ints (36 bytes)
     p = model.params
 
     is_shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
@@ -486,6 +490,8 @@ def export_model(model, filepath):
     # --> 60 bytes
 
     # 5) write some other flags (TODO)
+    out_file.write(struct.pack('i', 800))        # 量化类型 TODO 待定义
+    out_file.write(struct.pack('i', group_size)) # 量化参数(分组长度)
 
     # 6) pad rest with zeros; 'tell' returns current pos
     pad = 256 - out_file.tell()
@@ -503,47 +509,119 @@ def export_model(model, filepath):
     #########################################################
     # 写入模型参数
 
-    print("Writing model parameters...")
+    # 如果GS等于0，则为非量化模型
+    if group_size == 0:
 
-    weights = [
-        model.tok_embeddings.weight,
-        *[layer.attention_norm.weight for layer in model.layers],
-        *[layer.attention.wq.weight for layer in model.layers],
-        *[layer.attention.wk.weight for layer in model.layers],
-        *[layer.attention.wv.weight for layer in model.layers],
-        *[layer.attention.wo.weight for layer in model.layers],
+        print("Writing FP32 model parameters...")
 
-        # *[layer.attention.wq.bias for layer in model.layers], # Qwen2
-        # *[layer.attention.wk.bias for layer in model.layers], # Qwen2
-        # *[layer.attention.wv.bias for layer in model.layers], # Qwen2
+        weights = [
+            # No quant
+            *[layer.attention_norm.weight for layer in model.layers],
+            *[layer.ffn_norm.weight for layer in model.layers],
+            model.norm.weight,
 
-        *[layer.attention.q_norm.weight for layer in model.layers], # Qwen3
-        *[layer.attention.k_norm.weight for layer in model.layers], # Qwen3
+            # Quantized
+            model.tok_embeddings.weight,
+            *[layer.attention.wq.weight for layer in model.layers],
+            *[layer.attention.wk.weight for layer in model.layers],
+            *[layer.attention.wv.weight for layer in model.layers],
+            *[layer.attention.wo.weight for layer in model.layers],
+            *[layer.feed_forward.w1.weight for layer in model.layers],
+            *[layer.feed_forward.w2.weight for layer in model.layers],
+            *[layer.feed_forward.w3.weight for layer in model.layers],
 
-        *[layer.ffn_norm.weight for layer in model.layers],
-        *[layer.feed_forward.w1.weight for layer in model.layers],
-        *[layer.feed_forward.w2.weight for layer in model.layers],
-        *[layer.feed_forward.w3.weight for layer in model.layers],
-        model.norm.weight,
-        model.freqs_cos,
-        model.freqs_sin,
-    ]
-    if not is_shared_classifier:
-        weights.append(model.output.weight)
+            # Qwen2/Qwen3
+            # *[layer.attention.wq.bias for layer in model.layers], # Qwen2
+            # *[layer.attention.wk.bias for layer in model.layers], # Qwen2
+            # *[layer.attention.wv.bias for layer in model.layers], # Qwen2
+            *[layer.attention.q_norm.weight for layer in model.layers], # Qwen3
+            *[layer.attention.k_norm.weight for layer in model.layers], # Qwen3
 
-    param_count = 0
-    for w in weights:
-        param_count += w.detach().cpu().view(-1).numel()
+            # Optional
+            model.freqs_cos,
+            model.freqs_sin,
 
-    # 【NOTE 不需要】写入模型参数数（本字段8个字节）
-    # out_file.write(struct.pack('Q', param_count)) # unsigned long long - uint64_t
+            # Optional: model.output.weight
+        ]
+        if not is_shared_classifier:
+            weights.append(model.output.weight)
 
-    # 按照上面定义的维度顺序，将模型参数写入文件，没有其他定界符或填充数据
-    for w in weights:
-        serialize_fp32(out_file, w)
+        param_count = 0
+        for w in weights:
+            param_count += w.detach().cpu().view(-1).numel()
 
-    print(f"Params = {param_count}")
-    print(f"Total bin file length = {out_file.tell()}")
+        # 【NOTE 不需要】写入模型参数数（本字段8个字节）
+        # out_file.write(struct.pack('Q', param_count)) # unsigned long long - uint64_t
+
+        # 按照上面定义的维度顺序，将模型参数写入文件，没有其他定界符或填充数据
+        for w in weights:
+            serialize_fp32(out_file, w)
+
+        print(f"Params = {param_count}")
+        print(f"Total bin file length = {out_file.tell()}")
+
+    # 如果GS大于0，则为量化模型
+    elif group_size > 0:
+
+        print("Writing Q80 quantized model parameters...")
+
+        while p.dim % group_size != 0:
+            group_size //= 2
+            print(f"BACKOFF: reducing group size to {group_size} to fit hidden_dim")
+
+        quantized_weights = [
+            model.tok_embeddings.weight,
+            *[layer.attention.wq.weight for layer in model.layers],
+            *[layer.attention.wk.weight for layer in model.layers],
+            *[layer.attention.wv.weight for layer in model.layers],
+            *[layer.attention.wo.weight for layer in model.layers],
+            *[layer.feed_forward.w1.weight for layer in model.layers],
+            *[layer.feed_forward.w2.weight for layer in model.layers],
+            *[layer.feed_forward.w3.weight for layer in model.layers],
+        ]
+
+        for w in quantized_weights:
+            assert w.numel() % group_size == 0, f"weight {i} has numel {w.numel()}, not a multiple of group_size {group_size}"
+
+
+        #########################################################
+        # 量化并写入模型参数
+
+        # 首先写入不量化的各层参数
+
+        for layer in model.layers:
+            serialize_fp32(out_file, layer.attention_norm.weight)
+
+        for layer in model.layers:
+            serialize_fp32(out_file, layer.ffn_norm.weight)
+
+        serialize_fp32(out_file, model.norm.weight)
+
+        # 写入量化的各层参数
+
+        for i, w in enumerate(quantized_weights):
+            write_quantized_tensor(out_file, w, group_size)
+
+        # 写入Qwen3的q/k_norm参数
+
+        for layer in model.layers:
+            serialize_fp32(out_file, layer.attention.q_norm.weight)
+        for layer in model.layers:
+            serialize_fp32(out_file, layer.attention.k_norm.weight)
+
+        # 写入RoPE参数
+
+        serialize_fp32(out_file, model.freqs_cos)
+        serialize_fp32(out_file, model.freqs_sin)
+
+        # 最后，如果token嵌入层不共享，则按需写入输出解码层
+
+        if not is_shared_classifier:
+            w = model.output.weight
+            assert w.numel() % group_size == 0, f"output.weight has numel {w.numel()}, not a multiple of group_size {group_size}"
+            write_quantized_tensor(out_file, w, group_size)
+
+
 
     #########################################################
     # 写入并关闭文件
@@ -659,16 +737,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("filepath", type=str, help="the output filepath")
-    parser.add_argument("--version", default=1, type=int, help="the version to export with")
+    parser.add_argument("--gs", default=0, type=int, help="Quant group size, default=0. if gs == 0 no quant; else if gs>0 quant")
     parser.add_argument("--dtype", type=str, help="dtype of the model (fp16, fp32)", default="fp32")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--checkpoint", type=str, help="model checkpoint, .pt file")
     group.add_argument("--hf", type=str, help="HuggingFace model checkpoint")
-    group.add_argument("--quant", type=str, help="model checkpoint, .pt file for exporting quantized model bin file")
-    group.add_argument("--lora", type=str, help="lora module, .pt file")
     args = parser.parse_args()
     dtype = {"fp16": torch.float16, "fp32": torch.float32}[args.dtype]
 
     if args.hf:
         model = load_hf_model(args.hf)
-        export_model(model, args.filepath)
+        export_model(model, args.filepath, args.gs)
