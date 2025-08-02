@@ -219,6 +219,7 @@ typedef struct {
     LoRA *lora;
     Tokenizer *tokenizer;
     Sampler *sampler;
+    uint32_t max_seq_len; // NOTE 每个context的最大序列长度可设置，不一定等于模型的block_size。这样可以按需控制KV缓存的大小。
     int random_seed;
 } Nano_Context;
 
@@ -237,13 +238,13 @@ typedef struct {
     float tps;
 } Nano_Session;
 
-void load_llm_from_buffer(LLM *llm, Tokenizer *tk, char *buffer);
-void load_llm(LLM *llm, Tokenizer *tk, char *model_path);
+void load_llm_from_buffer(LLM *llm, Tokenizer *tk, char *buffer, uint32_t max_seq_len);
+void load_llm(LLM *llm, Tokenizer *tk, char *model_path, uint32_t max_seq_len);
 Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long rng_seed);
 LoRA *load_lora_from_buffer(LLM *llm, char *buffer);
 LoRA *load_lora(LLM *llm, char *lora_path);
 
-Nano_Context *llm_context_init(char *model_path, char *lora_path, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed);
+Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed);
 void llm_context_free(Nano_Context *ctx);
 
 uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens_ptr);

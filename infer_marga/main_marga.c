@@ -130,9 +130,9 @@ int main() {
     float top_p = 0.5f;
     unsigned int top_k = 0;
     unsigned long long random_seed = (unsigned int)time(NULL);
-    uint32_t max_seq_len = 32768;
+    uint32_t max_seq_len = 512;
 
-    g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, repetition_penalty, temperature, top_p, top_k, random_seed);
+    g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
 
     show_splash_screen();
 
@@ -650,7 +650,8 @@ STATE_4:// 选择语言模型状态
             if (key_edge == -1 && key_code == 1) {
                 llm_context_free(g_llm_ctx);
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...", 0); OLED_Refresh();
-                g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, repetition_penalty, temperature, top_p, top_k, random_seed);
+                max_seq_len = 512;
+                g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
                 usleep(1000*1000);
                 render_input_buffer(input_buffer, ime_mode_flag, 1);
@@ -662,7 +663,8 @@ STATE_4:// 选择语言模型状态
             else if (key_edge == -1 && key_code == 2) {
                 llm_context_free(g_llm_ctx);
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...", 0); OLED_Refresh();
-                g_llm_ctx = llm_context_init(MODEL_PATH_2, NULL, repetition_penalty, temperature, top_p, top_k, random_seed);
+                max_seq_len = 512;
+                g_llm_ctx = llm_context_init(MODEL_PATH_2, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
                 usleep(1000*1000);
                 render_input_buffer(input_buffer, ime_mode_flag, 1);
@@ -674,7 +676,8 @@ STATE_4:// 选择语言模型状态
             else if (key_edge == -1 && key_code == 3) {
                 llm_context_free(g_llm_ctx);
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...", 0); OLED_Refresh();
-                g_llm_ctx = llm_context_init(MODEL_PATH_3, LORA_PATH_3, repetition_penalty, temperature, top_p, top_k, random_seed);
+                max_seq_len = 512;
+                g_llm_ctx = llm_context_init(MODEL_PATH_3, LORA_PATH_3, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
                 usleep(1000*1000);
                 render_input_buffer(input_buffer, ime_mode_flag, 1);
@@ -686,7 +689,8 @@ STATE_4:// 选择语言模型状态
             else if (key_edge == -1 && key_code == 4) {
                 llm_context_free(g_llm_ctx);
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...", 0); OLED_Refresh();
-                g_llm_ctx = llm_context_init(MODEL_PATH_4, NULL, 1.0, 0.6, 0.95, 20, random_seed);
+                max_seq_len = 32768;
+                g_llm_ctx = llm_context_init(MODEL_PATH_4, NULL, max_seq_len, 1.0, 0.6, 0.95, 20, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
                 usleep(1000*1000);
                 render_input_buffer(input_buffer, ime_mode_flag, 1);
@@ -698,7 +702,8 @@ STATE_4:// 选择语言模型状态
             else if (key_edge == -1 && key_code == 5) {
                 llm_context_free(g_llm_ctx);
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...", 0); OLED_Refresh();
-                g_llm_ctx = llm_context_init(MODEL_PATH_5, NULL, 1.0, 0.6, 0.95, 20, random_seed);
+                max_seq_len = 32768;
+                g_llm_ctx = llm_context_init(MODEL_PATH_5, NULL, max_seq_len, 1.0, 0.6, 0.95, 20, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
                 usleep(1000*1000);
                 render_input_buffer(input_buffer, ime_mode_flag, 1);

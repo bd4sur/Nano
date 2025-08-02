@@ -63,8 +63,9 @@ self.onmessage = function(event) {
 
     if(event.data.eventType === "MODEL_FILE") {
         send_info("开始初始化LLM");
-        let model_file_buffer = new Uint8Array(event.data.eventData);
-        init(model_file_buffer);
+        let max_seq_len = event.data.eventData.max_seq_len;
+        let model_file_buffer = new Uint8Array(event.data.eventData.file_buffer);
+        init(model_file_buffer, max_seq_len);
     }
 
     if(event.data.eventType === "LOAD_LORA") {
@@ -101,7 +102,7 @@ function set_uint32(ptr, heap, value) {
 }
 
 
-async function init(model_file_buffer) {
+async function init(model_file_buffer, max_seq_len) {
 
     memory = new WebAssembly.Memory({ initial: 10, maximum: 65536 });
 
@@ -171,7 +172,7 @@ async function init(model_file_buffer) {
 
     HEAPU8.set(model_file_buffer, buffer_ptr);
 
-    let res = init_nano(buffer_ptr, Date.now() % 0xffffffff);
+    let res = init_nano(buffer_ptr, max_seq_len, Date.now() % 0xffffffff);
     HEAPU8 = new Uint8Array(memory.buffer);
 
     self.postMessage({
@@ -180,6 +181,34 @@ async function init(model_file_buffer) {
     });
 
     send_info("语言模型加载完毕，可以开始对话啦！\nCiallo～(∠·ω< )⌒★");
+}
+
+function js_string_to_wchar_array(js_str) {
+    // 计算所需内存大小（每个字符4字节 + 终止符）
+    const bufferSize = (js_str.length + 1) * 4;
+    let wchar_array = [];
+    let offset = 0;
+    for (let i = 0; i < js_str.length; i++) {
+        const code = js_str.charCodeAt(i);
+        // 处理代理对（Surrogate pairs）
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            const nextCode = js_str.charCodeAt(i + 1);
+            if (nextCode >= 0xDC00 && nextCode <= 0xDFFF) {
+                // 组合代理对为完整码点
+                const fullCode = (code - 0xD800) * 0x400 + (nextCode - 0xDC00) + 0x10000;
+                wchar_array[offset] = fullCode;
+                offset++;
+                i++; // 跳过已处理的低位代理
+                continue;
+            }
+        }
+        // 直接写入 BMP 字符
+        wchar_array[offset] = code;
+        offset++;
+    }
+    // 添加4字节终止符
+    wchar_array[offset] = 0;
+    return wchar_array;
 }
 
 async function generate(prompt, args) {
@@ -194,14 +223,18 @@ async function generate(prompt, args) {
 
     let input_text_ptr = malloc((prompt.length+1) * 4);
     let n_tokens_ptr = malloc(4);
-    let ids_ptr = malloc(512 * 4);
+    let ids_ptr = malloc(args.max_seq_len * 4);
     HEAPU8 = new Uint8Array(memory.buffer);
 
-    for(let i = 0; i < prompt.length; i++) {
-        let ch = prompt[i].charCodeAt();
+    let prompt_wchar = js_string_to_wchar_array(prompt);
+    console.log(prompt_wchar);
+
+    for(let i = 0; i < prompt_wchar.length; i++) {
+        // let ch = prompt_wchar[i].charCodeAt();
+        let ch = prompt_wchar[i];
         set_uint32(input_text_ptr + i * 4, HEAPU8, ch);
     }
-    set_uint32(input_text_ptr + prompt.length * 4, HEAPU8, 0);
+    set_uint32(input_text_ptr + prompt_wchar.length * 4, HEAPU8, 0);
 
     let prompt_ptr = encode_external(input_text_ptr, n_tokens_ptr);
     HEAPU8 = new Uint8Array(memory.buffer);
@@ -255,7 +288,8 @@ async function generate(prompt, args) {
         on_running(output_str, num_prompt_tokens, pos, status, tps_now);
 
         if(IS_RUNNING !== true) break;
-        if(next_token == 0 || next_token == 3) break;
+        if (next_token === 0 || next_token === 3 ||
+            (is_prefilling === 0 && (next_token === 151643 || next_token === 151645))) break; // 包括Qwen3的<|endoftext|>(151643)或<|im_end|>(151645)
 
         await new Promise(resolve => setTimeout(resolve, 0));
     }

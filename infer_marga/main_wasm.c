@@ -3,13 +3,15 @@
 
 static Nano_Context *g_llm_ctx;
 
-int init_nano(char *buffer, uint32_t random_seed) {
+int init_nano(char *buffer, uint32_t max_seq_len, uint32_t random_seed) {
+    if(!setlocale(LC_CTYPE, "")) return -1;
     g_llm_ctx = (Nano_Context*)calloc(1, sizeof(Nano_Context));
+    g_llm_ctx->max_seq_len = max_seq_len;
     g_llm_ctx->random_seed = random_seed;
     g_llm_ctx->llm = (LLM *)calloc(1, (sizeof(LLM)));
     g_llm_ctx->tokenizer = (Tokenizer *)calloc(1, (sizeof(Tokenizer)));
     g_llm_ctx->lora = NULL;
-    load_llm_from_buffer(g_llm_ctx->llm, g_llm_ctx->tokenizer, buffer);
+    load_llm_from_buffer(g_llm_ctx->llm, g_llm_ctx->tokenizer, buffer, g_llm_ctx->max_seq_len);
     return 0;
 }
 

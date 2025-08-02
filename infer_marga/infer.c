@@ -100,7 +100,7 @@ wchar_t *apply_chat_template(wchar_t *system_prompt, wchar_t *history, wchar_t *
 // 模型文件解析·内存管理
 // ===============================================================================
 
-void malloc_fwd_buffer(LLM *llm) {
+void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
     FwdBuffer *s = &(llm->state);
     LLM_Config *llm_cfg = &(llm->config);
 
@@ -126,9 +126,9 @@ void malloc_fwd_buffer(LLM *llm) {
     s->xbaq    = (QuantizedTensor) { .q = calloc(q_dim, sizeof(QTYPE)), .s = calloc(q_dim / GS, sizeof(float)) };
     s->hq      = (QuantizedTensor) { .q = calloc(llm_cfg->n_hidden, sizeof(QTYPE)), .s = calloc(llm_cfg->n_hidden / GS, sizeof(float)) };
     s->q       = calloc(q_dim, sizeof(float));
-    s->k_cache = calloc(llm_cfg->n_layer * llm_cfg->block_size * kv_dim, sizeof(float));
-    s->v_cache = calloc(llm_cfg->n_layer * llm_cfg->block_size * kv_dim, sizeof(float));
-    s->att     = calloc(llm_cfg->n_head * llm_cfg->block_size, sizeof(float));
+    s->k_cache = calloc(llm_cfg->n_layer * max_seq_len * kv_dim, sizeof(float));
+    s->v_cache = calloc(llm_cfg->n_layer * max_seq_len * kv_dim, sizeof(float));
+    s->att     = calloc(llm_cfg->n_head * max_seq_len, sizeof(float));
     s->logits  = calloc(llm_cfg->vocab_size, sizeof(float));
     // ensure all mallocs went fine
     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q ||
@@ -359,13 +359,13 @@ void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
 }
 
 
-void load_llm_from_buffer(LLM *llm, Tokenizer *tk, char *buffer) {
+void load_llm_from_buffer(LLM *llm, Tokenizer *tk, char *buffer, uint32_t max_seq_len) {
     parse_model_file(buffer, llm, tk);
-    malloc_fwd_buffer(llm);
+    malloc_fwd_buffer(llm, max_seq_len);
 }
 
 
-void load_llm(LLM *llm, Tokenizer *tk, char *model_path) {
+void load_llm(LLM *llm, Tokenizer *tk, char *model_path, uint32_t max_seq_len) {
     // 获得文件长度
     FILE *_file = fopen(model_path, "rb");
     if (!_file) { fprintf(stderr, "Couldn't open file %s\n", model_path); exit(EXIT_FAILURE); }
@@ -384,7 +384,7 @@ void load_llm(LLM *llm, Tokenizer *tk, char *model_path) {
     llm->fd = fd;
     llm->buffer = buffer;
 
-    load_llm_from_buffer(llm, tk, buffer);
+    load_llm_from_buffer(llm, tk, buffer, max_seq_len);
 
 #else
 
@@ -395,7 +395,7 @@ void load_llm(LLM *llm, Tokenizer *tk, char *model_path) {
     if(fread(buffer, sizeof(char), llm->file_size, file) != llm->file_size) { exit(EXIT_FAILURE); }
     llm->buffer = buffer;
 
-    load_llm_from_buffer(llm, tk, buffer);
+    load_llm_from_buffer(llm, tk, buffer, max_seq_len);
 
     fclose(file);
 #endif
@@ -565,12 +565,13 @@ void free_lora(LLM *llm, LoRA *lora) {
 // 推理引擎单例（现在暂且叫context）管理
 // ===============================================================================
 
-Nano_Context *llm_context_init(char *model_path, char *lora_path, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed) {
+Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed) {
     Nano_Context *ctx = (Nano_Context*)calloc(1, sizeof(Nano_Context));
+    ctx->max_seq_len = max_seq_len;
     ctx->random_seed = random_seed;
     ctx->llm = (LLM *)calloc(1, (sizeof(LLM)));
     ctx->tokenizer = (Tokenizer *)calloc(1, (sizeof(Tokenizer)));
-    load_llm(ctx->llm, ctx->tokenizer, model_path);
+    load_llm(ctx->llm, ctx->tokenizer, model_path, max_seq_len);
     ctx->sampler = build_sampler(ctx->llm->config.vocab_size, repetition_penalty, temperature, top_p, top_k, ctx->random_seed);
     ctx->lora = (lora_path) ? load_lora(ctx->llm, lora_path) : NULL;
     return ctx;
@@ -696,7 +697,7 @@ void rope(float *head, uint32_t head_dim, uint32_t pos, float *freq_cis_real_row
 }
 
 
-float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
+float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm, LoRA *lora) {
 
     LLM_Config *cfg = &llm->config;
     LLM_Param *w = &llm->params;
@@ -748,7 +749,8 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
         rmsnorm(s->xb, x, w->rms_norm_attn + l*n_embd, n_embd);
 
         // key and value point to the kv cache
-        int layer_offset = l * cfg->block_size * kv_dim;
+        // NOTE KV缓存的长度由max_seq_len参数指定，不一定等于模型本身的block_size。这样做的目的是为了按需控制KV缓存的大小。
+        int layer_offset = l * max_seq_len * kv_dim;
         s->k = s->k_cache + layer_offset + pos * kv_dim;
         s->v = s->v_cache + layer_offset + pos * kv_dim;
 
@@ -848,7 +850,7 @@ float* llm_forward(uint32_t token, uint32_t pos, LLM* llm, LoRA *lora) {
             // get the query vector for this head
             float* q = s->q + h * head_dim;
             // attention scores for this head
-            float* att = s->att + h * cfg->block_size;
+            float* att = s->att + h * max_seq_len; // NOTE max_seq_len不一定等于模型本身的block_size。这样做的目的是为了节约内存。
             // iterate over all timesteps, including the current one
             for (int t = 0; t <= pos; t++) {
                 // get the key vector for this head and at this timestep
@@ -1054,7 +1056,7 @@ uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t p
 
     uint32_t next_token = output_ids[pos];
 
-    float* logits = llm_forward(next_token, pos, llm, lora);
+    float* logits = llm_forward(next_token, pos, ctx->max_seq_len, llm, lora);
 
     // Pre-fill: if we are still processing the input prompt, force the next prompt token
     if (is_prefilling == 1) {

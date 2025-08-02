@@ -121,14 +121,17 @@
                 <div style="color: #26262866; font-size: 11px; margin: 5px 0 0 0;">（请确保HuggingFace可访问，模型最大约700MiB）</div>
             </div>
             <div style="display: flex;">
-                <div class="LoadModelButton LoadRemoteModelButton" data-model-name="56M-QA-V1" data-model-url="https://huggingface.co/bd4sur/Nano-56M/resolve/main/nano_56m_99000_sft_229000.bin">
-                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">56M-QA<br><span style="font-weight: normal; font-size: 11px;">通用问答</span></div>
+                <div class="LoadModelButton LoadRemoteModelButton" data-model-name="Nano-56M-QA-V2" data-model-url="https://huggingface.co/bd4sur/Nano-56M/resolve/main/nano_56m_99000_sft_v2_200000_q80.bin" data-max-seq-len="512">
+                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-56M-QA<br><span style="font-weight: normal; font-size: 11px;">通用问答</span></div>
                 </div>
-                <div class="LoadModelButton LoadRemoteModelButton" data-model-name="168M-QA-V2" data-model-url="https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_947000.bin">
-                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">168M-QA<br><span style="font-weight: normal; font-size: 11px;">通用问答</span></div>
+                <div class="LoadModelButton LoadRemoteModelButton" data-model-name="Nano-168M-QA-V2" data-model-url="https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_947000_q80.bin" data-max-seq-len="512">
+                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-168M-QA<br><span style="font-weight: normal; font-size: 11px;">通用问答</span></div>
                 </div>
-                <div class="LoadModelButton LoadRemoteModelButton" data-model-name="168M-QA-AR" data-model-url="https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_875000_amateur_radio_890000.bin">
+                <!-- <div class="LoadModelButton LoadRemoteModelButton" data-model-name="168M-QA-AR" data-model-url="https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_875000_amateur_radio_890000.bin" data-max-seq-len="512">
                     <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">168M-QA-AR<br><span style="font-weight: normal; font-size: 11px;">业余无线电考试</span></div>
+                </div> -->
+                <div class="LoadModelButton LoadRemoteModelButton" style="background-color: #6611ee;" data-model-name="Qwen3-0.6B" data-model-url="https://huggingface.co/bd4sur/Qwen3/resolve/main/qwen3-0b6-q80.bin" data-max-seq-len="3072">
+                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Qwen3-0.6B<br><span style="font-weight: normal; font-size: 11px;">推理模型</span></div>
                 </div>
             </div>
         </div>
@@ -515,7 +518,11 @@ function llm_on_running(round_counter, text, num_prompt_tokens, num_generated_to
     }
     if(status === "Decoding...") {
         $(`#prefill_progress_${round_counter}`).fadeOut(300);
-        update_bot_bubble(marked.parse(text.replace(/~/gi, "～")), round_counter);
+
+        let _text = text.replace(/~/gi, "～")
+                        .replace("<think>", "<blockquote><p style=\"font-weight: bold;\">思考中...</p>")
+                        .replace("</think>", "</blockquote>");
+        update_bot_bubble(marked.parse(_text), round_counter);
     }
     else if(status === "Pre-filling...") {
         let prefill_progress = (num_generated_tokens + 1) / num_prompt_tokens * 100;
@@ -562,7 +569,10 @@ model_file_selector.onchange = async () => {
         if(NANO_INFER_BACKEND === "wasm") {
             nano_worker.postMessage({
                 eventType: "MODEL_FILE",
-                eventData: file_buffer
+                eventData: {
+                    max_seq_len: 3072,
+                    file_buffer: file_buffer
+                }
             });
         }
         else if(NANO_INFER_BACKEND == "js") {
@@ -650,6 +660,21 @@ $(".LoadRemoteModelButton").on("click", async function () {
     const model_name = $(this).attr("data-model-name");
     $("#model_name").html(model_name);
 
+    const max_seq_len_value = Number($(this).attr("data-max-seq-len"));
+
+    if (model_name.indexOf("Qwen") >= 0) {
+        is_instruct_enabled = false;
+        $("#instruct_switch").removeClass("ButtonHover");
+
+        top_k.setValue(20);
+        top_p.setValue(0.8);
+        temperature.setValue(0.7);
+        repetition_penalty.setValue(1.0);
+        max_seq_len.setValue(max_seq_len_value);
+        
+        append_chat_info("启用Qwen3模型");
+    }
+
     const model_url = $(this).attr("data-model-url");
     let file_buffer = await fetch_cache_model(model_url);
 
@@ -657,7 +682,10 @@ $(".LoadRemoteModelButton").on("click", async function () {
     if(NANO_INFER_BACKEND === "wasm") {
         nano_worker.postMessage({
             eventType: "MODEL_FILE",
-            eventData: file_buffer
+            eventData: {
+                max_seq_len: max_seq_len_value,
+                file_buffer: file_buffer
+            }
         });
     }
     else if(NANO_INFER_BACKEND == "js") {

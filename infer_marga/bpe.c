@@ -185,7 +185,15 @@ void encode_bpe(Tokenizer* t, char *text, uint32_t *tokens, uint32_t *n_tokens) 
 
         for (int i=0; i < (*n_tokens-1); i++) {
             // check if we can merge the pair (tokens[i], tokens[i+1])
-            sprintf(str_buffer, "%s%s", t->vocab[tokens[i]], t->vocab[tokens[i+1]]);
+            // sprintf(str_buffer, "%s%s", t->vocab[tokens[i]], t->vocab[tokens[i+1]]);
+
+            const char *str1 = t->vocab[tokens[i]];
+            const char *str2 = t->vocab[tokens[i+1]];
+            char *ptr = str_buffer;
+            while (*str1 != '\0') *ptr++ = *str1++;
+            while (*str2 != '\0') *ptr++ = *str2++;
+            *ptr = '\0';
+
             int id = str_lookup(str_buffer, t->sorted_vocab, t->vocab_size);
             if (id != -1 && t->vocab_scores[id] > best_score) {
                 // this merge pair exists in vocab! record its score and position

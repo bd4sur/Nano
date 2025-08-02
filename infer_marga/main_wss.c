@@ -166,7 +166,7 @@ int main(int argc, char **argv) {
         else { show_usage(); }
     }
 
-    g_llm_ctx = llm_context_init(model_path, NULL, repetition_penalty, temperature, top_p, top_k, random_seed);
+    g_llm_ctx = llm_context_init(model_path, NULL, 32768, repetition_penalty, temperature, top_p, top_k, random_seed);
 
     if(!setlocale(LC_CTYPE, "")) return -1;
 
