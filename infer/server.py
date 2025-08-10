@@ -33,31 +33,9 @@ SSL_CERT_PATH = "/home/bd4sur/bd4sur.crt"
 SSL_PRIVATE_KEY_PATH = "/home/bd4sur/key_unencrypted.pem"
 
 NUM_GPU_LAYERS = -1 # 设为-1以加载全部层到GPU
-CURRENT_LLM_CONFIG_KEY = "Qwen3-30B-A3B-Q80-64K"
+CURRENT_LLM_CONFIG_KEY = "Qwen3-30B-A3B-Instruct-2507-Q80-64K"
 
 LLM_CONFIG = {
-    "Qwen2.5-7B-Q4KM": {
-        "model_type": "gguf",
-        "model_path": "/home/bd4sur/ai/_model/Qwen25/qwen2.5-7b-instruct-q4_k_m.gguf",
-        "seed": 3407,
-        "context_length": 0,
-        "temperature": 1,
-        "top_p": 0.9,
-        "top_k": 40,
-        "min_p": 0.0,
-        "repeat_penalty": 1.0
-    },
-    "Qwen2.5-14B-1M-Q80": {
-        "model_type": "gguf",
-        "model_path": "/home/bd4sur/ai/_model/Qwen25/Qwen2.5-14B-Instruct-1M-Q8_0.gguf",
-        "seed": 3407,
-        "context_length": 131072,
-        "temperature": 1,
-        "top_p": 0.9,
-        "top_k": 40,
-        "min_p": 0.0,
-        "repeat_penalty": 1.0
-    },
     "Qwen2.5-72B-Q4KM": {
         "model_type": "gguf",
         "model_path": "/home/bd4sur/ai/_model/Qwen25/qwen2.5-72b-instruct-q4_k_m.gguf",
@@ -80,17 +58,6 @@ LLM_CONFIG = {
         "min_p": 0.0,
         "repeat_penalty": 1.0
     },
-    "QwQ-32B-Q4KM": {
-        "model_type": "gguf",
-        "model_path": "/home/bd4sur/ai/_model/QwQ/qwq-32b-q4_k_m-unsloth.gguf",
-        "seed": 3407,
-        "context_length": 65536,
-        "temperature": 0.6,
-        "top_p": 0.95,
-        "top_k": 40,
-        "min_p": 0.0,
-        "repeat_penalty": 1.0
-    },
     "QwQ-32B-Q5KM": {
         "model_type": "gguf",
         "model_path": "/home/bd4sur/ai/_model/QwQ/qwq-32b-q5_k_m-unsloth.gguf",
@@ -101,22 +68,6 @@ LLM_CONFIG = {
         "top_k": 40,
         "min_p": 0.0,
         "repeat_penalty": 1.0
-    },
-    "QwQ-32B-Q80": {
-        "model_type": "gguf",
-        "model_path": "/home/bd4sur/ai/_model/QwQ/qwq-32b-q8_0-unsloth.gguf",
-        "seed": 3407,
-        "context_length": 65536,
-        "temperature": 0.6,
-        "top_p": 0.95,
-        "top_k": 40,
-        "min_p": 0.0,
-        "repeat_penalty": 1.0
-    },
-    "QwQ-32B-AWQ": {
-        "model_type": "torch",
-        "model_path": "/home/bd4sur/ai/_model/QwQ/QwQ-32B-AWQ",
-        "context_length": 65536
     },
     "Qwen3-32B-Q80-64K": {
         "model_type": "gguf",
@@ -140,6 +91,39 @@ LLM_CONFIG = {
         "min_p": 0.0,
         "repeat_penalty": 1.0
     },
+    "Qwen3-30B-A3B-Thinking-2507-Q80-64K": {
+        "model_type": "gguf",
+        "model_path": "/home/bd4sur/ai/_model/Qwen3/Qwen3-30B-A3B-Thinking-2507-Q8_0.gguf",
+        "seed": 3407,
+        "context_length": 65536,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
+    },
+    "Qwen3-30B-A3B-Instruct-2507-Q80-64K": {
+        "model_type": "gguf",
+        "model_path": "/home/bd4sur/ai/_model/Qwen3/Qwen3-30B-A3B-Instruct-2507-Q8_0.gguf",
+        "seed": 3407,
+        "context_length": 65536,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
+    },
+    "Qwen3-4B-Thinking-2507-Q80-64K": {
+        "model_type": "gguf",
+        "model_path": "/home/bd4sur/ai/_model/Qwen3/Qwen3-4B-Thinking-2507-Q8_0-unsloth.gguf",
+        "seed": 3407,
+        "context_length": 65536,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0
+    }
 }
 
 

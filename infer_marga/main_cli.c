@@ -7,7 +7,7 @@
 // 推理引擎实例（单例模式）
 static Nano_Context *g_llm_ctx;
 
-static char *MODEL_PATH_1 = "/home/bd4sur/ai/_model/qwen3-1b7-q80.bin";
+static char *MODEL_PATH_1 = "/home/bd4sur/ai/_model/Nano/qwen3-1b7-q80.bin";
 
 wchar_t *drop_thinking(wchar_t *input) {
     if (input == NULL) {

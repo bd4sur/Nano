@@ -37,7 +37,7 @@ class InferenceGPT:
 
         # 读取模型检查点和训练配置
         print(f"Loading model from `{self.model_path}`...")
-        checkpoint = torch.load(self.model_path, map_location=device)
+        checkpoint = torch.load(self.model_path, map_location=device, weights_only=False)
         train_config = checkpoint['train_config']
         model_config = checkpoint['model_config']
         tokenizer_config = checkpoint['tokenizer_config']
