@@ -40,7 +40,7 @@ uint32_t *encode_external(wchar_t *text, uint32_t *n_tokens_ptr) {
 wchar_t *decode_external(uint32_t *ids, uint32_t len) {
     // return decode(g_llm_ctx->tokenizer, ids, len);
     if (g_llm_ctx->llm->arch == LLM_ARCH_NANO) {
-        return decode(g_llm_ctx->tokenizer, ids, len);
+        return decode_nano(g_llm_ctx->tokenizer, ids, len);
     }
     else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
         return decode_bpe(g_llm_ctx->tokenizer, ids, len);

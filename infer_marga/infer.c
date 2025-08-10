@@ -60,7 +60,7 @@ uint32_t *string_to_ids(struct Map *unicode_to_id_map, wchar_t *utext) {
     return ids;
 }
 
-wchar_t *decode(Tokenizer *t, uint32_t *ids, uint32_t len) {
+wchar_t *decode_nano(Tokenizer *t, uint32_t *ids, uint32_t len) {
     wchar_t *out = (wchar_t *)calloc(len * MAX_TOKEN_LENGTH + 1, sizeof(wchar_t));
     uint32_t count = 0;
     for(uint32_t i = 0; i < len; i++) {
@@ -93,6 +93,19 @@ wchar_t *apply_chat_template(wchar_t *system_prompt, wchar_t *history, wchar_t *
     wcscat(prompt, user_input);
     wcscat(prompt, L"<|response_mark|>");
     return prompt;
+}
+
+wchar_t *decode(Nano_Context *ctx, uint32_t *ids, uint32_t len) {
+    if (ctx->llm->arch == LLM_ARCH_NANO) {
+        return decode_nano(ctx->tokenizer, ids, len);
+    }
+    else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
+        return decode_bpe(ctx->tokenizer, ids, len);
+    }
+    else {
+        printf("Error: unknown LLM arch.\n");
+        return NULL;
+    }
 }
 
 
@@ -1154,7 +1167,6 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, unsigned int 
 
 
 int32_t llm_session_step(Nano_Context *ctx, Nano_Session *session) {
-    Tokenizer *tokenizer = ctx->tokenizer;
     if (session->pos < session->max_seq_len) {
         if (session->t_0 == 0) { session->t_0 = time_in_ms(); }
 
@@ -1164,16 +1176,8 @@ int32_t llm_session_step(Nano_Context *ctx, Nano_Session *session) {
 
         if (session->is_prefilling == 0) {
             session->output_ids[session->num_prompt_tokens + (session->output_count)++] = session->next_token;
-            if (ctx->llm->arch == LLM_ARCH_NANO) {
-                session->output_text = decode(tokenizer, session->output_ids + session->num_prompt_tokens, session->output_count);
-            }
-            else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
-                session->output_text = decode_bpe(tokenizer, session->output_ids + session->num_prompt_tokens, session->output_count);
-            }
-            else {
-                printf("Error: unknown LLM arch.\n");
-                return LLM_STOPPED_WITH_ERROR;
-            }
+            session->output_text = decode(ctx, session->output_ids + session->num_prompt_tokens, session->output_count);
+            if (session->output_text == NULL) return LLM_STOPPED_WITH_ERROR;
         }
 
         session->pos++;
@@ -1305,7 +1309,7 @@ int32_t generate(
         }
         else if(is_prefilling == 0) {
             output_ids[num_prompt_tokens + output_count++] = next_token;
-            output_text = decode(tokenizer, output_ids + num_prompt_tokens, output_count);
+            output_text = decode_nano(tokenizer, output_ids + num_prompt_tokens, output_count);
 
             float tps = (pos-1) / (double)(time_in_ms() - t_0) * 1000;
 
