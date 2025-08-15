@@ -1,23 +1,25 @@
 CC = gcc
-CCFLAGS = -O3 -march=native -ffast-math -Wall
+CCFLAGS = -O3 -march=native -ffast-math -Wall -fopenmp
 LDFLAGS = -lm
 
-all: marga
+
+all: marga cli wss
+
 
 marga: nano_marga
-
 nano_marga: main_marga.c oled.c ui.c avltree.c bpe.c hashmap.c trie.c quant.c matmul_pthread.c infer.c
 	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
-cli: nano_cli
 
+cli: nano_cli
 nano_cli: main_cli.c bpe.c hashmap.c trie.c quant.c matmul_pthread.c infer.c
 	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
-wss: nano_wss
 
+wss: nano_wss
 nano_wss: main_wss.c bpe.c hashmap.c trie.c quant.c matmul_pthread.c infer.c
 	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lwebsockets
+
 
 install:
 	chmod +x nano_marga

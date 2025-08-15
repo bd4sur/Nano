@@ -7,6 +7,8 @@
 #include "keyboard.h"
 #include "infer.h"
 
+#define MODEL_ROOT_DIR "/home/bd4sur/ai/_model/Nano"
+// #define MODEL_ROOT_DIR "/emmc/_model"
 
 #define ALPHABET_COUNTDOWN_MAX (30)
 #define LONG_PRESS_THRESHOLD (360)
@@ -19,12 +21,13 @@
 // 推理引擎实例（单例模式）
 static Nano_Context *g_llm_ctx;
 
-static char *MODEL_PATH_1 = "/emmc/_model/nano_168m_625000_sft_947000_q80.bin";
-static char *MODEL_PATH_2 = "/emmc/_model/nano_56m_99000_sft_v2_200000_q80.bin";
-static char *MODEL_PATH_3 = "/emmc/_model/1-基础模型-99000_q80.bin";
-static char *LORA_PATH_3  = "/emmc/_model/2-插件-猫娘.bin";
-static char *MODEL_PATH_4 = "/emmc/_model/qwen3-0b6-q80.bin";
-static char *MODEL_PATH_5 = "/emmc/_model/qwen3-1b7-q80.bin";
+static char *MODEL_PATH_1 = MODEL_ROOT_DIR "/nano_168m_625000_sft_947000_q80.bin";
+static char *MODEL_PATH_2 = MODEL_ROOT_DIR "/nano_56m_99000_sft_v2_200000_q80.bin";
+static char *MODEL_PATH_3 = MODEL_ROOT_DIR "/1-基础模型-99000_q80.bin";
+static char *LORA_PATH_3  = MODEL_ROOT_DIR "/2-插件-猫娘.bin";
+static char *MODEL_PATH_4 = MODEL_ROOT_DIR "/qwen3-0b6-q80.bin";
+static char *MODEL_PATH_5 = MODEL_ROOT_DIR "/qwen3-1b7-q80.bin";
+static char *MODEL_PATH_6 = MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q80.bin";
 
 static float g_tps_of_last_session = 0.0f;
 static wchar_t g_output_of_last_session[OUTPUT_BUFFER_LENGTH];
@@ -111,20 +114,6 @@ int32_t on_finished(Nano_Session *session) {
 int main() {
     if(!setlocale(LC_CTYPE, "")) return -1;
 
-    ///////////////////////////////////////
-    // OLED 初始化
-
-    OLED_Init();
-    OLED_Clear();
-
-    ////////////////////////////////////////////////
-    // LLM Init
-
-    OLED_SoftClear();
-    render_text(L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...", 0);
-    OLED_Refresh();
-    usleep(500*1000);
-
     float repetition_penalty = 1.05f;
     float temperature = 1.0f;
     float top_p = 0.5f;
@@ -132,7 +121,11 @@ int main() {
     unsigned long long random_seed = (unsigned int)time(NULL);
     uint32_t max_seq_len = 512;
 
-    g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
+    ///////////////////////////////////////
+    // OLED 初始化
+
+    OLED_Init();
+    OLED_Clear();
 
     show_splash_screen();
 
@@ -167,6 +160,7 @@ int main() {
     // 全局文字输入缓冲
     uint32_t *input_buffer = (uint32_t *)calloc(INPUT_BUFFER_LENGTH, sizeof(uint32_t)); // 文字输入缓冲区
     int32_t input_counter = 0;
+    int32_t cursor_pos = 0; // 光标位置
 
     // 推理结果翻页相关
     int32_t output_line_num = 0;
@@ -281,8 +275,28 @@ STATE_M2:// 主菜单。
 
             // 短按2键：进入文本输入就绪状态
             else if (key_edge == -1 && key_code == 2) {
+
+                // LLM Init
+
+                OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...", 0); OLED_Refresh();
+
+                repetition_penalty = 1.05f;
+                temperature = 1.0f;
+                top_p = 0.5f;
+                top_k = 0;
+                random_seed = (unsigned int)time(NULL);
+                max_seq_len = 512;
+
+                g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
+
+                OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
+                usleep(1000*1000);
+
+                // 刷新文本输入框
                 input_buffer = refresh_input_buffer(input_buffer, &input_counter);
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                cursor_pos = input_counter;
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
+                current_page = 0;
                 STATE = 0;
             }
 
@@ -344,7 +358,7 @@ STATE_M3:// 文本显示状态
             break;
 
         /////////////////////////////////////////////
-STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输入缓冲区的内容提交给大模型
+STATE_0:// 文字编辑器状态：等待输入拼音/字母/数字，或者将文字输入缓冲区的内容提交给大模型
         /////////////////////////////////////////////
 
         case 0:
@@ -364,7 +378,7 @@ STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输�
             else if (key_edge == -1 && key_code == 0) {
                 if (ime_mode_flag == IME_MODE_NUMBER) {
                     input_buffer[input_counter++] = L'0';
-                    render_input_buffer(input_buffer, ime_mode_flag, 1);
+                    render_input_buffer(input_buffer, ime_mode_flag, -1);
                     STATE = 0;
                 }
             }
@@ -379,7 +393,7 @@ STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输�
                 }
                 else if (ime_mode_flag == IME_MODE_NUMBER) {
                     input_buffer[input_counter++] = L'0' + key_code;
-                    render_input_buffer(input_buffer, ime_mode_flag, 1);
+                    render_input_buffer(input_buffer, ime_mode_flag, -1);
                     STATE = 0;
                 }
                 else if (ime_mode_flag == IME_MODE_ALPHABET) {
@@ -413,7 +427,7 @@ STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输�
             else if ((key_edge == -1 || key_edge == -2) && key_code == 10) {
                 if (input_counter >= 1) {
                     input_buffer[--input_counter] = 0;
-                    render_input_buffer(input_buffer, ime_mode_flag, 1);
+                    render_input_buffer(input_buffer, ime_mode_flag, -1);
                     STATE = 0;
                 }
                 else {
@@ -435,13 +449,13 @@ STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输�
             // 长+短按C键：依次切换汉-英-数输入模式
             else if ((key_edge == -1 || key_edge == -2) && key_code == 12) {
                 ime_mode_flag = (ime_mode_flag + 1) % 3;
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
                 STATE = 0;
             }
 
             // 短按D键：提交
             else if (key_edge == -1 && key_code == 13) {
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 STATE = 10;
                 goto STATE_10;
@@ -467,7 +481,7 @@ STATE_0:// 就绪状态：等待输入拼音/字母/数字，或者将文字输�
             // 长+短按#键：（关于）光标向右移动
             else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
                 OLED_SoftClear();
-                render_text(L"Project MARGA!\nV2025.5\n电子鹦鹉笼\n\n(c) 2025 BD4SUR", 0);
+                render_text(L"Project MARGA!\nV2025.8\n电子鹦鹉笼\n\n(c) 2025 BD4SUR", 0);
                 OLED_Refresh();
 
                 STATE = 5;
@@ -491,7 +505,7 @@ STATE_1:// 拼音输入状态
 
             // 短按A键：取消输入拼音，清除已输入的所有按键，回到初始状态
             else if (key_edge == -1 && key_code == 10) {
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 current_page = 0;
                 pinyin_keys = 0;
@@ -540,7 +554,7 @@ STATE_2:// 候选字选择状态
                     printf("选定了列表之外的字，忽略。\n");
                 }
 
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 free(candidates); candidates = NULL;
                 free_candidate_pages(candidate_pages, candidate_page_num); candidate_pages = NULL;
@@ -572,7 +586,7 @@ STATE_2:// 候选字选择状态
 
             // 短按A键：取消选择，回到初始状态
             else if (key_edge == -1 && key_code == 10) {
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 current_page = 0;
                 pinyin_keys = 0;
@@ -599,7 +613,7 @@ STATE_3:// 符号选择状态
                     printf("选定了列表之外的符号，忽略。\n");
                 }
 
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 free(candidates); candidates = NULL;
                 free_candidate_pages(candidate_pages, candidate_page_num); candidate_pages = NULL;
@@ -631,7 +645,7 @@ STATE_3:// 符号选择状态
 
             // 短按A键：取消选择，回到初始状态
             else if (key_edge == -1 && key_code == 10) {
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 current_page = 0;
                 pinyin_keys = 0;
@@ -650,11 +664,18 @@ STATE_4:// 选择语言模型状态
             if (key_edge == -1 && key_code == 1) {
                 llm_context_free(g_llm_ctx);
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...", 0); OLED_Refresh();
+
+                repetition_penalty = 1.05f;
+                temperature = 1.0f;
+                top_p = 0.5f;
+                top_k = 0;
+                random_seed = (unsigned int)time(NULL);
                 max_seq_len = 512;
+
                 g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
                 usleep(1000*1000);
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
                 current_page = 0;
                 STATE = 0;
             }
@@ -663,11 +684,18 @@ STATE_4:// 选择语言模型状态
             else if (key_edge == -1 && key_code == 2) {
                 llm_context_free(g_llm_ctx);
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...", 0); OLED_Refresh();
+
+                repetition_penalty = 1.05f;
+                temperature = 1.0f;
+                top_p = 0.5f;
+                top_k = 0;
+                random_seed = (unsigned int)time(NULL);
                 max_seq_len = 512;
+
                 g_llm_ctx = llm_context_init(MODEL_PATH_2, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
                 usleep(1000*1000);
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
                 current_page = 0;
                 STATE = 0;
             }
@@ -676,11 +704,18 @@ STATE_4:// 选择语言模型状态
             else if (key_edge == -1 && key_code == 3) {
                 llm_context_free(g_llm_ctx);
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...", 0); OLED_Refresh();
+
+                repetition_penalty = 1.05f;
+                temperature = 1.0f;
+                top_p = 0.5f;
+                top_k = 0;
+                random_seed = (unsigned int)time(NULL);
                 max_seq_len = 512;
+
                 g_llm_ctx = llm_context_init(MODEL_PATH_3, LORA_PATH_3, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
                 usleep(1000*1000);
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
                 current_page = 0;
                 STATE = 0;
             }
@@ -689,11 +724,18 @@ STATE_4:// 选择语言模型状态
             else if (key_edge == -1 && key_code == 4) {
                 llm_context_free(g_llm_ctx);
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...", 0); OLED_Refresh();
+
+                repetition_penalty = 1.0f;
+                temperature = 0.6f;
+                top_p = 0.95f;
+                top_k = 20;
+                random_seed = (unsigned int)time(NULL);
                 max_seq_len = 32768;
-                g_llm_ctx = llm_context_init(MODEL_PATH_4, NULL, max_seq_len, 1.0, 0.6, 0.95, 20, random_seed);
+
+                g_llm_ctx = llm_context_init(MODEL_PATH_4, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
                 usleep(1000*1000);
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
                 current_page = 0;
                 STATE = 0;
             }
@@ -702,11 +744,38 @@ STATE_4:// 选择语言模型状态
             else if (key_edge == -1 && key_code == 5) {
                 llm_context_free(g_llm_ctx);
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...", 0); OLED_Refresh();
+
+                repetition_penalty = 1.0f;
+                temperature = 0.6f;
+                top_p = 0.95f;
+                top_k = 20;
+                random_seed = (unsigned int)time(NULL);
                 max_seq_len = 32768;
-                g_llm_ctx = llm_context_init(MODEL_PATH_5, NULL, max_seq_len, 1.0, 0.6, 0.95, 20, random_seed);
+
+                g_llm_ctx = llm_context_init(MODEL_PATH_5, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
                 usleep(1000*1000);
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
+                current_page = 0;
+                STATE = 0;
+            }
+
+            // 短按6键
+            else if (key_edge == -1 && key_code == 6) {
+                llm_context_free(g_llm_ctx);
+                OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-4B-Inst-2507\n 请稍等...", 0); OLED_Refresh();
+
+                repetition_penalty = 1.0f;
+                temperature = 0.7f;
+                top_p = 0.8f;
+                top_k = 20;
+                random_seed = (unsigned int)time(NULL);
+                max_seq_len = 32768;
+
+                g_llm_ctx = llm_context_init(MODEL_PATH_6, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
+                OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
+                usleep(1000*1000);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
                 current_page = 0;
                 STATE = 0;
             }
@@ -719,7 +788,7 @@ STATE_4:// 选择语言模型状态
 
                 usleep(1000*1000);
 
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 current_page = 0;
                 STATE = 0;
@@ -735,7 +804,7 @@ STATE_5:// 显示帮助和关于信息状态
 
             // 短按A键：回到初始状态
             if (key_edge == -1 && key_code == 10) {
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 current_page = 0;
                 pinyin_keys = 0;
@@ -850,7 +919,7 @@ STATE_10: // 提交候选字到LLM，开始推理
             else if (key_edge == -1 && key_code == 10) {
 
                 input_buffer = refresh_input_buffer(input_buffer, &input_counter);
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 current_page = 0;
                 STATE = 0;
@@ -909,10 +978,11 @@ STATE_20: // 录音进行中
                 stop_recording();
                 play_recording();
 
-                STATE = 0;
                 // 软触发A键
-                key_edge = -1;
-                key_code = 10;
+                // key_edge = -1;
+                // key_code = 10;
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
+                STATE = 0;
                 goto STATE_0;
             }
 
@@ -953,7 +1023,7 @@ STATE_20: // 录音进行中
                     printf("选定了列表之外的字母，忽略。\n");
                 }
 
-                render_input_buffer(input_buffer, ime_mode_flag, 1);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 alphabet_current_key = 255;
                 alphabet_index = 0;

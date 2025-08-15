@@ -38,7 +38,7 @@ void show_main_menu() {
     OLED_Refresh();
 }
 
-void render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, uint32_t is_show_cursor) {
+int32_t render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, int32_t cursor_pos) {
     OLED_SoftClear();
     wchar_t text[INPUT_BUFFER_LENGTH] = L"请输入问题：     [";
     if (ime_mode_flag == IME_MODE_HANZI) {
@@ -51,9 +51,33 @@ void render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, uint32_
         wcscat(text, L"数]\n");
     }
     wcscat(text, input_buffer);
-    if (is_show_cursor) wcscat(text, L"_");
+    // if (cursor_pos) wcscat(text, L"_");
     render_text(text, 0);
+
+    // 绘制光标
+
+    int32_t char_count = 0;
+    int32_t break_count = 0;
+    int32_t line_x_pos = 0;
+    for (char_count = 0; char_count < wcslen(input_buffer); char_count++) {
+        wchar_t ch = input_buffer[char_count];
+        int32_t char_width = (ch < 127) ? ((ch == '\n') ? 0 : 6) : 12;
+        if (line_x_pos + char_width >= 128 || ch == '\n') {
+            break_count++;
+            line_x_pos = 0;
+        }
+        line_x_pos += char_width;
+        if (cursor_pos == char_count) break;
+    }
+
+    uint8_t x = line_x_pos;
+    uint8_t y = (uint8_t)(13 * (break_count + 1)); // 12x12字模底部本来就有1px的空白，加上行间距1px，所以每行的起始位置是13的倍数
+    OLED_DrawLine(x, y-1, x, y+12, 1);
+    OLED_DrawLine(x+1, y-1, x+1, y+12, 1);
+
     OLED_Refresh();
+
+    return char_count;
 }
 
 void render_pinyin_input(uint32_t **candidate_pages, uint32_t pinyin_keys, uint32_t current_page, uint32_t candidate_page_num, uint32_t is_picking) {

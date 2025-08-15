@@ -12,7 +12,7 @@
 
 void show_splash_screen();
 void show_main_menu();
-void render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, uint32_t is_show_cursor);
+int32_t render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, int32_t cursor_pos);
 void render_pinyin_input(uint32_t **candidate_pages, uint32_t pinyin_keys, uint32_t current_page, uint32_t candidate_page_num, uint32_t is_picking);
 void render_symbol_input(uint32_t **candidate_pages, uint32_t current_page, uint32_t candidate_page_num);
 void render_scroll_bar(int32_t line_num, int32_t current_line);
