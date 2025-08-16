@@ -142,7 +142,7 @@ int main() {
     uint32_t ime_mode_flag = 0; // 0汉字 1英文 2数字
 
     // 符号列表
-    wchar_t symbols[55] = L"，。、？！：；“”‘’（）《》…―～・【】 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+    wchar_t symbols[55] = L"，。、？！：；“”‘’（）《》…—～·【】 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 
     // 按键对应的字母列表
     wchar_t alphabet[10][32] = {L"", L" .,;:?!-/+_=&\"*", L"abcABC", L"defDEF", L"ghiGHI", L"jklJKL", L"mnoMNO", L"pqrsPRQS", L"tuvTUV", L"wxyzWXYZ"};

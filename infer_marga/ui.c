@@ -2,7 +2,73 @@
 #include <time.h>
 
 #include "ui.h"
+#include "oledfont.h"
 #include "oled.h"
+
+
+
+void text_typeset(
+    uint32_t *text,          // in  待排版的文本
+    int32_t view_width,      // in  视图宽度
+    int32_t view_height,     // in  视图高度
+    int32_t start_line,      // in  从哪行开始显示（用于滚动）
+    int32_t *length,         // out 文本长度（字符数）
+    int32_t *break_pos,      // out 折行位置数组
+    int32_t *view_lines,     // out 可见行数
+    int32_t *view_start_pos, // out 可见区域第一个字符的index
+    int32_t *view_end_pos    // out 可见区域最后一个字符的index
+) {
+    int32_t char_count = 0;
+    int32_t break_count = 0;
+    int32_t line_x_pos = 0;
+    for (char_count = 0; char_count < wcslen(text); char_count++) {
+        wchar_t ch = text[char_count];
+        int32_t char_width = (ch < 127) ? ((ch == '\n') ? 0 : FONT_WIDTH_HALF) : FONT_WIDTH_FULL;
+        if (line_x_pos + char_width >= view_width || ch == '\n') {
+            break_pos[break_count] = char_count;
+            break_count++;
+            line_x_pos = 0;
+        }
+        line_x_pos += char_width;
+    }
+    break_pos[break_count] = char_count; // 最后一个字符视为换行，但不计入break_count
+
+    // 计算当前视图最大能容纳的行数。
+    //   NOTE 考虑到行间距为1，且末行以下无间距，因此分子加1以去除末行无间距的影响。
+    //        例如，高度为64的屏幕，实际可容纳(64+1)/(12+1)=5行。
+    int32_t max_view_lines = (view_height + 1) / (FONT_HEIGHT + 1);
+
+    int32_t _view_lines = break_count - 1;
+    *view_lines =_view_lines;
+    *length = char_count;
+
+    // 对start_line的检查和标准化
+    if (start_line < 0) {
+        // start_line小于0，解释为反向卷动，例如-1意味着卷动到文本末行
+        start_line = start_line % _view_lines;
+        start_line += _view_lines;
+    }
+    else if (start_line >= _view_lines) {
+        // start_line超过了末行，则对文本行数取模后滚动
+        start_line = start_line % _view_lines;
+    }
+
+    // 情况1：start_line介于首行（0）和（使得末行进入可见区域以下1行的位置），即视图内不包含末行
+    if (start_line < _view_lines - max_view_lines) {
+        *view_start_pos = break_pos[start_line];
+        *view_end_pos = break_pos[start_line + max_view_lines] - 1;
+    }
+    // 情况2：start_line等于或超过了（使得末行恰好位于可见区域底行的位置），但尚未超出末行，也就是末行位于视图内
+    else if (start_line >= _view_lines - max_view_lines && start_line < _view_lines) {
+        *view_start_pos = break_pos[start_line];
+        *view_end_pos = char_count - 1;
+    }
+}
+
+
+
+
+
 
 void show_splash_screen() {
     OLED_SoftClear();
