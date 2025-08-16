@@ -175,10 +175,11 @@ int main() {
     int32_t is_recording = 0;
 
     // 按键状态
-    uint8_t  key_code = 16; // 大于等于16为没有任何按键，0-15为按键
-    int8_t   key_edge = 0;  // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)
-    uint32_t key_timer = 0; // 按下计时器
-    uint8_t  key_mask = 0;  // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
+    uint8_t  key_code = 16;  // 大于等于16为没有任何按键，0-15为按键
+    int8_t   key_edge = 0;   // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)
+    uint32_t key_timer = 0;  // 按下计时器
+    uint8_t  key_mask = 0;   // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
+    uint8_t  key_repeat = 0; // 触发一次长按后，只要不松手，该标记置1，直到物理按键松开后置0。若该标记为1，则在按住时触发连续重复动作。
 
     while (1) {
         char key = keyboard_read_key();
@@ -193,32 +194,38 @@ int main() {
             // 松开瞬间（下降沿）
             else {
                 key_code = prev_key;
-                // 短按
-                if (key_timer >= 0 && key_timer < LONG_PRESS_THRESHOLD) {
-                    // printf("下降 短按：%d，计时=%d，key_mask=%d\n", (int)key, key_timer, (int)key_mask);
+                // 短按（或者通过长按触发重复动作状态后反复触发）
+                if (key_repeat == 1 || key_timer >= 0 && key_timer < LONG_PRESS_THRESHOLD) {
                     key_edge = -1;
                     key_timer = 0;
                 }
                 // 长按
                 else if (key_timer >= LONG_PRESS_THRESHOLD) {
-                    // printf("下降 长按：%d，计时=%d，key_mask=%d\n", (int)key, key_timer, (int)key_mask);
                     key_edge = -2;
                     key_timer = 0;
+                    key_repeat = 1;
                 }
             }
         }
         // 按住或松开
         else {
-            // 按住（按住可以反复触发长按）
+            // 按住
             if (key != 16) {
                 key_code = key;
                 key_edge = 0;
                 key_timer++;
-                if (key_timer >= LONG_PRESS_THRESHOLD) {
+                // 若重复动作标记key_repeat在一次长按后点亮，则继续按住可以反复触发短按
+                if (key_repeat == 1) {
+                    key_edge = -2;
+                    key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
+                    key = 16; // 便于后面设置prev_key为16（无键按下）
+                    key_repeat = 1;
+                }
+                // 如果没有点亮动作标记key_repeat，则达到长按阈值后触发长按事件
+                else if (key_timer >= LONG_PRESS_THRESHOLD) {
                     // printf("按住超时触发长按：%d，计时=%d，key_mask=%d\n", (int)key, key_timer, (int)key_mask);
                     key_edge = -2;
-                    key_timer = 0;
-                    key_mask = 1; // 软复位置1，即强制恢复为无按键状态，尽管物理上有键按下
+                    key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
                     key = 16; // 便于后面设置prev_key为16（无键按下）
                 }
             }
@@ -228,6 +235,7 @@ int main() {
                 key_edge = 0;
                 key_timer = 0;
                 key_mask = 0;
+                key_repeat = 0;
             }
         }
         prev_key = key;
