@@ -278,7 +278,8 @@ void OLED_ShowChar(uint8_t x, uint8_t y, uint8_t *glyph, uint8_t font_width, uin
     uint32_t bytenum = (font_height / 8 + ((font_height % 8) ? 1 : 0)) * font_width; // 得到字体一个字符对应点阵集所占的字节数
     for (uint32_t i = 0; i < bytenum; i++) {
         uint8_t temp = glyph[i];
-        for (uint8_t m = 0; m < 8; m++) {
+        uint8_t available_bits = (i >= bytenum - font_width) ? (8 - (bytenum / font_width) * 8 + font_height) : 8; // 只绘制有效位
+        for (uint8_t m = 0; m < available_bits; m++) {
             if (temp & 0x01)
                 OLED_DrawPoint(x, y, mode);
             else

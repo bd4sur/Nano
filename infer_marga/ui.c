@@ -160,7 +160,11 @@ void show_splash_screen() {
     strftime(datetime_string_buffer, sizeof(datetime_string_buffer), "%Y-%m-%d %H:%M:%S", timeinfo); // 格式化输出
     mbstowcs(datetime_wcs_buffer, datetime_string_buffer, 80);
 
-    render_line(L"Project MARGA!", 24, 2, 1);
+    for (int i = 1; i <= 14; i++) {
+        OLED_DrawLine(1, i, 127, i, 1);
+    }
+
+    render_line(L"Project MARGA!", 24, 2, 0);
     render_line(L"完全离线电子鹦鹉", 16, 20, 1);
     // render_line(L"自研Nano模型强力驱动", 4, 34, 1);
     render_line(datetime_wcs_buffer, 8, 34, 1);
