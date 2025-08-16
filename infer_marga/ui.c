@@ -13,7 +13,7 @@ void text_typeset(
     int32_t view_height,     // in  视图高度
     int32_t start_line,      // in  从哪行开始显示（用于滚动）
     int32_t *length,         // out 文本长度（字符数）
-    int32_t *break_pos,      // out 折行位置数组
+    int32_t *break_pos,      // out 折行位置（每行第一个字符的index）数组
     int32_t *view_lines,     // out 可见行数
     int32_t *view_start_pos, // out 可见区域第一个字符的index
     int32_t *view_end_pos    // out 可见区域最后一个字符的index
@@ -24,29 +24,43 @@ void text_typeset(
     for (char_count = 0; char_count < wcslen(text); char_count++) {
         wchar_t ch = text[char_count];
         int32_t char_width = (ch < 127) ? ((ch == '\n') ? 0 : FONT_WIDTH_HALF) : FONT_WIDTH_FULL;
-        if (line_x_pos + char_width >= view_width || ch == '\n') {
+        if (char_count == 0 || line_x_pos + char_width >= view_width) {
             break_pos[break_count] = char_count;
+            break_count++;
+            line_x_pos = 0;
+        }
+        else if (ch == '\n') {
+            break_pos[break_count] = char_count + 1;
             break_count++;
             line_x_pos = 0;
         }
         line_x_pos += char_width;
     }
-    break_pos[break_count] = char_count; // 最后一个字符视为换行，但不计入break_count
 
     // 计算当前视图最大能容纳的行数。
     //   NOTE 考虑到行间距为1，且末行以下无间距，因此分子加1以去除末行无间距的影响。
     //        例如，高度为64的屏幕，实际可容纳(64+1)/(12+1)=5行。
     int32_t max_view_lines = (view_height + 1) / (FONT_HEIGHT + 1);
 
-    int32_t _view_lines = break_count - 1;
+    int32_t _view_lines = break_count;
     *view_lines =_view_lines;
     *length = char_count;
 
     // 对start_line的检查和标准化
     if (start_line < 0) {
-        // start_line小于0，解释为反向卷动，例如-1意味着卷动到文本末行
-        start_line = start_line % _view_lines;
-        start_line += _view_lines;
+        // start_line小于0，解释为将文字末行卷动到视图的某一行。例如：-1代表将文字末行卷动到视图的倒数1行、-max_view_lines代表将文字末行卷动到视图的第1行。
+        //   若start_line小于-max_view_lines，则等效于-max_view_lines，保证文字内容不会卷到视图以外。
+        if (-start_line <= max_view_lines) {
+            if (_view_lines >= max_view_lines) {
+                start_line = _view_lines - 1 - start_line - max_view_lines;
+            }
+            else {
+                start_line = 0;
+            }
+        }
+        else {
+            start_line = _view_lines - 1;
+        }
     }
     else if (start_line >= _view_lines) {
         // start_line超过了末行，则对文本行数取模后滚动
@@ -59,6 +73,7 @@ void text_typeset(
         *view_end_pos = break_pos[start_line + max_view_lines] - 1;
     }
     // 情况2：start_line等于或超过了（使得末行恰好位于可见区域底行的位置），但尚未超出末行，也就是末行位于视图内
+    //        若文本行数不大于视图行数，则一定满足此条件。
     else if (start_line >= _view_lines - max_view_lines && start_line < _view_lines) {
         *view_start_pos = break_pos[start_line];
         *view_end_pos = char_count - 1;
@@ -67,6 +82,68 @@ void text_typeset(
 
 
 
+
+// 渲染一行文本，mode为1则为正显，为0则为反白
+void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
+    uint32_t x_pos = x;
+    uint32_t y_pos = y;
+    for (uint32_t i = 0; i < wcslen(line); i++) {
+        uint32_t current_char = line[i];
+        uint8_t font_width = 12;
+        uint8_t font_height = 12;
+        uint8_t *glyph = get_glyph(current_char, &font_width, &font_height);
+        if (!glyph) {
+            printf("出现了字库之外的字符！\n");
+            break;
+        }
+        if (x_pos + font_width >= 128) {
+            break;
+        }
+        OLED_ShowChar(x_pos, y_pos, glyph, font_width, font_height, (mode % 2));
+        x_pos += font_width;
+    }
+}
+
+// 返回值：文本折行后的行数（含换行符）
+int32_t render_text(wchar_t *text, int32_t start_line) {
+    int32_t length = 0;
+    int32_t break_pos[STRING_BUFFER_LENGTH];
+    int32_t view_lines = 0;
+    int32_t view_start_pos = 0;
+    int32_t view_end_pos = 0;
+
+    text_typeset(text, 128, 64, start_line, &length, break_pos, &view_lines, &view_start_pos, &view_end_pos);
+
+    int x_pos = 0;
+    int y_pos = 0;
+    // for (int i = 0; i < wcslen(wrapped_clipped); i++) {
+    for (int i = view_start_pos; i <= view_end_pos; i++) {
+        uint32_t current_char = text[i];
+        uint8_t font_width = 12;
+        uint8_t font_height = 12;
+        if (current_char == '\n') {
+            x_pos = 0;
+            if(i > 0) y_pos += (font_height + 1);
+            continue;
+        }
+        uint8_t *glyph = get_glyph(current_char, &font_width, &font_height);
+        if (!glyph) {
+            printf("出现了字库之外的字符[%d]\n", current_char);
+            glyph = get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+        }
+        if (x_pos + font_width >= 128) {
+            y_pos += (font_height + 1);
+            x_pos = 0;
+        }
+        OLED_ShowChar(x_pos, y_pos, glyph, font_width, font_height, 1);
+        x_pos += font_width;
+    }
+
+    // free(wrapped);
+    // free(wrapped_clipped);
+
+    return view_lines;
+}
 
 
 

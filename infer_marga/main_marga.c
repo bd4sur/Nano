@@ -93,7 +93,7 @@ int32_t on_decoding(Nano_Session *session) {
     }
     // DECODE_LED_ON
     OLED_SoftClear();
-    int32_t line_num = render_text(session->output_text, 0);
+    int32_t line_num = render_text(session->output_text, -1);
     render_scroll_bar(line_num, line_num - 5);
     OLED_Refresh();
     // DECODE_LED_OFF
@@ -164,7 +164,7 @@ int main() {
 
     // 推理结果翻页相关
     int32_t output_line_num = 0;
-    int32_t output_shift = 0;
+    int32_t output_current_line = 0;
 
     // 英文字母输入模式的倒计时
     int32_t alphabet_countdown = -1; // 从ALPHABET_COUNTDOWN_MAX开始，每轮主循环后倒数减1，减到0时清除进度条，减到-1意味着英文字母输入状态结束
@@ -261,14 +261,11 @@ STATE_M2:// 主菜单。
 
             // 短按1键
             if (key_edge == -1 && key_code == 1) {
-                // 先计算文本行数，不实际渲染
-                output_line_num = render_text(g_anniversory, 0);
-
                 // 文本卷到顶，渲染
                 OLED_SoftClear();
-                output_shift = (output_line_num - 5);
-                render_text(g_anniversory, output_shift);
-                render_scroll_bar(output_line_num, output_line_num - output_shift - 5);
+                output_current_line = 0;
+                output_line_num = render_text(g_anniversory, output_current_line);
+                render_scroll_bar(output_line_num, output_current_line);
                 OLED_Refresh();
                 STATE = -3;
             }
@@ -323,16 +320,16 @@ STATE_M3:// 文本显示状态
 
             // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
             else if ((key_edge == -1 || key_edge == -2) && key_code == 14) {
-                if (output_shift == (output_line_num - 5)) { // 卷到顶的卷动量
-                    output_shift = 0;
+                if (output_current_line <= 0) { // 卷到顶
+                    output_current_line = output_line_num - 5;
                 }
                 else {
-                    output_shift++;
+                    output_current_line--;
                 }
 
                 OLED_SoftClear();
-                render_text(g_anniversory, output_shift);
-                render_scroll_bar(output_line_num, output_line_num - output_shift - 5);
+                render_text(g_anniversory, output_current_line);
+                render_scroll_bar(output_line_num, output_current_line);
                 OLED_Refresh();
 
                 STATE = -3;
@@ -340,16 +337,16 @@ STATE_M3:// 文本显示状态
 
             // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
             else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
-                if (output_shift == 0) {
-                    output_shift = (output_line_num - 5); // 卷到顶的卷动量
+                if (output_current_line >= (output_line_num - 5)) { // 卷到底
+                    output_current_line = 0;
                 }
                 else {
-                    output_shift--;
+                    output_current_line++;
                 }
 
                 OLED_SoftClear();
-                render_text(g_anniversory, output_shift);
-                render_scroll_bar(output_line_num, output_line_num - output_shift - 5);
+                render_text(g_anniversory, output_current_line);
+                render_scroll_bar(output_line_num, output_current_line);
                 OLED_Refresh();
 
                 STATE = -3;
@@ -855,12 +852,13 @@ STATE_10: // 提交候选字到LLM，开始推理
                     wcscat(prompt_and_output, tps_wcstr);
 
                     wcscpy(g_output_of_last_session, prompt_and_output);
-                    output_line_num = render_text(g_output_of_last_session, 0);
-                    render_scroll_bar(output_line_num, output_line_num - 5);
+                    output_line_num = render_text(g_output_of_last_session, -1);
+                    output_current_line = (output_line_num >= 5) ? output_line_num - 5 : 0;
+                    render_scroll_bar(output_line_num, output_current_line);
                     OLED_Refresh();
 
                     // OLED_SoftClear();
-                    // render_text(L"推理中止 QAQ\n\n\n\n按[取消]键返回。", 0);
+                    // render_text(L"推理中止 QAQ\n\n\n\n按[取消]键返回。", -1);
                     // OLED_Refresh();
                     // usleep(1000 * 1000);
 
@@ -881,8 +879,9 @@ STATE_10: // 提交候选字到LLM，开始推理
                     wcscat(prompt_and_output, tps_wcstr);
 
                     wcscpy(g_output_of_last_session, prompt_and_output);
-                    output_line_num = render_text(g_output_of_last_session, 0);
-                    render_scroll_bar(output_line_num, output_line_num - 5);
+                    output_line_num = render_text(g_output_of_last_session, -1);
+                    output_current_line = (output_line_num >= 5) ? output_line_num - 5 : 0;
+                    render_scroll_bar(output_line_num, output_current_line);
                     OLED_Refresh();
 
                     STATE = 10;
@@ -902,12 +901,13 @@ STATE_10: // 提交候选字到LLM，开始推理
                     wcscat(prompt_and_output, tps_wcstr);
 
                     wcscpy(g_output_of_last_session, prompt_and_output);
-                    output_line_num = render_text(g_output_of_last_session, 0);
-                    render_scroll_bar(output_line_num, output_line_num - 5);
+                    output_line_num = render_text(g_output_of_last_session, -1);
+                    output_current_line = (output_line_num >= 5) ? output_line_num - 5 : 0;
+                    render_scroll_bar(output_line_num, output_current_line);
                     OLED_Refresh();
 
                     // OLED_SoftClear();
-                    // render_text(L"推理过程异常退出。\n\n\n\n按[取消]键返回。", 0);
+                    // render_text(L"推理过程异常退出。\n\n\n\n按[取消]键返回。", -1);
                     // OLED_Refresh();
                     // usleep(1000 * 1000);
 
@@ -927,16 +927,16 @@ STATE_10: // 提交候选字到LLM，开始推理
 
             // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
             else if ((key_edge == -1 || key_edge == -2) && key_code == 14) {
-                if (output_shift == (output_line_num - 5)) { // 卷到顶的卷动量
-                    output_shift = 0;
+                if (output_current_line <= 0) { // 卷到顶
+                    output_current_line = output_line_num - 5;
                 }
                 else {
-                    output_shift++;
+                    output_current_line--;
                 }
 
                 OLED_SoftClear();
-                render_text(g_output_of_last_session, output_shift);
-                render_scroll_bar(output_line_num, output_line_num - output_shift - 5);
+                render_text(g_output_of_last_session, output_current_line);
+                render_scroll_bar(output_line_num, output_current_line);
                 OLED_Refresh();
 
                 STATE = 10;
@@ -944,16 +944,16 @@ STATE_10: // 提交候选字到LLM，开始推理
 
             // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
             else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
-                if (output_shift == 0) {
-                    output_shift = (output_line_num - 5); // 卷到顶的卷动量
+                if (output_current_line >= (output_line_num - 5)) { // 卷到底
+                    output_current_line = 0;
                 }
                 else {
-                    output_shift--;
+                    output_current_line++;
                 }
 
                 OLED_SoftClear();
-                render_text(g_output_of_last_session, output_shift);
-                render_scroll_bar(output_line_num, output_line_num - output_shift - 5);
+                render_text(g_output_of_last_session, output_current_line);
+                render_scroll_bar(output_line_num, output_current_line);
                 OLED_Refresh();
 
                 STATE = 10;

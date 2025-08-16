@@ -62,7 +62,5 @@ void OLED_ColorTurn(uint8_t i);
 void OLED_DisplayTurn(uint8_t i);
 
 uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height);
-void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode);
-int32_t render_text(wchar_t *text, int32_t line_pos);
 
 #endif

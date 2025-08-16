@@ -1,6 +1,7 @@
 #ifndef __NANO_UI_H__
 #define __NANO_UI_H__
 
+#include <wchar.h>
 #include <stdint.h>
 
 #define INPUT_BUFFER_LENGTH  (4096)
@@ -9,6 +10,9 @@
 #define IME_MODE_HANZI    (0)
 #define IME_MODE_ALPHABET (1)
 #define IME_MODE_NUMBER   (2)
+
+void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode);
+int32_t render_text(wchar_t *text, int32_t start_line);
 
 void show_splash_screen();
 void show_main_menu();
