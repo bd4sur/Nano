@@ -38,6 +38,9 @@ pid_t record_pid = 0;
 
 #define AUDIO_FILE_NAME "/tmp/nano_audio.wav"
 
+#define ASR_PIPE_NAME "/tmp/asr_pipe"
+#define ASR_BUFFER_SIZE 1024
+
 // 启动录音进程
 void start_recording() {
     record_pid = fork();
@@ -174,6 +177,12 @@ int main() {
     // 录音状态
     int32_t is_recording = 0;
 
+    // ASR命名管道
+    int asr_pipe_fd;
+    char asr_buffer[ASR_BUFFER_SIZE];
+    wchar_t asr_wcsbuffer[ASR_BUFFER_SIZE];
+    ssize_t asr_bytes_read;
+
     // 按键状态
     uint8_t  key_code = 16;  // 大于等于16为没有任何按键，0-15为按键
     int8_t   key_edge = 0;   // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)
@@ -303,6 +312,36 @@ STATE_M2:// 主菜单。
                 render_input_buffer(input_buffer, ime_mode_flag, -1);
                 current_page = 0;
                 STATE = 0;
+            }
+
+            // 按下*键：开始PTT
+            else if (key_edge > 0 && key_code == 14) {
+                FILE *file;
+                char filename[] = "/tmp/ptt_status";
+                file = fopen(filename, "w");
+                if (file == NULL) {
+                    printf("无法创建或打开文件 %s\n", filename);
+                    return 1;
+                }
+                fprintf(file, "1");
+                fclose(file);
+
+                // 以只读方式打开ASR命名管道（非阻塞）
+                asr_pipe_fd = open(ASR_PIPE_NAME, O_RDONLY | O_NONBLOCK);
+                if (asr_pipe_fd == -1) {
+                    perror("打开管道失败");
+                    exit(EXIT_FAILURE);
+                }
+                printf("管道打开成功，开始读取数据...\n");
+
+                OLED_SoftClear();
+                render_text(L" \n \n     正在识别...", 0);
+                OLED_Refresh();
+
+                is_recording = 1;
+
+                STATE = 21;
+                goto STATE_21;
             }
 
             // 短按A键：回到splash
@@ -993,6 +1032,74 @@ STATE_20: // 录音进行中
                 STATE = 0;
                 goto STATE_0;
             }
+
+            break;
+
+
+        /////////////////////////////////////////////
+STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内容）
+        /////////////////////////////////////////////
+
+        case 21:
+
+            if (is_recording == 1) {
+
+                // 反复读取管道内容
+                // while (1) {
+                    memset(asr_buffer, 0, ASR_BUFFER_SIZE);
+                    asr_bytes_read = read(asr_pipe_fd, asr_buffer, ASR_BUFFER_SIZE - 1);
+                    printf("ASR Read = %d\n", asr_bytes_read);
+
+                    if (asr_bytes_read > 0) {
+                        asr_buffer[asr_bytes_read] = '\0';
+                        printf("读取到数据: %s", asr_buffer);
+                        mbstowcs(asr_wcsbuffer, asr_buffer, ASR_BUFFER_SIZE);
+                        OLED_SoftClear(); render_text(asr_wcsbuffer, -1); OLED_Refresh();
+                        fflush(stdout);
+                    } else if (asr_bytes_read == 0) {
+                        // 管道写端关闭，重新打开
+                        printf("管道写端关闭，重新打开管道...\n");
+                        close(asr_pipe_fd);
+                        asr_pipe_fd = open(ASR_PIPE_NAME, O_RDONLY);
+                        if (asr_pipe_fd == -1) {
+                            perror("重新打开管道失败");
+                        }
+                    } else {
+                        // 读取错误
+                        if (errno != EINTR) {
+                            // perror("读取管道失败");
+                        }
+                    }
+                // }
+            }
+
+
+            // 松开按钮，停止PTT
+            if (is_recording > 0 && key_edge == 0 && key_code == 16) {
+                printf("松开PTT\n");
+                is_recording = 0;
+
+                close(asr_pipe_fd);
+
+                FILE *file;
+                char filename[] = "/tmp/ptt_status";
+                file = fopen(filename, "w");
+                if (file == NULL) {
+                    printf("无法创建或打开文件 %s\n", filename);
+                    return 1;
+                }
+                fprintf(file, "0");
+                fclose(file);
+
+                OLED_SoftClear();
+                render_text(L" \n \n     识别完成", 0);
+                OLED_Refresh();
+                usleep(1000*1000);
+                
+                show_main_menu();
+                STATE = -2;
+            }
+
 
             break;
 
