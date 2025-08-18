@@ -15,20 +15,15 @@ registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-c
 --hotword /workspace/models/hotwords.txt \
 --certfile 0
 
-python funasr_wss_client.py --host "0.0.0.0" --port 10096 --mode 2pass --chunk_size "5,10,5" --ssl 0 --thread_num 4
+python funasr_wss_client.py --host "0.0.0.0" --port 10096 --mode 2pass --chunk_size "5,10,5" --ssl 0
 
 """
 import os
-import time
 import websockets, ssl
 import asyncio
-# import threading
 import argparse
 import json
-import traceback
 from multiprocessing import Process
-# from funasr.fileio.datadir_writer import DatadirWriter
-
 import logging
 
 logging.basicConfig(level=logging.ERROR)
@@ -56,18 +51,10 @@ parser.add_argument("--hotword",
                     type=str,
                     default="",
                     help="hotword file path, one hotword perline (e.g.:阿里巴巴 20)")
-parser.add_argument("--audio_in",
-                    type=str,
-                    default=None,
-                    help="audio_in")
 parser.add_argument("--audio_fs",
                     type=int,
                     default=16000,
                     help="audio_fs")
-parser.add_argument("--send_without_sleep",
-                    action="store_true",
-                    default=True,
-                    help="if audio_in is set, send_without_sleep")
 parser.add_argument("--thread_num",
                     type=int,
                     default=1,
@@ -76,10 +63,6 @@ parser.add_argument("--words_max_print",
                     type=int,
                     default=10000,
                     help="chunk")
-parser.add_argument("--output_dir",
-                    type=str,
-                    default=None,
-                    help="output_dir")
 parser.add_argument("--ssl",
                     type=int,
                     default=1,
@@ -105,15 +88,6 @@ offline_msg_done=False
 text_print = ""
 text_print_2pass_online = ""
 text_print_2pass_offline = ""
-
-if args.output_dir is not None:
-    # if os.path.exists(args.output_dir):
-    #     os.remove(args.output_dir)
-        
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-
-
 
 
 # 命名管道路径
@@ -185,7 +159,7 @@ def write_text_to_pipe(text):
         # 清空管道中已有的内容
         clear_pipe_content()
         # 尝试写入数据
-        os.write(pipe_fd, (text + '\n').encode())
+        os.write(pipe_fd, text.encode())
         return True
     except OSError as e:
         # 如果写入失败（通常是管道没有读取者），关闭文件描述符
@@ -264,6 +238,8 @@ async def record_microphone():
                 await asyncio.sleep(0.005)
 
             print("PTT松开")
+            end_message = json.dumps({"is_speaking": False})
+            await websocket.send(end_message)
             text_print = ""
             text_print_2pass_online = ""
             text_print_2pass_offline = ""
@@ -273,10 +249,6 @@ async def message(id):
     text_print = ""
     text_print_2pass_online = ""
     text_print_2pass_offline = ""
-    if args.output_dir is not None:
-        ibest_writer = open(os.path.join(args.output_dir, "text.{}".format(id)), "a", encoding="utf-8")
-    else:
-        ibest_writer = None
     try:
         while True:
             meg = await websocket.recv()
@@ -288,13 +260,6 @@ async def message(id):
             offline_msg_done = meg.get("is_final", False)
             if "timestamp" in meg:
                 timestamp = meg["timestamp"]
-
-            if ibest_writer is not None:
-                if timestamp !="":
-                    text_write_line = "{}\t{}\t{}\n".format(wav_name, text, timestamp)
-                else:
-                    text_write_line = "{}\t{}\n".format(wav_name, text)
-                ibest_writer.write(text_write_line)
 
             if 'mode' not in meg:
                 continue
@@ -329,86 +294,42 @@ async def message(id):
 
     except Exception as e:
             print("Exception:", e)
-            #traceback.print_exc()
-            #await websocket.close()
+            await websocket.close()
 
 
 
 
-async def ws_client(id, chunk_begin, chunk_size):
-    if args.audio_in is None:
-        chunk_begin=0
-        chunk_size=1
+async def ws_client(id):
     global websocket,voices,offline_msg_done
-    
-    for i in range(chunk_begin,chunk_begin+chunk_size):
-        offline_msg_done=False
-        voices = Queue()
-        if args.ssl == 1:
-            ssl_context = ssl.SSLContext()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            uri = "wss://{}:{}".format(args.host, args.port)
-        else:
-            uri = "ws://{}:{}".format(args.host, args.port)
-            ssl_context = None
-        print("connect to", uri)
-        async with websockets.connect(uri, subprotocols=["binary"], ping_interval=None, ssl=ssl_context) as websocket:
-            task = asyncio.create_task(record_microphone())
-            task3 = asyncio.create_task(message(str(id)+"_"+str(i))) #processid+fileid
-            await asyncio.gather(task, task3)
+
+    offline_msg_done=False
+    voices = Queue()
+    if args.ssl == 1:
+        ssl_context = ssl.SSLContext()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        uri = "wss://{}:{}".format(args.host, args.port)
+    else:
+        uri = "ws://{}:{}".format(args.host, args.port)
+        ssl_context = None
+    print("connect to", uri)
+    async with websockets.connect(uri, subprotocols=["binary"], ping_interval=None, ssl=ssl_context) as websocket:
+        task = asyncio.create_task(record_microphone())
+        task3 = asyncio.create_task(message(str(id))) #processid+fileid
+        await asyncio.gather(task, task3)
+
     exit(0)
     
 
-def one_thread(id, chunk_begin, chunk_size):
-    asyncio.get_event_loop().run_until_complete(ws_client(id, chunk_begin, chunk_size))
+def one_thread(id):
+    asyncio.get_event_loop().run_until_complete(ws_client(id))
     asyncio.get_event_loop().run_forever()
 
 if __name__ == '__main__':
 
     create_named_pipe()
 
-
-
-    # for microphone
-    if args.audio_in is None:
-        p = Process(target=one_thread, args=(0, 0, 0))
-        p.start()
-        p.join()
-        print('end')
-    else:
-        # calculate the number of wavs for each preocess
-        wavs = [args.audio_in]
-
-        for wav in wavs:
-            wav_splits = wav.strip().split()
-            wav_name = wav_splits[0] if len(wav_splits) > 1 else "demo"
-            wav_path = wav_splits[1] if len(wav_splits) > 1 else wav_splits[0]
-            audio_type = os.path.splitext(wav_path)[-1].lower()
-
-
-        total_len = len(wavs)
-        if total_len >= args.thread_num:
-            chunk_size = int(total_len / args.thread_num)
-            remain_wavs = total_len - chunk_size * args.thread_num
-        else:
-            chunk_size = 1
-            remain_wavs = 0
-
-        process_list = []
-        chunk_begin = 0
-        for i in range(args.thread_num):
-            now_chunk_size = chunk_size
-            if remain_wavs > 0:
-                now_chunk_size = chunk_size + 1
-                remain_wavs = remain_wavs - 1
-            # process i handle wavs at chunk_begin and size of now_chunk_size
-            p = Process(target=one_thread, args=(i, chunk_begin, now_chunk_size))
-            chunk_begin = chunk_begin + now_chunk_size
-            p.start()
-            process_list.append(p)
-
-        for i in process_list:
-            p.join()
-
-        print('end')
+    p = Process(target=one_thread, args=(0,))
+    p.start()
+    p.join()
+    print('end')

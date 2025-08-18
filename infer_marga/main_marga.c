@@ -30,9 +30,15 @@ static char *MODEL_PATH_5 = MODEL_ROOT_DIR "/qwen3-1b7-q80.bin";
 static char *MODEL_PATH_6 = MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q80.bin";
 
 static float g_tps_of_last_session = 0.0f;
-static wchar_t g_output_of_last_session[OUTPUT_BUFFER_LENGTH];
+static wchar_t g_llm_output_of_last_session[OUTPUT_BUFFER_LENGTH];
+static wchar_t g_asr_output[OUTPUT_BUFFER_LENGTH];
 
 static wchar_t g_anniversory[OUTPUT_BUFFER_LENGTH] = L"我在博客中，一直回避谈我自己。原因一方面固然是隐私安全考虑，而更重要的原因是，在博客中谈我自己，相当于直面“我是谁”这个终极问题，而我难以回答这个问题，甚至在求索的过程中，只会看到自己的空虚和肤浅。\n\n诸君应该知道，佛经中经常出现“如是我闻”这四个字，意思是“我听说事情是这样的…”。于是我转而回答“我知道什么”，试图迂回说明“什么是我”“什么属于我”，而非径直回答“我是什么”。\n\n一方面，我将个人博客转型为业余电台网站，以电台为载体，来间接呈现它的OP也就是我自己的所见所闻、所思所想。这样的好处是，业余电台是一个比“我”简单得多的系统，介绍“我的电台”，比介绍“我”更容易。电台是一个具象的抓手，可以允许我免于直接回答“我是谁”这个困难的问题。\n\n另一方面，我尽力将我的精神世界区分为“事实”和“观点”两部分，将事实放在“博客”栏目，将观点放在“灵感”栏目。尽管实践中难以明确区分二者，但我依然认为，将思维的依据和思维的结果解耦开来，通过罗列“什么是我”“什么属于我”来渐进式地刻画出我的精神世界的面貌，有助于以超脱的视角来观测我自己，有助于我接近“我是谁”这个问题的答案。\n\n还有一种策略。既然“我是谁”这个问题难以回答，不妨退而求其次，试图回答退化的问题：“我想成为什么样的人”。这个问题实际上包含三个方面，分别是我“想”、我“能”和我“得”。这问题表面上看起来是反思自我，实际上却有很强烈的“外部性”，涉及人作为社会人的价值的评判。\n\n具体而言，为了深刻反思自我，就必须以人为镜，对标他人。想要对标他人，就要了解他人。了解他人，除了了解抽象的他人，还应该了解具体的他人。求解“他是谁”这个问题，似乎比求解“我是谁”这个问题简单一点。既然谈的是博客，那么阅读某人的博客，实际上就是阅读一个“具体的人”。\n\n有人认为，当今网友思维极端化，“二极管思维”盛行，擅长扣帽子、贴标签。但这责任，依我看，也要归咎于许多人并不懂得如何呈现“具体”的自己。许多人活得太抽象，不仅在认识他人的时候太抽象，认识自己的时候也太抽象。人与人之间，都习惯于通过标签和简单归纳来互相认识，这难免产生“二极管思维”。我尽力避免成为这样的人，因此我希望回答好“我是谁”这个问题，呈现一个“具体”的自己。\n\n然而，活得“具体”是很难的。我有个点子，那就是为了观察某人的“专业性”，可以要求他在十秒内说出一句包含很多专业术语的话。一方面，认识具体的人，难免要花不少的时间去与对方交流、相处，也包括阅读他的文章。另一方面，为了让自己活得具体，就要输入足量的具体的事实，输出足量的具体的观点。这也就是说，人要活得“具体”，首先要活得“丰富”。泡利还是谁说过，所谓专家，就是把他所在领域中所有能犯的错误都犯过一遍的人。有了足量的具体细节，才“有资格”发展出自己的“高观点”，从“真懂”到“真信”，实现“我有什么”到“我是什么”的飞跃。\n\n这实际上就是人的认识规律，而且是认识规律的很小但很重要的一方面。这提醒我，要“把手弄脏”，先谈问题，再谈主义。这既是认识他人和世界的方法，也是认识自我的途径。\n\n取乎上得乎中，取乎中得乎下。对标什么人，想成为什么人，能成为什么人，必须要成为什么人。这是人生观的大问题，不可不察。\n";
+
+
+// 全局设置状态
+int32_t g_config_auto_submit_after_asr = 1; // ASR结束后立刻提交识别内容到LLM
+
 
 pid_t record_pid = 0;
 
@@ -70,7 +76,7 @@ int32_t on_prefilling(Nano_Session *session) {
     // 按住A键中止推理
     char key = keyboard_read_key();
     if (key == 10) {
-        wcscpy(g_output_of_last_session, L"");
+        wcscpy(g_llm_output_of_last_session, L"");
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_PREFILLING;
     }
@@ -90,7 +96,7 @@ int32_t on_decoding(Nano_Session *session) {
     // 按住A键中止推理
     char key = keyboard_read_key();
     if (key == 10) {
-        wcscpy(g_output_of_last_session, session->output_text);
+        wcscpy(g_llm_output_of_last_session, session->output_text);
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_DECODING;
     }
@@ -106,7 +112,7 @@ int32_t on_decoding(Nano_Session *session) {
 }
 
 int32_t on_finished(Nano_Session *session) {
-    wcscpy(g_output_of_last_session, session->output_text);
+    wcscpy(g_llm_output_of_last_session, session->output_text);
 
     g_tps_of_last_session = session->tps;
     printf("TPS = %f\n", session->tps);
@@ -292,19 +298,21 @@ STATE_M2:// 主菜单。
 
                 // LLM Init
 
-                OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...", 0); OLED_Refresh();
+                if (!g_llm_ctx) {
+                    OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...", 0); OLED_Refresh();
 
-                repetition_penalty = 1.05f;
-                temperature = 1.0f;
-                top_p = 0.5f;
-                top_k = 0;
-                random_seed = (unsigned int)time(NULL);
-                max_seq_len = 512;
+                    repetition_penalty = 1.05f;
+                    temperature = 1.0f;
+                    top_p = 0.5f;
+                    top_k = 0;
+                    random_seed = (unsigned int)time(NULL);
+                    max_seq_len = 512;
 
-                g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
+                    g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
 
-                OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(1000*1000);
+                    OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
+                    usleep(1000*1000);
+                }
 
                 // 刷新文本输入框
                 input_buffer = refresh_input_buffer(input_buffer, &input_counter);
@@ -314,8 +322,17 @@ STATE_M2:// 主菜单。
                 STATE = 0;
             }
 
-            // 按下*键：开始PTT
-            else if (key_edge > 0 && key_code == 14) {
+            // 短按3键：选择语言模型
+            else if (key_edge == -1 && key_code == 3) {
+                OLED_SoftClear();
+                render_text(L"选择语言模型：\n1. Nano-168M-QA\n2. Nano-56M-QA\n3. Nano-56M-Neko\n4. Qwen3-0.6B", 0);
+                OLED_Refresh();
+
+                STATE = 4;
+            }
+/*
+            // 按下C键：开始PTT
+            else if (key_edge > 0 && key_code == 12) {
                 FILE *file;
                 char filename[] = "/tmp/ptt_status";
                 file = fopen(filename, "w");
@@ -335,7 +352,7 @@ STATE_M2:// 主菜单。
                 printf("管道打开成功，开始读取数据...\n");
 
                 OLED_SoftClear();
-                render_text(L" \n \n     正在识别...", 0);
+                render_text(L" \n \n     请说话...", 0);
                 OLED_Refresh();
 
                 is_recording = 1;
@@ -343,7 +360,7 @@ STATE_M2:// 主菜单。
                 STATE = 21;
                 goto STATE_21;
             }
-
+*/
             // 短按A键：回到splash
             else if (key_edge == -1 && key_code == 10) {
                 key_code = 16; // 取消按键状态
@@ -481,20 +498,41 @@ STATE_0:// 文字编辑器状态：等待输入拼音/字母/数字，或者将�
                 }
             }
 
-            // 短按B键：转到设置
-            else if (key_edge == -1 && key_code == 11) {
-                OLED_SoftClear();
-                render_text(L"选择语言模型：\n1. Nano-168M-QA\n2. Nano-56M-QA\n3. Nano-56M-Neko\n4. Qwen3-0.6B", 0);
-                OLED_Refresh();
-
-                STATE = 4;
-            }
-
-            // 长+短按C键：依次切换汉-英-数输入模式
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 12) {
+            // 长+短按B键：依次切换汉-英-数输入模式
+            else if ((key_edge == -1 || key_edge == -2) && key_code == 11) {
                 ime_mode_flag = (ime_mode_flag + 1) % 3;
                 render_input_buffer(input_buffer, ime_mode_flag, -1);
                 STATE = 0;
+            }
+
+            // 按下C键：开始PTT
+            else if (key_edge > 0 && key_code == 12) {
+                FILE *file;
+                char filename[] = "/tmp/ptt_status";
+                file = fopen(filename, "w");
+                if (file == NULL) {
+                    printf("无法创建或打开文件 %s\n", filename);
+                    return 1;
+                }
+                fprintf(file, "1");
+                fclose(file);
+
+                // 以只读方式打开ASR命名管道（非阻塞）
+                asr_pipe_fd = open(ASR_PIPE_NAME, O_RDONLY | O_NONBLOCK);
+                if (asr_pipe_fd == -1) {
+                    perror("打开管道失败");
+                    exit(EXIT_FAILURE);
+                }
+                printf("管道打开成功，开始读取数据...\n");
+
+                OLED_SoftClear();
+                render_text(L" \n \n     请说话...", 0);
+                OLED_Refresh();
+
+                is_recording = 1;
+
+                STATE = 21;
+                goto STATE_21;
             }
 
             // 短按D键：提交
@@ -706,7 +744,9 @@ STATE_4:// 选择语言模型状态
 
             // 短按1键
             if (key_edge == -1 && key_code == 1) {
-                llm_context_free(g_llm_ctx);
+                if (g_llm_ctx)
+                    llm_context_free(g_llm_ctx);
+
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...", 0); OLED_Refresh();
 
                 repetition_penalty = 1.05f;
@@ -718,15 +758,17 @@ STATE_4:// 选择语言模型状态
 
                 g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(1000*1000);
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-                current_page = 0;
-                STATE = 0;
+                usleep(500*1000);
+
+                show_main_menu();
+                STATE = -2;
             }
 
             // 短按2键
             else if (key_edge == -1 && key_code == 2) {
-                llm_context_free(g_llm_ctx);
+                if (g_llm_ctx)
+                    llm_context_free(g_llm_ctx);
+
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...", 0); OLED_Refresh();
 
                 repetition_penalty = 1.05f;
@@ -738,15 +780,17 @@ STATE_4:// 选择语言模型状态
 
                 g_llm_ctx = llm_context_init(MODEL_PATH_2, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(1000*1000);
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-                current_page = 0;
-                STATE = 0;
+                usleep(500*1000);
+
+                show_main_menu();
+                STATE = -2;
             }
 
             // 短按3键
             else if (key_edge == -1 && key_code == 3) {
-                llm_context_free(g_llm_ctx);
+                if (g_llm_ctx)
+                    llm_context_free(g_llm_ctx);
+
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...", 0); OLED_Refresh();
 
                 repetition_penalty = 1.05f;
@@ -758,15 +802,17 @@ STATE_4:// 选择语言模型状态
 
                 g_llm_ctx = llm_context_init(MODEL_PATH_3, LORA_PATH_3, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(1000*1000);
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-                current_page = 0;
-                STATE = 0;
+                usleep(500*1000);
+
+                show_main_menu();
+                STATE = -2;
             }
 
             // 短按4键
             else if (key_edge == -1 && key_code == 4) {
-                llm_context_free(g_llm_ctx);
+                if (g_llm_ctx)
+                    llm_context_free(g_llm_ctx);
+
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...", 0); OLED_Refresh();
 
                 repetition_penalty = 1.0f;
@@ -778,15 +824,17 @@ STATE_4:// 选择语言模型状态
 
                 g_llm_ctx = llm_context_init(MODEL_PATH_4, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(1000*1000);
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-                current_page = 0;
-                STATE = 0;
+                usleep(500*1000);
+
+                show_main_menu();
+                STATE = -2;
             }
 
             // 短按5键
             else if (key_edge == -1 && key_code == 5) {
-                llm_context_free(g_llm_ctx);
+                if (g_llm_ctx)
+                    llm_context_free(g_llm_ctx);
+
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...", 0); OLED_Refresh();
 
                 repetition_penalty = 1.0f;
@@ -798,15 +846,17 @@ STATE_4:// 选择语言模型状态
 
                 g_llm_ctx = llm_context_init(MODEL_PATH_5, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(1000*1000);
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-                current_page = 0;
-                STATE = 0;
+                usleep(500*1000);
+
+                show_main_menu();
+                STATE = -2;
             }
 
             // 短按6键
             else if (key_edge == -1 && key_code == 6) {
-                llm_context_free(g_llm_ctx);
+                if (g_llm_ctx)
+                    llm_context_free(g_llm_ctx);
+
                 OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-4B-Inst-2507\n 请稍等...", 0); OLED_Refresh();
 
                 repetition_penalty = 1.0f;
@@ -818,24 +868,16 @@ STATE_4:// 选择语言模型状态
 
                 g_llm_ctx = llm_context_init(MODEL_PATH_6, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
                 OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(1000*1000);
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-                current_page = 0;
-                STATE = 0;
+                usleep(500*1000);
+
+                show_main_menu();
+                STATE = -2;
             }
 
-            // 短按A键：取消操作，回到初始状态
+            // 短按A键：取消操作，回到主菜单
             else if (key_edge == -1 && key_code == 10) {
-                OLED_SoftClear();
-                render_text(L"操作已取消", 0);
-                OLED_Refresh();
-
-                usleep(1000*1000);
-
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-
-                current_page = 0;
-                STATE = 0;
+                show_main_menu();
+                STATE = -2;
             }
 
             break;
@@ -863,7 +905,7 @@ STATE_10: // 提交候选字到LLM，开始推理
 
         case 10:
 
-            // 短按D键：从STATE_0跳转过来，响应D键，开始推理。推理完成后，并不清除输入缓冲区，因此再次按D键会重新推理。
+            // 短按D键：开始推理。推理完成后，并不清除输入缓冲区，因此再次按D键会重新推理。
             if (key_edge == -1 && key_code == 13) {
                 OLED_SoftClear();
 
@@ -893,13 +935,13 @@ STATE_10: // 提交候选字到LLM，开始推理
                     wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
                     wcscat(prompt_and_output, input_buffer);
                     wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
-                    wcscat(prompt_and_output, g_output_of_last_session);
+                    wcscat(prompt_and_output, g_llm_output_of_last_session);
                     wchar_t tps_wcstr[50];
                     swprintf(tps_wcstr, 50, L"\n\n[Nano:推理中止]\n\n[平均速度%.1f词元/秒]", g_tps_of_last_session);
                     wcscat(prompt_and_output, tps_wcstr);
 
-                    wcscpy(g_output_of_last_session, prompt_and_output);
-                    output_line_num = render_text(g_output_of_last_session, -1);
+                    wcscpy(g_llm_output_of_last_session, prompt_and_output);
+                    output_line_num = render_text(g_llm_output_of_last_session, -1);
                     output_current_line = (output_line_num >= 5) ? output_line_num - 5 : 0;
                     render_scroll_bar(output_line_num, output_current_line);
                     OLED_Refresh();
@@ -920,13 +962,13 @@ STATE_10: // 提交候选字到LLM，开始推理
                     wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
                     wcscat(prompt_and_output, input_buffer);
                     wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
-                    wcscat(prompt_and_output, g_output_of_last_session);
+                    wcscat(prompt_and_output, g_llm_output_of_last_session);
                     wchar_t tps_wcstr[50];
                     swprintf(tps_wcstr, 50, L"\n\n[平均速度%.1f词元/秒]", g_tps_of_last_session);
                     wcscat(prompt_and_output, tps_wcstr);
 
-                    wcscpy(g_output_of_last_session, prompt_and_output);
-                    output_line_num = render_text(g_output_of_last_session, -1);
+                    wcscpy(g_llm_output_of_last_session, prompt_and_output);
+                    output_line_num = render_text(g_llm_output_of_last_session, -1);
                     output_current_line = (output_line_num >= 5) ? output_line_num - 5 : 0;
                     render_scroll_bar(output_line_num, output_current_line);
                     OLED_Refresh();
@@ -942,13 +984,13 @@ STATE_10: // 提交候选字到LLM，开始推理
                     wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
                     wcscat(prompt_and_output, input_buffer);
                     wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
-                    wcscat(prompt_and_output, g_output_of_last_session);
+                    wcscat(prompt_and_output, g_llm_output_of_last_session);
                     wchar_t tps_wcstr[50];
                     swprintf(tps_wcstr, 50, L"\n\n推理过程异常结束！\n\n[平均速度%.1f词元/秒]", g_tps_of_last_session);
                     wcscat(prompt_and_output, tps_wcstr);
 
-                    wcscpy(g_output_of_last_session, prompt_and_output);
-                    output_line_num = render_text(g_output_of_last_session, -1);
+                    wcscpy(g_llm_output_of_last_session, prompt_and_output);
+                    output_line_num = render_text(g_llm_output_of_last_session, -1);
                     output_current_line = (output_line_num >= 5) ? output_line_num - 5 : 0;
                     render_scroll_bar(output_line_num, output_current_line);
                     OLED_Refresh();
@@ -982,7 +1024,7 @@ STATE_10: // 提交候选字到LLM，开始推理
                 }
 
                 OLED_SoftClear();
-                render_text(g_output_of_last_session, output_current_line);
+                render_text(g_llm_output_of_last_session, output_current_line);
                 render_scroll_bar(output_line_num, output_current_line);
                 OLED_Refresh();
 
@@ -999,7 +1041,7 @@ STATE_10: // 提交候选字到LLM，开始推理
                 }
 
                 OLED_SoftClear();
-                render_text(g_output_of_last_session, output_current_line);
+                render_text(g_llm_output_of_last_session, output_current_line);
                 render_scroll_bar(output_line_num, output_current_line);
                 OLED_Refresh();
 
@@ -1043,34 +1085,31 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
         case 21:
 
             if (is_recording == 1) {
-
                 // 反复读取管道内容
-                // while (1) {
-                    memset(asr_buffer, 0, ASR_BUFFER_SIZE);
-                    asr_bytes_read = read(asr_pipe_fd, asr_buffer, ASR_BUFFER_SIZE - 1);
-                    printf("ASR Read = %d\n", asr_bytes_read);
+                memset(asr_buffer, 0, ASR_BUFFER_SIZE);
+                asr_bytes_read = read(asr_pipe_fd, asr_buffer, ASR_BUFFER_SIZE - 1);
+                // printf("ASR Read = %d\n", asr_bytes_read);
 
-                    if (asr_bytes_read > 0) {
-                        asr_buffer[asr_bytes_read] = '\0';
-                        printf("读取到数据: %s", asr_buffer);
-                        mbstowcs(asr_wcsbuffer, asr_buffer, ASR_BUFFER_SIZE);
-                        OLED_SoftClear(); render_text(asr_wcsbuffer, -1); OLED_Refresh();
-                        fflush(stdout);
-                    } else if (asr_bytes_read == 0) {
-                        // 管道写端关闭，重新打开
-                        printf("管道写端关闭，重新打开管道...\n");
-                        close(asr_pipe_fd);
-                        asr_pipe_fd = open(ASR_PIPE_NAME, O_RDONLY);
-                        if (asr_pipe_fd == -1) {
-                            perror("重新打开管道失败");
-                        }
-                    } else {
-                        // 读取错误
-                        if (errno != EINTR) {
-                            // perror("读取管道失败");
-                        }
+                if (asr_bytes_read > 0) {
+                    asr_buffer[asr_bytes_read] = '\0';
+                    printf("读取到数据: %s\n", asr_buffer);
+                    mbstowcs(asr_wcsbuffer, asr_buffer, ASR_BUFFER_SIZE);
+                    OLED_SoftClear(); render_text(asr_wcsbuffer, -1); OLED_Refresh();
+                    fflush(stdout);
+                } else if (asr_bytes_read == 0) {
+                    // 管道写端关闭，重新打开
+                    printf("管道写端关闭，重新打开管道...\n");
+                    close(asr_pipe_fd);
+                    asr_pipe_fd = open(ASR_PIPE_NAME, O_RDONLY);
+                    if (asr_pipe_fd == -1) {
+                        perror("重新打开管道失败");
                     }
-                // }
+                } else {
+                    // 读取错误
+                    if (errno != EINTR) {
+                        // perror("读取管道失败");
+                    }
+                }
             }
 
 
@@ -1094,12 +1133,95 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
                 OLED_SoftClear();
                 render_text(L" \n \n     识别完成", 0);
                 OLED_Refresh();
-                usleep(1000*1000);
-                
+                usleep(500*1000);
+
+/*
+                // 计算识别内容的行数，绘制文本和滚动条
+                OLED_SoftClear();
+
+                wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"转文字:\n";
+                wcscat(prompt_and_output, asr_wcsbuffer);
+                wcscpy(g_asr_output, prompt_and_output);
+                output_line_num = render_text(g_asr_output, 0);
+                output_current_line = 0;
+                render_scroll_bar(output_line_num, output_current_line);
+                OLED_Refresh();
+
+                STATE = 21;
+*/
+
+                wcscpy(g_asr_output, asr_wcsbuffer);
+                wcscpy(input_buffer, g_asr_output);
+                input_counter = wcslen(g_asr_output);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
+
+                // ASR后立刻提交到LLM？
+                if (g_config_auto_submit_after_asr) {
+                    printf("立刻提交LLM：%ls\n", input_buffer);
+                    // 软触发D键
+                    key_edge = -1;
+                    key_code = 13;
+                    STATE = 10;
+                    goto STATE_10;
+                }
+                else {
+                    // 回到文字输入状态
+                    current_page = 0;
+                    STATE = 0;
+                }
+
+            }
+
+            // 短按A键：清屏，清除输入缓冲区，回到初始状态
+            else if (key_edge == -1 && key_code == 10) {
+
+                input_buffer = refresh_input_buffer(input_buffer, &input_counter);
+                render_input_buffer(input_buffer, ime_mode_flag, -1);
+
+                current_page = 0;
+                STATE = 0;
+            }
+/*
+            // 短按A键：清屏，回到主菜单
+            else if (key_edge == -1 && key_code == 10) {
                 show_main_menu();
                 STATE = -2;
             }
 
+            // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
+            else if ((key_edge == -1 || key_edge == -2) && key_code == 14) {
+                if (output_current_line <= 0) { // 卷到顶
+                    output_current_line = output_line_num - 5;
+                }
+                else {
+                    output_current_line--;
+                }
+
+                OLED_SoftClear();
+                render_text(g_asr_output, output_current_line);
+                render_scroll_bar(output_line_num, output_current_line);
+                OLED_Refresh();
+
+                STATE = 21;
+            }
+
+            // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
+            else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
+                if (output_current_line >= (output_line_num - 5)) { // 卷到底
+                    output_current_line = 0;
+                }
+                else {
+                    output_current_line++;
+                }
+
+                OLED_SoftClear();
+                render_text(g_asr_output, output_current_line);
+                render_scroll_bar(output_line_num, output_current_line);
+                OLED_Refresh();
+
+                STATE = 21;
+            }
+*/
 
             break;
 
