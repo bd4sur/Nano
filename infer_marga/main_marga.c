@@ -1,4 +1,5 @@
 #include <signal.h>
+#include <sys/stat.h>
 
 #include "avltree.h"
 #include "pinyin.h"
@@ -40,12 +41,21 @@ static wchar_t g_anniversory[OUTPUT_BUFFER_LENGTH] = L"我在博客中，一直�
 int32_t g_config_auto_submit_after_asr = 1; // ASR结束后立刻提交识别内容到LLM
 
 
+
+// 传递PTT状态的命名管道
+int g_ptt_fifo_fd;
+// 传递ASR识别结果的命名管道
+int g_asr_fifo_fd;
+
+
 pid_t record_pid = 0;
 
 #define AUDIO_FILE_NAME "/tmp/nano_audio.wav"
 
-#define ASR_PIPE_NAME "/tmp/asr_pipe"
+#define ASR_FIFO_PATH "/tmp/asr_fifo"
 #define ASR_BUFFER_SIZE 1024
+
+#define PTT_FIFO_PATH "/tmp/ptt_fifo"
 
 // 启动录音进程
 void start_recording() {
@@ -71,6 +81,84 @@ void play_recording() {
     snprintf(command, sizeof(command), "aplay %s", AUDIO_FILE_NAME);
     system(command);
 }
+
+
+// 以只读方式打开ASR命名管道（非阻塞）
+int32_t open_asr_fifo() {
+    g_asr_fifo_fd = open(ASR_FIFO_PATH, O_RDONLY | O_NONBLOCK);
+    if (g_asr_fifo_fd == -1) {
+        perror("打开管道失败");
+        return -1;
+    }
+    printf("管道打开成功，开始读取数据...\n");
+    return 0;
+}
+
+// 读取ASR管道内容
+int32_t read_asr_fifo(wchar_t *asr_text) {
+    char asr_buffer[ASR_BUFFER_SIZE];
+    memset(asr_buffer, 0, ASR_BUFFER_SIZE);
+
+    ssize_t asr_bytes_read = read(g_asr_fifo_fd, asr_buffer, ASR_BUFFER_SIZE - 1);
+
+    if (asr_bytes_read > 0) {
+        asr_buffer[asr_bytes_read] = '\0';
+        printf("读取到数据: %s\n", asr_buffer); fflush(stdout);
+        mbstowcs(asr_text, asr_buffer, ASR_BUFFER_SIZE);
+    }
+    else if (asr_bytes_read == 0) {
+        // 管道写端关闭，重新打开
+        printf("管道写端关闭，重新打开管道...\n");fflush(stdout);
+        close(g_asr_fifo_fd);
+        g_asr_fifo_fd = open(ASR_FIFO_PATH, O_RDONLY | O_NONBLOCK);
+        if (g_asr_fifo_fd == -1) {
+            // perror("重新打开管道失败");
+            return -1;
+        }
+    }
+    else {
+        if (errno != EINTR) {
+            // perror("读取管道失败");
+        }
+        return -1;
+    }
+    return (int32_t)asr_bytes_read;
+}
+
+// 向PTT状态FIFO中写PTT状态
+int32_t set_ptt_status(uint8_t status) {
+    if (mkfifo(PTT_FIFO_PATH, 0666) == -1 && errno != EEXIST) {
+        perror("mkfifo failed");
+        return -1;
+    }
+    // 以非阻塞写模式打开FIFO
+    g_ptt_fifo_fd = open(PTT_FIFO_PATH, O_WRONLY | O_NONBLOCK);
+    if (g_ptt_fifo_fd == -1) {
+        perror("open fifo for writing failed");
+        return -1;
+    }
+    // 尝试写入一个字节
+    uint8_t data = status;
+    ssize_t result = write(g_ptt_fifo_fd, &data, 1);
+    if (result == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // FIFO缓冲区满，丢弃数据（不处理）
+            // printf("FIFO full, data dropped\n");
+        } else {
+            perror("write failed");
+            return -1;
+        }
+    } else {
+        // 成功写入
+        // printf("Wrote byte: %d\n", (unsigned char)data);
+    }
+    return 0;
+}
+
+
+
+
+
 
 int32_t on_prefilling(Nano_Session *session) {
     // 按住A键中止推理
@@ -183,12 +271,6 @@ int main() {
     // 录音状态
     int32_t is_recording = 0;
 
-    // ASR命名管道
-    int asr_pipe_fd;
-    char asr_buffer[ASR_BUFFER_SIZE];
-    wchar_t asr_wcsbuffer[ASR_BUFFER_SIZE];
-    ssize_t asr_bytes_read;
-
     // 按键状态
     uint8_t  key_code = 16;  // 大于等于16为没有任何按键，0-15为按键
     int8_t   key_edge = 0;   // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)
@@ -210,7 +292,7 @@ int main() {
             else {
                 key_code = prev_key;
                 // 短按（或者通过长按触发重复动作状态后反复触发）
-                if (key_repeat == 1 || key_timer >= 0 && key_timer < LONG_PRESS_THRESHOLD) {
+                if (key_repeat == 1 || (key_timer >= 0 && key_timer < LONG_PRESS_THRESHOLD)) {
                     key_edge = -1;
                     key_timer = 0;
                 }
@@ -330,37 +412,7 @@ STATE_M2:// 主菜单。
 
                 STATE = 4;
             }
-/*
-            // 按下C键：开始PTT
-            else if (key_edge > 0 && key_code == 12) {
-                FILE *file;
-                char filename[] = "/tmp/ptt_status";
-                file = fopen(filename, "w");
-                if (file == NULL) {
-                    printf("无法创建或打开文件 %s\n", filename);
-                    return 1;
-                }
-                fprintf(file, "1");
-                fclose(file);
 
-                // 以只读方式打开ASR命名管道（非阻塞）
-                asr_pipe_fd = open(ASR_PIPE_NAME, O_RDONLY | O_NONBLOCK);
-                if (asr_pipe_fd == -1) {
-                    perror("打开管道失败");
-                    exit(EXIT_FAILURE);
-                }
-                printf("管道打开成功，开始读取数据...\n");
-
-                OLED_SoftClear();
-                render_text(L" \n \n     请说话...", 0);
-                OLED_Refresh();
-
-                is_recording = 1;
-
-                STATE = 21;
-                goto STATE_21;
-            }
-*/
             // 短按A键：回到splash
             else if (key_edge == -1 && key_code == 10) {
                 key_code = 16; // 取消按键状态
@@ -507,23 +559,12 @@ STATE_0:// 文字编辑器状态：等待输入拼音/字母/数字，或者将�
 
             // 按下C键：开始PTT
             else if (key_edge > 0 && key_code == 12) {
-                FILE *file;
-                char filename[] = "/tmp/ptt_status";
-                file = fopen(filename, "w");
-                if (file == NULL) {
-                    printf("无法创建或打开文件 %s\n", filename);
-                    return 1;
-                }
-                fprintf(file, "1");
-                fclose(file);
 
-                // 以只读方式打开ASR命名管道（非阻塞）
-                asr_pipe_fd = open(ASR_PIPE_NAME, O_RDONLY | O_NONBLOCK);
-                if (asr_pipe_fd == -1) {
-                    perror("打开管道失败");
-                    exit(EXIT_FAILURE);
-                }
-                printf("管道打开成功，开始读取数据...\n");
+                // 设置PTT状态为按下（>0）
+                if (set_ptt_status(66) < 0) break;
+
+                // 打开ASR管道
+                if (open_asr_fifo() < 0) break;
 
                 OLED_SoftClear();
                 render_text(L" \n \n     请说话...", 0);
@@ -1085,62 +1126,36 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
         case 21:
 
             if (is_recording == 1) {
-                // 反复读取管道内容
-                memset(asr_buffer, 0, ASR_BUFFER_SIZE);
-                asr_bytes_read = read(asr_pipe_fd, asr_buffer, ASR_BUFFER_SIZE - 1);
-                // printf("ASR Read = %d\n", asr_bytes_read);
-
-                if (asr_bytes_read > 0) {
-                    asr_buffer[asr_bytes_read] = '\0';
-                    printf("读取到数据: %s\n", asr_buffer);
-                    mbstowcs(asr_wcsbuffer, asr_buffer, ASR_BUFFER_SIZE);
-                    OLED_SoftClear(); render_text(asr_wcsbuffer, -1); OLED_Refresh();
-                    fflush(stdout);
-                } else if (asr_bytes_read == 0) {
-                    // 管道写端关闭，重新打开
-                    printf("管道写端关闭，重新打开管道...\n");
-                    close(asr_pipe_fd);
-                    asr_pipe_fd = open(ASR_PIPE_NAME, O_RDONLY);
-                    if (asr_pipe_fd == -1) {
-                        perror("重新打开管道失败");
-                    }
-                } else {
-                    // 读取错误
-                    if (errno != EINTR) {
-                        // perror("读取管道失败");
-                    }
+                int32_t len = read_asr_fifo(g_asr_output);
+                if (len > 0) {
+                    OLED_SoftClear();
+                    render_text(g_asr_output, -1);
+                    OLED_Refresh();
                 }
             }
-
 
             // 松开按钮，停止PTT
             if (is_recording > 0 && key_edge == 0 && key_code == 16) {
                 printf("松开PTT\n");
                 is_recording = 0;
 
-                close(asr_pipe_fd);
+                close(g_asr_fifo_fd);
 
-                FILE *file;
-                char filename[] = "/tmp/ptt_status";
-                file = fopen(filename, "w");
-                if (file == NULL) {
-                    printf("无法创建或打开文件 %s\n", filename);
-                    return 1;
-                }
-                fprintf(file, "0");
-                fclose(file);
+                // // 设置PTT状态为松开（==0）
+                if (set_ptt_status(0) < 0) break;
+                close(g_ptt_fifo_fd);
 
-                OLED_SoftClear();
-                render_text(L" \n \n     识别完成", 0);
-                OLED_Refresh();
-                usleep(500*1000);
+                // OLED_SoftClear();
+                // render_text(L" \n \n     识别完成", 0);
+                // OLED_Refresh();
+                // usleep(500*1000);
 
 /*
                 // 计算识别内容的行数，绘制文本和滚动条
                 OLED_SoftClear();
 
                 wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"转文字:\n";
-                wcscat(prompt_and_output, asr_wcsbuffer);
+                wcscat(prompt_and_output, g_asr_output);
                 wcscpy(g_asr_output, prompt_and_output);
                 output_line_num = render_text(g_asr_output, 0);
                 output_current_line = 0;
@@ -1150,7 +1165,6 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
                 STATE = 21;
 */
 
-                wcscpy(g_asr_output, asr_wcsbuffer);
                 wcscpy(input_buffer, g_asr_output);
                 input_counter = wcslen(g_asr_output);
                 render_input_buffer(input_buffer, ime_mode_flag, -1);

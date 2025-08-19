@@ -3,30 +3,27 @@
 sudo docker run -p 10096:10095 -it --rm --privileged=true --name funasr \
 --volume /home/bd4sur/ai/_model/FunASR:/workspace/models \
 --workdir /workspace/FunASR/runtime \
-registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.12
-
-/bin/bash run_server_2pass.sh \
+funasr-online-cpu-0.1.12-20250820:latest \
+/bin/bash -c "/workspace/FunASR/runtime/start_2pass.sh \
 --download-model-dir /workspace/models \
---vad-dir damo/speech_fsmn_vad_zh-cn-16k-common-onnx \
---model-dir damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx \
---online-model-dir damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online-onnx  \
---punc-dir damo/punc_ct-transformer_zh-cn-common-vad_realtime-vocab272727-onnx \
---itn-dir thuduj12/fst_itn_zh \
 --hotword /workspace/models/hotwords.txt \
---certfile 0
+--certfile 0"
 
 python funasr_wss_client.py --host "0.0.0.0" --port 10096 --mode 2pass --chunk_size "5,10,5" --ssl 0
 
+
+sudo nano /etc/asound.conf
+添加：defaults.pcm.card 2
+
 """
 import os
+import errno
 import websockets, ssl
 import asyncio
 import argparse
 import json
 from multiprocessing import Process
-import logging
-
-logging.basicConfig(level=logging.ERROR)
+import pyaudio
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--host",
@@ -36,7 +33,7 @@ parser.add_argument("--host",
                     help="host ip, localhost, 0.0.0.0")
 parser.add_argument("--port",
                     type=int,
-                    default=10095,
+                    default=10096,
                     required=False,
                     help="grpc server port")
 parser.add_argument("--chunk_size",
@@ -51,14 +48,6 @@ parser.add_argument("--hotword",
                     type=str,
                     default="",
                     help="hotword file path, one hotword perline (e.g.:阿里巴巴 20)")
-parser.add_argument("--audio_fs",
-                    type=int,
-                    default=16000,
-                    help="audio_fs")
-parser.add_argument("--thread_num",
-                    type=int,
-                    default=1,
-                    help="thread_num")
 parser.add_argument("--words_max_print",
                     type=int,
                     default=10000,
@@ -78,117 +67,117 @@ parser.add_argument("--mode",
 
 args = parser.parse_args()
 args.chunk_size = [int(x) for x in args.chunk_size.split(",")]
-print(args)
-# voices = asyncio.Queue()
-from queue import Queue
 
-voices = Queue()
-offline_msg_done=False
+g_offline_msg_done=False
 
-text_print = ""
-text_print_2pass_online = ""
-text_print_2pass_offline = ""
+g_output_text = ""
+g_text_2pass_online = ""
+g_text_2pass_offline = ""
 
+PTT_STATUS = False
 
-# 命名管道路径
-PIPE_NAME = "/tmp/asr_pipe"
-pipe_fd = None
+# 进程间通信的两个fifo
+ASR_FIFO_PATH = "/tmp/asr_fifo"
+ASR_FIFO_FD = None
+PTT_FIFO_PATH = "/tmp/ptt_fifo"
+PTT_FIFO_FD = None
 
-def create_named_pipe():
-    """创建命名管道"""
+def create_all_fifo():
     try:
-        # 如果管道已存在，先删除
-        if os.path.exists(PIPE_NAME):
-            os.unlink(PIPE_NAME)
-        
-        # 创建命名管道
-        os.mkfifo(PIPE_NAME)
-        print(f"命名管道 {PIPE_NAME} 创建成功")
+        if os.path.exists(ASR_FIFO_PATH):
+            os.unlink(ASR_FIFO_PATH)
+        os.mkfifo(ASR_FIFO_PATH)
+        print(f"命名管道 {ASR_FIFO_PATH} 创建成功")
+
+        if os.path.exists(PTT_FIFO_PATH):
+            os.unlink(PTT_FIFO_PATH)
+        os.mkfifo(PTT_FIFO_PATH)
+        print(f"命名管道 {PTT_FIFO_PATH} 创建成功")
+
         return True
+
     except OSError as e:
         print(f"创建命名管道失败: {e}")
         return False
 
-def open_pipe_nonblocking():
-    """以非阻塞方式打开管道"""
-    global pipe_fd
+def open_asr_fifo():
+    global ASR_FIFO_FD
     try:
-        if pipe_fd:
+        if ASR_FIFO_FD:
             try:
-                os.close(pipe_fd)
+                os.close(ASR_FIFO_FD)
             except:
                 pass
-        
-        # 以非阻塞写模式打开管道
-        pipe_fd = os.open(PIPE_NAME, os.O_WRONLY | os.O_NONBLOCK)
-        print("管道已打开（非阻塞模式）")
+        ASR_FIFO_FD = os.open(ASR_FIFO_PATH, os.O_WRONLY | os.O_NONBLOCK)
+        print("ASR管道已打开（非阻塞模式）")
         return True
     except OSError as e:
-        # 如果没有读取者，open会失败
-        print("管道打开失败")
-        pipe_fd = None
+        print("ASR管道打开失败")
+        ASR_FIFO_FD = None
         return False
 
-def clear_pipe_content():
-    """清空管道中已有的内容"""
-    global pipe_fd
-    if not pipe_fd:
-        return False
-    
+def write_text_to_asr_fifo(text):
+    global ASR_FIFO_FD
     try:
-        # 尝试读取并丢弃所有现有数据
-        while True:
-            data = os.read(pipe_fd, 1024)  # 读取1KB数据
-            print("读取1KB数据")
-            if len(data) == 0:
-                print("管道清空")
-                break  # 没有更多数据可读
-    except OSError:
-        print("没有数据可读或其它错误")
-        pass
-    return True
-
-def write_text_to_pipe(text):
-    """尝试向命名管道写入字符串"""
-    global pipe_fd
-    try:
-        if not pipe_fd:
-            # 尝试打开管道
-            if not open_pipe_nonblocking():
+        if not ASR_FIFO_FD:
+            if not open_asr_fifo():
                 return False
-        # 清空管道中已有的内容
-        clear_pipe_content()
-        # 尝试写入数据
-        os.write(pipe_fd, text.encode())
+        os.write(ASR_FIFO_FD, text.encode())
         return True
     except OSError as e:
-        # 如果写入失败（通常是管道没有读取者），关闭文件描述符
-        if pipe_fd:
+        if ASR_FIFO_FD:
             try:
-                os.close(pipe_fd)
+                os.close(ASR_FIFO_FD)
             except:
                 pass
-            pipe_fd = None
+            ASR_FIFO_FD = None
         return False
 
+async def check_ptt_status():
+    global PTT_STATUS
 
-def check_ptt_status():
-    try:
-        with open('/tmp/ptt_status', 'r') as f:
-            content = f.read().strip()
-            if content == '1':
-                return True
-            elif content == '0':
-                return False
-    except Exception as e:
-        print(f"错误: {e}")
+    while True:
+        try:
+            # 以非阻塞方式打开FIFO进行读取
+            fd = os.open(PTT_FIFO_PATH, os.O_RDONLY | os.O_NONBLOCK)
+            while True:
+                try:
+                    # 尝试读取一个字节
+                    data = os.read(fd, 1)
+                    if data:
+                        byte_value = data[0]
+                        if byte_value > 0:
+                            PTT_STATUS = True
+                        else:
+                            PTT_STATUS = False
+                    else:
+                        pass
+                    
+                except BlockingIOError:
+                    pass
+                except OSError as e:
+                    if e.errno == errno.EAGAIN or e.errno == errno.EWOULDBLOCK:
+                        pass
+                    else:
+                        print(f"Error reading from FIFO: {e}")
+                        break
+                # 让出控制权，避免忙等待
+                await asyncio.sleep(0.05)
+        except FileNotFoundError:
+            print("FIFO not found, waiting...")
+            await asyncio.sleep(1)
+        except Exception as e:
+            print(f"Error opening FIFO: {e}")
+            await asyncio.sleep(1)
+        finally:
+            try:
+                os.close(fd)
+            except:
+                pass
 
 
 async def record_microphone():
-    is_finished = False
-    import pyaudio
-    # print("2")
-    global voices, text_print, text_print_2pass_online, text_print_2pass_offline
+    global g_output_text, g_text_2pass_online, g_text_2pass_offline, PTT_STATUS
     FORMAT = pyaudio.paInt16
     CHANNELS = 1
     RATE = 16000
@@ -219,9 +208,7 @@ async def record_microphone():
         use_itn=False
 
     while True:
-        ptt_status = check_ptt_status()
-        if ptt_status == True:
-            print("PTT已按下，打开音频流")
+        if PTT_STATUS == True:
             stream = p.open(format=FORMAT,
                 channels=CHANNELS,
                 rate=RATE,
@@ -230,25 +217,24 @@ async def record_microphone():
             message = json.dumps({"mode": args.mode, "chunk_size": args.chunk_size, "chunk_interval": args.chunk_interval,
                                 "wav_name": "microphone", "is_speaking": True, "hotwords":hotword_msg, "itn": use_itn})
             await websocket.send(message)
-            while ptt_status == True:
-                ptt_status = check_ptt_status()
+            while PTT_STATUS == True:
                 data = stream.read(CHUNK)
                 message = data
                 await websocket.send(message)
                 await asyncio.sleep(0.005)
-
-            print("PTT松开")
+            print("PTT松开下降沿")
             end_message = json.dumps({"is_speaking": False})
             await websocket.send(end_message)
-            text_print = ""
-            text_print_2pass_online = ""
-            text_print_2pass_offline = ""
+            g_output_text = ""
+            g_text_2pass_online = ""
+            g_text_2pass_offline = ""
+        await asyncio.sleep(0.1)
 
 async def message(id):
-    global websocket, voices, offline_msg_done, text_print, text_print_2pass_online, text_print_2pass_offline
-    text_print = ""
-    text_print_2pass_online = ""
-    text_print_2pass_offline = ""
+    global websocket, g_offline_msg_done, g_output_text, g_text_2pass_online, g_text_2pass_offline
+    g_output_text = ""
+    g_text_2pass_online = ""
+    g_text_2pass_offline = ""
     try:
         while True:
             meg = await websocket.recv()
@@ -257,40 +243,38 @@ async def message(id):
             wav_name = meg.get("wav_name", "demo")
             text = meg["text"]
             timestamp=""
-            offline_msg_done = meg.get("is_final", False)
+            g_offline_msg_done = meg.get("is_final", False)
             if "timestamp" in meg:
                 timestamp = meg["timestamp"]
 
             if 'mode' not in meg:
                 continue
             if meg["mode"] == "online":
-                text_print += "{}".format(text)
-                text_print = text_print[-args.words_max_print:]
+                g_output_text += "{}".format(text)
+                g_output_text = g_output_text[-args.words_max_print:]
                 os.system('clear')
-                print("\rpid" + str(id) + ": " + text_print)
+                print("\rpid" + str(id) + ": " + g_output_text)
             elif meg["mode"] == "offline":
                 if timestamp !="":
-                    text_print += "{} timestamp: {}".format(text, timestamp)
+                    g_output_text += "{} timestamp: {}".format(text, timestamp)
                 else:
-                    text_print += "{}".format(text)
+                    g_output_text += "{}".format(text)
 
-                # text_print = text_print[-args.words_max_print:]
-                # os.system('clear')
-                print("\rpid" + str(id) + ": " + wav_name + ": " + text_print)
-                offline_msg_done = True
+                # g_output_text = g_output_text[-args.words_max_print:]
+                print("\rpid" + str(id) + ": " + wav_name + ": " + g_output_text)
+                g_offline_msg_done = True
             else:
                 if meg["mode"] == "2pass-online":
-                    text_print_2pass_online += "{}".format(text)
-                    text_print = text_print_2pass_offline + text_print_2pass_online
+                    g_text_2pass_online += "{}".format(text)
+                    g_output_text = g_text_2pass_offline + g_text_2pass_online
                 else:
-                    text_print_2pass_online = ""
-                    text_print = text_print_2pass_offline + "{}".format(text)
-                    text_print_2pass_offline += "{}".format(text)
-                text_print = text_print[-args.words_max_print:]
-                # os.system('clear')
-                print("\rpid" + str(id) + ": " + text_print)
-                write_text_to_pipe(text_print)
-                # offline_msg_done=True
+                    g_text_2pass_online = ""
+                    g_output_text = g_text_2pass_offline + "{}".format(text)
+                    g_text_2pass_offline += "{}".format(text)
+                g_output_text = g_output_text[-args.words_max_print:]
+                print("\rpid" + str(id) + ": " + g_output_text)
+                write_text_to_asr_fifo(g_output_text)
+                # g_offline_msg_done=True
 
     except Exception as e:
             print("Exception:", e)
@@ -300,10 +284,10 @@ async def message(id):
 
 
 async def ws_client(id):
-    global websocket,voices,offline_msg_done
+    global websocket, g_offline_msg_done
 
-    offline_msg_done=False
-    voices = Queue()
+    g_offline_msg_done=False
+
     if args.ssl == 1:
         ssl_context = ssl.SSLContext()
         ssl_context.check_hostname = False
@@ -315,8 +299,9 @@ async def ws_client(id):
     print("connect to", uri)
     async with websockets.connect(uri, subprotocols=["binary"], ping_interval=None, ssl=ssl_context) as websocket:
         task = asyncio.create_task(record_microphone())
-        task3 = asyncio.create_task(message(str(id))) #processid+fileid
-        await asyncio.gather(task, task3)
+        task2 = asyncio.create_task(check_ptt_status())
+        task3 = asyncio.create_task(message(str(id)))
+        await asyncio.gather(task, task2, task3)
 
     exit(0)
     
@@ -327,7 +312,7 @@ def one_thread(id):
 
 if __name__ == '__main__':
 
-    create_named_pipe()
+    create_all_fifo()
 
     p = Process(target=one_thread, args=(0,))
     p.start()
