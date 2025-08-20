@@ -238,6 +238,11 @@ typedef struct {
     float tps;
 } Nano_Session;
 
+
+unsigned int random_u32(unsigned long long *state);
+float random_f32(unsigned long long *state);
+long time_in_ms();
+
 void load_llm_from_buffer(LLM *llm, Tokenizer *tk, char *buffer, uint32_t max_seq_len);
 void load_llm(LLM *llm, Tokenizer *tk, char *model_path, uint32_t max_seq_len);
 Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long rng_seed);

@@ -181,7 +181,7 @@ void show_splash_screen() {
 
 void show_main_menu() {
     OLED_SoftClear();
-    render_text(L"1.人类的本质\n2.电子鹦鹉\n3.选择语言模型\n4.设置", 0);
+    render_text(L"1.人类的本质\n2.电子鹦鹉\n3.选择语言模型\n4.设置\n5.安全关机", 0);
     OLED_Refresh();
 }
 

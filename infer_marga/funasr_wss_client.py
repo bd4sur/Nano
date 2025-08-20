@@ -1,6 +1,28 @@
 # -*- encoding: utf-8 -*-
 """
+# FunASR服务启动方式
+
+## 原始镜像
+
 sudo docker run -p 10096:10095 -it --rm --privileged=true --name funasr \
+--volume /home/bd4sur/ai/_model/FunASR:/workspace/models \
+--workdir /workspace/FunASR/runtime \
+registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.12
+
+/bin/bash run_server_2pass.sh \
+--download-model-dir /workspace/models \
+--vad-dir damo/speech_fsmn_vad_zh-cn-16k-common-onnx \
+--model-dir damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx \
+--online-model-dir damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online-onnx  \
+--punc-dir damo/punc_ct-transformer_zh-cn-common-vad_realtime-vocab272727-onnx \
+--itn-dir thuduj12/fst_itn_zh \
+--hotword /workspace/models/hotwords.txt \
+--certfile 0
+
+## 安装了ffmpeg的镜像，一行命令启动
+
+sudo docker run -p 10096:10095 -d --privileged=true --name funasr \
+--restart=always \
 --volume /home/bd4sur/ai/_model/FunASR:/workspace/models \
 --workdir /workspace/FunASR/runtime \
 funasr-online-cpu-0.1.12-20250820:latest \
@@ -9,8 +31,11 @@ funasr-online-cpu-0.1.12-20250820:latest \
 --hotword /workspace/models/hotwords.txt \
 --certfile 0"
 
+## 客户端启动命令
+
 python funasr_wss_client.py --host "0.0.0.0" --port 10096 --mode 2pass --chunk_size "5,10,5" --ssl 0
 
+## 解决作为系统服务启动时找不到默认音频设备的问题
 
 sudo nano /etc/asound.conf
 添加：defaults.pcm.card 2
@@ -186,6 +211,12 @@ async def record_microphone():
 
     p = pyaudio.PyAudio()
 
+    device_count = p.get_device_count()
+    print(f"设备数：{device_count}")
+    for i in range(device_count):
+        info = p.get_device_info_by_index(i)
+        print(info)
+
     # hotwords
     fst_dict = {}
     hotword_msg = ""
@@ -209,7 +240,8 @@ async def record_microphone():
 
     while True:
         if PTT_STATUS == True:
-            stream = p.open(format=FORMAT,
+            stream = p.open(
+                format=FORMAT,
                 channels=CHANNELS,
                 rate=RATE,
                 input=True,

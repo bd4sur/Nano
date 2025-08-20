@@ -423,13 +423,35 @@ void free_llm(LLM* llm, Tokenizer *tk) {
 #else
     free(llm->buffer);
 #endif
+
+    free(llm->params.token_embedding);
+    free(llm->params.q_tokens);
+    if (llm->config.is_shared_classifier == 0) {
+        free(llm->params.token_classifier);
+    }
+    free(llm->params.wq);
+    free(llm->params.wk);
+    free(llm->params.wv);
+    free(llm->params.wo);
+    free(llm->params.w1);
+    free(llm->params.w2);
+    free(llm->params.w3);
+
     if (llm->arch == LLM_ARCH_NANO) {
         free_tokenizer(tk);
     }
     else if (llm->arch == LLM_ARCH_QWEN2 || llm->arch == LLM_ARCH_QWEN3) {
         free_bpe_tokenizer(tk);
+        if (llm->arch == LLM_ARCH_QWEN3) {
+            free(llm->params.freq_cis_real);
+            free(llm->params.freq_cis_imag);
+        }
     }
     free_fwd_buffer(&llm->state);
+
+    free(llm);
+
+    printf("555\n");
 }
 
 

@@ -1,4 +1,5 @@
 #include <signal.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 
 #include "avltree.h"
@@ -80,6 +81,21 @@ void play_recording() {
     char command[1024];
     snprintf(command, sizeof(command), "aplay %s", AUDIO_FILE_NAME);
     system(command);
+}
+
+
+// 优雅关机
+int32_t graceful_shutdown() {
+    // 同步所有文件系统数据
+    sync();
+    // 等待同步完成
+    sleep(2);
+    // 执行关机
+    if (system("sudo poweroff") == -1) {
+        perror("关机失败");
+        return -1;
+    }
+    return 0;
 }
 
 
@@ -411,6 +427,25 @@ STATE_M2:// 主菜单。
                 OLED_Refresh();
 
                 STATE = 4;
+            }
+
+            // 短按5键：安全关机
+            else if (key_edge == -1 && key_code == 10) {
+                OLED_SoftClear();
+                render_text(L"正在安全关机...", 0);
+                OLED_Refresh();
+                usleep(1000*1000);
+                if (graceful_shutdown() >= 0) {
+                    exit(0);
+                }
+                else {
+                    OLED_SoftClear();
+                    render_text(L"安全关机失败", 0);
+                    OLED_Refresh();
+                    usleep(1000*1000);
+                }
+                show_main_menu();
+                STATE = -2;
             }
 
             // 短按A键：回到splash
@@ -1167,7 +1202,7 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
 
                 wcscpy(input_buffer, g_asr_output);
                 input_counter = wcslen(g_asr_output);
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
+                // render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 // ASR后立刻提交到LLM？
                 if (g_config_auto_submit_after_asr) {
