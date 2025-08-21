@@ -1,3 +1,4 @@
+#include <time.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -33,14 +34,18 @@ static char *MODEL_PATH_6 = MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q80.bin";
 
 static float g_tps_of_last_session = 0.0f;
 static wchar_t g_llm_output_of_last_session[OUTPUT_BUFFER_LENGTH];
-static wchar_t g_asr_output[OUTPUT_BUFFER_LENGTH];
+static wchar_t g_asr_output[OUTPUT_BUFFER_LENGTH] = L"请说话...";
 
 static wchar_t g_anniversory[OUTPUT_BUFFER_LENGTH] = L"我在博客中，一直回避谈我自己。原因一方面固然是隐私安全考虑，而更重要的原因是，在博客中谈我自己，相当于直面“我是谁”这个终极问题，而我难以回答这个问题，甚至在求索的过程中，只会看到自己的空虚和肤浅。\n\n诸君应该知道，佛经中经常出现“如是我闻”这四个字，意思是“我听说事情是这样的…”。于是我转而回答“我知道什么”，试图迂回说明“什么是我”“什么属于我”，而非径直回答“我是什么”。\n\n一方面，我将个人博客转型为业余电台网站，以电台为载体，来间接呈现它的OP也就是我自己的所见所闻、所思所想。这样的好处是，业余电台是一个比“我”简单得多的系统，介绍“我的电台”，比介绍“我”更容易。电台是一个具象的抓手，可以允许我免于直接回答“我是谁”这个困难的问题。\n\n另一方面，我尽力将我的精神世界区分为“事实”和“观点”两部分，将事实放在“博客”栏目，将观点放在“灵感”栏目。尽管实践中难以明确区分二者，但我依然认为，将思维的依据和思维的结果解耦开来，通过罗列“什么是我”“什么属于我”来渐进式地刻画出我的精神世界的面貌，有助于以超脱的视角来观测我自己，有助于我接近“我是谁”这个问题的答案。\n\n还有一种策略。既然“我是谁”这个问题难以回答，不妨退而求其次，试图回答退化的问题：“我想成为什么样的人”。这个问题实际上包含三个方面，分别是我“想”、我“能”和我“得”。这问题表面上看起来是反思自我，实际上却有很强烈的“外部性”，涉及人作为社会人的价值的评判。\n\n具体而言，为了深刻反思自我，就必须以人为镜，对标他人。想要对标他人，就要了解他人。了解他人，除了了解抽象的他人，还应该了解具体的他人。求解“他是谁”这个问题，似乎比求解“我是谁”这个问题简单一点。既然谈的是博客，那么阅读某人的博客，实际上就是阅读一个“具体的人”。\n\n有人认为，当今网友思维极端化，“二极管思维”盛行，擅长扣帽子、贴标签。但这责任，依我看，也要归咎于许多人并不懂得如何呈现“具体”的自己。许多人活得太抽象，不仅在认识他人的时候太抽象，认识自己的时候也太抽象。人与人之间，都习惯于通过标签和简单归纳来互相认识，这难免产生“二极管思维”。我尽力避免成为这样的人，因此我希望回答好“我是谁”这个问题，呈现一个“具体”的自己。\n\n然而，活得“具体”是很难的。我有个点子，那就是为了观察某人的“专业性”，可以要求他在十秒内说出一句包含很多专业术语的话。一方面，认识具体的人，难免要花不少的时间去与对方交流、相处，也包括阅读他的文章。另一方面，为了让自己活得具体，就要输入足量的具体的事实，输出足量的具体的观点。这也就是说，人要活得“具体”，首先要活得“丰富”。泡利还是谁说过，所谓专家，就是把他所在领域中所有能犯的错误都犯过一遍的人。有了足量的具体细节，才“有资格”发展出自己的“高观点”，从“真懂”到“真信”，实现“我有什么”到“我是什么”的飞跃。\n\n这实际上就是人的认识规律，而且是认识规律的很小但很重要的一方面。这提醒我，要“把手弄脏”，先谈问题，再谈主义。这既是认识他人和世界的方法，也是认识自我的途径。\n\n取乎上得乎中，取乎中得乎下。对标什么人，想成为什么人，能成为什么人，必须要成为什么人。这是人生观的大问题，不可不察。\n";
 
 
-// 全局设置状态
+// 全局设置
 int32_t g_config_auto_submit_after_asr = 1; // ASR结束后立刻提交识别内容到LLM
 
+
+// 全局状态
+int32_t g_is_asr_server_up = 0;
+int32_t g_timer = 0; // 全局计时器
 
 
 // 传递PTT状态的命名管道
@@ -54,7 +59,7 @@ pid_t record_pid = 0;
 #define AUDIO_FILE_NAME "/tmp/nano_audio.wav"
 
 #define ASR_FIFO_PATH "/tmp/asr_fifo"
-#define ASR_BUFFER_SIZE 1024
+#define ASR_BUFFER_SIZE (65536)
 
 #define PTT_FIFO_PATH "/tmp/ptt_fifo"
 
@@ -97,6 +102,36 @@ int32_t graceful_shutdown() {
     }
     return 0;
 }
+
+
+
+
+// 穷人的ASR服务状态检测：通过读取ASR服务的日志前64kB中是否出现“init finished”来判断
+#define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
+int32_t check_asr_server_status() {
+    char asr_log_buffer[65536];
+    FILE *file = fopen(ASR_SERVER_LOG_PATH, "r");
+    if (file == NULL) {
+        return -1;
+    }
+    // 读取最多max_chars个字符
+    size_t chars_read = fread(asr_log_buffer, sizeof(char), 65536 - 1, file);
+    // 添加字符串结束符
+    asr_log_buffer[chars_read] = '\0';
+    fclose(file);
+    // 查找日志中的模式
+    char pattern[] = "asr model init finished. listen on port";
+    // 使用strstr查找子字符串
+    if (strstr(asr_log_buffer, pattern) != NULL) {
+        return 1;
+    }
+    else {
+        return 0;
+    }
+}
+
+
+
 
 
 // 以只读方式打开ASR命名管道（非阻塞）
@@ -240,7 +275,7 @@ int main() {
     OLED_Init();
     OLED_Clear();
 
-    show_splash_screen();
+    show_splash_screen(g_timer, g_is_asr_server_up);
 
     ///////////////////////////////////////
     // 矩阵按键初始化与读取
@@ -286,6 +321,8 @@ int main() {
 
     // 录音状态
     int32_t is_recording = 0;
+    // 录音起始的时间戳
+    time_t asr_start_timestamp = 0;
 
     // 按键状态
     uint8_t  key_code = 16;  // 大于等于16为没有任何按键，0-15为按键
@@ -364,7 +401,7 @@ STATE_M1:// 初始状态：欢迎屏幕。按任意键进入主菜单
 
         case -1:
 
-            show_splash_screen();
+            show_splash_screen(g_timer, g_is_asr_server_up);
 
             // 按下任何键，不论长短按，进入主菜单
             if (key_edge < 0 && key_code < 16) {
@@ -430,7 +467,7 @@ STATE_M2:// 主菜单。
             }
 
             // 短按5键：安全关机
-            else if (key_edge == -1 && key_code == 10) {
+            else if (key_edge == -1 && key_code == 5) {
                 OLED_SoftClear();
                 render_text(L"正在安全关机...", 0);
                 OLED_Refresh();
@@ -606,6 +643,7 @@ STATE_0:// 文字编辑器状态：等待输入拼音/字母/数字，或者将�
                 OLED_Refresh();
 
                 is_recording = 1;
+                asr_start_timestamp = time(NULL);
 
                 STATE = 21;
                 goto STATE_21;
@@ -1160,19 +1198,28 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
 
         case 21:
 
+            // 实时显示ASR结果
             if (is_recording == 1) {
                 int32_t len = read_asr_fifo(g_asr_output);
-                if (len > 0) {
+                // if (len > 0) {
+                    // 显示录音持续时间
+                    wchar_t asr_text_with_duration[ASR_BUFFER_SIZE] = L"";
+                    wcscat(asr_text_with_duration, g_asr_output);
+                    wchar_t rec_duration[50];
+                    swprintf(rec_duration, 50, L"\n[ %d s ]", (int32_t)(time(NULL) - asr_start_timestamp));
+                    wcscat(asr_text_with_duration, rec_duration);
+
                     OLED_SoftClear();
-                    render_text(g_asr_output, -1);
+                    render_text(asr_text_with_duration, -1);
                     OLED_Refresh();
-                }
+                // }
             }
 
             // 松开按钮，停止PTT
             if (is_recording > 0 && key_edge == 0 && key_code == 16) {
                 printf("松开PTT\n");
                 is_recording = 0;
+                asr_start_timestamp = 0;
 
                 close(g_asr_fifo_fd);
 
@@ -1202,6 +1249,7 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
 
                 wcscpy(input_buffer, g_asr_output);
                 input_counter = wcslen(g_asr_output);
+                wcscpy(g_asr_output, L"请说话...");
                 // render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 // ASR后立刻提交到LLM？
@@ -1317,7 +1365,13 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
             }
         }
 
+        // 定期检查ASR服务状态
+        if (g_timer % 100 == 0) {
+            g_is_asr_server_up = check_asr_server_status();
+            printf("ASR Service = %d\n", g_is_asr_server_up);
+        }
 
+        g_timer = (g_timer == 2147483647) ? 0 : (g_timer + 1);
     }
 
     llm_context_free(g_llm_ctx);

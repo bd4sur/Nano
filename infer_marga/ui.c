@@ -147,7 +147,7 @@ int32_t render_text(wchar_t *text, int32_t start_line) {
 
 
 
-void show_splash_screen() {
+void show_splash_screen(int32_t timer, int32_t is_asr_server_up) {
     OLED_SoftClear();
 
     time_t rawtime;
@@ -173,8 +173,17 @@ void show_splash_screen() {
     OLED_DrawLine(0, 0, 127, 0, 1);
     OLED_DrawLine(0, 15, 127, 15, 1);
     OLED_DrawLine(0, 0, 0, 63, 1);
-    OLED_DrawLine(127, 0, 127, 63, 1);
+    OLED_DrawLine(127, 0, 127, 64, 1); // NOTE 如果横坐标设为63则会漏掉最后一个点
     OLED_DrawLine(0, 63, 127, 63, 1);
+
+    // 检查ASR服务状态，如果ASR服务未启动，则在屏幕左上角画一个小点，表示ASR服务启动中
+    if (is_asr_server_up < 1) {
+        int32_t v = ((timer >> 2) % 2);
+        OLED_DrawLine(1, 1, 2, 1, v);
+        OLED_DrawLine(1, 1, 1, 2, v);
+        OLED_DrawLine(1, 2, 2, 2, v);
+        OLED_DrawLine(2, 1, 2, 3, v); // NOTE 如果横坐标设为63则会漏掉最后一个点
+    }
 
     OLED_Refresh();
 }

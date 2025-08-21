@@ -58,7 +58,7 @@
 #define LLM_STOPPED_IN_PREFILLING (21)
 #define LLM_STOPPED_IN_DECODING   (22)
 
-#define MAX_PROMPT_BUFFER_LENGTH  (16384)
+#define MAX_PROMPT_BUFFER_LENGTH  (65536)
 
 // ===============================================================================
 // 数据结构定义

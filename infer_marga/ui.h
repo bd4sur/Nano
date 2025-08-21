@@ -4,8 +4,8 @@
 #include <wchar.h>
 #include <stdint.h>
 
-#define INPUT_BUFFER_LENGTH  (4096)
-#define OUTPUT_BUFFER_LENGTH (32768)
+#define INPUT_BUFFER_LENGTH  (65536)
+#define OUTPUT_BUFFER_LENGTH (65536)
 
 #define IME_MODE_HANZI    (0)
 #define IME_MODE_ALPHABET (1)
@@ -14,7 +14,7 @@
 void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode);
 int32_t render_text(wchar_t *text, int32_t start_line);
 
-void show_splash_screen();
+void show_splash_screen(int32_t timer, int32_t is_asr_server_up);
 void show_main_menu();
 int32_t render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, int32_t cursor_pos);
 void render_pinyin_input(uint32_t **candidate_pages, uint32_t pinyin_keys, uint32_t current_page, uint32_t candidate_page_num, uint32_t is_picking);
