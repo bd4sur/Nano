@@ -13,9 +13,6 @@
 #define MODEL_ROOT_DIR "/home/bd4sur/ai/_model/Nano"
 // #define MODEL_ROOT_DIR "/emmc/_model"
 
-#define ALPHABET_COUNTDOWN_MAX (30)
-#define LONG_PRESS_THRESHOLD (360)
-
 #define PREFILL_LED_ON  system("echo \"1\" > /sys/devices/platform/leds/leds/green:status/brightness");
 #define PREFILL_LED_OFF system("echo \"0\" > /sys/devices/platform/leds/leds/green:status/brightness");
 #define DECODE_LED_ON   system("echo \"1\" > /sys/devices/platform/leds/leds/blue:status/brightness");
@@ -42,10 +39,14 @@ static wchar_t g_anniversory[OUTPUT_BUFFER_LENGTH] = L"我在博客中，一直�
 // 全局设置
 int32_t g_config_auto_submit_after_asr = 1; // ASR结束后立刻提交识别内容到LLM
 
-
-// 全局状态
-int32_t g_is_asr_server_up = 0;
-int32_t g_timer = 0; // 全局计时器
+char *g_model_path = NULL;
+char *g_lora_path = NULL;
+float g_repetition_penalty = 1.05f;
+float g_temperature = 1.0f;
+float g_top_p = 0.5f;
+unsigned int g_top_k = 0;
+unsigned long long g_random_seed = 0;
+uint32_t g_max_seq_len = 512;
 
 
 // 传递PTT状态的命名管道
@@ -54,39 +55,11 @@ int g_ptt_fifo_fd;
 int g_asr_fifo_fd;
 
 
-pid_t record_pid = 0;
-
-#define AUDIO_FILE_NAME "/tmp/nano_audio.wav"
-
 #define ASR_FIFO_PATH "/tmp/asr_fifo"
 #define ASR_BUFFER_SIZE (65536)
 
 #define PTT_FIFO_PATH "/tmp/ptt_fifo"
 
-// 启动录音进程
-void start_recording() {
-    record_pid = fork();
-    if(record_pid == 0) {
-        char *argv[] = {"arecord", "-f", "dat", "-t", "wav", AUDIO_FILE_NAME, NULL};
-        execv("/usr/bin/arecord", argv);
-        exit(1);
-    }
-}
-
-// 停止录音
-void stop_recording() {
-    if(record_pid > 0) {
-        kill(record_pid, SIGTERM);  // 终止录音进程
-        record_pid = 0;
-    }
-}
-
-// 播放录音
-void play_recording() {
-    char command[1024];
-    snprintf(command, sizeof(command), "aplay %s", AUDIO_FILE_NAME);
-    system(command);
-}
 
 
 // 优雅关机
@@ -260,14 +233,54 @@ int32_t on_finished(Nano_Session *session) {
 
 
 int main() {
+
     if(!setlocale(LC_CTYPE, "")) return -1;
 
-    float repetition_penalty = 1.05f;
-    float temperature = 1.0f;
-    float top_p = 0.5f;
-    unsigned int top_k = 0;
-    unsigned long long random_seed = (unsigned int)time(NULL);
-    uint32_t max_seq_len = 512;
+    ///////////////////////////////////////
+    // 初始化各类状态
+
+    Global_State           *global_state = (Global_State*)calloc(1, sizeof(Global_State));
+    Key_Event              *key_event = (Key_Event*)calloc(1, sizeof(Key_Event));
+    Widget_Textarea_State  *widget_textarea_state = (Widget_Textarea_State*)calloc(1, sizeof(Widget_Textarea_State));
+    Widget_Input_State     *widget_input_state = (Widget_Input_State*)calloc(1, sizeof(Widget_Input_State));
+    Widget_Menu_State      *main_menu_state = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
+
+
+    global_state->is_recording = 0;
+    global_state->asr_start_timestamp = 0;
+
+    widget_input_state->state = 0;
+    widget_input_state->ime_mode_flag = 0;
+    widget_input_state->pinyin_keys = 0;
+    widget_input_state->candidates = NULL;
+    widget_input_state->candidate_num = 0;
+    widget_input_state->candidate_pages = NULL;
+    widget_input_state->candidate_page_num = 0;
+    widget_input_state->current_page = 0;
+    widget_input_state->input_buffer = (uint32_t *)calloc(INPUT_BUFFER_LENGTH, sizeof(uint32_t));
+    widget_input_state->input_counter = 0;
+    widget_input_state->cursor_pos = 0;
+
+    widget_input_state->alphabet_countdown = -1;
+    widget_input_state->alphabet_current_key = 255;
+    widget_input_state->alphabet_index = 0;
+
+    widget_textarea_state->line_num = 0;
+    widget_textarea_state->current_line = 0;
+
+    key_event->key_code = 16;  // 大于等于16为没有任何按键，0-15为按键
+    key_event->key_edge = 0;   // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)
+    key_event->key_timer = 0;  // 按下计时器
+    key_event->key_mask = 0;   // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
+    key_event->key_repeat = 0; // 触发一次长按后，只要不松手，该标记置1，直到物理按键松开后置0。若该标记为1，则在按住时触发连续重复动作。
+
+    // 空按键状态：用于定时器事件
+    Key_Event *void_key_event = (Key_Event*)calloc(1, sizeof(Key_Event));
+    void_key_event->key_code = 16;
+    void_key_event->key_edge = 0;
+    void_key_event->key_timer = 0;
+    void_key_event->key_mask = 0;
+    void_key_event->key_repeat = 0;
 
     ///////////////////////////////////////
     // OLED 初始化
@@ -275,85 +288,42 @@ int main() {
     OLED_Init();
     OLED_Clear();
 
-    show_splash_screen(g_timer, g_is_asr_server_up);
+    show_splash_screen(key_event, global_state);
 
     ///////////////////////////////////////
     // 矩阵按键初始化与读取
 
     if(keyboard_init() < 0) return -1;
-    char prev_key = 16;
+    key_event->prev_key = 16;
 
     // 全局状态标志
     int32_t STATE = -1;
 
-    // 汉英数输入模式标志
-    uint32_t ime_mode_flag = 0; // 0汉字 1英文 2数字
-
-    // 符号列表
-    wchar_t symbols[55] = L"，。、？！：；“”‘’（）《》…—～·【】 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
-
-    // 按键对应的字母列表
-    wchar_t alphabet[10][32] = {L"", L" .,;:?!-/+_=&\"*", L"abcABC", L"defDEF", L"ghiGHI", L"jklJKL", L"mnoMNO", L"pqrsPRQS", L"tuvTUV", L"wxyzWXYZ"};
-
-    // 单字拼音键码暂存
-    uint32_t pinyin_keys = 0;
-
-    // 候选字翻页相关
-    uint32_t *candidates = NULL;
-    uint32_t candidate_num = 0;
-    uint32_t **candidate_pages = NULL;
-    uint32_t candidate_page_num = 0;
-    uint32_t current_page = 0;
-
-    // 全局文字输入缓冲
-    uint32_t *input_buffer = (uint32_t *)calloc(INPUT_BUFFER_LENGTH, sizeof(uint32_t)); // 文字输入缓冲区
-    int32_t input_counter = 0;
-    int32_t cursor_pos = 0; // 光标位置
-
-    // 推理结果翻页相关
-    int32_t output_line_num = 0;
-    int32_t output_current_line = 0;
-
-    // 英文字母输入模式的倒计时
-    int32_t alphabet_countdown = -1; // 从ALPHABET_COUNTDOWN_MAX开始，每轮主循环后倒数减1，减到0时清除进度条，减到-1意味着英文字母输入状态结束
-    char alphabet_current_key = 255;
-    uint32_t alphabet_index = 0;
-
-    // 录音状态
-    int32_t is_recording = 0;
-    // 录音起始的时间戳
-    time_t asr_start_timestamp = 0;
-
-    // 按键状态
-    uint8_t  key_code = 16;  // 大于等于16为没有任何按键，0-15为按键
-    int8_t   key_edge = 0;   // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)
-    uint32_t key_timer = 0;  // 按下计时器
-    uint8_t  key_mask = 0;   // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
-    uint8_t  key_repeat = 0; // 触发一次长按后，只要不松手，该标记置1，直到物理按键松开后置0。若该标记为1，则在按住时触发连续重复动作。
 
     while (1) {
         char key = keyboard_read_key();
         // 边沿
-        if (key_mask != 1 && (key != prev_key)) {
+        if (key_event->key_mask != 1 && (key != key_event->prev_key)) {
             // 按下瞬间（上升沿）
             if (key != 16) {
-                key_code = key;
-                key_edge = 1;
-                key_timer = 0;
+                key_event->key_code = key;
+                key_event->key_edge = 1;
+                key_event->key_timer = 0;
             }
             // 松开瞬间（下降沿）
             else {
-                key_code = prev_key;
+                key_event->key_code = key_event->prev_key;
+                printf("key_timer = %d\n", key_event->key_timer);
                 // 短按（或者通过长按触发重复动作状态后反复触发）
-                if (key_repeat == 1 || (key_timer >= 0 && key_timer < LONG_PRESS_THRESHOLD)) {
-                    key_edge = -1;
-                    key_timer = 0;
+                if (key_event->key_repeat == 1 || (key_event->key_timer >= 0 && key_event->key_timer < LONG_PRESS_THRESHOLD)) {
+                    key_event->key_edge = -1;
+                    key_event->key_timer = 0;
                 }
                 // 长按
-                else if (key_timer >= LONG_PRESS_THRESHOLD) {
-                    key_edge = -2;
-                    key_timer = 0;
-                    key_repeat = 1;
+                else if (key_event->key_timer >= LONG_PRESS_THRESHOLD) {
+                    key_event->key_edge = -2;
+                    key_event->key_timer = 0;
+                    key_event->key_repeat = 1;
                 }
             }
         }
@@ -361,34 +331,34 @@ int main() {
         else {
             // 按住
             if (key != 16) {
-                key_code = key;
-                key_edge = 0;
-                key_timer++;
+                key_event->key_code = key;
+                key_event->key_edge = 0;
+                key_event->key_timer++;
                 // 若重复动作标记key_repeat在一次长按后点亮，则继续按住可以反复触发短按
-                if (key_repeat == 1) {
-                    key_edge = -2;
-                    key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
+                if (key_event->key_repeat == 1) {
+                    key_event->key_edge = -2;
+                    key_event->key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
                     key = 16; // 便于后面设置prev_key为16（无键按下）
-                    key_repeat = 1;
+                    key_event->key_repeat = 1;
                 }
                 // 如果没有点亮动作标记key_repeat，则达到长按阈值后触发长按事件
-                else if (key_timer >= LONG_PRESS_THRESHOLD) {
-                    // printf("按住超时触发长按：%d，计时=%d，key_mask=%d\n", (int)key, key_timer, (int)key_mask);
-                    key_edge = -2;
-                    key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
+                else if (key_event->key_timer >= LONG_PRESS_THRESHOLD) {
+                    // printf("按住超时触发长按：%d，计时=%d，key_mask=%d\n", (int)key, key_event->key_timer, (int)key_event->key_mask);
+                    key_event->key_edge = -2;
+                    key_event->key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
                     key = 16; // 便于后面设置prev_key为16（无键按下）
                 }
             }
             // 松开
             else {
-                key_code = 16;
-                key_edge = 0;
-                key_timer = 0;
-                key_mask = 0;
-                key_repeat = 0;
+                key_event->key_code = 16;
+                key_event->key_edge = 0;
+                key_event->key_timer = 0;
+                key_event->key_mask = 0;
+                key_event->key_repeat = 0;
             }
         }
-        prev_key = key;
+        key_event->prev_key = key;
 
 
 
@@ -401,11 +371,11 @@ STATE_M1:// 初始状态：欢迎屏幕。按任意键进入主菜单
 
         case -1:
 
-            show_splash_screen(g_timer, g_is_asr_server_up);
+            show_splash_screen(key_event, global_state);
 
             // 按下任何键，不论长短按，进入主菜单
-            if (key_edge < 0 && key_code < 16) {
-                show_main_menu();
+            if (key_event->key_edge < 0 && key_event->key_code < 16) {
+                show_main_menu(key_event, global_state, main_menu_state);
                 STATE = -2;
             }
 
@@ -418,76 +388,83 @@ STATE_M2:// 主菜单。
         case -2:
 
             // 短按1键
-            if (key_edge == -1 && key_code == 1) {
+            if (key_event->key_edge == -1 && key_event->key_code == 1) {
                 // 文本卷到顶，渲染
-                OLED_SoftClear();
-                output_current_line = 0;
-                output_line_num = render_text(g_anniversory, output_current_line);
-                render_scroll_bar(output_line_num, output_current_line);
-                OLED_Refresh();
+                widget_textarea_state->text = g_anniversory;
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 1;
+                draw_textarea(key_event, global_state, widget_textarea_state);
                 STATE = -3;
             }
 
             // 短按2键：进入文本输入就绪状态
-            else if (key_edge == -1 && key_code == 2) {
+            else if (key_event->key_edge == -1 && key_event->key_code == 2) {
 
                 // LLM Init
 
                 if (!g_llm_ctx) {
-                    OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...", 0); OLED_Refresh();
+                    widget_textarea_state->text = L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...";
+                    widget_textarea_state->current_line = 0;
+                    widget_textarea_state->is_show_scroll_bar = 0;
+                    draw_textarea(key_event, global_state, widget_textarea_state);
 
-                    repetition_penalty = 1.05f;
-                    temperature = 1.0f;
-                    top_p = 0.5f;
-                    top_k = 0;
-                    random_seed = (unsigned int)time(NULL);
-                    max_seq_len = 512;
+                    g_model_path = MODEL_PATH_1;
+                    g_lora_path = NULL;
+                    g_repetition_penalty = 1.05f;
+                    g_temperature = 1.0f;
+                    g_top_p = 0.5f;
+                    g_top_k = 0;
+                    g_random_seed = (unsigned int)time(NULL);
+                    g_max_seq_len = 512;
+                    g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, g_random_seed);
 
-                    g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
-
-                    OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
+                    widget_textarea_state->text = L"加载完成~";
+                    widget_textarea_state->current_line = 0;
+                    widget_textarea_state->is_show_scroll_bar = 0;
+                    draw_textarea(key_event, global_state, widget_textarea_state);
                     usleep(1000*1000);
                 }
 
                 // 刷新文本输入框
-                input_buffer = refresh_input_buffer(input_buffer, &input_counter);
-                cursor_pos = input_counter;
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-                current_page = 0;
+                init_input(key_event, global_state, widget_input_state);
                 STATE = 0;
             }
 
             // 短按3键：选择语言模型
-            else if (key_edge == -1 && key_code == 3) {
-                OLED_SoftClear();
-                render_text(L"选择语言模型：\n1. Nano-168M-QA\n2. Nano-56M-QA\n3. Nano-56M-Neko\n4. Qwen3-0.6B", 0);
-                OLED_Refresh();
+            else if (key_event->key_edge == -1 && key_event->key_code == 3) {
+                widget_textarea_state->text = L"选择语言模型：\n1. Nano-168M-QA\n2. Nano-56M-QA\n3. Nano-56M-Neko\n4. Qwen3-0.6B";
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
 
                 STATE = 4;
             }
 
             // 短按5键：安全关机
-            else if (key_edge == -1 && key_code == 5) {
-                OLED_SoftClear();
-                render_text(L"正在安全关机...", 0);
-                OLED_Refresh();
-                usleep(1000*1000);
+            else if (key_event->key_edge == -1 && key_event->key_code == 5) {
+                widget_textarea_state->text = L"正在安全关机...";
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+
                 if (graceful_shutdown() >= 0) {
                     exit(0);
                 }
                 else {
-                    OLED_SoftClear();
-                    render_text(L"安全关机失败", 0);
-                    OLED_Refresh();
+                    widget_textarea_state->text = L"安全关机失败";
+                    widget_textarea_state->current_line = 0;
+                    widget_textarea_state->is_show_scroll_bar = 0;
+                    draw_textarea(key_event, global_state, widget_textarea_state);
+
                     usleep(1000*1000);
                 }
-                show_main_menu();
+                show_main_menu(key_event, global_state, main_menu_state);
                 STATE = -2;
             }
 
             // 短按A键：回到splash
-            else if (key_edge == -1 && key_code == 10) {
-                key_code = 16; // 取消按键状态
+            else if (key_event->key_edge == -1 && key_event->key_code == 10) {
+                key_event->key_code = 16; // 取消按键状态
                 STATE = -1;
                 goto STATE_M1;
             }
@@ -501,41 +478,39 @@ STATE_M3:// 文本显示状态
         case -3:
 
             // 短按A键：回到主菜单
-            if (key_edge == -1 && key_code == 10) {
-                show_main_menu();
+            if (key_event->key_edge == -1 && key_event->key_code == 10) {
+                show_main_menu(key_event, global_state, main_menu_state);
                 STATE = -2;
             }
 
             // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 14) {
-                if (output_current_line <= 0) { // 卷到顶
-                    output_current_line = output_line_num - 5;
+            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 14) {
+                if (widget_textarea_state->current_line <= 0) { // 卷到顶
+                    widget_textarea_state->current_line = widget_textarea_state->line_num - 5;
                 }
                 else {
-                    output_current_line--;
+                    widget_textarea_state->current_line--;
                 }
 
-                OLED_SoftClear();
-                render_text(g_anniversory, output_current_line);
-                render_scroll_bar(output_line_num, output_current_line);
-                OLED_Refresh();
+                widget_textarea_state->text = g_anniversory;
+                widget_textarea_state->is_show_scroll_bar = 1;
+                draw_textarea(key_event, global_state, widget_textarea_state);
 
                 STATE = -3;
             }
 
             // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
-                if (output_current_line >= (output_line_num - 5)) { // 卷到底
-                    output_current_line = 0;
+            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 15) {
+                if (widget_textarea_state->current_line >= (widget_textarea_state->line_num - 5)) { // 卷到底
+                    widget_textarea_state->current_line = 0;
                 }
                 else {
-                    output_current_line++;
+                    widget_textarea_state->current_line++;
                 }
 
-                OLED_SoftClear();
-                render_text(g_anniversory, output_current_line);
-                render_scroll_bar(output_line_num, output_current_line);
-                OLED_Refresh();
+                widget_textarea_state->text = g_anniversory;
+                widget_textarea_state->is_show_scroll_bar = 1;
+                draw_textarea(key_event, global_state, widget_textarea_state);
 
                 STATE = -3;
             }
@@ -543,94 +518,23 @@ STATE_M3:// 文本显示状态
             break;
 
         /////////////////////////////////////////////
-STATE_0:// 文字编辑器状态：等待输入拼音/字母/数字，或者将文字输入缓冲区的内容提交给大模型
+STATE_0:// 文字编辑器状态
         /////////////////////////////////////////////
 
         case 0:
 
-            // 长按0：输入符号
-            if (key_edge == -2 && key_code == 0) {
-                candidates = (uint32_t *)calloc(54, sizeof(uint32_t));
-                for (int i = 0; i < 54; i++) candidates[i] = (uint32_t)symbols[i];
-                candidate_pages = candidate_paging(candidates, 54, 10, &candidate_page_num);
-                render_symbol_input(candidate_pages, current_page, candidate_page_num);
-
-                current_page = 0;
-                STATE = 3;
-            }
-
-            // 短按0：数字输入模式下是直接输入0，其余模式无动作
-            else if (key_edge == -1 && key_code == 0) {
-                if (ime_mode_flag == IME_MODE_NUMBER) {
-                    input_buffer[input_counter++] = L'0';
-                    render_input_buffer(input_buffer, ime_mode_flag, -1);
-                    STATE = 0;
-                }
-            }
-
-            // 短按1-9：输入拼音/字母/数字，根据输入模式标志，转向不同的状态
-            else if (key_edge == -1 && (key_code >= 1 && key_code <= 9)) {
-                if (ime_mode_flag == IME_MODE_HANZI) {
-                    if (key_code >= 2 && key_code <= 9) { // 仅响应按键2-9；1无动作
-                        STATE = 1;
-                        goto STATE_1;
-                    }
-                }
-                else if (ime_mode_flag == IME_MODE_NUMBER) {
-                    input_buffer[input_counter++] = L'0' + key_code;
-                    render_input_buffer(input_buffer, ime_mode_flag, -1);
-                    STATE = 0;
-                }
-                else if (ime_mode_flag == IME_MODE_ALPHABET) {
-                    // 如果按键按下时，不是字母切换状态，则开始循环切换，并开始倒计时。
-                    if (alphabet_countdown == -1) {
-                        alphabet_countdown = ALPHABET_COUNTDOWN_MAX;
-                        alphabet_current_key = key_code;
-                        alphabet_index = 0;
-                    }
-                    // 如果按键按下时，倒计时尚未结束，则切换到下一个字母。
-                    else if (alphabet_countdown > 0) {
-                        alphabet_countdown = ALPHABET_COUNTDOWN_MAX;
-                        alphabet_current_key = key_code;
-                        alphabet_index = (alphabet_index + 1) % wcslen(alphabet[(int)key_code]);
-                    }
-
-                    // 在屏幕上循环显示当前选中的字母
-                    wchar_t letter[2];
-                    uint32_t x_pos = 1;
-                    for (int i = 0; i < wcslen(alphabet[(int)key_code]); i++) {
-                        letter[0] = alphabet[(int)key_code][i]; letter[1] = 0;
-                        render_line(letter, x_pos, 50, (i != alphabet_index));
-                        x_pos += 8;
-                    }
-
-                    STATE = 0;
-                }
-            }
-
             // 长+短按A键：删除一个字符；如果输入缓冲区为空，则回到主菜单
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 10) {
-                if (input_counter >= 1) {
-                    input_buffer[--input_counter] = 0;
-                    render_input_buffer(input_buffer, ime_mode_flag, -1);
-                    STATE = 0;
-                }
-                else {
-                    input_buffer = refresh_input_buffer(input_buffer, &input_counter);
-                    show_main_menu();
+            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+                if (widget_input_state->state == 0 && widget_input_state->input_counter <= 0) {
+                    // widget_input_state->input_buffer = refresh_input_buffer(widget_input_state->input_buffer, &(widget_input_state->input_counter));
+                    init_input(key_event, global_state, widget_input_state);
+                    show_main_menu(key_event, global_state, main_menu_state);
                     STATE = -2;
                 }
             }
 
-            // 长+短按B键：依次切换汉-英-数输入模式
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 11) {
-                ime_mode_flag = (ime_mode_flag + 1) % 3;
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-                STATE = 0;
-            }
-
             // 按下C键：开始PTT
-            else if (key_edge > 0 && key_code == 12) {
+            else if (key_event->key_edge > 0 && key_event->key_code == 12) {
 
                 // 设置PTT状态为按下（>0）
                 if (set_ptt_status(66) < 0) break;
@@ -638,215 +542,28 @@ STATE_0:// 文字编辑器状态：等待输入拼音/字母/数字，或者将�
                 // 打开ASR管道
                 if (open_asr_fifo() < 0) break;
 
-                OLED_SoftClear();
-                render_text(L" \n \n     请说话...", 0);
-                OLED_Refresh();
+                widget_textarea_state->text = L" \n \n     请说话...";
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
 
-                is_recording = 1;
-                asr_start_timestamp = time(NULL);
+                global_state->is_recording = 1;
+                global_state->asr_start_timestamp = time(NULL);
 
                 STATE = 21;
                 goto STATE_21;
             }
 
             // 短按D键：提交
-            else if (key_edge == -1 && key_code == 13) {
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-
-                STATE = 10;
-                goto STATE_10;
-            }
-
-            // 长+短按*：光标向左移动
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 14) {
-                
-            }
-
-            // 按下瞬间*：开始录音
-            else if (key_edge > 0 && key_code == 14) {
-                OLED_SoftClear();
-                render_text(L" \n \n     正在录音...", 0);
-                OLED_Refresh();
-                is_recording = 1;
-                start_recording();
-
-                STATE = 20;
-                goto STATE_20;
-            }
-
-            // 长+短按#键：（关于）光标向右移动
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
-                OLED_SoftClear();
-                render_text(L"Project MARGA!\nV2025.8\n电子鹦鹉笼\n\n(c) 2025 BD4SUR", 0);
-                OLED_Refresh();
-
-                STATE = 5;
-            }
-
-            break;
-
-        /////////////////////////////////////////////
-STATE_1:// 拼音输入状态
-        /////////////////////////////////////////////
-
-        case 1:
-
-            // 短按D键：开始选字
-            if (key_edge == -1 && key_code == 13) {
-                if (candidate_pages) {
-                    render_pinyin_input(candidate_pages, pinyin_keys, current_page, candidate_page_num, 1);
-                    STATE = 2;
+            else if (key_event->key_edge == -1 && key_event->key_code == 13) {
+                // render_input_buffer(widget_input_state->input_buffer, widget_input_state->ime_mode_flag, -1);
+                if (widget_input_state->state == 0) {
+                    STATE = 10;
+                    goto STATE_10;
                 }
             }
 
-            // 短按A键：取消输入拼音，清除已输入的所有按键，回到初始状态
-            else if (key_edge == -1 && key_code == 10) {
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-
-                current_page = 0;
-                pinyin_keys = 0;
-                STATE = 0;
-            }
-
-            // 短按2-9键：继续输入拼音
-            else if (key_edge == -1 && (key_code >= 2 && key_code <= 9)) {
-                pinyin_keys *= 10;
-                pinyin_keys += (uint32_t)key_code;
-
-                if (candidates) { free(candidates); candidates = NULL; }
-                free_candidate_pages(candidate_pages, candidate_page_num); candidate_pages = NULL;
-
-                candidates = candidate_hanzi_list(pinyin_keys, &candidate_num);
-
-                if (candidates) { // 如果当前键码有对应的候选字
-                    // 候选字列表分页
-                    candidate_pages = candidate_paging(candidates, candidate_num, 10, &candidate_page_num);
-                    render_pinyin_input(candidate_pages, pinyin_keys, current_page, candidate_page_num, 0);
-                }
-                else {
-                    render_pinyin_input(NULL, pinyin_keys, 0, 0, 0);
-                }
-
-                STATE = 1;
-            }
-
-            break;
-
-        /////////////////////////////////////////////
-STATE_2:// 候选字选择状态
-        /////////////////////////////////////////////
-
-        case 2:
-
-            // 短按0-9键：从候选字列表中选定一个字，选定后转到初始状态
-            if (key_edge == -1 && (key_code >= 0 && key_code <= 9)) {
-                uint32_t index = (key_code == 0) ? 9 : (key_code - 1); // 按键0对应9
-                // 将选中的字加入输入缓冲区
-                uint32_t ch = candidate_pages[current_page][index];
-                if (ch) {
-                    input_buffer[input_counter++] = ch;
-                }
-                else {
-                    printf("选定了列表之外的字，忽略。\n");
-                }
-
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-
-                free(candidates); candidates = NULL;
-                free_candidate_pages(candidate_pages, candidate_page_num); candidate_pages = NULL;
-                current_page = 0;
-
-                pinyin_keys = 0;
-                STATE = 0;
-            }
-
-            // 长+短按*键：候选字翻页到上一页
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 14) {
-                if(current_page > 0) {
-                    current_page--;
-                    render_pinyin_input(candidate_pages, pinyin_keys, current_page, candidate_page_num, 1);
-                }
-
-                STATE = 2;
-            }
-
-            // 长+短按#键：候选字翻页到下一页
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
-                if(current_page < candidate_page_num - 1) {
-                    current_page++;
-                    render_pinyin_input(candidate_pages, pinyin_keys, current_page, candidate_page_num, 1);
-                }
-
-                STATE = 2;
-            }
-
-            // 短按A键：取消选择，回到初始状态
-            else if (key_edge == -1 && key_code == 10) {
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-
-                current_page = 0;
-                pinyin_keys = 0;
-                STATE = 0;
-            }
-
-            break;
-
-        /////////////////////////////////////////////
-STATE_3:// 符号选择状态
-        /////////////////////////////////////////////
-
-        case 3:
-
-            // 短按0-9键：从符号列表中选定一个符号，选定后转到初始状态
-            if (key_edge == -1 && (key_code >= 0 && key_code <= 9)) {
-                uint32_t index = (key_code == 0) ? 9 : (key_code - 1); // 按键0对应9
-                // 将选中的符号加入输入缓冲区
-                uint32_t ch = candidate_pages[current_page][index];
-                if (ch) {
-                    input_buffer[input_counter++] = ch;
-                }
-                else {
-                    printf("选定了列表之外的符号，忽略。\n");
-                }
-
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-
-                free(candidates); candidates = NULL;
-                free_candidate_pages(candidate_pages, candidate_page_num); candidate_pages = NULL;
-                current_page = 0;
-
-                pinyin_keys = 0;
-                STATE = 0;
-            }
-
-            // 长+短按*键：候选字翻页到上一页
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 14) {
-                if(current_page > 0) {
-                    current_page--;
-                    render_symbol_input(candidate_pages, current_page, candidate_page_num);
-                }
-
-                STATE = 3;
-            }
-
-            // 长+短按#键：候选字翻页到下一页
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
-                if(current_page < candidate_page_num - 1) {
-                    current_page++;
-                    render_symbol_input(candidate_pages, current_page, candidate_page_num);
-                }
-
-                STATE = 3;
-            }
-
-            // 短按A键：取消选择，回到初始状态
-            else if (key_edge == -1 && key_code == 10) {
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-
-                current_page = 0;
-                pinyin_keys = 0;
-                STATE = 0;
-            }
+            draw_input(key_event, global_state, widget_input_state);
 
             break;
 
@@ -857,158 +574,94 @@ STATE_4:// 选择语言模型状态
         case 4:
 
             // 短按1键
-            if (key_edge == -1 && key_code == 1) {
-                if (g_llm_ctx)
+            if (key_event->key_edge == -1 && (key_event->key_code >= 1 && key_event->key_code <= 6)) {
+                if (g_llm_ctx) {
                     llm_context_free(g_llm_ctx);
+                }
 
-                OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...", 0); OLED_Refresh();
+                if (key_event->key_code == 1) {
+                    widget_textarea_state->text = L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...";
+                    g_model_path = MODEL_PATH_1;
+                    g_lora_path = NULL;
+                    g_repetition_penalty = 1.05f;
+                    g_temperature = 1.0f;
+                    g_top_p = 0.5f;
+                    g_top_k = 0;
+                    g_max_seq_len = 512;
+                }
+                else if (key_event->key_code == 2) {
+                    widget_textarea_state->text = L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...";
+                    g_model_path = MODEL_PATH_2;
+                    g_lora_path = NULL;
+                    g_repetition_penalty = 1.05f;
+                    g_temperature = 1.0f;
+                    g_top_p = 0.5f;
+                    g_top_k = 0;
+                    g_max_seq_len = 512;
+                }
+                else if (key_event->key_code == 3) {
+                    widget_textarea_state->text = L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...";
+                    g_model_path = MODEL_PATH_3;
+                    g_lora_path = LORA_PATH_3;
+                    g_repetition_penalty = 1.05f;
+                    g_temperature = 1.0f;
+                    g_top_p = 0.5f;
+                    g_top_k = 0;
+                    g_max_seq_len = 512;
+                }
+                else if (key_event->key_code == 4) {
+                    widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...";
+                    g_model_path = MODEL_PATH_4;
+                    g_lora_path = NULL;
+                    g_repetition_penalty = 1.0f;
+                    g_temperature = 0.6f;
+                    g_top_p = 0.95f;
+                    g_top_k = 20;
+                    g_max_seq_len = 32768;
+                }
+                else if (key_event->key_code == 5) {
+                    widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...";
+                    g_model_path = MODEL_PATH_5;
+                    g_lora_path = NULL;
+                    g_repetition_penalty = 1.0f;
+                    g_temperature = 0.6f;
+                    g_top_p = 0.95f;
+                    g_top_k = 20;
+                    g_max_seq_len = 32768;
+                }
+                else if (key_event->key_code == 6) {
+                    widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-4B-Inst-2507\n 请稍等...";
+                    g_model_path = MODEL_PATH_6;
+                    g_lora_path = NULL;
+                    g_repetition_penalty = 1.0f;
+                    g_temperature = 0.7f;
+                    g_top_p = 0.8f;
+                    g_top_k = 20;
+                    g_max_seq_len = 32768;
+                }
 
-                repetition_penalty = 1.05f;
-                temperature = 1.0f;
-                top_p = 0.5f;
-                top_k = 0;
-                random_seed = (unsigned int)time(NULL);
-                max_seq_len = 512;
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
 
-                g_llm_ctx = llm_context_init(MODEL_PATH_1, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
-                OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
+                g_random_seed = (unsigned int)time(NULL);
+                g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, g_random_seed);
+
+                widget_textarea_state->text = L"加载完成~";
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+
                 usleep(500*1000);
 
-                show_main_menu();
-                STATE = -2;
-            }
-
-            // 短按2键
-            else if (key_edge == -1 && key_code == 2) {
-                if (g_llm_ctx)
-                    llm_context_free(g_llm_ctx);
-
-                OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...", 0); OLED_Refresh();
-
-                repetition_penalty = 1.05f;
-                temperature = 1.0f;
-                top_p = 0.5f;
-                top_k = 0;
-                random_seed = (unsigned int)time(NULL);
-                max_seq_len = 512;
-
-                g_llm_ctx = llm_context_init(MODEL_PATH_2, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
-                OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(500*1000);
-
-                show_main_menu();
-                STATE = -2;
-            }
-
-            // 短按3键
-            else if (key_edge == -1 && key_code == 3) {
-                if (g_llm_ctx)
-                    llm_context_free(g_llm_ctx);
-
-                OLED_SoftClear(); render_text(L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...", 0); OLED_Refresh();
-
-                repetition_penalty = 1.05f;
-                temperature = 1.0f;
-                top_p = 0.5f;
-                top_k = 0;
-                random_seed = (unsigned int)time(NULL);
-                max_seq_len = 512;
-
-                g_llm_ctx = llm_context_init(MODEL_PATH_3, LORA_PATH_3, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
-                OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(500*1000);
-
-                show_main_menu();
-                STATE = -2;
-            }
-
-            // 短按4键
-            else if (key_edge == -1 && key_code == 4) {
-                if (g_llm_ctx)
-                    llm_context_free(g_llm_ctx);
-
-                OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...", 0); OLED_Refresh();
-
-                repetition_penalty = 1.0f;
-                temperature = 0.6f;
-                top_p = 0.95f;
-                top_k = 20;
-                random_seed = (unsigned int)time(NULL);
-                max_seq_len = 32768;
-
-                g_llm_ctx = llm_context_init(MODEL_PATH_4, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
-                OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(500*1000);
-
-                show_main_menu();
-                STATE = -2;
-            }
-
-            // 短按5键
-            else if (key_edge == -1 && key_code == 5) {
-                if (g_llm_ctx)
-                    llm_context_free(g_llm_ctx);
-
-                OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...", 0); OLED_Refresh();
-
-                repetition_penalty = 1.0f;
-                temperature = 0.6f;
-                top_p = 0.95f;
-                top_k = 20;
-                random_seed = (unsigned int)time(NULL);
-                max_seq_len = 32768;
-
-                g_llm_ctx = llm_context_init(MODEL_PATH_5, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
-                OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(500*1000);
-
-                show_main_menu();
-                STATE = -2;
-            }
-
-            // 短按6键
-            else if (key_edge == -1 && key_code == 6) {
-                if (g_llm_ctx)
-                    llm_context_free(g_llm_ctx);
-
-                OLED_SoftClear(); render_text(L" 正在加载语言模型\n Qwen3-4B-Inst-2507\n 请稍等...", 0); OLED_Refresh();
-
-                repetition_penalty = 1.0f;
-                temperature = 0.7f;
-                top_p = 0.8f;
-                top_k = 20;
-                random_seed = (unsigned int)time(NULL);
-                max_seq_len = 32768;
-
-                g_llm_ctx = llm_context_init(MODEL_PATH_6, NULL, max_seq_len, repetition_penalty, temperature, top_p, top_k, random_seed);
-                OLED_SoftClear(); render_text(L"加载完成~", 0); OLED_Refresh();
-                usleep(500*1000);
-
-                show_main_menu();
+                show_main_menu(key_event, global_state, main_menu_state);
                 STATE = -2;
             }
 
             // 短按A键：取消操作，回到主菜单
-            else if (key_edge == -1 && key_code == 10) {
-                show_main_menu();
+            else if (key_event->key_edge == -1 && key_event->key_code == 10) {
+                show_main_menu(key_event, global_state, main_menu_state);
                 STATE = -2;
-            }
-
-            break;
-
-        /////////////////////////////////////////////
-STATE_5:// 显示帮助和关于信息状态
-        /////////////////////////////////////////////
-
-        case 5:
-
-            // 短按A键：回到初始状态
-            if (key_edge == -1 && key_code == 10) {
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-
-                current_page = 0;
-                pinyin_keys = 0;
-                STATE = 0;
             }
 
             break;
@@ -1020,22 +673,22 @@ STATE_10: // 提交候选字到LLM，开始推理
         case 10:
 
             // 短按D键：开始推理。推理完成后，并不清除输入缓冲区，因此再次按D键会重新推理。
-            if (key_edge == -1 && key_code == 13) {
+            if (key_event->key_edge == -1 && key_event->key_code == 13) {
                 OLED_SoftClear();
 
                 wchar_t *prompt;
                 if (g_llm_ctx->llm->arch == LLM_ARCH_NANO) {
-                    prompt = apply_chat_template(NULL, NULL, input_buffer);
+                    prompt = apply_chat_template(NULL, NULL, widget_input_state->input_buffer);
                 }
                 else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
-                    prompt = input_buffer;
+                    prompt = widget_input_state->input_buffer;
                 }
                 else {
                     fprintf(stderr, "Error: unknown model arch.\n");
                     exit(EXIT_FAILURE);
                 }
 
-                int32_t flag = generate_sync(g_llm_ctx, prompt, max_seq_len, on_prefilling, on_decoding, on_finished);
+                int32_t flag = generate_sync(g_llm_ctx, prompt, g_max_seq_len, on_prefilling, on_decoding, on_finished);
 
                 if (flag == LLM_STOPPED_IN_PREFILLING || flag == LLM_STOPPED_IN_DECODING) {
                     printf("推理中止。\n");
@@ -1043,11 +696,9 @@ STATE_10: // 提交候选字到LLM，开始推理
                     // 按键延时：等待（on_decoding回调中检测到的）按键松开，防止误触发
                     usleep(500 * 1000);
 
-                    // 计算提示语+生成内容的行数，绘制文本和滚动条
-                    OLED_SoftClear();
-
+                    // 计算提示语+生成内容的行数
                     wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
-                    wcscat(prompt_and_output, input_buffer);
+                    wcscat(prompt_and_output, widget_input_state->input_buffer);
                     wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
                     wcscat(prompt_and_output, g_llm_output_of_last_session);
                     wchar_t tps_wcstr[50];
@@ -1055,15 +706,12 @@ STATE_10: // 提交候选字到LLM，开始推理
                     wcscat(prompt_and_output, tps_wcstr);
 
                     wcscpy(g_llm_output_of_last_session, prompt_and_output);
-                    output_line_num = render_text(g_llm_output_of_last_session, -1);
-                    output_current_line = (output_line_num >= 5) ? output_line_num - 5 : 0;
-                    render_scroll_bar(output_line_num, output_current_line);
-                    OLED_Refresh();
 
-                    // OLED_SoftClear();
-                    // render_text(L"推理中止 QAQ\n\n\n\n按[取消]键返回。", -1);
-                    // OLED_Refresh();
-                    // usleep(1000 * 1000);
+                    widget_textarea_state->text = g_llm_output_of_last_session;
+                    int32_t line_num = get_view_lines(widget_textarea_state->text);
+                    widget_textarea_state->current_line = (line_num >= 5) ? line_num - 5 : 0;
+                    widget_textarea_state->is_show_scroll_bar = 1;
+                    draw_textarea(key_event, global_state, widget_textarea_state);
 
                     STATE = 10;
                 }
@@ -1074,7 +722,7 @@ STATE_10: // 提交候选字到LLM，开始推理
                     OLED_SoftClear();
 
                     wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
-                    wcscat(prompt_and_output, input_buffer);
+                    wcscat(prompt_and_output, widget_input_state->input_buffer);
                     wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
                     wcscat(prompt_and_output, g_llm_output_of_last_session);
                     wchar_t tps_wcstr[50];
@@ -1082,10 +730,12 @@ STATE_10: // 提交候选字到LLM，开始推理
                     wcscat(prompt_and_output, tps_wcstr);
 
                     wcscpy(g_llm_output_of_last_session, prompt_and_output);
-                    output_line_num = render_text(g_llm_output_of_last_session, -1);
-                    output_current_line = (output_line_num >= 5) ? output_line_num - 5 : 0;
-                    render_scroll_bar(output_line_num, output_current_line);
-                    OLED_Refresh();
+
+                    widget_textarea_state->text = g_llm_output_of_last_session;
+                    int32_t line_num = get_view_lines(widget_textarea_state->text);
+                    widget_textarea_state->current_line = (line_num >= 5) ? line_num - 5 : 0;
+                    widget_textarea_state->is_show_scroll_bar = 1;
+                    draw_textarea(key_event, global_state, widget_textarea_state);
 
                     STATE = 10;
                 }
@@ -1096,7 +746,7 @@ STATE_10: // 提交候选字到LLM，开始推理
                     OLED_SoftClear();
 
                     wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
-                    wcscat(prompt_and_output, input_buffer);
+                    wcscat(prompt_and_output, widget_input_state->input_buffer);
                     wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
                     wcscat(prompt_and_output, g_llm_output_of_last_session);
                     wchar_t tps_wcstr[50];
@@ -1104,89 +754,54 @@ STATE_10: // 提交候选字到LLM，开始推理
                     wcscat(prompt_and_output, tps_wcstr);
 
                     wcscpy(g_llm_output_of_last_session, prompt_and_output);
-                    output_line_num = render_text(g_llm_output_of_last_session, -1);
-                    output_current_line = (output_line_num >= 5) ? output_line_num - 5 : 0;
-                    render_scroll_bar(output_line_num, output_current_line);
-                    OLED_Refresh();
 
-                    // OLED_SoftClear();
-                    // render_text(L"推理过程异常退出。\n\n\n\n按[取消]键返回。", -1);
-                    // OLED_Refresh();
-                    // usleep(1000 * 1000);
+                    widget_textarea_state->text = g_llm_output_of_last_session;
+                    int32_t line_num = get_view_lines(widget_textarea_state->text);
+                    widget_textarea_state->current_line = (line_num >= 5) ? line_num - 5 : 0;
+                    widget_textarea_state->is_show_scroll_bar = 1;
+                    draw_textarea(key_event, global_state, widget_textarea_state);
 
                     STATE = 10;
                 }
             }
 
             // 短按A键：清屏，清除输入缓冲区，回到初始状态
-            else if (key_edge == -1 && key_code == 10) {
-
-                input_buffer = refresh_input_buffer(input_buffer, &input_counter);
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-
-                current_page = 0;
+            else if (key_event->key_edge == -1 && key_event->key_code == 10) {
+                // 刷新文本输入框
+                init_input(key_event, global_state, widget_input_state);
                 STATE = 0;
             }
 
             // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 14) {
-                if (output_current_line <= 0) { // 卷到顶
-                    output_current_line = output_line_num - 5;
+            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 14) {
+                if (widget_textarea_state->current_line <= 0) { // 卷到顶
+                    widget_textarea_state->current_line = widget_textarea_state->line_num - 5;
                 }
                 else {
-                    output_current_line--;
+                    widget_textarea_state->current_line--;
                 }
 
-                OLED_SoftClear();
-                render_text(g_llm_output_of_last_session, output_current_line);
-                render_scroll_bar(output_line_num, output_current_line);
-                OLED_Refresh();
+                widget_textarea_state->text = g_llm_output_of_last_session;
+                widget_textarea_state->is_show_scroll_bar = 1;
+                draw_textarea(key_event, global_state, widget_textarea_state);
 
                 STATE = 10;
             }
 
             // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
-                if (output_current_line >= (output_line_num - 5)) { // 卷到底
-                    output_current_line = 0;
+            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 15) {
+                if (widget_textarea_state->current_line >= (widget_textarea_state->line_num - 5)) { // 卷到底
+                    widget_textarea_state->current_line = 0;
                 }
                 else {
-                    output_current_line++;
+                    widget_textarea_state->current_line++;
                 }
 
-                OLED_SoftClear();
-                render_text(g_llm_output_of_last_session, output_current_line);
-                render_scroll_bar(output_line_num, output_current_line);
-                OLED_Refresh();
+                widget_textarea_state->text = g_llm_output_of_last_session;
+                widget_textarea_state->is_show_scroll_bar = 1;
+                draw_textarea(key_event, global_state, widget_textarea_state);
 
                 STATE = 10;
-            }
-
-            break;
-
-        /////////////////////////////////////////////
-STATE_20: // 录音进行中
-        /////////////////////////////////////////////
-
-        case 20:
-
-            // 松开按钮，停止录音并播放
-            if (is_recording > 0 && key_edge == 0 && key_code == 16) {
-                is_recording = 0;
-
-                OLED_SoftClear();
-                render_text(L" \n \n     正在播放...", 0);
-                OLED_Refresh();
-
-                stop_recording();
-                play_recording();
-
-                // 软触发A键
-                // key_edge = -1;
-                // key_code = 10;
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-                STATE = 0;
-                goto STATE_0;
             }
 
             break;
@@ -1199,27 +814,28 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
         case 21:
 
             // 实时显示ASR结果
-            if (is_recording == 1) {
+            if (global_state->is_recording == 1) {
                 int32_t len = read_asr_fifo(g_asr_output);
                 // if (len > 0) {
                     // 显示录音持续时间
                     wchar_t asr_text_with_duration[ASR_BUFFER_SIZE] = L"";
                     wcscat(asr_text_with_duration, g_asr_output);
                     wchar_t rec_duration[50];
-                    swprintf(rec_duration, 50, L"\n[ %d s ]", (int32_t)(time(NULL) - asr_start_timestamp));
+                    swprintf(rec_duration, 50, L"\n[ %d s ]", (int32_t)(time(NULL) - global_state->asr_start_timestamp));
                     wcscat(asr_text_with_duration, rec_duration);
 
-                    OLED_SoftClear();
-                    render_text(asr_text_with_duration, -1);
-                    OLED_Refresh();
+                    widget_textarea_state->text = asr_text_with_duration;
+                    widget_textarea_state->current_line = -1;
+                    widget_textarea_state->is_show_scroll_bar = 1;
+                    draw_textarea(key_event, global_state, widget_textarea_state);
                 // }
             }
 
             // 松开按钮，停止PTT
-            if (is_recording > 0 && key_edge == 0 && key_code == 16) {
+            if (global_state->is_recording > 0 && key_event->key_edge == 0 && key_event->key_code == 16) {
                 printf("松开PTT\n");
-                is_recording = 0;
-                asr_start_timestamp = 0;
+                global_state->is_recording = 0;
+                global_state->asr_start_timestamp = 0;
 
                 close(g_asr_fifo_fd);
 
@@ -1227,154 +843,84 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
                 if (set_ptt_status(0) < 0) break;
                 close(g_ptt_fifo_fd);
 
-                // OLED_SoftClear();
-                // render_text(L" \n \n     识别完成", 0);
-                // OLED_Refresh();
-                // usleep(500*1000);
+                widget_textarea_state->text = L" \n \n     识别完成";
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
 
-/*
-                // 计算识别内容的行数，绘制文本和滚动条
-                OLED_SoftClear();
+                usleep(500*1000);
 
-                wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"转文字:\n";
-                wcscat(prompt_and_output, g_asr_output);
-                wcscpy(g_asr_output, prompt_and_output);
-                output_line_num = render_text(g_asr_output, 0);
-                output_current_line = 0;
-                render_scroll_bar(output_line_num, output_current_line);
-                OLED_Refresh();
-
-                STATE = 21;
-*/
-
-                wcscpy(input_buffer, g_asr_output);
-                input_counter = wcslen(g_asr_output);
+                wcscpy(widget_input_state->input_buffer, g_asr_output);
+                widget_input_state->input_counter = wcslen(g_asr_output);
                 wcscpy(g_asr_output, L"请说话...");
-                // render_input_buffer(input_buffer, ime_mode_flag, -1);
 
                 // ASR后立刻提交到LLM？
                 if (g_config_auto_submit_after_asr) {
-                    printf("立刻提交LLM：%ls\n", input_buffer);
+                    printf("立刻提交LLM：%ls\n", widget_input_state->input_buffer);
                     // 软触发D键
-                    key_edge = -1;
-                    key_code = 13;
+                    key_event->key_edge = -1;
+                    key_event->key_code = 13;
                     STATE = 10;
                     goto STATE_10;
                 }
                 else {
-                    // 回到文字输入状态
-                    current_page = 0;
+                    // 回到文字输widget_input_state->current_page = 0;
                     STATE = 0;
                 }
 
             }
 
             // 短按A键：清屏，清除输入缓冲区，回到初始状态
-            else if (key_edge == -1 && key_code == 10) {
-
-                input_buffer = refresh_input_buffer(input_buffer, &input_counter);
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-
-                current_page = 0;
+            else if (key_event->key_edge == -1 && key_event->key_code == 10) {
+                // 刷新文本输入框
+                init_input(key_event, global_state, widget_input_state);
                 STATE = 0;
             }
-/*
-            // 短按A键：清屏，回到主菜单
-            else if (key_edge == -1 && key_code == 10) {
-                show_main_menu();
-                STATE = -2;
-            }
-
-            // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 14) {
-                if (output_current_line <= 0) { // 卷到顶
-                    output_current_line = output_line_num - 5;
-                }
-                else {
-                    output_current_line--;
-                }
-
-                OLED_SoftClear();
-                render_text(g_asr_output, output_current_line);
-                render_scroll_bar(output_line_num, output_current_line);
-                OLED_Refresh();
-
-                STATE = 21;
-            }
-
-            // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
-            else if ((key_edge == -1 || key_edge == -2) && key_code == 15) {
-                if (output_current_line >= (output_line_num - 5)) { // 卷到底
-                    output_current_line = 0;
-                }
-                else {
-                    output_current_line++;
-                }
-
-                OLED_SoftClear();
-                render_text(g_asr_output, output_current_line);
-                render_scroll_bar(output_line_num, output_current_line);
-                OLED_Refresh();
-
-                STATE = 21;
-            }
-*/
 
             break;
-
 
         default:
             break;
         }
 
+
+        // 绘制焦点组件
+        // if (STATE == 0) {
+        //     draw_input(key_event, global_state, widget_input_state);
+        // }
+
+
+
+
+
+
+
+
+
+
         /////////////////////////////////////////////
         // 英文字母输入模式的循环切换
         /////////////////////////////////////////////
-
-        if (STATE == 0 && ime_mode_flag == IME_MODE_ALPHABET) {
-            // 倒计时进行中，绘制进度条
-            if (alphabet_countdown > 0) {
-                alphabet_countdown--;
-                uint8_t x_pos = (uint8_t)(alphabet_countdown * 128 / ALPHABET_COUNTDOWN_MAX);
-                OLED_DrawLine(0, 63, x_pos, 63, 1);
-                OLED_DrawLine(x_pos + 1, 63, 127, 63, 0);
-                OLED_Refresh();
-                STATE = 0;
-            }
-            // 倒计时结束，提交当前选中的字母，清除进度条
-            else if (alphabet_countdown == 0) {
-                // 清除进度条
-                alphabet_countdown--;
-                OLED_DrawLine(0, 63, 127, 63, 0);
-                OLED_Refresh();
-
-                // 将当前选中的字母加入输入缓冲区
-                uint32_t ch = alphabet[(int)alphabet_current_key][alphabet_index];
-                if (ch) {
-                    input_buffer[input_counter++] = ch;
-                }
-                else {
-                    printf("选定了列表之外的字母，忽略。\n");
-                }
-
-                render_input_buffer(input_buffer, ime_mode_flag, -1);
-
-                alphabet_current_key = 255;
-                alphabet_index = 0;
-                STATE = 0;
-            }
-        }
+        // draw_input(void_key_event, global_state, widget_input_state);
 
         // 定期检查ASR服务状态
-        if (g_timer % 100 == 0) {
-            g_is_asr_server_up = check_asr_server_status();
-            printf("ASR Service = %d\n", g_is_asr_server_up);
+        if (global_state->timer % 100 == 0) {
+            global_state->is_asr_server_up = check_asr_server_status();
+            printf("ASR Service = %d\n", global_state->is_asr_server_up);
         }
 
-        g_timer = (g_timer == 2147483647) ? 0 : (g_timer + 1);
+        global_state->timer = (global_state->timer == 2147483647) ? 0 : (global_state->timer + 1);
     }
 
     llm_context_free(g_llm_ctx);
+
+    free(global_state);
+    free(key_event);
+    free(widget_textarea_state);
+    free(widget_input_state);
+    free(main_menu_state);
+
+    free(void_key_event);
 
     OLED_Close();
 
