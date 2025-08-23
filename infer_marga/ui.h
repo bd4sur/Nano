@@ -14,6 +14,8 @@
 #define ALPHABET_COUNTDOWN_MAX (30)
 #define LONG_PRESS_THRESHOLD (360)
 
+#define MAX_MENU_ITEMS (1024)
+#define MAX_MENU_ITEM_LEN (24)
 
 typedef struct {
     int32_t timer;
@@ -66,7 +68,12 @@ typedef struct {
 } Widget_Input_State;
 
 typedef struct {
-    int32_t state;
+    int32_t current_item_intex; // 当前选中（高亮）的条目的标号（注意：选中条目不一定在显示的页面范围内）
+    int32_t first_item_intex; // 当前页面显示的第一个条目的标号
+    int32_t item_num; // 菜单条目数
+    int32_t items_per_page; // 每页容纳的条目数
+    wchar_t title[MAX_MENU_ITEM_LEN]; // 菜单标题
+    wchar_t items[MAX_MENU_ITEMS][MAX_MENU_ITEM_LEN]; // 条目标题
 } Widget_Menu_State;
 
 
@@ -88,6 +95,9 @@ void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Text
 
 void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+
+void init_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
+void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
 
 int32_t render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, int32_t cursor_pos);
 void render_pinyin_input(uint32_t **candidate_pages, uint32_t pinyin_keys, uint32_t current_page, uint32_t candidate_page_num, uint32_t is_picking);

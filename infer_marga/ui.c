@@ -156,6 +156,8 @@ void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
         if (x_pos + font_width >= 128) {
             break;
         }
+        // NOTE 反色显示时，在每个字符场面额外补充一条线，避免菜单中高亮区域看起来顶格
+        OLED_DrawLine(x_pos, y_pos - 1, x_pos+font_width, y_pos - 1, 1 - (mode % 2));
         OLED_ShowChar(x_pos, y_pos, glyph, font_width, font_height, (mode % 2));
         x_pos += font_width;
     }
@@ -237,8 +239,8 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
         OLED_DrawLine(1, i, 127, i, 1);
     }
 
-    render_line(L"Project MARGA!", 24, 2, 0);
-    render_line(L"完全离线电子鹦鹉", 16, 20, 1);
+    render_line(L"Project Nano", 28, 2, 0);
+    render_line(L"语音对话电子鹦鹉", 16, 20, 1);
     // render_line(L"自研Nano模型强力驱动", 4, 34, 1);
     render_line(datetime_wcs_buffer, 8, 34, 1);
     render_line(L"(c) 2025 BD4SUR", 18, 50, 1);
@@ -261,16 +263,6 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     OLED_Refresh();
 }
 
-
-
-
-
-
-void show_main_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
-    OLED_SoftClear();
-    render_text(L"1.人类的本质\n2.电子鹦鹉\n3.选择语言模型\n4.设置\n5.安全关机", 0);
-    OLED_Refresh();
-}
 
 
 
@@ -309,7 +301,7 @@ void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
 void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
 
     int32_t state = input_state->state;
-    printf("State = %d  |  Key_code = %d  |  Key_edge = %d\n", state, key_event->key_code, key_event->key_edge);
+    // printf("State = %d  |  Key_code = %d  |  Key_edge = %d\n", state, key_event->key_code, key_event->key_edge);
 
     // 定时器触发：更新进度条
     if (input_state->ime_mode_flag == IME_MODE_ALPHABET) {
@@ -582,6 +574,65 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         }
     }
 }
+
+
+
+
+void init_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
+    menu_state->current_item_intex = 0;
+    menu_state->first_item_intex = 0;
+    menu_state->items_per_page = 4;
+
+    draw_menu(key_event, global_state, menu_state);
+}
+
+
+
+void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
+
+    uint32_t x_indent = 6;
+
+    OLED_SoftClear();
+
+    render_line(menu_state->title, x_indent, 0, 1);
+    wchar_t item_counter[13];
+    swprintf(item_counter, 13, L"%d/%d", menu_state->current_item_intex + 1, menu_state->item_num);
+    int32_t iclen = wcslen(item_counter);
+    render_line(item_counter, 126 - iclen * 6, 0, 1);
+
+    uint32_t y_pos = 13;
+    uint8_t is_highlight = 0;
+    for (uint32_t i = menu_state->first_item_intex; i < menu_state->item_num; i++) {
+        if (i == menu_state->first_item_intex + menu_state->items_per_page) {
+            break;
+        }
+        if (i != menu_state->current_item_intex) {
+            is_highlight = 0;
+        }
+        else {
+            is_highlight = 1;
+        }
+        render_line(menu_state->items[i], x_indent, y_pos, (1 - is_highlight));
+        y_pos += (FONT_HEIGHT + 1);
+    }
+
+    // NOTE 因render_line会额外给文字上方增加一行，因此这个横线在菜单文字绘制之后再绘制
+    OLED_DrawLine(0, 12, 128, 12, 1);
+
+    OLED_Refresh();
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -450,8 +450,6 @@ void free_llm(LLM* llm, Tokenizer *tk) {
     free_fwd_buffer(&llm->state);
 
     free(llm);
-
-    printf("555\n");
 }
 
 

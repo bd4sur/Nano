@@ -232,19 +232,302 @@ int32_t on_finished(Nano_Session *session) {
 }
 
 
+///////////////////////////////////////
+// 全局GUI组件对象
+
+Global_State           *global_state;
+Key_Event              *key_event;
+Widget_Textarea_State  *widget_textarea_state;
+Widget_Input_State     *widget_input_state;
+Widget_Menu_State      *main_menu_state;
+Widget_Menu_State      *model_menu_state;
+
+// 全局状态标志
+int32_t STATE = -1;
+int32_t PREV_STATE = -1;
+
+
+///////////////////////////////////////
+// 全局组件操作过程
+
+void init_main_menu() {
+    wcscpy(main_menu_state->title, L"Nano V202508");
+    wcscpy(main_menu_state->items[0], L"电子书");
+    wcscpy(main_menu_state->items[1], L"电子鹦鹉");
+    wcscpy(main_menu_state->items[2], L"选择语言模型");
+    wcscpy(main_menu_state->items[3], L"设置");
+    wcscpy(main_menu_state->items[4], L"优雅关机");
+    wcscpy(main_menu_state->items[5], L"关于本机器");
+    main_menu_state->item_num = 6;
+    init_menu(key_event, global_state, main_menu_state);
+}
+
+void refresh_main_menu() {
+    draw_menu(key_event, global_state, main_menu_state);
+}
+
+void init_model_menu() {
+    wcscpy(model_menu_state->title, L"Select LLM");
+    wcscpy(model_menu_state->items[0], L"Nano-168M-QA");
+    wcscpy(model_menu_state->items[1], L"Nano-56M-QA");
+    wcscpy(model_menu_state->items[2], L"Nano-56M-Neko");
+    wcscpy(model_menu_state->items[3], L"Qwen3-0.6B");
+    wcscpy(model_menu_state->items[4], L"Qwen3-1.7B");
+    wcscpy(model_menu_state->items[5], L"Qwen3-4B-Inst-2507");
+    model_menu_state->item_num = 6;
+    init_menu(key_event, global_state, model_menu_state);
+}
+
+void refresh_model_menu() {
+    draw_menu(key_event, global_state, model_menu_state);
+}
+
+
+///////////////////////////////////////
+// 事件处理回调
+//   NOTE 现阶段，回调函数里面引用的都是全局变量。后续可以container或者ctx之类的参数形式传进去。
+
+// 通用的菜单事件处理
+int32_t menu_event_handler(
+    Key_Event *ke, Global_State *gs, Widget_Menu_State *ms,
+    int32_t (*menu_item_action)(int32_t), int32_t prev_focus, int32_t current_focus
+) {
+    // 短按0-9数字键：直接选中屏幕上显示的那页的相对第几项
+    if (ke->key_edge == -1 && (ke->key_code >= 0 && ke->key_code <= 9)) {
+        ms->current_item_intex = ms->first_item_intex + (uint32_t)(ke->key_code) - 1;
+        return menu_item_action(ms->current_item_intex);
+    }
+    // 短按A键：返回上一个焦点状态
+    else if (ke->key_edge == -1 && ke->key_code == 10) {
+        return prev_focus;
+    }
+    // 短按D键：执行菜单项对应的功能
+    else if (ke->key_edge == -1 && ke->key_code == 13) {
+        return menu_item_action(ms->current_item_intex);
+    }
+    // 长+短按*键：光标向上移动
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == 14) {
+        if (ms->first_item_intex == 0 && ms->current_item_intex == 0) {
+            ms->first_item_intex = ms->item_num - ms->items_per_page;
+            ms->current_item_intex = ms->item_num - 1;
+        }
+        else if (ms->current_item_intex == ms->first_item_intex) {
+            ms->first_item_intex--;
+            ms->current_item_intex--;
+        }
+        else {
+            ms->current_item_intex--;
+        }
+
+        draw_menu(ke, gs, ms);
+
+        return current_focus;
+    }
+    // 长+短按#键：光标向下移动
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == 15) {
+        if (ms->first_item_intex == ms->item_num - ms->items_per_page && ms->current_item_intex == ms->item_num - 1) {
+            ms->first_item_intex = 0;
+            ms->current_item_intex = 0;
+        }
+        else if (ms->current_item_intex == ms->first_item_intex + ms->items_per_page - 1) {
+            ms->first_item_intex++;
+            ms->current_item_intex++;
+        }
+        else {
+            ms->current_item_intex++;
+        }
+
+        draw_menu(ke, gs, ms);
+
+        return current_focus;
+    }
+
+    return current_focus;
+}
+
+///////////////////////////////////////
+// 菜单条目动作回调
+
+// 主菜单各条目的动作
+int32_t main_menu_item_action(uint32_t item_index) {
+    // 1.电子书
+    if (item_index == 0) {
+        // 文本卷到顶，渲染
+        widget_textarea_state->text = g_anniversory;
+        widget_textarea_state->current_line = 0;
+        widget_textarea_state->is_show_scroll_bar = 1;
+        draw_textarea(key_event, global_state, widget_textarea_state);
+        return -3;
+    }
+
+    // 2.电子鹦鹉
+    else if (item_index == 1) {
+
+        // LLM Init
+
+        if (!g_llm_ctx) {
+            widget_textarea_state->text = L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...";
+            widget_textarea_state->current_line = 0;
+            widget_textarea_state->is_show_scroll_bar = 0;
+            draw_textarea(key_event, global_state, widget_textarea_state);
+
+            g_model_path = MODEL_PATH_1;
+            g_lora_path = NULL;
+            g_repetition_penalty = 1.05f;
+            g_temperature = 1.0f;
+            g_top_p = 0.5f;
+            g_top_k = 0;
+            g_random_seed = (unsigned int)time(NULL);
+            g_max_seq_len = 512;
+            g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, g_random_seed);
+
+            widget_textarea_state->text = L"加载完成~";
+            widget_textarea_state->current_line = 0;
+            widget_textarea_state->is_show_scroll_bar = 0;
+            draw_textarea(key_event, global_state, widget_textarea_state);
+            usleep(1000*1000);
+        }
+
+        // 刷新文本输入框
+        init_input(key_event, global_state, widget_input_state);
+        return 0;
+    }
+
+    // 3.选择语言模型
+    else if (item_index == 2) {
+        init_model_menu();
+        return 4;
+    }
+
+    // 4.设置
+    else if (item_index == 3) {
+        return -2;
+    }
+
+    // 5.安全关机
+    else if (item_index == 4) {
+        widget_textarea_state->text = L"正在安全关机...";
+        widget_textarea_state->current_line = 0;
+        widget_textarea_state->is_show_scroll_bar = 0;
+        draw_textarea(key_event, global_state, widget_textarea_state);
+
+        if (graceful_shutdown() >= 0) {
+            exit(0);
+        }
+        else {
+            widget_textarea_state->text = L"安全关机失败";
+            widget_textarea_state->current_line = 0;
+            widget_textarea_state->is_show_scroll_bar = 0;
+            draw_textarea(key_event, global_state, widget_textarea_state);
+
+            usleep(1000*1000);
+        }
+        return -2;
+    }
+    return -2;
+}
+
+int32_t model_menu_item_action(uint32_t item_index) {
+    if (g_llm_ctx) {
+        llm_context_free(g_llm_ctx);
+    }
+
+    if (item_index == 0) {
+        widget_textarea_state->text = L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...";
+        g_model_path = MODEL_PATH_1;
+        g_lora_path = NULL;
+        g_repetition_penalty = 1.05f;
+        g_temperature = 1.0f;
+        g_top_p = 0.5f;
+        g_top_k = 0;
+        g_max_seq_len = 512;
+    }
+    else if (item_index == 1) {
+        widget_textarea_state->text = L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...";
+        g_model_path = MODEL_PATH_2;
+        g_lora_path = NULL;
+        g_repetition_penalty = 1.05f;
+        g_temperature = 1.0f;
+        g_top_p = 0.5f;
+        g_top_k = 0;
+        g_max_seq_len = 512;
+    }
+    else if (item_index == 2) {
+        widget_textarea_state->text = L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...";
+        g_model_path = MODEL_PATH_3;
+        g_lora_path = LORA_PATH_3;
+        g_repetition_penalty = 1.05f;
+        g_temperature = 1.0f;
+        g_top_p = 0.5f;
+        g_top_k = 0;
+        g_max_seq_len = 512;
+    }
+    else if (item_index == 3) {
+        widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...";
+        g_model_path = MODEL_PATH_4;
+        g_lora_path = NULL;
+        g_repetition_penalty = 1.0f;
+        g_temperature = 0.6f;
+        g_top_p = 0.95f;
+        g_top_k = 20;
+        g_max_seq_len = 32768;
+    }
+    else if (item_index == 4) {
+        widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...";
+        g_model_path = MODEL_PATH_5;
+        g_lora_path = NULL;
+        g_repetition_penalty = 1.0f;
+        g_temperature = 0.6f;
+        g_top_p = 0.95f;
+        g_top_k = 20;
+        g_max_seq_len = 32768;
+    }
+    else if (item_index == 5) {
+        widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-4B-Inst-2507\n 请稍等...";
+        g_model_path = MODEL_PATH_6;
+        g_lora_path = NULL;
+        g_repetition_penalty = 1.0f;
+        g_temperature = 0.7f;
+        g_top_p = 0.8f;
+        g_top_k = 20;
+        g_max_seq_len = 32768;
+    }
+
+    widget_textarea_state->current_line = 0;
+    widget_textarea_state->is_show_scroll_bar = 0;
+    draw_textarea(key_event, global_state, widget_textarea_state);
+
+    g_random_seed = (unsigned int)time(NULL);
+    g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, g_random_seed);
+
+    widget_textarea_state->text = L"加载完成~";
+    widget_textarea_state->current_line = 0;
+    widget_textarea_state->is_show_scroll_bar = 0;
+    draw_textarea(key_event, global_state, widget_textarea_state);
+
+    usleep(500*1000);
+
+    refresh_main_menu();
+    return -2;
+}
+
+
+
+
+
 int main() {
 
     if(!setlocale(LC_CTYPE, "")) return -1;
 
     ///////////////////////////////////////
-    // 初始化各类状态
+    // 初始化GUI状态
 
-    Global_State           *global_state = (Global_State*)calloc(1, sizeof(Global_State));
-    Key_Event              *key_event = (Key_Event*)calloc(1, sizeof(Key_Event));
-    Widget_Textarea_State  *widget_textarea_state = (Widget_Textarea_State*)calloc(1, sizeof(Widget_Textarea_State));
-    Widget_Input_State     *widget_input_state = (Widget_Input_State*)calloc(1, sizeof(Widget_Input_State));
-    Widget_Menu_State      *main_menu_state = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
-
+    global_state = (Global_State*)calloc(1, sizeof(Global_State));
+    key_event = (Key_Event*)calloc(1, sizeof(Key_Event));
+    widget_textarea_state = (Widget_Textarea_State*)calloc(1, sizeof(Widget_Textarea_State));
+    widget_input_state = (Widget_Input_State*)calloc(1, sizeof(Widget_Input_State));
+    main_menu_state = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
+    model_menu_state = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
 
     global_state->is_recording = 0;
     global_state->asr_start_timestamp = 0;
@@ -295,9 +578,6 @@ int main() {
 
     if(keyboard_init() < 0) return -1;
     key_event->prev_key = 16;
-
-    // 全局状态标志
-    int32_t STATE = -1;
 
 
     while (1) {
@@ -375,7 +655,7 @@ STATE_M1:// 初始状态：欢迎屏幕。按任意键进入主菜单
 
             // 按下任何键，不论长短按，进入主菜单
             if (key_event->key_edge < 0 && key_event->key_code < 16) {
-                show_main_menu(key_event, global_state, main_menu_state);
+                init_main_menu();
                 STATE = -2;
             }
 
@@ -387,87 +667,12 @@ STATE_M2:// 主菜单。
 
         case -2:
 
-            // 短按1键
-            if (key_event->key_edge == -1 && key_event->key_code == 1) {
-                // 文本卷到顶，渲染
-                widget_textarea_state->text = g_anniversory;
-                widget_textarea_state->current_line = 0;
-                widget_textarea_state->is_show_scroll_bar = 1;
-                draw_textarea(key_event, global_state, widget_textarea_state);
-                STATE = -3;
+            if (PREV_STATE != STATE) {
+                refresh_main_menu();
             }
+            PREV_STATE = STATE;
 
-            // 短按2键：进入文本输入就绪状态
-            else if (key_event->key_edge == -1 && key_event->key_code == 2) {
-
-                // LLM Init
-
-                if (!g_llm_ctx) {
-                    widget_textarea_state->text = L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...";
-                    widget_textarea_state->current_line = 0;
-                    widget_textarea_state->is_show_scroll_bar = 0;
-                    draw_textarea(key_event, global_state, widget_textarea_state);
-
-                    g_model_path = MODEL_PATH_1;
-                    g_lora_path = NULL;
-                    g_repetition_penalty = 1.05f;
-                    g_temperature = 1.0f;
-                    g_top_p = 0.5f;
-                    g_top_k = 0;
-                    g_random_seed = (unsigned int)time(NULL);
-                    g_max_seq_len = 512;
-                    g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, g_random_seed);
-
-                    widget_textarea_state->text = L"加载完成~";
-                    widget_textarea_state->current_line = 0;
-                    widget_textarea_state->is_show_scroll_bar = 0;
-                    draw_textarea(key_event, global_state, widget_textarea_state);
-                    usleep(1000*1000);
-                }
-
-                // 刷新文本输入框
-                init_input(key_event, global_state, widget_input_state);
-                STATE = 0;
-            }
-
-            // 短按3键：选择语言模型
-            else if (key_event->key_edge == -1 && key_event->key_code == 3) {
-                widget_textarea_state->text = L"选择语言模型：\n1. Nano-168M-QA\n2. Nano-56M-QA\n3. Nano-56M-Neko\n4. Qwen3-0.6B";
-                widget_textarea_state->current_line = 0;
-                widget_textarea_state->is_show_scroll_bar = 0;
-                draw_textarea(key_event, global_state, widget_textarea_state);
-
-                STATE = 4;
-            }
-
-            // 短按5键：安全关机
-            else if (key_event->key_edge == -1 && key_event->key_code == 5) {
-                widget_textarea_state->text = L"正在安全关机...";
-                widget_textarea_state->current_line = 0;
-                widget_textarea_state->is_show_scroll_bar = 0;
-                draw_textarea(key_event, global_state, widget_textarea_state);
-
-                if (graceful_shutdown() >= 0) {
-                    exit(0);
-                }
-                else {
-                    widget_textarea_state->text = L"安全关机失败";
-                    widget_textarea_state->current_line = 0;
-                    widget_textarea_state->is_show_scroll_bar = 0;
-                    draw_textarea(key_event, global_state, widget_textarea_state);
-
-                    usleep(1000*1000);
-                }
-                show_main_menu(key_event, global_state, main_menu_state);
-                STATE = -2;
-            }
-
-            // 短按A键：回到splash
-            else if (key_event->key_edge == -1 && key_event->key_code == 10) {
-                key_event->key_code = 16; // 取消按键状态
-                STATE = -1;
-                goto STATE_M1;
-            }
+            STATE = menu_event_handler(key_event, global_state, main_menu_state, main_menu_item_action, -1, -2);
 
             break;
 
@@ -479,7 +684,7 @@ STATE_M3:// 文本显示状态
 
             // 短按A键：回到主菜单
             if (key_event->key_edge == -1 && key_event->key_code == 10) {
-                show_main_menu(key_event, global_state, main_menu_state);
+                refresh_main_menu();
                 STATE = -2;
             }
 
@@ -528,7 +733,7 @@ STATE_0:// 文字编辑器状态
                 if (widget_input_state->state == 0 && widget_input_state->input_counter <= 0) {
                     // widget_input_state->input_buffer = refresh_input_buffer(widget_input_state->input_buffer, &(widget_input_state->input_counter));
                     init_input(key_event, global_state, widget_input_state);
-                    show_main_menu(key_event, global_state, main_menu_state);
+                    refresh_main_menu();
                     STATE = -2;
                 }
             }
@@ -573,96 +778,12 @@ STATE_4:// 选择语言模型状态
 
         case 4:
 
-            // 短按1键
-            if (key_event->key_edge == -1 && (key_event->key_code >= 1 && key_event->key_code <= 6)) {
-                if (g_llm_ctx) {
-                    llm_context_free(g_llm_ctx);
-                }
-
-                if (key_event->key_code == 1) {
-                    widget_textarea_state->text = L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...";
-                    g_model_path = MODEL_PATH_1;
-                    g_lora_path = NULL;
-                    g_repetition_penalty = 1.05f;
-                    g_temperature = 1.0f;
-                    g_top_p = 0.5f;
-                    g_top_k = 0;
-                    g_max_seq_len = 512;
-                }
-                else if (key_event->key_code == 2) {
-                    widget_textarea_state->text = L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...";
-                    g_model_path = MODEL_PATH_2;
-                    g_lora_path = NULL;
-                    g_repetition_penalty = 1.05f;
-                    g_temperature = 1.0f;
-                    g_top_p = 0.5f;
-                    g_top_k = 0;
-                    g_max_seq_len = 512;
-                }
-                else if (key_event->key_code == 3) {
-                    widget_textarea_state->text = L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...";
-                    g_model_path = MODEL_PATH_3;
-                    g_lora_path = LORA_PATH_3;
-                    g_repetition_penalty = 1.05f;
-                    g_temperature = 1.0f;
-                    g_top_p = 0.5f;
-                    g_top_k = 0;
-                    g_max_seq_len = 512;
-                }
-                else if (key_event->key_code == 4) {
-                    widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...";
-                    g_model_path = MODEL_PATH_4;
-                    g_lora_path = NULL;
-                    g_repetition_penalty = 1.0f;
-                    g_temperature = 0.6f;
-                    g_top_p = 0.95f;
-                    g_top_k = 20;
-                    g_max_seq_len = 32768;
-                }
-                else if (key_event->key_code == 5) {
-                    widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...";
-                    g_model_path = MODEL_PATH_5;
-                    g_lora_path = NULL;
-                    g_repetition_penalty = 1.0f;
-                    g_temperature = 0.6f;
-                    g_top_p = 0.95f;
-                    g_top_k = 20;
-                    g_max_seq_len = 32768;
-                }
-                else if (key_event->key_code == 6) {
-                    widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-4B-Inst-2507\n 请稍等...";
-                    g_model_path = MODEL_PATH_6;
-                    g_lora_path = NULL;
-                    g_repetition_penalty = 1.0f;
-                    g_temperature = 0.7f;
-                    g_top_p = 0.8f;
-                    g_top_k = 20;
-                    g_max_seq_len = 32768;
-                }
-
-                widget_textarea_state->current_line = 0;
-                widget_textarea_state->is_show_scroll_bar = 0;
-                draw_textarea(key_event, global_state, widget_textarea_state);
-
-                g_random_seed = (unsigned int)time(NULL);
-                g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, g_random_seed);
-
-                widget_textarea_state->text = L"加载完成~";
-                widget_textarea_state->current_line = 0;
-                widget_textarea_state->is_show_scroll_bar = 0;
-                draw_textarea(key_event, global_state, widget_textarea_state);
-
-                usleep(500*1000);
-
-                show_main_menu(key_event, global_state, main_menu_state);
-                STATE = -2;
+            if (PREV_STATE != STATE) {
+                refresh_model_menu();
             }
+            PREV_STATE = STATE;
 
-            // 短按A键：取消操作，回到主菜单
-            else if (key_event->key_edge == -1 && key_event->key_code == 10) {
-                show_main_menu(key_event, global_state, main_menu_state);
-                STATE = -2;
-            }
+            STATE = menu_event_handler(key_event, global_state, model_menu_state, model_menu_item_action, -2, 4);
 
             break;
 
@@ -843,7 +964,7 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
                 if (set_ptt_status(0) < 0) break;
                 close(g_ptt_fifo_fd);
 
-                widget_textarea_state->text = L" \n \n     识别完成";
+                widget_textarea_state->text = L" \n \n      识别完成";
                 widget_textarea_state->current_line = 0;
                 widget_textarea_state->is_show_scroll_bar = 0;
                 draw_textarea(key_event, global_state, widget_textarea_state);
@@ -904,9 +1025,9 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
         // draw_input(void_key_event, global_state, widget_input_state);
 
         // 定期检查ASR服务状态
-        if (global_state->timer % 100 == 0) {
+        if (global_state->timer % 200 == 0) {
             global_state->is_asr_server_up = check_asr_server_status();
-            printf("ASR Service = %d\n", global_state->is_asr_server_up);
+            // printf("ASR Service = %d\n", global_state->is_asr_server_up);
         }
 
         global_state->timer = (global_state->timer == 2147483647) ? 0 : (global_state->timer + 1);
