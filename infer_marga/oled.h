@@ -22,7 +22,7 @@
 #define OLED_I2C_ADDR 0x3c
 ///////////////////////////////////////////////
 
-#define STRING_BUFFER_LENGTH (16384)
+#define STRING_BUFFER_LENGTH (65536)
 
 #define OLED_WIDTH  128
 #define OLED_HEIGHT 64

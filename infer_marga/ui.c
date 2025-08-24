@@ -63,6 +63,7 @@ void text_typeset(
     int32_t start_line,      // in  从哪行开始显示（用于滚动）
     int32_t *length,         // out 文本长度（字符数）
     int32_t *break_pos,      // out 折行位置（每行第一个字符的index）数组
+    int32_t *line_num,     // out 可见行数
     int32_t *view_lines,     // out 可见行数
     int32_t *view_start_pos, // out 可见区域第一个字符的index
     int32_t *view_end_pos    // out 可见区域最后一个字符的index
@@ -91,8 +92,9 @@ void text_typeset(
     //        例如，高度为64的屏幕，实际可容纳(64+1)/(12+1)=5行。
     int32_t max_view_lines = (view_height + 1) / (FONT_HEIGHT + 1);
 
-    int32_t _view_lines = break_count;
-    *view_lines =_view_lines;
+    int32_t _line_num = break_count;
+    *line_num = break_count;
+    *view_lines = max_view_lines;
     *length = char_count;
 
     // 对start_line的检查和标准化
@@ -100,43 +102,33 @@ void text_typeset(
         // start_line小于0，解释为将文字末行卷动到视图的某一行。例如：-1代表将文字末行卷动到视图的倒数1行、-max_view_lines代表将文字末行卷动到视图的第1行。
         //   若start_line小于-max_view_lines，则等效于-max_view_lines，保证文字内容不会卷到视图以外。
         if (-start_line <= max_view_lines) {
-            if (_view_lines >= max_view_lines) {
-                start_line = _view_lines - 1 - start_line - max_view_lines;
+            if (_line_num >= max_view_lines) {
+                start_line = _line_num - 1 - start_line - max_view_lines;
             }
             else {
                 start_line = 0;
             }
         }
         else {
-            start_line = _view_lines - 1;
+            start_line = _line_num - 1;
         }
     }
-    else if (start_line >= _view_lines) {
+    else if (start_line >= _line_num) {
         // start_line超过了末行，则对文本行数取模后滚动
-        start_line = start_line % _view_lines;
+        start_line = start_line % _line_num;
     }
 
     // 情况1：start_line介于首行（0）和（使得末行进入可见区域以下1行的位置），即视图内不包含末行
-    if (start_line < _view_lines - max_view_lines) {
+    if (start_line < _line_num - max_view_lines) {
         *view_start_pos = break_pos[start_line];
         *view_end_pos = break_pos[start_line + max_view_lines] - 1;
     }
     // 情况2：start_line等于或超过了（使得末行恰好位于可见区域底行的位置），但尚未超出末行，也就是末行位于视图内
     //        若文本行数不大于视图行数，则一定满足此条件。
-    else if (start_line >= _view_lines - max_view_lines && start_line < _view_lines) {
+    else if (start_line >= _line_num - max_view_lines && start_line < _line_num) {
         *view_start_pos = break_pos[start_line];
         *view_end_pos = char_count - 1;
     }
-}
-
-int32_t get_view_lines(wchar_t *text) {
-    int32_t length = 0;
-    int32_t break_pos[STRING_BUFFER_LENGTH];
-    int32_t view_lines = 0;
-    int32_t view_start_pos = 0;
-    int32_t view_end_pos = 0;
-    text_typeset(text, 128, 64, 0, &length, break_pos, &view_lines, &view_start_pos, &view_end_pos);
-    return view_lines;
 }
 
 
@@ -164,24 +156,25 @@ void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
 }
 
 // 返回值：文本折行后的行数（含换行符）
-int32_t render_text(wchar_t *text, int32_t start_line) {
+void render_text(wchar_t *text, int32_t start_line, int32_t x_offset, int32_t y_offset, int32_t width, int32_t height) {
     int32_t length = 0;
     int32_t break_pos[STRING_BUFFER_LENGTH];
+    int32_t line_num = 0;
     int32_t view_lines = 0;
     int32_t view_start_pos = 0;
     int32_t view_end_pos = 0;
 
-    text_typeset(text, 128, 64, start_line, &length, break_pos, &view_lines, &view_start_pos, &view_end_pos);
+    text_typeset(text, width, height, start_line, &length, break_pos, &line_num, &view_lines, &view_start_pos, &view_end_pos);
 
-    int x_pos = 0;
-    int y_pos = 0;
-    // for (int i = 0; i < wcslen(wrapped_clipped); i++) {
+    int x_pos = x_offset;
+    int y_pos = y_offset;
+
     for (int i = view_start_pos; i <= view_end_pos; i++) {
         uint32_t current_char = text[i];
-        uint8_t font_width = 12;
-        uint8_t font_height = 12;
+        uint8_t font_width = FONT_WIDTH_FULL;
+        uint8_t font_height = FONT_HEIGHT;
         if (current_char == '\n') {
-            x_pos = 0;
+            x_pos = x_offset;
             if(i > 0) y_pos += (font_height + 1);
             continue;
         }
@@ -190,9 +183,9 @@ int32_t render_text(wchar_t *text, int32_t start_line) {
             printf("出现了字库之外的字符[%d]\n", current_char);
             glyph = get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
-        if (x_pos + font_width >= 128) {
+        if (x_pos + font_width >= x_offset + width) {
             y_pos += (font_height + 1);
-            x_pos = 0;
+            x_pos = x_offset;
         }
         OLED_ShowChar(x_pos, y_pos, glyph, font_width, font_height, 1);
         x_pos += font_width;
@@ -200,18 +193,45 @@ int32_t render_text(wchar_t *text, int32_t start_line) {
 
     // free(wrapped);
     // free(wrapped_clipped);
-
-    return view_lines;
 }
 
 // 绘制滚动条
-void render_scroll_bar(int32_t line_num, int32_t current_line) {
-    for (int y = 0; y < 64; y++) {
-        OLED_DrawPoint(127, y, !(y % 3));
+//   line_num - 文本总行数
+//   current_line - 当前在屏幕顶端的是哪一行
+//   view_lines - 屏幕最多容纳几行
+void render_scroll_bar(int32_t current_line, int32_t line_num, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height) {
+
+    // 对current_line的检查和标准化
+    if (current_line < 0) {
+        // current_line小于0，解释为将文字末行卷动到视图的某一行。例如：-1代表将文字末行卷动到视图的倒数1行、-max_view_lines代表将文字末行卷动到视图的第1行。
+        //   若current_line小于-max_view_lines，则等效于-max_view_lines，保证文字内容不会卷到视图以外。
+        if (-current_line <= view_lines) {
+            if (line_num >= view_lines) {
+                current_line = line_num - 1 - current_line - view_lines;
+            }
+            else {
+                current_line = 0;
+            }
+        }
+        else {
+            current_line = line_num - 1;
+        }
     }
-    uint8_t bar_height = (uint8_t)((5 * 64) / line_num);
-    uint8_t y_0 = (uint8_t)((current_line * 64) / line_num);
-    OLED_DrawLine(127, y_0, 127, y_0 + bar_height, 1);
+    else if (current_line >= line_num) {
+        // current_line超过了末行，则对文本行数取模后滚动
+        current_line = current_line % line_num;
+    }
+
+    for (int n = y; n < y + height; n++) {
+        OLED_DrawPoint(x + width - 1, n, !(n % 3));
+    }
+    // 如果总行数装不满视图，则滚动条长度等于视图高度height
+    uint8_t bar_height = (line_num < view_lines) ? (uint8_t)(height) : (uint8_t)((view_lines * height) / line_num);
+    // 进度条高度不小于3px
+    bar_height = (bar_height < 3) ? 3 : bar_height;
+    uint8_t y_0 = (uint8_t)(y + (current_line * height) / line_num);
+    OLED_DrawLine(x + width - 1, y_0, x + width - 1, y_0 + bar_height + 1, 1);
+    OLED_DrawLine(x + width - 2, y_0, x + width - 2, y_0 + bar_height + 1, 1);
 }
 
 
@@ -269,12 +289,36 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
 
 
 void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state) {
-    OLED_SoftClear();
-    textarea_state->line_num = render_text(textarea_state->text, textarea_state->current_line);
-    if (textarea_state->is_show_scroll_bar) {
-        render_scroll_bar(textarea_state->line_num, textarea_state->current_line);
+    text_typeset(
+        textarea_state->text,
+        textarea_state->width,
+        textarea_state->height,
+        textarea_state->current_line,
+        &(textarea_state->length),
+        textarea_state->break_pos,
+        &(textarea_state->line_num),
+        &(textarea_state->view_lines),
+        &(textarea_state->view_start_pos),
+        &(textarea_state->view_end_pos)
+    );
+
+    if (global_state->is_full_refresh) {
+        OLED_SoftClear();
     }
-    OLED_Refresh();
+
+    render_text(
+        textarea_state->text, textarea_state->current_line,
+        textarea_state->x, textarea_state->y, textarea_state->width, textarea_state->height);
+
+    if (textarea_state->is_show_scroll_bar) {
+        render_scroll_bar(
+            textarea_state->current_line, textarea_state->line_num, textarea_state->view_lines,
+            textarea_state->x, textarea_state->y, textarea_state->width, textarea_state->height);
+    }
+
+    if (global_state->is_full_refresh) {
+        OLED_Refresh();
+    }
 }
 
 
@@ -282,6 +326,21 @@ void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Text
 
 void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
     input_state->state = 0;
+
+    input_state->x = 0;
+    input_state->y = 0;
+    input_state->width = 128;
+    input_state->height = 64;
+    // input_state->text[INPUT_BUFFER_LENGTH];
+    input_state->length = 0;
+    // input_state->break_pos[INPUT_BUFFER_LENGTH];
+    input_state->line_num = 0;
+    input_state->view_lines = 0;
+    input_state->view_start_pos = 0;
+    input_state->view_end_pos = 0;
+    input_state->current_line = 0;
+    input_state->is_show_scroll_bar = 0;
+
     input_state->ime_mode_flag = IME_MODE_HANZI;
     input_state->pinyin_keys = 0;
     input_state->candidates = NULL;
@@ -295,7 +354,15 @@ void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
     input_state->alphabet_current_key = 255;
     input_state->alphabet_index = 0;
 
-    render_input_buffer(input_state->input_buffer, input_state->ime_mode_flag, -1);
+    render_input_buffer(
+        input_state->input_buffer, input_state->ime_mode_flag, -1,
+        input_state->x, input_state->y, input_state->width, input_state->height);
+}
+
+void refresh_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
+    render_input_buffer(
+        input_state->input_buffer, input_state->ime_mode_flag, -1,
+        input_state->x, input_state->y, input_state->width, input_state->height);
 }
 
 void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
@@ -330,7 +397,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
                 printf("选定了列表之外的字母，忽略。\n");
             }
 
-            render_input_buffer(input_state->input_buffer, input_state->ime_mode_flag, -1);
+            render_input_buffer(
+                input_state->input_buffer, input_state->ime_mode_flag, -1,
+                input_state->x, input_state->y, input_state->width, input_state->height);
 
             input_state->alphabet_current_key = 255;
             input_state->alphabet_index = 0;
@@ -345,7 +414,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
             input_state->candidates = (uint32_t *)calloc(54, sizeof(uint32_t));
             for (int i = 0; i < 54; i++) input_state->candidates[i] = (uint32_t)ime_symbols[i];
             input_state->candidate_pages = candidate_paging(input_state->candidates, 54, 10, &(input_state->candidate_page_num));
-            render_symbol_input(input_state->candidate_pages, input_state->current_page, input_state->candidate_page_num);
+            render_symbol_input(
+                input_state->candidate_pages, input_state->current_page, input_state->candidate_page_num,
+                input_state->x, input_state->y, input_state->width, input_state->height);
             input_state->current_page = 0;
             input_state->state = 3;
         }
@@ -354,7 +425,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         else if (key_event->key_edge == -1 && key_event->key_code == 0) {
             if (input_state->ime_mode_flag == IME_MODE_NUMBER) {
                 input_state->input_buffer[(input_state->input_counter)++] = L'0';
-                render_input_buffer(input_state->input_buffer, input_state->ime_mode_flag, -1);
+                render_input_buffer(
+                    input_state->input_buffer, input_state->ime_mode_flag, -1,
+                    input_state->x, input_state->y, input_state->width, input_state->height);
                 input_state->state = 0;
             }
         }
@@ -370,7 +443,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
             }
             else if (input_state->ime_mode_flag == IME_MODE_NUMBER) {
                 input_state->input_buffer[(input_state->input_counter)++] = L'0' + key_event->key_code;
-                render_input_buffer(input_state->input_buffer, input_state->ime_mode_flag, -1);
+                render_input_buffer(
+                    input_state->input_buffer, input_state->ime_mode_flag, -1,
+                    input_state->x, input_state->y, input_state->width, input_state->height);
                 input_state->state = 0;
             }
             else if (input_state->ime_mode_flag == IME_MODE_ALPHABET) {
@@ -404,7 +479,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
             if (input_state->input_counter >= 1) {
                 input_state->input_buffer[--(input_state->input_counter)] = 0;
-                render_input_buffer(input_state->input_buffer, input_state->ime_mode_flag, -1);
+                render_input_buffer(
+                    input_state->input_buffer, input_state->ime_mode_flag, -1,
+                    input_state->x, input_state->y, input_state->width, input_state->height);
             }
             input_state->state = 0;
         }
@@ -412,7 +489,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         // 长+短按B键：依次切换汉-英-数输入模式
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 11) {
             input_state->ime_mode_flag = (input_state->ime_mode_flag + 1) % 3;
-            render_input_buffer(input_state->input_buffer, input_state->ime_mode_flag, -1);
+            render_input_buffer(
+                input_state->input_buffer, input_state->ime_mode_flag, -1,
+                input_state->x, input_state->y, input_state->width, input_state->height);
             input_state->state = 0;
         }
 
@@ -431,14 +510,18 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         // 短按D键：开始选字
         if (key_event->key_edge == -1 && key_event->key_code == 13) {
             if (input_state->candidate_pages) {
-                render_pinyin_input(input_state->candidate_pages, input_state->pinyin_keys, input_state->current_page, input_state->candidate_page_num, 1);
+                render_pinyin_input(
+                    input_state->candidate_pages, input_state->pinyin_keys, input_state->current_page, input_state->candidate_page_num, 1,
+                    input_state->x, input_state->y, input_state->width, input_state->height);
                 input_state->state = 2;
             }
         }
 
         // 短按A键：取消输入拼音，清除已输入的所有按键，回到初始状态
         else if (key_event->key_edge == -1 && key_event->key_code == 10) {
-            render_input_buffer(input_state->input_buffer, input_state->ime_mode_flag, -1);
+            render_input_buffer(
+                input_state->input_buffer, input_state->ime_mode_flag, -1,
+                input_state->x, input_state->y, input_state->width, input_state->height);
             input_state->current_page = 0;
             input_state->pinyin_keys = 0;
             input_state->state = 0;
@@ -461,10 +544,14 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
             if (input_state->candidates) { // 如果当前键码有对应的候选字
                 // 候选字列表分页
                 input_state->candidate_pages = candidate_paging(input_state->candidates, input_state->candidate_num, 10, &(input_state->candidate_page_num));
-                render_pinyin_input(input_state->candidate_pages, input_state->pinyin_keys, input_state->current_page, input_state->candidate_page_num, 0);
+                render_pinyin_input(
+                    input_state->candidate_pages, input_state->pinyin_keys, input_state->current_page, input_state->candidate_page_num, 0,
+                    input_state->x, input_state->y, input_state->width, input_state->height);
             }
             else {
-                render_pinyin_input(NULL, input_state->pinyin_keys, 0, 0, 0);
+                render_pinyin_input(
+                    NULL, input_state->pinyin_keys, 0, 0, 0,
+                    input_state->x, input_state->y, input_state->width, input_state->height);
             }
 
             input_state->state = 1;
@@ -484,7 +571,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
                 printf("选定了列表之外的字，忽略。\n");
             }
 
-            render_input_buffer(input_state->input_buffer, input_state->ime_mode_flag, -1);
+            render_input_buffer(
+                input_state->input_buffer, input_state->ime_mode_flag, -1,
+                input_state->x, input_state->y, input_state->width, input_state->height);
 
             free(input_state->candidates);
             input_state->candidates = NULL;
@@ -500,7 +589,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 14) {
             if(input_state->current_page > 0) {
                 input_state->current_page--;
-                render_pinyin_input(input_state->candidate_pages, input_state->pinyin_keys, input_state->current_page, input_state->candidate_page_num, 1);
+                render_pinyin_input(
+                    input_state->candidate_pages, input_state->pinyin_keys, input_state->current_page, input_state->candidate_page_num, 1,
+                    input_state->x, input_state->y, input_state->width, input_state->height);
             }
             input_state->state = 2;
         }
@@ -509,14 +600,18 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 15) {
             if(input_state->current_page < input_state->candidate_page_num - 1) {
                 input_state->current_page++;
-                render_pinyin_input(input_state->candidate_pages, input_state->pinyin_keys, input_state->current_page, input_state->candidate_page_num, 1);
+                render_pinyin_input(
+                    input_state->candidate_pages, input_state->pinyin_keys, input_state->current_page, input_state->candidate_page_num, 1,
+                    input_state->x, input_state->y, input_state->width, input_state->height);
             }
             input_state->state = 2;
         }
 
         // 短按A键：取消选择，回到初始状态
         else if (key_event->key_edge == -1 && key_event->key_code == 10) {
-            render_input_buffer(input_state->input_buffer, input_state->ime_mode_flag, -1);
+            render_input_buffer(
+                input_state->input_buffer, input_state->ime_mode_flag, -1,
+                input_state->x, input_state->y, input_state->width, input_state->height);
             input_state->current_page = 0;
             input_state->pinyin_keys = 0;
             input_state->state = 0;
@@ -535,7 +630,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
             else {
                 printf("选定了列表之外的符号，忽略。\n");
             }
-            render_input_buffer(input_state->input_buffer, input_state->ime_mode_flag, -1);
+            render_input_buffer(
+                input_state->input_buffer, input_state->ime_mode_flag, -1,
+                input_state->x, input_state->y, input_state->width, input_state->height);
 
             free(input_state->candidates);
             input_state->candidates = NULL;
@@ -551,7 +648,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 14) {
             if(input_state->current_page > 0) {
                 input_state->current_page--;
-                render_symbol_input(input_state->candidate_pages, input_state->current_page, input_state->candidate_page_num);
+                render_symbol_input(
+                    input_state->candidate_pages, input_state->current_page, input_state->candidate_page_num,
+                    input_state->x, input_state->y, input_state->width, input_state->height);
             }
             input_state->state = 3;
         }
@@ -560,14 +659,18 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 15) {
             if(input_state->current_page < input_state->candidate_page_num - 1) {
                 input_state->current_page++;
-                render_symbol_input(input_state->candidate_pages, input_state->current_page, input_state->candidate_page_num);
+                render_symbol_input(
+                    input_state->candidate_pages, input_state->current_page, input_state->candidate_page_num,
+                    input_state->x, input_state->y, input_state->width, input_state->height);
             }
             input_state->state = 3;
         }
 
         // 短按A键：取消选择，回到初始状态
         else if (key_event->key_edge == -1 && key_event->key_code == 10) {
-            render_input_buffer(input_state->input_buffer, input_state->ime_mode_flag, -1);
+            render_input_buffer(
+                input_state->input_buffer, input_state->ime_mode_flag, -1,
+                input_state->x, input_state->y, input_state->width, input_state->height);
             input_state->current_page = 0;
             input_state->pinyin_keys = 0;
             input_state->state = 0;
@@ -586,7 +689,9 @@ void init_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
     draw_menu(key_event, global_state, menu_state);
 }
 
-
+void refresh_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
+    draw_menu(key_event, global_state, menu_state);
+}
 
 void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
 
@@ -637,7 +742,10 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
 
 
 
-int32_t render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, int32_t cursor_pos) {
+int32_t render_input_buffer(
+    uint32_t *input_buffer, uint32_t ime_mode_flag, int32_t cursor_pos,
+    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height
+) {
     OLED_SoftClear();
     wchar_t text[INPUT_BUFFER_LENGTH] = L"请输入问题：     [";
     if (ime_mode_flag == IME_MODE_HANZI) {
@@ -651,19 +759,19 @@ int32_t render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, int3
     }
     wcscat(text, input_buffer);
     // if (cursor_pos) wcscat(text, L"_");
-    render_text(text, 0);
+    render_text(text, 0, x_offset, y_offset, width, height);
 
     // 绘制光标
 
     int32_t char_count = 0;
     int32_t break_count = 0;
-    int32_t line_x_pos = 0;
+    int32_t line_x_pos = x_offset;
     for (char_count = 0; char_count < wcslen(input_buffer); char_count++) {
         wchar_t ch = input_buffer[char_count];
         int32_t char_width = (ch < 127) ? ((ch == '\n') ? 0 : 6) : 12;
-        if (line_x_pos + char_width >= 128 || ch == '\n') {
+        if (line_x_pos + char_width >= x_offset + width || ch == '\n') {
             break_count++;
-            line_x_pos = 0;
+            line_x_pos = x_offset;
         }
         line_x_pos += char_width;
         if (cursor_pos == char_count) break;
@@ -679,7 +787,10 @@ int32_t render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, int3
     return char_count;
 }
 
-void render_pinyin_input(uint32_t **candidate_pages, uint32_t pinyin_keys, uint32_t current_page, uint32_t candidate_page_num, uint32_t is_picking) {
+void render_pinyin_input(
+    uint32_t **candidate_pages, uint32_t pinyin_keys, uint32_t current_page, uint32_t candidate_page_num, uint32_t is_picking,
+    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height
+) {
     OLED_SoftClear();
     // 计算候选列表长度
     uint32_t candidate_num = 0;
@@ -711,11 +822,14 @@ void render_pinyin_input(uint32_t **candidate_pages, uint32_t pinyin_keys, uint3
     else {
         wcscat(text, L"(无候选字)");
     }
-    render_text(text, 0);
+    render_text(text, 0, x_offset, y_offset, width, height);
     OLED_Refresh();
 }
 
-void render_symbol_input(uint32_t **candidate_pages, uint32_t current_page, uint32_t candidate_page_num) {
+void render_symbol_input(
+    uint32_t **candidate_pages, uint32_t current_page, uint32_t candidate_page_num,
+    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height
+) {
     OLED_SoftClear();
     // 计算候选列表长度
     uint32_t candidate_num = 0;
@@ -752,7 +866,7 @@ void render_symbol_input(uint32_t **candidate_pages, uint32_t current_page, uint
     else {
         wcscat(text, L"(无候选符号)");
     }
-    render_text(text, 0);
+    render_text(text, 0, x_offset, y_offset, width, height);
     OLED_Refresh();
 }
 

@@ -4,6 +4,8 @@
 #include <wchar.h>
 #include <stdint.h>
 
+#include "infer.h"
+
 #define INPUT_BUFFER_LENGTH  (65536)
 #define OUTPUT_BUFFER_LENGTH (65536)
 
@@ -20,9 +22,13 @@
 typedef struct {
     int32_t timer;
     int32_t focus;
+    Nano_Session *llm_session; // LLM一轮对话状态
+    int32_t llm_status; // LLM推理状态
     int32_t is_asr_server_up;
     int32_t is_recording; // 录音状态
     time_t asr_start_timestamp; // 录音起始的时间戳
+
+    int32_t is_full_refresh; // 作为所有绘制函数的一个参数，用于控制是否整帧刷新。默认为1。0-禁用函数内的clear-refresh，1-启用函数内的clear-refresh
 
 } Global_State;
 
@@ -38,17 +44,38 @@ typedef struct {
 typedef struct {
     int32_t state;
     int32_t x;
-    int32_t y;
+    int32_t y; // NOTE 设置文本框高度时，按照除末行外，每行margin-bottom:1px来计算。例如，如果希望恰好显示4行，则高度应为13*3+12=51px。
     int32_t width;
     int32_t height;
-    wchar_t *text;
+    wchar_t text[INPUT_BUFFER_LENGTH];
+    int32_t length;
+    int32_t break_pos[INPUT_BUFFER_LENGTH];
     int32_t line_num;
+    int32_t view_lines;
+    int32_t view_start_pos;
+    int32_t view_end_pos;
     int32_t current_line;
     int32_t is_show_scroll_bar; // 是否显示滚动条：0不显示 1显示
 } Widget_Textarea_State;
 
 typedef struct {
+    // 以下实际上是继承 Widget_Textarea_State
     int32_t state; // 内部状态
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+    wchar_t text[INPUT_BUFFER_LENGTH];
+    int32_t length;
+    int32_t break_pos[INPUT_BUFFER_LENGTH];
+    int32_t line_num;
+    int32_t view_lines;
+    int32_t view_start_pos;
+    int32_t view_end_pos;
+    int32_t current_line;
+    int32_t is_show_scroll_bar;
+
+    // 以下是Widget_Input_State独有的
     uint32_t ime_mode_flag; // 汉英数输入模式标志 0汉字 1英文 2数字
     uint32_t pinyin_keys;   // 单字拼音键码暂存
     // 候选字翻页相关
@@ -83,26 +110,35 @@ static wchar_t ime_symbols[55] = L"，。、？！：；“”‘’（）《》
 static wchar_t ime_alphabet[10][32] = {L"", L" .,;:?!-/+_=&\"*", L"abcABC", L"defDEF", L"ghiGHI", L"jklJKL", L"mnoMNO", L"pqrsPRQS", L"tuvTUV", L"wxyzWXYZ"};
 
 
-int32_t get_view_lines(wchar_t *text);
-
 void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode);
-int32_t render_text(wchar_t *text, int32_t start_line);
+void render_text(wchar_t *text, int32_t start_line, int32_t x_offset, int32_t y_offset, int32_t width, int32_t height);
 
 void show_splash_screen(Key_Event *key_event, Global_State *global_state);
-void show_main_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
 
 void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
 
 void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+void refresh_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 
 void init_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
+void refresh_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
 void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
 
-int32_t render_input_buffer(uint32_t *input_buffer, uint32_t ime_mode_flag, int32_t cursor_pos);
-void render_pinyin_input(uint32_t **candidate_pages, uint32_t pinyin_keys, uint32_t current_page, uint32_t candidate_page_num, uint32_t is_picking);
-void render_symbol_input(uint32_t **candidate_pages, uint32_t current_page, uint32_t candidate_page_num);
-void render_scroll_bar(int32_t line_num, int32_t current_line);
+int32_t render_input_buffer(
+    uint32_t *input_buffer, uint32_t ime_mode_flag, int32_t cursor_pos,
+    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height);
+
+void render_pinyin_input(
+    uint32_t **candidate_pages, uint32_t pinyin_keys, uint32_t current_page, uint32_t candidate_page_num, uint32_t is_picking,
+    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height);
+
+void render_symbol_input(
+    uint32_t **candidate_pages, uint32_t current_page, uint32_t candidate_page_num,
+    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height);
+
+void render_scroll_bar(int32_t line_num, int32_t current_line, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height);
+
 uint32_t *refresh_input_buffer(uint32_t *input_buffer, int32_t *input_counter);
 
 #endif

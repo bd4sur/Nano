@@ -61,6 +61,23 @@ int g_asr_fifo_fd;
 #define PTT_FIFO_PATH "/tmp/ptt_fifo"
 
 
+///////////////////////////////////////
+// 全局GUI组件对象
+
+Global_State           *global_state;
+Key_Event              *key_event;
+Widget_Textarea_State  *widget_textarea_state;
+Widget_Textarea_State  *asr_textarea_state;
+Widget_Textarea_State  *prefilling_textarea_state;
+Widget_Input_State     *widget_input_state;
+Widget_Menu_State      *main_menu_state;
+Widget_Menu_State      *model_menu_state;
+
+// 全局状态标志
+int32_t STATE = -1;
+int32_t PREV_STATE = -1;
+
+
 
 // 优雅关机
 int32_t graceful_shutdown() {
@@ -127,7 +144,7 @@ int32_t read_asr_fifo(wchar_t *asr_text) {
 
     if (asr_bytes_read > 0) {
         asr_buffer[asr_bytes_read] = '\0';
-        printf("读取到数据: %s\n", asr_buffer); fflush(stdout);
+        // printf("读取到数据: %s\n", asr_buffer); fflush(stdout);
         mbstowcs(asr_text, asr_buffer, ASR_BUFFER_SIZE);
     }
     else if (asr_bytes_read == 0) {
@@ -184,67 +201,73 @@ int32_t set_ptt_status(uint8_t status) {
 
 
 
-int32_t on_prefilling(Nano_Session *session) {
-    // 按住A键中止推理
-    char key = keyboard_read_key();
-    if (key == 10) {
+int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state, Nano_Session *session) {
+    // 长/短按A键中止推理
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
         wcscpy(g_llm_output_of_last_session, L"");
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_PREFILLING;
     }
     // PREFILL_LED_ON
-    render_text(L"Pre-filling...", 0);
+
+    prefilling_textarea_state->x = 0;
+    prefilling_textarea_state->y = 0;
+    prefilling_textarea_state->width = 128;
+    prefilling_textarea_state->height = 24;
+
+    wcscpy(prefilling_textarea_state->text, L"Pre-filling...");
+    prefilling_textarea_state->current_line = 0;
+    prefilling_textarea_state->is_show_scroll_bar = 0;
+
+    // 临时关闭draw_textarea的整帧绘制，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
+    global_state->is_full_refresh = 0;
+
+    OLED_SoftClear();
+
+    draw_textarea(key_event, global_state, prefilling_textarea_state);
+
     OLED_DrawLine(0, 60, 128, 60, 1);
     OLED_DrawLine(0, 63, 128, 63, 1);
     OLED_DrawLine(127, 60, 127, 63, 1);
     OLED_DrawLine(0, 61, session->pos * 128 / (session->num_prompt_tokens - 2), 61, 1);
     OLED_DrawLine(0, 62, session->pos * 128 / (session->num_prompt_tokens - 2), 62, 1);
+
     OLED_Refresh();
+
+    // 重新开启整帧绘制，注意这个标记是所有函数共享的全局标记。
+    global_state->is_full_refresh = 1;
+
     // PREFILL_LED_OFF
     return LLM_RUNNING_IN_PREFILLING;
 }
 
-int32_t on_decoding(Nano_Session *session) {
-    // 按住A键中止推理
-    char key = keyboard_read_key();
-    if (key == 10) {
+int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_Session *session) {
+    // 长/短按A键中止推理
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
         wcscpy(g_llm_output_of_last_session, session->output_text);
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_DECODING;
     }
     // DECODE_LED_ON
-    OLED_SoftClear();
-    int32_t line_num = render_text(session->output_text, -1);
-    render_scroll_bar(line_num, line_num - 5);
-    OLED_Refresh();
+
+    wcscpy(widget_textarea_state->text, session->output_text);
+    widget_textarea_state->current_line = -1;
+    widget_textarea_state->is_show_scroll_bar = 1;
+    draw_textarea(key_event, global_state, widget_textarea_state);
+
     // DECODE_LED_OFF
 
     free(session->output_text);
     return LLM_RUNNING_IN_DECODING;
 }
 
-int32_t on_finished(Nano_Session *session) {
+int32_t on_llm_finished(Nano_Session *session) {
     wcscpy(g_llm_output_of_last_session, session->output_text);
 
     g_tps_of_last_session = session->tps;
     printf("TPS = %f\n", session->tps);
     return LLM_STOPPED_NORMALLY;
 }
-
-
-///////////////////////////////////////
-// 全局GUI组件对象
-
-Global_State           *global_state;
-Key_Event              *key_event;
-Widget_Textarea_State  *widget_textarea_state;
-Widget_Input_State     *widget_input_state;
-Widget_Menu_State      *main_menu_state;
-Widget_Menu_State      *model_menu_state;
-
-// 全局状态标志
-int32_t STATE = -1;
-int32_t PREV_STATE = -1;
 
 
 ///////////////////////////////////////
@@ -260,10 +283,6 @@ void init_main_menu() {
     wcscpy(main_menu_state->items[5], L"关于本机器");
     main_menu_state->item_num = 6;
     init_menu(key_event, global_state, main_menu_state);
-}
-
-void refresh_main_menu() {
-    draw_menu(key_event, global_state, main_menu_state);
 }
 
 void init_model_menu() {
@@ -345,18 +364,59 @@ int32_t menu_event_handler(
     return current_focus;
 }
 
+
+// 通用的文本框卷行事件处理
+int32_t textarea_event_handler(
+    Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts,
+    int32_t prev_focus, int32_t current_focus
+) {
+    // 短按A键：回到上一个焦点
+    if (ke->key_edge == -1 && ke->key_code == 10) {
+        return prev_focus;
+    }
+
+    // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == 14) {
+        if (ts->current_line <= 0) { // 卷到顶
+            ts->current_line = ts->line_num - 5;
+        }
+        else {
+            ts->current_line--;
+        }
+
+        draw_textarea(ke, gs, ts);
+
+        return current_focus;
+    }
+
+    // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == 15) {
+        if (ts->current_line >= (ts->line_num - 5)) { // 卷到底
+            ts->current_line = 0;
+        }
+        else {
+            ts->current_line++;
+        }
+
+        draw_textarea(ke, gs, ts);
+
+        return current_focus;
+    }
+
+    return current_focus;
+}
+
+
+
+
+
 ///////////////////////////////////////
 // 菜单条目动作回调
 
 // 主菜单各条目的动作
-int32_t main_menu_item_action(uint32_t item_index) {
+int32_t main_menu_item_action(int32_t item_index) {
     // 1.电子书
     if (item_index == 0) {
-        // 文本卷到顶，渲染
-        widget_textarea_state->text = g_anniversory;
-        widget_textarea_state->current_line = 0;
-        widget_textarea_state->is_show_scroll_bar = 1;
-        draw_textarea(key_event, global_state, widget_textarea_state);
         return -3;
     }
 
@@ -366,7 +426,7 @@ int32_t main_menu_item_action(uint32_t item_index) {
         // LLM Init
 
         if (!g_llm_ctx) {
-            widget_textarea_state->text = L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...";
+            wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...");
             widget_textarea_state->current_line = 0;
             widget_textarea_state->is_show_scroll_bar = 0;
             draw_textarea(key_event, global_state, widget_textarea_state);
@@ -381,7 +441,7 @@ int32_t main_menu_item_action(uint32_t item_index) {
             g_max_seq_len = 512;
             g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, g_random_seed);
 
-            widget_textarea_state->text = L"加载完成~";
+            wcscpy(widget_textarea_state->text, L"加载完成~");
             widget_textarea_state->current_line = 0;
             widget_textarea_state->is_show_scroll_bar = 0;
             draw_textarea(key_event, global_state, widget_textarea_state);
@@ -406,7 +466,7 @@ int32_t main_menu_item_action(uint32_t item_index) {
 
     // 5.安全关机
     else if (item_index == 4) {
-        widget_textarea_state->text = L"正在安全关机...";
+        wcscpy(widget_textarea_state->text, L"正在安全关机...");
         widget_textarea_state->current_line = 0;
         widget_textarea_state->is_show_scroll_bar = 0;
         draw_textarea(key_event, global_state, widget_textarea_state);
@@ -415,7 +475,7 @@ int32_t main_menu_item_action(uint32_t item_index) {
             exit(0);
         }
         else {
-            widget_textarea_state->text = L"安全关机失败";
+            wcscpy(widget_textarea_state->text, L"安全关机失败");
             widget_textarea_state->current_line = 0;
             widget_textarea_state->is_show_scroll_bar = 0;
             draw_textarea(key_event, global_state, widget_textarea_state);
@@ -427,13 +487,13 @@ int32_t main_menu_item_action(uint32_t item_index) {
     return -2;
 }
 
-int32_t model_menu_item_action(uint32_t item_index) {
+int32_t model_menu_item_action(int32_t item_index) {
     if (g_llm_ctx) {
         llm_context_free(g_llm_ctx);
     }
 
     if (item_index == 0) {
-        widget_textarea_state->text = L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...";
+        wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...");
         g_model_path = MODEL_PATH_1;
         g_lora_path = NULL;
         g_repetition_penalty = 1.05f;
@@ -443,7 +503,7 @@ int32_t model_menu_item_action(uint32_t item_index) {
         g_max_seq_len = 512;
     }
     else if (item_index == 1) {
-        widget_textarea_state->text = L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...";
+        wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...");
         g_model_path = MODEL_PATH_2;
         g_lora_path = NULL;
         g_repetition_penalty = 1.05f;
@@ -453,7 +513,7 @@ int32_t model_menu_item_action(uint32_t item_index) {
         g_max_seq_len = 512;
     }
     else if (item_index == 2) {
-        widget_textarea_state->text = L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...";
+        wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...");
         g_model_path = MODEL_PATH_3;
         g_lora_path = LORA_PATH_3;
         g_repetition_penalty = 1.05f;
@@ -463,7 +523,7 @@ int32_t model_menu_item_action(uint32_t item_index) {
         g_max_seq_len = 512;
     }
     else if (item_index == 3) {
-        widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...";
+        wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...");
         g_model_path = MODEL_PATH_4;
         g_lora_path = NULL;
         g_repetition_penalty = 1.0f;
@@ -473,7 +533,7 @@ int32_t model_menu_item_action(uint32_t item_index) {
         g_max_seq_len = 32768;
     }
     else if (item_index == 4) {
-        widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...";
+        wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...");
         g_model_path = MODEL_PATH_5;
         g_lora_path = NULL;
         g_repetition_penalty = 1.0f;
@@ -483,7 +543,7 @@ int32_t model_menu_item_action(uint32_t item_index) {
         g_max_seq_len = 32768;
     }
     else if (item_index == 5) {
-        widget_textarea_state->text = L" 正在加载语言模型\n Qwen3-4B-Inst-2507\n 请稍等...";
+        wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Qwen3-4B-Inst-2507\n 请稍等...");
         g_model_path = MODEL_PATH_6;
         g_lora_path = NULL;
         g_repetition_penalty = 1.0f;
@@ -500,15 +560,22 @@ int32_t model_menu_item_action(uint32_t item_index) {
     g_random_seed = (unsigned int)time(NULL);
     g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, g_random_seed);
 
-    widget_textarea_state->text = L"加载完成~";
+    wcscpy(widget_textarea_state->text, L"加载完成~");
     widget_textarea_state->current_line = 0;
     widget_textarea_state->is_show_scroll_bar = 0;
     draw_textarea(key_event, global_state, widget_textarea_state);
 
     usleep(500*1000);
 
-    refresh_main_menu();
-    return -2;
+    // 以下两条路选一个：
+
+    // 1、直接进入电子鹦鹉
+    init_input(key_event, global_state, widget_input_state);
+    return 0;
+
+    // 2、或者回到主菜单
+    // refresh_menu(key_event, global_state, main_menu_state);
+    // return -2;
 }
 
 
@@ -525,12 +592,16 @@ int main() {
     global_state = (Global_State*)calloc(1, sizeof(Global_State));
     key_event = (Key_Event*)calloc(1, sizeof(Key_Event));
     widget_textarea_state = (Widget_Textarea_State*)calloc(1, sizeof(Widget_Textarea_State));
+    asr_textarea_state = (Widget_Textarea_State*)calloc(1, sizeof(Widget_Textarea_State));
+    prefilling_textarea_state = (Widget_Textarea_State*)calloc(1, sizeof(Widget_Textarea_State));
     widget_input_state = (Widget_Input_State*)calloc(1, sizeof(Widget_Input_State));
     main_menu_state = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
     model_menu_state = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
 
+    global_state->llm_status = LLM_STOPPED_NORMALLY;
     global_state->is_recording = 0;
     global_state->asr_start_timestamp = 0;
+    global_state->is_full_refresh = 1;
 
     widget_input_state->state = 0;
     widget_input_state->ime_mode_flag = 0;
@@ -548,6 +619,10 @@ int main() {
     widget_input_state->alphabet_current_key = 255;
     widget_input_state->alphabet_index = 0;
 
+    widget_textarea_state->x = 0;
+    widget_textarea_state->y = 0;
+    widget_textarea_state->width = 128;
+    widget_textarea_state->height = 64;
     widget_textarea_state->line_num = 0;
     widget_textarea_state->current_line = 0;
 
@@ -593,7 +668,6 @@ int main() {
             // 松开瞬间（下降沿）
             else {
                 key_event->key_code = key_event->prev_key;
-                printf("key_timer = %d\n", key_event->key_timer);
                 // 短按（或者通过长按触发重复动作状态后反复触发）
                 if (key_event->key_repeat == 1 || (key_event->key_timer >= 0 && key_event->key_timer < LONG_PRESS_THRESHOLD)) {
                     key_event->key_edge = -1;
@@ -646,7 +720,7 @@ int main() {
         switch(STATE) {
 
         /////////////////////////////////////////////
-STATE_M1:// 初始状态：欢迎屏幕。按任意键进入主菜单
+        // 初始状态：欢迎屏幕。按任意键进入主菜单
         /////////////////////////////////////////////
 
         case -1:
@@ -662,13 +736,14 @@ STATE_M1:// 初始状态：欢迎屏幕。按任意键进入主菜单
             break;
 
         /////////////////////////////////////////////
-STATE_M2:// 主菜单。
+        // 主菜单。
         /////////////////////////////////////////////
 
         case -2:
 
+            // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
-                refresh_main_menu();
+                refresh_menu(key_event, global_state, main_menu_state);
             }
             PREV_STATE = STATE;
 
@@ -677,94 +752,53 @@ STATE_M2:// 主菜单。
             break;
 
         /////////////////////////////////////////////
-STATE_M3:// 文本显示状态
+        // 文本显示状态
         /////////////////////////////////////////////
 
         case -3:
 
-            // 短按A键：回到主菜单
-            if (key_event->key_edge == -1 && key_event->key_code == 10) {
-                refresh_main_menu();
-                STATE = -2;
-            }
-
-            // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
-            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 14) {
-                if (widget_textarea_state->current_line <= 0) { // 卷到顶
-                    widget_textarea_state->current_line = widget_textarea_state->line_num - 5;
-                }
-                else {
-                    widget_textarea_state->current_line--;
-                }
-
-                widget_textarea_state->text = g_anniversory;
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                wcscpy(widget_textarea_state->text, g_anniversory);
+                widget_textarea_state->current_line = 0;
                 widget_textarea_state->is_show_scroll_bar = 1;
                 draw_textarea(key_event, global_state, widget_textarea_state);
-
-                STATE = -3;
             }
+            PREV_STATE = STATE;
 
-            // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
-            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 15) {
-                if (widget_textarea_state->current_line >= (widget_textarea_state->line_num - 5)) { // 卷到底
-                    widget_textarea_state->current_line = 0;
-                }
-                else {
-                    widget_textarea_state->current_line++;
-                }
-
-                widget_textarea_state->text = g_anniversory;
-                widget_textarea_state->is_show_scroll_bar = 1;
-                draw_textarea(key_event, global_state, widget_textarea_state);
-
-                STATE = -3;
-            }
+            STATE = textarea_event_handler(key_event, global_state, widget_textarea_state, -2, -3);
 
             break;
 
         /////////////////////////////////////////////
-STATE_0:// 文字编辑器状态
+        // 文字编辑器状态
         /////////////////////////////////////////////
 
         case 0:
 
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                refresh_input(key_event, global_state, widget_input_state);
+            }
+            PREV_STATE = STATE;
+
             // 长+短按A键：删除一个字符；如果输入缓冲区为空，则回到主菜单
             if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
                 if (widget_input_state->state == 0 && widget_input_state->input_counter <= 0) {
-                    // widget_input_state->input_buffer = refresh_input_buffer(widget_input_state->input_buffer, &(widget_input_state->input_counter));
                     init_input(key_event, global_state, widget_input_state);
-                    refresh_main_menu();
                     STATE = -2;
                 }
             }
 
             // 按下C键：开始PTT
             else if (key_event->key_edge > 0 && key_event->key_code == 12) {
-
-                // 设置PTT状态为按下（>0）
-                if (set_ptt_status(66) < 0) break;
-
-                // 打开ASR管道
-                if (open_asr_fifo() < 0) break;
-
-                widget_textarea_state->text = L" \n \n     请说话...";
-                widget_textarea_state->current_line = 0;
-                widget_textarea_state->is_show_scroll_bar = 0;
-                draw_textarea(key_event, global_state, widget_textarea_state);
-
-                global_state->is_recording = 1;
-                global_state->asr_start_timestamp = time(NULL);
-
                 STATE = 21;
-                goto STATE_21;
             }
 
             // 短按D键：提交
             else if (key_event->key_edge == -1 && key_event->key_code == 13) {
-                // render_input_buffer(widget_input_state->input_buffer, widget_input_state->ime_mode_flag, -1);
                 if (widget_input_state->state == 0) {
-                    STATE = 10;
-                    goto STATE_10;
+                    STATE = 8;
                 }
             }
 
@@ -773,13 +807,14 @@ STATE_0:// 文字编辑器状态
             break;
 
         /////////////////////////////////////////////
-STATE_4:// 选择语言模型状态
+        // 选择语言模型状态
         /////////////////////////////////////////////
 
         case 4:
 
+            // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
-                refresh_model_menu();
+                refresh_menu(key_event, global_state, model_menu_state);
             }
             PREV_STATE = STATE;
 
@@ -788,16 +823,16 @@ STATE_4:// 选择语言模型状态
             break;
 
         /////////////////////////////////////////////
-STATE_10: // 提交候选字到LLM，开始推理
+        // 语言推理进行中（异步，每个iter结束后会将控制权交还事件循环，而非自行阻塞到最后一个token）
+        //   实际上就是将generate_sync的while循环打开，将其置于大的事件循环。
         /////////////////////////////////////////////
 
-        case 10:
+        case 8:
 
-            // 短按D键：开始推理。推理完成后，并不清除输入缓冲区，因此再次按D键会重新推理。
-            if (key_event->key_edge == -1 && key_event->key_code == 13) {
-                OLED_SoftClear();
-
-                wchar_t *prompt;
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                wchar_t *prompt = NULL;
+                // 首先根据模型类型应用prompt模板
                 if (g_llm_ctx->llm->arch == LLM_ARCH_NANO) {
                     prompt = apply_chat_template(NULL, NULL, widget_input_state->input_buffer);
                 }
@@ -809,119 +844,47 @@ STATE_10: // 提交候选字到LLM，开始推理
                     exit(EXIT_FAILURE);
                 }
 
-                int32_t flag = generate_sync(g_llm_ctx, prompt, g_max_seq_len, on_prefilling, on_decoding, on_finished);
+                // 初始化对话session
+                global_state->llm_session = llm_session_init(g_llm_ctx, prompt, g_max_seq_len);
+            }
+            PREV_STATE = STATE;
 
-                if (flag == LLM_STOPPED_IN_PREFILLING || flag == LLM_STOPPED_IN_DECODING) {
-                    printf("推理中止。\n");
+            // 事件循环主体：即同步版本的while(1)的循环体
 
-                    // 按键延时：等待（on_decoding回调中检测到的）按键松开，防止误触发
-                    usleep(500 * 1000);
-
-                    // 计算提示语+生成内容的行数
-                    wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
-                    wcscat(prompt_and_output, widget_input_state->input_buffer);
-                    wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
-                    wcscat(prompt_and_output, g_llm_output_of_last_session);
-                    wchar_t tps_wcstr[50];
-                    swprintf(tps_wcstr, 50, L"\n\n[Nano:推理中止]\n\n[平均速度%.1f词元/秒]", g_tps_of_last_session);
-                    wcscat(prompt_and_output, tps_wcstr);
-
-                    wcscpy(g_llm_output_of_last_session, prompt_and_output);
-
-                    widget_textarea_state->text = g_llm_output_of_last_session;
-                    int32_t line_num = get_view_lines(widget_textarea_state->text);
-                    widget_textarea_state->current_line = (line_num >= 5) ? line_num - 5 : 0;
-                    widget_textarea_state->is_show_scroll_bar = 1;
-                    draw_textarea(key_event, global_state, widget_textarea_state);
-
-                    STATE = 10;
-                }
-                else if (flag == LLM_STOPPED_NORMALLY) {
-                    printf("推理自然结束。\n");
-
-                    // 计算提示语+生成内容的行数，绘制文本和滚动条
-                    OLED_SoftClear();
-
-                    wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
-                    wcscat(prompt_and_output, widget_input_state->input_buffer);
-                    wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
-                    wcscat(prompt_and_output, g_llm_output_of_last_session);
-                    wchar_t tps_wcstr[50];
-                    swprintf(tps_wcstr, 50, L"\n\n[平均速度%.1f词元/秒]", g_tps_of_last_session);
-                    wcscat(prompt_and_output, tps_wcstr);
-
-                    wcscpy(g_llm_output_of_last_session, prompt_and_output);
-
-                    widget_textarea_state->text = g_llm_output_of_last_session;
-                    int32_t line_num = get_view_lines(widget_textarea_state->text);
-                    widget_textarea_state->current_line = (line_num >= 5) ? line_num - 5 : 0;
-                    widget_textarea_state->is_show_scroll_bar = 1;
-                    draw_textarea(key_event, global_state, widget_textarea_state);
-
+            global_state->llm_status = llm_session_step(g_llm_ctx, global_state->llm_session);
+            global_state->llm_session->tps = (global_state->llm_session->pos - 1) / (double)(time_in_ms() - global_state->llm_session->t_0) * 1000;
+            if (global_state->llm_status == LLM_RUNNING_IN_PREFILLING) {
+                global_state->llm_status = on_llm_prefilling(key_event, global_state, global_state->llm_session);
+                // 外部被动中止
+                if (global_state->llm_status == LLM_STOPPED_IN_PREFILLING) {
+                    llm_session_free(global_state->llm_session);
                     STATE = 10;
                 }
                 else {
-                    printf("推理过程异常结束。\n");
-
-                    // 计算提示语+生成内容的行数，绘制文本和滚动条
-                    OLED_SoftClear();
-
-                    wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
-                    wcscat(prompt_and_output, widget_input_state->input_buffer);
-                    wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
-                    wcscat(prompt_and_output, g_llm_output_of_last_session);
-                    wchar_t tps_wcstr[50];
-                    swprintf(tps_wcstr, 50, L"\n\n推理过程异常结束！\n\n[平均速度%.1f词元/秒]", g_tps_of_last_session);
-                    wcscat(prompt_and_output, tps_wcstr);
-
-                    wcscpy(g_llm_output_of_last_session, prompt_and_output);
-
-                    widget_textarea_state->text = g_llm_output_of_last_session;
-                    int32_t line_num = get_view_lines(widget_textarea_state->text);
-                    widget_textarea_state->current_line = (line_num >= 5) ? line_num - 5 : 0;
-                    widget_textarea_state->is_show_scroll_bar = 1;
-                    draw_textarea(key_event, global_state, widget_textarea_state);
-
+                    STATE = 8;
+                }
+            }
+            else if (global_state->llm_status == LLM_RUNNING_IN_DECODING) {
+                global_state->llm_status = on_llm_decoding(key_event, global_state, global_state->llm_session);
+                // 外部被动中止
+                if (global_state->llm_status == LLM_STOPPED_IN_DECODING) {
+                    llm_session_free(global_state->llm_session);
                     STATE = 10;
                 }
-            }
-
-            // 短按A键：清屏，清除输入缓冲区，回到初始状态
-            else if (key_event->key_edge == -1 && key_event->key_code == 10) {
-                // 刷新文本输入框
-                init_input(key_event, global_state, widget_input_state);
-                STATE = 0;
-            }
-
-            // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
-            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 14) {
-                if (widget_textarea_state->current_line <= 0) { // 卷到顶
-                    widget_textarea_state->current_line = widget_textarea_state->line_num - 5;
-                }
                 else {
-                    widget_textarea_state->current_line--;
+                    STATE = 8;
                 }
-
-                widget_textarea_state->text = g_llm_output_of_last_session;
-                widget_textarea_state->is_show_scroll_bar = 1;
-                draw_textarea(key_event, global_state, widget_textarea_state);
-
+            }
+            else if (global_state->llm_status == LLM_STOPPED_NORMALLY) {
+                global_state->llm_session->t_1 = time_in_ms();
+                global_state->llm_session->tps = (global_state->llm_session->pos - 1) / (double)(global_state->llm_session->t_1 - global_state->llm_session->t_0) * 1000;
+                global_state->llm_status = on_llm_finished(global_state->llm_session);
+                llm_session_free(global_state->llm_session);
                 STATE = 10;
             }
-
-            // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
-            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 15) {
-                if (widget_textarea_state->current_line >= (widget_textarea_state->line_num - 5)) { // 卷到底
-                    widget_textarea_state->current_line = 0;
-                }
-                else {
-                    widget_textarea_state->current_line++;
-                }
-
-                widget_textarea_state->text = g_llm_output_of_last_session;
-                widget_textarea_state->is_show_scroll_bar = 1;
-                draw_textarea(key_event, global_state, widget_textarea_state);
-
+            else {
+                global_state->llm_status = LLM_STOPPED_WITH_ERROR;
+                llm_session_free(global_state->llm_session);
                 STATE = 10;
             }
 
@@ -929,27 +892,105 @@ STATE_10: // 提交候选字到LLM，开始推理
 
 
         /////////////////////////////////////////////
-STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内容）
+        // 推理结束（自然结束或中断），显示推理结果
+        /////////////////////////////////////////////
+
+        case 10:
+
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                // 计算提示语+生成内容的行数
+                wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
+                wcscat(prompt_and_output, widget_input_state->input_buffer);
+                wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
+                wcscat(prompt_and_output, g_llm_output_of_last_session);
+                if (global_state->llm_status == LLM_STOPPED_IN_PREFILLING || global_state->llm_status == LLM_STOPPED_IN_DECODING) {
+                    printf("推理中止。\n");
+                    wcscat(prompt_and_output, L"\n\n[Nano:推理中止]");
+                }
+                else if (global_state->llm_status == LLM_STOPPED_NORMALLY) {
+                    printf("推理自然结束。\n");
+                }
+                else {
+                    printf("推理异常结束。\n");
+                    wcscat(prompt_and_output, L"\n\n[Nano:推理异常结束]");
+                }
+                wchar_t tps_wcstr[50];
+                swprintf(tps_wcstr, 50, L"\n\n[平均速度%.1f词元/秒]", g_tps_of_last_session);
+                wcscat(prompt_and_output, tps_wcstr);
+
+                wcscpy(g_llm_output_of_last_session, prompt_and_output);
+
+                wcscpy(widget_textarea_state->text, g_llm_output_of_last_session);
+                widget_textarea_state->current_line = -1;
+                widget_textarea_state->is_show_scroll_bar = 1;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+            }
+            PREV_STATE = STATE;
+
+            // 短按D键：重新推理。推理完成后，并不清除输入缓冲区，因此再次按D键会重新推理。
+            if (key_event->key_edge == -1 && key_event->key_code == 13) {
+                STATE = 8;
+            }
+            else {
+                STATE = textarea_event_handler(key_event, global_state, widget_textarea_state, 0, 10);
+            }
+
+            break;
+
+        /////////////////////////////////////////////
+        // ASR实时识别进行中（响应ASR客户端回报的ASR文本内容）
         /////////////////////////////////////////////
 
         case 21:
 
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                // 设置PTT状态为按下（>0）
+                if (set_ptt_status(66) < 0) break;
+
+                // 打开ASR管道
+                if (open_asr_fifo() < 0) break;
+
+
+                asr_textarea_state->x = 0;
+                asr_textarea_state->y = 0;
+                asr_textarea_state->width = 128;
+                asr_textarea_state->height = 51; // NOTE 详见结构体定义处的说明
+
+                wcscpy(asr_textarea_state->text, L"请说话...");
+
+                global_state->is_recording = 1;
+                global_state->asr_start_timestamp = time(NULL);
+            }
+            PREV_STATE = STATE;
+
             // 实时显示ASR结果
             if (global_state->is_recording == 1) {
                 int32_t len = read_asr_fifo(g_asr_output);
-                // if (len > 0) {
-                    // 显示录音持续时间
-                    wchar_t asr_text_with_duration[ASR_BUFFER_SIZE] = L"";
-                    wcscat(asr_text_with_duration, g_asr_output);
-                    wchar_t rec_duration[50];
-                    swprintf(rec_duration, 50, L"\n[ %d s ]", (int32_t)(time(NULL) - global_state->asr_start_timestamp));
-                    wcscat(asr_text_with_duration, rec_duration);
 
-                    widget_textarea_state->text = asr_text_with_duration;
-                    widget_textarea_state->current_line = -1;
-                    widget_textarea_state->is_show_scroll_bar = 1;
-                    draw_textarea(key_event, global_state, widget_textarea_state);
+                // 临时关闭draw_textarea的整帧绘制，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
+                global_state->is_full_refresh = 0;
+                OLED_SoftClear();
+
+                // 显示ASR结果
+                // if (len > 0) {
+                    wcscpy(asr_textarea_state->text, g_asr_output);
+                    asr_textarea_state->current_line = -1;
+                    asr_textarea_state->is_show_scroll_bar = 1;
+                    draw_textarea(key_event, global_state, asr_textarea_state);
                 // }
+
+                // 绘制录音持续时间
+                wchar_t rec_duration[50];
+                swprintf(rec_duration, 50, L" %ds ", (int32_t)(time(NULL) - global_state->asr_start_timestamp));
+                render_line(rec_duration, 0, 52, 0);
+
+                OLED_Refresh();
+
+                // 重新开启整帧绘制，注意这个标记是所有函数共享的全局标记。
+                global_state->is_full_refresh = 1;
+
             }
 
             // 松开按钮，停止PTT
@@ -964,28 +1005,25 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
                 if (set_ptt_status(0) < 0) break;
                 close(g_ptt_fifo_fd);
 
-                widget_textarea_state->text = L" \n \n      识别完成";
-                widget_textarea_state->current_line = 0;
-                widget_textarea_state->is_show_scroll_bar = 0;
-                draw_textarea(key_event, global_state, widget_textarea_state);
+                wcscpy(asr_textarea_state->text, L" \n \n      识别完成");
+                asr_textarea_state->current_line = 0;
+                asr_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, asr_textarea_state);
 
                 usleep(500*1000);
 
                 wcscpy(widget_input_state->input_buffer, g_asr_output);
                 widget_input_state->input_counter = wcslen(g_asr_output);
+
                 wcscpy(g_asr_output, L"请说话...");
 
                 // ASR后立刻提交到LLM？
                 if (g_config_auto_submit_after_asr) {
                     printf("立刻提交LLM：%ls\n", widget_input_state->input_buffer);
-                    // 软触发D键
-                    key_event->key_edge = -1;
-                    key_event->key_code = 13;
-                    STATE = 10;
-                    goto STATE_10;
+                    STATE = 8;
                 }
                 else {
-                    // 回到文字输widget_input_state->current_page = 0;
+                    widget_input_state->current_page = 0;
                     STATE = 0;
                 }
 
@@ -1005,24 +1043,6 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
         }
 
 
-        // 绘制焦点组件
-        // if (STATE == 0) {
-        //     draw_input(key_event, global_state, widget_input_state);
-        // }
-
-
-
-
-
-
-
-
-
-
-        /////////////////////////////////////////////
-        // 英文字母输入模式的循环切换
-        /////////////////////////////////////////////
-        // draw_input(void_key_event, global_state, widget_input_state);
 
         // 定期检查ASR服务状态
         if (global_state->timer % 200 == 0) {
@@ -1040,6 +1060,8 @@ STATE_21: // ASR实时识别进行中（响应ASR客户端回报的ASR文本内�
     free(widget_textarea_state);
     free(widget_input_state);
     free(main_menu_state);
+    free(model_menu_state);
+    free(prefilling_textarea_state);
 
     free(void_key_event);
 
