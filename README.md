@@ -3,8 +3,10 @@
 
 **B站视频演示**：
 
-|<a href="https://www.bilibili.com/video/BV1NAieYiEFi" target="_blank"><img src="./doc/nano-video-webui.jpg" width="100%"><br>手机浏览器推理+ASR+TTS</a>|<a href="https://www.bilibili.com/video/BV1vmrsYGERP" target="_blank"><img src="./doc/nano-video-ar-class-c.jpg" width="100%"><br>通过业余无线电C证考试</a>|<a href="https://www.bilibili.com/video/BV1mhVzzrEJf" target="_blank"><img src="./doc/nano-video-marga.jpg" width="100%"><br>路由器离线部署+键盘屏幕交互</a>|
+|<a href="https://www.bilibili.com/video/BV1dLYbz6ETe" target="_blank"><img src="./doc/nano-rpi-1.jpg" width="100%"><br>树莓派语音对话离线部署</a>|<a href="https://www.bilibili.com/video/BV1rNgCzNE84" target="_blank"><img src="./doc/nano-scheme.jpg" width="100%"><br>基于自制Scheme解释器的推理</a>|<a href="https://www.bilibili.com/video/BV1mhVzzrEJf" target="_blank"><img src="./doc/nano-video-marga.jpg" width="100%"><br>路由器离线部署</a>|
 |-|-|-|
+|<a href="https://www.bilibili.com/video/BV1NAieYiEFi" target="_blank"><img src="./doc/nano.jpg" width="100%"><br>浏览器离线推理+ASR+TTS</a>|<a href="https://www.bilibili.com/video/BV1vmrsYGERP" target="_blank"><img src="./doc/nano-video-ar-class-c.jpg" width="100%"><br>通过业余无线电C证考试</a>|<a href="https://www.bilibili.com/video/BV1vPRDYyEgp" target="_blank"><img src="./doc/nano-mi-ax5.jpg" width="100%"><br>红米AX5路由器部署推理</a>|
+
 
 ### [【立即体验浏览器本地推理】](https://bd4sur.com/Nano/infer)
 
@@ -75,7 +77,9 @@
 
 文档待补充。
 
-![ ](./doc/nano-marga.jpg)
+|树莓派离线部署|路由器离线部署|
+|--|--|
+|![ ](./doc/nano-raspi.jpg)|![ ](./doc/nano-marga.jpg)|
 
 **Scheme实现的、可在自研Scheme解释器上运行的推理**
 
