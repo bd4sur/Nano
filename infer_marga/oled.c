@@ -168,10 +168,10 @@ void OLED_SoftClear(void) {
 }
 
 // 画点
-// x:0~127
-// y:0~63
-// t:1 填充 0,清空
-void OLED_DrawPoint(uint8_t x, uint8_t y, uint8_t t) {
+// x: 0~127
+// y: 0~63
+// t: 0-置0  1-置1  2-异或
+void OLED_DrawPoint(uint8_t x, uint8_t y, uint8_t mode) {
     if (x >= OLED_WIDTH || y >= OLED_HEIGHT) {
         // printf("WARNING: Plot Coord Out of bound! Cancelled.\n");
         return;
@@ -180,13 +180,16 @@ void OLED_DrawPoint(uint8_t x, uint8_t y, uint8_t t) {
     i = y / OLED_PAGES;
     m = y % OLED_PAGES;
     n = 1 << m;
-    if (t) {
+    if (mode == 0) {
+        OLED_FRAME_BUFFER[i][x] = ~OLED_FRAME_BUFFER[i][x];
+        OLED_FRAME_BUFFER[i][x] |= n;
+        OLED_FRAME_BUFFER[i][x] = ~OLED_FRAME_BUFFER[i][x];
+    }
+    else if (mode == 1) {
         OLED_FRAME_BUFFER[i][x] |= n;
     }
     else {
-        OLED_FRAME_BUFFER[i][x] = ~OLED_FRAME_BUFFER[i][x];
-        OLED_FRAME_BUFFER[i][x] |= n;
-        OLED_FRAME_BUFFER[i][x] = ~OLED_FRAME_BUFFER[i][x];
+        OLED_FRAME_BUFFER[i][x] ^= n;
     }
 }
 

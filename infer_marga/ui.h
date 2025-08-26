@@ -16,6 +16,10 @@
 #define ALPHABET_COUNTDOWN_MAX (30)
 #define LONG_PRESS_THRESHOLD (360)
 
+#define MAX_CANDIDATE_NUM (1024)     // 候选字最大数量
+#define MAX_CANDIDATE_PAGE_NUM (108) // 候选字最大分页数
+#define MAX_CANDIDATE_NUM_PER_PAGE (10) // 每页最多有几个候选字（每页10个字）
+
 #define MAX_MENU_ITEMS (1024)
 #define MAX_MENU_ITEM_LEN (24)
 
@@ -76,21 +80,19 @@ typedef struct {
     int32_t is_show_scroll_bar;
 
     // 以下是Widget_Input_State独有的
-    uint32_t ime_mode_flag; // 汉英数输入模式标志 0汉字 1英文 2数字
-    uint32_t pinyin_keys;   // 单字拼音键码暂存
+
+    int32_t cursor_pos;           // 光标位置
+    uint32_t ime_mode_flag;       // 汉英数输入模式标志 0汉字 1英文 2数字
+    uint32_t pinyin_keys;         // 单字拼音键码暂存
     // 候选字翻页相关
-    uint32_t *candidates;
-    uint32_t candidate_num;
-    uint32_t **candidate_pages;
-    uint32_t candidate_page_num;
-    uint32_t current_page;
-    // 全局文字输入缓冲
-    uint32_t *input_buffer; // 文字输入缓冲区
-    int32_t input_counter;
-    int32_t cursor_pos; // 光标位置
+    uint32_t candidates[MAX_CANDIDATE_NUM]; // 全部候选字/符号
+    uint32_t candidate_num;       // 候选字总数
+    uint32_t candidate_pages[MAX_CANDIDATE_PAGE_NUM][MAX_CANDIDATE_NUM_PER_PAGE]; // 候选字分页
+    uint32_t candidate_page_num;  // 总的候选字分页数
+    uint32_t current_page;        // 当前显示的候选字页标号
     // 英文字母输入模式的倒计时
-    int32_t alphabet_countdown; // 从ALPHABET_COUNTDOWN_MAX开始，每轮主循环后倒数减1，减到0时清除进度条，减到-1意味着英文字母输入状态结束
-    uint8_t alphabet_current_key;
+    int32_t alphabet_countdown;   // 从ALPHABET_COUNTDOWN_MAX开始，每轮主循环后倒数减1，减到0时清除进度条，减到-1意味着英文字母输入状态结束
+    uint8_t alphabet_current_key; // 当前选中的字母按键
     uint32_t alphabet_index;
 } Widget_Input_State;
 
@@ -107,7 +109,7 @@ typedef struct {
 // 符号列表
 static wchar_t ime_symbols[55] = L"，。、？！：；“”‘’（）《》…—～·【】 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 // 按键对应的字母列表
-static wchar_t ime_alphabet[10][32] = {L"", L" .,;:?!-/+_=&\"*", L"abcABC", L"defDEF", L"ghiGHI", L"jklJKL", L"mnoMNO", L"pqrsPRQS", L"tuvTUV", L"wxyzWXYZ"};
+static wchar_t ime_alphabet[10][32] = {L"0", L" 1.,:?!-/+_=&\"*", L"abcABC2", L"defDEF3", L"ghiGHI4", L"jklJKL5", L"mnoMNO6", L"pqrsPRQS7", L"tuvTUV8", L"wxyzWXYZ9"};
 
 
 void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode);
@@ -125,20 +127,11 @@ void init_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
 void refresh_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
 void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
 
-int32_t render_input_buffer(
-    uint32_t *input_buffer, uint32_t ime_mode_flag, int32_t cursor_pos,
-    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height);
-
-void render_pinyin_input(
-    uint32_t **candidate_pages, uint32_t pinyin_keys, uint32_t current_page, uint32_t candidate_page_num, uint32_t is_picking,
-    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height);
-
-void render_symbol_input(
-    uint32_t **candidate_pages, uint32_t current_page, uint32_t candidate_page_num,
-    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height);
+void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+void render_cursor(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+void render_pinyin_input(Widget_Input_State *input_state, uint32_t is_picking);
+void render_symbol_input(Widget_Input_State *input_state);
 
 void render_scroll_bar(int32_t line_num, int32_t current_line, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height);
-
-uint32_t *refresh_input_buffer(uint32_t *input_buffer, int32_t *input_counter);
 
 #endif

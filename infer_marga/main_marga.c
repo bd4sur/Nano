@@ -279,8 +279,8 @@ void init_main_menu() {
     wcscpy(main_menu_state->items[1], L"电子鹦鹉");
     wcscpy(main_menu_state->items[2], L"选择语言模型");
     wcscpy(main_menu_state->items[3], L"设置");
-    wcscpy(main_menu_state->items[4], L"优雅关机");
-    wcscpy(main_menu_state->items[5], L"关于本机器");
+    wcscpy(main_menu_state->items[4], L"安全关机");
+    wcscpy(main_menu_state->items[5], L"本机自述");
     main_menu_state->item_num = 6;
     init_menu(key_event, global_state, main_menu_state);
 }
@@ -603,22 +603,6 @@ int main() {
     global_state->asr_start_timestamp = 0;
     global_state->is_full_refresh = 1;
 
-    widget_input_state->state = 0;
-    widget_input_state->ime_mode_flag = 0;
-    widget_input_state->pinyin_keys = 0;
-    widget_input_state->candidates = NULL;
-    widget_input_state->candidate_num = 0;
-    widget_input_state->candidate_pages = NULL;
-    widget_input_state->candidate_page_num = 0;
-    widget_input_state->current_page = 0;
-    widget_input_state->input_buffer = (uint32_t *)calloc(INPUT_BUFFER_LENGTH, sizeof(uint32_t));
-    widget_input_state->input_counter = 0;
-    widget_input_state->cursor_pos = 0;
-
-    widget_input_state->alphabet_countdown = -1;
-    widget_input_state->alphabet_current_key = 255;
-    widget_input_state->alphabet_index = 0;
-
     widget_textarea_state->x = 0;
     widget_textarea_state->y = 0;
     widget_textarea_state->width = 128;
@@ -784,7 +768,7 @@ int main() {
 
             // 长+短按A键：删除一个字符；如果输入缓冲区为空，则回到主菜单
             if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
-                if (widget_input_state->state == 0 && widget_input_state->input_counter <= 0) {
+                if (widget_input_state->state == 0 && widget_input_state->length <= 0) {
                     init_input(key_event, global_state, widget_input_state);
                     STATE = -2;
                 }
@@ -834,10 +818,10 @@ int main() {
                 wchar_t *prompt = NULL;
                 // 首先根据模型类型应用prompt模板
                 if (g_llm_ctx->llm->arch == LLM_ARCH_NANO) {
-                    prompt = apply_chat_template(NULL, NULL, widget_input_state->input_buffer);
+                    prompt = apply_chat_template(NULL, NULL, widget_input_state->text);
                 }
                 else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
-                    prompt = widget_input_state->input_buffer;
+                    prompt = widget_input_state->text;
                 }
                 else {
                     fprintf(stderr, "Error: unknown model arch.\n");
@@ -901,7 +885,7 @@ int main() {
             if (PREV_STATE != STATE) {
                 // 计算提示语+生成内容的行数
                 wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
-                wcscat(prompt_and_output, widget_input_state->input_buffer);
+                wcscat(prompt_and_output, widget_input_state->text);
                 wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
                 wcscat(prompt_and_output, g_llm_output_of_last_session);
                 if (global_state->llm_status == LLM_STOPPED_IN_PREFILLING || global_state->llm_status == LLM_STOPPED_IN_DECODING) {
@@ -1012,14 +996,14 @@ int main() {
 
                 usleep(500*1000);
 
-                wcscpy(widget_input_state->input_buffer, g_asr_output);
-                widget_input_state->input_counter = wcslen(g_asr_output);
+                wcscpy(widget_input_state->text, g_asr_output);
+                widget_input_state->length = wcslen(g_asr_output);
 
                 wcscpy(g_asr_output, L"请说话...");
 
                 // ASR后立刻提交到LLM？
                 if (g_config_auto_submit_after_asr) {
-                    printf("立刻提交LLM：%ls\n", widget_input_state->input_buffer);
+                    printf("立刻提交LLM：%ls\n", widget_input_state->text);
                     STATE = 8;
                 }
                 else {

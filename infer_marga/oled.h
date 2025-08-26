@@ -52,7 +52,7 @@ void OLED_Display_Off(void);
 void OLED_Refresh(void);
 void OLED_Clear(void);
 void OLED_SoftClear(void);
-void OLED_DrawPoint(uint8_t x, uint8_t y, uint8_t t);
+void OLED_DrawPoint(uint8_t x, uint8_t y, uint8_t mode);
 void OLED_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t mode);
 void OLED_DrawCircle(uint8_t x, uint8_t y, uint8_t r);
 void OLED_ShowChar(uint8_t x, uint8_t y, uint8_t *glyph, uint8_t font_width, uint8_t font_height, uint8_t mode);
