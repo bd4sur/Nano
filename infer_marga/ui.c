@@ -42,14 +42,37 @@ void candidate_paging(Widget_Input_State *input_state) {
     }
 }
 
-void free_candidate_pages(uint32_t **candidate_pages, uint32_t pages) {
-    if (!candidate_pages) return;
-    for (uint32_t i = 0; i < pages; i++) {
-        free(candidate_pages[i]);
+// 在文本框的光标位置之后插入一个字符
+void insert_char(Widget_Input_State *input_state, wchar_t new_char) {
+    if (input_state->length + 1 > INPUT_BUFFER_LENGTH) {
+        return;
     }
-    free(candidate_pages);
+
+    input_state->text[input_state->length + 1] = L'\0';
+
+    for (uint32_t i = input_state->length; i >= input_state->cursor_pos + 2; i--) {
+        input_state->text[i] = input_state->text[i-1];
+    }
+    input_state->text[input_state->cursor_pos + 1] = new_char;
+
+    input_state->cursor_pos++;
+    input_state->length++;
 }
 
+// 删除光标位置的字符（即光标竖线左边的一个字符）
+void delete_char(Widget_Input_State *input_state) {
+    if (input_state->length <= 0 || input_state->cursor_pos < 0) {
+        return;
+    }
+
+    for (uint32_t i = input_state->cursor_pos; i < input_state->length; i++) {
+        input_state->text[i] = input_state->text[i+1];
+    }
+    input_state->text[input_state->length - 1] = L'\0';
+
+    input_state->cursor_pos--;
+    input_state->length--;
+}
 
 
 
@@ -384,8 +407,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
             // 将当前选中的字母加入输入缓冲区
             uint32_t ch = ime_alphabet[(int)(input_state->alphabet_current_key)][input_state->alphabet_index];
             if (ch) {
-                input_state->text[input_state->length++] = ch;
-                input_state->cursor_pos++;
+                // input_state->text[input_state->length++] = ch;
+                // input_state->cursor_pos++;
+                insert_char(input_state, ch);
             }
             else {
                 printf("选定了列表之外的字母，忽略。\n");
@@ -421,8 +445,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         // 短按0：数字输入模式下是直接输入0，其余模式无动作
         else if (key_event->key_edge == -1 && key_event->key_code == 0) {
             if (input_state->ime_mode_flag == IME_MODE_NUMBER) {
-                input_state->text[(input_state->length)++] = L'0';
-                input_state->cursor_pos++;
+                // input_state->text[(input_state->length)++] = L'0';
+                // input_state->cursor_pos++;
+                insert_char(input_state, L'0');
                 render_input_buffer(key_event, global_state, input_state);
                 input_state->state = 0;
             }
@@ -438,8 +463,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
                 }
             }
             else if (input_state->ime_mode_flag == IME_MODE_NUMBER) {
-                input_state->text[(input_state->length)++] = L'0' + key_event->key_code;
-                input_state->cursor_pos++;
+                // input_state->text[(input_state->length)++] = L'0' + key_event->key_code;
+                // input_state->cursor_pos++;
+                insert_char(input_state, (wchar_t)(L'0' + key_event->key_code));
                 render_input_buffer(key_event, global_state, input_state);
                 input_state->state = 0;
             }
@@ -473,8 +499,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         // 长+短按A键：删除一个字符；如果输入缓冲区为空，则回到主菜单（在焦点转换部分处理）
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
             if (input_state->length >= 1) {
-                input_state->text[--(input_state->length)] = 0;
-                input_state->cursor_pos--;
+                // input_state->text[--(input_state->length)] = 0;
+                // input_state->cursor_pos--;
+                delete_char(input_state);
                 render_input_buffer(key_event, global_state, input_state);
             }
             input_state->state = 0;
@@ -565,8 +592,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
             // 将选中的字加入输入缓冲区
             uint32_t ch = input_state->candidate_pages[input_state->current_page][index];
             if (ch) {
-                input_state->text[(input_state->length)++] = ch;
-                input_state->cursor_pos++;
+                // input_state->text[(input_state->length)++] = ch;
+                // input_state->cursor_pos++;
+                insert_char(input_state, ch);
             }
             else {
                 printf("选定了列表之外的字，忽略。\n");
@@ -616,8 +644,9 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
             // 将选中的符号加入输入缓冲区
             uint32_t ch = input_state->candidate_pages[input_state->current_page][index];
             if (ch) {
-                input_state->text[(input_state->length)++] = ch;
-                input_state->cursor_pos++;
+                // input_state->text[(input_state->length)++] = ch;
+                // input_state->cursor_pos++;
+                insert_char(input_state, ch);
             }
             else {
                 printf("选定了列表之外的符号，忽略。\n");
