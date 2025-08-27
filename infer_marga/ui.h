@@ -32,6 +32,9 @@ typedef struct {
     int32_t is_recording; // 录音状态
     time_t asr_start_timestamp; // 录音起始的时间戳
 
+    int32_t ups_voltage; // UPS电压
+    int32_t ups_soc; // UPS电量
+
     int32_t is_full_refresh; // 作为所有绘制函数的一个参数，用于控制是否整帧刷新。默认为1。0-禁用函数内的clear-refresh，1-启用函数内的clear-refresh
 
 } Global_State;

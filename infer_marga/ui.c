@@ -169,7 +169,7 @@ void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
             break;
         }
         // NOTE 反色显示时，在每个字符场面额外补充一条线，避免菜单中高亮区域看起来顶格
-        OLED_DrawLine(x_pos, y_pos - 1, x_pos+font_width, y_pos - 1, 1 - (mode % 2));
+        OLED_DrawLine(x_pos, y_pos - 1, x_pos+font_width-1, y_pos - 1, 1 - (mode % 2));
         OLED_ShowChar(x_pos, y_pos, glyph, font_width, font_height, (mode % 2));
         x_pos += font_width;
     }
@@ -289,17 +289,31 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     OLED_DrawLine(0, 0, 127, 0, 1);
     OLED_DrawLine(0, 15, 127, 15, 1);
     OLED_DrawLine(0, 0, 0, 63, 1);
-    OLED_DrawLine(127, 0, 127, 64, 1); // NOTE 如果横坐标设为63则会漏掉最后一个点
+    OLED_DrawLine(127, 0, 127, 63, 1);
     OLED_DrawLine(0, 63, 127, 63, 1);
 
-    // 检查ASR服务状态，如果ASR服务未启动，则在屏幕左上角画一个小点，表示ASR服务启动中
+    // 检查ASR服务状态，如果ASR服务未启动，则在屏幕左上角画一个闪烁的点，表示ASR服务启动中
     if (global_state->is_asr_server_up < 1) {
         uint8_t v = (uint8_t)((global_state->timer >> 2) & 0x1);
-        OLED_DrawLine(1, 1, 2, 1, v);
-        OLED_DrawLine(1, 1, 1, 2, v);
-        OLED_DrawLine(1, 2, 2, 2, v);
-        OLED_DrawLine(2, 1, 2, 3, v); // NOTE 如果横坐标设为63则会漏掉最后一个点
+        OLED_DrawLine(4, 6, 7, 6, v);
+        OLED_DrawLine(4, 7, 7, 7, v);
+        OLED_DrawLine(4, 8, 7, 8, v);
+        OLED_DrawLine(4, 9, 7, 9, v);
     }
+
+    // 绘制电池电量
+    OLED_DrawLine(112, 4, 125, 4, 0);
+    OLED_DrawLine(125, 4, 125, 11, 0);
+    OLED_DrawLine(112, 11, 125, 11, 0);
+    OLED_DrawLine(112, 4, 112, 11, 0);
+    OLED_DrawLine(111, 6, 111, 9, 0);
+
+    int32_t soc_bar_length = (int32_t)(10.0f * ((float)global_state->ups_soc / 100.0f));
+    soc_bar_length = (soc_bar_length > 9) ? 9 : soc_bar_length;
+    OLED_DrawLine(123 - soc_bar_length, 6, 123, 6, 0);
+    OLED_DrawLine(123 - soc_bar_length, 7, 123, 7, 0);
+    OLED_DrawLine(123 - soc_bar_length, 8, 123, 8, 0);
+    OLED_DrawLine(123 - soc_bar_length, 9, 123, 9, 0);
 
     OLED_Refresh();
 }

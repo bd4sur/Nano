@@ -7,6 +7,7 @@
 #include "pinyin.h"
 #include "oled.h"
 #include "ui.h"
+#include "ups.h"
 #include "keyboard.h"
 #include "infer.h"
 
@@ -86,7 +87,7 @@ int32_t graceful_shutdown() {
     // 等待同步完成
     sleep(2);
     // 执行关机
-    if (system("sudo poweroff") == -1) {
+    if (system("sudo shutdown -h now") == -1) {
         perror("关机失败");
         return -1;
     }
@@ -415,12 +416,12 @@ int32_t textarea_event_handler(
 
 // 主菜单各条目的动作
 int32_t main_menu_item_action(int32_t item_index) {
-    // 1.电子书
+    // 0.电子书
     if (item_index == 0) {
         return -3;
     }
 
-    // 2.电子鹦鹉
+    // 1.电子鹦鹉
     else if (item_index == 1) {
 
         // LLM Init
@@ -453,36 +454,25 @@ int32_t main_menu_item_action(int32_t item_index) {
         return 0;
     }
 
-    // 3.选择语言模型
+    // 2.选择语言模型
     else if (item_index == 2) {
         init_model_menu();
         return 4;
     }
 
-    // 4.设置
+    // 3.设置
     else if (item_index == 3) {
         return -2;
     }
 
-    // 5.安全关机
+    // 4.安全关机
     else if (item_index == 4) {
-        wcscpy(widget_textarea_state->text, L"正在安全关机...");
-        widget_textarea_state->current_line = 0;
-        widget_textarea_state->is_show_scroll_bar = 0;
-        draw_textarea(key_event, global_state, widget_textarea_state);
+        return 31;
+    }
 
-        if (graceful_shutdown() >= 0) {
-            exit(0);
-        }
-        else {
-            wcscpy(widget_textarea_state->text, L"安全关机失败");
-            widget_textarea_state->current_line = 0;
-            widget_textarea_state->is_show_scroll_bar = 0;
-            draw_textarea(key_event, global_state, widget_textarea_state);
-
-            usleep(1000*1000);
-        }
-        return -2;
+    // 5.本机自述
+    else if (item_index == 5) {
+        return 26;
     }
     return -2;
 }
@@ -625,6 +615,11 @@ int main() {
     void_key_event->key_repeat = 0;
 
     ///////////////////////////////////////
+    // UPS传感器初始化
+
+    ups_init();
+
+    ///////////////////////////////////////
     // OLED 初始化
 
     OLED_Init();
@@ -709,7 +704,10 @@ int main() {
 
         case -1:
 
-            show_splash_screen(key_event, global_state);
+            // 节流
+            if (global_state->timer % 10 == 0) {
+                show_splash_screen(key_event, global_state);
+            }
 
             // 按下任何键，不论长短按，进入主菜单
             if (key_event->key_edge < 0 && key_event->key_code < 16) {
@@ -1022,16 +1020,95 @@ int main() {
 
             break;
 
+        /////////////////////////////////////////////
+        // 本机自述
+        /////////////////////////////////////////////
+
+        case 26:
+
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+
+            }
+            PREV_STATE = STATE;
+
+            wchar_t readme_buf[128];
+            // 节流
+            if (global_state->timer % 200 == 0) {
+                swprintf(readme_buf, 128, L"Project Nano v2508\n端上大模型语音对话\n(c) 2025 BD4SUR\n\nUPS:%04dmV/%d%% ", global_state->ups_voltage, global_state->ups_soc);
+                wcscpy(widget_textarea_state->text, readme_buf);
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+            }
+
+            // 按A键返回主菜单
+            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+                STATE = -2;
+            }
+
+            break;
+
+
+        /////////////////////////////////////////////
+        // 关机确认
+        /////////////////////////////////////////////
+
+        case 31:
+
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                wcscpy(widget_textarea_state->text, L"确定关机？\n\n·长按D键: 关机\n·短按A键: 返回");
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+            }
+            PREV_STATE = STATE;
+
+            // 长按D键确认关机
+            if (key_event->key_edge == -2 && key_event->key_code == 13) {
+                wcscpy(widget_textarea_state->text, L" \n \n    正在安全关机...");
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+
+                if (graceful_shutdown() >= 0) {
+                    exit(0);
+                }
+                // 关机失败，返回主菜单
+                else {
+                    wcscpy(widget_textarea_state->text, L"安全关机失败");
+                    widget_textarea_state->current_line = 0;
+                    widget_textarea_state->is_show_scroll_bar = 0;
+                    draw_textarea(key_event, global_state, widget_textarea_state);
+
+                    usleep(1000*1000);
+
+                    STATE = -2;
+                }
+            }
+
+            // 长短按A键取消关机，返回主菜单
+            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+                STATE = -2;
+            }
+
+            break;
+
         default:
             break;
         }
 
 
 
-        // 定期检查ASR服务状态
-        if (global_state->timer % 200 == 0) {
+        // 定期检查系统状态
+        if (global_state->timer % 600 == 0) {
+            // ASR服务状态
             global_state->is_asr_server_up = check_asr_server_status();
-            // printf("ASR Service = %d\n", global_state->is_asr_server_up);
+            // UPS电压和电量
+            global_state->ups_voltage = read_ups_voltage();
+            global_state->ups_soc = read_ups_soc();
+            // printf("%d mV | %d%%\n", global_state->ups_voltage, global_state->ups_soc);
         }
 
         global_state->timer = (global_state->timer == 2147483647) ? 0 : (global_state->timer + 1);
