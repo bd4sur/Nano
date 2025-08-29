@@ -39,6 +39,7 @@ static wchar_t g_anniversory[OUTPUT_BUFFER_LENGTH] = L"我在博客中，一直�
 
 // 全局设置
 int32_t g_config_auto_submit_after_asr = 1; // ASR结束后立刻提交识别内容到LLM
+int32_t g_config_tts_mode = 1; // TTS工作模式：0-关闭   1-实时   2-全部生成后统一TTS
 
 char *g_model_path = NULL;
 char *g_lora_path = NULL;
@@ -54,12 +55,20 @@ uint32_t g_max_seq_len = 512;
 int g_ptt_fifo_fd;
 // 传递ASR识别结果的命名管道
 int g_asr_fifo_fd;
+// 传递给TTS的文字内容的命名管道
+int g_tts_fifo_fd;
 
+#define PTT_FIFO_PATH "/tmp/ptt_fifo"
 
 #define ASR_FIFO_PATH "/tmp/asr_fifo"
 #define ASR_BUFFER_SIZE (65536)
 
-#define PTT_FIFO_PATH "/tmp/ptt_fifo"
+#define TTS_FIFO_PATH "/tmp/tts_fifo"
+#define TTS_BUFFER_SIZE (4096)
+
+
+// TTS分句用全局变量
+int32_t g_tts_split_from = 0; // 切句子的起始位置
 
 
 ///////////////////////////////////////
@@ -167,6 +176,73 @@ int32_t read_asr_fifo(wchar_t *asr_text) {
     return (int32_t)asr_bytes_read;
 }
 
+// 向TTS输入FIFO中写文本内容
+int32_t write_tts_fifo(wchar_t *text, int32_t is_finished) {
+    // TTS切句子
+    wchar_t tts_chunk[TTS_BUFFER_SIZE];
+    memset(tts_chunk, 0, TTS_BUFFER_SIZE);
+    int32_t wlen = wcslen(text);
+    if (is_finished) {
+        wcsncpy(tts_chunk, text + g_tts_split_from, wlen - g_tts_split_from);
+        g_tts_split_from = 0;
+    }
+    else {
+        for (int32_t i = g_tts_split_from; i < wlen; i++) {
+            if (text[i] == L'，' ||
+                text[i] == L'。' ||
+                text[i] == L'\n' ||
+                text[i] == L'：' ||
+                text[i] == L'；' ||
+                text[i] == L'？' ||
+                text[i] == L'！') {
+                if (i - g_tts_split_from > 6) {
+                    wcsncpy(tts_chunk, text + g_tts_split_from, i + 1 - g_tts_split_from);
+                    g_tts_split_from = i + 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 非阻塞写FIFO
+    char text_bytes[TTS_BUFFER_SIZE];
+    memset(text_bytes, 0, TTS_BUFFER_SIZE);
+    size_t len = wcstombs(text_bytes, tts_chunk, TTS_BUFFER_SIZE);
+    if (len <= 0) {
+        return -1;
+    }
+    printf("Write TTS FIFO: %s (%ld)\n", text_bytes, len);
+
+    // 如果没有fifo，创建fifo
+    if (mkfifo(TTS_FIFO_PATH, 0666) == -1 && errno != EEXIST) {
+        perror("tts fifo mkfifo failed");
+        return -1;
+    }
+    // 以非阻塞写模式打开FIFO
+    g_tts_fifo_fd = open(TTS_FIFO_PATH, O_WRONLY | O_NONBLOCK);
+    if (g_tts_fifo_fd == -1) {
+        perror("open tts fifo for writing failed");
+        return -1;
+    }
+
+    ssize_t result = write(g_tts_fifo_fd, text_bytes, len);
+    if (result == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // FIFO缓冲区满，丢弃数据（不处理）
+            // printf("FIFO full, data dropped\n");
+        } else {
+            perror("write failed");
+            close(g_tts_fifo_fd);
+            return -1;
+        }
+    } else {
+        // 成功写入
+        // printf("Wrote byte: %d\n", (unsigned char)data);
+    }
+    close(g_tts_fifo_fd);
+    return 0;
+}
+
 // 向PTT状态FIFO中写PTT状态
 int32_t set_ptt_status(uint8_t status) {
     if (mkfifo(PTT_FIFO_PATH, 0666) == -1 && errno != EEXIST) {
@@ -238,6 +314,8 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state, Nano
     // 重新开启整帧绘制，注意这个标记是所有函数共享的全局标记。
     global_state->is_full_refresh = 1;
 
+    g_tts_split_from = 0;
+
     // PREFILL_LED_OFF
     return LLM_RUNNING_IN_PREFILLING;
 }
@@ -258,12 +336,18 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_S
 
     // DECODE_LED_OFF
 
+    write_tts_fifo(session->output_text, 0);
+
     free(session->output_text);
     return LLM_RUNNING_IN_DECODING;
 }
 
 int32_t on_llm_finished(Nano_Session *session) {
     wcscpy(g_llm_output_of_last_session, session->output_text);
+
+    write_tts_fifo(session->output_text, 1);
+
+    g_tts_split_from = 0;
 
     g_tps_of_last_session = session->tps;
     printf("TPS = %f\n", session->tps);
