@@ -109,7 +109,7 @@ def read_fifo(fifo_path):
                             except queue.Empty:
                                 break
                     else:
-                        text = text.replace('\n', '，').replace('！', '，').replace('。', '，').replace('*', '').replace('. ', '，').replace('.', '点')
+                        text = text.replace('\n', '，').replace('！', '，').replace('：', '，').replace('。', '，').replace('*', '').replace('. ', '，').replace('.', '点')
                         print(f"收到文本：{text}")
                         text_queue.put(text)
             except OSError as e:
