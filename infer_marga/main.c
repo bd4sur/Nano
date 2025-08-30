@@ -82,6 +82,7 @@ Widget_Textarea_State  *prefilling_textarea_state;
 Widget_Input_State     *widget_input_state;
 Widget_Menu_State      *main_menu_state;
 Widget_Menu_State      *model_menu_state;
+Widget_Menu_State      *setting_menu_state;
 
 // 全局状态标志
 int32_t STATE = -1;
@@ -347,7 +348,9 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_S
 
     // DECODE_LED_OFF
 
-    send_tts_request(session->output_text, 0);
+    if (g_config_tts_mode > 0) {
+        send_tts_request(session->output_text, 0);
+    }
 
     free(session->output_text);
     return LLM_RUNNING_IN_DECODING;
@@ -356,7 +359,9 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_S
 int32_t on_llm_finished(Nano_Session *session) {
     wcscpy(g_llm_output_of_last_session, session->output_text);
 
-    send_tts_request(session->output_text, 1);
+    if (g_config_tts_mode > 0) {
+        send_tts_request(session->output_text, 1);
+    }
 
     g_tts_split_from = 0;
 
@@ -397,6 +402,15 @@ void refresh_model_menu() {
     draw_menu(key_event, global_state, model_menu_state);
 }
 
+void init_setting_menu() {
+    wcscpy(setting_menu_state->title, L"设置");
+    wcscpy(setting_menu_state->items[0], L"语言模型生成参数");
+    wcscpy(setting_menu_state->items[1], L"语音合成(TTS)设置");
+    wcscpy(setting_menu_state->items[2], L"语音识别(ASR)设置");
+    setting_menu_state->item_num = 3;
+    init_menu(key_event, global_state, setting_menu_state);
+}
+
 
 ///////////////////////////////////////
 // 事件处理回调
@@ -409,7 +423,9 @@ int32_t menu_event_handler(
 ) {
     // 短按0-9数字键：直接选中屏幕上显示的那页的相对第几项
     if (ke->key_edge == -1 && (ke->key_code >= 0 && ke->key_code <= 9)) {
-        ms->current_item_intex = ms->first_item_intex + (uint32_t)(ke->key_code) - 1;
+        if (ke->key_code < ms->item_num) {
+            ms->current_item_intex = ms->first_item_intex + (uint32_t)(ke->key_code) - 1;
+        }
         return menu_item_action(ms->current_item_intex);
     }
     // 短按A键：返回上一个焦点状态
@@ -557,7 +573,8 @@ int32_t main_menu_item_action(int32_t item_index) {
 
     // 3.设置
     else if (item_index == 3) {
-        return -2;
+        init_setting_menu();
+        return 5;
     }
 
     // 4.安全关机
@@ -663,7 +680,31 @@ int32_t model_menu_item_action(int32_t item_index) {
     // return -2;
 }
 
+int32_t setting_menu_item_action(int32_t item_index) {
+    // 语言模型生成参数设置
+    if (item_index == 0) {
+        wcscpy(widget_textarea_state->text, L"暂未实现");
+        widget_textarea_state->current_line = 0;
+        widget_textarea_state->is_show_scroll_bar = 0;
+        draw_textarea(key_event, global_state, widget_textarea_state);
 
+        usleep(500*1000);
+
+        refresh_menu(key_event, global_state, setting_menu_state);
+        return 5;
+    }
+    // TTS设置
+    else if (item_index == 1) {
+        return 32;
+    }
+    // ASR设置
+    else if (item_index == 2) {
+        return 33;
+    }
+    else {
+        return 5;
+    }
+}
 
 
 
@@ -682,6 +723,7 @@ int main() {
     widget_input_state = (Widget_Input_State*)calloc(1, sizeof(Widget_Input_State));
     main_menu_state = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
     model_menu_state = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
+    setting_menu_state = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
 
     global_state->llm_status = LLM_STOPPED_NORMALLY;
     global_state->is_recording = 0;
@@ -899,6 +941,24 @@ int main() {
 
             break;
 
+
+        /////////////////////////////////////////////
+        // 设置菜单
+        /////////////////////////////////////////////
+
+        case 5:
+
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                refresh_menu(key_event, global_state, setting_menu_state);
+            }
+            PREV_STATE = STATE;
+
+            STATE = menu_event_handler(key_event, global_state, setting_menu_state, setting_menu_item_action, -2, 5);
+
+            break;
+
+
         /////////////////////////////////////////////
         // 语言推理进行中（异步，每个iter结束后会将控制权交还事件循环，而非自行阻塞到最后一个token）
         //   实际上就是将generate_sync的while循环打开，将其置于大的事件循环。
@@ -945,7 +1005,9 @@ int main() {
                 global_state->llm_status = on_llm_decoding(key_event, global_state, global_state->llm_session);
                 // 外部被动中止
                 if (global_state->llm_status == LLM_STOPPED_IN_DECODING) {
-                    stop_tts();
+                    if (g_config_tts_mode > 0) {
+                        stop_tts();
+                    }
                     llm_session_free(global_state->llm_session);
                     STATE = 10;
                 }
@@ -1013,7 +1075,9 @@ int main() {
             else {
                 // 短按A键：停止TTS
                 if (key_event->key_edge == -1 && key_event->key_code == 10) {
-                    stop_tts();
+                    if (g_config_tts_mode > 0) {
+                        stop_tts();
+                    }
                 }
                 STATE = textarea_event_handler(key_event, global_state, widget_textarea_state, 0, 10);
             }
@@ -1135,7 +1199,7 @@ int main() {
             wchar_t readme_buf[128];
             // 节流
             if (global_state->timer % 200 == 0) {
-                swprintf(readme_buf, 128, L"Project Nano v2508\n端上大模型语音对话\n(c) 2025 BD4SUR\n\nUPS:%04dmV/%d%% ", global_state->ups_voltage, global_state->ups_soc);
+                swprintf(readme_buf, 128, L"Project Nano v2508\n电子鹦鹉·端上大模型\n(c) 2025 BD4SUR\n\nUPS:%04dmV/%d%% ", global_state->ups_voltage, global_state->ups_soc);
                 wcscpy(widget_textarea_state->text, readme_buf);
                 widget_textarea_state->current_line = 0;
                 widget_textarea_state->is_show_scroll_bar = 0;
@@ -1194,6 +1258,136 @@ int main() {
             }
 
             break;
+
+
+        /////////////////////////////////////////////
+        // TTS设置
+        /////////////////////////////////////////////
+
+        case 32:
+
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                wcscpy(widget_textarea_state->text, L"语音合成(TTS)设置\n\n·0:关闭\n·1:实时请求合成\n·2:生成结束后合成");
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+            }
+            PREV_STATE = STATE;
+
+            // 选项0
+            if (key_event->key_edge == -1 && key_event->key_code == 0) {
+                g_config_tts_mode = 0;
+
+                wcscpy(widget_textarea_state->text, L"TTS已关闭。");
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+
+                usleep(500*1000);
+
+                STATE = 5;
+            }
+
+            // 选项1
+            else if (key_event->key_edge == -1 && key_event->key_code == 1) {
+                g_config_tts_mode = 1;
+
+                wcscpy(widget_textarea_state->text, L"TTS设置为实时请求。");
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+
+                usleep(500*1000);
+
+                STATE = 5;
+            }
+
+            // 选项2
+            else if (key_event->key_edge == -1 && key_event->key_code == 2) {
+                g_config_tts_mode = 2;
+
+                wcscpy(widget_textarea_state->text, L"TTS设置为生成结束后统一请求合成。");
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+
+                usleep(500*1000);
+
+                STATE = 5;
+            }
+
+            // 长短按A键，返回设置菜单
+            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+                STATE = 5;
+            }
+
+            break;
+
+
+        /////////////////////////////////////////////
+        // ASR设置
+        /////////////////////////////////////////////
+
+        case 33:
+
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                wcscpy(widget_textarea_state->text, L"语音识别(TTS)设置\n识别结果立刻提交？\n·0:先编辑再提交\n·1:立刻提交");
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+            }
+            PREV_STATE = STATE;
+
+            // 选项0
+            if (key_event->key_edge == -1 && key_event->key_code == 0) {
+                g_config_auto_submit_after_asr = 0;
+
+                wcscpy(widget_textarea_state->text, L"ASR自动提交已关闭");
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+
+                usleep(500*1000);
+
+                STATE = 5;
+            }
+
+            // 选项1
+            else if (key_event->key_edge == -1 && key_event->key_code == 1) {
+                g_config_auto_submit_after_asr = 1;
+
+                wcscpy(widget_textarea_state->text, L"ASR自动提交已开启");
+                widget_textarea_state->current_line = 0;
+                widget_textarea_state->is_show_scroll_bar = 0;
+                draw_textarea(key_event, global_state, widget_textarea_state);
+
+                usleep(500*1000);
+
+                STATE = 5;
+            }
+
+            // 长短按A键，返回设置菜单
+            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+                STATE = 5;
+            }
+
+            break;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         default:
             break;

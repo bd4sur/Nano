@@ -393,6 +393,7 @@ void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
 }
 
 void refresh_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
+    input_state->cursor_pos = input_state->length - 1;
     render_input_buffer(key_event, global_state, input_state);
 }
 
@@ -709,7 +710,7 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
 void init_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
     menu_state->current_item_intex = 0;
     menu_state->first_item_intex = 0;
-    menu_state->items_per_page = 4;
+    menu_state->items_per_page = (menu_state->item_num > 4) ? 4 : menu_state->item_num;
 
     draw_menu(key_event, global_state, menu_state);
 }
