@@ -177,10 +177,42 @@ int32_t read_asr_fifo(wchar_t *asr_text) {
 }
 
 // 向TTS输入FIFO中写文本内容
-int32_t write_tts_fifo(wchar_t *text, int32_t is_finished) {
+int32_t write_tts_fifo(char *text_bytes, int32_t len) {
+    // 如果没有fifo，创建fifo
+    if (mkfifo(TTS_FIFO_PATH, 0666) == -1 && errno != EEXIST) {
+        perror("tts fifo mkfifo failed");
+        return -1;
+    }
+    // 以非阻塞写模式打开FIFO
+    g_tts_fifo_fd = open(TTS_FIFO_PATH, O_WRONLY | O_NONBLOCK);
+    if (g_tts_fifo_fd == -1) {
+        perror("open tts fifo for writing failed");
+        return -1;
+    }
+
+    ssize_t result = write(g_tts_fifo_fd, text_bytes, len);
+    if (result == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // FIFO缓冲区满，丢弃数据（不处理）
+            // printf("FIFO full, data dropped\n");
+        } else {
+            perror("write failed");
+            close(g_tts_fifo_fd);
+            return -1;
+        }
+    } else {
+        // 成功写入
+        // printf("Wrote byte: %d\n", (unsigned char)data);
+    }
+    close(g_tts_fifo_fd);
+    return 0;
+}
+
+
+int32_t send_tts_request(wchar_t *text, int32_t is_finished) {
     // TTS切句子
     wchar_t tts_chunk[TTS_BUFFER_SIZE];
-    memset(tts_chunk, 0, TTS_BUFFER_SIZE);
+    memset(tts_chunk, 0, TTS_BUFFER_SIZE * sizeof(wchar_t));
     int32_t wlen = wcslen(text);
     if (is_finished) {
         wcsncpy(tts_chunk, text + g_tts_split_from, wlen - g_tts_split_from);
@@ -213,35 +245,14 @@ int32_t write_tts_fifo(wchar_t *text, int32_t is_finished) {
     }
     printf("Write TTS FIFO: %s (%ld)\n", text_bytes, len);
 
-    // 如果没有fifo，创建fifo
-    if (mkfifo(TTS_FIFO_PATH, 0666) == -1 && errno != EEXIST) {
-        perror("tts fifo mkfifo failed");
-        return -1;
-    }
-    // 以非阻塞写模式打开FIFO
-    g_tts_fifo_fd = open(TTS_FIFO_PATH, O_WRONLY | O_NONBLOCK);
-    if (g_tts_fifo_fd == -1) {
-        perror("open tts fifo for writing failed");
-        return -1;
-    }
-
-    ssize_t result = write(g_tts_fifo_fd, text_bytes, len);
-    if (result == -1) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // FIFO缓冲区满，丢弃数据（不处理）
-            // printf("FIFO full, data dropped\n");
-        } else {
-            perror("write failed");
-            close(g_tts_fifo_fd);
-            return -1;
-        }
-    } else {
-        // 成功写入
-        // printf("Wrote byte: %d\n", (unsigned char)data);
-    }
-    close(g_tts_fifo_fd);
-    return 0;
+    return write_tts_fifo(text_bytes, len);
 }
+
+
+int32_t stop_tts() {
+    return write_tts_fifo("_TTS_STOP_", 11);
+}
+
 
 // 向PTT状态FIFO中写PTT状态
 int32_t set_ptt_status(uint8_t status) {
@@ -336,7 +347,7 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_S
 
     // DECODE_LED_OFF
 
-    write_tts_fifo(session->output_text, 0);
+    send_tts_request(session->output_text, 0);
 
     free(session->output_text);
     return LLM_RUNNING_IN_DECODING;
@@ -345,7 +356,7 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_S
 int32_t on_llm_finished(Nano_Session *session) {
     wcscpy(g_llm_output_of_last_session, session->output_text);
 
-    write_tts_fifo(session->output_text, 1);
+    send_tts_request(session->output_text, 1);
 
     g_tts_split_from = 0;
 
@@ -934,6 +945,7 @@ int main() {
                 global_state->llm_status = on_llm_decoding(key_event, global_state, global_state->llm_session);
                 // 外部被动中止
                 if (global_state->llm_status == LLM_STOPPED_IN_DECODING) {
+                    stop_tts();
                     llm_session_free(global_state->llm_session);
                     STATE = 10;
                 }
@@ -999,6 +1011,10 @@ int main() {
                 STATE = 8;
             }
             else {
+                // 短按A键：停止TTS
+                if (key_event->key_edge == -1 && key_event->key_code == 10) {
+                    stop_tts();
+                }
                 STATE = textarea_event_handler(key_event, global_state, widget_textarea_state, 0, 10);
             }
 
