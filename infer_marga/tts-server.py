@@ -23,7 +23,9 @@ tts_config = sherpa_onnx.OfflineTtsConfig(
             tokens=f"{model_path}/tokens.txt",
         ),
         num_threads=4,
+        provider="cpu",
     ),
+    rule_fsts=f"{model_path}/date.fst,{model_path}/number.fst",
     max_num_sentences=1,
 )
 
