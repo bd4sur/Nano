@@ -3,21 +3,19 @@
 
 **B站视频演示**：
 
-|<a href="https://www.bilibili.com/video/BV1dLYbz6ETe" target="_blank"><img src="./doc/nano-rpi-1.jpg" width="100%"><br>树莓派语音对话离线部署</a>|<a href="https://www.bilibili.com/video/BV1rNgCzNE84" target="_blank"><img src="./doc/nano-scheme.jpg" width="100%"><br>基于自制Scheme解释器的推理</a>|<a href="https://www.bilibili.com/video/BV1mhVzzrEJf" target="_blank"><img src="./doc/nano-video-marga.jpg" width="100%"><br>路由器离线部署</a>|
+|<a href="https://www.bilibili.com/video/BV1SjajztELH" target="_blank"><img src="./doc/nano-rpi-2.jpg" width="100%"><br>树莓派语音对话离线部署</a>|<a href="https://www.bilibili.com/video/BV1rNgCzNE84" target="_blank"><img src="./doc/nano-scheme.jpg" width="100%"><br>基于自制Scheme解释器的推理</a>|<a href="https://www.bilibili.com/video/BV1mhVzzrEJf" target="_blank"><img src="./doc/nano-video-marga.jpg" width="100%"><br>路由器离线部署</a>|
 |-|-|-|
 |<a href="https://www.bilibili.com/video/BV1NAieYiEFi" target="_blank"><img src="./doc/nano.jpg" width="100%"><br>浏览器离线推理+ASR+TTS</a>|<a href="https://www.bilibili.com/video/BV1vmrsYGERP" target="_blank"><img src="./doc/nano-video-ar-class-c.jpg" width="100%"><br>通过业余无线电C证考试</a>|<a href="https://www.bilibili.com/video/BV1vPRDYyEgp" target="_blank"><img src="./doc/nano-mi-ax5.jpg" width="100%"><br>红米AX5路由器部署推理</a>|
 
 
 ### [【立即体验浏览器本地推理】](https://bd4sur.com/Nano/infer)
 
-![ ](./doc/nano-web-2.png)
-
 **Nano**是Transformer结构的自回归语言模型，供个人赏玩、研究、炼丹炉煲机。期望：
 
 - 基于PyTorch，实现一个具体而微的Transformer语言模型。
 - 实现模型的预训练、监督微调过程。不做后训练（强化学习等）。
 - 从头训练出56M、168M参数的语言模型，以及配套的LoRA插件。
-- 实现各类设备上的推理，例如浏览器、路由器等。
+- 实现各类设备上的推理，例如浏览器、路由器、单板机（如树莓派）等。
 - 研究模型的动力学、训/推加速等问题，以及解决其他模态和领域问题的潜能。
 - 对大语言模型祛魅，在实践中建立起对于LLM的感性经验和合理预期。
 
@@ -30,7 +28,7 @@
 
 预训练模型和问答模型（其中bin扩展名的模型可用于浏览器推理）：
 
-|预训练模型|监督微调模型|LoRA插件|
+|预训练和通用问答模型|领域监督微调模型|LoRA插件|
 |---------|-----------|-------|
 |[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|无规划|无规划|
 |[Nano-168M](https://huggingface.co/bd4sur/Nano-168M)|[业余无线电操作证考试](https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_875000_amateur_radio_890000.bin)|暂无公开插件|
@@ -41,13 +39,11 @@
 
 数据集为7z压缩包，解压口令“nano”。
 
-用于端侧推理的Qwen2/Qwen3单文件模型：[bd4sur/Qwen3](https://huggingface.co/bd4sur/Qwen3)
+用于端侧推理的Qwen2.5/Qwen3模型（含量化模型）：[bd4sur/Qwen3](https://huggingface.co/bd4sur/Qwen3)
 
-## 使用说明
+## 推理部署
 
-### 0. 百闻不如一见：立刻体验推理效果
-
-**WASM/JS实现的基于浏览器的CPU推理**
+### WASM/JS实现的基于浏览器的CPU推理
 
 - 访问[在线体验页面](https://bd4sur.com/Nano/infer)，或者用浏览器直接打开`Nano/infer/index.html`。
 - 按页面提示，下载基座模型、指令微调模型或LoRA插件（扩展名均为bin）。
@@ -59,17 +55,17 @@
 - 作为WebUI，能够接入部署在本地服务器上的LLM/ASR/TTS接口，详见后文。
 - 构建方式：执行`bash infer_marga/build_wasm.sh`（工具链配置见注释），在`./infer`中生成`nano_infer.wasm`。
 
-![ ](./doc/nano-web-1.jpg)
+![ ](./doc/nano-web-2.png)
 
-**C语言实现的CPU推理，可部署于嵌入式设备**
+### C语言实现的CPU推理
 
-基于[karpathy/llama2.c](https://github.com/karpathy/llama2.c)实现的纯C语言推理引擎，几乎没有任何依赖。除了Nano，还适配了Qwen2-0.5B、Qwen3-0.6B/1.7B。
+基于[karpathy/llama2.c](https://github.com/karpathy/llama2.c)实现的纯C语言推理引擎，几乎没有任何依赖，可部署于嵌入式设备。除了Nano，还适配了Qwen2-0.5B、Qwen3-0.6B/1.7B/4B。
 
 提供3种形态：CLI、WebSocket服务端、功能完整的键盘屏幕交互对话（电子鹦鹉笼）。构建和运行方式如下：
 
 - CLI：`cd ./infer_marga && make cli && ./nano_cli`
 - WebSocket服务端：`cd ./infer_marga && make wss && ./nano_wss <模型文件路径.bin> -n <上下文长度> -P <端口号=8080>`，随后打开`index.html`，开始对话。
-- 电子鹦鹉笼：`cd ./infer_marga && make marga && ./nano_marga`
+- 电子鹦鹉笼：`cd ./infer_marga && make marga && ./nano`
 
 根据实际情况启用OpenMP或者基于pthreads的多线程实现。如果启用OpenMP并行优化，可以在exe前面加上`OMP_NUM_THREADS=<线程数>`。最佳线程数需要通过实验确定。
 
@@ -81,17 +77,11 @@
 |--|--|
 |![ ](./doc/nano-raspi.jpg)|![ ](./doc/nano-marga.jpg)|
 
-**Scheme实现的、可在自研Scheme解释器上运行的推理**
+### Scheme实现的、可在自研Scheme解释器上运行的推理
 
-详见[Animac Playground](https://bd4sur.com/Animac)，[开源代码仓库](https://github.com/bd4sur/Animac)。
+详见 [Animac Playground](https://bd4sur.com/Animac)，[开源代码仓库](https://github.com/bd4sur/Animac)。
 
-**基于OpenWrt/LuCI的推理GUI**
-
-文档待补充。
-
-![ ](./doc/nano-openwrt-luci.jpg)
-
-**基于PyTorch的CPU/GPU推理**
+### 基于PyTorch的CPU/GPU推理
 
 首先下载pt扩展名的基座模型、指令微调模型或LoRA插件到`checkpoint`目录。
 
@@ -106,7 +96,7 @@
 - `-r` or `--repetition_penalty`：浮点数，复读惩罚，默认值为1.2，越大则越抑制生成重复的词元。
 - `-p` or `--profile`：开关标识。若启用，则统计性能数据，包括首词元延迟、词元生成速率等。
 
-**Mio：适用于 Jetson AGX Orin 的实用化推理部署**
+### Mio：适用于 Jetson AGX Orin 的实用化推理部署
 
 Mio是多个LLM、VLM和TTS模型的缝合怪，各自的依赖相互冲突，因此需要做一点小小的魔改。本人主要在 Jetson AGX Orin 上开发并部署Mio，因此此处记载的信息仅供个人备忘。
 
@@ -237,23 +227,17 @@ nohup /bin/bash run_server_2pass.sh \
 
 **注意事项**
 
-- 由于ChatTTS对硬件性能要求很高，在Jetson上还不能实现实时TTS，因此需要等待比较长的时间才能听到转换后的语音。
 - 视觉问答目前只支持针对一幅图片的连续问答。
 - 选用纯语言模型时，不要上传图片，否则可能会出错。
 
 ![ ](./doc/mio-on-jetson.jpg)
 
+## 训练
+
 ### 1. 安装依赖
 
-一般要求：
-
-- 硬件：建议使用英伟达GPU，以计算能力7.0以上的为宜，详见[英伟达官网](https://developer.nvidia.com/cuda-gpus)。若只有CPU也无妨。
-- 软件：建议使用Ubuntu等Linux操作系统，并安装Anaconda/Miniconda等环境管理工具。
-
-如果想基于PyTorch进行模型的训练、推理、数据清洗和开发等工作：
-
 ```
-conda create -n nano python=3.10 pysocks -y
+conda create -n nano python=3.10
 conda activate nano
 python -m pip install -r requirements.txt
 ```
@@ -387,9 +371,9 @@ model_file
 
 ## 技术要点简述
 
-**Transformer模型结构**
+### Transformer模型结构
 
-Nano基本上沿用了Llama的模型结构设计，如下图所示。
+Nano是典型的Transformer语言模型，如下图所示。
 
 ![ ](doc/nano-llm.png)
 
