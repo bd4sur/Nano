@@ -1,30 +1,38 @@
-# Qwen3树莓派部署和使用指南
+# Qwen3树莓派端侧部署教程
 
 ![ ](../doc/overview.jpg)
 
-本文简要介绍了将Qwen3部署在树莓派上进行推理的方法。
+大模型的端侧部署是近期比较热门的技术话题。如今，像树莓派5代这样的嵌入式系统，其算力已经足够推理小规模的语言模型。为了使感兴趣的读者快速体验大模型的端侧推理，本教程介绍了一种比较简单、实用的方案，将Qwen3语言模型部署在树莓派5代上，实现完全离线推理。
+
+本教程尽可能写得简明易懂，读者若按照教程一步步操作，应当不难完成。但是，为了能够顺利部署，希望读者具备一些前置知识，例如访问网络、电子制作、Linux系统等等。
+
+本文介绍的方案，是BD4SUR基于 Andrej Karpathy 的[llama2.c](https://github.com/karpathy/llama2.c)开源项目二次开发的，并增加了键盘输入和OLED屏幕输出功能。该方案完全由C语言实现，依赖极少，不依赖于llama.cpp、vLLM等第三方推理引擎，能够运行在树莓派、RK3588甚至路由器等嵌入式Linux系统上。
+
+该方案目前支持Qwen3-0.6B、Qwen3-1.7B、Qwen3-4B、以及[BD4SUR自主训练的Nano-168M语言模型](https://github.com/bd4sur/Nano)。在树莓派5代上，Qwen3-0.6B的推理速度可以达到每秒8~12个词元。
+
+技术上，本方案采用朴素的Q80权重量化，能够明显提升推理速度，同时模型能力几乎无损失。自回归语言模型的推理性能取决于内存带宽。在树莓派5代上，通过实验发现，多线程推理的性能反而不如单线程，因而建议在树莓派上仅使用单线程进行推理。但是在RK3588上实验发现，多线程的推理性能要明显优于单线程。
+
+本方案是BD4SUR的自制大模型项目“电子鹦鹉Nano”的一部分。请访问[项目仓库](https://github.com/bd4sur/Nano)，查看更多的推理场景和演示视频。
+
+请注意：该方案只是一个粗糙的原型，一定存在很多缺陷和漏洞。语言模型的输出依赖于输入和采样方式。作者不对该模型所生成的任何内容负责。本系统“按原样”提供，采用MIT协议授权。本系统为作者个人以学习和自用目的所创作的原型作品。作者不对本系统的质量作任何承诺。作者不保证提供有关本系统的任何形式的解释、维护或支持。作者不为任何人使用此系统所造成的任何正面的或负面的后果负责。
+
+
 
 ## 硬件准备
 
 准备以下材料：
 
-- 树莓派5代：内存4GB或以上，建议16GB。建议加装官方主动散热器。
-- microSD卡：存储树莓派操作系统和语言模型，建议不小于16GB。
+- 树莓派5代：内存4GB或以上，越大越好。建议加装官方主动散热器。
+- microSD卡或者SSD：存储树莓派操作系统和语言模型，建议不小于16GB。
 - 电源：建议使用树莓派官方5V5A电源，以免输入功率不足导致性能下降。
 - OLED屏幕：基于SSD1309芯片的128x64点阵OLED显示屏，I2C接口。
-- 矩阵键盘：I2C接口。
+- 矩阵键盘：I2C接口，地址0x27，键码映射如下图。
 - 杜邦线、跳线等线缆若干。
-- 显示器、键盘、鼠标，用于直接在树莓派上操作；或者准备一台电脑，通过SSH和SFTP以“无头”方式远程操作树莓派。
+- 显示器、键盘、鼠标，用于直接在树莓派上操作；或者通过SSH以“无头”方式远程操作。
 
-按照以下图示，使用杜邦线等线缆连接各个模块：
+按照以下图示，连接各个模块：
 
 ![ ](../doc/blocks.png)
-
-
-上面图示中的I2C总线信号线，可以按照下图的方式制作，将同名信号线、VCC=3V3、GND连接在一起，形成一个三端的总线结构，分别连接树莓派、OLED屏幕和矩阵键盘：
-
-![ ](../doc/bus_wire.jpg)
-
 
 注意：切勿带电插拔模块。切勿接反或短路电源线和地线。避免导电物体接触裸露的电子模块，以防意外短路。建议操作前先释放身上的静电，或者戴静电手环操作。
 
@@ -32,9 +40,9 @@
 
 **第一步：环境配置**
 
-首先，按照[树莓派官方文档](https://www.raspberrypi.com/documentation/computers/getting-started.html)的说明，在电脑上下载树莓派系统烧录工具，将 Raspberry Pi OS (64-bit) 烧录进microSD卡。
+首先，按照[树莓派官方文档](https://www.raspberrypi.com/documentation/computers/getting-started.html)的说明，在电脑上下载树莓派系统烧录工具，将 Raspberry Pi OS (64-bit) 烧录进microSD卡。建议使用树莓派官方系统，避免不必要的麻烦。（注：如果想减少模型加载的等待时间，也可以使用NVMe的SSD）
 
-随后，将显示器、键盘、网线连接到树莓派，将烧录了操作系统的microSD卡插入插槽，确保所有模块连接正确后，插入电源，树莓派应能自动启动。按照[树莓派官方文档](https://www.raspberrypi.com/documentation/computers/getting-started.html)的说明，完成网络、账户密码等配置（**下文使用的用户名为`pi`**），进入 Raspberry Pi OS。
+随后，将显示器、键盘、网线连接到树莓派，将烧录了操作系统的microSD卡插入插槽，确保所有模块按照上文说明正确连接，插入电源，树莓派应能自动启动。按照[树莓派官方文档](https://www.raspberrypi.com/documentation/computers/getting-started.html)的说明，完成网络、账户密码等配置（**下文使用的用户名为`pi`**），进入 Raspberry Pi OS。
 
 打开终端，执行`gcc --version`，如果没有报错，则意味着编译工具链已成功安装，进入第二步。否则，执行以下命令，更新并安装必要软件：
 
@@ -45,7 +53,7 @@ sudo apt install git build-essential
 
 **第二步：启用并设置I2C端口**
 
-打开终端，执行
+打开终端，执行：
 
 ```
 sudo nano /boot/firmware/config.txt
@@ -81,7 +89,7 @@ sudo i2cdetect 1 -y
 
 **第三步：拉取代码并编译**
 
-首先，拉取代码仓库到本地：
+首先，拉取代码仓库到本地，并进入代码目录：
 
 ```
 cd /home/pi
@@ -89,9 +97,19 @@ git clone https://github.com/bd4sur/Nano.git
 cd Nano/nanochat
 ```
 
-然后，从[HuggingFace](https://huggingface.co/bd4sur/Qwen3)或者[ModelScope]()下载转换好的模型文件，并将其放置于`model`目录下。
+然后，将代码编译为可执行文件：
 
 ```
+cd ..
+make -j4
+```
+
+编译完成后，在当前目录中会出现一个新的可执行文件`nanochat`。
+
+在执行程序之前，先从[HuggingFace](https://huggingface.co/bd4sur/Qwen3)或者[ModelScope](https://modelscope.cn/models/bd4sur/qwen3_nano)下载转换好的模型文件，并将其放置于`model`目录下。所有模型加起来大约将近7GB。
+
+```
+# 进入模型目录
 cd model
 
 # 从HuggingFace下载
@@ -101,27 +119,21 @@ wget -c https://huggingface.co/bd4sur/Qwen3/resolve/main/qwen3-4b-instruct-2507-
 wget -c https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_947000_q80.bin
 
 # 或者从ModelScope下载
-
 wget -c https://modelscope.cn/models/bd4sur/qwen3_nano/resolve/master/qwen3-0b6-q80.bin
 wget -c https://modelscope.cn/models/bd4sur/qwen3_nano/resolve/master/qwen3-1b7-q80.bin
 wget -c https://modelscope.cn/models/bd4sur/qwen3_nano/resolve/master/qwen3-4b-instruct-2507-q80.bin
 wget -c https://modelscope.cn/models/bd4sur/Nano-168M/resolve/master/nano_168m_625000_sft_947000_q80.bin
 ```
 
-模型下载完成后，返回上一级目录，将代码编译为可执行文件：
-
-```
-cd ..
-make -j4
-```
-
-编译完成后，在当前目录中会出现一个新的可执行文件`nanochat`，执行它：
+模型下载完成后，返回上一级目录，执行刚刚编译得到的`nanochat`：
 
 ```
 ./nanochat
 ```
 
 如果一切正常，OLED屏幕亮起，可以开始与电子鹦鹉对话啦。
+
+![ ](../doc/screen.gif)
 
 ## 使用方法
 
