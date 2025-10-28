@@ -95,6 +95,7 @@ sudo i2cdetect 1 -y
 首先，拉取代码仓库到本地，并进入代码目录：
 
 ```
+# 假设当前用户名为pi
 cd /home/pi
 git clone https://github.com/bd4sur/Nano.git
 cd Nano/nanochat
@@ -103,7 +104,6 @@ cd Nano/nanochat
 然后，将代码编译为可执行文件：
 
 ```
-cd ..
 make -j4
 ```
 
@@ -131,6 +131,7 @@ wget -c https://modelscope.cn/models/bd4sur/Nano-168M/resolve/master/nano_168m_6
 模型下载完成后，返回上一级目录，执行刚刚编译得到的`nanochat`：
 
 ```
+cd ..
 ./nanochat
 ```
 
