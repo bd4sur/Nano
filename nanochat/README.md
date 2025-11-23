@@ -41,7 +41,7 @@
 
 ## 软件准备
 
-**第一步：环境配置**
+**第1步：环境配置**
 
 首先，按照[树莓派官方文档](https://www.raspberrypi.com/documentation/computers/getting-started.html)的说明，在电脑上下载树莓派系统烧录工具，将 Raspberry Pi OS (64-bit) 烧录进microSD卡。建议使用树莓派官方系统，避免不必要的麻烦。（注：如果想减少模型加载的等待时间，也可以使用NVMe的SSD）
 
@@ -54,7 +54,7 @@ sudo apt update
 sudo apt install git build-essential
 ```
 
-**第二步：启用并设置I2C端口**
+**第2步：启用并设置I2C端口**
 
 打开终端，执行：
 
@@ -70,7 +70,7 @@ dtparam=i2c_arm=on,i2c_arm_baudrate=400000
 
 保存并退出，随后执行`sudo reboot`重启树莓派。
 
-重启之后，执行以下命令，检查能否正确识别OLED屏幕和矩阵键盘两个设备：
+重启之后，执行以下命令，检查能否正确识别OLED屏幕和矩阵键盘两个设备。如果找不到`i2cdetect`，尝试使用`/usr/sbin/i2cdetect`。
 
 ```
 sudo i2cdetect 1 -y
@@ -90,7 +90,149 @@ sudo i2cdetect 1 -y
 70: -- -- -- -- -- -- -- --
 ```
 
-**第三步：拉取代码并编译**
+
+**第3步：设置Nano服务开机自启**
+
+执行`sudo nano /etc/systemd/system/nano.timer`，增加以下内容：
+
+```
+[Unit]
+Description=Run Nano AI Agent Service 2 minutes after boot
+Requires=nano.service
+
+[Timer]
+OnBootSec=2min
+Unit=nano.service
+
+[Install]
+WantedBy=timers.target
+```
+
+执行`sudo nano /etc/systemd/system/nano.service`，增加以下内容：
+
+```
+[Unit]
+Description=Nano AI Agent Service
+After=network.target
+
+[Service]
+Type=simple
+User=bd4sur
+WorkingDirectory=/home/bd4sur/ai/Nano/infer_marga
+ExecStart=/home/bd4sur/ai/Nano/infer_marga/nano
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**第4步：设置ASR服务开机自启**
+
+设置默认麦克风：
+
+```
+sudo nano /etc/asound.conf
+添加：defaults.pcm.card 2
+其中的2是希望设置为默认capture设备的设备序号（通过 arecord -l 查询）
+```
+
+加载FunASR服务容器镜像：
+
+```
+sudo docker load -i funasr-online-cpu-0.1.12-20250820.tar
+```
+
+然后执行：
+
+```
+sudo docker run -p 10096:10095 -d --restart=always --privileged=true --name funasr \
+--volume /home/bd4sur/ai/_model/FunASR:/workspace/models \
+--workdir /workspace/FunASR/runtime \
+funasr-online-cpu-0.1.12-20250820:latest \
+/bin/bash -c "/workspace/FunASR/runtime/start_2pass.sh \
+--download-model-dir /workspace/models \
+--hotword /workspace/models/hotwords.txt \
+--certfile 0 > /workspace/models/log.txt 2>&1"
+```
+
+**第5步：设置ASR中间件开机自启**
+
+执行`sudo nano /etc/systemd/system/nano-asr.timer`，增加以下内容：
+
+```
+[Unit]
+Description=Run Nano Agent FunASR WebSocket Client 2 minutes after boot
+Requires=nano-asr.service
+
+[Timer]
+OnBootSec=2min
+Unit=nano-asr.service
+
+[Install]
+WantedBy=timers.target
+```
+
+执行`sudo nano /etc/systemd/system/nano-asr.service`，增加以下内容：
+
+```
+[Unit]
+Description=Nano Agent FunASR WebSocket Client
+After=network.target
+
+[Service]
+Type=simple
+User=bd4sur
+WorkingDirectory=/home/bd4sur/ai/Nano/infer_marga
+ExecStart=/usr/bin/python /home/bd4sur/ai/Nano/infer_marga/asr_client.py --host "0.0.0.0" --port 10096 --mode 2pass --chunk_size "5,10,5" --ssl 0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**第6步：部署TTS服务，并设置开机自启**
+
+首先安装conda环境：`conda create -n melotts-onnx -y python==3.10`
+
+执行`sudo nano /etc/systemd/system/melotts.timer`，增加以下内容：
+
+```
+[Unit]
+Description=Run MeloTTS ONNX Inference Server after boot
+Requires=melotts.service
+
+[Timer]
+OnBootSec=2min
+Unit=melotts.service
+
+[Install]
+WantedBy=timers.target
+```
+
+执行`sudo nano /etc/systemd/system/melotts.service`，增加以下内容：
+
+```
+[Unit]
+Description=MeloTTS ONNX Inference Server
+After=network.target
+
+[Service]
+Type=simple
+User=bd4sur
+WorkingDirectory=/home/bd4sur/ai/Nano/infer_marga
+ExecStart=/home/bd4sur/miniconda3/bin/conda run -n melotts-onnx python /home/bd4sur/ai/Nano/infer_marga/tts-server-melotts-onnx.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+
+
+**第4步：拉取代码并编译**
 
 首先，拉取代码仓库到本地，并进入代码目录：
 

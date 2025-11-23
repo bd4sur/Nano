@@ -110,13 +110,13 @@ def read_fifo(fifo_path):
     audio_thread.start()
 
     # 初始提示
-    audio = tts.generate(
-        "T T S 准备就绪",
-        sid=SPEAKER_ID,
-        speed=SPEED,
-        # callback=generated_audio_callback,
-    )
-    audio_queue.put(audio.samples)
+    # audio = tts.generate(
+    #     "T T S 准备就绪",
+    #     sid=SPEAKER_ID,
+    #     speed=SPEED,
+    #     # callback=generated_audio_callback,
+    # )
+    # audio_queue.put(audio.samples)
     # print(audio)
 
     # 以非阻塞模式打开FIFO

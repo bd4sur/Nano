@@ -75,8 +75,8 @@ def read_fifo(fifo_path):
     audio_thread.start()
 
     # 初始提示
-    initial_audio = tts.speak("T T S 准备就绪", speaker=tts.speakers[0], speed=SPEED)
-    audio_queue.put(initial_audio)
+    # initial_audio = tts.speak("T T S 准备就绪", speaker=tts.speakers[0], speed=SPEED)
+    # audio_queue.put(initial_audio)
 
     # 以非阻塞模式打开FIFO
     fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)

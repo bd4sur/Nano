@@ -39,7 +39,7 @@ static wchar_t g_anniversory[OUTPUT_BUFFER_LENGTH] = L"我在博客中，一直�
 
 // 全局设置
 int32_t g_config_auto_submit_after_asr = 1; // ASR结束后立刻提交识别内容到LLM
-int32_t g_config_tts_mode = 1; // TTS工作模式：0-关闭   1-实时   2-全部生成后统一TTS
+int32_t g_config_tts_mode = 0; // TTS工作模式：0-关闭   1-实时   2-全部生成后统一TTS
 
 char *g_model_path = NULL;
 char *g_lora_path = NULL;

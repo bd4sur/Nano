@@ -71,7 +71,7 @@
 
 模型转换方式详见下文。可将Nano的pickle模型和Qwen2、Qwen3的HuggingFace模型转换为推理引擎可接受的二进制模型文件，文件内嵌词表。
 
-文档待补充。
+文档详见[此处](nanochat/README.md)。
 
 |树莓派离线部署|路由器离线部署|
 |--|--|
@@ -635,6 +635,23 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 - A Radford, K Narasimhan, T Salimans, et al. [Improving Language Understanding by Generative Pre-Training](https://s3-us-west-2.amazonaws.com/openai-assets/research-covers/language-unsupervised/language_understanding_paper.pdf) [J]. 2018.
 - [GPT可视化](https://bbycroft.net/llm)
 - [LLMs-from-scratch](https://github.com/rasbt/LLMs-from-scratch)
+
+## 引用Nano
+
+请使用以下BibTex条目，引用Nano：
+
+```
+@online{NanoLM,
+  author = {{BD4SUR}},
+  title  = {NanoLM: A Cyber Parrot},
+  year   = {2025},
+  url    = {https://github.com/bd4sur/Nano}
+}
+```
+
+引用或使用Nano的工作：
+
+- [树莓派这种“玩具级”设备，真能跑大模型吗？](https://mp.weixin.qq.com/s/4LyVzHvm6VCdaZ8ahI-F1g)：2025年10月，应约为“通义大模型”微信公众号撰稿。
 
 ## 权利声明
 
