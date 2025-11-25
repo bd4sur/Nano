@@ -308,23 +308,28 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state, Nano
     prefilling_textarea_state->current_line = 0;
     prefilling_textarea_state->is_show_scroll_bar = 0;
 
-    // 临时关闭draw_textarea的整帧绘制，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
-    global_state->is_full_refresh = 0;
+    // 每隔refresh_ratio个token刷新一次屏幕
+    if (global_state->timer % global_state->refresh_ratio == 0) {
+    
+        // 临时关闭draw_textarea的整帧绘制，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
+        global_state->is_full_refresh = 0;
 
-    OLED_SoftClear();
+        OLED_SoftClear();
 
-    draw_textarea(key_event, global_state, prefilling_textarea_state);
+        draw_textarea(key_event, global_state, prefilling_textarea_state);
 
-    OLED_DrawLine(0, 60, 128, 60, 1);
-    OLED_DrawLine(0, 63, 128, 63, 1);
-    OLED_DrawLine(127, 60, 127, 63, 1);
-    OLED_DrawLine(0, 61, session->pos * 128 / (session->num_prompt_tokens - 2), 61, 1);
-    OLED_DrawLine(0, 62, session->pos * 128 / (session->num_prompt_tokens - 2), 62, 1);
+        OLED_DrawLine(0, 60, 128, 60, 1);
+        OLED_DrawLine(0, 63, 128, 63, 1);
+        OLED_DrawLine(127, 60, 127, 63, 1);
+        OLED_DrawLine(0, 61, session->pos * 128 / (session->num_prompt_tokens - 2), 61, 1);
+        OLED_DrawLine(0, 62, session->pos * 128 / (session->num_prompt_tokens - 2), 62, 1);
 
-    OLED_Refresh();
+        OLED_Refresh();
 
-    // 重新开启整帧绘制，注意这个标记是所有函数共享的全局标记。
-    global_state->is_full_refresh = 1;
+        // 重新开启整帧绘制，注意这个标记是所有函数共享的全局标记。
+        global_state->is_full_refresh = 1;
+
+    }
 
     g_tts_split_from = 0;
 
@@ -344,7 +349,11 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_S
     wcscpy(widget_textarea_state->text, session->output_text);
     widget_textarea_state->current_line = -1;
     widget_textarea_state->is_show_scroll_bar = 1;
-    draw_textarea(key_event, global_state, widget_textarea_state);
+
+    // 每隔refresh_ratio个token刷新一次屏幕
+    if (global_state->timer % global_state->refresh_ratio == 0) {
+        draw_textarea(key_event, global_state, widget_textarea_state);
+    }
 
     // DECODE_LED_OFF
 
@@ -376,13 +385,12 @@ int32_t on_llm_finished(Nano_Session *session) {
 
 void init_main_menu() {
     wcscpy(main_menu_state->title, L"Nano V202508");
-    wcscpy(main_menu_state->items[0], L"电子书");
-    wcscpy(main_menu_state->items[1], L"电子鹦鹉");
-    wcscpy(main_menu_state->items[2], L"选择语言模型");
-    wcscpy(main_menu_state->items[3], L"设置");
-    wcscpy(main_menu_state->items[4], L"安全关机");
-    wcscpy(main_menu_state->items[5], L"本机自述");
-    main_menu_state->item_num = 6;
+    wcscpy(main_menu_state->items[0], L"电子鹦鹉");
+    wcscpy(main_menu_state->items[1], L"电子书");
+    wcscpy(main_menu_state->items[2], L"设置");
+    wcscpy(main_menu_state->items[3], L"安全关机");
+    wcscpy(main_menu_state->items[4], L"本机自述");
+    main_menu_state->item_num = 5;
     init_menu(key_event, global_state, main_menu_state);
 }
 
@@ -527,63 +535,30 @@ int32_t textarea_event_handler(
 
 // 主菜单各条目的动作
 int32_t main_menu_item_action(int32_t item_index) {
-    // 0.电子书
+    // 0.电子鹦鹉
     if (item_index == 0) {
-        return -3;
-    }
-
-    // 1.电子鹦鹉
-    else if (item_index == 1) {
-
-        // LLM Init
-
-        if (!g_llm_ctx) {
-            wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...");
-            widget_textarea_state->current_line = 0;
-            widget_textarea_state->is_show_scroll_bar = 0;
-            draw_textarea(key_event, global_state, widget_textarea_state);
-
-            g_model_path = MODEL_PATH_1;
-            g_lora_path = NULL;
-            g_repetition_penalty = 1.05f;
-            g_temperature = 1.0f;
-            g_top_p = 0.5f;
-            g_top_k = 0;
-            g_random_seed = (unsigned int)time(NULL);
-            g_max_seq_len = 512;
-            g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, g_random_seed);
-
-            wcscpy(widget_textarea_state->text, L"加载完成~");
-            widget_textarea_state->current_line = 0;
-            widget_textarea_state->is_show_scroll_bar = 0;
-            draw_textarea(key_event, global_state, widget_textarea_state);
-            usleep(1000*1000);
-        }
-
-        // 刷新文本输入框
-        init_input(key_event, global_state, widget_input_state);
-        return 0;
-    }
-
-    // 2.选择语言模型
-    else if (item_index == 2) {
         init_model_menu();
         return 4;
     }
 
-    // 3.设置
-    else if (item_index == 3) {
+    // 1.电子书
+    else if (item_index == 1) {
+        return -3;
+    }
+
+    // 2.设置
+    else if (item_index == 2) {
         init_setting_menu();
         return 5;
     }
 
-    // 4.安全关机
-    else if (item_index == 4) {
+    // 3.安全关机
+    else if (item_index == 3) {
         return 31;
     }
 
-    // 5.本机自述
-    else if (item_index == 5) {
+    // 4.本机自述
+    else if (item_index == 4) {
         return 26;
     }
     return -2;
@@ -603,6 +578,7 @@ int32_t model_menu_item_action(int32_t item_index) {
         g_top_p = 0.5f;
         g_top_k = 0;
         g_max_seq_len = 512;
+        global_state->refresh_ratio = 8;
     }
     else if (item_index == 1) {
         wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...");
@@ -613,6 +589,7 @@ int32_t model_menu_item_action(int32_t item_index) {
         g_top_p = 0.5f;
         g_top_k = 0;
         g_max_seq_len = 512;
+        global_state->refresh_ratio = 8;
     }
     else if (item_index == 2) {
         wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...");
@@ -623,6 +600,7 @@ int32_t model_menu_item_action(int32_t item_index) {
         g_top_p = 0.5f;
         g_top_k = 0;
         g_max_seq_len = 512;
+        global_state->refresh_ratio = 8;
     }
     else if (item_index == 3) {
         wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...");
@@ -633,6 +611,7 @@ int32_t model_menu_item_action(int32_t item_index) {
         g_top_p = 0.95f;
         g_top_k = 20;
         g_max_seq_len = 32768;
+        global_state->refresh_ratio = 4;
     }
     else if (item_index == 4) {
         wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...");
@@ -643,6 +622,7 @@ int32_t model_menu_item_action(int32_t item_index) {
         g_top_p = 0.95f;
         g_top_k = 20;
         g_max_seq_len = 32768;
+        global_state->refresh_ratio = 1;
     }
     else if (item_index == 5) {
         wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Qwen3-4B-Inst-2507\n 请稍等...");
@@ -653,6 +633,7 @@ int32_t model_menu_item_action(int32_t item_index) {
         g_top_p = 0.8f;
         g_top_k = 20;
         g_max_seq_len = 32768;
+        global_state->refresh_ratio = 1;
     }
 
     widget_textarea_state->current_line = 0;
@@ -729,6 +710,7 @@ int main() {
     global_state->is_recording = 0;
     global_state->asr_start_timestamp = 0;
     global_state->is_full_refresh = 1;
+    global_state->refresh_ratio = 2; // 默认每2个token刷新一次屏幕
 
     widget_textarea_state->x = 0;
     widget_textarea_state->y = 0;

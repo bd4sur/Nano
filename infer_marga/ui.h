@@ -37,6 +37,8 @@ typedef struct {
 
     int32_t is_full_refresh; // 作为所有绘制函数的一个参数，用于控制是否整帧刷新。默认为1。0-禁用函数内的clear-refresh，1-启用函数内的clear-refresh
 
+    int32_t refresh_ratio; // LLM推理过程中，屏幕刷新的分频系数，也就是每几次推理刷新一次屏幕
+
 } Global_State;
 
 typedef struct {
