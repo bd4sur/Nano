@@ -63,6 +63,9 @@ void OLED_ShowPicture(uint8_t x, uint8_t y, uint8_t sizex, uint8_t sizey, uint8_
 void OLED_ColorTurn(uint8_t i);
 void OLED_DisplayTurn(uint8_t i);
 
+void add_glyph_index_to_cache(uint32_t utf32, uint32_t index);
+int32_t find_glyph_index_from_cache(uint32_t utf32);
+
 uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height);
 
 #endif

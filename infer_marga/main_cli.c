@@ -1,13 +1,14 @@
 #include <wctype.h>
 
 #include "infer.h"
+#include "prompt.h"
 
 #define OUTPUT_BUFFER_LENGTH (32768)
 
 // 推理引擎实例（单例模式）
 static Nano_Context *g_llm_ctx;
 
-static char *MODEL_PATH = "/home/bd4sur/ai/_model/Nano/qwen3-4b-instruct-2507-q80.bin";
+static char *MODEL_PATH = "/home/bd4sur/ai/_model/Nano/qwen3-0b6-q80.bin";
 
 // 是否是第一次decoding：用于判断何时清除Pre-filling进度内容
 int32_t g_is_first_decoding = 1;
@@ -230,6 +231,12 @@ int main() {
             wchar_t wcline[MAX_PROMPT_BUFFER_LENGTH];
             mbstowcs(wcline, lines[i], MAX_PROMPT_BUFFER_LENGTH);
             wcscat(prompt, wcline);
+        }
+
+        // 如果输入为空，则随机选用一个默认prompt
+        if (wcslen(prompt) == 0) {
+            wcscpy(prompt, get_random_prompt());
+            printf("%ls\n", prompt);
         }
 
         // wchar_t *time_str = get_current_time_wstring();

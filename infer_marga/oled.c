@@ -6,6 +6,9 @@ static uint8_t **OLED_FRAME_BUFFER;
 
 static AVLNode *GLYPH;
 
+static uint32_t *GLYPH_CACHE; // 字形缓存：前半部分是utf32，后半部分是字形index
+static uint32_t GLYPH_CACHE_LEVEL; // 字形缓存的水位
+
 static int i2cdev_fd;
 
 // 发送命令
@@ -89,6 +92,10 @@ void OLED_Init(void) {
     // 初始化字库
     GLYPH = buildAVLTree(UTF32_LUT, 7445);
 
+    // 初始化字形缓存
+    GLYPH_CACHE = (uint32_t*)calloc(2048, sizeof(uint32_t));
+    GLYPH_CACHE_LEVEL = 0;
+
     // 初始化屏幕设备
     i2cdev_fd = open(OLED_I2C_DEVFILE, O_RDWR);
     if (i2cdev_fd < 0) {
@@ -132,10 +139,10 @@ void OLED_Init(void) {
     OLED_WriteCommand(0x00); // Set Memory Addressing Mode ab Horizontal addressing mode
     OLED_WriteCommand(0xAF);
 
-#elif SSD1306
+#elif defined(SSD1306)
 
     // SSD1306 ///////////////////////////////////////////////////////////////////////////////
-/*
+
     OLED_WriteCommand(0xAE); // Display OFF
     OLED_WriteCommand(0xD5); // Set Display Clock Divide Ratio / Oscillator Frequency
     OLED_WriteCommand(0x80); // SSD1306 推荐值：0x80 (divide ratio = 1, freq = 8)
@@ -166,7 +173,6 @@ void OLED_Init(void) {
     // Page mode
     OLED_WriteCommand(0x20);
     OLED_WriteCommand(0x02);
-*/
 
 #endif
 
@@ -416,6 +422,23 @@ void OLED_DisplayTurn(uint8_t i) {
     }
 }
 
+void add_glyph_index_to_cache(uint32_t utf32, uint32_t index) {
+    if (GLYPH_CACHE_LEVEL < 1024) {
+        GLYPH_CACHE[   GLYPH_CACHE_LEVEL    ] = utf32;
+        GLYPH_CACHE[GLYPH_CACHE_LEVEL + 1024] = index;
+        GLYPH_CACHE_LEVEL++;
+    }
+}
+
+int32_t find_glyph_index_from_cache(uint32_t utf32) {
+    for (int32_t i = 0; i < GLYPH_CACHE_LEVEL; i++) {
+        if (GLYPH_CACHE[i] == utf32) {
+            return GLYPH_CACHE[i + 1024];
+        }
+    }
+    return -1;
+}
+
 uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
     if(utf32 < 127) {
         *font_width = 6;
@@ -423,7 +446,19 @@ uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
         return ASCII_6_12[utf32 - 32];
     }
     else {
-        uint32_t index = findIndex(GLYPH, utf32);
+        uint32_t index = 0;
+        // 首先从cache中取
+        int32_t _index = find_glyph_index_from_cache(utf32);
+        // 如果cache命中：直接取
+        if (_index >= 0) {
+            index = (uint32_t)_index;
+        }
+        // 如果cache不命中，则从AVL树中查询，并加入cache
+        else {
+            index = findIndex(GLYPH, utf32);
+            add_glyph_index_to_cache(utf32, index);
+        }
+
         if (index >= 0 && index < 7445) {
             *font_width = 12;
             *font_height = 12;

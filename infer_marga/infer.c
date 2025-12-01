@@ -83,18 +83,6 @@ uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens_ptr) {
     return output_ids;
 }
 
-// 构建提示模板
-wchar_t *apply_chat_template(wchar_t *system_prompt, wchar_t *history, wchar_t *user_input) {
-    wchar_t *prompt = (wchar_t*)calloc(MAX_PROMPT_BUFFER_LENGTH + 1, sizeof(wchar_t));
-    prompt[0] = 0;
-    if (system_prompt != NULL) wcscat(prompt, system_prompt);
-    if (history != NULL) wcscat(prompt, history);
-    wcscat(prompt, L"<|instruct_mark|>");
-    wcscat(prompt, user_input);
-    wcscat(prompt, L"<|response_mark|>");
-    return prompt;
-}
-
 wchar_t *decode(Nano_Context *ctx, uint32_t *ids, uint32_t len) {
     if (ctx->llm->arch == LLM_ARCH_NANO) {
         return decode_nano(ctx->tokenizer, ids, len);

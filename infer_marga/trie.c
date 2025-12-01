@@ -27,7 +27,7 @@ void expand_memory_pool(struct Trie *trie) {
 
 // 初始化一个Trie树
 //   注：当前使用动态内存池的实现中，没有用到两个参数。仅为兼容性而保留。
-struct Trie *new_trie(uint32_t vocab_size, uint32_t is_end_of_token) {
+struct Trie *new_trie(uint32_t vocab_size, uint8_t is_end_of_token) {
     struct Trie *trie = (struct Trie *)malloc(sizeof(struct Trie));
     if (!trie) {
         printf("Failed to allocate memory for Trie\n");

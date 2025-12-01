@@ -254,7 +254,6 @@ void llm_context_free(Nano_Context *ctx);
 
 uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens_ptr);
 wchar_t *decode_nano(Tokenizer *t, uint32_t *ids, uint32_t len);
-wchar_t *apply_chat_template(wchar_t *system_prompt, wchar_t *history, wchar_t *user_input);
 
 wchar_t *decode(Nano_Context *ctx, uint32_t *ids, uint32_t len);
 
