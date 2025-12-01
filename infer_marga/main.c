@@ -952,26 +952,21 @@ int main() {
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
                 wchar_t prompt[MAX_PROMPT_BUFFER_LENGTH] = L"";
+
+                // 如果输入为空，则随机选用一个预置prompt
+                if (wcslen(widget_input_state->text) == 0) {
+                    wcscpy(widget_input_state->text, get_random_prompt());
+                    widget_input_state->length = wcslen(widget_input_state->text);
+                }
+
                 // 根据模型类型应用prompt模板
                 if (g_llm_ctx->llm->arch == LLM_ARCH_NANO) {
                     wcscat(prompt, L"<|instruct_mark|>");
-                    // 如果输入为空，则随机选用一个预置prompt
-                    if (wcslen(widget_input_state->text) == 0) {
-                        wcscat(prompt, get_random_prompt());
-                    }
-                    else {
-                        wcscat(prompt, widget_input_state->text);
-                    }
+                    wcscat(prompt, widget_input_state->text);
                     wcscat(prompt, L"<|response_mark|>");
                 }
                 else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
-                    // 如果输入为空，则随机选用一个预置prompt
-                    if (wcslen(widget_input_state->text) == 0) {
-                        wcscpy(prompt, get_random_prompt());
-                    }
-                    else {
-                        wcscpy(prompt, widget_input_state->text);
-                    }
+                    wcscpy(prompt, widget_input_state->text);
                     // wcscat(prompt, L" /no_think");
                 }
                 else {

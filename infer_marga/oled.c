@@ -446,6 +446,7 @@ uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
         return ASCII_6_12[utf32 - 32];
     }
     else {
+/*
         uint32_t index = 0;
         // 首先从cache中取
         int32_t _index = find_glyph_index_from_cache(utf32);
@@ -458,7 +459,9 @@ uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
             index = findIndex(GLYPH, utf32);
             add_glyph_index_to_cache(utf32, index);
         }
+*/
 
+        uint32_t index = findIndex(GLYPH, utf32);
         if (index >= 0 && index < 7445) {
             *font_width = 12;
             *font_height = 12;

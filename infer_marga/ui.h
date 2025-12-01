@@ -118,7 +118,10 @@ static wchar_t ime_alphabet[10][32] = {L"0", L" 1.,:?!-/+_=&\"*", L"abcABC2", L"
 
 
 void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode);
-void render_text(wchar_t *text, int32_t start_line, int32_t x_offset, int32_t y_offset, int32_t width, int32_t height);
+
+void render_text(
+    wchar_t *text, int32_t start_line, int32_t length, int32_t *break_pos, int32_t line_num,
+    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height, int32_t do_typeset);
 
 void show_splash_screen(Key_Event *key_event, Global_State *global_state);
 

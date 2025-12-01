@@ -77,13 +77,14 @@ void delete_char(Widget_Input_State *input_state) {
 
 
 void text_typeset(
+    int32_t is_full,         // in  全量排版？0-仅计算翻页；1-先计算全部换行，再计算翻页
     uint32_t *text,          // in  待排版的文本
     int32_t view_width,      // in  视图宽度
     int32_t view_height,     // in  视图高度
     int32_t start_line,      // in  从哪行开始显示（用于滚动）
-    int32_t *length,         // out 文本长度（字符数）
-    int32_t *break_pos,      // out 折行位置（每行第一个字符的index）数组
-    int32_t *line_num,     // out 可见行数
+    int32_t *length,         // (in if is_full else out) 文本长度（字符数）
+    int32_t *break_pos,      // (in if is_full else out) 折行位置（每行第一个字符的index）数组
+    int32_t *line_num,       // (in if is_full else out) 可见行数
     int32_t *view_lines,     // out 可见行数
     int32_t *view_start_pos, // out 可见区域第一个字符的index
     int32_t *view_end_pos    // out 可见区域最后一个字符的index
@@ -91,31 +92,36 @@ void text_typeset(
     int32_t char_count = 0;
     int32_t break_count = 0;
     int32_t line_x_pos = 0;
-    for (char_count = 0; char_count < wcslen(text); char_count++) {
-        wchar_t ch = text[char_count];
-        int32_t char_width = (ch < 127) ? ((ch == '\n') ? 0 : FONT_WIDTH_HALF) : FONT_WIDTH_FULL;
-        if (char_count == 0 || line_x_pos + char_width >= view_width) {
-            break_pos[break_count] = char_count;
-            break_count++;
-            line_x_pos = 0;
+
+    // 全量排版：计算全部文本的length(char_count)、line_num(break_count)、break_pos
+    if (is_full) {
+        for (char_count = 0; char_count < wcslen(text); char_count++) {
+            wchar_t ch = text[char_count];
+            int32_t char_width = (ch < 127) ? ((ch == '\n') ? 0 : FONT_WIDTH_HALF) : FONT_WIDTH_FULL;
+            if (char_count == 0 || line_x_pos + char_width >= view_width) {
+                break_pos[break_count] = char_count;
+                break_count++;
+                line_x_pos = 0;
+            }
+            else if (ch == '\n') {
+                break_pos[break_count] = char_count + 1;
+                break_count++;
+                line_x_pos = 0;
+            }
+            line_x_pos += char_width;
         }
-        else if (ch == '\n') {
-            break_pos[break_count] = char_count + 1;
-            break_count++;
-            line_x_pos = 0;
-        }
-        line_x_pos += char_width;
+
+        *line_num = break_count;
+        *length = char_count;
     }
 
     // 计算当前视图最大能容纳的行数。
     //   NOTE 考虑到行间距为1，且末行以下无间距，因此分子加1以去除末行无间距的影响。
     //        例如，高度为64的屏幕，实际可容纳(64+1)/(12+1)=5行。
     int32_t max_view_lines = (view_height + 1) / (FONT_HEIGHT + 1);
+    int32_t _line_num = *line_num;
 
-    int32_t _line_num = break_count;
-    *line_num = break_count;
     *view_lines = max_view_lines;
-    *length = char_count;
 
     // 对start_line的检查和标准化
     if (start_line < 0) {
@@ -147,7 +153,7 @@ void text_typeset(
     //        若文本行数不大于视图行数，则一定满足此条件。
     else if (start_line >= _line_num - max_view_lines && start_line < _line_num) {
         *view_start_pos = break_pos[start_line];
-        *view_end_pos = char_count - 1;
+        *view_end_pos = *length - 1;
     }
 }
 
@@ -176,15 +182,16 @@ void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
 }
 
 // 返回值：文本折行后的行数（含换行符）
-void render_text(wchar_t *text, int32_t start_line, int32_t x_offset, int32_t y_offset, int32_t width, int32_t height) {
-    int32_t length = 0;
-    int32_t break_pos[STRING_BUFFER_LENGTH];
-    int32_t line_num = 0;
+void render_text(
+    wchar_t *text, int32_t start_line, int32_t length, int32_t *break_pos, int32_t line_num,
+    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height,
+    int32_t is_full_typeset)
+{
     int32_t view_lines = 0;
     int32_t view_start_pos = 0;
     int32_t view_end_pos = 0;
 
-    text_typeset(text, width, height, start_line, &length, break_pos, &line_num, &view_lines, &view_start_pos, &view_end_pos);
+    text_typeset(is_full_typeset, text, width, height, start_line, &length, break_pos, &line_num, &view_lines, &view_start_pos, &view_end_pos);
 
     int x_pos = x_offset;
     int y_pos = y_offset;
@@ -325,6 +332,7 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
 
 void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state) {
     text_typeset(
+        1,
         textarea_state->text,
         textarea_state->width,
         textarea_state->height,
@@ -342,8 +350,8 @@ void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Text
     }
 
     render_text(
-        textarea_state->text, textarea_state->current_line,
-        textarea_state->x, textarea_state->y, textarea_state->width, textarea_state->height);
+        textarea_state->text, textarea_state->current_line, textarea_state->length, textarea_state->break_pos, textarea_state->line_num,
+        textarea_state->x, textarea_state->y, textarea_state->width, textarea_state->height, 0);
 
     if (textarea_state->is_show_scroll_bar) {
         render_scroll_bar(
@@ -789,6 +797,7 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
     // 第一次排版：用于判断光标是否在视图内部
     // input_state->current_line = 0;
     text_typeset(
+        1,
         input_state->text,
         input_state->width,
         input_state->height,
@@ -824,6 +833,7 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
         }
         // 重新排版
         text_typeset(
+            1,
             input_state->text,
             input_state->width,
             input_state->height,
@@ -838,7 +848,9 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
     }
 
     // 绘制文本
-    render_text(input_state->text, input_state->current_line, input_state->x, input_state->y, input_state->width, input_state->height);
+    render_text(
+        input_state->text, input_state->current_line, input_state->length, input_state->break_pos, input_state->line_num,
+        input_state->x, input_state->y, input_state->width, input_state->height, 0);
 
     // 绘制滚动条
     if (input_state->is_show_scroll_bar) {
@@ -910,7 +922,9 @@ void render_pinyin_input(Widget_Input_State *input_state, uint32_t is_picking) {
     else {
         wcscat(buf, L"(无候选字)");
     }
-    render_text(buf, 0, input_state->x, input_state->y, input_state->width, input_state->height);
+    render_text(
+        buf, 0, input_state->length, input_state->break_pos, input_state->line_num,
+        input_state->x, input_state->y, input_state->width, input_state->height, 1);
     OLED_Refresh();
 }
 
@@ -950,6 +964,10 @@ void render_symbol_input(Widget_Input_State *input_state) {
     else {
         wcscat(text, L"(无候选符号)");
     }
-    render_text(text, 0, input_state->x, input_state->y, input_state->width, input_state->height);
+
+    render_text(
+        text, 0, input_state->length, input_state->break_pos, input_state->line_num,
+        input_state->x, input_state->y, input_state->width, input_state->height, 1);
+
     OLED_Refresh();
 }
