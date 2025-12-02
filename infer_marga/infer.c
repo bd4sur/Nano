@@ -601,6 +601,7 @@ Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_s
 void llm_context_free(Nano_Context *ctx) {
     free_llm(ctx->llm, ctx->tokenizer);
     free_sampler(ctx->sampler);
+    free(ctx);
 }
 
 
@@ -1169,6 +1170,8 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, unsigned int 
     session->is_prefilling = 0;
 
     session->output_text = NULL;
+
+    free(prompt_tokens);
 
     return session;
 }

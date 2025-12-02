@@ -20,6 +20,7 @@ void free_map(struct Map *pm) {
             current_entry = next_entry;
         }
     }
+    free(pm->buckets);
     free(pm);
 }
 

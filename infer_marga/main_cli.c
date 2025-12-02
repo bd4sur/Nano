@@ -200,7 +200,7 @@ int main() {
     printf("Nano Language Model Inference Engine CLI\n\n");
 
     unsigned long long random_seed = (unsigned int)time(NULL);
-    uint32_t max_seq_len = 32768;
+    uint32_t max_seq_len = 2048;
 
     printf("Using model: %s\n", MODEL_PATH);
 
@@ -220,6 +220,7 @@ int main() {
     printf("\n请输入问题，过程中可按Enter换行；输入完成请按两次Ctrl+D提交。\n\n");
 
     while (1) {
+        wchar_t input_text[MAX_PROMPT_BUFFER_LENGTH] = L"";
         wchar_t prompt[MAX_PROMPT_BUFFER_LENGTH] = L"";
 
         printf("\x1b[32;1mHomo:\x1b[0m ");
@@ -230,13 +231,28 @@ int main() {
         for (int i = 0; i < line_count; i++) {
             wchar_t wcline[MAX_PROMPT_BUFFER_LENGTH];
             mbstowcs(wcline, lines[i], MAX_PROMPT_BUFFER_LENGTH);
-            wcscat(prompt, wcline);
+            wcscat(input_text, wcline);
         }
 
         // 如果输入为空，则随机选用一个默认prompt
-        if (wcslen(prompt) == 0) {
-            wcscpy(prompt, get_random_prompt());
-            printf("%ls\n", prompt);
+        if (wcslen(input_text) == 0) {
+            wcscpy(input_text, get_random_prompt());
+            printf("%ls\n", input_text);
+        }
+
+        // 根据模型类型应用prompt模板
+        if (g_llm_ctx->llm->arch == LLM_ARCH_NANO) {
+            wcscat(prompt, L"<|instruct_mark|>");
+            wcscat(prompt, input_text);
+            wcscat(prompt, L"<|response_mark|>");
+        }
+        else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
+            wcscpy(prompt, input_text);
+            wcscat(prompt, L" /no_think");
+        }
+        else {
+            fprintf(stderr, "Error: unknown model arch.\n");
+            exit(EXIT_FAILURE);
         }
 
         // wchar_t *time_str = get_current_time_wstring();
