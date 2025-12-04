@@ -27,7 +27,7 @@ void expand_memory_pool(struct Trie *trie) {
 
 // 初始化一个Trie树
 //   注：当前使用动态内存池的实现中，没有用到两个参数。仅为兼容性而保留。
-struct Trie *new_trie(uint32_t vocab_size, uint32_t is_end_of_token) {
+struct Trie *new_trie(uint32_t vocab_size, uint8_t is_end_of_token) {
     struct Trie *trie = (struct Trie *)malloc(sizeof(struct Trie));
     if (!trie) {
         printf("Failed to allocate memory for Trie\n");
@@ -47,17 +47,23 @@ struct Trie *new_trie(uint32_t vocab_size, uint32_t is_end_of_token) {
     return trie;
 }
 
-// 从内存池中分配一个新的Trie节点
-struct TrieNode *allocate_node(struct Trie *trie) {
+// 从内存池中分配一个新的Trie节点，返回它在节点内存池中的索引
+uint32_t allocate_node(struct Trie *trie) {
     if (trie->next_free_node >= trie->pool_size) {
         expand_memory_pool(trie); // 扩展内存池
     }
-    return &trie->node_pool[trie->next_free_node++];
+    return trie->next_free_node++;
 }
 
 // 释放Trie树
 void free_trie(struct Trie *trie) {
     if (trie) {
+        for (int32_t i = 0; i < trie->next_free_node; i++) {
+            struct TrieNode *node = &trie->node_pool[i];
+            if (node->children) {
+                free_map(node->children);
+            }
+        }
         free(trie->node_pool);
         free(trie);
     }
@@ -72,11 +78,22 @@ int add_token(struct Trie *trie, uint32_t *token, uint32_t token_len, uint32_t t
         uint32_t index = token[i];
         if (index >= VOCAB_SIZE) return -1; // 超出VOCAB_SIZE范围
 
-        if (!node->children[index]) {
-            node->children[index] = allocate_node(trie);
+        uint32_t child_node_index = 0;
+        if (!node->children) {
+            node->children = new_map(30);
+            child_node_index = allocate_node(trie);
+            map_set(node->children, index, child_node_index);
         }
-        node = node->children[index];
+        else {
+            child_node_index = map_get(node->children, index);
+            if (!child_node_index) { // 返回0就是不存在（没找到）
+                child_node_index = allocate_node(trie);
+                map_set(node->children, index, child_node_index);
+            }
+        }
+        node = &trie->node_pool[child_node_index];
     }
+
     if (node->is_end_of_token) return -1; // 防止重复添加
 
     node->is_end_of_token = 1;
@@ -91,9 +108,18 @@ int match_token(struct Trie *trie, uint32_t *pattern, uint32_t pattern_len, uint
     struct TrieNode *node = trie->root;
     for (uint32_t i = 0; i < pattern_len; ++i) {
         uint32_t index = pattern[i];
-        if (index >= VOCAB_SIZE || !node->children[index]) return -1;
+        uint32_t child_node_index = 0;
 
-        node = node->children[index];
+        if (index >= VOCAB_SIZE) return -1;
+
+        if (!node->children) {
+            return -1;
+        }
+        else {
+            child_node_index = map_get(node->children, index);
+            if (!child_node_index) return -1;
+            node = &trie->node_pool[child_node_index];
+        }
     }
     if (node->is_end_of_token) {
         if (token_id) *token_id = node->token_id;

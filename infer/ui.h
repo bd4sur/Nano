@@ -37,6 +37,8 @@ typedef struct {
 
     int32_t is_full_refresh; // 作为所有绘制函数的一个参数，用于控制是否整帧刷新。默认为1。0-禁用函数内的clear-refresh，1-启用函数内的clear-refresh
 
+    int32_t refresh_ratio; // LLM推理过程中，屏幕刷新的分频系数，也就是每几次推理刷新一次屏幕
+
 } Global_State;
 
 typedef struct {
@@ -116,7 +118,10 @@ static wchar_t ime_alphabet[10][32] = {L"0", L" 1.,:?!-/+_=&\"*", L"abcABC2", L"
 
 
 void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode);
-void render_text(wchar_t *text, int32_t start_line, int32_t x_offset, int32_t y_offset, int32_t width, int32_t height);
+
+void render_text(
+    wchar_t *text, int32_t start_line, int32_t length, int32_t *break_pos, int32_t line_num,
+    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height, int32_t do_typeset);
 
 void show_splash_screen(Key_Event *key_event, Global_State *global_state);
 

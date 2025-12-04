@@ -11,9 +11,9 @@
 
 // Trie树的节点结构
 struct TrieNode {
-    uint32_t is_end_of_token;  // 标记是否为词的结尾
     uint32_t token_id;         // 保存词对应的ID
-    struct TrieNode *children[VOCAB_SIZE]; // 子节点指针
+    uint8_t  is_end_of_token;  // 标记是否为词的结尾
+    struct Map *children;      // 子节点HashMap(token_id -> trie_node_index)
 };
 
 // Trie树结构
@@ -30,10 +30,10 @@ void expand_memory_pool(struct Trie *trie);
 
 // 初始化一个Trie树
 //   注：当前使用动态内存池的实现中，没有用到两个参数。仅为兼容性而保留。
-struct Trie *new_trie(uint32_t vocab_size, uint32_t is_end_of_token);
+struct Trie *new_trie(uint32_t vocab_size, uint8_t is_end_of_token);
 
-// 从内存池中分配一个新的Trie节点
-struct TrieNode *allocate_node(struct Trie *trie);
+// 从内存池中分配一个新的Trie节点，返回它在节点内存池中的索引
+uint32_t allocate_node(struct Trie *trie);
 
 // 释放Trie树
 void free_trie(struct Trie *trie);

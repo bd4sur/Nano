@@ -1,0 +1,57 @@
+<html><head></head>
+<body>
+<div id="oled" style="font-family:'Maple Mono Normal NL NF CN'; width: 128px; height: 64px; font-size: 11px; position: relative; background-color:#000;"></div>
+    <script>
+
+function isASCII(input){
+    return typeof input ==='string' && /^[\x00-\x7F]*$/.test(input);
+}
+let text = "看到 DGX Spark 的参数之后，决定把手上的 Orin NX 置换成一个新的 AGX Orin 盒子。黄老板不厚道，AGX Orin 64GB 目前看来仍然是NV最具性价比的产品没有之一。个人玩家盲目追求大显存倒也没有太大必要（酸葡萄），毕竟一分钱一分货、两毛钱两分货、三块钱三分货，语言模型规模扩大的边际收益我觉得是递减的。";
+
+function wrap(text) {
+    let wrapped = [];
+    let char_count = 0;
+    let break_pos = [];
+    let break_count = 0;
+    let line_width = 0;
+    for (let i = 0; i < text.length; i++) {
+        let char_width = isASCII(text[i]) ? 6 : 12;
+        if (line_width + char_width >= 128) {
+            break_pos[break_count] = char_count;
+            break_count++;
+            wrapped[char_count] = "\n";
+            char_count++;
+            line_width = 0;
+        }
+        line_width += char_width;
+        wrapped[char_count] = text[i];
+        char_count++;
+    }
+    return wrapped.slice(break_pos[break_count - 5] + 1).join(""); //折行后的文本，只取后面5行
+}
+
+let pos = 0;
+let oled = document.getElementById("oled");
+let timer = setInterval(() => {
+    let tails = wrap(text.slice(0, pos));
+    oled.innerHTML = "";
+    let x_pos = 0;
+    let y_pos = 0;
+    for (let i = 0; i < tails.length; i++) {
+        if (tails[i] === "\n") {
+            y_pos += 12;
+            x_pos = 0;
+        }
+        else {
+            let char_node = document.createElement("div");
+            char_node.innerHTML = tails[i];
+            char_node.style = `position: absolute; left: ${x_pos}px; top: ${y_pos}px; color: #00ff00;`;
+            x_pos += isASCII(tails[i]) ? 6 : 12;
+            oled.appendChild(char_node);
+        }
+    }
+    pos++;
+    if(pos > text.length) clearInterval(timer);
+}, 0);
+
+</script></body></html>

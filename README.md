@@ -8,7 +8,7 @@
 |<a href="https://www.bilibili.com/video/BV1NAieYiEFi" target="_blank"><img src="./doc/nano.jpg" width="100%"><br>浏览器离线推理+ASR+TTS</a>|<a href="https://www.bilibili.com/video/BV1vmrsYGERP" target="_blank"><img src="./doc/nano-video-ar-class-c.jpg" width="100%"><br>通过业余无线电C证考试</a>|<a href="https://www.bilibili.com/video/BV1vPRDYyEgp" target="_blank"><img src="./doc/nano-mi-ax5.jpg" width="100%"><br>红米AX5路由器部署推理</a>|
 
 
-### [【立即体验浏览器本地推理】](https://bd4sur.com/Nano/infer)
+### [【立即体验浏览器本地推理】](https://bd4sur.com/Nano/infer/web)
 
 **Nano**是Transformer结构的自回归语言模型，供个人赏玩、研究、炼丹炉煲机。期望：
 
@@ -21,7 +21,7 @@
 
 为什么叫“Nano”：
 
-- 東雲なの（Shinonome **Nano**）和坂本是动画《日常》的角色。なの是博士创造的女高中生机器人，而坂本是一只会说话的黑猫。
+- 東雲なの（Shinonome **Nano**）是动画《日常》中出场的机器人高中生。
 - 本仓库主要复刻自Karpathy大佬的[nanoGPT](https://github.com/karpathy/nanoGPT)。取名Nano也是为了致(chao)敬(xi)nanoGPT。
 
 ## 模型和数据
@@ -71,7 +71,7 @@
 
 模型转换方式详见下文。可将Nano的pickle模型和Qwen2、Qwen3的HuggingFace模型转换为推理引擎可接受的二进制模型文件，文件内嵌词表。
 
-文档详见[此处](nanochat/README.md)。
+文档详见[此处](doc/on-device.md)。
 
 |树莓派离线部署|路由器离线部署|
 |--|--|
@@ -99,8 +99,6 @@
 ### Mio：适用于 Jetson AGX Orin 的实用化推理部署
 
 Mio是多个LLM、VLM和TTS模型的缝合怪，各自的依赖相互冲突，因此需要做一点小小的魔改。本人主要在 Jetson AGX Orin 上开发并部署Mio，因此此处记载的信息仅供个人备忘。
-
-- **Transformers**：Mio仅支持Qwen2-VL这一个VLM，而Qwen2-VL要求`transformers>=4.45.0`。然而，截至2024年8月31日，`transformers==4.45.0.dev0`已不能完美支持`torch<=2.3.0`。因此，需要找到`<site-packages>/transformers/pytorch_utils.py`的`ALL_LAYERNORM_LAYERS`变量，删掉列表中的`nn.RMSNorm`。
 
 ```
 # 克隆本仓库
@@ -531,55 +529,11 @@ Min = 0, Max = 1, Depth = 4, BlockSize = MaxLen = 64
 
 ## 动力学研究
 
-### 模型质量度量
+### 模型评测
 
-- 预训练损失：下一词元预测序列的交叉熵损失。
-- 指令微调损失：带掩模的交叉熵损失。
+### 推理性能
 
-通用评测：C-Eval等。
-
-### 尺度缩放定律（Scaling law）
-
-2024年10月8日
-
-|Block|Vocab|Layer|Head|Embd|RoPE|
-|-----|-----|-----|----|----|----|
-| 256 |32768|  8  | 64 |512 |True|
-
-### 性能
-
-**推理性能天梯图**
-
-```
-gcc -Ofast -fopenmp -march=native run.c -lm -o run
-OMP_NUM_THREADS=4 ./run qwen25-0b5-instruct.bin -i "人类的本质是复读机吗？"
-```
-
-- a - AMD Ryzen 7 5800H / Ubuntu 22.04
-- b - Atom P5942B (7.03)
-- c - Jetson Orin NX 16GB
-- d - RK3588 32GB
-
-|线程|  a |  b |  c |  d |
-|----|----|----|----|----|
-| 1  |13.3| 3.3| 6.0| 7.1|
-| 2  |19.6| 5.8|11.5|10.9|
-| 3  |20.6| 7.8|13.9|11.5|
-| 4  |19.9| 8.9|17.8|10.6|
-| 5  |18.7|10.1|15.4| 6.0|
-| 6  |16.9|10.4|18.0| 6.4|
-| 7  |15.3|10.5|15.5| 6.6|
-| 8  |14.2|10.9|15.7| 6.7|
-| 9  |13.8|11.3|    |----|
-| 10 |13.8|11.4|    |----|
-| 11 |13.6|11.7|    |----|
-| 12 |13.2|12.2|13.6| 7.8|
-| 13 |12.7|12.6|    |----|
-| 14 |12.3|12.7|    |----|
-| 15 |12.0|12.1|    |----|
-| 16 |11.7| 1.7|12.8| 6.8|
-
-**训练性能天梯图**
+### 训练性能
 
 训练参数：BlockSize=512, VocabSize=2114, Layers=2, Heads=4, Embd=512, BatchSize=100（参数量13.67M，显存占用9045MiB）
 
@@ -620,7 +574,7 @@ OMP_NUM_THREADS=4 ./run qwen25-0b5-instruct.bin -i "人类的本质是复读机�
 - 平均FLOPS：3.2TFLOPS
 - 平均吞吐率：8k tokens/s
 
-### 算子`scaled_dot_product_attention`的性能
+**算子`scaled_dot_product_attention`的性能**
 
 PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135) 的注意力算子计算加速。目前有3种kernel，但是不支持较旧的GPU。分别启用3种kernel，实测相对性能如下：
 
@@ -641,7 +595,7 @@ PyTorch 2.0 以上支持基于 [FlashAttention](https://arxiv.org/abs/2205.14135
 请使用以下BibTex条目，引用Nano：
 
 ```
-@online{NanoLM,
+@misc{nanolm,
   author = {{BD4SUR}},
   title  = {NanoLM: A Cyber Parrot},
   year   = {2025},

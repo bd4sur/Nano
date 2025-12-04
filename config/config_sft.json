@@ -9,7 +9,7 @@
     "dataset_path": [
         ["/home/bd4sur/ai/Nano/dataset_preprocessed/sft_train.base64", "/home/bd4sur/ai/Nano/dataset_preprocessed/sft_val.base64"]
     ],
-    "tokenizer_path": "/home/bd4sur/ai/Nano/tokenizer/tokenizer_16384.json",
+    "tokenizer_path": "/home/bd4sur/ai/Nano/tokenizer/tokenizer_16384_v2.json",
 
     "random_seed": 39,
     "batch_size": 16,

@@ -83,18 +83,6 @@ uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens_ptr) {
     return output_ids;
 }
 
-// 构建提示模板
-wchar_t *apply_chat_template(wchar_t *system_prompt, wchar_t *history, wchar_t *user_input) {
-    wchar_t *prompt = (wchar_t*)calloc(MAX_PROMPT_BUFFER_LENGTH + 1, sizeof(wchar_t));
-    prompt[0] = 0;
-    if (system_prompt != NULL) wcscat(prompt, system_prompt);
-    if (history != NULL) wcscat(prompt, history);
-    wcscat(prompt, L"<|instruct_mark|>");
-    wcscat(prompt, user_input);
-    wcscat(prompt, L"<|response_mark|>");
-    return prompt;
-}
-
 wchar_t *decode(Nano_Context *ctx, uint32_t *ids, uint32_t len) {
     if (ctx->llm->arch == LLM_ARCH_NANO) {
         return decode_nano(ctx->tokenizer, ids, len);
@@ -613,6 +601,7 @@ Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_s
 void llm_context_free(Nano_Context *ctx) {
     free_llm(ctx->llm, ctx->tokenizer);
     free_sampler(ctx->sampler);
+    free(ctx);
 }
 
 
@@ -1181,6 +1170,8 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, unsigned int 
     session->is_prefilling = 0;
 
     session->output_text = NULL;
+
+    free(prompt_tokens);
 
     return session;
 }
