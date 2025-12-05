@@ -1112,7 +1112,6 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, unsigned int 
 
 int32_t llm_session_step(Nano_Context *ctx, Nano_Session *session) {
     if (session->pos < session->max_seq_len) {
-        if (session->t_0 == 0) { session->t_0 = time_in_ms(); }
 
         session->is_prefilling = (session->pos < session->num_prompt_tokens - 1) ? 1 : 0;
 
@@ -1175,7 +1174,6 @@ int32_t generate_sync(
     int32_t status = 0;
     while (1) {
         status = llm_session_step(ctx, session);
-        session->tps = (session->pos - 1) / (double)(time_in_ms() - session->t_0) * 1000;
         if (status == LLM_RUNNING_IN_PREFILLING) {
             int32_t callback_flag = on_prefilling(session);
             // 外部被动中止
@@ -1193,8 +1191,6 @@ int32_t generate_sync(
             }
         }
         else if (status == LLM_STOPPED_NORMALLY) {
-            session->t_1 = time_in_ms();
-            session->tps = (session->pos - 1) / (double)(session->t_1 - session->t_0) * 1000;
             status = on_finished(session);
             break;
         }

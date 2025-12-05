@@ -1,7 +1,5 @@
 #include "utils.h"
 
-#include <time.h>
-
 // ===============================================================================
 // HashMap
 // ===============================================================================
@@ -349,7 +347,7 @@ void freeTree(AVLNode* root) {
 
 
 // ===============================================================================
-// 其他工具函数
+// 其他平台无关的工具函数
 // ===============================================================================
 
 unsigned int random_u32(unsigned long long *state) {
@@ -363,11 +361,4 @@ unsigned int random_u32(unsigned long long *state) {
 // random float32 in [0,1)
 float random_f32(unsigned long long *state) {
     return (random_u32(state) >> 8) / 16777216.0f;
-}
-
-// return time in milliseconds, for benchmarking the model speed
-long time_in_ms() {
-    struct timespec time;
-    clock_gettime(CLOCK_REALTIME, &time);
-    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
 }

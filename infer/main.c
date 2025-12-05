@@ -1,6 +1,6 @@
 #include <time.h>
 #include <signal.h>
-#include <stdlib.h>
+#include <locale.h>
 #include <sys/stat.h>
 
 #include "pinyin.h"
@@ -11,8 +11,7 @@
 #include "infer.h"
 #include "prompt.h"
 
-#define MODEL_ROOT_DIR "/home/bd4sur/ai/_model/Nano"
-// #define MODEL_ROOT_DIR "/emmc/_model"
+#include "platform.h"
 
 #define PREFILL_LED_ON  system("echo \"1\" > /sys/devices/platform/leds/leds/green:status/brightness");
 #define PREFILL_LED_OFF system("echo \"0\" > /sys/devices/platform/leds/leds/green:status/brightness");
@@ -90,6 +89,18 @@ int32_t PREV_STATE = -1;
 
 
 
+
+
+// return time in milliseconds, for benchmarking the model speed
+long time_in_ms() {
+    struct timespec time;
+    clock_gettime(CLOCK_REALTIME, &time);
+    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
+}
+
+
+
+
 // 优雅关机
 int32_t graceful_shutdown() {
     // 同步所有文件系统数据
@@ -108,7 +119,6 @@ int32_t graceful_shutdown() {
 
 
 // 穷人的ASR服务状态检测：通过读取ASR服务的日志前64kB中是否出现“init finished”来判断
-#define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
 int32_t check_asr_server_status() {
     char asr_log_buffer[65536];
     FILE *file = fopen(ASR_SERVER_LOG_PATH, "r");
@@ -291,12 +301,20 @@ int32_t set_ptt_status(uint8_t status) {
 
 
 int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state, Nano_Session *session) {
+    if (session->t_0 == 0) {
+        session->t_0 = time_in_ms();
+    }
+    else {
+        session->tps = (session->pos - 1) / (double)(time_in_ms() - session->t_0) * 1000;
+    }
+
     // 长/短按A键中止推理
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
         wcscpy(g_llm_output_of_last_session, L"");
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_PREFILLING;
     }
+
     // PREFILL_LED_ON
 
     prefilling_textarea_state->x = 0;
@@ -338,12 +356,20 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state, Nano
 }
 
 int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_Session *session) {
+    if (session->t_0 == 0) {
+        session->t_0 = time_in_ms();
+    }
+    else {
+        session->tps = (session->pos - 1) / (double)(time_in_ms() - session->t_0) * 1000;
+    }
+
     // 长/短按A键中止推理
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
         wcscpy(g_llm_output_of_last_session, session->output_text);
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_DECODING;
     }
+
     // DECODE_LED_ON
 
     wcscpy(widget_textarea_state->text, session->output_text);
@@ -357,20 +383,27 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_S
 
     // DECODE_LED_OFF
 
+#ifdef TTS_ENABLED
     if (g_config_tts_mode > 0) {
         send_tts_request(session->output_text, 0);
     }
+#endif
 
     free(session->output_text);
     return LLM_RUNNING_IN_DECODING;
 }
 
 int32_t on_llm_finished(Nano_Session *session) {
+    session->t_1 = time_in_ms();
+    session->tps = (session->pos - 1) / (double)(session->t_1 - session->t_0) * 1000;
+
     wcscpy(g_llm_output_of_last_session, session->output_text);
 
+#ifdef TTS_ENABLED
     if (g_config_tts_mode > 0) {
         send_tts_request(session->output_text, 1);
     }
+#endif
 
     g_tts_split_from = 0;
 
@@ -735,8 +768,9 @@ int main() {
 
     ///////////////////////////////////////
     // UPS传感器初始化
-
+#ifdef UPS_ENABLED
     ups_init();
+#endif
 
     ///////////////////////////////////////
     // OLED 初始化
@@ -890,12 +924,12 @@ int main() {
                     STATE = -2;
                 }
             }
-
+#ifdef ASR_ENABLED
             // 按下C键：开始PTT
             else if (key_event->key_edge > 0 && key_event->key_code == 12) {
                 STATE = 21;
             }
-
+#endif
             // 短按D键：提交
             else if (key_event->key_edge == -1 && key_event->key_code == 13) {
                 if (widget_input_state->state == 0) {
@@ -981,7 +1015,7 @@ int main() {
             // 事件循环主体：即同步版本的while(1)的循环体
 
             global_state->llm_status = llm_session_step(g_llm_ctx, global_state->llm_session);
-            global_state->llm_session->tps = (global_state->llm_session->pos - 1) / (double)(time_in_ms() - global_state->llm_session->t_0) * 1000;
+
             if (global_state->llm_status == LLM_RUNNING_IN_PREFILLING) {
                 global_state->llm_status = on_llm_prefilling(key_event, global_state, global_state->llm_session);
                 // 外部被动中止
@@ -997,9 +1031,11 @@ int main() {
                 global_state->llm_status = on_llm_decoding(key_event, global_state, global_state->llm_session);
                 // 外部被动中止
                 if (global_state->llm_status == LLM_STOPPED_IN_DECODING) {
+#ifdef TTS_ENABLED
                     if (g_config_tts_mode > 0) {
                         stop_tts();
                     }
+#endif
                     llm_session_free(global_state->llm_session);
                     STATE = 10;
                 }
@@ -1008,8 +1044,6 @@ int main() {
                 }
             }
             else if (global_state->llm_status == LLM_STOPPED_NORMALLY) {
-                global_state->llm_session->t_1 = time_in_ms();
-                global_state->llm_session->tps = (global_state->llm_session->pos - 1) / (double)(global_state->llm_session->t_1 - global_state->llm_session->t_0) * 1000;
                 global_state->llm_status = on_llm_finished(global_state->llm_session);
                 llm_session_free(global_state->llm_session);
                 STATE = 10;
@@ -1067,9 +1101,11 @@ int main() {
             else {
                 // 短按A键：停止TTS
                 if (key_event->key_edge == -1 && key_event->key_code == 10) {
+#ifdef TTS_ENABLED
                     if (g_config_tts_mode > 0) {
                         stop_tts();
                     }
+#endif
                 }
                 STATE = textarea_event_handler(key_event, global_state, widget_textarea_state, 0, 10);
             }
@@ -1389,12 +1425,16 @@ int main() {
 
         // 定期检查系统状态
         if (global_state->timer % 600 == 0) {
+#ifdef ASR_ENABLED
             // ASR服务状态
             global_state->is_asr_server_up = check_asr_server_status();
+#endif
+#ifdef UPS_ENABLED
             // UPS电压和电量
             global_state->ups_voltage = read_ups_voltage();
             global_state->ups_soc = read_ups_soc();
             // printf("%d mV | %d%%\n", global_state->ups_voltage, global_state->ups_soc);
+#endif
         }
 
         global_state->timer = (global_state->timer == 2147483647) ? 0 : (global_state->timer + 1);

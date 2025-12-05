@@ -9,10 +9,8 @@
 #include <time.h>
 #include <string.h>
 
-///////////////////////////////////////////////
-#define UPS_I2C_DEVICE "/dev/i2c-1"
-#define UPS_I2C_ADDR (0x36)
-///////////////////////////////////////////////
+#include "platform.h"
+
 
 static int ups_fd;
 

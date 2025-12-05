@@ -13,22 +13,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
-#include <time.h>
 #include <math.h>
 #include <string.h>
-#include <fcntl.h>
-#include <locale.h>
 #include <wchar.h>
+
+#include <fcntl.h>
 
 #include "utils.h"
 #include "tokenizer.h"
 #include "tensor.h"
 
+#include "platform.h"
+
 // 是否使用mmap？
 #define NANO_USE_MMAP
-
-// 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
-// #define MATMUL_PTHREAD
 
 #ifdef MATMUL_PTHREAD
     #include "matmul_pthread.h"

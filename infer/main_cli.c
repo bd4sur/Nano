@@ -1,4 +1,5 @@
 #include <wctype.h>
+#include <locale.h>
 
 #include "infer.h"
 #include "prompt.h"
@@ -12,6 +13,15 @@ static char *MODEL_PATH = "/home/bd4sur/ai/_model/Nano/qwen3-0b6-q80.bin";
 
 // 是否是第一次decoding：用于判断何时清除Pre-filling进度内容
 int32_t g_is_first_decoding = 1;
+
+
+// return time in milliseconds, for benchmarking the model speed
+long time_in_ms() {
+    struct timespec time;
+    clock_gettime(CLOCK_REALTIME, &time);
+    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
+}
+
 
 wchar_t *drop_thinking(wchar_t *input) {
     if (input == NULL) {
@@ -140,6 +150,13 @@ void freelines(char** lines, int line_count) {
 }
 
 int32_t on_prefilling(Nano_Session *session) {
+    if (session->t_0 == 0) {
+        session->t_0 = time_in_ms();
+    }
+    else {
+        session->tps = (session->pos - 1) / (double)(time_in_ms() - session->t_0) * 1000;
+    }
+
     printf("\033[1A\033[2K\r");
     printf("\x1b[36;1mPre-filling: %.1f%%\x1b[0m\n", ((float)(session->pos + 1) / (float)session->num_prompt_tokens * 100.0f));
     fflush(stdout);
@@ -152,6 +169,13 @@ int32_t on_decoding(Nano_Session *session) {
         g_is_first_decoding = 0;
         printf("\033[1A\033[2K\r");
         printf("\n\x1b[34;1mNano:\x1b[0m ");
+    }
+
+    if (session->t_0 == 0) {
+        session->t_0 = time_in_ms();
+    }
+    else {
+        session->tps = (session->pos - 1) / (double)(time_in_ms() - session->t_0) * 1000;
     }
 
     // NOTE Qwen模型有时会输出奇怪的token，也就是把unicode字符从中间切开的不完整token。因此Qwen模型仍然需要直接从vocab中解码出这样的裸字符串并输出。
@@ -178,6 +202,9 @@ int32_t on_decoding(Nano_Session *session) {
 
 int32_t on_finished(Nano_Session *session) {
     // printf("[%ls]\n", drop_thinking(session->output_text));
+    session->t_1 = time_in_ms();
+    session->tps = (session->pos - 1) / (double)(session->t_1 - session->t_0) * 1000;
+
     printf("\nTPS = %f\n\n", session->tps);
     return LLM_STOPPED_NORMALLY;
 }

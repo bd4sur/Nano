@@ -101,7 +101,6 @@ void freeTree(AVLNode* root);
 
 unsigned int random_u32(unsigned long long *state);
 float random_f32(unsigned long long *state);
-long time_in_ms();
 
 
 #endif

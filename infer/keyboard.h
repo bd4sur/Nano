@@ -7,10 +7,7 @@
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 
-///////////////////////////////////////////////
-#define KB_I2C_DEVFILE "/dev/i2c-1"
-#define KB_I2C_ADDR (0x27)
-///////////////////////////////////////////////
+#include "platform.h"
 
 
 static int kb_fd;

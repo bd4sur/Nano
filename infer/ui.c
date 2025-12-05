@@ -6,6 +6,7 @@
 #include "oledfont.h"
 #include "oled.h"
 
+#include "platform.h"
 
 void get_candidate_hanzi_list(Widget_Input_State *input_state) {
     unsigned int candidate_index[500];
@@ -299,6 +300,7 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     OLED_DrawLine(127, 0, 127, 63, 1);
     OLED_DrawLine(0, 63, 127, 63, 1);
 
+#ifdef ASR_ENABLED
     // 检查ASR服务状态，如果ASR服务未启动，则在屏幕左上角画一个闪烁的点，表示ASR服务启动中
     if (global_state->is_asr_server_up < 1) {
         uint8_t v = (uint8_t)((global_state->timer >> 2) & 0x1);
@@ -307,7 +309,9 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
         OLED_DrawLine(4, 8, 7, 8, v);
         OLED_DrawLine(4, 9, 7, 9, v);
     }
+#endif
 
+#ifdef UPS_ENABLED
     // 绘制电池电量
     OLED_DrawLine(112, 4, 125, 4, 0);
     OLED_DrawLine(125, 4, 125, 11, 0);
@@ -321,6 +325,7 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     OLED_DrawLine(123 - soc_bar_length, 7, 123, 7, 0);
     OLED_DrawLine(123 - soc_bar_length, 8, 123, 8, 0);
     OLED_DrawLine(123 - soc_bar_length, 9, 123, 9, 0);
+#endif
 
     OLED_Refresh();
 }

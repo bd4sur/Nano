@@ -14,15 +14,10 @@
 #include <unistd.h>
 #include <wchar.h>
 
+#include "platform.h"
 #include "utils.h"
 
 
-///////////////////////////////////////////////
-// #define SSD1306
-#define SSD1309
-#define OLED_I2C_DEVFILE "/dev/i2c-1"
-#define OLED_I2C_ADDR 0x3c
-///////////////////////////////////////////////
 
 #define STRING_BUFFER_LENGTH (65536)
 
