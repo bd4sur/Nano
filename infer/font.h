@@ -1,5 +1,5 @@
-#ifndef __OLEDFONT_H__
-#define __OLEDFONT_H__
+#ifndef __NANO_GFX_FONT_H__
+#define __NANO_GFX_FONT_H__
 
 #define FONT_HEIGHT (12)
 #define FONT_WIDTH_FULL (12)

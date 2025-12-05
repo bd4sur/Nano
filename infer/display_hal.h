@@ -17,8 +17,6 @@
 #include "platform.h"
 #include "utils.h"
 
-
-
 #define STRING_BUFFER_LENGTH (65536)
 
 #define OLED_WIDTH  128
@@ -42,25 +40,14 @@
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 
 void OLED_WriteByte(uint8_t data, uint8_t mode);
+void OLED_Refresh(uint8_t **FRAME_BUFFER);
 void OLED_Init(void);
 void OLED_Close(void);
 void OLED_Display_On(void);
 void OLED_Display_Off(void);
-void OLED_Refresh(void);
-void OLED_Clear(void);
-void OLED_SoftClear(void);
-void OLED_DrawPoint(uint8_t x, uint8_t y, uint8_t mode);
-void OLED_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t mode);
-void OLED_DrawCircle(uint8_t x, uint8_t y, uint8_t r);
-void OLED_ShowChar(uint8_t x, uint8_t y, uint8_t *glyph, uint8_t font_width, uint8_t font_height, uint8_t mode);
-void OLED_ShowPicture(uint8_t x, uint8_t y, uint8_t sizex, uint8_t sizey, uint8_t BMP[], uint8_t mode);
-
 void OLED_ColorTurn(uint8_t i);
 void OLED_DisplayTurn(uint8_t i);
 
-void add_glyph_index_to_cache(uint32_t utf32, uint32_t index);
-int32_t find_glyph_index_from_cache(uint32_t utf32);
 
-uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height);
 
 #endif

@@ -1,10 +1,9 @@
 #include <stdio.h>
 #include <time.h>
 
+#include "graphics.h"
 #include "ui.h"
 #include "pinyin.h"
-#include "oledfont.h"
-#include "oled.h"
 
 #include "platform.h"
 
@@ -176,8 +175,8 @@ void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
             break;
         }
         // NOTE 反色显示时，在每个字符场面额外补充一条线，避免菜单中高亮区域看起来顶格
-        OLED_DrawLine(x_pos, y_pos - 1, x_pos+font_width-1, y_pos - 1, 1 - (mode % 2));
-        OLED_ShowChar(x_pos, y_pos, glyph, font_width, font_height, (mode % 2));
+        fb_draw_line(x_pos, y_pos - 1, x_pos+font_width-1, y_pos - 1, 1 - (mode % 2));
+        fb_draw_char(x_pos, y_pos, glyph, font_width, font_height, (mode % 2));
         x_pos += font_width;
     }
 }
@@ -216,7 +215,7 @@ void render_text(
             y_pos += (font_height + 1);
             x_pos = x_offset;
         }
-        OLED_ShowChar(x_pos, y_pos, glyph, font_width, font_height, 1);
+        fb_draw_char(x_pos, y_pos, glyph, font_width, font_height, 1);
         x_pos += font_width;
     }
 
@@ -252,15 +251,15 @@ void render_scroll_bar(int32_t current_line, int32_t line_num, int32_t view_line
     }
 
     for (int n = y; n < y + height; n++) {
-        OLED_DrawPoint(x + width - 1, n, !(n % 3));
+        fb_plot(x + width - 1, n, !(n % 3));
     }
     // 如果总行数装不满视图，则滚动条长度等于视图高度height
     uint8_t bar_height = (line_num < view_lines) ? (uint8_t)(height) : (uint8_t)((view_lines * height) / line_num);
     // 进度条高度不小于3px
     bar_height = (bar_height < 3) ? 3 : bar_height;
     uint8_t y_0 = (uint8_t)(y + (current_line * height) / line_num);
-    OLED_DrawLine(x + width - 1, y_0, x + width - 1, y_0 + bar_height + 1, 1);
-    OLED_DrawLine(x + width - 2, y_0, x + width - 2, y_0 + bar_height + 1, 1);
+    fb_draw_line(x + width - 1, y_0, x + width - 1, y_0 + bar_height + 1, 1);
+    fb_draw_line(x + width - 2, y_0, x + width - 2, y_0 + bar_height + 1, 1);
 }
 
 
@@ -272,7 +271,7 @@ void render_scroll_bar(int32_t current_line, int32_t line_num, int32_t view_line
 
 
 void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
-    OLED_SoftClear();
+    fb_soft_clear();
 
     time_t rawtime;
     struct tm *timeinfo;
@@ -285,7 +284,7 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     mbstowcs(datetime_wcs_buffer, datetime_string_buffer, 80);
 
     for (int i = 1; i <= 14; i++) {
-        OLED_DrawLine(1, i, 127, i, 1);
+        fb_draw_line(1, i, 127, i, 1);
     }
 
     render_line(L"Project Nano", 28, 2, 0);
@@ -294,40 +293,40 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     render_line(datetime_wcs_buffer, 8, 34, 1);
     render_line(L"(c) 2025 BD4SUR", 18, 50, 1);
 
-    OLED_DrawLine(0, 0, 127, 0, 1);
-    OLED_DrawLine(0, 15, 127, 15, 1);
-    OLED_DrawLine(0, 0, 0, 63, 1);
-    OLED_DrawLine(127, 0, 127, 63, 1);
-    OLED_DrawLine(0, 63, 127, 63, 1);
+    fb_draw_line(0, 0, 127, 0, 1);
+    fb_draw_line(0, 15, 127, 15, 1);
+    fb_draw_line(0, 0, 0, 63, 1);
+    fb_draw_line(127, 0, 127, 63, 1);
+    fb_draw_line(0, 63, 127, 63, 1);
 
 #ifdef ASR_ENABLED
     // 检查ASR服务状态，如果ASR服务未启动，则在屏幕左上角画一个闪烁的点，表示ASR服务启动中
     if (global_state->is_asr_server_up < 1) {
         uint8_t v = (uint8_t)((global_state->timer >> 2) & 0x1);
-        OLED_DrawLine(4, 6, 7, 6, v);
-        OLED_DrawLine(4, 7, 7, 7, v);
-        OLED_DrawLine(4, 8, 7, 8, v);
-        OLED_DrawLine(4, 9, 7, 9, v);
+        fb_draw_line(4, 6, 7, 6, v);
+        fb_draw_line(4, 7, 7, 7, v);
+        fb_draw_line(4, 8, 7, 8, v);
+        fb_draw_line(4, 9, 7, 9, v);
     }
 #endif
 
 #ifdef UPS_ENABLED
     // 绘制电池电量
-    OLED_DrawLine(112, 4, 125, 4, 0);
-    OLED_DrawLine(125, 4, 125, 11, 0);
-    OLED_DrawLine(112, 11, 125, 11, 0);
-    OLED_DrawLine(112, 4, 112, 11, 0);
-    OLED_DrawLine(111, 6, 111, 9, 0);
+    fb_draw_line(112, 4, 125, 4, 0);
+    fb_draw_line(125, 4, 125, 11, 0);
+    fb_draw_line(112, 11, 125, 11, 0);
+    fb_draw_line(112, 4, 112, 11, 0);
+    fb_draw_line(111, 6, 111, 9, 0);
 
     int32_t soc_bar_length = (int32_t)(10.0f * ((float)global_state->ups_soc / 100.0f));
     soc_bar_length = (soc_bar_length > 9) ? 9 : soc_bar_length;
-    OLED_DrawLine(123 - soc_bar_length, 6, 123, 6, 0);
-    OLED_DrawLine(123 - soc_bar_length, 7, 123, 7, 0);
-    OLED_DrawLine(123 - soc_bar_length, 8, 123, 8, 0);
-    OLED_DrawLine(123 - soc_bar_length, 9, 123, 9, 0);
+    fb_draw_line(123 - soc_bar_length, 6, 123, 6, 0);
+    fb_draw_line(123 - soc_bar_length, 7, 123, 7, 0);
+    fb_draw_line(123 - soc_bar_length, 8, 123, 8, 0);
+    fb_draw_line(123 - soc_bar_length, 9, 123, 9, 0);
 #endif
 
-    OLED_Refresh();
+    gfx_refresh();
 }
 
 
@@ -351,7 +350,7 @@ void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Text
     );
 
     if (global_state->is_full_refresh) {
-        OLED_SoftClear();
+        fb_soft_clear();
     }
 
     render_text(
@@ -365,7 +364,7 @@ void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Text
     }
 
     if (global_state->is_full_refresh) {
-        OLED_Refresh();
+        gfx_refresh();
     }
 }
 
@@ -420,17 +419,17 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         if (input_state->alphabet_countdown > 0) {
             input_state->alphabet_countdown--;
             uint8_t x_pos = (uint8_t)(input_state->alphabet_countdown * 128 / ALPHABET_COUNTDOWN_MAX);
-            OLED_DrawLine(0, 63, x_pos, 63, 1);
-            OLED_DrawLine(x_pos + 1, 63, 127, 63, 0);
-            OLED_Refresh();
+            fb_draw_line(0, 63, x_pos, 63, 1);
+            fb_draw_line(x_pos + 1, 63, 127, 63, 0);
+            gfx_refresh();
             input_state->state = 0;
         }
         // 倒计时结束，提交当前选中的字母，清除进度条
         else if (input_state->alphabet_countdown == 0) {
             // 清除进度条
             input_state->alphabet_countdown--;
-            OLED_DrawLine(0, 63, 127, 63, 0);
-            OLED_Refresh();
+            fb_draw_line(0, 63, 127, 63, 0);
+            gfx_refresh();
 
             // 将当前选中的字母加入输入缓冲区
             uint32_t ch = ime_alphabet[(int)(input_state->alphabet_current_key)][input_state->alphabet_index];
@@ -568,7 +567,7 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
         else {
             if (global_state->timer % 120 == 0) {
                 render_cursor(key_event, global_state, input_state);
-                OLED_Refresh();
+                gfx_refresh();
             }
         }
     }
@@ -736,7 +735,7 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
 
     uint32_t x_indent = 6;
 
-    OLED_SoftClear();
+    fb_soft_clear();
 
     render_line(menu_state->title, x_indent, 0, 1);
     wchar_t item_counter[13];
@@ -761,9 +760,9 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
     }
 
     // NOTE 因render_line会额外给文字上方增加一行，因此这个横线在菜单文字绘制之后再绘制
-    OLED_DrawLine(0, 12, 128, 12, 1);
+    fb_draw_line(0, 12, 128, 12, 1);
 
-    OLED_Refresh();
+    gfx_refresh();
 }
 
 
@@ -781,7 +780,7 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
 
 void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
 
-    OLED_SoftClear();
+    fb_soft_clear();
 
     wchar_t prompt[INPUT_BUFFER_LENGTH] = L"请输入           [";
     if (input_state->ime_mode_flag == IME_MODE_HANZI) {
@@ -796,8 +795,8 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
     render_line(prompt, 0, 0, 0);
 
     // 绘制右侧未填满的两列像素
-    OLED_DrawLine(126, 0, 126, 12, 1);
-    OLED_DrawLine(127, 0, 127, 12, 1);
+    fb_draw_line(126, 0, 126, 12, 1);
+    fb_draw_line(127, 0, 127, 12, 1);
 
     // 第一次排版：用于判断光标是否在视图内部
     // input_state->current_line = 0;
@@ -867,7 +866,7 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
     // 绘制光标
     render_cursor(key_event, global_state, input_state);
 
-    OLED_Refresh();
+    gfx_refresh();
 }
 
 
@@ -891,12 +890,12 @@ void render_cursor(Key_Event *key_event, Global_State *global_state, Widget_Inpu
 
     uint8_t x = line_x_pos;
     uint8_t y = (uint8_t)(input_state->y + 13 * break_count); // 12x12字模底部本来就有1px的空白，加上行间距1px，所以每行的起始位置是13的倍数
-    OLED_DrawLine(x, y-1, x, y+12, 2);
-    OLED_DrawLine(x+1, y-1, x+1, y+12, 2);
+    fb_draw_line(x, y-1, x, y+12, 2);
+    fb_draw_line(x+1, y-1, x+1, y+12, 2);
 }
 
 void render_pinyin_input(Widget_Input_State *input_state, uint32_t is_picking) {
-    OLED_SoftClear();
+    fb_soft_clear();
     // 计算候选列表长度
     uint32_t count = 0;
     wchar_t cc[MAX_CANDIDATE_NUM_PER_PAGE + 1];
@@ -930,11 +929,11 @@ void render_pinyin_input(Widget_Input_State *input_state, uint32_t is_picking) {
     render_text(
         buf, 0, input_state->length, input_state->break_pos, input_state->line_num,
         input_state->x, input_state->y, input_state->width, input_state->height, 1);
-    OLED_Refresh();
+    gfx_refresh();
 }
 
 void render_symbol_input(Widget_Input_State *input_state) {
-    OLED_SoftClear();
+    fb_soft_clear();
     // 计算候选列表长度
     uint32_t count = 0;
     uint32_t list_char_width = 0;
@@ -974,5 +973,5 @@ void render_symbol_input(Widget_Input_State *input_state) {
         text, 0, input_state->length, input_state->break_pos, input_state->line_num,
         input_state->x, input_state->y, input_state->width, input_state->height, 1);
 
-    OLED_Refresh();
+    gfx_refresh();
 }

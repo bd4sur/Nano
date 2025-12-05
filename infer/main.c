@@ -2,9 +2,10 @@
 #include <signal.h>
 #include <locale.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 #include "pinyin.h"
-#include "oled.h"
+#include "graphics.h"
 #include "ui.h"
 #include "ups.h"
 #include "keyboard.h"
@@ -332,17 +333,17 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state, Nano
         // 临时关闭draw_textarea的整帧绘制，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
         global_state->is_full_refresh = 0;
 
-        OLED_SoftClear();
+        fb_soft_clear();
 
         draw_textarea(key_event, global_state, prefilling_textarea_state);
 
-        OLED_DrawLine(0, 60, 128, 60, 1);
-        OLED_DrawLine(0, 63, 128, 63, 1);
-        OLED_DrawLine(127, 60, 127, 63, 1);
-        OLED_DrawLine(0, 61, session->pos * 128 / (session->num_prompt_tokens - 2), 61, 1);
-        OLED_DrawLine(0, 62, session->pos * 128 / (session->num_prompt_tokens - 2), 62, 1);
+        fb_draw_line(0, 60, 128, 60, 1);
+        fb_draw_line(0, 63, 128, 63, 1);
+        fb_draw_line(127, 60, 127, 63, 1);
+        fb_draw_line(0, 61, session->pos * 128 / (session->num_prompt_tokens - 2), 61, 1);
+        fb_draw_line(0, 62, session->pos * 128 / (session->num_prompt_tokens - 2), 62, 1);
 
-        OLED_Refresh();
+        gfx_refresh();
 
         // 重新开启整帧绘制，注意这个标记是所有函数共享的全局标记。
         global_state->is_full_refresh = 1;
@@ -775,8 +776,7 @@ int main() {
     ///////////////////////////////////////
     // OLED 初始化
 
-    OLED_Init();
-    OLED_Clear();
+    gfx_init();
 
     show_splash_screen(key_event, global_state);
 
@@ -1145,7 +1145,7 @@ int main() {
 
                 // 临时关闭draw_textarea的整帧绘制，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
                 global_state->is_full_refresh = 0;
-                OLED_SoftClear();
+                fb_soft_clear();
 
                 // 显示ASR结果
                 // if (len > 0) {
@@ -1160,7 +1160,7 @@ int main() {
                 swprintf(rec_duration, 50, L" %ds ", (int32_t)(time(NULL) - global_state->asr_start_timestamp));
                 render_line(rec_duration, 0, 52, 0);
 
-                OLED_Refresh();
+                gfx_refresh();
 
                 // 重新开启整帧绘制，注意这个标记是所有函数共享的全局标记。
                 global_state->is_full_refresh = 1;
@@ -1452,7 +1452,7 @@ int main() {
 
     free(void_key_event);
 
-    OLED_Close();
+    gfx_close();
 
 #ifdef MATMUL_PTHREAD
     matmul_pthread_cleanup();
