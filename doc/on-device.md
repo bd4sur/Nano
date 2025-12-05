@@ -118,8 +118,8 @@ After=network.target
 [Service]
 Type=simple
 User=bd4sur
-WorkingDirectory=/home/bd4sur/ai/Nano/infer
-ExecStart=/home/bd4sur/ai/Nano/infer/nano_pod
+WorkingDirectory=/home/bd4sur/ai/Nano/infer/bin
+ExecStart=/home/bd4sur/ai/Nano/infer/bin/nano_pod
 Restart=on-failure
 RestartSec=5
 
@@ -183,8 +183,8 @@ After=network.target
 [Service]
 Type=simple
 User=bd4sur
-WorkingDirectory=/home/bd4sur/ai/Nano/infer
-ExecStart=/usr/bin/python /home/bd4sur/ai/Nano/infer/asr_client.py --host "0.0.0.0" --port 10096 --mode 2pass --chunk_size "5,10,5" --ssl 0
+WorkingDirectory=/home/bd4sur/ai/Nano/infer/asr
+ExecStart=/usr/bin/python /home/bd4sur/ai/Nano/infer/asr/asr_client.py --host "0.0.0.0" --port 10096 --mode 2pass --chunk_size "5,10,5" --ssl 0
 Restart=always
 RestartSec=5
 
@@ -196,22 +196,22 @@ WantedBy=multi-user.target
 
 首先安装conda环境：`conda create -n melotts-onnx -y python==3.10`
 
-执行`sudo nano /etc/systemd/system/melotts.timer`，增加以下内容：
+执行`sudo nano /etc/systemd/system/nano-tts.timer`，增加以下内容：
 
 ```
 [Unit]
 Description=Run MeloTTS ONNX Inference Server after boot
-Requires=melotts.service
+Requires=nano-tts.service
 
 [Timer]
 OnBootSec=2min
-Unit=melotts.service
+Unit=nano-tts.service
 
 [Install]
 WantedBy=timers.target
 ```
 
-执行`sudo nano /etc/systemd/system/melotts.service`，增加以下内容：
+执行`sudo nano /etc/systemd/system/nano-tts.service`，增加以下内容：
 
 ```
 [Unit]
@@ -221,8 +221,8 @@ After=network.target
 [Service]
 Type=simple
 User=bd4sur
-WorkingDirectory=/home/bd4sur/ai/Nano/infer_marga
-ExecStart=/home/bd4sur/miniconda3/bin/conda run -n melotts-onnx python /home/bd4sur/ai/Nano/infer_marga/tts-server-melotts-onnx.py
+WorkingDirectory=/home/bd4sur/ai/Nano/infer/tts
+ExecStart=/home/bd4sur/miniconda3/bin/conda run -n melotts-onnx python /home/bd4sur/ai/Nano/infer/tts/tts-server-melotts-onnx.py
 Restart=always
 RestartSec=5
 
@@ -249,9 +249,9 @@ cd Nano/infer
 make -j4
 ```
 
-编译完成后，在当前目录中会出现一个新的可执行文件`nanochat`。
+编译完成后，在`./bin`中会出现一个新的可执行文件`nano_pod`。
 
-在执行程序之前，先从[HuggingFace](https://huggingface.co/bd4sur/Qwen3)或者[ModelScope](https://modelscope.cn/models/bd4sur/qwen3_nano)下载转换好的模型文件，并将其放置于`model`目录下。所有模型加起来大约将近7GB。
+在执行程序之前，先从[HuggingFace](https://huggingface.co/bd4sur/Qwen3)或者[ModelScope](https://modelscope.cn/models/bd4sur/qwen3_nano)下载转换好的模型文件，并将其放置于`~/ai/_model/Nano`目录下。所有模型加起来大约将近7GB。
 
 ```
 # 进入模型目录
@@ -270,11 +270,11 @@ wget -c https://modelscope.cn/models/bd4sur/qwen3_nano/resolve/master/qwen3-4b-i
 wget -c https://modelscope.cn/models/bd4sur/Nano-168M/resolve/master/nano_168m_625000_sft_947000_q80.bin
 ```
 
-模型下载完成后，返回上一级目录，执行刚刚编译得到的`nano_pod`：
+模型下载完成后，执行刚刚编译得到的`nano_pod`：
 
 ```
 cd ..
-./nano_pod
+./bin/nano_pod
 ```
 
 如果一切正常，OLED屏幕亮起，可以开始与电子鹦鹉对话啦。

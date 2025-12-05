@@ -36,7 +36,7 @@ $LD --export-dynamic --allow-undefined --lto-O3 \
   --export=unload_lora_external \
   --export=close_nano \
   --no-entry \
-  --import-memory -L${WASI_SDK_PATH}/lib/wasi -lclang_rt.builtins-wasm32 obj_main_wasm.o obj_utils.o obj_tokenizer.o obj_tensor.o obj_infer.o -o ../infer/nano_infer.wasm \
+  --import-memory -L${WASI_SDK_PATH}/lib/wasi -lclang_rt.builtins-wasm32 obj_main_wasm.o obj_utils.o obj_tokenizer.o obj_tensor.o obj_infer.o -o ./web/nano_infer.wasm \
 
 rm -f obj_main_wasm.o obj_utils.o obj_tokenizer.o obj_tensor.o obj_infer.o
 
