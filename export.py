@@ -238,8 +238,8 @@ def export_model(model, tokenizer_config, filepath):
 
     print("Writing header...")
 
-    major_version = 2024
-    minor_version = 10
+    major_version = 2025
+    minor_version = 12
 
     # 1) write magic, which will be two uint32 of "BD4SURLM" in ASCII
     out_file.write(struct.pack('I', 0x42443453))
@@ -260,7 +260,7 @@ def export_model(model, tokenizer_config, filepath):
     cfg = model.config
     is_shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
     header = struct.pack(
-        "iiiiiiii",
+        "iiiiiiiii",
         cfg.block_size,
         cfg.vocab_size,
         cfg.n_layer,
@@ -268,12 +268,14 @@ def export_model(model, tokenizer_config, filepath):
         cfg.n_head,
         cfg.n_kv_head if cfg.n_kv_head is not None else cfg.n_head,
         cfg.n_hidden if cfg.n_hidden is not None else model.layers[0].feed_forward.w1.weight.shape[0],
-        int(is_shared_classifier)
+        int(is_shared_classifier),
+        cfg.n_embd // cfg.n_head # head_dim Nano不用这个参数
     )
     out_file.write(header)
-    # --> 56 bytes
+    # --> 60 bytes
 
     # 5) write some other flags (TODO)
+    out_file.write(struct.pack('i', 0))  # 量化类型：QUANT_TYPE_F32=0(无量化)，见`infer/tensor.h`
 
     # 6) pad rest with zeros; 'tell' returns current pos
     pad = 256 - out_file.tell()
@@ -294,17 +296,22 @@ def export_model(model, tokenizer_config, filepath):
     print("Writing model parameters...")
 
     weights = [
-        model.tok_embeddings.weight,
+        # No quant
         *[layer.attention_norm.weight for layer in model.layers],
+        *[layer.ffn_norm.weight for layer in model.layers],
+        model.norm.weight,
+
+        # Quantized
+        model.tok_embeddings.weight,
         *[layer.attention.wq.weight for layer in model.layers],
         *[layer.attention.wk.weight for layer in model.layers],
         *[layer.attention.wv.weight for layer in model.layers],
         *[layer.attention.wo.weight for layer in model.layers],
-        *[layer.ffn_norm.weight for layer in model.layers],
         *[layer.feed_forward.w1.weight for layer in model.layers],
         *[layer.feed_forward.w2.weight for layer in model.layers],
         *[layer.feed_forward.w3.weight for layer in model.layers],
-        model.norm.weight,
+
+        # Optional
         model.freqs_cos,
         model.freqs_sin,
     ]
@@ -351,7 +358,7 @@ def export_quantized(model, tokenizer_config, filepath, group_size=64):
     print("Writing header...")
 
     major_version = 2025
-    minor_version = 8
+    minor_version = 12
 
     # 1) write magic, which will be two uint32 of "BD4SURLM" in ASCII
     out_file.write(struct.pack('I', 0x42443453))
@@ -380,13 +387,14 @@ def export_quantized(model, tokenizer_config, filepath, group_size=64):
         cfg.n_head,
         cfg.n_kv_head if cfg.n_kv_head is not None else cfg.n_head,
         cfg.n_hidden if cfg.n_hidden is not None else model.layers[0].feed_forward.w1.weight.shape[0],
-        int(is_shared_classifier)
+        int(is_shared_classifier),
+        cfg.n_embd // cfg.n_head # head_dim Nano不用这个参数
     )
     out_file.write(header)
-    # --> 56 bytes
+    # --> 60 bytes
 
     # 5) write some other flags
-    out_file.write(struct.pack('i', 800))        # 量化类型 TODO 待定义
+    out_file.write(struct.pack('i', 10))         # 量化类型：QUANT_TYPE_Q80=10，见`infer/tensor.h`
     out_file.write(struct.pack('i', group_size)) # 量化参数(分组长度)
 
     # 6) pad rest with zeros; 'tell' returns current pos
@@ -472,7 +480,7 @@ def export_quantized(model, tokenizer_config, filepath, group_size=64):
 
 def load_checkpoint(checkpoint):
     # load the provided model checkpoint
-    checkpoint_dict = torch.load(checkpoint, map_location='cpu')
+    checkpoint_dict = torch.load(checkpoint, weights_only=False, map_location='cpu')
     model_config = checkpoint_dict['model_config']
     model = GPT(model_config)
     state_dict = checkpoint_dict['model']
@@ -488,7 +496,7 @@ def load_checkpoint(checkpoint):
 
 def load_lora(lora_path):
     print(f"LoRA module file path: {lora_path}")
-    checkpoint_dict = torch.load(lora_path, map_location='cpu')
+    checkpoint_dict = torch.load(lora_path, weights_only=False, map_location='cpu')
     if checkpoint_dict["is_lora"]:
         train_config = checkpoint_dict["train_config"]
         model_config = checkpoint_dict["model_config"]

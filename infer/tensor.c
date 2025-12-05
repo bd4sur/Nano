@@ -1,12 +1,12 @@
 #include "tensor.h"
 
-void dequantize(QuantizedTensor *qx, float* x, int n) {
+void dequantize(Q80_Tensor *qx, float* x, int n) {
     for (int i = 0; i < n; i++) {
         x[i] = qx->q[i] * qx->s[i / GS];
     }
 }
 
-void quantize(QuantizedTensor *qx, float* x, int n) {
+void quantize(Q80_Tensor *qx, float* x, int n) {
     int num_groups = n / GS;
 
     for (int group = 0; group < num_groups; group++) {
@@ -33,27 +33,27 @@ void quantize(QuantizedTensor *qx, float* x, int n) {
     }
 }
 
-QuantizedTensor *init_quantized_tensors(float *w, int n, int size_each) {
-    QuantizedTensor *res = malloc(n * sizeof(QuantizedTensor));
+Q80_Tensor *init_quantized_tensors(float *w, int n, int size_each) {
+    Q80_Tensor *res = malloc(n * sizeof(Q80_Tensor));
     for(int i = 0; i < n; i++) {
         QTYPE *qv = (QTYPE *)calloc(size_each, sizeof(QTYPE));
         float *sf = (float *)calloc(size_each / GS, sizeof(float));
-        res[i] = (QuantizedTensor){ .q = qv, .s = sf };
+        res[i] = (Q80_Tensor){ .q = qv, .s = sf };
         quantize(res + i, w + i * size_each, size_each);
     }
     return res;
 }
 
 /* initialize `n` x quantized tensor (with `size_each` elements), starting from memory pointed at *ptr */
-QuantizedTensor *parse_quantized_tensors(void **ptr, int n, int size_each) {
+Typed_Tensor *parse_quantized_tensors(void **ptr, int n, int size_each) {
     void *p = *ptr;
-    QuantizedTensor *res = malloc(n * sizeof(QuantizedTensor));
-    for(int i=0; i<n; i++) {
+    Typed_Tensor *res = malloc(n * sizeof(Typed_Tensor));
+    for(int i = 0; i < n; i++) {
         /* map quantized int8 values*/
-        res[i].q = (int8_t*)p;
+        res[i].tensor_q80.q = (int8_t*)p;
         p = (int8_t*)p + size_each;
         /* map scale factors */
-        res[i].s = (float*)p;
+        res[i].tensor_q80.s = (float*)p;
         p = (float*)p + size_each / GS;
     }
     *ptr = p; // advance ptr to current position

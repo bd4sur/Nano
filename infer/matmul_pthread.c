@@ -163,7 +163,7 @@ void matmul_quant_task(void* arg) {
     free(args);
 }
 
-void matmul_quant_pthread(float* xout, QuantizedTensor *x, QuantizedTensor *w, int n, int d) {
+void matmul_quant_pthread(float* xout, Q80_Tensor *x, Q80_Tensor *w, int n, int d) {
     // 初始化全局线程池（首次调用时）
     if (!g_threadpool) {
         int num_cores = sysconf(_SC_NPROCESSORS_ONLN);

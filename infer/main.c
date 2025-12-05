@@ -384,7 +384,7 @@ int32_t on_llm_finished(Nano_Session *session) {
 // 全局组件操作过程
 
 void init_main_menu() {
-    wcscpy(main_menu_state->title, L"Nano V202508");
+    wcscpy(main_menu_state->title, L"Nano-Pod V2512");
     wcscpy(main_menu_state->items[0], L"电子鹦鹉");
     wcscpy(main_menu_state->items[1], L"电子书");
     wcscpy(main_menu_state->items[2], L"设置");
@@ -1191,7 +1191,7 @@ int main() {
             wchar_t readme_buf[128];
             // 节流
             if (global_state->timer % 200 == 0) {
-                swprintf(readme_buf, 128, L"Project Nano v2508\n电子鹦鹉·端上大模型\n(c) 2025 BD4SUR\n\nUPS:%04dmV/%d%% ", global_state->ups_voltage, global_state->ups_soc);
+                swprintf(readme_buf, 128, L"Nano-Pod v2512\n电子鹦鹉·端上大模型\n(c) 2025 BD4SUR\n\nUPS:%04dmV/%d%% ", global_state->ups_voltage, global_state->ups_soc);
                 wcscpy(widget_textarea_state->text, readme_buf);
                 widget_textarea_state->current_line = 0;
                 widget_textarea_state->is_show_scroll_bar = 0;

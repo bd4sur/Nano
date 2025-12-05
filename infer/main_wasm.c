@@ -1,4 +1,5 @@
-#include "bpe.h"
+#include "utils.h"
+#include "tokenizer.h"
 #include "infer.h"
 
 static Nano_Context *g_llm_ctx;

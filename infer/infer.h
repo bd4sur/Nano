@@ -73,14 +73,17 @@ typedef struct {
 } LLM_Config;
 
 typedef struct {
-    QuantizedTensor *q_tokens;  // (vocab_size, n_embd) quantized
+    Typed_Tensor *q_tokens;  // (vocab_size, n_embd) quantized
     float *token_embedding; // (vocab_size, n_embd)
-    float *rms_norm_attn;   // (layer, n_embd)
 
-    QuantizedTensor *wq;    // (layer, n_embd, n_heads * head_dim)
-    QuantizedTensor *wk;    // (layer, n_embd, n_kv_heads * head_dim)
-    QuantizedTensor *wv;    // (layer, n_embd, n_kv_heads * head_dim)
-    QuantizedTensor *wo;    // (layer, n_heads * head_dim, n_embd)
+    float *rms_norm_attn;   // (layer, n_embd)
+    float *rms_norm_ffn;    // (layer, n_embd)
+    float *rms_norm_final;  // (n_embd,)
+
+    Typed_Tensor *wq;    // (layer, n_embd, n_heads * head_dim)
+    Typed_Tensor *wk;    // (layer, n_embd, n_kv_heads * head_dim)
+    Typed_Tensor *wv;    // (layer, n_embd, n_kv_heads * head_dim)
+    Typed_Tensor *wo;    // (layer, n_heads * head_dim, n_embd)
 
     // Qwen2 only
     float *bq;              // (layer, n_heads * head_dim)
@@ -91,17 +94,14 @@ typedef struct {
     float *q_norm;          // (layer, head_size)
     float *k_norm;          // (layer, head_size)
 
-    float *rms_norm_ffn;    // (layer, n_embd)
+    Typed_Tensor *w1;    // (layer, n_hidden, n_embd)
+    Typed_Tensor *w2;    // (layer, n_embd, n_hidden)
+    Typed_Tensor *w3;    // (layer, n_hidden, n_embd)
 
-    QuantizedTensor *w1;    // (layer, n_hidden, n_embd)
-    QuantizedTensor *w2;    // (layer, n_embd, n_hidden)
-    QuantizedTensor *w3;    // (layer, n_hidden, n_embd)
-
-    float *rms_norm_final;  // (n_embd,)
-
-    QuantizedTensor *token_classifier; // (vocab_size, n_embd)
     float *freq_cis_real;
     float *freq_cis_imag;
+
+    Typed_Tensor *token_classifier; // (vocab_size, n_embd)
 } LLM_Param;
 
 typedef struct {
@@ -111,9 +111,9 @@ typedef struct {
     float *xb2;     // an additional buffer just for convenience (n_embd,)
     float *hb;      // buffer for hidden dimension in the ffn (n_hidden,)
     float *hb2;     // buffer for hidden dimension in the ffn (n_hidden,)
-    QuantizedTensor xq;   // quantized x/xb (n_embd,)
-    QuantizedTensor xbaq; // quantized xba (q_dim,)
-    QuantizedTensor hq;   // quantized hb (n_hidden,)
+    Typed_Tensor xq;   // quantized x/xb (n_embd,)
+    Typed_Tensor xbaq; // quantized xba (q_dim,)
+    Typed_Tensor hq;   // quantized hb (n_hidden,)
     float *q;       // query (q_dim,) q_dim = (n_embd if model == Nano||Qwen2 else (head_dim * n_head))
     float *k;       // key (kv_dim,)
     float *v;       // value (kv_dim,)
@@ -138,6 +138,8 @@ typedef struct {
     FwdBuffer state;
     // 语言模型架构类别
     uint32_t arch;
+    // 量化参数
+    uint32_t quant_type;
     // 与mmap相关的
     int fd;            // file descriptor for memory mapping
     char *buffer;       // memory mapped data pointer

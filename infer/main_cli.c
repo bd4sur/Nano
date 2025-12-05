@@ -8,7 +8,7 @@
 // 推理引擎实例（单例模式）
 static Nano_Context *g_llm_ctx;
 
-static char *MODEL_PATH = "/home/bd4sur/ai/_model/Nano/nano_168m_625000_sft_947000_q80.bin";
+static char *MODEL_PATH = "/home/bd4sur/ai/_model/Nano/qwen3-0b6-q80.bin";
 
 // 是否是第一次decoding：用于判断何时清除Pre-filling进度内容
 int32_t g_is_first_decoding = 1;
@@ -216,6 +216,7 @@ int main() {
     printf("  is_shared_classifier = %d\n", g_llm_ctx->llm->config.is_shared_classifier);
     printf("  head_dim = %d\n", g_llm_ctx->llm->config.head_dim);
     printf("  llm->arch = %d\n", g_llm_ctx->llm->arch);
+    printf("  llm->quant_type = %d\n", g_llm_ctx->llm->quant_type);
 
     printf("\n请输入问题，过程中可按Enter换行；输入完成请按两次Ctrl+D提交。\n\n");
 

@@ -41,8 +41,8 @@ typedef struct {
 
 typedef struct {
     float* xout;
-    QuantizedTensor* x;
-    QuantizedTensor* w;
+    Q80_Tensor* x;
+    Q80_Tensor* w;
     int n;
     int start_i;
     int end_i;
@@ -50,7 +50,7 @@ typedef struct {
 } ThreadArgsQuant;
 
 void matmul_pthread(float* xout, float* x, float* w, int n, int d);
-void matmul_quant_pthread(float* xout, QuantizedTensor *x, QuantizedTensor *w, int n, int d);
+void matmul_quant_pthread(float* xout, Q80_Tensor *x, Q80_Tensor *w, int n, int d);
 void matmul_pthread_cleanup();
 
 #endif

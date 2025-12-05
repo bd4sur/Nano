@@ -5,6 +5,12 @@
 #include <stdint.h>
 #include <math.h>
 
+// 量化类型
+#define QUANT_TYPE_F32  (0)
+#define QUANT_TYPE_F16  (1)
+#define QUANT_TYPE_BF16 (2)
+#define QUANT_TYPE_Q80  (10)
+
 // 量化相关
 #define GS (128)        // 分组量化的组长度
 #define QTYPE int8_t    // 量化类型
@@ -13,11 +19,16 @@
 typedef struct {
     QTYPE* q;     // quantized values
     float* s;     // scaling factors
-} QuantizedTensor;
+} Q80_Tensor;
 
-void dequantize(QuantizedTensor *qx, float* x, int n);
-void quantize(QuantizedTensor *qx, float* x, int n);
-QuantizedTensor *init_quantized_tensors(float *w, int n, int size_each);
-QuantizedTensor *parse_quantized_tensors(void **ptr, int n, int size_each);
+typedef union {
+    Q80_Tensor tensor_q80;  // type = QUANT_TYPE_Q80
+    float *tensor_f32;      // type = QUANT_TYPE_F32
+} Typed_Tensor;
+
+void dequantize(Q80_Tensor *qx, float* x, int n);
+void quantize(Q80_Tensor *qx, float* x, int n);
+Q80_Tensor *init_quantized_tensors(float *w, int n, int size_each);
+Typed_Tensor *parse_quantized_tensors(void **ptr, int n, int size_each);
 
 #endif

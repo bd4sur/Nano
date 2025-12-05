@@ -35,9 +35,16 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
     s->xb2     = calloc(llm_cfg->n_embd, sizeof(float));
     s->hb      = calloc(llm_cfg->n_hidden, sizeof(float));
     s->hb2     = calloc(llm_cfg->n_hidden, sizeof(float));
-    s->xq      = (QuantizedTensor) { .q = calloc(llm_cfg->n_embd, sizeof(QTYPE)), .s = calloc(llm_cfg->n_embd / GS, sizeof(float)) };
-    s->xbaq    = (QuantizedTensor) { .q = calloc(q_dim, sizeof(QTYPE)), .s = calloc(q_dim / GS, sizeof(float)) };
-    s->hq      = (QuantizedTensor) { .q = calloc(llm_cfg->n_hidden, sizeof(QTYPE)), .s = calloc(llm_cfg->n_hidden / GS, sizeof(float)) };
+
+    if (llm->quant_type == QUANT_TYPE_Q80) {
+        Q80_Tensor xq_tmp   = (Q80_Tensor) { .q = calloc(llm_cfg->n_embd, sizeof(QTYPE)), .s = calloc(llm_cfg->n_embd / GS, sizeof(float)) };
+        Q80_Tensor xbaq_tmp = (Q80_Tensor) { .q = calloc(q_dim, sizeof(QTYPE)), .s = calloc(q_dim / GS, sizeof(float)) };
+        Q80_Tensor hq_tmp   = (Q80_Tensor) { .q = calloc(llm_cfg->n_hidden, sizeof(QTYPE)), .s = calloc(llm_cfg->n_hidden / GS, sizeof(float)) };
+        s->xq               = (Typed_Tensor) { .tensor_q80 = xq_tmp };
+        s->xbaq             = (Typed_Tensor) { .tensor_q80 = xbaq_tmp };
+        s->hq               = (Typed_Tensor) { .tensor_q80 = hq_tmp };
+    }
+
     s->q       = calloc(q_dim, sizeof(float));
     s->k_cache = calloc(llm_cfg->n_layer * max_seq_len * kv_dim, sizeof(float));
     s->v_cache = calloc(llm_cfg->n_layer * max_seq_len * kv_dim, sizeof(float));
@@ -52,26 +59,27 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
 }
 
 
-void free_fwd_buffer(FwdBuffer* s) {
+void free_fwd_buffer(LLM* llm) {
+    FwdBuffer* s = &llm->state;
     free(s->x);
     free(s->xb);
     free(s->xba);
     free(s->xb2);
     free(s->hb);
     free(s->hb2);
-    free(s->xq.q);
-    free(s->xq.s);
-    free(s->xbaq.q);
-    free(s->xbaq.s);
-    free(s->hq.q);
-    free(s->hq.s);
+    if (llm->quant_type == QUANT_TYPE_Q80) {
+        free(s->xq.tensor_q80.q);
+        free(s->xq.tensor_q80.s);
+        free(s->xbaq.tensor_q80.q);
+        free(s->xbaq.tensor_q80.s);
+        free(s->hq.tensor_q80.q);
+        free(s->hq.tensor_q80.s);
+    }
     free(s->q);
     free(s->att);
     free(s->logits);
     free(s->k_cache);
     free(s->v_cache);
-    // free(s->q0); free(s->k0); free(s->v0); free(s->o0);
-    // free(s->q1); free(s->k1); free(s->v1); free(s->o1);
 }
 
 void memory_map_params(LLM *llm, void* ptr) {
@@ -96,47 +104,36 @@ void memory_map_params(LLM *llm, void* ptr) {
     w->rms_norm_ffn   = fptr;   fptr += n_layer * cfg->n_embd;
     w->rms_norm_final = fptr;   fptr += cfg->n_embd;
 
-    ptr = (void*)fptr;
+    if (llm->quant_type == QUANT_TYPE_Q80) {
+        ptr = (void*)fptr;
 
-    // w->token_embedding = ptr;ptr += cfg->vocab_size * cfg->n_embd;
+        w->q_tokens = parse_quantized_tensors(&ptr, 1, cfg->vocab_size * cfg->n_embd);
+        w->token_embedding = malloc(cfg->vocab_size * cfg->n_embd * sizeof(float));
+        dequantize(&w->q_tokens->tensor_q80, w->token_embedding, cfg->vocab_size * cfg->n_embd);
 
-    w->q_tokens = parse_quantized_tensors(&ptr, 1, cfg->vocab_size * cfg->n_embd);
-    w->token_embedding = malloc(cfg->vocab_size * cfg->n_embd * sizeof(float));
-    dequantize(w->q_tokens, w->token_embedding, cfg->vocab_size * cfg->n_embd);
+        w->wq = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_head * head_size));
+        w->wk = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
+        w->wv = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
+        w->wo = parse_quantized_tensors(&ptr, n_layer, (cfg->n_head * head_size) * cfg->n_embd);
 
-/*
-    float *wq_fp32 = ptr;    ptr += n_layer * cfg->n_embd * (cfg->n_head * head_size);
-    float *wk_fp32 = ptr;    ptr += n_layer * cfg->n_embd * (cfg->n_kv_head * head_size);
-    float *wv_fp32 = ptr;    ptr += n_layer * cfg->n_embd * (cfg->n_kv_head * head_size);
-    float *wo_fp32 = ptr;    ptr += n_layer * (cfg->n_head * head_size) * cfg->n_embd;
+        w->w1 = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * cfg->n_hidden);
+        w->w2 = parse_quantized_tensors(&ptr, n_layer, cfg->n_hidden * cfg->n_embd);
+        w->w3 = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * cfg->n_hidden);
 
-    w->wq = init_quantized_tensors(wq_fp32, n_layer, cfg->n_embd * (cfg->n_head * head_size));
-    w->wk = init_quantized_tensors(wk_fp32, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
-    w->wv = init_quantized_tensors(wv_fp32, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
-    w->wo = init_quantized_tensors(wo_fp32, n_layer, (cfg->n_head * head_size) * cfg->n_embd);
-*/
+        fptr = (float*)ptr;
+    }
+    else if (llm->quant_type == QUANT_TYPE_F32) {
+        w->token_embedding = fptr; fptr += cfg->vocab_size * cfg->n_embd;
 
-    w->wq = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_head * head_size));
-    w->wk = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
-    w->wv = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
-    w->wo = parse_quantized_tensors(&ptr, n_layer, (cfg->n_head * head_size) * cfg->n_embd);
+        w->wq = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->wq->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_head * head_size);
+        w->wk = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->wk->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_kv_head * head_size);
+        w->wv = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->wv->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_kv_head * head_size);
+        w->wo = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->wo->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_head * head_size) * cfg->n_embd;
 
-/*
-    float *w1_fp32 = ptr;    ptr += n_layer * cfg->n_embd * cfg->n_hidden;
-    float *w2_fp32 = ptr;    ptr += n_layer * cfg->n_hidden * cfg->n_embd;
-    float *w3_fp32 = ptr;    ptr += n_layer * cfg->n_embd * cfg->n_hidden;
-
-    w->w1 = init_quantized_tensors(w1_fp32, n_layer, cfg->n_embd * cfg->n_hidden);
-    w->w2 = init_quantized_tensors(w2_fp32, n_layer, cfg->n_hidden * cfg->n_embd);
-    w->w3 = init_quantized_tensors(w3_fp32, n_layer, cfg->n_embd * cfg->n_hidden);
-*/
-
-    w->w1 = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * cfg->n_hidden);
-    w->w2 = parse_quantized_tensors(&ptr, n_layer, cfg->n_hidden * cfg->n_embd);
-    w->w3 = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * cfg->n_hidden);
-
-
-    fptr = (float*)ptr;
+        w->w1 = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->w1->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * cfg->n_hidden;
+        w->w2 = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->w2->tensor_f32 = fptr;  fptr += n_layer * cfg->n_hidden * cfg->n_embd;
+        w->w3 = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->w3->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * cfg->n_hidden;
+    }
 
     if (llm->arch == LLM_ARCH_QWEN2) {
         w->bq = fptr;         fptr += n_layer * (cfg->n_head * head_size);
@@ -169,10 +166,14 @@ void memory_map_params(LLM *llm, void* ptr) {
         fptr += cfg->block_size * head_size / 2;
     }
 
-    ptr = (void*)fptr;
-    // w->token_classifier = cfg->is_shared_classifier ? w->token_embedding : ptr;
-    // w->token_classifier = init_quantized_tensors(w->token_embedding, 1, cfg->n_embd * cfg->vocab_size);
-    w->token_classifier = cfg->is_shared_classifier ? w->q_tokens : parse_quantized_tensors(&ptr, 1, cfg->n_embd * cfg->vocab_size);
+    if (llm->quant_type == QUANT_TYPE_Q80) {
+        ptr = (void*)fptr;
+        w->token_classifier = cfg->is_shared_classifier ? w->q_tokens : parse_quantized_tensors(&ptr, 1, cfg->n_embd * cfg->vocab_size);
+    }
+    else if (llm->quant_type == QUANT_TYPE_F32) {
+        w->token_classifier = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));
+        w->token_classifier->tensor_f32 = cfg->is_shared_classifier ? w->token_embedding : ptr;
+    }
 }
 
 
@@ -187,14 +188,14 @@ void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
 
     uint32_t offset = 0;
 
-    /*uint32_t magic_number_0 = header[offset];*/ offset++;
-    /*uint32_t magic_number_1 = header[offset];*/ offset++;
+    uint32_t magic_number_0 = header[offset]; offset++;
+    uint32_t magic_number_1 = header[offset]; offset++;
 
-    /*uint32_t major_version  = header[offset];*/ offset++;
-    /*uint32_t minor_version  = header[offset];*/ offset++;
+    uint32_t major_version  = header[offset]; offset++;
+    uint32_t minor_version  = header[offset]; offset++;
 
     uint32_t model_type     = header[offset]; offset++;
-    /*uint32_t config_length  = header[offset];*/ offset++;
+    uint32_t config_length  = header[offset]; offset++;
 
     config->block_size      = header[offset]; offset++;
     config->vocab_size      = header[offset]; offset++;
@@ -206,7 +207,12 @@ void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
     config->is_shared_classifier = header[offset]; offset++;
     config->head_dim        = header[offset]; offset++;
 
+    uint32_t quant_type     = header[offset]; offset++;
+    uint32_t group_size     = header[offset]; offset++;
+
     llm->arch = model_type;
+
+    llm->quant_type = (quant_type == 0) ? QUANT_TYPE_F32 : QUANT_TYPE_Q80; // TODO 量化类型enum待统一
 
     // 解析词表，同时构建trie树和hashmap
 
@@ -347,7 +353,7 @@ void free_llm(LLM* llm, Tokenizer *tk) {
             free(llm->params.freq_cis_imag);
         }
     }
-    free_fwd_buffer(&llm->state);
+    free_fwd_buffer(llm);
 
     free(llm);
 }
@@ -587,9 +593,9 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
 }
 
 // W (d,n) @ x (n,) -> xout (d,)
-void matmul_quant(float* xout, QuantizedTensor *x, QuantizedTensor *w, int n, int d) {
+void matmul_quant(float* xout, Typed_Tensor *x, Typed_Tensor *w, int n, int d) {
 #ifdef MATMUL_PTHREAD
-    matmul_quant_pthread(xout, x, w, n, d);
+    matmul_quant_pthread(xout, x->tensor_q80, w->tensor_q80, n, d);
 #else
     int i;
     #pragma omp parallel for private(i)
@@ -603,9 +609,9 @@ void matmul_quant(float* xout, QuantizedTensor *x, QuantizedTensor *w, int n, in
         int j;
         for (j = 0; j <= n - GS; j += GS) {
             for (int k = 0; k < GS; k++) {
-                ival += ((int32_t) x->q[j + k]) * ((int32_t) w->q[in + j + k]);
+                ival += ((int32_t) x->tensor_q80.q[j + k]) * ((int32_t) w->tensor_q80.q[in + j + k]);
             }
-            val += ((float) ival) * w->s[(in + j) / GS] * x->s[j / GS];
+            val += ((float) ival) * w->tensor_q80.s[(in + j) / GS] * x->tensor_q80.s[j / GS];
             ival = 0;
         }
 
@@ -689,14 +695,17 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
         s->v = s->v_cache + layer_offset + pos * kv_dim;
 
         // qkv matmuls for this position
-        // matmul(s->q, s->xb, w->wq + l*q_dim*n_embd,  n_embd, q_dim);
-        // matmul(s->k, s->xb, w->wk + l*kv_dim*n_embd, n_embd, kv_dim);
-        // matmul(s->v, s->xb, w->wv + l*kv_dim*n_embd, n_embd, kv_dim);
-
-        quantize(&s->xq, s->xb, n_embd);
-        matmul_quant(s->q, &s->xq, w->wq + l, n_embd, q_dim);
-        matmul_quant(s->k, &s->xq, w->wk + l, n_embd, kv_dim);
-        matmul_quant(s->v, &s->xq, w->wv + l, n_embd, kv_dim);
+        if (llm->quant_type == QUANT_TYPE_F32) {
+            matmul(s->q, s->xb, w->wq->tensor_f32 + l*q_dim*n_embd,  n_embd, q_dim);
+            matmul(s->k, s->xb, w->wk->tensor_f32 + l*kv_dim*n_embd, n_embd, kv_dim);
+            matmul(s->v, s->xb, w->wv->tensor_f32 + l*kv_dim*n_embd, n_embd, kv_dim);
+        }
+        else if (llm->quant_type == QUANT_TYPE_Q80) {
+            quantize(&s->xq.tensor_q80, s->xb, n_embd);
+            matmul_quant(s->q, &s->xq, w->wq + l, n_embd, q_dim);
+            matmul_quant(s->k, &s->xq, w->wk + l, n_embd, kv_dim);
+            matmul_quant(s->v, &s->xq, w->wv + l, n_embd, kv_dim);
+        }
 
         if (llm->arch == LLM_ARCH_QWEN2) {
             // TODO Qwen2 bq bk bv
@@ -818,10 +827,13 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
         }
 
         // final matmul to get the output of the attention
-        // matmul(s->xb2, s->xba, w->wo + l*n_embd*q_dim, q_dim, n_embd);
-
-        quantize(&s->xbaq, s->xba, q_dim);
-        matmul_quant(s->xb2, &s->xbaq, w->wo + l, q_dim, n_embd);
+        if (llm->quant_type == QUANT_TYPE_F32) {
+            matmul(s->xb2, s->xba, w->wo->tensor_f32 + l*n_embd*q_dim, q_dim, n_embd);
+        }
+        else if (llm->quant_type == QUANT_TYPE_Q80) {
+            quantize(&s->xbaq.tensor_q80, s->xba, q_dim);
+            matmul_quant(s->xb2, &s->xbaq, w->wo + l, q_dim, n_embd);
+        }
 
         // 计算output的低秩分解分支，并将其累加到原来的输出上
         if(use_lora == 1) {
@@ -841,12 +853,15 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
 
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
-        // matmul(s->hb, s->xb, w->w1 + l*n_hidden*n_embd, n_embd, n_hidden);
-        // matmul(s->hb2, s->xb, w->w3 + l*n_hidden*n_embd, n_embd, n_hidden);
-
-        quantize(&s->xq, s->xb, n_embd);
-        matmul_quant(s->hb, &s->xq, w->w1 + l, n_embd, n_hidden);
-        matmul_quant(s->hb2, &s->xq, w->w3 + l, n_embd, n_hidden);
+        if (llm->quant_type == QUANT_TYPE_F32) {
+            matmul(s->hb, s->xb, w->w1->tensor_f32 + l*n_hidden*n_embd, n_embd, n_hidden);
+            matmul(s->hb2, s->xb, w->w3->tensor_f32 + l*n_hidden*n_embd, n_embd, n_hidden);
+        }
+        else if (llm->quant_type == QUANT_TYPE_Q80) {
+            quantize(&s->xq.tensor_q80, s->xb, n_embd);
+            matmul_quant(s->hb, &s->xq, w->w1 + l, n_embd, n_hidden);
+            matmul_quant(s->hb2, &s->xq, w->w3 + l, n_embd, n_hidden);
+        }
 
         // SwiGLU non-linearity
         for (int i = 0; i < n_hidden; i++) {
@@ -859,10 +874,13 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
         }
 
         // final matmul to get the output of the ffn
-        // matmul(s->xb, s->hb, w->w2 + l*n_embd*n_hidden, n_hidden, n_embd);
-
-        quantize(&s->hq, s->hb, n_hidden);
-        matmul_quant(s->xb, &s->hq, w->w2 + l, n_hidden, n_embd);
+        if (llm->quant_type == QUANT_TYPE_F32) {
+            matmul(s->xb, s->hb, w->w2->tensor_f32 + l*n_embd*n_hidden, n_hidden, n_embd);
+        }
+        else if (llm->quant_type == QUANT_TYPE_Q80) {
+            quantize(&s->hq.tensor_q80, s->hb, n_hidden);
+            matmul_quant(s->xb, &s->hq, w->w2 + l, n_hidden, n_embd);
+        }
 
         // residual connection
         for (int i = 0; i < n_embd; i++) {
@@ -874,10 +892,13 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
     rmsnorm(x, x, w->rms_norm_final, n_embd);
 
     // classifier into logits
-    // matmul(s->logits, x, w->token_classifier, cfg->n_embd, cfg->vocab_size);
-
-    quantize(&s->xq, x, cfg->n_embd);
-    matmul_quant(s->logits, &s->xq, w->token_classifier, cfg->n_embd, cfg->vocab_size);
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(s->logits, x, w->token_classifier->tensor_f32, cfg->n_embd, cfg->vocab_size);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->xq.tensor_q80, x, cfg->n_embd);
+        matmul_quant(s->logits, &s->xq, w->token_classifier, cfg->n_embd, cfg->vocab_size);
+    }
 
     return s->logits;
 }
