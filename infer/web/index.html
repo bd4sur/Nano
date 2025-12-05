@@ -96,15 +96,18 @@
     <div class="ChatInput">
         <div class="LoadModel">
             <div class="LoadModelPrompt" style="display: flex; align-items: center; flex-direction: column; margin: 0px 0 0px 0; font-size: 14px;">
-                <div style="color: #262628;">若已部署推理服务</div>
-                <div style="color: #26262866; font-size: 11px; margin: 5px 0 0 0;">（部署方式详见<a href="https://github.com/bd4sur/Nano/blob/master/README.md" target="_blank">文档</a>，支持Qwen等主流模型）</div>
-                <div class="LoadModelButton LoadLocalModelButton" id="enable_api" style="margin-bottom: 26px;">
+                <div style="color: #000;">若已部署推理服务</div>
+                <div style="color: #26262866; font-size: 11px; margin: 5px 0 0 0;">部署方式详见<a href="https://github.com/bd4sur/Nano/blob/master/README.md" target="_blank">文档</a>，支持Qwen等主流模型</div>
+                <div class="LoadModelButton LoadLocalModelButton" id="enable_api">
                     <div style="font-weight: bold; background: deepskyblue; color: #fff; padding: 6px 20px; border-radius: 100px;">调用推理服务API</div>
                 </div>
             </div>
+
+            <div class="LoadModelPrompt" style="height: 1px; width: 80%; background: linear-gradient(90deg, transparent, #cfd3dc, transparent); margin: 6px 0 15px 0;"></div>
+
             <div class="LoadModelPrompt" style="display: flex; align-items: center; flex-direction: column; margin: 0px 0 0px 0; font-size: 14px;">
-                <div style="color: #262628;">或者，下载并手动加载语言模型</div>
-                <div style="color: #26262866; font-size: 11px; margin: 5px 0 0 0;">（基座模型加载后，可按需挂载LoRA插件）</div>
+                <div style="color: #000;">或者，下载并手动加载语言模型</div>
+                <div style="color: #26262866; font-size: 11px; margin: 5px 0 0 0;">基础模型加载后，可按需挂载LoRA插件<br>JavaScript推理引擎仅支持2512及以后版本的FP32模型</div>
             </div>
             <div style="display: flex; align-items: center; flex-direction: row;">
                 <div class="LoadModelButton LoadLocalModelButton" id="download_model_button">
@@ -116,16 +119,19 @@
                     <div id="load_model_button_prompt" style="font-weight: bold;">加载本地模型</div>
                 </div>
             </div>
+
+            <div class="LoadModelPrompt" style="height: 1px; width: 80%; background: linear-gradient(90deg, transparent, #cfd3dc, transparent); margin: 3px 0 0 0;"></div>
+
             <div class="LoadModelPrompt" style="display: flex; align-items: center; flex-direction: column; margin: 16px 0; font-size: 14px;">
-                <div style="color: #262628;">或者，直接拉取并体验下列模型</div>
-                <div style="color: #26262866; font-size: 11px; margin: 5px 0 0 0;">（请确保HuggingFace可访问，模型最大约700MiB）</div>
+                <div style="color: #000;">或者，直接拉取并体验下列模型</div>
+                <div style="color: #26262866; font-size: 11px; margin: 5px 0 0 0;">请确保可访问HuggingFace，模型最大约600MiB<br>Qwen3-0.6B模型上下文有限，仅作可行性验证</div>
             </div>
             <div style="display: flex;">
                 <div class="LoadModelButton LoadRemoteModelButton" data-model-name="Nano-56M-QA-V2" data-model-url="https://huggingface.co/bd4sur/Nano-56M/resolve/main/nano_56m_99000_sft_v2_200000_q80.bin" data-max-seq-len="512">
-                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-56M-QA<br><span style="font-weight: normal; font-size: 11px;">通用问答</span></div>
+                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-56M<br><span style="font-weight: normal; font-size: 11px;">通用问答</span></div>
                 </div>
                 <div class="LoadModelButton LoadRemoteModelButton" data-model-name="Nano-168M-QA-V2" data-model-url="https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_947000_q80.bin" data-max-seq-len="512">
-                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-168M-QA<br><span style="font-weight: normal; font-size: 11px;">通用问答</span></div>
+                    <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">Nano-168M<br><span style="font-weight: normal; font-size: 11px;">通用问答</span></div>
                 </div>
                 <!-- <div class="LoadModelButton LoadRemoteModelButton" data-model-name="168M-QA-AR" data-model-url="https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_875000_amateur_radio_890000.bin" data-max-seq-len="512">
                     <div class="LoadRemoteModelButtonPrompt" style="font-weight: bold;">168M-QA-AR<br><span style="font-weight: normal; font-size: 11px;">业余无线电考试</span></div>
