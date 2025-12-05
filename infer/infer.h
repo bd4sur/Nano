@@ -20,9 +20,9 @@
 #include <locale.h>
 #include <wchar.h>
 
-#include "quant.h"
-#include "hashmap.h"
-#include "trie.h"
+#include "utils.h"
+#include "tokenizer.h"
+#include "tensor.h"
 
 // 是否使用mmap？
 #define NANO_USE_MMAP
@@ -49,16 +49,12 @@
 #define LLM_ARCH_QWEN2 (2)
 #define LLM_ARCH_QWEN3 (3)
 
-#define MAX_TOKEN_LENGTH  (17) // NOTE 虽然可以扫描词表得到该值，但是考虑到性能，设置为固定值（对于16384词表而言，至少17）
-
 #define LLM_RUNNING_IN_PREFILLING (11)
 #define LLM_RUNNING_IN_DECODING   (12)
 #define LLM_STOPPED_WITH_ERROR    (-1)
 #define LLM_STOPPED_NORMALLY      (20)
 #define LLM_STOPPED_IN_PREFILLING (21)
 #define LLM_STOPPED_IN_DECODING   (22)
-
-#define MAX_PROMPT_BUFFER_LENGTH  (65536)
 
 // ===============================================================================
 // 数据结构定义
@@ -176,29 +172,6 @@ typedef struct {
     float *data;
 } LoRA;
 
-// 仅用于LLM_ARCH_QWEN2/3
-typedef struct {
-    char *str;
-    int id;
-} TokenIndex;
-
-typedef struct {
-    // 共享
-    uint32_t vocab_size;
-    // 仅LLM_ARCH_NANO
-    wchar_t *unicode_charset;
-    wchar_t **token_list;
-    struct Trie *vocab_trie;
-    struct Map *unicode_to_id_map;
-    struct Map *token_to_id_map;
-    // 仅LLM_ARCH_QWEN2/3
-    char** vocab;
-    float* vocab_scores;
-    TokenIndex *sorted_vocab;
-    unsigned int max_token_length;
-    unsigned char byte_pieces[512]; // stores all single-byte strings
-} Tokenizer;
-
 typedef struct {
     float prob;
     int index;
@@ -239,10 +212,6 @@ typedef struct {
 } Nano_Session;
 
 
-unsigned int random_u32(unsigned long long *state);
-float random_f32(unsigned long long *state);
-long time_in_ms();
-
 void load_llm_from_buffer(LLM *llm, Tokenizer *tk, char *buffer, uint32_t max_seq_len);
 void load_llm(LLM *llm, Tokenizer *tk, char *model_path, uint32_t max_seq_len);
 Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long rng_seed);
@@ -251,11 +220,6 @@ LoRA *load_lora(LLM *llm, char *lora_path);
 
 Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed);
 void llm_context_free(Nano_Context *ctx);
-
-uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens_ptr);
-wchar_t *decode_nano(Tokenizer *t, uint32_t *ids, uint32_t len);
-
-wchar_t *decode(Nano_Context *ctx, uint32_t *ids, uint32_t len);
 
 uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t pos, int is_prefilling);
 
@@ -270,15 +234,6 @@ int32_t generate_sync(
     int32_t (*on_prefilling)(Nano_Session*),
     int32_t (*on_decoding)(Nano_Session*),
     int32_t (*on_finished)(Nano_Session*)
-);
-
-int32_t generate(
-    Nano_Context *ctx,
-    wchar_t *prompt,
-    uint32_t max_seq_len,
-    int32_t (*on_prefilling)(wchar_t*, uint32_t, uint32_t),
-    int32_t (*on_decoding)(wchar_t*, uint32_t, float),
-    int32_t (*on_finished)(wchar_t*, uint32_t, float)
 );
 
 void free_lora(LLM *llm, LoRA *lora);

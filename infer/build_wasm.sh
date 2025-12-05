@@ -17,10 +17,9 @@ export CC="${WASI_SDK_PATH}/bin/clang --sysroot=${WASI_SDK_PATH}/share/wasi-sysr
 export LD="${WASI_SDK_PATH}/bin/wasm-ld"
 
 $CC --target=wasm32-wasi -O3 -I. -o obj_main_wasm.o -c main_wasm.c
-$CC --target=wasm32-wasi -O3 -I. -o obj_bpe.o -c bpe.c
-$CC --target=wasm32-wasi -O3 -I. -o obj_hashmap.o -c hashmap.c
-$CC --target=wasm32-wasi -O3 -I. -o obj_trie.o -c trie.c
-$CC --target=wasm32-wasi -O3 -I. -o obj_quant.o -c quant.c
+$CC --target=wasm32-wasi -O3 -I. -o obj_utils.o -c utils.c
+$CC --target=wasm32-wasi -O3 -I. -o obj_tokenizer.o -c tokenizer.c
+$CC --target=wasm32-wasi -O3 -I. -o obj_tensor.o -c tensor.c
 $CC --target=wasm32-wasi -O3 -I. -o obj_infer.o -c infer.c
 
 $LD --export-dynamic --allow-undefined --lto-O3 \
@@ -37,9 +36,9 @@ $LD --export-dynamic --allow-undefined --lto-O3 \
   --export=unload_lora_external \
   --export=close_nano \
   --no-entry \
-  --import-memory -L${WASI_SDK_PATH}/lib/wasi -lclang_rt.builtins-wasm32 obj_main_wasm.o obj_bpe.o obj_hashmap.o obj_trie.o obj_quant.o obj_infer.o -o ../infer/nano_infer.wasm \
+  --import-memory -L${WASI_SDK_PATH}/lib/wasi -lclang_rt.builtins-wasm32 obj_main_wasm.o obj_utils.o obj_tokenizer.o obj_tensor.o obj_infer.o -o ../infer/nano_infer.wasm \
 
-rm -f obj_main_wasm.o obj_bpe.o obj_hashmap.o obj_trie.o obj_quant.o obj_infer.o
+rm -f obj_main_wasm.o obj_utils.o obj_tokenizer.o obj_tensor.o obj_infer.o
 
 # 作为参考，用emscripten编译的选项如下
 if false; then

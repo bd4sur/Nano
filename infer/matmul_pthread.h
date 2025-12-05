@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 
-#include "quant.h"
+#include "tensor.h"
 
 #define MIN_CHUNK_SIZE (64)
 

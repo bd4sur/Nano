@@ -9,29 +9,31 @@ else
     LDFLAGS = -lm -fopenmp
 endif
 
-all: nano cli wss
+all: pod cli wss
 
-
-nano: main.c oled.c ui.c avltree.c bpe.c hashmap.c trie.c quant.c matmul_pthread.c infer.c
+# Nano-pod：带键盘和屏幕的电子鹦鹉笼
+pod: nano_pod
+nano_pod: main.c oled.c ui.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c
 	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
-
+# Nano-CLI：适用于文字终端交互的终端程序
 cli: nano_cli
-nano_cli: main_cli.c bpe.c hashmap.c trie.c quant.c matmul_pthread.c infer.c
+nano_cli: main_cli.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c
 	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
-
+# Nano-WSS：WebSocket服务器
 wss: nano_wss
-nano_wss: main_wss.c bpe.c hashmap.c trie.c quant.c matmul_pthread.c infer.c
+nano_wss: main_wss.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c
 	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lwebsockets
 
 
+# 仅适用于OpenWrt
 install:
-	chmod +x nano
-	cp -pR nano /usr/bin/
-	grep -qxF "/usr/bin/nano &" /etc/rc.local || sed -i "/^[[:space:]]*exit[[:space:]]0/i /usr/bin/nano &" /etc/rc.local
+	chmod +x nano_pod
+	cp -pR nano_pod /usr/bin/
+	grep -qxF "/usr/bin/nano_pod &" /etc/rc.local || sed -i "/^[[:space:]]*exit[[:space:]]0/i /usr/bin/nano_pod &" /etc/rc.local
 
 clean:
-	rm -f nano
+	rm -f nano_pod
 	rm -f nano_cli
 	rm -f nano_wss

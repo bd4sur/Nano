@@ -8,94 +8,6 @@
 
 
 #include "infer.h"
-#include "bpe.h"
-
-
-// ===============================================================================
-// 辅助函数
-// ===============================================================================
-
-unsigned int random_u32(unsigned long long *state) {
-    // xorshift rng: https://en.wikipedia.org/wiki/Xorshift#xorshift.2A
-    *state ^= *state >> 12;
-    *state ^= *state << 25;
-    *state ^= *state >> 27;
-    return (*state * 0x2545F4914F6CDD1Dull) >> 32;
-}
-
-// random float32 in [0,1)
-float random_f32(unsigned long long *state) {
-    return (random_u32(state) >> 8) / 16777216.0f;
-}
-
-// return time in milliseconds, for benchmarking the model speed
-long time_in_ms() {
-    struct timespec time;
-    clock_gettime(CLOCK_REALTIME, &time);
-    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
-}
-
-
-// ===============================================================================
-// 朴素分词器和词元编解码（用于自研Nano模型）
-// ===============================================================================
-
-void free_tokenizer(Tokenizer *tk) {
-    for(uint32_t i = 0; i < tk->vocab_size; i++) {
-        if(NULL != tk->token_list[i])
-            free(tk->token_list[i]);
-    }
-    free(tk->unicode_charset);
-    free_trie(tk->vocab_trie);
-    free_map(tk->token_to_id_map);
-    free_map(tk->unicode_to_id_map);
-}
-
-uint32_t *string_to_ids(struct Map *unicode_to_id_map, wchar_t *utext) {
-    uint32_t len = wcslen(utext);
-    uint32_t *ids = calloc(len, sizeof(uint32_t));
-    for(uint32_t i = 0; i < wcslen(utext); i++) {
-        ids[i] = map_get(unicode_to_id_map, utext[i]);
-    }
-    return ids;
-}
-
-wchar_t *decode_nano(Tokenizer *t, uint32_t *ids, uint32_t len) {
-    wchar_t *out = (wchar_t *)calloc(len * MAX_TOKEN_LENGTH + 1, sizeof(wchar_t));
-    uint32_t count = 0;
-    for(uint32_t i = 0; i < len; i++) {
-        wchar_t *utoken = t->token_list[ids[i]];
-        for(uint32_t j = 0; j < wcslen(utoken); j++) {
-            out[count] = utoken[j];
-            count++;
-        }
-    }
-    out[count] = 0;
-    return out;
-}
-
-uint32_t *encode(Tokenizer *t, wchar_t *text, uint32_t *n_tokens_ptr) {
-    uint32_t *input_ids = string_to_ids(t->unicode_to_id_map, text);
-    uint32_t *output_ids = (uint32_t *)calloc(wcslen(text), sizeof(uint32_t *));
-    uint32_t token_count = tokenize(t->vocab_trie, output_ids, input_ids, wcslen(text), MAX_TOKEN_LENGTH);
-    free(input_ids);
-    *n_tokens_ptr = token_count;
-    return output_ids;
-}
-
-wchar_t *decode(Nano_Context *ctx, uint32_t *ids, uint32_t len) {
-    if (ctx->llm->arch == LLM_ARCH_NANO) {
-        return decode_nano(ctx->tokenizer, ids, len);
-    }
-    else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
-        return decode_bpe(ctx->tokenizer, ids, len);
-    }
-    else {
-        printf("Error: unknown LLM arch.\n");
-        return NULL;
-    }
-}
-
 
 // ===============================================================================
 // 模型文件解析·内存管理
@@ -1150,7 +1062,7 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, unsigned int 
     session->num_prompt_tokens = 0;
     uint32_t *prompt_tokens;
     if (ctx->llm->arch == LLM_ARCH_NANO) {
-        prompt_tokens = encode(tokenizer, session->prompt, &(session->num_prompt_tokens));
+        prompt_tokens = encode_nano(tokenizer, session->prompt, &(session->num_prompt_tokens));
     }
     else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
         prompt_tokens = apply_qwen_chat_template(tokenizer, session->prompt, &(session->num_prompt_tokens), 1);
@@ -1187,8 +1099,16 @@ int32_t llm_session_step(Nano_Context *ctx, Nano_Session *session) {
 
         if (session->is_prefilling == 0) {
             session->output_ids[session->num_prompt_tokens + (session->output_count)++] = session->next_token;
-            session->output_text = decode(ctx, session->output_ids + session->num_prompt_tokens, session->output_count);
-            if (session->output_text == NULL) return LLM_STOPPED_WITH_ERROR;
+            if (ctx->llm->arch == LLM_ARCH_NANO) {
+                session->output_text = decode_nano(ctx->tokenizer, session->output_ids + session->num_prompt_tokens, session->output_count);
+            }
+            else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
+                session->output_text = decode_bpe(ctx->tokenizer, session->output_ids + session->num_prompt_tokens, session->output_count);
+            }
+            else {
+                printf("Error: unknown LLM arch.\n");
+                return LLM_STOPPED_WITH_ERROR;
+            }
         }
 
         session->pos++;
@@ -1265,91 +1185,3 @@ int32_t generate_sync(
     llm_session_free(session);
     return status;
 }
-
-
-
-// 弃用，被generate_sync取代
-int32_t generate(
-    Nano_Context *ctx,
-    wchar_t *prompt,
-    uint32_t max_seq_len,
-    int32_t (*on_prefilling)(wchar_t*, uint32_t, uint32_t),
-    int32_t (*on_decoding)(wchar_t*, uint32_t, float),
-    int32_t (*on_finished)(wchar_t*, uint32_t, float)
-) {
-
-    int32_t flag = 0;
-
-    Tokenizer *tokenizer = ctx->tokenizer;
-
-    wchar_t *empty_prompt = L"";
-    if (prompt == NULL) { prompt = empty_prompt; }
-
-    long t_0 = 0;
-    long t_1 = 0;
-
-    uint32_t *output_ids = (uint32_t *)calloc(max_seq_len + 1, sizeof(uint32_t));
-    uint32_t output_count = 0;
-
-    uint32_t num_prompt_tokens = 0;
-    uint32_t *prompt_tokens = encode(tokenizer, prompt, &num_prompt_tokens);
-
-    for(int i = 0; i < num_prompt_tokens; i++) {
-        output_ids[i] = prompt_tokens[i];
-    }
-
-    uint32_t next_token = prompt_tokens[0]; // kick off with the first token in the prompt
-    uint32_t pos = 0;     // position in the sequence
-
-    wchar_t *output_text = NULL;
-
-    while (pos < max_seq_len) {
-        if (t_0 == 0) { t_0 = time_in_ms(); }
-
-        int is_prefilling = (pos < num_prompt_tokens - 1) ? 1 : 0;
-
-        next_token = generate_next_token(ctx, output_ids, pos, is_prefilling);
-
-        if(is_prefilling == 1) {
-            int32_t callback_flag = on_prefilling(prompt, pos, num_prompt_tokens);
-            // 外部被动中止
-            if (callback_flag > 0) {
-                flag = LLM_STOPPED_IN_PREFILLING; // 在预填充阶段被动中止
-                break;
-            }
-        }
-        else if(is_prefilling == 0) {
-            output_ids[num_prompt_tokens + output_count++] = next_token;
-            output_text = decode_nano(tokenizer, output_ids + num_prompt_tokens, output_count);
-
-            float tps = (pos-1) / (double)(time_in_ms() - t_0) * 1000;
-
-            int32_t callback_flag = on_decoding(output_text, pos, tps);
-
-            // 外部被动中止
-            if (callback_flag > 0) {
-                flag = LLM_STOPPED_IN_DECODING; // 在解码阶段被动中止
-                break;
-            }
-        }
-
-        pos++;
-
-        if(next_token == 0 || next_token == 3) {
-            flag = LLM_STOPPED_NORMALLY; // 遇到结束符号，主动结束
-            break;
-        }
-    }
-
-    t_1 = time_in_ms();
-    float tps = (pos-1) / (double)(t_1 - t_0) * 1000;
-    on_finished(output_text, pos, tps);
-
-    free(prompt_tokens);
-    free(output_ids);
-    free(output_text);
-
-    return flag;
-}
-
-

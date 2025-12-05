@@ -91,35 +91,35 @@ sudo i2cdetect 1 -y
 ```
 
 
-**第3步：设置Nano服务开机自启**
+**第3步：设置NanoPod服务开机自启**
 
-执行`sudo nano /etc/systemd/system/nano.timer`，增加以下内容：
+执行`sudo nano /etc/systemd/system/nano-pod.timer`，增加以下内容：
 
 ```
 [Unit]
-Description=Run Nano AI Agent Service 2 minutes after boot
-Requires=nano.service
+Description=Run Nano-Pod AI Agent Service 2 minutes after boot
+Requires=nano-pod.service
 
 [Timer]
 OnBootSec=2min
-Unit=nano.service
+Unit=nano-pod.service
 
 [Install]
 WantedBy=timers.target
 ```
 
-执行`sudo nano /etc/systemd/system/nano.service`，增加以下内容：
+执行`sudo nano /etc/systemd/system/nano-pod.service`，增加以下内容：
 
 ```
 [Unit]
-Description=Nano AI Agent Service
+Description=Nano-Pod AI Agent Service
 After=network.target
 
 [Service]
 Type=simple
 User=bd4sur
-WorkingDirectory=/home/bd4sur/ai/Nano/infer_marga
-ExecStart=/home/bd4sur/ai/Nano/infer_marga/nano
+WorkingDirectory=/home/bd4sur/ai/Nano/infer
+ExecStart=/home/bd4sur/ai/Nano/infer/nano_pod
 Restart=on-failure
 RestartSec=5
 
@@ -183,8 +183,8 @@ After=network.target
 [Service]
 Type=simple
 User=bd4sur
-WorkingDirectory=/home/bd4sur/ai/Nano/infer_marga
-ExecStart=/usr/bin/python /home/bd4sur/ai/Nano/infer_marga/asr_client.py --host "0.0.0.0" --port 10096 --mode 2pass --chunk_size "5,10,5" --ssl 0
+WorkingDirectory=/home/bd4sur/ai/Nano/infer
+ExecStart=/usr/bin/python /home/bd4sur/ai/Nano/infer/asr_client.py --host "0.0.0.0" --port 10096 --mode 2pass --chunk_size "5,10,5" --ssl 0
 Restart=always
 RestartSec=5
 
@@ -240,7 +240,7 @@ WantedBy=multi-user.target
 # 假设当前用户名为pi
 cd /home/pi
 git clone https://github.com/bd4sur/Nano.git
-cd Nano/nanochat
+cd Nano/infer
 ```
 
 然后，将代码编译为可执行文件：
@@ -270,11 +270,11 @@ wget -c https://modelscope.cn/models/bd4sur/qwen3_nano/resolve/master/qwen3-4b-i
 wget -c https://modelscope.cn/models/bd4sur/Nano-168M/resolve/master/nano_168m_625000_sft_947000_q80.bin
 ```
 
-模型下载完成后，返回上一级目录，执行刚刚编译得到的`nanochat`：
+模型下载完成后，返回上一级目录，执行刚刚编译得到的`nano_pod`：
 
 ```
 cd ..
-./nanochat
+./nano_pod
 ```
 
 如果一切正常，OLED屏幕亮起，可以开始与电子鹦鹉对话啦。

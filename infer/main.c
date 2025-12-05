@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 
-#include "avltree.h"
 #include "pinyin.h"
 #include "oled.h"
 #include "ui.h"

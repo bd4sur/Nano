@@ -1,6 +1,11 @@
-#include "bpe.h"
-#include "infer.h"
+#include "tokenizer.h"
 
+#include <locale.h>
+#include <wchar.h>
+
+// ===============================================================================
+// BPE tokenizer
+// ===============================================================================
 
 int compare_tokens(const void *a, const void *b) {
     return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
@@ -261,3 +266,52 @@ uint32_t *apply_qwen_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uin
     free(user_prompt_tokens);
     return prompt_tokens;
 }
+
+
+// ===============================================================================
+// 朴素分词器和词元编解码（用于自研Nano模型）
+// ===============================================================================
+
+void free_tokenizer(Tokenizer *tk) {
+    for(uint32_t i = 0; i < tk->vocab_size; i++) {
+        if(NULL != tk->token_list[i])
+            free(tk->token_list[i]);
+    }
+    free(tk->unicode_charset);
+    free_trie(tk->vocab_trie);
+    free_map(tk->token_to_id_map);
+    free_map(tk->unicode_to_id_map);
+}
+
+uint32_t *string_to_ids(struct Map *unicode_to_id_map, wchar_t *utext) {
+    uint32_t len = wcslen(utext);
+    uint32_t *ids = calloc(len, sizeof(uint32_t));
+    for(uint32_t i = 0; i < wcslen(utext); i++) {
+        ids[i] = map_get(unicode_to_id_map, utext[i]);
+    }
+    return ids;
+}
+
+wchar_t *decode_nano(Tokenizer *t, uint32_t *ids, uint32_t len) {
+    wchar_t *out = (wchar_t *)calloc(len * MAX_TOKEN_LENGTH + 1, sizeof(wchar_t));
+    uint32_t count = 0;
+    for(uint32_t i = 0; i < len; i++) {
+        wchar_t *utoken = t->token_list[ids[i]];
+        for(uint32_t j = 0; j < wcslen(utoken); j++) {
+            out[count] = utoken[j];
+            count++;
+        }
+    }
+    out[count] = 0;
+    return out;
+}
+
+uint32_t *encode_nano(Tokenizer *t, wchar_t *text, uint32_t *n_tokens_ptr) {
+    uint32_t *input_ids = string_to_ids(t->unicode_to_id_map, text);
+    uint32_t *output_ids = (uint32_t *)calloc(wcslen(text), sizeof(uint32_t *));
+    uint32_t token_count = tokenize(t->vocab_trie, output_ids, input_ids, wcslen(text), MAX_TOKEN_LENGTH);
+    free(input_ids);
+    *n_tokens_ptr = token_count;
+    return output_ids;
+}
+

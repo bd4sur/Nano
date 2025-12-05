@@ -8,7 +8,7 @@
 // 推理引擎实例（单例模式）
 static Nano_Context *g_llm_ctx;
 
-static char *MODEL_PATH = "/home/bd4sur/ai/_model/Nano/qwen3-0b6-q80.bin";
+static char *MODEL_PATH = "/home/bd4sur/ai/_model/Nano/nano_168m_625000_sft_947000_q80.bin";
 
 // 是否是第一次decoding：用于判断何时清除Pre-filling进度内容
 int32_t g_is_first_decoding = 1;
@@ -158,7 +158,7 @@ int32_t on_decoding(Nano_Session *session) {
     if (g_llm_ctx->llm->arch == LLM_ARCH_NANO) {
         uint32_t new_token[1];
         new_token[0] = session->next_token;
-        printf("%ls", decode(g_llm_ctx, new_token, 1));
+        printf("%ls", decode_nano(g_llm_ctx->tokenizer, new_token, 1));
     }
     else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
         printf("%s", g_llm_ctx->tokenizer->vocab[session->next_token]);
