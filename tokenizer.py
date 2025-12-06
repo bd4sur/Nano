@@ -5,6 +5,7 @@ from typing import Optional
 import base64
 import regex
 import blobfile
+import codecs
 from tqdm import tqdm
 
 # 来源：https://github.com/skywind3000/ECDICT，选用各类考试的词汇（除GRE、TOEFL，约5035个）
@@ -252,7 +253,12 @@ class Tokenizer:
             "<|eos|>": 3,
             "<|instruct_mark|>": 4,
             "<|response_mark|>": 5,
-            "<|BD4SUR|>": 6
+            "<|BD4SUR|>": 6,
+            "<|nano_meta_0|>": 7,
+            "<|nano_meta_1|>": 8,
+            "<|nano_meta_2|>": 9,
+            "<|nano_meta_3|>": 10,
+            "<|nano_meta_4|>": 11
         }
         self.trie = None
 
@@ -262,7 +268,7 @@ class Tokenizer:
         for i,c in enumerate(self.special_tokens):
             itos[i] = c
 
-        itos = itos + sorted(tokens)
+        itos = itos + tokens
 
         self.vocab_size = len(itos)
 
@@ -369,6 +375,43 @@ class Tokenizer:
             json.dump(self.config, f, ensure_ascii=True)
 
 
+    def build_8192(self, config_path):
+        CHARSET_8192 = []
+        with open("tokenizer/charset_8192.txt", 'r', encoding='utf-8') as f:
+            CHARSET_8192 = [
+                line.rstrip('\r\n')
+                .replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
+                .replace('\\f', '\f').replace('\\b', '\b')
+                for line in f]
+        self._build(CHARSET_8192)
+        with open(config_path, 'w') as f:
+            json.dump(self.config, f, ensure_ascii=False)
+
+    def build_6000(self, config_path):
+        CHARSET_6000 = []
+        with open("tokenizer/charset_6000.txt", 'r', encoding='utf-8') as f:
+            CHARSET_6000 = [
+                line.rstrip('\r\n')
+                .replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
+                .replace('\\f', '\f').replace('\\b', '\b')
+                for line in f]
+        self._build(CHARSET_6000)
+        with open(config_path, 'w') as f:
+            json.dump(self.config, f, ensure_ascii=False)
+
+    def build_4096(self, config_path):
+        CHARSET_4096 = []
+        with open("tokenizer/charset_4096.txt", 'r', encoding='utf-8') as f:
+            CHARSET_4096 = [
+                line.rstrip('\r\n')
+                .replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
+                .replace('\\f', '\f').replace('\\b', '\b')
+                for line in f]
+        self._build(CHARSET_4096)
+        with open(config_path, 'w') as f:
+            json.dump(self.config, f, ensure_ascii=False)
+
+
     # 根据已有文本建立编码器，并保存到配置文件
     def build_from_text(self, text, config_path):
         charset = sorted(list(set(text)))
@@ -413,10 +456,13 @@ if __name__ == "__main__":
 
     tokenizer = Tokenizer()
     # tokenizer.build_32768(f"tokenizer_32768_v2.json")
-    tokenizer.build_16384(f"tokenizer_16384_v2.json")
+    # tokenizer.build_16384(f"tokenizer_16384_v2.json")
+    # tokenizer.build_8192(f"tokenizer/tokenizer_8192.json")
+    # tokenizer.build_6000(f"tokenizer/tokenizer_6000.json")
+    tokenizer.build_4096(f"tokenizer/tokenizer_4096.json")
     print(f"VocabSize = {tokenizer.vocab_size}")
 
-    input_text = "人类（包括BD4SUR的操作员）的<|unknown|>本质是<|response_mark|>复读机！<|eos|><|padding|><|padding|>\nFour score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal ... that this nation, under God, shall have a new birth of freedom—and that government of the people, by the people, for the people, shall not perish from the earth. \n《现代汉语常用词表》是中国国家语言文字工作委员会组织的一个研制项目，项目于1998年7月启动，目的是推广规范汉字，帮助国内的语文教育和研究。是已经公布的《现代汉语常用字表》等配套规范。目前最新的版本为2021年8月出版的第二版。《现代汉语常用词表（第2版）》由李行健和苏新春主编，是根据《现代汉语常用词表（草案）》为基础的修订版，书中收录56790个常用词语。增加了《草稿》漏收的词语1050个，包括暴走、充电宝等。删掉原版220个陈旧、冷僻、罕用的词语，如本市、秀拔等。修改了部分词语的读音和词形，如“下工夫”改为“下功夫”等。该版本厦门大学人文学院部分博士生参与到修订工作中。"
+    input_text = "人类（包括BD4SUR的操作员）的本质是<|response_mark|>复读\t机！<|eos|><|padding|><|padding|>\nFour score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal ... that this nation, under God, shall have a new birth of freedom—and that government of the people, by the people, for the people, shall not perish from the earth. \n《现代汉语常用词表》是中国国家语言文字工作委员会组织的一个研制项目，项目于1998年7月启动，目的是推广规范汉字，帮助国内的语文教育和研究。是已经公布的《现代汉语常用字表》等配套规范。目前最新的版本为2021年8月出版的第二版。《现代汉语常用词表（第2版）》由李行健和苏新春主编，是根据《现代汉语常用词表（草案）》为基础的修订版，书中收录56790个常用词语。增加了《草稿》漏收的词语1050个，包括暴走、充电宝等。删掉原版220个陈旧、冷僻、罕用的词语，如本市、秀拔等。修改了部分词语的读音和词形，如“下工夫”改为“下功夫”等。该版本厦门大学人文学院部分博士生参与到修订工作中。"
     ids = tokenizer.encode(input_text)
     output_text = tokenizer.decode(ids)
     print(f"是否无损？{input_text == output_text}")

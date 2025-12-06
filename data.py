@@ -12,6 +12,8 @@ PRETRAIN_DATASETS = [
     "dataset/pretrain_psycho.txt"
 ]
 SFT_DATASET = "dataset/sft-general.jsonl"
+TOKENIZER_PATH = "tokenizer/tokenizer_4096.json"
+
 
 STAGE_FLAG = {
     "pretrain": 1,  # 1 - do ; else - pass
@@ -24,8 +26,6 @@ USE_MP = True # 多进程加速？
 
 base_path = os.path.dirname(__file__)
 os.makedirs(os.path.join(base_path, "dataset_preprocessed"), exist_ok=True)
-
-TOKENIZER_PATH = "tokenizer/tokenizer_16384.json"
 
 # tokenizer = build_from_files(PRETRAIN_DATASETS + [SFT_DATASET], os.path.join(base_path, TOKENIZER_PATH))
 tokenizer = Tokenizer()
