@@ -18,7 +18,7 @@ $(BIN_DIR):
 
 # Nano-pod：带键盘和屏幕的电子鹦鹉笼
 pod: $(BIN_DIR)/nano_pod
-$(BIN_DIR)/nano_pod: main.c oled.c graphics.c ui.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod: main.c display_hal.c graphics.c ui.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
 	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-CLI：适用于文字终端交互的终端程序

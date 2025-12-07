@@ -200,7 +200,7 @@ class TrainGPT():
 
         # 继续训练（分为全参数微调/继续预训练（取决于数据mask）、LoRA微调两种情况）
         if self.from_checkpoint is not None:
-            _checkpoint = torch.load(self.from_checkpoint, map_location=self.current_device)
+            _checkpoint = torch.load(self.from_checkpoint, map_location=self.current_device, weights_only=False)
             # 恢复模型配置
             self.model_config = _checkpoint["model_config"]
             self.model_config.dropout = self.model_config.dropout # Overrided by new training configuration
