@@ -347,6 +347,105 @@ void freeTree(AVLNode* root) {
 
 
 // ===============================================================================
+// 字符编码相关
+// ===============================================================================
+
+// 将 UTF-32 码点（wchar_t）数组转换为 UTF-8 字符串
+// 注意：此函数假设 wchar_t 为 32 位（即 UTF-32），符合 ESP32 的配置（通常 -fshort-wchar 未启用）
+void _wcstombs(char *dest, const wchar_t *src, uint32_t length) {
+    char *p = dest;
+    for (uint32_t i = 0; i < length; ++i) {
+        uint32_t cp = (uint32_t)src[i];
+
+        if (cp <= 0x7F) {
+            // 0xxxxxxx
+            *p++ = (char)cp;
+        } else if (cp <= 0x7FF) {
+            // 110xxxxx 10xxxxxx
+            *p++ = (char)(0xC0 | (cp >> 6));
+            *p++ = (char)(0x80 | (cp & 0x3F));
+        } else if (cp <= 0xFFFF) {
+            // 1110xxxx 10xxxxxx 10xxxxxx
+            *p++ = (char)(0xE0 | (cp >> 12));
+            *p++ = (char)(0x80 | ((cp >> 6) & 0x3F));
+            *p++ = (char)(0x80 | (cp & 0x3F));
+        } else if (cp <= 0x10FFFF) {
+            // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+            *p++ = (char)(0xF0 | (cp >> 18));
+            *p++ = (char)(0x80 | ((cp >> 12) & 0x3F));
+            *p++ = (char)(0x80 | ((cp >> 6) & 0x3F));
+            *p++ = (char)(0x80 | (cp & 0x3F));
+        } else {
+            // 非法 UTF-32 码点（超出 Unicode 范围），替换为 U+FFFD（但此处简化处理为 '?'）
+            // 嵌入式环境通常避免动态分配或复杂错误处理
+            *p++ = '?';
+        }
+    }
+    *p = '\0'; // 可选：添加字符串终止符（如果调用者期望 null-terminated 字符串）
+}
+
+// 将 UTF-8 字符串转换为 null-terminated 的 UTF-32 (wchar_t) 字符串
+// 返回值：成功转换的 wchar_t 字符数量（不包括结尾的 L'\0'）
+// 注意：dest 必须有至少 (length + 1) 个 wchar_t 的空间（最坏情况）
+uint32_t _mbstowcs(wchar_t *dest, const char *src, uint32_t length) {
+    const uint8_t *p = (const uint8_t *)src;
+    const uint8_t *end = p + length;
+    wchar_t *out = dest;
+
+    while (p < end) {
+        uint8_t byte = *p++;
+
+        if ((byte & 0x80) == 0) {
+            // 1-byte: ASCII
+            *out++ = (wchar_t)byte;
+        } else if ((byte & 0xE0) == 0xC0) {
+            // 2-byte
+            if (p >= end) goto invalid;
+            uint8_t b2 = *p++;
+            if ((b2 & 0xC0) != 0x80) goto invalid;
+            uint32_t cp = ((byte & 0x1F) << 6) | (b2 & 0x3F);
+            if (cp < 0x80) goto invalid; // overlong
+            *out++ = (wchar_t)cp;
+        } else if ((byte & 0xF0) == 0xE0) {
+            // 3-byte
+            if (p + 1 >= end) goto invalid;
+            uint8_t b2 = *p++;
+            uint8_t b3 = *p++;
+            if ((b2 & 0xC0) != 0x80 || (b3 & 0xC0) != 0x80) goto invalid;
+            uint32_t cp = ((byte & 0x0F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+            if (cp < 0x800) goto invalid;
+            if (cp >= 0xD800 && cp <= 0xDFFF) goto invalid; // surrogate
+            *out++ = (wchar_t)cp;
+        } else if ((byte & 0xF8) == 0xF0) {
+            // 4-byte
+            if (p + 2 >= end) goto invalid;
+            uint8_t b2 = *p++;
+            uint8_t b3 = *p++;
+            uint8_t b4 = *p++;
+            if ((b2 & 0xC0) != 0x80 || (b3 & 0xC0) != 0x80 || (b4 & 0xC0) != 0x80) goto invalid;
+            uint32_t cp = ((byte & 0x07) << 18) | ((b2 & 0x3F) << 12) |
+                          ((b3 & 0x3F) << 6) | (b4 & 0x3F);
+            if (cp < 0x10000) goto invalid;
+            if (cp > 0x10FFFF) goto invalid;
+            *out++ = (wchar_t)cp;
+        } else {
+            goto invalid;
+        }
+    }
+
+    // 正常结束：添加 null 终止符
+    *out = (wchar_t)0;
+    return (uint32_t)(out - dest);
+
+invalid:
+    // 遇到无效 UTF-8：用 '?' 替代并终止
+    *out++ = (wchar_t)'?';
+    *out = (wchar_t)0;  // 仍然保证 null-terminated
+    return (uint32_t)(out - dest); // 返回包含 '?' 的字符数
+}
+
+
+// ===============================================================================
 // 其他平台无关的工具函数
 // ===============================================================================
 

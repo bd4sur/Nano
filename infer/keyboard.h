@@ -7,6 +7,10 @@
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "platform.h"
 
 
@@ -37,5 +41,9 @@ char keyboard_read_key() {
         return -1;
     }
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

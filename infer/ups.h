@@ -1,3 +1,10 @@
+#ifndef __NANO_UPS_H__
+#define __NANO_UPS_H__
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -74,3 +81,9 @@ int32_t read_ups_soc() {
     // 计算容量百分比
     return data / 256;
 }
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

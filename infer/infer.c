@@ -6,7 +6,6 @@
 //   Forked from: https://github.com/karpathy/llama2.c
 //
 
-
 #include "infer.h"
 
 // ===============================================================================
@@ -29,30 +28,50 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
         kv_dim = llm_cfg->head_dim * llm_cfg->n_kv_head;
     }
 
-    s->x       = calloc(llm_cfg->n_embd, sizeof(float));
-    s->xb      = calloc(llm_cfg->n_embd, sizeof(float));
-    s->xba     = calloc(q_dim, sizeof(float));
-    s->xb2     = calloc(llm_cfg->n_embd, sizeof(float));
-    s->hb      = calloc(llm_cfg->n_hidden, sizeof(float));
-    s->hb2     = calloc(llm_cfg->n_hidden, sizeof(float));
+    uint32_t xbuf_length = llm_cfg->n_embd + llm_cfg->n_embd + q_dim + llm_cfg->n_embd + llm_cfg->n_hidden + llm_cfg->n_hidden
+                         + q_dim + llm_cfg->n_head * max_seq_len + llm_cfg->vocab_size;        
+    s->xbuf = (float *)calloc(xbuf_length, sizeof(float));
+    float *xbuf = s->xbuf;
+
+    s->x       = xbuf;  xbuf += llm_cfg->n_embd;
+    s->xb      = xbuf;  xbuf += llm_cfg->n_embd;
+    s->xba     = xbuf;  xbuf += q_dim;
+    s->xb2     = xbuf;  xbuf += llm_cfg->n_embd;
+    s->hb      = xbuf;  xbuf += llm_cfg->n_hidden;
+    s->hb2     = xbuf;  xbuf += llm_cfg->n_hidden;
+    s->q       = xbuf;  xbuf += q_dim;
+    s->att     = xbuf;  xbuf += llm_cfg->n_head * max_seq_len;
+    s->logits  = xbuf;  xbuf += llm_cfg->vocab_size;
+
+    uint32_t kvcache_length = llm_cfg->n_layer * max_seq_len * kv_dim * 2;        
+    s->kvcache = (float *)calloc(kvcache_length, sizeof(float));
+    float *kvcache = s->kvcache;
+
+    s->k_cache = kvcache;  kvcache += llm_cfg->n_layer * max_seq_len * kv_dim;
+    s->v_cache = kvcache;  kvcache += llm_cfg->n_layer * max_seq_len * kv_dim;
 
     if (llm->quant_type == QUANT_TYPE_Q80) {
-        Q80_Tensor xq_tmp   = (Q80_Tensor) { .q = calloc(llm_cfg->n_embd, sizeof(QTYPE)), .s = calloc(llm_cfg->n_embd / GS, sizeof(float)) };
-        Q80_Tensor xbaq_tmp = (Q80_Tensor) { .q = calloc(q_dim, sizeof(QTYPE)), .s = calloc(q_dim / GS, sizeof(float)) };
-        Q80_Tensor hq_tmp   = (Q80_Tensor) { .q = calloc(llm_cfg->n_hidden, sizeof(QTYPE)), .s = calloc(llm_cfg->n_hidden / GS, sizeof(float)) };
+        uint32_t gs = llm->group_size;
+
+        uint32_t qvbuf_length = llm_cfg->n_embd + q_dim + llm_cfg->n_hidden;
+        uint32_t qsbuf_length = llm_cfg->n_embd / gs + q_dim / gs + llm_cfg->n_hidden / gs;
+        s->qvbuf = (QTYPE *)calloc(qvbuf_length, sizeof(QTYPE));
+        s->qsbuf = (float *)calloc(qsbuf_length, sizeof(float));
+        QTYPE *qvbuf = s->qvbuf;
+        float *qsbuf = s->qsbuf;
+
+        Q80_Tensor xq_tmp   = (Q80_Tensor) { .q = qvbuf, .s = qsbuf };  qvbuf += llm_cfg->n_embd; qsbuf += llm_cfg->n_embd / gs;
+        Q80_Tensor xbaq_tmp = (Q80_Tensor) { .q = qvbuf, .s = qsbuf };  qvbuf += q_dim; qsbuf += q_dim / gs;
+        Q80_Tensor hq_tmp   = (Q80_Tensor) { .q = qvbuf, .s = qsbuf };  qvbuf += llm_cfg->n_hidden; qsbuf += llm_cfg->n_hidden / gs;
+        
         s->xq               = (Typed_Tensor) { .tensor_q80 = xq_tmp };
         s->xbaq             = (Typed_Tensor) { .tensor_q80 = xbaq_tmp };
         s->hq               = (Typed_Tensor) { .tensor_q80 = hq_tmp };
     }
 
-    s->q       = calloc(q_dim, sizeof(float));
-    s->k_cache = calloc(llm_cfg->n_layer * max_seq_len * kv_dim, sizeof(float));
-    s->v_cache = calloc(llm_cfg->n_layer * max_seq_len * kv_dim, sizeof(float));
-    s->att     = calloc(llm_cfg->n_head * max_seq_len, sizeof(float));
-    s->logits  = calloc(llm_cfg->vocab_size, sizeof(float));
+
     // ensure all mallocs went fine
-    if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q ||
-        !s->k_cache || !s->v_cache || !s->att || !s->logits) {
+    if (!s->xbuf || !s->kvcache) {
         fprintf(stderr, "malloc failed!\n");
         exit(EXIT_FAILURE);
     }
@@ -61,25 +80,14 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
 
 void free_fwd_buffer(LLM* llm) {
     FwdBuffer* s = &llm->state;
-    free(s->x);
-    free(s->xb);
-    free(s->xba);
-    free(s->xb2);
-    free(s->hb);
-    free(s->hb2);
+
+    free(s->xbuf);
+    free(s->kvcache);
+
     if (llm->quant_type == QUANT_TYPE_Q80) {
-        free(s->xq.tensor_q80.q);
-        free(s->xq.tensor_q80.s);
-        free(s->xbaq.tensor_q80.q);
-        free(s->xbaq.tensor_q80.s);
-        free(s->hq.tensor_q80.q);
-        free(s->hq.tensor_q80.s);
+        free(s->qvbuf);
+        free(s->qsbuf);
     }
-    free(s->q);
-    free(s->att);
-    free(s->logits);
-    free(s->k_cache);
-    free(s->v_cache);
 }
 
 void memory_map_params(LLM *llm, void* ptr) {
@@ -107,18 +115,18 @@ void memory_map_params(LLM *llm, void* ptr) {
     if (llm->quant_type == QUANT_TYPE_Q80) {
         ptr = (void*)fptr;
 
-        w->q_tokens = parse_quantized_tensors(&ptr, 1, cfg->vocab_size * cfg->n_embd);
+        w->q_tokens = parse_quantized_tensors(&ptr, 1, cfg->vocab_size * cfg->n_embd, llm->group_size);
         w->token_embedding = malloc(cfg->vocab_size * cfg->n_embd * sizeof(float));
-        dequantize(&w->q_tokens->tensor_q80, w->token_embedding, cfg->vocab_size * cfg->n_embd);
+        dequantize(&w->q_tokens->tensor_q80, w->token_embedding, cfg->vocab_size * cfg->n_embd, llm->group_size);
 
-        w->wq = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_head * head_size));
-        w->wk = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
-        w->wv = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size));
-        w->wo = parse_quantized_tensors(&ptr, n_layer, (cfg->n_head * head_size) * cfg->n_embd);
+        w->wq = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_head * head_size), llm->group_size);
+        w->wk = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size), llm->group_size);
+        w->wv = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_kv_head * head_size), llm->group_size);
+        w->wo = parse_quantized_tensors(&ptr, n_layer, (cfg->n_head * head_size) * cfg->n_embd, llm->group_size);
 
-        w->w1 = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * cfg->n_hidden);
-        w->w2 = parse_quantized_tensors(&ptr, n_layer, cfg->n_hidden * cfg->n_embd);
-        w->w3 = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * cfg->n_hidden);
+        w->w1 = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * cfg->n_hidden, llm->group_size);
+        w->w2 = parse_quantized_tensors(&ptr, n_layer, cfg->n_hidden * cfg->n_embd, llm->group_size);
+        w->w3 = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * cfg->n_hidden, llm->group_size);
 
         fptr = (float*)ptr;
     }
@@ -168,7 +176,7 @@ void memory_map_params(LLM *llm, void* ptr) {
 
     if (llm->quant_type == QUANT_TYPE_Q80) {
         ptr = (void*)fptr;
-        w->token_classifier = cfg->is_shared_classifier ? w->q_tokens : parse_quantized_tensors(&ptr, 1, cfg->n_embd * cfg->vocab_size);
+        w->token_classifier = cfg->is_shared_classifier ? w->q_tokens : parse_quantized_tensors(&ptr, 1, cfg->n_embd * cfg->vocab_size, llm->group_size);
     }
     else if (llm->quant_type == QUANT_TYPE_F32) {
         w->token_classifier = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));
@@ -177,7 +185,7 @@ void memory_map_params(LLM *llm, void* ptr) {
 }
 
 
-void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
+void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
 
     LLM_Config *config = &(llm->config);
 
@@ -213,6 +221,7 @@ void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
     llm->arch = model_type;
 
     llm->quant_type = (quant_type == 0) ? QUANT_TYPE_F32 : QUANT_TYPE_Q80; // TODO 量化类型enum待统一
+    llm->group_size = group_size;
 
     // 解析词表，同时构建trie树和hashmap
 
@@ -268,17 +277,17 @@ void parse_model_file(char* buffer, LLM *llm, Tokenizer *tk) {
         }
     }
     else if (llm->arch == LLM_ARCH_QWEN2 || llm->arch == LLM_ARCH_QWEN3) {
-        build_bpe_tokenizer(tk, (char*)tokenzier_ptr, 151669);
+        build_bpe_tokenizer(tk, (uint8_t*)tokenzier_ptr, 151669);
     }
 
     // 解析模型参数
 
-    void *param_ptr = (float*)((char*)tokenzier_ptr + tokenizer_field_bytes);
+    void *param_ptr = (float*)((uint8_t*)tokenzier_ptr + tokenizer_field_bytes);
     memory_map_params(llm, param_ptr);
 }
 
 
-void load_llm_from_buffer(LLM *llm, Tokenizer *tk, char *buffer, uint32_t max_seq_len) {
+void load_llm_from_buffer(LLM *llm, Tokenizer *tk, uint8_t *buffer, uint32_t max_seq_len) {
     parse_model_file(buffer, llm, tk);
     malloc_fwd_buffer(llm, max_seq_len);
 }
@@ -297,7 +306,7 @@ void load_llm(LLM *llm, Tokenizer *tk, char *model_path, uint32_t max_seq_len) {
     // 将文件mmap到虚拟内存
     int fd = open(model_path, O_RDONLY);
     if (fd == -1) { fprintf(stderr, "open failed!\n"); exit(EXIT_FAILURE); }
-    char *buffer = mmap(NULL, llm->file_size, PROT_READ, (MAP_PRIVATE | MAP_POPULATE), fd, 0);
+    uint8_t *buffer = mmap(NULL, llm->file_size, PROT_READ, (MAP_PRIVATE | MAP_POPULATE), fd, 0);
     if (buffer == MAP_FAILED) { fprintf(stderr, "mmap failed!\n"); exit(EXIT_FAILURE); }
 
     llm->fd = fd;
@@ -309,9 +318,9 @@ void load_llm(LLM *llm, Tokenizer *tk, char *model_path, uint32_t max_seq_len) {
 
     FILE *file = fopen(model_path, "rb");
     if (!file) { fprintf(stderr, "Couldn't open model file %s\n", model_path); exit(EXIT_FAILURE); }
-    char *buffer = (char *)malloc(llm->file_size + 1);
+    uint8_t *buffer = (uint8_t *)malloc(llm->file_size + 1);
     if (!buffer)  { fprintf(stderr, "malloc failed.\n"); exit(EXIT_FAILURE); }
-    if(fread(buffer, sizeof(char), llm->file_size, file) != llm->file_size) { exit(EXIT_FAILURE); }
+    if(fread(buffer, sizeof(uint8_t), llm->file_size, file) != llm->file_size) { exit(EXIT_FAILURE); }
     llm->buffer = buffer;
 
     load_llm_from_buffer(llm, tk, buffer, max_seq_len);
@@ -353,6 +362,7 @@ void free_llm(LLM* llm, Tokenizer *tk) {
             free(llm->params.freq_cis_imag);
         }
     }
+
     free_fwd_buffer(llm);
 
     free(llm);
@@ -386,7 +396,7 @@ void malloc_fwd_buffer_with_lora(LLM *llm, LoRA_Config *lora_cfg) {
 }
 
 
-void parse_lora_file(char* buffer, LoRA *lora, LLM *llm) {
+void parse_lora_file(uint8_t* buffer, LoRA *lora, LLM *llm) {
     LoRA_Config *lora_cfg    = &(lora->config);
     LoRA_Param  *lora_params = &(lora->params);
     LLM_Config  *llm_cfg     = &(llm->config);
@@ -461,10 +471,10 @@ LoRA *load_lora(LLM *llm, char *lora_path) {
     long long unsigned int file_size = ftell(file);
     rewind(file);
 
-    char *lora_buffer = (char *)malloc(file_size + 1);
+    uint8_t *lora_buffer = (uint8_t *)malloc(file_size + 1);
     if (!lora_buffer)  { fprintf(stderr, "malloc failed.\n"); exit(EXIT_FAILURE); }
 
-    if(fread(lora_buffer, sizeof(char), file_size, file) != file_size) { exit(EXIT_FAILURE); }
+    if(fread(lora_buffer, sizeof(uint8_t), file_size, file) != file_size) { exit(EXIT_FAILURE); }
     LoRA *p_lora = (LoRA *)calloc(1, sizeof(LoRA));
 
     p_lora->data = (float*)lora_buffer;
@@ -476,7 +486,7 @@ LoRA *load_lora(LLM *llm, char *lora_path) {
     return p_lora;
 }
 
-LoRA *load_lora_from_buffer(LLM *llm, char *buffer) {
+LoRA *load_lora_from_buffer(LLM *llm, uint8_t *buffer) {
     LoRA *p_lora = (LoRA *)calloc(1, sizeof(LoRA));
     p_lora->data = (float*)buffer;
     parse_lora_file(buffer, p_lora, llm);
@@ -503,6 +513,18 @@ void free_lora(LLM *llm, LoRA *lora) {
 // ===============================================================================
 // 推理引擎单例（现在暂且叫context）管理
 // ===============================================================================
+
+Nano_Context *llm_context_init_from_buffer(uint8_t *buffer, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed) {
+    Nano_Context *ctx = (Nano_Context*)calloc(1, sizeof(Nano_Context));
+    ctx->max_seq_len = max_seq_len;
+    ctx->random_seed = random_seed;
+    ctx->llm = (LLM *)calloc(1, (sizeof(LLM)));
+    ctx->tokenizer = (Tokenizer *)calloc(1, (sizeof(Tokenizer)));
+    ctx->lora = NULL;
+    load_llm_from_buffer(ctx->llm, ctx->tokenizer, buffer, ctx->max_seq_len);
+    ctx->sampler = build_sampler(ctx->llm->config.vocab_size, repetition_penalty, temperature, top_p, top_k, ctx->random_seed);
+    return ctx;
+}
 
 Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed) {
     Nano_Context *ctx = (Nano_Context*)calloc(1, sizeof(Nano_Context));
@@ -593,9 +615,9 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
 }
 
 // W (d,n) @ x (n,) -> xout (d,)
-void matmul_quant(float* xout, Typed_Tensor *x, Typed_Tensor *w, int n, int d) {
+void matmul_quant(float* xout, Typed_Tensor *x, Typed_Tensor *w, int n, int d, uint32_t group_size) {
 #ifdef MATMUL_PTHREAD
-    matmul_quant_pthread(xout, x->tensor_q80, w->tensor_q80, n, d);
+    matmul_quant_pthread(xout, x->tensor_q80, w->tensor_q80, n, d, group_size);
 #else
     int i;
     #pragma omp parallel for private(i)
@@ -605,13 +627,13 @@ void matmul_quant(float* xout, Typed_Tensor *x, Typed_Tensor *w, int n, int d) {
         int32_t ival = 0;
         int in = i * n;
 
-        // do the matmul in groups of GS
+        // do the matmul in groups of group_size
         int j;
-        for (j = 0; j <= n - GS; j += GS) {
-            for (int k = 0; k < GS; k++) {
+        for (j = 0; j <= n - group_size; j += group_size) {
+            for (int k = 0; k < group_size; k++) {
                 ival += ((int32_t) x->tensor_q80.q[j + k]) * ((int32_t) w->tensor_q80.q[in + j + k]);
             }
-            val += ((float) ival) * w->tensor_q80.s[(in + j) / GS] * x->tensor_q80.s[j / GS];
+            val += ((float) ival) * w->tensor_q80.s[(in + j) / group_size] * x->tensor_q80.s[j / group_size];
             ival = 0;
         }
 
@@ -701,10 +723,10 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
             matmul(s->v, s->xb, w->wv->tensor_f32 + l*kv_dim*n_embd, n_embd, kv_dim);
         }
         else if (llm->quant_type == QUANT_TYPE_Q80) {
-            quantize(&s->xq.tensor_q80, s->xb, n_embd);
-            matmul_quant(s->q, &s->xq, w->wq + l, n_embd, q_dim);
-            matmul_quant(s->k, &s->xq, w->wk + l, n_embd, kv_dim);
-            matmul_quant(s->v, &s->xq, w->wv + l, n_embd, kv_dim);
+            quantize(&s->xq.tensor_q80, s->xb, n_embd, llm->group_size);
+            matmul_quant(s->q, &s->xq, w->wq + l, n_embd, q_dim  , llm->group_size);
+            matmul_quant(s->k, &s->xq, w->wk + l, n_embd, kv_dim , llm->group_size);
+            matmul_quant(s->v, &s->xq, w->wv + l, n_embd, kv_dim , llm->group_size);
         }
 
         if (llm->arch == LLM_ARCH_QWEN2) {
@@ -831,8 +853,8 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
             matmul(s->xb2, s->xba, w->wo->tensor_f32 + l*n_embd*q_dim, q_dim, n_embd);
         }
         else if (llm->quant_type == QUANT_TYPE_Q80) {
-            quantize(&s->xbaq.tensor_q80, s->xba, q_dim);
-            matmul_quant(s->xb2, &s->xbaq, w->wo + l, q_dim, n_embd);
+            quantize(&s->xbaq.tensor_q80, s->xba, q_dim, llm->group_size);
+            matmul_quant(s->xb2, &s->xbaq, w->wo + l, q_dim, n_embd, llm->group_size);
         }
 
         // 计算output的低秩分解分支，并将其累加到原来的输出上
@@ -858,9 +880,9 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
             matmul(s->hb2, s->xb, w->w3->tensor_f32 + l*n_hidden*n_embd, n_embd, n_hidden);
         }
         else if (llm->quant_type == QUANT_TYPE_Q80) {
-            quantize(&s->xq.tensor_q80, s->xb, n_embd);
-            matmul_quant(s->hb, &s->xq, w->w1 + l, n_embd, n_hidden);
-            matmul_quant(s->hb2, &s->xq, w->w3 + l, n_embd, n_hidden);
+            quantize(&s->xq.tensor_q80, s->xb, n_embd, llm->group_size);
+            matmul_quant(s->hb, &s->xq, w->w1 + l, n_embd, n_hidden , llm->group_size);
+            matmul_quant(s->hb2, &s->xq, w->w3 + l, n_embd, n_hidden, llm->group_size);
         }
 
         // SwiGLU non-linearity
@@ -878,8 +900,8 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
             matmul(s->xb, s->hb, w->w2->tensor_f32 + l*n_embd*n_hidden, n_hidden, n_embd);
         }
         else if (llm->quant_type == QUANT_TYPE_Q80) {
-            quantize(&s->hq.tensor_q80, s->hb, n_hidden);
-            matmul_quant(s->xb, &s->hq, w->w2 + l, n_hidden, n_embd);
+            quantize(&s->hq.tensor_q80, s->hb, n_hidden, llm->group_size);
+            matmul_quant(s->xb, &s->hq, w->w2 + l, n_hidden, n_embd, llm->group_size);
         }
 
         // residual connection
@@ -896,8 +918,8 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
         matmul(s->logits, x, w->token_classifier->tensor_f32, cfg->n_embd, cfg->vocab_size);
     }
     else if (llm->quant_type == QUANT_TYPE_Q80) {
-        quantize(&s->xq.tensor_q80, x, cfg->n_embd);
-        matmul_quant(s->logits, &s->xq, w->token_classifier, cfg->n_embd, cfg->vocab_size);
+        quantize(&s->xq.tensor_q80, x, cfg->n_embd, llm->group_size);
+        matmul_quant(s->logits, &s->xq, w->token_classifier, cfg->n_embd, cfg->vocab_size, llm->group_size);
     }
 
     return s->logits;
@@ -1195,6 +1217,7 @@ int32_t generate_sync(
             break;
         }
         else {
+            on_finished(session);
             status = LLM_STOPPED_WITH_ERROR;
             break;
         }

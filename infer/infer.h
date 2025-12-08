@@ -10,6 +10,10 @@
 #ifndef __NANO_INFER_H__
 #define __NANO_INFER_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -25,23 +29,21 @@
 
 #include "platform.h"
 
-// 是否使用mmap？
-#define NANO_USE_MMAP
-
-#ifdef MATMUL_PTHREAD
-    #include "matmul_pthread.h"
-#endif
 
 #if defined _WIN32
     #include "win.h"
-#else
+#elif defined __unix__ || defined __unix || (defined(__APPLE__) && defined(__MACH__))
+    // 是否使用mmap？
+    #define NANO_USE_MMAP
     #include <unistd.h>
     #if defined NANO_USE_MMAP
         #include <sys/mman.h>
     #endif
+    #ifdef MATMUL_PTHREAD
+        #include "matmul_pthread.h"
+    #endif
 #endif
 
-#define uint32_t unsigned int
 
 #define LLM_ARCH_NANO  (0)
 #define LLM_ARCH_QWEN2 (2)
@@ -103,6 +105,11 @@ typedef struct {
 } LLM_Param;
 
 typedef struct {
+    float *xbuf;    // 中间激活值的统一内存
+    QTYPE *qvbuf;   // 量化值统一内存
+    float *qsbuf;   // 量化缩放因子统一内存
+    float *kvcache; // KV缓存统一内存
+    // 以下指针实际上都是指向上面的内存池（的某个偏移位置）
     float *x;       // activation at current time stamp (n_embd,)
     float *xb;      // same, but inside a residual branch (n_embd,)
     float *xba;     // output of attention block (q_dim,) q_dim = (n_embd if model == Nano||Qwen2 else (head_dim * n_head))
@@ -120,6 +127,7 @@ typedef struct {
     float *att;     // buffer for scores/attention values (n_heads, block_size)
     float *logits;  // output logits
 
+    // LoRA激活值暂不做池化
     float *q0;      // query  LoRA branch (lora_cfg.lora_rank,)
     float *k0;      // key    LoRA branch (lora_cfg.lora_rank,)
     float *v0;      // value  LoRA branch (lora_cfg.lora_rank,)
@@ -138,9 +146,10 @@ typedef struct {
     uint32_t arch;
     // 量化参数
     uint32_t quant_type;
+    uint32_t group_size;
     // 与mmap相关的
     int fd;            // file descriptor for memory mapping
-    char *buffer;       // memory mapped data pointer
+    uint8_t *buffer;       // memory mapped data pointer
     size_t file_size; // size of the checkpoint file in bytes
 } LLM;
 
@@ -212,12 +221,13 @@ typedef struct {
 } Nano_Session;
 
 
-void load_llm_from_buffer(LLM *llm, Tokenizer *tk, char *buffer, uint32_t max_seq_len);
+void load_llm_from_buffer(LLM *llm, Tokenizer *tk, uint8_t *buffer, uint32_t max_seq_len);
 void load_llm(LLM *llm, Tokenizer *tk, char *model_path, uint32_t max_seq_len);
 Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long rng_seed);
-LoRA *load_lora_from_buffer(LLM *llm, char *buffer);
+LoRA *load_lora_from_buffer(LLM *llm, uint8_t *buffer);
 LoRA *load_lora(LLM *llm, char *lora_path);
 
+Nano_Context *llm_context_init_from_buffer(uint8_t *buffer, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed);
 Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed);
 void llm_context_free(Nano_Context *ctx);
 
@@ -240,5 +250,8 @@ void free_lora(LLM *llm, LoRA *lora);
 void free_llm(LLM *llm, Tokenizer *tk);
 void free_sampler(Sampler *sampler);
 
+#ifdef __cplusplus
+}
+#endif
 
 #endif

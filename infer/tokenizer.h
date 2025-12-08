@@ -1,6 +1,10 @@
 #ifndef __NANO_TOKENIZER_H__
 #define __NANO_TOKENIZER_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "utils.h"
 
 
@@ -38,7 +42,7 @@ typedef struct {
 // BPE tokenizer
 // ===============================================================================
 
-void build_bpe_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size);
+void build_bpe_tokenizer(Tokenizer* t, uint8_t* tokenizer_buffer, int vocab_size);
 void free_bpe_tokenizer(Tokenizer* t);
 
 char* decode_bpe_pair(Tokenizer* t, uint32_t prev_token, uint32_t token);
@@ -58,5 +62,9 @@ uint32_t *encode_nano(Tokenizer *t, wchar_t *text, uint32_t *n_tokens_ptr);
 wchar_t *decode_nano(Tokenizer *t, uint32_t *ids, uint32_t len);
 
 void free_tokenizer(Tokenizer *tk);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

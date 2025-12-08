@@ -145,15 +145,16 @@ void matmul_pthread(float* xout, float* x, float* w, int n, int d) {
 // 任务处理函数
 void matmul_quant_task(void* arg) {
     ThreadArgsQuant* args = (ThreadArgsQuant*)arg;
+    uint32_t gs = args->group_size;
     for (int i = args->start_i; i < args->end_i; i++) {
         float val = 0.0f;
         int32_t ival = 0;
         int in = i * args->n;
-        for (int j = 0; j <= args->n - GS; j += GS) {
-            for (int k = 0; k < GS; k++) {
+        for (int j = 0; j <= args->n - gs; j += gs) {
+            for (int k = 0; k < gs; k++) {
                 ival += ((int32_t) (args->x)->q[j + k]) * ((int32_t) (args->w)->q[in + j + k]);
             }
-            val += ((float) ival) * (args->w)->s[(in + j) / GS] * (args->x)->s[j / GS];
+            val += ((float) ival) * (args->w)->s[(in + j) / gs] * (args->x)->s[j / gs];
             ival = 0;
         }
 
@@ -163,7 +164,7 @@ void matmul_quant_task(void* arg) {
     free(args);
 }
 
-void matmul_quant_pthread(float* xout, Q80_Tensor *x, Q80_Tensor *w, int n, int d) {
+void matmul_quant_pthread(float* xout, Q80_Tensor *x, Q80_Tensor *w, int n, int d, uint32_t group_size) {
     // 初始化全局线程池（首次调用时）
     if (!g_threadpool) {
         int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
@@ -192,6 +193,7 @@ void matmul_quant_pthread(float* xout, Q80_Tensor *x, Q80_Tensor *w, int n, int 
         args->n = n;
         args->start_i = current_start;
         args->end_i = current_start + chunk_size;
+        args->group_size = group_size;
         args->sem = &sem;
         
         current_start += chunk_size;

@@ -1,6 +1,10 @@
 #ifndef __NANO_UI_H__
 #define __NANO_UI_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <wchar.h>
 #include <stdint.h>
 
@@ -141,5 +145,9 @@ void render_pinyin_input(Widget_Input_State *input_state, uint32_t is_picking);
 void render_symbol_input(Widget_Input_State *input_state);
 
 void render_scroll_bar(int32_t line_num, int32_t current_line, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -1,6 +1,10 @@
 #ifndef __NANO_INFER_MATMUL_PT__
 #define __NANO_INFER_MATMUL_PT__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <pthread.h>
 #include <semaphore.h>
 #include <unistd.h>
@@ -46,11 +50,16 @@ typedef struct {
     int n;
     int start_i;
     int end_i;
+    uint32_t group_size;
     sem_t* sem; // 完成信号量
 } ThreadArgsQuant;
 
 void matmul_pthread(float* xout, float* x, float* w, int n, int d);
-void matmul_quant_pthread(float* xout, Q80_Tensor *x, Q80_Tensor *w, int n, int d);
+void matmul_quant_pthread(float* xout, Q80_Tensor *x, Q80_Tensor *w, int n, int d, uint32_t group_size);
 void matmul_pthread_cleanup();
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

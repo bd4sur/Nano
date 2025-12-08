@@ -1,6 +1,10 @@
 #ifndef __NANO_PROMPT_H__
 #define __NANO_PROMPT_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <ctype.h>
 #include <time.h>
 
@@ -37,5 +41,9 @@ wchar_t *get_random_prompt() {
     uint32_t index = (state * 0x2545F4914F6CDD1Dull) >> 32;
     return default_prompts[index % 20];
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

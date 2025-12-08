@@ -11,7 +11,7 @@ int compare_tokens(const void *a, const void *b) {
     return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
 }
 
-void build_bpe_tokenizer(Tokenizer* t, char* buffer, int vocab_size) {
+void build_bpe_tokenizer(Tokenizer* t, uint8_t* buffer, int vocab_size) {
     // i should have written the vocab_size into the tokenizer file... sigh
     t->vocab_size = vocab_size;
     // malloc space to hold the scores and the strings

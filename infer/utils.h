@@ -1,12 +1,18 @@
 #ifndef __NANO_UTILITIES_H__
 #define __NANO_UTILITIES_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+
+#define uint32_t unsigned int
 
 // ===============================================================================
 // HashMap
@@ -96,11 +102,23 @@ void freeTree(AVLNode* root);
 
 
 // ===============================================================================
+// 字符编码相关
+// ===============================================================================
+
+void _wcstombs(char *dest, const wchar_t *src, uint32_t length);
+uint32_t _mbstowcs(wchar_t *dest, const char *src, uint32_t length);
+
+
+// ===============================================================================
 // 其他平台无关的工具函数
 // ===============================================================================
 
 unsigned int random_u32(unsigned long long *state);
 float random_f32(unsigned long long *state);
 
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

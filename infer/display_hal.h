@@ -1,6 +1,9 @@
 #ifndef __OLED_H__
 #define __OLED_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -48,6 +51,8 @@ void OLED_Display_Off(void);
 void OLED_ColorTurn(uint8_t i);
 void OLED_DisplayTurn(uint8_t i);
 
-
+#ifdef __cplusplus
+}
+#endif
 
 #endif

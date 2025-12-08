@@ -78,7 +78,7 @@ void delete_char(Widget_Input_State *input_state) {
 
 void text_typeset(
     int32_t is_full,         // in  全量排版？0-仅计算翻页；1-先计算全部换行，再计算翻页
-    uint32_t *text,          // in  待排版的文本
+    wchar_t *text,          // in  待排版的文本
     int32_t view_width,      // in  视图宽度
     int32_t view_height,     // in  视图高度
     int32_t start_line,      // in  从哪行开始显示（用于滚动）

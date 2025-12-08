@@ -1,6 +1,10 @@
 #ifndef __NANO_GFX_H__
 #define __NANO_GFX_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <inttypes.h>
 #include <stdint.h>
 #include <unistd.h>
@@ -23,5 +27,9 @@ void add_glyph_index_to_cache(uint32_t utf32, uint32_t index);
 int32_t find_glyph_index_from_cache(uint32_t utf32);
 
 uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
