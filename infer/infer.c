@@ -116,7 +116,7 @@ void memory_map_params(LLM *llm, void* ptr) {
         ptr = (void*)fptr;
 
         w->q_tokens = parse_quantized_tensors(&ptr, 1, cfg->vocab_size * cfg->n_embd, llm->group_size);
-        w->token_embedding = malloc(cfg->vocab_size * cfg->n_embd * sizeof(float));
+        w->token_embedding = (float *)calloc(cfg->vocab_size * cfg->n_embd, sizeof(float));
         dequantize(&w->q_tokens->tensor_q80, w->token_embedding, cfg->vocab_size * cfg->n_embd, llm->group_size);
 
         w->wq = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_head * head_size), llm->group_size);
@@ -318,7 +318,7 @@ void load_llm(LLM *llm, Tokenizer *tk, char *model_path, uint32_t max_seq_len) {
 
     FILE *file = fopen(model_path, "rb");
     if (!file) { fprintf(stderr, "Couldn't open model file %s\n", model_path); exit(EXIT_FAILURE); }
-    uint8_t *buffer = (uint8_t *)malloc(llm->file_size + 1);
+    uint8_t *buffer = (uint8_t *)calloc(llm->file_size + 1, sizeof(uint8_t));
     if (!buffer)  { fprintf(stderr, "malloc failed.\n"); exit(EXIT_FAILURE); }
     if(fread(buffer, sizeof(uint8_t), llm->file_size, file) != llm->file_size) { exit(EXIT_FAILURE); }
     llm->buffer = buffer;
@@ -471,7 +471,7 @@ LoRA *load_lora(LLM *llm, char *lora_path) {
     long long unsigned int file_size = ftell(file);
     rewind(file);
 
-    uint8_t *lora_buffer = (uint8_t *)malloc(file_size + 1);
+    uint8_t *lora_buffer = (uint8_t *)calloc(file_size + 1, sizeof(uint8_t));
     if (!lora_buffer)  { fprintf(stderr, "malloc failed.\n"); exit(EXIT_FAILURE); }
 
     if(fread(lora_buffer, sizeof(uint8_t), file_size, file) != file_size) { exit(EXIT_FAILURE); }
@@ -1011,7 +1011,7 @@ Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperatu
     sampler->top_k = top_k;
     sampler->rng_state = rng_seed;
     // buffer only used with nucleus sampling; may not need but it's ~small
-    sampler->probindex = malloc(sampler->vocab_size * sizeof(ProbIndex));
+    sampler->probindex = (ProbIndex *)calloc(sampler->vocab_size, sizeof(ProbIndex));
     return sampler;
 }
 
