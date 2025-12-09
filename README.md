@@ -12,12 +12,10 @@
 
 **Nano**是Transformer结构的自回归语言模型，供个人赏玩、研究、炼丹炉煲机。期望：
 
-- 基于PyTorch，实现一个具体而微的Transformer语言模型。
-- 实现模型的预训练、监督微调过程。不做后训练（强化学习等）。
-- 从头训练出56M、168M参数的语言模型，以及配套的LoRA插件。
-- 实现各类设备上的推理，例如浏览器、路由器、单板机（如树莓派）等。
-- 研究模型的动力学、训/推加速等问题，以及解决其他模态和领域问题的潜能。
-- 对大语言模型祛魅，在实践中建立起对于LLM的感性经验和合理预期。
+- **训练实践**：实现Transformer语言模型的预训练和监督微调，训练出若干可用的模型。
+- **推理实践**：在单板机、单片机、浏览器、PC、服务器等各类环境上，高效推理语言模型。
+- **开放探索**：研究LLM的动力学等问题，探索LLM解决其他模态和领域问题的潜能。
+- **硅碳互动**：对LLM祛魅，在实践中建立起对于LLM的感性经验、合理预期和哲学认识。
 
 为什么叫“Nano”：
 
@@ -30,6 +28,7 @@
 
 |预训练和通用问答模型|领域监督微调模型|LoRA插件|
 |---------|-----------|-------|
+|[Nano-Pico](https://huggingface.co/bd4sur/Nano-Pico)|无规划|无规划|
 |[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|无规划|无规划|
 |[Nano-168M](https://huggingface.co/bd4sur/Nano-168M)|[业余无线电操作证考试](https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_875000_amateur_radio_890000.bin)|暂无公开插件|
 
@@ -39,53 +38,50 @@
 
 数据集为7z压缩包，解压口令“nano”。
 
-用于端侧推理的Qwen2.5/Qwen3模型（含量化模型）：[bd4sur/Qwen3](https://huggingface.co/bd4sur/Qwen3)
+适配Nano推理引擎的Qwen2.5/Qwen3模型：[bd4sur/Qwen3](https://huggingface.co/bd4sur/Qwen3)
 
 ## 推理部署
 
-### WASM/JS实现的基于浏览器的CPU推理
+|<img src="./doc/nano-web-2.png" width="100%"><br>Nano-Web 浏览器WASM部署|<img src="./doc/nano-raspi.jpg" width="100%"><br>Nano-Pod 树莓派部署|<img src="./doc/nano-marga.jpg" width="100%"><br>Nano-Marga 路由器部署|
+|-|-|-|
+|<img src="./doc/mio-on-jetson.jpg" width="100%"><br>Mio 私有云WebUI|<img src="./doc/nano-raspi.jpg" width="100%"><br>Nano-Pod 树莓派部署|<img src="./doc/nano-marga.jpg" width="100%"><br>Nano-Marga 路由器部署|
 
-- 访问[在线体验页面](https://bd4sur.com/Nano/infer)，或者用浏览器直接打开`Nano/infer/index.html`。
-- 按页面提示，下载基座模型、指令微调模型或LoRA插件（扩展名均为bin）。
-- 点击页面下方按钮，打开基座模型或指令微调模型。
-- 可切换文本续写模式和指令问答模式，默认后者。推荐使用指令微调后模型，在指令问答模式下体验。
-- 可随时加载或卸载LoRA插件。注意LoRA插件需要与某个预训练基座模型匹配。
-- 使用`export.py`将检查点文件转换为基座模型或者LoRA插件，详见下文。
+### 基于浏览器WASM的CPU推理
+
+基于[karpathy/llama2.c](https://github.com/karpathy/llama2.c)，用C语言和JavaScript分别实现的推理引擎。其中C语言实现的推理引擎被编译为WASM，支持FP32和Q80两种精度。JavaScript实现的推理引擎只支持FP32精度。仓库中已经提供了编译好的WASM二进制文件，可以开箱即用。
+
+- 访问[在线体验页面](https://bd4sur.com/Nano/infer/web)，或者用浏览器直接打开`Nano/infer/web/index.html`。
+- 手动下载基座模型、指令微调模型或LoRA插件（扩展名均为bin），或者直接点击下方按钮，自动从HuggingFace下载模型。
+- 可切换文本续写模式和指令问答模式，默认后者。如果使用基座模型，请选择文本续写模式。如果使用指令微调后的问答模型，请选择指令问答模式。如果使用Qwen模型，请选择指令问答模式。
+- 使用基座模型时，可随时加载或卸载与基座模型匹配的LoRA插件。
+- 使用`export.py`将模型检查点文件转换为二进制模型文件，详见下文。
 - 所有推理过程（含ASR和TTS）均在本地浏览器内部进行。
-- 作为WebUI，能够接入部署在本地服务器上的LLM/ASR/TTS接口，详见后文。
-- 构建方式：执行`bash infer_marga/build_wasm.sh`（工具链配置见注释），在`./infer`中生成`nano_infer.wasm`。
+- 作为WebUI，能够接入部署在服务器上的LLM/ASR/TTS接口，详见[文档](./doc/mio.md)。
+- 构建方式：执行`bash infer/build_wasm.sh`（工具链配置见注释），在`./infer/web`中生成`nano_infer.wasm`。
 
-![ ](./doc/nano-web-2.png)
+### 通用CPU推理
 
-### C语言实现的CPU推理
+基于[karpathy/llama2.c](https://github.com/karpathy/llama2.c)实现的纯C语言推理引擎，依赖很少，容易移植，可部署于各类设备，如树莓派、路由器、单片机、PC、服务器等。除了Nano，还适配了Qwen2-0.5B、Qwen3-0.6B/1.7B/4B。
 
-基于[karpathy/llama2.c](https://github.com/karpathy/llama2.c)实现的纯C语言推理引擎，几乎没有任何依赖，可部署于嵌入式设备。除了Nano，还适配了Qwen2-0.5B、Qwen3-0.6B/1.7B/4B。
+提供3种形态：Nano-CLI（终端交互）、Nano-WSS（WebSocket服务端）和Nano-Pod（有键盘输入和GUI的，能够语音输入输出的电子鹦鹉笼）。在`infer`目录下，执行`make`进行构建，构建得到的二进制文件位于`infer/bin`目录。执行以下命令以启动推理：
 
-提供3种形态：CLI、WebSocket服务端、功能完整的键盘屏幕交互对话（电子鹦鹉笼）。构建和运行方式如下：
+- Nano-CLI：`OMP_NUM_THREADS=N ./bin/nano_cli`
+- Nano-WSS：`OMP_NUM_THREADS=N ./bin/nano_wss <model.bin> -n <seqlen> -P <port=8080>`
+- Nano-Pod：`OMP_NUM_THREADS=N ./bin/nano_pod`
 
-- CLI：`cd ./infer_marga && make cli && ./nano_cli`
-- WebSocket服务端：`cd ./infer_marga && make wss && ./nano_wss <模型文件路径.bin> -n <上下文长度> -P <端口号=8080>`，随后打开`index.html`，开始对话。
-- 电子鹦鹉笼：`cd ./infer_marga && make marga && ./nano`
+上面命令中的`N`是线程数，需通过实验确定最佳数值。二进制模型文件的转换方式详见下文，可将Nano的pickle模型和Qwen2、Qwen3的HuggingFace模型转换为推理引擎可接受的二进制模型文件，文件内嵌词表。
 
-根据实际情况启用OpenMP或者基于pthreads的多线程实现。如果启用OpenMP并行优化，可以在exe前面加上`OMP_NUM_THREADS=<线程数>`。最佳线程数需要通过实验确定。
+Nano-Pod的详细安装部署文档详见[此处](doc/on-device.md)。
 
-模型转换方式详见下文。可将Nano的pickle模型和Qwen2、Qwen3的HuggingFace模型转换为推理引擎可接受的二进制模型文件，文件内嵌词表。
+### 基于自研Scheme解释器的浏览器CPU推理
 
-文档详见[此处](doc/on-device.md)。
+这一形态的推理引擎是由Scheme实现的，运行在BD4SUR自研的Scheme解释器[Animac](https://github.com/bd4sur/Animac)上。而Animac是由JavaScript实现的，运行在浏览器上。因此，这种部署方式的推理性能很低，只能部署Nano-Pico这样的极小语言模型，只作为技术验证。
 
-|树莓派离线部署|路由器离线部署|
-|--|--|
-|![ ](./doc/nano-raspi.jpg)|![ ](./doc/nano-marga.jpg)|
-
-### Scheme实现的、可在自研Scheme解释器上运行的推理
-
-详见 [Animac Playground](https://bd4sur.com/Animac)，[开源代码仓库](https://github.com/bd4sur/Animac)。
+开箱即用，请直接访问 [Animac Playground](https://bd4sur.com/Animac)。
 
 ### 基于PyTorch的CPU/GPU推理
 
-首先下载pt扩展名的基座模型、指令微调模型或LoRA插件到`checkpoint`目录。
-
-执行`python infer.py -i -m checkpoint/xxx.pt [-l lora.pt]`，其中`xxx.pt`是模型检查点文件，`lora.pt`是LoRA模块的检查点文件。可选的命令行参数如下：
+首先下载Pickle格式（pt扩展名）的基座模型、指令微调模型或LoRA插件到`checkpoint`目录。执行`python infer.py -i -m checkpoint/xxx.pt [-l lora.pt]`，其中`xxx.pt`是模型检查点文件，`lora.pt`是LoRA模块的检查点文件。可选的命令行参数如下：
 
 - `-m` or `--model`：字符串，模型相对路径。
 - `-l` or `--lora`：字符串，LoRA模块的相对路径。
@@ -95,140 +91,6 @@
 - `-k` or `--top_k`：整数，前k采样，默认值为5，越高则生成越多样。
 - `-r` or `--repetition_penalty`：浮点数，复读惩罚，默认值为1.2，越大则越抑制生成重复的词元。
 - `-p` or `--profile`：开关标识。若启用，则统计性能数据，包括首词元延迟、词元生成速率等。
-
-### Mio：适用于 Jetson AGX Orin 的实用化推理部署
-
-Mio是多个LLM、VLM和TTS模型的缝合怪，各自的依赖相互冲突，因此需要做一点小小的魔改。本人主要在 Jetson AGX Orin 上开发并部署Mio，因此此处记载的信息仅供个人备忘。
-
-```
-# 克隆本仓库
-git clone https://github.com/bd4sur/Nano
-cd Nano
-
-# 首先创建虚拟环境
-sudo apt install ffmpeg libavformat-dev libavcodec-dev libavutil-dev libavdevice-dev libavfilter-dev
-conda create -n nano python=3.10.15 pysocks -y
-conda activate nano
-
-# 单独安装NV官方魔改版PyTorch (https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048)
-python -m pip install /home/bd4sur/software/torch-2.4.0a0+07cecf4168.nv24.05.14710581-cp310-cp310-linux_aarch64.whl
-python -m pip install /home/bd4sur/software/torchaudio-2.3.0+952ea74-cp310-cp310-linux_aarch64.whl
-python -m pip install /home/bd4sur/software/torchvision-0.18.0a0+6043bc2-cp310-cp310-linux_aarch64.whl
-
-# 编译安装llama-cpp-python
-git clone --recurse-submodules https://github.com/abetlen/llama-cpp-python.git
-cd llama-cpp-python
-CMAKE_ARGS="-DGGML_CUDA=on -DLLAVA_BUILD=off" pip install . --verbose --force-reinstall --no-cache-dir
-
-# 可选：安装 Flash-Attention-2
-cd ..
-git clone https://github.com/Dao-AILab/flash-attention.git
-cd flash-attention
-# 接下来将`setup.py`中所有涉及`sm_xx`的部分改成`sm_87`（因为Orin的 Ampere GPU 的 Compute Capability == 8.7）
-# 然后执行安装命令（并行任务数不能高于6，否则会耗尽内存。）
-MAX_JOBS=4 python -m pip install . --no-build-isolation --verbose
-
-# 安装Triton和AutoAWQ
-cd ..
-git clone https://github.com/triton-lang/triton
-cd triton
-python -m pip install ninja cmake wheel pybind11 # build-time dependencies
-python -m pip install -e python --verbose
-cd ..
-git clone https://github.com/casper-hansen/AutoAWQ
-cd AutoAWQ
-python -m pip install . --verbose
-
-# 安装其他依赖
-python -m pip install -r requirements.txt --verbose
-```
-
-<details>
-
-<summary>生成自签名SSL证书</summary>
-
-**<span style="color: red;">警告：本节涉及网络安全，仅供本人技术备忘之用。读者切勿参考，否则后果自负。</span>**
-
-由于现代浏览器的安全策略限制，必须使用HTTPS，才能在浏览器上使用语音交互。因此，在内网服务器上部署时，需要正确配置SSL证书。
-
-1、首先生成私钥。过程中需要输入口令，必须牢记并保密该口令。
-
-```
-openssl genrsa -des3 -out key.pem 1024
-```
-
-2、在信任的环境中，将其解密为明文密钥，这样每次启动服务器或者建立SSL连接时，无需输入口令。
-
-```
-openssl rsa -in key.pem -out key_unencrypted.pem
-```
-
-3、生成CSR（证书签名请求）文件。注意：Common Name 必须与域名保持一致，否则浏览器会提示安全风险。
-
-openssl req -new -key key_unencrypted.pem -out bd4sur.csr
-
-4、生成自签名证书。首先在当前工作目录创建扩展配置文件`extconfig.txt`（[参考](https://www.openssl.org/docs/man3.0/man5/x509v3_config.html)），其内容如下，以添加“证书使用者可选名称”字段。如果不添加这一字段，则浏览器会提示安全风险。
-
-```
-basicConstraints = CA:FALSE
-subjectAltName = @alt_names
-[alt_names]
-DNS.1 = ai.bd4sur.intra
-```
-
-然后执行以下命令，生成自签名证书`bd4sur.crt`，其有效期为365天。
-
-```
-openssl x509 -req -days 365 -in bd4sur.csr -signkey key_unencrypted.pem -out bd4sur.crt -extfile extconfig.txt
-```
-
-5、将私钥文件`key_unencrypted.pem`和证书文件`bd4sur.crt`置于以下目录：
-
-- `~`
-- `~/ai/funasr/models` 用于FunASR容器通过挂载的目录访问。
-
-6、将证书设置为客户端的信任证书。对于安卓（小米）手机，通过“设置→密码与安全→系统安全→加密与凭据→从存储设备安装”，选取上面生成的`bd4sur.crt`，验证身份后，“凭据用途”选择“VPN和应用”即可。
-
-7、在手机上设置域名解析。在内网搭建DNS服务器之前，以下是一个权宜手段：手机安装[Virtual-Hosts](https://github.com/x-falcon/Virtual-Hosts)，设置hosts文件并启动。
-
-</details>
-
-<details>
-
-<summary>启动FunASR容器</summary>
-
-```
-# 首先启动容器
-sudo docker run -p 10096:10095 -it --rm --privileged=true --name funasr \
---volume /home/bd4sur/ai/_model/FunASR:/workspace/models \
---workdir /workspace/FunASR/runtime \
-registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.12
-
-# 在容器内启动FunASR进程
-nohup /bin/bash run_server_2pass.sh \
---download-model-dir /workspace/models \
---vad-dir damo/speech_fsmn_vad_zh-cn-16k-common-onnx \
---model-dir damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx \
---online-model-dir damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online-onnx  \
---punc-dir damo/punc_ct-transformer_zh-cn-common-vad_realtime-vocab272727-onnx \
---itn-dir thuduj12/fst_itn_zh \
---hotword /workspace/models/hotwords.txt \
---certfile /workspace/models/bd4sur.crt \
---keyfile /workspace/models/key_unencrypted.pem > log.txt 2>&1 &
-```
-
-</details>
-
-启动LLM服务器：`python server.py`
-
-在浏览器中输入`https://ai.bd4sur.intra:8443`，进入对话窗口。
-
-**注意事项**
-
-- 视觉问答目前只支持针对一幅图片的连续问答。
-- 选用纯语言模型时，不要上传图片，否则可能会出错。
-
-![ ](./doc/mio-on-jetson.jpg)
 
 ## 训练
 
@@ -242,10 +104,15 @@ python -m pip install -r requirements.txt
 
 ### 2. 数据下载·预处理
 
-- 自行准备或者下载笔者收集的预训练数据集和指令微调数据集。
-- 解压得到`pretrain.txt`和`sft.jsonl`两个文件，移动到`dataset`目录下。
-- 将`data.py`中`PRETRAIN_DATASETS`和`SFT_DATASET`替换为刚刚下载的两个文件。
-- 执行`python data.py`，进行数据预处理。可能占用大量记忆体和存储空间，请提前预留。
+Nano的预训练数据集可以直接使用无任何特殊格式的原始文本语料，建议在每个文段的前后加上`<|bos|>`和`<|eos|>`特殊词元，这有助于避免训练时将不相关的文本混淆到同一个上下文窗口中（目前暂未实现）。预处理时，首先将原始文本语料按`block_size`切分成块，编码为词元序列，并将次元序列编码为每块一行的base64字符串，再将所有的块打乱顺序，保存在`pt.base64`文件中。训练时，按（打乱后的）顺序成批读取每个块，对语言模型进行预训练。
+
+指令微调数据集是JSONL格式，每一行是一轮QA，格式为`{"question": "提示语", "answer": "答复"}`，在数据预处理阶段转换为指令模板的格式：`<|InstructMark|>提示语<|ResponseMark|>答复<|eos|><|Padding|>*`，填充至上下文长度。Nano现在不支持多轮对话，因多轮对话在原理上与单轮对话的SFT没有本质区别。后续可能会支持。
+
+数据预处理的步骤如下：
+
+- 将`pretrain.txt`和`sft.jsonl`文件，放置于`dataset`目录下。
+- 将`data.py`中`PRETRAIN_DATASETS`和`SFT_DATASET`替换为预训练和SFT语料文件的路径，并指定上下文窗口长度和词表文件。
+- 执行`python data.py`，进行数据预处理。过程可能占用大量内存和存储，请提前预留。
 
 ### 3. 预训练和监督微调
 
@@ -259,7 +126,7 @@ python -m pip install -r requirements.txt
 
 **预训练**：
 
-在预训练之前，首先根据规模扩展法则确定模型的规模、性能和算力预算，再确定模型的结构参数。作为参考，笔者训练的56M模型的参数如下（在`config/model_config.json`中设置）：
+在预训练之前，首先根据规模扩展法则确定模型的规模、性能和算力预算，再确定模型的结构参数。作为参考，笔者训练的56M模型的参数如下（在`config/model.json`中设置）：
 
 |block_size|vocab_size|n_layer|n_embd|n_head|n_kv_head|n_hidden|norm_eps|
 |----|----|----|----|----|----|----|----|
@@ -270,7 +137,7 @@ python -m pip install -r requirements.txt
 单卡或者CPU训练，执行
 
 ```bash
-python train.py -m config/model_config.json -t config/config_pretrain.json
+python train.py -m config/model.json -t config/pretrain.json
 ```
 
 分布式数据并行（DDP）训练，在主节点上执行以下命令。注意设置卡数。
@@ -279,33 +146,33 @@ python train.py -m config/model_config.json -t config/config_pretrain.json
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 OMP_NUM_THREADS=1 \
 python -m torch.distributed.run --nproc_per_node 4 \
-train.py -m config/model_config.json -t config/config_pretrain.json
+train.py -m config/model.json -t config/pretrain.json
 ```
 
 如果从某个检查点开始继续预训练，需要带上参数`-c`。
 
 请注意：
 
-- 训练参数的设置与训练任务和算力资源相关。将`config/config_pretrain.json`中的`batch_size`设置为一个能够充分利用显存的值。对于 AGX Orin (64GiB)，训练56M模型，可设置为160。
+- 训练参数的设置与训练任务和算力资源相关。将`config/pretrain.json`中的`batch_size`设置为一个能够充分利用显存的值。对于 AGX Orin (64GiB)，训练56M模型，可设置为160。
 - 训练没有最大步数限制。因此，需要自行决定何时中止训练。建议不少于1轮（epoch），保证模型“见过”全部语料。
 - 如果使用DDP训练，`gradient_accumulation_steps`应设置为显卡数的整数倍。
 - 支持保存模型检查点。训练过程中，程序将按照模型保存策略，保存模型训练检查点到`checkpoint`目录。保存策略主要有三点：一是根据训练配置文件中规定的间隔，每隔一定的步数保存一个检查点；二是只有当验证集损失下降才会保存检查点；三是每隔1000步定期保存一次检查点。优先级：策略3 > 策略2 > 策略1。
-- 支持手动断点续训。如果预训练意外中止，可以将`config/config_pretrain.json`中的`from_checkpoint`字段设为上一个检查点的相对路径`"checkpoint/xxx.pt"`，然后重新启动训练。
+- 支持手动断点续训。如果预训练意外中止，可以将`config/pretrain.json`中的`from_checkpoint`字段设为上一个检查点的相对路径`"checkpoint/xxx.pt"`，然后重新启动训练。
 - 支持训练过程监控。每次训练，程序都会记录一个新的训练日志文件`train_xxx.log`，位于仓库根目录。执行`python plot_loss.py -n train_xxx.log`，绘制训练集损失曲线。
 
 **监督微调（全参数）**
 
-监督微调一般是在某个预训练模型的基础上作继续训练，因而首先将`config/config_sft.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行下列命令：
+监督微调一般是在某个预训练模型的基础上作继续训练，因而首先将`config/sft.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行下列命令：
 
 ```bash
 # 单卡或CPU
-python train.py -m config/model_config.json -t config/config_sft.json
+python train.py -m config/model.json -t config/sft.json
 
 # DDP
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 OMP_NUM_THREADS=1 \
 python -m torch.distributed.run --nproc_per_node 4 \
-train.py -m config/model_config.json -t config/config_sft.json
+train.py -m config/model.json -t config/sft.json
 ```
 
 请注意：
@@ -325,10 +192,10 @@ LoRA微调在任务性质、优化目标上与全参数微调没有区别，但�
 - LoRA训练的计算量并不小，因为训练过程中还是需要完整进行基座模型的前向传播，并且LoRA模型训练收敛较慢甚至不收敛，且对超参设置非常敏感，需要多次实验才能找到合适的超参。
 - LoRA微调，或者说一切监督微调，都不是解决领域能力注入的银弹。LoRA更适合作语言风格微调这类与考试和事实性信息注入关系不大的任务，例如模仿某人的说话风格等等。
 
-与全参数微调类似，先将`config/config_lora.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行下列命令：
+与全参数微调类似，先将`config/lora.json`中的`from_checkpoint`字段设为预训练模型的相对路径`"checkpoint/xxx.pt"`。然后执行下列命令：
 
 ```bash
-python train.py -m config/model_config.json -t config/config_lora.json
+python train.py -m config/model.json -t config/lora.json
 ```
 
 ### 4. 模型转换
@@ -384,7 +251,7 @@ Nano是典型的Transformer语言模型，如下图所示。
 - 支持KV-Cache。
 - 支持插件化的低秩适配（LoRA）训练和推理。
 
-模型结构参数`model_config.json`：
+模型结构参数`model.json`：
 
 |参数|类型|默认值|说明|
 |-|-|-|-|
@@ -412,18 +279,6 @@ Nano是典型的Transformer语言模型，如下图所示。
 - 为了提升英文编码效率，在词表中手工添加了部分英文单词。
 - 词元编码器采用Trie树+最大前向匹配算法进行分词。
 - 仓库中同时包含了tiktoken提供的一个BPE词元编码算法，由于速度很慢，并不实用，因此仅作为参照，并不实际使用。之所以不使用BPE等词元编码工具，例如tiktoken、Tokenizers等，一方面是为了最小化外部依赖，另一方面也是想探索不含（高效）词元编码的语言模型效果如何。
-
-**预训练数据格式**
-
-- 原则上讲，随便什么文本都可以，没有任何的格式要求。
-- 建议在独立文章的前后加上定界用的特殊词元`<|bos|>`和`<|eos|>`。这有助于避免训练时将不相关的文本混淆到同一个上下文窗口中（目前暂未实现）。
-- 但是要注意“垃圾进、垃圾出”喔！因此，如果想获得比较好的模型，就务必重视预训练数据的处理工作。
-
-**监督微调（指令微调）数据格式**
-
-- Nano指令模板格式：`<|InstructMark|>提示语<|ResponseMark|>答复<|eos|><|Padding|>*`，填充至上下文长度。
-- SFT数据集是JSONL格式，每一行是一轮QA，格式为`{"question": "提示语", "answer": "答复"}`，在数据预处理阶段转换为指令模板的格式。
-- Nano现在不支持多轮对话，因多轮对话在原理上与单轮对话的SFT没有本质区别。后续可能会支持。
 
 **模型训练参数**
 
