@@ -4,7 +4,7 @@
 **B站视频演示**：
 
 |<a href="https://www.bilibili.com/video/BV1SjajztELH" target="_blank"><img src="./doc/nano-rpi-2.jpg" width="100%"><br>树莓派语音对话离线部署</a>|<a href="https://www.bilibili.com/video/BV1rNgCzNE84" target="_blank"><img src="./doc/nano-scheme.jpg" width="100%"><br>基于自制Scheme解释器的推理</a>|<a href="https://www.bilibili.com/video/BV1mhVzzrEJf" target="_blank"><img src="./doc/nano-video-marga.jpg" width="100%"><br>路由器离线部署</a>|
-|-|-|-|
+|:--:|:--:|:--:|
 |<a href="https://www.bilibili.com/video/BV1NAieYiEFi" target="_blank"><img src="./doc/nano.jpg" width="100%"><br>浏览器离线推理+ASR+TTS</a>|<a href="https://www.bilibili.com/video/BV1vmrsYGERP" target="_blank"><img src="./doc/nano-video-ar-class-c.jpg" width="100%"><br>通过业余无线电C证考试</a>|<a href="https://www.bilibili.com/video/BV1vPRDYyEgp" target="_blank"><img src="./doc/nano-mi-ax5.jpg" width="100%"><br>红米AX5路由器部署推理</a>|
 
 
@@ -24,13 +24,11 @@
 
 ## 模型和数据
 
-预训练模型和问答模型（其中bin扩展名的模型可用于浏览器推理）：
-
-|预训练和通用问答模型|领域监督微调模型|LoRA插件|
-|---------|-----------|-------|
-|[Nano-Pico](https://huggingface.co/bd4sur/Nano-Pico)|无规划|无规划|
-|[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|无规划|无规划|
-|[Nano-168M](https://huggingface.co/bd4sur/Nano-168M)|[业余无线电操作证考试](https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_875000_amateur_radio_890000.bin)|暂无公开插件|
+|模型|说明|领域监督微调模型|LoRA插件|
+|:---------:|:----:|:-----------:|:-------:|
+|[Nano-Pico](https://huggingface.co/bd4sur/Nano-Pico)|用于验证极低资源推理部署的极小规模模型|无规划|无规划|
+|[Nano-56M](https://huggingface.co/bd4sur/Nano-56M)|56M参数，包括基础模型和通用问答模型|无规划|无规划|
+|[Nano-168M](https://huggingface.co/bd4sur/Nano-168M)|168M参数，包括基础模型和通用问答模型|[业余无线电操作证考试](https://huggingface.co/bd4sur/Nano-168M/resolve/main/nano_168m_625000_sft_875000_amateur_radio_890000.bin)|暂无公开插件|
 
 公开数据集：
 
@@ -40,11 +38,11 @@
 
 适配Nano推理引擎的Qwen2.5/Qwen3模型：[bd4sur/Qwen3](https://huggingface.co/bd4sur/Qwen3)
 
-## 推理部署
+## 推理
 
-|<img src="./doc/nano-web-2.png" width="100%"><br>Nano-Web 浏览器WASM部署|<img src="./doc/nano-raspi.jpg" width="100%"><br>Nano-Pod 树莓派部署|<img src="./doc/nano-marga.jpg" width="100%"><br>Nano-Marga 路由器部署|
-|-|-|-|
-|<img src="./doc/mio-on-jetson.jpg" width="100%"><br>Mio 私有云WebUI|<img src="./doc/nano-raspi.jpg" width="100%"><br>Nano-Pod 树莓派部署|<img src="./doc/nano-marga.jpg" width="100%"><br>Nano-Marga 路由器部署|
+|<img src="./doc/nano-raspi.jpg" width="100%"><br>Nano-Pod<br>部署于树莓派5代|<img src="./doc/nano-marga.jpg" width="100%"><br>Nano-Marga<br>部署于京东云路由器|<img src="./doc/nano-a733.jpg" width="100%"><br>Nano-Card<br>部署于Cubie-A7Z|
+|:--:|:--:|:--:|
+|<img src="./doc/nano-animac.png" width="100%"><br>Nano-Animac<br>部署于自研Scheme解释器|<img src="./doc/nano-web-2.png" width="100%"><br>Nano-Web<br>部署于浏览器|<img src="./doc/nano-esp.jpg" width="100%"><br>Nano-ESP<br>部署于ESP32-P4单片机|
 
 ### 基于浏览器WASM的CPU推理
 
@@ -104,11 +102,21 @@ python -m pip install -r requirements.txt
 
 ### 2. 数据下载·预处理
 
-Nano的预训练数据集可以直接使用无任何特殊格式的原始文本语料，建议在每个文段的前后加上`<|bos|>`和`<|eos|>`特殊词元，这有助于避免训练时将不相关的文本混淆到同一个上下文窗口中（目前暂未实现）。预处理时，首先将原始文本语料按`block_size`切分成块，编码为词元序列，并将次元序列编码为每块一行的base64字符串，再将所有的块打乱顺序，保存在`pt.base64`文件中。训练时，按（打乱后的）顺序成批读取每个块，对语言模型进行预训练。
+Nano的预训练数据集可以直接使用无任何特殊格式的原始文本语料，建议在每个文段的前后加上`<|bos|>`和`<|eos|>`特殊词元，这有助于避免训练时将不相关的文本混淆到同一个上下文窗口中（目前暂未实现）。数据集预处理的步骤如下：
 
-指令微调数据集是JSONL格式，每一行是一轮QA，格式为`{"question": "提示语", "answer": "答复"}`，在数据预处理阶段转换为指令模板的格式：`<|InstructMark|>提示语<|ResponseMark|>答复<|eos|><|Padding|>*`，填充至上下文长度。Nano现在不支持多轮对话，因多轮对话在原理上与单轮对话的SFT没有本质区别。后续可能会支持。
++ 将原始文本语料按`block_size`切分成块。
++ 将文本块编码为词元序列（numpy的array）。
++ 将每个块的词元序列编码为base64字符串，以便保存为易于解析的纯文本文件。
++ 将所有的块随机打乱顺序，并划分为训练集和验证集两部分。
++ 分别保存在`pt_train.base64`和`pt_valid.base64`文件中。
 
-数据预处理的步骤如下：
+指令微调数据集是JSONL格式，每一行是一轮QA，格式为`{"question": "提示语", "answer": "答复"}`，在数据预处理阶段转换为指令模板的格式：`<|InstructMark|>提示语<|ResponseMark|>答复<|eos|><|Padding|>*`，填充至上下文长度。其余处理步骤与预训练语料相同。Nano现在不支持多轮对话，因多轮对话在原理上与单轮对话的SFT没有本质区别。后续可能会支持。
+
+为了用有限的内存打乱巨大的数据集，将巨大数据集文件划分为一定大小的块，暂存在磁盘上，在块内进行随机打乱，然后将打乱后的各块按照乱序重新拼接起来。这样做的好处是能够在内存有限的机器上处理TB级数据集，坏处是无法在整个数据集的范围内彻底随机打乱，实际训练过程中可以看到loss的周期性尖峰，可能与此有关。这是一种权衡。
+
+在Nano目前的实现中，数据集划分实际上并未严格隔离训练集和验证集，训练集等于100%的数据集，验证集是从训练集中简单抽取5%得到。
+
+数据预处理的操作步骤如下：
 
 - 将`pretrain.txt`和`sft.jsonl`文件，放置于`dataset`目录下。
 - 将`data.py`中`PRETRAIN_DATASETS`和`SFT_DATASET`替换为预训练和SFT语料文件的路径，并指定上下文窗口长度和词表文件。
@@ -255,8 +263,8 @@ Nano是典型的Transformer语言模型，如下图所示。
 
 |参数|类型|默认值|说明|
 |-|-|-|-|
-|block_size|int|256|上下文（窗口）长度|
-|vocab_size|int|10000|词典长度（实际取决于词元编码器）|
+|block_size|int|512|上下文（窗口）长度|
+|vocab_size|int|8192|词表长度|
 |n_layer|int|4|模型深度，即Transformer模型层数|
 |n_head|int|4|Q注意力头数|
 |n_kv_head|int|4|KV注意力头数|
@@ -266,12 +274,6 @@ Nano是典型的Transformer语言模型，如下图所示。
 |use_rope|bool|True|使用RoPE位置编码？反之使用训练位置编码|
 |norm_eps|float|1e-5|均方根标准化层参数|
 |is_causal|bool|True|因果注意力？|
-
-**数据预处理**
-
-- 包含文本分块、词元编码、数据集划分、随机打乱、SFT模板组装等处理步骤。
-- 为了在有限的记忆体内打乱巨大的数据集，将巨大数据集文件划分为一定大小的块，暂存在磁盘上，在块内进行随机打乱，然后将打乱后的各块按照乱序重新拼接起来。这样做的好处是能够在记忆体有限的机器上处理TB级数据集，坏处是无法在整个数据集的范围内彻底随机打乱，实际训练过程中可以看到loss的周期性尖峰，可能与此有关。这是一种权衡。
-- 考虑到大规模预训练过程中验证集损失的意义并不是决定性的，同时为了充分利用宝贵的数据资源，在默认实现中，数据集划分实际上并未严格隔离训练集和验证集，训练集等于100%的数据集，验证集是从训练集中简单抽取5%得到。
 
 **词元编码**
 
@@ -291,7 +293,7 @@ Nano是典型的Transformer语言模型，如下图所示。
 - `gradient_accumulation_steps: int`：梯度累加步数。默认值：1。在DDP场景下，梯度累积步数必须是GPU卡数的整数倍。梯度累加技术可以在有限的批次大小上模拟以较大批大小训练的效果，其原理是以时间换空间，根据偏导数的加法分配律，将几个小批次上多步迭代得到的梯度进行累加，使用累加后的梯度一次性更新参数，达到模拟较大批次的效果。
 - `grad_clip: float`：梯度压限系数，用于防止梯度爆炸。默认值：1.0。
 - `dropout: float`：随机丢弃层的丢弃概率，仅在训练阶段有效。默认值：0。预训练阶段一般设置为0，微调阶段一般为非0。
-- `learning_rate: float`：初始学习率。默认值：6e-4。
+- `learning_rate: float`：初始学习率。默认值：5e-4。模型越小，初始学习率越应适当增大。
 - `weight_decay: float`：权重衰减系数。默认值：1e-1。
 - `beta1: float`：AdamW优化器参数，详见[文档](https://pytorch.org/docs/stable/generated/torch.optim.AdamW.html)。默认值：0.9。
 - `beta2: float`：AdamW优化器参数，详见[文档](https://pytorch.org/docs/stable/generated/torch.optim.AdamW.html)。默认值：0.99。
@@ -343,6 +345,10 @@ python inference_ds.py
 
 ## 其他玩法
 
+|<img src="./doc/q.jpg" width="100%">|<img src="./doc/sort.png" width="100%">|
+|:--:|:--:|
+|丘成桐先生也答不出的Q问题|排序问题（见[B站视频](https://www.bilibili.com/video/BV1XZ421s7bM)）|
+
 笔者选取若干个自然语言处理之外的问题，试图探索Transformer模型在各类（机器学习）问题上的潜力。
 
 ```bash
@@ -353,11 +359,7 @@ python problem.py
 
 所谓“Q问题”，是《鲁豫有约》20150902期节目中，主持人给丘成桐出的一道脑筋急转弯题。
 
-![ ](./doc/q.jpg)
-
 **玩法2：排序，但是GPT**
-
-[B站视频](https://www.bilibili.com/video/BV1XZ421s7bM)
 
 eg. 114515 -> 111455
 
