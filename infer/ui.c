@@ -111,7 +111,7 @@ void text_typeset(
             line_x_pos += char_width;
         }
 
-        *line_num = break_count;
+        *line_num = (break_count <= 0) ? 1 : break_count;
         *length = char_count;
     }
 
@@ -247,12 +247,15 @@ void render_scroll_bar(int32_t current_line, int32_t line_num, int32_t view_line
     }
     else if (current_line >= line_num) {
         // current_line超过了末行，则对文本行数取模后滚动
-        current_line = current_line % line_num;
+        current_line = (line_num <= 0) ? 0 : current_line % line_num;
     }
 
     for (int n = y; n < y + height; n++) {
         fb_plot(x + width - 1, n, !(n % 3));
     }
+
+    line_num = (line_num <= 0) ? 1 : line_num;
+
     // 如果总行数装不满视图，则滚动条长度等于视图高度height
     uint8_t bar_height = (line_num < view_lines) ? (uint8_t)(height) : (uint8_t)((view_lines * height) / line_num);
     // 进度条高度不小于3px

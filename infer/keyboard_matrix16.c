@@ -1,5 +1,4 @@
-#ifndef __NANO_KEYBOARD_H__
-#define __NANO_KEYBOARD_H__
+#include "keyboard_hal.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -7,16 +6,12 @@
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "platform.h"
 
 
 static int kb_fd;
 
-int keyboard_init() {
+int keyboard_hal_init() {
     kb_fd = open(KB_I2C_DEVFILE, O_RDWR);
     if(kb_fd < 0) {
         return -1;
@@ -27,7 +22,7 @@ int keyboard_init() {
     return 0;
 }
 
-char keyboard_read_key() {
+char keyboard_hal_read_key() {
     char val = 0x03;
     char read_buf = 0;
     if(write(kb_fd, &val, 1) < 0) {
@@ -41,9 +36,3 @@ char keyboard_read_key() {
         return -1;
     }
 }
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif

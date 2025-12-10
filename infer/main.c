@@ -8,7 +8,7 @@
 #include "graphics.h"
 #include "ui.h"
 #include "ups.h"
-#include "keyboard.h"
+#include "keyboard_hal.h"
 #include "infer.h"
 #include "prompt.h"
 
@@ -310,7 +310,7 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state, Nano
     }
 
     // 长/短按A键中止推理
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
         wcscpy(g_llm_output_of_last_session, L"");
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_PREFILLING;
@@ -365,7 +365,7 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_S
     }
 
     // 长/短按A键中止推理
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
         wcscpy(g_llm_output_of_last_session, session->output_text);
         g_tps_of_last_session = session->tps;
         return LLM_STOPPED_IN_DECODING;
@@ -464,22 +464,22 @@ int32_t menu_event_handler(
     int32_t (*menu_item_action)(int32_t), int32_t prev_focus, int32_t current_focus
 ) {
     // 短按0-9数字键：直接选中屏幕上显示的那页的相对第几项
-    if (ke->key_edge == -1 && (ke->key_code >= 0 && ke->key_code <= 9)) {
+    if (ke->key_edge == -1 && (ke->key_code >= KEYCODE_NUM_0 && ke->key_code <= KEYCODE_NUM_9)) {
         if (ke->key_code < ms->item_num) {
             ms->current_item_intex = ms->first_item_intex + (uint32_t)(ke->key_code) - 1;
         }
         return menu_item_action(ms->current_item_intex);
     }
     // 短按A键：返回上一个焦点状态
-    else if (ke->key_edge == -1 && ke->key_code == 10) {
+    else if (ke->key_edge == -1 && ke->key_code == KEYCODE_NUM_A) {
         return prev_focus;
     }
     // 短按D键：执行菜单项对应的功能
-    else if (ke->key_edge == -1 && ke->key_code == 13) {
+    else if (ke->key_edge == -1 && ke->key_code == KEYCODE_NUM_D) {
         return menu_item_action(ms->current_item_intex);
     }
     // 长+短按*键：光标向上移动
-    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == 14) {
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_STAR) {
         if (ms->first_item_intex == 0 && ms->current_item_intex == 0) {
             ms->first_item_intex = ms->item_num - ms->items_per_page;
             ms->current_item_intex = ms->item_num - 1;
@@ -497,7 +497,7 @@ int32_t menu_event_handler(
         return current_focus;
     }
     // 长+短按#键：光标向下移动
-    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == 15) {
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_HASH) {
         if (ms->first_item_intex == ms->item_num - ms->items_per_page && ms->current_item_intex == ms->item_num - 1) {
             ms->first_item_intex = 0;
             ms->current_item_intex = 0;
@@ -525,12 +525,12 @@ int32_t textarea_event_handler(
     int32_t prev_focus, int32_t current_focus
 ) {
     // 短按A键：回到上一个焦点
-    if (ke->key_edge == -1 && ke->key_code == 10) {
+    if (ke->key_edge == -1 && ke->key_code == KEYCODE_NUM_A) {
         return prev_focus;
     }
 
     // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
-    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == 14) {
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_STAR) {
         if (ts->current_line <= 0) { // 卷到顶
             ts->current_line = ts->line_num - 5;
         }
@@ -544,7 +544,7 @@ int32_t textarea_event_handler(
     }
 
     // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
-    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == 15) {
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_HASH) {
         if (ts->current_line >= (ts->line_num - 5)) { // 卷到底
             ts->current_line = 0;
         }
@@ -753,7 +753,7 @@ int main() {
     widget_textarea_state->line_num = 0;
     widget_textarea_state->current_line = 0;
 
-    key_event->key_code = 16;  // 大于等于16为没有任何按键，0-15为按键
+    key_event->key_code = KEYCODE_NUM_IDLE; // 大于等于16为没有任何按键，0-15为按键
     key_event->key_edge = 0;   // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)
     key_event->key_timer = 0;  // 按下计时器
     key_event->key_mask = 0;   // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
@@ -761,7 +761,7 @@ int main() {
 
     // 空按键状态：用于定时器事件
     Key_Event *void_key_event = (Key_Event*)calloc(1, sizeof(Key_Event));
-    void_key_event->key_code = 16;
+    void_key_event->key_code = KEYCODE_NUM_IDLE;
     void_key_event->key_edge = 0;
     void_key_event->key_timer = 0;
     void_key_event->key_mask = 0;
@@ -783,16 +783,16 @@ int main() {
     ///////////////////////////////////////
     // 矩阵按键初始化与读取
 
-    if(keyboard_init() < 0) return -1;
-    key_event->prev_key = 16;
+    if(keyboard_hal_init() < 0) return -1;
+    key_event->prev_key = KEYCODE_NUM_IDLE;
 
 
     while (1) {
-        char key = keyboard_read_key();
+        char key = keyboard_hal_read_key();
         // 边沿
         if (key_event->key_mask != 1 && (key != key_event->prev_key)) {
             // 按下瞬间（上升沿）
-            if (key != 16) {
+            if (key != KEYCODE_NUM_IDLE) {
                 key_event->key_code = key;
                 key_event->key_edge = 1;
                 key_event->key_timer = 0;
@@ -816,7 +816,7 @@ int main() {
         // 按住或松开
         else {
             // 按住
-            if (key != 16) {
+            if (key != KEYCODE_NUM_IDLE) {
                 key_event->key_code = key;
                 key_event->key_edge = 0;
                 key_event->key_timer++;
@@ -824,7 +824,7 @@ int main() {
                 if (key_event->key_repeat == 1) {
                     key_event->key_edge = -2;
                     key_event->key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
-                    key = 16; // 便于后面设置prev_key为16（无键按下）
+                    key = KEYCODE_NUM_IDLE; // 便于后面设置prev_key为KEYCODE_NUM_IDLE（无键按下）
                     key_event->key_repeat = 1;
                 }
                 // 如果没有点亮动作标记key_repeat，则达到长按阈值后触发长按事件
@@ -832,12 +832,12 @@ int main() {
                     // printf("按住超时触发长按：%d，计时=%d，key_mask=%d\n", (int)key, key_event->key_timer, (int)key_event->key_mask);
                     key_event->key_edge = -2;
                     key_event->key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
-                    key = 16; // 便于后面设置prev_key为16（无键按下）
+                    key = KEYCODE_NUM_IDLE; // 便于后面设置prev_key为KEYCODE_NUM_IDLE（无键按下）
                 }
             }
             // 松开
             else {
-                key_event->key_code = 16;
+                key_event->key_code = KEYCODE_NUM_IDLE;
                 key_event->key_edge = 0;
                 key_event->key_timer = 0;
                 key_event->key_mask = 0;
@@ -863,7 +863,7 @@ int main() {
             }
 
             // 按下任何键，不论长短按，进入主菜单
-            if (key_event->key_edge < 0 && key_event->key_code < 16) {
+            if (key_event->key_edge < 0 && key_event->key_code != KEYCODE_NUM_IDLE) {
                 init_main_menu();
                 STATE = -2;
             }
@@ -918,7 +918,7 @@ int main() {
             PREV_STATE = STATE;
 
             // 长+短按A键：删除一个字符；如果输入缓冲区为空，则回到主菜单
-            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
                 if (widget_input_state->state == 0 && widget_input_state->length <= 0) {
                     init_input(key_event, global_state, widget_input_state);
                     STATE = -2;
@@ -926,12 +926,12 @@ int main() {
             }
 #ifdef ASR_ENABLED
             // 按下C键：开始PTT
-            else if (key_event->key_edge > 0 && key_event->key_code == 12) {
+            else if (key_event->key_edge > 0 && key_event->key_code == KEYCODE_NUM_C) {
                 STATE = 21;
             }
 #endif
             // 短按D键：提交
-            else if (key_event->key_edge == -1 && key_event->key_code == 13) {
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
                 if (widget_input_state->state == 0) {
                     STATE = 8;
                 }
@@ -1095,12 +1095,12 @@ int main() {
             PREV_STATE = STATE;
 
             // 短按D键：重新推理。推理完成后，并不清除输入缓冲区，因此再次按D键会重新推理。
-            if (key_event->key_edge == -1 && key_event->key_code == 13) {
+            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
                 STATE = 8;
             }
             else {
                 // 短按A键：停止TTS
-                if (key_event->key_edge == -1 && key_event->key_code == 10) {
+                if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_A) {
 #ifdef TTS_ENABLED
                     if (g_config_tts_mode > 0) {
                         stop_tts();
@@ -1168,7 +1168,7 @@ int main() {
             }
 
             // 松开按钮，停止PTT
-            if (global_state->is_recording > 0 && key_event->key_edge == 0 && key_event->key_code == 16) {
+            if (global_state->is_recording > 0 && key_event->key_edge == 0 && key_event->key_code == KEYCODE_NUM_IDLE) {
                 printf("松开PTT\n");
                 global_state->is_recording = 0;
                 global_state->asr_start_timestamp = 0;
@@ -1204,7 +1204,7 @@ int main() {
             }
 
             // 短按A键：清屏，清除输入缓冲区，回到初始状态
-            else if (key_event->key_edge == -1 && key_event->key_code == 10) {
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_A) {
                 // 刷新文本输入框
                 init_input(key_event, global_state, widget_input_state);
                 STATE = 0;
@@ -1235,7 +1235,7 @@ int main() {
             }
 
             // 按A键返回主菜单
-            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
                 STATE = -2;
             }
 
@@ -1258,7 +1258,7 @@ int main() {
             PREV_STATE = STATE;
 
             // 长按D键确认关机
-            if (key_event->key_edge == -2 && key_event->key_code == 13) {
+            if (key_event->key_edge == -2 && key_event->key_code == KEYCODE_NUM_D) {
                 wcscpy(widget_textarea_state->text, L" \n \n    正在安全关机...");
                 widget_textarea_state->current_line = 0;
                 widget_textarea_state->is_show_scroll_bar = 0;
@@ -1281,7 +1281,7 @@ int main() {
             }
 
             // 长短按A键取消关机，返回主菜单
-            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
                 STATE = -2;
             }
 
@@ -1304,7 +1304,7 @@ int main() {
             PREV_STATE = STATE;
 
             // 选项0
-            if (key_event->key_edge == -1 && key_event->key_code == 0) {
+            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_0) {
                 g_config_tts_mode = 0;
 
                 wcscpy(widget_textarea_state->text, L"TTS已关闭。");
@@ -1318,7 +1318,7 @@ int main() {
             }
 
             // 选项1
-            else if (key_event->key_edge == -1 && key_event->key_code == 1) {
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_1) {
                 g_config_tts_mode = 1;
 
                 wcscpy(widget_textarea_state->text, L"TTS设置为实时请求。");
@@ -1332,7 +1332,7 @@ int main() {
             }
 
             // 选项2
-            else if (key_event->key_edge == -1 && key_event->key_code == 2) {
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_2) {
                 g_config_tts_mode = 2;
 
                 wcscpy(widget_textarea_state->text, L"TTS设置为生成结束后统一请求合成。");
@@ -1346,7 +1346,7 @@ int main() {
             }
 
             // 长短按A键，返回设置菜单
-            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
                 STATE = 5;
             }
 
@@ -1369,7 +1369,7 @@ int main() {
             PREV_STATE = STATE;
 
             // 选项0
-            if (key_event->key_edge == -1 && key_event->key_code == 0) {
+            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_0) {
                 g_config_auto_submit_after_asr = 0;
 
                 wcscpy(widget_textarea_state->text, L"ASR自动提交已关闭");
@@ -1383,7 +1383,7 @@ int main() {
             }
 
             // 选项1
-            else if (key_event->key_edge == -1 && key_event->key_code == 1) {
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_1) {
                 g_config_auto_submit_after_asr = 1;
 
                 wcscpy(widget_textarea_state->text, L"ASR自动提交已开启");
@@ -1397,7 +1397,7 @@ int main() {
             }
 
             // 长短按A键，返回设置菜单
-            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
                 STATE = 5;
             }
 

@@ -1,5 +1,23 @@
 #include "display_hal.h"
 
+#include <inttypes.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <linux/i2c-dev.h>
+#include <errno.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include <wchar.h>
+
+#define OLED_CMD 0  // 写命令
+#define OLED_DATA 1 // 写数据
+
+#define OLED_Command_Mode 0x00
+#define OLED_Data_Mode    0x40
+
 static int i2cdev_fd;
 
 // 发送命令
@@ -31,23 +49,23 @@ void OLED_WriteCommand(uint8_t cmd) {
 }
 
 // 更新显存到OLED
-void OLED_Refresh(uint8_t **FRAME_BUFFER) {
-    for (uint8_t row = 0; row < OLED_PAGES; row++) {
+void display_hal_refresh(uint8_t **FRAME_BUFFER) {
+    for (uint8_t row = 0; row < FB_PAGES; row++) {
         uint8_t col = 0;
         OLED_WriteCommand(0xb0 + row); // 设置行起始地址
         OLED_WriteCommand(0x00 + (col & 0x0F));        // 设置低列起始地址
         OLED_WriteCommand(0x10 + (col & 0x0F)); // 设置高列起始地址
 
-        // for (u8 col = 0; col < OLED_WIDTH; col++) {
+        // for (uint8_t col = 0; col < FB_WIDTH; col++) {
         //     OLED_WriteData(FRAME_BUFFER[row][col]);
         // }
 
         uint8_t buf[129];
         buf[0] = OLED_Data_Mode;
-        for (uint8_t col = 0; col < OLED_WIDTH; col++) {
+        for (uint8_t col = 0; col < FB_WIDTH; col++) {
             buf[col + 1] = FRAME_BUFFER[row][col];
         }
-        if( write(i2cdev_fd, buf, (OLED_WIDTH+1)) != (OLED_WIDTH+1) ) printf("I2C write error\n");
+        if( write(i2cdev_fd, buf, (FB_WIDTH+1)) != (FB_WIDTH+1) ) printf("I2C write error\n");
 
         // Wire.beginTransmission(OLED_I2C_ADDR);
         // Wire.write(OLED_Data_Mode);
@@ -56,7 +74,7 @@ void OLED_Refresh(uint8_t **FRAME_BUFFER) {
     
         // 有32字节的缓冲区??
 /*
-        while (col < OLED_WIDTH) {
+        while (col < FB_WIDTH) {
             uint8_t buf[64];
             buf[0] = OLED_Data_Mode;
             uint8_t actual_buf_length = 1;
@@ -64,7 +82,7 @@ void OLED_Refresh(uint8_t **FRAME_BUFFER) {
                 buf[i] = FRAME_BUFFER[row][col];
                 col++;
                 actual_buf_length++;
-                if(col >= OLED_WIDTH) break;
+                if(col >= FB_WIDTH) break;
             }
             if( write(i2cdev_fd, buf, actual_buf_length) != actual_buf_length ) printf("I2C write error\n");
         }
@@ -73,7 +91,7 @@ void OLED_Refresh(uint8_t **FRAME_BUFFER) {
 }
 
 // OLED的初始化
-void OLED_Init(void) {
+void display_hal_init(void) {
     // 初始化屏幕设备
     i2cdev_fd = open(OLED_I2C_DEVFILE, O_RDWR);
     if (i2cdev_fd < 0) {
@@ -83,7 +101,7 @@ void OLED_Init(void) {
         printf("OLED ioctl error : %s\r\n", strerror(errno));
     }
 
-    delay(100);
+    usleep(100*1000);
 
 #ifdef SSD1309
 
@@ -153,7 +171,7 @@ void OLED_Init(void) {
 
 }
 
-void OLED_Close(void) {
+void display_hal_close(void) {
     close(i2cdev_fd);
 }
 

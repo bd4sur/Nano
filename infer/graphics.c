@@ -2,7 +2,6 @@
 
 #include "display_hal.h"
 
-// uint8_t FRAME_BUFFER[OLED_PAGES][OLED_WIDTH];
 static uint8_t **FRAME_BUFFER;
 
 static AVLNode *GLYPH;
@@ -13,9 +12,9 @@ static uint32_t GLYPH_CACHE_LEVEL; // 字形缓存的水位
 
 void gfx_init() {
     // 初始化GDRAM
-    FRAME_BUFFER = (uint8_t **)calloc(OLED_PAGES, sizeof(uint8_t *));
-    for(uint8_t i = 0; i < OLED_PAGES; i++) {
-        FRAME_BUFFER[i] = (uint8_t *)calloc(OLED_WIDTH, sizeof(uint8_t));
+    FRAME_BUFFER = (uint8_t **)calloc(FB_PAGES, sizeof(uint8_t *));
+    for(uint8_t i = 0; i < FB_PAGES; i++) {
+        FRAME_BUFFER[i] = (uint8_t *)calloc(FB_WIDTH, sizeof(uint8_t));
     }
 
     // 初始化字库
@@ -25,26 +24,26 @@ void gfx_init() {
     GLYPH_CACHE = (uint32_t*)calloc(2048, sizeof(uint32_t));
     GLYPH_CACHE_LEVEL = 0;
 
-    OLED_Init();
+    display_hal_init();
 
     fb_clear();
 }
 
 
 void gfx_close() {
-    OLED_Close();
+    display_hal_close();
     freeTree(GLYPH);
 }
 
 
 void gfx_refresh() {
-    OLED_Refresh(FRAME_BUFFER);
+    display_hal_refresh(FRAME_BUFFER);
 }
 
 // 清屏函数
 void fb_clear(void) {
-    for (uint8_t i = 0; i < OLED_PAGES; i++) {
-        for (uint8_t n = 0; n < OLED_WIDTH; n++) {
+    for (uint8_t i = 0; i < FB_PAGES; i++) {
+        for (uint8_t n = 0; n < FB_WIDTH; n++) {
             FRAME_BUFFER[i][n] = 0;
         }
     }
@@ -53,8 +52,8 @@ void fb_clear(void) {
 
 // 清屏函数
 void fb_soft_clear(void) {
-    for (uint8_t i = 0; i < OLED_PAGES; i++) {
-        for (uint8_t n = 0; n < OLED_WIDTH; n++) {
+    for (uint8_t i = 0; i < FB_PAGES; i++) {
+        for (uint8_t n = 0; n < FB_WIDTH; n++) {
             FRAME_BUFFER[i][n] = 0;
         }
     }
@@ -65,13 +64,13 @@ void fb_soft_clear(void) {
 // y: 0~63
 // t: 0-置0  1-置1  2-异或
 void fb_plot(uint8_t x, uint8_t y, uint8_t mode) {
-    if (x >= OLED_WIDTH || y >= OLED_HEIGHT) {
+    if (x >= FB_WIDTH || y >= FB_HEIGHT) {
         // printf("WARNING: Plot Coord Out of bound! Cancelled.\n");
         return;
     }
     uint8_t i, m, n;
-    i = y / OLED_PAGES;
-    m = y % OLED_PAGES;
+    i = y / FB_PAGES;
+    m = y % FB_PAGES;
     n = 1 << m;
     if (mode == 0) {
         FRAME_BUFFER[i][x] = ~FRAME_BUFFER[i][x];
@@ -213,7 +212,7 @@ void fb_draw_char(uint8_t x, uint8_t y, uint8_t *glyph, uint8_t font_width, uint
 // BMP[]：要写入的图片数组
 // mode:0,反色显示;1,正常显示
 void fb_draw_bitmap(uint8_t x, uint8_t y, uint8_t sizex, uint8_t sizey, uint8_t BMP[], uint8_t mode) {
-    u16 j = 0;
+    uint32_t j = 0;
     uint8_t i, n, temp, m;
     uint8_t x0 = x, y0 = y;
     sizey = sizey / 8 + ((sizey % 8) ? 1 : 0);
