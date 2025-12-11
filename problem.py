@@ -12,10 +12,10 @@ from train import TrainGPT
 # 注意：先将`model.py`中的 `USE_KV_CACHE` 设为 False
 
 # "q", "sort", "palindrome", "calculator"
-TASK_TAG = "calculator"
+TASK_TAG = "sort"
 
-MAX_STEPS = 500
-SEQ_LENGTH = 6
+MAX_STEPS = 2000
+SEQ_LENGTH = 8
 
 MIN_NUMBER = 0
 MAX_NUMBER = 1
@@ -29,12 +29,12 @@ os.makedirs(os.path.join(ROOT_PATH, "dataset_preprocessed"), exist_ok=True)
 CHECKPOINT_FILE_NAME = f"problem_{TASK_TAG}.pt"
 TRAINSET_PATH        = f"{ROOT_PATH}/dataset_preprocessed/problem_{TASK_TAG}_train.base64"
 VALSET_PATH          = f"{ROOT_PATH}/dataset_preprocessed/problem_{TASK_TAG}_val.base64"
-TOKENIZER_PATH       = f"{ROOT_PATH}/dataset_preprocessed/problem_{TASK_TAG}_tokenizer.json"
+TOKENIZER_PATH       = f"{ROOT_PATH}/tokenizer/nano_80.json"
 
 
 model_config = {
     "block_size": SEQ_LENGTH,
-    "vocab_size": 100,
+    "vocab_size": 80,
     "n_layer": 2,
     "n_embd": 32,
     "n_head": 2,
@@ -96,10 +96,10 @@ elif TASK_TAG == "sort":
     model_config["block_size"] = SEQ_LENGTH
     model_config["n_layer"]    = 2
     model_config["n_embd"]     = 32
-    model_config["n_head"]     = 2
+    model_config["n_head"]     = 4
     model_config["n_kv_head"]  = 2
     model_config["n_hidden"]   = 16
-    model_config["use_rope"]   = False
+    model_config["use_rope"]   = True
     model_config["is_causal"]  = False
 
 elif TASK_TAG == "palindrome":
@@ -243,7 +243,8 @@ def generate_dataset():
     if TASK_TAG in ["q", "sort", "palindrome"]:
         print(f"Building tokenizer...")
         tokenizer = Tokenizer()
-        tokenizer.build_from_text(fulltext, TOKENIZER_PATH)
+        # tokenizer.build_from_text(fulltext, TOKENIZER_PATH)
+        tokenizer.load_from_config_file(TOKENIZER_PATH)
 
         train_path = TRAINSET_PATH
         val_path   = VALSET_PATH
@@ -313,7 +314,7 @@ def inference(checkpoint_path):
 
     # 读取模型检查点和训练配置
     print(f"Loading checkpoint from {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     train_config = checkpoint['train_config']
     model_config = checkpoint['model_config']
 
@@ -329,7 +330,8 @@ def inference(checkpoint_path):
 
     # 读取分词器
     tokenizer = Tokenizer()
-    tokenizer.load_from_config_dict(checkpoint['tokenizer_config'])
+    # tokenizer.load_from_config_dict(checkpoint['tokenizer_config'])
+    tokenizer.load_from_config_file(TOKENIZER_PATH)
 
     with torch.no_grad():
         ok_count = 0
