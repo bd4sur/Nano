@@ -363,6 +363,13 @@ python problem.py
 
 eg. 114515 -> 111455
 
+```
+# 2025.12新增C语言实现的sort推理
+cd infer
+make sort
+./bin/nano_sort
+```
+
 **玩法3：回文序列**
 
 eg. 123456 -> 654321

@@ -11,7 +11,7 @@ endif
 
 BIN_DIR := bin
 
-all: $(BIN_DIR) pod card cli wss tty
+all: $(BIN_DIR) pod card tty cli sort wss
 
 $(BIN_DIR):
 	mkdir -p $@
@@ -36,6 +36,11 @@ cli: $(BIN_DIR)/nano_cli
 $(BIN_DIR)/nano_cli: main_cli.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
 	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
+# Nano-Sort：演示如何用LLM解决排序问题（
+sort: $(BIN_DIR)/nano_sort
+$(BIN_DIR)/nano_sort: main_sort.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+
 # Nano-WSS：WebSocket服务器
 wss: $(BIN_DIR)/nano_wss
 $(BIN_DIR)/nano_wss: main_wss.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
@@ -50,5 +55,8 @@ install:
 
 clean:
 	rm -f $(BIN_DIR)/nano_pod
+	rm -f $(BIN_DIR)/nano_card
+	rm -f $(BIN_DIR)/nano_tty
 	rm -f $(BIN_DIR)/nano_cli
+	rm -f $(BIN_DIR)/nano_sort
 	rm -f $(BIN_DIR)/nano_wss

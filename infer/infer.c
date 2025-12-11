@@ -339,7 +339,9 @@ void free_llm(LLM* llm, Tokenizer *tk) {
     free(llm->buffer);
 #endif
 
-    free(llm->params.token_embedding);
+    if (llm->quant_type == QUANT_TYPE_Q80) {
+        free(llm->params.token_embedding);
+    }
     free(llm->params.q_tokens);
     if (llm->config.is_shared_classifier == 0) {
         free(llm->params.token_classifier);
@@ -658,8 +660,10 @@ void rope(float *head, uint32_t head_dim, uint32_t pos, float *freq_cis_real_row
     }
 }
 
-
-float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm, LoRA *lora) {
+// NOTE 该函数实现了在1个token+过往KVCache上的完整的因果自注意力前向推理。对于一般的自回归因果语言模型推理，is_causal=1。
+//      参数is_causal=0启用全局自注意力，仅用于（且必须搭配用于）seq2seq函数。因该函数并没有实现完整的seq2seq全局自注意力前向推理。
+//      seq2seq函数主要是整活用途，有大量冗余计算，效率极低。
+float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, uint32_t is_causal, LLM* llm, LoRA *lora) {
 
     LLM_Config *cfg = &llm->config;
     LLM_Param *w = &llm->params;
@@ -817,7 +821,8 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
             // attention scores for this head
             float* att = s->att + h * max_seq_len; // NOTE max_seq_len不一定等于模型本身的block_size。这样做的目的是为了节约内存。
             // iterate over all timesteps, including the current one
-            for (int t = 0; t <= pos; t++) {
+            uint32_t attn_range = (is_causal) ? (pos + 1) : max_seq_len; // NOTE 用于兼容因果自注意力和全局自注意力
+            for (int t = 0; t < attn_range; t++) {
                 // get the key vector for this head and at this timestep
                 float* k = s->k_cache + layer_offset + t * kv_dim + (h / kv_mul) * head_dim;
                 // calculate the attention score as the dot product of q and k
@@ -831,12 +836,12 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, LLM* llm,
             }
 
             // softmax the scores to get attention weights, from 0..pos inclusively
-            softmax(att, pos + 1);
+            softmax(att, attn_range);
 
             // weighted sum of the values, store back into xba
             float* xba = s->xba + h * head_dim;
             memset(xba, 0, head_dim * sizeof(float));
-            for (int t = 0; t <= pos; t++) {
+            for (int t = 0; t < attn_range; t++) {
                 // get the value vector for this head and at this timestep
                 float* v = s->v_cache + layer_offset + t * kv_dim + (h / kv_mul) * head_dim;
                 // get the attention weight for this timestep
@@ -1033,7 +1038,7 @@ uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t p
 
     uint32_t next_token = output_ids[pos];
 
-    float* logits = llm_forward(next_token, pos, ctx->max_seq_len, llm, lora);
+    float* logits = llm_forward(next_token, pos, ctx->max_seq_len, 1, llm, lora);
 
     // Pre-fill: if we are still processing the input prompt, force the next prompt token
     if (is_prefilling == 1) {
@@ -1225,3 +1230,45 @@ int32_t generate_sync(
     llm_session_free(session);
     return status;
 }
+
+
+// 序列生成：用于推理诸如排序、回文数等Nano架构的序列生成模型
+void seq2seq(Nano_Context *ctx, wchar_t *input_list, wchar_t *output_list, uint32_t max_seq_len) {
+    uint32_t num_prompt_tokens = 0;
+    uint32_t *input_ids = encode_nano(ctx->tokenizer, input_list, &num_prompt_tokens);
+    uint32_t *output_ids = (uint32_t *)calloc(max_seq_len, sizeof(uint32_t));
+
+    LLM *llm = ctx->llm;
+    Sampler *sampler = ctx->sampler;
+
+    float *output_logits = (float*)calloc(max_seq_len * sampler->vocab_size, sizeof(float));
+
+    // 阶段1：预填充KVCache。
+    //   内层循环对输入序列的每一个pos进行前向计算，填充每一层的第pos位置上的KVCache。
+    //   一次遍历完整个序列后，只有第一层的KVCache完成了对整个序列的全局自注意力，但下游各层并没有。
+    //   下游各层的KVCache依赖于上游各层完成全局自注意力（输出的中间值）。因此这个过程需要执行L次。
+    for (uint32_t i = 0; i < llm->config.n_layer; i++) {
+        for (uint32_t pos = 0; pos < max_seq_len; pos++) {
+            (void)llm_forward(input_ids[pos], pos, max_seq_len, 0, llm, NULL);
+
+        }
+    }
+
+    // 阶段2：KVCache全部填充后，再对每个pos执行完整的forward，获得每个pos上的logits
+    for (uint32_t pos = 0; pos < max_seq_len; pos++) {
+        float *logits = llm_forward(input_ids[pos], pos, max_seq_len, 0, llm, NULL);
+        memcpy(output_logits + pos * sampler->vocab_size, logits, sampler->vocab_size *sizeof(float));
+    }
+
+    // 阶段3：对每个pos上的logits进行单独的采样
+    for (uint32_t pos = 0; pos < max_seq_len; pos++) {
+        float *logits = output_logits + pos * sampler->vocab_size;
+        output_ids[pos] = sample_argmax(logits, sampler->vocab_size);
+    }
+
+    free(input_ids);
+    free(output_logits);
+
+    wcscpy(output_list, decode_nano(ctx->tokenizer, output_ids, max_seq_len));
+}
+

@@ -246,6 +246,8 @@ int32_t generate_sync(
     int32_t (*on_finished)(Nano_Session*)
 );
 
+void seq2seq(Nano_Context *ctx, wchar_t *input_list, wchar_t *output_list, uint32_t max_seq_len);
+
 void free_lora(LLM *llm, LoRA *lora);
 void free_llm(LLM *llm, Tokenizer *tk);
 void free_sampler(Sampler *sampler);
