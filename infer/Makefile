@@ -18,13 +18,15 @@ $(BIN_DIR):
 
 # Nano-pod：带键盘和屏幕的电子鹦鹉笼
 pod: $(BIN_DIR)/nano_pod
-$(BIN_DIR)/nano_pod: main.c display_ssd130x_linux.c keyboard_matrix16.c graphics.c ui.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
-	$(CC) -DSSD1309 -D'I2C_DEVFILE="/dev/i2c-1"' $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+$(BIN_DIR)/nano_pod: main.c ups.c display_ssd130x_linux.c keyboard_matrix16.c graphics.c ui.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+	$(CC) -DSSD1309 -D'I2C_DEVFILE="/dev/i2c-1"' -DUPS_ENABLED -DASR_ENABLED -DTTS_ENABLED \
+	$(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-Card：运行在Cubie-A7Z上的卡片式电子鹦鹉
 card: $(BIN_DIR)/nano_card
 $(BIN_DIR)/nano_card: main.c display_ssd130x_linux.c keyboard_matrix16.c graphics.c ui.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
-	$(CC) -DSSD1306 -D'I2C_DEVFILE="/dev/i2c-7"' $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+	$(CC) -DSSD1306 -D'I2C_DEVFILE="/dev/i2c-7"' \
+	$(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty

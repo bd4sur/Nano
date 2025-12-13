@@ -196,14 +196,14 @@ void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
 
     uint32_t offset = 0;
 
-    uint32_t magic_number_0 = header[offset]; offset++;
-    uint32_t magic_number_1 = header[offset]; offset++;
+    /* uint32_t magic_number_0 = header[offset]; */ offset++;
+    /* uint32_t magic_number_1 = header[offset]; */ offset++;
 
-    uint32_t major_version  = header[offset]; offset++;
-    uint32_t minor_version  = header[offset]; offset++;
+    /* uint32_t major_version  = header[offset]; */ offset++;
+    /* uint32_t minor_version  = header[offset]; */ offset++;
 
     uint32_t model_type     = header[offset]; offset++;
-    uint32_t config_length  = header[offset]; offset++;
+    /* uint32_t config_length  = header[offset]; */ offset++;
 
     config->block_size      = header[offset]; offset++;
     config->vocab_size      = header[offset]; offset++;

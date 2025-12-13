@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 
+#include "utils.h"
 #include "platform.h"
 
 // 逻辑键值定义
@@ -27,8 +28,8 @@ extern "C" {
 #define KEYCODE_NUM_HASH (15)
 #define KEYCODE_NUM_IDLE (16)
 
-int keyboard_hal_init();
-char keyboard_hal_read_key();
+int32_t keyboard_hal_init();
+uint8_t keyboard_hal_read_key();
 
 #ifdef __cplusplus
 }

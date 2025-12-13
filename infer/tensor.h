@@ -5,9 +5,7 @@
 extern "C" {
 #endif
 
-#include <stdlib.h>
-#include <stdint.h>
-#include <math.h>
+#include "utils.h"
 
 // 量化类型
 #define QUANT_TYPE_F32  (0)

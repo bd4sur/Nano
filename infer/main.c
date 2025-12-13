@@ -4,7 +4,6 @@
 #include <sys/stat.h>
 #include <errno.h>
 
-#include "pinyin.h"
 #include "graphics.h"
 #include "ui.h"
 #include "ups.h"
@@ -20,7 +19,7 @@
 #define DECODE_LED_OFF  system("echo \"0\" > /sys/devices/platform/leds/leds/blue:status/brightness");
 
 // 推理引擎实例（单例模式）
-static Nano_Context *g_llm_ctx;
+static Nano_Context *g_llm_ctx = NULL;
 
 static char *MODEL_PATH_1 = MODEL_ROOT_DIR "/nano_168m_625000_sft_947000_q80.bin";
 static char *MODEL_PATH_2 = MODEL_ROOT_DIR "/nano_56m_99000_sft_v2_200000_q80.bin";
@@ -52,11 +51,11 @@ uint32_t g_max_seq_len = 512;
 
 
 // 传递PTT状态的命名管道
-int g_ptt_fifo_fd;
+int g_ptt_fifo_fd = 0;
 // 传递ASR识别结果的命名管道
-int g_asr_fifo_fd;
+int g_asr_fifo_fd = 0;
 // 传递给TTS的文字内容的命名管道
-int g_tts_fifo_fd;
+int g_tts_fifo_fd = 0;
 
 #define PTT_FIFO_PATH "/tmp/ptt_fifo"
 
@@ -74,15 +73,15 @@ int32_t g_tts_split_from = 0; // 切句子的起始位置
 ///////////////////////////////////////
 // 全局GUI组件对象
 
-Global_State           *global_state;
-Key_Event              *key_event;
-Widget_Textarea_State  *widget_textarea_state;
-Widget_Textarea_State  *asr_textarea_state;
-Widget_Textarea_State  *prefilling_textarea_state;
-Widget_Input_State     *widget_input_state;
-Widget_Menu_State      *main_menu_state;
-Widget_Menu_State      *model_menu_state;
-Widget_Menu_State      *setting_menu_state;
+Global_State           *global_state  = {0};
+Key_Event              *key_event = {0};
+Widget_Textarea_State  *widget_textarea_state = {0};
+Widget_Textarea_State  *asr_textarea_state = {0};
+Widget_Textarea_State  *prefilling_textarea_state = {0};
+Widget_Input_State     *widget_input_state = {0};
+Widget_Menu_State      *main_menu_state = {0};
+Widget_Menu_State      *model_menu_state = {0};
+Widget_Menu_State      *setting_menu_state = {0};
 
 // 全局状态标志
 int32_t STATE = -1;
@@ -788,7 +787,7 @@ int main() {
 
 
     while (1) {
-        char key = keyboard_hal_read_key();
+        uint8_t key = keyboard_hal_read_key();
         // 边沿
         if (key_event->key_mask != 1 && (key != key_event->prev_key)) {
             // 按下瞬间（上升沿）

@@ -9,7 +9,7 @@ extern "C" {
 // I2C端口设备文件（屏幕、键盘、UPS共用）
 // ===============================================================================
 // Raspberry Pi 5
-#define I2C_DEVFILE "/dev/i2c-1"
+// #define I2C_DEVFILE "/dev/i2c-1"
 
 // Cubie-A7Z
 // #define I2C_DEVFILE "/dev/i2c-7"
@@ -31,28 +31,25 @@ extern "C" {
 // ===============================================================================
 // #define NCURSES
 // #define SSD1306
-#define SSD1309
-#define OLED_I2C_DEVFILE I2C_DEVFILE
+// #define SSD1309
 #define OLED_I2C_ADDR (0x3c)
 
 // ===============================================================================
 // 键盘
 // ===============================================================================
-#define KB_I2C_DEVFILE I2C_DEVFILE
 #define KB_I2C_ADDR (0x27)
 
 // ===============================================================================
 // UPS（仅树莓派）
 // ===============================================================================
-#define UPS_ENABLED
-#define UPS_I2C_DEVICE I2C_DEVFILE
+// #define UPS_ENABLED
 #define UPS_I2C_ADDR (0x36)
 
 // ===============================================================================
 // ASR和TTS
 // ===============================================================================
-#define ASR_ENABLED
-#define TTS_ENABLED
+// #define ASR_ENABLED
+// #define TTS_ENABLED
 
 #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
 

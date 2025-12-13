@@ -9,6 +9,13 @@ static Nano_Context *g_llm_ctx;
 
 static Nano_Session *g_llm_session;
 
+// return time in milliseconds, for benchmarking the model speed
+long time_in_ms() {
+    struct timespec time;
+    clock_gettime(CLOCK_REALTIME, &time);
+    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
+}
+
 int32_t on_prefilling(Nano_Session *session) {
     // printf("Pre-filling...\n");
     return LLM_RUNNING_IN_PREFILLING;

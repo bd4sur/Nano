@@ -1,7 +1,5 @@
 #include "display_hal.h"
 
-#include <inttypes.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +9,8 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <wchar.h>
+
+#include "utils.h"
 
 #define OLED_CMD 0  // 写命令
 #define OLED_DATA 1 // 写数据
@@ -93,7 +93,7 @@ void display_hal_refresh(uint8_t **FRAME_BUFFER) {
 // OLED的初始化
 void display_hal_init(void) {
     // 初始化屏幕设备
-    i2cdev_fd = open(OLED_I2C_DEVFILE, O_RDWR);
+    i2cdev_fd = open(I2C_DEVFILE, O_RDWR);
     if (i2cdev_fd < 0) {
         printf("OLED open error : %s\r\n", strerror(errno));
     }

@@ -5,11 +5,11 @@
 extern "C" {
 #endif
 
-#include <inttypes.h>
-#include <stdint.h>
-#include <unistd.h>
+#include "utils.h"
 
-#include "font.h"
+#define FONT_HEIGHT (12)
+#define FONT_WIDTH_FULL (12)
+#define FONT_WIDTH_HALF (6)
 
 void gfx_init();
 void gfx_close();

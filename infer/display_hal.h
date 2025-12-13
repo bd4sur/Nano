@@ -1,5 +1,5 @@
-#ifndef __OLED_H__
-#define __OLED_H__
+#ifndef __NANO_DISPLAY_HAL_H__
+#define __NANO_DISPLAY_HAL_H__
 
 #ifdef __cplusplus
 extern "C" {

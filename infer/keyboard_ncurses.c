@@ -4,12 +4,12 @@
 
 #include "platform.h"
 
-int keyboard_hal_init() {
+int32_t keyboard_hal_init() {
     return 0;
 }
 
-char keyboard_hal_read_key() {
-    char ch = (char)getch();
+uint8_t keyboard_hal_read_key() {
+    uint8_t ch = (uint8_t)getch();
     switch(ch) {
         case '1': return KEYCODE_NUM_1;
         case '2': return KEYCODE_NUM_2;

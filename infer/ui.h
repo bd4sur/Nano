@@ -6,12 +6,12 @@ extern "C" {
 #endif
 
 #include <wchar.h>
-#include <stdint.h>
 
+#include "utils.h"
 #include "infer.h"
 
-#define INPUT_BUFFER_LENGTH  (65536)
-#define OUTPUT_BUFFER_LENGTH (65536)
+#define INPUT_BUFFER_LENGTH  (16384)
+#define OUTPUT_BUFFER_LENGTH (16384)
 
 #define IME_MODE_HANZI    (0)
 #define IME_MODE_ALPHABET (1)
@@ -20,11 +20,11 @@ extern "C" {
 #define ALPHABET_COUNTDOWN_MAX (30)
 #define LONG_PRESS_THRESHOLD (360)
 
-#define MAX_CANDIDATE_NUM (1024)     // 候选字最大数量
+#define MAX_CANDIDATE_NUM (256)     // 候选字最大数量
 #define MAX_CANDIDATE_PAGE_NUM (108) // 候选字最大分页数
 #define MAX_CANDIDATE_NUM_PER_PAGE (10) // 每页最多有几个候选字（每页10个字）
 
-#define MAX_MENU_ITEMS (1024)
+#define MAX_MENU_ITEMS (128)
 #define MAX_MENU_ITEM_LEN (24)
 
 typedef struct {
@@ -113,13 +113,6 @@ typedef struct {
     wchar_t title[MAX_MENU_ITEM_LEN]; // 菜单标题
     wchar_t items[MAX_MENU_ITEMS][MAX_MENU_ITEM_LEN]; // 条目标题
 } Widget_Menu_State;
-
-
-// 符号列表
-static wchar_t ime_symbols[55] = L"，。、？！：；“”‘’（）《》…—～·【】 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
-// 按键对应的字母列表
-static wchar_t ime_alphabet[10][32] = {L"0", L" 1.,:?!-/+_=&\"*", L"abcABC2", L"defDEF3", L"ghiGHI4", L"jklJKL5", L"mnoMNO6", L"pqrsPRQS7", L"tuvTUV8", L"wxyzWXYZ9"};
-
 
 void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode);
 
