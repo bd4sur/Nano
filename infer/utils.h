@@ -11,9 +11,7 @@ extern "C" {
 #include <ctype.h>
 #include <math.h>
 
-
-
-#if CONFIG_IDF_TARGET_ESP32S3
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
     #define uint64_t unsigned long long
     #define int64_t signed long long
     #define uint32_t unsigned int
@@ -24,14 +22,6 @@ extern "C" {
     #define int8_t signed char
 #else
     #include <stdint.h>
-    // typedef unsigned long long uint64_t;
-    // typedef signed long long int64_t;
-    // typedef unsigned int uint32_t;
-    // typedef signed int int32_t;
-    // typedef unsigned short uint16_t;
-    // typedef signed short int16_t;
-    // typedef unsigned char uint8_t;
-    // typedef signed char int8_t;
 #endif
 
 // ===============================================================================

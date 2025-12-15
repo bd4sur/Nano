@@ -11,7 +11,7 @@ void sleep_in_ms(uint32_t ms) {
 }
 
 uint64_t get_timestamp_in_ms() {
-    (uint64_t)millis();
+    return (uint64_t)millis();
 }
 
 // 优雅关机

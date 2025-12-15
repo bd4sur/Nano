@@ -36,7 +36,7 @@ static char *MODEL_PATH_5 = MODEL_ROOT_DIR "/qwen3-1b7-q80.bin";
 static char *MODEL_PATH_6 = MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q80.bin";
 
 static float g_tps_of_last_session = 0.0f;
-static wchar_t g_llm_output_of_last_session[OUTPUT_BUFFER_LENGTH];
+static wchar_t g_llm_output_of_last_session[OUTPUT_BUFFER_LENGTH] = L"";
 static wchar_t g_asr_output[OUTPUT_BUFFER_LENGTH] = L"请说话...";
 
 static wchar_t g_anniversory[OUTPUT_BUFFER_LENGTH] = L"我在博客中，一直回避谈我自己。原因一方面固然是隐私安全考虑，而更重要的原因是，在博客中谈我自己，相当于直面“我是谁”这个终极问题，而我难以回答这个问题，甚至在求索的过程中，只会看到自己的空虚和肤浅。\n\n诸君应该知道，佛经中经常出现“如是我闻”这四个字，意思是“我听说事情是这样的…”。于是我转而回答“我知道什么”，试图迂回说明“什么是我”“什么属于我”，而非径直回答“我是什么”。\n\n一方面，我将个人博客转型为业余电台网站，以电台为载体，来间接呈现它的OP也就是我自己的所见所闻、所思所想。这样的好处是，业余电台是一个比“我”简单得多的系统，介绍“我的电台”，比介绍“我”更容易。电台是一个具象的抓手，可以允许我免于直接回答“我是谁”这个困难的问题。\n\n另一方面，我尽力将我的精神世界区分为“事实”和“观点”两部分，将事实放在“博客”栏目，将观点放在“灵感”栏目。尽管实践中难以明确区分二者，但我依然认为，将思维的依据和思维的结果解耦开来，通过罗列“什么是我”“什么属于我”来渐进式地刻画出我的精神世界的面貌，有助于以超脱的视角来观测我自己，有助于我接近“我是谁”这个问题的答案。\n\n还有一种策略。既然“我是谁”这个问题难以回答，不妨退而求其次，试图回答退化的问题：“我想成为什么样的人”。这个问题实际上包含三个方面，分别是我“想”、我“能”和我“得”。这问题表面上看起来是反思自我，实际上却有很强烈的“外部性”，涉及人作为社会人的价值的评判。\n\n具体而言，为了深刻反思自我，就必须以人为镜，对标他人。想要对标他人，就要了解他人。了解他人，除了了解抽象的他人，还应该了解具体的他人。求解“他是谁”这个问题，似乎比求解“我是谁”这个问题简单一点。既然谈的是博客，那么阅读某人的博客，实际上就是阅读一个“具体的人”。\n\n有人认为，当今网友思维极端化，“二极管思维”盛行，擅长扣帽子、贴标签。但这责任，依我看，也要归咎于许多人并不懂得如何呈现“具体”的自己。许多人活得太抽象，不仅在认识他人的时候太抽象，认识自己的时候也太抽象。人与人之间，都习惯于通过标签和简单归纳来互相认识，这难免产生“二极管思维”。我尽力避免成为这样的人，因此我希望回答好“我是谁”这个问题，呈现一个“具体”的自己。\n\n然而，活得“具体”是很难的。我有个点子，那就是为了观察某人的“专业性”，可以要求他在十秒内说出一句包含很多专业术语的话。一方面，认识具体的人，难免要花不少的时间去与对方交流、相处，也包括阅读他的文章。另一方面，为了让自己活得具体，就要输入足量的具体的事实，输出足量的具体的观点。这也就是说，人要活得“具体”，首先要活得“丰富”。泡利还是谁说过，所谓专家，就是把他所在领域中所有能犯的错误都犯过一遍的人。有了足量的具体细节，才“有资格”发展出自己的“高观点”，从“真懂”到“真信”，实现“我有什么”到“我是什么”的飞跃。\n\n这实际上就是人的认识规律，而且是认识规律的很小但很重要的一方面。这提醒我，要“把手弄脏”，先谈问题，再谈主义。这既是认识他人和世界的方法，也是认识自我的途径。\n\n取乎上得乎中，取乎中得乎下。对标什么人，想成为什么人，能成为什么人，必须要成为什么人。这是人生观的大问题，不可不察。\n";
@@ -51,9 +51,8 @@ char *g_lora_path = NULL;
 float g_repetition_penalty = 1.05f;
 float g_temperature = 1.0f;
 float g_top_p = 0.5f;
-unsigned int g_top_k = 0;
+uint32_t g_top_k = 0;
 uint32_t g_max_seq_len = 512;
-
 
 
 
@@ -166,7 +165,6 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_S
     }
 #endif
 
-    free(session->output_text);
     return LLM_RUNNING_IN_DECODING;
 }
 
@@ -388,9 +386,11 @@ int32_t setting_menu_item_action(int32_t item_index) {
 
 
 int main() {
-    (void)g_asr_output; // 抑制编译器报变量未使用问题
+    
 
     if(!setlocale(LC_CTYPE, "")) return -1;
+
+    (void)g_asr_output; // 抑制编译器报变量未使用问题
 
     ///////////////////////////////////////
     // 初始化GUI状态
@@ -448,7 +448,7 @@ int main() {
     ///////////////////////////////////////
     // 矩阵按键初始化与读取
 
-    if(keyboard_hal_init() < 0) return -1;
+    keyboard_hal_init();
     key_event->prev_key = KEYCODE_NUM_IDLE;
 
     ///////////////////////////////////////
@@ -673,8 +673,8 @@ int main() {
                     // wcscat(prompt, L" /no_think");
                 }
                 else {
-                    fprintf(stderr, "Error: unknown model arch.\n");
-                    exit(EXIT_FAILURE);
+                    STATE = -1;
+                    break;
                 }
 
                 // 初始化对话session
@@ -719,7 +719,7 @@ int main() {
                 STATE = 10;
             }
             else {
-                global_state->llm_status = LLM_STOPPED_WITH_ERROR;
+                global_state->llm_status = on_llm_finished(global_state->llm_session);
                 llm_session_free(global_state->llm_session);
                 STATE = 10;
             }
@@ -736,7 +736,8 @@ int main() {
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
                 // 计算提示语+生成内容的行数
-                wchar_t prompt_and_output[OUTPUT_BUFFER_LENGTH] = L"Homo:\n";
+                wchar_t *prompt_and_output = (wchar_t *)calloc(OUTPUT_BUFFER_LENGTH * 2, sizeof(wchar_t));
+                wcscat(prompt_and_output, L"Homo:\n");
                 wcscat(prompt_and_output, widget_input_state->text);
                 wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
                 wcscat(prompt_and_output, g_llm_output_of_last_session);
@@ -757,6 +758,8 @@ int main() {
                 wcscat(prompt_and_output, tps_wcstr);
 
                 wcscpy(g_llm_output_of_last_session, prompt_and_output);
+
+                free(prompt_and_output);
 
                 wcscpy(widget_textarea_state->text, g_llm_output_of_last_session);
                 widget_textarea_state->current_line = -1;
@@ -887,7 +890,7 @@ int main() {
         // 本机自述
         /////////////////////////////////////////////
 
-        case 26:
+        case 26: {
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -896,9 +899,9 @@ int main() {
             PREV_STATE = STATE;
 
             wchar_t readme_buf[128] = L"Nano-Pod v2512\n电子鹦鹉·端上大模型\n(c) 2025 BD4SUR\n\n";
+            wchar_t status_buf[30];
             // 节流
             if (global_state->timer % 200 == 0) {
-                wchar_t status_buf[30];
 #ifdef UPS_ENABLED
                 swprintf(status_buf, 30, L"UPS:%04dmV/%d%% ", global_state->ups_voltage, global_state->ups_soc);
 #else
@@ -917,7 +920,7 @@ int main() {
             }
 
             break;
-
+        }
 
         /////////////////////////////////////////////
         // 关机确认
@@ -942,7 +945,7 @@ int main() {
                 draw_textarea(key_event, global_state, widget_textarea_state);
 
                 if (graceful_shutdown() >= 0) {
-                    exit(0);
+                    // exit(0);
                 }
                 // 关机失败，返回主菜单
                 else {
