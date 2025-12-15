@@ -148,7 +148,7 @@ int main(int argc, char **argv) {
     float temperature = 0.6f;
     float top_p = 0.95f;
     unsigned int top_k = 20;
-    unsigned long long random_seed = get_timestamp_in_ms();
+    uint64_t random_seed = get_timestamp_in_ms();
 
     if(argc >= 2) { model_path = argv[1]; } else { show_usage(); }
     for(int i = 2; i < argc; i += 2) {

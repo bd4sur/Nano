@@ -445,7 +445,7 @@ invalid:
 // 其他平台无关的工具函数
 // ===============================================================================
 
-unsigned int random_u32(unsigned long long *state) {
+uint32_t random_u32(uint64_t *state) {
     // xorshift rng: https://en.wikipedia.org/wiki/Xorshift#xorshift.2A
     *state ^= *state >> 12;
     *state ^= *state << 25;
@@ -454,6 +454,6 @@ unsigned int random_u32(unsigned long long *state) {
 }
 
 // random float32 in [0,1)
-float random_f32(unsigned long long *state) {
+float random_f32(uint64_t *state) {
     return (random_u32(state) >> 8) / 16777216.0f;
 }

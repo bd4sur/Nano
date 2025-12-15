@@ -104,7 +104,7 @@ void memory_map_params(LLM *llm, void* ptr) {
     }
 
     // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
-    unsigned long long n_layer = cfg->n_layer;
+    uint64_t n_layer = cfg->n_layer;
 
     float* fptr = (float*) ptr;
 
@@ -470,7 +470,7 @@ LoRA *load_lora(LLM *llm, char *lora_path) {
 
     // 获取文件大小
     fseek(file, 0, SEEK_END);
-    long long unsigned int file_size = ftell(file);
+    uint64_t file_size = ftell(file);
     rewind(file);
 
     uint8_t *lora_buffer = (uint8_t *)calloc(file_size + 1, sizeof(uint8_t));
@@ -516,7 +516,7 @@ void free_lora(LLM *llm, LoRA *lora) {
 // 推理引擎单例（现在暂且叫context）管理
 // ===============================================================================
 
-Nano_Context *llm_context_init_from_buffer(uint8_t *buffer, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed) {
+Nano_Context *llm_context_init_from_buffer(uint8_t *buffer, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, uint64_t random_seed) {
     Nano_Context *ctx = (Nano_Context*)calloc(1, sizeof(Nano_Context));
     ctx->max_seq_len = max_seq_len;
     ctx->random_seed = random_seed;
@@ -528,7 +528,7 @@ Nano_Context *llm_context_init_from_buffer(uint8_t *buffer, uint32_t max_seq_len
     return ctx;
 }
 
-Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed) {
+Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, uint64_t random_seed) {
     Nano_Context *ctx = (Nano_Context*)calloc(1, sizeof(Nano_Context));
     ctx->max_seq_len = max_seq_len;
     ctx->random_seed = random_seed;
@@ -709,7 +709,7 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, uint32_t 
     float *freq_cis_imag_row = w->freq_cis_imag + pos * head_dim / 2;
 
     // forward all the layers
-    for(unsigned long long l = 0; l < cfg->n_layer; l++) {
+    for(uint64_t l = 0; l < cfg->n_layer; l++) {
 
         // attention rmsnorm
         rmsnorm(s->xb, x, w->rms_norm_attn + l*n_embd, n_embd);
@@ -1007,7 +1007,7 @@ int sample_top_p(float* probabilities, int n, float top_p, ProbIndex* probindex,
     return probindex[last_idx].index; // in case of rounding errors
 }
 
-Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long rng_seed) {
+Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperature, float top_p, uint32_t top_k, uint64_t rng_seed) {
     Sampler *sampler = (Sampler *)calloc(1, sizeof(Sampler));
     sampler->vocab_size = vocab_size;
     sampler->repetition_penalty = repetition_penalty;

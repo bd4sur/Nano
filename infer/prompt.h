@@ -7,7 +7,7 @@ extern "C" {
 
 #include "utils.h"
 
-void set_random_prompt(wchar_t *dest, unsigned long long seed);
+void set_random_prompt(wchar_t *dest, uint64_t seed);
 
 #ifdef __cplusplus
 }

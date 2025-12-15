@@ -219,7 +219,7 @@ int main() {
 
     printf("Nano Language Model Inference Engine CLI\n\n");
 
-    unsigned long long random_seed = get_timestamp_in_ms();
+    uint64_t random_seed = get_timestamp_in_ms();
     uint32_t max_seq_len = 2048;
 
     printf("Using model: %s\n", MODEL_PATH);

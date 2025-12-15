@@ -25,8 +25,8 @@ static wchar_t *default_prompts[] = {
     L"9.9和9.11哪个大？"
 };
 
-void set_random_prompt(wchar_t *dest, unsigned long long seed) {
-    unsigned long long state = seed;
+void set_random_prompt(wchar_t *dest, uint64_t seed) {
+    uint64_t state = seed;
     state ^= state >> 12;
     state ^= state << 25;
     state ^= state >> 27;

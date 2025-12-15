@@ -4,7 +4,7 @@
 
 static Nano_Context *g_llm_ctx;
 
-int init_nano(char *buffer, uint32_t max_seq_len, uint32_t random_seed) {
+int init_nano(char *buffer, uint32_t max_seq_len, uint64_t random_seed) {
     if(!setlocale(LC_CTYPE, "")) return -1;
     g_llm_ctx = (Nano_Context*)calloc(1, sizeof(Nano_Context));
     g_llm_ctx->max_seq_len = max_seq_len;
@@ -17,7 +17,7 @@ int init_nano(char *buffer, uint32_t max_seq_len, uint32_t random_seed) {
 }
 
 // 仅当random_seed不为0时更新random_seed
-int set_sampler(float repetition_penalty, float temperature, float top_p, int top_k, uint32_t random_seed) {
+int set_sampler(float repetition_penalty, float temperature, float top_p, int top_k, uint64_t random_seed) {
     if(random_seed != 0) g_llm_ctx->random_seed = random_seed;
     g_llm_ctx->sampler = build_sampler(g_llm_ctx->llm->config.vocab_size, repetition_penalty, temperature, top_p, top_k, g_llm_ctx->random_seed);
     return 0;

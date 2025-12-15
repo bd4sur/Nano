@@ -193,7 +193,7 @@ typedef struct {
     float temperature;
     float top_p;
     uint32_t top_k;
-    unsigned long long rng_state;
+    uint64_t rng_state;
 } Sampler;
 
 typedef struct {
@@ -202,7 +202,7 @@ typedef struct {
     Tokenizer *tokenizer;
     Sampler *sampler;
     uint32_t max_seq_len; // NOTE 每个context的最大序列长度可设置，不一定等于模型的block_size。这样可以按需控制KV缓存的大小。
-    int random_seed;
+    uint64_t random_seed;
 } Nano_Context;
 
 typedef struct {
@@ -215,20 +215,20 @@ typedef struct {
     uint32_t next_token;
     uint32_t pos;
     int32_t is_prefilling;
-    long t_0;
-    long t_1;
+    uint64_t t_0;
+    uint64_t t_1;
     float tps;
 } Nano_Session;
 
 
 void load_llm_from_buffer(LLM *llm, Tokenizer *tk, uint8_t *buffer, uint32_t max_seq_len);
 void load_llm(LLM *llm, Tokenizer *tk, char *model_path, uint32_t max_seq_len);
-Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long rng_seed);
+Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperature, float top_p, uint32_t top_k, uint64_t rng_seed);
 LoRA *load_lora_from_buffer(LLM *llm, uint8_t *buffer);
 LoRA *load_lora(LLM *llm, char *lora_path);
 
-Nano_Context *llm_context_init_from_buffer(uint8_t *buffer, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed);
-Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, unsigned long long random_seed);
+Nano_Context *llm_context_init_from_buffer(uint8_t *buffer, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, uint64_t random_seed);
+Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, uint64_t random_seed);
 void llm_context_free(Nano_Context *ctx);
 
 uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t pos, int is_prefilling);

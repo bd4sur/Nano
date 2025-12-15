@@ -295,6 +295,15 @@ void render_scroll_bar(int32_t current_line, int32_t line_num, int32_t view_line
 void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     fb_soft_clear();
 
+    for (int i = 1; i <= 14; i++) {
+        fb_draw_line(1, i, 127, i, 1);
+    }
+
+#if CONFIG_IDF_TARGET_ESP32S3
+    render_line(L"Project Nano", 28, 2, 0);
+    render_line(L"电子鹦鹉@ESP32S3", 16, 20, 1);
+    render_line(L"(c) 2025 BD4SUR", 18, 50, 1);
+#else
     time_t rawtime;
     struct tm *timeinfo;
     char datetime_string_buffer[80];
@@ -305,15 +314,11 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     strftime(datetime_string_buffer, sizeof(datetime_string_buffer), "%Y-%m-%d %H:%M:%S", timeinfo); // 格式化输出
     _mbstowcs(datetime_wcs_buffer, datetime_string_buffer, 80);
 
-    for (int i = 1; i <= 14; i++) {
-        fb_draw_line(1, i, 127, i, 1);
-    }
-
     render_line(L"Project Nano", 28, 2, 0);
     render_line(L"语音对话电子鹦鹉", 16, 20, 1);
-    // render_line(L"自研Nano模型强力驱动", 4, 34, 1);
     render_line(datetime_wcs_buffer, 8, 34, 1);
     render_line(L"(c) 2025 BD4SUR", 18, 50, 1);
+#endif
 
     fb_draw_line(0, 0, 127, 0, 1);
     fb_draw_line(0, 15, 127, 15, 1);

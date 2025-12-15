@@ -52,7 +52,6 @@ float g_repetition_penalty = 1.05f;
 float g_temperature = 1.0f;
 float g_top_p = 0.5f;
 unsigned int g_top_k = 0;
-unsigned long long g_random_seed = 0;
 uint32_t g_max_seq_len = 512;
 
 
@@ -78,10 +77,10 @@ int32_t PREV_STATE = -1;
 
 int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state, Nano_Session *session) {
     if (session->t_0 == 0) {
-        session->t_0 = get_timestamp_in_ms();
+        session->t_0 = global_state->timestamp;
     }
     else {
-        session->tps = (session->pos - 1) / (double)(get_timestamp_in_ms() - session->t_0) * 1000;
+        session->tps = (session->pos - 1) / (float)(global_state->timestamp - session->t_0) * 1000;
     }
 
     // 长/短按A键中止推理
@@ -135,10 +134,10 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state, Nano
 
 int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_Session *session) {
     if (session->t_0 == 0) {
-        session->t_0 = get_timestamp_in_ms();
+        session->t_0 = global_state->timestamp;
     }
     else {
-        session->tps = (session->pos - 1) / (double)(get_timestamp_in_ms() - session->t_0) * 1000;
+        session->tps = (session->pos - 1) / (float)(global_state->timestamp - session->t_0) * 1000;
     }
 
     // 长/短按A键中止推理
@@ -172,8 +171,8 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_S
 }
 
 int32_t on_llm_finished(Nano_Session *session) {
-    session->t_1 = get_timestamp_in_ms();
-    session->tps = (session->pos - 1) / (double)(session->t_1 - session->t_0) * 1000;
+    session->t_1 = global_state->timestamp;
+    session->tps = (session->pos - 1) / (float)(session->t_1 - session->t_0) * 1000;
 
     wcscpy(g_llm_output_of_last_session, session->output_text);
 
@@ -185,7 +184,7 @@ int32_t on_llm_finished(Nano_Session *session) {
 #endif
 
     g_tps_of_last_session = session->tps;
-    printf("TPS = %f\n", session->tps);
+
     return LLM_STOPPED_NORMALLY;
 }
 
@@ -340,8 +339,7 @@ int32_t model_menu_item_action(int32_t item_index) {
     widget_textarea_state->is_show_scroll_bar = 0;
     draw_textarea(key_event, global_state, widget_textarea_state);
 
-    g_random_seed = get_timestamp_in_ms();
-    g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, g_random_seed);
+    g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, global_state->timestamp);
 
     wcscpy(widget_textarea_state->text, L"加载完成~");
     widget_textarea_state->current_line = 0;
@@ -453,8 +451,14 @@ int main() {
     if(keyboard_hal_init() < 0) return -1;
     key_event->prev_key = KEYCODE_NUM_IDLE;
 
+    ///////////////////////////////////////
+    // 主循环
 
     while (1) {
+
+        // 物理时间戳
+        global_state->timestamp = get_timestamp_in_ms();
+
         uint8_t key = keyboard_hal_read_key();
         // 边沿
         if (key_event->key_mask != 1 && (key != key_event->prev_key)) {
@@ -496,7 +500,6 @@ int main() {
                 }
                 // 如果没有点亮动作标记key_repeat，则达到长按阈值后触发长按事件
                 else if (key_event->key_timer >= LONG_PRESS_THRESHOLD) {
-                    // printf("按住超时触发长按：%d，计时=%d，key_mask=%d\n", (int)key, key_event->key_timer, (int)key_event->key_mask);
                     key_event->key_edge = -2;
                     key_event->key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
                     key = KEYCODE_NUM_IDLE; // 便于后面设置prev_key为KEYCODE_NUM_IDLE（无键按下）
@@ -737,15 +740,16 @@ int main() {
                 wcscat(prompt_and_output, widget_input_state->text);
                 wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
                 wcscat(prompt_and_output, g_llm_output_of_last_session);
+                // 推理中止
                 if (global_state->llm_status == LLM_STOPPED_IN_PREFILLING || global_state->llm_status == LLM_STOPPED_IN_DECODING) {
-                    printf("推理中止。\n");
                     wcscat(prompt_and_output, L"\n\n[Nano:推理中止]");
                 }
+                // 推理自然结束
                 else if (global_state->llm_status == LLM_STOPPED_NORMALLY) {
-                    printf("推理自然结束。\n");
+
                 }
+                // 推理异常结束
                 else {
-                    printf("推理异常结束。\n");
                     wcscat(prompt_and_output, L"\n\n[Nano:推理异常结束]");
                 }
                 wchar_t tps_wcstr[50];
@@ -802,7 +806,7 @@ int main() {
                 wcscpy(asr_textarea_state->text, L"请说话...");
 
                 global_state->is_recording = 1;
-                global_state->asr_start_timestamp = get_timestamp_in_ms();
+                global_state->asr_start_timestamp = global_state->timestamp;
             }
             PREV_STATE = STATE;
 
@@ -825,7 +829,7 @@ int main() {
 
                 // 绘制录音持续时间
                 wchar_t rec_duration[50];
-                swprintf(rec_duration, 50, L" %ds ", (int32_t)(get_timestamp_in_ms() - global_state->asr_start_timestamp));
+                swprintf(rec_duration, 50, L" %ds ", (uint32_t)((global_state->timestamp - global_state->asr_start_timestamp) / 1000));
                 render_line(rec_duration, 0, 52, 0);
 
                 gfx_refresh();
@@ -837,7 +841,7 @@ int main() {
 
             // 松开按钮，停止PTT
             if (global_state->is_recording > 0 && key_event->key_edge == 0 && key_event->key_code == KEYCODE_NUM_IDLE) {
-                printf("松开PTT\n");
+
                 global_state->is_recording = 0;
                 global_state->asr_start_timestamp = 0;
 
@@ -861,7 +865,6 @@ int main() {
 
                 // ASR后立刻提交到LLM？
                 if (g_config_auto_submit_after_asr) {
-                    printf("立刻提交LLM：%ls\n", widget_input_state->text);
                     STATE = 8;
                 }
                 else {
@@ -1107,7 +1110,6 @@ int main() {
             // UPS电压和电量
             global_state->ups_voltage = read_ups_voltage();
             global_state->ups_soc = read_ups_soc();
-            // printf("%d mV | %d%%\n", global_state->ups_voltage, global_state->ups_soc);
 #endif
         }
 

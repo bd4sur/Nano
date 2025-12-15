@@ -3105,7 +3105,7 @@ int main() {
 
     printf("使用Nano语言模型解决排序问题（？）\n\n");
 
-    unsigned long long random_seed = 39;
+    uint64_t random_seed = 39;
     uint32_t max_seq_len = 6;
 
     g_llm_ctx = llm_context_init_from_buffer(SORT_6_MODEL, max_seq_len, 0, 0, 0, 1, random_seed);

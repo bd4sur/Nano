@@ -10,9 +10,8 @@ void sleep_in_ms(uint32_t ms) {
     delay(ms);
 }
 
-// NOTE 返回的时间戳是32位的，存在2038问题！
-uint32_t get_timestamp_in_ms() {
-    (uint32_t)millis();
+uint64_t get_timestamp_in_ms() {
+    (uint64_t)millis();
 }
 
 // 优雅关机

@@ -28,13 +28,14 @@ extern "C" {
 #define MAX_MENU_ITEM_LEN (24)
 
 typedef struct {
-    int32_t timer;
+    uint64_t timestamp; // 物理时间戳
+    int32_t timer; // 主循环计数器：从0开始递增，不与物理时间关联
     int32_t focus;
     Nano_Session *llm_session; // LLM一轮对话状态
     int32_t llm_status; // LLM推理状态
     int32_t is_asr_server_up;
     int32_t is_recording; // 录音状态
-    time_t asr_start_timestamp; // 录音起始的时间戳
+    uint64_t asr_start_timestamp; // 录音起始的时间戳
 
     int32_t ups_voltage; // UPS电压
     int32_t ups_soc; // UPS电量
