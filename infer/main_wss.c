@@ -9,12 +9,6 @@ static Nano_Context *g_llm_ctx;
 
 static Nano_Session *g_llm_session;
 
-// return time in milliseconds, for benchmarking the model speed
-long time_in_ms() {
-    struct timespec time;
-    clock_gettime(CLOCK_REALTIME, &time);
-    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
-}
 
 int32_t on_prefilling(Nano_Session *session) {
     // printf("Pre-filling...\n");
@@ -68,7 +62,7 @@ static int callback_chat(struct lws *wsi, enum lws_callback_reasons reason,
     case LWS_CALLBACK_SERVER_WRITEABLE:
 
         int32_t status = llm_session_step(g_llm_ctx, g_llm_session);
-        g_llm_session->tps = (g_llm_session->pos - 1) / (double)(time_in_ms() - g_llm_session->t_0) * 1000;
+        g_llm_session->tps = (g_llm_session->pos - 1) / (double)(get_timestamp_in_ms() - g_llm_session->t_0) * 1000;
         if (status == LLM_RUNNING_IN_PREFILLING) {
             int32_t callback_flag = on_prefilling(g_llm_session);
             // 外部被动中止
@@ -103,7 +97,7 @@ static int callback_chat(struct lws *wsi, enum lws_callback_reasons reason,
             }
         }
         else if (status == LLM_STOPPED_NORMALLY) {
-            g_llm_session->t_1 = time_in_ms();
+            g_llm_session->t_1 = get_timestamp_in_ms();
             g_llm_session->tps = (g_llm_session->pos - 1) / (double)(g_llm_session->t_1 - g_llm_session->t_0) * 1000;
             status = on_finished(g_llm_session);
         }
@@ -154,7 +148,7 @@ int main(int argc, char **argv) {
     float temperature = 0.6f;
     float top_p = 0.95f;
     unsigned int top_k = 20;
-    unsigned long long random_seed = (unsigned int)time(NULL);
+    unsigned long long random_seed = get_timestamp_in_ms();
 
     if(argc >= 2) { model_path = argv[1]; } else { show_usage(); }
     for(int i = 2; i < argc; i += 2) {

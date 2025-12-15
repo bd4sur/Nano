@@ -196,14 +196,14 @@ void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
 
     uint32_t offset = 0;
 
-    /* uint32_t magic_number_0 = header[offset]; */ offset++;
-    /* uint32_t magic_number_1 = header[offset]; */ offset++;
+    uint32_t magic_number_0 = header[offset]; offset++; (void)magic_number_0;
+    uint32_t magic_number_1 = header[offset]; offset++; (void)magic_number_1;
 
-    /* uint32_t major_version  = header[offset]; */ offset++;
-    /* uint32_t minor_version  = header[offset]; */ offset++;
+    uint32_t major_version  = header[offset]; offset++; (void)major_version;
+    uint32_t minor_version  = header[offset]; offset++; (void)minor_version;
 
     uint32_t model_type     = header[offset]; offset++;
-    /* uint32_t config_length  = header[offset]; */ offset++;
+    uint32_t config_length  = header[offset]; offset++; (void)config_length;
 
     config->block_size      = header[offset]; offset++;
     config->vocab_size      = header[offset]; offset++;
@@ -247,9 +247,9 @@ void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
             uint32_t token_id     = *vocab_ptr; vocab_ptr++; byte_count += sizeof(uint32_t);
 
             // NOTE Little endian 小端序！如果按照uint32解析，顺序是 MSB(reserved_1 reserved_0 is_special token_length)LSB
-            // uint32_t reserved_1   = (token_header & 0xff000000) >> 24;
-            // uint32_t reserved_0   = (token_header & 0x00ff0000) >> 16;
-            // uint32_t is_special   = (token_header & 0x0000ff00) >> 8;
+            uint32_t reserved_1   = (token_header & 0xff000000) >> 24; (void)reserved_1;
+            uint32_t reserved_0   = (token_header & 0x00ff0000) >> 16; (void)reserved_0;
+            uint32_t is_special   = (token_header & 0x0000ff00) >> 8;  (void)is_special;
             uint32_t token_length = (token_header & 0x000000ff);
 
             wchar_t *token = (wchar_t *)calloc(token_length+1, sizeof(wchar_t));
@@ -410,14 +410,14 @@ void parse_lora_file(uint8_t* buffer, LoRA *lora, LLM *llm) {
 
     uint32_t offset = 0;
 
-    /*uint32_t magic_number_0 = header[offset];*/ offset++;
-    /*uint32_t magic_number_1 = header[offset];*/ offset++;
+    uint32_t magic_number_0 = header[offset]; offset++; (void)magic_number_0;
+    uint32_t magic_number_1 = header[offset]; offset++; (void)magic_number_1;
 
-    /*uint32_t major_version  = header[offset];*/ offset++;
-    /*uint32_t minor_version  = header[offset];*/ offset++;
+    uint32_t major_version  = header[offset]; offset++; (void)major_version;
+    uint32_t minor_version  = header[offset]; offset++; (void)minor_version;
 
-    /*uint32_t model_type     = header[offset];*/ offset++;
-    /*uint32_t config_length  = header[offset];*/ offset++;
+    uint32_t model_type     = header[offset]; offset++; (void)model_type;
+    uint32_t config_length  = header[offset]; offset++; (void)config_length;
 
     lora_cfg->lora_rank     = header[offset]; offset++;
     lora_cfg->lora_alpha    = header[offset]; offset++;

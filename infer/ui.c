@@ -2,6 +2,7 @@
 #include <time.h>
 
 #include "graphics.h"
+#include "keyboard_hal.h"
 #include "ui.h"
 
 #include "platform.h"
@@ -388,6 +389,53 @@ void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Text
         gfx_refresh();
     }
 }
+
+// 通用的文本框卷行事件处理
+int32_t textarea_event_handler(
+    Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts,
+    int32_t prev_focus_state, int32_t current_focus_state
+) {
+    // 短按A键：回到上一个焦点
+    if (ke->key_edge == -1 && ke->key_code == KEYCODE_NUM_A) {
+        return prev_focus_state;
+    }
+
+    // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_STAR) {
+        if (ts->current_line <= 0) { // 卷到顶
+            ts->current_line = ts->line_num - 5;
+        }
+        else {
+            ts->current_line--;
+        }
+
+        draw_textarea(ke, gs, ts);
+
+        return current_focus_state;
+    }
+
+    // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_HASH) {
+        if (ts->current_line >= (ts->line_num - 5)) { // 卷到底
+            ts->current_line = 0;
+        }
+        else {
+            ts->current_line++;
+        }
+
+        draw_textarea(ke, gs, ts);
+
+        return current_focus_state;
+    }
+
+    return current_focus_state;
+}
+
+
+
+
+
+
 
 void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
     input_state->state = 0;
@@ -786,6 +834,66 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
     gfx_refresh();
 }
 
+
+// 通用的菜单事件处理+回调注册
+int32_t menu_event_handler(
+    Key_Event *ke, Global_State *gs, Widget_Menu_State *ms,
+    int32_t (*menu_item_action_callback)(int32_t), int32_t prev_focus_state, int32_t current_focus_state
+) {
+    // 短按0-9数字键：直接选中屏幕上显示的那页的相对第几项
+    if (ke->key_edge == -1 && (ke->key_code >= KEYCODE_NUM_0 && ke->key_code <= KEYCODE_NUM_9)) {
+        if (ke->key_code < ms->item_num) {
+            ms->current_item_intex = ms->first_item_intex + (uint32_t)(ke->key_code) - 1;
+        }
+        return menu_item_action_callback(ms->current_item_intex);
+    }
+    // 短按A键：返回上一个焦点状态
+    else if (ke->key_edge == -1 && ke->key_code == KEYCODE_NUM_A) {
+        return prev_focus_state;
+    }
+    // 短按D键：执行菜单项对应的功能
+    else if (ke->key_edge == -1 && ke->key_code == KEYCODE_NUM_D) {
+        return menu_item_action_callback(ms->current_item_intex);
+    }
+    // 长+短按*键：光标向上移动
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_STAR) {
+        if (ms->first_item_intex == 0 && ms->current_item_intex == 0) {
+            ms->first_item_intex = ms->item_num - ms->items_per_page;
+            ms->current_item_intex = ms->item_num - 1;
+        }
+        else if (ms->current_item_intex == ms->first_item_intex) {
+            ms->first_item_intex--;
+            ms->current_item_intex--;
+        }
+        else {
+            ms->current_item_intex--;
+        }
+
+        draw_menu(ke, gs, ms);
+
+        return current_focus_state;
+    }
+    // 长+短按#键：光标向下移动
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_HASH) {
+        if (ms->first_item_intex == ms->item_num - ms->items_per_page && ms->current_item_intex == ms->item_num - 1) {
+            ms->first_item_intex = 0;
+            ms->current_item_intex = 0;
+        }
+        else if (ms->current_item_intex == ms->first_item_intex + ms->items_per_page - 1) {
+            ms->first_item_intex++;
+            ms->current_item_intex++;
+        }
+        else {
+            ms->current_item_intex++;
+        }
+
+        draw_menu(ke, gs, ms);
+
+        return current_focus_state;
+    }
+
+    return current_focus_state;
+}
 
 
 

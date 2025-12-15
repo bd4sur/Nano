@@ -123,6 +123,10 @@ void render_text(
 void show_splash_screen(Key_Event *key_event, Global_State *global_state);
 
 void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
+int32_t textarea_event_handler(
+    Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts,
+    int32_t prev_focus_state, int32_t current_focus_state
+);
 
 void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 void refresh_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
@@ -131,6 +135,10 @@ void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
 void init_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
 void refresh_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
 void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
+int32_t menu_event_handler(
+    Key_Event *ke, Global_State *gs, Widget_Menu_State *ms,
+    int32_t (*menu_item_action_callback)(int32_t), int32_t prev_focus_state, int32_t current_focus_state
+);
 
 void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 void render_cursor(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);

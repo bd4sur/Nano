@@ -352,36 +352,32 @@ void freeTree(AVLNode* root) {
 
 // 将 UTF-32 码点（wchar_t）数组转换为 UTF-8 字符串
 // 注意：此函数假设 wchar_t 为 32 位（即 UTF-32），符合 ESP32 的配置（通常 -fshort-wchar 未启用）
-void _wcstombs(char *dest, const wchar_t *src, uint32_t length) {
-    char *p = dest;
-    for (uint32_t i = 0; i < length; ++i) {
-        uint32_t cp = (uint32_t)src[i];
+void _wcstombs(char *dest, const wchar_t *src, uint32_t dest_size) {
+    const wchar_t *p = src;
+    char *q = dest;
+    char *end = dest + dest_size - 1; // 留 1 字节给 \0
 
-        if (cp <= 0x7F) {
-            // 0xxxxxxx
-            *p++ = (char)cp;
-        } else if (cp <= 0x7FF) {
-            // 110xxxxx 10xxxxxx
-            *p++ = (char)(0xC0 | (cp >> 6));
-            *p++ = (char)(0x80 | (cp & 0x3F));
-        } else if (cp <= 0xFFFF) {
-            // 1110xxxx 10xxxxxx 10xxxxxx
-            *p++ = (char)(0xE0 | (cp >> 12));
-            *p++ = (char)(0x80 | ((cp >> 6) & 0x3F));
-            *p++ = (char)(0x80 | (cp & 0x3F));
-        } else if (cp <= 0x10FFFF) {
-            // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
-            *p++ = (char)(0xF0 | (cp >> 18));
-            *p++ = (char)(0x80 | ((cp >> 12) & 0x3F));
-            *p++ = (char)(0x80 | ((cp >> 6) & 0x3F));
-            *p++ = (char)(0x80 | (cp & 0x3F));
-        } else {
-            // 非法 UTF-32 码点（超出 Unicode 范围），替换为 U+FFFD（但此处简化处理为 '?'）
-            // 嵌入式环境通常避免动态分配或复杂错误处理
-            *p++ = '?';
+    while (*p != L'\0' && q < end) {
+        uint32_t cp = (uint32_t)*p++;
+        if (cp <= 0x7F && q < end) {
+            *q++ = (char)cp;
+        } else if (cp <= 0x7FF && q + 1 < end) {
+            *q++ = 0xC0 | (cp >> 6);
+            *q++ = 0x80 | (cp & 0x3F);
+        } else if (cp <= 0xFFFF && q + 2 < end) {
+            *q++ = 0xE0 | (cp >> 12);
+            *q++ = 0x80 | ((cp >> 6) & 0x3F);
+            *q++ = 0x80 | (cp & 0x3F);
+        } else if (cp <= 0x10FFFF && q + 3 < end) {
+            *q++ = 0xF0 | (cp >> 18);
+            *q++ = 0x80 | ((cp >> 12) & 0x3F);
+            *q++ = 0x80 | ((cp >> 6) & 0x3F);
+            *q++ = 0x80 | (cp & 0x3F);
+        } else if (q < end) {
+            *q++ = '?';
         }
     }
-    *p = '\0'; // 可选：添加字符串终止符（如果调用者期望 null-terminated 字符串）
+    *q = '\0';
 }
 
 // 将 UTF-8 字符串转换为 null-terminated 的 UTF-32 (wchar_t) 字符串
