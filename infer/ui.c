@@ -187,8 +187,8 @@ void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
         uint8_t font_height = 12;
         uint8_t *glyph = get_glyph(current_char, &font_width, &font_height);
         if (!glyph) {
-            printf("出现了字库之外的字符！\n");
-            break;
+            // printf("出现了字库之外的字符！\n");
+            glyph = get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
         if (x_pos + font_width >= 128) {
             break;
@@ -227,7 +227,7 @@ void render_text(
         }
         uint8_t *glyph = get_glyph(current_char, &font_width, &font_height);
         if (!glyph) {
-            printf("出现了字库之外的字符[%d]\n", current_char);
+            // printf("出现了字库之外的字符[%d]\n", current_char);
             glyph = get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
         if (x_pos + font_width >= x_offset + width) {

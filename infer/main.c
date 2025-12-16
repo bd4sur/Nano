@@ -466,23 +466,23 @@ int main() {
             if (key != KEYCODE_NUM_IDLE) {
                 key_event->key_code = key;
                 key_event->key_edge = 1;
-                key_event->key_timer = 0;
             }
             // 松开瞬间（下降沿）
             else {
                 key_event->key_code = key_event->prev_key;
                 // 短按（或者通过长按触发重复动作状态后反复触发）
-                if (key_event->key_repeat == 1 || (key_event->key_timer >= 0 && key_event->key_timer < LONG_PRESS_THRESHOLD)) {
+                if (key_event->key_repeat == 1 ||
+                    ((global_state->timestamp - key_event->key_timer) >= 0 &&
+                     (global_state->timestamp - key_event->key_timer) < LONG_PRESS_THRESHOLD)) {
                     key_event->key_edge = -1;
-                    key_event->key_timer = 0;
                 }
                 // 长按
-                else if (key_event->key_timer >= LONG_PRESS_THRESHOLD) {
+                else if ((global_state->timestamp - key_event->key_timer) >= LONG_PRESS_THRESHOLD) {
                     key_event->key_edge = -2;
-                    key_event->key_timer = 0;
                     key_event->key_repeat = 1;
                 }
             }
+            key_event->key_timer = global_state->timestamp;
         }
         // 按住或松开
         else {
@@ -490,7 +490,7 @@ int main() {
             if (key != KEYCODE_NUM_IDLE) {
                 key_event->key_code = key;
                 key_event->key_edge = 0;
-                key_event->key_timer++;
+                // key_event->key_timer++;
                 // 若重复动作标记key_repeat在一次长按后点亮，则继续按住可以反复触发短按
                 if (key_event->key_repeat == 1) {
                     key_event->key_edge = -2;
@@ -499,7 +499,7 @@ int main() {
                     key_event->key_repeat = 1;
                 }
                 // 如果没有点亮动作标记key_repeat，则达到长按阈值后触发长按事件
-                else if (key_event->key_timer >= LONG_PRESS_THRESHOLD) {
+                else if ((global_state->timestamp - key_event->key_timer) >= LONG_PRESS_THRESHOLD) {
                     key_event->key_edge = -2;
                     key_event->key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
                     key = KEYCODE_NUM_IDLE; // 便于后面设置prev_key为KEYCODE_NUM_IDLE（无键按下）
@@ -509,7 +509,7 @@ int main() {
             else {
                 key_event->key_code = KEYCODE_NUM_IDLE;
                 key_event->key_edge = 0;
-                key_event->key_timer = 0;
+                key_event->key_timer = global_state->timestamp;
                 key_event->key_mask = 0;
                 key_event->key_repeat = 0;
             }

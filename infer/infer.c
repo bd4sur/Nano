@@ -645,6 +645,17 @@ void matmul_quant(float* xout, Typed_Tensor *x, Typed_Tensor *w, int n, int d, u
 }
 
 void rope(float *head, uint32_t head_dim, uint32_t pos, float *freq_cis_real_row, float *freq_cis_imag_row) {
+    for (uint32_t i = 0; i < head_dim; i += 2) {
+        float v0 = head[i];
+        float v1 = head[i + 1];
+        float fcr = freq_cis_real_row[i / 2];
+        float fci = freq_cis_imag_row[i / 2];
+        head[  i  ] = v0 * fcr - v1 * fci;
+        head[i + 1] = v0 * fci + v1 * fcr;
+    }
+}
+
+void rope_qwen3(float *head, uint32_t head_dim, uint32_t pos, float *freq_cis_real_row, float *freq_cis_imag_row) {
     for (uint32_t i = 0; i < head_dim / 2; i++) {
         // float freq = 1.0f / powf(1000000.0f, (float)(i * 2) / (float)head_dim); // QWEN3_ROPE_THETA = 1000000.0
         // float fcr = cosf(pos * freq);
@@ -660,31 +671,24 @@ void rope(float *head, uint32_t head_dim, uint32_t pos, float *freq_cis_real_row
     }
 }
 
-// NOTE 该函数实现了在1个token+过往KVCache上的完整的因果自注意力前向推理。对于一般的自回归因果语言模型推理，is_causal=1。
-//      参数is_causal=0启用全局自注意力，仅用于（且必须搭配用于）seq2seq函数。因该函数并没有实现完整的seq2seq全局自注意力前向推理。
-//      seq2seq函数主要是整活用途，有大量冗余计算，效率极低。
-float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, uint32_t is_causal, LLM* llm, LoRA *lora) {
+
+// 前向传播一个Transformer块
+// 函数的输入输出都是x，输入的x是上一层传入的值，输出即为本层输出。复用同一块内存（原地更新），波动传递中间激活值。
+// NOTE is_causal参数的说明详见llm_forward函数
+// NOTE 本函数每次执行都会重新计算一次模型的结构参数，但是开销很小。比起逻辑上的清晰和后续流水线并行改造，这点代价是值得的。
+void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t max_seq_len, uint32_t is_causal, LLM* llm, LoRA *lora) {
 
     LLM_Config *cfg = &llm->config;
     LLM_Param *w = &llm->params;
     FwdBuffer *s = &llm->state;
 
-    int use_lora = (NULL == lora) ? 0 : 1;
-    LoRA_Param *a = NULL;
-    uint32_t lora_rank = 0;
-    uint32_t lora_alpha = 0;;
-    if(use_lora == 1) {
-        a = &(lora->params);
-        lora_rank = lora->config.lora_rank;
-        lora_alpha = lora->config.lora_alpha;
-    }
+    // 模型结构参数
 
-    float *x = s->x;
-    int n_embd = cfg->n_embd;
+    uint32_t n_embd = cfg->n_embd;
+    uint32_t kv_mul = cfg->n_head / cfg->n_kv_head; // integer multiplier of the kv sharing in multiquery
+    uint32_t n_hidden =  cfg->n_hidden;
 
-    uint32_t head_dim = n_embd / cfg->n_head;
-    uint32_t q_dim = cfg->n_embd;
-    uint32_t kv_dim = (cfg->n_embd * cfg->n_kv_head) / cfg->n_head;
+    uint32_t head_dim = 0, q_dim = 0, kv_dim = 0;
 
     if (llm->arch == LLM_ARCH_NANO || llm->arch == LLM_ARCH_QWEN2) {
         head_dim = n_embd / cfg->n_head;
@@ -697,228 +701,221 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, uint32_t 
         kv_dim = head_dim * cfg->n_kv_head;
     }
 
-    int kv_mul = cfg->n_head / cfg->n_kv_head; // integer multiplier of the kv sharing in multiquery
-    int n_hidden =  cfg->n_hidden;
+    // 设定LoRA相关参数
 
-    // copy the token embedding into x
-    float* content_row = w->token_embedding + token * n_embd;
-    memcpy(x, content_row, n_embd*sizeof(*x));
+    int32_t use_lora = (NULL == lora) ? 0 : 1;
+    LoRA_Param *a = NULL;
+    uint32_t lora_rank = 0;
+    uint32_t lora_alpha = 0;;
+    if(use_lora == 1) {
+        a = &(lora->params);
+        lora_rank = lora->config.lora_rank;
+        lora_alpha = lora->config.lora_alpha;
+    }
 
-    // pluck out the "pos" row of freq_cis_real and freq_cis_imag
+    // 第pos位置上的RoPE系数
     float *freq_cis_real_row = w->freq_cis_real + pos * head_dim / 2;
     float *freq_cis_imag_row = w->freq_cis_imag + pos * head_dim / 2;
+    
+    // attention rmsnorm
+    rmsnorm(s->xb, x, w->rms_norm_attn + layer * n_embd, n_embd);
 
-    // forward all the layers
-    for(uint64_t l = 0; l < cfg->n_layer; l++) {
+    // key and value point to the kv cache
+    // NOTE KV缓存的长度由max_seq_len参数指定，不一定等于模型本身的block_size。这样做的目的是为了按需控制KV缓存的大小。
+    int layer_offset = layer * max_seq_len * kv_dim;
+    s->k = s->k_cache + layer_offset + pos * kv_dim;
+    s->v = s->v_cache + layer_offset + pos * kv_dim;
 
-        // attention rmsnorm
-        rmsnorm(s->xb, x, w->rms_norm_attn + l*n_embd, n_embd);
+    // qkv matmuls for this position
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(s->q, s->xb, w->wq->tensor_f32 + layer*q_dim*n_embd,  n_embd, q_dim);
+        matmul(s->k, s->xb, w->wk->tensor_f32 + layer*kv_dim*n_embd, n_embd, kv_dim);
+        matmul(s->v, s->xb, w->wv->tensor_f32 + layer*kv_dim*n_embd, n_embd, kv_dim);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->xq.tensor_q80, s->xb, n_embd, llm->group_size);
+        matmul_quant(s->q, &s->xq, w->wq + layer, n_embd, q_dim  , llm->group_size);
+        matmul_quant(s->k, &s->xq, w->wk + layer, n_embd, kv_dim , llm->group_size);
+        matmul_quant(s->v, &s->xq, w->wv + layer, n_embd, kv_dim , llm->group_size);
+    }
 
-        // key and value point to the kv cache
-        // NOTE KV缓存的长度由max_seq_len参数指定，不一定等于模型本身的block_size。这样做的目的是为了按需控制KV缓存的大小。
-        int layer_offset = l * max_seq_len * kv_dim;
-        s->k = s->k_cache + layer_offset + pos * kv_dim;
-        s->v = s->v_cache + layer_offset + pos * kv_dim;
+    if (llm->arch == LLM_ARCH_QWEN2) {
+        // TODO Qwen2 bq bk bv
+    }
 
-        // qkv matmuls for this position
-        if (llm->quant_type == QUANT_TYPE_F32) {
-            matmul(s->q, s->xb, w->wq->tensor_f32 + l*q_dim*n_embd,  n_embd, q_dim);
-            matmul(s->k, s->xb, w->wk->tensor_f32 + l*kv_dim*n_embd, n_embd, kv_dim);
-            matmul(s->v, s->xb, w->wv->tensor_f32 + l*kv_dim*n_embd, n_embd, kv_dim);
+    if(llm->arch == LLM_ARCH_NANO && use_lora == 1) {
+        matmul(s->q0, s->xb, a->wq_lora_a + layer * lora_rank * n_embd, n_embd, lora_rank);
+        matmul(s->k0, s->xb, a->wk_lora_a + layer * lora_rank * n_embd, n_embd, lora_rank);
+        matmul(s->v0, s->xb, a->wv_lora_a + layer * lora_rank * n_embd, n_embd, lora_rank);
+
+        matmul(s->q1, s->q0, a->wq_lora_b + layer * n_embd * lora_rank, lora_rank, n_embd);
+        matmul(s->k1, s->k0, a->wk_lora_b + layer * kv_dim * lora_rank, lora_rank, kv_dim);
+        matmul(s->v1, s->v0, a->wv_lora_b + layer * kv_dim * lora_rank, lora_rank, kv_dim);
+
+        scale(s->q1, ((float)lora_alpha / (float)lora_rank), n_embd);
+        scale(s->k1, ((float)lora_alpha / (float)lora_rank), kv_dim);
+        scale(s->v1, ((float)lora_alpha / (float)lora_rank), kv_dim);
+
+        accum(s->q, s->q1, n_embd);
+        accum(s->k, s->k1, kv_dim);
+        accum(s->v, s->v1, kv_dim);
+    }
+
+    // RoPE位置编码
+    if (llm->arch == LLM_ARCH_NANO || llm->arch == LLM_ARCH_QWEN2) {
+        for (uint32_t h = 0; h < cfg->n_head; h++) {
+            float *q = s->q + h * head_dim;
+            rope(q, head_dim, pos, freq_cis_real_row, freq_cis_imag_row);
         }
-        else if (llm->quant_type == QUANT_TYPE_Q80) {
-            quantize(&s->xq.tensor_q80, s->xb, n_embd, llm->group_size);
-            matmul_quant(s->q, &s->xq, w->wq + l, n_embd, q_dim  , llm->group_size);
-            matmul_quant(s->k, &s->xq, w->wk + l, n_embd, kv_dim , llm->group_size);
-            matmul_quant(s->v, &s->xq, w->wv + l, n_embd, kv_dim , llm->group_size);
+        for (uint32_t m = 0; m < cfg->n_kv_head; m++) {
+            float *k = s->k + m * head_dim;
+            rope(k, head_dim, pos, freq_cis_real_row, freq_cis_imag_row);
         }
-
-        if (llm->arch == LLM_ARCH_QWEN2) {
-            // TODO Qwen2 bq bk bv
+    }
+    else if (llm->arch == LLM_ARCH_QWEN3) {
+        for (uint32_t h = 0; h < cfg->n_head; h++) {
+            float *q = s->q + h * head_dim;
+            rmsnorm(q, q, w->q_norm + layer * head_dim, head_dim);
+            rope_qwen3(q, head_dim, pos, freq_cis_real_row, freq_cis_imag_row);
         }
-
-        if(llm->arch == LLM_ARCH_NANO && use_lora == 1) {
-            matmul(s->q0, s->xb, a->wq_lora_a + l * lora_rank * n_embd, n_embd, lora_rank);
-            matmul(s->k0, s->xb, a->wk_lora_a + l * lora_rank * n_embd, n_embd, lora_rank);
-            matmul(s->v0, s->xb, a->wv_lora_a + l * lora_rank * n_embd, n_embd, lora_rank);
-
-            matmul(s->q1, s->q0, a->wq_lora_b + l * n_embd * lora_rank, lora_rank, n_embd);
-            matmul(s->k1, s->k0, a->wk_lora_b + l * kv_dim * lora_rank, lora_rank, kv_dim);
-            matmul(s->v1, s->v0, a->wv_lora_b + l * kv_dim * lora_rank, lora_rank, kv_dim);
-
-            scale(s->q1, ((float)lora_alpha / (float)lora_rank), n_embd);
-            scale(s->k1, ((float)lora_alpha / (float)lora_rank), kv_dim);
-            scale(s->v1, ((float)lora_alpha / (float)lora_rank), kv_dim);
-
-            accum(s->q, s->q1, n_embd);
-            accum(s->k, s->k1, kv_dim);
-            accum(s->v, s->v1, kv_dim);
-        }
-
-        if (llm->arch == LLM_ARCH_NANO || llm->arch == LLM_ARCH_QWEN2) {
-            // RoPE旋转位置编码实现方式1：使用模型提供的旋转系数
-            for (int h = 0; h < cfg->n_head; h++) {
-                float *q = s->q + h * head_dim;
-                for (int i = 0; i < head_dim; i += 2) {
-                    float q0 = q[i];
-                    float q1 = q[i + 1];
-                    float fcr = freq_cis_real_row[i / 2];
-                    float fci = freq_cis_imag_row[i / 2];
-                    q[i] = q0 * fcr - q1 * fci;
-                    q[i + 1] = q0 * fci + q1 * fcr;
-                }
-            }
-            for (int m = 0; m < cfg->n_kv_head; m++) {
-                float *k = s->k + m * head_dim;
-                for (int i = 0; i < head_dim; i += 2) {
-                    float k0 = k[i];
-                    float k1 = k[i + 1];
-                    float fcr = freq_cis_real_row[i / 2];
-                    float fci = freq_cis_imag_row[i / 2];
-                    k[i] = k0 * fcr - k1 * fci;
-                    k[i + 1] = k0 * fci + k1 * fcr;
-                }
-            }
-
-            // RoPE旋转位置编码实现方式2：直接计算旋转系数
-            /*
-            for (int i = 0; i < n_embd; i+=2) {
-                int head_dim = i % head_dim;
-                float freq = 1.0f / powf(10000.0f, head_dim / (float)head_dim);
-                float val = pos * freq;
-                float fcr = cosf(val);
-                float fci = sinf(val);
-                int rotn = i < kv_dim ? 2 : 1; // how many vectors? 2 = q & k, 1 = q only
-                for (int v = 0; v < rotn; v++) {
-                    float* vec = v == 0 ? s->q : s->k; // the vector to rotate (query or key)
-                    float v0 = vec[i];
-                    float v1 = vec[i+1];
-                    vec[i]   = v0 * fcr - v1 * fci;
-                    vec[i+1] = v0 * fci + v1 * fcr;
-                }
-            }
-            */
-        }
-        else if (llm->arch == LLM_ARCH_QWEN3) {
-            for (int h = 0; h < cfg->n_head; h++) {
-                float *q = s->q + h * head_dim;
-                rmsnorm(q, q, w->q_norm + l*head_dim, head_dim);
-                rope(q, head_dim, pos, freq_cis_real_row, freq_cis_imag_row);
-            }
-            for (int h = 0; h < cfg->n_kv_head; h++) {
-                float *k = s->k + h * head_dim;
-                rmsnorm(k, k, w->k_norm + l*head_dim, head_dim);
-                rope(k, head_dim, pos, freq_cis_real_row, freq_cis_imag_row);
-            }
-        }
-
-        // multihead attention. iterate over all heads
-        int h;
-        #pragma omp parallel for private(h)
-        for (h = 0; h < cfg->n_head; h++) {
-            // get the query vector for this head
-            float* q = s->q + h * head_dim;
-            // attention scores for this head
-            float* att = s->att + h * max_seq_len; // NOTE max_seq_len不一定等于模型本身的block_size。这样做的目的是为了节约内存。
-            // iterate over all timesteps, including the current one
-            uint32_t attn_range = (is_causal) ? (pos + 1) : max_seq_len; // NOTE 用于兼容因果自注意力和全局自注意力
-            for (int t = 0; t < attn_range; t++) {
-                // get the key vector for this head and at this timestep
-                float* k = s->k_cache + layer_offset + t * kv_dim + (h / kv_mul) * head_dim;
-                // calculate the attention score as the dot product of q and k
-                float score = 0.0f;
-                for (int i = 0; i < head_dim; i++) {
-                    score += q[i] * k[i];
-                }
-                score /= sqrtf(head_dim);
-                // save the score to the attention buffer
-                att[t] = score;
-            }
-
-            // softmax the scores to get attention weights, from 0..pos inclusively
-            softmax(att, attn_range);
-
-            // weighted sum of the values, store back into xba
-            float* xba = s->xba + h * head_dim;
-            memset(xba, 0, head_dim * sizeof(float));
-            for (int t = 0; t < attn_range; t++) {
-                // get the value vector for this head and at this timestep
-                float* v = s->v_cache + layer_offset + t * kv_dim + (h / kv_mul) * head_dim;
-                // get the attention weight for this timestep
-                float a = att[t];
-                // accumulate the weighted value into xba
-                for (int i = 0; i < head_dim; i++) {
-                    xba[i] += a * v[i];
-                }
-            }
-        }
-
-        // final matmul to get the output of the attention
-        if (llm->quant_type == QUANT_TYPE_F32) {
-            matmul(s->xb2, s->xba, w->wo->tensor_f32 + l*n_embd*q_dim, q_dim, n_embd);
-        }
-        else if (llm->quant_type == QUANT_TYPE_Q80) {
-            quantize(&s->xbaq.tensor_q80, s->xba, q_dim, llm->group_size);
-            matmul_quant(s->xb2, &s->xbaq, w->wo + l, q_dim, n_embd, llm->group_size);
-        }
-
-        // 计算output的低秩分解分支，并将其累加到原来的输出上
-        if(use_lora == 1) {
-            matmul(s->o0, s->xba, a->wo_lora_a + l * lora_rank * q_dim,  q_dim,    lora_rank);
-            matmul(s->o1, s->o0,  a->wo_lora_b + l * n_embd * lora_rank, lora_rank, n_embd);
-            scale(s->o1, ((float)lora_alpha / (float)lora_rank), n_embd);
-            accum(s->xb2, s->o1, n_embd);
-        }
-
-        // residual connection back into x
-        for (int i = 0; i < n_embd; i++) {
-            x[i] += s->xb2[i];
-        }
-
-        // ffn rmsnorm
-        rmsnorm(s->xb, x, w->rms_norm_ffn + l*n_embd, n_embd);
-
-        // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-        // first calculate self.w1(x) and self.w3(x)
-        if (llm->quant_type == QUANT_TYPE_F32) {
-            matmul(s->hb, s->xb, w->w1->tensor_f32 + l*n_hidden*n_embd, n_embd, n_hidden);
-            matmul(s->hb2, s->xb, w->w3->tensor_f32 + l*n_hidden*n_embd, n_embd, n_hidden);
-        }
-        else if (llm->quant_type == QUANT_TYPE_Q80) {
-            quantize(&s->xq.tensor_q80, s->xb, n_embd, llm->group_size);
-            matmul_quant(s->hb, &s->xq, w->w1 + l, n_embd, n_hidden , llm->group_size);
-            matmul_quant(s->hb2, &s->xq, w->w3 + l, n_embd, n_hidden, llm->group_size);
-        }
-
-        // SwiGLU non-linearity
-        for (int i = 0; i < n_hidden; i++) {
-            float val = s->hb[i];
-            // silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-            val *= (1.0f / (1.0f + expf(-val)));
-            // elementwise multiply with w3(x)
-            val *= s->hb2[i];
-            s->hb[i] = val;
-        }
-
-        // final matmul to get the output of the ffn
-        if (llm->quant_type == QUANT_TYPE_F32) {
-            matmul(s->xb, s->hb, w->w2->tensor_f32 + l*n_embd*n_hidden, n_hidden, n_embd);
-        }
-        else if (llm->quant_type == QUANT_TYPE_Q80) {
-            quantize(&s->hq.tensor_q80, s->hb, n_hidden, llm->group_size);
-            matmul_quant(s->xb, &s->hq, w->w2 + l, n_hidden, n_embd, llm->group_size);
-        }
-
-        // residual connection
-        for (int i = 0; i < n_embd; i++) {
-            x[i] += s->xb[i];
+        for (uint32_t h = 0; h < cfg->n_kv_head; h++) {
+            float *k = s->k + h * head_dim;
+            rmsnorm(k, k, w->k_norm + layer * head_dim, head_dim);
+            rope_qwen3(k, head_dim, pos, freq_cis_real_row, freq_cis_imag_row);
         }
     }
 
-    // final rmsnorm
+    // multihead attention. iterate over all heads
+    int h;
+    #pragma omp parallel for private(h)
+    for (h = 0; h < cfg->n_head; h++) {
+        // get the query vector for this head
+        float* q = s->q + h * head_dim;
+        // attention scores for this head
+        float* att = s->att + h * max_seq_len; // NOTE max_seq_len不一定等于模型本身的block_size。这样做的目的是为了节约内存。
+        // iterate over all timesteps, including the current one
+        uint32_t attn_range = (is_causal) ? (pos + 1) : max_seq_len; // NOTE 用于兼容因果自注意力和全局自注意力
+        for (int t = 0; t < attn_range; t++) {
+            // get the key vector for this head and at this timestep
+            float* k = s->k_cache + layer_offset + t * kv_dim + (h / kv_mul) * head_dim;
+            // calculate the attention score as the dot product of q and k
+            float score = 0.0f;
+            for (int i = 0; i < head_dim; i++) {
+                score += q[i] * k[i];
+            }
+            score /= sqrtf(head_dim);
+            // save the score to the attention buffer
+            att[t] = score;
+        }
+
+        // softmax the scores to get attention weights, from 0..pos inclusively
+        softmax(att, attn_range);
+
+        // weighted sum of the values, store back into xba
+        float* xba = s->xba + h * head_dim;
+        memset(xba, 0, head_dim * sizeof(float));
+        for (int t = 0; t < attn_range; t++) {
+            // get the value vector for this head and at this timestep
+            float* v = s->v_cache + layer_offset + t * kv_dim + (h / kv_mul) * head_dim;
+            // get the attention weight for this timestep
+            float a = att[t];
+            // accumulate the weighted value into xba
+            for (int i = 0; i < head_dim; i++) {
+                xba[i] += a * v[i];
+            }
+        }
+    }
+
+    // final matmul to get the output of the attention
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(s->xb2, s->xba, w->wo->tensor_f32 + layer*n_embd*q_dim, q_dim, n_embd);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->xbaq.tensor_q80, s->xba, q_dim, llm->group_size);
+        matmul_quant(s->xb2, &s->xbaq, w->wo + layer, q_dim, n_embd, llm->group_size);
+    }
+
+    // 计算output的低秩分解分支，并将其累加到原来的输出上
+    if(use_lora == 1) {
+        matmul(s->o0, s->xba, a->wo_lora_a + layer * lora_rank * q_dim,  q_dim,    lora_rank);
+        matmul(s->o1, s->o0,  a->wo_lora_b + layer * n_embd * lora_rank, lora_rank, n_embd);
+        scale(s->o1, ((float)lora_alpha / (float)lora_rank), n_embd);
+        accum(s->xb2, s->o1, n_embd);
+    }
+
+    // residual connection back into x
+    for (int i = 0; i < n_embd; i++) {
+        x[i] += s->xb2[i];
+    }
+
+    // ffn rmsnorm
+    rmsnorm(s->xb, x, w->rms_norm_ffn + layer*n_embd, n_embd);
+
+    // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
+    // first calculate self.w1(x) and self.w3(x)
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(s->hb, s->xb, w->w1->tensor_f32 + layer*n_hidden*n_embd, n_embd, n_hidden);
+        matmul(s->hb2, s->xb, w->w3->tensor_f32 + layer*n_hidden*n_embd, n_embd, n_hidden);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->xq.tensor_q80, s->xb, n_embd, llm->group_size);
+        matmul_quant(s->hb, &s->xq, w->w1 + layer, n_embd, n_hidden , llm->group_size);
+        matmul_quant(s->hb2, &s->xq, w->w3 + layer, n_embd, n_hidden, llm->group_size);
+    }
+
+    // SwiGLU non-linearity
+    for (int i = 0; i < n_hidden; i++) {
+        float val = s->hb[i];
+        // silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
+        val *= (1.0f / (1.0f + expf(-val)));
+        // elementwise multiply with w3(x)
+        val *= s->hb2[i];
+        s->hb[i] = val;
+    }
+
+    // final matmul to get the output of the ffn
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(s->xb, s->hb, w->w2->tensor_f32 + layer*n_embd*n_hidden, n_hidden, n_embd);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->hq.tensor_q80, s->hb, n_hidden, llm->group_size);
+        matmul_quant(s->xb, &s->hq, w->w2 + layer, n_hidden, n_embd, llm->group_size);
+    }
+
+    // residual connection
+    for (int i = 0; i < n_embd; i++) {
+        x[i] += s->xb[i];
+    }
+}
+
+// NOTE 该函数实现了在1个token+过往KVCache上的完整的因果自注意力前向推理。对于一般的自回归因果语言模型推理，is_causal=1。
+//      参数is_causal=0启用全局自注意力，仅用于（且必须搭配用于）seq2seq函数。因该函数并没有实现完整的seq2seq全局自注意力前向推理。
+//      seq2seq函数主要是整活用途，有大量冗余计算，效率极低。
+float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, uint32_t is_causal, LLM* llm, LoRA *lora) {
+
+    LLM_Config *cfg = &llm->config;
+    LLM_Param *w = &llm->params;
+    FwdBuffer *s = &llm->state;
+
+    // 模型结构参数
+    uint32_t n_embd = cfg->n_embd;
+
+    // Transformer层间传递的中间激活值
+    float *x = s->x;
+
+    // 模型入口：将输入token的one-hot转为嵌入向量，等价于直接查token_embedding表
+    float* content_row = w->token_embedding + token * n_embd;
+    memcpy(x, content_row, n_embd*sizeof(*x));
+
+    // 前向传播，遍历各层的Transformer块，以x为层间传递的中间值（原地更新）
+    for(uint64_t l = 0; l < cfg->n_layer; l++) {
+        transformer_block_forward(x, l, pos, max_seq_len, is_causal, llm, lora);
+    }
+
+    // 最后一层RMSNorm
     rmsnorm(x, x, w->rms_norm_final, n_embd);
 
-    // classifier into logits
+    // 模型出口：将最终的嵌入向量解码成logits
     if (llm->quant_type == QUANT_TYPE_F32) {
         matmul(s->logits, x, w->token_classifier->tensor_f32, cfg->n_embd, cfg->vocab_size);
     }
