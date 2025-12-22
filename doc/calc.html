@@ -1,0 +1,248 @@
+<!-- Framework Iroha -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>LLM算力计算器</title>
+
+
+<!--页面自定义样式开始-->
+<style>
+body {
+    font-size: 14px;
+    font-family: system-ui, sans-serif;
+    margin: 20px auto;
+    max-width: 400px;
+    width: 90%;
+    line-height: 1.5;
+}
+
+.input-group {
+    display: flex;
+    margin: 6px 0;
+}
+.input-group label {
+    flex: 0 0 auto;
+    text-align: right;
+    margin-right: 8px;
+    white-space: nowrap;
+}
+.input-group input[type="number"] {
+    flex: 1;
+    min-width: 0;
+    padding: 3px 6px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+.res_value {
+    color: #c00000;
+    font-weight: bold;
+}
+
+#result {
+    margin-top: 12px;
+}
+
+.ref {
+    margin-top: 20px;
+    font-size: smaller;
+    color: #9fa2a9;
+}
+
+</style>
+<!--页面自定义样式结束-->
+
+</head>
+<body>
+
+<!--页面内容开始-->
+
+<div class="input-group">
+    <label for="block_size">block_size:</label>
+    <input type="number" id="block_size" value="512" step="any">
+</div>
+
+<div class="input-group">
+    <label for="vocab_size">vocab_size:</label>
+    <input type="number" id="vocab_size" value="8192" step="any">
+</div>
+
+<div class="input-group">
+    <label for="n_layer">n_layer:</label>
+    <input type="number" id="n_layer" value="12" step="any">
+</div>
+
+<div class="input-group">
+    <label for="n_embd">n_embd:</label>
+    <input type="number" id="n_embd" value="240" step="any">
+</div>
+
+<div class="input-group">
+    <label for="n_head">n_head:</label>
+    <input type="number" id="n_head" value="12" step="any">
+</div>
+
+<div class="input-group">
+    <label for="n_kv_head">n_kv_head:</label>
+    <input type="number" id="n_kv_head" value="4" step="any">
+</div>
+
+<div class="input-group">
+    <label for="head_dim">head_dim:</label>
+    <input type="number" id="head_dim" value="20" step="any">
+</div>
+
+<div class="input-group">
+    <label for="n_hidden">n_hidden:</label>
+    <input type="number" id="n_hidden" value="720" step="any">
+</div>
+
+<div class="input-group">
+    <label for="seqlen">seqlen:</label>
+    <input type="number" id="seqlen" value="512" step="any">
+</div>
+
+<div class="input-group">
+    <label for="tps">tps:</label>
+    <input type="number" id="tps" value="20" step="any">
+</div>
+
+<div id="result">f = 0</div>
+
+<div class="ref">计算方法见源码 | 参考文献：arxiv:2204.02311</div>
+
+<!--页面内容结束-->
+
+<!--脚本开始-->
+<script>
+
+const SIZE_OF_FLOAT = 4;
+
+function infer_flop_per_token(
+    pos, vocab_size, n_layer, n_embd, n_head, n_kv_head, n_hidden, head_dim
+) {
+    const SQRT_MUL = 5; // sqrt按5次浮点乘法计算
+    const EXP_MUL = 15; // exp按15次浮点乘法计算
+
+    let q_dim = head_dim * n_head;
+    let kv_dim = head_dim * n_kv_head;
+
+    let rmsnorm = (n)=>[3*n+SQRT_MUL, n]; // [mul, acc]
+    let softmax = (n)=>[n+n*EXP_MUL, n];
+    let matmul = (n,d)=>[n*d, n*d];
+    let rope = (n)=>[2*n, n];
+
+    let transformer_block = [
+        rmsnorm(n_embd),
+        matmul(n_embd, q_dim),
+        matmul(n_embd, kv_dim),
+        matmul(n_embd, kv_dim),
+        rope(head_dim),
+        rope(head_dim),
+        //rmsnorm(head_dim),
+        //rmsnorm(head_dim),
+        [
+            n_head * (pos * (head_dim + 1) + pos * head_dim + pos * SQRT_MUL + softmax(pos)[0]),
+            n_head * (pos * head_dim + pos * head_dim + softmax(pos)[1])
+        ],
+        matmul(q_dim, n_embd),
+        [0, n_embd],
+        rmsnorm(n_embd),
+        matmul(n_embd, n_hidden),
+        matmul(n_embd, n_hidden),
+        [3*n_hidden + n_hidden * EXP_MUL, n_hidden],
+        matmul(n_hidden, n_embd),
+        [0, n_embd],
+    ].reduce((p,c,i)=>[p[0]+c[0], p[1]+c[1]], [0, 0]);
+
+    let fwd = [
+        transformer_block.map((v)=>v * n_layer),
+        rmsnorm(n_embd),
+        matmul(n_embd, vocab_size)
+    ].reduce((p,c,i)=>[p[0]+c[0], p[1]+c[1]], [0, 0]);
+
+    return fwd.reduce((p,c)=>p+c, 0);
+}
+
+function num_of_params(
+    block_size, vocab_size, n_layer, n_embd, n_head, n_kv_head, n_hidden, head_dim
+) {
+    let q_dim = head_dim * n_head;
+    let kv_dim = head_dim * n_kv_head;
+
+    let rms_norm_attn  = n_layer * n_embd;
+    let rms_norm_ffn   = n_layer * n_embd;
+    let rms_norm_final = n_embd;
+
+    let token_embd = vocab_size * n_embd;
+
+    let wq = n_layer * n_embd * q_dim;
+    let wk = n_layer * n_embd * kv_dim;
+    let wv = n_layer * n_embd * kv_dim;
+    let wo = n_layer * q_dim * n_embd;
+
+    let w1 = n_layer * n_embd * n_hidden;
+    let w2 = n_layer * n_hidden * n_embd;
+    let w3 = n_layer * n_embd * n_hidden;
+
+    let q_norm = n_layer * head_dim; // Qwen3
+    let k_norm = n_layer * head_dim; // Qwen3
+
+    let pe_cmplx = block_size * head_dim;
+
+    let token_cls = 0;
+
+    return [
+        // 全部参数
+        (rms_norm_attn + rms_norm_ffn + rms_norm_final + wq + wk + wv + wo + w1 + w2 + w3 + q_norm + k_norm + pe_cmplx + token_embd + token_cls),
+        // 不含embd层
+        (rms_norm_attn + rms_norm_ffn + rms_norm_final + wq + wk + wv + wo + w1 + w2 + w3 + q_norm + k_norm),
+    ];
+}
+
+function kvcache_memory_bytes(seqlen, n_layer, n_kv_head, head_dim) {
+    return n_layer * seqlen * head_dim * n_kv_head * SIZE_OF_FLOAT;
+}
+
+
+function calculate() {
+    const block_size = parseFloat(document.getElementById('block_size').value) || 0;
+    const vocab_size = parseFloat(document.getElementById('vocab_size').value) || 0;
+    const n_layer = parseFloat(document.getElementById('n_layer').value) || 0;
+    const n_embd = parseFloat(document.getElementById('n_embd').value) || 0;
+    const n_head = parseFloat(document.getElementById('n_head').value) || 0;
+    const n_kv_head = parseFloat(document.getElementById('n_kv_head').value) || 0;
+    const head_dim = parseFloat(document.getElementById('head_dim').value) || 0;
+    const n_hidden = parseFloat(document.getElementById('n_hidden').value) || 0;
+    const seqlen = parseFloat(document.getElementById('seqlen').value) || 0;
+    const tps = parseFloat(document.getElementById('tps').value) || 0;
+
+    let n_param = num_of_params(block_size, vocab_size, n_layer, n_embd, n_head, n_kv_head, n_hidden, head_dim);
+    let infer_flop_per_tk = infer_flop_per_token(seqlen, vocab_size, n_layer, n_embd, n_head, n_kv_head, n_hidden, head_dim);
+    let train_flop_per_tk = 6 * n_param[0] + 12 * n_layer * n_head * head_dim * seqlen;
+    let kvcache_bytes = kvcache_memory_bytes(seqlen, n_layer, n_kv_head, head_dim);
+
+    document.getElementById('result').innerHTML = `<div>
+<div>参数量 = <span class="res_value">${n_param[0].toLocaleString()}</span> (<span class="res_value">${(n_param[0] * SIZE_OF_FLOAT / 1024.0 / 1024.0).toLocaleString()}</span> MiB)</div>
+<div>参数量(不含embd) = <span class="res_value">${n_param[1].toLocaleString()}</span> (<span class="res_value">${(n_param[1] * SIZE_OF_FLOAT / 1024.0 / 1024.0).toLocaleString()}</span> MiB)</div>
+<div>推理每词元计算量 = <span class="res_value">${infer_flop_per_tk / 1e6}</span> Mflop</div>
+<div>训练每词元计算量 = <span class="res_value">${train_flop_per_tk / 1e6}</span> Mflop</div>
+<div>推理计算速度 = <span class="res_value">${infer_flop_per_tk * tps / 1e9}</span> Gflop/s</div>
+<div>KVCache占用内存 = <span class="res_value">${kvcache_bytes / 1024.0 / 1024.0}</span> MiB</div>
+</div>`;
+}
+
+// 为所有输入绑定实时计算
+document.querySelectorAll('input').forEach(input => {
+    input.addEventListener('input', calculate);
+});
+
+// 初始计算
+calculate();
+
+</script>
+<!--脚本结束-->
+
+</body>
+</html>

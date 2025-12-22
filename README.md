@@ -124,23 +124,13 @@ Nano的预训练数据集可以直接使用无任何特殊格式的原始文本�
 
 ### 3. 预训练和监督微调
 
-大模型的训练非常昂贵，需要PFLOP甚至EFLOP量级的计算量。请勿低估让电脑说人话的成本。因此，开始训练之前，请先确认几件事：
-
-- 请做好训练过程随时会宕掉的心理准备，合理设置检查点保存策略。
-- 若长时间训练，**强烈建议使用 [GNU Screen](https://www.gnu.org/software/screen/) 等终端切换工具，保证训练进程不被意外杀掉**。
-- 若使用多机分布式训练，请先提前配置好分布式环境，例如无密码ssh认证等。
-
-> 简单估算训练时间：对58M参数的GPT语言模型(L=16, H=16, E=512, VocabSize=512)作预训练，按照[文献](https://arxiv.org/abs/2204.02311)中提供的算法进行计算，每个词元所需计算量约为403MFlop。如果使用10亿词元的语料进行一轮(epoch)预训练，则总计算量约为403PFlop。实际使用单卡A100进行训练，**实测耗时约5200秒（1.44小时）**，对应运算速度为78TFlop/s，是A100标称BF16算力312TFlop/s的25%，也即MFU为25%左右。
+大模型的训练非常昂贵，需要PFLOP甚至EFLOP量级的计算量。请勿低估让电脑说人话的成本。请务必注意：训练过程随时有可能意外中断，必须合理设置检查点保存策略，以便从断点处恢复训练。若长时间训练，**必须使用 [GNU Screen](https://www.gnu.org/software/screen/) 等工具，保证训练进程不被意外销毁**。若使用多机分布式训练，须提前配置好分布式环境，例如无密码ssh认证等。
 
 **预训练**：
 
-在预训练之前，首先根据规模扩展法则确定模型的规模、性能和算力预算，再确定模型的结构参数。作为参考，笔者训练的56M模型的参数如下（在`config/model.json`中设置）：
+在预训练之前，首先根据规模扩展法则确定模型的规模、性能和算力预算，确定模型的结构参数。可以使用[LLM算力计算器](./doc/calc.html)来估算模型训练推理所需的计算资源。
 
-|block_size|vocab_size|n_layer|n_embd|n_head|n_kv_head|n_hidden|norm_eps|
-|----|----|----|----|----|----|----|----|
-|512|16384|16|512|16|8|1408|1e-5|
-
-默认使用RoPE，预训练阶段Dropout为0。后文讲解这些参数的具体含义。一般而言，对于小规模模型，模型的长宽比例应适当，在保证宽度（n_embd）的前提下，尽量加大深度（n_layer）。
+> 估算实践案例：对58M参数的GPT语言模型(BlockSize=512, VocabSize=16384, nEmbd=512, nLayer=16, nHead=16, nKvHead=8, HeadDim=32, nHidden=1536)作试验预训练，使用[LLM算力计算器](./doc/calc.html)估算每个词元所需计算量约为403Mflop。若使用10亿词元的语料进行一轮预训练，则总计算量约为403Pflop。实际租用云服务器上的单卡A100进行训练，**实测耗时约5200秒（1.44小时）**，对应运算速度为78Tflop/s，是A100标称BF16算力312Tflop/s的25%，也即MFU约为25%。
 
 单卡或者CPU训练，执行
 
@@ -246,16 +236,16 @@ model_file
 
 ### Transformer模型结构
 
-Nano是典型的Transformer语言模型，如下图所示。
+Nano是Transformer因果自注意力编码器结构的自回归语言模型，如下图所示。
 
 ![ ](doc/nano-llm.png)
 
 - 模型结构以Llama2和GPT（[karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)）为主要参考。
-- 使用RoPE位置编码（可选用训练位置编码）和前置RMSNorm。
+- 使用旋转位置编码RoPE和前置均方根标准化RMSNorm。
 - 使用分组查询注意力（GQA）。
 - 使用SwiGLU，参考[文献](https://arxiv.org/pdf/2002.05202)。
-- 可选择因果自注意力或完全的自注意力，前者用于语言模型，后者用于在其他任务上的探索。
-- 词元嵌入层与分类层共享权重。关于这个问题，可参考[文献](https://spaces.ac.cn/archives/9698)。
+- 可选择因果自注意力或全局自注意力，前者用于语言模型，后者用于在其他任务上的探索。
+- 词元编码层与输出层共享权重。参考[文献](https://spaces.ac.cn/archives/9698)。
 - 支持KV-Cache。
 - 支持插件化的低秩适配（LoRA）训练和推理。
 
@@ -265,15 +255,24 @@ Nano是典型的Transformer语言模型，如下图所示。
 |-|-|-|-|
 |block_size|int|512|上下文（窗口）长度|
 |vocab_size|int|8192|词表长度|
-|n_layer|int|4|模型深度，即Transformer模型层数|
+|n_layer|int|4|模型深度：即Transformer模型层数|
+|n_embd|int|256|模型宽度：内部表示向量的维度|
 |n_head|int|4|Q注意力头数|
 |n_kv_head|int|4|KV注意力头数|
-|n_embd|int|256|模型宽度：内部表示向量的维度|
-|dropout|float|0.0|随机丢弃层的丢弃概率|
-|bias|bool|False|线性变换层加偏置？|
+|head_dim|int|4|每个注意力头的维度，**未必**等于Q注意力头的维度|
+|n_hidden|int|4|FFN隐藏层维度，一般是模型宽度的3倍|
+|dropout|float|0.0|随机丢弃层的丢弃概率，仅训练时使用，预训练时设为0|
 |use_rope|bool|True|使用RoPE位置编码？反之使用训练位置编码|
-|norm_eps|float|1e-5|均方根标准化层参数|
+|norm_eps|float|1e-5|均方根标准化参数，一般不动|
 |is_causal|bool|True|因果注意力？|
+
+作为参考，笔者训练的56M模型的参数如下（在`config/model.json`中设置）：
+
+|block_size|vocab_size|n_layer|n_embd|n_head|n_kv_head|head_dim|n_hidden|
+|----|----|----|----|----|----|----|----|
+|512|16384|16|512|16|8|32|1408|
+
+一般而言，对于小规模模型，在保证宽度（n_embd）的前提下，尽量加大深度（n_layer）。
 
 **词元编码**
 
