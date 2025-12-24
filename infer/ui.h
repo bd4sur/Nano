@@ -29,7 +29,7 @@ extern "C" {
 
 typedef struct {
     // 全局通用状态
-    uint64_t timestamp; // 物理时间戳
+    uint64_t timestamp; // 物理时间戳（ms）
     int32_t timer; // 主循环计数器：从0开始递增，不与物理时间关联
     int32_t focus;
 
@@ -56,7 +56,8 @@ typedef struct {
 
     // 显示相关
     int32_t is_full_refresh; // 作为所有绘制函数的一个参数，用于控制是否整帧刷新。默认为1。0-禁用函数内的clear-refresh，1-启用函数内的clear-refresh
-    int32_t refresh_ratio; // LLM推理过程中，屏幕刷新的分频系数，也就是每几次推理刷新一次屏幕
+    uint32_t llm_refresh_max_fps; // 设置项：LLM推理过程中屏幕刷新的最高帧率
+    uint64_t llm_refresh_timestamp; // LLM推理过程中，上一次刷新屏幕的时间戳。用于控制刷新频率（不高于llm_refresh_max_fps），避免刷新过于频繁，拖累表观TPS（目前LLM推理与屏幕刷新是同步串行的）。
 
 } Global_State;
 

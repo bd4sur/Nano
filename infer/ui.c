@@ -25,6 +25,10 @@ static wchar_t ime_symbols[55] = L"，。、？！：；“”‘’（）《》
 // 按键对应的字母列表
 static wchar_t ime_alphabet[10][32] = {L"0", L" 1.,:?!-/+_=&\"*", L"abcABC2", L"defDEF3", L"ghiGHI4", L"jklJKL5", L"mnoMNO6", L"pqrsPRQS7", L"tuvTUV8", L"wxyzWXYZ9"};
 
+// 带四舍五入的整数除法，仅接受正数
+static inline uint32_t div_round(uint32_t a, uint32_t b) {
+    return (a + b / 2) / b;
+}
 
 void get_candidate_hanzi_list(Widget_Input_State *input_state) {
     unsigned int candidate_index[500];
@@ -276,12 +280,15 @@ void render_scroll_bar(int32_t current_line, int32_t line_num, int32_t view_line
     line_num = (line_num <= 0) ? 1 : line_num;
 
     // 如果总行数装不满视图，则滚动条长度等于视图高度height
-    uint8_t bar_height = (line_num < view_lines) ? (uint8_t)(height) : (uint8_t)((view_lines * height) / line_num);
-    // 进度条高度不小于3px
-    bar_height = (bar_height < 3) ? 3 : bar_height;
-    uint8_t y_0 = (uint8_t)(y + (current_line * height) / line_num);
-    fb_draw_line(x + width - 1, y_0, x + width - 1, y_0 + bar_height + 1, 1);
-    fb_draw_line(x + width - 2, y_0, x + width - 2, y_0 + bar_height + 1, 1);
+    int32_t bar_height = (line_num < view_lines) ? (height) : div_round((view_lines * height), line_num);
+    bar_height = (bar_height < 3) ? 3 : bar_height; // 滚动条高度不小于3px
+
+    // 滚动条顶部y坐标
+    int32_t y_0 = y + div_round(current_line * height, line_num);
+    y_0 = (y_0 >= y + height - 3 - 1) ? (y + height - 3 - 1) : y_0; // 滚动条顶部限位（不低于底部上方3px）
+
+    fb_draw_line(x + width - 1, (uint8_t)y_0, x + width - 1, (uint8_t)(y_0 + bar_height), 1);
+    fb_draw_line(x + width - 2, (uint8_t)y_0, x + width - 2, (uint8_t)(y_0 + bar_height), 1);
 }
 
 
