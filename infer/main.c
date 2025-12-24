@@ -24,8 +24,8 @@
 #define DECODE_LED_ON   system("echo \"1\" > /sys/devices/platform/leds/leds/blue:status/brightness");
 #define DECODE_LED_OFF  system("echo \"0\" > /sys/devices/platform/leds/leds/blue:status/brightness");
 
-// 推理引擎实例（单例模式）
-static Nano_Context *g_llm_ctx = NULL;
+
+static char *LOG_FILE_PATH = "chat.jsonl";
 
 static char *MODEL_PATH_1 = MODEL_ROOT_DIR "/nano_168m_625000_sft_947000_q80.bin";
 static char *MODEL_PATH_2 = MODEL_ROOT_DIR "/nano_56m_99000_sft_v2_200000_q80.bin";
@@ -39,21 +39,10 @@ static float g_tps_of_last_session = 0.0f;
 static wchar_t g_llm_output_of_last_session[OUTPUT_BUFFER_LENGTH] = L"";
 static wchar_t g_asr_output[OUTPUT_BUFFER_LENGTH] = L"请说话...";
 
-static wchar_t g_anniversory[OUTPUT_BUFFER_LENGTH] = L"我在博客中，一直回避谈我自己。原因一方面固然是隐私安全考虑，而更重要的原因是，在博客中谈我自己，相当于直面“我是谁”这个终极问题，而我难以回答这个问题，甚至在求索的过程中，只会看到自己的空虚和肤浅。\n\n诸君应该知道，佛经中经常出现“如是我闻”这四个字，意思是“我听说事情是这样的…”。于是我转而回答“我知道什么”，试图迂回说明“什么是我”“什么属于我”，而非径直回答“我是什么”。\n\n一方面，我将个人博客转型为业余电台网站，以电台为载体，来间接呈现它的OP也就是我自己的所见所闻、所思所想。这样的好处是，业余电台是一个比“我”简单得多的系统，介绍“我的电台”，比介绍“我”更容易。电台是一个具象的抓手，可以允许我免于直接回答“我是谁”这个困难的问题。\n\n另一方面，我尽力将我的精神世界区分为“事实”和“观点”两部分，将事实放在“博客”栏目，将观点放在“灵感”栏目。尽管实践中难以明确区分二者，但我依然认为，将思维的依据和思维的结果解耦开来，通过罗列“什么是我”“什么属于我”来渐进式地刻画出我的精神世界的面貌，有助于以超脱的视角来观测我自己，有助于我接近“我是谁”这个问题的答案。\n\n还有一种策略。既然“我是谁”这个问题难以回答，不妨退而求其次，试图回答退化的问题：“我想成为什么样的人”。这个问题实际上包含三个方面，分别是我“想”、我“能”和我“得”。这问题表面上看起来是反思自我，实际上却有很强烈的“外部性”，涉及人作为社会人的价值的评判。\n\n具体而言，为了深刻反思自我，就必须以人为镜，对标他人。想要对标他人，就要了解他人。了解他人，除了了解抽象的他人，还应该了解具体的他人。求解“他是谁”这个问题，似乎比求解“我是谁”这个问题简单一点。既然谈的是博客，那么阅读某人的博客，实际上就是阅读一个“具体的人”。\n\n有人认为，当今网友思维极端化，“二极管思维”盛行，擅长扣帽子、贴标签。但这责任，依我看，也要归咎于许多人并不懂得如何呈现“具体”的自己。许多人活得太抽象，不仅在认识他人的时候太抽象，认识自己的时候也太抽象。人与人之间，都习惯于通过标签和简单归纳来互相认识，这难免产生“二极管思维”。我尽力避免成为这样的人，因此我希望回答好“我是谁”这个问题，呈现一个“具体”的自己。\n\n然而，活得“具体”是很难的。我有个点子，那就是为了观察某人的“专业性”，可以要求他在十秒内说出一句包含很多专业术语的话。一方面，认识具体的人，难免要花不少的时间去与对方交流、相处，也包括阅读他的文章。另一方面，为了让自己活得具体，就要输入足量的具体的事实，输出足量的具体的观点。这也就是说，人要活得“具体”，首先要活得“丰富”。泡利还是谁说过，所谓专家，就是把他所在领域中所有能犯的错误都犯过一遍的人。有了足量的具体细节，才“有资格”发展出自己的“高观点”，从“真懂”到“真信”，实现“我有什么”到“我是什么”的飞跃。\n\n这实际上就是人的认识规律，而且是认识规律的很小但很重要的一方面。这提醒我，要“把手弄脏”，先谈问题，再谈主义。这既是认识他人和世界的方法，也是认识自我的途径。\n\n取乎上得乎中，取乎中得乎下。对标什么人，想成为什么人，能成为什么人，必须要成为什么人。这是人生观的大问题，不可不察。\n";
-
 
 // 全局设置
 int32_t g_config_auto_submit_after_asr = 1; // ASR结束后立刻提交识别内容到LLM
 int32_t g_config_tts_mode = 0; // TTS工作模式：0-关闭   1-实时   2-全部生成后统一TTS
-
-char *g_model_path = NULL;
-char *g_lora_path = NULL;
-float g_repetition_penalty = 1.05f;
-float g_temperature = 1.0f;
-float g_top_p = 0.5f;
-uint32_t g_top_k = 0;
-uint32_t g_max_seq_len = 512;
-
 
 
 ///////////////////////////////////////
@@ -74,7 +63,9 @@ int32_t STATE = -1;
 int32_t PREV_STATE = -1;
 
 
-int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state, Nano_Session *session) {
+int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
+    Nano_Session *session = global_state->llm_session;
+
     if (session->t_0 == 0) {
         session->t_0 = global_state->timestamp;
     }
@@ -131,7 +122,9 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state, Nano
     return LLM_RUNNING_IN_PREFILLING;
 }
 
-int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_Session *session) {
+int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state) {
+    Nano_Session *session = global_state->llm_session;
+
     if (session->t_0 == 0) {
         session->t_0 = global_state->timestamp;
     }
@@ -168,11 +161,16 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state, Nano_S
     return LLM_RUNNING_IN_DECODING;
 }
 
-int32_t on_llm_finished(Nano_Session *session) {
+int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state) {
+    Nano_Session *session = global_state->llm_session;
+
     session->t_1 = global_state->timestamp;
     session->tps = (session->pos - 1) / (float)(session->t_1 - session->t_0) * 1000;
 
     wcscpy(g_llm_output_of_last_session, session->output_text);
+
+    // 将本轮对话写入日志
+    write_chat_log(LOG_FILE_PATH, global_state->timestamp, session->prompt, g_llm_output_of_last_session);
 
 #ifdef TTS_ENABLED
     if (g_config_tts_mode > 0) {
@@ -262,74 +260,74 @@ int32_t main_menu_item_action(int32_t item_index) {
 }
 
 int32_t model_menu_item_action(int32_t item_index) {
-    if (g_llm_ctx) {
-        llm_context_free(g_llm_ctx);
+    if (global_state->llm_ctx) {
+        llm_context_free(global_state->llm_ctx);
     }
 
     if (item_index == 0) {
         wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...");
-        g_model_path = MODEL_PATH_1;
-        g_lora_path = NULL;
-        g_repetition_penalty = 1.05f;
-        g_temperature = 1.0f;
-        g_top_p = 0.5f;
-        g_top_k = 0;
-        g_max_seq_len = 512;
+        global_state->llm_model_path = MODEL_PATH_1;
+        global_state->llm_lora_path = NULL;
+        global_state->llm_repetition_penalty = 1.05f;
+        global_state->llm_temperature = 1.0f;
+        global_state->llm_top_p = 0.5f;
+        global_state->llm_top_k = 0;
+        global_state->llm_max_seq_len = 512;
         global_state->refresh_ratio = 8;
     }
     else if (item_index == 1) {
         wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...");
-        g_model_path = MODEL_PATH_2;
-        g_lora_path = NULL;
-        g_repetition_penalty = 1.05f;
-        g_temperature = 1.0f;
-        g_top_p = 0.5f;
-        g_top_k = 0;
-        g_max_seq_len = 512;
+        global_state->llm_model_path = MODEL_PATH_2;
+        global_state->llm_lora_path = NULL;
+        global_state->llm_repetition_penalty = 1.05f;
+        global_state->llm_temperature = 1.0f;
+        global_state->llm_top_p = 0.5f;
+        global_state->llm_top_k = 0;
+        global_state->llm_max_seq_len = 512;
         global_state->refresh_ratio = 8;
     }
     else if (item_index == 2) {
         wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...");
-        g_model_path = MODEL_PATH_3;
-        g_lora_path = LORA_PATH_3;
-        g_repetition_penalty = 1.05f;
-        g_temperature = 1.0f;
-        g_top_p = 0.5f;
-        g_top_k = 0;
-        g_max_seq_len = 512;
+        global_state->llm_model_path = MODEL_PATH_3;
+        global_state->llm_lora_path = LORA_PATH_3;
+        global_state->llm_repetition_penalty = 1.05f;
+        global_state->llm_temperature = 1.0f;
+        global_state->llm_top_p = 0.5f;
+        global_state->llm_top_k = 0;
+        global_state->llm_max_seq_len = 512;
         global_state->refresh_ratio = 8;
     }
     else if (item_index == 3) {
         wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...");
-        g_model_path = MODEL_PATH_4;
-        g_lora_path = NULL;
-        g_repetition_penalty = 1.0f;
-        g_temperature = 0.6f;
-        g_top_p = 0.95f;
-        g_top_k = 20;
-        g_max_seq_len = 32768;
+        global_state->llm_model_path = MODEL_PATH_4;
+        global_state->llm_lora_path = NULL;
+        global_state->llm_repetition_penalty = 1.0f;
+        global_state->llm_temperature = 0.6f;
+        global_state->llm_top_p = 0.95f;
+        global_state->llm_top_k = 20;
+        global_state->llm_max_seq_len = 32768;
         global_state->refresh_ratio = 4;
     }
     else if (item_index == 4) {
         wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...");
-        g_model_path = MODEL_PATH_5;
-        g_lora_path = NULL;
-        g_repetition_penalty = 1.0f;
-        g_temperature = 0.6f;
-        g_top_p = 0.95f;
-        g_top_k = 20;
-        g_max_seq_len = 32768;
+        global_state->llm_model_path = MODEL_PATH_5;
+        global_state->llm_lora_path = NULL;
+        global_state->llm_repetition_penalty = 1.0f;
+        global_state->llm_temperature = 0.6f;
+        global_state->llm_top_p = 0.95f;
+        global_state->llm_top_k = 20;
+        global_state->llm_max_seq_len = 32768;
         global_state->refresh_ratio = 1;
     }
     else if (item_index == 5) {
         wcscpy(widget_textarea_state->text, L" 正在加载语言模型\n Qwen3-4B-Inst-2507\n 请稍等...");
-        g_model_path = MODEL_PATH_6;
-        g_lora_path = NULL;
-        g_repetition_penalty = 1.0f;
-        g_temperature = 0.7f;
-        g_top_p = 0.8f;
-        g_top_k = 20;
-        g_max_seq_len = 32768;
+        global_state->llm_model_path = MODEL_PATH_6;
+        global_state->llm_lora_path = NULL;
+        global_state->llm_repetition_penalty = 1.0f;
+        global_state->llm_temperature = 0.7f;
+        global_state->llm_top_p = 0.8f;
+        global_state->llm_top_k = 20;
+        global_state->llm_max_seq_len = 32768;
         global_state->refresh_ratio = 1;
     }
 
@@ -337,7 +335,15 @@ int32_t model_menu_item_action(int32_t item_index) {
     widget_textarea_state->is_show_scroll_bar = 0;
     draw_textarea(key_event, global_state, widget_textarea_state);
 
-    g_llm_ctx = llm_context_init(g_model_path, g_lora_path, g_max_seq_len, g_repetition_penalty, g_temperature, g_top_p, g_top_k, global_state->timestamp);
+    global_state->llm_ctx = llm_context_init(
+        global_state->llm_model_path,
+        global_state->llm_lora_path,
+        global_state->llm_max_seq_len,
+        global_state->llm_repetition_penalty,
+        global_state->llm_temperature,
+        global_state->llm_top_p,
+        global_state->llm_top_k,
+        global_state->timestamp);
 
     wcscpy(widget_textarea_state->text, L"加载完成~");
     widget_textarea_state->current_line = 0;
@@ -406,6 +412,14 @@ int main() {
     setting_menu_state = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
 
     global_state->llm_status = LLM_STOPPED_NORMALLY;
+    global_state->llm_model_path = NULL;
+    global_state->llm_lora_path = NULL;
+    global_state->llm_repetition_penalty = 1.05f;
+    global_state->llm_temperature = 1.0f;
+    global_state->llm_top_p = 0.5f;
+    global_state->llm_top_k = 0;
+    global_state->llm_max_seq_len = 512;
+    global_state->is_asr_server_up = 0;
     global_state->is_recording = 0;
     global_state->asr_start_timestamp = 0;
     global_state->is_full_refresh = 1;
@@ -564,7 +578,14 @@ int main() {
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
-                wcscpy(widget_textarea_state->text, g_anniversory);
+                wchar_t* content = read_file_to_wchar(LOG_FILE_PATH);
+                if (content) {
+                    wcscpy(widget_textarea_state->text, content);
+                    free(content);
+                }
+                else {
+                    wcscpy(widget_textarea_state->text, L"文件不存在...");
+                }
                 widget_textarea_state->current_line = 0;
                 widget_textarea_state->is_show_scroll_bar = 1;
                 draw_textarea(key_event, global_state, widget_textarea_state);
@@ -663,12 +684,12 @@ int main() {
                 }
 
                 // 根据模型类型应用prompt模板
-                if (g_llm_ctx->llm->arch == LLM_ARCH_NANO) {
+                if (global_state->llm_ctx->llm->arch == LLM_ARCH_NANO) {
                     wcscat(prompt, L"<|instruct_mark|>");
                     wcscat(prompt, widget_input_state->text);
                     wcscat(prompt, L"<|response_mark|>");
                 }
-                else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
+                else if (global_state->llm_ctx->llm->arch == LLM_ARCH_QWEN2 || global_state->llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
                     wcscpy(prompt, widget_input_state->text);
                     // wcscat(prompt, L" /no_think");
                 }
@@ -678,16 +699,16 @@ int main() {
                 }
 
                 // 初始化对话session
-                global_state->llm_session = llm_session_init(g_llm_ctx, prompt, g_max_seq_len);
+                global_state->llm_session = llm_session_init(global_state->llm_ctx, prompt, global_state->llm_max_seq_len);
             }
             PREV_STATE = STATE;
 
             // 事件循环主体：即同步版本的while(1)的循环体
 
-            global_state->llm_status = llm_session_step(g_llm_ctx, global_state->llm_session);
+            global_state->llm_status = llm_session_step(global_state->llm_ctx, global_state->llm_session);
 
             if (global_state->llm_status == LLM_RUNNING_IN_PREFILLING) {
-                global_state->llm_status = on_llm_prefilling(key_event, global_state, global_state->llm_session);
+                global_state->llm_status = on_llm_prefilling(key_event, global_state);
                 // 外部被动中止
                 if (global_state->llm_status == LLM_STOPPED_IN_PREFILLING) {
                     llm_session_free(global_state->llm_session);
@@ -698,7 +719,7 @@ int main() {
                 }
             }
             else if (global_state->llm_status == LLM_RUNNING_IN_DECODING) {
-                global_state->llm_status = on_llm_decoding(key_event, global_state, global_state->llm_session);
+                global_state->llm_status = on_llm_decoding(key_event, global_state);
                 // 外部被动中止
                 if (global_state->llm_status == LLM_STOPPED_IN_DECODING) {
 #ifdef TTS_ENABLED
@@ -714,12 +735,12 @@ int main() {
                 }
             }
             else if (global_state->llm_status == LLM_STOPPED_NORMALLY) {
-                global_state->llm_status = on_llm_finished(global_state->llm_session);
+                global_state->llm_status = on_llm_finished(key_event, global_state);
                 llm_session_free(global_state->llm_session);
                 STATE = 10;
             }
             else {
-                global_state->llm_status = on_llm_finished(global_state->llm_session);
+                global_state->llm_status = on_llm_finished(key_event, global_state);
                 llm_session_free(global_state->llm_session);
                 STATE = 10;
             }
@@ -1119,7 +1140,7 @@ int main() {
         global_state->timer = (global_state->timer == 2147483647) ? 0 : (global_state->timer + 1);
     }
 
-    llm_context_free(g_llm_ctx);
+    llm_context_free(global_state->llm_ctx);
 
     free(global_state);
     free(key_event);

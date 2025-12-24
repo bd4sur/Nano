@@ -231,7 +231,7 @@ uint32_t *apply_qwen_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uin
     }
 
     char user_prompt[MAX_PROMPT_BUFFER_LENGTH];
-    _wcstombs(user_prompt, user_prompt_wchar, MAX_PROMPT_BUFFER_LENGTH);
+    (void)_wcstombs(user_prompt, user_prompt_wchar, MAX_PROMPT_BUFFER_LENGTH);
     uint32_t num_user_prompt_tokens = 0;
     uint32_t *user_prompt_tokens = (uint32_t*)calloc(strlen(user_prompt), sizeof(uint32_t));
     encode_bpe(t, user_prompt, user_prompt_tokens, &num_user_prompt_tokens);

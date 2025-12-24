@@ -379,7 +379,7 @@ def export_quantized(model, tokenizer_config, filepath, group_size=64):
     cfg = model.config
     is_shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
     header = struct.pack(
-        "iiiiiiii",
+        "iiiiiiiii",
         cfg.block_size,
         cfg.vocab_size,
         cfg.n_layer,

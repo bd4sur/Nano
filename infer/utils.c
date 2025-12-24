@@ -352,32 +352,39 @@ void freeTree(AVLNode* root) {
 
 // 将 UTF-32 码点（wchar_t）数组转换为 UTF-8 字符串
 // 注意：此函数假设 wchar_t 为 32 位（即 UTF-32），符合 ESP32 的配置（通常 -fshort-wchar 未启用）
-void _wcstombs(char *dest, const wchar_t *src, uint32_t dest_size) {
+uint32_t _wcstombs(char *dest, const wchar_t *src, uint32_t dest_size) {
     const wchar_t *p = src;
     char *q = dest;
+    uint32_t dest_len = 0;
     char *end = dest + dest_size - 1; // 留 1 字节给 \0
 
     while (*p != L'\0' && q < end) {
         uint32_t cp = (uint32_t)*p++;
         if (cp <= 0x7F && q < end) {
             *q++ = (char)cp;
+            dest_len++;
         } else if (cp <= 0x7FF && q + 1 < end) {
             *q++ = 0xC0 | (cp >> 6);
             *q++ = 0x80 | (cp & 0x3F);
+            dest_len += 2;
         } else if (cp <= 0xFFFF && q + 2 < end) {
             *q++ = 0xE0 | (cp >> 12);
             *q++ = 0x80 | ((cp >> 6) & 0x3F);
             *q++ = 0x80 | (cp & 0x3F);
+            dest_len += 3;
         } else if (cp <= 0x10FFFF && q + 3 < end) {
             *q++ = 0xF0 | (cp >> 18);
             *q++ = 0x80 | ((cp >> 12) & 0x3F);
             *q++ = 0x80 | ((cp >> 6) & 0x3F);
             *q++ = 0x80 | (cp & 0x3F);
+            dest_len += 4;
         } else if (q < end) {
             *q++ = '?';
+            dest_len++;
         }
     }
     *q = '\0';
+    return dest_len;
 }
 
 // 将 UTF-8 字符串转换为 null-terminated 的 UTF-32 (wchar_t) 字符串
@@ -456,4 +463,161 @@ uint32_t random_u32(uint64_t *state) {
 // random float32 in [0,1)
 float random_f32(uint64_t *state) {
     return (random_u32(state) >> 8) / 16777216.0f;
+}
+
+// 辅助函数：在 wchar_t 层面对字符串进行 JSON 转义（\n, ", \）
+wchar_t* escape_wchar_string(const wchar_t* wstr) {
+    if (!wstr) return NULL;
+
+    size_t len = wcslen(wstr);
+    // 最坏情况：每个字符扩展为 2 个宽字符（如 L'\\' → L'\\'L'\\'）
+    size_t max_escaped_len = len * 2 + 1;
+    wchar_t* escaped = malloc(max_escaped_len * sizeof(wchar_t));
+    if (!escaped) return NULL;
+
+    wchar_t* out = escaped;
+    const wchar_t* p = wstr;
+
+    while (*p) {
+        if (*p == L'\n') {
+            *out++ = L'\\';
+            *out++ = L'n';
+        } else if (*p == L'"') {
+            *out++ = L'\\';
+            *out++ = L'"';
+        } else if (*p == L'\\') {
+            *out++ = L'\\';
+            *out++ = L'\\';
+        } else {
+            *out++ = *p;
+        }
+        p++;
+    }
+    *out = L'\0';
+    return escaped;
+}
+
+// 将转义后的 wchar_t* 用 wcstombs 转为 char*（依赖当前 locale）
+char* wchar_to_utf8(const wchar_t* wstr) {
+    if (!wstr) return NULL;
+
+    size_t len = wcslen(wstr);
+    size_t buf_size = len * MB_CUR_MAX + 1;
+    char* mbstr = malloc(buf_size);
+    if (!mbstr) return NULL;
+
+    size_t result = _wcstombs(mbstr, wstr, buf_size);
+    if (result == (size_t)-1) {
+        free(mbstr);
+        return NULL;
+    }
+
+    return mbstr;
+}
+
+// 主函数：将 prompt 和 response 转义、转换、写入 log.jsonl
+int32_t write_chat_log(char *filepath, uint64_t timestamp, wchar_t* prompt, wchar_t* response) {
+
+    // 第一步：在 wchar_t 层面转义
+    wchar_t* escaped_prompt_w = escape_wchar_string(prompt);
+    wchar_t* escaped_response_w = escape_wchar_string(response);
+
+    if (!escaped_prompt_w || !escaped_response_w) {
+        free(escaped_prompt_w);
+        free(escaped_response_w);
+        return -1;
+    }
+
+    // 第二步：用 wcstombs 转为 char*（UTF-8）
+    char* escaped_prompt = wchar_to_utf8(escaped_prompt_w);
+    char* escaped_response = wchar_to_utf8(escaped_response_w);
+
+    free(escaped_prompt_w);
+    free(escaped_response_w);
+
+    if (!escaped_prompt || !escaped_response) {
+        free(escaped_prompt);
+        free(escaped_response);
+        return -1;
+    }
+
+    // 第三步：写入 JSONL 文件
+    FILE* fp = fopen(filepath, "a");
+    if (!fp) {
+        free(escaped_prompt);
+        free(escaped_response);
+        return -1;
+    }
+
+    fprintf(fp, "{\"timestamp\": %ld, \"prompt\": \"%s\", \"response\": \"%s\"}\n",
+            timestamp, escaped_prompt, escaped_response);
+
+    fclose(fp);
+    free(escaped_prompt);
+    free(escaped_response);
+    return 0;
+}
+
+/**
+ * 读取当前工作目录下指定文件的全部内容（UTF-8），并转换为 wchar_t* 字符串。
+ *
+ * @param filename 文件名
+ * @return 成功时返回动态分配的 wchar_t*（以 L'\0' 结尾），失败返回 NULL。
+ *         调用者需用 free() 释放返回值。
+ */
+wchar_t* read_file_to_wchar(char* filename) {
+    if (!filename) return NULL;
+
+    // 2. 打开文件（当前工作目录）
+    FILE* fp = fopen(filename, "rb"); // 用二进制模式避免换行转换
+    if (!fp) {
+        return NULL;
+    }
+
+    // 3. 获取文件大小（可选，用于高效分配）
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+    size_t size = ftell(fp);
+    if (size < 0) {
+        fclose(fp);
+        return NULL;
+    }
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+
+    // 4. 读取全部内容到 char 缓冲区（+1 保证可加 '\0'）
+    char* buffer = malloc(size + 1);
+    if (!buffer) {
+        fclose(fp);
+        return NULL;
+    }
+
+    size_t bytes_read = fread(buffer, 1, size, fp);
+    fclose(fp);
+
+    if ((size_t)bytes_read != size) {
+        free(buffer);
+        return NULL;
+    }
+    buffer[size] = '\0'; // 确保以 null 结尾（UTF-8 是 null-safe 的）
+
+    // 5. 计算所需 wchar_t 数量
+    size_t wlen = size;
+
+    // 6. 分配 wchar_t 缓冲区
+    wchar_t* wstr = malloc((wlen + 1) * sizeof(wchar_t));
+    if (!wstr) {
+        free(buffer);
+        return NULL;
+    }
+
+    // 7. 执行实际转换
+    (void)_mbstowcs(wstr, buffer, wlen + 1);
+    free(buffer);
+
+    return wstr; // 调用者负责 free()
 }

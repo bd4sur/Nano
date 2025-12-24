@@ -9,7 +9,13 @@ extern "C" {
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <wchar.h>
+#include <locale.h>
 #include <math.h>
+
+// TODO 以下两个与平台有关，需要移到platform.h中
+#include <sys/stat.h>
+#include <unistd.h>
 
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
     #define uint64_t unsigned long long
@@ -115,7 +121,7 @@ void freeTree(AVLNode* root);
 // 字符编码相关
 // ===============================================================================
 
-void _wcstombs(char *dest, const wchar_t *src, uint32_t length);
+uint32_t _wcstombs(char *dest, const wchar_t *src, uint32_t length);
 uint32_t _mbstowcs(wchar_t *dest, const char *src, uint32_t length);
 
 
@@ -126,6 +132,9 @@ uint32_t _mbstowcs(wchar_t *dest, const char *src, uint32_t length);
 uint32_t random_u32(uint64_t *state);
 float random_f32(uint64_t *state);
 
+int32_t write_chat_log(char *filepath, uint64_t timestamp, wchar_t* prompt, wchar_t* response);
+
+wchar_t* read_file_to_wchar(char* filename);
 
 #ifdef __cplusplus
 }
