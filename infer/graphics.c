@@ -7796,6 +7796,30 @@ void fb_draw_bitmap(uint8_t x, uint8_t y, uint8_t sizex, uint8_t sizey, uint8_t 
     }
 }
 
+// 绘制一行文本，mode为1则为正显，为0则为反白
+void fb_draw_textline(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
+    uint32_t x_pos = x;
+    uint32_t y_pos = y;
+    for (uint32_t i = 0; i < wcslen(line); i++) {
+        uint32_t current_char = line[i];
+        uint8_t font_width = 12;
+        uint8_t font_height = 12;
+        uint8_t *glyph = get_glyph(current_char, &font_width, &font_height);
+        if (!glyph) {
+            // printf("出现了字库之外的字符！\n");
+            glyph = get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+        }
+        if (x_pos + font_width >= 128) {
+            break;
+        }
+        // NOTE 反色显示时，在每个字符场面额外补充一条线，避免菜单中高亮区域看起来顶格
+        fb_draw_line(x_pos, y_pos - 1, x_pos+font_width-1, y_pos - 1, 1 - (mode % 2));
+        fb_draw_char(x_pos, y_pos, glyph, font_width, font_height, (mode % 2));
+        x_pos += font_width;
+    }
+}
+
+
 void add_glyph_index_to_cache(uint32_t utf32, uint32_t index) {
     if (GLYPH_CACHE_LEVEL < 1024) {
         GLYPH_CACHE[   GLYPH_CACHE_LEVEL    ] = utf32;

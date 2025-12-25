@@ -76,36 +76,25 @@ typedef struct {
     int32_t y; // NOTE 设置文本框高度时，按照除末行外，每行margin-bottom:1px来计算。例如，如果希望恰好显示4行，则高度应为13*3+12=51px。
     int32_t width;
     int32_t height;
-    wchar_t text[INPUT_BUFFER_LENGTH];
+    wchar_t *text;
     int32_t length;
-    int32_t break_pos[INPUT_BUFFER_LENGTH];
+    int32_t *break_pos;
     int32_t line_num;
     int32_t view_lines;
     int32_t view_start_pos;
     int32_t view_end_pos;
     int32_t current_line;
     int32_t is_show_scroll_bar; // 是否显示滚动条：0不显示 1显示
+    int32_t is_modified; // 文本内容是否有修改过？默认1。用于控制是否进行typeset_line_breaks排版
 } Widget_Textarea_State;
 
 typedef struct {
-    // 以下实际上是继承 Widget_Textarea_State
-    int32_t state; // 内部状态
-    int32_t x;
-    int32_t y;
-    int32_t width;
-    int32_t height;
-    wchar_t text[INPUT_BUFFER_LENGTH];
-    int32_t length;
-    int32_t break_pos[INPUT_BUFFER_LENGTH];
-    int32_t line_num;
-    int32_t view_lines;
-    int32_t view_start_pos;
-    int32_t view_end_pos;
-    int32_t current_line;
-    int32_t is_show_scroll_bar;
+    // 继承 Widget_Textarea_State
+    Widget_Textarea_State textarea;
 
     // 以下是Widget_Input_State独有的
 
+    int32_t state;                // 控件状态（不复用textarea内部的状态）
     int32_t cursor_pos;           // 光标位置
     uint32_t ime_mode_flag;       // 汉英数输入模式标志 0汉字 1英文 2数字
     uint32_t pinyin_keys;         // 单字拼音键码暂存
@@ -130,14 +119,15 @@ typedef struct {
     wchar_t items[MAX_MENU_ITEMS][MAX_MENU_ITEM_LEN]; // 条目标题
 } Widget_Menu_State;
 
-void render_line(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode);
 
-void render_text(
-    wchar_t *text, int32_t start_line, int32_t length, int32_t *break_pos, int32_t line_num,
-    int32_t x_offset, int32_t y_offset, int32_t width, int32_t height, int32_t do_typeset);
+void render_text(Widget_Textarea_State *textarea_state);
 
 void show_splash_screen(Key_Event *key_event, Global_State *global_state);
 
+void init_textarea(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state,
+    uint32_t max_len);
+void set_textarea(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state,
+    wchar_t *text, int32_t current_line, int32_t is_show_scroll_bar);
 void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
 int32_t textarea_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts,
@@ -146,7 +136,10 @@ int32_t textarea_event_handler(
 
 void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 void refresh_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
-void draw_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+int32_t input_event_handler(
+    Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state,
+    int32_t prev_focus_state, int32_t current_focus_state, int32_t next_focus_state
+);
 
 void init_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
 void refresh_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
