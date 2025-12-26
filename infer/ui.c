@@ -1016,7 +1016,7 @@ void render_pinyin_input(Widget_Input_State *input_state, uint32_t is_picking) {
     uint32_t y_offset = input_state->textarea.y + 13;
 
     // 清空输入法显示区域
-    for (int i = y_offset; i <= input_state->textarea.y + input_state->textarea.height; i++) {
+    for (int i = y_offset-1; i <= input_state->textarea.y + input_state->textarea.height; i++) {
         fb_draw_line(input_state->textarea.x, i, input_state->textarea.x + input_state->textarea.width, i, 0);
     }
 
@@ -1071,7 +1071,7 @@ void render_symbol_input(Widget_Input_State *input_state) {
     uint32_t y_offset = input_state->textarea.y + 13;
 
     // 清空输入法显示区域
-    for (int i = y_offset; i <= input_state->textarea.y + input_state->textarea.height; i++) {
+    for (int i = y_offset-1; i <= input_state->textarea.y + input_state->textarea.height; i++) {
         fb_draw_line(input_state->textarea.x, i, input_state->textarea.x + input_state->textarea.width, i, 0);
     }
 

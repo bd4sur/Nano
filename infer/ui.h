@@ -46,9 +46,13 @@ typedef struct {
     uint32_t llm_max_seq_len;
 
     // ASR相关
+    int32_t is_auto_submit_after_asr; // ASR结束后立刻提交识别内容到LLM？默认值1（不编辑，立刻提交）
     int32_t is_asr_server_up;
     int32_t is_recording; // 录音状态
     uint64_t asr_start_timestamp; // 录音起始的时间戳
+
+    // TTS相关
+    int32_t tts_req_mode; // TTS请求方式：0-关闭（默认值）   1-实时（每生成“一句话”立刻请求TTS）   2-全部生成完成后统一请求TTS
 
     // UPS相关
     int32_t ups_voltage; // UPS电压
