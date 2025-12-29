@@ -19,6 +19,17 @@ int32_t graceful_shutdown() {
     return 0;
 }
 
+// 主函数：将 prompt 和 response 转义、转换、写入 log.jsonl
+int32_t write_chat_log(char *filepath, uint64_t timestamp, wchar_t* prompt, wchar_t* response) {
+    // Stub
+    return 0;
+}
+
+// 读取文件内容（UTF-8），并转换为 wchar_t* 字符串
+wchar_t* read_file_to_wchar(char* filename) {
+    // Stub
+    return NULL;
+}
 
 
 

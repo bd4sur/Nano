@@ -1087,7 +1087,7 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, unsigned int 
     Nano_Session *session = (Nano_Session *)calloc(1, sizeof(Nano_Session));
     Tokenizer *tokenizer = ctx->tokenizer;
 
-    session->prompt = (wchar_t *)calloc(MAX_PROMPT_BUFFER_LENGTH + 1, sizeof(wchar_t));
+    session->prompt = (wchar_t *)calloc(max_seq_len + 1, sizeof(wchar_t));
     if (prompt == NULL) {
         wcscpy(session->prompt, L"");
     }

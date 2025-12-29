@@ -15,6 +15,12 @@ void sleep_in_ms(uint32_t ms);
 uint64_t get_timestamp_in_ms();
 int32_t graceful_shutdown();
 
+// 将对话记录写入日志文件（JSONL格式）
+int32_t write_chat_log(char *filepath, uint64_t timestamp, wchar_t* prompt, wchar_t* response);
+// 读取文件，并返回新的wchar数组
+wchar_t* read_file_to_wchar(char* filename);
+
+
 // ===============================================================================
 // Nano-Pod: Raspberry Pi 5
 // ===============================================================================

@@ -834,12 +834,13 @@ int32_t menu_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Menu_State *ms,
     int32_t (*menu_item_action_callback)(int32_t), int32_t prev_focus_state, int32_t current_focus_state
 ) {
-    // 短按0-9数字键：直接选中屏幕上显示的那页的相对第几项
-    if (ke->key_edge == -1 && (ke->key_code >= KEYCODE_NUM_0 && ke->key_code <= KEYCODE_NUM_9)) {
-        if (ke->key_code < ms->item_num) {
+    // 短按1-9数字键：直接选中屏幕上显示的那页的相对第几项
+    // NOTE 从1开始
+    if (ke->key_edge == -1 && (ke->key_code >= KEYCODE_NUM_1 && ke->key_code <= KEYCODE_NUM_9)) {
+        if (ke->key_code <= ms->items_per_page) {
             ms->current_item_intex = ms->first_item_intex + (uint32_t)(ke->key_code) - 1;
+            return menu_item_action_callback(ms->current_item_intex);
         }
-        return menu_item_action_callback(ms->current_item_intex);
     }
     // 短按A键：返回上一个焦点状态
     else if (ke->key_edge == -1 && ke->key_code == KEYCODE_NUM_A) {

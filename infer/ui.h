@@ -11,7 +11,6 @@ extern "C" {
 #include "infer.h"
 
 #define INPUT_BUFFER_LENGTH  (16384)
-#define OUTPUT_BUFFER_LENGTH (16384)
 
 #define IME_MODE_HANZI    (0)
 #define IME_MODE_ALPHABET (1)
@@ -27,11 +26,13 @@ extern "C" {
 #define MAX_MENU_ITEMS (128)
 #define MAX_MENU_ITEM_LEN (24)
 
+// NOTE 增删字段时，务必修改初始化部分
 typedef struct {
     // 全局通用状态
     uint64_t timestamp; // 物理时间戳（ms）
     int32_t timer; // 主循环计数器：从0开始递增，不与物理时间关联
     int32_t focus;
+    int32_t is_ctrl_enabled; // 是否处于Ctrl键的激活状态：1-是，0-否
 
     // LLM相关
     Nano_Context *llm_ctx;
@@ -44,6 +45,7 @@ typedef struct {
     float llm_top_p;
     uint32_t llm_top_k;
     uint32_t llm_max_seq_len;
+    int32_t is_thinking_enabled; // 是否开启思考模式：1-是，0-否
 
     // ASR相关
     int32_t is_auto_submit_after_asr; // ASR结束后立刻提交识别内容到LLM？默认值1（不编辑，立刻提交）

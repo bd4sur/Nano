@@ -5,8 +5,6 @@
 #include "infer.h"
 #include "prompt.h"
 
-#define OUTPUT_BUFFER_LENGTH (32768)
-
 // 推理引擎实例（单例模式）
 static Nano_Context *g_llm_ctx;
 

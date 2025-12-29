@@ -37,8 +37,8 @@ static char *MODEL_PATH_6 = MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q80.bin";
 
 static uint32_t g_tokens_count = 0;
 static float g_tps_of_last_session = 0.0f;
-static wchar_t g_llm_output_of_last_session[OUTPUT_BUFFER_LENGTH] = L"";
-static wchar_t g_asr_output[OUTPUT_BUFFER_LENGTH] = L"请说话...";
+static wchar_t g_llm_output_of_last_session[INPUT_BUFFER_LENGTH] = L"";
+static wchar_t g_asr_output[INPUT_BUFFER_LENGTH] = L"请说话...";
 
 
 
@@ -501,6 +501,7 @@ int main() {
     w_menu_asr_setting = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
     w_menu_tts_setting = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
 
+    global_state->is_ctrl_enabled = 0;
     global_state->llm_status = LLM_STOPPED_NORMALLY;
     global_state->llm_model_path = NULL;
     global_state->llm_lora_path = NULL;
@@ -509,6 +510,7 @@ int main() {
     global_state->llm_top_p = 0.5f;
     global_state->llm_top_k = 0;
     global_state->llm_max_seq_len = 512;
+    global_state->is_thinking_enabled = 1;
     global_state->is_auto_submit_after_asr = 1; // ASR结束后立刻提交识别内容到LLM
     global_state->is_asr_server_up = 0;
     global_state->is_recording = 0;
@@ -773,7 +775,7 @@ int main() {
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
-                wchar_t prompt[MAX_PROMPT_BUFFER_LENGTH] = L"";
+                wchar_t *prompt = (wchar_t*)calloc(global_state->llm_max_seq_len + 1, sizeof(wchar_t));
 
                 // 如果输入为空，则随机选用一个预置prompt
                 if (wcslen(w_input_main->textarea.text) == 0) {
@@ -781,7 +783,7 @@ int main() {
                     w_input_main->textarea.length = wcslen(w_input_main->textarea.text);
                 }
 
-                // 根据模型类型应用prompt模板
+                // 根据模型类型应用prompt模板（NOTE 注意：prompt模板会占用max_seq_len长度）
                 if (global_state->llm_ctx->llm->arch == LLM_ARCH_NANO) {
                     wcscat(prompt, L"<|instruct_mark|>");
                     wcscat(prompt, w_input_main->textarea.text);
@@ -855,7 +857,7 @@ int main() {
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
                 // 计算提示语+生成内容的行数
-                wchar_t *prompt_and_output = (wchar_t *)calloc(OUTPUT_BUFFER_LENGTH * 2, sizeof(wchar_t));
+                wchar_t *prompt_and_output = (wchar_t *)calloc(INPUT_BUFFER_LENGTH * 2, sizeof(wchar_t));
                 wcscat(prompt_and_output, L"Homo:\n");
                 wcscat(prompt_and_output, w_input_main->textarea.text);
                 wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
