@@ -1,7 +1,4 @@
-
-
 #include <locale.h>
-
 
 #include "graphics.h"
 #include "ui.h"
@@ -24,6 +21,20 @@
 #define DECODE_LED_ON   system("echo \"1\" > /sys/devices/platform/leds/leds/blue:status/brightness");
 #define DECODE_LED_OFF  system("echo \"0\" > /sys/devices/platform/leds/leds/blue:status/brightness");
 
+#define STATE_DEFAULT         (-100)
+#define STATE_SPLASH_SCREEN   (-1)
+#define STATE_MAIN_MENU       (-2)
+#define STATE_EBOOK           (-3)
+#define STATE_LLM_INPUT       (0)
+#define STATE_MODEL_MENU      (4)
+#define STATE_SETTING_MENU    (5)
+#define STATE_LLM_ON_INFER    (8)
+#define STATE_LLM_AFTER_INFER (10)
+#define STATE_ASR_RUNNING     (21)
+#define STATE_README          (26)
+#define STATE_SHUTDOWN        (31)
+#define STATE_TTS_SETTING     (32)
+#define STATE_ASR_SETTING     (33)
 
 static char *LOG_FILE_PATH = "chat.jsonl";
 
@@ -63,8 +74,8 @@ Widget_Menu_State      *w_menu_tts_setting = {0};
 
 
 // 全局状态标志
-int32_t STATE = -1;
-int32_t PREV_STATE = -1;
+int32_t STATE = STATE_SPLASH_SCREEN;
+int32_t PREV_STATE = STATE_DEFAULT;
 
 
 int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
@@ -191,7 +202,7 @@ int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state) {
 // 全局组件操作过程
 
 void init_main_menu() {
-    wcscpy(w_menu_main->title, L"Nano-Pod V2512");
+    wcscpy(w_menu_main->title, L"Nano-Pod");
     wcscpy(w_menu_main->items[0], L"电子鹦鹉");
     wcscpy(w_menu_main->items[1], L"电子书");
     wcscpy(w_menu_main->items[2], L"设置");
@@ -249,30 +260,30 @@ int32_t main_menu_item_action(int32_t item_index) {
     // 0.电子鹦鹉
     if (item_index == 0) {
         init_model_menu();
-        return 4;
+        return STATE_MODEL_MENU;
     }
 
     // 1.电子书
     else if (item_index == 1) {
-        return -3;
+        return STATE_EBOOK;
     }
 
     // 2.设置
     else if (item_index == 2) {
         init_setting_menu();
-        return 5;
+        return STATE_SETTING_MENU;
     }
 
     // 3.安全关机
     else if (item_index == 3) {
-        return 31;
+        return STATE_SHUTDOWN;
     }
 
     // 4.本机自述
     else if (item_index == 4) {
-        return 26;
+        return STATE_README;
     }
-    return -2;
+    return STATE_MAIN_MENU;
 }
 
 int32_t model_menu_item_action(int32_t item_index) {
@@ -365,11 +376,11 @@ int32_t model_menu_item_action(int32_t item_index) {
 
     // 1、直接进入电子鹦鹉
     init_input(key_event, global_state, w_input_main);
-    return 0;
+    return STATE_LLM_INPUT;
 
     // 2、或者回到主菜单
     // refresh_menu(key_event, global_state, w_menu_main);
-    // return -2;
+    // return STATE_MAIN_MENU;
 }
 
 int32_t setting_menu_item_action(int32_t item_index) {
@@ -381,20 +392,20 @@ int32_t setting_menu_item_action(int32_t item_index) {
         sleep_in_ms(500);
 
         refresh_menu(key_event, global_state, w_menu_setting);
-        return 5;
+        return STATE_SETTING_MENU;
     }
     // TTS设置
     else if (item_index == 1) {
         init_tts_setting_menu();
-        return 32;
+        return STATE_TTS_SETTING;
     }
     // ASR设置
     else if (item_index == 2) {
         init_asr_setting_menu();
-        return 33;
+        return STATE_ASR_SETTING;
     }
     else {
-        return 5;
+        return STATE_SETTING_MENU;
     }
 }
 
@@ -410,7 +421,7 @@ int32_t asr_setting_menu_item_action(int32_t item_index) {
         sleep_in_ms(500);
 
         refresh_menu(key_event, global_state, w_menu_asr_setting);
-        return 5;
+        return STATE_SETTING_MENU;
     }
     // 1.立刻提交
     else if (item_index == 1) {
@@ -422,10 +433,10 @@ int32_t asr_setting_menu_item_action(int32_t item_index) {
         sleep_in_ms(500);
 
         refresh_menu(key_event, global_state, w_menu_asr_setting);
-        return 5;
+        return STATE_SETTING_MENU;
     }
     else {
-        return 33;
+        return STATE_ASR_SETTING;
     }
 }
 
@@ -441,7 +452,7 @@ int32_t tts_setting_menu_item_action(int32_t item_index) {
         sleep_in_ms(500);
 
         refresh_menu(key_event, global_state, w_menu_tts_setting);
-        return 5;
+        return STATE_SETTING_MENU;
     }
     // 1.实时TTS
     else if (item_index == 1) {
@@ -453,7 +464,7 @@ int32_t tts_setting_menu_item_action(int32_t item_index) {
         sleep_in_ms(500);
 
         refresh_menu(key_event, global_state, w_menu_tts_setting);
-        return 5;
+        return STATE_SETTING_MENU;
     }
     // 2.完成后统一TTS
     else if (item_index == 2) {
@@ -465,10 +476,10 @@ int32_t tts_setting_menu_item_action(int32_t item_index) {
         sleep_in_ms(500);
 
         refresh_menu(key_event, global_state, w_menu_tts_setting);
-        return 5;
+        return STATE_SETTING_MENU;
     }
     else {
-        return 32;
+        return STATE_TTS_SETTING;
     }
 }
 
@@ -630,7 +641,7 @@ int main() {
         // 初始状态：欢迎屏幕。按任意键进入主菜单
         /////////////////////////////////////////////
 
-        case -1:
+        case STATE_SPLASH_SCREEN:
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -645,7 +656,7 @@ int main() {
 
             // 按下任何键，不论长短按，进入主菜单
             if (key_event->key_edge < 0 && key_event->key_code != KEYCODE_NUM_IDLE) {
-                STATE = -2;
+                STATE = STATE_MAIN_MENU;
             }
 
             break;
@@ -654,7 +665,7 @@ int main() {
         // 主菜单。
         /////////////////////////////////////////////
 
-        case -2:
+        case STATE_MAIN_MENU:
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -662,7 +673,7 @@ int main() {
             }
             PREV_STATE = STATE;
 
-            STATE = menu_event_handler(key_event, global_state, w_menu_main, main_menu_item_action, -1, -2);
+            STATE = menu_event_handler(key_event, global_state, w_menu_main, main_menu_item_action, STATE_SPLASH_SCREEN, STATE_MAIN_MENU);
 
             break;
 
@@ -670,7 +681,7 @@ int main() {
         // 文本显示状态
         /////////////////////////////////////////////
 
-        case -3:
+        case STATE_EBOOK:
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -704,7 +715,7 @@ int main() {
             }
 #endif
 
-            STATE = textarea_event_handler(key_event, global_state, w_textarea_main, -2, -3);
+            STATE = textarea_event_handler(key_event, global_state, w_textarea_main, STATE_MAIN_MENU, STATE_EBOOK);
 
             break;
 
@@ -712,7 +723,7 @@ int main() {
         // 文字编辑器状态
         /////////////////////////////////////////////
 
-        case 0:
+        case STATE_LLM_INPUT:
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -723,12 +734,12 @@ int main() {
 #ifdef ASR_ENABLED
             // 按下C键：开始PTT
             if (key_event->key_edge > 0 && key_event->key_code == KEYCODE_NUM_C) {
-                STATE = 21;
+                STATE = STATE_ASR_RUNNING;
                 break;
             }
 #endif
 
-            STATE = input_event_handler(key_event, global_state, w_input_main, 4, 0, 8);
+            STATE = input_event_handler(key_event, global_state, w_input_main, STATE_MODEL_MENU, STATE_LLM_INPUT, STATE_LLM_ON_INFER);
 
             break;
 
@@ -736,7 +747,7 @@ int main() {
         // 选择语言模型状态
         /////////////////////////////////////////////
 
-        case 4:
+        case STATE_MODEL_MENU:
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -744,7 +755,7 @@ int main() {
             }
             PREV_STATE = STATE;
 
-            STATE = menu_event_handler(key_event, global_state, w_menu_model, model_menu_item_action, -2, 4);
+            STATE = menu_event_handler(key_event, global_state, w_menu_model, model_menu_item_action, STATE_MAIN_MENU, STATE_MODEL_MENU);
 
             break;
 
@@ -753,7 +764,7 @@ int main() {
         // 设置菜单
         /////////////////////////////////////////////
 
-        case 5:
+        case STATE_SETTING_MENU:
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -761,7 +772,7 @@ int main() {
             }
             PREV_STATE = STATE;
 
-            STATE = menu_event_handler(key_event, global_state, w_menu_setting, setting_menu_item_action, -2, 5);
+            STATE = menu_event_handler(key_event, global_state, w_menu_setting, setting_menu_item_action, STATE_MAIN_MENU, STATE_SETTING_MENU);
 
             break;
 
@@ -771,7 +782,7 @@ int main() {
         //   实际上就是将generate_sync的while循环打开，将其置于大的事件循环。
         /////////////////////////////////////////////
 
-        case 8:
+        case STATE_LLM_ON_INFER:
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -794,7 +805,7 @@ int main() {
                     // wcscat(prompt, L" /no_think");
                 }
                 else {
-                    STATE = -1;
+                    STATE = STATE_SPLASH_SCREEN;
                     break;
                 }
 
@@ -812,10 +823,10 @@ int main() {
                 // 外部被动中止
                 if (global_state->llm_status == LLM_STOPPED_IN_PREFILLING) {
                     llm_session_free(global_state->llm_session);
-                    STATE = 10;
+                    STATE = STATE_LLM_AFTER_INFER;
                 }
                 else {
-                    STATE = 8;
+                    STATE = STATE_LLM_ON_INFER;
                 }
             }
             else if (global_state->llm_status == LLM_RUNNING_IN_DECODING) {
@@ -828,21 +839,21 @@ int main() {
                     }
 #endif
                     llm_session_free(global_state->llm_session);
-                    STATE = 10;
+                    STATE = STATE_LLM_AFTER_INFER;
                 }
                 else {
-                    STATE = 8;
+                    STATE = STATE_LLM_ON_INFER;
                 }
             }
             else if (global_state->llm_status == LLM_STOPPED_NORMALLY) {
                 global_state->llm_status = on_llm_finished(key_event, global_state);
                 llm_session_free(global_state->llm_session);
-                STATE = 10;
+                STATE = STATE_LLM_AFTER_INFER;
             }
             else {
                 global_state->llm_status = on_llm_finished(key_event, global_state);
                 llm_session_free(global_state->llm_session);
-                STATE = 10;
+                STATE = STATE_LLM_AFTER_INFER;
             }
 
             break;
@@ -852,7 +863,7 @@ int main() {
         // 推理结束（自然结束或中断），显示推理结果
         /////////////////////////////////////////////
 
-        case 10:
+        case STATE_LLM_AFTER_INFER:
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -889,7 +900,7 @@ int main() {
 
             // 短按D键：重新推理。推理完成后，并不清除输入缓冲区，因此再次按D键会重新推理。
             if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
-                STATE = 8;
+                STATE = STATE_LLM_ON_INFER;
             }
             else {
                 // 短按A键：停止TTS
@@ -900,7 +911,7 @@ int main() {
                     }
 #endif
                 }
-                STATE = textarea_event_handler(key_event, global_state, w_textarea_main, 0, 10);
+                STATE = textarea_event_handler(key_event, global_state, w_textarea_main, STATE_LLM_INPUT, STATE_LLM_AFTER_INFER);
             }
 
             break;
@@ -909,7 +920,7 @@ int main() {
         // ASR实时识别进行中（响应ASR客户端回报的ASR文本内容）
         /////////////////////////////////////////////
 
-        case 21:
+        case STATE_ASR_RUNNING:
 #ifdef ASR_ENABLED
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -983,11 +994,11 @@ int main() {
 
                 // ASR后立刻提交到LLM？
                 if (global_state->is_auto_submit_after_asr) {
-                    STATE = 8;
+                    STATE = STATE_LLM_ON_INFER;
                 }
                 else {
                     w_input_main->current_page = 0;
-                    STATE = 0;
+                    STATE = STATE_LLM_INPUT;
                 }
 
             }
@@ -996,7 +1007,7 @@ int main() {
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_A) {
                 // 刷新文本输入框
                 init_input(key_event, global_state, w_input_main);
-                STATE = 0;
+                STATE = STATE_LLM_INPUT;
             }
 #endif
             break;
@@ -1005,7 +1016,7 @@ int main() {
         // 本机自述
         /////////////////////////////////////////////
 
-        case 26: {
+        case STATE_README: {
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -1013,7 +1024,7 @@ int main() {
             }
             PREV_STATE = STATE;
 
-            wchar_t readme_buf[128] = L"Nano-Pod v2512\n电子鹦鹉·端上大模型\n(c) 2025 BD4SUR\n\n";
+            wchar_t readme_buf[128] = L"Nano-Pod v" NANO_VERSION "\n电子鹦鹉·端上大模型\n(c) 2025 BD4SUR\n\n";
             wchar_t status_buf[30];
             // 节流
             if (global_state->timer % 200 == 0) {
@@ -1030,7 +1041,7 @@ int main() {
 
             // 按A键返回主菜单
             if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
-                STATE = -2;
+                STATE = STATE_MAIN_MENU;
             }
 
             break;
@@ -1040,7 +1051,7 @@ int main() {
         // 关机确认
         /////////////////////////////////////////////
 
-        case 31:
+        case STATE_SHUTDOWN:
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -1064,13 +1075,13 @@ int main() {
 
                     sleep_in_ms(1000);
 
-                    STATE = -2;
+                    STATE = STATE_MAIN_MENU;
                 }
             }
 
             // 长短按A键取消关机，返回主菜单
             else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
-                STATE = -2;
+                STATE = STATE_MAIN_MENU;
             }
 
             break;
@@ -1080,7 +1091,7 @@ int main() {
         // TTS设置
         /////////////////////////////////////////////
 
-        case 32:
+        case STATE_TTS_SETTING:
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -1088,7 +1099,7 @@ int main() {
             }
             PREV_STATE = STATE;
 
-            STATE = menu_event_handler(key_event, global_state, w_menu_tts_setting, tts_setting_menu_item_action, 5, 32);
+            STATE = menu_event_handler(key_event, global_state, w_menu_tts_setting, tts_setting_menu_item_action, STATE_SETTING_MENU, STATE_TTS_SETTING);
 
             break;
 
@@ -1097,7 +1108,7 @@ int main() {
         // ASR设置
         /////////////////////////////////////////////
 
-        case 33:
+        case STATE_ASR_SETTING:
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
@@ -1105,7 +1116,7 @@ int main() {
             }
             PREV_STATE = STATE;
 
-            STATE = menu_event_handler(key_event, global_state, w_menu_asr_setting, asr_setting_menu_item_action, 5, 33);
+            STATE = menu_event_handler(key_event, global_state, w_menu_asr_setting, asr_setting_menu_item_action, STATE_SETTING_MENU, STATE_ASR_SETTING);
 
             break;
 

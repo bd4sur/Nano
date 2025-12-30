@@ -275,7 +275,7 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     _mbstowcs(datetime_wcs_buffer, datetime_string_buffer, 80);
 
     fb_draw_textline(L"Project Nano", 28, 2, 0);
-    fb_draw_textline(L"语音对话电子鹦鹉", 16, 20, 1);
+    fb_draw_textline(L"电 子 鹦 鹉", 31, 20, 1);
     fb_draw_textline(datetime_wcs_buffer, 8, 34, 1);
     fb_draw_textline(L"(c) 2025 BD4SUR", 18, 50, 1);
 #endif
@@ -439,7 +439,8 @@ void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
     input_state->candidate_num = 0;
     input_state->candidate_page_num = 0;
     input_state->current_page = 0;
-    input_state->alphabet_countdown = -1;
+    input_state->alphabet_click_timestamp = 0;
+    input_state->alphabet_is_counting_down = 0;
     input_state->alphabet_current_key = 255;
     input_state->alphabet_index = 0;
 
@@ -463,28 +464,27 @@ int32_t input_event_handler(
     int32_t state = input_state->state;
 
     // 定时器触发：字母输入的倒计时进度条
-    if (input_state->ime_mode_flag == IME_MODE_ALPHABET) {
+    if (input_state->ime_mode_flag == IME_MODE_ALPHABET && input_state->alphabet_is_counting_down == 1) {
+        uint64_t ctimestamp = global_state->timestamp;
         // 倒计时进行中，绘制进度条
-        if (input_state->alphabet_countdown > 0) {
-            input_state->alphabet_countdown--;
-            uint8_t x_pos = (uint8_t)(input_state->alphabet_countdown * 128 / ALPHABET_COUNTDOWN_MAX);
+        if (ctimestamp - input_state->alphabet_click_timestamp <= ALPHABET_COUNTDOWN_MS) {
+            uint8_t x_pos = (uint8_t)((ALPHABET_COUNTDOWN_MS - ctimestamp + input_state->alphabet_click_timestamp) * 128 / ALPHABET_COUNTDOWN_MS);
             fb_draw_line(0, 63, x_pos, 63, 1);
             fb_draw_line(x_pos + 1, 63, 127, 63, 0);
             gfx_refresh();
             input_state->state = 0;
         }
         // 倒计时结束，提交当前选中的字母，清除进度条
-        else if (input_state->alphabet_countdown == 0) {
+        else {
+            input_state->alphabet_is_counting_down = 0;
+
             // 清除进度条
-            input_state->alphabet_countdown--;
             fb_draw_line(0, 63, 127, 63, 0);
             gfx_refresh();
 
             // 将当前选中的字母加入输入缓冲区
             uint32_t ch = ime_alphabet[(int)(input_state->alphabet_current_key)][input_state->alphabet_index];
             if (ch) {
-                // input_state->text[input_state->length++] = ch;
-                // input_state->cursor_pos++;
                 insert_char(input_state, ch);
             }
             else {
@@ -534,7 +534,6 @@ int32_t input_event_handler(
             if (input_state->ime_mode_flag == IME_MODE_HANZI) {
                 if (key_event->key_code >= 2 && key_event->key_code <= 9) { // 仅响应按键2-9；1无动作
                     input_state->state = 1;
-                    // goto STATE_1;
                     input_event_handler(
                         key_event, global_state, input_state,
                         prev_focus_state, current_focus_state, next_focus_state);
@@ -549,14 +548,16 @@ int32_t input_event_handler(
             }
             else if (input_state->ime_mode_flag == IME_MODE_ALPHABET) {
                 // 如果按键按下时，不是字母切换状态，则开始循环切换，并开始倒计时。
-                if (input_state->alphabet_countdown == -1) {
-                    input_state->alphabet_countdown = ALPHABET_COUNTDOWN_MAX;
+                if (input_state->alphabet_is_counting_down == 0) {
+                    input_state->alphabet_is_counting_down = 1;
+                    input_state->alphabet_click_timestamp = global_state->timestamp;
                     input_state->alphabet_current_key = key_event->key_code;
                     input_state->alphabet_index = 0;
                 }
                 // 如果按键按下时，倒计时尚未结束，则切换到下一个字母。
-                else if (input_state->alphabet_countdown > 0) {
-                    input_state->alphabet_countdown = ALPHABET_COUNTDOWN_MAX;
+                else {
+                    input_state->alphabet_is_counting_down = 1;
+                    input_state->alphabet_click_timestamp = global_state->timestamp;
                     input_state->alphabet_current_key = key_event->key_code;
                     input_state->alphabet_index = (input_state->alphabet_index + 1) % wcslen(ime_alphabet[(int)(key_event->key_code)]);
                 }

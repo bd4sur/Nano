@@ -196,7 +196,7 @@ typedef struct {
     uint64_t rng_state;
 } Sampler;
 
-typedef struct {
+typedef struct Nano_Context {
     LLM *llm;
     LoRA *lora;
     Tokenizer *tokenizer;
@@ -205,7 +205,7 @@ typedef struct {
     uint64_t random_seed;
 } Nano_Context;
 
-typedef struct {
+typedef struct Nano_Session {
     wchar_t *prompt;
     uint32_t num_prompt_tokens;
     uint32_t max_seq_len;

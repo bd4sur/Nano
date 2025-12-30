@@ -8,7 +8,6 @@ extern "C" {
 #include <wchar.h>
 
 #include "utils.h"
-#include "infer.h"
 
 #define INPUT_BUFFER_LENGTH  (16384)
 
@@ -16,7 +15,7 @@ extern "C" {
 #define IME_MODE_ALPHABET (1)
 #define IME_MODE_NUMBER   (2)
 
-#define ALPHABET_COUNTDOWN_MAX (30)
+#define ALPHABET_COUNTDOWN_MS (500)
 #define LONG_PRESS_THRESHOLD (360)
 
 #define MAX_CANDIDATE_NUM (256)     // 候选字最大数量
@@ -25,6 +24,12 @@ extern "C" {
 
 #define MAX_MENU_ITEMS (128)
 #define MAX_MENU_ITEM_LEN (24)
+
+struct Nano_Context;
+struct Nano_Session;
+
+typedef struct Nano_Context Nano_Context;
+typedef struct Nano_Session Nano_Session;
 
 // NOTE 增删字段时，务必修改初始化部分
 typedef struct {
@@ -111,8 +116,9 @@ typedef struct {
     uint32_t candidate_page_num;  // 总的候选字分页数
     uint32_t current_page;        // 当前显示的候选字页标号
     // 英文字母输入模式的倒计时
-    int32_t alphabet_countdown;   // 从ALPHABET_COUNTDOWN_MAX开始，每轮主循环后倒数减1，减到0时清除进度条，减到-1意味着英文字母输入状态结束
-    uint8_t alphabet_current_key; // 当前选中的字母按键
+    uint64_t alphabet_click_timestamp; // 按键时刻的时间戳，用于计算倒计时进度条
+    int32_t alphabet_is_counting_down; // 1-正在倒计时；0-不在倒计时
+    uint8_t alphabet_current_key;      // 当前选中的字母按键
     uint32_t alphabet_index;
 } Widget_Input_State;
 

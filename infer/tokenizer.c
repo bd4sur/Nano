@@ -69,19 +69,6 @@ char* decode_bpe_pair(Tokenizer* t, uint32_t prev_token, uint32_t token) {
     return piece;
 }
 
-void safe_printf(char *piece) {
-    // piece might be a raw byte token, and we only want to print printable chars or whitespace
-    // because some of the other bytes can be various control codes, backspace, etc.
-    if (piece == NULL) { return; }
-    if (piece[0] == '\0') { return; }
-    if (piece[1] == '\0') {
-        unsigned char byte_val = piece[0];
-        if (!(isprint(byte_val) || isspace(byte_val))) {
-            return; // bad byte, don't print it
-        }
-    }
-    printf("%s", piece);
-}
 
 wchar_t *decode_bpe(Tokenizer *t, uint32_t *ids, uint32_t len) {
     wchar_t *output_wc = (wchar_t *)calloc(len * t->max_token_length + 1, sizeof(wchar_t));
@@ -230,8 +217,9 @@ uint32_t *apply_qwen_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uin
         user_prompt_wchar = L"请你自我介绍。";
     }
 
-    char user_prompt[MAX_PROMPT_BUFFER_LENGTH]; // TODO 数组长度不合适
-    (void)_wcstombs(user_prompt, user_prompt_wchar, MAX_PROMPT_BUFFER_LENGTH);
+    size_t user_prompt_ch_len = wcslen(user_prompt_wchar) * MB_CUR_MAX + 1;
+    char *user_prompt = (char*)calloc(user_prompt_ch_len, sizeof(char));
+    (void)_wcstombs(user_prompt, user_prompt_wchar, user_prompt_ch_len);
     uint32_t num_user_prompt_tokens = 0;
     uint32_t *user_prompt_tokens = (uint32_t*)calloc(strlen(user_prompt), sizeof(uint32_t));
     encode_bpe(t, user_prompt, user_prompt_tokens, &num_user_prompt_tokens);

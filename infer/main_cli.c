@@ -5,6 +5,8 @@
 #include "infer.h"
 #include "prompt.h"
 
+#define MAX_PROMPT_BUFFER_LENGTH  (16384)
+
 // 推理引擎实例（单例模式）
 static Nano_Context *g_llm_ctx;
 
