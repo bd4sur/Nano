@@ -249,7 +249,41 @@ void render_scroll_bar(int32_t current_line, int32_t line_num, int32_t view_line
 
 
 
+// 绘制点阵的版权信息
+//   点阵数据通过bd4sur.com/html/am32.html取得
+void draw_copyright_notice(uint32_t x_offset, uint32_t y_offset) {
+    uint32_t callsign[5]  = {3876120944, 2493057352, 3836266864, 2495359312, 3876177480}; // BD4SUR, width=29
+    uint32_t year_2025[5] = {1662631936, 2493841408, 613010944, 1150296064, 4080910336};  // 2025-, width=23
+    uint32_t year_2026[5] = {1662566400, 2493841408, 613007360, 1150361600, 4080844800};  // 2026, width=19
+    uint32_t copy_mark[7] = {2013265920, 2214592512, 3019898880, 2751463424, 3019898880, 2214592512, 2013265920}; // (c), width=6
 
+    uint32_t x = x_offset;
+
+    for (uint32_t i = 0; i < 7; i++) {
+        for (uint32_t j = 0; j < 32; j++) {
+            fb_plot((uint8_t)(x + j), (uint8_t)(y_offset + i), (copy_mark[i] >> (32 - 1 - j)) & 0x1);
+        }
+    }
+    x += (6 + 4);
+    for (uint32_t i = 0; i < 5; i++) {
+        for (uint32_t j = 0; j < 32; j++) {
+            fb_plot((uint8_t)(x + j), (uint8_t)(y_offset + 1 + i), (year_2025[i] >> (32 - 1 - j)) & 0x1);
+        }
+    }
+    x += (23 + 1);
+    for (uint32_t i = 0; i < 5; i++) {
+        for (uint32_t j = 0; j < 32; j++) {
+            fb_plot((uint8_t)(x + j), (uint8_t)(y_offset + 1 + i), (year_2026[i] >> (32 - 1 - j)) & 0x1);
+        }
+    }
+    x += (19 + 4);
+    for (uint32_t i = 0; i < 5; i++) {
+        for (uint32_t j = 0; j < 32; j++) {
+            fb_plot((uint8_t)(x + j), (uint8_t)(y_offset + 1 + i), (callsign[i] >> (32 - 1 - j)) & 0x1);
+        }
+    }
+
+}
 
 
 void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
@@ -262,7 +296,7 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
 #if CONFIG_IDF_TARGET_ESP32S3
     fb_draw_textline(L"Project Nano", 28, 2, 0);
     fb_draw_textline(L"电子鹦鹉@ESP32S3", 16, 20, 1);
-    fb_draw_textline(L"(c) 2025 BD4SUR", 18, 50, 1);
+    draw_copyright_notice(20, 53);
 #else
     time_t rawtime;
     struct tm *timeinfo;
@@ -276,8 +310,8 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
 
     fb_draw_textline(L"Project Nano", 28, 2, 0);
     fb_draw_textline(L"电 子 鹦 鹉", 31, 20, 1);
-    fb_draw_textline(datetime_wcs_buffer, 8, 34, 1);
-    fb_draw_textline(L"(c) 2025 BD4SUR", 18, 50, 1);
+    fb_draw_textline(datetime_wcs_buffer, 8, 35, 1);
+    draw_copyright_notice(20, 53);
 #endif
 
     fb_draw_line(0, 0, 127, 0, 1);
@@ -575,16 +609,22 @@ int32_t input_event_handler(
             }
         }
 
-        // 长+短按A键：删除一个字符；如果输入缓冲区为空，则回到上一个状态
+        // 长+短按A键：删除一个字符，或返回上一个状态，取决于缓冲区状态和Ctrl状态
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
             input_state->state = 0;
-            if (input_state->textarea.length >= 1) {
+            // 如果缓冲区非空且非Ctrl状态，则删除一个字符
+            if (global_state->is_ctrl_enabled == 0 && input_state->textarea.length >= 1) {
                 // input_state->text[--(input_state->length)] = 0;
                 // input_state->cursor_pos--;
                 delete_char(input_state);
                 render_input_buffer(key_event, global_state, input_state);
             }
-            else if (input_state->textarea.length <= 0) {
+            // 如果缓冲区空，或者是Ctrl状态，则清空缓冲区，回到上一个状态
+            else {
+                // 重置Ctrl状态
+                if (global_state->is_ctrl_enabled == 1) {
+                    global_state->is_ctrl_enabled = 0;
+                }
                 init_input(key_event, global_state, input_state);
                 return prev_focus_state;
             }
@@ -593,6 +633,13 @@ int32_t input_event_handler(
         // 长+短按B键：依次切换汉-英-数输入模式
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 11) {
             input_state->ime_mode_flag = (input_state->ime_mode_flag + 1) % 3;
+            render_input_buffer(key_event, global_state, input_state);
+            input_state->state = 0;
+        }
+
+        // 短按C键：切换全局Ctrl键状态
+        else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_C) {
+            global_state->is_ctrl_enabled = 1 - global_state->is_ctrl_enabled;
             render_input_buffer(key_event, global_state, input_state);
             input_state->state = 0;
         }
@@ -909,15 +956,23 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
 
     fb_soft_clear();
 
-    wchar_t prompt[32] = L"请输入           [";
+    wchar_t prompt[32] = L"请输入         ";
+    // 显示Ctrl激活状态
+    if (global_state->is_ctrl_enabled == 1) {
+        wcscat(prompt, L"◆");
+    }
+    else {
+        wcscat(prompt, L"  ");
+    }
+    // 显示输入状态
     if (input_state->ime_mode_flag == IME_MODE_HANZI) {
-        wcscat(prompt, L"汉]\n");
+        wcscat(prompt, L"[汉]\n");
     }
     else if (input_state->ime_mode_flag == IME_MODE_ALPHABET) {
-        wcscat(prompt, L"En]\n");
+        wcscat(prompt, L"[En]\n");
     }
     else if (input_state->ime_mode_flag == IME_MODE_NUMBER) {
-        wcscat(prompt, L"数]\n");
+        wcscat(prompt, L"[数]\n");
     }
     fb_draw_textline(prompt, 0, 0, 0);
 

@@ -732,8 +732,8 @@ int main() {
             PREV_STATE = STATE;
 
 #ifdef ASR_ENABLED
-            // 按下C键：开始PTT
-            if (key_event->key_edge > 0 && key_event->key_code == KEYCODE_NUM_C) {
+            // 长按D键：开始PTT
+            if (key_event->key_edge == -2 && key_event->key_code == KEYCODE_NUM_D) {
                 STATE = STATE_ASR_RUNNING;
                 break;
             }
@@ -1024,7 +1024,7 @@ int main() {
             }
             PREV_STATE = STATE;
 
-            wchar_t readme_buf[128] = L"Nano-Pod v" NANO_VERSION "\n电子鹦鹉·端上大模型\n(c) 2025 BD4SUR\n\n";
+            wchar_t readme_buf[128] = L"Nano-Pod v" NANO_VERSION "\n电子鹦鹉·端上大模型\n(c) 2025-2026 BD4SUR\n\n";
             wchar_t status_buf[30];
             // 节流
             if (global_state->timer % 200 == 0) {
