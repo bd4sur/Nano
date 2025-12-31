@@ -7,6 +7,10 @@
 
 #include "platform.h"
 
+#ifdef BADAPPLE_ENABLED
+    #include "badapple.h"
+#endif
+
 #define IME_HANZI_NUM 7081
 
 // 查询方式：给定按键序列对应的整数，例如“33”，从KEYS_LIST中查出全部出现位置的index，在UTF32_LIST中对应index位置的数值，即为候选字的utf32
@@ -349,6 +353,35 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
 
     gfx_refresh();
 }
+
+
+void play_bad_apple(Key_Event *key_event, Global_State *global_state) {
+#ifdef BADAPPLE_ENABLED
+    if (global_state->timestamp - global_state->ba_begin_timestamp >= 100 * global_state->ba_frame_count) {
+        fb_soft_clear();
+        for (uint32_t row = 0; row < 64; row++) {
+            uint32_t page_0 = bad_apple_10fps_64x64[global_state->ba_frame_count * 128 + row * 2];
+            uint32_t page_1 = bad_apple_10fps_64x64[global_state->ba_frame_count * 128 + row * 2 + 1];
+            for (uint32_t col = 0; col < 32; col++) {
+                fb_plot(col + 32, row, (page_0 >> (32 - 1 - col)) & 0x1);
+            }
+            for (uint32_t col = 32; col < 64; col++) {
+                fb_plot(col + 32, row, (page_1 >> (32 - 1 - (col-32))) & 0x1);
+            }
+        }
+        gfx_refresh();
+        global_state->ba_frame_count++;
+
+        if (global_state->ba_frame_count > 2193) {
+            global_state->ba_frame_count = 0;
+            global_state->ba_begin_timestamp = global_state->timestamp;
+        }
+    }
+#endif
+}
+
+
+
 
 
 

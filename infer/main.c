@@ -31,7 +31,8 @@
 #define STATE_LLM_ON_INFER    (8)
 #define STATE_LLM_AFTER_INFER (10)
 #define STATE_ASR_RUNNING     (21)
-#define STATE_README          (26)
+#define STATE_README          (25)
+#define STATE_BADAPPLE        (26)
 #define STATE_SHUTDOWN        (31)
 #define STATE_TTS_SETTING     (32)
 #define STATE_ASR_SETTING     (33)
@@ -205,10 +206,11 @@ void init_main_menu() {
     wcscpy(w_menu_main->title, L"Nano-Pod");
     wcscpy(w_menu_main->items[0], L"电子鹦鹉");
     wcscpy(w_menu_main->items[1], L"电子书");
-    wcscpy(w_menu_main->items[2], L"设置");
-    wcscpy(w_menu_main->items[3], L"安全关机");
-    wcscpy(w_menu_main->items[4], L"本机自述");
-    w_menu_main->item_num = 5;
+    wcscpy(w_menu_main->items[2], L"Bad Apple！");
+    wcscpy(w_menu_main->items[3], L"设置");
+    wcscpy(w_menu_main->items[4], L"安全关机");
+    wcscpy(w_menu_main->items[5], L"本机自述");
+    w_menu_main->item_num = 6;
     init_menu(key_event, global_state, w_menu_main);
 }
 
@@ -268,19 +270,24 @@ int32_t main_menu_item_action(int32_t item_index) {
         return STATE_EBOOK;
     }
 
-    // 2.设置
+    // 2.BadApple
     else if (item_index == 2) {
+        return STATE_BADAPPLE;
+    }
+
+    // 3.设置
+    else if (item_index == 3) {
         init_setting_menu();
         return STATE_SETTING_MENU;
     }
 
-    // 3.安全关机
-    else if (item_index == 3) {
+    // 4.安全关机
+    else if (item_index == 4) {
         return STATE_SHUTDOWN;
     }
 
-    // 4.本机自述
-    else if (item_index == 4) {
+    // 5.本机自述
+    else if (item_index == 5) {
         return STATE_README;
     }
     return STATE_MAIN_MENU;
@@ -529,6 +536,8 @@ int main() {
     global_state->is_full_refresh = 1;
     global_state->llm_refresh_max_fps = 10;
     global_state->llm_refresh_timestamp = 0;
+    global_state->ba_frame_count = 0;
+    global_state->ba_begin_timestamp = 0;
 
     key_event->key_code = KEYCODE_NUM_IDLE; // 大于等于16为没有任何按键，0-15为按键
     key_event->key_edge = 0;   // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)
@@ -1046,6 +1055,33 @@ int main() {
 
             break;
         }
+
+        /////////////////////////////////////////////
+        // TTS设置
+        /////////////////////////////////////////////
+
+        case STATE_BADAPPLE:
+
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                global_state->ba_begin_timestamp = global_state->timestamp;
+                global_state->ba_frame_count = 0;
+            }
+            PREV_STATE = STATE;
+
+#ifdef BADAPPLE_ENABLED
+            play_bad_apple(key_event, global_state);
+#else
+            set_textarea(key_event, global_state, w_textarea_main, L"未启用 Bad Apple ～", 0, 0);
+            draw_textarea(key_event, global_state, w_textarea_main);
+#endif
+
+            // 按A键返回主菜单
+            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+                STATE = STATE_MAIN_MENU;
+            }
+
+            break;
 
         /////////////////////////////////////////////
         // 关机确认

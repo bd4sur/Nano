@@ -50,6 +50,8 @@ wchar_t* read_file_to_wchar(char* filename);
     #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
+    // BadApple
+    #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-Pod: Rock 5B+
@@ -74,6 +76,8 @@ wchar_t* read_file_to_wchar(char* filename);
     #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
+    // BadApple
+    #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-Pod: Cubie-A7Z
@@ -98,6 +102,8 @@ wchar_t* read_file_to_wchar(char* filename);
     // #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
+    // BadApple
+    #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-Pod: Make Router Great Again 京东云RE-CS-02、红米AX5等
@@ -122,6 +128,8 @@ wchar_t* read_file_to_wchar(char* filename);
     // #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     #define MATMUL_PTHREAD
+    // BadApple
+    #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-ESP: ESP32-S3
@@ -146,6 +154,8 @@ wchar_t* read_file_to_wchar(char* filename);
     // #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
+    // BadApple
+    // #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-ESP: ESP32-P4
@@ -170,6 +180,8 @@ wchar_t* read_file_to_wchar(char* filename);
     // #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
+    // BadApple
+    // #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-TTY: 在终端上模拟Nano-Pod的图形界面和交互
@@ -194,6 +206,8 @@ wchar_t* read_file_to_wchar(char* filename);
     // #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
+    // BadApple
+    #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-CLI
@@ -218,6 +232,8 @@ wchar_t* read_file_to_wchar(char* filename);
     // #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
+    // BadApple
+    // #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-Sort
@@ -242,6 +258,8 @@ wchar_t* read_file_to_wchar(char* filename);
     // #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
+    // BadApple
+    // #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-WSS
@@ -266,6 +284,8 @@ wchar_t* read_file_to_wchar(char* filename);
     // #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
+    // BadApple
+    // #define BADAPPLE_ENABLED
 
 #else
 

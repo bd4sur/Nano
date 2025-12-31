@@ -70,6 +70,10 @@ typedef struct {
     uint32_t llm_refresh_max_fps; // 设置项：LLM推理过程中屏幕刷新的最高帧率
     uint64_t llm_refresh_timestamp; // LLM推理过程中，上一次刷新屏幕的时间戳。用于控制刷新频率（不高于llm_refresh_max_fps），避免刷新过于频繁，拖累表观TPS（目前LLM推理与屏幕刷新是同步串行的）。
 
+    // BadApple相关
+    uint32_t ba_frame_count;
+    uint64_t ba_begin_timestamp;
+
 } Global_State;
 
 typedef struct {
@@ -135,6 +139,8 @@ typedef struct {
 void render_text(Widget_Textarea_State *textarea_state);
 
 void show_splash_screen(Key_Event *key_event, Global_State *global_state);
+
+void play_bad_apple(Key_Event *key_event, Global_State *global_state);
 
 void init_textarea(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state,
     uint32_t max_len);
