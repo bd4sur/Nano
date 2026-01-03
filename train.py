@@ -21,6 +21,10 @@ from model import TrainConfig, ModelConfig, GPT
 
 logger = logging.getLogger(__name__)
 
+# 【默认为False！】临时支持去噪语言模型，直接作用于DataLoader.get_batch，仅用于探索验证
+IS_DENOISE = False
+MASK_TOKEN_ID = 7 #<|nano_meta_0|>
+
 MODEL_VERSION = "2024.10"
 
 class DataLoader:
@@ -93,6 +97,16 @@ class DataLoader:
                 torch.tensor(item[1][1 : block_size + 1], dtype=torch.int64) # SFT
                 for item in batch
             ])
+
+        # 临时支持去噪语言模型的训练
+        elif IS_DENOISE:
+            x = torch.stack([torch.tensor(item[0][0 : block_size], dtype=torch.int64) for item in batch])
+            y = x.clone()  # original tokens
+            # Mask tokens with random probability per sample
+            mask_probs = torch.rand(batch_size, 1)
+            mask = torch.rand(batch_size, block_size) < mask_probs
+            x[mask] = MASK_TOKEN_ID
+
         # 如果不是因果注意力模型，则将输入序列seq按照block_size一分为二：seq[0:block_size]和seq[block_size:]，后者截断为block_size长度（不足不填充）
         else:
             x = torch.stack([torch.tensor(item[0][0 : block_size], dtype=torch.int64) for item in batch])

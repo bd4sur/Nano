@@ -5,16 +5,16 @@
 
 |<a href="https://www.bilibili.com/video/BV1SjajztELH" target="_blank"><img src="./doc/nano-rpi-2.jpg" width="100%"><br>树莓派语音对话离线部署</a>|<a href="https://www.bilibili.com/video/BV1rNgCzNE84" target="_blank"><img src="./doc/nano-scheme.jpg" width="100%"><br>基于自制Scheme解释器的推理</a>|<a href="https://www.bilibili.com/video/BV1mhVzzrEJf" target="_blank"><img src="./doc/nano-video-marga.jpg" width="100%"><br>路由器离线部署</a>|
 |:--:|:--:|:--:|
-|<a href="https://www.bilibili.com/video/BV1NAieYiEFi" target="_blank"><img src="./doc/nano.jpg" width="100%"><br>浏览器离线推理+ASR+TTS</a>|<a href="https://www.bilibili.com/video/BV1vmrsYGERP" target="_blank"><img src="./doc/nano-video-ar-class-c.jpg" width="100%"><br>通过业余无线电C证考试</a>|<a href="https://www.bilibili.com/video/BV1vPRDYyEgp" target="_blank"><img src="./doc/nano-mi-ax5.jpg" width="100%"><br>红米AX5路由器部署推理</a>|
+|<a href="https://www.bilibili.com/video/BV1Q8qjB4ErP" target="_blank"><img src="./doc/nano-esp32-cluster.png" width="100%"><br>ESP32单片机集群推理</a>|<a href="https://www.bilibili.com/video/BV1vmrsYGERP" target="_blank"><img src="./doc/nano-video-ar-class-c.jpg" width="100%"><br>通过业余无线电C证考试</a>|<a href="https://www.bilibili.com/video/BV1vPRDYyEgp" target="_blank"><img src="./doc/nano-mi-ax5.jpg" width="100%"><br>红米AX5路由器部署推理</a>|
 
 
 ### [【立即体验浏览器本地推理】](https://bd4sur.com/Nano/infer/web)
 
-**Nano**是Transformer结构的自回归语言模型，供个人赏玩、研究、炼丹炉煲机。期望：
+**Nano**是Transformer结构的语言模型，供个人赏玩、研究、炼丹炉煲机。期望：
 
 - **训练实践**：实现Transformer语言模型的预训练和监督微调，训练出若干可用的模型。
 - **推理实践**：在单板机、单片机、浏览器、PC、服务器等各类环境上，高效推理语言模型。
-- **开放探索**：研究LLM的动力学等问题，探索LLM解决其他模态和领域问题的潜能。
+- **开放探索**：研究LLM的动力学等问题，开放探索其他模态和领域的问题。
 - **硅碳互动**：对LLM祛魅，在实践中建立起对于LLM的感性经验、合理预期和哲学认识。
 
 为什么叫“Nano”：
@@ -47,11 +47,11 @@
 
 公开数据集：
 
-- 预训练数据：[Nano-PT-10G](https://huggingface.co/datasets/bd4sur/Nano-PT-10G)
-
-数据集为7z压缩包，解压口令“nano”。
+- 预训练数据（7z压缩包，解压口令“nano”）：[Nano-PT-10G](https://huggingface.co/datasets/bd4sur/Nano-PT-10G)
 
 适配Nano推理引擎的Qwen2.5/Qwen3模型：[bd4sur/Qwen3](https://huggingface.co/bd4sur/Qwen3)
+
+探索去噪生成的试验性模型：[Nano-Denoise](https://huggingface.co/bd4sur/Nano-Denoise)
 
 ## 推理
 
@@ -98,12 +98,13 @@ Nano-Pod的详细安装部署文档详见[此处](doc/on-device.md)。
 
 - `-m` or `--model`：字符串，模型相对路径。
 - `-l` or `--lora`：字符串，LoRA模块的相对路径。
-- `-i` or `--instruct`：开关标识。若启用，则对输入套用指令模板，以支持指令微调模型上的指令问答；若不启用，则为自回归式文本生成。
+- `-i` or `--instruct`：开关标识。若启用，则对输入套用指令模板，以支持指令微调模型上的指令问答；若不启用，则为文本续写。
 - `-s` or `--max_seq_length`：整数，序列最大长度，默认为模型的上下文窗口长度。
 - `-t` or `--temperature`：浮点数，生成温度参数，默认值为1.0，越高则生成越随机。
 - `-k` or `--top_k`：整数，前k采样，默认值为5，越高则生成越多样。
 - `-r` or `--repetition_penalty`：浮点数，复读惩罚，默认值为1.2，越大则越抑制生成重复的词元。
 - `-p` or `--profile`：开关标识。若启用，则统计性能数据，包括首词元延迟、词元生成速率等。
+- `-d` or `--denoise`：开关标识。若模型为去噪生成模型，则启用此开关。
 
 ## 训练
 
@@ -251,7 +252,7 @@ model_file
 
 ### Transformer模型结构
 
-Nano是Transformer因果自注意力编码器结构的自回归语言模型，如下图所示。
+Nano是基于Transformer编码器结构的语言模型，可解决自回归生成、去噪生成或序列到序列生成等多种任务。默认配置为因果自注意力编码器结构的自回归语言模型，如下图所示。
 
 ![ ](doc/nano-llm.png)
 
@@ -279,7 +280,7 @@ Nano是Transformer因果自注意力编码器结构的自回归语言模型，�
 |dropout|float|0.0|随机丢弃层的丢弃概率，仅训练时使用，预训练时设为0|
 |use_rope|bool|True|使用RoPE位置编码？反之使用训练位置编码|
 |norm_eps|float|1e-5|均方根标准化参数，一般不动|
-|is_causal|bool|True|因果注意力？|
+|is_causal|bool|True|因果注意力？自回归为True，去噪或序列到序列为False|
 
 一般而言，对于小规模模型，在保证宽度（n_embd）的前提下，尽量加大深度（n_layer）。
 
@@ -321,7 +322,7 @@ Nano是Transformer因果自注意力编码器结构的自回归语言模型，�
 **解码策略**
 
 - Nano采用基于温度的随机采样策略，结合top-p、top-k采样和重复惩罚机制，从语言模型输出的概率分布中按照概率随机地采样出词元序列。若温度为0，则退化为贪心采样，即每次都选概率最大的词元。
-- Nano同时提供序列到序列的（非自回归）推理，用于NLP以外的其他问题的研究。
+- Nano同时支持去噪和序列到序列的（非自回归）推理，用于NLP以外的其他问题的研究。
 
 **基于DeepSpeed的分布式训练（已废弃）**
 

@@ -16,9 +16,10 @@ class InferenceGPT:
             is_instruct=True,
             max_seq_length=None,
             temperature=1.0,
-            top_k=5,
+            top_k=20,
             repetition_penalty=1.2,
-            profile=False
+            profile=False,
+            is_denoise=False
         ):
         self.model_path = model_path
         self.lora_path = lora_path
@@ -34,6 +35,8 @@ class InferenceGPT:
         self.temperature = temperature
         self.top_k = top_k
         self.repetition_penalty = repetition_penalty
+
+        self.is_denoise = is_denoise
 
         # 读取模型检查点和训练配置
         print(f"Loading model from `{self.model_path}`...")
@@ -96,9 +99,14 @@ class InferenceGPT:
             return False
 
     def typewriter(self, token_tensor):
+        if self.is_denoise:
+            print("\033[H\033[J", end="")
         token_list = token_tensor[0].tolist()
         chars = self.decode(token_list)
         self.token_count = self.token_count + 1
+
+        if self.is_denoise:
+            chars = chars.replace("<|nano_meta_0|>", "██")
         if self.profile and self.token_count % 4 == 0:
             tps = self.measure(4)
             if tps:
@@ -124,7 +132,10 @@ class InferenceGPT:
                     prompt = f"<|instruct_mark|>{prompt}<|response_mark|>"
                 x = torch.tensor(self.encode(prompt), dtype=torch.long, device=self.device)[None, ...]
                 print("\x1b[34;1mNano:\x1b[0m ", end="", flush=True)
-                y = self.model.auto_regressive_generate(x, self.max_seq_length, self.temperature, self.top_k, self.repetition_penalty, callback=self.typewriter)
+                if self.is_denoise:
+                    self.model.denoise_generate(x, self.max_seq_length, self.temperature, self.top_k, confidence_threshold=0.95, mask_token_id=7, callback=self.typewriter)
+                else:
+                    y = self.model.auto_regressive_generate(x, self.max_seq_length, self.temperature, self.top_k, self.repetition_penalty, callback=self.typewriter)
                 print("\n")
                 if self.profile:
                     print(f"TPS = {[round(tps) for tps in self.tps_record]}\n")
@@ -144,6 +155,7 @@ def main():
     parser.add_argument("-k", "--top_k", type=int, default=5)
     parser.add_argument("-r", "--repetition_penalty", type=float, default=1.2)
     parser.add_argument("-p", "--profile", action='store_true')
+    parser.add_argument("-d", "--denoise", action='store_true')
     args = parser.parse_args()
 
     infer = InferenceGPT(
@@ -155,7 +167,8 @@ def main():
         temperature=args.temperature,
         top_k=args.top_k,
         repetition_penalty=args.repetition_penalty,
-        profile=args.profile
+        profile=args.profile,
+        is_denoise=args.denoise,
     )
     infer.run()
 

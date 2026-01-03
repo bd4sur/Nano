@@ -576,3 +576,63 @@ class GPT(nn.Module):
             probs = F.softmax(lg, dim=-1)
             output_idx.append(torch.multinomial(probs, num_samples=1))
         return output_idx
+
+    # 去噪解码 ref. https://github.com/nathan-barry
+    @torch.no_grad()
+    def denoise_generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, confidence_threshold=0.9, mask_token_id=7, callback=None):
+        prompt_len = idx.size(1)
+        all_tokens = idx[0].tolist()
+        total_steps = 0
+
+        # Generate one block at a time
+        # while len(all_tokens) - prompt_len < max_new_tokens:
+        while len(all_tokens) < max_new_tokens:
+            # How many tokens to generate this block
+            block_len = min(self.config.block_size, prompt_len + max_new_tokens - len(all_tokens))
+
+            # Initialize: last prompt_len tokens + masks
+            x = torch.full((1, self.config.block_size), mask_token_id, dtype=torch.long, device=idx.device)
+            x[0, :prompt_len] = torch.tensor(all_tokens[-prompt_len:], device=idx.device)
+
+            # Track which positions need decoding
+            masked = torch.zeros(1, self.config.block_size, dtype=torch.bool, device=idx.device)
+            masked[0, prompt_len : prompt_len + block_len] = True
+
+            # Iteratively decode
+            while masked.any():
+                total_steps += 1
+
+                # Get predictions and confidences
+                logits, _ = self(x)
+                probs = F.softmax(logits / temperature, dim=-1)
+                top_k_probs, top_k_indices = torch.topk(probs, k=top_k, dim=-1)
+                confidences = top_k_probs.sum(dim=-1)
+
+                # Decode high-confidence masked positions (or at least 1)
+                decode_mask = (confidences >= confidence_threshold) & masked
+                if not decode_mask.any():
+                    masked_confidences = torch.where(
+                        masked, confidences, torch.tensor(-float("inf"))
+                    )
+                    decode_mask.view(-1)[masked_confidences.argmax()] = True
+
+                # Sample from top-k and update
+                top_k_probs_norm = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
+                sampled_k = torch.multinomial(top_k_probs_norm.view(-1, top_k), 1).view(
+                    1, self.config.block_size
+                )
+                sampled_tokens = torch.gather(
+                    top_k_indices, -1, sampled_k.unsqueeze(-1)
+                ).squeeze(-1)
+
+                x = torch.where(decode_mask, sampled_tokens, x)
+                masked = masked & ~decode_mask
+
+                callback(x)
+
+            # Extract and append generated tokens
+            all_tokens.extend(x[0, prompt_len : prompt_len + block_len].tolist())
+
+        tokens_generated = len(all_tokens) - prompt_len
+        print(f"\nTotal steps: {total_steps} for {tokens_generated} tokens")
+        print(f"\nAvg decoded per step: {tokens_generated / total_steps:.2f}")
