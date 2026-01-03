@@ -30,7 +30,7 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
 
     uint32_t xbuf_length = llm_cfg->n_embd + llm_cfg->n_embd + q_dim + llm_cfg->n_embd + llm_cfg->n_hidden + llm_cfg->n_hidden
                          + q_dim + llm_cfg->n_head * max_seq_len + llm_cfg->vocab_size;        
-    s->xbuf = (float *)calloc(xbuf_length, sizeof(float));
+    s->xbuf = (float *)calloc_dev(xbuf_length, sizeof(float));
     float *xbuf = s->xbuf;
 
     s->x       = xbuf;  xbuf += llm_cfg->n_embd;
@@ -44,7 +44,7 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
     s->logits  = xbuf;  xbuf += llm_cfg->vocab_size;
 
     uint32_t kvcache_length = llm_cfg->n_layer * max_seq_len * kv_dim * 2;        
-    s->kvcache = (float *)calloc(kvcache_length, sizeof(float));
+    s->kvcache = (float *)calloc_dev(kvcache_length, sizeof(float));
     float *kvcache = s->kvcache;
 
     s->k_cache = kvcache;  kvcache += llm_cfg->n_layer * max_seq_len * kv_dim;
@@ -55,8 +55,8 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
 
         uint32_t qvbuf_length = llm_cfg->n_embd + q_dim + llm_cfg->n_hidden;
         uint32_t qsbuf_length = llm_cfg->n_embd / gs + q_dim / gs + llm_cfg->n_hidden / gs;
-        s->qvbuf = (QTYPE *)calloc(qvbuf_length, sizeof(QTYPE));
-        s->qsbuf = (float *)calloc(qsbuf_length, sizeof(float));
+        s->qvbuf = (QTYPE *)calloc_dev(qvbuf_length, sizeof(QTYPE));
+        s->qsbuf = (float *)calloc_dev(qsbuf_length, sizeof(float));
         QTYPE *qvbuf = s->qvbuf;
         float *qsbuf = s->qsbuf;
 
@@ -116,7 +116,7 @@ void memory_map_params(LLM *llm, void* ptr) {
         ptr = (void*)fptr;
 
         w->q_tokens = parse_quantized_tensors(&ptr, 1, cfg->vocab_size * cfg->n_embd, llm->group_size);
-        w->token_embedding = (float *)calloc(cfg->vocab_size * cfg->n_embd, sizeof(float));
+        w->token_embedding = (float *)calloc_dev(cfg->vocab_size * cfg->n_embd, sizeof(float));
         dequantize(&w->q_tokens->tensor_q80, w->token_embedding, cfg->vocab_size * cfg->n_embd, llm->group_size);
 
         w->wq = parse_quantized_tensors(&ptr, n_layer, cfg->n_embd * (cfg->n_head * head_size), llm->group_size);
@@ -133,14 +133,14 @@ void memory_map_params(LLM *llm, void* ptr) {
     else if (llm->quant_type == QUANT_TYPE_F32) {
         w->token_embedding = fptr; fptr += cfg->vocab_size * cfg->n_embd;
 
-        w->wq = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->wq->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_head * head_size);
-        w->wk = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->wk->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_kv_head * head_size);
-        w->wv = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->wv->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_kv_head * head_size);
-        w->wo = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->wo->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_head * head_size) * cfg->n_embd;
+        w->wq = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wq->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_head * head_size);
+        w->wk = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wk->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_kv_head * head_size);
+        w->wv = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wv->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_kv_head * head_size);
+        w->wo = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wo->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_head * head_size) * cfg->n_embd;
 
-        w->w1 = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->w1->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * cfg->n_hidden;
-        w->w2 = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->w2->tensor_f32 = fptr;  fptr += n_layer * cfg->n_hidden * cfg->n_embd;
-        w->w3 = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));  w->w3->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * cfg->n_hidden;
+        w->w1 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->w1->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * cfg->n_hidden;
+        w->w2 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->w2->tensor_f32 = fptr;  fptr += n_layer * cfg->n_hidden * cfg->n_embd;
+        w->w3 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->w3->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * cfg->n_hidden;
     }
 
     if (llm->arch == LLM_ARCH_QWEN2) {
@@ -158,8 +158,8 @@ void memory_map_params(LLM *llm, void* ptr) {
         w->freq_cis_imag = fptr;  fptr += cfg->block_size * head_size / 2;
     }
     else if (llm->arch == LLM_ARCH_QWEN3) {
-        w->freq_cis_real = calloc(cfg->block_size * head_size / 2, sizeof(float));
-        w->freq_cis_imag = calloc(cfg->block_size * head_size / 2, sizeof(float));
+        w->freq_cis_real = calloc_dev(cfg->block_size * head_size / 2, sizeof(float));
+        w->freq_cis_imag = calloc_dev(cfg->block_size * head_size / 2, sizeof(float));
 
         for (uint32_t pos = 0; pos < cfg->block_size; pos++) {
             for (uint32_t i = 0; i < head_size / 2; i++) {
@@ -179,7 +179,7 @@ void memory_map_params(LLM *llm, void* ptr) {
         w->token_classifier = cfg->is_shared_classifier ? w->q_tokens : parse_quantized_tensors(&ptr, 1, cfg->n_embd * cfg->vocab_size, llm->group_size);
     }
     else if (llm->quant_type == QUANT_TYPE_F32) {
-        w->token_classifier = (Typed_Tensor *)calloc(1, sizeof(Typed_Tensor));
+        w->token_classifier = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));
         w->token_classifier->tensor_f32 = cfg->is_shared_classifier ? w->token_embedding : ptr;
     }
 }
@@ -236,8 +236,8 @@ void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
 
         tk->vocab_size = *vocab_ptr; vocab_ptr++;
 
-        tk->token_list        = (wchar_t **)calloc(tk->vocab_size, sizeof(wchar_t *));
-        tk->unicode_charset   = (wchar_t  *)calloc(tk->vocab_size, sizeof(wchar_t));
+        tk->token_list        = (wchar_t **)calloc_dev(tk->vocab_size, sizeof(wchar_t *));
+        tk->unicode_charset   = (wchar_t  *)calloc_dev(tk->vocab_size, sizeof(wchar_t));
         tk->unicode_to_id_map = new_map(tk->vocab_size);
         tk->token_to_id_map   = new_map(tk->vocab_size);
         tk->vocab_trie        = new_trie(tk->vocab_size, 0);
@@ -252,7 +252,7 @@ void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
             uint32_t is_special   = (token_header & 0x0000ff00) >> 8;  (void)is_special;
             uint32_t token_length = (token_header & 0x000000ff);
 
-            wchar_t *token = (wchar_t *)calloc(token_length+1, sizeof(wchar_t));
+            wchar_t *token = (wchar_t *)calloc_dev(token_length+1, sizeof(wchar_t));
             // 如果是单个字符，则加入unicode_charset
             if(token_length == 1) {
                 tk->unicode_charset[char_count] = *vocab_ptr;
@@ -1084,10 +1084,10 @@ uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t p
 
 
 Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, unsigned int max_seq_len) {
-    Nano_Session *session = (Nano_Session *)calloc(1, sizeof(Nano_Session));
+    Nano_Session *session = (Nano_Session *)calloc_dev(1, sizeof(Nano_Session));
     Tokenizer *tokenizer = ctx->tokenizer;
 
-    session->prompt = (wchar_t *)calloc(max_seq_len + 1, sizeof(wchar_t));
+    session->prompt = (wchar_t *)calloc_dev(max_seq_len + 1, sizeof(wchar_t));
     if (prompt == NULL) {
         wcscpy(session->prompt, L"");
     }
@@ -1101,7 +1101,7 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, unsigned int 
 
     session->max_seq_len = max_seq_len;
 
-    session->output_ids = (uint32_t *)calloc(max_seq_len + 1, sizeof(uint32_t));
+    session->output_ids = (uint32_t *)calloc_dev(max_seq_len + 1, sizeof(uint32_t));
     session->output_count = 0;
 
     session->num_prompt_tokens = 0;
@@ -1233,12 +1233,12 @@ int32_t generate_sync(
 void seq2seq(Nano_Context *ctx, wchar_t *input_list, wchar_t *output_list, uint32_t max_seq_len) {
     uint32_t num_prompt_tokens = 0;
     uint32_t *input_ids = encode_nano(ctx->tokenizer, input_list, &num_prompt_tokens);
-    uint32_t *output_ids = (uint32_t *)calloc(max_seq_len, sizeof(uint32_t));
+    uint32_t *output_ids = (uint32_t *)calloc_dev(max_seq_len, sizeof(uint32_t));
 
     LLM *llm = ctx->llm;
     Sampler *sampler = ctx->sampler;
 
-    float *output_logits = (float*)calloc(max_seq_len * sampler->vocab_size, sizeof(float));
+    float *output_logits = (float*)calloc_dev(max_seq_len * sampler->vocab_size, sizeof(float));
 
     // 阶段1：预填充KVCache。
     //   内层循环对输入序列的每一个pos进行前向计算，填充每一层的第pos位置上的KVCache。

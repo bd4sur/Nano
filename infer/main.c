@@ -795,7 +795,7 @@ int main() {
 
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
-                wchar_t *prompt = (wchar_t*)calloc(global_state->llm_max_seq_len + 1, sizeof(wchar_t));
+                wchar_t *prompt = (wchar_t*)calloc_dev(global_state->llm_max_seq_len + 1, sizeof(wchar_t));
 
                 // 如果输入为空，则随机选用一个预置prompt
                 if (wcslen(w_input_main->textarea.text) == 0) {
@@ -877,7 +877,7 @@ int main() {
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
                 // 计算提示语+生成内容的行数
-                wchar_t *prompt_and_output = (wchar_t *)calloc(INPUT_BUFFER_LENGTH * 2, sizeof(wchar_t));
+                wchar_t *prompt_and_output = (wchar_t *)calloc_dev(INPUT_BUFFER_LENGTH * 2, sizeof(wchar_t));
                 wcscat(prompt_and_output, L"Homo:\n");
                 wcscat(prompt_and_output, w_input_main->textarea.text);
                 wcscat(prompt_and_output, L"\n--------------------\nNano:\n");

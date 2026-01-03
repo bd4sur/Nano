@@ -26,6 +26,26 @@ int32_t write_chat_log(char *filepath, uint64_t timestamp, wchar_t* prompt, wcha
 // 读取文件，并返回新的wchar数组
 wchar_t* read_file_to_wchar(char* filename);
 
+// 根据设备类型选择不同的 calloc 实现
+#ifdef ARDUINO
+    #define calloc_dev(nmemb, size) psram_calloc(nmemb, size)
+#else
+    // 默认使用标准 calloc
+    #define calloc_dev(nmemb, size) calloc(nmemb, size)
+#endif
+
+// ===============================================================================
+// Arduino相关
+// ===============================================================================
+
+#ifdef ARDUINO
+
+void print_str(char* msg);
+void print_num(int i);
+void print_float(float i);
+void *psram_calloc(size_t n, size_t sizeoftype);
+
+#endif
 
 // ===============================================================================
 // Nano-Pod: Raspberry Pi 5
@@ -155,7 +175,7 @@ wchar_t* read_file_to_wchar(char* filename);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
     // BadApple
-    // #define BADAPPLE_ENABLED
+    #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-ESP: ESP32-P4
@@ -181,7 +201,7 @@ wchar_t* read_file_to_wchar(char* filename);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
     // BadApple
-    // #define BADAPPLE_ENABLED
+    #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-TTY: 在终端上模拟Nano-Pod的图形界面和交互
