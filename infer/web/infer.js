@@ -496,14 +496,14 @@ function llm_forward(token, pos, llm, lora, buf) {
             softmax(att, pos + 1);
 
             // weighted sum of the values, store back into xb
-            for (let i = 0; i < head_dim; i++) {
-                let val = 0.0;
-                for (let t = 0; t <= pos; t++) {
-                    const vh = s.v_cache.subarray(loff + t * kv_dim + m * head_dim, loff + (t + 1) * kv_dim + m * head_dim);
-                    val += att[t] * vh[i]; // NOTE bad locality
-                    // val += att[t] * s.v_cache[loff + t * kv_dim + m * head_dim + i]; // NOTE bad locality
+            const xba = s.xb.subarray(h * head_dim, (h+1) * head_dim);
+            xba.fill(0, 0, head_dim);
+            for (let t = 0; t <= pos; t++) {
+                const vh = s.v_cache.subarray(loff + t * kv_dim + m * head_dim, loff + (t + 1) * kv_dim + m * head_dim);
+                let a = att[t];
+                for (let i = 0; i < head_dim; i++) {
+                    xba[i] = xba[i] + (a * vh[i]);
                 }
-                s.xb[h * head_dim + i] = val;
             }
         }
 
