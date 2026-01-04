@@ -53,7 +53,7 @@ static int callback_chat(struct lws *wsi, enum lws_callback_reasons reason,
         free(w_input);
 
         printf("Received prompt: %ls\n", prompt);
-        g_llm_session = llm_session_init(g_llm_ctx, prompt, 32768);
+        g_llm_session = llm_session_init(g_llm_ctx, prompt, 32768, 1);
 
         lws_callback_on_writable(wsi);
 

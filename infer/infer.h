@@ -233,7 +233,7 @@ void llm_context_free(Nano_Context *ctx);
 
 uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t pos, int is_prefilling);
 
-Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, uint32_t max_seq_len);
+Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, uint32_t max_seq_len, int32_t is_thinking_enabled);
 int32_t llm_session_step(Nano_Context *ctx, Nano_Session *session);
 void llm_session_free(Nano_Session *session);
 

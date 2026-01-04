@@ -9,8 +9,6 @@ extern "C" {
 
 #include "utils.h"
 
-#define INPUT_BUFFER_LENGTH  (16384)
-
 #define IME_MODE_HANZI    (0)
 #define IME_MODE_ALPHABET (1)
 #define IME_MODE_NUMBER   (2)
@@ -43,6 +41,7 @@ typedef struct {
     Nano_Context *llm_ctx;
     Nano_Session *llm_session; // LLM一轮对话状态
     int32_t llm_status; // LLM推理状态
+    wchar_t *llm_model_name;
     char *llm_model_path;
     char *llm_lora_path;
     float llm_repetition_penalty;

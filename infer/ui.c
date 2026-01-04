@@ -71,7 +71,7 @@ void candidate_paging(Widget_Input_State *input_state) {
 
 // 在文本框的光标位置之后插入一个字符
 void insert_char(Widget_Input_State *input_state, wchar_t new_char) {
-    if (input_state->textarea.length + 1 > INPUT_BUFFER_LENGTH) {
+    if (input_state->textarea.length + 1 > UI_STR_BUF_MAX_LENGTH) {
         return;
     }
 
@@ -490,7 +490,7 @@ int32_t textarea_event_handler(
 void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
     Widget_Textarea_State *ta = &(input_state->textarea);
 
-    init_textarea(key_event, global_state, ta, INPUT_BUFFER_LENGTH);
+    init_textarea(key_event, global_state, ta, UI_STR_BUF_MAX_LENGTH);
 
     ta->state = 0;
     ta->x = 0;
@@ -598,7 +598,14 @@ int32_t input_event_handler(
 
         // 短按1-9：输入拼音/字母/数字，根据输入模式标志，转向不同的状态
         else if (key_event->key_edge == -1 && (key_event->key_code >= 1 && key_event->key_code <= 9)) {
-            if (input_state->ime_mode_flag == IME_MODE_HANZI) {
+            // Ctrl+1：切换思考模式/非思考模式
+            if (global_state->is_ctrl_enabled == 1 && key_event->key_code == 1) {
+                global_state->is_ctrl_enabled = 0;
+                global_state->is_thinking_enabled = 1 - global_state->is_thinking_enabled;
+                render_input_buffer(key_event, global_state, input_state);
+            }
+
+            else if (input_state->ime_mode_flag == IME_MODE_HANZI) {
                 if (key_event->key_code >= 2 && key_event->key_code <= 9) { // 仅响应按键2-9；1无动作
                     input_state->state = 1;
                     input_event_handler(
@@ -677,10 +684,17 @@ int32_t input_event_handler(
             input_state->state = 0;
         }
 
-        // 短按D键：进入下一个状态
+        // 短按D键：进入下一个状态；或者Ctrl状态下 输入一个换行符
         else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
-            input_state->state = 0;
-            return next_focus_state;
+            if (global_state->is_ctrl_enabled == 1) {
+                global_state->is_ctrl_enabled = 0;
+                insert_char(input_state, L'\n');
+                render_input_buffer(key_event, global_state, input_state);
+            }
+            else {
+                input_state->state = 0;
+                return next_focus_state;
+            }
         }
 
         // 长+短按*键：光标向左移动
@@ -989,7 +1003,14 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
 
     fb_soft_clear();
 
-    wchar_t prompt[32] = L"请输入         ";
+    wchar_t prompt[32] = L"请输入       ";
+    // 显示思考模式启用状态
+    if (global_state->is_thinking_enabled == 1) {
+        wcscat(prompt, L"Ψ");
+    }
+    else {
+        wcscat(prompt, L"  ");
+    }
     // 显示Ctrl激活状态
     if (global_state->is_ctrl_enabled == 1) {
         wcscat(prompt, L"◆");

@@ -1083,7 +1083,7 @@ uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t p
 }
 
 
-Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, unsigned int max_seq_len) {
+Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, uint32_t max_seq_len, int32_t is_thinking_enabled) {
     Nano_Session *session = (Nano_Session *)calloc_dev(1, sizeof(Nano_Session));
     Tokenizer *tokenizer = ctx->tokenizer;
 
@@ -1110,7 +1110,7 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, unsigned int 
         prompt_tokens = encode_nano(tokenizer, session->prompt, &(session->num_prompt_tokens));
     }
     else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
-        prompt_tokens = apply_qwen_chat_template(tokenizer, session->prompt, &(session->num_prompt_tokens), 1);
+        prompt_tokens = apply_qwen_chat_template(tokenizer, session->prompt, &(session->num_prompt_tokens), is_thinking_enabled);
     }
     else {
         printf("Error: unknown LLM arch.\n");
@@ -1194,7 +1194,7 @@ int32_t generate_sync(
     int32_t (*on_decoding)(Nano_Session*),
     int32_t (*on_finished)(Nano_Session*)
 ) {
-    Nano_Session *session = llm_session_init(ctx, prompt, max_seq_len);
+    Nano_Session *session = llm_session_init(ctx, prompt, max_seq_len, 1);
     int32_t status = 0;
     while (1) {
         status = llm_session_step(ctx, session);

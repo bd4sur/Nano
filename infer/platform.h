@@ -52,6 +52,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 // ===============================================================================
 #if defined(NANO_POD_RPI5)
 
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     #define I2C_DEVFILE "/dev/i2c-1"
     // 模型目录
@@ -78,6 +80,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 // ===============================================================================
 #elif defined(NANO_POD_ROCK5BP)
 
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     #define I2C_DEVFILE "/dev/i2c-3"
     // 模型目录
@@ -104,6 +108,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 // ===============================================================================
 #elif defined(NANO_POD_CUBIE_A7Z)
 
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     #define I2C_DEVFILE "/dev/i2c-7"
     // 模型目录
@@ -130,6 +136,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 // ===============================================================================
 #elif defined(NANO_POD_MARGA)
 
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     #define I2C_DEVFILE "/dev/i2c-0"
     // 模型目录
@@ -156,6 +164,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 // ===============================================================================
 #elif defined(NANO_ESP32_S3)
 
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (1024)
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
     // 模型目录
@@ -182,6 +192,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 // ===============================================================================
 #elif defined(NANO_ESP32_P4)
 
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (1024)
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
     // 模型目录
@@ -208,6 +220,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 // ===============================================================================
 #elif defined(NANO_TTY)
 
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
     // 模型目录
@@ -234,6 +248,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 // ===============================================================================
 #elif defined(NANO_CLI)
 
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
     // 模型目录
@@ -260,6 +276,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 // ===============================================================================
 #elif defined(NANO_SORT)
 
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
     // 模型目录
@@ -286,6 +304,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 // ===============================================================================
 #elif defined(NANO_WSS)
 
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
     // 模型目录

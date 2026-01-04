@@ -33,24 +33,51 @@
 #define STATE_ASR_RUNNING     (21)
 #define STATE_README          (25)
 #define STATE_BADAPPLE        (26)
+#define STATE_GAMEOFLIFE      (27)
 #define STATE_SHUTDOWN        (31)
 #define STATE_TTS_SETTING     (32)
 #define STATE_ASR_SETTING     (33)
 
 static char *LOG_FILE_PATH = "chat.jsonl";
 
-static char *MODEL_PATH_1 = MODEL_ROOT_DIR "/nano_168m_625000_sft_947000_q80.bin";
-static char *MODEL_PATH_2 = MODEL_ROOT_DIR "/nano_56m_99000_sft_v2_200000_q80.bin";
-static char *MODEL_PATH_3 = MODEL_ROOT_DIR "/1-基础模型-99000_q80.bin";
-static char *LORA_PATH_3  = MODEL_ROOT_DIR "/2-插件-猫娘.bin";
-static char *MODEL_PATH_4 = MODEL_ROOT_DIR "/qwen3-0b6-q80.bin";
-static char *MODEL_PATH_5 = MODEL_ROOT_DIR "/qwen3-1b7-q80.bin";
-static char *MODEL_PATH_6 = MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q80.bin";
+
+typedef struct {
+    wchar_t *model_name;
+    char *model_path;
+    char *lora_path;
+    float repetition_penalty;
+    float temperature;
+    float top_p;
+    uint32_t top_k;
+    uint32_t max_seq_len;
+} Model_Config;
+
+#define MODEL_CONFIG_ENTRY(name, m_path, l_path, rep_pen, temp, top_p_val, top_k_val, max_seq) \
+    { \
+        .model_name = (name), \
+        .model_path = (m_path), \
+        .lora_path = (l_path), \
+        .repetition_penalty = (rep_pen), \
+        .temperature = (temp), \
+        .top_p = (top_p_val), \
+        .top_k = (top_k_val), \
+        .max_seq_len = (max_seq) \
+    }
+
+// TODO 思考模式和非思考模式的参数不同
+static const Model_Config preset_model_configs[] = {
+    MODEL_CONFIG_ENTRY(L"Nano-168M", MODEL_ROOT_DIR "/nano_168m_625000_sft_947000_q80.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
+    MODEL_CONFIG_ENTRY(L"Nano-56M", MODEL_ROOT_DIR "/nano_56m_99000_sft_v2_200000_q80.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
+    MODEL_CONFIG_ENTRY(L"Nano-56M-Neko", MODEL_ROOT_DIR "/1-基础模型-99000_q80.bin", MODEL_ROOT_DIR "/2-插件-猫娘.bin", 1.05f, 1.0f, 0.5f, 0, 512),
+    MODEL_CONFIG_ENTRY(L"Qwen3-0.6B", MODEL_ROOT_DIR "/qwen3-0b6-q80.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768),
+    MODEL_CONFIG_ENTRY(L"Qwen3-1.7B", MODEL_ROOT_DIR "/qwen3-1b7-q80.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768),
+    MODEL_CONFIG_ENTRY(L"Qwen3-4B-Inst-2507", MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q80.bin", NULL, 1.0f, 0.7f, 0.8f, 20, 32768)
+};
 
 static uint32_t g_tokens_count = 0;
 static float g_tps_of_last_session = 0.0f;
-static wchar_t g_llm_output_of_last_session[INPUT_BUFFER_LENGTH] = L"";
-static wchar_t g_asr_output[INPUT_BUFFER_LENGTH] = L"请说话...";
+static wchar_t g_llm_output_of_last_session[UI_STR_BUF_MAX_LENGTH] = L"";
+static wchar_t g_asr_output[UI_STR_BUF_MAX_LENGTH] = L"请说话...";
 
 
 
@@ -93,6 +120,7 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
         wcscpy(g_llm_output_of_last_session, L"");
         g_tps_of_last_session = session->tps;
+        g_tokens_count = session->pos;
         return LLM_STOPPED_IN_PREFILLING;
     }
 
@@ -106,7 +134,7 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         w_textarea_prefill->width = 128;
         w_textarea_prefill->height = 24;
 
-        set_textarea(key_event, global_state, w_textarea_prefill, L"Pre-filling...", 0, 0);
+        set_textarea(key_event, global_state, w_textarea_prefill, L"Reading...", 0, 0);
     
         // 临时关闭draw_textarea的整帧绘制，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
         global_state->is_full_refresh = 0;
@@ -151,6 +179,7 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state) {
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
         wcscpy(g_llm_output_of_last_session, session->output_text);
         g_tps_of_last_session = session->tps;
+        g_tokens_count = session->pos;
         return LLM_STOPPED_IN_DECODING;
     }
 
@@ -216,13 +245,11 @@ void init_main_menu() {
 
 void init_model_menu() {
     wcscpy(w_menu_model->title, L"Select LLM");
-    wcscpy(w_menu_model->items[0], L"Nano-168M-QA");
-    wcscpy(w_menu_model->items[1], L"Nano-56M-QA");
-    wcscpy(w_menu_model->items[2], L"Nano-56M-Neko");
-    wcscpy(w_menu_model->items[3], L"Qwen3-0.6B");
-    wcscpy(w_menu_model->items[4], L"Qwen3-1.7B");
-    wcscpy(w_menu_model->items[5], L"Qwen3-4B-Inst-2507");
-    w_menu_model->item_num = 6;
+    size_t model_count = sizeof(preset_model_configs) / sizeof(preset_model_configs[0]);
+    for (size_t i = 0; i < model_count; i++) {
+        wcscpy(w_menu_model->items[i], preset_model_configs[i].model_name);
+    }
+    w_menu_model->item_num = (int32_t)model_count;
     init_menu(key_event, global_state, w_menu_model);
 }
 
@@ -298,70 +325,27 @@ int32_t model_menu_item_action(int32_t item_index) {
         llm_context_free(global_state->llm_ctx);
     }
 
-    wchar_t *llm_model_info = NULL;
+    int32_t model_count = (int32_t)(sizeof(preset_model_configs) / sizeof(preset_model_configs[0]));
 
-    if (item_index == 0) {
-        llm_model_info = L" 正在加载语言模型\n Nano-168M-QA\n 请稍等...";
-        global_state->llm_model_path = MODEL_PATH_1;
-        global_state->llm_lora_path = NULL;
-        global_state->llm_repetition_penalty = 1.05f;
-        global_state->llm_temperature = 1.0f;
-        global_state->llm_top_p = 0.5f;
-        global_state->llm_top_k = 0;
-        global_state->llm_max_seq_len = 512;
+    if (item_index < model_count) {
+        Model_Config mc = preset_model_configs[item_index];
+        global_state->llm_model_name = mc.model_name;
+        global_state->llm_model_path = mc.model_path;
+        global_state->llm_lora_path = mc.lora_path;
+        global_state->llm_repetition_penalty = mc.repetition_penalty;
+        global_state->llm_temperature = mc.temperature;
+        global_state->llm_top_p = mc.top_p;
+        global_state->llm_top_k = mc.top_k;
+        global_state->llm_max_seq_len = mc.max_seq_len;
     }
-    else if (item_index == 1) {
-        llm_model_info = L" 正在加载语言模型\n Nano-56M-QA\n 请稍等...";
-        global_state->llm_model_path = MODEL_PATH_2;
-        global_state->llm_lora_path = NULL;
-        global_state->llm_repetition_penalty = 1.05f;
-        global_state->llm_temperature = 1.0f;
-        global_state->llm_top_p = 0.5f;
-        global_state->llm_top_k = 0;
-        global_state->llm_max_seq_len = 512;
-    }
-    else if (item_index == 2) {
-        llm_model_info = L" 正在加载语言模型\n Nano-56M-Neko\n 请稍等...";
-        global_state->llm_model_path = MODEL_PATH_3;
-        global_state->llm_lora_path = LORA_PATH_3;
-        global_state->llm_repetition_penalty = 1.05f;
-        global_state->llm_temperature = 1.0f;
-        global_state->llm_top_p = 0.5f;
-        global_state->llm_top_k = 0;
-        global_state->llm_max_seq_len = 512;
-    }
-    else if (item_index == 3) {
-        llm_model_info = L" 正在加载语言模型\n Qwen3-0.6B\n 请稍等...";
-        global_state->llm_model_path = MODEL_PATH_4;
-        global_state->llm_lora_path = NULL;
-        global_state->llm_repetition_penalty = 1.0f;
-        global_state->llm_temperature = 0.6f;
-        global_state->llm_top_p = 0.95f;
-        global_state->llm_top_k = 20;
-        global_state->llm_max_seq_len = 32768;
-    }
-    else if (item_index == 4) {
-        llm_model_info = L" 正在加载语言模型\n Qwen3-1.7B\n 请稍等...";
-        global_state->llm_model_path = MODEL_PATH_5;
-        global_state->llm_lora_path = NULL;
-        global_state->llm_repetition_penalty = 1.0f;
-        global_state->llm_temperature = 0.6f;
-        global_state->llm_top_p = 0.95f;
-        global_state->llm_top_k = 20;
-        global_state->llm_max_seq_len = 32768;
-    }
-    else if (item_index == 5) {
-        llm_model_info = L" 正在加载语言模型\n Qwen3-4B-Inst-2507\n 请稍等...";
-        global_state->llm_model_path = MODEL_PATH_6;
-        global_state->llm_lora_path = NULL;
-        global_state->llm_repetition_penalty = 1.0f;
-        global_state->llm_temperature = 0.7f;
-        global_state->llm_top_p = 0.8f;
-        global_state->llm_top_k = 20;
-        global_state->llm_max_seq_len = 32768;
+    else {
+        return STATE_MAIN_MENU;
     }
 
-    set_textarea(key_event, global_state, w_textarea_main, llm_model_info, 0, 0);
+    wchar_t llm_loading_prompt[88];
+    swprintf(llm_loading_prompt, 88, L" 正在加载语言模型\n %ls\n 请稍等...", global_state->llm_model_name);
+
+    set_textarea(key_event, global_state, w_textarea_main, llm_loading_prompt, 0, 0);
     draw_textarea(key_event, global_state, w_textarea_main);
 
     global_state->llm_ctx = llm_context_init(
@@ -373,11 +357,6 @@ int32_t model_menu_item_action(int32_t item_index) {
         global_state->llm_top_p,
         global_state->llm_top_k,
         global_state->timestamp);
-
-    set_textarea(key_event, global_state, w_textarea_main, L"加载完成~", 0, 0);
-    draw_textarea(key_event, global_state, w_textarea_main);
-
-    sleep_in_ms(500);
 
     // 以下两条路选一个：
 
@@ -521,6 +500,7 @@ int main() {
 
     global_state->is_ctrl_enabled = 0;
     global_state->llm_status = LLM_STOPPED_NORMALLY;
+    global_state->llm_model_name = NULL;
     global_state->llm_model_path = NULL;
     global_state->llm_lora_path = NULL;
     global_state->llm_repetition_penalty = 1.05f;
@@ -553,9 +533,9 @@ int main() {
     void_key_event->key_mask = 0;
     void_key_event->key_repeat = 0;
 
-    init_textarea(key_event, global_state, w_textarea_main, INPUT_BUFFER_LENGTH);
-    init_textarea(key_event, global_state, w_textarea_asr, INPUT_BUFFER_LENGTH);
-    init_textarea(key_event, global_state, w_textarea_prefill, INPUT_BUFFER_LENGTH);
+    init_textarea(key_event, global_state, w_textarea_main, UI_STR_BUF_MAX_LENGTH);
+    init_textarea(key_event, global_state, w_textarea_asr, UI_STR_BUF_MAX_LENGTH);
+    init_textarea(key_event, global_state, w_textarea_prefill, UI_STR_BUF_MAX_LENGTH);
 
     ///////////////////////////////////////
     // UPS传感器初始化
@@ -811,7 +791,9 @@ int main() {
                 }
                 else if (global_state->llm_ctx->llm->arch == LLM_ARCH_QWEN2 || global_state->llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
                     wcscpy(prompt, w_input_main->textarea.text);
-                    // wcscat(prompt, L" /no_think");
+                    if (global_state->is_thinking_enabled == 0) {
+                        wcscat(prompt, L" /no_think");
+                    }
                 }
                 else {
                     STATE = STATE_SPLASH_SCREEN;
@@ -819,7 +801,7 @@ int main() {
                 }
 
                 // 初始化对话session
-                global_state->llm_session = llm_session_init(global_state->llm_ctx, prompt, global_state->llm_max_seq_len);
+                global_state->llm_session = llm_session_init(global_state->llm_ctx, prompt, global_state->llm_max_seq_len, global_state->is_thinking_enabled);
             }
             PREV_STATE = STATE;
 
@@ -877,7 +859,7 @@ int main() {
             // 首次获得焦点：初始化
             if (PREV_STATE != STATE) {
                 // 计算提示语+生成内容的行数
-                wchar_t *prompt_and_output = (wchar_t *)calloc_dev(INPUT_BUFFER_LENGTH * 2, sizeof(wchar_t));
+                wchar_t *prompt_and_output = (wchar_t *)calloc_dev(UI_STR_BUF_MAX_LENGTH * 2, sizeof(wchar_t));
                 wcscat(prompt_and_output, L"Homo:\n");
                 wcscat(prompt_and_output, w_input_main->textarea.text);
                 wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
@@ -895,7 +877,7 @@ int main() {
                     wcscat(prompt_and_output, L"\n\n[Nano:推理异常结束]");
                 }
                 wchar_t tps_wcstr[50];
-                swprintf(tps_wcstr, 50, L"\n\n[%d|%.1fTPS]", g_tokens_count, g_tps_of_last_session);
+                swprintf(tps_wcstr, 50, L"\n\n[%d/%d|%.1fTPS]", g_tokens_count, global_state->llm_max_seq_len, g_tps_of_last_session);
                 wcscat(prompt_and_output, tps_wcstr);
 
                 wcscpy(g_llm_output_of_last_session, prompt_and_output);
