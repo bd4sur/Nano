@@ -1203,3 +1203,75 @@ void render_symbol_input(Widget_Input_State *input_state) {
 
     gfx_refresh();
 }
+
+
+
+
+
+
+
+// ===============================================================================
+// Game of Life
+// ===============================================================================
+
+#define GOL_WIDTH (128)
+#define GOL_HEIGHT (64)
+static uint8_t gol_field[2][GOL_WIDTH][GOL_HEIGHT];
+static uint8_t gol_field_page;
+static uint64_t gol_refresh_timestamp;
+
+void game_of_life_init(Key_Event *key_event, Global_State *global_state) {
+    gol_field_page = 0;
+    gol_refresh_timestamp = global_state->timestamp;
+    uint64_t ts = global_state->timestamp;
+    for (uint32_t x = 0; x < GOL_WIDTH; x++) {
+        for (uint32_t y = 0; y < GOL_HEIGHT; y++) {
+            uint8_t s = random_u32(&ts) % 2;
+            gol_field[0][x][y] = s;
+            gol_field[1][x][y] = s;
+        }
+    }
+}
+
+void game_of_life_step(Key_Event *key_event, Global_State *global_state) {
+    // 节流：不大于50fps
+    if (global_state->timestamp - gol_refresh_timestamp < 20) {
+        return;
+    }
+    gol_refresh_timestamp = global_state->timestamp;
+    fb_soft_clear();
+    for (uint32_t x = 0; x < GOL_WIDTH; x++) {
+        for (uint32_t y = 0; y < GOL_HEIGHT; y++) {
+            // 获取某个格子的8邻域
+            uint32_t count = 0;
+            uint32_t x_a = (x == 0) ? (GOL_WIDTH-1) : (x-1);
+            uint32_t x_b = (x == (GOL_WIDTH-1)) ? 0 : (x+1);
+            uint32_t y_a = (y == 0) ? (GOL_HEIGHT-1) : (y-1);
+            uint32_t y_b = (y == (GOL_HEIGHT-1)) ? 0 : (y+1);
+            uint8_t n1 = gol_field[gol_field_page][x_a][y_a]; count += (n1 > 0) ? 1 : 0;
+            uint8_t n2 = gol_field[gol_field_page][ x ][y_a]; count += (n2 > 0) ? 1 : 0;
+            uint8_t n3 = gol_field[gol_field_page][x_b][y_a]; count += (n3 > 0) ? 1 : 0;
+            uint8_t n4 = gol_field[gol_field_page][x_a][ y ]; count += (n4 > 0) ? 1 : 0;
+            uint8_t n5 = gol_field[gol_field_page][ x ][ y ]; // self
+            uint8_t n6 = gol_field[gol_field_page][x_b][ y ]; count += (n6 > 0) ? 1 : 0;
+            uint8_t n7 = gol_field[gol_field_page][x_a][y_b]; count += (n7 > 0) ? 1 : 0;
+            uint8_t n8 = gol_field[gol_field_page][ x ][y_b]; count += (n8 > 0) ? 1 : 0;
+            uint8_t n9 = gol_field[gol_field_page][x_b][y_b]; count += (n9 > 0) ? 1 : 0;
+
+            uint8_t new_state = 0;
+            if (n5 == 0) {
+                new_state = (count == 3) ? 1 : 0;
+            }
+            else {
+                new_state = (count == 2 || count == 3) ? 1 : 0;
+            }
+
+            gol_field[1-gol_field_page][x][y] = new_state;
+
+            fb_plot(x, y, new_state);
+        }
+    }
+    gfx_refresh();
+    gol_field_page = 1 - gol_field_page;
+}
+

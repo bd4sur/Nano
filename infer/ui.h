@@ -173,6 +173,14 @@ void render_symbol_input(Widget_Input_State *input_state);
 
 void render_scroll_bar(int32_t line_num, int32_t current_line, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height);
 
+// ===============================================================================
+// Game of Life
+// ===============================================================================
+
+void game_of_life_init(Key_Event *key_event, Global_State *global_state);
+void game_of_life_step(Key_Event *key_event, Global_State *global_state);
+
+
 #ifdef __cplusplus
 }
 #endif

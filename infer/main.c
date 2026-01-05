@@ -236,10 +236,11 @@ void init_main_menu() {
     wcscpy(w_menu_main->items[0], L"电子鹦鹉");
     wcscpy(w_menu_main->items[1], L"电子书");
     wcscpy(w_menu_main->items[2], L"Bad Apple！");
-    wcscpy(w_menu_main->items[3], L"设置");
-    wcscpy(w_menu_main->items[4], L"安全关机");
-    wcscpy(w_menu_main->items[5], L"本机自述");
-    w_menu_main->item_num = 6;
+    wcscpy(w_menu_main->items[3], L"元胞自动机");
+    wcscpy(w_menu_main->items[4], L"设置");
+    wcscpy(w_menu_main->items[5], L"安全关机");
+    wcscpy(w_menu_main->items[6], L"本机自述");
+    w_menu_main->item_num = 7;
     init_menu(key_event, global_state, w_menu_main);
 }
 
@@ -302,19 +303,24 @@ int32_t main_menu_item_action(int32_t item_index) {
         return STATE_BADAPPLE;
     }
 
-    // 3.设置
+    // 3.元胞自动机
     else if (item_index == 3) {
+        return STATE_GAMEOFLIFE;
+    }
+
+    // 3.设置
+    else if (item_index == 4) {
         init_setting_menu();
         return STATE_SETTING_MENU;
     }
 
     // 4.安全关机
-    else if (item_index == 4) {
+    else if (item_index == 5) {
         return STATE_SHUTDOWN;
     }
 
     // 5.本机自述
-    else if (item_index == 5) {
+    else if (item_index == 6) {
         return STATE_README;
     }
     return STATE_MAIN_MENU;
@@ -1039,7 +1045,7 @@ int main() {
         }
 
         /////////////////////////////////////////////
-        // TTS设置
+        // Bad Apple! 动画
         /////////////////////////////////////////////
 
         case STATE_BADAPPLE:
@@ -1061,6 +1067,31 @@ int main() {
             // 按A键返回主菜单
             if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
                 STATE = STATE_MAIN_MENU;
+            }
+
+            break;
+
+        /////////////////////////////////////////////
+        // 元胞自动机：Conway的生命游戏
+        /////////////////////////////////////////////
+
+        case STATE_GAMEOFLIFE:
+
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                game_of_life_init(key_event, global_state);
+            }
+            PREV_STATE = STATE;
+
+            game_of_life_step(key_event, global_state);
+
+            // 按A键返回主菜单
+            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+                STATE = STATE_MAIN_MENU;
+            }
+            // 按D键刷新
+            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
+                game_of_life_init(key_event, global_state);
             }
 
             break;
