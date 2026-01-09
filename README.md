@@ -59,22 +59,9 @@
 |:--:|:--:|:--:|
 |<img src="./doc/nano-animac.png" width="100%"><br>Nano-Animac<br>部署于自研Scheme解释器|<img src="./doc/nano-web-2.png" width="100%"><br>Nano-Web<br>部署于浏览器|<img src="./doc/nano-esp.jpg" width="100%"><br>Nano-ESP<br>部署于ESP32-P4单片机|
 
-### 基于浏览器WASM的CPU推理
-
-基于[karpathy/llama2.c](https://github.com/karpathy/llama2.c)，用C语言和JavaScript分别实现的推理引擎。其中C语言实现的推理引擎被编译为WASM，支持FP32和Q80两种精度。JavaScript实现的推理引擎只支持FP32精度。仓库中已经提供了编译好的WASM二进制文件，可以开箱即用。
-
-- 访问[在线体验页面](https://bd4sur.com/Nano/infer/web)，或者用浏览器直接打开`Nano/infer/web/index.html`。
-- 手动下载基座模型、指令微调模型或LoRA插件（扩展名均为bin），或者直接点击下方按钮，自动从HuggingFace下载模型。
-- 可切换文本续写模式和指令问答模式，默认后者。如果使用基座模型，请选择文本续写模式。如果使用指令微调后的问答模型，请选择指令问答模式。如果使用Qwen模型，请选择指令问答模式。
-- 使用基座模型时，可随时加载或卸载与基座模型匹配的LoRA插件。
-- 使用`export.py`将模型检查点文件转换为二进制模型文件，详见下文。
-- 所有推理过程（含ASR和TTS）均在本地浏览器内部进行。
-- 作为WebUI，能够接入部署在服务器上的LLM/ASR/TTS接口，详见[文档](./doc/mio.md)。
-- 构建方式：执行`bash infer/build_wasm.sh`（工具链配置见注释），在`./infer/web`中生成`nano_infer.wasm`。
-
 ### 通用CPU推理
 
-基于[karpathy/llama2.c](https://github.com/karpathy/llama2.c)实现的纯C语言推理引擎，依赖很少，容易移植，可部署于各类设备，如树莓派、路由器、单片机、PC、服务器等。除了Nano，还适配了Qwen2-0.5B、Qwen3-0.6B/1.7B/4B。
+基于[karpathy/llama2.c](https://github.com/karpathy/llama2.c)实现的纯C语言推理引擎。支持FP32(W32A32)、Q80(W8A32)、Q4K(W4A32)等量化方式。依赖很少，容易移植，可部署于各类设备，如树莓派、路由器、单片机、PC、服务器等。除了Nano，还适配了Qwen2-0.5B、Qwen3-0.6B/1.7B/4B。
 
 提供3种形态：Nano-CLI（终端交互）、Nano-WSS（WebSocket服务端）和Nano-Pod（有键盘输入和GUI的，能够语音输入输出的电子鹦鹉笼）。在`infer`目录下，执行`make`进行构建，构建得到的二进制文件位于`infer/bin`目录。执行以下命令以启动推理：
 
@@ -85,6 +72,19 @@
 上面命令中的`N`是线程数，需通过实验确定最佳数值。二进制模型文件的转换方式详见下文，可将Nano的pickle模型和Qwen2、Qwen3的HuggingFace模型转换为推理引擎可接受的二进制模型文件，文件内嵌词表。
 
 Nano-Pod的详细安装部署文档详见[此处](doc/on-device.md)。
+
+### 基于浏览器WASM的CPU推理
+
+基于WASM和JavaScript分别实现的推理引擎。其中WASM推理引擎是由通用CPU推理引擎（C语言实现）编译得到。JavaScript实现的推理引擎只支持FP32精度。仓库中已经提供了编译好的WASM二进制文件，可以开箱即用。
+
+- 访问[在线体验页面](https://bd4sur.com/Nano/infer/web)，或者用浏览器直接打开`Nano/infer/web/index.html`。
+- 手动下载基座模型、指令微调模型或LoRA插件（扩展名均为bin），或者直接点击下方按钮，自动从HuggingFace下载模型。
+- 可切换文本续写模式和指令问答模式，默认后者。如果使用基座模型，请选择文本续写模式。如果使用指令微调后的问答模型，请选择指令问答模式。如果使用Qwen模型，请选择指令问答模式。
+- 使用基座模型时，可随时加载或卸载与基座模型匹配的LoRA插件。
+- 使用`export.py`将模型检查点文件转换为二进制模型文件，详见下文。
+- 所有推理过程（含ASR和TTS）均在本地浏览器内部进行。
+- 作为WebUI，能够接入部署在服务器上的LLM/ASR/TTS接口，详见[文档](./doc/mio.md)。
+- 构建方式：执行`bash infer/build_wasm.sh`（工具链配置见注释），在`./infer/web`中生成`nano_infer.wasm`。
 
 ### 基于自研Scheme解释器的浏览器CPU推理
 

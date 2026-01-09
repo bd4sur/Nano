@@ -8,6 +8,8 @@ extern "C" {
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <assert.h>
+#include <float.h>
 #include <ctype.h>
 #include <wchar.h>
 #include <locale.h>
