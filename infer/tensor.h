@@ -42,11 +42,11 @@ typedef struct {
 } Q4k_Block;
 
 typedef struct {
-    uint32_t header;
-    uint32_t ndim;
-    uint32_t shape[6];
-    uint32_t num_blocks;
-    Q4k_Block **blocks;
+    uint32_t header;     // 报头（包含量化类型等信息，待定）
+    uint32_t ndim;       // 张量维度数
+    uint32_t shape[6];   // 张量各维度大小，最多支持6维
+    uint32_t num_blocks; // 量化块数
+    Q4k_Block **blocks;  // 指向量化块指针数组
 } Q4k_Tensor;
 
 

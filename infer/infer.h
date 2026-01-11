@@ -80,15 +80,15 @@ typedef struct {
     float *rms_norm_ffn;    // (layer, n_embd)
     float *rms_norm_final;  // (n_embd,)
 
-    Typed_Tensor *wq;    // (layer, n_embd, n_heads * head_dim)
-    Typed_Tensor *wk;    // (layer, n_embd, n_kv_heads * head_dim)
-    Typed_Tensor *wv;    // (layer, n_embd, n_kv_heads * head_dim)
-    Typed_Tensor *wo;    // (layer, n_heads * head_dim, n_embd)
+    Typed_Tensor *wq;    // (layer, n_head * head_dim, n_embd)
+    Typed_Tensor *wk;    // (layer, n_kv_head * head_dim, n_embd)
+    Typed_Tensor *wv;    // (layer, n_kv_head * head_dim, n_embd)
+    Typed_Tensor *wo;    // (layer, n_embd, n_head * head_dim)
 
     // Qwen2 only
-    float *bq;              // (layer, n_heads * head_dim)
-    float *bk;              // (layer, n_kv_heads * head_dim)
-    float *bv;              // (layer, n_kv_heads * head_dim)
+    float *bq;              // (layer, n_head * head_dim)
+    float *bk;              // (layer, n_kv_head * head_dim)
+    float *bv;              // (layer, n_kv_head * head_dim)
 
     // Qwen3 only
     float *q_norm;          // (layer, head_size)
@@ -124,7 +124,7 @@ typedef struct {
     float *v;       // value (kv_dim,)
     float *k_cache; // (layer, block_size, kv_dim)
     float *v_cache; // (layer, block_size, kv_dim)
-    float *att;     // buffer for scores/attention values (n_heads, block_size)
+    float *att;     // buffer for scores/attention values (n_head, block_size)
     float *logits;  // output logits
 
     // LoRA激活值暂不做池化
