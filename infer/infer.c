@@ -68,7 +68,14 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
         s->xbaq             = (Typed_Tensor) { .tensor_q80 = xbaq_tmp };
         s->hq               = (Typed_Tensor) { .tensor_q80 = hq_tmp };
     }
-
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        Q4k_Tensor *xq_q4k   = make_q4k_tensor(1, (uint32_t[]){llm_cfg->n_embd});
+        Q4k_Tensor *xbaq_q4k = make_q4k_tensor(1, (uint32_t[]){q_dim});
+        Q4k_Tensor *hq_q4k   = make_q4k_tensor(1, (uint32_t[]){llm_cfg->n_hidden});
+        s->xq   = (Typed_Tensor) { .tensor_q4k = xq_q4k };
+        s->xbaq = (Typed_Tensor) { .tensor_q4k = xbaq_q4k };
+        s->hq   = (Typed_Tensor) { .tensor_q4k = hq_q4k };
+    }
 
     // ensure all mallocs went fine
     if (!s->xbuf || !s->kvcache) {
@@ -130,6 +137,28 @@ void memory_map_params(LLM *llm, void* ptr) {
 
         fptr = (float*)ptr;
     }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        ptr = (void*)fptr;
+
+        uint64_t tlen = 0;
+
+        Q4k_Tensor *q_tokens_q4k = unpack_q4k_tensor(ptr, &tlen);
+        w->q_tokens = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->q_tokens->tensor_q4k = q_tokens_q4k;  ptr += tlen;
+        w->token_embedding = (float *)calloc_dev(cfg->vocab_size * cfg->n_embd, sizeof(float));
+        uint32_t tedim = 2;
+        dequantize_tensor_q4k(q_tokens_q4k, w->token_embedding, &tedim, (uint32_t[]){cfg->vocab_size, cfg->n_embd});
+
+        Q4k_Tensor *wq_q4k = unpack_q4k_tensor(ptr, &tlen); w->wq = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->wq->tensor_q4k = wq_q4k; ptr += tlen;
+        Q4k_Tensor *wk_q4k = unpack_q4k_tensor(ptr, &tlen); w->wk = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->wk->tensor_q4k = wk_q4k; ptr += tlen;
+        Q4k_Tensor *wv_q4k = unpack_q4k_tensor(ptr, &tlen); w->wv = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->wv->tensor_q4k = wv_q4k; ptr += tlen;
+        Q4k_Tensor *wo_q4k = unpack_q4k_tensor(ptr, &tlen); w->wo = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->wo->tensor_q4k = wo_q4k; ptr += tlen;
+
+        Q4k_Tensor *w1_q4k = unpack_q4k_tensor(ptr, &tlen); w->w1 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->w1->tensor_q4k = w1_q4k; ptr += tlen;
+        Q4k_Tensor *w2_q4k = unpack_q4k_tensor(ptr, &tlen); w->w2 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->w2->tensor_q4k = w2_q4k; ptr += tlen;
+        Q4k_Tensor *w3_q4k = unpack_q4k_tensor(ptr, &tlen); w->w3 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->w3->tensor_q4k = w3_q4k; ptr += tlen;
+
+        fptr = (float*)ptr;
+    }
     else if (llm->quant_type == QUANT_TYPE_F32) {
         w->token_embedding = fptr; fptr += cfg->vocab_size * cfg->n_embd;
 
@@ -178,6 +207,9 @@ void memory_map_params(LLM *llm, void* ptr) {
         ptr = (void*)fptr;
         w->token_classifier = cfg->is_shared_classifier ? w->q_tokens : parse_quantized_tensors(&ptr, 1, cfg->n_embd * cfg->vocab_size, llm->group_size);
     }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        w->token_classifier = w->q_tokens;
+    }
     else if (llm->quant_type == QUANT_TYPE_F32) {
         w->token_classifier = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));
         w->token_classifier->tensor_f32 = cfg->is_shared_classifier ? w->token_embedding : ptr;
@@ -220,7 +252,7 @@ void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
 
     llm->arch = model_type;
 
-    llm->quant_type = (quant_type == 0) ? QUANT_TYPE_F32 : QUANT_TYPE_Q80; // TODO 量化类型enum待统一
+    llm->quant_type = (quant_type == QUANT_TYPE_F32 || quant_type == QUANT_TYPE_Q80 || quant_type == QUANT_TYPE_Q4K) ? quant_type : QUANT_TYPE_Q80;
     llm->group_size = group_size;
 
     // 解析词表，同时构建trie树和hashmap
@@ -738,6 +770,12 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
         matmul_quant(s->k, &s->xq, w->wk + layer, n_embd, kv_dim , llm->group_size);
         matmul_quant(s->v, &s->xq, w->wv + layer, n_embd, kv_dim , llm->group_size);
     }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(s->xb, 1, (uint32_t[]){n_embd}, s->xq.tensor_q4k);
+        matmul_q4k(s->q, s->xq.tensor_q4k, w->wq->tensor_q4k, layer);
+        matmul_q4k(s->k, s->xq.tensor_q4k, w->wk->tensor_q4k, layer);
+        matmul_q4k(s->v, s->xq.tensor_q4k, w->wv->tensor_q4k, layer);
+    }
 
     if (llm->arch == LLM_ARCH_QWEN2) {
         // TODO Qwen2 bq bk bv
@@ -834,6 +872,10 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
         quantize(&s->xbaq.tensor_q80, s->xba, q_dim, llm->group_size);
         matmul_quant(s->xb2, &s->xbaq, w->wo + layer, q_dim, n_embd, llm->group_size);
     }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(s->xba, 1, (uint32_t[]){q_dim}, s->xbaq.tensor_q4k);
+        matmul_q4k(s->xb2, s->xbaq.tensor_q4k, w->wo->tensor_q4k, layer);
+    }
 
     // 计算output的低秩分解分支，并将其累加到原来的输出上
     if(use_lora == 1) {
@@ -862,6 +904,11 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
         matmul_quant(s->hb, &s->xq, w->w1 + layer, n_embd, n_hidden , llm->group_size);
         matmul_quant(s->hb2, &s->xq, w->w3 + layer, n_embd, n_hidden, llm->group_size);
     }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(s->xb, 1, (uint32_t[]){n_embd}, s->xq.tensor_q4k);
+        matmul_q4k(s->hb,  s->xq.tensor_q4k, w->w1->tensor_q4k, layer);
+        matmul_q4k(s->hb2, s->xq.tensor_q4k, w->w3->tensor_q4k, layer);
+    }
 
     // SwiGLU non-linearity
     for (int i = 0; i < n_hidden; i++) {
@@ -880,6 +927,10 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
     else if (llm->quant_type == QUANT_TYPE_Q80) {
         quantize(&s->hq.tensor_q80, s->hb, n_hidden, llm->group_size);
         matmul_quant(s->xb, &s->hq, w->w2 + layer, n_hidden, n_embd, llm->group_size);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(s->hb, 1, (uint32_t[]){n_hidden}, s->hq.tensor_q4k);
+        matmul_q4k(s->xb, s->hq.tensor_q4k, w->w2->tensor_q4k, layer);
     }
 
     // residual connection
@@ -922,6 +973,10 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, uint32_t 
     else if (llm->quant_type == QUANT_TYPE_Q80) {
         quantize(&s->xq.tensor_q80, x, cfg->n_embd, llm->group_size);
         matmul_quant(s->logits, &s->xq, w->token_classifier, cfg->n_embd, cfg->vocab_size, llm->group_size);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(x, 1, (uint32_t[]){cfg->n_embd}, s->xq.tensor_q4k);
+        matmul_q4k(s->logits, s->xq.tensor_q4k, w->token_classifier->tensor_q4k, 0);
     }
 
     return s->logits;

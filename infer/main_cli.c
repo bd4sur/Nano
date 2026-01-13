@@ -10,7 +10,7 @@
 // 推理引擎实例（单例模式）
 static Nano_Context *g_llm_ctx;
 
-static char *MODEL_PATH = "/home/bd4sur/ai/_model/Nano/qwen3-0b6-q80.bin";
+static char *MODEL_PATH = "/mnt/d/Desktop/repos/qwen3-0b6-q4ks.bin";
 
 // 是否是第一次decoding：用于判断何时清除Pre-filling进度内容
 int32_t g_is_first_decoding = 1;

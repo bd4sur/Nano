@@ -363,7 +363,7 @@ def serialize_tokenizer(file):
 
     token_byte_length = 0
 
-    with open("/home/bd4sur/ai/_model/Qwen3/Qwen3-0.6B/tokenizer.json", "r") as f:
+    with open("/home/bd4sur/ai/_model/Qwen3-0.6B/tokenizer.json", "r") as f:
         tokenizer = json.load(f)
 
     tokens = [""] * 151936
@@ -452,8 +452,8 @@ def export_model(model, filepath, group_size=0):
 
     print("Writing header...")
 
-    major_version = 2025
-    minor_version = 8
+    major_version = 2026
+    minor_version = 1
 
     # 1) write magic, which will be two uint32 of "BD4SURLM" in ASCII
     out_file.write(struct.pack('I', 0x42443453))
@@ -490,7 +490,7 @@ def export_model(model, filepath, group_size=0):
     # --> 60 bytes
 
     # 5) write some other flags (TODO)
-    out_file.write(struct.pack('i', 800))        # 量化类型 TODO 待定义
+    out_file.write(struct.pack('i', 0 if group_size == 0 else 0x80))       # 量化类型 TODO 待定义
     out_file.write(struct.pack('i', group_size)) # 量化参数(分组长度)
 
     # 6) pad rest with zeros; 'tell' returns current pos

@@ -8,10 +8,10 @@ extern "C" {
 #include "utils.h"
 
 // 量化类型
-#define QUANT_TYPE_F32  (0)
-#define QUANT_TYPE_F16  (1)
-#define QUANT_TYPE_BF16 (2)
-#define QUANT_TYPE_Q80  (10)
+#define QUANT_TYPE_F32  (0x00)
+#define QUANT_TYPE_F16  (0x01)
+#define QUANT_TYPE_BF16 (0x02)
+#define QUANT_TYPE_Q80  (0x80)
 #define QUANT_TYPE_Q4K  (0x42)
 
 
@@ -55,7 +55,7 @@ typedef struct {
 /////////////////////////////////////////////////////////////
 
 typedef union {
-    Q4k_Tensor tensor_q4k;  // type = QUANT_TYPE_Q4K
+    Q4k_Tensor *tensor_q4k;  // type = QUANT_TYPE_Q4K
     Q80_Tensor tensor_q80;  // type = QUANT_TYPE_Q80
     float *tensor_f32;      // type = QUANT_TYPE_F32
 } Typed_Tensor;
@@ -70,13 +70,15 @@ void quantize(Q80_Tensor *qx, float* x, int n, uint32_t group_size);
 Typed_Tensor *parse_quantized_tensors(void **ptr, int n, int size_each, uint32_t group_size);
 
 
+Q4k_Tensor *make_q4k_tensor(uint32_t ndim, uint32_t shape[]);
 Q4k_Tensor *quantize_tensor_q4k(float *t, uint32_t ndim, uint32_t shape[]);
+void quantize_tensor_q4k_in_situ(float *t, uint32_t ndim, uint32_t shape[], Q4k_Tensor *T);
 void dequantize_tensor_q4k(Q4k_Tensor *Q, float *t_out, uint32_t *ndim, uint32_t *shape);
 uint8_t *pack_q4k_tensor(Q4k_Tensor *Q);
 Q4k_Tensor *unpack_q4k_tensor(uint8_t *buffer, uint64_t *p_total_bytes);
 
 
-void matmul_q4k(float *xout, Q4k_Tensor *x, Q4k_Tensor *w);
+void matmul_q4k(float *xout, Q4k_Tensor *x, Q4k_Tensor *w, uint32_t layer);
 
 #ifdef __cplusplus
 }

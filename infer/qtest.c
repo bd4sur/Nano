@@ -23,6 +23,10 @@ void pack_q4k_model_file(LLM *llm, uint8_t *buffer, uint64_t header_byte_length,
     memcpy(output_buffer + offset, header_ptr, sizeof(uint8_t) * header_byte_length);
     offset += sizeof(uint8_t) * header_byte_length;
 
+    // 修改quant_type字段
+    uint32_t qt = QUANT_TYPE_Q4K;
+    memcpy(output_buffer + 15 * sizeof(uint32_t), &qt, sizeof(uint32_t));
+
     // tokenizer
     memcpy(output_buffer + offset, tokenzier_ptr, sizeof(uint8_t) * tokenizer_field_bytes);
     offset += sizeof(uint8_t) * tokenizer_field_bytes;
@@ -82,19 +86,18 @@ void pack_q4k_model_file(LLM *llm, uint8_t *buffer, uint64_t header_byte_length,
 
     Q4k_Tensor *q_tokens_q4k = quantize_tensor_q4k(w->token_embedding, 2, (uint32_t[]){cfg->vocab_size, cfg->n_embd});
 
-    Q4k_Tensor *wq_q4k = quantize_tensor_q4k(w->wq->tensor_f32, 2, (uint32_t[]){cfg->n_head * head_size, cfg->n_embd});
-    Q4k_Tensor *wk_q4k = quantize_tensor_q4k(w->wk->tensor_f32, 2, (uint32_t[]){cfg->n_kv_head * head_size, cfg->n_embd});
-    Q4k_Tensor *wv_q4k = quantize_tensor_q4k(w->wv->tensor_f32, 2, (uint32_t[]){cfg->n_kv_head * head_size, cfg->n_embd});
-    Q4k_Tensor *wo_q4k = quantize_tensor_q4k(w->wo->tensor_f32, 2, (uint32_t[]){cfg->n_embd, cfg->n_head * head_size});
+    Q4k_Tensor *wq_q4k = quantize_tensor_q4k(w->wq->tensor_f32, 3, (uint32_t[]){n_layer, cfg->n_head * head_size, cfg->n_embd});
+    Q4k_Tensor *wk_q4k = quantize_tensor_q4k(w->wk->tensor_f32, 3, (uint32_t[]){n_layer, cfg->n_kv_head * head_size, cfg->n_embd});
+    Q4k_Tensor *wv_q4k = quantize_tensor_q4k(w->wv->tensor_f32, 3, (uint32_t[]){n_layer, cfg->n_kv_head * head_size, cfg->n_embd});
+    Q4k_Tensor *wo_q4k = quantize_tensor_q4k(w->wo->tensor_f32, 3, (uint32_t[]){n_layer, cfg->n_embd, cfg->n_head * head_size});
 
-    Q4k_Tensor *w1_q4k = quantize_tensor_q4k(w->w1->tensor_f32, 2, (uint32_t[]){cfg->n_hidden, cfg->n_embd});
-    Q4k_Tensor *w2_q4k = quantize_tensor_q4k(w->w2->tensor_f32, 2, (uint32_t[]){cfg->n_embd, cfg->n_hidden});
-    Q4k_Tensor *w3_q4k = quantize_tensor_q4k(w->w3->tensor_f32, 2, (uint32_t[]){cfg->n_hidden, cfg->n_embd});
+    Q4k_Tensor *w1_q4k = quantize_tensor_q4k(w->w1->tensor_f32, 3, (uint32_t[]){n_layer, cfg->n_hidden, cfg->n_embd});
+    Q4k_Tensor *w2_q4k = quantize_tensor_q4k(w->w2->tensor_f32, 3, (uint32_t[]){n_layer, cfg->n_embd, cfg->n_hidden});
+    Q4k_Tensor *w3_q4k = quantize_tensor_q4k(w->w3->tensor_f32, 3, (uint32_t[]){n_layer, cfg->n_hidden, cfg->n_embd});
 
     // 将Q4k写入输出缓冲区
 
     uint64_t q4k_tensor_bytes = 0;
-    uint8_t *q4k_tensor_stream = NULL;
 
     uint8_t *q_tokens_q4k_tensor_stream = pack_q4k_tensor(q_tokens_q4k);
     q4k_tensor_bytes = bytes_num_of_q4k_tensor(q_tokens_q4k);
@@ -187,7 +190,7 @@ void pack_q4k_model_file(LLM *llm, uint8_t *buffer, uint64_t header_byte_length,
 
     // 写入文件
 
-    FILE *fp = fopen("model_q4k.bin", "wb");
+    FILE *fp = fopen("qwen3-1b7-q4ks.bin", "wb");
     if (!fp) {
         perror("fopen");
         return;
@@ -405,7 +408,7 @@ int main(void) {
     Q4k_Tensor *w_up = unpack_q4k_tensor(w_stream, &frame_length);
     Q4k_Tensor *x_up = unpack_q4k_tensor(x_stream, &frame_length);
 
-    matmul_q4k(y_f32, x_up, w_up);
+    matmul_q4k(y_f32, x_up, w_up, 0);
     printf("量化乘 = ");
     for (uint32_t i = 0; i < d; i++) {
         printf("%.3f  ", y_f32[i]);
@@ -428,7 +431,7 @@ int main(void) {
 
 
     // 打开bin模型
-    Nano_Context *g_llm_ctx = llm_context_init_for_quant("/home/bd4sur/ai/_model/Nano/nano_168m_625000_sft_947000.bin", NULL, 256, 1.0, 0.7, 0.8, 20, 39);
+    Nano_Context *g_llm_ctx = llm_context_init_for_quant("/mnt/d/Desktop/repos/qwen3-1b7.bin", NULL, 256, 1.0, 0.7, 0.8, 20, 39);
 
 
     // free(all);
