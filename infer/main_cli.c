@@ -10,7 +10,8 @@
 // 推理引擎实例（单例模式）
 static Nano_Context *g_llm_ctx;
 
-static char *MODEL_PATH = "/mnt/d/Desktop/repos/qwen3-0b6-q4ks.bin";
+static char *MODEL_PATH = "/mnt/d/Desktop/repos/nano-56m-base-q80.bin";
+static char *LORA_PATH = "/mnt/d/Desktop/repos/nano-56m-lora-neko.bin";
 
 // 是否是第一次decoding：用于判断何时清除Pre-filling进度内容
 int32_t g_is_first_decoding = 1;
@@ -224,7 +225,7 @@ int main() {
 
     printf("Using model: %s\n", MODEL_PATH);
 
-    g_llm_ctx = llm_context_init(MODEL_PATH, NULL, max_seq_len, 1.0, 0.7, 0.8, 20, random_seed);
+    g_llm_ctx = llm_context_init(MODEL_PATH, LORA_PATH, max_seq_len, 1.0, 0.7, 0.8, 20, random_seed);
 
     printf("  block_size = %d\n", g_llm_ctx->llm->config.block_size);
     printf("  vocab_size = %d\n", g_llm_ctx->llm->config.vocab_size);

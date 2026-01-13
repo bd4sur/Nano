@@ -238,8 +238,8 @@ def export_model(model, tokenizer_config, filepath):
 
     print("Writing header...")
 
-    major_version = 2025
-    minor_version = 12
+    major_version = 2026
+    minor_version = 1
 
     # 1) write magic, which will be two uint32 of "BD4SURLM" in ASCII
     out_file.write(struct.pack('I', 0x42443453))
@@ -253,7 +253,7 @@ def export_model(model, tokenizer_config, filepath):
 
     # 3) write file type TODO to be defined
     out_file.write(struct.pack('i', 0))  # Model type: BD4SUR's Nano model
-    out_file.write(struct.pack('i', 32)) # Config Length: 32 bytes
+    out_file.write(struct.pack('i', 36)) # Config Length: 32 bytes
     # --> 24 bytes
 
     # 4) write the model config, which will be 8 ints (32 bytes)
@@ -275,7 +275,7 @@ def export_model(model, tokenizer_config, filepath):
     # --> 60 bytes
 
     # 5) write some other flags (TODO)
-    out_file.write(struct.pack('i', 0))  # 量化类型：QUANT_TYPE_F32=0(无量化)，见`infer/tensor.h`
+    out_file.write(struct.pack('i', 0x00))  # 量化类型：QUANT_TYPE_F32=0x00(无量化)，见`infer/tensor.h`
 
     # 6) pad rest with zeros; 'tell' returns current pos
     pad = 256 - out_file.tell()
@@ -340,7 +340,7 @@ def export_model(model, tokenizer_config, filepath):
 
 
 
-def export_quantized(model, tokenizer_config, filepath, group_size=64):
+def export_quantized(model, tokenizer_config, filepath, group_size=128):
     """
     Export the model weights in Q8_0 into .bin file to be read from C.
     That is:
@@ -357,8 +357,8 @@ def export_quantized(model, tokenizer_config, filepath, group_size=64):
 
     print("Writing header...")
 
-    major_version = 2025
-    minor_version = 12
+    major_version = 2026
+    minor_version = 1
 
     # 1) write magic, which will be two uint32 of "BD4SURLM" in ASCII
     out_file.write(struct.pack('I', 0x42443453))
@@ -372,7 +372,7 @@ def export_quantized(model, tokenizer_config, filepath, group_size=64):
 
     # 3) write file type TODO to be defined
     out_file.write(struct.pack('i', 0))  # Model type: BD4SUR's Nano model
-    out_file.write(struct.pack('i', 32)) # Config Length: 32 bytes
+    out_file.write(struct.pack('i', 36)) # Config Length: 32 bytes
     # --> 24 bytes
 
     # 4) write the model config, which will be 8 ints (32 bytes)
@@ -394,8 +394,8 @@ def export_quantized(model, tokenizer_config, filepath, group_size=64):
     # --> 60 bytes
 
     # 5) write some other flags
-    out_file.write(struct.pack('i', 10))         # 量化类型：QUANT_TYPE_Q80=10，见`infer/tensor.h`
-    out_file.write(struct.pack('i', group_size)) # 量化参数(分组长度)
+    out_file.write(struct.pack('i', 0x80))         # 量化类型：QUANT_TYPE_Q80=0x80，见`infer/tensor.h`
+    out_file.write(struct.pack('i', group_size))   # 量化参数(分组长度)
 
     # 6) pad rest with zeros; 'tell' returns current pos
     pad = 256 - out_file.tell()

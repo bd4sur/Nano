@@ -66,12 +66,17 @@ typedef struct {
 
 // TODO 思考模式和非思考模式的参数不同
 static const Model_Config preset_model_configs[] = {
-    MODEL_CONFIG_ENTRY(L"Nano-168M", MODEL_ROOT_DIR "/nano_168m_625000_sft_947000_q80.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
-    MODEL_CONFIG_ENTRY(L"Nano-56M", MODEL_ROOT_DIR "/nano_56m_99000_sft_v2_200000_q80.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
-    MODEL_CONFIG_ENTRY(L"Nano-56M-Neko", MODEL_ROOT_DIR "/1-基础模型-99000_q80.bin", MODEL_ROOT_DIR "/2-插件-猫娘.bin", 1.05f, 1.0f, 0.5f, 0, 512),
+    MODEL_CONFIG_ENTRY(L"Nano-168M", MODEL_ROOT_DIR "/nano-168m-q80.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
+    MODEL_CONFIG_ENTRY(L"Nano-56M", MODEL_ROOT_DIR "/nano-56m-q80.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
+    MODEL_CONFIG_ENTRY(L"Nano-56M-Neko", MODEL_ROOT_DIR "/nano-56m-base-q80.bin", MODEL_ROOT_DIR "/nano-56m-lora-neko.bin", 1.05f, 1.0f, 0.5f, 0, 512),
     MODEL_CONFIG_ENTRY(L"Qwen3-0.6B", MODEL_ROOT_DIR "/qwen3-0b6-q80.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768),
     MODEL_CONFIG_ENTRY(L"Qwen3-1.7B", MODEL_ROOT_DIR "/qwen3-1b7-q80.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768),
-    MODEL_CONFIG_ENTRY(L"Qwen3-4B-Inst-2507", MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q80.bin", NULL, 1.0f, 0.7f, 0.8f, 20, 32768)
+    MODEL_CONFIG_ENTRY(L"Qwen3-4B-Inst", MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q80.bin", NULL, 1.0f, 0.7f, 0.8f, 20, 32768),
+    MODEL_CONFIG_ENTRY(L"Nano-168M-Q4KS", MODEL_ROOT_DIR "/nano-168m-q4ks.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
+    MODEL_CONFIG_ENTRY(L"Nano-56M-Q4KS", MODEL_ROOT_DIR "/nano-56m-q4ks.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
+    MODEL_CONFIG_ENTRY(L"Qwen3-0.6B-Q4KS", MODEL_ROOT_DIR "/qwen3-0b6-q4ks.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768),
+    MODEL_CONFIG_ENTRY(L"Qwen3-1.7B-Q4KS", MODEL_ROOT_DIR "/qwen3-1b7-q4ks.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768),
+    MODEL_CONFIG_ENTRY(L"Qwen3-4B-Inst-Q4KS", MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q4ks.bin", NULL, 1.0f, 0.7f, 0.8f, 20, 32768)
 };
 
 static uint32_t g_tokens_count = 0;

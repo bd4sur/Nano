@@ -190,7 +190,7 @@ void pack_q4k_model_file(LLM *llm, uint8_t *buffer, uint64_t header_byte_length,
 
     // 写入文件
 
-    FILE *fp = fopen("qwen3-1b7-q4ks.bin", "wb");
+    FILE *fp = fopen("nano-56m-q4ks.bin", "wb");
     if (!fp) {
         perror("fopen");
         return;
@@ -431,7 +431,7 @@ int main(void) {
 
 
     // 打开bin模型
-    Nano_Context *g_llm_ctx = llm_context_init_for_quant("/mnt/d/Desktop/repos/qwen3-1b7.bin", NULL, 256, 1.0, 0.7, 0.8, 20, 39);
+    Nano_Context *g_llm_ctx = llm_context_init_for_quant("/mnt/d/Desktop/repos/nano-56m.bin", NULL, 256, 1.0, 0.7, 0.8, 20, 39);
 
 
     // free(all);
