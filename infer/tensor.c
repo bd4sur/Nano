@@ -93,11 +93,10 @@ Q4k_Tensor *make_q4k_tensor(uint32_t ndim, uint32_t shape[]) {
     T->num_blocks = n_blocks;
 
     // 分配块
-    T->blocks = (Q4k_Block**)calloc(n_blocks, sizeof(Q4k_Block*));
+    T->blocks = (Q4k_Block*)calloc(n_blocks, sizeof(Q4k_Block));
     for (uint32_t i = 0; i < n_blocks; i++) {
-        Q4k_Block *qb = (Q4k_Block*)calloc(1, sizeof(Q4k_Block));
+        Q4k_Block *qb = T->blocks + i;
         qb->header = QUANT_TYPE_Q4K;
-        T->blocks[i] = qb;
     }
     return T;
 }
@@ -296,7 +295,7 @@ void quantize_tensor_q4k_in_situ(float *t, uint32_t ndim, uint32_t shape[], Q4k_
         for (uint32_t j = 0; j < n_blocks_per_line; j++) {
             // 当前块的实际长度
             uint32_t d = (line_dim >= (j+1) * block_len) ? block_len : (line_dim - j * block_len);
-            quantize_one_block_q4k_in_situ(t + i * line_dim + j * d, d, T->blocks[i * n_blocks_per_line + j]);
+            quantize_one_block_q4k_in_situ(t + i * line_dim + j * d, d, T->blocks + i * n_blocks_per_line + j);
         }
     }
 }
@@ -328,7 +327,7 @@ void dequantize_tensor_q4k(Q4k_Tensor *Q, float *t_out, uint32_t *ndim, uint32_t
         for (uint32_t j = 0; j < n_blocks_per_line; j++) {
             // 当前块的实际长度
             uint32_t d = (line_dim >= (j+1) * block_len) ? block_len : (line_dim - j * block_len);
-            uint32_t qd = dequantize_one_block_q4k(Q->blocks[bcount], t_out + i * line_dim + j * d);
+            uint32_t qd = dequantize_one_block_q4k(Q->blocks + bcount, t_out + i * line_dim + j * d);
             assert(d == qd);
             bcount++;
         }
@@ -371,14 +370,13 @@ uint8_t *pack_q4k_tensor(Q4k_Tensor *Q) {
     memcpy(buffer + offset, Q->shape,      6 * sizeof(uint32_t)); offset += sizeof(uint32_t) * 6;
     memcpy(buffer + offset, &(Q->num_blocks),  sizeof(uint32_t)); offset += sizeof(uint32_t);
     for (uint32_t i = 0; i < Q->num_blocks; i++) {
-        pack_q4k_block(Q->blocks[i], buffer + offset);
+        pack_q4k_block(Q->blocks + i, buffer + offset);
         offset += bytes_per_block * sizeof(uint8_t);
     }
     return buffer;
 }
 
-Q4k_Block *unpack_q4k_block(uint8_t *buffer) {
-    Q4k_Block *qb = (Q4k_Block*)calloc(1, sizeof(Q4k_Block));
+void unpack_q4k_block(uint8_t *buffer, Q4k_Block *qb) {
     uint64_t offset = 0;
     memcpy(&(qb->header) , buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
     memcpy(&(qb->length) , buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
@@ -387,22 +385,27 @@ Q4k_Block *unpack_q4k_block(uint8_t *buffer) {
     memcpy(&(qb->s_bias) , buffer + offset, sizeof(float));    offset += sizeof(float);
     memcpy(qb->sb        , buffer + offset, 12 * sizeof(uint8_t));  offset += sizeof(uint8_t) * 12;
     memcpy(qb->value     , buffer + offset, 128* sizeof(uint8_t));  offset += sizeof(uint8_t) * 128;
-    return qb;
 }
 
 Q4k_Tensor *unpack_q4k_tensor(uint8_t *buffer, uint64_t *p_total_bytes) {
     const uint64_t bytes_per_block = 160;
-    Q4k_Tensor *Q = (Q4k_Tensor*)calloc(1, sizeof(Q4k_Tensor));
+    
+    uint32_t header = 0;
+    uint32_t ndim = 0;
+    uint32_t shape[6];
+    uint32_t num_blocks = 0;
+
     uint64_t offset = 0;
-    memcpy(p_total_bytes,     buffer + offset, sizeof(uint64_t)); offset += sizeof(uint64_t);
-    memcpy(&(Q->header),      buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(&(Q->ndim),        buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(Q->shape,          buffer + offset, 6 * sizeof(uint32_t)); offset += sizeof(uint32_t) * 6;
-    memcpy(&(Q->num_blocks),  buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
-    Q->blocks = (Q4k_Block**)calloc(Q->num_blocks, sizeof(Q4k_Block*));
+    memcpy(p_total_bytes, buffer + offset, sizeof(uint64_t)); offset += sizeof(uint64_t);
+    memcpy(&header,       buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
+    memcpy(&ndim,         buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
+    memcpy(shape,         buffer + offset, 6 * sizeof(uint32_t)); offset += sizeof(uint32_t) * 6;
+    memcpy(&num_blocks,   buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
+
+    Q4k_Tensor *Q = make_q4k_tensor(ndim, shape);
+
     for (uint32_t i = 0; i < Q->num_blocks; i++) {
-        Q4k_Block *qb = unpack_q4k_block(buffer + offset);
-        Q->blocks[i] = qb;
+        unpack_q4k_block(buffer + offset, Q->blocks + i);
         offset += bytes_per_block * sizeof(uint8_t);
     }
     return Q;
@@ -432,9 +435,9 @@ static inline float dot_two_blocks_q4k(const Q4k_Block * __restrict__ P, const Q
         float bp = pb_f32[g];
         float bq = qb_f32[g];
 
-        uint32_t sum_pq = 0;
-        uint32_t sum_p = 0;
-        uint32_t sum_q = 0;
+        int32_t sum_pq = 0;
+        int32_t sum_p = 0;
+        int32_t sum_q = 0;
 
         int32_t actual_group_len = (len >= ((g+1) * group_len)) ? group_len : (len - group_len * g);
 
@@ -471,9 +474,9 @@ static inline float dot_two_blocks_q4k(const Q4k_Block * __restrict__ P, const Q
         for (int32_t i = 0; i < group_len; i++) {
             uint8_t pv = p_nibbles[i];
             uint8_t qv = q_nibbles[i];
-            sum_pq += (uint32_t)(pv) * (uint32_t)(qv);
-            sum_p  += (uint32_t)(pv);
-            sum_q  += (uint32_t)(qv);
+            sum_pq += (int32_t)(pv) * (int32_t)(qv);
+            sum_p  += (int32_t)(pv);
+            sum_q  += (int32_t)(qv);
         }
 
         float dot_group_sum = sp * sq * (float)sum_pq
@@ -516,8 +519,8 @@ void matmul_q4k(float *xout, Q4k_Tensor *x, Q4k_Tensor *w, uint32_t layer) {
         uint32_t w_block_index = k * n_blocks_per_line;
         float line_sum = 0.0f;
         for (uint32_t i = 0; i < n_blocks_per_line; i++) {
-            Q4k_Block *w_block = w->blocks[w_block_index + i];
-            Q4k_Block *x_block = x->blocks[i];
+            Q4k_Block *w_block = w->blocks + w_block_index + i;
+            Q4k_Block *x_block = x->blocks + i;
             line_sum += dot_two_blocks_q4k(w_block, x_block);
         }
         xout[k - layer * d] = line_sum;

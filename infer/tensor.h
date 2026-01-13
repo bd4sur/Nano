@@ -46,7 +46,7 @@ typedef struct {
     uint32_t ndim;       // 张量维度数
     uint32_t shape[6];   // 张量各维度大小，最多支持6维
     uint32_t num_blocks; // 量化块数
-    Q4k_Block **blocks;  // 指向量化块指针数组
+    Q4k_Block *blocks;   // 量化块
 } Q4k_Tensor;
 
 
