@@ -1,9 +1,25 @@
+//
+// Nano Language Model - Inference Engine written in C
+//
+//   BD4SUR 2026-01
+//
+//   从FP32模型文件生成Q4K量化模型文件
+//
+// Usage:
+//   1) 修改 INPUT_FILE_PATH 和 OUTPUT_FILE_NAME 常量为所需的输入输出文件路径。
+//   2) 将本文件移动到 infer 目录下。
+//   3) 编译并运行本文件。
+//      cc -O3 -march=native -ffast-math -Wall -fopenmp export_q4k.c platform_linux.c utils.c prompt.c tokenizer.c tensor.c infer.c -o export_q4k -lm -fopenmp
+//      ./export_q4k
+//
+
+
 #include "infer.h"
 
-// cc -O3 -march=native -ffast-math -Wall -fopenmp qtest.c platform_linux.c utils.c prompt.c tokenizer.c tensor.c infer.c -o qtest -lm -fopenmp
 
 
-
+#define OUTPUT_FILE_NAME "qwen3-0b6-q4k.bin"
+#define INPUT_FILE_PATH "/mnt/d/Desktop/LLM/Nano/nano-168m.bin"
 
 
 
@@ -101,6 +117,7 @@ void pack_q4k_model_file(LLM *llm, uint8_t *buffer, uint64_t header_byte_length,
 
     uint8_t *q_tokens_q4k_tensor_stream = pack_q4k_tensor(q_tokens_q4k);
     q4k_tensor_bytes = bytes_num_of_q4k_tensor(q_tokens_q4k);
+    printf("q_tokens_q4k_tensor_bytes: %ld\n", (uint64_t)q4k_tensor_bytes);
     memcpy(output_buffer + offset, q_tokens_q4k_tensor_stream, q4k_tensor_bytes);
     offset += q4k_tensor_bytes;
     free(q_tokens_q4k_tensor_stream);
@@ -190,7 +207,7 @@ void pack_q4k_model_file(LLM *llm, uint8_t *buffer, uint64_t header_byte_length,
 
     // 写入文件
 
-    FILE *fp = fopen("nano-56m-q4ks.bin", "wb");
+    FILE *fp = fopen(OUTPUT_FILE_NAME, "wb");
     if (!fp) {
         perror("fopen");
         return;
@@ -374,6 +391,7 @@ Nano_Context *llm_context_init_for_quant(char *model_path, char *lora_path, uint
 
 
 int main(void) {
+/*
     uint64_t seed = 39;
 
     const uint32_t d = 8;
@@ -429,9 +447,9 @@ int main(void) {
     }
     printf("\n");
 
-
+*/
     // 打开bin模型
-    Nano_Context *g_llm_ctx = llm_context_init_for_quant("/mnt/d/Desktop/repos/nano-56m.bin", NULL, 256, 1.0, 0.7, 0.8, 20, 39);
+    Nano_Context *g_llm_ctx = llm_context_init_for_quant(INPUT_FILE_PATH, NULL, 256, 1.0, 0.7, 0.8, 20, 39);
 
 
     // free(all);

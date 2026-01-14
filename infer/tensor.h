@@ -30,7 +30,7 @@ typedef struct {
 /////////////////////////////////////////////////////////////
 // Q4k量化
 /////////////////////////////////////////////////////////////
-
+/*
 typedef struct {
     uint32_t header;     // 报头（包含量化类型等信息，待定）
     uint32_t length;     // 块内数组的实际长度（不大于256）
@@ -42,12 +42,35 @@ typedef struct {
 } Q4k_Block;
 
 typedef struct {
+    uint64_t bytes;      // 字节数（含本字段）
     uint32_t header;     // 报头（包含量化类型等信息，待定）
     uint32_t ndim;       // 张量维度数
     uint32_t shape[6];   // 张量各维度大小，最多支持6维
     uint32_t num_blocks; // 量化块数
     Q4k_Block *blocks;   // 量化块
 } Q4k_Tensor;
+*/
+
+typedef uint8_t Q4k_Block;
+typedef uint8_t Q4k_Tensor;
+
+#define q4k_block_bytes (160)
+
+#define get_q4k_block_header(x)    (*((uint32_t*)(x)))
+#define get_q4k_block_length(x)    (*((uint32_t*)(x+4)))
+#define get_q4k_block_meta(x)      (*((uint32_t*)(x+4+4)))
+#define get_q4k_block_s_scale(x)   (*((float*)(x+4+4+4)))
+#define get_q4k_block_s_bias(x)    (*((float*)(x+4+4+4+4)))
+#define get_q4k_block_sb_ptr(x)    ((uint8_t*)(x+4+4+4+4+4))
+#define get_q4k_block_value_ptr(x) ((uint8_t*)(x+4+4+4+4+4+12))
+
+#define get_q4k_tensor_bytes(x)       (*((uint64_t*)(x)))
+#define get_q4k_tensor_header(x)      (*((uint32_t*)(x+8)))
+#define get_q4k_tensor_ndim(x)        (*((uint32_t*)(x+8+4)))
+#define get_q4k_tensor_shape_ptr(x)   ((uint32_t*)(x+8+4+4))
+#define get_q4k_tensor_num_blocks(x)  (*((uint32_t*)(x+8+4+4+24)))
+#define get_q4k_tensor_blocks_ptr(x)  ((uint8_t*)(x+8+4+4+24+4))
+#define get_q4k_tensor_block_ptr(x,i) (get_q4k_tensor_blocks_ptr(x) + (i)*q4k_block_bytes)
 
 
 /////////////////////////////////////////////////////////////
@@ -69,7 +92,7 @@ void dequantize(Q80_Tensor *qx, float* x, int n, uint32_t group_size);
 void quantize(Q80_Tensor *qx, float* x, int n, uint32_t group_size);
 Typed_Tensor *parse_quantized_tensors(void **ptr, int n, int size_each, uint32_t group_size);
 
-
+uint64_t bytes_num_of_q4k_tensor(Q4k_Tensor *Q);
 Q4k_Tensor *make_q4k_tensor(uint32_t ndim, uint32_t shape[]);
 Q4k_Tensor *quantize_tensor_q4k(float *t, uint32_t ndim, uint32_t shape[]);
 void quantize_tensor_q4k_in_situ(float *t, uint32_t ndim, uint32_t shape[], Q4k_Tensor *T);

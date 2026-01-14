@@ -67,43 +67,51 @@ Typed_Tensor *parse_quantized_tensors(void **ptr, int n, int size_each, uint32_t
 // Q4k量化
 /////////////////////////////////////////////////////////////
 
+// 计算一个Q4k_Tensor打包后的字节数
+uint64_t bytes_num_of_q4k_tensor(Q4k_Tensor *Q) {
+    const uint64_t bytes_per_block = 160;
+    uint64_t bytes = 0;
+    bytes += sizeof(uint64_t);     // 帧字节数（含本字段）
+    bytes += sizeof(uint32_t);     // header
+    bytes += sizeof(uint32_t);     // ndim
+    bytes += sizeof(uint32_t) * 6; // shape[6]
+    bytes += sizeof(uint32_t);     // num_blocks
+    bytes += get_q4k_tensor_num_blocks(Q) * bytes_per_block;
+    return bytes;
+}
 
 Q4k_Tensor *make_q4k_tensor(uint32_t ndim, uint32_t shape[]) {
     const uint32_t block_len = 256;
 
-    Q4k_Tensor *T = (Q4k_Tensor*)calloc(1, sizeof(Q4k_Tensor));
-    T->header = QUANT_TYPE_Q4K; // 代表Q4k量化，其余字段待定
-    T->ndim = ndim;
-
     // 每个末维向量称为一“行”。首先计算末维每行对应的量化块数，这决定了总的块数
     uint32_t line_dim = shape[ndim-1];
-    for (uint32_t i = 0; i < ndim; i++) {
-        T->shape[i] = shape[i];
-    }
     uint32_t n_blocks_per_line = (uint32_t)ceilf((float)(line_dim) / (float)(block_len));
-
     // 将非末维全部展平，展平得到的维数称为“行数”
     uint32_t n_lines = 1;
     for (uint32_t i = 0; i < ndim-1; i++) {
         n_lines *= shape[i];
     }
-
     // 总的块数
     uint32_t n_blocks = n_lines * n_blocks_per_line;
-    T->num_blocks = n_blocks;
 
-    // 分配块
-    T->blocks = (Q4k_Block*)calloc(n_blocks, sizeof(Q4k_Block));
-    for (uint32_t i = 0; i < n_blocks; i++) {
-        Q4k_Block *qb = T->blocks + i;
-        qb->header = QUANT_TYPE_Q4K;
+    uint64_t total_bytes = 8+4+4+24+4+n_blocks * q4k_block_bytes;
+
+    Q4k_Tensor *T = (uint8_t*)calloc(total_bytes, sizeof(uint8_t));
+
+    get_q4k_tensor_bytes(T) = total_bytes;
+    get_q4k_tensor_header(T) = QUANT_TYPE_Q4K;
+    get_q4k_tensor_ndim(T) = ndim;
+    for (uint32_t i = 0; i < ndim; i++) {
+        get_q4k_tensor_shape_ptr(T)[i] = shape[i];
     }
+    get_q4k_tensor_num_blocks(T) = n_blocks;
+
     return T;
 }
 
 
 static inline void get_group_scale_and_bias(const Q4k_Block *Q, float *s_f32, float *b_f32) {
-    const uint8_t *sb = Q->sb;
+    const uint8_t *sb = get_q4k_block_sb_ptr(Q);
 
     uint8_t s_i6[8];
     uint8_t b_i6[8];
@@ -127,8 +135,8 @@ static inline void get_group_scale_and_bias(const Q4k_Block *Q, float *s_f32, fl
     b_i6[7] = (((sb[7] >> 6) << 4) | ((sb[11] & 0xf0) >> 4)) & 0x3f;
 
     for (int32_t i = 0; i < 8; i++) {
-        s_f32[i] = (float)(s_i6[i]) * Q->s_scale;
-        b_f32[i] = (float)(b_i6[i]) * Q->s_bias;
+        s_f32[i] = (float)(s_i6[i]) * get_q4k_block_s_scale(Q);
+        b_f32[i] = (float)(b_i6[i]) * get_q4k_block_s_bias(Q);
     }
 }
 
@@ -138,8 +146,8 @@ void quantize_one_block_q4k_in_situ(float *vec, uint32_t d, Q4k_Block *Q) {
     const uint32_t group_len = 32;
     const uint32_t group_num = 8; // 256/32
 
-    Q->header = QUANT_TYPE_Q4K;  // 代表Q4k量化，其余字段待定
-    Q->length = d;     // 块内向量实际长度（必不大于256）
+    get_q4k_block_header(Q) = QUANT_TYPE_Q4K;  // 代表Q4k量化，其余字段待定
+    get_q4k_block_length(Q) = d;     // 块内向量实际长度（必不大于256）
 
     // 统计各组的s和b
 
@@ -190,7 +198,7 @@ void quantize_one_block_q4k_in_situ(float *vec, uint32_t d, Q4k_Block *Q) {
     for (uint32_t i = 0; i < block_len; i += 2) { // 两个一组处理
         uint8_t v0 = v[ i ]; // 前一个在低4位
         uint8_t v1 = v[i+1]; // 后一个在高4位
-        Q->value[i>>1] = ((v0 & 0x0f) | (v1 << 4));
+        get_q4k_block_value_ptr(Q)[i>>1] = ((v0 & 0x0f) | (v1 << 4));
     }
 
     // 对各组的s和b进行6bit对称量化
@@ -207,38 +215,39 @@ void quantize_one_block_q4k_in_situ(float *vec, uint32_t d, Q4k_Block *Q) {
         if (b > b_max) b_max = b;
     }
 
-    Q->s_scale = s_max / 63.0f;
-    Q->s_bias  = b_max / 63.0f;
+    get_q4k_block_s_scale(Q) = s_max / 63.0f;
+    get_q4k_block_s_bias(Q)  = b_max / 63.0f;
 
     for (uint32_t g = 0; g < group_num; g++) {
-        group_s_quantized[g] = (!(Q->s_scale)) ? 0 : (uint8_t)(nearest_int(group_s[g] / Q->s_scale) & 0x3f);
-        group_b_quantized[g] = (!(Q->s_bias))  ? 0 : (uint8_t)(nearest_int(group_b[g] / Q->s_bias ) & 0x3f);
+        group_s_quantized[g] = (!(get_q4k_block_s_scale(Q))) ? 0 : (uint8_t)(nearest_int(group_s[g] / get_q4k_block_s_scale(Q)) & 0x3f);
+        group_b_quantized[g] = (!(get_q4k_block_s_bias(Q)))  ? 0 : (uint8_t)(nearest_int(group_b[g] / get_q4k_block_s_bias(Q)) & 0x3f);
     }
 
     // 将6bit量化的s和b打包进12个字节的Q->sb中
 
-    Q->sb[0] = ((group_s_quantized[4] & 0x30) << 2) | (group_s_quantized[0] & 0x3f);
-    Q->sb[1] = ((group_s_quantized[5] & 0x30) << 2) | (group_s_quantized[1] & 0x3f);
-    Q->sb[2] = ((group_s_quantized[6] & 0x30) << 2) | (group_s_quantized[2] & 0x3f);
-    Q->sb[3] = ((group_s_quantized[7] & 0x30) << 2) | (group_s_quantized[3] & 0x3f);
+    get_q4k_block_sb_ptr(Q)[0] = ((group_s_quantized[4] & 0x30) << 2) | (group_s_quantized[0] & 0x3f);
+    get_q4k_block_sb_ptr(Q)[1] = ((group_s_quantized[5] & 0x30) << 2) | (group_s_quantized[1] & 0x3f);
+    get_q4k_block_sb_ptr(Q)[2] = ((group_s_quantized[6] & 0x30) << 2) | (group_s_quantized[2] & 0x3f);
+    get_q4k_block_sb_ptr(Q)[3] = ((group_s_quantized[7] & 0x30) << 2) | (group_s_quantized[3] & 0x3f);
 
-    Q->sb[4] = ((group_b_quantized[4] & 0x30) << 2) | (group_b_quantized[0] & 0x3f);
-    Q->sb[5] = ((group_b_quantized[5] & 0x30) << 2) | (group_b_quantized[1] & 0x3f);
-    Q->sb[6] = ((group_b_quantized[6] & 0x30) << 2) | (group_b_quantized[2] & 0x3f);
-    Q->sb[7] = ((group_b_quantized[7] & 0x30) << 2) | (group_b_quantized[3] & 0x3f);
+    get_q4k_block_sb_ptr(Q)[4] = ((group_b_quantized[4] & 0x30) << 2) | (group_b_quantized[0] & 0x3f);
+    get_q4k_block_sb_ptr(Q)[5] = ((group_b_quantized[5] & 0x30) << 2) | (group_b_quantized[1] & 0x3f);
+    get_q4k_block_sb_ptr(Q)[6] = ((group_b_quantized[6] & 0x30) << 2) | (group_b_quantized[2] & 0x3f);
+    get_q4k_block_sb_ptr(Q)[7] = ((group_b_quantized[7] & 0x30) << 2) | (group_b_quantized[3] & 0x3f);
 
-    Q->sb[8] = ((group_b_quantized[4] & 0x0f) << 4) | (group_s_quantized[4] & 0x0f);
-    Q->sb[9] = ((group_b_quantized[5] & 0x0f) << 4) | (group_s_quantized[5] & 0x0f);
-    Q->sb[10]= ((group_b_quantized[6] & 0x0f) << 4) | (group_s_quantized[6] & 0x0f);
-    Q->sb[11]= ((group_b_quantized[7] & 0x0f) << 4) | (group_s_quantized[7] & 0x0f);
+    get_q4k_block_sb_ptr(Q)[8] = ((group_b_quantized[4] & 0x0f) << 4) | (group_s_quantized[4] & 0x0f);
+    get_q4k_block_sb_ptr(Q)[9] = ((group_b_quantized[5] & 0x0f) << 4) | (group_s_quantized[5] & 0x0f);
+    get_q4k_block_sb_ptr(Q)[10]= ((group_b_quantized[6] & 0x0f) << 4) | (group_s_quantized[6] & 0x0f);
+    get_q4k_block_sb_ptr(Q)[11]= ((group_b_quantized[7] & 0x0f) << 4) | (group_s_quantized[7] & 0x0f);
 }
 
+/*
 Q4k_Block *quantize_one_block_q4k(float *vec, uint32_t d) {
     Q4k_Block *Q = (Q4k_Block*)calloc(1, sizeof(Q4k_Block));
     quantize_one_block_q4k_in_situ(vec, d, Q);
     return Q;
 }
-
+*/
 
 // 反量化一个块，返回值是块的实际长度
 uint32_t dequantize_one_block_q4k(Q4k_Block *Q, float *out) {
@@ -246,7 +255,7 @@ uint32_t dequantize_one_block_q4k(Q4k_Block *Q, float *out) {
     const uint32_t group_len = 32;
     const uint32_t group_num = 8; // 256/32
 
-    uint32_t len = Q->length;
+    uint32_t len = get_q4k_block_length(Q);
 
     // 反量化各组的s和b
     float s_f32[group_num];
@@ -261,7 +270,7 @@ uint32_t dequantize_one_block_q4k(Q4k_Block *Q, float *out) {
         if (actual_group_len <= 0) break;
         for (int32_t i = 0; i < actual_group_len; i++) {
             uint32_t vindex = group_len * g + i;
-            uint8_t v = ((vindex & 1) == 0) ? ((Q->value[vindex>>1]) & 0x0f) : (((Q->value[vindex>>1]) >> 4) & 0x0f);
+            uint8_t v = ((vindex & 1) == 0) ? ((get_q4k_block_value_ptr(Q)[vindex>>1]) & 0x0f) : (((get_q4k_block_value_ptr(Q)[vindex>>1]) >> 4) & 0x0f);
             out[vindex] = (float)(v) * s - b;
         }
     }
@@ -272,12 +281,12 @@ uint32_t dequantize_one_block_q4k(Q4k_Block *Q, float *out) {
 void quantize_tensor_q4k_in_situ(float *t, uint32_t ndim, uint32_t shape[], Q4k_Tensor *T) {
     const uint32_t block_len = 256;
 
-    assert(T->ndim == ndim);
+    assert(get_q4k_tensor_ndim(T) == ndim);
 
     // 每个末维向量称为一“行”。首先计算末维每行对应的量化块数，这决定了总的块数
     uint32_t line_dim = shape[ndim-1];
     for (uint32_t i = 0; i < ndim; i++) {
-        T->shape[i] = shape[i];
+        get_q4k_tensor_shape_ptr(T)[i] = shape[i];
     }
     uint32_t n_blocks_per_line = (uint32_t)ceilf((float)(line_dim) / (float)(block_len));
 
@@ -295,7 +304,7 @@ void quantize_tensor_q4k_in_situ(float *t, uint32_t ndim, uint32_t shape[], Q4k_
         for (uint32_t j = 0; j < n_blocks_per_line; j++) {
             // 当前块的实际长度
             uint32_t d = (line_dim >= (j+1) * block_len) ? block_len : (line_dim - j * block_len);
-            quantize_one_block_q4k_in_situ(t + i * line_dim + j * d, d, T->blocks + i * n_blocks_per_line + j);
+            quantize_one_block_q4k_in_situ(t + i * line_dim + j * d, d, get_q4k_tensor_block_ptr(T, i * n_blocks_per_line + j));
         }
     }
 }
@@ -309,16 +318,16 @@ Q4k_Tensor *quantize_tensor_q4k(float *t, uint32_t ndim, uint32_t shape[]) {
 void dequantize_tensor_q4k(Q4k_Tensor *Q, float *t_out, uint32_t *ndim, uint32_t *shape) {
     const uint32_t block_len = 256;
 
-    *ndim = Q->ndim;
-    for (uint32_t i = 0; i < Q->ndim; i++) {
-        shape[i] = Q->shape[i];
+    *ndim = get_q4k_tensor_ndim(Q);
+    for (uint32_t i = 0; i < get_q4k_tensor_ndim(Q); i++) {
+        shape[i] = get_q4k_tensor_shape_ptr(Q)[i];
     }
 
-    uint32_t line_dim = shape[Q->ndim-1];
+    uint32_t line_dim = shape[get_q4k_tensor_ndim(Q)-1];
     uint32_t n_blocks_per_line = (uint32_t)ceilf((float)(line_dim) / (float)(block_len));
     uint32_t n_lines = 1;
-    for (uint32_t i = 0; i < Q->ndim-1; i++) {
-        n_lines *= Q->shape[i];
+    for (uint32_t i = 0; i < get_q4k_tensor_ndim(Q)-1; i++) {
+        n_lines *= get_q4k_tensor_shape_ptr(Q)[i];
     }
 
     uint32_t bcount = 0;
@@ -327,7 +336,7 @@ void dequantize_tensor_q4k(Q4k_Tensor *Q, float *t_out, uint32_t *ndim, uint32_t
         for (uint32_t j = 0; j < n_blocks_per_line; j++) {
             // 当前块的实际长度
             uint32_t d = (line_dim >= (j+1) * block_len) ? block_len : (line_dim - j * block_len);
-            uint32_t qd = dequantize_one_block_q4k(Q->blocks + bcount, t_out + i * line_dim + j * d);
+            uint32_t qd = dequantize_one_block_q4k(get_q4k_tensor_block_ptr(Q, bcount), t_out + i * line_dim + j * d);
             assert(d == qd);
             bcount++;
         }
@@ -335,80 +344,14 @@ void dequantize_tensor_q4k(Q4k_Tensor *Q, float *t_out, uint32_t *ndim, uint32_t
 }
 
 
-// 计算一个Q4k_Tensor打包后的字节数
-uint64_t bytes_num_of_q4k_tensor(Q4k_Tensor *Q) {
-    const uint64_t bytes_per_block = 160;
-    uint64_t bytes = 0;
-    bytes += sizeof(uint64_t);     // 帧字节数（含本字段）
-    bytes += sizeof(uint32_t);     // header
-    bytes += sizeof(uint32_t);     // ndim
-    bytes += sizeof(uint32_t) * 6; // shape[6]
-    bytes += sizeof(uint32_t);     // num_blocks
-    bytes += (Q->num_blocks) * bytes_per_block;
-    return bytes;
-}
-
-void pack_q4k_block(Q4k_Block *qb, uint8_t *buffer) {
-    uint64_t offset = 0;
-    memcpy(buffer + offset, &(qb->header), sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(buffer + offset, &(qb->length), sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(buffer + offset, &(qb->meta),   sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(buffer + offset, &(qb->s_scale),sizeof(float));    offset += sizeof(float);
-    memcpy(buffer + offset, &(qb->s_bias), sizeof(float));    offset += sizeof(float);
-    memcpy(buffer + offset, qb->sb,   12 * sizeof(uint8_t));  offset += sizeof(uint8_t) * 12;
-    memcpy(buffer + offset, qb->value,128* sizeof(uint8_t));  offset += sizeof(uint8_t) * 128;
-}
 
 uint8_t *pack_q4k_tensor(Q4k_Tensor *Q) {
-    const uint64_t bytes_per_block = 160;
-    uint64_t total_bytes = bytes_num_of_q4k_tensor(Q);
-    uint8_t *buffer = (uint8_t*)calloc(total_bytes, sizeof(uint8_t));
-    uint64_t offset = 0;
-    memcpy(buffer + offset, &(total_bytes),    sizeof(uint64_t)); offset += sizeof(uint64_t);
-    memcpy(buffer + offset, &(Q->header),      sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(buffer + offset, &(Q->ndim),        sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(buffer + offset, Q->shape,      6 * sizeof(uint32_t)); offset += sizeof(uint32_t) * 6;
-    memcpy(buffer + offset, &(Q->num_blocks),  sizeof(uint32_t)); offset += sizeof(uint32_t);
-    for (uint32_t i = 0; i < Q->num_blocks; i++) {
-        pack_q4k_block(Q->blocks + i, buffer + offset);
-        offset += bytes_per_block * sizeof(uint8_t);
-    }
-    return buffer;
-}
-
-void unpack_q4k_block(uint8_t *buffer, Q4k_Block *qb) {
-    uint64_t offset = 0;
-    memcpy(&(qb->header) , buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(&(qb->length) , buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(&(qb->meta)   , buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(&(qb->s_scale), buffer + offset, sizeof(float));    offset += sizeof(float);
-    memcpy(&(qb->s_bias) , buffer + offset, sizeof(float));    offset += sizeof(float);
-    memcpy(qb->sb        , buffer + offset, 12 * sizeof(uint8_t));  offset += sizeof(uint8_t) * 12;
-    memcpy(qb->value     , buffer + offset, 128* sizeof(uint8_t));  offset += sizeof(uint8_t) * 128;
+    return Q;
 }
 
 Q4k_Tensor *unpack_q4k_tensor(uint8_t *buffer, uint64_t *p_total_bytes) {
-    const uint64_t bytes_per_block = 160;
-    
-    uint32_t header = 0;
-    uint32_t ndim = 0;
-    uint32_t shape[6];
-    uint32_t num_blocks = 0;
-
-    uint64_t offset = 0;
-    memcpy(p_total_bytes, buffer + offset, sizeof(uint64_t)); offset += sizeof(uint64_t);
-    memcpy(&header,       buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(&ndim,         buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
-    memcpy(shape,         buffer + offset, 6 * sizeof(uint32_t)); offset += sizeof(uint32_t) * 6;
-    memcpy(&num_blocks,   buffer + offset, sizeof(uint32_t)); offset += sizeof(uint32_t);
-
-    Q4k_Tensor *Q = make_q4k_tensor(ndim, shape);
-
-    for (uint32_t i = 0; i < Q->num_blocks; i++) {
-        unpack_q4k_block(buffer + offset, Q->blocks + i);
-        offset += bytes_per_block * sizeof(uint8_t);
-    }
-    return Q;
+    *p_total_bytes = get_q4k_tensor_bytes(buffer);
+    return buffer;
 }
 
 
@@ -418,8 +361,8 @@ static inline float dot_two_blocks_q4k(const Q4k_Block * __restrict__ P, const Q
     const uint32_t group_len = 32;
     const uint32_t group_num = 8; // 256/32
 
-    assert(P->length == Q->length);
-    uint32_t len = P->length;
+    assert(get_q4k_block_length(P) == get_q4k_block_length(Q));
+    uint32_t len = get_q4k_block_length(P);
 
     // 反量化P块和Q块的各组的s和b
     float ps_f32[8]; float pb_f32[8];
@@ -447,8 +390,8 @@ static inline float dot_two_blocks_q4k(const Q4k_Block * __restrict__ P, const Q
         uint8_t p_nibbles[32];
         uint8_t q_nibbles[32];
 
-        const uint8_t *p_bytes = &P->value[g * 16]; // 16 bytes = 32 nibbles
-        const uint8_t *q_bytes = &Q->value[g * 16];
+        const uint8_t *p_bytes = &get_q4k_block_value_ptr(P)[g * 16]; // 16 bytes = 32 nibbles
+        const uint8_t *q_bytes = &get_q4k_block_value_ptr(Q)[g * 16];
 
         #pragma GCC unroll 8
         for (int i = 0; i < 16; i++) {
@@ -495,17 +438,17 @@ static inline float dot_two_blocks_q4k(const Q4k_Block * __restrict__ P, const Q
 void matmul_q4k(float *xout, Q4k_Tensor *x, Q4k_Tensor *w, uint32_t layer) {
     const uint32_t block_len = 256;
 
-    if (w->ndim != 2 && w->ndim != 3) {
+    if (get_q4k_tensor_ndim(w) != 2 && get_q4k_tensor_ndim(w) != 3) {
         assert(0);
         return;
     }
 
-    uint32_t wdim = w->ndim;
-    uint32_t l = (wdim == 3) ? w->shape[wdim-3] : 0;
-    uint32_t d = w->shape[wdim-2];
-    uint32_t n = w->shape[wdim-1];
+    uint32_t wdim = get_q4k_tensor_ndim(w);
+    uint32_t l = (wdim == 3) ? get_q4k_tensor_shape_ptr(w)[wdim-3] : 0;
+    uint32_t d = get_q4k_tensor_shape_ptr(w)[wdim-2];
+    uint32_t n = get_q4k_tensor_shape_ptr(w)[wdim-1];
 
-    assert(x->shape[0] == n);
+    assert(get_q4k_tensor_shape_ptr(x)[0] == n);
     if (wdim == 3) assert(layer < l);
     if (wdim == 2) layer = 0;
 
@@ -519,8 +462,8 @@ void matmul_q4k(float *xout, Q4k_Tensor *x, Q4k_Tensor *w, uint32_t layer) {
         uint32_t w_block_index = k * n_blocks_per_line;
         float line_sum = 0.0f;
         for (uint32_t i = 0; i < n_blocks_per_line; i++) {
-            Q4k_Block *w_block = w->blocks + w_block_index + i;
-            Q4k_Block *x_block = x->blocks + i;
+            Q4k_Block *w_block = get_q4k_tensor_block_ptr(w, w_block_index + i);
+            Q4k_Block *x_block = get_q4k_tensor_block_ptr(x, i);
             line_sum += dot_two_blocks_q4k(w_block, x_block);
         }
         xout[k - layer * d] = line_sum;
