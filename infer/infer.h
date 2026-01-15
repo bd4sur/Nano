@@ -51,10 +51,13 @@ extern "C" {
 
 #define LLM_RUNNING_IN_PREFILLING (11)
 #define LLM_RUNNING_IN_DECODING   (12)
-#define LLM_STOPPED_WITH_ERROR    (-1)
-#define LLM_STOPPED_NORMALLY      (20)
-#define LLM_STOPPED_IN_PREFILLING (21)
-#define LLM_STOPPED_IN_DECODING   (22)
+
+#define LLM_STOPPED_NORMALLY      (-10)
+#define LLM_STOPPED_IN_PREFILLING (-11)
+#define LLM_STOPPED_IN_DECODING   (-12)
+#define LLM_STOPPED_WITH_ERROR    (-20)
+
+#define IS_LLM_RUNNING(x) ((x) > 0)
 
 // ===============================================================================
 // 数据结构定义

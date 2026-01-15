@@ -64,7 +64,7 @@ typedef struct {
         .max_seq_len = (max_seq) \
     }
 
-// TODO 思考模式和非思考模式的参数不同
+
 static const Model_Config preset_model_configs[] = {
     MODEL_CONFIG_ENTRY(L"Nano-168M", MODEL_ROOT_DIR "/nano-168m-q80.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
     MODEL_CONFIG_ENTRY(L"Nano-56M", MODEL_ROOT_DIR "/nano-56m-q80.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
@@ -72,12 +72,19 @@ static const Model_Config preset_model_configs[] = {
     MODEL_CONFIG_ENTRY(L"Qwen3-0.6B", MODEL_ROOT_DIR "/qwen3-0b6-q80.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768),
     MODEL_CONFIG_ENTRY(L"Qwen3-1.7B", MODEL_ROOT_DIR "/qwen3-1b7-q80.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768),
     MODEL_CONFIG_ENTRY(L"Qwen3-4B-Inst", MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q80.bin", NULL, 1.0f, 0.7f, 0.8f, 20, 32768),
+    MODEL_CONFIG_ENTRY(L"Qwen3-4B-Think", MODEL_ROOT_DIR "/qwen3-4b-thinking-2507-q80.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768),
     MODEL_CONFIG_ENTRY(L"Nano-168M-Q4KS", MODEL_ROOT_DIR "/nano-168m-q4ks.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
     MODEL_CONFIG_ENTRY(L"Nano-56M-Q4KS", MODEL_ROOT_DIR "/nano-56m-q4ks.bin", NULL, 1.05f, 1.0f, 0.5f, 0, 512),
     MODEL_CONFIG_ENTRY(L"Qwen3-0.6B-Q4KS", MODEL_ROOT_DIR "/qwen3-0b6-q4ks.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768),
     MODEL_CONFIG_ENTRY(L"Qwen3-1.7B-Q4KS", MODEL_ROOT_DIR "/qwen3-1b7-q4ks.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768),
-    MODEL_CONFIG_ENTRY(L"Qwen3-4B-Inst-Q4KS", MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q4ks.bin", NULL, 1.0f, 0.7f, 0.8f, 20, 32768)
+    MODEL_CONFIG_ENTRY(L"Qwen3-4B-Inst-Q4KS", MODEL_ROOT_DIR "/qwen3-4b-instruct-2507-q4ks.bin", NULL, 1.0f, 0.7f, 0.8f, 20, 32768),
+    MODEL_CONFIG_ENTRY(L"Qwen3-4B-Think-Q4KS", MODEL_ROOT_DIR "/qwen3-4b-thinking-2507-q4ks.bin", NULL, 1.0f, 0.6f, 0.95f, 20, 32768)
 };
+
+// Qwen3思考模式和非思考模式的参数不同：分别是temperature和top-p
+static const float qwen3_infer_args_thinking[2] = {0.6f, 0.95f};
+static const float qwen3_infer_args_no_thinking[2] = {0.6f, 0.95f};
+
 
 static uint32_t g_tokens_count = 0;
 static float g_tps_of_last_session = 0.0f;
@@ -133,21 +140,32 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
 
     // 屏幕刷新节流
     if (global_state->timestamp - global_state->llm_refresh_timestamp > (1000 / global_state->llm_refresh_max_fps)) {
-
-        w_textarea_prefill->x = 0;
-        w_textarea_prefill->y = 0;
-        w_textarea_prefill->width = 128;
-        w_textarea_prefill->height = 24;
-
-        set_textarea(key_event, global_state, w_textarea_prefill, L"Reading...", 0, 0);
-    
-        // 临时关闭draw_textarea的整帧绘制，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
+        // 临时关闭draw_textarea的gfx_refresh，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
         global_state->is_full_refresh = 0;
 
         fb_soft_clear();
 
+        // 显示界面标题
+        for (int i = 0; i < 12; i++) {
+            fb_draw_line(0, i, 127, i, 1);
+        }
+        fb_draw_textline(L"Reading...", 0, 0, 0);
+
+        w_textarea_prefill->x = 0;
+        w_textarea_prefill->y = 17;
+        w_textarea_prefill->width = 128;
+        w_textarea_prefill->height = 26;
+
+        // 显示已经处理的输入prompt
+        set_textarea(key_event, global_state, w_textarea_prefill, session->output_text, -1, 1);
         draw_textarea(key_event, global_state, w_textarea_prefill);
 
+        // 进度百分比
+        wchar_t progress_str[30];
+        swprintf(progress_str, 30, L"%d/%d", session->pos, session->num_prompt_tokens);
+        fb_draw_textline(progress_str, 0, 48, 1);
+
+        // 进度条
         fb_draw_line(0, 60, 128, 60, 1);
         fb_draw_line(0, 63, 128, 63, 1);
         fb_draw_line(127, 60, 127, 63, 1);
@@ -804,6 +822,13 @@ int main() {
                     wcscpy(prompt, w_input_main->textarea.text);
                     if (global_state->is_thinking_enabled == 0) {
                         wcscat(prompt, L" /no_think");
+                        // TODO 采样参数应该是session的参数，而不是ctx的参数
+                        global_state->llm_ctx->sampler->temperature = qwen3_infer_args_no_thinking[0];
+                        global_state->llm_ctx->sampler->top_p = qwen3_infer_args_no_thinking[1];
+                    }
+                    else {
+                        global_state->llm_ctx->sampler->temperature = qwen3_infer_args_thinking[0];
+                        global_state->llm_ctx->sampler->top_p = qwen3_infer_args_thinking[1];
                     }
                 }
                 else {

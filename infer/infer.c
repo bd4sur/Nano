@@ -1196,7 +1196,21 @@ int32_t llm_session_step(Nano_Context *ctx, Nano_Session *session) {
 
         session->next_token = generate_next_token(ctx, session->output_ids, session->pos, session->is_prefilling);
 
-        if (session->is_prefilling == 0) {
+        // Pre-filling
+        if (session->is_prefilling == 1) {
+            if (ctx->llm->arch == LLM_ARCH_NANO) {
+                session->output_text = decode_nano(ctx->tokenizer, session->output_ids, session->pos);
+            }
+            else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
+                session->output_text = decode_bpe(ctx->tokenizer, session->output_ids, session->pos);
+            }
+            else {
+                printf("Error: unknown LLM arch.\n");
+                return LLM_STOPPED_WITH_ERROR;
+            }
+        }
+        // Decoding
+        else {
             session->output_ids[session->num_prompt_tokens + (session->output_count)++] = session->next_token;
             if (ctx->llm->arch == LLM_ARCH_NANO) {
                 session->output_text = decode_nano(ctx->tokenizer, session->output_ids + session->num_prompt_tokens, session->output_count);
