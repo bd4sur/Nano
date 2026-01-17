@@ -155,29 +155,45 @@ void fb_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t mode) 
 
 // x,y:圆心坐标
 // r:圆的半径
-void fb_draw_circle(uint8_t x, uint8_t y, uint8_t r)
-{
-    int a, b, num;
-    a = 0;
-    b = r;
-    while (2 * b * b >= r * r) {
-        fb_plot(x + a, y - b, 1);
-        fb_plot(x - a, y - b, 1);
-        fb_plot(x - a, y + b, 1);
-        fb_plot(x + a, y + b, 1);
+void fb_draw_circle(uint8_t cx, uint8_t cy, uint8_t r) {
+    if (r == 0) {
+        fb_plot(cx, cy, 1);
+        return;
+    }
 
-        fb_plot(x + b, y + a, 1);
-        fb_plot(x + b, y - a, 1);
-        fb_plot(x - b, y - a, 1);
-        fb_plot(x - b, y + a, 1);
+    int16_t x = 0;
+    int16_t y = r;
+    int16_t d = 3 - 2 * r;  // 更稳健的初始决策参数（Bresenham 形式）
 
-        a++;
-        num = (a * a + b * b) - r * r; // 计算画的点离圆心的距离
-        if (num > 0)
-        {
-            b--;
-            a--;
+    while (x <= y) {
+        // 定义8个对称点
+        int16_t points[8][2] = {
+            { cx + x, cy + y },
+            { cx + y, cy + x },
+            { cx - x, cy + y },
+            { cx - y, cy + x },
+            { cx + x, cy - y },
+            { cx + y, cy - x },
+            { cx - x, cy - y },
+            { cx - y, cy - x }
+        };
+
+        for (int i = 0; i < 8; i++) {
+            int16_t px = points[i][0];
+            int16_t py = points[i][1];
+            // 严格裁剪到屏幕范围
+            if (px >= 0 && px < FB_WIDTH && py >= 0 && py < FB_HEIGHT) {
+                fb_plot((uint8_t)px, (uint8_t)py, 1);
+            }
         }
+
+        if (d < 0) {
+            d = d + 4 * x + 6;
+        } else {
+            d = d + 4 * (x - y) + 10;
+            y--;
+        }
+        x++;
     }
 }
 
@@ -263,6 +279,113 @@ void fb_draw_textline(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
         fb_draw_line(x_pos, y_pos - 1, x_pos+font_width-1, y_pos - 1, 1 - (mode % 2));
         fb_draw_char(x_pos, y_pos, glyph, font_width, font_height, (mode % 2));
         x_pos += font_width;
+    }
+}
+
+
+void fb_draw_textline_mini(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
+    const uint8_t mini_glyph[42][7] = {
+        {3, 5, 0x1F, 0x11, 0x1F, 0x00, 0x00}, // 0
+        {3, 5, 0x12, 0x1F, 0x10, 0x00, 0x00}, // 1
+        {3, 5, 0x1D, 0x15, 0x17, 0x00, 0x00}, // 2
+        {3, 5, 0x15, 0x15, 0x1F, 0x00, 0x00}, // 3
+        {3, 5, 0x0F, 0x08, 0x1F, 0x00, 0x00}, // 4
+        {3, 5, 0x17, 0x15, 0x1D, 0x00, 0x00}, // 5
+        {3, 5, 0x1F, 0x15, 0x1D, 0x00, 0x00}, // 6
+        {3, 5, 0x01, 0x01, 0x1F, 0x00, 0x00}, // 7
+        {3, 5, 0x1F, 0x15, 0x1F, 0x00, 0x00}, // 8
+        {3, 5, 0x17, 0x15, 0x1F, 0x00, 0x00}, // 9
+
+        {3, 5, 0x1E, 0x05, 0x1E, 0x00, 0x00}, // A
+        {3, 5, 0x1F, 0x15, 0x0A, 0x00, 0x00}, // B
+        {3, 5, 0x0E, 0x11, 0x11, 0x00, 0x00}, // C
+        {3, 5, 0x1F, 0x11, 0x0E, 0x00, 0x00}, // D
+        {3, 5, 0x1F, 0x15, 0x11, 0x00, 0x00}, // E
+        {3, 5, 0x1F, 0x05, 0x11, 0x00, 0x00}, // F
+        {3, 5, 0x0E, 0x11, 0x1D, 0x00, 0x00}, // G
+        {3, 5, 0x1F, 0x04, 0x1F, 0x00, 0x00}, // H
+        {3, 5, 0x11, 0x1F, 0x11, 0x00, 0x00}, // I
+        {3, 5, 0x08, 0x10, 0x0F, 0x00, 0x00}, // J
+        {4, 5, 0x1F, 0x04, 0x0A, 0x11, 0x00}, // K
+        {3, 5, 0x1F, 0x10, 0x10, 0x00, 0x00}, // L
+        {5, 5, 0x1F, 0x02, 0x04, 0x02, 0x1F}, // M
+        {5, 5, 0x1F, 0x02, 0x04, 0x08, 0x1F}, // N
+        {3, 5, 0x0E, 0x11, 0x0E, 0x00, 0x00}, // O
+        {3, 5, 0x1F, 0x05, 0x02, 0x00, 0x00}, // P
+        {5, 5, 0x0E, 0x11, 0x15, 0x09, 0x16}, // Q
+        {3, 5, 0x1F, 0x05, 0x1A, 0x00, 0x00}, // R
+        {3, 5, 0x12, 0x15, 0x09, 0x00, 0x00}, // S
+        {3, 5, 0x01, 0x1F, 0x01, 0x00, 0x00}, // T
+        {3, 5, 0x1F, 0x10, 0x1F, 0x00, 0x00}, // U
+        {3, 5, 0x0F, 0x10, 0x0F, 0x00, 0x00}, // V
+        {5, 5, 0x0F, 0x10, 0x0C, 0x10, 0x0F}, // W
+        {3, 5, 0x1B, 0x04, 0x1B, 0x00, 0x00}, // X
+        {3, 5, 0x03, 0x0C, 0x03, 0x00, 0x00}, // Y
+        {3, 5, 0x19, 0x15, 0x13, 0x00, 0x00}, // Z
+
+        {3, 5, 0x00, 0x00, 0x00, 0x00, 0x00}, // 空格
+        {3, 5, 0x10, 0x00, 0x00, 0x00, 0x00}, // .
+        {3, 5, 0x04, 0x04, 0x04, 0x00, 0x00}, // -
+        {3, 5, 0x00, 0x0A, 0x00, 0x00, 0x00}, // :
+        {3, 5, 0x00, 0x0E, 0x11, 0x00, 0x00}, // (
+        {3, 5, 0x11, 0x0E, 0x00, 0x00, 0x00}  // )
+    };
+
+    uint32_t x_pos = x;
+    uint32_t y_pos = y;
+    for (uint32_t i = 0; i < wcslen(line); i++) {
+        wchar_t current_char = line[i];
+        uint8_t font_width = 3;
+        uint8_t font_height = 5;
+        uint8_t *glyph = NULL;
+        if (current_char >= L'0' && current_char <= L'9') {
+            glyph = (uint8_t *)mini_glyph[current_char - L'0'];
+        }
+        else if (current_char >= L'A' && current_char <= L'Z') {
+            glyph = (uint8_t *)mini_glyph[current_char - L'A' + 10];
+        }
+        else if (current_char == L' ') {
+            glyph = (uint8_t *)mini_glyph[36 + 0];
+        }
+        else if (current_char == L'.') {
+            glyph = (uint8_t *)mini_glyph[36 + 1];
+        }
+        else if (current_char == L'-') {
+            glyph = (uint8_t *)mini_glyph[36 + 2];
+        }
+        else if (current_char == L':') {
+            glyph = (uint8_t *)mini_glyph[36 + 3];
+        }
+        else if (current_char == L'(') {
+            glyph = (uint8_t *)mini_glyph[36 + 4];
+        }
+        else if (current_char == L')') {
+            glyph = (uint8_t *)mini_glyph[36 + 5];
+        }
+        else if (current_char == L'\n') {
+            x_pos = x;
+            y_pos += font_height + 1;
+            continue;
+        }
+        else {
+            // 未知字符，跳过
+            x_pos += font_width;
+            continue;
+        }
+        if (x_pos + font_width >= 128) {
+            break;
+        }
+        font_width = glyph[0];
+        font_height = glyph[1];
+        for (uint32_t i = 0; i < font_width; i++) {
+            uint8_t column_data = glyph[2 + i];
+            // printf("Column = %d\n", column_data);
+            for (uint32_t j = 0; j < font_height; j++) {
+                uint8_t m = ((column_data >> j) & 0x01) ? mode : (!mode);
+                fb_plot(x_pos + i, y_pos + j, m);
+            }
+        }
+        x_pos += (font_width + 1); // 字符间隔1像素
     }
 }
 

@@ -18,12 +18,12 @@ $(BIN_DIR):
 
 # Nano-Pod：带键盘和屏幕的电子鹦鹉笼
 pod: $(BIN_DIR)/nano_pod
-$(BIN_DIR)/nano_pod: main.c asr.c tts.c ups.c platform_linux.c display_ssd130x_linux.c keyboard_matrix16.c graphics.c ui.c utils.c prompt.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod: main.c asr.c tts.c ups.c platform_linux.c display_ssd130x_linux.c keyboard_matrix16.c ephemeris.c graphics.c ui.c utils.c prompt.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty
-$(BIN_DIR)/nano_tty: main.c platform_linux.c display_ncurses.c keyboard_ncurses.c graphics.c ui.c utils.c prompt.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_tty: main.c platform_linux.c display_ncurses.c keyboard_ncurses.c ephemeris.c graphics.c ui.c utils.c prompt.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_TTY $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lncursesw
 
 # Nano-CLI：适用于文字终端命令交互的终端程序

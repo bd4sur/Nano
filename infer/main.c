@@ -6,6 +6,7 @@
 #include "keyboard_hal.h"
 #include "infer.h"
 #include "prompt.h"
+#include "ephemeris.h"
 
 #include "platform.h"
 
@@ -34,6 +35,8 @@
 #define STATE_README          (25)
 #define STATE_BADAPPLE        (26)
 #define STATE_GAMEOFLIFE      (27)
+#define STATE_EPHEMERIS       (28)
+#define STATE_FLASHMEMO       (29)
 #define STATE_SHUTDOWN        (31)
 #define STATE_TTS_SETTING     (32)
 #define STATE_ASR_SETTING     (33)
@@ -257,13 +260,15 @@ int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state) {
 void init_main_menu() {
     wcscpy(w_menu_main->title, L"Nano-Pod");
     wcscpy(w_menu_main->items[0], L"电子鹦鹉");
-    wcscpy(w_menu_main->items[1], L"电子书");
-    wcscpy(w_menu_main->items[2], L"Bad Apple！");
-    wcscpy(w_menu_main->items[3], L"元胞自动机");
-    wcscpy(w_menu_main->items[4], L"设置");
-    wcscpy(w_menu_main->items[5], L"安全关机");
-    wcscpy(w_menu_main->items[6], L"本机自述");
-    w_menu_main->item_num = 7;
+    wcscpy(w_menu_main->items[1], L"文本阅读");
+    wcscpy(w_menu_main->items[2], L"闪念胶囊");
+    wcscpy(w_menu_main->items[3], L"赛博天球仪");
+    wcscpy(w_menu_main->items[4], L"Bad Apple！");
+    wcscpy(w_menu_main->items[5], L"元胞自动机");
+    wcscpy(w_menu_main->items[6], L"设置");
+    wcscpy(w_menu_main->items[7], L"安全关机");
+    wcscpy(w_menu_main->items[8], L"本机自述");
+    w_menu_main->item_num = 9;
     init_menu(key_event, global_state, w_menu_main);
 }
 
@@ -316,34 +321,44 @@ int32_t main_menu_item_action(int32_t item_index) {
         return STATE_MODEL_MENU;
     }
 
-    // 1.电子书
+    // 1.文本阅读
     else if (item_index == 1) {
         return STATE_EBOOK;
     }
 
-    // 2.BadApple
+    // 2.闪念胶囊
     else if (item_index == 2) {
+        return STATE_FLASHMEMO;
+    }
+
+    // 3.赛博天球仪
+    else if (item_index == 3) {
+        return STATE_EPHEMERIS;
+    }
+
+    // 4.BadApple
+    else if (item_index == 4) {
         return STATE_BADAPPLE;
     }
 
-    // 3.元胞自动机
-    else if (item_index == 3) {
+    // 5.元胞自动机
+    else if (item_index == 5) {
         return STATE_GAMEOFLIFE;
     }
 
-    // 3.设置
-    else if (item_index == 4) {
+    // 6.设置
+    else if (item_index == 6) {
         init_setting_menu();
         return STATE_SETTING_MENU;
     }
 
-    // 4.安全关机
-    else if (item_index == 5) {
+    // 7.安全关机
+    else if (item_index == 7) {
         return STATE_SHUTDOWN;
     }
 
-    // 5.本机自述
-    else if (item_index == 6) {
+    // 8.本机自述
+    else if (item_index == 8) {
         return STATE_README;
     }
     return STATE_MAIN_MENU;
@@ -1073,6 +1088,27 @@ int main() {
 
             break;
         }
+
+        /////////////////////////////////////////////
+        // 赛博天球仪：计算太阳和月亮位置
+        /////////////////////////////////////////////
+
+        case STATE_EPHEMERIS:
+
+            // 首次获得焦点：初始化
+            if (PREV_STATE != STATE) {
+                
+            }
+            PREV_STATE = STATE;
+
+            draw_ephemeris_screen(key_event, global_state);
+
+            // 按A键返回主菜单
+            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+                STATE = STATE_MAIN_MENU;
+            }
+
+            break;
 
         /////////////////////////////////////////////
         // Bad Apple! 动画
