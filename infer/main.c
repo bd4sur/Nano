@@ -1107,6 +1107,10 @@ int main() {
             if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
                 STATE = STATE_MAIN_MENU;
             }
+            // 按D键开始加速
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
+                ephemeris_toggle_speedup(key_event, global_state);
+            }
 
             break;
 
@@ -1156,7 +1160,7 @@ int main() {
                 STATE = STATE_MAIN_MENU;
             }
             // 按D键刷新
-            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
                 game_of_life_init(key_event, global_state);
             }
 

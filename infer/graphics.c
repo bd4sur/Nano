@@ -284,7 +284,7 @@ void fb_draw_textline(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
 
 
 void fb_draw_textline_mini(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
-    const uint8_t mini_glyph[42][7] = {
+    const uint8_t mini_glyph[43][7] = {
         {3, 5, 0x1F, 0x11, 0x1F, 0x00, 0x00}, // 0
         {3, 5, 0x12, 0x1F, 0x10, 0x00, 0x00}, // 1
         {3, 5, 0x1D, 0x15, 0x17, 0x00, 0x00}, // 2
@@ -328,7 +328,8 @@ void fb_draw_textline_mini(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) 
         {3, 5, 0x04, 0x04, 0x04, 0x00, 0x00}, // -
         {3, 5, 0x00, 0x0A, 0x00, 0x00, 0x00}, // :
         {3, 5, 0x00, 0x0E, 0x11, 0x00, 0x00}, // (
-        {3, 5, 0x11, 0x0E, 0x00, 0x00, 0x00}  // )
+        {3, 5, 0x11, 0x0E, 0x00, 0x00, 0x00}, // )
+        {5, 5, 0x13, 0x0B, 0x04, 0x1A, 0x19}  // %
     };
 
     uint32_t x_pos = x;
@@ -361,6 +362,9 @@ void fb_draw_textline_mini(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) 
         }
         else if (current_char == L')') {
             glyph = (uint8_t *)mini_glyph[36 + 5];
+        }
+        else if (current_char == L'%') {
+            glyph = (uint8_t *)mini_glyph[36 + 6];
         }
         else if (current_char == L'\n') {
             x_pos = x;

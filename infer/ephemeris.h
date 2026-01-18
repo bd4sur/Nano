@@ -29,6 +29,7 @@ void where_is_the_moon(
 );
 
 void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state);
+void ephemeris_toggle_speedup(Key_Event *key_event, Global_State *global_state);
 
 #ifdef __cplusplus
 }
