@@ -31,7 +31,11 @@ typedef struct Nano_Session Nano_Session;
 
 // NOTE 增删字段时，务必修改初始化部分
 typedef struct {
-    // 全局通用状态
+    // 全局状态
+    int32_t STATE; // 当前状态
+    int32_t PREV_STATE; // 上一状态
+
+    // 全局通用信息
     uint64_t timestamp; // 物理时间戳（ms）
     int32_t timer; // 主循环计数器：从0开始递增，不与物理时间关联
     int32_t focus;

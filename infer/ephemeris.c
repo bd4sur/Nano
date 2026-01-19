@@ -1,3 +1,11 @@
+/*
+ * 星历计算
+ *   计算太阳、月球的黄道和赤道坐标及其地平坐标、月相、日出日落时间，并根据这些数据推算农历日期。
+ *   基于 J. Meeus 的 Astronomical Algorithms (Second Edition) 所述算法，以及自行推导算法实现
+ *   (c) BD4SUR 2011-08 2011-09 2026-01
+ *
+ */
+
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
@@ -9,7 +17,80 @@
 
 // gcc ephemeris.c -o ephemeris
 
-#define PI (3.1415926565358979323846)
+#define PI (3.14159265358979323846)
+
+// ===============================================================================
+// 用于计算月球位置的参数 (AA Ch. 47)
+// ===============================================================================
+
+static const int32_t A_multiple_of_D[60] = {
+    0, 2, 2, 0, 0, 0, 2, 2, 2, 2, 0, 1, 0, 2, 0, 0, 4, 0, 4, 2, 2, 1, 1, 2, 2, 4, 2, 0, 2, 2,
+    1, 2, 0, 0, 2, 2, 2, 4, 0, 3, 2, 4, 0, 2, 2, 2, 4, 0, 4, 1, 2, 0, 1, 3, 4, 2, 0, 1, 2, 2
+};
+
+static const int32_t A_multiple_of_M[60] = {
+    0, 0, 0, 0, 1, 0, 0, -1, 0, -1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, -1, 0, 0, 0, 1, 0, -1,
+    0, -2, 1, 2, -2, 0, 0, -1, 0, 0, 1, -1, 2, 2, 1, -1, 0, 0, -1, 0, 1, 0, 1, 0, 0, -1, 2, 1, 0, 0
+};
+
+static const int32_t A_multiple_of_M2[60] = {
+    1, -1, 0, 2, 0, 0, -2, -1, 1, 0, -1, 0, 1, 0, 1, 1, -1, 3, -2, -1, 0, -1, 0, 1, 2, 0, -3, -2, -1, -2,
+    1, 0, 2, 0, -1, 1, 0, -1, 2, -1, 1, -2, -1, -1, -2, 0, 1, 4, 0, -2, 0, 2, 1, -2, -3, 2, 1, -1, 3, -1
+};
+
+static const int32_t A_multiple_of_F[60] = {
+    0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, -2, 2, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0,
+    0, 0, 0, 0, 0, -2, 2, 0, 2, 0, 0, 0, 0, 0, 0, -2, 0, 0, 0, 0, -2, -2, 0, 0, 0, 0, 0, 0, 0, -2
+};
+
+static const int32_t A_coeff_sine[60] = {
+    6288774, 1274027, 658314, 213618, -185116, -114332, 58793, 57066, 53322, 45758, -40923, -34720,
+    -30383, 15327, -12528, 10980, 10675, 10034, 8548, -7888, -6766, -5163, 4987, 4036, 3994, 3861,
+    3665, -2689, -2602, 2390, -2348, 2236, -2120, -2069, 2048, -1773, -1595, 1215, -1110, -892, -810,
+    759, -713, -700, 691, 596, 549, 537, 520, -487, -399, -381, 351, -340, 330, 327, -323, 299, 294
+};
+
+static const int32_t A_coeff_cosine[60] = {
+    -20905355, -3699111, -2955968, -569925, 48888, -3149, 246158, -152138, -170733, -204586, -129620,
+    108743, 104755, 10321, 0, 79661, -34782, -23210, -21636, 24208, 30824, -8379, -16675, -12831, -10445,
+    -11650, 14403, -7003, 0, 10056, 6322, -9884, 5751, 0, -4950, 4130, 0, -3958, 0, 3258, 2616, -1897,
+    -2117, 2354, 0, 0, -1423, -1117, -1571, -1739, 0, -4421, 0, 0, 0, 0, 1165, 0, 0, 8752
+};
+
+
+static const int32_t B_multiple_of_D[60] = {
+    0, 0, 0, 2, 2, 2, 2, 0, 2, 0, 2, 2, 2, 2, 2, 2, 2, 0, 4, 0, 0, 0, 1, 0, 0, 0, 1, 0, 4, 4,
+    0, 4, 2, 2, 2, 2, 0, 2, 2, 2, 2, 4, 2, 2, 0, 2, 1, 1, 0, 2, 1, 2, 0, 4, 4, 1, 4, 1, 4, 2
+};
+
+static const int32_t B_multiple_of_M[60] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 1, -1, -1, -1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0,
+    0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 1, 0, -1, -2, 0, 1, 1, 1, 1, 1, 0, -1, 1, 0, -1, 0, 0, 0, -1, -2
+};
+
+static const int32_t B_multiple_of_M2[60] = {
+    0, 1, 1, 0, -1, -1, 0, 2, 1, 2, 0, -2, 1, 0, -1, 0, -1, -1, -1, 0, 0, -1, 0, 1, 1, 0, 0, 3, 0, -1,
+    1, -2, 0, 2, 1, -2, 3, 2, -3, -1, 0, 0, 1, 0, 1, 1, 0, 0, -2, -1, 1, -2, 2, -2, -1, 1, 1, -1, 0, 0
+};
+
+static const int32_t B_multiple_of_F[60] = {
+    1, 1, -1, -1, 1, -1, 1, 1, -1, -1, -1, -1, 1, -1, 1, 1, -1, -1, -1, 1, 3, 1, 1, 1, -1, -1, -1, 1, -1, 1,
+    -3, 1, -3, -1, -1, 1, -1, 1, -1, 1, 1, 1, 1, -1, 3, -1, -1, 1, -1, -1, 1, -1, 1, -1, -1, -1, -1, -1, -1, 1
+};
+
+static const int32_t B_coeff_sine[60] = {
+    5128122, 280602, 277693, 173237, 55413, 46271, 32573, 17198, 9266, 8822, 8216, 4324, 4200, -3359, 2463, 2211,
+    2065, -1870, 1828, -1794, -1749, -1565, -1492, -1475, -1410, -1344, -1335, 1107, 1021, 833, 777, 671, 607, 596,
+    491, -451, 439, 422, 421, -366, -351, 331, 315, 302, -283, -229, 223, 223, -220, -220, -185, 181, -177, 176, 166,
+    -164, 132, -119, 115, 107
+};
+
+
+
+
+
+
+
 
 static inline double to_deg(double rad) {
     return rad * (180.0 / PI);
@@ -171,16 +252,15 @@ void print_ra_hms(double ra_deg) {
 }
 
 
-// 计算月球赤道坐标（RA, Dec）
-//   输入时间是儒略日，因天体在天球上的位置与观察者位置无关
-void calculate_lunar_equatorial_coordinates(double jd, double *RA, double *Dec) {
+// 计算月球黄道坐标（黄经lambda, 黄纬beta, 地心月心距离delta）
+void calculate_lunar_ecliptic_coordinates(double jd, double *lambda, double *beta, double *delta) {
     double H0 = jd - 2451545.0; // 自 J2000.0 起算的儒略日数
     double H = H0 / 36525.0; // 自 J2000.0 起算的儒略世纪数
-
+/*
     // 月球平黄经
     double I = 218.3164591 + 481267.88134236 * H - 0.0013268 * H*H + H*H*H / 538841.0 - H*H*H*H / 65194000.0;
-    double E = normalize_angle(I);
-    double T = (E <= 270.0) ? (270.0 - E) : (630.0 - E);
+    double lambda_moon = normalize_angle(I);
+    double T = (lambda_moon <= 270.0) ? (270.0 - lambda_moon) : (630.0 - lambda_moon);
 
     // 月球升交点黄经
     double J = 125.044555 - 1934.1361849 * H + 0.0020762 * H*H + H*H*H / 467410.0 - H*H*H*H / 60616000.0;
@@ -195,14 +275,87 @@ void calculate_lunar_equatorial_coordinates(double jd, double *RA, double *Dec) 
     double O = R * sin(r) * sin(T);
 
     // 月球黄纬
-    double F = to_deg(atan2(O, sqrt(M * M + N * N)));
+    double beta_moon = to_deg(atan2(O, sqrt(M * M + N * N)));
+*/
 
-    // 月球赤道坐标
-    double theta = 23.0 + (26.0 / 60.0); // 黄赤交角
-    F = to_rad(F); theta = to_rad(theta); E = to_rad(E);
-    double X = -R * cos(F) * cos(theta) * sin(E) + R * sin(F) * sin(theta);
-    double Y = -R * cos(F) * cos(E);
-    double Z =  R * cos(F) * sin(theta) * sin(E) + R * sin(F) * cos(theta);
+    double H2 = H*H;
+    double H3 = H2*H;
+    double H4 = H3*H;
+
+    // 月球平黄经
+    double LL = normalize_angle(
+        218.3164477 + 481267.88123421 * H - 0.0015786 * H2 + H3 / 538841.0 - H4 / 65194000.0);
+    // 月日平均距角
+    double D = normalize_angle(
+        297.8501921 + 445267.1114034 * H - 0.0018819 * H2 + H3 / 545868.0 - H4 / 113065000.0);
+    // 太阳平近点角
+    double M = normalize_angle(
+        357.5291092 + 35999.0502909 * H - 0.0001536 * H2 + H3 / 24490000.0);
+    // 月球平近点角
+    double M2 = normalize_angle(
+        134.9633964 + 477198.8675055 * H + 0.0087414 * H2 + H3 / 69699.0 - H4 / 14712000.0);
+    // 月球经度参数（月球到其升交点的平均角距离）
+    double F = normalize_angle(
+        93.2720950 + 483202.0175233 * H - 0.0036539 * H2 - H3 / 3526000.0 + H4 / 863310000.0);
+    // 三个修正系数
+    double A1 = normalize_angle(119.75 + 131.849 * H);
+    double A2 = normalize_angle(53.09 + 479264.290 * H);
+    double A3 = normalize_angle(313.45 + 481266.484 * H);
+    // 与地球公转轨道离心率相关的修正项
+    double E = 1 - 0.002516 * H - 0.0000074 * H2;
+    double E2 = E*E;
+
+    // 计算修正项Σl、Σr、Σb
+    double S_l = 0.0;
+    double S_r = 0.0;
+    double S_b = 0.0;
+    for (int32_t i = 0; i < 60; i++) {
+        double sc = A_coeff_sine[i];
+        double cc = A_coeff_cosine[i];
+        double m_D  = A_multiple_of_D[i];
+        double m_M  = A_multiple_of_M[i];
+        double m_M2 = A_multiple_of_M2[i];
+        double m_F  = A_multiple_of_F[i];
+        double e = (m_M == 2 || m_M == -2) ? E2 : ((m_M == 1 || m_M == -1) ? E : 1);
+        S_l += sc * e * sin(m_D * to_rad(D) + m_M * to_rad(M) + m_M2 * to_rad(M2) + m_F * to_rad(F));
+        S_r += cc * e * sin(m_D * to_rad(D) + m_M * to_rad(M) + m_M2 * to_rad(M2) + m_F * to_rad(F));
+    }
+    for (int32_t i = 0; i < 60; i++) {
+        double sc = B_coeff_sine[i];
+        double m_D  = B_multiple_of_D[i];
+        double m_M  = B_multiple_of_M[i];
+        double m_M2 = B_multiple_of_M2[i];
+        double m_F  = B_multiple_of_F[i];
+        double e = (m_M == 2 || m_M == -2) ? E2 : ((m_M == 1 || m_M == -1) ? E : 1);
+        S_b += sc * e * sin(m_D * to_rad(D) + m_M * to_rad(M) + m_M2 * to_rad(M2) + m_F * to_rad(F));
+    }
+    S_l += (3958.0 * sin(to_rad(A1)) + 1962.0 * sin(to_rad(LL - F)) + 318.0 * sin(to_rad(A2)));
+    S_b += (-2235.0 * sin(to_rad(LL)) + 382.0 * sin(to_rad(A3)) + 175.0 * sin(to_rad(A1 - F)) + 
+            175.0 * sin(to_rad(A1 + F)) + 127.0 * sin(to_rad(LL - M2)) - 115.0 * sin(to_rad(LL + M2)));
+
+    *lambda = LL + S_l / 1000000.0;
+    *beta = S_b / 1000000.0;
+    *delta = 385000.56 + S_r / 1000.0;
+
+}
+
+
+// 计算月球赤道坐标（RA, Dec）
+void calculate_lunar_equatorial_coordinates(double jd, double *RA, double *Dec) {
+
+    double lambda_moon = 0.0;
+    double beta_moon = 0.0;
+    double R_moon = 0.0;
+
+    // 计算黄道坐标
+    calculate_lunar_ecliptic_coordinates(jd, &lambda_moon, &beta_moon, &R_moon);
+
+    // 计算赤道坐标
+    double eps = 23.0 + (26.0 / 60.0); // 黄赤交角
+    beta_moon = to_rad(beta_moon); eps = to_rad(eps); lambda_moon = to_rad(lambda_moon);
+    double X = -R_moon * cos(beta_moon) * cos(eps) * sin(lambda_moon) + R_moon * sin(beta_moon) * sin(eps);
+    double Y = -R_moon * cos(beta_moon) * cos(lambda_moon);
+    double Z =  R_moon * cos(beta_moon) * sin(eps) * sin(lambda_moon) + R_moon * sin(beta_moon) * cos(eps);
 
     // 月球RA
     double ra_deg = to_deg(atan2(Y, X));
@@ -218,9 +371,8 @@ void calculate_lunar_equatorial_coordinates(double jd, double *RA, double *Dec) 
 }
 
 
-// 计算太阳赤道坐标（RA, Dec）
-//   输入时间是儒略日，因天体在天球上的位置与观察者位置无关
-void calculate_solar_equatorial_coordinates(double jd, double *RA, double *Dec) {
+// 计算太阳黄道坐标（黄经lambda, 黄纬beta, 地心月心距离delta）
+void calculate_solar_ecliptic_coordinates(double jd, double *lambda, double *beta, double *delta) {
     double H0 = jd - 2451545.0; // 自 J2000.0 起算的儒略日数
     double H = H0 / 36525.0; // 自 J2000.0 起算的儒略世纪数
 
@@ -240,14 +392,32 @@ void calculate_solar_equatorial_coordinates(double jd, double *RA, double *Dec) 
     // 真黄经（无其余修正）
     double U = normalize_angle(U1 + C);
 
+    *lambda = U;
+    *beta = 0.0;
+    *delta = 1.0;
+}
+
+// 计算太阳赤道坐标（RA, Dec）
+//   输入时间是儒略日，因天体在天球上的位置与观察者位置无关
+void calculate_solar_equatorial_coordinates(double jd, double *RA, double *Dec) {
+
+    double lambda_sun = 0.0;
+    double beta_sun = 0.0;
+    double R_sun = 1.0;
+
+    // 计算黄道坐标（仅用到黄经）
+    calculate_solar_ecliptic_coordinates(jd, &lambda_sun, &beta_sun, &R_sun);
+    (void)beta_sun;
+    (void)R_sun;
+
     // 太阳的赤道坐标
-    double theta = 23.0 + (26.0 / 60.0); // 黄赤交角
-    double M = -cos(to_rad(theta)) * sin(to_rad(U));
-    double N = -cos(to_rad(U));
-    double O = sin(to_rad(theta)) * sin(to_rad(U));
+    double eps = 23.0 + (26.0 / 60.0); // 黄赤交角
+    double M = -cos(to_rad(eps)) * sin(to_rad(lambda_sun));
+    double N = -cos(to_rad(lambda_sun));
+    double O = sin(to_rad(eps)) * sin(to_rad(lambda_sun));
 
     // 太阳的赤经和赤纬
-    if (U >= 0.0 && U < 180.0) {
+    if (lambda_sun >= 0.0 && lambda_sun < 180.0) {
         *RA = 90.0 - to_deg(asin(-N / sqrt(M*M + N*N)));
     }
     else {
@@ -255,6 +425,9 @@ void calculate_solar_equatorial_coordinates(double jd, double *RA, double *Dec) 
     }
     *Dec = to_deg(atan2(O, sqrt(M*M + N*N)));
 }
+
+
+
 
 // 带符号月相：-1.0 ~ +1.0
 // 假设输入 RA 和 Dec 单位为弧度

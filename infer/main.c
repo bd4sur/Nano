@@ -86,7 +86,7 @@ static const Model_Config preset_model_configs[] = {
 
 // Qwen3思考模式和非思考模式的参数不同：分别是temperature和top-p
 static const float qwen3_infer_args_thinking[2] = {0.6f, 0.95f};
-static const float qwen3_infer_args_no_thinking[2] = {0.6f, 0.95f};
+static const float qwen3_infer_args_no_thinking[2] = {0.7f, 0.8f};
 
 
 static uint32_t g_tokens_count = 0;
@@ -116,9 +116,6 @@ Widget_Menu_State      *w_menu_asr_setting = {0};
 Widget_Menu_State      *w_menu_tts_setting = {0};
 
 
-// 全局状态标志
-int32_t STATE = STATE_SPLASH_SCREEN;
-int32_t PREV_STATE = STATE_DEFAULT;
 
 
 int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
@@ -542,6 +539,9 @@ int main() {
     w_menu_asr_setting = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
     w_menu_tts_setting = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
 
+
+    global_state->STATE = STATE_SPLASH_SCREEN;
+    global_state->PREV_STATE = STATE_DEFAULT;
     global_state->is_ctrl_enabled = 0;
     global_state->llm_status = LLM_STOPPED_NORMALLY;
     global_state->llm_model_name = NULL;
@@ -668,7 +668,7 @@ int main() {
 
 
 
-        switch(STATE) {
+        switch(global_state->STATE) {
 
         /////////////////////////////////////////////
         // 初始状态：欢迎屏幕。按任意键进入主菜单
@@ -677,10 +677,10 @@ int main() {
         case STATE_SPLASH_SCREEN:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
 
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
             // 节流
             if (global_state->timer % 10 == 0) {
@@ -689,7 +689,7 @@ int main() {
 
             // 按下任何键，不论长短按，进入主菜单
             if (key_event->key_edge < 0 && key_event->key_code != KEYCODE_NUM_IDLE) {
-                STATE = STATE_MAIN_MENU;
+                global_state->STATE = STATE_MAIN_MENU;
             }
 
             break;
@@ -701,12 +701,12 @@ int main() {
         case STATE_MAIN_MENU:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 init_main_menu();
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
-            STATE = menu_event_handler(key_event, global_state, w_menu_main, main_menu_item_action, STATE_SPLASH_SCREEN, STATE_MAIN_MENU);
+            global_state->STATE = menu_event_handler(key_event, global_state, w_menu_main, main_menu_item_action, STATE_SPLASH_SCREEN, STATE_MAIN_MENU);
 
             break;
 
@@ -717,7 +717,7 @@ int main() {
         case STATE_EBOOK:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
 #ifdef TTS_ENABLED
                 reset_tts_split_status();
 #endif
@@ -731,7 +731,7 @@ int main() {
                 }
                 draw_textarea(key_event, global_state, w_textarea_main);
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
 #ifdef TTS_ENABLED
             // TODO 应逐句发送请求，不要一次性请求
@@ -748,7 +748,7 @@ int main() {
             }
 #endif
 
-            STATE = textarea_event_handler(key_event, global_state, w_textarea_main, STATE_MAIN_MENU, STATE_EBOOK);
+            global_state->STATE = textarea_event_handler(key_event, global_state, w_textarea_main, STATE_MAIN_MENU, STATE_EBOOK);
 
             break;
 
@@ -759,20 +759,20 @@ int main() {
         case STATE_LLM_INPUT:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 refresh_input(key_event, global_state, w_input_main);
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
 #ifdef ASR_ENABLED
             // 长按D键：开始PTT
             if (key_event->key_edge == -2 && key_event->key_code == KEYCODE_NUM_D) {
-                STATE = STATE_ASR_RUNNING;
+                global_state->STATE = STATE_ASR_RUNNING;
                 break;
             }
 #endif
 
-            STATE = input_event_handler(key_event, global_state, w_input_main, STATE_MODEL_MENU, STATE_LLM_INPUT, STATE_LLM_ON_INFER);
+            global_state->STATE = input_event_handler(key_event, global_state, w_input_main, STATE_MODEL_MENU, STATE_LLM_INPUT, STATE_LLM_ON_INFER);
 
             break;
 
@@ -783,12 +783,12 @@ int main() {
         case STATE_MODEL_MENU:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 refresh_menu(key_event, global_state, w_menu_model);
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
-            STATE = menu_event_handler(key_event, global_state, w_menu_model, model_menu_item_action, STATE_MAIN_MENU, STATE_MODEL_MENU);
+            global_state->STATE = menu_event_handler(key_event, global_state, w_menu_model, model_menu_item_action, STATE_MAIN_MENU, STATE_MODEL_MENU);
 
             break;
 
@@ -800,12 +800,12 @@ int main() {
         case STATE_SETTING_MENU:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 refresh_menu(key_event, global_state, w_menu_setting);
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
-            STATE = menu_event_handler(key_event, global_state, w_menu_setting, setting_menu_item_action, STATE_MAIN_MENU, STATE_SETTING_MENU);
+            global_state->STATE = menu_event_handler(key_event, global_state, w_menu_setting, setting_menu_item_action, STATE_MAIN_MENU, STATE_SETTING_MENU);
 
             break;
 
@@ -818,7 +818,7 @@ int main() {
         case STATE_LLM_ON_INFER:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 wchar_t *prompt = (wchar_t*)calloc_dev(global_state->llm_max_seq_len + 1, sizeof(wchar_t));
 
                 // 如果输入为空，则随机选用一个预置prompt
@@ -847,14 +847,14 @@ int main() {
                     }
                 }
                 else {
-                    STATE = STATE_SPLASH_SCREEN;
+                    global_state->STATE = STATE_SPLASH_SCREEN;
                     break;
                 }
 
                 // 初始化对话session
                 global_state->llm_session = llm_session_init(global_state->llm_ctx, prompt, global_state->llm_max_seq_len, global_state->is_thinking_enabled);
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
             // 事件循环主体：即同步版本的while(1)的循环体
 
@@ -865,10 +865,10 @@ int main() {
                 // 外部被动中止
                 if (global_state->llm_status == LLM_STOPPED_IN_PREFILLING) {
                     llm_session_free(global_state->llm_session);
-                    STATE = STATE_LLM_AFTER_INFER;
+                    global_state->STATE = STATE_LLM_AFTER_INFER;
                 }
                 else {
-                    STATE = STATE_LLM_ON_INFER;
+                    global_state->STATE = STATE_LLM_ON_INFER;
                 }
             }
             else if (global_state->llm_status == LLM_RUNNING_IN_DECODING) {
@@ -881,21 +881,21 @@ int main() {
                     }
 #endif
                     llm_session_free(global_state->llm_session);
-                    STATE = STATE_LLM_AFTER_INFER;
+                    global_state->STATE = STATE_LLM_AFTER_INFER;
                 }
                 else {
-                    STATE = STATE_LLM_ON_INFER;
+                    global_state->STATE = STATE_LLM_ON_INFER;
                 }
             }
             else if (global_state->llm_status == LLM_STOPPED_NORMALLY) {
                 global_state->llm_status = on_llm_finished(key_event, global_state);
                 llm_session_free(global_state->llm_session);
-                STATE = STATE_LLM_AFTER_INFER;
+                global_state->STATE = STATE_LLM_AFTER_INFER;
             }
             else {
                 global_state->llm_status = on_llm_finished(key_event, global_state);
                 llm_session_free(global_state->llm_session);
-                STATE = STATE_LLM_AFTER_INFER;
+                global_state->STATE = STATE_LLM_AFTER_INFER;
             }
 
             break;
@@ -908,7 +908,7 @@ int main() {
         case STATE_LLM_AFTER_INFER:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 // 计算提示语+生成内容的行数
                 wchar_t *prompt_and_output = (wchar_t *)calloc_dev(UI_STR_BUF_MAX_LENGTH * 2, sizeof(wchar_t));
                 wcscat(prompt_and_output, L"Homo:\n");
@@ -938,11 +938,11 @@ int main() {
                 set_textarea(key_event, global_state, w_textarea_main, g_llm_output_of_last_session, -1, 1);
                 draw_textarea(key_event, global_state, w_textarea_main);
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
             // 短按D键：重新推理。推理完成后，并不清除输入缓冲区，因此再次按D键会重新推理。
             if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
-                STATE = STATE_LLM_ON_INFER;
+                global_state->STATE = STATE_LLM_ON_INFER;
             }
             else {
                 // 短按A键：停止TTS
@@ -953,7 +953,7 @@ int main() {
                     }
 #endif
                 }
-                STATE = textarea_event_handler(key_event, global_state, w_textarea_main, STATE_LLM_INPUT, STATE_LLM_AFTER_INFER);
+                global_state->STATE = textarea_event_handler(key_event, global_state, w_textarea_main, STATE_LLM_INPUT, STATE_LLM_AFTER_INFER);
             }
 
             break;
@@ -965,7 +965,7 @@ int main() {
         case STATE_ASR_RUNNING:
 #ifdef ASR_ENABLED
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 // 设置PTT状态为按下（>0）
                 if (set_ptt_status(66) < 0) break;
 
@@ -983,7 +983,7 @@ int main() {
                 global_state->is_recording = 1;
                 global_state->asr_start_timestamp = global_state->timestamp;
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
             // 实时显示ASR结果
             if (global_state->is_recording == 1) {
@@ -1036,11 +1036,11 @@ int main() {
 
                 // ASR后立刻提交到LLM？
                 if (global_state->is_auto_submit_after_asr) {
-                    STATE = STATE_LLM_ON_INFER;
+                    global_state->STATE = STATE_LLM_ON_INFER;
                 }
                 else {
                     w_input_main->current_page = 0;
-                    STATE = STATE_LLM_INPUT;
+                    global_state->STATE = STATE_LLM_INPUT;
                 }
 
             }
@@ -1049,7 +1049,7 @@ int main() {
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_A) {
                 // 刷新文本输入框
                 init_input(key_event, global_state, w_input_main);
-                STATE = STATE_LLM_INPUT;
+                global_state->STATE = STATE_LLM_INPUT;
             }
 #endif
             break;
@@ -1061,10 +1061,10 @@ int main() {
         case STATE_README: {
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
 
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
             wchar_t readme_buf[128] = L"Nano-Pod v" NANO_VERSION "\n电子鹦鹉·端上大模型\n(c) 2025-2026 BD4SUR\n\n";
             wchar_t status_buf[30];
@@ -1083,7 +1083,7 @@ int main() {
 
             // 按A键返回主菜单
             if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
-                STATE = STATE_MAIN_MENU;
+                global_state->STATE = STATE_MAIN_MENU;
             }
 
             break;
@@ -1096,16 +1096,16 @@ int main() {
         case STATE_EPHEMERIS:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
             draw_ephemeris_screen(key_event, global_state);
 
             // 按A键返回主菜单
             if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
-                STATE = STATE_MAIN_MENU;
+                global_state->STATE = STATE_MAIN_MENU;
             }
             // 按D键开始加速
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
@@ -1121,11 +1121,11 @@ int main() {
         case STATE_BADAPPLE:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 global_state->ba_begin_timestamp = global_state->timestamp;
                 global_state->ba_frame_count = 0;
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
 #ifdef BADAPPLE_ENABLED
             play_bad_apple(key_event, global_state);
@@ -1136,7 +1136,7 @@ int main() {
 
             // 按A键返回主菜单
             if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
-                STATE = STATE_MAIN_MENU;
+                global_state->STATE = STATE_MAIN_MENU;
             }
 
             break;
@@ -1148,16 +1148,16 @@ int main() {
         case STATE_GAMEOFLIFE:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 game_of_life_init(key_event, global_state);
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
             game_of_life_step(key_event, global_state);
 
             // 按A键返回主菜单
             if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
-                STATE = STATE_MAIN_MENU;
+                global_state->STATE = STATE_MAIN_MENU;
             }
             // 按D键刷新
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
@@ -1173,11 +1173,11 @@ int main() {
         case STATE_SHUTDOWN:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 set_textarea(key_event, global_state, w_textarea_main, L"确定关机？\n\n·长按D键: 关机\n·短按A键: 返回", 0, 0);
                 draw_textarea(key_event, global_state, w_textarea_main);
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
             // 长按D键确认关机
             if (key_event->key_edge == -2 && key_event->key_code == KEYCODE_NUM_D) {
@@ -1194,13 +1194,13 @@ int main() {
 
                     sleep_in_ms(1000);
 
-                    STATE = STATE_MAIN_MENU;
+                    global_state->STATE = STATE_MAIN_MENU;
                 }
             }
 
             // 长短按A键取消关机，返回主菜单
             else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
-                STATE = STATE_MAIN_MENU;
+                global_state->STATE = STATE_MAIN_MENU;
             }
 
             break;
@@ -1213,12 +1213,12 @@ int main() {
         case STATE_TTS_SETTING:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 refresh_menu(key_event, global_state, w_menu_tts_setting);
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
-            STATE = menu_event_handler(key_event, global_state, w_menu_tts_setting, tts_setting_menu_item_action, STATE_SETTING_MENU, STATE_TTS_SETTING);
+            global_state->STATE = menu_event_handler(key_event, global_state, w_menu_tts_setting, tts_setting_menu_item_action, STATE_SETTING_MENU, STATE_TTS_SETTING);
 
             break;
 
@@ -1230,12 +1230,12 @@ int main() {
         case STATE_ASR_SETTING:
 
             // 首次获得焦点：初始化
-            if (PREV_STATE != STATE) {
+            if (global_state->PREV_STATE != global_state->STATE) {
                 refresh_menu(key_event, global_state, w_menu_asr_setting);
             }
-            PREV_STATE = STATE;
+            global_state->PREV_STATE = global_state->STATE;
 
-            STATE = menu_event_handler(key_event, global_state, w_menu_asr_setting, asr_setting_menu_item_action, STATE_SETTING_MENU, STATE_ASR_SETTING);
+            global_state->STATE = menu_event_handler(key_event, global_state, w_menu_asr_setting, asr_setting_menu_item_action, STATE_SETTING_MENU, STATE_ASR_SETTING);
 
             break;
 
