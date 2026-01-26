@@ -550,7 +550,7 @@ void draw_sun(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     uint8_t b = 0;
     // 接近地平线：深红到橙
     if (sun_altitude_deg < 5.0f) {
-        float t = MIN(1.0f, sun_altitude_deg / 5.0f);
+        float t = MIN(1.0f, MAX(0.0f, sun_altitude_deg) / 5.0f);
         r = 255;
         g = (uint8_t)roundf(160.0f * t);
         b = (uint8_t)roundf(40.0f * t);
