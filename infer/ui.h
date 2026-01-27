@@ -184,6 +184,13 @@ void render_scroll_bar(int32_t line_num, int32_t current_line, int32_t view_line
 void game_of_life_init(Key_Event *key_event, Global_State *global_state);
 void game_of_life_step(Key_Event *key_event, Global_State *global_state);
 
+// ===============================================================================
+// 天象仪
+// ===============================================================================
+
+void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state);
+void ephemeris_toggle_speedup(Key_Event *key_event, Global_State *global_state);
+
 
 #ifdef __cplusplus
 }

@@ -11,6 +11,9 @@
     #include "badapple.h"
 #endif
 
+#include "ephemeris.h"
+
+
 #define IME_HANZI_NUM 7081
 
 // 查询方式：给定按键序列对应的整数，例如“33”，从KEYS_LIST中查出全部出现位置的index，在UTF32_LIST中对应index位置的数值，即为候选字的utf32
@@ -1273,5 +1276,143 @@ void game_of_life_step(Key_Event *key_event, Global_State *global_state) {
     }
     gfx_refresh();
     gol_field_page = 1 - gol_field_page;
+}
+
+
+
+// ===============================================================================
+// 天象仪
+// ===============================================================================
+
+
+static uint64_t ephemeris_refersh_timestamp = 0;
+static uint64_t ephemeris_first_call_timestamp = 0;
+static uint32_t last_day = 0;
+static uint32_t sunrise_time[2] = {0, 0}; // hour, minute
+static uint32_t sunset_time[2] = {0, 0}; // hour, minute
+static int32_t is_speed_up = 0;
+static uint64_t start_timestamp = 0;
+
+void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
+    const double longitude = 119.0; // 东经
+    const double latitude = 32.0;   // 北纬
+    const double timezone = +8.0;   // 东八区
+
+    // 节流：不大于50fps
+    if (global_state->timestamp - ephemeris_refersh_timestamp < 20) {
+        return;
+    }
+    ephemeris_refersh_timestamp = global_state->timestamp;
+
+    fb_soft_clear();
+
+    fb_draw_circle(64, 32, 30);
+    fb_draw_circle(64, 32, 20);
+    fb_draw_circle(64, 32, 10);
+    fb_draw_line(32, 32, 96, 32, 1);
+    fb_draw_line(64, 0, 64, 64, 1);
+
+    // 方位文字和周围的边框
+    fb_draw_textline_mini(L"N", 62, 0, 1);  fb_plot(61, 2, 0); fb_plot(67, 2, 0); fb_plot(64, 5, 0);
+    fb_draw_textline_mini(L"S", 63, 59, 1); fb_plot(62, 62, 0); fb_plot(66, 62, 0); fb_plot(64, 58, 0);
+    fb_draw_textline_mini(L"W", 32, 30, 1); fb_plot(34, 29, 0); fb_plot(37, 32, 0); fb_plot(34, 35, 0);
+    fb_draw_textline_mini(L"E", 93, 30, 1); fb_plot(92, 32, 0); fb_plot(96, 32, 0); fb_plot(94, 29, 0); fb_plot(94, 35, 0);
+
+    fb_draw_line(0, 43, 30, 43, 1);
+
+    time_t ts = 0;
+    if (is_speed_up) {
+        start_timestamp += 600000;
+        ts = (time_t)start_timestamp / 1000;
+    }
+    else {
+        ts = (time_t)global_state->timestamp / 1000;
+    }
+    struct tm *timeinfo = localtime(&ts); // 转换为本地时间
+    
+    int32_t second = timeinfo->tm_sec;
+    int32_t minute = timeinfo->tm_min;
+    int32_t hour = timeinfo->tm_hour;
+    int32_t day = timeinfo->tm_mday;
+    int32_t month = timeinfo->tm_mon + 1;
+    int32_t year = timeinfo->tm_year + 1900;
+
+
+    wchar_t timestr[30];
+    swprintf(timestr, 30, L"%04d-%02d-%02d\n%02d:%02d:%02d", year, month, day, hour, minute, second);
+    fb_draw_textline_mini(timestr, 0, 0, 1);
+
+
+    double altitude_moon = 0.0;
+    double azimuth_moon = 0.0;
+
+    where_is_the_moon(year, month, day, hour, minute, second, timezone, longitude, latitude, &azimuth_moon, &altitude_moon);
+    double phase = moon_phase(year, month, day, hour, minute, second, timezone);
+
+    wchar_t coordstr_moon[30];
+    swprintf(coordstr_moon, 30, L"MOON\nP:%d%%\nA:%.1f\nE:%.1f", (int32_t)(phase * 100.0), azimuth_moon, altitude_moon);
+    fb_draw_textline_mini(coordstr_moon, 0, 18, 1);
+
+    double x_moon = 64 + (90.0 - altitude_moon) * 32.0 / 90.0 * sin(azimuth_moon / 180.0 * M_PI);
+    double y_moon = 32 - (90.0 - altitude_moon) * 32.0 / 90.0 * cos(azimuth_moon / 180.0 * M_PI);
+
+    fb_plot((int)x_moon - 1, (int)y_moon - 1, 1);
+    fb_plot((int)x_moon - 1, (int)y_moon - 0, 1);
+    fb_plot((int)x_moon - 1, (int)y_moon + 1, 1);
+    fb_plot((int)x_moon - 0, (int)y_moon - 1, 1);
+    fb_plot((int)x_moon - 0, (int)y_moon - 0, 1);
+    fb_plot((int)x_moon - 0, (int)y_moon + 1, 1);
+    fb_plot((int)x_moon + 1, (int)y_moon - 1, 1);
+    fb_plot((int)x_moon + 1, (int)y_moon - 0, 1);
+    fb_plot((int)x_moon + 1, (int)y_moon + 1, 1);
+
+
+
+    double altitude_sun = 0.0;
+    double azimuth_sun = 0.0;
+
+    where_is_the_sun(year, month, day, hour, minute, second, +8.0, longitude, latitude, &azimuth_sun, &altitude_sun);
+
+    wchar_t coordstr_sun[30];
+    swprintf(coordstr_sun, 30, L"SUN\nA:%.1f\nE:%.1f", azimuth_sun, altitude_sun);
+    fb_draw_textline_mini(coordstr_sun, 0, 46, 1);
+
+    double x_sun = 64 + (90.0 - altitude_sun) * 32.0 / 90.0 * sin(azimuth_sun / 180.0 * M_PI);
+    double y_sun = 32 - (90.0 - altitude_sun) * 32.0 / 90.0 * cos(azimuth_sun / 180.0 * M_PI);
+
+    fb_draw_circle((int)x_sun, (int)y_sun, 2);
+
+
+    // 二分搜索日出日落时间
+    if (ephemeris_first_call_timestamp == 0 || last_day != day) { // 只在首次调用和当天日期变化时计算
+        int32_t sunrise_min = find_sunrise(year, month, day, timezone, longitude, latitude);
+        if (sunrise_min != -1) {
+            sunrise_time[0] = sunrise_min / 60;
+            sunrise_time[1] = sunrise_min % 60;
+        }
+        int32_t sunset_min = find_sunset(year, month, day, timezone, longitude, latitude);
+        if (sunset_min != -1) {
+            sunset_time[0] = sunset_min / 60;
+            sunset_time[1] = sunset_min % 60;
+        }
+    }
+    wchar_t risefall_time[60];
+    swprintf(risefall_time, 60, L"R:%02d:%02d\nS:%02d:%02d", sunrise_time[0], sunrise_time[1], sunset_time[0], sunset_time[1]);
+    fb_draw_textline_mini(risefall_time, 98, 0, 1);
+
+
+    fb_draw_textline_mini(L"    BD4SUR\n2011-09-29", 86, 53, 1);
+
+    gfx_refresh();
+
+    if (ephemeris_first_call_timestamp == 0) {
+        ephemeris_first_call_timestamp = global_state->timestamp;
+    }
+    last_day = day;
+}
+
+void ephemeris_toggle_speedup(Key_Event *key_event, Global_State *global_state) {
+    is_speed_up = !is_speed_up;
+    start_timestamp = global_state->timestamp;
 }
 

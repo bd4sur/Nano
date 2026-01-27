@@ -5,8 +5,36 @@
 extern "C" {
 #endif
 
-#include "utils.h"
-#include "ui.h"
+// 计算儒略日（输入地方标准时间）
+double julian_day(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, double timezone_offset);
+
+// 计算月球黄道坐标（黄经lambda, 黄纬beta, 地心月心距离delta）
+void calculate_lunar_ecliptic_coordinates(double jd, double *lambda, double *beta, double *delta);
+
+// 计算月球赤道坐标（RA, Dec）
+void calculate_lunar_equatorial_coordinates(double jd, double *RA, double *Dec);
+
+// 计算太阳黄道坐标（黄经lambda, 黄纬beta, 地心月心距离delta）
+void calculate_solar_ecliptic_coordinates(double jd, double *lambda, double *beta, double *delta);
+
+// 计算太阳赤道坐标（RA, Dec）
+void calculate_solar_equatorial_coordinates(double jd, double *RA, double *Dec);
+
+// 带符号月相：-1.0 ~ +1.0
+double moon_phase(int year, int month, int day, int hour, int minute, int second, double timezone_offset);
+
+// 赤道坐标 → 地平坐标
+void equatorial_to_horizontal(
+    double ra_deg,          // 赤经 (0~360°)
+    double dec_deg,         // 赤纬 (-90~+90°)
+    int year, int month, int day, int hour, int minute, int second,
+    double timezone_offset, // 时区偏移（小时），如北京时间 +8.0
+    double longitude,       // 观测者经度 (东正)
+    double latitude,        // 观测者纬度 (北正)
+    double* azimuth,        // 输出：方位角（北=0°，东=90°）
+    double* altitude        // 输出：高度角（度）
+);
+
 
 // 给定时间地点，计算太阳地平坐标
 void where_is_the_sun(
@@ -28,8 +56,11 @@ void where_is_the_moon(
     double* altitude        // 输出：高度角（度）
 );
 
-void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state);
-void ephemeris_toggle_speedup(Key_Event *key_event, Global_State *global_state);
+// 二分查找日出时间
+int32_t find_sunrise(int32_t year, int32_t month, int32_t day, double timezone, double longitude, double latitude);
+
+// 二分查找日落时间
+int32_t find_sunset(int32_t year, int32_t month, int32_t day, double timezone, double longitude, double latitude);
 
 #ifdef __cplusplus
 }

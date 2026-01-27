@@ -141,15 +141,15 @@ static int64_t days_since_1583(int32_t y, int32_t m, int32_t d) {
     return total_days;
 }
 
-int64_t days_prd(int32_t y1, int32_t m1, int32_t d1,
+static int64_t days_prd(int32_t y1, int32_t m1, int32_t d1,
                  int32_t y2, int32_t m2, int32_t d2) {
     int64_t days1 = days_since_1583(y1, m1, d1);
     int64_t days2 = days_since_1583(y2, m2, d2);
     return days2 - days1;
 }
 
-// 计算儒略日（地方标准时间）
-static double julian_day(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, double timezone_offset) {
+// 计算儒略日（输入地方标准时间）
+double julian_day(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, double timezone_offset) {
     double local_hours = hour + minute / 60.0 + second / 3600.0;
     double utc_hours = local_hours - timezone_offset;
     int32_t utc_day = day;
@@ -398,7 +398,6 @@ void calculate_solar_ecliptic_coordinates(double jd, double *lambda, double *bet
 }
 
 // 计算太阳赤道坐标（RA, Dec）
-//   输入时间是儒略日，因天体在天球上的位置与观察者位置无关
 void calculate_solar_equatorial_coordinates(double jd, double *RA, double *Dec) {
 
     double lambda_sun = 0.0;
@@ -430,7 +429,6 @@ void calculate_solar_equatorial_coordinates(double jd, double *RA, double *Dec) 
 
 
 // 带符号月相：-1.0 ~ +1.0
-// 假设输入 RA 和 Dec 单位为弧度
 double moon_phase(int year, int month, int day, int hour, int minute, int second, double timezone_offset) {
     double sun_ra = 0.0;
     double sun_dec = 0.0;
@@ -576,9 +574,8 @@ static double get_solar_altitude(int32_t year, int32_t month, int32_t day, int32
     return alt;
 }
 
-// 二分查找日出时间（升交点）：在 [start, end) 区间内找第一个 alt >= 0 的点，
-// 且前一时刻 alt < 0。假设函数在此区间单调递增。
-static int32_t find_sunrise(int32_t year, int32_t month, int32_t day, double timezone, double longitude, double latitude) {
+// 二分查找日出时间（升交点）
+int32_t find_sunrise(int32_t year, int32_t month, int32_t day, double timezone, double longitude, double latitude) {
     int32_t low = 0;               // 00:00
     int32_t high = 12 * 60;        // 12:00（不含）
 
@@ -607,9 +604,8 @@ static int32_t find_sunrise(int32_t year, int32_t month, int32_t day, double tim
     return -1; // 理论上不应到达这里
 }
 
-// 二分查找日落时间（降交点）：在 [start, end) 区间内找第一个 alt < 0 的点，
-// 且前一时刻 alt >= 0。假设函数在此区间单调递减。
-static int32_t find_sunset(int32_t year, int32_t month, int32_t day, double timezone, double longitude, double latitude) {
+// 二分查找日落时间
+int32_t find_sunset(int32_t year, int32_t month, int32_t day, double timezone, double longitude, double latitude) {
     int32_t low = 12 * 60 + 1;     // 12:01
     int32_t high = 24 * 60;        // 23:59 + 1（即24:00，作为上界）
 
@@ -639,158 +635,3 @@ static int32_t find_sunset(int32_t year, int32_t month, int32_t day, double time
     return -1;
 }
 
-
-
-static uint64_t ephemeris_refersh_timestamp = 0;
-static uint64_t ephemeris_first_call_timestamp = 0;
-static uint32_t last_day = 0;
-static uint32_t sunrise_time[2] = {0, 0}; // hour, minute
-static uint32_t sunset_time[2] = {0, 0}; // hour, minute
-static int32_t is_speed_up = 0;
-static uint64_t start_timestamp = 0;
-void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
-    const double longitude = 119.0; // 东经
-    const double latitude = 32.0;   // 北纬
-    const double timezone = +8.0;   // 东八区
-
-    // 节流：不大于50fps
-    if (global_state->timestamp - ephemeris_refersh_timestamp < 20) {
-        return;
-    }
-    ephemeris_refersh_timestamp = global_state->timestamp;
-
-    fb_soft_clear();
-
-    fb_draw_circle(64, 32, 30);
-    fb_draw_circle(64, 32, 20);
-    fb_draw_circle(64, 32, 10);
-    fb_draw_line(32, 32, 96, 32, 1);
-    fb_draw_line(64, 0, 64, 64, 1);
-
-    // 方位文字和周围的边框
-    fb_draw_textline_mini(L"N", 62, 0, 1);  fb_plot(61, 2, 0); fb_plot(67, 2, 0); fb_plot(64, 5, 0);
-    fb_draw_textline_mini(L"S", 63, 59, 1); fb_plot(62, 62, 0); fb_plot(66, 62, 0); fb_plot(64, 58, 0);
-    fb_draw_textline_mini(L"W", 32, 30, 1); fb_plot(34, 29, 0); fb_plot(37, 32, 0); fb_plot(34, 35, 0);
-    fb_draw_textline_mini(L"E", 93, 30, 1); fb_plot(92, 32, 0); fb_plot(96, 32, 0); fb_plot(94, 29, 0); fb_plot(94, 35, 0);
-
-    fb_draw_line(0, 43, 30, 43, 1);
-
-    time_t ts = 0;
-    if (is_speed_up) {
-        start_timestamp += 600000;
-        ts = (time_t)start_timestamp / 1000;
-    }
-    else {
-        ts = (time_t)global_state->timestamp / 1000;
-    }
-    struct tm *timeinfo = localtime(&ts); // 转换为本地时间
-    
-    int32_t second = timeinfo->tm_sec;
-    int32_t minute = timeinfo->tm_min;
-    int32_t hour = timeinfo->tm_hour;
-    int32_t day = timeinfo->tm_mday;
-    int32_t month = timeinfo->tm_mon + 1;
-    int32_t year = timeinfo->tm_year + 1900;
-
-
-    wchar_t timestr[30];
-    swprintf(timestr, 30, L"%04d-%02d-%02d\n%02d:%02d:%02d", year, month, day, hour, minute, second);
-    fb_draw_textline_mini(timestr, 0, 0, 1);
-
-
-    double altitude_moon = 0.0;
-    double azimuth_moon = 0.0;
-
-    where_is_the_moon(year, month, day, hour, minute, second, timezone, longitude, latitude, &azimuth_moon, &altitude_moon);
-    double phase = moon_phase(year, month, day, hour, minute, second, timezone);
-
-    wchar_t coordstr_moon[30];
-    swprintf(coordstr_moon, 30, L"MOON\nP:%d%%\nA:%.1f\nE:%.1f", (int32_t)(phase * 100.0), azimuth_moon, altitude_moon);
-    fb_draw_textline_mini(coordstr_moon, 0, 18, 1);
-
-    double x_moon = 64 + (90.0 - altitude_moon) * 32.0 / 90.0 * sin(to_rad(azimuth_moon));
-    double y_moon = 32 - (90.0 - altitude_moon) * 32.0 / 90.0 * cos(to_rad(azimuth_moon));
-
-    fb_plot((int)x_moon - 1, (int)y_moon - 1, 1);
-    fb_plot((int)x_moon - 1, (int)y_moon - 0, 1);
-    fb_plot((int)x_moon - 1, (int)y_moon + 1, 1);
-    fb_plot((int)x_moon - 0, (int)y_moon - 1, 1);
-    fb_plot((int)x_moon - 0, (int)y_moon - 0, 1);
-    fb_plot((int)x_moon - 0, (int)y_moon + 1, 1);
-    fb_plot((int)x_moon + 1, (int)y_moon - 1, 1);
-    fb_plot((int)x_moon + 1, (int)y_moon - 0, 1);
-    fb_plot((int)x_moon + 1, (int)y_moon + 1, 1);
-
-
-
-    double altitude_sun = 0.0;
-    double azimuth_sun = 0.0;
-
-    where_is_the_sun(year, month, day, hour, minute, second, +8.0, longitude, latitude, &azimuth_sun, &altitude_sun);
-
-    wchar_t coordstr_sun[30];
-    swprintf(coordstr_sun, 30, L"SUN\nA:%.1f\nE:%.1f", azimuth_sun, altitude_sun);
-    fb_draw_textline_mini(coordstr_sun, 0, 46, 1);
-
-    double x_sun = 64 + (90.0 - altitude_sun) * 32.0 / 90.0 * sin(to_rad(azimuth_sun));
-    double y_sun = 32 - (90.0 - altitude_sun) * 32.0 / 90.0 * cos(to_rad(azimuth_sun));
-
-    fb_draw_circle((int)x_sun, (int)y_sun, 2);
-
-
-    // 二分搜索日出日落时间
-    if (ephemeris_first_call_timestamp == 0 || last_day != day) { // 只在首次调用和当天日期变化时计算
-        int32_t sunrise_min = find_sunrise(year, month, day, timezone, longitude, latitude);
-        if (sunrise_min != -1) {
-            sunrise_time[0] = sunrise_min / 60;
-            sunrise_time[1] = sunrise_min % 60;
-        }
-        int32_t sunset_min = find_sunset(year, month, day, timezone, longitude, latitude);
-        if (sunset_min != -1) {
-            sunset_time[0] = sunset_min / 60;
-            sunset_time[1] = sunset_min % 60;
-        }
-    }
-    wchar_t risefall_time[60];
-    swprintf(risefall_time, 60, L"R:%02d:%02d\nS:%02d:%02d", sunrise_time[0], sunrise_time[1], sunset_time[0], sunset_time[1]);
-    fb_draw_textline_mini(risefall_time, 98, 0, 1);
-
-
-    fb_draw_textline_mini(L"    BD4SUR\n2011-09-29", 86, 53, 1);
-
-    gfx_refresh();
-
-    if (ephemeris_first_call_timestamp == 0) {
-        ephemeris_first_call_timestamp = global_state->timestamp;
-    }
-    last_day = day;
-}
-
-void ephemeris_toggle_speedup(Key_Event *key_event, Global_State *global_state) {
-    is_speed_up = !is_speed_up;
-    start_timestamp = global_state->timestamp;
-}
-
-
-
-
-
-void ephemeris(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, double timezone, double longitude, double latitude) {
-
-    double Elevation = 0.0;
-    double Azimuth = 0.0;
-
-    where_is_the_sun(year, month, day, hour, minute, second, timezone, longitude, latitude, &Azimuth, &Elevation);
-    printf("太阳地平高度: %.6f degrees\n", Elevation);
-    printf("太阳方位角: %.6f degrees\n", Azimuth);
-
-    where_is_the_moon(year, month, day, hour, minute, second, timezone, longitude, latitude, &Azimuth, &Elevation);
-    printf("月球地平高度: %.6f degrees\n", Elevation);
-    printf("月球方位角: %.6f degrees\n", Azimuth);
-
-}
-
-int __main__(void) {
-    ephemeris(2026, 1, 17, 22, 00, 00, +8.0, 119.0, 32.0);
-    return 0;
-}
