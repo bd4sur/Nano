@@ -224,6 +224,29 @@ uint32_t tokenize(struct Trie *vocab_trie, uint32_t *output_token_ids, const uin
 
 
 // ===============================================================================
+// 对有序数组的二分查找
+// ===============================================================================
+
+int32_t binary_search(const uint32_t *lut_sorted, const uint32_t *lut_indexs, uint32_t n, uint32_t target) {
+    uint32_t left = 0;
+    uint32_t right = n - 1;
+    while (left <= right) {
+        uint32_t mid = left + (right - left) / 2; // 防止溢出
+        if (lut_sorted[mid] == target) {
+            return lut_indexs[mid];
+        }
+        else if (lut_sorted[mid] < target) {
+            left = mid + 1;
+        }
+        else {
+            right = mid - 1;
+        }
+    }
+    return -1;
+}
+
+
+// ===============================================================================
 // AVL树
 // ===============================================================================
 

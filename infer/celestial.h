@@ -5,8 +5,6 @@
 extern "C" {
 #endif
 
-void init_glyph();
-
 void dithering_fs(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height);
 void dithering_fast(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height);
 

@@ -497,13 +497,6 @@ void star_burst_filter(uint8_t *frame_buffer, int32_t width, int32_t height, flo
 // 绘制文字（临时实现）
 // ===============================================================================
 
-static AVLNode *GLYPH = NULL;
-
-void init_glyph() {
-    GLYPH = buildAVLTree(UTF32_LUT, 7445);
-}
-
-
 uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
     if(utf32 < 127) {
         *font_width = 6;
@@ -511,7 +504,7 @@ uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
         return ASCII_6_12[utf32 - 32];
     }
     else {
-        uint32_t index = findIndex(GLYPH, utf32);
+        int32_t index = binary_search(UTF32_LUT_SORTED, UTF32_LUT_INDEXS, GLYPH_CHAR_NUM, utf32);
         if (index >= 0 && index < 7445) {
             *font_width = 12;
             *font_height = 12;
@@ -524,34 +517,29 @@ uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
 }
 
 // 显示汉字
-// x,y:起点坐标
-// num:汉字对应的序号
-// mode:0,反色显示;1,正常显示
 void fb_draw_char(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     int32_t x, int32_t y, uint8_t *glyph, uint8_t font_width, uint8_t font_height,
     uint8_t red, uint8_t green, uint8_t blue
 ) {
-    if (x < 0 || x >= fb_width || y < 0 || y >= fb_height) return;
-    uint8_t x0 = x, y0 = y;
-    uint32_t bytenum = (font_height / 8 + ((font_height % 8) ? 1 : 0)) * font_width; // 得到字体一个字符对应点阵集所占的字节数
-    for (uint32_t i = 0; i < bytenum; i++) {
-        uint8_t temp = glyph[i];
-        uint8_t available_bits = (i >= bytenum - font_width) ? (8 - (bytenum / font_width) * 8 + font_height) : 8; // 只绘制有效位
-        for (uint8_t m = 0; m < available_bits; m++) {
-            if (temp & 0x01)
-                set_pixel(frame_buffer, fb_width, fb_height, x, y, red, green, blue);
-            else
-                add_pixel(frame_buffer, fb_width, fb_height, x, y, 0, 0, 0);
-            temp >>= 1;
-            y++;
+    int32_t row_bytes = (font_height + 8 - 1) / 8;
+    int32_t col_bytes = font_width;
+    for (int32_t j = 0; j < row_bytes; j++) {
+        int32_t bits = (j == (row_bytes-1)) ? (8 - ((8 * row_bytes) % font_height)) : 8;
+        for (int32_t i = 0; i < col_bytes; i++) {
+            uint8_t g = glyph[j * col_bytes + i];
+            for (int32_t b = 0; b < bits; b++) {
+                int32_t px = x + i;
+                int32_t py = y + j*8 + b;
+                if (px < 0 || px >= fb_width || py < 0 || py >= fb_height) continue;
+                if ((g >> b) & 0x1) {
+                    set_pixel(frame_buffer, fb_width, fb_height, px, py, red, green, blue);
+                }
+                else {
+                    add_pixel(frame_buffer, fb_width, fb_height, px, py, 0, 0, 0);
+                }
+            }
         }
-        x++;
-        if ((x - x0) == font_width) {
-            x = x0;
-            y0 = y0 + 8;
-        }
-        y = y0;
     }
 }
 

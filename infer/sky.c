@@ -48,8 +48,6 @@ int main(void) {
 
     int32_t is_pause = 0;
 
-    init_glyph();
-
     while ((ch = getch()) != 'q' && ch != 27) {
         if (ch == ' ') {
             is_pause = !is_pause;

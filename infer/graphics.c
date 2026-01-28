@@ -6,24 +6,12 @@
 
 static uint8_t **FRAME_BUFFER = NULL;
 
-static AVLNode *GLYPH = NULL;
-
-static uint32_t *GLYPH_CACHE = NULL; // 字形缓存：前半部分是utf32，后半部分是字形index
-static uint32_t GLYPH_CACHE_LEVEL = 0; // 字形缓存的水位
-
 void gfx_init() {
     // 初始化GDRAM
     FRAME_BUFFER = (uint8_t **)calloc(FB_PAGES, sizeof(uint8_t *));
     for(uint8_t i = 0; i < FB_PAGES; i++) {
         FRAME_BUFFER[i] = (uint8_t *)calloc(FB_WIDTH, sizeof(uint8_t));
     }
-
-    // 初始化字库
-    GLYPH = buildAVLTree(UTF32_LUT, 7445);
-
-    // 初始化字形缓存
-    GLYPH_CACHE = (uint32_t*)calloc(2048, sizeof(uint32_t));
-    GLYPH_CACHE_LEVEL = 0;
 
     display_hal_init();
 
@@ -33,7 +21,6 @@ void gfx_init() {
 
 void gfx_close() {
     display_hal_close();
-    freeTree(GLYPH);
 }
 
 
@@ -199,28 +186,23 @@ void fb_draw_circle(uint8_t cx, uint8_t cy, uint8_t r) {
 
 // 显示汉字
 // x,y:起点坐标
-// num:汉字对应的序号
 // mode:0,反色显示;1,正常显示
 void fb_draw_char(uint8_t x, uint8_t y, uint8_t *glyph, uint8_t font_width, uint8_t font_height, uint8_t mode) {
-    uint8_t x0 = x, y0 = y;
-    uint32_t bytenum = (font_height / 8 + ((font_height % 8) ? 1 : 0)) * font_width; // 得到字体一个字符对应点阵集所占的字节数
-    for (uint32_t i = 0; i < bytenum; i++) {
-        uint8_t temp = glyph[i];
-        uint8_t available_bits = (i >= bytenum - font_width) ? (8 - (bytenum / font_width) * 8 + font_height) : 8; // 只绘制有效位
-        for (uint8_t m = 0; m < available_bits; m++) {
-            if (temp & 0x01)
-                fb_plot(x, y, mode);
-            else
-                fb_plot(x, y, !mode);
-            temp >>= 1;
-            y++;
+    int32_t row_bytes = (font_height + 8 - 1) / 8;
+    int32_t col_bytes = font_width;
+    for (int32_t j = 0; j < row_bytes; j++) {
+        int32_t bits = (j == (row_bytes-1)) ? (8 - ((8 * row_bytes) % font_height)) : 8;
+        for (int32_t i = 0; i < col_bytes; i++) {
+            uint8_t g = glyph[j * col_bytes + i];
+            for (int32_t b = 0; b < bits; b++) {
+                if ((g >> b) & 0x1) {
+                    fb_plot((x+i), (y+j*8+b), mode);
+                }
+                else {
+                    fb_plot((x+i), (y+j*8+b), !mode);
+                }
+            }
         }
-        x++;
-        if ((x - x0) == font_width) {
-            x = x0;
-            y0 = y0 + 8;
-        }
-        y = y0;
     }
 }
 
@@ -394,22 +376,6 @@ void fb_draw_textline_mini(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) 
 }
 
 
-void add_glyph_index_to_cache(uint32_t utf32, uint32_t index) {
-    if (GLYPH_CACHE_LEVEL < 1024) {
-        GLYPH_CACHE[   GLYPH_CACHE_LEVEL    ] = utf32;
-        GLYPH_CACHE[GLYPH_CACHE_LEVEL + 1024] = index;
-        GLYPH_CACHE_LEVEL++;
-    }
-}
-
-int32_t find_glyph_index_from_cache(uint32_t utf32) {
-    for (int32_t i = 0; i < GLYPH_CACHE_LEVEL; i++) {
-        if (GLYPH_CACHE[i] == utf32) {
-            return GLYPH_CACHE[i + 1024];
-        }
-    }
-    return -1;
-}
 
 uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
     if(utf32 < 127) {
@@ -418,22 +384,7 @@ uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
         return ASCII_6_12[utf32 - 32];
     }
     else {
-/*
-        uint32_t index = 0;
-        // 首先从cache中取
-        int32_t _index = find_glyph_index_from_cache(utf32);
-        // 如果cache命中：直接取
-        if (_index >= 0) {
-            index = (uint32_t)_index;
-        }
-        // 如果cache不命中，则从AVL树中查询，并加入cache
-        else {
-            index = findIndex(GLYPH, utf32);
-            add_glyph_index_to_cache(utf32, index);
-        }
-*/
-
-        uint32_t index = findIndex(GLYPH, utf32);
+        int32_t index = binary_search(UTF32_LUT_SORTED, UTF32_LUT_INDEXS, GLYPH_CHAR_NUM, utf32);
         if (index >= 0 && index < 7445) {
             *font_width = 12;
             *font_height = 12;
