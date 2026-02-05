@@ -20,8 +20,11 @@ void calculate_solar_ecliptic_coordinates(double jd, double *lambda, double *bet
 // 计算太阳赤道坐标（RA, Dec）
 void calculate_solar_equatorial_coordinates(double jd, double *RA, double *Dec);
 
-// 带符号月相：-1.0 ~ +1.0
+// 月球相位角
 double moon_phase(int year, int month, int day, int hour, int minute, int second, double timezone_offset);
+
+// 月球亮面方向角
+double moon_bright_limb_pos_angle(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, double timezone_offset);
 
 // 赤道坐标 → 地平坐标
 void equatorial_to_horizontal(

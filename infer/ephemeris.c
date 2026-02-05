@@ -12,8 +12,6 @@
 #include <time.h>
 
 #include "ephemeris.h"
-#include "ui.h"
-#include "graphics.h"
 
 // gcc ephemeris.c -o ephemeris
 
@@ -428,7 +426,10 @@ void calculate_solar_equatorial_coordinates(double jd, double *RA, double *Dec) 
 
 
 
-// 带符号月相：-1.0 ~ +1.0
+// 月球相位角
+// NOTE 本函数实际上计算的是月心看到的地球与太阳的角距离i
+//      其与月面照亮的比例k关系为：k = (1+cos(i))/2
+//      实际绘制月面照亮部分时，应当使用k确定亮暗比例、用i的符号确定上半月还是下半月
 double moon_phase(int year, int month, int day, int hour, int minute, int second, double timezone_offset) {
     double sun_ra = 0.0;
     double sun_dec = 0.0;
@@ -438,42 +439,38 @@ double moon_phase(int year, int month, int day, int hour, int minute, int second
     calculate_lunar_equatorial_coordinates(jd, &moon_ra, &moon_dec);
     calculate_solar_equatorial_coordinates(jd, &sun_ra, &sun_dec);
 
-    sun_ra = to_rad(sun_ra);
-    sun_dec = to_rad(sun_dec);
-    moon_ra = to_rad(moon_ra);
-    moon_dec = to_rad(moon_dec);
+    double a0 = to_rad(sun_ra);
+    double d0 = to_rad(sun_dec);
+    double a  = to_rad(moon_ra);
+    double d  = to_rad(moon_dec);
 
-    // 1. 转换为单位向量
-    double sun_x = cos(sun_dec) * cos(sun_ra);
-    double sun_y = cos(sun_dec) * sin(sun_ra);
-    double sun_z = sin(sun_dec);
+    double cosp = sin(d0) * sin(d) + cos(d0) * cos(d) * cos(a0-a);
+    double phase_angle_deg = normalize_angle(to_deg(acos(-cosp)));
+    return phase_angle_deg;
+}
 
-    double moon_x = cos(moon_dec) * cos(moon_ra);
-    double moon_y = cos(moon_dec) * sin(moon_ra);
-    double moon_z = sin(moon_dec);
+// 月球亮面方向角
+// NOTE 根据 AA p.346 表述，“Position Angle of the Moon's bright limb”的定义是：
+//      从月面视圆盘的 North Point（天球北方向）起算，向东（即沿天球方位角增加方向）测量到明亮月面边缘中点的角度。
+//      这个角度是相对于天球赤道坐标系的子午线的扭转角度。与观测者位置无关。
+double moon_bright_limb_pos_angle(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, double timezone_offset) {
+    double sun_ra = 0.0;
+    double sun_dec = 0.0;
+    double moon_ra = 0.0;
+    double moon_dec = 0.0;
+    double jd = julian_day(year, month, day, hour, minute, second, timezone_offset);
+    calculate_lunar_equatorial_coordinates(jd, &moon_ra, &moon_dec);
+    calculate_solar_equatorial_coordinates(jd, &sun_ra, &sun_dec);
 
-    // 2. 计算日月角距 psi（弧度）
-    double dot = sun_x * moon_x + sun_y * moon_y + sun_z * moon_z;
-    // 限制 dot 在 [-1, 1] 防止数值误差
-    if (dot > 1.0) dot = 1.0;
-    if (dot < -1.0) dot = -1.0;
-    double psi = acos(dot); // [0, π]
+    double a0 = to_rad(sun_ra);
+    double d0 = to_rad(sun_dec);
+    double a  = to_rad(moon_ra);
+    double d  = to_rad(moon_dec);
 
-    // 3. 照明比例（0 ~ 1）
-    double illumination = (1.0 + cos(psi)) / 2.0; // 注意：这是简化模型！
+    double y = cos(d0) * sin(a0 - a);
+    double x = sin(d0) * cos(d) - cos(d0) * sin(d) * cos(a0 - a);
 
-    // 4. 判断盈亏：比较赤经（需处理 0/2π 跳变）
-    double ra_diff = fmod(moon_ra - sun_ra, 2.0 * PI);
-    if (ra_diff < 0) ra_diff += 2.0 * PI;
-
-    // 若月亮赤经领先太阳（0 < diff < π），则为盈（waxing，正）
-    // 若落后（π < diff < 2π），则为亏（waning，负）
-    double sign = (ra_diff < PI) ? 1.0 : -1.0;
-
-    // 5. 带符号月相：-1.0 ~ +1.0
-    double signed_phase = sign * illumination;
-
-    return signed_phase;
+    return to_deg(atan2(y, x));
 }
 
 
@@ -551,10 +548,6 @@ void where_is_the_moon(
     double Dec = 0.0;
     double jd = julian_day(year, month, day, hour, minute, second, timezone_offset);
     calculate_lunar_equatorial_coordinates(jd, &RA, &Dec);
-
-    // printf("月球赤经: ");
-    // print_ra_hms(RA);
-    // printf("月球赤纬: %.6f degrees\n", Dec);
 
     equatorial_to_horizontal(
         RA, Dec, year, month, day, hour, minute, second, timezone_offset,

@@ -12,14 +12,14 @@
 
 #define FB_WIDTH (240)
 #define FB_HEIGHT (240)
-static uint8_t frame_buffer[FB_WIDTH * FB_HEIGHT * 4];
+static uint8_t frame_buffer[FB_WIDTH * FB_HEIGHT * 3];
 
 void draw_frame(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height) {
     printf("\033[?25l\033[H"); // 隐藏光标+定位到左上角
     for (int32_t y = 0; y < fb_height; y += 2) {
         for (int32_t x = 0; x < fb_width; x++) {
-            int32_t i1 = (y * fb_width + x) * 4;
-            int32_t i2 = ((y+1) * fb_width + x) * 4;
+            int32_t i1 = (y * fb_width + x) * 3;
+            int32_t i2 = ((y+1) * fb_width + x) * 3;
             uint8_t r1 = frame_buffer[i1];
             uint8_t g1 = frame_buffer[i1+1];
             uint8_t b1 = frame_buffer[i1+2];
@@ -54,11 +54,15 @@ int main(void) {
         }
 
         if (!is_pause) {
-            memset(frame_buffer, 0, FB_WIDTH * FB_HEIGHT * 4 * sizeof(uint8_t));
+            memset(frame_buffer, 0, FB_WIDTH * FB_HEIGHT * 3 * sizeof(uint8_t));
 
             double longitude = 119.0;
             double latitude = 31.0;
             double timezone = 8.0;
+
+            int32_t year = 2026;
+            int32_t month = 2;
+            int32_t day = 5;
 
             int32_t second = timestamp % 60;
             int32_t minute = (timestamp / 60) % 60;
@@ -66,10 +70,25 @@ int main(void) {
 
             render_sky(frame_buffer, FB_WIDTH, FB_HEIGHT,
                 120, 120, 120,
-                2026, 1, 27, hour, minute, second,
-                8.0, 119.0, 31.0);
+                year, month, day, hour, minute, second,
+                8.0, 119.0, 31.0,
+                0, // 降采样因子（设为0为自动，建议设为2）
+                1, // 是否启用基于对称性的渲染优化（以画质为代价）
+                1, // 是否启用基于对称性的渲染优化（以画质为代价）
+
+                1, // 是否启用赤道坐标圈
+                1, // 是否启用地平坐标圈
+                1, // 是否启用星芒效果
+                1, // 是否启用大气散射效果
+                1  // 是否显示天体名称
+            );
 
             dithering_fs(frame_buffer, FB_WIDTH, FB_HEIGHT);
+
+            // 绘制当前时间
+            wchar_t current_time_str[30];
+            swprintf(current_time_str, 20, L"%d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second);
+            fb_draw_textline(frame_buffer, FB_WIDTH, FB_HEIGHT, current_time_str, 1, 1, 255, 255, 255);
 
             timestamp += 60;
 

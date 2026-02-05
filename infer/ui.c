@@ -1347,10 +1347,11 @@ void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
     double azimuth_moon = 0.0;
 
     where_is_the_moon(year, month, day, hour, minute, second, timezone, longitude, latitude, &azimuth_moon, &altitude_moon);
-    double phase = moon_phase(year, month, day, hour, minute, second, timezone);
+    double i_deg = moon_phase(year, month, day, hour, minute, second, timezone);
+    double moon_k = (1.0 + cos(i_deg / 180.0 * M_PI)) / 2.0;
 
     wchar_t coordstr_moon[30];
-    swprintf(coordstr_moon, 30, L"MOON\nP:%d%%\nA:%.1f\nE:%.1f", (int32_t)(phase * 100.0), azimuth_moon, altitude_moon);
+    swprintf(coordstr_moon, 30, L"MOON\nP:%d%%\nA:%.1f\nE:%.1f", (int32_t)(moon_k * 100.0), azimuth_moon, altitude_moon);
     fb_draw_textline_mini(coordstr_moon, 0, 18, 1);
 
     double x_moon = 64 + (90.0 - altitude_moon) * 32.0 / 90.0 * sin(azimuth_moon / 180.0 * M_PI);
