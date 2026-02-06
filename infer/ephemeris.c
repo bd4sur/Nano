@@ -11,6 +11,8 @@
 #include <math.h>
 #include <time.h>
 
+#include "vsop87c_small.h"
+
 #include "ephemeris.h"
 
 // gcc ephemeris.c -o ephemeris
@@ -628,3 +630,58 @@ int32_t find_sunset(int32_t year, int32_t month, int32_t day, double timezone, d
     return -1;
 }
 
+
+
+// 基于VSOP87c计算大行星地平坐标（不做章动、光行差等精密修正）
+void where_is_the_planet(
+    int year, int month, int day, int hour, int minute, int second,
+    double timezone_offset, // 时区偏移（小时），如北京时间 +8.0
+    double longitude,       // 观测者经度 (东正)
+    double latitude,        // 观测者纬度 (北正)
+    int32_t planet_index,   // 计算哪个行星：1-水 2-金 3-地球（直接返回） 4-火 5-木 6-土 7-天王 8-海王 其他无定义
+    double* azimuth,        // 输出：方位角（北=0°，东=90°）
+    double* altitude        // 输出：高度角（度）
+) {
+    // 计算儒略千年数
+    double jd = julian_day(year, month, day, hour, minute, second, timezone_offset);
+    double t = (jd - 2451545.0) / 365250.0; // NOTE 注意：是千年数！
+
+    // 计算地球的日心直角坐标
+    double earth_xyz[3] = {0.0, 0.0, 0.0};
+    vsop87c_small_getEarth(t, earth_xyz);
+
+    // 计算行星的日心直角坐标
+    double planet_xyz[3] = {0.0, 0.0, 0.0};
+    switch (planet_index) {
+        case 1: vsop87c_small_getMercury(t, planet_xyz); break;
+        case 2: vsop87c_small_getVenus(t, planet_xyz); break;
+        case 3: return;
+        case 4: vsop87c_small_getMars(t, planet_xyz); break;
+        case 5: vsop87c_small_getJupiter(t, planet_xyz); break;
+        case 6: vsop87c_small_getSaturn(t, planet_xyz); break;
+        case 7: vsop87c_small_getUranus(t, planet_xyz); break;
+        case 8: vsop87c_small_getNeptune(t, planet_xyz); break;
+        default: return;
+    }
+
+    // 计算行星的地心直角坐标
+    double x_geo = planet_xyz[0] - earth_xyz[0];
+    double y_geo = planet_xyz[1] - earth_xyz[1];
+    double z_geo = planet_xyz[2] - earth_xyz[2];
+
+    // 计算行星赤道坐标
+    double eps_rad = to_rad(23.0 + (26.0 / 60.0)); // 黄赤交角
+    double x_eq = x_geo;
+    double y_eq = y_geo * cos(eps_rad) - z_geo * sin(eps_rad);
+    double z_eq = y_geo * sin(eps_rad) + z_geo * cos(eps_rad);
+
+    double planet_ra  = to_deg(atan2(y_eq, x_eq));
+    double planet_dec = to_deg(asin(z_eq / sqrt(x_eq * x_eq + y_eq * y_eq + z_eq * z_eq)));
+
+    // 计算地平坐标
+    equatorial_to_horizontal(
+        planet_ra, planet_dec, year, month, day, hour, minute, second, timezone_offset,
+        longitude, latitude,
+        azimuth, altitude
+    );
+}

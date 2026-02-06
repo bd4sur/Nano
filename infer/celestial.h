@@ -43,7 +43,9 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     int32_t enable_horizontal_coord, // 是否启用地平坐标圈
     int32_t enable_star_burst,       // 是否启用星芒效果
     int32_t enable_atmospheric_scattering, // 是否启用大气散射效果
-    int32_t enable_star_name         // 是否显示天体名称
+    int32_t enable_star_name,        // 是否显示恒星名称
+    int32_t enable_planet,           // 是否显示大行星
+    int32_t enable_planet_name       // 是否显示大行星名称
 );
 
 #ifdef __cplusplus

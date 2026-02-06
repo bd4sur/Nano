@@ -8,7 +8,7 @@
 
 #include "celestial.h"
 
-// gcc utils.c celestial.c ephemeris.c sky.c -lncursesw -lm -o sky
+// gcc utils.c celestial.c vsop87c_small.c ephemeris.c sky.c -lncursesw -lm -o sky
 
 #define FB_WIDTH (240)
 #define FB_HEIGHT (240)
@@ -62,7 +62,7 @@ int main(void) {
 
             int32_t year = 2026;
             int32_t month = 2;
-            int32_t day = 5;
+            int32_t day = 7;
 
             int32_t second = timestamp % 60;
             int32_t minute = (timestamp / 60) % 60;
@@ -80,7 +80,9 @@ int main(void) {
                 1, // 是否启用地平坐标圈
                 1, // 是否启用星芒效果
                 1, // 是否启用大气散射效果
-                1  // 是否显示天体名称
+                1, // 是否显示恒星名称
+                1, // 是否显示大行星
+                1  // 是否显示大行星名称
             );
 
             dithering_fs(frame_buffer, FB_WIDTH, FB_HEIGHT);

@@ -47,6 +47,15 @@ static const float ATTN_SCALE_LUT[181] = {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 // NIGHT_ATTN_LUT[sun_altitude_deg+90] = (sun_altitude_deg >= 0) ? (1.0f) : MAX(0.0f, expf(0.016f * sun_altitude_deg));
 static const float NIGHT_ATTN_LUT[181] = {0.23692775868212176,0.24074909196587688,0.2446320583319975,0.24857765184107966,0.2525868825866102,0.2566607769535559,0.26080037788112365,0.2650067451297589,0.26928095555244996,0.27362410337040804,0.27803730045319414,0.2825216766033636,0.28707837984570167,0.2917085767211244,0.2964134525853191,0.3011942119122021,0.3060520786022707,0.3109882962959281,0.31600412869186245,0.32110085987056064,0.32627979462303947,0.3315422587848797,0.33688959957564707,0.34232318594378797,0.34784440891708746,0.35345468195878016,0.3591554413294046,0.3649481464544937,0.37083428029819565,0.37681534974292086,0.38289288597511206,0.38906844487723635,0.3953436074260998,0.401719980097586,0.4081991952779227,0.4147829116815814,0.4214728147759176,0.4282706172126597,0.43517805926635666,0.44219690927989863,0.44932896411722156,0.4565760496233147,0.46394002109164667,0.4714227637391309,0.47902619318875106,0.4867522559599717,0.494602929967057,0.5025802250254283,0.5106861833661879,0.5189228801589404,0.5272924240430485,0.535796957667456,0.5444386582392171,0.5532197380808739,0.5621424451968224,0.5712090638488149,0.5804219151407424,0.5897833576128504,0.5992957878455384,0.6089616410728969,0.6187833918061408,0.6287635544670984,0.6389046840319161,0.6492093766851474,0.659680270484389,0.6703200460356393,0.6811314271795471,0.6921171816887304,0.7032801219763409,0.7146231058160573,0.7261490370736909,0.7378608664505912,0.7497615922390413,0.7618542610898376,0.7741419687922484,0.7866278610665534,0.7993151343693651,0.812207036711939,0.8253068684916824,0.838617983337074,0.8521437889662113,0.865887748059205,0.8798533791446438,0.8940442575003572,0.9084640160687062,0.9231163463866358,0.9380049995307295,0.9531337870775047,0.9685065820791976,0.9841273200552851,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1};
 
+
+// 行星相关常量（用于渲染）
+//                                        -     1Mer  2Ven  3Ear  4Mars 5Jup  6Sat  7Ura  8Nep
+static const float   PLANET_RADIUS[9]   = {0.0f, 1.0f, 2.0f, 0.0f, 1.0f, 3.0f, 2.0f, 1.0f, 1.0f};
+static const uint8_t PLANET_COLOR_R[9]  = {0,    192,  255,  0,    255,  255,  192,  0,    192 };
+static const uint8_t PLANET_COLOR_G[9]  = {0,    192,  255,  0,    64,   192,  255,  255,  128 };
+static const uint8_t PLANET_COLOR_B[9]  = {0,    192,  64,   0,    0,    128,  128,  255,  255 };
+static const wchar_t PLANET_NAME[9][10] = {L"", L"水星", L"金星", L"地球", L"火星", L"木星", L"土星", L"天王星", L"海王星"};
+
 // 星表
 #define STARS_NUM (21)
 static const float STARS[STARS_NUM][7] = {
@@ -1226,7 +1235,7 @@ void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 
 void draw_star(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
-    float sx, float sy, float magnitude
+    float sx, float sy, float magnitude, float radius, uint8_t red, uint8_t green, uint8_t blue
 ) {
 
     int32_t maxGlowRadius = 1; // 光晕最大半径（像素）
@@ -1241,10 +1250,11 @@ void draw_star(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float bgLum = get_luminance(bgR, bgG, bgB);
 
     // 遍历光晕区域（正方形包围圆）
-    for (int32_t dy = -maxGlowRadius; dy <= maxGlowRadius; dy++) {
-        for (int32_t dx = -maxGlowRadius; dx <= maxGlowRadius; dx++) {
+    int32_t R = (int32_t)radius + maxGlowRadius;
+    for (int32_t dy = -R; dy <= R; dy++) {
+        for (int32_t dx = -R; dx <= R; dx++) {
             float dist = sqrtf(dx * dx + dy * dy);
-            if (dist > (float)maxGlowRadius) continue;
+            if (dist > (float)R) continue;
 
             int32_t px = (int32_t)roundf(sx + (float)dx);
             int32_t py = (int32_t)roundf(sy + (float)dy);
@@ -1252,9 +1262,14 @@ void draw_star(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 
             int32_t idx = (py * fb_width + px) * 3;
 
-            // 计算恒星在该点的原始发光强度（带光晕衰减）
-            float glowFactor = expf(-dist * 1.0f);
-            float starLum = starLumBase * glowFactor;
+            float starLum = 0.0f;
+            if (dist <= radius) {
+                starLum = starLumBase;
+            }
+            // 光晕衰减
+            else if (dist > radius) {
+                starLum = starLumBase * expf(-dist * 1.0f);
+            }
 
             // 对比度抑制：白天背景亮时，星星和光晕都应被压制
             float contrast = starLum / (bgLum + 0.001f);
@@ -1266,12 +1281,14 @@ void draw_star(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             starLum *= visibility;
 
             // 转为 0–255 范围
-            uint8_t add = MIN(255, (uint8_t)floorf(starLum * 255.0f));
+            uint8_t r = MIN(255, (uint8_t)floorf(starLum * (float)red));
+            uint8_t g = MIN(255, (uint8_t)floorf(starLum * (float)green));
+            uint8_t b = MIN(255, (uint8_t)floorf(starLum * (float)blue));
 
             // 叠加到 RGB（保持白色光晕，可改为彩色）
-            frame_buffer[idx + 0] = (uint8_t)MIN(255, frame_buffer[idx + 0] + add);
-            frame_buffer[idx + 1] = (uint8_t)MIN(255, frame_buffer[idx + 1] + add);
-            frame_buffer[idx + 2] = (uint8_t)MIN(255, frame_buffer[idx + 2] + add);
+            frame_buffer[idx + 0] = (uint8_t)MIN(255, frame_buffer[idx + 0] + r);
+            frame_buffer[idx + 1] = (uint8_t)MIN(255, frame_buffer[idx + 1] + g);
+            frame_buffer[idx + 2] = (uint8_t)MIN(255, frame_buffer[idx + 2] + b);
         }
     }
 }
@@ -1435,7 +1452,9 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     int32_t enable_horizontal_coord, // 是否启用地平坐标圈
     int32_t enable_star_burst,       // 是否启用星芒效果
     int32_t enable_atmospheric_scattering, // 是否启用大气散射效果
-    int32_t enable_star_name         // 是否显示天体名称
+    int32_t enable_star_name,        // 是否显示恒星名称
+    int32_t enable_planet,           // 是否显示大行星
+    int32_t enable_planet_name       // 是否显示大行星名称
 ) {
 
     if (fb_width < (int32_t)sky_radius * 2 || fb_height < (int32_t)sky_radius * 2 ||
@@ -1568,8 +1587,12 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         sky_radius, center_x, center_y,
         year, month, day, hour, minute, second, timezone, longitude, latitude);
 
+    // 绘制星芒
+    if (enable_star_burst && sun_alt > 0) {
+        star_burst_filter(frame_buffer, fb_width, fb_height, sun_proj_x, sun_proj_y);
+    }
 
-    // 绘制恒星等其他天体
+    // 绘制恒星
     float mag_offset = -2.0f;
     for (int32_t i = 0; i < STARS_NUM; i++) {
         float *star_item = STARS[i];
@@ -1585,28 +1608,32 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         float sy = 0.0f;
         horizontal_to_screen_xy(azi, alt, sky_radius, center_x, center_y, &sx, &sy);
 
-        draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, sx, sy, mag);
+        draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, sx, sy, mag, 1, 255, 255, 255);
 
         if (enable_star_name) {
             fb_draw_textline(frame_buffer, fb_width, fb_height, STAR_NAME[i], sx+3, sy+3, 250, 250, 250);
         }
     }
 
-    // 绘制星芒
-    if (enable_star_burst && sun_alt > 0) {
-        star_burst_filter(frame_buffer, fb_width, fb_height, sun_proj_x, sun_proj_y);
-    }
+    // 绘制大行星
+    if (enable_planet) {
+        for (int32_t i = 8; i >= 1; i--) { // 之所以倒数，是为了让靠近太阳的行星后绘制，使其覆盖在远离太阳的行星上面
+            if (i == 3) continue; // 跳过地球
+            double planet_azi = 0.0;
+            double planet_alt = 0.0;
+            where_is_the_planet(year, month, day, hour, minute, second, timezone, longitude, latitude, i, &planet_azi, &planet_alt);
 
-    // 绘制地景（天空投影圆盘之外的部分）
-    draw_horizon(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y);
+            float planet_proj_x = 0.0f;
+            float planet_proj_y = 0.0f;
+            horizontal_to_screen_xy(planet_azi, planet_alt, sky_radius, center_x, center_y, &planet_proj_x, &planet_proj_y);
 
-    // 绘制地平坐标网格
-    if (enable_horizontal_coord) {
-        draw_circle_outline(frame_buffer, fb_width, fb_height, center_x, center_y, (sky_radius-1.0f), 2.0f, 128, 128, 128);
-        draw_circle_outline(frame_buffer, fb_width, fb_height, center_x, center_y, (sky_radius/3.0f), 1.0f, 16, 16, 16);
-        draw_circle_outline(frame_buffer, fb_width, fb_height, center_x, center_y, (sky_radius/3.0f*2.0f), 1.0f, 16, 16, 16);
-        draw_line(frame_buffer, fb_width, fb_height, center_x, y1, center_x, y2, 1, 16, 16, 16);
-        draw_line(frame_buffer, fb_width, fb_height, x1, center_y, x2, center_y, 1, 16, 16, 16);
+            draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, planet_proj_x, planet_proj_y,
+                0.0f, PLANET_RADIUS[i], PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
+
+            if (enable_planet_name) {
+                fb_draw_textline(frame_buffer, fb_width, fb_height, PLANET_NAME[i], planet_proj_x+3, planet_proj_y+3, PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
+            }
+        }
     }
 
     // 绘制赤道坐标网格
@@ -1633,6 +1660,18 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
                 year, month, day, hour, minute, second, timezone, longitude, latitude
             );
         }
+    }
+
+    // 绘制地景（天空投影圆盘之外的部分）
+    draw_horizon(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y);
+
+    // 绘制地平坐标网格
+    if (enable_horizontal_coord) {
+        draw_circle_outline(frame_buffer, fb_width, fb_height, center_x, center_y, (sky_radius-1.0f), 2.0f, 128, 128, 128);
+        draw_circle_outline(frame_buffer, fb_width, fb_height, center_x, center_y, (sky_radius/3.0f), 1.0f, 16, 16, 16);
+        draw_circle_outline(frame_buffer, fb_width, fb_height, center_x, center_y, (sky_radius/3.0f*2.0f), 1.0f, 16, 16, 16);
+        draw_line(frame_buffer, fb_width, fb_height, center_x, y1, center_x, y2, 1, 16, 16, 16);
+        draw_line(frame_buffer, fb_width, fb_height, x1, center_y, x2, center_y, 1, 16, 16, 16);
     }
 
 }

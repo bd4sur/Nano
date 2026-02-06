@@ -65,6 +65,20 @@ int32_t find_sunrise(int32_t year, int32_t month, int32_t day, double timezone, 
 // 二分查找日落时间
 int32_t find_sunset(int32_t year, int32_t month, int32_t day, double timezone, double longitude, double latitude);
 
+
+// 基于VSOP87c计算大行星地平坐标（不做章动、光行差等精密修正）
+void where_is_the_planet(
+    int year, int month, int day, int hour, int minute, int second,
+    double timezone_offset, // 时区偏移（小时），如北京时间 +8.0
+    double longitude,       // 观测者经度 (东正)
+    double latitude,        // 观测者纬度 (北正)
+    int32_t planet_index,   // 计算哪个行星：1-水 2-金 3-地球（直接返回） 4-火 5-木 6-土 7-天王 8-海王 其他无定义
+    double* azimuth,        // 输出：方位角（北=0°，东=90°）
+    double* altitude        // 输出：高度角（度）
+);
+
+
+
 #ifdef __cplusplus
 }
 #endif
