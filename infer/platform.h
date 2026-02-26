@@ -61,6 +61,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     #define SSD1309
     #define OLED_I2C_ADDR (0x3c)
+    #define SCREEN_WIDTH  (128)
+    #define SCREEN_HEIGHT (64)
     // 键盘
     #define KB_I2C_ADDR (0x27)
     // UPS
@@ -89,6 +91,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     #define SSD1309
     #define OLED_I2C_ADDR (0x3c)
+    #define SCREEN_WIDTH  (128)
+    #define SCREEN_HEIGHT (64)
     // 键盘
     #define KB_I2C_ADDR (0x27)
     // UPS
@@ -117,15 +121,47 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     #define SSD1306
     #define OLED_I2C_ADDR (0x3c)
+    #define SCREEN_WIDTH  (128)
+    #define SCREEN_HEIGHT (64)
     // 键盘
     #define KB_I2C_ADDR (0x27)
     // UPS
     // #define UPS_ENABLED
-    // #define UPS_I2C_ADDR (0x36)
+    #define UPS_I2C_ADDR (0x36)
     // ASR和TTS
     // #define ASR_ENABLED
     // #define TTS_ENABLED
-    // #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
+    #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
+    // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
+    // #define MATMUL_PTHREAD
+    // BadApple
+    #define BADAPPLE_ENABLED
+
+// ===============================================================================
+// Nano-Pod-Plus: Cubie-A7Z + SPI LCD
+// ===============================================================================
+#elif defined(NANO_POD_PLUS_CUBIE_A7Z)
+
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
+    // I2C端口设备文件（屏幕、键盘、UPS共用）
+    #define I2C_DEVFILE "/dev/i2c-7"
+    // 模型目录
+    #define MODEL_ROOT_DIR "/home/radxa/ai/_model/Nano"
+    // 屏幕
+    #define USE_DEV_LIB
+    #define OLED_I2C_ADDR (0x3c)
+    #define SCREEN_WIDTH  (240)
+    #define SCREEN_HEIGHT (320)
+    // 键盘
+    #define KB_I2C_ADDR (0x27)
+    // UPS
+    // #define UPS_ENABLED
+    #define UPS_I2C_ADDR (0x36)
+    // ASR和TTS
+    // #define ASR_ENABLED
+    // #define TTS_ENABLED
+    #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
     // BadApple
@@ -145,6 +181,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     #define SSD1309
     #define OLED_I2C_ADDR (0x3c)
+    #define SCREEN_WIDTH  (128)
+    #define SCREEN_HEIGHT (64)
     // 键盘
     #define KB_I2C_ADDR (0x27)
     // UPS
@@ -173,6 +211,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     #define SSD1306
     #define OLED_I2C_ADDR (0x3c)
+    #define SCREEN_WIDTH  (128)
+    #define SCREEN_HEIGHT (64)
     // 键盘
     #define KB_I2C_ADDR (0x27)
     // UPS
@@ -201,6 +241,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     #define SSD1306
     #define OLED_I2C_ADDR (0x3c)
+    #define SCREEN_WIDTH  (128)
+    #define SCREEN_HEIGHT (64)
     // 键盘
     #define KB_I2C_ADDR (0x27)
     // UPS
@@ -229,6 +271,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     #define NCURSES
     // #define OLED_I2C_ADDR (0x3c)
+    #define SCREEN_WIDTH  (240)
+    #define SCREEN_HEIGHT (320)
     // 键盘
     // #define KB_I2C_ADDR (0x27)
     // UPS
@@ -257,6 +301,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     // #define SSD1309
     // #define OLED_I2C_ADDR (0x3c)
+    // #define SCREEN_WIDTH  (128)
+    // #define SCREEN_HEIGHT (64)
     // 键盘
     // #define KB_I2C_ADDR (0x27)
     // UPS
@@ -285,6 +331,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     // #define SSD1309
     // #define OLED_I2C_ADDR (0x3c)
+    // #define SCREEN_WIDTH  (128)
+    // #define SCREEN_HEIGHT (64)
     // 键盘
     // #define KB_I2C_ADDR (0x27)
     // UPS
@@ -313,6 +361,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     // #define SSD1309
     // #define OLED_I2C_ADDR (0x3c)
+    // #define SCREEN_WIDTH  (128)
+    // #define SCREEN_HEIGHT (64)
     // 键盘
     // #define KB_I2C_ADDR (0x27)
     // UPS

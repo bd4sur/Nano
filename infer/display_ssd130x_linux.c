@@ -12,6 +12,12 @@
 
 #include "utils.h"
 
+
+#define FB_WIDTH  128
+#define FB_HEIGHT 64
+#define FB_PAGES  8
+
+
 #define OLED_CMD 0  // 写命令
 #define OLED_DATA 1 // 写数据
 

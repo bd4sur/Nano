@@ -26,6 +26,9 @@ double moon_phase(int year, int month, int day, int hour, int minute, int second
 // 月球亮面方向角
 double moon_bright_limb_pos_angle(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, double timezone_offset);
 
+// 地心黄道坐标 → 赤道坐标（简单转换，不考虑任何岁差、章动等因素）
+void ecliptic_to_equatorial(double lambda, double beta, double *RA, double *Dec);
+
 // 赤道坐标 → 地平坐标
 void equatorial_to_horizontal(
     double ra_deg,          // 赤经 (0~360°)

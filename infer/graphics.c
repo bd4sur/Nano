@@ -15,17 +15,7 @@ void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mod
     display_hal_init();
 
     gfx_clear(gfx);
-/*
-    // 初始化GDRAM
-    FRAME_BUFFER = (uint8_t **)calloc(FB_PAGES, sizeof(uint8_t *));
-    for(uint8_t i = 0; i < FB_PAGES; i++) {
-        FRAME_BUFFER[i] = (uint8_t *)calloc(FB_WIDTH, sizeof(uint8_t));
-    }
 
-    display_hal_init();
-
-    gfx_clear();
-*/
 }
 
 
@@ -35,7 +25,7 @@ void gfx_close(Nano_GFX *gfx) {
 
 
 void gfx_refresh(Nano_GFX *gfx) {
-    display_hal_refresh(gfx->frame_buffer_rgb888, gfx->width, gfx->height, 0, 0, 128, 64);
+    display_hal_refresh(gfx->frame_buffer_rgb888, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
 }
 
 // 清屏函数

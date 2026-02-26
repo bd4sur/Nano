@@ -6,6 +6,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#define FB_WIDTH  128
+#define FB_HEIGHT 64
+
 // 更新显存到frameBuffer
 void display_hal_refresh(
     uint8_t *frame_buffer_rgb888, uint32_t fb_width, uint32_t fb_height,

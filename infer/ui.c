@@ -12,6 +12,7 @@
 #endif
 
 #include "ephemeris.h"
+#include "celestial.h"
 
 
 #define IME_HANZI_NUM 7081
@@ -1295,7 +1296,69 @@ static uint32_t sunset_time[2] = {0, 0}; // hour, minute
 static int32_t is_speed_up = 0;
 static uint64_t start_timestamp = 0;
 
-void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
+static int32_t linglong_version = 0;
+
+void draw_linglong(Key_Event *key_event, Global_State *global_state) {
+    const double longitude = 119.0; // 东经
+    const double latitude = 32.0;   // 北纬
+    const double timezone = +8.0;   // 东八区
+
+    // 节流：不大于50fps
+    // if (global_state->timestamp - ephemeris_refersh_timestamp < 20) {
+    //     return;
+    // }
+    // ephemeris_refersh_timestamp = global_state->timestamp;
+
+    gfx_soft_clear(global_state->gfx);
+
+    time_t ts = 0;
+    if (is_speed_up) {
+        start_timestamp += 600000;
+        ts = (time_t)start_timestamp / 1000;
+    }
+    else {
+        ts = (time_t)global_state->timestamp / 1000;
+    }
+    struct tm *timeinfo = localtime(&ts); // 转换为本地时间
+    
+    int32_t second = timeinfo->tm_sec;
+    int32_t minute = timeinfo->tm_min;
+    int32_t hour = timeinfo->tm_hour;
+    int32_t day = timeinfo->tm_mday;
+    int32_t month = timeinfo->tm_mon + 1;
+    int32_t year = timeinfo->tm_year + 1900;
+
+
+    // wchar_t timestr[30];
+    // swprintf(timestr, 30, L"%04d-%02d-%02d\n%02d:%02d:%02d", year, month, day, hour, minute, second);
+    // gfx_draw_textline_mini(global_state->gfx, timestr, 0, 0, 255, 255, 255, 1);
+
+    render_sky(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height,
+        120, 120, 120,
+        90.0f, 180.0f, 1.0f,
+        // 2026, 2, 25, 12, 0, 0, 8.0, 119.0, 31.0,
+        year, month, day, hour, minute, second, timezone, longitude, latitude,
+        0,     // 降采样因子（设为0为自动，建议设为2）
+        0,     // 是否启用基于对称性的渲染优化（以画质为代价）
+        0,     // 是否启用查找表计算加速（以画质为代价）
+        0,     // 是否启用双线性插值以优化画质
+
+        2,     // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
+        1,     // 是否启用赤道坐标圈
+        1,     // 是否启用地平坐标圈
+        1,     // 是否启用星芒效果
+        1,     // 是否显示恒星名称
+        1,     // 是否显示大行星
+        1,     // 是否显示大行星名称
+        1      // 是否显示黄道
+    );
+
+    dithering_fast(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height);
+
+    gfx_refresh(global_state->gfx);
+}
+
+void draw_linglong_lite(Key_Event *key_event, Global_State *global_state) {
     const double longitude = 119.0; // 东经
     const double latitude = 32.0;   // 北纬
     const double timezone = +8.0;   // 东八区
@@ -1414,8 +1477,22 @@ void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
     last_day = day;
 }
 
+
+void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
+    if (linglong_version == 0) {
+        draw_linglong_lite(key_event, global_state);
+    }
+    else {
+        draw_linglong(key_event, global_state);
+    }
+}
+
+
 void ephemeris_toggle_speedup(Key_Event *key_event, Global_State *global_state) {
     is_speed_up = !is_speed_up;
     start_timestamp = global_state->timestamp;
 }
 
+void ephemeris_toggle_linglong_version(Key_Event *key_event, Global_State *global_state) {
+    linglong_version = !linglong_version;
+}

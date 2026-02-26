@@ -6,6 +6,7 @@
 #include "keyboard_hal.h"
 #include "infer.h"
 #include "prompt.h"
+
 #include "ephemeris.h"
 
 #include "platform.h"
@@ -591,7 +592,7 @@ int main() {
     // gfx初始化
 
     global_state->gfx = (Nano_GFX*)calloc(1, sizeof(Nano_GFX));
-    gfx_init(global_state->gfx, 240, 320, GFX_COLOR_MODE_RGB888);
+    gfx_init(global_state->gfx, SCREEN_WIDTH, SCREEN_HEIGHT, GFX_COLOR_MODE_RGB888);
 
     show_splash_screen(key_event, global_state);
 
@@ -1107,6 +1108,10 @@ int main() {
             // 按A键返回主菜单
             if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
                 global_state->STATE = STATE_MAIN_MENU;
+            }
+            // 按C键切换玲珑仪版本
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_C) {
+                ephemeris_toggle_linglong_version(key_event, global_state);
             }
             // 按D键开始加速
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {

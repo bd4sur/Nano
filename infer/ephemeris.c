@@ -11,7 +11,7 @@
 #include <math.h>
 #include <time.h>
 
-#include "vsop87c_small.h"
+#include "vsop87c_milli.h"
 
 #include "ephemeris.h"
 
@@ -362,7 +362,7 @@ void calculate_lunar_equatorial_coordinates(double jd, double *RA, double *Dec) 
     if (ra_deg > -90.0 && ra_deg <= 180.0) {
         *RA = 270.0 - ra_deg;
     }
-    else if (ra_deg <= -90.0 && ra_deg > -180.0) {
+    else if (ra_deg <= -90.0 && ra_deg >= -180.0) {
         *RA = -90.0 - ra_deg;
     }
 
@@ -473,6 +473,30 @@ double moon_bright_limb_pos_angle(int32_t year, int32_t month, int32_t day, int3
     double x = sin(d0) * cos(d) - cos(d0) * sin(d) * cos(a0 - a);
 
     return to_deg(atan2(y, x));
+}
+
+
+// 地心黄道坐标 → 赤道坐标（简单转换，不考虑任何岁差、章动等因素）
+void ecliptic_to_equatorial(double lambda, double beta, double *RA, double *Dec) {
+    double R = 1.0;
+
+    double eps = 23.0 + (26.0 / 60.0); // 黄赤交角
+    beta = to_rad(beta); eps = to_rad(eps); lambda = to_rad(lambda);
+    double X = -R * cos(beta) * cos(eps) * sin(lambda) + R * sin(beta) * sin(eps);
+    double Y = -R * cos(beta) * cos(lambda);
+    double Z =  R * cos(beta) * sin(eps) * sin(lambda) + R * sin(beta) * cos(eps);
+
+    // 赤经RA
+    double ra_deg = to_deg(atan2(Y, X));
+    if (ra_deg > -90.0 && ra_deg <= 180.0) {
+        *RA = 270.0 - ra_deg;
+    }
+    else if (ra_deg <= -90.0 && ra_deg >= -180.0) {
+        *RA = -90.0 - ra_deg;
+    }
+
+    // 赤纬Dec
+    *Dec = to_deg(atan2(Z, sqrt(X * X + Y * Y)));
 }
 
 
@@ -648,19 +672,19 @@ void where_is_the_planet(
 
     // 计算地球的日心直角坐标
     double earth_xyz[3] = {0.0, 0.0, 0.0};
-    vsop87c_small_getEarth(t, earth_xyz);
+    vsop87c_milli_getEarth(t, earth_xyz);
 
     // 计算行星的日心直角坐标
     double planet_xyz[3] = {0.0, 0.0, 0.0};
     switch (planet_index) {
-        case 1: vsop87c_small_getMercury(t, planet_xyz); break;
-        case 2: vsop87c_small_getVenus(t, planet_xyz); break;
+        case 1: vsop87c_milli_getMercury(t, planet_xyz); break;
+        case 2: vsop87c_milli_getVenus(t, planet_xyz); break;
         case 3: return;
-        case 4: vsop87c_small_getMars(t, planet_xyz); break;
-        case 5: vsop87c_small_getJupiter(t, planet_xyz); break;
-        case 6: vsop87c_small_getSaturn(t, planet_xyz); break;
-        case 7: vsop87c_small_getUranus(t, planet_xyz); break;
-        case 8: vsop87c_small_getNeptune(t, planet_xyz); break;
+        case 4: vsop87c_milli_getMars(t, planet_xyz); break;
+        case 5: vsop87c_milli_getJupiter(t, planet_xyz); break;
+        case 6: vsop87c_milli_getSaturn(t, planet_xyz); break;
+        case 7: vsop87c_milli_getUranus(t, planet_xyz); break;
+        case 8: vsop87c_milli_getNeptune(t, planet_xyz); break;
         default: return;
     }
 

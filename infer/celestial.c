@@ -20,7 +20,6 @@
 #define MIN(x,y) (((x) < (y)) ? (x) : (y))
 #define MAX(x,y) (((x) > (y)) ? (x) : (y))
 
-static int32_t USE_FISHEYE_PROJECTION = 1; // 是否使用鱼眼投影（否则使用XY投影）
 
 // 大气光学参数
 static float MIE_G = 0.9f;
@@ -57,20 +56,20 @@ static const uint8_t PLANET_COLOR_B[9]  = {0,    192,  64,   0,    0,    128,  1
 static const wchar_t PLANET_NAME[9][10] = {L"", L"水星", L"金星", L"地球", L"火星", L"木星", L"土星", L"天王星", L"海王星"};
 
 // 星表
-#define STARS_NUM (21)
+#define STARS_NUM (22)
 static const float STARS[STARS_NUM][7] = {
 //(RA)h     m      s    (Dec)d       m      s        Mag
-    {2.0f,  32.0f, 9.3f,      89.0f, 16.0f, 10.8f,   2.09f}, // 勾陈一（北极星）
-    {11.0f, 3.0f,  45.2f,     61.0f, 44.0f, 47.5f,   1.95f}, // 天枢
-    {11.0f, 1.0f,  52.5f,     56.0f, 22.0f, 43.0f,   2.34f}, // 天璇
+    {2.0f,  32.0f,  9.3f,     89.0f, 16.0f, 10.8f,   2.09f}, // 勾陈一（北极星）
+    {11.0f,  3.0f, 45.2f,     61.0f, 44.0f, 47.5f,   1.95f}, // 天枢
+    {11.0f,  1.0f, 52.5f,     56.0f, 22.0f, 43.0f,   2.34f}, // 天璇
     {11.0f, 53.0f, 51.4f,     53.0f, 41.0f, 24.5f,   2.42f}, // 天玑
-    {12.0f, 15.0f, 27.0f,     57.0f, 1.0f,  39.6f,   3.33f}, // 天权
-    {12.0f, 54.0f, 2.8f,      55.0f, 57.0f, 16.2f,   1.75f}, // 玉衡
+    {12.0f, 15.0f, 27.0f,     57.0f,  1.0f, 39.6f,   3.33f}, // 天权
+    {12.0f, 54.0f,  2.8f,     55.0f, 57.0f, 16.2f,   1.75f}, // 玉衡
     {13.0f, 23.0f, 56.3f,     54.0f, 55.0f, 11.3f,   2.25f}, // 开阳
     {13.0f, 47.0f, 32.2f,     49.0f, 18.0f, 28.7f,   1.80f}, // 摇光
 
     { 6.0f, 45.0f, 91.0f,    -16.0f, 43.0f, 35.0f,  -1.46f}, // 天狼
-    {14.0f, 15.0f, 37.6f,     19.0f, 9.0f,  53.3f,  -0.05f}, // 大角
+    {14.0f, 15.0f, 37.6f,     19.0f,  9.0f, 53.3f,  -0.05f}, // 大角
     {18.0f, 36.0f, 55.2f,     38.0f, 46.0f, 59.8f,   0.03f}, // 织女一
     {19.0f, 50.0f, 46.6f,      8.0f, 52.0f, 10.9f,   0.76f}, // 河鼓二
     { 0.0f, 42.0f, 43.6f,     41.0f, 16.0f, 15.7f,   3.40f}, // M31
@@ -81,13 +80,14 @@ static const float STARS[STARS_NUM][7] = {
     { 5.0f, 32.0f,  1.4f,      0.0f,-18.0f,  1.9f,   2.41f}, // 参宿三
     { 5.0f, 47.0f, 46.5f,     -9.0f, 40.0f, 17.7f,   2.06f}, // 参宿六
     { 5.0f, 14.0f, 33.2f,     -8.0f, 12.0f, 13.0f,   0.13f}, // 参宿七
-    { 5.0f, 35.0f, 27.0f,     -5.0f, 54.0f, 42.2f,   2.77f}  // 伐三
+    { 5.0f, 35.0f, 27.0f,     -5.0f, 54.0f, 42.2f,   2.77f}, // 伐三
+    { 3.0f, 47.0f, 29.4f,     24.0f,  6.0f, 19.6f,   2.87f}, // 昴宿星团
 };
 
 static const wchar_t STAR_NAME[STARS_NUM][10] = {
     L"北极星", L"天枢", L"", L"", L"", L"", L"开阳", L"",
     L"天狼", L"大角", L"织女一", L"河鼓二", L"M31",
-    L"参宿四", L"", L"", L"", L"", L"", L"参宿七", L""
+    L"参宿四", L"", L"", L"", L"", L"", L"参宿七", L"", L"昴宿星团"
 };
 
 // 月球表面纹理
@@ -177,7 +177,7 @@ static inline float dec_dms_to_decimal(float d, float m, float s) {
 // 地平天球的球坐标系→地平天球的笛卡尔坐标系
 void horizontal_to_xyz(float azimuth_deg, float altitude_deg, float R, float *x, float *y, float *z) {
     float altRad = to_rad_float(altitude_deg);
-    float azRad = to_rad_float(180.0f + azimuth_deg);
+    float azRad = to_rad_float(azimuth_deg);
     *x = R * cosf(altRad) * sinf(azRad);
     *y = R * cosf(altRad) * cosf(azRad);
     *z = R * sinf(altRad);
@@ -188,41 +188,19 @@ void horizontal_to_screen_xy(
     float azimuth_deg, float altitude_deg, float radius,
     float center_x, float center_y, float *scr_x, float *scr_y
 ) {
-    // 鱼眼投影
-    if (USE_FISHEYE_PROJECTION) {
-        // 因为是躺在地上看天，所以方位角是从正北逆时针旋转
-        float az_rad = (-azimuth_deg * M_PI) / 180.0f;
-        float alt_rad = (altitude_deg * M_PI) / 180.0f;
-        // 天顶距 θ = π/2 - altitude
-        float theta = M_PI_2 - alt_rad;
-        // 等距鱼眼投影：r = (2R / π) * θ
-        float r = (2.0f * radius / M_PI) * theta;
-        // 投影到平面：X指向东（注意因为是躺在地上看天，所以东是屏幕坐标系的左侧/负半轴），Y指向北
-        float X = r * sinf(az_rad);
-        float Y = -r * cosf(az_rad);
+    // 因为是躺在地上看天，所以方位角是从正北逆时针旋转
+    float az_rad = (-azimuth_deg * M_PI) / 180.0f;
+    float alt_rad = (altitude_deg * M_PI) / 180.0f;
+    // 天顶距 θ = π/2 - altitude
+    float theta = M_PI_2 - alt_rad;
+    // 等距鱼眼投影：r = (2R / π) * θ
+    float r = (2.0f * radius / M_PI) * theta;
+    // 投影到平面：X指向东（注意因为是躺在地上看天，所以东是屏幕坐标系的左侧/负半轴），Y指向北
+    float X = r * sinf(az_rad);
+    float Y = -r * cosf(az_rad);
 
-        *scr_x = X + center_x;
-        *scr_y = Y + center_y;
-    }
-    // 正交XY投影：笛卡尔坐标系的XY直接垂直投射到地平面上
-    else {
-        float x = 0.0f;
-        float y = 0.0f;
-        float z = 0.0f;
-        horizontal_to_xyz(azimuth_deg, altitude_deg, radius, &x, &y, &z);
-        (void)z;
-
-        if (altitude_deg >= 0.0f) {
-            // 转到canvas的屏幕坐标系
-            *scr_x = x + center_x;
-            *scr_y = y + center_y;
-        }
-        else {
-            // 地平面以下的，移出canvas显示范围
-            *scr_x = x - center_x;
-            *scr_y = y - center_y;
-        }
-    }
+    *scr_x = X + center_x;
+    *scr_y = Y + center_y;
 }
 
 
@@ -236,39 +214,240 @@ int32_t screen_xy_to_xyz(
     float dx = scr_x - center_x;
     float dy = scr_y - center_y;
     float r = sqrtf(dx*dx + dy*dy) / radius; // 归一化半径
-    // 鱼眼投影
-    if (USE_FISHEYE_PROJECTION) {
-        if (r <= 1) {
-            float theta = r * M_PI_2; // 天顶角
-            float phi = atan2f(dy, dx); // 方位角
-            *x = radius * sinf(theta) * cosf(phi);
-            *y = radius * sinf(theta) * sinf(phi);
-            *z = radius * cosf(theta);
-            return 1;
-        }
-        else {
-            *x = 0.0f;
-            *y = 0.0f;
-            *z = 0.0f;
-            return -1;
-        }
+    if (r <= 1) {
+        float theta = r * M_PI_2; // 天顶角
+        float phi = atan2f(dx, dy); // 方位角
+        *x = -radius * sinf(theta) * sinf(phi);
+        *y = -radius * sinf(theta) * cosf(phi);
+        *z =  radius * cosf(theta);
+        return 1;
     }
-    // XY投影
     else {
-        if (r <= 1) {
-            *x = dx;
-            *y = dy;
-            *z = sqrtf(radius*radius - (dx*dx + dy*dy));
-            return 1;
-        }
-        else {
-            *x = 0.0f;
-            *y = 0.0f;
-            *z = 0.0f;
-            return -1;
-        }
+        *x = 0.0f;
+        *y = 0.0f;
+        *z = 0.0f;
+        return -1;
     }
 }
+
+
+// 笛卡尔坐标系 → 地平天球球坐标系 (altitude, azimuth, radius)
+void xyz_to_horizontal(float x, float y, float z, float *azimuth_deg, float *altitude_deg, float *radius) {
+    // 1. 计算半径（处理原点情况）
+    float R = sqrtf(x * x + y * y + z * z);
+    *radius = R;
+
+    if (R < 1e-15f) {
+        *azimuth_deg = 0.0f;
+        *altitude_deg = 0.0f;
+        *radius = 0.0f;
+        return; // 原点无定义，返回默认值
+    }
+
+    // 2. 计算高度角（钳制避免浮点误差导致 asin 越界）
+    float sinAlt = z / R;
+    sinAlt = MAX(-1.0f, MIN(1.0f, sinAlt)); // 严格限制在 [-1, 1]
+    *altitude_deg = to_deg_float(asinf(sinAlt));
+
+    // 3. 处理天顶/天底（|z| ≈ R 时方位角无定义）
+    if (fabsf(z) >= R * (1.0f - 1e-10f)) {
+        *azimuth_deg = 0.0f;
+        *radius = 0.0f;
+        return; // 方位角设为0（惯例）
+    }
+
+    // 4. 计算方位角（核心：atan2(x, y) 对应原函数中的 azRad）
+    float azRad = atan2f(x, y); // 注意参数顺序：x 对应 sin(azRad), y 对应 cos(azRad)
+    *azimuth_deg = normalize_angle_float(to_deg_float(azRad) - 180.0f); // 逆向抵消原函数的 +180°
+
+    return;
+}
+
+
+
+void cross(float a0, float a1, float a2, float b0, float b1, float b2, float *out0, float *out1, float *out2) {
+    *out0 = a1 * b2 - a2 * b1;
+    *out1 = a2 * b0 - a0 * b2;
+    *out2 = a0 * b1 - a1 * b0;
+    return;
+}
+
+float dot(float a0, float a1, float a2, float b0, float b1, float b2) {
+    return a0 * b0 + a1 * b1 + a2 * b2;
+}
+
+void norm(float a0, float a1, float a2, float *out0, float *out1, float *out2) {
+    float len = sqrtf(a0 * a0 + a1 * a1 + a2 * a2);
+    if (len < 1e-20f) {
+        *out0 = 0.0f;
+        *out1 = 0.0f;
+        *out2 = 0.0f;
+    }
+    else {
+        *out0 = a0 / len;
+        *out1 = a1 / len;
+        *out2 = a2 / len;
+    }
+    return;
+}
+
+
+// 地平天球的球坐标系→地平天球的笛卡尔坐标系→投影到地面投影坐标系
+void fisheye_project(
+    float azimuth_deg, float altitude_deg, float radius,
+    float center_x, float center_y, float view_alt, float view_azi, float f,
+    float *scr_x, float *scr_y
+) {
+    if (view_alt == 90.0f && view_azi == 180.0f && f == 1.0f) {
+        horizontal_to_screen_xy(azimuth_deg, altitude_deg, radius, center_x, center_y, scr_x, scr_y);
+        return;
+    }
+
+    if (fabsf(view_alt - 90.0f) < 1e-5f) {
+        view_alt = 89.99f;
+    }
+
+    float v_view_x = 0.0f;
+    float v_view_y = 0.0f;
+    float v_view_z = 0.0f;
+    horizontal_to_xyz(view_azi, view_alt, radius, &v_view_x, &v_view_y, &v_view_z);
+
+    float v_view_norm_x = 0.0f;
+    float v_view_norm_y = 0.0f;
+    float v_view_norm_z = 0.0f;
+    norm(v_view_x, v_view_y, v_view_z, &v_view_norm_x, &v_view_norm_y, &v_view_norm_z);
+
+    float v_x = 0.0f;
+    float v_y = 0.0f;
+    float v_z = 0.0f;
+    horizontal_to_xyz(azimuth_deg, altitude_deg, radius, &v_x, &v_y, &v_z);
+
+    float v_norm_x = 0.0f;
+    float v_norm_y = 0.0f;
+    float v_norm_z = 0.0f;
+    norm(v_x, v_y, v_z, &v_norm_x, &v_norm_y, &v_norm_z);
+
+    float xv_x = 0.0f; float xv_y = 0.0f; float xv_z = 0.0f;
+    float yv_x = 0.0f; float yv_y = 0.0f; float yv_z = 0.0f;
+
+    // if (Math.abs(view_alt - 90) < 1e-5) { // 谨慎处理临界点附近的浮点误差问题
+    //     v_view = [0, 0, 1];
+    //     // NOTE 如果强行设置y_v，将失去天顶视角的旋转（某种 gimble lock？）
+    //     y_v = [0, 1, 0]; // NOTE 方向的选择有任意性，与默认方向与坐标反解有关
+    // }
+    // else {
+    //     let zenith = [0, 0, 1];
+    //     let proj = scale(v_view, dot(zenith, v_view));
+    //     y_v = norm(sub(zenith, proj));
+    // }
+
+    float zenith_x = 0.0f; float zenith_y = 0.0f; float zenith_z = 1.0f;
+    float s = dot(zenith_x, zenith_y, zenith_z, v_view_norm_x, v_view_norm_y, v_view_norm_z);
+    float proj_x = v_view_norm_x * s;
+    float proj_y = v_view_norm_y * s;
+    float proj_z = v_view_norm_z * s;
+
+    norm(zenith_x - proj_x, zenith_y - proj_y, zenith_z - proj_z, &yv_x, &yv_y, &yv_z);
+
+
+    cross(yv_x, yv_y, yv_z, v_view_norm_x, v_view_norm_y, v_view_norm_z, &xv_x, &xv_y, &xv_z);
+
+    float vx = dot(v_norm_x, v_norm_y, v_norm_z, xv_x, xv_y, xv_z);
+    float vy = dot(v_norm_x, v_norm_y, v_norm_z, yv_x, yv_y, yv_z);
+    float vz = dot(v_norm_x, v_norm_y, v_norm_z, v_view_norm_x, v_view_norm_y, v_view_norm_z);
+
+    if (vz < -1.0f) {
+        *scr_x = 0.0f;
+        *scr_y = 0.0f;
+        return;
+    }
+
+    float theta = acosf(vz); // rad
+    float phi_v = -atan2f(vx, vy); // rad
+    float r = (f * 2.0f * radius / M_PI) * theta;
+    float x =  r * sinf(phi_v);
+    float y = -r * cosf(phi_v);
+
+    *scr_x = x + center_x;
+    *scr_y = y + center_y;
+    return;
+}
+
+
+void fisheye_unproject(
+    float scr_x, float scr_y,
+    float radius, float center_x, float center_y, float view_alt, float view_azi, float f,
+    float *x, float *y, float *z
+) {
+    if (view_alt == 90.0f && view_azi == 180.0f && f == 1.0f) {
+        screen_xy_to_xyz(scr_x, scr_y, radius, center_x, center_y, x, y, z);
+        return;
+    }
+
+    if (fabsf(view_alt - 90.0f) < 1e-5f) {
+        view_alt = 89.99f;
+    }
+
+    // 屏幕坐标转极坐标
+    float dx = center_x - scr_x;
+    float dy = center_y - scr_y;
+    float r = sqrtf(dx * dx + dy * dy);
+
+    // 处理中心点退化
+    float phi_prime = 0.0f;
+    if (r < 1e-6f) {
+        phi_prime = 0.0f;
+    }
+    else {
+        phi_prime = atan2f(dx, dy);
+    }
+
+    // 极坐标转单位向量
+    float theta = (M_PI / 2.0f) * (r / (radius * f));
+    float pxy = sinf(theta);
+    float p_prime_x = pxy * sinf(phi_prime);
+    float p_prime_y = pxy * cosf(phi_prime);
+    float p_prime_z = cosf(theta);
+
+    // 构建旋转矩阵转置
+    float V_alt_rad = to_rad_float(view_alt);
+    float V_azi_rad = to_rad_float(view_azi);
+
+    // 视线向量v
+    float v_x = cosf(V_alt_rad) * sinf(V_azi_rad);
+    float v_y = cosf(V_alt_rad) * cosf(V_azi_rad);
+    float v_z = sinf(V_alt_rad);
+
+    // 构建y'轴
+    float dd = v_z; // dd = dot(zenith=[0,0,1], v) => vz
+    float y_prime_x = -dd * v_x;
+    float y_prime_y = -dd * v_y;
+    float y_prime_z = 1.0f - dd * v_z;
+
+    norm(y_prime_x, y_prime_y, y_prime_z, &y_prime_x, &y_prime_y, &y_prime_z);
+
+    // 构建x'轴
+    float x_prime_x = 0.0f;
+    float x_prime_y = 0.0f;
+    float x_prime_z = 0.0f;
+    cross(y_prime_x, y_prime_y, y_prime_z, v_x, v_y, v_z, &x_prime_x, &x_prime_y, &x_prime_z);
+    norm(x_prime_x, x_prime_y, x_prime_z, &x_prime_x, &x_prime_y, &x_prime_z);
+
+    // 局部坐标转地平坐标
+    float px = x_prime_x * p_prime_x + y_prime_x * p_prime_y + v_x * p_prime_z;
+    float py = x_prime_y * p_prime_x + y_prime_y * p_prime_y + v_y * p_prime_z;
+    float pz = x_prime_z * p_prime_x + y_prime_z * p_prime_y + v_z * p_prime_z;
+
+    // 归一化到radius
+    norm(px, py, pz, &px, &py, &pz);
+    *x = px * radius;
+    *y = py * radius;
+    *z = pz * radius;
+
+    return;
+}
+
+
 
 
 // ===============================================================================
@@ -301,8 +480,8 @@ void star_burst_filter(uint8_t *frame_buffer, int32_t width, int32_t height, flo
     float sb = b * factor * 255.0f;
 
     // 3. 绘制星芒（沿4个方向双向延伸）
-    int32_t blurLength = 100;
-    float decay = 0.97f;
+    int32_t blurLength = LINGLONG_STAR_BURST_RADIUS;
+    float decay = LINGLONG_STAR_BURST_DECAY;
 
     for (int32_t k = 0; k < 4; k++) {
         float dx = 0.0f;
@@ -511,7 +690,7 @@ void dithering_fast(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height) 
 // 绘制文字（临时实现）
 // ===============================================================================
 
-uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
+uint8_t *_get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
     if(utf32 < 127) {
         *font_width = 6;
         *font_height = 12;
@@ -531,7 +710,7 @@ uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
 }
 
 // 显示汉字
-void gfx_draw_char(
+void fb_draw_char(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     int32_t x, int32_t y, uint8_t *glyph, uint8_t font_width, uint8_t font_height,
     uint8_t red, uint8_t green, uint8_t blue
@@ -560,7 +739,7 @@ void gfx_draw_char(
 
 
 // 绘制一行文本
-void gfx_draw_textline(
+void fb_draw_textline(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     wchar_t *line, int32_t x, int32_t y, uint8_t red, uint8_t green, uint8_t blue
 ) {
@@ -570,14 +749,14 @@ void gfx_draw_textline(
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        uint8_t *glyph = get_glyph(current_char, &font_width, &font_height);
+        uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
         if (!glyph) {
-            glyph = get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+            glyph = _get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
         if (x_pos + font_width >= fb_width) {
             break;
         }
-        gfx_draw_char(frame_buffer, fb_width, fb_height,
+        fb_draw_char(frame_buffer, fb_width, fb_height,
             x_pos, y_pos, glyph, font_width, font_height, red, green, blue);
         x_pos += font_width;
     }
@@ -595,9 +774,9 @@ void fb_draw_textline_centered(
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        uint8_t *glyph = get_glyph(current_char, &font_width, &font_height);
+        uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
         if (!glyph) {
-            glyph = get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+            glyph = _get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
         total_width += font_width;
     }
@@ -610,9 +789,9 @@ void fb_draw_textline_centered(
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        uint8_t *glyph = get_glyph(current_char, &font_width, &font_height);
+        uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
         if (!glyph) {
-            glyph = get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+            glyph = _get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
         if (x_pos < 0) {
             x_pos += font_width;
@@ -621,7 +800,7 @@ void fb_draw_textline_centered(
         else if (x_pos + font_width > fb_width) {
             break;
         }
-        gfx_draw_char(frame_buffer, fb_width, fb_height,
+        fb_draw_char(frame_buffer, fb_width, fb_height,
             x_pos, y_pos, glyph, font_width, font_height, red, green, blue);
         x_pos += font_width;
     }
@@ -808,25 +987,37 @@ void draw_rect(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 }
 
 // 地面填充纯黑色
-void draw_horizon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height, float sky_radius, float center_x, float center_y) {
-    float margin = 6.0f;
-    float R_sq = sky_radius * sky_radius;
-    float R_margin_sq = (sky_radius - margin) * (sky_radius - margin);
+void draw_horizon(
+    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+    float sky_radius, float center_x, float center_y,
+    float view_alt, float view_azi, float f,
+    float sun_alt
+) {
+    float margin = LINGLONG_HORIZON_BLUR_MARGIN;
+    // float k = MAX(0.2f, sinf(to_rad_float(sun_alt)) * 1.5f);
+    float hx = 0.0f;
+    float hy = 0.0f;
+    float hz = 0.0f;
     for (int32_t y = 0; y < fb_height; y++) {
         for (int32_t x = 0; x < fb_width; x++) {
-            float dx = (float)x - center_x;
-            float dy = (float)y - center_y;
-            float r2 = dx * dx + dy * dy;
-            if (r2 > R_sq) {
-                set_pixel(frame_buffer, fb_width, fb_height, x, y, 0, 0, 0);
+            fisheye_unproject(x, y, sky_radius, center_x, center_y, view_alt, view_azi, f, &hx, &hy, &hz);
+            if (hz < 0) {
+                if (1) {
+                    set_pixel(frame_buffer, fb_width, fb_height, x, y, 0, 0, 0);
+                }
+                else {
+                    // TODO
+                }
             }
-            else if (r2 >= R_margin_sq && r2 < R_sq) {
-                float k = 1.0f - (sqrtf(r2) - (sky_radius - margin)) / margin;
-                scale_pixel(frame_buffer, fb_width, fb_height, x, y, k);
+            else if (1 &&hz <= margin && hz >= 0.0f) {
+                float c = 0.0f;
+                float t = hz / margin;
+                scale_pixel(frame_buffer, fb_width, fb_height, x, y, t);
             }
         }
     }
 }
+
 
 // ===============================================================================
 // 绘制坐标系
@@ -847,13 +1038,12 @@ void draw_horizon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height, fl
 void draw_celestial_circle(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
+    float view_alt, float view_azi, float f,
     int32_t is_meridian, float ra_hours, float dec_deg,
     int32_t line_weight, uint8_t colorR, uint8_t colorG, uint8_t colorB,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double timezone, double longitude, double latitude
 ) {
-    int32_t POINTS = 360; // 提高采样密度以获得更平滑曲线
-
     float x_prev = 0.0f;
     float y_prev = 0.0f;
     double alt_prev = 0.0f;
@@ -867,14 +1057,14 @@ void draw_celestial_circle(
         float ra_deg = fmodf(ra_hours, 24.0f) * 15.0f;
         double alt = 0.0;
         double azi = 0.0;
-        for (int32_t i = 0; i <= POINTS; i++) {
-            float dec = -90.0f + (180.0f * (float)i / (float)POINTS);
+        for (int32_t i = 0; i <= LINGLONG_CELESTIAL_CIRCLE_POINTS; i++) {
+            float dec = -90.0f + (180.0f * (float)i / (float)LINGLONG_CELESTIAL_CIRCLE_POINTS);
             equatorial_to_horizontal((double)ra_deg, (double)dec, year, month, day, hour, minute, second, timezone, longitude, latitude, &azi, &alt);
 
             if (alt > 0.0) {
                 float x = 0.0f;
                 float y = 0.0f;
-                horizontal_to_screen_xy(azi, alt, sky_radius, center_x, center_y, &x, &y);
+                fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &x, &y);
 
                 if (i == 0) {
                     x_0 = x;
@@ -900,8 +1090,8 @@ void draw_celestial_circle(
         if (dec_deg < -90.0f || dec_deg > 90.0f) return;
         double alt = 0.0;
         double azi = 0.0;
-        for (int32_t i = 0; i <= POINTS; i++) {
-            float ra_h = 24.0f * (float)i / (float)POINTS;
+        for (int32_t i = 0; i <= LINGLONG_CELESTIAL_CIRCLE_POINTS; i++) {
+            float ra_h = 24.0f * (float)i / (float)LINGLONG_CELESTIAL_CIRCLE_POINTS;
             float ra_deg = fmodf(ra_h, 24.0f) * 15.0f;
 
             equatorial_to_horizontal((double)ra_deg, (double)dec_deg, year, month, day, hour, minute, second, timezone, longitude, latitude, &azi, &alt);
@@ -909,7 +1099,7 @@ void draw_celestial_circle(
             if (alt > 0.0) {
                 float x = 0.0f;
                 float y = 0.0f;
-                horizontal_to_screen_xy(azi, alt, sky_radius, center_x, center_y, &x, &y);
+                fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &x, &y);
 
                 if (i == 0) {
                     x_0 = x;
@@ -933,6 +1123,61 @@ void draw_celestial_circle(
 }
 
 
+void draw_ecliptic_circle(
+    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+    float sky_radius, float center_x, float center_y,
+    float view_alt, float view_azi, float f,
+    int32_t line_weight, uint8_t colorR, uint8_t colorG, uint8_t colorB,
+    int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
+    double timezone, double longitude, double latitude
+) {
+    float x_prev = 0.0f;
+    float y_prev = 0.0f;
+    double alt_prev = 0.0f;
+    float x_0 = 0.0f;
+    float y_0 = 0.0f;
+    double alt_0 = 0.0f;
+
+    double eps = 0.5; // 防止两个端点处的点连成弓弦
+
+    double RA = 0.0;
+    double Dec = 0.0;
+    double alt = 0.0;
+    double azi = 0.0;
+    for (int32_t i = 0; i <= LINGLONG_ECLIPTIC_CIRCLE_POINTS; i++) {
+        // 计算黄道上各点的赤经赤纬
+        float lambda = (360.0f * (float)i / (float)LINGLONG_ECLIPTIC_CIRCLE_POINTS);
+        ecliptic_to_equatorial(lambda, 0, &RA, &Dec);
+        // 将其转为地平坐标
+        equatorial_to_horizontal(RA, Dec, year, month, day, hour, minute, second, timezone, longitude, latitude, &azi, &alt);
+
+        if (alt > 0.0) {
+            float x = 0.0f;
+            float y = 0.0f;
+            fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &x, &y);
+
+            if (i == 0) {
+                x_0 = x;
+                y_0 = y;
+                alt_0 = alt;
+            }
+            
+            if (alt_prev > eps && alt > eps) {
+                draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x, y, line_weight, colorR, colorG, colorB);
+            }
+
+            x_prev = x;
+            y_prev = y;
+            alt_prev = alt;
+        }
+    }
+    if (alt_0 > eps && alt > eps) {
+        draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x_0, y_0, line_weight, colorR, colorG, colorB);
+    }
+
+}
+
+
 // ===============================================================================
 // 绘制天体
 // ===============================================================================
@@ -945,10 +1190,10 @@ void render_sun(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sun_radius = sky_radius * 0.02;
 
     // 太阳半径（随高度变化）：地平线附近略大
-    float radius = MAX(6.0f, sun_radius) * (1.0f + 0.2f * MAX(0.0f, 1.0f - sun_altitude_deg / 10.0f));
+    float radius = MAX(LINGLONG_SUN_RADIUS_MIN, sun_radius) * (1.0f + 0.2f * MAX(0.0f, 1.0f - sun_altitude_deg / 10.0f));
 
     // 光晕半径
-    int32_t glow_radius = 20;
+    int32_t glow_radius = LINGLONG_SUN_GLOW_RADIUS;
 
     // 太阳颜色：随高度从红→黄→白
     uint8_t r = 0;
@@ -1019,6 +1264,7 @@ void render_sun(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 // 基于球面几何晨昏线的月相绘制（带物理合理的软边缘）
 void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
+    float view_alt, float view_azi, float f,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double timezone, double longitude, double latitude
 ) {
@@ -1041,7 +1287,7 @@ void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     // 计算月球的屏幕投影坐标
     float moon_scr_x = 0.0f;
     float moon_scr_y = 0.0f;
-    horizontal_to_screen_xy(moon_azi, moon_alt, sky_radius, center_x, center_y, &moon_scr_x, &moon_scr_y);
+    fisheye_project(moon_azi, moon_alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &moon_scr_x, &moon_scr_y);
 
     // 以下是计算月面贴图的北极（月球地理北极）相对于屏幕y轴的旋转角
     // 这一步是旋转月球地理北极，使其指向其所在的天球子午圈北向切线方向，为后面计算月球亮区旋转角作准备
@@ -1055,7 +1301,7 @@ void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         longitude, latitude,
         &northdelta_azi, &northdelta_alt
     );
-    horizontal_to_screen_xy(northdelta_azi, northdelta_alt, sky_radius, center_x, center_y, &northdelta_scr_x, &northdelta_scr_y);
+    fisheye_project(northdelta_azi, northdelta_alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &northdelta_scr_x, &northdelta_scr_y);
 
     float xa = moon_scr_x;
     float ya = moon_scr_y;
@@ -1069,7 +1315,7 @@ void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float bright_pos_deg = (float)moon_bright_limb_pos_angle(year, month, day, hour, minute, second, timezone);
     bright_pos_deg = normalize_angle_float(bright_pos_deg);
     // 假定月面亮区两端永远是月球的地理南北极
-    tilt_deg = normalize_angle_float(tilt_deg - (bright_pos_deg-90)); // NOTE 仰视东西颠倒；亮区拱点和亮区的尖尖相差90度
+    bright_pos_deg = normalize_angle_float(tilt_deg - (bright_pos_deg-90)); // NOTE 仰视东西颠倒；亮区拱点和亮区的尖尖相差90度
 
     // 月相
     float moon_i = (float)moon_phase(year, month, day, hour, minute, second, timezone);
@@ -1077,8 +1323,8 @@ void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float phase_deg = normalize_angle_float(moon_i - 90);
     float cosPhase = cosf(to_rad_float(phase_deg));
     float sinPhase = sinf(to_rad_float(phase_deg));
-    float sunDirX = cosPhase * cosf(to_rad_float(tilt_deg));
-    float sunDirY = cosPhase * sinf(to_rad_float(tilt_deg));
+    float sunDirX = cosPhase * cosf(to_rad_float(bright_pos_deg));
+    float sunDirY = cosPhase * sinf(to_rad_float(bright_pos_deg));
     float sunDirZ = sinPhase;
 
     float sunLen = sqrtf(sunDirX * sunDirX + sunDirY * sunDirY + sunDirZ * sunDirZ);
@@ -1098,7 +1344,7 @@ void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float edgeSmoothWidth = 1.0f;
 
     // 显示直径
-    float moonRadius = sky_radius * 0.08;
+    float moonRadius = MAX(LINGLONG_MOON_RADIUS_MIN, sky_radius * 0.08);
 
     float r2 = moonRadius * moonRadius;
     for (int32_t dy = -(int32_t)moonRadius; dy <= (int32_t)moonRadius; dy++) {
@@ -1237,8 +1483,11 @@ void draw_star(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
     float sx, float sy, float magnitude, float radius, uint8_t red, uint8_t green, uint8_t blue
 ) {
+    if (sx < 0 || sx >= fb_width || sy < 0 || sy >= fb_height) {
+        return;
+    }
 
-    int32_t maxGlowRadius = 1; // 光晕最大半径（像素）
+    int32_t maxGlowRadius = LINGLONG_STAR_GLOW_RADIUS; // 光晕最大半径（像素）
 
     float starLumBase = magnitude_to_relative_luminance(magnitude);
 
@@ -1300,7 +1549,7 @@ void draw_star(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 // ===============================================================================
 
 // 计算大气散射强度
-void calculate_scattered_pixel(
+void scatter_model_1(
     float ray_x, float ray_y, float ray_z, float sun_x, float sun_y, float sun_z,
     float *red, float *green, float *blue,
     int32_t enable_opt_lut
@@ -1436,25 +1685,200 @@ void calculate_scattered_pixel(
     *blue  = MIN(1.0f, scattered_2 * global_gain);
 }
 
+
+// 计算大气散射强度（模型2：Nishita模型）
+// Ref. https://www.scratchapixel.com/lessons/procedural-generation-virtual-worlds/simulating-sky/simulating-colors-of-the-sky.html
+void scatter_model_2(
+    float ray_x, float ray_y, float ray_z, float sun_x, float sun_y, float sun_z,
+    float *red, float *green, float *blue,
+    int32_t enable_opt_lut /* dummy */
+) {
+
+    // 视线向量归一化
+    float ray_length = sqrtf(ray_x * ray_x + ray_y * ray_y + ray_z * ray_z);
+    if (ray_length == 0.0f) {
+        *red = 0;
+        *green = 0;
+        *blue = 0;
+        return;
+    }
+    float ray_norm_x = ray_x / ray_length;
+    float ray_norm_y = ray_y / ray_length;
+    float ray_norm_z = ray_z / ray_length;
+
+
+    // 太阳方向归一化
+    float sun_vec_radius = sqrtf(sun_x * sun_x + sun_y * sun_y + sun_z * sun_z);
+    if (sun_vec_radius == 0.0f) {
+        *red = 0;
+        *green = 255.0;
+        *blue = 0;
+        return;
+    }
+    float sun_norm_x = sun_x / sun_vec_radius;
+    float sun_norm_y = sun_y / sun_vec_radius;
+    float sun_norm_z = sun_z / sun_vec_radius;
+
+    // 太阳仰角
+    float sun_altitude = asinf(MAX(-1.0f, MIN(1.0f, sun_norm_z))); // [-π/2, π/2]
+    float sun_altitude_deg = sun_altitude * 180.0f / M_PI;
+    float sun_azimuth = 90.0f + atan2f(sun_norm_y, sun_norm_x) * 180.0f / M_PI;
+
+    // 观察者视线仰角
+    float view_zenith = acosf(MAX(0.0f, MIN(1.0f, ray_norm_z)));
+    float view_zenith_deg = view_zenith * 180.0f / M_PI;
+    float view_altitude_deg = 90.0f - view_zenith_deg;
+
+    // 观察方向与太阳方向夹角余弦
+    float cos_theta = ray_norm_x * sun_norm_x + ray_norm_y * sun_norm_y + ray_norm_z * sun_norm_z;
+
+    // 米氏散射相函数
+    const float g = 0.76f;
+    float mie_phase = 3.0f / (8.0f * M_PI) * ((1.0f - g*g) * (1.0f + cos_theta * cos_theta)) / ((2.0f + g*g) * powf(1.0f + g*g - 2.0f * g * cos_theta, 1.5f));
+
+    // 瑞利散射相函数
+    float rayleigh_phase = (1.0f + cos_theta * cos_theta) * 0.75f;
+
+    // 瑞利散射系数：分波长（RGB通道）计算
+    const float rayleigh_beta_base = 0.04f;
+    // rayleigh_beta_at_wavelength[i] = rayleigh_beta_base * Math.pow(rayleigh_ref_wavelength / RAYLEIGH_WAVELENGTH_FACTORS[i], 4);
+    float rayleigh_ref_wavelength = RAYLEIGH_WAVELENGTH_FACTORS[1]; // G分量作为参考波长
+    float wl_0 = rayleigh_ref_wavelength / RAYLEIGH_WAVELENGTH_FACTORS[0]; // R
+    float wl_1 = rayleigh_ref_wavelength / RAYLEIGH_WAVELENGTH_FACTORS[1]; // G
+    float wl_2 = rayleigh_ref_wavelength / RAYLEIGH_WAVELENGTH_FACTORS[2]; // B
+
+    float rayleigh_beta_0 = rayleigh_beta_base * wl_0 * wl_0 * wl_0 * wl_0; // R
+    float rayleigh_beta_1 = rayleigh_beta_base * wl_1 * wl_1 * wl_1 * wl_1; // G
+    float rayleigh_beta_2 = rayleigh_beta_base * wl_2 * wl_2 * wl_2 * wl_2; // B
+
+    // 米氏散射系数
+    float mie_beta = 0.05;
+
+    const float H = 8.0f;   // 大气层厚度
+    const float H_R = 8.0f;  // 瑞利散射高度
+    const float H_M = 1.2f;  // 米氏散射高度
+    float R = 3000.0f * cosf(to_rad_float(sun_azimuth)) + 3300.0f; // 地球+大气层半径，用于计算几何光程，控制维纳斯带强度
+
+    const int32_t S = 4; // 路径积分的取样点数
+
+    // 已知三角形ABC，AB固定为(R-H)，AC固定为R，角B=α+90°，求BC关于α的表达式。
+
+    float view_alt = (view_altitude_deg >= 90.0f) ? (180.0f - view_altitude_deg) : view_altitude_deg;
+    float cos_view_alt = cosf(to_rad_float(view_alt));
+    float sin_view_alt = sinf(to_rad_float(view_alt));
+    float Lray = sqrtf(R*R - (R-H)*(R-H) * cos_view_alt * cos_view_alt) - (R-H) * sin_view_alt;
+
+    float sun_alt = (sun_altitude_deg >= 90.0f) ? (180.0f - sun_altitude_deg) : sun_altitude_deg;
+    float cos_sun_alt = cosf(to_rad_float(sun_alt));
+    float sin_sun_alt = sinf(to_rad_float(sun_alt));
+    float Lsun = sqrtf(R*R - (R-H)*(R-H) * cos_sun_alt * cos_sun_alt) - (R-H) * sin_sun_alt;
+
+    float sum_R_r = 0.0f; float sum_R_g = 0.0f; float sum_R_b = 0.0f;
+    float sum_M_r = 0.0f; float sum_M_g = 0.0f; float sum_M_b = 0.0f;
+    float depth_R = 0.0f;
+    float depth_M = 0.0f;
+
+    for (int32_t i = 0; i < S; i++) {
+        float t = (float)i / (float)S;
+
+        float L_t = t * Lray;
+        float dl = L_t / (float)S;
+        float h_R_t = t * H_R;
+        float h_M_t = t * H_M;
+        float density_R_t = expf(-h_R_t / H_R);
+        float density_M_t = expf(-h_M_t / H_M);
+
+        depth_R += density_R_t * dl;
+        depth_M += density_M_t * dl;
+
+        float depth_sun_R = 0;
+        float depth_sun_M = 0;
+
+        float Lsun_t = (1-t) * Lsun;
+        float dlsun = Lsun_t / (float)S;
+
+        for (int32_t j = 0; j < S; j++) {
+            float n = (float)j / (float)S;
+            float hsun_R = h_R_t + n * (1-t) * H_R;
+            float hsun_M = h_M_t + n * (1-t) * H_M;
+            float density_sun_R = expf(-hsun_R / H_R);
+            float density_sun_M = expf(-hsun_M / H_M);
+            depth_sun_R += density_sun_R * dlsun;
+            depth_sun_M += density_sun_M * dlsun;
+        }
+
+        float tau_r = rayleigh_beta_0 * (depth_sun_R + depth_R) + mie_beta * (depth_sun_M + depth_M) * 1.1;
+        float tau_g = rayleigh_beta_1 * (depth_sun_R + depth_R) + mie_beta * (depth_sun_M + depth_M) * 1.1;
+        float tau_b = rayleigh_beta_2 * (depth_sun_R + depth_R) + mie_beta * (depth_sun_M + depth_M) * 1.1;
+
+        float attn_r = expf(-tau_r);
+        float attn_g = expf(-tau_g);
+        float attn_b = expf(-tau_b);
+
+        sum_R_r += attn_r * depth_R; sum_R_g += attn_g * depth_R; sum_R_b += attn_b * depth_R;
+        sum_M_r += attn_r * depth_M; sum_M_g += attn_g * depth_M; sum_M_b += attn_b * depth_M;
+    }
+
+    // 臭氧吸收
+    float oz_factor = 0.16f;
+    float oz_r = expf(-OZONE_ABSORPTION[0] * Lsun * oz_factor);
+    float oz_g = expf(-OZONE_ABSORPTION[1] * Lsun * oz_factor);
+    float oz_b = expf(-OZONE_ABSORPTION[2] * Lsun * oz_factor);
+
+    float scattered_0 = (sum_R_r * rayleigh_beta_0 * rayleigh_phase + sum_M_r * mie_beta * mie_phase) * oz_r;
+    float scattered_1 = (sum_R_g * rayleigh_beta_1 * rayleigh_phase + sum_M_g * mie_beta * mie_phase) * oz_g;
+    float scattered_2 = (sum_R_b * rayleigh_beta_2 * rayleigh_phase + sum_M_b * mie_beta * mie_phase) * oz_b;
+
+    // 全局增益、限幅、输出
+    const float global_gain = 2.0;
+    *red   = MIN(1.0f, scattered_0 * global_gain);
+    *green = MIN(1.0f, scattered_1 * global_gain);
+    *blue  = MIN(1.0f, scattered_2 * global_gain);
+}
+
+
+void calculate_scattered_pixel(
+    float ray_x, float ray_y, float ray_z, float sun_x, float sun_y, float sun_z,
+    float *red, float *green, float *blue,
+    int32_t enable_opt_lut,
+    int32_t model_index
+) {
+    if (model_index == 1) {
+        scatter_model_1(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, red, green, blue, enable_opt_lut);
+    }
+    else if (model_index == 2) {
+        scatter_model_2(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, red, green, blue, enable_opt_lut);
+    }
+    else {
+        *red   = 0.0f;
+        *green = 0.0f;
+        *blue  = 0.0f;
+    }
+}
+
+
 // ===============================================================================
 // 渲染整个天空
 // ===============================================================================
 
 void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
+    float view_alt, float view_azi, float f,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double timezone, double longitude, double latitude,
     int32_t downsampling_factor,     // 降采样因子（设为0为自动，建议设为2）
     int32_t enable_opt_sym,          // 是否启用基于对称性的渲染优化（以画质为代价）
-    int32_t enable_opt_lut,          // 是否启用基于对称性的渲染优化（以画质为代价）
+    int32_t enable_opt_lut,          // 是否启用查找表计算加速（以画质为代价）
+    int32_t enable_opt_bilinear,     // 是否启用双线性插值以优化画质
 
+    int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
     int32_t enable_equatorial_coord, // 是否启用赤道坐标圈
     int32_t enable_horizontal_coord, // 是否启用地平坐标圈
     int32_t enable_star_burst,       // 是否启用星芒效果
-    int32_t enable_atmospheric_scattering, // 是否启用大气散射效果
     int32_t enable_star_name,        // 是否显示恒星名称
     int32_t enable_planet,           // 是否显示大行星
-    int32_t enable_planet_name       // 是否显示大行星名称
+    int32_t enable_planet_name,      // 是否显示大行星名称
+    int32_t enable_ecliptic_circle   // 是否显示黄道
 ) {
 
     if (fb_width < (int32_t)sky_radius * 2 || fb_height < (int32_t)sky_radius * 2 ||
@@ -1481,7 +1905,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 
     float sun_proj_x = 0.0f;
     float sun_proj_y = 0.0f;
-    horizontal_to_screen_xy(sun_azi, sun_alt, sky_radius, center_x, center_y, &sun_proj_x, &sun_proj_y);
+    fisheye_project(sun_azi, sun_alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &sun_proj_x, &sun_proj_y);
 
     // 天空绘制范围的屏幕坐标
     int32_t y1 = (int32_t)floorf(center_y - sky_radius);
@@ -1490,8 +1914,18 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     int32_t x2 = (int32_t)floorf(center_x + sky_radius);
 
     // 大气散射
-    int32_t _downsampling_factor = (downsampling_factor == 0) ? ((sun_alt < -18.0) ? 8 : 2) : (downsampling_factor); // 降采样倍数
-    if (enable_atmospheric_scattering) {
+    if (sky_model > 0) {
+        // 首先根据太阳高度自适应设置降采样因子
+        int32_t _downsampling_factor = downsampling_factor;
+        if (downsampling_factor == 0) {
+            if (sun_alt < -18.0) {
+                _downsampling_factor = (enable_opt_bilinear && !enable_opt_sym) ? 32 : 8;
+            }
+            else {
+                _downsampling_factor = (enable_opt_bilinear && !enable_opt_sym) ? 8 : 2;
+            }
+        }
+
         if (enable_opt_sym) {
             for (int32_t y = y1; y < y2; y += 2) {
                 for (int32_t x = x1; x < x2; x += 2) {
@@ -1519,14 +1953,12 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
                         float ray_x = 0.0f;
                         float ray_y = 0.0f;
                         float ray_z = 0.0f;
-                        int32_t on_sphere = screen_xy_to_xyz((float)x, (float)y, sky_radius, center_x, center_y, &ray_x, &ray_y, &ray_z);
+                        fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, f, &ray_x, &ray_y, &ray_z);
 
                         float red = 0.0f;
                         float green = 0.0f;
                         float blue = 0.0f;
-                        if (on_sphere > 0) {
-                            calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut);
-                        }
+                        calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut, sky_model);
 
                         uint8_t rr = (uint8_t)(red * 255.0f);
                         uint8_t gg = (uint8_t)(green * 255.0f);
@@ -1554,19 +1986,77 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
                     float ray_x = 0.0f;
                     float ray_y = 0.0f;
                     float ray_z = 0.0f;
-                    int32_t on_sphere = screen_xy_to_xyz((float)x, (float)y, sky_radius, center_x, center_y, &ray_x, &ray_y, &ray_z);
+                    fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, f, &ray_x, &ray_y, &ray_z);
 
                     float red = 0.0f;
                     float green = 0.0f;
                     float blue = 0.0f;
-                    if (on_sphere > 0) {
-                        calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut);
+                    calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut, sky_model);
+
+                    if (enable_opt_bilinear) {
+                        set_pixel(frame_buffer, fb_width, fb_height, x, y, (uint8_t)(red * 255.0f), (uint8_t)(green * 255.0f), (uint8_t)(blue  * 255.0f));
+                    }
+                    else {
+                        for (int32_t i = 0; i < _downsampling_factor; i++) {
+                            for (int32_t j = 0; j < _downsampling_factor; j++) {
+                                add_pixel(frame_buffer, fb_width, fb_height,
+                                    (x+i), (y+j), (uint8_t)(red * 255.0f), (uint8_t)(green * 255.0f), (uint8_t)(blue  * 255.0f));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 双线性插值以缓解块效应
+        if (enable_opt_bilinear) {
+            int32_t C = _downsampling_factor;
+            for (int32_t y = y1; y < y2; y += C) {
+                for (int32_t x = x1; x < x2; x += C) {
+
+                    int32_t r2 = (x-center_x)*(x-center_x) + (y-center_y)*(y-center_y);
+                    if (r2 > (sky_radius+C)*(sky_radius+C)) continue;
+
+                    int32_t idx_11 = ((y+0) * fb_width + (x+0)) * 3;
+                    int32_t idx_12 = (x+C < fb_width)  ? (((y+0) * fb_width + (x+C)) * 3) : idx_11;
+                    int32_t idx_21 = (y+C < fb_height) ? (((y+C) * fb_width + (x+0)) * 3) : idx_11;
+                    int32_t idx_22 = ((x+C < fb_width) || (y+C < fb_height)) ? (((y+C) * fb_width + (x+C)) * 3) : idx_11;
+
+                    uint8_t r11 = frame_buffer[idx_11 + 0]; uint8_t r12 = frame_buffer[idx_12 + 0]; uint8_t r21 = frame_buffer[idx_21 + 0]; uint8_t r22 = frame_buffer[idx_22 + 0];
+                    uint8_t g11 = frame_buffer[idx_11 + 1]; uint8_t g12 = frame_buffer[idx_12 + 1]; uint8_t g21 = frame_buffer[idx_21 + 1]; uint8_t g22 = frame_buffer[idx_22 + 1];
+                    uint8_t b11 = frame_buffer[idx_11 + 2]; uint8_t b12 = frame_buffer[idx_12 + 2]; uint8_t b21 = frame_buffer[idx_21 + 2]; uint8_t b22 = frame_buffer[idx_22 + 2];
+
+                    // 检查并处理黑边
+                    if (r11+b11+g11 == 0) {
+                        if      (r22+b22+g22 != 0) { r11 = r22; g11 = g22; b11 = b22; }
+                        else if (r12+b12+g12 != 0) { r11 = r12; g11 = g12; b11 = b12; }
+                        else if (r21+b21+g21 != 0) { r11 = r21; g11 = g21; b11 = b21; }
+                    }
+                    if (r12+b12+g12 == 0) {
+                        if      (r22+b22+g22 != 0) { r12 = r22; g12 = g22; b12 = b22; }
+                        else if (r11+b11+g11 != 0) { r12 = r11; g12 = g11; b12 = b11; }
+                        else if (r21+b21+g21 != 0) { r12 = r21; g12 = g21; b12 = b21; }
+                    }
+                    if (r21+b21+g21 == 0) {
+                        if      (r22+b22+g22 != 0) { r21 = r22; g21 = g22; b21 = b22; }
+                        else if (r11+b11+g11 != 0) { r21 = r11; g21 = g11; b21 = b11; }
+                        else if (r12+b12+g12 != 0) { r21 = r12; g21 = g12; b21 = b12; }
+                    }
+                    if (r22+b22+g22 == 0) {
+                        if      (r21+b21+g21 != 0) { r22 = r21; g22 = g21; b22 = b21; }
+                        else if (r11+b11+g11 != 0) { r22 = r11; g22 = g11; b22 = b11; }
+                        else if (r12+b12+g12 != 0) { r22 = r12; g22 = g12; b22 = b12; }
                     }
 
-                    for (int32_t i = 0; i < _downsampling_factor; i++) {
-                        for (int32_t j = 0; j < _downsampling_factor; j++) {
-                            add_pixel(frame_buffer, fb_width, fb_height,
-                                (x+i), (y+j), (uint8_t)(red * 255.0f), (uint8_t)(green * 255.0f), (uint8_t)(blue  * 255.0f));
+                    for (int32_t i = 0; i < C; i++) {
+                        for (int32_t j = 0; j < C; j++) {
+                            if ((x + j >= fb_width) || (y + i >= fb_height)) continue;
+                            int32_t idx = ((y+i) * fb_width + (x+j)) * 3;
+                            float v = (float)i / (float)C;
+                            float u = (float)j / (float)C;
+                            frame_buffer[idx + 0] = MIN(255, (uint8_t)((1-u)*(1-v)*(float)r11 + u*(1-v)*(float)r12 + (1-u)*v*(float)r21 + u*v*(float)r22));
+                            frame_buffer[idx + 1] = MIN(255, (uint8_t)((1-u)*(1-v)*(float)g11 + u*(1-v)*(float)g12 + (1-u)*v*(float)g21 + u*v*(float)g22));
+                            frame_buffer[idx + 2] = MIN(255, (uint8_t)((1-u)*(1-v)*(float)b11 + u*(1-v)*(float)b12 + (1-u)*v*(float)b21 + u*v*(float)b22));
                         }
                     }
                 }
@@ -1585,6 +2075,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     render_moon(
         frame_buffer, fb_width, fb_height,
         sky_radius, center_x, center_y,
+        view_alt, view_azi, f,
         year, month, day, hour, minute, second, timezone, longitude, latitude);
 
     // 绘制星芒
@@ -1606,13 +2097,24 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 
         float sx = 0.0f;
         float sy = 0.0f;
-        horizontal_to_screen_xy(azi, alt, sky_radius, center_x, center_y, &sx, &sy);
+        fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &sx, &sy);
 
         draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, sx, sy, mag, 1, 255, 255, 255);
 
         if (enable_star_name) {
-            gfx_draw_textline(frame_buffer, fb_width, fb_height, STAR_NAME[i], sx+3, sy+3, 250, 250, 250);
+            fb_draw_textline(frame_buffer, fb_width, fb_height, STAR_NAME[i], sx+3, sy+3, 250, 250, 250);
         }
+    }
+
+    // 绘制黄道
+    if (enable_ecliptic_circle) {
+        draw_ecliptic_circle(
+            frame_buffer, fb_width, fb_height,
+            sky_radius, center_x, center_y,
+            view_alt, view_azi, f,
+            6, 32, 32, 0,
+            year, month, day, hour, minute, second, timezone, longitude, latitude
+        );
     }
 
     // 绘制大行星
@@ -1625,13 +2127,13 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 
             float planet_proj_x = 0.0f;
             float planet_proj_y = 0.0f;
-            horizontal_to_screen_xy(planet_azi, planet_alt, sky_radius, center_x, center_y, &planet_proj_x, &planet_proj_y);
+            fisheye_project(planet_azi, planet_alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &planet_proj_x, &planet_proj_y);
 
             draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, planet_proj_x, planet_proj_y,
                 0.0f, PLANET_RADIUS[i], PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
 
             if (enable_planet_name) {
-                gfx_draw_textline(frame_buffer, fb_width, fb_height, PLANET_NAME[i], planet_proj_x+3, planet_proj_y+3, PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
+                fb_draw_textline(frame_buffer, fb_width, fb_height, PLANET_NAME[i], planet_proj_x+3, planet_proj_y+3, PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
             }
         }
     }
@@ -1640,10 +2142,11 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     if (enable_equatorial_coord) {
         // 绘制赤道天球子午圈
         for (int32_t i = 0; i < 24; i += 2) {
-            int32_t line_width = (i == 0 || i == 12) ? 3 : 2;
+            int32_t line_width = (i == 0 || i == 12) ? 5 : 3;
             draw_celestial_circle(
                 frame_buffer, fb_width, fb_height,
                 sky_radius, center_x, center_y,
+                view_alt, view_azi, f,
                 1, (float)i, 0.0f,
                 line_width, 8, 16, 32,
                 year, month, day, hour, minute, second, timezone, longitude, latitude
@@ -1651,10 +2154,11 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         }
         // 绘制赤道天球等纬度圈
         for (int32_t i = -90; i < 90; i += 10) {
-            int32_t line_width = (i == 0) ? 3 : 2;
+            int32_t line_width = (i == 0) ? 5 : 3;
             draw_celestial_circle(
                 frame_buffer, fb_width, fb_height,
                 sky_radius, center_x, center_y,
+                view_alt, view_azi, f,
                 0, 0.0f, (float)i,
                 line_width, 8, 16, 32,
                 year, month, day, hour, minute, second, timezone, longitude, latitude
@@ -1662,16 +2166,22 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         }
     }
 
-    // 绘制地景（天空投影圆盘之外的部分）
-    draw_horizon(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y);
-
     // 绘制地平坐标网格
     if (enable_horizontal_coord) {
-        draw_circle_outline(frame_buffer, fb_width, fb_height, center_x, center_y, (sky_radius-1.0f), 2.0f, 128, 128, 128);
-        draw_circle_outline(frame_buffer, fb_width, fb_height, center_x, center_y, (sky_radius/3.0f), 1.0f, 16, 16, 16);
-        draw_circle_outline(frame_buffer, fb_width, fb_height, center_x, center_y, (sky_radius/3.0f*2.0f), 1.0f, 16, 16, 16);
-        draw_line(frame_buffer, fb_width, fb_height, center_x, y1, center_x, y2, 1, 16, 16, 16);
-        draw_line(frame_buffer, fb_width, fb_height, x1, center_y, x2, center_y, 1, 16, 16, 16);
+        float label_x = 0.0f;
+        float label_y = 0.0f;
+        fisheye_project(0, 6, sky_radius, center_x, center_y, view_alt, view_azi, f, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"北", label_x, label_y, 255, 0, 0);
+        fisheye_project(90, 6, sky_radius, center_x, center_y, view_alt, view_azi, f, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"东", label_x, label_y, 255, 0, 0);
+        fisheye_project(180, 6, sky_radius, center_x, center_y, view_alt, view_azi, f, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"南", label_x, label_y, 255, 0, 0);
+        fisheye_project(270, 6, sky_radius, center_x, center_y, view_alt, view_azi, f, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"西", label_x, label_y, 255, 0, 0);
+
     }
+
+    // 绘制地景（天空投影圆盘之外的部分）
+    draw_horizon(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, view_alt, view_azi, f, sun_alt);
 
 }
