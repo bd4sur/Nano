@@ -143,13 +143,13 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         // 临时关闭draw_textarea的gfx_refresh，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
         global_state->is_full_refresh = 0;
 
-        fb_soft_clear();
+        gfx_soft_clear(global_state->gfx);
 
         // 显示界面标题
         for (int i = 0; i < 12; i++) {
-            fb_draw_line(0, i, 127, i, 1);
+            gfx_draw_line(global_state->gfx, 0, i, 127, i, 255, 255, 255, 1);
         }
-        fb_draw_textline(L"Reading...", 0, 0, 0);
+        gfx_draw_textline(global_state->gfx, L"Reading...", 0, 0, 255, 255, 255, 0);
 
         w_textarea_prefill->x = 0;
         w_textarea_prefill->y = 17;
@@ -163,16 +163,16 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         // 进度百分比
         wchar_t progress_str[30];
         swprintf(progress_str, 30, L"%d/%d", session->pos, session->num_prompt_tokens);
-        fb_draw_textline(progress_str, 0, 48, 1);
+        gfx_draw_textline(global_state->gfx, progress_str, 0, 48, 255, 255, 255, 1);
 
         // 进度条
-        fb_draw_line(0, 60, 128, 60, 1);
-        fb_draw_line(0, 63, 128, 63, 1);
-        fb_draw_line(127, 60, 127, 63, 1);
-        fb_draw_line(0, 61, session->pos * 128 / (session->num_prompt_tokens - 2), 61, 1);
-        fb_draw_line(0, 62, session->pos * 128 / (session->num_prompt_tokens - 2), 62, 1);
+        gfx_draw_line(global_state->gfx, 0, 60, 128, 60, 255, 255, 255, 1);
+        gfx_draw_line(global_state->gfx, 0, 63, 128, 63, 255, 255, 255, 1);
+        gfx_draw_line(global_state->gfx, 127, 60, 127, 63, 255, 255, 255, 1);
+        gfx_draw_line(global_state->gfx, 0, 61, session->pos * 128 / (session->num_prompt_tokens - 2), 61, 255, 255, 255, 1);
+        gfx_draw_line(global_state->gfx, 0, 62, session->pos * 128 / (session->num_prompt_tokens - 2), 62, 255, 255, 255, 1);
 
-        gfx_refresh();
+        gfx_refresh(global_state->gfx);
 
         // 重新开启整帧绘制，注意这个标记是所有函数共享的全局标记。
         global_state->is_full_refresh = 1;
@@ -588,9 +588,10 @@ int main() {
 #endif
 
     ///////////////////////////////////////
-    // OLED 初始化
+    // gfx初始化
 
-    gfx_init();
+    global_state->gfx = (Nano_GFX*)calloc(1, sizeof(Nano_GFX));
+    gfx_init(global_state->gfx, 240, 320, GFX_COLOR_MODE_RGB888);
 
     show_splash_screen(key_event, global_state);
 
@@ -992,7 +993,7 @@ int main() {
 
                 // 临时关闭draw_textarea的整帧绘制，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
                 global_state->is_full_refresh = 0;
-                fb_soft_clear();
+                gfx_soft_clear(global_state->gfx);
 
                 // 显示ASR结果
                 // if (len > 0) {
@@ -1003,9 +1004,9 @@ int main() {
                 // 绘制录音持续时间
                 wchar_t rec_duration[50];
                 swprintf(rec_duration, 50, L" %ds ", (uint32_t)((global_state->timestamp - global_state->asr_start_timestamp) / 1000));
-                fb_draw_textline(rec_duration, 0, 52, 0);
+                gfx_draw_textline(global_state->gfx, rec_duration, 0, 52, 255, 255, 255, 0);
 
-                gfx_refresh();
+                gfx_refresh(global_state->gfx);
 
                 // 重新开启整帧绘制，注意这个标记是所有函数共享的全局标记。
                 global_state->is_full_refresh = 1;
@@ -1274,6 +1275,8 @@ int main() {
     }
 
     llm_context_free(global_state->llm_ctx);
+    
+    gfx_close(global_state->gfx);
 
     free(global_state);
     free(key_event);
@@ -1291,8 +1294,6 @@ int main() {
     free(w_menu_tts_setting);
 
     free(void_key_event);
-
-    gfx_close();
 
 #ifdef MATMUL_PTHREAD
     matmul_pthread_cleanup();

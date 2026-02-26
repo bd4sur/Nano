@@ -531,7 +531,7 @@ uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
 }
 
 // 显示汉字
-void fb_draw_char(
+void gfx_draw_char(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     int32_t x, int32_t y, uint8_t *glyph, uint8_t font_width, uint8_t font_height,
     uint8_t red, uint8_t green, uint8_t blue
@@ -560,7 +560,7 @@ void fb_draw_char(
 
 
 // 绘制一行文本
-void fb_draw_textline(
+void gfx_draw_textline(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     wchar_t *line, int32_t x, int32_t y, uint8_t red, uint8_t green, uint8_t blue
 ) {
@@ -577,7 +577,7 @@ void fb_draw_textline(
         if (x_pos + font_width >= fb_width) {
             break;
         }
-        fb_draw_char(frame_buffer, fb_width, fb_height,
+        gfx_draw_char(frame_buffer, fb_width, fb_height,
             x_pos, y_pos, glyph, font_width, font_height, red, green, blue);
         x_pos += font_width;
     }
@@ -621,7 +621,7 @@ void fb_draw_textline_centered(
         else if (x_pos + font_width > fb_width) {
             break;
         }
-        fb_draw_char(frame_buffer, fb_width, fb_height,
+        gfx_draw_char(frame_buffer, fb_width, fb_height,
             x_pos, y_pos, glyph, font_width, font_height, red, green, blue);
         x_pos += font_width;
     }
@@ -1611,7 +1611,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, sx, sy, mag, 1, 255, 255, 255);
 
         if (enable_star_name) {
-            fb_draw_textline(frame_buffer, fb_width, fb_height, STAR_NAME[i], sx+3, sy+3, 250, 250, 250);
+            gfx_draw_textline(frame_buffer, fb_width, fb_height, STAR_NAME[i], sx+3, sy+3, 250, 250, 250);
         }
     }
 
@@ -1631,7 +1631,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
                 0.0f, PLANET_RADIUS[i], PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
 
             if (enable_planet_name) {
-                fb_draw_textline(frame_buffer, fb_width, fb_height, PLANET_NAME[i], planet_proj_x+3, planet_proj_y+3, PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
+                gfx_draw_textline(frame_buffer, fb_width, fb_height, PLANET_NAME[i], planet_proj_x+3, planet_proj_y+3, PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
             }
         }
     }

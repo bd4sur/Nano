@@ -90,7 +90,7 @@ int main(void) {
             // 绘制当前时间
             wchar_t current_time_str[30];
             swprintf(current_time_str, 20, L"%d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second);
-            fb_draw_textline(frame_buffer, FB_WIDTH, FB_HEIGHT, current_time_str, 1, 1, 255, 255, 255);
+            gfx_draw_textline(frame_buffer, FB_WIDTH, FB_HEIGHT, current_time_str, 1, 1, 255, 255, 255);
 
             timestamp += 60;
 

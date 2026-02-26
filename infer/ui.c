@@ -178,7 +178,7 @@ void typeset_view_range(Widget_Textarea_State *textarea_state) {
 }
 
 
-void render_text(Widget_Textarea_State *textarea_state) {
+void render_text(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state) {
     int x_pos = textarea_state->x;
     int y_pos = textarea_state->y;
 
@@ -192,16 +192,16 @@ void render_text(Widget_Textarea_State *textarea_state) {
             if(i > 0) y_pos += (font_height + 1);
             continue;
         }
-        uint8_t *glyph = get_glyph(current_char, &font_width, &font_height);
+        uint8_t *glyph = get_glyph(global_state->gfx, current_char, &font_width, &font_height);
         if (!glyph) {
             // printf("出现了字库之外的字符[%d]\n", current_char);
-            glyph = get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+            glyph = get_glyph(global_state->gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
         if (x_pos + font_width >= textarea_state->x + textarea_state->width) {
             y_pos += (font_height + 1);
             x_pos = textarea_state->x;
         }
-        fb_draw_char(x_pos, y_pos, glyph, font_width, font_height, 1);
+        gfx_draw_char(global_state->gfx, x_pos, y_pos, glyph, font_width, font_height, 255, 255, 255, 1);
         x_pos += font_width;
     }
 }
@@ -210,7 +210,7 @@ void render_text(Widget_Textarea_State *textarea_state) {
 //   line_num - 文本总行数
 //   current_line - 当前在屏幕顶端的是哪一行
 //   view_lines - 屏幕最多容纳几行
-void render_scroll_bar(int32_t current_line, int32_t line_num, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height) {
+void render_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_t current_line, int32_t line_num, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height) {
 
     // 对current_line的检查和标准化
     if (current_line < 0) {
@@ -234,7 +234,7 @@ void render_scroll_bar(int32_t current_line, int32_t line_num, int32_t view_line
     }
 
     for (int n = y; n < y + height; n++) {
-        fb_plot(x + width - 1, n, !(n % 3));
+        gfx_draw_point(global_state->gfx, x + width - 1, n, 255, 255, 255, !(n % 3));
     }
 
     line_num = (line_num <= 0) ? 1 : line_num;
@@ -247,8 +247,8 @@ void render_scroll_bar(int32_t current_line, int32_t line_num, int32_t view_line
     int32_t y_0 = y + div_round(current_line * height, line_num);
     y_0 = (y_0 >= y + height - 3 - 1) ? (y + height - 3 - 1) : y_0; // 滚动条顶部限位（不低于底部上方3px）
 
-    fb_draw_line(x + width - 1, (uint8_t)y_0, x + width - 1, (uint8_t)(y_0 + bar_height), 1);
-    fb_draw_line(x + width - 2, (uint8_t)y_0, x + width - 2, (uint8_t)(y_0 + bar_height), 1);
+    gfx_draw_line(global_state->gfx, x + width - 1, (uint8_t)y_0, x + width - 1, (uint8_t)(y_0 + bar_height), 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, x + width - 2, (uint8_t)y_0, x + width - 2, (uint8_t)(y_0 + bar_height), 255, 255, 255, 1);
 }
 
 
@@ -258,7 +258,7 @@ void render_scroll_bar(int32_t current_line, int32_t line_num, int32_t view_line
 
 // 绘制点阵的版权信息
 //   点阵数据通过bd4sur.com/html/am32.html取得
-void draw_copyright_notice(uint32_t x_offset, uint32_t y_offset) {
+void draw_copyright_notice(Key_Event *key_event, Global_State *global_state, uint32_t x_offset, uint32_t y_offset) {
     uint32_t callsign[5]  = {3876120944, 2493057352, 3836266864, 2495359312, 3876177480}; // BD4SUR, width=29
     uint32_t year_2025[5] = {1662631936, 2493841408, 613010944, 1150296064, 4080910336};  // 2025-, width=23
     uint32_t year_2026[5] = {1662566400, 2493841408, 613007360, 1150361600, 4080844800};  // 2026, width=19
@@ -268,25 +268,25 @@ void draw_copyright_notice(uint32_t x_offset, uint32_t y_offset) {
 
     for (uint32_t i = 0; i < 7; i++) {
         for (uint32_t j = 0; j < 32; j++) {
-            fb_plot((uint8_t)(x + j), (uint8_t)(y_offset + i), (copy_mark[i] >> (32 - 1 - j)) & 0x1);
+            gfx_draw_point(global_state->gfx, (x + j), (y_offset + i), 255, 255, 255, (copy_mark[i] >> (32 - 1 - j)) & 0x1);
         }
     }
     x += (6 + 4);
     for (uint32_t i = 0; i < 5; i++) {
         for (uint32_t j = 0; j < 32; j++) {
-            fb_plot((uint8_t)(x + j), (uint8_t)(y_offset + 1 + i), (year_2025[i] >> (32 - 1 - j)) & 0x1);
+            gfx_draw_point(global_state->gfx, (x + j), (y_offset + 1 + i), 255, 255, 255, (year_2025[i] >> (32 - 1 - j)) & 0x1);
         }
     }
     x += (23 + 1);
     for (uint32_t i = 0; i < 5; i++) {
         for (uint32_t j = 0; j < 32; j++) {
-            fb_plot((uint8_t)(x + j), (uint8_t)(y_offset + 1 + i), (year_2026[i] >> (32 - 1 - j)) & 0x1);
+            gfx_draw_point(global_state->gfx, (x + j), (y_offset + 1 + i), 255, 255, 255, (year_2026[i] >> (32 - 1 - j)) & 0x1);
         }
     }
     x += (19 + 4);
     for (uint32_t i = 0; i < 5; i++) {
         for (uint32_t j = 0; j < 32; j++) {
-            fb_plot((uint8_t)(x + j), (uint8_t)(y_offset + 1 + i), (callsign[i] >> (32 - 1 - j)) & 0x1);
+            gfx_draw_point(global_state->gfx, (x + j), (y_offset + 1 + i), 255, 255, 255, (callsign[i] >> (32 - 1 - j)) & 0x1);
         }
     }
 
@@ -294,16 +294,16 @@ void draw_copyright_notice(uint32_t x_offset, uint32_t y_offset) {
 
 
 void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
-    fb_soft_clear();
+    gfx_soft_clear(global_state->gfx);
 
     for (int i = 1; i <= 14; i++) {
-        fb_draw_line(1, i, 127, i, 1);
+        gfx_draw_line(global_state->gfx, 1, i, 127, i, 255, 255, 255, 1);
     }
 
 #if CONFIG_IDF_TARGET_ESP32S3
-    fb_draw_textline(L"Project Nano", 28, 2, 0);
-    fb_draw_textline(L"电子鹦鹉@ESP32S3", 16, 20, 1);
-    draw_copyright_notice(20, 53);
+    gfx_draw_textline(global_state->gfx, L"Project Nano", 28, 2, 255, 255, 255, 0);
+    gfx_draw_textline(global_state->gfx, L"电子鹦鹉@ESP32S3", 16, 20, 255, 255, 255, 1);
+    draw_copyright_notice(key_event, global_state, 20, 53);
 #else
     time_t rawtime;
     struct tm *timeinfo;
@@ -315,64 +315,64 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     strftime(datetime_string_buffer, sizeof(datetime_string_buffer), "%Y-%m-%d %H:%M:%S", timeinfo); // 格式化输出
     _mbstowcs(datetime_wcs_buffer, datetime_string_buffer, 80);
 
-    fb_draw_textline(L"Project Nano", 28, 2, 0);
-    fb_draw_textline(L"电 子 鹦 鹉", 31, 20, 1);
-    fb_draw_textline(datetime_wcs_buffer, 8, 35, 1);
-    draw_copyright_notice(20, 53);
+    gfx_draw_textline(global_state->gfx, L"Project Nano", 28, 2, 255, 255, 255, 0);
+    gfx_draw_textline(global_state->gfx, L"电 子 鹦 鹉", 31, 20, 0, 255, 255, 1);
+    gfx_draw_textline(global_state->gfx, datetime_wcs_buffer, 8, 35, 255, 255, 255, 1);
+    draw_copyright_notice(key_event, global_state, 20, 53);
 #endif
 
-    fb_draw_line(0, 0, 127, 0, 1);
-    fb_draw_line(0, 15, 127, 15, 1);
-    fb_draw_line(0, 0, 0, 63, 1);
-    fb_draw_line(127, 0, 127, 63, 1);
-    fb_draw_line(0, 63, 127, 63, 1);
+    gfx_draw_line(global_state->gfx, 0, 0, 127, 0, 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 0, 15, 127, 15, 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 0, 0, 0, 63, 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 127, 0, 127, 63, 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 0, 63, 127, 63, 255, 255, 255, 1);
 
 #ifdef ASR_ENABLED
     // 检查ASR服务状态，如果ASR服务未启动，则在屏幕左上角画一个闪烁的点，表示ASR服务启动中
     if (global_state->is_asr_server_up < 1) {
         uint8_t v = (uint8_t)((global_state->timer >> 2) & 0x1);
-        fb_draw_line(4, 6, 7, 6, v);
-        fb_draw_line(4, 7, 7, 7, v);
-        fb_draw_line(4, 8, 7, 8, v);
-        fb_draw_line(4, 9, 7, 9, v);
+        gfx_draw_line(global_state->gfx, 4, 6, 7, 6, 255, 255, 255, v);
+        gfx_draw_line(global_state->gfx, 4, 7, 7, 7, 255, 255, 255, v);
+        gfx_draw_line(global_state->gfx, 4, 8, 7, 8, 255, 255, 255, v);
+        gfx_draw_line(global_state->gfx, 4, 9, 7, 9, 255, 255, 255, v);
     }
 #endif
 
 #ifdef UPS_ENABLED
     // 绘制电池电量
-    fb_draw_line(112, 4, 125, 4, 0);
-    fb_draw_line(125, 4, 125, 11, 0);
-    fb_draw_line(112, 11, 125, 11, 0);
-    fb_draw_line(112, 4, 112, 11, 0);
-    fb_draw_line(111, 6, 111, 9, 0);
+    gfx_draw_line(global_state->gfx, 112, 4, 125, 4, 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, 125, 4, 125, 11, 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, 112, 11, 125, 11, 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, 112, 4, 112, 11, 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, 111, 6, 111, 9, 255, 255, 255, 0);
 
     int32_t soc_bar_length = (int32_t)(10.0f * ((float)global_state->ups_soc / 100.0f));
     soc_bar_length = (soc_bar_length > 9) ? 9 : soc_bar_length;
-    fb_draw_line(123 - soc_bar_length, 6, 123, 6, 0);
-    fb_draw_line(123 - soc_bar_length, 7, 123, 7, 0);
-    fb_draw_line(123 - soc_bar_length, 8, 123, 8, 0);
-    fb_draw_line(123 - soc_bar_length, 9, 123, 9, 0);
+    gfx_draw_line(global_state->gfx, 123 - soc_bar_length, 6, 123, 6, 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, 123 - soc_bar_length, 7, 123, 7, 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, 123 - soc_bar_length, 8, 123, 8, 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, 123 - soc_bar_length, 9, 123, 9, 255, 255, 255, 0);
 #endif
 
-    gfx_refresh();
+    gfx_refresh(global_state->gfx);
 }
 
 
 void play_bad_apple(Key_Event *key_event, Global_State *global_state) {
 #ifdef BADAPPLE_ENABLED
     if (global_state->timestamp - global_state->ba_begin_timestamp >= 100 * global_state->ba_frame_count) {
-        fb_soft_clear();
+        gfx_soft_clear(global_state->gfx);
         for (uint32_t row = 0; row < 64; row++) {
             uint32_t page_0 = bad_apple_10fps_64x64[global_state->ba_frame_count * 128 + row * 2];
             uint32_t page_1 = bad_apple_10fps_64x64[global_state->ba_frame_count * 128 + row * 2 + 1];
             for (uint32_t col = 0; col < 32; col++) {
-                fb_plot(col + 32, row, (page_0 >> (32 - 1 - col)) & 0x1);
+                gfx_draw_point(global_state->gfx, col + 32, row, 255, 255, 255, (page_0 >> (32 - 1 - col)) & 0x1);
             }
             for (uint32_t col = 32; col < 64; col++) {
-                fb_plot(col + 32, row, (page_1 >> (32 - 1 - (col-32))) & 0x1);
+                gfx_draw_point(global_state->gfx, col + 32, row, 255, 255, 255, (page_1 >> (32 - 1 - (col-32))) & 0x1);
             }
         }
-        gfx_refresh();
+        gfx_refresh(global_state->gfx);
         global_state->ba_frame_count++;
 
         if (global_state->ba_frame_count > 2193) {
@@ -423,19 +423,20 @@ void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Text
     typeset_view_range(textarea_state);
 
     if (global_state->is_full_refresh) {
-        fb_soft_clear();
+        gfx_soft_clear(global_state->gfx);
     }
 
-    render_text(textarea_state);
+    render_text(key_event, global_state, textarea_state);
 
     if (textarea_state->is_show_scroll_bar) {
         render_scroll_bar(
+            key_event, global_state,
             textarea_state->current_line, textarea_state->line_num, textarea_state->view_lines,
             textarea_state->x, textarea_state->y, textarea_state->width, textarea_state->height);
     }
 
     if (global_state->is_full_refresh) {
-        gfx_refresh();
+        gfx_refresh(global_state->gfx);
     }
 }
 
@@ -539,9 +540,9 @@ int32_t input_event_handler(
         // 倒计时进行中，绘制进度条
         if (ctimestamp - input_state->alphabet_click_timestamp <= ALPHABET_COUNTDOWN_MS) {
             uint8_t x_pos = (uint8_t)((ALPHABET_COUNTDOWN_MS - ctimestamp + input_state->alphabet_click_timestamp) * 128 / ALPHABET_COUNTDOWN_MS);
-            fb_draw_line(0, 63, x_pos, 63, 1);
-            fb_draw_line(x_pos + 1, 63, 127, 63, 0);
-            gfx_refresh();
+            gfx_draw_line(global_state->gfx, 0, 63, x_pos, 63, 255, 255, 255, 1);
+            gfx_draw_line(global_state->gfx, x_pos + 1, 63, 127, 63, 255, 255, 255, 0);
+            gfx_refresh(global_state->gfx);
             input_state->state = 0;
         }
         // 倒计时结束，提交当前选中的字母，清除进度条
@@ -549,8 +550,8 @@ int32_t input_event_handler(
             input_state->alphabet_is_counting_down = 0;
 
             // 清除进度条
-            fb_draw_line(0, 63, 127, 63, 0);
-            gfx_refresh();
+            gfx_draw_line(global_state->gfx, 0, 63, 127, 63, 255, 255, 255, 0);
+            gfx_refresh(global_state->gfx);
 
             // 将当前选中的字母加入输入缓冲区
             uint32_t ch = ime_alphabet[(int)(input_state->alphabet_current_key)][input_state->alphabet_index];
@@ -582,7 +583,7 @@ int32_t input_event_handler(
 
             candidate_paging(input_state);
 
-            render_symbol_input(input_state);
+            render_symbol_input(key_event, global_state, input_state);
 
             input_state->current_page = 0;
             input_state->state = 3;
@@ -644,7 +645,7 @@ int32_t input_event_handler(
                 uint32_t x_pos = 1;
                 for (int i = 0; i < wcslen(ime_alphabet[(int)(key_event->key_code)]); i++) {
                     letter[0] = ime_alphabet[(int)(key_event->key_code)][i]; letter[1] = 0;
-                    fb_draw_textline(letter, x_pos, 50, (i != input_state->alphabet_index));
+                    gfx_draw_textline(global_state->gfx, letter, x_pos, 50, 255, 255, 255, (i != input_state->alphabet_index));
                     x_pos += 8;
                 }
 
@@ -726,7 +727,7 @@ int32_t input_event_handler(
         else {
             if (global_state->timer % 120 == 0) {
                 render_cursor(key_event, global_state, input_state);
-                gfx_refresh();
+                gfx_refresh(global_state->gfx);
             }
         }
     }
@@ -735,7 +736,7 @@ int32_t input_event_handler(
         // 短按D键：开始选字
         if (key_event->key_edge == -1 && key_event->key_code == 13) {
             if (input_state->candidate_num > 0) {
-                render_pinyin_input(input_state, 1);
+                render_pinyin_input(key_event, global_state, input_state, 1);
                 input_state->state = 2;
             }
         }
@@ -761,10 +762,10 @@ int32_t input_event_handler(
             if (input_state->candidate_num > 0) { // 如果当前键码有对应的候选字
                 // 候选字列表分页
                 candidate_paging(input_state);
-                render_pinyin_input(input_state, 0);
+                render_pinyin_input(key_event, global_state, input_state, 0);
             }
             else {
-                render_pinyin_input(input_state, 0);
+                render_pinyin_input(key_event, global_state, input_state, 0);
             }
 
             input_state->state = 1;
@@ -800,7 +801,7 @@ int32_t input_event_handler(
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 14) {
             if(input_state->current_page > 0) {
                 input_state->current_page--;
-                render_pinyin_input(input_state, 1);
+                render_pinyin_input(key_event, global_state, input_state, 1);
             }
             input_state->state = 2;
         }
@@ -809,7 +810,7 @@ int32_t input_event_handler(
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 15) {
             if(input_state->current_page < input_state->candidate_page_num - 1) {
                 input_state->current_page++;
-                render_pinyin_input(input_state, 1);
+                render_pinyin_input(key_event, global_state, input_state, 1);
             }
             input_state->state = 2;
         }
@@ -851,7 +852,7 @@ int32_t input_event_handler(
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 14) {
             if(input_state->current_page > 0) {
                 input_state->current_page--;
-                render_symbol_input(input_state);
+                render_symbol_input(key_event, global_state, input_state);
             }
             input_state->state = 3;
         }
@@ -860,7 +861,7 @@ int32_t input_event_handler(
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 15) {
             if(input_state->current_page < input_state->candidate_page_num - 1) {
                 input_state->current_page++;
-                render_symbol_input(input_state);
+                render_symbol_input(key_event, global_state, input_state);
             }
             input_state->state = 3;
         }
@@ -896,13 +897,13 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
 
     uint32_t x_indent = 6;
 
-    fb_soft_clear();
+    gfx_soft_clear(global_state->gfx);
 
-    fb_draw_textline(menu_state->title, x_indent, 0, 1);
+    gfx_draw_textline(global_state->gfx, menu_state->title, x_indent, 0, 255, 255, 255, 1);
     wchar_t item_counter[13];
     swprintf(item_counter, 13, L"%d/%d", menu_state->current_item_intex + 1, menu_state->item_num);
     int32_t iclen = wcslen(item_counter);
-    fb_draw_textline(item_counter, 126 - iclen * 6, 0, 1);
+    gfx_draw_textline(global_state->gfx, item_counter, 126 - iclen * 6, 0, 255, 255, 255, 1);
 
     uint32_t y_pos = 13;
     uint8_t is_highlight = 0;
@@ -916,14 +917,14 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
         else {
             is_highlight = 1;
         }
-        fb_draw_textline(menu_state->items[i], x_indent, y_pos, (1 - is_highlight));
+        gfx_draw_textline(global_state->gfx, menu_state->items[i], x_indent, y_pos, 255, 255, 255, (1 - is_highlight));
         y_pos += (FONT_HEIGHT + 1);
     }
 
     // NOTE 因fb_draw_textline会额外给文字上方增加一行，因此这个横线在菜单文字绘制之后再绘制
-    fb_draw_line(0, 12, 128, 12, 1);
+    gfx_draw_line(global_state->gfx, 0, 12, 128, 12, 255, 255, 255, 1);
 
-    gfx_refresh();
+    gfx_refresh(global_state->gfx);
 }
 
 
@@ -1004,7 +1005,7 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
 
     Widget_Textarea_State *ta = &(input_state->textarea);
 
-    fb_soft_clear();
+    gfx_soft_clear(global_state->gfx);
 
     wchar_t prompt[32] = L"请输入       ";
     // 显示思考模式启用状态
@@ -1031,11 +1032,11 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
     else if (input_state->ime_mode_flag == IME_MODE_NUMBER) {
         wcscat(prompt, L"[数]\n");
     }
-    fb_draw_textline(prompt, 0, 0, 0);
+    gfx_draw_textline(global_state->gfx, prompt, 0, 0, 255, 255, 255, 0);
 
     // 绘制右侧未填满的两列像素
-    fb_draw_line(126, 0, 126, 12, 1);
-    fb_draw_line(127, 0, 127, 12, 1);
+    gfx_draw_line(global_state->gfx, 126, 0, 126, 12, 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 127, 0, 127, 12, 255, 255, 255, 1);
 
     // 第一次排版：用于判断光标是否在视图内部
     // ta->current_line = 0;
@@ -1069,11 +1070,12 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
     }
 
     // 绘制文本
-    render_text(ta);
+    render_text(key_event, global_state, ta);
 
     // 绘制滚动条
     if (ta->is_show_scroll_bar) {
         render_scroll_bar(
+            key_event, global_state,
             ta->current_line, ta->line_num, ta->view_lines,
             ta->x, ta->y, ta->width, ta->height);
     }
@@ -1081,7 +1083,7 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
     // 绘制光标
     render_cursor(key_event, global_state, input_state);
 
-    gfx_refresh();
+    gfx_refresh(global_state->gfx);
 }
 
 
@@ -1106,12 +1108,12 @@ void render_cursor(Key_Event *key_event, Global_State *global_state, Widget_Inpu
 
     uint8_t x = line_x_pos;
     uint8_t y = (uint8_t)(ta->y + 13 * break_count); // 12x12字模底部本来就有1px的空白，加上行间距1px，所以每行的起始位置是13的倍数
-    fb_draw_line(x, y-1, x, y+12, 2);
-    fb_draw_line(x+1, y-1, x+1, y+12, 2);
+    gfx_draw_line(global_state->gfx, x, y-1, x, y+12, 255, 255, 255, 2);
+    gfx_draw_line(global_state->gfx, x+1, y-1, x+1, y+12, 255, 255, 255, 2);
 }
 
-void render_pinyin_input(Widget_Input_State *input_state, uint32_t is_picking) {
-    // fb_soft_clear();
+void render_pinyin_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, uint32_t is_picking) {
+    // gfx_soft_clear(global_state->gfx);
     // 计算候选列表长度
     uint32_t count = 0;
     wchar_t cc[MAX_CANDIDATE_NUM_PER_PAGE + 1];
@@ -1131,33 +1133,33 @@ void render_pinyin_input(Widget_Input_State *input_state, uint32_t is_picking) {
 
     // 清空输入法显示区域
     for (int i = y_offset-1; i <= input_state->textarea.y + input_state->textarea.height; i++) {
-        fb_draw_line(input_state->textarea.x, i, input_state->textarea.x + input_state->textarea.width, i, 0);
+        gfx_draw_line(global_state->gfx, input_state->textarea.x, i, input_state->textarea.x + input_state->textarea.width, i, 255, 255, 255, 0);
     }
 
     wchar_t buf[30];
     if (is_picking) {
         swprintf(buf, 30, L"PY[%-6d]   (%2d/%2d)", input_state->pinyin_keys, (input_state->current_page+1), input_state->candidate_page_num);
-        fb_draw_textline(buf, 0, y_offset + 0, 1);
-        fb_draw_textline(cindex, 0, y_offset + 13, 1);
+        gfx_draw_textline(global_state->gfx, buf, 0, y_offset + 0, 255, 255, 255, 1);
+        gfx_draw_textline(global_state->gfx, cindex, 0, y_offset + 13, 255, 255, 255, 1);
     }
     else {
         swprintf(buf, 30, L"PY[%-6d]", input_state->pinyin_keys);
-        fb_draw_textline(buf, 0, y_offset + 0, 1);
+        gfx_draw_textline(global_state->gfx, buf, 0, y_offset + 0, 255, 255, 255, 1);
     }
     if (input_state->candidate_num > 0) {
-        fb_draw_textline(cc, 0, y_offset + 26, 1);
+        gfx_draw_textline(global_state->gfx, cc, 0, y_offset + 26, 255, 255, 255, 1);
     }
     else {
-        fb_draw_textline(L"(无候选字)", 0, y_offset + 26, 1);
+        gfx_draw_textline(global_state->gfx, L"(无候选字)", 0, y_offset + 26, 255, 255, 255, 1);
     }
 
-    fb_draw_line(input_state->textarea.x, y_offset-2, input_state->textarea.x + input_state->textarea.width, y_offset-2, 1);
+    gfx_draw_line(global_state->gfx, input_state->textarea.x, y_offset-2, input_state->textarea.x + input_state->textarea.width, y_offset-2, 255, 255, 255, 1);
 
-    gfx_refresh();
+    gfx_refresh(global_state->gfx);
 }
 
-void render_symbol_input(Widget_Input_State *input_state) {
-    // fb_soft_clear();
+void render_symbol_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
+    // gfx_soft_clear(global_state->gfx);
     // 计算候选列表长度
     uint32_t count = 0;
     uint32_t list_char_width = 0;
@@ -1186,25 +1188,25 @@ void render_symbol_input(Widget_Input_State *input_state) {
 
     // 清空输入法显示区域
     for (int i = y_offset-1; i <= input_state->textarea.y + input_state->textarea.height; i++) {
-        fb_draw_line(input_state->textarea.x, i, input_state->textarea.x + input_state->textarea.width, i, 0);
+        gfx_draw_line(global_state->gfx, input_state->textarea.x, i, input_state->textarea.x + input_state->textarea.width, i, 255, 255, 255, 0);
     }
 
     wchar_t text[30];
 
     swprintf(text, 30, L"Symbols      (%2d/%2d)", (input_state->current_page+1), input_state->candidate_page_num);
-    fb_draw_textline(text, 0, y_offset + 0, 1);
-    fb_draw_textline(cindex, 0, y_offset + 13, 1);
+    gfx_draw_textline(global_state->gfx, text, 0, y_offset + 0, 255, 255, 255, 1);
+    gfx_draw_textline(global_state->gfx, cindex, 0, y_offset + 13, 255, 255, 255, 1);
 
     if (input_state->candidate_num > 0) {
-        fb_draw_textline(cc, 0, y_offset + 26, 1);
+        gfx_draw_textline(global_state->gfx, cc, 0, y_offset + 26, 255, 255, 255, 1);
     }
     else {
-        fb_draw_textline(L"(无候选符号)", 0, y_offset + 26, 1);
+        gfx_draw_textline(global_state->gfx, L"(无候选符号)", 0, y_offset + 26, 255, 255, 255, 1);
     }
 
-    fb_draw_line(input_state->textarea.x, y_offset-2, input_state->textarea.x + input_state->textarea.width, y_offset-2, 1);
+    gfx_draw_line(global_state->gfx, input_state->textarea.x, y_offset-2, input_state->textarea.x + input_state->textarea.width, y_offset-2, 255, 255, 255, 1);
 
-    gfx_refresh();
+    gfx_refresh(global_state->gfx);
 }
 
 
@@ -1242,7 +1244,7 @@ void game_of_life_step(Key_Event *key_event, Global_State *global_state) {
         return;
     }
     gol_refresh_timestamp = global_state->timestamp;
-    fb_soft_clear();
+    gfx_soft_clear(global_state->gfx);
     for (uint32_t x = 0; x < GOL_WIDTH; x++) {
         for (uint32_t y = 0; y < GOL_HEIGHT; y++) {
             // 获取某个格子的8邻域
@@ -1271,10 +1273,10 @@ void game_of_life_step(Key_Event *key_event, Global_State *global_state) {
 
             gol_field[1-gol_field_page][x][y] = new_state;
 
-            fb_plot(x, y, new_state);
+            gfx_draw_point(global_state->gfx, x, y, 255, 255, 255, new_state);
         }
     }
-    gfx_refresh();
+    gfx_refresh(global_state->gfx);
     gol_field_page = 1 - gol_field_page;
 }
 
@@ -1304,21 +1306,21 @@ void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
     }
     ephemeris_refersh_timestamp = global_state->timestamp;
 
-    fb_soft_clear();
+    gfx_soft_clear(global_state->gfx);
 
-    fb_draw_circle(64, 32, 30);
-    fb_draw_circle(64, 32, 20);
-    fb_draw_circle(64, 32, 10);
-    fb_draw_line(32, 32, 96, 32, 1);
-    fb_draw_line(64, 0, 64, 64, 1);
+    gfx_draw_circle(global_state->gfx, 64, 32, 30, 255, 255, 255, 1);
+    gfx_draw_circle(global_state->gfx, 64, 32, 20, 255, 255, 255, 1);
+    gfx_draw_circle(global_state->gfx, 64, 32, 10, 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 32, 32, 96, 32, 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 64, 0, 64, 64, 255, 255, 255, 1);
 
     // 方位文字和周围的边框
-    fb_draw_textline_mini(L"N", 62, 0, 1);  fb_plot(61, 2, 0); fb_plot(67, 2, 0); fb_plot(64, 5, 0);
-    fb_draw_textline_mini(L"S", 63, 59, 1); fb_plot(62, 62, 0); fb_plot(66, 62, 0); fb_plot(64, 58, 0);
-    fb_draw_textline_mini(L"W", 32, 30, 1); fb_plot(34, 29, 0); fb_plot(37, 32, 0); fb_plot(34, 35, 0);
-    fb_draw_textline_mini(L"E", 93, 30, 1); fb_plot(92, 32, 0); fb_plot(96, 32, 0); fb_plot(94, 29, 0); fb_plot(94, 35, 0);
+    gfx_draw_textline_mini(global_state->gfx, L"N", 62, 0,  255, 255, 255, 1);  gfx_draw_point(global_state->gfx, 61, 2,  255, 255, 255, 0);  gfx_draw_point(global_state->gfx, 67, 2, 255, 255, 255, 0);  gfx_draw_point(global_state->gfx, 64, 5, 255, 255, 255, 0);
+    gfx_draw_textline_mini(global_state->gfx, L"S", 63, 59, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, 62, 62, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 66, 62, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 64, 58, 255, 255, 255, 0);
+    gfx_draw_textline_mini(global_state->gfx, L"W", 32, 30, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, 34, 29, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 37, 32, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 34, 35, 255, 255, 255, 0);
+    gfx_draw_textline_mini(global_state->gfx, L"E", 93, 30, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, 92, 32, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 96, 32, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 94, 29, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 94, 35, 255, 255, 255, 0);
 
-    fb_draw_line(0, 43, 30, 43, 1);
+    gfx_draw_line(global_state->gfx, 0, 43, 30, 43, 255, 255, 255, 1);
 
     time_t ts = 0;
     if (is_speed_up) {
@@ -1340,7 +1342,7 @@ void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
 
     wchar_t timestr[30];
     swprintf(timestr, 30, L"%04d-%02d-%02d\n%02d:%02d:%02d", year, month, day, hour, minute, second);
-    fb_draw_textline_mini(timestr, 0, 0, 1);
+    gfx_draw_textline_mini(global_state->gfx, timestr, 0, 0, 255, 255, 255, 1);
 
 
     double altitude_moon = 0.0;
@@ -1352,20 +1354,20 @@ void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
 
     wchar_t coordstr_moon[30];
     swprintf(coordstr_moon, 30, L"MOON\nP:%d%%\nA:%.1f\nE:%.1f", (int32_t)(moon_k * 100.0), azimuth_moon, altitude_moon);
-    fb_draw_textline_mini(coordstr_moon, 0, 18, 1);
+    gfx_draw_textline_mini(global_state->gfx, coordstr_moon, 0, 18, 255, 255, 255, 1);
 
     double x_moon = 64 + (90.0 - altitude_moon) * 32.0 / 90.0 * sin(azimuth_moon / 180.0 * M_PI);
     double y_moon = 32 - (90.0 - altitude_moon) * 32.0 / 90.0 * cos(azimuth_moon / 180.0 * M_PI);
 
-    fb_plot((int)x_moon - 1, (int)y_moon - 1, 1);
-    fb_plot((int)x_moon - 1, (int)y_moon - 0, 1);
-    fb_plot((int)x_moon - 1, (int)y_moon + 1, 1);
-    fb_plot((int)x_moon - 0, (int)y_moon - 1, 1);
-    fb_plot((int)x_moon - 0, (int)y_moon - 0, 1);
-    fb_plot((int)x_moon - 0, (int)y_moon + 1, 1);
-    fb_plot((int)x_moon + 1, (int)y_moon - 1, 1);
-    fb_plot((int)x_moon + 1, (int)y_moon - 0, 1);
-    fb_plot((int)x_moon + 1, (int)y_moon + 1, 1);
+    gfx_draw_point(global_state->gfx, (int)x_moon - 1, (int)y_moon - 1, 255, 255, 255, 1);
+    gfx_draw_point(global_state->gfx, (int)x_moon - 1, (int)y_moon - 0, 255, 255, 255, 1);
+    gfx_draw_point(global_state->gfx, (int)x_moon - 1, (int)y_moon + 1, 255, 255, 255, 1);
+    gfx_draw_point(global_state->gfx, (int)x_moon - 0, (int)y_moon - 1, 255, 255, 255, 1);
+    gfx_draw_point(global_state->gfx, (int)x_moon - 0, (int)y_moon - 0, 255, 255, 255, 1);
+    gfx_draw_point(global_state->gfx, (int)x_moon - 0, (int)y_moon + 1, 255, 255, 255, 1);
+    gfx_draw_point(global_state->gfx, (int)x_moon + 1, (int)y_moon - 1, 255, 255, 255, 1);
+    gfx_draw_point(global_state->gfx, (int)x_moon + 1, (int)y_moon - 0, 255, 255, 255, 1);
+    gfx_draw_point(global_state->gfx, (int)x_moon + 1, (int)y_moon + 1, 255, 255, 255, 1);
 
 
 
@@ -1376,12 +1378,12 @@ void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
 
     wchar_t coordstr_sun[30];
     swprintf(coordstr_sun, 30, L"SUN\nA:%.1f\nE:%.1f", azimuth_sun, altitude_sun);
-    fb_draw_textline_mini(coordstr_sun, 0, 46, 1);
+    gfx_draw_textline_mini(global_state->gfx, coordstr_sun, 0, 46, 255, 255, 255, 1);
 
     double x_sun = 64 + (90.0 - altitude_sun) * 32.0 / 90.0 * sin(azimuth_sun / 180.0 * M_PI);
     double y_sun = 32 - (90.0 - altitude_sun) * 32.0 / 90.0 * cos(azimuth_sun / 180.0 * M_PI);
 
-    fb_draw_circle((int)x_sun, (int)y_sun, 2);
+    gfx_draw_circle(global_state->gfx, (int)x_sun, (int)y_sun, 2, 255, 255, 255, 1);
 
 
     // 二分搜索日出日落时间
@@ -1399,12 +1401,12 @@ void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
     }
     wchar_t risefall_time[60];
     swprintf(risefall_time, 60, L"R:%02d:%02d\nS:%02d:%02d", sunrise_time[0], sunrise_time[1], sunset_time[0], sunset_time[1]);
-    fb_draw_textline_mini(risefall_time, 98, 0, 1);
+    gfx_draw_textline_mini(global_state->gfx, risefall_time, 98, 0, 255, 255, 255, 1);
 
 
-    fb_draw_textline_mini(L"    BD4SUR\n2011-09-29", 86, 53, 1);
+    gfx_draw_textline_mini(global_state->gfx, L"    BD4SUR\n2011-09-29", 86, 53, 255, 255, 255, 1);
 
-    gfx_refresh();
+    gfx_refresh(global_state->gfx);
 
     if (ephemeris_first_call_timestamp == 0) {
         ephemeris_first_call_timestamp = global_state->timestamp;

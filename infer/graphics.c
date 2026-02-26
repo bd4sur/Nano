@@ -4,9 +4,18 @@
 
 #include "glyph.h"
 
-static uint8_t **FRAME_BUFFER = NULL;
 
-void gfx_init() {
+void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode) {
+    // gfx = (Nano_GFX*)calloc(1, sizeof(Nano_GFX));
+    gfx->color_mode = color_mode;
+    gfx->width = width;
+    gfx->height = height;
+    gfx->frame_buffer_rgb888 = (uint8_t *)calloc(width * height * 3, sizeof(uint8_t));
+
+    display_hal_init();
+
+    gfx_clear(gfx);
+/*
     // 初始化GDRAM
     FRAME_BUFFER = (uint8_t **)calloc(FB_PAGES, sizeof(uint8_t *));
     for(uint8_t i = 0; i < FB_PAGES; i++) {
@@ -15,81 +24,88 @@ void gfx_init() {
 
     display_hal_init();
 
-    fb_clear();
+    gfx_clear();
+*/
 }
 
 
-void gfx_close() {
-    display_hal_close();
+void gfx_close(Nano_GFX *gfx) {
+    // display_hal_close();
 }
 
 
-void gfx_refresh() {
-    display_hal_refresh(FRAME_BUFFER);
-}
-
-// 清屏函数
-void fb_clear(void) {
-    for (uint8_t i = 0; i < FB_PAGES; i++) {
-        for (uint8_t n = 0; n < FB_WIDTH; n++) {
-            FRAME_BUFFER[i][n] = 0;
-        }
-    }
-    gfx_refresh();
+void gfx_refresh(Nano_GFX *gfx) {
+    display_hal_refresh(gfx->frame_buffer_rgb888, gfx->width, gfx->height, 0, 0, 128, 64);
 }
 
 // 清屏函数
-void fb_soft_clear(void) {
-    for (uint8_t i = 0; i < FB_PAGES; i++) {
-        for (uint8_t n = 0; n < FB_WIDTH; n++) {
-            FRAME_BUFFER[i][n] = 0;
-        }
-    }
+void gfx_clear(Nano_GFX *gfx) {
+    memset(gfx->frame_buffer_rgb888, 0, gfx->width * gfx->height * 3);
+    gfx_refresh(gfx);
+}
+
+// 清屏函数
+void gfx_soft_clear(Nano_GFX *gfx) {
+    memset(gfx->frame_buffer_rgb888, 0, gfx->width * gfx->height * 3);
+    // gfx_refresh(gfx);
 }
 
 // 画点
-// x: 0~127
-// y: 0~63
-// t: 0-置0  1-置1  2-异或
-void fb_plot(uint8_t x, uint8_t y, uint8_t mode) {
-    if (x >= FB_WIDTH || y >= FB_HEIGHT) {
-        // printf("WARNING: Plot Coord Out of bound! Cancelled.\n");
+// mode: 0-置黑  1-置色  2-异或  3-加色
+void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    if (x >= gfx->width || y >= gfx->height) {
         return;
     }
-    uint8_t i, m, n;
-    i = y / FB_PAGES;
-    m = y % FB_PAGES;
-    n = 1 << m;
+
+    uint32_t idx = (y * gfx->width + x) * 3;
+
     if (mode == 0) {
-        FRAME_BUFFER[i][x] = ~FRAME_BUFFER[i][x];
-        FRAME_BUFFER[i][x] |= n;
-        FRAME_BUFFER[i][x] = ~FRAME_BUFFER[i][x];
+        gfx->frame_buffer_rgb888[idx+0] = 0;
+        gfx->frame_buffer_rgb888[idx+1] = 0;
+        gfx->frame_buffer_rgb888[idx+2] = 0;
     }
     else if (mode == 1) {
-        FRAME_BUFFER[i][x] |= n;
+        gfx->frame_buffer_rgb888[idx+0] = MIN(255, red);
+        gfx->frame_buffer_rgb888[idx+1] = MIN(255, green);
+        gfx->frame_buffer_rgb888[idx+2] = MIN(255, blue);
+    }
+    else if (mode == 2) {
+        uint8_t r = gfx->frame_buffer_rgb888[idx+0];
+        uint8_t g = gfx->frame_buffer_rgb888[idx+1];
+        uint8_t b = gfx->frame_buffer_rgb888[idx+2];
+
+        gfx->frame_buffer_rgb888[idx+0] = (r == 0) ? 255 : 0;
+        gfx->frame_buffer_rgb888[idx+1] = (g == 0) ? 255 : 0;
+        gfx->frame_buffer_rgb888[idx+2] = (b == 0) ? 255 : 0;
     }
     else {
-        FRAME_BUFFER[i][x] ^= n;
+        uint8_t r = gfx->frame_buffer_rgb888[idx+0];
+        uint8_t g = gfx->frame_buffer_rgb888[idx+1];
+        uint8_t b = gfx->frame_buffer_rgb888[idx+2];
+
+        gfx->frame_buffer_rgb888[idx+0] = MIN(255, r + red);
+        gfx->frame_buffer_rgb888[idx+1] = MIN(255, g + green);
+        gfx->frame_buffer_rgb888[idx+2] = MIN(255, b + blue);
     }
 }
 
 // 画线
 // x1,y1:起点坐标
 // x2,y2:结束坐标
-void fb_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t mode) {
+void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
 
     // 垂直线
     if (x1 == x2 && y1 != y2) {
         int32_t delta = y2 - y1;
         for (int32_t y = y1; ((delta >= 0) ? (y <= y2) : (y >= y2)); ((delta >= 0) ? (y++) : (y--))) {
-            fb_plot(x1, y, mode);
+            gfx_draw_point(gfx, x1, y, red, green, blue, mode);
         }
     }
     // 水平线（或一点）
     else if (y1 == y2) {
         int32_t delta = x2 - x1;
         for (int32_t x = x1; ((delta >= 0) ? (x <= x2) : (x >= x2)); ((delta >= 0) ? (x++) : (x--))) {
-            fb_plot(x, y1, mode);
+            gfx_draw_point(gfx, x, y1, red, green, blue, mode);
         }
     }
     // 斜线
@@ -125,7 +141,7 @@ void fb_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t mode) 
             distance = delta_y;
 
         for (int32_t t = 0; t < distance + 1; t++) {
-            fb_plot(uRow, uCol, mode);
+            gfx_draw_point(gfx, uRow, uCol, red, green, blue, mode);
             xerr += delta_x;
             yerr += delta_y;
             if (xerr > distance) {
@@ -142,19 +158,19 @@ void fb_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t mode) 
 
 // x,y:圆心坐标
 // r:圆的半径
-void fb_draw_circle(uint8_t cx, uint8_t cy, uint8_t r) {
+void gfx_draw_circle(Nano_GFX *gfx, uint32_t cx, uint32_t cy, uint32_t r, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
     if (r == 0) {
-        fb_plot(cx, cy, 1);
+        gfx_draw_point(gfx, cx, cy, red, green, blue, mode);
         return;
     }
 
-    int16_t x = 0;
-    int16_t y = r;
-    int16_t d = 3 - 2 * r;  // 更稳健的初始决策参数（Bresenham 形式）
+    int32_t x = 0;
+    int32_t y = r;
+    int32_t d = 3 - 2 * r;  // 更稳健的初始决策参数（Bresenham 形式）
 
     while (x <= y) {
         // 定义8个对称点
-        int16_t points[8][2] = {
+        int32_t points[8][2] = {
             { cx + x, cy + y },
             { cx + y, cy + x },
             { cx - x, cy + y },
@@ -166,11 +182,11 @@ void fb_draw_circle(uint8_t cx, uint8_t cy, uint8_t r) {
         };
 
         for (int i = 0; i < 8; i++) {
-            int16_t px = points[i][0];
-            int16_t py = points[i][1];
+            int32_t px = points[i][0];
+            int32_t py = points[i][1];
             // 严格裁剪到屏幕范围
-            if (px >= 0 && px < FB_WIDTH && py >= 0 && py < FB_HEIGHT) {
-                fb_plot((uint8_t)px, (uint8_t)py, 1);
+            if (px >= 0 && px < gfx->width && py >= 0 && py < gfx->height) {
+                gfx_draw_point(gfx, (uint32_t)px, (uint32_t)py, red, green, blue, mode);
             }
         }
 
@@ -187,7 +203,11 @@ void fb_draw_circle(uint8_t cx, uint8_t cy, uint8_t r) {
 // 显示汉字
 // x,y:起点坐标
 // mode:0,反色显示;1,正常显示
-void fb_draw_char(uint8_t x, uint8_t y, uint8_t *glyph, uint8_t font_width, uint8_t font_height, uint8_t mode) {
+void gfx_draw_char(
+    Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t *glyph,
+    uint8_t font_width, uint8_t font_height,
+    uint8_t red, uint8_t green, uint8_t blue, uint8_t mode
+) {
     int32_t row_bytes = (font_height + 8 - 1) / 8;
     int32_t col_bytes = font_width;
     for (int32_t j = 0; j < row_bytes; j++) {
@@ -196,76 +216,42 @@ void fb_draw_char(uint8_t x, uint8_t y, uint8_t *glyph, uint8_t font_width, uint
             uint8_t g = glyph[j * col_bytes + i];
             for (int32_t b = 0; b < bits; b++) {
                 if ((g >> b) & 0x1) {
-                    fb_plot((x+i), (y+j*8+b), mode);
+                    gfx_draw_point(gfx, (x+i), (y+j*8+b), red, green, blue, mode);
                 }
                 else {
-                    fb_plot((x+i), (y+j*8+b), !mode);
+                    gfx_draw_point(gfx, (x+i), (y+j*8+b), red, green, blue, !mode);
                 }
             }
         }
     }
 }
 
-// x,y：起点坐标
-// sizex,sizey,图片长宽
-// BMP[]：要写入的图片数组
-// mode:0,反色显示;1,正常显示
-void fb_draw_bitmap(uint8_t x, uint8_t y, uint8_t sizex, uint8_t sizey, uint8_t BMP[], uint8_t mode) {
-    uint32_t j = 0;
-    uint8_t i, n, temp, m;
-    uint8_t x0 = x, y0 = y;
-    sizey = sizey / 8 + ((sizey % 8) ? 1 : 0);
-    for (n = 0; n < sizey; n++)
-    {
-        for (i = 0; i < sizex; i++)
-        {
-            temp = BMP[j];
-            j++;
-            for (m = 0; m < 8; m++)
-            {
-                if (temp & 0x01)
-                    fb_plot(x, y, mode);
-                else
-                    fb_plot(x, y, !mode);
-                temp >>= 1;
-                y++;
-            }
-            x++;
-            if ((x - x0) == sizex)
-            {
-                x = x0;
-                y0 = y0 + 8;
-            }
-            y = y0;
-        }
-    }
-}
 
 // 绘制一行文本，mode为1则为正显，为0则为反白
-void fb_draw_textline(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
+void gfx_draw_textline(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
     uint32_t x_pos = x;
     uint32_t y_pos = y;
     for (uint32_t i = 0; i < wcslen(line); i++) {
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        uint8_t *glyph = get_glyph(current_char, &font_width, &font_height);
+        uint8_t *glyph = get_glyph(gfx, current_char, &font_width, &font_height);
         if (!glyph) {
             // printf("出现了字库之外的字符！\n");
-            glyph = get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+            glyph = get_glyph(gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
         if (x_pos + font_width >= 128) {
             break;
         }
         // NOTE 反色显示时，在每个字符场面额外补充一条线，避免菜单中高亮区域看起来顶格
-        fb_draw_line(x_pos, y_pos - 1, x_pos+font_width-1, y_pos - 1, 1 - (mode % 2));
-        fb_draw_char(x_pos, y_pos, glyph, font_width, font_height, (mode % 2));
+        // gfx_draw_line(gfx, x_pos, y_pos - 1, x_pos+font_width-1, y_pos - 1, red, green, blue, 1 - (mode % 2));
+        gfx_draw_char(gfx, x_pos, y_pos, glyph, font_width, font_height, red, green, blue, mode);
         x_pos += font_width;
     }
 }
 
 
-void fb_draw_textline_mini(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) {
+void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
     const uint8_t mini_glyph[43][7] = {
         {3, 5, 0x1F, 0x11, 0x1F, 0x00, 0x00}, // 0
         {3, 5, 0x12, 0x1F, 0x10, 0x00, 0x00}, // 1
@@ -368,7 +354,7 @@ void fb_draw_textline_mini(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) 
             // printf("Column = %d\n", column_data);
             for (uint32_t j = 0; j < font_height; j++) {
                 uint8_t m = ((column_data >> j) & 0x01) ? mode : (!mode);
-                fb_plot(x_pos + i, y_pos + j, m);
+                gfx_draw_point(gfx, x_pos + i, y_pos + j, red, green, blue, m);
             }
         }
         x_pos += (font_width + 1); // 字符间隔1像素
@@ -377,7 +363,7 @@ void fb_draw_textline_mini(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode) 
 
 
 
-uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
+uint8_t *get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
     if(utf32 < 127) {
         *font_width = 6;
         *font_height = 12;

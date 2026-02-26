@@ -20,6 +20,8 @@
 
 static int i2cdev_fd;
 
+static uint8_t **FRAME_BUFFER = NULL;
+
 // 发送命令
 void OLED_WriteData(uint8_t data) {
     uint8_t buf[2];
@@ -49,7 +51,32 @@ void OLED_WriteCommand(uint8_t cmd) {
 }
 
 // 更新显存到OLED
-void display_hal_refresh(uint8_t **FRAME_BUFFER) {
+void display_hal_refresh(
+    uint8_t *frame_buffer_rgb888, uint32_t fb_width, uint32_t fb_height,
+    uint32_t x0, uint32_t y0, uint32_t view_width, uint32_t view_height
+) {
+    // 将frame_buffer_rgb888复制到设备的FRAME_BUFFER中
+    for (uint8_t row = 0; row < FB_PAGES; row++) {
+        for (uint8_t col = 0; col < FB_WIDTH; col++) {
+            uint8_t page_line = 0;
+            for (uint8_t i = 0; i < 8; i++) {
+                uint32_t x = col;
+                uint32_t y = row * 8 + i;
+                if (x < x0 || x > x0 + view_width || y < y0 || y > y0 + view_height) {
+                    continue;
+                }
+                uint32_t idx = (y * fb_width + x) * 3;
+                uint8_t red   = frame_buffer_rgb888[idx+0];
+                uint8_t green = frame_buffer_rgb888[idx+1];
+                uint8_t blue  = frame_buffer_rgb888[idx+2];
+                if (red + green + blue != 0) {
+                    page_line |= (0x1 << i);
+                }
+            }
+            FRAME_BUFFER[row][col] = page_line;
+        }
+    }
+
     for (uint8_t row = 0; row < FB_PAGES; row++) {
         uint8_t col = 0;
         OLED_WriteCommand(0xb0 + row); // 设置行起始地址
@@ -92,6 +119,12 @@ void display_hal_refresh(uint8_t **FRAME_BUFFER) {
 
 // OLED的初始化
 void display_hal_init(void) {
+    // 初始化GDRAM
+    FRAME_BUFFER = (uint8_t **)calloc(FB_PAGES, sizeof(uint8_t *));
+    for(uint8_t i = 0; i < FB_PAGES; i++) {
+        FRAME_BUFFER[i] = (uint8_t *)calloc(FB_WIDTH, sizeof(uint8_t));
+    }
+
     // 初始化屏幕设备
     i2cdev_fd = open(I2C_DEVFILE, O_RDWR);
     if (i2cdev_fd < 0) {

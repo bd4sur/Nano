@@ -26,7 +26,7 @@ void draw_rect(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float x0, float y0, float width, float height, uint8_t red, uint8_t green, uint8_t blue
 );
 
-void fb_draw_textline(
+void gfx_draw_textline(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     wchar_t *line, int32_t x, int32_t y, uint8_t red, uint8_t green, uint8_t blue
 );

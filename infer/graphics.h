@@ -11,21 +11,44 @@ extern "C" {
 #define FONT_WIDTH_FULL (12)
 #define FONT_WIDTH_HALF (6)
 
-void gfx_init();
-void gfx_close();
-void gfx_refresh();
+#define GFX_COLOR_MODE_BINARY (1)
+#define GFX_COLOR_MODE_RGB888 (11)
+#define GFX_COLOR_MODE_RGB565 (12)
 
-void fb_clear();
-void fb_soft_clear();
-void fb_plot(uint8_t x, uint8_t y, uint8_t mode);
-void fb_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, uint8_t mode);
-void fb_draw_circle(uint8_t x, uint8_t y, uint8_t r);
-void fb_draw_char(uint8_t x, uint8_t y, uint8_t *glyph, uint8_t font_width, uint8_t font_height, uint8_t mode);
-void fb_draw_bitmap(uint8_t x, uint8_t y, uint8_t sizex, uint8_t sizey, uint8_t BMP[], uint8_t mode);
-void fb_draw_textline(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode);
-void fb_draw_textline_mini(wchar_t *line, uint32_t x, uint32_t y, uint8_t mode);
+typedef struct {
+    uint32_t color_mode;
 
-uint8_t *get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height);
+    // 通用帧缓冲
+    uint8_t *frame_buffer_rgb888;
+    uint32_t width;
+    uint32_t height;
+
+    // 脏区域管理
+
+    // 字库
+
+    // 其他元数据
+
+} Nano_GFX;
+
+void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode);
+void gfx_close(Nano_GFX *gfx);
+void gfx_refresh(Nano_GFX *gfx);
+
+void gfx_clear(Nano_GFX *gfx);
+void gfx_soft_clear(Nano_GFX *gfx);
+
+void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
+void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
+void gfx_draw_circle(Nano_GFX *gfx, uint32_t cx, uint32_t cy, uint32_t r, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
+void gfx_draw_char(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t *glyph,
+    uint8_t font_width, uint8_t font_height,
+    uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
+
+void gfx_draw_textline(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
+void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
+
+uint8_t *get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uint8_t *font_height);
 
 #ifdef __cplusplus
 }

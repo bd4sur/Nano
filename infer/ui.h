@@ -7,6 +7,7 @@ extern "C" {
 
 #include <wchar.h>
 
+#include "graphics.h"
 #include "utils.h"
 
 #define IME_MODE_HANZI    (0)
@@ -31,6 +32,9 @@ typedef struct Nano_Session Nano_Session;
 
 // NOTE 增删字段时，务必修改初始化部分
 typedef struct {
+    // gfx对象
+    Nano_GFX *gfx;
+
     // 全局状态
     int32_t STATE; // 当前状态
     int32_t PREV_STATE; // 上一状态
@@ -139,7 +143,7 @@ typedef struct {
 } Widget_Menu_State;
 
 
-void render_text(Widget_Textarea_State *textarea_state);
+void render_text(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
 
 void show_splash_screen(Key_Event *key_event, Global_State *global_state);
 
@@ -172,10 +176,10 @@ int32_t menu_event_handler(
 
 void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 void render_cursor(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
-void render_pinyin_input(Widget_Input_State *input_state, uint32_t is_picking);
-void render_symbol_input(Widget_Input_State *input_state);
+void render_pinyin_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, uint32_t is_picking);
+void render_symbol_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 
-void render_scroll_bar(int32_t line_num, int32_t current_line, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height);
+void render_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_t line_num, int32_t current_line, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height);
 
 // ===============================================================================
 // Game of Life
