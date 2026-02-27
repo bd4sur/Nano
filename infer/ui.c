@@ -395,8 +395,8 @@ void init_textarea(Key_Event *key_event, Global_State *global_state, Widget_Text
     textarea_state->state = 0;
     textarea_state->x = 0;
     textarea_state->y = 0;
-    textarea_state->width = 128;
-    textarea_state->height = 64;
+    textarea_state->width = SCREEN_WIDTH;
+    textarea_state->height = SCREEN_HEIGHT;
     textarea_state->length = 0;
     textarea_state->line_num = 0;
     textarea_state->view_lines = 0;
@@ -1334,23 +1334,24 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
     // gfx_draw_textline_mini(global_state->gfx, timestr, 0, 0, 255, 255, 255, 1);
 
     render_sky(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height,
-        120, 120, 120,
-        90.0f, 180.0f, 1.0f,
+        120, 160, 120,
+        global_state->pitch, global_state->roll, 1.0f,
         // 2026, 2, 25, 12, 0, 0, 8.0, 119.0, 31.0,
         year, month, day, hour, minute, second, timezone, longitude, latitude,
-        0,     // 降采样因子（设为0为自动，建议设为2）
+        2,     // 降采样因子（设为0为自动，建议设为2）
         0,     // 是否启用基于对称性的渲染优化（以画质为代价）
         0,     // 是否启用查找表计算加速（以画质为代价）
         0,     // 是否启用双线性插值以优化画质
 
         2,     // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
-        1,     // 是否启用赤道坐标圈
+        1,     // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
+        0,     // 是否启用赤道坐标圈
         1,     // 是否启用地平坐标圈
         1,     // 是否启用星芒效果
-        1,     // 是否显示恒星名称
+        0,     // 是否显示恒星名称
         1,     // 是否显示大行星
         1,     // 是否显示大行星名称
-        1      // 是否显示黄道
+        0      // 是否显示黄道
     );
 
     dithering_fast(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height);

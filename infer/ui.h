@@ -68,6 +68,12 @@ typedef struct {
     // TTS相关
     int32_t tts_req_mode; // TTS请求方式：0-关闭（默认值）   1-实时（每生成“一句话”立刻请求TTS）   2-全部生成完成后统一请求TTS
 
+    // IMU相关
+    float pitch;
+    float roll;
+    float yaw;
+    float imu_temperature;
+
     // UPS相关
     int32_t ups_voltage; // UPS电压
     int32_t ups_soc; // UPS电量

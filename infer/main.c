@@ -3,6 +3,7 @@
 #include "graphics.h"
 #include "ui.h"
 #include "ups.h"
+#include "mpu6050.h"
 #include "keyboard_hal.h"
 #include "infer.h"
 #include "prompt.h"
@@ -36,7 +37,7 @@
 #define STATE_README          (25)
 #define STATE_BADAPPLE        (26)
 #define STATE_GAMEOFLIFE      (27)
-#define STATE_EPHEMERIS       (28)
+#define STATE_LINGLONG       (28)
 #define STATE_FLASHMEMO       (29)
 #define STATE_SHUTDOWN        (31)
 #define STATE_TTS_SETTING     (32)
@@ -260,7 +261,7 @@ void init_main_menu() {
     wcscpy(w_menu_main->items[0], L"电子鹦鹉");
     wcscpy(w_menu_main->items[1], L"文本阅读");
     wcscpy(w_menu_main->items[2], L"闪念胶囊");
-    wcscpy(w_menu_main->items[3], L"赛博天球仪");
+    wcscpy(w_menu_main->items[3], L"玲珑天象仪");
     wcscpy(w_menu_main->items[4], L"Bad Apple！");
     wcscpy(w_menu_main->items[5], L"元胞自动机");
     wcscpy(w_menu_main->items[6], L"设置");
@@ -329,9 +330,9 @@ int32_t main_menu_item_action(int32_t item_index) {
         return STATE_FLASHMEMO;
     }
 
-    // 3.赛博天球仪
+    // 3.玲珑天象仪
     else if (item_index == 3) {
-        return STATE_EPHEMERIS;
+        return STATE_LINGLONG;
     }
 
     // 4.BadApple
@@ -558,6 +559,10 @@ int main() {
     global_state->is_asr_server_up = 0;
     global_state->is_recording = 0;
     global_state->asr_start_timestamp = 0;
+    global_state->pitch = 0.0f;
+    global_state->roll = 0.0f;
+    global_state->yaw = 0.0f;
+    global_state->imu_temperature = 0.0f;
     global_state->is_full_refresh = 1;
     global_state->llm_refresh_max_fps = 10;
     global_state->llm_refresh_timestamp = 0;
@@ -586,6 +591,12 @@ int main() {
     // UPS传感器初始化
 #ifdef UPS_ENABLED
     ups_init();
+#endif
+
+    ///////////////////////////////////////
+    // IMU初始化
+#ifdef IMU_ENABLED
+    mpu6050_init();
 #endif
 
     ///////////////////////////////////////
@@ -1092,16 +1103,24 @@ int main() {
         }
 
         /////////////////////////////////////////////
-        // 赛博天球仪：计算太阳和月亮位置
+        // 玲珑天象仪：计算太阳和月亮位置
         /////////////////////////////////////////////
 
-        case STATE_EPHEMERIS:
+        case STATE_LINGLONG:
 
             // 首次获得焦点：初始化
             if (global_state->PREV_STATE != global_state->STATE) {
                 
             }
             global_state->PREV_STATE = global_state->STATE;
+
+#ifdef IMU_ENABLED
+            int ret = -1;
+            do {
+                ret = mpu6050_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw), &(global_state->imu_temperature));
+            } while(ret != 0);
+            printf("%-10.2f %-10.2f %-10.2f %-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw, global_state->imu_temperature);
+#endif
 
             draw_ephemeris_screen(key_event, global_state);
 

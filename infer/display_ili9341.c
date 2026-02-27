@@ -1160,7 +1160,10 @@ parameter    :
 void ILI9341_Display(uint8_t *image)
 {
     uint16_t i;
-    ILI9341_SetWindow(0, 0, ILI9341_WIDTH, ILI9341_HEIGHT);
+    // NOTE 不旋转
+    // ILI9341_SetWindow(0, 0, ILI9341_WIDTH, ILI9341_HEIGHT);
+    // NOTE 旋转90度或270度
+    ILI9341_SetWindow(0, 0, ILI9341_HEIGHT, ILI9341_WIDTH);
     DEV_Digital_Write(LCD_DC, 1);
     for (i = 0; i < ILI9341_HEIGHT; i++)
     {
@@ -1204,16 +1207,16 @@ void ILI9341_SetRotation(uint8_t rotation) {
     
     switch(rotation) {
         case 0: // 0度
-            madctl = MADCTL_MX | MADCTL_BGR;
+            madctl = MADCTL_BGR;
             break;
         case 1: // 90度
-            madctl = MADCTL_MV | MADCTL_BGR;
+            madctl = MADCTL_MV | MADCTL_MY | MADCTL_BGR;
             break;
         case 2: // 180度
-            madctl = MADCTL_MY | MADCTL_BGR;
+            madctl = MADCTL_MX | MADCTL_MY | MADCTL_BGR;
             break;
         case 3: // 270度
-            madctl = MADCTL_MX | MADCTL_MY | MADCTL_MV | MADCTL_BGR;
+            madctl = MADCTL_MV | MADCTL_MX | MADCTL_BGR;
             break;
     }
     
@@ -1270,7 +1273,7 @@ void display_hal_init(void) {
 
     ILI9341_Init();
     ILI9341_SetBacklight(1023);
-    // ILI9341_SetRotation(1);
+    ILI9341_SetRotation(3);
     ILI9341_Clear(RGB565_GREEN);
     DEV_Delay_ms(1000);
 }
