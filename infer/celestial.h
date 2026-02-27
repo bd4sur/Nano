@@ -45,7 +45,7 @@ void fb_draw_textline(
 
 void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
-    float view_alt, float view_azi, float f,
+    float view_alt, float view_azi, float view_roll, float f,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double timezone, double longitude, double latitude,
     int32_t downsampling_factor,     // 降采样因子（设为0为自动，建议设为2）

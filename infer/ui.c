@@ -1335,7 +1335,7 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
 
     render_sky(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height,
         120, 160, 120,
-        global_state->pitch, global_state->roll, 1.0f,
+        global_state->pitch, 180, global_state->roll, 1.0f,
         // 2026, 2, 25, 12, 0, 0, 8.0, 119.0, 31.0,
         year, month, day, hour, minute, second, timezone, longitude, latitude,
         2,     // 降采样因子（设为0为自动，建议设为2）

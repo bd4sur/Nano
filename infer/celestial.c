@@ -289,78 +289,95 @@ void norm(float a0, float a1, float a2, float *out0, float *out1, float *out2) {
 
 
 // 地平天球的球坐标系→地平天球的笛卡尔坐标系→投影到地面投影坐标系
+// 新增roll_deg参数：滚转角(±90°)，正值为顺时针旋转（从观察者视角，右侧地平线下倾）
 void fisheye_project(
     float azimuth_deg, float altitude_deg, float radius,
-    float center_x, float center_y, float view_alt, float view_azi, float f,
+    float center_x, float center_y, 
+    float view_alt, float view_azi, float view_roll, float f,
     float *scr_x, float *scr_y
 ) {
-    if (view_alt == 90.0f && view_azi == 180.0f && f == 1.0f) {
+    // 快速路径：默认视角且无roll时使用简化投影
+    if (view_alt == 90.0f && view_azi == 180.0f && view_roll == 0.0f && f == 1.0f) {
         horizontal_to_screen_xy(azimuth_deg, altitude_deg, radius, center_x, center_y, scr_x, scr_y);
         return;
     }
 
+    // 处理天顶视角的数值稳定性问题（避免除零/奇异点）
     if (fabsf(view_alt - 90.0f) < 1e-5f) {
         view_alt = 89.99f;
     }
 
-    float v_view_x = 0.0f;
-    float v_view_y = 0.0f;
-    float v_view_z = 0.0f;
+    // ===== 1. 计算视线方向的单位向量 (局部坐标系Z轴) =====
+    float v_view_x = 0.0f, v_view_y = 0.0f, v_view_z = 0.0f;
     horizontal_to_xyz(view_azi, view_alt, radius, &v_view_x, &v_view_y, &v_view_z);
-
-    float v_view_norm_x = 0.0f;
-    float v_view_norm_y = 0.0f;
-    float v_view_norm_z = 0.0f;
+    float v_view_norm_x = 0.0f, v_view_norm_y = 0.0f, v_view_norm_z = 0.0f;
     norm(v_view_x, v_view_y, v_view_z, &v_view_norm_x, &v_view_norm_y, &v_view_norm_z);
 
-    float v_x = 0.0f;
-    float v_y = 0.0f;
-    float v_z = 0.0f;
+    // ===== 2. 计算目标点的单位向量 =====
+    float v_x = 0.0f, v_y = 0.0f, v_z = 0.0f;
     horizontal_to_xyz(azimuth_deg, altitude_deg, radius, &v_x, &v_y, &v_z);
-
-    float v_norm_x = 0.0f;
-    float v_norm_y = 0.0f;
-    float v_norm_z = 0.0f;
+    float v_norm_x = 0.0f, v_norm_y = 0.0f, v_norm_z = 0.0f;
     norm(v_x, v_y, v_z, &v_norm_x, &v_norm_y, &v_norm_z);
 
-    float xv_x = 0.0f; float xv_y = 0.0f; float xv_z = 0.0f;
-    float yv_x = 0.0f; float yv_y = 0.0f; float yv_z = 0.0f;
-
-    // if (Math.abs(view_alt - 90) < 1e-5) { // 谨慎处理临界点附近的浮点误差问题
-    //     v_view = [0, 0, 1];
-    //     // NOTE 如果强行设置y_v，将失去天顶视角的旋转（某种 gimble lock？）
-    //     y_v = [0, 1, 0]; // NOTE 方向的选择有任意性，与默认方向与坐标反解有关
-    // }
-    // else {
-    //     let zenith = [0, 0, 1];
-    //     let proj = scale(v_view, dot(zenith, v_view));
-    //     y_v = norm(sub(zenith, proj));
-    // }
-
-    float zenith_x = 0.0f; float zenith_y = 0.0f; float zenith_z = 1.0f;
-    float s = dot(zenith_x, zenith_y, zenith_z, v_view_norm_x, v_view_norm_y, v_view_norm_z);
+    // ===== 3. 构建局部坐标系 (无roll时) =====
+    // Z轴: 视线方向 v_view_norm
+    // Y轴: 天顶方向[0,0,1]在垂直于视线平面上的投影 (指向"上")
+    float zenith_x = 0.0f, zenith_y = 0.0f, zenith_z = 1.0f;
+    float s = dot(zenith_x, zenith_y, zenith_z, 
+                  v_view_norm_x, v_view_norm_y, v_view_norm_z);
     float proj_x = v_view_norm_x * s;
     float proj_y = v_view_norm_y * s;
     float proj_z = v_view_norm_z * s;
+    
+    float yv_x = 0.0f, yv_y = 0.0f, yv_z = 0.0f;
+    norm(zenith_x - proj_x, zenith_y - proj_y, zenith_z - proj_z, 
+         &yv_x, &yv_y, &yv_z);
+    
+    // X轴: Y轴 × Z轴 (右手坐标系，指向"右")
+    float xv_x = 0.0f, xv_y = 0.0f, xv_z = 0.0f;
+    cross(yv_x, yv_y, yv_z, 
+          v_view_norm_x, v_view_norm_y, v_view_norm_z, 
+          &xv_x, &xv_y, &xv_z);
 
-    norm(zenith_x - proj_x, zenith_y - proj_y, zenith_z - proj_z, &yv_x, &yv_y, &yv_z);
+    // ===== 4. 应用Roll旋转: 绕视线方向(Z轴)旋转局部坐标系 =====
+    float roll_rad = view_roll * M_PI / 180.0f;
+    float cos_roll = cosf(roll_rad);
+    float sin_roll = sinf(roll_rad);
+    
+    // 旋转基向量 (绕Z轴的2D旋转矩阵)
+    // 新X = 旧X*cos(roll) - 旧Y*sin(roll)
+    // 新Y = 旧X*sin(roll) + 旧Y*cos(roll)
+    float xv_rot_x = xv_x * cos_roll - yv_x * sin_roll;
+    float xv_rot_y = xv_y * cos_roll - yv_y * sin_roll;
+    float xv_rot_z = xv_z * cos_roll - yv_z * sin_roll;
+    
+    float yv_rot_x = xv_x * sin_roll + yv_x * cos_roll;
+    float yv_rot_y = xv_y * sin_roll + yv_y * cos_roll;
+    float yv_rot_z = xv_z * sin_roll + yv_z * cos_roll;
 
+    // ===== 5. 将目标点投影到旋转后的局部坐标系 =====
+    float vx = dot(v_norm_x, v_norm_y, v_norm_z, 
+                   xv_rot_x, xv_rot_y, xv_rot_z);  // 局部X分量
+    float vy = dot(v_norm_x, v_norm_y, v_norm_z, 
+                   yv_rot_x, yv_rot_y, yv_rot_z);  // 局部Y分量
+    float vz = dot(v_norm_x, v_norm_y, v_norm_z, 
+                   v_view_norm_x, v_view_norm_y, v_view_norm_z);  // 局部Z分量
 
-    cross(yv_x, yv_y, yv_z, v_view_norm_x, v_view_norm_y, v_view_norm_z, &xv_x, &xv_y, &xv_z);
-
-    float vx = dot(v_norm_x, v_norm_y, v_norm_z, xv_x, xv_y, xv_z);
-    float vy = dot(v_norm_x, v_norm_y, v_norm_z, yv_x, yv_y, yv_z);
-    float vz = dot(v_norm_x, v_norm_y, v_norm_z, v_view_norm_x, v_view_norm_y, v_view_norm_z);
-
-    if (vz < -1.0f) {
-        *scr_x = 0.0f;
-        *scr_y = 0.0f;
+    // ===== 6. 鱼眼投影计算 =====
+    // 处理边界：点在视线后方时返回中心
+    if (vz <= -1.0f) {
+        *scr_x = center_x;
+        *scr_y = center_y;
         return;
     }
+    // 防止浮点误差导致acos域错误
+    if (vz > 1.0f) vz = 1.0f;
 
-    float theta = acosf(vz); // rad
-    float phi_v = -atan2f(vx, vy); // rad
-    float r = (f * 2.0f * radius / M_PI) * theta;
+    float theta = acosf(vz);                    // 与视线的夹角 (rad)
+    float phi_v = -atan2f(vx, vy);              // 局部平面内的方位角 (rad)
+    float r = (f * 2.0f * radius / M_PI) * theta; // 等距投影: r = f * θ
+    
+    // 转换为屏幕坐标 (注意y轴负号匹配原坐标系约定)
     float x =  r * sinf(phi_v);
     float y = -r * cosf(phi_v);
 
@@ -370,71 +387,99 @@ void fisheye_project(
 }
 
 
+// 鱼眼反投影：屏幕平面(x,y) → 地平天球笛卡尔坐标系(x,y,z)
+// 新增view_roll参数：滚转角(±90°)，正值为顺时针旋转（从观察者视角，右侧地平线下倾）
+// 与fisheye_project的roll约定保持一致，确保互为逆运算
 void fisheye_unproject(
     float scr_x, float scr_y,
-    float radius, float center_x, float center_y, float view_alt, float view_azi, float f,
+    float radius, float center_x, float center_y, 
+    float view_alt, float view_azi, float view_roll, float f,
     float *x, float *y, float *z
 ) {
-    if (view_alt == 90.0f && view_azi == 180.0f && f == 1.0f) {
+    // 快速路径：默认视角且无roll时使用简化反投影
+    if (view_alt == 90.0f && view_azi == 180.0f && view_roll == 0.0f && f == 1.0f) {
         screen_xy_to_xyz(scr_x, scr_y, radius, center_x, center_y, x, y, z);
         return;
     }
 
+    // 处理天顶视角的数值稳定性问题
     if (fabsf(view_alt - 90.0f) < 1e-5f) {
         view_alt = 89.99f;
     }
 
-    // 屏幕坐标转极坐标
+    // ===== 1. 屏幕坐标转极坐标 =====
     float dx = center_x - scr_x;
     float dy = center_y - scr_y;
     float r = sqrtf(dx * dx + dy * dy);
 
-    // 处理中心点退化
+    // 处理中心点退化情况
     float phi_prime = 0.0f;
     if (r < 1e-6f) {
         phi_prime = 0.0f;
     }
     else {
+        // 注意：atan2f(dx, dy) 与 project 中的 -atan2f(vx, vy) 互为逆运算
         phi_prime = atan2f(dx, dy);
     }
 
-    // 极坐标转单位向量
+    // ===== 2. 极坐标转局部坐标系单位向量 =====
+    // 等距投影反解: θ = (π/2) * r / (radius * f)
     float theta = (M_PI / 2.0f) * (r / (radius * f));
+    
+    // 防止theta超出[0, π]导致数值问题
+    if (theta > M_PI) theta = M_PI;
+    if (theta < 0.0f) theta = 0.0f;
+    
     float pxy = sinf(theta);
-    float p_prime_x = pxy * sinf(phi_prime);
-    float p_prime_y = pxy * cosf(phi_prime);
-    float p_prime_z = cosf(theta);
+    float p_prime_x = pxy * sinf(phi_prime);   // 局部X分量
+    float p_prime_y = pxy * cosf(phi_prime);   // 局部Y分量  
+    float p_prime_z = cosf(theta);              // 局部Z分量 (沿视线)
 
-    // 构建旋转矩阵转置
+    // ===== 3. 构建视线方向的局部坐标系 (无roll时) =====
     float V_alt_rad = to_rad_float(view_alt);
     float V_azi_rad = to_rad_float(view_azi);
 
-    // 视线向量v
+    // Z轴: 视线方向单位向量 v
     float v_x = cosf(V_alt_rad) * sinf(V_azi_rad);
     float v_y = cosf(V_alt_rad) * cosf(V_azi_rad);
     float v_z = sinf(V_alt_rad);
 
-    // 构建y'轴
-    float dd = v_z; // dd = dot(zenith=[0,0,1], v) => vz
+    // Y轴: 天顶[0,0,1]在垂直于视线平面上的投影 (指向"上")
+    float dd = v_z;  // dot(zenith, v)
     float y_prime_x = -dd * v_x;
     float y_prime_y = -dd * v_y;
     float y_prime_z = 1.0f - dd * v_z;
-
     norm(y_prime_x, y_prime_y, y_prime_z, &y_prime_x, &y_prime_y, &y_prime_z);
 
-    // 构建x'轴
-    float x_prime_x = 0.0f;
-    float x_prime_y = 0.0f;
-    float x_prime_z = 0.0f;
-    cross(y_prime_x, y_prime_y, y_prime_z, v_x, v_y, v_z, &x_prime_x, &x_prime_y, &x_prime_z);
+    // X轴: Y × Z (右手系，指向"右")
+    float x_prime_x = 0.0f, x_prime_y = 0.0f, x_prime_z = 0.0f;
+    cross(y_prime_x, y_prime_y, y_prime_z, v_x, v_y, v_z, 
+          &x_prime_x, &x_prime_y, &x_prime_z);
     norm(x_prime_x, x_prime_y, x_prime_z, &x_prime_x, &x_prime_y, &x_prime_z);
 
-    // 局部坐标转地平坐标
-    float px = x_prime_x * p_prime_x + y_prime_x * p_prime_y + v_x * p_prime_z;
-    float py = x_prime_y * p_prime_x + y_prime_y * p_prime_y + v_y * p_prime_z;
-    float pz = x_prime_z * p_prime_x + y_prime_z * p_prime_y + v_z * p_prime_z;
+    // ===== 4. 应用Roll旋转: 绕视线方向(Z轴)旋转局部XY平面 =====
+    float roll_rad = view_roll * M_PI / 180.0f;
+    float cos_roll = cosf(roll_rad);
+    float sin_roll = sinf(roll_rad);
+    
+    // 旋转基向量 (绕Z轴的2D旋转矩阵)
+    // 新X = 旧X*cos(roll) - 旧Y*sin(roll)
+    // 新Y = 旧X*sin(roll) + 旧Y*cos(roll)
+    float x_prime_rot_x = x_prime_x * cos_roll - y_prime_x * sin_roll;
+    float x_prime_rot_y = x_prime_y * cos_roll - y_prime_y * sin_roll;
+    float x_prime_rot_z = x_prime_z * cos_roll - y_prime_z * sin_roll;
+    
+    float y_prime_rot_x = x_prime_x * sin_roll + y_prime_x * cos_roll;
+    float y_prime_rot_y = x_prime_y * sin_roll + y_prime_y * cos_roll;
+    float y_prime_rot_z = x_prime_z * sin_roll + y_prime_z * cos_roll;
 
-    // 归一化到radius
+    // ===== 5. 局部坐标转地平坐标系 (使用旋转后的基向量) =====
+    // P_world = X'*p_x + Y'*p_y + Z'*p_z
+    float px = x_prime_rot_x * p_prime_x + y_prime_rot_x * p_prime_y + v_x * p_prime_z;
+    float py = x_prime_rot_y * p_prime_x + y_prime_rot_y * p_prime_y + v_y * p_prime_z;
+    float pz = x_prime_rot_z * p_prime_x + y_prime_rot_z * p_prime_y + v_z * p_prime_z;
+
+    // ===== 6. 归一化并缩放到指定radius =====
     norm(px, py, pz, &px, &py, &pz);
     *x = px * radius;
     *y = py * radius;
@@ -986,7 +1031,7 @@ void draw_rect(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 void draw_horizon(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
-    float view_alt, float view_azi, float f,
+    float view_alt, float view_azi, float view_roll, float f,
     float sun_alt, int32_t landscape_index
 ) {
     float margin = LINGLONG_HORIZON_BLUR_MARGIN;
@@ -996,7 +1041,7 @@ void draw_horizon(
     float hz = 0.0f;
     for (int32_t y = 0; y < fb_height; y++) {
         for (int32_t x = 0; x < fb_width; x++) {
-            fisheye_unproject(x, y, sky_radius, center_x, center_y, view_alt, view_azi, f, &hx, &hy, &hz);
+            fisheye_unproject(x, y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &hx, &hy, &hz);
             if (hz < 0) {
                 if (landscape_index == 0) {
                     set_pixel(frame_buffer, fb_width, fb_height, x, y, 0, 0, 0);
@@ -1053,7 +1098,7 @@ void draw_horizon(
 void draw_celestial_circle(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
-    float view_alt, float view_azi, float f,
+    float view_alt, float view_azi, float view_roll, float f,
     int32_t is_meridian, float ra_hours, float dec_deg,
     int32_t line_weight, uint8_t colorR, uint8_t colorG, uint8_t colorB,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
@@ -1079,7 +1124,7 @@ void draw_celestial_circle(
             if (alt > 0.0) {
                 float x = 0.0f;
                 float y = 0.0f;
-                fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &x, &y);
+                fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &x, &y);
 
                 if (i == 0) {
                     x_0 = x;
@@ -1114,7 +1159,7 @@ void draw_celestial_circle(
             if (alt > 0.0) {
                 float x = 0.0f;
                 float y = 0.0f;
-                fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &x, &y);
+                fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &x, &y);
 
                 if (i == 0) {
                     x_0 = x;
@@ -1141,7 +1186,7 @@ void draw_celestial_circle(
 void draw_ecliptic_circle(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
-    float view_alt, float view_azi, float f,
+    float view_alt, float view_azi, float view_roll, float f,
     int32_t line_weight, uint8_t colorR, uint8_t colorG, uint8_t colorB,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double timezone, double longitude, double latitude
@@ -1169,7 +1214,7 @@ void draw_ecliptic_circle(
         if (alt > 0.0) {
             float x = 0.0f;
             float y = 0.0f;
-            fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &x, &y);
+            fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &x, &y);
 
             if (i == 0) {
                 x_0 = x;
@@ -1279,7 +1324,7 @@ void render_sun(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 // 基于球面几何晨昏线的月相绘制（带物理合理的软边缘）
 void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
-    float view_alt, float view_azi, float f,
+    float view_alt, float view_azi, float view_roll, float f,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double timezone, double longitude, double latitude
 ) {
@@ -1302,7 +1347,7 @@ void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     // 计算月球的屏幕投影坐标
     float moon_scr_x = 0.0f;
     float moon_scr_y = 0.0f;
-    fisheye_project(moon_azi, moon_alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &moon_scr_x, &moon_scr_y);
+    fisheye_project(moon_azi, moon_alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &moon_scr_x, &moon_scr_y);
 
     // 以下是计算月面贴图的北极（月球地理北极）相对于屏幕y轴的旋转角
     // 这一步是旋转月球地理北极，使其指向其所在的天球子午圈北向切线方向，为后面计算月球亮区旋转角作准备
@@ -1316,7 +1361,7 @@ void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         longitude, latitude,
         &northdelta_azi, &northdelta_alt
     );
-    fisheye_project(northdelta_azi, northdelta_alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &northdelta_scr_x, &northdelta_scr_y);
+    fisheye_project(northdelta_azi, northdelta_alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &northdelta_scr_x, &northdelta_scr_y);
 
     float xa = moon_scr_x;
     float ya = moon_scr_y;
@@ -1880,7 +1925,7 @@ void calculate_scattered_pixel(
 
 void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
-    float view_alt, float view_azi, float f,
+    float view_alt, float view_azi, float view_roll, float f,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double timezone, double longitude, double latitude,
     int32_t downsampling_factor,     // 降采样因子（设为0为自动，建议设为2）
@@ -1921,7 +1966,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 
     float sun_proj_x = 0.0f;
     float sun_proj_y = 0.0f;
-    fisheye_project(sun_azi, sun_alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &sun_proj_x, &sun_proj_y);
+    fisheye_project(sun_azi, sun_alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &sun_proj_x, &sun_proj_y);
 
     // 天空绘制范围的屏幕坐标
     // int32_t y1 = (int32_t)floorf(center_y - sky_radius);
@@ -1973,7 +2018,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
                         float ray_x = 0.0f;
                         float ray_y = 0.0f;
                         float ray_z = 0.0f;
-                        fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, f, &ray_x, &ray_y, &ray_z);
+                        fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &ray_x, &ray_y, &ray_z);
 
                         float red = 0.0f;
                         float green = 0.0f;
@@ -2006,7 +2051,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
                     float ray_x = 0.0f;
                     float ray_y = 0.0f;
                     float ray_z = 0.0f;
-                    fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, f, &ray_x, &ray_y, &ray_z);
+                    fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &ray_x, &ray_y, &ray_z);
 
                     float red = 0.0f;
                     float green = 0.0f;
@@ -2095,7 +2140,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     render_moon(
         frame_buffer, fb_width, fb_height,
         sky_radius, center_x, center_y,
-        view_alt, view_azi, f,
+        view_alt, view_azi, view_roll, f,
         year, month, day, hour, minute, second, timezone, longitude, latitude);
 
     // 绘制星芒
@@ -2117,7 +2162,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 
         float sx = 0.0f;
         float sy = 0.0f;
-        fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &sx, &sy);
+        fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &sx, &sy);
 
         draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, sx, sy, mag, 1, 255, 255, 255);
 
@@ -2131,7 +2176,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         draw_ecliptic_circle(
             frame_buffer, fb_width, fb_height,
             sky_radius, center_x, center_y,
-            view_alt, view_azi, f,
+            view_alt, view_azi, view_roll, f,
             6, 32, 32, 0,
             year, month, day, hour, minute, second, timezone, longitude, latitude
         );
@@ -2147,7 +2192,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 
             float planet_proj_x = 0.0f;
             float planet_proj_y = 0.0f;
-            fisheye_project(planet_azi, planet_alt, sky_radius, center_x, center_y, view_alt, view_azi, f, &planet_proj_x, &planet_proj_y);
+            fisheye_project(planet_azi, planet_alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &planet_proj_x, &planet_proj_y);
 
             draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, planet_proj_x, planet_proj_y,
                 0.0f, PLANET_RADIUS[i], PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
@@ -2166,7 +2211,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             draw_celestial_circle(
                 frame_buffer, fb_width, fb_height,
                 sky_radius, center_x, center_y,
-                view_alt, view_azi, f,
+                view_alt, view_azi, view_roll, f,
                 1, (float)i, 0.0f,
                 line_width, 8, 16, 32,
                 year, month, day, hour, minute, second, timezone, longitude, latitude
@@ -2178,7 +2223,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             draw_celestial_circle(
                 frame_buffer, fb_width, fb_height,
                 sky_radius, center_x, center_y,
-                view_alt, view_azi, f,
+                view_alt, view_azi, view_roll, f,
                 0, 0.0f, (float)i,
                 line_width, 8, 16, 32,
                 year, month, day, hour, minute, second, timezone, longitude, latitude
@@ -2190,18 +2235,18 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     if (enable_horizontal_coord) {
         float label_x = 0.0f;
         float label_y = 0.0f;
-        fisheye_project(0, 6, sky_radius, center_x, center_y, view_alt, view_azi, f, &label_x, &label_y);
+        fisheye_project(0, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &label_x, &label_y);
         fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"北", label_x, label_y, 255, 0, 0);
-        fisheye_project(90, 6, sky_radius, center_x, center_y, view_alt, view_azi, f, &label_x, &label_y);
+        fisheye_project(90, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &label_x, &label_y);
         fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"东", label_x, label_y, 255, 0, 0);
-        fisheye_project(180, 6, sky_radius, center_x, center_y, view_alt, view_azi, f, &label_x, &label_y);
+        fisheye_project(180, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &label_x, &label_y);
         fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"南", label_x, label_y, 255, 0, 0);
-        fisheye_project(270, 6, sky_radius, center_x, center_y, view_alt, view_azi, f, &label_x, &label_y);
+        fisheye_project(270, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, &label_x, &label_y);
         fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"西", label_x, label_y, 255, 0, 0);
 
     }
 
     // 绘制地景（天空投影圆盘之外的部分）
-    draw_horizon(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, view_alt, view_azi, f, sun_alt, landscape_index);
+    draw_horizon(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, sun_alt, landscape_index);
 
 }
