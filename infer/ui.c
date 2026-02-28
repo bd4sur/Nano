@@ -1313,7 +1313,7 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
 
     time_t ts = 0;
     if (is_speed_up) {
-        start_timestamp += 600000;
+        start_timestamp += 10 * 60 * 1000; // 10min
         ts = (time_t)start_timestamp / 1000;
     }
     else {
@@ -1329,13 +1329,9 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
     int32_t year = timeinfo->tm_year + 1900;
 
 
-    // wchar_t timestr[30];
-    // swprintf(timestr, 30, L"%04d-%02d-%02d\n%02d:%02d:%02d", year, month, day, hour, minute, second);
-    // gfx_draw_textline_mini(global_state->gfx, timestr, 0, 0, 255, 255, 255, 1);
-
     render_sky(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height,
         120, 160, 120,
-        global_state->pitch, 180, global_state->roll, 1.0f,
+        global_state->pitch, (global_state->yaw + 180.0f), global_state->roll, 1.0f,
         // 2026, 2, 25, 12, 0, 0, 8.0, 119.0, 31.0,
         year, month, day, hour, minute, second, timezone, longitude, latitude,
         2,     // 降采样因子（设为0为自动，建议设为2）
@@ -1350,11 +1346,17 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
         1,     // 是否启用星芒效果
         0,     // 是否显示恒星名称
         1,     // 是否显示大行星
-        1,     // 是否显示大行星名称
+        0,     // 是否显示大行星名称
         0      // 是否显示黄道
     );
 
     dithering_fast(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height);
+
+    gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V2603 (c) BD4SUR", 1, 226, 64, 64, 64, 3);
+
+    wchar_t timestr[30];
+    swprintf(timestr, 30, L"%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second);
+    gfx_draw_textline(global_state->gfx, timestr, 200, 226, 128, 128, 128, 3);
 
     gfx_refresh(global_state->gfx);
 }

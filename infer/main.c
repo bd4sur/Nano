@@ -3,7 +3,7 @@
 #include "graphics.h"
 #include "ui.h"
 #include "ups.h"
-#include "mpu6050.h"
+#include "imu.h"
 #include "keyboard_hal.h"
 #include "infer.h"
 #include "prompt.h"
@@ -596,7 +596,8 @@ int main() {
     ///////////////////////////////////////
     // IMU初始化
 #ifdef IMU_ENABLED
-    mpu6050_init();
+    imu_init();
+    imu_calib();
 #endif
 
     ///////////////////////////////////////
@@ -1117,9 +1118,11 @@ int main() {
 #ifdef IMU_ENABLED
             int ret = -1;
             do {
-                ret = mpu6050_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw), &(global_state->imu_temperature));
+                ret = imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
+                global_state->roll = -global_state->roll;
+                global_state->yaw = -global_state->yaw;
             } while(ret != 0);
-            printf("%-10.2f %-10.2f %-10.2f %-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw, global_state->imu_temperature);
+            printf("%-10.2f %-10.2f %-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw);
 #endif
 
             draw_ephemeris_screen(key_event, global_state);

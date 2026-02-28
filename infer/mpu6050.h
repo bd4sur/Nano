@@ -1,5 +1,5 @@
-#ifndef __NANO_UPS_H__
-#define __NANO_UPS_H__
+#ifndef __NANO_MPU6050_H__
+#define __NANO_MPU6050_H__
 
 #ifdef __cplusplus
 extern "C" {

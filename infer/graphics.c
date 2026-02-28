@@ -208,7 +208,7 @@ void gfx_draw_char(
                 if ((g >> b) & 0x1) {
                     gfx_draw_point(gfx, (x+i), (y+j*8+b), red, green, blue, mode);
                 }
-                else {
+                else if (mode == 0) {
                     gfx_draw_point(gfx, (x+i), (y+j*8+b), red, green, blue, !mode);
                 }
             }
@@ -230,7 +230,7 @@ void gfx_draw_textline(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uin
             // printf("出现了字库之外的字符！\n");
             glyph = get_glyph(gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
-        if (x_pos + font_width >= 128) {
+        if (x_pos + font_width >= gfx->width) {
             break;
         }
         // NOTE 反色显示时，在每个字符场面额外补充一条线，避免菜单中高亮区域看起来顶格
@@ -334,7 +334,7 @@ void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y
             x_pos += font_width;
             continue;
         }
-        if (x_pos + font_width >= 128) {
+        if (x_pos + font_width >= gfx->width) {
             break;
         }
         font_width = glyph[0];

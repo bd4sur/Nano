@@ -722,7 +722,7 @@ void DEV_HARDWARE_SPI_end(void)
 // ===============================================================================
 
 
-#define LCD_CS 110
+#define LCD_CS 38
 #define LCD_RST 36
 #define LCD_DC 39
 #define LCD_BL 40
@@ -972,6 +972,143 @@ function:
 ******************************************************************************/
 void ILI9341_Init(void)
 {
+
+    // 1. 硬件复位
+    ILI9341_Reset();
+    DEV_Delay_ms(150); // IPS 屏复位后需要较长延时
+
+    // 2. 睡眠退出
+    ILI9341_Write_Command(0x11);
+    DEV_Delay_ms(250);
+
+    // 3. 像素格式：RGB565 (16-bit)
+    ILI9341_Write_Command(0x3A);
+    ILI9341_WriteData_Byte(0x05);
+
+    // 4. 内存访问控制 (根据屏幕方向调整，这里假设竖屏 RGB)
+    // 如果颜色红蓝互换，将 0x00 改为 0xC0 (BGR)
+    ILI9341_Write_Command(0x36);
+    ILI9341_WriteData_Byte(0xC0); 
+
+    // 5. 帧率控制 (标准 60Hz)
+    ILI9341_Write_Command(0xB2);
+    ILI9341_WriteData_Byte(0x05);
+    ILI9341_WriteData_Byte(0x05);
+    ILI9341_WriteData_Byte(0x00);
+    ILI9341_WriteData_Byte(0x33);
+    ILI9341_WriteData_Byte(0x33);
+
+    // 6. 门控驱动时序 (Gate Control) - IPS 关键
+    ILI9341_Write_Command(0xB7);
+    ILI9341_WriteData_Byte(0x35); // ⚠️ 关键：如果发黄，尝试改为 0x15 或 0x25
+
+    // 7. VCOM 设置 - IPS 关键
+    ILI9341_Write_Command(0xBB);
+    ILI9341_WriteData_Byte(0x21); // 微调此值可改变整体色温
+
+    // 8. LCM 控制
+    ILI9341_Write_Command(0xC0);
+    ILI9341_WriteData_Byte(0x2C);
+
+    ILI9341_Write_Command(0xC2);
+    ILI9341_WriteData_Byte(0x01);
+
+    ILI9341_Write_Command(0xC3);
+    ILI9341_WriteData_Byte(0x0B);
+
+    ILI9341_Write_Command(0xC4);
+    ILI9341_WriteData_Byte(0x20);
+
+    ILI9341_Write_Command(0xC6);
+    ILI9341_WriteData_Byte(0x0F); // Frame Rate
+
+    ILI9341_Write_Command(0xD0);
+    ILI9341_WriteData_Byte(0xA7);
+    ILI9341_WriteData_Byte(0xA1);
+
+    ILI9341_Write_Command(0xD6);
+    ILI9341_WriteData_Byte(0xA1);
+
+    // 9. Gamma 设置 (使用通用 IPS 校正值，替代 ILI9341 的值)
+    ILI9341_Write_Command(0xE0);
+    ILI9341_WriteData_Byte(0xD0);
+    ILI9341_WriteData_Byte(0x04);
+    ILI9341_WriteData_Byte(0x08);
+    ILI9341_WriteData_Byte(0x0A);
+    ILI9341_WriteData_Byte(0x09);
+    ILI9341_WriteData_Byte(0x05);
+    ILI9341_WriteData_Byte(0x2D);
+    ILI9341_WriteData_Byte(0x43);
+    ILI9341_WriteData_Byte(0x49);
+    ILI9341_WriteData_Byte(0x09);
+    ILI9341_WriteData_Byte(0x16);
+    ILI9341_WriteData_Byte(0x15);
+    ILI9341_WriteData_Byte(0x26);
+    ILI9341_WriteData_Byte(0x2B);
+
+    ILI9341_Write_Command(0xE1);
+    ILI9341_WriteData_Byte(0xD0);
+    ILI9341_WriteData_Byte(0x03);
+    ILI9341_WriteData_Byte(0x09);
+    ILI9341_WriteData_Byte(0x0A);
+    ILI9341_WriteData_Byte(0x0A);
+    ILI9341_WriteData_Byte(0x06);
+    ILI9341_WriteData_Byte(0x2E);
+    ILI9341_WriteData_Byte(0x44);
+    ILI9341_WriteData_Byte(0x40);
+    ILI9341_WriteData_Byte(0x3A);
+    ILI9341_WriteData_Byte(0x15);
+    ILI9341_WriteData_Byte(0x15);
+    ILI9341_WriteData_Byte(0x26);
+    ILI9341_WriteData_Byte(0x2A);
+
+    // 可选：如果依然偏黄，尝试开启/关闭反转
+    ILI9341_Write_Command(0x21);
+
+    // 10. 显示开启
+    ILI9341_Write_Command(0x29);
+
+
+
+/*
+    ILI9341_Reset();
+    DEV_Delay_ms(120);  // ⚠️ 复位后必须延时≥120ms[[3]]
+    
+    ILI9341_Write_Command(0x11);  // Sleep Out
+    DEV_Delay_ms(200);
+    
+    // 像素格式: RGB565
+    ILI9341_Write_Command(0x3A);
+    ILI9341_WriteData_Byte(0x55);
+    
+    // 显示方向 + 颜色顺序 (关键!)
+    ILI9341_Write_Command(0x36);
+    ILI9341_WriteData_Byte(0x00);  // 竖屏, RGB顺序
+    // 如果颜色反了，改为 0x08 (设置BGR)
+    
+    // 帧率控制 (可选)
+    ILI9341_Write_Command(0xB2);
+    ILI9341_WriteData_Byte(0x0C); ILI9341_WriteData_Byte(0x0C);
+    ILI9341_WriteData_Byte(0x00); ILI9341_WriteData_Byte(0x33); ILI9341_WriteData_Byte(0x33);
+    
+    // 伽马设置 (ST7789使用不同命令)
+    ILI9341_Write_Command(0x21);  // 显示反转关闭
+
+    // 6. 门控驱动时序 (Gate Control) - IPS 关键
+    ILI9341_Write_Command(0xB7);
+    ILI9341_WriteData_Byte(0x35); // ⚠️ 关键：如果发黄，尝试改为 0x15 或 0x25
+
+    // 7. VCOM 设置 - IPS 关键
+    ILI9341_Write_Command(0xBB);
+    ILI9341_WriteData_Byte(0x28); // 微调此值可改变整体色温
+    
+    // 显示开启
+    ILI9341_Write_Command(0x29);
+
+*/
+
+
+/*
     ILI9341_Reset();
 
     ILI9341_Write_Command(0x11); // Sleep out
@@ -1060,6 +1197,7 @@ void ILI9341_Init(void)
     ILI9341_WriteData_Byte(0x38);
     ILI9341_WriteData_Byte(0x0F);
     ILI9341_Write_Command(0x29); // Display on
+*/
 }
 
 /******************************************************************************
@@ -1204,22 +1342,22 @@ void Handler_2IN4_LCD(int signo)
 // 设置旋转角度
 void ILI9341_SetRotation(uint8_t rotation) {
     uint8_t madctl = 0;
-    
+
     switch(rotation) {
         case 0: // 0度
-            madctl = MADCTL_BGR;
+            madctl = MADCTL_RGB;
             break;
         case 1: // 90度
-            madctl = MADCTL_MV | MADCTL_MY | MADCTL_BGR;
+            madctl = MADCTL_MV | MADCTL_MY | MADCTL_RGB;
             break;
         case 2: // 180度
-            madctl = MADCTL_MX | MADCTL_MY | MADCTL_BGR;
+            madctl = MADCTL_MX | MADCTL_MY | MADCTL_RGB;
             break;
         case 3: // 270度
-            madctl = MADCTL_MV | MADCTL_MX | MADCTL_BGR;
+            madctl = MADCTL_MV | MADCTL_MX | MADCTL_RGB;
             break;
     }
-    
+
     ILI9341_Write_Command(0x36);  // MADCTL
     ILI9341_WriteData_Byte(madctl);
 }
@@ -1274,8 +1412,6 @@ void display_hal_init(void) {
     ILI9341_Init();
     ILI9341_SetBacklight(1023);
     ILI9341_SetRotation(3);
-    ILI9341_Clear(RGB565_GREEN);
-    DEV_Delay_ms(1000);
 }
 
 

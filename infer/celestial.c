@@ -134,7 +134,8 @@ static inline void scale_pixel(uint8_t *frame_buffer, int32_t fb_width, int32_t 
     frame_buffer[i+2] = MIN(255, (uint8_t)(k * (float)frame_buffer[i+2]));
 }
 
-static inline uint8_t get_pixel_channel(const uint8_t *tex, int32_t width, int32_t x, int32_t y, int32_t c) {
+static inline uint8_t get_pixel_channel(const uint8_t *tex, int32_t width, int32_t height, int32_t x, int32_t y, int32_t c) {
+    if (x < 0 || x >= width || y < 0 || y >= height) return 0;
     return tex[((y * width + x) * 3) + c];
 }
 
@@ -182,7 +183,7 @@ void horizontal_to_xyz(float azimuth_deg, float altitude_deg, float R, float *x,
 // 地平天球的球坐标系→地平天球的笛卡尔坐标系→投影到地面投影坐标系
 void horizontal_to_screen_xy(
     float azimuth_deg, float altitude_deg, float radius,
-    float center_x, float center_y, float *scr_x, float *scr_y
+    float center_x, float center_y, float view_height, float *scr_x, float *scr_y
 ) {
     // 因为是躺在地上看天，所以方位角是从正北逆时针旋转
     float az_rad = (-azimuth_deg * M_PI) / 180.0f;
@@ -190,7 +191,8 @@ void horizontal_to_screen_xy(
     // 天顶距 θ = π/2 - altitude
     float theta = M_PI_2 - alt_rad;
     // 等距鱼眼投影：r = (2R / π) * θ
-    float r = (2.0f * radius / M_PI) * theta;
+    float r = (view_height == 1.0f) ? ((theta / (M_PI / 2.0f)) * theta): (powf(theta / (M_PI / 2.0f), (1.0f / view_height)) * radius);
+    // float r = (2.0f * radius / M_PI) * theta;
     // 投影到平面：X指向东（注意因为是躺在地上看天，所以东是屏幕坐标系的左侧/负半轴），Y指向北
     float X = r * sinf(az_rad);
     float Y = -r * cosf(az_rad);
@@ -298,7 +300,7 @@ void fisheye_project(
 ) {
     // 快速路径：默认视角且无roll时使用简化投影
     if (view_alt == 90.0f && view_azi == 180.0f && view_roll == 0.0f && f == 1.0f) {
-        horizontal_to_screen_xy(azimuth_deg, altitude_deg, radius, center_x, center_y, scr_x, scr_y);
+        horizontal_to_screen_xy(azimuth_deg, altitude_deg, radius, center_x, center_y, 1.0f, scr_x, scr_y);
         return;
     }
 
@@ -1032,7 +1034,7 @@ void draw_horizon(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f,
-    float sun_alt, int32_t landscape_index
+    float view_height, float sun_alt, int32_t landscape_index
 ) {
     float margin = LINGLONG_HORIZON_BLUR_MARGIN;
     float k = MAX(0.2f, sinf(to_rad_float(sun_alt)) * 1.5f);
@@ -1056,11 +1058,11 @@ void draw_horizon(
                     // 再转为地面贴图上的xy坐标
                     float tx = 0.0f;
                     float ty = 0.0f;
-                    horizontal_to_screen_xy(-azi, -alt, 300, 300, 300, &tx, &ty); // R略小于地面贴图的半径，注意修改其中的center_x/y
+                    horizontal_to_screen_xy(-azi, -alt, 300, 300, 300, view_height, &tx, &ty); // R略小于地面贴图的半径，注意修改其中的center_x/y
 
-                    uint8_t r = get_pixel_channel(landscape_texture_rgb, landscape_texture_width, floorf(tx), floorf(ty), 0);
-                    uint8_t g = get_pixel_channel(landscape_texture_rgb, landscape_texture_width, floorf(tx), floorf(ty), 1);
-                    uint8_t b = get_pixel_channel(landscape_texture_rgb, landscape_texture_width, floorf(tx), floorf(ty), 2);
+                    uint8_t r = get_pixel_channel(landscape_texture_rgb, landscape_texture_width, landscape_texture_height, floorf(tx), floorf(ty), 0);
+                    uint8_t g = get_pixel_channel(landscape_texture_rgb, landscape_texture_width, landscape_texture_height, floorf(tx), floorf(ty), 1);
+                    uint8_t b = get_pixel_channel(landscape_texture_rgb, landscape_texture_width, landscape_texture_height, floorf(tx), floorf(ty), 2);
 
                     r = (uint8_t)MIN(255.0f, ((float)r * k));
                     g = (uint8_t)MIN(255.0f, ((float)g * k));
@@ -1499,21 +1501,21 @@ void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             float wx = tx - (float)x0;
             float wy = ty - (float)y0;
 
-            uint8_t c00_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, x0, y0, 0);
-            uint8_t c00_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, x0, y0, 1);
-            uint8_t c00_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, x0, y0, 2);
+            uint8_t c00_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y0, 0);
+            uint8_t c00_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y0, 1);
+            uint8_t c00_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y0, 2);
 
-            uint8_t c10_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, x1, y0, 0);
-            uint8_t c10_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, x1, y0, 1);
-            uint8_t c10_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, x1, y0, 2);
+            uint8_t c10_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y0, 0);
+            uint8_t c10_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y0, 1);
+            uint8_t c10_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y0, 2);
 
-            uint8_t c01_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, x0, y1, 0);
-            uint8_t c01_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, x0, y1, 1);
-            uint8_t c01_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, x0, y1, 2);
+            uint8_t c01_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y1, 0);
+            uint8_t c01_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y1, 1);
+            uint8_t c01_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y1, 2);
 
-            uint8_t c11_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, x1, y1, 0);
-            uint8_t c11_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, x1, y1, 1);
-            uint8_t c11_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, x1, y1, 2);
+            uint8_t c11_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y1, 0);
+            uint8_t c11_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y1, 1);
+            uint8_t c11_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y1, 2);
 
             // bilinear interpolation
             float r0 = (float)c00_r + wx * (float)(c10_r - c00_r);
@@ -2247,6 +2249,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     }
 
     // 绘制地景（天空投影圆盘之外的部分）
-    draw_horizon(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, sun_alt, landscape_index);
+    float view_height = 0.01f * fabsf(sun_alt) + 1.0f;
+    draw_horizon(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, view_height, sun_alt, landscape_index);
 
 }
