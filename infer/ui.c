@@ -1025,13 +1025,13 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
     }
     // 显示输入状态
     if (input_state->ime_mode_flag == IME_MODE_HANZI) {
-        wcscat(prompt, L"[汉]\n");
+        wcscat(prompt, L"[汉]");
     }
     else if (input_state->ime_mode_flag == IME_MODE_ALPHABET) {
-        wcscat(prompt, L"[En]\n");
+        wcscat(prompt, L"[En]");
     }
     else if (input_state->ime_mode_flag == IME_MODE_NUMBER) {
-        wcscat(prompt, L"[数]\n");
+        wcscat(prompt, L"[数]");
     }
     gfx_draw_textline(global_state->gfx, prompt, 0, 0, 255, 255, 255, 0);
 
@@ -1296,7 +1296,7 @@ static uint32_t sunset_time[2] = {0, 0}; // hour, minute
 static int32_t is_speed_up = 0;
 static uint64_t start_timestamp = 0;
 
-static int32_t linglong_version = 0;
+static int32_t linglong_version = 1;
 
 void draw_linglong(Key_Event *key_event, Global_State *global_state) {
     const double longitude = 119.0; // 东经

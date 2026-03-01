@@ -115,8 +115,13 @@ int read_frame(uint8_t *buffer) {
 
     while (1) {
         if (read(fd, &byte, 1) <= 0) {
+            count++;
             // 读取失败或无数据，可根据需要添加超时处理
-            continue; 
+            if (count >= 10) return;
+            else continue; 
+        }
+        else {
+            count = 0;
         }
 
         if (state == 0) {
@@ -184,6 +189,13 @@ int imu_init() {
 
     printf("初始化设置为自动模式...\n");
     send_command(0xA5, 0x52);
+}
+
+
+int imu_reset() {
+    tcflush(fd, TCIFLUSH);
+    // send_command(0xA5, 0x52);
+    // tcflush(fd, TCIFLUSH);
 }
 
 

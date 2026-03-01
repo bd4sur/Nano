@@ -354,7 +354,10 @@ void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y
 
 
 uint8_t *get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
-    if(utf32 < 127) {
+    if (utf32 < 32) {
+        return NULL;
+    }
+    else if (utf32 >= 32 && utf32 < 127) {
         *font_width = 6;
         *font_height = 12;
         return ASCII_6_12[utf32 - 32];

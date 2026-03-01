@@ -10,6 +10,8 @@ extern "C" {
 
 int imu_init();
 
+int imu_reset();
+
 int imu_calib();
 
 int imu_read_angle(float *pitch, float *roll, float *yaw);
