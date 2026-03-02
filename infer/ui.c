@@ -235,7 +235,7 @@ void render_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_t
     }
 
     for (int n = y; n < y + height; n++) {
-        gfx_draw_point(global_state->gfx, x + width - 1, n, 255, 255, 255, !(n % 3));
+        gfx_draw_point(global_state->gfx, x + width - 1, n, 128, 128, 128, !(n % 3));
     }
 
     line_num = (line_num <= 0) ? 1 : line_num;
@@ -248,8 +248,8 @@ void render_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_t
     int32_t y_0 = y + div_round(current_line * height, line_num);
     y_0 = (y_0 >= y + height - 3 - 1) ? (y + height - 3 - 1) : y_0; // 滚动条顶部限位（不低于底部上方3px）
 
-    gfx_draw_line(global_state->gfx, x + width - 1, (uint8_t)y_0, x + width - 1, (uint8_t)(y_0 + bar_height), 255, 255, 255, 1);
-    gfx_draw_line(global_state->gfx, x + width - 2, (uint8_t)y_0, x + width - 2, (uint8_t)(y_0 + bar_height), 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, x + width - 1, y_0, x + width - 1, (y_0 + bar_height), 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, x + width - 2, y_0, x + width - 2, (y_0 + bar_height), 255, 255, 255, 1);
 }
 
 
@@ -297,13 +297,14 @@ void draw_copyright_notice(Key_Event *key_event, Global_State *global_state, uin
 void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     gfx_soft_clear(global_state->gfx);
 
-    for (int i = 1; i <= 14; i++) {
-        gfx_draw_line(global_state->gfx, 1, i, 127, i, 255, 255, 255, 1);
+    const int header_height = 14;
+    for (int i = 1; i <= header_height; i++) {
+        gfx_draw_line(global_state->gfx, 1, i, global_state->gfx->width - 1, i, 255, 255, 255, 1);
     }
 
 #if CONFIG_IDF_TARGET_ESP32S3
-    gfx_draw_textline(global_state->gfx, L"Project Nano", 28, 2, 255, 255, 255, 0);
-    gfx_draw_textline(global_state->gfx, L"电子鹦鹉@ESP32S3", 16, 20, 255, 255, 255, 1);
+    gfx_draw_textline_centered(global_state->gfx, L"Project Nano", global_state->gfx->width / 2, 8, 255, 255, 255, 0);
+    gfx_draw_textline_centered(global_state->gfx, L"电子鹦鹉@ESP32S3", global_state->gfx->width, 28, 255, 255, 255, 1);
     draw_copyright_notice(key_event, global_state, 20, 53);
 #else
     time_t rawtime;
@@ -316,17 +317,22 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
     strftime(datetime_string_buffer, sizeof(datetime_string_buffer), "%Y-%m-%d %H:%M:%S", timeinfo); // 格式化输出
     _mbstowcs(datetime_wcs_buffer, datetime_string_buffer, 80);
 
-    gfx_draw_textline(global_state->gfx, L"Project Nano", 28, 2, 255, 255, 255, 0);
-    gfx_draw_textline(global_state->gfx, L"电 子 鹦 鹉", 31, 20, 0, 255, 255, 1);
-    gfx_draw_textline(global_state->gfx, datetime_wcs_buffer, 8, 35, 255, 255, 255, 1);
-    draw_copyright_notice(key_event, global_state, 20, 53);
+    gfx_draw_textline_centered(global_state->gfx, L"Project Nano", global_state->gfx->width / 2, 8, 255, 255, 255, 0);
+    gfx_draw_textline_centered(global_state->gfx, L"电 子 鹦 鹉", global_state->gfx->width / 2, 28, 0, 255, 255, 1);
+    gfx_draw_textline_centered(global_state->gfx, datetime_wcs_buffer, global_state->gfx->width / 2, 43, 255, 255, 255, 1);
+    if (global_state->gfx->width > 128) {
+        gfx_draw_textline_centered(global_state->gfx, L"(c) 2025-2026 BD4SUR", global_state->gfx->width / 2, global_state->gfx->height - 3 - FONT_HEIGHT/2, 192, 192, 192, 1);
+    }
+    else {
+        draw_copyright_notice(key_event, global_state, 20, 53);
+    }
 #endif
 
-    gfx_draw_line(global_state->gfx, 0, 0, 127, 0, 255, 255, 255, 1);
-    gfx_draw_line(global_state->gfx, 0, 15, 127, 15, 255, 255, 255, 1);
-    gfx_draw_line(global_state->gfx, 0, 0, 0, 63, 255, 255, 255, 1);
-    gfx_draw_line(global_state->gfx, 127, 0, 127, 63, 255, 255, 255, 1);
-    gfx_draw_line(global_state->gfx, 0, 63, 127, 63, 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 0, 0, (global_state->gfx->width - 1), 0, 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 0, 15, (global_state->gfx->width - 1), 15, 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 0, 0, 0, (global_state->gfx->height - 1), 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, (global_state->gfx->width - 1), 0, (global_state->gfx->width - 1), (global_state->gfx->height - 1), 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 1), (global_state->gfx->width - 1), (global_state->gfx->height - 1), 255, 255, 255, 1);
 
 #ifdef ASR_ENABLED
     // 检查ASR服务状态，如果ASR服务未启动，则在屏幕左上角画一个闪烁的点，表示ASR服务启动中
@@ -341,18 +347,20 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
 
 #ifdef UPS_ENABLED
     // 绘制电池电量
-    gfx_draw_line(global_state->gfx, 112, 4, 125, 4, 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, 125, 4, 125, 11, 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, 112, 11, 125, 11, 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, 112, 4, 112, 11, 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, 111, 6, 111, 9, 255, 255, 255, 0);
+    uint32_t icon_x = global_state->gfx->width - 17;
+    uint32_t icon_y = 4;
+    gfx_draw_line(global_state->gfx, (icon_x+1),  (icon_y),   (icon_x+14), (icon_y),   255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, (icon_x+14), (icon_y),   (icon_x+14), (icon_y+7), 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, (icon_x+1),  (icon_y+7), (icon_x+14), (icon_y+7), 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, (icon_x+1),  (icon_y),   (icon_x+1),  (icon_y+7), 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, (icon_x),    (icon_y+2), (icon_x),    (icon_y+5), 255, 255, 255, 0);
 
     int32_t soc_bar_length = (int32_t)(10.0f * ((float)global_state->ups_soc / 100.0f));
     soc_bar_length = (soc_bar_length > 9) ? 9 : soc_bar_length;
-    gfx_draw_line(global_state->gfx, 123 - soc_bar_length, 6, 123, 6, 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, 123 - soc_bar_length, 7, 123, 7, 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, 123 - soc_bar_length, 8, 123, 8, 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, 123 - soc_bar_length, 9, 123, 9, 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+2), (icon_x+12), (icon_y+2), 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+3), (icon_x+12), (icon_y+3), 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+4), (icon_x+12), (icon_y+4), 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+5), (icon_x+12), (icon_y+5), 255, 255, 255, 0);
 #endif
 
     gfx_refresh(global_state->gfx);
@@ -361,16 +369,18 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
 
 void play_bad_apple(Key_Event *key_event, Global_State *global_state) {
 #ifdef BADAPPLE_ENABLED
+    uint32_t center_x = global_state->gfx->width / 2;
+    uint32_t center_y = global_state->gfx->height / 2;
     if (global_state->timestamp - global_state->ba_begin_timestamp >= 100 * global_state->ba_frame_count) {
         gfx_soft_clear(global_state->gfx);
         for (uint32_t row = 0; row < 64; row++) {
             uint32_t page_0 = bad_apple_10fps_64x64[global_state->ba_frame_count * 128 + row * 2];
             uint32_t page_1 = bad_apple_10fps_64x64[global_state->ba_frame_count * 128 + row * 2 + 1];
             for (uint32_t col = 0; col < 32; col++) {
-                gfx_draw_point(global_state->gfx, col + 32, row, 255, 255, 255, (page_0 >> (32 - 1 - col)) & 0x1);
+                gfx_draw_point(global_state->gfx, col + (center_x - 32), row + (center_y - 32), 255, 255, 255, (page_0 >> (32 - 1 - col)) & 0x1);
             }
             for (uint32_t col = 32; col < 64; col++) {
-                gfx_draw_point(global_state->gfx, col + 32, row, 255, 255, 255, (page_1 >> (32 - 1 - (col-32))) & 0x1);
+                gfx_draw_point(global_state->gfx, col + (center_x - 32), row + (center_y - 32), 255, 255, 255, (page_1 >> (32 - 1 - (col-32))) & 0x1);
             }
         }
         gfx_refresh(global_state->gfx);
@@ -395,8 +405,8 @@ void init_textarea(Key_Event *key_event, Global_State *global_state, Widget_Text
     textarea_state->state = 0;
     textarea_state->x = 0;
     textarea_state->y = 0;
-    textarea_state->width = SCREEN_WIDTH;
-    textarea_state->height = SCREEN_HEIGHT;
+    textarea_state->width = global_state->gfx->width;
+    textarea_state->height = global_state->gfx->height;
     textarea_state->length = 0;
     textarea_state->line_num = 0;
     textarea_state->view_lines = 0;
@@ -454,7 +464,7 @@ int32_t textarea_event_handler(
     // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
     else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_STAR) {
         if (ts->current_line <= 0) { // 卷到顶
-            ts->current_line = ts->line_num - 5;
+            ts->current_line = ts->line_num - ts->view_lines;
         }
         else {
             ts->current_line--;
@@ -469,7 +479,7 @@ int32_t textarea_event_handler(
 
     // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
     else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_HASH) {
-        if (ts->current_line >= (ts->line_num - 5)) { // 卷到底
+        if (ts->current_line >= (ts->line_num - ts->view_lines)) { // 卷到底
             ts->current_line = 0;
         }
         else {
@@ -500,8 +510,8 @@ void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_S
     ta->state = 0;
     ta->x = 0;
     ta->y = 13;
-    ta->width = 128;
-    ta->height = 51; // NOTE 详见结构体定义处的说明
+
+    ta->height = global_state->gfx->height - ta->y; // NOTE 详见结构体定义处的说明
     ta->length = 0;
     ta->is_show_scroll_bar = 1;
 
@@ -540,10 +550,14 @@ int32_t input_event_handler(
         uint64_t ctimestamp = global_state->timestamp;
         // 倒计时进行中，绘制进度条
         if (ctimestamp - input_state->alphabet_click_timestamp <= ALPHABET_COUNTDOWN_MS) {
-            uint8_t x_pos = (uint8_t)((ALPHABET_COUNTDOWN_MS - ctimestamp + input_state->alphabet_click_timestamp) * 128 / ALPHABET_COUNTDOWN_MS);
-            gfx_draw_line(global_state->gfx, 0, 63, x_pos, 63, 255, 255, 255, 1);
-            gfx_draw_line(global_state->gfx, x_pos + 1, 63, 127, 63, 255, 255, 255, 0);
+            uint32_t x_pos = (ALPHABET_COUNTDOWN_MS - ctimestamp + input_state->alphabet_click_timestamp) * global_state->gfx->width / ALPHABET_COUNTDOWN_MS;
+            gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 2), x_pos, (global_state->gfx->height - 2), 255, 255, 0, 1);
+            gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 1), x_pos, (global_state->gfx->height - 1), 255, 255, 0, 1);
+            gfx_draw_line(global_state->gfx, x_pos + 1, (global_state->gfx->height - 2), (global_state->gfx->width - 1), (global_state->gfx->height - 2), 0, 0, 0, 1);
+            gfx_draw_line(global_state->gfx, x_pos + 1, (global_state->gfx->height - 1), (global_state->gfx->width - 1), (global_state->gfx->height - 1), 0, 0, 0, 1);
             gfx_refresh(global_state->gfx);
+            // gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 2), (global_state->gfx->width - 1), (global_state->gfx->height - 2), 0, 0, 0, 1);
+            // gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 1), (global_state->gfx->width - 1), (global_state->gfx->height - 1), 0, 0, 0, 1);
             input_state->state = 0;
         }
         // 倒计时结束，提交当前选中的字母，清除进度条
@@ -551,7 +565,7 @@ int32_t input_event_handler(
             input_state->alphabet_is_counting_down = 0;
 
             // 清除进度条
-            gfx_draw_line(global_state->gfx, 0, 63, 127, 63, 255, 255, 255, 0);
+            gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 1), (global_state->gfx->width - 1), (global_state->gfx->height - 1), 255, 255, 255, 0);
             gfx_refresh(global_state->gfx);
 
             // 将当前选中的字母加入输入缓冲区
@@ -644,9 +658,17 @@ int32_t input_event_handler(
                 // 在屏幕上循环显示当前选中的字母
                 wchar_t letter[2];
                 uint32_t x_pos = 1;
+                uint32_t y_pos = global_state->gfx->height - FONT_HEIGHT - 3;
                 for (int i = 0; i < wcslen(ime_alphabet[(int)(key_event->key_code)]); i++) {
                     letter[0] = ime_alphabet[(int)(key_event->key_code)][i]; letter[1] = 0;
-                    gfx_draw_textline(global_state->gfx, letter, x_pos, 50, 255, 255, 255, (i != input_state->alphabet_index));
+                    if (i == input_state->alphabet_index) {
+                        gfx_draw_rectangle(global_state->gfx, x_pos-1, y_pos, FONT_WIDTH_HALF+1, FONT_HEIGHT, 255, 255, 255, 1);
+                        gfx_draw_textline(global_state->gfx, letter, x_pos, y_pos, 0, 0, 0, 1);
+                    }
+                    else {
+                        gfx_draw_rectangle(global_state->gfx, x_pos-1, y_pos, FONT_WIDTH_HALF+1, FONT_HEIGHT, 0, 0, 0, 1);
+                        gfx_draw_textline(global_state->gfx, letter, x_pos, y_pos, 255, 255, 255, 1);
+                    }
                     x_pos += 8;
                 }
 
@@ -885,7 +907,8 @@ int32_t input_event_handler(
 void init_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
     menu_state->current_item_intex = 0;
     menu_state->first_item_intex = 0;
-    menu_state->items_per_page = (menu_state->item_num > 4) ? 4 : menu_state->item_num;
+    uint32_t max_items_per_page = (global_state->gfx->height - FONT_HEIGHT + 1) / (FONT_HEIGHT + 1);
+    menu_state->items_per_page = (menu_state->item_num > max_items_per_page) ? max_items_per_page : menu_state->item_num;
 
     draw_menu(key_event, global_state, menu_state);
 }
@@ -900,11 +923,12 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
 
     gfx_soft_clear(global_state->gfx);
 
-    gfx_draw_textline(global_state->gfx, menu_state->title, x_indent, 0, 255, 255, 255, 1);
+    // 菜单首行：标题和选项数
+    gfx_draw_textline(global_state->gfx, menu_state->title, x_indent, 0, 0, 255, 255, 1);
     wchar_t item_counter[13];
     swprintf(item_counter, 13, L"%d/%d", menu_state->current_item_intex + 1, menu_state->item_num);
     int32_t iclen = wcslen(item_counter);
-    gfx_draw_textline(global_state->gfx, item_counter, 126 - iclen * 6, 0, 255, 255, 255, 1);
+    gfx_draw_textline(global_state->gfx, item_counter, (global_state->gfx->width-2) - iclen * 6, 0, 255, 255, 0, 1);
 
     uint32_t y_pos = 13;
     uint8_t is_highlight = 0;
@@ -918,12 +942,20 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
         else {
             is_highlight = 1;
         }
+        // 绘制高亮底色
+        if (is_highlight) {
+            for (uint32_t j = y_pos - 1; j < y_pos + FONT_HEIGHT; j++) {
+                gfx_draw_line(global_state->gfx, 0, j, global_state->gfx->width, j, 255, 255, 255, 1);
+            }
+        }
+        // 绘制文字
         gfx_draw_textline(global_state->gfx, menu_state->items[i], x_indent, y_pos, 255, 255, 255, (1 - is_highlight));
+
         y_pos += (FONT_HEIGHT + 1);
     }
 
     // NOTE 因fb_draw_textline会额外给文字上方增加一行，因此这个横线在菜单文字绘制之后再绘制
-    gfx_draw_line(global_state->gfx, 0, 12, 128, 12, 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, 0, 12, global_state->gfx->width, 12, 128, 128, 128, 1);
 
     gfx_refresh(global_state->gfx);
 }
@@ -1008,36 +1040,29 @@ void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widge
 
     gfx_soft_clear(global_state->gfx);
 
-    wchar_t prompt[32] = L"请输入       ";
+
+    // 绘制顶部状态栏
+    gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, 12, 64, 64, 64, 1);
+    gfx_draw_textline(global_state->gfx, L"请输入", 0, 0, 255, 255, 255, 1);
     // 显示思考模式启用状态
     if (global_state->is_thinking_enabled == 1) {
-        wcscat(prompt, L"Ψ");
-    }
-    else {
-        wcscat(prompt, L"  ");
+        gfx_draw_textline(global_state->gfx, L"Ψ", global_state->gfx->width - 8*FONT_WIDTH_HALF - 1, 0, 0, 255, 255, 1);
     }
     // 显示Ctrl激活状态
     if (global_state->is_ctrl_enabled == 1) {
-        wcscat(prompt, L"◆");
-    }
-    else {
-        wcscat(prompt, L"  ");
+        gfx_draw_textline(global_state->gfx, L"◆", global_state->gfx->width - 6*FONT_WIDTH_HALF - 1, 0, 255, 255, 255, 1);
     }
     // 显示输入状态
     if (input_state->ime_mode_flag == IME_MODE_HANZI) {
-        wcscat(prompt, L"[汉]");
+        gfx_draw_textline(global_state->gfx, L"[汉]", global_state->gfx->width - 4*FONT_WIDTH_HALF - 1, 0, 255, 255, 0, 1);
     }
     else if (input_state->ime_mode_flag == IME_MODE_ALPHABET) {
-        wcscat(prompt, L"[En]");
+        gfx_draw_textline(global_state->gfx, L"[En]", global_state->gfx->width - 4*FONT_WIDTH_HALF - 1, 0, 255, 255, 0, 1);
     }
     else if (input_state->ime_mode_flag == IME_MODE_NUMBER) {
-        wcscat(prompt, L"[数]");
+        gfx_draw_textline(global_state->gfx, L"[数]", global_state->gfx->width - 4*FONT_WIDTH_HALF - 1, 0, 255, 255, 0, 1);
     }
-    gfx_draw_textline(global_state->gfx, prompt, 0, 0, 255, 255, 255, 0);
 
-    // 绘制右侧未填满的两列像素
-    gfx_draw_line(global_state->gfx, 126, 0, 126, 12, 255, 255, 255, 1);
-    gfx_draw_line(global_state->gfx, 127, 0, 127, 12, 255, 255, 255, 1);
 
     // 第一次排版：用于判断光标是否在视图内部
     // ta->current_line = 0;
@@ -1107,8 +1132,8 @@ void render_cursor(Key_Event *key_event, Global_State *global_state, Widget_Inpu
         }
     }
 
-    uint8_t x = line_x_pos;
-    uint8_t y = (uint8_t)(ta->y + 13 * break_count); // 12x12字模底部本来就有1px的空白，加上行间距1px，所以每行的起始位置是13的倍数
+    uint32_t x = line_x_pos;
+    uint32_t y = ta->y + 13 * break_count; // 12x12字模底部本来就有1px的空白，加上行间距1px，所以每行的起始位置是13的倍数
     gfx_draw_line(global_state->gfx, x, y-1, x, y+12, 255, 255, 255, 2);
     gfx_draw_line(global_state->gfx, x+1, y-1, x+1, y+12, 255, 255, 255, 2);
 }
@@ -1130,7 +1155,7 @@ void render_pinyin_input(Key_Event *key_event, Global_State *global_state, Widge
     cindex[count << 1] = 0;
 
 
-    uint32_t y_offset = input_state->textarea.y + 13;
+    uint32_t y_offset = input_state->textarea.y + input_state->textarea.height - FONT_HEIGHT*3 - 1;
 
     // 清空输入法显示区域
     for (int i = y_offset-1; i <= input_state->textarea.y + input_state->textarea.height; i++) {

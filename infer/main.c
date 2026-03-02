@@ -157,15 +157,13 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         gfx_soft_clear(global_state->gfx);
 
         // 显示界面标题
-        for (int i = 0; i < 12; i++) {
-            gfx_draw_line(global_state->gfx, 0, i, 127, i, 255, 255, 255, 1);
-        }
-        gfx_draw_textline(global_state->gfx, L"Reading...", 0, 0, 255, 255, 255, 0);
+        // gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, 12, 255, 255, 255, 1);
+        gfx_draw_textline(global_state->gfx, L"Reading...", 0, 0, 64, 255, 64, 1);
 
         w_textarea_prefill->x = 0;
         w_textarea_prefill->y = 17;
-        w_textarea_prefill->width = 128;
-        w_textarea_prefill->height = 26;
+        w_textarea_prefill->width = global_state->gfx->width;
+        w_textarea_prefill->height = global_state->gfx->height - 17 - 17;
 
         // 显示已经处理的输入prompt
         set_textarea(key_event, global_state, w_textarea_prefill, session->output_text, -1, 1);
@@ -174,14 +172,16 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         // 进度百分比
         wchar_t progress_str[30];
         swprintf(progress_str, 30, L"%d/%d", session->pos, session->num_prompt_tokens);
-        gfx_draw_textline(global_state->gfx, progress_str, 0, 48, 255, 255, 255, 1);
+        gfx_draw_textline(global_state->gfx, progress_str, 0, (global_state->gfx->height - 16), 255, 255, 255, 1);
 
         // 进度条
-        gfx_draw_line(global_state->gfx, 0, 60, 128, 60, 255, 255, 255, 1);
-        gfx_draw_line(global_state->gfx, 0, 63, 128, 63, 255, 255, 255, 1);
-        gfx_draw_line(global_state->gfx, 127, 60, 127, 63, 255, 255, 255, 1);
-        gfx_draw_line(global_state->gfx, 0, 61, session->pos * 128 / (session->num_prompt_tokens - 2), 61, 255, 255, 255, 1);
-        gfx_draw_line(global_state->gfx, 0, 62, session->pos * 128 / (session->num_prompt_tokens - 2), 62, 255, 255, 255, 1);
+        gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 4), global_state->gfx->width, (global_state->gfx->height - 4), 255, 255, 255, 1);
+        gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 1), global_state->gfx->width, (global_state->gfx->height - 1), 255, 255, 255, 1);
+        gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 4), 0, (global_state->gfx->height - 1), 255, 255, 255, 1);
+        gfx_draw_line(global_state->gfx, (global_state->gfx->width - 1), (global_state->gfx->height - 4), (global_state->gfx->width - 1), (global_state->gfx->height - 1), 255, 255, 255, 1);
+        uint32_t pgpos_x = MIN(global_state->gfx->width - 1, session->pos * global_state->gfx->width / (session->num_prompt_tokens - 1));
+        gfx_draw_line(global_state->gfx, 1, (global_state->gfx->height - 2), pgpos_x, (global_state->gfx->height - 2), 0, 255, 255, 1);
+        gfx_draw_line(global_state->gfx, 1, (global_state->gfx->height - 3), pgpos_x, (global_state->gfx->height - 3), 0, 255, 255, 1);
 
         gfx_refresh(global_state->gfx);
 
@@ -551,6 +551,12 @@ int main() {
     w_menu_tts_setting = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
 
 
+    ///////////////////////////////////////
+    // gfx初始化
+
+    global_state->gfx = (Nano_GFX*)calloc(1, sizeof(Nano_GFX));
+    gfx_init(global_state->gfx, SCREEN_WIDTH, SCREEN_HEIGHT, GFX_COLOR_MODE_RGB888);
+
     global_state->STATE = STATE_SPLASH_SCREEN;
     global_state->PREV_STATE = STATE_DEFAULT;
     global_state->is_ctrl_enabled = 0;
@@ -596,6 +602,9 @@ int main() {
     init_textarea(key_event, global_state, w_textarea_asr, UI_STR_BUF_MAX_LENGTH);
     init_textarea(key_event, global_state, w_textarea_prefill, UI_STR_BUF_MAX_LENGTH);
 
+    show_splash_screen(key_event, global_state);
+
+
     ///////////////////////////////////////
     // UPS传感器初始化
 #ifdef UPS_ENABLED
@@ -608,14 +617,6 @@ int main() {
     imu_init();
     imu_calib();
 #endif
-
-    ///////////////////////////////////////
-    // gfx初始化
-
-    global_state->gfx = (Nano_GFX*)calloc(1, sizeof(Nano_GFX));
-    gfx_init(global_state->gfx, SCREEN_WIDTH, SCREEN_HEIGHT, GFX_COLOR_MODE_RGB888);
-
-    show_splash_screen(key_event, global_state);
 
     ///////////////////////////////////////
     // 矩阵按键初始化与读取
