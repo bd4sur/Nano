@@ -1,10 +1,9 @@
 #include <locale.h>
 
 #include "graphics.h"
-#include "ui.h"
-#include "ups.h"
-#include "imu.h"
 #include "keyboard_hal.h"
+#include "ui.h"
+
 #include "infer.h"
 #include "prompt.h"
 
@@ -12,9 +11,19 @@
 
 #include "platform.h"
 
+
+#ifdef IMU_ENABLED
+    #include "imu.h"
+#endif
+
+#ifdef UPS_ENABLED
+    #include "ups.h"
+#endif
+
 #ifdef ASR_ENABLED
     #include "asr.h"
 #endif
+
 #ifdef TTS_ENABLED
     #include "tts.h"
 #endif
@@ -1117,7 +1126,7 @@ int main() {
 
 #ifdef IMU_ENABLED
             int ret = -1;
-            int32_t imu_count = 2000;
+            int32_t imu_count = 3000;
             do {
                 // 根据IMU安装方式调整
                 // ret = imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
@@ -1127,7 +1136,7 @@ int main() {
                 imu_count--;
                 if (imu_count <= 0) {
                     printf("IMU读取超时，重置\n");
-                    // imu_reset();
+                    imu_reset();
                     break;
                 }
             } while(ret != 0);
@@ -1141,6 +1150,7 @@ int main() {
             if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
                 global_state->STATE = STATE_MAIN_MENU;
             }
+#ifdef IMU_ENABLED
             // 按B键重新校准IMU
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_B) {
                 set_textarea(key_event, global_state, w_textarea_main, L" \n \n    正在校准IMU...", 0, 0);
@@ -1150,6 +1160,7 @@ int main() {
                 set_textarea(key_event, global_state, w_textarea_main, L" \n \n    校准完成", 0, 0);
                 draw_textarea(key_event, global_state, w_textarea_main);
             }
+#endif
             // 按C键切换玲珑仪版本
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_C) {
                 ephemeris_toggle_linglong_version(key_event, global_state);

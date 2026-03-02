@@ -53,17 +53,17 @@
 #define ILI9341_WIDTH 240  // LCD width
 #define ILI9341_HEIGHT 320 // LCD height
 
-#define ILI9341_CS_0 LCD_CS_0
-#define ILI9341_CS_1 LCD_CS_1
+#define ILI9341_CS_0 SCREEN_SPI_CS_0
+#define ILI9341_CS_1 SCREEN_SPI_CS_1
 
-#define ILI9341_RST_0 LCD_RST_0
-#define ILI9341_RST_1 LCD_RST_1
+#define ILI9341_RST_0 SCREEN_SPI_RST_0
+#define ILI9341_RST_1 SCREEN_SPI_RST_1
 
-#define ILI9341_DC_0 LCD_DC_0
-#define ILI9341_DC_1 LCD_DC_1
+#define ILI9341_DC_0 SCREEN_SPI_DC_0
+#define ILI9341_DC_1 SCREEN_SPI_DC_1
 
-#define ILI9341_BL_0 LCD_BL_0
-#define ILI9341_BL_1 LCD_BL_1
+#define ILI9341_BL_0 SCREEN_SPI_BL_0
+#define ILI9341_BL_1 SCREEN_SPI_BL_1
 
 
 
@@ -97,7 +97,6 @@
 #define NUM_MAXBUF 4
 #define DIR_MAXSIZ 60
 
-#define GPIO_CHIP_PATH "/dev/gpiochip0"
 #define MAX_GPIO_PINS 512
 
 // 全局状态管理
@@ -123,10 +122,10 @@ static int get_chip_fd(void)
 {
     if (gpio_chip_fd < 0)
     {
-        gpio_chip_fd = open(GPIO_CHIP_PATH, O_RDONLY);
+        gpio_chip_fd = open(GPIO_CHIP_DEVFILE, O_RDONLY);
         if (gpio_chip_fd < 0)
         {
-            printf("无法打开 GPIO 芯片设备 %s\n", GPIO_CHIP_PATH);
+            printf("无法打开 GPIO 芯片设备 %s\n", GPIO_CHIP_DEVFILE);
             return -1;
         }
     }
@@ -722,12 +721,6 @@ void DEV_HARDWARE_SPI_end(void)
 // ===============================================================================
 
 
-#define LCD_CS 38
-#define LCD_RST 36
-#define LCD_DC 39
-#define LCD_BL 40
-
-
 
 /*****************************************
                 GPIO
@@ -802,13 +795,13 @@ void DEV_Delay_ms(uint32_t xms)
 
 static void DEV_GPIO_Init(void)
 {
-    DEV_GPIO_Mode(LCD_CS, 1);
-    DEV_GPIO_Mode(LCD_RST, 1);
-    DEV_GPIO_Mode(LCD_DC, 1);
-    DEV_GPIO_Mode(LCD_BL, 1);
+    DEV_GPIO_Mode(SCREEN_SPI_CS, 1);
+    DEV_GPIO_Mode(SCREEN_SPI_RST, 1);
+    DEV_GPIO_Mode(SCREEN_SPI_DC, 1);
+    DEV_GPIO_Mode(SCREEN_SPI_BL, 1);
 
-    DEV_Digital_Write(LCD_CS, 1);
-    DEV_Digital_Write(LCD_BL, 1);
+    DEV_Digital_Write(SCREEN_SPI_CS, 1);
+    DEV_Digital_Write(SCREEN_SPI_BL, 1);
 }
 
 /******************************************************************************
@@ -832,11 +825,11 @@ uint8_t DEV_ModuleInit(void)
     }
     DEV_GPIO_Init();
     wiringPiSPISetup(0, 80000000);
-    pinMode(LCD_BL, PWM_OUTPUT);
-    pwmWrite(LCD_BL, 1023);
+    pinMode(SCREEN_SPI_BL, PWM_OUTPUT);
+    pwmWrite(SCREEN_SPI_BL, 1023);
 #elif defined(USE_DEV_LIB)
     DEV_GPIO_Init();
-    DEV_HARDWARE_SPI_begin("/dev/spidev1.0");
+    DEV_HARDWARE_SPI_begin(SPI_DEVFILE);
 #endif
     return 0;
 }
@@ -879,7 +872,7 @@ void DEV_ModuleExit(void)
 #ifdef USE_DEV_LIB_PWM
     pthread_cancel(t1);
 #endif
-    DEV_Digital_Write(LCD_BL, 1);
+    DEV_Digital_Write(SCREEN_SPI_BL, 1);
 #endif
 }
 
@@ -907,17 +900,17 @@ void DEV_ModuleExit(void)
 
 
 // LCD
-#define LCD_CS_0 DEV_Digital_Write(LCD_CS, 0)
-#define LCD_CS_1 DEV_Digital_Write(LCD_CS, 1)
+#define SCREEN_SPI_CS_0 DEV_Digital_Write(SCREEN_SPI_CS, 0)
+#define SCREEN_SPI_CS_1 DEV_Digital_Write(SCREEN_SPI_CS, 1)
 
-#define LCD_RST_0 DEV_Digital_Write(LCD_RST, 0)
-#define LCD_RST_1 DEV_Digital_Write(LCD_RST, 1)
+#define SCREEN_SPI_RST_0 DEV_Digital_Write(SCREEN_SPI_RST, 0)
+#define SCREEN_SPI_RST_1 DEV_Digital_Write(SCREEN_SPI_RST, 1)
 
-#define LCD_DC_0 DEV_Digital_Write(LCD_DC, 0)
-#define LCD_DC_1 DEV_Digital_Write(LCD_DC, 1)
+#define SCREEN_SPI_DC_0 DEV_Digital_Write(SCREEN_SPI_DC, 0)
+#define SCREEN_SPI_DC_1 DEV_Digital_Write(SCREEN_SPI_DC, 1)
 
-#define LCD_BL_0 DEV_Digital_Write(LCD_BL, 0)
-#define LCD_BL_1 DEV_Digital_Write(LCD_BL, 1)
+#define SCREEN_SPI_BL_0 DEV_Digital_Write(SCREEN_SPI_BL, 0)
+#define SCREEN_SPI_BL_1 DEV_Digital_Write(SCREEN_SPI_BL, 1)
 
 
 
@@ -930,11 +923,11 @@ function:
 *******************************************************************************/
 static void ILI9341_Reset(void)
 {
-    DEV_Digital_Write(LCD_CS, 1);
+    DEV_Digital_Write(SCREEN_SPI_CS, 1);
     DEV_Delay_ms(100);
-    DEV_Digital_Write(LCD_RST, 0);
+    DEV_Digital_Write(SCREEN_SPI_RST, 0);
     DEV_Delay_ms(100);
-    DEV_Digital_Write(LCD_RST, 1);
+    DEV_Digital_Write(SCREEN_SPI_RST, 1);
     DEV_Delay_ms(100);
 }
 
@@ -944,26 +937,26 @@ function:
 *******************************************************************************/
 static void ILI9341_Write_Command(uint8_t data)
 {
-    DEV_Digital_Write(LCD_CS, 0);
-    DEV_Digital_Write(LCD_DC, 0);
+    DEV_Digital_Write(SCREEN_SPI_CS, 0);
+    DEV_Digital_Write(SCREEN_SPI_DC, 0);
     DEV_SPI_WriteByte(data);
 }
 
 static void ILI9341_WriteData_Byte(uint8_t data)
 {
-    DEV_Digital_Write(LCD_CS, 0);
-    DEV_Digital_Write(LCD_DC, 1);
+    DEV_Digital_Write(SCREEN_SPI_CS, 0);
+    DEV_Digital_Write(SCREEN_SPI_DC, 1);
     DEV_SPI_WriteByte(data);
-    DEV_Digital_Write(LCD_CS, 1);
+    DEV_Digital_Write(SCREEN_SPI_CS, 1);
 }
 
 void ILI9341_WriteData_Word(uint16_t data)
 {
-    DEV_Digital_Write(LCD_CS, 0);
-    DEV_Digital_Write(LCD_DC, 1);
+    DEV_Digital_Write(SCREEN_SPI_CS, 0);
+    DEV_Digital_Write(SCREEN_SPI_DC, 1);
     DEV_SPI_WriteByte((data >> 8) & 0xff);
     DEV_SPI_WriteByte(data);
-    DEV_Digital_Write(LCD_CS, 1);
+    DEV_Digital_Write(SCREEN_SPI_CS, 1);
 }
 
 /******************************************************************************
@@ -1262,7 +1255,7 @@ void ILI9341_Clear(uint16_t Color)
         image[i] = Color >> 8 | (Color & 0xff) << 8;
     }
     ILI9341_SetWindow(0, 0, ILI9341_WIDTH, ILI9341_HEIGHT);
-    DEV_Digital_Write(LCD_DC, 1);
+    DEV_Digital_Write(SCREEN_SPI_DC, 1);
     for (i = 0; i < ILI9341_HEIGHT; i++) {
         DEV_SPI_Write_nByte((uint8_t *)(image), ILI9341_WIDTH * 2);
     }
@@ -1302,7 +1295,7 @@ void ILI9341_Display(uint8_t *image)
     // ILI9341_SetWindow(0, 0, ILI9341_WIDTH, ILI9341_HEIGHT);
     // NOTE 旋转90度或270度
     ILI9341_SetWindow(0, 0, ILI9341_HEIGHT, ILI9341_WIDTH);
-    DEV_Digital_Write(LCD_DC, 1);
+    DEV_Digital_Write(SCREEN_SPI_DC, 1);
     for (i = 0; i < ILI9341_HEIGHT; i++)
     {
         DEV_SPI_Write_nByte((uint8_t *)image + ILI9341_WIDTH * 2 * i, ILI9341_WIDTH * 2);
@@ -1316,9 +1309,9 @@ void ILI9341_Display(uint8_t *image)
 void ILI9341_SetBacklight(uint16_t Value)
 {
 #ifdef USE_WIRINGPI_LIB
-    pwmWrite(LCD_BL, Value);
+    pwmWrite(SCREEN_SPI_BL, Value);
 #elif defined(USE_DEV_LIB)
-    DEV_Digital_Write(LCD_BL, 1);
+    DEV_Digital_Write(SCREEN_SPI_BL, 1);
 #endif
 }
 

@@ -11,8 +11,6 @@
 #include "imu.h"
 
 // ================= 配置区域 =================
-// 串口设备路径，USB 转 TTL 通常为 /dev/ttyUSB0，GPIO 直连通常为 /dev/ttyAMA0
-#define SERIAL_DEVICE "/dev/ttyAS4" 
 // 波特率，根据 PCB 焊接点选择，默认为 115200
 #define BAUDRATE 115200
 // ===========================================
@@ -38,7 +36,7 @@ int serial_init() {
     struct termios options;
     
     // 打开串口，O_RDWR 读写，O_NOCTTY 不作为控制终端，O_NDELAY 非阻塞 (稍后我们会配置阻塞)
-    fd = open(SERIAL_DEVICE, O_RDWR | O_NOCTTY | O_NDELAY);
+    fd = open(IMU_DEVFILE, O_RDWR | O_NOCTTY | O_NDELAY);
     if (fd == -1) {
         perror("无法打开串口");
         return -1;
@@ -88,7 +86,7 @@ int serial_init() {
         return -1;
     }
 
-    printf("串口 %s 初始化成功 (波特率：%d)\n", SERIAL_DEVICE, BAUDRATE);
+    printf("串口 %s 初始化成功 (波特率：%d)\n", IMU_DEVFILE, BAUDRATE);
     return 0;
 }
 
@@ -204,6 +202,8 @@ int imu_calib() {
     send_command(0xA5, 0x54);
     printf("发送校正航向命令...\n");
     send_command(0xA5, 0x55);
+
+    tcflush(fd, TCIFLUSH);
 
     // 再发送自动模式指令
     send_command(0xA5, 0x52);
