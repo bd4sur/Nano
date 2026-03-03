@@ -13,7 +13,7 @@
 
 /* 配置项 / Config */
 #ifndef IMU_UART_RX_BUF_SIZE
-#define IMU_UART_RX_BUF_SIZE 256 /* 环形接收缓冲区大小 / RX ring buffer size */
+#define IMU_UART_RX_BUF_SIZE 512 /* 环形接收缓冲区大小 / RX ring buffer size */
 #endif
 
 #define FRAME_HEAD1 0x7E
@@ -27,6 +27,7 @@
 #define IMU_FUNC_QUAT 0x16
 #define IMU_FUNC_EULER 0x26
 #define IMU_FUNC_BARO 0x32
+#define IMU_FUNC_SET_FREQ 0x60
 #define IMU_FUNC_CALIB_IMU 0x70
 #define IMU_FUNC_CALIB_MAG 0x71
 #define IMU_FUNC_CALIB_BARO 0x72
@@ -519,10 +520,9 @@ void IMU_UART_GetVersion(void)
         uint8_t rxbyte = 0;
         for (int i = 0; i < 20; ++i)
         {
-            for (int j = 0; j < 128; ++j)
+            for (int j = 0; j < IMU_UART_RX_BUF_SIZE/2; ++j)
             { // 把串口缓存刷入环形缓冲
                 int32_t ret = uart_receive(&rxbyte);
-                printf("%d\n", rxbyte);
                 if (!ret)
                 {
                     IMU_UART_RxBytes(&rxbyte, 1);
@@ -582,7 +582,7 @@ int IMU_UART_WaitCalibration(uint8_t function, uint32_t timeout_ms)
     uint32_t elapsed_ms = 0;
     while (1)
     {
-        for (int j = 0; j < 128; ++j)
+        for (int j = 0; j < IMU_UART_RX_BUF_SIZE/2; ++j)
         { // 把串口缓存刷入环形缓冲
             int32_t ret = uart_receive(&rxbyte);
             if (!ret)
@@ -686,6 +686,14 @@ int IMU_UART_ResetUserData(void)
 }
 
 
+int IMU_UART_SetFreq(uint8_t freq)
+{
+    uint8_t payload[2] = {0x01, 0x5F};
+    payload[0] = freq;
+    return IMU_UART_SendCommand(IMU_FUNC_SET_FREQ, payload, (uint8_t)sizeof(payload));
+}
+
+
 void Send_IMU_Data(uint8_t Data)
 {
     uart_send_uint8(Data);
@@ -699,6 +707,7 @@ void Send_IMU_Data(uint8_t Data)
 int imu_init() {
     uart_init();
     IMU_UART_GetVersion();
+    IMU_UART_SetFreq(20);
     return 0;
 }
 
@@ -725,7 +734,7 @@ int imu_read_angle(float *pitch, float *roll, float *yaw) {
     uint8_t rxbyte = 0;
 
     // Receive a bunch of bytes to fill the buffer / 接收一堆字节以填充缓冲区
-    for (int i = 0; i < 128; i++) {
+    for (int i = 0; i < IMU_UART_RX_BUF_SIZE/2; i++) {
         int32_t ret = uart_receive(&rxbyte);
         if (!ret) {
             IMU_UART_RxBytes(&rxbyte, 1);

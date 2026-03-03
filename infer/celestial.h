@@ -43,6 +43,11 @@ void fb_draw_textline(
     wchar_t *line, int32_t x, int32_t y, uint8_t red, uint8_t green, uint8_t blue
 );
 
+
+
+void linglong_init();
+
+
 void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f,

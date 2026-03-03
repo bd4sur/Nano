@@ -92,6 +92,12 @@ static const wchar_t STAR_NAME[STARS_NUM][10] = {
 };
 
 
+// 地景
+static uint32_t landscape_texture_width = 600;
+static uint32_t landscape_texture_height = 600;
+static uint8_t *landscape_texture_rgb = NULL;
+
+
 // ===============================================================================
 // 幅度转换
 // ===============================================================================
@@ -191,7 +197,10 @@ void horizontal_to_screen_xy(
     // 天顶距 θ = π/2 - altitude
     float theta = M_PI_2 - alt_rad;
     // 等距鱼眼投影：r = (2R / π) * θ
-    float r = (view_height == 1.0f) ? ((theta / (M_PI / 2.0f)) * theta): (powf(theta / (M_PI / 2.0f), (1.0f / view_height)) * radius);
+    float r = (view_height == 1.0f) ? ((theta / (M_PI / 2.0f)) * radius): (powf(theta / (M_PI / 2.0f), (1.0f / view_height)) * radius);
+    // 视野系数，高度越高视野越完整（越接近1），高度越低视野越不完整（越接近0）
+    float range = MAX(0.1f, 1.0f - expf(-10.0f * view_height));
+    r *= range;
     // float r = (2.0f * radius / M_PI) * theta;
     // 投影到平面：X指向东（注意因为是躺在地上看天，所以东是屏幕坐标系的左侧/负半轴），Y指向北
     float X = r * sinf(az_rad);
@@ -256,7 +265,7 @@ void xyz_to_horizontal(float x, float y, float z, float *azimuth_deg, float *alt
 
     // 4. 计算方位角（核心：atan2(x, y) 对应原函数中的 azRad）
     float azRad = atan2f(x, y); // 注意参数顺序：x 对应 sin(azRad), y 对应 cos(azRad)
-    *azimuth_deg = normalize_angle_float(to_deg_float(azRad) - 180.0f); // 逆向抵消原函数的 +180°
+    *azimuth_deg = normalize_angle_float(to_deg_float(azRad)); // 逆向抵消原函数的 +180°
 
     return;
 }
@@ -489,6 +498,119 @@ void fisheye_unproject(
 
     return;
 }
+
+
+
+
+
+/**
+ * 双线性插值采样
+ * @param {Uint8ClampedArray} frame_buffer - 图像数据
+ * @param {number} fb_width - 图像宽度
+ * @param {number} fb_height - 图像高度
+ * @param {number} x - 采样点 X 坐标 (浮点数)
+ * @param {number} y - 采样点 Y 坐标 (浮点数)
+ * @returns {number[]} [R, G, B]
+ */
+void bilinear_sample(uint8_t *frame_buffer, uint32_t fb_width, uint32_t fb_height, float x, float y, uint8_t *r, uint8_t *g, uint8_t *b) {
+    // 边界检查
+    if (x < 0 || x >= fb_width || y < 0 || y >= fb_height) {
+        *r = *g = *b = 128;
+        return;
+    }
+    
+    uint32_t x0 = (uint32_t)floorf(x);
+    uint32_t y0 = (uint32_t)floorf(y);
+    uint32_t x1 = x0 + 1;
+    uint32_t y1 = y0 + 1;
+    
+    float dx = x - (float)x0;
+    float dy = y - (float)y0;
+    float dx1 = 1 - dx;
+    float dy1 = 1 - dy;
+    
+    uint32_t idx00 = (y0 * fb_width + x0) * 3;
+    uint32_t idx10 = (y0 * fb_width + x1) * 3;
+    uint32_t idx01 = (y1 * fb_width + x0) * 3;
+    uint32_t idx11 = (y1 * fb_width + x1) * 3;
+    
+    // 对 RGBA 四个通道分别插值
+    *r = (uint8_t)MIN(255.0f, (float)frame_buffer[idx00+0] * dx1 * dy1 + (float)frame_buffer[idx10+0] * dx * dy1 + (float)frame_buffer[idx01+0] * dx1 * dy + (float)frame_buffer[idx11+0] * dx * dy);
+    *g = (uint8_t)MIN(255.0f, (float)frame_buffer[idx00+1] * dx1 * dy1 + (float)frame_buffer[idx10+1] * dx * dy1 + (float)frame_buffer[idx01+1] * dx1 * dy + (float)frame_buffer[idx11+1] * dx * dy);
+    *b = (uint8_t)MIN(255.0f, (float)frame_buffer[idx00+2] * dx1 * dy1 + (float)frame_buffer[idx10+2] * dx * dy1 + (float)frame_buffer[idx01+2] * dx1 * dy + (float)frame_buffer[idx11+2] * dx * dy);
+}
+
+
+/**
+ * 将正方形平面图像映射为圆形鱼眼图像
+ * @param {Uint8ClampedArray} inputBuffer - 输入图像数据 (RGB888)
+ * @param {Uint8ClampedArray} outputBuffer - 输出图像数据 (RGB888)
+ * @param {number} input_width - 图像宽度 (假设宽高相等)
+ * @param {number} input_height - 图像高度 (假设宽高相等)
+ * @param {number} fovFactor - 鱼眼视场角因子 (0.5 ~ 1.56即pi/2), 越大畸变越强
+ */
+void to_fisheye(uint8_t *inputBuffer, uint8_t *outputBuffer, uint32_t input_width, uint32_t input_height, float fovFactor) {
+    float centerX = input_width / 2.0f;
+    float centerY = input_height / 2.0f;
+    float maxRadius = input_width / 2.0f;
+    
+    // 输入图像的最大半径 (半对角线), 确保正方形角点映射到圆边缘
+    float inputMaxRadius = maxRadius; // Math.sqrt(centerX * centerX + centerY * centerY);
+    
+    // 预计算 tan(fovFactor), 避免循环内重复计算
+    float tanFov = tanf(fovFactor);
+    
+    // 遍历输出图像的每一个像素 (逆向映射)
+    for (uint32_t y = 0; y < input_height; y++) {
+        for (uint32_t x = 0; x < input_width; x++) {
+            float dx = (float)(x - centerX);
+            float dy = (float)(y - centerY);
+            float rOut = sqrtf(dx * dx + dy * dy);
+            
+            // 如果在输出圆外，设为黑色
+            if (rOut > maxRadius) {
+                uint32_t idx = (y * input_width + x) * 3;
+                outputBuffer[idx + 0] = 0;
+                outputBuffer[idx + 1] = 64;
+                outputBuffer[idx + 2] = 0;
+                continue;
+            }
+
+            // 归一化半径 (0 ~ 1)
+            float rNorm = rOut / maxRadius;
+
+            // 计算角度
+            float theta = atan2f(dy, dx);
+
+            // 鱼眼映射核心公式 (正切投影)
+            float rIn = 0.0f;
+            if (fovFactor >= M_PI / 2.0f - 0.001f) {
+                // 防止 tan 无穷大，退化处理
+                rIn = rNorm * inputMaxRadius;
+            }
+            else {
+                rIn = inputMaxRadius * tanf(rNorm * fovFactor) / tanFov;
+            }
+
+            // 计算输入图像的坐标
+            uint32_t srcX = (uint32_t)(centerX + rIn * cosf(theta));
+            uint32_t srcY = (uint32_t)(centerY + rIn * sinf(theta));
+
+            // 双线性插值获取颜色
+            uint8_t red = 0;
+            uint8_t green = 0;
+            uint8_t blue = 0;
+            bilinear_sample(inputBuffer, input_width, input_height, srcX, srcY, &red, &green, &blue);
+
+            // 写入输出像素
+            uint32_t outIdx = (y * input_width + x) * 3;
+            outputBuffer[outIdx + 0] = red;
+            outputBuffer[outIdx + 1] = green;
+            outputBuffer[outIdx + 2] = blue;
+        }
+    }
+}
+
 
 
 
@@ -1029,7 +1151,7 @@ void draw_rect(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     }
 }
 
-// 地面填充纯黑色
+// 绘制地景
 void draw_horizon(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
@@ -1058,7 +1180,7 @@ void draw_horizon(
                     // 再转为地面贴图上的xy坐标
                     float tx = 0.0f;
                     float ty = 0.0f;
-                    horizontal_to_screen_xy(-azi, -alt, 300, 300, 300, view_height, &tx, &ty); // R略小于地面贴图的半径，注意修改其中的center_x/y
+                    horizontal_to_screen_xy(-azi, -alt, landscape_texture_width/2, landscape_texture_width/2, landscape_texture_height/2, view_height, &tx, &ty); // R略小于地面贴图的半径，注意修改其中的center_x/y
 
                     uint8_t r = get_pixel_channel(landscape_texture_rgb, landscape_texture_width, landscape_texture_height, floorf(tx), floorf(ty), 0);
                     uint8_t g = get_pixel_channel(landscape_texture_rgb, landscape_texture_width, landscape_texture_height, floorf(tx), floorf(ty), 1);
@@ -1066,7 +1188,7 @@ void draw_horizon(
 
                     r = (uint8_t)MIN(255.0f, ((float)r * k));
                     g = (uint8_t)MIN(255.0f, ((float)g * k));
-                    b = (uint8_t)MIN(255.0f, ((float)b * k));
+                    b = (uint8_t)MIN(255.0f, ((float)b * (k+0.1f))); // 模拟反射天光偏蓝
 
                     set_pixel(frame_buffer, fb_width, fb_height, x, y, r, g, b);
                 }
@@ -1079,6 +1201,25 @@ void draw_horizon(
         }
     }
 }
+
+
+
+// 刷新地景
+//   landscape_buffer - 地景纹理（可能是鱼眼贴图、平面贴图、平面的算法生成地景等）
+//   is_flat - 0:贴图本身就是鱼眼，无需转鱼眼  1-贴图是平面的，需要使用fov参数转鱼眼
+void update_landscape(uint8_t *landscape_buffer, uint32_t width, uint32_t height, int32_t is_flat, float fov) {
+    if (is_flat) {
+        landscape_texture_width = width;
+        landscape_texture_height = height;
+        to_fisheye(landscape_buffer, landscape_texture_rgb, width, height, fov);
+    }
+    else {
+        landscape_texture_width = width;
+        landscape_texture_height = height;
+        landscape_texture_rgb = landscape_buffer;
+    }
+}
+
 
 
 // ===============================================================================
@@ -1921,6 +2062,16 @@ void calculate_scattered_pixel(
 }
 
 
+
+// ===============================================================================
+// 初始化天象仪语境
+// ===============================================================================
+
+void linglong_init() {
+    landscape_texture_rgb = (uint8_t *)calloc(landscape_texture_width * landscape_texture_height * 3, sizeof(uint8_t));
+}
+
+
 // ===============================================================================
 // 渲染整个天空
 // ===============================================================================
@@ -2249,7 +2400,11 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     }
 
     // 绘制地景（天空投影圆盘之外的部分）
-    float view_height = 0.01f * fabsf(sun_alt) + 1.0f;
+    // TODO 几何关系待优化
+    float fov = (0.45f/90.0f) * fabsf(sun_alt) + 1.1f;
+    update_landscape(FLAT_TEXTURE_BUFFER, FLAT_TEXTURE_WIDTH, FLAT_TEXTURE_HEIGHT, 1, fov);
+    float view_height = 1.0f;
+    // float view_height = 0.01f * fabsf(sun_alt) + 1.0f;
     draw_horizon(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, view_height, sun_alt, landscape_index);
 
 }
