@@ -1130,10 +1130,13 @@ int main() {
             int32_t imu_count = 3000;
             do {
                 // 根据IMU安装方式调整
-                // ret = imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
-                ret = imu_read_angle(&(global_state->roll), &(global_state->pitch), &(global_state->yaw));
-                global_state->pitch = -global_state->pitch;
-                global_state->yaw = -global_state->yaw;
+                ret = imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
+
+                // 以下代码适配 NANO_POD_PLUS_CUBIE_A7Z （2026-03-02制作的单板原型）
+                // ret = imu_read_angle(&(global_state->roll), &(global_state->pitch), &(global_state->yaw));
+                // global_state->pitch = -global_state->pitch;
+                // global_state->yaw = -global_state->yaw;
+
                 imu_count--;
                 if (imu_count <= 0) {
                     printf("IMU读取超时，重置\n");
@@ -1142,7 +1145,7 @@ int main() {
                 }
             } while(ret != 0);
 
-            printf("%-10.2f %-10.2f %-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw);
+            printf("俯仰=%-10.2f    滚转=%-10.2f    航向=%-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw);
 #endif
 
             draw_ephemeris_screen(key_event, global_state);
