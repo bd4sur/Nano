@@ -1156,10 +1156,12 @@ void draw_horizon(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f,
-    float view_height, float sun_alt, int32_t landscape_index
+    float view_height, float sun_alt, int32_t landscape_index,
+    int32_t enable_atmosphere_scattering, uint8_t atmo_r, uint8_t atmo_g, uint8_t atmo_b
 ) {
     float margin = LINGLONG_HORIZON_BLUR_MARGIN;
     float k = MAX(0.2f, sinf(to_rad_float(sun_alt)) * 1.5f);
+    float max_scattering_depth = 0.8;
     float hx = 0.0f;
     float hy = 0.0f;
     float hz = 0.0f;
@@ -1186,17 +1188,34 @@ void draw_horizon(
                     uint8_t g = get_pixel_channel(landscape_texture_rgb, landscape_texture_width, landscape_texture_height, floorf(tx), floorf(ty), 1);
                     uint8_t b = get_pixel_channel(landscape_texture_rgb, landscape_texture_width, landscape_texture_height, floorf(tx), floorf(ty), 2);
 
-                    r = (uint8_t)MIN(255.0f, ((float)r * k));
-                    g = (uint8_t)MIN(255.0f, ((float)g * k));
-                    b = (uint8_t)MIN(255.0f, ((float)b * (k+0.1f))); // 模拟反射天光偏蓝
+                    // 模拟近地大气散射
+                    float scattered_r = 1.0f;
+                    float scattered_g = 1.0f;
+                    float scattered_b = 1.0f;
+                    if (enable_atmosphere_scattering) {
+                        float depth = sqrtf(hx * hx + hy * hy) / rr;
+                        depth = MIN(1.0, powf(depth, 2.0f)) * max_scattering_depth;
+                        scattered_r = (1 - depth) * (float)r + (float)atmo_r * depth;
+                        scattered_g = (1 - depth) * (float)g + (float)atmo_g * depth;
+                        scattered_b = (1 - depth) * (float)b + (float)atmo_b * depth;
+                    }
+
+                    r = (uint8_t)MIN(255.0f, (scattered_r * k));
+                    g = (uint8_t)MIN(255.0f, (scattered_g * k));
+                    b = (uint8_t)MIN(255.0f, (scattered_b * k));
 
                     set_pixel(frame_buffer, fb_width, fb_height, x, y, r, g, b);
                 }
             }
-            else if (landscape_index == 0 && hz <= margin && hz >= 0.0f) {
-                float c = 0.0f;
-                float t = hz / margin;
-                scale_pixel(frame_buffer, fb_width, fb_height, x, y, t);
+            else if (enable_atmosphere_scattering && hz <= margin && hz >= 0.0f) {
+                float cr = (float)atmo_r * k;
+                float cg = (float)atmo_g * k;
+                float cb = (float)atmo_b * k;
+                float t = powf(hz / margin, 0.5f);
+                uint32_t idx = (y * fb_width + x) * 3;
+                frame_buffer[idx + 0] = (uint8_t)MIN(255.0f, ((1.0f - t) * cr + t * (float)frame_buffer[idx + 0]));
+                frame_buffer[idx + 1] = (uint8_t)MIN(255.0f, ((1.0f - t) * cg + t * (float)frame_buffer[idx + 1]));
+                frame_buffer[idx + 2] = (uint8_t)MIN(255.0f, ((1.0f - t) * cb + t * (float)frame_buffer[idx + 2]));
             }
         }
     }
@@ -2131,9 +2150,53 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     int32_t x1 = 0;
     int32_t x2 = fb_width;
 
+    ////////////////////////////
     // 大气散射
+    ////////////////////////////
+
+    // 用于计算地景近地大气散射的天光平均色相
+    float atmo_r = 0;
+    float atmo_g = 0;
+    float atmo_b = 0;
+
     if (sky_model > 0) {
-        // 首先根据太阳高度自适应设置降采样因子
+
+        // 对天空半球进行采样，计算天光平均色相
+        uint32_t atmo_count = 0;
+        for (float ray_alt = 0.0f; ray_alt < 30.0f; ray_alt += 2.0f) {
+            for (float ray_azi = 0.0f; ray_azi < 360.0f; ray_azi += 10.0f) {
+                float _ray_x = 0.0f;
+                float _ray_y = 0.0f;
+                float _ray_z = 0.0f;
+                horizontal_to_xyz(ray_azi, ray_alt, sky_radius, &_ray_x, &_ray_y, &_ray_z);
+                float _ar = 0.0f;
+                float _ag = 0.0f;
+                float _ab = 0.0f;
+                calculate_scattered_pixel(_ray_x, _ray_y, _ray_z, sun_x, sun_y, sun_z, &_ar, &_ag, &_ab, enable_opt_lut, sky_model);
+                atmo_r += _ar * 255.0f;
+                atmo_g += _ag * 255.0f;
+                atmo_b += _ab * 255.0f;
+
+                atmo_count++;
+            }
+        }
+        atmo_r = (atmo_r / atmo_count) * 1.0f;
+        atmo_g = (atmo_g / atmo_count) * 1.0f;
+        atmo_b = (atmo_b / atmo_count) * 1.0f;
+
+        // 调整饱和度、明度拉满
+        float hv = MAX(MAX(atmo_r, atmo_g), atmo_b);
+        float sat = 0.8;
+        atmo_r = MAX(1.0f, sat * atmo_r + (1 - sat) * hv);
+        atmo_g = MAX(1.0f, sat * atmo_g + (1 - sat) * hv);
+        atmo_b = MAX(1.0f, sat * atmo_b + (1 - sat) * hv);
+        float _k = 255.0f / hv;
+        atmo_r = MIN(255.0f, atmo_r * _k);
+        atmo_g = MIN(255.0f, atmo_g * _k);
+        atmo_b = MIN(255.0f, atmo_b * _k);
+
+
+        // 根据太阳高度自适应设置降采样因子
         int32_t _downsampling_factor = downsampling_factor;
         if (downsampling_factor == 0) {
             if (sun_alt < -18.0) {
@@ -2405,6 +2468,8 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     update_landscape(FLAT_TEXTURE_BUFFER, FLAT_TEXTURE_WIDTH, FLAT_TEXTURE_HEIGHT, 1, fov);
     float view_height = 1.0f;
     // float view_height = 0.01f * fabsf(sun_alt) + 1.0f;
-    draw_horizon(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, view_height, sun_alt, landscape_index);
+    draw_horizon(
+        frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y,
+        view_alt, view_azi, view_roll, f, view_height, sun_alt, landscape_index, 1, (uint8_t)atmo_r, (uint8_t)atmo_g, (uint8_t)atmo_b);
 
 }
