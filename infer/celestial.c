@@ -2086,8 +2086,43 @@ void calculate_scattered_pixel(
 // 初始化天象仪语境
 // ===============================================================================
 
-void linglong_init() {
+void linglong_init(Linglong_Config *cfg) {
     landscape_texture_rgb = (uint8_t *)calloc(landscape_texture_width * landscape_texture_height * 3, sizeof(uint8_t));
+
+    cfg->fb_width = 0;
+    cfg->fb_height = 0;
+    cfg->sky_radius = 0;
+    cfg->center_x = 0;
+    cfg->center_y = 0;
+    cfg->view_alt = 90.0f;
+    cfg->view_azi = 180.0f;
+    cfg->view_roll = 0.0f;
+    cfg->view_f = 1.0f;
+
+    cfg->year = 2026;
+    cfg->month = 2;
+    cfg->day = 17;
+    cfg->hour = 12;
+    cfg->minute = 0;
+    cfg->second = 0;
+    cfg->timezone = 8.0;
+    cfg->longitude = 119.0;
+    cfg->latitude = 31.0;
+
+    cfg->downsampling_factor = 2;     // 降采样因子（设为0为自动，建议设为2）
+    cfg->enable_opt_sym = 0;          // 是否启用基于对称性的渲染优化（以画质为代价）
+    cfg->enable_opt_lut = 0;          // 是否启用查找表计算加速（以画质为代价）
+    cfg->enable_opt_bilinear = 0;     // 是否启用双线性插值以优化画质
+ 
+    cfg->sky_model = 2;               // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
+    cfg->landscape_index = 1;         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
+    cfg->enable_equatorial_coord = 0; // 是否启用赤道坐标圈
+    cfg->enable_horizontal_coord = 1; // 是否启用地平坐标圈
+    cfg->enable_star_burst = 1;       // 是否启用星芒效果
+    cfg->enable_star_name = 0;        // 是否显示恒星名称
+    cfg->enable_planet = 1;           // 是否显示大行星
+    cfg->enable_planet_name = 0;      // 是否显示大行星名称
+    cfg->enable_ecliptic_circle = 0;  // 是否显示黄道
 }
 
 

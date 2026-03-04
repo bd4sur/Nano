@@ -8,6 +8,7 @@
 #include "prompt.h"
 
 #include "ephemeris.h"
+#include "celestial.h"
 
 #include "platform.h"
 
@@ -627,7 +628,8 @@ int main() {
     ///////////////////////////////////////
     // 初始化玲珑天象仪
 
-    linglong_init();
+    global_state->linglong_cfg = (Linglong_Config *)calloc(1, sizeof(Linglong_Config));
+    linglong_init(global_state->linglong_cfg);
 
     ///////////////////////////////////////
     // 主循环
@@ -1155,8 +1157,18 @@ int main() {
 
             draw_ephemeris_screen(key_event, global_state);
 
+            // 按7键拉远
+            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_7) {
+                global_state->linglong_cfg->view_f -= 0.1f;
+                if (global_state->linglong_cfg->view_f <= 0.1f) global_state->linglong_cfg->view_f = 0.1f;
+            }
+            // 按9键推近
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_9) {
+                global_state->linglong_cfg->view_f += 0.1f;
+                if (global_state->linglong_cfg->view_f >= 5.0f) global_state->linglong_cfg->view_f = 5.0f;
+            }
             // 按A键返回主菜单
-            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+            else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
                 global_state->STATE = STATE_MAIN_MENU;
             }
 #ifdef IMU_ENABLED

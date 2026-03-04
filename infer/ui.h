@@ -10,6 +10,8 @@ extern "C" {
 #include "graphics.h"
 #include "utils.h"
 
+#include "celestial.h"
+
 #define IME_MODE_HANZI    (0)
 #define IME_MODE_ALPHABET (1)
 #define IME_MODE_NUMBER   (2)
@@ -82,6 +84,9 @@ typedef struct {
     int32_t is_full_refresh; // 作为所有绘制函数的一个参数，用于控制是否整帧刷新。默认为1。0-禁用函数内的clear-refresh，1-启用函数内的clear-refresh
     uint32_t llm_refresh_max_fps; // 设置项：LLM推理过程中屏幕刷新的最高帧率
     uint64_t llm_refresh_timestamp; // LLM推理过程中，上一次刷新屏幕的时间戳。用于控制刷新频率（不高于llm_refresh_max_fps），避免刷新过于频繁，拖累表观TPS（目前LLM推理与屏幕刷新是同步串行的）。
+
+    // 玲珑天象仪全局配置
+    Linglong_Config *linglong_cfg;
 
     // BadApple相关
     uint32_t ba_frame_count;

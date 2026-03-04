@@ -1324,9 +1324,8 @@ static uint64_t start_timestamp = 0;
 static int32_t linglong_version = 1;
 
 void draw_linglong(Key_Event *key_event, Global_State *global_state) {
-    const double longitude = 119.0; // 东经
-    const double latitude = 32.0;   // 北纬
-    const double timezone = +8.0;   // 东八区
+
+    Linglong_Config *llcfg = global_state->linglong_cfg;
 
     // 节流：不大于50fps
     // if (global_state->timestamp - ephemeris_refersh_timestamp < 20) {
@@ -1346,33 +1345,37 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
     }
     struct tm *timeinfo = localtime(&ts); // 转换为本地时间
     
-    int32_t second = timeinfo->tm_sec;
-    int32_t minute = timeinfo->tm_min;
-    int32_t hour = timeinfo->tm_hour;
-    int32_t day = timeinfo->tm_mday;
-    int32_t month = timeinfo->tm_mon + 1;
-    int32_t year = timeinfo->tm_year + 1900;
+    llcfg->second = timeinfo->tm_sec;
+    llcfg->minute = timeinfo->tm_min;
+    llcfg->hour = timeinfo->tm_hour;
+    llcfg->day = timeinfo->tm_mday;
+    llcfg->month = timeinfo->tm_mon + 1;
+    llcfg->year = timeinfo->tm_year + 1900;
+
+
+    llcfg->view_alt  = global_state->pitch;
+    llcfg->view_azi  = global_state->yaw + 180.0f;
+    llcfg->view_roll = global_state->roll;
 
 
     render_sky(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height,
-        120, 160, 120,
-        global_state->pitch, (global_state->yaw + 180.0f), global_state->roll, 1.0f,
+        MIN(global_state->gfx->width, global_state->gfx->height) / 2, global_state->gfx->width / 2, global_state->gfx->height / 2,
+        llcfg->view_alt, llcfg->view_azi, llcfg->view_roll, llcfg->view_f,
         // 2026, 2, 25, 12, 0, 0, 8.0, 119.0, 31.0,
-        year, month, day, hour, minute, second, timezone, longitude, latitude,
-        2,     // 降采样因子（设为0为自动，建议设为2）
-        0,     // 是否启用基于对称性的渲染优化（以画质为代价）
-        0,     // 是否启用查找表计算加速（以画质为代价）
-        0,     // 是否启用双线性插值以优化画质
-
-        2,     // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
-        1,     // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
-        0,     // 是否启用赤道坐标圈
-        1,     // 是否启用地平坐标圈
-        1,     // 是否启用星芒效果
-        0,     // 是否显示恒星名称
-        1,     // 是否显示大行星
-        0,     // 是否显示大行星名称
-        0      // 是否显示黄道
+        llcfg->year, llcfg->month, llcfg->day, llcfg->hour, llcfg->minute, llcfg->second, llcfg->timezone, llcfg->longitude, llcfg->latitude,
+        llcfg->downsampling_factor,
+        llcfg->enable_opt_sym,
+        llcfg->enable_opt_lut,
+        llcfg->enable_opt_bilinear,
+        llcfg->sky_model,
+        llcfg->landscape_index,
+        llcfg->enable_equatorial_coord,
+        llcfg->enable_horizontal_coord,
+        llcfg->enable_star_burst,
+        llcfg->enable_star_name,
+        llcfg->enable_planet,
+        llcfg->enable_planet_name,
+        llcfg->enable_ecliptic_circle
     );
 
     dithering_fast(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height);
@@ -1380,7 +1383,7 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
     gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V2603 (c) BD4SUR", 1, 226, 64, 64, 64, 3);
 
     wchar_t timestr[30];
-    swprintf(timestr, 30, L"%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second);
+    swprintf(timestr, 30, L"%04d-%02d-%02d %02d:%02d:%02d", llcfg->year, llcfg->month, llcfg->day, llcfg->hour, llcfg->minute, llcfg->second);
     gfx_draw_textline(global_state->gfx, timestr, 200, 226, 128, 128, 128, 3);
 
     gfx_refresh(global_state->gfx);

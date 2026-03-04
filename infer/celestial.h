@@ -17,6 +17,44 @@ extern "C" {
 #define LINGLONG_STAR_GLOW_RADIUS        (0)
 
 
+typedef struct {
+    int32_t fb_width;
+    int32_t fb_height;
+    float sky_radius;
+    float center_x;
+    float center_y;
+    float view_alt;
+    float view_azi;
+    float view_roll;
+    float view_f;
+
+    int32_t year;
+    int32_t month;
+    int32_t day;
+    int32_t hour;
+    int32_t minute;
+    int32_t second;
+    double timezone;
+    double longitude;
+    double latitude;
+
+    int32_t downsampling_factor;     // 降采样因子（设为0为自动，建议设为2）
+    int32_t enable_opt_sym;          // 是否启用基于对称性的渲染优化（以画质为代价）
+    int32_t enable_opt_lut;          // 是否启用查找表计算加速（以画质为代价）
+    int32_t enable_opt_bilinear;     // 是否启用双线性插值以优化画质
+ 
+    int32_t sky_model;               // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
+    int32_t landscape_index;         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
+    int32_t enable_equatorial_coord; // 是否启用赤道坐标圈
+    int32_t enable_horizontal_coord; // 是否启用地平坐标圈
+    int32_t enable_star_burst;       // 是否启用星芒效果
+    int32_t enable_star_name;        // 是否显示恒星名称
+    int32_t enable_planet;           // 是否显示大行星
+    int32_t enable_planet_name;      // 是否显示大行星名称
+    int32_t enable_ecliptic_circle;  // 是否显示黄道
+} Linglong_Config;
+
+
 void dithering_fs(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height);
 void dithering_fast(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height);
 
