@@ -1199,6 +1199,11 @@ void draw_horizon(
                         scattered_g = (1 - depth) * (float)g + (float)atmo_g * depth;
                         scattered_b = (1 - depth) * (float)b + (float)atmo_b * depth;
                     }
+                    else {
+                        scattered_r = (float)r;
+                        scattered_g = (float)g;
+                        scattered_b = (float)b;
+                    }
 
                     r = (uint8_t)MIN(255.0f, (scattered_r * k));
                     g = (uint8_t)MIN(255.0f, (scattered_g * k));
@@ -2115,7 +2120,7 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->enable_opt_bilinear = 0;     // 是否启用双线性插值以优化画质
  
     cfg->sky_model = 2;               // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
-    cfg->landscape_index = 1;         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
+    cfg->landscape_index = 2;         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
     cfg->enable_equatorial_coord = 0; // 是否启用赤道坐标圈
     cfg->enable_horizontal_coord = 1; // 是否启用地平坐标圈
     cfg->enable_star_burst = 1;       // 是否启用星芒效果
@@ -2123,6 +2128,8 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->enable_planet = 1;           // 是否显示大行星
     cfg->enable_planet_name = 0;      // 是否显示大行星名称
     cfg->enable_ecliptic_circle = 0;  // 是否显示黄道
+
+    cfg->enable_imu = 1;              // 是否启用IMU（使视角随机器姿态旋转）
 }
 
 
@@ -2498,13 +2505,26 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     }
 
     // 绘制地景（天空投影圆盘之外的部分）
-    // TODO 几何关系待优化
-    float fov = (0.45f/90.0f) * fabsf(sun_alt) + 1.1f;
-    update_landscape(FLAT_TEXTURE_BUFFER, FLAT_TEXTURE_WIDTH, FLAT_TEXTURE_HEIGHT, 1, fov);
+    float fov = 1.1f;
     float view_height = 1.0f;
-    // float view_height = 0.01f * fabsf(sun_alt) + 1.0f;
+    int32_t enable_atmosphere_scattering = 1; // 是否启用大气散射效果（只有在高空时启用）
+    // 卫星图
+    if (landscape_index == 1) {
+        // TODO 几何关系待优化
+        fov = (0.45f/90.0f) * fabsf(sun_alt) + 1.1f;
+        update_landscape(FLAT_TEXTURE_BUFFER, FLAT_TEXTURE_WIDTH, FLAT_TEXTURE_HEIGHT, 1, fov);
+        view_height = 1.0f;
+        // float view_height = 0.01f * fabsf(sun_alt) + 1.0f;
+        enable_atmosphere_scattering = 1;
+    }
+    // 鱼眼照片
+    else if (landscape_index == 2) {
+        update_landscape(FISHEYE_TEXTURE_BUFFER, FISHEYE_TEXTURE_WIDTH, FISHEYE_TEXTURE_HEIGHT, 0, fov);
+        enable_atmosphere_scattering = 0;
+    }
+
     draw_horizon(
         frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y,
-        view_alt, view_azi, view_roll, f, view_height, sun_alt, landscape_index, 1, (uint8_t)atmo_r, (uint8_t)atmo_g, (uint8_t)atmo_b);
+        view_alt, view_azi, view_roll, f, view_height, sun_alt, landscape_index, enable_atmosphere_scattering, (uint8_t)atmo_r, (uint8_t)atmo_g, (uint8_t)atmo_b);
 
 }

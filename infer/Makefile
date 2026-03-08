@@ -11,20 +11,20 @@ endif
 
 BIN_DIR := bin
 
-all: $(BIN_DIR) pod pod_plus tty cli sort wss
+all: $(BIN_DIR) pod_lite pod tty cli sort wss
 
 $(BIN_DIR):
 	mkdir -p $@
 
-# Nano-Pod：带键盘和单色I2C屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z/MARGA）
-pod: $(BIN_DIR)/nano_pod
-$(BIN_DIR)/nano_pod: main.c asr.c tts.c ups.c platform_linux.c display_ssd130x_linux.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c graphics.c ui.c utils.c prompt.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
-	$(CC) -DNANO_POD_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+# Nano-Pod-Lite：带键盘和单色I2C屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z/MARGA）
+pod_lite: $(BIN_DIR)/nano_pod_lite
+$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c ups.c platform_linux.c display_ssd130x_linux.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c graphics.c ui.c utils.c prompt.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+	$(CC) -DNANO_POD_LITE_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
-# Nano-Pod-Plus：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z）
-pod_plus: $(BIN_DIR)/nano_pod_plus
-$(BIN_DIR)/nano_pod_plus: main.c asr.c tts.c imu10.c ups.c platform_linux.c display_ili9341.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c graphics.c ui.c utils.c prompt.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
-	$(CC) -DNANO_POD_PLUS_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+# Nano-Pod：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z）
+pod: $(BIN_DIR)/nano_pod
+$(BIN_DIR)/nano_pod: main.c asr.c tts.c imu10.c ups.c platform_linux.c display_ili9341.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c graphics.c ui.c utils.c prompt.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+	$(CC) -DNANO_POD_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty
@@ -54,8 +54,8 @@ install:
 	grep -qxF "/usr/bin/nano_pod &" /etc/rc.local || sed -i "/^[[:space:]]*exit[[:space:]]0/i /usr/bin/nano_pod &" /etc/rc.local
 
 clean:
+	rm -f $(BIN_DIR)/nano_pod_lite
 	rm -f $(BIN_DIR)/nano_pod
-	rm -f $(BIN_DIR)/nano_pod_plus
 	rm -f $(BIN_DIR)/nano_tty
 	rm -f $(BIN_DIR)/nano_cli
 	rm -f $(BIN_DIR)/nano_sort

@@ -52,6 +52,9 @@ typedef struct {
     int32_t enable_planet;           // 是否显示大行星
     int32_t enable_planet_name;      // 是否显示大行星名称
     int32_t enable_ecliptic_circle;  // 是否显示黄道
+
+    // 以下与天空渲染无关（非render_sky参数）
+    int32_t enable_imu;              // 是否启用IMU（使视角随机器姿态旋转）
 } Linglong_Config;
 
 

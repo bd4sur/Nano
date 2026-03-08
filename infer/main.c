@@ -34,24 +34,26 @@
 #define DECODE_LED_ON   system("echo \"1\" > /sys/devices/platform/leds/leds/blue:status/brightness");
 #define DECODE_LED_OFF  system("echo \"0\" > /sys/devices/platform/leds/leds/blue:status/brightness");
 
-#define STATE_DEFAULT         (-100)
-#define STATE_SPLASH_SCREEN   (-1)
-#define STATE_MAIN_MENU       (-2)
-#define STATE_EBOOK           (-3)
-#define STATE_LLM_INPUT       (0)
-#define STATE_MODEL_MENU      (4)
-#define STATE_SETTING_MENU    (5)
-#define STATE_LLM_ON_INFER    (8)
-#define STATE_LLM_AFTER_INFER (10)
-#define STATE_ASR_RUNNING     (21)
-#define STATE_README          (25)
-#define STATE_BADAPPLE        (26)
-#define STATE_GAMEOFLIFE      (27)
-#define STATE_LINGLONG       (28)
-#define STATE_FLASHMEMO       (29)
-#define STATE_SHUTDOWN        (31)
-#define STATE_TTS_SETTING     (32)
-#define STATE_ASR_SETTING     (33)
+#define STATE_DEFAULT           (-100)
+#define STATE_SPLASH_SCREEN     (-1)
+#define STATE_MAIN_MENU         (-2)
+#define STATE_EBOOK             (-3)
+#define STATE_LLM_INPUT         (0)
+#define STATE_MODEL_MENU        (4)
+#define STATE_SETTING_MENU      (5)
+#define STATE_LLM_ON_INFER      (8)
+#define STATE_LLM_AFTER_INFER   (10)
+#define STATE_ASR_RUNNING       (21)
+#define STATE_README            (25)
+#define STATE_BADAPPLE          (26)
+#define STATE_GAMEOFLIFE        (27)
+#define STATE_LINGLONG          (28)
+#define STATE_FLASHMEMO         (29)
+#define STATE_SHUTDOWN          (31)
+#define STATE_TTS_SETTING       (32)
+#define STATE_ASR_SETTING       (33)
+#define STATE_LINGLONG_SETTING  (34)
+#define STATE_LINGLONG_TIMELOC  (35)
 
 static char *LOG_FILE_PATH = "chat.jsonl";
 
@@ -126,6 +128,7 @@ Widget_Menu_State      *w_menu_model = {0};
 Widget_Menu_State      *w_menu_setting = {0};
 Widget_Menu_State      *w_menu_asr_setting = {0};
 Widget_Menu_State      *w_menu_tts_setting = {0};
+Widget_Menu_State      *w_menu_linglong_setting = {0};
 
 
 
@@ -317,13 +320,28 @@ void init_tts_setting_menu() {
     init_menu(key_event, global_state, w_menu_tts_setting);
 }
 
+void init_linglong_setting_menu() {
+    wcscpy(w_menu_linglong_setting->title, L"玲珑仪设置");
+    wcscpy(w_menu_linglong_setting->items[0], L"时间和位置");
+    wcscpy(w_menu_linglong_setting->items[1], L"陀螺仪：");
+    wcscpy(w_menu_linglong_setting->items[2], L"天空模型：");
+    wcscpy(w_menu_linglong_setting->items[3], L"赤道坐标系：");
+    wcscpy(w_menu_linglong_setting->items[4], L"地平方位指示：");
+    wcscpy(w_menu_linglong_setting->items[5], L"天体名称：");
+    wcscpy(w_menu_linglong_setting->items[6], L"黄道：");
+    wcscpy(w_menu_linglong_setting->items[7], L"星芒：");
+    w_menu_linglong_setting->item_num = 8;
+    init_menu(key_event, global_state, w_menu_linglong_setting);
+}
 
 
 ///////////////////////////////////////
 // 菜单条目动作回调
 
 // 主菜单各条目的动作
-int32_t main_menu_item_action(int32_t item_index) {
+int32_t main_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
+    int32_t item_index = ms->current_item_index;
+
     // 0.电子鹦鹉
     if (item_index == 0) {
         init_model_menu();
@@ -373,64 +391,67 @@ int32_t main_menu_item_action(int32_t item_index) {
     return STATE_MAIN_MENU;
 }
 
-int32_t model_menu_item_action(int32_t item_index) {
-    if (global_state->llm_ctx) {
-        llm_context_free(global_state->llm_ctx);
+int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
+    int32_t item_index = ms->current_item_index;
+
+    if (gs->llm_ctx) {
+        llm_context_free(gs->llm_ctx);
     }
 
     int32_t model_count = (int32_t)(sizeof(preset_model_configs) / sizeof(preset_model_configs[0]));
 
     if (item_index < model_count) {
         Model_Config mc = preset_model_configs[item_index];
-        global_state->llm_model_name = mc.model_name;
-        global_state->llm_model_path = mc.model_path;
-        global_state->llm_lora_path = mc.lora_path;
-        global_state->llm_repetition_penalty = mc.repetition_penalty;
-        global_state->llm_temperature = mc.temperature;
-        global_state->llm_top_p = mc.top_p;
-        global_state->llm_top_k = mc.top_k;
-        global_state->llm_max_seq_len = mc.max_seq_len;
+        gs->llm_model_name = mc.model_name;
+        gs->llm_model_path = mc.model_path;
+        gs->llm_lora_path = mc.lora_path;
+        gs->llm_repetition_penalty = mc.repetition_penalty;
+        gs->llm_temperature = mc.temperature;
+        gs->llm_top_p = mc.top_p;
+        gs->llm_top_k = mc.top_k;
+        gs->llm_max_seq_len = mc.max_seq_len;
     }
     else {
         return STATE_MAIN_MENU;
     }
 
     wchar_t llm_loading_prompt[88];
-    swprintf(llm_loading_prompt, 88, L" 正在加载语言模型\n %ls\n 请稍等...", global_state->llm_model_name);
+    swprintf(llm_loading_prompt, 88, L" 正在加载语言模型\n %ls\n 请稍等...", gs->llm_model_name);
 
-    set_textarea(key_event, global_state, w_textarea_main, llm_loading_prompt, 0, 0);
-    draw_textarea(key_event, global_state, w_textarea_main);
+    set_textarea(ke, gs, w_textarea_main, llm_loading_prompt, 0, 0);
+    draw_textarea(ke, gs, w_textarea_main);
 
-    global_state->llm_ctx = llm_context_init(
-        global_state->llm_model_path,
-        global_state->llm_lora_path,
-        global_state->llm_max_seq_len,
-        global_state->llm_repetition_penalty,
-        global_state->llm_temperature,
-        global_state->llm_top_p,
-        global_state->llm_top_k,
-        global_state->timestamp);
+    gs->llm_ctx = llm_context_init(
+        gs->llm_model_path,
+        gs->llm_lora_path,
+        gs->llm_max_seq_len,
+        gs->llm_repetition_penalty,
+        gs->llm_temperature,
+        gs->llm_top_p,
+        gs->llm_top_k,
+        gs->timestamp);
 
     // 以下两条路选一个：
 
     // 1、直接进入电子鹦鹉
-    init_input(key_event, global_state, w_input_main);
+    init_input(ke, gs, w_input_main);
     return STATE_LLM_INPUT;
 
     // 2、或者回到主菜单
-    // refresh_menu(key_event, global_state, w_menu_main);
+    // refresh_menu(ke, gs, w_menu_main);
     // return STATE_MAIN_MENU;
 }
 
-int32_t setting_menu_item_action(int32_t item_index) {
+int32_t setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
+    int32_t item_index = ms->current_item_index;
     // 语言模型生成参数设置
     if (item_index == 0) {
-        set_textarea(key_event, global_state, w_textarea_main, L"暂未实现", 0, 0);
-        draw_textarea(key_event, global_state, w_textarea_main);
+        set_textarea(ke, gs, w_textarea_main, L"暂未实现", 0, 0);
+        draw_textarea(ke, gs, w_textarea_main);
 
         sleep_in_ms(500);
 
-        refresh_menu(key_event, global_state, w_menu_setting);
+        refresh_menu(ke, gs, ms);
         return STATE_SETTING_MENU;
     }
     // TTS设置
@@ -449,29 +470,30 @@ int32_t setting_menu_item_action(int32_t item_index) {
 }
 
 
-int32_t asr_setting_menu_item_action(int32_t item_index) {
+int32_t asr_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
+    int32_t item_index = ms->current_item_index;
     // 0.先编辑再提交
     if (item_index == 0) {
-        global_state->is_auto_submit_after_asr = 0;
+        gs->is_auto_submit_after_asr = 0;
 
-        set_textarea(key_event, global_state, w_textarea_main, L"ASR自动提交已关闭", 0, 0);
-        draw_textarea(key_event, global_state, w_textarea_main);
+        set_textarea(ke, gs, w_textarea_main, L"ASR自动提交已关闭", 0, 0);
+        draw_textarea(ke, gs, w_textarea_main);
 
         sleep_in_ms(500);
 
-        refresh_menu(key_event, global_state, w_menu_asr_setting);
+        refresh_menu(ke, gs, ms);
         return STATE_SETTING_MENU;
     }
     // 1.立刻提交
     else if (item_index == 1) {
-        global_state->is_auto_submit_after_asr = 1;
+        gs->is_auto_submit_after_asr = 1;
 
-        set_textarea(key_event, global_state, w_textarea_main, L"ASR自动提交已开启", 0, 0);
-        draw_textarea(key_event, global_state, w_textarea_main);
+        set_textarea(ke, gs, w_textarea_main, L"ASR自动提交已开启", 0, 0);
+        draw_textarea(ke, gs, w_textarea_main);
 
         sleep_in_ms(500);
 
-        refresh_menu(key_event, global_state, w_menu_asr_setting);
+        refresh_menu(ke, gs, ms);
         return STATE_SETTING_MENU;
     }
     else {
@@ -480,47 +502,81 @@ int32_t asr_setting_menu_item_action(int32_t item_index) {
 }
 
 
-int32_t tts_setting_menu_item_action(int32_t item_index) {
+int32_t tts_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
+    int32_t item_index = ms->current_item_index;
     // 0.关闭
     if (item_index == 0) {
-        global_state->tts_req_mode = 0;
+        gs->tts_req_mode = 0;
 
-        set_textarea(key_event, global_state, w_textarea_main, L"TTS已关闭。", 0, 0);
-        draw_textarea(key_event, global_state, w_textarea_main);
+        set_textarea(ke, gs, w_textarea_main, L"TTS已关闭。", 0, 0);
+        draw_textarea(ke, gs, w_textarea_main);
 
         sleep_in_ms(500);
 
-        refresh_menu(key_event, global_state, w_menu_tts_setting);
+        refresh_menu(ke, gs, ms);
         return STATE_SETTING_MENU;
     }
     // 1.实时TTS
     else if (item_index == 1) {
-        global_state->tts_req_mode = 1;
+        gs->tts_req_mode = 1;
 
-        set_textarea(key_event, global_state, w_textarea_main, L"TTS设置为实时请求。", 0, 0);
-        draw_textarea(key_event, global_state, w_textarea_main);
+        set_textarea(ke, gs, w_textarea_main, L"TTS设置为实时请求。", 0, 0);
+        draw_textarea(ke, gs, w_textarea_main);
 
         sleep_in_ms(500);
 
-        refresh_menu(key_event, global_state, w_menu_tts_setting);
+        refresh_menu(ke, gs, ms);
         return STATE_SETTING_MENU;
     }
     // 2.完成后统一TTS
     else if (item_index == 2) {
-        global_state->tts_req_mode = 2;
+        gs->tts_req_mode = 2;
 
-        set_textarea(key_event, global_state, w_textarea_main, L"TTS设置为全部生成后统一请求。", 0, 0);
-        draw_textarea(key_event, global_state, w_textarea_main);
+        set_textarea(ke, gs, w_textarea_main, L"TTS设置为全部生成后统一请求。", 0, 0);
+        draw_textarea(ke, gs, w_textarea_main);
 
         sleep_in_ms(500);
 
-        refresh_menu(key_event, global_state, w_menu_tts_setting);
+        refresh_menu(ke, gs, ms);
         return STATE_SETTING_MENU;
     }
     else {
         return STATE_TTS_SETTING;
     }
 }
+
+
+int32_t linglong_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
+    int32_t item_index = ms->current_item_index;
+    // 0.时间和位置
+    if (item_index == 0) {
+        return STATE_LINGLONG_TIMELOC;
+    }
+    // 1.陀螺仪
+    else if (item_index == 1) {
+        // 菜单标题：陀螺仪：开/关
+        if (gs->linglong_cfg->enable_imu == 0) {
+            gs->linglong_cfg->enable_imu = 1;
+            ms->items[ms->current_item_index][4] = L'开';
+        }
+        else {
+            gs->linglong_cfg->enable_imu = 0;
+            ms->items[ms->current_item_index][4] = L'关';
+        }
+        refresh_menu(ke, gs, ms);
+        return STATE_LINGLONG_SETTING;
+    }
+    // TODO
+    else {
+        return STATE_LINGLONG;
+    }
+}
+
+
+
+
+
+
 
 
 
@@ -550,6 +606,7 @@ int main() {
     w_menu_setting = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
     w_menu_asr_setting = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
     w_menu_tts_setting = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
+    w_menu_linglong_setting = (Widget_Menu_State*)calloc(1, sizeof(Widget_Menu_State));
 
 
     ///////////////////////////////////////
@@ -1133,34 +1190,81 @@ int main() {
             global_state->PREV_STATE = global_state->STATE;
 
 #ifdef IMU_ENABLED
-            int ret = -1;
-            int32_t imu_count = 3000;
-            do {
-                // 根据IMU安装方式调整
-                ret = imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
+            if (global_state->linglong_cfg->enable_imu) {
+                int ret = -1;
+                int32_t imu_count = 3000;
+                do {
+                    // 根据IMU安装方式调整
+                    ret = imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
 
-                // 以下代码适配 NANO_POD_PLUS_CUBIE_A7Z （2026-03-02制作的单板原型）
-                // ret = imu_read_angle(&(global_state->roll), &(global_state->pitch), &(global_state->yaw));
-                // global_state->pitch = -global_state->pitch;
-                // global_state->yaw = -global_state->yaw;
+                    // 以下代码适配 NANO_POD_PLUS_CUBIE_A7Z （2026-03-02制作的单板原型）
+                    // ret = imu_read_angle(&(global_state->roll), &(global_state->pitch), &(global_state->yaw));
+                    // global_state->pitch = -global_state->pitch;
+                    // global_state->yaw = -global_state->yaw;
 
-                imu_count--;
-                if (imu_count <= 0) {
-                    printf("IMU读取超时，重置\n");
-                    imu_reset();
-                    break;
-                }
-            } while(ret != 0);
-
-            printf("俯仰=%-10.2f    滚转=%-10.2f    航向=%-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw);
+                    imu_count--;
+                    if (imu_count <= 0) {
+                        printf("IMU读取超时，重置\n");
+                        imu_reset();
+                        break;
+                    }
+                } while(ret != 0);
+                printf("俯仰=%-10.2f    滚转=%-10.2f    航向=%-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw);
+            }
 #endif
 
             draw_ephemeris_screen(key_event, global_state);
 
+            // 按2键抬头（pitch++）
+            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_2) {
+                global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
+                global_state->linglong_cfg->view_alt += 5.0f;
+                if (global_state->linglong_cfg->view_alt >= 90.0f) {
+                    global_state->linglong_cfg->view_alt = 90.0f;
+                }
+            }
+            // 按4键向东旋转（yaw--）
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_4) {
+                global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
+                global_state->linglong_cfg->view_azi -= 5.0f;
+                if (global_state->linglong_cfg->view_azi <= 0.0f) {
+                    global_state->linglong_cfg->view_azi = 360.0f;
+                }
+            }
+            // 按5键归中，或切换陀螺仪状态
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_5) {
+                // 如果IMU已关闭，则开启
+                if (global_state->linglong_cfg->enable_imu == 0) {
+                    global_state->linglong_cfg->enable_imu = 1;
+                }
+                // 如果IMU已开启，则关闭并归中
+                else {
+                    global_state->linglong_cfg->enable_imu = 0;
+                    global_state->linglong_cfg->view_alt = 90.0f;
+                    global_state->linglong_cfg->view_azi = 180.0f;
+                    global_state->linglong_cfg->view_f = 1.0f;
+                }
+            }
+            // 按6键向西旋转（yaw++）
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_6) {
+                global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
+                global_state->linglong_cfg->view_azi += 5.0f;
+                if (global_state->linglong_cfg->view_azi >= 360.0f) {
+                    global_state->linglong_cfg->view_azi = 0.0f;
+                }
+            }
             // 按7键拉远
-            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_7) {
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_7) {
                 global_state->linglong_cfg->view_f -= 0.1f;
                 if (global_state->linglong_cfg->view_f <= 0.1f) global_state->linglong_cfg->view_f = 0.1f;
+            }
+            // 按8键低头（pitch--）
+            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_8) {
+                global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
+                global_state->linglong_cfg->view_alt -= 5.0f;
+                if (global_state->linglong_cfg->view_alt <= -90.0f) {
+                    global_state->linglong_cfg->view_alt = -90.0f;
+                }
             }
             // 按9键推近
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_9) {
@@ -1171,17 +1275,11 @@ int main() {
             else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
                 global_state->STATE = STATE_MAIN_MENU;
             }
-#ifdef IMU_ENABLED
-            // 按B键重新校准IMU
+            // 按B键打开玲珑仪设置菜单
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_B) {
-                set_textarea(key_event, global_state, w_textarea_main, L" \n \n    正在校准IMU...", 0, 0);
-                draw_textarea(key_event, global_state, w_textarea_main);
-                imu_calib();
-                sleep_in_ms(500);
-                set_textarea(key_event, global_state, w_textarea_main, L" \n \n    校准完成", 0, 0);
-                draw_textarea(key_event, global_state, w_textarea_main);
+                init_linglong_setting_menu();
+                global_state->STATE = STATE_LINGLONG_SETTING;
             }
-#endif
             // 按C键切换玲珑仪版本
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_C) {
                 ephemeris_toggle_linglong_version(key_event, global_state);
@@ -1190,6 +1288,17 @@ int main() {
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
                 ephemeris_toggle_speedup(key_event, global_state);
             }
+#ifdef IMU_ENABLED
+            // 按*键重新校准IMU
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_STAR) {
+                set_textarea(key_event, global_state, w_textarea_main, L" \n \n    正在校准IMU...", 0, 0);
+                draw_textarea(key_event, global_state, w_textarea_main);
+                imu_calib();
+                sleep_in_ms(500);
+                set_textarea(key_event, global_state, w_textarea_main, L" \n \n    校准完成", 0, 0);
+                draw_textarea(key_event, global_state, w_textarea_main);
+            }
+#endif
 
             break;
 
@@ -1319,9 +1428,30 @@ int main() {
             break;
 
 
+        /////////////////////////////////////////////
+        // 玲珑仪设置
+        /////////////////////////////////////////////
+
+        case STATE_LINGLONG_SETTING:
+
+            // 首次获得焦点：初始化
+            if (global_state->PREV_STATE != global_state->STATE) {
+                refresh_menu(key_event, global_state, w_menu_linglong_setting);
+            }
+            global_state->PREV_STATE = global_state->STATE;
+
+            global_state->STATE = menu_event_handler(key_event, global_state, w_menu_linglong_setting, linglong_setting_menu_item_action, STATE_LINGLONG, STATE_LINGLONG_SETTING);
+
+            break;
 
 
+        /////////////////////////////////////////////
+        // 玲珑仪时间地点设置
+        /////////////////////////////////////////////
 
+        case STATE_LINGLONG_TIMELOC:
+
+            break;
 
 
 

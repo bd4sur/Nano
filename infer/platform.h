@@ -48,9 +48,9 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 #endif
 
 // ===============================================================================
-// Nano-Pod: Raspberry Pi 5
+// Nano-Pod-Lite: Raspberry Pi 5
 // ===============================================================================
-#if defined(NANO_POD_RPI5)
+#if defined(NANO_POD_LITE_RPI5)
 
     // UI字符串缓冲区最大长度限制
     #define UI_STR_BUF_MAX_LENGTH (16384)
@@ -101,9 +101,9 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 
 
 // ===============================================================================
-// Nano-Pod-Plus: Raspberry Pi 5 + SPI LCD + IMU
+// Nano-Pod: Raspberry Pi 5 + SPI LCD + IMU
 // ===============================================================================
-#elif defined(NANO_POD_PLUS_RPI5)
+#elif defined(NANO_POD_RPI5)
 
     // UI字符串缓冲区最大长度限制
     #define UI_STR_BUF_MAX_LENGTH (16384)
@@ -158,9 +158,9 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 
 
 // ===============================================================================
-// Nano-Pod: Rock 5B+
+// Nano-Pod-Lite: Rock 5B+
 // ===============================================================================
-#elif defined(NANO_POD_ROCK5BP)
+#elif defined(NANO_POD_LITE_ROCK5BP)
 
     // UI字符串缓冲区最大长度限制
     #define UI_STR_BUF_MAX_LENGTH (16384)
@@ -211,9 +211,9 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 
 
 // ===============================================================================
-// Nano-Pod: Cubie-A7Z
+// Nano-Pod-Lite: Cubie-A7Z
 // ===============================================================================
-#elif defined(NANO_POD_CUBIE_A7Z)
+#elif defined(NANO_POD_LITE_CUBIE_A7Z)
 
     // UI字符串缓冲区最大长度限制
     #define UI_STR_BUF_MAX_LENGTH (16384)
@@ -264,9 +264,9 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 
 
 // ===============================================================================
-// Nano-Pod-Plus: Cubie-A7Z + SPI LCD + IMU
+// Nano-Pod: Cubie-A7Z + SPI LCD + IMU
 // ===============================================================================
-#elif defined(NANO_POD_PLUS_CUBIE_A7Z)
+#elif defined(NANO_POD_CUBIE_A7Z)
 
     // UI字符串缓冲区最大长度限制
     #define UI_STR_BUF_MAX_LENGTH (16384)
@@ -321,9 +321,9 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 
 
 // ===============================================================================
-// Nano-Pod: Make Router Great Again 京东云RE-CS-02、红米AX5等
+// Nano-Pod-Lite: Make Router Great Again 京东云RE-CS-02、红米AX5等
 // ===============================================================================
-#elif defined(NANO_POD_MARGA)
+#elif defined(NANO_POD_LITE_MARGA)
 
     // UI字符串缓冲区最大长度限制
     #define UI_STR_BUF_MAX_LENGTH (16384)

@@ -905,7 +905,7 @@ int32_t input_event_handler(
 
 
 void init_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
-    menu_state->current_item_intex = 0;
+    menu_state->current_item_index = 0;
     menu_state->first_item_intex = 0;
     uint32_t max_items_per_page = (global_state->gfx->height - FONT_HEIGHT + 1) / (FONT_HEIGHT + 1);
     menu_state->items_per_page = (menu_state->item_num > max_items_per_page) ? max_items_per_page : menu_state->item_num;
@@ -926,7 +926,7 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
     // 菜单首行：标题和选项数
     gfx_draw_textline(global_state->gfx, menu_state->title, x_indent, 0, 0, 255, 255, 1);
     wchar_t item_counter[13];
-    swprintf(item_counter, 13, L"%d/%d", menu_state->current_item_intex + 1, menu_state->item_num);
+    swprintf(item_counter, 13, L"%d/%d", menu_state->current_item_index + 1, menu_state->item_num);
     int32_t iclen = wcslen(item_counter);
     gfx_draw_textline(global_state->gfx, item_counter, (global_state->gfx->width-2) - iclen * 6, 0, 255, 255, 0, 1);
 
@@ -936,7 +936,7 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
         if (i == menu_state->first_item_intex + menu_state->items_per_page) {
             break;
         }
-        if (i != menu_state->current_item_intex) {
+        if (i != menu_state->current_item_index) {
             is_highlight = 0;
         }
         else {
@@ -964,14 +964,14 @@ void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_Sta
 // 通用的菜单事件处理+回调注册
 int32_t menu_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Menu_State *ms,
-    int32_t (*menu_item_action_callback)(int32_t), int32_t prev_focus_state, int32_t current_focus_state
+    int32_t (*menu_item_action_callback)(Key_Event*, Global_State*, Widget_Menu_State*), int32_t prev_focus_state, int32_t current_focus_state
 ) {
     // 短按1-9数字键：直接选中屏幕上显示的那页的相对第几项
     // NOTE 从1开始
     if (ke->key_edge == -1 && (ke->key_code >= KEYCODE_NUM_1 && ke->key_code <= KEYCODE_NUM_9)) {
         if (ke->key_code <= ms->items_per_page) {
-            ms->current_item_intex = ms->first_item_intex + (uint32_t)(ke->key_code) - 1;
-            return menu_item_action_callback(ms->current_item_intex);
+            ms->current_item_index = ms->first_item_intex + (uint32_t)(ke->key_code) - 1;
+            return menu_item_action_callback(ke, gs, ms);
         }
     }
     // 短按A键：返回上一个焦点状态
@@ -980,20 +980,20 @@ int32_t menu_event_handler(
     }
     // 短按D键：执行菜单项对应的功能
     else if (ke->key_edge == -1 && ke->key_code == KEYCODE_NUM_D) {
-        return menu_item_action_callback(ms->current_item_intex);
+        return menu_item_action_callback(ke, gs, ms);
     }
     // 长+短按*键：光标向上移动
     else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_STAR) {
-        if (ms->first_item_intex == 0 && ms->current_item_intex == 0) {
+        if (ms->first_item_intex == 0 && ms->current_item_index == 0) {
             ms->first_item_intex = ms->item_num - ms->items_per_page;
-            ms->current_item_intex = ms->item_num - 1;
+            ms->current_item_index = ms->item_num - 1;
         }
-        else if (ms->current_item_intex == ms->first_item_intex) {
+        else if (ms->current_item_index == ms->first_item_intex) {
             ms->first_item_intex--;
-            ms->current_item_intex--;
+            ms->current_item_index--;
         }
         else {
-            ms->current_item_intex--;
+            ms->current_item_index--;
         }
 
         draw_menu(ke, gs, ms);
@@ -1002,16 +1002,16 @@ int32_t menu_event_handler(
     }
     // 长+短按#键：光标向下移动
     else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_HASH) {
-        if (ms->first_item_intex == ms->item_num - ms->items_per_page && ms->current_item_intex == ms->item_num - 1) {
+        if (ms->first_item_intex == ms->item_num - ms->items_per_page && ms->current_item_index == ms->item_num - 1) {
             ms->first_item_intex = 0;
-            ms->current_item_intex = 0;
+            ms->current_item_index = 0;
         }
-        else if (ms->current_item_intex == ms->first_item_intex + ms->items_per_page - 1) {
+        else if (ms->current_item_index == ms->first_item_intex + ms->items_per_page - 1) {
             ms->first_item_intex++;
-            ms->current_item_intex++;
+            ms->current_item_index++;
         }
         else {
-            ms->current_item_intex++;
+            ms->current_item_index++;
         }
 
         draw_menu(ke, gs, ms);
@@ -1353,9 +1353,11 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
     llcfg->year = timeinfo->tm_year + 1900;
 
 
-    llcfg->view_alt  = global_state->pitch;
-    llcfg->view_azi  = global_state->yaw + 180.0f;
-    llcfg->view_roll = global_state->roll;
+    if (llcfg->enable_imu) {
+        llcfg->view_alt  = global_state->pitch;
+        llcfg->view_azi  = global_state->yaw + 180.0f;
+        llcfg->view_roll = global_state->roll;
+    }
 
 
     render_sky(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height,
@@ -1521,7 +1523,9 @@ void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
 
 void ephemeris_toggle_speedup(Key_Event *key_event, Global_State *global_state) {
     is_speed_up = !is_speed_up;
-    start_timestamp = global_state->timestamp;
+    if (start_timestamp == 0) {
+        start_timestamp = global_state->timestamp;
+    }
 }
 
 void ephemeris_toggle_linglong_version(Key_Event *key_event, Global_State *global_state) {

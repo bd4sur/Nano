@@ -671,7 +671,7 @@ void DEV_HARDWARE_SPI_begin(char *SPI_device)
         printf("can't get bits per word\r\n");
     }
 
-    int speed = 80000000;
+    int speed = 96000000;
     ret = ioctl(hardware_SPI.fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed);
     if (ret == -1)
     {

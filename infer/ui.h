@@ -24,7 +24,7 @@ extern "C" {
 #define MAX_CANDIDATE_NUM_PER_PAGE (10) // 每页最多有几个候选字（每页10个字）
 
 #define MAX_MENU_ITEMS (128)
-#define MAX_MENU_ITEM_LEN (24)
+#define MAX_MENU_ITEM_LEN (64)
 
 struct Nano_Context;
 struct Nano_Session;
@@ -145,7 +145,7 @@ typedef struct {
 } Widget_Input_State;
 
 typedef struct {
-    int32_t current_item_intex; // 当前选中（高亮）的条目的标号（注意：选中条目不一定在显示的页面范围内）
+    int32_t current_item_index; // 当前选中（高亮）的条目的标号（注意：选中条目不一定在显示的页面范围内）
     int32_t first_item_intex; // 当前页面显示的第一个条目的标号
     int32_t item_num; // 菜单条目数
     int32_t items_per_page; // 每页容纳的条目数
@@ -182,7 +182,7 @@ void refresh_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_
 void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
 int32_t menu_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Menu_State *ms,
-    int32_t (*menu_item_action_callback)(int32_t), int32_t prev_focus_state, int32_t current_focus_state
+    int32_t (*menu_item_action_callback)(Key_Event*, Global_State*, Widget_Menu_State*), int32_t prev_focus_state, int32_t current_focus_state
 );
 
 void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
