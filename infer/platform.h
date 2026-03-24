@@ -502,8 +502,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     #define NCURSES
     // #define OLED_I2C_ADDR (0x3c)
-    #define SCREEN_WIDTH  (240)
-    #define SCREEN_HEIGHT (320)
+    #define SCREEN_WIDTH  (320)
+    #define SCREEN_HEIGHT (240)
 
     // 键盘
     // #define KB_I2C_ADDR (0x27)

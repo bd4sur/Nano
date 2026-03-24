@@ -1363,7 +1363,7 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
     render_sky(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height,
         MIN(global_state->gfx->width, global_state->gfx->height) / 2, global_state->gfx->width / 2, global_state->gfx->height / 2,
         llcfg->view_alt, llcfg->view_azi, llcfg->view_roll, llcfg->view_f,
-        // 2026, 2, 25, 12, 0, 0, 8.0, 119.0, 31.0,
+        // 2026, 3, 24, 18, 10, 0, 8.0, 119.0, 31.0,
         llcfg->year, llcfg->month, llcfg->day, llcfg->hour, llcfg->minute, llcfg->second, llcfg->timezone, llcfg->longitude, llcfg->latitude,
         llcfg->downsampling_factor,
         llcfg->enable_opt_sym,

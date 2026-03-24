@@ -74,6 +74,7 @@ static const float STARS[STARS_NUM][7] = {
     {18.0f, 36.0f, 55.2f,     38.0f, 46.0f, 59.8f,   0.03f}, // 织女一
     {19.0f, 50.0f, 46.6f,      8.0f, 52.0f, 10.9f,   0.76f}, // 河鼓二
     { 0.0f, 42.0f, 43.6f,     41.0f, 16.0f, 15.7f,   3.40f}, // M31
+    { 5.0f, 35.0f,  8.3f,      9.0f, 56.0f,  3.0f,   3.54f}, // 觜宿一
     { 5.0f, 55.0f, 11.4f,      7.0f, 24.0f, 22.2f,   0.42f}, // 参宿四
     { 5.0f, 25.0f,  8.8f,      6.0f, 20.0f, 55.1f,   1.64f}, // 参宿五
     { 5.0f, 40.0f, 46.6f,     -1.0f, 56.0f, 38.7f,   1.77f}, // 参宿一
@@ -88,7 +89,7 @@ static const float STARS[STARS_NUM][7] = {
 static const wchar_t STAR_NAME[STARS_NUM][10] = {
     L"北极星", L"天枢", L"", L"", L"", L"", L"开阳", L"",
     L"天狼", L"大角", L"织女一", L"河鼓二", L"M31",
-    L"参宿四", L"", L"", L"", L"", L"", L"参宿七", L"", L"昴宿星团"
+    L"", L"参宿四", L"", L"", L"", L"", L"", L"参宿七", L"", L"昴宿星团"
 };
 
 
@@ -1160,7 +1161,8 @@ void draw_horizon(
     int32_t enable_atmosphere_scattering, uint8_t atmo_r, uint8_t atmo_g, uint8_t atmo_b
 ) {
     float margin = LINGLONG_HORIZON_BLUR_MARGIN;
-    float k = MAX(0.2f, sinf(to_rad_float(sun_alt)) * 1.5f);
+    // float k = MAX(0.2f, sinf(to_rad_float(sun_alt)) * 1.5f);
+    float k = (1.0f / M_PI) * atanf((sun_alt - 6.0f) / 6.0f) + 0.5f + 0.2f;
     float max_scattering_depth = 0.8;
     float hx = 0.0f;
     float hy = 0.0f;
@@ -1726,7 +1728,7 @@ void draw_star(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float bgLum = get_luminance(bgR, bgG, bgB);
 
     // 遍历光晕区域（正方形包围圆）
-    int32_t R = (int32_t)radius + maxGlowRadius;
+    int32_t R = 0; // (int32_t)radius + maxGlowRadius;
     for (int32_t dy = -R; dy <= R; dy++) {
         for (int32_t dx = -R; dx <= R; dx++) {
             float dist = sqrtf(dx * dx + dy * dy);
@@ -2066,6 +2068,438 @@ void scatter_model_2(
 }
 
 
+/* ================================================================
+ * 大气物理常数（国际单位制，长度单位：米）
+ *
+ * 模型基于 Nishita et al. 1993，扩展如下改进：
+ *   · 球形几何（精确射线-球面求交）
+ *   · 逐采样点地球遮蔽阴影检测
+ *   · 二阶多次散射（对天球方向的数值积分）
+ * ================================================================ */
+static const float S3_Re  = 6360e3f;          /* 地球半径 (m) */
+static const float S3_Ra  = 6420e3f;          /* 大气层外边界半径 (m) */
+static const float S3_Hr  = 7994.0f;          /* Rayleigh 标高 (m) */
+static const float S3_Hm  = 1200.0f;          /* Mie 标高 (m) */
+
+/* Rayleigh 海平面散射系数 (m⁻¹)，对应 R(680nm) / G(550nm) / B(440nm) */
+static const float S3_bR0 = 5.8e-6f;
+static const float S3_bR1 = 13.5e-6f;
+static const float S3_bR2 = 33.1e-6f;
+static const float S3_bM  = 16e-6f;           /* Mie 散射系数 (m⁻¹) */
+static const float S3_bMe = 16e-6f * 0.1f;    /* Mie 消光系数 ≈ 1.1 × 散射系数 NOTE 防止地平线消光过度，故将其调整到0.1 */
+static const float S3_g   = 0.76f;            /* Mie 各向异性参数（前向散射优势） */
+static const float S3_SUN = 20.0f;            /* 太阳强度归一化系数 */
+
+/* 上半球离散采样方向（原始未归一化值，在函数入口处完成归一化）
+ * 索引顺序：天顶、偏东上、偏西上、偏北上、偏南上、东北、西北、东南、西南
+ * 重要：这些是固定的物理方向，不含任何太阳角度阈值逻辑。 */
+static const float s3_amb_raw_x[9] = {  0.0f,  1.0f, -1.0f,  0.0f,  0.0f,  1.0f, -1.0f,  1.0f, -1.0f };
+static const float s3_amb_raw_y[9] = {  0.0f,  0.0f,  0.0f,  1.0f, -1.0f,  1.0f,  1.0f, -1.0f, -1.0f };
+static const float s3_amb_raw_z[9] = {  1.0f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f };
+
+/* ================================================================
+ * 散射相位函数
+ *
+ * 参数约定与 Nishita 参考代码一致：
+ *   μ = dot(视线方向 d, 太阳方向 sunDir)
+ *
+ * 物理意义：μ 是视线方向与太阳方向的夹角余弦。
+ * 对于 Rayleigh（μ² 对称），取值方向不影响结果；
+ * 对于 Mie（g=0.76 前向散射），μ=1 时达到峰值，
+ * 即观测者朝向太阳时散射最强——物理上正确。
+ * ================================================================ */
+static float s3_phaseR(float mu) {
+    return 3.0f / (16.0f * (float)M_PI) * (1.0f + mu * mu);
+}
+
+static float s3_phaseM(float mu) {
+    float base = 1.0f + S3_g * S3_g - 2.0f * S3_g * mu;
+    if (base < 1e-10f) base = 1e-10f;
+    return 3.0f / (8.0f * (float)M_PI)
+           * ((1.0f - S3_g * S3_g) * (1.0f + mu * mu))
+           / ((2.0f + S3_g * S3_g) * powf(base, 1.5f));
+}
+
+/* ================================================================
+ * 射线–球面求交（球心在坐标原点，半径 r）
+ *
+ * |o + t·d|² = r²  =>  t² + 2(o·d)t + (|o|²−r²) = 0
+ *
+ * 注意：若射线起点在球内（如大气内），则 t₀ < 0 < t₁，
+ * 调用处应取 t = max(0, t₀) 作为积分起点。
+ *
+ * 返回 1  → 有交点，结果写入 *t0, *t1；
+ * 返回 0 → 判别式小于 0，无交点。
+ * ================================================================ */
+static int32_t s3_rsi(
+    float ox, float oy, float oz,
+    float dx, float dy, float dz,
+    float r,
+    float *t0, float *t1) {
+    float b    = 2.0f * (ox * dx + oy * dy + oz * dz);
+    float c    = (ox * ox + oy * oy + oz * oz) - r * r;
+    float disc = b * b - 4.0f * c;       /* a = 1（d 已归一化） */
+    if (disc < 0.0f) return 0;
+    float sq = sqrtf(disc);
+    *t0 = (-b - sq) * 0.5f;
+    *t1 = (-b + sq) * 0.5f;
+    return 1;
+}
+
+/* ================================================================
+ * 核心单次散射步进（Nishita 1993，公式 4 / 5）
+ *
+ * 沿射线 o + t·d（t ∈ [t0, t1]）数值积分。
+ * 主射线取 nV 个采样点，每点向太阳方向追踪 nL 个次级采样，
+ * 判断是否被地球遮挡，并计算两段路径的合并透射率。
+ *
+ * 输出（通过指针参数）：
+ *   *sumR0/1/2 = Σᵢ exp(−τᶜᵢ) · ρR(hᵢ) · Δs   （Rayleigh 加权积分）
+ *   *sumM0/1/2 = Σᵢ exp(−τᶜᵢ) · ρM(hᵢ) · Δs   （Mie 加权积分）
+ *
+ * 最终颜色 = (sumR[c]·βR[c]·PR + sumM[c]·βM·PM) · SUN
+ * ================================================================ */
+static void s3_marchRay(
+    float ox,     float oy,     float oz,
+    float dx,     float dy,     float dz,
+    float t0,     float t1,     int nV,   int nL,
+    float sun_dx, float sun_dy, float sun_dz,
+    float *out_sumR0, float *out_sumR1, float *out_sumR2,
+    float *out_sumM0, float *out_sumM1, float *out_sumM2
+) {
+    float segLen = (t1 - t0) / (float)nV;
+    float sumR0 = 0.0f, sumR1 = 0.0f, sumR2 = 0.0f;
+    float sumM0 = 0.0f, sumM1 = 0.0f, sumM2 = 0.0f;
+    float odR = 0.0f, odM = 0.0f;    /* 沿主射线从起点累积的光学深度 */
+
+    for (int i = 0; i < nV; i++) {
+        float t     = t0 + ((float)i + 0.5f) * segLen;
+        float pos_x = ox + dx * t;
+        float pos_y = oy + dy * t;
+        float pos_z = oz + dz * t;
+        float h     = sqrtf(pos_x * pos_x + pos_y * pos_y + pos_z * pos_z) - S3_Re;
+        /* if (h < 0.0f) continue; */   /* 采样点位于地表以下，跳过 */
+
+        /* 当前采样点的大气密度（指数衰减）× 路径增量 */
+        float dR = expf(-h / S3_Hr) * segLen;
+        float dM = expf(-h / S3_Hm) * segLen;
+        odR += dR;
+        odM += dM;
+
+        /* ── 向太阳方向追踪次级射线 ── */
+        float sh_t0, sh_t1;
+        if (!s3_rsi(pos_x, pos_y, pos_z, sun_dx, sun_dy, sun_dz, S3_Ra, &sh_t0, &sh_t1))
+            continue;
+        if (sh_t1 <= 0.0f) continue;
+
+        float lSeg    = sh_t1 / (float)nL;
+        float lR      = 0.0f, lM = 0.0f;
+        int32_t blocked = 0;
+
+        for (int j = 0; j < nL; j++) {
+            float lt   = ((float)j + 0.5f) * lSeg;
+            float lp_x = pos_x + sun_dx * lt;
+            float lp_y = pos_y + sun_dy * lt;
+            float lp_z = pos_z + sun_dz * lt;
+            float lh   = sqrtf(lp_x * lp_x + lp_y * lp_y + lp_z * lp_z) - S3_Re;
+            if (lh < 0.0f) { blocked = 1; break; }   /* ← 地球遮蔽：此采样点无直射阳光 */
+            lR += expf(-lh / S3_Hr) * lSeg;
+            lM += expf(-lh / S3_Hm) * lSeg;
+        }
+        if (blocked) continue;   /* 整段太阳射线被遮，跳过此视线采样点 */
+
+        /* 合并透射率（公式5：e^a · e^b = e^(a+b)，避免两次指数调用） */
+        float odR_lR = odR + lR;
+        float odM_lM = odM + lM;
+        float tau0   = S3_bR0 * odR_lR + S3_bMe * odM_lM;
+        float tau1   = S3_bR1 * odR_lR + S3_bMe * odM_lM;
+        float tau2   = S3_bR2 * odR_lR + S3_bMe * odM_lM;
+        float atten0 = expf(-tau0);
+        float atten1 = expf(-tau1);
+        float atten2 = expf(-tau2);
+        sumR0 += atten0 * dR;   sumM0 += atten0 * dM;
+        sumR1 += atten1 * dR;   sumM1 += atten1 * dM;
+        sumR2 += atten2 * dR;   sumM2 += atten2 * dM;
+    }
+
+    *out_sumR0 = sumR0;  *out_sumR1 = sumR1;  *out_sumR2 = sumR2;
+    *out_sumM0 = sumM0;  *out_sumM1 = sumM1;  *out_sumM2 = sumM2;
+}
+
+/* HDR 色调映射（原 JS 局部内联函数，移至函数外部） */
+static float s3_hdr_mapping(float x) {
+    const float e = 0.2f;
+    return (sqrtf(1.0f + e) / 2.0f)
+           * (sqrtf((1.0f + x) * (1.0f + x) + e)
+              - sqrtf((1.0f - x) * (1.0f - x) + e));
+}
+
+/* ================================================================
+ * scatter_model_3：大气散射主函数
+ * ================================================================ */
+void scatter_model_3(
+    float ray_x, float ray_y, float ray_z,
+    float sun_x, float sun_y, float sun_z,
+    float *red, float *green, float *blue,   /* Output */
+    int32_t enable_opt_lut                   /* dummy */
+) {
+    (void)enable_opt_lut;
+
+    /* ================================================================
+     * 输入归一化与有效性检验
+     * ================================================================ */
+    float ray_proc_x = ray_x;
+    float ray_proc_y = ray_y;
+    float ray_proc_z = (ray_z < 0.0f) ? -ray_z : ray_z;
+
+    /* dir = vNorm(ray_vec_processed) */
+    float ray_proc_len = sqrtf(  ray_proc_x * ray_proc_x
+                               + ray_proc_y * ray_proc_y
+                               + ray_proc_z * ray_proc_z);
+    float dir_x, dir_y, dir_z;
+    if (ray_proc_len > 1e-12f) {
+        dir_x = ray_proc_x / ray_proc_len;
+        dir_y = ray_proc_y / ray_proc_len;
+        dir_z = ray_proc_z / ray_proc_len;
+    } else {
+        dir_x = 0.0f;  dir_y = 0.0f;  dir_z = 0.0f;
+    }
+
+    /* sunDir = vNorm(sun_vec) */
+    float sun_len = sqrtf(sun_x * sun_x + sun_y * sun_y + sun_z * sun_z);
+    float sunDir_x, sunDir_y, sunDir_z;
+    if (sun_len > 1e-12f) {
+        sunDir_x = sun_x / sun_len;
+        sunDir_y = sun_y / sun_len;
+        sunDir_z = sun_z / sun_len;
+    } else {
+        sunDir_x = 0.0f;  sunDir_y = 0.0f;  sunDir_z = 0.0f;
+    }
+
+    /* if (vLen(dir) < 0.5 || vLen(sunDir) < 0.5) return [0, 0, 0] */
+    float dir_vlen    = sqrtf(dir_x    * dir_x    + dir_y    * dir_y    + dir_z    * dir_z);
+    float sunDir_vlen = sqrtf(sunDir_x * sunDir_x + sunDir_y * sunDir_y + sunDir_z * sunDir_z);
+    if (dir_vlen < 0.5f || sunDir_vlen < 0.5f) {
+        *red = 0.0f;  *green = 0.0f;  *blue = 0.0f;
+        return;
+    }
+
+    /* 观测者位于海平面（坐标系：Z 轴朝上，与原代码一致） */
+    const float orig_x = 0.0f;
+    const float orig_y = 0.0f;
+    const float orig_z = S3_Re + 1.0f;
+
+    /* 太阳仰角 */
+    float sdir_z_cl       = sunDir_z < -1.0f ? -1.0f : (sunDir_z > 1.0f ? 1.0f : sunDir_z);
+    float sunElevation    = asinf(sdir_z_cl);              /* [-π/2, π/2] */
+    float sunElevationDeg = sunElevation * 180.0f / (float)M_PI;
+
+    /* 观察者视线的仰角、天顶角 */
+    float dir_z_cl         = dir_z < 0.0f ? 0.0f : (dir_z > 1.0f ? 1.0f : dir_z);
+    float viewZenith       = acosf(dir_z_cl);
+    float viewZenithDeg    = viewZenith * 180.0f / (float)M_PI;
+    float viewElevationDeg = 90.0f - viewZenithDeg;
+
+    /* ================================================================
+     * 确定主视线与大气球的有效积分范围
+     * ================================================================ */
+    float atmHit_t0, atmHit_t1;
+    if (!s3_rsi(orig_x, orig_y, orig_z, dir_x, dir_y, dir_z, S3_Ra,
+                &atmHit_t0, &atmHit_t1)
+        || atmHit_t1 < 0.0f) {
+        *red = 0.0f;  *green = 0.0f;  *blue = 0.0f;
+        return;
+    }
+    float tMin = (atmHit_t0 > 0.0f) ? atmHit_t0 : 0.0f;
+    float tMax = atmHit_t1;
+
+    float earthHit_t0, earthHit_t1;
+    if (s3_rsi(orig_x, orig_y, orig_z, dir_x, dir_y, dir_z, S3_Re,
+               &earthHit_t0, &earthHit_t1)
+        && earthHit_t0 > 1.0f) {
+        /* 视线从外部射入地球（观测者在地面以上，ray 指向地面方向） */
+        if (earthHit_t0 < tMax) tMax = earthHit_t0;
+    }
+
+    if (tMax <= tMin) {
+        *red = 0.0f;  *green = 0.0f;  *blue = 0.0f;
+        return;
+    }
+
+    /* ================================================================
+     * 一阶单次散射（Nishita 核心路径积分）
+     * ================================================================ */
+    float mu1 = dir_x * sunDir_x + dir_y * sunDir_y + dir_z * sunDir_z;
+    float pR1 = s3_phaseR(mu1);
+    float pM1 = s3_phaseM(mu1);
+
+    float sc1_sumR0, sc1_sumR1, sc1_sumR2;
+    float sc1_sumM0, sc1_sumM1, sc1_sumM2;
+    s3_marchRay(
+        orig_x, orig_y, orig_z,
+        dir_x,  dir_y,  dir_z,
+        tMin, tMax, 50, 1,
+        sunDir_x, sunDir_y, sunDir_z,
+        &sc1_sumR0, &sc1_sumR1, &sc1_sumR2,
+        &sc1_sumM0, &sc1_sumM1, &sc1_sumM2);
+
+    /* color 数组直接累加后续贡献，此处先写入一阶结果 */
+    float color0 = (sc1_sumR0 * S3_bR0 * pR1 + sc1_sumM0 * S3_bM * pM1) * S3_SUN;
+    float color1 = (sc1_sumR1 * S3_bR1 * pR1 + sc1_sumM1 * S3_bM * pM1) * S3_SUN;
+    float color2 = (sc1_sumR2 * S3_bR2 * pR1 + sc1_sumM2 * S3_bM * pM1) * S3_SUN;
+
+    /* ================================================================
+     * 二阶多次散射（第一性原理数值积分）
+     *
+     * 物理机制：视线上每个采样点 X 除接受直射阳光（一阶散射）外，
+     * 还受到来自其他方向的已散射天光照射。
+     *
+     * 晨昏时段：下层大气处于地球阴影中，一阶散射贡献极少；
+     * 但高层大气仍在阳光照射下，并向各方向发出一次散射天光，
+     * 这些光子到达 X 后再次散射至观测者——这是真实黄昏/晨曦
+     * 天空亮度的主要物理来源，无需任何阈值判断，完全由几何决定。
+     *
+     * 积分公式（对视线路径和天球方向各取一次数值积分）：
+     *
+     *   L₂(eye) = ∫_view T(eye→X) ·
+     *       ∫_{4π} L₁(X,ω) · [βR·PR(ω,d) + βM·PM(ω,d)] · dω · dt
+     *
+     *   其中：
+     *     · T(eye→X)  : 视线方向的透射率（已在主射线中累积）
+     *     · L₁(X,ω)   : 从 X 沿方向 ω 的一次散射天光辐亮度
+     *                    由轻量 marchRay 调用计算（4+4 采样）
+     *     · βR·PR + βM·PM : X 处将入射天光向观测者方向散射的强度
+     *     · 球面积分用 N_AMB 个均匀方向蒙特卡洛离散化（dΩ = 2π/N）
+     *
+     * 相位函数方向约定：
+     *     入射光子行进方向 = −ω（天光从方向 ω 射向 X）
+     *     出射光子行进方向 = −d（从 X 射向眼睛，d = orig→X 方向）
+     *     μ_scatter = cos θ = dot(−ω, −d) = dot(ω, d)
+     * ================================================================ */
+
+    /* 上半球离散采样方向（9 方向，准均匀覆盖上半球 2π sr）
+     * 重要：这些是固定的物理方向，不含任何太阳角度阈值逻辑 */
+    float ambDirs_x[9], ambDirs_y[9], ambDirs_z[9];
+    for (int k = 0; k < 9; k++) {
+        float l = sqrtf(  s3_amb_raw_x[k] * s3_amb_raw_x[k]
+                        + s3_amb_raw_y[k] * s3_amb_raw_y[k]
+                        + s3_amb_raw_z[k] * s3_amb_raw_z[k]);
+        if (l > 1e-12f) {
+            ambDirs_x[k] = s3_amb_raw_x[k] / l;
+            ambDirs_y[k] = s3_amb_raw_y[k] / l;
+            ambDirs_z[k] = s3_amb_raw_z[k] / l;
+        } else {
+            ambDirs_x[k] = 0.0f;
+            ambDirs_y[k] = 0.0f;
+            ambDirs_z[k] = 0.0f;
+        }
+    }
+
+    const int   N_AMB  = 9;
+    const float dOmega = 2.0f * (float)M_PI / (float)N_AMB;  /* 每方向代表的立体角（上半球 2π / N_AMB） */
+
+    const int N_V2  = 4;                          /* 二阶路径采样数（粗于一阶，节省算力） */
+    float     segV2 = (tMax - tMin) / (float)N_V2;
+    float     odR2  = 0.0f, odM2 = 0.0f;         /* 累积视线光学深度（eye → 当前采样点） */
+
+    float global_gain = (16.0f - 2.0f)
+                        * expf(-(sunElevationDeg / 10.0f) * (sunElevationDeg / 10.0f))
+                        + 2.0f;
+
+    for (int i = 0; i < N_V2; i++) {
+        float t     = tMin + ((float)i + 0.5f) * segV2;
+        float pos_x = orig_x + dir_x * t;
+        float pos_y = orig_y + dir_y * t;
+        float pos_z = orig_z + dir_z * t;
+        float h     = sqrtf(pos_x * pos_x + pos_y * pos_y + pos_z * pos_z) - S3_Re;
+        if (h < 0.0f) continue;
+
+        float dR = expf(-h / S3_Hr) * segV2;
+        float dM = expf(-h / S3_Hm) * segV2;
+        odR2 += dR;
+        odM2 += dM;
+
+        /* T(eye → X)：视线方向累积透射率 */
+        float Tv0 = expf(-(S3_bR0 * odR2 + S3_bMe * odM2));
+        float Tv1 = expf(-(S3_bR1 * odR2 + S3_bMe * odM2));
+        float Tv2 = expf(-(S3_bR2 * odR2 + S3_bMe * odM2));
+
+        for (int k = 0; k < N_AMB; k++) {
+            float ad_x = ambDirs_x[k];
+            float ad_y = ambDirs_y[k];
+            float ad_z = ambDirs_z[k];
+
+            /* 从 X 出发沿方向 ad 找到大气出口（X 在大气内，t₀ < 0 < t₁） */
+            float aHit_t0, aHit_t1;
+            if (!s3_rsi(pos_x, pos_y, pos_z, ad_x, ad_y, ad_z,
+                        S3_Ra, &aHit_t0, &aHit_t1))
+                continue;
+            if (aHit_t1 <= 0.0f) continue;
+
+            /* 计算从 X 出发沿方向 ad 的一次散射天光 L₁(X, ad)
+             * 使用轻量级步进（4 主采样 + 4 太阳采样），性能友好 */
+            float muA = ad_x * sunDir_x + ad_y * sunDir_y + ad_z * sunDir_z;
+            float sc_sumR0, sc_sumR1, sc_sumR2;
+            float sc_sumM0, sc_sumM1, sc_sumM2;
+            s3_marchRay(
+                pos_x, pos_y, pos_z,
+                ad_x,  ad_y,  ad_z,
+                0.0f, aHit_t1, 2, 2,
+                sunDir_x, sunDir_y, sunDir_z,
+                &sc_sumR0, &sc_sumR1, &sc_sumR2,
+                &sc_sumM0, &sc_sumM1, &sc_sumM2);
+
+            float pRA = s3_phaseR(muA);
+            float pMA = s3_phaseM(muA);
+            float L1_0 = (sc_sumR0 * S3_bR0 * pRA + sc_sumM0 * S3_bM * pMA) * S3_SUN;
+            float L1_1 = (sc_sumR1 * S3_bR1 * pRA + sc_sumM1 * S3_bM * pMA) * S3_SUN;
+            float L1_2 = (sc_sumR2 * S3_bR2 * pRA + sc_sumM2 * S3_bM * pMA) * S3_SUN;
+
+            /* X 处将天光 L₁ 散射向观测者方向
+             * 相位函数参数：μ = dot(ad, dir)（见上方推导） */
+            float muS = ad_x * dir_x + ad_y * dir_y + ad_z * dir_z;
+            float pRS = s3_phaseR(muS);
+            float pMS = s3_phaseM(muS);
+
+            /* 二阶贡献 = L₁ · (βR·PR·ρR·Δs + βM·PM·ρM·Δs) · T(eye→X) · dΩ */
+            float sigma0 = S3_bR0 * pRS * dR + S3_bM * pMS * dM;
+            float sigma1 = S3_bR1 * pRS * dR + S3_bM * pMS * dM;
+            float sigma2 = S3_bR2 * pRS * dR + S3_bM * pMS * dM;
+            color0 += L1_0 * sigma0 * Tv0 * dOmega * global_gain;
+            color1 += L1_1 * sigma1 * Tv1 * dOmega * global_gain;
+            color2 += L1_2 * sigma2 * Tv2 * dOmega * global_gain;
+        }
+    }
+
+    /* 臭氧吸收 */
+    const float ozone_absorption0 = 0.005f;
+    const float ozone_absorption1 = 0.040f;
+    const float ozone_absorption2 = 0.010f;
+    const float oz_scale = 80.0f;
+    float oz_path = (tMax - tMin) / S3_Ra;
+    color0 *= expf(-ozone_absorption0 * oz_path * oz_scale);
+    color1 *= expf(-ozone_absorption1 * oz_path * oz_scale);
+    color2 *= expf(-ozone_absorption2 * oz_path * oz_scale);
+
+    /* HDR */
+    color0 = s3_hdr_mapping(color0);
+    color1 = s3_hdr_mapping(color1);
+    color2 = s3_hdr_mapping(color2);
+
+    /* 拍脑袋：夜天光 */
+    float night_light_scale = 1.0f - viewElevationDeg / 90.0f;
+    color0 += 0.05f * night_light_scale;
+    color1 += 0.08f * night_light_scale;
+    color2 += 0.10f * night_light_scale;
+
+    // 限幅输出
+    *red   = MIN(1.0f, color0);
+    *green = MIN(1.0f, color1);
+    *blue  = MIN(1.0f, color2);
+}
+
+
+
 void calculate_scattered_pixel(
     float ray_x, float ray_y, float ray_z, float sun_x, float sun_y, float sun_z,
     float *red, float *green, float *blue,
@@ -2077,6 +2511,9 @@ void calculate_scattered_pixel(
     }
     else if (model_index == 2) {
         scatter_model_2(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, red, green, blue, enable_opt_lut);
+    }
+    else if (model_index == 3) {
+        scatter_model_3(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, red, green, blue, enable_opt_lut);
     }
     else {
         *red   = 0.0f;
@@ -2114,12 +2551,12 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->longitude = 119.0;
     cfg->latitude = 31.0;
 
-    cfg->downsampling_factor = 2;     // 降采样因子（设为0为自动，建议设为2）
+    cfg->downsampling_factor = 0;     // 降采样因子（设为0为自动，建议设为2）
     cfg->enable_opt_sym = 0;          // 是否启用基于对称性的渲染优化（以画质为代价）
     cfg->enable_opt_lut = 0;          // 是否启用查找表计算加速（以画质为代价）
-    cfg->enable_opt_bilinear = 0;     // 是否启用双线性插值以优化画质
+    cfg->enable_opt_bilinear = 1;     // 是否启用双线性插值以优化画质
  
-    cfg->sky_model = 2;               // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
+    cfg->sky_model = 3;               // 选择天空模型（0-不启用散射；1-简单散射模型；2-一次散射；3-二次散射）
     cfg->landscape_index = 2;         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
     cfg->enable_equatorial_coord = 0; // 是否启用赤道坐标圈
     cfg->enable_horizontal_coord = 1; // 是否启用地平坐标圈
@@ -2245,7 +2682,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
                 _downsampling_factor = (enable_opt_bilinear && !enable_opt_sym) ? 32 : 8;
             }
             else {
-                _downsampling_factor = (enable_opt_bilinear && !enable_opt_sym) ? 8 : 2;
+                _downsampling_factor = (enable_opt_bilinear && !enable_opt_sym) ? 4 : 2;
             }
         }
 
@@ -2338,7 +2775,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
                 for (int32_t x = x1; x < x2; x += C) {
 
                     int32_t r2 = (x-center_x)*(x-center_x) + (y-center_y)*(y-center_y);
-                    if (r2 > (sky_radius+C)*(sky_radius+C)) continue;
+                    // if (r2 > (sky_radius+C)*(sky_radius+C)) continue;
 
                     int32_t idx_11 = ((y+0) * fb_width + (x+0)) * 3;
                     int32_t idx_12 = (x+C < fb_width)  ? (((y+0) * fb_width + (x+C)) * 3) : idx_11;
