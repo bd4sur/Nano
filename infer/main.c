@@ -337,7 +337,9 @@ void refresh_text_of_linglong_setting_menu() {
     wcscpy(w_menu_linglong_setting->items[2], buf);
 
 
-    wcscpy(w_menu_linglong_setting->items[3], L"姿态指示：");
+    swprintf(buf, MAX_MENU_ITEM_LEN, L"姿态指示：%ls",
+        (global_state->linglong_cfg->enable_att_indicator == 0) ? L"关" : L"开");
+    wcscpy(w_menu_linglong_setting->items[3], buf);
 
 
     switch (global_state->linglong_cfg->landscape_index) {
@@ -364,11 +366,39 @@ void refresh_text_of_linglong_setting_menu() {
     wcscpy(w_menu_linglong_setting->items[6], buf);
 
 
-    wcscpy(w_menu_linglong_setting->items[7], L"地平坐标：");
-    wcscpy(w_menu_linglong_setting->items[8], L"天体名称：");
-    wcscpy(w_menu_linglong_setting->items[9], L"黄道：");
-    wcscpy(w_menu_linglong_setting->items[10], L"星芒：");
-    w_menu_linglong_setting->item_num = 11;
+    switch (global_state->linglong_cfg->enable_horizontal_coord) {
+        case 0: swprintf(buf, MAX_MENU_ITEM_LEN, L"地平坐标：%ls", L"关闭"); break;
+        case 1: swprintf(buf, MAX_MENU_ITEM_LEN, L"地平坐标：%ls", L"方位角"); break;
+        case 2: swprintf(buf, MAX_MENU_ITEM_LEN, L"地平坐标：%ls", L"坐标圈"); break;
+        default: swprintf(buf, MAX_MENU_ITEM_LEN, L"地平坐标：%ls", L"关闭"); break;
+    }
+    wcscpy(w_menu_linglong_setting->items[7], buf);
+
+
+    switch (global_state->linglong_cfg->enable_star_name) {
+        case 0: swprintf(buf, MAX_MENU_ITEM_LEN, L"天体名称：%ls", L"关闭"); break;
+        case 1: swprintf(buf, MAX_MENU_ITEM_LEN, L"天体名称：%ls", L"除行星外的全部天体"); break;
+        case 2: swprintf(buf, MAX_MENU_ITEM_LEN, L"天体名称：%ls", L"仅行星"); break;
+        case 3: swprintf(buf, MAX_MENU_ITEM_LEN, L"天体名称：%ls", L"全部显示"); break;
+        default: swprintf(buf, MAX_MENU_ITEM_LEN, L"天体名称：%ls", L"关闭"); break;
+    }
+    wcscpy(w_menu_linglong_setting->items[8], buf);
+
+
+    swprintf(buf, MAX_MENU_ITEM_LEN, L"黄道：%ls",
+        (global_state->linglong_cfg->enable_ecliptic_circle == 0) ? L"关闭" : L"开启");
+    wcscpy(w_menu_linglong_setting->items[9], buf);
+
+
+    swprintf(buf, MAX_MENU_ITEM_LEN, L"星芒：%ls",
+        (global_state->linglong_cfg->enable_star_burst == 0) ? L"关闭" : L"开启");
+    wcscpy(w_menu_linglong_setting->items[10], buf);
+
+
+    wcscpy(w_menu_linglong_setting->items[11], L"校准陀螺仪");
+
+
+    w_menu_linglong_setting->item_num = 12;
 }
 
 void init_linglong_setting_menu() {
@@ -620,7 +650,8 @@ int32_t linglong_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widge
     }
     // 3.姿态指示
     else if (item_index == 3) {
-        // TODO
+        gs->linglong_cfg->enable_att_indicator++;
+        gs->linglong_cfg->enable_att_indicator = gs->linglong_cfg->enable_att_indicator % 2;
         refresh_text_of_linglong_setting_menu();
         refresh_menu(ke, gs, ms);
         return STATE_LINGLONG_SETTING;
@@ -648,6 +679,50 @@ int32_t linglong_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widge
         refresh_text_of_linglong_setting_menu();
         refresh_menu(ke, gs, ms);
         return STATE_LINGLONG_SETTING;
+    }
+    // 7.地平坐标
+    else if (item_index == 7) {
+        gs->linglong_cfg->enable_horizontal_coord++;
+        gs->linglong_cfg->enable_horizontal_coord = gs->linglong_cfg->enable_horizontal_coord % 3;
+        refresh_text_of_linglong_setting_menu();
+        refresh_menu(ke, gs, ms);
+        return STATE_LINGLONG_SETTING;
+    }
+    // 8.天体名称
+    else if (item_index == 8) {
+        gs->linglong_cfg->enable_star_name++;
+        gs->linglong_cfg->enable_star_name = gs->linglong_cfg->enable_star_name % 4;
+        refresh_text_of_linglong_setting_menu();
+        refresh_menu(ke, gs, ms);
+        return STATE_LINGLONG_SETTING;
+    }
+    // 9.黄道
+    else if (item_index == 9) {
+        gs->linglong_cfg->enable_ecliptic_circle++;
+        gs->linglong_cfg->enable_ecliptic_circle = gs->linglong_cfg->enable_ecliptic_circle % 2;
+        refresh_text_of_linglong_setting_menu();
+        refresh_menu(ke, gs, ms);
+        return STATE_LINGLONG_SETTING;
+    }
+    // 10.星芒
+    else if (item_index == 10) {
+        gs->linglong_cfg->enable_star_burst++;
+        gs->linglong_cfg->enable_star_burst = gs->linglong_cfg->enable_star_burst % 2;
+        refresh_text_of_linglong_setting_menu();
+        refresh_menu(ke, gs, ms);
+        return STATE_LINGLONG_SETTING;
+    }
+    // 11.校准陀螺仪
+    else if (item_index == 11) {
+#ifdef IMU_ENABLED
+        set_textarea(ke, gs, w_textarea_main, L" \n \n    正在校准IMU...", 0, 0);
+        draw_textarea(ke, gs, w_textarea_main);
+        imu_calib();
+        sleep_in_ms(500);
+        set_textarea(ke, gs, w_textarea_main, L" \n \n    校准完成", 0, 0);
+        draw_textarea(ke, gs, w_textarea_main);
+#endif
+        return STATE_LINGLONG;
     }
     // TODO
     else {
@@ -1384,20 +1459,22 @@ int main() {
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_C) {
                 ephemeris_toggle_linglong_version(key_event, global_state);
             }
-#ifdef IMU_ENABLED
-            // 按*键重新校准IMU
+            // 按*键时光机向前（过去）
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_STAR) {
-                set_textarea(key_event, global_state, w_textarea_main, L" \n \n    正在校准IMU...", 0, 0);
-                draw_textarea(key_event, global_state, w_textarea_main);
-                imu_calib();
-                sleep_in_ms(500);
-                set_textarea(key_event, global_state, w_textarea_main, L" \n \n    校准完成", 0, 0);
-                draw_textarea(key_event, global_state, w_textarea_main);
+                ephemeris_set_timemachine_speed(key_event, global_state, -120);
             }
-#endif
-            // 按0键切换时光机运行/暂停
+            // 短按0键切换时光机运行/暂停
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_0) {
-                ephemeris_toggle_speedup(key_event, global_state);
+                ephemeris_toggle_timemachine(key_event, global_state);
+            }
+            // 长按0键回到实时
+            else if (key_event->key_edge == -2 && key_event->key_code == KEYCODE_NUM_0) {
+                ephemeris_set_realtime(key_event, global_state);
+                ephemeris_set_timemachine_speed(key_event, global_state, 0);
+            }
+            // 按#键时光机向后（未来）
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_HASH) {
+                ephemeris_set_timemachine_speed(key_event, global_state, 120);
             }
 
             break;

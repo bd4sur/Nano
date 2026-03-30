@@ -44,15 +44,15 @@ typedef struct {
     int32_t enable_opt_bilinear;     // 是否启用双线性插值以优化画质
  
     int32_t projection;              // 投影算法（0-鱼眼；1-线性透视）
-    int32_t sky_model;               // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
+    int32_t sky_model;               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
     int32_t landscape_index;         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
     int32_t enable_equatorial_coord; // 是否启用赤道坐标圈
-    int32_t enable_horizontal_coord; // 是否启用地平坐标圈
+    int32_t enable_horizontal_coord; // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst;       // 是否启用星芒效果
-    int32_t enable_star_name;        // 是否显示恒星名称
+    int32_t enable_star_name;        // 是否显示恒星名称（0-不显示；1-除行星；2-仅行星；3-全部）
     int32_t enable_planet;           // 是否显示大行星
-    int32_t enable_planet_name;      // 是否显示大行星名称
     int32_t enable_ecliptic_circle;  // 是否显示黄道
+    int32_t enable_att_indicator;    // 是否显示姿态指示标记
 
     // 以下与天空渲染无关（非render_sky参数）
     int32_t enable_imu;              // 是否启用IMU（使视角随机器姿态旋转）
@@ -101,15 +101,15 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     int32_t enable_opt_bilinear,     // 是否启用双线性插值以优化画质
 
     int32_t projection,              // 投影算法（0-鱼眼；1-线性透视）
-    int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
+    int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
     int32_t landscape_index,         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
     int32_t enable_equatorial_coord, // 是否启用赤道坐标圈
-    int32_t enable_horizontal_coord, // 是否启用地平坐标圈
+    int32_t enable_horizontal_coord, // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst,       // 是否启用星芒效果
-    int32_t enable_star_name,        // 是否显示恒星名称
+    int32_t enable_star_name,        // 是否显示恒星名称（0-不显示；1-除行星；2-仅行星；3-全部）
     int32_t enable_planet,           // 是否显示大行星
-    int32_t enable_planet_name,      // 是否显示大行星名称
-    int32_t enable_ecliptic_circle   // 是否显示黄道
+    int32_t enable_ecliptic_circle,  // 是否显示黄道
+    int32_t enable_att_indicator     // 是否显示姿态指示标记
 );
 
 #ifdef __cplusplus

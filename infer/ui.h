@@ -204,7 +204,9 @@ void game_of_life_step(Key_Event *key_event, Global_State *global_state);
 // ===============================================================================
 
 void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state);
-void ephemeris_toggle_speedup(Key_Event *key_event, Global_State *global_state);
+void ephemeris_toggle_timemachine(Key_Event *key_event, Global_State *global_state);
+void ephemeris_set_timemachine_speed(Key_Event *key_event, Global_State *global_state, int32_t speed);
+void ephemeris_set_realtime(Key_Event *key_event, Global_State *global_state);
 void ephemeris_toggle_linglong_version(Key_Event *key_event, Global_State *global_state);
 
 

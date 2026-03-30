@@ -1318,8 +1318,10 @@ static uint64_t ephemeris_first_call_timestamp = 0;
 static uint32_t last_day = 0;
 static uint32_t sunrise_time[2] = {0, 0}; // hour, minute
 static uint32_t sunset_time[2] = {0, 0}; // hour, minute
-static int32_t is_speed_up = 0;
-static uint64_t start_timestamp = 0;
+
+static int32_t timemachine_running_state = 0; // 0-停止；1-时光机运行；2-实时
+static int32_t timemachine_speed = 0; // 时光机速度，正数为未来，负数为过去，单位秒
+static uint64_t timemachine_start_timestamp = 0;
 
 static int32_t linglong_version = 1;
 
@@ -1335,22 +1337,29 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
 
     gfx_soft_clear(global_state->gfx);
 
-    time_t ts = 0;
-    if (is_speed_up) {
-        start_timestamp += 5 * 60 * 1000;
-        ts = (time_t)start_timestamp / 1000;
+    time_t ts = (time_t)global_state->timestamp / 1000;
+    if (timemachine_running_state == 1) {
+        timemachine_start_timestamp += (timemachine_speed * 1000);
+        ts = (time_t)timemachine_start_timestamp / 1000;
+        struct tm *timeinfo = localtime(&ts); // 转换为本地时间
+
+        llcfg->second = timeinfo->tm_sec;
+        llcfg->minute = timeinfo->tm_min;
+        llcfg->hour = timeinfo->tm_hour;
+        llcfg->day = timeinfo->tm_mday;
+        llcfg->month = timeinfo->tm_mon + 1;
+        llcfg->year = timeinfo->tm_year + 1900;
     }
-    else {
+    else if (timemachine_running_state == 2) {
         ts = (time_t)global_state->timestamp / 1000;
+        struct tm *timeinfo = localtime(&ts);
+        llcfg->second = timeinfo->tm_sec;
+        llcfg->minute = timeinfo->tm_min;
+        llcfg->hour = timeinfo->tm_hour;
+        llcfg->day = timeinfo->tm_mday;
+        llcfg->month = timeinfo->tm_mon + 1;
+        llcfg->year = timeinfo->tm_year + 1900;
     }
-    struct tm *timeinfo = localtime(&ts); // 转换为本地时间
-    
-    llcfg->second = timeinfo->tm_sec;
-    llcfg->minute = timeinfo->tm_min;
-    llcfg->hour = timeinfo->tm_hour;
-    llcfg->day = timeinfo->tm_mday;
-    llcfg->month = timeinfo->tm_mon + 1;
-    llcfg->year = timeinfo->tm_year + 1900;
 
 
     if (llcfg->enable_imu) {
@@ -1377,8 +1386,8 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
         llcfg->enable_star_burst,
         llcfg->enable_star_name,
         llcfg->enable_planet,
-        llcfg->enable_planet_name,
-        llcfg->enable_ecliptic_circle
+        llcfg->enable_ecliptic_circle,
+        llcfg->enable_att_indicator
     );
 
     dithering_fast(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height);
@@ -1393,6 +1402,8 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
 }
 
 void draw_linglong_lite(Key_Event *key_event, Global_State *global_state) {
+    Linglong_Config *llcfg = global_state->linglong_cfg;
+
     const double longitude = 119.0; // 东经
     const double latitude = 32.0;   // 北纬
     const double timezone = +8.0;   // 东八区
@@ -1419,22 +1430,40 @@ void draw_linglong_lite(Key_Event *key_event, Global_State *global_state) {
 
     gfx_draw_line(global_state->gfx, 0, 43, 30, 43, 255, 255, 255, 1);
 
-    time_t ts = 0;
-    if (is_speed_up) {
-        start_timestamp += 5 * 60 * 1000;
-        ts = (time_t)start_timestamp / 1000;
-    }
-    else {
-        ts = (time_t)global_state->timestamp / 1000;
-    }
+    time_t ts = (time_t)global_state->timestamp / 1000;
     struct tm *timeinfo = localtime(&ts); // 转换为本地时间
-    
-    int32_t second = timeinfo->tm_sec;
-    int32_t minute = timeinfo->tm_min;
-    int32_t hour = timeinfo->tm_hour;
-    int32_t day = timeinfo->tm_mday;
-    int32_t month = timeinfo->tm_mon + 1;
-    int32_t year = timeinfo->tm_year + 1900;
+
+    int32_t second = llcfg->second;
+    int32_t minute = llcfg->minute;
+    int32_t hour = llcfg->hour;
+    int32_t day = llcfg->day;
+    int32_t month = llcfg->month;
+    int32_t year = llcfg->year;
+
+    if (timemachine_running_state == 1) {
+        timemachine_start_timestamp += (timemachine_speed * 1000);
+        ts = (time_t)timemachine_start_timestamp / 1000;
+        struct tm *timeinfo = localtime(&ts); // 转换为本地时间
+
+        second = timeinfo->tm_sec;
+        minute = timeinfo->tm_min;
+        hour = timeinfo->tm_hour;
+        day = timeinfo->tm_mday;
+        month = timeinfo->tm_mon + 1;
+        year = timeinfo->tm_year + 1900;
+    }
+    else if (timemachine_running_state == 2) {
+        ts = (time_t)global_state->timestamp / 1000;
+        struct tm *timeinfo = localtime(&ts);
+        second = timeinfo->tm_sec;
+        minute = timeinfo->tm_min;
+        hour = timeinfo->tm_hour;
+        day = timeinfo->tm_mday;
+        month = timeinfo->tm_mon + 1;
+        year = timeinfo->tm_year + 1900;
+    }
+
+
 
 
     wchar_t timestr[30];
@@ -1522,11 +1551,35 @@ void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state) {
 }
 
 
-void ephemeris_toggle_speedup(Key_Event *key_event, Global_State *global_state) {
-    is_speed_up = !is_speed_up;
-    if (start_timestamp == 0) {
-        start_timestamp = global_state->timestamp;
+void ephemeris_toggle_timemachine(Key_Event *key_event, Global_State *global_state) {
+    if (timemachine_running_state == 0) {
+        timemachine_running_state = 1;
     }
+    else {
+        timemachine_running_state = 0;
+    }
+    if (timemachine_start_timestamp == 0) {
+        timemachine_start_timestamp = global_state->timestamp;
+    }
+}
+
+void ephemeris_set_timemachine_speed(Key_Event *key_event, Global_State *global_state, int32_t speed) {
+    timemachine_speed = speed;
+    ephemeris_toggle_timemachine(key_event, global_state);
+}
+
+void ephemeris_set_realtime(Key_Event *key_event, Global_State *global_state) {
+    Linglong_Config *llcfg = global_state->linglong_cfg;
+    time_t ts = (time_t)global_state->timestamp / 1000;
+    struct tm *timeinfo = localtime(&ts); // 转换为本地时间
+    llcfg->second = timeinfo->tm_sec;
+    llcfg->minute = timeinfo->tm_min;
+    llcfg->hour = timeinfo->tm_hour;
+    llcfg->day = timeinfo->tm_mday;
+    llcfg->month = timeinfo->tm_mon + 1;
+    llcfg->year = timeinfo->tm_year + 1900;
+
+    timemachine_running_state = 2;
 }
 
 void ephemeris_toggle_linglong_version(Key_Event *key_event, Global_State *global_state) {

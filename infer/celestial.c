@@ -57,7 +57,7 @@ static const uint8_t PLANET_COLOR_B[9]  = {0,    192,  64,   0,    0,    128,  1
 static const wchar_t PLANET_NAME[9][10] = {L"", L"水星", L"金星", L"地球", L"火星", L"木星", L"土星", L"天王星", L"海王星"};
 
 // 星表
-#define STARS_NUM (22)
+#define STARS_NUM (23)
 static const float STARS[STARS_NUM][7] = {
 //(RA)h     m      s    (Dec)d       m      s        Mag
     {2.0f,  32.0f,  9.3f,     89.0f, 16.0f, 10.8f,   2.09f}, // 勾陈一（北极星）
@@ -1436,6 +1436,108 @@ void draw_ecliptic_circle(
 
 }
 
+// 绘制地平等仰角圈
+void draw_horizontal_altitude_circle(
+    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+    float sky_radius, float center_x, float center_y,
+    float view_alt, float view_azi, float view_roll, float f, int32_t projection,
+    float altitude_deg,
+    int32_t line_weight, uint8_t colorR, uint8_t colorG, uint8_t colorB
+) {
+    const int32_t POINTS = 360;
+    float x_prev = 0.0f;
+    float y_prev = 0.0f;
+    float x_0 = 0.0f;
+    float y_0 = 0.0f;
+    int32_t first_point = 0;
+    int32_t prev_valid = 0;
+    
+    double eps = 0.5; // 防止两个端点处的点连成弓弦
+    
+    // 如果固定仰角低于地平线，直接返回
+    // if (altitude_deg < eps) {
+    //     return;
+    // }
+    
+    for (int32_t i = 0; i <= POINTS; i++) {
+        float azimuth_deg = (360.0f * (float)i / (float)POINTS);
+        
+        float x = 0.0f;
+        float y = 0.0f;
+        fisheye_project(azimuth_deg, altitude_deg, sky_radius, center_x, center_y,
+                       view_alt, view_azi, view_roll, f, projection, &x, &y);
+        
+        // 检查点是否在有效范围内（屏幕内）作为可见性判断
+        int32_t valid = (x >= 0 && x < fb_width && y >= 0 && y < fb_height);
+        
+        if (valid) {
+            if (i == 0) {
+                x_0 = x;
+                y_0 = y;
+                first_point = 1;
+            }
+            
+            // 防弓弦：只有前一个点也有效时才连线
+            if (prev_valid) {
+                draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x, y,
+                         line_weight, colorR, colorG, colorB);
+            }
+            
+            x_prev = x;
+            y_prev = y;
+            prev_valid = 1;
+        } else {
+            prev_valid = 0; // 断开连接，防止跨边界弓弦
+        }
+    }
+    
+    // 对于闭合的等仰角圈，最后连接首尾（如果都有效）
+    if (prev_valid && first_point) {
+        draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x_0, y_0,
+                 line_weight, colorR, colorG, colorB);
+    }
+}
+
+// 绘制地平等方位角圈
+void draw_horizontal_azimuth_circle(
+    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+    float sky_radius, float center_x, float center_y,
+    float view_alt, float view_azi, float view_roll, float f, int32_t projection,
+    float azimuth_deg,
+    int32_t line_weight, uint8_t colorR, uint8_t colorG, uint8_t colorB
+) {
+    const int32_t POINTS = 180;
+    float x_prev = 0.0f;
+    float y_prev = 0.0f;
+    double alt_prev = -100.0; // 初始化为不可能的值
+    
+    double eps = 0.5; // 防止两个端点处的点连成弓弦（特别是地平线以下）
+    
+    for (int32_t i = -POINTS; i <= POINTS; i++) {
+        float altitude_deg = (90.0f * (float)i / (float)POINTS);
+        
+        float x = 0.0f;
+        float y = 0.0f;
+        fisheye_project(azimuth_deg, altitude_deg, sky_radius, center_x, center_y,
+                       view_alt, view_azi, view_roll, f, projection, &x, &y);
+
+        // 防弓弦逻辑：只有前一个点也满足仰角 > eps 时才连线
+        // 这防止了当地平线截断曲线时，两侧端点连成弓弦
+        if (alt_prev > eps && altitude_deg > eps) {
+            draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x, y,
+                        line_weight, colorR, colorG, colorB);
+        }
+
+        x_prev = x;
+        y_prev = y;
+        alt_prev = altitude_deg;
+
+    }
+    // 注意：等方位角圈通常不是闭合曲线（从地平线下到天顶再到地平线下），不需要首尾连接
+}
+
+
+
 
 // ===============================================================================
 // 绘制天体
@@ -2587,15 +2689,15 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->enable_opt_bilinear = 1;     // 是否启用双线性插值以优化画质
 
     cfg->projection = 0;              // 投影算法（0-鱼眼；1-线性透视）
-    cfg->sky_model = 3;               // 选择天空模型（0-不启用散射；1-简单散射模型；2-一次散射；3-二次散射）
+    cfg->sky_model = 3;               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
     cfg->landscape_index = 2;         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
     cfg->enable_equatorial_coord = 0; // 是否启用赤道坐标圈
-    cfg->enable_horizontal_coord = 1; // 是否启用地平坐标圈
+    cfg->enable_horizontal_coord = 1; // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     cfg->enable_star_burst = 1;       // 是否启用星芒效果
-    cfg->enable_star_name = 0;        // 是否显示恒星名称
+    cfg->enable_star_name = 0;        // 是否显示恒星名称（0-不显示；1-除行星；2-仅行星；3-全部）
     cfg->enable_planet = 1;           // 是否显示大行星
-    cfg->enable_planet_name = 0;      // 是否显示大行星名称
     cfg->enable_ecliptic_circle = 0;  // 是否显示黄道
+    cfg->enable_att_indicator = 0;    // 是否显示姿态指示标记
 
     cfg->enable_imu = 1;              // 是否启用IMU（使视角随机器姿态旋转）
 }
@@ -2616,15 +2718,15 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     int32_t enable_opt_bilinear,     // 是否启用双线性插值以优化画质
 
     int32_t projection,              // 投影算法（0-鱼眼；1-线性透视）
-    int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
+    int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
     int32_t landscape_index,         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
     int32_t enable_equatorial_coord, // 是否启用赤道坐标圈
-    int32_t enable_horizontal_coord, // 是否启用地平坐标圈
+    int32_t enable_horizontal_coord, // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst,       // 是否启用星芒效果
-    int32_t enable_star_name,        // 是否显示恒星名称
+    int32_t enable_star_name,        // 是否显示恒星名称（0-不显示；1-除行星；2-仅行星；3-全部）
     int32_t enable_planet,           // 是否显示大行星
-    int32_t enable_planet_name,      // 是否显示大行星名称
-    int32_t enable_ecliptic_circle   // 是否显示黄道
+    int32_t enable_ecliptic_circle,  // 是否显示黄道
+    int32_t enable_att_indicator     // 是否显示姿态指示标记
 ) {
 
     if (fb_width < (int32_t)sky_radius * 2 || fb_height < (int32_t)sky_radius * 2 ||
@@ -2893,7 +2995,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 
         draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, sx, sy, mag, 1, 255, 255, 255);
 
-        if (enable_star_name) {
+        if (enable_star_name == 1 || enable_star_name == 3) {
             fb_draw_textline(frame_buffer, fb_width, fb_height, STAR_NAME[i], sx+3, sy+3, 250, 250, 250);
         }
     }
@@ -2924,7 +3026,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, planet_proj_x, planet_proj_y,
                 0.0f, PLANET_RADIUS[i], PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
 
-            if (enable_planet_name) {
+            if (enable_star_name == 2 || enable_star_name == 3) {
                 fb_draw_textline(frame_buffer, fb_width, fb_height, PLANET_NAME[i], planet_proj_x+3, planet_proj_y+3, PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
             }
         }
@@ -2958,20 +3060,6 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         }
     }
 
-    // 绘制地平坐标网格
-    if (enable_horizontal_coord) {
-        float label_x = 0.0f;
-        float label_y = 0.0f;
-        fisheye_project(0, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"北", label_x, label_y, 255, 0, 0);
-        fisheye_project(90, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"东", label_x, label_y, 255, 0, 0);
-        fisheye_project(180, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"南", label_x, label_y, 255, 0, 0);
-        fisheye_project(270, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"西", label_x, label_y, 255, 0, 0);
-
-    }
 
     // 绘制地景（天空投影圆盘之外的部分）
     float fov = 1.1f;
@@ -2997,4 +3085,58 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         view_alt, view_azi, view_roll, f, projection,
         view_height, sun_alt, landscape_index, enable_atmosphere_scattering, (uint8_t)atmo_r, (uint8_t)atmo_g, (uint8_t)atmo_b);
 
+
+
+    // 绘制地平坐标网格
+    if (enable_horizontal_coord > 0) {
+        if (enable_horizontal_coord == 2) {
+            // 绘制等仰角圈（地平纬度圈）
+            for (int32_t alt = -90; alt <= 90; alt += 10) {
+                int32_t line_width = (alt == 0) ? 4 : 2;
+                draw_horizontal_altitude_circle(
+                    frame_buffer, fb_width, fb_height,
+                    sky_radius, center_x, center_y,
+                    view_alt, view_azi, view_roll, f, projection,
+                    (float)alt,
+                    line_width, 16, 32, 8
+                );
+            }
+            // 绘制等方位角圈（地平经线圈）- 每隔30度绘制一条线，从0°（北）到330°
+            for (int32_t azi = 0; azi < 360; azi += 30) {
+                int32_t line_width = 2; // (azi === 0) ? 3 : 2;
+                draw_horizontal_azimuth_circle(
+                    frame_buffer, fb_width, fb_height,
+                    sky_radius, center_x, center_y,
+                    view_alt, view_azi, view_roll, f, projection,
+                    (float)azi,
+                    line_width, 16, 32, 8
+                );
+            }
+        }
+
+        float label_x = 0.0f;
+        float label_y = 0.0f;
+        fisheye_project(0, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"北", label_x, label_y, 255, 0, 0);
+        fisheye_project(90, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"东", label_x, label_y, 255, 0, 0);
+        fisheye_project(180, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"南", label_x, label_y, 255, 0, 0);
+        fisheye_project(270, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"西", label_x, label_y, 255, 0, 0);
+
+    }
+
+    // 绘制姿态仪相关符号
+    if (enable_att_indicator > 0) {
+        draw_rect(frame_buffer, fb_width, fb_height, (center_x - 60), center_y - 2, 50, 4, 255, 255, 0);
+        draw_rect(frame_buffer, fb_width, fb_height, (center_x - 14), center_y - 2, 4, 10, 255, 255, 0);
+        draw_rect(frame_buffer, fb_width, fb_height, (center_x + 10), center_y - 2, 50, 4, 255, 255, 0);
+        draw_rect(frame_buffer, fb_width, fb_height, (center_x + 10), center_y - 2, 4, 10, 255, 255, 0);
+        draw_rect(frame_buffer, fb_width, fb_height, (center_x - 1), center_y - 1, 2, 2, 255, 255, 0);
+
+        wchar_t euler_angle[59];
+        swprintf(euler_angle, 59, L"Pitch:%d  Yaw:%d  Roll:%d  F:%.1f", (int32_t)roundf(view_alt), (int32_t)roundf(view_azi), (int32_t)roundf(view_roll), f);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, euler_angle, fb_width/2, fb_height-26, 255, 255, 255);
+    }
 }
