@@ -320,17 +320,59 @@ void init_tts_setting_menu() {
     init_menu(key_event, global_state, w_menu_tts_setting);
 }
 
-void init_linglong_setting_menu() {
+void refresh_text_of_linglong_setting_menu() {
+    wchar_t buf[MAX_MENU_ITEM_LEN];
+
     wcscpy(w_menu_linglong_setting->title, L"玲珑仪设置");
     wcscpy(w_menu_linglong_setting->items[0], L"时间和位置");
-    wcscpy(w_menu_linglong_setting->items[1], L"陀螺仪：");
-    wcscpy(w_menu_linglong_setting->items[2], L"天空模型：");
-    wcscpy(w_menu_linglong_setting->items[3], L"赤道坐标系：");
-    wcscpy(w_menu_linglong_setting->items[4], L"地平方位指示：");
-    wcscpy(w_menu_linglong_setting->items[5], L"天体名称：");
-    wcscpy(w_menu_linglong_setting->items[6], L"黄道：");
-    wcscpy(w_menu_linglong_setting->items[7], L"星芒：");
-    w_menu_linglong_setting->item_num = 8;
+
+
+    swprintf(buf, MAX_MENU_ITEM_LEN, L"陀螺仪：%ls",
+        (global_state->linglong_cfg->enable_imu == 0) ? L"关" : L"开");
+    wcscpy(w_menu_linglong_setting->items[1], buf);
+
+
+    swprintf(buf, MAX_MENU_ITEM_LEN, L"投影算法：%ls",
+        (global_state->linglong_cfg->projection == 0) ? L"鱼眼投影" : L"透视投影");
+    wcscpy(w_menu_linglong_setting->items[2], buf);
+
+
+    wcscpy(w_menu_linglong_setting->items[3], L"姿态指示：");
+
+
+    switch (global_state->linglong_cfg->landscape_index) {
+        case 0: swprintf(buf, MAX_MENU_ITEM_LEN, L"地景：%ls", L"关闭"); break;
+        case 1: swprintf(buf, MAX_MENU_ITEM_LEN, L"地景：%ls", L"卫星照片"); break;
+        case 2: swprintf(buf, MAX_MENU_ITEM_LEN, L"地景：%ls", L"地面风景"); break;
+        default: swprintf(buf, MAX_MENU_ITEM_LEN, L"地景：%ls", L"关闭"); break;
+    }
+    wcscpy(w_menu_linglong_setting->items[4], buf);
+
+
+    switch (global_state->linglong_cfg->sky_model) {
+        case 0: swprintf(buf, MAX_MENU_ITEM_LEN, L"大气散射模型：%ls", L"关闭"); break;
+        case 1: swprintf(buf, MAX_MENU_ITEM_LEN, L"大气散射模型：%ls", L"简化模型"); break;
+        case 2: swprintf(buf, MAX_MENU_ITEM_LEN, L"大气散射模型：%ls", L"一次散射"); break;
+        case 3: swprintf(buf, MAX_MENU_ITEM_LEN, L"大气散射模型：%ls", L"二次散射"); break;
+        default: swprintf(buf, MAX_MENU_ITEM_LEN, L"大气散射模型：%ls", L"关闭"); break;
+    }
+    wcscpy(w_menu_linglong_setting->items[5], buf);
+
+
+    swprintf(buf, MAX_MENU_ITEM_LEN, L"赤道坐标：%ls",
+        (global_state->linglong_cfg->enable_equatorial_coord == 0) ? L"关闭" : L"开启");
+    wcscpy(w_menu_linglong_setting->items[6], buf);
+
+
+    wcscpy(w_menu_linglong_setting->items[7], L"地平坐标：");
+    wcscpy(w_menu_linglong_setting->items[8], L"天体名称：");
+    wcscpy(w_menu_linglong_setting->items[9], L"黄道：");
+    wcscpy(w_menu_linglong_setting->items[10], L"星芒：");
+    w_menu_linglong_setting->item_num = 11;
+}
+
+void init_linglong_setting_menu() {
+    refresh_text_of_linglong_setting_menu();
     init_menu(key_event, global_state, w_menu_linglong_setting);
 }
 
@@ -554,15 +596,56 @@ int32_t linglong_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widge
     }
     // 1.陀螺仪
     else if (item_index == 1) {
-        // 菜单标题：陀螺仪：开/关
         if (gs->linglong_cfg->enable_imu == 0) {
             gs->linglong_cfg->enable_imu = 1;
-            ms->items[ms->current_item_index][4] = L'开';
         }
         else {
             gs->linglong_cfg->enable_imu = 0;
-            ms->items[ms->current_item_index][4] = L'关';
         }
+        refresh_text_of_linglong_setting_menu();
+        refresh_menu(ke, gs, ms);
+        return STATE_LINGLONG_SETTING;
+    }
+    // 2.投影算法
+    else if (item_index == 2) {
+        if (gs->linglong_cfg->projection == 0) {
+            gs->linglong_cfg->projection = 1;
+        }
+        else {
+            gs->linglong_cfg->projection = 0;
+        }
+        refresh_text_of_linglong_setting_menu();
+        refresh_menu(ke, gs, ms);
+        return STATE_LINGLONG_SETTING;
+    }
+    // 3.姿态指示
+    else if (item_index == 3) {
+        // TODO
+        refresh_text_of_linglong_setting_menu();
+        refresh_menu(ke, gs, ms);
+        return STATE_LINGLONG_SETTING;
+    }
+    // 4.地景
+    else if (item_index == 4) {
+        gs->linglong_cfg->landscape_index++;
+        gs->linglong_cfg->landscape_index = gs->linglong_cfg->landscape_index % 3;
+        refresh_text_of_linglong_setting_menu();
+        refresh_menu(ke, gs, ms);
+        return STATE_LINGLONG_SETTING;
+    }
+    // 5.大气散射模型
+    else if (item_index == 5) {
+        gs->linglong_cfg->sky_model++;
+        gs->linglong_cfg->sky_model = gs->linglong_cfg->sky_model % 4;
+        refresh_text_of_linglong_setting_menu();
+        refresh_menu(ke, gs, ms);
+        return STATE_LINGLONG_SETTING;
+    }
+    // 6.赤道坐标
+    else if (item_index == 6) {
+        gs->linglong_cfg->enable_equatorial_coord ++;
+        gs->linglong_cfg->enable_equatorial_coord = gs->linglong_cfg->enable_equatorial_coord % 2;
+        refresh_text_of_linglong_setting_menu();
         refresh_menu(ke, gs, ms);
         return STATE_LINGLONG_SETTING;
     }
@@ -1215,20 +1298,37 @@ int main() {
 
             draw_ephemeris_screen(key_event, global_state);
 
-            // 按2键抬头（pitch++）
-            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_2) {
-                global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
-                global_state->linglong_cfg->view_alt += 5.0f;
-                if (global_state->linglong_cfg->view_alt >= 90.0f) {
-                    global_state->linglong_cfg->view_alt = 90.0f;
-                }
-            }
-            // 按4键向东旋转（yaw--）
-            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_4) {
+            
+            // 按1键向左偏航（yaw--）
+            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_1) {
                 global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
                 global_state->linglong_cfg->view_azi -= 5.0f;
                 if (global_state->linglong_cfg->view_azi <= 0.0f) {
                     global_state->linglong_cfg->view_azi = 360.0f;
+                }
+            }
+            // 按2键推杆低头（pitch--）
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_2) {
+                global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
+                global_state->linglong_cfg->view_alt -= 5.0f;
+                if (global_state->linglong_cfg->view_alt <= -90.0f) {
+                    global_state->linglong_cfg->view_alt = -90.0f;
+                }
+            }
+            // 按3键向右偏航（yaw++）
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_3) {
+                global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
+                global_state->linglong_cfg->view_azi += 5.0f;
+                if (global_state->linglong_cfg->view_azi >= 360.0f) {
+                    global_state->linglong_cfg->view_azi = 0.0f;
+                }
+            }
+            // 按4键向左坡度（roll--）
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_4) {
+                global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
+                global_state->linglong_cfg->view_roll -= 5.0f;
+                if (global_state->linglong_cfg->view_roll <= -90.0f) {
+                    global_state->linglong_cfg->view_roll = -90.0f;
                 }
             }
             // 按5键归中，或切换陀螺仪状态
@@ -1245,12 +1345,12 @@ int main() {
                     global_state->linglong_cfg->view_f = 1.0f;
                 }
             }
-            // 按6键向西旋转（yaw++）
+            // 按6键向右坡度（roll++）
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_6) {
                 global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
-                global_state->linglong_cfg->view_azi += 5.0f;
-                if (global_state->linglong_cfg->view_azi >= 360.0f) {
-                    global_state->linglong_cfg->view_azi = 0.0f;
+                global_state->linglong_cfg->view_roll += 5.0f;
+                if (global_state->linglong_cfg->view_roll >= 90.0f) {
+                    global_state->linglong_cfg->view_roll = 90.0f;
                 }
             }
             // 按7键拉远
@@ -1258,12 +1358,12 @@ int main() {
                 global_state->linglong_cfg->view_f -= 0.1f;
                 if (global_state->linglong_cfg->view_f <= 0.1f) global_state->linglong_cfg->view_f = 0.1f;
             }
-            // 按8键低头（pitch--）
+            // 按8键拉杆抬头（pitch++）
             if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_8) {
                 global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
-                global_state->linglong_cfg->view_alt -= 5.0f;
-                if (global_state->linglong_cfg->view_alt <= -90.0f) {
-                    global_state->linglong_cfg->view_alt = -90.0f;
+                global_state->linglong_cfg->view_alt += 5.0f;
+                if (global_state->linglong_cfg->view_alt >= 90.0f) {
+                    global_state->linglong_cfg->view_alt = 90.0f;
                 }
             }
             // 按9键推近
@@ -1284,10 +1384,6 @@ int main() {
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_C) {
                 ephemeris_toggle_linglong_version(key_event, global_state);
             }
-            // 按D键开始加速
-            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
-                ephemeris_toggle_speedup(key_event, global_state);
-            }
 #ifdef IMU_ENABLED
             // 按*键重新校准IMU
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_STAR) {
@@ -1299,6 +1395,10 @@ int main() {
                 draw_textarea(key_event, global_state, w_textarea_main);
             }
 #endif
+            // 按0键切换时光机运行/暂停
+            else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_0) {
+                ephemeris_toggle_speedup(key_event, global_state);
+            }
 
             break;
 

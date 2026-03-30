@@ -43,6 +43,7 @@ typedef struct {
     int32_t enable_opt_lut;          // 是否启用查找表计算加速（以画质为代价）
     int32_t enable_opt_bilinear;     // 是否启用双线性插值以优化画质
  
+    int32_t projection;              // 投影算法（0-鱼眼；1-线性透视）
     int32_t sky_model;               // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
     int32_t landscape_index;         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
     int32_t enable_equatorial_coord; // 是否启用赤道坐标圈
@@ -99,6 +100,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     int32_t enable_opt_lut,          // 是否启用查找表计算加速（以画质为代价）
     int32_t enable_opt_bilinear,     // 是否启用双线性插值以优化画质
 
+    int32_t projection,              // 投影算法（0-鱼眼；1-线性透视）
     int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射模型；2-西田算法）
     int32_t landscape_index,         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
     int32_t enable_equatorial_coord, // 是否启用赤道坐标圈

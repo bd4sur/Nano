@@ -1337,7 +1337,7 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
 
     time_t ts = 0;
     if (is_speed_up) {
-        start_timestamp += 10 * 60 * 1000; // 10min
+        start_timestamp += 5 * 60 * 1000;
         ts = (time_t)start_timestamp / 1000;
     }
     else {
@@ -1369,6 +1369,7 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
         llcfg->enable_opt_sym,
         llcfg->enable_opt_lut,
         llcfg->enable_opt_bilinear,
+        llcfg->projection,
         llcfg->sky_model,
         llcfg->landscape_index,
         llcfg->enable_equatorial_coord,
@@ -1420,7 +1421,7 @@ void draw_linglong_lite(Key_Event *key_event, Global_State *global_state) {
 
     time_t ts = 0;
     if (is_speed_up) {
-        start_timestamp += 600000;
+        start_timestamp += 5 * 60 * 1000;
         ts = (time_t)start_timestamp / 1000;
     }
     else {
