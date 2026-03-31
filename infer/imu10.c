@@ -120,6 +120,22 @@ static int _serial_available(int fd)
     return 0;
 }
 
+/* 批量读取串口数据到缓冲区，返回实际读取的字节数 */
+static ssize_t _serial_read_batch(int fd, uint8_t *buffer, size_t max_len)
+{
+    if (fd < 0 || !buffer || max_len == 0)
+        return -1;
+    
+    int available = _serial_available(fd);
+    if (available <= 0)
+        return 0;
+    
+    /* 限制读取数量不超过缓冲区大小 */
+    size_t to_read = (available > (int)max_len) ? max_len : (size_t)available;
+    ssize_t n = read(fd, buffer, to_read);
+    return n;
+}
+
 /* ================= 公开API实现 ================= */
 
 /* 串口初始化 */
@@ -174,6 +190,40 @@ int32_t uart_receive(uint8_t *rxbyte)
 static volatile uint8_t s_rx_buffer[IMU_UART_RX_BUF_SIZE];
 static volatile uint16_t s_rx_write_index = 0; /* 写入位置 / write index */
 static volatile uint16_t s_rx_read_index = 0;  /* 读取位置 / read index */
+
+/* ---------- 缓冲区管理 / Buffer management ---------- */
+
+/**
+ * @brief 清空环形缓冲区
+ *        Clear/reset the RX ring buffer
+ */
+static inline void _rxbuf_clear(void)
+{
+    s_rx_write_index = 0;
+    s_rx_read_index = 0;
+}
+
+/**
+ * @brief 清空串口硬件缓冲区
+ *        Clear the serial port hardware buffer
+ */
+static inline void _serial_flush(int fd)
+{
+    if (fd >= 0)
+    {
+        tcflush(fd, TCIFLUSH);
+    }
+}
+
+/**
+ * @brief 清空所有缓冲区（串口硬件缓冲区 + 环形缓冲区）
+ *        Clear all buffers to discard stale data
+ */
+static void _discard_stale_data(void)
+{
+    _serial_flush(mySerialFd);
+    _rxbuf_clear();
+}
 
 static inline uint16_t _rxbuf_next(uint16_t index)
 {
@@ -331,7 +381,7 @@ void IMU_UART_Init(void)
  * @brief 中断接收入口，将新数据写入环形缓冲
  *        ISR entry to push received bytes into ring buffer
  */
-void IMU_UART_RxBytes(volatile uint8_t *data, uint16_t len)
+void IMU_UART_RxBytes(const uint8_t *data, uint16_t len)
 {
     if (!data || len == 0)
         return;
@@ -339,6 +389,23 @@ void IMU_UART_RxBytes(volatile uint8_t *data, uint16_t len)
     {
         _rxbuf_push(data[i]);
     }
+}
+
+/**
+ * @brief 批量从串口读取数据并推入环形缓冲区
+ *        Read data from serial port in batch and push to ring buffer
+ * @return 实际读取并推入环形缓冲区的字节数
+ */
+static uint16_t _uart_receive_batch(void)
+{
+    uint8_t temp_buffer[256];
+    ssize_t n = _serial_read_batch(mySerialFd, temp_buffer, sizeof(temp_buffer));
+    if (n > 0)
+    {
+        IMU_UART_RxBytes(temp_buffer, (uint16_t)n);
+        return (uint16_t)n;
+    }
+    return 0;
 }
 
 /**
@@ -517,21 +584,10 @@ void IMU_UART_GetVersion(void)
         uint8_t payload[2] = {IMU_FUNC_VERSION, 0x00};
         IMU_UART_SendCommand(IMU_FUNC_REQUEST_DATA, payload, (uint8_t)sizeof(payload));
 
-        uint8_t rxbyte = 0;
         for (int i = 0; i < 20; ++i)
         {
-            for (int j = 0; j < IMU_UART_RX_BUF_SIZE/2; ++j)
-            { // 把串口缓存刷入环形缓冲
-                int32_t ret = uart_receive(&rxbyte);
-                if (!ret)
-                {
-                    IMU_UART_RxBytes(&rxbyte, 1);
-                }
-                else
-                {
-                    // return;
-                }
-            }
+            /* 批量读取串口数据到环形缓冲区 */
+            _uart_receive_batch();
             IMU_UART_Process();
             if (s_version_high >= 0)
             {
@@ -578,22 +634,11 @@ void IMU_UART_ClearAutoReportData(void)
 
 int IMU_UART_WaitCalibration(uint8_t function, uint32_t timeout_ms)
 {
-    uint8_t rxbyte = 0;
     uint32_t elapsed_ms = 0;
     while (1)
     {
-        for (int j = 0; j < IMU_UART_RX_BUF_SIZE/2; ++j)
-        { // 把串口缓存刷入环形缓冲
-            int32_t ret = uart_receive(&rxbyte);
-            if (!ret)
-            {
-                IMU_UART_RxBytes(&rxbyte, 1);
-            }
-            else
-            {
-                // return -1;
-            }
-        }
+        /* 批量读取串口数据到环形缓冲区 */
+        _uart_receive_batch();
         IMU_UART_Process();
 
         if (s_last_rx_function == function)
@@ -731,18 +776,33 @@ int imu_close() {
 
 int imu_read_angle(float *pitch, float *roll, float *yaw) {
     imu_measurement_t imu_data;
-    uint8_t rxbyte = 0;
 
-    // Receive a bunch of bytes to fill the buffer / 接收一堆字节以填充缓冲区
-    for (int i = 0; i < IMU_UART_RX_BUF_SIZE/2; i++) {
-        int32_t ret = uart_receive(&rxbyte);
-        if (!ret) {
-            IMU_UART_RxBytes(&rxbyte, 1);
-        }
-    }
+    /* 
+     * 策略：丢弃过时数据，获取最新实时数据
+     * Strategy: Discard stale data, get the latest real-time data
+     * 
+     * 步骤1：批量读取当前所有可用数据到环形缓冲区
+     * Step 1: Read all currently available data into ring buffer
+     */
+    _uart_receive_batch();
+    
+    /* 
+     * 步骤2：处理所有数据帧，最后一帧会覆盖之前的，所以静态变量中是最新数据
+     * Step 2: Process all frames, the last one will overwrite previous ones
+     */
     IMU_UART_Process();
-
+    
+    /* 
+     * 步骤3：获取当前最新数据
+     * Step 3: Get the latest data
+     */
     int ret = IMU_UART_GetAll(&imu_data);
+
+    /* 
+     * 步骤4：清空所有缓冲区，丢弃未处理的旧数据，确保下次读取的是新数据
+     * Step 4: Clear all buffers to discard unconsumed stale data
+     */
+    _discard_stale_data();
 
     if (ret == 0) {
         *pitch = imu_data.euler[1];
@@ -753,6 +813,51 @@ int imu_read_angle(float *pitch, float *roll, float *yaw) {
         *pitch = 0.0f;
         *roll = 0.0f;
         *yaw = 0.0f;
+    }
+    return ret;
+}
+
+int imu_read_quaternion(float *q0, float *q1, float *q2, float *q3) {
+    imu_measurement_t imu_data;
+
+    /* 
+     * 策略：丢弃过时数据，获取最新实时数据
+     * Strategy: Discard stale data, get the latest real-time data
+     * 
+     * 步骤1：批量读取当前所有可用数据到环形缓冲区
+     * Step 1: Read all currently available data into ring buffer
+     */
+    _uart_receive_batch();
+    
+    /* 
+     * 步骤2：处理所有数据帧，最后一帧会覆盖之前的，所以静态变量中是最新数据
+     * Step 2: Process all frames, the last one will overwrite previous ones
+     */
+    IMU_UART_Process();
+    
+    /* 
+     * 步骤3：获取当前最新数据
+     * Step 3: Get the latest data
+     */
+    int ret = IMU_UART_GetAll(&imu_data);
+
+    /* 
+     * 步骤4：清空所有缓冲区，丢弃未处理的旧数据，确保下次读取的是新数据
+     * Step 4: Clear all buffers to discard unconsumed stale data
+     */
+    _discard_stale_data();
+
+    if (ret == 0) {
+        *q0 = imu_data.quat[0];
+        *q1 = imu_data.quat[1];
+        *q2 = imu_data.quat[2];
+        *q3 = imu_data.quat[3];
+    }
+    else {
+        *q0 = 0.0f;
+        *q1 = 0.0f;
+        *q2 = 0.0f;
+        *q3 = 0.0f;
     }
     return ret;
 }

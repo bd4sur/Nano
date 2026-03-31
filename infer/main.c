@@ -1352,8 +1352,17 @@ int main() {
                 int ret = -1;
                 int32_t imu_count = 3000;
                 do {
-                    // 根据IMU安装方式调整
-                    ret = imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
+                    // 以下代码适配树莓派盒子（NanoPod）
+                    float q0 = 0.0f;
+                    float q1 = 0.0f;
+                    float q2 = 0.0f;
+                    float q3 = 0.0f;
+                    ret = imu_read_quaternion(&q0, &q1, &q2, &q3);
+                    quaternion_to_euler(q0, q1, q2, q3, &(global_state->roll), &(global_state->pitch), &(global_state->yaw));
+                    global_state->pitch -= 90.0f;
+                    global_state->yaw = fmod(-global_state->yaw, 360.0);
+                    if (global_state->yaw < 0) global_state->yaw += 360.0;
+
 
                     // 以下代码适配 NANO_POD_PLUS_CUBIE_A7Z （2026-03-02制作的单板原型）
                     // ret = imu_read_angle(&(global_state->roll), &(global_state->pitch), &(global_state->yaw));

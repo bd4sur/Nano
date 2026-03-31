@@ -59,6 +59,9 @@ typedef struct {
 } Linglong_Config;
 
 
+void transform_euler_angles(float pitch_in, float roll_in, float yaw_in, float *pitch_out, float *roll_out, float *yaw_out);
+void quaternion_to_euler(float q0, float q1, float q2, float q3, float *pitch, float *roll, float *yaw);
+
 void dithering_fs(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height);
 void dithering_fast(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height);
 

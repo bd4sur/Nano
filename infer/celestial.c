@@ -678,6 +678,120 @@ void to_fisheye(uint8_t *inputBuffer, uint8_t *outputBuffer, uint32_t input_widt
 
 
 
+// 欧拉角转换：避免pitch=90°时的环架锁问题
+void transform_euler_angles(float pitch_in, float roll_in, float yaw_in, float *pitch_out, float *roll_out, float *yaw_out) {
+    const float degtorad = M_PI / 180.0f;
+    const float radtodeg = 180.0f / M_PI;
+
+    float alpha = yaw_in;
+    float beta = pitch_in;
+    float gamma = roll_in;
+    
+    // 计算输入角度的三角函数值
+    float cX = cosf(beta * degtorad);   // cos(beta)
+    float cY = cosf(gamma * degtorad);    // cos(gamma)
+    float cZ = cosf(alpha * degtorad);  // cos(alpha)
+    float sX = sinf(beta * degtorad);   // sin(beta)
+    float sY = sinf(gamma * degtorad);    // sin(gamma)
+    float sZ = sinf(alpha * degtorad);  // sin(alpha)
+    
+    // 计算旋转矩阵元素
+    float m11 = cZ * cY - sZ * sX * sY;
+    float m12 = - cX * sZ;
+    float m13 = cY * sZ * sX + cZ * sY;
+
+    float m21 = cY * sZ + cZ * sX * sY;
+    float m22 = cZ * cX;
+    float m23 = sZ * sY - cZ * cY * sX;
+
+    float m31 = - cX * sY;
+    float m32 = sX;
+    float m33 = cX * cY;
+    
+    // 计算 sy 判断是否奇异
+    float sy = sqrtf(m13 * m13 + m23 * m23);
+    
+    float x, y, z;
+    
+    if (sy >= 1e-6f) {
+        x = atan2f(m31, m32);
+        y = atan2f(-m33, sy);
+        z = atan2f(m23, m13);
+    } else {
+        x = atan2f(-m22, m21);
+        y = atan2f(-m33, sy);
+        z = 0.0f;
+    }
+    
+    *pitch_out = y * radtodeg;
+    *roll_out = x * radtodeg;
+    *yaw_out = z * radtodeg;
+}
+
+
+#include <math.h>
+
+/**
+ * 将四元数转换为 ZXY 欧拉角（Tait-Bryan 角）
+ * 
+ * 坐标系约定:
+ *   - yaw   (alpha): 绕 Z 轴方位角，范围 [0°, 360°)
+ *   - pitch (beta):  绕 X 轴俯仰角，范围 [-90°, 90°]
+ *   - roll  (gamma): 绕 Y 轴横滚角，范围 (-180°, 180°]
+ *
+ * 参数:
+ *   q0,q1,q2,q3 - 输入四元数分量 (x, y, z, w)
+ *   pitch, roll, yaw - 输出指针，结果以度为单位
+ */
+void quaternion_to_euler(float q0, float q1, float q2, float q3, float *pitch, float *roll, float *yaw) {
+    // 映射到标准 x,y,z,w 以便阅读
+    const float x = q1;
+    const float y = q2;
+    const float z = q3;
+    const float w = q0;
+    
+    const float RAD2DEG = 180.0f / M_PI;
+    const float EPS = 1e-6f;
+    
+    // ── 第一步：四元数 → 3×3 旋转矩阵 (R = Rz(yaw)*Rx(pitch)*Ry(roll)) ──
+    const float R00 = 1.0f - 2.0f * (y*y + z*z);
+    const float R01 = 2.0f * (x*y - w*z);
+    const float R10 = 2.0f * (x*y + w*z);
+    const float R11 = 1.0f - 2.0f * (x*x + z*z);
+    const float R20 = 2.0f * (x*z - w*y);
+    const float R21 = 2.0f * (y*z + w*x);
+    const float R22 = 1.0f - 2.0f * (x*x + y*y);
+    
+    // ── 第二步：从旋转矩阵提取 ZXY 欧拉角 ──────────────────────────────
+    // R[2][1] = sin(pitch)
+    float sin_pitch = R21;
+    
+    // 钳制到 [-1, 1]，防止浮点误差导致 asin 返回 NaN
+    if (sin_pitch > 1.0f)  sin_pitch = 1.0f;
+    if (sin_pitch < -1.0f) sin_pitch = -1.0f;
+    
+    float pitch_rad = asinf(sin_pitch);
+    float cos_pitch = cosf(pitch_rad);
+    
+    float roll_rad, yaw_rad;
+    
+    if (fabsf(cos_pitch) > EPS) {
+        // 正常情况：无万向锁
+        roll_rad = atan2f(-R20, R22);
+        yaw_rad  = atan2f(-R01, R11);
+    } else {
+        // 万向锁：pitch ≈ ±90°，cos(pitch)≈0，yaw 与 roll 耦合
+        // 约定 roll = 0，通过矩阵残余项恢复 yaw
+        roll_rad = 0.0f;
+        yaw_rad  = atan2f(R10, R00);
+    }
+    
+    // ── 第三步：转换为角度并归一化 ────────────────────────────────────
+    *pitch = pitch_rad * RAD2DEG;               // [-90, 90]
+    *roll  = roll_rad  * RAD2DEG;               // (-180, 180]
+    *yaw   = yaw_rad   * RAD2DEG;
+}
+
 
 // ===============================================================================
 // 滤波器
