@@ -1459,20 +1459,15 @@ int main() {
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_C) {
                 ephemeris_toggle_linglong_version(key_event, global_state);
             }
-            // 按*键时光机向前（过去）
+            // 按*键时光机向前（过去）（反复按运行/暂停）
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_STAR) {
                 ephemeris_set_timemachine_speed(key_event, global_state, -120);
             }
-            // 短按0键切换时光机运行/暂停
+            // 短按0键回到实时（反复按运行/暂停）
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_0) {
-                ephemeris_toggle_timemachine(key_event, global_state);
-            }
-            // 长按0键回到实时
-            else if (key_event->key_edge == -2 && key_event->key_code == KEYCODE_NUM_0) {
                 ephemeris_set_realtime(key_event, global_state);
-                ephemeris_set_timemachine_speed(key_event, global_state, 0);
             }
-            // 按#键时光机向后（未来）
+            // 按#键时光机向后（未来）（反复按运行/暂停）
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_HASH) {
                 ephemeris_set_timemachine_speed(key_event, global_state, 120);
             }

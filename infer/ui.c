@@ -13,6 +13,7 @@
 
 #include "ephemeris.h"
 #include "celestial.h"
+#include "nongli.h"
 
 
 #define IME_HANZI_NUM 7081
@@ -309,19 +310,24 @@ void show_splash_screen(Key_Event *key_event, Global_State *global_state) {
 #else
     time_t rawtime;
     struct tm *timeinfo;
-    char datetime_string_buffer[80];
-    wchar_t datetime_wcs_buffer[80];
+    char datetime_string_buffer[33];
+    wchar_t datetime_wcs_buffer[33];
+    wchar_t nongli_wcs_buffer[33];
 
     time(&rawtime); // 获取当前时间戳
     timeinfo = localtime(&rawtime); // 转换为本地时间
     strftime(datetime_string_buffer, sizeof(datetime_string_buffer), "%Y-%m-%d %H:%M:%S", timeinfo); // 格式化输出
-    _mbstowcs(datetime_wcs_buffer, datetime_string_buffer, 80);
+    _mbstowcs(datetime_wcs_buffer, datetime_string_buffer, 33);
+
+    LunarDate *nongli = lunar_calculate(timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, 8.0);
+    _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
 
     gfx_draw_textline_centered(global_state->gfx, L"Project Nano", global_state->gfx->width / 2, 8, 255, 255, 255, 0);
     gfx_draw_textline_centered(global_state->gfx, L"电 子 鹦 鹉", global_state->gfx->width / 2, 28, 0, 255, 255, 1);
     gfx_draw_textline_centered(global_state->gfx, datetime_wcs_buffer, global_state->gfx->width / 2, 43, 255, 255, 255, 1);
+    gfx_draw_textline_centered(global_state->gfx, nongli_wcs_buffer, global_state->gfx->width / 2, 58, 255, 255, 255, 1);
     if (global_state->gfx->width > 128) {
-        gfx_draw_textline_centered(global_state->gfx, L"(c) 2025-2026 BD4SUR", global_state->gfx->width / 2, global_state->gfx->height - 3 - FONT_HEIGHT/2, 192, 192, 192, 1);
+        gfx_draw_textline_centered(global_state->gfx, L"(c) 2025-2026 BD4SUR", global_state->gfx->width / 2, global_state->gfx->height - 3 - FONT_HEIGHT/2, 128, 128, 128, 1);
     }
     else {
         draw_copyright_notice(key_event, global_state, 20, 53);
@@ -1319,7 +1325,7 @@ static uint32_t last_day = 0;
 static uint32_t sunrise_time[2] = {0, 0}; // hour, minute
 static uint32_t sunset_time[2] = {0, 0}; // hour, minute
 
-static int32_t timemachine_running_state = 0; // 0-停止；1-时光机运行；2-实时
+static int32_t timemachine_running_state = 2; // 0-停止；1-时光机运行；2-实时
 static int32_t timemachine_speed = 0; // 时光机速度，正数为未来，负数为过去，单位秒
 static uint64_t timemachine_start_timestamp = 0;
 
@@ -1392,11 +1398,11 @@ void draw_linglong(Key_Event *key_event, Global_State *global_state) {
 
     dithering_fast(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height);
 
-    gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V2603 (c) BD4SUR", 1, 226, 64, 64, 64, 3);
+    gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V2603 (c) BD4SUR", 1, 226, 128, 128, 128, 3);
 
     wchar_t timestr[30];
     swprintf(timestr, 30, L"%04d-%02d-%02d %02d:%02d:%02d", llcfg->year, llcfg->month, llcfg->day, llcfg->hour, llcfg->minute, llcfg->second);
-    gfx_draw_textline(global_state->gfx, timestr, 200, 226, 128, 128, 128, 3);
+    gfx_draw_textline(global_state->gfx, timestr, 200, global_state->gfx->height - 14, 255, 255, 255, 1);
 
     gfx_refresh(global_state->gfx);
 }
@@ -1565,7 +1571,15 @@ void ephemeris_toggle_timemachine(Key_Event *key_event, Global_State *global_sta
 
 void ephemeris_set_timemachine_speed(Key_Event *key_event, Global_State *global_state, int32_t speed) {
     timemachine_speed = speed;
-    ephemeris_toggle_timemachine(key_event, global_state);
+    if (timemachine_running_state == 0) {
+        timemachine_running_state = 1;
+    }
+    else {
+        timemachine_running_state = 0;
+    }
+    if (timemachine_start_timestamp == 0) {
+        timemachine_start_timestamp = global_state->timestamp;
+    }
 }
 
 void ephemeris_set_realtime(Key_Event *key_event, Global_State *global_state) {
@@ -1579,7 +1593,15 @@ void ephemeris_set_realtime(Key_Event *key_event, Global_State *global_state) {
     llcfg->month = timeinfo->tm_mon + 1;
     llcfg->year = timeinfo->tm_year + 1900;
 
-    timemachine_running_state = 2;
+    if (timemachine_running_state == 0) {
+        timemachine_running_state = 2;
+    }
+    else {
+        timemachine_running_state = 0;
+    }
+    if (timemachine_start_timestamp == 0) {
+        timemachine_start_timestamp = global_state->timestamp;
+    }
 }
 
 void ephemeris_toggle_linglong_version(Key_Event *key_event, Global_State *global_state) {

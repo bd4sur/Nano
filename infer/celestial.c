@@ -22,31 +22,6 @@
 #define MAX(x,y) (((x) > (y)) ? (x) : (y))
 
 
-// 大气光学参数
-static float MIE_G = 0.9f;
-static float RAYLEIGH_BETA = 0.3f;
-static float MIE_BETA_BASE = 0.001f;
-static float MIE_BETA_MAX = 0.1f;
-static float ATMOSPHERE_HEIGHT = 8.5f;
-
-// 波长相关的瑞利散射系数 (近似)
-static float RAYLEIGH_WAVELENGTH_FACTORS[3] = { 680, 550, 450 };
-
-// 臭氧吸收系数
-static float OZONE_ABSORPTION[3] = { 0.005,  0.040,  0.025 };
-
-// 大气光学质量查找表：index(deg)=[0,90]
-// AIR_MASS_LUT[i] = 1.0 / (Math.cos(i/180*Math.PI) + 0.50572 * Math.pow(96.07995 - i, -1.6364));
-static const float AIR_MASS_LUT[91] = {0.9997119918558381f, 0.9998592586926793f, 1.0003110890402365f, 1.0010681642273038f, 1.0021316319418698f, 1.0035031104733083f, 1.0051846947247018f, 1.0071789640369042f, 1.0094889918788565f, 1.0121183574721748f, 1.0150711594323112f, 1.0183520315238068f, 1.021966160643514f, 1.02591930716334f, 1.03021782778332f, 1.034868701066905f, 1.039879555853524f, 1.045258702769114f, 1.0510151690837524f, 1.0571587371972049f, 1.0636999870686308f, 1.0706503429463945f, 1.0780221247986177f, 1.085828604895485f, 1.0940840700512897f, 1.1028038900988062f, 1.1120045932419853f, 1.121703949016588f, 1.1319210596838862f, 1.1426764609918518f, 1.1539922333636758f, 1.1658921247176817f, 1.1784016862889535f, 1.1915484230151434f, 1.2053619602715009f, 1.2198742289986713f, 1.235119671567844f, 1.2511354710792817f, 1.2679618072017325f, 1.2856421421433408f, 1.304223540913535f, 1.3237570307072422f, 1.3442980050388187f, 1.3659066791992502f, 1.3886486047386126f, 1.4125952520262743f, 1.4378246715634218f, 1.4644222466782195f, 1.4924815526010962f, 1.5221053397946254f, 1.5534066629239196f, 1.5865101811584308f, 1.6215536607984282f, 1.6586897177821054f, 1.698087845793255f, 1.7399367858997083f, 1.7844473064938864f, 1.8318554785517882f, 1.8824265519054382f, 1.936459564717931f, 1.9942928525292494f, 2.0563106676544924f, 2.122951177872814f, 2.194716190118216f, 2.2721830471079465f, 2.3560192822092514f, 2.4470008042366937f, 2.54603463942889f, 2.6541876121514743f, 2.7727228429386073f, 2.9031466488030997f, 3.04726944828179f, 3.2072857614398935f, 3.385880605461222f, 3.5863729280725876f, 3.812911869220776f, 4.07074973811966f, 4.366628617623185f, 4.709338986746881f, 5.110545154023385f, 5.5860358798512f, 6.157673414942184f, 6.856529464259364f, 7.728117030932225f, 8.841485995032256f, 10.30579132793028f, 12.30208325139153f, 15.14773544253034f, 19.433245107572002f, 26.31055506838526f, 37.91960837783621f};
-
-// 散射光随太阳高度变化的衰减因子：sun_altitude_deg=[-90,90]
-// ATTN_SCALE_LUT[sun_altitude_deg+90] = (sun_altitude_deg >= 0) ? (expf(-powf((sun_altitude_deg / 20.0f), 4.0f)) + 0.01f) : (1.0f);
-static const float ATTN_SCALE_LUT[181] = {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1.01,1.009993750019531,1.0099000049998332,1.0094938781229095,1.0084012793176063,1.0061013694701175,1.0019327166055711,0.9951057826726806,0.9847249016017939,0.9698231310344834,0.9494130628134758,0.9225556126616087,0.8884467393499313,0.8465188286183754,0.796549202213455,0.7387633299194912,0.6739157633354735,0.6033289868052961,0.5288709904654524,0.45285793449343037,0.37787944117144234,0.3065598428646592,0.24128605528432856,0.18394671713945743,0.1357323295944279,0.0970383676562235,0.06749254452616452,0.04609841754220801,0.031459239080080414,0.02202814149649049,0.016329715427485746,0.013113504775028439,0.011424976438192463,0.010603957787932912,0.010235900606629577,0.010084487560285047,0.010027602616196642,0.0100081825538457,0.010002188925004884,0.010000525452390085,0.010000112535174719,0.010000021375803119,0.01000000357929494,0.01000000052506122,0.010000000067048827,0.0100000000074047,0.010000000000702522,0.01000000000005687,0.010000000000003902,0.010000000000000226,0.01000000000000001,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01};
-
-// 夜间散射光的衰减因子：sun_altitude_deg=[-90,90]
-// NIGHT_ATTN_LUT[sun_altitude_deg+90] = (sun_altitude_deg >= 0) ? (1.0f) : MAX(0.0f, expf(0.016f * sun_altitude_deg));
-static const float NIGHT_ATTN_LUT[181] = {0.23692775868212176,0.24074909196587688,0.2446320583319975,0.24857765184107966,0.2525868825866102,0.2566607769535559,0.26080037788112365,0.2650067451297589,0.26928095555244996,0.27362410337040804,0.27803730045319414,0.2825216766033636,0.28707837984570167,0.2917085767211244,0.2964134525853191,0.3011942119122021,0.3060520786022707,0.3109882962959281,0.31600412869186245,0.32110085987056064,0.32627979462303947,0.3315422587848797,0.33688959957564707,0.34232318594378797,0.34784440891708746,0.35345468195878016,0.3591554413294046,0.3649481464544937,0.37083428029819565,0.37681534974292086,0.38289288597511206,0.38906844487723635,0.3953436074260998,0.401719980097586,0.4081991952779227,0.4147829116815814,0.4214728147759176,0.4282706172126597,0.43517805926635666,0.44219690927989863,0.44932896411722156,0.4565760496233147,0.46394002109164667,0.4714227637391309,0.47902619318875106,0.4867522559599717,0.494602929967057,0.5025802250254283,0.5106861833661879,0.5189228801589404,0.5272924240430485,0.535796957667456,0.5444386582392171,0.5532197380808739,0.5621424451968224,0.5712090638488149,0.5804219151407424,0.5897833576128504,0.5992957878455384,0.6089616410728969,0.6187833918061408,0.6287635544670984,0.6389046840319161,0.6492093766851474,0.659680270484389,0.6703200460356393,0.6811314271795471,0.6921171816887304,0.7032801219763409,0.7146231058160573,0.7261490370736909,0.7378608664505912,0.7497615922390413,0.7618542610898376,0.7741419687922484,0.7866278610665534,0.7993151343693651,0.812207036711939,0.8253068684916824,0.838617983337074,0.8521437889662113,0.865887748059205,0.8798533791446438,0.8940442575003572,0.9084640160687062,0.9231163463866358,0.9380049995307295,0.9531337870775047,0.9685065820791976,0.9841273200552851,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1};
-
 
 // 行星相关常量（用于渲染）
 //                                        -     1Mer  2Ven  3Ear  4Mars 5Jup  6Sat  7Ura  8Nep
@@ -57,7 +32,7 @@ static const uint8_t PLANET_COLOR_B[9]  = {0,    192,  64,   0,    0,    128,  1
 static const wchar_t PLANET_NAME[9][10] = {L"", L"水星", L"金星", L"地球", L"火星", L"木星", L"土星", L"天王星", L"海王星"};
 
 // 星表
-#define STARS_NUM (23)
+#define STARS_NUM (72)
 static const float STARS[STARS_NUM][7] = {
 //(RA)h     m      s    (Dec)d       m      s        Mag
     {2.0f,  32.0f,  9.3f,     89.0f, 16.0f, 10.8f,   2.09f}, // 勾陈一（北极星）
@@ -84,12 +59,69 @@ static const float STARS[STARS_NUM][7] = {
     { 5.0f, 14.0f, 33.2f,     -8.0f, 12.0f, 13.0f,   0.13f}, // 参宿七
     { 5.0f, 35.0f, 27.0f,     -5.0f, 54.0f, 42.2f,   2.77f}, // 伐三
     { 3.0f, 47.0f, 29.4f,     24.0f,  6.0f, 19.6f,   2.87f}, // 昴宿星团
+
+    // 以下更不准确，仅用于视觉效果
+    { 0.0f,  9.0f, 10.7f,      29.0f, 18.0f, 44.0f,   2.06f}, // 壁宿二（Alpheratz）
+    { 0.0f, 13.0f, 14.2f,      15.0f, 11.0f,  1.0f,   3.41f}, // 雷电一（Lambda Pegasi）
+    { 0.0f, 19.0f, 43.6f,      -8.0f, 49.0f, 26.0f,   3.97f}, // 离宫一（Lambda Piscium）
+    { 0.0f, 43.0f, 35.4f,     -17.0f, 59.0f, 12.0f,   2.04f}, // 土司空（Diphda）
+    { 1.0f,  8.0f, 44.9f,     -10.0f, 10.0f, 56.0f,   3.60f}, // 外屏七（Chi Piscium）
+    { 1.0f,  9.0f, 43.9f,      35.0f, 37.0f, 14.0f,   2.05f}, // 奎宿九（Mirach）
+    { 2.0f,  2.0f,  2.8f,      -2.0f, 45.0f, 49.0f,   3.82f}, // 右更二（Theta Ceti）
+    { 2.0f,  3.0f, 53.9f,      42.0f, 19.0f, 47.0f,   2.27f}, // 王良一（Caph）
+    { 3.0f, 47.0f, 29.1f,      24.0f,  6.0f, 18.0f,   1.65f}, // 昴宿六（Alcyone）
+    { 4.0f,  5.0f, 16.9f,      15.0f, 23.0f, 54.0f,   3.77f}, // 卷舌二（Xi Persei）
+    { 4.0f, 49.0f, 50.4f,       6.0f, 57.0f, 40.0f,   3.77f}, // 砺石四（Gamma Eridani）
+    { 6.0f,  8.0f, 57.7f,     -14.0f, 42.0f,  9.0f,   2.89f}, // 军市一（Mirzam）
+    { 6.0f, 22.0f, 41.9f,     -17.0f, 57.0f, 21.0f,   2.75f}, // 娄宿三（Hamal）
+    { 6.0f, 37.0f, 42.8f,      16.0f, 23.0f, 57.0f,   1.93f}, // 井宿三（Alhena）
+    { 6.0f, 58.0f, 37.6f,     -28.0f, 58.0f, 19.0f,   1.50f}, // 弧矢七（Adhara）
+    { 7.0f, 24.0f,  5.7f,     -29.0f, 18.0f, 11.0f,   3.02f}, // 孙增一（Delta Canis Majoris）
+    { 7.0f, 34.0f, 36.0f,      31.0f, 53.0f, 19.0f,   1.58f}, // 北河二（Castor）
+    { 7.0f, 45.0f, 18.9f,      28.0f,  1.0f, 34.0f,   1.14f}, // 北河三（Pollux）
+    { 9.0f, 27.0f, 35.2f,      -8.0f, 39.0f, 31.0f,   1.98f}, // 星宿一（Alphard）
+    { 9.0f, 45.0f, 51.1f,     -14.0f, 40.0f, 35.0f,   3.11f}, // 柳宿六（Zeta Hydrae）
+    {10.0f, 35.0f, 48.4f,      -9.0f, 48.0f, 36.0f,   3.90f}, // 西上相（Theta Leonis）
+    {11.0f, 53.0f, 49.8f,      53.0f, 41.0f, 41.0f,   3.01f}, // 文昌四（Al Haud）
+    {12.0f, 21.0f, 21.6f,     -57.0f,  6.0f, 45.0f,   1.63f}, // 十字架一（Gacrux）
+    {13.0f, 39.0f, 53.1f,     -53.0f, 27.0f, 10.0f,   2.55f}, // 库楼三（Gamma Centauri）
+    {13.0f, 47.0f, 32.4f,     -49.0f, 18.0f, 48.0f,   1.86f}, // 海石一（Avior）
+    {13.0f, 54.0f, 41.1f,      18.0f, 23.0f, 51.0f,   2.68f}, // 常陈一（Muphrid）
+    {14.0f, 16.0f,  6.9f,      51.0f, 22.0f, 21.0f,   3.72f}, // 紫微右垣三（Kappa Draconis）
+    {14.0f, 50.0f, 52.5f,     -16.0f,  2.0f, 30.0f,   2.75f}, // 氐宿一（Zubeneschamali）
+    {15.0f, 20.0f, 43.7f,      -9.0f, 46.0f, 12.0f,   2.89f}, // 周鼎一（Zubenelgenubi）
+    {15.0f, 34.0f, 41.2f,       1.0f, 32.0f, 32.0f,   3.38f}, // 东次相（Delta Virginis）
+    {16.0f,  0.0f, 20.0f,     -22.0f, 37.0f, 18.0f,   2.74f}, // 尾宿五（Sargas）
+    {16.0f, 35.0f, 52.2f,     -28.0f, 12.0f, 57.0f,   2.60f}, // 尾宿八（Shaula）
+    {16.0f, 48.0f, 39.9f,     -69.0f,  1.0f, 40.0f,   2.69f}, // 三角形三（Atria）
+    {17.0f, 10.0f, 22.7f,      15.0f, 43.0f, 18.0f,   3.23f}, // 奚仲三（Theta Herculis）
+    {17.0f, 14.0f, 38.8f,     -15.0f, 36.0f, 43.0f,   3.49f}, // 宋增一（Kappa Ophiuchi）
+    {17.0f, 22.0f, 51.2f,     -24.0f, 59.0f, 58.0f,   2.43f}, // 韩增一（Gamma Ophiuchi）
+    {17.0f, 33.0f, 36.5f,     -37.0f,  6.0f, 13.0f,   2.80f}, // 侯（Cebalrai）
+    {17.0f, 37.0f, 19.1f,     -42.0f, 59.0f, 52.0f,   2.75f}, // 望远镜座一（Alpha Telescopii）
+    {18.0f,  5.0f, 27.2f,     -30.0f, 25.0f,  3.0f,   2.72f}, // 傅说（Phi Sagittarii）
+    {18.0f, 21.0f,  8.9f,      -2.0f, 53.0f, 49.0f,   3.39f}, // 箕宿三（Kaus Australis）
+    {18.0f, 27.0f, 58.1f,     -25.0f, 15.0f, 18.0f,   2.82f}, // 斗宿四（Nunki）
+    {19.0f,  2.0f, 36.7f,     -29.0f, 52.0f, 15.0f,   3.51f}, // 建三（Gamma Telescopii）
+    {19.0f, 55.0f, 50.4f,     -60.0f, 21.0f, 34.0f,   2.86f}, // 鸟喙一（Alpha Tucanae）
+    {20.0f, 18.0f,  3.4f,     -12.0f, 32.0f, 41.0f,   2.97f}, // 垒壁阵五（Delta Capricorni）
+    {20.0f, 25.0f, 38.9f,     -56.0f, 44.0f,  6.0f,   2.75f}, // 孔雀十一（Peacock）
+    {21.0f, 31.0f, 33.5f,      -5.0f, 34.0f, 16.0f,   2.90f}, // 虚宿一（Beta Aquarii）
+    {21.0f, 44.0f,  8.2f,     -14.0f, 32.0f, 57.0f,   3.73f}, // 危宿一（Alpha Equulei）
+    {22.0f,  2.0f, 51.7f,     -43.0f,  8.0f, 45.0f,   3.49f}, // 败臼一（Gamma Gruis）
+    {22.0f,  8.0f, 14.0f,     -46.0f, 57.0f, 40.0f,   1.74f}, // 鹤一（Al Nair）
 };
 
 static const wchar_t STAR_NAME[STARS_NUM][10] = {
-    L"北极星", L"天枢", L"", L"", L"", L"", L"开阳", L"",
+    L"北极星", L"天枢", L"天璇", L"天玑", L"天权", L"玉衡", L"开阳", L"摇光",
     L"天狼", L"大角", L"织女一", L"河鼓二", L"M31",
-    L"", L"参宿四", L"", L"", L"", L"", L"", L"参宿七", L"", L"昴宿星团"
+    L"觜宿一", L"参宿四", L"参宿五", L"参宿一", L"参宿二", L"参宿三", L"参宿六", L"参宿七", L"伐三", L"昴宿星团",
+    L"老人", L"南门二", L"五车二", L"南河三", L"水委一", L"马腹一", L"毕宿五", L"心宿二", L"角宿一", L"北河三", L"北落师门", L"十字架三",
+    L"天津四", L"十字架二", L"轩辕十四", L"斗宿四", L"娄宿三",
+    L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", 
+    L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", 
+    L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", 
+    L"", L"", L"", L""
 };
 
 
@@ -97,6 +129,7 @@ static const wchar_t STAR_NAME[STARS_NUM][10] = {
 static uint32_t landscape_texture_width = 600;
 static uint32_t landscape_texture_height = 600;
 static uint8_t *landscape_texture_rgb = NULL;
+static uint8_t *landscape_buffer_rgb = NULL;
 
 
 // ===============================================================================
@@ -1261,18 +1294,20 @@ void draw_horizon(
 
 
 // 刷新地景
-//   landscape_buffer - 地景纹理（可能是鱼眼贴图、平面贴图、平面的算法生成地景等）
+//   landscape_source - 地景纹理（可能是鱼眼贴图、平面贴图、平面的算法生成地景等）
 //   is_flat - 0:贴图本身就是鱼眼，无需转鱼眼  1-贴图是平面的，需要使用fov参数转鱼眼
-void update_landscape(uint8_t *landscape_buffer, uint32_t width, uint32_t height, int32_t is_flat, float fov) {
+void update_landscape(uint8_t *landscape_source, uint32_t width, uint32_t height, int32_t is_flat, float fov) {
     if (is_flat) {
         landscape_texture_width = width;
         landscape_texture_height = height;
-        to_fisheye(landscape_buffer, landscape_texture_rgb, width, height, fov);
+        to_fisheye(landscape_source, landscape_buffer_rgb, width, height, fov);
+        landscape_texture_rgb = landscape_buffer_rgb;
     }
     else {
         landscape_texture_width = width;
         landscape_texture_height = height;
-        landscape_texture_rgb = landscape_buffer;
+        // memcpy(landscape_texture_rgb, landscape_source, width * height * 3);
+        landscape_texture_rgb = landscape_source;
     }
 }
 
@@ -1950,9 +1985,7 @@ void scatter_model_1(
     float sun_air_mass = 0.0f;
     // Kasten-Young, Ref. https://kexue.fm/archives/396
     if (sun_altitude_deg >= 0.0f) {
-        sun_air_mass = (enable_opt_lut) ?
-                        AIR_MASS_LUT[(int32_t)floorf(sun_zenith_deg)] :
-                        (1.0f / (cosf(sun_zenith) + 0.50572f * powf(96.07995f - sun_zenith_deg, -1.6364f)));
+        sun_air_mass = 1.0f / (cosf(sun_zenith) + 0.50572f * powf(96.07995f - sun_zenith_deg, -1.6364f));
     }
     else {
         sun_air_mass = 40.0f;
@@ -1966,8 +1999,7 @@ void scatter_model_1(
     float view_air_mass = 0.0f;
     // Kasten-Young
     if (view_altitude_deg >= 0.0f) {
-        view_air_mass = (enable_opt_lut) ? AIR_MASS_LUT[(int32_t)floorf(view_zenith_deg)] :
-                        (1.0f / (cosf(view_zenith) + 0.50572f * powf(96.07995f - view_zenith_deg, -1.6364f)));
+        view_air_mass = 1.0f / (cosf(view_zenith) + 0.50572f * powf(96.07995f - view_zenith_deg, -1.6364f));
     }
     else {
         view_air_mass = 40.0f;
@@ -1979,6 +2011,7 @@ void scatter_model_1(
 
 
     // 米氏散射相函数
+    const float MIE_G = 0.9f;
     float mie_phase = powf(1.0f + MIE_G * MIE_G - 2.0f * MIE_G * cos_theta, -1.5f);
 
 
@@ -1988,10 +2021,13 @@ void scatter_model_1(
 
     // 计算视线方向的大气密度系数：直觉上来看，密度越大，对散射的贡献越大
     float rz = MAX(0.01, ray_norm_z); // 避免除零
+    const float ATMOSPHERE_HEIGHT = 8.5f;
     float density_factor = expf(-rz / ATMOSPHERE_HEIGHT);
 
 
     // 瑞利散射系数：分波长（RGB通道）计算
+    const float RAYLEIGH_BETA = 0.3f;
+    const float RAYLEIGH_WAVELENGTH_FACTORS[3] = { 680, 550, 450 };
     // rayleigh_beta_at_wavelength[i] = RAYLEIGH_BETA * Math.pow(rayleigh_ref_wavelength / RAYLEIGH_WAVELENGTH_FACTORS[i], 4);
     float rayleigh_ref_wavelength = RAYLEIGH_WAVELENGTH_FACTORS[1]; // G分量作为参考波长
     float wl_0 = rayleigh_ref_wavelength / RAYLEIGH_WAVELENGTH_FACTORS[0]; // R
@@ -2004,6 +2040,8 @@ void scatter_model_1(
 
 
     // 米氏散射系数：地平线附近，气溶胶浓度剧增（用viewAirMass模拟），米氏散射贡献显著上升
+    const float MIE_BETA_BASE = 0.001f;
+    const float MIE_BETA_MAX = 0.1f;
     float mie_beta = MIN(MIE_BETA_MAX, MIE_BETA_BASE * view_air_mass);
 
 
@@ -2015,14 +2053,14 @@ void scatter_model_1(
     float rayleigh_contrib_1 = rayleigh_beta_1 * rayleigh_phase;
     float rayleigh_contrib_2 = rayleigh_beta_2 * rayleigh_phase;
 
-    float attn_scale = (enable_opt_lut) ?
-                        ATTN_SCALE_LUT[(int32_t)floorf(sun_altitude_deg) + 90] :
-                        ((sun_altitude_deg >= 0) ? (expf(-powf((sun_altitude_deg / 20.0f), 4.0f)) + 0.01f) : (1.0f));
+    float attn_scale = (sun_altitude_deg >= 0) ? (expf(-powf((sun_altitude_deg / 20.0f), 4.0f)) + 0.01f) : (1.0f);
 
     float attn_0 = expf(-(rayleigh_beta_0 + mie_beta) * view_air_mass * attn_scale);
     float attn_1 = expf(-(rayleigh_beta_1 + mie_beta) * view_air_mass * attn_scale);
     float attn_2 = expf(-(rayleigh_beta_2 + mie_beta) * view_air_mass * attn_scale);
 
+    // 臭氧吸收
+    const float OZONE_ABSORPTION[3] = { 0.005,  0.040,  0.025 };
     float ozone_transmittance_0 = expf(-OZONE_ABSORPTION[0] * sun_air_mass * 0.8);
     float ozone_transmittance_1 = expf(-OZONE_ABSORPTION[1] * sun_air_mass * 0.8);
     float ozone_transmittance_2 = expf(-OZONE_ABSORPTION[2] * sun_air_mass * 0.8);
@@ -2032,9 +2070,7 @@ void scatter_model_1(
     float scattered_2 = (rayleigh_contrib_2 + mie_contrib) * attn_2 * ozone_transmittance_2 * density_factor;
 
     // 太阳落到地平线以下时，进一步衰减散射光
-    float night_attn = (enable_opt_lut) ?
-                        NIGHT_ATTN_LUT[(int32_t)floorf(sun_altitude_deg) + 90] :
-                        ((sun_altitude_deg >= 0) ? (1.0f) : MAX(0.0f, expf(0.016f * sun_altitude_deg)));
+    float night_attn = (sun_altitude_deg >= 0) ? (1.0f) : MAX(0.0f, expf(0.016f * sun_altitude_deg));
     scattered_0 *= night_attn;
     scattered_1 *= night_attn;
     scattered_2 *= night_attn;
@@ -2101,6 +2137,7 @@ void scatter_model_2(
     float rayleigh_phase = (1.0f + cos_theta * cos_theta) * 0.75f;
 
     // 瑞利散射系数：分波长（RGB通道）计算
+    const float RAYLEIGH_WAVELENGTH_FACTORS[3] = { 680, 550, 450 };
     const float rayleigh_beta_base = 0.04f;
     // rayleigh_beta_at_wavelength[i] = rayleigh_beta_base * Math.pow(rayleigh_ref_wavelength / RAYLEIGH_WAVELENGTH_FACTORS[i], 4);
     float rayleigh_ref_wavelength = RAYLEIGH_WAVELENGTH_FACTORS[1]; // G分量作为参考波长
@@ -2183,6 +2220,7 @@ void scatter_model_2(
     }
 
     // 臭氧吸收
+    const float OZONE_ABSORPTION[3] = { 0.005,  0.040,  0.025 };
     float oz_factor = 0.16f;
     float oz_r = expf(-OZONE_ABSORPTION[0] * Lsun * oz_factor);
     float oz_g = expf(-OZONE_ABSORPTION[1] * Lsun * oz_factor);
@@ -2661,7 +2699,7 @@ void calculate_scattered_pixel(
 // ===============================================================================
 
 void linglong_init(Linglong_Config *cfg) {
-    landscape_texture_rgb = (uint8_t *)calloc(landscape_texture_width * landscape_texture_height * 3, sizeof(uint8_t));
+    landscape_buffer_rgb = (uint8_t *)calloc(landscape_texture_width * landscape_texture_height * 3, sizeof(uint8_t));
 
     cfg->fb_width = 0;
     cfg->fb_height = 0;
