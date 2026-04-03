@@ -2345,7 +2345,8 @@ void scatter_model_2(
     float scattered_2 = (sum_R_b * rayleigh_beta_2 * rayleigh_phase + sum_M_b * mie_beta * mie_phase) * oz_b;
 
     // 全局增益、限幅、输出
-    const float global_gain = 2.0;
+    // const float global_gain = (4.0f-1.8f) * expf(-(sun_altitude_deg / 3.0f) * (sun_altitude_deg / 3.0f)) + 1.8f;
+    const float global_gain = 2.0f;
     *red   = MIN(1.0f, scattered_0 * global_gain);
     *green = MIN(1.0f, scattered_1 * global_gain);
     *blue  = MIN(1.0f, scattered_2 * global_gain);
@@ -2756,10 +2757,10 @@ void scatter_model_3(
     }
 
     /* 臭氧吸收 */
-    const float ozone_absorption0 = 0.005f;
+    const float ozone_absorption0 = 0.020f;
     const float ozone_absorption1 = 0.040f;
-    const float ozone_absorption2 = 0.010f;
-    const float oz_scale = 80.0f;
+    const float ozone_absorption2 = 0.000f;
+    const float oz_scale = 90.0f;
     float oz_path = (tMax - tMin) / S3_Ra;
     color0 *= expf(-ozone_absorption0 * oz_path * oz_scale);
     color1 *= expf(-ozone_absorption1 * oz_path * oz_scale);
@@ -2774,7 +2775,7 @@ void scatter_model_3(
     float night_light_scale = 1.0f - viewElevationDeg / 90.0f;
     color0 += 0.05f * night_light_scale;
     color1 += 0.08f * night_light_scale;
-    color2 += 0.10f * night_light_scale;
+    color2 += 0.12f * night_light_scale;
 
     // 限幅输出
     *red   = MIN(1.0f, color0);
