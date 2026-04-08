@@ -40,6 +40,12 @@ void gfx_soft_clear(Nano_GFX *gfx) {
     // gfx_refresh(gfx);
 }
 
+// 用纯白色填充整个屏幕
+void gfx_fill_white(Nano_GFX *gfx) {
+    memset(gfx->frame_buffer_rgb888, 255, gfx->width * gfx->height * 3);
+    // gfx_refresh(gfx);
+}
+
 // 画点
 // mode: 0-置黑  1-置色  2-异或  3-加色
 void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
@@ -400,6 +406,107 @@ void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y
 }
 
 
+
+// 绘制实心六边形
+// 使用扫描线算法填充凸六边形
+void gfx_draw_hexagon(
+    Nano_GFX *gfx,
+    uint32_t x1, uint32_t y1,
+    uint32_t x2, uint32_t y2,
+    uint32_t x3, uint32_t y3,
+    uint32_t x4, uint32_t y4,
+    uint32_t x5, uint32_t y5,
+    uint32_t x6, uint32_t y6,
+    uint8_t red, uint8_t green, uint8_t blue, uint8_t mode
+) {
+    // 将顶点存储到数组中便于处理
+    uint32_t x_coords[6] = {x1, x2, x3, x4, x5, x6};
+    uint32_t y_coords[6] = {y1, y2, y3, y4, y5, y6};
+    
+    // 计算六边形的垂直范围（限制在屏幕范围内）
+    uint32_t y_min = y1;
+    uint32_t y_max = y1;
+    for (int i = 1; i < 6; i++) {
+        if (y_coords[i] < y_min) y_min = y_coords[i];
+        if (y_coords[i] > y_max) y_max = y_coords[i];
+    }
+    
+    // 限制在画布范围内
+    if (y_min >= gfx->height) return;
+    if (y_max >= gfx->height) y_max = gfx->height - 1;
+    
+    // 对每一行扫描线，计算与六边形边的交点
+    for (uint32_t y = y_min; y <= y_max; y++) {
+        int32_t x_intersections[6];
+        int num_intersections = 0;
+        
+        // 检查每条边与当前水平线的交点
+        for (int i = 0; i < 6; i++) {
+            uint32_t x_start = x_coords[i];
+            uint32_t y_start = y_coords[i];
+            uint32_t x_end = x_coords[(i + 1) % 6];
+            uint32_t y_end = y_coords[(i + 1) % 6];
+            
+            // 跳过水平边（已在顶点处处理）
+            if (y_start == y_end) continue;
+            
+            // 检查当前扫描线是否与这条边相交
+            // 使用严格的包含-排除规则避免顶点重复计数
+            int intersect = 0;
+            if (y_start < y_end) {
+                // 向上边：y_start <= y < y_end
+                intersect = (y >= y_start && y < y_end) ? 1 : 0;
+            } else {
+                // 向下边：y_end < y <= y_start
+                intersect = (y > y_end && y <= y_start) ? 1 : 0;
+            }
+            
+            if (intersect) {
+                // 线性插值计算交点的x坐标
+                int32_t dy = (int32_t)y_end - (int32_t)y_start;
+                int32_t dx = (int32_t)x_end - (int32_t)x_start;
+                int32_t dy_scan = (int32_t)y - (int32_t)y_start;
+                
+                // x = x_start + dx * (y - y_start) / dy
+                int32_t x_intersect = (int32_t)x_start + (dx * dy_scan) / dy;
+                
+                if (num_intersections < 6) {
+                    x_intersections[num_intersections++] = x_intersect;
+                }
+            }
+        }
+        
+        // 对交点进行排序（冒泡排序）
+        for (int i = 0; i < num_intersections - 1; i++) {
+            for (int j = i + 1; j < num_intersections; j++) {
+                if (x_intersections[i] > x_intersections[j]) {
+                    int32_t temp = x_intersections[i];
+                    x_intersections[i] = x_intersections[j];
+                    x_intersections[j] = temp;
+                }
+            }
+        }
+        
+        // 填充交点之间的区域（凸多边形，成对填充）
+        for (int i = 0; i < num_intersections; i += 2) {
+            if (i + 1 >= num_intersections) break;
+            
+            int32_t x_start = x_intersections[i];
+            int32_t x_end = x_intersections[i + 1];
+            
+            // 限制在画布范围内
+            if (x_end < 0) continue;
+            if (x_start >= (int32_t)gfx->width) continue;
+            if (x_start < 0) x_start = 0;
+            if (x_end >= (int32_t)gfx->width) x_end = gfx->width - 1;
+            
+            // 绘制扫描线段
+            for (int32_t x = x_start; x <= x_end; x++) {
+                gfx_draw_point(gfx, (uint32_t)x, y, red, green, blue, mode);
+            }
+        }
+    }
+}
 
 uint8_t *get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
     if (utf32 < 32) {

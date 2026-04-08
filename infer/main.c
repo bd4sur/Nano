@@ -158,34 +158,37 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         // 临时关闭draw_textarea的gfx_refresh，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
         global_state->is_full_refresh = 0;
 
-        gfx_soft_clear(global_state->gfx);
+        gfx_fill_white(global_state->gfx);
 
         // 显示界面标题
-        // gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, 12, 255, 255, 255, 1);
-        gfx_draw_textline(global_state->gfx, L"Reading...", 0, 0, 64, 255, 64, 1);
+        wchar_t prefill_title_str[50];
+        swprintf(prefill_title_str, 50, L"%ls Reading...", global_state->llm_model_name);
+        render_header(key_event, global_state, prefill_title_str, 1);
 
         w_textarea_prefill->x = 0;
-        w_textarea_prefill->y = 17;
+        w_textarea_prefill->y = 14;
         w_textarea_prefill->width = global_state->gfx->width;
-        w_textarea_prefill->height = global_state->gfx->height - 17 - 17;
+        w_textarea_prefill->height = global_state->gfx->height - 14 - 14;
 
         // 显示已经处理的输入prompt
         set_textarea(key_event, global_state, w_textarea_prefill, session->output_text, -1, 1);
         draw_textarea(key_event, global_state, w_textarea_prefill);
 
+        // 进度条
+        uint32_t pg_bottom_y = global_state->gfx->height - 14;
+        // gfx_draw_line(global_state->gfx, 0, (pg_bottom_y - 4), global_state->gfx->width, (pg_bottom_y - 4), 0, 0, 0, 1);
+        // gfx_draw_line(global_state->gfx, 0, (pg_bottom_y - 1), global_state->gfx->width, (pg_bottom_y - 1), 0, 0, 0, 1);
+        // gfx_draw_line(global_state->gfx, 0, (pg_bottom_y - 4), 0, (pg_bottom_y - 1), 0, 0, 0, 1);
+        // gfx_draw_line(global_state->gfx, (global_state->gfx->width - 1), (pg_bottom_y - 4), (global_state->gfx->width - 1), (pg_bottom_y - 1), 0, 0, 0, 1);
+        uint32_t pgpos_x = MIN(global_state->gfx->width - 1, session->pos * global_state->gfx->width / (session->num_prompt_tokens - 1));
+        gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 1), pgpos_x, (pg_bottom_y - 1), 102, 204, 255, 1);
+        gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 2), pgpos_x, (pg_bottom_y - 2), 102, 204, 255, 1);
+
         // 进度百分比
         wchar_t progress_str[30];
         swprintf(progress_str, 30, L"%d/%d", session->pos, session->num_prompt_tokens);
-        gfx_draw_textline(global_state->gfx, progress_str, 0, (global_state->gfx->height - 16), 255, 255, 255, 1);
-
-        // 进度条
-        gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 4), global_state->gfx->width, (global_state->gfx->height - 4), 255, 255, 255, 1);
-        gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 1), global_state->gfx->width, (global_state->gfx->height - 1), 255, 255, 255, 1);
-        gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 4), 0, (global_state->gfx->height - 1), 255, 255, 255, 1);
-        gfx_draw_line(global_state->gfx, (global_state->gfx->width - 1), (global_state->gfx->height - 4), (global_state->gfx->width - 1), (global_state->gfx->height - 1), 255, 255, 255, 1);
-        uint32_t pgpos_x = MIN(global_state->gfx->width - 1, session->pos * global_state->gfx->width / (session->num_prompt_tokens - 1));
-        gfx_draw_line(global_state->gfx, 1, (global_state->gfx->height - 2), pgpos_x, (global_state->gfx->height - 2), 0, 255, 255, 1);
-        gfx_draw_line(global_state->gfx, 1, (global_state->gfx->height - 3), pgpos_x, (global_state->gfx->height - 3), 0, 255, 255, 1);
+        // gfx_draw_textline(global_state->gfx, progress_str, 0, (global_state->gfx->height - 16), 0, 0, 0, 1);
+        render_footer(key_event, global_state, progress_str, 1);
 
         gfx_refresh(global_state->gfx);
 
@@ -225,6 +228,17 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state) {
 
     // 屏幕刷新节流
     if (global_state->timestamp - global_state->llm_refresh_timestamp > (1000 / global_state->llm_refresh_max_fps)) {
+        // 标题
+        wchar_t title_str[50];
+        swprintf(title_str, 50, L"%ls Decoding...", global_state->llm_model_name);
+        render_header(key_event, global_state, title_str, 1);
+
+        // 底部
+        wchar_t tps_str[50];
+        swprintf(tps_str, 50, L"%ls | %d/%d | %.1f词元/秒", global_state->llm_model_name, session->pos, global_state->llm_max_seq_len, session->tps);
+        render_footer(key_event, global_state, tps_str, 1);
+
+        // 刷新输出文本
         set_textarea(key_event, global_state, w_textarea_main, session->output_text, -1, 1);
         draw_textarea(key_event, global_state, w_textarea_main);
         global_state->llm_refresh_timestamp = global_state->timestamp;
@@ -272,20 +286,19 @@ int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state) {
 void init_main_menu() {
     wcscpy(w_menu_main->title, L"Nano-Pod");
     wcscpy(w_menu_main->items[0], L"电子鹦鹉");
-    wcscpy(w_menu_main->items[1], L"文本阅读");
-    wcscpy(w_menu_main->items[2], L"闪念胶囊");
-    wcscpy(w_menu_main->items[3], L"玲珑天象仪");
-    wcscpy(w_menu_main->items[4], L"Bad Apple！");
-    wcscpy(w_menu_main->items[5], L"元胞自动机");
-    wcscpy(w_menu_main->items[6], L"设置");
-    wcscpy(w_menu_main->items[7], L"安全关机");
-    wcscpy(w_menu_main->items[8], L"本机自述");
-    w_menu_main->item_num = 9;
+    wcscpy(w_menu_main->items[1], L"玲珑天象仪");
+    wcscpy(w_menu_main->items[2], L"文字阅读器");
+    wcscpy(w_menu_main->items[3], L"Bad Apple！");
+    wcscpy(w_menu_main->items[4], L"元胞自动机");
+    wcscpy(w_menu_main->items[5], L"设置");
+    wcscpy(w_menu_main->items[6], L"安全关机");
+    wcscpy(w_menu_main->items[7], L"本机自述");
+    w_menu_main->item_num = 8;
     init_menu(key_event, global_state, w_menu_main);
 }
 
 void init_model_menu() {
-    wcscpy(w_menu_model->title, L"Select LLM");
+    wcscpy(w_menu_model->title, L"选择语言模型");
     size_t model_count = sizeof(preset_model_configs) / sizeof(preset_model_configs[0]);
     for (size_t i = 0; i < model_count; i++) {
         wcscpy(w_menu_model->items[i], preset_model_configs[i].model_name);
@@ -420,44 +433,44 @@ int32_t main_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
         return STATE_MODEL_MENU;
     }
 
-    // 1.文本阅读
+    // 1.玲珑天象仪
     else if (item_index == 1) {
+        return STATE_LINGLONG;
+    }
+
+    // 2.文本阅读
+    else if (item_index == 2) {
         return STATE_EBOOK;
     }
 
     // 2.闪念胶囊
-    else if (item_index == 2) {
-        return STATE_FLASHMEMO;
-    }
+    // else if (item_index == 2) {
+    //     return STATE_FLASHMEMO;
+    // }
 
-    // 3.玲珑天象仪
+    // 3.BadApple
     else if (item_index == 3) {
-        return STATE_LINGLONG;
-    }
-
-    // 4.BadApple
-    else if (item_index == 4) {
         return STATE_BADAPPLE;
     }
 
-    // 5.元胞自动机
-    else if (item_index == 5) {
+    // 4.元胞自动机
+    else if (item_index == 4) {
         return STATE_GAMEOFLIFE;
     }
 
-    // 6.设置
-    else if (item_index == 6) {
+    // 5.设置
+    else if (item_index == 5) {
         init_setting_menu();
         return STATE_SETTING_MENU;
     }
 
-    // 7.安全关机
-    else if (item_index == 7) {
+    // 6.安全关机
+    else if (item_index == 6) {
         return STATE_SHUTDOWN;
     }
 
-    // 8.本机自述
-    else if (item_index == 8) {
+    // 7.本机自述
+    else if (item_index == 7) {
         return STATE_README;
     }
     return STATE_MAIN_MENU;
@@ -949,6 +962,9 @@ int main() {
             // 首次获得焦点：初始化
             if (global_state->PREV_STATE != global_state->STATE) {
                 init_main_menu();
+                render_header(key_event, global_state, w_menu_main->title, 1);
+                render_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+                gfx_refresh(global_state->gfx);
             }
             global_state->PREV_STATE = global_state->STATE;
 
@@ -975,6 +991,8 @@ int main() {
                 else {
                     set_textarea(key_event, global_state, w_textarea_main, L"文件不存在...", 0, 1);
                 }
+                render_header(key_event, global_state, L"文本阅读", 1);
+                render_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
                 draw_textarea(key_event, global_state, w_textarea_main);
             }
             global_state->PREV_STATE = global_state->STATE;
@@ -1031,6 +1049,9 @@ int main() {
             // 首次获得焦点：初始化
             if (global_state->PREV_STATE != global_state->STATE) {
                 refresh_menu(key_event, global_state, w_menu_model);
+                render_header(key_event, global_state, w_menu_model->title, 1);
+                render_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+                gfx_refresh(global_state->gfx);
             }
             global_state->PREV_STATE = global_state->STATE;
 
@@ -1048,6 +1069,9 @@ int main() {
             // 首次获得焦点：初始化
             if (global_state->PREV_STATE != global_state->STATE) {
                 refresh_menu(key_event, global_state, w_menu_setting);
+                render_header(key_event, global_state, w_menu_setting->title, 1);
+                render_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+                gfx_refresh(global_state->gfx);
             }
             global_state->PREV_STATE = global_state->STATE;
 
@@ -1155,15 +1179,23 @@ int main() {
 
             // 首次获得焦点：初始化
             if (global_state->PREV_STATE != global_state->STATE) {
+                // 标题
+                render_header(key_event, global_state, global_state->llm_model_name, 1);
+
+                // 底部
+                wchar_t tps_str[50];
+                swprintf(tps_str, 50, L"%ls | 已生成%d词元 | %.1f词元/秒", global_state->llm_model_name, g_tokens_count, global_state->llm_max_seq_len, g_tps_of_last_session);
+                render_footer(key_event, global_state, tps_str, 1);
+
                 // 计算提示语+生成内容的行数
                 wchar_t *prompt_and_output = (wchar_t *)calloc_dev(UI_STR_BUF_MAX_LENGTH * 2, sizeof(wchar_t));
-                wcscat(prompt_and_output, L"Homo:\n");
+                wcscat(prompt_and_output, L"[#66ccff]Homo:[#000000]\n");
                 wcscat(prompt_and_output, w_input_main->textarea.text);
-                wcscat(prompt_and_output, L"\n--------------------\nNano:\n");
+                wcscat(prompt_and_output, L"\n--------------------\n[#65bb00]Nano:[#000000]\n");
                 wcscat(prompt_and_output, g_llm_output_of_last_session);
                 // 推理中止
                 if (global_state->llm_status == LLM_STOPPED_IN_PREFILLING || global_state->llm_status == LLM_STOPPED_IN_DECODING) {
-                    wcscat(prompt_and_output, L"\n\n[Nano:推理中止]");
+                    wcscat(prompt_and_output, L"\n\n[#ff0000][Nano:推理中止][#000000]");
                 }
                 // 推理自然结束
                 else if (global_state->llm_status == LLM_STOPPED_NORMALLY) {
@@ -1171,10 +1203,10 @@ int main() {
                 }
                 // 推理异常结束
                 else {
-                    wcscat(prompt_and_output, L"\n\n[Nano:推理异常结束]");
+                    wcscat(prompt_and_output, L"\n\n[#ff0000][Nano:推理异常结束][#000000]");
                 }
                 wchar_t tps_wcstr[50];
-                swprintf(tps_wcstr, 50, L"\n\n[%d/%d|%.1fTPS]", g_tokens_count, global_state->llm_max_seq_len, g_tps_of_last_session);
+                swprintf(tps_wcstr, 50, L"\n\n[#dda300][%d/%d|%.1fTPS][#000000]", g_tokens_count, global_state->llm_max_seq_len, g_tps_of_last_session);
                 wcscat(prompt_and_output, tps_wcstr);
 
                 wcscpy(g_llm_output_of_last_session, prompt_and_output);
@@ -1308,11 +1340,12 @@ int main() {
 
             // 首次获得焦点：初始化
             if (global_state->PREV_STATE != global_state->STATE) {
-
+                render_header(key_event, global_state, L"本机自述", 1);
+                render_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
             }
             global_state->PREV_STATE = global_state->STATE;
 
-            wchar_t readme_buf[128] = L"Nano-Pod v" NANO_VERSION "\n电子鹦鹉·端上大模型\n(c) 2025-2026 BD4SUR\n\n";
+            wchar_t readme_buf[128] = L"[#1155ee]Nano-Pod[#000000] v" NANO_VERSION "\n掌上电子鹦鹉·玲珑天象仪\n(c) 2025-2026 BD4SUR\n\n";
             wchar_t status_buf[30];
             // 节流
             if (global_state->timer % 200 == 0) {
@@ -1352,7 +1385,7 @@ int main() {
                 int ret = -1;
                 int32_t imu_count = 3000;
                 do {
-                    // 以下代码适配树莓派盒子（NanoPod）
+                    // 以下代码适配树莓派盒子（NanoPod）：IMU的PCB平面与树莓派PCB平行，IMU顶部指向树莓派TypeC口方向，IMU串口指向树莓派的PCIe方向
                     float q0 = 0.0f;
                     float q1 = 0.0f;
                     float q2 = 0.0f;
@@ -1543,6 +1576,8 @@ int main() {
 
             // 首次获得焦点：初始化
             if (global_state->PREV_STATE != global_state->STATE) {
+                render_header(key_event, global_state, L"安全关机", 1);
+                render_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
                 set_textarea(key_event, global_state, w_textarea_main, L"确定关机？\n\n·长按D键: 关机\n·短按A键: 返回", 0, 0);
                 draw_textarea(key_event, global_state, w_textarea_main);
             }
@@ -1584,6 +1619,9 @@ int main() {
             // 首次获得焦点：初始化
             if (global_state->PREV_STATE != global_state->STATE) {
                 refresh_menu(key_event, global_state, w_menu_tts_setting);
+                render_header(key_event, global_state, w_menu_tts_setting->title, 1);
+                render_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+                gfx_refresh(global_state->gfx);
             }
             global_state->PREV_STATE = global_state->STATE;
 
@@ -1601,6 +1639,9 @@ int main() {
             // 首次获得焦点：初始化
             if (global_state->PREV_STATE != global_state->STATE) {
                 refresh_menu(key_event, global_state, w_menu_asr_setting);
+                render_header(key_event, global_state, w_menu_asr_setting->title, 1);
+                render_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+                gfx_refresh(global_state->gfx);
             }
             global_state->PREV_STATE = global_state->STATE;
 
@@ -1618,6 +1659,9 @@ int main() {
             // 首次获得焦点：初始化
             if (global_state->PREV_STATE != global_state->STATE) {
                 refresh_menu(key_event, global_state, w_menu_linglong_setting);
+                render_header(key_event, global_state, w_menu_linglong_setting->title, 1);
+                render_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+                gfx_refresh(global_state->gfx);
             }
             global_state->PREV_STATE = global_state->STATE;
 

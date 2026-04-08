@@ -110,6 +110,7 @@ typedef struct {
     int32_t width;
     int32_t height;
     wchar_t *text;
+    uint32_t *style; // 逐字符样式，当前仅为RGB颜色（MSB-0xXXRRGGBB-LSB）
     int32_t length;
     int32_t *break_pos;
     int32_t line_num;
@@ -145,6 +146,11 @@ typedef struct {
 } Widget_Input_State;
 
 typedef struct {
+    int32_t x;
+    int32_t y;
+    int32_t zindex;
+    int32_t width;
+    int32_t height;
     int32_t current_item_index; // 当前选中（高亮）的条目的标号（注意：选中条目不一定在显示的页面范围内）
     int32_t first_item_intex; // 当前页面显示的第一个条目的标号
     int32_t item_num; // 菜单条目数
@@ -191,6 +197,13 @@ void render_pinyin_input(Key_Event *key_event, Global_State *global_state, Widge
 void render_symbol_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 
 void render_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_t line_num, int32_t current_line, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height);
+
+
+// ===============================================================================
+// 七段码
+// ===============================================================================
+
+void render_7seg_time(Key_Event *key_event, Global_State *global_state, int32_t xx, int32_t yy, int h, int m, int s, int t);
 
 // ===============================================================================
 // Game of Life

@@ -37,11 +37,13 @@ void gfx_refresh(Nano_GFX *gfx);
 
 void gfx_clear(Nano_GFX *gfx);
 void gfx_soft_clear(Nano_GFX *gfx);
+void gfx_fill_white(Nano_GFX *gfx);
 
 void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 void gfx_draw_rectangle(Nano_GFX *gfx, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 void gfx_draw_circle(Nano_GFX *gfx, uint32_t cx, uint32_t cy, uint32_t r, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
+void gfx_draw_hexagon(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2, uint32_t x3, uint32_t y3, uint32_t x4, uint32_t y4, uint32_t x5, uint32_t y5, uint32_t x6, uint32_t y6, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 void gfx_draw_char(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t *glyph,
     uint8_t font_width, uint8_t font_height,
     uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
