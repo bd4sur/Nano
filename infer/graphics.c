@@ -208,7 +208,7 @@ void gfx_draw_circle(Nano_GFX *gfx, uint32_t cx, uint32_t cy, uint32_t r, uint8_
 // x,y:起点坐标
 // mode:0,反色显示;1,正常显示
 void gfx_draw_char(
-    Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t *glyph,
+    Nano_GFX *gfx, uint32_t x, uint32_t y, const uint8_t *glyph,
     uint8_t font_width, uint8_t font_height,
     uint8_t red, uint8_t green, uint8_t blue, uint8_t mode
 ) {
@@ -240,7 +240,7 @@ void gfx_draw_textline(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uin
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        uint8_t *glyph = get_glyph(gfx, current_char, &font_width, &font_height);
+        const uint8_t *glyph = get_glyph(gfx, current_char, &font_width, &font_height);
         if (!glyph) {
             // printf("出现了字库之外的字符！\n");
             glyph = get_glyph(gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
@@ -263,7 +263,7 @@ void gfx_draw_textline_centered(Nano_GFX *gfx, wchar_t *line, uint32_t cx, uint3
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        uint8_t *glyph = get_glyph(gfx, current_char, &font_width, &font_height);
+        const uint8_t *glyph = get_glyph(gfx, current_char, &font_width, &font_height);
         if (!glyph) {
             glyph = get_glyph(gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
@@ -278,7 +278,7 @@ void gfx_draw_textline_centered(Nano_GFX *gfx, wchar_t *line, uint32_t cx, uint3
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        uint8_t *glyph = get_glyph(gfx, current_char, &font_width, &font_height);
+        const uint8_t *glyph = get_glyph(gfx, current_char, &font_width, &font_height);
         if (!glyph) {
             glyph = get_glyph(gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
@@ -508,7 +508,7 @@ void gfx_draw_hexagon(
     }
 }
 
-uint8_t *get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
+const uint8_t *get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
     if (utf32 < 32) {
         return NULL;
     }

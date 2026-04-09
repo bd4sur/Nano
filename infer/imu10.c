@@ -155,20 +155,24 @@ static inline void uart_init(void)
 }
 
 /* 发送单个字节 */
-inline void uart_send_uint8(uint8_t Data)
+inline int uart_send_uint8(uint8_t Data)
 {
-    if (mySerialFd >= 0)
-    {
-        write(mySerialFd, &Data, 1);
+    if (mySerialFd >= 0) {
+        return write(mySerialFd, &Data, 1);
+    }
+    else {
+        return -1;
     }
 }
 
 /* 发送字节数组 */
-inline void uart_send_uint8_array(uint8_t *pData, uint16_t Length)
+inline int uart_send_uint8_array(uint8_t *pData, uint16_t Length)
 {
-    if (mySerialFd >= 0 && pData != NULL && Length > 0)
-    {
-        write(mySerialFd, pData, Length);
+    if (mySerialFd >= 0 && pData != NULL && Length > 0) {
+        return write(mySerialFd, pData, Length);
+    }
+    else {
+        return -1;
     }
 }
 
@@ -339,9 +343,8 @@ static void _parse_frame_data(uint8_t frame_function, const uint8_t *frame_data)
 
 /* ---------- 帧发送接口 / Command sender ---------- */
 
-void Send_IMU_Array(uint8_t *pData, uint8_t Length)
-{
-    uart_send_uint8_array(pData, Length);
+int Send_IMU_Array(uint8_t *pData, uint8_t Length) {
+    return uart_send_uint8_array(pData, Length);
 }
 
 int IMU_UART_SendCommand(uint8_t function, const uint8_t *params, uint8_t param_len)
@@ -368,8 +371,7 @@ int IMU_UART_SendCommand(uint8_t function, const uint8_t *params, uint8_t param_
     }
     frame[frame_len - 1] = checksum;
 
-    Send_IMU_Array(frame, frame_len);
-    return 0;
+    return Send_IMU_Array(frame, frame_len);
 }
 
 /** 初始化接口，当前为占位符 / Init hook (placeholder). */
@@ -739,9 +741,8 @@ int IMU_UART_SetFreq(uint8_t freq)
 }
 
 
-void Send_IMU_Data(uint8_t Data)
-{
-    uart_send_uint8(Data);
+int Send_IMU_Data(uint8_t Data) {
+    return uart_send_uint8(Data);
 }
 
 

@@ -32,7 +32,7 @@ static const uint8_t PLANET_COLOR_B[9]  = {0,    192,  64,   0,    0,    128,  1
 static const wchar_t PLANET_NAME[9][10] = {L"", L"水星", L"金星", L"地球", L"火星", L"木星", L"土星", L"天王星", L"海王星"};
 
 // 星表
-#define STARS_NUM (72)
+#define STARS_NUM (89)
 static const float STARS[STARS_NUM][7] = {
 //(RA)h     m      s    (Dec)d       m      s        Mag
     {2.0f,  32.0f,  9.3f,     89.0f, 16.0f, 10.8f,   2.09f}, // 勾陈一（北极星）
@@ -59,6 +59,25 @@ static const float STARS[STARS_NUM][7] = {
     { 5.0f, 14.0f, 33.2f,     -8.0f, 12.0f, 13.0f,   0.13f}, // 参宿七
     { 5.0f, 35.0f, 27.0f,     -5.0f, 54.0f, 42.2f,   2.77f}, // 伐三
     { 3.0f, 47.0f, 29.4f,     24.0f,  6.0f, 19.6f,   2.87f}, // 昴宿星团
+
+    // 以下是AI生成的，姑且保留，待确认
+    { 6.0f, 23.0f, 57.1f,    -52.0f, 41.0f, 45.0f,  -0.72f}, // 老人星（船底座α）
+    {14.0f, 39.0f, 35.9f,    -60.0f, 50.0f,  7.0f,  -0.01f}, // 南门二（半人马座α）
+    { 5.0f, 16.0f, 41.4f,     45.0f, 59.0f, 53.0f,   0.08f}, // 五车二（御夫座α）
+    { 7.0f, 39.0f, 18.1f,      5.0f, 13.0f, 30.0f,   0.38f}, // 南河三（小犬座α）
+    { 1.0f, 37.0f, 42.9f,    -57.0f, 14.0f, 12.0f,   0.46f}, // 水委一（波江座α）
+    {14.0f,  3.0f, 49.4f,    -60.0f, 22.0f, 23.0f,   0.61f}, // 马腹一（半人马座β）
+    { 4.0f, 35.0f, 55.2f,     16.0f, 30.0f, 33.0f,   0.85f}, // 毕宿五（金牛座α）
+    {16.0f, 29.0f, 24.4f,    -26.0f, 25.0f, 55.0f,   0.96f}, // 心宿二（天蝎座α，变星）
+    {13.0f, 25.0f, 11.6f,    -11.0f,  9.0f, 41.0f,   0.98f}, // 角宿一（室女座α）
+    { 7.0f, 45.0f, 18.9f,     28.0f,  1.0f, 34.0f,   1.14f}, // 北河三（双子座β）
+    {22.0f, 57.0f, 39.1f,    -29.0f, 37.0f, 20.0f,   1.16f}, // 北落师门（南鱼座α）
+    {12.0f, 47.0f, 43.2f,    -59.0f, 41.0f, 19.0f,   1.25f}, // 十字架三（南十字座β）
+    {20.0f, 41.0f, 25.9f,     45.0f, 16.0f, 49.0f,   1.25f}, // 天津四（天鹅座α）
+    {12.0f, 26.0f, 35.9f,    -63.0f,  5.0f, 57.0f,   1.33f}, // 十字架二（南十字座α）
+    {10.0f,  8.0f, 22.3f,     11.0f, 58.0f,  2.0f,   1.35f}, // 轩辕十四（狮子座α）
+    {18.0f, 55.0f, 15.9f,    -26.0f, 17.0f, 48.0f,   2.05f}, // 斗宿四/箕宿三（人马座σ）
+    { 2.0f,  7.0f, 10.4f,     23.0f, 27.0f, 45.0f,   2.00f}, // 娄宿三（白羊座α）
 
     // 以下更不准确，仅用于视觉效果
     { 0.0f,  9.0f, 10.7f,      29.0f, 18.0f, 44.0f,   2.06f}, // 壁宿二（Alpheratz）
@@ -707,7 +726,9 @@ void transform_euler_angles(float pitch_in, float roll_in, float yaw_in, float *
     float m31 = - cX * sY;
     float m32 = sX;
     float m33 = cX * cY;
-    
+
+    (void)m11; (void)m12;
+
     // 计算 sy 判断是否奇异
     float sy = sqrtf(m13 * m13 + m23 * m23);
     
@@ -1033,7 +1054,7 @@ void dithering_fast(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height) 
 // 绘制文字（临时实现）
 // ===============================================================================
 
-uint8_t *_get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
+const uint8_t *_get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
     if(utf32 < 127) {
         *font_width = 6;
         *font_height = 12;
@@ -1055,7 +1076,7 @@ uint8_t *_get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
 // 显示汉字
 void fb_draw_char(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    int32_t x, int32_t y, uint8_t *glyph, uint8_t font_width, uint8_t font_height,
+    int32_t x, int32_t y, const uint8_t *glyph, uint8_t font_width, uint8_t font_height,
     uint8_t red, uint8_t green, uint8_t blue
 ) {
     int32_t row_bytes = (font_height + 8 - 1) / 8;
@@ -1092,7 +1113,7 @@ void fb_draw_textline(
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
+        const uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
         if (!glyph) {
             glyph = _get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
@@ -1117,7 +1138,7 @@ void fb_draw_textline_centered(
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
+        const uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
         if (!glyph) {
             glyph = _get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
@@ -1132,7 +1153,7 @@ void fb_draw_textline_centered(
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
+        const uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
         if (!glyph) {
             glyph = _get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
@@ -1196,6 +1217,8 @@ void draw_line(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float inv_len = 1.0f / len;
     float nx = -dy * inv_len; // 法向量（垂直于线段）
     float ny = dx * inv_len;
+
+    (void)nx; (void)ny;
 
     float half_w = line_width / 2.0f;
 
@@ -1600,14 +1623,7 @@ void draw_horizontal_altitude_circle(
     float y_0 = 0.0f;
     int32_t first_point = 0;
     int32_t prev_valid = 0;
-    
-    double eps = 0.5; // 防止两个端点处的点连成弓弦
-    
-    // 如果固定仰角低于地平线，直接返回
-    // if (altitude_deg < eps) {
-    //     return;
-    // }
-    
+
     for (int32_t i = 0; i <= POINTS; i++) {
         float azimuth_deg = (360.0f * (float)i / (float)POINTS);
         
@@ -1884,10 +1900,6 @@ void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             if (moonWeight <= 0) continue;
 
 
-            int32_t idx = (py * fb_width + px) * 3;
-
-            // 构造单位球面上的表面点（归一化位置向量 = 法向量）
-            float len = sqrtf(dx * dx + dy * dy + r2 - dx * dx - dy * dy); // = moonRadius
             // 实际上，(dx, dy, dz) 在半径为 moonRadius 的球面上，所以单位向量为：
             float nx = (float)dx / moonRadius;
             float ny = (float)dy / moonRadius;
@@ -2009,6 +2021,7 @@ void draw_star(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float bgLum = get_luminance(bgR, bgG, bgB);
 
     // 遍历光晕区域（正方形包围圆）
+    (void)maxGlowRadius;
     int32_t R = 0; // (int32_t)radius + maxGlowRadius;
     for (int32_t dy = -R; dy <= R; dy++) {
         for (int32_t dx = -R; dx <= R; dx++) {
@@ -2233,7 +2246,6 @@ void scatter_model_2(
     // 太阳仰角
     float sun_altitude = asinf(MAX(-1.0f, MIN(1.0f, sun_norm_z))); // [-π/2, π/2]
     float sun_altitude_deg = sun_altitude * 180.0f / M_PI;
-    float sun_azimuth = 90.0f + atan2f(sun_norm_y, sun_norm_x) * 180.0f / M_PI;
 
     // 观察者视线仰角
     float view_zenith = acosf(MAX(0.0f, MIN(1.0f, ray_norm_z)));
@@ -3062,7 +3074,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             for (int32_t y = y1; y < y2; y += C) {
                 for (int32_t x = x1; x < x2; x += C) {
 
-                    int32_t r2 = (x-center_x)*(x-center_x) + (y-center_y)*(y-center_y);
+                    // int32_t r2 = (x-center_x)*(x-center_x) + (y-center_y)*(y-center_y);
                     // if (r2 > (sky_radius+C)*(sky_radius+C)) continue; // NOTE 将滤波范围限定在视野圆内，然而对于任意视角，这是不合理的，故注释之
 
                     int32_t idx_11 = ((y+0) * fb_width + (x+0)) * 3;
@@ -3134,7 +3146,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     // 绘制恒星
     float mag_offset = -2.0f;
     for (int32_t i = 0; i < STARS_NUM; i++) {
-        float *star_item = STARS[i];
+        const float *star_item = STARS[i];
         double alt = 0.0;
         double azi = 0.0;
         equatorial_to_horizontal(
@@ -3150,7 +3162,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, sx, sy, mag, 1, 255, 255, 255);
 
         if (enable_star_name == 1 || enable_star_name == 3) {
-            fb_draw_textline(frame_buffer, fb_width, fb_height, STAR_NAME[i], sx+3, sy+3, 250, 250, 250);
+            fb_draw_textline(frame_buffer, fb_width, fb_height, (wchar_t*)STAR_NAME[i], sx+3, sy+3, 250, 250, 250);
         }
     }
 
@@ -3181,7 +3193,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
                 0.0f, PLANET_RADIUS[i], PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
 
             if (enable_star_name == 2 || enable_star_name == 3) {
-                fb_draw_textline(frame_buffer, fb_width, fb_height, PLANET_NAME[i], planet_proj_x+3, planet_proj_y+3, PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
+                fb_draw_textline(frame_buffer, fb_width, fb_height, (wchar_t*)PLANET_NAME[i], planet_proj_x+3, planet_proj_y+3, PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
             }
         }
     }
@@ -3223,14 +3235,14 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     if (landscape_index == 1) {
         // TODO 几何关系待优化
         fov = (0.45f/90.0f) * fabsf(sun_alt) + 1.1f;
-        update_landscape(FLAT_TEXTURE_BUFFER, FLAT_TEXTURE_WIDTH, FLAT_TEXTURE_HEIGHT, 1, fov);
+        update_landscape((uint8_t*)FLAT_TEXTURE_BUFFER, FLAT_TEXTURE_WIDTH, FLAT_TEXTURE_HEIGHT, 1, fov);
         view_height = 1.0f;
         // float view_height = 0.01f * fabsf(sun_alt) + 1.0f;
         enable_atmosphere_scattering = 1;
     }
     // 鱼眼照片
     else if (landscape_index == 2) {
-        update_landscape(FISHEYE_TEXTURE_BUFFER, FISHEYE_TEXTURE_WIDTH, FISHEYE_TEXTURE_HEIGHT, 0, fov);
+        update_landscape((uint8_t*)FISHEYE_TEXTURE_BUFFER, FISHEYE_TEXTURE_WIDTH, FISHEYE_TEXTURE_HEIGHT, 0, fov);
         enable_atmosphere_scattering = 0;
     }
 
@@ -3278,6 +3290,15 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"南", label_x, label_y, 255, 0, 0);
         fisheye_project(270, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
         fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"西", label_x, label_y, 255, 0, 0);
+
+        fisheye_project(45, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"45", label_x, label_y, 255, 0, 0);
+        fisheye_project(135, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"135", label_x, label_y, 255, 0, 0);
+        fisheye_project(225, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"225", label_x, label_y, 255, 0, 0);
+        fisheye_project(315, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
+        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"315", label_x, label_y, 255, 0, 0);
 
     }
 

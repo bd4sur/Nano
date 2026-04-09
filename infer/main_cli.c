@@ -3,7 +3,6 @@
 #include <locale.h>
 
 #include "infer.h"
-#include "prompt.h"
 
 #define MAX_PROMPT_BUFFER_LENGTH  (16384)
 

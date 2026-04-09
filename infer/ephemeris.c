@@ -115,6 +115,7 @@ static inline int is_leap(int32_t year) {
     return (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0);
 }
 
+#if 0
 // 计算从1583年1月1日到给定日期（y, m, d）之间的天数（1583-01-01 为第 0 天）
 static int64_t days_since_1583(int32_t y, int32_t m, int32_t d) {
     static const int8_t days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -144,9 +145,10 @@ static int64_t days_since_1583(int32_t y, int32_t m, int32_t d) {
 static int64_t days_prd(int32_t y1, int32_t m1, int32_t d1,
                  int32_t y2, int32_t m2, int32_t d2) {
     int64_t days1 = days_since_1583(y1, m1, d1);
-    int64_t days2 = days_since_1583(y2, m2, d2);
+    int64_t days2 = days_since_1583(y2, m2, d2)s;
     return days2 - days1;
 }
+#endif
 
 // 计算儒略日（输入地方标准时间）
 double julian_day(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, double timezone_offset) {

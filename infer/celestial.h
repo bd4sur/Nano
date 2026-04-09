@@ -17,7 +17,7 @@ extern "C" {
 #define LINGLONG_STAR_GLOW_RADIUS        (0)
 
 
-typedef struct {
+typedef struct Linglong_Config {
     int32_t fb_width;
     int32_t fb_height;
     float sky_radius;

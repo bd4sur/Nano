@@ -524,12 +524,14 @@ LunarDate *lunar_calculate(int year, int month, int day,
     res->month   = lunar_month_num + 1; /* 1–12 */
     res->day     = lunar_day;
     res->is_leap = is_leap_month;
-    strncpy(res->year_ganzhi,  year_ganzhi,      sizeof(res->year_ganzhi)  - 1);
-    strncpy(res->month_ganzhi, month_ganzhi,     sizeof(res->month_ganzhi) - 1);
-    strncpy(res->day_ganzhi,   day_ganzhi,        sizeof(res->day_ganzhi)   - 1);
-    strncpy(res->zodiac,       zodiac,            sizeof(res->zodiac)       - 1);
-    strncpy(res->month_name,   lunar_month_name,  sizeof(res->month_name)   - 1);
-    strncpy(res->day_name,     lunar_day_name,    sizeof(res->day_name)     - 1);
+
+    snprintf(res->year_ganzhi, sizeof(res->year_ganzhi), "%s", year_ganzhi);
+    snprintf(res->month_ganzhi, sizeof(res->month_ganzhi), "%s", month_ganzhi);
+    snprintf(res->day_ganzhi, sizeof(res->day_ganzhi), "%s", day_ganzhi);
+    snprintf(res->zodiac, sizeof(res->zodiac), "%s", zodiac);
+    snprintf(res->month_name, sizeof(res->month_name), "%s", lunar_month_name);
+    snprintf(res->day_name, sizeof(res->day_name), "%s", lunar_day_name);
+
     snprintf(res->full_display, sizeof(res->full_display),
              "%s%s年 %s%s", year_ganzhi, zodiac, lunar_month_name, lunar_day_name);
 

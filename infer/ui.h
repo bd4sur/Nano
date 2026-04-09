@@ -10,7 +10,6 @@ extern "C" {
 #include "graphics.h"
 #include "utils.h"
 
-#include "celestial.h"
 
 #define IME_MODE_HANZI    (0)
 #define IME_MODE_ALPHABET (1)
@@ -28,9 +27,11 @@ extern "C" {
 
 struct Nano_Context;
 struct Nano_Session;
+struct Linglong_Config;
 
 typedef struct Nano_Context Nano_Context;
 typedef struct Nano_Session Nano_Session;
+typedef struct Linglong_Config Linglong_Config;
 
 // NOTE 增删字段时，务必修改初始化部分
 typedef struct {
@@ -52,6 +53,7 @@ typedef struct {
     Nano_Session *llm_session; // LLM一轮对话状态
     int32_t llm_status; // LLM推理状态
     wchar_t *llm_model_name;
+    int32_t llm_is_thinking_model;
     char *llm_model_path;
     char *llm_lora_path;
     float llm_repetition_penalty;
@@ -60,8 +62,12 @@ typedef struct {
     uint32_t llm_top_k;
     uint32_t llm_max_seq_len;
     int32_t is_thinking_enabled; // 是否开启思考模式：1-是，0-否
+    wchar_t *llm_output_of_last_session;
+    float tps_of_last_session;
+    int32_t token_num_of_last_session;
 
     // ASR相关
+    wchar_t *asr_output_buffer;
     int32_t is_auto_submit_after_asr; // ASR结束后立刻提交识别内容到LLM？默认值1（不编辑，立刻提交）
     int32_t is_asr_server_up;
     int32_t is_recording; // 录音状态
@@ -110,7 +116,7 @@ typedef struct {
     int32_t width;
     int32_t height;
     wchar_t *text;
-    uint32_t *style; // 逐字符样式，当前仅为RGB颜色（MSB-0xXXRRGGBB-LSB）
+    uint32_t *style; // 逐字符样式，MSB-0xXXRRGGBB-LSB。最高位为1代表格式控制标记的字符，渲染时忽略。
     int32_t length;
     int32_t *break_pos;
     int32_t line_num;
@@ -160,67 +166,52 @@ typedef struct {
 } Widget_Menu_State;
 
 
-void render_text(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
+void ui_draw_header(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center);
+void ui_draw_footer(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center);
 
-void show_splash_screen(Key_Event *key_event, Global_State *global_state);
+void ui_draw_text_block(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
 
-void play_bad_apple(Key_Event *key_event, Global_State *global_state);
 
-void init_textarea(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state,
+
+void ui_widget_textarea_init(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state,
     uint32_t max_len);
-void set_textarea(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state,
+void ui_widget_textarea_set(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state,
     wchar_t *text, int32_t current_line, int32_t is_show_scroll_bar);
-void draw_textarea(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
-int32_t textarea_event_handler(
+void ui_widget_textarea_draw(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
+int32_t ui_widget_textarea_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts,
     int32_t prev_focus_state, int32_t current_focus_state
 );
 
-void init_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
-void refresh_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
-int32_t input_event_handler(
+void ui_widget_input_init(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+void ui_widget_input_refresh(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+int32_t ui_widget_input_event_handler(
     Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state,
     int32_t prev_focus_state, int32_t current_focus_state, int32_t next_focus_state
 );
 
-void init_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
-void refresh_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
-void draw_menu(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
-int32_t menu_event_handler(
+void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
+void ui_widget_menu_refresh(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
+void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
+int32_t ui_widget_menu_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Menu_State *ms,
     int32_t (*menu_item_action_callback)(Key_Event*, Global_State*, Widget_Menu_State*), int32_t prev_focus_state, int32_t current_focus_state
 );
 
-void render_input_buffer(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
-void render_cursor(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
-void render_pinyin_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, uint32_t is_picking);
-void render_symbol_input(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+void ui_draw_input_buffer(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+void ui_draw_input_cursor(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+void ui_draw_input_pinyin(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, uint32_t is_picking);
+void ui_draw_input_symbol(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 
-void render_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_t line_num, int32_t current_line, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height);
+void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_t line_num, int32_t current_line, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height);
 
 
 // ===============================================================================
 // 七段码
 // ===============================================================================
 
-void render_7seg_time(Key_Event *key_event, Global_State *global_state, int32_t xx, int32_t yy, int h, int m, int s, int t);
+void ui_draw_7seg_time_string(Key_Event *key_event, Global_State *global_state, int32_t xx, int32_t yy, int h, int m, int s, int t);
 
-// ===============================================================================
-// Game of Life
-// ===============================================================================
-
-void game_of_life_init(Key_Event *key_event, Global_State *global_state);
-void game_of_life_step(Key_Event *key_event, Global_State *global_state);
-
-// ===============================================================================
-// 玲珑天象仪
-// ===============================================================================
-
-void draw_ephemeris_screen(Key_Event *key_event, Global_State *global_state);
-void ephemeris_toggle_timemachine(Key_Event *key_event, Global_State *global_state);
-void ephemeris_set_timemachine_speed(Key_Event *key_event, Global_State *global_state, int32_t speed);
-void ephemeris_set_realtime(Key_Event *key_event, Global_State *global_state);
-void ephemeris_toggle_linglong_version(Key_Event *key_event, Global_State *global_state);
 
 
 #ifdef __cplusplus
