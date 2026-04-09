@@ -44,7 +44,6 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
 void ui_app_linglong_toggle_timemachine(Key_Event *key_event, Global_State *global_state);
 void ui_app_linglong_set_timemachine_speed(Key_Event *key_event, Global_State *global_state, int32_t speed);
 void ui_app_linglong_set_realtime(Key_Event *key_event, Global_State *global_state);
-void ui_app_linglong_toggle_linglong_version(Key_Event *key_event, Global_State *global_state);
 
 
 

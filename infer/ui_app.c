@@ -125,6 +125,8 @@ static void ui_draw_copyright_notice(Key_Event *key_event, Global_State *global_
 void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state) {
     gfx_fill_white(global_state->gfx);
 
+    gfx_draw_image(global_state->gfx, "/home/bd4sur/ai/Nano/infer/web/nano.png", 235, 56, 85, 170, 1);
+
 #if CONFIG_IDF_TARGET_ESP32S3
     gfx_draw_textline_centered(global_state->gfx, L"Project Nano", global_state->gfx->width / 2, 8, 255, 255, 255, 0);
     gfx_draw_textline_centered(global_state->gfx, L"电子鹦鹉@ESP32S3", global_state->gfx->width, 28, 255, 255, 255, 1);
@@ -147,9 +149,9 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 
     ui_draw_header(key_event, global_state, L"Project Nano", 1);
 
-    gfx_draw_textline_centered(global_state->gfx, L"电 子 鹦 鹉", global_state->gfx->width / 2, 28, 0, 255, 255, 1);
+    // gfx_draw_textline_centered(global_state->gfx, L"电 子 鹦 鹉", global_state->gfx->width / 2, 28, 0, 255, 255, 1);
     gfx_draw_textline_centered(global_state->gfx, datetime_wcs_buffer, global_state->gfx->width / 2, 43, 0, 0, 0, 1);
-    gfx_draw_textline_centered(global_state->gfx, nongli_wcs_buffer, global_state->gfx->width / 2, 58, 0, 0, 0, 1);
+    gfx_draw_textline_centered(global_state->gfx, nongli_wcs_buffer, global_state->gfx->width / 2, 58, 255, 180, 52, 1);
     if (global_state->gfx->width > 128) {
         ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
         // gfx_draw_textline_centered(global_state->gfx, L"(c) 2025-2026 BD4SUR", global_state->gfx->width / 2, global_state->gfx->height - 3 - FONT_HEIGHT/2, 128, 128, 128, 1);
@@ -165,7 +167,7 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     // gfx_draw_line(global_state->gfx, (global_state->gfx->width - 1), 0, (global_state->gfx->width - 1), (global_state->gfx->height - 1), 255, 255, 255, 1);
     // gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 1), (global_state->gfx->width - 1), (global_state->gfx->height - 1), 255, 255, 255, 1);
 
-    ui_draw_7seg_time_string(key_event, global_state, 90, 160, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, 0);
+    ui_draw_7seg_time_string(key_event, global_state, 88, 180, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, 0);
 
 #ifdef ASR_ENABLED
     // 检查ASR服务状态，如果ASR服务未启动，则在屏幕左上角画一个闪烁的点，表示ASR服务启动中
@@ -181,20 +183,24 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 #ifdef UPS_ENABLED
     // 绘制电池电量
     uint32_t icon_x = global_state->gfx->width - 17;
-    uint32_t icon_y = 4;
-    gfx_draw_line(global_state->gfx, (icon_x+1),  (icon_y),   (icon_x+14), (icon_y),   255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, (icon_x+14), (icon_y),   (icon_x+14), (icon_y+7), 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, (icon_x+1),  (icon_y+7), (icon_x+14), (icon_y+7), 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, (icon_x+1),  (icon_y),   (icon_x+1),  (icon_y+7), 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, (icon_x),    (icon_y+2), (icon_x),    (icon_y+5), 255, 255, 255, 0);
+    uint32_t icon_y = 3;
+    gfx_draw_line(global_state->gfx, (icon_x+1),  (icon_y),   (icon_x+14), (icon_y),   255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, (icon_x+14), (icon_y),   (icon_x+14), (icon_y+7), 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, (icon_x+1),  (icon_y+7), (icon_x+14), (icon_y+7), 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, (icon_x+1),  (icon_y),   (icon_x+1),  (icon_y+7), 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, (icon_x),    (icon_y+2), (icon_x),    (icon_y+5), 255, 255, 255, 1);
 
     int32_t soc_bar_length = (int32_t)(10.0f * ((float)global_state->ups_soc / 100.0f));
     soc_bar_length = (soc_bar_length > 9) ? 9 : soc_bar_length;
-    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+2), (icon_x+12), (icon_y+2), 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+3), (icon_x+12), (icon_y+3), 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+4), (icon_x+12), (icon_y+4), 255, 255, 255, 0);
-    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+5), (icon_x+12), (icon_y+5), 255, 255, 255, 0);
+    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+2), (icon_x+12), (icon_y+2), 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+3), (icon_x+12), (icon_y+3), 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+4), (icon_x+12), (icon_y+4), 255, 255, 255, 1);
+    gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+5), (icon_x+12), (icon_y+5), 255, 255, 255, 1);
 #endif
+
+    ui_app_linglong_draw_lite(key_event, global_state, 96, 88,
+        timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec,
+        119.0, 32.0, 8.0);
 
     gfx_refresh(global_state->gfx);
 }
@@ -304,34 +310,32 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
 // 玲珑天象仪
 // ===============================================================================
 
-static uint64_t ephemeris_refersh_timestamp = 0;
-static uint64_t ephemeris_first_call_timestamp = 0;
-static uint32_t last_day = 0;
-static uint32_t sunrise_time[2] = {0, 0}; // hour, minute
-static uint32_t sunset_time[2] = {0, 0}; // hour, minute
+static uint64_t linglong_refresh_timestamp = 0;
+static uint64_t linglong_first_call_timestamp = 0;
+static uint32_t linglong_last_day = 0;
+static uint32_t linglong_sunrise_time[2] = {0, 0}; // hour, minute
+static uint32_t linglong_sunset_time[2] = {0, 0}; // hour, minute
 
-static int32_t timemachine_running_state = 2; // 0-停止；1-时光机运行；2-实时
-static int32_t timemachine_speed = 0; // 时光机速度，正数为未来，负数为过去，单位秒
-static uint64_t timemachine_start_timestamp = 0;
-
-static int32_t linglong_version = 1;
+static int32_t linglong_timemachine_running_state = 2; // 0-停止；1-时光机运行；2-实时
+static int32_t linglong_timemachine_speed = 0; // 时光机速度，正数为未来，负数为过去，单位秒
+static uint64_t linglong_timemachine_start_timestamp = 0;
 
 void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state) {
 
     Linglong_Config *llcfg = global_state->linglong_cfg;
 
     // 节流：不大于50fps
-    // if (global_state->timestamp - ephemeris_refersh_timestamp < 20) {
+    // if (global_state->timestamp - linglong_refresh_timestamp < 20) {
     //     return;
     // }
-    // ephemeris_refersh_timestamp = global_state->timestamp;
+    // linglong_refresh_timestamp = global_state->timestamp;
 
     gfx_soft_clear(global_state->gfx);
 
     time_t ts = (time_t)global_state->timestamp / 1000;
-    if (timemachine_running_state == 1) {
-        timemachine_start_timestamp += (timemachine_speed * 1000);
-        ts = (time_t)timemachine_start_timestamp / 1000;
+    if (linglong_timemachine_running_state == 1) {
+        linglong_timemachine_start_timestamp += (linglong_timemachine_speed * 1000);
+        ts = (time_t)linglong_timemachine_start_timestamp / 1000;
         struct tm *timeinfo = localtime(&ts); // 转换为本地时间
 
         llcfg->second = timeinfo->tm_sec;
@@ -341,7 +345,7 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->month = timeinfo->tm_mon + 1;
         llcfg->year = timeinfo->tm_year + 1900;
     }
-    else if (timemachine_running_state == 2) {
+    else if (linglong_timemachine_running_state == 2) {
         ts = (time_t)global_state->timestamp / 1000;
         struct tm *timeinfo = localtime(&ts);
         llcfg->second = timeinfo->tm_sec;
@@ -392,74 +396,38 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
     gfx_refresh(global_state->gfx);
 }
 
-void ui_app_linglong_draw_lite(Key_Event *key_event, Global_State *global_state, int32_t x, int32_t y) {
+void ui_app_linglong_draw_lite(
+    Key_Event *key_event, Global_State *global_state,
+    int32_t x, int32_t y,
+    int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
+    double longitude, double latitude, double timezone
+) {
     Linglong_Config *llcfg = global_state->linglong_cfg;
 
-    const double longitude = 119.0; // 东经
-    const double latitude = 32.0;   // 北纬
-    const double timezone = +8.0;   // 东八区
+    gfx_draw_rectangle(global_state->gfx, x, y, 128, 64, 255, 255, 255, 1);
 
-    // 节流：不大于50fps
-    if (global_state->timestamp - ephemeris_refersh_timestamp < 20) {
-        return;
-    }
-    ephemeris_refersh_timestamp = global_state->timestamp;
+    gfx_draw_circle(global_state->gfx, x+64, y+32, 30,         222, 222, 222, 1);
+    gfx_draw_circle(global_state->gfx, x+64, y+32, 20,         222, 222, 222, 1);
+    gfx_draw_circle(global_state->gfx, x+64, y+32, 10,         222, 222, 222, 1);
+    gfx_draw_line(global_state->gfx,   x+32, y+32, x+96, y+32, 222, 222, 222, 1);
+    gfx_draw_line(global_state->gfx,   x+64, y+0, x+64, y+64,  222, 222, 222, 1);
 
-    gfx_soft_clear(global_state->gfx);
-
-    gfx_draw_circle(global_state->gfx, 64, 32, 30, 255, 255, 255, 1);
-    gfx_draw_circle(global_state->gfx, 64, 32, 20, 255, 255, 255, 1);
-    gfx_draw_circle(global_state->gfx, 64, 32, 10, 255, 255, 255, 1);
-    gfx_draw_line(global_state->gfx, 32, 32, 96, 32, 255, 255, 255, 1);
-    gfx_draw_line(global_state->gfx, 64, 0, 64, 64, 255, 255, 255, 1);
+    gfx_draw_rectangle(global_state->gfx, x+62-1, y+0,    5+2, 5+1, 255, 255, 255, 1); // N背景
+    gfx_draw_rectangle(global_state->gfx, x+63-1, y+59-1, 3+2, 5+1, 255, 255, 255, 1); // S背景
+    gfx_draw_rectangle(global_state->gfx, x+32-1, y+30-1, 5+2, 5+2, 255, 255, 255, 1); // W背景
+    gfx_draw_rectangle(global_state->gfx, x+93-1, y+30-1, 3+2, 5+2, 255, 255, 255, 1); // E背景
 
     // 方位文字和周围的边框
-    gfx_draw_textline_mini(global_state->gfx, L"N", 62, 0,  255, 255, 255, 1);  gfx_draw_point(global_state->gfx, 61, 2,  255, 255, 255, 0);  gfx_draw_point(global_state->gfx, 67, 2, 255, 255, 255, 0);  gfx_draw_point(global_state->gfx, 64, 5, 255, 255, 255, 0);
-    gfx_draw_textline_mini(global_state->gfx, L"S", 63, 59, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, 62, 62, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 66, 62, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 64, 58, 255, 255, 255, 0);
-    gfx_draw_textline_mini(global_state->gfx, L"W", 32, 30, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, 34, 29, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 37, 32, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 34, 35, 255, 255, 255, 0);
-    gfx_draw_textline_mini(global_state->gfx, L"E", 93, 30, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, 92, 32, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 96, 32, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 94, 29, 255, 255, 255, 0); gfx_draw_point(global_state->gfx, 94, 35, 255, 255, 255, 0);
+    gfx_draw_textline_mini(global_state->gfx, L"N", x+62, y+0,  255, 0, 0, 1); gfx_draw_point(global_state->gfx, x+61, y+2,  255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+67, y+2,  255, 255, 255, 1);  gfx_draw_point(global_state->gfx, x+64, y+5, 255, 255, 255, 1);
+    gfx_draw_textline_mini(global_state->gfx, L"S", x+63, y+59, 255, 0, 0, 1); gfx_draw_point(global_state->gfx, x+62, y+62, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+66, y+62, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+64, y+58, 255, 255, 255, 1);
+    gfx_draw_textline_mini(global_state->gfx, L"W", x+32, y+30, 255, 0, 0, 1); gfx_draw_point(global_state->gfx, x+34, y+29, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+37, y+32, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+34, y+35, 255, 255, 255, 1);
+    gfx_draw_textline_mini(global_state->gfx, L"E", x+93, y+30, 255, 0, 0, 1); gfx_draw_point(global_state->gfx, x+92, y+32, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+96, y+32, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+94, y+29, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+94, y+35, 255, 255, 255, 1);
 
-    gfx_draw_line(global_state->gfx, 0, 43, 30, 43, 255, 255, 255, 1);
-
-    time_t ts = (time_t)global_state->timestamp / 1000;
-
-    int32_t second = llcfg->second;
-    int32_t minute = llcfg->minute;
-    int32_t hour = llcfg->hour;
-    int32_t day = llcfg->day;
-    int32_t month = llcfg->month;
-    int32_t year = llcfg->year;
-
-    if (timemachine_running_state == 1) {
-        timemachine_start_timestamp += (timemachine_speed * 1000);
-        ts = (time_t)timemachine_start_timestamp / 1000;
-        struct tm *timeinfo = localtime(&ts); // 转换为本地时间
-
-        second = timeinfo->tm_sec;
-        minute = timeinfo->tm_min;
-        hour = timeinfo->tm_hour;
-        day = timeinfo->tm_mday;
-        month = timeinfo->tm_mon + 1;
-        year = timeinfo->tm_year + 1900;
-    }
-    else if (timemachine_running_state == 2) {
-        ts = (time_t)global_state->timestamp / 1000;
-        struct tm *timeinfo = localtime(&ts);
-        second = timeinfo->tm_sec;
-        minute = timeinfo->tm_min;
-        hour = timeinfo->tm_hour;
-        day = timeinfo->tm_mday;
-        month = timeinfo->tm_mon + 1;
-        year = timeinfo->tm_year + 1900;
-    }
-
-
-
+    gfx_draw_line(global_state->gfx, x+0, y+43, x+30, y+43, 222, 222, 222, 1);
 
     wchar_t timestr[30];
     swprintf(timestr, 30, L"%04d-%02d-%02d\n%02d:%02d:%02d", year, month, day, hour, minute, second);
-    gfx_draw_textline_mini(global_state->gfx, timestr, 0, 0, 255, 255, 255, 1);
-
+    gfx_draw_textline_mini(global_state->gfx, timestr, x+0, y+0, 0, 0, 255, 1);
 
     double altitude_moon = 0.0;
     double azimuth_moon = 0.0;
@@ -470,22 +438,22 @@ void ui_app_linglong_draw_lite(Key_Event *key_event, Global_State *global_state,
 
     wchar_t coordstr_moon[30];
     swprintf(coordstr_moon, 30, L"MOON\nP:%d%%\nA:%.1f\nE:%.1f", (int32_t)(moon_k * 100.0), azimuth_moon, altitude_moon);
-    gfx_draw_textline_mini(global_state->gfx, coordstr_moon, 0, 18, 255, 255, 255, 1);
+    gfx_draw_textline_mini(global_state->gfx, coordstr_moon, x+0, y+18, 0, 0, 0, 1);
 
     double x_moon = 64 + (90.0 - altitude_moon) * 32.0 / 90.0 * sin(azimuth_moon / 180.0 * M_PI);
     double y_moon = 32 - (90.0 - altitude_moon) * 32.0 / 90.0 * cos(azimuth_moon / 180.0 * M_PI);
 
-    gfx_draw_point(global_state->gfx, (int)x_moon - 1, (int)y_moon - 1, 255, 255, 255, 1);
-    gfx_draw_point(global_state->gfx, (int)x_moon - 1, (int)y_moon - 0, 255, 255, 255, 1);
-    gfx_draw_point(global_state->gfx, (int)x_moon - 1, (int)y_moon + 1, 255, 255, 255, 1);
-    gfx_draw_point(global_state->gfx, (int)x_moon - 0, (int)y_moon - 1, 255, 255, 255, 1);
-    gfx_draw_point(global_state->gfx, (int)x_moon - 0, (int)y_moon - 0, 255, 255, 255, 1);
-    gfx_draw_point(global_state->gfx, (int)x_moon - 0, (int)y_moon + 1, 255, 255, 255, 1);
-    gfx_draw_point(global_state->gfx, (int)x_moon + 1, (int)y_moon - 1, 255, 255, 255, 1);
-    gfx_draw_point(global_state->gfx, (int)x_moon + 1, (int)y_moon - 0, 255, 255, 255, 1);
-    gfx_draw_point(global_state->gfx, (int)x_moon + 1, (int)y_moon + 1, 255, 255, 255, 1);
-
-
+    if (x_moon >= 32 && x_moon <= 96 && y_moon >= 0 && y_moon <= 64) {
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 1, y + (int)y_moon - 1, 255, 0, 255, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 1, y + (int)y_moon - 0, 255, 0, 255, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 1, y + (int)y_moon + 1, 255, 0, 255, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 0, y + (int)y_moon - 1, 255, 0, 255, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 0, y + (int)y_moon - 0, 255, 0, 255, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 0, y + (int)y_moon + 1, 255, 0, 255, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon + 1, y + (int)y_moon - 1, 255, 0, 255, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon + 1, y + (int)y_moon - 0, 255, 0, 255, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon + 1, y + (int)y_moon + 1, 255, 0, 255, 1);
+    }
 
     double altitude_sun = 0.0;
     double azimuth_sun = 0.0;
@@ -494,75 +462,66 @@ void ui_app_linglong_draw_lite(Key_Event *key_event, Global_State *global_state,
 
     wchar_t coordstr_sun[30];
     swprintf(coordstr_sun, 30, L"SUN\nA:%.1f\nE:%.1f", azimuth_sun, altitude_sun);
-    gfx_draw_textline_mini(global_state->gfx, coordstr_sun, 0, 46, 255, 255, 255, 1);
+    gfx_draw_textline_mini(global_state->gfx, coordstr_sun, x+0, y+46, 0, 0, 0, 1);
 
     double x_sun = 64 + (90.0 - altitude_sun) * 32.0 / 90.0 * sin(azimuth_sun / 180.0 * M_PI);
     double y_sun = 32 - (90.0 - altitude_sun) * 32.0 / 90.0 * cos(azimuth_sun / 180.0 * M_PI);
 
-    gfx_draw_circle(global_state->gfx, (int)x_sun, (int)y_sun, 2, 255, 255, 255, 1);
+    if (x_sun >= 32 && x_sun <= 96 && y_sun >= 0 && y_sun <= 64) {
+        gfx_draw_circle(global_state->gfx, x+(int)x_sun, y+(int)y_sun, 2, 255, 0, 0, 1);
+    }
 
 
     // 二分搜索日出日落时间
-    if (ephemeris_first_call_timestamp == 0 || last_day != day) { // 只在首次调用和当天日期变化时计算
+    if (linglong_first_call_timestamp == 0 || linglong_last_day != day) { // 只在首次调用和当天日期变化时计算
         int32_t sunrise_min = find_sunrise(year, month, day, timezone, longitude, latitude);
         if (sunrise_min != -1) {
-            sunrise_time[0] = sunrise_min / 60;
-            sunrise_time[1] = sunrise_min % 60;
+            linglong_sunrise_time[0] = sunrise_min / 60;
+            linglong_sunrise_time[1] = sunrise_min % 60;
         }
         int32_t sunset_min = find_sunset(year, month, day, timezone, longitude, latitude);
         if (sunset_min != -1) {
-            sunset_time[0] = sunset_min / 60;
-            sunset_time[1] = sunset_min % 60;
+            linglong_sunset_time[0] = sunset_min / 60;
+            linglong_sunset_time[1] = sunset_min % 60;
         }
     }
     wchar_t risefall_time[60];
-    swprintf(risefall_time, 60, L"R:%02d:%02d\nS:%02d:%02d", sunrise_time[0], sunrise_time[1], sunset_time[0], sunset_time[1]);
-    gfx_draw_textline_mini(global_state->gfx, risefall_time, 98, 0, 255, 255, 255, 1);
+    swprintf(risefall_time, 60, L"R:%02d:%02d\nS:%02d:%02d", linglong_sunrise_time[0], linglong_sunrise_time[1], linglong_sunset_time[0], linglong_sunset_time[1]);
+    gfx_draw_textline_mini(global_state->gfx, risefall_time, x+98, y+0, 0, 0, 0, 1);
 
-
-    gfx_draw_textline_mini(global_state->gfx, L"    BD4SUR\n2011-09-29", 86, 53, 255, 255, 255, 1);
+    gfx_draw_textline_mini(global_state->gfx, L"    BD4SUR\n2011-09-29", x+86, y+53, 0, 0, 0, 1);
 
     gfx_refresh(global_state->gfx);
-
-    if (ephemeris_first_call_timestamp == 0) {
-        ephemeris_first_call_timestamp = global_state->timestamp;
-    }
-    last_day = day;
 }
 
 
 void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_state) {
-    if (linglong_version == 0) {
-        ui_app_linglong_draw_lite(key_event, global_state, 0, 0);
-    }
-    else {
-        ui_app_linglong_draw_full(key_event, global_state);
-    }
+    ui_app_linglong_draw_full(key_event, global_state);
 }
 
 
 void ui_app_linglong_toggle_timemachine(Key_Event *key_event, Global_State *global_state) {
-    if (timemachine_running_state == 0) {
-        timemachine_running_state = 1;
+    if (linglong_timemachine_running_state == 0) {
+        linglong_timemachine_running_state = 1;
     }
     else {
-        timemachine_running_state = 0;
+        linglong_timemachine_running_state = 0;
     }
-    if (timemachine_start_timestamp == 0) {
-        timemachine_start_timestamp = global_state->timestamp;
+    if (linglong_timemachine_start_timestamp == 0) {
+        linglong_timemachine_start_timestamp = global_state->timestamp;
     }
 }
 
 void ui_app_linglong_set_timemachine_speed(Key_Event *key_event, Global_State *global_state, int32_t speed) {
-    timemachine_speed = speed;
-    if (timemachine_running_state == 0) {
-        timemachine_running_state = 1;
+    linglong_timemachine_speed = speed;
+    if (linglong_timemachine_running_state == 0) {
+        linglong_timemachine_running_state = 1;
     }
     else {
-        timemachine_running_state = 0;
+        linglong_timemachine_running_state = 0;
     }
-    if (timemachine_start_timestamp == 0) {
-        timemachine_start_timestamp = global_state->timestamp;
+    if (linglong_timemachine_start_timestamp == 0) {
+        linglong_timemachine_start_timestamp = global_state->timestamp;
     }
 }
 
@@ -577,17 +536,13 @@ void ui_app_linglong_set_realtime(Key_Event *key_event, Global_State *global_sta
     llcfg->month = timeinfo->tm_mon + 1;
     llcfg->year = timeinfo->tm_year + 1900;
 
-    if (timemachine_running_state == 0) {
-        timemachine_running_state = 2;
+    if (linglong_timemachine_running_state == 0) {
+        linglong_timemachine_running_state = 2;
     }
     else {
-        timemachine_running_state = 0;
+        linglong_timemachine_running_state = 0;
     }
-    if (timemachine_start_timestamp == 0) {
-        timemachine_start_timestamp = global_state->timestamp;
+    if (linglong_timemachine_start_timestamp == 0) {
+        linglong_timemachine_start_timestamp = global_state->timestamp;
     }
-}
-
-void ui_app_linglong_toggle_linglong_version(Key_Event *key_event, Global_State *global_state) {
-    linglong_version = !linglong_version;
 }

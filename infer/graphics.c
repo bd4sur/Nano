@@ -4,6 +4,91 @@
 
 #include "glyph.h"
 
+// 定义宏以生成 stb 库的实现
+#define STB_IMAGE_IMPLEMENTATION
+#include "vendor/stb_image.h"
+
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "vendor/stb_image_resize2.h"
+
+#include <string.h>
+
+// 图像缓存项结构
+typedef struct {
+    char path[256];           // 图像路径（key）
+    uint8_t *data;            // resize 后的图像数据（RGB888）
+    uint32_t width;           // 图像宽度
+    uint32_t height;          // 图像高度
+    uint8_t valid;            // 此项是否有效
+} ImageCacheEntry;
+
+// 图像缓存数组（简单的固定大小缓存，LRU 淘汰）
+static ImageCacheEntry s_image_cache[GFX_IMAGE_CACHE_SIZE];
+static uint8_t s_cache_initialized = 0;
+
+// 初始化缓存
+static void init_image_cache(void) {
+    if (s_cache_initialized) return;
+    for (int i = 0; i < GFX_IMAGE_CACHE_SIZE; i++) {
+        s_image_cache[i].path[0] = '\0';
+        s_image_cache[i].data = NULL;
+        s_image_cache[i].width = 0;
+        s_image_cache[i].height = 0;
+        s_image_cache[i].valid = 0;
+    }
+    s_cache_initialized = 1;
+}
+
+// 在缓存中查找图像，返回缓存项指针，未找到返回 NULL
+static ImageCacheEntry* find_in_cache(const char *img_path, uint32_t width, uint32_t height) {
+    for (int i = 0; i < GFX_IMAGE_CACHE_SIZE; i++) {
+        if (s_image_cache[i].valid && 
+            strcmp(s_image_cache[i].path, img_path) == 0 &&
+            s_image_cache[i].width == width &&
+            s_image_cache[i].height == height) {
+            return &s_image_cache[i];
+        }
+    }
+    return NULL;
+}
+
+// 将图像存入缓存（使用简单的 LRU 策略：将命中项移到最前，新项插入最前，淘汰最后）
+static void add_to_cache(const char *img_path, uint8_t *data, uint32_t width, uint32_t height) {
+    // 首先检查是否已存在（可能是 force_fetch 情况）
+    ImageCacheEntry *existing = find_in_cache(img_path, width, height);
+    if (existing) {
+        // 更新现有缓存项的数据
+        free(existing->data);
+        existing->data = data;
+        // 移到最前面（LRU）
+        ImageCacheEntry temp = *existing;
+        int idx = (int)(existing - s_image_cache);
+        for (int i = idx; i > 0; i--) {
+            s_image_cache[i] = s_image_cache[i - 1];
+        }
+        s_image_cache[0] = temp;
+        return;
+    }
+
+    // 淘汰最后一个缓存项（如果已满）
+    if (s_image_cache[GFX_IMAGE_CACHE_SIZE - 1].valid) {
+        free(s_image_cache[GFX_IMAGE_CACHE_SIZE - 1].data);
+    }
+
+    // 将现有项后移
+    for (int i = GFX_IMAGE_CACHE_SIZE - 1; i > 0; i--) {
+        s_image_cache[i] = s_image_cache[i - 1];
+    }
+
+    // 新项插入最前
+    s_image_cache[0].valid = 1;
+    strncpy(s_image_cache[0].path, img_path, sizeof(s_image_cache[0].path) - 1);
+    s_image_cache[0].path[sizeof(s_image_cache[0].path) - 1] = '\0';
+    s_image_cache[0].data = data;
+    s_image_cache[0].width = width;
+    s_image_cache[0].height = height;
+}
+
 
 void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode) {
     // gfx = (Nano_GFX*)calloc(1, sizeof(Nano_GFX));
@@ -397,8 +482,9 @@ void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y
             uint8_t column_data = glyph[2 + i];
             // printf("Column = %d\n", column_data);
             for (uint32_t j = 0; j < font_height; j++) {
-                uint8_t m = ((column_data >> j) & 0x01) ? mode : (!mode);
-                gfx_draw_point(gfx, x_pos + i, y_pos + j, red, green, blue, m);
+                if ((column_data >> j) & 0x01) {
+                    gfx_draw_point(gfx, x_pos + i, y_pos + j, red, green, blue, mode);
+                }
             }
         }
         x_pos += (font_width + 1); // 字符间隔1像素
@@ -526,6 +612,87 @@ const uint8_t *get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uin
         }
         else {
             return NULL;
+        }
+    }
+}
+
+// 从指定文件读取图像并绘制到 frame_buffer（带缓存）
+// img_path: 图像文件路径
+// x0, y0: 目标区域左上角坐标
+// width, height: 目标区域宽高（图像将被缩放到此大小）
+// is_force_fetch: 如果非0，忽略缓存，重新读取并resize图像，并更新缓存
+void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch) {
+    // 初始化缓存
+    init_image_cache();
+    
+    uint8_t *draw_data = NULL;
+    
+    if (!is_force_fetch) {
+        // 尝试从缓存获取
+        ImageCacheEntry *cached = find_in_cache(img_path, width, height);
+        if (cached != NULL) {
+            draw_data = cached->data;
+            // 更新 LRU：将此缓存项移到最前面
+            int idx = (int)(cached - s_image_cache);
+            if (idx > 0) {
+                ImageCacheEntry temp = s_image_cache[idx];
+                for (int i = idx; i > 0; i--) {
+                    s_image_cache[i] = s_image_cache[i - 1];
+                }
+                s_image_cache[0] = temp;
+            }
+        }
+    }
+    
+    // 缓存未命中或强制刷新：从文件读取并resize
+    if (draw_data == NULL) {
+        int img_w, img_h, channels;
+        
+        // 加载图像文件，获取 RGB 数据（3通道）
+        unsigned char *img_data = stbi_load(img_path, &img_w, &img_h, &channels, 3);
+        if (img_data == NULL) {
+            // 加载失败，直接返回
+            return;
+        }
+        
+        // 分配缩放后图像的内存（RGB888 格式，3字节/像素）
+        draw_data = (uint8_t *)malloc(width * height * 3);
+        if (draw_data == NULL) {
+            stbi_image_free(img_data);
+            return;
+        }
+        
+        // 缩放图像到目标尺寸
+        stbir_resize_uint8_linear(
+            img_data, img_w, img_h, 0,           // 输入图像数据、宽、高、行跨度（0表示连续）
+            draw_data, (int)width, (int)height, 0,  // 输出图像数据、宽、高、行跨度
+            STBIR_RGB                               // 像素布局：RGB
+        );
+        
+        // 释放原始图像数据
+        stbi_image_free(img_data);
+        
+        // 存入缓存（缓存接管内存所有权）
+        add_to_cache(img_path, draw_data, width, height);
+    }
+    
+    // 将图像绘制到 frame_buffer
+    // 裁剪到 gfx 边界
+    uint32_t x_end = (x0 + width > gfx->width) ? gfx->width : x0 + width;
+    uint32_t y_end = (y0 + height > gfx->height) ? gfx->height : y0 + height;
+    
+    for (uint32_t y = y0; y < y_end; y++) {
+        for (uint32_t x = x0; x < x_end; x++) {
+            // 计算源图像中的像素位置
+            uint32_t src_x = x - x0;
+            uint32_t src_y = y - y0;
+            uint32_t src_idx = (src_y * width + src_x) * 3;
+            
+            // 写入frame_buffer
+            uint32_t idx = (y * gfx->width + x) * 3;
+            gfx->frame_buffer_rgb888[idx+0] = MIN(255, draw_data[src_idx]);
+            gfx->frame_buffer_rgb888[idx+1] = MIN(255, draw_data[src_idx + 1]);
+            gfx->frame_buffer_rgb888[idx+2] = MIN(255, draw_data[src_idx + 2]);
         }
     }
 }

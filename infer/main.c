@@ -1445,9 +1445,14 @@ int main() {
                 init_linglong_setting_menu();
                 global_state->STATE = STATE_LINGLONG_SETTING;
             }
-            // 按C键切换玲珑仪版本
+            // 按C键切换Ctrl
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_C) {
-                ui_app_linglong_toggle_linglong_version(key_event, global_state);
+                if (global_state->is_ctrl_enabled == 0) {
+                    global_state->is_ctrl_enabled = 1;
+                }
+                else {
+                    global_state->is_ctrl_enabled = 0;
+                }
             }
             // 按*键时光机向前（过去）（反复按运行/暂停）
             else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_STAR) {
