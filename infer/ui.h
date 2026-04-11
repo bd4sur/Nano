@@ -31,12 +31,30 @@ struct Linglong_Config;
 
 typedef struct Nano_Context Nano_Context;
 typedef struct Nano_Session Nano_Session;
+
+typedef struct Widget_Textarea_State Widget_Textarea_State;
+typedef struct Widget_Input_State Widget_Input_State;
+typedef struct Widget_Menu_State Widget_Menu_State;
 typedef struct Linglong_Config Linglong_Config;
 
 // NOTE 增删字段时，务必修改初始化部分
-typedef struct {
+typedef struct Global_State {
     // gfx对象
     Nano_GFX *gfx;
+
+    // UI组件（指向它们的指针），目前暂且硬编码
+    Widget_Textarea_State  *w_textarea_main;
+    Widget_Textarea_State  *w_textarea_asr;
+    Widget_Textarea_State  *w_textarea_prefill;
+
+    Widget_Input_State     *w_input_main;
+
+    Widget_Menu_State      *w_menu_main;
+    Widget_Menu_State      *w_menu_model;
+    Widget_Menu_State      *w_menu_setting;
+    Widget_Menu_State      *w_menu_asr_setting;
+    Widget_Menu_State      *w_menu_tts_setting;
+    Widget_Menu_State      *w_menu_linglong_setting;
 
     // 全局状态
     int32_t STATE; // 当前状态
@@ -100,7 +118,7 @@ typedef struct {
 
 } Global_State;
 
-typedef struct {
+typedef struct Key_Event {
     uint8_t  prev_key;   // 上一次按键的键值
     uint8_t  key_code;   // 大于等于16为没有任何按键，0-15为按键
     int8_t   key_edge;   // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)
@@ -109,7 +127,7 @@ typedef struct {
     uint8_t  key_repeat; // 触发一次长按后，只要不松手，该标记置1，直到物理按键松开后置0。若该标记为1，则在按住时触发连续重复动作。
 } Key_Event;
 
-typedef struct {
+typedef struct Widget_Textarea_State {
     int32_t state;
     int32_t x;
     int32_t y; // NOTE 设置文本框高度时，按照除末行外，每行margin-bottom:1px来计算。例如，如果希望恰好显示4行，则高度应为13*3+12=51px。
@@ -128,7 +146,7 @@ typedef struct {
     int32_t is_modified; // 文本内容是否有修改过？默认1。用于控制是否进行typeset_line_breaks排版
 } Widget_Textarea_State;
 
-typedef struct {
+typedef struct Widget_Input_State {
     // 继承 Widget_Textarea_State
     Widget_Textarea_State textarea;
 
@@ -151,7 +169,7 @@ typedef struct {
     uint32_t alphabet_index;
 } Widget_Input_State;
 
-typedef struct {
+typedef struct Widget_Menu_State {
     int32_t x;
     int32_t y;
     int32_t zindex;
