@@ -2778,16 +2778,16 @@ void scatter_model_3(
     color1 *= expf(-ozone_absorption1 * oz_path * oz_scale);
     color2 *= expf(-ozone_absorption2 * oz_path * oz_scale);
 
-    /* HDR */
-    color0 = s3_hdr_mapping(color0);
-    color1 = s3_hdr_mapping(color1);
-    color2 = s3_hdr_mapping(color2);
-
     /* 拍脑袋：夜天光 */
     float night_light_scale = 1.0f - viewElevationDeg / 90.0f;
     color0 += 0.05f * night_light_scale;
     color1 += 0.08f * night_light_scale;
     color2 += 0.12f * night_light_scale;
+
+    /* HDR */
+    color0 = s3_hdr_mapping(color0);
+    color1 = s3_hdr_mapping(color1);
+    color2 = s3_hdr_mapping(color2);
 
     // 限幅输出
     *red   = MIN(1.0f, color0);
