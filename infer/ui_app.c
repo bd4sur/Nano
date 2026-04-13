@@ -29,6 +29,8 @@
     #include "badapple.h"
 #endif
 
+#include "flip.h"
+
 #include "ephemeris.h"
 #include "celestial.h"
 #include "nongli.h"
@@ -389,6 +391,32 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
     gol_field_page = 1 - gol_field_page;
 }
 
+
+// ===============================================================================
+// FLIP流体模拟
+// ===============================================================================
+
+void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
+    flip_init(2, 1);
+}
+
+void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) {
+    int show_particles = 1;
+    int show_grid      = 1;
+
+    gfx_soft_clear(global_state->gfx);
+
+    render_flip(global_state->gfx, 20, 20, 128, 64,
+                2, 1,            /* pool_width, pool_height */
+                0.0f, -9.81f,    /* gravity_x, gravity_y */
+                1.0f / 60.0f,    /* dt */
+                0.9f,            /* flip_ratio */
+                50, 2,           /* num_pressure_iters, num_particle_iters */
+                1.9f,            /* over_relaxation */
+                1, 1,            /* compensate_drift, separate_particles */
+                show_particles, show_grid);
+    gfx_refresh(global_state->gfx);
+}
 
 
 // ===============================================================================

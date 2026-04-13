@@ -258,10 +258,10 @@ void ui_draw_text_block(Key_Event *key_event, Global_State *global_state, Widget
             if(i > 0) y_pos += (font_height + 1);
             continue;
         }
-        const uint8_t *glyph = get_glyph(global_state->gfx, current_char, &font_width, &font_height);
+        const uint8_t *glyph = gfx_get_glyph(global_state->gfx, current_char, &font_width, &font_height);
         if (!glyph) {
             // printf("出现了字库之外的字符[%d]\n", current_char);
-            glyph = get_glyph(global_state->gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+            glyph = gfx_get_glyph(global_state->gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
         if (x_pos + font_width >= textarea_state->x + textarea_state->width) {
             y_pos += (font_height + 1);

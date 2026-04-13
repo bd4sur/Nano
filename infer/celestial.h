@@ -6,15 +6,16 @@ extern "C" {
 #endif
 
 // 若干视觉参数
-#define LINGLONG_STAR_BURST_RADIUS       (60)
-#define LINGLONG_STAR_BURST_DECAY        (0.94f)
-#define LINGLONG_HORIZON_BLUR_MARGIN     (10.0f)
-#define LINGLONG_CELESTIAL_CIRCLE_POINTS (180)
-#define LINGLONG_ECLIPTIC_CIRCLE_POINTS  (360)
-#define LINGLONG_SUN_RADIUS_MIN          (3.0f)
-#define LINGLONG_SUN_GLOW_RADIUS         (4)
-#define LINGLONG_MOON_RADIUS_MIN         (16.0f)
-#define LINGLONG_STAR_GLOW_RADIUS        (0)
+#define LINGLONG_STAR_BURST_RADIUS        (60)
+#define LINGLONG_STAR_BURST_DECAY         (0.94f)
+#define LINGLONG_HORIZON_BLUR_MARGIN      (10.0f)
+#define LINGLONG_CELESTIAL_CIRCLE_POINTS  (180)
+#define LINGLONG_HORIZONTAL_CIRCLE_POINTS (180)
+#define LINGLONG_ECLIPTIC_CIRCLE_POINTS   (360)
+#define LINGLONG_SUN_RADIUS_MIN           (3.0f)
+#define LINGLONG_SUN_GLOW_RADIUS          (4)
+#define LINGLONG_MOON_RADIUS_MIN          (16.0f)
+#define LINGLONG_STAR_GLOW_RADIUS         (0)
 
 
 typedef struct Linglong_Config {

@@ -29,6 +29,7 @@ extern "C" {
 #define STATE_ASR_SETTING       (33)
 #define STATE_LINGLONG_SETTING  (34)
 #define STATE_LINGLONG_TIMELOC  (35)
+#define STATE_FLIP              (36)
 
 
 #define PREFILL_LED_ON  system("echo \"1\" > /sys/devices/platform/leds/leds/green:status/brightness");
@@ -71,6 +72,14 @@ void ui_app_badapple_render_frame(Key_Event *key_event, Global_State *global_sta
 
 void ui_app_gol_init(Key_Event *key_event, Global_State *global_state);
 void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state);
+
+
+// ===============================================================================
+// FLIP流体模拟
+// ===============================================================================
+
+void ui_app_flip_init(Key_Event *key_event, Global_State *global_state);
+void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state);
 
 
 // ===============================================================================

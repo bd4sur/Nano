@@ -244,11 +244,12 @@ void init_main_menu() {
     wcscpy(global_state->w_menu_main->items[1], L"玲珑天象仪");
     wcscpy(global_state->w_menu_main->items[2], L"文字阅读器");
     wcscpy(global_state->w_menu_main->items[3], L"Bad Apple！");
-    wcscpy(global_state->w_menu_main->items[4], L"元胞自动机");
-    wcscpy(global_state->w_menu_main->items[5], L"设置");
-    wcscpy(global_state->w_menu_main->items[6], L"安全关机");
-    wcscpy(global_state->w_menu_main->items[7], L"本机自述");
-    global_state->w_menu_main->item_num = 8;
+    wcscpy(global_state->w_menu_main->items[4], L"FLIP流体模拟");
+    wcscpy(global_state->w_menu_main->items[5], L"元胞自动机");
+    wcscpy(global_state->w_menu_main->items[6], L"设置");
+    wcscpy(global_state->w_menu_main->items[7], L"安全关机");
+    wcscpy(global_state->w_menu_main->items[8], L"本机自述");
+    global_state->w_menu_main->item_num = 9;
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
 }
 
@@ -323,24 +324,29 @@ int32_t main_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
         return STATE_BADAPPLE;
     }
 
-    // 4.元胞自动机
+    // 4.FLIP流体模拟
     else if (item_index == 4) {
+        return STATE_FLIP;
+    }
+
+    // 5.元胞自动机
+    else if (item_index == 5) {
         return STATE_GAMEOFLIFE;
     }
 
-    // 5.设置
-    else if (item_index == 5) {
+    // 6.设置
+    else if (item_index == 6) {
         init_setting_menu();
         return STATE_SETTING_MENU;
     }
 
-    // 6.安全关机
-    else if (item_index == 6) {
+    // 7.安全关机
+    else if (item_index == 7) {
         return STATE_SHUTDOWN;
     }
 
-    // 7.本机自述
-    else if (item_index == 7) {
+    // 8.本机自述
+    else if (item_index == 8) {
         return STATE_README;
     }
     return STATE_MAIN_MENU;
@@ -1063,6 +1069,29 @@ int main() {
             }
 
             break;
+
+
+        /////////////////////////////////////////////
+        // FLIP流体模拟
+        /////////////////////////////////////////////
+
+        case STATE_FLIP:
+
+            // 首次获得焦点：初始化
+            if (global_state->PREV_STATE != global_state->STATE) {
+                ui_app_flip_init(key_event, global_state);
+            }
+            global_state->PREV_STATE = global_state->STATE;
+
+            ui_app_flip_render_frame(key_event, global_state);
+
+            // 按A键返回主菜单
+            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+                global_state->STATE = STATE_MAIN_MENU;
+            }
+
+            break;
+
 
         /////////////////////////////////////////////
         // 元胞自动机：Conway的生命游戏

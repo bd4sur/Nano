@@ -1179,6 +1179,112 @@ void fb_draw_textline_centered(
 // 绘制基本形状
 // ===============================================================================
 
+static inline float _fpart(float x) { return x - floorf(x); }
+static inline float _rfpart(float x) { return 1.0f - _fpart(x); }
+
+static void draw_line_xiaolin_wu(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+    float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b)
+{
+    int steep = fabsf(y1 - y0) > fabsf(x1 - x0);
+
+    if (steep) {
+        float t = x0; x0 = y0; y0 = t;
+        t = x1; x1 = y1; y1 = t;
+    }
+
+    if (x0 > x1) {
+        float t = x0; x0 = x1; x1 = t;
+        t = y0; y0 = y1; y1 = t;
+    }
+
+    float dx = x1 - x0;
+    float dy = y1 - y0;
+    float gradient = (dx == 0.0f) ? 0.0f : dy / dx;
+
+    // steep 决定算法坐标系与屏幕坐标系的映射关系，从而确定各自的合法边界
+    int32_t x_limit = steep ? fb_height : fb_width;   // 算法 x 方向对应屏幕的宽度/高度
+    int32_t y_limit = steep ? fb_width  : fb_height;  // 算法 y 方向对应屏幕的高度/宽度
+
+    // handle first endpoint
+    float xend = roundf(x0);
+    float yend = y0 + gradient * (xend - x0);
+    float xgap = _rfpart(x0 + 0.5f);
+    int xpxl1 = (int)xend;
+    int ypxl1 = (int)floorf(yend);
+    if (xpxl1 >= 0 && xpxl1 < x_limit) {
+        if (steep) {
+            if (ypxl1 >= 0 && ypxl1 < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, ypxl1,   xpxl1, r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+            }
+            if (ypxl1 + 1 >= 0 && ypxl1 + 1 < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, ypxl1+1, xpxl1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+            }
+        } else {
+            if (ypxl1 >= 0 && ypxl1 < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, xpxl1, ypxl1,   r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+            }
+            if (ypxl1 + 1 >= 0 && ypxl1 + 1 < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, xpxl1, ypxl1+1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+            }
+        }
+    }
+    float intery = yend + gradient;
+
+    // handle second endpoint
+    xend = roundf(x1);
+    yend = y1 + gradient * (xend - x1);
+    xgap = _fpart(x1 + 0.5f);
+    int xpxl2 = (int)xend;
+    int ypxl2 = (int)floorf(yend);
+    if (xpxl2 >= 0 && xpxl2 < x_limit) {
+        if (steep) {
+            if (ypxl2 >= 0 && ypxl2 < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, ypxl2,   xpxl2, r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+            }
+            if (ypxl2 + 1 >= 0 && ypxl2 + 1 < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, ypxl2+1, xpxl2, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+            }
+        } else {
+            if (ypxl2 >= 0 && ypxl2 < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, xpxl2, ypxl2,   r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+            }
+            if (ypxl2 + 1 >= 0 && ypxl2 + 1 < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, xpxl2, ypxl2+1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+            }
+        }
+    }
+
+    // main loop：先对 x 范围做裁剪，消除循环变量本身的越界
+    int x_start = xpxl1 + 1;
+    int x_end = xpxl2 - 1;
+    if (x_start < 0) x_start = 0;
+    if (x_end >= x_limit) x_end = x_limit - 1;
+
+    if (steep) {
+        for (int x = x_start; x <= x_end; x++) {
+            int y_base = (int)floorf(intery);
+            if (y_base >= 0 && y_base < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, y_base,   x, r * _rfpart(intery), g * _rfpart(intery), b * _rfpart(intery));
+            }
+            if (y_base + 1 >= 0 && y_base + 1 < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, y_base+1, x, r * _fpart(intery),  g * _fpart(intery),  b * _fpart(intery));
+            }
+            intery += gradient;
+        }
+    } else {
+        for (int x = x_start; x <= x_end; x++) {
+            int y_base = (int)floorf(intery);
+            if (y_base >= 0 && y_base < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, x, y_base,   r * _rfpart(intery), g * _rfpart(intery), b * _rfpart(intery));
+            }
+            if (y_base + 1 >= 0 && y_base + 1 < y_limit) {
+                add_pixel(frame_buffer, fb_width, fb_height, x, y_base+1, r * _fpart(intery),  g * _fpart(intery),  b * _fpart(intery));
+            }
+            intery += gradient;
+        }
+    }
+}
+
 void draw_line(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float x1, float y1, float x2, float y2, float line_width, uint8_t r, uint8_t g, uint8_t b
 ) {
@@ -1188,6 +1294,12 @@ void draw_line(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     uint8_t cr = MAX(0, MIN(255, r));
     uint8_t cg = MAX(0, MIN(255, g));
     uint8_t cb = MAX(0, MIN(255, b));
+
+    // 线宽为1时，使用吴小林算法以获得更锐利的抗锯齿效果
+    if (line_width <= 1.0f) {
+        draw_line_xiaolin_wu(frame_buffer, fb_width, fb_height, x1, y1, x2, y2, cr, cg, cb);
+        return;
+    }
 
     float dx = x2 - x1;
     float dy = y2 - y1;
@@ -1236,8 +1348,8 @@ void draw_line(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 
             // 投影长度（参数 t）
             float t = (float)(px * dx + py * dy) / len_sq;
-            int32_t closest_x = x1;
-            int32_t closest_y = y1;
+            float closest_x = x1;
+            float closest_y = y1;
 
             if (t < 0.0f) {
                 closest_x = x1;
@@ -1248,17 +1360,17 @@ void draw_line(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
                 closest_y = y2;
             }
             else {
-                closest_x = x1 + (int32_t)(t * dx);
-                closest_y = y1 + (int32_t)(t * dy);
+                closest_x = x1 + t * dx;
+                closest_y = y1 + t * dy;
             }
 
-            float dist = sqrtf((float)((x - closest_x) * (x - closest_x) + (y - closest_y) * (y - closest_y)));
+            float dist = sqrtf((x - closest_x) * (x - closest_x) + (y - closest_y) * (y - closest_y));
 
             if (dist > half_w) continue;
 
             // 抗锯齿：边缘平滑过渡
             float alpha = 1.0f;
-            float edge_fade = 1.0; // 像素，可调
+            float edge_fade = MIN(1.0f, half_w); // 自适应边缘宽度，防止细线中心像素过淡
             if (dist > half_w - edge_fade) {
                 alpha = (half_w - dist) / edge_fade;
                 alpha = MAX(0.0f, MIN(1.0f, alpha));
@@ -1475,12 +1587,12 @@ void draw_celestial_circle(
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double timezone, double longitude, double latitude
 ) {
-    float x_prev = 0.0f;
-    float y_prev = 0.0f;
-    double alt_prev = 0.0f;
-    float x_0 = 0.0f;
-    float y_0 = 0.0f;
-    double alt_0 = 0.0f;
+    const int32_t POINTS = LINGLONG_CELESTIAL_CIRCLE_POINTS;
+    const double eps = 0.5;
+
+    float points_x[LINGLONG_CELESTIAL_CIRCLE_POINTS+1];
+    float points_y[LINGLONG_CELESTIAL_CIRCLE_POINTS+1];
+    int valid[LINGLONG_CELESTIAL_CIRCLE_POINTS+1];
 
     // 子午圈：固定 RA，遍历 Dec ∈ [-90°, +90°]
     if (is_meridian) {
@@ -1488,32 +1600,30 @@ void draw_celestial_circle(
         float ra_deg = fmodf(ra_hours, 24.0f) * 15.0f;
         double alt = 0.0;
         double azi = 0.0;
-        for (int32_t i = 0; i <= LINGLONG_CELESTIAL_CIRCLE_POINTS; i++) {
-            float dec = -90.0f + (180.0f * (float)i / (float)LINGLONG_CELESTIAL_CIRCLE_POINTS);
+        for (int32_t i = 0; i <= POINTS; i++) {
+            float dec = -90.0f + (180.0f * (float)i / (float)POINTS);
             equatorial_to_horizontal((double)ra_deg, (double)dec, year, month, day, hour, minute, second, timezone, longitude, latitude, &azi, &alt);
-
-            if (alt > 0.0) {
+            if (alt > eps) {
                 float x = 0.0f;
                 float y = 0.0f;
                 fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &x, &y);
-
-                if (i == 0) {
-                    x_0 = x;
-                    y_0 = y;
-                    alt_0 = alt;
-                }
-                
-                if (alt_prev > 0.0 && alt > 0.0) {
-                    draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x, y, line_weight, colorR, colorG, colorB);
-                }
-
-                x_prev = x;
-                y_prev = y;
-                alt_prev = alt;
+                points_x[i] = x;
+                points_y[i] = y;
+                valid[i] = 1;
+            } else {
+                valid[i] = 0;
             }
         }
-        if (alt_0 > 0.0 && alt > 0.0) {
-            draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x_0, y_0, line_weight, colorR, colorG, colorB);
+
+        // 连接可见段
+        for (int32_t i = 0; i < POINTS; i++) {
+            if (valid[i] && valid[i + 1]) {
+                draw_line(frame_buffer, fb_width, fb_height, points_x[i], points_y[i], points_x[i + 1], points_y[i + 1], line_weight, colorR, colorG, colorB);
+            }
+        }
+        // 首尾闭合
+        if (valid[POINTS] && valid[0]) {
+            draw_line(frame_buffer, fb_width, fb_height, points_x[POINTS], points_y[POINTS], points_x[0], points_y[0], line_weight, colorR, colorG, colorB);
         }
     }
     // 纬度圈：固定 Dec，遍历 RA ∈ [0h, 24h)
@@ -1521,34 +1631,31 @@ void draw_celestial_circle(
         if (dec_deg < -90.0f || dec_deg > 90.0f) return;
         double alt = 0.0;
         double azi = 0.0;
-        for (int32_t i = 0; i <= LINGLONG_CELESTIAL_CIRCLE_POINTS; i++) {
-            float ra_h = 24.0f * (float)i / (float)LINGLONG_CELESTIAL_CIRCLE_POINTS;
+        for (int32_t i = 0; i <= POINTS; i++) {
+            float ra_h = 24.0f * (float)i / (float)POINTS;
             float ra_deg = fmodf(ra_h, 24.0f) * 15.0f;
-
             equatorial_to_horizontal((double)ra_deg, (double)dec_deg, year, month, day, hour, minute, second, timezone, longitude, latitude, &azi, &alt);
-
-            if (alt > 0.0) {
+            if (alt > eps) {
                 float x = 0.0f;
                 float y = 0.0f;
                 fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &x, &y);
-
-                if (i == 0) {
-                    x_0 = x;
-                    y_0 = y;
-                    alt_0 = alt;
-                }
-
-                if (alt_prev > 0.0 && alt > 0.0) {
-                    draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x, y, line_weight, colorR, colorG, colorB);
-                }
-
-                x_prev = x;
-                y_prev = y;
-                alt_prev = alt;
+                points_x[i] = x;
+                points_y[i] = y;
+                valid[i] = 1;
+            } else {
+                valid[i] = 0;
             }
         }
-        if (alt_0 > 0.0 && alt > 0.0) {
-            draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x_0, y_0, line_weight, colorR, colorG, colorB);
+
+        // 连接可见段
+        for (int32_t i = 0; i < POINTS; i++) {
+            if (valid[i] && valid[i + 1]) {
+                draw_line(frame_buffer, fb_width, fb_height, points_x[i], points_y[i], points_x[i + 1], points_y[i + 1], line_weight, colorR, colorG, colorB);
+            }
+        }
+        // 首尾闭合
+        if (valid[POINTS] && valid[0]) {
+            draw_line(frame_buffer, fb_width, fb_height, points_x[POINTS], points_y[POINTS], points_x[0], points_y[0], line_weight, colorR, colorG, colorB);
         }
     }
 }
@@ -1608,7 +1715,7 @@ void draw_ecliptic_circle(
 
 }
 
-// 绘制地平等仰角圈
+// 绘制地平等仰角圈（地平经度圈/高度圈）
 void draw_horizontal_altitude_circle(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
@@ -1616,54 +1723,41 @@ void draw_horizontal_altitude_circle(
     float altitude_deg,
     int32_t line_weight, uint8_t colorR, uint8_t colorG, uint8_t colorB
 ) {
-    const int32_t POINTS = 360;
-    float x_prev = 0.0f;
-    float y_prev = 0.0f;
-    float x_0 = 0.0f;
-    float y_0 = 0.0f;
-    int32_t first_point = 0;
-    int32_t prev_valid = 0;
+    const int32_t POINTS = LINGLONG_HORIZONTAL_CIRCLE_POINTS;
+    const float R = sky_radius;
 
+    float points_x[LINGLONG_HORIZONTAL_CIRCLE_POINTS+1];
+    float points_y[LINGLONG_HORIZONTAL_CIRCLE_POINTS+1];
+    int valid[LINGLONG_HORIZONTAL_CIRCLE_POINTS+1];
+
+    // 固定仰角，遍历方位角 0°到360°
     for (int32_t i = 0; i <= POINTS; i++) {
         float azimuth_deg = (360.0f * (float)i / (float)POINTS);
-        
         float x = 0.0f;
         float y = 0.0f;
-        fisheye_project(azimuth_deg, altitude_deg, sky_radius, center_x, center_y,
+        fisheye_project(azimuth_deg, altitude_deg, R, center_x, center_y,
                        view_alt, view_azi, view_roll, f, projection, &x, &y);
-        
-        // 检查点是否在有效范围内（屏幕内）作为可见性判断
-        int32_t valid = (x >= 0 && x < fb_width && y >= 0 && y < fb_height);
-        
-        if (valid) {
-            if (i == 0) {
-                x_0 = x;
-                y_0 = y;
-                first_point = 1;
-            }
-            
-            // 防弓弦：只有前一个点也有效时才连线
-            if (prev_valid) {
-                draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x, y,
-                         line_weight, colorR, colorG, colorB);
-            }
-            
-            x_prev = x;
-            y_prev = y;
-            prev_valid = 1;
+        // 检查点是否有效（在画面范围内）
+        if (x >= 0 && x < fb_width && y >= 0 && y < fb_height) {
+            points_x[i] = x;
+            points_y[i] = y;
+            valid[i] = 1;
         } else {
-            prev_valid = 0; // 断开连接，防止跨边界弓弦
+            valid[i] = 0;
         }
     }
-    
-    // 对于闭合的等仰角圈，最后连接首尾（如果都有效）
-    if (prev_valid && first_point) {
-        draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x_0, y_0,
-                 line_weight, colorR, colorG, colorB);
+
+    // 使用抗锯齿 draw_line 连接可见段
+    for (int32_t i = 0; i < POINTS; i++) {
+        if (valid[i] && valid[i + 1]) {
+            draw_line(frame_buffer, fb_width, fb_height,
+                      points_x[i], points_y[i], points_x[i + 1], points_y[i + 1],
+                      line_weight, colorR, colorG, colorB);
+        }
     }
 }
 
-// 绘制地平等方位角圈
+// 绘制地平等方位角圈（地平经线圈/方位圈）
 void draw_horizontal_azimuth_circle(
     uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     float sky_radius, float center_x, float center_y,
@@ -1671,34 +1765,40 @@ void draw_horizontal_azimuth_circle(
     float azimuth_deg,
     int32_t line_weight, uint8_t colorR, uint8_t colorG, uint8_t colorB
 ) {
-    const int32_t POINTS = 180;
-    float x_prev = 0.0f;
-    float y_prev = 0.0f;
-    double alt_prev = -100.0; // 初始化为不可能的值
-    
-    double eps = 0.5; // 防止两个端点处的点连成弓弦（特别是地平线以下）
-    
+    const int32_t POINTS = LINGLONG_HORIZONTAL_CIRCLE_POINTS;
+    const float R = sky_radius;
+
+    // i 从 -POINTS 到 POINTS，共 2*POINTS+1 个点
+    float points_x[2*LINGLONG_HORIZONTAL_CIRCLE_POINTS+1];
+    float points_y[2*LINGLONG_HORIZONTAL_CIRCLE_POINTS+1];
+    int valid[2*LINGLONG_HORIZONTAL_CIRCLE_POINTS+1];
+
+    // 固定方位角，遍历仰角从地平线（0°）到天顶（90°）
     for (int32_t i = -POINTS; i <= POINTS; i++) {
         float altitude_deg = (90.0f * (float)i / (float)POINTS);
-        
         float x = 0.0f;
         float y = 0.0f;
-        fisheye_project(azimuth_deg, altitude_deg, sky_radius, center_x, center_y,
+        fisheye_project(azimuth_deg, altitude_deg, R, center_x, center_y,
                        view_alt, view_azi, view_roll, f, projection, &x, &y);
-
-        // 防弓弦逻辑：只有前一个点也满足仰角 > eps 时才连线
-        // 这防止了当地平线截断曲线时，两侧端点连成弓弦
-        if (alt_prev > eps && altitude_deg > eps) {
-            draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x, y,
-                        line_weight, colorR, colorG, colorB);
+        int32_t idx = i + POINTS;
+        // 检查点是否有效
+        if (x >= 0 && x < fb_width && y >= 0 && y < fb_height) {
+            points_x[idx] = x;
+            points_y[idx] = y;
+            valid[idx] = 1;
+        } else {
+            valid[idx] = 0;
         }
-
-        x_prev = x;
-        y_prev = y;
-        alt_prev = altitude_deg;
-
     }
-    // 注意：等方位角圈通常不是闭合曲线（从地平线下到天顶再到地平线下），不需要首尾连接
+
+    // 使用抗锯齿 draw_line 连接可见段
+    for (int32_t i = 0; i < 2 * POINTS; i++) {
+        if (valid[i] && valid[i + 1]) {
+            draw_line(frame_buffer, fb_width, fb_height,
+                      points_x[i], points_y[i], points_x[i + 1], points_y[i + 1],
+                      line_weight, colorR, colorG, colorB);
+        }
+    }
 }
 
 
@@ -3202,7 +3302,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     if (enable_equatorial_coord) {
         // 绘制赤道天球子午圈
         for (int32_t i = 0; i < 24; i += 2) {
-            int32_t line_width = (i == 0 || i == 12) ? 5 : 3;
+            int32_t line_width = (i == 0 || i == 12) ? 4 : 1;
             draw_celestial_circle(
                 frame_buffer, fb_width, fb_height,
                 sky_radius, center_x, center_y,
@@ -3214,7 +3314,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         }
         // 绘制赤道天球等纬度圈
         for (int32_t i = -90; i < 90; i += 10) {
-            int32_t line_width = (i == 0) ? 5 : 3;
+            int32_t line_width = (i == 0) ? 4 : 1;
             draw_celestial_circle(
                 frame_buffer, fb_width, fb_height,
                 sky_radius, center_x, center_y,
@@ -3230,7 +3330,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     // 绘制地景（天空投影圆盘之外的部分）
     float fov = 1.1f;
     float view_height = 1.0f;
-    int32_t enable_atmosphere_scattering = 1; // 是否启用大气散射效果（只有在高空时启用）
+    int32_t enable_atmosphere_scattering = 0; // 是否启用大气散射效果（只有在高空时启用）
     // 卫星图
     if (landscape_index == 1) {
         // TODO 几何关系待优化
@@ -3258,7 +3358,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         if (enable_horizontal_coord == 2) {
             // 绘制等仰角圈（地平纬度圈）
             for (int32_t alt = -90; alt <= 90; alt += 10) {
-                int32_t line_width = (alt == 0) ? 4 : 2;
+                int32_t line_width = (alt == 0) ? 4 : 1;
                 draw_horizontal_altitude_circle(
                     frame_buffer, fb_width, fb_height,
                     sky_radius, center_x, center_y,
@@ -3269,7 +3369,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             }
             // 绘制等方位角圈（地平经线圈）- 每隔30度绘制一条线，从0°（北）到330°
             for (int32_t azi = 0; azi < 360; azi += 30) {
-                int32_t line_width = 2; // (azi === 0) ? 3 : 2;
+                int32_t line_width = 1; // (azi === 0) ? 3 : 2;
                 draw_horizontal_azimuth_circle(
                     frame_buffer, fb_width, fb_height,
                     sky_radius, center_x, center_y,

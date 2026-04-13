@@ -325,10 +325,10 @@ void gfx_draw_textline(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uin
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        const uint8_t *glyph = get_glyph(gfx, current_char, &font_width, &font_height);
+        const uint8_t *glyph = gfx_get_glyph(gfx, current_char, &font_width, &font_height);
         if (!glyph) {
             // printf("出现了字库之外的字符！\n");
-            glyph = get_glyph(gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+            glyph = gfx_get_glyph(gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
         if (x_pos + font_width >= gfx->width) {
             break;
@@ -348,9 +348,9 @@ void gfx_draw_textline_centered(Nano_GFX *gfx, wchar_t *line, uint32_t cx, uint3
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        const uint8_t *glyph = get_glyph(gfx, current_char, &font_width, &font_height);
+        const uint8_t *glyph = gfx_get_glyph(gfx, current_char, &font_width, &font_height);
         if (!glyph) {
-            glyph = get_glyph(gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+            glyph = gfx_get_glyph(gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
         total_width += font_width;
     }
@@ -363,9 +363,9 @@ void gfx_draw_textline_centered(Nano_GFX *gfx, wchar_t *line, uint32_t cx, uint3
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
-        const uint8_t *glyph = get_glyph(gfx, current_char, &font_width, &font_height);
+        const uint8_t *glyph = gfx_get_glyph(gfx, current_char, &font_width, &font_height);
         if (!glyph) {
-            glyph = get_glyph(gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+            glyph = gfx_get_glyph(gfx, 12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
         }
         if (x_pos < 0) {
             x_pos += font_width;
@@ -594,7 +594,7 @@ void gfx_draw_hexagon(
     }
 }
 
-const uint8_t *get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
+const uint8_t *gfx_get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
     if (utf32 < 32) {
         return NULL;
     }
