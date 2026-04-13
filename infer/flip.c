@@ -493,7 +493,7 @@ static void render_to_framebuffer(
 void flip_init(float pool_width, float pool_height) {
     if (g_initialized) flip_cleanup();
 
-    int res = 16;
+    int res = 32;
     float tank_height = pool_height;
     float tank_width = pool_width;
     float h = tank_height / res;

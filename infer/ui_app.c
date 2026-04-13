@@ -397,19 +397,62 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
 // ===============================================================================
 
 void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
-    flip_init(2, 1);
+    flip_init(1.33, 1);
 }
 
 void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) {
     int show_particles = 1;
-    int show_grid      = 1;
+    int show_grid      = 0;
 
     gfx_soft_clear(global_state->gfx);
 
-    render_flip(global_state->gfx, 20, 20, 128, 64,
-                2, 1,            /* pool_width, pool_height */
-                0.0f, -9.81f,    /* gravity_x, gravity_y */
-                1.0f / 60.0f,    /* dt */
+    // 获取重力方向
+    float gravity_x = 0.0f;
+    float gravity_y = -9.8f;
+#ifdef IMU_ENABLED
+
+    int ret = -1;
+    int32_t imu_count = 3000;
+    do {
+        // 以下代码适配树莓派盒子（NanoPod）：IMU的PCB平面与树莓派PCB平行，IMU顶部指向树莓派TypeC口方向，IMU串口指向树莓派的PCIe方向
+        float q0 = 0.0f;
+        float q1 = 0.0f;
+        float q2 = 0.0f;
+        float q3 = 0.0f;
+        ret = imu_read_quaternion(&q0, &q1, &q2, &q3);
+        quaternion_to_euler(q0, q1, q2, q3, &(global_state->roll), &(global_state->pitch), &(global_state->yaw));
+        global_state->pitch -= 90.0f;
+        global_state->yaw = fmod(-global_state->yaw, 360.0);
+        if (global_state->yaw < 0) global_state->yaw += 360.0;
+
+        // 以下代码适配 NANO_POD_PLUS_CUBIE_A7Z （2026-03-02制作的单板原型）
+        // ret = imu_read_angle(&(global_state->roll), &(global_state->pitch), &(global_state->yaw));
+        // global_state->pitch = -global_state->pitch;
+        // global_state->yaw = -global_state->yaw;
+
+        imu_count--;
+        if (imu_count <= 0) {
+            printf("IMU读取超时，重置\n");
+            imu_reset();
+            break;
+        }
+    } while(ret != 0);
+    printf("俯仰=%-10.2f    滚转=%-10.2f    航向=%-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw);
+
+    // gravity_x = -9.8f * sinf(global_state->roll / 180.0f * M_PI) * cosf(global_state->pitch / 180.0f * M_PI);
+    // gravity_y = -9.8f * cosf(global_state->roll / 180.0f * M_PI) * cosf(global_state->pitch / 180.0f * M_PI);
+
+    gravity_x = -9.8f * sinf(global_state->roll / 180.0f * M_PI);
+    gravity_y = -9.8f * cosf(global_state->roll / 180.0f * M_PI);
+
+    printf("gx=%-10.2f    gy=%-10.2f\n", gravity_x, gravity_y);
+
+#endif
+
+    render_flip(global_state->gfx, 0, 0, 320, 240,
+                1.33, 1,            /* pool_width, pool_height */
+                gravity_x, gravity_y,    /* gravity_x, gravity_y */
+                1.5f / 60.0f,    /* dt */
                 0.9f,            /* flip_ratio */
                 50, 2,           /* num_pressure_iters, num_particle_iters */
                 1.9f,            /* over_relaxation */
