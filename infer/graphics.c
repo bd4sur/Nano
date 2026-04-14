@@ -131,6 +131,36 @@ void gfx_fill_white(Nano_GFX *gfx) {
     // gfx_refresh(gfx);
 }
 
+// 设置像素
+inline void gfx_set_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b) {
+    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+    uint32_t fb_width = gfx->width;
+    uint32_t i = (y * fb_width + x) * 3;
+    frame_buffer[ i ] = MIN(255, r);
+    frame_buffer[i+1] = MIN(255, g);
+    frame_buffer[i+2] = MIN(255, b);
+}
+
+// 叠加像素
+inline void gfx_add_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b) {
+    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+    uint32_t fb_width = gfx->width;
+    uint32_t i = (y * fb_width + x) * 3;
+    frame_buffer[ i ] = MIN(255, frame_buffer[ i ] + r);
+    frame_buffer[i+1] = MIN(255, frame_buffer[i+1] + g);
+    frame_buffer[i+2] = MIN(255, frame_buffer[i+2] + b);
+}
+
+// 数乘像素
+inline void gfx_scale_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, float k) {
+    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+    uint32_t fb_width = gfx->width;
+    uint32_t i = (y * fb_width + x) * 3;
+    frame_buffer[ i ] = MIN(255, (uint8_t)(k * (float)frame_buffer[ i ]));
+    frame_buffer[i+1] = MIN(255, (uint8_t)(k * (float)frame_buffer[i+1]));
+    frame_buffer[i+2] = MIN(255, (uint8_t)(k * (float)frame_buffer[i+2]));
+}
+
 // 画点
 // mode: 0-置黑  1-置色  2-异或  3-加色
 void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
@@ -237,6 +267,219 @@ void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_
     }
 }
 
+
+static inline float _fpart(float x) { return x - floorf(x); }
+static inline float _rfpart(float x) { return 1.0f - _fpart(x); }
+
+static void gfx_draw_line_xiaolin_wu(Nano_GFX *gfx,
+    float x0, float y0, float x1, float y1,
+    uint8_t r, uint8_t g, uint8_t b, uint8_t mode
+) {
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
+
+    int steep = fabsf(y1 - y0) > fabsf(x1 - x0);
+
+    if (steep) {
+        float t = x0; x0 = y0; y0 = t;
+        t = x1; x1 = y1; y1 = t;
+    }
+
+    if (x0 > x1) {
+        float t = x0; x0 = x1; x1 = t;
+        t = y0; y0 = y1; y1 = t;
+    }
+
+    float dx = x1 - x0;
+    float dy = y1 - y0;
+    float gradient = (dx == 0.0f) ? 0.0f : dy / dx;
+
+    // steep 决定算法坐标系与屏幕坐标系的映射关系，从而确定各自的合法边界
+    int32_t x_limit = steep ? fb_height : fb_width;   // 算法 x 方向对应屏幕的宽度/高度
+    int32_t y_limit = steep ? fb_width  : fb_height;  // 算法 y 方向对应屏幕的高度/宽度
+
+    // handle first endpoint
+    float xend = roundf(x0);
+    float yend = y0 + gradient * (xend - x0);
+    float xgap = _rfpart(x0 + 0.5f);
+    int xpxl1 = (int)xend;
+    int ypxl1 = (int)floorf(yend);
+    if (xpxl1 >= 0 && xpxl1 < x_limit) {
+        if (steep) {
+            if (ypxl1 >= 0 && ypxl1 < y_limit) {
+                gfx_add_pixel(gfx, ypxl1,   xpxl1, r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+            }
+            if (ypxl1 + 1 >= 0 && ypxl1 + 1 < y_limit) {
+                gfx_add_pixel(gfx, ypxl1+1, xpxl1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+            }
+        } else {
+            if (ypxl1 >= 0 && ypxl1 < y_limit) {
+                gfx_add_pixel(gfx, xpxl1, ypxl1,   r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+            }
+            if (ypxl1 + 1 >= 0 && ypxl1 + 1 < y_limit) {
+                gfx_add_pixel(gfx, xpxl1, ypxl1+1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+            }
+        }
+    }
+    float intery = yend + gradient;
+
+    // handle second endpoint
+    xend = roundf(x1);
+    yend = y1 + gradient * (xend - x1);
+    xgap = _fpart(x1 + 0.5f);
+    int xpxl2 = (int)xend;
+    int ypxl2 = (int)floorf(yend);
+    if (xpxl2 >= 0 && xpxl2 < x_limit) {
+        if (steep) {
+            if (ypxl2 >= 0 && ypxl2 < y_limit) {
+                gfx_add_pixel(gfx, ypxl2,   xpxl2, r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+            }
+            if (ypxl2 + 1 >= 0 && ypxl2 + 1 < y_limit) {
+                gfx_add_pixel(gfx, ypxl2+1, xpxl2, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+            }
+        } else {
+            if (ypxl2 >= 0 && ypxl2 < y_limit) {
+                gfx_add_pixel(gfx, xpxl2, ypxl2,   r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+            }
+            if (ypxl2 + 1 >= 0 && ypxl2 + 1 < y_limit) {
+                gfx_add_pixel(gfx, xpxl2, ypxl2+1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+            }
+        }
+    }
+
+    // main loop：先对 x 范围做裁剪，消除循环变量本身的越界
+    int x_start = xpxl1 + 1;
+    int x_end = xpxl2 - 1;
+    if (x_start < 0) x_start = 0;
+    if (x_end >= x_limit) x_end = x_limit - 1;
+
+    if (steep) {
+        for (int x = x_start; x <= x_end; x++) {
+            int y_base = (int)floorf(intery);
+            if (y_base >= 0 && y_base < y_limit) {
+                gfx_add_pixel(gfx, y_base,   x, r * _rfpart(intery), g * _rfpart(intery), b * _rfpart(intery));
+            }
+            if (y_base + 1 >= 0 && y_base + 1 < y_limit) {
+                gfx_add_pixel(gfx, y_base+1, x, r * _fpart(intery),  g * _fpart(intery),  b * _fpart(intery));
+            }
+            intery += gradient;
+        }
+    } else {
+        for (int x = x_start; x <= x_end; x++) {
+            int y_base = (int)floorf(intery);
+            if (y_base >= 0 && y_base < y_limit) {
+                gfx_add_pixel(gfx, x, y_base,   r * _rfpart(intery), g * _rfpart(intery), b * _rfpart(intery));
+            }
+            if (y_base + 1 >= 0 && y_base + 1 < y_limit) {
+                gfx_add_pixel(gfx, x, y_base+1, r * _fpart(intery),  g * _fpart(intery),  b * _fpart(intery));
+            }
+            intery += gradient;
+        }
+    }
+}
+
+void gfx_draw_line_anti_aliasing(Nano_GFX *gfx,
+    float x1, float y1, float x2, float y2, float line_width,
+    uint8_t r, uint8_t g, uint8_t b, uint8_t mode
+) {
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
+
+    if (line_width <= 0.0f) return;
+
+    // 确保颜色在 [0, 255] 范围内
+    uint8_t cr = MAX(0, MIN(255, r));
+    uint8_t cg = MAX(0, MIN(255, g));
+    uint8_t cb = MAX(0, MIN(255, b));
+
+    // 线宽为1时，使用吴小林算法以获得更锐利的抗锯齿效果
+    if (line_width <= 1.0f) {
+        gfx_draw_line_xiaolin_wu(gfx, x1, y1, x2, y2, cr, cg, cb, mode);
+        return;
+    }
+
+    float dx = x2 - x1;
+    float dy = y2 - y1;
+    float len_sq = dx * dx + dy * dy;
+
+    // 退化为点：绘制圆形
+    if (len_sq == 0.0f) { // TODO 与0比较
+        float radius = line_width / 2.0f;
+        float r_sq = radius * radius;
+        int32_t xMin = MAX(0, (int32_t)floorf(x1 - radius));
+        int32_t xMax = MIN(fb_width - 1, (int32_t)ceilf(x1 + radius));
+        int32_t yMin = MAX(0, (int32_t)floorf(y1 - radius));
+        int32_t yMax = MIN(fb_height - 1, (int32_t)ceilf(y1 + radius));
+
+        for (int32_t y = yMin; y <= yMax; y++) {
+            for (int32_t x = xMin; x <= xMax; x++) {
+                float dist_sq = (float)((x - x1) * (x - x1) + (y - y1) * (y - y1));
+                if (dist_sq <= r_sq) {
+                    gfx_add_pixel(gfx, x, y, cr, cg, cb);
+                }
+            }
+        }
+        return;
+    }
+
+    float len = sqrtf(len_sq);
+    float inv_len = 1.0f / len;
+    float nx = -dy * inv_len; // 法向量（垂直于线段）
+    float ny = dx * inv_len;
+
+    (void)nx; (void)ny;
+
+    float half_w = line_width / 2.0f;
+
+    // 包围盒（含线宽）
+    int32_t xMin = MAX(0, (int32_t)floorf(MIN(x1, x2) - half_w));
+    int32_t xMax = MIN(fb_width - 1, (int32_t)ceilf(MAX(x1, x2) + half_w));
+    int32_t yMin = MAX(0, (int32_t)floorf(MIN(y1, y2) - half_w));
+    int32_t yMax = MIN(fb_height - 1, (int32_t)ceilf(MAX(y1, y2) + half_w));
+
+    for (int32_t y = yMin; y <= yMax; y++) {
+        for (int32_t x = xMin; x <= xMax; x++) {
+            // 计算点 (x, y) 到线段的有符号距离
+            int32_t px = x - x1;
+            int32_t py = y - y1;
+
+            // 投影长度（参数 t）
+            float t = (float)(px * dx + py * dy) / len_sq;
+            float closest_x = x1;
+            float closest_y = y1;
+
+            if (t < 0.0f) {
+                closest_x = x1;
+                closest_y = y1;
+            }
+            else if (t > 1.0f) {
+                closest_x = x2;
+                closest_y = y2;
+            }
+            else {
+                closest_x = x1 + t * dx;
+                closest_y = y1 + t * dy;
+            }
+
+            float dist = sqrtf((x - closest_x) * (x - closest_x) + (y - closest_y) * (y - closest_y));
+
+            if (dist > half_w) continue;
+
+            // 抗锯齿：边缘平滑过渡
+            float alpha = 1.0f;
+            float edge_fade = MIN(1.0f, half_w); // 自适应边缘宽度，防止细线中心像素过淡
+            if (dist > half_w - edge_fade) {
+                alpha = (half_w - dist) / edge_fade;
+                alpha = MAX(0.0f, MIN(1.0f, alpha));
+            }
+            gfx_add_pixel(gfx, x, y, cr * alpha, cg * alpha, cb * alpha);
+        }
+    }
+}
+
+
+
+
 void gfx_draw_rectangle(Nano_GFX *gfx, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
     for (uint32_t y = y0; y < MIN(gfx->height, y0 + height); y++) {
         for (uint32_t x = x0; x < MIN(gfx->width, x0 + width); x++) {
@@ -304,6 +547,15 @@ void gfx_draw_char(
         for (int32_t i = 0; i < col_bytes; i++) {
             uint8_t g = glyph[j * col_bytes + i];
             for (int32_t b = 0; b < bits; b++) {
+                uint32_t px = x + i;
+                uint32_t py = y + j*8 + b;
+                if (px < 0 || px >= gfx->width || py < 0 || py >= gfx->height) continue;
+                // if ((g >> b) & 0x1) {
+                //     gfx_set_pixel(gfx, px, py, red, green, blue);
+                // }
+                // else if (mode == 0) {
+                //     gfx_add_pixel(gfx, px, py, red, green, blue);
+                // }
                 if ((g >> b) & 0x1) {
                     gfx_draw_point(gfx, (x+i), (y+j*8+b), red, green, blue, mode);
                 }

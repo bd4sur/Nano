@@ -714,7 +714,7 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
     }
 
 
-    render_sky(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height,
+    render_sky(global_state->gfx,
         MIN(global_state->gfx->width, global_state->gfx->height) / 2, global_state->gfx->width / 2, global_state->gfx->height / 2,
         llcfg->view_alt, llcfg->view_azi, llcfg->view_roll, llcfg->view_f,
         // 2026, 3, 24, 18, 10, 0, 8.0, 119.0, 31.0,
@@ -735,9 +735,9 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->enable_att_indicator
     );
 
-    dithering_fast(global_state->gfx->frame_buffer_rgb888, global_state->gfx->width, global_state->gfx->height);
+    dithering_fast(global_state->gfx);
 
-    gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V2603 (c) BD4SUR", 1, 226, 128, 128, 128, 3);
+    gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V" NANO_VERSION, 1, 226, 128, 128, 128, 3);
 
     wchar_t timestr[30];
     swprintf(timestr, 30, L"%04d-%02d-%02d %02d:%02d:%02d", llcfg->year, llcfg->month, llcfg->day, llcfg->hour, llcfg->minute, llcfg->second);

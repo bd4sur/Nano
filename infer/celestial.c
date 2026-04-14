@@ -5,6 +5,7 @@
 
 #include "utils.h"
 #include "glyph.h"
+#include "graphics.h"
 
 #include "linglong_texture.h"
 #include "celestial.h"
@@ -165,38 +166,6 @@ float get_luminance(float r, float g, float b) {
     return 0.299f * r + 0.587f * g + 0.114f * b;
 }
 
-// ===============================================================================
-// 帧缓冲操作
-// ===============================================================================
-
-// 设置像素
-static inline void set_pixel(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height, int32_t x, int32_t y, uint8_t r, uint8_t g, uint8_t b) {
-    int32_t i = (y * fb_width + x) * 3;
-    frame_buffer[ i ] = MIN(255, r);
-    frame_buffer[i+1] = MIN(255, g);
-    frame_buffer[i+2] = MIN(255, b);
-}
-
-// 叠加像素
-static inline void add_pixel(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height, int32_t x, int32_t y, uint8_t r, uint8_t g, uint8_t b) {
-    int32_t i = (y * fb_width + x) * 3;
-    frame_buffer[ i ] = MIN(255, frame_buffer[ i ] + r);
-    frame_buffer[i+1] = MIN(255, frame_buffer[i+1] + g);
-    frame_buffer[i+2] = MIN(255, frame_buffer[i+2] + b);
-}
-
-// 数乘像素
-static inline void scale_pixel(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height, int32_t x, int32_t y, float k) {
-    int32_t i = (y * fb_width + x) * 3;
-    frame_buffer[ i ] = MIN(255, (uint8_t)(k * (float)frame_buffer[ i ]));
-    frame_buffer[i+1] = MIN(255, (uint8_t)(k * (float)frame_buffer[i+1]));
-    frame_buffer[i+2] = MIN(255, (uint8_t)(k * (float)frame_buffer[i+2]));
-}
-
-static inline uint8_t get_pixel_channel(const uint8_t *tex, int32_t width, int32_t height, int32_t x, int32_t y, int32_t c) {
-    if (x < 0 || x >= width || y < 0 || y >= height) return 0;
-    return tex[((y * width + x) * 3) + c];
-}
 
 // ===============================================================================
 // 坐标转换
@@ -362,8 +331,8 @@ void fisheye_project(
     int32_t projection,
     float *scr_x, float *scr_y
 ) {
-    // 快速路径：默认视角且无roll时使用简化投影
-    if (view_alt == 90.0f && view_azi == 180.0f && view_roll == 0.0f && f == 1.0f) {
+    // 快速路径：鱼眼，默认视角且无roll时使用简化投影
+    if (projection == 0 && view_alt == 90.0f && view_azi == 180.0f && view_roll == 0.0f && f == 1.0f) {
         horizontal_to_screen_xy(azimuth_deg, altitude_deg, radius, center_x, center_y, 1.0f, scr_x, scr_y);
         return;
     }
@@ -595,7 +564,7 @@ void fisheye_unproject(
  * @param {number} y - 采样点 Y 坐标 (浮点数)
  * @returns {number[]} [R, G, B]
  */
-void bilinear_sample(uint8_t *frame_buffer, uint32_t fb_width, uint32_t fb_height, float x, float y, uint8_t *r, uint8_t *g, uint8_t *b) {
+static void bilinear_sample(uint8_t *frame_buffer, uint32_t fb_width, uint32_t fb_height, float x, float y, uint8_t *r, uint8_t *g, uint8_t *b) {
     // 边界检查
     if (x < 0 || x >= fb_width || y < 0 || y >= fb_height) {
         *r = *g = *b = 128;
@@ -750,8 +719,6 @@ void transform_euler_angles(float pitch_in, float roll_in, float yaw_in, float *
 }
 
 
-#include <math.h>
-
 /**
  * 将四元数转换为 ZXY 欧拉角（Tait-Bryan 角）
  * 
@@ -818,7 +785,11 @@ void quaternion_to_euler(float q0, float q1, float q2, float q3, float *pitch, f
 // 滤波器
 // ===============================================================================
 
-void star_burst_filter(uint8_t *frame_buffer, int32_t width, int32_t height, float sun_screen_x, float sun_screen_y) {
+void star_burst_filter(Nano_GFX *gfx, float sun_screen_x, float sun_screen_y) {
+    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+    uint32_t width = gfx->width;
+    uint32_t height = gfx->height;
+
     // 亮度阈值
     float threshold = 0.9;
 
@@ -871,14 +842,14 @@ void star_burst_filter(uint8_t *frame_buffer, int32_t width, int32_t height, flo
             int32_t px = (int32_t)floorf(cx + ndx * d);
             int32_t py = (int32_t)floorf(cy + ndy * d);
             if (px >= 0 && px < width && py >= 0 && py < height) {
-                add_pixel(frame_buffer, width, height, px, py, (uint8_t)(sr * alpha), (uint8_t)(sg * alpha), (uint8_t)(sb * alpha));
+                gfx_add_pixel(gfx, px, py, (uint8_t)(sr * alpha), (uint8_t)(sg * alpha), (uint8_t)(sb * alpha));
             }
 
             // 反向
             px = (int32_t)floorf(cx - ndx * d);
             py = (int32_t)floorf(cy - ndy * d);
             if (px >= 0 && px < width && py >= 0 && py < height) {
-                add_pixel(frame_buffer, width, height, px, py, (uint8_t)(sr * alpha), (uint8_t)(sg * alpha), (uint8_t)(sb * alpha));
+                gfx_add_pixel(gfx, px, py, (uint8_t)(sr * alpha), (uint8_t)(sg * alpha), (uint8_t)(sb * alpha));
             }
         }
     }
@@ -888,10 +859,6 @@ void star_burst_filter(uint8_t *frame_buffer, int32_t width, int32_t height, flo
 /**
  * Floyd-Steinberg误差扩散抖动
  * 在RGB888缓冲区上模拟RGB565量化过程，通过误差扩散缓解色带
- * 
- * @param frame_buffer RGB8888格式帧缓冲（3字节/像素，顺序R,G,B）
- * @param fb_width     帧缓冲宽度（像素）
- * @param fb_height    帧缓冲高度（像素）
  * 
  * 算法原理：
  * 1. 对每个像素，先叠加累积误差得到"增强值"
@@ -903,7 +870,11 @@ void star_burst_filter(uint8_t *frame_buffer, int32_t width, int32_t height, flo
  *        [ 0      X    7/16   ]
  *        [ 3/16  5/16  1/16   ]
  */
-void dithering_fs(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height) {
+void dithering_fs(Nano_GFX *gfx) {
+    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
+
     if (!frame_buffer || fb_width <= 0 || fb_height <= 0) return;
 
     const int32_t stride = fb_width * 3;  // RGB888每行字节数
@@ -1018,7 +989,11 @@ static const uint8_t bayer8x8[64] = {
 // 量化误差补偿表（RGB565量化后还原的亮度偏移补偿）
 static const int8_t quant_bias[8] = {0, 1, 1, 2, 2, 3, 3, 4}; // 经验值
 
-void dithering_fast(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height) {
+void dithering_fast(Nano_GFX *gfx) {
+    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
+
     if (!frame_buffer || fb_width <= 0 || fb_height <= 0) return;
 
     const int32_t stride = fb_width * 3;
@@ -1050,340 +1025,16 @@ void dithering_fast(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height) 
 }
 
 
-// ===============================================================================
-// 绘制文字（临时实现）
-// ===============================================================================
-
-const uint8_t *_get_glyph(uint32_t utf32, uint8_t *font_width, uint8_t *font_height) {
-    if(utf32 < 127) {
-        *font_width = 6;
-        *font_height = 12;
-        return ASCII_6_12[utf32 - 32];
-    }
-    else {
-        int32_t index = binary_search(UTF32_LUT_SORTED, UTF32_LUT_INDEXS, GLYPH_CHAR_NUM, utf32);
-        if (index >= 0 && index < 7445) {
-            *font_width = 12;
-            *font_height = 12;
-            return GB2312_12_12[index];
-        }
-        else {
-            return NULL;
-        }
-    }
-}
-
-// 显示汉字
-void fb_draw_char(
-    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    int32_t x, int32_t y, const uint8_t *glyph, uint8_t font_width, uint8_t font_height,
-    uint8_t red, uint8_t green, uint8_t blue
-) {
-    int32_t row_bytes = (font_height + 8 - 1) / 8;
-    int32_t col_bytes = font_width;
-    for (int32_t j = 0; j < row_bytes; j++) {
-        int32_t bits = (j == (row_bytes-1)) ? (8 - ((8 * row_bytes) % font_height)) : 8;
-        for (int32_t i = 0; i < col_bytes; i++) {
-            uint8_t g = glyph[j * col_bytes + i];
-            for (int32_t b = 0; b < bits; b++) {
-                int32_t px = x + i;
-                int32_t py = y + j*8 + b;
-                if (px < 0 || px >= fb_width || py < 0 || py >= fb_height) continue;
-                if ((g >> b) & 0x1) {
-                    set_pixel(frame_buffer, fb_width, fb_height, px, py, red, green, blue);
-                }
-                else {
-                    add_pixel(frame_buffer, fb_width, fb_height, px, py, 0, 0, 0);
-                }
-            }
-        }
-    }
-}
-
-
-
-// 绘制一行文本
-void fb_draw_textline(
-    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    wchar_t *line, int32_t x, int32_t y, uint8_t red, uint8_t green, uint8_t blue
-) {
-    uint32_t x_pos = x;
-    uint32_t y_pos = y;
-    for (uint32_t i = 0; i < wcslen(line); i++) {
-        uint32_t current_char = line[i];
-        uint8_t font_width = 12;
-        uint8_t font_height = 12;
-        const uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
-        if (!glyph) {
-            glyph = _get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
-        }
-        if (x_pos + font_width >= fb_width) {
-            break;
-        }
-        fb_draw_char(frame_buffer, fb_width, fb_height,
-            x_pos, y_pos, glyph, font_width, font_height, red, green, blue);
-        x_pos += font_width;
-    }
-}
-
-
-// 绘制一行文本（居中）
-void fb_draw_textline_centered(
-    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    wchar_t *line, int32_t cx, int32_t cy, uint8_t red, uint8_t green, uint8_t blue
-) {
-    // 第一遍扫描：计算文本渲染长度
-    int32_t total_width = 0;
-    for (uint32_t i = 0; i < wcslen(line); i++) {
-        uint32_t current_char = line[i];
-        uint8_t font_width = 12;
-        uint8_t font_height = 12;
-        const uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
-        if (!glyph) {
-            glyph = _get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
-        }
-        total_width += font_width;
-    }
-
-    // 第二遍扫描：渲染
-    int32_t x_pos = cx - (total_width/2);
-    int32_t y_pos = cy - 6;
-    if (y_pos < 0 || y_pos + 6 > fb_height) return;
-    for (uint32_t i = 0; i < wcslen(line); i++) {
-        uint32_t current_char = line[i];
-        uint8_t font_width = 12;
-        uint8_t font_height = 12;
-        const uint8_t *glyph = _get_glyph(current_char, &font_width, &font_height);
-        if (!glyph) {
-            glyph = _get_glyph(12307, &font_width, &font_height); // 用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
-        }
-        if (x_pos < 0) {
-            x_pos += font_width;
-            continue;
-        }
-        else if (x_pos + font_width > fb_width) {
-            break;
-        }
-        fb_draw_char(frame_buffer, fb_width, fb_height,
-            x_pos, y_pos, glyph, font_width, font_height, red, green, blue);
-        x_pos += font_width;
-    }
-}
-
-
-
-
-
 
 // ===============================================================================
 // 绘制基本形状
 // ===============================================================================
 
-static inline float _fpart(float x) { return x - floorf(x); }
-static inline float _rfpart(float x) { return 1.0f - _fpart(x); }
 
-static void draw_line_xiaolin_wu(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b)
-{
-    int steep = fabsf(y1 - y0) > fabsf(x1 - x0);
+void draw_circle_outline(Nano_GFX *gfx, float cx, float cy, float radius, float line_weight, uint8_t red, uint8_t green, uint8_t blue) {
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
 
-    if (steep) {
-        float t = x0; x0 = y0; y0 = t;
-        t = x1; x1 = y1; y1 = t;
-    }
-
-    if (x0 > x1) {
-        float t = x0; x0 = x1; x1 = t;
-        t = y0; y0 = y1; y1 = t;
-    }
-
-    float dx = x1 - x0;
-    float dy = y1 - y0;
-    float gradient = (dx == 0.0f) ? 0.0f : dy / dx;
-
-    // steep 决定算法坐标系与屏幕坐标系的映射关系，从而确定各自的合法边界
-    int32_t x_limit = steep ? fb_height : fb_width;   // 算法 x 方向对应屏幕的宽度/高度
-    int32_t y_limit = steep ? fb_width  : fb_height;  // 算法 y 方向对应屏幕的高度/宽度
-
-    // handle first endpoint
-    float xend = roundf(x0);
-    float yend = y0 + gradient * (xend - x0);
-    float xgap = _rfpart(x0 + 0.5f);
-    int xpxl1 = (int)xend;
-    int ypxl1 = (int)floorf(yend);
-    if (xpxl1 >= 0 && xpxl1 < x_limit) {
-        if (steep) {
-            if (ypxl1 >= 0 && ypxl1 < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, ypxl1,   xpxl1, r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
-            }
-            if (ypxl1 + 1 >= 0 && ypxl1 + 1 < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, ypxl1+1, xpxl1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
-            }
-        } else {
-            if (ypxl1 >= 0 && ypxl1 < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, xpxl1, ypxl1,   r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
-            }
-            if (ypxl1 + 1 >= 0 && ypxl1 + 1 < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, xpxl1, ypxl1+1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
-            }
-        }
-    }
-    float intery = yend + gradient;
-
-    // handle second endpoint
-    xend = roundf(x1);
-    yend = y1 + gradient * (xend - x1);
-    xgap = _fpart(x1 + 0.5f);
-    int xpxl2 = (int)xend;
-    int ypxl2 = (int)floorf(yend);
-    if (xpxl2 >= 0 && xpxl2 < x_limit) {
-        if (steep) {
-            if (ypxl2 >= 0 && ypxl2 < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, ypxl2,   xpxl2, r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
-            }
-            if (ypxl2 + 1 >= 0 && ypxl2 + 1 < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, ypxl2+1, xpxl2, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
-            }
-        } else {
-            if (ypxl2 >= 0 && ypxl2 < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, xpxl2, ypxl2,   r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
-            }
-            if (ypxl2 + 1 >= 0 && ypxl2 + 1 < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, xpxl2, ypxl2+1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
-            }
-        }
-    }
-
-    // main loop：先对 x 范围做裁剪，消除循环变量本身的越界
-    int x_start = xpxl1 + 1;
-    int x_end = xpxl2 - 1;
-    if (x_start < 0) x_start = 0;
-    if (x_end >= x_limit) x_end = x_limit - 1;
-
-    if (steep) {
-        for (int x = x_start; x <= x_end; x++) {
-            int y_base = (int)floorf(intery);
-            if (y_base >= 0 && y_base < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, y_base,   x, r * _rfpart(intery), g * _rfpart(intery), b * _rfpart(intery));
-            }
-            if (y_base + 1 >= 0 && y_base + 1 < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, y_base+1, x, r * _fpart(intery),  g * _fpart(intery),  b * _fpart(intery));
-            }
-            intery += gradient;
-        }
-    } else {
-        for (int x = x_start; x <= x_end; x++) {
-            int y_base = (int)floorf(intery);
-            if (y_base >= 0 && y_base < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, x, y_base,   r * _rfpart(intery), g * _rfpart(intery), b * _rfpart(intery));
-            }
-            if (y_base + 1 >= 0 && y_base + 1 < y_limit) {
-                add_pixel(frame_buffer, fb_width, fb_height, x, y_base+1, r * _fpart(intery),  g * _fpart(intery),  b * _fpart(intery));
-            }
-            intery += gradient;
-        }
-    }
-}
-
-void draw_line(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    float x1, float y1, float x2, float y2, float line_width, uint8_t r, uint8_t g, uint8_t b
-) {
-    if (line_width <= 0.0f) return;
-
-    // 确保颜色在 [0, 255] 范围内
-    uint8_t cr = MAX(0, MIN(255, r));
-    uint8_t cg = MAX(0, MIN(255, g));
-    uint8_t cb = MAX(0, MIN(255, b));
-
-    // 线宽为1时，使用吴小林算法以获得更锐利的抗锯齿效果
-    if (line_width <= 1.0f) {
-        draw_line_xiaolin_wu(frame_buffer, fb_width, fb_height, x1, y1, x2, y2, cr, cg, cb);
-        return;
-    }
-
-    float dx = x2 - x1;
-    float dy = y2 - y1;
-    float len_sq = dx * dx + dy * dy;
-
-    // 退化为点：绘制圆形
-    if (len_sq == 0.0f) { // TODO 与0比较
-        float radius = line_width / 2.0f;
-        float r_sq = radius * radius;
-        int32_t xMin = MAX(0, (int32_t)floorf(x1 - radius));
-        int32_t xMax = MIN(fb_width - 1, (int32_t)ceilf(x1 + radius));
-        int32_t yMin = MAX(0, (int32_t)floorf(y1 - radius));
-        int32_t yMax = MIN(fb_height - 1, (int32_t)ceilf(y1 + radius));
-
-        for (int32_t y = yMin; y <= yMax; y++) {
-            for (int32_t x = xMin; x <= xMax; x++) {
-                float dist_sq = (float)((x - x1) * (x - x1) + (y - y1) * (y - y1));
-                if (dist_sq <= r_sq) {
-                    add_pixel(frame_buffer, fb_width, fb_height, x, y, cr, cg, cb);
-                }
-            }
-        }
-        return;
-    }
-
-    float len = sqrtf(len_sq);
-    float inv_len = 1.0f / len;
-    float nx = -dy * inv_len; // 法向量（垂直于线段）
-    float ny = dx * inv_len;
-
-    (void)nx; (void)ny;
-
-    float half_w = line_width / 2.0f;
-
-    // 包围盒（含线宽）
-    int32_t xMin = MAX(0, (int32_t)floorf(MIN(x1, x2) - half_w));
-    int32_t xMax = MIN(fb_width - 1, (int32_t)ceilf(MAX(x1, x2) + half_w));
-    int32_t yMin = MAX(0, (int32_t)floorf(MIN(y1, y2) - half_w));
-    int32_t yMax = MIN(fb_height - 1, (int32_t)ceilf(MAX(y1, y2) + half_w));
-
-    for (int32_t y = yMin; y <= yMax; y++) {
-        for (int32_t x = xMin; x <= xMax; x++) {
-            // 计算点 (x, y) 到线段的有符号距离
-            int32_t px = x - x1;
-            int32_t py = y - y1;
-
-            // 投影长度（参数 t）
-            float t = (float)(px * dx + py * dy) / len_sq;
-            float closest_x = x1;
-            float closest_y = y1;
-
-            if (t < 0.0f) {
-                closest_x = x1;
-                closest_y = y1;
-            }
-            else if (t > 1.0f) {
-                closest_x = x2;
-                closest_y = y2;
-            }
-            else {
-                closest_x = x1 + t * dx;
-                closest_y = y1 + t * dy;
-            }
-
-            float dist = sqrtf((x - closest_x) * (x - closest_x) + (y - closest_y) * (y - closest_y));
-
-            if (dist > half_w) continue;
-
-            // 抗锯齿：边缘平滑过渡
-            float alpha = 1.0f;
-            float edge_fade = MIN(1.0f, half_w); // 自适应边缘宽度，防止细线中心像素过淡
-            if (dist > half_w - edge_fade) {
-                alpha = (half_w - dist) / edge_fade;
-                alpha = MAX(0.0f, MIN(1.0f, alpha));
-            }
-            add_pixel(frame_buffer, fb_width, fb_height, x, y, cr * alpha, cg * alpha, cb * alpha);
-        }
-    }
-}
-
-
-void draw_circle_outline(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    float cx, float cy, float radius, float line_weight, uint8_t red, uint8_t green, uint8_t blue
-) {
     if (radius <= 0.0f || line_weight <= 0.0f) return;
 
     uint8_t r = MAX(0, MIN(255, red));
@@ -1412,66 +1063,32 @@ void draw_circle_outline(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_hei
 
             // 判断是否在环形区域内（包含外边界，排除内边界）
             if (distSq < outerRSq && distSq >= innerRSq) {
-                add_pixel(frame_buffer, fb_width, fb_height, x, y, r, g, b);
+                gfx_add_pixel(gfx, x, y, r, g, b);
             }
         }
     }
 }
 
-// 画实心圆形
-void draw_circle(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    float cx, float cy, float radius, uint8_t red, uint8_t green, uint8_t blue
-) {
-    if (radius <= 0.0f) return;
 
-    uint8_t r = MAX(0, MIN(255, red));
-    uint8_t g = MAX(0, MIN(255, green));
-    uint8_t b = MAX(0, MIN(255, blue));
 
-    float outerRSq = radius * radius;
 
-    // 包围盒（含线宽）
-    int32_t xMin = MAX(0, (int32_t)floorf(cx - radius));
-    int32_t xMax = MIN(fb_width - 1, (int32_t)ceilf(cx + radius));
-    int32_t yMin = MAX(0, (int32_t)floorf(cy - radius));
-    int32_t yMax = MIN(fb_height - 1, (int32_t)ceilf(cy + radius));
-
-    for (int32_t y = yMin; y <= yMax; y++) {
-        for (int32_t x = xMin; x <= xMax; x++) {
-            float dx = x - cx;
-            float dy = y - cy;
-            float distSq = dx * dx + dy * dy;
-
-            // 判断是否在区域内
-            if (distSq < outerRSq) {
-                add_pixel(frame_buffer, fb_width, fb_height, x, y, r, g, b);
-            }
-        }
-    }
-}
-
-// 画实心矩形
-void draw_rect(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    float x0, float y0, float width, float height, uint8_t red, uint8_t green, uint8_t blue
-) {
-    uint8_t r = MAX(0, MIN(255, red));
-    uint8_t g = MAX(0, MIN(255, green));
-    uint8_t b = MAX(0, MIN(255, blue));
-    for (int32_t y = y0; y < y0+height; y++) {
-        for (int32_t x = x0; x < x0+width; x++) {
-            set_pixel(frame_buffer, fb_width, fb_height, x, y, r, g, b);
-        }
-    }
+static inline uint8_t get_pixel_channel(const uint8_t *tex, int32_t width, int32_t height, int32_t x, int32_t y, int32_t c) {
+    if (x < 0 || x >= width || y < 0 || y >= height) return 0;
+    return tex[((y * width + x) * 3) + c];
 }
 
 // 绘制地景
 void draw_horizon(
-    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+    Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f, int32_t projection,
     float view_height, float sun_alt, int32_t landscape_index,
     int32_t enable_atmosphere_scattering, uint8_t atmo_r, uint8_t atmo_g, uint8_t atmo_b
 ) {
+    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
+
     float margin = LINGLONG_HORIZON_BLUR_MARGIN;
     // float k = MAX(0.2f, sinf(to_rad_float(sun_alt)) * 1.5f);
     float k = (1.0f / M_PI) * atanf((sun_alt - 6.0f) / 6.0f) + 0.5f + 0.2f;
@@ -1484,7 +1101,7 @@ void draw_horizon(
             fisheye_unproject(x, y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &hx, &hy, &hz);
             if (hz < 0) {
                 if (landscape_index == 0) {
-                    set_pixel(frame_buffer, fb_width, fb_height, x, y, 0, 0, 0);
+                    gfx_set_pixel(gfx, x, y, 0, 0, 0);
                 }
                 else {
                     // 反解此处的xyz坐标，转为地平坐标
@@ -1523,7 +1140,7 @@ void draw_horizon(
                     g = (uint8_t)MIN(255.0f, (scattered_g * k));
                     b = (uint8_t)MIN(255.0f, (scattered_b * k));
 
-                    set_pixel(frame_buffer, fb_width, fb_height, x, y, r, g, b);
+                    gfx_set_pixel(gfx, x, y, r, g, b);
                 }
             }
             else if (enable_atmosphere_scattering && hz <= margin && hz >= 0.0f) {
@@ -1568,9 +1185,6 @@ void update_landscape(uint8_t *landscape_source, uint32_t width, uint32_t height
 
 /**
  * 绘制赤道坐标系下的子午圈或纬度圈（投影到地平屏幕）
- * @param frame_buffer - 帧缓冲区
- * @param fb_width - 缓冲区宽度
- * @param fb_height - 缓冲区高度
  * @param is_meridian - 1: 子午圈（固定RA）；0: 纬度圈（固定Dec）
  * @param ra_hours - 子午圈的赤经（小时），仅当 is_meridian=1 时有效
  * @param dec_deg - 纬度圈的赤纬（度），仅当 is_meridian=0 时有效
@@ -1579,7 +1193,7 @@ void update_landscape(uint8_t *landscape_source, uint32_t width, uint32_t height
  * @param year, month, day, hour, minute, second, timezone, longitude, latitude - 观测参数
  */
 void draw_celestial_circle(
-    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+    Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f, int32_t projection,
     int32_t is_meridian, float ra_hours, float dec_deg,
@@ -1618,12 +1232,12 @@ void draw_celestial_circle(
         // 连接可见段
         for (int32_t i = 0; i < POINTS; i++) {
             if (valid[i] && valid[i + 1]) {
-                draw_line(frame_buffer, fb_width, fb_height, points_x[i], points_y[i], points_x[i + 1], points_y[i + 1], line_weight, colorR, colorG, colorB);
+                gfx_draw_line_anti_aliasing(gfx, points_x[i], points_y[i], points_x[i + 1], points_y[i + 1], line_weight, colorR, colorG, colorB, 3);
             }
         }
         // 首尾闭合
         if (valid[POINTS] && valid[0]) {
-            draw_line(frame_buffer, fb_width, fb_height, points_x[POINTS], points_y[POINTS], points_x[0], points_y[0], line_weight, colorR, colorG, colorB);
+            gfx_draw_line_anti_aliasing(gfx, points_x[POINTS], points_y[POINTS], points_x[0], points_y[0], line_weight, colorR, colorG, colorB, 3);
         }
     }
     // 纬度圈：固定 Dec，遍历 RA ∈ [0h, 24h)
@@ -1650,19 +1264,19 @@ void draw_celestial_circle(
         // 连接可见段
         for (int32_t i = 0; i < POINTS; i++) {
             if (valid[i] && valid[i + 1]) {
-                draw_line(frame_buffer, fb_width, fb_height, points_x[i], points_y[i], points_x[i + 1], points_y[i + 1], line_weight, colorR, colorG, colorB);
+                gfx_draw_line_anti_aliasing(gfx, points_x[i], points_y[i], points_x[i + 1], points_y[i + 1], line_weight, colorR, colorG, colorB, 3);
             }
         }
         // 首尾闭合
         if (valid[POINTS] && valid[0]) {
-            draw_line(frame_buffer, fb_width, fb_height, points_x[POINTS], points_y[POINTS], points_x[0], points_y[0], line_weight, colorR, colorG, colorB);
+            gfx_draw_line_anti_aliasing(gfx, points_x[POINTS], points_y[POINTS], points_x[0], points_y[0], line_weight, colorR, colorG, colorB, 3);
         }
     }
 }
 
 
 void draw_ecliptic_circle(
-    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+    Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f, int32_t projection,
     int32_t line_weight, uint8_t colorR, uint8_t colorG, uint8_t colorB,
@@ -1701,7 +1315,7 @@ void draw_ecliptic_circle(
             }
             
             if (alt_prev > eps && alt > eps) {
-                draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x, y, line_weight, colorR, colorG, colorB);
+                gfx_draw_line_anti_aliasing(gfx, x_prev, y_prev, x, y, line_weight, colorR, colorG, colorB, 3);
             }
 
             x_prev = x;
@@ -1710,19 +1324,22 @@ void draw_ecliptic_circle(
         }
     }
     if (alt_0 > eps && alt > eps) {
-        draw_line(frame_buffer, fb_width, fb_height, x_prev, y_prev, x_0, y_0, line_weight, colorR, colorG, colorB);
+        gfx_draw_line_anti_aliasing(gfx, x_prev, y_prev, x_0, y_0, line_weight, colorR, colorG, colorB, 3);
     }
 
 }
 
 // 绘制地平等仰角圈（地平经度圈/高度圈）
 void draw_horizontal_altitude_circle(
-    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+    Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f, int32_t projection,
     float altitude_deg,
     int32_t line_weight, uint8_t colorR, uint8_t colorG, uint8_t colorB
 ) {
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
+
     const int32_t POINTS = LINGLONG_HORIZONTAL_CIRCLE_POINTS;
     const float R = sky_radius;
 
@@ -1750,21 +1367,23 @@ void draw_horizontal_altitude_circle(
     // 使用抗锯齿 draw_line 连接可见段
     for (int32_t i = 0; i < POINTS; i++) {
         if (valid[i] && valid[i + 1]) {
-            draw_line(frame_buffer, fb_width, fb_height,
-                      points_x[i], points_y[i], points_x[i + 1], points_y[i + 1],
-                      line_weight, colorR, colorG, colorB);
+            gfx_draw_line_anti_aliasing(gfx, points_x[i], points_y[i], points_x[i + 1], points_y[i + 1],
+                      line_weight, colorR, colorG, colorB, 3);
         }
     }
 }
 
 // 绘制地平等方位角圈（地平经线圈/方位圈）
 void draw_horizontal_azimuth_circle(
-    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+    Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f, int32_t projection,
     float azimuth_deg,
     int32_t line_weight, uint8_t colorR, uint8_t colorG, uint8_t colorB
 ) {
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
+
     const int32_t POINTS = LINGLONG_HORIZONTAL_CIRCLE_POINTS;
     const float R = sky_radius;
 
@@ -1794,9 +1413,8 @@ void draw_horizontal_azimuth_circle(
     // 使用抗锯齿 draw_line 连接可见段
     for (int32_t i = 0; i < 2 * POINTS; i++) {
         if (valid[i] && valid[i + 1]) {
-            draw_line(frame_buffer, fb_width, fb_height,
-                      points_x[i], points_y[i], points_x[i + 1], points_y[i + 1],
-                      line_weight, colorR, colorG, colorB);
+            gfx_draw_line_anti_aliasing(gfx, points_x[i], points_y[i], points_x[i + 1], points_y[i + 1],
+                      line_weight, colorR, colorG, colorB, 3);
         }
     }
 }
@@ -1808,10 +1426,12 @@ void draw_horizontal_azimuth_circle(
 // 绘制天体
 // ===============================================================================
 
-void render_sun(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+void render_sun(Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float sun_proj_x, float sun_proj_y, float sun_altitude_deg
 ) {
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
 
     float sun_radius = sky_radius * 0.02;
 
@@ -1881,19 +1501,22 @@ void render_sun(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             float totalG = diskWeight * g + glow * g;
             float totalB = diskWeight * b + glow * b;
 
-            add_pixel(frame_buffer, fb_width, fb_height, px, py, totalR, totalG, totalB);
+            gfx_add_pixel(gfx, px, py, totalR, totalG, totalB);
         }
     }
 }
 
 
 // 基于球面几何晨昏线的月相绘制（带物理合理的软边缘）
-void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+void render_moon(Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f, int32_t projection,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double timezone, double longitude, double latitude
 ) {
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
+
     float lum = 0.8f;
 
     // 计算月球位置、月相、月球方向角
@@ -2095,16 +1718,20 @@ void render_moon(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             float g = roundf(texG * intensity);
             float b = roundf(texB * intensity);
 
-            add_pixel(frame_buffer, fb_width, fb_height, px, py, moonWeight * r, moonWeight * g, moonWeight * b);
+            gfx_add_pixel(gfx, px, py, moonWeight * r, moonWeight * g, moonWeight * b);
         }
     }
 }
 
 
-void draw_star(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+void draw_star(Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float sx, float sy, float magnitude, float radius, uint8_t red, uint8_t green, uint8_t blue
 ) {
+    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
+
     if (sx < 0 || sx >= fb_width || sy < 0 || sy >= fb_height) {
         return;
     }
@@ -2972,7 +2599,7 @@ void linglong_init(Linglong_Config *cfg) {
 // 渲染整个天空
 // ===============================================================================
 
-void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+void render_sky(Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
@@ -2993,6 +2620,10 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     int32_t enable_ecliptic_circle,  // 是否显示黄道
     int32_t enable_att_indicator     // 是否显示姿态指示标记
 ) {
+
+    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
 
     if (fb_width < (int32_t)sky_radius * 2 || fb_height < (int32_t)sky_radius * 2 ||
         center_x < (int32_t)sky_radius || (fb_width - center_x) < (int32_t)sky_radius ||
@@ -3130,8 +2761,8 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
 
                         for (int32_t i = 0; i < 3; i++) {
                             for (int32_t j = 0; j < 3; j++) {
-                                set_pixel(frame_buffer, fb_width, fb_height, (x+i), (y+j), rr, gg, bb);
-                                set_pixel(frame_buffer, fb_width, fb_height, (xx + i + offset_x), (yy + j + offset_y), rr, gg, bb);
+                                gfx_set_pixel(gfx, (x+i), (y+j), rr, gg, bb);
+                                gfx_set_pixel(gfx, (xx + i + offset_x), (yy + j + offset_y), rr, gg, bb);
                             }
                         }
                     }
@@ -3154,12 +2785,12 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
                     calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut, sky_model);
 
                     if (enable_opt_bilinear) {
-                        set_pixel(frame_buffer, fb_width, fb_height, x, y, (uint8_t)(red * 255.0f), (uint8_t)(green * 255.0f), (uint8_t)(blue  * 255.0f));
+                        gfx_set_pixel(gfx, x, y, (uint8_t)(red * 255.0f), (uint8_t)(green * 255.0f), (uint8_t)(blue  * 255.0f));
                     }
                     else {
                         for (int32_t i = 0; i < _downsampling_factor; i++) {
                             for (int32_t j = 0; j < _downsampling_factor; j++) {
-                                add_pixel(frame_buffer, fb_width, fb_height,
+                                gfx_add_pixel(gfx,
                                     (x+i), (y+j), (uint8_t)(red * 255.0f), (uint8_t)(green * 255.0f), (uint8_t)(blue  * 255.0f));
                             }
                         }
@@ -3225,22 +2856,20 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
     }
 
     // 绘制太阳
-    render_sun(
-        frame_buffer, fb_width, fb_height,
+    render_sun(gfx,
         sky_radius, center_x, center_y,
         sun_proj_x, sun_proj_y, sun_alt);
 
 
     // 计算月球位置并绘制
-    render_moon(
-        frame_buffer, fb_width, fb_height,
+    render_moon(gfx,
         sky_radius, center_x, center_y,
         view_alt, view_azi, view_roll, f, projection,
         year, month, day, hour, minute, second, timezone, longitude, latitude);
 
     // 绘制星芒
     if (enable_star_burst && sun_alt > 0) {
-        star_burst_filter(frame_buffer, fb_width, fb_height, sun_proj_x, sun_proj_y);
+        star_burst_filter(gfx, sun_proj_x, sun_proj_y);
     }
 
     // 绘制恒星
@@ -3259,17 +2888,18 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         float sy = 0.0f;
         fisheye_project(azi, alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &sx, &sy);
 
-        draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, sx, sy, mag, 1, 255, 255, 255);
+        draw_star(gfx, sky_radius, center_x, center_y, sx, sy, mag, 1, 255, 255, 255);
 
         if (enable_star_name == 1 || enable_star_name == 3) {
-            fb_draw_textline(frame_buffer, fb_width, fb_height, (wchar_t*)STAR_NAME[i], sx+3, sy+3, 250, 250, 250);
+            if (sx > 0.0f && sx < (float)fb_width && sy > 0.0f && sy < (float)fb_height) {
+                gfx_draw_textline(gfx, (wchar_t*)STAR_NAME[i], sx+3, sy+3, 250, 250, 250, 1);
+            }
         }
     }
 
     // 绘制黄道
     if (enable_ecliptic_circle) {
-        draw_ecliptic_circle(
-            frame_buffer, fb_width, fb_height,
+        draw_ecliptic_circle(gfx,
             sky_radius, center_x, center_y,
             view_alt, view_azi, view_roll, f, projection,
             6, 32, 32, 0,
@@ -3289,11 +2919,13 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             float planet_proj_y = 0.0f;
             fisheye_project(planet_azi, planet_alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &planet_proj_x, &planet_proj_y);
 
-            draw_star(frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y, planet_proj_x, planet_proj_y,
+            draw_star(gfx, sky_radius, center_x, center_y, planet_proj_x, planet_proj_y,
                 0.0f, PLANET_RADIUS[i], PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
 
             if (enable_star_name == 2 || enable_star_name == 3) {
-                fb_draw_textline(frame_buffer, fb_width, fb_height, (wchar_t*)PLANET_NAME[i], planet_proj_x+3, planet_proj_y+3, PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i]);
+                if (planet_proj_x > 0.0f && planet_proj_x < (float)fb_width && planet_proj_y > 0.0f && planet_proj_y < (float)fb_height) {
+                    gfx_draw_textline(gfx, (wchar_t*)PLANET_NAME[i], planet_proj_x+3, planet_proj_y+3, PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i], 1);
+                }
             }
         }
     }
@@ -3303,8 +2935,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         // 绘制赤道天球子午圈
         for (int32_t i = 0; i < 24; i += 2) {
             int32_t line_width = (i == 0 || i == 12) ? 4 : 1;
-            draw_celestial_circle(
-                frame_buffer, fb_width, fb_height,
+            draw_celestial_circle(gfx,
                 sky_radius, center_x, center_y,
                 view_alt, view_azi, view_roll, f, projection,
                 1, (float)i, 0.0f,
@@ -3315,8 +2946,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         // 绘制赤道天球等纬度圈
         for (int32_t i = -90; i < 90; i += 10) {
             int32_t line_width = (i == 0) ? 4 : 1;
-            draw_celestial_circle(
-                frame_buffer, fb_width, fb_height,
+            draw_celestial_circle(gfx,
                 sky_radius, center_x, center_y,
                 view_alt, view_azi, view_roll, f, projection,
                 0, 0.0f, (float)i,
@@ -3346,8 +2976,8 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         enable_atmosphere_scattering = 0;
     }
 
-    draw_horizon(
-        frame_buffer, fb_width, fb_height, sky_radius, center_x, center_y,
+    draw_horizon(gfx,
+        sky_radius, center_x, center_y,
         view_alt, view_azi, view_roll, f, projection,
         view_height, sun_alt, landscape_index, enable_atmosphere_scattering, (uint8_t)atmo_r, (uint8_t)atmo_g, (uint8_t)atmo_b);
 
@@ -3359,8 +2989,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             // 绘制等仰角圈（地平纬度圈）
             for (int32_t alt = -90; alt <= 90; alt += 10) {
                 int32_t line_width = (alt == 0) ? 4 : 1;
-                draw_horizontal_altitude_circle(
-                    frame_buffer, fb_width, fb_height,
+                draw_horizontal_altitude_circle(gfx,
                     sky_radius, center_x, center_y,
                     view_alt, view_azi, view_roll, f, projection,
                     (float)alt,
@@ -3370,8 +2999,7 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
             // 绘制等方位角圈（地平经线圈）- 每隔30度绘制一条线，从0°（北）到330°
             for (int32_t azi = 0; azi < 360; azi += 30) {
                 int32_t line_width = 1; // (azi === 0) ? 3 : 2;
-                draw_horizontal_azimuth_circle(
-                    frame_buffer, fb_width, fb_height,
+                draw_horizontal_azimuth_circle(gfx,
                     sky_radius, center_x, center_y,
                     view_alt, view_azi, view_roll, f, projection,
                     (float)azi,
@@ -3383,35 +3011,35 @@ void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
         float label_x = 0.0f;
         float label_y = 0.0f;
         fisheye_project(0, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"北", label_x, label_y, 255, 0, 0);
+        gfx_draw_textline_centered(gfx, L"北", label_x, label_y, 255, 0, 0, 1);
         fisheye_project(90, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"东", label_x, label_y, 255, 0, 0);
+        gfx_draw_textline_centered(gfx, L"东", label_x, label_y, 255, 0, 0, 1);
         fisheye_project(180, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"南", label_x, label_y, 255, 0, 0);
+        gfx_draw_textline_centered(gfx, L"南", label_x, label_y, 255, 0, 0, 1);
         fisheye_project(270, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"西", label_x, label_y, 255, 0, 0);
+        gfx_draw_textline_centered(gfx, L"西", label_x, label_y, 255, 0, 0, 1);
 
         fisheye_project(45, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"45", label_x, label_y, 255, 0, 0);
+        gfx_draw_textline_centered(gfx, L"45", label_x, label_y, 255, 0, 0, 1);
         fisheye_project(135, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"135", label_x, label_y, 255, 0, 0);
+        gfx_draw_textline_centered(gfx, L"135", label_x, label_y, 255, 0, 0, 1);
         fisheye_project(225, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"225", label_x, label_y, 255, 0, 0);
+        gfx_draw_textline_centered(gfx, L"225", label_x, label_y, 255, 0, 0, 1);
         fisheye_project(315, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, L"315", label_x, label_y, 255, 0, 0);
+        gfx_draw_textline_centered(gfx, L"315", label_x, label_y, 255, 0, 0, 1);
 
     }
 
     // 绘制姿态仪相关符号
     if (enable_att_indicator > 0) {
-        draw_rect(frame_buffer, fb_width, fb_height, (center_x - 60), center_y - 2, 50, 4, 255, 255, 0);
-        draw_rect(frame_buffer, fb_width, fb_height, (center_x - 14), center_y - 2, 4, 10, 255, 255, 0);
-        draw_rect(frame_buffer, fb_width, fb_height, (center_x + 10), center_y - 2, 50, 4, 255, 255, 0);
-        draw_rect(frame_buffer, fb_width, fb_height, (center_x + 10), center_y - 2, 4, 10, 255, 255, 0);
-        draw_rect(frame_buffer, fb_width, fb_height, (center_x - 1), center_y - 1, 2, 2, 255, 255, 0);
+        gfx_draw_rectangle(gfx, (center_x - 60), center_y - 2, 50, 4, 255, 255, 0, 1);
+        gfx_draw_rectangle(gfx, (center_x - 14), center_y - 2, 4, 10, 255, 255, 0, 1);
+        gfx_draw_rectangle(gfx, (center_x + 10), center_y - 2, 50, 4, 255, 255, 0, 1);
+        gfx_draw_rectangle(gfx, (center_x + 10), center_y - 2, 4, 10, 255, 255, 0, 1);
+        gfx_draw_rectangle(gfx, (center_x - 1), center_y - 1, 2, 2, 255, 255, 0, 1);
 
         wchar_t euler_angle[59];
         swprintf(euler_angle, 59, L"Pitch:%d  Yaw:%d  Roll:%d  F:%.1f", (int32_t)roundf(view_alt), (int32_t)roundf(view_azi), (int32_t)roundf(view_roll), f);
-        fb_draw_textline_centered(frame_buffer, fb_width, fb_height, euler_angle, fb_width/2, fb_height-26, 255, 255, 255);
+        gfx_draw_textline_centered(gfx, euler_angle, fb_width/2, fb_height-26, 255, 255, 255, 1);
     }
 }

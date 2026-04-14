@@ -5,6 +5,8 @@
 extern "C" {
 #endif
 
+#include "graphics.h"
+
 // 若干视觉参数
 #define LINGLONG_STAR_BURST_RADIUS        (60)
 #define LINGLONG_STAR_BURST_DECAY         (0.94f)
@@ -63,38 +65,13 @@ typedef struct Linglong_Config {
 void transform_euler_angles(float pitch_in, float roll_in, float yaw_in, float *pitch_out, float *roll_out, float *yaw_out);
 void quaternion_to_euler(float q0, float q1, float q2, float q3, float *pitch, float *roll, float *yaw);
 
-void dithering_fs(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height);
-void dithering_fast(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height);
-
-void draw_line(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    float x1, float y1, float x2, float y2, float line_width, uint8_t r, uint8_t g, uint8_t b
-);
-
-// 绘制一行文本（居中）
-void fb_draw_textline_centered(
-    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    wchar_t *line, int32_t cx, int32_t cy, uint8_t red, uint8_t green, uint8_t blue
-);
-
-void draw_circle(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    float cx, float cy, float radius, uint8_t red, uint8_t green, uint8_t blue
-);
-
-void draw_rect(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    float x0, float y0, float width, float height, uint8_t red, uint8_t green, uint8_t blue
-);
-
-void fb_draw_textline(
-    uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
-    wchar_t *line, int32_t x, int32_t y, uint8_t red, uint8_t green, uint8_t blue
-);
+void dithering_fs(Nano_GFX *gfx);
+void dithering_fast(Nano_GFX *gfx);
 
 
+void linglong_init(Linglong_Config *cfg);
 
-void linglong_init();
-
-
-void render_sky(uint8_t *frame_buffer, int32_t fb_width, int32_t fb_height,
+void render_sky(Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
