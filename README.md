@@ -76,6 +76,8 @@
 
 Nano-Pod的详细安装部署文档详见[此处](doc/nano-pod.md)。
 
+![ ](./doc/nano-arch.svg)
+
 ### 基于浏览器WASM的CPU推理
 
 基于WASM和JavaScript分别实现的推理引擎。其中WASM推理引擎是由通用CPU推理引擎（C语言实现）编译得到。JavaScript实现的推理引擎只支持FP32精度。仓库中已经提供了编译好的WASM二进制文件，可以开箱即用。

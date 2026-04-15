@@ -18,32 +18,32 @@ $(BIN_DIR):
 
 # Nano-Pod-Lite：带键盘和单色I2C屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z/MARGA）
 pod_lite: $(BIN_DIR)/nano_pod_lite
-$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c ups.c platform_linux.c display_ssd130x_linux.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c ups.c platform_linux.c display_ssd130x_linux.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_LITE_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-Pod：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z）
 pod: $(BIN_DIR)/nano_pod
-$(BIN_DIR)/nano_pod: main.c asr.c tts.c imu10.c ups.c platform_linux.c display_ili9341.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod: main.c asr.c tts.c imu10.c ups.c platform_linux.c display_ili9341.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty
-$(BIN_DIR)/nano_tty: main.c platform_linux.c display_ncurses.c keyboard_ncurses.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_tty: main.c platform_linux.c display_ncurses.c keyboard_ncurses.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_TTY $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lncursesw
 
 # Nano-CLI：适用于文字终端命令交互的终端程序
 cli: $(BIN_DIR)/nano_cli
-$(BIN_DIR)/nano_cli: main_cli.c platform_linux.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_cli: main_cli.c platform_linux.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_CLI $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-Sort：演示如何用LLM解决排序问题（
 sort: $(BIN_DIR)/nano_sort
-$(BIN_DIR)/nano_sort: main_sort.c platform_linux.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_sort: main_sort.c platform_linux.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_SORT $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-WSS：WebSocket服务器
 wss: $(BIN_DIR)/nano_wss
-$(BIN_DIR)/nano_wss: main_wss.c platform_linux.c utils.c tokenizer.c tensor.c matmul_pthread.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_wss: main_wss.c platform_linux.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_WSS $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lwebsockets
 
 

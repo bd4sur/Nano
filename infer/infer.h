@@ -39,9 +39,6 @@ extern "C" {
     #if defined NANO_USE_MMAP
         #include <sys/mman.h>
     #endif
-    #ifdef MATMUL_PTHREAD
-        #include "matmul_pthread.h"
-    #endif
 #endif
 
 
