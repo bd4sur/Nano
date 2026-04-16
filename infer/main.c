@@ -84,8 +84,8 @@ static const float qwen3_infer_args_no_thinking[2] = {0.7f, 0.8f};
 ///////////////////////////////////////
 // 全局GUI状态
 
-Global_State *global_state;
-Key_Event    *key_event;
+static Global_State *global_state = NULL;
+static Key_Event    *key_event = NULL;
 
 
 int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
@@ -238,7 +238,7 @@ int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state) {
 ///////////////////////////////////////
 // 全局组件操作过程
 
-void init_main_menu() {
+void init_main_menu(Key_Event *key_event, Global_State *global_state) {
     wcscpy(global_state->w_menu_main->title, L"Nano-Pod");
     wcscpy(global_state->w_menu_main->items[0], L"电子鹦鹉");
     wcscpy(global_state->w_menu_main->items[1], L"玲珑天象仪");
@@ -253,7 +253,7 @@ void init_main_menu() {
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
 }
 
-void init_model_menu() {
+void init_model_menu(Key_Event *key_event, Global_State *global_state) {
     wcscpy(global_state->w_menu_model->title, L"选择语言模型");
     size_t model_count = sizeof(preset_model_configs) / sizeof(preset_model_configs[0]);
     for (size_t i = 0; i < model_count; i++) {
@@ -263,7 +263,7 @@ void init_model_menu() {
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_model);
 }
 
-void init_setting_menu() {
+void init_setting_menu(Key_Event *key_event, Global_State *global_state) {
     wcscpy(global_state->w_menu_setting->title, L"设置");
     wcscpy(global_state->w_menu_setting->items[0], L"语言模型生成参数");
     wcscpy(global_state->w_menu_setting->items[1], L"语音合成(TTS)设置");
@@ -272,7 +272,7 @@ void init_setting_menu() {
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_setting);
 }
 
-void init_asr_setting_menu() {
+void init_asr_setting_menu(Key_Event *key_event, Global_State *global_state) {
     wcscpy(global_state->w_menu_asr_setting->title, L"ASR自动提交设置");
     wcscpy(global_state->w_menu_asr_setting->items[0], L"0.先编辑再提交");
     wcscpy(global_state->w_menu_asr_setting->items[1], L"1.立刻提交");
@@ -280,7 +280,7 @@ void init_asr_setting_menu() {
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_asr_setting);
 }
 
-void init_tts_setting_menu() {
+void init_tts_setting_menu(Key_Event *key_event, Global_State *global_state) {
     wcscpy(global_state->w_menu_tts_setting->title, L"TTS设置");
     wcscpy(global_state->w_menu_tts_setting->items[0], L"0.关闭");
     wcscpy(global_state->w_menu_tts_setting->items[1], L"1.实时TTS");
@@ -300,7 +300,7 @@ int32_t main_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
 
     // 0.电子鹦鹉
     if (item_index == 0) {
-        init_model_menu();
+        init_model_menu(ke, gs);
         return STATE_MODEL_MENU;
     }
 
@@ -336,7 +336,7 @@ int32_t main_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
 
     // 6.设置
     else if (item_index == 6) {
-        init_setting_menu();
+        init_setting_menu(ke, gs);
         return STATE_SETTING_MENU;
     }
 
@@ -418,12 +418,12 @@ int32_t setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_St
     }
     // TTS设置
     else if (item_index == 1) {
-        init_tts_setting_menu();
+        init_tts_setting_menu(ke, gs);
         return STATE_TTS_SETTING;
     }
     // ASR设置
     else if (item_index == 2) {
-        init_asr_setting_menu();
+        init_asr_setting_menu(ke, gs);
         return STATE_ASR_SETTING;
     }
     else {
@@ -612,7 +612,7 @@ int main() {
 
             // 首次获得焦点：初始化
             if (global_state->PREV_STATE != global_state->STATE) {
-                init_main_menu();
+                init_main_menu(key_event, global_state);
                 ui_draw_header(key_event, global_state, global_state->w_menu_main->title, 1);
                 ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
                 gfx_refresh(global_state->gfx);
