@@ -88,14 +88,14 @@ void pack_q4k_model_file(LLM *llm, uint8_t *buffer, uint64_t header_byte_length,
 
     w->token_embedding = fptr; fptr += cfg->vocab_size * cfg->n_embd;
 
-    w->wq = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wq->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_head * head_size) * cfg->n_embd;
-    w->wk = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wk->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_kv_head * head_size) * cfg->n_embd;
-    w->wv = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wv->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_kv_head * head_size) * cfg->n_embd;
-    w->wo = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wo->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_head * head_size);
+    w->wq = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->wq->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_head * head_size) * cfg->n_embd;
+    w->wk = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->wk->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_kv_head * head_size) * cfg->n_embd;
+    w->wv = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->wv->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_kv_head * head_size) * cfg->n_embd;
+    w->wo = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->wo->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_head * head_size);
 
-    w->w1 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->w1->tensor_f32 = fptr;  fptr += n_layer * cfg->n_hidden * cfg->n_embd;
-    w->w2 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->w2->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * cfg->n_hidden;
-    w->w3 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->w3->tensor_f32 = fptr;  fptr += n_layer * cfg->n_hidden * cfg->n_embd;
+    w->w1 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->w1->tensor_f32 = fptr;  fptr += n_layer * cfg->n_hidden * cfg->n_embd;
+    w->w2 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->w2->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * cfg->n_hidden;
+    w->w3 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->w3->tensor_f32 = fptr;  fptr += n_layer * cfg->n_hidden * cfg->n_embd;
 
     // 将fp32转成Q4k
     // TODO 逐层
@@ -279,8 +279,8 @@ void parse_model_file_for_quant(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
 
         tk->vocab_size = *vocab_ptr; vocab_ptr++;
 
-        tk->token_list        = (wchar_t **)calloc_dev(tk->vocab_size, sizeof(wchar_t *));
-        tk->unicode_charset   = (wchar_t  *)calloc_dev(tk->vocab_size, sizeof(wchar_t));
+        tk->token_list        = (wchar_t **)platform_calloc(tk->vocab_size, sizeof(wchar_t *));
+        tk->unicode_charset   = (wchar_t  *)platform_calloc(tk->vocab_size, sizeof(wchar_t));
         tk->unicode_to_id_map = new_map(tk->vocab_size);
         tk->token_to_id_map   = new_map(tk->vocab_size);
         tk->vocab_trie        = new_trie(tk->vocab_size, 0);
@@ -295,7 +295,7 @@ void parse_model_file_for_quant(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
             uint32_t is_special   = (token_header & 0x0000ff00) >> 8;  (void)is_special;
             uint32_t token_length = (token_header & 0x000000ff);
 
-            wchar_t *token = (wchar_t *)calloc_dev(token_length+1, sizeof(wchar_t));
+            wchar_t *token = (wchar_t *)platform_calloc(token_length+1, sizeof(wchar_t));
             // 如果是单个字符，则加入unicode_charset
             if(token_length == 1) {
                 tk->unicode_charset[char_count] = *vocab_ptr;
@@ -363,7 +363,7 @@ void load_llm_for_quant(LLM *llm, Tokenizer *tk, char *model_path, uint32_t max_
     FILE *file = fopen(model_path, "rb");
     if (!file) { fprintf(stderr, "Couldn't open model file %s\n", model_path); exit(EXIT_FAILURE); }
     uint8_t *buffer = (uint8_t *)calloc(llm->file_size + 1, sizeof(uint8_t));
-    if (!buffer)  { fprintf(stderr, "malloc failed.\n"); exit(EXIT_FAILURE); }
+    if (!buffer)  { fprintf(stderr, "mem alloc failed.\n"); exit(EXIT_FAILURE); }
     if(fread(buffer, sizeof(uint8_t), llm->file_size, file) != llm->file_size) { exit(EXIT_FAILURE); }
     llm->buffer = buffer;
 

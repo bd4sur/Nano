@@ -126,9 +126,9 @@ void display_hal_refresh(
 // OLED的初始化
 void display_hal_init(void) {
     // 初始化GDRAM
-    FRAME_BUFFER = (uint8_t **)calloc(FB_PAGES, sizeof(uint8_t *));
+    FRAME_BUFFER = (uint8_t **)platform_calloc(FB_PAGES, sizeof(uint8_t *));
     for(uint8_t i = 0; i < FB_PAGES; i++) {
-        FRAME_BUFFER[i] = (uint8_t *)calloc(FB_WIDTH, sizeof(uint8_t));
+        FRAME_BUFFER[i] = (uint8_t *)platform_calloc(FB_WIDTH, sizeof(uint8_t));
     }
 
     // 初始化屏幕设备

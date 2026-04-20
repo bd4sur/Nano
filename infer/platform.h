@@ -13,6 +13,8 @@ extern "C" {
 
 #define NANO_VERSION "2604"
 
+#define LOG_FILE_PATH "chat.jsonl"
+
 // ===============================================================================
 // 平台相关工具函数
 // ===============================================================================
@@ -26,12 +28,14 @@ int32_t write_chat_log(char *filepath, uint64_t timestamp, wchar_t* prompt, wcha
 // 读取文件，并返回新的wchar数组
 wchar_t* read_file_to_wchar(char* filename);
 
-// 根据设备类型选择不同的 calloc 实现
+// 根据设备类型选择不同的 m/calloc 实现
 #ifdef ARDUINO
-    #define calloc_dev(nmemb, size) psram_calloc(nmemb, size)
+    #define platform_calloc(nmemb, size) psram_calloc((nmemb), (size))
+    #define platform_malloc(n) psram_malloc((n))
 #else
-    // 默认使用标准 calloc
-    #define calloc_dev(nmemb, size) calloc(nmemb, size)
+    // 默认使用标准 m/calloc
+    #define platform_calloc(nmemb, size) calloc((nmemb), (size))
+    #define platform_malloc(n) malloc((n))
 #endif
 
 // ===============================================================================
@@ -502,8 +506,8 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // 屏幕
     #define NCURSES
     // #define OLED_I2C_ADDR (0x3c)
-    #define SCREEN_WIDTH  (320)
-    #define SCREEN_HEIGHT (240)
+    #define SCREEN_WIDTH  (240)
+    #define SCREEN_HEIGHT (135)
 
     // 键盘
     // #define KB_I2C_ADDR (0x27)

@@ -380,9 +380,9 @@ void ui_widget_textarea_init(Key_Event *key_event, Global_State *global_state, W
     textarea_state->current_line = 0;
     textarea_state->is_show_scroll_bar = 1;
     textarea_state->is_modified = 1;
-    textarea_state->text = (wchar_t*)calloc(max_len, sizeof(wchar_t));
-    textarea_state->style = (uint32_t*)calloc(max_len, sizeof(uint32_t));
-    textarea_state->break_pos = (int32_t*)calloc(max_len, sizeof(int32_t));
+    textarea_state->text = (wchar_t*)platform_calloc(max_len, sizeof(wchar_t));
+    textarea_state->style = (uint32_t*)platform_calloc(max_len, sizeof(uint32_t));
+    textarea_state->break_pos = (int32_t*)platform_calloc(max_len, sizeof(int32_t));
 }
 
 void ui_widget_textarea_set(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state,
@@ -503,6 +503,20 @@ void ui_widget_input_init(Key_Event *key_event, Global_State *global_state, Widg
 void ui_widget_input_refresh(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
     input_state->cursor_pos = input_state->textarea.length - 1;
     ui_draw_input_buffer(key_event, global_state, input_state);
+}
+
+// 绘制文本输入操作说明
+static void ui_draw_input_help(Key_Event *key_event, Global_State *global_state) {
+    gfx_draw_rectangle(global_state->gfx, 3, 3, global_state->gfx->width - 6, global_state->gfx->height - 6, 222, 222, 222, 3);
+    gfx_draw_textline_centered(global_state->gfx, L"文本输入操作说明", global_state->gfx->width/2, 5+6, 0, 0, 222, 1);
+    gfx_draw_textline_centered(global_state->gfx, L"A-退格/返回  B-切换汉英数",   global_state->gfx->width/2, 5+6+(12+1)*1, 0x0, 0x0, 0x0, 1);
+    gfx_draw_textline_centered(global_state->gfx, L"C-第二功能  D-输入/提交",    global_state->gfx->width/2, 5+6+(12+1)*2, 0x0, 0x0, 0x0, 1);
+    gfx_draw_textline_centered(global_state->gfx, L"按住0选择符号 左右键移动光标",  global_state->gfx->width/2, 5+6+(12+1)*3, 0x0, 0x0, 0x0, 1);
+    gfx_draw_textline_centered(global_state->gfx, L"按住D语音输入 Ctrl+D 换行",    global_state->gfx->width/2, 5+6+(12+1)*4, 0x0, 0x0, 0x0, 1);
+    gfx_draw_textline_centered(global_state->gfx, L"Ctrl+1 切换思考模式",          global_state->gfx->width/2, 5+6+(12+1)*5, 0x0, 0x0, 0x0, 1);
+    gfx_draw_textline_centered(global_state->gfx, L"Ctrl+A 放弃输入并返回",        global_state->gfx->width/2, 5+6+(12+1)*6, 0x0, 0x0, 0x0, 1);
+
+    gfx_refresh(global_state->gfx);
 }
 
 int32_t ui_widget_input_event_handler(
@@ -667,11 +681,21 @@ int32_t ui_widget_input_event_handler(
             }
         }
 
-        // 长+短按B键：依次切换汉-英-数输入模式
+        // 长+短按B键：依次切换汉-英-数输入模式 / 或Ctrl显示帮助
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 11) {
-            input_state->ime_mode_flag = (input_state->ime_mode_flag + 1) % 3;
-            ui_draw_input_buffer(key_event, global_state, input_state);
-            input_state->state = 0;
+            // 如果非Ctrl状态，则依次切换汉-英-数输入模式
+            if (global_state->is_ctrl_enabled == 0) {
+                input_state->ime_mode_flag = (input_state->ime_mode_flag + 1) % 3;
+                ui_draw_input_buffer(key_event, global_state, input_state);
+                input_state->state = 0;
+            }
+            // 如果Ctrl，则显示帮助文本
+            else {
+                // 重置Ctrl状态
+                global_state->is_ctrl_enabled = 0;
+                ui_draw_input_help(key_event, global_state);
+                input_state->state = 9;
+            }
         }
 
         // 短按C键：切换全局Ctrl键状态
@@ -868,6 +892,15 @@ int32_t ui_widget_input_event_handler(
         }
     }
 
+    // 特殊状态：显示使用说明
+    else if (state == 9) {
+        // 按任意键返回状态0
+        if ((key_event->key_edge < 0) && key_event->key_code != KEYCODE_NUM_IDLE) {
+            ui_draw_input_buffer(key_event, global_state, input_state);
+            input_state->state = 0;
+        }
+    }
+
     return current_focus_state;
 }
 
@@ -1024,7 +1057,7 @@ void ui_draw_input_buffer(Key_Event *key_event, Global_State *global_state, Widg
     gfx_fill_white(global_state->gfx);
 
     // 底部
-    ui_draw_footer(key_event, global_state, L"A 退格/退出  B 切换汉英数  C 第二功能键  D 提交", 1);
+    ui_draw_footer(key_event, global_state, L"Ctrl+B 使用说明", 1);
 
     // 顶部
     ui_draw_header(key_event, global_state, L"", 0);

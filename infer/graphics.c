@@ -91,11 +91,10 @@ static void add_to_cache(const char *img_path, uint8_t *data, uint32_t width, ui
 
 
 void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode) {
-    // gfx = (Nano_GFX*)calloc(1, sizeof(Nano_GFX));
     gfx->color_mode = color_mode;
     gfx->width = width;
     gfx->height = height;
-    gfx->frame_buffer_rgb888 = (uint8_t *)calloc(width * height * 3, sizeof(uint8_t));
+    gfx->frame_buffer_rgb888 = (uint8_t *)platform_calloc(width * height * 3, sizeof(uint8_t));
 
     display_hal_init();
 
@@ -908,7 +907,7 @@ void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uin
         }
         
         // 分配缩放后图像的内存（RGB888 格式，3字节/像素）
-        draw_data = (uint8_t *)malloc(width * height * 3);
+        draw_data = (uint8_t *)platform_malloc(width * height * 3);
         if (draw_data == NULL) {
             stbi_image_free(img_data);
             return;

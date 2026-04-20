@@ -40,17 +40,34 @@ extern "C" {
 
 
 // ===============================================================================
-// 获取按键事件
+// UI框架：获取按键事件
 // ===============================================================================
 
 void get_key_event(Key_Event *key_event, Global_State *global_state);
 
 
 // ===============================================================================
-// 全局GUI+gfx初始化
+// UI框架：全局GUI+gfx初始化
 // ===============================================================================
 
 void ui_init(Key_Event *key_event, Global_State *global_state);
+
+
+// ===============================================================================
+// 核心业务：电子鹦鹉
+// ===============================================================================
+
+int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state);
+int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state);
+void init_model_menu(Key_Event *key_event, Global_State *global_state);
+int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
+
+// ===============================================================================
+// 主菜单
+// ===============================================================================
+
+void init_main_menu(Key_Event *key_event, Global_State *global_state);
+int32_t main_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
 
 // ===============================================================================
 // 开机欢迎画面
@@ -99,6 +116,31 @@ void ui_app_linglong_set_timemachine_speed(Key_Event *key_event, Global_State *g
 void ui_app_linglong_set_realtime(Key_Event *key_event, Global_State *global_state);
 void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_state);
 
+
+// ===============================================================================
+// 设置菜单
+// ===============================================================================
+
+void init_setting_menu(Key_Event *key_event, Global_State *global_state);
+void init_asr_setting_menu(Key_Event *key_event, Global_State *global_state);
+void init_tts_setting_menu(Key_Event *key_event, Global_State *global_state);
+int32_t setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
+int32_t asr_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
+int32_t tts_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
+
+
+
+
+
+
+// ===============================================================================
+// UI主体框架
+// ===============================================================================
+
+int32_t main_init(Key_Event *key_event, Global_State *global_state);
+int32_t main_event_handler(Key_Event *key_event, Global_State *global_state);
+int32_t main_periodic_task(Key_Event *key_event, Global_State *global_state);
+int32_t main_deinit(Key_Event *key_event, Global_State *global_state);
 
 #ifdef __cplusplus
 }

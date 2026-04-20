@@ -30,7 +30,7 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
 
     uint32_t xbuf_length = llm_cfg->n_embd + llm_cfg->n_embd + q_dim + llm_cfg->n_embd + llm_cfg->n_hidden + llm_cfg->n_hidden
                          + q_dim + llm_cfg->n_head * max_seq_len + llm_cfg->vocab_size;        
-    s->xbuf = (float *)calloc_dev(xbuf_length, sizeof(float));
+    s->xbuf = (float *)platform_calloc(xbuf_length, sizeof(float));
     float *xbuf = s->xbuf;
 
     s->x       = xbuf;  xbuf += llm_cfg->n_embd;
@@ -44,7 +44,7 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
     s->logits  = xbuf;  xbuf += llm_cfg->vocab_size;
 
     uint32_t kvcache_length = llm_cfg->n_layer * max_seq_len * kv_dim * 2;        
-    s->kvcache = (float *)calloc_dev(kvcache_length, sizeof(float));
+    s->kvcache = (float *)platform_calloc(kvcache_length, sizeof(float));
     float *kvcache = s->kvcache;
 
     s->k_cache = kvcache;  kvcache += llm_cfg->n_layer * max_seq_len * kv_dim;
@@ -55,8 +55,8 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
 
         uint32_t qvbuf_length = llm_cfg->n_embd + q_dim + llm_cfg->n_hidden;
         uint32_t qsbuf_length = llm_cfg->n_embd / gs + q_dim / gs + llm_cfg->n_hidden / gs;
-        s->qvbuf = (QTYPE *)calloc_dev(qvbuf_length, sizeof(QTYPE));
-        s->qsbuf = (float *)calloc_dev(qsbuf_length, sizeof(float));
+        s->qvbuf = (QTYPE *)platform_calloc(qvbuf_length, sizeof(QTYPE));
+        s->qsbuf = (float *)platform_calloc(qsbuf_length, sizeof(float));
         QTYPE *qvbuf = s->qvbuf;
         float *qsbuf = s->qsbuf;
 
@@ -79,7 +79,7 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
 
     // ensure all mallocs went fine
     if (!s->xbuf || !s->kvcache) {
-        fprintf(stderr, "malloc failed!\n");
+        fprintf(stderr, "mem alloc failed!\n");
         exit(EXIT_FAILURE);
     }
 }
@@ -123,7 +123,7 @@ void memory_map_params(LLM *llm, void* ptr) {
         ptr = (void*)fptr;
 
         w->q_tokens = parse_quantized_tensors(&ptr, 1, cfg->vocab_size * cfg->n_embd, llm->group_size);
-        w->token_embedding = (float *)calloc_dev(cfg->vocab_size * cfg->n_embd, sizeof(float));
+        w->token_embedding = (float *)platform_calloc(cfg->vocab_size * cfg->n_embd, sizeof(float));
         dequantize(&w->q_tokens->tensor_q80, w->token_embedding, cfg->vocab_size * cfg->n_embd, llm->group_size);
 
         w->wq = parse_quantized_tensors(&ptr, n_layer, (cfg->n_head * head_size) * cfg->n_embd, llm->group_size);
@@ -143,33 +143,33 @@ void memory_map_params(LLM *llm, void* ptr) {
         uint64_t tlen = 0;
 
         Q4k_Tensor *q_tokens_q4k = unpack_q4k_tensor(ptr, &tlen);
-        w->q_tokens = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->q_tokens->tensor_q4k = q_tokens_q4k;  ptr += tlen;
-        w->token_embedding = (float *)calloc_dev(cfg->vocab_size * cfg->n_embd, sizeof(float));
+        w->q_tokens = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor)); w->q_tokens->tensor_q4k = q_tokens_q4k;  ptr += tlen;
+        w->token_embedding = (float *)platform_calloc(cfg->vocab_size * cfg->n_embd, sizeof(float));
         uint32_t tedim = 2;
         dequantize_tensor_q4k(q_tokens_q4k, w->token_embedding, &tedim, (uint32_t[]){cfg->vocab_size, cfg->n_embd});
 
-        Q4k_Tensor *wq_q4k = unpack_q4k_tensor(ptr, &tlen); w->wq = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->wq->tensor_q4k = wq_q4k; ptr += tlen;
-        Q4k_Tensor *wk_q4k = unpack_q4k_tensor(ptr, &tlen); w->wk = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->wk->tensor_q4k = wk_q4k; ptr += tlen;
-        Q4k_Tensor *wv_q4k = unpack_q4k_tensor(ptr, &tlen); w->wv = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->wv->tensor_q4k = wv_q4k; ptr += tlen;
-        Q4k_Tensor *wo_q4k = unpack_q4k_tensor(ptr, &tlen); w->wo = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->wo->tensor_q4k = wo_q4k; ptr += tlen;
+        Q4k_Tensor *wq_q4k = unpack_q4k_tensor(ptr, &tlen); w->wq = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor)); w->wq->tensor_q4k = wq_q4k; ptr += tlen;
+        Q4k_Tensor *wk_q4k = unpack_q4k_tensor(ptr, &tlen); w->wk = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor)); w->wk->tensor_q4k = wk_q4k; ptr += tlen;
+        Q4k_Tensor *wv_q4k = unpack_q4k_tensor(ptr, &tlen); w->wv = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor)); w->wv->tensor_q4k = wv_q4k; ptr += tlen;
+        Q4k_Tensor *wo_q4k = unpack_q4k_tensor(ptr, &tlen); w->wo = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor)); w->wo->tensor_q4k = wo_q4k; ptr += tlen;
 
-        Q4k_Tensor *w1_q4k = unpack_q4k_tensor(ptr, &tlen); w->w1 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->w1->tensor_q4k = w1_q4k; ptr += tlen;
-        Q4k_Tensor *w2_q4k = unpack_q4k_tensor(ptr, &tlen); w->w2 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->w2->tensor_q4k = w2_q4k; ptr += tlen;
-        Q4k_Tensor *w3_q4k = unpack_q4k_tensor(ptr, &tlen); w->w3 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor)); w->w3->tensor_q4k = w3_q4k; ptr += tlen;
+        Q4k_Tensor *w1_q4k = unpack_q4k_tensor(ptr, &tlen); w->w1 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor)); w->w1->tensor_q4k = w1_q4k; ptr += tlen;
+        Q4k_Tensor *w2_q4k = unpack_q4k_tensor(ptr, &tlen); w->w2 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor)); w->w2->tensor_q4k = w2_q4k; ptr += tlen;
+        Q4k_Tensor *w3_q4k = unpack_q4k_tensor(ptr, &tlen); w->w3 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor)); w->w3->tensor_q4k = w3_q4k; ptr += tlen;
 
         fptr = (float*)ptr;
     }
     else if (llm->quant_type == QUANT_TYPE_F32) {
         w->token_embedding = fptr; fptr += cfg->vocab_size * cfg->n_embd;
 
-        w->wq = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wq->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_head * head_size) * cfg->n_embd;
-        w->wk = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wk->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_kv_head * head_size) * cfg->n_embd;
-        w->wv = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wv->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_kv_head * head_size) * cfg->n_embd;
-        w->wo = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->wo->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_head * head_size);
+        w->wq = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->wq->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_head * head_size) * cfg->n_embd;
+        w->wk = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->wk->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_kv_head * head_size) * cfg->n_embd;
+        w->wv = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->wv->tensor_f32 = fptr;  fptr += n_layer * (cfg->n_kv_head * head_size) * cfg->n_embd;
+        w->wo = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->wo->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * (cfg->n_head * head_size);
 
-        w->w1 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->w1->tensor_f32 = fptr;  fptr += n_layer * cfg->n_hidden * cfg->n_embd;
-        w->w2 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->w2->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * cfg->n_hidden;
-        w->w3 = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));  w->w3->tensor_f32 = fptr;  fptr += n_layer * cfg->n_hidden * cfg->n_embd;
+        w->w1 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->w1->tensor_f32 = fptr;  fptr += n_layer * cfg->n_hidden * cfg->n_embd;
+        w->w2 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->w2->tensor_f32 = fptr;  fptr += n_layer * cfg->n_embd * cfg->n_hidden;
+        w->w3 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));  w->w3->tensor_f32 = fptr;  fptr += n_layer * cfg->n_hidden * cfg->n_embd;
     }
 
     if (llm->arch == LLM_ARCH_QWEN2) {
@@ -187,8 +187,8 @@ void memory_map_params(LLM *llm, void* ptr) {
         w->freq_cis_imag = fptr;  fptr += cfg->block_size * head_size / 2;
     }
     else if (llm->arch == LLM_ARCH_QWEN3) {
-        w->freq_cis_real = calloc_dev(cfg->block_size * head_size / 2, sizeof(float));
-        w->freq_cis_imag = calloc_dev(cfg->block_size * head_size / 2, sizeof(float));
+        w->freq_cis_real = platform_calloc(cfg->block_size * head_size / 2, sizeof(float));
+        w->freq_cis_imag = platform_calloc(cfg->block_size * head_size / 2, sizeof(float));
 
         for (uint32_t pos = 0; pos < cfg->block_size; pos++) {
             for (uint32_t i = 0; i < head_size / 2; i++) {
@@ -211,7 +211,7 @@ void memory_map_params(LLM *llm, void* ptr) {
         w->token_classifier = w->q_tokens;
     }
     else if (llm->quant_type == QUANT_TYPE_F32) {
-        w->token_classifier = (Typed_Tensor *)calloc_dev(1, sizeof(Typed_Tensor));
+        w->token_classifier = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
         w->token_classifier->tensor_f32 = cfg->is_shared_classifier ? w->token_embedding : ptr;
     }
 }
@@ -268,8 +268,8 @@ void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
 
         tk->vocab_size = *vocab_ptr; vocab_ptr++;
 
-        tk->token_list        = (wchar_t **)calloc_dev(tk->vocab_size, sizeof(wchar_t *));
-        tk->unicode_charset   = (wchar_t  *)calloc_dev(tk->vocab_size, sizeof(wchar_t));
+        tk->token_list        = (wchar_t **)platform_calloc(tk->vocab_size, sizeof(wchar_t *));
+        tk->unicode_charset   = (wchar_t  *)platform_calloc(tk->vocab_size, sizeof(wchar_t));
         tk->unicode_to_id_map = new_map(tk->vocab_size);
         tk->token_to_id_map   = new_map(tk->vocab_size);
         tk->vocab_trie        = new_trie(tk->vocab_size, 0);
@@ -284,7 +284,7 @@ void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
             uint32_t is_special   = (token_header & 0x0000ff00) >> 8;  (void)is_special;
             uint32_t token_length = (token_header & 0x000000ff);
 
-            wchar_t *token = (wchar_t *)calloc_dev(token_length+1, sizeof(wchar_t));
+            wchar_t *token = (wchar_t *)platform_calloc(token_length+1, sizeof(wchar_t));
             // 如果是单个字符，则加入unicode_charset
             if(token_length == 1) {
                 tk->unicode_charset[char_count] = *vocab_ptr;
@@ -350,8 +350,8 @@ void load_llm(LLM *llm, Tokenizer *tk, char *model_path, uint32_t max_seq_len) {
 
     FILE *file = fopen(model_path, "rb");
     if (!file) { fprintf(stderr, "Couldn't open model file %s\n", model_path); exit(EXIT_FAILURE); }
-    uint8_t *buffer = (uint8_t *)calloc(llm->file_size + 1, sizeof(uint8_t));
-    if (!buffer)  { fprintf(stderr, "malloc failed.\n"); exit(EXIT_FAILURE); }
+    uint8_t *buffer = (uint8_t *)platform_calloc(llm->file_size + 1, sizeof(uint8_t));
+    if (!buffer)  { fprintf(stderr, "mem alloc failed.\n"); exit(EXIT_FAILURE); }
     if(fread(buffer, sizeof(uint8_t), llm->file_size, file) != llm->file_size) { exit(EXIT_FAILURE); }
     llm->buffer = buffer;
 
@@ -413,18 +413,18 @@ void malloc_fwd_buffer_with_lora(LLM *llm, LoRA_Config *lora_cfg) {
     FwdBuffer *s = &(llm->state);
     LLM_Config *llm_cfg = &(llm->config);
     uint32_t kv_dim = (llm_cfg->n_embd * llm_cfg->n_kv_head) / llm_cfg->n_head;
-    s->q0 = calloc(lora_cfg->lora_rank, sizeof(float));
-    s->k0 = calloc(lora_cfg->lora_rank, sizeof(float));
-    s->v0 = calloc(lora_cfg->lora_rank, sizeof(float));
-    s->o0 = calloc(lora_cfg->lora_rank, sizeof(float));
-    s->q1 = calloc(llm_cfg->n_embd, sizeof(float));
-    s->k1 = calloc(kv_dim, sizeof(float));
-    s->v1 = calloc(kv_dim, sizeof(float));
-    s->o1 = calloc(llm_cfg->n_embd, sizeof(float));
+    s->q0 = platform_calloc(lora_cfg->lora_rank, sizeof(float));
+    s->k0 = platform_calloc(lora_cfg->lora_rank, sizeof(float));
+    s->v0 = platform_calloc(lora_cfg->lora_rank, sizeof(float));
+    s->o0 = platform_calloc(lora_cfg->lora_rank, sizeof(float));
+    s->q1 = platform_calloc(llm_cfg->n_embd, sizeof(float));
+    s->k1 = platform_calloc(kv_dim, sizeof(float));
+    s->v1 = platform_calloc(kv_dim, sizeof(float));
+    s->o1 = platform_calloc(llm_cfg->n_embd, sizeof(float));
     // ensure all mallocs went fine
     if (!s->q0 || !s->k0 || !s->v0 || !s->o0 ||
         !s->q1 || !s->k1 || !s->v1 || !s->o1 ) {
-        fprintf(stderr, "malloc failed!\n");
+        fprintf(stderr, "mem alloc failed!\n");
         exit(EXIT_FAILURE);
     }
 }
@@ -505,11 +505,11 @@ LoRA *load_lora(LLM *llm, char *lora_path) {
     uint64_t file_size = ftell(file);
     rewind(file);
 
-    uint8_t *lora_buffer = (uint8_t *)calloc(file_size + 1, sizeof(uint8_t));
-    if (!lora_buffer)  { fprintf(stderr, "malloc failed.\n"); exit(EXIT_FAILURE); }
+    uint8_t *lora_buffer = (uint8_t *)platform_calloc(file_size + 1, sizeof(uint8_t));
+    if (!lora_buffer)  { fprintf(stderr, "mem alloc failed.\n"); exit(EXIT_FAILURE); }
 
     if(fread(lora_buffer, sizeof(uint8_t), file_size, file) != file_size) { exit(EXIT_FAILURE); }
-    LoRA *p_lora = (LoRA *)calloc(1, sizeof(LoRA));
+    LoRA *p_lora = (LoRA *)platform_calloc(1, sizeof(LoRA));
 
     p_lora->data = (float*)lora_buffer;
 
@@ -521,7 +521,7 @@ LoRA *load_lora(LLM *llm, char *lora_path) {
 }
 
 LoRA *load_lora_from_buffer(LLM *llm, uint8_t *buffer) {
-    LoRA *p_lora = (LoRA *)calloc(1, sizeof(LoRA));
+    LoRA *p_lora = (LoRA *)platform_calloc(1, sizeof(LoRA));
     p_lora->data = (float*)buffer;
     parse_lora_file(buffer, p_lora, llm);
     malloc_fwd_buffer_with_lora(llm, &p_lora->config);
@@ -549,11 +549,11 @@ void free_lora(LLM *llm, LoRA *lora) {
 // ===============================================================================
 
 Nano_Context *llm_context_init_from_buffer(uint8_t *buffer, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, uint64_t random_seed) {
-    Nano_Context *ctx = (Nano_Context*)calloc(1, sizeof(Nano_Context));
+    Nano_Context *ctx = (Nano_Context*)platform_calloc(1, sizeof(Nano_Context));
     ctx->max_seq_len = max_seq_len;
     ctx->random_seed = random_seed;
-    ctx->llm = (LLM *)calloc(1, (sizeof(LLM)));
-    ctx->tokenizer = (Tokenizer *)calloc(1, (sizeof(Tokenizer)));
+    ctx->llm = (LLM *)platform_calloc(1, (sizeof(LLM)));
+    ctx->tokenizer = (Tokenizer *)platform_calloc(1, (sizeof(Tokenizer)));
     ctx->lora = NULL;
     load_llm_from_buffer(ctx->llm, ctx->tokenizer, buffer, ctx->max_seq_len);
     ctx->sampler = build_sampler(ctx->llm->config.vocab_size, repetition_penalty, temperature, top_p, top_k, ctx->random_seed);
@@ -561,11 +561,11 @@ Nano_Context *llm_context_init_from_buffer(uint8_t *buffer, uint32_t max_seq_len
 }
 
 Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_seq_len, float repetition_penalty, float temperature, float top_p, uint32_t top_k, uint64_t random_seed) {
-    Nano_Context *ctx = (Nano_Context*)calloc(1, sizeof(Nano_Context));
+    Nano_Context *ctx = (Nano_Context*)platform_calloc(1, sizeof(Nano_Context));
     ctx->max_seq_len = max_seq_len;
     ctx->random_seed = random_seed;
-    ctx->llm = (LLM *)calloc(1, (sizeof(LLM)));
-    ctx->tokenizer = (Tokenizer *)calloc(1, (sizeof(Tokenizer)));
+    ctx->llm = (LLM *)platform_calloc(1, (sizeof(LLM)));
+    ctx->tokenizer = (Tokenizer *)platform_calloc(1, (sizeof(Tokenizer)));
     load_llm(ctx->llm, ctx->tokenizer, model_path, max_seq_len);
     ctx->sampler = build_sampler(ctx->llm->config.vocab_size, repetition_penalty, temperature, top_p, top_k, ctx->random_seed);
     ctx->lora = (lora_path) ? load_lora(ctx->llm, lora_path) : NULL;
@@ -1060,7 +1060,7 @@ int sample_top_p(float* probabilities, int n, float top_p, ProbIndex* probindex,
 }
 
 Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperature, float top_p, uint32_t top_k, uint64_t rng_seed) {
-    Sampler *sampler = (Sampler *)calloc(1, sizeof(Sampler));
+    Sampler *sampler = (Sampler *)platform_calloc(1, sizeof(Sampler));
     sampler->vocab_size = vocab_size;
     sampler->repetition_penalty = repetition_penalty;
     sampler->temperature = temperature;
@@ -1068,7 +1068,7 @@ Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperatu
     sampler->top_k = top_k;
     sampler->rng_state = rng_seed;
     // buffer only used with nucleus sampling; may not need but it's ~small
-    sampler->probindex = (ProbIndex *)calloc(sampler->vocab_size, sizeof(ProbIndex));
+    sampler->probindex = (ProbIndex *)platform_calloc(sampler->vocab_size, sizeof(ProbIndex));
     return sampler;
 }
 
@@ -1100,7 +1100,7 @@ uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t p
     // Auto-regressive Decode
     else {
         // 复读惩罚：对过往出现过的词元施加惩罚，词元出现得越多，概率越低: ref arxiv:1909.05858
-        uint32_t *tokenset = (uint32_t *)calloc(sampler->vocab_size, sizeof(uint32_t));
+        uint32_t *tokenset = (uint32_t *)platform_calloc(sampler->vocab_size, sizeof(uint32_t));
         for(uint32_t i = 0; i < pos; i++) {
             tokenset[output_ids[i]] = 1;  // 1表示output_ids中出现了这个token
         }
@@ -1139,10 +1139,10 @@ uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t p
 
 
 Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, uint32_t max_seq_len, int32_t is_thinking_enabled) {
-    Nano_Session *session = (Nano_Session *)calloc_dev(1, sizeof(Nano_Session));
+    Nano_Session *session = (Nano_Session *)platform_calloc(1, sizeof(Nano_Session));
     Tokenizer *tokenizer = ctx->tokenizer;
 
-    session->prompt = (wchar_t *)calloc_dev(max_seq_len + 1, sizeof(wchar_t));
+    session->prompt = (wchar_t *)platform_calloc(max_seq_len + 1, sizeof(wchar_t));
     if (prompt == NULL) {
         wcscpy(session->prompt, L"");
     }
@@ -1156,7 +1156,7 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, uint32_t max_
 
     session->max_seq_len = max_seq_len;
 
-    session->output_ids = (uint32_t *)calloc_dev(max_seq_len + 1, sizeof(uint32_t));
+    session->output_ids = (uint32_t *)platform_calloc(max_seq_len + 1, sizeof(uint32_t));
     session->output_count = 0;
 
     session->num_prompt_tokens = 0;
@@ -1302,12 +1302,12 @@ int32_t generate_sync(
 void seq2seq(Nano_Context *ctx, wchar_t *input_list, wchar_t *output_list, uint32_t max_seq_len) {
     uint32_t num_prompt_tokens = 0;
     uint32_t *input_ids = encode_nano(ctx->tokenizer, input_list, &num_prompt_tokens);
-    uint32_t *output_ids = (uint32_t *)calloc_dev(max_seq_len, sizeof(uint32_t));
+    uint32_t *output_ids = (uint32_t *)platform_calloc(max_seq_len, sizeof(uint32_t));
 
     LLM *llm = ctx->llm;
     Sampler *sampler = ctx->sampler;
 
-    float *output_logits = (float*)calloc_dev(max_seq_len * sampler->vocab_size, sizeof(float));
+    float *output_logits = (float*)platform_calloc(max_seq_len * sampler->vocab_size, sizeof(float));
 
     // 阶段1：预填充KVCache。
     //   内层循环对输入序列的每一个pos进行前向计算，填充每一层的第pos位置上的KVCache。

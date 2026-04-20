@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-#include "utils.h"
+#include "platform.h"
 
 #define MAX_TOKEN_LENGTH  (17) // NOTE 虽然可以扫描词表得到该值，但是考虑到性能，设置为固定值（对于16384词表而言，至少17）
 

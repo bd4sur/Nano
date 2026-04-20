@@ -14,9 +14,9 @@ int compare_tokens(const void *a, const void *b) {
 void build_bpe_tokenizer(Tokenizer* t, uint8_t* buffer, int vocab_size) {
     // i should have written the vocab_size into the tokenizer file... sigh
     t->vocab_size = vocab_size;
-    // malloc space to hold the scores and the strings
-    t->vocab = (char**)malloc(vocab_size * sizeof(char*));
-    t->vocab_scores = (float*)malloc(vocab_size * sizeof(float));
+    // mem alloc space to hold the scores and the strings
+    t->vocab = (char**)platform_malloc(vocab_size * sizeof(char*));
+    t->vocab_scores = (float*)platform_malloc(vocab_size * sizeof(float));
     t->sorted_vocab = NULL; // initialized lazily
     for (int i = 0; i < 256; i++) {
         t->byte_pieces[i * 2] = (unsigned char)i;
@@ -38,7 +38,7 @@ void build_bpe_tokenizer(Tokenizer* t, uint8_t* buffer, int vocab_size) {
         uint32_t len = *((uint32_t*)(buffer + offset));
         offset += sizeof(uint32_t);
 
-        t->vocab[i] = (char *)malloc(len + 1);
+        t->vocab[i] = (char *)platform_malloc(len + 1);
         for (uint32_t j = 0; j < len; j++) {
             t->vocab[i][j] = *((char*)(buffer + offset));
             offset += sizeof(char);
@@ -71,8 +71,8 @@ char* decode_bpe_pair(Tokenizer* t, uint32_t prev_token, uint32_t token) {
 
 
 wchar_t *decode_bpe(Tokenizer *t, uint32_t *ids, uint32_t len) {
-    wchar_t *output_wc = (wchar_t *)calloc(len * t->max_token_length + 1, sizeof(wchar_t));
-    char    *output_ac = (char *   )calloc(len * t->max_token_length + 1, sizeof(char));
+    wchar_t *output_wc = (wchar_t *)platform_calloc(len * t->max_token_length + 1, sizeof(wchar_t));
+    char    *output_ac = (char *   )platform_calloc(len * t->max_token_length + 1, sizeof(char));
     output_ac[0] = 0;
     for (uint32_t i = 0; i < len; i++) {
         strcat(output_ac, t->vocab[ids[i]]);
@@ -94,8 +94,8 @@ void encode_bpe(Tokenizer* t, char *text, uint32_t *tokens, uint32_t *n_tokens) 
     if (text == NULL) { fprintf(stderr, "cannot encode NULL text\n"); exit(EXIT_FAILURE); }
 
     if (t->sorted_vocab == NULL) {
-        // lazily malloc and sort the vocabulary
-        t->sorted_vocab = malloc(t->vocab_size * sizeof(TokenIndex));
+        // lazily mem alloc and sort the vocabulary
+        t->sorted_vocab = platform_malloc(t->vocab_size * sizeof(TokenIndex));
         for (int i = 0; i < t->vocab_size; i++) {
             t->sorted_vocab[i].str = t->vocab[i];
             t->sorted_vocab[i].id = i;
@@ -105,7 +105,7 @@ void encode_bpe(Tokenizer* t, char *text, uint32_t *tokens, uint32_t *n_tokens) 
 
     // create a temporary buffer that will store merge candidates of always two consecutive tokens
     // *2 for concat, +1 for null terminator +2 for UTF8 (in case max_token_length is 1)
-    char* str_buffer = malloc((t->max_token_length*2 +1 +2) * sizeof(char));
+    char* str_buffer = platform_malloc((t->max_token_length*2 +1 +2) * sizeof(char));
     size_t str_len = 0;
 
     // start at 0 tokens
@@ -218,13 +218,13 @@ uint32_t *apply_qwen_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uin
     }
 
     size_t user_prompt_ch_len = wcslen(user_prompt_wchar) * MB_CUR_MAX + 1;
-    char *user_prompt = (char*)calloc(user_prompt_ch_len, sizeof(char));
+    char *user_prompt = (char*)platform_calloc(user_prompt_ch_len, sizeof(char));
     (void)_wcstombs(user_prompt, user_prompt_wchar, user_prompt_ch_len);
     uint32_t num_user_prompt_tokens = 0;
-    uint32_t *user_prompt_tokens = (uint32_t*)calloc(strlen(user_prompt), sizeof(uint32_t));
+    uint32_t *user_prompt_tokens = (uint32_t*)platform_calloc(strlen(user_prompt), sizeof(uint32_t));
     encode_bpe(t, user_prompt, user_prompt_tokens, &num_user_prompt_tokens);
 
-    uint32_t *prompt_tokens = (uint32_t*)calloc(num_user_prompt_tokens + 16, sizeof(uint32_t));
+    uint32_t *prompt_tokens = (uint32_t*)platform_calloc(num_user_prompt_tokens + 16, sizeof(uint32_t));
 
     prompt_tokens[0] = 151644; // <|im_start|>
     prompt_tokens[1] = 872;    // user
@@ -273,7 +273,7 @@ void free_tokenizer(Tokenizer *tk) {
 
 uint32_t *string_to_ids(struct Map *unicode_to_id_map, wchar_t *utext) {
     uint32_t len = wcslen(utext);
-    uint32_t *ids = calloc(len, sizeof(uint32_t));
+    uint32_t *ids = platform_calloc(len, sizeof(uint32_t));
     for(uint32_t i = 0; i < wcslen(utext); i++) {
         ids[i] = map_get(unicode_to_id_map, utext[i]);
     }
@@ -281,7 +281,7 @@ uint32_t *string_to_ids(struct Map *unicode_to_id_map, wchar_t *utext) {
 }
 
 wchar_t *decode_nano(Tokenizer *t, uint32_t *ids, uint32_t len) {
-    wchar_t *out = (wchar_t *)calloc(len * MAX_TOKEN_LENGTH + 1, sizeof(wchar_t));
+    wchar_t *out = (wchar_t *)platform_calloc(len * MAX_TOKEN_LENGTH + 1, sizeof(wchar_t));
     uint32_t count = 0;
     for(uint32_t i = 0; i < len; i++) {
         wchar_t *utoken = t->token_list[ids[i]];
@@ -296,7 +296,7 @@ wchar_t *decode_nano(Tokenizer *t, uint32_t *ids, uint32_t len) {
 
 uint32_t *encode_nano(Tokenizer *t, wchar_t *text, uint32_t *n_tokens_ptr) {
     uint32_t *input_ids = string_to_ids(t->unicode_to_id_map, text);
-    uint32_t *output_ids = (uint32_t *)calloc(wcslen(text), sizeof(uint32_t *));
+    uint32_t *output_ids = (uint32_t *)platform_calloc(wcslen(text), sizeof(uint32_t *));
     uint32_t token_count = tokenize(t->vocab_trie, output_ids, input_ids, wcslen(text), MAX_TOKEN_LENGTH);
     free(input_ids);
     *n_tokens_ptr = token_count;

@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-#include "utils.h"
+#include "platform.h"
 
 /////////////////////////////////////////////////////////////
 // matmul_pthread

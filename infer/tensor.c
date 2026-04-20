@@ -48,7 +48,7 @@ void quantize(Q80_Tensor *qx, float* x, int n, uint32_t group_size) {
 /* initialize `n` x quantized tensor (with `size_each` elements), starting from memory pointed at *ptr */
 Typed_Tensor *parse_quantized_tensors(void **ptr, int n, int size_each, uint32_t group_size) {
     void *p = *ptr;
-    Typed_Tensor *res = malloc(n * sizeof(Typed_Tensor));
+    Typed_Tensor *res = platform_malloc(n * sizeof(Typed_Tensor));
     for(int i = 0; i < n; i++) {
         /* map quantized int8 values*/
         res[i].tensor_q80.q = (int8_t*)p;
@@ -96,7 +96,7 @@ Q4k_Tensor *make_q4k_tensor(uint32_t ndim, uint32_t shape[]) {
 
     uint64_t total_bytes = 8+4+4+24+4+n_blocks * q4k_block_bytes;
 
-    Q4k_Tensor *T = (uint8_t*)calloc(total_bytes, sizeof(uint8_t));
+    Q4k_Tensor *T = (uint8_t*)platform_calloc(total_bytes, sizeof(uint8_t));
 
     get_q4k_tensor_bytes(T) = total_bytes;
     get_q4k_tensor_header(T) = QUANT_TYPE_Q4K;
@@ -243,7 +243,7 @@ void quantize_one_block_q4k_in_situ(float *vec, uint32_t d, Q4k_Block *Q) {
 
 /*
 Q4k_Block *quantize_one_block_q4k(float *vec, uint32_t d) {
-    Q4k_Block *Q = (Q4k_Block*)calloc(1, sizeof(Q4k_Block));
+    Q4k_Block *Q = (Q4k_Block*)platform_calloc(1, sizeof(Q4k_Block));
     quantize_one_block_q4k_in_situ(vec, d, Q);
     return Q;
 }
@@ -515,14 +515,14 @@ void* worker_thread(void* arg) {
 
 // 初始化线程池
 ThreadPool* threadpool_init(int num_threads) {
-    ThreadPool* pool = (ThreadPool*)malloc(sizeof(ThreadPool));
+    ThreadPool* pool = (ThreadPool*)platform_malloc(sizeof(ThreadPool));
     pool->num_threads = num_threads;
     pool->task_head = pool->task_tail = NULL;
     pool->shutdown = 0;
     pthread_mutex_init(&pool->mutex, NULL);
     pthread_cond_init(&pool->cond, NULL);
     
-    pool->threads = (pthread_t*)malloc(num_threads * sizeof(pthread_t));
+    pool->threads = (pthread_t*)platform_malloc(num_threads * sizeof(pthread_t));
     for (int i = 0; i < num_threads; i++) {
         pthread_create(&pool->threads[i], NULL, worker_thread, pool);
     }
@@ -531,7 +531,7 @@ ThreadPool* threadpool_init(int num_threads) {
 
 // 提交任务到线程池
 void threadpool_submit(ThreadPool* pool, void (*func)(void*), void* arg) {
-    Task* task = (Task*)malloc(sizeof(Task));
+    Task* task = (Task*)platform_malloc(sizeof(Task));
     task->func = func;
     task->arg = arg;
     task->next = NULL;
@@ -600,7 +600,7 @@ void matmul_pthread(float* xout, float* x, float* w, int n, int d) {
             chunk_size = d - current_start;
         }
         
-        ThreadArgs* args = (ThreadArgs*)malloc(sizeof(ThreadArgs));
+        ThreadArgs* args = (ThreadArgs*)platform_malloc(sizeof(ThreadArgs));
         args->xout = xout;
         args->x = x;
         args->w = w;
@@ -664,7 +664,7 @@ void matmul_quant_pthread(float* xout, Q80_Tensor *x, Q80_Tensor *w, int n, int 
             chunk_size = d - current_start;
         }
         
-        ThreadArgsQuant* args = (ThreadArgsQuant*)malloc(sizeof(ThreadArgsQuant));
+        ThreadArgsQuant* args = (ThreadArgsQuant*)platform_malloc(sizeof(ThreadArgsQuant));
         args->xout = xout;
         args->x = x;
         args->w = w;

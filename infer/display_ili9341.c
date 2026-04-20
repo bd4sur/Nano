@@ -1394,7 +1394,7 @@ void display_hal_refresh(uint8_t *frame_buffer_rgb888, uint32_t fb_width, uint32
 
 
 void display_hal_init(void) {
-    g_frame_buffer_rgb565 = (uint16_t *)malloc(ILI9341_WIDTH * ILI9341_HEIGHT * sizeof(uint16_t));
+    g_frame_buffer_rgb565 = (uint16_t *)platform_malloc(ILI9341_WIDTH * ILI9341_HEIGHT * sizeof(uint16_t));
     memset(g_frame_buffer_rgb565, 0, ILI9341_WIDTH * ILI9341_HEIGHT * sizeof(uint16_t));
 
     if (DEV_ModuleInit() != 0) {

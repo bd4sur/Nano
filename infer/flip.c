@@ -3,7 +3,7 @@
 #include <string.h>
 #include <math.h>
 
-#include "utils.h"
+#include "platform.h"
 #include "graphics.h"
 
 #ifndef M_PI
@@ -388,9 +388,9 @@ static void update_cell_colors(FlipFluid *f) {
     memset(f->cell_color, 0, 3 * f->f_num_cells * sizeof(float));
     for (int i = 0; i < f->f_num_cells; i++) {
         if (f->cell_type[i] == SOLID_CELL) {
-            f->cell_color[3 * i]     = 0.5f;
-            f->cell_color[3 * i + 1] = 0.5f;
-            f->cell_color[3 * i + 2] = 0.5f;
+            f->cell_color[3 * i]     = 0.0f;
+            f->cell_color[3 * i + 1] = 0.0f;
+            f->cell_color[3 * i + 2] = 0.0f;
         } else if (f->cell_type[i] == FLUID_CELL) {
             float d = f->particle_density[i];
             if (f->particle_rest_density > 0.0f) d /= f->particle_rest_density;
@@ -426,13 +426,13 @@ static void draw_particle_to_framebuffer(Nano_GFX *gfx,
     int y0 = maxi(cy - radius, 0);
     int x1 = mini(cx + radius, width - 1);
     int y1 = mini(cy + radius, height - 1);
-    int r2 = radius * radius;
+    // int r2 = radius * radius;
     for (int y = y0; y <= y1; y++) {
         for (int x = x0; x <= x1; x++) {
-            int dx = x - cx, dy = y - cy;
-            if (dx * dx + dy * dy <= r2) {
+            // int dx = x - cx, dy = y - cy;
+            // if (dx * dx + dy * dy <= r2) {
                 gfx_draw_point(gfx, x+center_x, y+center_y, r, g, b, 1);
-            }
+            // }
         }
     }
 }
@@ -514,23 +514,23 @@ void flip_init(float pool_width, float pool_height) {
     f->f_inv_spacing = 1.0f / f->h;
     f->f_num_cells = f->f_num_x * f->f_num_y;
 
-    f->u = (float *)calloc(f->f_num_cells, sizeof(float));
-    f->v = (float *)calloc(f->f_num_cells, sizeof(float));
-    f->du = (float *)calloc(f->f_num_cells, sizeof(float));
-    f->dv = (float *)calloc(f->f_num_cells, sizeof(float));
-    f->prev_u = (float *)calloc(f->f_num_cells, sizeof(float));
-    f->prev_v = (float *)calloc(f->f_num_cells, sizeof(float));
-    f->p = (float *)calloc(f->f_num_cells, sizeof(float));
-    f->s = (float *)calloc(f->f_num_cells, sizeof(float));
-    f->cell_type = (int *)calloc(f->f_num_cells, sizeof(int));
-    f->cell_color = (float *)calloc(3 * f->f_num_cells, sizeof(float));
-    f->particle_density = (float *)calloc(f->f_num_cells, sizeof(float));
+    f->u = (float *)platform_calloc(f->f_num_cells, sizeof(float));
+    f->v = (float *)platform_calloc(f->f_num_cells, sizeof(float));
+    f->du = (float *)platform_calloc(f->f_num_cells, sizeof(float));
+    f->dv = (float *)platform_calloc(f->f_num_cells, sizeof(float));
+    f->prev_u = (float *)platform_calloc(f->f_num_cells, sizeof(float));
+    f->prev_v = (float *)platform_calloc(f->f_num_cells, sizeof(float));
+    f->p = (float *)platform_calloc(f->f_num_cells, sizeof(float));
+    f->s = (float *)platform_calloc(f->f_num_cells, sizeof(float));
+    f->cell_type = (int *)platform_calloc(f->f_num_cells, sizeof(int));
+    f->cell_color = (float *)platform_calloc(3 * f->f_num_cells, sizeof(float));
+    f->particle_density = (float *)platform_calloc(f->f_num_cells, sizeof(float));
 
     f->max_particles = max_particles;
-    f->particle_pos = (float *)calloc(2 * max_particles, sizeof(float));
-    f->particle_color = (float *)calloc(3 * max_particles, sizeof(float));
+    f->particle_pos = (float *)platform_calloc(2 * max_particles, sizeof(float));
+    f->particle_color = (float *)platform_calloc(3 * max_particles, sizeof(float));
     for (int i = 0; i < max_particles; i++) f->particle_color[3 * i + 2] = 1.0f;
-    f->particle_vel = (float *)calloc(2 * max_particles, sizeof(float));
+    f->particle_vel = (float *)platform_calloc(2 * max_particles, sizeof(float));
     f->particle_rest_density = 0.0f;
 
     f->particle_radius = r;
@@ -539,9 +539,9 @@ void flip_init(float pool_width, float pool_height) {
     f->p_num_y = (int)floorf(tank_height * f->p_inv_spacing) + 1;
     f->p_num_cells = f->p_num_x * f->p_num_y;
 
-    f->num_cell_particles = (int *)calloc(f->p_num_cells, sizeof(int));
-    f->first_cell_particle = (int *)calloc(f->p_num_cells + 1, sizeof(int));
-    f->cell_particle_ids = (int *)calloc(max_particles, sizeof(int));
+    f->num_cell_particles = (int *)platform_calloc(f->p_num_cells, sizeof(int));
+    f->first_cell_particle = (int *)platform_calloc(f->p_num_cells + 1, sizeof(int));
+    f->cell_particle_ids = (int *)platform_calloc(max_particles, sizeof(int));
     f->num_particles = num_x * num_y;
 
     int p = 0;

@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <math.h>
 
-#include "utils.h"
+#include "platform.h"
 #include "glyph.h"
 #include "graphics.h"
 
@@ -881,9 +881,9 @@ void dithering_fs(Nano_GFX *gfx) {
 
     // 为避免跨行误差污染，使用双行误差缓冲（当前行+下一行）
     // 误差范围：[-255, 255] → 用int16_t安全存储
-    int16_t *err_r = (int16_t *)calloc(fb_width * 2, sizeof(int16_t));
-    int16_t *err_g = (int16_t *)calloc(fb_width * 2, sizeof(int16_t));
-    int16_t *err_b = (int16_t *)calloc(fb_width * 2, sizeof(int16_t));
+    int16_t *err_r = (int16_t *)platform_calloc(fb_width * 2, sizeof(int16_t));
+    int16_t *err_g = (int16_t *)platform_calloc(fb_width * 2, sizeof(int16_t));
+    int16_t *err_b = (int16_t *)platform_calloc(fb_width * 2, sizeof(int16_t));
 
     if (!err_r || !err_g || !err_b) {
         if (err_r) free(err_r);
@@ -2553,7 +2553,7 @@ void calculate_scattered_pixel(
 // ===============================================================================
 
 void linglong_init(Linglong_Config *cfg) {
-    landscape_buffer_rgb = (uint8_t *)calloc(landscape_texture_width * landscape_texture_height * 3, sizeof(uint8_t));
+    landscape_buffer_rgb = (uint8_t *)platform_calloc(landscape_texture_width * landscape_texture_height * 3, sizeof(uint8_t));
 
     cfg->fb_width = 0;
     cfg->fb_height = 0;
