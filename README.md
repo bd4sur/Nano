@@ -57,7 +57,7 @@
 
 |<img src="./doc/nano-raspi.jpg" width="100%"><br>Nano-Pod<br>部署于树莓派5代|<img src="./doc/nano-marga.jpg" width="100%"><br>Nano-Marga<br>部署于京东云路由器|<img src="./doc/nano-a733.jpg" width="100%"><br>Nano-Card<br>部署于Cubie-A7Z|
 |:--:|:--:|:--:|
-|<img src="./doc/nano-animac.png" width="100%"><br>Nano-Animac<br>部署于自研Scheme解释器|<img src="./doc/nano-web-2.png" width="100%"><br>Nano-Web<br>部署于浏览器|<img src="./doc/nano-esp.jpg" width="100%"><br>Nano-ESP<br>部署于ESP32-P4单片机|
+|<img src="./doc/nano-animac.png" width="100%"><br>Nano-Animac<br>部署于自研Scheme解释器|<img src="./doc/nano-web-2.png" width="100%"><br>Nano-Web<br>部署于浏览器|<img src="./doc/nano-esp.jpg" width="100%"><br>Nano-ESP<br>部署于ESP32-S3单片机|
 
 ### 通用CPU推理
 
