@@ -18,7 +18,8 @@ extern "C" {
 #define LINGLONG_SUN_GLOW_RADIUS          (4)
 #define LINGLONG_MOON_RADIUS_MIN          (16.0f)
 #define LINGLONG_STAR_GLOW_RADIUS         (0)
-
+// 是否开启动态地景：动态地景需动态分配大量堆内存，若内存紧张，可关闭。同时关闭透视转鱼眼功能，详见代码。
+#define LINGLONG_ENABLE_DYNAMIC_LANDSCAPE (1)
 
 typedef struct Linglong_Config {
     int32_t fb_width;
@@ -65,7 +66,6 @@ typedef struct Linglong_Config {
 void transform_euler_angles(float pitch_in, float roll_in, float yaw_in, float *pitch_out, float *roll_out, float *yaw_out);
 void quaternion_to_euler(float q0, float q1, float q2, float q3, float *pitch, float *roll, float *yaw);
 
-void dithering_fs(Nano_GFX *gfx);
 void dithering_fast(Nano_GFX *gfx);
 
 

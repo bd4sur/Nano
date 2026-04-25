@@ -1268,21 +1268,19 @@ void ui_draw_input_symbol(Key_Event *key_event, Global_State *global_state, Widg
 // 七段码
 // ===============================================================================
 
-#define CFG_DIGIT_W      14.0f
-#define CFG_DIGIT_H      24.0f
-#define CFG_THICKNESS    2.0f
-#define CFG_GAP          2.0f
-#define CFG_SKEW_TAN     0.0f
-#define CFG_CUT_RATIO    0.2f
-#define CFG_DIGIT_GAP    6.0f
-#define CFG_COLON_W      10.0f
-#define PI               3.14159265358979323846f
+/* 笔画长度 l 与粗细 w，可自定义。整体尺寸由二者决定：
+   宽度 = l + 2*w, 高度 = 2*l + 3*w */
+#define SEG_LENGTH       8.0f
+#define SEG_THICKNESS    2.0f
+#define CFG_DIGIT_W      (SEG_LENGTH + 2.0f * SEG_THICKNESS)
+#define CFG_DIGIT_H      (2.0f * SEG_LENGTH + 3.0f * SEG_THICKNESS)
+#define CFG_DIGIT_GAP    4.0f
+#define CFG_COLON_W      8.0f
 
 /* ============================================================
-   [C] 静态常量数组: 10个数字 x 7个段 (1=点亮, 0=熄灭)
+   静态常量数组: 10个数字 x 7个段 (1=点亮, 0=熄灭)
    段索引: 0=上, 1=右上, 2=右下, 3=下, 4=左下, 5=左上, 6=中
    ============================================================ */
-
 static const int g_digit_map[10][7] = {
     {1,1,1,1,1,1,0}, /* 0 */
     {0,1,1,0,0,0,0}, /* 1 */
@@ -1296,271 +1294,128 @@ static const int g_digit_map[10][7] = {
     {1,1,1,1,0,1,1}  /* 9 */
 };
 
-/*
- * 计算倾斜六边形的6个顶点坐标
- * out_x, out_y: 调用者预分配的 float 数组，长度固定为 6
- */
-void compute_hexagon_points(float x1, float y1, float x2, float y2, float base_y, float out_x[6], float out_y[6]) {
-    float dx = x2 - x1;
-    float dy = y2 - y1;
-    float len_sq = dx * dx + dy * dy;
-    
-    if (len_sq < 1.0f) return;
-
-    float len = sqrtf(len_sq);
-
-    /* 安全切角钳制: 防止短笔画退化 */
-    float cut = CFG_THICKNESS * CFG_CUT_RATIO * 1.2f;
-    if (cut > len * 0.42f) cut = len * 0.42f;
-    float half_t = CFG_THICKNESS * 0.5f;
-
-    /* 单位方向向量与法向量 */
-    float ux = dx / len;
-    float uy = dy / len;
-    float nx = -uy;
-    float ny = ux;
-
-    /* 显式填充6个顶点 (顺时针) */
-    out_x[0] = x1;
-    out_y[0] = y1;
-    
-    out_x[1] = x1 + ux * cut + nx * half_t;
-    out_y[1] = y1 + uy * cut + ny * half_t;
-    
-    out_x[2] = x2 - ux * cut + nx * half_t;
-    out_y[2] = y2 - uy * cut + ny * half_t;
-    
-    out_x[3] = x2;
-    out_y[3] = y2;
-    
-    out_x[4] = x2 - ux * cut - nx * half_t;
-    out_y[4] = y2 - uy * cut - ny * half_t;
-    
-    out_x[5] = x1 + ux * cut - nx * half_t;
-    out_y[5] = y1 + uy * cut - ny * half_t;
-
-    /* 应用斜体变换: x' = x + (y - base_y) * tan */
-    for (int i = 0; i < 6; i++) {
-        out_x[i] = out_x[i] + (out_y[i] - base_y) * CFG_SKEW_TAN;
-    }
-}
-
-/* 计算矩形笔画的4个顶点（考虑斜体变换） */
-void compute_rectangle_points(float x1, float y1, float x2, float y2, float base_y, float out_x[4], float out_y[4]) {
-    float dx = x2 - x1;
-    float dy = y2 - y1;
-    float len_sq = dx * dx + dy * dy;
-    
-    if (len_sq < 1.0f) return;
-
-    float len = sqrtf(len_sq);
-    float half_t = CFG_THICKNESS * 0.5f;
-
-    /* 单位方向向量与法向量 */
-    float ux = dx / len;
-    float uy = dy / len;
-    float nx = -uy;
-    float ny = ux;
-
-    /* 矩形4个顶点（顺时针） */
-    out_x[0] = x1 + nx * half_t;
-    out_y[0] = y1 + ny * half_t;
-    
-    out_x[1] = x2 + nx * half_t;
-    out_y[1] = y2 + ny * half_t;
-    
-    out_x[2] = x2 - nx * half_t;
-    out_y[2] = y2 - ny * half_t;
-    
-    out_x[3] = x1 - nx * half_t;
-    out_y[3] = y1 - ny * half_t;
-
-    /* 应用斜体变换: x' = x + (y - base_y) * tan */
-    for (int i = 0; i < 4; i++) {
-        out_x[i] = out_x[i] + (out_y[i] - base_y) * CFG_SKEW_TAN;
-    }
-}
-
-/* 绘制单个六边形笔画 */
-void draw_hex_segment(Nano_GFX *gfx, float x1, float y1, float x2, float y2, float base_y, int32_t is_on) {
-    float pts_x[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    float pts_y[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-
-    compute_hexagon_points(x1, y1, x2, y2, base_y, pts_x, pts_y);
-
+static void draw_seg_rect(Nano_GFX *gfx, float x, float y, float w, float h, int32_t is_on) {
+    uint32_t rx = (uint32_t)x;
+    uint32_t ry = (uint32_t)y;
+    uint32_t rw = (uint32_t)w;
+    uint32_t rh = (uint32_t)h;
+    if (rw == 0) rw = 1;
+    if (rh == 0) rh = 1;
     if (is_on) {
-        gfx_draw_hexagon(gfx,
-            pts_x[0], pts_y[0],
-            pts_x[1], pts_y[1],
-            pts_x[2], pts_y[2],
-            pts_x[3], pts_y[3],
-            pts_x[4], pts_y[4],
-            pts_x[5], pts_y[5], 0, 128, 255, 1);
+        gfx_draw_rectangle(gfx, rx, ry, rw, rh, 255, 0, 0, 1);
     } else {
-        gfx_draw_hexagon(gfx,
-            pts_x[0], pts_y[0],
-            pts_x[1], pts_y[1],
-            pts_x[2], pts_y[2],
-            pts_x[3], pts_y[3],
-            pts_x[4], pts_y[4],
-            pts_x[5], pts_y[5], 240, 240, 240, 1);
+        gfx_draw_rectangle(gfx, rx, ry, rw, rh, 250, 250, 250, 1);
     }
 }
 
-/* 绘制单个矩形笔画 */
-void draw_rect_segment(Nano_GFX *gfx, float x1, float y1, float x2, float y2, float base_y, int32_t is_on) {
-    float pts_x[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    float pts_y[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-
-    compute_rectangle_points(x1, y1, x2, y2, base_y, pts_x, pts_y);
-
-    /* 计算矩形边界框（4个顶点相接但不重合） */
-    float min_x = pts_x[0];
-    float max_x = pts_x[0];
-    float min_y = pts_y[0];
-    float max_y = pts_y[0];
-    
-    for (int i = 1; i < 4; i++) {
-        if (pts_x[i] < min_x) min_x = pts_x[i];
-        if (pts_x[i] > max_x) max_x = pts_x[i];
-        if (pts_y[i] < min_y) min_y = pts_y[i];
-        if (pts_y[i] > max_y) max_y = pts_y[i];
-    }
-    
-    uint32_t rect_x = (uint32_t)min_x;
-    uint32_t rect_y = (uint32_t)min_y;
-    uint32_t rect_w = (uint32_t)(max_x - min_x);
-    uint32_t rect_h = (uint32_t)(max_y - min_y);
-    
-    /* 确保宽度和高度至少为1 */
-    if (rect_w == 0) rect_w = 1;
-    if (rect_h == 0) rect_h = 1;
-
-    if (is_on) {
-        gfx_draw_rectangle(gfx, rect_x, rect_y, rect_w, rect_h, 0, 128, 255, 1);
-    } else {
-        gfx_draw_rectangle(gfx, rect_x, rect_y, rect_w, rect_h, 240, 240, 240, 1);
-    }
-}
-
-/* 绘制单个数字 (0-9) */
-/* use_rect: 0-使用六边形笔画  1-使用矩形笔画 */
+/* 绘制单个数字 (0-9)
+   use_rect 参数已弃用，保留仅为兼容现有调用签名 */
 void ui_draw_7seg_digit(Nano_GFX *gfx, int num, float ox, float oy, int32_t use_rect) {
-    float w = CFG_DIGIT_W;
-    float h = CFG_DIGIT_H;
-    float g = CFG_GAP;
-    float half_h = h * 0.5f;
-    float base_y = oy;
+    (void)use_rect;
+    float l = SEG_LENGTH;
+    float w = SEG_THICKNESS;
 
-    /* [C] 显式定义7段中心线坐标，避免动态分配 */
-    float seg_x1[7], seg_y1[7], seg_x2[7], seg_y2[7];
+    /* 各段矩形坐标与尺寸 (x, y, width, height)
+       横画: l=width, w=height;  竖画: l=height, w=width
+       角点相接关系:
+       B0=D1, C0=A5, C1=A6, D2=B6, C2=A3, D3=B4, A4=C6, B5=D6 */
+    float seg_x[7], seg_y[7], seg_w[7], seg_h[7];
 
-    /* 0: 上 */
-    seg_x1[0] = g;       seg_y1[0] = g;
-    seg_x2[0] = w - g;   seg_y2[0] = g;
-    
-    /* 1: 右上 */
-    seg_x1[1] = w - g;   seg_y1[1] = g;
-    seg_x2[1] = w - g;   seg_y2[1] = half_h - g;
-    
-    /* 2: 右下 */
-    seg_x1[2] = w - g;   seg_y1[2] = half_h + g;
-    seg_x2[2] = w - g;   seg_y2[2] = h - g;
-    
-    /* 3: 下 */
-    seg_x1[3] = g;       seg_y1[3] = h - g;
-    seg_x2[3] = w - g;   seg_y2[3] = h - g;
-    
-    /* 4: 左下 */
-    seg_x1[4] = g;       seg_y1[4] = half_h + g;
-    seg_x2[4] = g;       seg_y2[4] = h - g;
-    
-    /* 5: 左上 */
-    seg_x1[5] = g;       seg_y1[5] = g;
-    seg_x2[5] = g;       seg_y2[5] = half_h - g;
-    
-    /* 6: 中 */
-    seg_x1[6] = g;       seg_y1[6] = half_h;
-    seg_x2[6] = w - g;   seg_y2[6] = half_h;
+    /* 0: 上横 */
+    seg_x[0] = ox + w;     seg_y[0] = oy;
+    seg_w[0] = l;          seg_h[0] = w;
+
+    /* 1: 右上竖 */
+    seg_x[1] = ox + w + l; seg_y[1] = oy + w;
+    seg_w[1] = w;          seg_h[1] = l;
+
+    /* 2: 右下竖 */
+    seg_x[2] = ox + w + l; seg_y[2] = oy + w + l + w;
+    seg_w[2] = w;          seg_h[2] = l;
+
+    /* 3: 下横 */
+    seg_x[3] = ox + w;     seg_y[3] = oy + w + l + w + l;
+    seg_w[3] = l;          seg_h[3] = w;
+
+    /* 4: 左下竖 */
+    seg_x[4] = ox;         seg_y[4] = oy + w + l + w;
+    seg_w[4] = w;          seg_h[4] = l;
+
+    /* 5: 左上竖 */
+    seg_x[5] = ox;         seg_y[5] = oy + w;
+    seg_w[5] = w;          seg_h[5] = l;
+
+    /* 6: 中横 */
+    seg_x[6] = ox + w;     seg_y[6] = oy + w + l;
+    seg_w[6] = l;          seg_h[6] = w;
 
     for (int i = 0; i < 7; i++) {
-        int32_t is_on = g_digit_map[num][i] == 1;
-        if (use_rect) {
-            draw_rect_segment(gfx, ox + seg_x1[i], oy + seg_y1[i], ox + seg_x2[i], oy + seg_y2[i], base_y, is_on);
-        } else {
-            draw_hex_segment(gfx, ox + seg_x1[i], oy + seg_y1[i], ox + seg_x2[i], oy + seg_y2[i], base_y, is_on);
-        }
+        draw_seg_rect(gfx, seg_x[i], seg_y[i], seg_w[i], seg_h[i], g_digit_map[num][i]);
     }
 }
 
-/* 绘制时间分隔符 (实心圆) */
+/* 绘制时间分隔符 (两个实心方块) */
 void draw_colon(Nano_GFX *gfx, float cx, float oy) {
     float h = CFG_DIGIT_H;
 
     /* 计算上下圆点中心 Y */
-    float cy1 = oy + h * 0.28f;
-    float cy2 = oy + h * 0.72f;
-    
-    /* 应用斜体 X 偏移，保持与数字倾斜视觉一致 */
-    float cx1 = cx + (cy1 - oy) * CFG_SKEW_TAN;
-    float cx2 = cx + (cy2 - oy) * CFG_SKEW_TAN;
+    float cy1 = oy + h * 0.25f;
+    float cy2 = oy + h * 0.75f;
 
     /* 上圆点 */
-    gfx_draw_rectangle(gfx, cx1-1, cy1-1, 2, 2, 0, 128, 255, 1);
+    gfx_draw_rectangle(gfx, (uint32_t)(cx - 1), (uint32_t)(cy1 - 1), 2, 2, 255, 0, 0, 1);
 
     /* 下圆点 */
-    gfx_draw_rectangle(gfx, cx2-1, cy2-1, 2, 2, 0, 128, 255, 1);
+    gfx_draw_rectangle(gfx, (uint32_t)(cx - 1), (uint32_t)(cy2 - 1), 2, 2, 255, 0, 0, 1);
 }
 
 void ui_draw_7seg_time_string(Key_Event *key_event, Global_State *global_state, int32_t xx, int32_t yy, int h, int m, int s, int t) {
     Nano_GFX *gfx = global_state->gfx;
 
-    (void)t; /* 毫秒值在渲染中未使用，标记为未使用以避免警告 */
+    (void)t;           /* 毫秒值在渲染中未使用 */
+    (void)key_event;   /* 按键事件在本渲染中未使用 */
 
     float x = (float)xx;
     float y = (float)yy;
     float w = CFG_DIGIT_W;
     float g = CFG_DIGIT_GAP;
-    float cw = CFG_COLON_W;
-    float skew_shift = w * CFG_SKEW_TAN;
+    // float cw = CFG_COLON_W;
 
     /* 十进制拆分 */
     int h1 = h / 10; int h2 = h % 10;
     int m1 = m / 10; int m2 = m % 10;
     int s1 = s / 10; int s2 = s % 10;
 
-    /* 显式线性布局 (无循环，便于后续改为硬编码或表驱动) */
-    
     /* 数字1: 时十位 */
-    ui_draw_7seg_digit(gfx, h1, x, y, 1); 
-    x += w + skew_shift + g;
-    
+    ui_draw_7seg_digit(gfx, h1, x, y, 1);
+    x += w + g;
+
     /* 数字2: 时个位 */
-    ui_draw_7seg_digit(gfx, h2, x, y, 1); 
-    x += w + skew_shift + g;
-    
+    ui_draw_7seg_digit(gfx, h2, x, y, 1);
+    x += w + g;
+
     /* 冒号1 */
-    draw_colon(gfx, x + w * 0.5f + skew_shift * 0.5f, y); 
-    x += cw + g;
-    
+    draw_colon(gfx, x + w * 0.5f, y);
+    x += w + g;
+
     /* 数字3: 分十位 */
-    ui_draw_7seg_digit(gfx, m1, x, y, 1); 
-    x += w + skew_shift + g;
-    
+    ui_draw_7seg_digit(gfx, m1, x, y, 1);
+    x += w + g;
+
     /* 数字4: 分个位 */
-    ui_draw_7seg_digit(gfx, m2, x, y, 1); 
-    x += w + skew_shift + g;
-    
+    ui_draw_7seg_digit(gfx, m2, x, y, 1);
+    x += w + g;
+
     /* 冒号2 */
-    draw_colon(gfx, x + w * 0.5f + skew_shift * 0.5f, y); 
-    x += cw + g;
-    
+    draw_colon(gfx, x + w * 0.5f, y);
+    x += w + g;
+
     /* 数字5: 秒十位 */
-    ui_draw_7seg_digit(gfx, s1, x, y, 1); 
-    x += w + skew_shift + g;
-    
+    ui_draw_7seg_digit(gfx, s1, x, y, 1);
+    x += w + g;
+
     /* 数字6: 秒个位 */
-    ui_draw_7seg_digit(gfx, s2, x, y, 1); 
-    x += w + skew_shift + g;
+    ui_draw_7seg_digit(gfx, s2, x, y, 1);
+    x += w + g;
 }
 

@@ -635,6 +635,7 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 
 void ui_app_badapple_render_frame(Key_Event *key_event, Global_State *global_state) {
 #ifdef BADAPPLE_ENABLED
+    wchar_t ba_str[20];
     uint32_t center_x = global_state->gfx->width / 2;
     uint32_t center_y = global_state->gfx->height / 2;
     if (global_state->timestamp - global_state->ba_begin_timestamp >= 100 * global_state->ba_frame_count) {
@@ -649,6 +650,10 @@ void ui_app_badapple_render_frame(Key_Event *key_event, Global_State *global_sta
                 gfx_draw_point(global_state->gfx, col + (center_x - 32), row + (center_y - 32), 255, 255, 255, (page_1 >> (32 - 1 - (col-32))) & 0x1);
             }
         }
+
+        swprintf(ba_str, 20, L"%04d / 2193", global_state->ba_frame_count);
+        gfx_draw_textline_centered(global_state->gfx, ba_str, global_state->gfx->width/2, global_state->gfx->height - 8, 255, 255, 255, 1);
+
         gfx_refresh(global_state->gfx);
         global_state->ba_frame_count++;
 
@@ -666,31 +671,31 @@ void ui_app_badapple_render_frame(Key_Event *key_event, Global_State *global_sta
 // Game of Life
 // ===============================================================================
 
-#define GOL_WIDTH (128)
-#define GOL_HEIGHT (64)
-static uint8_t gol_field[2][GOL_WIDTH][GOL_HEIGHT];
-static uint8_t gol_field_page;
-static uint64_t gol_refresh_timestamp;
+#define GOL_WIDTH (320)
+#define GOL_HEIGHT (240)
+static uint8_t s_ui_app_gol_field[2][GOL_WIDTH][GOL_HEIGHT];
+static uint8_t s_ui_app_gol_field_page;
+static uint64_t s_ui_app_gol_refresh_timestamp;
 
 void ui_app_gol_init(Key_Event *key_event, Global_State *global_state) {
-    gol_field_page = 0;
-    gol_refresh_timestamp = global_state->timestamp;
+    s_ui_app_gol_field_page = 0;
+    s_ui_app_gol_refresh_timestamp = global_state->timestamp;
     uint64_t ts = global_state->timestamp;
     for (uint32_t x = 0; x < GOL_WIDTH; x++) {
         for (uint32_t y = 0; y < GOL_HEIGHT; y++) {
             uint8_t s = random_u32(&ts) % 2;
-            gol_field[0][x][y] = s;
-            gol_field[1][x][y] = s;
+            s_ui_app_gol_field[0][x][y] = s;
+            s_ui_app_gol_field[1][x][y] = s;
         }
     }
 }
 
 void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
     // 节流：不大于50fps
-    if (global_state->timestamp - gol_refresh_timestamp < 20) {
+    if (global_state->timestamp - s_ui_app_gol_refresh_timestamp < 20) {
         return;
     }
-    gol_refresh_timestamp = global_state->timestamp;
+    s_ui_app_gol_refresh_timestamp = global_state->timestamp;
     gfx_soft_clear(global_state->gfx);
     for (uint32_t x = 0; x < GOL_WIDTH; x++) {
         for (uint32_t y = 0; y < GOL_HEIGHT; y++) {
@@ -700,15 +705,15 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
             uint32_t x_b = (x == (GOL_WIDTH-1)) ? 0 : (x+1);
             uint32_t y_a = (y == 0) ? (GOL_HEIGHT-1) : (y-1);
             uint32_t y_b = (y == (GOL_HEIGHT-1)) ? 0 : (y+1);
-            uint8_t n1 = gol_field[gol_field_page][x_a][y_a]; count += (n1 > 0) ? 1 : 0;
-            uint8_t n2 = gol_field[gol_field_page][ x ][y_a]; count += (n2 > 0) ? 1 : 0;
-            uint8_t n3 = gol_field[gol_field_page][x_b][y_a]; count += (n3 > 0) ? 1 : 0;
-            uint8_t n4 = gol_field[gol_field_page][x_a][ y ]; count += (n4 > 0) ? 1 : 0;
-            uint8_t n5 = gol_field[gol_field_page][ x ][ y ]; // self
-            uint8_t n6 = gol_field[gol_field_page][x_b][ y ]; count += (n6 > 0) ? 1 : 0;
-            uint8_t n7 = gol_field[gol_field_page][x_a][y_b]; count += (n7 > 0) ? 1 : 0;
-            uint8_t n8 = gol_field[gol_field_page][ x ][y_b]; count += (n8 > 0) ? 1 : 0;
-            uint8_t n9 = gol_field[gol_field_page][x_b][y_b]; count += (n9 > 0) ? 1 : 0;
+            uint8_t n1 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_a][y_a]; count += (n1 > 0) ? 1 : 0;
+            uint8_t n2 = s_ui_app_gol_field[s_ui_app_gol_field_page][ x ][y_a]; count += (n2 > 0) ? 1 : 0;
+            uint8_t n3 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_b][y_a]; count += (n3 > 0) ? 1 : 0;
+            uint8_t n4 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_a][ y ]; count += (n4 > 0) ? 1 : 0;
+            uint8_t n5 = s_ui_app_gol_field[s_ui_app_gol_field_page][ x ][ y ]; // self
+            uint8_t n6 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_b][ y ]; count += (n6 > 0) ? 1 : 0;
+            uint8_t n7 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_a][y_b]; count += (n7 > 0) ? 1 : 0;
+            uint8_t n8 = s_ui_app_gol_field[s_ui_app_gol_field_page][ x ][y_b]; count += (n8 > 0) ? 1 : 0;
+            uint8_t n9 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_b][y_b]; count += (n9 > 0) ? 1 : 0;
 
             uint8_t new_state = 0;
             if (n5 == 0) {
@@ -718,7 +723,7 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
                 new_state = (count == 2 || count == 3) ? 1 : 0;
             }
 
-            gol_field[1-gol_field_page][x][y] = new_state;
+            s_ui_app_gol_field[1-s_ui_app_gol_field_page][x][y] = new_state;
 
             if (new_state) {
                 gfx_draw_point(global_state->gfx, x, y, 0, 255, 255, 1);
@@ -726,7 +731,7 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
         }
     }
     gfx_refresh(global_state->gfx);
-    gol_field_page = 1 - gol_field_page;
+    s_ui_app_gol_field_page = 1 - s_ui_app_gol_field_page;
 }
 
 
@@ -735,7 +740,8 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
 // ===============================================================================
 
 void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
-    flip_init(1.33, 1);
+    float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
+    flip_init(k, 1.0f, 32);
 }
 
 void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) {
@@ -788,16 +794,30 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     int show_particles = 0;
     int show_grid      = 1;
 
+    float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
+
     render_flip(global_state->gfx, 0, 0, global_state->gfx->width, global_state->gfx->height,
-                1.33, 1,            /* pool_width, pool_height */
+                k, 1.0f, 32,     /* pool_width, pool_height, resolution */
                 gravity_x, gravity_y,    /* gravity_x, gravity_y */
-                1.5f / 60.0f,    /* dt */
+                1.52f / 60.0f,    /* dt */
                 0.9f,            /* flip_ratio */
                 50, 2,           /* num_pressure_iters, num_particle_iters */
-                1.9f,            /* over_relaxation */
+                1.6f,            /* over_relaxation */
                 1, 1,            /* compensate_drift, separate_particles */
                 show_particles, show_grid);
     gfx_refresh(global_state->gfx);
+}
+
+
+void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state) {
+    // 按A键返回主菜单
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        global_state->STATE = STATE_MAIN_MENU;
+    }
+    // 按D键刷新
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_D) {
+        ui_app_flip_init(key_event, global_state);
+    }
 }
 
 
@@ -1184,18 +1204,13 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
     ui_app_linglong_draw_full(key_event, global_state);
 
     if (global_state->is_ctrl_enabled) {
-        gfx_draw_rectangle(global_state->gfx, 2, 2, 4, 4, 255, 255, 255, 1);
         gfx_draw_rectangle(global_state->gfx, 10, 10, global_state->gfx->width - 20, global_state->gfx->height - 20, 128, 128, 128, 3);
-        gfx_draw_textline_centered(global_state->gfx, L"=== 功能选择 ===", global_state->gfx->width/2, 12+6, 0, 255, 255, 1);
-        gfx_draw_textline(global_state->gfx, L"Ctrl+1 投影算法",          12, (12+1)*2, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline(global_state->gfx, L"Ctrl+2 赤道坐标圈",        12, (12+1)*3, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline(global_state->gfx, L"Ctrl+3 地平坐标圈和方位角", 12, (12+1)*4, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline(global_state->gfx, L"Ctrl+4 黄道",              12, (12+1)*5, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline(global_state->gfx, L"Ctrl+5 天体名称标签",       12, (12+1)*6, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline(global_state->gfx, L"Ctrl+6 姿态指示",           12, (12+1)*7, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline(global_state->gfx, L"Ctrl+7 大气散射模型",       12, (12+1)*8, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline(global_state->gfx, L"Ctrl+8 地景",              12, (12+1)*9, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline(global_state->gfx, L"Ctrl+9 校准IMU",           12, (12+1)*10, 0x0, 0x0, 0x0, 1);
+        gfx_draw_textline_centered(global_state->gfx, L"=== 功能选择 ===", global_state->gfx->width/2, 12+6, 0, 0, 255, 1);
+        gfx_draw_textline_centered(global_state->gfx, L"1 投影算法    6 姿态指示",  global_state->gfx->width/2, (12+6) + (12+1)*1, 0x0, 0x0, 0x0, 1);
+        gfx_draw_textline_centered(global_state->gfx, L"2 赤道坐标    7 大气散射",  global_state->gfx->width/2, (12+6) + (12+1)*2, 0x0, 0x0, 0x0, 1);
+        gfx_draw_textline_centered(global_state->gfx, L"3 地平坐标    8 地景    ",  global_state->gfx->width/2, (12+6) + (12+1)*3, 0x0, 0x0, 0x0, 1);
+        gfx_draw_textline_centered(global_state->gfx, L"4 黄道        9 校准IMU ",  global_state->gfx->width/2, (12+6) + (12+1)*4, 0x0, 0x0, 0x0, 1);
+        gfx_draw_textline_centered(global_state->gfx, L"5 天体名称              ",  global_state->gfx->width/2, (12+6) + (12+1)*5, 0x0, 0x0, 0x0, 1);
     }
 
     gfx_refresh(global_state->gfx);
@@ -2176,11 +2191,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         ui_app_flip_render_frame(key_event, global_state);
-
-        // 按A键返回主菜单
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
-            global_state->STATE = STATE_MAIN_MENU;
-        }
+        ui_app_flip_event_handler(key_event, global_state);
 
         break;
 

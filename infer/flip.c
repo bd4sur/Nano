@@ -422,13 +422,15 @@ static void draw_particle_to_framebuffer(Nano_GFX *gfx,
     int cx, int cy, int radius,
     uint8_t r, uint8_t g, uint8_t b
 ) {
-    int x0 = maxi(cx - radius, 0);
-    int y0 = maxi(cy - radius, 0);
-    int x1 = mini(cx + radius, width - 1);
-    int y1 = mini(cy + radius, height - 1);
+    // int x0 = maxi(cx - radius, 0);
+    // int y0 = maxi(cy - radius, 0);
+    // int x1 = mini(cx + radius, width - 1);
+    // int y1 = mini(cy + radius, height - 1);
     // int r2 = radius * radius;
-    for (int y = y0; y <= y1; y++) {
-        for (int x = x0; x <= x1; x++) {
+    // for (int y = y0; y <= y1; y++) {
+    //     for (int x = x0; x <= x1; x++) {
+    for (int y = cy-1; y <= cy+1; y++) {
+        for (int x = cx-1; x <= cx+1; x++) {
             // int dx = x - cx, dy = y - cy;
             // if (dx * dx + dy * dy <= r2) {
                 gfx_draw_point(gfx, x+center_x, y+center_y, r, g, b, 1);
@@ -451,16 +453,26 @@ static void render_to_framebuffer(
 
     if (show_grid) {
         float point_size = 0.9f * f->h / scene_w * fb_w;
-        int radius = (int)(point_size * 0.5f);
+        int radius = (int)roundf(point_size * 0.5f);
         if (radius < 1) radius = 1;
         int n = f->f_num_y;
+
+        // 计算整数步长，确保均匀分布
+        // int step_x = (int)ceilf(fb_w / f->f_num_x);  // 或根据需求调整
+        // int step_y = (int)ceilf(fb_h / f->f_num_y);
+
         for (int i = 0; i < f->f_num_cells; i++) {
             int xi = i / n;
             int yi = i % n;
+
             float px = (xi + 0.5f) * f->h * c_scale;
             float py = fb_h - (yi + 0.5f) * f->h * c_scale;
-            int cx = (int)px;
-            int cy = (int)py;
+            int cx = (int)roundf(px);
+            int cy = (int)roundf(py);
+
+            // int cx = (xi + 0.5f) * step_x; // 间距是固定的整数
+            // int cy = fb_h - (yi + 0.5f) * step_y;
+
             uint8_t r = (uint8_t)clampf(f->cell_color[3 * i]     * 255.0f, 0.0f, 255.0f);
             uint8_t g = (uint8_t)clampf(f->cell_color[3 * i + 1] * 255.0f, 0.0f, 255.0f);
             uint8_t b = (uint8_t)clampf(f->cell_color[3 * i + 2] * 255.0f, 0.0f, 255.0f);
@@ -470,14 +482,14 @@ static void render_to_framebuffer(
 
     if (show_particles) {
         float point_size = 2.2f * f->particle_radius / scene_w * fb_w;
-        int radius = (int)(point_size * 0.5f);
+        int radius = (int)roundf(point_size * 0.5f);
         if (radius < 1) radius = 1;
 
         for (int i = 0; i < f->num_particles; i++) {
             float px = f->particle_pos[2 * i] * c_scale;
             float py = fb_h - f->particle_pos[2 * i + 1] * c_scale;
-            int cx = (int)px;
-            int cy = (int)py;
+            int cx = (int)roundf(px);
+            int cy = (int)roundf(py);
             uint8_t r = (uint8_t)clampf(f->particle_color[3 * i]     * 255.0f, 0.0f, 255.0f);
             uint8_t g = (uint8_t)clampf(f->particle_color[3 * i + 1] * 255.0f, 0.0f, 255.0f);
             uint8_t b = (uint8_t)clampf(f->particle_color[3 * i + 2] * 255.0f, 0.0f, 255.0f);
@@ -490,13 +502,12 @@ static void render_to_framebuffer(
 /* Public API                                                           */
 /* -------------------------------------------------------------------- */
 
-void flip_init(float pool_width, float pool_height) {
+void flip_init(float pool_width, float pool_height, int32_t resolution) {
     if (g_initialized) flip_cleanup();
 
-    int res = 32;
     float tank_height = pool_height;
     float tank_width = pool_width;
-    float h = tank_height / res;
+    float h = tank_height / resolution;
     float density = 1000.0f;
     float rel_water_height = 0.8f, rel_water_width = 0.6f;
     float r = 0.3f * h;
@@ -578,7 +589,7 @@ void flip_cleanup(void) {
 
 void render_flip(Nano_GFX *gfx,
                  int32_t center_x, int32_t center_y, int32_t width, int32_t height,
-                 int32_t pool_width, int32_t pool_height,
+                 float pool_width, float pool_height, int32_t resolution,
                  float gravity_x, float gravity_y,
                  float dt, float flip_ratio,
                  int32_t num_pressure_iters, int32_t num_particle_iters,
@@ -586,7 +597,7 @@ void render_flip(Nano_GFX *gfx,
                  int32_t separate_particles,
                  int32_t show_particles, int32_t show_grid) {
     if (!g_initialized) {
-        flip_init((float)pool_width, (float)pool_height);
+        flip_init(pool_width, pool_height, resolution);
     }
 
     FlipFluid *f = &g_fluid;
@@ -595,6 +606,6 @@ void render_flip(Nano_GFX *gfx,
                   over_relaxation, compensate_drift, separate_particles);
 
     render_to_framebuffer(gfx, center_x, center_y, width, height, f,
-                          (float)pool_width, (float)pool_height,
+                          pool_width, pool_height,
                           show_particles, show_grid);
 }

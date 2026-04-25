@@ -14,7 +14,7 @@ extern "C" {
  * Call this before the first render_flip(), or let render_flip()
  * auto-initialize on first call.
  */
-void flip_init(float pool_width, float pool_height);
+void flip_init(float pool_width, float pool_height, int32_t resolution);
 
 /*
  * Clean up all internally allocated memory.
@@ -44,7 +44,7 @@ void flip_cleanup(void);
  */
 void render_flip(Nano_GFX *gfx,
                  int32_t center_x, int32_t center_y, int32_t width, int32_t height,
-                 int32_t pool_width, int32_t pool_height,
+                 float pool_width, float pool_height, int32_t resolution,
                  float gravity_x, float gravity_y,
                  float dt, float flip_ratio,
                  int32_t num_pressure_iters, int32_t num_particle_iters,

@@ -149,7 +149,10 @@ static const wchar_t STAR_NAME[STARS_NUM][10] = {
 static uint32_t landscape_texture_width = 600;
 static uint32_t landscape_texture_height = 600;
 static uint8_t *landscape_texture_rgb = NULL;
+
+#if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
 static uint8_t *landscape_buffer_rgb = NULL;
+#endif
 
 
 // ===============================================================================
@@ -564,32 +567,53 @@ void fisheye_unproject(
  * @param {number} y - 采样点 Y 坐标 (浮点数)
  * @returns {number[]} [R, G, B]
  */
-static void bilinear_sample(uint8_t *frame_buffer, uint32_t fb_width, uint32_t fb_height, float x, float y, uint8_t *r, uint8_t *g, uint8_t *b) {
+static void bilinear_sample(uint8_t *frame_buffer, uint32_t fb_width, uint32_t fb_height, float x, float y, float *r, float *g, float *b) {
     // 边界检查
     if (x < 0 || x >= fb_width || y < 0 || y >= fb_height) {
-        *r = *g = *b = 128;
+        *r = *g = *b = 0;
         return;
     }
-    
-    uint32_t x0 = (uint32_t)floorf(x);
-    uint32_t y0 = (uint32_t)floorf(y);
-    uint32_t x1 = x0 + 1;
-    uint32_t y1 = y0 + 1;
-    
+
+    int32_t x0 = (int32_t)floorf(x);
+    int32_t y0 = (int32_t)floorf(y);
+    int32_t x1 = (x0 + 1) % fb_width;
+    int32_t y1 = MIN(y0 + 1, fb_height - 1);
+
     float dx = x - (float)x0;
     float dy = y - (float)y0;
-    float dx1 = 1 - dx;
-    float dy1 = 1 - dy;
-    
-    uint32_t idx00 = (y0 * fb_width + x0) * 3;
-    uint32_t idx10 = (y0 * fb_width + x1) * 3;
-    uint32_t idx01 = (y1 * fb_width + x0) * 3;
-    uint32_t idx11 = (y1 * fb_width + x1) * 3;
-    
-    // 对 RGBA 四个通道分别插值
-    *r = (uint8_t)MIN(255.0f, (float)frame_buffer[idx00+0] * dx1 * dy1 + (float)frame_buffer[idx10+0] * dx * dy1 + (float)frame_buffer[idx01+0] * dx1 * dy + (float)frame_buffer[idx11+0] * dx * dy);
-    *g = (uint8_t)MIN(255.0f, (float)frame_buffer[idx00+1] * dx1 * dy1 + (float)frame_buffer[idx10+1] * dx * dy1 + (float)frame_buffer[idx01+1] * dx1 * dy + (float)frame_buffer[idx11+1] * dx * dy);
-    *b = (uint8_t)MIN(255.0f, (float)frame_buffer[idx00+2] * dx1 * dy1 + (float)frame_buffer[idx10+2] * dx * dy1 + (float)frame_buffer[idx01+2] * dx1 * dy + (float)frame_buffer[idx11+2] * dx * dy);
+
+    int32_t idx00 = (y0 * fb_width + x0) * 3;
+    int32_t idx10 = (y0 * fb_width + x1) * 3;
+    int32_t idx01 = (y1 * fb_width + x0) * 3;
+    int32_t idx11 = (y1 * fb_width + x1) * 3;
+
+    uint8_t c00_r = frame_buffer[idx00 + 0];
+    uint8_t c00_g = frame_buffer[idx00 + 1];
+    uint8_t c00_b = frame_buffer[idx00 + 2];
+
+    uint8_t c10_r = frame_buffer[idx10 + 0];
+    uint8_t c10_g = frame_buffer[idx10 + 1];
+    uint8_t c10_b = frame_buffer[idx10 + 2];
+
+    uint8_t c01_r = frame_buffer[idx01 + 0];
+    uint8_t c01_g = frame_buffer[idx01 + 1];
+    uint8_t c01_b = frame_buffer[idx01 + 2];
+
+    uint8_t c11_r = frame_buffer[idx11 + 0];
+    uint8_t c11_g = frame_buffer[idx11 + 1];
+    uint8_t c11_b = frame_buffer[idx11 + 2];
+
+    float r0 = (float)c00_r + dx * (float)(c10_r - c00_r);
+    float g0 = (float)c00_g + dx * (float)(c10_g - c00_g);
+    float b0 = (float)c00_b + dx * (float)(c10_b - c00_b);
+
+    float r1 = (float)c01_r + dx * (float)(c11_r - c01_r);
+    float g1 = (float)c01_g + dx * (float)(c11_g - c01_g);
+    float b1 = (float)c01_b + dx * (float)(c11_b - c01_b);
+
+    *r = r0 + dy * (r1 - r0);
+    *g = g0 + dy * (g1 - g0);
+    *b = b0 + dy * (b1 - b0);
 }
 
 
@@ -649,16 +673,16 @@ void to_fisheye(uint8_t *inputBuffer, uint8_t *outputBuffer, uint32_t input_widt
             uint32_t srcY = (uint32_t)(centerY + rIn * sinf(theta));
 
             // 双线性插值获取颜色
-            uint8_t red = 0;
-            uint8_t green = 0;
-            uint8_t blue = 0;
+            float red = 0.0f;
+            float green = 0.0f;
+            float blue = 0.0f;
             bilinear_sample(inputBuffer, input_width, input_height, srcX, srcY, &red, &green, &blue);
 
             // 写入输出像素
             uint32_t outIdx = (y * input_width + x) * 3;
-            outputBuffer[outIdx + 0] = red;
-            outputBuffer[outIdx + 1] = green;
-            outputBuffer[outIdx + 2] = blue;
+            outputBuffer[outIdx + 0] = MIN(255, roundf(red));
+            outputBuffer[outIdx + 1] = MIN(255, roundf(green));
+            outputBuffer[outIdx + 2] = MIN(255, roundf(blue));
         }
     }
 }
@@ -856,123 +880,6 @@ void star_burst_filter(Nano_GFX *gfx, float sun_screen_x, float sun_screen_y) {
 }
 
 // 抖动：用于缓解低位深屏幕的色带现象
-/**
- * Floyd-Steinberg误差扩散抖动
- * 在RGB888缓冲区上模拟RGB565量化过程，通过误差扩散缓解色带
- * 
- * 算法原理：
- * 1. 对每个像素，先叠加累积误差得到"增强值"
- * 2. 模拟RGB565量化：R8→R5(>>3), G8→G6(>>2), B8→B5(>>3)
- * 3. 量化后还原为8bit：R5→R8(<<3|>>2), G6→G8(<<2|>>4), B5→B8(<<3|>>2)
- * 4. 计算误差 = 增强值 - 量化还原值
- * 5. 按Floyd-Steinberg权重扩散误差到邻域：
- *        [ 0      0      0    ]
- *        [ 0      X    7/16   ]
- *        [ 3/16  5/16  1/16   ]
- */
-void dithering_fs(Nano_GFX *gfx) {
-    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
-    uint32_t fb_width = gfx->width;
-    uint32_t fb_height = gfx->height;
-
-    if (!frame_buffer || fb_width <= 0 || fb_height <= 0) return;
-
-    const int32_t stride = fb_width * 3;  // RGB888每行字节数
-
-    // 为避免跨行误差污染，使用双行误差缓冲（当前行+下一行）
-    // 误差范围：[-255, 255] → 用int16_t安全存储
-    int16_t *err_r = (int16_t *)platform_calloc(fb_width * 2, sizeof(int16_t));
-    int16_t *err_g = (int16_t *)platform_calloc(fb_width * 2, sizeof(int16_t));
-    int16_t *err_b = (int16_t *)platform_calloc(fb_width * 2, sizeof(int16_t));
-
-    if (!err_r || !err_g || !err_b) {
-        if (err_r) free(err_r);
-        if (err_g) free(err_g);
-        if (err_b) free(err_b);
-        return; // 内存分配失败，静默退出
-    }
-
-    #define CLAMP(v, min, max) ((v) < (min) ? (min) : ((v) > (max) ? (max) : (v)))
-
-    for (int32_t y = 0; y < fb_height; y++) {
-        int16_t *curr_err_r = err_r + (y & 1) * fb_width;      // 双缓冲切换
-        int16_t *curr_err_g = err_g + (y & 1) * fb_width;
-        int16_t *curr_err_b = err_b + (y & 1) * fb_width;
-        int16_t *next_err_r = err_r + ((y + 1) & 1) * fb_width;
-        int16_t *next_err_g = err_g + ((y + 1) & 1) * fb_width;
-        int16_t *next_err_b = err_b + ((y + 1) & 1) * fb_width;
-
-        // 清空下一行误差缓冲（避免残留）
-        if (y + 1 < fb_height) {
-            memset(next_err_r, 0, fb_width * sizeof(int16_t));
-            memset(next_err_g, 0, fb_width * sizeof(int16_t));
-            memset(next_err_b, 0, fb_width * sizeof(int16_t));
-        }
-
-        uint8_t *row = frame_buffer + y * stride;
-
-        for (int32_t x = 0; x < fb_width; x++) {
-            // 1. 叠加累积误差（限制在合理范围防止溢出）
-            int32_t r = CLAMP(row[x * 3 + 0] + curr_err_r[x], 0, 255);
-            int32_t g = CLAMP(row[x * 3 + 1] + curr_err_g[x], 0, 255);
-            int32_t b = CLAMP(row[x * 3 + 2] + curr_err_b[x], 0, 255);
-
-            // 2. 模拟RGB565量化并还原到8bit（保留低位以维持亮度）
-            uint8_t r5 = r >> 3;          // 8bit → 5bit
-            uint8_t g6 = g >> 2;          // 8bit → 6bit
-            uint8_t b5 = b >> 3;          // 8bit → 5bit
-
-            uint8_t r_out = (r5 << 3) | (r5 >> 2);  // 5bit → 8bit (复制高位到低位)
-            uint8_t g_out = (g6 << 2) | (g6 >> 4);  // 6bit → 8bit
-            uint8_t b_out = (b5 << 3) | (b5 >> 2);  // 5bit → 8bit
-
-            // 3. 写回量化+抖动后的像素值
-            row[x * 3 + 0] = r_out;
-            row[x * 3 + 1] = g_out;
-            row[x * 3 + 2] = b_out;
-            // Alpha保持原值
-
-            // 4. 计算误差（原始增强值 - 量化还原值）
-            int32_t err_r_val = r - r_out;
-            int32_t err_g_val = g - g_out;
-            int32_t err_b_val = b - b_out;
-
-            // 5. Floyd-Steinberg误差扩散（仅传播到未处理像素）
-            if (x + 1 < fb_width) {
-                // 右侧像素 (7/16)
-                curr_err_r[x + 1] += (err_r_val * 7) >> 4;
-                curr_err_g[x + 1] += (err_g_val * 7) >> 4;
-                curr_err_b[x + 1] += (err_b_val * 7) >> 4;
-            }
-
-            if (y + 1 < fb_height) {
-                if (x > 0) {
-                    // 左下 (3/16)
-                    next_err_r[x - 1] += (err_r_val * 3) >> 4;
-                    next_err_g[x - 1] += (err_g_val * 3) >> 4;
-                    next_err_b[x - 1] += (err_b_val * 3) >> 4;
-                }
-                // 正下 (5/16)
-                next_err_r[x] += (err_r_val * 5) >> 4;
-                next_err_g[x] += (err_g_val * 5) >> 4;
-                next_err_b[x] += (err_b_val * 5) >> 4;
-
-                if (x + 1 < fb_width) {
-                    // 右下 (1/16)
-                    next_err_r[x + 1] += err_r_val >> 4;
-                    next_err_g[x + 1] += err_g_val >> 4;
-                    next_err_b[x + 1] += err_b_val >> 4;
-                }
-            }
-        }
-    }
-
-    free(err_r);
-    free(err_g);
-    free(err_b);
-}
-
-
 
 // 8x8 Bayer矩阵（预缩放至0~255范围，避免运行时乘法）
 static const uint8_t bayer8x8[64] = {
@@ -1164,15 +1071,20 @@ void draw_horizon(
 //   is_flat - 0:贴图本身就是鱼眼，无需转鱼眼  1-贴图是平面的，需要使用fov参数转鱼眼
 void update_landscape(uint8_t *landscape_source, uint32_t width, uint32_t height, int32_t is_flat, float fov) {
     if (is_flat) {
+#if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
         landscape_texture_width = width;
         landscape_texture_height = height;
         to_fisheye(landscape_source, landscape_buffer_rgb, width, height, fov);
         landscape_texture_rgb = landscape_buffer_rgb;
+#else
+        landscape_texture_width = width;
+        landscape_texture_height = height;
+        landscape_texture_rgb = landscape_source;
+#endif
     }
     else {
         landscape_texture_width = width;
         landscape_texture_height = height;
-        // memcpy(landscape_texture_rgb, landscape_source, width * height * 3);
         landscape_texture_rgb = landscape_source;
     }
 }
@@ -1676,42 +1588,11 @@ void render_moon(Nano_GFX *gfx,
             float tx = u * (float)moon_texture_width - 0.5f;
             float ty = v * (float)moon_texture_height - 0.5f;
 
-            int32_t x0 = (int32_t)floorf(tx);
-            int32_t y0 = (int32_t)floorf(ty);
-            int32_t x1 = (x0 + 1) % moon_texture_width;
-            int32_t y1 = MIN(y0 + 1, moon_texture_height - 1);
+            float texR = 0.0f;
+            float texG = 0.0f;
+            float texB = 0.0f;
 
-            float wx = tx - (float)x0;
-            float wy = ty - (float)y0;
-
-            uint8_t c00_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y0, 0);
-            uint8_t c00_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y0, 1);
-            uint8_t c00_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y0, 2);
-
-            uint8_t c10_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y0, 0);
-            uint8_t c10_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y0, 1);
-            uint8_t c10_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y0, 2);
-
-            uint8_t c01_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y1, 0);
-            uint8_t c01_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y1, 1);
-            uint8_t c01_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x0, y1, 2);
-
-            uint8_t c11_r = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y1, 0);
-            uint8_t c11_g = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y1, 1);
-            uint8_t c11_b = get_pixel_channel(moon_texture_rgb, moon_texture_width, moon_texture_height, x1, y1, 2);
-
-            // bilinear interpolation
-            float r0 = (float)c00_r + wx * (float)(c10_r - c00_r);
-            float g0 = (float)c00_g + wx * (float)(c10_g - c00_g);
-            float b0 = (float)c00_b + wx * (float)(c10_b - c00_b);
-
-            float r1 = (float)c01_r + wx * (float)(c11_r - c01_r);
-            float g1 = (float)c01_g + wx * (float)(c11_g - c01_g);
-            float b1 = (float)c01_b + wx * (float)(c11_b - c01_b);
-
-            float texR = r0 + wy * (r1 - r0);
-            float texG = g0 + wy * (g1 - g0);
-            float texB = b0 + wy * (b1 - b0);
+            bilinear_sample((uint8_t*)moon_texture_rgb, moon_texture_width, moon_texture_height, tx, ty, &texR, &texG, &texB);
 
             // 应用光照强度
             float r = roundf(texR * intensity);
@@ -2553,7 +2434,10 @@ void calculate_scattered_pixel(
 // ===============================================================================
 
 void linglong_init(Linglong_Config *cfg) {
+
+#if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
     landscape_buffer_rgb = (uint8_t *)platform_calloc(landscape_texture_width * landscape_texture_height * 3, sizeof(uint8_t));
+#endif
 
     cfg->fb_width = 0;
     cfg->fb_height = 0;

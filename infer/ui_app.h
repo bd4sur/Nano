@@ -97,6 +97,7 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state);
 
 void ui_app_flip_init(Key_Event *key_event, Global_State *global_state);
 void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state);
+void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state);
 
 
 // ===============================================================================
