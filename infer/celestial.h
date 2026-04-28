@@ -66,7 +66,6 @@ typedef struct Linglong_Config {
 void transform_euler_angles(float pitch_in, float roll_in, float yaw_in, float *pitch_out, float *roll_out, float *yaw_out);
 void quaternion_to_euler(float q0, float q1, float q2, float q3, float *pitch, float *roll, float *yaw);
 
-void dithering_fast(Nano_GFX *gfx);
 
 
 void linglong_init(Linglong_Config *cfg);

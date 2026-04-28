@@ -810,7 +810,6 @@ void quaternion_to_euler(float q0, float q1, float q2, float q3, float *pitch, f
 // ===============================================================================
 
 void star_burst_filter(Nano_GFX *gfx, float sun_screen_x, float sun_screen_y) {
-    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
     uint32_t width = gfx->width;
     uint32_t height = gfx->height;
 
@@ -824,10 +823,13 @@ void star_burst_filter(Nano_GFX *gfx, float sun_screen_x, float sun_screen_y) {
     if (ix < 0 || ix >= width || iy < 0 || iy >= height) return;
 
     // 1. 读取原图中该像素的亮度
-    int32_t idx = (iy * width + ix) * 3;
-    float r = frame_buffer[idx] / 255.f;
-    float g = frame_buffer[idx + 1] / 255.f;
-    float b = frame_buffer[idx + 2] / 255.f;
+    uint8_t r8 = 0;
+    uint8_t g8 = 0;
+    uint8_t b8 = 0;
+    gfx_get_pixel(gfx, ix, iy, &r8, &g8, &b8);
+    float r = r8 / 255.f;
+    float g = g8 / 255.f;
+    float b = b8 / 255.f;
     float lum = get_luminance(r, g, b);
 
     if (lum <= threshold) return; // 不够亮，不绘制星芒
@@ -875,58 +877,6 @@ void star_burst_filter(Nano_GFX *gfx, float sun_screen_x, float sun_screen_y) {
             if (px >= 0 && px < width && py >= 0 && py < height) {
                 gfx_add_pixel(gfx, px, py, (uint8_t)(sr * alpha), (uint8_t)(sg * alpha), (uint8_t)(sb * alpha));
             }
-        }
-    }
-}
-
-// 抖动：用于缓解低位深屏幕的色带现象
-
-// 8x8 Bayer矩阵（预缩放至0~255范围，避免运行时乘法）
-static const uint8_t bayer8x8[64] = {
-    0,  192, 48,  240, 12,  204, 60,  252,
-    128,64,  176,112,140,76,  224,160,
-    32, 224, 16,  208, 44, 236, 28,  220,
-    160,96,  144,80,  172,108,252,188,
-    8,  200, 56,  248, 4,  196, 52,  244,
-    136,72,  184,120,132,68,  216,152,
-    40, 232, 24,  216, 36, 228, 20,  212,
-    168,104,152,88,  180,116,244,180
-};
-
-// 量化误差补偿表（RGB565量化后还原的亮度偏移补偿）
-static const int8_t quant_bias[8] = {0, 1, 1, 2, 2, 3, 3, 4}; // 经验值
-
-void dithering_fast(Nano_GFX *gfx) {
-    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
-    uint32_t fb_width = gfx->width;
-    uint32_t fb_height = gfx->height;
-
-    if (!frame_buffer || fb_width <= 0 || fb_height <= 0) return;
-
-    const int32_t stride = fb_width * 3;
-
-    for (int32_t y = 0; y < fb_height; y++) {
-        uint8_t *row = frame_buffer + y * stride;
-        for (int32_t x = 0; x < fb_width; x++) {
-            uint8_t *px = row + x * 3;
-            uint8_t r = px[0], g = px[1], b = px[2];
-
-            // 1. 获取Bayer阈值（归一化到0~7范围，匹配5/6bit量化步长）
-            uint8_t threshold = bayer8x8[(y & 7) * 8 + (x & 7)] >> 5; // 0~7
-
-            // 2. 应用阈值偏移（模拟误差扩散的视觉效果）
-            int32_t r_adj = r + quant_bias[threshold];
-            int32_t g_adj = g + quant_bias[threshold];
-            int32_t b_adj = b + quant_bias[threshold];
-
-            // 3. 模拟RGB565量化并还原
-            uint8_t r5 = (r_adj > 255) ? 31 : (r_adj >> 3);
-            uint8_t g6 = (g_adj > 255) ? 63 : (g_adj >> 2);
-            uint8_t b5 = (b_adj > 255) ? 31 : (b_adj >> 3);
-
-            px[0] = (r5 << 3) | (r5 >> 2);
-            px[1] = (g6 << 2) | (g6 >> 4);
-            px[2] = (b5 << 3) | (b5 >> 2);
         }
     }
 }
@@ -992,7 +942,6 @@ void draw_horizon(
     float view_height, float sun_alt, int32_t landscape_index,
     int32_t enable_atmosphere_scattering, uint8_t atmo_r, uint8_t atmo_g, uint8_t atmo_b
 ) {
-    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
     uint32_t fb_width = gfx->width;
     uint32_t fb_height = gfx->height;
 
@@ -1055,10 +1004,16 @@ void draw_horizon(
                 float cg = (float)atmo_g * k;
                 float cb = (float)atmo_b * k;
                 float t = powf(hz / margin, 0.5f);
-                uint32_t idx = (y * fb_width + x) * 3;
-                frame_buffer[idx + 0] = (uint8_t)MIN(255.0f, ((1.0f - t) * cr + t * (float)frame_buffer[idx + 0]));
-                frame_buffer[idx + 1] = (uint8_t)MIN(255.0f, ((1.0f - t) * cg + t * (float)frame_buffer[idx + 1]));
-                frame_buffer[idx + 2] = (uint8_t)MIN(255.0f, ((1.0f - t) * cb + t * (float)frame_buffer[idx + 2]));
+
+                uint8_t bg_r8 = 0;
+                uint8_t bg_g8 = 0;
+                uint8_t bg_b8 = 0;
+                gfx_get_pixel(gfx, x, y, &bg_r8, &bg_g8, &bg_b8);
+                gfx_set_pixel(gfx, x, y,
+                    (uint8_t)MIN(255.0f,((1.0f - t) * cr + t * (float)bg_r8)),
+                    (uint8_t)MIN(255.0f,((1.0f - t) * cg + t * (float)bg_g8)),
+                    (uint8_t)MIN(255.0f,((1.0f - t) * cb + t * (float)bg_b8))
+                );
             }
         }
     }
@@ -1609,7 +1564,6 @@ void draw_star(Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float sx, float sy, float magnitude, float radius, uint8_t red, uint8_t green, uint8_t blue
 ) {
-    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
     uint32_t fb_width = gfx->width;
     uint32_t fb_height = gfx->height;
 
@@ -1622,10 +1576,14 @@ void draw_star(Nano_GFX *gfx,
     float starLumBase = magnitude_to_relative_luminance(magnitude);
 
     // 获取背景亮度用于对比度抑制
-    int32_t bgIdx = ((int32_t)sy * fb_width + (int32_t)sx) * 3;
-    float bgR = frame_buffer[bgIdx] / 255.0f;
-    float bgG = frame_buffer[bgIdx + 1] / 255.0f;
-    float bgB = frame_buffer[bgIdx + 2] / 255.0f;
+    uint8_t bg_r8 = 0;
+    uint8_t bg_g8 = 0;
+    uint8_t bg_b8 = 0;
+    gfx_get_pixel(gfx, (int32_t)sx, (int32_t)sy, &bg_r8, &bg_g8, &bg_b8);
+
+    float bgR = bg_r8 / 255.0f;
+    float bgG = bg_g8 / 255.0f;
+    float bgB = bg_b8 / 255.0f;
     float bgLum = get_luminance(bgR, bgG, bgB);
 
     // 遍历光晕区域（正方形包围圆）
@@ -1639,8 +1597,6 @@ void draw_star(Nano_GFX *gfx,
             int32_t px = (int32_t)roundf(sx + (float)dx);
             int32_t py = (int32_t)roundf(sy + (float)dy);
             if (px < 0 || px >= fb_width || py < 0 || py >= fb_height) continue;
-
-            int32_t idx = (py * fb_width + px) * 3;
 
             float starLum = 0.0f;
             if (dist <= radius) {
@@ -1666,9 +1622,7 @@ void draw_star(Nano_GFX *gfx,
             uint8_t b = MIN(255, (uint8_t)floorf(starLum * (float)blue));
 
             // 叠加到 RGB（保持白色光晕，可改为彩色）
-            frame_buffer[idx + 0] = (uint8_t)MIN(255, frame_buffer[idx + 0] + r);
-            frame_buffer[idx + 1] = (uint8_t)MIN(255, frame_buffer[idx + 1] + g);
-            frame_buffer[idx + 2] = (uint8_t)MIN(255, frame_buffer[idx + 2] + b);
+            gfx_add_pixel(gfx, px, py, r, g, b);
         }
     }
 }
@@ -2505,7 +2459,6 @@ void render_sky(Nano_GFX *gfx,
     int32_t enable_att_indicator     // 是否显示姿态指示标记
 ) {
 
-    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
     uint32_t fb_width = gfx->width;
     uint32_t fb_height = gfx->height;
 
@@ -2692,14 +2645,42 @@ void render_sky(Nano_GFX *gfx,
                     // int32_t r2 = (x-center_x)*(x-center_x) + (y-center_y)*(y-center_y);
                     // if (r2 > (sky_radius+C)*(sky_radius+C)) continue; // NOTE 将滤波范围限定在视野圆内，然而对于任意视角，这是不合理的，故注释之
 
-                    int32_t idx_11 = ((y+0) * fb_width + (x+0)) * 3;
-                    int32_t idx_12 = (x+C < fb_width)  ? (((y+0) * fb_width + (x+C)) * 3) : idx_11;
-                    int32_t idx_21 = (y+C < fb_height) ? (((y+C) * fb_width + (x+0)) * 3) : idx_11;
-                    int32_t idx_22 = ((x+C < fb_width) && (y+C < fb_height)) ? (((y+C) * fb_width + (x+C)) * 3) : idx_11;
+                    // int32_t idx_11 = ((y+0) * fb_width + (x+0)) * 3;
+                    // int32_t idx_12 = (x+C < fb_width)  ? (((y+0) * fb_width + (x+C)) * 3) : idx_11;
+                    // int32_t idx_21 = (y+C < fb_height) ? (((y+C) * fb_width + (x+0)) * 3) : idx_11;
+                    // int32_t idx_22 = ((x+C < fb_width) && (y+C < fb_height)) ? (((y+C) * fb_width + (x+C)) * 3) : idx_11;
 
-                    uint8_t r11 = frame_buffer[idx_11 + 0]; uint8_t r12 = frame_buffer[idx_12 + 0]; uint8_t r21 = frame_buffer[idx_21 + 0]; uint8_t r22 = frame_buffer[idx_22 + 0];
-                    uint8_t g11 = frame_buffer[idx_11 + 1]; uint8_t g12 = frame_buffer[idx_12 + 1]; uint8_t g21 = frame_buffer[idx_21 + 1]; uint8_t g22 = frame_buffer[idx_22 + 1];
-                    uint8_t b11 = frame_buffer[idx_11 + 2]; uint8_t b12 = frame_buffer[idx_12 + 2]; uint8_t b21 = frame_buffer[idx_21 + 2]; uint8_t b22 = frame_buffer[idx_22 + 2];
+                    uint8_t r11 = 0; uint8_t r12 = 0; uint8_t r21 = 0; uint8_t r22 = 0;
+                    uint8_t g11 = 0; uint8_t g12 = 0; uint8_t g21 = 0; uint8_t g22 = 0;
+                    uint8_t b11 = 0; uint8_t b12 = 0; uint8_t b21 = 0; uint8_t b22 = 0;
+
+                    // RGB_11
+                    gfx_get_pixel(gfx, (x+0), (y+0), &r11, &g11, &b11);
+
+                    // RGB_12
+                    if (x+C < fb_width) {
+                        gfx_get_pixel(gfx, (x+C), (y+0), &r12, &g12, &b12);
+                    }
+                    else {
+                        gfx_get_pixel(gfx, (x+0), (y+0), &r12, &g12, &b12);
+                    }
+
+                    // RGB_21
+                    if (y+C < fb_height) {
+                        gfx_get_pixel(gfx, (x+0), (y+C), &r21, &g21, &b21);
+                    }
+                    else {
+                        gfx_get_pixel(gfx, (x+0), (y+0), &r12, &g12, &b12);
+                    }
+
+                    // RGB_22
+                    if ((x+C < fb_width) && (y+C < fb_height)) {
+                        gfx_get_pixel(gfx, (x+C), (y+C), &r22, &g22, &b22);
+                    }
+                    else {
+                        gfx_get_pixel(gfx, (x+0), (y+0), &r12, &g12, &b12);
+                    }
+
 
                     // 检查并处理黑边
                     if (r11+b11+g11 == 0) {
@@ -2726,12 +2707,12 @@ void render_sky(Nano_GFX *gfx,
                     for (int32_t i = 0; i < C; i++) {
                         for (int32_t j = 0; j < C; j++) {
                             if ((x + j >= fb_width) || (y + i >= fb_height)) continue;
-                            int32_t idx = ((y+i) * fb_width + (x+j)) * 3;
                             float v = (float)i / (float)C;
                             float u = (float)j / (float)C;
-                            frame_buffer[idx + 0] = MIN(255, (uint8_t)((1-u)*(1-v)*(float)r11 + u*(1-v)*(float)r12 + (1-u)*v*(float)r21 + u*v*(float)r22));
-                            frame_buffer[idx + 1] = MIN(255, (uint8_t)((1-u)*(1-v)*(float)g11 + u*(1-v)*(float)g12 + (1-u)*v*(float)g21 + u*v*(float)g22));
-                            frame_buffer[idx + 2] = MIN(255, (uint8_t)((1-u)*(1-v)*(float)b11 + u*(1-v)*(float)b12 + (1-u)*v*(float)b21 + u*v*(float)b22));
+                            gfx_set_pixel(gfx, (x+j), (y+i),
+                                (uint8_t)((1-u)*(1-v)*(float)r11 + u*(1-v)*(float)r12 + (1-u)*v*(float)r21 + u*v*(float)r22),
+                                (uint8_t)((1-u)*(1-v)*(float)g11 + u*(1-v)*(float)g12 + (1-u)*v*(float)g21 + u*v*(float)g22),
+                                (uint8_t)((1-u)*(1-v)*(float)b11 + u*(1-v)*(float)b12 + (1-u)*v*(float)b21 + u*v*(float)b22));
                         }
                     }
                 }

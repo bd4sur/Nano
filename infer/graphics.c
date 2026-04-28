@@ -90,11 +90,84 @@ static void add_to_cache(const char *img_path, uint8_t *data, uint32_t width, ui
 }
 
 
+
+
+static inline uint16_t rgb888_to_rgb565(uint8_t r, uint8_t g, uint8_t b) {
+    // 方法1
+    // return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+
+    // 方法2
+    uint8_t r5 = (r >= 252) ? 31 : (r + 4) >> 3;
+    uint8_t g6 = (g >= 254) ? 63 : (g + 2) >> 2;
+    uint8_t b5 = (b >= 252) ? 31 : (b + 4) >> 3;
+    return (r5 << 11) | (g6 << 5) | b5;
+
+    // 方法3
+    // uint8_t r5 = (r * 31 + 127) / 255;  // 0→0, 255→31，中间均匀分布
+    // uint8_t g6 = (g * 63 + 127) / 255;  // 0→0, 255→63
+    // uint8_t b5 = (b * 31 + 127) / 255;
+    // return (r5 << 11) | (g6 << 5) | b5;
+}
+
+// #define RGB565_R(v) ((uint8_t)(((uint16_t)(v) & 0xF800) >> 8))
+// #define RGB565_G(v) ((uint8_t)(((uint16_t)(v) & 0x07E0) >> 3))
+// #define RGB565_B(v) ((uint8_t)(((uint16_t)(v) & 0x001F) << 3))
+
+static inline uint8_t RGB565_R(uint16_t c) {
+    uint8_t r = (c >> 11) & 0x1F;
+    return (r << 3) | (r >> 2);
+}
+
+static inline uint8_t RGB565_G(uint16_t c) {
+    uint8_t g = (c >> 5) & 0x3F;
+    return (g << 2) | (g >> 4);
+}
+
+static inline uint8_t RGB565_B(uint16_t c) {
+    uint8_t b = c & 0x1F;
+    return (b << 3) | (b >> 2);
+}
+
+/*
+static void convert_rgb888_to_rgb565(uint8_t *rgb888, uint16_t *rgb565, int width, int height) {
+    uint8_t *p = rgb888;
+    uint16_t *out = rgb565;
+    for (int i = 0; i < width * height; i++) {
+        uint8_t r = p[0];
+        uint8_t g = p[1];
+        uint8_t b = p[2];
+        *out++ = rgb888_to_rgb565(r, g, b);
+        p += 3;
+    }
+}
+
+static void convert_rgb565_to_rgb888(uint16_t *rgb565, uint8_t *rgb888, int width, int height) {
+    uint16_t *p = rgb565;
+    uint8_t *out = rgb888;
+    for (int i = 0; i < width * height; i++) {
+        uint16_t v = p[i];
+        *out++ = RGB565_R(v);
+        *out++ = RGB565_G(v);
+        *out++ = RGB565_B(v);
+    }
+}
+*/
+
+
+
 void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode) {
     gfx->color_mode = color_mode;
     gfx->width = width;
     gfx->height = height;
-    gfx->frame_buffer_rgb888 = (uint8_t *)platform_calloc(width * height * 3, sizeof(uint8_t));
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        gfx->frame_buffer_rgb888 = (uint8_t *)platform_calloc(width * height * 3, sizeof(uint8_t));
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        gfx->frame_buffer_rgb565 = (uint16_t *)platform_calloc(width * height, sizeof(uint16_t));
+        // NOTE 仅供测试
+        // gfx->frame_buffer_rgb888 = (uint8_t *)platform_calloc(width * height * 3, sizeof(uint8_t));
+    }
+    else return;
 
     display_hal_init();
 
@@ -109,93 +182,179 @@ void gfx_close(Nano_GFX *gfx) {
 
 
 void gfx_refresh(Nano_GFX *gfx) {
-    display_hal_refresh(gfx->frame_buffer_rgb888, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        display_hal_refresh(gfx->frame_buffer_rgb888, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        // TODO 仅供测试
+        // convert_rgb565_to_rgb888(gfx->frame_buffer_rgb565, gfx->frame_buffer_rgb888, gfx->width, gfx->height);
+        // display_hal_refresh(gfx->frame_buffer_rgb888, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
+    }
 }
 
 // 清屏函数
 void gfx_clear(Nano_GFX *gfx) {
-    memset(gfx->frame_buffer_rgb888, 0, gfx->width * gfx->height * 3);
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        memset(gfx->frame_buffer_rgb888, 0, gfx->width * gfx->height * 3);
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        memset(gfx->frame_buffer_rgb565, 0, gfx->width * gfx->height * sizeof(uint16_t));
+    }
     gfx_refresh(gfx);
 }
 
 // 清屏函数
 void gfx_soft_clear(Nano_GFX *gfx) {
-    memset(gfx->frame_buffer_rgb888, 0, gfx->width * gfx->height * 3);
-    // gfx_refresh(gfx);
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        memset(gfx->frame_buffer_rgb888, 0, gfx->width * gfx->height * 3);
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        memset(gfx->frame_buffer_rgb565, 0, gfx->width * gfx->height * sizeof(uint16_t));
+    }
 }
 
 // 用纯白色填充整个屏幕
 void gfx_fill_white(Nano_GFX *gfx) {
-    memset(gfx->frame_buffer_rgb888, 255, gfx->width * gfx->height * 3);
-    // gfx_refresh(gfx);
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        memset(gfx->frame_buffer_rgb888, 255, gfx->width * gfx->height * 3);
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        memset(gfx->frame_buffer_rgb565, 0xFF, gfx->width * gfx->height * sizeof(uint16_t));
+    }
+}
+
+
+void gfx_get_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t *r, uint8_t *g, uint8_t *b) {
+    if (x < 0 || y < 0 || x >= gfx->width || y >= gfx->height) {
+        *r = 0; *g = 0; *b = 0;
+        return;
+    }
+    else {
+        if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+            uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+            uint32_t fb_width = gfx->width;
+            uint32_t i = (y * fb_width + x) * 3;
+            *r = frame_buffer[i+0];
+            *g = frame_buffer[i+1];
+            *b = frame_buffer[i+2];
+        }
+        else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+            uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
+            uint32_t fb_width = gfx->width;
+            uint32_t i = y * fb_width + x;
+            uint16_t v = frame_buffer[i];
+            *r = RGB565_R(v);
+            *g = RGB565_G(v);
+            *b = RGB565_B(v);
+        }
+    }
 }
 
 // 设置像素
 inline void gfx_set_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b) {
-    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
-    uint32_t fb_width = gfx->width;
-    uint32_t i = (y * fb_width + x) * 3;
-    frame_buffer[ i ] = MIN(255, r);
-    frame_buffer[i+1] = MIN(255, g);
-    frame_buffer[i+2] = MIN(255, b);
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+        uint32_t fb_width = gfx->width;
+        uint32_t i = (y * fb_width + x) * 3;
+        frame_buffer[ i ] = MIN(255, r);
+        frame_buffer[i+1] = MIN(255, g);
+        frame_buffer[i+2] = MIN(255, b);
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
+        uint32_t fb_width = gfx->width;
+        uint32_t i = y * fb_width + x;
+        frame_buffer[i] = rgb888_to_rgb565(MIN(255, r), MIN(255, g), MIN(255, b));
+    }
 }
 
 // 叠加像素
 inline void gfx_add_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b) {
-    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
-    uint32_t fb_width = gfx->width;
-    uint32_t i = (y * fb_width + x) * 3;
-    frame_buffer[ i ] = MIN(255, frame_buffer[ i ] + r);
-    frame_buffer[i+1] = MIN(255, frame_buffer[i+1] + g);
-    frame_buffer[i+2] = MIN(255, frame_buffer[i+2] + b);
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+        uint32_t fb_width = gfx->width;
+        uint32_t i = (y * fb_width + x) * 3;
+        frame_buffer[ i ] = MIN(255, frame_buffer[ i ] + r);
+        frame_buffer[i+1] = MIN(255, frame_buffer[i+1] + g);
+        frame_buffer[i+2] = MIN(255, frame_buffer[i+2] + b);
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
+        uint32_t fb_width = gfx->width;
+        uint32_t i = y * fb_width + x;
+        uint16_t v = frame_buffer[i];
+        frame_buffer[i] = rgb888_to_rgb565(
+            MIN(255, RGB565_R(v) + r),
+            MIN(255, RGB565_G(v) + g),
+            MIN(255, RGB565_B(v) + b));
+    }
 }
 
 // 数乘像素
 inline void gfx_scale_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, float k) {
-    uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
-    uint32_t fb_width = gfx->width;
-    uint32_t i = (y * fb_width + x) * 3;
-    frame_buffer[ i ] = MIN(255, (uint8_t)(k * (float)frame_buffer[ i ]));
-    frame_buffer[i+1] = MIN(255, (uint8_t)(k * (float)frame_buffer[i+1]));
-    frame_buffer[i+2] = MIN(255, (uint8_t)(k * (float)frame_buffer[i+2]));
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+        uint32_t fb_width = gfx->width;
+        uint32_t i = (y * fb_width + x) * 3;
+        frame_buffer[ i ] = MIN(255, (uint8_t)(k * (float)frame_buffer[ i ]));
+        frame_buffer[i+1] = MIN(255, (uint8_t)(k * (float)frame_buffer[i+1]));
+        frame_buffer[i+2] = MIN(255, (uint8_t)(k * (float)frame_buffer[i+2]));
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
+        uint32_t fb_width = gfx->width;
+        uint32_t i = y * fb_width + x;
+        uint16_t v = frame_buffer[i];
+        frame_buffer[i] = rgb888_to_rgb565(
+            MIN(255, (uint8_t)(k * (float)(RGB565_R(v)))),
+            MIN(255, (uint8_t)(k * (float)(RGB565_G(v)))),
+            MIN(255, (uint8_t)(k * (float)(RGB565_B(v)))));
+    }
+}
+
+// 反转像素
+inline void gfx_reverse_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y) {
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+        uint32_t fb_width = gfx->width;
+        uint32_t i = (y * fb_width + x) * 3;
+        uint8_t r = frame_buffer[i+0];
+        uint8_t g = frame_buffer[i+1];
+        uint8_t b = frame_buffer[i+2];
+        frame_buffer[ i ] = (r == 0) ? 255 : 0;
+        frame_buffer[i+1] = (g == 0) ? 255 : 0;
+        frame_buffer[i+2] = (b == 0) ? 255 : 0;
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
+        uint32_t fb_width = gfx->width;
+        uint32_t i = y * fb_width + x;
+        frame_buffer[i] = (frame_buffer[i] == 0) ? 0xFFFF : 0;
+    }
 }
 
 // 画点
 // mode: 0-置黑  1-置色  2-异或  3-加色
 void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
-    if (x >= gfx->width || y >= gfx->height) {
+    if (x < 0 || y < 0 || x >= gfx->width || y >= gfx->height) {
         return;
     }
 
-    uint32_t idx = (y * gfx->width + x) * 3;
-
+    // 置0
     if (mode == 0) {
-        gfx->frame_buffer_rgb888[idx+0] = 0;
-        gfx->frame_buffer_rgb888[idx+1] = 0;
-        gfx->frame_buffer_rgb888[idx+2] = 0;
+        gfx_set_pixel(gfx, x, y, 0, 0, 0);
     }
+    // 正常置位
     else if (mode == 1) {
-        gfx->frame_buffer_rgb888[idx+0] = MIN(255, red);
-        gfx->frame_buffer_rgb888[idx+1] = MIN(255, green);
-        gfx->frame_buffer_rgb888[idx+2] = MIN(255, blue);
+        gfx_set_pixel(gfx, x, y, red, green, blue);
     }
+    // 反转
     else if (mode == 2) {
-        uint8_t r = gfx->frame_buffer_rgb888[idx+0];
-        uint8_t g = gfx->frame_buffer_rgb888[idx+1];
-        uint8_t b = gfx->frame_buffer_rgb888[idx+2];
-
-        gfx->frame_buffer_rgb888[idx+0] = (r == 0) ? 255 : 0;
-        gfx->frame_buffer_rgb888[idx+1] = (g == 0) ? 255 : 0;
-        gfx->frame_buffer_rgb888[idx+2] = (b == 0) ? 255 : 0;
+        gfx_reverse_pixel(gfx, x, y);
     }
+    // 叠加
     else {
-        uint8_t r = gfx->frame_buffer_rgb888[idx+0];
-        uint8_t g = gfx->frame_buffer_rgb888[idx+1];
-        uint8_t b = gfx->frame_buffer_rgb888[idx+2];
-
-        gfx->frame_buffer_rgb888[idx+0] = MIN(255, r + red);
-        gfx->frame_buffer_rgb888[idx+1] = MIN(255, g + green);
-        gfx->frame_buffer_rgb888[idx+2] = MIN(255, b + blue);
+        gfx_add_pixel(gfx, x, y, red, green, blue);
     }
 }
 
@@ -867,6 +1026,109 @@ const uint8_t *gfx_get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width,
     }
 }
 
+
+
+
+
+
+
+
+
+// 抖动：用于缓解低位深屏幕的色带现象
+
+// 8x8 Bayer矩阵（预缩放至0~255范围，避免运行时乘法）
+static const uint8_t bayer8x8[64] = {
+    0,  192, 48,  240, 12,  204, 60,  252,
+    128,64,  176,112,140,76,  224,160,
+    32, 224, 16,  208, 44, 236, 28,  220,
+    160,96,  144,80,  172,108,252,188,
+    8,  200, 56,  248, 4,  196, 52,  244,
+    136,72,  184,120,132,68,  216,152,
+    40, 232, 24,  216, 36, 228, 20,  212,
+    168,104,152,88,  180,116,244,180
+};
+
+// 量化误差补偿表（RGB565量化后还原的亮度偏移补偿）
+static const int8_t quant_bias[8] = {0, 1, 1, 2, 2, 3, 3, 4}; // 经验值
+
+void gfx_dithering(Nano_GFX *gfx) {
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
+
+    if (fb_width <= 0 || fb_height <= 0) return;
+
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+        if (!frame_buffer) return;
+
+        const int32_t stride = fb_width * 3;
+
+        for (int32_t y = 0; y < fb_height; y++) {
+            uint8_t *row = frame_buffer + y * stride;
+            for (int32_t x = 0; x < fb_width; x++) {
+                uint8_t *px = row + x * 3;
+                uint8_t r = px[0], g = px[1], b = px[2];
+
+                // 1. 获取Bayer阈值（归一化到0~7范围，匹配5/6bit量化步长）
+                uint8_t threshold = bayer8x8[(y & 7) * 8 + (x & 7)] >> 5; // 0~7
+
+                // 2. 应用阈值偏移（模拟误差扩散的视觉效果）
+                int32_t r_adj = r + quant_bias[threshold];
+                int32_t g_adj = g + quant_bias[threshold];
+                int32_t b_adj = b + quant_bias[threshold];
+
+                // 3. 模拟RGB565量化并还原
+                uint8_t r5 = (r_adj > 255) ? 31 : (r_adj >> 3);
+                uint8_t g6 = (g_adj > 255) ? 63 : (g_adj >> 2);
+                uint8_t b5 = (b_adj > 255) ? 31 : (b_adj >> 3);
+
+                px[0] = (r5 << 3) | (r5 >> 2);
+                px[1] = (g6 << 2) | (g6 >> 4);
+                px[2] = (b5 << 3) | (b5 >> 2);
+            }
+        }
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
+        if (!frame_buffer) return;
+
+        for (int32_t y = 0; y < fb_height; y++) {
+            for (int32_t x = 0; x < fb_width; x++) {
+                uint32_t i = y * fb_width + x;
+                uint16_t v = frame_buffer[i];
+
+                uint8_t r = RGB565_R(v);
+                uint8_t g = RGB565_G(v);
+                uint8_t b = RGB565_B(v);
+
+                // 1. 获取Bayer阈值（归一化到0~7范围，匹配5/6bit量化步长）
+                uint8_t threshold = bayer8x8[(y & 7) * 8 + (x & 7)] >> 5; // 0~7
+
+                // 2. 应用阈值偏移（模拟误差扩散的视觉效果）
+                int32_t r_adj = r + quant_bias[threshold];
+                int32_t g_adj = g + quant_bias[threshold];
+                int32_t b_adj = b + quant_bias[threshold];
+
+                // 3. 量化到RGB565
+                frame_buffer[i] = rgb888_to_rgb565(
+                    (r_adj > 255) ? 255 : (uint8_t)r_adj,
+                    (g_adj > 255) ? 255 : (uint8_t)g_adj,
+                    (b_adj > 255) ? 255 : (uint8_t)b_adj
+                );
+            }
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
+
 // 从指定文件读取图像并绘制到 frame_buffer（带缓存）
 // img_path: 图像文件路径
 // x0, y0: 目标区域左上角坐标
@@ -940,10 +1202,7 @@ void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uin
             uint32_t src_idx = (src_y * width + src_x) * 3;
             
             // 写入frame_buffer
-            uint32_t idx = (y * gfx->width + x) * 3;
-            gfx->frame_buffer_rgb888[idx+0] = MIN(255, draw_data[src_idx]);
-            gfx->frame_buffer_rgb888[idx+1] = MIN(255, draw_data[src_idx + 1]);
-            gfx->frame_buffer_rgb888[idx+2] = MIN(255, draw_data[src_idx + 2]);
+            gfx_set_pixel(gfx, x, y, draw_data[src_idx], draw_data[src_idx + 1], draw_data[src_idx + 2]);
         }
     }
 }

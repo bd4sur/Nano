@@ -25,6 +25,7 @@ typedef struct {
 
     // 通用帧缓冲
     uint8_t *frame_buffer_rgb888;
+    uint16_t *frame_buffer_rgb565;
     uint32_t width;
     uint32_t height;
 
@@ -44,9 +45,12 @@ void gfx_clear(Nano_GFX *gfx);
 void gfx_soft_clear(Nano_GFX *gfx);
 void gfx_fill_white(Nano_GFX *gfx);
 
+void gfx_get_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t *r, uint8_t *g, uint8_t *b);
+
 void gfx_set_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b);
 void gfx_add_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b);
 void gfx_scale_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, float k);
+void gfx_reverse_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y);
 
 void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
@@ -65,6 +69,8 @@ void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y
 void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch);
 
 const uint8_t *gfx_get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uint8_t *font_height);
+
+void gfx_dithering(Nano_GFX *gfx);
 
 #ifdef __cplusplus
 }
