@@ -52,6 +52,8 @@ typedef struct {
     int *first_cell_particle;
     int *cell_particle_ids;
     int num_particles;
+
+    int hourglass_enabled;
 } FlipFluid;
 
 static FlipFluid g_fluid;
@@ -75,6 +77,57 @@ static inline int cell_type_safe(const int *cell_type, int idx, int num_cells) {
     if (idx < 0 || idx >= num_cells) return SOLID_CELL;
     return cell_type[idx];
 }
+
+/* ---------- hourglass helpers ---------- */
+
+static int is_in_funnel_neck(FlipFluid *f, int xi, int yi)
+{
+    float half_y = f->f_num_y / 2.0f;
+    float neck_width = 1.0f;
+    if (fabsf(yi - half_y) <= neck_width) {
+        int in_left  = (xi >= yi - 1);
+        int in_right = (xi <= f->f_num_y - yi + 1);
+        return in_left && in_right;
+    }
+    return 0;
+}
+
+static void apply_funnel_neck_damping(FlipFluid *f, float dt, float damping_coeff)
+{
+    if (damping_coeff <= 0.0f || !f->hourglass_enabled)
+        return;
+
+    float half_y = f->f_num_y / 2.0f;
+    int n = f->f_num_y;
+    float decay_base = expf(-damping_coeff * dt * 60.0f);
+
+    /* A. grid velocity damping */
+    for (int i = 1; i < f->f_num_x - 1; i++) {
+        for (int j = 1; j < f->f_num_y - 1; j++) {
+            int cell_nr = i * n + j;
+            if (f->cell_type[cell_nr] != FLUID_CELL)
+                continue;
+            if (fabsf(j - half_y) <= 1.0f && is_in_funnel_neck(f, i, j)) {
+                f->v[cell_nr] *= powf(decay_base, 1.5f);
+                f->u[cell_nr] *= powf(decay_base, 0.3f);
+            }
+        }
+    }
+
+    /* B. particle velocity damping */
+    for (int p = 0; p < f->num_particles; p++) {
+        float x = f->particle_pos[2 * p];
+        float y = f->particle_pos[2 * p + 1];
+        int xi = (int)floorf(x * f->f_inv_spacing);
+        int yi = (int)floorf(y * f->f_inv_spacing);
+        if (is_in_funnel_neck(f, xi, yi)) {
+            f->particle_vel[2 * p + 1] *= powf(decay_base, 1.5f);
+            f->particle_vel[2 * p]     *= powf(decay_base, 0.3f);
+        }
+    }
+}
+
+/* ---------- particle dynamics ---------- */
 
 static void integrate_particles(FlipFluid *f, float dt, float gravity_x, float gravity_y) {
     for (int i = 0; i < f->num_particles; i++) {
@@ -170,10 +223,57 @@ static void handle_particle_collisions(FlipFluid *f) {
     float r = f->particle_radius;
     float min_x = h + r, max_x = (f->f_num_x - 1) * h - r;
     float min_y = h + r, max_y = (f->f_num_y - 1) * h - r;
+    float inv_sqrt2 = 1.0f / sqrtf(2.0f);
 
     for (int i = 0; i < f->num_particles; i++) {
         float x = f->particle_pos[2 * i];
         float y = f->particle_pos[2 * i + 1];
+
+        /* hourglass wall collision */
+        if (f->hourglass_enabled) {
+            float half_y = f->f_num_y / 2.0f;
+            int xi = (int)floorf(x * f->f_inv_spacing);
+            int yi = (int)floorf(y * f->f_inv_spacing);
+
+            int in_solid = 0;
+            float nx = 0.0f, ny = 0.0f;
+            float penetration = 0.0f;
+
+            if (xi < yi && yi < half_y) {
+                in_solid = 1;
+                nx =  inv_sqrt2; ny = -inv_sqrt2;
+                penetration = -(x - y) * inv_sqrt2;
+            }
+            else if (xi > yi && yi > half_y) {
+                in_solid = 1;
+                nx = -inv_sqrt2; ny =  inv_sqrt2;
+                penetration =  (x - y) * inv_sqrt2;
+            }
+            else if (xi < f->f_num_y - yi && yi > half_y) {
+                in_solid = 1;
+                nx = inv_sqrt2; ny = inv_sqrt2;
+                penetration = -(x + y - f->f_num_y * h) * inv_sqrt2;
+            }
+            else if (xi > f->f_num_y - yi && yi < half_y) {
+                in_solid = 1;
+                nx = -inv_sqrt2; ny = -inv_sqrt2;
+                penetration =  (x + y - f->f_num_y * h) * inv_sqrt2;
+            }
+
+            if (in_solid && penetration > 0.0f) {
+                float push_dist = penetration + r * 0.5f;
+                x += nx * push_dist;
+                y += ny * push_dist;
+
+                float vn = f->particle_vel[2*i] * nx + f->particle_vel[2*i+1] * ny;
+                if (vn < 0.0f) {
+                    f->particle_vel[2*i]     -= vn * nx;
+                    f->particle_vel[2*i + 1] -= vn * ny;
+                }
+            }
+        }
+
+        /* domain boundary collision */
         if (x < min_x) { x = min_x; f->particle_vel[2 * i] = 0.0f; }
         if (x > max_x) { x = max_x; f->particle_vel[2 * i] = 0.0f; }
         if (y < min_y) { y = min_y; f->particle_vel[2 * i + 1] = 0.0f; }
@@ -308,12 +408,13 @@ static void transfer_velocities(FlipFluid *f, int to_grid, float flip_ratio) {
     }
 }
 
-static void solve_incompressibility(FlipFluid *f, int num_iters, float dt, float over_relaxation, int compensate_drift) {
+static void solve_incompressibility(FlipFluid *f, int num_iters, float dt, float over_relaxation, int compensate_drift, float funnel_pressure_resistance) {
     memset(f->p, 0, f->f_num_cells * sizeof(float));
     memcpy(f->prev_u, f->u, f->f_num_cells * sizeof(float));
     memcpy(f->prev_v, f->v, f->f_num_cells * sizeof(float));
     int n = f->f_num_y;
     float cp = f->density * f->h / dt;
+    float half_y = f->f_num_y / 2.0f;
 
     for (int iter = 0; iter < num_iters; iter++) {
         for (int i = 1; i < f->f_num_x - 1; i++) {
@@ -329,6 +430,16 @@ static void solve_incompressibility(FlipFluid *f, int num_iters, float dt, float
                 float s = sx0 + sx1 + sy0 + sy1;
                 if (s == 0.0f) continue;
                 float div = f->u[right] - f->u[center] + f->v[top] - f->v[center];
+
+                /* funnel pressure resistance */
+                if (f->hourglass_enabled && funnel_pressure_resistance > 0.0f && fabsf(j - half_y) <= 1.0f) {
+                    if (is_in_funnel_neck(f, i, j)) {
+                        float vy_avg = (f->v[center] + f->v[top]) * 0.5f;
+                        float resistance = funnel_pressure_resistance * vy_avg * dt;
+                        div += resistance;
+                    }
+                }
+
                 if (f->particle_rest_density > 0.0f && compensate_drift) {
                     float compression = f->particle_density[center] - f->particle_rest_density;
                     if (compression > 0.0f) div -= 1.0f * compression;
@@ -401,16 +512,18 @@ static void update_cell_colors(FlipFluid *f) {
 
 static void simulate_step(FlipFluid *f, float dt, float gravity_x, float gravity_y,
                           float flip_ratio, int num_pressure_iters, int num_particle_iters,
-                          float over_relaxation, int compensate_drift, int separate_particles) {
+                          float over_relaxation, int compensate_drift, int separate_particles,
+                          float funnel_neck_damping, float funnel_pressure_resistance) {
     int num_sub_steps = 1;
     float sdt = dt / num_sub_steps;
     for (int step = 0; step < num_sub_steps; step++) {
         integrate_particles(f, sdt, gravity_x, gravity_y);
         if (separate_particles) push_particles_apart(f, num_particle_iters);
         handle_particle_collisions(f);
+        apply_funnel_neck_damping(f, sdt, funnel_neck_damping);
         transfer_velocities(f, 1, 0.0f);
         update_particle_density(f);
-        solve_incompressibility(f, num_pressure_iters, sdt, over_relaxation, compensate_drift);
+        solve_incompressibility(f, num_pressure_iters, sdt, over_relaxation, compensate_drift, funnel_pressure_resistance);
         transfer_velocities(f, 0, flip_ratio);
     }
     update_particle_colors(f);
@@ -422,19 +535,9 @@ static void draw_particle_to_framebuffer(Nano_GFX *gfx,
     int cx, int cy, int radius,
     uint8_t r, uint8_t g, uint8_t b
 ) {
-    // int x0 = maxi(cx - radius, 0);
-    // int y0 = maxi(cy - radius, 0);
-    // int x1 = mini(cx + radius, width - 1);
-    // int y1 = mini(cy + radius, height - 1);
-    // int r2 = radius * radius;
-    // for (int y = y0; y <= y1; y++) {
-    //     for (int x = x0; x <= x1; x++) {
     for (int y = cy-1; y <= cy+1; y++) {
         for (int x = cx-1; x <= cx+1; x++) {
-            // int dx = x - cx, dy = y - cy;
-            // if (dx * dx + dy * dy <= r2) {
-                gfx_draw_point(gfx, x+center_x, y+center_y, r, g, b, 1);
-            // }
+            gfx_draw_point(gfx, x+center_x, y+center_y, r, g, b, 1);
         }
     }
 }
@@ -457,10 +560,6 @@ static void render_to_framebuffer(
         if (radius < 1) radius = 1;
         int n = f->f_num_y;
 
-        // 计算整数步长，确保均匀分布
-        // int step_x = (int)ceilf(fb_w / f->f_num_x);  // 或根据需求调整
-        // int step_y = (int)ceilf(fb_h / f->f_num_y);
-
         for (int i = 0; i < f->f_num_cells; i++) {
             int xi = i / n;
             int yi = i % n;
@@ -469,9 +568,6 @@ static void render_to_framebuffer(
             float py = fb_h - (yi + 0.5f) * f->h * c_scale;
             int cx = (int)roundf(px);
             int cy = (int)roundf(py);
-
-            // int cx = (xi + 0.5f) * step_x; // 间距是固定的整数
-            // int cy = fb_h - (yi + 0.5f) * step_y;
 
             uint8_t r = (uint8_t)clampf(f->cell_color[3 * i]     * 255.0f, 0.0f, 255.0f);
             uint8_t g = (uint8_t)clampf(f->cell_color[3 * i + 1] * 255.0f, 0.0f, 255.0f);
@@ -502,14 +598,14 @@ static void render_to_framebuffer(
 /* Public API                                                           */
 /* -------------------------------------------------------------------- */
 
-void flip_init(float pool_width, float pool_height, int32_t resolution) {
+void flip_init(float pool_width, float pool_height, int32_t resolution, int32_t hourglass_enabled) {
     if (g_initialized) flip_cleanup();
 
     float tank_height = pool_height;
     float tank_width = pool_width;
     float h = tank_height / resolution;
     float density = 1000.0f;
-    float rel_water_height = 0.8f, rel_water_width = 0.6f;
+    float rel_water_height = 0.5f, rel_water_width = 0.3f;
     float r = 0.3f * h;
     float dx = 2.0f * r;
     float dy = sqrtf(3.0f) / 2.0f * dx;
@@ -518,6 +614,7 @@ void flip_init(float pool_width, float pool_height, int32_t resolution) {
     int max_particles = num_x * num_y;
 
     FlipFluid *f = &g_fluid;
+    f->hourglass_enabled = hourglass_enabled;
     f->density = density;
     f->f_num_x = (int)floorf(tank_width / h) + 1;
     f->f_num_y = (int)floorf(tank_height / h) + 1;
@@ -568,6 +665,13 @@ void flip_init(float pool_width, float pool_height, int32_t resolution) {
         for (int j = 0; j < f->f_num_y; j++) {
             float s = 1.0f;
             if (i == 0 || i == f->f_num_x - 1 || j == 0) s = 0.0f;
+            if (f->hourglass_enabled) {
+                float half_y = f->f_num_y / 2.0f;
+                if ((i < j && j < half_y) || (i > j && j > half_y) ||
+                    (i < f->f_num_y - j && j > half_y) || (i > f->f_num_y - j && j < half_y)) {
+                    s = 0.0f;
+                }
+            }
             f->s[i * n + j] = s;
         }
     }
@@ -595,15 +699,17 @@ void render_flip(Nano_GFX *gfx,
                  int32_t num_pressure_iters, int32_t num_particle_iters,
                  float over_relaxation, int32_t compensate_drift,
                  int32_t separate_particles,
-                 int32_t show_particles, int32_t show_grid) {
+                 int32_t show_particles, int32_t show_grid,
+                 float funnel_neck_damping, float funnel_pressure_resistance) {
     if (!g_initialized) {
-        flip_init(pool_width, pool_height, resolution);
+        flip_init(pool_width, pool_height, resolution, 0);
     }
 
     FlipFluid *f = &g_fluid;
     simulate_step(f, dt, gravity_x, gravity_y, flip_ratio,
                   num_pressure_iters, num_particle_iters,
-                  over_relaxation, compensate_drift, separate_particles);
+                  over_relaxation, compensate_drift, separate_particles,
+                  funnel_neck_damping, funnel_pressure_resistance);
 
     render_to_framebuffer(gfx, center_x, center_y, width, height, f,
                           pool_width, pool_height,

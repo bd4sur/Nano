@@ -741,7 +741,7 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
 
 void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
-    flip_init(k, 1.0f, 32);
+    flip_init(k, 1.0f, 32, 1);
 }
 
 void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) {
@@ -791,7 +791,7 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
 
 #endif
 
-    int show_particles = 0;
+    int show_particles = 1;
     int show_grid      = 1;
 
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
@@ -804,7 +804,8 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
                 50, 2,           /* num_pressure_iters, num_particle_iters */
                 1.6f,            /* over_relaxation */
                 1, 1,            /* compensate_drift, separate_particles */
-                show_particles, show_grid);
+                show_particles, show_grid,
+                0.6f, 0.3f);     /* funnel_neck_damping, funnel_pressure_resistance */
     gfx_refresh(global_state->gfx);
 }
 
