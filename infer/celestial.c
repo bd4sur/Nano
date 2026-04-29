@@ -763,7 +763,7 @@ void quaternion_to_euler(float q0, float q1, float q2, float q3, float *pitch, f
     const float w = q0;
     
     const float RAD2DEG = 180.0f / M_PI;
-    const float EPS = 1e-6f;
+    const float epsilon = 1e-6f;
     
     // ── 第一步：四元数 → 3×3 旋转矩阵 (R = Rz(yaw)*Rx(pitch)*Ry(roll)) ──
     const float R00 = 1.0f - 2.0f * (y*y + z*z);
@@ -787,7 +787,7 @@ void quaternion_to_euler(float q0, float q1, float q2, float q3, float *pitch, f
     
     float roll_rad, yaw_rad;
     
-    if (fabsf(cos_pitch) > EPS) {
+    if (fabsf(cos_pitch) > epsilon) {
         // 正常情况：无万向锁
         roll_rad = atan2f(-R20, R22);
         yaw_rad  = atan2f(-R01, R11);

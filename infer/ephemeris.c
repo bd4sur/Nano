@@ -145,7 +145,7 @@ static int64_t days_since_1583(int32_t y, int32_t m, int32_t d) {
 static int64_t days_prd(int32_t y1, int32_t m1, int32_t d1,
                  int32_t y2, int32_t m2, int32_t d2) {
     int64_t days1 = days_since_1583(y1, m1, d1);
-    int64_t days2 = days_since_1583(y2, m2, d2)s;
+    int64_t days2 = days_since_1583(y2, m2, d2);
     return days2 - days1;
 }
 #endif
