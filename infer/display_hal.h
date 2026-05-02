@@ -11,6 +11,8 @@ extern "C" {
 
 void display_hal_refresh(uint8_t *frame_buffer_rgb888, uint32_t fb_width, uint32_t fb_height,
     uint32_t x0, uint32_t y0, uint32_t view_width, uint32_t view_height);
+void display_hal_refresh_rgb565(uint16_t *frame_buffer_rgb565, uint32_t fb_width, uint32_t fb_height,
+    uint32_t x0, uint32_t y0, uint32_t view_width, uint32_t view_height);
 void display_hal_init(void);
 void display_hal_close(void);
 
