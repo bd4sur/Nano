@@ -14,7 +14,7 @@ void sleep_in_ms(uint32_t ms) {
 uint64_t get_timestamp_in_ms() {
     struct timespec time;
     clock_gettime(CLOCK_REALTIME, &time);
-    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
+    return (uint64_t)time.tv_sec * 1000ULL + (uint64_t)time.tv_nsec / 1000000ULL;
 }
 
 // 优雅关机
