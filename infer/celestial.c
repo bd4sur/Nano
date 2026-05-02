@@ -2607,7 +2607,7 @@ void render_sky(Nano_GFX *gfx,
             }
         }
         else {
-            #pragma omp parallel for schedule(dynamic)
+            #pragma omp parallel for schedule(static)
             for (int32_t y = y1; y < y2; y += _downsampling_factor) {
                 for (int32_t x = x1; x < x2; x += _downsampling_factor) {
                     // 观察者到该像素的方向向量（从屏幕坐标系转回地平天球的笛卡尔坐标系）
