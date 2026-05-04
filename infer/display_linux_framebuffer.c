@@ -127,23 +127,201 @@ void display_hal_refresh(
         offset_y = (fb_height - view_height) / 2;
     }
 
-    // Blit RGB888 view region to framebuffer
-    for (uint32_t y = 0; y < view_height; y++) {
-        uint32_t src_y = y0 + y;
-        int32_t dst_y = offset_y + (int32_t)y;
-        if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
+    // Pre-calculate actual copy width to avoid per-pixel boundary checks in inner loops
+    uint32_t copy_width = view_width;
+    if ((uint32_t)offset_x + copy_width > fb_width) {
+        copy_width = fb_width - (uint32_t)offset_x;
+    }
 
-        for (uint32_t x = 0; x < view_width; x++) {
-            uint32_t src_x = x0 + x;
-            int32_t dst_x = offset_x + (int32_t)x;
-            if (dst_x < 0 || dst_x >= (int32_t)fb_width) continue;
+    if (fb_bpp == 16) {
+        uint16_t *temp_row = (uint16_t *)malloc(copy_width * sizeof(uint16_t));
+        if (!temp_row) return;
 
-            uint32_t idx = (src_y * fb_width_in + src_x) * 3;
-            uint8_t r = frame_buffer_rgb888[idx + 0];
-            uint8_t g = frame_buffer_rgb888[idx + 1];
-            uint8_t b = frame_buffer_rgb888[idx + 2];
-            write_pixel((uint32_t)dst_x, (uint32_t)dst_y, r, g, b);
+        // Fast path: native RGB565 (R5G6B5, little-endian)
+        if (px_fmt.r_offset == 11 && px_fmt.r_len == 5 &&
+            px_fmt.g_offset == 5  && px_fmt.g_len == 6 &&
+            px_fmt.b_offset == 0  && px_fmt.b_len == 5) {
+            for (uint32_t y = 0; y < view_height; y++) {
+                uint32_t src_y = y0 + y;
+                int32_t dst_y = offset_y + (int32_t)y;
+                if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
+
+                uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                for (uint32_t x = 0; x < copy_width; x++) {
+                    uint8_t r = src[0];
+                    uint8_t g = src[1];
+                    uint8_t b = src[2];
+                    temp_row[x] = ((uint16_t)(r & 0xF8) << 8) |
+                                  ((uint16_t)(g & 0xFC) << 3) |
+                                  (b >> 3);
+                    src += 3;
+                }
+                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 2;
+                memcpy(dst_row, temp_row, copy_width * sizeof(uint16_t));
+            }
         }
+        else {
+            // Generic 16bpp: pack according to pixel format
+            for (uint32_t y = 0; y < view_height; y++) {
+                uint32_t src_y = y0 + y;
+                int32_t dst_y = offset_y + (int32_t)y;
+                if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
+
+                uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                for (uint32_t x = 0; x < copy_width; x++) {
+                    uint16_t pix = 0;
+                    pix |= (convert_channel(src[0], px_fmt.r_len) << px_fmt.r_offset);
+                    pix |= (convert_channel(src[1], px_fmt.g_len) << px_fmt.g_offset);
+                    pix |= (convert_channel(src[2], px_fmt.b_len) << px_fmt.b_offset);
+                    temp_row[x] = pix;
+                    src += 3;
+                }
+                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 2;
+                memcpy(dst_row, temp_row, copy_width * sizeof(uint16_t));
+            }
+        }
+        free(temp_row);
+    }
+    else if (fb_bpp == 24) {
+        uint8_t *temp_row = (uint8_t *)malloc(copy_width * 3);
+        if (!temp_row) return;
+
+        // Fast path: standard BGR888 (b_offset=0, g_offset=8, r_offset=16)
+        if (px_fmt.r_offset == 16 && px_fmt.r_len == 8 &&
+            px_fmt.g_offset == 8  && px_fmt.g_len == 8 &&
+            px_fmt.b_offset == 0  && px_fmt.b_len == 8) {
+            for (uint32_t y = 0; y < view_height; y++) {
+                uint32_t src_y = y0 + y;
+                int32_t dst_y = offset_y + (int32_t)y;
+                if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
+
+                uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                for (uint32_t x = 0; x < copy_width; x++) {
+                    temp_row[x * 3 + 0] = src[2]; // B
+                    temp_row[x * 3 + 1] = src[1]; // G
+                    temp_row[x * 3 + 2] = src[0]; // R
+                    src += 3;
+                }
+                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 3;
+                memcpy(dst_row, temp_row, copy_width * 3);
+            }
+        }
+        else {
+            // Generic 24bpp
+            for (uint32_t y = 0; y < view_height; y++) {
+                uint32_t src_y = y0 + y;
+                int32_t dst_y = offset_y + (int32_t)y;
+                if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
+
+                uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                for (uint32_t x = 0; x < copy_width; x++) {
+                    uint32_t pix = 0;
+                    pix |= (convert_channel(src[0], px_fmt.r_len) << px_fmt.r_offset);
+                    pix |= (convert_channel(src[1], px_fmt.g_len) << px_fmt.g_offset);
+                    pix |= (convert_channel(src[2], px_fmt.b_len) << px_fmt.b_offset);
+                    temp_row[x * 3 + 0] = pix & 0xFF;
+                    temp_row[x * 3 + 1] = (pix >> 8) & 0xFF;
+                    temp_row[x * 3 + 2] = (pix >> 16) & 0xFF;
+                    src += 3;
+                }
+                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 3;
+                memcpy(dst_row, temp_row, copy_width * 3);
+            }
+        }
+        free(temp_row);
+    }
+    else if (fb_bpp == 32) {
+        uint32_t *temp_row = (uint32_t *)malloc(copy_width * sizeof(uint32_t));
+        if (!temp_row) return;
+
+        // Fast path: standard BGRA8888 (b=0, g=8, r=16, a=24)
+        if (px_fmt.r_offset == 16 && px_fmt.r_len == 8 &&
+            px_fmt.g_offset == 8  && px_fmt.g_len == 8 &&
+            px_fmt.b_offset == 0  && px_fmt.b_len == 8) {
+            for (uint32_t y = 0; y < view_height; y++) {
+                uint32_t src_y = y0 + y;
+                int32_t dst_y = offset_y + (int32_t)y;
+                if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
+
+                uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                for (uint32_t x = 0; x < copy_width; x++) {
+                    temp_row[x] = 0xFF000000U |
+                                  ((uint32_t)src[2] << 16) |
+                                  ((uint32_t)src[1] << 8) |
+                                  src[0];
+                    src += 3;
+                }
+                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 4;
+                memcpy(dst_row, temp_row, copy_width * sizeof(uint32_t));
+            }
+        }
+        // Fast path: standard RGBA8888 (r=24, g=16, b=8, a=0)
+        else if (px_fmt.r_offset == 24 && px_fmt.r_len == 8 &&
+                 px_fmt.g_offset == 16 && px_fmt.g_len == 8 &&
+                 px_fmt.b_offset == 8  && px_fmt.b_len == 8) {
+            for (uint32_t y = 0; y < view_height; y++) {
+                uint32_t src_y = y0 + y;
+                int32_t dst_y = offset_y + (int32_t)y;
+                if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
+
+                uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                for (uint32_t x = 0; x < copy_width; x++) {
+                    temp_row[x] = ((uint32_t)src[0] << 24) |
+                                  ((uint32_t)src[1] << 16) |
+                                  ((uint32_t)src[2] << 8) |
+                                  0xFF;
+                    src += 3;
+                }
+                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 4;
+                memcpy(dst_row, temp_row, copy_width * sizeof(uint32_t));
+            }
+        }
+        else {
+            // Generic 32bpp
+            for (uint32_t y = 0; y < view_height; y++) {
+                uint32_t src_y = y0 + y;
+                int32_t dst_y = offset_y + (int32_t)y;
+                if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
+
+                uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                for (uint32_t x = 0; x < copy_width; x++) {
+                    uint32_t pix = 0;
+                    pix |= (convert_channel(src[0], px_fmt.r_len) << px_fmt.r_offset);
+                    pix |= (convert_channel(src[1], px_fmt.g_len) << px_fmt.g_offset);
+                    pix |= (convert_channel(src[2], px_fmt.b_len) << px_fmt.b_offset);
+                    if (px_fmt.r_len + px_fmt.r_offset <= 24 &&
+                        px_fmt.g_len + px_fmt.g_offset <= 24 &&
+                        px_fmt.b_len + px_fmt.b_offset <= 24) {
+                        pix |= (0xFFU << 24);
+                    }
+                    temp_row[x] = pix;
+                    src += 3;
+                }
+                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 4;
+                memcpy(dst_row, temp_row, copy_width * sizeof(uint32_t));
+            }
+        }
+        free(temp_row);
+    }
+    else {
+        // 8bpp or other: grayscale fallback, row-by-row
+        uint8_t *temp_row = (uint8_t *)malloc(copy_width);
+        if (!temp_row) return;
+
+        for (uint32_t y = 0; y < view_height; y++) {
+            uint32_t src_y = y0 + y;
+            int32_t dst_y = offset_y + (int32_t)y;
+            if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
+
+            uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+            for (uint32_t x = 0; x < copy_width; x++) {
+                temp_row[x] = (uint8_t)((src[0] * 77 + src[1] * 150 + src[2] * 29) >> 8);
+                src += 3;
+            }
+            uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x;
+            memcpy(dst_row, temp_row, copy_width);
+        }
+        free(temp_row);
     }
 }
 

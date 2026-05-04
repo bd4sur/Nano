@@ -1042,10 +1042,10 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
 
     gfx_soft_clear(global_state->gfx);
 
-    time_t ts = (time_t)global_state->timestamp / 1000;
+    time_t ts = (time_t)(global_state->timestamp / 1000);
     if (linglong_timemachine_running_state == 1) {
         linglong_timemachine_start_timestamp += (linglong_timemachine_speed * 1000);
-        ts = (time_t)linglong_timemachine_start_timestamp / 1000;
+        ts = (time_t)(linglong_timemachine_start_timestamp / 1000);
         struct tm *timeinfo = localtime(&ts); // 转换为本地时间
 
         llcfg->second = timeinfo->tm_sec;
@@ -1056,7 +1056,7 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->year = timeinfo->tm_year + 1900;
     }
     else if (linglong_timemachine_running_state == 2) {
-        ts = (time_t)global_state->timestamp / 1000;
+        ts = (time_t)(global_state->timestamp / 1000);
         struct tm *timeinfo = localtime(&ts);
         llcfg->second = timeinfo->tm_sec;
         llcfg->minute = timeinfo->tm_min;
@@ -1245,7 +1245,7 @@ void ui_app_linglong_set_timemachine_speed(Key_Event *key_event, Global_State *g
 
 void ui_app_linglong_set_realtime(Key_Event *key_event, Global_State *global_state) {
     Linglong_Config *llcfg = global_state->linglong_cfg;
-    time_t ts = (time_t)global_state->timestamp / 1000;
+    time_t ts = (time_t)(global_state->timestamp / 1000);
     struct tm *timeinfo = localtime(&ts); // 转换为本地时间
     llcfg->second = timeinfo->tm_sec;
     llcfg->minute = timeinfo->tm_min;
