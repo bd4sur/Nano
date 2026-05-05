@@ -1040,6 +1040,21 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
 
     Linglong_Config *llcfg = global_state->linglong_cfg;
 
+    // FPS统计
+    static uint64_t fps_last_timestamp = 0;
+    static uint32_t fps_frame_count = 0;
+    static float fps_display_value = 0.0f;
+
+    fps_frame_count++;
+    if (fps_last_timestamp == 0) {
+        fps_last_timestamp = global_state->timestamp;
+    }
+    else if (global_state->timestamp - fps_last_timestamp >= 1000) {
+        fps_display_value = fps_frame_count * 1000.0f / (float)(global_state->timestamp - fps_last_timestamp);
+        fps_frame_count = 0;
+        fps_last_timestamp = global_state->timestamp;
+    }
+
     gfx_soft_clear(global_state->gfx);
 
     time_t ts = (time_t)(global_state->timestamp / 1000);
@@ -1102,6 +1117,11 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
     wchar_t timestr[30];
     swprintf(timestr, 30, L"%04d-%02d-%02d %02d:%02d:%02d", llcfg->year, llcfg->month, llcfg->day, llcfg->hour, llcfg->minute, llcfg->second);
     gfx_draw_textline(global_state->gfx, timestr, global_state->gfx->width - 116, global_state->gfx->height - 14, 255, 255, 255, 1);
+
+    // 显示FPS
+    wchar_t fps_str[16];
+    swprintf(fps_str, 16, L"FPS=%.1f", fps_display_value);
+    gfx_draw_textline(global_state->gfx, fps_str, 1, 0, 0, 255, 0, 1);
 
 }
 
