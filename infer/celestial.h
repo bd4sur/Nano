@@ -60,6 +60,10 @@ typedef struct Linglong_Config {
 
     // 以下与天空渲染无关（非render_sky参数）
     int32_t enable_imu;              // 是否启用IMU（使视角随机器姿态旋转）
+
+    float lut_alt_step;              // Inscatter LUT 高度角步长（度），默认 0.5
+    float lut_azi_step;              // Inscatter LUT 方位角步长（度），默认 0.5
+    float lut_transmittance_step;    // Transmittance LUT 天顶角步长（度），默认 0.5
 } Linglong_Config;
 
 
@@ -69,6 +73,7 @@ void quaternion_to_euler(float q0, float q1, float q2, float q3, float *pitch, f
 
 
 void linglong_init(Linglong_Config *cfg);
+void linglong_free(void);
 
 void render_sky(Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,

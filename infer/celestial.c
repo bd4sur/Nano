@@ -2383,6 +2383,374 @@ void calculate_scattered_pixel(
 
 
 
+
+// ===============================================================================
+// 方向图预计算（Sky Direction Map）
+// ===============================================================================
+//
+// 原理：fisheye_unproject 对每个像素的计算包含大量三角函数和矩阵运算。
+// 由于这些运算在视角参数不变时可复用，我们预计算一张屏幕大小的方向缓存图，
+// 直接存储每个像素对应的 (ray_x, ray_y, ray_z) 世界方向向量。
+//
+// 精度：基于屏幕像素级采样。以 320x240 屏幕、sky_radius=120 为例，
+//       相邻像素中心视角差约 0.35°（边缘）~ 0.0°（中心），满足 0.5° 精度要求。
+
+typedef struct {
+    float *dir_x;
+    float *dir_y;
+    float *dir_z;
+    uint32_t width;
+    uint32_t height;
+    float cached_sky_radius;
+    float cached_center_x;
+    float cached_center_y;
+    float cached_view_alt;
+    float cached_view_azi;
+    float cached_view_roll;
+    float cached_f;
+    int32_t cached_projection;
+    uint8_t valid;
+} SkyDirMap;
+
+static SkyDirMap g_sky_dir_map = {0};
+
+static void sky_dir_map_ensure(uint32_t width, uint32_t height) {
+    if (g_sky_dir_map.dir_x == NULL ||
+        g_sky_dir_map.width != width ||
+        g_sky_dir_map.height != height) {
+        if (g_sky_dir_map.dir_x != NULL) {
+            free(g_sky_dir_map.dir_x);
+            free(g_sky_dir_map.dir_y);
+            free(g_sky_dir_map.dir_z);
+        }
+        g_sky_dir_map.width = width;
+        g_sky_dir_map.height = height;
+        g_sky_dir_map.dir_x = (float *)platform_calloc(width * height, sizeof(float));
+        g_sky_dir_map.dir_y = (float *)platform_calloc(width * height, sizeof(float));
+        g_sky_dir_map.dir_z = (float *)platform_calloc(width * height, sizeof(float));
+        g_sky_dir_map.valid = 0;
+    }
+}
+
+static void sky_dir_map_update(
+    float sky_radius, float center_x, float center_y,
+    float view_alt, float view_azi, float view_roll, float f, int32_t projection
+) {
+    if (g_sky_dir_map.valid &&
+        fabsf(g_sky_dir_map.cached_sky_radius - sky_radius) < 1e-4f &&
+        fabsf(g_sky_dir_map.cached_center_x - center_x) < 1e-4f &&
+        fabsf(g_sky_dir_map.cached_center_y - center_y) < 1e-4f &&
+        fabsf(g_sky_dir_map.cached_view_alt - view_alt) < 1e-4f &&
+        fabsf(g_sky_dir_map.cached_view_azi - view_azi) < 1e-4f &&
+        fabsf(g_sky_dir_map.cached_view_roll - view_roll) < 1e-4f &&
+        fabsf(g_sky_dir_map.cached_f - f) < 1e-4f &&
+        g_sky_dir_map.cached_projection == projection) {
+        return;
+    }
+
+    g_sky_dir_map.cached_sky_radius = sky_radius;
+    g_sky_dir_map.cached_center_x   = center_x;
+    g_sky_dir_map.cached_center_y   = center_y;
+    g_sky_dir_map.cached_view_alt   = view_alt;
+    g_sky_dir_map.cached_view_azi   = view_azi;
+    g_sky_dir_map.cached_view_roll  = view_roll;
+    g_sky_dir_map.cached_f          = f;
+    g_sky_dir_map.cached_projection = projection;
+
+    uint32_t w = g_sky_dir_map.width;
+    uint32_t h = g_sky_dir_map.height;
+
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < (int32_t)h; y++) {
+        for (int32_t x = 0; x < (int32_t)w; x++) {
+            float rx, ry, rz;
+            fisheye_unproject(
+                (float)x, (float)y,
+                sky_radius, center_x, center_y,
+                view_alt, view_azi, view_roll, f, projection,
+                &rx, &ry, &rz);
+            size_t idx = (size_t)y * w + x;
+            g_sky_dir_map.dir_x[idx] = rx;
+            g_sky_dir_map.dir_y[idx] = ry;
+            g_sky_dir_map.dir_z[idx] = rz;
+        }
+    }
+
+    g_sky_dir_map.valid = 1;
+}
+
+static inline void sky_dir_map_get(int32_t x, int32_t y, float *rx, float *ry, float *rz) {
+    size_t idx = (size_t)y * g_sky_dir_map.width + x;
+    *rx = g_sky_dir_map.dir_x[idx];
+    *ry = g_sky_dir_map.dir_y[idx];
+    *rz = g_sky_dir_map.dir_z[idx];
+}
+
+
+// ===============================================================================
+// 预积分 LUT（Transmittance + Inscatter）
+// ===============================================================================
+//
+// 设计原则：
+//   · 所有 LUT 内存均在首次需要且 enable_opt_lut 为真时才分配。
+//   · 步长由 linglong_init 通过 Linglong_Config 传入，运行时确定 LUT 维度。
+//   · 当 enable_opt_lut 不启用时，不引入任何 LUT 相关内存开销。
+
+// 全局 LUT 步长（由 linglong_init 设置）
+static float g_lut_alt_step = 0.5f;
+static float g_lut_azi_step = 0.5f;
+static float g_lut_transmittance_step = 0.5f;
+
+// 全局 LUT 维度（运行时计算）
+static int g_lut_transmittance_bins = 0;
+static int g_lut_inscatter_alt_bins = 0;
+static int g_lut_inscatter_azi_bins = 0;
+
+#define S3_LUT_INSCATTER_ALT_MIN  (-10.0f)
+
+// ------------------------------------------------------------------------------
+// Transmittance LUT（1D）
+// ------------------------------------------------------------------------------
+static float *s3_transmittance_lut = NULL;  // [bins * 3]，扁平化存储
+static uint8_t s3_transmittance_lut_valid = 0;
+
+static void sky_transmittance_lut_ensure(void) {
+    if (s3_transmittance_lut != NULL) return;
+    g_lut_transmittance_bins = (int)(90.0f / g_lut_transmittance_step) + 1;
+    s3_transmittance_lut = (float *)platform_calloc((size_t)g_lut_transmittance_bins * 3, sizeof(float));
+}
+
+static void sky_transmittance_lut_init(void) {
+    if (s3_transmittance_lut_valid) return;
+    sky_transmittance_lut_ensure();
+    if (s3_transmittance_lut == NULL) return;
+
+    for (int i = 0; i < g_lut_transmittance_bins; i++) {
+        float zenith_deg = (float)i * g_lut_transmittance_step;
+        float zenith_rad = to_rad_float(zenith_deg);
+
+        float dx = sinf(zenith_rad);
+        float dy = 0.0f;
+        float dz = cosf(zenith_rad);
+
+        float ox = 0.0f, oy = 0.0f, oz = S3_Re + 1.0f;
+
+        float t0, t1;
+        if (!s3_rsi(ox, oy, oz, dx, dy, dz, S3_Ra, &t0, &t1) || t1 < 0.0f) {
+            s3_transmittance_lut[i * 3 + 0] = 1.0f;
+            s3_transmittance_lut[i * 3 + 1] = 1.0f;
+            s3_transmittance_lut[i * 3 + 2] = 1.0f;
+            continue;
+        }
+
+        float t_min = (t0 > 0.0f) ? t0 : 0.0f;
+        float t_max = t1;
+
+        float earth_t0, earth_t1;
+        if (s3_rsi(ox, oy, oz, dx, dy, dz, S3_Re, &earth_t0, &earth_t1)
+            && earth_t0 > 1.0f && earth_t0 < t_max) {
+            t_max = earth_t0;
+        }
+
+        const int n_samples = 36;
+        float seg_len = (t_max - t_min) / (float)n_samples;
+        float odR = 0.0f, odM = 0.0f;
+
+        for (int j = 0; j < n_samples; j++) {
+            float t = t_min + ((float)j + 0.5f) * seg_len;
+            float px = ox + dx * t;
+            float py = oy + dy * t;
+            float pz = oz + dz * t;
+            float h = sqrtf(px * px + py * py + pz * pz) - S3_Re;
+            if (h < 0.0f) continue;
+            odR += expf(-h / S3_Hr) * seg_len;
+            odM += expf(-h / S3_Hm) * seg_len;
+        }
+
+        s3_transmittance_lut[i * 3 + 0] = expf(-(S3_bR0 * odR + S3_bMe * odM));
+        s3_transmittance_lut[i * 3 + 1] = expf(-(S3_bR1 * odR + S3_bMe * odM));
+        s3_transmittance_lut[i * 3 + 2] = expf(-(S3_bR2 * odR + S3_bMe * odM));
+    }
+
+    s3_transmittance_lut_valid = 1;
+}
+
+static inline void sky_transmittance_lut_lookup(float zenith_deg, float *tR, float *tG, float *tB) {
+    if (s3_transmittance_lut == NULL) {
+        *tR = *tG = *tB = 1.0f;
+        return;
+    }
+    int idx = (int)(zenith_deg / g_lut_transmittance_step + 0.5f);
+    if (idx < 0) idx = 0;
+    if (idx >= g_lut_transmittance_bins) idx = g_lut_transmittance_bins - 1;
+    *tR = s3_transmittance_lut[idx * 3 + 0];
+    *tG = s3_transmittance_lut[idx * 3 + 1];
+    *tB = s3_transmittance_lut[idx * 3 + 2];
+}
+
+// ------------------------------------------------------------------------------
+// Inscatter LUT（2D）
+// ------------------------------------------------------------------------------
+// 参数空间：view_altitude (-10° ~ 90°) × rel_azimuth (0° ~ 180°)
+
+typedef struct {
+    float *data;  // [alt_bin][azi_bin][rgb]
+    float cached_sun_x;
+    float cached_sun_y;
+    float cached_sun_z;
+    float cached_sun_alt;
+    float cached_sun_azi;
+    uint8_t valid;
+} SkyInscatterLUT;
+
+static SkyInscatterLUT g_sky_inscatter_lut = {0};
+
+static void sky_inscatter_lut_ensure(void) {
+    if (g_sky_inscatter_lut.data != NULL) return;
+    g_lut_inscatter_alt_bins = (int)((90.0f - S3_LUT_INSCATTER_ALT_MIN) / g_lut_alt_step) + 1;
+    g_lut_inscatter_azi_bins = (int)(180.0f / g_lut_azi_step) + 1;
+    size_t n = (size_t)g_lut_inscatter_alt_bins * g_lut_inscatter_azi_bins * 3;
+    g_sky_inscatter_lut.data = (float *)platform_calloc(n, sizeof(float));
+    g_sky_inscatter_lut.valid = 0;
+}
+
+static void sky_inscatter_lut_update(
+    float sun_x, float sun_y, float sun_z,
+    float sun_alt, float sun_azi,
+    int32_t sky_model
+) {
+    sky_inscatter_lut_ensure();
+
+    // 阈值：太阳方向变化 < 0.5° 时复用
+    float sun_len_sq = sun_x * sun_x + sun_y * sun_y + sun_z * sun_z;
+    float cached_len_sq = g_sky_inscatter_lut.cached_sun_x * g_sky_inscatter_lut.cached_sun_x
+                        + g_sky_inscatter_lut.cached_sun_y * g_sky_inscatter_lut.cached_sun_y
+                        + g_sky_inscatter_lut.cached_sun_z * g_sky_inscatter_lut.cached_sun_z;
+    float dot_sun = sun_x * g_sky_inscatter_lut.cached_sun_x
+                  + sun_y * g_sky_inscatter_lut.cached_sun_y
+                  + sun_z * g_sky_inscatter_lut.cached_sun_z;
+    float cos_diff = 0.0f;
+    if (sun_len_sq > 1e-12f && cached_len_sq > 1e-12f) {
+        cos_diff = dot_sun / sqrtf(sun_len_sq * cached_len_sq);
+    }
+    if (cos_diff > 1.0f) cos_diff = 1.0f;
+    if (cos_diff < -1.0f) cos_diff = -1.0f;
+    float angle_diff_deg = to_deg_float(acosf(cos_diff));
+
+    if (g_sky_inscatter_lut.valid && angle_diff_deg < 0.5f) {
+        return;
+    }
+
+    g_sky_inscatter_lut.cached_sun_x   = sun_x;
+    g_sky_inscatter_lut.cached_sun_y   = sun_y;
+    g_sky_inscatter_lut.cached_sun_z   = sun_z;
+    g_sky_inscatter_lut.cached_sun_alt = sun_alt;
+    g_sky_inscatter_lut.cached_sun_azi = sun_azi;
+
+    float sun_azi_rad = to_rad_float(sun_azi);
+
+    #pragma omp parallel for schedule(dynamic)
+    for (int i = 0; i < g_lut_inscatter_alt_bins; i++) {
+        float alt_deg = S3_LUT_INSCATTER_ALT_MIN + (float)i * g_lut_alt_step;
+        float alt_rad = to_rad_float(alt_deg);
+
+        for (int j = 0; j < g_lut_inscatter_azi_bins; j++) {
+            float rel_azi_deg = (float)j * g_lut_azi_step;
+            float rel_azi_rad = to_rad_float(rel_azi_deg);
+
+            float dir_azi_rad = sun_azi_rad + rel_azi_rad;
+            float dir_x = cosf(alt_rad) * sinf(dir_azi_rad);
+            float dir_y = cosf(alt_rad) * cosf(dir_azi_rad);
+            float dir_z = sinf(alt_rad);
+
+            float r, g, b;
+            calculate_scattered_pixel(dir_x, dir_y, dir_z,
+                                      sun_x, sun_y, sun_z,
+                                      &r, &g, &b, 0, sky_model);
+
+            size_t idx = ((size_t)i * g_lut_inscatter_azi_bins + j) * 3;
+            g_sky_inscatter_lut.data[idx + 0] = r;
+            g_sky_inscatter_lut.data[idx + 1] = g;
+            g_sky_inscatter_lut.data[idx + 2] = b;
+        }
+    }
+
+    g_sky_inscatter_lut.valid = 1;
+}
+
+static inline void sky_inscatter_lut_lookup(
+    float ray_x, float ray_y, float ray_z,
+    float sun_x, float sun_y, float sun_z,
+    float *out_r, float *out_g, float *out_b
+) {
+    if (g_sky_inscatter_lut.data == NULL) {
+        *out_r = *out_g = *out_b = 0.0f;
+        return;
+    }
+
+    // 1. 视线高度角
+    float dir_len = sqrtf(ray_x * ray_x + ray_y * ray_y + ray_z * ray_z);
+    float dir_z_norm = (dir_len > 1e-12f) ? (ray_z / dir_len) : 1.0f;
+    if (dir_z_norm > 1.0f) dir_z_norm = 1.0f;
+    if (dir_z_norm < -1.0f) dir_z_norm = -1.0f;
+    float alt_deg = to_deg_float(asinf(dir_z_norm));
+
+    // 2. 相对方位角（水平面投影夹角）
+    float dir_x_norm = (dir_len > 1e-12f) ? (ray_x / dir_len) : 0.0f;
+    float dir_y_norm = (dir_len > 1e-12f) ? (ray_y / dir_len) : 0.0f;
+
+    float sun_len = sqrtf(sun_x * sun_x + sun_y * sun_y + sun_z * sun_z);
+    float sun_x_norm = (sun_len > 1e-12f) ? (sun_x / sun_len) : 0.0f;
+    float sun_y_norm = (sun_len > 1e-12f) ? (sun_y / sun_len) : 0.0f;
+
+    float dir_azi = atan2f(dir_x_norm, dir_y_norm);
+    float sun_azi = atan2f(sun_x_norm, sun_y_norm);
+    float rel_azi = fabsf(dir_azi - sun_azi);
+    if (rel_azi > M_PI) rel_azi = 2.0f * M_PI - rel_azi;
+    float rel_azi_deg = to_deg_float(rel_azi);
+
+    // 3. 钳制到 LUT 边界
+    float alt_clamped = alt_deg;
+    if (alt_clamped < S3_LUT_INSCATTER_ALT_MIN) alt_clamped = S3_LUT_INSCATTER_ALT_MIN;
+    if (alt_clamped > 90.0f) alt_clamped = 90.0f;
+    if (rel_azi_deg < 0.0f) rel_azi_deg = 0.0f;
+    if (rel_azi_deg > 180.0f) rel_azi_deg = 180.0f;
+
+    // 4. 双线性插值
+    float alt_f = (alt_clamped - S3_LUT_INSCATTER_ALT_MIN) / g_lut_alt_step;
+    float azi_f = rel_azi_deg / g_lut_azi_step;
+
+    int alt_i0 = (int)alt_f;
+    int azi_j0 = (int)azi_f;
+    if (alt_i0 < 0) alt_i0 = 0;
+    if (alt_i0 >= g_lut_inscatter_alt_bins - 1) alt_i0 = g_lut_inscatter_alt_bins - 2;
+    if (azi_j0 < 0) azi_j0 = 0;
+    if (azi_j0 >= g_lut_inscatter_azi_bins - 1) azi_j0 = g_lut_inscatter_azi_bins - 2;
+
+    int alt_i1 = alt_i0 + 1;
+    int azi_j1 = azi_j0 + 1;
+
+    float alt_t = alt_f - (float)alt_i0;
+    float azi_t = azi_f - (float)azi_j0;
+
+    size_t idx00 = ((size_t)alt_i0 * g_lut_inscatter_azi_bins + azi_j0) * 3;
+    size_t idx01 = ((size_t)alt_i0 * g_lut_inscatter_azi_bins + azi_j1) * 3;
+    size_t idx10 = ((size_t)alt_i1 * g_lut_inscatter_azi_bins + azi_j0) * 3;
+    size_t idx11 = ((size_t)alt_i1 * g_lut_inscatter_azi_bins + azi_j1) * 3;
+
+    for (int c = 0; c < 3; c++) {
+        float v0 = g_sky_inscatter_lut.data[idx00 + c] * (1.0f - azi_t)
+                 + g_sky_inscatter_lut.data[idx01 + c] * azi_t;
+        float v1 = g_sky_inscatter_lut.data[idx10 + c] * (1.0f - azi_t)
+                 + g_sky_inscatter_lut.data[idx11 + c] * azi_t;
+        float val = v0 * (1.0f - alt_t) + v1 * alt_t;
+        if (c == 0) *out_r = val;
+        else if (c == 1) *out_g = val;
+        else *out_b = val;
+    }
+}
+
+
 // ===============================================================================
 // 初始化天象仪语境
 // ===============================================================================
@@ -2430,6 +2798,42 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->enable_att_indicator = 0;    // 是否显示姿态指示标记
 
     cfg->enable_imu = 1;              // 是否启用IMU（使视角随机器姿态旋转）
+
+    cfg->lut_alt_step = 0.5f;         // Inscatter LUT 高度角步长（度）
+    cfg->lut_azi_step = 0.5f;         // Inscatter LUT 方位角步长（度）
+    cfg->lut_transmittance_step = 0.5f; // Transmittance LUT 天顶角步长（度）
+
+    // 同步 LUT 步长到全局变量
+    g_lut_alt_step = (cfg->lut_alt_step > 0.0f) ? cfg->lut_alt_step : 0.5f;
+    g_lut_azi_step = (cfg->lut_azi_step > 0.0f) ? cfg->lut_azi_step : 0.5f;
+    g_lut_transmittance_step = (cfg->lut_transmittance_step > 0.0f) ? cfg->lut_transmittance_step : 0.5f;
+}
+
+
+// ===============================================================================
+// 释放天象仪资源
+// ===============================================================================
+
+void linglong_free(void) {
+    if (g_sky_dir_map.dir_x != NULL) {
+        free(g_sky_dir_map.dir_x);
+        free(g_sky_dir_map.dir_y);
+        free(g_sky_dir_map.dir_z);
+        g_sky_dir_map.dir_x = NULL;
+        g_sky_dir_map.dir_y = NULL;
+        g_sky_dir_map.dir_z = NULL;
+        g_sky_dir_map.valid = 0;
+    }
+    if (g_sky_inscatter_lut.data != NULL) {
+        free(g_sky_inscatter_lut.data);
+        g_sky_inscatter_lut.data = NULL;
+        g_sky_inscatter_lut.valid = 0;
+    }
+    if (s3_transmittance_lut != NULL) {
+        free(s3_transmittance_lut);
+        s3_transmittance_lut = NULL;
+        s3_transmittance_lut_valid = 0;
+    }
 }
 
 
@@ -2475,7 +2879,7 @@ void render_sky(Nano_GFX *gfx,
     where_is_the_sun(year, month, day, hour, minute, second, timezone, longitude, latitude, &sun_azi, &sun_alt);
 
     // 夜晚默认启用查找表
-    if (sun_alt < -18.0f) enable_opt_lut = 1;
+    // if (sun_alt < -18.0f) enable_opt_lut = 1;
 
     float sun_x = 0.0f;
     float sun_y = 0.0f;
@@ -2485,6 +2889,14 @@ void render_sky(Nano_GFX *gfx,
     float sun_proj_x = 0.0f;
     float sun_proj_y = 0.0f;
     fisheye_project(sun_azi, sun_alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &sun_proj_x, &sun_proj_y);
+
+    // 初始化方向图和预积分 LUT（仅在 enable_opt_lut 时启用，避免额外内存开销）
+    if (enable_opt_lut && sky_model > 0) {
+        sky_dir_map_ensure(fb_width, fb_height);
+        sky_dir_map_update(sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection);
+        sky_transmittance_lut_init();
+        sky_inscatter_lut_update(sun_x, sun_y, sun_z, (float)sun_alt, (float)sun_azi, sky_model);
+    }
 
     // 天空绘制范围的屏幕坐标
     // int32_t y1 = (int32_t)floorf(center_y - sky_radius);
@@ -2580,12 +2992,22 @@ void render_sky(Nano_GFX *gfx,
                         float ray_x = 0.0f;
                         float ray_y = 0.0f;
                         float ray_z = 0.0f;
-                        fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &ray_x, &ray_y, &ray_z);
+                        if (enable_opt_lut && g_sky_dir_map.valid) {
+                            sky_dir_map_get(x, y, &ray_x, &ray_y, &ray_z);
+                        }
+                        else {
+                            fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &ray_x, &ray_y, &ray_z);
+                        }
 
                         float red = 0.0f;
                         float green = 0.0f;
                         float blue = 0.0f;
-                        calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut, sky_model);
+                        if (enable_opt_lut && g_sky_inscatter_lut.valid) {
+                            sky_inscatter_lut_lookup(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue);
+                        }
+                        else {
+                            calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut, sky_model);
+                        }
 
                         uint8_t rr = (uint8_t)(red * 255.0f);
                         uint8_t gg = (uint8_t)(green * 255.0f);
@@ -2614,12 +3036,22 @@ void render_sky(Nano_GFX *gfx,
                     float ray_x = 0.0f;
                     float ray_y = 0.0f;
                     float ray_z = 0.0f;
-                    fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &ray_x, &ray_y, &ray_z);
+                    if (enable_opt_lut && g_sky_dir_map.valid) {
+                        sky_dir_map_get(x, y, &ray_x, &ray_y, &ray_z);
+                    }
+                    else {
+                        fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &ray_x, &ray_y, &ray_z);
+                    }
 
                     float red = 0.0f;
                     float green = 0.0f;
                     float blue = 0.0f;
-                    calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut, sky_model);
+                    if (enable_opt_lut && g_sky_inscatter_lut.valid) {
+                        sky_inscatter_lut_lookup(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue);
+                    }
+                    else {
+                        calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut, sky_model);
+                    }
 
                     if (enable_opt_bilinear) {
                         gfx_set_pixel(gfx, x, y, (uint8_t)(red * 255.0f), (uint8_t)(green * 255.0f), (uint8_t)(blue  * 255.0f));
