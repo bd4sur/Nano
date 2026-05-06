@@ -1321,7 +1321,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
 #endif
 
     // 按1键向左偏航（yaw--），或者Ctrl时切换投影算法
-    if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_1) {
+    if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_1) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_azi -= 5.0f;
@@ -1340,7 +1340,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按2键推杆低头（pitch--），或者Ctrl时切换赤道坐标圈
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_2) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_2) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_alt -= 5.0f;
@@ -1355,7 +1355,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按3键向右偏航（yaw++），或者Ctrl时切换地平坐标
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_3) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_3) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_azi += 5.0f;
@@ -1370,7 +1370,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按4键向左坡度（roll--），或者Ctrl时切换黄道
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_4) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_4) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_roll -= 5.0f;
@@ -1385,7 +1385,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按5键归中，或切换陀螺仪状态，或者Ctrl时切换天体名称
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_5) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_5) {
         if (global_state->is_ctrl_enabled == 0) {
             // 如果IMU已关闭，则开启
             if (global_state->linglong_cfg->enable_imu == 0) {
@@ -1406,7 +1406,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按6键向右坡度（roll++），或者Ctrl时切换姿态指示
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_6) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_6) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_roll += 5.0f;
@@ -1421,7 +1421,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按7键拉远，或者Ctrl时切换大气散射模型
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_7) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_7) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->view_f -= 0.1f;
             if (global_state->linglong_cfg->view_f <= 0.1f) global_state->linglong_cfg->view_f = 0.1f;
@@ -1433,7 +1433,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按8键拉杆抬头（pitch++），或者Ctrl时切换地景
-    if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_8) {
+    if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_8) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_alt += 5.0f;
@@ -1448,7 +1448,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按9键推近，或者Ctrl时校准陀螺仪
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_9) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_9) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->view_f += 0.1f;
             if (global_state->linglong_cfg->view_f >= 5.0f) global_state->linglong_cfg->view_f = 5.0f;
@@ -1470,12 +1470,12 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         global_state->STATE = STATE_MAIN_MENU;
     }
     // 按B键打开玲珑仪设置菜单
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_B) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_B) {
         init_linglong_setting_menu(key_event, global_state);
         global_state->STATE = STATE_LINGLONG_SETTING;
     }
     // 按C键切换Ctrl
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_C) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_C) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->is_ctrl_enabled = 1;
         }
@@ -1484,15 +1484,15 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按*键时光机向前（过去）（反复按运行/暂停）
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_STAR) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_STAR) {
         ui_app_linglong_set_timemachine_speed(key_event, global_state, -120);
     }
     // 短按0键回到实时（反复按运行/暂停）
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_0) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_0) {
         ui_app_linglong_set_realtime(key_event, global_state);
     }
     // 按#键时光机向后（未来）（反复按运行/暂停）
-    else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_HASH) {
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_HASH) {
         ui_app_linglong_set_timemachine_speed(key_event, global_state, 120);
     }
 }

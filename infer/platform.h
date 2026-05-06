@@ -325,6 +325,58 @@ void *psram_calloc(size_t n, size_t sizeoftype);
 
 
 // ===============================================================================
+// Nano-Pod: STM32MP135 + SPI LCD + IMU
+// ===============================================================================
+#elif defined(NANO_POD_MP135)
+
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
+
+    // I2C端口设备文件（屏幕、键盘、UPS共用）
+    #define I2C_DEVFILE "/dev/i2c-1"
+
+    // GPIO设备文件
+    #define GPIO_CHIP_DEVFILE "/dev/gpiochip0"
+
+    // SPI设备文件
+    #define SPI_DEVFILE "/dev/spidev1.0"
+
+    // 模型目录
+    #define MODEL_ROOT_DIR "/root/ai/_model/Nano"
+
+    // 屏幕
+    #define USE_DEV_LIB
+    #define SCREEN_WIDTH  (320)
+    #define SCREEN_HEIGHT (240)
+
+    // 键盘
+    #define KB_I2C_ADDR (0x27)
+
+    // 蜂鸣器
+    // #define BUZZER_ENABLED
+    // #define BUZZER_GPIO 6
+
+    // IMU
+    // #define IMU_ENABLED
+    // #define IMU_DEVFILE "/dev/ttyAS4"
+
+    // UPS
+    // #define UPS_ENABLED
+    // #define UPS_I2C_ADDR (0x36)
+
+    // ASR和TTS
+    // #define ASR_ENABLED
+    // #define TTS_ENABLED
+    #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
+
+    // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
+    // #define MATMUL_PTHREAD
+
+    // BadApple
+    #define BADAPPLE_ENABLED
+
+
+// ===============================================================================
 // Nano-Pod-Lite: Make Router Great Again 京东云RE-CS-02、红米AX5等
 // ===============================================================================
 #elif defined(NANO_POD_LITE_MARGA)
