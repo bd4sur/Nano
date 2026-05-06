@@ -1111,6 +1111,7 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
     );
 
     gfx_dithering(global_state->gfx);
+    // gfx_gamma(global_state->gfx, 1.3f);
 
     gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->gfx->height - 14, 128, 128, 128, 3);
 

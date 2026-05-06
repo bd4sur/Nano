@@ -156,6 +156,20 @@ static uint8_t *landscape_buffer_rgb = NULL;
 
 
 // ===============================================================================
+// 基本数学运算
+// ===============================================================================
+
+static inline float expf_fast_schraudolph(float x) {
+    if (x > 87.0f) return 3.402823466e+38f;
+    if (x < -87.0f) return 0.0f;
+
+    union { float f; int32_t i; } u;
+    u.i = (int32_t)(x * 12102203.161561f + 1065353218.0f);  // 127 << 23
+    return u.f;
+}
+
+
+// ===============================================================================
 // 幅度转换
 // ===============================================================================
 
@@ -224,7 +238,7 @@ void horizontal_to_screen_xy(
     // 等距鱼眼投影：r = (2R / π) * θ
     float r = (view_height == 1.0f) ? ((theta / (M_PI / 2.0f)) * radius): (powf(theta / (M_PI / 2.0f), (1.0f / view_height)) * radius);
     // 视野系数，高度越高视野越完整（越接近1），高度越低视野越不完整（越接近0）
-    float range = MAX(0.1f, 1.0f - expf(-10.0f * view_height));
+    float range = MAX(0.1f, 1.0f - expf_fast_schraudolph(-10.0f * view_height));
     r *= range;
     // float r = (2.0f * radius / M_PI) * theta;
     // 投影到平面：X指向东（注意因为是躺在地上看天，所以东是屏幕坐标系的左侧/负半轴），Y指向北
@@ -1348,7 +1362,7 @@ void render_sun(Nano_GFX *gfx,
             float glow = 0.0f;
             if (dist > radius && dist <= (float)glow_radius) {
                 // 光晕强度随距离衰减
-                glow = expf(-(dist / (float)glow_radius) * 3.0f);
+                glow = expf_fast_schraudolph(-(dist / (float)glow_radius) * 3.0f);
             }
 
             // 太阳本体（带抗锯齿）
@@ -1604,7 +1618,7 @@ void draw_star(Nano_GFX *gfx,
             }
             // 光晕衰减
             else if (dist > radius) {
-                starLum = starLumBase * expf(-dist * 1.0f);
+                starLum = starLumBase * expf_fast_schraudolph(-dist * 1.0f);
             }
 
             // 对比度抑制：白天背景亮时，星星和光晕都应被压制
@@ -1711,7 +1725,7 @@ void scatter_model_1(
     // 计算视线方向的大气密度系数：直觉上来看，密度越大，对散射的贡献越大
     float rz = MAX(0.01, ray_norm_z); // 避免除零
     const float ATMOSPHERE_HEIGHT = 8.5f;
-    float density_factor = expf(-rz / ATMOSPHERE_HEIGHT);
+    float density_factor = expf_fast_schraudolph(-rz / ATMOSPHERE_HEIGHT);
 
 
     // 瑞利散射系数：分波长（RGB通道）计算
@@ -1742,24 +1756,24 @@ void scatter_model_1(
     float rayleigh_contrib_1 = rayleigh_beta_1 * rayleigh_phase;
     float rayleigh_contrib_2 = rayleigh_beta_2 * rayleigh_phase;
 
-    float attn_scale = (sun_altitude_deg >= 0) ? (expf(-powf((sun_altitude_deg / 20.0f), 4.0f)) + 0.01f) : (1.0f);
+    float attn_scale = (sun_altitude_deg >= 0) ? (expf_fast_schraudolph(-powf((sun_altitude_deg / 20.0f), 4.0f)) + 0.01f) : (1.0f);
 
-    float attn_0 = expf(-(rayleigh_beta_0 + mie_beta) * view_air_mass * attn_scale);
-    float attn_1 = expf(-(rayleigh_beta_1 + mie_beta) * view_air_mass * attn_scale);
-    float attn_2 = expf(-(rayleigh_beta_2 + mie_beta) * view_air_mass * attn_scale);
+    float attn_0 = expf_fast_schraudolph(-(rayleigh_beta_0 + mie_beta) * view_air_mass * attn_scale);
+    float attn_1 = expf_fast_schraudolph(-(rayleigh_beta_1 + mie_beta) * view_air_mass * attn_scale);
+    float attn_2 = expf_fast_schraudolph(-(rayleigh_beta_2 + mie_beta) * view_air_mass * attn_scale);
 
     // 臭氧吸收
     const float OZONE_ABSORPTION[3] = { 0.005,  0.040,  0.025 };
-    float ozone_transmittance_0 = expf(-OZONE_ABSORPTION[0] * sun_air_mass * 0.8);
-    float ozone_transmittance_1 = expf(-OZONE_ABSORPTION[1] * sun_air_mass * 0.8);
-    float ozone_transmittance_2 = expf(-OZONE_ABSORPTION[2] * sun_air_mass * 0.8);
+    float ozone_transmittance_0 = expf_fast_schraudolph(-OZONE_ABSORPTION[0] * sun_air_mass * 0.8);
+    float ozone_transmittance_1 = expf_fast_schraudolph(-OZONE_ABSORPTION[1] * sun_air_mass * 0.8);
+    float ozone_transmittance_2 = expf_fast_schraudolph(-OZONE_ABSORPTION[2] * sun_air_mass * 0.8);
 
     float scattered_0 = (rayleigh_contrib_0 + mie_contrib) * attn_0 * ozone_transmittance_0 * density_factor;
     float scattered_1 = (rayleigh_contrib_1 + mie_contrib) * attn_1 * ozone_transmittance_1 * density_factor;
     float scattered_2 = (rayleigh_contrib_2 + mie_contrib) * attn_2 * ozone_transmittance_2 * density_factor;
 
     // 太阳落到地平线以下时，进一步衰减散射光
-    float night_attn = (sun_altitude_deg >= 0) ? (1.0f) : MAX(0.0f, expf(0.016f * sun_altitude_deg));
+    float night_attn = (sun_altitude_deg >= 0) ? (1.0f) : MAX(0.0f, expf_fast_schraudolph(0.016f * sun_altitude_deg));
     scattered_0 *= night_attn;
     scattered_1 *= night_attn;
     scattered_2 *= night_attn;
@@ -1844,8 +1858,8 @@ void scatter_model_2(
     const float H_R = 8.0f;  // 瑞利散射高度
     const float H_M = 1.2f;  // 米氏散射高度
     // 地球+大气层半径，用于计算几何光程，控制维纳斯带强度
-    float R = (sun_altitude_deg >= 0.0f) ? ((3000.0f-300.0f) * expf(-sun_altitude_deg * 0.1f) + 300.0f)
-                                         : ((3000.0f-60.0f) * expf(sun_altitude_deg * 0.2f) + 60.0f);
+    float R = (sun_altitude_deg >= 0.0f) ? ((3000.0f-300.0f) * expf_fast_schraudolph(-sun_altitude_deg * 0.1f) + 300.0f)
+                                         : ((3000.0f-60.0f) * expf_fast_schraudolph(sun_altitude_deg * 0.2f) + 60.0f);
 
     const int32_t S = 4; // 路径积分的取样点数
 
@@ -1873,8 +1887,8 @@ void scatter_model_2(
         float dl = L_t / (float)S;
         float h_R_t = t * H_R;
         float h_M_t = t * H_M;
-        float density_R_t = expf(-h_R_t / H_R);
-        float density_M_t = expf(-h_M_t / H_M);
+        float density_R_t = expf_fast_schraudolph(-h_R_t / H_R);
+        float density_M_t = expf_fast_schraudolph(-h_M_t / H_M);
 
         depth_R += density_R_t * dl;
         depth_M += density_M_t * dl;
@@ -1889,8 +1903,8 @@ void scatter_model_2(
             float n = (float)j / (float)S;
             float hsun_R = h_R_t + n * (1-t) * H_R;
             float hsun_M = h_M_t + n * (1-t) * H_M;
-            float density_sun_R = expf(-hsun_R / H_R);
-            float density_sun_M = expf(-hsun_M / H_M);
+            float density_sun_R = expf_fast_schraudolph(-hsun_R / H_R);
+            float density_sun_M = expf_fast_schraudolph(-hsun_M / H_M);
             depth_sun_R += density_sun_R * dlsun;
             depth_sun_M += density_sun_M * dlsun;
         }
@@ -1899,9 +1913,9 @@ void scatter_model_2(
         float tau_g = rayleigh_beta_1 * (depth_sun_R + depth_R) + mie_beta * (depth_sun_M + depth_M) * 1.1;
         float tau_b = rayleigh_beta_2 * (depth_sun_R + depth_R) + mie_beta * (depth_sun_M + depth_M) * 1.1;
 
-        float attn_r = expf(-tau_r);
-        float attn_g = expf(-tau_g);
-        float attn_b = expf(-tau_b);
+        float attn_r = expf_fast_schraudolph(-tau_r);
+        float attn_g = expf_fast_schraudolph(-tau_g);
+        float attn_b = expf_fast_schraudolph(-tau_b);
 
         sum_R_r += attn_r * depth_R; sum_R_g += attn_g * depth_R; sum_R_b += attn_b * depth_R;
         sum_M_r += attn_r * depth_M; sum_M_g += attn_g * depth_M; sum_M_b += attn_b * depth_M;
@@ -1910,16 +1924,16 @@ void scatter_model_2(
     // 臭氧吸收
     const float OZONE_ABSORPTION[3] = { 0.005,  0.040,  0.025 };
     float oz_factor = 0.16f;
-    float oz_r = expf(-OZONE_ABSORPTION[0] * Lsun * oz_factor);
-    float oz_g = expf(-OZONE_ABSORPTION[1] * Lsun * oz_factor);
-    float oz_b = expf(-OZONE_ABSORPTION[2] * Lsun * oz_factor);
+    float oz_r = expf_fast_schraudolph(-OZONE_ABSORPTION[0] * Lsun * oz_factor);
+    float oz_g = expf_fast_schraudolph(-OZONE_ABSORPTION[1] * Lsun * oz_factor);
+    float oz_b = expf_fast_schraudolph(-OZONE_ABSORPTION[2] * Lsun * oz_factor);
 
     float scattered_0 = (sum_R_r * rayleigh_beta_0 * rayleigh_phase + sum_M_r * mie_beta * mie_phase) * oz_r;
     float scattered_1 = (sum_R_g * rayleigh_beta_1 * rayleigh_phase + sum_M_g * mie_beta * mie_phase) * oz_g;
     float scattered_2 = (sum_R_b * rayleigh_beta_2 * rayleigh_phase + sum_M_b * mie_beta * mie_phase) * oz_b;
 
     // 全局增益、限幅、输出
-    // const float global_gain = (4.0f-1.8f) * expf(-(sun_altitude_deg / 3.0f) * (sun_altitude_deg / 3.0f)) + 1.8f;
+    // const float global_gain = (4.0f-1.8f) * expf_fast_schraudolph(-(sun_altitude_deg / 3.0f) * (sun_altitude_deg / 3.0f)) + 1.8f;
     const float global_gain = 2.0f;
     *red   = MIN(1.0f, scattered_0 * global_gain);
     *green = MIN(1.0f, scattered_1 * global_gain);
@@ -2040,8 +2054,8 @@ static void s3_marchRay(
         /* if (h < 0.0f) continue; */   /* 采样点位于地表以下，跳过 */
 
         /* 当前采样点的大气密度（指数衰减）× 路径增量 */
-        float dR = expf(-h / S3_Hr) * segLen;
-        float dM = expf(-h / S3_Hm) * segLen;
+        float dR = expf_fast_schraudolph(-h / S3_Hr) * segLen;
+        float dM = expf_fast_schraudolph(-h / S3_Hm) * segLen;
         odR += dR;
         odM += dM;
 
@@ -2062,8 +2076,8 @@ static void s3_marchRay(
             float lp_z = pos_z + sun_dz * lt;
             float lh   = sqrtf(lp_x * lp_x + lp_y * lp_y + lp_z * lp_z) - S3_Re;
             if (lh < 0.0f) { blocked = 1; break; }   /* ← 地球遮蔽：此采样点无直射阳光 */
-            lR += expf(-lh / S3_Hr) * lSeg;
-            lM += expf(-lh / S3_Hm) * lSeg;
+            lR += expf_fast_schraudolph(-lh / S3_Hr) * lSeg;
+            lM += expf_fast_schraudolph(-lh / S3_Hm) * lSeg;
         }
         if (blocked) continue;   /* 整段太阳射线被遮，跳过此视线采样点 */
 
@@ -2073,9 +2087,9 @@ static void s3_marchRay(
         float tau0   = S3_bR0 * odR_lR + S3_bMe * odM_lM;
         float tau1   = S3_bR1 * odR_lR + S3_bMe * odM_lM;
         float tau2   = S3_bR2 * odR_lR + S3_bMe * odM_lM;
-        float atten0 = expf(-tau0);
-        float atten1 = expf(-tau1);
-        float atten2 = expf(-tau2);
+        float atten0 = expf_fast_schraudolph(-tau0);
+        float atten1 = expf_fast_schraudolph(-tau1);
+        float atten2 = expf_fast_schraudolph(-tau2);
         sumR0 += atten0 * dR;   sumM0 += atten0 * dM;
         sumR1 += atten1 * dR;   sumM1 += atten1 * dM;
         sumR2 += atten2 * dR;   sumM2 += atten2 * dM;
@@ -2262,7 +2276,7 @@ void scatter_model_3(
     float     odR2  = 0.0f, odM2 = 0.0f;         /* 累积视线光学深度（eye → 当前采样点） */
 
     float global_gain = (16.0f - 2.0f)
-                        * expf(-(sunElevationDeg / 10.0f) * (sunElevationDeg / 10.0f))
+                        * expf_fast_schraudolph(-(sunElevationDeg / 10.0f) * (sunElevationDeg / 10.0f))
                         + 2.0f;
 
     for (int i = 0; i < N_V2; i++) {
@@ -2273,15 +2287,15 @@ void scatter_model_3(
         float h     = sqrtf(pos_x * pos_x + pos_y * pos_y + pos_z * pos_z) - S3_Re;
         if (h < 0.0f) continue;
 
-        float dR = expf(-h / S3_Hr) * segV2;
-        float dM = expf(-h / S3_Hm) * segV2;
+        float dR = expf_fast_schraudolph(-h / S3_Hr) * segV2;
+        float dM = expf_fast_schraudolph(-h / S3_Hm) * segV2;
         odR2 += dR;
         odM2 += dM;
 
         /* T(eye → X)：视线方向累积透射率 */
-        float Tv0 = expf(-(S3_bR0 * odR2 + S3_bMe * odM2));
-        float Tv1 = expf(-(S3_bR1 * odR2 + S3_bMe * odM2));
-        float Tv2 = expf(-(S3_bR2 * odR2 + S3_bMe * odM2));
+        float Tv0 = expf_fast_schraudolph(-(S3_bR0 * odR2 + S3_bMe * odM2));
+        float Tv1 = expf_fast_schraudolph(-(S3_bR1 * odR2 + S3_bMe * odM2));
+        float Tv2 = expf_fast_schraudolph(-(S3_bR2 * odR2 + S3_bMe * odM2));
 
         for (int k = 0; k < N_AMB; k++) {
             float ad_x = ambDirs_x[k];
@@ -2336,9 +2350,9 @@ void scatter_model_3(
     const float ozone_absorption2 = 0.000f;
     const float oz_scale = 90.0f;
     float oz_path = (tMax - tMin) / S3_Ra;
-    color0 *= expf(-ozone_absorption0 * oz_path * oz_scale);
-    color1 *= expf(-ozone_absorption1 * oz_path * oz_scale);
-    color2 *= expf(-ozone_absorption2 * oz_path * oz_scale);
+    color0 *= expf_fast_schraudolph(-ozone_absorption0 * oz_path * oz_scale);
+    color1 *= expf_fast_schraudolph(-ozone_absorption1 * oz_path * oz_scale);
+    color2 *= expf_fast_schraudolph(-ozone_absorption2 * oz_path * oz_scale);
 
     /* 拍脑袋：夜天光 */
     float night_light_scale = 1.0f - viewElevationDeg / 90.0f;
@@ -2563,13 +2577,13 @@ static void sky_transmittance_lut_init(void) {
             float pz = oz + dz * t;
             float h = sqrtf(px * px + py * py + pz * pz) - S3_Re;
             if (h < 0.0f) continue;
-            odR += expf(-h / S3_Hr) * seg_len;
-            odM += expf(-h / S3_Hm) * seg_len;
+            odR += expf_fast_schraudolph(-h / S3_Hr) * seg_len;
+            odM += expf_fast_schraudolph(-h / S3_Hm) * seg_len;
         }
 
-        s3_transmittance_lut[i * 3 + 0] = expf(-(S3_bR0 * odR + S3_bMe * odM));
-        s3_transmittance_lut[i * 3 + 1] = expf(-(S3_bR1 * odR + S3_bMe * odM));
-        s3_transmittance_lut[i * 3 + 2] = expf(-(S3_bR2 * odR + S3_bMe * odM));
+        s3_transmittance_lut[i * 3 + 0] = expf_fast_schraudolph(-(S3_bR0 * odR + S3_bMe * odM));
+        s3_transmittance_lut[i * 3 + 1] = expf_fast_schraudolph(-(S3_bR1 * odR + S3_bMe * odM));
+        s3_transmittance_lut[i * 3 + 2] = expf_fast_schraudolph(-(S3_bR2 * odR + S3_bMe * odM));
     }
 
     s3_transmittance_lut_valid = 1;

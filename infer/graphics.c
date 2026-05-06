@@ -186,9 +186,7 @@ void gfx_refresh(Nano_GFX *gfx) {
         display_hal_refresh(gfx->frame_buffer_rgb888, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
     }
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
-        // TODO 仅供测试
-        // convert_rgb565_to_rgb888(gfx->frame_buffer_rgb565, gfx->frame_buffer_rgb888, gfx->width, gfx->height);
-        // display_hal_refresh(gfx->frame_buffer_rgb888, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
+        display_hal_refresh_rgb565(gfx->frame_buffer_rgb565, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
     }
 }
 
@@ -309,6 +307,40 @@ inline void gfx_scale_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, float k) {
             MIN(255, (uint8_t)(k * (float)(RGB565_R(v)))),
             MIN(255, (uint8_t)(k * (float)(RGB565_G(v)))),
             MIN(255, (uint8_t)(k * (float)(RGB565_B(v)))));
+    }
+}
+
+// Gamma 校正
+void gfx_gamma(Nano_GFX *gfx, float gamma) {
+    if (gamma <= 0.0f || gamma == 1.0f) return;
+
+    uint32_t fb_width = gfx->width;
+    uint32_t fb_height = gfx->height;
+
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+        if (!frame_buffer) return;
+        uint32_t n = fb_width * fb_height * 3;
+        for (uint32_t i = 0; i < n; i++) {
+            float v = frame_buffer[i] / 255.0f;
+            float c = powf(v, gamma) * 255.0f + 0.5f;
+            frame_buffer[i] = (uint8_t)MAX(0.0f, MIN(255.0f, c));
+        }
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
+        if (!frame_buffer) return;
+        uint32_t n = fb_width * fb_height;
+        for (uint32_t i = 0; i < n; i++) {
+            uint16_t v = frame_buffer[i];
+            float r = RGB565_R(v) / 255.0f;
+            float g = RGB565_G(v) / 255.0f;
+            float b = RGB565_B(v) / 255.0f;
+            uint8_t rc = (uint8_t)(MAX(0.0f, MIN(255.0f, powf(r, gamma) * 255.0f + 0.5f)));
+            uint8_t gc = (uint8_t)(MAX(0.0f, MIN(255.0f, powf(g, gamma) * 255.0f + 0.5f)));
+            uint8_t bc = (uint8_t)(MAX(0.0f, MIN(255.0f, powf(b, gamma) * 255.0f + 0.5f)));
+            frame_buffer[i] = rgb888_to_rgb565(rc, gc, bc);
+        }
     }
 }
 

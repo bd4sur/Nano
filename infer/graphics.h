@@ -70,6 +70,7 @@ void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uin
 
 const uint8_t *gfx_get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uint8_t *font_height);
 
+void gfx_gamma(Nano_GFX *gfx, float gamma);
 void gfx_dithering(Nano_GFX *gfx);
 
 #ifdef __cplusplus

@@ -48,6 +48,13 @@ void display_hal_refresh(
     // refresh();
 }
 
+void display_hal_refresh_rgb565(
+    uint16_t *frame_buffer_rgb565, uint32_t fb_width_in, uint32_t fb_height_in,
+    uint32_t x0, uint32_t y0, uint32_t view_width, uint32_t view_height
+) {
+    return;
+};
+
 // OLED的初始化
 void display_hal_init(void) {
     initscr();

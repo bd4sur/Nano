@@ -1408,6 +1408,14 @@ void display_hal_init(void) {
 }
 
 
+void display_hal_refresh_rgb565(
+    uint16_t *frame_buffer_rgb565, uint32_t fb_width_in, uint32_t fb_height_in,
+    uint32_t x0, uint32_t y0, uint32_t view_width, uint32_t view_height
+) {
+    return;
+};
+
+
 void display_hal_close(void) {
     free(g_frame_buffer_rgb565);
     g_frame_buffer_rgb565 = NULL;
