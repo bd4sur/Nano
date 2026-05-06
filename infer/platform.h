@@ -361,7 +361,7 @@ void *psram_calloc(size_t n, size_t sizeoftype);
     // #define IMU_DEVFILE "/dev/ttyAS4"
 
     // UPS
-    // #define UPS_ENABLED
+    #define UPS_ENABLED
     // #define UPS_I2C_ADDR (0x36)
 
     // ASR和TTS

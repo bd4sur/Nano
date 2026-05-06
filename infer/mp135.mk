@@ -21,7 +21,7 @@ $(BIN_DIR):
 
 # Nano-Pod：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于CoreMP135）
 pod: $(BIN_DIR)/nano_pod
-$(BIN_DIR)/nano_pod: main.c platform_linux.c display_linux_framebuffer.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod: main.c ups_coremp135.c platform_linux.c display_linux_framebuffer.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_MP135 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
