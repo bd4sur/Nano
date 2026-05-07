@@ -68,45 +68,38 @@ uint32_t map_get(struct Map *m, uint32_t key);
 
 
 // ===============================================================================
-// Trie树
+// Radix Tree（基数树 / 压缩前缀树）
 // ===============================================================================
 
-#define VOCAB_SIZE        (16384) // Trie树字符数。为效率考虑（避免动态内存分配），固定为16384。
-#define INITIAL_POOL_SIZE (16384) // 初始内存池大小。
+#define VOCAB_SIZE        (16384) // 树字符数上限，用于输入合法性校验。
 
-// Trie树的节点结构
-struct TrieNode {
+// Radix Tree 节点结构
+struct RadixNode {
     uint32_t token_id;         // 保存词对应的ID
     uint8_t  is_end_of_token;  // 标记是否为词的结尾
-    struct Map *children;      // 子节点HashMap(token_id -> trie_node_index)
+    uint32_t prefix_len;       // 从父节点到本节点的路径标签长度
+    uint32_t *prefix;          // 从父节点到本节点的路径标签（uint32_t 数组）
+    struct RadixNode **children; // 子节点指针数组
+    uint32_t num_children;     // 子节点数量
+    uint32_t child_capacity;   // 子节点数组容量
 };
 
-// Trie树结构
+// Trie 树结构（对外接口名称保持兼容，内部已改为 Radix Tree）
 struct Trie {
-    struct TrieNode *root;       // 根节点
-    struct TrieNode *node_pool;  // 内存池
-    uint32_t pool_size;          // 内存池大小
-    uint32_t next_free_node;     // 下一个可用节点的索引
+    struct RadixNode *root;    // 根节点
 };
 
-
-// 扩展内存池
-void expand_memory_pool(struct Trie *trie);
-
-// 初始化一个Trie树
-//   注：当前使用动态内存池的实现中，没有用到两个参数。仅为兼容性而保留。
+// 初始化一个 Trie 树（内部使用 Radix Tree 实现）
+//   注：参数 vocab_size 和 is_end_of_token 仅为兼容性而保留。
 struct Trie *new_trie(uint32_t vocab_size, uint8_t is_end_of_token);
 
-// 从内存池中分配一个新的Trie节点，返回它在节点内存池中的索引
-uint32_t allocate_node(struct Trie *trie);
-
-// 释放Trie树
+// 释放 Trie 树
 void free_trie(struct Trie *trie);
 
-// 向Trie树中增加一个词
+// 向 Trie 树中增加一个词
 int add_token(struct Trie *trie, uint32_t *token, uint32_t token_len, uint32_t token_id);
 
-// 在Trie树中匹配一个词
+// 在 Trie 树中匹配一个词
 int match_token(struct Trie *trie, uint32_t *pattern, uint32_t pattern_len, uint32_t *token_id);
 
 uint32_t tokenize(struct Trie *vocab_trie, uint32_t *output_token_ids, const uint32_t *input_char_ids, uint32_t input_length, uint32_t max_token_length);

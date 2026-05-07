@@ -741,7 +741,7 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
 
 void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
-    flip_init(k, 1.0f, 32, 1);
+    flip_init(k, 1.0f, FLIP_RESOLUTION, 1);
 }
 
 void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) {
@@ -797,12 +797,12 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
 
     render_flip(global_state->gfx, 0, 0, global_state->gfx->width, global_state->gfx->height,
-                k, 1.0f, 32,     /* pool_width, pool_height, resolution */
+                k, 1.0f, FLIP_RESOLUTION,     /* pool_width, pool_height, resolution */
                 gravity_x, gravity_y,    /* gravity_x, gravity_y */
-                1.52f / 60.0f,    /* dt */
-                0.9f,            /* flip_ratio */
+                1.4f / 60.0f,    /* dt */
+                0.8f,            /* flip_ratio */
                 50, 2,           /* num_pressure_iters, num_particle_iters */
-                1.6f,            /* over_relaxation */
+                1.0f,            /* over_relaxation */
                 1, 1,            /* compensate_drift, separate_particles */
                 show_particles, show_grid,
                 0.6f, 0.3f);     /* funnel_neck_damping, funnel_pressure_resistance */
@@ -1132,30 +1132,38 @@ void ui_app_linglong_draw_lite(
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double longitude, double latitude, double timezone
 ) {
-    gfx_draw_rectangle(global_state->gfx, x, y, 128, 64, 255, 255, 255, 1);
+    const uint8_t BG_R = 255, BG_G = 255, BG_B = 255;
+    const uint8_t COORD_R = 222, COORD_G = 222, COORD_B = 222;
+    const uint8_t NSWE_R = 255, NSWE_G = 0, NSWE_B = 0;
+    const uint8_t DATETIME_R = 0, DATETIME_G = 0, DATETIME_B = 255;
+    const uint8_t TEXT_R = 0, TEXT_G = 0, TEXT_B = 0;
+    const uint8_t SUN_R = 255, SUN_G = 0, SUN_B = 0;
+    const uint8_t MOON_R = 255, MOON_G = 0, MOON_B = 255;
 
-    gfx_draw_circle(global_state->gfx, x+64, y+32, 30,         222, 222, 222, 1);
-    gfx_draw_circle(global_state->gfx, x+64, y+32, 20,         222, 222, 222, 1);
-    gfx_draw_circle(global_state->gfx, x+64, y+32, 10,         222, 222, 222, 1);
-    gfx_draw_line(global_state->gfx,   x+32, y+32, x+96, y+32, 222, 222, 222, 1);
-    gfx_draw_line(global_state->gfx,   x+64, y+0, x+64, y+64,  222, 222, 222, 1);
+    gfx_draw_rectangle(global_state->gfx, x, y, 128, 64, BG_R, BG_G, BG_B, 1);
 
-    gfx_draw_rectangle(global_state->gfx, x+62-1, y+0,    5+2, 5+1, 255, 255, 255, 1); // N背景
-    gfx_draw_rectangle(global_state->gfx, x+63-1, y+59-1, 3+2, 5+1, 255, 255, 255, 1); // S背景
-    gfx_draw_rectangle(global_state->gfx, x+32-1, y+30-1, 5+2, 5+2, 255, 255, 255, 1); // W背景
-    gfx_draw_rectangle(global_state->gfx, x+93-1, y+30-1, 3+2, 5+2, 255, 255, 255, 1); // E背景
+    gfx_draw_circle(global_state->gfx, x+64, y+32, 30,         COORD_R, COORD_G, COORD_B, 1);
+    gfx_draw_circle(global_state->gfx, x+64, y+32, 20,         COORD_R, COORD_G, COORD_B, 1);
+    gfx_draw_circle(global_state->gfx, x+64, y+32, 10,         COORD_R, COORD_G, COORD_B, 1);
+    gfx_draw_line(global_state->gfx,   x+32, y+32, x+96, y+32, COORD_R, COORD_G, COORD_B, 1);
+    gfx_draw_line(global_state->gfx,   x+64, y+0, x+64, y+64,  COORD_R, COORD_G, COORD_B, 1);
+
+    gfx_draw_rectangle(global_state->gfx, x+62-1, y+0,    5+2, 5+1, BG_R, BG_G, BG_B, 1); // N背景
+    gfx_draw_rectangle(global_state->gfx, x+63-1, y+59-1, 3+2, 5+1, BG_R, BG_G, BG_B, 1); // S背景
+    gfx_draw_rectangle(global_state->gfx, x+32-1, y+30-1, 5+2, 5+2, BG_R, BG_G, BG_B, 1); // W背景
+    gfx_draw_rectangle(global_state->gfx, x+93-1, y+30-1, 3+2, 5+2, BG_R, BG_G, BG_B, 1); // E背景
 
     // 方位文字和周围的边框
-    gfx_draw_textline_mini(global_state->gfx, L"N", x+62, y+0,  255, 0, 0, 1); gfx_draw_point(global_state->gfx, x+61, y+2,  255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+67, y+2,  255, 255, 255, 1);  gfx_draw_point(global_state->gfx, x+64, y+5, 255, 255, 255, 1);
-    gfx_draw_textline_mini(global_state->gfx, L"S", x+63, y+59, 255, 0, 0, 1); gfx_draw_point(global_state->gfx, x+62, y+62, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+66, y+62, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+64, y+58, 255, 255, 255, 1);
-    gfx_draw_textline_mini(global_state->gfx, L"W", x+32, y+30, 255, 0, 0, 1); gfx_draw_point(global_state->gfx, x+34, y+29, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+37, y+32, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+34, y+35, 255, 255, 255, 1);
-    gfx_draw_textline_mini(global_state->gfx, L"E", x+93, y+30, 255, 0, 0, 1); gfx_draw_point(global_state->gfx, x+92, y+32, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+96, y+32, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+94, y+29, 255, 255, 255, 1); gfx_draw_point(global_state->gfx, x+94, y+35, 255, 255, 255, 1);
+    gfx_draw_textline_mini(global_state->gfx, L"N", x+62, y+0,  NSWE_R, NSWE_G, NSWE_B, 1); gfx_draw_point(global_state->gfx, x+61, y+2,  BG_R, BG_G, BG_B, 1); gfx_draw_point(global_state->gfx, x+67, y+2,  BG_R, BG_G, BG_B, 1);  gfx_draw_point(global_state->gfx, x+64, y+5, BG_R, BG_G, BG_B, 1);
+    gfx_draw_textline_mini(global_state->gfx, L"S", x+63, y+59, NSWE_R, NSWE_G, NSWE_B, 1); gfx_draw_point(global_state->gfx, x+62, y+62, BG_R, BG_G, BG_B, 1); gfx_draw_point(global_state->gfx, x+66, y+62, BG_R, BG_G, BG_B, 1); gfx_draw_point(global_state->gfx, x+64, y+58, BG_R, BG_G, BG_B, 1);
+    gfx_draw_textline_mini(global_state->gfx, L"W", x+32, y+30, NSWE_R, NSWE_G, NSWE_B, 1); gfx_draw_point(global_state->gfx, x+34, y+29, BG_R, BG_G, BG_B, 1); gfx_draw_point(global_state->gfx, x+37, y+32, BG_R, BG_G, BG_B, 1); gfx_draw_point(global_state->gfx, x+34, y+35, BG_R, BG_G, BG_B, 1);
+    gfx_draw_textline_mini(global_state->gfx, L"E", x+93, y+30, NSWE_R, NSWE_G, NSWE_B, 1); gfx_draw_point(global_state->gfx, x+92, y+32, BG_R, BG_G, BG_B, 1); gfx_draw_point(global_state->gfx, x+96, y+32, BG_R, BG_G, BG_B, 1); gfx_draw_point(global_state->gfx, x+94, y+29, BG_R, BG_G, BG_B, 1); gfx_draw_point(global_state->gfx, x+94, y+35, BG_R, BG_G, BG_B, 1);
 
-    gfx_draw_line(global_state->gfx, x+0, y+43, x+30, y+43, 222, 222, 222, 1);
+    gfx_draw_line(global_state->gfx, x+0, y+43, x+30, y+43, COORD_R, COORD_G, COORD_B, 1);
 
     wchar_t timestr[30];
     swprintf(timestr, 30, L"%04d-%02d-%02d\n%02d:%02d:%02d", year, month, day, hour, minute, second);
-    gfx_draw_textline_mini(global_state->gfx, timestr, x+0, y+0, 0, 0, 255, 1);
+    gfx_draw_textline_mini(global_state->gfx, timestr, x+0, y+0, DATETIME_R, DATETIME_G, DATETIME_B, 1);
 
     double altitude_moon = 0.0;
     double azimuth_moon = 0.0;
@@ -1166,21 +1174,21 @@ void ui_app_linglong_draw_lite(
 
     wchar_t coordstr_moon[30];
     swprintf(coordstr_moon, 30, L"MOON\nP:%d%%\nA:%.1f\nE:%.1f", (int32_t)(moon_k * 100.0), azimuth_moon, altitude_moon);
-    gfx_draw_textline_mini(global_state->gfx, coordstr_moon, x+0, y+18, 0, 0, 0, 1);
+    gfx_draw_textline_mini(global_state->gfx, coordstr_moon, x+0, y+18, TEXT_R, TEXT_G, TEXT_B, 1);
 
     double x_moon = 64 + (90.0 - altitude_moon) * 32.0 / 90.0 * sin(azimuth_moon / 180.0 * M_PI);
     double y_moon = 32 - (90.0 - altitude_moon) * 32.0 / 90.0 * cos(azimuth_moon / 180.0 * M_PI);
 
     if (x_moon >= 32 && x_moon <= 96 && y_moon >= 0 && y_moon <= 64) {
-        gfx_draw_point(global_state->gfx, x + (int)x_moon - 1, y + (int)y_moon - 1, 255, 0, 255, 1);
-        gfx_draw_point(global_state->gfx, x + (int)x_moon - 1, y + (int)y_moon - 0, 255, 0, 255, 1);
-        gfx_draw_point(global_state->gfx, x + (int)x_moon - 1, y + (int)y_moon + 1, 255, 0, 255, 1);
-        gfx_draw_point(global_state->gfx, x + (int)x_moon - 0, y + (int)y_moon - 1, 255, 0, 255, 1);
-        gfx_draw_point(global_state->gfx, x + (int)x_moon - 0, y + (int)y_moon - 0, 255, 0, 255, 1);
-        gfx_draw_point(global_state->gfx, x + (int)x_moon - 0, y + (int)y_moon + 1, 255, 0, 255, 1);
-        gfx_draw_point(global_state->gfx, x + (int)x_moon + 1, y + (int)y_moon - 1, 255, 0, 255, 1);
-        gfx_draw_point(global_state->gfx, x + (int)x_moon + 1, y + (int)y_moon - 0, 255, 0, 255, 1);
-        gfx_draw_point(global_state->gfx, x + (int)x_moon + 1, y + (int)y_moon + 1, 255, 0, 255, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 1, y + (int)y_moon - 1, MOON_R, MOON_G, MOON_B, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 1, y + (int)y_moon - 0, MOON_R, MOON_G, MOON_B, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 1, y + (int)y_moon + 1, MOON_R, MOON_G, MOON_B, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 0, y + (int)y_moon - 1, MOON_R, MOON_G, MOON_B, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 0, y + (int)y_moon - 0, MOON_R, MOON_G, MOON_B, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon - 0, y + (int)y_moon + 1, MOON_R, MOON_G, MOON_B, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon + 1, y + (int)y_moon - 1, MOON_R, MOON_G, MOON_B, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon + 1, y + (int)y_moon - 0, MOON_R, MOON_G, MOON_B, 1);
+        gfx_draw_point(global_state->gfx, x + (int)x_moon + 1, y + (int)y_moon + 1, MOON_R, MOON_G, MOON_B, 1);
     }
 
     double altitude_sun = 0.0;
@@ -1190,13 +1198,13 @@ void ui_app_linglong_draw_lite(
 
     wchar_t coordstr_sun[30];
     swprintf(coordstr_sun, 30, L"SUN\nA:%.1f\nE:%.1f", azimuth_sun, altitude_sun);
-    gfx_draw_textline_mini(global_state->gfx, coordstr_sun, x+0, y+46, 0, 0, 0, 1);
+    gfx_draw_textline_mini(global_state->gfx, coordstr_sun, x+0, y+46, TEXT_R, TEXT_G, TEXT_B, 1);
 
     double x_sun = 64 + (90.0 - altitude_sun) * 32.0 / 90.0 * sin(azimuth_sun / 180.0 * M_PI);
     double y_sun = 32 - (90.0 - altitude_sun) * 32.0 / 90.0 * cos(azimuth_sun / 180.0 * M_PI);
 
     if (x_sun >= 32 && x_sun <= 96 && y_sun >= 0 && y_sun <= 64) {
-        gfx_draw_circle(global_state->gfx, x+(int)x_sun, y+(int)y_sun, 2, 255, 0, 0, 1);
+        gfx_draw_circle(global_state->gfx, x+(int)x_sun, y+(int)y_sun, 2, SUN_R, SUN_G, SUN_B, 1);
     }
 
 
@@ -1215,10 +1223,9 @@ void ui_app_linglong_draw_lite(
     }
     wchar_t risefall_time[60];
     swprintf(risefall_time, 60, L"R:%02d:%02d\nS:%02d:%02d", linglong_sunrise_time[0], linglong_sunrise_time[1], linglong_sunset_time[0], linglong_sunset_time[1]);
-    gfx_draw_textline_mini(global_state->gfx, risefall_time, x+98, y+0, 0, 0, 0, 1);
+    gfx_draw_textline_mini(global_state->gfx, risefall_time, x+98, y+0, TEXT_R, TEXT_G, TEXT_B, 1);
 
-    gfx_draw_textline_mini(global_state->gfx, L"    BD4SUR\n2011-09-29", x+86, y+53, 0, 0, 0, 1);
-
+    gfx_draw_textline_mini(global_state->gfx, L"    BD4SUR\n 2011-2026", x+86, y+53, TEXT_R, TEXT_G, TEXT_B, 1);
 }
 
 

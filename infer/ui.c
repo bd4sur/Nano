@@ -107,14 +107,14 @@ static int hex_char_to_int(uint32_t c) {
  * @param b 返回蓝色分量
  * @return 成功返回消耗的字符数（9），失败返回0
  */
-static int parse_color_tag(const uint32_t *text, int pos, int max_pos, uint32_t *style_code) {
+static int parse_color_tag(wchar_t *text, int pos, int max_pos, uint32_t *style_code) {
     // 检查是否有足够的字符: '[' '#' R R G G B B ']' 共9个字符
     if (pos + 8 > max_pos) return 0;
     
     // 状态检查：必须是 [#RRGGBB] 格式
-    if (text[pos] != '[') return 0;
-    if (text[pos + 1] != '#') return 0;
-    if (text[pos + 8] != ']') return 0;
+    if ((uint32_t)text[pos] != (uint32_t)'[') return 0;
+    if ((uint32_t)text[pos + 1] != (uint32_t)'#') return 0;
+    if ((uint32_t)text[pos + 8] != (uint32_t)']') return 0;
     
     // 验证并解析6位十六进制颜色值
     int color_val = 0;
@@ -150,7 +150,7 @@ void typeset_line_breaks(Widget_Textarea_State *textarea_state) {
 
     for (int32_t i = 0; i < text_len; i++) {
         // 调用 parse_color_tag 检测颜色标签
-        int consumed = parse_color_tag((const uint32_t *)textarea_state->text, char_count, text_len - 1, &style_code);
+        int consumed = parse_color_tag(textarea_state->text, char_count, text_len - 1, &style_code);
         textarea_state->style[char_count] = style_code;
 
         if (consumed > 0) {

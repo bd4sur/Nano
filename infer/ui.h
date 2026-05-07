@@ -19,10 +19,10 @@ extern "C" {
 #define LONG_PRESS_THRESHOLD (360)
 
 #define MAX_CANDIDATE_NUM (256)     // 候选字最大数量
-#define MAX_CANDIDATE_PAGE_NUM (108) // 候选字最大分页数
+#define MAX_CANDIDATE_PAGE_NUM (26) // 候选字最大分页数
 #define MAX_CANDIDATE_NUM_PER_PAGE (10) // 每页最多有几个候选字（每页10个字）
 
-#define MAX_MENU_ITEMS (128)
+#define MAX_MENU_ITEMS (64)
 #define MAX_MENU_ITEM_LEN (64)
 
 struct Nano_Context;

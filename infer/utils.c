@@ -74,123 +74,217 @@ uint32_t map_get(struct Map *m, uint32_t key) {
 
 
 // ===============================================================================
-// Trie树
+// Radix Tree（基数树 / 压缩前缀树）
 // ===============================================================================
 
-// 扩展内存池
-void expand_memory_pool(struct Trie *trie) {
-    uint32_t new_pool_size = trie->pool_size * 2; // 新内存池大小
-    struct TrieNode *new_pool = (struct TrieNode *)calloc(new_pool_size, sizeof(struct TrieNode));
-    if (!new_pool) {
-        printf("Failed to allocate expanded memory pool\n");
+// 创建一个新的 Radix 节点
+static struct RadixNode *new_radix_node(void) {
+    struct RadixNode *node = (struct RadixNode *)calloc(1, sizeof(struct RadixNode));
+    if (!node) {
+        printf("Failed to allocate RadixNode\n");
         exit(EXIT_FAILURE);
     }
-
-    // 拷贝旧内存池的内容到新池中
-    memcpy(new_pool, trie->node_pool, trie->pool_size * sizeof(struct TrieNode));
-    free(trie->node_pool);
-
-    trie->node_pool = new_pool;
-    trie->pool_size = new_pool_size;
-    printf("Memory pool expanded to %u nodes\n", trie->pool_size);
+    return node;
 }
 
-// 初始化一个Trie树
-//   注：当前使用动态内存池的实现中，没有用到两个参数。仅为兼容性而保留。
+// 递归释放 Radix 节点及其所有子树
+static void free_radix_node(struct RadixNode *node) {
+    if (!node) return;
+    if (node->prefix) {
+        free(node->prefix);
+    }
+    for (uint32_t i = 0; i < node->num_children; i++) {
+        free_radix_node(node->children[i]);
+    }
+    if (node->children) {
+        free(node->children);
+    }
+    free(node);
+}
+
+// 在父节点的子节点中查找首元素与给定 key 匹配的子节点
+static struct RadixNode *find_child(struct RadixNode *parent, uint32_t key) {
+    for (uint32_t i = 0; i < parent->num_children; i++) {
+        if (parent->children[i]->prefix_len > 0 && parent->children[i]->prefix[0] == key) {
+            return parent->children[i];
+        }
+    }
+    return NULL;
+}
+
+// 向父节点添加一个子节点
+static void add_child(struct RadixNode *parent, struct RadixNode *child) {
+    if (parent->num_children >= parent->child_capacity) {
+        uint32_t new_cap = parent->child_capacity == 0 ? 4 : parent->child_capacity * 2;
+        struct RadixNode **new_children = (struct RadixNode **)realloc(parent->children, new_cap * sizeof(struct RadixNode *));
+        if (!new_children) {
+            printf("Failed to realloc children array\n");
+            exit(EXIT_FAILURE);
+        }
+        parent->children = new_children;
+        parent->child_capacity = new_cap;
+    }
+    parent->children[parent->num_children++] = child;
+}
+
+// 初始化一个 Trie 树（内部使用 Radix Tree 实现）
+//   注：参数 vocab_size 和 is_end_of_token 仅为兼容性而保留。
 struct Trie *new_trie(uint32_t vocab_size, uint8_t is_end_of_token) {
+    (void)vocab_size;
+    (void)is_end_of_token;
     struct Trie *trie = (struct Trie *)malloc(sizeof(struct Trie));
     if (!trie) {
         printf("Failed to allocate memory for Trie\n");
         exit(EXIT_FAILURE);
     }
-
-    trie->pool_size = INITIAL_POOL_SIZE;
-    trie->node_pool = (struct TrieNode *)calloc(trie->pool_size, sizeof(struct TrieNode));
-    if (!trie->node_pool) {
-        printf("Failed to allocate initial memory pool for Trie nodes\n");
-        free(trie);
-        exit(EXIT_FAILURE);
-    }
-
-    trie->next_free_node = 0;
-    trie->root = &trie->node_pool[trie->next_free_node++];
+    trie->root = new_radix_node();
     return trie;
 }
 
-// 从内存池中分配一个新的Trie节点，返回它在节点内存池中的索引
-uint32_t allocate_node(struct Trie *trie) {
-    if (trie->next_free_node >= trie->pool_size) {
-        expand_memory_pool(trie); // 扩展内存池
-    }
-    return trie->next_free_node++;
-}
-
-// 释放Trie树
+// 释放 Trie 树
 void free_trie(struct Trie *trie) {
     if (trie) {
-        for (int32_t i = 0; i < trie->next_free_node; i++) {
-            struct TrieNode *node = &trie->node_pool[i];
-            if (node->children) {
-                free_map(node->children);
-            }
-        }
-        free(trie->node_pool);
+        free_radix_node(trie->root);
         free(trie);
     }
 }
 
-// 向Trie树中增加一个词
+// 向 Trie 树中增加一个词
 int add_token(struct Trie *trie, uint32_t *token, uint32_t token_len, uint32_t token_id) {
     if (!trie || !token || token_len == 0) return -1;
 
-    struct TrieNode *node = trie->root;
-    for (uint32_t i = 0; i < token_len; ++i) {
-        uint32_t index = token[i];
-        if (index >= VOCAB_SIZE) return -1; // 超出VOCAB_SIZE范围
-
-        uint32_t child_node_index = 0;
-        if (!node->children) {
-            node->children = new_map(30);
-            child_node_index = allocate_node(trie);
-            map_set(node->children, index, child_node_index);
-        }
-        else {
-            child_node_index = map_get(node->children, index);
-            if (!child_node_index) { // 返回0就是不存在（没找到）
-                child_node_index = allocate_node(trie);
-                map_set(node->children, index, child_node_index);
-            }
-        }
-        node = &trie->node_pool[child_node_index];
+    // 合法性校验
+    for (uint32_t i = 0; i < token_len; i++) {
+        if (token[i] >= VOCAB_SIZE) return -1;
     }
 
-    if (node->is_end_of_token) return -1; // 防止重复添加
+    struct RadixNode *node = trie->root;
+    uint32_t pos = 0;
 
-    node->is_end_of_token = 1;
-    node->token_id = token_id;
-    return 0;
+    while (pos < token_len) {
+        struct RadixNode *child = find_child(node, token[pos]);
+        if (!child) {
+            // 没有匹配的子节点，直接创建新节点并挂载
+            struct RadixNode *new_node = new_radix_node();
+            new_node->prefix_len = token_len - pos;
+            new_node->prefix = (uint32_t *)malloc(new_node->prefix_len * sizeof(uint32_t));
+            if (!new_node->prefix) {
+                printf("Failed to allocate prefix\n");
+                exit(EXIT_FAILURE);
+            }
+            memcpy(new_node->prefix, token + pos, new_node->prefix_len * sizeof(uint32_t));
+            new_node->is_end_of_token = 1;
+            new_node->token_id = token_id;
+            add_child(node, new_node);
+            return 0;
+        }
+
+        // 计算当前待插入序列与 child 前缀的公共长度
+        uint32_t common_len = 0;
+        uint32_t min_len = (token_len - pos < child->prefix_len) ? (token_len - pos) : child->prefix_len;
+        while (common_len < min_len && token[pos + common_len] == child->prefix[common_len]) {
+            common_len++;
+        }
+
+        if (common_len == child->prefix_len && common_len == token_len - pos) {
+            // 完全匹配已有节点
+            if (child->is_end_of_token) return -1; // 防止重复添加
+            child->is_end_of_token = 1;
+            child->token_id = token_id;
+            return 0;
+        }
+        else if (common_len < child->prefix_len) {
+            // 需要分裂 child 节点
+            struct RadixNode *split = new_radix_node();
+            split->prefix_len = common_len;
+            split->prefix = (uint32_t *)malloc(common_len * sizeof(uint32_t));
+            if (!split->prefix) {
+                printf("Failed to allocate prefix for split\n");
+                exit(EXIT_FAILURE);
+            }
+            memcpy(split->prefix, child->prefix, common_len * sizeof(uint32_t));
+
+            // 调整原 child 节点的前缀为剩余部分
+            uint32_t remaining = child->prefix_len - common_len;
+            uint32_t *new_prefix = (uint32_t *)malloc(remaining * sizeof(uint32_t));
+            if (!new_prefix) {
+                printf("Failed to allocate new prefix\n");
+                exit(EXIT_FAILURE);
+            }
+            memcpy(new_prefix, child->prefix + common_len, remaining * sizeof(uint32_t));
+            free(child->prefix);
+            child->prefix = new_prefix;
+            child->prefix_len = remaining;
+
+            // 将原 child 挂载到 split 下
+            add_child(split, child);
+
+            // 在 node 的子节点列表中用 split 替换 child
+            for (uint32_t i = 0; i < node->num_children; i++) {
+                if (node->children[i] == child) {
+                    node->children[i] = split;
+                    break;
+                }
+            }
+
+            if (common_len == token_len - pos) {
+                // 插入的词在 split 处结束
+                split->is_end_of_token = 1;
+                split->token_id = token_id;
+            } else {
+                // 还需要创建一个剩余部分的新节点挂载到 split 下
+                struct RadixNode *new_node = new_radix_node();
+                new_node->prefix_len = token_len - pos - common_len;
+                new_node->prefix = (uint32_t *)malloc(new_node->prefix_len * sizeof(uint32_t));
+                if (!new_node->prefix) {
+                    printf("Failed to allocate suffix prefix\n");
+                    exit(EXIT_FAILURE);
+                }
+                memcpy(new_node->prefix, token + pos + common_len, new_node->prefix_len * sizeof(uint32_t));
+                new_node->is_end_of_token = 1;
+                new_node->token_id = token_id;
+                add_child(split, new_node);
+            }
+            return 0;
+        }
+        else {
+            // common_len == child->prefix_len < token_len - pos
+            // 继续向下匹配
+            pos += common_len;
+            node = child;
+        }
+    }
+
+    return -1; // 理论上不会到达此处
 }
 
-// 在Trie树中匹配一个词
+// 在 Trie 树中匹配一个词
 int match_token(struct Trie *trie, uint32_t *pattern, uint32_t pattern_len, uint32_t *token_id) {
     if (!trie || !pattern || pattern_len == 0) return -1;
 
-    struct TrieNode *node = trie->root;
-    for (uint32_t i = 0; i < pattern_len; ++i) {
-        uint32_t index = pattern[i];
-        uint32_t child_node_index = 0;
-
-        if (index >= VOCAB_SIZE) return -1;
-
-        if (!node->children) {
-            return -1;
-        }
-        else {
-            child_node_index = map_get(node->children, index);
-            if (!child_node_index) return -1;
-            node = &trie->node_pool[child_node_index];
-        }
+    // 合法性校验
+    for (uint32_t i = 0; i < pattern_len; i++) {
+        if (pattern[i] >= VOCAB_SIZE) return -1;
     }
+
+    struct RadixNode *node = trie->root;
+    uint32_t pos = 0;
+
+    while (pos < pattern_len) {
+        struct RadixNode *child = find_child(node, pattern[pos]);
+        if (!child) return -1;
+
+        uint32_t remaining = pattern_len - pos;
+        if (remaining < child->prefix_len) return -1;
+
+        for (uint32_t i = 0; i < child->prefix_len; i++) {
+            if (pattern[pos + i] != child->prefix[i]) return -1;
+        }
+
+        pos += child->prefix_len;
+        node = child;
+    }
+
     if (node->is_end_of_token) {
         if (token_id) *token_id = node->token_id;
         return 0;
@@ -201,7 +295,6 @@ int match_token(struct Trie *trie, uint32_t *pattern, uint32_t pattern_len, uint
 uint32_t tokenize(struct Trie *vocab_trie, uint32_t *output_token_ids, const uint32_t *input_char_ids, uint32_t input_length, uint32_t max_token_length) {
     uint32_t token_count = 0;
     uint32_t pos = 0;
-    // uint32_t prefix[MAX_TOKEN_LENGTH];
     while(pos < input_length) {
         uint32_t available_max_token_length = (input_length - pos < max_token_length) ? (input_length - pos) : max_token_length;
         for(uint32_t n = available_max_token_length; n > 0; n--) {
@@ -214,6 +307,7 @@ uint32_t tokenize(struct Trie *vocab_trie, uint32_t *output_token_ids, const uin
                 output_token_ids[token_count] = (n == 1) ? prefix[0] : tid;
                 token_count++;
                 pos += n;
+                free(prefix);
                 break;
             }
             free(prefix);

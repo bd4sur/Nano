@@ -83,10 +83,13 @@ static inline int cell_type_safe(const int *cell_type, int idx, int num_cells) {
 static int is_in_funnel_neck(FlipFluid *f, int xi, int yi)
 {
     float half_y = f->f_num_y / 2.0f;
-    float neck_width = 1.0f;
+    float neck_width = 2.0f;
     if (fabsf(yi - half_y) <= neck_width) {
-        int in_left  = (xi >= yi - 1);
-        int in_right = (xi <= f->f_num_y - yi + 1);
+        float ratio = f->f_num_y / (float)f->f_num_x;
+        float diag1 = ratio * xi;                 /* y = (NumY/NumX) * x */
+        float diag2 = f->f_num_y - ratio * xi;    /* y = NumY - (NumY/NumX) * x */
+        int in_left  = (yi <= diag1 + 1.0f);
+        int in_right = (yi <= diag2 + 1.0f);
         return in_left && in_right;
     }
     return 0;
@@ -98,33 +101,118 @@ static void apply_funnel_neck_damping(FlipFluid *f, float dt, float damping_coef
         return;
 
     float half_y = f->f_num_y / 2.0f;
-    int n = f->f_num_y;
-    float decay_base = expf(-damping_coeff * dt * 60.0f);
+    float h = f->h;
+    float decay = expf(-damping_coeff * dt * 60.0f);
+    float min_dist = 2.0f * f->particle_radius;
+    float min_dist_sq = min_dist * min_dist;
 
-    /* A. grid velocity damping */
-    for (int i = 1; i < f->f_num_x - 1; i++) {
-        for (int j = 1; j < f->f_num_y - 1; j++) {
-            int cell_nr = i * n + j;
-            if (f->cell_type[cell_nr] != FLUID_CELL)
-                continue;
-            if (fabsf(j - half_y) <= 1.0f && is_in_funnel_neck(f, i, j)) {
-                f->v[cell_nr] *= powf(decay_base, 1.5f);
-                f->u[cell_nr] *= powf(decay_base, 0.3f);
-            }
-        }
+    char *blocked = (char *)platform_calloc(f->num_particles, sizeof(char));
+    int *queue = (int *)platform_malloc(f->num_particles * sizeof(int));
+    if (!blocked || !queue) {
+        free(blocked); free(queue);
+        return;
     }
 
-    /* B. particle velocity damping */
+    int qhead = 0, qtail = 0;
+
+    /* 1. 种子：瓶颈中心最狭窄处的粒子，水平速度强制置零以形成刚性塞子 */
     for (int p = 0; p < f->num_particles; p++) {
         float x = f->particle_pos[2 * p];
         float y = f->particle_pos[2 * p + 1];
         int xi = (int)floorf(x * f->f_inv_spacing);
         int yi = (int)floorf(y * f->f_inv_spacing);
-        if (is_in_funnel_neck(f, xi, yi)) {
-            f->particle_vel[2 * p + 1] *= powf(decay_base, 1.5f);
-            f->particle_vel[2 * p]     *= powf(decay_base, 0.3f);
+        if (fabsf(yi - half_y) <= 1.0f && is_in_funnel_neck(f, xi, yi)) {
+            blocked[p] = 1;
+            queue[qtail++] = p;
+            f->particle_vel[2 * p] = 0.0f;
         }
     }
+
+    if (qtail == 0) {
+        free(blocked); free(queue);
+        return;
+    }
+
+    /* 2. 构建粒子空间哈希（复用 f 的持久数组） */
+    memset(f->num_cell_particles, 0, f->p_num_cells * sizeof(int));
+    for (int i = 0; i < f->num_particles; i++) {
+        float x = f->particle_pos[2 * i];
+        float y = f->particle_pos[2 * i + 1];
+        int xi = clampi((int)floorf(x * f->p_inv_spacing), 0, f->p_num_x - 1);
+        int yi = clampi((int)floorf(y * f->p_inv_spacing), 0, f->p_num_y - 1);
+        f->num_cell_particles[xi * f->p_num_y + yi]++;
+    }
+
+    int first = 0;
+    for (int i = 0; i < f->p_num_cells; i++) {
+        first += f->num_cell_particles[i];
+        f->first_cell_particle[i] = first;
+    }
+    f->first_cell_particle[f->p_num_cells] = first;
+
+    for (int i = f->num_particles - 1; i >= 0; i--) {
+        float x = f->particle_pos[2 * i];
+        float y = f->particle_pos[2 * i + 1];
+        int xi = clampi((int)floorf(x * f->p_inv_spacing), 0, f->p_num_x - 1);
+        int yi = clampi((int)floorf(y * f->p_inv_spacing), 0, f->p_num_y - 1);
+        int cell_nr = xi * f->p_num_y + yi;
+        f->first_cell_particle[cell_nr]--;
+        f->cell_particle_ids[f->first_cell_particle[cell_nr]] = i;
+    }
+
+    /* 3. BFS 接触传播：凡是与瓶颈种子通过接触链相连的粒子均标记为 blocked */
+    while (qhead < qtail) {
+        int cur = queue[qhead++];
+        float px = f->particle_pos[2 * cur];
+        float py = f->particle_pos[2 * cur + 1];
+        int pxi = clampi((int)floorf(px * f->p_inv_spacing), 0, f->p_num_x - 1);
+        int pyi = clampi((int)floorf(py * f->p_inv_spacing), 0, f->p_num_y - 1);
+        int x0 = maxi(pxi - 1, 0);
+        int y0 = maxi(pyi - 1, 0);
+        int x1 = mini(pxi + 1, f->p_num_x - 1);
+        int y1 = mini(pyi + 1, f->p_num_y - 1);
+
+        for (int xi = x0; xi <= x1; xi++) {
+            for (int yi = y0; yi <= y1; yi++) {
+                int cell_nr = xi * f->p_num_y + yi;
+                int start = f->first_cell_particle[cell_nr];
+                int end = f->first_cell_particle[cell_nr + 1];
+                for (int k = start; k < end; k++) {
+                    int nid = f->cell_particle_ids[k];
+                    if (blocked[nid]) continue;
+                    float dx = f->particle_pos[2 * nid] - px;
+                    float dy = f->particle_pos[2 * nid + 1] - py;
+                    float d2 = dx * dx + dy * dy;
+                    if (d2 <= min_dist_sq && d2 > 0.0f) {
+                        blocked[nid] = 1;
+                        queue[qtail++] = nid;
+                    }
+                }
+            }
+        }
+    }
+
+    /* 4. 计算流体整体在 y 轴的平均运动方向，以来源侧为“上方” */
+    float avg_vy = 0.0f;
+    for (int p = 0; p < f->num_particles; p++) {
+        avg_vy += f->particle_vel[2 * p + 1];
+    }
+    avg_vy /= f->num_particles;
+
+    /* 5. 对阻塞链中位于“上方”（来源侧）的所有粒子施加强阻尼 */
+    float neck_y = half_y * h;
+    for (int p = 0; p < f->num_particles; p++) {
+        if (!blocked[p]) continue;
+        float y = f->particle_pos[2 * p + 1];
+        int is_upstream = (avg_vy <= 0.0f) ? (y >= neck_y - h) : (y <= neck_y + h);
+        if (is_upstream) {
+            f->particle_vel[2 * p]     *= decay;
+            f->particle_vel[2 * p + 1] *= decay;
+        }
+    }
+
+    free(blocked);
+    free(queue);
 }
 
 /* ---------- particle dynamics ---------- */
@@ -171,7 +259,21 @@ static void push_particles_apart(FlipFluid *f, int num_iters) {
     float min_dist = 2.0f * f->particle_radius;
     float min_dist2 = min_dist * min_dist;
 
+    /* Jacobi-style displacement accumulation: compute all pairwise pushes
+     * based on the same snapshot of positions, then apply them all at once.
+     * This eliminates the directional bias of the original Gauss-Seidel
+     * in-place updates. */
+    float *dx_buf = (float *)platform_calloc(f->num_particles, sizeof(float));
+    float *dy_buf = (float *)platform_calloc(f->num_particles, sizeof(float));
+    if (!dx_buf || !dy_buf) {
+        free(dx_buf); free(dy_buf);
+        return;
+    }
+
     for (int iter = 0; iter < num_iters; iter++) {
+        memset(dx_buf, 0, f->num_particles * sizeof(float));
+        memset(dy_buf, 0, f->num_particles * sizeof(float));
+
         for (int i = 0; i < f->num_particles; i++) {
             float px = f->particle_pos[2 * i];
             float py = f->particle_pos[2 * i + 1];
@@ -189,7 +291,10 @@ static void push_particles_apart(FlipFluid *f, int num_iters) {
                     int ls = f->first_cell_particle[cell_nr + 1];
                     for (int j = fs; j < ls; j++) {
                         int id = f->cell_particle_ids[j];
-                        if (id == i) continue;
+                        /* Enforce id > i so each pair is processed exactly once.
+                         * Without this, Jacobi accumulation would double-count
+                         * the same pair because both particles see each other. */
+                        if (id <= i) continue;
                         float qx = f->particle_pos[2 * id];
                         float qy = f->particle_pos[2 * id + 1];
                         float dx = qx - px;
@@ -199,10 +304,8 @@ static void push_particles_apart(FlipFluid *f, int num_iters) {
                         float d = sqrtf(d2);
                         float s = 0.5f * (min_dist - d) / d;
                         dx *= s; dy *= s;
-                        f->particle_pos[2 * i]     -= dx;
-                        f->particle_pos[2 * i + 1] -= dy;
-                        f->particle_pos[2 * id]     += dx;
-                        f->particle_pos[2 * id + 1] += dy;
+                        dx_buf[i] -= dx; dy_buf[i] -= dy;
+                        dx_buf[id] += dx; dy_buf[id] += dy;
 
                         for (int k = 0; k < 3; k++) {
                             float color0 = f->particle_color[3 * i + k];
@@ -215,7 +318,15 @@ static void push_particles_apart(FlipFluid *f, int num_iters) {
                 }
             }
         }
+
+        for (int i = 0; i < f->num_particles; i++) {
+            f->particle_pos[2 * i]     += dx_buf[i];
+            f->particle_pos[2 * i + 1] += dy_buf[i];
+        }
     }
+
+    free(dx_buf);
+    free(dy_buf);
 }
 
 static void handle_particle_collisions(FlipFluid *f) {
@@ -223,8 +334,6 @@ static void handle_particle_collisions(FlipFluid *f) {
     float r = f->particle_radius;
     float min_x = h + r, max_x = (f->f_num_x - 1) * h - r;
     float min_y = h + r, max_y = (f->f_num_y - 1) * h - r;
-    float inv_sqrt2 = 1.0f / sqrtf(2.0f);
-
     for (int i = 0; i < f->num_particles; i++) {
         float x = f->particle_pos[2 * i];
         float y = f->particle_pos[2 * i + 1];
@@ -239,25 +348,34 @@ static void handle_particle_collisions(FlipFluid *f) {
             float nx = 0.0f, ny = 0.0f;
             float penetration = 0.0f;
 
-            if (xi < yi && yi < half_y) {
+            float ratio = f->f_num_y / (float)f->f_num_x;
+            float len = sqrtf(ratio * ratio + 1.0f);
+            float inv_len = 1.0f / len;
+
+            int below_diag1 = (yi * f->f_num_x <= xi * f->f_num_y);
+            int above_diag1 = (yi * f->f_num_x >= xi * f->f_num_y);
+            int below_diag2 = (yi * f->f_num_x + xi * f->f_num_y <= f->f_num_x * f->f_num_y);
+            int above_diag2 = (yi * f->f_num_x + xi * f->f_num_y >= f->f_num_x * f->f_num_y);
+
+            if (above_diag1 && yi <= half_y) {
                 in_solid = 1;
-                nx =  inv_sqrt2; ny = -inv_sqrt2;
-                penetration = -(x - y) * inv_sqrt2;
+                nx =  ratio * inv_len; ny = -inv_len;
+                penetration = -(ratio * x - y) * inv_len;
             }
-            else if (xi > yi && yi > half_y) {
+            else if (below_diag1 && yi >= half_y - 0) {
                 in_solid = 1;
-                nx = -inv_sqrt2; ny =  inv_sqrt2;
-                penetration =  (x - y) * inv_sqrt2;
+                nx = -ratio * inv_len; ny =  inv_len;
+                penetration =  (ratio * x - y) * inv_len;
             }
-            else if (xi < f->f_num_y - yi && yi > half_y) {
+            else if (below_diag2 && yi >= half_y) {
                 in_solid = 1;
-                nx = inv_sqrt2; ny = inv_sqrt2;
-                penetration = -(x + y - f->f_num_y * h) * inv_sqrt2;
+                nx = ratio * inv_len; ny = inv_len;
+                penetration = -(ratio * x + y - f->f_num_y * h) * inv_len;
             }
-            else if (xi > f->f_num_y - yi && yi < half_y) {
+            else if (above_diag2 && yi <= half_y + 0) {
                 in_solid = 1;
-                nx = -inv_sqrt2; ny = -inv_sqrt2;
-                penetration =  (x + y - f->f_num_y * h) * inv_sqrt2;
+                nx = -ratio * inv_len; ny = -inv_len;
+                penetration =  (ratio * x + y - f->f_num_y * h) * inv_len;
             }
 
             if (in_solid && penetration > 0.0f) {
@@ -292,8 +410,8 @@ static void update_particle_density(FlipFluid *f) {
     for (int i = 0; i < f->num_particles; i++) {
         float x = f->particle_pos[2 * i];
         float y = f->particle_pos[2 * i + 1];
-        x = clampf(x, h, (f->f_num_x - 1) * h);
-        y = clampf(y, h, (f->f_num_y - 1) * h);
+        x = clampf(x, h + h2, (f->f_num_x - 1) * h - h2);
+        y = clampf(y, h + h2, (f->f_num_y - 1) * h - h2);
 
         int x0 = (int)floorf((x - h2) * h1);
         float tx = ((x - h2) - x0 * h) * h1;
@@ -355,8 +473,8 @@ static void transfer_velocities(FlipFluid *f, int to_grid, float flip_ratio) {
         for (int i = 0; i < f->num_particles; i++) {
             float x = f->particle_pos[2 * i];
             float y = f->particle_pos[2 * i + 1];
-            x = clampf(x, h, (f->f_num_x - 1) * h);
-            y = clampf(y, h, (f->f_num_y - 1) * h);
+            x = clampf(x, h + h2, (f->f_num_x - 1) * h - h2);
+            y = clampf(y, h + h2, (f->f_num_y - 1) * h - h2);
 
             int x0 = mini((int)floorf((x - dx) * h1), f->f_num_x - 2);
             float tx = ((x - dx) - x0 * h) * h1;
@@ -391,6 +509,14 @@ static void transfer_velocities(FlipFluid *f, int to_grid, float flip_ratio) {
                     f->particle_vel[2 * i + component] = (1.0f - flip_ratio) * pic_v + flip_ratio * flip_v;
                 }
             }
+
+            // if (f->hourglass_enabled) {
+            //     if (y >= (f->f_num_y/2 - 1) * h && y <= (f->f_num_y/2 + 1) * h) {
+            //         f->particle_vel[2 * i + 0] = 0.0f;
+            //         if (f->particle_vel[2 * i + 1] > 0) f->particle_vel[2 * i + 1] = 0.0005f;
+            //         else f->particle_vel[2 * i + 1] = -0.0005f;
+            //     }
+            // }
         }
 
         if (to_grid) {
@@ -408,15 +534,48 @@ static void transfer_velocities(FlipFluid *f, int to_grid, float flip_ratio) {
     }
 }
 
+static void apply_funnel_neck_constraint(FlipFluid *f, float funnel_pressure_resistance) {
+    if (funnel_pressure_resistance <= 0.0f || !f->hourglass_enabled) return;
+
+    int n = f->f_num_y;
+    float half_y = f->f_num_y / 2.0f;
+    // float blend = clampf(funnel_pressure_resistance, 0.0f, 1.0f);
+
+    for (int i = 1; i < f->f_num_x - 1; i++) {
+        for (int j = 1; j < f->f_num_y - 1; j++) {
+            if (fabsf(j - half_y) > 1.0f) continue;
+            if (!is_in_funnel_neck(f, i, j)) continue;
+
+            int center = i * n + j;
+            int left   = (i - 1) * n + j;
+            int right  = (i + 1) * n + j;
+            if (f->cell_type[center] != FLUID_CELL) continue;
+
+            f->u[left] = 0;
+            f->u[center] = 0;
+            f->u[right] = 0;
+
+            float target_v = (f->prev_v[center] > 0.0f) ? -0.2f : 0.2f;
+            f->v[center] = target_v;
+        }
+    }
+}
+
 static void solve_incompressibility(FlipFluid *f, int num_iters, float dt, float over_relaxation, int compensate_drift, float funnel_pressure_resistance) {
     memset(f->p, 0, f->f_num_cells * sizeof(float));
     memcpy(f->prev_u, f->u, f->f_num_cells * sizeof(float));
     memcpy(f->prev_v, f->v, f->f_num_cells * sizeof(float));
     int n = f->f_num_y;
     float cp = f->density * f->h / dt;
-    float half_y = f->f_num_y / 2.0f;
+    // float half_y = f->f_num_y / 2.0f;
 
     for (int iter = 0; iter < num_iters; iter++) {
+        /* Jacobi iteration: snapshot the current velocity field so that
+         * all cells in this sweep read from the same state, eliminating
+         * the directional bias inherent to Gauss-Seidel in-place updates. */
+        memcpy(f->du, f->u, f->f_num_cells * sizeof(float));
+        memcpy(f->dv, f->v, f->f_num_cells * sizeof(float));
+
         for (int i = 1; i < f->f_num_x - 1; i++) {
             for (int j = 1; j < f->f_num_y - 1; j++) {
                 int center = i * n + j;
@@ -429,16 +588,10 @@ static void solve_incompressibility(FlipFluid *f, int num_iters, float dt, float
                 float sy0 = f->s[bottom], sy1 = f->s[top];
                 float s = sx0 + sx1 + sy0 + sy1;
                 if (s == 0.0f) continue;
-                float div = f->u[right] - f->u[center] + f->v[top] - f->v[center];
 
-                /* funnel pressure resistance */
-                if (f->hourglass_enabled && funnel_pressure_resistance > 0.0f && fabsf(j - half_y) <= 1.0f) {
-                    if (is_in_funnel_neck(f, i, j)) {
-                        float vy_avg = (f->v[center] + f->v[top]) * 0.5f;
-                        float resistance = funnel_pressure_resistance * vy_avg * dt;
-                        div += resistance;
-                    }
-                }
+                /* Divergence computed from the frozen snapshot (du/dv),
+                 * not from the partially-updated field. */
+                float div = f->du[right] - f->du[center] + f->dv[top] - f->dv[center];
 
                 if (f->particle_rest_density > 0.0f && compensate_drift) {
                     float compression = f->particle_density[center] - f->particle_rest_density;
@@ -446,11 +599,16 @@ static void solve_incompressibility(FlipFluid *f, int num_iters, float dt, float
                 }
                 float p_val = -div / s * over_relaxation;
                 f->p[center] += cp * p_val;
+
+                /* Velocity updates accumulate symmetrically on the live field.
+                 * Because every cell derived p_val from the same snapshot,
+                 * no directional sweep bias remains. */
                 f->u[center] -= sx0 * p_val; f->u[right] += sx1 * p_val;
-                f->v[center] -= sy0 * p_val; f->v[top]    += sy1 * p_val;
+                f->v[center] -= sy0 * p_val; f->v[top]   += sy1 * p_val;
             }
         }
     }
+    // apply_funnel_neck_constraint(f, funnel_pressure_resistance);
 }
 
 static void update_particle_colors(FlipFluid *f) {
@@ -499,9 +657,9 @@ static void update_cell_colors(FlipFluid *f) {
     memset(f->cell_color, 0, 3 * f->f_num_cells * sizeof(float));
     for (int i = 0; i < f->f_num_cells; i++) {
         if (f->cell_type[i] == SOLID_CELL) {
-            f->cell_color[3 * i]     = 0.0f;
-            f->cell_color[3 * i + 1] = 0.0f;
-            f->cell_color[3 * i + 2] = 0.0f;
+            f->cell_color[3 * i]     = 0.2f;
+            f->cell_color[3 * i + 1] = 0.2f;
+            f->cell_color[3 * i + 2] = 0.2f;
         } else if (f->cell_type[i] == FLUID_CELL) {
             float d = f->particle_density[i];
             if (f->particle_rest_density > 0.0f) d /= f->particle_rest_density;
@@ -605,7 +763,7 @@ void flip_init(float pool_width, float pool_height, int32_t resolution, int32_t 
     float tank_width = pool_width;
     float h = tank_height / resolution;
     float density = 1000.0f;
-    float rel_water_height = 0.5f, rel_water_width = 0.3f;
+    float rel_water_height = 0.5f, rel_water_width = 0.6f;
     float r = 0.3f * h;
     float dx = 2.0f * r;
     float dy = sqrtf(3.0f) / 2.0f * dx;
@@ -664,11 +822,15 @@ void flip_init(float pool_width, float pool_height, int32_t resolution, int32_t 
     for (int i = 0; i < f->f_num_x; i++) {
         for (int j = 0; j < f->f_num_y; j++) {
             float s = 1.0f;
-            if (i == 0 || i == f->f_num_x - 1 || j == 0) s = 0.0f;
+            if (i == 0 || i == f->f_num_x - 1 || j == 0 || j == f->f_num_y - 1) s = 0.0f;
             if (f->hourglass_enabled) {
                 float half_y = f->f_num_y / 2.0f;
-                if ((i < j && j < half_y) || (i > j && j > half_y) ||
-                    (i < f->f_num_y - j && j > half_y) || (i > f->f_num_y - j && j < half_y)) {
+                int below_diag1 = (j * f->f_num_x <= i * f->f_num_y);
+                int above_diag1 = (j * f->f_num_x >= i * f->f_num_y);
+                int below_diag2 = (j * f->f_num_x + i * f->f_num_y <= f->f_num_x * f->f_num_y);
+                int above_diag2 = (j * f->f_num_x + i * f->f_num_y >= f->f_num_x * f->f_num_y);
+                if ((above_diag1 && j <= half_y) || (below_diag1 && j >= half_y) ||
+                    (below_diag2 && j >= half_y) || (above_diag2 && j <= half_y)) {
                     s = 0.0f;
                 }
             }
