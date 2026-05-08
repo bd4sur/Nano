@@ -25,6 +25,8 @@ int main() {
         main_event_handler(key_event, global_state);
         // 周期性任务
         main_periodic_task(key_event, global_state);
+        // 更新上一轮循环的物理时间戳
+        global_state->timestamp_last = global_state->timestamp;
     }
 
     main_deinit(key_event, global_state);

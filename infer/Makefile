@@ -18,12 +18,12 @@ $(BIN_DIR):
 
 # Nano-Pod-Lite：带键盘和单色I2C屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z/MARGA）
 pod_lite: $(BIN_DIR)/nano_pod_lite
-$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c ups.c platform_linux.c display_ssd130x_linux.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c ups_rpi5.c platform_linux.c display_ssd130x_linux.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_LITE_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-Pod：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z）
 pod: $(BIN_DIR)/nano_pod
-$(BIN_DIR)/nano_pod: main.c asr.c tts.c imu10.c ups.c platform_linux.c display_ili9341.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod: main.c asr.c tts.c imu10.c ups_rpi5.c platform_linux.c display_ili9341.c keyboard_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-TTY：适用于文字终端图形交互的终端程序

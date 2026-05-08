@@ -9,9 +9,14 @@ extern "C" {
 #include "platform.h"
 
 int ups_init();
-// 读取电压寄存器(mV)
+
+// 充电状态
+int32_t read_ups_is_charging();
+// 电压(mV)
 int32_t read_ups_voltage();
-// 读取电池容量寄存器
+// 电流(mV)
+int32_t read_ups_current();
+// 电池电量
 int32_t read_ups_soc();
 
 #ifdef __cplusplus

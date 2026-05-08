@@ -51,7 +51,11 @@ int ups_init() {
     return 0;
 }
 
-// 读取电压寄存器(mV)
+int32_t read_ups_is_charging() {
+    return 0;
+}
+
+// 电压(mV)
 int32_t read_ups_voltage() {
     if (ups_fd < 0) {
         return -1;
@@ -73,7 +77,12 @@ int32_t read_ups_voltage() {
     return vbat;
 }
 
-// 读取电池容量寄存器
+// 电流(mA)
+int32_t read_ups_current() {
+    return 0;
+}
+
+// 电量
 int32_t read_ups_soc() {
     int32_t vbat = read_ups_voltage();
     if (vbat < 0) {

@@ -16,18 +16,20 @@ extern "C" {
 #include <math.h>
 
 
-#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
-    #define uint64_t unsigned long long
-    #define int64_t signed long long
-    #define uint32_t unsigned int
-    #define int32_t signed int
-    #define uint16_t unsigned short
-    #define int16_t signed short
-    #define uint8_t unsigned char
-    #define int8_t signed char
-#else
-    #include <stdint.h>
-#endif
+// #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
+//     #define uint64_t unsigned long long
+//     #define int64_t signed long long
+//     #define uint32_t unsigned int
+//     #define int32_t signed int
+//     #define uint16_t unsigned short
+//     #define int16_t signed short
+//     #define uint8_t unsigned char
+//     #define int8_t signed char
+// #else
+//     #include <stdint.h>
+// #endif
+
+#include <stdint.h>
 
 #ifndef M_PI
     #define M_PI (3.14159265358979323846)

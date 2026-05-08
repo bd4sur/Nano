@@ -23,7 +23,11 @@ int ups_init() {
     return 0;
 }
 
-// 读取电压寄存器(mV)
+int32_t read_ups_is_charging() {
+    return 0;
+}
+
+// 电压(mV)
 int32_t read_ups_voltage() {
     uint16_t data;
     char buf[2];
@@ -48,7 +52,12 @@ int32_t read_ups_voltage() {
     return (int32_t)(data * 1.25 / 1000.0 / 16.0 * 1000.0);
 }
 
-// 读取电池容量寄存器
+// 电流(mA)
+int32_t read_ups_current() {
+    return 0;
+}
+
+// 电量
 int32_t read_ups_soc() {
     uint16_t data;
     char buf[2];

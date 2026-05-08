@@ -130,6 +130,9 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
 
     global_state->STATE = STATE_SPLASH_SCREEN;
     global_state->PREV_STATE = STATE_DEFAULT;
+
+    global_state->timestamp_last = 0;
+
     global_state->is_ctrl_enabled = 0;
     global_state->llm_status = LLM_STOPPED_NORMALLY;
     global_state->llm_model_name = NULL;
@@ -619,6 +622,12 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+3), (icon_x+12), (icon_y+3), 255, 255, 255, 1);
     gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+4), (icon_x+12), (icon_y+4), 255, 255, 255, 1);
     gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+5), (icon_x+12), (icon_y+5), 255, 255, 255, 1);
+
+    // 显示电量信息文字
+    wchar_t battery_info_buf[100];
+    swprintf(battery_info_buf, 100, L"电量:%d%%  |  %dmV  |  %dmA%ls", global_state->ups_soc, global_state->ups_voltage, global_state->ups_current, (global_state->ups_is_charging ? L"  |  正在充电" : L""));
+    gfx_draw_textline_centered(global_state->gfx, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*2, 0, 0, 0, 1);
+
 #endif
 
     ui_app_linglong_draw_lite(key_event, global_state, (global_state->gfx->width - 128) / 2, (global_state->gfx->height - 64) / 2,
@@ -1764,10 +1773,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        // 节流
-        if (global_state->timer % 10 == 0) {
-            ui_app_splash_render_frame(key_event, global_state);
-        }
+        ui_app_splash_render_frame(key_event, global_state);
 
         // 按下任何键，不论长短按，进入主菜单
         if (key_event->key_edge < 0 && key_event->key_code != KEYCODE_NUM_IDLE) {
@@ -1916,7 +1922,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
             // 如果输入为空，则随机选用一个预置prompt
             if (wcslen(global_state->w_input_main->textarea.text) == 0) {
-                set_random_prompt(global_state->w_input_main->textarea.text, global_state->timer);
+                set_random_prompt(global_state->w_input_main->textarea.text, global_state->timestamp);
                 global_state->w_input_main->textarea.length = wcslen(global_state->w_input_main->textarea.text);
             }
 
@@ -2175,20 +2181,10 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        wchar_t readme_buf[128] = L"[#1155ee]Nano-Pod[#000000] v" NANO_VERSION "\n掌上电子鹦鹉·玲珑天象仪\n(c) 2025-2026 BD4SUR\n\n";
-        wchar_t status_buf[30];
-        // 节流
-        if (global_state->timer % 200 == 0) {
-#ifdef UPS_ENABLED
-            swprintf(status_buf, 30, L"UPS:%04dmV/%d%% ", global_state->ups_voltage, global_state->ups_soc);
-#else
-            wcscpy(status_buf, L"github.com/bd4sur");
-#endif
-            wcscat(readme_buf, status_buf);
+        wchar_t readme_buf[128] = L"[#1155ee]Nano-Pod[#000000] v" NANO_VERSION "\n掌上电子鹦鹉·玲珑天象仪\n(c) 2025-2026 BD4SUR\n\ngithub.com/bd4sur";
 
-            ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, readme_buf, 0, 0);
-            ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
-        }
+        ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, readme_buf, 0, 0);
+        ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
 
         // 按A键返回主菜单
         if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
@@ -2420,12 +2416,13 @@ int32_t main_periodic_task(Key_Event *key_event, Global_State *global_state) {
         global_state->is_asr_server_up = check_asr_server_status();
 #endif
 #ifdef UPS_ENABLED
-        // UPS电压和电量
+        global_state->ups_is_charging = read_ups_is_charging();
         global_state->ups_voltage = read_ups_voltage();
+        global_state->ups_current = read_ups_current();
         global_state->ups_soc = read_ups_soc();
 #endif
     }
-
+    // 逻辑时间戳
     global_state->timer = (global_state->timer == 2147483647) ? 0 : (global_state->timer + 1);
 
     return 0;
