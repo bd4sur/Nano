@@ -995,7 +995,7 @@ void draw_horizon(
                     float scattered_b = 1.0f;
                     if (enable_atmosphere_scattering) {
                         float depth = sqrtf(hx * hx + hy * hy) / rr;
-                        depth = MIN(1.0, powf(depth, 2.0f)) * max_scattering_depth;
+                        depth = MIN(1.0, depth * depth) * max_scattering_depth;
                         scattered_r = (1 - depth) * (float)r + (float)atmo_r * depth;
                         scattered_g = (1 - depth) * (float)g + (float)atmo_g * depth;
                         scattered_b = (1 - depth) * (float)b + (float)atmo_b * depth;
@@ -2796,13 +2796,13 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->latitude = 31.0;
 
     cfg->downsampling_factor = 0;     // 降采样因子（设为0为自动，建议设为2）
-    cfg->enable_opt_sym = 0;          // 是否启用基于对称性的渲染优化（以画质为代价）
+    cfg->enable_opt_sym = 0;          // 【废弃】是否启用基于对称性的渲染优化（以画质为代价）
     cfg->enable_opt_lut = 0;          // 是否启用查找表计算加速（以画质为代价）
     cfg->enable_opt_bilinear = 1;     // 是否启用双线性插值以优化画质
 
     cfg->projection = 0;              // 投影算法（0-鱼眼；1-线性透视）
     cfg->sky_model = 3;               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
-    cfg->landscape_index = 2;         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
+    cfg->landscape_index = 1;         // 选择地景贴图（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景）
     cfg->enable_equatorial_coord = 0; // 是否启用赤道坐标圈
     cfg->enable_horizontal_coord = 1; // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     cfg->enable_star_burst = 1;       // 是否启用星芒效果
@@ -2861,13 +2861,13 @@ void render_sky(Nano_GFX *gfx,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double timezone, double longitude, double latitude,
     int32_t downsampling_factor,     // 降采样因子（设为0为自动，建议设为2）
-    int32_t enable_opt_sym,          // 是否启用基于对称性的渲染优化（以画质为代价）
+    int32_t enable_opt_sym,          // 【废弃】是否启用基于对称性的渲染优化（以画质为代价）
     int32_t enable_opt_lut,          // 是否启用查找表计算加速（以画质为代价）
     int32_t enable_opt_bilinear,     // 是否启用双线性插值以优化画质
 
     int32_t projection,              // 投影算法（0-鱼眼；1-线性透视）
     int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
-    int32_t landscape_index,         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
+    int32_t landscape_index,         // 选择地景贴图（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景）
     int32_t enable_equatorial_coord, // 是否启用赤道坐标圈
     int32_t enable_horizontal_coord, // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst,       // 是否启用星芒效果
@@ -2891,9 +2891,6 @@ void render_sky(Nano_GFX *gfx,
     double sun_azi = 0.0;
     double sun_alt = 0.0;
     where_is_the_sun(year, month, day, hour, minute, second, timezone, longitude, latitude, &sun_azi, &sun_alt);
-
-    // 夜晚默认启用查找表
-    // if (sun_alt < -18.0f) enable_opt_lut = 1;
 
     float sun_x = 0.0f;
     float sun_y = 0.0f;
@@ -2933,149 +2930,86 @@ void render_sky(Nano_GFX *gfx,
 
     if (sky_model > 0) {
 
-        // 对天空半球进行采样，计算天光平均色相
-        uint32_t atmo_count = 0;
-        for (float ray_alt = 0.0f; ray_alt < 30.0f; ray_alt += 2.0f) {
-            for (float ray_azi = 0.0f; ray_azi < 360.0f; ray_azi += 10.0f) {
-                float _ray_x = 0.0f;
-                float _ray_y = 0.0f;
-                float _ray_z = 0.0f;
-                horizontal_to_xyz(ray_azi, ray_alt, sky_radius, &_ray_x, &_ray_y, &_ray_z);
-                float _ar = 0.0f;
-                float _ag = 0.0f;
-                float _ab = 0.0f;
-                calculate_scattered_pixel(_ray_x, _ray_y, _ray_z, sun_x, sun_y, sun_z, &_ar, &_ag, &_ab, enable_opt_lut, sky_model);
-                atmo_r += _ar * 255.0f;
-                atmo_g += _ag * 255.0f;
-                atmo_b += _ab * 255.0f;
+        // 开启动态地景的情况下：对天空半球进行采样，计算天光平均色相
+        if (landscape_index == 2) {
+            uint32_t atmo_count = 0;
+            for (float ray_alt = 0.0f; ray_alt < 30.0f; ray_alt += 2.0f) {
+                for (float ray_azi = 0.0f; ray_azi < 360.0f; ray_azi += 10.0f) {
+                    float _ray_x = 0.0f;
+                    float _ray_y = 0.0f;
+                    float _ray_z = 0.0f;
+                    horizontal_to_xyz(ray_azi, ray_alt, sky_radius, &_ray_x, &_ray_y, &_ray_z);
+                    float _ar = 0.0f;
+                    float _ag = 0.0f;
+                    float _ab = 0.0f;
+                    calculate_scattered_pixel(_ray_x, _ray_y, _ray_z, sun_x, sun_y, sun_z, &_ar, &_ag, &_ab, enable_opt_lut, sky_model);
+                    atmo_r += _ar * 255.0f;
+                    atmo_g += _ag * 255.0f;
+                    atmo_b += _ab * 255.0f;
 
-                atmo_count++;
+                    atmo_count++;
+                }
             }
-        }
-        atmo_r = (atmo_r / atmo_count) * 1.0f;
-        atmo_g = (atmo_g / atmo_count) * 1.0f;
-        atmo_b = (atmo_b / atmo_count) * 1.0f;
+            atmo_r = (atmo_r / atmo_count) * 1.0f;
+            atmo_g = (atmo_g / atmo_count) * 1.0f;
+            atmo_b = (atmo_b / atmo_count) * 1.0f;
 
-        // 调整饱和度、明度拉满
-        float hv = MAX(MAX(atmo_r, atmo_g), atmo_b);
-        float sat = 0.8;
-        atmo_r = MAX(1.0f, sat * atmo_r + (1 - sat) * hv);
-        atmo_g = MAX(1.0f, sat * atmo_g + (1 - sat) * hv);
-        atmo_b = MAX(1.0f, sat * atmo_b + (1 - sat) * hv);
-        float _k = 255.0f / hv;
-        atmo_r = MIN(255.0f, atmo_r * _k);
-        atmo_g = MIN(255.0f, atmo_g * _k);
-        atmo_b = MIN(255.0f, atmo_b * _k);
+            // 调整饱和度、明度拉满
+            float hv = MAX(MAX(atmo_r, atmo_g), atmo_b);
+            float sat = 0.8;
+            atmo_r = MAX(1.0f, sat * atmo_r + (1 - sat) * hv);
+            atmo_g = MAX(1.0f, sat * atmo_g + (1 - sat) * hv);
+            atmo_b = MAX(1.0f, sat * atmo_b + (1 - sat) * hv);
+            float _k = 255.0f / hv;
+            atmo_r = MIN(255.0f, atmo_r * _k);
+            atmo_g = MIN(255.0f, atmo_g * _k);
+            atmo_b = MIN(255.0f, atmo_b * _k);
+        }
 
 
         // 根据太阳高度自适应设置降采样因子
         int32_t _downsampling_factor = downsampling_factor;
         if (downsampling_factor == 0) {
             if (sun_alt < -18.0) {
-                _downsampling_factor = (enable_opt_bilinear && !enable_opt_sym) ? 32 : 8;
+                _downsampling_factor = (enable_opt_bilinear) ? 32 : 8;
             }
             else {
-                _downsampling_factor = (enable_opt_bilinear && !enable_opt_sym) ? 4 : 2;
+                _downsampling_factor = (enable_opt_bilinear) ? 4 : 2;
             }
         }
 
-        if (enable_opt_sym) {
-            for (int32_t y = y1; y < y2; y += 2) {
-                for (int32_t x = x1; x < x2; x += 2) {
-                    // 计算太阳与圆心的连线法向量，进而计算半圆范围和镜像点坐标
-                    float dx = sun_proj_x - center_x;
-                    float dy = sun_proj_y - center_y;
-                    float t = (((float)x - center_x) * dx + ((float)y - center_y) * dy) / (dx * dx + dy * dy);
-                    int32_t xx = (int32_t)floorf(center_x * 2 + 2 * t * dx - (float)x);
-                    int32_t yy = (int32_t)floorf(center_y * 2 + 2 * t * dy - (float)y);
-
-                    if ((xx - center_x) * (xx - center_x) + (yy - center_y) * (yy - center_y) > sky_radius * sky_radius ||
-                        (x - center_x) * (x - center_x) + (y - center_y) * (y - center_y) > sky_radius * sky_radius
-                    ) {
-                        continue;
-                    }
-
-                    float c0 = (-center_x) * dy - (-center_y) * dx;
-                    float nx = (c0 > 0) ? (dy) : (-dy);
-                    float ny = (c0 > 0) ? (-dx) : (dx);
-
-                    float dp = nx * (x - center_x) + ny * (y - center_y);
-
-                    if (dp >= 0) {
-                        // 观察者到该像素的方向向量（从屏幕坐标系转回地平天球的笛卡尔坐标系）
-                        float ray_x = 0.0f;
-                        float ray_y = 0.0f;
-                        float ray_z = 0.0f;
-                        if (enable_opt_lut && g_sky_dir_map.valid) {
-                            sky_dir_map_get(x, y, &ray_x, &ray_y, &ray_z);
-                        }
-                        else {
-                            fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &ray_x, &ray_y, &ray_z);
-                        }
-
-                        float red = 0.0f;
-                        float green = 0.0f;
-                        float blue = 0.0f;
-                        if (enable_opt_lut && g_sky_inscatter_lut.valid) {
-                            sky_inscatter_lut_lookup(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue);
-                        }
-                        else {
-                            calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut, sky_model);
-                        }
-
-                        uint8_t rr = (uint8_t)(red * 255.0f);
-                        uint8_t gg = (uint8_t)(green * 255.0f);
-                        uint8_t bb = (uint8_t)(blue  * 255.0f);
-
-                        // 为了补偿上下错位而引入的启发式偏置。通过实验确定，原因不明，可能跟浮点数舍入有关。
-                        float k = dy/dx;
-                        int32_t offset_x = (k <  1.0f && k >= 0.0f) ? 1 : 0;
-                        int32_t offset_y = (k >= 1.0f) ? 1 : 0;
-
-                        for (int32_t i = 0; i < 3; i++) {
-                            for (int32_t j = 0; j < 3; j++) {
-                                gfx_set_pixel(gfx, (x+i), (y+j), rr, gg, bb);
-                                gfx_set_pixel(gfx, (xx + i + offset_x), (yy + j + offset_y), rr, gg, bb);
-                            }
-                        }
-                    }
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = y1; y < y2; y += _downsampling_factor) {
+            for (int32_t x = x1; x < x2; x += _downsampling_factor) {
+                // 观察者到该像素的方向向量（从屏幕坐标系转回地平天球的笛卡尔坐标系）
+                float ray_x = 0.0f;
+                float ray_y = 0.0f;
+                float ray_z = 0.0f;
+                if (enable_opt_lut && g_sky_dir_map.valid) {
+                    sky_dir_map_get(x, y, &ray_x, &ray_y, &ray_z);
                 }
-            }
-        }
-        else {
-            #pragma omp parallel for schedule(static)
-            for (int32_t y = y1; y < y2; y += _downsampling_factor) {
-                for (int32_t x = x1; x < x2; x += _downsampling_factor) {
-                    // 观察者到该像素的方向向量（从屏幕坐标系转回地平天球的笛卡尔坐标系）
-                    float ray_x = 0.0f;
-                    float ray_y = 0.0f;
-                    float ray_z = 0.0f;
-                    if (enable_opt_lut && g_sky_dir_map.valid) {
-                        sky_dir_map_get(x, y, &ray_x, &ray_y, &ray_z);
-                    }
-                    else {
-                        fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &ray_x, &ray_y, &ray_z);
-                    }
+                else {
+                    fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &ray_x, &ray_y, &ray_z);
+                }
 
-                    float red = 0.0f;
-                    float green = 0.0f;
-                    float blue = 0.0f;
-                    if (enable_opt_lut && g_sky_inscatter_lut.valid) {
-                        sky_inscatter_lut_lookup(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue);
-                    }
-                    else {
-                        calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut, sky_model);
-                    }
+                float red = 0.0f;
+                float green = 0.0f;
+                float blue = 0.0f;
+                if (enable_opt_lut && g_sky_inscatter_lut.valid) {
+                    sky_inscatter_lut_lookup(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue);
+                }
+                else {
+                    calculate_scattered_pixel(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue, enable_opt_lut, sky_model);
+                }
 
-                    if (enable_opt_bilinear) {
-                        gfx_set_pixel(gfx, x, y, (uint8_t)(red * 255.0f), (uint8_t)(green * 255.0f), (uint8_t)(blue  * 255.0f));
-                    }
-                    else {
-                        for (int32_t i = 0; i < _downsampling_factor; i++) {
-                            for (int32_t j = 0; j < _downsampling_factor; j++) {
-                                gfx_add_pixel(gfx,
-                                    (x+i), (y+j), (uint8_t)(red * 255.0f), (uint8_t)(green * 255.0f), (uint8_t)(blue  * 255.0f));
-                            }
+                if (enable_opt_bilinear) {
+                    gfx_set_pixel(gfx, x, y, (uint8_t)(red * 255.0f), (uint8_t)(green * 255.0f), (uint8_t)(blue  * 255.0f));
+                }
+                else {
+                    for (int32_t i = 0; i < _downsampling_factor; i++) {
+                        for (int32_t j = 0; j < _downsampling_factor; j++) {
+                            gfx_add_pixel(gfx,
+                                (x+i), (y+j), (uint8_t)(red * 255.0f), (uint8_t)(green * 255.0f), (uint8_t)(blue  * 255.0f));
                         }
                     }
                 }
@@ -3272,19 +3206,21 @@ void render_sky(Nano_GFX *gfx,
     float fov = 1.1f;
     float view_height = 1.0f;
     int32_t enable_atmosphere_scattering = 0; // 是否启用大气散射效果（只有在高空时启用）
-    // 卫星图
+    // 鱼眼照片
     if (landscape_index == 1) {
+        update_landscape((uint8_t*)FISHEYE_TEXTURE_BUFFER, FISHEYE_TEXTURE_WIDTH, FISHEYE_TEXTURE_HEIGHT, 0, fov);
+        enable_atmosphere_scattering = 0;
+    }
+    // 卫星图（动态地景）
+    else if (landscape_index == 2) {
+#if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
         // TODO 几何关系待优化
         fov = (0.45f/90.0f) * fabsf(sun_alt) + 1.1f;
         update_landscape((uint8_t*)FLAT_TEXTURE_BUFFER, FLAT_TEXTURE_WIDTH, FLAT_TEXTURE_HEIGHT, 1, fov);
         view_height = 1.0f;
         // float view_height = 0.01f * fabsf(sun_alt) + 1.0f;
         enable_atmosphere_scattering = 1;
-    }
-    // 鱼眼照片
-    else if (landscape_index == 2) {
-        update_landscape((uint8_t*)FISHEYE_TEXTURE_BUFFER, FISHEYE_TEXTURE_WIDTH, FISHEYE_TEXTURE_HEIGHT, 0, fov);
-        enable_atmosphere_scattering = 0;
+#endif
     }
 
     draw_horizon(gfx,

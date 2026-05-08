@@ -90,7 +90,7 @@ void ui_app_badapple_render_frame(Key_Event *key_event, Global_State *global_sta
 // Game of Life
 // ===============================================================================
 
-void ui_app_gol_init(Key_Event *key_event, Global_State *global_state);
+void ui_app_gol_init(Key_Event *key_event, Global_State *global_state, int32_t gol_width, int32_t gol_height);
 void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state);
 
 

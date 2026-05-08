@@ -32,12 +32,25 @@ static struct {
     uint8_t b_len;
 } px_fmt;
 
-// Convert 8-bit color channel to framebuffer bit-length
+// Convert RGB888 to RGB565 (little-endian pixel value, no byte-swap)
+static inline uint16_t rgb888_to_rgb565(uint8_t r, uint8_t g, uint8_t b) {
+    // return ((uint16_t)(r & 0xF8) << 8) |
+    //        ((uint16_t)(g & 0xFC) << 3) |
+    //        (b >> 3);
+    uint8_t r5 = (r >= 252) ? 31 : (r + 4) >> 3;
+    uint8_t g6 = (g >= 254) ? 63 : (g + 2) >> 2;
+    uint8_t b5 = (b >= 252) ? 31 : (b + 4) >> 3;
+    return (((uint16_t)(r5 << 11)) | ((uint16_t)(g6 << 5)) | ((uint16_t)b5));
+}
+
+// Convert 8-bit color channel to framebuffer bit-length.
+// We keep the high bits only (e.g. 8->5: c >> 3), which matches
+// the reference rgb888_to_rgb565 implementation and avoids the
+// uneven quantization steps of the old multiply+divide method.
 static inline uint32_t convert_channel(uint8_t c, uint8_t len) {
-    if (len == 8) return c;
+    if (len >= 8) return c;
     if (len == 0) return 0;
-    // Scale to target bit depth
-    return ((uint32_t)c * ((1U << len) - 1) + 127) / 255;
+    return c >> (8 - len);
 }
 
 // Convert RGB565 to RGB888 channels (reference: graphics.c)
@@ -59,10 +72,17 @@ static inline void write_pixel(uint32_t x, uint32_t y, uint8_t r, uint8_t g, uin
     uint8_t *dst = fb_mmap + y * fb_line_length + x * (fb_bpp / 8);
 
     if (fb_bpp == 16) {
-        uint16_t pix = 0;
-        pix |= (convert_channel(r, px_fmt.r_len) << px_fmt.r_offset);
-        pix |= (convert_channel(g, px_fmt.g_len) << px_fmt.g_offset);
-        pix |= (convert_channel(b, px_fmt.b_len) << px_fmt.b_offset);
+        uint16_t pix;
+        if (px_fmt.r_offset == 11 && px_fmt.r_len == 5 &&
+            px_fmt.g_offset == 5  && px_fmt.g_len == 6 &&
+            px_fmt.b_offset == 0  && px_fmt.b_len == 5) {
+            pix = rgb888_to_rgb565(r, g, b);
+        } else {
+            pix = 0;
+            pix |= (convert_channel(r, px_fmt.r_len) << px_fmt.r_offset);
+            pix |= (convert_channel(g, px_fmt.g_len) << px_fmt.g_offset);
+            pix |= (convert_channel(b, px_fmt.b_len) << px_fmt.b_offset);
+        }
         dst[0] = pix & 0xFF;
         dst[1] = (pix >> 8) & 0xFF;
     }
@@ -151,9 +171,7 @@ void display_hal_refresh(
                     uint8_t r = src[0];
                     uint8_t g = src[1];
                     uint8_t b = src[2];
-                    temp_row[x] = ((uint16_t)(r & 0xF8) << 8) |
-                                  ((uint16_t)(g & 0xFC) << 3) |
-                                  (b >> 3);
+                    temp_row[x] = rgb888_to_rgb565(r, g, b);
                     src += 3;
                 }
                 uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 2;

@@ -43,13 +43,13 @@ typedef struct Linglong_Config {
     double latitude;
 
     int32_t downsampling_factor;     // 降采样因子（设为0为自动，建议设为2）
-    int32_t enable_opt_sym;          // 是否启用基于对称性的渲染优化（以画质为代价）
+    int32_t enable_opt_sym;          // 【废弃】是否启用基于对称性的渲染优化（以画质为代价）
     int32_t enable_opt_lut;          // 是否启用查找表计算加速（以画质为代价）
     int32_t enable_opt_bilinear;     // 是否启用双线性插值以优化画质
  
     int32_t projection;              // 投影算法（0-鱼眼；1-线性透视）
     int32_t sky_model;               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
-    int32_t landscape_index;         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
+    int32_t landscape_index;         // 选择地景贴图（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景）
     int32_t enable_equatorial_coord; // 是否启用赤道坐标圈
     int32_t enable_horizontal_coord; // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst;       // 是否启用星芒效果
@@ -81,13 +81,13 @@ void render_sky(Nano_GFX *gfx,
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double timezone, double longitude, double latitude,
     int32_t downsampling_factor,     // 降采样因子（设为0为自动，建议设为2）
-    int32_t enable_opt_sym,          // 是否启用基于对称性的渲染优化（以画质为代价）
+    int32_t enable_opt_sym,          // 【废弃】是否启用基于对称性的渲染优化（以画质为代价）
     int32_t enable_opt_lut,          // 是否启用查找表计算加速（以画质为代价）
     int32_t enable_opt_bilinear,     // 是否启用双线性插值以优化画质
 
     int32_t projection,              // 投影算法（0-鱼眼；1-线性透视）
     int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
-    int32_t landscape_index,         // 选择地景贴图（0-不启用，地景设为纯黑；其他-地景贴图序号）
+    int32_t landscape_index,         // 选择地景贴图（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景）
     int32_t enable_equatorial_coord, // 是否启用赤道坐标圈
     int32_t enable_horizontal_coord, // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst,       // 是否启用星芒效果

@@ -9,6 +9,18 @@
 
 #include "ui_pinyin_lut.h"
 
+// 全局色彩变量（用于调节UI配色风格）
+
+static uint8_t S_UI_COLOR_SCROLL_BAR_BG[3] = {200, 200, 200};
+static uint8_t S_UI_COLOR_SCROLL_BAR_FG[3] = {33 , 33 , 33 };
+static uint8_t S_UI_COLOR_HEADER_TEXT[3]   = {255, 255, 255};
+static uint8_t S_UI_COLOR_FOOTER_BG[3]     = {224, 230, 234};
+static uint8_t S_UI_COLOR_FOOTER_TEXT[3]   = {90 , 98 , 106};
+
+static uint8_t S_UI_COLOR_IME_HELP_BG[3]   = {222, 222, 222};
+static uint8_t S_UI_COLOR_IME_HELP_TEXT[3] = {0  , 0  , 0  };
+
+
 // 符号列表
 static wchar_t ime_symbols[55] = L"，。、？！：；“”‘’（）《》…—～·【】 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 // 按键对应的字母列表
@@ -305,7 +317,7 @@ void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_
     }
 
     for (int n = y; n < y + height; n++) {
-        gfx_draw_point(global_state->gfx, x + width - 1, n, 200, 200, 200, 1);
+        gfx_draw_point(global_state->gfx, x + width - 1, n, S_UI_COLOR_SCROLL_BAR_BG[0], S_UI_COLOR_SCROLL_BAR_BG[1], S_UI_COLOR_SCROLL_BAR_BG[2], 1);
     }
 
     line_num = (line_num <= 0) ? 1 : line_num;
@@ -318,8 +330,8 @@ void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_
     int32_t y_0 = y + div_round(current_line * height, line_num);
     y_0 = (y_0 >= y + height - 3 - 1) ? (y + height - 3 - 1) : y_0; // 滚动条顶部限位（不低于底部上方3px）
 
-    gfx_draw_line(global_state->gfx, x + width - 1, y_0, x + width - 1, (y_0 + bar_height), 33, 33, 33, 1);
-    gfx_draw_line(global_state->gfx, x + width - 2, y_0, x + width - 2, (y_0 + bar_height), 33, 33, 33, 1);
+    gfx_draw_line(global_state->gfx, x + width - 1, y_0, x + width - 1, (y_0 + bar_height), S_UI_COLOR_SCROLL_BAR_FG[0], S_UI_COLOR_SCROLL_BAR_FG[1], S_UI_COLOR_SCROLL_BAR_FG[2], 1);
+    gfx_draw_line(global_state->gfx, x + width - 2, y_0, x + width - 2, (y_0 + bar_height), S_UI_COLOR_SCROLL_BAR_FG[0], S_UI_COLOR_SCROLL_BAR_FG[1], S_UI_COLOR_SCROLL_BAR_FG[2], 1);
 }
 
 
@@ -337,23 +349,23 @@ void ui_draw_header(Key_Event *key_event, Global_State *global_state, wchar_t *t
         gfx_draw_line(global_state->gfx, 0, i, global_state->gfx->width - 1, i, header_bgcolor[i*3+0], header_bgcolor[i*3+1], header_bgcolor[i*3+2], 1);
     }
     if (is_center) {
-        gfx_draw_textline_centered(global_state->gfx, text, global_state->gfx->width / 2, 7, 255, 255, 255, 1);
+        gfx_draw_textline_centered(global_state->gfx, text, global_state->gfx->width / 2, 7, S_UI_COLOR_HEADER_TEXT[0], S_UI_COLOR_HEADER_TEXT[1], S_UI_COLOR_HEADER_TEXT[2], 1);
     }
     else {
-        gfx_draw_textline(global_state->gfx, text, 0, 1, 255, 255, 255, 1);
+        gfx_draw_textline(global_state->gfx, text, 0, 1, S_UI_COLOR_HEADER_TEXT[0], S_UI_COLOR_HEADER_TEXT[1], S_UI_COLOR_HEADER_TEXT[2], 1);
     }
 }
 
 void ui_draw_footer(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center) {
     const int footer_height = 14;
     for (int i = global_state->gfx->height - footer_height; i < global_state->gfx->height; i++) {
-        gfx_draw_line(global_state->gfx, 0, i, global_state->gfx->width - 1, i, 224, 230, 234, 1);
+        gfx_draw_line(global_state->gfx, 0, i, global_state->gfx->width - 1, i, S_UI_COLOR_FOOTER_BG[0], S_UI_COLOR_FOOTER_BG[1], S_UI_COLOR_FOOTER_BG[2], 1);
     }
     if (is_center) {
-        gfx_draw_textline_centered(global_state->gfx, text, global_state->gfx->width / 2, global_state->gfx->height - footer_height + 7, 90, 98, 106, 1);
+        gfx_draw_textline_centered(global_state->gfx, text, global_state->gfx->width / 2, global_state->gfx->height - footer_height + 7, S_UI_COLOR_FOOTER_TEXT[0], S_UI_COLOR_FOOTER_TEXT[1], S_UI_COLOR_FOOTER_TEXT[2], 1);
     }
     else {
-        gfx_draw_textline(global_state->gfx, text, 0, global_state->gfx->height - footer_height + 1, 90, 98, 106, 1);
+        gfx_draw_textline(global_state->gfx, text, 0, global_state->gfx->height - footer_height + 1, S_UI_COLOR_FOOTER_TEXT[0], S_UI_COLOR_FOOTER_TEXT[1], S_UI_COLOR_FOOTER_TEXT[2], 1);
     }
 }
 
@@ -507,14 +519,14 @@ void ui_widget_input_refresh(Key_Event *key_event, Global_State *global_state, W
 
 // 绘制文本输入操作说明
 static void ui_draw_input_help(Key_Event *key_event, Global_State *global_state) {
-    gfx_draw_rectangle(global_state->gfx, 3, 3, global_state->gfx->width - 6, global_state->gfx->height - 6, 222, 222, 222, 3);
+    gfx_draw_rectangle(global_state->gfx, 3, 3, global_state->gfx->width - 6, global_state->gfx->height - 6, S_UI_COLOR_IME_HELP_BG[0], S_UI_COLOR_IME_HELP_BG[1], S_UI_COLOR_IME_HELP_BG[2], 3);
     gfx_draw_textline_centered(global_state->gfx, L"文本输入操作说明", global_state->gfx->width/2, 5+6, 0, 0, 222, 1);
-    gfx_draw_textline_centered(global_state->gfx, L"A-退格/返回  B-切换汉英数",   global_state->gfx->width/2, 5+6+(12+1)*1, 0x0, 0x0, 0x0, 1);
-    gfx_draw_textline_centered(global_state->gfx, L"C-第二功能  D-输入/提交",    global_state->gfx->width/2, 5+6+(12+1)*2, 0x0, 0x0, 0x0, 1);
-    gfx_draw_textline_centered(global_state->gfx, L"按住0选择符号 左右键移动光标",  global_state->gfx->width/2, 5+6+(12+1)*3, 0x0, 0x0, 0x0, 1);
-    gfx_draw_textline_centered(global_state->gfx, L"按住D语音输入 Ctrl+D 换行",    global_state->gfx->width/2, 5+6+(12+1)*4, 0x0, 0x0, 0x0, 1);
-    gfx_draw_textline_centered(global_state->gfx, L"Ctrl+1 切换思考模式",          global_state->gfx->width/2, 5+6+(12+1)*5, 0x0, 0x0, 0x0, 1);
-    gfx_draw_textline_centered(global_state->gfx, L"Ctrl+A 放弃输入并返回",        global_state->gfx->width/2, 5+6+(12+1)*6, 0x0, 0x0, 0x0, 1);
+    gfx_draw_textline_centered(global_state->gfx, L"A-退格/返回  B-切换汉英数",   global_state->gfx->width/2, 5+6+(12+1)*1, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
+    gfx_draw_textline_centered(global_state->gfx, L"C-第二功能  D-输入/提交",    global_state->gfx->width/2, 5+6+(12+1)*2, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
+    gfx_draw_textline_centered(global_state->gfx, L"按住0选择符号 左右键移动光标",  global_state->gfx->width/2, 5+6+(12+1)*3, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
+    gfx_draw_textline_centered(global_state->gfx, L"按住D语音输入 Ctrl+D 换行",    global_state->gfx->width/2, 5+6+(12+1)*4, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
+    gfx_draw_textline_centered(global_state->gfx, L"Ctrl+1 切换思考模式",          global_state->gfx->width/2, 5+6+(12+1)*5, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
+    gfx_draw_textline_centered(global_state->gfx, L"Ctrl+A 放弃输入并返回",        global_state->gfx->width/2, 5+6+(12+1)*6, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
 
     gfx_refresh(global_state->gfx);
 }

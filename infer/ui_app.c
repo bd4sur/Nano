@@ -671,49 +671,77 @@ void ui_app_badapple_render_frame(Key_Event *key_event, Global_State *global_sta
 // Game of Life
 // ===============================================================================
 
-#define GOL_WIDTH (320)
-#define GOL_HEIGHT (240)
-static uint8_t s_ui_app_gol_field[2][GOL_WIDTH][GOL_HEIGHT];
-static uint8_t s_ui_app_gol_field_page;
-static uint64_t s_ui_app_gol_refresh_timestamp;
+static uint8_t *s_ui_app_gol_field_0 = NULL;
+static uint8_t *s_ui_app_gol_field_1 = NULL;
+static uint8_t s_ui_app_gol_field_page = 0;
+static uint64_t s_ui_app_gol_refresh_timestamp = 0;
+static uint64_t s_ui_app_gol_step_count = 0;
+static int32_t s_gol_width = 0;
+static int32_t s_gol_height = 0;
 
-void ui_app_gol_init(Key_Event *key_event, Global_State *global_state) {
+static inline uint8_t ui_app_gol_get_cell(uint8_t *field, int32_t w, int32_t h, int32_t x, int32_t y) {
+    int32_t byte_index = (y * w + x) / 8;
+    int32_t bit_rem = (y * w + x) % 8;
+    return ((field[byte_index] & ((uint8_t)0x80u >> bit_rem)) != 0);
+}
+
+static inline void ui_app_gol_set_cell(uint8_t *field, int32_t w, int32_t h, int32_t x, int32_t y, uint8_t value) {
+    int32_t byte_index = (y * w + x) / 8;
+    int32_t bit_rem = (y * w + x) % 8;
+    uint8_t oldv = field[byte_index];
+    field[byte_index] = (oldv & ~((uint8_t)(0x80u >> bit_rem))) | ((uint8_t)(!!value << (7 - bit_rem)));
+}
+
+void ui_app_gol_init(Key_Event *key_event, Global_State *global_state, int32_t gol_width, int32_t gol_height) {
+    s_gol_width = gol_width;
+    s_gol_height = gol_height;
+
+    s_ui_app_gol_step_count = 0;
     s_ui_app_gol_field_page = 0;
     s_ui_app_gol_refresh_timestamp = global_state->timestamp;
     uint64_t ts = global_state->timestamp;
-    for (uint32_t x = 0; x < GOL_WIDTH; x++) {
-        for (uint32_t y = 0; y < GOL_HEIGHT; y++) {
+
+    s_ui_app_gol_field_0 = (uint8_t*)platform_calloc(gol_width * gol_height / 8, sizeof(uint8_t));
+    s_ui_app_gol_field_1 = (uint8_t*)platform_calloc(gol_width * gol_height / 8, sizeof(uint8_t));
+
+    for (uint32_t x = 0; x < gol_width; x++) {
+        for (uint32_t y = 0; y < gol_height; y++) {
             uint8_t s = random_u32(&ts) % 2;
-            s_ui_app_gol_field[0][x][y] = s;
-            s_ui_app_gol_field[1][x][y] = s;
+            ui_app_gol_set_cell(s_ui_app_gol_field_0, gol_width, gol_height, x, y, s);
+            ui_app_gol_set_cell(s_ui_app_gol_field_1, gol_width, gol_height, x, y, s);
         }
     }
 }
 
 void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
     // 节流：不大于50fps
-    if (global_state->timestamp - s_ui_app_gol_refresh_timestamp < 20) {
-        return;
-    }
-    s_ui_app_gol_refresh_timestamp = global_state->timestamp;
+    // if (global_state->timestamp - s_ui_app_gol_refresh_timestamp < 20) {
+    //     return;
+    // }
+    // s_ui_app_gol_refresh_timestamp = global_state->timestamp;
     gfx_soft_clear(global_state->gfx);
-    for (uint32_t x = 0; x < GOL_WIDTH; x++) {
-        for (uint32_t y = 0; y < GOL_HEIGHT; y++) {
+
+    uint32_t total_count = 0;
+
+    uint8_t *field     = (s_ui_app_gol_field_page) ? s_ui_app_gol_field_0 : s_ui_app_gol_field_1;
+    uint8_t *field_new = (s_ui_app_gol_field_page) ? s_ui_app_gol_field_1 : s_ui_app_gol_field_0;
+    for (uint32_t x = 0; x < s_gol_width; x++) {
+        for (uint32_t y = 0; y < s_gol_height; y++) {
             // 获取某个格子的8邻域
             uint32_t count = 0;
-            uint32_t x_a = (x == 0) ? (GOL_WIDTH-1) : (x-1);
-            uint32_t x_b = (x == (GOL_WIDTH-1)) ? 0 : (x+1);
-            uint32_t y_a = (y == 0) ? (GOL_HEIGHT-1) : (y-1);
-            uint32_t y_b = (y == (GOL_HEIGHT-1)) ? 0 : (y+1);
-            uint8_t n1 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_a][y_a]; count += (n1 > 0) ? 1 : 0;
-            uint8_t n2 = s_ui_app_gol_field[s_ui_app_gol_field_page][ x ][y_a]; count += (n2 > 0) ? 1 : 0;
-            uint8_t n3 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_b][y_a]; count += (n3 > 0) ? 1 : 0;
-            uint8_t n4 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_a][ y ]; count += (n4 > 0) ? 1 : 0;
-            uint8_t n5 = s_ui_app_gol_field[s_ui_app_gol_field_page][ x ][ y ]; // self
-            uint8_t n6 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_b][ y ]; count += (n6 > 0) ? 1 : 0;
-            uint8_t n7 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_a][y_b]; count += (n7 > 0) ? 1 : 0;
-            uint8_t n8 = s_ui_app_gol_field[s_ui_app_gol_field_page][ x ][y_b]; count += (n8 > 0) ? 1 : 0;
-            uint8_t n9 = s_ui_app_gol_field[s_ui_app_gol_field_page][x_b][y_b]; count += (n9 > 0) ? 1 : 0;
+            uint32_t x_a = (x == 0) ? (s_gol_width-1) : (x-1);
+            uint32_t x_b = (x == (s_gol_width-1)) ? 0 : (x+1);
+            uint32_t y_a = (y == 0) ? (s_gol_height-1) : (y-1);
+            uint32_t y_b = (y == (s_gol_height-1)) ? 0 : (y+1);
+            uint8_t n1 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_a, y_a); count += (n1 != 0);
+            uint8_t n2 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height,  x , y_a); count += (n2 != 0);
+            uint8_t n3 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_b, y_a); count += (n3 != 0);
+            uint8_t n4 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_a,  y ); count += (n4 != 0);
+            uint8_t n5 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height,  x ,  y ); // self
+            uint8_t n6 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_b,  y ); count += (n6 != 0);
+            uint8_t n7 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_a, y_b); count += (n7 != 0);
+            uint8_t n8 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height,  x , y_b); count += (n8 != 0);
+            uint8_t n9 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_b, y_b); count += (n9 != 0);
 
             uint8_t new_state = 0;
             if (n5 == 0) {
@@ -723,15 +751,23 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
                 new_state = (count == 2 || count == 3) ? 1 : 0;
             }
 
-            s_ui_app_gol_field[1-s_ui_app_gol_field_page][x][y] = new_state;
+            ui_app_gol_set_cell(field_new, s_gol_width, s_gol_height, x, y, new_state);
 
             if (new_state) {
                 gfx_draw_point(global_state->gfx, x, y, 0, 255, 255, 1);
+                total_count++;
             }
         }
     }
+
+    wchar_t text[100];
+    swprintf(text, 100, L"康威生命游戏 | 迭代:%d | 存活:%d | 密度:%.2f%%", s_ui_app_gol_step_count, total_count, (float)total_count / (float)(s_gol_width * s_gol_height) * 100);
+    gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, 12, 39, 39, 39, 3);
+    gfx_draw_textline(global_state->gfx, text, 0, 0, 255, 255, 255, 1);
+
     gfx_refresh(global_state->gfx);
     s_ui_app_gol_field_page = 1 - s_ui_app_gol_field_page;
+    s_ui_app_gol_step_count++;
 }
 
 
@@ -2233,7 +2269,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
-            ui_app_gol_init(key_event, global_state);
+            ui_app_gol_init(key_event, global_state, global_state->gfx->width, global_state->gfx->height);
         }
         global_state->PREV_STATE = global_state->STATE;
 
@@ -2245,7 +2281,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         // 按D键刷新
         else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
-            ui_app_gol_init(key_event, global_state);
+            ui_app_gol_init(key_event, global_state, global_state->gfx->width, global_state->gfx->height);
         }
 
         break;
