@@ -684,7 +684,7 @@ static uint8_t *s_ui_app_gol_field_0 = NULL;
 static uint8_t *s_ui_app_gol_field_1 = NULL;
 static uint8_t s_ui_app_gol_field_page = 0;
 static uint64_t s_ui_app_gol_refresh_timestamp = 0;
-static uint64_t s_ui_app_gol_step_count = 0;
+static uint32_t s_ui_app_gol_step_count = 0;
 static int32_t s_gol_width = 0;
 static int32_t s_gol_height = 0;
 
@@ -770,7 +770,7 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
     }
 
     wchar_t text[100];
-    swprintf(text, 100, L"康威生命游戏 | 迭代:%d | 存活:%d | 密度:%.2f%%", s_ui_app_gol_step_count, total_count, (float)total_count / (float)(s_gol_width * s_gol_height) * 100);
+    swprintf(text, 100, L"康威生命游戏 | 迭代:%u | 存活:%u | 密度:%.2f%%", s_ui_app_gol_step_count, total_count, (float)total_count / (float)(s_gol_width * s_gol_height) * 100);
     gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, 12, 39, 39, 39, 3);
     gfx_draw_textline(global_state->gfx, text, 0, 0, 255, 255, 255, 1);
 
@@ -2178,18 +2178,19 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         if (global_state->PREV_STATE != global_state->STATE) {
             ui_draw_header(key_event, global_state, L"本机自述", 1);
             ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+
+            ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main,
+                L"[#1155ee]Nano-Pod[#000000] v" NANO_VERSION "\n掌上电子鹦鹉·玲珑天象仪\n(c) 2025-2026 BD4SUR\n\ngithub.com/bd4sur", 0, 1);
+            ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
         }
         global_state->PREV_STATE = global_state->STATE;
-
-        wchar_t readme_buf[128] = L"[#1155ee]Nano-Pod[#000000] v" NANO_VERSION "\n掌上电子鹦鹉·玲珑天象仪\n(c) 2025-2026 BD4SUR\n\ngithub.com/bd4sur";
-
-        ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, readme_buf, 0, 0);
-        ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
 
         // 按A键返回主菜单
         if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
             global_state->STATE = STATE_MAIN_MENU;
         }
+
+        global_state->STATE = ui_widget_textarea_event_handler(key_event, global_state, global_state->w_textarea_main, STATE_MAIN_MENU, STATE_README);
 
         break;
     }
