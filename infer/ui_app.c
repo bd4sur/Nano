@@ -436,6 +436,141 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
 // 主菜单
 // ===============================================================================
 
+/******************************************************
+
+屏幕区域布局示意
+    +---------+---------+---------+---------+
+    |              Padding Top              |
++---0---------1---------2---------3---------4---+
+|   | (0,0) 1 | (1,0) 2 | (2,0) 3 | (3,0) A |   |
+| L 1---------+---------+---------+---------+ R |
+| E | (0,1) 4 | (1,1) 5 | (2,1) 6 | (3,1) B | I |
+| F 2---------+---------+---------+---------+ G |
+| T | (0,2) 7 | (1,2) 8 | (2,2) 9 | (3,2) C | H |
+|   3---------+---------+---------+---------+ T |
+|   | (0,3) E*| (1,3) 0 | (2,3) F#| (3,3) D |   |
++---4---------+---------+---------+---------+---|
+    |            Padding Bottom             |
+    +---------+---------+---------+---------+
+
+******************************************************/
+// 屏幕布局坐标
+#define PADDING_TOP    (14)
+#define PADDING_BOTTOM (14)
+#define PADDING_LEFT   (0)
+#define PADDING_RIGHT  (0)
+#define CELL_WIDTH     ((SCREEN_WIDTH-PADDING_LEFT-PADDING_RIGHT)/4)
+#define CELL_HEIGHT    ((SCREEN_HEIGHT-PADDING_TOP-PADDING_BOTTOM)/4)
+#define CELL_X0(col,row)       (PADDING_LEFT + (col) * CELL_WIDTH)
+#define CELL_Y0(col,row)       (PADDING_TOP  + (row) * CELL_HEIGHT)
+#define CELL_CENTER_X(col,row) (CELL_X0((col),(row)) + (CELL_WIDTH/2))
+#define CELL_CENTER_Y(col,row) (CELL_Y0((col),(row)) + (CELL_HEIGHT/2))
+
+// 网格范围
+#define IN_BTN_1(x,y)  (((x) >= CELL_X0(0,0)) && ((x) < CELL_X0(1,0)) && ((y) >= CELL_Y0(0,0)) && ((y) < CELL_Y0(0,1)))
+#define IN_BTN_2(x,y)  (((x) >= CELL_X0(1,0)) && ((x) < CELL_X0(2,0)) && ((y) >= CELL_Y0(1,0)) && ((y) < CELL_Y0(1,1)))
+#define IN_BTN_3(x,y)  (((x) >= CELL_X0(2,0)) && ((x) < CELL_X0(3,0)) && ((y) >= CELL_Y0(2,0)) && ((y) < CELL_Y0(2,1)))
+#define IN_BTN_A(x,y)  (((x) >= CELL_X0(3,0)) && ((x) < CELL_X0(4,0)) && ((y) >= CELL_Y0(3,0)) && ((y) < CELL_Y0(3,1)))
+#define IN_BTN_4(x,y)  (((x) >= CELL_X0(0,1)) && ((x) < CELL_X0(1,1)) && ((y) >= CELL_Y0(0,1)) && ((y) < CELL_Y0(0,2)))
+#define IN_BTN_5(x,y)  (((x) >= CELL_X0(1,1)) && ((x) < CELL_X0(2,1)) && ((y) >= CELL_Y0(1,1)) && ((y) < CELL_Y0(1,2)))
+#define IN_BTN_6(x,y)  (((x) >= CELL_X0(2,1)) && ((x) < CELL_X0(3,1)) && ((y) >= CELL_Y0(2,1)) && ((y) < CELL_Y0(2,2)))
+#define IN_BTN_B(x,y)  (((x) >= CELL_X0(3,1)) && ((x) < CELL_X0(4,1)) && ((y) >= CELL_Y0(3,1)) && ((y) < CELL_Y0(3,2)))
+#define IN_BTN_7(x,y)  (((x) >= CELL_X0(0,2)) && ((x) < CELL_X0(1,2)) && ((y) >= CELL_Y0(0,2)) && ((y) < CELL_Y0(0,3)))
+#define IN_BTN_8(x,y)  (((x) >= CELL_X0(1,2)) && ((x) < CELL_X0(2,2)) && ((y) >= CELL_Y0(1,2)) && ((y) < CELL_Y0(1,3)))
+#define IN_BTN_9(x,y)  (((x) >= CELL_X0(2,2)) && ((x) < CELL_X0(3,2)) && ((y) >= CELL_Y0(2,2)) && ((y) < CELL_Y0(2,3)))
+#define IN_BTN_C(x,y)  (((x) >= CELL_X0(3,2)) && ((x) < CELL_X0(4,2)) && ((y) >= CELL_Y0(3,2)) && ((y) < CELL_Y0(3,3)))
+#define IN_BTN_E(x,y)  (((x) >= CELL_X0(0,3)) && ((x) < CELL_X0(1,3)) && ((y) >= CELL_Y0(0,3)) && ((y) < CELL_Y0(0,4)))
+#define IN_BTN_0(x,y)  (((x) >= CELL_X0(1,3)) && ((x) < CELL_X0(2,3)) && ((y) >= CELL_Y0(1,3)) && ((y) < CELL_Y0(1,4)))
+#define IN_BTN_F(x,y)  (((x) >= CELL_X0(2,3)) && ((x) < CELL_X0(3,3)) && ((y) >= CELL_Y0(2,3)) && ((y) < CELL_Y0(2,4)))
+#define IN_BTN_D(x,y)  (((x) >= CELL_X0(3,3)) && ((x) < CELL_X0(4,3)) && ((y) >= CELL_Y0(3,3)) && ((y) < CELL_Y0(3,4)))
+
+#define IN_BTN_TOP(x,y)     ((y) < CELL_Y0(0,0))
+#define IN_BTN_BOTTOM(x,y)  ((y) >= CELL_Y0(0,4))
+
+static uint8_t S_UI_COLOR_GRID_CELL_BG[3]   = {233, 239, 255};
+static uint8_t S_UI_COLOR_GRID_CELL_TEXT[3] = {0  , 0  , 0  };
+
+void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
+    const wchar_t cell_text[4][4][2][10] = {
+        { {L"[1]", L"番茄钟",}, {L"[2]", L"电子鹦鹉",}, {L"[3]", L"玲珑天象仪",}, {L"[A]", L"返回",}, },
+        { {L"[4]", L"电子书",}, {L"[5]", L"音乐盒",}, {L"[6]", L"相册",}, {L"[B]", L"设置",}, },
+        { {L"[7]", L"BadApple",}, {L"[8]", L"元胞自动机",}, {L"[9]", L"无线电报",}, {L"[C]", L"本机自述",}, },
+        { {L"[*]", L"2048",}, {L"[0]", L"频谱仪",}, {L"[#]", L"遗传算法",}, {L"[D]", L"安全关机",}, },
+    };
+    for (int32_t row = 0; row < 4; row++) {
+        for (int32_t col = 0; col < 4; col++) {
+            int32_t bx = (col == 0) ? 1 : 0;
+            int32_t by = (row == 0) ? 1 : 0;
+            uint8_t bg_r = S_UI_COLOR_GRID_CELL_BG[0], bg_g = S_UI_COLOR_GRID_CELL_BG[1], bg_b = S_UI_COLOR_GRID_CELL_BG[2];
+            uint8_t tx_r = S_UI_COLOR_GRID_CELL_TEXT[0], tx_g = S_UI_COLOR_GRID_CELL_TEXT[1], tx_b = S_UI_COLOR_GRID_CELL_TEXT[2];
+            if (col == 3) {
+                bg_r = 215; bg_g = 227; bg_b = 255;
+                tx_r = 0; tx_g = 0; tx_b = 128;
+            }
+            gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, bg_r, bg_g, bg_b, 1);
+            gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][0], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, 192, 192, 211, 1);
+            gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][1], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+8, tx_r, tx_g, tx_b, 1);
+        }
+    }
+}
+
+void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_state) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_1) {
+        global_state->STATE = STATE_FLIP;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_2) {
+        init_model_menu(key_event, global_state);
+        global_state->STATE = STATE_MODEL_MENU;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_3) {
+        global_state->STATE = STATE_LINGLONG;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_4) {
+        global_state->STATE = STATE_EBOOK;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_5) {
+        // TODO
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_6) {
+        // TODO
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_7) {
+        global_state->STATE = STATE_BADAPPLE;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_8) {
+        global_state->STATE = STATE_GAMEOFLIFE;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_9) {
+        // TODO
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
+        // TODO
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        global_state->STATE = STATE_SPLASH_SCREEN;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_B) {
+        init_setting_menu(key_event, global_state);
+        global_state->STATE = STATE_SETTING_MENU;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_C) {
+        global_state->STATE = STATE_README;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_D) {
+        global_state->STATE = STATE_SHUTDOWN;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
+        // TODO
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_HASH) {
+        // TODO
+    }
+    else {
+        return;
+    }
+}
+
+
 void init_main_menu(Key_Event *key_event, Global_State *global_state) {
     wcscpy(global_state->w_menu_main->title, L"Nano-Pod");
     wcscpy(global_state->w_menu_main->items[0], L"电子鹦鹉");
@@ -1790,14 +1925,16 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
-            init_main_menu(key_event, global_state);
-            ui_draw_header(key_event, global_state, global_state->w_menu_main->title, 1);
+            // init_main_menu(key_event, global_state);
+            gfx_fill_white(global_state->gfx);
+            ui_widget_grid16_draw(key_event, global_state);
+            ui_draw_header(key_event, global_state, L"Nano-Pod", 1);
             ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
             gfx_refresh(global_state->gfx);
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, main_menu_item_action, STATE_SPLASH_SCREEN, STATE_MAIN_MENU);
+        ui_widget_grid16_event_handler(key_event, global_state);
 
         break;
 
