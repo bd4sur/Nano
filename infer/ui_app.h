@@ -27,7 +27,6 @@ extern "C" {
 #define STATE_SHUTDOWN          (31)
 #define STATE_TTS_SETTING       (32)
 #define STATE_ASR_SETTING       (33)
-#define STATE_LINGLONG_SETTING  (34)
 #define STATE_LINGLONG_TIMELOC  (35)
 #define STATE_FLIP              (36)
 
@@ -71,9 +70,6 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
 
 void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state);
 void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_state);
-
-void init_main_menu(Key_Event *key_event, Global_State *global_state);
-int32_t main_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
 
 // ===============================================================================
 // 开机欢迎画面

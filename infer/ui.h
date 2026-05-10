@@ -49,12 +49,10 @@ typedef struct Global_State {
 
     Widget_Input_State     *w_input_main;
 
-    Widget_Menu_State      *w_menu_main;
     Widget_Menu_State      *w_menu_model;
     Widget_Menu_State      *w_menu_setting;
     Widget_Menu_State      *w_menu_asr_setting;
     Widget_Menu_State      *w_menu_tts_setting;
-    Widget_Menu_State      *w_menu_linglong_setting;
 
     // 全局状态
     int32_t STATE; // 当前状态

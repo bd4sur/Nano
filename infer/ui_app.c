@@ -35,7 +35,21 @@
 #include "celestial.h"
 #include "nongli.h"
 
+#include "ui_color.h"
 #include "ui_app.h"
+
+
+// 全局色彩变量（用于调节UI配色风格）
+
+int32_t UI_COLOR_STYLE = UI_COLOR_LIGHT;
+
+static uint8_t S_UI_COLOR_LLM_PREFILL_PROGRESS[3] = {102, 204, 255};
+static uint8_t S_UI_COLOR_MAIN_MENU_CELL_BG[3]    = {233, 239, 255};
+static uint8_t S_UI_COLOR_MAIN_MENU_CELL_TEXT[3]  = {0  , 0  , 0  };
+static uint8_t S_UI_COLOR_SPLASH_TIME_TEXT[3]     = {0  , 0  , 0  };
+static uint8_t S_UI_COLOR_SPLASH_NONGLI_TEXT[3]   = {220, 120, 0  };
+
+
 
 
 // ===============================================================================
@@ -114,12 +128,10 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
 
     global_state->w_input_main = (Widget_Input_State*)platform_calloc(1, sizeof(Widget_Input_State));
 
-    global_state->w_menu_main = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
     global_state->w_menu_model = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
     global_state->w_menu_setting = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
     global_state->w_menu_asr_setting = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
     global_state->w_menu_tts_setting = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
-    global_state->w_menu_linglong_setting = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
 
 
     ///////////////////////////////////////
@@ -246,7 +258,13 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         // 临时关闭draw_textarea的gfx_refresh，以便在textarea上绘制进度条之后再统一写入屏幕，否则反复的clear会导致进度条闪烁。
         global_state->is_full_refresh = 0;
 
-        gfx_fill_white(global_state->gfx);
+        // 清屏
+        if (UI_COLOR_STYLE == UI_COLOR_LIGHT) {
+            gfx_fill_white(global_state->gfx);
+        }
+        else if (UI_COLOR_STYLE == UI_COLOR_DARK) {
+            gfx_soft_clear(global_state->gfx);
+        }
 
         // 显示界面标题
         wchar_t prefill_title_str[50];
@@ -264,18 +282,13 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
 
         // 进度条
         uint32_t pg_bottom_y = global_state->gfx->height - 14;
-        // gfx_draw_line(global_state->gfx, 0, (pg_bottom_y - 4), global_state->gfx->width, (pg_bottom_y - 4), 0, 0, 0, 1);
-        // gfx_draw_line(global_state->gfx, 0, (pg_bottom_y - 1), global_state->gfx->width, (pg_bottom_y - 1), 0, 0, 0, 1);
-        // gfx_draw_line(global_state->gfx, 0, (pg_bottom_y - 4), 0, (pg_bottom_y - 1), 0, 0, 0, 1);
-        // gfx_draw_line(global_state->gfx, (global_state->gfx->width - 1), (pg_bottom_y - 4), (global_state->gfx->width - 1), (pg_bottom_y - 1), 0, 0, 0, 1);
         uint32_t pgpos_x = MIN(global_state->gfx->width - 1, session->pos * global_state->gfx->width / (session->num_prompt_tokens - 1));
-        gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 1), pgpos_x, (pg_bottom_y - 1), 102, 204, 255, 1);
-        gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 2), pgpos_x, (pg_bottom_y - 2), 102, 204, 255, 1);
+        gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 1), pgpos_x, (pg_bottom_y - 1), S_UI_COLOR_LLM_PREFILL_PROGRESS[0], S_UI_COLOR_LLM_PREFILL_PROGRESS[1], S_UI_COLOR_LLM_PREFILL_PROGRESS[2], 1);
+        gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 2), pgpos_x, (pg_bottom_y - 2), S_UI_COLOR_LLM_PREFILL_PROGRESS[0], S_UI_COLOR_LLM_PREFILL_PROGRESS[1], S_UI_COLOR_LLM_PREFILL_PROGRESS[2], 1);
 
         // 进度百分比
         wchar_t progress_str[30];
         swprintf(progress_str, 30, L"%d/%d", session->pos, session->num_prompt_tokens);
-        // gfx_draw_textline(global_state->gfx, progress_str, 0, (global_state->gfx->height - 16), 0, 0, 0, 1);
         ui_draw_footer(key_event, global_state, progress_str, 1);
 
         gfx_refresh(global_state->gfx);
@@ -420,15 +433,9 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
         gs->llm_top_k,
         gs->timestamp);
 
-    // 以下两条路选一个：
-
-    // 1、直接进入电子鹦鹉
+    // 进入电子鹦鹉
     ui_widget_input_init(ke, gs, gs->w_input_main);
     return STATE_LLM_INPUT;
-
-    // 2、或者回到主菜单
-    // ui_widget_menu_refresh(ke, gs, gs->w_menu_main);
-    // return STATE_MAIN_MENU;
 }
 
 
@@ -487,26 +494,32 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
 #define IN_BTN_TOP(x,y)     ((y) < CELL_Y0(0,0))
 #define IN_BTN_BOTTOM(x,y)  ((y) >= CELL_Y0(0,4))
 
-static uint8_t S_UI_COLOR_GRID_CELL_BG[3]   = {233, 239, 255};
-static uint8_t S_UI_COLOR_GRID_CELL_TEXT[3] = {0  , 0  , 0  };
 
 void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
-    const wchar_t cell_text[4][4][2][10] = {
+    wchar_t cell_text[4][4][2][10] = {
         { {L"[1]", L"番茄钟",}, {L"[2]", L"电子鹦鹉",}, {L"[3]", L"玲珑天象仪",}, {L"[A]", L"返回",}, },
         { {L"[4]", L"电子书",}, {L"[5]", L"音乐盒",}, {L"[6]", L"相册",}, {L"[B]", L"设置",}, },
         { {L"[7]", L"BadApple",}, {L"[8]", L"元胞自动机",}, {L"[9]", L"无线电报",}, {L"[C]", L"本机自述",}, },
         { {L"[*]", L"2048",}, {L"[0]", L"频谱仪",}, {L"[#]", L"遗传算法",}, {L"[D]", L"安全关机",}, },
     };
+    if (UI_COLOR_STYLE == UI_COLOR_LIGHT) {
+        // TODO
+    }
+    else if (UI_COLOR_STYLE == UI_COLOR_DARK) {
+        S_UI_COLOR_MAIN_MENU_CELL_BG[0] = 50;
+        S_UI_COLOR_MAIN_MENU_CELL_BG[1] = 51;
+        S_UI_COLOR_MAIN_MENU_CELL_BG[2] = 52;
+        S_UI_COLOR_MAIN_MENU_CELL_TEXT[0] = 255;
+        S_UI_COLOR_MAIN_MENU_CELL_TEXT[1] = 255;
+        S_UI_COLOR_MAIN_MENU_CELL_TEXT[2] = 255;
+    }
+
     for (int32_t row = 0; row < 4; row++) {
         for (int32_t col = 0; col < 4; col++) {
             int32_t bx = (col == 0) ? 1 : 0;
             int32_t by = (row == 0) ? 1 : 0;
-            uint8_t bg_r = S_UI_COLOR_GRID_CELL_BG[0], bg_g = S_UI_COLOR_GRID_CELL_BG[1], bg_b = S_UI_COLOR_GRID_CELL_BG[2];
-            uint8_t tx_r = S_UI_COLOR_GRID_CELL_TEXT[0], tx_g = S_UI_COLOR_GRID_CELL_TEXT[1], tx_b = S_UI_COLOR_GRID_CELL_TEXT[2];
-            if (col == 3) {
-                bg_r = 215; bg_g = 227; bg_b = 255;
-                tx_r = 0; tx_g = 0; tx_b = 128;
-            }
+            uint8_t bg_r = S_UI_COLOR_MAIN_MENU_CELL_BG[0], bg_g = S_UI_COLOR_MAIN_MENU_CELL_BG[1], bg_b = S_UI_COLOR_MAIN_MENU_CELL_BG[2];
+            uint8_t tx_r = S_UI_COLOR_MAIN_MENU_CELL_TEXT[0], tx_g = S_UI_COLOR_MAIN_MENU_CELL_TEXT[1], tx_b = S_UI_COLOR_MAIN_MENU_CELL_TEXT[2];
             gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, bg_r, bg_g, bg_b, 1);
             gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][0], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, 192, 192, 211, 1);
             gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][1], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+8, tx_r, tx_g, tx_b, 1);
@@ -571,80 +584,6 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
 }
 
 
-void init_main_menu(Key_Event *key_event, Global_State *global_state) {
-    wcscpy(global_state->w_menu_main->title, L"Nano-Pod");
-    wcscpy(global_state->w_menu_main->items[0], L"电子鹦鹉");
-    wcscpy(global_state->w_menu_main->items[1], L"玲珑天象仪");
-    wcscpy(global_state->w_menu_main->items[2], L"文字阅读器");
-    wcscpy(global_state->w_menu_main->items[3], L"Bad Apple！");
-    wcscpy(global_state->w_menu_main->items[4], L"FLIP流体模拟");
-    wcscpy(global_state->w_menu_main->items[5], L"元胞自动机");
-    wcscpy(global_state->w_menu_main->items[6], L"设置");
-    wcscpy(global_state->w_menu_main->items[7], L"安全关机");
-    wcscpy(global_state->w_menu_main->items[8], L"本机自述");
-    global_state->w_menu_main->item_num = 9;
-    ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
-}
-
-// 主菜单各条目的动作
-int32_t main_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
-    int32_t item_index = ms->current_item_index;
-
-    // 0.电子鹦鹉
-    if (item_index == 0) {
-        init_model_menu(ke, gs);
-        return STATE_MODEL_MENU;
-    }
-
-    // 1.玲珑天象仪
-    else if (item_index == 1) {
-        return STATE_LINGLONG;
-    }
-
-    // 2.文本阅读
-    else if (item_index == 2) {
-        return STATE_EBOOK;
-    }
-
-    // 2.闪念胶囊
-    // else if (item_index == 2) {
-    //     return STATE_FLASHMEMO;
-    // }
-
-    // 3.BadApple
-    else if (item_index == 3) {
-        return STATE_BADAPPLE;
-    }
-
-    // 4.FLIP流体模拟
-    else if (item_index == 4) {
-        return STATE_FLIP;
-    }
-
-    // 5.元胞自动机
-    else if (item_index == 5) {
-        return STATE_GAMEOFLIFE;
-    }
-
-    // 6.设置
-    else if (item_index == 6) {
-        init_setting_menu(ke, gs);
-        return STATE_SETTING_MENU;
-    }
-
-    // 7.安全关机
-    else if (item_index == 7) {
-        return STATE_SHUTDOWN;
-    }
-
-    // 8.本机自述
-    else if (item_index == 8) {
-        return STATE_README;
-    }
-    return STATE_MAIN_MENU;
-}
-
-
 // ===============================================================================
 // 开机欢迎画面
 // ===============================================================================
@@ -686,60 +625,63 @@ static void ui_draw_copyright_notice(Key_Event *key_event, Global_State *global_
 
 
 void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state) {
-    gfx_fill_white(global_state->gfx);
+
+    // 清屏
+    if (UI_COLOR_STYLE == UI_COLOR_LIGHT) {
+        gfx_fill_white(global_state->gfx);
+    }
+    else if (UI_COLOR_STYLE == UI_COLOR_DARK) {
+        gfx_soft_clear(global_state->gfx);
+    }
 
     gfx_draw_image(global_state->gfx, "/home/bd4sur/ai/Nano/infer/web/nano.png", 235, 56, 85, 170, 1);
 
-#if CONFIG_IDF_TARGET_ESP32S3
-    gfx_draw_textline_centered(global_state->gfx, L"Project Nano", global_state->gfx->width / 2, 8, 255, 255, 255, 0);
-    gfx_draw_textline_centered(global_state->gfx, L"电子鹦鹉@ESP32S3", global_state->gfx->width, 28, 255, 255, 255, 1);
-    ui_draw_copyright_notice(key_event, global_state, 20, 53);
-#else
+    // Header
+    ui_draw_header(key_event, global_state, L"Project Nano", 1);
+
+    // 时间
     time_t rawtime;
     struct tm *timeinfo;
+    time(&rawtime); // 获取当前时间戳
+    timeinfo = localtime(&rawtime); // 转换为本地时间
+
+    int32_t year = timeinfo->tm_year + 1900;
+    int32_t month = timeinfo->tm_mon + 1;
+    int32_t day = timeinfo->tm_mday;
+    int32_t hour = timeinfo->tm_hour;
+    int32_t minute = timeinfo->tm_min;
+    int32_t second = timeinfo->tm_sec;
+    double timezone = 8.0;
+    double longitude = 119.0;
+    double latitude = 32.0;
+
     char datetime_string_buffer[33];
     wchar_t datetime_wcs_buffer[33];
     wchar_t nongli_wcs_buffer[33];
 
-    time(&rawtime); // 获取当前时间戳
-    timeinfo = localtime(&rawtime); // 转换为本地时间
     strftime(datetime_string_buffer, sizeof(datetime_string_buffer), "%Y-%m-%d %H:%M:%S", timeinfo); // 格式化输出
     _mbstowcs(datetime_wcs_buffer, datetime_string_buffer, 33);
+    gfx_draw_textline_centered(global_state->gfx, datetime_wcs_buffer, global_state->gfx->width / 2, 22, S_UI_COLOR_SPLASH_TIME_TEXT[0], S_UI_COLOR_SPLASH_TIME_TEXT[1], S_UI_COLOR_SPLASH_TIME_TEXT[2], 1);
 
-    LunarDate *nongli = lunar_calculate(timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, 8.0);
+    // 农历日期
+    LunarDate *nongli = lunar_calculate(year, month, day, hour, minute, second, timezone);
     _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
+    gfx_draw_textline_centered(global_state->gfx, nongli_wcs_buffer, global_state->gfx->width / 2, 37, S_UI_COLOR_SPLASH_NONGLI_TEXT[0], S_UI_COLOR_SPLASH_NONGLI_TEXT[1], S_UI_COLOR_SPLASH_NONGLI_TEXT[2], 1);
 
-
-    ui_draw_header(key_event, global_state, L"Project Nano", 1);
-
-    gfx_draw_textline_centered(global_state->gfx, datetime_wcs_buffer, global_state->gfx->width / 2, 22, 0, 0, 0, 1);
-    gfx_draw_textline_centered(global_state->gfx, nongli_wcs_buffer, global_state->gfx->width / 2, 37, 255, 180, 52, 1);
+    // Footer
     if (global_state->gfx->width > 128) {
         ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
     }
     else {
         ui_draw_copyright_notice(key_event, global_state, 20, 53);
     }
-#endif
 
-    // gfx_draw_line(global_state->gfx, 0, 0, (global_state->gfx->width - 1), 0, 255, 255, 255, 1);
-    // gfx_draw_line(global_state->gfx, 0, 15, (global_state->gfx->width - 1), 15, 255, 255, 255, 1);
-    // gfx_draw_line(global_state->gfx, 0, 0, 0, (global_state->gfx->height - 1), 255, 255, 255, 1);
-    // gfx_draw_line(global_state->gfx, (global_state->gfx->width - 1), 0, (global_state->gfx->width - 1), (global_state->gfx->height - 1), 255, 255, 255, 1);
-    // gfx_draw_line(global_state->gfx, 0, (global_state->gfx->height - 1), (global_state->gfx->width - 1), (global_state->gfx->height - 1), 255, 255, 255, 1);
+    // 七段码时钟
+    ui_draw_7seg_time_string(key_event, global_state, (global_state->gfx->width - 220) / 2, (global_state->gfx->height + 64) / 2, hour, minute, second, 0);
 
-    ui_draw_7seg_time_string(key_event, global_state, (global_state->gfx->width - 150) / 2, (global_state->gfx->height + 64) / 2, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, 0);
-
-#ifdef ASR_ENABLED
-    // 检查ASR服务状态，如果ASR服务未启动，则在屏幕左上角画一个闪烁的点，表示ASR服务启动中
-    if (global_state->is_asr_server_up < 1) {
-        uint8_t v = (uint8_t)((global_state->timer >> 2) & 0x1);
-        gfx_draw_line(global_state->gfx, 4, 6, 7, 6, 255, 255, 255, v);
-        gfx_draw_line(global_state->gfx, 4, 7, 7, 7, 255, 255, 255, v);
-        gfx_draw_line(global_state->gfx, 4, 8, 7, 8, 255, 255, 255, v);
-        gfx_draw_line(global_state->gfx, 4, 9, 7, 9, 255, 255, 255, v);
-    }
-#endif
+    // 玲珑仪（青春版）
+    ui_app_linglong_draw_lite(key_event, global_state, (global_state->gfx->width - 128) / 2, (global_state->gfx->height - 64) / 2,
+        year, month, day, hour, minute, second, longitude, latitude, timezone);
 
 #ifdef UPS_ENABLED
     // 绘制电池电量
@@ -765,9 +707,17 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 
 #endif
 
-    ui_app_linglong_draw_lite(key_event, global_state, (global_state->gfx->width - 128) / 2, (global_state->gfx->height - 64) / 2,
-        timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec,
-        119.0, 32.0, 8.0);
+
+#ifdef ASR_ENABLED
+    // 检查ASR服务状态，如果ASR服务未启动，则在屏幕左上角画一个闪烁的点，表示ASR服务启动中
+    if (global_state->is_asr_server_up < 1) {
+        uint8_t v = (uint8_t)((global_state->timer >> 2) & 0x1);
+        gfx_draw_line(global_state->gfx, 4, 6, 7, 6, 255, 255, 255, v);
+        gfx_draw_line(global_state->gfx, 4, 7, 7, 7, 255, 255, 255, v);
+        gfx_draw_line(global_state->gfx, 4, 8, 7, 8, 255, 255, 255, v);
+        gfx_draw_line(global_state->gfx, 4, 9, 7, 9, 255, 255, 255, v);
+    }
+#endif
 
     gfx_refresh(global_state->gfx);
 }
@@ -1016,204 +966,211 @@ static int32_t linglong_timemachine_speed = 0; // 时光机速度，正数为未
 static uint64_t linglong_timemachine_start_timestamp = 0;
 
 
-void refresh_text_of_linglong_setting_menu(Key_Event *key_event, Global_State *global_state) {
-    wchar_t buf[MAX_MENU_ITEM_LEN];
 
-    wcscpy(global_state->w_menu_linglong_setting->title, L"玲珑仪设置");
-    wcscpy(global_state->w_menu_linglong_setting->items[0], L"时间和位置");
+void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state) {
+    uint8_t txt_color[4][4][3] = {
+        {{0,0,0}, {0,0,0}, {0,0,0}, {0,0,0},},
+        {{0,0,0}, {0,0,0}, {0,0,0}, {0,0,0},},
+        {{0,0,0}, {0,0,0}, {0,0,0}, {0,0,0},},
+        {{0,0,0}, {0,0,0}, {0,0,0}, {0,0,0},},
+    };
+    wchar_t cell_text[4][4][2][10] = {
+        { {L"1.投影算法", L"鱼眼",}, {L"2.赤道坐标", L"关",}, {L"3.地平坐标", L"方位角",}, {L"A.返回", L"",}, },
+        { {L"4.黄道", L"关",}, {L"5.天体名称", L"关",}, {L"6.姿态指示", L"关",}, {L"B.校准IMU", L"",}, },
+        { {L"7.大气散射", L"二次散射",}, {L"8.地景", L"草原全景",}, {L"9.平滑滤波", L"开",}, {L"", L"",}, },
+        { {L"*.时间", L"",}, {L"", L"",}, {L"#.位置", L"",}, {L"", L"",}, },
+    };
 
-
-    swprintf(buf, MAX_MENU_ITEM_LEN, L"陀螺仪：%ls",
-        (global_state->linglong_cfg->enable_imu == 0) ? L"关" : L"开");
-    wcscpy(global_state->w_menu_linglong_setting->items[1], buf);
-
-
-    swprintf(buf, MAX_MENU_ITEM_LEN, L"投影算法：%ls",
-        (global_state->linglong_cfg->projection == 0) ? L"鱼眼投影" : L"透视投影");
-    wcscpy(global_state->w_menu_linglong_setting->items[2], buf);
-
-
-    swprintf(buf, MAX_MENU_ITEM_LEN, L"姿态指示：%ls",
-        (global_state->linglong_cfg->enable_att_indicator == 0) ? L"关" : L"开");
-    wcscpy(global_state->w_menu_linglong_setting->items[3], buf);
-
-
-    switch (global_state->linglong_cfg->landscape_index) {
-        case 0: swprintf(buf, MAX_MENU_ITEM_LEN, L"地景：%ls", L"关闭"); break;
-        case 1: swprintf(buf, MAX_MENU_ITEM_LEN, L"地景：%ls", L"卫星照片"); break;
-        case 2: swprintf(buf, MAX_MENU_ITEM_LEN, L"地景：%ls", L"地面风景"); break;
-        default: swprintf(buf, MAX_MENU_ITEM_LEN, L"地景：%ls", L"关闭"); break;
+    // (0,0)投影算法
+    if (global_state->linglong_cfg->projection == 0) {
+        wcscpy(cell_text[0][0][1], L"鱼眼");
+        txt_color[0][0][0] = 0;
+        txt_color[0][0][1] = 255;
+        txt_color[0][0][2] = 255;
     }
-    wcscpy(global_state->w_menu_linglong_setting->items[4], buf);
-
-
-    switch (global_state->linglong_cfg->sky_model) {
-        case 0: swprintf(buf, MAX_MENU_ITEM_LEN, L"大气散射模型：%ls", L"关闭"); break;
-        case 1: swprintf(buf, MAX_MENU_ITEM_LEN, L"大气散射模型：%ls", L"简化模型"); break;
-        case 2: swprintf(buf, MAX_MENU_ITEM_LEN, L"大气散射模型：%ls", L"一次散射"); break;
-        case 3: swprintf(buf, MAX_MENU_ITEM_LEN, L"大气散射模型：%ls", L"二次散射"); break;
-        default: swprintf(buf, MAX_MENU_ITEM_LEN, L"大气散射模型：%ls", L"关闭"); break;
-    }
-    wcscpy(global_state->w_menu_linglong_setting->items[5], buf);
-
-
-    swprintf(buf, MAX_MENU_ITEM_LEN, L"赤道坐标：%ls",
-        (global_state->linglong_cfg->enable_equatorial_coord == 0) ? L"关闭" : L"开启");
-    wcscpy(global_state->w_menu_linglong_setting->items[6], buf);
-
-
-    switch (global_state->linglong_cfg->enable_horizontal_coord) {
-        case 0: swprintf(buf, MAX_MENU_ITEM_LEN, L"地平坐标：%ls", L"关闭"); break;
-        case 1: swprintf(buf, MAX_MENU_ITEM_LEN, L"地平坐标：%ls", L"方位角"); break;
-        case 2: swprintf(buf, MAX_MENU_ITEM_LEN, L"地平坐标：%ls", L"坐标圈"); break;
-        default: swprintf(buf, MAX_MENU_ITEM_LEN, L"地平坐标：%ls", L"关闭"); break;
-    }
-    wcscpy(global_state->w_menu_linglong_setting->items[7], buf);
-
-
-    switch (global_state->linglong_cfg->enable_star_name) {
-        case 0: swprintf(buf, MAX_MENU_ITEM_LEN, L"天体名称：%ls", L"关闭"); break;
-        case 1: swprintf(buf, MAX_MENU_ITEM_LEN, L"天体名称：%ls", L"除行星外的全部天体"); break;
-        case 2: swprintf(buf, MAX_MENU_ITEM_LEN, L"天体名称：%ls", L"仅行星"); break;
-        case 3: swprintf(buf, MAX_MENU_ITEM_LEN, L"天体名称：%ls", L"全部显示"); break;
-        default: swprintf(buf, MAX_MENU_ITEM_LEN, L"天体名称：%ls", L"关闭"); break;
-    }
-    wcscpy(global_state->w_menu_linglong_setting->items[8], buf);
-
-
-    swprintf(buf, MAX_MENU_ITEM_LEN, L"黄道：%ls",
-        (global_state->linglong_cfg->enable_ecliptic_circle == 0) ? L"关闭" : L"开启");
-    wcscpy(global_state->w_menu_linglong_setting->items[9], buf);
-
-
-    swprintf(buf, MAX_MENU_ITEM_LEN, L"星芒：%ls",
-        (global_state->linglong_cfg->enable_star_burst == 0) ? L"关闭" : L"开启");
-    wcscpy(global_state->w_menu_linglong_setting->items[10], buf);
-
-
-    wcscpy(global_state->w_menu_linglong_setting->items[11], L"校准陀螺仪");
-
-
-    global_state->w_menu_linglong_setting->item_num = 12;
-}
-
-void init_linglong_setting_menu(Key_Event *key_event, Global_State *global_state) {
-    refresh_text_of_linglong_setting_menu(key_event, global_state);
-    ui_widget_menu_init(key_event, global_state, global_state->w_menu_linglong_setting);
-}
-
-
-int32_t linglong_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
-    int32_t item_index = ms->current_item_index;
-    // 0.时间和位置
-    if (item_index == 0) {
-        return STATE_LINGLONG_TIMELOC;
-    }
-    // 1.陀螺仪
-    else if (item_index == 1) {
-        if (gs->linglong_cfg->enable_imu == 0) {
-            gs->linglong_cfg->enable_imu = 1;
-        }
-        else {
-            gs->linglong_cfg->enable_imu = 0;
-        }
-        refresh_text_of_linglong_setting_menu(ke, gs);
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_LINGLONG_SETTING;
-    }
-    // 2.投影算法
-    else if (item_index == 2) {
-        if (gs->linglong_cfg->projection == 0) {
-            gs->linglong_cfg->projection = 1;
-        }
-        else {
-            gs->linglong_cfg->projection = 0;
-        }
-        refresh_text_of_linglong_setting_menu(ke, gs);
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_LINGLONG_SETTING;
-    }
-    // 3.姿态指示
-    else if (item_index == 3) {
-        gs->linglong_cfg->enable_att_indicator++;
-        gs->linglong_cfg->enable_att_indicator = gs->linglong_cfg->enable_att_indicator % 2;
-        refresh_text_of_linglong_setting_menu(ke, gs);
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_LINGLONG_SETTING;
-    }
-    // 4.地景
-    else if (item_index == 4) {
-        gs->linglong_cfg->landscape_index++;
-        gs->linglong_cfg->landscape_index = gs->linglong_cfg->landscape_index % 3;
-        refresh_text_of_linglong_setting_menu(ke, gs);
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_LINGLONG_SETTING;
-    }
-    // 5.大气散射模型
-    else if (item_index == 5) {
-        gs->linglong_cfg->sky_model++;
-        gs->linglong_cfg->sky_model = gs->linglong_cfg->sky_model % 4;
-        refresh_text_of_linglong_setting_menu(ke, gs);
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_LINGLONG_SETTING;
-    }
-    // 6.赤道坐标
-    else if (item_index == 6) {
-        gs->linglong_cfg->enable_equatorial_coord ++;
-        gs->linglong_cfg->enable_equatorial_coord = gs->linglong_cfg->enable_equatorial_coord % 2;
-        refresh_text_of_linglong_setting_menu(ke, gs);
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_LINGLONG_SETTING;
-    }
-    // 7.地平坐标
-    else if (item_index == 7) {
-        gs->linglong_cfg->enable_horizontal_coord++;
-        gs->linglong_cfg->enable_horizontal_coord = gs->linglong_cfg->enable_horizontal_coord % 3;
-        refresh_text_of_linglong_setting_menu(ke, gs);
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_LINGLONG_SETTING;
-    }
-    // 8.天体名称
-    else if (item_index == 8) {
-        gs->linglong_cfg->enable_star_name++;
-        gs->linglong_cfg->enable_star_name = gs->linglong_cfg->enable_star_name % 4;
-        refresh_text_of_linglong_setting_menu(ke, gs);
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_LINGLONG_SETTING;
-    }
-    // 9.黄道
-    else if (item_index == 9) {
-        gs->linglong_cfg->enable_ecliptic_circle++;
-        gs->linglong_cfg->enable_ecliptic_circle = gs->linglong_cfg->enable_ecliptic_circle % 2;
-        refresh_text_of_linglong_setting_menu(ke, gs);
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_LINGLONG_SETTING;
-    }
-    // 10.星芒
-    else if (item_index == 10) {
-        gs->linglong_cfg->enable_star_burst++;
-        gs->linglong_cfg->enable_star_burst = gs->linglong_cfg->enable_star_burst % 2;
-        refresh_text_of_linglong_setting_menu(ke, gs);
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_LINGLONG_SETTING;
-    }
-    // 11.校准陀螺仪
-    else if (item_index == 11) {
-#ifdef IMU_ENABLED
-        ui_widget_textarea_set(ke, gs, gs->w_textarea_main, L" \n \n    正在校准IMU...", 0, 0);
-        ui_widget_textarea_draw(ke, gs, gs->w_textarea_main);
-        imu_calib();
-        sleep_in_ms(500);
-        ui_widget_textarea_set(ke, gs, gs->w_textarea_main, L" \n \n    校准完成", 0, 0);
-        ui_widget_textarea_draw(ke, gs, gs->w_textarea_main);
-#endif
-        return STATE_LINGLONG;
-    }
-    // TODO
     else {
-        return STATE_LINGLONG;
+        wcscpy(cell_text[0][0][1], L"透视");
+        txt_color[0][0][0] = 0;
+        txt_color[0][0][1] = 255;
+        txt_color[0][0][2] = 255;
+    }
+
+    // (0,1)赤道坐标
+    if (global_state->linglong_cfg->enable_equatorial_coord == 0) {
+        wcscpy(cell_text[0][1][1], L"关");
+        txt_color[0][1][0] = 222;
+        txt_color[0][1][1] = 0;
+        txt_color[0][1][2] = 0;
+    }
+    else {
+        wcscpy(cell_text[0][1][1], L"开");
+        txt_color[0][1][0] = 0;
+        txt_color[0][1][1] = 255;
+        txt_color[0][1][2] = 0;
+    }
+
+    // (0,2)地平坐标
+    switch (global_state->linglong_cfg->enable_horizontal_coord) {
+        case 0:
+            wcscpy(cell_text[0][2][1], L"关");
+            txt_color[0][2][0] = 222;
+            txt_color[0][2][1] = 0;
+            txt_color[0][2][2] = 0;
+            break;
+        case 1:
+            wcscpy(cell_text[0][2][1], L"方位角");
+            txt_color[0][2][0] = 0;
+            txt_color[0][2][1] = 255;
+            txt_color[0][2][2] = 255;
+            break;
+        case 2:
+            wcscpy(cell_text[0][2][1], L"坐标圈");
+            txt_color[0][2][0] = 0;
+            txt_color[0][2][1] = 255;
+            txt_color[0][2][2] = 255;
+            break;
+        default: break;
+    }
+
+    // (1,0)黄道
+    if (global_state->linglong_cfg->enable_ecliptic_circle == 0) {
+        wcscpy(cell_text[1][0][1], L"关");
+        txt_color[1][0][0] = 222;
+        txt_color[1][0][1] = 0;
+        txt_color[1][0][2] = 0;
+    }
+    else {
+        wcscpy(cell_text[1][0][1], L"开");
+        txt_color[1][0][0] = 0;
+        txt_color[1][0][1] = 255;
+        txt_color[1][0][2] = 0;
+    }
+
+    // (1,1)地平坐标
+    switch (global_state->linglong_cfg->enable_star_name) {
+        case 0:
+            wcscpy(cell_text[1][1][1], L"关");
+            txt_color[1][1][0] = 222;
+            txt_color[1][1][1] = 0;
+            txt_color[1][1][2] = 0;
+            break;
+        case 1:
+            wcscpy(cell_text[1][1][1], L"仅恒星");
+            txt_color[1][1][0] = 0;
+            txt_color[1][1][1] = 255;
+            txt_color[1][1][2] = 255;
+            break;
+        case 2:
+            wcscpy(cell_text[1][1][1], L"仅行星");
+            txt_color[1][1][0] = 0;
+            txt_color[1][1][1] = 255;
+            txt_color[1][1][2] = 255;
+            break;
+        case 3:
+            wcscpy(cell_text[1][1][1], L"全部显示");
+            txt_color[1][1][0] = 0;
+            txt_color[1][1][1] = 255;
+            txt_color[1][1][2] = 255;
+            break;
+        default: break;
+    }
+
+    // (1,2)姿态指示
+    if (global_state->linglong_cfg->enable_att_indicator == 0) {
+        wcscpy(cell_text[1][2][1], L"关");
+        txt_color[1][2][0] = 222;
+        txt_color[1][2][1] = 0;
+        txt_color[1][2][2] = 0;
+    }
+    else {
+        wcscpy(cell_text[1][2][1], L"开");
+        txt_color[1][2][0] = 0;
+        txt_color[1][2][1] = 255;
+        txt_color[1][2][2] = 0;
+    }
+
+    // (2,0)大气散射
+    switch (global_state->linglong_cfg->sky_model) {
+        case 0:
+            wcscpy(cell_text[2][0][1], L"关");
+            txt_color[2][0][0] = 222;
+            txt_color[2][0][1] = 0;
+            txt_color[2][0][2] = 0;
+            break;
+        case 1:
+            wcscpy(cell_text[2][0][1], L"简化模型");
+            txt_color[2][0][0] = 0;
+            txt_color[2][0][1] = 255;
+            txt_color[2][0][2] = 255;
+            break;
+        case 2:
+            wcscpy(cell_text[2][0][1], L"一次散射");
+            txt_color[2][0][0] = 0;
+            txt_color[2][0][1] = 255;
+            txt_color[2][0][2] = 255;
+            break;
+        case 3:
+            wcscpy(cell_text[2][0][1], L"二次散射");
+            txt_color[2][0][0] = 0;
+            txt_color[2][0][1] = 255;
+            txt_color[2][0][2] = 255;
+            break;
+        default: break;
+    }
+
+    // (2,1)地景
+    switch (global_state->linglong_cfg->landscape_index) {
+        case 0:
+            wcscpy(cell_text[2][1][1], L"关");
+            txt_color[2][1][0] = 222;
+            txt_color[2][1][1] = 0;
+            txt_color[2][1][2] = 0;
+            break;
+        case 1:
+            wcscpy(cell_text[2][1][1], L"草原");
+            txt_color[2][1][0] = 0;
+            txt_color[2][1][1] = 255;
+            txt_color[2][1][2] = 255;
+            break;
+        case 2:
+            wcscpy(cell_text[2][1][1], L"卫星照片");
+            txt_color[2][1][0] = 0;
+            txt_color[2][1][1] = 255;
+            txt_color[2][1][2] = 255;
+            break;
+        default: break;
+    }
+
+    // (2,2)平滑滤波
+    if (global_state->linglong_cfg->enable_opt_bilinear == 0) {
+        wcscpy(cell_text[2][2][1], L"关");
+        txt_color[2][2][0] = 222;
+        txt_color[2][2][1] = 0;
+        txt_color[2][2][2] = 0;
+    }
+    else {
+        wcscpy(cell_text[2][2][1], L"开");
+        txt_color[2][2][0] = 0;
+        txt_color[2][2][1] = 255;
+        txt_color[2][2][2] = 0;
+    }
+
+
+    gfx_soft_clear(global_state->gfx);
+
+    for (int32_t row = 0; row < 4; row++) {
+        for (int32_t col = 0; col < 4; col++) {
+            int32_t bx = (col == 0) ? 1 : 0;
+            int32_t by = (row == 0) ? 1 : 0;
+            gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, 37, 38, 41, 1);
+            gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][0], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, 255, 255, 255, 1);
+            gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][1], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, txt_color[row][col][0], txt_color[row][col][1], txt_color[row][col][2], 1);
+        }
     }
 }
+
+
+
 
 
 void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state) {
@@ -1292,12 +1249,6 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
 
     gfx_dithering(global_state->gfx);
     // gfx_gamma(global_state->gfx, 1.3f);
-
-    gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->gfx->height - 14, 128, 128, 128, 3);
-
-    wchar_t timestr[30];
-    swprintf(timestr, 30, L"%04d-%02d-%02d %02d:%02d:%02d", llcfg->year, llcfg->month, llcfg->day, llcfg->hour, llcfg->minute, llcfg->second);
-    gfx_draw_textline(global_state->gfx, timestr, global_state->gfx->width - 116, global_state->gfx->height - 14, 255, 255, 255, 1);
 
     // 显示FPS
     wchar_t fps_str[16];
@@ -1390,6 +1341,9 @@ void ui_app_linglong_draw_lite(
 
     // 二分搜索日出日落时间
     if (linglong_first_call_timestamp == 0 || linglong_last_day != day) { // 只在首次调用和当天日期变化时计算
+        linglong_first_call_timestamp = global_state->timestamp;
+        linglong_last_day = day;
+
         int32_t sunrise_min = find_sunrise(year, month, day, timezone, longitude, latitude);
         if (sunrise_min != -1) {
             linglong_sunrise_time[0] = sunrise_min / 60;
@@ -1413,14 +1367,23 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
     ui_app_linglong_draw_full(key_event, global_state);
 
     if (global_state->is_ctrl_enabled) {
-        gfx_draw_rectangle(global_state->gfx, 10, 10, global_state->gfx->width - 20, global_state->gfx->height - 20, 128, 128, 128, 3);
-        gfx_draw_textline_centered(global_state->gfx, L"=== 功能选择 ===", global_state->gfx->width/2, 12+6, 0, 0, 255, 1);
-        gfx_draw_textline_centered(global_state->gfx, L"1 投影算法    6 姿态指示",  global_state->gfx->width/2, (12+6) + (12+1)*1, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline_centered(global_state->gfx, L"2 赤道坐标    7 大气散射",  global_state->gfx->width/2, (12+6) + (12+1)*2, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline_centered(global_state->gfx, L"3 地平坐标    8 地景    ",  global_state->gfx->width/2, (12+6) + (12+1)*3, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline_centered(global_state->gfx, L"4 黄道        9 校准IMU ",  global_state->gfx->width/2, (12+6) + (12+1)*4, 0x0, 0x0, 0x0, 1);
-        gfx_draw_textline_centered(global_state->gfx, L"5 天体名称              ",  global_state->gfx->width/2, (12+6) + (12+1)*5, 0x0, 0x0, 0x0, 1);
+        ui_app_linglong_setting_draw(key_event, global_state);
+        gfx_draw_textline_centered(global_state->gfx, L"设置", global_state->gfx->width/2, PADDING_TOP/2, 222, 222, 222, 1);
+        // gfx_draw_rectangle(global_state->gfx, 10, 10, global_state->gfx->width - 20, global_state->gfx->height - 20, 128, 128, 128, 3);
+        // gfx_draw_textline_centered(global_state->gfx, L"=== 功能选择 ===", global_state->gfx->width/2, 12+6, 0, 0, 255, 1);
+        // gfx_draw_textline_centered(global_state->gfx, L"1 投影算法    6 姿态指示",  global_state->gfx->width/2, (12+6) + (12+1)*1, 0x0, 0x0, 0x0, 1);
+        // gfx_draw_textline_centered(global_state->gfx, L"2 赤道坐标    7 大气散射",  global_state->gfx->width/2, (12+6) + (12+1)*2, 0x0, 0x0, 0x0, 1);
+        // gfx_draw_textline_centered(global_state->gfx, L"3 地平坐标    8 地景    ",  global_state->gfx->width/2, (12+6) + (12+1)*3, 0x0, 0x0, 0x0, 1);
+        // gfx_draw_textline_centered(global_state->gfx, L"4 黄道        9 校准IMU ",  global_state->gfx->width/2, (12+6) + (12+1)*4, 0x0, 0x0, 0x0, 1);
+        // gfx_draw_textline_centered(global_state->gfx, L"5 天体名称              ",  global_state->gfx->width/2, (12+6) + (12+1)*5, 0x0, 0x0, 0x0, 1);
     }
+
+    gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->gfx->height - 13, 128, 128, 128, 3);
+
+    wchar_t timestr[30];
+    swprintf(timestr, 30, L"%04d-%02d-%02d %02d:%02d:%02d", global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->second);
+    gfx_draw_textline(global_state->gfx, timestr, global_state->gfx->width - 116, global_state->gfx->height - 13, 255, 255, 255, 1);
+
 
     gfx_refresh(global_state->gfx);
 }
@@ -1634,11 +1597,26 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             global_state->linglong_cfg->landscape_index = global_state->linglong_cfg->landscape_index % 3;
         }
     }
-    // 按9键推近，或者Ctrl时校准陀螺仪
+    // 按9键推近，或者Ctrl时切换平滑滤波
     else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_9) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->view_f += 0.1f;
             if (global_state->linglong_cfg->view_f >= 5.0f) global_state->linglong_cfg->view_f = 5.0f;
+        }
+        else {
+            global_state->is_ctrl_enabled = 0;
+            global_state->linglong_cfg->enable_opt_bilinear++;
+            global_state->linglong_cfg->enable_opt_bilinear = global_state->linglong_cfg->enable_opt_bilinear % 2;
+        }
+    }
+    // 按A键返回主菜单
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        global_state->STATE = STATE_MAIN_MENU;
+    }
+    // 按B键+Ctrl校准IMU
+    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_B) {
+        if (global_state->is_ctrl_enabled == 0) {
+            // TODO
         }
         else {
             global_state->is_ctrl_enabled = 0;
@@ -1651,15 +1629,6 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
 #endif
         }
-    }
-    // 按A键返回主菜单
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
-        global_state->STATE = STATE_MAIN_MENU;
-    }
-    // 按B键打开玲珑仪设置菜单
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_B) {
-        init_linglong_setting_menu(key_event, global_state);
-        global_state->STATE = STATE_LINGLONG_SETTING;
     }
     // 按C键切换Ctrl
     else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_C) {
@@ -1925,8 +1894,14 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
-            // init_main_menu(key_event, global_state);
-            gfx_fill_white(global_state->gfx);
+            // 清屏
+            if (UI_COLOR_STYLE == UI_COLOR_LIGHT) {
+                gfx_fill_white(global_state->gfx);
+            }
+            else if (UI_COLOR_STYLE == UI_COLOR_DARK) {
+                gfx_soft_clear(global_state->gfx);
+            }
+
             ui_widget_grid16_draw(key_event, global_state);
             ui_draw_header(key_event, global_state, L"Nano-Pod", 1);
             ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
@@ -2503,26 +2478,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
 
     /////////////////////////////////////////////
-    // 玲珑仪设置
-    /////////////////////////////////////////////
-
-    case STATE_LINGLONG_SETTING:
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_linglong_setting);
-            ui_draw_header(key_event, global_state, global_state->w_menu_linglong_setting->title, 1);
-            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
-            gfx_refresh(global_state->gfx);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_linglong_setting, linglong_setting_menu_item_action, STATE_LINGLONG, STATE_LINGLONG_SETTING);
-
-        break;
-
-
-    /////////////////////////////////////////////
     // 玲珑仪时间地点设置
     /////////////////////////////////////////////
 
@@ -2584,7 +2539,6 @@ int32_t main_deinit(Key_Event *key_event, Global_State *global_state) {
 
     free(global_state->w_input_main);
 
-    free(global_state->w_menu_main);
     free(global_state->w_menu_model);
     free(global_state->w_menu_setting);
     free(global_state->w_menu_asr_setting);

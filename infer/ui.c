@@ -7,6 +7,7 @@
 
 #include "platform.h"
 
+#include "ui_color.h"
 #include "ui_pinyin_lut.h"
 
 // 全局色彩变量（用于调节UI配色风格）
@@ -19,6 +20,9 @@ static uint8_t S_UI_COLOR_FOOTER_TEXT[3]   = {90 , 98 , 106};
 
 static uint8_t S_UI_COLOR_IME_HELP_BG[3]   = {222, 222, 222};
 static uint8_t S_UI_COLOR_IME_HELP_TEXT[3] = {0  , 0  , 0  };
+
+static uint8_t S_UI_COLOR_7SEG_FG[3]       = {0  , 255, 0  };
+static uint8_t S_UI_COLOR_7SEG_BG[3]       = {250, 250, 250};
 
 
 // 符号列表
@@ -345,8 +349,19 @@ void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_
 void ui_draw_header(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center) {
     const int header_height = 14;
     const uint8_t header_bgcolor[42] = {17,85,238,33,101,239,44,114,241,53,126,242,60,137,243,66,146,245,72,155,246,77,163,247,82,171,249,86,178,250,91,185,251,95,192,252,98,198,254,102,204,255};
-    for (int i = 0; i < header_height; i++) {
-        gfx_draw_line(global_state->gfx, 0, i, global_state->gfx->width - 1, i, header_bgcolor[i*3+0], header_bgcolor[i*3+1], header_bgcolor[i*3+2], 1);
+    if (UI_COLOR_STYLE == UI_COLOR_LIGHT) {
+        for (int i = 0; i < header_height; i++) {
+            gfx_draw_line(global_state->gfx, 0, i, global_state->gfx->width - 1, i, header_bgcolor[i*3+0], header_bgcolor[i*3+1], header_bgcolor[i*3+2], 1);
+        }
+        S_UI_COLOR_HEADER_TEXT[0] = 255;
+        S_UI_COLOR_HEADER_TEXT[1] = 255;
+        S_UI_COLOR_HEADER_TEXT[2] = 255;
+    }
+    else if (UI_COLOR_STYLE == UI_COLOR_DARK) {
+        gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, header_height, 37, 38, 41, 1);
+        S_UI_COLOR_HEADER_TEXT[0] = 255;
+        S_UI_COLOR_HEADER_TEXT[1] = 255;
+        S_UI_COLOR_HEADER_TEXT[2] = 255;
     }
     if (is_center) {
         gfx_draw_textline_centered(global_state->gfx, text, global_state->gfx->width / 2, 7, S_UI_COLOR_HEADER_TEXT[0], S_UI_COLOR_HEADER_TEXT[1], S_UI_COLOR_HEADER_TEXT[2], 1);
@@ -358,8 +373,14 @@ void ui_draw_header(Key_Event *key_event, Global_State *global_state, wchar_t *t
 
 void ui_draw_footer(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center) {
     const int footer_height = 14;
-    for (int i = global_state->gfx->height - footer_height; i < global_state->gfx->height; i++) {
-        gfx_draw_line(global_state->gfx, 0, i, global_state->gfx->width - 1, i, S_UI_COLOR_FOOTER_BG[0], S_UI_COLOR_FOOTER_BG[1], S_UI_COLOR_FOOTER_BG[2], 1);
+    if (UI_COLOR_STYLE == UI_COLOR_LIGHT) {
+        gfx_draw_rectangle(global_state->gfx, 0, global_state->gfx->height - footer_height, global_state->gfx->width, footer_height, S_UI_COLOR_FOOTER_BG[0], S_UI_COLOR_FOOTER_BG[1], S_UI_COLOR_FOOTER_BG[2], 1);
+    }
+    else if (UI_COLOR_STYLE == UI_COLOR_DARK) {
+        gfx_draw_rectangle(global_state->gfx, 0, global_state->gfx->height - footer_height, global_state->gfx->width, footer_height, 37, 38, 41, 1);
+        S_UI_COLOR_FOOTER_TEXT[0] = 255;
+        S_UI_COLOR_FOOTER_TEXT[1] = 255;
+        S_UI_COLOR_FOOTER_TEXT[2] = 255;
     }
     if (is_center) {
         gfx_draw_textline_centered(global_state->gfx, text, global_state->gfx->width / 2, global_state->gfx->height - footer_height + 7, S_UI_COLOR_FOOTER_TEXT[0], S_UI_COLOR_FOOTER_TEXT[1], S_UI_COLOR_FOOTER_TEXT[2], 1);
@@ -1282,12 +1303,11 @@ void ui_draw_input_symbol(Key_Event *key_event, Global_State *global_state, Widg
 
 /* 笔画长度 l 与粗细 w，可自定义。整体尺寸由二者决定：
    宽度 = l + 2*w, 高度 = 2*l + 3*w */
-#define SEG_LENGTH       8.0f
-#define SEG_THICKNESS    2.0f
+#define SEG_LENGTH       16.0f
+#define SEG_THICKNESS    5.0f
 #define CFG_DIGIT_W      (SEG_LENGTH + 2.0f * SEG_THICKNESS)
 #define CFG_DIGIT_H      (2.0f * SEG_LENGTH + 3.0f * SEG_THICKNESS)
-#define CFG_DIGIT_GAP    4.0f
-#define CFG_COLON_W      8.0f
+#define CFG_DIGIT_GAP    6.0f
 
 /* ============================================================
    静态常量数组: 10个数字 x 7个段 (1=点亮, 0=熄灭)
@@ -1313,11 +1333,41 @@ static void draw_seg_rect(Nano_GFX *gfx, float x, float y, float w, float h, int
     uint32_t rh = (uint32_t)h;
     if (rw == 0) rw = 1;
     if (rh == 0) rh = 1;
-    if (is_on) {
-        gfx_draw_rectangle(gfx, rx, ry, rw, rh, 255, 0, 0, 1);
-    } else {
-        gfx_draw_rectangle(gfx, rx, ry, rw, rh, 250, 250, 250, 1);
+
+    // 判断是横画还是竖画
+    int32_t is_heng = (rw > rh) ? 1 : 0;
+
+    uint8_t red   = S_UI_COLOR_7SEG_FG[0];
+    uint8_t green = S_UI_COLOR_7SEG_FG[1];
+    uint8_t blue  = S_UI_COLOR_7SEG_FG[2];
+    if (!is_on) {
+        return;
     }
+
+    if (is_heng) {
+        int32_t thickness = rh;
+        for (int32_t x = 1; x <= thickness/2; x++) {
+            int32_t xx1 = rx - x;
+            int32_t xx2 = rx + rw - 1 + x;
+            int32_t y1 = ry + (thickness/2) - (thickness - 2 * x) / 2;
+            int32_t y2 = ry + (thickness/2) + (thickness - 2 * x) / 2;
+            gfx_draw_line(gfx, xx1, y1, xx1, y2, red, green, blue, 1);
+            gfx_draw_line(gfx, xx2, y1, xx2, y2, red, green, blue, 1);
+        }
+    }
+    else {
+        int32_t thickness = rw;
+        for (int32_t y = 1; y <= thickness/2; y++) {
+            int32_t yy1 = ry - y;
+            int32_t yy2 = ry + rh - 1 + y;
+            int32_t x1 = rx + (thickness/2) - (thickness - 2 * y) / 2;
+            int32_t x2 = rx + (thickness/2) + (thickness - 2 * y) / 2;
+            gfx_draw_line(gfx, x1, yy1, x2, yy1, red, green, blue, 1);
+            gfx_draw_line(gfx, x1, yy2, x2, yy2, red, green, blue, 1);
+        }
+    }
+    gfx_draw_rectangle(gfx, rx, ry, rw, rh, red, green, blue, 1);
+
 }
 
 /* 绘制单个数字 (0-9)
@@ -1369,16 +1419,17 @@ void ui_draw_7seg_digit(Nano_GFX *gfx, int num, float ox, float oy, int32_t use_
 /* 绘制时间分隔符 (两个实心方块) */
 void draw_colon(Nano_GFX *gfx, float cx, float oy) {
     float h = CFG_DIGIT_H;
+    float thickness = SEG_THICKNESS;
 
     /* 计算上下圆点中心 Y */
     float cy1 = oy + h * 0.25f;
     float cy2 = oy + h * 0.75f;
 
     /* 上圆点 */
-    gfx_draw_rectangle(gfx, (uint32_t)(cx - 1), (uint32_t)(cy1 - 1), 2, 2, 255, 0, 0, 1);
+    gfx_draw_rectangle(gfx, (uint32_t)(cx - thickness/2), (uint32_t)(cy1 - thickness/2), thickness, thickness, S_UI_COLOR_7SEG_FG[0], S_UI_COLOR_7SEG_FG[1], S_UI_COLOR_7SEG_FG[2], 1);
 
     /* 下圆点 */
-    gfx_draw_rectangle(gfx, (uint32_t)(cx - 1), (uint32_t)(cy2 - 1), 2, 2, 255, 0, 0, 1);
+    gfx_draw_rectangle(gfx, (uint32_t)(cx - thickness/2), (uint32_t)(cy2 - thickness/2), thickness, thickness, S_UI_COLOR_7SEG_FG[0], S_UI_COLOR_7SEG_FG[1], S_UI_COLOR_7SEG_FG[2], 1);
 }
 
 void ui_draw_7seg_time_string(Key_Event *key_event, Global_State *global_state, int32_t xx, int32_t yy, int h, int m, int s, int t) {
@@ -1391,7 +1442,6 @@ void ui_draw_7seg_time_string(Key_Event *key_event, Global_State *global_state, 
     float y = (float)yy;
     float w = CFG_DIGIT_W;
     float g = CFG_DIGIT_GAP;
-    // float cw = CFG_COLON_W;
 
     /* 十进制拆分 */
     int h1 = h / 10; int h2 = h % 10;
@@ -1407,8 +1457,8 @@ void ui_draw_7seg_time_string(Key_Event *key_event, Global_State *global_state, 
     x += w + g;
 
     /* 冒号1 */
-    draw_colon(gfx, x + w * 0.5f, y);
-    x += w + g;
+    draw_colon(gfx, x + w/2 * 0.5f, y);
+    x += w/2 + g;
 
     /* 数字3: 分十位 */
     ui_draw_7seg_digit(gfx, m1, x, y, 1);
@@ -1419,8 +1469,8 @@ void ui_draw_7seg_time_string(Key_Event *key_event, Global_State *global_state, 
     x += w + g;
 
     /* 冒号2 */
-    draw_colon(gfx, x + w * 0.5f, y);
-    x += w + g;
+    draw_colon(gfx, x + w/2 * 0.5f, y);
+    x += w/2 + g;
 
     /* 数字5: 秒十位 */
     ui_draw_7seg_digit(gfx, s1, x, y, 1);
