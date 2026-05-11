@@ -10,7 +10,6 @@ extern "C" {
 #define UI_COLOR_DARK  (1)
 
 
-extern int32_t UI_COLOR_STYLE;
 
 
 #ifdef __cplusplus

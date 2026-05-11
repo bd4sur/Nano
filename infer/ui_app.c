@@ -39,18 +39,6 @@
 #include "ui_app.h"
 
 
-// 全局色彩变量（用于调节UI配色风格）
-
-int32_t UI_COLOR_STYLE = UI_COLOR_LIGHT;
-
-static uint8_t S_UI_COLOR_LLM_PREFILL_PROGRESS[3] = {102, 204, 255};
-static uint8_t S_UI_COLOR_MAIN_MENU_CELL_BG[3]    = {233, 239, 255};
-static uint8_t S_UI_COLOR_MAIN_MENU_CELL_TEXT[3]  = {0  , 0  , 0  };
-static uint8_t S_UI_COLOR_SPLASH_TIME_TEXT[3]     = {0  , 0  , 0  };
-static uint8_t S_UI_COLOR_SPLASH_NONGLI_TEXT[3]   = {220, 120, 0  };
-
-
-
 
 // ===============================================================================
 // UI框架：获取按键事件
@@ -142,6 +130,8 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
 
     global_state->STATE = STATE_SPLASH_SCREEN;
     global_state->PREV_STATE = STATE_DEFAULT;
+
+    global_state->ui_color_style = UI_COLOR_DARK;
 
     global_state->timestamp_last = 0;
 
@@ -259,10 +249,10 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         global_state->is_full_refresh = 0;
 
         // 清屏
-        if (UI_COLOR_STYLE == UI_COLOR_LIGHT) {
+        if (global_state->ui_color_style == UI_COLOR_LIGHT) {
             gfx_fill_white(global_state->gfx);
         }
-        else if (UI_COLOR_STYLE == UI_COLOR_DARK) {
+        else if (global_state->ui_color_style == UI_COLOR_DARK) {
             gfx_soft_clear(global_state->gfx);
         }
 
@@ -281,10 +271,17 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_prefill);
 
         // 进度条
+        uint8_t progress_R = 102, progress_G = 204, progress_B = 255;
+        if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+            progress_R = 102; progress_G = 204; progress_B = 255;
+        }
+        else if (global_state->ui_color_style == UI_COLOR_DARK) {
+            progress_R = 102; progress_G = 204; progress_B = 255;
+        }
         uint32_t pg_bottom_y = global_state->gfx->height - 14;
         uint32_t pgpos_x = MIN(global_state->gfx->width - 1, session->pos * global_state->gfx->width / (session->num_prompt_tokens - 1));
-        gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 1), pgpos_x, (pg_bottom_y - 1), S_UI_COLOR_LLM_PREFILL_PROGRESS[0], S_UI_COLOR_LLM_PREFILL_PROGRESS[1], S_UI_COLOR_LLM_PREFILL_PROGRESS[2], 1);
-        gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 2), pgpos_x, (pg_bottom_y - 2), S_UI_COLOR_LLM_PREFILL_PROGRESS[0], S_UI_COLOR_LLM_PREFILL_PROGRESS[1], S_UI_COLOR_LLM_PREFILL_PROGRESS[2], 1);
+        gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 1), pgpos_x, (pg_bottom_y - 1), progress_R, progress_G, progress_B, 1);
+        gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 2), pgpos_x, (pg_bottom_y - 2), progress_R, progress_G, progress_B, 1);
 
         // 进度百分比
         wchar_t progress_str[30];
@@ -500,31 +497,50 @@ void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
         { {L"[1]", L"番茄钟",}, {L"[2]", L"电子鹦鹉",}, {L"[3]", L"玲珑天象仪",}, {L"[A]", L"返回",}, },
         { {L"[4]", L"电子书",}, {L"[5]", L"音乐盒",}, {L"[6]", L"相册",}, {L"[B]", L"设置",}, },
         { {L"[7]", L"BadApple",}, {L"[8]", L"元胞自动机",}, {L"[9]", L"无线电报",}, {L"[C]", L"本机自述",}, },
-        { {L"[*]", L"2048",}, {L"[0]", L"频谱仪",}, {L"[#]", L"遗传算法",}, {L"[D]", L"安全关机",}, },
+        { {L"[*]", L"2048",}, {L"[0]", L"色彩风格",}, {L"[#]", L"遗传算法",}, {L"[D]", L"安全关机",}, },
     };
-    if (UI_COLOR_STYLE == UI_COLOR_LIGHT) {
-        // TODO
+
+    // 清屏
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        gfx_fill_white(global_state->gfx);
     }
-    else if (UI_COLOR_STYLE == UI_COLOR_DARK) {
-        S_UI_COLOR_MAIN_MENU_CELL_BG[0] = 50;
-        S_UI_COLOR_MAIN_MENU_CELL_BG[1] = 51;
-        S_UI_COLOR_MAIN_MENU_CELL_BG[2] = 52;
-        S_UI_COLOR_MAIN_MENU_CELL_TEXT[0] = 255;
-        S_UI_COLOR_MAIN_MENU_CELL_TEXT[1] = 255;
-        S_UI_COLOR_MAIN_MENU_CELL_TEXT[2] = 255;
+    else if (global_state->ui_color_style == UI_COLOR_DARK) {
+        gfx_soft_clear(global_state->gfx);
+    }
+
+    uint8_t cell_bg_R = 0, cell_bg_G = 0, cell_bg_B = 0;
+    uint8_t cell_text_R = 0, cell_text_G = 0, cell_text_B = 0;
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        cell_bg_R = 233;
+        cell_bg_G = 239;
+        cell_bg_B = 255;
+        cell_text_R = 0;
+        cell_text_G = 0;
+        cell_text_B = 0;
+    }
+    else if (global_state->ui_color_style == UI_COLOR_DARK) {
+        cell_bg_R = 40;
+        cell_bg_G = 40;
+        cell_bg_B = 42;
+        cell_text_R = 255;
+        cell_text_G = 255;
+        cell_text_B = 255;
     }
 
     for (int32_t row = 0; row < 4; row++) {
         for (int32_t col = 0; col < 4; col++) {
             int32_t bx = (col == 0) ? 1 : 0;
             int32_t by = (row == 0) ? 1 : 0;
-            uint8_t bg_r = S_UI_COLOR_MAIN_MENU_CELL_BG[0], bg_g = S_UI_COLOR_MAIN_MENU_CELL_BG[1], bg_b = S_UI_COLOR_MAIN_MENU_CELL_BG[2];
-            uint8_t tx_r = S_UI_COLOR_MAIN_MENU_CELL_TEXT[0], tx_g = S_UI_COLOR_MAIN_MENU_CELL_TEXT[1], tx_b = S_UI_COLOR_MAIN_MENU_CELL_TEXT[2];
+            uint8_t bg_r = cell_bg_R, bg_g = cell_bg_G, bg_b = cell_bg_B;
+            uint8_t tx_r = cell_text_R, tx_g = cell_text_G, tx_b = cell_text_B;
             gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, bg_r, bg_g, bg_b, 1);
             gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][0], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, 192, 192, 211, 1);
             gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][1], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+8, tx_r, tx_g, tx_b, 1);
         }
     }
+
+    ui_draw_header(key_event, global_state, L"Nano-Pod", 1);
+    ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
 }
 
 void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_state) {
@@ -557,7 +573,15 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         // TODO
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
-        // TODO
+        // 暂时用作切换色彩风格功能
+        if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+            global_state->ui_color_style = UI_COLOR_DARK;
+        }
+        else {
+            global_state->ui_color_style = UI_COLOR_LIGHT;
+        }
+        ui_widget_grid16_draw(key_event, global_state);
+        gfx_refresh(global_state->gfx);
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
         global_state->STATE = STATE_SPLASH_SCREEN;
@@ -627,14 +651,14 @@ static void ui_draw_copyright_notice(Key_Event *key_event, Global_State *global_
 void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state) {
 
     // 清屏
-    if (UI_COLOR_STYLE == UI_COLOR_LIGHT) {
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
         gfx_fill_white(global_state->gfx);
     }
-    else if (UI_COLOR_STYLE == UI_COLOR_DARK) {
+    else if (global_state->ui_color_style == UI_COLOR_DARK) {
         gfx_soft_clear(global_state->gfx);
     }
 
-    gfx_draw_image(global_state->gfx, "/home/bd4sur/ai/Nano/infer/web/nano.png", 235, 56, 85, 170, 1);
+    // gfx_draw_image(global_state->gfx, "/home/bd4sur/wp.jpg", 0, 0, 320, 240, 1);
 
     // Header
     ui_draw_header(key_event, global_state, L"Project Nano", 1);
@@ -655,18 +679,47 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     double longitude = 119.0;
     double latitude = 32.0;
 
-    char datetime_string_buffer[33];
     wchar_t datetime_wcs_buffer[33];
     wchar_t nongli_wcs_buffer[33];
 
-    strftime(datetime_string_buffer, sizeof(datetime_string_buffer), "%Y-%m-%d %H:%M:%S", timeinfo); // 格式化输出
-    _mbstowcs(datetime_wcs_buffer, datetime_string_buffer, 33);
-    gfx_draw_textline_centered(global_state->gfx, datetime_wcs_buffer, global_state->gfx->width / 2, 22, S_UI_COLOR_SPLASH_TIME_TEXT[0], S_UI_COLOR_SPLASH_TIME_TEXT[1], S_UI_COLOR_SPLASH_TIME_TEXT[2], 1);
+    uint8_t time_red = 0, time_green = 0, time_blue = 0;
+    uint8_t nongli_red = 0, nongli_green = 0, nongli_blue = 0;
+    uint8_t sevenseg_red = 0, sevenseg_green = 0, sevenseg_blue = 0;
+
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        time_red = 0; time_green = 0; time_blue = 0;
+        nongli_red = 220; nongli_green = 120; nongli_blue = 0;
+        sevenseg_red = 255; sevenseg_green = 0; sevenseg_blue = 0;
+    }
+    else if (global_state->ui_color_style == UI_COLOR_DARK) {
+        time_red = 255; time_green = 255; time_blue = 255;
+        nongli_red = 0xff; nongli_green = 0xfb; nongli_blue = 0;
+        sevenseg_red = 255; sevenseg_green = 255; sevenseg_blue = 255;
+    }
+
+    const wchar_t *weekdays[] = {L"日", L"一", L"二", L"三", L"四", L"五", L"六"};
+    swprintf(datetime_wcs_buffer, 33, L"%04d年%02d月%02d日 星期%ls", year, month, day, weekdays[timeinfo->tm_wday]);
+    gfx_draw_textline_centered(global_state->gfx, datetime_wcs_buffer, global_state->gfx->width / 2, 22, time_red, time_green, time_blue, 1);
 
     // 农历日期
     LunarDate *nongli = lunar_calculate(year, month, day, hour, minute, second, timezone);
     _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
-    gfx_draw_textline_centered(global_state->gfx, nongli_wcs_buffer, global_state->gfx->width / 2, 37, S_UI_COLOR_SPLASH_NONGLI_TEXT[0], S_UI_COLOR_SPLASH_NONGLI_TEXT[1], S_UI_COLOR_SPLASH_NONGLI_TEXT[2], 1);
+    gfx_draw_textline_centered(global_state->gfx, nongli_wcs_buffer, global_state->gfx->width / 2, 37, nongli_red, nongli_green, nongli_blue, 1);
+
+    // 七段码时钟
+    wchar_t time7seg_str[10];
+    swprintf(time7seg_str, 10, L"%02d:%02d:%02d", hour, minute, second);
+    int32_t s7seg_width = 0.0f;
+    int32_t s7seg_height = 0.0f;
+    ui_draw_7seg_string(key_event, global_state,
+        (global_state->gfx->width - 222) / 2, 50,
+        time7seg_str, sevenseg_red, sevenseg_green, sevenseg_blue, 16.0f, 3.0f, 10.0f, &s7seg_width, &s7seg_height);
+
+
+    // 玲珑仪（青春版）
+    ui_app_linglong_draw_lite(key_event, global_state, (global_state->gfx->width - 128) / 2, 100,
+        year, month, day, hour, minute, second, longitude, latitude, timezone);
+
 
     // Footer
     if (global_state->gfx->width > 128) {
@@ -676,12 +729,10 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
         ui_draw_copyright_notice(key_event, global_state, 20, 53);
     }
 
-    // 七段码时钟
-    ui_draw_7seg_time_string(key_event, global_state, (global_state->gfx->width - 220) / 2, (global_state->gfx->height + 64) / 2, hour, minute, second, 0);
 
-    // 玲珑仪（青春版）
-    ui_app_linglong_draw_lite(key_event, global_state, (global_state->gfx->width - 128) / 2, (global_state->gfx->height - 64) / 2,
-        year, month, day, hour, minute, second, longitude, latitude, timezone);
+
+
+
 
 #ifdef UPS_ENABLED
     // 绘制电池电量
@@ -869,12 +920,29 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
 // FLIP流体模拟
 // ===============================================================================
 
+static int32_t s_ui_flip_setting_count = 0;
+static int32_t s_ui_flip_show_particles = 1;
+static int32_t s_ui_flip_show_grid = 1;
+static float s_ui_flip_damping_coeff = 0.0f;
+
 void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
     flip_init(k, 1.0f, FLIP_RESOLUTION, 1);
 }
 
 void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) {
+
+    static uint64_t frame_count = 0;
+    static uint64_t last_time = 0;
+    static int fps = 0;
+
+    frame_count++;
+    uint64_t now = global_state->timestamp;
+    if (now - last_time >= 1000) {
+        fps = (int)frame_count;
+        frame_count = 0;
+        last_time = now;
+    }
 
     gfx_soft_clear(global_state->gfx);
 
@@ -921,28 +989,56 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
 
 #endif
 
-    int show_particles = 1;
-    int show_grid      = 1;
-
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
 
     render_flip(global_state->gfx, 0, 0, global_state->gfx->width, global_state->gfx->height,
                 k, 1.0f, FLIP_RESOLUTION,     /* pool_width, pool_height, resolution */
                 gravity_x, gravity_y,    /* gravity_x, gravity_y */
-                1.4f / 60.0f,    /* dt */
+                1.6f / 60.0f,    /* dt */
                 0.8f,            /* flip_ratio */
-                50, 2,           /* num_pressure_iters, num_particle_iters */
+                20, 2,           /* num_pressure_iters, num_particle_iters */
                 1.0f,            /* over_relaxation */
                 1, 1,            /* compensate_drift, separate_particles */
-                show_particles, show_grid,
-                0.6f, 0.3f);     /* funnel_neck_damping, funnel_pressure_resistance */
+                s_ui_flip_show_particles, s_ui_flip_show_grid,
+                s_ui_flip_damping_coeff, 0.3f);     /* funnel_neck_damping, funnel_pressure_resistance */
+
+    wchar_t info_buf[100];
+    swprintf(info_buf, 100, L"FPS=%d | %ls", fps, ((s_ui_flip_damping_coeff > 0.01f) ? L"节流开启" : L"节流关闭"));
+    gfx_draw_textline_centered(global_state->gfx, info_buf, global_state->gfx->width/2, global_state->gfx->height - 7, 255, 255, 255, 1);
+
     gfx_refresh(global_state->gfx);
 }
 
 
 void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state) {
+    // 按*键切换显示方式
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
+        if (s_ui_flip_setting_count == 0) {
+            s_ui_flip_show_grid = 0;
+            s_ui_flip_show_particles = 1;
+        }
+        else if (s_ui_flip_setting_count == 1) {
+            s_ui_flip_show_grid = 1;
+            s_ui_flip_show_particles = 0;
+        }
+        else if (s_ui_flip_setting_count == 2) {
+            s_ui_flip_show_grid = 1;
+            s_ui_flip_show_particles = 1;
+        }
+        s_ui_flip_setting_count++;
+        s_ui_flip_setting_count = s_ui_flip_setting_count % 3;
+    }
+    // 按0键切换漏斗阻尼
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
+        if (s_ui_flip_damping_coeff > 0.01f) { // 避免直接比0
+            s_ui_flip_damping_coeff = 0.0f;
+        }
+        else {
+            s_ui_flip_damping_coeff = 1e20f;
+        }
+    }
     // 按A键返回主菜单
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
         global_state->STATE = STATE_MAIN_MENU;
     }
     // 按D键刷新
@@ -978,7 +1074,7 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
         { {L"1.投影算法", L"鱼眼",}, {L"2.赤道坐标", L"关",}, {L"3.地平坐标", L"方位角",}, {L"A.返回", L"",}, },
         { {L"4.黄道", L"关",}, {L"5.天体名称", L"关",}, {L"6.姿态指示", L"关",}, {L"B.校准IMU", L"",}, },
         { {L"7.大气散射", L"二次散射",}, {L"8.地景", L"草原全景",}, {L"9.平滑滤波", L"开",}, {L"", L"",}, },
-        { {L"*.时间", L"",}, {L"", L"",}, {L"#.位置", L"",}, {L"", L"",}, },
+        { {L"*.时间", L"",}, {L"0.跟踪太阳", L"关",}, {L"#.位置", L"",}, {L"", L"",}, },
     };
 
     // (0,0)投影算法
@@ -1155,6 +1251,20 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
         txt_color[2][2][2] = 0;
     }
 
+    // (3,1)跟踪太阳
+    if (global_state->linglong_cfg->enable_tracking_sun == 0) {
+        wcscpy(cell_text[3][1][1], L"关");
+        txt_color[3][1][0] = 222;
+        txt_color[3][1][1] = 0;
+        txt_color[3][1][2] = 0;
+    }
+    else {
+        wcscpy(cell_text[3][1][1], L"开");
+        txt_color[3][1][0] = 0;
+        txt_color[3][1][1] = 255;
+        txt_color[3][1][2] = 0;
+    }
+
 
     gfx_soft_clear(global_state->gfx);
 
@@ -1244,7 +1354,8 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->enable_star_name,
         llcfg->enable_planet,
         llcfg->enable_ecliptic_circle,
-        llcfg->enable_att_indicator
+        llcfg->enable_att_indicator,
+        llcfg->enable_tracking_sun
     );
 
     gfx_dithering(global_state->gfx);
@@ -1263,13 +1374,26 @@ void ui_app_linglong_draw_lite(
     int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
     double longitude, double latitude, double timezone
 ) {
-    const uint8_t BG_R = 255, BG_G = 255, BG_B = 255;
-    const uint8_t COORD_R = 222, COORD_G = 222, COORD_B = 222;
-    const uint8_t NSWE_R = 255, NSWE_G = 0, NSWE_B = 0;
-    const uint8_t DATETIME_R = 0, DATETIME_G = 0, DATETIME_B = 255;
-    const uint8_t TEXT_R = 0, TEXT_G = 0, TEXT_B = 0;
-    const uint8_t SUN_R = 255, SUN_G = 0, SUN_B = 0;
-    const uint8_t MOON_R = 255, MOON_G = 0, MOON_B = 255;
+    uint8_t BG_R = 255, BG_G = 255, BG_B = 255;
+    uint8_t COORD_R = 222, COORD_G = 222, COORD_B = 222;
+    uint8_t NSWE_R = 255, NSWE_G = 0, NSWE_B = 0;
+    uint8_t DATETIME_R = 0, DATETIME_G = 0, DATETIME_B = 255;
+    uint8_t TEXT_R = 0, TEXT_G = 0, TEXT_B = 0;
+    uint8_t SUN_R = 255, SUN_G = 0, SUN_B = 0;
+    uint8_t MOON_R = 255, MOON_G = 0, MOON_B = 255;
+
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        // 同初始化
+    }
+    else if (global_state->ui_color_style == UI_COLOR_DARK) {
+        BG_R = 0, BG_G = 0, BG_B = 0;
+        COORD_R = 66, COORD_G = 66, COORD_B = 66;
+        NSWE_R = 255, NSWE_G = 0, NSWE_B = 0;
+        DATETIME_R = 0, DATETIME_G = 255, DATETIME_B = 255;
+        TEXT_R = 255, TEXT_G = 255, TEXT_B = 255;
+        SUN_R = 255, SUN_G = 255, SUN_B = 0;
+        MOON_R = 222, MOON_G = 222, MOON_B = 0;
+    }
 
     gfx_draw_rectangle(global_state->gfx, x, y, 128, 64, BG_R, BG_G, BG_B, 1);
 
@@ -1643,9 +1767,16 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
     else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_STAR) {
         ui_app_linglong_set_timemachine_speed(key_event, global_state, -120);
     }
-    // 短按0键回到实时（反复按运行/暂停）
+    // 按0键回到实时（反复按运行/暂停），或者Ctrl时切换跟踪太阳
     else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_0) {
-        ui_app_linglong_set_realtime(key_event, global_state);
+        if (global_state->is_ctrl_enabled == 0) {
+            ui_app_linglong_set_realtime(key_event, global_state);
+        }
+        else {
+            global_state->is_ctrl_enabled = 0;
+            global_state->linglong_cfg->enable_tracking_sun++;
+            global_state->linglong_cfg->enable_tracking_sun = global_state->linglong_cfg->enable_tracking_sun % 2;
+        }
     }
     // 按#键时光机向后（未来）（反复按运行/暂停）
     else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_HASH) {
@@ -1894,17 +2025,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
-            // 清屏
-            if (UI_COLOR_STYLE == UI_COLOR_LIGHT) {
-                gfx_fill_white(global_state->gfx);
-            }
-            else if (UI_COLOR_STYLE == UI_COLOR_DARK) {
-                gfx_soft_clear(global_state->gfx);
-            }
-
             ui_widget_grid16_draw(key_event, global_state);
-            ui_draw_header(key_event, global_state, L"Nano-Pod", 1);
-            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
             gfx_refresh(global_state->gfx);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -2137,13 +2258,31 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
             // 计算提示语+生成内容的行数
             wchar_t *prompt_and_output = (wchar_t *)platform_calloc(UI_STR_BUF_MAX_LENGTH * 2, sizeof(wchar_t));
-            wcscat(prompt_and_output, L"[#66ccff]Homo:[#000000]\n");
+            wcscat(prompt_and_output, L"[#1155ee]Homo:");
+            if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+                wcscat(prompt_and_output, L"[#000000]\n");
+            }
+            else if (global_state->ui_color_style == UI_COLOR_DARK) {
+                wcscat(prompt_and_output, L"[#ffffff]\n");
+            }
             wcscat(prompt_and_output, global_state->w_input_main->textarea.text);
-            wcscat(prompt_and_output, L"\n--------------------\n[#65bb00]Nano:[#000000]\n");
+            wcscat(prompt_and_output, L"\n--------------------\n[#65bb00]Nano:");
+            if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+                wcscat(prompt_and_output, L"[#000000]\n");
+            }
+            else if (global_state->ui_color_style == UI_COLOR_DARK) {
+                wcscat(prompt_and_output, L"[#ffffff]\n");
+            }
             wcscat(prompt_and_output, global_state->llm_output_of_last_session);
             // 推理中止
             if (global_state->llm_status == LLM_STOPPED_IN_PREFILLING || global_state->llm_status == LLM_STOPPED_IN_DECODING) {
-                wcscat(prompt_and_output, L"\n\n[#ff0000][Nano:推理中止][#000000]");
+                wcscat(prompt_and_output, L"\n\n[#ff0000][Nano:推理中止]");
+                if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+                    wcscat(prompt_and_output, L"[#000000]");
+                }
+                else if (global_state->ui_color_style == UI_COLOR_DARK) {
+                    wcscat(prompt_and_output, L"[#ffffff]");
+                }
             }
             // 推理自然结束
             else if (global_state->llm_status == LLM_STOPPED_NORMALLY) {
@@ -2151,11 +2290,23 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             }
             // 推理异常结束
             else {
-                wcscat(prompt_and_output, L"\n\n[#ff0000][Nano:推理异常结束][#000000]");
+                wcscat(prompt_and_output, L"\n\n[#ff0000][Nano:推理异常结束]");
+                if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+                    wcscat(prompt_and_output, L"[#000000]");
+                }
+                else if (global_state->ui_color_style == UI_COLOR_DARK) {
+                    wcscat(prompt_and_output, L"[#ffffff]");
+                }
             }
             wchar_t tps_wcstr[50];
-            swprintf(tps_wcstr, 50, L"\n\n[#dda300][%d/%d|%.1fTPS][#000000]", global_state->token_num_of_last_session, global_state->llm_max_seq_len, global_state->tps_of_last_session);
+            swprintf(tps_wcstr, 50, L"\n\n[#dda300][%d/%d|%.1fTPS]", global_state->token_num_of_last_session, global_state->llm_max_seq_len, global_state->tps_of_last_session);
             wcscat(prompt_and_output, tps_wcstr);
+            if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+                wcscat(prompt_and_output, L"[#000000]");
+            }
+            else if (global_state->ui_color_style == UI_COLOR_DARK) {
+                wcscat(prompt_and_output, L"[#ffffff]");
+            }
 
             wcscpy(global_state->llm_output_of_last_session, prompt_and_output);
 
@@ -2291,8 +2442,17 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             ui_draw_header(key_event, global_state, L"本机自述", 1);
             ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
 
-            ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main,
-                L"[#1155ee]Nano-Pod[#000000] v" NANO_VERSION "\n掌上电子鹦鹉·玲珑天象仪\n(c) 2025-2026 BD4SUR\n\ngithub.com/bd4sur", 0, 1);
+            wchar_t readme[256];
+            wchar_t color_reset_tag[10];
+            if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+                wcscpy(color_reset_tag, L"[#000000]");
+            }
+            else if (global_state->ui_color_style == UI_COLOR_DARK) {
+                wcscpy(color_reset_tag, L"[#ffffff]");
+            }
+            swprintf(readme, 256, L"[#1155ee]Nano-Pod%ls v" NANO_VERSION "\n掌上电子鹦鹉·玲珑天象仪\n(c) 2025-2026 BD4SUR\n\ngithub.com/bd4sur", color_reset_tag);
+
+            ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, readme, 0, 1);
             ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
         }
         global_state->PREV_STATE = global_state->STATE;

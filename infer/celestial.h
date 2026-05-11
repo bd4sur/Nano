@@ -57,6 +57,7 @@ typedef struct Linglong_Config {
     int32_t enable_planet;           // 是否显示大行星
     int32_t enable_ecliptic_circle;  // 是否显示黄道
     int32_t enable_att_indicator;    // 是否显示姿态指示标记
+    int32_t enable_tracking_sun;     // 视线偏航角是否跟踪太阳
 
     // 以下与天空渲染无关（非render_sky参数）
     int32_t enable_imu;              // 是否启用IMU（使视角随机器姿态旋转）
@@ -94,7 +95,8 @@ void render_sky(Nano_GFX *gfx,
     int32_t enable_star_name,        // 是否显示恒星名称（0-不显示；1-除行星；2-仅行星；3-全部）
     int32_t enable_planet,           // 是否显示大行星
     int32_t enable_ecliptic_circle,  // 是否显示黄道
-    int32_t enable_att_indicator     // 是否显示姿态指示标记
+    int32_t enable_att_indicator,    // 是否显示姿态指示标记
+    int32_t enable_tracking_sun      // 视线偏航角是否跟踪太阳
 );
 
 #ifdef __cplusplus

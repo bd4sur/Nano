@@ -64,6 +64,7 @@ typedef struct Global_State {
     int32_t timer; // 主循环计数器：从0开始递增，不与物理时间关联
     int32_t focus;
     int32_t is_ctrl_enabled; // 是否处于Ctrl键的激活状态：1-是，0-否
+    int32_t ui_color_style;
 
     // LLM相关
     Nano_Context *llm_ctx;
@@ -229,8 +230,13 @@ void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_
 // 七段码
 // ===============================================================================
 
-void ui_draw_7seg_time_string(Key_Event *key_event, Global_State *global_state, int32_t xx, int32_t yy, int h, int m, int s, int t);
-
+void ui_draw_7seg_string(
+    Key_Event *key_event, Global_State *global_state,
+    int32_t xx, int32_t yy, wchar_t *text,
+    uint8_t red, uint8_t green, uint8_t blue,
+    float seg_length, float seg_thickness, float digit_gap,
+    int32_t *text_width, int32_t *text_height
+);
 
 
 #ifdef __cplusplus

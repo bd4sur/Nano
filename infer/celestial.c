@@ -2810,6 +2810,7 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->enable_planet = 1;           // 是否显示大行星
     cfg->enable_ecliptic_circle = 0;  // 是否显示黄道
     cfg->enable_att_indicator = 0;    // 是否显示姿态指示标记
+    cfg->enable_tracking_sun = 0;     // 视线偏航角是否跟踪太阳
 
     cfg->enable_imu = 1;              // 是否启用IMU（使视角随机器姿态旋转）
 
@@ -2874,7 +2875,8 @@ void render_sky(Nano_GFX *gfx,
     int32_t enable_star_name,        // 是否显示恒星名称（0-不显示；1-除行星；2-仅行星；3-全部）
     int32_t enable_planet,           // 是否显示大行星
     int32_t enable_ecliptic_circle,  // 是否显示黄道
-    int32_t enable_att_indicator     // 是否显示姿态指示标记
+    int32_t enable_att_indicator,    // 是否显示姿态指示标记
+    int32_t enable_tracking_sun      // 视线偏航角是否跟踪太阳
 ) {
 
     uint32_t fb_width = gfx->width;
@@ -2891,6 +2893,12 @@ void render_sky(Nano_GFX *gfx,
     double sun_azi = 0.0;
     double sun_alt = 0.0;
     where_is_the_sun(year, month, day, hour, minute, second, timezone, longitude, latitude, &sun_azi, &sun_alt);
+
+    // 视线跟踪太阳
+    if (enable_tracking_sun) {
+        view_azi = sun_azi;
+        // view_alt = MAX(0.0f, sun_alt);
+    }
 
     float sun_x = 0.0f;
     float sun_y = 0.0f;
