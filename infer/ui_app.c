@@ -923,7 +923,7 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
 static int32_t s_ui_flip_setting_count = 0;
 static int32_t s_ui_flip_show_particles = 1;
 static int32_t s_ui_flip_show_grid = 1;
-static float s_ui_flip_damping_coeff = 0.0f;
+static int32_t s_ui_flip_is_throttle = 0;
 
 void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
@@ -1000,10 +1000,10 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
                 1.0f,            /* over_relaxation */
                 1, 1,            /* compensate_drift, separate_particles */
                 s_ui_flip_show_particles, s_ui_flip_show_grid,
-                s_ui_flip_damping_coeff, 0.3f);     /* funnel_neck_damping, funnel_pressure_resistance */
+                s_ui_flip_is_throttle);
 
     wchar_t info_buf[100];
-    swprintf(info_buf, 100, L"FPS=%d | %ls", fps, ((s_ui_flip_damping_coeff > 0.01f) ? L"节流开启" : L"节流关闭"));
+    swprintf(info_buf, 100, L"FPS=%d | %ls", fps, ((s_ui_flip_is_throttle) ? L"节流开启" : L"节流关闭"));
     gfx_draw_textline_centered(global_state->gfx, info_buf, global_state->gfx->width/2, global_state->gfx->height - 7, 255, 255, 255, 1);
 
     gfx_refresh(global_state->gfx);
@@ -1030,11 +1030,11 @@ void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state)
     }
     // 按0键切换漏斗阻尼
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
-        if (s_ui_flip_damping_coeff > 0.01f) { // 避免直接比0
-            s_ui_flip_damping_coeff = 0.0f;
+        if (s_ui_flip_is_throttle) { // 避免直接比0
+            s_ui_flip_is_throttle = 0;
         }
         else {
-            s_ui_flip_damping_coeff = 1e20f;
+            s_ui_flip_is_throttle = 1;
         }
     }
     // 按A键返回主菜单

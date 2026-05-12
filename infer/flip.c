@@ -329,20 +329,132 @@ static void push_particles_apart(FlipFluid *f, int num_iters) {
     free(dy_buf);
 }
 
-static void handle_particle_collisions(FlipFluid *f) {
+static void push_particles_apart2(FlipFluid *f, int num_iters) {
+    float color_diffusion_coeff = 0.001f;
+    memset(f->num_cell_particles, 0, f->p_num_cells * sizeof(int));
+
+    for (int i = 0; i < f->num_particles; i++) {
+        float x = f->particle_pos[2 * i];
+        float y = f->particle_pos[2 * i + 1];
+        int xi = clampi((int)floorf(x * f->p_inv_spacing), 0, f->p_num_x - 1);
+        int yi = clampi((int)floorf(y * f->p_inv_spacing), 0, f->p_num_y - 1);
+        int cell_nr = xi * f->p_num_y + yi;
+        f->num_cell_particles[cell_nr]++;
+    }
+
+    int first = 0;
+    for (int i = 0; i < f->p_num_cells; i++) {
+        first += f->num_cell_particles[i];
+        f->first_cell_particle[i] = first;
+    }
+    f->first_cell_particle[f->p_num_cells] = first;
+
+    for (int i = 0; i < f->num_particles; i++) {
+        float x = f->particle_pos[2 * i];
+        float y = f->particle_pos[2 * i + 1];
+        int xi = clampi((int)floorf(x * f->p_inv_spacing), 0, f->p_num_x - 1);
+        int yi = clampi((int)floorf(y * f->p_inv_spacing), 0, f->p_num_y - 1);
+        int cell_nr = xi * f->p_num_y + yi;
+        f->first_cell_particle[cell_nr]--;
+        f->cell_particle_ids[f->first_cell_particle[cell_nr]] = i;
+    }
+
+    float min_dist = 2.0f * f->particle_radius;
+    float min_dist2 = min_dist * min_dist;
+
+    for (int iter = 0; iter < num_iters; iter++) {
+        for (int i = 0; i < f->num_particles; i++) {
+            float px = f->particle_pos[2 * i];
+            float py = f->particle_pos[2 * i + 1];
+            int pxi = (int)floorf(px * f->p_inv_spacing);
+            int pyi = (int)floorf(py * f->p_inv_spacing);
+            int x0 = maxi(pxi - 1, 0);
+            int y0 = maxi(pyi - 1, 0);
+            int x1 = mini(pxi + 1, f->p_num_x - 1);
+            int y1 = mini(pyi + 1, f->p_num_y - 1);
+
+            for (int xi = x0; xi <= x1; xi++) {
+                for (int yi = y0; yi <= y1; yi++) {
+                    int cell_nr = xi * f->p_num_y + yi;
+                    int fs = f->first_cell_particle[cell_nr];
+                    int ls = f->first_cell_particle[cell_nr + 1];
+                    for (int j = fs; j < ls; j++) {
+                        int id = f->cell_particle_ids[j];
+                        if (id == i) continue;
+                        float qx = f->particle_pos[2 * id];
+                        float qy = f->particle_pos[2 * id + 1];
+                        float dx = qx - px;
+                        float dy = qy - py;
+                        float d2 = dx * dx + dy * dy;
+                        if (d2 > min_dist2 || d2 == 0.0f) continue;
+                        float d = sqrtf(d2);
+                        float s = 0.5f * (min_dist - d) / d;
+                        dx *= s; dy *= s;
+                        f->particle_pos[2 * i]     -= dx;
+                        f->particle_pos[2 * i + 1] -= dy;
+                        f->particle_pos[2 * id]     += dx;
+                        f->particle_pos[2 * id + 1] += dy;
+
+                        for (int k = 0; k < 3; k++) {
+                            float color0 = f->particle_color[3 * i + k];
+                            float color1 = f->particle_color[3 * id + k];
+                            float color = (color0 + color1) * 0.5f;
+                            f->particle_color[3 * i + k] = color0 + (color - color0) * color_diffusion_coeff;
+                            f->particle_color[3 * id + k] = color1 + (color - color1) * color_diffusion_coeff;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void handle_particle_collisions(FlipFluid *f, int32_t is_throttle) {
     float h = 1.0f / f->f_inv_spacing;
     float r = f->particle_radius;
     float min_x = h + r, max_x = (f->f_num_x - 1) * h - r;
     float min_y = h + r, max_y = (f->f_num_y - 1) * h - r;
+
+    int32_t release_count = 0;
+
+    static const float obstacle_radius = 0.1f;
+
     for (int i = 0; i < f->num_particles; i++) {
         float x = f->particle_pos[2 * i];
         float y = f->particle_pos[2 * i + 1];
 
-        /* hourglass wall collision */
         if (f->hourglass_enabled) {
             float half_y = f->f_num_y / 2.0f;
             int xi = (int)floorf(x * f->f_inv_spacing);
             int yi = (int)floorf(y * f->f_inv_spacing);
+
+
+            // 瓶颈处节流
+            if (is_throttle) {
+                float obs_x = (f->f_num_x * h) / 2.0f;
+                float obs_y = (f->f_num_y * h) / 2.0f;
+
+                float dx = x - obs_x;
+                float dy = y - obs_y;
+                float d2 = dx * dx + dy * dy;
+                float obs_r = obstacle_radius + r*2;
+
+                if (d2 < (obs_r * obs_r) && d2 > 1e-10) {
+                    if (release_count < 1) {
+                        release_count++;
+                    }
+                    else {
+                        float d = sqrtf(d2);
+                        float push = (obs_r - d);
+                        f->particle_pos[2 * i] += (dx / d * push);
+                        f->particle_pos[2 * i + 1] += (dy / d * push);
+                        f->particle_vel[2 * i] = 0;
+                        f->particle_vel[2 * i + 1] = 0;
+                    }
+                }
+            }
+
+            /* hourglass wall collision */
 
             int in_solid = 0;
             float nx = 0.0f, ny = 0.0f;
@@ -380,8 +492,8 @@ static void handle_particle_collisions(FlipFluid *f) {
 
             if (in_solid && penetration > 0.0f) {
                 float push_dist = penetration + r * 0.5f;
-                x += nx * push_dist;
-                y += ny * push_dist;
+                f->particle_pos[2 * i]     += nx * push_dist;
+                f->particle_pos[2 * i + 1] += ny * push_dist;
 
                 float vn = f->particle_vel[2*i] * nx + f->particle_vel[2*i+1] * ny;
                 if (vn < 0.0f) {
@@ -392,6 +504,8 @@ static void handle_particle_collisions(FlipFluid *f) {
         }
 
         /* domain boundary collision */
+        x = f->particle_pos[2 * i];
+        y = f->particle_pos[2 * i + 1];
         if (x < min_x) { x = min_x; f->particle_vel[2 * i] = 0.0f; }
         if (x > max_x) { x = max_x; f->particle_vel[2 * i] = 0.0f; }
         if (y < min_y) { y = min_y; f->particle_vel[2 * i + 1] = 0.0f; }
@@ -611,6 +725,42 @@ static void solve_incompressibility(FlipFluid *f, int num_iters, float dt, float
     // apply_funnel_neck_constraint(f, funnel_pressure_resistance);
 }
 
+static void solve_incompressibility2(FlipFluid *f, int num_iters, float dt, float over_relaxation, int compensate_drift, float funnel_pressure_resistance) {
+    memset(f->p, 0, f->f_num_cells * sizeof(float));
+    memcpy(f->prev_u, f->u, f->f_num_cells * sizeof(float));
+    memcpy(f->prev_v, f->v, f->f_num_cells * sizeof(float));
+    int n = f->f_num_y;
+    float cp = f->density * f->h / dt;
+    float half_y = f->f_num_y / 2.0f;
+
+    for (int iter = 0; iter < num_iters; iter++) {
+        for (int i = 1; i < f->f_num_x - 1; i++) {
+            for (int j = 1; j < f->f_num_y - 1; j++) {
+                int center = i * n + j;
+                if (f->cell_type[center] != FLUID_CELL) continue;
+                int left   = (i - 1) * n + j;
+                int right  = (i + 1) * n + j;
+                int bottom = i * n + j - 1;
+                int top    = i * n + j + 1;
+                float sx0 = f->s[left], sx1 = f->s[right];
+                float sy0 = f->s[bottom], sy1 = f->s[top];
+                float s = sx0 + sx1 + sy0 + sy1;
+                if (s == 0.0f) continue;
+                float div = f->u[right] - f->u[center] + f->v[top] - f->v[center];
+
+                if (f->particle_rest_density > 0.0f && compensate_drift) {
+                    float compression = f->particle_density[center] - f->particle_rest_density;
+                    if (compression > 0.0f) div -= 1.0f * compression;
+                }
+                float p_val = -div / s * over_relaxation;
+                f->p[center] += cp * p_val;
+                f->u[center] -= sx0 * p_val; f->u[right] += sx1 * p_val;
+                f->v[center] -= sy0 * p_val; f->v[top]    += sy1 * p_val;
+            }
+        }
+    }
+}
+
 static void update_particle_colors(FlipFluid *f) {
     float h1 = f->f_inv_spacing;
     for (int i = 0; i < f->num_particles; i++) {
@@ -671,17 +821,16 @@ static void update_cell_colors(FlipFluid *f) {
 static void simulate_step(FlipFluid *f, float dt, float gravity_x, float gravity_y,
                           float flip_ratio, int num_pressure_iters, int num_particle_iters,
                           float over_relaxation, int compensate_drift, int separate_particles,
-                          float funnel_neck_damping, float funnel_pressure_resistance) {
+                          int32_t is_throttle) {
     int num_sub_steps = 1;
     float sdt = dt / num_sub_steps;
     for (int step = 0; step < num_sub_steps; step++) {
         integrate_particles(f, sdt, gravity_x, gravity_y);
         if (separate_particles) push_particles_apart(f, num_particle_iters);
-        handle_particle_collisions(f);
-        apply_funnel_neck_damping(f, sdt, funnel_neck_damping);
+        handle_particle_collisions(f, is_throttle);
         transfer_velocities(f, 1, 0.0f);
         update_particle_density(f);
-        solve_incompressibility(f, num_pressure_iters, sdt, over_relaxation, compensate_drift, funnel_pressure_resistance);
+        solve_incompressibility(f, num_pressure_iters, sdt, over_relaxation, compensate_drift, 0);
         transfer_velocities(f, 0, flip_ratio);
     }
     update_particle_colors(f);
@@ -862,7 +1011,7 @@ void render_flip(Nano_GFX *gfx,
                  float over_relaxation, int32_t compensate_drift,
                  int32_t separate_particles,
                  int32_t show_particles, int32_t show_grid,
-                 float funnel_neck_damping, float funnel_pressure_resistance) {
+                 int32_t is_throttle) {
     if (!g_initialized) {
         flip_init(pool_width, pool_height, resolution, 0);
     }
@@ -871,7 +1020,7 @@ void render_flip(Nano_GFX *gfx,
     simulate_step(f, dt, gravity_x, gravity_y, flip_ratio,
                   num_pressure_iters, num_particle_iters,
                   over_relaxation, compensate_drift, separate_particles,
-                  funnel_neck_damping, funnel_pressure_resistance);
+                  is_throttle);
 
     render_to_framebuffer(gfx, center_x, center_y, width, height, f,
                           pool_width, pool_height,
