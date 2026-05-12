@@ -379,7 +379,7 @@ void ui_draw_header(Key_Event *key_event, Global_State *global_state, wchar_t *t
         S_UI_COLOR_HEADER_TEXT[2] = 255;
     }
     else if (global_state->ui_color_style == UI_COLOR_DARK) {
-        gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, header_height, 37, 38, 41, 1);
+        gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, header_height, 15, 16, 17, 1);
         S_UI_COLOR_HEADER_TEXT[0] = 255;
         S_UI_COLOR_HEADER_TEXT[1] = 255;
         S_UI_COLOR_HEADER_TEXT[2] = 255;
@@ -401,7 +401,7 @@ void ui_draw_footer(Key_Event *key_event, Global_State *global_state, wchar_t *t
         S_UI_COLOR_FOOTER_TEXT[2] = 106;
     }
     else if (global_state->ui_color_style == UI_COLOR_DARK) {
-        gfx_draw_rectangle(global_state->gfx, 0, global_state->gfx->height - footer_height, global_state->gfx->width, footer_height, 37, 38, 41, 1);
+        gfx_draw_rectangle(global_state->gfx, 0, global_state->gfx->height - footer_height, global_state->gfx->width, footer_height, 15, 16, 17, 1);
         S_UI_COLOR_FOOTER_TEXT[0] = 255;
         S_UI_COLOR_FOOTER_TEXT[1] = 255;
         S_UI_COLOR_FOOTER_TEXT[2] = 255;
