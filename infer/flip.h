@@ -57,7 +57,8 @@ void render_flip(Nano_GFX *gfx,
                  float over_relaxation, int32_t compensate_drift,
                  int32_t separate_particles,
                  int32_t show_particles, int32_t show_grid,
-                 int32_t is_throttle);
+                 int32_t is_throttle,
+                 int32_t *upper_count, int32_t *lower_count);
 
 #ifdef __cplusplus
 }

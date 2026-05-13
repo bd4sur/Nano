@@ -935,6 +935,154 @@ void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y
 
 
 
+// 绘制实心三角形
+// 使用扫描线算法填充凸三角形
+// is_anti_aliasing: 0-普通填充, 非0-基于面积覆盖率的抗锯齿填充
+// mode: 0-置黑 1-置色 2-异或 3-加色
+void gfx_draw_triangle(
+    Nano_GFX *gfx,
+    uint32_t x0, uint32_t y0,
+    uint32_t x1, uint32_t y1,
+    uint32_t x2, uint32_t y2,
+    int32_t is_anti_aliasing,
+    uint8_t red, uint8_t green, uint8_t blue, uint8_t mode
+) {
+    // 计算三角形的垂直范围
+    uint32_t y_min = y0;
+    uint32_t y_max = y0;
+    if (y1 < y_min) y_min = y1;
+    if (y1 > y_max) y_max = y1;
+    if (y2 < y_min) y_min = y2;
+    if (y2 > y_max) y_max = y2;
+
+    // 限制在画布范围内
+    if (y_min >= gfx->height) return;
+    if (y_max >= gfx->height) y_max = gfx->height - 1;
+
+    // 对每一行扫描线，计算与三角形边的交点
+    for (uint32_t y = y_min; y <= y_max; y++) {
+        float x_intersections[3];
+        int num_intersections = 0;
+
+        // 三角形的三条边
+        uint32_t xs[3] = {x0, x1, x2};
+        uint32_t ys[3] = {y0, y1, y2};
+
+        for (int i = 0; i < 3; i++) {
+            uint32_t x_start = xs[i];
+            uint32_t y_start = ys[i];
+            uint32_t x_end = xs[(i + 1) % 3];
+            uint32_t y_end = ys[(i + 1) % 3];
+
+            // 跳过水平边（已在顶点处处理）
+            if (y_start == y_end) continue;
+
+            // 检查当前扫描线是否与这条边相交
+            // 使用严格的包含-排除规则避免顶点重复计数
+            int intersect = 0;
+            if (y_start < y_end) {
+                // 向上边：y_start <= y < y_end
+                intersect = (y >= y_start && y < y_end) ? 1 : 0;
+            } else {
+                // 向下边：y_end < y <= y_start
+                intersect = (y > y_end && y <= y_start) ? 1 : 0;
+            }
+
+            if (intersect) {
+                // 线性插值计算交点的x坐标（浮点精度）
+                float dy = (float)y_end - (float)y_start;
+                float dx = (float)x_end - (float)x_start;
+                float dy_scan = (float)y - (float)y_start;
+
+                // x = x_start + dx * (y - y_start) / dy
+                float x_intersect = (float)x_start + (dx * dy_scan) / dy;
+
+                if (num_intersections < 3) {
+                    x_intersections[num_intersections++] = x_intersect;
+                }
+            }
+        }
+
+        // 对交点进行排序（冒泡排序）
+        for (int i = 0; i < num_intersections - 1; i++) {
+            for (int j = i + 1; j < num_intersections; j++) {
+                if (x_intersections[i] > x_intersections[j]) {
+                    float temp = x_intersections[i];
+                    x_intersections[i] = x_intersections[j];
+                    x_intersections[j] = temp;
+                }
+            }
+        }
+
+        // 填充交点之间的区域（凸多边形，成对填充）
+        for (int i = 0; i < num_intersections; i += 2) {
+            if (i + 1 >= num_intersections) break;
+
+            float x_left = x_intersections[i];
+            float x_right = x_intersections[i + 1];
+
+            if (x_right < 0.0f) continue;
+            if (x_left >= (float)gfx->width) continue;
+
+            if (is_anti_aliasing) {
+                // 抗锯齿：基于像素面积覆盖率绘制
+                int32_t x_start = (int32_t)floorf(x_left);
+                int32_t x_end = (int32_t)ceilf(x_right);
+                if (x_start < 0) x_start = 0;
+                if (x_end >= (int32_t)gfx->width) x_end = gfx->width - 1;
+
+                for (int32_t x = x_start; x <= x_end; x++) {
+                    float pix_left = (float)x;
+                    float pix_right = (float)x + 1.0f;
+                    float cover_left = (x_left > pix_left) ? x_left : pix_left;
+                    float cover_right = (x_right < pix_right) ? x_right : pix_right;
+                    float alpha = cover_right - cover_left;
+                    if (alpha <= 0.0f) continue;
+
+                    if (mode == 0) {
+                        // 置黑：只要有覆盖就置黑
+                        gfx_set_pixel(gfx, (uint32_t)x, y, 0, 0, 0);
+                    }
+                    else if (mode == 1) {
+                        // 置色：按覆盖率设置颜色
+                        gfx_set_pixel(gfx, (uint32_t)x, y,
+                            (uint8_t)((float)red * alpha),
+                            (uint8_t)((float)green * alpha),
+                            (uint8_t)((float)blue * alpha));
+                    }
+                    else if (mode == 2) {
+                        // 反转：覆盖率超过0.5才反转
+                        if (alpha >= 0.5f) {
+                            gfx_reverse_pixel(gfx, (uint32_t)x, y);
+                        }
+                    }
+                    else {
+                        // 加色：按覆盖率叠加
+                        gfx_add_pixel(gfx, (uint32_t)x, y,
+                            (uint8_t)((float)red * alpha),
+                            (uint8_t)((float)green * alpha),
+                            (uint8_t)((float)blue * alpha));
+                    }
+                }
+            }
+            else {
+                // 非抗锯齿：整数边界，直接填充
+                int32_t x_start = (int32_t)x_left;
+                int32_t x_end = (int32_t)x_right;
+
+                if (x_end < 0) continue;
+                if (x_start >= (int32_t)gfx->width) continue;
+                if (x_start < 0) x_start = 0;
+                if (x_end >= (int32_t)gfx->width) x_end = gfx->width - 1;
+
+                for (int32_t x = x_start; x <= x_end; x++) {
+                    gfx_draw_point(gfx, (uint32_t)x, y, red, green, blue, mode);
+                }
+            }
+        }
+    }
+}
+
 // 绘制实心六边形
 // 使用扫描线算法填充凸六边形
 void gfx_draw_hexagon(

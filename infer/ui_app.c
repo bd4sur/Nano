@@ -925,7 +925,12 @@ static int32_t s_ui_flip_show_particles = 1;
 static int32_t s_ui_flip_show_grid = 1;
 static int32_t s_ui_flip_is_throttle = 0;
 
+static int32_t s_ui_flip_last_upper_count = 0; // 用于计算粒子流量
+static uint64_t s_ui_flip_last_upper_count_timestamp = 0; // 用于计算粒子流量
+static uint64_t s_ui_fanqie_start_timestamp = 0;
+
 void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
+    s_ui_fanqie_start_timestamp = global_state->timestamp;
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
     flip_init(k, 1.0f, FLIP_RESOLUTION, 1);
 }
@@ -991,20 +996,80 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
 
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
 
-    render_flip(global_state->gfx, 0, 0, global_state->gfx->width, global_state->gfx->height,
-                k, 1.0f, FLIP_RESOLUTION,     /* pool_width, pool_height, resolution */
-                gravity_x, gravity_y,    /* gravity_x, gravity_y */
-                0.6f / 60.0f,    /* dt */
-                0.8f,            /* flip_ratio */
-                20, 2,           /* num_pressure_iters, num_particle_iters */
-                1.0f,            /* over_relaxation */
-                1, 1,            /* compensate_drift, separate_particles */
-                s_ui_flip_show_particles, s_ui_flip_show_grid,
-                s_ui_flip_is_throttle);
+    int32_t upper_count = 0;
+    int32_t lower_count = 0;
 
-    wchar_t info_buf[100];
-    swprintf(info_buf, 100, L"FPS=%d | %ls", fps, ((s_ui_flip_is_throttle) ? L"节流开启" : L"节流关闭"));
-    gfx_draw_textline_centered(global_state->gfx, info_buf, global_state->gfx->width/2, global_state->gfx->height - 7, 255, 255, 255, 1);
+    render_flip(
+        global_state->gfx, 0, 0, global_state->gfx->width, global_state->gfx->height,
+        k, 1.0f, FLIP_RESOLUTION,     /* pool_width, pool_height, resolution */
+        gravity_x, gravity_y,    /* gravity_x, gravity_y */
+        0.6f / 60.0f,    /* dt */
+        0.8f,            /* flip_ratio */
+        20, 2,           /* num_pressure_iters, num_particle_iters */
+        1.0f,            /* over_relaxation */
+        1, 1,            /* compensate_drift, separate_particles */
+        s_ui_flip_show_particles, s_ui_flip_show_grid,
+        s_ui_flip_is_throttle,
+        &upper_count, &lower_count
+    );
+
+    // 绘制沙漏边界线 NOTE 硬编码
+    gfx_draw_triangle(global_state->gfx, 0, 3, 150, 112, 0, 233, 0, 30, 31, 32, 1);
+    gfx_draw_triangle(global_state->gfx, 150, 112, 0, 233, 150, 120, 0, 30, 31, 32, 1);
+
+    gfx_draw_triangle(global_state->gfx, 319, 3, 178, 112, 178, 120, 0, 30, 31, 32, 1);
+    gfx_draw_triangle(global_state->gfx, 319, 3, 178, 120, 319, 227, 0, 30, 31, 32, 1);
+
+    gfx_draw_line_anti_aliasing(global_state->gfx, 0, 3, 150, 112, 3, 0x00, 0x01, 0x02, 1);
+    gfx_draw_line_anti_aliasing(global_state->gfx, 319, 3, 178, 112, 3, 0x00, 0x01, 0x02, 1);
+
+    gfx_draw_line_anti_aliasing(global_state->gfx, 150, 112, 150, 120, 3, 0x00, 0x01, 0x02, 1);
+    gfx_draw_line_anti_aliasing(global_state->gfx, 178, 112, 178, 120, 3, 0x00, 0x01, 0x02, 1);
+
+    gfx_draw_line_anti_aliasing(global_state->gfx, 150, 120, 0, 233, 3, 0x00, 0x01, 0x02, 1);
+    gfx_draw_line_anti_aliasing(global_state->gfx, 178, 120, 319, 227, 3, 0x00, 0x01, 0x02, 1);
+
+
+    // 计时
+    gfx_draw_textline(global_state->gfx, L"计时", 10, 102 - 20, 128, 128, 128, 1);
+    wchar_t time7seg_str[10];
+    wchar_t ms_str[5];
+    int32_t countdown = (int32_t)((global_state->timestamp - s_ui_fanqie_start_timestamp) / 1000);
+    int32_t ms = (int32_t)((global_state->timestamp - s_ui_fanqie_start_timestamp) % 1000) / 10;
+    swprintf(time7seg_str, 10, L"%02d:%02d", countdown / 60, countdown % 60);
+    swprintf(ms_str, 5, L".%02d", ms);
+    int32_t s7seg_width = 0.0f;
+    int32_t s7seg_height = 0.0f;
+    ui_draw_7seg_string(key_event, global_state,
+        10, 102,
+        time7seg_str, 255, 255, 255, 10.0f, 3.0f, 7.0f, &s7seg_width, &s7seg_height);
+    gfx_draw_textline(global_state->gfx, ms_str, 8 + s7seg_width, 102 + s7seg_height/2 - 6 + 4, 255, 255, 255, 1);
+
+    // FPS
+    wchar_t fps_buf[20];
+    swprintf(fps_buf, 20, L"FPS=%d", fps);
+    gfx_draw_textline(global_state->gfx, fps_buf, 10, 102 + s7seg_height + 9, 128, 128, 128, 1);
+
+    // 每1000ms统计一次粒子流量
+    static float particle_flow_per_sec = 0.0f;
+    if (s_ui_flip_last_upper_count == 0 || global_state->timestamp - s_ui_flip_last_upper_count_timestamp >= 1000) {
+        particle_flow_per_sec = (float)(upper_count - s_ui_flip_last_upper_count) / (float)(global_state->timestamp - s_ui_flip_last_upper_count_timestamp) * 1000;
+        s_ui_flip_last_upper_count = upper_count;
+        s_ui_flip_last_upper_count_timestamp = global_state->timestamp;
+    }
+    wchar_t flow_str[30];
+    swprintf(flow_str, 30, L"粒子流量：%.1f /s", fabs(particle_flow_per_sec));
+    gfx_draw_textline(global_state->gfx, flow_str, 200, 110, 255, 255, 255, 1);
+
+    wchar_t throttle_str[10];
+    swprintf(throttle_str, 10, L"%ls", ((s_ui_flip_is_throttle) ? L"节流开启" : L"节流关闭"));
+    gfx_draw_textline(global_state->gfx, throttle_str, 210, 90, 255, 255, 255, 1);
+
+    // 根据重力方向计算沙漏进度
+    float hourglass_progress = (float)((gravity_y <= 0) ? lower_count : upper_count) / (float)(upper_count + lower_count);
+    wchar_t count_str[30];
+    swprintf(count_str, 30, L"%d/%d (%.1f%%)", upper_count, lower_count, hourglass_progress * 100.0f);
+    gfx_draw_textline(global_state->gfx, count_str, 210, 130, 255, 255, 255, 1);
 
     gfx_refresh(global_state->gfx);
 }

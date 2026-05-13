@@ -807,16 +807,38 @@ static void set_sci_color(FlipFluid *f, int cell_nr, float val, float min_val, f
 static void update_cell_colors(FlipFluid *f) {
     memset(f->cell_color, 0, 3 * f->f_num_cells * sizeof(float));
     for (int i = 0; i < f->f_num_cells; i++) {
+        // 固体网格的色彩
         if (f->cell_type[i] == SOLID_CELL) {
-            f->cell_color[3 * i]     = 0.2f;
-            f->cell_color[3 * i + 1] = 0.2f;
-            f->cell_color[3 * i + 2] = 0.2f;
-        } else if (f->cell_type[i] == FLUID_CELL) {
+            f->cell_color[3 * i]     = 0.0f;
+            f->cell_color[3 * i + 1] = 0.0f;
+            f->cell_color[3 * i + 2] = 0.0f;
+        }
+        // 液体网格的色彩（由particle_density决定）
+        else if (f->cell_type[i] == FLUID_CELL) {
             float d = f->particle_density[i];
             if (f->particle_rest_density > 0.0f) d /= f->particle_rest_density;
             set_sci_color(f, i, d, 0.0f, 2.0f);
         }
     }
+}
+
+static void count_particle(FlipFluid *f, int32_t *upper_count, int32_t *lower_count)
+{
+    float half_y = (f->f_num_y * f->h) / 2.0f;
+    int32_t upper = 0;
+    int32_t lower = 0;
+
+    for (int i = 0; i < f->num_particles; i++) {
+        float y = f->particle_pos[2 * i + 1];
+        if (y >= half_y) {
+            upper++;
+        } else {
+            lower++;
+        }
+    }
+
+    *upper_count = upper;
+    *lower_count = lower;
 }
 
 static void simulate_step(FlipFluid *f, float dt, float gravity_x, float gravity_y,
@@ -1012,7 +1034,8 @@ void render_flip(Nano_GFX *gfx,
                  float over_relaxation, int32_t compensate_drift,
                  int32_t separate_particles,
                  int32_t show_particles, int32_t show_grid,
-                 int32_t is_throttle) {
+                 int32_t is_throttle,
+                 int32_t *upper_count, int32_t *lower_count) {
     if (!g_initialized) {
         flip_init(pool_width, pool_height, resolution, 0);
     }
@@ -1026,4 +1049,6 @@ void render_flip(Nano_GFX *gfx,
     render_to_framebuffer(gfx, center_x, center_y, width, height, f,
                           pool_width, pool_height,
                           show_particles, show_grid);
+
+    count_particle(f, upper_count, lower_count);
 }
