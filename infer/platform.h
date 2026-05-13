@@ -28,28 +28,13 @@ int32_t write_chat_log(char *filepath, uint64_t timestamp, wchar_t* prompt, wcha
 // 读取文件，并返回新的wchar数组
 wchar_t* read_file_to_wchar(char* filename);
 
-// 根据设备类型选择不同的 m/calloc 实现
-#ifdef ARDUINO
-    #define platform_calloc(nmemb, size) psram_calloc((nmemb), (size))
-    #define platform_malloc(n) psram_malloc((n))
-#else
-    // 默认使用标准 m/calloc
-    #define platform_calloc(nmemb, size) calloc((nmemb), (size))
-    #define platform_malloc(n) malloc((n))
-#endif
 
-// ===============================================================================
-// Arduino相关
-// ===============================================================================
+void *platform_calloc(size_t nmemb, size_t size);
+void *platform_malloc(size_t n);
+void *platform_calloc_internal(size_t nmemb, size_t size);
+void *platform_malloc_internal(size_t n);
 
-#ifdef ARDUINO
 
-void print_str(char* msg);
-void print_num(int i);
-void print_float(float i);
-void *psram_calloc(size_t n, size_t sizeoftype);
-
-#endif
 
 // ===============================================================================
 // Nano-Pod-Lite: Raspberry Pi 5

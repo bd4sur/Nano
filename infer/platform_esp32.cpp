@@ -32,20 +32,20 @@ wchar_t* read_file_to_wchar(char* filename) {
 }
 
 
-void print_str(char* msg) {
-    Serial.print(msg);
+void *platform_calloc(size_t n, size_t sizeoftype) {
+    return heap_caps_calloc((n), (sizeoftype), MALLOC_CAP_SPIRAM);
 }
 
-void print_num(int i) {
-    Serial.print(i);
+void *platform_calloc_internal(size_t n, size_t sizeoftype) {
+    return heap_caps_calloc((n), (sizeoftype), MALLOC_CAP_DEFAULT);
 }
 
-void print_float(float i) {
-    Serial.print(i);
+void *platform_malloc(size_t nbytes) {
+    return heap_caps_malloc((nbytes), MALLOC_CAP_SPIRAM);
 }
 
-void *psram_calloc(size_t n, size_t sizeoftype) {
-    return ps_calloc(n, sizeoftype);
+void *platform_malloc_internal(size_t nbytes) {
+    return heap_caps_malloc((nbytes), MALLOC_CAP_DEFAULT);
 }
 
 

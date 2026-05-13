@@ -188,3 +188,19 @@ wchar_t* read_file_to_wchar(char* filename) {
 
     return wstr; // 调用者负责 free()
 }
+
+void *platform_calloc(size_t nmemb, size_t size) {
+    return calloc(nmemb, size);
+}
+
+void *platform_calloc_internal(size_t nmemb, size_t size) {
+    return calloc(nmemb, size);
+}
+
+void *platform_malloc(size_t n) {
+    return malloc(n);
+}
+
+void *platform_malloc_internal(size_t n) {
+    return malloc(n);
+}

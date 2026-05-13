@@ -994,7 +994,7 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     render_flip(global_state->gfx, 0, 0, global_state->gfx->width, global_state->gfx->height,
                 k, 1.0f, FLIP_RESOLUTION,     /* pool_width, pool_height, resolution */
                 gravity_x, gravity_y,    /* gravity_x, gravity_y */
-                1.6f / 60.0f,    /* dt */
+                0.6f / 60.0f,    /* dt */
                 0.8f,            /* flip_ratio */
                 20, 2,           /* num_pressure_iters, num_particle_iters */
                 1.0f,            /* over_relaxation */

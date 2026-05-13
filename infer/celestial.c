@@ -4,7 +4,6 @@
 #include <math.h>
 
 #include "platform.h"
-#include "glyph.h"
 #include "graphics.h"
 
 #include "linglong_texture.h"
@@ -898,49 +897,8 @@ void star_burst_filter(Nano_GFX *gfx, float sun_screen_x, float sun_screen_y) {
 
 
 // ===============================================================================
-// 绘制基本形状
+// 绘制地景
 // ===============================================================================
-
-
-void draw_circle_outline(Nano_GFX *gfx, float cx, float cy, float radius, float line_weight, uint8_t red, uint8_t green, uint8_t blue) {
-    uint32_t fb_width = gfx->width;
-    uint32_t fb_height = gfx->height;
-
-    if (radius <= 0.0f || line_weight <= 0.0f) return;
-
-    uint8_t r = MAX(0, MIN(255, red));
-    uint8_t g = MAX(0, MIN(255, green));
-    uint8_t b = MAX(0, MIN(255, blue));
-
-    // 计算内外半径（考虑线宽居中）
-    float halfWeight = line_weight / 2.0f;
-    float outerR = radius + halfWeight;
-    float innerR = MAX(0, radius - halfWeight);
-
-    float outerRSq = outerR * outerR;
-    float innerRSq = innerR * innerR;
-
-    // 包围盒（含线宽）
-    int32_t xMin = MAX(0, (int32_t)floorf(cx - outerR));
-    int32_t xMax = MIN(fb_width - 1, (int32_t)ceilf(cx + outerR));
-    int32_t yMin = MAX(0, (int32_t)floorf(cy - outerR));
-    int32_t yMax = MIN(fb_height - 1, (int32_t)ceilf(cy + outerR));
-
-    for (int32_t y = yMin; y <= yMax; y++) {
-        for (int32_t x = xMin; x <= xMax; x++) {
-            float dx = x - cx;
-            float dy = y - cy;
-            float distSq = dx * dx + dy * dy;
-
-            // 判断是否在环形区域内（包含外边界，排除内边界）
-            if (distSq < outerRSq && distSq >= innerRSq) {
-                gfx_add_pixel(gfx, x, y, r, g, b);
-            }
-        }
-    }
-}
-
-
 
 
 static inline uint8_t get_pixel_channel(const uint8_t *tex, int32_t width, int32_t height, int32_t x, int32_t y, int32_t c) {
@@ -961,7 +919,7 @@ void draw_horizon(
 
     float margin = LINGLONG_HORIZON_BLUR_MARGIN;
     // float k = MAX(0.2f, sinf(to_rad_float(sun_alt)) * 1.5f);
-    float k = (1.0f / M_PI) * atanf((sun_alt - 6.0f) / 6.0f) + 0.5f + 0.2f;
+    float k = (1.0f / M_PI) * atanf((sun_alt - 6.0f) / 6.0f) + 0.5f + 0.1f;
     float max_scattering_depth = 0.8;
     float hx = 0.0f;
     float hy = 0.0f;

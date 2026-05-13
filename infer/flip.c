@@ -417,7 +417,7 @@ static void handle_particle_collisions(FlipFluid *f, int32_t is_throttle) {
 
     int32_t release_count = 0;
 
-    static const float obstacle_radius = 0.1f;
+    static const float obstacle_radius = 0.06f;
 
     for (int i = 0; i < f->num_particles; i++) {
         float x = f->particle_pos[2 * i];
@@ -431,7 +431,7 @@ static void handle_particle_collisions(FlipFluid *f, int32_t is_throttle) {
 
             // 瓶颈处节流
             if (is_throttle) {
-                float obs_x = (f->f_num_x * h) / 2.0f;
+                float obs_x = (f->f_num_x * h) / 2.0f + 0.024f;
                 float obs_y = (f->f_num_y * h) / 2.0f;
 
                 float dx = x - obs_x;
@@ -446,7 +446,8 @@ static void handle_particle_collisions(FlipFluid *f, int32_t is_throttle) {
                     else {
                         float d = sqrtf(d2);
                         float push = (obs_r - d);
-                        f->particle_pos[2 * i] += (dx / d * push);
+                        // 注释掉x位置增量可抑制某一方向上的速度奇点，不知原因为何
+                        // f->particle_pos[2 * i] += (dx / d * push);
                         f->particle_pos[2 * i + 1] += (dy / d * push);
                         f->particle_vel[2 * i] = 0;
                         f->particle_vel[2 * i + 1] = 0;
@@ -731,7 +732,7 @@ static void solve_incompressibility2(FlipFluid *f, int num_iters, float dt, floa
     memcpy(f->prev_v, f->v, f->f_num_cells * sizeof(float));
     int n = f->f_num_y;
     float cp = f->density * f->h / dt;
-    float half_y = f->f_num_y / 2.0f;
+    // float half_y = f->f_num_y / 2.0f;
 
     for (int iter = 0; iter < num_iters; iter++) {
         for (int i = 1; i < f->f_num_x - 1; i++) {
@@ -912,7 +913,7 @@ void flip_init(float pool_width, float pool_height, int32_t resolution, int32_t 
     float tank_width = pool_width;
     float h = tank_height / resolution;
     float density = 1000.0f;
-    float rel_water_height = 0.5f, rel_water_width = 0.6f;
+    float rel_water_height = 0.4f, rel_water_width = 1.0f;
     float r = 0.3f * h;
     float dx = 2.0f * r;
     float dy = sqrtf(3.0f) / 2.0f * dx;
@@ -963,7 +964,7 @@ void flip_init(float pool_width, float pool_height, int32_t resolution, int32_t 
     for (int i = 0; i < num_x; i++) {
         for (int j = 0; j < num_y; j++) {
             f->particle_pos[p++] = h + r + dx * i + (j % 2 == 0 ? 0.0f : r);
-            f->particle_pos[p++] = h + r + dy * j;
+            f->particle_pos[p++] = f->f_num_y * h - (h + r + dy * j);
         }
     }
 
@@ -978,8 +979,8 @@ void flip_init(float pool_width, float pool_height, int32_t resolution, int32_t 
                 int above_diag1 = (j * f->f_num_x >= i * f->f_num_y);
                 int below_diag2 = (j * f->f_num_x + i * f->f_num_y <= f->f_num_x * f->f_num_y);
                 int above_diag2 = (j * f->f_num_x + i * f->f_num_y >= f->f_num_x * f->f_num_y);
-                if ((above_diag1 && j <= half_y) || (below_diag1 && j >= half_y) ||
-                    (below_diag2 && j >= half_y) || (above_diag2 && j <= half_y)) {
+                if ((above_diag1 && j <= half_y + 0.1f) || (below_diag1 && j >= half_y - 0.1f) ||
+                    (below_diag2 && j >= half_y - 0.1f) || (above_diag2 && j <= half_y + 0.1f)) {
                     s = 0.0f;
                 }
             }
