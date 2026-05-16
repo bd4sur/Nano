@@ -1375,7 +1375,7 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
     time_t ts = (time_t)(global_state->timestamp / 1000);
 
     if (linglong_timemachine_running_state == 0) {
-        if (linglong_refreshed) {
+        if (linglong_refreshed && (!(llcfg->enable_imu))) {
             return;
         }
     }

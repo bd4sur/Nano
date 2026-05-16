@@ -372,6 +372,12 @@ void display_hal_refresh_rgb565(
         offset_y = (fb_height - view_height) / 2;
     }
 
+    // Pre-calculate actual copy width to avoid per-pixel boundary checks
+    uint32_t copy_width = view_width;
+    if ((uint32_t)offset_x + copy_width > fb_width) {
+        copy_width = fb_width - (uint32_t)offset_x;
+    }
+
     // Fast path: physical framebuffer is native RGB565, memcpy row-by-row
     if (fb_bpp == 16 &&
         px_fmt.r_offset == 11 && px_fmt.r_len == 5 &&
@@ -384,7 +390,7 @@ void display_hal_refresh_rgb565(
 
             uint16_t *src_row = frame_buffer_rgb565 + src_y * fb_width_in + x0;
             uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 2;
-            memcpy(dst_row, src_row, view_width * sizeof(uint16_t));
+            memcpy(dst_row, src_row, copy_width * sizeof(uint16_t));
         }
         return;
     }
