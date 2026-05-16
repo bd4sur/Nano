@@ -234,7 +234,7 @@ void ui_draw_7seg_string(
     Key_Event *key_event, Global_State *global_state,
     int32_t xx, int32_t yy, wchar_t *text,
     uint8_t red, uint8_t green, uint8_t blue,
-    float seg_length, float seg_thickness, float digit_gap,
+    float seg_length, float seg_thickness, float digit_gap, int32_t is_shadow,
     int32_t *text_width, int32_t *text_height
 );
 

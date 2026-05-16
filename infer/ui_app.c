@@ -685,16 +685,19 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     uint8_t time_red = 0, time_green = 0, time_blue = 0;
     uint8_t nongli_red = 0, nongli_green = 0, nongli_blue = 0;
     uint8_t sevenseg_red = 0, sevenseg_green = 0, sevenseg_blue = 0;
+    uint32_t sevenseg_shadow = 1;
 
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
         time_red = 0; time_green = 0; time_blue = 0;
         nongli_red = 220; nongli_green = 120; nongli_blue = 0;
         sevenseg_red = 255; sevenseg_green = 0; sevenseg_blue = 0;
+        sevenseg_shadow = 0;
     }
     else if (global_state->ui_color_style == UI_COLOR_DARK) {
         time_red = 255; time_green = 255; time_blue = 255;
         nongli_red = 0xff; nongli_green = 0xfb; nongli_blue = 0;
         sevenseg_red = 255; sevenseg_green = 255; sevenseg_blue = 255;
+        sevenseg_shadow = 1;
     }
 
     const wchar_t *weekdays[] = {L"日", L"一", L"二", L"三", L"四", L"五", L"六"};
@@ -713,7 +716,8 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     int32_t s7seg_height = 0.0f;
     ui_draw_7seg_string(key_event, global_state,
         (global_state->gfx->width - 222) / 2, 50,
-        time7seg_str, sevenseg_red, sevenseg_green, sevenseg_blue, 16.0f, 3.0f, 10.0f, &s7seg_width, &s7seg_height);
+        time7seg_str, sevenseg_red, sevenseg_green, sevenseg_blue, 16.0f, 3.0f, 10.0f, sevenseg_shadow,
+        &s7seg_width, &s7seg_height);
 
 
     // 玲珑仪（青春版）
@@ -1048,7 +1052,7 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     int32_t s7seg_height = 0.0f;
     ui_draw_7seg_string(key_event, global_state,
         10, 102,
-        time7seg_str, 255, 255, 255, 10.0f, 3.0f, 7.0f, &s7seg_width, &s7seg_height);
+        time7seg_str, 255, 255, 255, 10.0f, 3.0f, 7.0f, 0, &s7seg_width, &s7seg_height);
     gfx_draw_textline(global_state->gfx, ms_str, 8 + s7seg_width, 102 + s7seg_height/2 - 6 + 4, 255, 255, 255, 1);
 
     // FPS

@@ -1393,7 +1393,7 @@ static const int g_digit_map[10][7] = {
     {1,1,1,1,0,1,1}  /* 9 */
 };
 
-static void draw_seg_rect(Nano_GFX *gfx, float x, float y, float w, float h, int32_t is_on, uint8_t red, uint8_t green, uint8_t blue) {
+static void draw_seg_rect(Nano_GFX *gfx, float x, float y, float w, float h, int32_t is_shadow, int32_t is_on, uint8_t red, uint8_t green, uint8_t blue) {
     uint32_t rx = (uint32_t)x;
     uint32_t ry = (uint32_t)y;
     uint32_t rw = (uint32_t)w;
@@ -1417,6 +1417,12 @@ static void draw_seg_rect(Nano_GFX *gfx, float x, float y, float w, float h, int
             int32_t y2 = ry + (thickness/2) + (thickness - 2 * x) / 2;
             gfx_draw_line(gfx, xx1, y1, xx1, y2, red, green, blue, 1);
             gfx_draw_line(gfx, xx2, y1, xx2, y2, red, green, blue, 1);
+            if (is_shadow) {
+                gfx_draw_point(gfx, xx2, y2+1, 127, 127, 127, 1);
+            }
+        }
+        if (is_shadow) {
+            gfx_draw_line(gfx, rx, ry+rh, rx+rw-1, ry+rh, 127, 127, 127, 1);
         }
     }
     else {
@@ -1428,6 +1434,12 @@ static void draw_seg_rect(Nano_GFX *gfx, float x, float y, float w, float h, int
             int32_t x2 = rx + (thickness/2) + (thickness - 2 * y) / 2;
             gfx_draw_line(gfx, x1, yy1, x2, yy1, red, green, blue, 1);
             gfx_draw_line(gfx, x1, yy2, x2, yy2, red, green, blue, 1);
+            if (is_shadow) {
+                gfx_draw_point(gfx, x2+1, yy2, 127, 127, 127, 1);
+            }
+        }
+        if (is_shadow) {
+            gfx_draw_line(gfx, rx+rw, ry, rx+rw, ry+rh-1, 127, 127, 127, 1);
         }
     }
     gfx_draw_rectangle(gfx, rx, ry, rw, rh, red, green, blue, 1);
@@ -1438,7 +1450,7 @@ static void draw_seg_rect(Nano_GFX *gfx, float x, float y, float w, float h, int
    use_rect 参数已弃用，保留仅为兼容现有调用签名 */
 void ui_draw_7seg_digit(
     Nano_GFX *gfx, int num, float ox, float oy,
-    float seg_length, float seg_thickness,
+    float seg_length, float seg_thickness, int32_t is_shadow,
     uint8_t red, uint8_t green, uint8_t blue,
     float *digit_width, float *digit_height
 ) {
@@ -1483,14 +1495,14 @@ void ui_draw_7seg_digit(
     seg_w[6] = l;          seg_h[6] = w;
 
     for (int i = 0; i < 7; i++) {
-        draw_seg_rect(gfx, seg_x[i], seg_y[i], seg_w[i], seg_h[i], g_digit_map[num][i], red, green, blue);
+        draw_seg_rect(gfx, seg_x[i], seg_y[i], seg_w[i], seg_h[i], is_shadow, g_digit_map[num][i], red, green, blue);
     }
 }
 
 /* 绘制时间分隔符 (两个实心方块) */
 void ui_draw_7seg_colon(
     Nano_GFX *gfx, float ox, float oy,
-    float seg_length, float seg_thickness,
+    float seg_length, float seg_thickness, int32_t is_shadow,
     uint8_t red, uint8_t green, uint8_t blue,
     float *digit_width, float *digit_height
 ) {
@@ -1504,17 +1516,28 @@ void ui_draw_7seg_colon(
     float cy2 = oy + h * 0.75f;
 
     /* 上圆点 */
-    gfx_draw_rectangle(gfx, (uint32_t)(cx - seg_thickness/2), (uint32_t)(cy1 - seg_thickness/2), seg_thickness, seg_thickness, red, green, blue, 1);
+    uint32_t x0 = (uint32_t)(cx - seg_thickness/2);
+    uint32_t y1 = (uint32_t)(cy1 - seg_thickness/2);
+    uint32_t y2 = (uint32_t)(cy2 - seg_thickness/2);
+    gfx_draw_rectangle(gfx, x0, y1, seg_thickness, seg_thickness, red, green, blue, 1);
+    if (is_shadow) {
+        gfx_draw_line(gfx, x0, y1+seg_thickness-1, x0+seg_thickness-1, y1+seg_thickness-1, 127, 127, 127, 1);
+        gfx_draw_line(gfx, x0+seg_thickness-1, y1, x0+seg_thickness-1, y1+seg_thickness-1, 127, 127, 127, 1);
+    }
 
     /* 下圆点 */
-    gfx_draw_rectangle(gfx, (uint32_t)(cx - seg_thickness/2), (uint32_t)(cy2 - seg_thickness/2), seg_thickness, seg_thickness, red, green, blue, 1);
+    gfx_draw_rectangle(gfx, x0, y2, seg_thickness, seg_thickness, red, green, blue, 1);
+    if (is_shadow) {
+        gfx_draw_line(gfx, x0, y2+seg_thickness-1, x0+seg_thickness-1, y2+seg_thickness-1, 127, 127, 127, 1);
+        gfx_draw_line(gfx, x0+seg_thickness-1, y2, x0+seg_thickness-1, y2+seg_thickness-1, 127, 127, 127, 1);
+    }
 }
 
 void ui_draw_7seg_string(
     Key_Event *key_event, Global_State *global_state,
     int32_t xx, int32_t yy, wchar_t *text,
     uint8_t red, uint8_t green, uint8_t blue,
-    float seg_length, float seg_thickness, float digit_gap,
+    float seg_length, float seg_thickness, float digit_gap, int32_t is_shadow,
     int32_t *text_width, int32_t *text_height
 ) {
     float digit_width = 0.0f;
@@ -1526,11 +1549,11 @@ void ui_draw_7seg_string(
         wchar_t ch = text[i];
         if (ch >= L'0' && ch <= L'9') {
             int32_t num = (uint32_t)ch - (uint32_t)(L'0');
-            ui_draw_7seg_digit(global_state->gfx, num, x, yy, seg_length, seg_thickness, red, green, blue, &digit_width, &digit_height);
+            ui_draw_7seg_digit(global_state->gfx, num, x, yy, seg_length, seg_thickness, is_shadow, red, green, blue, &digit_width, &digit_height);
             x += digit_width + digit_gap;
         }
         else if (ch == L':') {
-            ui_draw_7seg_colon(global_state->gfx, x, yy, seg_length, seg_thickness, red, green, blue, &digit_width, &digit_height);
+            ui_draw_7seg_colon(global_state->gfx, x, yy, seg_length, seg_thickness, is_shadow, red, green, blue, &digit_width, &digit_height);
             x += digit_width + digit_gap;
         }
     }
