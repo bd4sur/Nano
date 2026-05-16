@@ -730,6 +730,10 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     }
 
 
+    // 时间戳
+    wchar_t ts_text[100];
+    swprintf(ts_text, 100, L"Timestamp: %llu | Ticks: %d", global_state->timestamp, global_state->timer);
+    gfx_draw_textline_centered(global_state->gfx, ts_text, global_state->gfx->width/2, global_state->gfx->height-13*3, time_red, time_green, time_blue, 1);
 
 
 
@@ -999,11 +1003,13 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     int32_t upper_count = 0;
     int32_t lower_count = 0;
 
+    float dt = (s_ui_flip_is_throttle) ? (0.6f / 60.0f) : (1.6f / 60.0f);
+
     render_flip(
         global_state->gfx, 0, 0, global_state->gfx->width, global_state->gfx->height,
         k, 1.0f, FLIP_RESOLUTION,     /* pool_width, pool_height, resolution */
         gravity_x, gravity_y,    /* gravity_x, gravity_y */
-        0.6f / 60.0f,    /* dt */
+        dt,    /* dt */
         0.8f,            /* flip_ratio */
         20, 2,           /* num_pressure_iters, num_particle_iters */
         1.0f,            /* over_relaxation */
@@ -1564,13 +1570,11 @@ void ui_app_linglong_draw_lite(
 
 
 void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_state) {
+    ui_app_linglong_draw_full(key_event, global_state);
 
     if (global_state->is_ctrl_enabled) {
         ui_app_linglong_setting_draw(key_event, global_state);
         gfx_draw_textline_centered(global_state->gfx, L"设置", global_state->gfx->width/2, PADDING_TOP/2, 222, 222, 222, 1);
-    }
-    else {
-        ui_app_linglong_draw_full(key_event, global_state);
     }
 
     gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->gfx->height - 13, 128, 128, 128, 3);
@@ -1811,7 +1815,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
     }
     // 按A键返回主菜单
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
-        global_state->is_ctrl_enabled = 0;    
+        global_state->is_ctrl_enabled = 0;
         global_state->STATE = STATE_MAIN_MENU;
     }
     // 按B键+Ctrl校准IMU
