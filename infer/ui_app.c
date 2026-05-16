@@ -754,7 +754,7 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     // 显示电量信息文字
     wchar_t battery_info_buf[100];
     swprintf(battery_info_buf, 100, L"电量:%d%%  |  %dmV  |  %dmA%ls", global_state->ups_soc, global_state->ups_voltage, global_state->ups_current, (global_state->ups_is_charging ? L"  |  正在充电" : L""));
-    gfx_draw_textline_centered(global_state->gfx, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*2, 0, 0, 0, 1);
+    gfx_draw_textline_centered(global_state->gfx, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*2, time_red, time_green, time_blue, 1);
 
 #endif
 
@@ -1122,11 +1122,16 @@ static uint32_t linglong_last_day = 0;
 static uint32_t linglong_sunrise_time[2] = {0, 0}; // hour, minute
 static uint32_t linglong_sunset_time[2] = {0, 0}; // hour, minute
 
+static int32_t linglong_refreshed = 0; // 记录暂停状态下是否已刷新
 static int32_t linglong_timemachine_running_state = 2; // 0-停止；1-时光机运行；2-实时
 static int32_t linglong_timemachine_speed = 0; // 时光机速度，正数为未来，负数为过去，单位秒
 static uint64_t linglong_timemachine_start_timestamp = 0;
 
 
+
+void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state) {
+    linglong_refreshed = 0;
+}
 
 void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state) {
     uint8_t txt_color[4][4][3] = {
@@ -1367,10 +1372,14 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         fps_last_timestamp = global_state->timestamp;
     }
 
-    gfx_soft_clear(global_state->gfx);
-
     time_t ts = (time_t)(global_state->timestamp / 1000);
-    if (linglong_timemachine_running_state == 1) {
+
+    if (linglong_timemachine_running_state == 0) {
+        if (linglong_refreshed) {
+            return;
+        }
+    }
+    else if (linglong_timemachine_running_state == 1) {
         linglong_timemachine_start_timestamp += (linglong_timemachine_speed * 1000);
         ts = (time_t)(linglong_timemachine_start_timestamp / 1000);
         struct tm *timeinfo = localtime(&ts); // 转换为本地时间
@@ -1400,6 +1409,7 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->view_roll = global_state->roll;
     }
 
+    gfx_soft_clear(global_state->gfx);
 
     render_sky(global_state->gfx,
         MIN(global_state->gfx->width, global_state->gfx->height) / 2, global_state->gfx->width / 2, global_state->gfx->height / 2,
@@ -1431,6 +1441,7 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
     swprintf(fps_str, 16, L"FPS=%.1f", fps_display_value);
     gfx_draw_textline(global_state->gfx, fps_str, 1, 0, 0, 255, 0, 1);
 
+    linglong_refreshed = 1;
 }
 
 void ui_app_linglong_draw_lite(
@@ -1553,18 +1564,13 @@ void ui_app_linglong_draw_lite(
 
 
 void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_state) {
-    ui_app_linglong_draw_full(key_event, global_state);
 
     if (global_state->is_ctrl_enabled) {
         ui_app_linglong_setting_draw(key_event, global_state);
         gfx_draw_textline_centered(global_state->gfx, L"设置", global_state->gfx->width/2, PADDING_TOP/2, 222, 222, 222, 1);
-        // gfx_draw_rectangle(global_state->gfx, 10, 10, global_state->gfx->width - 20, global_state->gfx->height - 20, 128, 128, 128, 3);
-        // gfx_draw_textline_centered(global_state->gfx, L"=== 功能选择 ===", global_state->gfx->width/2, 12+6, 0, 0, 255, 1);
-        // gfx_draw_textline_centered(global_state->gfx, L"1 投影算法    6 姿态指示",  global_state->gfx->width/2, (12+6) + (12+1)*1, 0x0, 0x0, 0x0, 1);
-        // gfx_draw_textline_centered(global_state->gfx, L"2 赤道坐标    7 大气散射",  global_state->gfx->width/2, (12+6) + (12+1)*2, 0x0, 0x0, 0x0, 1);
-        // gfx_draw_textline_centered(global_state->gfx, L"3 地平坐标    8 地景    ",  global_state->gfx->width/2, (12+6) + (12+1)*3, 0x0, 0x0, 0x0, 1);
-        // gfx_draw_textline_centered(global_state->gfx, L"4 黄道        9 校准IMU ",  global_state->gfx->width/2, (12+6) + (12+1)*4, 0x0, 0x0, 0x0, 1);
-        // gfx_draw_textline_centered(global_state->gfx, L"5 天体名称              ",  global_state->gfx->width/2, (12+6) + (12+1)*5, 0x0, 0x0, 0x0, 1);
+    }
+    else {
+        ui_app_linglong_draw_full(key_event, global_state);
     }
 
     gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->gfx->height - 13, 128, 128, 128, 3);
@@ -1658,6 +1664,11 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         printf("俯仰=%-10.2f    滚转=%-10.2f    航向=%-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw);
     }
 #endif
+
+    // 按任意键都重置玲珑仪刷新状态，以便响应按键活动
+    if (key_event->key_edge < 0 && key_event->key_code != KEYCODE_NUM_IDLE) {
+        linglong_refreshed = 0;
+    }
 
     // 按1键向左偏航（yaw--），或者Ctrl时切换投影算法
     if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_1) {
@@ -1800,6 +1811,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
     }
     // 按A键返回主菜单
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        global_state->is_ctrl_enabled = 0;    
         global_state->STATE = STATE_MAIN_MENU;
     }
     // 按B键+Ctrl校准IMU
@@ -2540,7 +2552,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
-            
+            ui_app_linglong_init(key_event, global_state);
         }
         global_state->PREV_STATE = global_state->STATE;
 

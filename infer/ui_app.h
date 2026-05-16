@@ -106,7 +106,8 @@ void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state)
 // 玲珑天象仪
 // ===============================================================================
 
-int32_t linglong_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
+void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state);
+void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state);
 void ui_app_linglong_draw_lite(
     Key_Event *key_event, Global_State *global_state,
     int32_t x, int32_t y,

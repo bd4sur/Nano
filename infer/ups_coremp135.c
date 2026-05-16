@@ -73,7 +73,7 @@ int32_t read_ups_voltage() {
         return -1;
     }
 
-    int32_t vbat = (((data[0] & 0x3f) << 8) | data[1]);
+    int32_t vbat = roundf((((data[0] & 0x3f) << 8) | data[1]) * 1.0f);
     return vbat;
 }
 
