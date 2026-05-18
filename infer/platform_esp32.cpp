@@ -1,5 +1,6 @@
 #include "platform.h"
 
+#include <sys/time.h>
 #include <Arduino.h>
 #include <esp32-hal-psram.h>
 #include <Wire.h>
@@ -11,7 +12,9 @@ void sleep_in_ms(uint32_t ms) {
 }
 
 uint64_t get_timestamp_in_ms() {
-    return (uint64_t)millis();
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
 }
 
 // 优雅关机
@@ -48,5 +51,12 @@ void *platform_malloc_internal(size_t nbytes) {
     return heap_caps_malloc((nbytes), MALLOC_CAP_DEFAULT);
 }
 
+void *platform_realloc(void *ptr, size_t n) {
+    return heap_caps_realloc((ptr), (n), MALLOC_CAP_SPIRAM);
+}
+
+void *platform_realloc_internal(void *ptr, size_t n) {
+    return heap_caps_realloc((ptr), (n), MALLOC_CAP_DEFAULT);
+}
 
 }

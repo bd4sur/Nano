@@ -1,11 +1,11 @@
 #ifndef __NANO_PLATFORM_H__
 #define __NANO_PLATFORM_H__
 
+#include "utils.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#include "utils.h"
 
 // ===============================================================================
 // 全局字符串常量
@@ -28,11 +28,16 @@ int32_t write_chat_log(char *filepath, uint64_t timestamp, wchar_t* prompt, wcha
 // 读取文件，并返回新的wchar数组
 wchar_t* read_file_to_wchar(char* filename);
 
+// 根据设备类型选择不同的 m/calloc 实现
+void *platform_calloc(size_t n, size_t sizeoftype);
+void *platform_calloc_internal(size_t n, size_t sizeoftype);
+void *platform_malloc(size_t nbytes);
+void *platform_malloc_internal(size_t nbytes);
+void *platform_realloc(void *ptr, size_t n);
+void *platform_realloc_internal(void *ptr, size_t n);
 
-void *platform_calloc(size_t nmemb, size_t size);
-void *platform_malloc(size_t n);
-void *platform_calloc_internal(size_t nmemb, size_t size);
-void *platform_malloc_internal(size_t n);
+// 读取二进制文件到内存缓冲区
+int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, size_t *size);
 
 
 

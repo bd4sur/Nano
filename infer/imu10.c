@@ -10,6 +10,7 @@
 #include <sys/ioctl.h>
 
 #include "imu.h"
+#include "platform.h"
 
 /* 配置项 / Config */
 #ifndef IMU_UART_RX_BUF_SIZE

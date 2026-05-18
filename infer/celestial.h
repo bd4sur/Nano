@@ -21,6 +21,13 @@ extern "C" {
 // 是否开启动态地景：动态地景需动态分配大量堆内存，若内存紧张，可关闭。同时关闭透视转鱼眼功能，详见代码。
 #define LINGLONG_ENABLE_DYNAMIC_LANDSCAPE (1)
 
+// 二次散射模型相关参数
+#define LINGLONG_SCATTER_MARCHRAY_NV  (36)
+#define LINGLONG_SCATTER_MARCHRAY_NL  (1)
+#define LINGLONG_SCATTER_MARCHRAY_V2  (3)
+#define LINGLONG_SCATTER_MARCHRAY_NV2 (2)
+#define LINGLONG_SCATTER_MARCHRAY_NL2 (2)
+
 typedef struct Linglong_Config {
     int32_t fb_width;
     int32_t fb_height;

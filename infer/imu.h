@@ -6,7 +6,6 @@ extern "C" {
 #endif
 
 #include "utils.h"
-#include "platform.h"
 
 int imu_init();
 

@@ -32,7 +32,12 @@ static const uint8_t PLANET_COLOR_B[9]  = {0,    192,  64,   0,    0,    128,  1
 static const wchar_t PLANET_NAME[9][10] = {L"", L"水星", L"金星", L"地球", L"火星", L"木星", L"土星", L"天王星", L"海王星"};
 
 // 星表
-#define STARS_NUM (89)
+#if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
+    #define STARS_NUM (89)
+#else
+    #define STARS_NUM (40)
+#endif
+
 static const float STARS[STARS_NUM][7] = {
 //(RA)h     m      s    (Dec)d       m      s        Mag
     {2.0f,  32.0f,  9.3f,     89.0f, 16.0f, 10.8f,   2.09f}, // 勾陈一（北极星）
@@ -78,7 +83,7 @@ static const float STARS[STARS_NUM][7] = {
     {10.0f,  8.0f, 22.3f,     11.0f, 58.0f,  2.0f,   1.35f}, // 轩辕十四（狮子座α）
     {18.0f, 55.0f, 15.9f,    -26.0f, 17.0f, 48.0f,   2.05f}, // 斗宿四/箕宿三（人马座σ）
     { 2.0f,  7.0f, 10.4f,     23.0f, 27.0f, 45.0f,   2.00f}, // 娄宿三（白羊座α）
-
+#if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
     // 以下更不准确，仅用于视觉效果
     { 0.0f,  9.0f, 10.7f,      29.0f, 18.0f, 44.0f,   2.06f}, // 壁宿二（Alpheratz）
     { 0.0f, 13.0f, 14.2f,      15.0f, 11.0f,  1.0f,   3.41f}, // 雷电一（Lambda Pegasi）
@@ -129,6 +134,7 @@ static const float STARS[STARS_NUM][7] = {
     {21.0f, 44.0f,  8.2f,     -14.0f, 32.0f, 57.0f,   3.73f}, // 危宿一（Alpha Equulei）
     {22.0f,  2.0f, 51.7f,     -43.0f,  8.0f, 45.0f,   3.49f}, // 败臼一（Gamma Gruis）
     {22.0f,  8.0f, 14.0f,     -46.0f, 57.0f, 40.0f,   1.74f}, // 鹤一（Al Nair）
+#endif
 };
 
 static const wchar_t STAR_NAME[STARS_NUM][10] = {
@@ -137,10 +143,12 @@ static const wchar_t STAR_NAME[STARS_NUM][10] = {
     L"觜宿一", L"参宿四", L"参宿五", L"参宿一", L"参宿二", L"参宿三", L"参宿六", L"参宿七", L"伐三", L"昴宿星团",
     L"老人", L"南门二", L"五车二", L"南河三", L"水委一", L"马腹一", L"毕宿五", L"心宿二", L"角宿一", L"北河三", L"北落师门", L"十字架三",
     L"天津四", L"十字架二", L"轩辕十四", L"斗宿四", L"娄宿三",
+#if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
     L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", 
     L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", 
     L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", L"", 
     L"", L"", L"", L""
+#endif
 };
 
 
@@ -2169,7 +2177,7 @@ void scatter_model_3(
     s3_marchRay(
         orig_x, orig_y, orig_z,
         dir_x,  dir_y,  dir_z,
-        tMin, tMax, 36, 1,
+        tMin, tMax, LINGLONG_SCATTER_MARCHRAY_NV, LINGLONG_SCATTER_MARCHRAY_NL,
         sunDir_x, sunDir_y, sunDir_z,
         &sc1_sumR0, &sc1_sumR1, &sc1_sumR2,
         &sc1_sumM0, &sc1_sumM1, &sc1_sumM2);
@@ -2229,7 +2237,7 @@ void scatter_model_3(
     const int   N_AMB  = 9;
     const float dOmega = 2.0f * (float)M_PI / (float)N_AMB;  /* 每方向代表的立体角（上半球 2π / N_AMB） */
 
-    const int N_V2  = 3;                          /* 二阶路径采样数（粗于一阶，节省算力） */
+    const int N_V2  = LINGLONG_SCATTER_MARCHRAY_V2;     /* 二阶路径采样数（粗于一阶，节省算力） */
     float     segV2 = (tMax - tMin) / (float)N_V2;
     float     odR2  = 0.0f, odM2 = 0.0f;         /* 累积视线光学深度（eye → 当前采样点） */
 
@@ -2275,7 +2283,7 @@ void scatter_model_3(
             s3_marchRay(
                 pos_x, pos_y, pos_z,
                 ad_x,  ad_y,  ad_z,
-                0.0f, aHit_t1, 2, 2,
+                0.0f, aHit_t1, LINGLONG_SCATTER_MARCHRAY_NV2, LINGLONG_SCATTER_MARCHRAY_NL2,
                 sunDir_x, sunDir_y, sunDir_z,
                 &sc_sumR0, &sc_sumR1, &sc_sumR2,
                 &sc_sumM0, &sc_sumM1, &sc_sumM2);

@@ -4,14 +4,6 @@
 
 #include "glyph.h"
 
-// 定义宏以生成 stb 库的实现
-#define STB_IMAGE_IMPLEMENTATION
-#include "vendor/stb_image.h"
-
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include "vendor/stb_image_resize2.h"
-
-#include <string.h>
 
 // 图像缓存项结构
 typedef struct {
@@ -159,6 +151,7 @@ void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mod
     gfx->color_mode = color_mode;
     gfx->width = width;
     gfx->height = height;
+#if GFX_DOUBLE_BUFFER == 0
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         gfx->frame_buffer_rgb888 = (uint8_t *)platform_calloc(width * height * 3, sizeof(uint8_t));
     }
@@ -168,10 +161,8 @@ void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mod
         // gfx->frame_buffer_rgb888 = (uint8_t *)platform_calloc(width * height * 3, sizeof(uint8_t));
     }
     else return;
-
+#endif
     display_hal_init();
-
-    gfx_clear(gfx);
 
 }
 
@@ -182,12 +173,16 @@ void gfx_close(Nano_GFX *gfx) {
 
 
 void gfx_refresh(Nano_GFX *gfx) {
+#if GFX_DOUBLE_BUFFER
+    display_hal_refresh_rgb565_double(gfx->frame_buffer_rgb565_top, gfx->frame_buffer_rgb565_bottom, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
+#else
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         display_hal_refresh(gfx->frame_buffer_rgb888, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
     }
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
         display_hal_refresh_rgb565(gfx->frame_buffer_rgb565, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
     }
+#endif
 }
 
 // 清屏函数
@@ -196,7 +191,15 @@ void gfx_clear(Nano_GFX *gfx) {
         memset(gfx->frame_buffer_rgb888, 0, gfx->width * gfx->height * 3);
     }
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+#if GFX_DOUBLE_BUFFER
+        uint32_t half_height = gfx->height / 2;
+        uint32_t top_pixels = gfx->width * half_height;
+        uint32_t bottom_pixels = gfx->width * (gfx->height - half_height);
+        if (gfx->frame_buffer_rgb565_top) memset(gfx->frame_buffer_rgb565_top, 0, top_pixels * sizeof(uint16_t));
+        if (gfx->frame_buffer_rgb565_bottom) memset(gfx->frame_buffer_rgb565_bottom, 0, bottom_pixels * sizeof(uint16_t));
+#else
         memset(gfx->frame_buffer_rgb565, 0, gfx->width * gfx->height * sizeof(uint16_t));
+#endif
     }
     gfx_refresh(gfx);
 }
@@ -207,7 +210,15 @@ void gfx_soft_clear(Nano_GFX *gfx) {
         memset(gfx->frame_buffer_rgb888, 0, gfx->width * gfx->height * 3);
     }
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+#if GFX_DOUBLE_BUFFER
+        uint32_t half_height = gfx->height / 2;
+        uint32_t top_pixels = gfx->width * half_height;
+        uint32_t bottom_pixels = gfx->width * (gfx->height - half_height);
+        if (gfx->frame_buffer_rgb565_top) memset(gfx->frame_buffer_rgb565_top, 0, top_pixels * sizeof(uint16_t));
+        if (gfx->frame_buffer_rgb565_bottom) memset(gfx->frame_buffer_rgb565_bottom, 0, bottom_pixels * sizeof(uint16_t));
+#else
         memset(gfx->frame_buffer_rgb565, 0, gfx->width * gfx->height * sizeof(uint16_t));
+#endif
     }
 }
 
@@ -217,7 +228,15 @@ void gfx_fill_white(Nano_GFX *gfx) {
         memset(gfx->frame_buffer_rgb888, 255, gfx->width * gfx->height * 3);
     }
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+#if GFX_DOUBLE_BUFFER
+        uint32_t half_height = gfx->height / 2;
+        uint32_t top_pixels = gfx->width * half_height;
+        uint32_t bottom_pixels = gfx->width * (gfx->height - half_height);
+        if (gfx->frame_buffer_rgb565_top) memset(gfx->frame_buffer_rgb565_top, 0xFF, top_pixels * sizeof(uint16_t));
+        if (gfx->frame_buffer_rgb565_bottom) memset(gfx->frame_buffer_rgb565_bottom, 0xFF, bottom_pixels * sizeof(uint16_t));
+#else
         memset(gfx->frame_buffer_rgb565, 0xFF, gfx->width * gfx->height * sizeof(uint16_t));
+#endif
     }
 }
 
@@ -237,9 +256,14 @@ void gfx_get_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t *r, uint8_t *g
             *b = frame_buffer[i+2];
         }
         else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+#if GFX_DOUBLE_BUFFER
+            uint32_t i;
+            uint16_t *frame_buffer = gfx_rgb565_ptr(gfx, x, y, &i);
+#else
             uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
             uint32_t fb_width = gfx->width;
             uint32_t i = y * fb_width + x;
+#endif
             uint16_t v = frame_buffer[i];
             *r = RGB565_R(v);
             *g = RGB565_G(v);
@@ -259,9 +283,14 @@ inline void gfx_set_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint
         frame_buffer[i+2] = MIN(255, b);
     }
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+#if GFX_DOUBLE_BUFFER
+        uint32_t i;
+        uint16_t *frame_buffer = gfx_rgb565_ptr(gfx, x, y, &i);
+#else
         uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
         uint32_t fb_width = gfx->width;
         uint32_t i = y * fb_width + x;
+#endif
         frame_buffer[i] = rgb888_to_rgb565(MIN(255, r), MIN(255, g), MIN(255, b));
     }
 }
@@ -277,9 +306,14 @@ inline void gfx_add_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint
         frame_buffer[i+2] = MIN(255, frame_buffer[i+2] + b);
     }
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+#if GFX_DOUBLE_BUFFER
+        uint32_t i;
+        uint16_t *frame_buffer = gfx_rgb565_ptr(gfx, x, y, &i);
+#else
         uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
         uint32_t fb_width = gfx->width;
         uint32_t i = y * fb_width + x;
+#endif
         uint16_t v = frame_buffer[i];
         frame_buffer[i] = rgb888_to_rgb565(
             MIN(255, RGB565_R(v) + r),
@@ -299,9 +333,14 @@ inline void gfx_scale_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, float k) {
         frame_buffer[i+2] = MIN(255, (uint8_t)(k * (float)frame_buffer[i+2]));
     }
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+#if GFX_DOUBLE_BUFFER
+        uint32_t i;
+        uint16_t *frame_buffer = gfx_rgb565_ptr(gfx, x, y, &i);
+#else
         uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
         uint32_t fb_width = gfx->width;
         uint32_t i = y * fb_width + x;
+#endif
         uint16_t v = frame_buffer[i];
         frame_buffer[i] = rgb888_to_rgb565(
             MIN(255, (uint8_t)(k * (float)(RGB565_R(v)))),
@@ -358,9 +397,14 @@ inline void gfx_reverse_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y) {
         frame_buffer[i+2] = (b == 0) ? 255 : 0;
     }
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+#if GFX_DOUBLE_BUFFER
+        uint32_t i;
+        uint16_t *frame_buffer = gfx_rgb565_ptr(gfx, x, y, &i);
+#else
         uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
         uint32_t fb_width = gfx->width;
         uint32_t i = y * fb_width + x;
+#endif
         frame_buffer[i] = (frame_buffer[i] == 0) ? 0xFFFF : 0;
     }
 }
@@ -935,7 +979,7 @@ void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y
 
 
 // 高性能水平线填充辅助函数
-// 直接操作连续统一的帧缓冲区，绕过 gfx_draw_point 的逐像素函数调用开销
+// 直接操作帧缓冲区，绕过 gfx_draw_point 的逐像素函数调用开销
 static inline void gfx_fill_hline_fast(Nano_GFX *gfx, int32_t x_start, int32_t x_end, int32_t y,
     uint8_t r, uint8_t g, uint8_t b, uint8_t mode) {
     if (x_start > x_end) {
@@ -951,8 +995,13 @@ static inline void gfx_fill_hline_fast(Nano_GFX *gfx, int32_t x_start, int32_t x
     int32_t count = x_end - x_start + 1;
 
     if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+#if GFX_DOUBLE_BUFFER
+        uint32_t offset;
+        uint16_t *fb = gfx_rgb565_ptr(gfx, (uint32_t)x_start, (uint32_t)y, &offset);
+#else
         uint16_t *fb = gfx->frame_buffer_rgb565;
         uint32_t offset = (uint32_t)y * gfx->width + (uint32_t)x_start;
+#endif
 
         if (mode == 1) {
             uint16_t color = rgb888_to_rgb565(r, g, b);
@@ -1013,7 +1062,7 @@ static inline void gfx_fill_hline_fast(Nano_GFX *gfx, int32_t x_start, int32_t x
 }
 
 // 绘制实心三角形
-// 使用整数扫描线算法填充凸三角形，基于连续统一的帧缓冲区
+// 使用整数扫描线算法填充凸三角形（极致优化版）
 // is_anti_aliasing: 保留参数但已去除抗锯齿功能（兼容性）
 // mode: 0-置黑 1-置色 2-异或 3-加色
 void gfx_draw_triangle(
@@ -1286,6 +1335,69 @@ void gfx_dithering(Nano_GFX *gfx) {
         }
     }
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+#if GFX_DOUBLE_BUFFER
+        uint32_t half_height = gfx->height / 2;
+
+        // 上半区
+        uint16_t *frame_buffer = gfx->frame_buffer_rgb565_top;
+        if (frame_buffer) {
+            for (int32_t y = 0; y < (int32_t)half_height; y++) {
+                for (int32_t x = 0; x < (int32_t)fb_width; x++) {
+                    uint32_t i = y * fb_width + x;
+                    uint16_t v = frame_buffer[i];
+
+                    uint8_t r = RGB565_R(v);
+                    uint8_t g = RGB565_G(v);
+                    uint8_t b = RGB565_B(v);
+
+                    // 1. 获取Bayer阈值（归一化到0~7范围，匹配5/6bit量化步长）
+                    uint8_t threshold = bayer8x8[(y & 7) * 8 + (x & 7)] >> 5; // 0~7
+
+                    // 2. 应用阈值偏移（模拟误差扩散的视觉效果）
+                    int32_t r_adj = r + quant_bias[threshold];
+                    int32_t g_adj = g + quant_bias[threshold];
+                    int32_t b_adj = b + quant_bias[threshold];
+
+                    // 3. 量化到RGB565
+                    frame_buffer[i] = rgb888_to_rgb565(
+                        (r_adj > 255) ? 255 : (uint8_t)r_adj,
+                        (g_adj > 255) ? 255 : (uint8_t)g_adj,
+                        (b_adj > 255) ? 255 : (uint8_t)b_adj
+                    );
+                }
+            }
+        }
+
+        // 下半区
+        frame_buffer = gfx->frame_buffer_rgb565_bottom;
+        if (frame_buffer) {
+            for (int32_t y = 0; y < (int32_t)(gfx->height - half_height); y++) {
+                for (int32_t x = 0; x < (int32_t)fb_width; x++) {
+                    uint32_t i = y * fb_width + x;
+                    uint16_t v = frame_buffer[i];
+
+                    uint8_t r = RGB565_R(v);
+                    uint8_t g = RGB565_G(v);
+                    uint8_t b = RGB565_B(v);
+
+                    // 1. 获取Bayer阈值（归一化到0~7范围，匹配5/6bit量化步长）
+                    uint8_t threshold = bayer8x8[((y + half_height) & 7) * 8 + (x & 7)] >> 5; // 0~7
+
+                    // 2. 应用阈值偏移（模拟误差扩散的视觉效果）
+                    int32_t r_adj = r + quant_bias[threshold];
+                    int32_t g_adj = g + quant_bias[threshold];
+                    int32_t b_adj = b + quant_bias[threshold];
+
+                    // 3. 量化到RGB565
+                    frame_buffer[i] = rgb888_to_rgb565(
+                        (r_adj > 255) ? 255 : (uint8_t)r_adj,
+                        (g_adj > 255) ? 255 : (uint8_t)g_adj,
+                        (b_adj > 255) ? 255 : (uint8_t)b_adj
+                    );
+                }
+            }
+        }
+#else
         uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
         if (!frame_buffer) return;
 
@@ -1314,6 +1426,7 @@ void gfx_dithering(Nano_GFX *gfx) {
                 );
             }
         }
+#endif
     }
 }
 
@@ -1321,6 +1434,48 @@ void gfx_dithering(Nano_GFX *gfx) {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#define STBI_MALLOC platform_malloc
+#define STBI_REALLOC platform_realloc
+#define STBI_FREE free
+#define STBIR_MALLOC(size,user_data) platform_malloc(size)
+#define STBIR_FREE(ptr,user_data) free(ptr)
+
+// 定义宏以生成 stb 库的实现
+#define STB_IMAGE_IMPLEMENTATION
+#include "vendor/stb_image.h"
+
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "vendor/stb_image_resize2.h"
+
+#include <string.h>
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#endif
 
 
 
@@ -1400,6 +1555,324 @@ void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uin
             
             // 写入frame_buffer
             gfx_set_pixel(gfx, x, y, draw_data[src_idx], draw_data[src_idx + 1], draw_data[src_idx + 2]);
+        }
+    }
+}
+
+// 从内存缓冲区读取图像并绘制到 frame_buffer（无缓存，每次重新解码和缩放）
+// img_buffer: 包含图像文件数据的内存缓冲区（如 PNG/JPG/BMP 等格式）
+// buffer_size: 缓冲区的字节长度
+// x0, y0: 目标区域左上角坐标
+// width, height: 目标区域宽高（图像将被缩放到此大小）
+// 图像格式由 stb_image 自动识别
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+typedef struct {
+    Nano_GFX *gfx;
+    uint8_t *img_buffer;
+    uint32_t buffer_size;
+    uint32_t x0;
+    uint32_t y0;
+    uint32_t width;
+    uint32_t height;
+    SemaphoreHandle_t sem;
+} gfx_draw_image_buffer_params_t;
+
+static void gfx_draw_image_buffer_task(void *param) {
+    gfx_draw_image_buffer_params_t *p = (gfx_draw_image_buffer_params_t *)param;
+
+    int img_w, img_h, channels;
+    unsigned char *img_data = stbi_load_from_memory(p->img_buffer, (int)p->buffer_size, &img_w, &img_h, &channels, 3);
+    if (img_data != NULL) {
+        uint8_t *draw_data = img_data;
+        uint32_t draw_w = img_w;
+        uint32_t draw_h = img_h;
+
+        if (!(p->width == 0 && p->height == 0)) {
+            draw_data = (uint8_t *)platform_malloc(p->width * p->height * 3);
+            if (draw_data != NULL) {
+                stbir_resize_uint8_linear(
+                    img_data, img_w, img_h, 0,
+                    draw_data, (int)p->width, (int)p->height, 0,
+                    STBIR_RGB
+                );
+                stbi_image_free(img_data);
+                draw_w = p->width;
+                draw_h = p->height;
+            } else {
+                stbi_image_free(img_data);
+                xSemaphoreGive(p->sem);
+                vTaskDelete(NULL);
+                return;
+            }
+        }
+
+        uint32_t x_end = (p->x0 + draw_w > p->gfx->width) ? p->gfx->width : p->x0 + draw_w;
+        uint32_t y_end = (p->y0 + draw_h > p->gfx->height) ? p->gfx->height : p->y0 + draw_h;
+
+        for (uint32_t y = p->y0; y < y_end; y++) {
+            for (uint32_t x = p->x0; x < x_end; x++) {
+                uint32_t src_x = x - p->x0;
+                uint32_t src_y = y - p->y0;
+                uint32_t src_idx = (src_y * draw_w + src_x) * 3;
+                gfx_set_pixel(p->gfx, x, y, draw_data[src_idx], draw_data[src_idx + 1], draw_data[src_idx + 2]);
+            }
+        }
+
+        if (p->width == 0 && p->height == 0) {
+            stbi_image_free(img_data);
+        } else {
+            free(draw_data);
+        }
+    }
+
+    xSemaphoreGive(p->sem);
+    vTaskDelete(NULL);
+}
+#endif
+
+void gfx_draw_image_buffer(Nano_GFX *gfx, uint8_t *img_buffer, uint32_t buffer_size, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height) {
+    if (img_buffer == NULL || buffer_size == 0) {
+        return;
+    }
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+    SemaphoreHandle_t sem = xSemaphoreCreateBinary();
+    if (sem == NULL) {
+        return;
+    }
+
+    gfx_draw_image_buffer_params_t params = {
+        .gfx = gfx,
+        .img_buffer = img_buffer,
+        .buffer_size = buffer_size,
+        .x0 = x0,
+        .y0 = y0,
+        .width = width,
+        .height = height,
+        .sem = sem
+    };
+
+    TaskHandle_t taskHandle = NULL;
+    BaseType_t result = xTaskCreate(
+        gfx_draw_image_buffer_task,
+        "gfx_draw_img",
+        32768,  // 32KB stack to avoid stack overflow in stb_image/stbir
+        &params,
+        1,
+        &taskHandle
+    );
+
+    if (result == pdPASS) {
+        xSemaphoreTake(sem, portMAX_DELAY);
+    } else {
+        printf("gfx_draw_image_buffer: failed to create task\n");
+    }
+
+    vSemaphoreDelete(sem);
+#else
+    int img_w, img_h, channels;
+
+    // 从内存缓冲区加载图像，stb_image 自动识别格式（PNG/JPG/BMP/GIF 等）
+    unsigned char *img_data = stbi_load_from_memory(img_buffer, (int)buffer_size, &img_w, &img_h, &channels, 3);
+    if (img_data == NULL) {
+        return;
+    }
+
+    uint8_t *draw_data = img_data;
+    uint32_t draw_w = img_w;
+    uint32_t draw_h = img_h;
+
+    if (!(width == 0 && height == 0)) {
+        // 分配缩放后图像的内存（RGB888 格式，3字节/像素）
+        draw_data = (uint8_t *)platform_malloc(width * height * 3);
+        if (draw_data == NULL) {
+            stbi_image_free(img_data);
+            return;
+        }
+
+        // 缩放图像到目标尺寸
+        stbir_resize_uint8_linear(
+            img_data, img_w, img_h, 0,           // 输入图像数据、宽、高、行跨度
+            draw_data, (int)width, (int)height, 0,  // 输出图像数据、宽、高、行跨度
+            STBIR_RGB                               // 像素布局：RGB
+        );
+
+        // 释放原始图像数据
+        stbi_image_free(img_data);
+        draw_w = width;
+        draw_h = height;
+    }
+
+    // 将图像绘制到 frame_buffer
+    uint32_t x_end = (x0 + draw_w > gfx->width) ? gfx->width : x0 + draw_w;
+    uint32_t y_end = (y0 + draw_h > gfx->height) ? gfx->height : y0 + draw_h;
+
+    for (uint32_t y = y0; y < y_end; y++) {
+        for (uint32_t x = x0; x < x_end; x++) {
+            uint32_t src_x = x - x0;
+            uint32_t src_y = y - y0;
+            uint32_t src_idx = (src_y * draw_w + src_x) * 3;
+            gfx_set_pixel(gfx, x, y, draw_data[src_idx], draw_data[src_idx + 1], draw_data[src_idx + 2]);
+        }
+    }
+
+    // 释放图像数据
+    if (width == 0 && height == 0) {
+        stbi_image_free(img_data);
+    } else {
+        free(draw_data);
+    }
+#endif
+}
+
+// ============================================================================
+// 新增：图像解码与绘制拆分函数
+// ============================================================================
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+typedef struct {
+    uint8_t *img_buffer;
+    uint32_t buffer_size;
+    uint32_t req_width;
+    uint32_t req_height;
+    uint8_t *out_rgb888;
+    uint32_t *out_width;
+    uint32_t *out_height;
+    int32_t result;
+    SemaphoreHandle_t sem;
+} gfx_decode_image_buffer_params_t;
+
+static void gfx_decode_image_buffer_task(void *param) {
+    gfx_decode_image_buffer_params_t *p = (gfx_decode_image_buffer_params_t *)param;
+
+    int img_w, img_h, channels;
+    unsigned char *img_data = stbi_load_from_memory(p->img_buffer, (int)p->buffer_size, &img_w, &img_h, &channels, 3);
+    if (img_data == NULL) {
+        p->result = -1;
+        xSemaphoreGive(p->sem);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (p->req_width == 0 && p->req_height == 0) {
+        memcpy(p->out_rgb888, img_data, img_w * img_h * 3);
+        *p->out_width = (uint32_t)img_w;
+        *p->out_height = (uint32_t)img_h;
+    } else {
+        stbir_resize_uint8_linear(
+            img_data, img_w, img_h, 0,
+            p->out_rgb888, (int)p->req_width, (int)p->req_height, 0,
+            STBIR_RGB
+        );
+        *p->out_width = p->req_width;
+        *p->out_height = p->req_height;
+    }
+
+    stbi_image_free(img_data);
+    p->result = 0;
+    xSemaphoreGive(p->sem);
+    vTaskDelete(NULL);
+}
+#endif
+
+// 从内存缓冲区解码图像到调用者预先分配的 RGB888 缓冲区
+// img_buffer: 图像文件数据（PNG/JPG/BMP等）
+// buffer_size: 缓冲区字节长度
+// req_width, req_height: 请求的输出宽高。若都为0，则按原始图像尺寸输出（调用者需确保out_rgb888足够大）。
+// out_rgb888: 调用者预先分配的 RGB888 缓冲区（3字节/像素）
+// out_width, out_height: 返回实际解码后的图像宽高
+// 返回: 0 成功，-1 失败
+int32_t gfx_decode_image_buffer(uint8_t *img_buffer, uint32_t buffer_size,
+                                uint32_t req_width, uint32_t req_height,
+                                uint8_t *out_rgb888,
+                                uint32_t *out_width, uint32_t *out_height) {
+    if (img_buffer == NULL || buffer_size == 0 || out_rgb888 == NULL || out_width == NULL || out_height == NULL) {
+        return -1;
+    }
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+    SemaphoreHandle_t sem = xSemaphoreCreateBinary();
+    if (sem == NULL) {
+        return -1;
+    }
+
+    gfx_decode_image_buffer_params_t params = {
+        .img_buffer = img_buffer,
+        .buffer_size = buffer_size,
+        .req_width = req_width,
+        .req_height = req_height,
+        .out_rgb888 = out_rgb888,
+        .out_width = out_width,
+        .out_height = out_height,
+        .result = -1,
+        .sem = sem
+    };
+
+    TaskHandle_t taskHandle = NULL;
+    BaseType_t result = xTaskCreate(
+        gfx_decode_image_buffer_task,
+        "gfx_dec_img",
+        32768,  // 32KB stack to avoid stack overflow in stb_image/stbir
+        &params,
+        1,
+        &taskHandle
+    );
+
+    if (result == pdPASS) {
+        xSemaphoreTake(sem, portMAX_DELAY);
+    } else {
+        printf("gfx_decode_image_buffer: failed to create task\n");
+    }
+
+    vSemaphoreDelete(sem);
+    return params.result;
+#else
+    int img_w, img_h, channels;
+    unsigned char *img_data = stbi_load_from_memory(img_buffer, (int)buffer_size, &img_w, &img_h, &channels, 3);
+    if (img_data == NULL) {
+        return -1;
+    }
+
+    if (req_width == 0 && req_height == 0) {
+        memcpy(out_rgb888, img_data, img_w * img_h * 3);
+        *out_width = (uint32_t)img_w;
+        *out_height = (uint32_t)img_h;
+    } else {
+        stbir_resize_uint8_linear(
+            img_data, img_w, img_h, 0,
+            out_rgb888, (int)req_width, (int)req_height, 0,
+            STBIR_RGB
+        );
+        *out_width = req_width;
+        *out_height = req_height;
+    }
+
+    stbi_image_free(img_data);
+    return 0;
+#endif
+}
+
+// 将 RGB888 图像缓冲区绘制到 NanoGFX
+// rgb888_buffer: RGB888 像素数据（3字节/像素，按行优先连续存储）
+// img_width, img_height: 图像宽高
+// x0, y0: 绘制起始坐标
+void gfx_draw_rgb888_buffer(Nano_GFX *gfx, uint8_t *rgb888_buffer,
+                            uint32_t img_width, uint32_t img_height,
+                            uint32_t x0, uint32_t y0) {
+    if (rgb888_buffer == NULL || img_width == 0 || img_height == 0) {
+        return;
+    }
+
+    uint32_t x_end = (x0 + img_width > gfx->width) ? gfx->width : x0 + img_width;
+    uint32_t y_end = (y0 + img_height > gfx->height) ? gfx->height : y0 + img_height;
+
+    for (uint32_t y = y0; y < y_end; y++) {
+        for (uint32_t x = x0; x < x_end; x++) {
+            uint32_t src_x = x - x0;
+            uint32_t src_y = y - y0;
+            uint32_t src_idx = (src_y * img_width + src_x) * 3;
+            gfx_set_pixel(gfx, x, y, rgb888_buffer[src_idx], rgb888_buffer[src_idx + 1], rgb888_buffer[src_idx + 2]);
         }
     }
 }

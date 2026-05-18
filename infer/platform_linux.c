@@ -204,3 +204,11 @@ void *platform_malloc(size_t n) {
 void *platform_malloc_internal(size_t n) {
     return malloc(n);
 }
+
+void *platform_realloc(void *ptr, size_t n) {
+    return realloc(ptr, n);
+}
+
+void *platform_realloc_internal(void *ptr, size_t n) {
+    return realloc(ptr, n);
+}

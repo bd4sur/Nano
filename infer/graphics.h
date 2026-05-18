@@ -20,12 +20,19 @@ extern "C" {
 #define GFX_COLOR_MODE_RGB888 (11)
 #define GFX_COLOR_MODE_RGB565 (12)
 
+// 是否启用RGB565的上下两个半屏的缓冲
+#define GFX_DOUBLE_BUFFER (0)
+
 typedef struct {
     uint32_t color_mode;
 
     // 通用帧缓冲
     uint8_t *frame_buffer_rgb888;
     uint16_t *frame_buffer_rgb565;
+
+    uint16_t *frame_buffer_rgb565_top;
+    uint16_t *frame_buffer_rgb565_bottom;
+
     uint32_t width;
     uint32_t height;
 
@@ -36,6 +43,17 @@ typedef struct {
     // 其他元数据
 
 } Nano_GFX;
+
+static inline uint16_t* gfx_rgb565_ptr(Nano_GFX *gfx, uint32_t x, uint32_t y, uint32_t *offset) {
+    uint32_t half_height = gfx->height / 2;
+    if (y < half_height) {
+        *offset = y * gfx->width + x;
+        return gfx->frame_buffer_rgb565_top;
+    } else {
+        *offset = (y - half_height) * gfx->width + x;
+        return gfx->frame_buffer_rgb565_bottom;
+    }
+}
 
 void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode);
 void gfx_close(Nano_GFX *gfx);
@@ -67,12 +85,16 @@ void gfx_draw_textline(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uin
 void gfx_draw_textline_centered(Nano_GFX *gfx, wchar_t *line, uint32_t cx, uint32_t cy, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 
-void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch);
-
 const uint8_t *gfx_get_glyph(Nano_GFX *gfx, uint32_t utf32, uint8_t *font_width, uint8_t *font_height);
 
 void gfx_gamma(Nano_GFX *gfx, float gamma);
 void gfx_dithering(Nano_GFX *gfx);
+
+void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch);
+void gfx_draw_image_buffer(Nano_GFX *gfx, uint8_t *img_buffer, uint32_t buffer_size, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height);
+
+int32_t gfx_decode_image_buffer(uint8_t *img_buffer, uint32_t buffer_size, uint32_t req_width, uint32_t req_height, uint8_t *out_rgb888, uint32_t *out_width, uint32_t *out_height);
+void gfx_draw_rgb888_buffer(Nano_GFX *gfx, uint8_t *rgb888_buffer, uint32_t img_width, uint32_t img_height, uint32_t x0, uint32_t y0);
 
 #ifdef __cplusplus
 }
