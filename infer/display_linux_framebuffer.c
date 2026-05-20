@@ -154,9 +154,6 @@ void display_hal_refresh(
     }
 
     if (fb_bpp == 16) {
-        uint16_t *temp_row = (uint16_t *)malloc(copy_width * sizeof(uint16_t));
-        if (!temp_row) return;
-
         // Fast path: native RGB565 (R5G6B5, little-endian)
         if (px_fmt.r_offset == 11 && px_fmt.r_len == 5 &&
             px_fmt.g_offset == 5  && px_fmt.g_len == 6 &&
@@ -167,15 +164,14 @@ void display_hal_refresh(
                 if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
 
                 uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                uint8_t *dst = fb_mmap + dst_y * fb_line_length + offset_x * 2;
                 for (uint32_t x = 0; x < copy_width; x++) {
-                    uint8_t r = src[0];
-                    uint8_t g = src[1];
-                    uint8_t b = src[2];
-                    temp_row[x] = rgb888_to_rgb565(r, g, b);
+                    uint16_t pix = rgb888_to_rgb565(src[0], src[1], src[2]);
+                    dst[0] = pix & 0xFF;
+                    dst[1] = (pix >> 8) & 0xFF;
+                    dst += 2;
                     src += 3;
                 }
-                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 2;
-                memcpy(dst_row, temp_row, copy_width * sizeof(uint16_t));
             }
         }
         else {
@@ -186,24 +182,21 @@ void display_hal_refresh(
                 if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
 
                 uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                uint8_t *dst = fb_mmap + dst_y * fb_line_length + offset_x * 2;
                 for (uint32_t x = 0; x < copy_width; x++) {
                     uint16_t pix = 0;
                     pix |= (convert_channel(src[0], px_fmt.r_len) << px_fmt.r_offset);
                     pix |= (convert_channel(src[1], px_fmt.g_len) << px_fmt.g_offset);
                     pix |= (convert_channel(src[2], px_fmt.b_len) << px_fmt.b_offset);
-                    temp_row[x] = pix;
+                    dst[0] = pix & 0xFF;
+                    dst[1] = (pix >> 8) & 0xFF;
+                    dst += 2;
                     src += 3;
                 }
-                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 2;
-                memcpy(dst_row, temp_row, copy_width * sizeof(uint16_t));
             }
         }
-        free(temp_row);
     }
     else if (fb_bpp == 24) {
-        uint8_t *temp_row = (uint8_t *)malloc(copy_width * 3);
-        if (!temp_row) return;
-
         // Fast path: standard BGR888 (b_offset=0, g_offset=8, r_offset=16)
         if (px_fmt.r_offset == 16 && px_fmt.r_len == 8 &&
             px_fmt.g_offset == 8  && px_fmt.g_len == 8 &&
@@ -214,14 +207,14 @@ void display_hal_refresh(
                 if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
 
                 uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                uint8_t *dst = fb_mmap + dst_y * fb_line_length + offset_x * 3;
                 for (uint32_t x = 0; x < copy_width; x++) {
-                    temp_row[x * 3 + 0] = src[2]; // B
-                    temp_row[x * 3 + 1] = src[1]; // G
-                    temp_row[x * 3 + 2] = src[0]; // R
+                    dst[0] = src[2]; // B
+                    dst[1] = src[1]; // G
+                    dst[2] = src[0]; // R
+                    dst += 3;
                     src += 3;
                 }
-                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 3;
-                memcpy(dst_row, temp_row, copy_width * 3);
             }
         }
         else {
@@ -232,26 +225,22 @@ void display_hal_refresh(
                 if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
 
                 uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                uint8_t *dst = fb_mmap + dst_y * fb_line_length + offset_x * 3;
                 for (uint32_t x = 0; x < copy_width; x++) {
                     uint32_t pix = 0;
                     pix |= (convert_channel(src[0], px_fmt.r_len) << px_fmt.r_offset);
                     pix |= (convert_channel(src[1], px_fmt.g_len) << px_fmt.g_offset);
                     pix |= (convert_channel(src[2], px_fmt.b_len) << px_fmt.b_offset);
-                    temp_row[x * 3 + 0] = pix & 0xFF;
-                    temp_row[x * 3 + 1] = (pix >> 8) & 0xFF;
-                    temp_row[x * 3 + 2] = (pix >> 16) & 0xFF;
+                    dst[0] = pix & 0xFF;
+                    dst[1] = (pix >> 8) & 0xFF;
+                    dst[2] = (pix >> 16) & 0xFF;
+                    dst += 3;
                     src += 3;
                 }
-                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 3;
-                memcpy(dst_row, temp_row, copy_width * 3);
             }
         }
-        free(temp_row);
     }
     else if (fb_bpp == 32) {
-        uint32_t *temp_row = (uint32_t *)malloc(copy_width * sizeof(uint32_t));
-        if (!temp_row) return;
-
         // Fast path: standard BGRA8888 (b=0, g=8, r=16, a=24)
         if (px_fmt.r_offset == 16 && px_fmt.r_len == 8 &&
             px_fmt.g_offset == 8  && px_fmt.g_len == 8 &&
@@ -262,15 +251,19 @@ void display_hal_refresh(
                 if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
 
                 uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                uint8_t *dst = fb_mmap + dst_y * fb_line_length + offset_x * 4;
                 for (uint32_t x = 0; x < copy_width; x++) {
-                    temp_row[x] = 0xFF000000U |
+                    uint32_t pix = 0xFF000000U |
                                   ((uint32_t)src[2] << 16) |
                                   ((uint32_t)src[1] << 8) |
                                   src[0];
+                    dst[0] = pix & 0xFF;
+                    dst[1] = (pix >> 8) & 0xFF;
+                    dst[2] = (pix >> 16) & 0xFF;
+                    dst[3] = (pix >> 24) & 0xFF;
+                    dst += 4;
                     src += 3;
                 }
-                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 4;
-                memcpy(dst_row, temp_row, copy_width * sizeof(uint32_t));
             }
         }
         // Fast path: standard RGBA8888 (r=24, g=16, b=8, a=0)
@@ -283,15 +276,19 @@ void display_hal_refresh(
                 if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
 
                 uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                uint8_t *dst = fb_mmap + dst_y * fb_line_length + offset_x * 4;
                 for (uint32_t x = 0; x < copy_width; x++) {
-                    temp_row[x] = ((uint32_t)src[0] << 24) |
+                    uint32_t pix = ((uint32_t)src[0] << 24) |
                                   ((uint32_t)src[1] << 16) |
                                   ((uint32_t)src[2] << 8) |
                                   0xFF;
+                    dst[0] = pix & 0xFF;
+                    dst[1] = (pix >> 8) & 0xFF;
+                    dst[2] = (pix >> 16) & 0xFF;
+                    dst[3] = (pix >> 24) & 0xFF;
+                    dst += 4;
                     src += 3;
                 }
-                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 4;
-                memcpy(dst_row, temp_row, copy_width * sizeof(uint32_t));
             }
         }
         else {
@@ -302,6 +299,7 @@ void display_hal_refresh(
                 if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
 
                 uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                uint8_t *dst = fb_mmap + dst_y * fb_line_length + offset_x * 4;
                 for (uint32_t x = 0; x < copy_width; x++) {
                     uint32_t pix = 0;
                     pix |= (convert_channel(src[0], px_fmt.r_len) << px_fmt.r_offset);
@@ -312,34 +310,30 @@ void display_hal_refresh(
                         px_fmt.b_len + px_fmt.b_offset <= 24) {
                         pix |= (0xFFU << 24);
                     }
-                    temp_row[x] = pix;
+                    dst[0] = pix & 0xFF;
+                    dst[1] = (pix >> 8) & 0xFF;
+                    dst[2] = (pix >> 16) & 0xFF;
+                    dst[3] = (pix >> 24) & 0xFF;
+                    dst += 4;
                     src += 3;
                 }
-                uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 4;
-                memcpy(dst_row, temp_row, copy_width * sizeof(uint32_t));
             }
         }
-        free(temp_row);
     }
     else {
         // 8bpp or other: grayscale fallback, row-by-row
-        uint8_t *temp_row = (uint8_t *)malloc(copy_width);
-        if (!temp_row) return;
-
         for (uint32_t y = 0; y < view_height; y++) {
             uint32_t src_y = y0 + y;
             int32_t dst_y = offset_y + (int32_t)y;
             if (dst_y < 0 || dst_y >= (int32_t)fb_height) continue;
 
             uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+            uint8_t *dst = fb_mmap + dst_y * fb_line_length + offset_x;
             for (uint32_t x = 0; x < copy_width; x++) {
-                temp_row[x] = (uint8_t)((src[0] * 77 + src[1] * 150 + src[2] * 29) >> 8);
+                dst[x] = (uint8_t)((src[0] * 77 + src[1] * 150 + src[2] * 29) >> 8);
                 src += 3;
             }
-            uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x;
-            memcpy(dst_row, temp_row, copy_width);
         }
-        free(temp_row);
     }
 }
 
@@ -383,6 +377,17 @@ void display_hal_refresh_rgb565(
         px_fmt.r_offset == 11 && px_fmt.r_len == 5 &&
         px_fmt.g_offset == 5  && px_fmt.g_len == 6 &&
         px_fmt.b_offset == 0  && px_fmt.b_len == 5) {
+        // Ultra-fast path: single block copy when row pitches match exactly
+        if (offset_x == 0 && x0 == 0 &&
+            copy_width == fb_width_in &&
+            fb_line_length == fb_width_in * sizeof(uint16_t) &&
+            offset_y >= 0 && (uint32_t)offset_y + view_height <= fb_height) {
+            uint8_t *src_start = (uint8_t *)frame_buffer_rgb565 + y0 * fb_width_in * sizeof(uint16_t);
+            uint8_t *dst_start = fb_mmap + offset_y * fb_line_length;
+            memcpy(dst_start, src_start, view_height * fb_line_length);
+            return;
+        }
+
         for (uint32_t y = 0; y < view_height; y++) {
             uint32_t src_y = y0 + y;
             int32_t dst_y = offset_y + (int32_t)y;

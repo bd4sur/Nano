@@ -2323,7 +2323,7 @@ void scatter_model_3(
     /* 拍脑袋：夜天光 */
     float night_light_scale = 1.0f - viewElevationDeg / 90.0f;
     color0 += 0.05f * night_light_scale;
-    color1 += 0.08f * night_light_scale;
+    color1 += 0.06f * night_light_scale;
     color2 += 0.12f * night_light_scale;
 
     /* HDR */
