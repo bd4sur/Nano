@@ -2,7 +2,7 @@
 #include <time.h>
 
 #include "graphics.h"
-#include "keyboard_hal.h"
+#include "input_device.h"
 #include "ui.h"
 
 #include "platform.h"
@@ -45,7 +45,7 @@
 // ===============================================================================
 
 void get_key_event(Key_Event *key_event, Global_State *global_state) {
-    uint8_t key = keyboard_hal_read_key();
+    uint8_t key = input_device_read_key();
     // 边沿
     if (key_event->key_mask != 1 && (key != key_event->prev_key)) {
         // 按下瞬间（上升沿）
@@ -439,58 +439,6 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
 // ===============================================================================
 // 主菜单
 // ===============================================================================
-
-/******************************************************
-
-屏幕区域布局示意
-    +---------+---------+---------+---------+
-    |              Padding Top              |
-+---0---------1---------2---------3---------4---+
-|   | (0,0) 1 | (1,0) 2 | (2,0) 3 | (3,0) A |   |
-| L 1---------+---------+---------+---------+ R |
-| E | (0,1) 4 | (1,1) 5 | (2,1) 6 | (3,1) B | I |
-| F 2---------+---------+---------+---------+ G |
-| T | (0,2) 7 | (1,2) 8 | (2,2) 9 | (3,2) C | H |
-|   3---------+---------+---------+---------+ T |
-|   | (0,3) E*| (1,3) 0 | (2,3) F#| (3,3) D |   |
-+---4---------+---------+---------+---------+---|
-    |            Padding Bottom             |
-    +---------+---------+---------+---------+
-
-******************************************************/
-// 屏幕布局坐标
-#define PADDING_TOP    (14)
-#define PADDING_BOTTOM (14)
-#define PADDING_LEFT   (0)
-#define PADDING_RIGHT  (0)
-#define CELL_WIDTH     ((SCREEN_WIDTH-PADDING_LEFT-PADDING_RIGHT)/4)
-#define CELL_HEIGHT    ((SCREEN_HEIGHT-PADDING_TOP-PADDING_BOTTOM)/4)
-#define CELL_X0(col,row)       (PADDING_LEFT + (col) * CELL_WIDTH)
-#define CELL_Y0(col,row)       (PADDING_TOP  + (row) * CELL_HEIGHT)
-#define CELL_CENTER_X(col,row) (CELL_X0((col),(row)) + (CELL_WIDTH/2))
-#define CELL_CENTER_Y(col,row) (CELL_Y0((col),(row)) + (CELL_HEIGHT/2))
-
-// 网格范围
-#define IN_BTN_1(x,y)  (((x) >= CELL_X0(0,0)) && ((x) < CELL_X0(1,0)) && ((y) >= CELL_Y0(0,0)) && ((y) < CELL_Y0(0,1)))
-#define IN_BTN_2(x,y)  (((x) >= CELL_X0(1,0)) && ((x) < CELL_X0(2,0)) && ((y) >= CELL_Y0(1,0)) && ((y) < CELL_Y0(1,1)))
-#define IN_BTN_3(x,y)  (((x) >= CELL_X0(2,0)) && ((x) < CELL_X0(3,0)) && ((y) >= CELL_Y0(2,0)) && ((y) < CELL_Y0(2,1)))
-#define IN_BTN_A(x,y)  (((x) >= CELL_X0(3,0)) && ((x) < CELL_X0(4,0)) && ((y) >= CELL_Y0(3,0)) && ((y) < CELL_Y0(3,1)))
-#define IN_BTN_4(x,y)  (((x) >= CELL_X0(0,1)) && ((x) < CELL_X0(1,1)) && ((y) >= CELL_Y0(0,1)) && ((y) < CELL_Y0(0,2)))
-#define IN_BTN_5(x,y)  (((x) >= CELL_X0(1,1)) && ((x) < CELL_X0(2,1)) && ((y) >= CELL_Y0(1,1)) && ((y) < CELL_Y0(1,2)))
-#define IN_BTN_6(x,y)  (((x) >= CELL_X0(2,1)) && ((x) < CELL_X0(3,1)) && ((y) >= CELL_Y0(2,1)) && ((y) < CELL_Y0(2,2)))
-#define IN_BTN_B(x,y)  (((x) >= CELL_X0(3,1)) && ((x) < CELL_X0(4,1)) && ((y) >= CELL_Y0(3,1)) && ((y) < CELL_Y0(3,2)))
-#define IN_BTN_7(x,y)  (((x) >= CELL_X0(0,2)) && ((x) < CELL_X0(1,2)) && ((y) >= CELL_Y0(0,2)) && ((y) < CELL_Y0(0,3)))
-#define IN_BTN_8(x,y)  (((x) >= CELL_X0(1,2)) && ((x) < CELL_X0(2,2)) && ((y) >= CELL_Y0(1,2)) && ((y) < CELL_Y0(1,3)))
-#define IN_BTN_9(x,y)  (((x) >= CELL_X0(2,2)) && ((x) < CELL_X0(3,2)) && ((y) >= CELL_Y0(2,2)) && ((y) < CELL_Y0(2,3)))
-#define IN_BTN_C(x,y)  (((x) >= CELL_X0(3,2)) && ((x) < CELL_X0(4,2)) && ((y) >= CELL_Y0(3,2)) && ((y) < CELL_Y0(3,3)))
-#define IN_BTN_E(x,y)  (((x) >= CELL_X0(0,3)) && ((x) < CELL_X0(1,3)) && ((y) >= CELL_Y0(0,3)) && ((y) < CELL_Y0(0,4)))
-#define IN_BTN_0(x,y)  (((x) >= CELL_X0(1,3)) && ((x) < CELL_X0(2,3)) && ((y) >= CELL_Y0(1,3)) && ((y) < CELL_Y0(1,4)))
-#define IN_BTN_F(x,y)  (((x) >= CELL_X0(2,3)) && ((x) < CELL_X0(3,3)) && ((y) >= CELL_Y0(2,3)) && ((y) < CELL_Y0(2,4)))
-#define IN_BTN_D(x,y)  (((x) >= CELL_X0(3,3)) && ((x) < CELL_X0(4,3)) && ((y) >= CELL_Y0(3,3)) && ((y) < CELL_Y0(3,4)))
-
-#define IN_BTN_TOP(x,y)     ((y) < CELL_Y0(0,0))
-#define IN_BTN_BOTTOM(x,y)  ((y) >= CELL_Y0(0,4))
-
 
 void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
     wchar_t cell_text[4][4][2][10] = {
@@ -1876,6 +1824,367 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
 // 设置菜单
 // ===============================================================================
 
+static void ui_app_setting_value_to_string(
+    Key_Event *key_event, Global_State *global_state, wchar_t *value_text, int32_t value_type,
+    int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, float timezone, float longitude, float latitude
+) {
+    // 日期 yyyy-mm-dd
+    if (value_type == 0) {
+        value_text[0] = (wchar_t)get_digit(year, 3);
+        value_text[1] = (wchar_t)get_digit(year, 2);
+        value_text[2] = (wchar_t)get_digit(year, 1);
+        value_text[3] = (wchar_t)get_digit(year, 0);
+        value_text[4] = L'-';
+        value_text[5] = (wchar_t)get_digit(month, 1);
+        value_text[6] = (wchar_t)get_digit(month, 0);
+        value_text[7] = L'-';
+        value_text[8] = (wchar_t)get_digit(day, 1);
+        value_text[9] = (wchar_t)get_digit(day, 0);
+        value_text[10] = 0;
+    }
+    // 时间时区 hh:mmsaabb
+    else if (value_type == 1) {
+        value_text[0] = (wchar_t)get_digit(hour, 1);
+        value_text[1] = (wchar_t)get_digit(hour, 0);
+        value_text[2] = L':';
+        value_text[3] = (wchar_t)get_digit(minute, 1);
+        value_text[4] = (wchar_t)get_digit(minute, 0);
+        value_text[5] = (wchar_t)get_timezone_digit(timezone, 0);
+        value_text[6] = (wchar_t)get_timezone_digit(timezone, 1);
+        value_text[7] = (wchar_t)get_timezone_digit(timezone, 2);
+        value_text[8] = (wchar_t)get_timezone_digit(timezone, 3);
+        value_text[9] = (wchar_t)get_timezone_digit(timezone, 4);
+        value_text[10] = 0;
+    }
+    // 经度 sddd_mm'ss"
+    else if (value_type == 2) {
+        value_text[0] = (wchar_t)get_lon_lat_digit(longitude, 0);
+        value_text[1] = (wchar_t)get_lon_lat_digit(longitude, 1);
+        value_text[2] = (wchar_t)get_lon_lat_digit(longitude, 2);
+        value_text[3] = (wchar_t)get_lon_lat_digit(longitude, 3);
+        value_text[4] = L' ';
+        value_text[5] = (wchar_t)get_lon_lat_digit(longitude, 4);
+        value_text[6] = (wchar_t)get_lon_lat_digit(longitude, 5);
+        value_text[7] = L'\'';
+        value_text[8] = (wchar_t)get_lon_lat_digit(longitude, 6);
+        value_text[9] = (wchar_t)get_lon_lat_digit(longitude, 7);
+        value_text[10] = L'"';
+        value_text[11] = 0;
+    }
+    // 纬度 sdd_mm'ss"
+    else if (value_type == 3) {
+        value_text[0] = (wchar_t)get_lon_lat_digit(latitude, 0);
+        value_text[1] = (wchar_t)get_lon_lat_digit(latitude, 2);
+        value_text[2] = (wchar_t)get_lon_lat_digit(latitude, 3);
+        value_text[3] = L' ';
+        value_text[4] = (wchar_t)get_lon_lat_digit(latitude, 4);
+        value_text[5] = (wchar_t)get_lon_lat_digit(latitude, 5);
+        value_text[6] = L'\'';
+        value_text[7] = (wchar_t)get_lon_lat_digit(latitude, 6);
+        value_text[8] = (wchar_t)get_lon_lat_digit(latitude, 7);
+        value_text[9] = L'"';
+        value_text[10] = 0;
+    }
+}
+
+static void ui_app_setting_grid16_refrech_button(
+    Key_Event *key_event, Global_State *global_state, int32_t is_single_line,
+    int32_t col, int32_t row, wchar_t *text0, wchar_t *text1,
+    uint8_t cell_bg_R, uint8_t cell_bg_G, uint8_t cell_bg_B, uint8_t cell_bg_mode,
+    uint8_t cell_text0_R, uint8_t cell_text0_G, uint8_t cell_text0_B, uint8_t cell_text0_mode,
+    uint8_t cell_text1_R, uint8_t cell_text1_G, uint8_t cell_text1_B, uint8_t cell_text1_mode
+) {
+    int32_t bx = (col == 0) ? 1 : 0;
+    int32_t by = (row == 0) ? 1 : 0;
+    gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, cell_bg_R, cell_bg_G, cell_bg_B, cell_bg_mode);
+    if (is_single_line) {
+        gfx_draw_textline_centered(global_state->gfx, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row), cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
+    }
+    else {
+        gfx_draw_textline_centered(global_state->gfx, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
+        gfx_draw_textline_centered(global_state->gfx, text1, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, cell_text1_R, cell_text1_G, cell_text1_B, cell_text1_mode);
+    }
+}
+
+void ui_app_setting_grid16_draw(Key_Event *key_event, Global_State *global_state) {
+
+    // 清屏
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        gfx_fill_white(global_state->gfx);
+    }
+    else if (global_state->ui_color_style == UI_COLOR_DARK) {
+        gfx_soft_clear(global_state->gfx);
+    }
+
+    uint8_t cell_bg_R = 0, cell_bg_G = 0, cell_bg_B = 0;
+    uint8_t cell_text0_R = 0, cell_text0_G = 0, cell_text0_B = 0;
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        cell_bg_R = 233;
+        cell_bg_G = 239;
+        cell_bg_B = 255;
+        cell_text0_R = 0;
+        cell_text0_G = 0;
+        cell_text0_B = 0;
+    }
+    else if (global_state->ui_color_style == UI_COLOR_DARK) {
+        cell_bg_R = 40;
+        cell_bg_G = 40;
+        cell_bg_B = 42;
+        cell_text0_R = 255;
+        cell_text0_G = 255;
+        cell_text0_B = 255;
+    }
+
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 0,
+        0, 0, L"日期", L"2026-05-21", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 0,
+        1, 0, L"时间", L"12:34+0800", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 0,
+        2, 0, L"屏幕亮度", L"50%", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        3, 0, L"返回", NULL, cell_bg_R+10, cell_bg_G+10, cell_bg_B+10, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 0,
+        0, 1, L"经度", L"+118 12'30\"", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 0,
+        1, 1, L"纬度", L"+32 12'30\"", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 0,
+        2, 1, L"音量", L"50%", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 0,
+        3, 1, L"IMU", L"开", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0x00, 1);
+
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 0,
+        0, 2, L"LLM设置", L"...", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 0,
+        1, 2, L"TTS设置", L"...", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 0,
+        2, 2, L"ASR设置", L"...", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 0,
+        3, 2, L"自动关机", L"关", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0x00, 0x00, 1);
+
+    ui_draw_header(key_event, global_state, L"系统设置", 1);
+    ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+}
+
+void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *global_state) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_1) {
+        ui_app_setting_value_input_draw(key_event, global_state, 0,
+            global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->timezone,
+            global_state->linglong_cfg->longitude, global_state->linglong_cfg->latitude, 1);
+        gfx_refresh(global_state->gfx);
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_2) {
+        ui_app_setting_value_input_draw(key_event, global_state, 1,
+            global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->timezone,
+            global_state->linglong_cfg->longitude, global_state->linglong_cfg->latitude, 5);
+        gfx_refresh(global_state->gfx);
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_3) {
+        global_state->STATE = STATE_LINGLONG;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_4) {
+        ui_app_setting_value_input_draw(key_event, global_state, 2,
+            global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->timezone,
+            global_state->linglong_cfg->longitude, global_state->linglong_cfg->latitude, 2);
+        gfx_refresh(global_state->gfx);
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_5) {
+        ui_app_setting_value_input_draw(key_event, global_state, 3,
+            global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->timezone,
+            global_state->linglong_cfg->longitude, global_state->linglong_cfg->latitude, 3);
+        gfx_refresh(global_state->gfx);
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_6) {
+        // TODO
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_7) {
+        global_state->STATE = STATE_BADAPPLE;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_8) {
+        global_state->STATE = STATE_GAMEOFLIFE;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_9) {
+        // TODO
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
+        // 暂时用作切换色彩风格功能
+        if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+            global_state->ui_color_style = UI_COLOR_DARK;
+        }
+        else {
+            global_state->ui_color_style = UI_COLOR_LIGHT;
+        }
+        ui_widget_grid16_draw(key_event, global_state);
+        gfx_refresh(global_state->gfx);
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        global_state->STATE = STATE_SPLASH_SCREEN;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_B) {
+        init_setting_menu(key_event, global_state);
+        global_state->STATE = STATE_SETTING_MENU;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_C) {
+        global_state->STATE = STATE_README;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_D) {
+        global_state->STATE = STATE_SHUTDOWN;
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
+        // TODO
+    }
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_HASH) {
+        // TODO
+    }
+    else {
+        return;
+    }
+}
+
+
+// 日期/时间/经度/纬度设置
+// value_type: 0-日期 1-时间时区 2-经度 3-纬度
+// cursor_pos: 光标相对于值字符串第一个字符的位置（不检测连字符，连字符位置由调用者处理），例如:
+//   value_str   12:34+0800
+//   cursor_pos  0123456789
+void ui_app_setting_value_input_draw(
+    Key_Event *key_event, Global_State *global_state, int32_t value_type,
+    int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, float timezone,
+    float longitude, float latitude, int32_t cursor_pos
+) {
+    // 清屏
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        gfx_fill_white(global_state->gfx);
+    }
+    else if (global_state->ui_color_style == UI_COLOR_DARK) {
+        gfx_soft_clear(global_state->gfx);
+    }
+
+    uint8_t cell_bg_R = 0, cell_bg_G = 0, cell_bg_B = 0;
+    uint8_t cell_text0_R = 0, cell_text0_G = 0, cell_text0_B = 0;
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        cell_bg_R = 233;
+        cell_bg_G = 239;
+        cell_bg_B = 255;
+        cell_text0_R = 0;
+        cell_text0_G = 0;
+        cell_text0_B = 0;
+    }
+    else if (global_state->ui_color_style == UI_COLOR_DARK) {
+        cell_bg_R = 40;
+        cell_bg_G = 40;
+        cell_bg_B = 42;
+        cell_text0_R = 255;
+        cell_text0_G = 255;
+        cell_text0_B = 255;
+    }
+
+    // 绘制顶栏（前缀）
+    switch (value_type) {
+        case 0: ui_draw_header(key_event, global_state, L"设置时间：", 0); break;
+        case 1: ui_draw_header(key_event, global_state, L"设置日期：", 0); break;
+        case 2: ui_draw_header(key_event, global_state, L"设置经度：", 0); break;
+        case 3: ui_draw_header(key_event, global_state, L"设置纬度：", 0); break;
+        default: return;
+    }
+
+    // 绘制设置值和光标
+    int32_t x0 = 12 * 5; // 与顶栏前缀的长度有关
+    int32_t x_cur = x0 + cursor_pos * 6;
+    wchar_t value_text[32];
+    ui_app_setting_value_to_string(key_event, global_state, value_text, value_type, year, month, day, hour, minute, timezone, longitude, latitude);
+    gfx_draw_textline(global_state->gfx, value_text, x0, 1, 0x00, 0xff, 0xff, 1);
+    gfx_draw_rectangle(global_state->gfx, x_cur, 12, 5, 2, 0x00, 0xff, 0xff, 1);
+
+    // 绘制底栏
+    ui_draw_footer(key_event, global_state, L"按数字键输入 光标自动右移", 1);
+
+    // 绘制按键
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        0, 0, L"1", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        1, 0, L"2", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        2, 0, L"3", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        3, 0, L"取消", NULL, cell_bg_R+10, cell_bg_G, cell_bg_B, 1, 0xff, 0x00, 0x00, 1, 0x00, 0x00, 0x00, 1);
+
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        0, 1, L"4", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        1, 1, L"5", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        2, 1, L"6", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    switch (value_type) {
+        case 0: break;
+        case 1:
+            if (cursor_pos == 5) {
+                ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+                    3, 1, L"东(+)", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+            }
+            break;
+        case 2:
+            if (cursor_pos == 0) {
+                ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+                    3, 1, L"东经(+)", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+            }
+            break;
+        case 3:
+            if (cursor_pos == 0) {
+                ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+                    3, 1, L"北纬(+)", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+            }
+            break;
+        default: return;
+    }
+
+
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        0, 2, L"7", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        1, 2, L"8", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        2, 2, L"9", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    switch (value_type) {
+        case 0: break;
+        case 1:
+            if (cursor_pos == 5) {
+                ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+                    3, 2, L"西(-)", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+            }
+            break;
+        case 2:
+            if (cursor_pos == 0) {
+                ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+                    3, 2, L"西经(-)", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+            }
+            break;
+        case 3:
+            if (cursor_pos == 0) {
+                ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+                    3, 2, L"南纬(-)", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+            }
+            break;
+        default: return;
+    }
+
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        0, 3, L"←", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        1, 3, L"0", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        2, 3, L"→", NULL, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refrech_button(key_event, global_state, 1,
+        3, 3, L"确认", NULL, cell_bg_R, cell_bg_G+10, cell_bg_B, 1, 0x00, 0xff, 0x00, 1, 0x00, 0x00, 0x00, 1);
+}
+
+
+
+
+
+
+
+
 void init_setting_menu(Key_Event *key_event, Global_State *global_state) {
     wcscpy(global_state->w_menu_setting->title, L"设置");
     wcscpy(global_state->w_menu_setting->items[0], L"语言模型生成参数");
@@ -2059,9 +2368,9 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
 #endif
 
     ///////////////////////////////////////
-    // 矩阵按键初始化
+    // 输入设备初始化
 
-    keyboard_hal_init();
+    input_device_init();
     key_event->prev_key = KEYCODE_NUM_IDLE;
 
     ///////////////////////////////////////
@@ -2215,14 +2524,12 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
-            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_setting);
-            ui_draw_header(key_event, global_state, global_state->w_menu_setting->title, 1);
-            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+            ui_app_setting_grid16_draw(key_event, global_state);
             gfx_refresh(global_state->gfx);
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_setting, setting_menu_item_action, STATE_MAIN_MENU, STATE_SETTING_MENU);
+        ui_app_setting_grid16_event_handler(key_event, global_state);
 
         break;
 

@@ -1,5 +1,8 @@
 #include "utils.h"
 
+#include <stdint.h>
+#include <math.h>
+
 // ===============================================================================
 // HashMap
 // ===============================================================================
@@ -459,6 +462,129 @@ void freeTree(AVLNode* root) {
         freeTree(root->left);
         freeTree(root->right);
         free(root);
+    }
+}
+
+
+// ===============================================================================
+// 数字格式字符串
+// ===============================================================================
+
+// 获取十进制整数 num 的第 n 位（从右往左，个位是第 0 位）
+uint8_t get_digit(int32_t num, int32_t n) {
+    if (n < 0) return (uint8_t)'?';
+    num = abs(num);
+    for (int i = 0; i < n; i++) {
+        num /= 10;
+        if (num == 0) return '0';
+    }
+    return (uint8_t)(num % 10 + '0');
+}
+
+// 将浮点数格式的时区转为 shhmm 格式，并返回指定位置的 ASCII 字符
+// shhmm 格式说明：
+//   位置 0: 符号位 ('+' 或 '-')
+//   位置 1: 小时十位 (0-9)
+//   位置 2: 小时个位 (0-9)
+//   位置 3: 分钟十位 (0-5)
+//   位置 4: 分钟个位 (0-9)
+// 注意：时区 0.0 视为 "+0000"
+uint8_t get_timezone_digit(float tz, int32_t digit) {
+    // 1. 处理符号位（0.0 视为正）
+    char sign = (tz < 0.0f && tz != -0.0f) ? '-' : '+';
+
+    // 2. 取绝对值（处理 -0.0 的特殊情况）
+    float abs_tz = fabsf(tz);
+
+    // 3. 分解小时和分钟（四舍五入到最近分钟）
+    int hours = (int)floorf(abs_tz);          // 小时整数部分
+    float fractional = abs_tz - hours;        // 小数部分
+    int minutes = (int)roundf(fractional * 60.0f); // 转换为分钟并四舍五入
+
+    // 4. 处理分钟进位（例如 59.9 分钟 -> 60 分钟 -> 进位）
+    if (minutes >= 60) {
+        hours += minutes / 60;
+        minutes %= 60;
+    }
+
+    // 5. 限制小时范围（时区标准范围 -12~+14，但保留健壮性）
+    if (hours > 99) hours = 99;  // 极端情况保护
+
+    // 6. 根据 digit 位置返回对应 ASCII 字符
+    switch (digit) {
+        case 0:  // 符号位
+            return (uint8_t)sign;
+        case 1:  // 小时十位
+            return (uint8_t)('0' + (hours / 10));
+        case 2:  // 小时个位
+            return (uint8_t)('0' + (hours % 10));
+        case 3:  // 分钟十位
+            return (uint8_t)('0' + (minutes / 10));
+        case 4:  // 分钟个位
+            return (uint8_t)('0' + (minutes % 10));
+        default: // 无效位置返回空字符（或根据需求返回错误码）
+            return (uint8_t)'\0';
+    }
+}
+
+
+
+// 将十进制格式的浮点数经度或者纬度转换为shhhmmss格式，并返回指定位置的 ASCII 字符
+// shhhmmss格式说明：
+//   位置 0: 符号位 ('+' 或 '-')，经纬度0的符号一律为'+'
+//   位置 1: 小时百位 (0-9)
+//   位置 2: 小时十位 (0-9)
+//   位置 3: 小时个位 (0-9)
+//   位置 4: 分钟十位 (0-9)
+//   位置 5: 分钟个位 (0-9)
+//   位置 6: 秒数十位 (0-9)
+//   位置 7: 秒数个位 (0-9)
+uint8_t get_lon_lat_digit(float decimal, int32_t digit) {
+    // 1. 确定符号位：0值（含-0.0）统一使用'+'
+    char sign = '+';
+    if (decimal < -1e-6f) {
+        sign = '-';
+    }
+
+    // 2. 取绝对值进行度分秒计算
+    float abs_val = fabsf(decimal);
+
+    // 3. 计算度、分、秒（带四舍五入）
+    int degrees = (int)abs_val;
+    float minutes_frac = (abs_val - degrees) * 60.0f;
+    int minutes = (int)minutes_frac;
+    int seconds = (int)((minutes_frac - minutes) * 60.0f + 0.5f);  // 四舍五入
+
+    // 4. 处理进位（秒→分→度）
+    if (seconds >= 60) {
+        seconds -= 60;
+        minutes++;
+    }
+    if (minutes >= 60) {
+        minutes -= 60;
+        degrees++;
+    }
+
+    // 5. 根据digit位置返回对应ASCII字符
+    switch (digit) {
+        case 0:  // 符号位
+            return (uint8_t)sign;
+        case 1:  // 度百位 (0-1，经度最大180，纬度最大90)
+            return (uint8_t)('0' + (degrees / 100) % 10);
+        case 2:  // 度十位
+            return (uint8_t)('0' + (degrees / 10) % 10);
+        case 3:  // 度个位
+            return (uint8_t)('0' + degrees % 10);
+        case 4:  // 分十位
+            return (uint8_t)('0' + (minutes / 10) % 10);
+        case 5:  // 分个位
+            return (uint8_t)('0' + minutes % 10);
+        case 6:  // 秒十位
+            return (uint8_t)('0' + (seconds / 10) % 10);
+        case 7:  // 秒个位
+            return (uint8_t)('0' + seconds % 10);
+        default: // 无效位置返回问号
+            return (uint8_t)'?';
     }
 }
 

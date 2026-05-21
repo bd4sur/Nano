@@ -1,5 +1,5 @@
 #include "platform.h"
-#include "keyboard_hal.h"
+#include "input_device.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,7 +60,7 @@ static uint8_t map_touch_to_key(int x, int y) {
     }
 }
 
-int32_t keyboard_hal_init() {
+int32_t input_device_init() {
     input_fd = open(INPUT_DEVICE, O_RDONLY | O_NONBLOCK);
     if (input_fd < 0) {
         return -1;
@@ -68,7 +68,7 @@ int32_t keyboard_hal_init() {
     return 0;
 }
 
-uint8_t keyboard_hal_read_key() {
+uint8_t input_device_read_key() {
     struct input_event ev;
 
     // 读取所有当前可用的输入事件

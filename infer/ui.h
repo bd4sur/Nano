@@ -121,6 +121,11 @@ typedef struct Global_State {
 } Global_State;
 
 typedef struct Key_Event {
+    int32_t  event_type; // 事件类型
+    int32_t  touch_x;
+    int32_t  touch_y;
+    int32_t  is_touching;
+
     uint8_t  prev_key;   // 上一次按键的键值
     uint8_t  key_code;   // 大于等于16为没有任何按键，0-15为按键
     int8_t   key_edge;   // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)

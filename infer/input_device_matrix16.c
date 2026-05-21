@@ -1,4 +1,4 @@
-#include "keyboard_hal.h"
+#include "input_device.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -11,7 +11,7 @@
 
 static int kb_fd;
 
-int32_t keyboard_hal_init() {
+int32_t input_device_init() {
     kb_fd = open(I2C_DEVFILE, O_RDWR);
     if(kb_fd < 0) {
         return -1;
@@ -22,7 +22,7 @@ int32_t keyboard_hal_init() {
     return 0;
 }
 
-uint8_t keyboard_hal_read_key() {
+uint8_t input_device_read_key() {
     uint8_t val = 0x03;
     uint8_t read_buf = 0;
     if(write(kb_fd, &val, 1) < 0) {

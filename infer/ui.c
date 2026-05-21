@@ -2,7 +2,7 @@
 #include <time.h>
 
 #include "graphics.h"
-#include "keyboard_hal.h"
+#include "input_device.h"
 #include "ui.h"
 
 #include "platform.h"

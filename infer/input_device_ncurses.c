@@ -1,14 +1,14 @@
-#include "keyboard_hal.h"
+#include "input_device.h"
 
 #include <ncurses.h>
 
 #include "platform.h"
 
-int32_t keyboard_hal_init() {
+int32_t input_device_init() {
     return 0;
 }
 
-uint8_t keyboard_hal_read_key() {
+uint8_t input_device_read_key() {
     uint8_t ch = (uint8_t)getch();
     switch(ch) {
         case '1': return KEYCODE_NUM_1;

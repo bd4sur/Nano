@@ -1,5 +1,5 @@
 #include "platform.h"
-#include "keyboard_hal.h"
+#include "input_device.h"
 
 #include <Arduino.h>
 #include "M5Unified.h"
@@ -17,12 +17,12 @@ m5::touch_detail_t touchDetail;
 #define Y3 (SCREEN_HEIGHT / 4 * 3)
 #define Y4 (SCREEN_HEIGHT)
 
-int32_t keyboard_hal_init() {
+int32_t input_device_init() {
     return 0;
 }
 
 
-uint8_t keyboard_hal_read_key() {
+uint8_t input_device_read_key() {
     touchDetail = M5.Touch.getDetail();
     if (touchDetail.isPressed()) {
         int x = touchDetail.x;
