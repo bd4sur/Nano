@@ -67,6 +67,7 @@ void gfx_get_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t *r, uint8_t *g
 
 void gfx_set_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b);
 void gfx_add_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b);
+void gfx_blend_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 void gfx_scale_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, float k);
 void gfx_reverse_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y);
 

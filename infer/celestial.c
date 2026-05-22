@@ -937,7 +937,20 @@ void draw_horizon(
             fisheye_unproject(x, y, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &hx, &hy, &hz);
             if (hz < 0) {
                 if (landscape_index == 0) {
-                    gfx_set_pixel(gfx, x, y, 0, 0, 0);
+                    uint8_t r = 0, g = 0, b = 0;
+                    // 地景边缘抗锯齿：在地平线附近与天空背景平滑过渡
+                    float edge_margin = 2.0f;
+                    if (!enable_atmosphere_scattering && hz > -edge_margin) {
+                        uint8_t bg_r8 = 0;
+                        uint8_t bg_g8 = 0;
+                        uint8_t bg_b8 = 0;
+                        gfx_get_pixel(gfx, x, y, &bg_r8, &bg_g8, &bg_b8);
+                        float t = powf((edge_margin + hz) / edge_margin, 0.5f);
+                        r = (uint8_t)MIN(255.0f, ((1.0f - t) * (float)r + t * (float)bg_r8));
+                        g = (uint8_t)MIN(255.0f, ((1.0f - t) * (float)g + t * (float)bg_g8));
+                        b = (uint8_t)MIN(255.0f, ((1.0f - t) * (float)b + t * (float)bg_b8));
+                    }
+                    gfx_set_pixel(gfx, x, y, r, g, b);
                 }
                 else {
                     // 反解此处的xyz坐标，转为地平坐标
@@ -975,6 +988,19 @@ void draw_horizon(
                     r = (uint8_t)MIN(255.0f, (scattered_r * k));
                     g = (uint8_t)MIN(255.0f, (scattered_g * k));
                     b = (uint8_t)MIN(255.0f, (scattered_b * k));
+
+                    // 地景边缘抗锯齿：在地平线附近与天空背景平滑过渡
+                    float edge_margin = 2.0f;
+                    if (!enable_atmosphere_scattering && hz > -edge_margin) {
+                        uint8_t bg_r8 = 0;
+                        uint8_t bg_g8 = 0;
+                        uint8_t bg_b8 = 0;
+                        gfx_get_pixel(gfx, x, y, &bg_r8, &bg_g8, &bg_b8);
+                        float t = powf((edge_margin + hz) / edge_margin, 0.5f);
+                        r = (uint8_t)MIN(255.0f, ((1.0f - t) * (float)r + t * (float)bg_r8));
+                        g = (uint8_t)MIN(255.0f, ((1.0f - t) * (float)g + t * (float)bg_g8));
+                        b = (uint8_t)MIN(255.0f, ((1.0f - t) * (float)b + t * (float)bg_b8));
+                    }
 
                     gfx_set_pixel(gfx, x, y, r, g, b);
                 }

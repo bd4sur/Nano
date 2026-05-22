@@ -1529,7 +1529,7 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
         gfx_draw_textline_centered(global_state->gfx, L"设置", global_state->gfx->width/2, PADDING_TOP/2, 222, 222, 222, 1);
     }
 
-    gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->gfx->height - 13, 128, 128, 128, 3);
+    gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->gfx->height - 13, 255, 255, 255, 200);
 
     wchar_t timestr[30];
     swprintf(timestr, 30, L"%04d-%02d-%02d %02d:%02d:%02d", global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->second);

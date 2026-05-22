@@ -322,6 +322,52 @@ inline void gfx_add_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint
     }
 }
 
+// Alpha 混合像素
+// a: 0=全透明(保留背景), 255=不透明(完全覆盖为前景色)
+inline void gfx_blend_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    if (a == 0) return;
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
+        uint32_t fb_width = gfx->width;
+        uint32_t i = (y * fb_width + x) * 3;
+        if (a == 255) {
+            frame_buffer[i]   = r;
+            frame_buffer[i+1] = g;
+            frame_buffer[i+2] = b;
+        } else {
+            uint16_t t = a;
+            uint16_t inv_t = 255 - a;
+            frame_buffer[i]   = (uint8_t)((t * r + inv_t * frame_buffer[i]   + 127) / 255);
+            frame_buffer[i+1] = (uint8_t)((t * g + inv_t * frame_buffer[i+1] + 127) / 255);
+            frame_buffer[i+2] = (uint8_t)((t * b + inv_t * frame_buffer[i+2] + 127) / 255);
+        }
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+#if GFX_DOUBLE_BUFFER
+        uint32_t i;
+        uint16_t *frame_buffer = gfx_rgb565_ptr(gfx, x, y, &i);
+#else
+        uint16_t *frame_buffer = gfx->frame_buffer_rgb565;
+        uint32_t fb_width = gfx->width;
+        uint32_t i = y * fb_width + x;
+#endif
+        if (a == 255) {
+            frame_buffer[i] = rgb888_to_rgb565(r, g, b);
+        } else {
+            uint16_t v = frame_buffer[i];
+            uint16_t t = a;
+            uint16_t inv_t = 255 - a;
+            uint8_t br = RGB565_R(v);
+            uint8_t bg = RGB565_G(v);
+            uint8_t bb = RGB565_B(v);
+            uint8_t nr = (uint8_t)((t * r + inv_t * br + 127) / 255);
+            uint8_t ng = (uint8_t)((t * g + inv_t * bg + 127) / 255);
+            uint8_t nb = (uint8_t)((t * b + inv_t * bb + 127) / 255);
+            frame_buffer[i] = rgb888_to_rgb565(nr, ng, nb);
+        }
+    }
+}
+
 // 数乘像素
 inline void gfx_scale_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, float k) {
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
@@ -410,7 +456,7 @@ inline void gfx_reverse_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y) {
 }
 
 // 画点
-// mode: 0-置黑  1-置色  2-异或  3-加色
+// mode: 0-置黑  1-置色  2-异或  3-加色 >=4-Alpha混合
 void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
     if (x < 0 || y < 0 || x >= gfx->width || y >= gfx->height) {
         return;
@@ -429,8 +475,12 @@ void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t 
         gfx_reverse_pixel(gfx, x, y);
     }
     // 叠加
-    else {
+    else if (mode == 3) {
         gfx_add_pixel(gfx, x, y, red, green, blue);
+    }
+    // Alpha混合
+    else {
+        gfx_blend_pixel(gfx, x, y, red, green, blue, mode);
     }
 }
 
