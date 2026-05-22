@@ -436,6 +436,72 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
 }
 
 
+void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_state, int32_t x0, int32_t y0) {
+    Nano_GFX *gfx = global_state->gfx;
+    // 色彩
+    uint8_t bg_R = 0x00, bg_G = 0x00, bg_B = 0x00;
+    uint8_t line_R = 0xaa, line_G = 0xaa, line_B = 0xaa;
+    uint8_t block_R = 0x39, block_G = 0x39, block_B = 0x39;
+    uint8_t text_R = 0xff, text_G = 0xff, text_B = 0xff;
+    // 绘制连线
+    gfx_draw_line(gfx, x0+55, y0+14, x0+55, y0+50, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+15, y0+50, x0+95, y0+50, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+15, y0+79, x0+95, y0+79, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+15, y0+50, x0+15, y0+79, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+95, y0+50, x0+95, y0+79, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+55, y0+79, x0+55, y0+133, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+35, y0+133, x0+95, y0+133, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+35, y0+133, x0+35, y0+160, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+95, y0+133, x0+95, y0+203, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+15, y0+160, x0+55, y0+160, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+15, y0+203, x0+15, y0+160, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+55, y0+160, x0+55, y0+227, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+15, y0+203, x0+95, y0+203, line_R, line_G, line_B, 1);
+    gfx_draw_line(gfx, x0+36, y0+103, x0+55, y0+103, line_R, line_G, line_B, 1); // Res Branch
+    gfx_draw_line(gfx, x0+36, y0+20, x0+55, y0+20, line_R, line_G, line_B, 1); // Res Branch
+    // 绘制方框和文字
+    gfx_draw_rectangle(gfx, x0+40, y0+25, 30, 14, block_R, block_G, block_B, 1); // W2
+    gfx_draw_textline_centered(gfx, L"W2", x0+40+15, y0+25+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+0, y0+61, 30, 14, block_R, block_G, block_B, 1); // W1
+    gfx_draw_textline_centered(gfx, L"W1", x0+0+15, y0+61+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+80, y0+43, 30, 14, block_R, block_G, block_B, 1); // SiLU
+    gfx_draw_textline_centered(gfx, L"SiLU", x0+80+15, y0+43+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+80, y0+61, 30, 14, block_R, block_G, block_B, 1); // W3
+    gfx_draw_textline_centered(gfx, L"W3", x0+80+15, y0+61+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+40, y0+83, 30, 14, block_R, block_G, block_B, 1); // lin Norm
+    gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+83+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+40, y0+109, 30, 14, block_R, block_G, block_B, 1); // O
+    gfx_draw_textline_centered(gfx, L"O", x0+40+15, y0+109+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+0, y0+168, 30, 14, block_R, block_G, block_B, 1); // RoPE Q
+    gfx_draw_textline_centered(gfx, L"RoPE", x0+0+15, y0+168+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+40, y0+168, 30, 14, block_R, block_G, block_B, 1); // RoPE K
+    gfx_draw_textline_centered(gfx, L"RoPE", x0+40+15, y0+168+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+0, y0+185, 30, 14, block_R, block_G, block_B, 1); // Q
+    gfx_draw_textline_centered(gfx, L"Q", x0+0+15, y0+185+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+40, y0+185, 30, 14, block_R, block_G, block_B, 1); // K
+    gfx_draw_textline_centered(gfx, L"K", x0+40+15, y0+185+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+80, y0+185, 30, 14, block_R, block_G, block_B, 1); // V
+    gfx_draw_textline_centered(gfx, L"V", x0+80+15, y0+185+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+40, y0+207, 30, 14, block_R, block_G, block_B, 1); // Attn Norm
+    gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+207+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+29, y0+138, 12, 12, block_R, block_G, block_B, 1); // Mask
+    gfx_draw_line(gfx, x0+29, y0+138, x0+29+12, y0+138+12, bg_R, bg_G, bg_B, 1);
+    gfx_draw_circle_fill(gfx, x0+55, y0+50, 6, block_R, block_G, block_B, 1); // lin Hadamard
+    gfx_draw_line(gfx, x0+49, y0+44, x0+49+12, y0+44+12, bg_R, bg_G, bg_B, 1);
+    gfx_draw_line(gfx, x0+49+12, y0+44, x0+49, y0+44+12, bg_R, bg_G, bg_B, 1);
+    gfx_draw_circle_fill(gfx, x0+55, y0+133, 6, block_R, block_G, block_B, 1); // A*V
+    gfx_draw_line(gfx, x0+49, y0+127, x0+49+12, y0+127+12, bg_R, bg_G, bg_B, 1);
+    gfx_draw_line(gfx, x0+49+12, y0+127, x0+49, y0+127+12, bg_R, bg_G, bg_B, 1);
+    gfx_draw_circle_fill(gfx, x0+35, y0+160, 6, block_R, block_G, block_B, 1); // Q*K
+    gfx_draw_line(gfx, x0+29, y0+154, x0+29+12, y0+154+12, bg_R, bg_G, bg_B, 1);
+    gfx_draw_line(gfx, x0+29+12, y0+154, x0+29, y0+154+12, bg_R, bg_G, bg_B, 1);
+}
+
+
+
+
+
+
 // ===============================================================================
 // 主菜单
 // ===============================================================================
@@ -519,6 +585,9 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_9) {
         // TODO
+        gfx_soft_clear(global_state->gfx);
+        ui_app_llm_model_diagram_draw(key_event, global_state, 0, 0);
+        gfx_refresh(global_state->gfx);
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
         // 暂时用作切换色彩风格功能

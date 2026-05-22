@@ -816,6 +816,33 @@ void gfx_draw_circle(Nano_GFX *gfx, uint32_t cx, uint32_t cy, uint32_t r, uint8_
     }
 }
 
+// 画实心圆
+// cx,cy:圆心坐标
+// r:圆的半径
+void gfx_draw_circle_fill(Nano_GFX *gfx, uint32_t cx, uint32_t cy, uint32_t r, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    if (r == 0) {
+        gfx_draw_point(gfx, cx, cy, red, green, blue, mode);
+        return;
+    }
+
+    int32_t r_sq = (int32_t)r * (int32_t)r;
+    int32_t cx_i = (int32_t)cx;
+    int32_t cy_i = (int32_t)cy;
+
+    for (int32_t y = cy_i - (int32_t)r; y <= cy_i + (int32_t)r; y++) {
+        if (y < 0 || y >= (int32_t)gfx->height) continue;
+        int32_t dy = y - cy_i;
+        int32_t dy_sq = dy * dy;
+        for (int32_t x = cx_i - (int32_t)r; x <= cx_i + (int32_t)r; x++) {
+            if (x < 0 || x >= (int32_t)gfx->width) continue;
+            int32_t dx = x - cx_i;
+            if (dx * dx + dy_sq <= r_sq) {
+                gfx_draw_point(gfx, (uint32_t)x, (uint32_t)y, red, green, blue, mode);
+            }
+        }
+    }
+}
+
 // 显示汉字
 // x,y:起点坐标
 // mode:0,反色显示;1,正常显示
