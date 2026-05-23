@@ -150,6 +150,7 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
     global_state->llm_output_of_last_session = (wchar_t*)platform_calloc(UI_STR_BUF_MAX_LENGTH, sizeof(wchar_t));
     global_state->tps_of_last_session = 0.0f;
     global_state->token_num_of_last_session = 0;
+    global_state->llm_enable_observation = 1;
 #ifdef ASR_ENABLED
     global_state->asr_output_buffer = (wchar_t*)platform_calloc(UI_STR_BUF_MAX_LENGTH, sizeof(wchar_t));
     wcscpy(global_state->asr_output_buffer, L"请说话...");
@@ -260,11 +261,6 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         wchar_t prefill_title_str[50];
         swprintf(prefill_title_str, 50, L"%ls Reading...", global_state->llm_model_name);
         ui_draw_header(key_event, global_state, prefill_title_str, 1);
-
-        global_state->w_textarea_prefill->x = 0;
-        global_state->w_textarea_prefill->y = 14;
-        global_state->w_textarea_prefill->width = global_state->gfx->width;
-        global_state->w_textarea_prefill->height = global_state->gfx->height - 14 - 14;
 
         // 显示已经处理的输入prompt
         ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_prefill, session->output_text, -1, 1);
@@ -389,6 +385,18 @@ void init_model_menu(Key_Event *key_event, Global_State *global_state) {
 }
 
 
+void llm_observation(Nano_Observation obs, void *env) {
+    Global_State *global_state = (Global_State*)env;
+    Nano_GFX *gfx = global_state->gfx;
+    int32_t total_layers = global_state->llm_ctx->llm->config.n_layer;
+    // wchar_t obs_text[64];
+    // swprintf(obs_text, 64, L"Layer=%d | Phase=%d", obs.layer, obs.phase);
+
+    gfx_draw_rectangle(gfx, 0, 14, gfx->width/2, gfx->height-14-14, 0, 0, 0, 1);
+    ui_app_llm_model_diagram_draw(NULL, global_state, 0, 0, total_layers, obs.layer, obs.phase);
+    gfx_refresh(gfx);
+}
+
 int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
     int32_t item_index = ms->current_item_index;
 
@@ -430,18 +438,29 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
         gs->llm_top_k,
         gs->timestamp);
 
+    gs->llm_ctx->observation = llm_observation;
+    gs->llm_ctx->observation_env = gs; // 模拟闭包：将观测函数的词法环境指向UI全局上下文，这样就可以在观测回调中使用UI的API
+
+    if (gs->llm_enable_observation) {
+        gs->w_textarea_main->x = 160;
+        gs->w_textarea_main->width = gs->gfx->width - 160;
+        
+        gs->w_textarea_prefill->x = 160;
+        gs->w_textarea_prefill->width = gs->gfx->width - 160;
+    }
+
     // 进入电子鹦鹉
     ui_widget_input_init(ke, gs, gs->w_input_main);
     return STATE_LLM_INPUT;
 }
 
 
-void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_state, int32_t x0, int32_t y0) {
+void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_state, int32_t x0, int32_t y0, int32_t total_layers, int32_t layer, int32_t phase) {
     Nano_GFX *gfx = global_state->gfx;
     // 色彩
     uint8_t bg_R = 0x00, bg_G = 0x00, bg_B = 0x00;
     uint8_t line_R = 0xaa, line_G = 0xaa, line_B = 0xaa;
-    uint8_t block_R = 0x39, block_G = 0x39, block_B = 0x39;
+    uint8_t block_R = 0x33, block_G = 0x33, block_B = 0x33;
     uint8_t text_R = 0xff, text_G = 0xff, text_B = 0xff;
     // 绘制连线
     gfx_draw_line(gfx, x0+55, y0+14, x0+55, y0+50, line_R, line_G, line_B, 1);
@@ -459,42 +478,95 @@ void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_st
     gfx_draw_line(gfx, x0+15, y0+203, x0+95, y0+203, line_R, line_G, line_B, 1);
     gfx_draw_line(gfx, x0+36, y0+103, x0+55, y0+103, line_R, line_G, line_B, 1); // Res Branch
     gfx_draw_line(gfx, x0+36, y0+20, x0+55, y0+20, line_R, line_G, line_B, 1); // Res Branch
+
     // 绘制方框和文字
-    gfx_draw_rectangle(gfx, x0+40, y0+25, 30, 14, block_R, block_G, block_B, 1); // W2
+
+    uint8_t bR = block_R, bG = block_G, bB = block_B;
+
+    // NANO_LLM_PHASE_W2
+    if (phase == NANO_LLM_PHASE_W2) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    gfx_draw_rectangle(gfx, x0+40, y0+25, 30, 14, bR, bG, bB, 1); // W2
     gfx_draw_textline_centered(gfx, L"W2", x0+40+15, y0+25+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+0, y0+61, 30, 14, block_R, block_G, block_B, 1); // W1
-    gfx_draw_textline_centered(gfx, L"W1", x0+0+15, y0+61+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+80, y0+43, 30, 14, block_R, block_G, block_B, 1); // SiLU
-    gfx_draw_textline_centered(gfx, L"SiLU", x0+80+15, y0+43+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+80, y0+61, 30, 14, block_R, block_G, block_B, 1); // W3
-    gfx_draw_textline_centered(gfx, L"W3", x0+80+15, y0+61+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+40, y0+83, 30, 14, block_R, block_G, block_B, 1); // lin Norm
-    gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+83+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+40, y0+109, 30, 14, block_R, block_G, block_B, 1); // O
-    gfx_draw_textline_centered(gfx, L"O", x0+40+15, y0+109+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+0, y0+168, 30, 14, block_R, block_G, block_B, 1); // RoPE Q
-    gfx_draw_textline_centered(gfx, L"RoPE", x0+0+15, y0+168+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+40, y0+168, 30, 14, block_R, block_G, block_B, 1); // RoPE K
-    gfx_draw_textline_centered(gfx, L"RoPE", x0+40+15, y0+168+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+0, y0+185, 30, 14, block_R, block_G, block_B, 1); // Q
-    gfx_draw_textline_centered(gfx, L"Q", x0+0+15, y0+185+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+40, y0+185, 30, 14, block_R, block_G, block_B, 1); // K
-    gfx_draw_textline_centered(gfx, L"K", x0+40+15, y0+185+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+80, y0+185, 30, 14, block_R, block_G, block_B, 1); // V
-    gfx_draw_textline_centered(gfx, L"V", x0+80+15, y0+185+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+40, y0+207, 30, 14, block_R, block_G, block_B, 1); // Attn Norm
-    gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+207+7, text_R, text_G, text_B, 1);
-    gfx_draw_rectangle(gfx, x0+29, y0+138, 12, 12, block_R, block_G, block_B, 1); // Mask
-    gfx_draw_line(gfx, x0+29, y0+138, x0+29+12, y0+138+12, bg_R, bg_G, bg_B, 1);
-    gfx_draw_circle_fill(gfx, x0+55, y0+50, 6, block_R, block_G, block_B, 1); // lin Hadamard
+    gfx_draw_circle_fill(gfx, x0+55, y0+50, 6, bR, bG, bB, 1); // FFN Hadamard
     gfx_draw_line(gfx, x0+49, y0+44, x0+49+12, y0+44+12, bg_R, bg_G, bg_B, 1);
     gfx_draw_line(gfx, x0+49+12, y0+44, x0+49, y0+44+12, bg_R, bg_G, bg_B, 1);
-    gfx_draw_circle_fill(gfx, x0+55, y0+133, 6, block_R, block_G, block_B, 1); // A*V
+    bR = block_R; bG = block_G; bB = block_B;
+
+    // NANO_LLM_PHASE_W1W3
+    if (phase == NANO_LLM_PHASE_W1W3) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    gfx_draw_rectangle(gfx, x0+0, y0+61, 30, 14, bR, bG, bB, 1); // W1
+    gfx_draw_textline_centered(gfx, L"W1", x0+0+15, y0+61+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+80, y0+43, 30, 14, bR, bG, bB, 1); // SiLU
+    gfx_draw_textline_centered(gfx, L"SiLU", x0+80+15, y0+43+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+80, y0+61, 30, 14, bR, bG, bB, 1); // W3
+    gfx_draw_textline_centered(gfx, L"W3", x0+80+15, y0+61+7, text_R, text_G, text_B, 1);
+    bR = block_R; bG = block_G; bB = block_B;
+
+    // NANO_LLM_PHASE_FFN_NORM
+    if (phase == NANO_LLM_PHASE_FFN_NORM) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    gfx_draw_rectangle(gfx, x0+40, y0+83, 30, 14, bR, bG, bB, 1); // FFN Norm
+    gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+83+7, text_R, text_G, text_B, 1);
+    bR = block_R; bG = block_G; bB = block_B;
+
+    // NANO_LLM_PHASE_O
+    if (phase == NANO_LLM_PHASE_O) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    gfx_draw_rectangle(gfx, x0+40, y0+109, 30, 14, bR, bG, bB, 1); // O
+    gfx_draw_textline_centered(gfx, L"O", x0+40+15, y0+109+7, text_R, text_G, text_B, 1);
+    bR = block_R; bG = block_G; bB = block_B;
+
+    // NANO_LLM_PHASE_MHA
+    if (phase == NANO_LLM_PHASE_MHA) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    gfx_draw_rectangle(gfx, x0+29, y0+138, 12, 12, bR, bG, bB, 1); // Mask
+    gfx_draw_line(gfx, x0+29, y0+138, x0+29+12, y0+138+12, bg_R, bg_G, bg_B, 1);
+    gfx_draw_circle_fill(gfx, x0+55, y0+133, 6, bR, bG, bB, 1); // A*V
     gfx_draw_line(gfx, x0+49, y0+127, x0+49+12, y0+127+12, bg_R, bg_G, bg_B, 1);
     gfx_draw_line(gfx, x0+49+12, y0+127, x0+49, y0+127+12, bg_R, bg_G, bg_B, 1);
-    gfx_draw_circle_fill(gfx, x0+35, y0+160, 6, block_R, block_G, block_B, 1); // Q*K
+    gfx_draw_circle_fill(gfx, x0+35, y0+160, 6, bR, bG, bB, 1); // Q*K
     gfx_draw_line(gfx, x0+29, y0+154, x0+29+12, y0+154+12, bg_R, bg_G, bg_B, 1);
     gfx_draw_line(gfx, x0+29+12, y0+154, x0+29, y0+154+12, bg_R, bg_G, bg_B, 1);
+    bR = block_R; bG = block_G; bB = block_B;
+
+    // NANO_LLM_PHASE_QK_ROPE
+    if (phase == NANO_LLM_PHASE_QK_ROPE) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    gfx_draw_rectangle(gfx, x0+0, y0+168, 30, 14, bR, bG, bB, 1); // RoPE Q
+    gfx_draw_textline_centered(gfx, L"RoPE", x0+0+15, y0+168+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+40, y0+168, 30, 14, bR, bG, bB, 1); // RoPE K
+    gfx_draw_textline_centered(gfx, L"RoPE", x0+40+15, y0+168+7, text_R, text_G, text_B, 1);
+    bR = block_R; bG = block_G; bB = block_B;
+
+    // NANO_LLM_PHASE_QKV
+    if (phase == NANO_LLM_PHASE_QKV) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    gfx_draw_rectangle(gfx, x0+0, y0+185, 30, 14, bR, bG, bB, 1); // Q
+    gfx_draw_textline_centered(gfx, L"Q", x0+0+15, y0+185+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+40, y0+185, 30, 14, bR, bG, bB, 1); // K
+    gfx_draw_textline_centered(gfx, L"K", x0+40+15, y0+185+7, text_R, text_G, text_B, 1);
+    gfx_draw_rectangle(gfx, x0+80, y0+185, 30, 14, bR, bG, bB, 1); // V
+    gfx_draw_textline_centered(gfx, L"V", x0+80+15, y0+185+7, text_R, text_G, text_B, 1);
+    bR = block_R; bG = block_G; bB = block_B;
+
+    // NANO_LLM_PHASE_ATTN_NORM
+    if (phase == NANO_LLM_PHASE_ATTN_NORM) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    gfx_draw_rectangle(gfx, x0+40, y0+207, 30, 14, bR, bG, bB, 1); // Attn Norm
+    gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+207+7, text_R, text_G, text_B, 1);
+    bR = block_R; bG = block_G; bB = block_B;
+
+
+    // 绘制模型各层
+    int32_t H = gfx->height - 14 - 14;
+    int32_t layer_h = floorf(H / (total_layers * 2.0f));
+    int32_t delta_y = (int32_t)floorf((float)(H - layer_h) / (float)(total_layers - 1));
+    int32_t y_pos = y0 + 14;
+    for (int32_t ll = total_layers; ll >= 0; ll--) {
+        if (layer == ll) {
+            bR = 0x00; bG = 0xff; bB = 0xff;
+        }
+        else {
+            bR = block_R; bG = block_G; bB = block_B;
+        }
+        gfx_draw_rectangle(gfx, x0+120, y_pos, 16, layer_h, bR, bG, bB, 1);
+
+        y_pos += delta_y;
+    }
 }
 
 
@@ -585,9 +657,6 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_9) {
         // TODO
-        gfx_soft_clear(global_state->gfx);
-        ui_app_llm_model_diagram_draw(key_event, global_state, 0, 0);
-        gfx_refresh(global_state->gfx);
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
         // 暂时用作切换色彩风格功能
@@ -2419,6 +2488,14 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     ui_widget_textarea_init(key_event, global_state, global_state->w_textarea_main, UI_STR_BUF_MAX_LENGTH);
     ui_widget_textarea_init(key_event, global_state, global_state->w_textarea_asr, UI_STR_BUF_MAX_LENGTH);
     ui_widget_textarea_init(key_event, global_state, global_state->w_textarea_prefill, UI_STR_BUF_MAX_LENGTH);
+
+
+    
+    global_state->w_textarea_prefill->x = 0;
+    global_state->w_textarea_prefill->y = 14;
+    global_state->w_textarea_prefill->width = global_state->gfx->width;
+    global_state->w_textarea_prefill->height = global_state->gfx->height - 14 - 14;
+
 
     ui_app_splash_render_frame(key_event, global_state);
 

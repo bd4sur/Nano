@@ -83,6 +83,7 @@ typedef struct Global_State {
     wchar_t *llm_output_of_last_session;
     float tps_of_last_session;
     int32_t token_num_of_last_session;
+    int32_t llm_enable_observation; // 是否启用推理状态观测
 
     // ASR相关
     wchar_t *asr_output_buffer;

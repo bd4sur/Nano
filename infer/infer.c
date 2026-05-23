@@ -708,7 +708,7 @@ void rope_qwen3(float *head, uint32_t head_dim, uint32_t pos, float *freq_cis_re
 // 函数的输入输出都是x，输入的x是上一层传入的值，输出即为本层输出。复用同一块内存（原地更新），波动传递中间激活值。
 // NOTE is_causal参数的说明详见llm_forward函数
 // NOTE 本函数每次执行都会重新计算一次模型的结构参数，但是开销很小。比起逻辑上的清晰和后续流水线并行改造，这点代价是值得的。
-void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t max_seq_len, uint32_t is_causal, LLM* llm, LoRA *lora) {
+void transformer_block_forward(Nano_Context *ctx, float *x, uint32_t layer, uint32_t pos, uint32_t max_seq_len, uint32_t is_causal, LLM* llm, LoRA *lora) {
 
     LLM_Config *cfg = &llm->config;
     LLM_Param *w = &llm->params;
@@ -750,6 +750,9 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
     float *freq_cis_imag_row = w->freq_cis_imag + pos * head_dim / 2;
     
     // attention rmsnorm
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_ATTN_NORM}, ctx->observation_env);
+#endif
     rmsnorm(s->xb, x, w->rms_norm_attn + layer * n_embd, n_embd);
 
     // key and value point to the kv cache
@@ -759,6 +762,9 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
     s->v = s->v_cache + layer_offset + pos * kv_dim;
 
     // qkv matmuls for this position
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_QKV}, ctx->observation_env);
+#endif
     if (llm->quant_type == QUANT_TYPE_F32) {
         matmul(s->q, s->xb, w->wq->tensor_f32 + layer*q_dim*n_embd,  n_embd, q_dim);
         matmul(s->k, s->xb, w->wk->tensor_f32 + layer*kv_dim*n_embd, n_embd, kv_dim);
@@ -800,6 +806,9 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
     }
 
     // RoPE位置编码
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_QK_ROPE}, ctx->observation_env);
+#endif
     if (llm->arch == LLM_ARCH_NANO || llm->arch == LLM_ARCH_QWEN2) {
         for (uint32_t h = 0; h < cfg->n_head; h++) {
             float *q = s->q + h * head_dim;
@@ -824,6 +833,9 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
     }
 
     // multihead attention. iterate over all heads
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_MHA}, ctx->observation_env);
+#endif
     int h;
     #pragma omp parallel for private(h)
     for (h = 0; h < cfg->n_head; h++) {
@@ -865,6 +877,9 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
     }
 
     // final matmul to get the output of the attention
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_O}, ctx->observation_env);
+#endif
     if (llm->quant_type == QUANT_TYPE_F32) {
         matmul(s->xb2, s->xba, w->wo->tensor_f32 + layer*n_embd*q_dim, q_dim, n_embd);
     }
@@ -891,10 +906,16 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
     }
 
     // ffn rmsnorm
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_FFN_NORM}, ctx->observation_env);
+#endif
     rmsnorm(s->xb, x, w->rms_norm_ffn + layer*n_embd, n_embd);
 
     // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
     // first calculate self.w1(x) and self.w3(x)
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_W1W3}, ctx->observation_env);
+#endif
     if (llm->quant_type == QUANT_TYPE_F32) {
         matmul(s->hb, s->xb, w->w1->tensor_f32 + layer*n_hidden*n_embd, n_embd, n_hidden);
         matmul(s->hb2, s->xb, w->w3->tensor_f32 + layer*n_hidden*n_embd, n_embd, n_hidden);
@@ -921,6 +942,9 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
     }
 
     // final matmul to get the output of the ffn
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_W2}, ctx->observation_env);
+#endif
     if (llm->quant_type == QUANT_TYPE_F32) {
         matmul(s->xb, s->hb, w->w2->tensor_f32 + layer*n_embd*n_hidden, n_hidden, n_embd);
     }
@@ -942,7 +966,7 @@ void transformer_block_forward(float *x, uint32_t layer, uint32_t pos, uint32_t 
 // NOTE 该函数实现了在1个token+过往KVCache上的完整的因果自注意力前向推理。对于一般的自回归因果语言模型推理，is_causal=1。
 //      参数is_causal=0启用全局自注意力，仅用于（且必须搭配用于）seq2seq函数。因该函数并没有实现完整的seq2seq全局自注意力前向推理。
 //      seq2seq函数主要是整活用途，有大量冗余计算，效率极低。
-float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, uint32_t is_causal, LLM* llm, LoRA *lora) {
+float* llm_forward(Nano_Context *ctx, uint32_t token, uint32_t pos, uint32_t max_seq_len, uint32_t is_causal, LLM* llm, LoRA *lora) {
 
     LLM_Config *cfg = &llm->config;
     LLM_Param *w = &llm->params;
@@ -955,18 +979,27 @@ float* llm_forward(uint32_t token, uint32_t pos, uint32_t max_seq_len, uint32_t 
     float *x = s->x;
 
     // 模型入口：将输入token的one-hot转为嵌入向量，等价于直接查token_embedding表
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = -1, .phase = NANO_LLM_PHASE_EMBEDDING}, ctx->observation_env);
+#endif
     float* content_row = w->token_embedding + token * n_embd;
     memcpy(x, content_row, n_embd*sizeof(*x));
 
     // 前向传播，遍历各层的Transformer块，以x为层间传递的中间值（原地更新）
     for(uint64_t l = 0; l < cfg->n_layer; l++) {
-        transformer_block_forward(x, l, pos, max_seq_len, is_causal, llm, lora);
+        transformer_block_forward(ctx, x, l, pos, max_seq_len, is_causal, llm, lora);
     }
 
     // 最后一层RMSNorm
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = -1, .phase = NANO_LLM_PHASE_FINAL_NORM}, ctx->observation_env);
+#endif
     rmsnorm(x, x, w->rms_norm_final, n_embd);
 
     // 模型出口：将最终的嵌入向量解码成logits
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = -1, .phase = NANO_LLM_PHASE_CLASSIFY}, ctx->observation_env);
+#endif
     if (llm->quant_type == QUANT_TYPE_F32) {
         matmul(s->logits, x, w->token_classifier->tensor_f32, cfg->n_embd, cfg->vocab_size);
     }
@@ -1090,7 +1123,7 @@ uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t p
 
     uint32_t next_token = output_ids[pos];
 
-    float* logits = llm_forward(next_token, pos, ctx->max_seq_len, 1, llm, lora);
+    float* logits = llm_forward(ctx, next_token, pos, ctx->max_seq_len, 1, llm, lora);
 
     // Pre-fill: if we are still processing the input prompt, force the next prompt token
     if (is_prefilling == 1) {
@@ -1099,6 +1132,9 @@ uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t p
     }
     // Auto-regressive Decode
     else {
+#if ENABLE_NANO_OBSERVATION
+        ctx->observation((Nano_Observation){.layer = -1, .phase = NANO_LLM_PHASE_SAMPLE}, ctx->observation_env);
+#endif
         // 复读惩罚：对过往出现过的词元施加惩罚，词元出现得越多，概率越低: ref arxiv:1909.05858
         uint32_t *tokenset = (uint32_t *)platform_calloc(sampler->vocab_size, sizeof(uint32_t));
         for(uint32_t i = 0; i < pos; i++) {
@@ -1315,14 +1351,14 @@ void seq2seq(Nano_Context *ctx, wchar_t *input_list, wchar_t *output_list, uint3
     //   下游各层的KVCache依赖于上游各层完成全局自注意力（输出的中间值）。因此这个过程需要执行L次。
     for (uint32_t i = 0; i < llm->config.n_layer; i++) {
         for (uint32_t pos = 0; pos < max_seq_len; pos++) {
-            (void)llm_forward(input_ids[pos], pos, max_seq_len, 0, llm, NULL);
+            (void)llm_forward(ctx, input_ids[pos], pos, max_seq_len, 0, llm, NULL);
 
         }
     }
 
     // 阶段2：KVCache全部填充后，再对每个pos执行完整的forward，获得每个pos上的logits
     for (uint32_t pos = 0; pos < max_seq_len; pos++) {
-        float *logits = llm_forward(input_ids[pos], pos, max_seq_len, 0, llm, NULL);
+        float *logits = llm_forward(ctx, input_ids[pos], pos, max_seq_len, 0, llm, NULL);
         memcpy(output_logits + pos * sampler->vocab_size, logits, sampler->vocab_size *sizeof(float));
     }
 

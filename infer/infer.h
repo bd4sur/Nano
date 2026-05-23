@@ -60,6 +60,29 @@ extern "C" {
 // 数据结构定义
 // ===============================================================================
 
+#define ENABLE_NANO_OBSERVATION (1)
+
+#define NANO_LLM_PHASE_EMBEDDING  (1)
+#define NANO_LLM_PHASE_ATTN_NORM  (2)
+#define NANO_LLM_PHASE_QKV        (3)
+#define NANO_LLM_PHASE_QK_ROPE    (4)
+#define NANO_LLM_PHASE_MHA        (5)
+#define NANO_LLM_PHASE_O          (6)
+#define NANO_LLM_PHASE_FFN_NORM   (7)
+#define NANO_LLM_PHASE_W1W3       (8)
+#define NANO_LLM_PHASE_W2         (9)
+#define NANO_LLM_PHASE_FINAL_NORM (10)
+#define NANO_LLM_PHASE_CLASSIFY   (11)
+#define NANO_LLM_PHASE_SAMPLE     (12)
+
+typedef struct Nano_Observation {
+    int32_t layer;
+    int32_t phase;
+    uint32_t token_0;
+    uint32_t token_1;
+    uint32_t token_2;
+} Nano_Observation;
+
 typedef struct {
     uint32_t block_size;
     uint32_t vocab_size;
@@ -203,6 +226,9 @@ typedef struct Nano_Context {
     Sampler *sampler;
     uint32_t max_seq_len; // NOTE 每个context的最大序列长度可设置，不一定等于模型的block_size。这样可以按需控制KV缓存的大小。
     uint64_t random_seed;
+    // 观测钩子相关
+    void (*observation)(Nano_Observation obs, void *env); // 观测钩子函数
+    void *observation_env; // 观测钩子的词法环境
 } Nano_Context;
 
 typedef struct Nano_Session {

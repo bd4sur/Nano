@@ -8,6 +8,17 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <linux/fb.h>
+#include <time.h>
+
+// 最高刷新频率限制（Hz），编译时可通过 -DREFRESH_RATE_LIMIT_HZ=30 覆盖。
+// 设为 0 或负数则恢复默认值 60Hz。
+#ifndef REFRESH_RATE_LIMIT_HZ
+#define REFRESH_RATE_LIMIT_HZ 60
+#endif
+#if REFRESH_RATE_LIMIT_HZ <= 0
+#undef REFRESH_RATE_LIMIT_HZ
+#define REFRESH_RATE_LIMIT_HZ 60
+#endif
 
 // Framebuffer device path. Can be overridden by FRAMEBUFFER environment variable.
 #ifndef FB_DEVICE
@@ -21,6 +32,29 @@ static uint32_t fb_line_length = 0;
 static uint32_t fb_bpp = 0;
 static uint32_t fb_width = 0;
 static uint32_t fb_height = 0;
+
+
+static inline void limit_refresh_rate(void) {
+    static struct timespec last_ts = {0, 0};
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (last_ts.tv_sec != 0 || last_ts.tv_nsec != 0) {
+        long elapsed_us = (now.tv_sec - last_ts.tv_sec) * 1000000L
+                        + (now.tv_nsec - last_ts.tv_nsec) / 1000L;
+        long target_interval_us = 1000000L / REFRESH_RATE_LIMIT_HZ;
+        if (elapsed_us < target_interval_us) {
+            usleep((useconds_t)(target_interval_us - elapsed_us));
+        }
+    }
+    last_ts = now;
+}
+
+static inline void sync_and_throttle(void) {
+    if (fb_mmap != NULL && fb_mmap_size > 0) {
+        msync(fb_mmap, fb_mmap_size, MS_SYNC);
+    }
+    limit_refresh_rate();
+}
 
 // Pixel format info from fb_var_screeninfo
 static struct {
@@ -335,6 +369,8 @@ void display_hal_refresh(
             }
         }
     }
+
+    sync_and_throttle();
 }
 
 void display_hal_refresh_rgb565(
@@ -385,6 +421,7 @@ void display_hal_refresh_rgb565(
             uint8_t *src_start = (uint8_t *)frame_buffer_rgb565 + y0 * fb_width_in * sizeof(uint16_t);
             uint8_t *dst_start = fb_mmap + offset_y * fb_line_length;
             memcpy(dst_start, src_start, view_height * fb_line_length);
+            sync_and_throttle();
             return;
         }
 
@@ -397,6 +434,7 @@ void display_hal_refresh_rgb565(
             uint8_t *dst_row = fb_mmap + dst_y * fb_line_length + offset_x * 2;
             memcpy(dst_row, src_row, copy_width * sizeof(uint16_t));
         }
+        sync_and_throttle();
         return;
     }
 
@@ -418,6 +456,8 @@ void display_hal_refresh_rgb565(
             write_pixel((uint32_t)dst_x, (uint32_t)dst_y, r, g, b);
         }
     }
+
+    sync_and_throttle();
 }
 
 void display_hal_init(void) {
