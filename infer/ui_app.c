@@ -393,7 +393,7 @@ void llm_observation(Nano_Observation obs, void *env) {
     // swprintf(obs_text, 64, L"Layer=%d | Phase=%d", obs.layer, obs.phase);
 
     gfx_draw_rectangle(gfx, 0, 14, gfx->width/2, gfx->height-14-14, 0, 0, 0, 1);
-    ui_app_llm_model_diagram_draw(NULL, global_state, 0, 0, total_layers, obs.layer, obs.phase);
+    ui_app_llm_model_diagram_draw(NULL, global_state, 0, 0, total_layers, obs);
     gfx_refresh(gfx);
 }
 
@@ -455,13 +455,19 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
 }
 
 
-void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_state, int32_t x0, int32_t y0, int32_t total_layers, int32_t layer, int32_t phase) {
+void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_state, int32_t x0, int32_t y0, int32_t total_layers, Nano_Observation obs) {
     Nano_GFX *gfx = global_state->gfx;
+    int32_t layer = obs.layer;
+    int32_t phase = obs.phase;
+
     // 色彩
     uint8_t bg_R = 0x00, bg_G = 0x00, bg_B = 0x00;
-    uint8_t line_R = 0xaa, line_G = 0xaa, line_B = 0xaa;
+    uint8_t line_R = 0x99, line_G = 0x99, line_B = 0x99;
     uint8_t block_R = 0x33, block_G = 0x33, block_B = 0x33;
-    uint8_t text_R = 0xff, text_G = 0xff, text_B = 0xff;
+    uint8_t block_active_R = 0x00, block_active_G = 0xff, block_active_B = 0x00;
+    uint8_t text_R = 0xcc, text_G = 0xcc, text_B = 0xcc;
+    uint8_t text_active_R = 0xff, text_active_G = 0xff, text_active_B = 0xff;
+
     // 绘制连线
     gfx_draw_line(gfx, x0+55, y0+14, x0+55, y0+50, line_R, line_G, line_B, 1);
     gfx_draw_line(gfx, x0+15, y0+50, x0+95, y0+50, line_R, line_G, line_B, 1);
@@ -476,46 +482,59 @@ void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_st
     gfx_draw_line(gfx, x0+15, y0+203, x0+15, y0+160, line_R, line_G, line_B, 1);
     gfx_draw_line(gfx, x0+55, y0+160, x0+55, y0+227, line_R, line_G, line_B, 1);
     gfx_draw_line(gfx, x0+15, y0+203, x0+95, y0+203, line_R, line_G, line_B, 1);
+
     gfx_draw_line(gfx, x0+36, y0+103, x0+55, y0+103, line_R, line_G, line_B, 1); // Res Branch
+    gfx_draw_line(gfx, x0+53, y0+103, x0+57, y0+103, bg_R, bg_G, bg_B, 1);
+    gfx_draw_line(gfx, x0+55, y0+101, x0+55, y0+105, bg_R, bg_G, bg_B, 1);
+    gfx_draw_line(gfx, x0+54, y0+103, x0+56, y0+103, line_R+10, line_G+10, line_B+10, 1);
+    gfx_draw_line(gfx, x0+55, y0+102, x0+55, y0+104, line_R+10, line_G+10, line_B+10, 1);
+    gfx_draw_textline_centered(gfx, L"X1", x0+36-6, y0+103, line_R, line_G, line_B, 1);
     gfx_draw_line(gfx, x0+36, y0+20, x0+55, y0+20, line_R, line_G, line_B, 1); // Res Branch
+    gfx_draw_line(gfx, x0+53, y0+20, x0+57, y0+20, bg_R, bg_G, bg_B, 1);
+    gfx_draw_line(gfx, x0+55, y0+20-2, x0+55, y0+20+2, bg_R, bg_G, bg_B, 1);
+    gfx_draw_line(gfx, x0+54, y0+20, x0+56, y0+20, line_R+10, line_G+10, line_B+10, 1);
+    gfx_draw_line(gfx, x0+55, y0+20-1, x0+55, y0+20+1, line_R+10, line_G+10, line_B+10, 1);
+    gfx_draw_textline_centered(gfx, L"X2", x0+36-6, y0+20, line_R, line_G, line_B, 1);
+
 
     // 绘制方框和文字
 
     uint8_t bR = block_R, bG = block_G, bB = block_B;
+    uint8_t tR = text_R, tG = text_G, tB = text_B;
 
     // NANO_LLM_PHASE_W2
-    if (phase == NANO_LLM_PHASE_W2) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    if (phase == NANO_LLM_PHASE_W2) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
     gfx_draw_rectangle(gfx, x0+40, y0+25, 30, 14, bR, bG, bB, 1); // W2
-    gfx_draw_textline_centered(gfx, L"W2", x0+40+15, y0+25+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"W2", x0+40+15, y0+25+7, tR, tG, tB, 1);
     gfx_draw_circle_fill(gfx, x0+55, y0+50, 6, bR, bG, bB, 1); // FFN Hadamard
     gfx_draw_line(gfx, x0+49, y0+44, x0+49+12, y0+44+12, bg_R, bg_G, bg_B, 1);
     gfx_draw_line(gfx, x0+49+12, y0+44, x0+49, y0+44+12, bg_R, bg_G, bg_B, 1);
     bR = block_R; bG = block_G; bB = block_B;
 
     // NANO_LLM_PHASE_W1W3
-    if (phase == NANO_LLM_PHASE_W1W3) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    if (phase == NANO_LLM_PHASE_W1W3) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
     gfx_draw_rectangle(gfx, x0+0, y0+61, 30, 14, bR, bG, bB, 1); // W1
-    gfx_draw_textline_centered(gfx, L"W1", x0+0+15, y0+61+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"W1", x0+0+15, y0+61+7, tR, tG, tB, 1);
     gfx_draw_rectangle(gfx, x0+80, y0+43, 30, 14, bR, bG, bB, 1); // SiLU
-    gfx_draw_textline_centered(gfx, L"SiLU", x0+80+15, y0+43+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"SiLU", x0+80+15, y0+43+7, tR, tG, tB, 1);
     gfx_draw_rectangle(gfx, x0+80, y0+61, 30, 14, bR, bG, bB, 1); // W3
-    gfx_draw_textline_centered(gfx, L"W3", x0+80+15, y0+61+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"W3", x0+80+15, y0+61+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
 
     // NANO_LLM_PHASE_FFN_NORM
-    if (phase == NANO_LLM_PHASE_FFN_NORM) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    if (phase == NANO_LLM_PHASE_FFN_NORM) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
     gfx_draw_rectangle(gfx, x0+40, y0+83, 30, 14, bR, bG, bB, 1); // FFN Norm
-    gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+83+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+83+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
 
     // NANO_LLM_PHASE_O
-    if (phase == NANO_LLM_PHASE_O) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    if (phase == NANO_LLM_PHASE_O) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
     gfx_draw_rectangle(gfx, x0+40, y0+109, 30, 14, bR, bG, bB, 1); // O
-    gfx_draw_textline_centered(gfx, L"O", x0+40+15, y0+109+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"O", x0+40+15, y0+109+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
 
     // NANO_LLM_PHASE_MHA
-    if (phase == NANO_LLM_PHASE_MHA) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    if (phase == NANO_LLM_PHASE_MHA) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
     gfx_draw_rectangle(gfx, x0+29, y0+138, 12, 12, bR, bG, bB, 1); // Mask
     gfx_draw_line(gfx, x0+29, y0+138, x0+29+12, y0+138+12, bg_R, bg_G, bg_B, 1);
     gfx_draw_circle_fill(gfx, x0+55, y0+133, 6, bR, bG, bB, 1); // A*V
@@ -527,37 +546,37 @@ void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_st
     bR = block_R; bG = block_G; bB = block_B;
 
     // NANO_LLM_PHASE_QK_ROPE
-    if (phase == NANO_LLM_PHASE_QK_ROPE) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    if (phase == NANO_LLM_PHASE_QK_ROPE) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
     gfx_draw_rectangle(gfx, x0+0, y0+168, 30, 14, bR, bG, bB, 1); // RoPE Q
-    gfx_draw_textline_centered(gfx, L"RoPE", x0+0+15, y0+168+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"RoPE", x0+0+15, y0+168+7, tR, tG, tB, 1);
     gfx_draw_rectangle(gfx, x0+40, y0+168, 30, 14, bR, bG, bB, 1); // RoPE K
-    gfx_draw_textline_centered(gfx, L"RoPE", x0+40+15, y0+168+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"RoPE", x0+40+15, y0+168+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
 
     // NANO_LLM_PHASE_QKV
-    if (phase == NANO_LLM_PHASE_QKV) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    if (phase == NANO_LLM_PHASE_QKV) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
     gfx_draw_rectangle(gfx, x0+0, y0+185, 30, 14, bR, bG, bB, 1); // Q
-    gfx_draw_textline_centered(gfx, L"Q", x0+0+15, y0+185+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"Q", x0+0+15, y0+185+7, tR, tG, tB, 1);
     gfx_draw_rectangle(gfx, x0+40, y0+185, 30, 14, bR, bG, bB, 1); // K
-    gfx_draw_textline_centered(gfx, L"K", x0+40+15, y0+185+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"K", x0+40+15, y0+185+7, tR, tG, tB, 1);
     gfx_draw_rectangle(gfx, x0+80, y0+185, 30, 14, bR, bG, bB, 1); // V
-    gfx_draw_textline_centered(gfx, L"V", x0+80+15, y0+185+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"V", x0+80+15, y0+185+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
 
     // NANO_LLM_PHASE_ATTN_NORM
-    if (phase == NANO_LLM_PHASE_ATTN_NORM) { bR = 0x00; bG = 0xdf; bB = 0x00; }
+    if (phase == NANO_LLM_PHASE_ATTN_NORM) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
     gfx_draw_rectangle(gfx, x0+40, y0+207, 30, 14, bR, bG, bB, 1); // Attn Norm
-    gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+207+7, text_R, text_G, text_B, 1);
+    gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+207+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
 
 
     // 绘制模型各层
     int32_t H = gfx->height - 14 - 14;
-    int32_t layer_h = floorf(H / (total_layers * 2.0f));
-    int32_t delta_y = (int32_t)floorf((float)(H - layer_h) / (float)(total_layers - 1));
+    int32_t layer_h = floorf(H / ((total_layers+2) * 2.0f));
+    int32_t delta_y = (int32_t)floorf((float)(H - layer_h) / (float)((total_layers+2) - 1));
     int32_t y_pos = y0 + 14;
-    for (int32_t ll = total_layers; ll >= 0; ll--) {
-        if (layer == ll) {
+    for (int32_t ll = total_layers+1; ll >= 0; ll--) { // 包含Embd和Cls额外两层
+        if ((layer == -1 && ll == 0) || (ll == layer + 1)) {
             bR = 0x00; bG = 0xff; bB = 0xff;
         }
         else {
@@ -567,6 +586,33 @@ void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_st
 
         y_pos += delta_y;
     }
+
+    // 显示top6
+    static uint32_t tokens[6];
+    Nano_Context *ctx = global_state->llm_ctx;
+    if (obs.token_0) {
+        tokens[0] = obs.token_0;
+        tokens[1] = obs.token_1;
+        tokens[2] = obs.token_2;
+        tokens[3] = obs.token_3;
+        tokens[4] = obs.token_4;
+        tokens[5] = obs.token_5;
+    }
+    for (int32_t i = 0; i < 6; i++) {
+        wchar_t *top_token_text = NULL;
+        if (ctx->llm->arch == LLM_ARCH_NANO) {
+            top_token_text = decode_nano(ctx->tokenizer, tokens + i, 1);
+        }
+        else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
+            top_token_text = decode_bpe(ctx->tokenizer, tokens + i, 1);
+        }
+        else {
+            return;
+        }
+        gfx_draw_textline(gfx, top_token_text, x0+ 140, y0+140+i*13, 255, 255, 0, 1);
+        free(top_token_text);
+    }
+
 }
 
 

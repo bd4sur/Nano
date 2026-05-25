@@ -81,6 +81,9 @@ typedef struct Nano_Observation {
     uint32_t token_0;
     uint32_t token_1;
     uint32_t token_2;
+    uint32_t token_3;
+    uint32_t token_4;
+    uint32_t token_5;
 } Nano_Observation;
 
 typedef struct {

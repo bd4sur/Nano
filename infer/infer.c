@@ -992,13 +992,13 @@ float* llm_forward(Nano_Context *ctx, uint32_t token, uint32_t pos, uint32_t max
 
     // 最后一层RMSNorm
 #if ENABLE_NANO_OBSERVATION
-    ctx->observation((Nano_Observation){.layer = -1, .phase = NANO_LLM_PHASE_FINAL_NORM}, ctx->observation_env);
+    ctx->observation((Nano_Observation){.layer = cfg->n_layer, .phase = NANO_LLM_PHASE_FINAL_NORM}, ctx->observation_env);
 #endif
     rmsnorm(x, x, w->rms_norm_final, n_embd);
 
     // 模型出口：将最终的嵌入向量解码成logits
 #if ENABLE_NANO_OBSERVATION
-    ctx->observation((Nano_Observation){.layer = -1, .phase = NANO_LLM_PHASE_CLASSIFY}, ctx->observation_env);
+    ctx->observation((Nano_Observation){.layer = cfg->n_layer, .phase = NANO_LLM_PHASE_CLASSIFY}, ctx->observation_env);
 #endif
     if (llm->quant_type == QUANT_TYPE_F32) {
         matmul(s->logits, x, w->token_classifier->tensor_f32, cfg->n_embd, cfg->vocab_size);
@@ -1021,7 +1021,7 @@ float* llm_forward(Nano_Context *ctx, uint32_t token, uint32_t pos, uint32_t max
 // ===============================================================================
 
 // 贪心采样：返回概率最大的下标
-int sample_argmax(float* probabilities, int n) {
+int sample_argmax(Nano_Context *ctx, float* probabilities, int n) {
     // return the index that has the highest probability
     int max_i = 0;
     float max_p = probabilities[0];
@@ -1037,7 +1037,7 @@ int sample_argmax(float* probabilities, int n) {
 // 概率采样（香草味的）
 // sample index from probabilities (they must sum to 1!)
 // coin is a random number in [0, 1), usually from random_f32()
-int sample_multinomial(float* probabilities, int n, float coin) {
+int sample_multinomial(Nano_Context *ctx, float* probabilities, int n, float coin) {
     float cdf = 0.0f;
     for (int i = 0; i < n; i++) {
         cdf += probabilities[i];
@@ -1057,7 +1057,7 @@ int compare(const void* a, const void* b) {
 }
 
 // Top-P采样（核采样）：只在累积概率达到p的概率最高的若干个词元中采样
-int sample_top_p(float* probabilities, int n, float top_p, ProbIndex* probindex, float coin) {
+int sample_top_p(Nano_Context *ctx, float* probabilities, int n, float top_p, ProbIndex* probindex, float coin) {
     int n0 = 0;
     const float cutoff = (1.0f - top_p) / (n - 1);
     for (int i = 0; i < n; i++) {
@@ -1080,6 +1080,19 @@ int sample_top_p(float* probabilities, int n, float top_p, ProbIndex* probindex,
         }
     }
 
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){
+        .layer = -1,
+        .phase = NANO_LLM_PHASE_SAMPLE,
+        .token_0 = (n0 > 0) ? probindex[0].index : 0,
+        .token_1 = (n0 > 1) ? probindex[1].index : 0,
+        .token_2 = (n0 > 2) ? probindex[2].index : 0,
+        .token_3 = (n0 > 3) ? probindex[3].index : 0,
+        .token_4 = (n0 > 4) ? probindex[4].index : 0,
+        .token_5 = (n0 > 5) ? probindex[5].index : 0,
+    }, ctx->observation_env);
+#endif
+
     // sample from the truncated list
     float r = coin * cumulative_prob;
     float cdf = 0.0f;
@@ -1089,6 +1102,7 @@ int sample_top_p(float* probabilities, int n, float top_p, ProbIndex* probindex,
             return probindex[i].index;
         }
     }
+
     return probindex[last_idx].index; // in case of rounding errors
 }
 
@@ -1149,7 +1163,7 @@ uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t p
 
         // 温度采样：当温度设为0时，退化为贪心采样
         if (sampler->temperature == 0.0f) {
-            next_token = sample_argmax(logits, sampler->vocab_size);
+            next_token = sample_argmax(ctx, logits, sampler->vocab_size);
         }
         else {
             for(uint32_t q = 0; q < sampler->vocab_size; q++) {
@@ -1162,10 +1176,10 @@ uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t p
             float coin = random_f32(&sampler->rng_state);
 
             if (sampler->top_p > 0 || sampler->top_p < 1) {
-                next_token = sample_top_p(logits, sampler->vocab_size, sampler->top_p, sampler->probindex, coin);
+                next_token = sample_top_p(ctx, logits, sampler->vocab_size, sampler->top_p, sampler->probindex, coin);
             }
             else {
-                next_token = sample_multinomial(logits, sampler->vocab_size, coin);
+                next_token = sample_multinomial(ctx, logits, sampler->vocab_size, coin);
             }
         }
     }
@@ -1365,7 +1379,7 @@ void seq2seq(Nano_Context *ctx, wchar_t *input_list, wchar_t *output_list, uint3
     // 阶段3：对每个pos上的logits进行单独的采样
     for (uint32_t pos = 0; pos < max_seq_len; pos++) {
         float *logits = output_logits + pos * sampler->vocab_size;
-        output_ids[pos] = sample_argmax(logits, sampler->vocab_size);
+        output_ids[pos] = sample_argmax(ctx, logits, sampler->vocab_size);
     }
 
     free(input_ids);
