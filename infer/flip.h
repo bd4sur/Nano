@@ -18,7 +18,7 @@ extern "C" {
  *   hourglass_enabled - Non-zero to set up an hourglass obstacle scene;
  *                       zero for the simple open-tank demo.
  */
-void flip_init(float pool_width, float pool_height, int32_t resolution, int32_t hourglass_enabled);
+void flip_init(float pool_width, float pool_height, int32_t resolution, uint64_t initial_random_seed, int32_t hourglass_enabled);
 
 /*
  * Clean up all internally allocated memory.
@@ -47,6 +47,7 @@ void flip_cleanup(void);
  *   show_grid         - Non-zero to draw MAC grid cells
  *   funnel_neck_damping      - Velocity damping in the hourglass neck (0.0 ~ 0.6)
  *   funnel_pressure_resistance - Artificial pressure resistance in the neck (0.0 ~ 0.3)
+ *   is_throttle - 节流程度：0为不节流；1为最小节流；100为最大节流（彻底堵住瓶颈）
  */
 void render_flip(Nano_GFX *gfx,
                  int32_t center_x, int32_t center_y, int32_t width, int32_t height,

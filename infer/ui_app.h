@@ -132,7 +132,11 @@ int32_t setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_St
 int32_t asr_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
 int32_t tts_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
 
-
+void ui_app_setting_value_input_draw(
+    Key_Event *key_event, Global_State *global_state, int32_t value_type,
+    int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, float timezone,
+    float longitude, float latitude, int32_t cursor_pos
+);
 
 
 

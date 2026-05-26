@@ -385,76 +385,6 @@ void init_model_menu(Key_Event *key_event, Global_State *global_state) {
 }
 
 
-void llm_observation(Nano_Observation obs, void *env) {
-    Global_State *global_state = (Global_State*)env;
-    Nano_GFX *gfx = global_state->gfx;
-    int32_t total_layers = global_state->llm_ctx->llm->config.n_layer;
-    // wchar_t obs_text[64];
-    // swprintf(obs_text, 64, L"Layer=%d | Phase=%d", obs.layer, obs.phase);
-
-    gfx_draw_rectangle(gfx, 0, 14, gfx->width/2, gfx->height-14-14, 0, 0, 0, 1);
-    ui_app_llm_model_diagram_draw(NULL, global_state, 0, 0, total_layers, obs);
-    gfx_refresh(gfx);
-}
-
-int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
-    int32_t item_index = ms->current_item_index;
-
-    if (gs->llm_ctx) {
-        llm_context_free(gs->llm_ctx);
-    }
-
-    int32_t model_count = (int32_t)(sizeof(preset_model_configs) / sizeof(preset_model_configs[0]));
-
-    if (item_index < model_count) {
-        Model_Config mc = preset_model_configs[item_index];
-        gs->llm_model_name = mc.model_name;
-        gs->llm_is_thinking_model = mc.is_thinking_model;
-        gs->llm_model_path = mc.model_path;
-        gs->llm_lora_path = mc.lora_path;
-        gs->llm_repetition_penalty = mc.repetition_penalty;
-        gs->llm_temperature = mc.temperature;
-        gs->llm_top_p = mc.top_p;
-        gs->llm_top_k = mc.top_k;
-        gs->llm_max_seq_len = mc.max_seq_len;
-    }
-    else {
-        return STATE_MAIN_MENU;
-    }
-
-    wchar_t llm_loading_prompt[88];
-    swprintf(llm_loading_prompt, 88, L" 正在加载语言模型\n %ls\n 请稍等...", gs->llm_model_name);
-
-    ui_widget_textarea_set(ke, gs, gs->w_textarea_main, llm_loading_prompt, 0, 0);
-    ui_widget_textarea_draw(ke, gs, gs->w_textarea_main);
-
-    gs->llm_ctx = llm_context_init(
-        gs->llm_model_path,
-        gs->llm_lora_path,
-        gs->llm_max_seq_len,
-        gs->llm_repetition_penalty,
-        gs->llm_temperature,
-        gs->llm_top_p,
-        gs->llm_top_k,
-        gs->timestamp);
-
-    gs->llm_ctx->observation = llm_observation;
-    gs->llm_ctx->observation_env = gs; // 模拟闭包：将观测函数的词法环境指向UI全局上下文，这样就可以在观测回调中使用UI的API
-
-    if (gs->llm_enable_observation) {
-        gs->w_textarea_main->x = 160;
-        gs->w_textarea_main->width = gs->gfx->width - 160;
-        
-        gs->w_textarea_prefill->x = 160;
-        gs->w_textarea_prefill->width = gs->gfx->width - 160;
-    }
-
-    // 进入电子鹦鹉
-    ui_widget_input_init(ke, gs, gs->w_input_main);
-    return STATE_LLM_INPUT;
-}
-
-
 void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_state, int32_t x0, int32_t y0, int32_t total_layers, Nano_Observation obs) {
     Nano_GFX *gfx = global_state->gfx;
     int32_t layer = obs.layer;
@@ -614,6 +544,79 @@ void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_st
     }
 
 }
+
+
+void llm_observation(Nano_Observation obs, void *env) {
+    Global_State *global_state = (Global_State*)env;
+    Nano_GFX *gfx = global_state->gfx;
+    int32_t total_layers = global_state->llm_ctx->llm->config.n_layer;
+    // wchar_t obs_text[64];
+    // swprintf(obs_text, 64, L"Layer=%d | Phase=%d", obs.layer, obs.phase);
+
+    gfx_draw_rectangle(gfx, 0, 14, gfx->width/2, gfx->height-14-14, 0, 0, 0, 1);
+    ui_app_llm_model_diagram_draw(NULL, global_state, 0, 0, total_layers, obs);
+    gfx_refresh(gfx);
+}
+
+int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
+    int32_t item_index = ms->current_item_index;
+
+    if (gs->llm_ctx) {
+        llm_context_free(gs->llm_ctx);
+    }
+
+    int32_t model_count = (int32_t)(sizeof(preset_model_configs) / sizeof(preset_model_configs[0]));
+
+    if (item_index < model_count) {
+        Model_Config mc = preset_model_configs[item_index];
+        gs->llm_model_name = mc.model_name;
+        gs->llm_is_thinking_model = mc.is_thinking_model;
+        gs->llm_model_path = mc.model_path;
+        gs->llm_lora_path = mc.lora_path;
+        gs->llm_repetition_penalty = mc.repetition_penalty;
+        gs->llm_temperature = mc.temperature;
+        gs->llm_top_p = mc.top_p;
+        gs->llm_top_k = mc.top_k;
+        gs->llm_max_seq_len = mc.max_seq_len;
+    }
+    else {
+        return STATE_MAIN_MENU;
+    }
+
+    wchar_t llm_loading_prompt[88];
+    swprintf(llm_loading_prompt, 88, L" 正在加载语言模型\n %ls\n 请稍等...", gs->llm_model_name);
+
+    ui_widget_textarea_set(ke, gs, gs->w_textarea_main, llm_loading_prompt, 0, 0);
+    ui_widget_textarea_draw(ke, gs, gs->w_textarea_main);
+
+    gs->llm_ctx = llm_context_init(
+        gs->llm_model_path,
+        gs->llm_lora_path,
+        gs->llm_max_seq_len,
+        gs->llm_repetition_penalty,
+        gs->llm_temperature,
+        gs->llm_top_p,
+        gs->llm_top_k,
+        gs->timestamp);
+
+    gs->llm_ctx->observation = llm_observation;
+    gs->llm_ctx->observation_env = gs; // 模拟闭包：将观测函数的词法环境指向UI全局上下文，这样就可以在观测回调中使用UI的API
+
+    if (gs->llm_enable_observation) {
+        gs->w_textarea_main->x = 160;
+        gs->w_textarea_main->width = gs->gfx->width - 160;
+        
+        gs->w_textarea_prefill->x = 160;
+        gs->w_textarea_prefill->width = gs->gfx->width - 160;
+    }
+
+    // 进入电子鹦鹉
+    ui_widget_input_init(ke, gs, gs->w_input_main);
+    return STATE_LLM_INPUT;
+}
+
+
+
 
 
 
@@ -1064,15 +1067,20 @@ static int32_t s_ui_flip_setting_count = 0;
 static int32_t s_ui_flip_show_particles = 1;
 static int32_t s_ui_flip_show_grid = 1;
 static int32_t s_ui_flip_is_throttle = 0;
+static int32_t s_ui_flip_init_throttle = 50;
 
 static int32_t s_ui_flip_last_upper_count = 0; // 用于计算粒子流量
 static uint64_t s_ui_flip_last_upper_count_timestamp = 0; // 用于计算粒子流量
 static uint64_t s_ui_fanqie_start_timestamp = 0;
+static uint64_t s_ui_fanqie_stop_timestamp = 0;
+static int32_t s_ui_fanqie_is_running = 0;
 
 void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
     s_ui_fanqie_start_timestamp = global_state->timestamp;
+    s_ui_fanqie_stop_timestamp = 0;
+    s_ui_fanqie_is_running = 1;
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
-    flip_init(k, 1.0f, FLIP_RESOLUTION, 1);
+    flip_init(k, 1.0f, FLIP_RESOLUTION, global_state->timestamp, 1);
 }
 
 void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) {
@@ -1171,13 +1179,29 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     gfx_draw_line_anti_aliasing(global_state->gfx, 150, 120, 0, 233, 3, 0x00, 0x01, 0x02, 1);
     gfx_draw_line_anti_aliasing(global_state->gfx, 178, 120, 319, 227, 3, 0x00, 0x01, 0x02, 1);
 
+    // 判断沙漏重置事件
+    if ((lower_count < 1 && gravity_y < 0) || (upper_count < 1 && gravity_y > 0)) {
+        s_ui_fanqie_start_timestamp = global_state->timestamp;
+        s_ui_fanqie_stop_timestamp = 0;
+        s_ui_fanqie_is_running = 1;
+    }
+    else if ((upper_count < 1 && gravity_y < 0) || (lower_count < 1 && gravity_y > 0)) {
+        if (!s_ui_fanqie_stop_timestamp) {
+            s_ui_fanqie_stop_timestamp = global_state->timestamp;
+        }
+        s_ui_fanqie_is_running = 0;
+    }
 
     // 计时
+    uint64_t current_timestamp = global_state->timestamp;
+    if (!s_ui_fanqie_is_running) {
+        current_timestamp = s_ui_fanqie_stop_timestamp;
+    }
     gfx_draw_textline(global_state->gfx, L"计时", 10, 102 - 20, 128, 128, 128, 1);
     wchar_t time7seg_str[10];
     wchar_t ms_str[5];
-    int32_t countdown = (int32_t)((global_state->timestamp - s_ui_fanqie_start_timestamp) / 1000);
-    int32_t ms = (int32_t)((global_state->timestamp - s_ui_fanqie_start_timestamp) % 1000) / 10;
+    int32_t countdown = (int32_t)((current_timestamp - s_ui_fanqie_start_timestamp) / 1000);
+    int32_t ms = (int32_t)((current_timestamp - s_ui_fanqie_start_timestamp) % 1000) / 10;
     swprintf(time7seg_str, 10, L"%02d:%02d", countdown / 60, countdown % 60);
     swprintf(ms_str, 5, L".%02d", ms);
     int32_t s7seg_width = 0.0f;
@@ -1204,7 +1228,7 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     gfx_draw_textline(global_state->gfx, flow_str, 200, 110, 255, 255, 255, 1);
 
     wchar_t throttle_str[10];
-    swprintf(throttle_str, 10, L"%ls", ((s_ui_flip_is_throttle) ? L"节流开启" : L"节流关闭"));
+    swprintf(throttle_str, 10, L"节流度%d%%", s_ui_flip_is_throttle);
     gfx_draw_textline(global_state->gfx, throttle_str, 210, 90, 255, 255, 255, 1);
 
     // 根据重力方向计算沙漏进度
@@ -1212,6 +1236,9 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     wchar_t count_str[30];
     swprintf(count_str, 30, L"%d/%d (%.1f%%)", upper_count, lower_count, hourglass_progress * 100.0f);
     gfx_draw_textline(global_state->gfx, count_str, 210, 130, 255, 255, 255, 1);
+
+    // 根据沙漏进度调整节流度，避免来自上方的压力过小时，出现几乎不往下流的问题
+    s_ui_flip_is_throttle = roundf((1.0f - (float)s_ui_flip_init_throttle) * hourglass_progress * hourglass_progress + (float)s_ui_flip_init_throttle);
 
     gfx_refresh(global_state->gfx);
 }
@@ -1237,11 +1264,11 @@ void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state)
     }
     // 按0键切换漏斗阻尼
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
-        if (s_ui_flip_is_throttle) { // 避免直接比0
+        if (s_ui_flip_is_throttle) {
             s_ui_flip_is_throttle = 0;
         }
         else {
-            s_ui_flip_is_throttle = 1;
+            s_ui_flip_is_throttle = s_ui_flip_init_throttle;
         }
     }
     // 按A键返回主菜单

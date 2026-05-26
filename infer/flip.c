@@ -54,6 +54,8 @@ typedef struct {
     int num_particles;
 
     int hourglass_enabled;
+
+    uint64_t random_seed;
 } FlipFluid;
 
 static FlipFluid g_fluid;
@@ -79,6 +81,7 @@ static inline int cell_type_safe(const int *cell_type, int idx, int num_cells) {
 }
 
 /* ---------- hourglass helpers ---------- */
+/*
 
 static int is_in_funnel_neck(FlipFluid *f, int xi, int yi)
 {
@@ -86,8 +89,8 @@ static int is_in_funnel_neck(FlipFluid *f, int xi, int yi)
     float neck_width = 2.0f;
     if (fabsf(yi - half_y) <= neck_width) {
         float ratio = f->f_num_y / (float)f->f_num_x;
-        float diag1 = ratio * xi;                 /* y = (NumY/NumX) * x */
-        float diag2 = f->f_num_y - ratio * xi;    /* y = NumY - (NumY/NumX) * x */
+        float diag1 = ratio * xi;                 // y = (NumY/NumX) * x
+        float diag2 = f->f_num_y - ratio * xi;    // y = NumY - (NumY/NumX) * x
         int in_left  = (yi <= diag1 + 1.0f);
         int in_right = (yi <= diag2 + 1.0f);
         return in_left && in_right;
@@ -115,7 +118,7 @@ static void apply_funnel_neck_damping(FlipFluid *f, float dt, float damping_coef
 
     int qhead = 0, qtail = 0;
 
-    /* 1. 种子：瓶颈中心最狭窄处的粒子，水平速度强制置零以形成刚性塞子 */
+    // 1. 种子：瓶颈中心最狭窄处的粒子，水平速度强制置零以形成刚性塞子
     for (int p = 0; p < f->num_particles; p++) {
         float x = f->particle_pos[2 * p];
         float y = f->particle_pos[2 * p + 1];
@@ -133,7 +136,7 @@ static void apply_funnel_neck_damping(FlipFluid *f, float dt, float damping_coef
         return;
     }
 
-    /* 2. 构建粒子空间哈希（复用 f 的持久数组） */
+    // 2. 构建粒子空间哈希（复用 f 的持久数组）
     memset(f->num_cell_particles, 0, f->p_num_cells * sizeof(int));
     for (int i = 0; i < f->num_particles; i++) {
         float x = f->particle_pos[2 * i];
@@ -160,7 +163,7 @@ static void apply_funnel_neck_damping(FlipFluid *f, float dt, float damping_coef
         f->cell_particle_ids[f->first_cell_particle[cell_nr]] = i;
     }
 
-    /* 3. BFS 接触传播：凡是与瓶颈种子通过接触链相连的粒子均标记为 blocked */
+    // 3. BFS 接触传播：凡是与瓶颈种子通过接触链相连的粒子均标记为 blocked
     while (qhead < qtail) {
         int cur = queue[qhead++];
         float px = f->particle_pos[2 * cur];
@@ -192,14 +195,14 @@ static void apply_funnel_neck_damping(FlipFluid *f, float dt, float damping_coef
         }
     }
 
-    /* 4. 计算流体整体在 y 轴的平均运动方向，以来源侧为“上方” */
+    // 4. 计算流体整体在 y 轴的平均运动方向，以来源侧为“上方”
     float avg_vy = 0.0f;
     for (int p = 0; p < f->num_particles; p++) {
         avg_vy += f->particle_vel[2 * p + 1];
     }
     avg_vy /= f->num_particles;
 
-    /* 5. 对阻塞链中位于“上方”（来源侧）的所有粒子施加强阻尼 */
+    // 5. 对阻塞链中位于“上方”（来源侧）的所有粒子施加强阻尼
     float neck_y = half_y * h;
     for (int p = 0; p < f->num_particles; p++) {
         if (!blocked[p]) continue;
@@ -214,6 +217,7 @@ static void apply_funnel_neck_damping(FlipFluid *f, float dt, float damping_coef
     free(blocked);
     free(queue);
 }
+*/
 
 /* ---------- particle dynamics ---------- */
 
@@ -329,6 +333,7 @@ static void push_particles_apart(FlipFluid *f, int num_iters) {
     free(dy_buf);
 }
 
+/*
 static void push_particles_apart2(FlipFluid *f, int num_iters) {
     float color_diffusion_coeff = 0.001f;
     memset(f->num_cell_particles, 0, f->p_num_cells * sizeof(int));
@@ -408,14 +413,17 @@ static void push_particles_apart2(FlipFluid *f, int num_iters) {
         }
     }
 }
+*/
 
+// is_throttle控制节流程度：0-完全开放；1-节流程度最小--节流程度最大-完全关闭-100
 static void handle_particle_collisions(FlipFluid *f, int32_t is_throttle) {
     float h = 1.0f / f->f_inv_spacing;
     float r = f->particle_radius;
     float min_x = h + r, max_x = (f->f_num_x - 1) * h - r;
     float min_y = h + r, max_y = (f->f_num_y - 1) * h - r;
 
-    int32_t release_count = 0;
+    // 随机将release_count置为0或1，置1则完全节流，置0则允许释放
+    int32_t release_count = (100.0f * random_f32(&(f->random_seed)) > (float)is_throttle) ? 0 : 1;
 
     static const float obstacle_radius = 0.06f;
 
@@ -440,10 +448,10 @@ static void handle_particle_collisions(FlipFluid *f, int32_t is_throttle) {
                 float obs_r = obstacle_radius + r*2;
 
                 if (d2 < (obs_r * obs_r) && d2 > 1e-10) {
-                    if (release_count < 1) {
+                    if (release_count < 1) { // 每轮迭代允许释放x=1个
                         release_count++;
                     }
-                    else {
+                    else { // 节流
                         float d = sqrtf(d2);
                         float push = (obs_r - d);
                         // 注释掉x位置增量可抑制某一方向上的速度奇点，不知原因为何
@@ -649,6 +657,7 @@ static void transfer_velocities(FlipFluid *f, int to_grid, float flip_ratio) {
     }
 }
 
+/*
 static void apply_funnel_neck_constraint(FlipFluid *f, float funnel_pressure_resistance) {
     if (funnel_pressure_resistance <= 0.0f || !f->hourglass_enabled) return;
 
@@ -675,6 +684,7 @@ static void apply_funnel_neck_constraint(FlipFluid *f, float funnel_pressure_res
         }
     }
 }
+*/
 
 static void solve_incompressibility(FlipFluid *f, int num_iters, float dt, float over_relaxation, int compensate_drift, float funnel_pressure_resistance) {
     memset(f->p, 0, f->f_num_cells * sizeof(float));
@@ -726,6 +736,7 @@ static void solve_incompressibility(FlipFluid *f, int num_iters, float dt, float
     // apply_funnel_neck_constraint(f, funnel_pressure_resistance);
 }
 
+/*
 static void solve_incompressibility2(FlipFluid *f, int num_iters, float dt, float over_relaxation, int compensate_drift, float funnel_pressure_resistance) {
     memset(f->p, 0, f->f_num_cells * sizeof(float));
     memcpy(f->prev_u, f->u, f->f_num_cells * sizeof(float));
@@ -761,6 +772,7 @@ static void solve_incompressibility2(FlipFluid *f, int num_iters, float dt, floa
         }
     }
 }
+*/
 
 static void update_particle_colors(FlipFluid *f) {
     float h1 = f->f_inv_spacing;
@@ -865,9 +877,22 @@ static void draw_particle_to_framebuffer(Nano_GFX *gfx,
     int cx, int cy, int radius,
     uint8_t r, uint8_t g, uint8_t b
 ) {
-    for (int y = cy-1; y <= cy+1; y++) {
-        for (int x = cx-1; x <= cx+1; x++) {
-            gfx_draw_point(gfx, x+center_x, y+center_y, r, g, b, 1);
+    if (radius == 0) {
+        for (int y = cy - 1; y <= cy + 1; y++) {
+            for (int x = cx - 1; x <= cx + 1; x++) {
+                gfx_draw_point(gfx, x + center_x, y + center_y, r, g, b, 1);
+            }
+        }
+    } else {
+        int r_sq = radius * radius;
+        for (int y = cy - radius; y <= cy + radius; y++) {
+            for (int x = cx - radius; x <= cx + radius; x++) {
+                int dx = x - cx;
+                int dy = y - cy;
+                if (dx * dx + dy * dy <= r_sq) {
+                    gfx_draw_point(gfx, x + center_x, y + center_y, r, g, b, 1);
+                }
+            }
         }
     }
 }
@@ -879,17 +904,13 @@ static void render_to_framebuffer(
     int show_particles, int show_grid
 ) {
 
-    int32_t fb_w = width;
+    // int32_t fb_w = width;
     int32_t fb_h = height;
 
     float c_scale = fb_h / scene_h;
 
     if (show_grid) {
-        float point_size = 0.9f * f->h / scene_w * fb_w;
-        int radius = (int)roundf(point_size * 0.5f);
-        if (radius < 1) radius = 1;
         int n = f->f_num_y;
-
         for (int i = 0; i < f->f_num_cells; i++) {
             int xi = i / n;
             int yi = i % n;
@@ -902,15 +923,11 @@ static void render_to_framebuffer(
             uint8_t r = (uint8_t)clampf(f->cell_color[3 * i]     * 255.0f, 0.0f, 255.0f);
             uint8_t g = (uint8_t)clampf(f->cell_color[3 * i + 1] * 255.0f, 0.0f, 255.0f);
             uint8_t b = (uint8_t)clampf(f->cell_color[3 * i + 2] * 255.0f, 0.0f, 255.0f);
-            draw_particle_to_framebuffer(gfx, center_x, center_y, width, height, cx, cy, radius, r, g, b);
+            draw_particle_to_framebuffer(gfx, center_x, center_y, width, height, cx, cy, 0, r, g, b);
         }
     }
 
     if (show_particles) {
-        float point_size = 2.2f * f->particle_radius / scene_w * fb_w;
-        int radius = (int)roundf(point_size * 0.5f);
-        if (radius < 1) radius = 1;
-
         for (int i = 0; i < f->num_particles; i++) {
             float px = f->particle_pos[2 * i] * c_scale;
             float py = fb_h - f->particle_pos[2 * i + 1] * c_scale;
@@ -919,7 +936,7 @@ static void render_to_framebuffer(
             uint8_t r = (uint8_t)clampf(f->particle_color[3 * i]     * 255.0f, 0.0f, 255.0f);
             uint8_t g = (uint8_t)clampf(f->particle_color[3 * i + 1] * 255.0f, 0.0f, 255.0f);
             uint8_t b = (uint8_t)clampf(f->particle_color[3 * i + 2] * 255.0f, 0.0f, 255.0f);
-            draw_particle_to_framebuffer(gfx, center_x, center_y, width, height, cx, cy, radius, r, g, b);
+            draw_particle_to_framebuffer(gfx, center_x, center_y, width, height, cx, cy, 0, r, g, b);
         }
     }
 }
@@ -928,7 +945,7 @@ static void render_to_framebuffer(
 /* Public API                                                           */
 /* -------------------------------------------------------------------- */
 
-void flip_init(float pool_width, float pool_height, int32_t resolution, int32_t hourglass_enabled) {
+void flip_init(float pool_width, float pool_height, int32_t resolution, uint64_t initial_random_seed, int32_t hourglass_enabled) {
     if (g_initialized) flip_cleanup();
 
     float tank_height = pool_height;
@@ -981,6 +998,8 @@ void flip_init(float pool_width, float pool_height, int32_t resolution, int32_t 
     f->first_cell_particle = (int *)platform_calloc(f->p_num_cells + 1, sizeof(int));
     f->cell_particle_ids = (int *)platform_calloc(max_particles, sizeof(int));
     f->num_particles = num_x * num_y;
+
+    f->random_seed = initial_random_seed;
 
     int p = 0;
     for (int i = 0; i < num_x; i++) {
@@ -1037,7 +1056,7 @@ void render_flip(Nano_GFX *gfx,
                  int32_t is_throttle,
                  int32_t *upper_count, int32_t *lower_count) {
     if (!g_initialized) {
-        flip_init(pool_width, pool_height, resolution, 0);
+        flip_init(pool_width, pool_height, resolution, 0, 0);
     }
 
     FlipFluid *f = &g_fluid;
