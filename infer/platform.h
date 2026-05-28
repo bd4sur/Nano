@@ -325,11 +325,8 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     #define I2C_DEVFILE "/dev/i2c-1"
 
-    // GPIO设备文件
-    #define GPIO_CHIP_DEVFILE "/dev/gpiochip0"
-
     // SPI设备文件
-    #define SPI_DEVFILE "/dev/spidev1.0"
+    #define SPI_DEVFILE "/dev/spidev0.0"
 
     // 模型目录
     #define MODEL_ROOT_DIR "/root/ai/_model/Nano"
@@ -338,6 +335,12 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     #define USE_DEV_LIB
     #define SCREEN_WIDTH  (320)
     #define SCREEN_HEIGHT (240)
+    #define SCREEN_SPI_CS_CHIP  (7)
+    #define SCREEN_SPI_CS_LINE  (5)
+    #define SCREEN_SPI_RST_CHIP (8)
+    #define SCREEN_SPI_RST_LINE (0)
+    #define SCREEN_SPI_DC_CHIP  (7)
+    #define SCREEN_SPI_DC_LINE  (4)
 
     // 键盘
     #define KB_I2C_ADDR (0x27)
