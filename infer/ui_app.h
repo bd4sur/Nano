@@ -27,7 +27,7 @@ extern "C" {
 #define STATE_SHUTDOWN          (31)
 #define STATE_TTS_SETTING       (32)
 #define STATE_ASR_SETTING       (33)
-#define STATE_LINGLONG_TIMELOC  (35)
+#define STATE_SETTING_INPUT     (35)
 #define STATE_FLIP              (36)
 
 
@@ -132,11 +132,7 @@ int32_t setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_St
 int32_t asr_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
 int32_t tts_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
 
-void ui_app_setting_value_input_draw(
-    Key_Event *key_event, Global_State *global_state, int32_t value_type,
-    int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, float timezone,
-    float longitude, float latitude, int32_t cursor_pos
-);
+void ui_app_setting_value_input_draw(Key_Event *key_event, Global_State *global_state, int32_t value_type, wchar_t *value_text, int32_t cursor_pos);
 
 
 

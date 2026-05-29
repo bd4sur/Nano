@@ -61,6 +61,16 @@ typedef struct Global_State {
     // 全局通用信息
     uint64_t timestamp; // 物理时间戳（ms）
     uint64_t timestamp_last; // 上一次主循环的物理时间戳（ms），用于统计帧率、节流等用途
+    int32_t year;
+    int32_t month;
+    int32_t day;
+    int32_t hour;
+    int32_t minute;
+    int32_t second;
+    int32_t millisecond;
+    float timezone;
+    float longitude;
+    float latitude;
     int32_t timer; // 主循环计数器：从0开始递增，不与物理时间关联
     int32_t focus;
     int32_t is_ctrl_enabled; // 是否处于Ctrl键的激活状态：1-是，0-否
