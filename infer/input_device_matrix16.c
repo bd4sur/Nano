@@ -26,13 +26,14 @@ uint8_t input_device_read_key() {
     uint8_t val = 0x03;
     uint8_t read_buf = 0;
     if(write(kb_fd, &val, 1) < 0) {
-        return -1;
+        return KEYCODE_NUM_IDLE;
     }
     usleep(1000);
     if(read(kb_fd, &read_buf, 1)) {
+        if (read_buf == 16) read_buf = KEYCODE_NUM_IDLE;
         return read_buf;
     }
     else {
-        return -1;
+        return KEYCODE_NUM_IDLE;
     }
 }

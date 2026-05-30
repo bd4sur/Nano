@@ -185,6 +185,11 @@ void gfx_refresh(Nano_GFX *gfx) {
 #endif
 }
 
+// 设置屏幕亮度(0-255)
+void gfx_set_brightness(Nano_GFX *gfx, int32_t brightness) {
+    display_set_brightness(brightness % 256);
+}
+
 // 清屏函数
 void gfx_clear(Nano_GFX *gfx) {
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {

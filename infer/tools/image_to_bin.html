@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>像素提取器 · RGB888</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+SC:wght@300;600;900&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        :root {
+            --bg: #0c0e12;
+            --bg2: #13161c;
+            --card: #1a1e27;
+            --border: #2a2f3a;
+            --fg: #e8eaf0;
+            --muted: #6b7280;
+            --accent: #00e89d;
+            --accent2: #00c4ff;
+            --accent-dim: rgba(0, 232, 157, 0.12);
+            --danger: #ff4d6a;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--fg);
+            font-family: 'Noto Sans SC', sans-serif;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* 背景装饰 */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -30%;
+            left: -20%;
+            width: 60vw;
+            height: 60vw;
+            background: radial-gradient(circle, rgba(0, 232, 157, 0.06) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            bottom: -20%;
+            right: -15%;
+            width: 50vw;
+            height: 50vw;
+            background: radial-gradient(circle, rgba(0, 196, 255, 0.05) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* 网格背景 */
+        .grid-bg {
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(42, 47, 58, 0.3) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(42, 47, 58, 0.3) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 48px 24px 80px;
+        }
+
+        /* 头部 */
+        header {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        header h1 {
+            font-size: 2.8rem;
+            font-weight: 900;
+            letter-spacing: -1px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1.2;
+        }
+
+        header p {
+            color: var(--muted);
+            font-weight: 300;
+            font-size: 1.05rem;
+            margin-top: 8px;
+        }
+
+        header .tag {
+            display: inline-block;
+            margin-top: 12px;
+            padding: 4px 14px;
+            border-radius: 999px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--accent);
+            background: var(--accent-dim);
+            border: 1px solid rgba(0, 232, 157, 0.2);
+        }
+
+        /* 主区域布局 */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 28px;
+            align-items: start;
+        }
+
+        @media (max-width: 720px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* 左侧面板 */
+        .panel-left {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 24px;
+            transition: border-color 0.3s;
+        }
+
+        .card:hover {
+            border-color: rgba(0, 232, 157, 0.25);
+        }
+
+        .card-title {
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--muted);
+            margin-bottom: 16px;
+        }
+
+        /* 上传区域 */
+        .upload-zone {
+            border: 2px dashed var(--border);
+            border-radius: 12px;
+            padding: 32px 16px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .upload-zone:hover,
+        .upload-zone.drag-over {
+            border-color: var(--accent);
+            background: var(--accent-dim);
+        }
+
+        .upload-zone i {
+            font-size: 2rem;
+            color: var(--muted);
+            margin-bottom: 10px;
+            transition: color 0.3s, transform 0.3s;
+        }
+
+        .upload-zone:hover i {
+            color: var(--accent);
+            transform: translateY(-3px);
+        }
+
+        .upload-zone .label {
+            font-size: 0.9rem;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
+        .upload-zone .label span {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .upload-zone input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        /* Canvas 预览 */
+        .canvas-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        .canvas-box {
+            position: relative;
+        }
+
+        .canvas-box canvas {
+            border: 2px solid var(--border);
+            border-radius: 6px;
+            image-rendering: pixelated;
+            display: block;
+        }
+
+        .canvas-box .dim {
+            position: absolute;
+            bottom: -22px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--muted);
+            white-space: nowrap;
+        }
+
+        .arrow-icon {
+            color: var(--muted);
+            font-size: 1.4rem;
+            animation: arrowPulse 1.6s ease-in-out infinite;
+        }
+
+        @keyframes arrowPulse {
+
+            0%,
+            100% {
+                opacity: 0.4;
+                transform: translateX(0);
+            }
+
+            50% {
+                opacity: 1;
+                transform: translateX(4px);
+            }
+        }
+
+        .preview-zoomed canvas {
+            width: 160px;
+            height: 160px;
+            image-rendering: pixelated;
+        }
+
+        .preview-orig canvas {
+            width: 64px;
+            height: 64px;
+        }
+
+        /* 信息条 */
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            font-size: 0.85rem;
+        }
+
+        .info-row .info-label {
+            color: var(--muted);
+        }
+
+        .info-row .info-value {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--fg);
+            font-weight: 700;
+        }
+
+        /* 右侧输出面板 */
+        .panel-right {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .output-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .output-header .left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .output-header .card-title {
+            margin-bottom: 0;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 18px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg2);
+            color: var(--fg);
+            font-family: 'Noto Sans SC', sans-serif;
+            font-size: 0.82rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-dim);
+        }
+
+        .btn:active {
+            transform: scale(0.97);
+        }
+
+        .btn-accent {
+            background: linear-gradient(135deg, var(--accent), #00c9a7);
+            color: #0c0e12;
+            border-color: transparent;
+            font-weight: 700;
+        }
+
+        .btn-accent:hover {
+            color: #0c0e12;
+            filter: brightness(1.1);
+            box-shadow: 0 0 20px rgba(0, 232, 157, 0.3);
+        }
+
+        /* 代码输出区 */
+        .output-box {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .output-box .line-numbers {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 48px;
+            background: rgba(0, 0, 0, 0.3);
+            border-right: 1px solid var(--border);
+            padding: 16px 0;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            pointer-events: none;
+            user-select: none;
+            overflow: hidden;
+        }
+
+        .output-box .line-numbers span {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.68rem;
+            color: rgba(107, 114, 128, 0.5);
+            line-height: 1.65;
+            padding-right: 10px;
+            min-height: 1.65em;
+        }
+
+        .output-pre {
+            margin-left: 48px;
+            padding: 16px 20px;
+            overflow: auto;
+            max-height: 520px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            line-height: 1.65;
+            color: var(--fg);
+            white-space: pre;
+            tab-size: 2;
+        }
+
+        .output-pre::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        .output-pre::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .output-pre::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        /* 语法高亮色 */
+        .hl-brace {
+            color: #6b7280;
+        }
+
+        .hl-hex {
+            color: var(--accent);
+        }
+
+        .hl-comma {
+            color: #6b7280;
+        }
+
+        /* 空状态 */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 20px;
+            color: var(--muted);
+            text-align: center;
+        }
+
+        .empty-state i {
+            font-size: 2.4rem;
+            margin-bottom: 12px;
+            opacity: 0.4;
+        }
+
+        .empty-state p {
+            font-size: 0.9rem;
+        }
+
+        /* Toast 提示 */
+        .toast {
+            position: fixed;
+            bottom: 32px;
+            left: 50%;
+            transform: translateX(-50%) translateY(80px);
+            background: var(--card);
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 12px 28px;
+            border-radius: 10px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            box-shadow: 0 8px 32px rgba(0, 232, 157, 0.15);
+            opacity: 0;
+            transition: all 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+            z-index: 999;
+            pointer-events: none;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* 渐入动画 */
+        @keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .fade-up {
+            animation: fadeUp 0.6s ease forwards;
+        }
+
+        .fade-up-d1 {
+            animation-delay: 0.1s;
+            opacity: 0;
+        }
+
+        .fade-up-d2 {
+            animation-delay: 0.2s;
+            opacity: 0;
+        }
+
+        .fade-up-d3 {
+            animation-delay: 0.3s;
+            opacity: 0;
+        }
+
+        /* 呼吸光效 */
+        .glow-ring {
+            position: absolute;
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            border: 1px solid rgba(0, 232, 157, 0.08);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            animation: glowPulse 3s ease-in-out infinite;
+        }
+
+        @keyframes glowPulse {
+
+            0%,
+            100% {
+                opacity: 0.3;
+                transform: translate(-50%, -50%) scale(1);
+            }
+
+            50% {
+                opacity: 0.7;
+                transform: translate(-50%, -50%) scale(1.15);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="grid-bg"></div>
+
+    <div class="container">
+        <header class="fade-up">
+            <h1>像素提取器</h1>
+            <p>上传图片，缩放至 64×64，提取 RGB888 像素数组</p>
+            <div class="tag">64 × 64 · RGB888 · HEX</div>
+        </header>
+
+        <div class="main-grid">
+            <!-- 左侧面板 -->
+            <div class="panel-left">
+                <!-- 上传卡片 -->
+                <div class="card fade-up fade-up-d1">
+                    <div class="card-title"><i class="fa-solid fa-arrow-up-from-bracket"
+                            style="margin-right:6px"></i>图片上传</div>
+                    <div class="upload-zone" id="uploadZone">
+                        <i class="fa-solid fa-image"></i>
+                        <div class="label">点击选择或拖拽图片<br><span>支持 JPG / PNG / BMP / WebP</span></div>
+                        <input type="file" id="fileInput" accept="image/*">
+                    </div>
+                </div>
+
+                <!-- 预览卡片 -->
+                <div class="card fade-up fade-up-d2" id="previewCard" style="display:none">
+                    <div class="card-title"><i class="fa-solid fa-eye" style="margin-right:6px"></i>缩放预览</div>
+                    <div class="canvas-wrap">
+                        <div class="canvas-box preview-orig">
+                            <canvas id="canvas64" width="64" height="64"></canvas>
+                            <div class="dim">64×64</div>
+                        </div>
+                        <i class="fa-solid fa-arrow-right arrow-icon"></i>
+                        <div class="canvas-box preview-zoomed" style="position:relative">
+                            <canvas id="canvasZoom" width="64" height="64"></canvas>
+                            <div class="glow-ring"></div>
+                            <div class="dim">放大预览</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 信息卡片 -->
+                <div class="card fade-up fade-up-d3" id="infoCard" style="display:none">
+                    <div class="card-title"><i class="fa-solid fa-circle-info" style="margin-right:6px"></i>数组信息</div>
+                    <div class="info-row">
+                        <span class="info-label">图片尺寸</span>
+                        <span class="info-value" id="infoSize">—</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">像素总数</span>
+                        <span class="info-value" id="infoPixels">—</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">数组长度</span>
+                        <span class="info-value" id="infoLength">—</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">数据大小</span>
+                        <span class="info-value" id="infoBytes">—</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧输出面板 -->
+            <div class="panel-right fade-up fade-up-d3">
+                <div class="output-header">
+                    <div class="left">
+                        <span class="card-title" style="margin-bottom:0"><i class="fa-solid fa-code"
+                                style="margin-right:6px"></i>RGB888 数组输出</span>
+                    </div>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn" id="btnCopy" disabled>
+                            <i class="fa-regular fa-copy"></i> 复制数组
+                        </button>
+                        <button class="btn btn-accent" id="btnCArray" disabled>
+                            <i class="fa-solid fa-download"></i> 复制为 C 数组
+                        </button>
+                    </div>
+                </div>
+
+                <div class="output-box" id="outputBox">
+                    <!-- 空状态 -->
+                    <div class="empty-state" id="emptyState">
+                        <i class="fa-solid fa-arrow-left"></i>
+                        <p>请先上传一张图片</p>
+                    </div>
+                    <!-- 行号 -->
+                    <div class="line-numbers" id="lineNumbers" style="display:none"></div>
+                    <!-- 代码内容 -->
+                    <pre class="output-pre" id="outputPre" style="display:none"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // ========== DOM 引用 ==========
+        const fileInput = document.getElementById('fileInput');
+        const uploadZone = document.getElementById('uploadZone');
+        const canvas64 = document.getElementById('canvas64');
+        const canvasZoom = document.getElementById('canvasZoom');
+        const previewCard = document.getElementById('previewCard');
+        const infoCard = document.getElementById('infoCard');
+        const emptyState = document.getElementById('emptyState');
+        const lineNumbers = document.getElementById('lineNumbers');
+        const outputPre = document.getElementById('outputPre');
+        const btnCopy = document.getElementById('btnCopy');
+        const btnCArray = document.getElementById('btnCArray');
+        const toast = document.getElementById('toast');
+
+        const ctx64 = canvas64.getContext('2d', { willReadFrequently: true });
+        const ctxZoom = canvasZoom.getContext('2d');
+
+        // 存储提取出的 RGB 数组
+        let rgbArray = [];
+
+        // ========== Toast 提示 ==========
+        function showToast(msg) {
+            toast.textContent = msg;
+            toast.classList.add('show');
+            clearTimeout(toast._timer);
+            toast._timer = setTimeout(() => toast.classList.remove('show'), 2200);
+        }
+
+        // ========== 拖拽交互 ==========
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('drag-over');
+        });
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('drag-over');
+        });
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('drag-over');
+            if (e.dataTransfer.files.length > 0) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        // ========== 文件选择 ==========
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        // ========== 处理文件 ==========
+        function handleFile(file) {
+            if (!file.type.startsWith('image/')) {
+                showToast('请上传图片文件');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    processImage(img);
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // ========== 处理图片：绘制到64x64并提取像素 ==========
+        function processImage(img) {
+            // 清空画布并绘制缩放图
+            ctx64.clearRect(0, 0, 64, 64);
+            // 关闭平滑以获得像素风（但实际我们用默认平滑来获得更好的缩放质量）
+            ctx64.imageSmoothingEnabled = true;
+            ctx64.imageSmoothingQuality = 'high';
+            ctx64.drawImage(img, 0, 0, 64, 64);
+
+            // 复制到放大预览 canvas
+            ctxZoom.clearRect(0, 0, 64, 64);
+            ctxZoom.drawImage(canvas64, 0, 0);
+
+            // 获取像素数据
+            const imageData = ctx64.getImageData(0, 0, 64, 64);
+            const rgba = imageData.data;
+
+            // 提取 RGB（跳过 Alpha 通道）
+            rgbArray = [];
+            for (let i = 0; i < rgba.length; i += 4) {
+                rgbArray.push(rgba[i]);       // R
+                rgbArray.push(rgba[i + 1]);   // G
+                rgbArray.push(rgba[i + 2]);   // B
+            }
+
+            // 更新信息面板
+            document.getElementById('infoSize').textContent = `${img.naturalWidth} × ${img.naturalHeight} → 64 × 64`;
+            document.getElementById('infoPixels').textContent = '4,096';
+            document.getElementById('infoLength').textContent = rgbArray.length.toLocaleString();
+            document.getElementById('infoBytes').textContent = formatBytes(rgbArray.length);
+
+            // 显示面板
+            previewCard.style.display = '';
+            infoCard.style.display = '';
+
+            // 生成输出文本
+            renderOutput(rgbArray);
+
+            // 启用按钮
+            btnCopy.disabled = false;
+            btnCArray.disabled = false;
+
+            showToast('图片处理完成，已提取 ' + rgbArray.length + ' 个值');
+        }
+
+        // ========== 格式化字节大小 ==========
+        function formatBytes(len) {
+            const bytes = len; // 每个值1字节
+            if (bytes < 1024) return bytes + ' B';
+            return (bytes / 1024).toFixed(1) + ' KB';
+        }
+
+        // ========== 渲染输出 ==========
+        function renderOutput(rgb) {
+            emptyState.style.display = 'none';
+            lineNumbers.style.display = '';
+            outputPre.style.display = '';
+
+            // 每16个值换行，格式化为 0xHH
+            const valuesPerLine = 16;
+            const lines = [];
+
+            for (let i = 0; i < rgb.length; i += valuesPerLine) {
+                const chunk = rgb.slice(i, i + valuesPerLine);
+                const hexStrs = chunk.map(v => '0x' + v.toString(16).toUpperCase().padStart(2, '0'));
+                lines.push(hexStrs.join(', '));
+            }
+
+            // 构建带简单高亮的 HTML
+            let html = '';
+            html += '<span class="hl-brace">{</span>\n';
+            for (let i = 0; i < lines.length; i++) {
+                const isLast = (i === lines.length - 1);
+                // 对每行的每个值加高亮 span
+                const parts = lines[i].split(', ');
+                const highlighted = parts.map(p => {
+                    // p 形如 "0xFF"
+                    return '<span class="hl-hex">' + p + '</span>';
+                }).join('<span class="hl-comma">,</span> ');
+
+                if (isLast) {
+                    html += '  ' + highlighted + '\n';
+                } else {
+                    html += '  ' + highlighted + '<span class="hl-comma">,</span>\n';
+                }
+            }
+            html += '<span class="hl-brace">}</span>';
+
+            outputPre.innerHTML = html;
+
+            // 生成行号
+            lineNumbers.innerHTML = '';
+            const totalLines = lines.length + 2; // 加上开头 { 和结尾 }
+            for (let i = 1; i <= totalLines; i++) {
+                const span = document.createElement('span');
+                span.textContent = i;
+                lineNumbers.appendChild(span);
+            }
+
+            // 纯文本版本供复制（普通 JS 数组格式）
+            renderOutput._plainText = buildPlainArray(rgb, valuesPerLine);
+            renderOutput._cArrayText = buildCArray(rgb, valuesPerLine);
+        }
+
+        // ========== 构建纯文本 JS 数组 ==========
+        function buildPlainArray(rgb, perLine) {
+            let text = '[\n';
+            for (let i = 0; i < rgb.length; i += perLine) {
+                const chunk = rgb.slice(i, i + perLine);
+                const hexStrs = chunk.map(v => '0x' + v.toString(16).toUpperCase().padStart(2, '0'));
+                const isLast = (i + perLine >= rgb.length);
+                text += '  ' + hexStrs.join(', ') + (isLast ? '' : ',') + '\n';
+            }
+            text += ']';
+            return text;
+        }
+
+        // ========== 构建 C 数组格式 ==========
+        function buildCArray(rgb, perLine) {
+            let text = 'const uint8_t image_rgb888[64 * 64 * 3] = {\n';
+            for (let i = 0; i < rgb.length; i += perLine) {
+                const chunk = rgb.slice(i, i + perLine);
+                const hexStrs = chunk.map(v => '0x' + v.toString(16).toUpperCase().padStart(2, '0'));
+                const isLast = (i + perLine >= rgb.length);
+                text += '    ' + hexStrs.join(', ') + (isLast ? '' : ',') + '\n';
+            }
+            text += '};';
+            return text;
+        }
+
+        // ========== 复制按钮 ==========
+        btnCopy.addEventListener('click', () => {
+            if (!renderOutput._plainText) return;
+            navigator.clipboard.writeText(renderOutput._plainText).then(() => {
+                showToast('JS 数组已复制到剪贴板');
+            }).catch(() => {
+                fallbackCopy(renderOutput._plainText);
+            });
+        });
+
+        btnCArray.addEventListener('click', () => {
+            if (!renderOutput._cArrayText) return;
+            navigator.clipboard.writeText(renderOutput._cArrayText).then(() => {
+                showToast('C 数组已复制到剪贴板');
+            }).catch(() => {
+                fallbackCopy(renderOutput._cArrayText);
+            });
+        });
+
+        // 兼容性回退复制
+        function fallbackCopy(text) {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+                document.execCommand('copy');
+                showToast('已复制到剪贴板');
+            } catch {
+                showToast('复制失败，请手动选择复制');
+            }
+            document.body.removeChild(ta);
+        }
+    </script>
+
+</body>
+
+</html>

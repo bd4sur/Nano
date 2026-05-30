@@ -50,9 +50,6 @@ typedef struct Global_State {
     Widget_Input_State     *w_input_main;
 
     Widget_Menu_State      *w_menu_model;
-    Widget_Menu_State      *w_menu_setting;
-    Widget_Menu_State      *w_menu_asr_setting;
-    Widget_Menu_State      *w_menu_tts_setting;
 
     // 全局状态
     int32_t STATE; // 当前状态
@@ -121,6 +118,7 @@ typedef struct Global_State {
     int32_t is_full_refresh; // 作为所有绘制函数的一个参数，用于控制是否整帧刷新。默认为1。0-禁用函数内的clear-refresh，1-启用函数内的clear-refresh
     uint32_t llm_refresh_max_fps; // 设置项：LLM推理过程中屏幕刷新的最高帧率
     uint64_t llm_refresh_timestamp; // LLM推理过程中，上一次刷新屏幕的时间戳。用于控制刷新频率（不高于llm_refresh_max_fps），避免刷新过于频繁，拖累表观TPS（目前LLM推理与屏幕刷新是同步串行的）。
+    int32_t brightness; // 屏幕亮度
 
     // 玲珑天象仪全局配置
     Linglong_Config *linglong_cfg;

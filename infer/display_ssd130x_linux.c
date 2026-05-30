@@ -256,3 +256,7 @@ void OLED_DisplayTurn(uint8_t i) {
         OLED_WriteCommand(0xA0);
     }
 }
+
+void display_set_brightness(uint8_t value) {
+    // TODO
+}

@@ -1421,3 +1421,7 @@ void display_hal_close(void) {
     g_frame_buffer_rgb565 = NULL;
     DEV_ModuleExit();
 }
+
+void display_set_brightness(uint8_t value) {
+    // TODO
+}

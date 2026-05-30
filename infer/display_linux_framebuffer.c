@@ -532,3 +532,7 @@ void display_hal_close(void) {
         fb_fd = -1;
     }
 }
+
+void display_set_brightness(uint8_t value) {
+    // TODO
+}

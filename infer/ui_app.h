@@ -19,6 +19,7 @@ extern "C" {
 #define STATE_LLM_ON_INFER      (8)
 #define STATE_LLM_AFTER_INFER   (10)
 #define STATE_ASR_RUNNING       (21)
+#define STATE_GENETIC           (24)
 #define STATE_README            (25)
 #define STATE_BADAPPLE          (26)
 #define STATE_GAMEOFLIFE        (27)
@@ -124,13 +125,6 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
 // ===============================================================================
 // 设置菜单
 // ===============================================================================
-
-void init_setting_menu(Key_Event *key_event, Global_State *global_state);
-void init_asr_setting_menu(Key_Event *key_event, Global_State *global_state);
-void init_tts_setting_menu(Key_Event *key_event, Global_State *global_state);
-int32_t setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
-int32_t asr_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
-int32_t tts_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
 
 void ui_app_setting_value_input_draw(Key_Event *key_event, Global_State *global_state, int32_t value_type, wchar_t *value_text, int32_t cursor_pos);
 

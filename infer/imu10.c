@@ -776,7 +776,7 @@ int imu_close() {
 }
 
 
-int imu_read_angle(float *pitch, float *roll, float *yaw) {
+int __imu_read_angle(float *pitch, float *roll, float *yaw) {
     imu_measurement_t imu_data;
 
     /* 
@@ -816,6 +816,37 @@ int imu_read_angle(float *pitch, float *roll, float *yaw) {
         *roll = 0.0f;
         *yaw = 0.0f;
     }
+    return ret;
+}
+
+int imu_read_angle(float *pitch, float *roll, float *yaw) {
+    int ret = -1;
+    int32_t imu_count = 3000;
+    do {
+        // 以下代码适配树莓派盒子（NanoPod）：IMU的PCB平面与树莓派PCB平行，IMU顶部指向树莓派TypeC口方向，IMU串口指向树莓派的PCIe方向
+#ifdef NANO_POD_RPI5
+        float q0 = 0.0f;
+        float q1 = 0.0f;
+        float q2 = 0.0f;
+        float q3 = 0.0f;
+        ret = imu_read_quaternion(&q0, &q1, &q2, &q3);
+        quaternion_to_euler(q0, q1, q2, q3, roll, pitch, yaw);
+        *pitch = *pitch - 90.0f;
+        *yaw = fmod(-(*yaw), 360.0);
+        if ((*yaw) < 0) *yaw = *yaw + 360.0;
+#elif defined(NANO_POD_CUBIE_A7Z)
+        // 以下代码适配 NANO_POD_PLUS_CUBIE_A7Z （2026-03-02制作的单板原型）
+        ret = imu_read_angle(roll, pitch, yaw);
+        *pitch = -(*pitch);
+        *yaw = -(*yaw);
+#endif
+        imu_count--;
+        if (imu_count <= 0) {
+            printf("IMU读取超时，重置\n");
+            imu_reset();
+            break;
+        }
+    } while(ret != 0);
     return ret;
 }
 

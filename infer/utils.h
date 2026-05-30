@@ -157,6 +157,14 @@ void set_random_prompt(wchar_t *dest, uint64_t seed);
 
 
 // ===============================================================================
+// IMU坐标变换
+// ===============================================================================
+
+void transform_euler_angles(float pitch_in, float roll_in, float yaw_in, float *pitch_out, float *roll_out, float *yaw_out);
+void quaternion_to_euler(float q0, float q1, float q2, float q3, float *pitch, float *roll, float *yaw);
+
+
+// ===============================================================================
 // 其他平台无关的工具函数
 // ===============================================================================
 

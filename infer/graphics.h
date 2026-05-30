@@ -59,6 +59,8 @@ void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mod
 void gfx_close(Nano_GFX *gfx);
 void gfx_refresh(Nano_GFX *gfx);
 
+void gfx_set_brightness(Nano_GFX *gfx, int32_t brightness);
+
 void gfx_clear(Nano_GFX *gfx);
 void gfx_soft_clear(Nano_GFX *gfx);
 void gfx_fill_white(Nano_GFX *gfx);

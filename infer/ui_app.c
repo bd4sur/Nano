@@ -31,6 +31,8 @@
 
 #include "flip.h"
 
+#include "ui_genetic.h"
+
 #include "ephemeris.h"
 #include "celestial.h"
 #include "nongli.h"
@@ -117,16 +119,7 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
     global_state->w_input_main = (Widget_Input_State*)platform_calloc(1, sizeof(Widget_Input_State));
 
     global_state->w_menu_model = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
-    global_state->w_menu_setting = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
-    global_state->w_menu_asr_setting = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
-    global_state->w_menu_tts_setting = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
 
-
-    ///////////////////////////////////////
-    // gfx初始化
-
-    global_state->gfx = (Nano_GFX*)platform_calloc(1, sizeof(Nano_GFX));
-    gfx_init(global_state->gfx, SCREEN_WIDTH, SCREEN_HEIGHT, GFX_COLOR_MODE_RGB888);
 
     global_state->STATE = STATE_SPLASH_SCREEN;
     global_state->PREV_STATE = STATE_DEFAULT;
@@ -440,6 +433,7 @@ void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_st
     gfx_draw_line(gfx, x0+49, y0+44, x0+49+12, y0+44+12, bg_R, bg_G, bg_B, 1);
     gfx_draw_line(gfx, x0+49+12, y0+44, x0+49, y0+44+12, bg_R, bg_G, bg_B, 1);
     bR = block_R; bG = block_G; bB = block_B;
+    tR = text_R; tG = text_G; tB = text_B;
 
     // NANO_LLM_PHASE_W1W3
     if (phase == NANO_LLM_PHASE_W1W3) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
@@ -450,18 +444,21 @@ void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_st
     gfx_draw_rectangle(gfx, x0+80, y0+61, 30, 14, bR, bG, bB, 1); // W3
     gfx_draw_textline_centered(gfx, L"W3", x0+80+15, y0+61+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
+    tR = text_R; tG = text_G; tB = text_B;
 
     // NANO_LLM_PHASE_FFN_NORM
     if (phase == NANO_LLM_PHASE_FFN_NORM) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
     gfx_draw_rectangle(gfx, x0+40, y0+83, 30, 14, bR, bG, bB, 1); // FFN Norm
     gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+83+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
+    tR = text_R; tG = text_G; tB = text_B;
 
     // NANO_LLM_PHASE_O
     if (phase == NANO_LLM_PHASE_O) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
     gfx_draw_rectangle(gfx, x0+40, y0+109, 30, 14, bR, bG, bB, 1); // O
     gfx_draw_textline_centered(gfx, L"O", x0+40+15, y0+109+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
+    tR = text_R; tG = text_G; tB = text_B;
 
     // NANO_LLM_PHASE_MHA
     if (phase == NANO_LLM_PHASE_MHA) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
@@ -474,6 +471,7 @@ void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_st
     gfx_draw_line(gfx, x0+29, y0+154, x0+29+12, y0+154+12, bg_R, bg_G, bg_B, 1);
     gfx_draw_line(gfx, x0+29+12, y0+154, x0+29, y0+154+12, bg_R, bg_G, bg_B, 1);
     bR = block_R; bG = block_G; bB = block_B;
+    tR = text_R; tG = text_G; tB = text_B;
 
     // NANO_LLM_PHASE_QK_ROPE
     if (phase == NANO_LLM_PHASE_QK_ROPE) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
@@ -482,6 +480,7 @@ void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_st
     gfx_draw_rectangle(gfx, x0+40, y0+168, 30, 14, bR, bG, bB, 1); // RoPE K
     gfx_draw_textline_centered(gfx, L"RoPE", x0+40+15, y0+168+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
+    tR = text_R; tG = text_G; tB = text_B;
 
     // NANO_LLM_PHASE_QKV
     if (phase == NANO_LLM_PHASE_QKV) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
@@ -492,12 +491,14 @@ void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_st
     gfx_draw_rectangle(gfx, x0+80, y0+185, 30, 14, bR, bG, bB, 1); // V
     gfx_draw_textline_centered(gfx, L"V", x0+80+15, y0+185+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
+    tR = text_R; tG = text_G; tB = text_B;
 
     // NANO_LLM_PHASE_ATTN_NORM
     if (phase == NANO_LLM_PHASE_ATTN_NORM) { bR = block_active_R; bG = block_active_G; bB = block_active_B; tR = text_active_R; tG = text_active_G; tB = text_active_B;}
     gfx_draw_rectangle(gfx, x0+40, y0+207, 30, 14, bR, bG, bB, 1); // Attn Norm
     gfx_draw_textline_centered(gfx, L"Norm", x0+40+15, y0+207+7, tR, tG, tB, 1);
     bR = block_R; bG = block_G; bB = block_B;
+    tR = text_R; tG = text_G; tB = text_B;
 
 
     // 绘制模型各层
@@ -548,10 +549,10 @@ void ui_app_llm_model_diagram_draw(Key_Event *key_event, Global_State *global_st
 
 void llm_observation(Nano_Observation obs, void *env) {
     Global_State *global_state = (Global_State*)env;
+    if (!global_state->llm_enable_observation) return;
+
     Nano_GFX *gfx = global_state->gfx;
     int32_t total_layers = global_state->llm_ctx->llm->config.n_layer;
-    // wchar_t obs_text[64];
-    // swprintf(obs_text, 64, L"Layer=%d | Phase=%d", obs.layer, obs.phase);
 
     gfx_draw_rectangle(gfx, 0, 14, gfx->width/2, gfx->height-14-14, 0, 0, 0, 1);
     ui_app_llm_model_diagram_draw(NULL, global_state, 0, 0, total_layers, obs);
@@ -705,7 +706,7 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         global_state->STATE = STATE_GAMEOFLIFE;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_9) {
-        // TODO
+        global_state->STATE = STATE_GENETIC;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
         // 暂时用作切换色彩风格功能
@@ -722,7 +723,6 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         global_state->STATE = STATE_SPLASH_SCREEN;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_B) {
-        init_setting_menu(key_event, global_state);
         global_state->STATE = STATE_SETTING_MENU;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_C) {
@@ -1102,44 +1102,12 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     // 获取重力方向
     float gravity_x = 0.0f;
     float gravity_y = -9.8f;
+
 #ifdef IMU_ENABLED
-
-    int ret = -1;
-    int32_t imu_count = 3000;
-    do {
-        // 以下代码适配树莓派盒子（NanoPod）：IMU的PCB平面与树莓派PCB平行，IMU顶部指向树莓派TypeC口方向，IMU串口指向树莓派的PCIe方向
-        float q0 = 0.0f;
-        float q1 = 0.0f;
-        float q2 = 0.0f;
-        float q3 = 0.0f;
-        ret = imu_read_quaternion(&q0, &q1, &q2, &q3);
-        quaternion_to_euler(q0, q1, q2, q3, &(global_state->roll), &(global_state->pitch), &(global_state->yaw));
-        global_state->pitch -= 90.0f;
-        global_state->yaw = fmod(-global_state->yaw, 360.0);
-        if (global_state->yaw < 0) global_state->yaw += 360.0;
-
-        // 以下代码适配 NANO_POD_PLUS_CUBIE_A7Z （2026-03-02制作的单板原型）
-        // ret = imu_read_angle(&(global_state->roll), &(global_state->pitch), &(global_state->yaw));
-        // global_state->pitch = -global_state->pitch;
-        // global_state->yaw = -global_state->yaw;
-
-        imu_count--;
-        if (imu_count <= 0) {
-            printf("IMU读取超时，重置\n");
-            imu_reset();
-            break;
-        }
-    } while(ret != 0);
+    imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
     printf("俯仰=%-10.2f    滚转=%-10.2f    航向=%-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw);
-
-    // gravity_x = -9.8f * sinf(global_state->roll / 180.0f * M_PI) * cosf(global_state->pitch / 180.0f * M_PI);
-    // gravity_y = -9.8f * cosf(global_state->roll / 180.0f * M_PI) * cosf(global_state->pitch / 180.0f * M_PI);
-
     gravity_x = -9.8f * sinf(global_state->roll / 180.0f * M_PI);
     gravity_y = -9.8f * cosf(global_state->roll / 180.0f * M_PI);
-
-    printf("gx=%-10.2f    gy=%-10.2f\n", gravity_x, gravity_y);
-
 #endif
 
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
@@ -1802,32 +1770,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
     // 获取机器姿态（欧拉角）
 #ifdef IMU_ENABLED
     if (global_state->linglong_cfg->enable_imu) {
-        int ret = -1;
-        int32_t imu_count = 3000;
-        do {
-            // 以下代码适配树莓派盒子（NanoPod）：IMU的PCB平面与树莓派PCB平行，IMU顶部指向树莓派TypeC口方向，IMU串口指向树莓派的PCIe方向
-            float q0 = 0.0f;
-            float q1 = 0.0f;
-            float q2 = 0.0f;
-            float q3 = 0.0f;
-            ret = imu_read_quaternion(&q0, &q1, &q2, &q3);
-            quaternion_to_euler(q0, q1, q2, q3, &(global_state->roll), &(global_state->pitch), &(global_state->yaw));
-            global_state->pitch -= 90.0f;
-            global_state->yaw = fmod(-global_state->yaw, 360.0);
-            if (global_state->yaw < 0) global_state->yaw += 360.0;
-
-            // 以下代码适配 NANO_POD_PLUS_CUBIE_A7Z （2026-03-02制作的单板原型）
-            // ret = imu_read_angle(&(global_state->roll), &(global_state->pitch), &(global_state->yaw));
-            // global_state->pitch = -global_state->pitch;
-            // global_state->yaw = -global_state->yaw;
-
-            imu_count--;
-            if (imu_count <= 0) {
-                printf("IMU读取超时，重置\n");
-                imu_reset();
-                break;
-            }
-        } while(ret != 0);
+        imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
         printf("俯仰=%-10.2f    滚转=%-10.2f    航向=%-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw);
     }
 #endif
@@ -2206,11 +2149,17 @@ void ui_app_setting_grid16_draw(Key_Event *key_event, Global_State *global_state
         3, 1, L"IMU", L"开", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0x00, 1);
 
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
-        0, 2, L"LLM设置", L"...", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+        0, 2, L"LLM演示",
+        (global_state->llm_enable_observation == 0) ? L"关闭" : L"开启",
+        cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
-        1, 2, L"TTS设置", L"...", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+        1, 2, L"TTS设置",
+        (global_state->tts_req_mode == 0) ? L"关闭" : ((global_state->tts_req_mode == 1) ? L"实时转换" : L"统一转换"),
+        cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
-        2, 2, L"ASR设置", L"...", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+        2, 2, L"ASR设置",
+        (global_state->is_auto_submit_after_asr == 0) ? L"编辑后提交" : L"立刻提交",
+        cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
         3, 2, L"自动关机", L"关", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0x00, 0x00, 1);
 
@@ -2218,57 +2167,78 @@ void ui_app_setting_grid16_draw(Key_Event *key_event, Global_State *global_state
     ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
 }
 
+static inline void ui_app_setting_capture_value(Key_Event *key_event, Global_State *global_state) {
+    year_edit = global_state->year;
+    month_edit = global_state->month;
+    day_edit = global_state->day;
+    hour_edit = global_state->hour;
+    minute_edit = global_state->minute;
+    timezone_edit = global_state->year;
+    longitude_edit = global_state->longitude;
+    latitude_edit = global_state->latitude;
+}
+
 void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *global_state) {
+    // 日期
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_1) {
-        global_state->STATE = STATE_SETTING_INPUT;
         value_type = 0;
+        ui_app_setting_capture_value(key_event, global_state);
         ui_app_setting_value_to_string(
             key_event, global_state, value_text, value_type,
-            global_state->year, global_state->month, global_state->day,
-            global_state->hour, global_state->minute, global_state->timezone,
-            global_state->longitude, global_state->latitude);
+            year_edit, month_edit, day_edit, hour_edit, minute_edit, timezone_edit, longitude_edit, latitude_edit);
+        global_state->STATE = STATE_SETTING_INPUT;
     }
+    // 时间和时区
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_2) {
-        global_state->STATE = STATE_SETTING_INPUT;
         value_type = 1;
+        ui_app_setting_capture_value(key_event, global_state);
         ui_app_setting_value_to_string(
             key_event, global_state, value_text, value_type,
-            global_state->year, global_state->month, global_state->day,
-            global_state->hour, global_state->minute, global_state->timezone,
-            global_state->longitude, global_state->latitude);
+            year_edit, month_edit, day_edit, hour_edit, minute_edit, timezone_edit, longitude_edit, latitude_edit);
+        global_state->STATE = STATE_SETTING_INPUT;
     }
+    // 屏幕亮度
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_3) {
-        global_state->STATE = STATE_LINGLONG;
+        global_state->brightness += 32;
+        global_state->brightness = global_state->brightness % 256;
+        gfx_set_brightness(global_state->gfx, global_state->brightness);
     }
+    // 经度
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_4) {
-        global_state->STATE = STATE_SETTING_INPUT;
         value_type = 2;
+        ui_app_setting_capture_value(key_event, global_state);
         ui_app_setting_value_to_string(
             key_event, global_state, value_text, value_type,
-            global_state->year, global_state->month, global_state->day,
-            global_state->hour, global_state->minute, global_state->timezone,
-            global_state->longitude, global_state->latitude);
-    }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_5) {
+            year_edit, month_edit, day_edit, hour_edit, minute_edit, timezone_edit, longitude_edit, latitude_edit);
         global_state->STATE = STATE_SETTING_INPUT;
+    }
+    // 纬度
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_5) {
         value_type = 3;
+        ui_app_setting_capture_value(key_event, global_state);
         ui_app_setting_value_to_string(
             key_event, global_state, value_text, value_type,
-            global_state->year, global_state->month, global_state->day,
-            global_state->hour, global_state->minute, global_state->timezone,
-            global_state->longitude, global_state->latitude);
+            year_edit, month_edit, day_edit, hour_edit, minute_edit, timezone_edit, longitude_edit, latitude_edit);
+        global_state->STATE = STATE_SETTING_INPUT;
     }
+    // 音量
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_6) {
         // TODO
     }
+    // LLM演示设置
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_7) {
-        global_state->STATE = STATE_BADAPPLE;
+        global_state->llm_enable_observation += 1;
+        global_state->llm_enable_observation = global_state->llm_enable_observation % 2;
     }
+    // TTS设置
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_8) {
-        global_state->STATE = STATE_GAMEOFLIFE;
+        global_state->tts_req_mode += 1;
+        global_state->tts_req_mode = global_state->tts_req_mode % 3;
     }
+    // ASR设置
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_9) {
-        // TODO
+        global_state->is_auto_submit_after_asr += 1;
+        global_state->is_auto_submit_after_asr = global_state->is_auto_submit_after_asr % 2;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
         // 暂时用作切换色彩风格功能
@@ -2285,14 +2255,13 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
         global_state->STATE = STATE_SPLASH_SCREEN;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_B) {
-        init_setting_menu(key_event, global_state);
-        global_state->STATE = STATE_SETTING_MENU;
+        // TODO
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_C) {
-        global_state->STATE = STATE_README;
+        // TODO
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_D) {
-        global_state->STATE = STATE_SHUTDOWN;
+        // TODO
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
         // TODO
@@ -2302,6 +2271,12 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
     }
     else {
         return;
+    }
+
+    // 有键按下则刷新
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code != KEYCODE_NUM_IDLE) {
+        ui_app_setting_grid16_draw(key_event, global_state);
+        gfx_refresh(global_state->gfx);
     }
 }
 
@@ -2510,6 +2485,80 @@ static int32_t ui_app_setting_next_pos(Key_Event *key_event, Global_State *globa
     else return 0;
 }
 
+// 计算上个光标位置
+static int32_t ui_app_setting_prev_pos(Key_Event *key_event, Global_State *global_state, int32_t value_type, int32_t current_pos) {
+    // yyyy-mm-dd
+    // 0123456789    
+    if (value_type == 0) {
+        switch (current_pos) {
+            case 0: return 9; break;
+            case 1: return 0; break;
+            case 2: return 1; break;
+            case 3: return 2; break;
+            case 4: return 3; break;
+            case 5: return 3; break;
+            case 6: return 5; break;
+            case 7: return 6; break;
+            case 8: return 6; break;
+            case 9: return 8; break;
+            default: return 9; break;
+        }
+    }
+    // hh:mmsaabb
+    // 0123456789
+    else if (value_type == 1) {
+        switch (current_pos) {
+            case 0: return 9; break;
+            case 1: return 0; break;
+            case 2: return 1; break;
+            case 3: return 1; break;
+            case 4: return 3; break;
+            case 5: return 4; break;
+            case 6: return 5; break;
+            case 7: return 6; break;
+            case 8: return 7; break;
+            case 9: return 8; break;
+            default: return 9; break;
+        }
+    }
+    // 经度
+    // sddd_mm'ss"
+    // 0123456789A
+    else if (value_type == 2) {
+        switch (current_pos) {
+            case 0: return 9; break;
+            case 1: return 0; break;
+            case 2: return 1; break;
+            case 3: return 2; break;
+            case 4: return 3; break;
+            case 5: return 3; break;
+            case 6: return 5; break;
+            case 7: return 6; break;
+            case 8: return 6; break;
+            case 9: return 8; break;
+            default: return 9; break;
+        }
+    }
+    // 纬度
+    // sdd_mm'ss"
+    // 0123456789
+    else if (value_type == 3) {
+        switch (current_pos) {
+            case 0: return 8; break;
+            case 1: return 0; break;
+            case 2: return 1; break;
+            case 3: return 2; break;
+            case 4: return 2; break;
+            case 5: return 4; break;
+            case 6: return 5; break;
+            case 7: return 5; break;
+            case 8: return 7; break;
+            default: return 8; break;
+        }
+    }
+    else return 0;
+}
+
 void ui_app_setting_value_input_event_handler(Key_Event *key_event, Global_State *global_state, int32_t value_type) {
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_1) {
         value_text[cursor_pos] = L'1';
@@ -2615,157 +2664,18 @@ void ui_app_setting_value_input_event_handler(Key_Event *key_event, Global_State
         return;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
-        // TODO
+        cursor_pos = ui_app_setting_prev_pos(key_event, global_state, value_type, cursor_pos);
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_HASH) {
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
 
+    // 有键按下则刷新
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code != KEYCODE_NUM_IDLE) {
         ui_app_setting_value_input_draw(key_event, global_state, value_type, value_text, cursor_pos);
         gfx_refresh(global_state->gfx);
     }
 }
-
-
-
-
-
-void init_setting_menu(Key_Event *key_event, Global_State *global_state) {
-    wcscpy(global_state->w_menu_setting->title, L"设置");
-    wcscpy(global_state->w_menu_setting->items[0], L"语言模型生成参数");
-    wcscpy(global_state->w_menu_setting->items[1], L"语音合成(TTS)设置");
-    wcscpy(global_state->w_menu_setting->items[2], L"语音识别(ASR)设置");
-    global_state->w_menu_setting->item_num = 3;
-    ui_widget_menu_init(key_event, global_state, global_state->w_menu_setting);
-}
-
-void init_asr_setting_menu(Key_Event *key_event, Global_State *global_state) {
-    wcscpy(global_state->w_menu_asr_setting->title, L"ASR自动提交设置");
-    wcscpy(global_state->w_menu_asr_setting->items[0], L"0.先编辑再提交");
-    wcscpy(global_state->w_menu_asr_setting->items[1], L"1.立刻提交");
-    global_state->w_menu_asr_setting->item_num = 2;
-    ui_widget_menu_init(key_event, global_state, global_state->w_menu_asr_setting);
-}
-
-void init_tts_setting_menu(Key_Event *key_event, Global_State *global_state) {
-    wcscpy(global_state->w_menu_tts_setting->title, L"TTS设置");
-    wcscpy(global_state->w_menu_tts_setting->items[0], L"0.关闭");
-    wcscpy(global_state->w_menu_tts_setting->items[1], L"1.实时TTS");
-    wcscpy(global_state->w_menu_tts_setting->items[2], L"2.完成后统一TTS");
-    global_state->w_menu_tts_setting->item_num = 3;
-    ui_widget_menu_init(key_event, global_state, global_state->w_menu_tts_setting);
-}
-
-
-
-int32_t setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
-    int32_t item_index = ms->current_item_index;
-    // 语言模型生成参数设置
-    if (item_index == 0) {
-        ui_widget_textarea_set(ke, gs, gs->w_textarea_main, L"暂未实现", 0, 0);
-        ui_widget_textarea_draw(ke, gs, gs->w_textarea_main);
-
-        sleep_in_ms(500);
-
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_SETTING_MENU;
-    }
-    // TTS设置
-    else if (item_index == 1) {
-        init_tts_setting_menu(ke, gs);
-        return STATE_TTS_SETTING;
-    }
-    // ASR设置
-    else if (item_index == 2) {
-        init_asr_setting_menu(ke, gs);
-        return STATE_ASR_SETTING;
-    }
-    else {
-        return STATE_SETTING_MENU;
-    }
-}
-
-
-int32_t asr_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
-    int32_t item_index = ms->current_item_index;
-    // 0.先编辑再提交
-    if (item_index == 0) {
-        gs->is_auto_submit_after_asr = 0;
-
-        ui_widget_textarea_set(ke, gs, gs->w_textarea_main, L"ASR自动提交已关闭", 0, 0);
-        ui_widget_textarea_draw(ke, gs, gs->w_textarea_main);
-
-        sleep_in_ms(500);
-
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_SETTING_MENU;
-    }
-    // 1.立刻提交
-    else if (item_index == 1) {
-        gs->is_auto_submit_after_asr = 1;
-
-        ui_widget_textarea_set(ke, gs, gs->w_textarea_main, L"ASR自动提交已开启", 0, 0);
-        ui_widget_textarea_draw(ke, gs, gs->w_textarea_main);
-
-        sleep_in_ms(500);
-
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_SETTING_MENU;
-    }
-    else {
-        return STATE_ASR_SETTING;
-    }
-}
-
-
-int32_t tts_setting_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
-    int32_t item_index = ms->current_item_index;
-    // 0.关闭
-    if (item_index == 0) {
-        gs->tts_req_mode = 0;
-
-        ui_widget_textarea_set(ke, gs, gs->w_textarea_main, L"TTS已关闭。", 0, 0);
-        ui_widget_textarea_draw(ke, gs, gs->w_textarea_main);
-
-        sleep_in_ms(500);
-
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_SETTING_MENU;
-    }
-    // 1.实时TTS
-    else if (item_index == 1) {
-        gs->tts_req_mode = 1;
-
-        ui_widget_textarea_set(ke, gs, gs->w_textarea_main, L"TTS设置为实时请求。", 0, 0);
-        ui_widget_textarea_draw(ke, gs, gs->w_textarea_main);
-
-        sleep_in_ms(500);
-
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_SETTING_MENU;
-    }
-    // 2.完成后统一TTS
-    else if (item_index == 2) {
-        gs->tts_req_mode = 2;
-
-        ui_widget_textarea_set(ke, gs, gs->w_textarea_main, L"TTS设置为全部生成后统一请求。", 0, 0);
-        ui_widget_textarea_draw(ke, gs, gs->w_textarea_main);
-
-        sleep_in_ms(500);
-
-        ui_widget_menu_refresh(ke, gs, ms);
-        return STATE_SETTING_MENU;
-    }
-    else {
-        return STATE_TTS_SETTING;
-    }
-}
-
-
-
-
-
 
 
 
@@ -2790,6 +2700,14 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     key_event->key_mask = 0;   // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
     key_event->key_repeat = 0; // 触发一次长按后，只要不松手，该标记置1，直到物理按键松开后置0。若该标记为1，则在按住时触发连续重复动作。
 
+    
+    ///////////////////////////////////////
+    // gfx初始化
+
+    global_state->gfx = (Nano_GFX*)platform_calloc(1, sizeof(Nano_GFX));
+    gfx_init(global_state->gfx, SCREEN_WIDTH, SCREEN_HEIGHT, GFX_COLOR_MODE_RGB888);
+
+
 
     ui_init(key_event, global_state);
 
@@ -2805,7 +2723,6 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     global_state->w_textarea_prefill->height = global_state->gfx->height - 14 - 14;
 
 
-    ui_app_splash_render_frame(key_event, global_state);
 
 
     ///////////////////////////////////////
@@ -2833,6 +2750,10 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     global_state->linglong_cfg = (Linglong_Config *)platform_calloc(1, sizeof(Linglong_Config));
     linglong_init(global_state->linglong_cfg);
 
+    global_state->timezone = 8.0f;
+    global_state->longitude = 119.0f;
+    global_state->latitude = 32.0f;
+
     return 0;
 }
 
@@ -2840,6 +2761,18 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
 
 
 int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
+
+    // 将时间戳转为本地日期时间
+    time_t ts = (time_t)(global_state->timestamp / 1000);
+    struct tm *timeinfo = localtime(&ts);
+    global_state->year = timeinfo->tm_year + 1900;
+    global_state->month = timeinfo->tm_mon + 1;
+    global_state->day = timeinfo->tm_mday;
+    global_state->hour = timeinfo->tm_hour;
+    global_state->minute = timeinfo->tm_min;
+    global_state->second = timeinfo->tm_sec;
+    global_state->millisecond = global_state->timestamp % 1000;
+
 
     // 主状态机
     switch(global_state->STATE) {
@@ -3401,6 +3334,33 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         break;
 
+
+    /////////////////////////////////////////////
+    // 演化算法
+    /////////////////////////////////////////////
+
+    case STATE_GENETIC:
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_app_genetic_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        ui_app_genetic_refresh(key_event, global_state);
+
+        // 按A键返回主菜单
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+            global_state->STATE = STATE_MAIN_MENU;
+        }
+        // 按D键刷新
+        else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
+            ui_app_genetic_init(key_event, global_state);
+        }
+
+        break;
+
+
     /////////////////////////////////////////////
     // 关机确认
     /////////////////////////////////////////////
@@ -3439,46 +3399,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
             global_state->STATE = STATE_MAIN_MENU;
         }
-
-        break;
-
-
-    /////////////////////////////////////////////
-    // TTS设置
-    /////////////////////////////////////////////
-
-    case STATE_TTS_SETTING:
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_tts_setting);
-            ui_draw_header(key_event, global_state, global_state->w_menu_tts_setting->title, 1);
-            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
-            gfx_refresh(global_state->gfx);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_tts_setting, tts_setting_menu_item_action, STATE_SETTING_MENU, STATE_TTS_SETTING);
-
-        break;
-
-
-    /////////////////////////////////////////////
-    // ASR设置
-    /////////////////////////////////////////////
-
-    case STATE_ASR_SETTING:
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_asr_setting);
-            ui_draw_header(key_event, global_state, global_state->w_menu_asr_setting->title, 1);
-            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
-            gfx_refresh(global_state->gfx);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_asr_setting, asr_setting_menu_item_action, STATE_SETTING_MENU, STATE_ASR_SETTING);
 
         break;
 
@@ -3555,9 +3475,6 @@ int32_t main_deinit(Key_Event *key_event, Global_State *global_state) {
     free(global_state->w_input_main);
 
     free(global_state->w_menu_model);
-    free(global_state->w_menu_setting);
-    free(global_state->w_menu_asr_setting);
-    free(global_state->w_menu_tts_setting);
 
 #ifdef MATMUL_PTHREAD
     matmul_pthread_cleanup();

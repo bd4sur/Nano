@@ -72,3 +72,7 @@ void display_hal_init(void) {
 void display_hal_close(void) {
     return;
 }
+
+void display_set_brightness(uint8_t value) {
+    // TODO
+}
