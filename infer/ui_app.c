@@ -658,7 +658,7 @@ void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
         cell_bg_R = 40;
         cell_bg_G = 40;
         cell_bg_B = 42;
-        cell_text_R = 255;
+        cell_text_R = 0;
         cell_text_G = 255;
         cell_text_B = 255;
     }
@@ -2716,7 +2716,6 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     ui_widget_textarea_init(key_event, global_state, global_state->w_textarea_prefill, UI_STR_BUF_MAX_LENGTH);
 
 
-    
     global_state->w_textarea_prefill->x = 0;
     global_state->w_textarea_prefill->y = 14;
     global_state->w_textarea_prefill->width = global_state->gfx->width;
