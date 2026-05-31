@@ -532,7 +532,7 @@ void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_
             incy = 0; // 水平线
         else {
             incy = -1;
-            delta_y = -delta_x;
+            delta_y = -delta_y;
         }
 
         if (delta_x > delta_y)

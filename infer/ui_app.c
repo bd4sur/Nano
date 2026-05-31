@@ -33,6 +33,8 @@
 
 #include "ui_genetic.h"
 
+#include "ui_tsp.h"
+
 #include "ephemeris.h"
 #include "celestial.h"
 #include "nongli.h"
@@ -633,7 +635,7 @@ void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
         { {L"[1]", L"番茄钟",}, {L"[2]", L"电子鹦鹉",}, {L"[3]", L"玲珑天象仪",}, {L"[A]", L"返回",}, },
         { {L"[4]", L"电子书",}, {L"[5]", L"音乐盒",}, {L"[6]", L"相册",}, {L"[B]", L"设置",}, },
         { {L"[7]", L"BadApple",}, {L"[8]", L"元胞自动机",}, {L"[9]", L"演化算法",}, {L"[C]", L"本机自述",}, },
-        { {L"[*]", L"",}, {L"[0]", L"色彩风格",}, {L"[#]", L"",}, {L"[D]", L"安全关机",}, },
+        { {L"[*]", L"",}, {L"[0]", L"色彩风格",}, {L"[#]", L"TSP",}, {L"[D]", L"安全关机",}, },
     };
 
     // 清屏
@@ -735,7 +737,7 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         // TODO
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_HASH) {
-        // TODO
+        global_state->STATE = STATE_GENETIC_TSP;
     }
     else {
         return;
@@ -3359,6 +3361,31 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         break;
 
+
+    /////////////////////////////////////////////
+    // 演化算法+TSP
+    /////////////////////////////////////////////
+
+    case STATE_GENETIC_TSP:
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_app_tsp_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        ui_app_tsp_refresh(key_event, global_state);
+
+        // 按A键返回主菜单
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+            global_state->STATE = STATE_MAIN_MENU;
+        }
+        // 按D键刷新
+        else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
+            ui_app_tsp_init(key_event, global_state);
+        }
+
+        break;
 
     /////////////////////////////////////////////
     // 关机确认

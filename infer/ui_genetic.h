@@ -942,9 +942,7 @@ static void g_eden_init(G_Eden *eden, const float *ref) {
 }
 
 void ui_app_genetic_init(Key_Event *key_event, Global_State *global_state) {
-    if (s_g_initialized) {
-        return;
-    }
+
     s_g_rng_state = global_state->timestamp;
     s_g_generation = 0;
 
@@ -979,7 +977,7 @@ void ui_app_genetic_refresh(Key_Event *key_event, Global_State *global_state) {
         ui_app_genetic_init(key_event, global_state);
     }
 
-    for (int32_t i = 0; i < 10; i++) {
+    for (int32_t i = 0; i < 100; i++) {
         g_eden_evolve(&s_eden_r);
         g_eden_evolve(&s_eden_g);
         g_eden_evolve(&s_eden_b);
@@ -987,8 +985,8 @@ void ui_app_genetic_refresh(Key_Event *key_event, Global_State *global_state) {
 
     gfx_soft_clear(global_state->gfx);
 
-    int offset_x = (global_state->gfx->width - G_WIDTH) / 2;
-    int offset_y = (global_state->gfx->height - G_HEIGHT) / 2;
+    int offset_x = (global_state->gfx->width - G_WIDTH * 2) / 2;
+    int offset_y = (global_state->gfx->height - G_HEIGHT * 2) / 2;
 
     const float *gene_r = s_eden_r.population[s_eden_r.best_id].gene;
     const float *gene_g = s_eden_g.population[s_eden_g.best_id].gene;
@@ -1000,12 +998,17 @@ void ui_app_genetic_refresh(Key_Event *key_event, Global_State *global_state) {
             uint8_t r = (uint8_t)(gene_r[idx]);
             uint8_t g = (uint8_t)(gene_g[idx]);
             uint8_t b = (uint8_t)(gene_b[idx]);
-            gfx_set_pixel(global_state->gfx, offset_x + x, offset_y + y, r, g, b);
+            int sx = offset_x + x * 2;
+            int sy = offset_y + y * 2;
+            gfx_set_pixel(global_state->gfx, sx, sy, r, g, b);
+            gfx_set_pixel(global_state->gfx, sx + 1, sy, r, g, b);
+            gfx_set_pixel(global_state->gfx, sx, sy + 1, r, g, b);
+            gfx_set_pixel(global_state->gfx, sx + 1, sy + 1, r, g, b);
         }
     }
 
     wchar_t text[64];
-    swprintf(text, 64, L"演化算法 | 代数:%u0", s_g_generation);
+    swprintf(text, 64, L"演化算法 | 代数:%u00", s_g_generation);
     gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, 12, 39, 39, 39, 3);
     gfx_draw_textline(global_state->gfx, text, 0, 0, 255, 255, 255, 1);
 
