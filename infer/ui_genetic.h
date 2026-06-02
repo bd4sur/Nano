@@ -972,12 +972,12 @@ void ui_app_genetic_init(Key_Event *key_event, Global_State *global_state) {
     s_g_initialized = 1;
 }
 
-void ui_app_genetic_refresh(Key_Event *key_event, Global_State *global_state) {
+void ui_app_genetic_refresh(Key_Event *key_event, Global_State *global_state, int32_t step) {
     if (!s_g_initialized) {
         ui_app_genetic_init(key_event, global_state);
     }
 
-    for (int32_t i = 0; i < 100; i++) {
+    for (int32_t i = 0; i < step; i++) {
         g_eden_evolve(&s_eden_r);
         g_eden_evolve(&s_eden_g);
         g_eden_evolve(&s_eden_b);
@@ -1008,12 +1008,12 @@ void ui_app_genetic_refresh(Key_Event *key_event, Global_State *global_state) {
     }
 
     wchar_t text[64];
-    swprintf(text, 64, L"演化算法 | 代数:%u00", s_g_generation);
+    swprintf(text, 64, L"演化算法 | 代数:%u", s_g_generation);
     gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, 12, 39, 39, 39, 3);
     gfx_draw_textline(global_state->gfx, text, 0, 0, 255, 255, 255, 1);
 
     gfx_refresh(global_state->gfx);
-    s_g_generation++;
+    s_g_generation += step;
 }
 
 #ifdef __cplusplus

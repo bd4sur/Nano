@@ -3348,7 +3348,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        ui_app_genetic_refresh(key_event, global_state);
+        ui_app_genetic_refresh(key_event, global_state, 10);
 
         // 按A键返回主菜单
         if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {

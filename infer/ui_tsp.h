@@ -49,22 +49,22 @@ static const float tsp_map[34][2] = {
 };
 
 static wchar_t *tsp_city_names[34] = {
-    L"BEIJING", L"TIANJIN", L"SHANGHAI", L"CHONGQING",
-    L"LASA", L"WULUMUQI", L"YINCHUAN", L"HUHEHAOTE",
-    L"NANNING", L"HARBIN", L"CHANGCHUN", L"SHENYANG",
-    L"SHIJIAZHUANG", L"TAIYUAN", L"XINING", L"JINAN",
-    L"ZHENGZHOU", L"NANJING", L"HEFEI", L"HANGZHOU",
-    L"FUZHOU", L"NANCHANG", L"CHANGSHA", L"WUHAN",
-    L"GUANGZHOU", L"TAIBEI", L"HAIKOU", L"LANZHOU",
-    L"XI_AN", L"CHENGDU", L"GUIYANG", L"KUNMING",
-    L"XIANGGANG", L"AOMEN"
+    L"PEK", L"TSN", L"SHA", L"CKG",
+    L"LXA", L"URC", L"INC", L"HET",
+    L"NNG", L"HRB", L"CGQ", L"SHE",
+    L"SJW", L"TYN", L"XNN", L"TNA",
+    L"CGO", L"NKG", L"HFE", L"HGH",
+    L"FOC", L"KHN", L"CSX", L"WUH",
+    L"CAN", L"TPE", L"HAK", L"LHW",
+    L"XIY", L"TFU", L"KWE", L"KMG",
+    L"HKG", L"MFM"
 };
 
-#define TSP_MUTATION_PROB  (0.008f)
+#define TSP_MUTATION_PROB  (0.01f)
 #define TSP_CROSSOVER_PROB (0.2f)
 #define TSP_CITY_NUM       (34)
-#define TSP_POP_SIZE       (500)
-#define TSP_HISTORY_SIZE   (200)
+#define TSP_POP_SIZE       (1000)
+#define TSP_HISTORY_SIZE   (300)
 
 // 屏幕布局（固定 320 x 240）
 #define TSP_SCREEN_W       (320)

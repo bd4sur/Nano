@@ -53,17 +53,19 @@
 #define ILI9341_WIDTH 240  // LCD width
 #define ILI9341_HEIGHT 320 // LCD height
 
-#define ILI9341_CS_0 SCREEN_SPI_CS_0
-#define ILI9341_CS_1 SCREEN_SPI_CS_1
+#define ILI9341_CS_0  DEV_Digital_Write(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 0)
+#define ILI9341_CS_1  DEV_Digital_Write(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 1)
 
-#define ILI9341_RST_0 SCREEN_SPI_RST_0
-#define ILI9341_RST_1 SCREEN_SPI_RST_1
+#define ILI9341_RST_0 DEV_Digital_Write(SCREEN_SPI_RST_CHIP, SCREEN_SPI_RST_LINE, 0)
+#define ILI9341_RST_1 DEV_Digital_Write(SCREEN_SPI_RST_CHIP, SCREEN_SPI_RST_LINE, 1)
 
-#define ILI9341_DC_0 SCREEN_SPI_DC_0
-#define ILI9341_DC_1 SCREEN_SPI_DC_1
+#define ILI9341_DC_0  DEV_Digital_Write(SCREEN_SPI_DC_CHIP, SCREEN_SPI_DC_LINE, 0)
+#define ILI9341_DC_1  DEV_Digital_Write(SCREEN_SPI_DC_CHIP, SCREEN_SPI_DC_LINE, 1)
 
-#define ILI9341_BL_0 SCREEN_SPI_BL_0
-#define ILI9341_BL_1 SCREEN_SPI_BL_1
+#ifdef SCREEN_SPI_BL_CHIP
+#define ILI9341_BL_0  DEV_Digital_Write(SCREEN_SPI_BL_CHIP, SCREEN_SPI_BL_LINE, 0)
+#define ILI9341_BL_1  DEV_Digital_Write(SCREEN_SPI_BL_CHIP, SCREEN_SPI_BL_LINE, 1)
+#endif
 
 
 
@@ -97,11 +99,12 @@
 #define NUM_MAXBUF 4
 #define DIR_MAXSIZ 60
 
-#define MAX_GPIO_PINS 512
+#define MAX_GPIO_CHIPS 16
+#define MAX_GPIO_LINES_PER_CHIP 128
 
 // 全局状态管理
-static int gpio_chip_fd = -1;
-static int gpio_line_fds[MAX_GPIO_PINS];
+static int gpio_chip_fds[MAX_GPIO_CHIPS];
+static int gpio_line_fds[MAX_GPIO_CHIPS][MAX_GPIO_LINES_PER_CHIP];
 static int gpio_initialized = 0;
 
 // 内部辅助函数：初始化映射表
@@ -109,56 +112,68 @@ static void init_gpio_map(void)
 {
     if (!gpio_initialized)
     {
-        for (int i = 0; i < MAX_GPIO_PINS; i++)
+        for (int i = 0; i < MAX_GPIO_CHIPS; i++)
         {
-            gpio_line_fds[i] = -1;
+            gpio_chip_fds[i] = -1;
+            for (int j = 0; j < MAX_GPIO_LINES_PER_CHIP; j++)
+            {
+                gpio_line_fds[i][j] = -1;
+            }
         }
         gpio_initialized = 1;
     }
 }
 
 // 内部辅助函数：获取或打开芯片设备
-static int get_chip_fd(void)
+static int get_chip_fd(int32_t chip)
 {
-    if (gpio_chip_fd < 0)
+    if (chip < 0 || chip >= MAX_GPIO_CHIPS)
     {
-        gpio_chip_fd = open(GPIO_CHIP_DEVFILE, O_RDONLY);
-        if (gpio_chip_fd < 0)
+        printf("GPIO chip 编号超出范围：%d\n", chip);
+        return -1;
+    }
+
+    if (gpio_chip_fds[chip] < 0)
+    {
+        char devfile[32];
+        snprintf(devfile, sizeof(devfile), "/dev/gpiochip%d", chip);
+        gpio_chip_fds[chip] = open(devfile, O_RDONLY);
+        if (gpio_chip_fds[chip] < 0)
         {
-            printf("无法打开 GPIO 芯片设备 %s\n", GPIO_CHIP_DEVFILE);
+            printf("无法打开 GPIO 芯片设备 %s\n", devfile);
             return -1;
         }
     }
-    return gpio_chip_fd;
+    return gpio_chip_fds[chip];
 }
 
 // 内部辅助函数：申请 GPIO 线路
-static int request_gpio_line(int pin, int direction)
+static int request_gpio_line(int32_t chip, int32_t line, int direction)
 {
     struct gpiohandle_request req;
     int ret;
     int chip_fd;
 
     init_gpio_map();
-    chip_fd = get_chip_fd();
+    chip_fd = get_chip_fd(chip);
     if (chip_fd < 0)
         return -1;
 
-    if (pin < 0 || pin >= MAX_GPIO_PINS)
+    if (chip < 0 || chip >= MAX_GPIO_CHIPS || line < 0 || line >= MAX_GPIO_LINES_PER_CHIP)
     {
-        printf("Pin 编号超出范围：%d\n", pin);
+        printf("GPIO 编号超出范围 (chip%d, line%d)\n", chip, line);
         return -1;
     }
 
     // 如果已经申请过，先释放（用于 Direction 切换）
-    if (gpio_line_fds[pin] >= 0)
+    if (gpio_line_fds[chip][line] >= 0)
     {
-        close(gpio_line_fds[pin]);
-        gpio_line_fds[pin] = -1;
+        close(gpio_line_fds[chip][line]);
+        gpio_line_fds[chip][line] = -1;
     }
 
     memset(&req, 0, sizeof(req));
-    req.lineoffsets[0] = pin;
+    req.lineoffsets[0] = line;
     req.lines = 1;
 
     // 设置方向标志
@@ -177,82 +192,82 @@ static int request_gpio_line(int pin, int direction)
     ret = ioctl(chip_fd, GPIO_GET_LINEHANDLE_IOCTL, &req);
     if (ret < 0)
     {
-        printf("申请 GPIO 失败 (Pin%d): %m\n", pin);
+        printf("申请 GPIO 失败 (chip%d, line%d): %m\n", chip, line);
         return -1;
     }
 
-    gpio_line_fds[pin] = req.fd;
+    gpio_line_fds[chip][line] = req.fd;
     return 0;
 }
 
-int SYSFS_GPIO_Export(int Pin)
+int SYSFS_GPIO_Export(int32_t chip, int32_t line)
 {
     init_gpio_map();
 
     // 检查是否已经 Export
-    if (Pin >= 0 && Pin < MAX_GPIO_PINS && gpio_line_fds[Pin] >= 0)
+    if (chip >= 0 && chip < MAX_GPIO_CHIPS && line >= 0 && line < MAX_GPIO_LINES_PER_CHIP && gpio_line_fds[chip][line] >= 0)
     {
-        printf("Export Failed: Pin%d 已被占用\n", Pin);
+        printf("Export Failed: chip%d, line%d 已被占用\n", chip, line);
         return -1;
     }
 
     // Character Device 需要在 Export 时申请线路，默认先设为输入（安全）
     // 用户随后调用 Direction 会重新申请
-    if (request_gpio_line(Pin, SYSFS_GPIO_IN) < 0)
+    if (request_gpio_line(chip, line, SYSFS_GPIO_IN) < 0)
     {
         return -1;
     }
 
-    printf("Export: Pin%d\r\n", Pin);
+    printf("Export: chip%d, line%d\r\n", chip, line);
     return 0;
 }
 
-int SYSFS_GPIO_Unexport(int Pin)
+int SYSFS_GPIO_Unexport(int32_t chip, int32_t line)
 {
     init_gpio_map();
 
-    if (Pin < 0 || Pin >= MAX_GPIO_PINS || gpio_line_fds[Pin] < 0)
+    if (chip < 0 || chip >= MAX_GPIO_CHIPS || line < 0 || line >= MAX_GPIO_LINES_PER_CHIP || gpio_line_fds[chip][line] < 0)
     {
-        printf("unexport Failed: Pin%d 未导出或无效\n", Pin);
+        printf("unexport Failed: chip%d, line%d 未导出或无效\n", chip, line);
         return -1;
     }
 
-    close(gpio_line_fds[Pin]);
-    gpio_line_fds[Pin] = -1;
+    close(gpio_line_fds[chip][line]);
+    gpio_line_fds[chip][line] = -1;
 
-    printf("Unexport: Pin%d\r\n", Pin);
+    printf("Unexport: chip%d, line%d\r\n", chip, line);
     return 0;
 }
 
-int SYSFS_GPIO_Direction(int Pin, int Dir)
+int SYSFS_GPIO_Direction(int32_t chip, int32_t line, int Dir)
 {
     // 检查是否已 Export
-    if (Pin < 0 || Pin >= MAX_GPIO_PINS || gpio_line_fds[Pin] < 0)
+    if (chip < 0 || chip >= MAX_GPIO_CHIPS || line < 0 || line >= MAX_GPIO_LINES_PER_CHIP || gpio_line_fds[chip][line] < 0)
     {
-        printf("Set Direction failed: Pin%d 未 Export\n", Pin);
+        printf("Set Direction failed: chip%d, line%d 未 Export\n", chip, line);
         return -1;
     }
 
     // 在 Character Device 中，改变方向需要重新 Request 线路
     // 我们复用 request_gpio_line，它会自动关闭旧的 fd
-    if (request_gpio_line(Pin, Dir) < 0)
+    if (request_gpio_line(chip, line, Dir) < 0)
     {
         return -1;
     }
 
     if (Dir == SYSFS_GPIO_IN)
     {
-        printf("Pin%d:intput\r\n", Pin);
+        printf("chip%d, line%d:intput\r\n", chip, line);
     }
     else
     {
-        printf("Pin%d:Output\r\n", Pin);
+        printf("chip%d, line%d:Output\r\n", chip, line);
     }
 
     return 0;
 }
 
-int SYSFS_GPIO_Read(int Pin)
+int SYSFS_GPIO_Read(int32_t chip, int32_t line)
 {
     struct gpiohandle_data data;
     int ret;
@@ -260,25 +275,25 @@ int SYSFS_GPIO_Read(int Pin)
 
     init_gpio_map();
 
-    if (Pin < 0 || Pin >= MAX_GPIO_PINS || gpio_line_fds[Pin] < 0)
+    if (chip < 0 || chip >= MAX_GPIO_CHIPS || line < 0 || line >= MAX_GPIO_LINES_PER_CHIP || gpio_line_fds[chip][line] < 0)
     {
-        printf("Read failed Pin%d: 未 Export\n", Pin);
+        printf("Read failed chip%d, line%d: 未 Export\n", chip, line);
         return -1;
     }
 
-    line_fd = gpio_line_fds[Pin];
+    line_fd = gpio_line_fds[chip][line];
 
     ret = ioctl(line_fd, GPIOHANDLE_GET_LINE_VALUES_IOCTL, &data);
     if (ret < 0)
     {
-        printf("failed to read value! Pin%d\n", Pin);
+        printf("failed to read value! chip%d, line%d\n", chip, line);
         return -1;
     }
 
     return data.values[0];
 }
 
-int SYSFS_GPIO_Write(int Pin, int value)
+int SYSFS_GPIO_Write(int32_t chip, int32_t line, int value)
 {
     struct gpiohandle_data data;
     int ret;
@@ -286,20 +301,20 @@ int SYSFS_GPIO_Write(int Pin, int value)
 
     init_gpio_map();
 
-    if (Pin < 0 || Pin >= MAX_GPIO_PINS || gpio_line_fds[Pin] < 0)
+    if (chip < 0 || chip >= MAX_GPIO_CHIPS || line < 0 || line >= MAX_GPIO_LINES_PER_CHIP || gpio_line_fds[chip][line] < 0)
     {
-        printf("Write failed : Pin%d,value = %d (未 Export)\n", Pin, value);
+        printf("Write failed : chip%d, line%d, value = %d (未 Export)\n", chip, line, value);
         return -1;
     }
 
-    line_fd = gpio_line_fds[Pin];
+    line_fd = gpio_line_fds[chip][line];
     data.values[0] = value ? 1 : 0;
 
     ret = ioctl(line_fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data);
     if (ret < 0)
     {
         // 如果引脚是输入模式，ioctl 会失败，这符合预期
-        printf("failed to write value! Pin%d (可能是输入模式)\n", Pin);
+        printf("failed to write value! chip%d, line%d (可能是输入模式)\n", chip, line);
         return -1;
     }
 
@@ -725,54 +740,54 @@ void DEV_HARDWARE_SPI_end(void)
 /*****************************************
                 GPIO
 *****************************************/
-void DEV_Digital_Write(uint16_t Pin, uint8_t Value)
+void DEV_Digital_Write(int32_t chip, int32_t line, uint8_t Value)
 {
 #ifdef USE_WIRINGPI_LIB
-    digitalWrite(Pin, Value);
+    digitalWrite(line, Value);
 
 #elif defined(USE_DEV_LIB)
-    SYSFS_GPIO_Write(Pin, Value);
+    SYSFS_GPIO_Write(chip, line, Value);
 
 #endif
 }
 
-uint8_t DEV_Digital_Read(uint16_t Pin)
+uint8_t DEV_Digital_Read(int32_t chip, int32_t line)
 {
     uint8_t Read_value = 0;
 
 #ifdef USE_WIRINGPI_LIB
-    Read_value = digitalRead(Pin);
+    Read_value = digitalRead(line);
 
 #elif defined(USE_DEV_LIB)
-    Read_value = SYSFS_GPIO_Read(Pin);
+    Read_value = SYSFS_GPIO_Read(chip, line);
 #endif
     return Read_value;
 }
 
-void DEV_GPIO_Mode(uint16_t Pin, uint16_t Mode)
+void DEV_GPIO_Mode(int32_t chip, int32_t line, uint16_t Mode)
 {
 #ifdef USE_WIRINGPI_LIB
     if (Mode == 0 || Mode == INPUT)
     {
-        pinMode(Pin, INPUT);
-        pullUpDnControl(Pin, PUD_UP);
+        pinMode(line, INPUT);
+        pullUpDnControl(line, PUD_UP);
     }
     else
     {
-        pinMode(Pin, OUTPUT);
-        // printf (" %d OUT \r\n",Pin);
+        pinMode(line, OUTPUT);
+        // printf (" %d OUT \r\n",line);
     }
 #elif defined(USE_DEV_LIB)
-    SYSFS_GPIO_Export(Pin);
+    SYSFS_GPIO_Export(chip, line);
     if (Mode == 0 || Mode == SYSFS_GPIO_IN)
     {
-        SYSFS_GPIO_Direction(Pin, SYSFS_GPIO_IN);
-        printf("IN Pin = %d\r\n",Pin);
+        SYSFS_GPIO_Direction(chip, line, SYSFS_GPIO_IN);
+        printf("IN chip = %d, line = %d\r\n", chip, line);
     }
     else
     {
-        SYSFS_GPIO_Direction(Pin, SYSFS_GPIO_OUT);
-        printf("OUT Pin = %d\r\n",Pin);
+        SYSFS_GPIO_Direction(chip, line, SYSFS_GPIO_OUT);
+        printf("OUT chip = %d, line = %d\r\n", chip, line);
     }
 #endif
 }
@@ -795,13 +810,14 @@ void DEV_Delay_ms(uint32_t xms)
 
 static void DEV_GPIO_Init(void)
 {
-    DEV_GPIO_Mode(SCREEN_SPI_CS, 1);
-    DEV_GPIO_Mode(SCREEN_SPI_RST, 1);
-    DEV_GPIO_Mode(SCREEN_SPI_DC, 1);
-    DEV_GPIO_Mode(SCREEN_SPI_BL, 1);
-
-    DEV_Digital_Write(SCREEN_SPI_CS, 1);
-    DEV_Digital_Write(SCREEN_SPI_BL, 1);
+    DEV_GPIO_Mode(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 1);
+    DEV_GPIO_Mode(SCREEN_SPI_RST_CHIP, SCREEN_SPI_RST_LINE, 1);
+    DEV_GPIO_Mode(SCREEN_SPI_DC_CHIP, SCREEN_SPI_DC_LINE, 1);
+#ifdef SCREEN_SPI_BL_CHIP
+    DEV_GPIO_Mode(SCREEN_SPI_BL_CHIP, SCREEN_SPI_BL_LINE, 1);
+    DEV_Digital_Write(SCREEN_SPI_BL_CHIP, SCREEN_SPI_BL_LINE, 1);
+#endif
+    DEV_Digital_Write(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 1);
 }
 
 /******************************************************************************
@@ -825,8 +841,10 @@ uint8_t DEV_ModuleInit(void)
     }
     DEV_GPIO_Init();
     wiringPiSPISetup(0, 80000000);
+#ifdef SCREEN_SPI_BL
     pinMode(SCREEN_SPI_BL, PWM_OUTPUT);
     pwmWrite(SCREEN_SPI_BL, 1023);
+#endif
 #elif defined(USE_DEV_LIB)
     DEV_GPIO_Init();
     DEV_HARDWARE_SPI_begin(SPI_DEVFILE);
@@ -872,7 +890,9 @@ void DEV_ModuleExit(void)
 #ifdef USE_DEV_LIB_PWM
     pthread_cancel(t1);
 #endif
-    DEV_Digital_Write(SCREEN_SPI_BL, 1);
+#ifdef SCREEN_SPI_BL_CHIP
+    DEV_Digital_Write(SCREEN_SPI_BL_CHIP, SCREEN_SPI_BL_LINE, 1);
+#endif
 #endif
 }
 
@@ -900,17 +920,19 @@ void DEV_ModuleExit(void)
 
 
 // LCD
-#define SCREEN_SPI_CS_0 DEV_Digital_Write(SCREEN_SPI_CS, 0)
-#define SCREEN_SPI_CS_1 DEV_Digital_Write(SCREEN_SPI_CS, 1)
+#define SCREEN_SPI_CS_0  DEV_Digital_Write(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 0)
+#define SCREEN_SPI_CS_1  DEV_Digital_Write(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 1)
 
-#define SCREEN_SPI_RST_0 DEV_Digital_Write(SCREEN_SPI_RST, 0)
-#define SCREEN_SPI_RST_1 DEV_Digital_Write(SCREEN_SPI_RST, 1)
+#define SCREEN_SPI_RST_0 DEV_Digital_Write(SCREEN_SPI_RST_CHIP, SCREEN_SPI_RST_LINE, 0)
+#define SCREEN_SPI_RST_1 DEV_Digital_Write(SCREEN_SPI_RST_CHIP, SCREEN_SPI_RST_LINE, 1)
 
-#define SCREEN_SPI_DC_0 DEV_Digital_Write(SCREEN_SPI_DC, 0)
-#define SCREEN_SPI_DC_1 DEV_Digital_Write(SCREEN_SPI_DC, 1)
+#define SCREEN_SPI_DC_0  DEV_Digital_Write(SCREEN_SPI_DC_CHIP, SCREEN_SPI_DC_LINE, 0)
+#define SCREEN_SPI_DC_1  DEV_Digital_Write(SCREEN_SPI_DC_CHIP, SCREEN_SPI_DC_LINE, 1)
 
-#define SCREEN_SPI_BL_0 DEV_Digital_Write(SCREEN_SPI_BL, 0)
-#define SCREEN_SPI_BL_1 DEV_Digital_Write(SCREEN_SPI_BL, 1)
+#ifdef SCREEN_SPI_BL_CHIP
+#define SCREEN_SPI_BL_0  DEV_Digital_Write(SCREEN_SPI_BL_CHIP, SCREEN_SPI_BL_LINE, 0)
+#define SCREEN_SPI_BL_1  DEV_Digital_Write(SCREEN_SPI_BL_CHIP, SCREEN_SPI_BL_LINE, 1)
+#endif
 
 
 
@@ -923,11 +945,11 @@ function:
 *******************************************************************************/
 static void ILI9341_Reset(void)
 {
-    DEV_Digital_Write(SCREEN_SPI_CS, 1);
+    DEV_Digital_Write(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 1);
     DEV_Delay_ms(100);
-    DEV_Digital_Write(SCREEN_SPI_RST, 0);
+    DEV_Digital_Write(SCREEN_SPI_RST_CHIP, SCREEN_SPI_RST_LINE, 0);
     DEV_Delay_ms(100);
-    DEV_Digital_Write(SCREEN_SPI_RST, 1);
+    DEV_Digital_Write(SCREEN_SPI_RST_CHIP, SCREEN_SPI_RST_LINE, 1);
     DEV_Delay_ms(100);
 }
 
@@ -937,26 +959,26 @@ function:
 *******************************************************************************/
 static void ILI9341_Write_Command(uint8_t data)
 {
-    DEV_Digital_Write(SCREEN_SPI_CS, 0);
-    DEV_Digital_Write(SCREEN_SPI_DC, 0);
+    DEV_Digital_Write(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 0);
+    DEV_Digital_Write(SCREEN_SPI_DC_CHIP, SCREEN_SPI_DC_LINE, 0);
     DEV_SPI_WriteByte(data);
 }
 
 static void ILI9341_WriteData_Byte(uint8_t data)
 {
-    DEV_Digital_Write(SCREEN_SPI_CS, 0);
-    DEV_Digital_Write(SCREEN_SPI_DC, 1);
+    DEV_Digital_Write(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 0);
+    DEV_Digital_Write(SCREEN_SPI_DC_CHIP, SCREEN_SPI_DC_LINE, 1);
     DEV_SPI_WriteByte(data);
-    DEV_Digital_Write(SCREEN_SPI_CS, 1);
+    DEV_Digital_Write(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 1);
 }
 
 void ILI9341_WriteData_Word(uint16_t data)
 {
-    DEV_Digital_Write(SCREEN_SPI_CS, 0);
-    DEV_Digital_Write(SCREEN_SPI_DC, 1);
+    DEV_Digital_Write(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 0);
+    DEV_Digital_Write(SCREEN_SPI_DC_CHIP, SCREEN_SPI_DC_LINE, 1);
     DEV_SPI_WriteByte((data >> 8) & 0xff);
     DEV_SPI_WriteByte(data);
-    DEV_Digital_Write(SCREEN_SPI_CS, 1);
+    DEV_Digital_Write(SCREEN_SPI_CS_CHIP, SCREEN_SPI_CS_LINE, 1);
 }
 
 /******************************************************************************
@@ -1255,7 +1277,7 @@ void ILI9341_Clear(uint16_t Color)
         image[i] = Color >> 8 | (Color & 0xff) << 8;
     }
     ILI9341_SetWindow(0, 0, ILI9341_WIDTH, ILI9341_HEIGHT);
-    DEV_Digital_Write(SCREEN_SPI_DC, 1);
+    DEV_Digital_Write(SCREEN_SPI_DC_CHIP, SCREEN_SPI_DC_LINE, 1);
     for (i = 0; i < ILI9341_HEIGHT; i++) {
         DEV_SPI_Write_nByte((uint8_t *)(image), ILI9341_WIDTH * 2);
     }
@@ -1295,7 +1317,7 @@ void ILI9341_Display(uint8_t *image)
     // ILI9341_SetWindow(0, 0, ILI9341_WIDTH, ILI9341_HEIGHT);
     // NOTE 旋转90度或270度
     ILI9341_SetWindow(0, 0, ILI9341_HEIGHT, ILI9341_WIDTH);
-    DEV_Digital_Write(SCREEN_SPI_DC, 1);
+    DEV_Digital_Write(SCREEN_SPI_DC_CHIP, SCREEN_SPI_DC_LINE, 1);
     for (i = 0; i < ILI9341_HEIGHT; i++)
     {
         DEV_SPI_Write_nByte((uint8_t *)image + ILI9341_WIDTH * 2 * i, ILI9341_WIDTH * 2);
@@ -1311,7 +1333,9 @@ void ILI9341_SetBacklight(uint16_t Value)
 #ifdef USE_WIRINGPI_LIB
     pwmWrite(SCREEN_SPI_BL, Value);
 #elif defined(USE_DEV_LIB)
-    DEV_Digital_Write(SCREEN_SPI_BL, 1);
+#ifdef SCREEN_SPI_BL_CHIP
+    DEV_Digital_Write(SCREEN_SPI_BL_CHIP, SCREEN_SPI_BL_LINE, 1);
+#endif
 #endif
 }
 

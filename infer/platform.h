@@ -52,9 +52,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     #define I2C_DEVFILE "/dev/i2c-1"
 
-    // GPIO设备文件
-    #define GPIO_CHIP_DEVFILE "/dev/gpiochip4"
-
     // SPI设备文件
     #define SPI_DEVFILE "/dev/spidev0.0"
 
@@ -105,9 +102,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     #define I2C_DEVFILE "/dev/i2c-1"
 
-    // GPIO设备文件
-    #define GPIO_CHIP_DEVFILE "/dev/gpiochip4"
-
     // SPI设备文件
     #define SPI_DEVFILE "/dev/spidev0.0"
 
@@ -116,10 +110,15 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
 
     // 屏幕
     #define USE_DEV_LIB
-    #define SCREEN_SPI_CS  17
-    #define SCREEN_SPI_RST 27
-    #define SCREEN_SPI_DC  22
-    #define SCREEN_SPI_BL  25
+    #define SCREEN_SPI_CS_CHIP  (4)
+    #define SCREEN_SPI_CS_LINE  (17)
+    #define SCREEN_SPI_RST_CHIP (4)
+    #define SCREEN_SPI_RST_LINE (27)
+    #define SCREEN_SPI_DC_CHIP  (4)
+    #define SCREEN_SPI_DC_LINE  (22)
+    #define SCREEN_SPI_BL_CHIP  (4)
+    #define SCREEN_SPI_BL_LINE  (25)
+
     #define OLED_I2C_ADDR (0x3c)
     #define SCREEN_WIDTH  (320)
     #define SCREEN_HEIGHT (240)
@@ -161,9 +160,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
 
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     #define I2C_DEVFILE "/dev/i2c-3"
-
-    // GPIO设备文件
-    #define GPIO_CHIP_DEVFILE "/dev/gpiochip0"
 
     // SPI设备文件
     #define SPI_DEVFILE "/dev/spidev0.0"
@@ -215,9 +211,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     #define I2C_DEVFILE "/dev/i2c-7"
 
-    // GPIO设备文件
-    #define GPIO_CHIP_DEVFILE "/dev/gpiochip0"
-
     // SPI设备文件
     #define SPI_DEVFILE "/dev/spidev1.0"
 
@@ -268,9 +261,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     #define I2C_DEVFILE "/dev/i2c-7"
 
-    // GPIO设备文件
-    #define GPIO_CHIP_DEVFILE "/dev/gpiochip0"
-
     // SPI设备文件
     #define SPI_DEVFILE "/dev/spidev1.0"
 
@@ -279,10 +269,15 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
 
     // 屏幕
     #define USE_DEV_LIB
-    #define SCREEN_SPI_CS  38
-    #define SCREEN_SPI_RST 36
-    #define SCREEN_SPI_DC  39
-    #define SCREEN_SPI_BL  40
+    #define SCREEN_SPI_CS_CHIP  (0)
+    #define SCREEN_SPI_CS_LINE  (38)
+    #define SCREEN_SPI_RST_CHIP (0)
+    #define SCREEN_SPI_RST_LINE (36)
+    #define SCREEN_SPI_DC_CHIP  (0)
+    #define SCREEN_SPI_DC_LINE  (39)
+    #define SCREEN_SPI_BL_CHIP  (0)
+    #define SCREEN_SPI_BL_LINE  (40)
+
     #define OLED_I2C_ADDR (0x3c)
     #define SCREEN_WIDTH  (320)
     #define SCREEN_HEIGHT (240)
@@ -380,9 +375,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     #define I2C_DEVFILE "/dev/i2c-0"
 
-    // GPIO设备文件
-    #define GPIO_CHIP_DEVFILE "/dev/gpiochip4"
-
     // SPI设备文件
     #define SPI_DEVFILE "/dev/spidev0.0"
 
@@ -432,9 +424,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
 
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
-
-    // GPIO设备文件
-    // #define GPIO_CHIP_DEVFILE "/dev/gpiochip0"
 
     // SPI设备文件
     // #define SPI_DEVFILE "/dev/spidev0.0"
@@ -486,9 +475,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
 
-    // GPIO设备文件
-    // #define GPIO_CHIP_DEVFILE "/dev/gpiochip0"
-
     // SPI设备文件
     // #define SPI_DEVFILE "/dev/spidev0.0"
 
@@ -538,9 +524,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
 
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
-
-    // GPIO设备文件
-    // #define GPIO_CHIP_DEVFILE "/dev/gpiochip0"
 
     // SPI设备文件
     // #define SPI_DEVFILE "/dev/spidev0.0"
@@ -592,9 +575,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
 
-    // GPIO设备文件
-    // #define GPIO_CHIP_DEVFILE "/dev/gpiochip0"
-
     // SPI设备文件
     // #define SPI_DEVFILE "/dev/spidev0.0"
 
@@ -645,9 +625,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
 
-    // GPIO设备文件
-    // #define GPIO_CHIP_DEVFILE "/dev/gpiochip0"
-
     // SPI设备文件
     // #define SPI_DEVFILE "/dev/spidev0.0"
 
@@ -697,9 +674,6 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
 
     // I2C端口设备文件（屏幕、键盘、UPS共用）
     // #define I2C_DEVFILE "/dev/i2c-1"
-
-    // GPIO设备文件
-    // #define GPIO_CHIP_DEVFILE "/dev/gpiochip0"
 
     // SPI设备文件
     // #define SPI_DEVFILE "/dev/spidev0.0"
