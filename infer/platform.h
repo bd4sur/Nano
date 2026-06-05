@@ -321,7 +321,7 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     #define I2C_DEVFILE "/dev/i2c-1"
 
     // SPI设备文件
-    #define SPI_DEVFILE "/dev/spidev0.0"
+    #define SPI_DEVFILE "/dev/spidev1.0"
 
     // 模型目录
     #define MODEL_ROOT_DIR "/root/ai/_model/Nano"
