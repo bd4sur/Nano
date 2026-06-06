@@ -20,10 +20,7 @@ extern "C" {
 #define GFX_COLOR_MODE_RGB888 (11)
 #define GFX_COLOR_MODE_RGB565 (12)
 
-// 是否启用RGB565的上下两个半屏的缓冲
-#define GFX_DOUBLE_BUFFER (0)
-
-typedef struct {
+typedef struct Nano_GFX {
     uint32_t color_mode;
 
     // 通用帧缓冲
@@ -36,6 +33,10 @@ typedef struct {
     uint32_t width;
     uint32_t height;
 
+    uint8_t is_double_buffer;
+
+    uint16_t *(*rgb565_access)(struct Nano_GFX *, uint32_t, uint32_t, uint32_t *);
+
     // 脏区域管理
 
     // 字库
@@ -43,17 +44,6 @@ typedef struct {
     // 其他元数据
 
 } Nano_GFX;
-
-static inline uint16_t* gfx_rgb565_ptr(Nano_GFX *gfx, uint32_t x, uint32_t y, uint32_t *offset) {
-    uint32_t half_height = gfx->height / 2;
-    if (y < half_height) {
-        *offset = y * gfx->width + x;
-        return gfx->frame_buffer_rgb565_top;
-    } else {
-        *offset = (y - half_height) * gfx->width + x;
-        return gfx->frame_buffer_rgb565_bottom;
-    }
-}
 
 void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode);
 void gfx_close(Nano_GFX *gfx);

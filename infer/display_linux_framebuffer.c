@@ -460,6 +460,12 @@ void display_hal_refresh_rgb565(
     sync_and_throttle();
 }
 
+void display_hal_refresh_rgb565_double(uint16_t *frame_buffer_rgb565_top, uint16_t *frame_buffer_rgb565_bottom,
+    uint32_t fb_width, uint32_t fb_height,
+    uint32_t x0, uint32_t y0, uint32_t view_width, uint32_t view_height) {
+    return;
+}
+
 void display_hal_init(void) {
     const char *fb_dev = getenv("FRAMEBUFFER");
     if (fb_dev == NULL) {

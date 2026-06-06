@@ -2745,6 +2745,7 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     // gfx初始化
 
     global_state->gfx = (Nano_GFX*)platform_calloc(1, sizeof(Nano_GFX));
+    global_state->gfx->is_double_buffer = 0;
     gfx_init(global_state->gfx, SCREEN_WIDTH, SCREEN_HEIGHT, GFX_COLOR_MODE_RGB888);
 
 

@@ -281,17 +281,6 @@ static void tsp_lonlat_to_screen_f(float lon, float lat, float *sx, float *sy) {
     *sy = (float)TSP_MAP_TOP + (lat_max - lat) * (float)map_h / (lat_max - lat_min);
 }
 
-static void tsp_lonlat_to_screen(float lon, float lat, int *sx, int *sy) {
-    float fx, fy;
-    tsp_lonlat_to_screen_f(lon, lat, &fx, &fy);
-    *sx = (int)(fx + 0.5f);
-    *sy = (int)(fy + 0.5f);
-    if (*sx < 0) *sx = 0;
-    if (*sx >= TSP_SCREEN_W) *sx = TSP_SCREEN_W - 1;
-    if (*sy < TSP_MAP_TOP) *sy = TSP_MAP_TOP;
-    if (*sy >= TSP_MAP_BOTTOM) *sy = TSP_MAP_BOTTOM - 1;
-}
-
 // ===============================================================================
 // UI 接口
 // ===============================================================================

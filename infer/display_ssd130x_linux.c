@@ -130,6 +130,12 @@ void display_hal_refresh_rgb565(
     return;
 };
 
+void display_hal_refresh_rgb565_double(uint16_t *frame_buffer_rgb565_top, uint16_t *frame_buffer_rgb565_bottom,
+    uint32_t fb_width, uint32_t fb_height,
+    uint32_t x0, uint32_t y0, uint32_t view_width, uint32_t view_height) {
+    return;
+}
+
 // OLED的初始化
 void display_hal_init(void) {
     // 初始化GDRAM

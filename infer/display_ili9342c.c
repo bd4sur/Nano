@@ -1269,6 +1269,11 @@ void display_hal_refresh(uint8_t *frame_buffer_rgb888, uint32_t fb_width, uint32
     ILI9341_Display((uint8_t *)g_frame_buffer_rgb565);
 }
 
+void display_hal_refresh_rgb565_double(uint16_t *frame_buffer_rgb565_top, uint16_t *frame_buffer_rgb565_bottom,
+    uint32_t fb_width, uint32_t fb_height,
+    uint32_t x0, uint32_t y0, uint32_t view_width, uint32_t view_height) {
+    return;
+}
 
 void display_hal_init(void) {
     g_frame_buffer_rgb565 = (uint16_t *)platform_malloc(ILI9341_WIDTH * ILI9341_HEIGHT * sizeof(uint16_t));
