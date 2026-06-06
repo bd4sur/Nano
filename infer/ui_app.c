@@ -1739,6 +1739,21 @@ void ui_app_linglong_draw_lite(
     gfx_draw_textline_mini(global_state->gfx, L"    BD4SUR\n 2011-2026", x+86, y+53, TEXT_R, TEXT_G, TEXT_B, 1);
 }
 
+void ui_app_linglong_splash(Key_Event *key_event, Global_State *global_state) {
+    Nano_GFX *gfx = global_state->gfx;
+    gfx_soft_clear(gfx);
+    gfx_draw_textline_centered(gfx, L"玲珑天象仪 V" NANO_VERSION, gfx->width/2, gfx->height/2 - 14 * 6, 0, 255, 255, 1);
+    gfx_draw_textline_centered(gfx, L"Der bestirnte Himmel ueber mir.", gfx->width/2, gfx->height/2 - 14 * 5, 222, 222, 230, 1);
+    gfx_draw_textline_centered(gfx, L"(c) 2011-2026 BD4SUR", gfx->width/2, gfx->height/2 - 14 * 4, 96, 96, 96, 1);
+    gfx_draw_textline_centered(gfx, L"正在渲染首帧...请稍等", gfx->width/2, gfx->height/2 - 14 * 1, 255, 255, 255, 1);
+    gfx_draw_textline_centered(gfx, L"操作时请按住按钮，耐心等待响应和刷新", gfx->width/2, gfx->height/2 + 14 * 1, 255, 255, 255, 1);
+    gfx_draw_textline_centered(gfx, L"1左转   2推杆   3右转   A退出", gfx->width/2, gfx->height/2 + 14 * 3, 96, 96, 96, 1);
+    gfx_draw_textline_centered(gfx, L"4左倾   5归中   6右倾   B    ", gfx->width/2, gfx->height/2 + 14 * 4, 96, 96, 96, 1);
+    gfx_draw_textline_centered(gfx, L"7拉远   8拉杆   9推进   C设置", gfx->width/2, gfx->height/2 + 14 * 5, 96, 96, 96, 1);
+    gfx_draw_textline_centered(gfx, L"*快退   0实时   #快进   D    ", gfx->width/2, gfx->height/2 + 14 * 6, 96, 96, 96, 1);
+
+    gfx_refresh(gfx);
+}
 
 void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_state) {
     ui_app_linglong_draw_full(key_event, global_state);
@@ -3295,6 +3310,8 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
             ui_app_linglong_init(key_event, global_state);
+            ui_app_linglong_splash(key_event, global_state);
+            sleep_in_ms(1000);
         }
         global_state->PREV_STATE = global_state->STATE;
 

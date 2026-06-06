@@ -145,6 +145,29 @@ static void convert_rgb565_to_rgb888(uint16_t *rgb565, uint8_t *rgb888, int widt
 }
 */
 
+void convert_rgb888_to_rgb565_double(Nano_GFX *gfx, uint8_t *rgb888, int32_t width, int32_t height) {
+    uint8_t *p = rgb888;
+    uint32_t half_height = gfx->height / 2;
+    for (int32_t y = 0; y < height; y++) {
+        uint16_t *out;
+        uint32_t row_offset;
+        if (y < (int32_t)half_height) {
+            out = gfx->frame_buffer_rgb565_top;
+            row_offset = y * gfx->width;
+        } else {
+            out = gfx->frame_buffer_rgb565_bottom;
+            row_offset = (y - half_height) * gfx->width;
+        }
+        for (int32_t x = 0; x < width; x++) {
+            uint8_t r = p[0];
+            uint8_t g = p[1];
+            uint8_t b = p[2];
+            out[row_offset + x] = rgb888_to_rgb565(r, g, b);
+            p += 3;
+        }
+    }
+}
+
 
 
 static uint16_t* gfx_rgb565_ptr_double(Nano_GFX *gfx, uint32_t x, uint32_t y, uint32_t *offset) {
