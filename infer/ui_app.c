@@ -1065,10 +1065,12 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
 // FLIP流体模拟
 // ===============================================================================
 
+static uint64_t s_ui_flip_first_load_timestamp = 0;
 static int32_t s_ui_flip_setting_count = 0;
 static int32_t s_ui_flip_show_particles = 1;
 static int32_t s_ui_flip_show_grid = 1;
-static int32_t s_ui_flip_is_throttle = 0;
+static int32_t s_ui_flip_is_throttle = 1;
+static int32_t s_ui_flip_throttle = 0;
 static int32_t s_ui_flip_init_throttle = 50;
 
 static int32_t s_ui_flip_last_upper_count = 0; // 用于计算粒子流量
@@ -1097,6 +1099,10 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
         fps = (int)frame_count;
         frame_count = 0;
         last_time = now;
+    }
+
+    if (!s_ui_flip_first_load_timestamp) {
+        s_ui_flip_first_load_timestamp = global_state->timestamp;
     }
 
     gfx_soft_clear(global_state->gfx);
@@ -1129,7 +1135,7 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
         1.0f,            /* over_relaxation */
         1, 1,            /* compensate_drift, separate_particles */
         s_ui_flip_show_particles, s_ui_flip_show_grid,
-        s_ui_flip_is_throttle,
+        (s_ui_flip_is_throttle) ? s_ui_flip_throttle : 0,
         &upper_count, &lower_count
     );
 
@@ -1148,6 +1154,16 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
 
     gfx_draw_line_anti_aliasing(global_state->gfx, 150, 120, 0, 233, 3, 0x00, 0x01, 0x02, 1);
     gfx_draw_line_anti_aliasing(global_state->gfx, 178, 120, 319, 227, 3, 0x00, 0x01, 0x02, 1);
+
+    // 进入沙漏画面若干秒内显示提示文字
+    if (global_state->timestamp - s_ui_flip_first_load_timestamp < 10000) {
+        gfx_draw_textline(global_state->gfx, L"节流", 0, 0, 59, 59, 59, 1);
+        gfx_draw_textline(global_state->gfx, L"退出", 320-24-2, 0, 59, 59, 59, 1);
+        gfx_draw_textline(global_state->gfx, L"画风", 0, 240-12, 59, 59, 59, 1);
+        gfx_draw_textline(global_state->gfx, L"复位", 320-24-2, 240-12, 59, 59, 59, 1);
+        gfx_draw_textline(global_state->gfx, L"调整节流度", 320-12*5-2, 120+36, 59, 59, 59, 1);
+    }
+
 
     // 判断沙漏重置事件
     if ((lower_count < 1 && gravity_y < 0) || (upper_count < 1 && gravity_y > 0)) {
@@ -1194,21 +1210,36 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
         s_ui_flip_last_upper_count_timestamp = global_state->timestamp;
     }
     wchar_t flow_str[30];
-    swprintf(flow_str, 30, L"粒子流量：%.1f /s", fabs(particle_flow_per_sec));
-    gfx_draw_textline(global_state->gfx, flow_str, 200, 110, 255, 255, 255, 1);
-
-    wchar_t throttle_str[10];
-    swprintf(throttle_str, 10, L"节流度%d%%", s_ui_flip_is_throttle);
-    gfx_draw_textline(global_state->gfx, throttle_str, 210, 90, 255, 255, 255, 1);
+    swprintf(flow_str, 30, L"流量 %.1f /s", fabs(particle_flow_per_sec));
 
     // 根据重力方向计算沙漏进度
     float hourglass_progress = (float)((gravity_y <= 0) ? lower_count : upper_count) / (float)(upper_count + lower_count);
     wchar_t count_str[30];
-    swprintf(count_str, 30, L"%d/%d (%.1f%%)", upper_count, lower_count, hourglass_progress * 100.0f);
-    gfx_draw_textline(global_state->gfx, count_str, 210, 130, 255, 255, 255, 1);
+    swprintf(count_str, 30, L"%03d/%03d", upper_count, lower_count);
+    wchar_t percent_str[10];
+    swprintf(percent_str, 10, L"%d", (int32_t)floor(hourglass_progress * 100.0f));
+    wchar_t percent_decimal_str[10];
+    swprintf(percent_decimal_str, 10, L".%d%%", (int32_t)floor(hourglass_progress * 100.0f * 10.0f) % 10);
+
+    // 第一次绘制是获取长宽，清除后再重新绘制
+    ui_draw_7seg_string(key_event, global_state,
+        210, 102,
+        percent_str, 255, 255, 255, 10.0f, 3.0f, 7.0f, 0, &s7seg_width, &s7seg_height);
+    gfx_draw_rectangle(global_state->gfx, 210, 102, 320-210, s7seg_height, 30, 31, 32, 1);
+    ui_draw_7seg_string(key_event, global_state,
+        320-10-6*3-s7seg_width, 102,
+        percent_str, 255, 255, 255, 10.0f, 3.0f, 7.0f, 0, &s7seg_width, &s7seg_height);
+    gfx_draw_textline(global_state->gfx, percent_decimal_str, 320-10-6*3, 102 + s7seg_height/2 - 6 + 4, 255, 255, 255, 1);
+    gfx_draw_textline(global_state->gfx, count_str, 190, 102 + s7seg_height/2 - 6 + 4, 64, 64, 64, 1);
+    gfx_draw_textline(global_state->gfx, flow_str, 230, 102 - 20, 128, 128, 128, 1);
+
+
+    wchar_t throttle_str[10];
+    swprintf(throttle_str, 10, L"节流度 %d%%", (s_ui_flip_is_throttle) ? s_ui_flip_throttle : 0);
+    gfx_draw_textline(global_state->gfx, throttle_str, 250, 102 + s7seg_height + 9, 128, 128, 128, 1);
 
     // 根据沙漏进度调整节流度，避免来自上方的压力过小时，出现几乎不往下流的问题
-    s_ui_flip_is_throttle = roundf((1.0f - (float)s_ui_flip_init_throttle) * hourglass_progress * hourglass_progress + (float)s_ui_flip_init_throttle);
+    s_ui_flip_throttle = roundf((1.0f - (float)s_ui_flip_init_throttle) * hourglass_progress * hourglass_progress + (float)s_ui_flip_init_throttle);
 
     gfx_refresh(global_state->gfx);
 }
@@ -1232,20 +1263,27 @@ void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state)
         s_ui_flip_setting_count++;
         s_ui_flip_setting_count = s_ui_flip_setting_count % 3;
     }
-    // 按0键切换漏斗阻尼
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
+    // 按1键切换漏斗阻尼
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_1) {
         if (s_ui_flip_is_throttle) {
             s_ui_flip_is_throttle = 0;
         }
         else {
-            s_ui_flip_is_throttle = s_ui_flip_init_throttle;
+            s_ui_flip_is_throttle = 1;
         }
     }
     // 按A键返回主菜单
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
         global_state->STATE = STATE_MAIN_MENU;
     }
-    // 按D键刷新
+    // 按C键切换节流度
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_C) {
+        s_ui_flip_init_throttle += 10;
+        if (s_ui_flip_init_throttle > 100) {
+            s_ui_flip_init_throttle = 10;
+        }
+    }
+    // 按D键复位
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_D) {
         ui_app_flip_init(key_event, global_state);
     }
@@ -3300,6 +3338,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
+            s_ui_flip_first_load_timestamp = 0;
             ui_app_flip_init(key_event, global_state);
         }
         global_state->PREV_STATE = global_state->STATE;
