@@ -45,6 +45,8 @@ typedef struct Nano_GFX {
 
 } Nano_GFX;
 
+void gfx_test(Nano_GFX *gfx);
+
 void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode);
 void gfx_close(Nano_GFX *gfx);
 void gfx_refresh(Nano_GFX *gfx);

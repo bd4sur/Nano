@@ -915,6 +915,8 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     }
 #endif
 
+    // gfx_test(global_state->gfx);
+
     gfx_refresh(global_state->gfx);
 }
 

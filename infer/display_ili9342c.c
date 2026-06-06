@@ -1001,14 +1001,18 @@ void ILI9341_Init(void) {
 
     /* Gamma Set (26h) */
     ILI9341_Write_Command(0x26);
-    ILI9341_WriteData_Byte(0x08);
+    ILI9341_WriteData_Byte(0x01);
 
     ///////////////////////////////////////////
     // EXTC
-    // ILI9341_Write_Command(0xC8);
-    // ILI9341_WriteData_Byte(0xFF);
-    // ILI9341_WriteData_Byte(0x93);
-    // ILI9341_WriteData_Byte(0x42);
+    ILI9341_Write_Command(0xC8);
+    ILI9341_WriteData_Byte(0xFF);
+    ILI9341_WriteData_Byte(0x93);
+    ILI9341_WriteData_Byte(0x42);
+
+    ILI9341_Write_Command(0xC0);
+    ILI9341_WriteData_Byte(0x08);
+    ILI9341_WriteData_Byte(0x08);
 
     /* Frame Rate Control (In Normal Mode/Full Colors) (B1h) */
     // ILI9341_Write_Command(0xB1);
@@ -1027,40 +1031,56 @@ void ILI9341_Init(void) {
 
 
     /* Positive Gamma Correction */
-    // ILI9341_Write_Command(0xE0);
-    // ILI9341_WriteData_Byte(0x0F); // 
-    // ILI9341_WriteData_Byte(0x31); // 
-    // ILI9341_WriteData_Byte(0x2B); // 
-    // ILI9341_WriteData_Byte(0x0C); // 
-    // ILI9341_WriteData_Byte(0x0E); // 
-    // ILI9341_WriteData_Byte(0x08); // 
-    // ILI9341_WriteData_Byte(0x4E); // 
-    // ILI9341_WriteData_Byte(0xF1); // 
-    // ILI9341_WriteData_Byte(0x37); // 
-    // ILI9341_WriteData_Byte(0x07); // 
-    // ILI9341_WriteData_Byte(0x10); // 
-    // ILI9341_WriteData_Byte(0x03); // 
-    // ILI9341_WriteData_Byte(0x0E); // 
-    // ILI9341_WriteData_Byte(0x09); // 
-    // ILI9341_WriteData_Byte(0x00); // 
+    ILI9341_Write_Command(0xE0);
+    ILI9341_WriteData_Byte(0x00); // 0/F
+    ILI9341_WriteData_Byte(0x05); // 1/3F
+    ILI9341_WriteData_Byte(0x08); // 2/3F
+    ILI9341_WriteData_Byte(0x04); // 4/F
+    ILI9341_WriteData_Byte(0x13); // 6/1F
+    ILI9341_WriteData_Byte(0x0a); // 13/F
+    ILI9341_WriteData_Byte(0x34); // 20/7F
+    ILI9341_WriteData_Byte(0x8a); // 36/F  27/F
+    ILI9341_WriteData_Byte(0x46); // 43/7F
+    ILI9341_WriteData_Byte(0x07); // 50/F
+    ILI9341_WriteData_Byte(0x0e); // 57/1F
+    ILI9341_WriteData_Byte(0x0a); // 59/F
+    ILI9341_WriteData_Byte(0x1b); // 61/3F
+    ILI9341_WriteData_Byte(0x1d); // 62/3F
+    ILI9341_WriteData_Byte(0x0f); // 63/F
 
     /* Negative Gamma Correction (E1h) */
-    // ILI9341_Write_Command(0xE1);
-    // ILI9341_WriteData_Byte(0x00); // 
-    // ILI9341_WriteData_Byte(0x0E); // 
-    // ILI9341_WriteData_Byte(0x14); // 
-    // ILI9341_WriteData_Byte(0x03); // 
-    // ILI9341_WriteData_Byte(0x11); // 
-    // ILI9341_WriteData_Byte(0x07); // 
-    // ILI9341_WriteData_Byte(0x31); // 
-    // ILI9341_WriteData_Byte(0xC1); // 
-    // ILI9341_WriteData_Byte(0x48); // 
-    // ILI9341_WriteData_Byte(0x08); // 
-    // ILI9341_WriteData_Byte(0x0F); // 
-    // ILI9341_WriteData_Byte(0x0C); // 
-    // ILI9341_WriteData_Byte(0x31); // 
-    // ILI9341_WriteData_Byte(0x36); // 
-    // ILI9341_WriteData_Byte(0x0F); // 
+    ILI9341_Write_Command(0xE1);
+    ILI9341_WriteData_Byte(0x01); // 0/F
+    ILI9341_WriteData_Byte(0x02); // 1/3F
+    ILI9341_WriteData_Byte(0x04); // 2/3F
+    ILI9341_WriteData_Byte(0x03); // 4/F
+    ILI9341_WriteData_Byte(0x0F); // 6/1F
+    ILI9341_WriteData_Byte(0x06); // 13/F
+    ILI9341_WriteData_Byte(0x38); // 20/7F
+    ILI9341_WriteData_Byte(0x56); // 36/F  27/F
+    ILI9341_WriteData_Byte(0x4B); // 43/7F
+    ILI9341_WriteData_Byte(0x05); // 50/F
+    ILI9341_WriteData_Byte(0x0C); // 57/1F
+    ILI9341_WriteData_Byte(0x0A); // 59/F
+    ILI9341_WriteData_Byte(0x37); // 61/3F
+    ILI9341_WriteData_Byte(0x3A); // 62/3F
+    ILI9341_WriteData_Byte(0x0F); // 63/F
+
+    // ILI9341_WriteData_Byte(0x01); // 0/F
+    // ILI9341_WriteData_Byte(0x02); // 1/3F
+    // ILI9341_WriteData_Byte(0x04); // 2/3F
+    // ILI9341_WriteData_Byte(0x03); // 4/F
+    // ILI9341_WriteData_Byte(0x08); // 6/1F
+    // ILI9341_WriteData_Byte(0x07); // 13/F
+    // ILI9341_WriteData_Byte(0x2A); // 20/7F
+    // ILI9341_WriteData_Byte(0x77); // 36/F  27/F
+    // ILI9341_WriteData_Byte(0x39); // 43/7F
+    // ILI9341_WriteData_Byte(0x05); // 50/F
+    // ILI9341_WriteData_Byte(0x0A); // 57/1F
+    // ILI9341_WriteData_Byte(0x07); // 59/F
+    // ILI9341_WriteData_Byte(0x18); // 61/3F
+    // ILI9341_WriteData_Byte(0x18); // 62/3F
+    // ILI9341_WriteData_Byte(0x01); // 63/F
 
     /* Sleep Out (11h)  */
     ILI9341_Write_Command(0x11);
