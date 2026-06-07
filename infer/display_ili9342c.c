@@ -951,6 +951,7 @@ static void ILI9341_Reset(void)
     DEV_Digital_Write(SCREEN_SPI_RST_CHIP, SCREEN_SPI_RST_LINE, 0);
     DEV_Delay_ms(20);
     DEV_Digital_Write(SCREEN_SPI_RST_CHIP, SCREEN_SPI_RST_LINE, 1);
+    DEV_Delay_ms(200);
 }
 
 /*******************************************************************************
@@ -988,12 +989,12 @@ function:
 void ILI9341_Init(void) {
     ILI9341_Reset();
 
-    /* memory access control set */
-    ILI9341_Write_Command(0x36);
-    ILI9341_WriteData_Byte(0x08);
-
     /*inv*/
     ILI9341_Write_Command(0x21);
+
+    /* memory access control set */
+    ILI9341_Write_Command(0x36);
+    ILI9341_WriteData_Byte(0x08); // 0x00-RGB 0x08-BGR
 
     /*  Pixel Format Set (3Ah)  */
     ILI9341_Write_Command(0x3A);

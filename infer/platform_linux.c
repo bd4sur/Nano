@@ -24,7 +24,7 @@ int32_t graceful_shutdown() {
     // 等待同步完成
     sleep(2);
     // 执行关机
-    if (system("sudo shutdown -h now") == -1) {
+    if (system("poweroff") == -1) {
         perror("关机失败");
         return -1;
     }
