@@ -353,7 +353,7 @@ int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state) {
     wcscpy(global_state->llm_output_of_last_session, session->output_text);
 
     // 将本轮对话写入日志
-    write_chat_log(LOG_FILE_PATH, global_state->timestamp, session->prompt, global_state->llm_output_of_last_session);
+    // write_chat_log(LOG_FILE_PATH, global_state->timestamp, session->prompt, global_state->llm_output_of_last_session);
 
 #ifdef TTS_ENABLED
     if (global_state->tts_req_mode > 0) {

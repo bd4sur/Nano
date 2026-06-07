@@ -55,9 +55,10 @@
 
 ## 推理
 
-|<img src="./doc/nano-raspi.jpg" width="100%"><br>Nano-Pod<br>部署于树莓派5代|<img src="./doc/nano-marga.jpg" width="100%"><br>Nano-Marga<br>部署于京东云路由器|<img src="./doc/nano-a733.jpg" width="100%"><br>Nano-Card<br>部署于Cubie-A7Z|
+|<img src="./doc/nano-raspi.jpg" width="100%"><br>Raspberry Pi 5<br>16GB RAM Nano-168M|<img src="./doc/nano-marga.jpg" width="100%"><br>Qualcomm IPQ6010<br>3GB RAM Qwen3-0.6B|<img src="./doc/nano-a733.jpg" width="100%">Allwinner A733<br>1GB RAM Nano-168M|
 |:--:|:--:|:--:|
-|<img src="./doc/nano-animac.png" width="100%"><br>Nano-Animac<br>部署于自研Scheme解释器|<img src="./doc/nano-web-2.png" width="100%"><br>Nano-Web<br>部署于浏览器|<img src="./doc/nano-esp.jpg" width="100%"><br>Nano-ESP<br>部署于ESP32-S3单片机|
+|<img src="./doc/nano-mp135.jpg" width="100%"><br>STM32-MP135<br>512MB RAM Nano-168M|<img src="./doc/nano-esp32-vis.jpg" width="100%">ESP32 + 可视化演示<br>8MB PSRAM Psycho-230K|<img src="./doc/nano-esp32-dist.jpg" width="100%">5个ESP32-S3组成的集群<br>8MB PSRAM Psycho-230K|
+|<img src="./doc/nano-animac.png" width="100%">自研Scheme解释器<br>Psycho-230K|<img src="./doc/nano-web-2.png" width="100%">浏览器 (WASM)<br>Nano-168M|<img src="./doc/nano-esp.jpg" width="100%">ESP32-S3<br>16MB PSRAM Psycho-230K|
 
 ### 通用CPU推理
 
