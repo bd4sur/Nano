@@ -86,13 +86,13 @@ static void add_to_cache(const char *img_path, uint8_t *data, uint32_t width, ui
 
 static inline uint16_t rgb888_to_rgb565(uint8_t r, uint8_t g, uint8_t b) {
     // 方法1
-    // return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
 
     // 方法2
-    uint8_t r5 = (r >= 252) ? 31 : (r + 4) >> 3;
-    uint8_t g6 = (g >= 254) ? 63 : (g + 2) >> 2;
-    uint8_t b5 = (b >= 252) ? 31 : (b + 4) >> 3;
-    return (r5 << 11) | (g6 << 5) | b5;
+    // uint8_t r5 = (r >= 252) ? 31 : (r + 4) >> 3;
+    // uint8_t g6 = (g >= 254) ? 63 : (g + 2) >> 2;
+    // uint8_t b5 = (b >= 252) ? 31 : (b + 4) >> 3;
+    // return (r5 << 11) | (g6 << 5) | b5;
 
     // 方法3
     // uint8_t r5 = (r * 31 + 127) / 255;  // 0→0, 255→31，中间均匀分布

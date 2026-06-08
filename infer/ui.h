@@ -122,6 +122,7 @@ typedef struct Global_State {
 
     // 玲珑天象仪全局配置
     Linglong_Config *linglong_cfg;
+    Nano_GFX *llgfx; // 玲珑仪专用gfx
 
     // BadApple相关
     uint32_t ba_frame_count;

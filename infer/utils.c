@@ -589,6 +589,66 @@ uint8_t get_lon_lat_digit(float decimal, int32_t digit) {
 }
 
 
+static int32_t _days_in_month(int32_t y, int32_t m) {
+    static const int32_t dim[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (m == 2 && ((y % 4 == 0 && y % 100 != 0) || (y % 400 == 0))) {
+        return 29;
+    }
+    return dim[m - 1];
+}
+
+void local_time_to_utc(
+    int32_t year, int32_t month, int32_t day,
+    int32_t hour, int32_t minute, int32_t second,
+    float timezone,
+    int32_t *utc_year, int32_t *utc_month, int32_t *utc_day,
+    int32_t *utc_hour, int32_t *utc_minute, int32_t *utc_second
+) {
+    // timezone 为正表示东半球（如北京时间 +8.0），为负表示西半球
+    // UTC = 地方时 - timezone
+    int32_t offset_minutes_total = (int32_t)(timezone * 60.0f);
+    int32_t offset_hours = offset_minutes_total / 60;
+    int32_t offset_mins  = offset_minutes_total % 60;
+
+    int32_t s = second;
+    int32_t mi = minute - offset_mins;
+    int32_t h = hour - offset_hours;
+    int32_t d = day;
+    int32_t mo = month;
+    int32_t y = year;
+
+    while (s < 0) { s += 60; mi -= 1; }
+    while (s >= 60) { s -= 60; mi += 1; }
+
+    while (mi < 0) { mi += 60; h -= 1; }
+    while (mi >= 60) { mi -= 60; h += 1; }
+
+    while (h < 0) { h += 24; d -= 1; }
+    while (h >= 24) { h -= 24; d += 1; }
+
+    while (d < 1) {
+        mo -= 1;
+        if (mo < 1) { mo = 12; y -= 1; }
+        d += _days_in_month(y, mo);
+    }
+    while (d > _days_in_month(y, mo)) {
+        d -= _days_in_month(y, mo);
+        mo += 1;
+        if (mo > 12) { mo = 1; y += 1; }
+    }
+
+    while (mo < 1) { mo += 12; y -= 1; }
+    while (mo > 12) { mo -= 12; y += 1; }
+
+    *utc_year = y;
+    *utc_month = mo;
+    *utc_day = d;
+    *utc_hour = h;
+    *utc_minute = mi;
+    *utc_second = s;
+}
+
+
 // ===============================================================================
 // 字符编码相关
 // ===============================================================================

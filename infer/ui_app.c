@@ -632,10 +632,10 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
 
 void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
     wchar_t cell_text[4][4][2][10] = {
-        { {L"[1]", L"番茄钟",}, {L"[2]", L"电子鹦鹉",}, {L"[3]", L"玲珑天象仪",}, {L"[A]", L"返回",}, },
-        { {L"[4]", L"电子书",}, {L"[5]", L"音乐盒",}, {L"[6]", L"相册",}, {L"[B]", L"设置",}, },
-        { {L"[7]", L"BadApple",}, {L"[8]", L"元胞自动机",}, {L"[9]", L"演化算法",}, {L"[C]", L"本机自述",}, },
-        { {L"[*]", L"",}, {L"[0]", L"色彩风格",}, {L"[#]", L"TSP",}, {L"[D]", L"安全关机",}, },
+        { {L"[1]", L"番茄表",}, {L"[2]", L"鹦鹉笼",}, {L"[3]", L"玲珑仪",}, {L"[A]", L"返回",}, },
+        { {L"[4]", L"计算器",}, {L"[5]", L"音乐盒",}, {L"[6]", L"时光集",}, {L"[B]", L"设置",}, },
+        { {L"[7]", L"小游戏",}, {L"[8]", L"频谱仪",}, {L"[9]", L"寻呼机",}, {L"[C]", L"自述",}, },
+        { {L"[*]", L"计步器",}, {L"[0]", L"手电筒",}, {L"[#]", L"控制台",}, {L"[D]", L"关机",}, },
     };
 
     // 清屏
@@ -700,6 +700,8 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_6) {
         // TODO
+        gfx_fill_white(global_state->gfx);
+        gfx_refresh(global_state->gfx);
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_7) {
         global_state->STATE = STATE_BADAPPLE;
@@ -734,7 +736,9 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         global_state->STATE = STATE_SHUTDOWN;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
-        // TODO
+        global_state->brightness += 32;
+        global_state->brightness = global_state->brightness % 256;
+        gfx_set_brightness(global_state->gfx, (uint8_t)global_state->brightness);
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_HASH) {
         global_state->STATE = STATE_GENETIC_TSP;
@@ -828,7 +832,7 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
         time_red = 0; time_green = 0; time_blue = 0;
         nongli_red = 220; nongli_green = 120; nongli_blue = 0;
         sevenseg_red = 255; sevenseg_green = 0; sevenseg_blue = 0;
-        sevenseg_shadow = 0;
+        sevenseg_shadow = 1;
     }
     else if (global_state->ui_color_style == UI_COLOR_DARK) {
         time_red = 255; time_green = 255; time_blue = 255;
@@ -898,7 +902,7 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 
     // 显示电量信息文字
     wchar_t battery_info_buf[100];
-    swprintf(battery_info_buf, 100, L"电量:%d%%  |  %dmV  |  %dmA%ls", global_state->ups_soc, global_state->ups_voltage, global_state->ups_current, (global_state->ups_is_charging ? L"  |  正在充电" : L""));
+    swprintf(battery_info_buf, 100, L"电量:%d%% | %dmV | %dmA%ls", global_state->ups_soc, global_state->ups_voltage, global_state->ups_current, (global_state->ups_is_charging ? L"  |  正在充电" : L""));
     gfx_draw_textline_centered(global_state->gfx, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*2, time_red, time_green, time_blue, 1);
 
 #endif
@@ -1148,14 +1152,14 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     gfx_draw_triangle(global_state->gfx, 319, 3, 178, 112, 178, 120, 0, 30, 31, 32, 1);
     gfx_draw_triangle(global_state->gfx, 319, 3, 178, 120, 319, 227, 0, 30, 31, 32, 1);
 
-    gfx_draw_line_anti_aliasing(global_state->gfx, 0, 3, 150, 112, 3, 0x00, 0x01, 0x02, 1);
-    gfx_draw_line_anti_aliasing(global_state->gfx, 319, 3, 178, 112, 3, 0x00, 0x01, 0x02, 1);
+    // gfx_draw_line_anti_aliasing(global_state->gfx, 0, 3, 150, 112, 3, 0x00, 0x01, 0x02, 1);
+    // gfx_draw_line_anti_aliasing(global_state->gfx, 319, 3, 178, 112, 3, 0x00, 0x01, 0x02, 1);
 
-    gfx_draw_line_anti_aliasing(global_state->gfx, 150, 112, 150, 120, 3, 0x00, 0x01, 0x02, 1);
-    gfx_draw_line_anti_aliasing(global_state->gfx, 178, 112, 178, 120, 3, 0x00, 0x01, 0x02, 1);
+    // gfx_draw_line_anti_aliasing(global_state->gfx, 150, 112, 150, 120, 3, 0x00, 0x01, 0x02, 1);
+    // gfx_draw_line_anti_aliasing(global_state->gfx, 178, 112, 178, 120, 3, 0x00, 0x01, 0x02, 1);
 
-    gfx_draw_line_anti_aliasing(global_state->gfx, 150, 120, 0, 233, 3, 0x00, 0x01, 0x02, 1);
-    gfx_draw_line_anti_aliasing(global_state->gfx, 178, 120, 319, 227, 3, 0x00, 0x01, 0x02, 1);
+    // gfx_draw_line_anti_aliasing(global_state->gfx, 150, 120, 0, 233, 3, 0x00, 0x01, 0x02, 1);
+    // gfx_draw_line_anti_aliasing(global_state->gfx, 178, 120, 319, 227, 3, 0x00, 0x01, 0x02, 1);
 
     // 进入沙漏画面若干秒内显示提示文字
     if (global_state->timestamp - s_ui_flip_first_load_timestamp < 10000) {
@@ -1515,15 +1519,15 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
     }
 
 
-    gfx_soft_clear(global_state->gfx);
+    gfx_soft_clear(global_state->llgfx);
 
     for (int32_t row = 0; row < 4; row++) {
         for (int32_t col = 0; col < 4; col++) {
             int32_t bx = (col == 0) ? 1 : 0;
             int32_t by = (row == 0) ? 1 : 0;
-            gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, 37, 38, 41, 1);
-            gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][0], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, 255, 255, 255, 1);
-            gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][1], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, txt_color[row][col][0], txt_color[row][col][1], txt_color[row][col][2], 1);
+            gfx_draw_rectangle(global_state->llgfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, 37, 38, 41, 1);
+            gfx_draw_textline_centered(global_state->llgfx, cell_text[row][col][0], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, 255, 255, 255, 1);
+            gfx_draw_textline_centered(global_state->llgfx, cell_text[row][col][1], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, txt_color[row][col][0], txt_color[row][col][1], txt_color[row][col][2], 1);
         }
     }
 }
@@ -1588,10 +1592,10 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->view_roll = global_state->roll;
     }
 
-    gfx_soft_clear(global_state->gfx);
+    gfx_soft_clear(global_state->llgfx);
 
-    render_sky(global_state->gfx,
-        MIN(global_state->gfx->width, global_state->gfx->height) / 2, global_state->gfx->width / 2, global_state->gfx->height / 2,
+    render_sky(global_state->llgfx,
+        MIN(global_state->llgfx->width, global_state->llgfx->height) / 2, global_state->llgfx->width / 2, global_state->llgfx->height / 2,
         llcfg->view_alt, llcfg->view_azi, llcfg->view_roll, llcfg->view_f,
         // 2026, 3, 24, 18, 10, 0, 8.0, 119.0, 31.0,
         llcfg->year, llcfg->month, llcfg->day, llcfg->hour, llcfg->minute, llcfg->second, llcfg->timezone, llcfg->longitude, llcfg->latitude,
@@ -1612,13 +1616,13 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->enable_tracking_sun
     );
 
-    gfx_dithering(global_state->gfx);
-    // gfx_gamma(global_state->gfx, 1.3f);
+    gfx_dithering(global_state->llgfx);
+    // gfx_gamma(global_state->llgfx, 1.3f);
 
     // 显示FPS
     wchar_t fps_str[16];
     swprintf(fps_str, 16, L"FPS=%.1f", fps_display_value);
-    gfx_draw_textline(global_state->gfx, fps_str, 1, 0, 0, 255, 0, 1);
+    gfx_draw_textline(global_state->llgfx, fps_str, 1, 0, 0, 255, 0, 1);
 
     linglong_refreshed = 1;
 }
@@ -1762,17 +1766,17 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
 
     if (global_state->is_ctrl_enabled) {
         ui_app_linglong_setting_draw(key_event, global_state);
-        gfx_draw_textline_centered(global_state->gfx, L"设置", global_state->gfx->width/2, PADDING_TOP/2, 222, 222, 222, 1);
+        gfx_draw_textline_centered(global_state->llgfx, L"设置", global_state->llgfx->width/2, PADDING_TOP/2, 222, 222, 222, 1);
     }
 
-    gfx_draw_textline(global_state->gfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->gfx->height - 13, 255, 255, 255, 200);
+    gfx_draw_textline(global_state->llgfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->llgfx->height - 13, 255, 255, 255, 200);
 
     wchar_t timestr[30];
     swprintf(timestr, 30, L"%04d-%02d-%02d %02d:%02d:%02d", global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->second);
-    gfx_draw_textline(global_state->gfx, timestr, global_state->gfx->width - 116, global_state->gfx->height - 13, 255, 255, 255, 1);
+    gfx_draw_textline(global_state->llgfx, timestr, global_state->llgfx->width - 116, global_state->llgfx->height - 13, 255, 255, 255, 1);
 
-
-    gfx_refresh(global_state->gfx);
+    // convert_rgb888_to_rgb565_double(global_state->gfx, global_state->llgfx->frame_buffer_rgb888, global_state->llgfx->width, global_state->llgfx->height);
+    gfx_refresh(global_state->llgfx);
 }
 
 
@@ -2230,7 +2234,7 @@ static inline void ui_app_setting_capture_value(Key_Event *key_event, Global_Sta
     day_edit = global_state->day;
     hour_edit = global_state->hour;
     minute_edit = global_state->minute;
-    timezone_edit = global_state->year;
+    timezone_edit = global_state->timezone;
     longitude_edit = global_state->longitude;
     latitude_edit = global_state->latitude;
 }
@@ -2680,6 +2684,15 @@ void ui_app_setting_value_input_event_handler(Key_Event *key_event, Global_State
                                 (value_text[6] - L'0') * 1;
             global_state->day = (value_text[8] - L'0') * 10 + 
                                 (value_text[9] - L'0') * 1;
+
+            int32_t utc_year = 0, utc_month = 0, utc_day = 0, utc_hour = 0, utc_minute = 0, utc_second = 0;
+            local_time_to_utc(
+                global_state->year, global_state->month, global_state->day,
+                global_state->hour, global_state->minute, global_state->second,
+                global_state->timezone,
+                &utc_year, &utc_month, &utc_day, &utc_hour, &utc_minute, &utc_second
+            );
+            set_sys_time(utc_year, utc_month, utc_day, utc_hour, utc_minute, 0);
         }
         // 时间时区 hh:mmsaabb
         else if (value_type == 1) {
@@ -2693,6 +2706,15 @@ void ui_app_setting_value_input_event_handler(Key_Event *key_event, Global_State
             float tz_min =          (value_text[8] - '0') * 10.0f + 
                                     (value_text[9] - '0') * 1.0f;
             global_state->timezone = tz_sign * (tz_hour + tz_min / 60.0f);
+
+            int32_t utc_year = 0, utc_month = 0, utc_day = 0, utc_hour = 0, utc_minute = 0, utc_second = 0;
+            local_time_to_utc(
+                global_state->year, global_state->month, global_state->day,
+                global_state->hour, global_state->minute, global_state->second,
+                global_state->timezone,
+                &utc_year, &utc_month, &utc_day, &utc_hour, &utc_minute, &utc_second
+            );
+            set_sys_time(utc_year, utc_month, utc_day, utc_hour, utc_minute, 0);
         }
         // 经度 sddd_mm'ss"
         else if (value_type == 2) {
@@ -2806,6 +2828,15 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
 
     global_state->linglong_cfg = (Linglong_Config *)platform_calloc(1, sizeof(Linglong_Config));
     linglong_init(global_state->linglong_cfg);
+
+    global_state->llgfx = global_state->gfx;
+
+
+    ///////////////////////////////////////
+    // 初始化文件系统
+
+    fs_init();
+
 
     global_state->timezone = 8.0f;
     global_state->longitude = 119.0f;

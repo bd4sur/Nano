@@ -189,6 +189,14 @@ wchar_t* read_file_to_wchar(char* filename) {
     return wstr; // 调用者负责 free()
 }
 
+void set_sys_time(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second) {
+    return;
+}
+
+int32_t fs_init() {
+    return 0;
+}
+
 void *platform_calloc(size_t nmemb, size_t size) {
     return calloc(nmemb, size);
 }

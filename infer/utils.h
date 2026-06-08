@@ -140,6 +140,15 @@ uint8_t get_digit(int32_t num, int32_t n);
 uint8_t get_timezone_digit(float tz, int32_t digit);
 uint8_t get_lon_lat_digit(float decimal, int32_t digit);
 
+// 地方时+时区 转换为 UTC
+void local_time_to_utc(
+    int32_t year, int32_t month, int32_t day,
+    int32_t hour, int32_t minute, int32_t second,
+    float timezone,
+    int32_t *utc_year, int32_t *utc_month, int32_t *utc_day,
+    int32_t *utc_hour, int32_t *utc_minute, int32_t *utc_second
+);
+
 
 // ===============================================================================
 // 字符编码相关

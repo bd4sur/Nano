@@ -2,6 +2,7 @@
 #define __NANO_UI_TSP_H__
 
 #include "ui_app.h"
+#include "platform.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -89,8 +90,8 @@ typedef struct {
     float best_fitness;
 } TSP_Eden;
 
-static TSP_Eden s_tsp_eden;
-static TSP_Individual s_tsp_new_population[TSP_POP_SIZE];
+static TSP_Eden *s_tsp_eden = NULL;
+static TSP_Individual *s_tsp_new_population = NULL;
 static uint64_t s_tsp_rng_state = 0;
 static uint32_t s_tsp_generation = 0;
 static int32_t s_tsp_initialized = 0;
@@ -298,8 +299,14 @@ void ui_app_tsp_init(Key_Event *key_event, Global_State *global_state) {
         s_tsp_history[i] = 0.0f;
     }
 
-    tsp_eden_init(&s_tsp_eden);
-    tsp_eden_evolve(&s_tsp_eden);
+    if (!s_tsp_eden) s_tsp_eden = (TSP_Eden *)platform_calloc(1, sizeof(TSP_Eden));
+    if (!s_tsp_new_population) s_tsp_new_population = (TSP_Individual *)platform_calloc(TSP_POP_SIZE, sizeof(TSP_Individual));
+    if (!s_tsp_eden || !s_tsp_new_population) {
+        return;
+    }
+
+    tsp_eden_init(s_tsp_eden);
+    tsp_eden_evolve(s_tsp_eden);
 
     s_tsp_generation = 1;
     s_tsp_initialized = 1;
@@ -311,9 +318,9 @@ void ui_app_tsp_refresh(Key_Event *key_event, Global_State *global_state) {
         ui_app_tsp_init(key_event, global_state);
     }
 
-    tsp_eden_evolve(&s_tsp_eden);
+    tsp_eden_evolve(s_tsp_eden);
 
-    s_tsp_best_distance = (float)TSP_CITY_NUM / s_tsp_eden.best_fitness;
+    s_tsp_best_distance = (float)TSP_CITY_NUM / s_tsp_eden->best_fitness;
 
     // 记录历史
     s_tsp_history[s_tsp_history_count % TSP_HISTORY_SIZE] = s_tsp_best_distance;
@@ -342,7 +349,7 @@ void ui_app_tsp_refresh(Key_Event *key_event, Global_State *global_state) {
         if (city_sy[i] >= TSP_MAP_BOTTOM) city_sy[i] = TSP_MAP_BOTTOM - 1;
     }
 
-    const int *best_gene = s_tsp_eden.population[s_tsp_eden.best_id].gene;
+    const int *best_gene = s_tsp_eden->population[s_tsp_eden->best_id].gene;
 
     // 绘制城市点（红色）
     for (int i = 0; i < TSP_CITY_NUM; i++) {

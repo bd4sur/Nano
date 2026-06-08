@@ -2,12 +2,13 @@
 #define __NANO_UI_GENETIC_H__
 
 #include "ui_app.h"
+#include "platform.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-static const uint8_t image_rgb888[64 * 64 * 3] = {
+const static uint8_t image_rgb888[64 * 64 * 3] = {
     0x3F, 0x3C, 0xA1, 0x3F, 0x3C, 0xA1, 0x3F, 0x3C, 0xA1, 0x3F, 0x3B, 0xA1, 0x3F, 0x3F, 0xA9, 0x46,
     0x54, 0xC8, 0x49, 0x5C, 0xD3, 0x3B, 0x43, 0x97, 0x34, 0x31, 0x72, 0x36, 0x34, 0x7A, 0x39, 0x3C,
     0x8D, 0x3B, 0x45, 0x9D, 0x49, 0x5A, 0xCC, 0x48, 0x5A, 0xD1, 0x47, 0x57, 0xCD, 0x44, 0x4D, 0xBE,
@@ -798,10 +799,10 @@ typedef struct {
     float best_fitness;
 } G_Eden;
 
-static G_Eden s_eden_r;
-static G_Eden s_eden_g;
-static G_Eden s_eden_b;
-static G_Individual s_g_new_population[G_POP_SIZE];
+static G_Eden *s_eden_r = NULL;
+static G_Eden *s_eden_g = NULL;
+static G_Eden *s_eden_b = NULL;
+static G_Individual *s_g_new_population = NULL;
 static uint64_t s_g_rng_state = 0;
 static uint32_t s_g_generation = 0;
 static int32_t s_g_initialized = 0;
@@ -942,7 +943,16 @@ static void g_eden_init(G_Eden *eden, const float *ref) {
 }
 
 void ui_app_genetic_init(Key_Event *key_event, Global_State *global_state) {
-
+    // if (s_g_initialized) {
+    //     return;
+    // }
+    if (!s_eden_r) s_eden_r = (G_Eden *)platform_calloc(1, sizeof(G_Eden));
+    if (!s_eden_g) s_eden_g = (G_Eden *)platform_calloc(1, sizeof(G_Eden));
+    if (!s_eden_b) s_eden_b = (G_Eden *)platform_calloc(1, sizeof(G_Eden));
+    if (!s_g_new_population) s_g_new_population = (G_Individual *)platform_calloc(G_POP_SIZE, sizeof(G_Individual));
+    if (!s_eden_r || !s_eden_g || !s_eden_b || !s_g_new_population) {
+        return;
+    }
     s_g_rng_state = global_state->timestamp;
     s_g_generation = 0;
 
@@ -960,14 +970,14 @@ void ui_app_genetic_init(Key_Event *key_event, Global_State *global_state) {
         }
     }
 
-    g_eden_init(&s_eden_r, ref_r);
-    g_eden_init(&s_eden_g, ref_g);
-    g_eden_init(&s_eden_b, ref_b);
+    g_eden_init(s_eden_r, ref_r);
+    g_eden_init(s_eden_g, ref_g);
+    g_eden_init(s_eden_b, ref_b);
 
     // JS: new Eden(200, matref); eden.Evolve();
-    g_eden_evolve(&s_eden_r);
-    g_eden_evolve(&s_eden_g);
-    g_eden_evolve(&s_eden_b);
+    g_eden_evolve(s_eden_r);
+    g_eden_evolve(s_eden_g);
+    g_eden_evolve(s_eden_b);
 
     s_g_initialized = 1;
 }
@@ -978,9 +988,9 @@ void ui_app_genetic_refresh(Key_Event *key_event, Global_State *global_state, in
     }
 
     for (int32_t i = 0; i < step; i++) {
-        g_eden_evolve(&s_eden_r);
-        g_eden_evolve(&s_eden_g);
-        g_eden_evolve(&s_eden_b);
+        g_eden_evolve(s_eden_r);
+        g_eden_evolve(s_eden_g);
+        g_eden_evolve(s_eden_b);
     }
 
     gfx_soft_clear(global_state->gfx);
@@ -988,9 +998,9 @@ void ui_app_genetic_refresh(Key_Event *key_event, Global_State *global_state, in
     int offset_x = (global_state->gfx->width - G_WIDTH * 2) / 2;
     int offset_y = (global_state->gfx->height - G_HEIGHT * 2) / 2;
 
-    const float *gene_r = s_eden_r.population[s_eden_r.best_id].gene;
-    const float *gene_g = s_eden_g.population[s_eden_g.best_id].gene;
-    const float *gene_b = s_eden_b.population[s_eden_b.best_id].gene;
+    const float *gene_r = s_eden_r->population[s_eden_r->best_id].gene;
+    const float *gene_g = s_eden_g->population[s_eden_g->best_id].gene;
+    const float *gene_b = s_eden_b->population[s_eden_b->best_id].gene;
 
     for (int y = 0; y < G_HEIGHT; y++) {
         for (int x = 0; x < G_WIDTH; x++) {

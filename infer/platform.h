@@ -39,6 +39,22 @@ void *platform_realloc_internal(void *ptr, size_t n);
 // 读取二进制文件到内存缓冲区
 int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, size_t *size);
 
+// 设置时间
+void set_sys_time(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second);
+
+// 初始化文件系统
+int32_t fs_init();
+
+
+
+
+
+
+
+
+
+
+
 
 
 // ===============================================================================
