@@ -2232,7 +2232,7 @@ void scatter_model_3(
     color2 *= expf_fast_schraudolph(-ozone_absorption2 * oz_path * oz_scale);
 
     /* 拍脑袋：夜天光 */
-    float night_light_scale = 1.0f - viewElevationDeg / 90.0f;
+    float night_light_scale = 1.0f - viewElevationDeg / 120.0f;
     color0 += 0.05f * night_light_scale;
     color1 += 0.06f * night_light_scale;
     color2 += 0.12f * night_light_scale;

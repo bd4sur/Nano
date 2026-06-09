@@ -197,6 +197,47 @@ int32_t fs_init() {
     return 0;
 }
 
+int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, size_t *size) {
+    FILE *fp = fopen(filepath, "rb");
+    if (!fp) {
+        return -1;
+    }
+
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return -1;
+    }
+
+    long file_size = ftell(fp);
+    if (file_size < 0) {
+        fclose(fp);
+        return -1;
+    }
+
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        return -1;
+    }
+
+    *buffer = (uint8_t *)platform_malloc(file_size);
+    if (*buffer == NULL) {
+        fclose(fp);
+        return -1;
+    }
+
+    size_t bytes_read = fread(*buffer, 1, file_size, fp);
+    fclose(fp);
+
+    if (bytes_read != (size_t)file_size) {
+        free(*buffer);
+        *buffer = NULL;
+        return -1;
+    }
+
+    *size = file_size;
+    return 0;
+}
+
 void *platform_calloc(size_t nmemb, size_t size) {
     return calloc(nmemb, size);
 }

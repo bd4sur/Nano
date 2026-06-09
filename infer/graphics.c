@@ -4,6 +4,32 @@
 
 #include "glyph.h"
 
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+//////////////////////////////////////////////////////
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+static SemaphoreHandle_t gfx_refresh_mutex = NULL;
+
+#define GFX_SEM_INIT do { \
+    if (gfx_refresh_mutex == NULL) { \
+        gfx_refresh_mutex = xSemaphoreCreateMutex(); \
+    } \
+} while(0);
+
+#define GFX_SEM_TAKE do { \
+    if (gfx_refresh_mutex != NULL) { \
+        xSemaphoreTake(gfx_refresh_mutex, portMAX_DELAY); \
+    } \
+} while(0);
+
+#define GFX_SEM_GIVE do { \
+    if (gfx_refresh_mutex != NULL) { \
+        xSemaphoreGive(gfx_refresh_mutex); \
+    } \
+} while(0);
+//////////////////////////////////////////////////////
+#endif
+
 
 // 图像缓存项结构
 typedef struct {
@@ -225,6 +251,10 @@ void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mod
     
     display_hal_init();
 
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+    GFX_SEM_INIT
+#endif
+
 }
 
 
@@ -234,6 +264,11 @@ void gfx_close(Nano_GFX *gfx) {
 
 
 void gfx_refresh(Nano_GFX *gfx) {
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+    GFX_SEM_TAKE
+#endif
+
     if (gfx->is_double_buffer) {
         display_hal_refresh_rgb565_double(gfx->frame_buffer_rgb565_top, gfx->frame_buffer_rgb565_bottom, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
     } else {
@@ -244,6 +279,11 @@ void gfx_refresh(Nano_GFX *gfx) {
             display_hal_refresh_rgb565(gfx->frame_buffer_rgb565, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
         }
     }
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+    GFX_SEM_GIVE
+#endif
+
 }
 
 // 设置屏幕亮度(0-255)
@@ -1083,6 +1123,13 @@ void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y
         x_pos += (font_width + 1); // 字符间隔1像素
     }
 }
+
+
+void gfx_draw_busy(Nano_GFX *gfx) {
+    gfx_draw_rectangle(gfx, gfx->width/2 - 50, 0, 100, 14, 0x11, 0x55, 0xee, 1);
+    gfx_draw_textline_centered(gfx, L"正在计算...", gfx->width/2, 7, 255, 255, 255, 1);
+}
+
 
 
 // 高性能水平线填充辅助函数

@@ -42,6 +42,21 @@
 #include "ui_color.h"
 #include "ui_app.h"
 
+#define WALLPAPER_PATH ("/home/bd4sur/wp.jpg")
+
+// 全局变量
+
+static uint64_t last_splash_timestamp = 0;
+
+// 指向图像缓冲区的指针
+static uint8_t *image_file_buffer = NULL;
+static size_t image_file_size = 0;
+
+// 壁纸图像解码后的 RGB888 像素缓冲区（避免每次渲染都重新解码）
+static uint8_t *s_wallpaper_rgb888 = NULL;
+static uint32_t s_wallpaper_width = 0;
+static uint32_t s_wallpaper_height = 0;
+static uint8_t s_wallpaper_ready = 0;
 
 
 // ===============================================================================
@@ -799,10 +814,49 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
         gfx_soft_clear(global_state->gfx);
     }
 
-    // gfx_draw_image(global_state->gfx, "/home/bd4sur/wp.jpg", 0, 0, 320, 240, 1);
+    // 首次加载：从SD卡读取壁纸到文件缓冲区
+    if (image_file_buffer == NULL) {
+        int32_t ret = platform_read_file_to_buffer(WALLPAPER_PATH, &image_file_buffer, &image_file_size);
+        printf("platform_read_file_to_buffer %d\n", ret);
+    }
+
+    // 首次解码：将图像文件解码到 RGB888 像素缓冲区（避免每次渲染都重新解码）
+    if (image_file_buffer != NULL && image_file_size > 0 && !s_wallpaper_ready) {
+        if (s_wallpaper_rgb888 == NULL) {
+            s_wallpaper_rgb888 = (uint8_t *)platform_malloc(SCREEN_WIDTH * SCREEN_HEIGHT * 3);
+        }
+        if (s_wallpaper_rgb888 != NULL) {
+            int32_t ret = gfx_decode_image_buffer(
+                image_file_buffer, image_file_size,
+                SCREEN_WIDTH, SCREEN_HEIGHT,
+                s_wallpaper_rgb888,
+                &s_wallpaper_width, &s_wallpaper_height
+            );
+            if (ret == 0) {
+                s_wallpaper_ready = 1;
+                printf("gfx_decode_image_buffer ok, %dx%d\n", s_wallpaper_width, s_wallpaper_height);
+            } else {
+                printf("gfx_decode_image_buffer failed\n");
+            }
+        }
+    }
+
+    // 优先使用已解码的 RGB888 缓冲区绘制壁纸
+    if (s_wallpaper_ready && s_wallpaper_rgb888 != NULL) {
+        gfx_draw_rgb888_buffer(
+            global_state->gfx, s_wallpaper_rgb888,
+            s_wallpaper_width, s_wallpaper_height,
+            0, 0
+        );
+    }
+    // 若解码尚未完成或失败，回退到原始方式（带实时解码）
+    else if (image_file_buffer != NULL && image_file_size > 0) {
+        gfx_draw_image_buffer(global_state->gfx, image_file_buffer, image_file_size, 0, 0, 0, 0);
+        printf("gfx_draw_image_buffer\n");
+    }
 
     // Header
-    ui_draw_header(key_event, global_state, L"Project Nano", 1);
+    // ui_draw_header(key_event, global_state, L"Project Nano", 1);
 
     // 时间
     time_t rawtime;
@@ -830,8 +884,8 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
         time_red = 0; time_green = 0; time_blue = 0;
-        nongli_red = 220; nongli_green = 120; nongli_blue = 0;
-        sevenseg_red = 255; sevenseg_green = 0; sevenseg_blue = 0;
+        nongli_red = 0xff; nongli_green = 0xfb; nongli_blue = 0;
+        sevenseg_red = 255; sevenseg_green = 255; sevenseg_blue = 255;
         sevenseg_shadow = 1;
     }
     else if (global_state->ui_color_style == UI_COLOR_DARK) {
@@ -843,12 +897,12 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 
     const wchar_t *weekdays[] = {L"日", L"一", L"二", L"三", L"四", L"五", L"六"};
     swprintf(datetime_wcs_buffer, 33, L"%04d年%02d月%02d日 星期%ls", year, month, day, weekdays[timeinfo->tm_wday]);
-    gfx_draw_textline_centered(global_state->gfx, datetime_wcs_buffer, global_state->gfx->width / 2, 22, time_red, time_green, time_blue, 1);
+    gfx_draw_textline_centered(global_state->gfx, datetime_wcs_buffer, global_state->gfx->width / 2, 30, time_red, time_green, time_blue, 1);
 
     // 农历日期
     LunarDate *nongli = lunar_calculate(year, month, day, hour, minute, second, timezone);
     _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
-    gfx_draw_textline_centered(global_state->gfx, nongli_wcs_buffer, global_state->gfx->width / 2, 37, nongli_red, nongli_green, nongli_blue, 1);
+    gfx_draw_textline_centered(global_state->gfx, nongli_wcs_buffer, global_state->gfx->width / 2, 110, nongli_red, nongli_green, nongli_blue, 1);
 
     // 七段码时钟
     wchar_t time7seg_str[10];
@@ -856,30 +910,30 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     int32_t s7seg_width = 0.0f;
     int32_t s7seg_height = 0.0f;
     ui_draw_7seg_string(key_event, global_state,
-        (global_state->gfx->width - 222) / 2, 50,
-        time7seg_str, sevenseg_red, sevenseg_green, sevenseg_blue, 16.0f, 3.0f, 10.0f, sevenseg_shadow,
+        (global_state->gfx->width - 246) / 2, 46,
+        time7seg_str, sevenseg_red, sevenseg_green, sevenseg_blue, 16.0f, 5.0f, 10.0f, sevenseg_shadow,
         &s7seg_width, &s7seg_height);
 
 
     // 玲珑仪（青春版）
-    ui_app_linglong_draw_lite(key_event, global_state, (global_state->gfx->width - 128) / 2, 100,
-        year, month, day, hour, minute, second, longitude, latitude, timezone);
+    // ui_app_linglong_draw_lite(key_event, global_state, (global_state->gfx->width - 128) / 2, 100,
+    //     year, month, day, hour, minute, second, longitude, latitude, timezone);
 
 
     // Footer
-    if (global_state->gfx->width > 128) {
-        ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
-    }
-    else {
-        ui_draw_copyright_notice(key_event, global_state, 20, 53);
-    }
+    // if (global_state->gfx->width > 128) {
+    //     ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+    // }
+    // else {
+    //     ui_draw_copyright_notice(key_event, global_state, 20, 53);
+    // }
+
 
 
     // 时间戳
-    wchar_t ts_text[100];
-    swprintf(ts_text, 100, L"Timestamp: %llu | Ticks: %d", global_state->timestamp, global_state->timer);
-    gfx_draw_textline_centered(global_state->gfx, ts_text, global_state->gfx->width/2, global_state->gfx->height-13*3, time_red, time_green, time_blue, 1);
-
+    // wchar_t ts_text[100];
+    // swprintf(ts_text, 100, L"Timestamp: %llu | Ticks: %d", global_state->timestamp, global_state->timer);
+    // gfx_draw_textline_centered(global_state->gfx, ts_text, global_state->gfx->width/2, global_state->gfx->height-13*3-6, time_red, time_green, time_blue, 1);
 
 
 
@@ -903,7 +957,7 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     // 显示电量信息文字
     wchar_t battery_info_buf[100];
     swprintf(battery_info_buf, 100, L"电量:%d%% | %dmV | %dmA%ls", global_state->ups_soc, global_state->ups_voltage, global_state->ups_current, (global_state->ups_is_charging ? L"  |  正在充电" : L""));
-    gfx_draw_textline_centered(global_state->gfx, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*2, time_red, time_green, time_blue, 1);
+    gfx_draw_textline_centered(global_state->gfx, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*2-6, time_red, time_green, time_blue, 1);
 
 #endif
 
@@ -918,8 +972,6 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
         gfx_draw_line(global_state->gfx, 4, 9, 7, 9, 255, 255, 255, v);
     }
 #endif
-
-    // gfx_test(global_state->gfx);
 
     gfx_refresh(global_state->gfx);
 }
@@ -1310,10 +1362,16 @@ static int32_t linglong_timemachine_running_state = 2; // 0-停止；1-时光机
 static int32_t linglong_timemachine_speed = 0; // 时光机速度，正数为未来，负数为过去，单位秒
 static uint64_t linglong_timemachine_start_timestamp = 0;
 
+static int32_t linglong_state = 0; // 玲珑仪UI状态
+
+#define LL_STATE_SKY (0)
+#define LL_STATE_SETTING (1)
+#define LL_STATE_SETTING_CALLBACK (2)
 
 
 void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state) {
     linglong_refreshed = 0;
+    linglong_state = LL_STATE_SKY;
 }
 
 void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state) {
@@ -1324,10 +1382,10 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
         {{0,0,0}, {0,0,0}, {0,0,0}, {0,0,0},},
     };
     wchar_t cell_text[4][4][2][10] = {
-        { {L"1.投影算法", L"鱼眼",}, {L"2.赤道坐标", L"关",}, {L"3.地平坐标", L"方位角",}, {L"A.返回", L"",}, },
-        { {L"4.黄道", L"关",}, {L"5.天体名称", L"关",}, {L"6.姿态指示", L"关",}, {L"B.校准IMU", L"",}, },
-        { {L"7.大气散射", L"二次散射",}, {L"8.地景", L"草原全景",}, {L"9.平滑滤波", L"开",}, {L"", L"",}, },
-        { {L"*.时间", L"",}, {L"0.跟踪太阳", L"关",}, {L"#.位置", L"",}, {L"", L"",}, },
+        { {L"投影算法", L"鱼眼",}, {L"赤道坐标", L"关",}, {L"地平坐标", L"方位角",}, {L"退出玲珑仪", L"",}, },
+        { {L"黄道", L"关",}, {L"天体名称", L"关",}, {L"姿态指示", L"关",}, {L"校准IMU", L"",}, },
+        { {L"大气散射", L"二次散射",}, {L"地景", L"草原全景",}, {L"平滑滤波", L"开",}, {L"返回", L"",}, },
+        { {L"时间", L"",}, {L"跟踪太阳", L"关",}, {L"位置", L"",}, {L"", L"",}, },
     };
 
     // (0,0)投影算法
@@ -1530,6 +1588,8 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
             gfx_draw_textline_centered(global_state->llgfx, cell_text[row][col][1], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, txt_color[row][col][0], txt_color[row][col][1], txt_color[row][col][2], 1);
         }
     }
+
+    gfx_draw_textline_centered(global_state->llgfx, L"玲珑天象仪设置", global_state->llgfx->width/2, PADDING_TOP/2, 222, 222, 222, 1);
 }
 
 
@@ -1752,7 +1812,6 @@ void ui_app_linglong_splash(Key_Event *key_event, Global_State *global_state) {
     gfx_draw_textline_centered(gfx, L"Der bestirnte Himmel ueber mir.", gfx->width/2, gfx->height/2 - 14 * 5, 222, 222, 230, 1);
     gfx_draw_textline_centered(gfx, L"(c) 2011-2026 BD4SUR", gfx->width/2, gfx->height/2 - 14 * 4, 96, 96, 96, 1);
     gfx_draw_textline_centered(gfx, L"正在渲染首帧...请稍等", gfx->width/2, gfx->height/2 - 14 * 1, 255, 255, 255, 1);
-    gfx_draw_textline_centered(gfx, L"操作时请按住按钮，耐心等待响应和刷新", gfx->width/2, gfx->height/2 + 14 * 1, 255, 255, 255, 1);
     gfx_draw_textline_centered(gfx, L"1左转   2推杆   3右转   A退出", gfx->width/2, gfx->height/2 + 14 * 3, 96, 96, 96, 1);
     gfx_draw_textline_centered(gfx, L"4左倾   5归中   6右倾   B    ", gfx->width/2, gfx->height/2 + 14 * 4, 96, 96, 96, 1);
     gfx_draw_textline_centered(gfx, L"7拉远   8拉杆   9推进   C设置", gfx->width/2, gfx->height/2 + 14 * 5, 96, 96, 96, 1);
@@ -1762,21 +1821,28 @@ void ui_app_linglong_splash(Key_Event *key_event, Global_State *global_state) {
 }
 
 void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_state) {
-    ui_app_linglong_draw_full(key_event, global_state);
+    // ui_app_linglong_draw_full(key_event, global_state);
 
-    if (global_state->is_ctrl_enabled) {
+    if (linglong_state == LL_STATE_SETTING || linglong_state == LL_STATE_SETTING_CALLBACK) {
         ui_app_linglong_setting_draw(key_event, global_state);
-        gfx_draw_textline_centered(global_state->llgfx, L"设置", global_state->llgfx->width/2, PADDING_TOP/2, 222, 222, 222, 1);
+    }
+    else {
+        ui_app_linglong_draw_full(key_event, global_state);
     }
 
     gfx_draw_textline(global_state->llgfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->llgfx->height - 13, 255, 255, 255, 200);
 
     wchar_t timestr[30];
-    swprintf(timestr, 30, L"%04d-%02d-%02d %02d:%02d:%02d", global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->second);
-    gfx_draw_textline(global_state->llgfx, timestr, global_state->llgfx->width - 116, global_state->llgfx->height - 13, 255, 255, 255, 1);
+    swprintf(timestr, 30, L"%ls %04d-%02d-%02d %02d:%02d:%02d",
+        (linglong_timemachine_running_state == 0) ? L"  " :
+            (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed > 0)) ? L">>" :
+            (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed < 0)) ? L"<<" : L" >")),
+        global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->second);
+    gfx_draw_textline(global_state->llgfx, timestr, global_state->llgfx->width - 134, global_state->llgfx->height - 13, 255, 255, 255, 1);
 
     // convert_rgb888_to_rgb565_double(global_state->gfx, global_state->llgfx->frame_buffer_rgb888, global_state->llgfx->width, global_state->llgfx->height);
     gfx_refresh(global_state->llgfx);
+
 }
 
 
@@ -1794,12 +1860,7 @@ void ui_app_linglong_toggle_timemachine(Key_Event *key_event, Global_State *glob
 
 void ui_app_linglong_set_timemachine_speed(Key_Event *key_event, Global_State *global_state, int32_t speed) {
     linglong_timemachine_speed = speed;
-    if (linglong_timemachine_running_state == 0) {
-        linglong_timemachine_running_state = 1;
-    }
-    else {
-        linglong_timemachine_running_state = 0;
-    }
+    linglong_timemachine_running_state = 1;
     if (linglong_timemachine_start_timestamp == 0) {
         linglong_timemachine_start_timestamp = global_state->timestamp;
     }
@@ -1836,6 +1897,8 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
     }
 #endif
 
+    int32_t is_setting_refresh = 0;
+
     // 按任意键都重置玲珑仪刷新状态，以便响应按键活动
     if (key_event->key_edge < 0 && key_event->key_code != KEYCODE_NUM_IDLE) {
         linglong_refreshed = 0;
@@ -1851,13 +1914,14 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             }
         }
         else {
-            global_state->is_ctrl_enabled = 0;
+            // global_state->is_ctrl_enabled = 0;
             if (global_state->linglong_cfg->projection == 0) {
                 global_state->linglong_cfg->projection = 1;
             }
             else {
                 global_state->linglong_cfg->projection = 0;
             }
+            linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
     // 按2键推杆低头（pitch--），或者Ctrl时切换赤道坐标圈
@@ -1870,9 +1934,10 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             }
         }
         else {
-            global_state->is_ctrl_enabled = 0;
+            // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->enable_equatorial_coord ++;
             global_state->linglong_cfg->enable_equatorial_coord = global_state->linglong_cfg->enable_equatorial_coord % 2;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
     // 按3键向右偏航（yaw++），或者Ctrl时切换地平坐标
@@ -1885,9 +1950,10 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             }
         }
         else {
-            global_state->is_ctrl_enabled = 0;
+            // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->enable_horizontal_coord++;
             global_state->linglong_cfg->enable_horizontal_coord = global_state->linglong_cfg->enable_horizontal_coord % 3;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
     // 按4键向左坡度（roll--），或者Ctrl时切换黄道
@@ -1900,9 +1966,10 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             }
         }
         else {
-            global_state->is_ctrl_enabled = 0;
+            // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->enable_ecliptic_circle++;
             global_state->linglong_cfg->enable_ecliptic_circle = global_state->linglong_cfg->enable_ecliptic_circle % 2;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
     // 按5键归中，或切换陀螺仪状态，或者Ctrl时切换天体名称
@@ -1921,9 +1988,10 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             }
         }
         else {
-            global_state->is_ctrl_enabled = 0;
+            // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->enable_star_name++;
             global_state->linglong_cfg->enable_star_name = global_state->linglong_cfg->enable_star_name % 4;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
     // 按6键向右坡度（roll++），或者Ctrl时切换姿态指示
@@ -1936,9 +2004,10 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             }
         }
         else {
-            global_state->is_ctrl_enabled = 0;
+            // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->enable_att_indicator++;
             global_state->linglong_cfg->enable_att_indicator = global_state->linglong_cfg->enable_att_indicator % 2;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
     // 按7键拉远，或者Ctrl时切换大气散射模型
@@ -1948,9 +2017,10 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             if (global_state->linglong_cfg->view_f <= 0.1f) global_state->linglong_cfg->view_f = 0.1f;
         }
         else {
-            global_state->is_ctrl_enabled = 0;
+            // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->sky_model++;
             global_state->linglong_cfg->sky_model = global_state->linglong_cfg->sky_model % 4;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
     // 按8键拉杆抬头（pitch++），或者Ctrl时切换地景
@@ -1963,9 +2033,10 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             }
         }
         else {
-            global_state->is_ctrl_enabled = 0;
+            // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->landscape_index++;
             global_state->linglong_cfg->landscape_index = global_state->linglong_cfg->landscape_index % 3;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
     // 按9键推近，或者Ctrl时切换平滑滤波
@@ -1975,9 +2046,10 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             if (global_state->linglong_cfg->view_f >= 5.0f) global_state->linglong_cfg->view_f = 5.0f;
         }
         else {
-            global_state->is_ctrl_enabled = 0;
+            // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->enable_opt_bilinear++;
             global_state->linglong_cfg->enable_opt_bilinear = global_state->linglong_cfg->enable_opt_bilinear % 2;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
     // 按A键返回主菜单
@@ -1991,7 +2063,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             // TODO
         }
         else {
-            global_state->is_ctrl_enabled = 0;
+            // global_state->is_ctrl_enabled = 0;
 #ifdef IMU_ENABLED
             ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, L" \n \n    正在校准IMU...", 0, 0);
             ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
@@ -2006,9 +2078,11 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
     else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_C) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->is_ctrl_enabled = 1;
+            linglong_state = LL_STATE_SETTING;
         }
         else {
             global_state->is_ctrl_enabled = 0;
+            linglong_state = LL_STATE_SKY;
         }
     }
     // 按*键时光机向前（过去）（反复按运行/暂停）
@@ -2021,9 +2095,10 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             ui_app_linglong_set_realtime(key_event, global_state);
         }
         else {
-            global_state->is_ctrl_enabled = 0;
+            // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->enable_tracking_sun++;
             global_state->linglong_cfg->enable_tracking_sun = global_state->linglong_cfg->enable_tracking_sun % 2;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
     // 按#键时光机向后（未来）（反复按运行/暂停）
@@ -2779,7 +2854,7 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     key_event->key_mask = 0;   // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
     key_event->key_repeat = 0; // 触发一次长按后，只要不松手，该标记置1，直到物理按键松开后置0。若该标记为1，则在按住时触发连续重复动作。
 
-    
+
     ///////////////////////////////////////
     // gfx初始化
 
@@ -2877,7 +2952,10 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        ui_app_splash_render_frame(key_event, global_state);
+        if (global_state->timestamp - last_splash_timestamp >= 100) {
+            ui_app_splash_render_frame(key_event, global_state);
+            last_splash_timestamp = global_state->timestamp;
+        }
 
         // 按下任何键，不论长短按，进入主菜单
         if (key_event->key_edge < 0 && key_event->key_code != KEYCODE_NUM_IDLE) {
