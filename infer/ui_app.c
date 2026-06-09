@@ -48,15 +48,25 @@
 
 static uint64_t last_splash_timestamp = 0;
 
-// 指向图像缓冲区的指针
-static uint8_t *image_file_buffer = NULL;
-static size_t image_file_size = 0;
+const static int32_t s_album_count = 3;
+static int32_t s_album_index = 0;
+const static char* s_album_path_list[] = {
+    "/home/bd4sur/wp.jpg",
+    "/home/bd4sur/wp2.png",
+    "/home/bd4sur/wp_yh.png",
+};
+static int32_t s_album_is_autoplay = 0;
+static uint64_t s_album_refresh_timestamp = 0;
 
+// 指向图像缓冲区的指针
+static uint8_t *s_image_file_buffer = NULL;
+static size_t s_image_file_size = 0;
+static char s_image_filename_buffer[128]; // 缓存图像文件名，用于确定是否要重新读取、重新解码
 // 壁纸图像解码后的 RGB888 像素缓冲区（避免每次渲染都重新解码）
-static uint8_t *s_wallpaper_rgb888 = NULL;
-static uint32_t s_wallpaper_width = 0;
-static uint32_t s_wallpaper_height = 0;
-static uint8_t s_wallpaper_ready = 0;
+static uint8_t *s_image_rgb888_buffer = NULL;
+static uint32_t s_image_width = 0;
+static uint32_t s_image_height = 0;
+static uint8_t s_image_decode_ready = 0;
 
 
 // ===============================================================================
@@ -180,6 +190,68 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
     global_state->llm_refresh_timestamp = 0;
     global_state->ba_frame_count = 0;
     global_state->ba_begin_timestamp = 0;
+}
+
+
+void ui_draw_image(Key_Event *key_event, Global_State *global_state, const char *img_path, int32_t is_reload) {
+
+    int32_t is_new_image_file = (strcmp(img_path, s_image_filename_buffer) != 0);
+
+    // 如果显式指定reload，或者图像文件名跟上次调用不同，则清除缓冲区，重新读文件并解码
+    if (is_reload || is_new_image_file) {
+        printf("reload/refresh image: %s\n", img_path);
+        strcpy(s_image_filename_buffer, img_path);
+        s_image_decode_ready = 0;
+        if (s_image_file_buffer != NULL) {
+            free(s_image_file_buffer);
+            s_image_file_buffer = NULL;
+        }
+        if (s_image_rgb888_buffer != NULL) {
+            free(s_image_rgb888_buffer);
+            s_image_rgb888_buffer = NULL;
+        }
+    }
+
+    // 首次加载：从SD卡读取图像文件到文件缓冲区
+    if (s_image_file_buffer == NULL) {
+        int32_t ret = platform_read_file_to_buffer(img_path, &s_image_file_buffer, &s_image_file_size);
+        printf("platform_read_file_to_buffer %d\n", ret);
+    }
+
+    // 首次解码：将图像文件解码到 RGB888 像素缓冲区（避免每次渲染都重新解码）
+    if (s_image_file_buffer != NULL && s_image_file_size > 0 && !s_image_decode_ready) {
+        if (s_image_rgb888_buffer == NULL) {
+            s_image_rgb888_buffer = (uint8_t *)platform_malloc(SCREEN_WIDTH * SCREEN_HEIGHT * 3);
+        }
+        if (s_image_rgb888_buffer != NULL) {
+            int32_t ret = gfx_decode_image_buffer(
+                s_image_file_buffer, s_image_file_size,
+                SCREEN_WIDTH, SCREEN_HEIGHT,
+                s_image_rgb888_buffer,
+                &s_image_width, &s_image_height
+            );
+            if (ret == 0) {
+                s_image_decode_ready = 1;
+                printf("gfx_decode_image_buffer ok, %dx%d\n", s_image_width, s_image_height);
+            } else {
+                printf("gfx_decode_image_buffer failed\n");
+            }
+        }
+    }
+
+    // 优先使用已解码的 RGB888 缓冲区绘制壁纸
+    if (s_image_decode_ready && s_image_rgb888_buffer != NULL) {
+        gfx_draw_rgb888_buffer(
+            global_state->gfx, s_image_rgb888_buffer,
+            s_image_width, s_image_height,
+            0, 0
+        );
+    }
+    // 若解码尚未完成或失败，回退到原始方式（带实时解码）
+    else if (s_image_file_buffer != NULL && s_image_file_size > 0) {
+        gfx_draw_image_buffer(global_state->gfx, s_image_file_buffer, s_image_file_size, 0, 0, 0, 0);
+        printf("gfx_draw_image_buffer\n");
+    }
 }
 
 
@@ -714,9 +786,7 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         // TODO
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_6) {
-        // TODO
-        gfx_fill_white(global_state->gfx);
-        gfx_refresh(global_state->gfx);
+        global_state->STATE = STATE_ALBUM;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_7) {
         global_state->STATE = STATE_BADAPPLE;
@@ -814,46 +884,8 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
         gfx_soft_clear(global_state->gfx);
     }
 
-    // 首次加载：从SD卡读取壁纸到文件缓冲区
-    if (image_file_buffer == NULL) {
-        int32_t ret = platform_read_file_to_buffer(WALLPAPER_PATH, &image_file_buffer, &image_file_size);
-        printf("platform_read_file_to_buffer %d\n", ret);
-    }
-
-    // 首次解码：将图像文件解码到 RGB888 像素缓冲区（避免每次渲染都重新解码）
-    if (image_file_buffer != NULL && image_file_size > 0 && !s_wallpaper_ready) {
-        if (s_wallpaper_rgb888 == NULL) {
-            s_wallpaper_rgb888 = (uint8_t *)platform_malloc(SCREEN_WIDTH * SCREEN_HEIGHT * 3);
-        }
-        if (s_wallpaper_rgb888 != NULL) {
-            int32_t ret = gfx_decode_image_buffer(
-                image_file_buffer, image_file_size,
-                SCREEN_WIDTH, SCREEN_HEIGHT,
-                s_wallpaper_rgb888,
-                &s_wallpaper_width, &s_wallpaper_height
-            );
-            if (ret == 0) {
-                s_wallpaper_ready = 1;
-                printf("gfx_decode_image_buffer ok, %dx%d\n", s_wallpaper_width, s_wallpaper_height);
-            } else {
-                printf("gfx_decode_image_buffer failed\n");
-            }
-        }
-    }
-
-    // 优先使用已解码的 RGB888 缓冲区绘制壁纸
-    if (s_wallpaper_ready && s_wallpaper_rgb888 != NULL) {
-        gfx_draw_rgb888_buffer(
-            global_state->gfx, s_wallpaper_rgb888,
-            s_wallpaper_width, s_wallpaper_height,
-            0, 0
-        );
-    }
-    // 若解码尚未完成或失败，回退到原始方式（带实时解码）
-    else if (image_file_buffer != NULL && image_file_size > 0) {
-        gfx_draw_image_buffer(global_state->gfx, image_file_buffer, image_file_size, 0, 0, 0, 0);
-        printf("gfx_draw_image_buffer\n");
-    }
+    // 绘制壁纸
+    ui_draw_image(key_event, global_state, WALLPAPER_PATH, 0);
 
     // Header
     // ui_draw_header(key_event, global_state, L"Project Nano", 1);
@@ -3615,10 +3647,74 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         break;
 
 
+    /////////////////////////////////////////////
+    // 时光集：相册
+    /////////////////////////////////////////////
 
+    case STATE_ALBUM:
 
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            gfx_draw_busy(global_state->gfx);
+            gfx_refresh(global_state->gfx);
+            ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
+            gfx_refresh(global_state->gfx);
+        }
+        global_state->PREV_STATE = global_state->STATE;
 
+        // 长短按1键：自动放映
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_1) {
+            s_album_is_autoplay++;
+            s_album_is_autoplay = s_album_is_autoplay % 2;
+            s_album_refresh_timestamp = global_state->timestamp;
 
+            ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
+            if (s_album_is_autoplay) {
+                gfx_draw_textline(global_state->gfx, L"★", 0, 0, 0x00, 0xff, 0x00, 1);
+            }
+            gfx_refresh(global_state->gfx);
+        }
+        // 长短按*键，切换上一张图片
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
+            ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
+            gfx_refresh(global_state->gfx);
+            s_album_index--;
+            if (s_album_index < 0) s_album_index = s_album_count - 1;
+            s_album_index = s_album_index % s_album_count;
+        }
+        // 长短按A键返回主菜单
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+            global_state->STATE = STATE_MAIN_MENU;
+        }
+        // 长短按D键，切换下一张图片
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_D) {
+            ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
+            gfx_refresh(global_state->gfx);
+            s_album_index++;
+            s_album_index = s_album_index % s_album_count;
+        }
+
+        // 自动放映
+        if (s_album_is_autoplay) {
+            // 每5000ms切换
+            if (global_state->timestamp - s_album_refresh_timestamp >= 5000) {
+                ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
+                gfx_draw_textline(global_state->gfx, L"★", 0, 0, 0x00, 0xff, 0x00, 1);
+                gfx_refresh(global_state->gfx);
+                s_album_index++;
+                s_album_index = s_album_index % s_album_count;
+                s_album_refresh_timestamp = global_state->timestamp;
+            }
+            else {
+                int32_t aa = (float)(global_state->timestamp - s_album_refresh_timestamp) / 5000.0f * 360;
+                gfx_draw_sector(global_state->gfx, 6, 6, 6, 0, aa, 0x66, 0xcc, 0xff, 1);
+                // gfx_draw_rectangle(global_state->gfx, 0, 239, global_state->gfx->width, 1, 0x00, 0x00, 0x00, 1);
+                // gfx_draw_rectangle(global_state->gfx, 0, 239, w, 1, 0x66, 0xcc, 0xff, 1);
+                gfx_refresh(global_state->gfx);
+            }
+        }
+
+        break;
 
 
     default:

@@ -26,11 +26,11 @@ extern "C" {
 #define STATE_GAMEOFLIFE        (27)
 #define STATE_LINGLONG          (28)
 #define STATE_FLASHMEMO         (29)
-#define STATE_SHUTDOWN          (31)
-#define STATE_TTS_SETTING       (32)
+#define STATE_ALBUM             (32)
 #define STATE_ASR_SETTING       (33)
 #define STATE_SETTING_INPUT     (35)
 #define STATE_FLIP              (36)
+#define STATE_SHUTDOWN          (99)
 
 
 #define PREFILL_LED_ON  system("echo \"1\" > /sys/devices/platform/leds/leds/green:status/brightness");

@@ -1298,6 +1298,112 @@ void gfx_draw_triangle(
     #undef TRI_SWAP
 }
 
+
+// 绘制实心扇形
+// x0,y0: 圆心坐标
+// r: 半径
+// angle0,angle1: 起始和终止角度（0度为正上方12点方向，顺时针增加）
+// mode: 0-置黑 1-置色 2-异或 3-加色 >=4-Alpha混合
+void gfx_draw_sector(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t r, int32_t angle0, int32_t angle1, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    if (r <= 0) return;
+
+    int32_t a0 = ((angle0 % 360) + 360) % 360;
+    int32_t a1 = ((angle1 % 360) + 360) % 360;
+    int32_t diff = (a1 - a0 + 360) % 360;
+    int32_t sweep = angle1 - angle0;
+
+    // diff == 0 时，若 sweep != 0 说明跨过了整圆周，按整圆处理
+    if (sweep >= 360 || sweep <= -360 || (diff == 0 && sweep != 0)) {
+        // 整圆填充
+        int64_t r_sq = (int64_t)r * (int64_t)r;
+        int32_t y_start = y0 - r;
+        int32_t y_end = y0 + r;
+        if (y_start < 0) y_start = 0;
+        if (y_end >= (int32_t)gfx->height) y_end = gfx->height - 1;
+        for (int32_t y = y_start; y <= y_end; y++) {
+            int64_t dy = (int64_t)y - (int64_t)y0;
+            int32_t dx_max = (int32_t)sqrtf((float)(r_sq - dy * dy));
+            int32_t x_left = x0 - dx_max;
+            int32_t x_right = x0 + dx_max;
+            if (x_left < 0) x_left = 0;
+            if (x_right >= (int32_t)gfx->width) x_right = gfx->width - 1;
+            if (x_left <= x_right) {
+                if (mode < 4) {
+                    gfx_fill_hline_fast(gfx, x_left, x_right, y, red, green, blue, mode);
+                } else {
+                    for (int32_t x = x_left; x <= x_right; x++) {
+                        gfx_draw_point(gfx, (uint32_t)x, (uint32_t)y, red, green, blue, mode);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // 0 度退化扇形
+    if (diff == 0) {
+        gfx_draw_point(gfx, (uint32_t)x0, (uint32_t)y0, red, green, blue, mode);
+        return;
+    }
+
+    float rad0 = a0 * (float)M_PI / 180.0f;
+    float rad1 = a1 * (float)M_PI / 180.0f;
+    float c0 = cosf(rad0);
+    float s0 = sinf(rad0);
+    float c1 = cosf(rad1);
+    float s1 = sinf(rad1);
+
+    int is_large_sector = (diff > 180);
+
+    int64_t r_sq = (int64_t)r * (int64_t)r;
+    int32_t y_start = y0 - r;
+    int32_t y_end = y0 + r;
+    if (y_start < 0) y_start = 0;
+    if (y_end >= (int32_t)gfx->height) y_end = gfx->height - 1;
+
+    for (int32_t y = y_start; y <= y_end; y++) {
+        int64_t dy = (int64_t)y - (int64_t)y0;
+        int64_t dy_sq = dy * dy;
+        if (dy_sq > r_sq) continue;
+        int32_t dx_max = (int32_t)sqrtf((float)(r_sq - dy_sq));
+        int32_t x_left = x0 - dx_max;
+        int32_t x_right = x0 + dx_max;
+        if (x_left < 0) x_left = 0;
+        if (x_right >= (int32_t)gfx->width) x_right = gfx->width - 1;
+
+        int32_t draw_left = -1;
+        int32_t draw_right = -1;
+
+        for (int32_t x = x_left; x <= x_right; x++) {
+            int32_t dx = x - x0;
+            float v0 = c0 * (float)dx + s0 * (float)dy;
+            float v1 = c1 * (float)dx + s1 * (float)dy;
+            int in_sector;
+            if (is_large_sector) {
+                in_sector = (v0 >= -1e-3f || v1 <= 1e-3f);
+            } else {
+                in_sector = (v0 >= -1e-3f && v1 <= 1e-3f);
+            }
+            if (in_sector) {
+                if (draw_left < 0) draw_left = x;
+                draw_right = x;
+            } else if (draw_left >= 0) {
+                break;
+            }
+        }
+
+        if (draw_left >= 0 && draw_right >= draw_left) {
+            if (mode < 4) {
+                gfx_fill_hline_fast(gfx, draw_left, draw_right, y, red, green, blue, mode);
+            } else {
+                for (int32_t x = draw_left; x <= draw_right; x++) {
+                    gfx_draw_point(gfx, (uint32_t)x, (uint32_t)y, red, green, blue, mode);
+                }
+            }
+        }
+    }
+}
+
 // 绘制实心六边形
 // 使用扫描线算法填充凸六边形
 void gfx_draw_hexagon(
