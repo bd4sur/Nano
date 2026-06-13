@@ -9,7 +9,7 @@ extern "C" {
 
 // 图像缓存大小（最大缓存图像数量）
 #ifndef GFX_IMAGE_CACHE_SIZE
-#define GFX_IMAGE_CACHE_SIZE 4
+#define GFX_IMAGE_CACHE_SIZE 2
 #endif
 
 #define FONT_HEIGHT (12)

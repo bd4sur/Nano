@@ -48,13 +48,9 @@
 
 static uint64_t last_splash_timestamp = 0;
 
-const static int32_t s_album_count = 3;
+static int32_t s_album_count = 1;
 static int32_t s_album_index = 0;
-const static char* s_album_path_list[] = {
-    "/home/bd4sur/wp.jpg",
-    "/home/bd4sur/wp2.png",
-    "/home/bd4sur/wp_yh.png",
-};
+static char **s_album_path_list = NULL;
 static int32_t s_album_is_autoplay = 0;
 static uint64_t s_album_refresh_timestamp = 0;
 
@@ -717,6 +713,26 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
 // 主菜单
 // ===============================================================================
 
+
+static void ui_app_main_menu_grid16_refresh_button(
+    Key_Event *key_event, Global_State *global_state, int32_t is_single_line,
+    int32_t col, int32_t row, wchar_t *text0, wchar_t *text1,
+    uint8_t cell_bg_R, uint8_t cell_bg_G, uint8_t cell_bg_B, uint8_t cell_bg_mode,
+    uint8_t cell_text0_R, uint8_t cell_text0_G, uint8_t cell_text0_B, uint8_t cell_text0_mode,
+    uint8_t cell_text1_R, uint8_t cell_text1_G, uint8_t cell_text1_B, uint8_t cell_text1_mode
+) {
+    int32_t bx = (col == 0) ? 1 : 0;
+    int32_t by = (row == 0) ? 1 : 0;
+    gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, cell_bg_R, cell_bg_G, cell_bg_B, cell_bg_mode);
+    if (is_single_line) {
+        gfx_draw_textline_centered(global_state->gfx, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row), cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
+    }
+    else {
+        gfx_draw_textline_centered(global_state->gfx, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
+        gfx_draw_textline_centered(global_state->gfx, text1, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, cell_text1_R, cell_text1_G, cell_text1_B, cell_text1_mode);
+    }
+}
+
 void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
     wchar_t cell_text[4][4][2][10] = {
         { {L"[1]", L"番茄表",}, {L"[2]", L"鹦鹉笼",}, {L"[3]", L"玲珑仪",}, {L"[A]", L"返回",}, },
@@ -752,15 +768,41 @@ void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
         cell_text_B = 255;
     }
 
+    const uint8_t cell_bg_preset[15] = {
+        0xea, 0xe0, 0xff, // 0 马卡龙紫
+        0xff, 0xfe, 0xcc, // 3 马卡龙黄
+        0xd5, 0xf3, 0xff, // 6 马卡龙蓝
+        0xdf, 0xff, 0xdb, // 9 马卡龙绿
+        0xff, 0xe6, 0xf0, // 12 马卡龙红
+    };
+
+    const uint8_t text_bg_preset[15] = {
+        0x39, 0x00, 0xc1, // 0 马卡龙紫
+        0x7f, 0x55, 0x00, // 3 马卡龙黄
+        0x00, 0x69, 0x93, // 6 马卡龙蓝
+        0x0a, 0x60, 0x00, // 9 马卡龙绿
+        0xc9, 0x00, 0x50, // 12 马卡龙红
+    };
+
     for (int32_t row = 0; row < 4; row++) {
         for (int32_t col = 0; col < 4; col++) {
-            int32_t bx = (col == 0) ? 1 : 0;
-            int32_t by = (row == 0) ? 1 : 0;
-            uint8_t bg_r = cell_bg_R, bg_g = cell_bg_G, bg_b = cell_bg_B;
-            uint8_t tx_r = cell_text_R, tx_g = cell_text_G, tx_b = cell_text_B;
-            gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, bg_r, bg_g, bg_b, 1);
-            gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][0], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, 192, 192, 211, 1);
-            gfx_draw_textline_centered(global_state->gfx, cell_text[row][col][1], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+8, tx_r, tx_g, tx_b, 1);
+
+            if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+                int32_t offset = (row * 4 + col) % 5 * 3;
+                cell_bg_R = cell_bg_preset[offset + 0];
+                cell_bg_G = cell_bg_preset[offset + 1];
+                cell_bg_B = cell_bg_preset[offset + 2];
+                cell_text_R = text_bg_preset[offset + 0];
+                cell_text_G = text_bg_preset[offset + 1];
+                cell_text_B = text_bg_preset[offset + 2];
+            }
+
+            ui_app_main_menu_grid16_refresh_button(key_event, global_state, 1,
+                col, row, cell_text[row][col][1], NULL,
+                cell_bg_R, cell_bg_G, cell_bg_B, 1,
+                cell_text_R, cell_text_G, cell_text_B, 1,
+                cell_text_R, cell_text_G, cell_text_B, 1);
+
         }
     }
 
@@ -1169,6 +1211,10 @@ static uint64_t s_ui_fanqie_start_timestamp = 0;
 static uint64_t s_ui_fanqie_stop_timestamp = 0;
 static int32_t s_ui_fanqie_is_running = 0;
 
+static uint64_t s_ui_fanqie_alarm_start_timestamp = 0;
+static uint64_t s_ui_fanqie_alarm_duration = 0;
+static uint64_t s_ui_fanqie_alarm_count = 0;
+
 void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
     s_ui_fanqie_start_timestamp = global_state->timestamp;
     s_ui_fanqie_stop_timestamp = 0;
@@ -1260,6 +1306,7 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
         s_ui_fanqie_start_timestamp = global_state->timestamp;
         s_ui_fanqie_stop_timestamp = 0;
         s_ui_fanqie_is_running = 1;
+        s_ui_fanqie_alarm_count = 0;
     }
     else if ((upper_count < 1 && gravity_y < 0) || (lower_count < 1 && gravity_y > 0)) {
         if (!s_ui_fanqie_stop_timestamp) {
@@ -1330,6 +1377,17 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
 
     // 根据沙漏进度调整节流度，避免来自上方的压力过小时，出现几乎不往下流的问题
     s_ui_flip_throttle = roundf((1.0f - (float)s_ui_flip_init_throttle) * hourglass_progress * hourglass_progress + (float)s_ui_flip_init_throttle);
+
+    // 到时提醒
+    if (!s_ui_fanqie_is_running) {
+        if (s_ui_fanqie_alarm_count < 6) {
+            // set_vibration(222);
+            // sleep_in_ms(600);
+            // set_vibration(0);
+            // sleep_in_ms(600);
+            s_ui_fanqie_alarm_count++;
+        }
+    }
 
     gfx_refresh(global_state->gfx);
 }
@@ -1892,7 +1950,12 @@ void ui_app_linglong_toggle_timemachine(Key_Event *key_event, Global_State *glob
 
 void ui_app_linglong_set_timemachine_speed(Key_Event *key_event, Global_State *global_state, int32_t speed) {
     linglong_timemachine_speed = speed;
-    linglong_timemachine_running_state = 1;
+    switch (linglong_timemachine_running_state) {
+        case 0: linglong_timemachine_running_state = 1; break;
+        case 1: linglong_timemachine_running_state = 0; break;
+        case 2: linglong_timemachine_running_state = 1; break;
+        default: linglong_timemachine_running_state = 0; break;
+    }
     if (linglong_timemachine_start_timestamp == 0) {
         linglong_timemachine_start_timestamp = global_state->timestamp;
     }
@@ -3655,6 +3718,85 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
+
+            gfx_soft_clear(global_state->gfx);
+            gfx_draw_textline_centered(global_state->gfx, L"枚举图片文件", 160, 10, 0x66, 0xcc, 0xff, 1);
+
+            const char *path = "/image";
+
+            // 获取数量
+            int32_t count = list_files(path, NULL);
+            if (count < 0) {
+                printf("打开目录失败\n");
+                break;
+            }
+            if (count == 0) {
+                printf("目录为空\n");
+                break;
+            }
+
+            // 分配指针数组
+            s_album_path_list = (char **)platform_malloc(count * sizeof(char *));
+            if (!s_album_path_list) {
+                printf("内存不足\n");
+                break;
+            }
+
+            // 获取文件名
+            int32_t actual = list_files(path, s_album_path_list);
+            if (actual < 0) {
+                printf("读取失败\n");
+                free(s_album_path_list);
+                break;
+            }
+            s_album_count = actual;
+
+            // 对文件名列表进行升序排序
+            sort_strings(s_album_path_list, actual, 0);
+
+            // 拼接成完整路径
+            for (int32_t i = 0; i < actual; i++) {
+                const char *filename = s_album_path_list[i];
+                if (filename == NULL) continue;
+
+                size_t path_len = strlen(path);
+                size_t name_len = strlen(filename);
+                int need_sep = (path_len == 0 || path[path_len - 1] == '/') ? 0 : 1;
+
+                char *full_path = (char *)platform_malloc(path_len + need_sep + name_len + 1);
+                if (full_path == NULL) {
+                    printf("拼接路径内存不足\n");
+                    continue;
+                }
+
+                snprintf(full_path, path_len + need_sep + name_len + 1,
+                         "%s%s%s", path, need_sep ? "/" : "", filename);
+
+                free(s_album_path_list[i]);
+                s_album_path_list[i] = full_path;
+            }
+
+            // 显示文件列表
+            printf("目录 %s 中有 %ld 个文件:\n", path, actual);
+            for (int32_t i = 0; i < actual; i++) {
+                wchar_t namew[128];
+                _mbstowcs(namew, s_album_path_list[i], 128);
+                gfx_draw_textline_centered(global_state->gfx, namew, 160, 10 + (i+1) * 17, 0xff, 0xff, 0xff, 1);
+                printf("  [%ld] %s\n", i, s_album_path_list[i]);
+            }
+
+
+            gfx_refresh(global_state->gfx);
+            sleep_in_ms(3000);
+
+
+
+
+
+
+
+
+
             gfx_draw_busy(global_state->gfx);
             gfx_refresh(global_state->gfx);
             ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
@@ -3669,13 +3811,18 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             s_album_refresh_timestamp = global_state->timestamp;
 
             ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
-            if (s_album_is_autoplay) {
-                gfx_draw_textline(global_state->gfx, L"★", 0, 0, 0x00, 0xff, 0x00, 1);
-            }
+            // if (s_album_is_autoplay) {
+            //     gfx_draw_textline(global_state->gfx, L"★", 0, 0, 0x00, 0xff, 0x00, 1);
+            // }
             gfx_refresh(global_state->gfx);
         }
-        // 长短按*键，切换上一张图片
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
+        // 长短按2/4/5/7/8/*/0键，切换上一张图片
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && (
+            (key_event->key_code == KEYCODE_NUM_2) ||
+            (key_event->key_code == KEYCODE_NUM_4) || (key_event->key_code == KEYCODE_NUM_5) ||
+            (key_event->key_code == KEYCODE_NUM_7) || (key_event->key_code == KEYCODE_NUM_8) ||
+            (key_event->key_code == KEYCODE_NUM_STAR) || (key_event->key_code == KEYCODE_NUM_0)
+        )) {
             ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
             gfx_refresh(global_state->gfx);
             s_album_index--;
@@ -3685,9 +3832,21 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 长短按A键返回主菜单
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
             global_state->STATE = STATE_MAIN_MENU;
+            // 释放内存
+            for (int32_t i = 0; i < s_album_count; i++) {
+                printf("Freeing %s\n", s_album_path_list[i]);
+                free(s_album_path_list[i]);     // 释放每个文件名
+            }
+            free(s_album_path_list);            // 释放指针数组
+            printf("Free done.\n");
         }
-        // 长短按D键，切换下一张图片
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_D) {
+        // 长短按3/6/B/9/C/#/D键，切换下一张图片
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && (
+            (key_event->key_code == KEYCODE_NUM_3) ||
+            (key_event->key_code == KEYCODE_NUM_6) || (key_event->key_code == KEYCODE_NUM_B) ||
+            (key_event->key_code == KEYCODE_NUM_9) || (key_event->key_code == KEYCODE_NUM_C) ||
+            (key_event->key_code == KEYCODE_NUM_HASH) || (key_event->key_code == KEYCODE_NUM_D)
+        )) {
             ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
             gfx_refresh(global_state->gfx);
             s_album_index++;
@@ -3696,20 +3855,23 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 自动放映
         if (s_album_is_autoplay) {
-            // 每5000ms切换
-            if (global_state->timestamp - s_album_refresh_timestamp >= 5000) {
+            // 每6000ms切换
+            if (global_state->timestamp - s_album_refresh_timestamp >= 6000) {
                 ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
-                gfx_draw_textline(global_state->gfx, L"★", 0, 0, 0x00, 0xff, 0x00, 1);
+                // gfx_draw_textline(global_state->gfx, L"★", 0, 0, 0x00, 0xff, 0x00, 1);
                 gfx_refresh(global_state->gfx);
                 s_album_index++;
                 s_album_index = s_album_index % s_album_count;
                 s_album_refresh_timestamp = global_state->timestamp;
             }
             else {
-                int32_t aa = (float)(global_state->timestamp - s_album_refresh_timestamp) / 5000.0f * 360;
-                gfx_draw_sector(global_state->gfx, 6, 6, 6, 0, aa, 0x66, 0xcc, 0xff, 1);
+                // int32_t aa = (float)(global_state->timestamp - s_album_refresh_timestamp) / 6000.0f * 360;
+                // gfx_draw_circle_fill(global_state->gfx, 6, 6, 6, 0xff, 0xff, 0xff, 1);
+                // gfx_draw_sector(global_state->gfx, 6, 6, 6, 0, aa, 0x66, 0xcc, 0xff, 1);
+
+                int32_t w = (float)(global_state->timestamp - s_album_refresh_timestamp) / 6000.0f * global_state->gfx->width;
                 // gfx_draw_rectangle(global_state->gfx, 0, 239, global_state->gfx->width, 1, 0x00, 0x00, 0x00, 1);
-                // gfx_draw_rectangle(global_state->gfx, 0, 239, w, 1, 0x66, 0xcc, 0xff, 1);
+                gfx_draw_rectangle(global_state->gfx, 0, 239, w, 1, 0x00, 0xaa, 0xff, 1);
                 gfx_refresh(global_state->gfx);
             }
         }

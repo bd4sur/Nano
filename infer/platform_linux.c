@@ -197,6 +197,10 @@ int32_t fs_init() {
     return 0;
 }
 
+int32_t list_files(const char *dir, char **filenames) {
+    return 0;
+}
+
 int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, size_t *size) {
     FILE *fp = fopen(filepath, "rb");
     if (!fp) {
@@ -260,4 +264,9 @@ void *platform_realloc(void *ptr, size_t n) {
 
 void *platform_realloc_internal(void *ptr, size_t n) {
     return realloc(ptr, n);
+}
+
+
+void set_vibration(uint32_t level) {
+    return;
 }

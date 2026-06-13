@@ -45,8 +45,10 @@ void set_sys_time(int32_t year, int32_t month, int32_t day, int32_t hour, int32_
 // 初始化文件系统
 int32_t fs_init();
 
+int32_t list_files(const char *dir, char **filenames);
 
-
+// 振动(0-255)
+void set_vibration(uint32_t level);
 
 
 

@@ -467,6 +467,42 @@ void freeTree(AVLNode* root) {
 
 
 // ===============================================================================
+// 对字符串列表进行原地排序
+// ===============================================================================
+
+static int _sort_strings_compare_asc(const void *a, const void *b) {
+    const char *sa = *(const char **)a;
+    const char *sb = *(const char **)b;
+    if (sa == NULL && sb == NULL) return 0;
+    if (sa == NULL) return -1;
+    if (sb == NULL) return 1;
+    return strcmp(sa, sb);
+}
+
+// order 0-升序 1-降序
+int32_t sort_strings(char **strings, int32_t num, int32_t order) {
+    if (strings == NULL || num < 0) return -1;
+    if (num <= 1) return 0;
+    if (order != 0 && order != 1) return -1;
+
+    qsort(strings, (size_t)num, sizeof(char *), _sort_strings_compare_asc);
+
+    if (order == 1) {
+        int32_t i = 0, j = num - 1;
+        while (i < j) {
+            char *tmp = strings[i];
+            strings[i] = strings[j];
+            strings[j] = tmp;
+            i++;
+            j--;
+        }
+    }
+
+    return 0;
+}
+
+
+// ===============================================================================
 // 数字格式字符串
 // ===============================================================================
 

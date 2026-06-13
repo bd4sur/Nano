@@ -126,6 +126,83 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     return 0;
 }
 
+/**
+ * 列出目录中的文件（纯 C 接口）
+ * 
+ * @param dir       目录路径，如 "/" 或 "/data"
+ * @param filenames 文件名字符串指针数组。
+ *                  传 NULL 时仅返回数量，不分配内存；
+ *                  非 NULL 时按顺序填充文件名（需预先分配 count 个 char*）
+ * @return  >=0: 文件数量
+ *           -1: 目录打开失败或路径不是目录
+ *           -2: 内存分配失败（仅当 filenames!=NULL 时可能返回）
+ */
+int32_t list_files(const char *dir, char **filenames)
+{
+    File root = SD.open(dir);
+    if (!root || !root.isDirectory()) {
+        return -1;
+    }
+
+    int32_t count = 0;
+    File entry = root.openNextFile();
+
+    while (entry) {
+        if (filenames != NULL) {
+            const char *src = entry.name();          // ESP32 返回 const char*
+            size_t len = strlen(src);
+
+            filenames[count] = (char *)malloc(len + 1);
+            if (filenames[count] == NULL) {
+                /* 分配失败：回滚已分配的内存，避免泄漏 */
+                for (int32_t i = 0; i < count; i++) {
+                    free(filenames[i]);
+                    filenames[i] = NULL;
+                }
+                entry.close();
+                root.close();
+                return -2;
+            }
+            memcpy(filenames[count], src, len + 1);  // 含 '\0'
+        }
+        count++;
+        entry.close();          // 必须及时关闭，释放文件句柄
+        entry = root.openNextFile();
+    }
+
+    root.close();
+    return count;
+}
+
+
+
+
+// 振动(0-255)
+void set_vibration(uint32_t level) {
+    M5.Power.setVibration(level);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
