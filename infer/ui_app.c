@@ -42,9 +42,11 @@
 #include "ui_color.h"
 #include "ui_app.h"
 
+#include "ui_animac.h"
+
 #define WALLPAPER_PATH ("/home/bd4sur/wp.jpg")
 
-// 全局变量
+// 全局变量（TODO 临时，后续要全部移到全局状态上下文中）
 
 static uint64_t last_splash_timestamp = 0;
 
@@ -64,6 +66,9 @@ static uint32_t s_image_width = 0;
 static uint32_t s_image_height = 0;
 static uint8_t s_image_decode_ready = 0;
 
+
+
+static uint32_t s_animac_console_text_len = 0;
 
 // ===============================================================================
 // UI框架：获取按键事件
@@ -697,7 +702,7 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
     }
 
     // 进入电子鹦鹉
-    ui_widget_input_init(ke, gs, gs->w_input_main);
+    ui_widget_input_init(ke, gs, gs->w_input_main, gs->llm_model_name);
     return STATE_LLM_INPUT;
 }
 
@@ -825,7 +830,7 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         global_state->STATE = STATE_EBOOK;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_5) {
-        // TODO
+        global_state->STATE = STATE_GENETIC_TSP;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_6) {
         global_state->STATE = STATE_ALBUM;
@@ -868,7 +873,7 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         gfx_set_brightness(global_state->gfx, (uint8_t)global_state->brightness);
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_HASH) {
-        global_state->STATE = STATE_GENETIC_TSP;
+        global_state->STATE = STATE_ANIMAC_INIT;
     }
     else {
         return;
@@ -3465,7 +3470,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 短按A键：清屏，清除输入缓冲区，回到初始状态
         else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_A) {
             // 刷新文本输入框
-            ui_widget_input_init(key_event, global_state, global_state->w_input_main);
+            ui_widget_input_init(key_event, global_state, global_state->w_input_main, global_state->llm_model_name);
             global_state->STATE = STATE_LLM_INPUT;
         }
 #endif
@@ -3877,6 +3882,89 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
 
         break;
+
+
+    /////////////////////////////////////////////
+    // Animac终端：初始化
+    /////////////////////////////////////////////
+
+    case STATE_ANIMAC_INIT: {
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_widget_input_init(key_event, global_state, global_state->w_input_main, L"电子核桃控制台");
+            // 提示符
+            wcscat(global_state->w_input_main->textarea.text, L"Animac Interpreter V2607\n(c) 2018-2026 BD4SUR\n");
+            wcscat(global_state->w_input_main->textarea.text, L"> ");
+            // 刷新input控件，使光标到最后
+            ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        ui_animac_init(key_event, global_state);
+
+        global_state->STATE = STATE_ANIMAC_CONSOLE;
+
+        break;
+    }
+
+
+    /////////////////////////////////////////////
+    // Animac终端：终端等待输入
+    /////////////////////////////////////////////
+
+    case STATE_ANIMAC_CONSOLE: {
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
+            s_animac_console_text_len = wcslen(global_state->w_input_main->textarea.text);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_widget_input_event_handler(key_event, global_state, global_state->w_input_main, STATE_MAIN_MENU, STATE_ANIMAC_CONSOLE, STATE_ANIMAC_RUNNING);
+
+        break;
+    }
+
+
+    /////////////////////////////////////////////
+    // Animac终端：执行中
+    /////////////////////////////////////////////
+
+    case STATE_ANIMAC_RUNNING: {
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        wchar_t *console_text = global_state->w_input_main->textarea.text;
+        wchar_t new_input[1024];
+        wcscpy(new_input, &console_text[s_animac_console_text_len]);
+
+        ui_animac_exec(key_event, global_state, new_input, console_text);
+
+        wcscat(console_text, L"> ");
+        ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
+
+        global_state->STATE = STATE_ANIMAC_CONSOLE;
+
+        break;
+    }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     default:

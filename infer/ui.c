@@ -534,7 +534,10 @@ int32_t ui_widget_textarea_event_handler(
 
 
 
-void ui_widget_input_init(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
+void ui_widget_input_init(
+    Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state,
+    wchar_t *title_text
+) {
     Widget_Textarea_State *ta = &(input_state->textarea);
 
     ui_widget_textarea_init(key_event, global_state, ta, UI_STR_BUF_MAX_LENGTH);
@@ -557,6 +560,7 @@ void ui_widget_input_init(Key_Event *key_event, Global_State *global_state, Widg
     input_state->alphabet_is_counting_down = 0;
     input_state->alphabet_current_key = 255;
     input_state->alphabet_index = 0;
+    input_state->title_text = title_text;
 
     // 初始化各个数组
     memset(input_state->candidates, 0, sizeof(input_state->candidates));
@@ -764,7 +768,7 @@ int32_t ui_widget_input_event_handler(
                 if (global_state->is_ctrl_enabled == 1) {
                     global_state->is_ctrl_enabled = 0;
                 }
-                ui_widget_input_init(key_event, global_state, input_state);
+                ui_widget_input_init(key_event, global_state, input_state, input_state->title_text);
                 return prev_focus_state;
             }
         }
@@ -1153,7 +1157,7 @@ void ui_draw_input_buffer(Key_Event *key_event, Global_State *global_state, Widg
 
     // 顶部
     ui_draw_header(key_event, global_state, L"", 0);
-    gfx_draw_textline(global_state->gfx, L"请输入", 0, 1, 255, 255, 255, 1);
+    gfx_draw_textline(global_state->gfx, input_state->title_text, 0, 1, 99, 99, 99, 1);
     // 显示思考模式启用状态
     if (global_state->is_thinking_enabled == 1) {
         gfx_draw_textline(global_state->gfx, L"Ψ", global_state->gfx->width - 8*FONT_WIDTH_HALF - 1, 1, 0, 255, 255, 1);

@@ -182,8 +182,10 @@ typedef struct Widget_Input_State {
     // 英文字母输入模式的倒计时
     uint64_t alphabet_click_timestamp; // 按键时刻的时间戳，用于计算倒计时进度条
     int32_t alphabet_is_counting_down; // 1-正在倒计时；0-不在倒计时
-    uint8_t alphabet_current_key;      // 当前选中的字母按键
     uint32_t alphabet_index;
+    uint8_t alphabet_current_key;      // 当前选中的字母按键
+    // 杂项
+    wchar_t *title_text;  // 顶部标题
 } Widget_Input_State;
 
 typedef struct Widget_Menu_State {
@@ -218,7 +220,7 @@ int32_t ui_widget_textarea_event_handler(
     int32_t prev_focus_state, int32_t current_focus_state
 );
 
-void ui_widget_input_init(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+void ui_widget_input_init(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, wchar_t *title_text);
 void ui_widget_input_refresh(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 int32_t ui_widget_input_event_handler(
     Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state,
