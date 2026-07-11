@@ -735,11 +735,14 @@ uint32_t _mbstowcs(wchar_t *dest, const char *src, uint32_t length) {
     wchar_t *out = dest;
 
     while (p < end) {
-        uint8_t byte = *p++;
+        uint8_t byte = *p;
+        if (byte == '\0') break;
+        p++;
 
         if ((byte & 0x80) == 0) {
             // 1-byte: ASCII
-            *out++ = (wchar_t)byte;
+            if (dest) *out++ = (wchar_t)byte;
+            else out++;
         } else if ((byte & 0xE0) == 0xC0) {
             // 2-byte
             if (p >= end) goto invalid;
@@ -747,7 +750,8 @@ uint32_t _mbstowcs(wchar_t *dest, const char *src, uint32_t length) {
             if ((b2 & 0xC0) != 0x80) goto invalid;
             uint32_t cp = ((byte & 0x1F) << 6) | (b2 & 0x3F);
             if (cp < 0x80) goto invalid; // overlong
-            *out++ = (wchar_t)cp;
+            if (dest) *out++ = (wchar_t)cp;
+            else out++;
         } else if ((byte & 0xF0) == 0xE0) {
             // 3-byte
             if (p + 1 >= end) goto invalid;
@@ -757,7 +761,8 @@ uint32_t _mbstowcs(wchar_t *dest, const char *src, uint32_t length) {
             uint32_t cp = ((byte & 0x0F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
             if (cp < 0x800) goto invalid;
             if (cp >= 0xD800 && cp <= 0xDFFF) goto invalid; // surrogate
-            *out++ = (wchar_t)cp;
+            if (dest) *out++ = (wchar_t)cp;
+            else out++;
         } else if ((byte & 0xF8) == 0xF0) {
             // 4-byte
             if (p + 2 >= end) goto invalid;
@@ -769,7 +774,8 @@ uint32_t _mbstowcs(wchar_t *dest, const char *src, uint32_t length) {
                           ((b3 & 0x3F) << 6) | (b4 & 0x3F);
             if (cp < 0x10000) goto invalid;
             if (cp > 0x10FFFF) goto invalid;
-            *out++ = (wchar_t)cp;
+            if (dest) *out++ = (wchar_t)cp;
+            else out++;
         } else {
             goto invalid;
         }
@@ -781,8 +787,9 @@ uint32_t _mbstowcs(wchar_t *dest, const char *src, uint32_t length) {
 
 invalid:
     // 遇到无效 UTF-8：用 '?' 替代并终止
-    *out++ = (wchar_t)'?';
-    *out = (wchar_t)0;  // 仍然保证 null-terminated
+    if (dest) *out++ = (wchar_t)'?';
+    else out++;
+    if (dest) *out = (wchar_t)0;  // 仍然保证 null-terminated
     return (uint32_t)(out - dest); // 返回包含 '?' 的字符数
 }
 

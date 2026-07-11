@@ -1145,11 +1145,21 @@ void ui_draw_input_buffer(Key_Event *key_event, Global_State *global_state, Widg
 
     Widget_Textarea_State *ta = &(input_state->textarea);
 
+    uint8_t title_text_R = 0xff;
+    uint8_t title_text_G = 0xff;
+    uint8_t title_text_B = 0xff;
+
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
         gfx_fill_white(global_state->gfx);
+        title_text_R = 0xff;
+        title_text_G = 0xff;
+        title_text_B = 0xff;
     }
     else if (global_state->ui_color_style == UI_COLOR_DARK) {
         gfx_soft_clear(global_state->gfx);
+        title_text_R = 0x60;
+        title_text_G = 0x60;
+        title_text_B = 0x60;
     }
 
     // 底部
@@ -1157,7 +1167,7 @@ void ui_draw_input_buffer(Key_Event *key_event, Global_State *global_state, Widg
 
     // 顶部
     ui_draw_header(key_event, global_state, L"", 0);
-    gfx_draw_textline(global_state->gfx, input_state->title_text, 0, 1, 99, 99, 99, 1);
+    gfx_draw_textline(global_state->gfx, input_state->title_text, 0, 1, title_text_R, title_text_G, title_text_B, 1);
     // 显示思考模式启用状态
     if (global_state->is_thinking_enabled == 1) {
         gfx_draw_textline(global_state->gfx, L"Ψ", global_state->gfx->width - 8*FONT_WIDTH_HALF - 1, 1, 0, 255, 255, 1);

@@ -1,11 +1,16 @@
 # 检测是否是树莓派
 IS_RASPBERRY_PI = $(shell cat /proc/cpuinfo 2>/dev/null | grep -i 'raspberry' > /dev/null && echo yes || echo no)
 
+ANIMAC_DIR  := vendor/animac
+ANIMAC_INC  := $(ANIMAC_DIR)/include
+ANIMAC_SRCS := $(wildcard $(ANIMAC_DIR)/src/*.c)
+ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/src/exclude.c, $(wildcard $(ANIMAC_DIR)/src/*.c))
+
 ifeq ($(IS_RASPBERRY_PI),yes)
     CCFLAGS = -O3 -march=native -ffast-math -Wall
     LDFLAGS = -lm
 else
-    CCFLAGS = -O3 -march=native -ffast-math -Wall -fopenmp
+    CCFLAGS = -O3 -march=native -ffast-math -Wall -fopenmp -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
     LDFLAGS = -lm -fopenmp
 endif
 
@@ -28,7 +33,7 @@ $(BIN_DIR)/nano_pod: main.c asr.c tts.c imu10.c ups_rpi5.c platform_linux.c disp
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty
-$(BIN_DIR)/nano_tty: main.c platform_linux.c display_ncurses.c input_device_ncurses.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) main.c platform_linux.c display_ncurses.c input_device_ncurses.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c graphics.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_TTY $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lncursesw
 
 # Nano-CLI：适用于文字终端命令交互的终端程序
