@@ -28,35 +28,35 @@ static int touch_y = 0;
 
 static uint8_t map_touch_to_key(int x, int y) {
     if (y >= Y0 && y < Y1) {
-        if (x >= X0 && x <  X1) return KEYCODE_NUM_1;
-        if (x >= X1 && x <  X2) return KEYCODE_NUM_2;
-        if (x >= X2 && x <  X3) return KEYCODE_NUM_3;
-        if (x >= X3 && x <= X4) return KEYCODE_NUM_A;
-        else return KEYCODE_NUM_IDLE;
+        if (x >= X0 && x <  X1) return NANO_KEY_1;
+        if (x >= X1 && x <  X2) return NANO_KEY_2;
+        if (x >= X2 && x <  X3) return NANO_KEY_3;
+        if (x >= X3 && x <= X4) return NANO_KEY_esc;
+        else return NANO_KEY_IDLE;
     }
     else if (y >= Y1 && y < Y2) {
-        if (x >= X0 && x <  X1) return KEYCODE_NUM_4;
-        if (x >= X1 && x <  X2) return KEYCODE_NUM_5;
-        if (x >= X2 && x <  X3) return KEYCODE_NUM_6;
-        if (x >= X3 && x <= X4) return KEYCODE_NUM_B;
-        else return KEYCODE_NUM_IDLE;
+        if (x >= X0 && x <  X1) return NANO_KEY_4;
+        if (x >= X1 && x <  X2) return NANO_KEY_5;
+        if (x >= X2 && x <  X3) return NANO_KEY_6;
+        if (x >= X3 && x <= X4) return NANO_KEY_shift;
+        else return NANO_KEY_IDLE;
     }
     else if (y >= Y2 && y < Y3) {
-        if (x >= X0 && x <  X1) return KEYCODE_NUM_7;
-        if (x >= X1 && x <  X2) return KEYCODE_NUM_8;
-        if (x >= X2 && x <  X3) return KEYCODE_NUM_9;
-        if (x >= X3 && x <= X4) return KEYCODE_NUM_C;
-        else return KEYCODE_NUM_IDLE;
+        if (x >= X0 && x <  X1) return NANO_KEY_7;
+        if (x >= X1 && x <  X2) return NANO_KEY_8;
+        if (x >= X2 && x <  X3) return NANO_KEY_9;
+        if (x >= X3 && x <= X4) return NANO_KEY_ctrl;
+        else return NANO_KEY_IDLE;
     }
     else if (y >= Y3 && y <= Y4) {
-        if (x >= X0 && x <  X1) return KEYCODE_NUM_STAR;
-        if (x >= X1 && x <  X2) return KEYCODE_NUM_0;
-        if (x >= X2 && x <  X3) return KEYCODE_NUM_HASH;
-        if (x >= X3 && x <= X4) return KEYCODE_NUM_D;
-        else return KEYCODE_NUM_IDLE;
+        if (x >= X0 && x <  X1) return NANO_KEY_left;
+        if (x >= X1 && x <  X2) return NANO_KEY_0;
+        if (x >= X2 && x <  X3) return NANO_KEY_right;
+        if (x >= X3 && x <= X4) return NANO_KEY_enter;
+        else return NANO_KEY_IDLE;
     }
     else {
-        return KEYCODE_NUM_IDLE;
+        return NANO_KEY_IDLE;
     }
 }
 
@@ -90,5 +90,5 @@ uint8_t input_device_read_key() {
         return map_touch_to_key(touch_x, touch_y);
     }
 
-    return KEYCODE_NUM_IDLE;
+    return NANO_KEY_IDLE;
 }

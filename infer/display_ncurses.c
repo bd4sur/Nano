@@ -68,6 +68,7 @@ void display_hal_init(void) {
     noecho();
     cbreak();
     timeout(0);
+    keypad(stdscr, TRUE);
 
     if (LINES < FB_HEIGHT || COLS < FB_WIDTH) {
         endwin();

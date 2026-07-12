@@ -9,25 +9,29 @@ int32_t input_device_init() {
 }
 
 uint8_t input_device_read_key() {
-    uint8_t ch = (uint8_t)getch();
+    int ch = getch();
     switch(ch) {
-        case '1': return KEYCODE_NUM_1;
-        case '2': return KEYCODE_NUM_2;
-        case '3': return KEYCODE_NUM_3;
-        case 'q': return KEYCODE_NUM_4;
-        case 'w': return KEYCODE_NUM_5;
-        case 'e': return KEYCODE_NUM_6;
-        case 'a': return KEYCODE_NUM_7;
-        case 's': return KEYCODE_NUM_8;
-        case 'd': return KEYCODE_NUM_9;
-        case 'z': return KEYCODE_NUM_STAR;
-        case 'x': return KEYCODE_NUM_0;
-        case 'c': return KEYCODE_NUM_HASH;
-        case '4': return KEYCODE_NUM_A;
-        case 'r': return KEYCODE_NUM_B;
-        case 'f': return KEYCODE_NUM_C;
-        case 'v': return KEYCODE_NUM_D;
+        case '0': return NANO_KEY_0;
+        case '7': return NANO_KEY_1;
+        case '8': return NANO_KEY_2;
+        case '9': return NANO_KEY_3;
+        case '4': return NANO_KEY_4;
+        case '5': return NANO_KEY_5;
+        case '6': return NANO_KEY_6;
+        case '1': return NANO_KEY_7;
+        case '2': return NANO_KEY_8;
+        case '3': return NANO_KEY_9;
+        case '*': return NANO_KEY_esc;
+        case '-': return NANO_KEY_shift;
+        case '+': return NANO_KEY_ctrl;
+        case '\n': return NANO_KEY_enter;
+        case KEY_BACKSPACE: return NANO_KEY_esc;
+        case KEY_LEFT: return NANO_KEY_left;
+        case KEY_RIGHT: return NANO_KEY_right;
+        case KEY_UP: return NANO_KEY_up;
+        case KEY_DOWN: return NANO_KEY_down;
+        case KEY_ENTER: return NANO_KEY_enter;
 
-        default: return KEYCODE_NUM_IDLE;
+        default: return NANO_KEY_IDLE;
     }
 }

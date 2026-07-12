@@ -489,12 +489,12 @@ int32_t ui_widget_textarea_event_handler(
     int32_t prev_focus_state, int32_t current_focus_state
 ) {
     // 短按A键：回到上一个焦点
-    if (ke->key_edge == -1 && ke->key_code == KEYCODE_NUM_A) {
+    if (ke->key_edge == -1 && ke->key_code == NANO_KEY_esc) {
         return prev_focus_state;
     }
 
     // 长+短按*键：推理结果向上翻一行。如果翻到顶，则回到最后一行。
-    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_STAR) {
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == NANO_KEY_left) {
         if (ts->current_line <= 0) { // 卷到顶
             ts->current_line = ts->line_num - ts->view_lines;
         }
@@ -510,7 +510,7 @@ int32_t ui_widget_textarea_event_handler(
     }
 
     // 长+短按#键：推理结果向下翻一行。如果翻到底，则回到第一行。
-    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_HASH) {
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == NANO_KEY_right) {
         if (ts->current_line >= (ts->line_num - ts->view_lines)) { // 卷到底
             ts->current_line = 0;
         }
@@ -664,7 +664,7 @@ int32_t ui_widget_input_event_handler(
     if (state == 0) {
 
         // 长按0：输入符号
-        if (key_event->key_edge == -2 && key_event->key_code == 0) {
+        if (key_event->key_edge == -2 && key_event->key_code == NANO_KEY_0) {
             memset(input_state->candidates, 0, sizeof(input_state->candidates));
 
             input_state->candidate_num = 54;
@@ -681,7 +681,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 短按0：数字输入模式下是直接输入0，其余模式无动作
-        else if (key_event->key_edge == -1 && key_event->key_code == 0) {
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_0) {
             if (input_state->ime_mode_flag == IME_MODE_NUMBER) {
                 // input_state->text[(input_state->length)++] = L'0';
                 // input_state->cursor_pos++;
@@ -692,16 +692,16 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 短按1-9：输入拼音/字母/数字，根据输入模式标志，转向不同的状态
-        else if (key_event->key_edge == -1 && (key_event->key_code >= 1 && key_event->key_code <= 9)) {
+        else if (key_event->key_edge == -1 && (key_event->key_code >= NANO_KEY_1 && key_event->key_code <= NANO_KEY_9)) {
             // Ctrl+1：切换思考模式/非思考模式
-            if (global_state->is_ctrl_enabled == 1 && key_event->key_code == 1) {
+            if (global_state->is_ctrl_enabled == 1 && key_event->key_code == NANO_KEY_1) {
                 global_state->is_ctrl_enabled = 0;
                 global_state->is_thinking_enabled = 1 - global_state->is_thinking_enabled;
                 ui_draw_input_buffer(key_event, global_state, input_state);
             }
 
             else if (input_state->ime_mode_flag == IME_MODE_HANZI) {
-                if (key_event->key_code >= 2 && key_event->key_code <= 9) { // 仅响应按键2-9；1无动作
+                if (key_event->key_code >= NANO_KEY_2 && key_event->key_code <= NANO_KEY_9) { // 仅响应按键2-9；1无动作
                     input_state->state = 1;
                     ui_widget_input_event_handler(
                         key_event, global_state, input_state,
@@ -709,9 +709,9 @@ int32_t ui_widget_input_event_handler(
                 }
             }
             else if (input_state->ime_mode_flag == IME_MODE_NUMBER) {
-                // input_state->text[(input_state->length)++] = L'0' + key_event->key_code;
+                // input_state->text[(input_state->length)++] = (wchar_t)(key_event->key_code);
                 // input_state->cursor_pos++;
-                insert_char(input_state, (wchar_t)(L'0' + key_event->key_code));
+                insert_char(input_state, (wchar_t)(key_event->key_code));
                 ui_draw_input_buffer(key_event, global_state, input_state);
                 input_state->state = 0;
             }
@@ -720,23 +720,23 @@ int32_t ui_widget_input_event_handler(
                 if (input_state->alphabet_is_counting_down == 0) {
                     input_state->alphabet_is_counting_down = 1;
                     input_state->alphabet_click_timestamp = global_state->timestamp;
-                    input_state->alphabet_current_key = key_event->key_code;
+                    input_state->alphabet_current_key = key_event->key_code - '0';
                     input_state->alphabet_index = 0;
                 }
                 // 如果按键按下时，倒计时尚未结束，则切换到下一个字母。
                 else {
                     input_state->alphabet_is_counting_down = 1;
                     input_state->alphabet_click_timestamp = global_state->timestamp;
-                    input_state->alphabet_current_key = key_event->key_code;
-                    input_state->alphabet_index = (input_state->alphabet_index + 1) % wcslen(ime_alphabet[(int)(key_event->key_code)]);
+                    input_state->alphabet_current_key = key_event->key_code - '0';
+                    input_state->alphabet_index = (input_state->alphabet_index + 1) % wcslen(ime_alphabet[(int)(key_event->key_code - '0')]);
                 }
 
                 // 在屏幕上循环显示当前选中的字母
                 wchar_t letter[2];
                 uint32_t x_pos = 1;
                 uint32_t y_pos = ta_y + ta_height - FONT_HEIGHT - 3;
-                for (int i = 0; i < wcslen(ime_alphabet[(int)(key_event->key_code)]); i++) {
-                    letter[0] = ime_alphabet[(int)(key_event->key_code)][i]; letter[1] = 0;
+                for (int i = 0; i < wcslen(ime_alphabet[(int)(key_event->key_code - '0')]); i++) {
+                    letter[0] = ime_alphabet[(int)(key_event->key_code - '0')][i]; letter[1] = 0;
                     if (i == input_state->alphabet_index) {
                         gfx_draw_rectangle(global_state->gfx, x_pos-1, y_pos, FONT_WIDTH_HALF+1, FONT_HEIGHT, candidate1_bg_R, candidate1_bg_G, candidate1_bg_B, 1);
                         gfx_draw_textline(global_state->gfx, letter, x_pos, y_pos, candidate1_fg_R, candidate1_fg_G, candidate1_fg_B, 1);
@@ -753,7 +753,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 长+短按A键：删除一个字符，或返回上一个状态，取决于缓冲区状态和Ctrl状态
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 10) {
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
             input_state->state = 0;
             // 如果缓冲区非空且非Ctrl状态，则删除一个字符
             if (global_state->is_ctrl_enabled == 0 && input_state->textarea.length >= 1) {
@@ -774,7 +774,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 长+短按B键：依次切换汉-英-数输入模式 / 或Ctrl显示帮助
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 11) {
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_shift) {
             // 如果非Ctrl状态，则依次切换汉-英-数输入模式
             if (global_state->is_ctrl_enabled == 0) {
                 input_state->ime_mode_flag = (input_state->ime_mode_flag + 1) % 3;
@@ -791,14 +791,14 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 短按C键：切换全局Ctrl键状态
-        else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_C) {
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_ctrl) {
             global_state->is_ctrl_enabled = 1 - global_state->is_ctrl_enabled;
             ui_draw_input_buffer(key_event, global_state, input_state);
             input_state->state = 0;
         }
 
         // 短按D键：进入下一个状态；或者Ctrl状态下 输入一个换行符
-        else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
             if (global_state->is_ctrl_enabled == 1) {
                 global_state->is_ctrl_enabled = 0;
                 insert_char(input_state, L'\n');
@@ -811,7 +811,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 长+短按*键：光标向左移动
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 14) {
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
             if (input_state->cursor_pos > -1) {
                 input_state->cursor_pos--;
             }
@@ -822,7 +822,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 长+短按#键：光标向右移动
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 15) {
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
             if (input_state->cursor_pos < input_state->textarea.length - 1) {
                 input_state->cursor_pos++;
             }
@@ -843,7 +843,7 @@ int32_t ui_widget_input_event_handler(
 
     else if (state == 1) {
         // 短按D键：开始选字
-        if (key_event->key_edge == -1 && key_event->key_code == 13) {
+        if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
             if (input_state->candidate_num > 0) {
                 ui_draw_input_pinyin(key_event, global_state, input_state, 1);
                 input_state->state = 2;
@@ -851,7 +851,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 短按A键：取消输入拼音，清除已输入的所有按键，回到初始状态
-        else if (key_event->key_edge == -1 && key_event->key_code == 10) {
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_esc) {
             ui_draw_input_buffer(key_event, global_state, input_state);
             input_state->current_page = 0;
             input_state->pinyin_keys = 0;
@@ -859,9 +859,9 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 短按2-9键：继续输入拼音
-        else if (key_event->key_edge == -1 && (key_event->key_code >= 2 && key_event->key_code <= 9)) {
+        else if (key_event->key_edge == -1 && (key_event->key_code >= NANO_KEY_2 && key_event->key_code <= NANO_KEY_9)) {
             input_state->pinyin_keys *= 10;
-            input_state->pinyin_keys += (uint32_t)(key_event->key_code);
+            input_state->pinyin_keys += (uint32_t)(key_event->key_code - '0');
 
             memset(input_state->candidates, 0, sizeof(input_state->candidates));
             memset(input_state->candidate_pages, 0, sizeof(input_state->candidate_pages));
@@ -883,8 +883,8 @@ int32_t ui_widget_input_event_handler(
 
     else if (state == 2) {
         // 短按0-9键：从候选字列表中选定一个字，选定后转到初始状态
-        if (key_event->key_edge == -1 && (key_event->key_code >= 0 && key_event->key_code <= 9)) {
-            uint32_t index = (key_event->key_code == 0) ? 9 : (key_event->key_code - 1); // 按键0对应9
+        if (key_event->key_edge == -1 && (key_event->key_code >= NANO_KEY_0 && key_event->key_code <= NANO_KEY_9)) {
+            uint32_t index = (key_event->key_code == NANO_KEY_0) ? 9 : ((key_event->key_code - '0') - 1); // 按键0对应9
             // 将选中的字加入输入缓冲区
             uint32_t ch = input_state->candidate_pages[input_state->current_page][index];
             if (ch) {
@@ -907,7 +907,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 长+短按*键：候选字翻页到上一页
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 14) {
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
             if(input_state->current_page > 0) {
                 input_state->current_page--;
                 ui_draw_input_pinyin(key_event, global_state, input_state, 1);
@@ -916,7 +916,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 长+短按#键：候选字翻页到下一页
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 15) {
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
             if(input_state->current_page < input_state->candidate_page_num - 1) {
                 input_state->current_page++;
                 ui_draw_input_pinyin(key_event, global_state, input_state, 1);
@@ -925,7 +925,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 短按A键：取消选择，回到初始状态
-        else if (key_event->key_edge == -1 && key_event->key_code == 10) {
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_esc) {
             ui_draw_input_buffer(key_event, global_state, input_state);
             input_state->current_page = 0;
             input_state->pinyin_keys = 0;
@@ -935,8 +935,8 @@ int32_t ui_widget_input_event_handler(
 
     else if (state == 3) {
         // 短按0-9键：从符号列表中选定一个符号，选定后转到初始状态
-        if (key_event->key_edge == -1 && (key_event->key_code >= 0 && key_event->key_code <= 9)) {
-            uint32_t index = (key_event->key_code == 0) ? 9 : (key_event->key_code - 1); // 按键0对应9
+        if (key_event->key_edge == -1 && (key_event->key_code >= NANO_KEY_0 && key_event->key_code <= NANO_KEY_9)) {
+            uint32_t index = (key_event->key_code == NANO_KEY_0) ? 9 : ((key_event->key_code - '0') - 1); // 按键0对应9
             // 将选中的符号加入输入缓冲区
             uint32_t ch = input_state->candidate_pages[input_state->current_page][index];
             if (ch) {
@@ -958,7 +958,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 长+短按*键：候选字翻页到上一页
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 14) {
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
             if(input_state->current_page > 0) {
                 input_state->current_page--;
                 ui_draw_input_symbol(key_event, global_state, input_state);
@@ -967,7 +967,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 长+短按#键：候选字翻页到下一页
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == 15) {
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
             if(input_state->current_page < input_state->candidate_page_num - 1) {
                 input_state->current_page++;
                 ui_draw_input_symbol(key_event, global_state, input_state);
@@ -976,7 +976,7 @@ int32_t ui_widget_input_event_handler(
         }
 
         // 短按A键：取消选择，回到初始状态
-        else if (key_event->key_edge == -1 && key_event->key_code == 10) {
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_esc) {
             ui_draw_input_buffer(key_event, global_state, input_state);
             input_state->current_page = 0;
             input_state->pinyin_keys = 0;
@@ -987,7 +987,7 @@ int32_t ui_widget_input_event_handler(
     // 特殊状态：显示使用说明
     else if (state == 9) {
         // 按任意键返回状态0
-        if ((key_event->key_edge < 0) && key_event->key_code != KEYCODE_NUM_IDLE) {
+        if ((key_event->key_edge < 0) && key_event->key_code != NANO_KEY_IDLE) {
             ui_draw_input_buffer(key_event, global_state, input_state);
             input_state->state = 0;
         }
@@ -1075,22 +1075,22 @@ int32_t ui_widget_menu_event_handler(
 ) {
     // 短按1-9数字键：直接选中屏幕上显示的那页的相对第几项
     // NOTE 从1开始
-    // if (ke->key_edge == -1 && (ke->key_code >= KEYCODE_NUM_1 && ke->key_code <= KEYCODE_NUM_9)) {
-    //     if (ke->key_code <= ms->items_per_page) {
-    //         ms->current_item_index = ms->first_item_intex + (uint32_t)(ke->key_code) - 1;
+    // if (ke->key_edge == -1 && (ke->key_code >= NANO_KEY_1 && ke->key_code <= NANO_KEY_9)) {
+    //     if ((ke->key_code - '0') <= ms->items_per_page) {
+    //         ms->current_item_index = ms->first_item_intex + (uint32_t)(ke->key_code - '0') - 1;
     //         return menu_item_action_callback(ke, gs, ms);
     //     }
     // }
     // 短按A键：返回上一个焦点状态
-    if (ke->key_edge == -1 && ke->key_code == KEYCODE_NUM_A) {
+    if (ke->key_edge == -1 && ke->key_code == NANO_KEY_esc) {
         return prev_focus_state;
     }
     // 短按D键：执行菜单项对应的功能
-    else if (ke->key_edge == -1 && ke->key_code == KEYCODE_NUM_D) {
+    else if (ke->key_edge == -1 && ke->key_code == NANO_KEY_enter) {
         return menu_item_action_callback(ke, gs, ms);
     }
     // 长+短按*键：光标向上移动
-    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_STAR) {
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == NANO_KEY_left) {
         if (ms->first_item_intex == 0 && ms->current_item_index == 0) {
             ms->first_item_intex = ms->item_num - ms->items_per_page;
             ms->current_item_index = ms->item_num - 1;
@@ -1108,7 +1108,7 @@ int32_t ui_widget_menu_event_handler(
         return current_focus_state;
     }
     // 长+短按#键：光标向下移动
-    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == KEYCODE_NUM_HASH) {
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == NANO_KEY_right) {
         if (ms->first_item_intex == ms->item_num - ms->items_per_page && ms->current_item_index == ms->item_num - 1) {
             ms->first_item_intex = 0;
             ms->current_item_index = 0;

@@ -79,7 +79,7 @@ void get_key_event(Key_Event *key_event, Global_State *global_state) {
     // 边沿
     if (key_event->key_mask != 1 && (key != key_event->prev_key)) {
         // 按下瞬间（上升沿）
-        if (key != KEYCODE_NUM_IDLE) {
+        if (key != NANO_KEY_IDLE) {
             key_event->key_code = key;
             key_event->key_edge = 1;
         }
@@ -103,7 +103,7 @@ void get_key_event(Key_Event *key_event, Global_State *global_state) {
     // 按住或松开
     else {
         // 按住
-        if (key != KEYCODE_NUM_IDLE) {
+        if (key != NANO_KEY_IDLE) {
             key_event->key_code = key;
             key_event->key_edge = 0;
             // key_event->key_timer++;
@@ -111,19 +111,19 @@ void get_key_event(Key_Event *key_event, Global_State *global_state) {
             if (key_event->key_repeat == 1) {
                 key_event->key_edge = -2;
                 key_event->key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
-                key = KEYCODE_NUM_IDLE; // 便于后面设置prev_key为KEYCODE_NUM_IDLE（无键按下）
+                key = NANO_KEY_IDLE; // 便于后面设置prev_key为KEY_IDLE（无键按下）
                 key_event->key_repeat = 1;
             }
             // 如果没有点亮动作标记key_repeat，则达到长按阈值后触发长按事件
             else if ((global_state->timestamp - key_event->key_timer) >= LONG_PRESS_THRESHOLD) {
                 key_event->key_edge = -2;
                 key_event->key_mask = 1; // 软复位置1，即强制恢复为无按键状态，以便下一次轮询检测到下降沿（尽管物理上有键按下），触发长按事件
-                key = KEYCODE_NUM_IDLE; // 便于后面设置prev_key为KEYCODE_NUM_IDLE（无键按下）
+                key = NANO_KEY_IDLE; // 便于后面设置prev_key为KEY_IDLE（无键按下）
             }
         }
         // 松开
         else {
-            key_event->key_code = KEYCODE_NUM_IDLE;
+            key_event->key_code = NANO_KEY_IDLE;
             key_event->key_edge = 0;
             key_event->key_timer = global_state->timestamp;
             key_event->key_mask = 0;
@@ -318,7 +318,7 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
     }
 
     // 长/短按A键中止推理
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         wcscpy(global_state->llm_output_of_last_session, L"");
         global_state->tps_of_last_session = session->tps;
         global_state->token_num_of_last_session = session->pos;
@@ -394,7 +394,7 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state) {
     }
 
     // 长/短按A键中止推理
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         wcscpy(global_state->llm_output_of_last_session, session->output_text);
         global_state->tps_of_last_session = session->tps;
         global_state->token_num_of_last_session = session->pos;
@@ -816,35 +816,35 @@ void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
 }
 
 void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_state) {
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_1) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_1) {
         global_state->STATE = STATE_FLIP;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_2) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_2) {
         init_model_menu(key_event, global_state);
         global_state->STATE = STATE_MODEL_MENU;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_3) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_3) {
         global_state->STATE = STATE_LINGLONG;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_4) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_4) {
         global_state->STATE = STATE_EBOOK;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_5) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_5) {
         global_state->STATE = STATE_GENETIC_TSP;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_6) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_6) {
         global_state->STATE = STATE_ALBUM;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_7) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_7) {
         global_state->STATE = STATE_BADAPPLE;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_8) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_8) {
         global_state->STATE = STATE_GAMEOFLIFE;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_9) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_9) {
         global_state->STATE = STATE_GENETIC;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_0) {
         // 暂时用作切换色彩风格功能
         if (global_state->ui_color_style == UI_COLOR_LIGHT) {
             global_state->ui_color_style = UI_COLOR_DARK;
@@ -855,24 +855,24 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         ui_widget_grid16_draw(key_event, global_state);
         gfx_refresh(global_state->gfx);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         global_state->STATE = STATE_SPLASH_SCREEN;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_B) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_shift) {
         global_state->STATE = STATE_SETTING_MENU;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_C) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_ctrl) {
         global_state->STATE = STATE_README;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_D) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_enter) {
         global_state->STATE = STATE_SHUTDOWN;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
         global_state->brightness += 32;
         global_state->brightness = global_state->brightness % 256;
         gfx_set_brightness(global_state->gfx, (uint8_t)global_state->brightness);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_HASH) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
         global_state->STATE = STATE_ANIMAC_INIT;
     }
     else {
@@ -1400,7 +1400,7 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
 
 void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state) {
     // 按*键切换显示方式
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
         if (s_ui_flip_setting_count == 0) {
             s_ui_flip_show_grid = 0;
             s_ui_flip_show_particles = 1;
@@ -1417,7 +1417,7 @@ void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state)
         s_ui_flip_setting_count = s_ui_flip_setting_count % 3;
     }
     // 按1键切换漏斗阻尼
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_1) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_1) {
         if (s_ui_flip_is_throttle) {
             s_ui_flip_is_throttle = 0;
         }
@@ -1426,18 +1426,18 @@ void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state)
         }
     }
     // 按A键返回主菜单
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         global_state->STATE = STATE_MAIN_MENU;
     }
     // 按C键切换节流度
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_C) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_ctrl) {
         s_ui_flip_init_throttle += 10;
         if (s_ui_flip_init_throttle > 100) {
             s_ui_flip_init_throttle = 10;
         }
     }
     // 按D键复位
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_D) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_enter) {
         ui_app_flip_init(key_event, global_state);
     }
 }
@@ -2000,12 +2000,12 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
     int32_t is_setting_refresh = 0;
 
     // 按任意键都重置玲珑仪刷新状态，以便响应按键活动
-    if (key_event->key_edge < 0 && key_event->key_code != KEYCODE_NUM_IDLE) {
+    if (key_event->key_edge < 0 && key_event->key_code != NANO_KEY_IDLE) {
         linglong_refreshed = 0;
     }
 
     // 按1键向左偏航（yaw--），或者Ctrl时切换投影算法
-    if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_1) {
+    if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_1) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_azi -= 5.0f;
@@ -2025,7 +2025,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按2键推杆低头（pitch--），或者Ctrl时切换赤道坐标圈
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_2) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_2) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_alt -= 5.0f;
@@ -2041,7 +2041,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按3键向右偏航（yaw++），或者Ctrl时切换地平坐标
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_3) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_3) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_azi += 5.0f;
@@ -2057,7 +2057,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按4键向左坡度（roll--），或者Ctrl时切换黄道
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_4) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_4) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_roll -= 5.0f;
@@ -2073,7 +2073,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按5键归中，或切换陀螺仪状态，或者Ctrl时切换天体名称
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_5) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_5) {
         if (global_state->is_ctrl_enabled == 0) {
             // 如果IMU已关闭，则开启
             if (global_state->linglong_cfg->enable_imu == 0) {
@@ -2095,7 +2095,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按6键向右坡度（roll++），或者Ctrl时切换姿态指示
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_6) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_6) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_roll += 5.0f;
@@ -2111,7 +2111,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按7键拉远，或者Ctrl时切换大气散射模型
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_7) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_7) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->view_f -= 0.1f;
             if (global_state->linglong_cfg->view_f <= 0.1f) global_state->linglong_cfg->view_f = 0.1f;
@@ -2124,7 +2124,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按8键拉杆抬头（pitch++），或者Ctrl时切换地景
-    if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_8) {
+    if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_8) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->enable_imu = 0; // 手动控制，关闭IMU
             global_state->linglong_cfg->view_alt += 5.0f;
@@ -2140,7 +2140,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按9键推近，或者Ctrl时切换平滑滤波
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_9) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_9) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->linglong_cfg->view_f += 0.1f;
             if (global_state->linglong_cfg->view_f >= 5.0f) global_state->linglong_cfg->view_f = 5.0f;
@@ -2153,12 +2153,12 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按A键返回主菜单
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         global_state->is_ctrl_enabled = 0;
         global_state->STATE = STATE_MAIN_MENU;
     }
     // 按B键+Ctrl校准IMU
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_B) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_shift) {
         if (global_state->is_ctrl_enabled == 0) {
             // TODO
         }
@@ -2175,7 +2175,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按C键切换Ctrl
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_C) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_ctrl) {
         if (global_state->is_ctrl_enabled == 0) {
             global_state->is_ctrl_enabled = 1;
             linglong_state = LL_STATE_SETTING;
@@ -2186,11 +2186,11 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按*键时光机向前（过去）（反复按运行/暂停）
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_STAR) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_left) {
         ui_app_linglong_set_timemachine_speed(key_event, global_state, -120);
     }
     // 按0键回到实时（反复按运行/暂停），或者Ctrl时切换跟踪太阳
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_0) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_0) {
         if (global_state->is_ctrl_enabled == 0) {
             ui_app_linglong_set_realtime(key_event, global_state);
         }
@@ -2202,7 +2202,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
     }
     // 按#键时光机向后（未来）（反复按运行/暂停）
-    else if (key_event->key_edge < 0 && key_event->key_code == KEYCODE_NUM_HASH) {
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_right) {
         ui_app_linglong_set_timemachine_speed(key_event, global_state, 120);
     }
 }
@@ -2416,7 +2416,7 @@ static inline void ui_app_setting_capture_value(Key_Event *key_event, Global_Sta
 
 void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *global_state) {
     // 日期
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_1) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_1) {
         value_type = 0;
         ui_app_setting_capture_value(key_event, global_state);
         ui_app_setting_value_to_string(
@@ -2425,7 +2425,7 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
         global_state->STATE = STATE_SETTING_INPUT;
     }
     // 时间和时区
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_2) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_2) {
         value_type = 1;
         ui_app_setting_capture_value(key_event, global_state);
         ui_app_setting_value_to_string(
@@ -2434,13 +2434,13 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
         global_state->STATE = STATE_SETTING_INPUT;
     }
     // 屏幕亮度
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_3) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_3) {
         global_state->brightness += 32;
         global_state->brightness = global_state->brightness % 256;
         gfx_set_brightness(global_state->gfx, global_state->brightness);
     }
     // 经度
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_4) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_4) {
         value_type = 2;
         ui_app_setting_capture_value(key_event, global_state);
         ui_app_setting_value_to_string(
@@ -2449,7 +2449,7 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
         global_state->STATE = STATE_SETTING_INPUT;
     }
     // 纬度
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_5) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_5) {
         value_type = 3;
         ui_app_setting_capture_value(key_event, global_state);
         ui_app_setting_value_to_string(
@@ -2458,25 +2458,25 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
         global_state->STATE = STATE_SETTING_INPUT;
     }
     // 音量
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_6) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_6) {
         // TODO
     }
     // LLM演示设置
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_7) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_7) {
         global_state->llm_enable_observation += 1;
         global_state->llm_enable_observation = global_state->llm_enable_observation % 2;
     }
     // TTS设置
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_8) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_8) {
         global_state->tts_req_mode += 1;
         global_state->tts_req_mode = global_state->tts_req_mode % 3;
     }
     // ASR设置
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_9) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_9) {
         global_state->is_auto_submit_after_asr += 1;
         global_state->is_auto_submit_after_asr = global_state->is_auto_submit_after_asr % 2;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_0) {
         // 暂时用作切换色彩风格功能
         if (global_state->ui_color_style == UI_COLOR_LIGHT) {
             global_state->ui_color_style = UI_COLOR_DARK;
@@ -2487,22 +2487,22 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
         ui_widget_grid16_draw(key_event, global_state);
         gfx_refresh(global_state->gfx);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         global_state->STATE = STATE_SPLASH_SCREEN;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_B) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_shift) {
         // TODO
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_C) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_ctrl) {
         // TODO
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_D) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_enter) {
         // TODO
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
         // TODO
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_HASH) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
         // TODO
     }
     else {
@@ -2510,7 +2510,7 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
     }
 
     // 有键按下则刷新
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code != KEYCODE_NUM_IDLE) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code != NANO_KEY_IDLE) {
         ui_app_setting_grid16_draw(key_event, global_state);
         gfx_refresh(global_state->gfx);
     }
@@ -2796,59 +2796,59 @@ static int32_t ui_app_setting_prev_pos(Key_Event *key_event, Global_State *globa
 }
 
 void ui_app_setting_value_input_event_handler(Key_Event *key_event, Global_State *global_state, int32_t value_type) {
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_1) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_1) {
         value_text[cursor_pos] = L'1';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_2) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_2) {
         value_text[cursor_pos] = L'2';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_3) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_3) {
         value_text[cursor_pos] = L'3';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_4) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_4) {
         value_text[cursor_pos] = L'4';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_5) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_5) {
         value_text[cursor_pos] = L'5';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_6) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_6) {
         value_text[cursor_pos] = L'6';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_7) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_7) {
         value_text[cursor_pos] = L'7';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_8) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_8) {
         value_text[cursor_pos] = L'8';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_9) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_9) {
         value_text[cursor_pos] = L'9';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_0) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_0) {
         value_text[cursor_pos] = L'0';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         global_state->STATE = STATE_SETTING_MENU;
         return;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_B) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_shift) {
         value_text[cursor_pos] = L'+';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_C) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_ctrl) {
         value_text[cursor_pos] = L'-';
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_D) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_enter) {
         // 日期 yyyy-mm-dd
         if (value_type == 0) {
             global_state->year =(value_text[0] - L'0') * 1000 + 
@@ -2917,15 +2917,15 @@ void ui_app_setting_value_input_event_handler(Key_Event *key_event, Global_State
         global_state->STATE = STATE_SETTING_MENU;
         return;
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_STAR) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
         cursor_pos = ui_app_setting_prev_pos(key_event, global_state, value_type, cursor_pos);
     }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_HASH) {
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
         cursor_pos = ui_app_setting_next_pos(key_event, global_state, value_type, cursor_pos);
     }
 
     // 有键按下则刷新
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code != KEYCODE_NUM_IDLE) {
+    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code != NANO_KEY_IDLE) {
         ui_app_setting_value_input_draw(key_event, global_state, value_type, value_text, cursor_pos);
         gfx_refresh(global_state->gfx);
     }
@@ -2948,7 +2948,7 @@ void ui_app_setting_value_input_event_handler(Key_Event *key_event, Global_State
 
 int32_t main_init(Key_Event *key_event, Global_State *global_state) {
 
-    key_event->key_code = KEYCODE_NUM_IDLE; // 大于等于16为没有任何按键，0-15为按键
+    key_event->key_code = NANO_KEY_IDLE; // 大于等于16为没有任何按键，0-15为按键
     key_event->key_edge = 0;   // 0：松开  1：上升沿  -1：下降沿(短按结束)  -2：下降沿(长按结束)
     key_event->key_timer = 0;  // 按下计时器
     key_event->key_mask = 0;   // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
@@ -2996,7 +2996,7 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     // 输入设备初始化
 
     input_device_init();
-    key_event->prev_key = KEYCODE_NUM_IDLE;
+    key_event->prev_key = NANO_KEY_IDLE;
 
     ///////////////////////////////////////
     // 初始化玲珑天象仪
@@ -3058,7 +3058,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
 
         // 按下任何键，不论长短按，进入主菜单
-        if (key_event->key_edge < 0 && key_event->key_code != KEYCODE_NUM_IDLE) {
+        if (key_event->key_edge < 0 && key_event->key_code != NANO_KEY_IDLE) {
             global_state->STATE = STATE_MAIN_MENU;
         }
 
@@ -3110,11 +3110,11 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // TODO 应逐句发送请求，不要一次性请求
 
         // 短按A键：停止TTS
-        if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_A) {
+        if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_esc) {
             stop_tts();
         }
         // 短按D键：请求TTS
-        else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
             for (int32_t i = 0; i < global_state->w_textarea_main->length; i++) {
                 send_tts_request(global_state->w_textarea_main->text + i, 0);
             }
@@ -3139,7 +3139,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
 #ifdef ASR_ENABLED
         // 长按D键：开始PTT
-        if (key_event->key_edge == -2 && key_event->key_code == KEYCODE_NUM_D) {
+        if (key_event->key_edge == -2 && key_event->key_code == NANO_KEY_enter) {
             global_state->STATE = STATE_ASR_RUNNING;
             break;
         }
@@ -3363,12 +3363,12 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         // 短按D键：重新推理。推理完成后，并不清除输入缓冲区，因此再次按D键会重新推理。
-        if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
+        if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
             global_state->STATE = STATE_LLM_ON_INFER;
         }
         else {
             // 短按A键：停止TTS
-            if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_A) {
+            if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_esc) {
 #ifdef TTS_ENABLED
                 if (global_state->tts_req_mode > 0) {
                     stop_tts();
@@ -3435,7 +3435,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
 
         // 松开按钮，停止PTT
-        if (global_state->is_recording > 0 && key_event->key_edge == 0 && key_event->key_code == KEYCODE_NUM_IDLE) {
+        if (global_state->is_recording > 0 && key_event->key_edge == 0 && key_event->key_code == NANO_KEY_IDLE) {
 
             global_state->is_recording = 0;
             global_state->asr_start_timestamp = 0;
@@ -3468,7 +3468,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
 
         // 短按A键：清屏，清除输入缓冲区，回到初始状态
-        else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_A) {
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_esc) {
             // 刷新文本输入框
             ui_widget_input_init(key_event, global_state, global_state->w_input_main, global_state->llm_model_name);
             global_state->STATE = STATE_LLM_INPUT;
@@ -3503,7 +3503,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         // 按A键返回主菜单
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
             global_state->STATE = STATE_MAIN_MENU;
         }
 
@@ -3552,7 +3552,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 #endif
 
         // 按A键返回主菜单
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
             global_state->STATE = STATE_MAIN_MENU;
         }
 
@@ -3593,11 +3593,11 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         ui_app_gol_render_frame(key_event, global_state);
 
         // 按A键返回主菜单
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
             global_state->STATE = STATE_MAIN_MENU;
         }
         // 按D键刷新
-        else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
             ui_app_gol_init(key_event, global_state, global_state->gfx->width, global_state->gfx->height);
         }
 
@@ -3619,11 +3619,11 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         ui_app_genetic_refresh(key_event, global_state, 10);
 
         // 按A键返回主菜单
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
             global_state->STATE = STATE_MAIN_MENU;
         }
         // 按D键刷新
-        else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
             ui_app_genetic_init(key_event, global_state);
         }
 
@@ -3645,11 +3645,11 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         ui_app_tsp_refresh(key_event, global_state);
 
         // 按A键返回主菜单
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
             global_state->STATE = STATE_MAIN_MENU;
         }
         // 按D键刷新
-        else if (key_event->key_edge == -1 && key_event->key_code == KEYCODE_NUM_D) {
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
             ui_app_tsp_init(key_event, global_state);
         }
 
@@ -3671,7 +3671,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         // 长按D键确认关机
-        if (key_event->key_edge == -2 && key_event->key_code == KEYCODE_NUM_D) {
+        if (key_event->key_edge == -2 && key_event->key_code == NANO_KEY_enter) {
             ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, L" \n \n    正在安全关机...", 0, 0);
             ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
 
@@ -3690,7 +3690,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
 
         // 长短按A键取消关机，返回主菜单
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
             global_state->STATE = STATE_MAIN_MENU;
         }
 
@@ -3810,7 +3810,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         // 长短按1键：自动放映
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_1) {
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_1) {
             s_album_is_autoplay++;
             s_album_is_autoplay = s_album_is_autoplay % 2;
             s_album_refresh_timestamp = global_state->timestamp;
@@ -3823,10 +3823,10 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         // 长短按2/4/5/7/8/*/0键，切换上一张图片
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && (
-            (key_event->key_code == KEYCODE_NUM_2) ||
-            (key_event->key_code == KEYCODE_NUM_4) || (key_event->key_code == KEYCODE_NUM_5) ||
-            (key_event->key_code == KEYCODE_NUM_7) || (key_event->key_code == KEYCODE_NUM_8) ||
-            (key_event->key_code == KEYCODE_NUM_STAR) || (key_event->key_code == KEYCODE_NUM_0)
+            (key_event->key_code == NANO_KEY_2) ||
+            (key_event->key_code == NANO_KEY_4) || (key_event->key_code == NANO_KEY_5) ||
+            (key_event->key_code == NANO_KEY_7) || (key_event->key_code == NANO_KEY_8) ||
+            (key_event->key_code == NANO_KEY_left) || (key_event->key_code == NANO_KEY_0)
         )) {
             ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
             gfx_refresh(global_state->gfx);
@@ -3835,7 +3835,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             s_album_index = s_album_index % s_album_count;
         }
         // 长短按A键返回主菜单
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == KEYCODE_NUM_A) {
+        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
             global_state->STATE = STATE_MAIN_MENU;
             // 释放内存
             for (int32_t i = 0; i < s_album_count; i++) {
@@ -3847,10 +3847,10 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         // 长短按3/6/B/9/C/#/D键，切换下一张图片
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && (
-            (key_event->key_code == KEYCODE_NUM_3) ||
-            (key_event->key_code == KEYCODE_NUM_6) || (key_event->key_code == KEYCODE_NUM_B) ||
-            (key_event->key_code == KEYCODE_NUM_9) || (key_event->key_code == KEYCODE_NUM_C) ||
-            (key_event->key_code == KEYCODE_NUM_HASH) || (key_event->key_code == KEYCODE_NUM_D)
+            (key_event->key_code == NANO_KEY_3) ||
+            (key_event->key_code == NANO_KEY_6) || (key_event->key_code == NANO_KEY_shift) ||
+            (key_event->key_code == NANO_KEY_9) || (key_event->key_code == NANO_KEY_ctrl) ||
+            (key_event->key_code == NANO_KEY_right) || (key_event->key_code == NANO_KEY_enter)
         )) {
             ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
             gfx_refresh(global_state->gfx);
