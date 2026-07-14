@@ -216,7 +216,7 @@ void ui_draw_image(Key_Event *key_event, Global_State *global_state, const char 
     // 首次加载：从SD卡读取图像文件到文件缓冲区
     if (s_image_file_buffer == NULL) {
         int32_t ret = platform_read_file_to_buffer(img_path, &s_image_file_buffer, &s_image_file_size);
-        printf("platform_read_file_to_buffer %d\n", ret);
+        // printf("platform_read_file_to_buffer %d\n", ret);
     }
 
     // 首次解码：将图像文件解码到 RGB888 像素缓冲区（避免每次渲染都重新解码）
