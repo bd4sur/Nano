@@ -9,6 +9,13 @@ extern "C" {
 #include "platform.h"
 
 
+// 物理键盘布局（16*3=48键）
+//   ESC    !1    @2    #3    $4    %5    ^6    &7    *8    (9    )0    BS 
+//   ALT    `Q    ~W    {E    }R    [T    ]Y    +U    -I    _O    =P    SYM
+//   SFT     A     S    |D    \F    :G    ;H    /J    ,K    .L     ↑    ENT
+//   CTRL    Z     X    <C    >V    ?B    'N    "M    SP     ←     ↓     ↓
+
+
 // 逻辑键值定义
 // ASCII: !"#$%&'()*+,-./0123456789:;<=>?​@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_​`abcdefghijklmnopqrstuvwxyz{|}~
 //       ^32d
