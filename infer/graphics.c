@@ -4,6 +4,10 @@
 
 #include "glyph.h"
 
+// 注意：glyph_12.h / glyph_16.h 为自动生成的字模库，内部符号相互冲突，
+// 不直接包含于此；对它们的访问经由 gfx_font_12.c / gfx_font_16.c 提供的
+// gfx_font_12_get_glyph / gfx_font_16_get_glyph 包装函数。
+
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
 //////////////////////////////////////////////////////
 #include <freertos/FreeRTOS.h>
@@ -969,6 +973,228 @@ void gfx_draw_textline(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uin
         gfx_draw_char(gfx, x_pos, y_pos, glyph, font_width, font_height, red, green, blue, mode);
         x_pos += font_width;
     }
+}
+
+
+/* ============================================================================
+ * 统一字体接口（声明与字体参数约定见 graphics.h）
+ *
+ * 二值点阵字模按“行顶”直接绘制；alpha 字模按基线绘制：
+ *   drawX = penX + xOffset; drawY = baselineY - yOffset; penX += xAdvance
+ *   baseline_y = y_top + gfx_font_baseline(font_id)
+ * alpha 字模为 4bpp（0..15），映射到 8bit 覆盖率时 a8 = q * 17 = (q << 4) | q
+ * ========================================================================== */
+
+// 单个 alpha 字模解码缓冲的最大尺寸（当前 12/16px 字体最大字模不超过 17x17，留有余量）
+#define GFX_ALPHA_GLYPH_MAX_W (24)
+#define GFX_ALPHA_GLYPH_MAX_H (24)
+
+// alpha 字模访问函数原型（与 gfx_font_12_get_glyph / gfx_font_16_get_glyph 一致）
+typedef uint8_t (*Gfx_Font_Get_Glyph_Fn)(uint32_t codepoint, uint8_t *alpha,
+                                         uint8_t *w, uint8_t *h,
+                                         int8_t *x_offset, int8_t *y_offset, uint8_t *x_advance);
+
+// 按字体ID取 alpha 字模访问函数；非 alpha 字体（二值点阵）返回 NULL
+static Gfx_Font_Get_Glyph_Fn gfx_font_alpha_accessor(uint32_t font_id) {
+    if (font_id == GFX_FONT_ALPHA_12) return gfx_font_12_get_glyph;
+    if (font_id == GFX_FONT_ALPHA_16) return gfx_font_16_get_glyph;
+    return NULL;
+}
+
+// 字体行高：同一套字体行高固定，与字符无关
+int32_t gfx_font_line_height(uint32_t font_id) {
+    switch (font_id) {
+        case GFX_FONT_ALPHA_12: return 15;   // 12px alpha 字模：行高15
+        case GFX_FONT_ALPHA_16: return 18;   // 16px alpha 字模：行高18
+        case GFX_FONT_BITMAP_12:
+        default:                return 13;   // 12px 二值点阵：字高12 + 行间距1
+    }
+}
+
+// 基线：行顶到基线的距离
+int32_t gfx_font_baseline(uint32_t font_id) {
+    switch (font_id) {
+        case GFX_FONT_ALPHA_12: return 12;
+        case GFX_FONT_ALPHA_16: return 14;
+        case GFX_FONT_BITMAP_12:
+        default:                return 12;   // 二值点阵无基线概念，取字模底缘
+    }
+}
+
+// 逐字符笔位步进宽度（'\n' 为 0；缺字时返回回退字符的宽度）
+int32_t gfx_font_char_advance(uint32_t font_id, uint32_t codepoint) {
+    if (codepoint == (uint32_t)'\n') return 0;
+
+    Gfx_Font_Get_Glyph_Fn get_glyph = gfx_font_alpha_accessor(font_id);
+    if (get_glyph) {
+        uint8_t x_advance = 0;
+        if (!get_glyph(codepoint, NULL, NULL, NULL, NULL, NULL, &x_advance)) {
+            // 缺字时用 '?' 代替
+            if (!get_glyph((uint32_t)'?', NULL, NULL, NULL, NULL, NULL, &x_advance)) {
+                x_advance = 0;
+            }
+        }
+        return (int32_t)x_advance;
+    }
+
+    // 二值点阵字模：半角 6px，全角 12px
+    return (codepoint < 127) ? FONT_WIDTH_HALF : FONT_WIDTH_FULL;
+}
+
+// 在笔位处绘制一个 alpha 字符（内部实现，供各 alpha 字体共用）
+// pen_x: 当前笔位横坐标; baseline_y: 基线纵坐标
+// mode: 语义同 gfx_draw_point：0-置黑 1-置色 2-异或 3-加色 >=4-Alpha混合
+//       字模 4bpp alpha 作为像素覆盖率参与计算；为保证边缘平滑，
+//       mode 1 与 >=4 均按覆盖率将前景色混合到背景（即抗锯齿渲染）
+// 返回笔位步进宽度（x_advance）；字符不在字库中或字模超大时返回 0（不推进笔位）
+static int32_t gfx_draw_glyph_alpha_impl(Nano_GFX *gfx, Gfx_Font_Get_Glyph_Fn get_glyph,
+                                         uint32_t codepoint, int32_t pen_x, int32_t baseline_y,
+                                         uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    uint8_t w = 0, h = 0, x_advance = 0;
+    int8_t x_offset = 0, y_offset = 0;
+
+    // 第 1 次调用：仅取元数据
+    if (!get_glyph(codepoint, NULL, &w, &h, &x_offset, &y_offset, &x_advance)) {
+        return 0;
+    }
+    if (w == 0 || h == 0) {
+        return x_advance; // 空白字形（如空格），只推进笔位
+    }
+    if (w > GFX_ALPHA_GLYPH_MAX_W || h > GFX_ALPHA_GLYPH_MAX_H) {
+        return 0; // 超出解码缓冲容量，安全起见跳过
+    }
+
+    // 第 2 次调用：解码 4bpp alpha 位图（每像素 1 字节，取值 0..15）
+    uint8_t alpha[GFX_ALPHA_GLYPH_MAX_W * GFX_ALPHA_GLYPH_MAX_H];
+    get_glyph(codepoint, alpha, &w, &h, &x_offset, &y_offset, &x_advance);
+
+    int32_t draw_x = pen_x + x_offset;
+    int32_t draw_y = baseline_y - y_offset;
+
+    for (int32_t j = 0; j < h; j++) {
+        int32_t py = draw_y + j;
+        if (py < 0 || py >= (int32_t)gfx->height) continue;
+        for (int32_t i = 0; i < w; i++) {
+            uint8_t q = alpha[j * w + i];
+            if (q == 0) continue; // 全透明像素，直接跳过
+            int32_t px = draw_x + i;
+            if (px < 0 || px >= (int32_t)gfx->width) continue;
+            uint8_t a8 = (uint8_t)((q << 4) | q); // 4bpp -> 8bpp：q * 17，作为覆盖率
+            if (mode == 0) {
+                // 置黑：按覆盖率向黑色混合
+                gfx_blend_pixel(gfx, (uint32_t)px, (uint32_t)py, 0, 0, 0, a8);
+            }
+            else if (mode == 2) {
+                // 异或无中间态，覆盖率过半才反转
+                if (a8 >= 128) gfx_reverse_pixel(gfx, (uint32_t)px, (uint32_t)py);
+            }
+            else if (mode == 3) {
+                // 加色：颜色按覆盖率加权后叠加
+                gfx_add_pixel(gfx, (uint32_t)px, (uint32_t)py,
+                              (uint8_t)((red * a8 + 127) / 255),
+                              (uint8_t)((green * a8 + 127) / 255),
+                              (uint8_t)((blue * a8 + 127) / 255));
+            }
+            else {
+                // 置色(mode 1)与 Alpha混合(mode >= 4)：按覆盖率将前景色混合到背景
+                gfx_blend_pixel(gfx, (uint32_t)px, (uint32_t)py, red, green, blue, a8);
+            }
+        }
+    }
+    return x_advance;
+}
+
+// 在 (x, y_top) 处绘制一个字符，返回实际笔位步进宽度（缺字时绘制回退字符）
+int32_t gfx_font_draw_char(Nano_GFX *gfx, uint32_t font_id, uint32_t codepoint, int32_t x, int32_t y_top,
+                           uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    if (codepoint == (uint32_t)'\n') return 0;
+
+    Gfx_Font_Get_Glyph_Fn get_glyph = gfx_font_alpha_accessor(font_id);
+    if (get_glyph) {
+        int32_t baseline_y = y_top + gfx_font_baseline(font_id);
+        int32_t advance = gfx_draw_glyph_alpha_impl(gfx, get_glyph, codepoint, x, baseline_y, red, green, blue, mode);
+        if (advance == 0) {
+            // 缺字时用 '?' 代替
+            advance = gfx_draw_glyph_alpha_impl(gfx, get_glyph, (uint32_t)'?', x, baseline_y, red, green, blue, mode);
+        }
+        return advance;
+    }
+
+    // 二值点阵字模：缺字用字脚符号“〓”代替，参考https://ja.wikipedia.org/wiki/下駄記号
+    uint8_t font_width = FONT_WIDTH_FULL;
+    uint8_t font_height = FONT_HEIGHT;
+    const uint8_t *glyph = gfx_get_glyph(gfx, codepoint, &font_width, &font_height);
+    if (!glyph) {
+        glyph = gfx_get_glyph(gfx, 12307, &font_width, &font_height);
+        if (!glyph) return 0;
+    }
+    gfx_draw_char(gfx, (uint32_t)x, (uint32_t)y_top, glyph, font_width, font_height, red, green, blue, mode);
+    return (int32_t)font_width;
+}
+
+// 测量一行文本的渲染总宽度（逐字符实际宽度求和），不修改帧缓冲
+int32_t gfx_font_measure_text(uint32_t font_id, wchar_t *line) {
+    int32_t total_width = 0;
+    for (uint32_t i = 0; i < wcslen(line); i++) {
+        total_width += gfx_font_char_advance(font_id, (uint32_t)line[i]);
+    }
+    return total_width;
+}
+
+// 绘制一行文本，(x, y_top) 为行框左上角；超宽截断
+void gfx_font_draw_text(Nano_GFX *gfx, uint32_t font_id, wchar_t *line, int32_t x, int32_t y_top,
+                        uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    int32_t pen_x = x;
+    for (uint32_t i = 0; i < wcslen(line); i++) {
+        pen_x += gfx_font_draw_char(gfx, font_id, (uint32_t)line[i], pen_x, y_top, red, green, blue, mode);
+        if (pen_x >= (int32_t)gfx->width) {
+            break;
+        }
+    }
+}
+
+// 绘制一行水平垂直居中的文本，(cx, cy) 为行框中心
+void gfx_font_draw_text_centered(Nano_GFX *gfx, uint32_t font_id, wchar_t *line, int32_t cx, int32_t cy,
+                                 uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    int32_t line_height = gfx_font_line_height(font_id);
+    int32_t x_pos = cx - gfx_font_measure_text(font_id, line) / 2;
+    int32_t y_pos = cy - line_height / 2;
+    if (x_pos < 0) x_pos = 0;
+    if (y_pos < 0 || y_pos + line_height > (int32_t)gfx->height) return;
+    gfx_font_draw_text(gfx, font_id, line, x_pos, y_pos, red, green, blue, mode);
+}
+
+
+// ----------------------------------------------------------------------------
+// 兼容接口：16px alpha 字模（GFX_FONT_ALPHA_16）
+// ----------------------------------------------------------------------------
+
+// 获取 16px alpha 字模；alpha 传 NULL 时仅提取元数据；返回 1=找到，0=未找到
+uint8_t gfx_get_glyph_alpha(uint32_t codepoint, uint8_t *alpha,
+                            uint8_t *w, uint8_t *h,
+                            int8_t *x_offset, int8_t *y_offset, uint8_t *x_advance) {
+    return gfx_font_16_get_glyph(codepoint, alpha, w, h, x_offset, y_offset, x_advance);
+}
+
+// 在笔位处绘制一个 16px alpha 字符（pen_x, baseline_y），返回笔位步进宽度
+int32_t gfx_draw_glyph_alpha(Nano_GFX *gfx, uint32_t codepoint, int32_t pen_x, int32_t baseline_y,
+                             uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    return gfx_draw_glyph_alpha_impl(gfx, gfx_font_16_get_glyph, codepoint, pen_x, baseline_y, red, green, blue, mode);
+}
+
+// 计算一行文本用 16px alpha 字体渲染后的总宽度，不修改帧缓冲
+int32_t gfx_measure_textline_alpha(wchar_t *line) {
+    return gfx_font_measure_text(GFX_FONT_ALPHA_16, line);
+}
+
+// 绘制一行 16px alpha 混合的平滑文本，x,y 为行框左上角
+void gfx_draw_textline_alpha(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    gfx_font_draw_text(gfx, GFX_FONT_ALPHA_16, line, (int32_t)x, (int32_t)y, red, green, blue, mode);
+}
+
+// 绘制一行水平垂直居中的 16px alpha 混合平滑文本（cx, cy 为行框中心坐标）
+void gfx_draw_textline_alpha_centered(Nano_GFX *gfx, wchar_t *line, uint32_t cx, uint32_t cy, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, line, (int32_t)cx, (int32_t)cy, red, green, blue, mode);
 }
 
 

@@ -72,6 +72,7 @@ typedef struct Global_State {
     int32_t focus;
     int32_t is_ctrl_enabled; // 是否处于Ctrl键的激活状态：1-是，0-否
     int32_t ui_color_style;
+    uint32_t ui_font; // UI 文本字体（GFX_FONT_*，见 graphics.h）。默认 0 = GFX_FONT_BITMAP_12（12px 二值点阵）
 
     // LLM相关
     Nano_Context *llm_ctx;
@@ -147,7 +148,7 @@ typedef struct Key_Event {
 typedef struct Widget_Textarea_State {
     int32_t state;
     int32_t x;
-    int32_t y; // NOTE 设置文本框高度时，按照除末行外，每行margin-bottom:1px来计算。例如，如果希望恰好显示4行，则高度应为13*3+12=51px。
+    int32_t y; // NOTE 设置文本框高度时，按照当前字体行高（gfx_font_line_height）来计算。例如，使用默认12px点阵字体（行高13）时，如果希望恰好显示4行，则高度应为13*3+12=51px。
     int32_t width;
     int32_t height;
     wchar_t *text;
@@ -206,7 +207,13 @@ typedef struct Widget_Menu_State {
 void ui_draw_header(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center);
 void ui_draw_footer(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center);
 
-void ui_draw_text_block(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
+// font_id: 文本字体（GFX_FONT_*），决定行高、逐字符宽度、基线与渲染方式
+void ui_draw_text_block(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state, uint32_t font_id);
+
+// 排版-折行：按当前字体（global_state->ui_font）逐字符实际宽度计算断行位置
+void typeset_line_breaks(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
+// 排版-视口：line_height 为当前字体行高（gfx_font_line_height）
+void typeset_view_range(Widget_Textarea_State *textarea_state, int32_t line_height);
 
 
 

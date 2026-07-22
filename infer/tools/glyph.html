@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>嵌入式字模取模工具 (紧凑裁剪/每字符yOffset/Alpha直取/双验证)</title>
+    <style>
+        :root { --bg: #121212; --panel: #1e1e1e; --border: #333; --accent: #5c8aff; --text: #e0e0e0; --mono: 'SF Mono', 'Consolas', monospace; }
+        body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 24px; display: flex; justify-content: center; }
+        .container { background: var(--panel); padding: 24px; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,0.5); width: 100%; max-width: 950px; }
+        h2 { margin: 0 0 16px; font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+        label { display: block; margin: 14px 0 6px; font-weight: 500; font-size: 13px; color: #aaa; }
+        textarea, input, select { width: 100%; padding: 10px; box-sizing: border-box; background: #0a0a0a; color: #fff; border: 1px solid var(--border); border-radius: 6px; font-family: var(--mono); font-size: 13px; transition: border 0.2s; }
+        textarea:focus, input:focus, select:focus { outline: none; border-color: var(--accent); }
+        #inputText { height: 70px; resize: vertical; }
+        .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+        .btn-group { display: flex; gap: 10px; margin-top: 14px; }
+        button { padding: 10px 16px; background: var(--accent); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s; }
+        button:hover { background: #4a75e0; }
+        button.secondary { background: #3a3a3a; }
+        button.secondary:hover { background: #4a4a4a; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+    
+        .canvas-wrap { position: relative; margin: 12px 0; background: #000; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+        .scroll-box { overflow-x: auto; max-height: 200px; scrollbar-width: thin; scrollbar-color: #444 #222; }
+        .scroll-box::-webkit-scrollbar { height: 6px; }
+        .scroll-box::-webkit-scrollbar-track { background: #222; }
+        .scroll-box::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+    
+        #previewCanvas, #verifyCanvas, #jsonVerifyCanvas { display: block; image-rendering: pixelated; }
+        #output, #cOutput { height: 280px; margin-top: 4px; font-size: 12px; line-height: 1.3; }
+        .info { font-size: 12px; color: #777; margin-top: 10px; line-height: 1.5; background: #161616; padding: 12px; border-radius: 6px; border-left: 3px solid var(--accent); }
+        .info code { background: #2a2a2a; padding: 2px 5px; border-radius: 3px; font-family: var(--mono); color: #ddd; }
+        .badge { background: var(--accent); color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 6px; }
+        .sub-title { font-size: 13px; color: #bbb; margin: 16px 0 4px; font-weight: 500; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔤 嵌入式字模 Alpha 提取工具</h2>
+    
+        <label>输入文本 <span class="badge">自动去重 / Unicode升序</span></label>
+        <textarea id="inputText" placeholder="输入需要生成字模的字符...">Hello 世界 123 !@# 测试字体边界</textarea>
+
+        <div class="controls">
+            <div><label>字号 (px)</label><input type="number" id="fontSize" value="16" min="6" max="128"></div>
+            <div><label>字体族</label>
+                <select id="fontFamily">
+                    <option value="Maple Mono Normal NL NF CN">Maple Mono</option>
+                    <option value="sans-serif">系统无衬线 (Sans-serif)</option>
+                    <option value="monospace">等宽 (Monospace)</option>
+                    <option value="Microsoft YaHei">微软雅黑</option>
+                    <option value="SimSun">宋体</option>
+                    <option value="Arial">Arial</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button id="generateBtn">⚡ 生成字模 JSON & 双验证</button>
+            <button id="downloadBtn" class="secondary" disabled>📥 下载 .json</button>
+        </div>
+
+        <div class="sub-title">📐 验证 1：浏览器原生渲染 (带基线参考)</div>
+        <div class="canvas-wrap scroll-box">
+            <canvas id="verifyCanvas"></canvas>
+        </div>
+
+        <div class="sub-title">🖼️ 验证 2：JSON 数据反绘 (白底黑字 / 纯软件 Alpha 混合)</div>
+        <div class="canvas-wrap scroll-box" style="background: #fff; border-color: #555;">
+            <canvas id="jsonVerifyCanvas"></canvas>
+        </div>
+
+        <label>JSON 输出 <span id="stat" style="float:right"></span></label>
+        <textarea id="output" readonly></textarea>
+        <div class="btn-group">
+            <button id="copyBtn" class="secondary">📋 复制到剪贴板</button>
+        </div>
+
+        <label>🔧 C 头文件输出 <span class="badge">自包含 / 4bpp / RLE / 架构无关 / const</span><span id="cStat" style="float:right"></span></label>
+        <textarea id="cOutput" readonly></textarea>
+        <div class="btn-group">
+            <button id="cCopyBtn" class="secondary">📋 复制 .h 到剪贴板</button>
+            <button id="cDownloadBtn" class="secondary" disabled>📥 下载 mcu_font.h</button>
+        </div>
+
+        <div class="info">
+            💡 <strong>提取与验证逻辑（紧凑裁剪 + 每字符 yOffset）</strong><br>
+            • <strong>紧凑裁剪</strong>：位图精确裁剪到各字形的墨盒 <code>actualBoundingBox</code>，不再统一等高，最大限度节省存储。<br>
+            • <strong>每字符定位参数</strong>：<code>xOffset</code> = 位图左边缘相对笔位 (pen origin) 的偏移，<b>可为负</b>（如斜体左出血）；<code>yOffset</code> = 基线到位图顶部的距离（向上为正，即该字符 Ascent；<b>可为负</b>，如 <code>_</code> 等整体位于基线下方的字符）；<code>xAdvance</code> = 笔位步进宽度。<br>
+            • <strong>嵌入式渲染公式</strong>：<code>drawX = penX + xOffset</code>，<code>drawY = baselineY - yOffset</code>；绘制后 <code>penX += xAdvance</code>。<br>
+            • <strong>全局行度量</strong>：<code>lineHeight</code> / <code>baseline</code> 仅用于换行与多行对齐，不参与单字定位。<br>
+            • <strong>Alpha 还原</strong>：Canvas 混合后 Alpha 通道恒为 255，实际抗锯齿覆盖度已线性混合进 RGB。黑底白字下，直接读取 <code>R</code> 通道即可无损还原 0~255 覆盖度。<br>
+            • <strong>验证 1</strong>：原生渲染画框（青色=墨盒，品红刻度=笔位），核对物理边界与基线。<br>
+            • <strong>验证 2</strong>：<b>完全基于 JSON 数据、按上述渲染公式逐像素混合</b>。白底 `255` + 黑字 `0`，混合公式 `Result = 255 - Alpha`。若反绘结果与验证1一致，证明定位参数与数据格式完全正确。<br>
+            • <strong>C 头文件</strong>：自包含 <code>mcu_font.h</code>。Alpha 量化为 4bpp（<code>q=(v+16)/17</code>），RLE token 流 + 13 字节定长稀疏索引（码点升序、二分查找），全部 <code>const uint8_t</code> 字节流、小端位移装配，架构无关、无浮点。接口 <code>mcu_font_get_glyph(cp, alpha, &w, &h, &xo, &yo, &adv)</code>（<code>xo/yo</code> 为 <code>int8_t*</code>）：<code>alpha=NULL</code> 仅取元数据；传入缓冲区则解码字模（每像素 1 字节，值 0~15）。配套测试见 <code>test_mcu_font.c</code>。
+        </div>
+    </div>
+
+    <script>
+        const inputText = document.getElementById('inputText');
+        const fontSizeInput = document.getElementById('fontSize');
+        const fontFamilyInput = document.getElementById('fontFamily');
+        const verifyCanvas = document.getElementById('verifyCanvas');
+        const jsonVerifyCanvas = document.getElementById('jsonVerifyCanvas');
+        const vCtx = verifyCanvas.getContext('2d', { willReadFrequently: true });
+        const jCtx = jsonVerifyCanvas.getContext('2d');
+        const outputArea = document.getElementById('output');
+        const statLabel = document.getElementById('stat');
+        const generateBtn = document.getElementById('generateBtn');
+        const copyBtn = document.getElementById('copyBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const cOutput = document.getElementById('cOutput');
+        const cStat = document.getElementById('cStat');
+        const cCopyBtn = document.getElementById('cCopyBtn');
+        const cDownloadBtn = document.getElementById('cDownloadBtn');
+
+        // ================= 4bpp 量化 / RLE 编码 / FNV 校验 =================
+        // 量化：v(0~255) -> q(0~15)，q = floor((v + 16) / 17)
+        function quantize4(v) { return Math.floor((v + 16) / 17); }
+
+        // FNV-1a 32bit（测试用，与 C 测试程序交叉校验解码正确性）
+        function fnv1a(arr) {
+            let h = 0x811C9DC5;
+            for (let i = 0; i < arr.length; i++) { h ^= arr[i]; h = Math.imul(h, 0x01000193) >>> 0; }
+            return h;
+        }
+
+        // RLE 编码（与 C 端解码器严格对应）：
+        //   token < 0x80 : 连续 (token+1) 个 0
+        //   token >= 0x80: 后续 (token&0x7F)+1 个 literal nibble，每字节 2 像素（高 nibble 在前）
+        // 优化：literal 段内允许吸收 <=2 的零间隙（避免行间碎片化产生额外 token）
+        function rleEncode4bpp(nib) {
+            const out = [];
+            const n = nib.length;
+            let i = 0;
+            while (i < n) {
+                if (nib[i] === 0) {
+                    let run = 0;
+                    while (i < n && nib[i] === 0 && run < 128) { run++; i++; }
+                    out.push(run - 1);
+                } else {
+                    const lits = [];
+                    while (i < n && lits.length < 128) {
+                        if (nib[i] !== 0) { lits.push(nib[i]); i++; }
+                        else {
+                            let z = 0;
+                            while (i + z < n && nib[i + z] === 0 && z < 3) z++;
+                            if (z >= 1 && z <= 2 && i + z < n && nib[i + z] !== 0 && lits.length + z < 128) {
+                                for (let k = 0; k < z; k++) lits.push(0);
+                                i += z;
+                            } else break;
+                        }
+                    }
+                    out.push(0x80 | (lits.length - 1));
+                    for (let k = 0; k < lits.length; k += 2) {
+                        out.push((lits[k] << 4) | (k + 1 < lits.length ? lits[k + 1] : 0));
+                    }
+                }
+            }
+            return out;
+        }
+
+        function bytesToCLines(bytes, indent) {
+            let s = '';
+            for (let i = 0; i < bytes.length; i += 16) {
+                s += indent + bytes.slice(i, i + 16).map(b => '0x' + b.toString(16).padStart(2, '0')).join(',');
+                s += (i + 16 < bytes.length ? ',' : '') + '\n';
+            }
+            return s;
+        }
+
+        // ================= 生成自包含 C 头文件 =================
+        function generateCHeader(result) {
+            const mask = [];
+            const index = [];
+            for (const g of result.glyphs) {
+                if (g.w > 255 || g.h > 255) throw new Error(`字符 "${g.char}" 尺寸超过 255`);
+                if (g.xOffset < -128 || g.xOffset > 127) throw new Error(`字符 "${g.char}" xOffset 超出 int8 范围`);
+                if (g.yOffset < -128 || g.yOffset > 127) throw new Error(`字符 "${g.char}" yOffset 超出 int8 范围`);
+                if (g.xAdvance > 255) throw new Error(`字符 "${g.char}" xAdvance 超过 255`);
+                const nib = new Array(g.data.length);
+                for (let i = 0; i < g.data.length; i++) nib[i] = quantize4(g.data[i]);
+                const enc = rleEncode4bpp(nib);
+                if (enc.length > 0xFFFF) throw new Error(`字符 "${g.char}" RLE 数据超过 65535 字节`);
+                const off = mask.length;
+                if (off + enc.length > 0xFFFFFF) throw new Error('字模数据总量超过 24 位寻址范围');
+                for (const b of enc) mask.push(b);
+                const cp = g.char.codePointAt(0);
+                index.push(cp & 0xFF, (cp >> 8) & 0xFF, (cp >> 16) & 0xFF,
+                           g.w, g.h, g.xOffset & 0xFF, g.yOffset & 0xFF, g.xAdvance,
+                           off & 0xFF, (off >> 8) & 0xFF, (off >> 16) & 0xFF,
+                           enc.length & 0xFF, (enc.length >> 8) & 0xFF);
+            }
+            const n = result.glyphs.length;
+            const rawPixels = result.glyphs.reduce((s, g) => s + g.w * g.h, 0);
+            const ratio = rawPixels ? (100 * mask.length / rawPixels).toFixed(1) : '0.0';
+
+            return `/* ============================================================================
+ * mcu_font.h - 自包含嵌入式字模库（由 glyph.html 自动生成，请勿手动修改）
+ *
+ *   字体: ${result.fontFamily} ${result.fontSize}px | 字符数: ${n}
+ *   行高 lineHeight: ${result.lineHeight} | 基线 baseline: ${result.baseline}（相对行顶）
+ *   原始像素: ${rawPixels} -> RLE 压缩后: ${mask.length} 字节（${ratio}%）
+ *
+ * Alpha 量化：4bpp（16 级），q = (v + 16) / 17（整数除法，无浮点运算）
+ *
+ * 存储格式（架构无关字节流；多字节字段一律小端、按位移装配，无对齐/端序依赖）：
+ *   1) Alpha Mask：RLE token 流
+ *        token <  0x80 : 连续 (token + 1) 个 alpha = 0
+ *        token >= 0x80 : 取 (token & 0x7F) + 1 个 literal nibble，
+ *                        每字节 2 像素（高 nibble 在前，奇数个时末尾补 0）
+ *   2) Sparse Index：每字形 13 字节定长记录（码点升序，二分查找）
+ *        [0..2] codepoint LE24 | [3] w | [4] h | [5] xOffset(int8)
+ *        [6] yOffset(int8) | [7] xAdvance | [8..10] mask 偏移 LE24 | [11..12] 长度 LE16
+ *
+ * 对外接口（不定义结构体，全部指针传参；alpha 缓冲区由调用者提供，大小 >= w*h）：
+ *   第 1 次调用（alpha = NULL）：仅提取元数据 w / h / xOffset / yOffset / xAdvance
+ *   第 2 次调用（alpha = 缓冲区）：解码字模，每像素 1 字节（取值 0..15）
+ *   返回值：1 = 找到该码点，0 = 未找到
+ *
+ * 排版公式：drawX = penX + xOffset; drawY = baselineY - yOffset; penX += xAdvance
+ * ============================================================================ */
+#ifndef MCU_FONT_H
+#define MCU_FONT_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+#define MCU_FONT_FONT_SIZE   ${result.fontSize}u
+#define MCU_FONT_LINE_HEIGHT ${result.lineHeight}u
+#define MCU_FONT_BASELINE    ${result.baseline}u
+#define MCU_FONT_GLYPH_COUNT ${n}u
+
+/* RLE 压缩的 4bpp Alpha Mask 数据 */
+static const uint8_t mcu_font_mask[] = {
+${bytesToCLines(mask, '    ')}};
+
+/* 字形稀疏索引（每记录 13 字节，码点升序） */
+static const uint8_t mcu_font_index[] = {
+${bytesToCLines(index, '    ')}};
+
+#define MCU_FONT_INDEX_REC_SIZE 13u
+
+static uint32_t mcu_font_rd24(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
+}
+
+static uint16_t mcu_font_rd16(const uint8_t *p) {
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+/* 二分查找字形索引记录，未找到返回 NULL */
+static const uint8_t *mcu_font_find(uint32_t codepoint) {
+    uint32_t lo = 0u, hi = MCU_FONT_GLYPH_COUNT;
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) >> 1;
+        const uint8_t *rec = mcu_font_index + mid * MCU_FONT_INDEX_REC_SIZE;
+        uint32_t c = mcu_font_rd24(rec);
+        if (codepoint < c) { hi = mid; }
+        else if (codepoint > c) { lo = mid + 1u; }
+        else { return rec; }
+    }
+    return NULL;
+}
+
+/* RLE 解码：src/len 为某字形的 mask 段，dst 容量 >= total（= w*h），纯整数运算 */
+static void mcu_font_decode(const uint8_t *src, uint16_t len, uint8_t *dst, uint16_t total) {
+    uint16_t i = 0u, pos = 0u;
+    while ((i < len) && (pos < total)) {
+        uint8_t token = src[i++];
+        if (token < 0x80u) {
+            uint16_t run = (uint16_t)token + 1u;
+            while ((run-- > 0u) && (pos < total)) { dst[pos++] = 0u; }
+        } else {
+            uint16_t count = (uint16_t)(token & 0x7Fu) + 1u;
+            uint16_t k;
+            for (k = 0u; (k < count) && (pos < total); k++) {
+                uint8_t b = src[i + (k >> 1)];
+                dst[pos++] = ((k & 1u) != 0u) ? (uint8_t)(b & 0x0Fu) : (uint8_t)(b >> 4);
+            }
+            i = (uint16_t)(i + ((count + 1u) >> 1));
+        }
+    }
+    while (pos < total) { dst[pos++] = 0u; }
+}
+
+/* 对外接口：按 Unicode 码点取字模
+ *   alpha     : 调用者提供的缓冲区（>= w*h 字节），传 NULL 则只取元数据
+ *   w/h       : 字模位图宽/高
+ *   x_offset  : 位图左缘相对笔位的偏移（可为负）
+ *   y_offset  : 基线到位图顶部的距离（向上为正；可为负，如 '_' 等整体位于基线下方的字符）
+ *   x_advance : 笔位步进宽度
+ *   返回值    : 1 = 找到，0 = 未找到
+ */
+static uint8_t mcu_font_get_glyph(uint32_t codepoint, uint8_t *alpha,
+                                  uint8_t *w, uint8_t *h,
+                                  int8_t *x_offset, int8_t *y_offset, uint8_t *x_advance) {
+    const uint8_t *rec = mcu_font_find(codepoint);
+    uint8_t gw, gh;
+    if (rec == NULL) { return 0u; }
+    gw = rec[3]; gh = rec[4];
+    if (w != NULL) { *w = gw; }
+    if (h != NULL) { *h = gh; }
+    if (x_offset != NULL) { *x_offset = (int8_t)rec[5]; }
+    if (y_offset != NULL) { *y_offset = (int8_t)rec[6]; }
+    if (x_advance != NULL) { *x_advance = rec[7]; }
+    if (alpha != NULL) {
+        mcu_font_decode(mcu_font_mask + mcu_font_rd24(rec + 8u),
+                        mcu_font_rd16(rec + 11u), alpha,
+                        (uint16_t)((uint16_t)gw * (uint16_t)gh));
+    }
+    return 1u;
+}
+
+#endif /* MCU_FONT_H */
+`;
+        }
+
+        function generateGlyphs() {
+            const text = inputText.value;
+            if (!text.trim()) { alert('请输入文本'); return; }
+
+            const fontSize = parseInt(fontSizeInput.value) || 16;
+            const fontFamily = fontFamilyInput.value;
+            const fontStr = `${fontSize}px ${fontFamily}`;
+
+            // 1. 去重并按 Unicode 码点排序
+            const uniqueChars = Array.from(new Set(text.split(''))).sort((a, b) => a.codePointAt(0) - b.codePointAt(0));
+
+            // 2. 逐字符测量：墨盒紧凑裁剪 + 每字符定位参数
+            //    墨盒水平范围（相对笔位原点）：左缘 = -actualBoundingBoxLeft，右缘 = actualBoundingBoxRight
+            vCtx.font = fontStr;
+            let maxAscent = 0, maxDescent = 0;
+            const charMetrics = [];
+
+            for (const ch of uniqueChars) {
+                const m = vCtx.measureText(ch);
+                const asc = Math.ceil(m.actualBoundingBoxAscent ?? fontSize * 0.8);
+                const desc = Math.ceil(m.actualBoundingBoxDescent ?? fontSize * 0.2);
+                const abL = m.actualBoundingBoxLeft ?? 0;
+                const abR = m.actualBoundingBoxRight ?? Math.max(1, m.width);
+                const xOffset = Math.floor(-abL);          // 位图左缘相对笔位的偏移（可为负）
+                const x1 = Math.ceil(abR);                 // 位图右缘（相对笔位）
+                const w = Math.max(1, x1 - xOffset);       // 紧凑位图宽
+                const h = Math.max(1, asc + desc);         // 紧凑位图高
+                const xAdvance = Math.max(1, Math.ceil(m.width)); // 笔位步进宽度
+                if (asc > maxAscent) maxAscent = asc;
+                if (desc > maxDescent) maxDescent = desc;
+                charMetrics.push({ ch, asc, desc, xOffset, w, h, xAdvance });
+            }
+
+            const lineHeight = maxAscent + maxDescent; // 全局行高（仅用于换行/对齐）
+            const gap = 4; // 验证画布上的字符间距
+
+            // ================= 验证 1：原生渲染画框 =================
+            let totalWidth = 20;
+            for (const c of charMetrics) totalWidth += c.xAdvance + gap;
+            verifyCanvas.width = totalWidth;
+            verifyCanvas.height = lineHeight + 40;
+
+            vCtx.fillStyle = '#000000';
+            vCtx.fillRect(0, 0, totalWidth, verifyCanvas.height);
+            vCtx.beginPath();
+            vCtx.strokeStyle = 'rgba(255, 50, 50, 0.4)';
+            vCtx.lineWidth = 1;
+            vCtx.setLineDash([6, 4]);
+            vCtx.moveTo(0, maxAscent + 10);
+            vCtx.lineTo(totalWidth, maxAscent + 10);
+            vCtx.stroke();
+            vCtx.setLineDash([]);
+
+            vCtx.font = fontStr;
+            vCtx.fillStyle = '#FFFFFF';
+            vCtx.textBaseline = 'alphabetic';
+            vCtx.textAlign = 'left';
+
+            let curX = 10;
+            const yBase = maxAscent + 10;
+
+            for (const c of charMetrics) {
+                vCtx.strokeStyle = 'rgba(0, 229, 255, 0.7)';
+                vCtx.lineWidth = 1;
+                vCtx.strokeRect(curX + c.xOffset, yBase - c.asc, c.w, c.h);
+                vCtx.fillStyle = '#FFFFFF';
+                vCtx.fillText(c.ch, curX, yBase);
+                // 品红刻度标记笔位原点 (pen origin)
+                vCtx.fillStyle = '#FF00FF';
+                vCtx.fillRect(curX, yBase - 2, 1, 5);
+                vCtx.fillStyle = '#FFD600';
+                vCtx.font = '10px monospace';
+                vCtx.fillText(`${c.w}×${c.h}`, curX + c.xOffset, yBase + c.desc + 14);
+                vCtx.font = fontStr;
+                curX += c.xAdvance + gap;
+            }
+
+            // ================= 提取 Alpha 生成 JSON =================
+            const glyphs = [];
+            const offCanvas = document.createElement('canvas');
+            const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
+
+            for (const c of charMetrics) {
+                offCanvas.width = c.w;
+                offCanvas.height = c.h;
+
+                offCtx.fillStyle = '#000000';
+                offCtx.fillRect(0, 0, c.w, c.h);
+
+                offCtx.fillStyle = '#FFFFFF';
+                offCtx.font = fontStr;
+                offCtx.textBaseline = 'alphabetic';
+                offCtx.textAlign = 'left';
+                // 笔位放在 (-xOffset, asc)，使位图 [0,w)×[0,h) 恰好覆盖墨盒（含左出血）
+                offCtx.fillText(c.ch, -c.xOffset, c.asc);
+
+                const imgData = offCtx.getImageData(0, 0, c.w, c.h);
+                const data = imgData.data;
+                const alphaArr = new Array(c.w * c.h);
+                let idx = 0;
+                // 黑底白字 SourceOver 混合后 Alpha 恒为 255，覆盖度已混入 R 通道
+                for (let i = 0; i < data.length; i += 4) {
+                    alphaArr[idx++] = data[i]; // 读取 R 通道作为字模 Alpha (0~255)
+                }
+                glyphs.push({
+                    char: c.ch,
+                    w: c.w,                 // 紧凑位图宽
+                    h: c.h,                 // 紧凑位图高
+                    xOffset: c.xOffset,     // 位图左缘相对笔位的偏移（可为负）
+                    yOffset: c.asc,         // 基线到位图顶部的距离（向上为正）
+                    xAdvance: c.xAdvance,   // 笔位步进宽度
+                    data: alphaArr
+                });
+            }
+
+            const result = {
+                fontSize,
+                fontFamily,
+                lineHeight,        // 建议行距 = maxAscent + maxDescent
+                baseline: maxAscent, // 基线相对行顶的位置
+                glyphs
+            };
+
+            // ================= 验证 2：JSON 数据反绘 (纯软件混合) =================
+            // 严格使用 JSON 字段按嵌入式渲染公式定位：
+            //   drawX = penX + xOffset, drawY = baselineY - yOffset, penX += xAdvance
+            let jsonTotalWidth = 20;
+            for (const g of result.glyphs) jsonTotalWidth += g.xAdvance + gap;
+            jsonVerifyCanvas.width = jsonTotalWidth;
+            jsonVerifyCanvas.height = lineHeight + 40;
+
+            // 创建全白背景 ImageData
+            const jsonImgData = jCtx.createImageData(jsonTotalWidth, jsonVerifyCanvas.height);
+            const jData = jsonImgData.data;
+            for (let i = 0; i < jData.length; i += 4) {
+                jData[i] = 255; jData[i+1] = 255; jData[i+2] = 255; jData[i+3] = 255;
+            }
+
+            let penX = 10;
+            const jsonYBase = result.baseline + 10; // 与验证1保持相同垂直布局
+
+            for (const g of result.glyphs) {
+                const bmpX = penX + g.xOffset;
+                const bmpY = jsonYBase - g.yOffset;
+
+                // 逐像素软件 Alpha 混合：白底(255) + 黑字(0) -> Result = 255 - Alpha
+                for (let y = 0; y < g.h; y++) {
+                    for (let x = 0; x < g.w; x++) {
+                        const alpha = g.data[y * g.w + x];
+                        const colorVal = 255 - alpha; // Alpha=255 -> 黑(0) | Alpha=0 -> 白(255)
+                        const canvasOffset = ((bmpY + y) * jsonTotalWidth + bmpX + x) * 4;
+                        jData[canvasOffset] = colorVal;
+                        jData[canvasOffset + 1] = colorVal;
+                        jData[canvasOffset + 2] = colorVal;
+                        jData[canvasOffset + 3] = 255;
+                    }
+                }
+                penX += g.xAdvance + gap;
+            }
+
+            jCtx.putImageData(jsonImgData, 0, 0);
+
+            // 绘制验证框、笔位刻度与尺寸标注（与验证1一致）
+            jCtx.strokeStyle = 'rgba(0, 180, 200, 0.9)';
+            jCtx.lineWidth = 1;
+            jCtx.fillStyle = '#B8860B';
+            jCtx.font = '10px monospace';
+            let boxPenX = 10;
+            for (const g of result.glyphs) {
+                const bmpY = jsonYBase - g.yOffset;
+                jCtx.strokeRect(boxPenX + g.xOffset, bmpY, g.w, g.h);
+                jCtx.fillStyle = '#FF00FF';
+                jCtx.fillRect(boxPenX, jsonYBase - 2, 1, 5);
+                jCtx.fillStyle = '#B8860B';
+                jCtx.fillText(`${g.w}×${g.h}`, boxPenX + g.xOffset, bmpY + g.h + 12);
+                boxPenX += g.xAdvance + gap;
+            }
+
+            // ================= 输出与统计 =================
+            const jsonStr = JSON.stringify(result, null, 2);
+            outputArea.value = jsonStr;
+            statLabel.textContent = `字符数: ${uniqueChars.length} | 行高: ${lineHeight}px | JSON体积: ${(new Blob([jsonStr]).size / 1024).toFixed(2)} KB`;
+            downloadBtn.disabled = false;
+            window.__lastResult = result; // 供自动化测试提取
+
+            // ================= 生成 C 头文件 =================
+            try {
+                const cStr = generateCHeader(result);
+                cOutput.value = cStr;
+                cStat.textContent = `头文件体积: ${(new Blob([cStr]).size / 1024).toFixed(2)} KB`;
+                cDownloadBtn.disabled = false;
+            } catch (err) {
+                cOutput.value = '';
+                cStat.textContent = '';
+                cDownloadBtn.disabled = true;
+                alert('C 头文件生成失败: ' + err.message);
+            }
+        }
+
+        generateBtn.addEventListener('click', generateGlyphs);
+    
+        copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(outputArea.value).then(() => {
+                const orig = copyBtn.textContent;
+                copyBtn.textContent = '✅ 已复制';
+                setTimeout(() => copyBtn.textContent = orig, 1500);
+            });
+        });
+
+        cCopyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(cOutput.value).then(() => {
+                const orig = cCopyBtn.textContent;
+                cCopyBtn.textContent = '✅ 已复制';
+                setTimeout(() => cCopyBtn.textContent = orig, 1500);
+            });
+        });
+
+        cDownloadBtn.addEventListener('click', () => {
+            const blob = new Blob([cOutput.value], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'mcu_font.h';
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            const blob = new Blob([outputArea.value], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `font_glyphs_${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+
+        inputText.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'Enter') generateGlyphs();
+        });
+    </script>
+</body>
+</html>

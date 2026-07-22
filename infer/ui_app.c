@@ -191,6 +191,8 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
     global_state->llm_refresh_timestamp = 0;
     global_state->ba_frame_count = 0;
     global_state->ba_begin_timestamp = 0;
+
+    global_state->ui_font = GFX_FONT_ALPHA_12;
 }
 
 
@@ -3344,7 +3346,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
                 }
             }
             wchar_t tps_wcstr[50];
-            swprintf(tps_wcstr, 50, L"\n\n[#dda300][%d/%d|%.1fTPS]", global_state->token_num_of_last_session, global_state->llm_max_seq_len, global_state->tps_of_last_session);
+            swprintf(tps_wcstr, 50, L"\n\n[#ffc840][%d/%d|%.1fTPS]", global_state->token_num_of_last_session, global_state->llm_max_seq_len, global_state->tps_of_last_session);
             wcscat(prompt_and_output, tps_wcstr);
             if (global_state->ui_color_style == UI_COLOR_LIGHT) {
                 wcscat(prompt_and_output, L"[#000000]");
