@@ -265,6 +265,7 @@ void free_tokenizer(Tokenizer *tk) {
         if(NULL != tk->token_list[i])
             free(tk->token_list[i]);
     }
+    free(tk->token_list); // 释放词表指针数组本体（infer.c分配）
     free(tk->unicode_charset);
     free_trie(tk->vocab_trie);
     free_map(tk->token_to_id_map);

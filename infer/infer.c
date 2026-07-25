@@ -574,6 +574,7 @@ Nano_Context *llm_context_init(char *model_path, char *lora_path, uint32_t max_s
 
 void llm_context_free(Nano_Context *ctx) {
     free_llm(ctx->llm, ctx->tokenizer);
+    free(ctx->tokenizer); // free_llm内部只调用free_tokenizer释放成员，Tokenizer结构体本体在此释放（infer.c:556/568分配）
     free_sampler(ctx->sampler);
     free(ctx);
 }
@@ -1121,6 +1122,7 @@ Sampler *build_sampler(int vocab_size, float repetition_penalty, float temperatu
 
 void free_sampler(Sampler* sampler) {
     free(sampler->probindex);
+    free(sampler); // 释放采样器结构体本体（build_sampler中platform_calloc分配）
 }
 
 
