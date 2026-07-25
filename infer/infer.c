@@ -1151,15 +1151,17 @@ uint32_t generate_next_token(Nano_Context *ctx, uint32_t *output_ids, uint32_t p
 #endif
         // 复读惩罚：对过往出现过的词元施加惩罚，词元出现得越多，概率越低: ref arxiv:1909.05858
         uint32_t *tokenset = (uint32_t *)platform_calloc(sampler->vocab_size, sizeof(uint32_t));
-        for(uint32_t i = 0; i < pos; i++) {
-            tokenset[output_ids[i]] = 1;  // 1表示output_ids中出现了这个token
-        }
-        for(uint32_t id = 0; id < sampler->vocab_size; id++) {
-            if(tokenset[id] == 1) {
-                logits[id] /= sampler->repetition_penalty;
+        if (tokenset) { // 分配失败（内存紧张）时跳过复读惩罚，避免空指针写入
+            for(uint32_t i = 0; i < pos; i++) {
+                tokenset[output_ids[i]] = 1;  // 1表示output_ids中出现了这个token
             }
+            for(uint32_t id = 0; id < sampler->vocab_size; id++) {
+                if(tokenset[id] == 1) {
+                    logits[id] /= sampler->repetition_penalty;
+                }
+            }
+            free(tokenset);
         }
-        free(tokenset);
 
         // 温度采样：当温度设为0时，退化为贪心采样
         if (sampler->temperature == 0.0f) {
@@ -1240,6 +1242,12 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, uint32_t max_
 
 
 int32_t llm_session_step(Nano_Context *ctx, Nano_Session *session) {
+    // 释放上一步的输出文本：output_text 每步由 decode_* 重新分配，
+    // 若不及时释放，将按词元数平方级泄漏（约34*N^2字节）
+    if (session->output_text) {
+        free(session->output_text);
+        session->output_text = NULL;
+    }
     if (session->pos < session->max_seq_len) {
 
         session->is_prefilling = (session->pos < session->num_prompt_tokens - 1) ? 1 : 0;
