@@ -1242,13 +1242,15 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, uint32_t max_
 
 
 int32_t llm_session_step(Nano_Context *ctx, Nano_Session *session) {
-    // 释放上一步的输出文本：output_text 每步由 decode_* 重新分配，
-    // 若不及时释放，将按词元数平方级泄漏（约34*N^2字节）
-    if (session->output_text) {
-        free(session->output_text);
-        session->output_text = NULL;
-    }
     if (session->pos < session->max_seq_len) {
+        // 释放上一步的输出文本：output_text 每生成一步都会重新分配，
+        // 若不及时释放，将按词元数平方级泄漏（约34*N^2字节）
+        // 注意：必须在确认本步会重新分配（pos < max_seq_len）后才释放，
+        // 否则到达长度上限停止时 output_text 为 NULL，后续 on_llm_finished 会读空指针
+        if (session->output_text) {
+            free(session->output_text);
+            session->output_text = NULL;
+        }
 
         session->is_prefilling = (session->pos < session->num_prompt_tokens - 1) ? 1 : 0;
 
