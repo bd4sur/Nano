@@ -53,6 +53,9 @@ typedef struct {
     int *cell_particle_ids;
     int num_particles;
 
+    float *sep_dx; // 粒子分离位移缓冲（flip_init一次性分配，避免每帧calloc/free的堆抖动）
+    float *sep_dy;
+
     int hourglass_enabled;
 
     uint64_t random_seed;
@@ -266,11 +269,10 @@ static void push_particles_apart(FlipFluid *f, int num_iters) {
     /* Jacobi-style displacement accumulation: compute all pairwise pushes
      * based on the same snapshot of positions, then apply them all at once.
      * This eliminates the directional bias of the original Gauss-Seidel
-     * in-place updates. */
-    float *dx_buf = (float *)platform_calloc(f->num_particles, sizeof(float));
-    float *dy_buf = (float *)platform_calloc(f->num_particles, sizeof(float));
+     * in-place updates. 缓冲区在 flip_init 一次性分配，避免每帧堆抖动。 */
+    float *dx_buf = f->sep_dx;
+    float *dy_buf = f->sep_dy;
     if (!dx_buf || !dy_buf) {
-        free(dx_buf); free(dy_buf);
         return;
     }
 
@@ -328,9 +330,7 @@ static void push_particles_apart(FlipFluid *f, int num_iters) {
             f->particle_pos[2 * i + 1] += dy_buf[i];
         }
     }
-
-    free(dx_buf);
-    free(dy_buf);
+    // 缓冲区不再每帧释放：生命周期与流体模拟器一致（flip_cleanup 中统一释放）
 }
 
 /*
@@ -872,17 +872,20 @@ static void simulate_step(FlipFluid *f, float dt, float gravity_x, float gravity
     update_cell_colors(f);
 }
 
+// 与 graphics.c 的 rgb888_to_rgb565 相同的转换公式（本地内联，避免重复调用开销）
+static inline uint16_t flip_rgb565(uint8_t r, uint8_t g, uint8_t b) {
+    return ((uint16_t)(r & 0xF8) << 8) | ((uint16_t)(g & 0xFC) << 3) | ((uint16_t)b >> 3);
+}
+
 static void draw_particle_to_framebuffer(Nano_GFX *gfx,
     int32_t center_x, int32_t center_y, int width, int height,
     int cx, int cy, int radius,
     uint8_t r, uint8_t g, uint8_t b
 ) {
     if (radius == 0) {
-        for (int y = cy - 1; y <= cy + 1; y++) {
-            for (int x = cx - 1; x <= cx + 1; x++) {
-                gfx_draw_point(gfx, x + center_x, y + center_y, r, g, b, 1);
-            }
-        }
+        // 快速路径：3x3色块一次调用直写RGB565（每粒子一次颜色转换+一次矩形调用，
+        // 替代原先的9次 gfx_draw_point 调用及逐点mode分支/色彩转换）
+        gfx_fill_rect_rgb565(gfx, cx - 1 + center_x, cy - 1 + center_y, 3, 3, flip_rgb565(r, g, b));
     } else {
         int r_sq = radius * radius;
         for (int y = cy - radius; y <= cy + radius; y++) {
@@ -997,6 +1000,8 @@ void flip_init(float pool_width, float pool_height, int32_t resolution, uint64_t
     f->num_cell_particles = (int *)platform_calloc(f->p_num_cells, sizeof(int));
     f->first_cell_particle = (int *)platform_calloc(f->p_num_cells + 1, sizeof(int));
     f->cell_particle_ids = (int *)platform_calloc(max_particles, sizeof(int));
+    f->sep_dx = (float *)platform_calloc(max_particles, sizeof(float));
+    f->sep_dy = (float *)platform_calloc(max_particles, sizeof(float));
     f->num_particles = num_x * num_y;
 
     f->random_seed = initial_random_seed;
@@ -1040,6 +1045,7 @@ void flip_cleanup(void) {
     free(f->cell_type); free(f->cell_color); free(f->particle_density);
     free(f->particle_pos); free(f->particle_color); free(f->particle_vel);
     free(f->num_cell_particles); free(f->first_cell_particle); free(f->cell_particle_ids);
+    free(f->sep_dx); free(f->sep_dy);
     memset(f, 0, sizeof(FlipFluid));
     g_initialized = 0;
 }

@@ -11,7 +11,7 @@ extern "C" {
 // 全局字符串常量
 // ===============================================================================
 
-#define NANO_VERSION "2606"
+#define NANO_VERSION "2607"
 
 #define LOG_FILE_PATH "chat.jsonl"
 
@@ -41,6 +41,13 @@ void *platform_malloc(size_t nbytes);
 void *platform_malloc_internal(size_t nbytes);
 void *platform_realloc(void *ptr, size_t n);
 void *platform_realloc_internal(void *ptr, size_t n);
+
+// 内存使用情况查询（字节）
+// external：大容量主堆（ESP32上为PSRAM堆，供大块内存分配）；internal：内部RAM堆
+uint32_t platform_get_free_heap_size(void);             // 主堆当前空闲总量
+uint32_t platform_get_largest_free_block(void);         // 主堆最大连续空闲块
+uint32_t platform_get_free_heap_size_internal(void);    // 内部RAM堆当前空闲总量
+uint32_t platform_get_largest_free_block_internal(void); // 内部RAM堆最大连续空闲块
 
 // 读取二进制文件到内存缓冲区
 int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, size_t *size);

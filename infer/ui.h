@@ -44,8 +44,6 @@ typedef struct Global_State {
 
     // UI组件（指向它们的指针），目前暂且硬编码
     Widget_Textarea_State  *w_textarea_main;
-    Widget_Textarea_State  *w_textarea_asr;
-    Widget_Textarea_State  *w_textarea_prefill;
 
     Widget_Input_State     *w_input_main;
 
@@ -143,6 +141,7 @@ typedef struct Key_Event {
     uint64_t key_timer;  // 按下状态的计时器
     uint8_t  key_mask;   // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
     uint8_t  key_repeat; // 触发一次长按后，只要不松手，该标记置1，直到物理按键松开后置0。若该标记为1，则在按住时触发连续重复动作。
+    uint8_t  is_softkbd; // 本事件是否来自触屏软键盘：1-是（键码为直接键码，不再经过九键输入法），0-否（触屏4x4网格键）
 } Key_Event;
 
 typedef struct Widget_Textarea_State {
@@ -172,6 +171,7 @@ typedef struct Widget_Input_State {
 
     int32_t state;                // 控件状态（不复用textarea内部的状态）
     int32_t cursor_pos;           // 光标位置
+    int32_t desired_x;            // 上下移动光标时希望保持的视觉x偏移（px，-1表示无效；左右移动/增删字符时重置）
     uint32_t ime_mode_flag;       // 汉英数输入模式标志 0汉字 1英文 2数字
     uint32_t pinyin_keys;         // 单字拼音键码暂存
     // 候选字翻页相关
@@ -229,6 +229,9 @@ int32_t ui_widget_textarea_event_handler(
 
 void ui_widget_input_init(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, wchar_t *title_text);
 void ui_widget_input_refresh(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+// 在文本框的光标位置之后插入/删除一个字符（触屏软键盘及其拼音输入法也会调用）
+void insert_char(Widget_Input_State *input_state, wchar_t new_char);
+void delete_char(Widget_Input_State *input_state);
 int32_t ui_widget_input_event_handler(
     Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state,
     int32_t prev_focus_state, int32_t current_focus_state, int32_t next_focus_state

@@ -4,6 +4,8 @@
 #include "graphics.h"
 #include "input_device.h"
 #include "ui.h"
+#include "ui_softkbd.h"
+#include "ui_pinyin_ime.h"
 
 #include "platform.h"
 
@@ -44,6 +46,10 @@
 
 #include "ui_animac.h"
 
+#include "ui_spectrogram.h"
+
+#include "ui_pedometer.h"
+
 #define WALLPAPER_PATH ("/home/bd4sur/wp.jpg")
 
 // 全局变量（TODO 临时，后续要全部移到全局状态上下文中）
@@ -70,12 +76,89 @@ static uint8_t s_image_decode_ready = 0;
 
 static uint32_t s_animac_console_text_len = 0;
 
+
+
+
+
+// 带容量上限的安全追加（剩余空间不足时直接截断，防堆溢出）
+static void ui_app_wcscat_bounded(wchar_t *dst, const wchar_t *src, uint32_t cap) {
+    size_t cur = wcslen(dst);
+    if (cur < cap - 1) {
+        wcsncat(dst, src, cap - 1 - cur);
+    }
+}
+
 // ===============================================================================
 // UI框架：获取按键事件
 // ===============================================================================
 
+// 滑动手势识别（Core1轮询侧）状态
+static int32_t s_swipe_active = 0;   // 正在跟踪一次触摸序列
+static int32_t s_swipe_start_y = 0;  // 序列起点y
+static int32_t s_swipe_min_y = 0;    // 序列中的最小y（最高点）
+static int32_t s_swipe_max_y = 0;    // 序列中的最大y（最低点）
+
+// 滑动手势（均为松手确认，跨越一半以上屏幕高度即>120px）：
+//   键盘隐藏时，从下到上滑动 = 呼出键盘；键盘可见时，从上到下滑动 = 关闭键盘。
+// 有效手势方向上位移超过 UI_SWIPE_MASK_PX 即预备吞掉本次触摸序列的按键事件
+// （key_mask软复位），防止滑动穿越网格键/软键盘键时产生杂散输入。
+#define UI_SWIPE_CONFIRM_PX (SCREEN_HEIGHT / 2)
+#define UI_SWIPE_MASK_PX    (20)
+
+
 void get_key_event(Key_Event *key_event, Global_State *global_state) {
+    // 滑动手势识别（仅Animac控制台状态）：上滑呼出键盘（隐藏态）/下滑关闭键盘（可见态）
+    if (global_state->STATE == STATE_ANIMAC_CONSOLE || global_state->STATE == STATE_ANIMAC_RUNNING) {
+        int32_t touch_x = 0, touch_y = 0, touch_pressed = 0;
+        touch_read(&touch_x, &touch_y, &touch_pressed);
+        if (touch_pressed) {
+            if (!s_swipe_active) {
+                s_swipe_active = 1;
+                s_swipe_start_y = touch_y;
+                s_swipe_min_y = touch_y;
+                s_swipe_max_y = touch_y;
+            }
+            else {
+                if (touch_y < s_swipe_min_y) s_swipe_min_y = touch_y;
+                if (touch_y > s_swipe_max_y) s_swipe_max_y = touch_y;
+                // 仅在与当前键盘显隐对应的手势方向上，位移超过预备阈值即吞掉本次序列的按键边沿事件
+                if ((!ui_softkbd_is_visible() && s_swipe_start_y - s_swipe_min_y > UI_SWIPE_MASK_PX) ||
+                    ( ui_softkbd_is_visible() && s_swipe_max_y - s_swipe_start_y > UI_SWIPE_MASK_PX)) {
+                    key_event->key_mask = 1;
+                }
+            }
+        }
+        else if (s_swipe_active) {
+            // 松手确认：隐藏时上滑跨越半屏 = 呼出；可见时下滑跨越半屏 = 关闭
+            if ((!ui_softkbd_is_visible() && s_swipe_start_y - s_swipe_min_y > UI_SWIPE_CONFIRM_PX) ||
+                ( ui_softkbd_is_visible() && s_swipe_max_y - s_swipe_start_y > UI_SWIPE_CONFIRM_PX)) {
+                key_event->key_mask = 1;
+                ui_softkbd_request_toggle();
+            }
+            s_swipe_active = 0;
+        }
+    }
+    else {
+        s_swipe_active = 0;
+    }
+
     uint8_t key = input_device_read_key();
+    uint8_t key_is_softkbd = 0;
+
+    // 触屏软键盘：可见时，键盘区域内的触摸由软键盘接管——吞掉触屏4x4网格键映射，
+    // 改为注入软键盘键码（无边沿时为NANO_KEY_IDLE，仍走下方的边沿检测机制）。
+    // 同时禁用键盘区域以外的十六键网格（仅保留右上角Esc键），防止误触。
+    if (ui_softkbd_is_visible()) {
+        uint8_t softkbd_key = ui_softkbd_poll();
+        if (ui_softkbd_touch_claimed()) {
+            key = softkbd_key;
+            key_is_softkbd = (softkbd_key != NANO_KEY_IDLE);
+        }
+        else if (key != NANO_KEY_esc) {
+            key = NANO_KEY_IDLE; // 软键盘激活时禁用十六键网格（Esc除外）
+        }
+    }
+
     // 边沿
     if (key_event->key_mask != 1 && (key != key_event->prev_key)) {
         // 按下瞬间（上升沿）
@@ -130,6 +213,9 @@ void get_key_event(Key_Event *key_event, Global_State *global_state) {
             key_event->key_repeat = 0;
         }
     }
+    if (key != NANO_KEY_IDLE) {
+        key_event->is_softkbd = key_is_softkbd; // 记录按键来源，下降沿事件沿用它
+    }
     key_event->prev_key = key;
 }
 
@@ -138,11 +224,21 @@ void get_key_event(Key_Event *key_event, Global_State *global_state) {
 // UI框架：全局GUI+gfx初始化
 // ===============================================================================
 
+// 切换触屏软键盘显隐，并重新布局为键盘让出/恢复空间（供 Ctrl+0 与上滑手势调用）
+static void ui_app_animac_softkbd_toggle(Key_Event *key_event, Global_State *global_state) {
+    if (ui_softkbd_is_visible()) ui_softkbd_hide();
+    else                         ui_softkbd_show();
+    ui_pinyin_ime_reset(); // 键盘显隐切换时，放弃进行中的拼音组字
+    // 重新布局：文本区高度扣除软键盘高度（隐藏时 ui_softkbd_height() 为0，布局复原）
+    int32_t header_height = gfx_font_line_height(global_state->ui_font) + 1;
+    global_state->w_input_main->textarea.height = global_state->gfx->height - ui_softkbd_height() - header_height * 2;
+    global_state->w_input_main->textarea.is_modified = 1;
+    ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
+}
+
 void ui_init(Key_Event *key_event, Global_State *global_state) {
 
     global_state->w_textarea_main = (Widget_Textarea_State*)platform_calloc(1, sizeof(Widget_Textarea_State));
-    global_state->w_textarea_asr = (Widget_Textarea_State*)platform_calloc(1, sizeof(Widget_Textarea_State));
-    global_state->w_textarea_prefill = (Widget_Textarea_State*)platform_calloc(1, sizeof(Widget_Textarea_State));
 
     global_state->w_input_main = (Widget_Input_State*)platform_calloc(1, sizeof(Widget_Input_State));
 
@@ -168,10 +264,10 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
     global_state->llm_top_k = 0;
     global_state->llm_max_seq_len = 512;
     global_state->is_thinking_enabled = 1;
-    global_state->llm_output_of_last_session = (wchar_t*)platform_calloc(UI_STR_BUF_MAX_LENGTH, sizeof(wchar_t));
+    global_state->llm_output_of_last_session = (wchar_t*)platform_calloc(UI_STR_BUF_MAX_LENGTH * 2, sizeof(wchar_t));
     global_state->tps_of_last_session = 0.0f;
     global_state->token_num_of_last_session = 0;
-    global_state->llm_enable_observation = 1;
+    global_state->llm_enable_observation = 0;
 #ifdef ASR_ENABLED
     global_state->asr_output_buffer = (wchar_t*)platform_calloc(UI_STR_BUF_MAX_LENGTH, sizeof(wchar_t));
     wcscpy(global_state->asr_output_buffer, L"请说话...");
@@ -192,7 +288,7 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
     global_state->ba_frame_count = 0;
     global_state->ba_begin_timestamp = 0;
 
-    global_state->ui_font = GFX_FONT_ALPHA_12;
+    global_state->ui_font = GFX_FONT_ALPHA_16;
 }
 
 
@@ -347,9 +443,9 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         swprintf(prefill_title_str, 50, L"%ls Reading...", global_state->llm_model_name);
         ui_draw_header(key_event, global_state, prefill_title_str, 1);
 
-        // 显示已经处理的输入prompt
-        ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_prefill, session->output_text, -1, 1);
-        ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_prefill);
+        // 显示已经处理的输入prompt（复用主文本框控件）
+        ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, session->output_text, -1, 1);
+        ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
 
         // 进度条
         uint8_t progress_R = 102, progress_G = 204, progress_B = 255;
@@ -359,7 +455,8 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         else if (global_state->ui_color_style == UI_COLOR_DARK) {
             progress_R = 102; progress_G = 204; progress_B = 255;
         }
-        uint32_t pg_bottom_y = global_state->gfx->height - 14;
+        // 进度条位于页脚（底部状态栏）上缘，页脚高度跟随当前字体行高（行高 + 1px 边距）
+        uint32_t pg_bottom_y = global_state->gfx->height - (gfx_font_line_height(global_state->ui_font) + 1);
         uint32_t pgpos_x = MIN(global_state->gfx->width - 1, session->pos * global_state->gfx->width / (session->num_prompt_tokens - 1));
         gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 1), pgpos_x, (pg_bottom_y - 1), progress_R, progress_G, progress_B, 1);
         gfx_draw_line(global_state->gfx, 1, (pg_bottom_y - 2), pgpos_x, (pg_bottom_y - 2), progress_R, progress_G, progress_B, 1);
@@ -397,7 +494,9 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state) {
 
     // 长/短按A键中止推理
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
-        wcscpy(global_state->llm_output_of_last_session, session->output_text);
+        if (session->output_text) {
+            wcscpy(global_state->llm_output_of_last_session, session->output_text);
+        }
         global_state->tps_of_last_session = session->tps;
         global_state->token_num_of_last_session = session->pos;
         return LLM_STOPPED_IN_DECODING;
@@ -440,7 +539,11 @@ int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state) {
     session->t_1 = global_state->timestamp;
     session->tps = (session->pos - 1) / (float)(session->t_1 - session->t_0) * 1000;
 
-    wcscpy(global_state->llm_output_of_last_session, session->output_text);
+    if (session->output_text) {
+        // 缓冲区容量为 UI_STR_BUF_MAX_LENGTH * 2 个 wchar_t（含结尾 L'\0'），截断拷贝防堆溢出
+        wcsncpy(global_state->llm_output_of_last_session, session->output_text, UI_STR_BUF_MAX_LENGTH * 2 - 1);
+        global_state->llm_output_of_last_session[UI_STR_BUF_MAX_LENGTH * 2 - 1] = L'\0';
+    }
 
     // 将本轮对话写入日志
     // write_chat_log(LOG_FILE_PATH, global_state->timestamp, session->prompt, global_state->llm_output_of_last_session);
@@ -656,6 +759,7 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
 
     if (gs->llm_ctx) {
         llm_context_free(gs->llm_ctx);
+        gs->llm_ctx = NULL; // 释放后置NULL，避免悬垂指针被二次释放
     }
 
     int32_t model_count = (int32_t)(sizeof(preset_model_configs) / sizeof(preset_model_configs[0]));
@@ -698,9 +802,6 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
     if (gs->llm_enable_observation) {
         gs->w_textarea_main->x = 160;
         gs->w_textarea_main->width = gs->gfx->width - 160;
-        
-        gs->w_textarea_prefill->x = 160;
-        gs->w_textarea_prefill->width = gs->gfx->width - 160;
     }
 
     // 进入电子鹦鹉
@@ -732,11 +833,11 @@ static void ui_app_main_menu_grid16_refresh_button(
     int32_t by = (row == 0) ? 1 : 0;
     gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, cell_bg_R, cell_bg_G, cell_bg_B, cell_bg_mode);
     if (is_single_line) {
-        gfx_draw_textline_centered(global_state->gfx, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row), cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row), cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
     }
     else {
-        gfx_draw_textline_centered(global_state->gfx, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
-        gfx_draw_textline_centered(global_state->gfx, text1, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, cell_text1_R, cell_text1_G, cell_text1_B, cell_text1_mode);
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text1, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, cell_text1_R, cell_text1_G, cell_text1_B, cell_text1_mode);
     }
 }
 
@@ -829,7 +930,10 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         global_state->STATE = STATE_LINGLONG;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_4) {
-        global_state->STATE = STATE_EBOOK;
+        // “计算器”入口改为计步器
+        global_state->STATE = STATE_PEDOMETER;
+        // 原入口（电子书阅读，保留备查）：
+        // global_state->STATE = STATE_EBOOK;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_5) {
         global_state->STATE = STATE_GENETIC_TSP;
@@ -844,7 +948,10 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         global_state->STATE = STATE_GAMEOFLIFE;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_9) {
-        global_state->STATE = STATE_GENETIC;
+        // “寻呼机”入口改为音频频谱仪
+        global_state->STATE = STATE_SPECTROGRAM;
+        // 原入口（遗传算法演示，保留备查）：
+        // global_state->STATE = STATE_GENETIC;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_0) {
         // 暂时用作切换色彩风格功能
@@ -978,12 +1085,12 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 
     const wchar_t *weekdays[] = {L"日", L"一", L"二", L"三", L"四", L"五", L"六"};
     swprintf(datetime_wcs_buffer, 33, L"%04d年%02d月%02d日 星期%ls", year, month, day, weekdays[timeinfo->tm_wday]);
-    gfx_draw_textline_centered(global_state->gfx, datetime_wcs_buffer, global_state->gfx->width / 2, 30, time_red, time_green, time_blue, 1);
+    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, datetime_wcs_buffer, global_state->gfx->width / 2, 30, time_red, time_green, time_blue, 1);
 
     // 农历日期
     LunarDate *nongli = lunar_calculate(year, month, day, hour, minute, second, timezone);
     _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
-    gfx_draw_textline_centered(global_state->gfx, nongli_wcs_buffer, global_state->gfx->width / 2, 110, nongli_red, nongli_green, nongli_blue, 1);
+    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2, 110, nongli_red, nongli_green, nongli_blue, 1);
 
     // 七段码时钟
     wchar_t time7seg_str[10];
@@ -1038,7 +1145,7 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     // 显示电量信息文字
     wchar_t battery_info_buf[100];
     swprintf(battery_info_buf, 100, L"电量:%d%% | %dmV | %dmA%ls", global_state->ups_soc, global_state->ups_voltage, global_state->ups_current, (global_state->ups_is_charging ? L"  |  正在充电" : L""));
-    gfx_draw_textline_centered(global_state->gfx, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*2-6, time_red, time_green, time_blue, 1);
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*2-6, time_red, time_green, time_blue, 1);
 
 #endif
 
@@ -1130,6 +1237,9 @@ void ui_app_gol_init(Key_Event *key_event, Global_State *global_state, int32_t g
     s_ui_app_gol_refresh_timestamp = global_state->timestamp;
     uint64_t ts = global_state->timestamp;
 
+    // 重新进入/刷新时先释放旧场，避免覆盖式分配造成泄漏（初次为NULL，free(NULL)安全）
+    if (s_ui_app_gol_field_0) free(s_ui_app_gol_field_0);
+    if (s_ui_app_gol_field_1) free(s_ui_app_gol_field_1);
     s_ui_app_gol_field_0 = (uint8_t*)platform_calloc(gol_width * gol_height / 8, sizeof(uint8_t));
     s_ui_app_gol_field_1 = (uint8_t*)platform_calloc(gol_width * gol_height / 8, sizeof(uint8_t));
 
@@ -1208,7 +1318,7 @@ static uint64_t s_ui_flip_first_load_timestamp = 0;
 static int32_t s_ui_flip_setting_count = 0;
 static int32_t s_ui_flip_show_particles = 1;
 static int32_t s_ui_flip_show_grid = 1;
-static int32_t s_ui_flip_is_throttle = 1;
+static int32_t s_ui_flip_is_throttle = 0;
 static int32_t s_ui_flip_throttle = 0;
 static int32_t s_ui_flip_init_throttle = 50;
 
@@ -1250,9 +1360,9 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
 
     gfx_soft_clear(global_state->gfx);
 
-    // 获取重力方向
-    float gravity_x = 0.0f;
-    float gravity_y = -9.8f;
+    // 获取重力方向（IMU每4帧读取一次并缓存：重力为慢变量，无需每帧I2C读取）
+    static float gravity_x = 0.0f;
+    static float gravity_y = -9.8f;
 
 #ifdef IMU_ENABLED
     imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
@@ -1386,7 +1496,7 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     s_ui_flip_throttle = roundf((1.0f - (float)s_ui_flip_init_throttle) * hourglass_progress * hourglass_progress + (float)s_ui_flip_init_throttle);
 
     // 到时提醒
-    if (!s_ui_fanqie_is_running) {
+    if (!s_ui_fanqie_is_running && s_ui_flip_is_throttle) {
         if (s_ui_fanqie_alarm_count < 6) {
             // set_vibration(222);
             // sleep_in_ms(600);
@@ -2303,11 +2413,11 @@ static void ui_app_setting_grid16_refresh_button(
     int32_t by = (row == 0) ? 1 : 0;
     gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, cell_bg_R, cell_bg_G, cell_bg_B, cell_bg_mode);
     if (is_single_line) {
-        gfx_draw_textline_centered(global_state->gfx, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row), cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_16, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row), cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
     }
     else {
-        gfx_draw_textline_centered(global_state->gfx, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
-        gfx_draw_textline_centered(global_state->gfx, text1, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, cell_text1_R, cell_text1_G, cell_text1_B, cell_text1_mode);
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_16, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text1, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, cell_text1_R, cell_text1_G, cell_text1_B, cell_text1_mode);
     }
 }
 
@@ -2553,17 +2663,33 @@ void ui_app_setting_value_input_draw(Key_Event *key_event, Global_State *global_
 
     // 绘制顶栏（前缀）
     switch (value_type) {
-        case 0: ui_draw_header(key_event, global_state, L"设置时间：", 0); break;
-        case 1: ui_draw_header(key_event, global_state, L"设置日期：", 0); break;
-        case 2: ui_draw_header(key_event, global_state, L"设置经度：", 0); break;
-        case 3: ui_draw_header(key_event, global_state, L"设置纬度：", 0); break;
+        case 0: {
+            ui_draw_header(key_event, global_state, L"", 0);
+            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置时间：", 0, 1, 255, 255, 255, 1);
+            break;
+        }
+        case 1: {
+            ui_draw_header(key_event, global_state, L"", 0);
+            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置日期：", 0, 1, 255, 255, 255, 1);
+            break;
+        }
+        case 2: {
+            ui_draw_header(key_event, global_state, L"", 0);
+            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置经度：", 0, 1, 255, 255, 255, 1);
+            break;
+        }
+        case 3: {
+            ui_draw_header(key_event, global_state, L"", 0);
+            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置纬度：", 0, 1, 255, 255, 255, 1);
+            break;
+        }
         default: return;
     }
 
     // 绘制设置值和光标
     int32_t x0 = 12 * 5; // 与顶栏前缀的长度有关
     int32_t x_cur = x0 + cursor_pos * 6;
-    gfx_draw_textline(global_state->gfx, value_text, x0, 1, 0x00, 0xff, 0xff, 1);
+    gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, value_text, x0, 1, 0x00, 0xff, 0xff, 1);
     gfx_draw_rectangle(global_state->gfx, x_cur, 12, 5, 2, 0x00, 0xff, 0xff, 1);
 
     // 绘制底栏
@@ -2969,14 +3095,6 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     ui_init(key_event, global_state);
 
     ui_widget_textarea_init(key_event, global_state, global_state->w_textarea_main, UI_STR_BUF_MAX_LENGTH);
-    ui_widget_textarea_init(key_event, global_state, global_state->w_textarea_asr, UI_STR_BUF_MAX_LENGTH);
-    ui_widget_textarea_init(key_event, global_state, global_state->w_textarea_prefill, UI_STR_BUF_MAX_LENGTH);
-
-
-    global_state->w_textarea_prefill->x = 0;
-    global_state->w_textarea_prefill->y = 14;
-    global_state->w_textarea_prefill->width = global_state->gfx->width;
-    global_state->w_textarea_prefill->height = global_state->gfx->height - 14 - 14;
 
 
 
@@ -2998,6 +3116,7 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     // 输入设备初始化
 
     input_device_init();
+    ui_softkbd_init(); // 触屏软键盘（内部初始化触屏HAL）
     key_event->prev_key = NANO_KEY_IDLE;
 
     ///////////////////////////////////////
@@ -3168,6 +3287,13 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_model, model_menu_item_action, STATE_MAIN_MENU, STATE_MODEL_MENU);
 
+        // 退出模型菜单回到主菜单时，释放LLM上下文（KV cache/分词器/采样器等常驻PSRAM）；
+        // 再次进入时会经“选模型”流程（model_menu_item_action）重新建立
+        if (global_state->STATE == STATE_MAIN_MENU && global_state->llm_ctx != NULL) {
+            llm_context_free(global_state->llm_ctx);
+            global_state->llm_ctx = NULL;
+        }
+
         break;
 
 
@@ -3239,6 +3365,8 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
             // 初始化对话session
             global_state->llm_session = llm_session_init(global_state->llm_ctx, prompt, global_state->llm_max_seq_len, global_state->is_thinking_enabled);
+            // session内部已复制prompt（infer.c llm_session_init），此处释放原缓冲，避免每轮泄漏
+            free(prompt);
         }
         global_state->PREV_STATE = global_state->STATE;
 
@@ -3305,30 +3433,30 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
             // 计算提示语+生成内容的行数
             wchar_t *prompt_and_output = (wchar_t *)platform_calloc(UI_STR_BUF_MAX_LENGTH * 2, sizeof(wchar_t));
-            wcscat(prompt_and_output, L"[#1155ee]Homo:");
+            ui_app_wcscat_bounded(prompt_and_output, L"[#1155ee]Homo:", UI_STR_BUF_MAX_LENGTH * 2);
             if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-                wcscat(prompt_and_output, L"[#000000]\n");
+                ui_app_wcscat_bounded(prompt_and_output, L"[#000000]\n", UI_STR_BUF_MAX_LENGTH * 2);
             }
             else if (global_state->ui_color_style == UI_COLOR_DARK) {
-                wcscat(prompt_and_output, L"[#ffffff]\n");
+                ui_app_wcscat_bounded(prompt_and_output, L"[#ffffff]\n", UI_STR_BUF_MAX_LENGTH * 2);
             }
-            wcscat(prompt_and_output, global_state->w_input_main->textarea.text);
-            wcscat(prompt_and_output, L"\n--------------------\n[#65bb00]Nano:");
+            ui_app_wcscat_bounded(prompt_and_output, global_state->w_input_main->textarea.text, UI_STR_BUF_MAX_LENGTH * 2);
+            ui_app_wcscat_bounded(prompt_and_output, L"\n--------------------\n[#65bb00]Nano:", UI_STR_BUF_MAX_LENGTH * 2);
             if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-                wcscat(prompt_and_output, L"[#000000]\n");
+                ui_app_wcscat_bounded(prompt_and_output, L"[#000000]\n", UI_STR_BUF_MAX_LENGTH * 2);
             }
             else if (global_state->ui_color_style == UI_COLOR_DARK) {
-                wcscat(prompt_and_output, L"[#ffffff]\n");
+                ui_app_wcscat_bounded(prompt_and_output, L"[#ffffff]\n", UI_STR_BUF_MAX_LENGTH * 2);
             }
-            wcscat(prompt_and_output, global_state->llm_output_of_last_session);
+            ui_app_wcscat_bounded(prompt_and_output, global_state->llm_output_of_last_session, UI_STR_BUF_MAX_LENGTH * 2);
             // 推理中止
             if (global_state->llm_status == LLM_STOPPED_IN_PREFILLING || global_state->llm_status == LLM_STOPPED_IN_DECODING) {
-                wcscat(prompt_and_output, L"\n\n[#ff0000][Nano:推理中止]");
+                ui_app_wcscat_bounded(prompt_and_output, L"\n\n[#ff0000][Nano:推理中止]", UI_STR_BUF_MAX_LENGTH * 2);
                 if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-                    wcscat(prompt_and_output, L"[#000000]");
+                    ui_app_wcscat_bounded(prompt_and_output, L"[#000000]", UI_STR_BUF_MAX_LENGTH * 2);
                 }
                 else if (global_state->ui_color_style == UI_COLOR_DARK) {
-                    wcscat(prompt_and_output, L"[#ffffff]");
+                    ui_app_wcscat_bounded(prompt_and_output, L"[#ffffff]", UI_STR_BUF_MAX_LENGTH * 2);
                 }
             }
             // 推理自然结束
@@ -3337,25 +3465,27 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             }
             // 推理异常结束
             else {
-                wcscat(prompt_and_output, L"\n\n[#ff0000][Nano:推理异常结束]");
+                ui_app_wcscat_bounded(prompt_and_output, L"\n\n[#ff0000][Nano:推理异常结束]", UI_STR_BUF_MAX_LENGTH * 2);
                 if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-                    wcscat(prompt_and_output, L"[#000000]");
+                    ui_app_wcscat_bounded(prompt_and_output, L"[#000000]", UI_STR_BUF_MAX_LENGTH * 2);
                 }
                 else if (global_state->ui_color_style == UI_COLOR_DARK) {
-                    wcscat(prompt_and_output, L"[#ffffff]");
+                    ui_app_wcscat_bounded(prompt_and_output, L"[#ffffff]", UI_STR_BUF_MAX_LENGTH * 2);
                 }
             }
             wchar_t tps_wcstr[50];
             swprintf(tps_wcstr, 50, L"\n\n[#ffc840][%d/%d|%.1fTPS]", global_state->token_num_of_last_session, global_state->llm_max_seq_len, global_state->tps_of_last_session);
-            wcscat(prompt_and_output, tps_wcstr);
+            ui_app_wcscat_bounded(prompt_and_output, tps_wcstr, UI_STR_BUF_MAX_LENGTH * 2);
             if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-                wcscat(prompt_and_output, L"[#000000]");
+                ui_app_wcscat_bounded(prompt_and_output, L"[#000000]", UI_STR_BUF_MAX_LENGTH * 2);
             }
             else if (global_state->ui_color_style == UI_COLOR_DARK) {
-                wcscat(prompt_and_output, L"[#ffffff]");
+                ui_app_wcscat_bounded(prompt_and_output, L"[#ffffff]", UI_STR_BUF_MAX_LENGTH * 2);
             }
 
-            wcscpy(global_state->llm_output_of_last_session, prompt_and_output);
+            // 缓冲区与 prompt_and_output 同容量（UI_STR_BUF_MAX_LENGTH * 2），并截断双保险
+            wcsncpy(global_state->llm_output_of_last_session, prompt_and_output, UI_STR_BUF_MAX_LENGTH * 2 - 1);
+            global_state->llm_output_of_last_session[UI_STR_BUF_MAX_LENGTH * 2 - 1] = L'\0';
 
             free(prompt_and_output);
 
@@ -3397,12 +3527,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             if (open_asr_fifo() < 0) break;
 
 
-            global_state->w_textarea_asr->x = 0;
-            global_state->w_textarea_asr->y = 0;
-            global_state->w_textarea_asr->width = 128;
-            global_state->w_textarea_asr->height = 51; // NOTE 详见结构体定义处的说明
-
-            ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_asr, L"请说话...", 0, 0);
+            ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, L"请说话...", 0, 0);
 
             global_state->is_recording = 1;
             global_state->asr_start_timestamp = global_state->timestamp;
@@ -3420,14 +3545,14 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
             // 显示ASR结果
             // if (len > 0) {
-                ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_asr, global_state->asr_output_buffer, -1, 1);
-                ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_asr);
+                ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, global_state->asr_output_buffer, -1, 1);
+                ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
             // }
 
-            // 绘制录音持续时间
+            // 绘制录音持续时间（位于底栏位置，底栏高度跟随当前字体行高）
             wchar_t rec_duration[50];
             swprintf(rec_duration, 50, L" %ds ", (uint32_t)((global_state->timestamp - global_state->asr_start_timestamp) / 1000));
-            gfx_draw_textline(global_state->gfx, rec_duration, 0, 52, 255, 255, 255, 0);
+            gfx_draw_textline(global_state->gfx, rec_duration, 0, global_state->gfx->height - (gfx_font_line_height(global_state->ui_font) + 1), 255, 255, 255, 0);
 
             gfx_refresh(global_state->gfx);
 
@@ -3448,8 +3573,8 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             if (set_ptt_status(0) < 0) break;
             close_ptt_fifo();
 
-            ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_asr, L" \n \n      识别完成", 0, 0);
-            ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_asr);
+            ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, L" \n \n      识别完成", 0, 0);
+            ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
 
             sleep_in_ms(500);
 
@@ -3578,6 +3703,58 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         ui_app_flip_event_handler(key_event, global_state);
 
         break;
+
+
+    /////////////////////////////////////////////
+    // 计步器（时域峰值计数 + 频域周期性校验）
+    /////////////////////////////////////////////
+
+    case STATE_PEDOMETER: {
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_pedometer_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 按A键返回主菜单
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
+            ui_pedometer_deinit(key_event, global_state);
+            global_state->STATE = STATE_MAIN_MENU;
+            break;
+        }
+
+        // 采样/分析/渲染一帧
+        ui_pedometer_render_frame(key_event, global_state);
+
+        break;
+    }
+
+
+    /////////////////////////////////////////////
+    // 音频频谱仪：STFT声谱图（从下往上滚动）
+    /////////////////////////////////////////////
+
+    case STATE_SPECTROGRAM: {
+
+        // 首次获得焦点：初始化（构建STFT工作区并接管麦克风）
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_spectrogram_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 按A键返回主菜单（关闭麦克风并恢复扬声器）
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
+            ui_spectrogram_deinit(key_event, global_state);
+            global_state->STATE = STATE_MAIN_MENU;
+            break;
+        }
+
+        // 采集一帧音频并渲染一帧声谱图
+        ui_spectrogram_render_frame(key_event, global_state);
+
+        break;
+    }
 
 
     /////////////////////////////////////////////
@@ -3726,6 +3903,8 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
 
+            s_album_index = 0; // 进入相册时重置浏览索引，防止越出本次文件数范围
+
             gfx_soft_clear(global_state->gfx);
             gfx_draw_textline_centered(global_state->gfx, L"枚举图片文件", 160, 10, 0x66, 0xcc, 0xff, 1);
 
@@ -3806,7 +3985,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
             gfx_draw_busy(global_state->gfx);
             gfx_refresh(global_state->gfx);
-            ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
+            ui_draw_image(key_event, global_state, s_album_path_list[s_album_index % s_album_count], 1);
             gfx_refresh(global_state->gfx);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -3845,6 +4024,19 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
                 free(s_album_path_list[i]);     // 释放每个文件名
             }
             free(s_album_path_list);            // 释放指针数组
+            s_album_path_list = NULL;
+            // 释放图像文件缓冲区与RGB888像素缓冲区（225KB+），避免常驻PSRAM造成堆碎片
+            if (s_image_file_buffer != NULL) {
+                free(s_image_file_buffer);
+                s_image_file_buffer = NULL;
+            }
+            if (s_image_rgb888_buffer != NULL) {
+                free(s_image_rgb888_buffer);
+                s_image_rgb888_buffer = NULL;
+            }
+            s_image_file_size = 0;
+            s_image_decode_ready = 0;
+            s_image_filename_buffer[0] = '\0'; // 使下次进入相册时重新读文件解码
             printf("Free done.\n");
         }
         // 长短按3/6/B/9/C/#/D键，切换下一张图片
@@ -3896,7 +4088,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         if (global_state->PREV_STATE != global_state->STATE) {
             ui_widget_input_init(key_event, global_state, global_state->w_input_main, L"电子核桃控制台");
             // 提示符
-            wcscat(global_state->w_input_main->textarea.text, L"Animac Interpreter V2607\n(c) 2018-2026 BD4SUR\n");
+            wcscat(global_state->w_input_main->textarea.text, L"灵机计算引擎 V2607 | M5Core2(ESP32)\n(c) 2018-2026 BD4SUR\n向上滑动或Ctrl+0呼出软键盘\n");
             wcscat(global_state->w_input_main->textarea.text, L"> ");
             // 刷新input控件，使光标到最后
             ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
@@ -3924,7 +4116,33 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         global_state->PREV_STATE = global_state->STATE;
 
+        // 上滑手势：请求切换软键盘显隐（Core1手势识别，见 get_key_event）
+        if (ui_softkbd_take_toggle_request()) {
+            ui_app_animac_softkbd_toggle(key_event, global_state);
+            break;
+        }
+
+        // Ctrl+0 组合键（十六键网格或软键盘自身均可）：呼出/关闭触屏软键盘
+        if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_0 && global_state->is_ctrl_enabled == 1) {
+            global_state->is_ctrl_enabled = 0;
+            ui_app_animac_softkbd_toggle(key_event, global_state);
+            break;
+        }
+
         global_state->STATE = ui_widget_input_event_handler(key_event, global_state, global_state->w_input_main, STATE_MAIN_MENU, STATE_ANIMAC_CONSOLE, STATE_ANIMAC_RUNNING);
+
+        // 离开控制台时关闭软键盘恢复布局，并销毁解释器上下文释放内存（约2MB PSRAM）
+        if (global_state->STATE != STATE_ANIMAC_CONSOLE && global_state->STATE != STATE_ANIMAC_RUNNING) {
+            ui_softkbd_hide();
+            ui_pinyin_ime_reset();
+            ui_animac_close(key_event, global_state);
+        }
+
+        // 软键盘自身状态变化（粘滞修饰键、按下高亮）时，补画键盘并刷新
+        if (ui_softkbd_is_visible() && ui_softkbd_take_dirty()) {
+            ui_softkbd_draw(global_state->gfx, (uint8_t)global_state->is_ctrl_enabled);
+            gfx_refresh(global_state->gfx);
+        }
 
         break;
     }
@@ -3943,12 +4161,15 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         wchar_t *console_text = global_state->w_input_main->textarea.text;
-        wchar_t new_input[1024];
+        // 控制台输入缓冲区（一次性分配于PSRAM，避免占用任务栈与紧张的内部RAM；
+        // 控制台单线程运行无重入；长度与控制台文本缓冲上限一致）
+        static wchar_t *new_input = NULL;
+        if (!new_input) new_input = (wchar_t*)platform_calloc(UI_STR_BUF_MAX_LENGTH, sizeof(wchar_t));
         wcscpy(new_input, &console_text[s_animac_console_text_len]);
 
         ui_animac_exec(key_event, global_state, new_input, console_text);
 
-        wcscat(console_text, L"> ");
+        ui_animac_console_append(console_text, L"> ");
         ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
 
         global_state->STATE = STATE_ANIMAC_CONSOLE;
@@ -4011,8 +4232,6 @@ int32_t main_deinit(Key_Event *key_event, Global_State *global_state) {
 #endif
 
     free(global_state->w_textarea_main);
-    free(global_state->w_textarea_asr);
-    free(global_state->w_textarea_prefill);
 
     free(global_state->w_input_main);
 

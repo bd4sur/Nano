@@ -50,6 +50,8 @@ void gfx_test(Nano_GFX *gfx);
 void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode);
 void gfx_close(Nano_GFX *gfx);
 void gfx_refresh(Nano_GFX *gfx);
+// 将帧缓冲整体上移 rows 行（底部 rows 行内容保留，由调用方覆写；支持RGB565双缓冲与RGB888）
+void gfx_scroll_up(Nano_GFX *gfx, int32_t rows);
 
 void gfx_set_brightness(Nano_GFX *gfx, int32_t brightness);
 
@@ -69,6 +71,9 @@ void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t 
 void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 void gfx_draw_line_anti_aliasing(Nano_GFX *gfx, float x1, float y1, float x2, float y2, float line_width, uint8_t r, uint8_t g, uint8_t b, uint8_t mode);
 void gfx_draw_rectangle(Nano_GFX *gfx, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
+// 以RGB565颜色快速填充矩形（供粒子喷溅等高频小矩形绘制：行指针每行只计算一次、
+// 像素直接写入，跳过逐点mode分支与RGB888→RGB565转换；非RGB565色彩模式回退到gfx_draw_rectangle）
+void gfx_fill_rect_rgb565(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t width, int32_t height, uint16_t rgb565);
 void gfx_draw_circle(Nano_GFX *gfx, uint32_t cx, uint32_t cy, uint32_t r, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 void gfx_draw_circle_fill(Nano_GFX *gfx, uint32_t cx, uint32_t cy, uint32_t r, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 void gfx_draw_triangle(Nano_GFX *gfx, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2, int32_t is_anti_aliasing, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);

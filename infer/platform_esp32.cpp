@@ -67,6 +67,22 @@ void *platform_realloc_internal(void *ptr, size_t n) {
     return heap_caps_realloc((ptr), (n), MALLOC_CAP_DEFAULT);
 }
 
+uint32_t platform_get_free_heap_size() {
+    return heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+}
+
+uint32_t platform_get_largest_free_block() {
+    return heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+}
+
+uint32_t platform_get_free_heap_size_internal() {
+    return heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+}
+
+uint32_t platform_get_largest_free_block_internal() {
+    return heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+}
+
 
 }
 
@@ -152,7 +168,7 @@ int32_t list_files(const char *dir, char **filenames)
             const char *src = entry.name();          // ESP32 返回 const char*
             size_t len = strlen(src);
 
-            filenames[count] = (char *)malloc(len + 1);
+            filenames[count] = (char *)platform_malloc(len + 1); // 文件名缓冲分配在PSRAM
             if (filenames[count] == NULL) {
                 /* 分配失败：回滚已分配的内存，避免泄漏 */
                 for (int32_t i = 0; i < count; i++) {
@@ -246,7 +262,8 @@ bool playWAVFromSD(const char* filename, uint32_t repeat, int channel, bool stop
 }
 
 bool playWAVMemory(File& wavFile, size_t fileSize, uint32_t repeat, int channel, bool stop_current) {
-    uint8_t* wavData = (uint8_t*)malloc(fileSize);
+    // 音频数据缓冲分配在PSRAM（M5Unified混音任务以CPU读取源数据，仅内部DMA缓冲需要内部RAM）
+    uint8_t* wavData = (uint8_t*)platform_malloc(fileSize);
     if (!wavData) {
         printf("Memory allocation failed!");
         wavFile.close();

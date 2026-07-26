@@ -35,6 +35,7 @@ extern "C" {
 #define STATE_ANIMAC_INIT       (50)
 #define STATE_ANIMAC_CONSOLE    (51)
 #define STATE_ANIMAC_RUNNING    (52)
+#define STATE_SPECTROGRAM       (53)
 #define STATE_SHUTDOWN          (99)
 
 

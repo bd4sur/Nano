@@ -177,8 +177,8 @@ extern "C" {
 
 ******************************************************/
 // 屏幕布局坐标
-#define PADDING_TOP    (14)
-#define PADDING_BOTTOM (14)
+#define PADDING_TOP    (18)
+#define PADDING_BOTTOM (18)
 #define PADDING_LEFT   (0)
 #define PADDING_RIGHT  (0)
 #define CELL_NUM_X     (4)

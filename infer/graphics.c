@@ -290,6 +290,43 @@ void gfx_refresh(Nano_GFX *gfx) {
 
 }
 
+// 将帧缓冲整体上移 rows 行（底部 rows 行内容保留，由调用方覆写）
+void gfx_scroll_up(Nano_GFX *gfx, int32_t rows) {
+    if (rows <= 0 || rows >= (int32_t)gfx->height) return;
+
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        uint32_t row_bytes = gfx->width * sizeof(uint16_t);
+        if (gfx->is_double_buffer) {
+            uint32_t half = gfx->height / 2;
+            if ((uint32_t)rows < half) {
+                // 上下两半帧在逻辑上是连续整屏：滚动必须跨界衔接。
+                // 1. 上半帧尾部 rows 行 ← 下半帧头部 rows 行（必须先于下半帧内移，避免被覆盖）
+                memmove((uint8_t *)gfx->frame_buffer_rgb565_top + (half - rows) * row_bytes,
+                        gfx->frame_buffer_rgb565_bottom, rows * row_bytes);
+                // 2. 上半帧内部上移
+                memmove(gfx->frame_buffer_rgb565_top,
+                        (uint8_t *)gfx->frame_buffer_rgb565_top + rows * row_bytes,
+                        (half - rows) * row_bytes);
+                // 3. 下半帧内部上移
+                memmove(gfx->frame_buffer_rgb565_bottom,
+                        (uint8_t *)gfx->frame_buffer_rgb565_bottom + rows * row_bytes,
+                        (half - rows) * row_bytes);
+            }
+        }
+        else if (gfx->frame_buffer_rgb565) {
+            memmove(gfx->frame_buffer_rgb565,
+                    (uint8_t *)gfx->frame_buffer_rgb565 + rows * row_bytes,
+                    (gfx->height - rows) * row_bytes);
+        }
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        uint32_t row_bytes = gfx->width * 3;
+        memmove(gfx->frame_buffer_rgb888,
+                (uint8_t *)gfx->frame_buffer_rgb888 + rows * row_bytes,
+                (gfx->height - rows) * row_bytes);
+    }
+}
+
 // 设置屏幕亮度(0-255)
 void gfx_set_brightness(Nano_GFX *gfx, int32_t brightness) {
     display_set_brightness(brightness % 256);
@@ -837,6 +874,32 @@ void gfx_draw_line_anti_aliasing(Nano_GFX *gfx,
 
 
 
+
+// 以RGB565颜色快速填充矩形（供粒子喷溅等高频小矩形绘制：行指针每行只计算一次、
+// 像素直接写入，跳过逐点mode分支与RGB888→RGB565转换；非RGB565色彩模式回退到gfx_draw_rectangle）
+void gfx_fill_rect_rgb565(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t width, int32_t height, uint16_t rgb565) {
+    if (width <= 0 || height <= 0) return;
+    if (gfx->color_mode != GFX_COLOR_MODE_RGB565) {
+        gfx_draw_rectangle(gfx, (uint32_t)x0, (uint32_t)y0, (uint32_t)width, (uint32_t)height,
+            (uint8_t)((rgb565 & 0xF800) >> 8), (uint8_t)((rgb565 & 0x07E0) >> 3), (uint8_t)((rgb565 & 0x001F) << 3), 1);
+        return;
+    }
+    int32_t x1 = x0 + width - 1;
+    int32_t y1 = y0 + height - 1;
+    // 与屏幕边界求交，完全在外部则直接返回
+    if (x1 < 0 || y1 < 0 || x0 >= (int32_t)gfx->width || y0 >= (int32_t)gfx->height) return;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= (int32_t)gfx->width)  x1 = (int32_t)gfx->width - 1;
+    if (y1 >= (int32_t)gfx->height) y1 = (int32_t)gfx->height - 1;
+    for (int32_t y = y0; y <= y1; y++) {
+        uint32_t i;
+        uint16_t *fb = gfx->rgb565_access(gfx, (uint32_t)x0, (uint32_t)y, &i);
+        for (int32_t x = x0; x <= x1; x++) {
+            fb[i++] = rgb565;
+        }
+    }
+}
 
 void gfx_draw_rectangle(Nano_GFX *gfx, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
     for (uint32_t y = y0; y < MIN(gfx->height, y0 + height); y++) {
