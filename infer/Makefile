@@ -1,10 +1,10 @@
 # 检测是否是树莓派
 IS_RASPBERRY_PI = $(shell cat /proc/cpuinfo 2>/dev/null | grep -i 'raspberry' > /dev/null && echo yes || echo no)
 
-ANIMAC_DIR  := vendor/animac
-ANIMAC_INC  := $(ANIMAC_DIR)/include
-ANIMAC_SRCS := $(wildcard $(ANIMAC_DIR)/src/*.c)
-ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/src/exclude.c, $(wildcard $(ANIMAC_DIR)/src/*.c))
+ANIMAC_DIR  := vendor/Animac
+ANIMAC_INC  := $(ANIMAC_DIR)
+ANIMAC_SRCS := $(wildcard $(ANIMAC_DIR)/*.c)
+ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c, $(wildcard $(ANIMAC_DIR)/*.c))
 
 ifeq ($(IS_RASPBERRY_PI),yes)
     CCFLAGS = -O3 -march=native -ffast-math -Wall
