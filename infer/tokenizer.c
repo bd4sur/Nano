@@ -252,6 +252,7 @@ uint32_t *apply_qwen_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uin
     }
 
     free(user_prompt_tokens);
+    free(user_prompt);
     return prompt_tokens;
 }
 

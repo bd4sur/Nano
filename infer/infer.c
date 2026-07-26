@@ -305,6 +305,7 @@ void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
             if(len > 1) {
                 uint32_t *ids = string_to_ids(tk->unicode_to_id_map, utoken);
                 add_token(tk->vocab_trie, ids, len, i);
+                free(ids); // add_token为拷贝语义（memcpy），ids由本函数释放
             }
         }
     }
