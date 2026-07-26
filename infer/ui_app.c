@@ -75,6 +75,7 @@ static uint8_t s_image_decode_ready = 0;
 
 
 static uint32_t s_animac_console_text_len = 0;
+static uint32_t s_animac_prev_ui_font = 0; // 进入 STATE_ANIMAC_* 之前的 ui_font，退出时恢复
 
 
 
@@ -868,10 +869,10 @@ void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
         cell_text_B = 0;
     }
     else if (global_state->ui_color_style == UI_COLOR_DARK) {
-        cell_bg_R = 40;
-        cell_bg_G = 40;
-        cell_bg_B = 42;
-        cell_text_R = 0;
+        cell_bg_R = 30;
+        cell_bg_G = 30;
+        cell_bg_B = 32;
+        cell_text_R = 255;
         cell_text_G = 255;
         cell_text_B = 255;
     }
@@ -913,7 +914,21 @@ void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
 
         }
     }
-
+/*
+    // 在“控制台”格子（row=3, col=2）中央绘制图标，图标中心点与格子中心点重合
+    // 参考 ui_draw_image：stb_image 的文件 API 不支持本硬件SD卡，
+    // 需先用 platform_read_file_to_buffer 将文件读入内存，再用 gfx_draw_image_buffer 解码绘制
+    uint8_t *icon_file_buffer = NULL;
+    size_t icon_file_size = 0;
+    if (platform_read_file_to_buffer("/icon/animac.png", &icon_file_buffer, &icon_file_size) == 0
+        && icon_file_buffer != NULL && icon_file_size > 0) {
+        gfx_draw_image_buffer(global_state->gfx, icon_file_buffer, (uint32_t)icon_file_size,
+            CELL_CENTER_X(2, 3) - 18, CELL_CENTER_Y(2, 3) - 18, 36, 36);
+    }
+    if (icon_file_buffer != NULL) {
+        free(icon_file_buffer);
+    }
+*/
     ui_draw_header(key_event, global_state, L"Nano-Pod", 1);
     ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
 }
@@ -978,7 +993,12 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
         global_state->brightness += 32;
-        global_state->brightness = global_state->brightness % 256;
+        if (global_state->brightness == 256) {
+            global_state->brightness = 255; // 最高亮度挡位
+        }
+        else if (global_state->brightness > 256) {
+            global_state->brightness = 32; // 不允许亮度为0，回绕到最低挡位
+        }
         gfx_set_brightness(global_state->gfx, (uint8_t)global_state->brightness);
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
@@ -1085,12 +1105,18 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 
     const wchar_t *weekdays[] = {L"日", L"一", L"二", L"三", L"四", L"五", L"六"};
     swprintf(datetime_wcs_buffer, 33, L"%04d年%02d月%02d日 星期%ls", year, month, day, weekdays[timeinfo->tm_wday]);
+    // 背景（阴影）
+    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, datetime_wcs_buffer, global_state->gfx->width / 2 + 1, 30 + 1, 0x66, 0x66, 0x66, 1);
+    // 前景
     gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, datetime_wcs_buffer, global_state->gfx->width / 2, 30, time_red, time_green, time_blue, 1);
 
     // 农历日期
     LunarDate *nongli = lunar_calculate(year, month, day, hour, minute, second, timezone);
     _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
-    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2, 110, nongli_red, nongli_green, nongli_blue, 1);
+    // 背景（阴影）
+    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2 + 1, 120 + 1, 0x66, 0x66, 0x66, 1);
+    // 前景
+    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2, 120, nongli_red, nongli_green, nongli_blue, 1);
 
     // 七段码时钟
     wchar_t time7seg_str[10];
@@ -1145,6 +1171,9 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     // 显示电量信息文字
     wchar_t battery_info_buf[100];
     swprintf(battery_info_buf, 100, L"电量:%d%% | %dmV | %dmA%ls", global_state->ups_soc, global_state->ups_voltage, global_state->ups_current, (global_state->ups_is_charging ? L"  |  正在充电" : L""));
+    // 背景（阴影）
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2 + 1, global_state->gfx->height-13*2-6 + 1, 0x66, 0x66, 0x66, 1);
+    // 前景
     gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*2-6, time_red, time_green, time_blue, 1);
 
 #endif
@@ -2482,8 +2511,12 @@ void ui_app_setting_grid16_draw(Key_Event *key_event, Global_State *global_state
         0, 0, L"日期", date_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
         1, 0, L"时间", time_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+
+    wchar_t brightness_str[32];
+    swprintf(brightness_str, 32, L"%d%%", (global_state->brightness * 100) / 255);
+
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
-        2, 0, L"屏幕亮度", L"50%", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+        2, 0, L"屏幕亮度", brightness_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
     ui_app_setting_grid16_refresh_button(key_event, global_state, 1,
         3, 0, L"返回", NULL, cell_bg_R+10, cell_bg_G+10, cell_bg_B+10, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
 
@@ -2548,7 +2581,12 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
     // 屏幕亮度
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_3) {
         global_state->brightness += 32;
-        global_state->brightness = global_state->brightness % 256;
+        if (global_state->brightness == 256) {
+            global_state->brightness = 255; // 最高亮度挡位
+        }
+        else if (global_state->brightness > 256) {
+            global_state->brightness = 32; // 不允许亮度为0，回绕到最低挡位
+        }
         gfx_set_brightness(global_state->gfx, global_state->brightness);
     }
     // 经度
@@ -3614,7 +3652,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             ui_draw_header(key_event, global_state, L"本机自述", 1);
             ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
 
-            wchar_t readme[256];
+            wchar_t readme[1024];
             wchar_t color_reset_tag[10];
             if (global_state->ui_color_style == UI_COLOR_LIGHT) {
                 wcscpy(color_reset_tag, L"[#000000]");
@@ -3622,7 +3660,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             else if (global_state->ui_color_style == UI_COLOR_DARK) {
                 wcscpy(color_reset_tag, L"[#ffffff]");
             }
-            swprintf(readme, 256, L"[#1155ee]Nano-Pod%ls v" NANO_VERSION "\n掌上电子鹦鹉·玲珑天象仪\n(c) 2025-2026 BD4SUR\n\ngithub.com/bd4sur", color_reset_tag);
+            swprintf(readme, 1024, L"[#66ccff]Nano-Pod%ls v" NANO_VERSION "\n电子核桃EDC | M5Core2(ESP32)\n(c) 2025-2026 BD4SUR\n\n番茄表：基于FLIP算法实现的流体仿真沙漏，可根据IMU测量到的重力方向定向流动，并具备可调节的瓶颈节流机制，因此可以当作番茄表使用。\n\n鹦鹉笼：与电子鹦鹉（端侧语言模型）对话，可以观测推理状态。在树莓派等算力丰富的硬件平台上，还具备语音输入、语音合成能力，并支持Qwen等更大规模的语言模型。\n\n玲珑仪：是一款天文计算和天空仿真程序，能够根据星历算法、时间地点，计算日月等重要天体的实时位置，同时渲染逼真的天空视觉效果。由于计算量大，在MCU上性能不佳，渲染一帧时间以秒计，但能够实时呈现。\n\n灵机引擎：自研Scheme语言解释器，可通过在电子核桃上直接编写程序控制电子核桃的行为。该功能同时提供了文字终端和软键盘，能够在不依赖任何外部硬件的条件下，独立实现程序代码的输入、执行和结果反馈。\n\ngithub.com/bd4sur/Nano", color_reset_tag);
 
             ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, readme, 0, 1);
             ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
@@ -4086,6 +4124,9 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
+            // ANIMAC终端临时将文字编辑控件字体改为 GFX_FONT_ALPHA_12，退出时恢复
+            s_animac_prev_ui_font = global_state->ui_font;
+            global_state->ui_font = GFX_FONT_ALPHA_12;
             ui_widget_input_init(key_event, global_state, global_state->w_input_main, L"电子核桃控制台");
             // 提示符
             wcscat(global_state->w_input_main->textarea.text, L"灵机计算引擎 V2607 | M5Core2(ESP32)\n(c) 2018-2026 BD4SUR\n向上滑动或Ctrl+0呼出软键盘\n");
@@ -4094,6 +4135,14 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
         }
         global_state->PREV_STATE = global_state->STATE;
+
+        // NOTE 临时调试代码（后续删除）：初始化REPL前打印当前内存使用情况
+        printf("[Animac] DRAM Free: %u | Largest: %u | PSRAM Free: %u | DMA Free: %u/%u\n",
+            heap_caps_get_free_size(MALLOC_CAP_8BIT),
+            heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+            heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+            heap_caps_get_free_size(MALLOC_CAP_DMA),
+            heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
 
         ui_animac_init(key_event, global_state);
 
@@ -4136,6 +4185,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             ui_softkbd_hide();
             ui_pinyin_ime_reset();
             ui_animac_close(key_event, global_state);
+            global_state->ui_font = s_animac_prev_ui_font; // 恢复进入 STATE_ANIMAC_* 之前的字体
         }
 
         // 软键盘自身状态变化（粘滞修饰键、按下高亮）时，补画键盘并刷新
