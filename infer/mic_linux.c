@@ -4,7 +4,7 @@
 // Linux 麦克风HAL打桩实现：本平台无麦克风硬件，仅用于满足链接。
 // 所有接口返回失败/空操作，上层应将其视为无麦克风可用。
 
-int32_t mic_init() {
+int32_t mic_init(uint32_t sample_rate) {
     return -1;  // 无麦克风硬件
 }
 

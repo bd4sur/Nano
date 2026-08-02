@@ -4,6 +4,9 @@
 #include <Arduino.h>
 #include <esp32-hal-psram.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include <M5Unified.h>
 #include <SPI.h>
 #include <SD.h>
@@ -20,9 +23,14 @@ uint64_t get_timestamp_in_ms() {
     return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
 }
 
-// 优雅关机
+// 优雅关机：通过 PMIC（Core2: AXP192 / CoreS3: AXP2101，M5.Power 已封装板型差异）切断整机全部电源。
+// 成功时本函数不返回（设备已断电）；若仍然返回，说明断电未生效（如 USB 供电时），
+// 返回 -1 由调用方提示关机失败。
 int32_t graceful_shutdown() {
-    return 0;
+    sleep_in_ms(500); // 让“正在安全关机”提示在屏幕上停留片刻
+    M5.Power.powerOff(); // 切断所有电源输出
+    sleep_in_ms(1000); // 等待断电生效；仍在运行则判定失败
+    return -1;
 }
 
 // 主函数：将 prompt 和 response 转义、转换、写入 log.jsonl
@@ -83,14 +91,43 @@ uint32_t platform_get_largest_free_block_internal() {
     return heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
 }
 
+// ---------------- 任务抽象（FreeRTOS 实现） ----------------
+
+int32_t platform_task_create(platform_task_func_t func, const char *name,
+                             uint32_t stack_bytes, void *arg, int32_t priority,
+                             int32_t core, platform_task_handle_t *out_handle) {
+    TaskHandle_t handle = NULL;
+    BaseType_t ok;
+    if (core >= 0) {
+        ok = xTaskCreatePinnedToCore(func, name, stack_bytes, arg,
+                                     (UBaseType_t)priority, &handle, (BaseType_t)core);
+    }
+    else {
+        ok = xTaskCreate(func, name, stack_bytes, arg,
+                         (UBaseType_t)priority, &handle);
+    }
+    if (ok != pdPASS) return -1;
+    if (out_handle) *out_handle = (platform_task_handle_t)handle;
+    return 0;
+}
+
+void platform_task_delete_self(void) {
+    vTaskDelete(NULL);
+}
+
+void platform_task_delete(platform_task_handle_t handle) {
+    if (handle) vTaskDelete((TaskHandle_t)handle);
+}
+
+void platform_task_delay_ms(uint32_t ms) {
+    vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
 
 }
 
 
-#define SD_SPI_CS_PIN   4
-#define SD_SPI_SCK_PIN  18
-#define SD_SPI_MISO_PIN 38
-#define SD_SPI_MOSI_PIN 23
+// SD 卡 SPI 引脚宏（SD_SPI_*_PIN）在 platform.h 中按 NANO_PLATFORM_* 定义
 
 int32_t fs_init() {
     // SD Card Initialization
@@ -141,6 +178,59 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     *size = fileSize;
     return 0;
 }
+
+int32_t platform_write_buffer_to_file(const char *filepath, const uint8_t *buffer, size_t size) {
+    File file = SD.open(filepath, FILE_WRITE); // 不存在则创建，存在则截断
+    if (!file) {
+        return -1;
+    }
+    size_t written = file.write(buffer, size);
+    file.close();
+    return (written == size) ? 0 : -1;
+}
+
+int32_t platform_is_directory(const char *path) {
+    File f = SD.open(path);
+    if (!f) {
+        return 0;
+    }
+    int32_t is_dir = f.isDirectory() ? 1 : 0;
+    f.close();
+    return is_dir;
+}
+
+// 随机访问文件读取（单句柄）
+static File s_platform_file;
+
+int32_t platform_file_open(const char *filepath) {
+    if (s_platform_file) {
+        s_platform_file.close();
+    }
+    s_platform_file = SD.open(filepath, FILE_READ);
+    return s_platform_file ? 0 : -1;
+}
+
+uint32_t platform_file_size(void) {
+    return s_platform_file ? s_platform_file.size() : 0;
+}
+
+int32_t platform_file_seek(uint32_t offset) {
+    return (s_platform_file && s_platform_file.seek(offset)) ? 0 : -1;
+}
+
+int32_t platform_file_read(uint8_t *buffer, size_t size) {
+    if (!s_platform_file) {
+        return -1;
+    }
+    return (int32_t)s_platform_file.read(buffer, size);
+}
+
+void platform_file_close(void) {
+    if (s_platform_file) {
+        s_platform_file.close();
+    }
+}
+
 
 /**
  * 列出目录中的文件（纯 C 接口）
@@ -196,6 +286,19 @@ int32_t list_files(const char *dir, char **filenames)
 // 振动(0-255)
 void set_vibration(uint32_t level) {
     M5.Power.setVibration(level);
+}
+
+static uint8_t s_master_volume = 16; // 与 ui_init 的 volume 初值一致
+
+void platform_set_master_volume(uint8_t volume) {
+    s_master_volume = volume;
+    if (M5.Speaker.isEnabled()) {
+        M5.Speaker.setVolume(volume);
+    }
+}
+
+uint8_t platform_get_master_volume(void) {
+    return s_master_volume;
 }
 
 

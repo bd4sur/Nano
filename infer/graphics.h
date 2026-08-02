@@ -165,6 +165,13 @@ void convert_rgb888_to_rgb565_double(Nano_GFX *gfx, uint8_t *rgb888, int32_t wid
 void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch);
 void gfx_draw_image_buffer(Nano_GFX *gfx, uint8_t *img_buffer, uint32_t buffer_size, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height);
 
+// 从内存缓冲区解码图像为 RGBA 四通道像素（不缩放、不绘制）
+// img_buffer: 包含图像文件数据的内存缓冲区（如 PNG/JPG/BMP 等格式）
+// buffer_size: 缓冲区的字节长度
+// out_width, out_height: 输出图像原始宽高
+// 返回值: 解码后的 RGBA 像素缓冲区（platform_malloc 分配，调用者负责 free）；失败返回 NULL
+uint8_t *gfx_decode_image_rgba(uint8_t *img_buffer, uint32_t buffer_size, int32_t *out_width, int32_t *out_height);
+
 int32_t gfx_decode_image_buffer(uint8_t *img_buffer, uint32_t buffer_size, uint32_t req_width, uint32_t req_height, uint8_t *out_rgb888, uint32_t *out_width, uint32_t *out_height);
 void gfx_draw_rgb888_buffer(Nano_GFX *gfx, uint8_t *rgb888_buffer, uint32_t img_width, uint32_t img_height, uint32_t x0, uint32_t y0);
 

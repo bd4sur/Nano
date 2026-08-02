@@ -2126,19 +2126,20 @@ static void gfx_draw_image_buffer_task(void *param) {
     gfx_draw_image_buffer_params_t *p = (gfx_draw_image_buffer_params_t *)param;
 
     int img_w, img_h, channels;
-    unsigned char *img_data = stbi_load_from_memory(p->img_buffer, (int)p->buffer_size, &img_w, &img_h, &channels, 3);
+    // 请求 RGBA 四通道，保留 alpha，绘制时用 gfx_blend_pixel 与背景做 alpha 混合
+    unsigned char *img_data = stbi_load_from_memory(p->img_buffer, (int)p->buffer_size, &img_w, &img_h, &channels, 4);
     if (img_data != NULL) {
         uint8_t *draw_data = img_data;
         uint32_t draw_w = img_w;
         uint32_t draw_h = img_h;
 
         if (!(p->width == 0 && p->height == 0)) {
-            draw_data = (uint8_t *)platform_malloc(p->width * p->height * 3);
+            draw_data = (uint8_t *)platform_malloc(p->width * p->height * 4);
             if (draw_data != NULL) {
                 stbir_resize_uint8_linear(
                     img_data, img_w, img_h, 0,
                     draw_data, (int)p->width, (int)p->height, 0,
-                    STBIR_RGB
+                    STBIR_RGBA
                 );
                 stbi_image_free(img_data);
                 draw_w = p->width;
@@ -2158,8 +2159,8 @@ static void gfx_draw_image_buffer_task(void *param) {
             for (uint32_t x = p->x0; x < x_end; x++) {
                 uint32_t src_x = x - p->x0;
                 uint32_t src_y = y - p->y0;
-                uint32_t src_idx = (src_y * draw_w + src_x) * 3;
-                gfx_set_pixel(p->gfx, x, y, draw_data[src_idx], draw_data[src_idx + 1], draw_data[src_idx + 2]);
+                uint32_t src_idx = (src_y * draw_w + src_x) * 4;
+                gfx_blend_pixel(p->gfx, x, y, draw_data[src_idx], draw_data[src_idx + 1], draw_data[src_idx + 2], draw_data[src_idx + 3]);
             }
         }
 
@@ -2218,7 +2219,8 @@ void gfx_draw_image_buffer(Nano_GFX *gfx, uint8_t *img_buffer, uint32_t buffer_s
     int img_w, img_h, channels;
 
     // 从内存缓冲区加载图像，stb_image 自动识别格式（PNG/JPG/BMP/GIF 等）
-    unsigned char *img_data = stbi_load_from_memory(img_buffer, (int)buffer_size, &img_w, &img_h, &channels, 3);
+    // 请求 RGBA 四通道，保留 alpha，绘制时用 gfx_blend_pixel 与背景做 alpha 混合
+    unsigned char *img_data = stbi_load_from_memory(img_buffer, (int)buffer_size, &img_w, &img_h, &channels, 4);
     if (img_data == NULL) {
         return;
     }
@@ -2228,8 +2230,8 @@ void gfx_draw_image_buffer(Nano_GFX *gfx, uint8_t *img_buffer, uint32_t buffer_s
     uint32_t draw_h = img_h;
 
     if (!(width == 0 && height == 0)) {
-        // 分配缩放后图像的内存（RGB888 格式，3字节/像素）
-        draw_data = (uint8_t *)platform_malloc(width * height * 3);
+        // 分配缩放后图像的内存（RGBA8888 格式，4字节/像素）
+        draw_data = (uint8_t *)platform_malloc(width * height * 4);
         if (draw_data == NULL) {
             stbi_image_free(img_data);
             return;
@@ -2239,7 +2241,7 @@ void gfx_draw_image_buffer(Nano_GFX *gfx, uint8_t *img_buffer, uint32_t buffer_s
         stbir_resize_uint8_linear(
             img_data, img_w, img_h, 0,           // 输入图像数据、宽、高、行跨度
             draw_data, (int)width, (int)height, 0,  // 输出图像数据、宽、高、行跨度
-            STBIR_RGB                               // 像素布局：RGB
+            STBIR_RGBA                              // 像素布局：RGBA
         );
 
         // 释放原始图像数据
@@ -2256,8 +2258,8 @@ void gfx_draw_image_buffer(Nano_GFX *gfx, uint8_t *img_buffer, uint32_t buffer_s
         for (uint32_t x = x0; x < x_end; x++) {
             uint32_t src_x = x - x0;
             uint32_t src_y = y - y0;
-            uint32_t src_idx = (src_y * draw_w + src_x) * 3;
-            gfx_set_pixel(gfx, x, y, draw_data[src_idx], draw_data[src_idx + 1], draw_data[src_idx + 2]);
+            uint32_t src_idx = (src_y * draw_w + src_x) * 4;
+            gfx_blend_pixel(gfx, x, y, draw_data[src_idx], draw_data[src_idx + 1], draw_data[src_idx + 2], draw_data[src_idx + 3]);
         }
     }
 
@@ -2394,6 +2396,87 @@ int32_t gfx_decode_image_buffer(uint8_t *img_buffer, uint32_t buffer_size,
 
     stbi_image_free(img_data);
     return 0;
+#endif
+}
+
+// 从内存缓冲区解码图像为 RGBA 四通道像素（不缩放、不绘制）
+// img_buffer: 图像文件数据（PNG/JPG/BMP等）
+// buffer_size: 缓冲区字节长度
+// out_width, out_height: 返回解码后的图像宽高
+// 返回: 解码后的 RGBA 像素缓冲区（stb_image 经 platform_malloc 分配于PSRAM，调用者负责 free）；失败返回 NULL
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+typedef struct {
+    uint8_t *img_buffer;
+    uint32_t buffer_size;
+    uint8_t *out_rgba;
+    int32_t *out_width;
+    int32_t *out_height;
+    SemaphoreHandle_t sem;
+} gfx_decode_image_rgba_params_t;
+
+static void gfx_decode_image_rgba_task(void *param) {
+    gfx_decode_image_rgba_params_t *p = (gfx_decode_image_rgba_params_t *)param;
+    int img_w, img_h, channels;
+    unsigned char *img_data = stbi_load_from_memory(p->img_buffer, (int)p->buffer_size, &img_w, &img_h, &channels, 4);
+    if (img_data != NULL) {
+        p->out_rgba = img_data;
+        *p->out_width = img_w;
+        *p->out_height = img_h;
+    }
+    xSemaphoreGive(p->sem);
+    vTaskDelete(NULL);
+}
+#endif
+
+uint8_t *gfx_decode_image_rgba(uint8_t *img_buffer, uint32_t buffer_size, int32_t *out_width, int32_t *out_height) {
+    if (img_buffer == NULL || buffer_size == 0 || out_width == NULL || out_height == NULL) {
+        return NULL;
+    }
+    *out_width = 0;
+    *out_height = 0;
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+    SemaphoreHandle_t sem = xSemaphoreCreateBinary();
+    if (sem == NULL) {
+        return NULL;
+    }
+
+    gfx_decode_image_rgba_params_t params = {
+        .img_buffer = img_buffer,
+        .buffer_size = buffer_size,
+        .out_rgba = NULL,
+        .out_width = out_width,
+        .out_height = out_height,
+        .sem = sem
+    };
+
+    TaskHandle_t taskHandle = NULL;
+    BaseType_t result = xTaskCreate(
+        gfx_decode_image_rgba_task,
+        "gfx_dec_rgba",
+        32768,  // 32KB stack to avoid stack overflow in stb_image/stbir
+        &params,
+        1,
+        &taskHandle
+    );
+
+    if (result == pdPASS) {
+        xSemaphoreTake(sem, portMAX_DELAY);
+    } else {
+        printf("gfx_decode_image_rgba: failed to create task\n");
+    }
+
+    vSemaphoreDelete(sem);
+    return params.out_rgba;
+#else
+    int img_w, img_h, channels;
+    unsigned char *img_data = stbi_load_from_memory(img_buffer, (int)buffer_size, &img_w, &img_h, &channels, 4);
+    if (img_data == NULL) {
+        return NULL;
+    }
+    *out_width = img_w;
+    *out_height = img_h;
+    return img_data;
 #endif
 }
 

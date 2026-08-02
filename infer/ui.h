@@ -9,6 +9,7 @@ extern "C" {
 
 #include "graphics.h"
 #include "utils.h"
+#include "ui_layout.h"
 
 
 #define IME_MODE_HANZI    (0)
@@ -21,9 +22,6 @@ extern "C" {
 #define MAX_CANDIDATE_NUM (256)     // 候选字最大数量
 #define MAX_CANDIDATE_PAGE_NUM (26) // 候选字最大分页数
 #define MAX_CANDIDATE_NUM_PER_PAGE (10) // 每页最多有几个候选字（每页10个字）
-
-#define MAX_MENU_ITEMS (64)
-#define MAX_MENU_ITEM_LEN (64)
 
 struct Nano_Context;
 struct Nano_Session;
@@ -47,7 +45,7 @@ typedef struct Global_State {
 
     Widget_Input_State     *w_input_main;
 
-    Widget_Menu_State      *w_menu_model;
+    Widget_Menu_State      *w_menu_main; // 全局唯一菜单实例（各菜单场景互斥，进入时重新初始化）
 
     // 全局状态
     int32_t STATE; // 当前状态
@@ -118,6 +116,9 @@ typedef struct Global_State {
     uint32_t llm_refresh_max_fps; // 设置项：LLM推理过程中屏幕刷新的最高帧率
     uint64_t llm_refresh_timestamp; // LLM推理过程中，上一次刷新屏幕的时间戳。用于控制刷新频率（不高于llm_refresh_max_fps），避免刷新过于频繁，拖累表观TPS（目前LLM推理与屏幕刷新是同步串行的）。
     int32_t brightness; // 屏幕亮度
+    int32_t volume;     // 全局主音量（0~255；影响按键音、寻呼机OFDM发射音量、音乐盒初始音量；音乐盒内部调节不回写）
+    int32_t auto_shutdown_minutes;   // 自动关机时长设置（分钟；0=关，可选 1/2/3/5/10/20/30/60）
+    uint64_t auto_shutdown_deadline; // 自动关机到期时间戳（ms，对 timestamp；0=未启用）
 
     // 玲珑天象仪全局配置
     Linglong_Config *linglong_cfg;
@@ -199,8 +200,8 @@ typedef struct Widget_Menu_State {
     int32_t first_item_intex; // 当前页面显示的第一个条目的标号
     int32_t item_num; // 菜单条目数
     int32_t items_per_page; // 每页容纳的条目数
-    wchar_t title[MAX_MENU_ITEM_LEN]; // 菜单标题
-    wchar_t items[MAX_MENU_ITEMS][MAX_MENU_ITEM_LEN]; // 条目标题
+    const wchar_t *title;   // 菜单标题（借用调用方字符串，不复制；调用方需保证生命周期）
+    const wchar_t **items;  // 条目字符串表（借用调用方存储，不复制；调用方需保证生命周期）
 } Widget_Menu_State;
 
 
@@ -260,6 +261,23 @@ void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_
 void ui_draw_7seg_string(
     Key_Event *key_event, Global_State *global_state,
     int32_t xx, int32_t yy, wchar_t *text,
+    uint8_t red, uint8_t green, uint8_t blue,
+    float seg_length, float seg_thickness, float digit_gap, int32_t is_shadow,
+    int32_t *text_width, int32_t *text_height
+);
+
+// 预计算七段码字符串的渲染宽高（不做实际渲染，纯几何计算无需上下文），
+// 供实际绘制前计算布局参数（如居中、右对齐等）
+void ui_measure_7seg_string(
+    wchar_t *text,
+    float seg_length, float seg_thickness, float digit_gap,
+    int32_t *text_width, int32_t *text_height
+);
+
+// 以 (cx, cy) 为中心绘制七段码字符串
+void ui_draw_7seg_string_centered(
+    Key_Event *key_event, Global_State *global_state,
+    int32_t cx, int32_t cy, wchar_t *text,
     uint8_t red, uint8_t green, uint8_t blue,
     float seg_length, float seg_thickness, float digit_gap, int32_t is_shadow,
     int32_t *text_width, int32_t *text_height

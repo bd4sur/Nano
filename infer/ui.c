@@ -1235,7 +1235,11 @@ void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widge
     uint32_t max_items_per_page = (menu_state->height - line_height + 2) / line_height;
     menu_state->items_per_page = (menu_state->item_num > max_items_per_page) ? max_items_per_page : menu_state->item_num;
 
-    ui_widget_menu_draw(key_event, global_state, menu_state);
+    // 注意：此处不再立即绘制。此前末尾调用 ui_widget_menu_draw（内含 gfx_refresh）会导致
+    // 进入菜单状态时先刷出菜单区（页眉/页脚尚未绘制，残留旧画面）、下一拍状态初始化分支
+    // 再补画页眉页脚，形成两阶段断续感。现全部 4 个调用点（model/game/ebook/ofdm 菜单）
+    // 均在随后的状态初始化分支统一“页眉页脚+菜单”画齐后一次刷屏（ui_widget_menu_refresh）。
+    (void)key_event;
 }
 
 void ui_widget_menu_refresh(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
@@ -1246,8 +1250,19 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
 
     uint32_t x_indent = 6;
 
+    // 配色随全局色彩风格（ui_color.h）：亮色保持原配色；
+    // 暗色：背景纯黑(#000000)、文字白(#ffffff)、选中条高亮底色 #003399（文字仍白）
+    uint8_t bg_r = 255, bg_g = 255, bg_b = 255;  // 菜单背景
+    uint8_t hl_r = 222, hl_g = 222, hl_b = 222;  // 选中条高亮底色
+    uint8_t fg_r = 0,   fg_g = 0,   fg_b = 0;    // 文字
+    if (global_state->ui_color_style == UI_COLOR_DARK) {
+        bg_r = 0x00; bg_g = 0x00; bg_b = 0x00;
+        hl_r = 0x00; hl_g = 0x33; hl_b = 0x99;
+        fg_r = 0xff; fg_g = 0xff; fg_b = 0xff;
+    }
+
     // 清除背景
-    gfx_draw_rectangle(global_state->gfx, menu_state->x, menu_state->y, menu_state->width, menu_state->height, 255, 255, 255, 1);
+    gfx_draw_rectangle(global_state->gfx, menu_state->x, menu_state->y, menu_state->width, menu_state->height, bg_r, bg_g, bg_b, 1);
 
     // 菜单首行：标题和选项数
     // gfx_draw_textline(global_state->gfx, menu_state->title, x_indent, 0, 0, 255, 255, 1);
@@ -1273,11 +1288,11 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
         // 绘制高亮底色
         if (is_highlight) {
             for (uint32_t j = y_pos - 1; j < y_pos + line_height - 1; j++) {
-                gfx_draw_line(global_state->gfx, menu_state->x, j, menu_state->x + menu_state->width, j, 222, 222, 222, 1);
+                gfx_draw_line(global_state->gfx, menu_state->x, j, menu_state->x + menu_state->width, j, hl_r, hl_g, hl_b, 1);
             }
         }
         // 绘制文字
-        gfx_font_draw_text(global_state->gfx, font_id, menu_state->items[i], menu_state->x + x_indent, y_pos, 0, 0, 0, 1);
+        gfx_font_draw_text(global_state->gfx, font_id, (wchar_t *)menu_state->items[i], menu_state->x + x_indent, y_pos, fg_r, fg_g, fg_b, 1);
 
         y_pos += line_height;
     }
@@ -1845,6 +1860,46 @@ void ui_draw_7seg_string(
     }
     *text_width = (int32_t)roundf(x - xx);
     *text_height = (int32_t)roundf(digit_height);
+}
+
+// 预计算七段码字符串的渲染宽高（不做实际渲染）。
+// 纯几何计算（无需 gfx 与上下文），宽度推算与 ui_draw_7seg_string 的步进逻辑完全一致，
+// 供实际绘制前计算布局参数（如居中、右对齐、外框尺寸等）。
+void ui_measure_7seg_string(
+    wchar_t *text,
+    float seg_length, float seg_thickness, float digit_gap,
+    int32_t *text_width, int32_t *text_height
+) {
+    float digit_w = seg_length + 2.0f * seg_thickness; // 数字宽度（与 ui_draw_7seg_digit 一致）
+    float colon_w = digit_w / 2.0f;                    // 冒号宽度（与 ui_draw_7seg_colon 一致）
+    float x = 0.0f;
+    int32_t len = wcslen(text);
+    for (int32_t i = 0; i < len; i++) {
+        wchar_t ch = text[i];
+        if (ch >= L'0' && ch <= L'9') {
+            x += digit_w + digit_gap;
+        }
+        else if (ch == L':') {
+            x += colon_w + digit_gap;
+        }
+    }
+    *text_width = (int32_t)roundf(x);
+    *text_height = (int32_t)roundf(2.0f * seg_length + 3.0f * seg_thickness);
+}
+
+// 以 (cx, cy) 为中心绘制七段码字符串（先经 ui_measure_7seg_string 测量宽高，再换算左上角）
+void ui_draw_7seg_string_centered(
+    Key_Event *key_event, Global_State *global_state,
+    int32_t cx, int32_t cy, wchar_t *text,
+    uint8_t red, uint8_t green, uint8_t blue,
+    float seg_length, float seg_thickness, float digit_gap, int32_t is_shadow,
+    int32_t *text_width, int32_t *text_height
+) {
+    int32_t w = 0, h = 0;
+    ui_measure_7seg_string(text, seg_length, seg_thickness, digit_gap, &w, &h);
+    ui_draw_7seg_string(key_event, global_state, cx - w / 2, cy - h / 2, text,
+        red, green, blue, seg_length, seg_thickness, digit_gap, is_shadow,
+        text_width, text_height);
 }
 
 

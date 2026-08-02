@@ -242,6 +242,47 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
     return 0;
 }
 
+
+int32_t platform_write_buffer_to_file(const char *filepath, const uint8_t *buffer, size_t size) {
+    return 0;
+}
+
+int32_t platform_is_directory(const char *path) {
+    return 0;
+}
+
+int32_t platform_file_open(const char *filepath) {
+    return 0;
+}
+
+uint32_t platform_file_size(void) {
+    return 0;
+}
+
+int32_t platform_file_seek(uint32_t offset) {
+    return 0;
+}
+
+int32_t platform_file_read(uint8_t *buffer, size_t size) {
+    return 0;
+}
+
+void platform_file_close(void) {
+    return;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 void *platform_calloc(size_t nmemb, size_t size) {
     return calloc(nmemb, size);
 }
@@ -266,7 +307,62 @@ void *platform_realloc_internal(void *ptr, size_t n) {
     return realloc(ptr, n);
 }
 
+uint32_t platform_get_free_heap_size() {
+    return 0;
+}
+
+uint32_t platform_get_largest_free_block() {
+    return 0;
+}
+
+uint32_t platform_get_free_heap_size_internal() {
+    return 0;
+}
+
+uint32_t platform_get_largest_free_block_internal() {
+    return 0;
+}
+
+
+
+
+
+
+// ---------------- 任务抽象（FreeRTOS 实现） ----------------
+
+int32_t platform_task_create(platform_task_func_t func, const char *name,
+                             uint32_t stack_bytes, void *arg, int32_t priority,
+                             int32_t core, platform_task_handle_t *out_handle) {
+    return 0;
+}
+
+void platform_task_delete_self(void) {
+    return;
+}
+
+void platform_task_delete(platform_task_handle_t handle) {
+    return;
+}
+
+void platform_task_delay_ms(uint32_t ms) {
+    return;
+}
+
+
+
+
+
+
 
 void set_vibration(uint32_t level) {
     return;
 }
+
+void platform_set_master_volume(uint8_t volume) {
+    return;
+}
+
+uint8_t platform_get_master_volume(void) {
+    return 0;
+}
+

@@ -8,10 +8,73 @@ extern "C" {
 #endif
 
 // ===============================================================================
+// 平台选择
+// 默认跟随 Arduino IDE 所选板型自动判定（ARDUINO_M5STACK_* 由 Arduino 核心自动定义）；
+// 也可手动取消下方注释之一，强制指定目标平台（优先级高于自动判定）。
+// 板型差异一律经 NANO_PLATFORM_* 宏控制，不要在业务代码中散落 #ifdef ARDUINO_*。
+// ===============================================================================
+
+// #define NANO_PLATFORM_M5CORE2
+// #define NANO_PLATFORM_M5CORES3
+
+#if !defined(NANO_PLATFORM_M5CORE2) && !defined(NANO_PLATFORM_M5CORES3)
+    #if defined(ARDUINO_M5STACK_CORES3)
+        #define NANO_PLATFORM_M5CORES3
+    #else
+        #define NANO_PLATFORM_M5CORE2   // 默认（含 ARDUINO_M5STACK_CORE2 及非 Arduino 环境）
+    #endif
+#endif
+
+// ===============================================================================
+// 平台差异参数（由 NANO_PLATFORM_* 宏选择）
+// 注意：本头文件同时被纯 C 文件包含，此处只允许出现纯数字/字符串常量，
+//       不得引用 ESP-IDF 类型（如 I2S_NUM_0 枚举），需要时在 .cpp 中强制转换。
+// ===============================================================================
+
+#if defined(NANO_PLATFORM_M5CORES3)
+
+    // SD 卡 SPI 引脚（CoreS3：SCK=36, MISO=35, MOSI=37, CS=4，同 M5Unified 引脚表）
+    #define SD_SPI_CS_PIN    (4)
+    #define SD_SPI_SCK_PIN   (36)
+    #define SD_SPI_MISO_PIN  (35)
+    #define SD_SPI_MOSI_PIN  (37)
+
+    // 显示屏 SPI 时钟（Hz）；0 = 不设置，使用 M5GFX 默认值。
+    // Core2 上实测 60MHz 稳定（80MHz 闪屏）；CoreS3 未经真机验证，先用默认值。
+    #define DISPLAY_SPI_CLOCK_HZ  (0)
+
+    // 麦克风：ES7210 I2S ADC（标准 I2S 模式，非 PDM），与扬声器共用 I2S_NUM_1
+    // 引脚（参照 M5Unified）：MCLK=GPIO0, BCLK=GPIO34, WS=GPIO33, DIN=GPIO14
+    #define MIC_I2S_PORT     (1)
+    #define MIC_PIN_MCLK     (0)
+    #define MIC_PIN_BCLK     (34)
+    #define MIC_PIN_WS       (33)
+    #define MIC_PIN_DATA_IN  (14)
+
+#else // NANO_PLATFORM_M5CORE2
+
+    // SD 卡 SPI 引脚（Core2：SCK=18, MISO=38, MOSI=23, CS=4）
+    #define SD_SPI_CS_PIN    (4)
+    #define SD_SPI_SCK_PIN   (18)
+    #define SD_SPI_MISO_PIN  (38)
+    #define SD_SPI_MOSI_PIN  (23)
+
+    // 显示屏 SPI 时钟（Hz）：Core2 实测 60MHz 稳定（原装 40MHz 的 1.5 倍）
+    #define DISPLAY_SPI_CLOCK_HZ  (60000000)
+
+    // 麦克风：PDM 硅麦，与扬声器共用 I2S_NUM_0
+    // 引脚（参照 M5Core2 FactoryTest）：CLK(WS)=GPIO0, DATA_IN=GPIO34
+    #define MIC_I2S_PORT     (0)
+    #define MIC_PIN_CLK      (0)
+    #define MIC_PIN_DATA_IN  (34)
+
+#endif
+
+// ===============================================================================
 // 全局字符串常量
 // ===============================================================================
 
-#define NANO_VERSION "2607"
+#define NANO_VERSION "2608"
 
 #define LOG_FILE_PATH "chat.jsonl"
 
@@ -49,8 +112,49 @@ uint32_t platform_get_largest_free_block(void);         // 主堆最大连续空
 uint32_t platform_get_free_heap_size_internal(void);    // 内部RAM堆当前空闲总量
 uint32_t platform_get_largest_free_block_internal(void); // 内部RAM堆最大连续空闲块
 
+// ===============================================================================
+// 任务抽象（ESP32 上由 FreeRTOS 实现；其他平台可用 pthread 等实现）
+// 注意：句柄为不透明 void*，业务代码不得依赖其具体类型；
+//       任务入口函数返回前必须调用 platform_task_delete_self() 自删（不返回）。
+// ===============================================================================
+
+typedef void* platform_task_handle_t;
+typedef void (*platform_task_func_t)(void *arg);
+
+// 创建任务。stack_bytes 为栈字节数；priority 数值越大优先级越高；
+// core >= 0 时绑定到指定核，core < 0 时不绑核。返回 0 成功，负数失败。
+int32_t platform_task_create(platform_task_func_t func, const char *name,
+                             uint32_t stack_bytes, void *arg, int32_t priority,
+                             int32_t core, platform_task_handle_t *out_handle);
+// 任务内自删除（不返回）
+void platform_task_delete_self(void);
+// 按句柄强制删除任务（用于清理兜底）
+void platform_task_delete(platform_task_handle_t handle);
+// 任务内延时（毫秒）
+void platform_task_delay_ms(uint32_t ms);
+
+// 全内存屏障（跨核 SPSC 无锁同步用：保证屏障前的写先于屏障后的写对外可见）
+#if defined(__GNUC__)
+    #define platform_memory_barrier() __sync_synchronize()
+#else
+    #define platform_memory_barrier()  // 其他平台按需实现
+#endif
+
 // 读取二进制文件到内存缓冲区
 int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, size_t *size);
+
+// 将内存缓冲区写入文件（不存在则创建，存在则截断覆盖）。返回0成功，-1失败
+int32_t platform_write_buffer_to_file(const char *filepath, const uint8_t *buffer, size_t size);
+
+// 判断路径是否为目录（1-是，0-否或打开失败）
+int32_t platform_is_directory(const char *path);
+
+// 随机访问文件读取（单句柄：同一时刻仅支持一个打开的文件，供电子书等分块读取使用）
+int32_t  platform_file_open(const char *filepath);    // 0成功，-1失败
+uint32_t platform_file_size(void);                    // 当前打开文件的大小（字节）
+int32_t  platform_file_seek(uint32_t offset);         // 0成功，-1失败
+int32_t  platform_file_read(uint8_t *buffer, size_t size); // 实际读取字节数，-1失败
+void     platform_file_close(void);
 
 // 设置时间
 void set_sys_time(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second);
@@ -63,6 +167,10 @@ int32_t list_files(const char *dir, char **filenames);
 // 振动(0-255)
 void set_vibration(uint32_t level);
 
+// 全局主音量（0~255）：由 ui_init/系统设置写入（同时应用到扬声器硬件）；
+// 音频相关 HAL（如 mic_close 恢复扬声器）读取该值恢复主音量，避免硬编码。
+void    platform_set_master_volume(uint8_t volume);
+uint8_t platform_get_master_volume(void);
 
 
 

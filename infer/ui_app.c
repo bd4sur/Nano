@@ -4,6 +4,7 @@
 #include "graphics.h"
 #include "input_device.h"
 #include "ui.h"
+#include "ui_icon.h"
 #include "ui_softkbd.h"
 #include "ui_pinyin_ime.h"
 
@@ -49,6 +50,16 @@
 #include "ui_spectrogram.h"
 
 #include "ui_pedometer.h"
+
+#include "ui_goldminer.h"
+
+#include "ui_tetris.h"
+
+#include "ui_ebook.h"
+
+#include "ui_ofdm.h"
+
+#include "ui_musicbox.h"
 
 #define WALLPAPER_PATH ("/home/bd4sur/wp.jpg")
 
@@ -243,13 +254,22 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
 
     global_state->w_input_main = (Widget_Input_State*)platform_calloc(1, sizeof(Widget_Input_State));
 
-    global_state->w_menu_model = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
+    global_state->w_menu_main = (Widget_Menu_State*)platform_calloc(1, sizeof(Widget_Menu_State));
 
 
     global_state->STATE = STATE_SPLASH_SCREEN;
     global_state->PREV_STATE = STATE_DEFAULT;
 
     global_state->ui_color_style = UI_COLOR_DARK;
+
+    // 全局默认背光（与 display_hal_init 的 setBrightness 一致；设置菜单按此值显示/调节）
+    global_state->brightness = 204;
+
+    // 全局主音量（影响按键音、寻呼机发射音量、音乐盒初始音量）
+    global_state->volume = 16;
+    // 自动关机（默认关）
+    global_state->auto_shutdown_minutes = 0;
+    global_state->auto_shutdown_deadline = 0;
 
     global_state->timestamp_last = 0;
 
@@ -564,13 +584,45 @@ int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state) {
 
 
 void init_model_menu(Key_Event *key_event, Global_State *global_state) {
-    wcscpy(global_state->w_menu_model->title, L"选择语言模型");
     size_t model_count = sizeof(preset_model_configs) / sizeof(preset_model_configs[0]);
+    // 条目字符串借用 preset_model_configs 的静态存储，控件不复制
+    static const wchar_t *model_menu_items[sizeof(preset_model_configs) / sizeof(preset_model_configs[0])];
     for (size_t i = 0; i < model_count; i++) {
-        wcscpy(global_state->w_menu_model->items[i], preset_model_configs[i].model_name);
+        model_menu_items[i] = preset_model_configs[i].model_name;
     }
-    global_state->w_menu_model->item_num = (int32_t)model_count;
-    ui_widget_menu_init(key_event, global_state, global_state->w_menu_model);
+    global_state->w_menu_main->title = L"选择语言模型";
+    global_state->w_menu_main->items = model_menu_items;
+    global_state->w_menu_main->item_num = (int32_t)model_count;
+    ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
+}
+
+
+void init_game_menu(Key_Event *key_event, Global_State *global_state) {
+    // 条目字符串借用字面量的静态存储，控件不复制
+    static const wchar_t *game_menu_items[] = {
+        L"黄金矿工",
+        L"Bad Apple!",
+        L"康威生命游戏",
+        L"遗传算法求解旅行商问题",
+        L"遗传算法拟合图像",
+        L"俄罗斯方块",
+    };
+    global_state->w_menu_main->title = L"小游戏";
+    global_state->w_menu_main->items = game_menu_items;
+    global_state->w_menu_main->item_num = 6;
+    ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
+}
+
+int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
+    switch (ms->current_item_index) {
+        case 0: return STATE_GOLDMINER;
+        case 1: return STATE_BADAPPLE;
+        case 2: return STATE_GAMEOFLIFE;
+        case 3: return STATE_GENETIC_TSP;
+        case 4: return STATE_GENETIC;
+        case 5: return STATE_TETRIS;
+        default: return STATE_MAIN_MENU;
+    }
 }
 
 
@@ -824,28 +876,30 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
 
 
 static void ui_app_main_menu_grid16_refresh_button(
-    Key_Event *key_event, Global_State *global_state, int32_t is_single_line,
-    int32_t col, int32_t row, wchar_t *text0, wchar_t *text1,
+    Key_Event *key_event, Global_State *global_state,
+    int32_t col, int32_t row, wchar_t *text,
+    const char *icon_path,
     uint8_t cell_bg_R, uint8_t cell_bg_G, uint8_t cell_bg_B, uint8_t cell_bg_mode,
-    uint8_t cell_text0_R, uint8_t cell_text0_G, uint8_t cell_text0_B, uint8_t cell_text0_mode,
-    uint8_t cell_text1_R, uint8_t cell_text1_G, uint8_t cell_text1_B, uint8_t cell_text1_mode
+    uint8_t cell_text_R, uint8_t cell_text_G, uint8_t cell_text_B, uint8_t cell_text_mode
 ) {
     int32_t bx = (col == 0) ? 1 : 0;
     int32_t by = (row == 0) ? 1 : 0;
-    gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, cell_bg_R, cell_bg_G, cell_bg_B, cell_bg_mode);
-    if (is_single_line) {
-        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row), cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
-    }
-    else {
-        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
-        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text1, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, cell_text1_R, cell_text1_G, cell_text1_B, cell_text1_mode);
-    }
+    // 网格布局：上下留白与顶/底栏高度一致（当前 UI 字体行高 + 1）
+    const int32_t bar_height = 0; // gfx_font_line_height(global_state->ui_font) + 1;
+    UI_Grid_Layout grid = ui_grid_layout_make(global_state->gfx->width, global_state->gfx->height, bar_height, bar_height, 0, 0, 4, 4);
+    int32_t cell_cx = ui_grid_cell_center_x(&grid,col);
+    int32_t cell_cy = ui_grid_cell_center_y(&grid,row);
+    gfx_draw_rectangle(global_state->gfx, ui_grid_cell_x0(&grid,col)+bx, ui_grid_cell_y0(&grid,row)+by, ui_grid_cell_width(&grid)-1-bx, ui_grid_cell_height(&grid)-1-by, cell_bg_R, cell_bg_G, cell_bg_B, cell_bg_mode);
+    // 图标（36x36，带PSRAM缓存）：中心点位于格子中心偏上8px
+    ui_icon_draw_centered(global_state->gfx, icon_path, cell_cx, cell_cy - 8);
+    // 文字：中心点位于图标下沿下方8px。后绘制文字，使其覆盖在图标上面
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text, cell_cx, cell_cy - 8 + 18 + 8, cell_text_R, cell_text_G, cell_text_B, cell_text_mode);
 }
 
 void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
     wchar_t cell_text[4][4][2][10] = {
         { {L"[1]", L"番茄表",}, {L"[2]", L"鹦鹉笼",}, {L"[3]", L"玲珑仪",}, {L"[A]", L"返回",}, },
-        { {L"[4]", L"计算器",}, {L"[5]", L"音乐盒",}, {L"[6]", L"时光集",}, {L"[B]", L"设置",}, },
+        { {L"[4]", L"电子书",}, {L"[5]", L"音乐盒",}, {L"[6]", L"时光集",}, {L"[B]", L"设置",}, },
         { {L"[7]", L"小游戏",}, {L"[8]", L"频谱仪",}, {L"[9]", L"寻呼机",}, {L"[C]", L"自述",}, },
         { {L"[*]", L"计步器",}, {L"[0]", L"手电筒",}, {L"[#]", L"控制台",}, {L"[D]", L"关机",}, },
     };
@@ -861,113 +915,90 @@ void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
     uint8_t cell_bg_R = 0, cell_bg_G = 0, cell_bg_B = 0;
     uint8_t cell_text_R = 0, cell_text_G = 0, cell_text_B = 0;
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-        cell_bg_R = 233;
-        cell_bg_G = 239;
-        cell_bg_B = 255;
-        cell_text_R = 0;
-        cell_text_G = 0;
-        cell_text_B = 0;
+        cell_bg_R = 0xff;
+        cell_bg_G = 0xff;
+        cell_bg_B = 0xff;
+        cell_text_R = 0x66;
+        cell_text_G = 0x66;
+        cell_text_B = 0x66;
     }
     else if (global_state->ui_color_style == UI_COLOR_DARK) {
         cell_bg_R = 30;
         cell_bg_G = 30;
         cell_bg_B = 32;
-        cell_text_R = 255;
-        cell_text_G = 255;
-        cell_text_B = 255;
+        cell_text_R = 0xcc;
+        cell_text_G = 0xcc;
+        cell_text_B = 0xcc;
     }
 
-    const uint8_t cell_bg_preset[15] = {
-        0xea, 0xe0, 0xff, // 0 马卡龙紫
-        0xff, 0xfe, 0xcc, // 3 马卡龙黄
-        0xd5, 0xf3, 0xff, // 6 马卡龙蓝
-        0xdf, 0xff, 0xdb, // 9 马卡龙绿
-        0xff, 0xe6, 0xf0, // 12 马卡龙红
-    };
-
-    const uint8_t text_bg_preset[15] = {
-        0x39, 0x00, 0xc1, // 0 马卡龙紫
-        0x7f, 0x55, 0x00, // 3 马卡龙黄
-        0x00, 0x69, 0x93, // 6 马卡龙蓝
-        0x0a, 0x60, 0x00, // 9 马卡龙绿
-        0xc9, 0x00, 0x50, // 12 马卡龙红
+    // 所有格子的图标路径（暂定全部为 animac.png，后续逐格替换）。尺寸均为36x36。
+    // 图标经 ui_icon_draw_centered 绘制：首次读取解码后常驻缓存于PSRAM，之后直接从缓存绘制
+    const char *cell_icon_path[4][4] = {
+        {"/icon/fanqie.png", "/icon/nano.png", "/icon/linglong.png", "/icon/home.png"},
+        {"/icon/ebook.png", "/icon/default.png", "/icon/album.png", "/icon/settings.png"},
+        {"/icon/game.png", "/icon/default.png", "/icon/ptt.png", "/icon/default.png"},
+        {"/icon/default.png", "/icon/default.png", "/icon/animac.png", "/icon/poweroff.png"},
     };
 
     for (int32_t row = 0; row < 4; row++) {
         for (int32_t col = 0; col < 4; col++) {
-
-            if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-                int32_t offset = (row * 4 + col) % 5 * 3;
-                cell_bg_R = cell_bg_preset[offset + 0];
-                cell_bg_G = cell_bg_preset[offset + 1];
-                cell_bg_B = cell_bg_preset[offset + 2];
-                cell_text_R = text_bg_preset[offset + 0];
-                cell_text_G = text_bg_preset[offset + 1];
-                cell_text_B = text_bg_preset[offset + 2];
-            }
-
-            ui_app_main_menu_grid16_refresh_button(key_event, global_state, 1,
-                col, row, cell_text[row][col][1], NULL,
+            ui_app_main_menu_grid16_refresh_button(key_event, global_state,
+                col, row, cell_text[row][col][1],
+                cell_icon_path[row][col],
                 cell_bg_R, cell_bg_G, cell_bg_B, 1,
-                cell_text_R, cell_text_G, cell_text_B, 1,
                 cell_text_R, cell_text_G, cell_text_B, 1);
 
         }
     }
-/*
-    // 在“控制台”格子（row=3, col=2）中央绘制图标，图标中心点与格子中心点重合
-    // 参考 ui_draw_image：stb_image 的文件 API 不支持本硬件SD卡，
-    // 需先用 platform_read_file_to_buffer 将文件读入内存，再用 gfx_draw_image_buffer 解码绘制
-    uint8_t *icon_file_buffer = NULL;
-    size_t icon_file_size = 0;
-    if (platform_read_file_to_buffer("/icon/animac.png", &icon_file_buffer, &icon_file_size) == 0
-        && icon_file_buffer != NULL && icon_file_size > 0) {
-        gfx_draw_image_buffer(global_state->gfx, icon_file_buffer, (uint32_t)icon_file_size,
-            CELL_CENTER_X(2, 3) - 18, CELL_CENTER_Y(2, 3) - 18, 36, 36);
-    }
-    if (icon_file_buffer != NULL) {
-        free(icon_file_buffer);
-    }
-*/
-    ui_draw_header(key_event, global_state, L"Nano-Pod", 1);
-    ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+
+    // ui_draw_header(key_event, global_state, L"Nano-Pod", 1);
+    // ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
 }
 
 void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_state) {
+    // 番茄表
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_1) {
         global_state->STATE = STATE_FLIP;
     }
+    // 鹦鹉笼
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_2) {
         init_model_menu(key_event, global_state);
         global_state->STATE = STATE_MODEL_MENU;
     }
+    // 玲珑仪
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_3) {
         global_state->STATE = STATE_LINGLONG;
     }
+    // 电子书
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_4) {
-        // “计算器”入口改为计步器
-        global_state->STATE = STATE_PEDOMETER;
-        // 原入口（电子书阅读，保留备查）：
-        // global_state->STATE = STATE_EBOOK;
+        ui_ebook_menu_init(key_event, global_state);
+        global_state->STATE = STATE_EBOOK;
     }
+    // 音乐盒
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_5) {
-        global_state->STATE = STATE_GENETIC_TSP;
+        ui_musicbox_menu_init(key_event, global_state);
+        global_state->STATE = STATE_MUSICBOX_MENU;
     }
+    // 时光集
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_6) {
         global_state->STATE = STATE_ALBUM;
     }
+    // 小游戏
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_7) {
-        global_state->STATE = STATE_BADAPPLE;
+        init_game_menu(key_event, global_state);
+        global_state->STATE = STATE_GAME_MENU;
     }
+    // 频谱仪
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_8) {
-        global_state->STATE = STATE_GAMEOFLIFE;
-    }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_9) {
-        // “寻呼机”入口改为音频频谱仪
         global_state->STATE = STATE_SPECTROGRAM;
-        // 原入口（遗传算法演示，保留备查）：
-        // global_state->STATE = STATE_GENETIC;
     }
+    // 寻呼机（OFDM 声波数传）
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_9) {
+        // TODO
+        ui_ofdm_menu_init(key_event, global_state);
+        global_state->STATE = STATE_OFDM_MENU;
+    }
+    // 手电筒
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_0) {
         // 暂时用作切换色彩风格功能
         if (global_state->ui_color_style == UI_COLOR_LIGHT) {
@@ -979,28 +1010,27 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         ui_widget_grid16_draw(key_event, global_state);
         gfx_refresh(global_state->gfx);
     }
+    // 返回
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         global_state->STATE = STATE_SPLASH_SCREEN;
     }
+    // 设置
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_shift) {
         global_state->STATE = STATE_SETTING_MENU;
     }
+    // 自述
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_ctrl) {
         global_state->STATE = STATE_README;
     }
+    // 关机
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_enter) {
         global_state->STATE = STATE_SHUTDOWN;
     }
+    // 计步器
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
-        global_state->brightness += 32;
-        if (global_state->brightness == 256) {
-            global_state->brightness = 255; // 最高亮度挡位
-        }
-        else if (global_state->brightness > 256) {
-            global_state->brightness = 32; // 不允许亮度为0，回绕到最低挡位
-        }
-        gfx_set_brightness(global_state->gfx, (uint8_t)global_state->brightness);
+        global_state->STATE = STATE_PEDOMETER;
     }
+    // 控制台
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
         global_state->STATE = STATE_ANIMAC_INIT;
     }
@@ -1106,26 +1136,26 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     const wchar_t *weekdays[] = {L"日", L"一", L"二", L"三", L"四", L"五", L"六"};
     swprintf(datetime_wcs_buffer, 33, L"%04d年%02d月%02d日 星期%ls", year, month, day, weekdays[timeinfo->tm_wday]);
     // 背景（阴影）
-    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, datetime_wcs_buffer, global_state->gfx->width / 2 + 1, 30 + 1, 0x66, 0x66, 0x66, 1);
+    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, datetime_wcs_buffer, global_state->gfx->width / 2 + 1, 16 + 1, 0x66, 0x66, 0x66, 1);
     // 前景
-    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, datetime_wcs_buffer, global_state->gfx->width / 2, 30, time_red, time_green, time_blue, 1);
+    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, datetime_wcs_buffer, global_state->gfx->width / 2, 16, time_red, time_green, time_blue, 1);
 
     // 农历日期
     LunarDate *nongli = lunar_calculate(year, month, day, hour, minute, second, timezone);
     _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
     // 背景（阴影）
-    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2 + 1, 120 + 1, 0x66, 0x66, 0x66, 1);
+    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2 + 1, 190 + 1, 0x66, 0x66, 0x66, 1);
     // 前景
-    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2, 120, nongli_red, nongli_green, nongli_blue, 1);
+    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2, 190, nongli_red, nongli_green, nongli_blue, 1);
 
     // 七段码时钟
     wchar_t time7seg_str[10];
     swprintf(time7seg_str, 10, L"%02d:%02d:%02d", hour, minute, second);
     int32_t s7seg_width = 0.0f;
     int32_t s7seg_height = 0.0f;
-    ui_draw_7seg_string(key_event, global_state,
-        (global_state->gfx->width - 246) / 2, 46,
-        time7seg_str, sevenseg_red, sevenseg_green, sevenseg_blue, 16.0f, 5.0f, 10.0f, sevenseg_shadow,
+    ui_draw_7seg_string_centered(key_event, global_state,
+        global_state->gfx->width / 2 + 6, 55,
+        time7seg_str, sevenseg_red, sevenseg_green, sevenseg_blue, 12.0f, 4.0f, 8.0f, sevenseg_shadow,
         &s7seg_width, &s7seg_height);
 
 
@@ -1168,13 +1198,21 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+4), (icon_x+12), (icon_y+4), 255, 255, 255, 1);
     gfx_draw_line(global_state->gfx, (icon_x+12) - soc_bar_length, (icon_y+5), (icon_x+12), (icon_y+5), 255, 255, 255, 1);
 
-    // 显示电量信息文字
-    wchar_t battery_info_buf[100];
-    swprintf(battery_info_buf, 100, L"电量:%d%% | %dmV | %dmA%ls", global_state->ups_soc, global_state->ups_voltage, global_state->ups_current, (global_state->ups_is_charging ? L"  |  正在充电" : L""));
+    // 显示电量信息文字（若启用自动关机，在电量信息尾部追加关机倒计时 " | mm:ss"；
+    // splash 每 100ms 重绘，倒计时随之逐秒刷新）
+    wchar_t battery_info_buf[112];
+    wchar_t auto_shutdown_buf[24] = L"";
+    if (global_state->auto_shutdown_deadline != 0) {
+        uint64_t remain_ms = (global_state->timestamp < global_state->auto_shutdown_deadline)
+                           ? (global_state->auto_shutdown_deadline - global_state->timestamp) : 0;
+        uint32_t remain_s = (uint32_t)((remain_ms + 999) / 1000); // 向上取整，避免剩余不足1秒时显示 00:00
+        swprintf(auto_shutdown_buf, 24, L" | %02d:%02d", (int)(remain_s / 60), (int)(remain_s % 60));
+    }
+    swprintf(battery_info_buf, 112, L"电量:%d%% | %dmV | %dmA%ls%ls", global_state->ups_soc, global_state->ups_voltage, global_state->ups_current, (global_state->ups_is_charging ? L"  |  正在充电" : L""), auto_shutdown_buf);
     // 背景（阴影）
-    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2 + 1, global_state->gfx->height-13*2-6 + 1, 0x66, 0x66, 0x66, 1);
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2 + 1, global_state->gfx->height-13*1-6 + 1, 0x66, 0x66, 0x66, 1);
     // 前景
-    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*2-6, time_red, time_green, time_blue, 1);
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*1-6, time_red, time_green, time_blue, 1);
 
 #endif
 
@@ -1360,11 +1398,15 @@ static int32_t s_ui_fanqie_is_running = 0;
 static uint64_t s_ui_fanqie_alarm_start_timestamp = 0;
 static uint64_t s_ui_fanqie_alarm_duration = 0;
 static uint64_t s_ui_fanqie_alarm_count = 0;
+static int32_t  s_ui_fanqie_alarm_phase = 0;      // 非阻塞报警状态机相位：0=空闲 1=鸣震段 2=静默段
+static uint64_t s_ui_fanqie_alarm_phase_ts = 0;   // 当前相位起始时间戳
 
 void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
     s_ui_fanqie_start_timestamp = global_state->timestamp;
     s_ui_fanqie_stop_timestamp = 0;
     s_ui_fanqie_is_running = 1;
+    s_ui_fanqie_alarm_count = 0;
+    s_ui_fanqie_alarm_phase = 0;
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
     flip_init(k, 1.0f, FLIP_RESOLUTION, global_state->timestamp, 1);
 }
@@ -1524,15 +1566,35 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     // 根据沙漏进度调整节流度，避免来自上方的压力过小时，出现几乎不往下流的问题
     s_ui_flip_throttle = roundf((1.0f - (float)s_ui_flip_init_throttle) * hourglass_progress * hourglass_progress + (float)s_ui_flip_init_throttle);
 
-    // 到时提醒
-    if (!s_ui_fanqie_is_running && s_ui_flip_is_throttle) {
-        if (s_ui_fanqie_alarm_count < 6) {
-            // set_vibration(222);
-            // sleep_in_ms(600);
-            // set_vibration(0);
-            // sleep_in_ms(600);
-            s_ui_fanqie_alarm_count++;
+    // 到时提醒（非阻塞状态机：跨帧推进震动节奏，不阻塞渲染任务）。
+    // 历史教训（2026-08-01 排障）：旧实现每帧 sleep_in_ms(600)×2 阻塞 1.2s，
+    // CoreS3 上 IMU 轴向差异致计时状态误判“流完”，按节流键即误触发本报警，
+    // 造成约 7.2s（6 周期×1.2s）的 1fps 卡顿；故改为非阻塞并加运行时长门槛。
+    if (!s_ui_fanqie_is_running && s_ui_flip_is_throttle && s_ui_fanqie_alarm_count < 6) {
+        // 门槛：仅真实计时（运行时长≥3s）结束后才报警，杜绝“进入即误判流完”的伪报警
+        if (s_ui_fanqie_stop_timestamp >= s_ui_fanqie_start_timestamp &&
+            s_ui_fanqie_stop_timestamp - s_ui_fanqie_start_timestamp >= 3000) {
+            uint64_t now = global_state->timestamp;
+            if (s_ui_fanqie_alarm_phase == 0) {           // 开始一段鸣震
+                set_vibration(222);
+                s_ui_fanqie_alarm_phase_ts = now;
+                s_ui_fanqie_alarm_phase = 1;
+            }
+            else if (s_ui_fanqie_alarm_phase == 1 && now - s_ui_fanqie_alarm_phase_ts >= 600) {
+                set_vibration(0);                          // 鸣震 600ms 后进入静默段
+                s_ui_fanqie_alarm_phase_ts = now;
+                s_ui_fanqie_alarm_phase = 2;
+            }
+            else if (s_ui_fanqie_alarm_phase == 2 && now - s_ui_fanqie_alarm_phase_ts >= 600) {
+                s_ui_fanqie_alarm_count++;                 // 静默 600ms 后完成一个周期
+                s_ui_fanqie_alarm_phase = 0;
+            }
         }
+    }
+    else if (s_ui_fanqie_alarm_phase != 0) {
+        // 报警被中断（重新计时/关闭节流/报警完成）：确保马达关闭、状态机复位
+        set_vibration(0);
+        s_ui_fanqie_alarm_phase = 0;
     }
 
     gfx_refresh(global_state->gfx);
@@ -1815,17 +1877,21 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
 
     gfx_soft_clear(global_state->llgfx);
 
+    // 网格布局：上下留白与顶/底栏高度一致（当前 UI 字体行高 + 1）
+    const int32_t bar_height = gfx_font_line_height(global_state->ui_font) + 1;
+    UI_Grid_Layout grid = ui_grid_layout_make(global_state->llgfx->width, global_state->llgfx->height, bar_height, bar_height, 0, 0, 4, 4);
+
     for (int32_t row = 0; row < 4; row++) {
         for (int32_t col = 0; col < 4; col++) {
             int32_t bx = (col == 0) ? 1 : 0;
             int32_t by = (row == 0) ? 1 : 0;
-            gfx_draw_rectangle(global_state->llgfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, 37, 38, 41, 1);
-            gfx_draw_textline_centered(global_state->llgfx, cell_text[row][col][0], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, 255, 255, 255, 1);
-            gfx_draw_textline_centered(global_state->llgfx, cell_text[row][col][1], CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, txt_color[row][col][0], txt_color[row][col][1], txt_color[row][col][2], 1);
+            gfx_draw_rectangle(global_state->llgfx, ui_grid_cell_x0(&grid,col)+bx, ui_grid_cell_y0(&grid,row)+by, ui_grid_cell_width(&grid)-1-bx, ui_grid_cell_height(&grid)-1-by, 37, 38, 41, 1);
+            gfx_draw_textline_centered(global_state->llgfx, cell_text[row][col][0], ui_grid_cell_center_x(&grid,col), ui_grid_cell_center_y(&grid,row)-8, 255, 255, 255, 1);
+            gfx_draw_textline_centered(global_state->llgfx, cell_text[row][col][1], ui_grid_cell_center_x(&grid,col), ui_grid_cell_center_y(&grid,row)+10, txt_color[row][col][0], txt_color[row][col][1], txt_color[row][col][2], 1);
         }
     }
 
-    gfx_draw_textline_centered(global_state->llgfx, L"玲珑天象仪设置", global_state->llgfx->width/2, PADDING_TOP/2, 222, 222, 222, 1);
+    gfx_draw_textline_centered(global_state->llgfx, L"玲珑天象仪设置", global_state->llgfx->width/2, grid.padding_top/2, 222, 222, 222, 1);
 }
 
 
@@ -2440,13 +2506,16 @@ static void ui_app_setting_grid16_refresh_button(
 ) {
     int32_t bx = (col == 0) ? 1 : 0;
     int32_t by = (row == 0) ? 1 : 0;
-    gfx_draw_rectangle(global_state->gfx, CELL_X0(col,row)+bx, CELL_Y0(col,row)+by, CELL_WIDTH-1-bx, CELL_HEIGHT-1-by, cell_bg_R, cell_bg_G, cell_bg_B, cell_bg_mode);
+    // 网格布局：上下留白与顶/底栏高度一致（当前 UI 字体行高 + 1）
+    const int32_t bar_height = gfx_font_line_height(global_state->ui_font) + 1;
+    UI_Grid_Layout grid = ui_grid_layout_make(global_state->gfx->width, global_state->gfx->height, bar_height, bar_height, 0, 0, 4, 4);
+    gfx_draw_rectangle(global_state->gfx, ui_grid_cell_x0(&grid,col)+bx, ui_grid_cell_y0(&grid,row)+by, ui_grid_cell_width(&grid)-1-bx, ui_grid_cell_height(&grid)-1-by, cell_bg_R, cell_bg_G, cell_bg_B, cell_bg_mode);
     if (is_single_line) {
-        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_16, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row), cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_16, text0, ui_grid_cell_center_x(&grid,col), ui_grid_cell_center_y(&grid,row), cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
     }
     else {
-        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_16, text0, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)-8, cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
-        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text1, CELL_CENTER_X(col,row), CELL_CENTER_Y(col,row)+10, cell_text1_R, cell_text1_G, cell_text1_B, cell_text1_mode);
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text0, ui_grid_cell_center_x(&grid,col), ui_grid_cell_center_y(&grid,row)-8, cell_text0_R, cell_text0_G, cell_text0_B, cell_text0_mode);
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text1, ui_grid_cell_center_x(&grid,col), ui_grid_cell_center_y(&grid,row)+10, cell_text1_R, cell_text1_G, cell_text1_B, cell_text1_mode);
     }
 }
 
@@ -2514,7 +2583,6 @@ void ui_app_setting_grid16_draw(Key_Event *key_event, Global_State *global_state
 
     wchar_t brightness_str[32];
     swprintf(brightness_str, 32, L"%d%%", (global_state->brightness * 100) / 255);
-
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
         2, 0, L"屏幕亮度", brightness_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
     ui_app_setting_grid16_refresh_button(key_event, global_state, 1,
@@ -2524,8 +2592,11 @@ void ui_app_setting_grid16_draw(Key_Event *key_event, Global_State *global_state
         0, 1, L"经度", longitude_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
         1, 1, L"纬度", latitude_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+
+    wchar_t volume_str[32];
+    swprintf(volume_str, 32, L"%d%%", (global_state->volume * 100) / 255);
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
-        2, 1, L"音量", L"50%", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+        2, 1, L"音量", volume_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
         3, 1, L"IMU", L"开", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0x00, 1);
 
@@ -2541,8 +2612,16 @@ void ui_app_setting_grid16_draw(Key_Event *key_event, Global_State *global_state
         2, 2, L"ASR设置",
         (global_state->is_auto_submit_after_asr == 0) ? L"编辑后提交" : L"立刻提交",
         cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    wchar_t auto_shutdown_str[32];
+    if (global_state->auto_shutdown_minutes <= 0) {
+        wcscpy(auto_shutdown_str, L"关");
+    }
+    else {
+        swprintf(auto_shutdown_str, 32, L"%d分钟", (int)global_state->auto_shutdown_minutes);
+    }
+
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
-        3, 2, L"自动关机", L"关", cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0x00, 0x00, 1);
+        3, 2, L"自动关机", auto_shutdown_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0x00, 0x00, 1);
 
     ui_draw_header(key_event, global_state, L"系统设置", 1);
     ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
@@ -2607,9 +2686,16 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
             year_edit, month_edit, day_edit, hour_edit, minute_edit, timezone_edit, longitude_edit, latitude_edit);
         global_state->STATE = STATE_SETTING_INPUT;
     }
-    // 音量
+    // 音量（全局主音量：+16 步进；=256 钳位 255；>256 回绕 0 静音；影响按键音/寻呼机发射/音乐盒初始音量）
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_6) {
-        // TODO
+        global_state->volume += 16;
+        if (global_state->volume == 256) {
+            global_state->volume = 255; // 最高音量挡位
+        }
+        else if (global_state->volume > 256) {
+            global_state->volume = 0; // 回绕到静音
+        }
+        platform_set_master_volume((uint8_t)global_state->volume);
     }
     // LLM演示设置
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_7) {
@@ -2643,8 +2729,17 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_shift) {
         // TODO
     }
+    // 自动关机（关→1→2→3→5→10→20→30→60 分钟循环；设置即从当前时刻重新倒计时）
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_ctrl) {
-        // TODO
+        static const int32_t AUTO_SHUTDOWN_OPTIONS[] = {0, 1, 2, 3, 5, 10, 20, 30, 60};
+        int32_t idx = 0;
+        for (int32_t i = 0; i < (int32_t)(sizeof(AUTO_SHUTDOWN_OPTIONS) / sizeof(AUTO_SHUTDOWN_OPTIONS[0])); i++) {
+            if (AUTO_SHUTDOWN_OPTIONS[i] == global_state->auto_shutdown_minutes) { idx = i; break; }
+        }
+        idx = (idx + 1) % (int32_t)(sizeof(AUTO_SHUTDOWN_OPTIONS) / sizeof(AUTO_SHUTDOWN_OPTIONS[0]));
+        global_state->auto_shutdown_minutes = AUTO_SHUTDOWN_OPTIONS[idx];
+        global_state->auto_shutdown_deadline = (AUTO_SHUTDOWN_OPTIONS[idx] > 0)
+            ? global_state->timestamp + (uint64_t)AUTO_SHUTDOWN_OPTIONS[idx] * 60000ULL : 0;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_enter) {
         // TODO
@@ -3241,46 +3336,38 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         break;
 
     /////////////////////////////////////////////
-    // 文本显示状态
+    // 电子书：文件列表菜单
     /////////////////////////////////////////////
 
     case STATE_EBOOK:
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
-#ifdef TTS_ENABLED
-            reset_tts_split_status();
-#endif
-            wchar_t* content = read_file_to_wchar(LOG_FILE_PATH);
-            if (content) {
-                ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, content, 0, 1);
-                free(content);
-            }
-            else {
-                ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, L"文件不存在...", 0, 1);
-            }
-            ui_draw_header(key_event, global_state, L"文本阅读", 1);
+            // 统一为“页眉页脚先入帧缓冲、菜单绘制最后统一刷屏”，避免两阶段断续感
+            ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
             ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
-            ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
+            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
 
-#ifdef TTS_ENABLED
-        // TODO 应逐句发送请求，不要一次性请求
+        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, ui_ebook_menu_item_action, STATE_MAIN_MENU, STATE_EBOOK);
 
-        // 短按A键：停止TTS
-        if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_esc) {
-            stop_tts();
-        }
-        // 短按D键：请求TTS
-        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
-            for (int32_t i = 0; i < global_state->w_textarea_main->length; i++) {
-                send_tts_request(global_state->w_textarea_main->text + i, 0);
-            }
-        }
-#endif
+        break;
 
-        global_state->STATE = ui_widget_textarea_event_handler(key_event, global_state, global_state->w_textarea_main, STATE_MAIN_MENU, STATE_EBOOK);
+    /////////////////////////////////////////////
+    // 电子书：阅读
+    /////////////////////////////////////////////
+
+    case STATE_EBOOK_READING:
+
+        // 首次获得焦点：渲染当前页
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_ebook_reading_render(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 翻页/跳页/返回等按键处理（发生变化的按键内部自行触发重绘）
+        ui_ebook_reading_event_handler(key_event, global_state);
 
         break;
 
@@ -3316,14 +3403,13 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
-            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_model);
-            ui_draw_header(key_event, global_state, global_state->w_menu_model->title, 1);
+            ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
             ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
-            gfx_refresh(global_state->gfx);
+            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_model, model_menu_item_action, STATE_MAIN_MENU, STATE_MODEL_MENU);
+        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, model_menu_item_action, STATE_MAIN_MENU, STATE_MODEL_MENU);
 
         // 退出模型菜单回到主菜单时，释放LLM上下文（KV cache/分词器/采样器等常驻PSRAM）；
         // 再次进入时会经“选模型”流程（model_menu_item_action）重新建立
@@ -3331,6 +3417,26 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             llm_context_free(global_state->llm_ctx);
             global_state->llm_ctx = NULL;
         }
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 小游戏菜单
+    /////////////////////////////////////////////
+
+    case STATE_GAME_MENU:
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            // 统一为“页眉页脚先入帧缓冲、菜单绘制最后统一刷屏”，避免两阶段断续感
+            ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
+            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, game_menu_item_action, STATE_MAIN_MENU, STATE_GAME_MENU);
 
         break;
 
@@ -3744,6 +3850,52 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
 
     /////////////////////////////////////////////
+    // 黄金矿工
+    /////////////////////////////////////////////
+
+    case STATE_GOLDMINER: {
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_goldminer_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 按键处理（A返回 / D或2放钩）；返回主菜单则跳过一帧渲染
+        ui_goldminer_event_handler(key_event, global_state);
+        if (global_state->STATE != STATE_GOLDMINER) break;
+
+        // 逻辑更新 + 渲染一帧
+        ui_goldminer_render_frame(key_event, global_state);
+
+        break;
+    }
+
+
+    /////////////////////////////////////////////
+    // 俄罗斯方块
+    /////////////////////////////////////////////
+
+    case STATE_TETRIS: {
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_tetris_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 按键处理（A返回 / 移动旋转落底）；返回菜单则跳过一帧渲染
+        ui_tetris_event_handler(key_event, global_state);
+        if (global_state->STATE != STATE_TETRIS) break;
+
+        // 重力更新 + 渲染一帧
+        ui_tetris_render_frame(key_event, global_state);
+
+        break;
+    }
+
+
+    /////////////////////////////////////////////
     // 计步器（时域峰值计数 + 频域周期性校验）
     /////////////////////////////////////////////
 
@@ -3793,6 +3945,158 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         break;
     }
+
+
+    /////////////////////////////////////////////
+    // 寻呼机（OFDM 声波数传）：模式菜单（发射/接收，同一时刻仅一种模式）
+    /////////////////////////////////////////////
+
+    case STATE_OFDM_MENU:
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            // 统一为“页眉页脚先入帧缓冲、菜单绘制最后统一刷屏”，避免两阶段断续感
+            ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
+            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, ui_ofdm_menu_item_action, STATE_MAIN_MENU, STATE_OFDM_MENU);
+
+        // 退出寻呼机模块（回主菜单）：释放 modem 码表（PSRAM）
+        if (global_state->STATE == STATE_MAIN_MENU) {
+            ui_ofdm_menu_on_exit();
+        }
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 寻呼机：发射文本输入（复用全局单例输入控件，D 提交进入发射态）
+    /////////////////////////////////////////////
+
+    case STATE_OFDM_TX:
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_ofdm_tx_on_enter(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_ofdm_tx_event(key_event, global_state);
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 寻呼机：发射中（OFDM 音频经扬声器多通道循环播放，直到手动停止）
+    /////////////////////////////////////////////
+
+    case STATE_OFDM_TXING:
+
+        // 首次获得焦点：调制并启动循环播放
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_ofdm_txing_on_enter(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_ofdm_txing_event(key_event, global_state);
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 寻呼机：接收中（硅麦采集 → OFDM 解调 → 文本滚动显示）
+    /////////////////////////////////////////////
+
+    case STATE_OFDM_RX:
+
+        // 首次获得焦点：接管麦克风并创建接收机
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_ofdm_rx_on_enter(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_ofdm_rx_event(key_event, global_state);
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 寻呼机：软件环路自测文本输入（复用全局单例输入控件，D 提交进入环回态）
+    /////////////////////////////////////////////
+
+    case STATE_OFDM_LOOP:
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_ofdm_loop_on_enter(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_ofdm_loop_event(key_event, global_state);
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 寻呼机：软件环路自测中（发射机逐帧渲染 → 直接喂本机接收机，不出声）
+    /////////////////////////////////////////////
+
+    case STATE_OFDM_LOOPING:
+
+        // 首次获得焦点：创建收发机并启动环回
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_ofdm_looping_on_enter(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_ofdm_looping_event(key_event, global_state);
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 音乐盒：文件列表（SD 卡根目录 WAV/MP3，复用全局单例菜单控件）
+    /////////////////////////////////////////////
+
+    case STATE_MUSICBOX_MENU:
+
+        // 首次获得焦点：初始化（从主菜单进入时列表已由 ui_musicbox_menu_init 构建；
+        // 从播放态返回时列表保留，仅重绘）
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
+            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, ui_musicbox_menu_item_action, STATE_MAIN_MENU, STATE_MUSICBOX_MENU);
+
+        // 退出音乐盒模块（回主菜单）：释放文件列表（PSRAM）
+        if (global_state->STATE == STATE_MAIN_MENU) {
+            ui_musicbox_menu_on_exit();
+        }
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 音乐盒：播放中（解码 → 扬声器流式播放；D 暂停/恢复，←→ 音量，4/6 切曲，A 返回）
+    /////////////////////////////////////////////
+
+    case STATE_MUSICBOX_PLAYING:
+
+        // 首次获得焦点：分配资源、打开解码器并启动播放
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_musicbox_playing_on_enter(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_musicbox_playing_event(key_event, global_state);
+
+        break;
 
 
     /////////////////////////////////////////////
@@ -4129,7 +4433,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             global_state->ui_font = GFX_FONT_ALPHA_12;
             ui_widget_input_init(key_event, global_state, global_state->w_input_main, L"电子核桃控制台");
             // 提示符
-            wcscat(global_state->w_input_main->textarea.text, L"灵机计算引擎 V2607 | M5Core2(ESP32)\n(c) 2018-2026 BD4SUR\n向上滑动或Ctrl+0呼出软键盘\n");
+            wcscat(global_state->w_input_main->textarea.text, UI_ANIMAC_STARTUP_MESSAGE);
             wcscat(global_state->w_input_main->textarea.text, L"> ");
             // 刷新input控件，使光标到最后
             ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
@@ -4137,12 +4441,12 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         // NOTE 临时调试代码（后续删除）：初始化REPL前打印当前内存使用情况
-        printf("[Animac] DRAM Free: %u | Largest: %u | PSRAM Free: %u | DMA Free: %u/%u\n",
-            heap_caps_get_free_size(MALLOC_CAP_8BIT),
-            heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-            heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-            heap_caps_get_free_size(MALLOC_CAP_DMA),
-            heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+        // printf("[Animac] DRAM Free: %u | Largest: %u | PSRAM Free: %u | DMA Free: %u/%u\n",
+        //     heap_caps_get_free_size(MALLOC_CAP_8BIT),
+        //     heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+        //     heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+        //     heap_caps_get_free_size(MALLOC_CAP_DMA),
+        //     heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
 
         ui_animac_init(key_event, global_state);
 
@@ -4162,8 +4466,15 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         if (global_state->PREV_STATE != global_state->STATE) {
             ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
             s_animac_console_text_len = wcslen(global_state->w_input_main->textarea.text);
+            // .load 指令载入的内容注入到提示符之后的输入区
+            if (ui_animac_apply_pending_input(global_state, &s_animac_console_text_len)) {
+                ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
+            }
         }
         global_state->PREV_STATE = global_state->STATE;
+
+        // 编辑器模式：驱动解释器事件循环（定时器等异步任务），并将其输出行搬入控制台
+        ui_animac_idle_pump(key_event, global_state, &s_animac_console_text_len);
 
         // 上滑手势：请求切换软键盘显隐（Core1手势识别，见 get_key_event）
         if (ui_softkbd_take_toggle_request()) {
@@ -4178,7 +4489,33 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             break;
         }
 
-        global_state->STATE = ui_widget_input_event_handler(key_event, global_state, global_state->w_input_main, STATE_MAIN_MENU, STATE_ANIMAC_CONSOLE, STATE_ANIMAC_RUNNING);
+        // Ctrl+V（触屏软键盘）：恢复上次提交的输入内容到输入区
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->is_softkbd == 1
+            && global_state->is_ctrl_enabled == 1
+            && (key_event->key_code == NANO_KEY_v || key_event->key_code == NANO_KEY_V)) {
+            global_state->is_ctrl_enabled = 0;
+            ui_animac_restore_last_input(key_event, global_state, s_animac_console_text_len);
+            break;
+        }
+
+        // Animac控制台交互：Enter换行、Ctrl+Enter提交执行（与通用输入框的语义相反，
+        // 故在此拦截Enter键，不交给 ui_widget_input_event_handler 的原生Enter分支）
+        if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
+            if (global_state->is_ctrl_enabled == 1) {
+                // Ctrl+Enter：提交执行
+                global_state->is_ctrl_enabled = 0;
+                global_state->w_input_main->state = 0;
+                global_state->STATE = STATE_ANIMAC_RUNNING;
+            }
+            else {
+                // Enter：插入换行
+                insert_char(global_state->w_input_main, L'\n');
+                ui_draw_input_buffer(key_event, global_state, global_state->w_input_main);
+            }
+        }
+        else {
+            global_state->STATE = ui_widget_input_event_handler(key_event, global_state, global_state->w_input_main, STATE_MAIN_MENU, STATE_ANIMAC_CONSOLE, STATE_ANIMAC_RUNNING);
+        }
 
         // 离开控制台时关闭软键盘恢复布局，并销毁解释器上下文释放内存（约2MB PSRAM）
         if (global_state->STATE != STATE_ANIMAC_CONSOLE && global_state->STATE != STATE_ANIMAC_RUNNING) {
@@ -4217,7 +4554,10 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         if (!new_input) new_input = (wchar_t*)platform_calloc(UI_STR_BUF_MAX_LENGTH, sizeof(wchar_t));
         wcscpy(new_input, &console_text[s_animac_console_text_len]);
 
-        ui_animac_exec(key_event, global_state, new_input, console_text);
+        // 记录本次提交的输入，供 Ctrl+V 恢复
+        ui_animac_save_last_input(new_input);
+
+        ui_animac_exec(key_event, global_state, new_input, console_text, &s_animac_console_text_len);
 
         ui_animac_console_append(console_text, L"> ");
         ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
@@ -4266,6 +4606,14 @@ int32_t main_periodic_task(Key_Event *key_event, Global_State *global_state) {
     // 逻辑时间戳
     global_state->timer = (global_state->timer == 2147483647) ? 0 : (global_state->timer + 1);
 
+    // 自动关机：倒计时到期即优雅关机（关机失败则取消本次设置，避免反复触发）
+    if (global_state->auto_shutdown_deadline != 0 &&
+        global_state->timestamp >= global_state->auto_shutdown_deadline) {
+        graceful_shutdown();
+        global_state->auto_shutdown_deadline = 0;
+        global_state->auto_shutdown_minutes = 0;
+    }
+
     return 0;
 }
 
@@ -4285,7 +4633,7 @@ int32_t main_deinit(Key_Event *key_event, Global_State *global_state) {
 
     free(global_state->w_input_main);
 
-    free(global_state->w_menu_model);
+    free(global_state->w_menu_main);
 
 #ifdef MATMUL_PTHREAD
     matmul_pthread_cleanup();

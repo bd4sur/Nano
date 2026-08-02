@@ -33,7 +33,43 @@ $(BIN_DIR)/nano_pod: main.c asr.c tts.c imu10.c ups_rpi5.c mic_linux.c platform_
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty
-$(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) main.c imu_linux.c mic_linux.c platform_linux.c display_ncurses.c touch_linux.c input_device_ncurses.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
+                        main.c \
+                        audio_out_linux.c \
+                        imu_linux.c \
+                        mic_linux.c \
+                        platform_linux.c \
+                        display_ncurses.c \
+                        touch_linux.c \
+                        input_device_ncurses.c \
+                        vsop87c_milli.c \
+                        celestial.c \
+                        ephemeris.c \
+                        nongli.c \
+                        flip.c \
+                        nano_fft.c \
+                        ofdm_modem.c \
+                        graphics.c \
+                        gfx_font_12.c \
+                        gfx_font_16.c \
+                        pinyin_ime.c \
+                        ui.c \
+                        ui_app.c \
+                        ui_ebook.c \
+                        ui_goldminer.c \
+                        ui_icon.c \
+                        ui_musicbox_mp3.c \
+                        ui_musicbox.c \
+                        ui_ofdm.c \
+                        ui_pedometer.c \
+                        ui_pinyin_ime.c \
+                        ui_softkbd.c \
+                        ui_spectrogram.c \
+                        ui_tetris.c \
+                        utils.c \
+                        tokenizer.c \
+                        tensor.c \
+                        infer.c | $(BIN_DIR)
 	$(CC) -DNANO_TTY $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lncursesw
 
 # Nano-CLI：适用于文字终端命令交互的终端程序

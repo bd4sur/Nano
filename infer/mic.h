@@ -14,7 +14,8 @@ extern "C" {
 // 在其间切换（进入采集时关闭扬声器，结束时恢复）。
 
 // 初始化麦克风（配置I2S采集通道；会关闭扬声器）
-int32_t mic_init();
+//   sample_rate ：采样率（Hz），如 44100（频谱仪）/ 48000（OFDM 寻呼机）
+int32_t mic_init(uint32_t sample_rate);
 
 // 读取一帧音频采样（阻塞至数据就绪或超时）
 //   buffer  ：输出缓冲（int16 采样，有符号16bit）

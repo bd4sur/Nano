@@ -3,6 +3,7 @@
 #include "ui_spectrogram.h"
 #include "mic.h"
 #include "nano_fft.h"
+#include "input_device.h"
 
 // ===============================================================================
 // 音频频谱仪实现
@@ -18,6 +19,18 @@
 #define SP_PLOT_X0    (26)    // 左侧时间轴区宽度（px）
 #define SP_AXIS_TOP_H (14)    // 顶部频率轴区高度（px）
 
+// 基准电平与动态范围调节（映射域 0..255：v_raw = log10(mag+1)*80）
+//   v = (v_raw - 基准电平) * 255 / 动态范围，低于基准的信号映射为黑
+//   ←/→：降低/升高基准电平；4/6：减小/增大动态范围（默认值与原行为等价）
+#define SP_LEVEL_BASE_DEFAULT  (240.0f)
+#define SP_LEVEL_BASE_STEP     (8.0f)
+#define SP_LEVEL_BASE_MAX      (240.0f)
+#define SP_LEVEL_RANGE_DEFAULT (300.0f)
+#define SP_LEVEL_RANGE_STEP    (16.0f)
+#define SP_LEVEL_RANGE_MIN     (32.0f)
+#define SP_LEVEL_RANGE_MAX     (512.0f)
+#define SP_ADJUST_OVERLAY_MS   (1500)  // 调节后数值叠加显示时长（ms）
+
 // 工作区指针（进入频谱仪时分配于PSRAM、退出时释放；避免约18.5KB常驻内部DRAM，
 // 否则挤占DMA域连续块，导致启动时帧缓冲分配失败）
 static float    *s_window = NULL;     // Hann窗
@@ -30,6 +43,9 @@ static int16_t  *s_mic_buf = NULL;
 static uint8_t  s_inited = 0;
 static uint64_t s_last_ts = 0;        // 上一帧时间戳（用于实测帧率）
 static float    s_frame_interval_ema = 23.2f; // 帧间隔指数滑动平均（ms），初值=1024/44100s
+static float    s_level_base = SP_LEVEL_BASE_DEFAULT;   // 基准电平（映射域下限）
+static float    s_level_range = SP_LEVEL_RANGE_DEFAULT; // 动态范围（映射域宽度）
+static uint64_t s_adjust_ts = 0;      // 最近一次调节时间戳（叠加显示用）
 
 // 分配全部工作区（可重入：已分配则复用）
 static int32_t sp_alloc_buffers() {
@@ -123,17 +139,46 @@ int32_t ui_spectrogram_init(Key_Event *key_event, Global_State *global_state) {
 
     s_inited = 1;
 
+    // 每次进入复位为默认基准电平/动态范围
+    s_level_base = SP_LEVEL_BASE_DEFAULT;
+    s_level_range = SP_LEVEL_RANGE_DEFAULT;
+    s_adjust_ts = 0;
+
     // 清屏，从全黑开始滚动
     gfx_soft_clear(global_state->gfx);
     gfx_refresh(global_state->gfx);
 
-    return mic_init();
+    return mic_init(SP_SAMPLE_RATE);
 }
 
 int32_t ui_spectrogram_render_frame(Key_Event *key_event, Global_State *global_state) {
     if (!s_inited) return -1;
 
     Nano_GFX *gfx = global_state->gfx;
+
+    // 按键调节（下降沿）：←/→ 降低/升高基准电平，4/6 减小/增大动态范围
+    if (key_event->key_edge < 0) {
+        if (key_event->key_code == NANO_KEY_left) {
+            s_level_base -= SP_LEVEL_BASE_STEP;
+            if (s_level_base < 0.0f) s_level_base = 0.0f;
+            s_adjust_ts = global_state->timestamp;
+        }
+        else if (key_event->key_code == NANO_KEY_right) {
+            s_level_base += SP_LEVEL_BASE_STEP;
+            if (s_level_base > SP_LEVEL_BASE_MAX) s_level_base = SP_LEVEL_BASE_MAX;
+            s_adjust_ts = global_state->timestamp;
+        }
+        else if (key_event->key_code == NANO_KEY_4) {
+            s_level_range -= SP_LEVEL_RANGE_STEP;
+            if (s_level_range < SP_LEVEL_RANGE_MIN) s_level_range = SP_LEVEL_RANGE_MIN;
+            s_adjust_ts = global_state->timestamp;
+        }
+        else if (key_event->key_code == NANO_KEY_6) {
+            s_level_range += SP_LEVEL_RANGE_STEP;
+            if (s_level_range > SP_LEVEL_RANGE_MAX) s_level_range = SP_LEVEL_RANGE_MAX;
+            s_adjust_ts = global_state->timestamp;
+        }
+    }
 
     // 读取一帧音频（阻塞至数据就绪）
     int32_t n = mic_read(s_mic_buf, SP_FFT_SIZE);
@@ -153,11 +198,13 @@ int32_t ui_spectrogram_render_frame(Key_Event *key_event, Global_State *global_s
     gfx_scroll_up(gfx, SP_ROW_H);
 
     // 将前 SP_BINS 个频点（跳过直流分量，从 bin 1 开始）按对数幅度绘制为新行
+    // 映射：v = (log10(mag+1)*80 - 基准电平) * 255 / 动态范围（←/→ 调基准，4/6 调范围）
     for (int32_t x = 0; x < SP_BINS; x++) {
         float re = s_fft_re[x + 1];
         float im = s_fft_im[x + 1];
         float mag = sqrtf(re * re + im * im);
-        int32_t v = (int32_t)(log10f(mag + 1.0f) * SP_LOG_SCALE);
+        float v_raw = log10f(mag + 1.0f) * SP_LOG_SCALE;
+        int32_t v = (int32_t)((v_raw - s_level_base) * 255.0f / s_level_range);
         if (v > 255) v = 255;
         if (v < 0)   v = 0;
         gfx_fill_rect_rgb565(gfx, SP_PLOT_X0 + x, gfx->height - SP_ROW_H, 1, SP_ROW_H, s_palette[v]);
@@ -165,6 +212,14 @@ int32_t ui_spectrogram_render_frame(Key_Event *key_event, Global_State *global_s
 
     // 绘制坐标轴（覆盖在滚动后的内容上，每帧重绘）
     sp_draw_axes(global_state);
+
+    // 调节后限时叠加显示当前基准电平/动态范围（位于绘图区，随声谱图自然上滚消失）
+    if (s_adjust_ts && global_state->timestamp - s_adjust_ts < SP_ADJUST_OVERLAY_MS) {
+        wchar_t info[32];
+        swprintf(info, 32, L"基准 %d  范围 %d", (int)s_level_base, (int)s_level_range);
+        gfx_draw_rectangle(gfx, SP_PLOT_X0 + 4, SP_AXIS_TOP_H + 4, 140, 16, 0, 0, 0, 1);
+        gfx_font_draw_text(gfx, GFX_FONT_BITMAP_12, info, SP_PLOT_X0 + 8, SP_AXIS_TOP_H + 6, 255, 255, 128, 1);
+    }
 
     gfx_refresh(gfx);
 

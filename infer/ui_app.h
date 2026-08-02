@@ -36,6 +36,18 @@ extern "C" {
 #define STATE_ANIMAC_CONSOLE    (51)
 #define STATE_ANIMAC_RUNNING    (52)
 #define STATE_SPECTROGRAM       (53)
+#define STATE_GAME_MENU         (54)
+#define STATE_GOLDMINER         (55)
+#define STATE_TETRIS            (56)
+#define STATE_EBOOK_READING     (57)
+#define STATE_OFDM_MENU         (58)
+#define STATE_OFDM_TX           (59)
+#define STATE_OFDM_RX           (60)
+#define STATE_OFDM_TXING        (61)
+#define STATE_OFDM_LOOP         (62)
+#define STATE_OFDM_LOOPING      (63)
+#define STATE_MUSICBOX_MENU     (64)
+#define STATE_MUSICBOX_PLAYING  (65)
 #define STATE_SHUTDOWN          (99)
 
 
@@ -71,6 +83,13 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state);
 int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state);
 void init_model_menu(Key_Event *key_event, Global_State *global_state);
 int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
+
+// ===============================================================================
+// 小游戏菜单
+// ===============================================================================
+
+void init_game_menu(Key_Event *key_event, Global_State *global_state);
+int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
 
 // ===============================================================================
 // 主菜单

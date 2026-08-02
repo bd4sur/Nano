@@ -779,18 +779,18 @@ uint32_t _mbstowcs(wchar_t *dest, const char *src, uint32_t length) {
         } else {
             goto invalid;
         }
+        continue;
+
+invalid:
+        // 无效 UTF-8 序列：替换为 '?' 并跳过一个字节继续（不终止整串，
+        // 避免单个坏字节截断后续全部内容——OFDM 含噪净荷等场景必需）
+        if (dest) *out++ = (wchar_t)'?';
+        else out++;
     }
 
     // 正常结束：添加 null 终止符
     *out = (wchar_t)0;
     return (uint32_t)(out - dest);
-
-invalid:
-    // 遇到无效 UTF-8：用 '?' 替代并终止
-    if (dest) *out++ = (wchar_t)'?';
-    else out++;
-    if (dest) *out = (wchar_t)0;  // 仍然保证 null-terminated
-    return (uint32_t)(out - dest); // 返回包含 '?' 的字符数
 }
 
 
