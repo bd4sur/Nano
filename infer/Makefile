@@ -6,12 +6,14 @@ ANIMAC_INC  := $(ANIMAC_DIR)
 ANIMAC_SRCS := $(wildcard $(ANIMAC_DIR)/*.c)
 ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c, $(wildcard $(ANIMAC_DIR)/*.c))
 
+# 音频HAL（audio_out_linux.c / mic_linux.c）依赖 ALSA（libasound2-dev）
+# 任务抽象（platform_linux.c）依赖 pthread
 ifeq ($(IS_RASPBERRY_PI),yes)
-    CCFLAGS = -O3 -march=native -ffast-math -Wall
-    LDFLAGS = -lm
+    CCFLAGS = -O3 -march=native -ffast-math -Wall -pthread
+    LDFLAGS = -lm -pthread
 else
-    CCFLAGS = -O3 -march=native -ffast-math -Wall -fopenmp -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
-    LDFLAGS = -lm -fopenmp
+    CCFLAGS = -O3 -march=native -ffast-math -Wall -fopenmp -pthread -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
+    LDFLAGS = -lm -fopenmp -pthread
 endif
 
 BIN_DIR := bin
@@ -24,12 +26,12 @@ $(BIN_DIR):
 # Nano-Pod-Lite：带键盘和单色I2C屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z/MARGA）
 pod_lite: $(BIN_DIR)/nano_pod_lite
 $(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c ups_rpi5.c mic_linux.c platform_linux.c display_ssd130x_linux.c touch_linux.c input_device_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
-	$(CC) -DNANO_POD_LITE_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+	$(CC) -DNANO_POD_LITE_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
 
 # Nano-Pod：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z）
 pod: $(BIN_DIR)/nano_pod
 $(BIN_DIR)/nano_pod: main.c asr.c tts.c imu10.c ups_rpi5.c mic_linux.c platform_linux.c display_ili9341.c touch_linux.c input_device_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
-	$(CC) -DNANO_POD_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+	$(CC) -DNANO_POD_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty
@@ -70,7 +72,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         tokenizer.c \
                         tensor.c \
                         infer.c | $(BIN_DIR)
-	$(CC) -DNANO_TTY $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lncursesw
+	$(CC) -DNANO_TTY $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lncursesw -lasound
 
 # Nano-CLI：适用于文字终端命令交互的终端程序
 cli: $(BIN_DIR)/nano_cli

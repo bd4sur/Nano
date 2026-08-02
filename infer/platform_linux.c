@@ -1,11 +1,31 @@
+// Linux 平台抽象层实现（PC / 树莓派等普通 Linux 系统）。
+//
+// 依赖：
+//   - pthread（任务抽象基于 pthread 实现，编译/链接需加 -pthread）
+//   - 其余均为 glibc / POSIX 标准接口，无额外第三方依赖。
+//
+// 路径语义说明：与 ESP32（SD 卡根目录 "/"）不同，本实现将路径按原样
+// 传递给宿主文件系统，即 "/" 指真实的文件系统根目录。电子书/音乐盒等
+// 以 "/" 为根枚举文件的应用，将枚举真实根目录下的文件。
+
+#define _GNU_SOURCE // pthread_setaffinity_np / CPU_ZERO / CPU_SET / timegm
+
 #include "platform.h"
 
 #include <unistd.h>
 #include <time.h>
 #include <signal.h>
 #include <locale.h>
+#include <dirent.h>
+#include <limits.h> // PTHREAD_STACK_MIN
+#include <pthread.h>
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
 #include <errno.h>
+
+#ifdef __linux__
+#include <sched.h> // CPU_ZERO / CPU_SET / pthread_setaffinity_np
+#endif
 
 void sleep_in_ms(uint32_t ms) {
     usleep(ms * 1000);
@@ -189,16 +209,68 @@ wchar_t* read_file_to_wchar(char* filename) {
     return wstr; // 调用者负责 free()
 }
 
+// 设置系统时间（入参为 UTC；对齐 ESP32 M5.Rtc.setDateTime 语义）。
+// 需要 root 或 CAP_SYS_TIME 权限，非特权用户调用时静默失败。
 void set_sys_time(int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second) {
-    return;
+    struct tm t;
+    memset(&t, 0, sizeof(t));
+    t.tm_year = year - 1900;
+    t.tm_mon  = month - 1;
+    t.tm_mday = day;
+    t.tm_hour = hour;
+    t.tm_min  = minute;
+    t.tm_sec  = second;
+
+    time_t sec = timegm(&t); // 按 UTC 解释
+    if (sec == (time_t)-1) return;
+
+    struct timespec ts;
+    ts.tv_sec  = sec;
+    ts.tv_nsec = 0;
+    (void)clock_settime(CLOCK_REALTIME, &ts); // EPERM 时忽略
 }
 
+// Linux 使用宿主原生文件系统，无需初始化
 int32_t fs_init() {
     return 0;
 }
 
+// 枚举目录下的文件名（不含路径，不含 "." / ".."）。
+//   dir       ：目录路径
+//   filenames ：为 NULL 时仅返回条目数量；
+//               非 NULL 时逐个 platform_malloc 填充文件名（调用方负责 free）。
+// 返回值：>=0 条目数量；-1 目录打开失败；-2 内存分配失败（已填充项回滚释放）。
 int32_t list_files(const char *dir, char **filenames) {
-    return 0;
+    if (!dir) return -1;
+
+    DIR *dp = opendir(dir);
+    if (!dp) return -1;
+
+    int32_t count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dp)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (filenames) {
+            size_t len = strlen(entry->d_name);
+            char *name = (char *)platform_malloc(len + 1);
+            if (!name) { // 分配失败：回滚已填充项
+                for (int32_t i = 0; i < count; i++) {
+                    free(filenames[i]);
+                    filenames[i] = NULL;
+                }
+                closedir(dp);
+                return -2;
+            }
+            memcpy(name, entry->d_name, len + 1);
+            filenames[count] = name;
+        }
+        count++;
+    }
+
+    closedir(dp);
+    return count;
 }
 
 int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, size_t *size) {
@@ -243,32 +315,62 @@ int32_t platform_read_file_to_buffer(const char *filepath, uint8_t **buffer, siz
 }
 
 
+// 将缓冲写入文件（不存在则创建，存在则截断）；成功 0，失败 -1
 int32_t platform_write_buffer_to_file(const char *filepath, const uint8_t *buffer, size_t size) {
-    return 0;
+    if (!filepath || (!buffer && size > 0)) return -1;
+
+    FILE *fp = fopen(filepath, "wb");
+    if (!fp) return -1;
+
+    size_t written = (size > 0) ? fwrite(buffer, 1, size, fp) : 0;
+    fclose(fp);
+
+    return (written == size) ? 0 : -1;
 }
 
+// 判断路径是否为目录：1 是；0 否或 stat 失败
 int32_t platform_is_directory(const char *path) {
-    return 0;
+    if (!path) return 0;
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return S_ISDIR(st.st_mode) ? 1 : 0;
 }
+
+// ---------------- 随机访问文件读取（全局单句柄，与 ESP32 SD File 语义一致） ----------------
+
+static FILE *s_platform_file = NULL;
 
 int32_t platform_file_open(const char *filepath) {
-    return 0;
+    if (!filepath) return -1;
+    platform_file_close(); // 同一时刻仅允许一个打开文件：先关闭旧句柄
+    s_platform_file = fopen(filepath, "rb");
+    return s_platform_file ? 0 : -1;
 }
 
 uint32_t platform_file_size(void) {
-    return 0;
+    if (!s_platform_file) return 0;
+    long cur = ftell(s_platform_file);
+    if (fseek(s_platform_file, 0, SEEK_END) != 0) return 0;
+    long size = ftell(s_platform_file);
+    if (cur >= 0) fseek(s_platform_file, cur, SEEK_SET); // 恢复原读写位置
+    return (size > 0) ? (uint32_t)size : 0;
 }
 
 int32_t platform_file_seek(uint32_t offset) {
-    return 0;
+    if (!s_platform_file) return -1;
+    return (fseek(s_platform_file, (long)offset, SEEK_SET) == 0) ? 0 : -1;
 }
 
 int32_t platform_file_read(uint8_t *buffer, size_t size) {
-    return 0;
+    if (!s_platform_file || !buffer) return -1;
+    return (int32_t)fread(buffer, 1, size, s_platform_file); // 返回实际读取字节数
 }
 
 void platform_file_close(void) {
-    return;
+    if (s_platform_file) {
+        fclose(s_platform_file);
+        s_platform_file = NULL;
+    }
 }
 
 
@@ -307,20 +409,37 @@ void *platform_realloc_internal(void *ptr, size_t n) {
     return realloc(ptr, n);
 }
 
+// Linux 上 malloc 直接由内核按需分配虚拟内存，无 ESP32 的堆碎片化问题；
+// 此处以 sysinfo 报告的可用物理内存作为近似值。注意：返回值不可为 0，
+// ui_animac.h 会依据 largest_free_block 是否超过 512K+64K 决定是否允许
+// 创建编辑器内存池。
+
+#define PLATFORM_HEAP_FALLBACK_BYTES (512u * 1024u * 1024u) // sysinfo 失败时的兜底值
+
+static uint32_t platform_sys_free_bytes(void) {
+    struct sysinfo info;
+    if (sysinfo(&info) != 0) return PLATFORM_HEAP_FALLBACK_BYTES;
+    uint64_t free_bytes = (uint64_t)info.freeram * (uint64_t)info.mem_unit;
+    if (free_bytes > UINT32_MAX) free_bytes = UINT32_MAX;
+    return (uint32_t)free_bytes;
+}
+
 uint32_t platform_get_free_heap_size() {
-    return 0;
+    return platform_sys_free_bytes();
 }
 
 uint32_t platform_get_largest_free_block() {
-    return 0;
+    // 虚拟内存下最大连续可分配块约等于可用内存
+    return platform_sys_free_bytes();
 }
 
+// Linux 不区分 PSRAM / 内部 RAM，_internal 变体与外部一致
 uint32_t platform_get_free_heap_size_internal() {
-    return 0;
+    return platform_sys_free_bytes();
 }
 
 uint32_t platform_get_largest_free_block_internal() {
-    return 0;
+    return platform_sys_free_bytes();
 }
 
 
@@ -328,24 +447,89 @@ uint32_t platform_get_largest_free_block_internal() {
 
 
 
-// ---------------- 任务抽象（FreeRTOS 实现） ----------------
+// ---------------- 任务抽象（pthread 实现，对应 ESP32 的 FreeRTOS） ----------------
+//
+// 说明：
+// - 任务以 DETACHED 状态创建，入口函数返回即自动回收（业务代码约定入口
+//   返回前调用 platform_task_delete_self，见 ui_ofdm.c）；
+// - stack_bytes 语义与 xTaskCreate 一致（字节数），小于 PTHREAD_STACK_MIN
+//   时提升到下限；
+// - core >= 0 时尝试绑核（pthread_setaffinity_np），失败不视为错误；
+// - priority 在 Linux 上无法在无特权情况下映射为实时调度优先级，故忽略；
+// - 句柄直接承载 pthread_t 值（glibc 下为指针宽度整数）。
+
+typedef struct {
+    platform_task_func_t func;
+    void *arg;
+} Platform_Task_Bootstrap;
+
+static void *platform_task_trampoline(void *p) {
+    Platform_Task_Bootstrap *bootstrap = (Platform_Task_Bootstrap *)p;
+    platform_task_func_t func = bootstrap->func;
+    void *arg = bootstrap->arg;
+    free(bootstrap);
+    func(arg); // 业务约定：函数末尾调用 platform_task_delete_self()，不会返回
+    return NULL;
+}
 
 int32_t platform_task_create(platform_task_func_t func, const char *name,
                              uint32_t stack_bytes, void *arg, int32_t priority,
                              int32_t core, platform_task_handle_t *out_handle) {
+    (void)name;     // pthread 无需任务名
+    (void)priority; // 无特权下无法设置实时优先级，忽略
+    if (!func) return -1;
+
+    Platform_Task_Bootstrap *bootstrap =
+        (Platform_Task_Bootstrap *)calloc(1, sizeof(Platform_Task_Bootstrap));
+    if (!bootstrap) return -1;
+    bootstrap->func = func;
+    bootstrap->arg  = arg;
+
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (stack_bytes >= (uint32_t)PTHREAD_STACK_MIN) {
+        pthread_attr_setstacksize(&attr, (size_t)stack_bytes);
+    }
+
+    pthread_t tid;
+    int err = pthread_create(&tid, &attr, platform_task_trampoline, bootstrap);
+    pthread_attr_destroy(&attr);
+    if (err != 0) {
+        free(bootstrap);
+        return -1;
+    }
+
+#ifdef __linux__
+    if (core >= 0) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(core, &cpuset);
+        (void)pthread_setaffinity_np(tid, sizeof(cpuset), &cpuset); // 失败忽略
+    }
+#else
+    (void)core;
+#endif
+
+    if (out_handle) {
+        *out_handle = (platform_task_handle_t)tid;
+    }
     return 0;
 }
 
+// 任务入口返回前必须调用（不返回）
 void platform_task_delete_self(void) {
-    return;
+    pthread_exit(NULL);
 }
 
+// 强制删除任务（清理兜底；对应 vTaskDelete）
 void platform_task_delete(platform_task_handle_t handle) {
-    return;
+    if (!handle) return;
+    pthread_cancel((pthread_t)handle);
 }
 
 void platform_task_delay_ms(uint32_t ms) {
-    return;
+    usleep(ms * 1000);
 }
 
 
@@ -354,15 +538,20 @@ void platform_task_delay_ms(uint32_t ms) {
 
 
 
+// 普通 Linux 平台无振动马达，空操作
 void set_vibration(uint32_t level) {
-    return;
+    (void)level;
 }
+
+// 主音量（0~255）：与 ui_app.c 中 global_state->volume 初值一致的默认值。
+// 进程内静态保存；实际出声增益由 audio_out_linux.c 在 init/set_volume 时应用。
+static uint8_t s_master_volume = 16;
 
 void platform_set_master_volume(uint8_t volume) {
-    return;
+    s_master_volume = volume;
 }
 
 uint8_t platform_get_master_volume(void) {
-    return 0;
+    return s_master_volume;
 }
 
