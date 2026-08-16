@@ -45,6 +45,7 @@
 #include "ui_tsp.h"
 
 #include "ui_cloud.h"
+#include "ui_nanochat.h"
 #include "ephemeris.h"
 #include "celestial.h"
 #include "nongli.h"
@@ -638,10 +639,11 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
         L"水池",
         L"体积云",
         L"日历",
+        L"小鹦鹉笼",
     };
     global_state->w_menu_main->title = L"小游戏";
     global_state->w_menu_main->items = game_menu_items;
-    global_state->w_menu_main->item_num = 11;
+    global_state->w_menu_main->item_num = 12;
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
 }
 
@@ -658,6 +660,7 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
         case 8: return STATE_WATER;
         case 9: return STATE_CLOUD;
         case 10: return STATE_CALENDAR;
+        case 11: return STATE_NMCHAT_MODEL_MENU;
         default: return STATE_MAIN_MENU;
     }
 }
@@ -3566,6 +3569,20 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, game_menu_item_action, STATE_MAIN_MENU, STATE_GAME_MENU);
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 小鹦鹉笼（基于 nano_min 极小内存引擎的 LLM 对话，实现在 ui_nanochat.c）
+    /////////////////////////////////////////////
+
+    case STATE_NMCHAT_MODEL_MENU:
+    case STATE_NMCHAT_INPUT:
+    case STATE_NMCHAT_ON_INFER:
+    case STATE_NMCHAT_AFTER_INFER:
+
+        global_state->STATE = ui_nanochat_event_handler(key_event, global_state);
 
         break;
 

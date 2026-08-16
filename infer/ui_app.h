@@ -55,6 +55,10 @@ extern "C" {
 #define STATE_CALENDAR          (70)
 #define STATE_WATER             (71)
 #define STATE_CLOUD             (72)
+#define STATE_NMCHAT_MODEL_MENU (73)
+#define STATE_NMCHAT_INPUT      (74)
+#define STATE_NMCHAT_ON_INFER   (75)
+#define STATE_NMCHAT_AFTER_INFER (76)
 #define STATE_SHUTDOWN          (99)
 
 

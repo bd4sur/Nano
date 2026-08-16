@@ -38,6 +38,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         nongli.c \
                         flip.c \
                         nano_fft.c \
+                        nano_min.c \
                         ofdm_modem.c \
                         graphics.c \
                         gfx_font_12.c \
@@ -54,6 +55,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         ui_icon.c \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
+                        ui_nanochat.c \
                         ui_ofdm.c \
                         ui_particlelife.c \
                         ui_pedometer.c \
@@ -86,6 +88,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         nongli.c \
                         flip.c \
                         nano_fft.c \
+                        nano_min.c \
                         ofdm_modem.c \
                         graphics.c \
                         gfx_font_12.c \
@@ -102,6 +105,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         ui_icon.c \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
+                        ui_nanochat.c \
                         ui_ofdm.c \
                         ui_particlelife.c \
                         ui_pedometer.c \
