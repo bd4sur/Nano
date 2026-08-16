@@ -50,6 +50,20 @@ void gfx_test(Nano_GFX *gfx);
 void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode);
 void gfx_close(Nano_GFX *gfx);
 void gfx_refresh(Nano_GFX *gfx);
+
+// gfx_refresh 前置/后置钩子：每次推帧前/后各回调一次（单线程渲染任务内同步调用）。
+// 供叠加层与正常 UI 刷新严格同步（如 ui.c 九键按键提示遮罩：前置钩子叠加遮罩、
+// 后置钩子恢复帧缓冲）。传 NULL 清除钩子。
+typedef void (*GFX_Refresh_Hook)(Nano_GFX *gfx);
+void gfx_set_refresh_hook(GFX_Refresh_Hook pre_hook, GFX_Refresh_Hook post_hook);
+
+// 帧缓冲整体快照/恢复（不透明操作：单缓冲整帧 / 双缓冲上下半屏的布局细节封装在图形层内部，
+// 调用方只需提供一块 gfx_frame_snapshot_bytes() 字节大小的内存）。
+// 典型用途：叠加层（如 ui.c 九键按键提示遮罩的 gfx_refresh 钩子）在推帧前快照干净帧、
+// 推帧后恢复，避免 alpha 叠加在持久帧缓冲上逐帧累积。
+uint32_t gfx_frame_snapshot_bytes(Nano_GFX *gfx);       // 快照所需字节数（不支持的色彩模式返回0）
+void     gfx_frame_snapshot(Nano_GFX *gfx, void *dst);  // 快照整个帧缓冲到 dst（容量须 >= gfx_frame_snapshot_bytes）
+void     gfx_frame_restore(Nano_GFX *gfx, const void *src); // 从 src 恢复整个帧缓冲
 // 将帧缓冲整体上移 rows 行（底部 rows 行内容保留，由调用方覆写；支持RGB565双缓冲与RGB888）
 void gfx_scroll_up(Nano_GFX *gfx, int32_t rows);
 

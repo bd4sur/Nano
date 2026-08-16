@@ -25,6 +25,7 @@ uint8_t input_device_read_key() {
         case '-': return NANO_KEY_shift;
         case '+': return NANO_KEY_ctrl;
         case '\n': return NANO_KEY_enter;
+        case '\r': return NANO_KEY_enter;
         case KEY_BACKSPACE: return NANO_KEY_esc;
         case KEY_LEFT: return NANO_KEY_left;
         case KEY_RIGHT: return NANO_KEY_right;

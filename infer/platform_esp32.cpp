@@ -199,6 +199,13 @@ int32_t platform_is_directory(const char *path) {
     return is_dir;
 }
 
+int32_t platform_mkdir(const char *path) {
+    if (platform_is_directory(path)) {
+        return 0; // 已存在且为目录
+    }
+    return SD.mkdir(path) ? 0 : -1;
+}
+
 // 随机访问文件读取（单句柄）
 static File s_platform_file;
 

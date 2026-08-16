@@ -6,8 +6,10 @@
 #include <string.h>
 #include <unistd.h>
 
-#define FB_WIDTH  128
-#define FB_HEIGHT 64
+// tty 目标使用完整 320x240 帧缓冲（与平台配置 SCREEN_WIDTH/SCREEN_HEIGHT 一致），
+// 终端以 2x1 半块字符（▀）承载上下两个像素行：320列 x 120行文本。
+#define FB_WIDTH  320
+#define FB_HEIGHT 240
 
 // 更新显存到frameBuffer
 void display_hal_refresh(
@@ -70,7 +72,8 @@ void display_hal_init(void) {
     timeout(0);
     keypad(stdscr, TRUE);
 
-    if (LINES < FB_HEIGHT || COLS < FB_WIDTH) {
+    // 尺寸检查：每行文本以半块字符承载上下两个像素行，故文本行数需 ≥ 像素行数/2
+    if (LINES < FB_HEIGHT / 2 || COLS < FB_WIDTH) {
         endwin();
         return;
     }

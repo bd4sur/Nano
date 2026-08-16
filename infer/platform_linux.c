@@ -336,6 +336,13 @@ int32_t platform_is_directory(const char *path) {
     return S_ISDIR(st.st_mode) ? 1 : 0;
 }
 
+int32_t platform_mkdir(const char *path) {
+    if (platform_is_directory(path)) {
+        return 0; // 已存在且为目录
+    }
+    return (mkdir(path, 0755) == 0) ? 0 : -1;
+}
+
 // ---------------- 随机访问文件读取（全局单句柄，与 ESP32 SD File 语义一致） ----------------
 
 static FILE *s_platform_file = NULL;

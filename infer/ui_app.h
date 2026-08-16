@@ -48,6 +48,13 @@ extern "C" {
 #define STATE_OFDM_LOOPING      (63)
 #define STATE_MUSICBOX_MENU     (64)
 #define STATE_MUSICBOX_PLAYING  (65)
+#define STATE_PARTICLELIFE      (66)
+#define STATE_RIPPLE            (67)
+#define STATE_DICT_QUERY        (68)
+#define STATE_DICT_DETAIL       (69)
+#define STATE_CALENDAR          (70)
+#define STATE_WATER             (71)
+#define STATE_CLOUD             (72)
 #define STATE_SHUTDOWN          (99)
 
 

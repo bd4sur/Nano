@@ -107,16 +107,16 @@ static int32_t ui_animac_reset_ctx() {
 
     // 内存池自适应申请：2MB连续内存在碎片化的堆上可能申请失败（差几十字节也会失败），
     // 按当前最大连续块留出安全余量后申请；低于下限则判定内存不足
-    // size_t largest = platform_get_largest_free_block();
-    // if (largest < UI_ANIMAC_POOL_MIN + UI_ANIMAC_POOL_MARGIN) {
-    //     printf("[Animac] 内存不足，无法创建解释器内存池（最大连续块 %u 字节）\n", (uint32_t)largest);
-    //     return -1;
-    // }
+    size_t largest = platform_get_largest_free_block();
+    if (largest < UI_ANIMAC_POOL_MIN + UI_ANIMAC_POOL_MARGIN) {
+        printf("[Animac] 内存不足，无法创建解释器内存池（最大连续块 %u 字节）\n", (uint32_t)largest);
+        return -1;
+    }
     size_t pool_size = UI_ANIMAC_POOL_SIZE;
-    // if (pool_size > largest - UI_ANIMAC_POOL_MARGIN) {
-    //     pool_size = largest - UI_ANIMAC_POOL_MARGIN;
-    // }
-    // printf("[Animac] 解释器内存池：%u 字节（最大连续块 %u）\n", (uint32_t)pool_size, (uint32_t)largest);
+    if (pool_size > largest - UI_ANIMAC_POOL_MARGIN) {
+        pool_size = largest - UI_ANIMAC_POOL_MARGIN;
+    }
+    printf("[Animac] 解释器内存池：%u 字节（最大连续块 %u）\n", (uint32_t)pool_size, (uint32_t)largest);
 
     ctx = am_repl_ctx_create(pool_size);
     if (!ctx) {

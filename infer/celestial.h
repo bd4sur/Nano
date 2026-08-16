@@ -55,7 +55,7 @@ typedef struct Linglong_Config {
     int32_t enable_opt_bilinear;     // 是否启用双线性插值以优化画质
  
     int32_t projection;              // 投影算法（0-鱼眼；1-线性透视）
-    int32_t sky_model;               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
+    int32_t sky_model;               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射；4-体积云+大气渲染）
     int32_t landscape_index;         // 选择地景贴图（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景）
     int32_t enable_equatorial_coord; // 是否启用赤道坐标圈
     int32_t enable_horizontal_coord; // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
@@ -65,6 +65,11 @@ typedef struct Linglong_Config {
     int32_t enable_ecliptic_circle;  // 是否显示黄道
     int32_t enable_att_indicator;    // 是否显示姿态指示标记
     int32_t enable_tracking_sun;     // 视线偏航角是否跟踪太阳
+
+    // 体积云参数（仅 sky_model==4 时有效；对应 ui_cloud.c 中已有的云量/云层/亮度控制）
+    int32_t cloud_coverage_level;    // 云量档位 0-5（晴空→疏云→半云→多云→阴天→满云）
+    int32_t cloud_layer_mask;        // 云层种类掩码；bit0-低层 bit1-中层 bit2-高层（7=全部，0=无云）
+    float   cloud_brightness;        // 云亮度 0.5~2.0（联动云介质光学参数，物理地改变观感）
 
     // 以下与天空渲染无关（非render_sky参数）
     int32_t enable_imu;              // 是否启用IMU（使视角随机器姿态旋转）
@@ -99,7 +104,11 @@ void render_sky(Nano_GFX *gfx,
     int32_t enable_planet,           // 是否显示大行星
     int32_t enable_ecliptic_circle,  // 是否显示黄道
     int32_t enable_att_indicator,    // 是否显示姿态指示标记
-    int32_t enable_tracking_sun      // 视线偏航角是否跟踪太阳
+    int32_t enable_tracking_sun,     // 视线偏航角是否跟踪太阳
+    // 体积云参数（仅 sky_model==4 时有效）
+    int32_t cloud_coverage_level,    // 云量档位 0-5
+    int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
+    float   cloud_brightness         // 云亮度 0.5~2.0
 );
 
 #ifdef __cplusplus

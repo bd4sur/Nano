@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
 
 #include "platform.h"
 #include "graphics.h"
@@ -9,6 +10,7 @@
 #include "linglong_texture.h"
 #include "celestial.h"
 #include "ephemeris.h"
+#include "ui_cloud.h"
 
 #ifndef M_PI
     #define M_PI (3.14159265358979323846)
@@ -2691,6 +2693,11 @@ void linglong_init(Linglong_Config *cfg) {
 
     cfg->enable_imu = 1;              // 是否启用IMU（使视角随机器姿态旋转）
 
+    // 体积云参数（sky_model==4 时生效；档位/亮度与 ui_cloud.c 独立应用的默认一致）
+    cfg->cloud_coverage_level = 2;    // 云量档位（半云）
+    cfg->cloud_layer_mask = UI_CLOUD_LAYER_ALL; // 显示全部云层
+    cfg->cloud_brightness = 1.4f;     // 云亮度
+
     cfg->lut_alt_step = 0.5f;         // Inscatter LUT 高度角步长（度）
     cfg->lut_azi_step = 0.5f;         // Inscatter LUT 方位角步长（度）
     cfg->lut_transmittance_step = 0.5f; // Transmittance LUT 天顶角步长（度）
@@ -2753,7 +2760,11 @@ void render_sky(Nano_GFX *gfx,
     int32_t enable_planet,           // 是否显示大行星
     int32_t enable_ecliptic_circle,  // 是否显示黄道
     int32_t enable_att_indicator,    // 是否显示姿态指示标记
-    int32_t enable_tracking_sun      // 视线偏航角是否跟踪太阳
+    int32_t enable_tracking_sun,     // 视线偏航角是否跟踪太阳
+    // 体积云参数（仅 sky_model==4 时有效）
+    int32_t cloud_coverage_level,    // 云量档位 0-5
+    int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
+    float   cloud_brightness         // 云亮度 0.5~2.0
 ) {
 
     uint32_t fb_width = gfx->width;
@@ -2786,8 +2797,8 @@ void render_sky(Nano_GFX *gfx,
     float sun_proj_y = 0.0f;
     fisheye_project(sun_azi, sun_alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &sun_proj_x, &sun_proj_y);
 
-    // 初始化方向图和预积分 LUT（仅在 enable_opt_lut 时启用，避免额外内存开销）
-    if (enable_opt_lut && sky_model > 0) {
+    // 初始化方向图和预积分 LUT（仅 enable_opt_lut 时启用，避免额外内存开销）
+    if (enable_opt_lut && sky_model > 0 && sky_model < 4) {
         sky_dir_map_ensure(fb_width, fb_height);
         sky_dir_map_update(sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection);
         sky_transmittance_lut_init();
@@ -2805,7 +2816,7 @@ void render_sky(Nano_GFX *gfx,
     int32_t x2 = fb_width;
 
     ////////////////////////////
-    // 大气散射
+    // 大气散射 / 体积云天空
     ////////////////////////////
 
     // 用于计算地景近地大气散射的天光平均色相
@@ -2813,7 +2824,60 @@ void render_sky(Nano_GFX *gfx,
     float atmo_g = 0;
     float atmo_b = 0;
 
-    if (sky_model > 0) {
+    if (sky_model == 4) {
+        // 体积云+大气渲染（ui_cloud.c 的 flower port）作为天空背景，光源/相机/坐标出自天象仪。
+        // 太阳镜头光晕在云内核中关闭（天象仪自己绘制太阳与星芒），太阳/月亮/恒星/坐标圈/地景
+        // 仍由 render_sky 后续步骤叠加绘制。
+        UiCloud_Render_Params cp;
+        memset(&cp, 0, sizeof(cp));
+
+        // 相机姿态：地平天球（方位角自北、仰角；roll 绕视线轴）
+        // → 云渲染 y-up 世界（x东 y上 z南）：yaw=180°-azi, pitch=alt, roll=view_roll
+        float norm_azi = fmodf(view_azi, 360.0f);
+        if (norm_azi < 0) norm_azi += 360.0f;
+        cp.yaw_rad = to_rad_float(180.0f - norm_azi);
+        cp.pitch_rad = to_rad_float(MAX(-90.0f, MIN(90.0f, view_alt)));
+        cp.roll_rad = to_rad_float(view_roll);
+        // 投影映射：天象仪 0=鱼眼 / 1=线性透视 → 云渲染 0=透视 / 1=鱼眼
+        cp.proj = (projection == 1) ? 0 : 1;
+        if (projection == 1) {
+            // 透视：屏幕半高对应半视场角 atan(1/f)（f 为天象仪 view_f）
+            float half = atanf(1.0f / MAX(0.05f, f));
+            cp.fov_deg = (int)lrintf(to_deg_float(half));
+            if (cp.fov_deg < 2) cp.fov_deg = 2;
+            if (cp.fov_deg > 89) cp.fov_deg = 89;
+        } else {
+            // 鱼眼：默认 f=1 → 整半球（90°/f）
+            cp.fov_deg = (int)lrintf(90.0f / MAX(0.2f, f));
+            if (cp.fov_deg < 5) cp.fov_deg = 5;
+            if (cp.fov_deg > 170) cp.fov_deg = 170;
+        }
+        // 场景时间：相对启动的墙钟（驱动云飘移动画；平台无关，取 64 位差再取模，避免精度损失）
+        static uint64_t s_cloud_wall0 = 0;
+        if (s_cloud_wall0 == 0) s_cloud_wall0 = get_timestamp_in_ms();
+        uint64_t wall = get_timestamp_in_ms();
+        cp.app_time_sec = (float)((wall - s_cloud_wall0) % 100000u) / 1000.0f;
+
+        // 光源方向由天象仪提供（horizontal_to_xyz 的东/北/上 → 云 y-up 世界 东/上/南）：
+        //   天象仪 sun_x=东  sun_y=北  sun_z=上  →  cloud x=东  y=上  z=-北
+        cp.sun_dx = sun_x;
+        cp.sun_dy = sun_z;
+        cp.sun_dz = -sun_y;
+
+        float sr, sg, sb, si;
+        ui_cloud_sun_color((float)sun_alt, &sr, &sg, &sb, &si);
+        cp.sun_r = sr; cp.sun_g = sg; cp.sun_b = sb; cp.sun_intensity = si;
+
+        // 云参数（沿用 ui_cloud.c 已有的云量/云层/亮度控制曲线）
+        cp.coverage = ui_cloud_coverage_for_level(cloud_coverage_level);
+        cp.layer_mask = cloud_layer_mask;
+        cp.brightness = cloud_brightness;
+        cp.enable_sun_lens = 0; // 天象仪绘制太阳
+
+        ui_cloud_render_core(gfx, &cp);
+        ui_cloud_flush(gfx);
+    }
+    else if (sky_model > 0) {
 
         // 开启动态地景的情况下：对天空半球进行采样，计算天光平均色相
         if (landscape_index == 2) {

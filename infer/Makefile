@@ -25,12 +25,12 @@ $(BIN_DIR):
 
 # Nano-Pod-Lite：带键盘和单色I2C屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z/MARGA）
 pod_lite: $(BIN_DIR)/nano_pod_lite
-$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c ups_rpi5.c mic_linux.c platform_linux.c display_ssd130x_linux.c touch_linux.c input_device_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c ups_rpi5.c mic_linux.c platform_linux.c display_ssd130x_linux.c touch_linux.c input_device_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_LITE_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
 
 # Nano-Pod：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z）
 pod: $(BIN_DIR)/nano_pod
-$(BIN_DIR)/nano_pod: main.c asr.c tts.c imu10.c ups_rpi5.c mic_linux.c platform_linux.c display_ili9341.c touch_linux.c input_device_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod: main.c asr.c tts.c imu10.c ups_rpi5.c mic_linux.c platform_linux.c display_ili9341.c touch_linux.c input_device_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
@@ -57,17 +57,24 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         pinyin_ime.c \
                         ui.c \
                         ui_app.c \
+                        ui_almanac.c \
+                        ui_calendar.c \
+                        ui_cloud.c \
+                        ui_dict.c \
                         ui_ebook.c \
                         ui_goldminer.c \
                         ui_icon.c \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
                         ui_ofdm.c \
+                        ui_particlelife.c \
                         ui_pedometer.c \
                         ui_pinyin_ime.c \
+                        ui_ripple.c \
                         ui_softkbd.c \
                         ui_spectrogram.c \
                         ui_tetris.c \
+                        ui_water.c \
                         utils.c \
                         tokenizer.c \
                         tensor.c \

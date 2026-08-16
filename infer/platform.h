@@ -149,6 +149,9 @@ int32_t platform_write_buffer_to_file(const char *filepath, const uint8_t *buffe
 // 判断路径是否为目录（1-是，0-否或打开失败）
 int32_t platform_is_directory(const char *path);
 
+// 创建目录（已存在且为目录则视为成功）。返回0成功，-1失败
+int32_t platform_mkdir(const char *path);
+
 // 随机访问文件读取（单句柄：同一时刻仅支持一个打开的文件，供电子书等分块读取使用）
 int32_t  platform_file_open(const char *filepath);    // 0成功，-1失败
 uint32_t platform_file_size(void);                    // 当前打开文件的大小（字节）

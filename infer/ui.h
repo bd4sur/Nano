@@ -54,6 +54,7 @@ typedef struct Global_State {
     // 全局通用信息
     uint64_t timestamp; // 物理时间戳（ms）
     uint64_t timestamp_last; // 上一次主循环的物理时间戳（ms），用于统计帧率、节流等用途
+    volatile uint64_t last_touch_timestamp; // 最后一次触屏按下的物理时间戳（ms；0=从未触摸）。由 Core1 的 get_key_event 以 1-2ms 周期高频锁存（短按不遗漏），供九键按键提示遮罩在 Core0 渲染侧可靠触发（见 ui.c）
     int32_t year;
     int32_t month;
     int32_t day;
@@ -119,6 +120,7 @@ typedef struct Global_State {
     int32_t volume;     // 全局主音量（0~255；影响按键音、寻呼机OFDM发射音量、音乐盒初始音量；音乐盒内部调节不回写）
     int32_t auto_shutdown_minutes;   // 自动关机时长设置（分钟；0=关，可选 1/2/3/5/10/20/30/60）
     uint64_t auto_shutdown_deadline; // 自动关机到期时间戳（ms，对 timestamp；0=未启用）
+    int32_t ime_hint_timeout_s;      // 九键按键提示遮罩显示时长设置（秒）：0=关闭，可选 0/3/6，默认 3（系统设置中循环切换）
 
     // 玲珑天象仪全局配置
     Linglong_Config *linglong_cfg;
@@ -207,6 +209,10 @@ typedef struct Widget_Menu_State {
 
 void ui_draw_header(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center);
 void ui_draw_footer(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center);
+// 软按键提示区页脚：4个字符串依次为十六宫格最底部一行 *、0、#、D 四键的功能提示，
+// 横向与底部4个格子中点对齐，纵向与 ui_draw_footer 一致；NULL或空串表示该键无功能
+void ui_draw_footer_softkeys(Key_Event *key_event, Global_State *global_state,
+    wchar_t *text_key_left, wchar_t *text_key_0, wchar_t *text_key_right, wchar_t *text_key_enter);
 
 // font_id: 文本字体（GFX_FONT_*），决定行高、逐字符宽度、基线与渲染方式
 void ui_draw_text_block(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state, uint32_t font_id);
@@ -230,6 +236,12 @@ int32_t ui_widget_textarea_event_handler(
 
 void ui_widget_input_init(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, wchar_t *title_text);
 void ui_widget_input_refresh(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+// 九键按键提示遮罩外部开关：1=启用机制（默认），0=关闭机制（立即解除已激活的遮罩并禁止触发）。
+// 软键盘启用时应由上层关闭本机制，避免遮罩干扰软键盘（见 ui_app.c 软键盘显隐切换处）。
+void ui_ime_hint_mask_set_enabled(int32_t enabled);
+// 切换触屏软键盘显隐（文本输入控件固有功能，供 Ctrl+0 组合键与上滑/下滑手势调用）：
+// 联动按键提示遮罩开关、全键盘拼音组字重置，并重新布局文本区为键盘让出/恢复空间。
+void ui_widget_input_toggle_softkbd(Key_Event *key_event, Global_State *global_state);
 // 在文本框的光标位置之后插入/删除一个字符（触屏软键盘及其拼音输入法也会调用）
 void insert_char(Widget_Input_State *input_state, wchar_t new_char);
 void delete_char(Widget_Input_State *input_state);
@@ -251,7 +263,7 @@ void ui_draw_input_cursor(Key_Event *key_event, Global_State *global_state, Widg
 void ui_draw_input_pinyin(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, uint32_t is_picking);
 void ui_draw_input_symbol(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 
-void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_t line_num, int32_t current_line, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height);
+void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_t current_line, int32_t line_num, int32_t view_lines, int32_t x, int32_t y, int32_t width, int32_t height);
 
 
 // ===============================================================================

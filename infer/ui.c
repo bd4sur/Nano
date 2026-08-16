@@ -21,6 +21,35 @@ static uint8_t S_UI_COLOR_FOOTER_TEXT[3]   = {90 , 98 , 106};
 static uint8_t S_UI_COLOR_IME_HELP_BG[3]   = {222, 222, 222};
 static uint8_t S_UI_COLOR_IME_HELP_TEXT[3] = {0  , 0  , 0  };
 
+// 输入法候选列表（候选字/候选符号）颜色，随全局颜色风格切换（由 ui_ime_candidate_color_apply 应用）
+static uint8_t S_UI_COLOR_IME_CANDIDATE_BG[3]     = {232, 235, 243}; // 候选列表底色
+static uint8_t S_UI_COLOR_IME_CANDIDATE_TEXT[3]   = {0  , 0  , 0  }; // 候选字/候选符号文字
+static uint8_t S_UI_COLOR_IME_CANDIDATE_INDEX[3]  = {128, 128, 128}; // 候选序号（灰，两种风格相同）
+static uint8_t S_UI_COLOR_IME_CANDIDATE_PINYIN[3] = {17 , 85 , 238}; // 拼音行（蓝，两种风格相同）
+
+// 按全局颜色风格应用输入法候选列表配色：亮色保持默认；暗色改深灰底+白色候选字，
+// 序号灰与拼音蓝保持原值（均已参数化，可直接改上方默认值或此处的暗色值）
+static void ui_ime_candidate_color_apply(int32_t ui_color_style) {
+    if (ui_color_style == UI_COLOR_DARK) {
+        S_UI_COLOR_IME_CANDIDATE_BG[0]   = 45 ; S_UI_COLOR_IME_CANDIDATE_BG[1]   = 48 ; S_UI_COLOR_IME_CANDIDATE_BG[2]   = 54 ;
+        S_UI_COLOR_IME_CANDIDATE_TEXT[0] = 255; S_UI_COLOR_IME_CANDIDATE_TEXT[1] = 255; S_UI_COLOR_IME_CANDIDATE_TEXT[2] = 255;
+    }
+    else {
+        S_UI_COLOR_IME_CANDIDATE_BG[0]   = 232; S_UI_COLOR_IME_CANDIDATE_BG[1]   = 235; S_UI_COLOR_IME_CANDIDATE_BG[2]   = 243;
+        S_UI_COLOR_IME_CANDIDATE_TEXT[0] = 0  ; S_UI_COLOR_IME_CANDIDATE_TEXT[1] = 0  ; S_UI_COLOR_IME_CANDIDATE_TEXT[2] = 0  ;
+    }
+}
+
+// 九键按键提示遮罩：文本输入控件状态下，任何触屏动作即显示，无触屏若干秒后消失。
+// 遮罩为 4x4 宫格（与触屏虚拟按键布局一致），内容随 Ctrl 激活态切换。
+// 显示时长由全局设置 Global_State.ime_hint_timeout_s 控制（0=关闭，可选 0/3/6 秒，系统设置中切换）。
+#define IME_HINT_MASK_ALPHA       (59)    // 遮罩层不透明度（gfx mode>=4 即 alpha）
+#define IME_HINT_GRID_LINE_ALPHA  (100)   // 宫格分割线不透明度
+static int32_t  ime_hint_mask_armed = 0;           // 遮罩标志：1=生效（刷新钩子已注册）
+static Global_State *ime_hint_gs = NULL;           // 钩子回调内取全局状态（is_ctrl_enabled/颜色风格/时间戳）
+static uint8_t *ime_hint_backup = NULL;            // 干净帧快照（PSRAM，大小由 gfx_frame_snapshot_bytes 给出）
+static int32_t  ime_hint_hook_backed_up = 0;       // 本轮推帧是否已快照（前后置钩子配对依据）
+
 
 // 符号列表
 static wchar_t ime_symbols[55] = L"，。、？！：；“”‘’（）《》…—～·【】 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
@@ -341,20 +370,26 @@ void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_
         current_line = (line_num <= 0) ? 0 : current_line % line_num;
     }
 
+    int32_t scroll_bar_x_offset = 0; // 亮色暗色模式，滚动条有不同的横向偏移。亮色模式下，滚动条需要左移1px，以避免与黑色的屏幕外框连在一起看不出来。
+
     uint8_t scroll_bar_bg_R = 0, scroll_bar_bg_G = 0, scroll_bar_bg_B = 0;
     uint8_t scroll_bar_fg_R = 0, scroll_bar_fg_G = 0, scroll_bar_fg_B = 0;
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-        scroll_bar_bg_R = 200; scroll_bar_bg_G = 200; scroll_bar_bg_B = 200;
-        scroll_bar_fg_R = 33; scroll_bar_fg_G = 33; scroll_bar_fg_B = 33;
+        scroll_bar_x_offset = -1;
+        scroll_bar_bg_R = 222; scroll_bar_bg_G = 222; scroll_bar_bg_B = 222;
+        scroll_bar_fg_R = 17; scroll_bar_fg_G = 85; scroll_bar_fg_B = 238;
     }
     else if (global_state->ui_color_style == UI_COLOR_DARK) {
-        scroll_bar_bg_R = 128; scroll_bar_bg_G = 128; scroll_bar_bg_B = 128;
-        scroll_bar_fg_R = 255; scroll_bar_fg_G = 255; scroll_bar_fg_B = 255;
+        scroll_bar_x_offset = 0;
+        scroll_bar_bg_R = 66; scroll_bar_bg_G = 66; scroll_bar_bg_B = 66;
+        scroll_bar_fg_R = 102; scroll_bar_fg_G = 204; scroll_bar_fg_B = 255;
     }
 
-    for (int n = y; n < y + height; n++) {
-        gfx_draw_point(global_state->gfx, x + width - 1, n, scroll_bar_bg_R, scroll_bar_bg_G, scroll_bar_bg_B, 1);
-    }
+    // for (int n = y; n < y + height; n++) {
+    //     gfx_draw_point(global_state->gfx, x + width - 1, n, scroll_bar_bg_R, scroll_bar_bg_G, scroll_bar_bg_B, 1);
+    // }
+    gfx_draw_line(global_state->gfx, x + width - 1 + scroll_bar_x_offset, y, x + width - 1 + scroll_bar_x_offset, (y + height - 1), scroll_bar_bg_R, scroll_bar_bg_G, scroll_bar_bg_B, 1);
+    gfx_draw_line(global_state->gfx, x + width - 2 + scroll_bar_x_offset, y, x + width - 2 + scroll_bar_x_offset, (y + height - 1), scroll_bar_bg_R, scroll_bar_bg_G, scroll_bar_bg_B, 1);
 
     line_num = (line_num <= 0) ? 1 : line_num;
 
@@ -366,8 +401,8 @@ void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_
     int32_t y_0 = y + div_round(current_line * height, line_num);
     y_0 = (y_0 >= y + height - 3 - 1) ? (y + height - 3 - 1) : y_0; // 滚动条顶部限位（不低于底部上方3px）
 
-    gfx_draw_line(global_state->gfx, x + width - 1, y_0, x + width - 1, (y_0 + bar_height), scroll_bar_fg_R, scroll_bar_fg_G, scroll_bar_fg_B, 1);
-    gfx_draw_line(global_state->gfx, x + width - 2, y_0, x + width - 2, (y_0 + bar_height), scroll_bar_fg_R, scroll_bar_fg_G, scroll_bar_fg_B, 1);
+    gfx_draw_line(global_state->gfx, x + width - 1 + scroll_bar_x_offset, y_0, x + width - 1 + scroll_bar_x_offset, (y_0 + bar_height), scroll_bar_fg_R, scroll_bar_fg_G, scroll_bar_fg_B, 1);
+    gfx_draw_line(global_state->gfx, x + width - 2 + scroll_bar_x_offset, y_0, x + width - 2 + scroll_bar_x_offset, (y_0 + bar_height), scroll_bar_fg_R, scroll_bar_fg_G, scroll_bar_fg_B, 1);
 }
 
 
@@ -443,6 +478,46 @@ void ui_draw_footer(Key_Event *key_event, Global_State *global_state, wchar_t *t
     }
     else {
         gfx_font_draw_text(global_state->gfx, font_id, text, 0, footer_bottom - footer_height + footer_height / 2 - line_height / 2, S_UI_COLOR_FOOTER_TEXT[0], S_UI_COLOR_FOOTER_TEXT[1], S_UI_COLOR_FOOTER_TEXT[2], 1);
+    }
+}
+
+// 绘制软按键提示区页脚（类似早期手机屏幕底部的软按键提示）：
+// 页脚作为触屏十六宫格最底部一行4个按键（*、0、#、D）在当前功能状态下的功能提示。
+// 4个提示字符串的中心在横向上与底部4个格子的中点对齐（横向4等分，与 input_device 的
+// 4x4宫格映射一致），纵向与 ui_draw_footer 一致（页脚高度跟随当前字体行高，文本在页脚带内
+// 垂直居中，行高差异由 gfx_font_draw_text_centered 的行框居中语义吸收）。
+// 传 NULL 或空字符串表示对应按键无功能（留空）。
+void ui_draw_footer_softkeys(
+    Key_Event *key_event, Global_State *global_state,
+    wchar_t *text_key_left, wchar_t *text_key_0, wchar_t *text_key_right, wchar_t *text_key_enter
+) {
+    // 页脚高度跟随当前字体行高（行高 + 1px 边距）
+    uint32_t font_id = global_state->ui_font;
+    int32_t line_height = gfx_font_line_height(font_id);
+    const int footer_height = line_height + 1;
+    // 触屏软键盘显示时，页脚上移为键盘让出空间（与 ui_draw_footer 一致）
+    const int32_t footer_bottom = global_state->gfx->height - ui_softkbd_height();
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        gfx_draw_rectangle(global_state->gfx, 0, footer_bottom - footer_height, global_state->gfx->width, footer_height, S_UI_COLOR_FOOTER_BG[0], S_UI_COLOR_FOOTER_BG[1], S_UI_COLOR_FOOTER_BG[2], 1);
+        S_UI_COLOR_FOOTER_TEXT[0] = 90;
+        S_UI_COLOR_FOOTER_TEXT[1] = 98;
+        S_UI_COLOR_FOOTER_TEXT[2] = 106;
+    }
+    else if (global_state->ui_color_style == UI_COLOR_DARK) {
+        gfx_draw_rectangle(global_state->gfx, 0, footer_bottom - footer_height, global_state->gfx->width, footer_height, 15, 16, 17, 1);
+        S_UI_COLOR_FOOTER_TEXT[0] = 188;
+        S_UI_COLOR_FOOTER_TEXT[1] = 188;
+        S_UI_COLOR_FOOTER_TEXT[2] = 188;
+    }
+    const wchar_t *texts[4] = {text_key_left, text_key_0, text_key_right, text_key_enter};
+    int32_t cell_width = global_state->gfx->width / 4;
+    int32_t cy = footer_bottom - footer_height + footer_height / 2;
+    for (int32_t i = 0; i < 4; i++) {
+        if (texts[i] != NULL && texts[i][0] != L'\0') {
+            gfx_font_draw_text_centered(global_state->gfx, font_id, (wchar_t *)texts[i],
+                cell_width * i + cell_width / 2, cy,
+                S_UI_COLOR_FOOTER_TEXT[0], S_UI_COLOR_FOOTER_TEXT[1], S_UI_COLOR_FOOTER_TEXT[2], 1);
+        }
     }
 }
 
@@ -609,13 +684,34 @@ void ui_widget_input_init(
     memset(input_state->candidates, 0, sizeof(input_state->candidates));
     memset(input_state->candidate_pages, 0, sizeof(input_state->candidate_pages));
 
+    // 清零触屏时间戳基线：九键按键提示遮罩仅响应本控件呈现之后的新触屏（同 ui_widget_input_refresh）
+    global_state->last_touch_timestamp = 0;
+
     ui_draw_input_buffer(key_event, global_state, input_state);
 }
 
 void ui_widget_input_refresh(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
     input_state->cursor_pos = input_state->textarea.length - 1;
     input_state->desired_x = -1;
+    // 清零触屏时间戳基线：九键按键提示遮罩仅响应本控件呈现之后的新触屏，
+    // 避免“用于进入本状态的那次触摸”（触屏宫格即按键）在控件出现后立即误触发遮罩；
+    // 若手指仍按住不放，Core1 会在 1-2ms 内重新锁存，持续触摸的提示不受影响
+    global_state->last_touch_timestamp = 0;
     ui_draw_input_buffer(key_event, global_state, input_state);
+}
+
+// 切换触屏软键盘显隐，并重新布局为键盘让出/恢复空间（文本输入控件固有功能：
+// 供 Ctrl+0 组合键与上滑/下滑手势调用；软键盘启用时关闭输入法提示遮罩，避免干扰软键盘）
+void ui_widget_input_toggle_softkbd(Key_Event *key_event, Global_State *global_state) {
+    if (ui_softkbd_is_visible()) ui_softkbd_hide();
+    else                         ui_softkbd_show();
+    ui_ime_hint_mask_set_enabled(!ui_softkbd_is_visible());
+    ui_pinyin_ime_reset(); // 键盘显隐切换时，放弃进行中的拼音组字
+    // 重新布局：文本区高度扣除软键盘高度（隐藏时 ui_softkbd_height() 为0，布局复原）
+    int32_t header_height = gfx_font_line_height(global_state->ui_font) + 1;
+    global_state->w_input_main->textarea.height = global_state->gfx->height - ui_softkbd_height() - header_height * 2;
+    global_state->w_input_main->textarea.is_modified = 1;
+    ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
 }
 
 // 绘制文本输入操作说明
@@ -632,15 +728,156 @@ static void ui_draw_input_help(Key_Event *key_event, Global_State *global_state)
     cy += line_height;
     gfx_font_draw_text_centered(global_state->gfx, font_id, L"C-第二功能  D-输入/提交",    cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
     cy += line_height;
-    gfx_font_draw_text_centered(global_state->gfx, font_id, L"按住0选择符号 左右键移动光标",  cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
+    gfx_font_draw_text_centered(global_state->gfx, font_id, L"Ctrl+1选择符号 左右键移动光标",  cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
     cy += line_height;
     gfx_font_draw_text_centered(global_state->gfx, font_id, L"按住D语音输入 Ctrl+D 换行",    cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
     cy += line_height;
-    gfx_font_draw_text_centered(global_state->gfx, font_id, L"Ctrl+1 切换思考模式",          cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
+    gfx_font_draw_text_centered(global_state->gfx, font_id, L"Ctrl+2 切换思考模式",          cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
     cy += line_height;
     gfx_font_draw_text_centered(global_state->gfx, font_id, L"Ctrl+A 放弃输入并返回",        cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
 
     gfx_refresh(global_state->gfx);
+}
+
+// 九键按键提示遮罩内容（4x4 宫格，与触屏虚拟按键布局一致）。
+// 每格 {第一行, 第二行}；第二行为 NULL 表示单行（16px 字体），否则双行（12px 字体）。
+static const wchar_t *ime_hint_mask_grid_normal[4][4][2] = {
+    {{L"1", L"符号"}, {L"2", L"ABC"}, {L"3", L"DEF"}, {L"退格", NULL}},
+    {{L"4", L"GHI"},  {L"5", L"JKL"}, {L"6", L"MNO"}, {L"输入法", NULL}},
+    {{L"7", L"PQRS"}, {L"8", L"TUV"}, {L"9", L"WXYZ"}, {L"Ctrl", NULL}},
+    {{L"←", NULL},     {L"0", L"TUV"}, {L"→", NULL},    {L"确认", NULL}},
+};
+static const wchar_t *ime_hint_mask_grid_ctrl[4][4][2] = {
+    {{L"符号", NULL},      {L"思考模式", NULL}, {L"3", L"DEF"}, {L"退出", NULL}},
+    {{L"4", L"GHI"},      {L"5", L"JKL"}, {L"6", L"MNO"}, {L"帮助", NULL}},
+    {{L"7", L"PQRS"},     {L"8", L"TUV"}, {L"9", L"WXYZ"}, {L"[Ctrl]", NULL}},
+    {{L"↑", NULL},        {L"键盘", NULL},  {L"↓", NULL},  {L"换行", NULL}},
+};
+#define IME_HINT_MASK_CTRL_HIGHLIGHT_ROW (2) // Ctrl 激活态下高亮的格子：[Ctrl]
+#define IME_HINT_MASK_CTRL_HIGHLIGHT_COL (3)
+
+// 绘制九键按键提示遮罩（叠加在当前帧缓冲之上，调用方负责 gfx_refresh）。
+// 色彩随全局颜色风格：暗色模式下为亮色遮罩+白色文字；亮色模式下为暗色遮罩+灰色文字。
+static void ui_draw_ime_hint_mask(Nano_GFX *gfx, int32_t is_ctrl_enabled, int32_t ui_color_style) {
+    uint8_t mask_R, mask_G, mask_B, text_R, text_G, text_B;
+    if (ui_color_style == UI_COLOR_DARK) {
+        mask_R = 255; mask_G = 255; mask_B = 255;  // 亮色遮罩
+        text_R = 255; text_G = 255; text_B = 255;  // 白色文字
+    }
+    else {
+        mask_R = 0;   mask_G = 0;   mask_B = 0;    // 暗色遮罩
+        text_R = 128; text_G = 128; text_B = 128;  // 灰色文字
+    }
+
+    int32_t screen_w = gfx->width;
+    int32_t screen_h = gfx->height;
+    int32_t cell_w = screen_w / 4;
+    int32_t cell_h = screen_h / 4;
+
+    // 全屏半透明遮罩
+    gfx_draw_rectangle(gfx, 0, 0, screen_w, screen_h, mask_R, mask_G, mask_B, IME_HINT_MASK_ALPHA);
+
+    // 宫格分割线
+    for (int32_t i = 1; i < 4; i++) {
+        gfx_draw_line(gfx, i * cell_w, 0, i * cell_w, screen_h - 1, text_R, text_G, text_B, IME_HINT_GRID_LINE_ALPHA);
+        gfx_draw_line(gfx, 0, i * cell_h, screen_w - 1, i * cell_h, text_R, text_G, text_B, IME_HINT_GRID_LINE_ALPHA);
+    }
+
+    // Ctrl 激活态：高亮 [Ctrl] 格（叠加一层文字色 + 实色边框）
+    if (is_ctrl_enabled) {
+        int32_t hx0 = IME_HINT_MASK_CTRL_HIGHLIGHT_COL * cell_w;
+        int32_t hy0 = IME_HINT_MASK_CTRL_HIGHLIGHT_ROW * cell_h;
+        gfx_draw_rectangle(gfx, hx0, hy0, cell_w, cell_h, text_R, text_G, text_B, 64);
+        for (int32_t d = 0; d < 2; d++) {
+            gfx_draw_line(gfx, hx0 + d, hy0 + d, hx0 + cell_w - 1 - d, hy0 + d, text_R, text_G, text_B, 1);
+            gfx_draw_line(gfx, hx0 + d, hy0 + cell_h - 1 - d, hx0 + cell_w - 1 - d, hy0 + cell_h - 1 - d, text_R, text_G, text_B, 1);
+            gfx_draw_line(gfx, hx0 + d, hy0 + d, hx0 + d, hy0 + cell_h - 1 - d, text_R, text_G, text_B, 1);
+            gfx_draw_line(gfx, hx0 + cell_w - 1 - d, hy0 + d, hx0 + cell_w - 1 - d, hy0 + cell_h - 1 - d, text_R, text_G, text_B, 1);
+        }
+    }
+
+    // 逐格绘制文字：双行 12px、单行 16px，均在格内居中
+    const wchar_t *(*grid)[4][2] = is_ctrl_enabled ? ime_hint_mask_grid_ctrl : ime_hint_mask_grid_normal;
+    for (int32_t row = 0; row < 4; row++) {
+        for (int32_t col = 0; col < 4; col++) {
+            int32_t cx = col * cell_w + cell_w / 2;
+            int32_t cy = row * cell_h + cell_h / 2;
+            const wchar_t *line0 = grid[row][col][0];
+            const wchar_t *line1 = grid[row][col][1];
+            if (line1 != NULL) {
+                gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)line0, cx, cy - 8, text_R, text_G, text_B, 1);
+                gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)line1, cx, cy + 8, text_R, text_G, text_B, 1);
+            }
+            else {
+                gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, (wchar_t *)line0, cx, cy, text_R, text_G, text_B, 1);
+            }
+        }
+    }
+}
+
+// 解除遮罩标志：注销刷新钩子并释放干净帧快照
+static void ui_ime_hint_mask_disarm(void) {
+    gfx_set_refresh_hook(NULL, NULL);
+    ime_hint_mask_armed = 0;
+    if (ime_hint_backup != NULL) { free(ime_hint_backup); ime_hint_backup = NULL; }
+}
+
+// 遮罩机制外部开关（默认启用；软键盘显示时由上层调用 ui_ime_hint_mask_set_enabled 关闭）
+static int32_t ime_hint_mask_enabled = 1;
+
+void ui_ime_hint_mask_set_enabled(int32_t enabled) {
+    ime_hint_mask_enabled = (enabled != 0) ? 1 : 0;
+    if (!ime_hint_mask_enabled && ime_hint_mask_armed) {
+        // 关闭机制时立即解除已激活的遮罩（帧缓冲已被后置钩子恢复为干净底图，无需重绘）
+        ui_ime_hint_mask_disarm();
+    }
+}
+
+// gfx_refresh 前置钩子：推帧前备份干净帧并叠加遮罩。
+// 遮罩为 alpha 叠加绘制，帧缓冲在帧间持久存在，若直接叠加会逐帧累积饱和；
+// 因此先备份干净帧、推帧后由后置钩子原样恢复，使遮罩只存在于“送往屏幕的那一帧”，
+// 与正常 GUI 刷新严格同步且完全不干扰输入控件的交互与各分支绘制逻辑。
+static void ui_ime_hint_pre_refresh_hook(Nano_GFX *gfx) {
+    ime_hint_hook_backed_up = 0;
+    // 仅叠加到注册时的主 UI 帧缓冲实例
+    if (gfx != ime_hint_gs->gfx || gfx->color_mode != GFX_COLOR_MODE_RGB565) {
+        return;
+    }
+    // 超过设定时长无触屏（或时长设置为0=关闭）自动解除遮罩标志：本次推帧即为干净帧
+    // （触屏时间戳由 Core1 高频锁存于 Global_State.last_touch_timestamp）
+    uint64_t timeout_ms = (uint64_t)ime_hint_gs->ime_hint_timeout_s * 1000ULL;
+    if (timeout_ms == 0 || ime_hint_gs->last_touch_timestamp == 0 ||
+        (ime_hint_gs->timestamp - ime_hint_gs->last_touch_timestamp) >= timeout_ms) {
+        ui_ime_hint_mask_disarm();
+        return;
+    }
+    // 快照干净帧（帧缓冲布局由图形层封装）→ 叠加遮罩
+    gfx_frame_snapshot(gfx, ime_hint_backup);
+    ime_hint_hook_backed_up = 1;
+    ui_draw_ime_hint_mask(gfx, ime_hint_gs->is_ctrl_enabled, ime_hint_gs->ui_color_style);
+}
+
+// gfx_refresh 后置钩子：推帧后恢复干净帧缓冲（与前置钩子配对）
+static void ui_ime_hint_post_refresh_hook(Nano_GFX *gfx) {
+    if (!ime_hint_hook_backed_up) {
+        return;
+    }
+    ime_hint_hook_backed_up = 0;
+    gfx_frame_restore(gfx, ime_hint_backup);
+}
+
+// 离开文本输入控件时的清理（控件两个退出分支 return prev/next_focus_state 处调用）：
+// 清除按键提示遮罩标志；收起软键盘并恢复布局（软键盘为控件固有功能，随控件退出而关闭）
+static void ui_widget_input_on_leave(Global_State *global_state, Widget_Input_State *input_state) {
+    ui_ime_hint_mask_disarm();
+    if (ui_softkbd_is_visible()) {
+        ui_softkbd_hide();
+        ui_ime_hint_mask_set_enabled(1);
+        ui_pinyin_ime_reset();
+        int32_t header_height = gfx_font_line_height(global_state->ui_font) + 1;
+        input_state->textarea.height = global_state->gfx->height - header_height * 2;
+        input_state->textarea.is_modified = 1;
+    }
 }
 
 // 光标上下移动：在视觉行（'\n'硬换行 + 按宽度软折行）之间移动，参照 main.cpp-ref 的
@@ -760,6 +997,44 @@ int32_t ui_widget_input_event_handler(
     int32_t prev_focus_state, int32_t current_focus_state, int32_t next_focus_state
 ) {
 
+    // 九键按键提示遮罩（全局标志：触屏置位、3 秒无触屏清除）。
+    // 触屏时间戳由 Core1 的 get_key_event 以 1-2ms 周期高频锁存（global_state->last_touch_timestamp，
+    // 短按不遗漏）；本处于处理器开头只做判定与置位/清除，置位后本帧的正常 UI 刷新推帧前
+    // 即被 gfx 刷新钩子叠加遮罩、推帧后恢复帧缓冲（遮罩与正常 GUI 刷新严格同步）。
+    {
+        uint64_t timeout_ms = (uint64_t)global_state->ime_hint_timeout_s * 1000ULL;
+        int32_t ime_hint_active = (ime_hint_mask_enabled != 0) && (timeout_ms > 0) &&
+            (global_state->last_touch_timestamp != 0) &&
+            ((global_state->timestamp - global_state->last_touch_timestamp) < timeout_ms);
+        if (ime_hint_active && !ime_hint_mask_armed && global_state->gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+            // 置位遮罩标志：分配干净帧快照缓冲（PSRAM，大小由图形层接口给出）并注册刷新钩子
+            ime_hint_backup = (uint8_t *)platform_malloc(gfx_frame_snapshot_bytes(global_state->gfx));
+            if (ime_hint_backup != NULL) {
+                ime_hint_gs = global_state;
+                ime_hint_mask_armed = 1;
+                gfx_set_refresh_hook(ui_ime_hint_pre_refresh_hook, ui_ime_hint_post_refresh_hook);
+                gfx_refresh(global_state->gfx); // 立即推一帧（钩子叠加遮罩），保证触摸即显
+            }
+        }
+        else if (!ime_hint_active && ime_hint_mask_armed) {
+            // 超过设定时长无触屏（或机制被外部开关关闭、时长设置为0）：清除遮罩标志并立即推一帧干净画面
+            // （帧缓冲在每次推帧后均被后置钩子恢复为干净底图，此处无需重绘控件）
+            ui_ime_hint_mask_disarm();
+            gfx_refresh(global_state->gfx);
+        }
+    }
+
+    // 触屏软键盘（文本输入控件固有功能）：
+    // 上滑/下滑手势请求切换显隐（Core1手势识别，见 ui_app.c get_key_event；任何输入状态均在此消费）
+    if (ui_softkbd_take_toggle_request()) {
+        ui_widget_input_toggle_softkbd(key_event, global_state);
+    }
+    // 软键盘自身状态变化（粘滞修饰键、按下高亮）时，补画键盘并刷新
+    if (ui_softkbd_is_visible() && ui_softkbd_take_dirty()) {
+        ui_softkbd_draw(global_state->gfx, (uint8_t)global_state->is_ctrl_enabled);
+        gfx_refresh(global_state->gfx);
+    }
+
     uint8_t countdown_fg_R = 0, countdown_fg_G = 0, countdown_fg_B = 0;
     uint8_t countdown_bg_R = 0, countdown_bg_G = 0, countdown_bg_B = 0;
     uint8_t candidate0_bg_R = 0, candidate0_bg_G = 0, candidate0_bg_B = 0; // 未选中的候选字母
@@ -863,8 +1138,9 @@ int32_t ui_widget_input_event_handler(
             input_state->state = 0;
         }
 
-        // 长按0：输入符号
-        else if (key_event->key_edge == -2 && key_event->key_code == NANO_KEY_0) {
+        // Ctrl+1：输入符号（消费型组合键，用后清除Ctrl状态）
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_1 && global_state->is_ctrl_enabled == 1) {
+            global_state->is_ctrl_enabled = 0;
             memset(input_state->candidates, 0, sizeof(input_state->candidates));
 
             input_state->candidate_num = 54;
@@ -880,6 +1156,13 @@ int32_t ui_widget_input_event_handler(
             input_state->state = 3;
         }
 
+        // Ctrl+0：呼出/关闭触屏软键盘（消费型组合键；文本输入控件固有功能）
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_0 && global_state->is_ctrl_enabled == 1) {
+            global_state->is_ctrl_enabled = 0;
+            ui_widget_input_toggle_softkbd(key_event, global_state);
+            input_state->state = 0;
+        }
+
         // 短按0：数字输入模式下是直接输入0，其余模式无动作
         else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_0) {
             if (input_state->ime_mode_flag == IME_MODE_NUMBER) {
@@ -893,8 +1176,8 @@ int32_t ui_widget_input_event_handler(
 
         // 短按1-9：输入拼音/字母/数字，根据输入模式标志，转向不同的状态
         else if (key_event->key_edge == -1 && (key_event->key_code >= NANO_KEY_1 && key_event->key_code <= NANO_KEY_9)) {
-            // Ctrl+1：切换思考模式/非思考模式
-            if (global_state->is_ctrl_enabled == 1 && key_event->key_code == NANO_KEY_1) {
+            // Ctrl+2：切换思考模式/非思考模式
+            if (global_state->is_ctrl_enabled == 1 && key_event->key_code == NANO_KEY_2) {
                 global_state->is_ctrl_enabled = 0;
                 global_state->is_thinking_enabled = 1 - global_state->is_thinking_enabled;
                 ui_draw_input_buffer(key_event, global_state, input_state);
@@ -972,6 +1255,7 @@ int32_t ui_widget_input_event_handler(
                     global_state->is_ctrl_enabled = 0;
                 }
                 ui_widget_input_init(key_event, global_state, input_state, input_state->title_text);
+                ui_widget_input_on_leave(global_state, input_state); // 离开输入控件：遮罩+软键盘清理
                 return prev_focus_state;
             }
         }
@@ -1014,31 +1298,44 @@ int32_t ui_widget_input_event_handler(
             }
             else {
                 input_state->state = 0;
+                ui_widget_input_on_leave(global_state, input_state); // 离开输入控件：遮罩+软键盘清理
                 return next_focus_state;
             }
         }
 
-        // 长+短按*键：光标向左移动
+        // 长+短按*键：光标向左移动（Ctrl+*：光标向上移动一个视觉行，消费型组合键）
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
-            if (input_state->cursor_pos > -1) {
-                input_state->cursor_pos--;
+            if (global_state->is_ctrl_enabled == 1) {
+                global_state->is_ctrl_enabled = 0; // 消费型组合键：用后清除Ctrl状态
+                ui_widget_input_move_cursor_vertical(global_state, input_state, -1);
             }
             else {
-                input_state->cursor_pos = -1;
+                if (input_state->cursor_pos > -1) {
+                    input_state->cursor_pos--;
+                }
+                else {
+                    input_state->cursor_pos = -1;
+                }
+                input_state->desired_x = -1; // 左右移动后，上下移动以新光标位置重新取目标x
             }
-            input_state->desired_x = -1; // 左右移动后，上下移动以新光标位置重新取目标x
             ui_draw_input_buffer(key_event, global_state, input_state);
         }
 
-        // 长+短按#键：光标向右移动
+        // 长+短按#键：光标向右移动（Ctrl+#：光标向下移动一个视觉行，消费型组合键）
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
-            if (input_state->cursor_pos < input_state->textarea.length - 1) {
-                input_state->cursor_pos++;
+            if (global_state->is_ctrl_enabled == 1) {
+                global_state->is_ctrl_enabled = 0; // 消费型组合键：用后清除Ctrl状态
+                ui_widget_input_move_cursor_vertical(global_state, input_state, 1);
             }
             else {
-                input_state->cursor_pos = input_state->textarea.length - 1;
+                if (input_state->cursor_pos < input_state->textarea.length - 1) {
+                    input_state->cursor_pos++;
+                }
+                else {
+                    input_state->cursor_pos = input_state->textarea.length - 1;
+                }
+                input_state->desired_x = -1; // 左右移动后，上下移动以新光标位置重新取目标x
             }
-            input_state->desired_x = -1; // 左右移动后，上下移动以新光标位置重新取目标x
             ui_draw_input_buffer(key_event, global_state, input_state);
         }
 
@@ -1331,8 +1628,8 @@ int32_t ui_widget_menu_event_handler(
     else if (ke->key_edge == -1 && ke->key_code == NANO_KEY_enter) {
         return menu_item_action_callback(ke, gs, ms);
     }
-    // 长+短按*键：光标向上移动
-    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == NANO_KEY_left) {
+    // 长+短按*键/上键：光标向上移动（上键功能同左键）
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && (ke->key_code == NANO_KEY_left || ke->key_code == NANO_KEY_up)) {
         if (ms->first_item_intex == 0 && ms->current_item_index == 0) {
             ms->first_item_intex = ms->item_num - ms->items_per_page;
             ms->current_item_index = ms->item_num - 1;
@@ -1349,8 +1646,8 @@ int32_t ui_widget_menu_event_handler(
 
         return current_focus_state;
     }
-    // 长+短按#键：光标向下移动
-    else if ((ke->key_edge == -1 || ke->key_edge == -2) && ke->key_code == NANO_KEY_right) {
+    // 长+短按#键/下键：光标向下移动（下键功能同右键）
+    else if ((ke->key_edge == -1 || ke->key_edge == -2) && (ke->key_code == NANO_KEY_right || ke->key_code == NANO_KEY_down)) {
         if (ms->first_item_intex == ms->item_num - ms->items_per_page && ms->current_item_index == ms->item_num - 1) {
             ms->first_item_intex = 0;
             ms->current_item_index = 0;
@@ -1550,6 +1847,7 @@ void ui_draw_input_cursor(Key_Event *key_event, Global_State *global_state, Widg
 
 void ui_draw_input_pinyin(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, uint32_t is_picking) {
     // gfx_soft_clear(global_state->gfx);
+    ui_ime_candidate_color_apply(global_state->ui_color_style);
     // 计算候选列表长度
     uint32_t count = 0;
 
@@ -1567,7 +1865,7 @@ void ui_draw_input_pinyin(Key_Event *key_event, Global_State *global_state, Widg
     gfx_draw_rectangle(global_state->gfx,
         input_state->textarea.x, y_offset-1,
         input_state->textarea.width, input_state->textarea.y + input_state->textarea.height - y_offset + 1 + 1,
-        232, 235, 243, 1);
+        S_UI_COLOR_IME_CANDIDATE_BG[0], S_UI_COLOR_IME_CANDIDATE_BG[1], S_UI_COLOR_IME_CANDIDATE_BG[2], 1);
 
     // 候选序号与候选字的排版：逐字按字符实际渲染宽度定位绘制，每字占1个全角宽度、靠左对齐。
     //   （原先通过空格分隔实现对齐，仅适用于定宽点阵字体；抗锯齿比例字体下空格偏窄会错位）
@@ -1576,36 +1874,37 @@ void ui_draw_input_pinyin(Key_Event *key_event, Global_State *global_state, Widg
     wchar_t buf[30];
     if (is_picking) {
         swprintf(buf, 30, L"PY[%-6d]   (%2d/%2d)", input_state->pinyin_keys, (input_state->current_page+1), input_state->candidate_page_num);
-        gfx_font_draw_text(global_state->gfx, font_id, buf, x_offset, y_offset + 0, 17, 85, 238, 1);
+        gfx_font_draw_text(global_state->gfx, font_id, buf, x_offset, y_offset + 0, S_UI_COLOR_IME_CANDIDATE_PINYIN[0], S_UI_COLOR_IME_CANDIDATE_PINYIN[1], S_UI_COLOR_IME_CANDIDATE_PINYIN[2], 1);
         // 候选序号（1~9,0）：逐字靠左绘制
         for (uint32_t j = 0; j < count; j++) {
             gfx_font_draw_char(global_state->gfx, font_id, (j == 9) ? (uint32_t)L'0' : (uint32_t)(L'1' + j),
-                x_offset + j * full_width, y_offset + line_height, 128, 128, 128, 1);
+                x_offset + j * full_width, y_offset + line_height, S_UI_COLOR_IME_CANDIDATE_INDEX[0], S_UI_COLOR_IME_CANDIDATE_INDEX[1], S_UI_COLOR_IME_CANDIDATE_INDEX[2], 1);
         }
     }
     else {
         swprintf(buf, 30, L"PY[%-6d]", input_state->pinyin_keys);
-        gfx_font_draw_text(global_state->gfx, font_id, buf, x_offset, y_offset + 0, 17, 85, 238, 1);
+        gfx_font_draw_text(global_state->gfx, font_id, buf, x_offset, y_offset + 0, S_UI_COLOR_IME_CANDIDATE_PINYIN[0], S_UI_COLOR_IME_CANDIDATE_PINYIN[1], S_UI_COLOR_IME_CANDIDATE_PINYIN[2], 1);
     }
     if (input_state->candidate_num > 0) {
         // 候选字：逐字靠左绘制，每字占1个全角宽度
         for (uint32_t j = 0; j < count; j++) {
             wchar_t ch = input_state->candidate_pages[input_state->current_page][j];
             gfx_font_draw_char(global_state->gfx, font_id, (uint32_t)ch,
-                x_offset + j * full_width, y_offset + 2*line_height, 0, 0, 0, 1);
+                x_offset + j * full_width, y_offset + 2*line_height, S_UI_COLOR_IME_CANDIDATE_TEXT[0], S_UI_COLOR_IME_CANDIDATE_TEXT[1], S_UI_COLOR_IME_CANDIDATE_TEXT[2], 1);
         }
     }
     else {
-        gfx_font_draw_text(global_state->gfx, font_id, L"(无候选字)", x_offset, y_offset + 2*line_height, 128, 128, 128, 1);
+        gfx_font_draw_text(global_state->gfx, font_id, L"(无候选字)", x_offset, y_offset + 2*line_height, S_UI_COLOR_IME_CANDIDATE_INDEX[0], S_UI_COLOR_IME_CANDIDATE_INDEX[1], S_UI_COLOR_IME_CANDIDATE_INDEX[2], 1);
     }
 
-    gfx_draw_line(global_state->gfx, input_state->textarea.x, y_offset-2, input_state->textarea.x + input_state->textarea.width, y_offset-2, 232, 235, 243, 1);
+    gfx_draw_line(global_state->gfx, input_state->textarea.x, y_offset-2, input_state->textarea.x + input_state->textarea.width, y_offset-2, S_UI_COLOR_IME_CANDIDATE_BG[0], S_UI_COLOR_IME_CANDIDATE_BG[1], S_UI_COLOR_IME_CANDIDATE_BG[2], 1);
 
     gfx_refresh(global_state->gfx);
 }
 
 void ui_draw_input_symbol(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
     // gfx_soft_clear(global_state->gfx);
+    ui_ime_candidate_color_apply(global_state->ui_color_style);
     // 计算候选列表长度
     uint32_t count = 0;
 
@@ -1623,7 +1922,7 @@ void ui_draw_input_symbol(Key_Event *key_event, Global_State *global_state, Widg
     gfx_draw_rectangle(global_state->gfx,
         input_state->textarea.x, y_offset-1,
         input_state->textarea.width, input_state->textarea.y + input_state->textarea.height - y_offset + 1 + 1,
-        232, 235, 243, 1);
+        S_UI_COLOR_IME_CANDIDATE_BG[0], S_UI_COLOR_IME_CANDIDATE_BG[1], S_UI_COLOR_IME_CANDIDATE_BG[2], 1);
 
     // 候选序号与候选符号的排版：逐字按字符实际渲染宽度定位绘制，每字占1个全角宽度、靠左对齐。
     //   （原先半角符号补空格实现对齐，仅适用于定宽点阵字体；抗锯齿比例字体下空格偏窄会错位）
@@ -1632,11 +1931,11 @@ void ui_draw_input_symbol(Key_Event *key_event, Global_State *global_state, Widg
     wchar_t text[30];
 
     swprintf(text, 30, L"Symbols      (%2d/%2d)", (input_state->current_page+1), input_state->candidate_page_num);
-    gfx_font_draw_text(global_state->gfx, font_id, text, x_offset, y_offset + 0, 17, 85, 238, 1);
+    gfx_font_draw_text(global_state->gfx, font_id, text, x_offset, y_offset + 0, S_UI_COLOR_IME_CANDIDATE_PINYIN[0], S_UI_COLOR_IME_CANDIDATE_PINYIN[1], S_UI_COLOR_IME_CANDIDATE_PINYIN[2], 1);
     // 候选序号（1~9,0）：逐字靠左绘制
     for (uint32_t j = 0; j < count; j++) {
         gfx_font_draw_char(global_state->gfx, font_id, (j == 9) ? (uint32_t)L'0' : (uint32_t)(L'1' + j),
-            x_offset + j * full_width, y_offset + line_height, 128, 128, 128, 1);
+            x_offset + j * full_width, y_offset + line_height, S_UI_COLOR_IME_CANDIDATE_INDEX[0], S_UI_COLOR_IME_CANDIDATE_INDEX[1], S_UI_COLOR_IME_CANDIDATE_INDEX[2], 1);
     }
 
     if (input_state->candidate_num > 0) {
@@ -1644,14 +1943,14 @@ void ui_draw_input_symbol(Key_Event *key_event, Global_State *global_state, Widg
         for (uint32_t j = 0; j < count; j++) {
             wchar_t ch = input_state->candidate_pages[input_state->current_page][j];
             gfx_font_draw_char(global_state->gfx, font_id, (uint32_t)ch,
-                x_offset + j * full_width, y_offset + 2*line_height, 0, 0, 0, 1);
+                x_offset + j * full_width, y_offset + 2*line_height, S_UI_COLOR_IME_CANDIDATE_TEXT[0], S_UI_COLOR_IME_CANDIDATE_TEXT[1], S_UI_COLOR_IME_CANDIDATE_TEXT[2], 1);
         }
     }
     else {
-        gfx_font_draw_text(global_state->gfx, font_id, L"(无候选符号)", x_offset, y_offset + 2*line_height, 128, 128, 128, 1);
+        gfx_font_draw_text(global_state->gfx, font_id, L"(无候选符号)", x_offset, y_offset + 2*line_height, S_UI_COLOR_IME_CANDIDATE_INDEX[0], S_UI_COLOR_IME_CANDIDATE_INDEX[1], S_UI_COLOR_IME_CANDIDATE_INDEX[2], 1);
     }
 
-    gfx_draw_line(global_state->gfx, input_state->textarea.x, y_offset-2, input_state->textarea.x + input_state->textarea.width, y_offset-2, 232, 235, 243, 1);
+    gfx_draw_line(global_state->gfx, input_state->textarea.x, y_offset-2, input_state->textarea.x + input_state->textarea.width, y_offset-2, S_UI_COLOR_IME_CANDIDATE_BG[0], S_UI_COLOR_IME_CANDIDATE_BG[1], S_UI_COLOR_IME_CANDIDATE_BG[2], 1);
 
     gfx_refresh(global_state->gfx);
 }

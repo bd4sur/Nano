@@ -267,11 +267,24 @@ void gfx_close(Nano_GFX *gfx) {
 }
 
 
+// gfx_refresh 前置/后置钩子（见 graphics.h）
+static GFX_Refresh_Hook gfx_pre_refresh_hook = NULL;
+static GFX_Refresh_Hook gfx_post_refresh_hook = NULL;
+
+void gfx_set_refresh_hook(GFX_Refresh_Hook pre_hook, GFX_Refresh_Hook post_hook) {
+    gfx_pre_refresh_hook = pre_hook;
+    gfx_post_refresh_hook = post_hook;
+}
+
 void gfx_refresh(Nano_GFX *gfx) {
 
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
     GFX_SEM_TAKE
 #endif
+
+    if (gfx_pre_refresh_hook != NULL) {
+        gfx_pre_refresh_hook(gfx);
+    }
 
     if (gfx->is_double_buffer) {
         display_hal_refresh_rgb565_double(gfx->frame_buffer_rgb565_top, gfx->frame_buffer_rgb565_bottom, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
@@ -284,10 +297,58 @@ void gfx_refresh(Nano_GFX *gfx) {
         }
     }
 
+    if (gfx_post_refresh_hook != NULL) {
+        gfx_post_refresh_hook(gfx);
+    }
+
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
     GFX_SEM_GIVE
 #endif
 
+}
+
+// 帧缓冲整体快照/恢复（布局细节封装于此：RGB565 双缓冲为上下半屏两块、单缓冲为一整帧；
+// RGB888 为单块三通道整帧。单/双缓冲一律以显式字段 is_double_buffer 判别）
+uint32_t gfx_frame_snapshot_bytes(Nano_GFX *gfx) {
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        return gfx->width * gfx->height * sizeof(uint16_t);
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        return gfx->width * gfx->height * 3;
+    }
+    return 0;
+}
+
+void gfx_frame_snapshot(Nano_GFX *gfx, void *dst) {
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        if (gfx->is_double_buffer) {
+            uint32_t half_bytes = gfx->width * (gfx->height / 2) * sizeof(uint16_t);
+            memcpy(dst, gfx->frame_buffer_rgb565_top, half_bytes);
+            memcpy((uint8_t *)dst + half_bytes, gfx->frame_buffer_rgb565_bottom, half_bytes);
+        }
+        else {
+            memcpy(dst, gfx->frame_buffer_rgb565_top, gfx->width * gfx->height * sizeof(uint16_t));
+        }
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        memcpy(dst, gfx->frame_buffer_rgb888, gfx->width * gfx->height * 3);
+    }
+}
+
+void gfx_frame_restore(Nano_GFX *gfx, const void *src) {
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        if (gfx->is_double_buffer) {
+            uint32_t half_bytes = gfx->width * (gfx->height / 2) * sizeof(uint16_t);
+            memcpy(gfx->frame_buffer_rgb565_top, src, half_bytes);
+            memcpy(gfx->frame_buffer_rgb565_bottom, (const uint8_t *)src + half_bytes, half_bytes);
+        }
+        else {
+            memcpy(gfx->frame_buffer_rgb565_top, src, gfx->width * gfx->height * sizeof(uint16_t));
+        }
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        memcpy(gfx->frame_buffer_rgb888, src, gfx->width * gfx->height * 3);
+    }
 }
 
 // 将帧缓冲整体上移 rows 行（底部 rows 行内容保留，由调用方覆写）

@@ -1,6 +1,12 @@
 #include <stdio.h>
 #include <time.h>
 
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
+    #include "esp_heap_caps.h"
+    #include "display_hal.h"
+    #include "model/nano_psycho_230k_q80.h"
+#endif
+
 #include "graphics.h"
 #include "input_device.h"
 #include "ui.h"
@@ -38,6 +44,7 @@
 
 #include "ui_tsp.h"
 
+#include "ui_cloud.h"
 #include "ephemeris.h"
 #include "celestial.h"
 #include "nongli.h"
@@ -53,6 +60,12 @@
 
 #include "ui_goldminer.h"
 
+#include "ui_particlelife.h"
+
+#include "ui_ripple.h"
+
+#include "ui_water.h"
+
 #include "ui_tetris.h"
 
 #include "ui_ebook.h"
@@ -61,7 +74,15 @@
 
 #include "ui_musicbox.h"
 
-#define WALLPAPER_PATH ("/home/bd4sur/wp.jpg")
+#include "ui_dict.h"
+
+#include "ui_calendar.h"
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
+    #define WALLPAPER_PATH ("/wp.png")
+#else
+    #define WALLPAPER_PATH ("/home/bd4sur/wp.jpg")
+#endif
 
 // 全局变量（TODO 临时，后续要全部移到全局状态上下文中）
 
@@ -118,9 +139,26 @@ static int32_t s_swipe_max_y = 0;    // 序列中的最大y（最低点）
 #define UI_SWIPE_MASK_PX    (20)
 
 
+// 当前状态是否寄宿文本输入控件（w_input_main）：上滑/下滑手势（呼出/收起软键盘）仅在这些状态识别，
+// 避免误吞水波、OFDM接收等其他状态的触屏拖动；新增输入状态只改这一处
+static int32_t ui_app_state_hosts_input_widget(int32_t state) {
+    return (state == STATE_LLM_INPUT || state == STATE_ANIMAC_CONSOLE ||
+            state == STATE_ANIMAC_RUNNING || state == STATE_OFDM_TX);
+}
+
 void get_key_event(Key_Event *key_event, Global_State *global_state) {
-    // 滑动手势识别（仅Animac控制台状态）：上滑呼出键盘（隐藏态）/下滑关闭键盘（可见态）
-    if (global_state->STATE == STATE_ANIMAC_CONSOLE || global_state->STATE == STATE_ANIMAC_RUNNING) {
+    // 触屏电平锁存（本函数在 Core1 每 1-2ms 轮询一次）：为九键按键提示遮罩提供可靠的
+    // 触发时间戳，避免渲染循环（Core0）帧率不均的低频采样漏掉短按（见 ui.c 遮罩实现）
+    {
+        int32_t touch_pressed = 0;
+        touch_read(NULL, NULL, &touch_pressed);
+        if (touch_pressed) {
+            global_state->last_touch_timestamp = global_state->timestamp;
+        }
+    }
+
+    // 滑动手势识别（仅寄宿文本输入控件的状态）：上滑呼出键盘（隐藏态）/下滑关闭键盘（可见态）
+    if (ui_app_state_hosts_input_widget(global_state->STATE)) {
         int32_t touch_x = 0, touch_y = 0, touch_pressed = 0;
         touch_read(&touch_x, &touch_y, &touch_pressed);
         if (touch_pressed) {
@@ -236,17 +274,8 @@ void get_key_event(Key_Event *key_event, Global_State *global_state) {
 // UI框架：全局GUI+gfx初始化
 // ===============================================================================
 
-// 切换触屏软键盘显隐，并重新布局为键盘让出/恢复空间（供 Ctrl+0 与上滑手势调用）
-static void ui_app_animac_softkbd_toggle(Key_Event *key_event, Global_State *global_state) {
-    if (ui_softkbd_is_visible()) ui_softkbd_hide();
-    else                         ui_softkbd_show();
-    ui_pinyin_ime_reset(); // 键盘显隐切换时，放弃进行中的拼音组字
-    // 重新布局：文本区高度扣除软键盘高度（隐藏时 ui_softkbd_height() 为0，布局复原）
-    int32_t header_height = gfx_font_line_height(global_state->ui_font) + 1;
-    global_state->w_input_main->textarea.height = global_state->gfx->height - ui_softkbd_height() - header_height * 2;
-    global_state->w_input_main->textarea.is_modified = 1;
-    ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
-}
+// 注：软键盘显隐切换已下沉为文本输入控件固有功能（ui.c 的 ui_widget_input_toggle_softkbd，
+// 供 Ctrl+0 组合键与上滑/下滑手势在任何输入状态使用）。
 
 void ui_init(Key_Event *key_event, Global_State *global_state) {
 
@@ -270,8 +299,10 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
     // 自动关机（默认关）
     global_state->auto_shutdown_minutes = 0;
     global_state->auto_shutdown_deadline = 0;
+    global_state->ime_hint_timeout_s = 3; // 按键提示遮罩默认显示3秒
 
     global_state->timestamp_last = 0;
+    global_state->last_touch_timestamp = 0;
 
     global_state->is_ctrl_enabled = 0;
     global_state->llm_status = LLM_STOPPED_NORMALLY;
@@ -606,10 +637,15 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
         L"遗传算法求解旅行商问题",
         L"遗传算法拟合图像",
         L"俄罗斯方块",
+        L"粒子生命",
+        L"水波",
+        L"水池",
+        L"体积云",
+        L"日历",
     };
     global_state->w_menu_main->title = L"小游戏";
     global_state->w_menu_main->items = game_menu_items;
-    global_state->w_menu_main->item_num = 6;
+    global_state->w_menu_main->item_num = 11;
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
 }
 
@@ -621,6 +657,11 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
         case 3: return STATE_GENETIC_TSP;
         case 4: return STATE_GENETIC;
         case 5: return STATE_TETRIS;
+        case 6: return STATE_PARTICLELIFE;
+        case 7: return STATE_RIPPLE;
+        case 8: return STATE_WATER;
+        case 9: return STATE_CLOUD;
+        case 10: return STATE_CALENDAR;
         default: return STATE_MAIN_MENU;
     }
 }
@@ -839,6 +880,16 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
     ui_widget_textarea_set(ke, gs, gs->w_textarea_main, llm_loading_prompt, 0, 0);
     ui_widget_textarea_draw(ke, gs, gs->w_textarea_main);
 
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
+    gs->llm_ctx = llm_context_init_from_buffer(
+        (uint8_t *)psycho_230k_1214_q80,
+        gs->llm_max_seq_len,
+        1.0,
+        1.0,
+        0.8,
+        20,
+        gs->timestamp);
+#else
     gs->llm_ctx = llm_context_init(
         gs->llm_model_path,
         gs->llm_lora_path,
@@ -848,6 +899,8 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
         gs->llm_top_p,
         gs->llm_top_k,
         gs->timestamp);
+#endif
+
 
     gs->llm_ctx->observation = llm_observation;
     gs->llm_ctx->observation_env = gs; // 模拟闭包：将观测函数的词法环境指向UI全局上下文，这样就可以在观测回调中使用UI的API
@@ -901,7 +954,8 @@ void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
         { {L"[1]", L"番茄表",}, {L"[2]", L"鹦鹉笼",}, {L"[3]", L"玲珑仪",}, {L"[A]", L"返回",}, },
         { {L"[4]", L"电子书",}, {L"[5]", L"音乐盒",}, {L"[6]", L"时光集",}, {L"[B]", L"设置",}, },
         { {L"[7]", L"小游戏",}, {L"[8]", L"频谱仪",}, {L"[9]", L"寻呼机",}, {L"[C]", L"自述",}, },
-        { {L"[*]", L"计步器",}, {L"[0]", L"手电筒",}, {L"[#]", L"控制台",}, {L"[D]", L"关机",}, },
+        // { {L"[*]", L"计步器",}, {L"[0]", L"手电筒",}, {L"[#]", L"控制台",}, {L"[D]", L"关机",}, }, // 原入口（手电筒已征用为电子词典）
+        { {L"[*]", L"计步器",}, {L"[0]", L"词典",}, {L"[#]", L"控制台",}, {L"[D]", L"关机",}, },
     };
 
     // 清屏
@@ -998,17 +1052,26 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
         ui_ofdm_menu_init(key_event, global_state);
         global_state->STATE = STATE_OFDM_MENU;
     }
-    // 手电筒
+    // 电子词典（原“手电筒”入口及其颜色风格切换功能已取消，注释保留备查；
+    // 颜色风格切换请使用“系统设置”中的正式按钮）
+    // else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_0) {
+    //     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+    //         global_state->ui_color_style = UI_COLOR_DARK;
+    //     }
+    //     else {
+    //         global_state->ui_color_style = UI_COLOR_LIGHT;
+    //     }
+    // }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_0) {
-        // 暂时用作切换色彩风格功能
-        if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-            global_state->ui_color_style = UI_COLOR_DARK;
+        // 索引就绪（缺失/失效则带进度构建）后进入查询状态；失败则停留在主菜单（错误画面已显示）
+        if (ui_dict_enter(key_event, global_state) == 0) {
+            global_state->STATE = STATE_DICT_QUERY;
         }
         else {
-            global_state->ui_color_style = UI_COLOR_LIGHT;
+            sleep_in_ms(1500); // 错误画面停留片刻
+            ui_widget_grid16_draw(key_event, global_state);
+            gfx_refresh(global_state->gfx);
         }
-        ui_widget_grid16_draw(key_event, global_state);
-        gfx_refresh(global_state->gfx);
     }
     // 返回
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
@@ -1436,10 +1499,24 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     static float gravity_y = -9.8f;
 
 #ifdef IMU_ENABLED
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
+    static int imu_frame_div = 0;
+    if ((imu_frame_div++ & 3) == 0) {
+        float gx = 0.0f;
+        float gy = 0.0f;
+        float gz = 0.0f;
+        imu_read_angle(&gx, &gy, &gz);
+        gravity_x = -9.8f * gx;
+        gravity_y = -9.8f * gy;
+    }
+#else
     imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
     printf("俯仰=%-10.2f    滚转=%-10.2f    航向=%-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw);
     gravity_x = -9.8f * sinf(global_state->roll / 180.0f * M_PI);
     gravity_y = -9.8f * cosf(global_state->roll / 180.0f * M_PI);
+#endif
+
 #endif
 
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
@@ -1447,7 +1524,11 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     int32_t upper_count = 0;
     int32_t lower_count = 0;
 
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
+    float dt = (s_ui_flip_is_throttle) ? (0.8f / 60.0f) : (1.6f / 60.0f);
+#else
     float dt = (s_ui_flip_is_throttle) ? (0.6f / 60.0f) : (1.6f / 60.0f);
+#endif
 
     render_flip(
         global_state->gfx, 0, 0, global_state->gfx->width, global_state->gfx->height,
@@ -1820,6 +1901,12 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
             txt_color[2][0][1] = 255;
             txt_color[2][0][2] = 255;
             break;
+        case 4:
+            wcscpy(cell_text[2][0][1], L"体积云");
+            txt_color[2][0][0] = 255;
+            txt_color[2][0][1] = 170;
+            txt_color[2][0][2] = 0;
+            break;
         default: break;
     }
 
@@ -1975,7 +2062,10 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->enable_planet,
         llcfg->enable_ecliptic_circle,
         llcfg->enable_att_indicator,
-        llcfg->enable_tracking_sun
+        llcfg->enable_tracking_sun,
+        llcfg->cloud_coverage_level,
+        llcfg->cloud_layer_mask,
+        llcfg->cloud_brightness
     );
 
     gfx_dithering(global_state->llgfx);
@@ -2142,8 +2232,13 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
         global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->second);
     gfx_draw_textline(global_state->llgfx, timestr, global_state->llgfx->width - 134, global_state->llgfx->height - 13, 255, 255, 255, 1);
 
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
+    convert_rgb888_to_rgb565_double(global_state->gfx, global_state->llgfx->frame_buffer_rgb888, global_state->llgfx->width, global_state->llgfx->height);
+    gfx_refresh(global_state->gfx);
+#else
     // convert_rgb888_to_rgb565_double(global_state->gfx, global_state->llgfx->frame_buffer_rgb888, global_state->llgfx->width, global_state->llgfx->height);
     gfx_refresh(global_state->llgfx);
+#endif
 
 }
 
@@ -2198,10 +2293,16 @@ void ui_app_linglong_set_realtime(Key_Event *key_event, Global_State *global_sta
 void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_state) {
     // 获取机器姿态（欧拉角）
 #ifdef IMU_ENABLED
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
+
+#else
     if (global_state->linglong_cfg->enable_imu) {
         imu_read_angle(&(global_state->pitch), &(global_state->roll), &(global_state->yaw));
         printf("俯仰=%-10.2f    滚转=%-10.2f    航向=%-10.2f\n", global_state->pitch, global_state->roll, global_state->yaw);
     }
+#endif
+
 #endif
 
     int32_t is_setting_refresh = 0;
@@ -2326,7 +2427,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         else {
             // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->sky_model++;
-            global_state->linglong_cfg->sky_model = global_state->linglong_cfg->sky_model % 4;
+            global_state->linglong_cfg->sky_model = global_state->linglong_cfg->sky_model % 5;
             linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
@@ -2623,6 +2724,19 @@ void ui_app_setting_grid16_draw(Key_Event *key_event, Global_State *global_state
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
         3, 2, L"自动关机", auto_shutdown_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0x00, 0x00, 1);
 
+    wchar_t ime_hint_str[32];
+    if (global_state->ime_hint_timeout_s <= 0) {
+        wcscpy(ime_hint_str, L"关闭");
+    }
+    else {
+        swprintf(ime_hint_str, 32, L"%d秒", (int)global_state->ime_hint_timeout_s);
+    }
+    ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
+        0, 3, L"按键提示", ime_hint_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
+        1, 3, L"颜色风格", (global_state->ui_color_style == UI_COLOR_LIGHT) ? L"亮" : L"暗",
+        cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+
     ui_draw_header(key_event, global_state, L"系统设置", 1);
     ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
 }
@@ -2712,16 +2826,15 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
         global_state->is_auto_submit_after_asr += 1;
         global_state->is_auto_submit_after_asr = global_state->is_auto_submit_after_asr % 2;
     }
+    // 颜色风格（全局UI色彩风格：亮/暗切换，默认暗；重绘由下方统一刷新块完成，
+    // 不得在此绘制主菜单宫格——此前误调用 ui_widget_grid16_draw 导致点击后闪一下主菜单）
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_0) {
-        // 暂时用作切换色彩风格功能
         if (global_state->ui_color_style == UI_COLOR_LIGHT) {
             global_state->ui_color_style = UI_COLOR_DARK;
         }
         else {
             global_state->ui_color_style = UI_COLOR_LIGHT;
         }
-        ui_widget_grid16_draw(key_event, global_state);
-        gfx_refresh(global_state->gfx);
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         global_state->STATE = STATE_SPLASH_SCREEN;
@@ -2744,8 +2857,15 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_enter) {
         // TODO
     }
+    // 按键提示（文本输入控件按键提示遮罩显示时长：关闭(0秒)→3秒→6秒 循环）
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
-        // TODO
+        static const int32_t IME_HINT_TIMEOUT_OPTIONS[] = {0, 3, 6};
+        int32_t idx = 0;
+        for (int32_t i = 0; i < (int32_t)(sizeof(IME_HINT_TIMEOUT_OPTIONS) / sizeof(IME_HINT_TIMEOUT_OPTIONS[0])); i++) {
+            if (IME_HINT_TIMEOUT_OPTIONS[i] == global_state->ime_hint_timeout_s) { idx = i; break; }
+        }
+        idx = (idx + 1) % (int32_t)(sizeof(IME_HINT_TIMEOUT_OPTIONS) / sizeof(IME_HINT_TIMEOUT_OPTIONS[0]));
+        global_state->ime_hint_timeout_s = IME_HINT_TIMEOUT_OPTIONS[idx];
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
         // TODO
@@ -3219,10 +3339,13 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     ///////////////////////////////////////
     // gfx初始化
 
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
+    
+#else
     global_state->gfx = (Nano_GFX*)platform_calloc(1, sizeof(Nano_GFX));
     global_state->gfx->is_double_buffer = 0;
     gfx_init(global_state->gfx, SCREEN_WIDTH, SCREEN_HEIGHT, GFX_COLOR_MODE_RGB888);
-
+#endif
 
 
     ui_init(key_event, global_state);
@@ -3258,7 +3381,13 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
     global_state->linglong_cfg = (Linglong_Config *)platform_calloc(1, sizeof(Linglong_Config));
     linglong_init(global_state->linglong_cfg);
 
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
+    global_state->llgfx = (Nano_GFX*)platform_calloc(1, sizeof(Nano_GFX));
+    global_state->llgfx->is_double_buffer = 0;
+    gfx_init(global_state->llgfx, SCREEN_WIDTH, SCREEN_HEIGHT, GFX_COLOR_MODE_RGB888);
+#else
     global_state->llgfx = global_state->gfx;
+#endif
 
 
     ///////////////////////////////////////
@@ -3345,7 +3474,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         if (global_state->PREV_STATE != global_state->STATE) {
             // 统一为“页眉页脚先入帧缓冲、菜单绘制最后统一刷屏”，避免两阶段断续感
             ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
-            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+            ui_draw_footer_softkeys(key_event, global_state, L"↑", L"", L"↓", L"选择");
             ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -3404,7 +3533,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
             ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
-            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+            ui_draw_footer_softkeys(key_event, global_state, L"↑", L"", L"↓", L"选择");
             ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -3431,12 +3560,30 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         if (global_state->PREV_STATE != global_state->STATE) {
             // 统一为“页眉页脚先入帧缓冲、菜单绘制最后统一刷屏”，避免两阶段断续感
             ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
-            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+            ui_draw_footer_softkeys(key_event, global_state, L"↑", L"", L"↓", L"选择");
             ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
 
         global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, game_menu_item_action, STATE_MAIN_MENU, STATE_GAME_MENU);
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 日历
+    /////////////////////////////////////////////
+
+    case STATE_CALENDAR:
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_calendar_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        ui_calendar_render_frame(key_event, global_state);
+        ui_calendar_event_handler(key_event, global_state);
 
         break;
 
@@ -3873,6 +4020,84 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
 
     /////////////////////////////////////////////
+    // 粒子生命
+    /////////////////////////////////////////////
+
+    case STATE_PARTICLELIFE: {
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_particlelife_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 按键处理（A返回 / D或2重置）；返回则释放粒子数组并跳过一帧渲染
+        ui_particlelife_event_handler(key_event, global_state);
+        if (global_state->STATE != STATE_PARTICLELIFE) {
+            ui_particlelife_on_exit();
+            break;
+        }
+
+        // 逻辑更新 + 渲染一帧
+        ui_particlelife_render_frame(key_event, global_state);
+
+        break;
+    }
+
+
+    /////////////////////////////////////////////
+    // 水波
+    /////////////////////////////////////////////
+
+    case STATE_RIPPLE: {
+
+        // 首次获得焦点：初始化（从SD卡读取/wp.png并解码为纹理）
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_ripple_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 按键处理（A返回）；返回则释放纹理与波场缓冲并跳过一帧渲染
+        ui_ripple_event_handler(key_event, global_state);
+        if (global_state->STATE != STATE_RIPPLE) {
+            ui_ripple_on_exit();
+            break;
+        }
+
+        // 触摸激发 + 逻辑更新 + 渲染一帧
+        ui_ripple_render_frame(key_event, global_state);
+
+        break;
+    }
+
+
+    /////////////////////////////////////////////
+    // 水池（WebGL Water 移植）
+    /////////////////////////////////////////////
+
+    case STATE_WATER: {
+
+        // 首次获得焦点：初始化（分配高度/速度场、法线场、视野映射与输出缓冲）
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_water_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 按键处理（A返回 / D或2雨滴）；返回则释放全部内存并跳过一帧渲染
+        ui_water_event_handler(key_event, global_state);
+        if (global_state->STATE != STATE_WATER) {
+            ui_water_on_exit();
+            break;
+        }
+
+        // 模拟 + 渲染一帧（触摸落水在 render_frame 内完成）
+        ui_water_render_frame(key_event, global_state);
+
+        break;
+    }
+
+
+    /////////////////////////////////////////////
     // 俄罗斯方块
     /////////////////////////////////////////////
 
@@ -3890,6 +4115,29 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 重力更新 + 渲染一帧
         ui_tetris_render_frame(key_event, global_state);
+
+        break;
+    }
+
+
+    /////////////////////////////////////////////
+    // 体积云与天空仿真
+    /////////////////////////////////////////////
+
+    case STATE_CLOUD: {
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_cloud_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 按键处理（方向键视角 / 回车太阳 / 返回主菜单）；返回主菜单则跳过一帧渲染
+        ui_cloud_event_handler(key_event, global_state);
+        if (global_state->STATE != STATE_CLOUD) break;
+
+        // 渲染一帧
+        ui_cloud_render_frame(key_event, global_state);
 
         break;
     }
@@ -3957,7 +4205,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         if (global_state->PREV_STATE != global_state->STATE) {
             // 统一为“页眉页脚先入帧缓冲、菜单绘制最后统一刷屏”，避免两阶段断续感
             ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
-            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+            ui_draw_footer_softkeys(key_event, global_state, L"↑", L"", L"↓", L"选择");
             ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -4067,7 +4315,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 从播放态返回时列表保留，仅重绘）
         if (global_state->PREV_STATE != global_state->STATE) {
             ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
-            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
+            ui_draw_footer_softkeys(key_event, global_state, L"↑", L"", L"↓", L"选择");
             ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -4175,6 +4423,35 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
 
         break;
+
+    /////////////////////////////////////////////
+    // 电子词典：前缀查询（候选菜单 + 固定软键盘；统一 GFX_FONT_ALPHA_12）
+    /////////////////////////////////////////////
+
+    case STATE_DICT_QUERY:
+
+        // 注意：必须先更新 PREV_STATE 再调用事件处理——若处理中发生状态迁移（如退出回主菜单），
+        // 依赖“PREV_STATE != STATE 才重绘”的目标状态才能触发首帧重绘
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_dict_query_event(key_event, global_state,
+            STATE_MAIN_MENU, STATE_DICT_QUERY, STATE_DICT_DETAIL);
+
+        break;
+
+    /////////////////////////////////////////////
+    // 电子词典：词条详情（字体 GFX_FONT_ALPHA_16）
+    /////////////////////////////////////////////
+
+    case STATE_DICT_DETAIL:
+
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_dict_detail_event(key_event, global_state,
+            STATE_DICT_QUERY, STATE_DICT_DETAIL);
+
+        break;
+
 
     /////////////////////////////////////////////
     // 关机确认
@@ -4440,13 +4717,15 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        // NOTE 临时调试代码（后续删除）：初始化REPL前打印当前内存使用情况
-        // printf("[Animac] DRAM Free: %u | Largest: %u | PSRAM Free: %u | DMA Free: %u/%u\n",
-        //     heap_caps_get_free_size(MALLOC_CAP_8BIT),
-        //     heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-        //     heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-        //     heap_caps_get_free_size(MALLOC_CAP_DMA),
-        //     heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
+    // NOTE 临时调试代码（后续删除）：初始化REPL前打印当前内存使用情况
+    printf("[Animac] DRAM Free: %u | Largest: %u | PSRAM Free: %u | DMA Free: %u/%u\n",
+        heap_caps_get_free_size(MALLOC_CAP_8BIT),
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+        heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+        heap_caps_get_free_size(MALLOC_CAP_DMA),
+        heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+#endif
 
         ui_animac_init(key_event, global_state);
 
@@ -4476,18 +4755,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 编辑器模式：驱动解释器事件循环（定时器等异步任务），并将其输出行搬入控制台
         ui_animac_idle_pump(key_event, global_state, &s_animac_console_text_len);
 
-        // 上滑手势：请求切换软键盘显隐（Core1手势识别，见 get_key_event）
-        if (ui_softkbd_take_toggle_request()) {
-            ui_app_animac_softkbd_toggle(key_event, global_state);
-            break;
-        }
-
-        // Ctrl+0 组合键（十六键网格或软键盘自身均可）：呼出/关闭触屏软键盘
-        if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_0 && global_state->is_ctrl_enabled == 1) {
-            global_state->is_ctrl_enabled = 0;
-            ui_app_animac_softkbd_toggle(key_event, global_state);
-            break;
-        }
+        // 注：软键盘切换请求消费与 Ctrl+0 绑定均已下沉到文本输入控件（ui.c），此处不再拦截
 
         // Ctrl+V（触屏软键盘）：恢复上次提交的输入内容到输入区
         if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->is_softkbd == 1
@@ -4517,18 +4785,12 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             global_state->STATE = ui_widget_input_event_handler(key_event, global_state, global_state->w_input_main, STATE_MAIN_MENU, STATE_ANIMAC_CONSOLE, STATE_ANIMAC_RUNNING);
         }
 
-        // 离开控制台时关闭软键盘恢复布局，并销毁解释器上下文释放内存（约2MB PSRAM）
+        // 离开控制台时销毁解释器上下文释放内存（约2MB PSRAM）
+        // （软键盘收起与布局恢复已由文本输入控件的退出路径固有处理，见 ui.c ui_widget_input_on_leave）
         if (global_state->STATE != STATE_ANIMAC_CONSOLE && global_state->STATE != STATE_ANIMAC_RUNNING) {
-            ui_softkbd_hide();
             ui_pinyin_ime_reset();
             ui_animac_close(key_event, global_state);
             global_state->ui_font = s_animac_prev_ui_font; // 恢复进入 STATE_ANIMAC_* 之前的字体
-        }
-
-        // 软键盘自身状态变化（粘滞修饰键、按下高亮）时，补画键盘并刷新
-        if (ui_softkbd_is_visible() && ui_softkbd_take_dirty()) {
-            ui_softkbd_draw(global_state->gfx, (uint8_t)global_state->is_ctrl_enabled);
-            gfx_refresh(global_state->gfx);
         }
 
         break;

@@ -383,32 +383,15 @@ static void ebook_load_window(Key_Event *key_event, Global_State *global_state, 
 // 阅读渲染/事件
 // ===============================================================================
 
-// 总进度滚动条：显示当前页在全部页中的位置（替代文本控件自带的“缓冲区内行位置”滚动条）
+// 总进度滚动条：显示当前页在全部页中的位置（替代文本控件自带的“缓冲区内行位置”滚动条）。
+// 显示风格复用 ui.c 的 ui_draw_scroll_bar（配色/2px轨道+2px滑块/横向偏移/最小高度与限位均一致）：
+// 将“页”映射为其“行”语义——全部页视为 line_num 行、视口视为 1 行、当前页视为 current_line。
 static void ui_ebook_draw_progress_bar(Key_Event *key_event, Global_State *global_state) {
     Widget_Textarea_State *ta = global_state->w_textarea_main;
-    uint8_t bg_R = 128, bg_G = 128, bg_B = 128;
-    uint8_t fg_R = 255, fg_G = 255, fg_B = 255;
-    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-        bg_R = 200; bg_G = 200; bg_B = 200;
-        fg_R = 33;  fg_G = 33;  fg_B = 33;
-    }
-    int32_t x = ta->x + ta->width - 1;
-    int32_t y = ta->y;
-    int32_t h = ta->height;
-    // 轨道
-    gfx_draw_line(global_state->gfx, x, y, x, y + h, bg_R, bg_G, bg_B, 1);
     int32_t pages = (s_page_count <= 0) ? 1 : s_page_count;
-    int32_t bar_h = h / pages;
-    if (bar_h < 3) bar_h = 3;
-    if (bar_h > h) bar_h = h;
-    int32_t y0 = y;
-    if (pages > 1) {
-        // 以视口首行所在页表示总进度
-        int32_t cur_page = (s_buf_start_line + ta->current_line) / ((s_view_lines > 0) ? s_view_lines : 1);
-        y0 = y + cur_page * (h - bar_h) / (pages - 1);
-    }
-    gfx_draw_line(global_state->gfx, x, y0, x, y0 + bar_h, fg_R, fg_G, fg_B, 1);
-    gfx_draw_line(global_state->gfx, x - 1, y0, x - 1, y0 + bar_h, fg_R, fg_G, fg_B, 1);
+    // 以视口首行所在页表示总进度
+    int32_t cur_page = (s_buf_start_line + ta->current_line) / ((s_view_lines > 0) ? s_view_lines : 1);
+    ui_draw_scroll_bar(key_event, global_state, cur_page, pages, 1, ta->x, ta->y, ta->width, ta->height);
 }
 
 int32_t ui_ebook_reading_render(Key_Event *key_event, Global_State *global_state) {
