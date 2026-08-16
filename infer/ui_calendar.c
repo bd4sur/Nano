@@ -2,7 +2,8 @@
 //
 // 进入时定位到系统当前年月，今天以高亮色块标出；静止画面不做重复推帧。
 //   - 左右键：切换上月/下月；上下键：切换上一年/下一年；
-//   - 0 键：回到系统当前年月；A(ESC) 或 D(回车)：返回小游戏菜单。
+//   - 0 键：回到系统当前年月；D(回车)：查看光标选中日期（今天）的黄历；
+//   - A(ESC)：返回小游戏菜单。
 
 #include "ui_calendar.h"
 #include "ui_color.h"
@@ -153,7 +154,7 @@ int32_t ui_calendar_render_frame(Key_Event *key_event, Global_State *global_stat
 
     // 页眉/页脚先入帧缓冲，日历网格最后统一推帧
     ui_draw_header(key_event, global_state, title, 1);
-    ui_draw_footer_softkeys(key_event, global_state, L"上月", L"今天", L"下月", L"返回");
+    ui_draw_footer_softkeys(key_event, global_state, L"上月", L"今天", L"下月", L"黄历");
 
     // 正文背景（页眉与页脚之间）
     int32_t top = header_height;
@@ -216,6 +217,18 @@ int32_t ui_calendar_render_frame(Key_Event *key_event, Global_State *global_stat
 }
 
 
+// 打开黄历模态框（触屏命中日期 / Enter 查看“今天”共用）。
+// 打开时刻由 timestamp 记录，用于吞掉同一手势的残留按键。
+static void ui_calendar_open_almanac(int32_t year, int32_t month, int32_t day, Global_State *global_state) {
+    // 计算黄历（成功=内容；失败=错误态提示，如 1900/2100 边界外）
+    ui_almanac_open(year, month, day, global_state->hour, global_state->minute);
+    s_almanac_active = 1;
+    s_almanac_dirty = 1;
+    s_almanac_open_timestamp = global_state->timestamp;
+    s_cal_dirty = 1;   // 打开模态框后停止日历重绘
+}
+
+
 int32_t ui_calendar_event_handler(Key_Event *key_event, Global_State *global_state) {
     // 触屏轮询（独立于 16 宫格键；按下沿判定见软键盘同款范式）：
     // 日期数字的点击无法经 16 宫格键区分（整个屏幕都被映射为 4x4 键），必须直读触屏。
@@ -252,13 +265,7 @@ int32_t ui_calendar_event_handler(Key_Event *key_event, Global_State *global_sta
     if (touch_edge) {
         int32_t day = ui_calendar_touch_hit(touch_x, touch_y, global_state);
         if (day != 0) {
-            // 计算黄历（成功=内容；失败=错误态提示，如 1900/2100 边界外）
-            ui_almanac_open(s_cal_year, s_cal_month, day,
-                            global_state->hour, global_state->minute);
-            s_almanac_active = 1;
-            s_almanac_dirty = 1;
-            s_almanac_open_timestamp = global_state->timestamp;
-            s_cal_dirty = 1;   // 打开模态框后停止日历重绘
+            ui_calendar_open_almanac(s_cal_year, s_cal_month, day, global_state);
             s_almanac_touch_prev = touch_pressed;
             return 0;
         }
@@ -311,8 +318,11 @@ int32_t ui_calendar_event_handler(Key_Event *key_event, Global_State *global_sta
             }
             break;
         case NANO_KEY_esc:     // A 键返回小游戏菜单
-        case NANO_KEY_enter:   // D（回车）返回小游戏菜单
             global_state->STATE = STATE_GAME_MENU;
+            break;
+        case NANO_KEY_enter:   // D（回车）：查看光标选中日期（今天）的黄历
+            ui_calendar_open_almanac(global_state->year, global_state->month,
+                                     global_state->day, global_state);
             break;
         default:
             break;

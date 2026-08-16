@@ -2847,8 +2847,17 @@ void render_sky(Nano_GFX *gfx,
             if (cp.fov_deg < 2) cp.fov_deg = 2;
             if (cp.fov_deg > 89) cp.fov_deg = 89;
         } else {
-            // 鱼眼：默认 f=1 → 整半球（90°/f）
-            cp.fov_deg = (int)lrintf(90.0f / MAX(0.2f, f));
+            // 鱼眼：天象仪等距投影以「天球盘半径 sky_radius = min(W,H)/2」为 90° 基准
+            // （θ = (π/2)·r/(sky_radius·f)），而云内核鱼眼以「屏幕对角」为 fov_deg 基准
+            // （θ = fov_deg·(r/(H/2))/fishRmax）。两者逐像素对齐需乘 aspect 因子：
+            //   fov_deg = 90° · fishRmax · (H/2)/sky_radius / f
+            // 320×240、f=1 → 150°（半高 90°、对角 150°，与恒星投影一致；原 90/f 使半高仅 54°，视场偏窄）。
+            const float sky_r = MAX(1.0f, sky_radius);
+            const float halfH = (float)fb_height / 2.0f;
+            const float fishRmax =
+                sqrtf((float)(fb_width * fb_width + fb_height * fb_height)
+                      / (float)fb_height / (float)fb_height);
+            cp.fov_deg = (int)lrintf(90.0f * fishRmax * (halfH / sky_r) / MAX(0.2f, f));
             if (cp.fov_deg < 5) cp.fov_deg = 5;
             if (cp.fov_deg > 170) cp.fov_deg = 170;
         }

@@ -548,6 +548,20 @@ static inline float dualLobPhase(float g0, float g1, float w, float cosTheta) {
 static Cv3 *s_transLut = NULL;
 static Cv3 *s_msLut = NULL;
 
+// 确保 LUT 缓冲已分配（只有此函数分配；ui_cloud_init 与天象仪集成共用）。
+// 返回 0 成功，-1 分配失败（已回滚释放）。
+static int cloud_ensure_luts_buffers(void) {
+    if (s_transLut && s_msLut) return 0;
+    s_transLut = (Cv3 *)platform_malloc(sizeof(Cv3) * TRANS_LUT_W * TRANS_LUT_H);
+    s_msLut    = (Cv3 *)platform_malloc(sizeof(Cv3) * MS_LUT_W * MS_LUT_H);
+    if (!s_transLut || !s_msLut) {
+        if (s_transLut) { free(s_transLut); s_transLut = NULL; }
+        if (s_msLut)    { free(s_msLut);    s_msLut = NULL; }
+        return -1;
+    }
+    return 0;
+}
+
 static Cv2 lutTransmittanceParamsToUv(const CloudScene *s, float viewHeight, float viewZenithCosAngle) {
     float H = sqrtf(fmaxf(0.0f, s->topRadius * s->topRadius - s->bottomRadius * s->bottomRadius));
     float rho = sqrtf(fmaxf(0.0f, viewHeight * viewHeight - s->bottomRadius * s->bottomRadius));
@@ -1579,15 +1593,9 @@ static void cloud_write_pixel(int32_t x, Cv3 hdr, uint8_t *rgb_line) {
 int32_t ui_cloud_init(Key_Event *key_event, Global_State *global_state) {
     (void)key_event;
     // LUT 缓冲一次性申请（PSRAM，见 s_transLut/s_msLut 处注释）；失败则回主菜单
-    if (!s_transLut || !s_msLut) {
-        s_transLut = (Cv3 *)platform_malloc(sizeof(Cv3) * TRANS_LUT_W * TRANS_LUT_H);
-        s_msLut    = (Cv3 *)platform_malloc(sizeof(Cv3) * MS_LUT_W * MS_LUT_H);
-        if (!s_transLut || !s_msLut) {
-            if (s_transLut) { free(s_transLut); s_transLut = NULL; }
-            if (s_msLut)    { free(s_msLut);    s_msLut = NULL; }
-            global_state->STATE = STATE_MAIN_MENU;
-            return -1;
-        }
+    if (cloud_ensure_luts_buffers() != 0) {
+        global_state->STATE = STATE_MAIN_MENU;
+        return -1;
     }
     cloud_generate_noise_textures();
     if (!s_ui.first_frame) {
@@ -1793,10 +1801,12 @@ static void cloud_setup_camera(float roll_rad, Cv3 *camPos, Cv3 *forward, Cv3 *r
     *camUp = v3cross(*right, *forward);
     *camUp = v3norm(*camUp);
     // 绕视线轴滚转（与天象仪 fisheye_project 的 roll 约定一致：正值为顺时针）
+    // 注意：天象仪 fisheye_project 的屏幕 x 与 right 轴反号（screen_x ∝ -vx），
+    // 因此本侧 roll 需与此处相反的 sin 符号才能产生相同的屏幕方向。
     if (roll_rad != 0.0f) {
         float cr = cosf(roll_rad), sr = sinf(roll_rad);
-        Cv3 rr = v3add(v3mul(*right, cr), v3mul(*camUp, -sr));
-        Cv3 uu = v3add(v3mul(*right, sr), v3mul(*camUp, cr));
+        Cv3 rr = v3add(v3mul(*right, cr), v3mul(*camUp, sr));
+        Cv3 uu = v3add(v3mul(*right, -sr), v3mul(*camUp, cr));
         *right = rr;
         *camUp = uu;
     }
@@ -1934,6 +1944,9 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
 // 将外部参数应用到内部场景（光源/相机/云参数），并执行一次核心渲染。
 // 独立应用与天象仪集成共用此入口，保证两端的体积云/大气渲染行为一致。
 void ui_cloud_render_core(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
+    // LUT 缓冲首次分配：独立云应用由 ui_cloud_init 分配；天象仪等直接调用方
+    // 也在此兜底分配，避免只渲染出黑屏（分配失败则本帧跳过，下帧重试）。
+    if (cloud_ensure_luts_buffers() != 0) return;
     cloud_generate_noise_textures();
     static int s_scene_ready = 0;
     if (!s_scene_ready) {
