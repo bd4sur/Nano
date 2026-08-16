@@ -48,7 +48,7 @@
 typedef struct NM_File NM_File;
 struct NM_File {
 #if defined(NM_PLATFORM_ESP32)
-    FILE *fp;              // ESP32：SD 卡经 VFS 提供标准 stdio（SD.begin 默认挂载 /sdcard）
+    void *impl;            // ESP32：SD 卡 File 对象（由 nano_min_esp32.cpp 实现）
 #else
     int fd;                // 普通 Linux：POSIX fd
 #endif
@@ -56,75 +56,54 @@ struct NM_File {
 
 #if defined(NM_PLATFORM_ESP32)
 
-// 业务路径（SD 根相对，如 "/kv.tmp"）→ stdio 路径（"/sdcard/kv.tmp"）
-static void nm_fix_path(const char *in, char *out, size_t out_size) {
-    if (in[0] == '/') snprintf(out, out_size, "/sdcard%s", in);
-    else              snprintf(out, out_size, "/sdcard/%s", in);
+// ESP32：经 Arduino SD 库访问（C++，实现在 nano_min_esp32.cpp）。
+// 不能走 stdio/POSIX 的 "/sdcard" VFS 路径：部分 Arduino-ESP32 内核未将 SD 挂载点注册进 VFS，
+// fopen("/sdcard/...") 会报 ENOENT；设备上唯一可靠的途径是 SD 库 API 本身。
+// 路径直接使用业务路径（SD 根相对，如 "/llm/nano_min_work.tmp"），不添加任何前缀。
+void   *nm_sd_open(const char *path, int32_t rw); // rw=0 只读；rw=1 读写（不存在则创建，不截断）
+int32_t nm_sd_pread (void *f, void *buf, uint32_t size, uint64_t offset);
+int32_t nm_sd_pwrite(void *f, const void *buf, uint32_t size, uint64_t offset);
+void    nm_sd_close(void *f);
+int32_t nm_sd_remove(const char *path);
+int32_t nm_sd_exists(const char *path);
+
+static NM_File *nm_wrap_impl(void *impl) {
+    if (!impl) return NULL;
+    NM_File *f = (NM_File *)platform_malloc_internal(sizeof(NM_File));
+    if (!f) { nm_sd_close(impl); return NULL; }
+    f->impl = impl;
+    return f;
 }
 
 static NM_File *nm_fopen_read(const char *path) {
-    char p[256]; nm_fix_path(path, p, sizeof(p));
-    FILE *fp = fopen(p, "rb");
-    if (!fp) return NULL;
-    NM_File *f = (NM_File *)platform_malloc_internal(sizeof(NM_File));
-    if (!f) { fclose(fp); return NULL; }
-    f->fp = fp;
-    return f;
+    return nm_wrap_impl(nm_sd_open(path, 0));
 }
 
 static NM_File *nm_fopen_rw(const char *path, uint64_t total_bytes) {
     (void)total_bytes; // FatFS 随写入自动扩展
-    char p[256]; nm_fix_path(path, p, sizeof(p));
-    FILE *fp = fopen(p, "w+b"); // 创建/截断 + 读写
-    if (!fp) return NULL;
-    NM_File *f = (NM_File *)platform_malloc_internal(sizeof(NM_File));
-    if (!f) { fclose(fp); return NULL; }
-    f->fp = fp;
-    return f;
+    return nm_wrap_impl(nm_sd_open(path, 1));
 }
 
 static int32_t nm_fread_at(NM_File *f, void *buf, uint32_t size, uint64_t offset) {
-    if (fseek(f->fp, (long)offset, SEEK_SET) != 0) return -1;
-    uint8_t *p = (uint8_t *)buf;
-    uint32_t done = 0;
-    while (done < size) {
-        size_t r = fread(p + done, 1, size - done, f->fp);
-        if (r == 0) return -1;
-        done += (uint32_t)r;
-    }
-    return 0;
+    return nm_sd_pread(f->impl, buf, size, offset);
 }
 
 static int32_t nm_fwrite_at(NM_File *f, const void *buf, uint32_t size, uint64_t offset) {
-    if (fseek(f->fp, (long)offset, SEEK_SET) != 0) return -1;
-    uint8_t *p = (uint8_t *)buf;
-    uint32_t done = 0;
-    while (done < size) {
-        size_t r = fwrite(p + done, 1, size - done, f->fp);
-        if (r == 0) return -1;
-        done += (uint32_t)r;
-    }
-    fflush(f->fp); // 保证后续读立即可见
-    return 0;
+    return nm_sd_pwrite(f->impl, buf, size, offset);
 }
 
 static void nm_fclose(NM_File *f) {
     if (!f) return;
-    fclose(f->fp);
+    nm_sd_close(f->impl);
     free(f);
 }
 
 static int32_t nm_fremove(const char *path) {
-    char p[256]; nm_fix_path(path, p, sizeof(p));
-    return (remove(p) == 0) ? 0 : -1;
+    return nm_sd_remove(path);
 }
 
 static int32_t nm_fexists(const char *path) {
-    char p[256]; nm_fix_path(path, p, sizeof(p));
-    FILE *fp = fopen(p, "rb");
-    if (!fp) return 0;
-    fclose(fp);
-    return 1;
+    return nm_sd_exists(path);
 }
 
 #else // 普通 Linux：POSIX 实现

@@ -15,8 +15,9 @@
 //   模型文件随机读 platform_file_*、fs_init 由应用调用）；KV/logits/索引文件的
 //   随机读写由引擎内部按平台宏选择实现：
 //     - 普通 Linux：POSIX open/pread/pwrite；
-//     - ESP32（ESP32/ARDUINO_ARCH_ESP32/ESP_PLATFORM/NANO_ESP32_*）：标准 stdio，
-//       路径自动加 "/sdcard" 前缀（SD.begin 默认挂载点），文件系统位于 SD 卡。
+//     - ESP32（ESP32/ARDUINO_ARCH_ESP32/ESP_PLATFORM/NANO_ESP32_*）：
+//       经 Arduino SD 库（实现在 nano_min_esp32.cpp，C++ 垫片；部分内核未把
+//       SD 挂载点注册进 VFS，stdio/POSIX 路径不可用），文件系统位于 SD 卡。
 //
 //   构建（WSL2，在 infer 目录下）：
 //     gcc -DNANO_CLI -O2 -Wall -o bin/nano_min main_nano_min.c nano_min.c platform_linux.c utils.c -lm -pthread
