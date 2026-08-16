@@ -78,11 +78,7 @@
 
 #include "ui_calendar.h"
 
-#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
-    #define WALLPAPER_PATH ("/wp.png")
-#else
-    #define WALLPAPER_PATH ("/home/bd4sur/wp.jpg")
-#endif
+#define WALLPAPER_PATH (PLATFORM_ROOT_DIR "/wp.png")
 
 // 全局变量（TODO 临时，后续要全部移到全局状态上下文中）
 
@@ -988,10 +984,14 @@ void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
     // 所有格子的图标路径（暂定全部为 animac.png，后续逐格替换）。尺寸均为36x36。
     // 图标经 ui_icon_draw_centered 绘制：首次读取解码后常驻缓存于PSRAM，之后直接从缓存绘制
     const char *cell_icon_path[4][4] = {
-        {"/icon/fanqie.png", "/icon/nano.png", "/icon/linglong.png", "/icon/home.png"},
-        {"/icon/ebook.png", "/icon/default.png", "/icon/album.png", "/icon/settings.png"},
-        {"/icon/game.png", "/icon/default.png", "/icon/ptt.png", "/icon/default.png"},
-        {"/icon/default.png", "/icon/default.png", "/icon/animac.png", "/icon/poweroff.png"},
+        {PLATFORM_ROOT_DIR "/icon/fanqie.png", PLATFORM_ROOT_DIR "/icon/nano.png",
+         PLATFORM_ROOT_DIR "/icon/linglong.png", PLATFORM_ROOT_DIR "/icon/home.png"},
+        {PLATFORM_ROOT_DIR "/icon/ebook.png", PLATFORM_ROOT_DIR "/icon/default.png",
+         PLATFORM_ROOT_DIR "/icon/album.png", PLATFORM_ROOT_DIR "/icon/settings.png"},
+        {PLATFORM_ROOT_DIR "/icon/game.png", PLATFORM_ROOT_DIR "/icon/default.png",
+         PLATFORM_ROOT_DIR "/icon/ptt.png", PLATFORM_ROOT_DIR "/icon/default.png"},
+        {PLATFORM_ROOT_DIR "/icon/default.png", PLATFORM_ROOT_DIR "/icon/default.png",
+         PLATFORM_ROOT_DIR "/icon/animac.png", PLATFORM_ROOT_DIR "/icon/poweroff.png"},
     };
 
     for (int32_t row = 0; row < 4; row++) {
@@ -4527,7 +4527,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             gfx_soft_clear(global_state->gfx);
             gfx_draw_textline_centered(global_state->gfx, L"枚举图片文件", 160, 10, 0x66, 0xcc, 0xff, 1);
 
-            const char *path = "/image";
+            const char *path = PLATFORM_ROOT_DIR "/image";
 
             // 获取数量
             int32_t count = list_files(path, NULL);

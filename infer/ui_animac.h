@@ -22,6 +22,10 @@ static Nano_GFX *gfx = NULL;
 
 static am_repl_ctx_t *ctx = NULL;
 
+// 解释器工作目录宽前缀（带尾斜杠；ESP32 前缀为空时保持 L"/"，即 SD 根）。
+// 在 ui_animac_init 中由 PLATFORM_ROOT_DIR 初始化。
+static wchar_t s_animac_root[128] = L"/";
+
 // 启动画面（进入控制台时显示，也用于 .clear 指令恢复）
 #define UI_ANIMAC_STARTUP_MESSAGE \
     L"灵机计算引擎 V2608 | M5Core2(ESP32)\n(c) 2018-2026 BD4SUR\nEnter换行, Ctrl+Enter执行, 上滑或Ctrl+0呼出键盘\nCtrl+V恢复上次输入, .ls列出文件, .load载入, .save保存, .clear清屏重置, .editor/.repl切换模式\n"
@@ -130,6 +134,11 @@ static int32_t ui_animac_reset_ctx() {
 
 int32_t ui_animac_init(Key_Event *key_event, Global_State *global_state) {
     gfx = global_state->gfx;
+    // 工作目录宽前缀（带尾斜杠）：ESP32 前缀为空 → 保持 L"/"（SD 根）
+    _mbstowcs(s_animac_root, PLATFORM_ROOT_DIR, 126);
+    size_t rl = wcslen(s_animac_root);
+    if (rl == 0) wcscpy(s_animac_root, L"/");
+    else if (s_animac_root[rl - 1] != L'/') { s_animac_root[rl] = L'/'; s_animac_root[rl + 1] = L'\0'; }
     // 控制台工作缓冲区分配于 PSRAM（避免约 12KB 常驻内部 DRAM）
     if (s_animac_last_input == NULL)    s_animac_last_input    = (wchar_t *)platform_calloc(UI_STR_BUF_MAX_LENGTH, sizeof(wchar_t));
     if (s_animac_pending_input == NULL) s_animac_pending_input = (wchar_t *)platform_calloc(UI_STR_BUF_MAX_LENGTH, sizeof(wchar_t));
@@ -304,8 +313,8 @@ static int32_t ui_animac_editor_start() {
     s_editor.vm_alloc = am_allocator_pool_get_vm(s_editor.pool);
     s_editor.heap_alloc = am_allocator_pool_get_heap(s_editor.pool);
 
-    // 工作目录固定为 SD 卡根目录
-    s_editor.rt = am_runtime_create(s_editor.vm_alloc, s_editor.heap_alloc, L"/", &S_ANIMAC_EDITOR_VTABLE);
+    // 工作目录 = 根前缀（ESP32 为 SD 卡根目录）
+    s_editor.rt = am_runtime_create(s_editor.vm_alloc, s_editor.heap_alloc, s_animac_root, &S_ANIMAC_EDITOR_VTABLE);
     if (!s_editor.rt) {
         am_allocator_pool_destroy(s_editor.pool);
         s_editor.pool = NULL;
@@ -368,8 +377,7 @@ static void ui_animac_editor_eval(Key_Event *key_event, Global_State *global_sta
         return;
     }
 
-    wchar_t base_dir_w[2] = L"/";
-    am_ast_t *linked = am_link(ast, base_dir_w, am_host_read_source_from_file, NULL);
+    am_ast_t *linked = am_link(ast, s_animac_root, am_host_read_source_from_file, NULL);
     if (!linked) {
         am_ast_destroy(ast);
         ui_animac_console_append(output, L"\n[editor] 链接失败");
@@ -567,9 +575,9 @@ static int32_t ui_animac_handle_ui_command(Key_Event *key_event, Global_State *g
         return 1;
     }
 
-    // .ls：列出SD卡根目录文件
+    // .ls：列出根目录文件
     if (wcscmp(cmd, L".ls") == 0) {
-        int32_t count = list_files("/", NULL);
+        int32_t count = list_files(PLATFORM_ROOT_DIR "/", NULL);
         if (count < 0) {
             ui_animac_console_append(output, L"\n[ls] 无法打开SD卡根目录");
         }
@@ -578,7 +586,7 @@ static int32_t ui_animac_handle_ui_command(Key_Event *key_event, Global_State *g
         }
         else {
             char **names = (char **)platform_calloc((size_t)count, sizeof(char *));
-            if (names == NULL || list_files("/", names) < 0) {
+            if (names == NULL || list_files(PLATFORM_ROOT_DIR "/", names) < 0) {
                 ui_animac_console_append(output, L"\n[ls] 内存不足，无法列出文件");
             }
             else {
@@ -606,9 +614,11 @@ static int32_t ui_animac_handle_ui_command(Key_Event *key_event, Global_State *g
             ui_animac_console_append(output, L"\n[load] 用法：.load /路径/文件名");
             return 1;
         }
-        char path_mb[128];
-        memset(path_mb, 0, sizeof(path_mb));
-        am_wcstombs(path_mb, arg, sizeof(path_mb) - 1);
+        char arg_mb[128];
+        char path_mb[256];
+        memset(arg_mb, 0, sizeof(arg_mb));
+        am_wcstombs(arg_mb, arg, sizeof(arg_mb) - 1);
+        snprintf(path_mb, sizeof(path_mb), PLATFORM_ROOT_DIR "%s", arg_mb);
         uint8_t *file_buffer = NULL;
         size_t file_size = 0;
         if (platform_read_file_to_buffer(path_mb, &file_buffer, &file_size) != 0
@@ -637,11 +647,13 @@ static int32_t ui_animac_handle_ui_command(Key_Event *key_event, Global_State *g
     if (wcscmp(cmd, L".save") == 0) {
         wchar_t path_w[128];
         if (*arg != L'\0') {
-            wcsncpy(path_w, arg, 127);
-            path_w[127] = L'\0';
+            // 显式路径按工作根解释（去掉前导 '/' 再拼前缀；ESP32 前缀为 "/" 时结果等价原路径）
+            swprintf(path_w, 128, L"%ls%s", s_animac_root,
+                     (arg[0] == L'/') ? arg + 1 : arg);
         }
         else {
-            swprintf(path_w, 128, L"/animac_%04d%02d%02d_%02d%02d%02d.txt",
+            swprintf(path_w, 128, L"%lsanimac_%04d%02d%02d_%02d%02d%02d.txt",
+                s_animac_root,   // 带尾斜杠，无需再加 '/'
                 global_state->year, global_state->month, global_state->day,
                 global_state->hour, global_state->minute, global_state->second);
         }

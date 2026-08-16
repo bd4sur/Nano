@@ -106,6 +106,8 @@ int32_t ui_calendar_render_frame(Key_Event *key_event, Global_State *global_stat
     // 黄历模态框激活：绘制模态框（打开/关闭时置位 dirty），静态画面不重复推帧
     if (s_almanac_active) {
         if (s_almanac_dirty) {
+            ui_almanac_draw(global_state->gfx);
+            gfx_refresh(global_state->gfx);
             s_almanac_dirty = 0;
         }
         return 0;

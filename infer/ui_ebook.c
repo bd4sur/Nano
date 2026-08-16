@@ -94,21 +94,19 @@ static void ebook_free_list(void) {
 int32_t ui_ebook_menu_init(Key_Event *key_event, Global_State *global_state) {
     ebook_free_list();
 
-    int32_t total = list_files("/", NULL);
+    int32_t total = list_files(PLATFORM_ROOT_DIR "/ebook", NULL);
     if (total > 0) {
         char **names = (char **)platform_calloc((size_t)total, sizeof(char *));
         s_list_mb = (char **)platform_calloc((size_t)total, sizeof(char *));
         s_list_w  = (wchar_t **)platform_calloc((size_t)total, sizeof(wchar_t *));
         s_items   = (const wchar_t **)platform_calloc((size_t)total, sizeof(wchar_t *));
         if (names != NULL && s_list_mb != NULL && s_list_w != NULL && s_items != NULL
-            && list_files("/", names) >= 0) {
+            && list_files(PLATFORM_ROOT_DIR "/ebook", names) >= 0) {
             for (int32_t i = 0; i < total; i++) {
                 if (names[i] == NULL) continue;
-                // 规范为带前导'/'的完整路径
+                // 规范为带前缀的完整路径
                 char path[160];
-                if (names[i][0] != '/') snprintf(path, sizeof(path), "/%s", names[i]);
-                else                    strncpy(path, names[i], sizeof(path) - 1);
-                path[sizeof(path) - 1] = '\0';
+                snprintf(path, sizeof(path), PLATFORM_ROOT_DIR "/ebook/%s", names[i]);
                 free(names[i]);
                 // 仅保留文件（非目录）
                 if (platform_is_directory(path)) continue;
@@ -121,8 +119,9 @@ int32_t ui_ebook_menu_init(Key_Event *key_event, Global_State *global_state) {
                     continue;
                 }
                 memcpy(s_list_mb[s_list_count], path, plen + 1);
-                // 显示名：去掉前导'/'，UTF-8 转宽字符
-                const uint8_t *p = (const uint8_t *)(path + 1);
+                // 显示名：只取最后一段文件名，UTF-8 转宽字符
+                const char *disp = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
+                const uint8_t *p = (const uint8_t *)disp;
                 int32_t wl = 0;
                 s_dec_need = 0;
                 while (*p != 0 && wl < (int32_t)plen - 1) {

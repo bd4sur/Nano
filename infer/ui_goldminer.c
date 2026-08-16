@@ -28,7 +28,7 @@ typedef enum {
 static const char *S_GM_SPRITE_PATH[GM_SPRITE_NUM] = {
     NULL, // GM_SPRITE_MINER      例如 "/icon/gm_miner.png"
     NULL, // GM_SPRITE_HOOK       例如 "/icon/gm_hook.png"
-    "/icon/default.png", // GM_SPRITE_GOLD_BIG   例如 "/icon/gm_gold_big.png"
+    PLATFORM_ROOT_DIR "/icon/default.png", // GM_SPRITE_GOLD_BIG   例如 "/icon/gm_gold_big.png"
     NULL, // GM_SPRITE_GOLD_SMALL 例如 "/icon/gm_gold_small.png"
     NULL, // GM_SPRITE_ROCK_BIG   例如 "/icon/gm_rock_big.png"
     NULL, // GM_SPRITE_ROCK_SMALL 例如 "/icon/gm_rock_small.png"

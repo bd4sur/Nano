@@ -7,6 +7,16 @@
 extern "C" {
 #endif
 
+// 文件系统根目录（工作目录前缀，无尾斜杠）
+// - ESP32（Arduino/IDF，含 NANO_ESP32_S3/P4）：SD 卡根目录 → 空串，"/dict" 等路径直接落在 SD 根
+// - Linux：宿主文件系统下的独立工作目录
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM) \
+    || defined(NANO_ESP32_S3) || defined(NANO_ESP32_P4)
+    #define PLATFORM_ROOT_DIR ""
+#else
+    #define PLATFORM_ROOT_DIR "/home/bd4sur/linglong"
+#endif
+
 // ===============================================================================
 // 平台选择
 // 默认跟随 Arduino IDE 所选板型自动判定（ARDUINO_M5STACK_* 由 Arduino 核心自动定义）；
@@ -76,7 +86,7 @@ extern "C" {
 
 #define NANO_VERSION "2608"
 
-#define LOG_FILE_PATH "chat.jsonl"
+#define LOG_FILE_PATH PLATFORM_ROOT_DIR "/chat.jsonl"
 
 // UI字符串缓冲区最大长度限制
 #ifndef UI_STR_BUF_MAX_LENGTH

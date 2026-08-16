@@ -46,7 +46,7 @@
 #define WR_MAP_SIZE (2 * WR_PAGE)                   // 振幅场总大小（元素数）
 #define WR_SIM_DROP_RADIUS ((int32_t)(WR_DROP_RADIUS * 0.6f))  // 半分辨率波源半径 3
 
-#define WR_IMAGE_PATH ("/wp.png")
+#define WR_IMAGE_PATH (PLATFORM_ROOT_DIR "/wp.png")
 
 // ===============================================================================
 // 定点实现（int16 振幅场 + 内部 RAM + 移位运算 + 行指针直写帧缓冲）

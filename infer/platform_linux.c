@@ -4,9 +4,9 @@
 //   - pthread（任务抽象基于 pthread 实现，编译/链接需加 -pthread）
 //   - 其余均为 glibc / POSIX 标准接口，无额外第三方依赖。
 //
-// 路径语义说明：与 ESP32（SD 卡根目录 "/"）不同，本实现将路径按原样
-// 传递给宿主文件系统，即 "/" 指真实的文件系统根目录。电子书/音乐盒等
-// 以 "/" 为根枚举文件的应用，将枚举真实根目录下的文件。
+// 路径语义说明：业务路径已统一经 PLATFORM_ROOT_DIR 前缀拼接（见 platform.h），
+// 本实现将拼接后的路径按原样传递给宿主文件系统。电子书/音乐盒等以 "/" 为根
+// 枚举文件的应用，实际枚举的是 PLATFORM_ROOT_DIR 下的内容。
 
 #define _GNU_SOURCE // pthread_setaffinity_np / CPU_ZERO / CPU_SET / timegm
 

@@ -136,21 +136,19 @@ void ui_musicbox_menu_init(Key_Event *key_event, Global_State *global_state) {
     // 进入音乐盒：以全局主音量为初始音量（音乐盒内部 ←/→ 调节不回写全局设置）
     s_volume = (uint8_t)global_state->volume;
 
-    int32_t total = list_files("/", NULL);
+    int32_t total = list_files(PLATFORM_ROOT_DIR "/music", NULL);
     int32_t cap = (total > 0) ? total : 1; // 至少留 1 项放占位提示
     char **names = (char **)platform_calloc((size_t)cap, sizeof(char *));
     s_list_mb = (char **)platform_calloc((size_t)cap, sizeof(char *));
     s_list_w  = (wchar_t **)platform_calloc((size_t)cap, sizeof(wchar_t *));
     s_items   = (const wchar_t **)platform_calloc((size_t)cap, sizeof(wchar_t *));
     if (names != NULL && s_list_mb != NULL && s_list_w != NULL && s_items != NULL
-        && total > 0 && list_files("/", names) >= 0) {
+        && total > 0 && list_files(PLATFORM_ROOT_DIR "/music", names) >= 0) {
         for (int32_t i = 0; i < total; i++) {
             if (names[i] == NULL) continue;
-            // 规范为带前导'/'的完整路径
+            // 规范为带前缀的完整路径
             char path[160];
-            if (names[i][0] != '/') snprintf(path, sizeof(path), "/%s", names[i]);
-            else                    strncpy(path, names[i], sizeof(path) - 1);
-            path[sizeof(path) - 1] = '\0';
+            snprintf(path, sizeof(path), PLATFORM_ROOT_DIR "/music/%s", names[i]);
             free(names[i]);
             // 仅保留 WAV/MP3 文件（非目录）
             if (platform_is_directory(path)) continue;
@@ -164,8 +162,9 @@ void ui_musicbox_menu_init(Key_Event *key_event, Global_State *global_state) {
                 continue;
             }
             memcpy(s_list_mb[s_list_count], path, plen + 1);
-            // 显示名：去掉前导'/'，UTF-8 转宽字符
-            _mbstowcs(s_list_w[s_list_count], path + 1, (uint32_t)plen);
+            // 显示名：只取最后一段文件名，UTF-8 转宽字符
+            const char *disp = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
+            _mbstowcs(s_list_w[s_list_count], disp, (uint32_t)plen);
             s_list_count++;
         }
     }

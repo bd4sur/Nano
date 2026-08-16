@@ -8,9 +8,9 @@
 // ===============================================================================
 // 配置
 // ===============================================================================
-#define UI_DICT_CSV_PATH        "/dict/ecdict.csv" // 英汉词典CSV（word,phonetic,definition）
-#define UI_DICT_IDX_PATH        "/dict/ecdict.idx" // 设备端生成的二进制索引（RAM映像）
-#define UI_DICT_DIR_PATH        "/dict"            // 词典目录（写索引前确保存在）
+#define UI_DICT_CSV_PATH        PLATFORM_ROOT_DIR "/dict/ecdict.csv" // 英汉词典CSV（word,phonetic,definition）
+#define UI_DICT_IDX_PATH        PLATFORM_ROOT_DIR "/dict/ecdict.idx" // 设备端生成的二进制索引（RAM映像）
+#define UI_DICT_DIR_PATH        PLATFORM_ROOT_DIR "/dict"            // 词典目录（写索引前确保存在）
 #define UI_DICT_IDX_MAGIC       (0x4E444354)  // "NDCT"
 #define UI_DICT_MATCH_MAX       (64)          // 候选词条数上限
 #define UI_DICT_WORD_WCHAR_MAX  (48)          // 候选表单个词条宽字符缓冲长度
