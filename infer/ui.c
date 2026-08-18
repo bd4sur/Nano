@@ -840,7 +840,7 @@ void ui_ime_hint_mask_set_enabled(int32_t enabled) {
 static void ui_ime_hint_pre_refresh_hook(Nano_GFX *gfx) {
     ime_hint_hook_backed_up = 0;
     // 仅叠加到注册时的主 UI 帧缓冲实例
-    if (gfx != ime_hint_gs->gfx || gfx->color_mode != GFX_COLOR_MODE_RGB565) {
+    if (gfx != ime_hint_gs->gfx) {
         return;
     }
     // 超过设定时长无触屏（或时长设置为0=关闭）自动解除遮罩标志：本次推帧即为干净帧
@@ -1006,7 +1006,7 @@ int32_t ui_widget_input_event_handler(
         int32_t ime_hint_active = (ime_hint_mask_enabled != 0) && (timeout_ms > 0) &&
             (global_state->last_touch_timestamp != 0) &&
             ((global_state->timestamp - global_state->last_touch_timestamp) < timeout_ms);
-        if (ime_hint_active && !ime_hint_mask_armed && global_state->gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        if (ime_hint_active && !ime_hint_mask_armed && gfx_frame_snapshot_bytes(global_state->gfx) > 0) {
             // 置位遮罩标志：分配干净帧快照缓冲（PSRAM，大小由图形层接口给出）并注册刷新钩子
             ime_hint_backup = (uint8_t *)platform_malloc(gfx_frame_snapshot_bytes(global_state->gfx));
             if (ime_hint_backup != NULL) {

@@ -42,7 +42,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         mic_linux.c \
                         platform_linux.c \
                         display_ncurses.c \
-                        touch_linux.c \
+                        touch_ncurses.c \
                         input_device_ncurses.c \
                         vsop87c_milli.c \
                         celestial.c \
