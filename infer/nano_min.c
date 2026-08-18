@@ -2,7 +2,8 @@
 // nano_min.c - 极致小内存 LLM 推理引擎（以文件系统为内存）
 //
 //   参照 infer/infer.c 的 Q80 前向推理流程实现，支持 NANO / QWEN2 / QWEN3 架构，区别：
-//     - 权重永不整体进入 RAM：逐行随机读取（经 platform_file_* 全局句柄，引擎独占之）；
+//     - 权重永不整体进入 RAM：经块缓存按大块读取（见 nm_model_read，默认缓存 6MB PSRAM，
+//       大幅减少 SD 随机 seek；缓存不可用时回退按行随机读取）；
 //     - KV-Cache 与 logits 驻留工作文件：随机读/写（经本文件内的 nm_file_* 抽象）；
 //     - QWEN BPE 大词表只留文件：经预生成的 <model>.bpeidx 索引文件做折半查找；
 //     - 采样对 logits 文件做流式扫描，top-p 用定长堆，无需 logits/排序缓冲驻留 RAM。
@@ -15,8 +16,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <math.h>
 #include <errno.h>
+
+// weak 默认空实现：设备端由 nano_min_esp32.cpp 提供强实现（Serial.printf），
+// 宿主测试程序可实现为 printf；未提供时静默丢弃，宿主构建不被破坏。
+__attribute__((weak)) void nm_dbg(const char *fmt, ...) { (void)fmt; }
 
 #define NM_MAGIC_0 (1111766099u)
 #define NM_MAGIC_1 (1431456845u)
@@ -30,6 +36,16 @@
 
 #define NM_TOPK (512u)   // top-p 采样堆大小（见 nm_sample 注释）
 #define NM_LBUF (1024u)  // logits 流式读/写块大小（float 数）
+
+// 模型文件块缓存：权重读取由“逐行随机 seek+小读”改为“按大块缓存进 PSRAM，命中直接拷贝”。
+// 默认 256KB × 24 = 6MB（8MB PSRAM 设备尽量多用）；块大小与槽位可经编译宏覆盖。
+// 分配失败时槽位自动减半重试，直至 1 槽；仍失败则回退直接逐行读。
+#ifndef NM_CACHE_BLOCK_BYTES
+#define NM_CACHE_BLOCK_BYTES (262144)
+#endif
+#ifndef NM_CACHE_SLOTS
+#define NM_CACHE_SLOTS (24)
+#endif
 
 // ===============================================================================
 // 随机访问文件抽象（nm_file_*）：多句柄、支持随机读/写
@@ -286,23 +302,112 @@ static char *nm_strdup_platform(const char *s) {
     return p;
 }
 
-// 从模型文件随机读取 size 字节到 buffer（经 platform_file_* 全局句柄）。
+// 模型文件块缓存状态（engine 生命周期内全局单例；nano_min 一次只跑一个引擎）
+static uint8_t  *g_cache_data = NULL;   // (slots × block) 权重块缓冲（PSRAM）
+static uint64_t  *g_cache_base = NULL;  // (slots,) 每槽块基址；~0ULL = 无效
+static uint32_t  *g_cache_len  = NULL;  // (slots,) 每槽实际加载字节数（文件末尾块可不满）
+static uint32_t   g_cache_slots = 0;
+static uint32_t   g_cache_block = 0;
+static uint32_t   g_cache_head  = 0;    // FIFO 替换指针
+
+static void nm_model_cache_free(void) {
+    if (g_cache_data) { free(g_cache_data); g_cache_data = NULL; }
+    if (g_cache_base) { free(g_cache_base); g_cache_base = NULL; }
+    if (g_cache_len)  { free(g_cache_len);  g_cache_len  = NULL; }
+    g_cache_slots = g_cache_block = g_cache_head = 0;
+}
+
+// 返回 0 成功；失败返回 -1（不退出，调用方回退到直接读路径）。
+// 大块数据缓冲区在 PSRAM 分配：从 NM_CACHE_SLOTS 槽位起，分配失败逐级减半重试，
+// 尽最大可能用满可用 PSRAM 以换取更少 seek。
+static int nm_model_cache_init(void) {
+    if (g_cache_data) return 0;
+    g_cache_block = (uint32_t)NM_CACHE_BLOCK_BYTES;
+    uint32_t slots = (uint32_t)NM_CACHE_SLOTS;
+    if (slots == 0 || g_cache_block == 0 || (uint64_t)slots * g_cache_block > 0xFFFFFFFFull) return -1;
+    for (;;) {
+        g_cache_data = (uint8_t *)platform_malloc((size_t)slots * g_cache_block);
+        if (g_cache_data) { g_cache_slots = slots; break; }
+        if (slots == 1) return -1;   // 减到头仍失败 → 直接读路径
+        slots = (slots + 1) / 2;     // 槽位减半重试，尽最大可能用满 PSRAM
+    }
+    g_cache_base = (uint64_t *)platform_calloc_internal(g_cache_slots, sizeof(uint64_t));
+    g_cache_len  = (uint32_t *)platform_calloc_internal(g_cache_slots, sizeof(uint32_t));
+    if (!g_cache_base || !g_cache_len) {
+        nm_model_cache_free();
+        return -1;
+    }
+    for (uint32_t i = 0; i < g_cache_slots; i++) g_cache_base[i] = ~0ULL;
+    g_cache_head = 0;
+    fprintf(stderr, "nano_min: model block cache = %u KB (%u × %u B)\n",
+            g_cache_slots * g_cache_block / 1024, g_cache_slots, g_cache_block);
+    return 0;
+}
+
+// 定位（或加载）块 block_off；返回槽下标。加载 = 一次 seek + 大块顺序读。
+static int32_t nm_block_find_or_load(uint64_t block_off) {
+    for (uint32_t i = 0; i < g_cache_slots; i++) {
+        if (g_cache_base[i] == block_off) return (int32_t)i;
+    }
+    uint32_t slot = g_cache_head;
+    g_cache_head = (g_cache_head + 1) % g_cache_slots;
+    g_cache_base[slot] = block_off;
+    if (block_off > 0xFFFFFFFFull) {
+        fprintf(stderr, "nano_min: model offset beyond 4GiB\n"); exit(EXIT_FAILURE);
+    }
+    if (platform_file_seek((uint32_t)block_off) != 0) {
+        fprintf(stderr, "nano_min: seek failed @%llu\n", (unsigned long long)block_off); exit(EXIT_FAILURE);
+    }
+    uint8_t *dst = g_cache_data + (size_t)slot * g_cache_block;
+    uint32_t done = 0;
+    while (done < g_cache_block) {
+        int32_t r = platform_file_read(dst + done, g_cache_block - done);
+        if (r <= 0) break; // EOF：文件末尾不满一块
+        done += (uint32_t)r;
+    }
+    if (done == 0) {
+        fprintf(stderr, "nano_min: block read failed @%llu\n", (unsigned long long)block_off); exit(EXIT_FAILURE);
+    }
+    g_cache_len[slot] = done;
+    return (int32_t)slot;
+}
+
+// 从模型文件随机读取 size 字节到 buffer（优先命中块缓存，其次整块缓存后拷贝）。
 // 注意：platform_file_seek 的偏移为 uint32_t，故模型文件须小于 4GiB。
 static void nm_model_read(void *buf, uint32_t size, uint64_t offset) {
     if (offset > 0xFFFFFFFFull) {
         fprintf(stderr, "nano_min: model offset beyond 4GiB\n"); exit(EXIT_FAILURE);
     }
-    if (platform_file_seek((uint32_t)offset) != 0) {
-        fprintf(stderr, "nano_min: seek failed @%llu\n", (unsigned long long)offset); exit(EXIT_FAILURE);
+    if (!g_cache_data) {
+        // 缓存不可用时的直接读路径（与原实现一致）
+        if (platform_file_seek((uint32_t)offset) != 0) {
+            fprintf(stderr, "nano_min: seek failed @%llu\n", (unsigned long long)offset); exit(EXIT_FAILURE);
+        }
+        uint8_t *p = (uint8_t *)buf;
+        uint32_t done = 0;
+        while (done < size) {
+            int32_t r = platform_file_read(p + done, size - done);
+            if (r <= 0) {
+                fprintf(stderr, "nano_min: read failed @%llu\n", (unsigned long long)offset); exit(EXIT_FAILURE);
+            }
+            done += (uint32_t)r;
+        }
+        return;
     }
     uint8_t *p = (uint8_t *)buf;
-    uint32_t done = 0;
-    while (done < size) {
-        int32_t r = platform_file_read(p + done, size - done);
-        if (r <= 0) {
-            fprintf(stderr, "nano_min: read failed @%llu\n", (unsigned long long)offset); exit(EXIT_FAILURE);
+    while (size > 0) {
+        uint64_t block_off = offset & ~((uint64_t)g_cache_block - 1);
+        int32_t slot = nm_block_find_or_load(block_off);
+        uint32_t in_block = (uint32_t)(offset - block_off);
+        uint32_t loaded = g_cache_len[slot];
+        if (in_block >= loaded) {
+            fprintf(stderr, "nano_min: read beyond cached block @%llu\n", (unsigned long long)offset);
+            exit(EXIT_FAILURE);
         }
-        done += (uint32_t)r;
+        uint32_t take = loaded - in_block;
+        if (take > size) take = size;
+        memcpy(p, g_cache_data + (size_t)slot * g_cache_block + in_block, take);
+        p += take; offset += take; size -= take;
     }
 }
 
@@ -657,6 +762,11 @@ NM_Engine *nm_open(const char *model_path, const char *work_path, uint32_t max_s
         fprintf(stderr, "nano_min: cannot open model %s\n", model_path); exit(EXIT_FAILURE);
     }
 
+    // 权重读取块缓存（分配失败仅回退直接读，不致命）
+    if (nm_model_cache_init() != 0) {
+        fprintf(stderr, "nano_min: model block cache unavailable, fallback to row reads\n");
+    }
+
     // ---- 文件头 ----
     uint8_t header[NM_HEADER_BYTES];
     nm_model_read(header, NM_HEADER_BYTES, 0);
@@ -806,12 +916,19 @@ NM_Engine *nm_open(const char *model_path, const char *work_path, uint32_t max_s
     // 默认采样参数
     nm_set_sampler(e, 1.0f, 0.7f, 0.8f, 42);
 
+    const char *arch_name = (e->arch == NM_ARCH_NANO) ? "NANO"
+                          : (e->arch == NM_ARCH_QWEN2) ? "QWEN2" : "QWEN3";
+    nm_dbg("[nm] open %s arch=%s layers=%u embd=%u vocab=%u cache=%uKB(%ux%uB) work=%.1fMB ram=%.1fKB\n",
+           model_path, arch_name, e->n_layer, e->n_embd, e->vocab_size,
+           g_cache_slots * g_cache_block / 1024, g_cache_slots, g_cache_block,
+           (double)e->work_total_bytes / 1048576.0, (double)e->ram_bytes / 1024.0);
     return e;
 }
 
 void nm_close(NM_Engine *e) {
     if (!e) return;
     platform_file_close(); // 模型文件（全局句柄）
+    nm_model_cache_free(); // 释放模型块缓存
     if (e->work_file) nm_fclose(e->work_file);
     if (e->bpeidx_file) nm_fclose(e->bpeidx_file);
     // 注意：工作文件是引擎自身创建的，随引擎关闭而删除（BPE 索引文件保留复用）
@@ -1003,6 +1120,9 @@ static void nm_rope_qwen3(float *head, uint32_t head_dim, const float *fre, cons
 // ===============================================================================
 
 void nm_forward(NM_Engine *e, uint32_t token, uint32_t pos) {
+    // 低频进度：每 token 一行（推理本身远慢于串口开销，不影响性能）
+    nm_dbg("[nm] fwd tok=%u pos=%u\n", token, pos);
+
     uint32_t n_embd  = e->n_embd;
     uint32_t kv_dim  = e->kv_dim;
     uint32_t q_dim   = e->q_dim;

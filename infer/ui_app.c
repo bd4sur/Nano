@@ -3937,8 +3937,9 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        // 按A键返回主菜单
+        // 按A键返回主菜单（释放演化算法占用的 PSRAM）
         if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
+            ui_app_genetic_exit();
             global_state->STATE = STATE_MAIN_MENU;
         }
 

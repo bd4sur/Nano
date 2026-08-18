@@ -784,7 +784,7 @@ const static uint8_t image_rgb888[64 * 64 * 3] = {
 #define G_WIDTH  (64)
 #define G_HEIGHT (64)
 #define G_GENE_LENGTH (G_WIDTH * G_HEIGHT)
-#define G_POP_SIZE (200)
+#define G_POP_SIZE (64)
 
 typedef struct {
     float gene[G_GENE_LENGTH];
@@ -906,17 +906,18 @@ static void g_eden_next_generation(G_Eden *eden) {
     int count = 1;
     while (count < G_POP_SIZE) {
         int p1 = g_eden_roulette_wheel(eden);
-        G_Individual child;
+        // 直接在新种群（PSRAM）中就位构造子代，避免 16KB 栈上临时个体
+        G_Individual *child = &s_g_new_population[count];
         if (g_random_float() <= G_CROSSOVER_PROB) {
             int p2 = g_eden_roulette_wheel(eden);
-            g_individual_crossover(&eden->population[p1], &eden->population[p2], &child);
+            g_individual_crossover(&eden->population[p1], &eden->population[p2], child);
         } else {
-            child = eden->population[p1];
+            *child = eden->population[p1];
         }
         if (g_random_float() <= G_MUTATION_PROB) {
-            g_individual_mutate(&child);
+            g_individual_mutate(child);
         }
-        s_g_new_population[count++] = child;
+        count++;
     }
 
     for (int i = 0; i < G_POP_SIZE; i++) {
@@ -929,10 +930,7 @@ static void g_eden_evolve(G_Eden *eden) {
     g_eden_next_generation(eden);
 }
 
-static void g_eden_init(G_Eden *eden, const float *ref) {
-    for (int i = 0; i < G_GENE_LENGTH; i++) {
-        eden->ref[i] = ref[i];
-    }
+static void g_eden_init(G_Eden *eden) {
     for (int i = 0; i < G_POP_SIZE; i++) {
         g_individual_init(&eden->population[i]);
     }
@@ -940,6 +938,15 @@ static void g_eden_init(G_Eden *eden, const float *ref) {
     eden->best_id = 0;
     eden->best_fitness = 0.0f;
     g_eden_evaluate(eden);
+}
+
+// 退出功能时调用：释放全部 PSRAM 分配，避免内存泄露
+void ui_app_genetic_exit(void) {
+    if (s_eden_r)           { free(s_eden_r);           s_eden_r = NULL; }
+    if (s_eden_g)           { free(s_eden_g);           s_eden_g = NULL; }
+    if (s_eden_b)           { free(s_eden_b);           s_eden_b = NULL; }
+    if (s_g_new_population) { free(s_g_new_population); s_g_new_population = NULL; }
+    s_g_initialized = 0;
 }
 
 void ui_app_genetic_init(Key_Event *key_event, Global_State *global_state) {
@@ -951,28 +958,28 @@ void ui_app_genetic_init(Key_Event *key_event, Global_State *global_state) {
     if (!s_eden_b) s_eden_b = (G_Eden *)platform_calloc(1, sizeof(G_Eden));
     if (!s_g_new_population) s_g_new_population = (G_Individual *)platform_calloc(G_POP_SIZE, sizeof(G_Individual));
     if (!s_eden_r || !s_eden_g || !s_eden_b || !s_g_new_population) {
+        // 分配失败：释放部分分配，保持未初始化状态，由调用方显示错误
+        ui_app_genetic_exit();
+        printf("ui_genetic: PSRAM alloc failed\n");
         return;
     }
     s_g_rng_state = global_state->timestamp;
     s_g_generation = 0;
 
-    float ref_r[G_GENE_LENGTH];
-    float ref_g[G_GENE_LENGTH];
-    float ref_b[G_GENE_LENGTH];
-
+    // 参考图像直接写入各 eden 的 ref 字段（PSRAM），避免 3x16KB 栈上临时数组
     for (int y = 0; y < G_HEIGHT; y++) {
         for (int x = 0; x < G_WIDTH; x++) {
             int idx = y * G_WIDTH + x;
             int img_idx = (y * G_WIDTH + x) * 3;
-            ref_r[idx] = (float)image_rgb888[img_idx];
-            ref_g[idx] = (float)image_rgb888[img_idx + 1];
-            ref_b[idx] = (float)image_rgb888[img_idx + 2];
+            s_eden_r->ref[idx] = (float)image_rgb888[img_idx];
+            s_eden_g->ref[idx] = (float)image_rgb888[img_idx + 1];
+            s_eden_b->ref[idx] = (float)image_rgb888[img_idx + 2];
         }
     }
 
-    g_eden_init(s_eden_r, ref_r);
-    g_eden_init(s_eden_g, ref_g);
-    g_eden_init(s_eden_b, ref_b);
+    g_eden_init(s_eden_r);
+    g_eden_init(s_eden_g);
+    g_eden_init(s_eden_b);
 
     // JS: new Eden(200, matref); eden.Evolve();
     g_eden_evolve(s_eden_r);
@@ -985,6 +992,13 @@ void ui_app_genetic_init(Key_Event *key_event, Global_State *global_state) {
 void ui_app_genetic_refresh(Key_Event *key_event, Global_State *global_state, int32_t step) {
     if (!s_g_initialized) {
         ui_app_genetic_init(key_event, global_state);
+        if (!s_g_initialized) {
+            // PSRAM 分配失败：显示错误画面而非继续访问空指针
+            gfx_soft_clear(global_state->gfx);
+            gfx_draw_textline(global_state->gfx, L"演化算法 | PSRAM 分配失败", 0, 0, 255, 80, 80, 1);
+            gfx_refresh(global_state->gfx);
+            return;
+        }
     }
 
     for (int32_t i = 0; i < step; i++) {

@@ -5,7 +5,9 @@
 //   设计目标：模型推理相关 RAM 占用 < 1MB，速度不计。
 //
 //   内存策略：
-//     - 权重：不整体载入，按“矩阵行”从模型文件随机读取（每行数 KB 以内）；
+//     - 权重：不整体载入，经模型文件块缓存按大块读取（NM_CACHE_BLOCK_BYTES×NM_CACHE_SLOTS
+//       字节的 FIFO 块缓存，默认 256KB×24=6MB PSRAM；可用编译宏覆盖），大幅减少 SD 随机
+//       seek；块分配失败自动减半槽位重试，仍失败回退到逐行随机读取；
 //     - KV-Cache 与 logits：写入工作文件，随机读/写；
 //     - 采样：对 logits 做流式多遍扫描（top-p 用定长堆，精确条件见 nm_sample 注释）；
 //     - 词表：NANO 小词表紧凑驻留 RAM；QWEN BPE 大词表只留文件，
@@ -74,6 +76,12 @@ uint32_t nm_sample(NM_Engine *e, const uint32_t *seen_ids, uint32_t n_seen);
 
 // 引擎自身统计的动态内存占用（字节）
 size_t nm_ram_bytes(NM_Engine *e);
+
+// 调试输出（printf 风格，低频关键行为进度）：
+//   - 设备端（ESP32）由 nano_min_esp32.cpp 实现为 Serial.printf；
+//   - 宿主机测试程序可实现为 printf 以观察；
+//   - 未提供实现时为 no-op（weak 默认），不会破坏任何宿主构建。
+void nm_dbg(const char *fmt, ...);
 
 // 调试：打印当前 logits 的 top1/top2 及差值（扫描工作文件，O(1) 内存）
 void nm_debug_top2(NM_Engine *e);
