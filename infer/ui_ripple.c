@@ -98,10 +98,14 @@ static void wr_render(Nano_GFX *gfx) {
     int32_t map_index = old_index;      // 振幅场索引
     for (int32_t sy = 0; sy < WR_SIM_H; sy++) {
         // 本模拟格对应的 2x2 帧缓冲块的首行行指针（每行一次函数指针调用，兼容单/双缓冲；
-        // 上下两行相邻且同处一个半屏——半屏分界 120 为偶数，故块内两行必在同一缓冲）
+        // 上下两行相邻且同处一个半屏——半屏分界 120 为偶数，故块内两行必在同一缓冲）。
+        // 仅 RGB565 帧缓冲可取行指针直写；其余色彩模式（如 RGB888）为 NULL，逐像素经图形层转换写入
         uint32_t fb_off = 0;
-        uint16_t *fb_row = gfx->rgb565_access(gfx, 0, (uint32_t)(2 * sy), &fb_off);
-        fb_row += fb_off;
+        uint16_t *fb_row = NULL;
+        if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+            fb_row = gfx->rgb565_access(gfx, 0, (uint32_t)(2 * sy), &fb_off);
+            fb_row += fb_off;
+        }
         for (int32_t sx = 0; sx < WR_SIM_W; sx++) {
             int32_t top    = map[map_index - WR_SIM_W];                     // 上边相邻点（首行读到零填充行）
             int32_t bottom = map[map_index + WR_SIM_W];                     // 下边相邻点（末行读到零填充行）
@@ -123,12 +127,13 @@ static void wr_render(Nano_GFX *gfx) {
                     int32_t dy = (((y - (WR_HEIGHT / 2)) * disp) >> WR_AMPLITUDE_SHIFT) + (WR_HEIGHT / 2);
                     if (dy < 0) dy = 0; else if (dy > WR_HEIGHT - 1) dy = WR_HEIGHT - 1;
                     const uint16_t *tex_row = &texture[dy * WR_WIDTH];
-                    uint16_t *out_row = &fb_row[oy * WR_WIDTH + 2 * sx];
+                    uint16_t *out_row = (fb_row != NULL) ? &fb_row[oy * WR_WIDTH + 2 * sx] : NULL;
                     for (int32_t ox = 0; ox < 2; ox++) {
                         int32_t x = 2 * sx + ox;
                         int32_t dx = (((x - (WR_WIDTH / 2)) * disp) >> WR_AMPLITUDE_SHIFT) + (WR_WIDTH / 2);
                         if (dx < 0) dx = 0; else if (dx > WR_WIDTH - 1) dx = WR_WIDTH - 1;
-                        out_row[ox] = tex_row[dx];
+                        if (out_row != NULL) out_row[ox] = tex_row[dx];
+                        else gfx_write_pixel_rgb565(gfx, (uint32_t)x, (uint32_t)y, tex_row[dx]);
                     }
                 }
             }
@@ -214,9 +219,15 @@ static void wr_render(Nano_GFX *gfx) {
                         int32_t x = 2 * sx + ox;
                         int32_t dx = (int32_t)(((x - half_width) * disp) / WR_MAX_AMPLITUDE) + half_width;
                         if (dx < 0) dx = 0; else if (dx > WR_WIDTH - 1) dx = WR_WIDTH - 1;
-                        uint32_t fb_off = 0;
-                        uint16_t *fb = gfx->rgb565_access(gfx, (uint32_t)x, (uint32_t)y, &fb_off);
-                        fb[fb_off] = texture[dy * WR_WIDTH + dx];
+                        uint16_t v = texture[dy * WR_WIDTH + dx];
+                        if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+                            uint32_t fb_off = 0;
+                            uint16_t *fb = gfx->rgb565_access(gfx, (uint32_t)x, (uint32_t)y, &fb_off);
+                            fb[fb_off] = v;
+                        }
+                        else {
+                            gfx_write_pixel_rgb565(gfx, (uint32_t)x, (uint32_t)y, v);
+                        }
                     }
                 }
             }

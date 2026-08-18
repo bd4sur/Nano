@@ -64,6 +64,11 @@ void gfx_set_refresh_hook(GFX_Refresh_Hook pre_hook, GFX_Refresh_Hook post_hook)
 uint32_t gfx_frame_snapshot_bytes(Nano_GFX *gfx);       // 快照所需字节数（不支持的色彩模式返回0）
 void     gfx_frame_snapshot(Nano_GFX *gfx, void *dst);  // 快照整个帧缓冲到 dst（容量须 >= gfx_frame_snapshot_bytes）
 void     gfx_frame_restore(Nano_GFX *gfx, const void *src); // 从 src 恢复整个帧缓冲
+
+// 将一幅与帧缓冲同尺寸的 RGB565 帧整体写入帧缓冲，或以 RGB565 像素值写单个像素
+// （RGB565 单/双缓冲直写、RGB888 逐像素转换；供水池/水波等内部以 RGB565 渲染的模块使用）
+void gfx_blit_rgb565(Nano_GFX *gfx, const uint16_t *src);
+void gfx_write_pixel_rgb565(Nano_GFX *gfx, uint32_t x, uint32_t y, uint16_t v);
 // 将帧缓冲整体上移 rows 行（底部 rows 行内容保留，由调用方覆写；支持RGB565双缓冲与RGB888）
 void gfx_scroll_up(Nano_GFX *gfx, int32_t rows);
 

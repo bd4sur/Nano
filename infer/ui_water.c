@@ -1220,16 +1220,8 @@ int32_t ui_water_render_frame(Key_Event *key_event, Global_State *global_state) 
     wt_compose_camera();
     wt_scene_render();
 
-    // ---- 逐行拷贝到帧缓冲（兼容单/双缓冲布局） ----
-    {
-        int WW = (int)gfx->width, HH = (int)gfx->height;
-        for (int y = 0; y < HH; y++) {
-            uint32_t off = 0;
-            uint16_t *fb = gfx->rgb565_access(gfx, 0, (uint32_t)y, &off);
-            const uint16_t *src = &s_wt.frame[y * WW];
-            for (int x = 0; x < WW; x++) fb[off + x] = src[x];
-        }
-    }
+    // ---- 拷贝到帧缓冲（仿真帧为 RGB565；单/双缓冲布局与色彩模式转换由图形层封装） ----
+    gfx_blit_rgb565(gfx, s_wt.frame);
     gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"水池", 4, 2, 208, 232, 255, 1);
     gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"A返回 D暂停 *重力 0光 2/4/6/8视角", 120, 2, 130, 130, 130, 1);
     gfx_refresh(gfx);

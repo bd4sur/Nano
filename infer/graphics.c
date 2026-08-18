@@ -351,6 +351,44 @@ void gfx_frame_restore(Nano_GFX *gfx, const void *src) {
     }
 }
 
+// 将一幅与帧缓冲同尺寸的 RGB565 帧整体写入帧缓冲
+// （RGB565 单/双缓冲按布局直拷；RGB888 逐像素转换；布局细节封装于图形层）
+void gfx_blit_rgb565(Nano_GFX *gfx, const uint16_t *src) {
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        for (uint32_t y = 0; y < gfx->height; y++) {
+            uint32_t off = 0;
+            uint16_t *fb = gfx->rgb565_access(gfx, 0, y, &off);
+            memcpy(fb + off, src + y * gfx->width, gfx->width * sizeof(uint16_t));
+        }
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        uint8_t *dst = gfx->frame_buffer_rgb888;
+        uint32_t n = gfx->width * gfx->height;
+        for (uint32_t i = 0; i < n; i++) {
+            uint16_t v = src[i];
+            dst[i * 3]     = RGB565_R(v);
+            dst[i * 3 + 1] = RGB565_G(v);
+            dst[i * 3 + 2] = RGB565_B(v);
+        }
+    }
+}
+
+// 以 RGB565 像素值写单个像素（RGB565 单/双缓冲直写；RGB888 转换；供增量渲染按像素回写）
+void gfx_write_pixel_rgb565(Nano_GFX *gfx, uint32_t x, uint32_t y, uint16_t v) {
+    if (x >= gfx->width || y >= gfx->height) return;
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        uint32_t off = 0;
+        uint16_t *fb = gfx->rgb565_access(gfx, x, y, &off);
+        fb[off] = v;
+    }
+    else if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+        uint8_t *dst = gfx->frame_buffer_rgb888 + (y * gfx->width + x) * 3;
+        dst[0] = RGB565_R(v);
+        dst[1] = RGB565_G(v);
+        dst[2] = RGB565_B(v);
+    }
+}
+
 // 将帧缓冲整体上移 rows 行（底部 rows 行内容保留，由调用方覆写）
 void gfx_scroll_up(Nano_GFX *gfx, int32_t rows) {
     if (rows <= 0 || rows >= (int32_t)gfx->height) return;
