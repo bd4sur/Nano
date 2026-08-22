@@ -8,7 +8,7 @@
 //       结束符 151643/151645。
 //
 //   构建（WSL2，在 infer 目录下）：
-//     gcc -DNANO_CLI -O2 -Wall -o bin/nano_min main_nano_min.c nano_min.c platform_linux.c utils.c -lm -pthread
+//     gcc -DNANO_CLI -O2 -Wall -o bin/nano_min main_nano_min.c nano_min.c utils.c -lm -pthread
 //
 //   运行：
 //     ./bin/nano_min [model_path] [work_file_path] [max_seq_len] [temperature] [top_p]

@@ -22,7 +22,7 @@
 //       SD 挂载点注册进 VFS，stdio/POSIX 路径不可用），文件系统位于 SD 卡。
 //
 //   构建（WSL2，在 infer 目录下）：
-//     gcc -DNANO_CLI -O2 -Wall -o bin/nano_min main_nano_min.c nano_min.c platform_linux.c utils.c -lm -pthread
+//     gcc -DNANO_CLI -O2 -Wall -o bin/nano_min main_nano_min.c nano_min.c utils.c -lm -pthread
 //
 
 #ifndef __NANO_MIN_H__

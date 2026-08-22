@@ -9,7 +9,7 @@
 //   1) 修改 INPUT_FILE_PATH 和 OUTPUT_FILE_NAME 常量为所需的输入输出文件路径。
 //   2) 将本文件移动到 infer 目录下。
 //   3) 编译并运行本文件。
-//      cc -O3 -march=native -ffast-math -Wall -fopenmp export_q4k.c platform_linux.c utils.c prompt.c tokenizer.c tensor.c infer.c -o export_q4k -lm -fopenmp
+//      cc -O3 -march=native -ffast-math -Wall -fopenmp export_q4k.c utils.c prompt.c tokenizer.c tensor.c infer.c -o export_q4k -lm -fopenmp
 //      ./export_q4k
 //
 

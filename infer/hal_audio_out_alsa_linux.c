@@ -203,6 +203,16 @@ uint8_t audio_out_get_master_volume(void) {
     return s_master_volume;
 }
 
+// platform.h 声明的全局主音量接口：
+// 由本 HAL 统一实现，确保与 audio_out 当前音量状态一致。
+void platform_set_master_volume(uint8_t volume) {
+    audio_out_set_master_volume(volume);
+}
+
+uint8_t platform_get_master_volume(void) {
+    return audio_out_get_master_volume();
+}
+
 void audio_out_close(void) {
     audio_out_stop();
     if (s_pcm) {
