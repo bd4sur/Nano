@@ -8,16 +8,16 @@ extern "C" {
 #include "utils.h"
 #include "platform.h"
 #include "graphics.h"
-#include "input_device.h"
-#include "touch.h"
+#include "hal_key.h"
+#include "hal_touch.h"
 
 // ===============================================================================
 // 触屏软键盘（硬件无关）
 //
 // 参照 main.cpp-ref 的软键盘实现，但完全基于本项目自制GFX框架（graphics.c）：
 //   - 绘制只写帧缓冲区（ui_softkbd_draw），不调用 gfx_refresh，由调用方统一全量刷新；
-//   - 触屏输入通过触屏HAL（touch.h）轮询获得，不依赖具体硬件库；
-//   - 键码映射到 input_device.h 的 NANO_KEY_* 定义（可打印字符即ASCII码）。
+//   - 触屏输入通过触屏HAL（hal_touch.h）轮询获得，不依赖具体硬件库；
+//   - 键码映射到 hal_key.h 的 NANO_KEY_* 定义（可打印字符即ASCII码）。
 //
 // 使用方式：
 //   - 事件侧（轮询任务）：每次主循环调用 ui_softkbd_poll()，返回按下沿键码
@@ -27,7 +27,7 @@ extern "C" {
 //     ui_softkbd_take_dirty() 用于查询键盘自身状态（粘滞键/按下高亮）是否变化。
 // ===============================================================================
 
-// 布局：4行x12列，与 input_device.h 头部注释的48键物理键盘布局一致
+// 布局：4行x12列，与 hal_key.h 头部注释的48键物理键盘布局一致
 #define UI_SOFTKBD_ROWS    (4)
 #define UI_SOFTKBD_COLS    (12)
 #define UI_SOFTKBD_HEIGHT  (128) // 键盘总高度（px），靠屏幕下沿

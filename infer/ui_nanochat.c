@@ -1,19 +1,18 @@
 //
 // ui_nanochat.c - 小鹦鹉笼：基于 nano_min 极小内存推理引擎的 LLM 对话功能
 //
-//   状态流转（对照“鹦鹉笼”的 STATE_MODEL_MENU -> STATE_LLM_INPUT -> STATE_LLM_ON_INFER
-//   -> STATE_LLM_AFTER_INFER 流程）：
-//     小游戏菜单 -> STATE_NMCHAT_MODEL_MENU（选择模型，选中即加载）
-//                -> STATE_NMCHAT_INPUT（文字编辑，D键提交 / A键返回模型菜单）
-//                -> STATE_NMCHAT_ON_INFER（协作式单步推理，A键中止）
-//                -> STATE_NMCHAT_AFTER_INFER（结果呈现，D键重新推理 / A键返回编辑）
-//   模型菜单按A键返回小游戏菜单，并释放引擎与工作文件。
+//   已并入“鹦鹉笼”（ui_llm）：模型选择由鹦鹉笼的统一模型菜单承担（选中 [轻] 项时
+//   经 ui_nanochat_model_enter 进入本模块），本模块只保留三个状态：
+//     STATE_NMCHAT_INPUT（文字编辑，D键提交 / A键返回鹦鹉笼模型菜单）
+//     STATE_NMCHAT_ON_INFER（协作式单步推理，A键中止）
+//     STATE_NMCHAT_AFTER_INFER（结果呈现，D键重新推理 / A键返回编辑）
+//   引擎与会话缓冲在选中其他模型或退出鹦鹉笼模型菜单时经 ui_nanochat_release 释放。
 //
 
 #include "ui_nanochat.h"
 
 #include "platform.h"      // PLATFORM_ROOT_DIR / UI_STR_BUF_MAX_LENGTH / fs 抽象
-#include "input_device.h"  // NANO_KEY_esc / NANO_KEY_enter
+#include "hal_key.h"  // NANO_KEY_esc / NANO_KEY_enter
 #include "infer.h"         // LLM_RUNNING_IN_* / LLM_STOPPED_* 状态码
 #include "ui_color.h"      // UI_COLOR_DARK
 
@@ -31,8 +30,8 @@ typedef struct {
 } NMChat_Model_Preset;
 
 static const NMChat_Model_Preset s_nmchat_models[] = {
-    { L"Nano-168M-Q80",  PLATFORM_ROOT_DIR "/llm/nano-168m-q80.bin", 1.05f, 1.0f, 0.5f,  512 },
-    { L"Qwen3-0.6B-Q80", PLATFORM_ROOT_DIR "/llm/qwen3-0b6-q80.bin", 1.0f,  0.6f, 0.95f, 512 },
+    { L"[轻] Nano-168M-Q80",  PLATFORM_ROOT_DIR "/llm/nano-168m-q80.bin", 1.05f, 1.0f, 0.5f,  512 },
+    { L"[轻] Qwen3-0.6B-Q80", PLATFORM_ROOT_DIR "/llm/qwen3-0b6-q80.bin", 1.0f,  0.6f, 0.95f, 512 },
 };
 #define NMCHAT_MODEL_NUM ((int32_t)(sizeof(s_nmchat_models) / sizeof(s_nmchat_models[0])))
 
@@ -77,7 +76,7 @@ static void nmchat_wcscat(wchar_t *dst, const wchar_t *src, uint32_t cap) {
     dst[dl + sl] = L'\0';
 }
 
-static void nmchat_release(void) {
+void ui_nanochat_release(void) {
     if (s_engine) { nm_close(s_engine); s_engine = NULL; }
     if (s_ids)       { free(s_ids);       s_ids = NULL; }
     if (s_out_text)  { free(s_out_text);  s_out_text = NULL; }
@@ -111,24 +110,21 @@ static void nmchat_append_output(uint32_t tok) {
 }
 
 // ===============================================================================
-// 模型选择菜单
+// 模型加载入口（由 ui_llm 的统一模型菜单调用；本模块不再有自有模型菜单）
 // ===============================================================================
 
-void ui_nanochat_model_menu_init(Key_Event *key_event, Global_State *global_state) {
-    // 条目字符串借用预设表的静态存储，控件不复制
-    static const wchar_t *items[NMCHAT_MODEL_NUM];
-    for (int32_t i = 0; i < NMCHAT_MODEL_NUM; i++) {
-        items[i] = s_nmchat_models[i].name;
-    }
-    global_state->w_menu_main->title = L"小鹦鹉笼·选择模型";
-    global_state->w_menu_main->items = items;
-    global_state->w_menu_main->item_num = NMCHAT_MODEL_NUM;
-    ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
+int32_t ui_nanochat_model_num(void) {
+    return NMCHAT_MODEL_NUM;
 }
 
-int32_t ui_nanochat_model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
-    int32_t idx = ms->current_item_index;
-    if (idx < 0 || idx >= NMCHAT_MODEL_NUM) return STATE_NMCHAT_MODEL_MENU;
+const wchar_t *ui_nanochat_model_name(int32_t idx) {
+    if (idx < 0 || idx >= NMCHAT_MODEL_NUM) return L"";
+    return s_nmchat_models[idx].name;
+}
+
+// 加载所选模型并初始化输入控件；返回 0 成功（转 STATE_NMCHAT_INPUT），-1 失败（已显示错误提示）
+int32_t ui_nanochat_model_enter(Key_Event *ke, Global_State *gs, int32_t idx) {
+    if (idx < 0 || idx >= NMCHAT_MODEL_NUM) return -1;
     const NMChat_Model_Preset *m = &s_nmchat_models[idx];
 
     // 加载提示（nm_open 为阻塞式，模型在 SD 卡上时可能耗时较长）
@@ -141,16 +137,21 @@ int32_t ui_nanochat_model_menu_item_action(Key_Event *ke, Global_State *gs, Widg
         ui_draw_header(ke, gs, L"模型文件缺失", 1);
         gfx_refresh(gs->gfx);
         sleep_in_ms(1500);
-        // 恢复菜单界面
-        ui_draw_header(ke, gs, (wchar_t *)gs->w_menu_main->title, 1);
-        ui_widget_menu_refresh(ke, gs, gs->w_menu_main);
-        return STATE_NMCHAT_MODEL_MENU;
+        return -1;
     }
     platform_file_close();
 
     // 释放上一个引擎（若存在），再加载新模型
     if (s_engine) { nm_close(s_engine); s_engine = NULL; }
     s_engine = nm_open(m->model_file, NMCHAT_WORK_PATH, m->max_seq_len);
+    if (!s_engine) {
+        // 加载失败（引擎内部已打印原因，如 BPE 索引构建内存不足/文件损坏）；
+        // 显示错误并返回菜单，不再 exit 重启整机
+        ui_draw_header(ke, gs, L"模型加载失败", 1);
+        gfx_refresh(gs->gfx);
+        sleep_in_ms(1500);
+        return -1;
+    }
     nm_set_sampler(s_engine, m->rep_penalty, m->temperature, m->top_p, gs->timestamp);
     s_arch = nm_get_arch(s_engine);
     s_max_seq_len = m->max_seq_len;
@@ -163,14 +164,14 @@ int32_t ui_nanochat_model_menu_item_action(Key_Event *ke, Global_State *gs, Widg
         s_out_bytes = (char     *)platform_calloc(UI_STR_BUF_MAX_LENGTH * 4, sizeof(char));
         s_result    = (wchar_t  *)platform_calloc(UI_STR_BUF_MAX_LENGTH * 2, sizeof(wchar_t));
         if (!s_ids || !s_out_text || !s_out_bytes || !s_result) {
-            nmchat_release();
-            return STATE_NMCHAT_MODEL_MENU;
+            ui_nanochat_release();
+            return -1;
         }
     }
 
     // 初始化输入控件（复用全局输入控件实例，标题为模型名）
     ui_widget_input_init(ke, gs, gs->w_input_main, (wchar_t *)s_model_name);
-    return STATE_NMCHAT_INPUT;
+    return 0;
 }
 
 // ===============================================================================
@@ -335,33 +336,15 @@ int32_t ui_nanochat_event_handler(Key_Event *key_event, Global_State *global_sta
     switch (st) {
 
     /////////////////////////////////////////////
-    // 选择模型
-    /////////////////////////////////////////////
-    case STATE_NMCHAT_MODEL_MENU: {
-        if (first) {
-            ui_nanochat_model_menu_init(ke, gs);
-            ui_draw_header(ke, gs, (wchar_t *)gs->w_menu_main->title, 1);
-            ui_draw_footer_softkeys(ke, gs, L"↑", L"", L"↓", L"选择");
-            ui_widget_menu_refresh(ke, gs, gs->w_menu_main);
-        }
-        int32_t next = ui_widget_menu_event_handler(ke, gs, gs->w_menu_main,
-                        ui_nanochat_model_menu_item_action, STATE_GAME_MENU, STATE_NMCHAT_MODEL_MENU);
-        // 退出模型菜单回到小游戏菜单时，释放引擎与工作文件
-        if (next == STATE_GAME_MENU && s_engine != NULL) {
-            nmchat_release();
-        }
-        return next;
-    }
-
-    /////////////////////////////////////////////
     // 文字编辑
     /////////////////////////////////////////////
     case STATE_NMCHAT_INPUT: {
         if (first) {
             ui_widget_input_refresh(ke, gs, gs->w_input_main);
         }
+        // A键返回鹦鹉笼的统一模型菜单
         return ui_widget_input_event_handler(ke, gs, gs->w_input_main,
-                    STATE_NMCHAT_MODEL_MENU, STATE_NMCHAT_INPUT, STATE_NMCHAT_ON_INFER);
+                    STATE_MODEL_MENU, STATE_NMCHAT_INPUT, STATE_NMCHAT_ON_INFER);
     }
 
     /////////////////////////////////////////////

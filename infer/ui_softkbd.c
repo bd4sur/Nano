@@ -5,7 +5,7 @@
 // ===============================================================================
 // 触屏软键盘（硬件无关实现）
 //
-// 布局与 main.cpp-ref 一致（4行x12列，对应 input_device.h 注释中的48键物理键盘），
+// 布局与 main.cpp-ref 一致（4行x12列，对应 hal_key.h 注释中的48键物理键盘），
 // 键码映射到本项目的 NANO_KEY_* 定义：
 //   - 可打印字符：键码即ASCII码（NANO_KEY_a == 'a' 等），分 base/shift/sym 三层；
 //   - 功能键：ESC/BS/ENT/SP/方向键映射到 NANO_KEY_esc/backspace/enter/space/up等；
@@ -46,7 +46,7 @@ typedef struct UI_Softkbd_Key {
     uint8_t mod;      // 粘滞修饰键：UI_SOFTKBD_MOD_*，0表示普通键
 } UI_Softkbd_Key;
 
-// 物理键盘布局（16*3=48键），见 input_device.h 头部注释：
+// 物理键盘布局（16*3=48键），见 hal_key.h 头部注释：
 //   ESC    !1    @2    #3    $4    %5    ^6    &7    *8    (9    )0    BS
 //   ALT    `Q    ~W    {E    }R    [T    ]Y    +U    -I    _O    =P    SYM
 //   SFT     A     S    |D    \F    :G    ;H    /J    ,K    .L     ↑    ENT

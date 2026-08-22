@@ -1,9 +1,9 @@
 #include <math.h>
 
 #include "ui_spectrogram.h"
-#include "mic.h"
+#include "hal_audio_in.h"
 #include "nano_fft.h"
-#include "input_device.h"
+#include "hal_key.h"
 
 // ===============================================================================
 // 音频频谱仪实现
@@ -148,7 +148,7 @@ int32_t ui_spectrogram_init(Key_Event *key_event, Global_State *global_state) {
     gfx_soft_clear(global_state->gfx);
     gfx_refresh(global_state->gfx);
 
-    return mic_init(SP_SAMPLE_RATE);
+    return mic_init(SP_SAMPLE_RATE, (uint8_t)global_state->volume);
 }
 
 int32_t ui_spectrogram_render_frame(Key_Event *key_event, Global_State *global_state) {

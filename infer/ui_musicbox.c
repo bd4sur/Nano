@@ -17,8 +17,8 @@
 #include <strings.h>
 #include <stdio.h>
 
-#include "audio_out.h"
-#include "input_device.h"
+#include "hal_audio_out.h"
+#include "hal_key.h"
 #include "ui_color.h"
 #include "vendor/minimp3.h"
 

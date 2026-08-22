@@ -23,15 +23,19 @@ all: $(BIN_DIR) pod tty cli sort wss
 $(BIN_DIR):
 	mkdir -p $@
 
-# Nano-Pod：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于CoreMP135），含触屏（touch_linux.c）
+# Nano-Pod：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于CoreMP135），含触屏（hal_touch_linux.c）
 pod: $(BIN_DIR)/nano_pod
 $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         main.c \
-                        ups_coremp135.c \
+                        hal_power_coremp135.c \
                         platform_linux.c \
-                        display_ili9342c.c \
-                        touch_linux.c \
-                        input_device_mp135.c \
+                        hal_ram_linux.c \
+                        hal_fs_linux.c \
+                        hal_os_linux.c \
+                        hal_misc_linux.c \
+                        hal_display_ili9342c.c \
+                        hal_touch_linux.c \
+                        hal_key_mp135.c \
                         vsop87c_milli.c \
                         celestial.c \
                         ephemeris.c \
@@ -53,6 +57,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         ui_ebook.c \
                         ui_goldminer.c \
                         ui_icon.c \
+                        ui_llm.c \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
                         ui_nanochat.c \
@@ -75,13 +80,17 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
 tty: $(BIN_DIR)/nano_tty
 $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         main.c \
-                        audio_out_linux.c \
-                        imu_linux.c \
-                        mic_linux.c \
+                        hal_audio_out_linux.c \
+                        hal_imu_linux.c \
+                        hal_audio_in_linux.c \
                         platform_linux.c \
-                        display_ncurses.c \
-                        touch_linux.c \
-                        input_device_ncurses.c \
+                        hal_ram_linux.c \
+                        hal_fs_linux.c \
+                        hal_os_linux.c \
+                        hal_misc_linux.c \
+                        hal_display_ncurses.c \
+                        hal_touch_linux.c \
+                        hal_key_ncurses.c \
                         vsop87c_milli.c \
                         celestial.c \
                         ephemeris.c \
@@ -103,6 +112,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         ui_ebook.c \
                         ui_goldminer.c \
                         ui_icon.c \
+                        ui_llm.c \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
                         ui_nanochat.c \
@@ -123,17 +133,17 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
 
 # Nano-CLI：适用于文字终端命令交互的终端程序
 cli: $(BIN_DIR)/nano_cli
-$(BIN_DIR)/nano_cli: main_cli.c platform_linux.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_cli: main_cli.c platform_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_CLI $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-Sort：演示如何用LLM解决排序问题（
 sort: $(BIN_DIR)/nano_sort
-$(BIN_DIR)/nano_sort: main_sort.c platform_linux.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_sort: main_sort.c platform_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_SORT $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Nano-WSS：WebSocket服务器
 wss: $(BIN_DIR)/nano_wss
-$(BIN_DIR)/nano_wss: main_wss.c platform_linux.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_wss: main_wss.c platform_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_WSS $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lwebsockets
 
 

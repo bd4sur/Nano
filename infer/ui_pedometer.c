@@ -2,8 +2,8 @@
 
 #include "ui_pedometer.h"
 #include "ui_color.h"
-#include "input_device.h"
-#include "imu.h"
+#include "hal_key.h"
+#include "hal_imu.h"
 #include "nano_fft.h"
 
 // ===============================================================================

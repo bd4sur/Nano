@@ -30,8 +30,8 @@
 
 #ifndef WATER_HOST_TEST
     #include "ui_water.h"
-    #include "input_device.h"
-    #include "touch.h"
+    #include "hal_key.h"
+    #include "hal_touch.h"
 #endif
 
 // ===============================================================================

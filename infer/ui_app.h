@@ -55,7 +55,7 @@ extern "C" {
 #define STATE_CALENDAR          (70)
 #define STATE_WATER             (71)
 #define STATE_CLOUD             (72)
-#define STATE_NMCHAT_MODEL_MENU (73)
+#define STATE_NMCHAT_MODEL_MENU (73)   // 已停用：小鹦鹉笼已并入鹦鹉笼统一模型菜单（STATE_MODEL_MENU），保留编号避免冲突
 #define STATE_NMCHAT_INPUT      (74)
 #define STATE_NMCHAT_ON_INFER   (75)
 #define STATE_NMCHAT_AFTER_INFER (76)
@@ -87,13 +87,9 @@ void ui_init(Key_Event *key_event, Global_State *global_state);
 
 
 // ===============================================================================
-// 核心业务：电子鹦鹉
+// 核心业务：电子鹦鹉（LLM 推理及其可视化）——已提取至独立模块 ui_llm（ui_llm.h/ui_llm.c），
+// 使用方（ui_app.c 等）直接包含 ui_llm.h
 // ===============================================================================
-
-int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state);
-int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state);
-void init_model_menu(Key_Event *key_event, Global_State *global_state);
-int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
 
 // ===============================================================================
 // 小游戏菜单

@@ -121,6 +121,7 @@ typedef struct Global_State {
     int32_t auto_shutdown_minutes;   // 自动关机时长设置（分钟；0=关，可选 1/2/3/5/10/20/30/60）
     uint64_t auto_shutdown_deadline; // 自动关机到期时间戳（ms，对 timestamp；0=未启用）
     int32_t ime_hint_timeout_s;      // 九键按键提示遮罩显示时长设置（秒）：0=关闭，可选 0/3/6，默认 3（系统设置中循环切换）
+    int32_t key_feedback_mode;       // 按键提示（按键反馈方式）设置：0=无，1=灯光，2=蜂鸣，3=灯光+蜂鸣；默认 1（灯光）（系统设置中循环切换）
 
     // 玲珑天象仪全局配置
     Linglong_Config *linglong_cfg;

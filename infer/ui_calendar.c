@@ -8,8 +8,8 @@
 #include "ui_calendar.h"
 #include "ui_color.h"
 #include "ui_almanac.h"
-#include "input_device.h"
-#include "touch.h"
+#include "hal_key.h"
+#include "hal_touch.h"
 
 // 支持显示的年份范围（公历）。
 #define CALENDAR_MIN_YEAR (1900)

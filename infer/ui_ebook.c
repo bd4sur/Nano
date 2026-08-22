@@ -5,7 +5,7 @@
 #include "ui_ebook.h"
 #include "ui_color.h"
 #include "ui_softkbd.h"
-#include "input_device.h"
+#include "hal_key.h"
 #include "platform.h"
 
 #define EBOOK_READ_CHUNK      (2048)

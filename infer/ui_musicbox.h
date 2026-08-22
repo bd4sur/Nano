@@ -12,7 +12,7 @@ extern "C" {
 // 入口：主菜单 [5] 音乐盒 → STATE_MUSICBOX_MENU（SD 卡根目录 WAV/MP3 文件列表）
 //   → 选中曲目 → STATE_MUSICBOX_PLAYING（播放/暂停/音量/上下曲）
 // 解码：WAV（RIFF PCM 8/16bit，自解析）与 MP3（vendor/minimp3.h，实现单元 ui_musicbox_mp3.c）
-// 输出：统一解码为 int16 单声道 PCM，经 audio_out.h 流式 HAL 播放（乒乓双缓冲 + 背压喂入，
+// 输出：统一解码为 int16 单声道 PCM，经 hal_audio_out.h 流式 HAL 播放（乒乓双缓冲 + 背压喂入，
 //   范式同 ui_ofdm.c TX 路径）。进入播放态申请、退出时释放全部内存（见 ui_musicbox.c 注释）。
 // ===============================================================================
 

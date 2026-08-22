@@ -2,7 +2,7 @@
 #include <time.h>
 
 #include "graphics.h"
-#include "input_device.h"
+#include "hal_key.h"
 #include "ui.h"
 #include "ui_softkbd.h"
 #include "ui_pinyin_ime.h"

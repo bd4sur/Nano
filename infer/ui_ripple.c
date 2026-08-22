@@ -4,9 +4,9 @@
 #include "ui_ripple.h"
 
 #include "graphics.h"
-#include "input_device.h"
+#include "hal_key.h"
 #include "platform.h"
-#include "touch.h"
+#include "hal_touch.h"
 
 // ===============================================================================
 // 实现选择：1-定点（默认，ESP32 无 FPU 优化）；0-浮点（JS 原版直译，可读性参考）

@@ -25,7 +25,7 @@
 // #include <omp.h>
 
 #include "ui_cloud.h"
-#include "input_device.h"
+#include "hal_key.h"
 #include "platform.h"
 
 // ---------------------------------------------------------------------------
@@ -435,9 +435,9 @@ static void cloud_default_scene(CloudScene *s) {
     s->cloudMarchingStepNum = 128;
     s->cloudAmbientScale = 1.0f;
 
-    // 太阳（正午）
+    // 太阳（正午；纯白，同 ui_cloud_sun_color 白天段）
     s->sunDirection = v3norm(v3(0.15f, 0.96f, 0.0f));
-    s->sunColor = v3(1.0f, 0.92f, 0.80f);
+    s->sunColor = v3(1.0f, 1.0f, 1.0f);
     s->sunIntensity = 48.0f;
 }
 
@@ -1427,8 +1427,8 @@ typedef struct {
 } SunPreset;
 
 static const SunPreset SUN_PRESETS[] = {
-    { 82,  -10, {1.00f, 0.93f, 0.82f}, 48.0f, L"正午" },
-    { 45,   30, {1.00f, 0.93f, 0.80f}, 44.0f, L"午后" },
+    { 82,  -10, {1.00f, 1.00f, 1.00f}, 48.0f, L"正午" },  // 白天纯白（同 ui_cloud_sun_color）
+    { 45,   30, {1.00f, 1.00f, 1.00f}, 44.0f, L"午后" },
     { 18,   70, {1.00f, 0.70f, 0.40f}, 40.0f, L"傍晚" },
     {  5,   80, {1.00f, 0.45f, 0.20f}, 36.0f, L"日落" },
     { -8,  100, {0.50f, 0.55f, 0.80f}, 10.0f, L"月夜" },
@@ -1468,12 +1468,13 @@ void ui_cloud_sun_color(float elev_deg, float *or_, float *og, float *ob, float 
     Cv3 col;
     float inten;
     if (elev_deg >= 15.0f) {
-        col = v3(1.0f, 0.93f, 0.82f);
+        col = v3(1.0f, 1.0f, 1.0f);  // 白天太阳纯白（Bruneton 模型的太阳辐照为白色；
+                                       // 原 (1.0,0.93,0.82) 暖色是天空偏黄的主因）
         inten = 48.0f;
     } else if (elev_deg >= 0.0f) {
         // 低空橙 → 正午白（0°..15°）
         float t = elev_deg / 15.0f;
-        col = v3lerp(v3(1.0f, 0.45f, 0.20f), v3(1.0f, 0.93f, 0.82f), t);
+        col = v3lerp(v3(1.0f, 0.45f, 0.20f), v3(1.0f, 1.0f, 1.0f), t);
         inten = mixf(36.0f, 48.0f, t);
     } else if (elev_deg >= -18.0f) {
         // 暮光段（-18°..0°）：民用(-6°)/航海(-12°)/天文(-18°) 暮光连续过渡
@@ -1581,9 +1582,16 @@ static void cloud_ensure_luts(void) {
     cloud_compute_multiscatter_lut(&s_scene);
 }
 
+// 饱和度提升系数：补偿逐通道 ACES 色调映射的去饱和（HDR 深蓝被洗淡是天空
+// “不够蓝”的主因之一；白色云天饱和度为 0，不受影响）。经宿主机仿真标定。
+#define CLOUD_SATURATION_BOOST (1.25f)
+
 // 色调映射 → 8bit 行缓冲
 static void cloud_write_pixel(int32_t x, Cv3 hdr, uint8_t *rgb_line) {
     Cv3 t = cloudAcesFilm(hdr);
+    // 饱和度提升（亮度保持，仅拉伸色度）
+    float lum = 0.2126f * t.x + 0.7152f * t.y + 0.0722f * t.z;
+    t = v3clamp(v3add(v3(lum, lum, lum), v3mul(v3sub(t, v3(lum, lum, lum)), CLOUD_SATURATION_BOOST)), 0.0f, 1.0f);
     t = v3(powf(t.x, 1.0f/2.2f), powf(t.y, 1.0f/2.2f), powf(t.z, 1.0f/2.2f)); // sRGB 伽马
     rgb_line[x * 3 + 0] = (uint8_t)(clampf(t.x, 0.0f, 1.0f) * 255.0f + 0.5f);
     rgb_line[x * 3 + 1] = (uint8_t)(clampf(t.y, 0.0f, 1.0f) * 255.0f + 0.5f);

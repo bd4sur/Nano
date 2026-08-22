@@ -1,6 +1,6 @@
 #include "graphics.h"
 
-#include "display_hal.h"
+#include "hal_display.h"
 
 #include "glyph.h"
 

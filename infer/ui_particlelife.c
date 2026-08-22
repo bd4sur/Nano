@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 #include "ui_particlelife.h"
-#include "input_device.h"
+#include "hal_key.h"
 #include "platform.h"
 
 // ===============================================================================

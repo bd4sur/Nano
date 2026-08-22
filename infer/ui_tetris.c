@@ -2,7 +2,7 @@
 #include <stdio.h>
 
 #include "ui_tetris.h"
-#include "input_device.h"
+#include "hal_key.h"
 
 // ===============================================================================
 // 俄罗斯方块

@@ -12,9 +12,9 @@
 #include <math.h>
 
 #include "ofdm_modem.h"
-#include "audio_out.h"
-#include "mic.h"
-#include "input_device.h"
+#include "hal_audio_out.h"
+#include "hal_audio_in.h"
+#include "hal_key.h"
 #include "ui_color.h"
 
 // 发射音量：跟随全局主音量（global_state->volume，系统设置中调节）。
@@ -561,7 +561,7 @@ void ui_ofdm_rx_on_enter(Key_Event *key_event, Global_State *global_state) {
     }
 
     // 接管麦克风（48kHz；会关闭扬声器，退出时 mic_close 恢复）
-    s_mic_ok = (mic_init(OFDM_SAMPLE_RATE) == 0) ? 1 : 0;
+    s_mic_ok = (mic_init(OFDM_SAMPLE_RATE, (uint8_t)global_state->volume) == 0) ? 1 : 0;
     if (!s_mic_ok) {
         ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main,
                                (wchar_t *)L"麦克风初始化失败", 0, 0);

@@ -437,12 +437,12 @@ static uint32_t nm_header_u32(const uint8_t *h, uint32_t idx) {
 // NANO 紧凑词表（两遍流式解析，词表字段永不整体进入 RAM）
 // ===============================================================================
 
-static void nm_load_nano_vocab(NM_Engine *e, uint32_t tok_field_bytes) {
+static int nm_load_nano_vocab(NM_Engine *e, uint32_t tok_field_bytes) {
     uint32_t vocab_in_file = 0;
     nm_model_read(&vocab_in_file, 4, NM_HEADER_BYTES + 4);
     if (vocab_in_file != e->vocab_size) {
         fprintf(stderr, "nano_min: vocab size mismatch (%u vs %u)\n", vocab_in_file, e->vocab_size);
-        exit(EXIT_FAILURE);
+        return -1;
     }
 
     // 第一遍：统计总字符数与最长 token（每个 token 只读 8 字节头）
@@ -483,6 +483,7 @@ static void nm_load_nano_vocab(NM_Engine *e, uint32_t tok_field_bytes) {
             e->tok_str[char_pos++] = 0;
         }
     }
+    return 0;
 }
 
 // ===============================================================================
@@ -517,7 +518,8 @@ static int nm_bpe_rec_cmp(const void *a, const void *b) {
 }
 
 // 生成 BPE 索引文件（离线预处理：允许使用较多内存，推理阶段不使用该路径）
-static void nm_bpe_index_build(NM_Engine *e, const char *idx_path, uint32_t tok_field_bytes) {
+// 返回 0 成功，-1 失败（由调用方传播，避免 exit 导致整机重启）
+static int nm_bpe_index_build(NM_Engine *e, const char *idx_path, uint32_t tok_field_bytes) {
     fprintf(stderr, "nano_min: building BPE index %s ...\n", idx_path);
     fflush(stderr);
 
@@ -544,7 +546,12 @@ static void nm_bpe_index_build(NM_Engine *e, const char *idx_path, uint32_t tok_
     // 第二遍：读入记录数组与字符串堆（构建期瞬态内存）
     NM_BpeRec *recs = (NM_BpeRec *)platform_malloc((size_t)count * sizeof(NM_BpeRec));
     uint8_t   *blob = (uint8_t   *)platform_malloc(total_bytes + count);
-    if (!recs || !blob) { fprintf(stderr, "nano_min: bpe build alloc failed\n"); exit(EXIT_FAILURE); }
+    if (!recs || !blob) {
+        fprintf(stderr, "nano_min: bpe build alloc failed (recs=%zuKB blob=%zuKB)\n",
+                (size_t)count * sizeof(NM_BpeRec) / 1024, (total_bytes + count) / 1024);
+        free(recs); free(blob);
+        return -1;
+    }
     {
         uint64_t q = p;
         uint64_t blob_pos = 0;
@@ -570,7 +577,11 @@ static void nm_bpe_index_build(NM_Engine *e, const char *idx_path, uint32_t tok_
 
     // 写索引文件
     NM_File *idx = nm_fopen_rw(idx_path, 0);
-    if (!idx) { fprintf(stderr, "nano_min: cannot create %s\n", idx_path); exit(EXIT_FAILURE); }
+    if (!idx) {
+        fprintf(stderr, "nano_min: cannot create %s\n", idx_path);
+        free(recs); free(blob); g_bpe_blob = NULL;
+        return -1;
+    }
 
     uint64_t sorted_off = 32;
     uint64_t idtab_off  = sorted_off + (uint64_t)count * 16;
@@ -588,7 +599,12 @@ static void nm_bpe_index_build(NM_Engine *e, const char *idx_path, uint32_t tok_
     // id 记录区：建立 id -> 排序后位置 的逆映射
     {
         uint32_t *inv = (uint32_t *)platform_malloc((size_t)count * sizeof(uint32_t));
-        if (!inv) { fprintf(stderr, "nano_min: bpe build alloc failed\n"); exit(EXIT_FAILURE); }
+        if (!inv) {
+            fprintf(stderr, "nano_min: bpe build alloc failed\n");
+            nm_fclose(idx); nm_fremove(idx_path); // 不留半成品索引，下次重建
+            free(recs); free(blob); g_bpe_blob = NULL;
+            return -1;
+        }
         for (uint32_t i = 0; i < count; i++) inv[recs[i].id] = i;
         for (uint32_t id = 0; id < count; id++) {
             uint32_t rec[2] = { recs[inv[id]].model_off, recs[inv[id]].len };
@@ -603,29 +619,31 @@ static void nm_bpe_index_build(NM_Engine *e, const char *idx_path, uint32_t tok_
     g_bpe_blob = NULL;
 
     fprintf(stderr, "nano_min: BPE index built (%u tokens).\n", count);
+    return 0;
 }
 
-static void nm_bpe_index_open(NM_Engine *e, const char *model_path, uint32_t tok_field_bytes) {
+// 打开（缺失时构建）BPE 索引文件；返回 0 成功，-1 失败
+static int nm_bpe_index_open(NM_Engine *e, const char *model_path, uint32_t tok_field_bytes) {
     // 派生索引文件路径：<model_path>.bpeidx
     size_t len = strlen(model_path);
     e->bpeidx_path_owned = (char *)platform_malloc(len + 8);
-    if (!e->bpeidx_path_owned) { fprintf(stderr, "nano_min: alloc failed\n"); exit(EXIT_FAILURE); }
+    if (!e->bpeidx_path_owned) { fprintf(stderr, "nano_min: alloc failed\n"); return -1; }
     memcpy(e->bpeidx_path_owned, model_path, len);
     memcpy(e->bpeidx_path_owned + len, ".bpeidx", 8);
 
     if (!nm_fexists(e->bpeidx_path_owned)) {
-        nm_bpe_index_build(e, e->bpeidx_path_owned, tok_field_bytes);
+        if (nm_bpe_index_build(e, e->bpeidx_path_owned, tok_field_bytes) != 0) return -1;
     }
 
     e->bpeidx_file = nm_fopen_read(e->bpeidx_path_owned);
-    if (!e->bpeidx_file) { fprintf(stderr, "nano_min: cannot open %s\n", e->bpeidx_path_owned); exit(EXIT_FAILURE); }
+    if (!e->bpeidx_file) { fprintf(stderr, "nano_min: cannot open %s\n", e->bpeidx_path_owned); return -1; }
 
     uint32_t hdr32[4];
     uint64_t hdr64[2];
     nm_bpeidx_read(e, hdr32, 16, 0);
     nm_bpeidx_read(e, hdr64, 16, 16);
     if (hdr32[0] != NM_BPE_IDX_MAGIC || hdr32[1] != NM_BPE_IDX_VERSION) {
-        fprintf(stderr, "nano_min: bad BPE index file\n"); exit(EXIT_FAILURE);
+        fprintf(stderr, "nano_min: bad BPE index file\n"); return -1;
     }
     e->bpe_count       = hdr32[2];
     e->bpe_max_tok_len = hdr32[3];
@@ -634,6 +652,7 @@ static void nm_bpe_index_open(NM_Engine *e, const char *model_path, uint32_t tok
 
     e->bpe_buf = (char *)nm_alloc(e, (size_t)e->bpe_max_tok_len * 2 + 3);
     e->bpe_tmp = (char *)nm_alloc(e, (size_t)e->bpe_max_tok_len + 1);
+    return 0;
 }
 
 // 从模型文件读取 token 字节串（经索引记录的 model_off）
@@ -756,15 +775,12 @@ uint32_t nm_encode_bpe(NM_Engine *e, const char *text, uint32_t *tokens, uint32_
 
 NM_Engine *nm_open(const char *model_path, const char *work_path, uint32_t max_seq_len) {
     NM_Engine *e = (NM_Engine *)platform_calloc(1, sizeof(NM_Engine));
-    if (!e) { fprintf(stderr, "nano_min: alloc failed\n"); exit(EXIT_FAILURE); }
+    if (!e) { fprintf(stderr, "nano_min: alloc failed\n"); return NULL; }
 
     if (platform_file_open(model_path) != 0) {
-        fprintf(stderr, "nano_min: cannot open model %s\n", model_path); exit(EXIT_FAILURE);
-    }
-
-    // 权重读取块缓存（分配失败仅回退直接读，不致命）
-    if (nm_model_cache_init() != 0) {
-        fprintf(stderr, "nano_min: model block cache unavailable, fallback to row reads\n");
+        fprintf(stderr, "nano_min: cannot open model %s\n", model_path);
+        free(e);
+        return NULL;
     }
 
     // ---- 文件头 ----
@@ -772,7 +788,7 @@ NM_Engine *nm_open(const char *model_path, const char *work_path, uint32_t max_s
     nm_model_read(header, NM_HEADER_BYTES, 0);
 
     if (nm_header_u32(header, 0) != NM_MAGIC_0 || nm_header_u32(header, 1) != NM_MAGIC_1) {
-        fprintf(stderr, "nano_min: bad magic number\n"); exit(EXIT_FAILURE);
+        fprintf(stderr, "nano_min: bad magic number\n"); goto fail;
     }
 
     e->arch                 = nm_header_u32(header, 4);
@@ -789,11 +805,11 @@ NM_Engine *nm_open(const char *model_path, const char *work_path, uint32_t max_s
     e->group_size           = nm_header_u32(header, 16);
 
     if (e->arch != NM_ARCH_NANO && e->arch != NM_ARCH_QWEN2 && e->arch != NM_ARCH_QWEN3) {
-        fprintf(stderr, "nano_min: unsupported arch %u\n", e->arch); exit(EXIT_FAILURE);
+        fprintf(stderr, "nano_min: unsupported arch %u\n", e->arch); goto fail;
     }
     if (e->quant_type != NM_QUANT_Q80) {
         fprintf(stderr, "nano_min: only Q80 quant is supported (quant=0x%x)\n", e->quant_type);
-        exit(EXIT_FAILURE);
+        goto fail;
     }
     if (max_seq_len == 0 || max_seq_len > e->block_size) max_seq_len = e->block_size;
     e->max_seq_len = max_seq_len;
@@ -813,15 +829,23 @@ NM_Engine *nm_open(const char *model_path, const char *work_path, uint32_t max_s
     uint64_t n_layer = e->n_layer, n_embd = e->n_embd, vocab = e->vocab_size;
     uint64_t q_dim = e->q_dim, kv_dim = e->kv_dim, n_hidden = e->n_hidden;
 
-    // ---- 词表 ----
+    // ---- 词表（先于块缓存分配！） ----
+    // QWEN 的 BPE 索引构建需瞬态持有大内存（Qwen3 词表 15 万条：recs ~3MB + 字符串堆 ~1MB），
+    // 若先分配 6MB 块缓存，8MB PSRAM 余量不足会导致构建失败；
+    // 构建只需 nm_model_read 的直接读路径（缓存未初始化时自动回退），构建完成后索引走文件。
     uint32_t tok_field_bytes = 0;
     nm_model_read(&tok_field_bytes, 4, NM_HEADER_BYTES);
 
     if (e->arch == NM_ARCH_NANO) {
-        nm_load_nano_vocab(e, tok_field_bytes);
+        if (nm_load_nano_vocab(e, tok_field_bytes) != 0) goto fail;
     }
     else {
-        nm_bpe_index_open(e, model_path, tok_field_bytes);
+        if (nm_bpe_index_open(e, model_path, tok_field_bytes) != 0) goto fail;
+    }
+
+    // 权重读取块缓存（分配失败仅回退直接读，不致命）
+    if (nm_model_cache_init() != 0) {
+        fprintf(stderr, "nano_min: model block cache unavailable, fallback to row reads\n");
     }
 
     // ---- 权重偏移（与 infer.c memory_map_params 的 Q80 布局一致） ----
@@ -879,7 +903,7 @@ NM_Engine *nm_open(const char *model_path, const char *work_path, uint32_t max_s
 
     e->work_path_owned = nm_strdup_platform(work_path);
     e->work_file = nm_fopen_rw(work_path, e->work_total_bytes);
-    if (!e->work_file) { fprintf(stderr, "nano_min: cannot open work file %s\n", work_path); exit(EXIT_FAILURE); }
+    if (!e->work_file) { fprintf(stderr, "nano_min: cannot open work file %s\n", work_path); goto fail; }
 
     // ---- 激活值与临时缓冲 ----
     uint32_t max_n = e->n_embd;
@@ -923,6 +947,12 @@ NM_Engine *nm_open(const char *model_path, const char *work_path, uint32_t max_s
            g_cache_slots * g_cache_block / 1024, g_cache_slots, g_cache_block,
            (double)e->work_total_bytes / 1048576.0, (double)e->ram_bytes / 1024.0);
     return e;
+
+fail:
+    // 打开失败：nm_close 对部分初始化状态是安全的（e 由 platform_calloc 零初始化，
+    // 各指针/句柄字段为空时自动跳过），避免 exit 导致整机重启
+    nm_close(e);
+    return NULL;
 }
 
 void nm_close(NM_Engine *e) {

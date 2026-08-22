@@ -3,7 +3,7 @@
 //
 //   为什么需要本文件：nano_min.c 是纯 C，而部分 Arduino-ESP32 内核的 SD 库并未把
 //   "/sdcard" 挂载点注册进 VFS（fopen("/sdcard/...") 报 ENOENT），设备上唯一可靠的
-//   文件途径是 SD 库 API 本身（与 platform_esp32.cpp 一致）。SD.h 为 C++，故有此垫片。
+//   文件途径是 SD 库 API 本身（与 hal_fs_m5esp.cpp 一致）。SD.h 为 C++，故有此垫片。
 //
 //   路径语义：直接使用业务路径（SD 卡根目录相对，如 "/llm/nano_min_work.tmp"）。
 //   调用前应用须已完成 fs_init()（即 SD.begin）。

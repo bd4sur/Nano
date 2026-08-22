@@ -4,7 +4,7 @@
 
 #include "ui_goldminer.h"
 #include "ui_icon.h"
-#include "input_device.h"
+#include "hal_key.h"
 
 // ===============================================================================
 // 黄金矿工

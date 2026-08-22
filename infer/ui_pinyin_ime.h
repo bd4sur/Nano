@@ -8,7 +8,7 @@ extern "C" {
 #include "utils.h"
 #include "platform.h"
 #include "graphics.h"
-#include "input_device.h"
+#include "hal_key.h"
 #include "ui.h"
 
 // ===============================================================================
