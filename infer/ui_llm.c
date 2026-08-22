@@ -1,5 +1,8 @@
 // ===============================================================================
 // 鹦鹉笼：端侧大语言模型推理及其可视化（自 ui_app.c 提取的独立模块，逻辑原样保留）
+//   小鹦鹉笼（nano_min 极小内存引擎）已并入本模块（见下方“引擎适配层”隔离区块）：
+//   二者共用同一套 UI 状态（STATE_MODEL_MENU / STATE_LLM_INPUT / STATE_LLM_ON_INFER /
+//   STATE_LLM_AFTER_INFER），仅在 STATE_LLM_ON_INFER 内按引擎分发 会话建立/单步/销毁 三个钩子。
 // ===============================================================================
 
 #include <stdio.h>
@@ -27,7 +30,7 @@
 
 #include "ui_app.h"
 #include "ui_llm.h"
-#include "ui_nanochat.h"  // 小鹦鹉笼（nano_min 极小内存引擎）已并入统一模型菜单
+#include "nano_min.h"  // 小鹦鹉笼引擎适配层（nano_min 极小内存引擎，见本文件下方隔离区块）
 
 // ===============================================================================
 // 核心业务：电子鹦鹉
@@ -79,6 +82,266 @@ static const Model_Config preset_model_configs[] = {
 static const float qwen3_infer_args_thinking[2] = {0.6f, 0.95f};
 static const float qwen3_infer_args_no_thinking[2] = {0.7f, 0.8f};
 
+
+// ===============================================================================
+// 小鹦鹉笼引擎适配层（nano_min 极小内存引擎，自原 ui_nanochat 模块并入）
+//   与 infer.c 标准引擎路径完全隔离：本区块的一切均为 static，仅通过下列统一钩子
+//   被模型菜单与 STATE_LLM_ON_INFER 调用（会话视图统一挂到 gs->llm_session）：
+//     llm_nm_model_num/name/enter（合并模型菜单）/ llm_nm_release（引擎释放，幂等）
+//     llm_nm_is_active / llm_nm_session_begin/step/free（会话钩子，语义对齐
+//     infer.c 的 llm_session_init/step/free）
+//   模型与工作文件均位于 PLATFORM_ROOT_DIR "/llm" 目录：
+//     - nano-168m-q80.bin / qwen3-0b6-q80.bin
+//     - qwen3-0b6-q80.bin.bpeidx（BPE 索引，缺失时自动生成；建议在 PC 上生成后拷贝到 SD 卡）
+//     - nano_min_work.tmp（KV-Cache + logits 工作文件，退出时删除）
+// ===============================================================================
+
+// 静态条目表容量上限（供合并模型菜单的定长数组使用）
+#define LLM_NM_MODEL_NUM_MAX (8)
+
+typedef struct {
+    const wchar_t *name;        // 菜单显示名（兼作界面标题），带 [轻] 前缀
+    const char    *model_file;  // 模型文件路径
+    float rep_penalty, temperature, top_p; // 采样参数（对齐 preset_model_configs）
+    uint32_t max_seq_len;
+} LLM_NM_Model_Preset;
+
+static const LLM_NM_Model_Preset s_llm_nm_models[] = {
+    { L"[轻] Nano-168M-Q80",  PLATFORM_ROOT_DIR "/llm/nano-168m-q80.bin", 1.05f, 1.0f, 0.5f,  512 },
+    { L"[轻] Qwen3-0.6B-Q80", PLATFORM_ROOT_DIR "/llm/qwen3-0b6-q80.bin", 1.0f,  0.6f, 0.95f, 512 },
+};
+#define LLM_NM_MODEL_NUM ((int32_t)(sizeof(s_llm_nm_models) / sizeof(s_llm_nm_models[0])))
+
+#define LLM_NM_WORK_PATH PLATFORM_ROOT_DIR "/llm/nano_min_work.tmp"
+
+// 引擎实例与模块内部状态（静态，避免侵入 Global_State）
+static NM_Engine *s_nm_engine = NULL;
+static uint32_t   s_nm_arch = NM_ARCH_NANO;
+static const wchar_t *s_nm_model_name = L"";
+static uint32_t   s_nm_max_seq_len = 512;
+
+// 会话缓冲（首次加载模型时分配，退出功能时释放）
+static uint32_t *s_nm_ids = NULL;        // (max_seq_len+1,) token 序列
+static wchar_t  *s_nm_out_text = NULL;   // (UI_STR_BUF_MAX_LENGTH,) 当前输出文本
+static char     *s_nm_out_bytes = NULL;  // (UI_STR_BUF_MAX_LENGTH*4,) QWEN 输出 UTF-8 累积
+
+// 会话状态
+static uint32_t s_nm_n_prompt = 0;
+static uint32_t s_nm_pos = 0;
+static uint32_t s_nm_token = 0;
+static uint32_t s_nm_out_len = 0;
+static uint32_t s_nm_out_bytes_len = 0;
+
+// 释放引擎与会话缓冲（选中其他模型 / 退出模型菜单时经 ui_llm_unload_model 调用；幂等）
+static void llm_nm_release(void) {
+    if (s_nm_engine) { nm_close(s_nm_engine); s_nm_engine = NULL; }
+    if (s_nm_ids)       { free(s_nm_ids);       s_nm_ids = NULL; }
+    if (s_nm_out_text)  { free(s_nm_out_text);  s_nm_out_text = NULL; }
+    if (s_nm_out_bytes) { free(s_nm_out_bytes); s_nm_out_bytes = NULL; }
+}
+
+// 当前是否由 nano_min 引擎承载对话（即选中的是 [轻] 模型）：1-是，0-否
+static int32_t llm_nm_is_active(void) {
+    return (s_nm_engine != NULL) ? 1 : 0;
+}
+
+// 生成一个 token 后，将其文本追加到输出缓冲（QWEN 先累积 UTF-8 字节再整体转换，
+// 容忍跨 token 的不完整 UTF-8 序列——与 main_cli.c 的说明一致）
+static void llm_nm_append_output(uint32_t tok) {
+    if (s_nm_arch == NM_ARCH_NANO) {
+        const wchar_t *s = nm_token_str(s_nm_engine, tok);
+        size_t l = wcslen(s);
+        if (s_nm_out_len + l < (uint32_t)UI_STR_BUF_MAX_LENGTH - 1) {
+            wcscpy(s_nm_out_text + s_nm_out_len, s);
+            s_nm_out_len += l;
+        }
+    }
+    else {
+        char buf[300];
+        nm_bpe_token_str(s_nm_engine, tok, buf, sizeof(buf));
+        size_t l = strlen(buf);
+        if (s_nm_out_bytes_len + l < (uint32_t)UI_STR_BUF_MAX_LENGTH * 4 - 1) {
+            memcpy(s_nm_out_bytes + s_nm_out_bytes_len, buf, l);
+            s_nm_out_bytes_len += l;
+            s_nm_out_bytes[s_nm_out_bytes_len] = 0;
+            _mbstowcs(s_nm_out_text, s_nm_out_bytes, UI_STR_BUF_MAX_LENGTH - 1);
+            s_nm_out_len = wcslen(s_nm_out_text);
+        }
+    }
+}
+
+// 模型数量与显示名（供合并模型菜单使用）
+static int32_t llm_nm_model_num(void) {
+    return LLM_NM_MODEL_NUM;
+}
+
+static const wchar_t *llm_nm_model_name(int32_t idx) {
+    if (idx < 0 || idx >= LLM_NM_MODEL_NUM) return L"";
+    return s_llm_nm_models[idx].name;
+}
+
+// 加载所选模型并初始化输入控件；返回 0 成功（调用方转 STATE_LLM_INPUT），-1 失败（已显示错误提示）
+static int32_t llm_nm_model_enter(Key_Event *ke, Global_State *gs, int32_t idx) {
+    if (idx < 0 || idx >= LLM_NM_MODEL_NUM) return -1;
+    const LLM_NM_Model_Preset *m = &s_llm_nm_models[idx];
+
+    // 加载提示（nm_open 为阻塞式，模型在 SD 卡上时可能耗时较长）
+    ui_draw_header(ke, gs, L"模型加载中...", 1);
+    gfx_refresh(gs->gfx);
+
+    // 预检模型文件是否存在（nano_min 打开失败会直接退出进程，此处先拦截）
+    if (platform_file_open(m->model_file) != 0) {
+        platform_file_close();
+        ui_draw_header(ke, gs, L"模型文件缺失", 1);
+        gfx_refresh(gs->gfx);
+        sleep_in_ms(1500);
+        return -1;
+    }
+    platform_file_close();
+
+    // 释放上一个引擎（若存在），再加载新模型
+    if (s_nm_engine) { nm_close(s_nm_engine); s_nm_engine = NULL; }
+    s_nm_engine = nm_open(m->model_file, LLM_NM_WORK_PATH, m->max_seq_len);
+    if (!s_nm_engine) {
+        // 加载失败（引擎内部已打印原因，如 BPE 索引构建内存不足/文件损坏）；
+        // 显示错误并返回菜单，不再 exit 重启整机
+        ui_draw_header(ke, gs, L"模型加载失败", 1);
+        gfx_refresh(gs->gfx);
+        sleep_in_ms(1500);
+        return -1;
+    }
+    nm_set_sampler(s_nm_engine, m->rep_penalty, m->temperature, m->top_p, gs->timestamp);
+    s_nm_arch = nm_get_arch(s_nm_engine);
+    s_nm_max_seq_len = m->max_seq_len;
+    s_nm_model_name = m->name;
+
+    // 会话缓冲（首次分配，之后复用）
+    if (!s_nm_ids) {
+        s_nm_ids       = (uint32_t *)platform_calloc(s_nm_max_seq_len + 1, sizeof(uint32_t));
+        s_nm_out_text  = (wchar_t  *)platform_calloc(UI_STR_BUF_MAX_LENGTH, sizeof(wchar_t));
+        s_nm_out_bytes = (char     *)platform_calloc(UI_STR_BUF_MAX_LENGTH * 4, sizeof(char));
+        if (!s_nm_ids || !s_nm_out_text || !s_nm_out_bytes) {
+            llm_nm_release();
+            return -1;
+        }
+    }
+
+    // 填充共享 UI 读取的全局模型信息（输入框/结果页标题、页脚统计、长度上限）
+    gs->llm_model_name = (wchar_t *)m->name;
+    gs->llm_is_thinking_model = 0;
+    gs->llm_max_seq_len = m->max_seq_len;
+
+    // nano_min 引擎无层级观测能力：若之前观测模式收窄过主文本框，恢复全宽
+    gs->w_textarea_main->x = 0;
+    gs->w_textarea_main->width = gs->gfx->width;
+
+    // 初始化输入控件（复用全局输入控件实例，标题为模型名）
+    ui_widget_input_init(ke, gs, gs->w_input_main, (wchar_t *)s_nm_model_name);
+    return 0;
+}
+
+// 组装 prompt、编码为 token 序列，并建立 Nano_Session 会话视图挂到 gs->llm_session
+// （进入 STATE_LLM_ON_INFER 首轮调用一次）；返回 0 成功，-1 失败
+static int32_t llm_nm_session_begin(Key_Event *ke, Global_State *gs) {
+    (void)ke;
+    if (!s_nm_engine) return -1;
+    wchar_t *text = gs->w_input_main->textarea.text;
+
+    // 输入为空时随机选用一个预置 prompt（与标准引擎路径一致）
+    if (wcslen(text) == 0) {
+        set_random_prompt(text, gs->timestamp);
+        gs->w_input_main->textarea.length = wcslen(text);
+    }
+
+    if (s_nm_arch == NM_ARCH_NANO) {
+        // Nano 提示词模板（同标准引擎路径）
+        wchar_t *prompt = (wchar_t *)platform_calloc(wcslen(text) + 64, sizeof(wchar_t));
+        wcscpy(prompt, L"<|instruct_mark|>");
+        wcscat(prompt, text);
+        wcscat(prompt, L"<|response_mark|>");
+        s_nm_n_prompt = nm_encode(s_nm_engine, prompt, s_nm_ids, s_nm_max_seq_len);
+        free(prompt);
+    }
+    else {
+        // ChatML 模板（同 tokenizer.c apply_qwen_chat_template，enable_thinking=1）
+        uint32_t n = 0;
+        s_nm_ids[n++] = 151644; // <|im_start|>
+        s_nm_ids[n++] = 872;    // user
+        s_nm_ids[n++] = 198;    // \n
+        {
+            size_t blen = wcslen(text) * 4 + 1;
+            char *bytes = (char *)platform_calloc(blen, sizeof(char));
+            _wcstombs(bytes, text, blen);
+            n += nm_encode_bpe(s_nm_engine, bytes, s_nm_ids + n, s_nm_max_seq_len - n - 5);
+            free(bytes);
+        }
+        s_nm_ids[n++] = 151645; // <|im_end|>
+        s_nm_ids[n++] = 198;    // \n
+        s_nm_ids[n++] = 151644; // <|im_start|>
+        s_nm_ids[n++] = 77091;  // assistant
+        s_nm_ids[n++] = 198;    // \n
+        s_nm_n_prompt = n;
+    }
+
+    s_nm_pos = 0;
+    s_nm_token = s_nm_ids[0];
+    s_nm_out_len = 0;       s_nm_out_text[0] = 0;
+    s_nm_out_bytes_len = 0; s_nm_out_bytes[0] = 0;
+
+    // 建立 UI 层会话视图（与 infer.c 引擎共用 Nano_Session 结构，UI 回调直接读取）；
+    // 各缓冲均为借用指针或 NULL，由 llm_nm_session_free 销毁视图时只释放视图本身
+    Nano_Session *session = (Nano_Session *)platform_calloc(1, sizeof(Nano_Session));
+    if (!session) return -1;
+    session->num_prompt_tokens = s_nm_n_prompt;
+    session->max_seq_len = s_nm_max_seq_len;
+    session->is_prefilling = 1;
+    session->output_text = text; // prefill 阶段回显输入 prompt（借用指针）
+    gs->llm_session = session;
+    return 0;
+}
+
+// 协作式单步推理（每轮主循环推进一步，同标准引擎路径）；返回 LLM 状态码（语义同 infer.h），不做 UI
+static int32_t llm_nm_session_step(Key_Event *ke, Global_State *gs) {
+    (void)ke;
+    Nano_Session *session = gs->llm_session;
+
+    if (s_nm_pos + 1 < s_nm_n_prompt) {
+        // Pre-filling
+        nm_forward(s_nm_engine, s_nm_ids[s_nm_pos], s_nm_pos);
+        s_nm_pos++;
+        session->pos = s_nm_pos;
+        session->output_text = gs->w_input_main->textarea.text; // 回显输入 prompt（借用指针）
+        return LLM_RUNNING_IN_PREFILLING;
+    }
+
+    // Decoding
+    nm_forward(s_nm_engine, s_nm_token, s_nm_pos);
+    uint32_t next_tok = nm_sample(s_nm_engine, s_nm_ids, s_nm_pos + 1);
+    s_nm_pos++;
+    session->pos = s_nm_pos;
+    if (nm_is_eos(s_nm_engine, next_tok) || s_nm_pos >= s_nm_max_seq_len) {
+        session->output_text = s_nm_out_text;
+        return LLM_STOPPED_NORMALLY;
+    }
+    s_nm_ids[s_nm_pos] = next_tok;
+    s_nm_token = next_tok;
+    llm_nm_append_output(next_tok);
+    session->output_text = s_nm_out_text;
+    return LLM_RUNNING_IN_DECODING;
+}
+
+// 销毁会话视图（离开 STATE_LLM_ON_INFER 时调用）：只释放视图本身，
+// 引擎与静态会话缓冲保留复用，由 llm_nm_release 统一释放
+static void llm_nm_session_free(Global_State *gs) {
+    if (gs->llm_session) {
+        free(gs->llm_session);
+        gs->llm_session = NULL;
+    }
+}
+
+// ===============================================================================
+// 推理过程 UI 回调（两套引擎共用：经 gs->llm_session 会话视图读取进度与输出）
+// ===============================================================================
 
 int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
     Nano_Session *session = global_state->llm_session;
@@ -239,16 +502,16 @@ int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state) {
 
 void init_model_menu(Key_Event *key_event, Global_State *global_state) {
     size_t model_count = sizeof(preset_model_configs) / sizeof(preset_model_configs[0]);
-    int32_t nmchat_count = ui_nanochat_model_num();
-    if (nmchat_count > UI_NANOCHAT_MODEL_NUM_MAX) nmchat_count = UI_NANOCHAT_MODEL_NUM_MAX;
-    // 条目字符串借用 preset_model_configs 与 ui_nanochat 预设表的静态存储，控件不复制；
+    int32_t nmchat_count = llm_nm_model_num();
+    if (nmchat_count > LLM_NM_MODEL_NUM_MAX) nmchat_count = LLM_NM_MODEL_NUM_MAX;
+    // 条目字符串借用 preset_model_configs 与小鹦鹉笼预设表的静态存储，控件不复制；
     // 合并菜单 = 大模型（infer.c 引擎） + [轻]小鹦鹉笼模型（nano_min 极小内存引擎）
-    static const wchar_t *model_menu_items[sizeof(preset_model_configs) / sizeof(preset_model_configs[0]) + UI_NANOCHAT_MODEL_NUM_MAX];
+    static const wchar_t *model_menu_items[sizeof(preset_model_configs) / sizeof(preset_model_configs[0]) + LLM_NM_MODEL_NUM_MAX];
     for (size_t i = 0; i < model_count; i++) {
         model_menu_items[i] = preset_model_configs[i].model_name;
     }
     for (int32_t i = 0; i < nmchat_count; i++) {
-        model_menu_items[model_count + i] = ui_nanochat_model_name(i);
+        model_menu_items[model_count + i] = llm_nm_model_name(i);
     }
     global_state->w_menu_main->title = L"选择语言模型";
     global_state->w_menu_main->items = model_menu_items;
@@ -444,19 +707,16 @@ void llm_observation(Nano_Observation obs, void *env) {
 int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
     int32_t item_index = ms->current_item_index;
 
-    // 选中任一模型前，释放两套引擎的旧实例（infer.c 上下文 / nano_min 引擎），避免并存
-    if (gs->llm_ctx) {
-        llm_context_free(gs->llm_ctx);
-        gs->llm_ctx = NULL; // 释放后置NULL，避免悬垂指针被二次释放
-    }
-    ui_nanochat_release();
+    // 选中任一模型前，卸载旧模型（释放 infer.c 上下文 / nano_min 引擎），避免并存
+    ui_llm_unload_model(gs);
 
     int32_t model_count = (int32_t)(sizeof(preset_model_configs) / sizeof(preset_model_configs[0]));
 
     if (item_index >= model_count) {
-        // [轻] 小鹦鹉笼模型（nano_min 极小内存引擎）：委托 ui_nanochat 加载
-        if (ui_nanochat_model_enter(ke, gs, item_index - model_count) == 0) {
-            return STATE_NMCHAT_INPUT;
+        // [轻] 小鹦鹉笼模型（nano_min 极小内存引擎）：由引擎适配层加载，
+        // 成功后与标准引擎路径共用输入状态（STATE_LLM_INPUT）
+        if (llm_nm_model_enter(ke, gs, item_index - model_count) == 0) {
+            return STATE_LLM_INPUT;
         }
         // 加载失败（错误提示已由其显示）：重绘模型菜单并停留（本状态未离开焦点，需手动重绘）
         ui_draw_header(ke, gs, (wchar_t *)gs->w_menu_main->title, 1);
@@ -536,6 +796,16 @@ static void ui_app_wcscat_bounded(wchar_t *dst, const wchar_t *src, uint32_t cap
 // 模块生命周期
 // ===============================================================================
 
+// 卸载当前模型（选中其他模型 / 退出模型菜单时调用；幂等）：
+// 释放 infer.c 上下文（KV cache/分词器/采样器等常驻PSRAM）与小鹦鹉笼引擎（若已加载）
+void ui_llm_unload_model(Global_State *global_state) {
+    if (global_state->llm_ctx) {
+        llm_context_free(global_state->llm_ctx);
+        global_state->llm_ctx = NULL; // 释放后置NULL，避免悬垂指针被二次释放
+    }
+    llm_nm_release();
+}
+
 // LLM 相关全局字段初始化（由 ui_init 调用）
 void ui_llm_init_config(Global_State *global_state) {
     global_state->llm_status = LLM_STOPPED_NORMALLY;
@@ -585,11 +855,33 @@ int32_t ui_llm_input_event_handler(Key_Event *key_event, Global_State *global_st
     return ui_widget_input_event_handler(key_event, global_state, global_state->w_input_main, STATE_MODEL_MENU, STATE_LLM_INPUT, STATE_LLM_ON_INFER);
 }
 
+// 按当前引擎销毁对话 session（infer.c 会话 / nano_min 会话视图）
+static void ui_llm_session_free(Global_State *global_state) {
+    if (llm_nm_is_active()) {
+        llm_nm_session_free(global_state);
+    }
+    else {
+        llm_session_free(global_state->llm_session);
+        global_state->llm_session = NULL;
+    }
+}
+
 // STATE_LLM_ON_INFER：语言推理进行中（异步，每个iter结束后会将控制权交还事件循环，
 // 而非自行阻塞到最后一个token；实际上就是将generate_sync的while循环打开，置于大的事件循环）
+//   小鹦鹉笼（nano_min 极小内存引擎）共用本状态：仅 会话建立/单步/销毁 三个钩子按引擎分发，
+//   UI 回调（on_llm_prefilling/on_llm_decoding/on_llm_finished）经 llm_session 会话视图零分支复用
 int32_t ui_llm_on_infer_event_handler(Key_Event *key_event, Global_State *global_state) {
-    // 首次获得焦点：初始化
+    int32_t use_nm_engine = llm_nm_is_active(); // 当前由小鹦鹉笼（nano_min 引擎）承载？
+
+    // 首次获得焦点：初始化对话 session
     if (global_state->PREV_STATE != global_state->STATE) {
+        if (use_nm_engine) {
+            // 小鹦鹉笼：prompt 模板组装与编码由引擎适配层完成，会话视图挂到 llm_session
+            if (llm_nm_session_begin(key_event, global_state) != 0) {
+                return STATE_LLM_INPUT;
+            }
+        }
+        else {
         wchar_t *prompt = (wchar_t*)platform_calloc(global_state->llm_max_seq_len + 1, sizeof(wchar_t));
 
         // 如果输入为空，则随机选用一个预置prompt
@@ -632,18 +924,21 @@ int32_t ui_llm_on_infer_event_handler(Key_Event *key_event, Global_State *global
         global_state->llm_session = llm_session_init(global_state->llm_ctx, prompt, global_state->llm_max_seq_len, global_state->is_thinking_enabled);
         // session内部已复制prompt（infer.c llm_session_init），此处释放原缓冲，避免每轮泄漏
         free(prompt);
+        }
     }
     global_state->PREV_STATE = global_state->STATE;
 
     // 事件循环主体：即同步版本的while(1)的循环体
 
-    global_state->llm_status = llm_session_step(global_state->llm_ctx, global_state->llm_session);
+    global_state->llm_status = (use_nm_engine)
+        ? llm_nm_session_step(key_event, global_state)
+        : llm_session_step(global_state->llm_ctx, global_state->llm_session);
 
     if (global_state->llm_status == LLM_RUNNING_IN_PREFILLING) {
         global_state->llm_status = on_llm_prefilling(key_event, global_state);
         // 外部被动中止
         if (global_state->llm_status == LLM_STOPPED_IN_PREFILLING) {
-            llm_session_free(global_state->llm_session);
+            ui_llm_session_free(global_state);
             return STATE_LLM_AFTER_INFER;
         }
         else {
@@ -659,7 +954,7 @@ int32_t ui_llm_on_infer_event_handler(Key_Event *key_event, Global_State *global
                 stop_tts();
             }
 #endif
-            llm_session_free(global_state->llm_session);
+            ui_llm_session_free(global_state);
             return STATE_LLM_AFTER_INFER;
         }
         else {
@@ -668,12 +963,12 @@ int32_t ui_llm_on_infer_event_handler(Key_Event *key_event, Global_State *global
     }
     else if (global_state->llm_status == LLM_STOPPED_NORMALLY) {
         global_state->llm_status = on_llm_finished(key_event, global_state);
-        llm_session_free(global_state->llm_session);
+        ui_llm_session_free(global_state);
         return STATE_LLM_AFTER_INFER;
     }
     else {
         global_state->llm_status = on_llm_finished(key_event, global_state);
-        llm_session_free(global_state->llm_session);
+        ui_llm_session_free(global_state);
         return STATE_LLM_AFTER_INFER;
     }
 }

@@ -25,12 +25,12 @@ $(BIN_DIR):
 
 # Nano-Pod-Lite：带键盘和单色I2C屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z/MARGA）
 pod_lite: $(BIN_DIR)/nano_pod_lite
-$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c hal_power_rpi5.c hal_audio_in_linux.c platform_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c hal_display_ssd130x_linux.c hal_touch_linux.c hal_key_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c ui_llm.c ui_nanochat.c nano_min.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c hal_power_rpi5.c hal_audio_in_linux.c platform_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c hal_display_ssd130x_linux.c hal_touch_linux.c hal_key_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c ui_llm.c nano_min.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_LITE_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
 
 # Nano-Pod：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z）
 pod: $(BIN_DIR)/nano_pod
-$(BIN_DIR)/nano_pod: main.c asr.c tts.c hal_imu10.c hal_power_rpi5.c hal_audio_in_linux.c platform_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c hal_display_ili9341.c hal_touch_linux.c hal_key_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c ui_llm.c ui_nanochat.c nano_min.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod: main.c asr.c tts.c hal_imu10.c hal_power_rpi5.c hal_audio_in_linux.c platform_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c hal_display_ili9341.c hal_touch_linux.c hal_key_matrix16.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c ui_llm.c nano_min.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
@@ -72,7 +72,6 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         ui_llm.c \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
-                        ui_nanochat.c \
                         ui_ofdm.c \
                         ui_particlelife.c \
                         ui_pedometer.c \

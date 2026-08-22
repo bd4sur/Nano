@@ -47,7 +47,6 @@
 #include "ui_tsp.h"
 
 #include "ui_cloud.h"
-#include "ui_nanochat.h"
 #include "ui_llm.h"
 #include "ephemeris.h"
 #include "celestial.h"
@@ -422,7 +421,7 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
         case 8: return STATE_WATER;
         case 9: return STATE_CLOUD;
         case 10: return STATE_CALENDAR;
-        // case 11: return STATE_NMCHAT_MODEL_MENU;  // 原“小鹦鹉笼”入口已移除（并入鹦鹉笼模型菜单）
+        // case 11: 原“小鹦鹉笼”入口已移除（并入鹦鹉笼模型菜单，条目带 [轻] 前缀）
         default: return STATE_MAIN_MENU;
     }
 }
@@ -508,7 +507,7 @@ void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
          PLATFORM_ROOT_DIR "/icon/album.png", PLATFORM_ROOT_DIR "/icon/settings.png"},
         {PLATFORM_ROOT_DIR "/icon/game.png", PLATFORM_ROOT_DIR "/icon/spectrogram.png",
          PLATFORM_ROOT_DIR "/icon/ptt.png", PLATFORM_ROOT_DIR "/icon/readme.png"},
-        {PLATFORM_ROOT_DIR "/icon/default.png", PLATFORM_ROOT_DIR "/icon/default.png",
+        {PLATFORM_ROOT_DIR "/icon/pedometer.png", PLATFORM_ROOT_DIR "/icon/dict.png",
          PLATFORM_ROOT_DIR "/icon/animac.png", PLATFORM_ROOT_DIR "/icon/poweroff.png"},
     };
 
@@ -702,7 +701,7 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     uint32_t sevenseg_shadow = 1;
 
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-        time_red = 0; time_green = 0; time_blue = 0;
+        time_red = 255; time_green = 255; time_blue = 255;
         nongli_red = 0xff; nongli_green = 0xfb; nongli_blue = 0;
         sevenseg_red = 255; sevenseg_green = 255; sevenseg_blue = 255;
         sevenseg_shadow = 1;
@@ -3052,14 +3051,10 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, model_menu_item_action, STATE_MAIN_MENU, STATE_MODEL_MENU);
 
-        // 退出模型菜单回到主菜单时，释放LLM上下文（KV cache/分词器/采样器等常驻PSRAM）
-        // 与小鹦鹉笼引擎（若已加载）；再次进入时会经“选模型”流程重新建立
+        // 退出模型菜单回到主菜单时，卸载当前模型（释放 infer.c 上下文与小鹦鹉笼引擎）；
+        // 再次进入时会经“选模型”流程重新建立
         if (global_state->STATE == STATE_MAIN_MENU) {
-            if (global_state->llm_ctx != NULL) {
-                llm_context_free(global_state->llm_ctx);
-                global_state->llm_ctx = NULL;
-            }
-            ui_nanochat_release();
+            ui_llm_unload_model(global_state);
         }
 
         break;
@@ -3081,20 +3076,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, game_menu_item_action, STATE_MAIN_MENU, STATE_GAME_MENU);
-
-        break;
-
-
-    /////////////////////////////////////////////
-    // 小鹦鹉笼（基于 nano_min 极小内存引擎的 LLM 对话，实现在 ui_nanochat.c；
-    // 已并入“鹦鹉笼”统一模型菜单，模型选择在 STATE_MODEL_MENU 经 ui_nanochat_model_enter 完成）
-    /////////////////////////////////////////////
-
-    case STATE_NMCHAT_INPUT:
-    case STATE_NMCHAT_ON_INFER:
-    case STATE_NMCHAT_AFTER_INFER:
-
-        global_state->STATE = ui_nanochat_event_handler(key_event, global_state);
 
         break;
 

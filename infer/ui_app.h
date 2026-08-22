@@ -55,10 +55,9 @@ extern "C" {
 #define STATE_CALENDAR          (70)
 #define STATE_WATER             (71)
 #define STATE_CLOUD             (72)
-#define STATE_NMCHAT_MODEL_MENU (73)   // 已停用：小鹦鹉笼已并入鹦鹉笼统一模型菜单（STATE_MODEL_MENU），保留编号避免冲突
-#define STATE_NMCHAT_INPUT      (74)
-#define STATE_NMCHAT_ON_INFER   (75)
-#define STATE_NMCHAT_AFTER_INFER (76)
+// 编号 73~76 已退役：原“小鹦鹉笼”独立的模型菜单/输入/推理/结果状态已并入鹦鹉笼统一状态
+// （STATE_MODEL_MENU / STATE_LLM_INPUT / STATE_LLM_ON_INFER / STATE_LLM_AFTER_INFER），
+// 仅推理引擎不同（nano_min，见 ui_llm.c 引擎适配层）；保留编号空缺避免冲突
 #define STATE_SHUTDOWN          (99)
 
 

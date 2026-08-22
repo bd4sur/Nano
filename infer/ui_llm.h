@@ -12,11 +12,17 @@ extern "C" {
 // 鹦鹉笼：端侧大语言模型推理及其可视化（自 ui_app.c 提取的独立模块）
 //   覆盖状态：STATE_MODEL_MENU（模型选择）/ STATE_LLM_INPUT（输入）/
 //             STATE_LLM_ON_INFER（推理进行中）/ STATE_LLM_AFTER_INFER（结果展示）
-//   可视化：llm_observation 观测回调（模型层级图 + top6 词元，由“LLM演示”设置开关）
+//   小鹦鹉笼（nano_min 极小内存引擎）已并入本模块的引擎适配层，共用以上全部状态，仅推理引擎不同
+//   可视化：llm_observation 观测回调（模型层级图 + top6 词元，由“LLM演示”设置开关；
+//           仅 infer.c 引擎支持，小鹦鹉笼无此能力）
 // ===============================================================================
 
 // LLM 相关全局字段初始化（由 ui_init 调用；分配 llm_output_of_last_session）
 void ui_llm_init_config(Global_State *global_state);
+
+// 卸载当前模型（选中其他模型 / 退出模型菜单时调用；幂等：
+// 释放 infer.c 上下文与小鹦鹉笼引擎）
+void ui_llm_unload_model(Global_State *global_state);
 
 // LLM 资源释放（由 main_deinit 调用）
 void ui_llm_deinit(Global_State *global_state);

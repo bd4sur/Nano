@@ -60,7 +60,6 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         ui_llm.c \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
-                        ui_nanochat.c \
                         ui_ofdm.c \
                         ui_particlelife.c \
                         ui_pedometer.c \
@@ -115,7 +114,6 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         ui_llm.c \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
-                        ui_nanochat.c \
                         ui_ofdm.c \
                         ui_particlelife.c \
                         ui_pedometer.c \
