@@ -27,26 +27,33 @@ $(BIN_DIR):
 pod: $(BIN_DIR)/nano_pod
 $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         main.c \
-                        hal_power_coremp135.c \
-                        hal_ram_linux.c \
                         hal_fs_linux.c \
+                        hal_ram_linux.c \
                         hal_os_linux.c \
-                        hal_misc_linux.c \
+                        hal_audio_in_mp135.c \
+                        hal_audio_out_mp135.c \
                         hal_display_ili9342c_linux.c \
-                        hal_touch_evdev_linux.c \
+                        hal_imu_linux.c \
                         hal_key_mp135.c \
-                        vsop87c_milli.c \
+                        hal_touch_evdev_linux.c \
+                        hal_power_coremp135.c \
+                        hal_misc_linux.c \
                         celestial.c \
                         ephemeris.c \
-                        nongli.c \
                         flip.c \
-                        nano_fft.c \
-                        nano_min.c \
-                        ofdm_modem.c \
-                        graphics.c \
                         gfx_font_12.c \
                         gfx_font_16.c \
+                        graphics.c \
+                        infer.c \
+                        nano_fft.c \
+                        nano_min.c \
+                        nongli.c \
+                        ofdm_modem.c \
                         pinyin_ime.c \
+                        tensor.c \
+                        tokenizer.c \
+                        utils.c \
+                        vsop87c_milli.c \
                         ui.c \
                         ui_app.c \
                         ui_almanac.c \
@@ -68,11 +75,8 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         ui_spectrogram.c \
                         ui_tetris.c \
                         ui_water.c \
-                        utils.c \
-                        tokenizer.c \
-                        tensor.c \
-                        infer.c | $(BIN_DIR)
-	$(CC) -DNANO_POD_MP135 $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+                        | $(BIN_DIR)
+	$(CC) -DNANO_POD_MP135 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -ltinyalsa -ldl
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty

@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <sys/ioctl.h>
 #include <linux/gpio.h>
 
@@ -1209,6 +1210,10 @@ void ILI9341_SetBacklight(uint16_t Value)
 #elif defined(USE_DEV_LIB)
 #ifdef SCREEN_SPI_BL_CHIP
     DEV_Digital_Write(SCREEN_SPI_BL_CHIP, SCREEN_SPI_BL_LINE, 1);
+#else
+    // 无背光 GPIO 的平台（如 CoreMP135，背光由 AXP2101 供电）：
+    // 经 sysfs backlight 调节（Value 0~1023 映射到 0~255）
+    display_set_brightness((uint8_t)(Value * 255 / 1023));
 #endif
 #endif
 }
@@ -1324,6 +1329,55 @@ void display_hal_close(void) {
     DEV_ModuleExit();
 }
 
+// === CoreMP135 背光亮度调节 ===
+// CoreMP135 的 LCD 背光由 AXP2101 PMIC 的 DLDO1 供电（非 GPIO/PWM），
+// BSP 内核补丁（coremp135_5_15/patches/linux/0004-add-axp2101_m5stack_bl.patch）
+// 将其注册为标准 backlight 类设备，用户态经 sysfs 调节：
+//   /sys/class/backlight/<name>/brightness （范围 0 ~ max_brightness，0 为关闭）
+// 设备名取自驱动名，此处不硬编码，扫描 /sys/class/backlight 取第一个设备。
+
+static char s_bl_brightness_path[320] = {0}; // .../brightness 完整路径（空串表示未探测到）
+static int  s_bl_max_brightness = 0;         // max_brightness 缓存
+static int  s_bl_probed = 0;                 // 是否已探测过（无论成功与否）
+
+static void display_bl_probe(void) {
+    if (s_bl_probed) return;
+    s_bl_probed = 1;
+
+    DIR *dir = opendir("/sys/class/backlight");
+    if (!dir) return;
+    char base[280] = {0};
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+        snprintf(base, sizeof(base), "/sys/class/backlight/%s", ent->d_name);
+        break;
+    }
+    closedir(dir);
+    if (!base[0]) return;
+
+    char path[320];
+    snprintf(path, sizeof(path), "%s/max_brightness", base);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    if (fscanf(f, "%d", &s_bl_max_brightness) != 1 || s_bl_max_brightness <= 0) {
+        s_bl_max_brightness = 0;
+        fclose(f);
+        return;
+    }
+    fclose(f);
+
+    snprintf(s_bl_brightness_path, sizeof(s_bl_brightness_path), "%s/brightness", base);
+}
+
+// value: 0~255（0 关闭背光，255 最亮），映射到 sysfs 的 0~max_brightness
 void display_set_brightness(uint8_t value) {
-    // TODO
+    display_bl_probe();
+    if (!s_bl_brightness_path[0] || s_bl_max_brightness <= 0) return;
+
+    int v = (int)value * s_bl_max_brightness / 255;
+    FILE *f = fopen(s_bl_brightness_path, "w");
+    if (!f) return;
+    fprintf(f, "%d", v);
+    fclose(f);
 }
