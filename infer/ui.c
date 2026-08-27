@@ -1607,7 +1607,7 @@ void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widge
     // 并自行修正 y/height（见 ui_dict.c）。
     int32_t line_height = gfx_font_line_height(global_state->ui_font);
     int32_t footer_height = line_height + 1;
-    menu_state->header_height = line_height * 2;
+    menu_state->header_height = line_height * 3 / 2;
     menu_state->x = 0;
     menu_state->y = menu_state->header_height;
     menu_state->zindex = 0;
