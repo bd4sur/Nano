@@ -4,60 +4,15 @@
 #include <Arduino.h>
 #include "M5Unified.h"
 
-m5::touch_detail_t touchDetail;
-
-#define X0 (0)
-#define X1 (SCREEN_WIDTH / 4 * 1)
-#define X2 (SCREEN_WIDTH / 4 * 2)
-#define X3 (SCREEN_WIDTH / 4 * 3)
-#define X4 (SCREEN_WIDTH)
-#define Y0 (0)
-#define Y1 (SCREEN_HEIGHT / 4 * 1)
-#define Y2 (SCREEN_HEIGHT / 4 * 2)
-#define Y3 (SCREEN_HEIGHT / 4 * 3)
-#define Y4 (SCREEN_HEIGHT)
+// M5Core2 按键HAL：本机无实体键盘（屏幕下沿的 BtnA/B/C 是触屏虚拟按钮，
+// 经触屏路径上报）。触屏 → 4x4 宫格虚拟按键的兼容映射曾置于此处，
+// 因旁路干净的触屏路径造成架构混乱，已上移至输入事件层（ui_app.c
+// ui_app_map_touch_to_grid16_key）；本HAL只负责实体按键，故恒返回无键。
 
 int32_t input_device_init() {
     return 0;
 }
 
-
 uint8_t input_device_read_key() {
-    touchDetail = M5.Touch.getDetail();
-    if (touchDetail.isPressed()) {
-        int x = touchDetail.x;
-        int y = touchDetail.y;
-        if (y >= Y0 && y < Y1) {
-            if (x >= X0 && x <  X1) return NANO_KEY_1;
-            if (x >= X1 && x <  X2) return NANO_KEY_2;
-            if (x >= X2 && x <  X3) return NANO_KEY_3;
-            if (x >= X3 && x <= X4) return NANO_KEY_esc;
-            else return NANO_KEY_IDLE;
-        }
-        else if (y >= Y1 && y < Y2) {
-            if (x >= X0 && x <  X1) return NANO_KEY_4;
-            if (x >= X1 && x <  X2) return NANO_KEY_5;
-            if (x >= X2 && x <  X3) return NANO_KEY_6;
-            if (x >= X3 && x <= X4) return NANO_KEY_shift;
-            else return NANO_KEY_IDLE;
-        }
-        else if (y >= Y2 && y < Y3) {
-            if (x >= X0 && x <  X1) return NANO_KEY_7;
-            if (x >= X1 && x <  X2) return NANO_KEY_8;
-            if (x >= X2 && x <  X3) return NANO_KEY_9;
-            if (x >= X3 && x <= X4) return NANO_KEY_ctrl;
-            else return NANO_KEY_IDLE;
-        }
-        else if (y >= Y3 && y <= Y4) {
-            if (x >= X0 && x <  X1) return NANO_KEY_left;
-            if (x >= X1 && x <  X2) return NANO_KEY_0;
-            if (x >= X2 && x <  X3) return NANO_KEY_right;
-            if (x >= X3 && x <= X4) return NANO_KEY_enter;
-            else return NANO_KEY_IDLE;
-        }
-        else {
-            return NANO_KEY_IDLE;
-        }
-    }
-    else return NANO_KEY_IDLE;
+    return NANO_KEY_IDLE;
 }

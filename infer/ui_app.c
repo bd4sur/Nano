@@ -183,9 +183,70 @@ static void ui_app_recognize_swipe_gesture(Key_Event *key_event, Global_State *g
     }
 }
 
+// ===============================================================================
+// 触屏 → 4x4 宫格虚拟按键（兼容性适配层）
+//
+// 历史沿革：项目早期仅支持实体键盘，全部业务逻辑基于 NANO_KEY_* 键码事件；
+// 后期主要设备只有触屏、无实体键盘。为复用既有键码处理逻辑，将触屏位置
+// 按屏幕 4x4 宫格映射为虚拟键码（布局与实体十六键一致），与实体键互为备份。
+// 该映射曾置于各平台按键HAL中（hal_key_m5esp/mp135/ncurses），旁路了干净的
+// 触屏路径，造成架构混乱；现上移至输入事件层——HAL 只提供原始触屏（hal_touch）
+// 与实体按键（hal_key），对触屏的一切解释（宫格映射、软键盘、滑动手势、
+// 各业务控件的直读）统一在本层及上层完成。
+// ===============================================================================
+#define GRID16_X0 (0)
+#define GRID16_X1 (SCREEN_WIDTH / 4 * 1)
+#define GRID16_X2 (SCREEN_WIDTH / 4 * 2)
+#define GRID16_X3 (SCREEN_WIDTH / 4 * 3)
+#define GRID16_X4 (SCREEN_WIDTH)
+#define GRID16_Y0 (0)
+#define GRID16_Y1 (SCREEN_HEIGHT / 4 * 1)
+#define GRID16_Y2 (SCREEN_HEIGHT / 4 * 2)
+#define GRID16_Y3 (SCREEN_HEIGHT / 4 * 3)
+#define GRID16_Y4 (SCREEN_HEIGHT)
+
+static uint8_t ui_app_map_touch_to_grid16_key(int32_t x, int32_t y) {
+    if (y >= GRID16_Y0 && y < GRID16_Y1) {
+        if (x >= GRID16_X0 && x <  GRID16_X1) return NANO_KEY_1;
+        if (x >= GRID16_X1 && x <  GRID16_X2) return NANO_KEY_2;
+        if (x >= GRID16_X2 && x <  GRID16_X3) return NANO_KEY_3;
+        if (x >= GRID16_X3 && x <= GRID16_X4) return NANO_KEY_esc;
+        else return NANO_KEY_IDLE;
+    }
+    else if (y >= GRID16_Y1 && y < GRID16_Y2) {
+        if (x >= GRID16_X0 && x <  GRID16_X1) return NANO_KEY_4;
+        if (x >= GRID16_X1 && x <  GRID16_X2) return NANO_KEY_5;
+        if (x >= GRID16_X2 && x <  GRID16_X3) return NANO_KEY_6;
+        if (x >= GRID16_X3 && x <= GRID16_X4) return NANO_KEY_shift;
+        else return NANO_KEY_IDLE;
+    }
+    else if (y >= GRID16_Y2 && y < GRID16_Y3) {
+        if (x >= GRID16_X0 && x <  GRID16_X1) return NANO_KEY_7;
+        if (x >= GRID16_X1 && x <  GRID16_X2) return NANO_KEY_8;
+        if (x >= GRID16_X2 && x <  GRID16_X3) return NANO_KEY_9;
+        if (x >= GRID16_X3 && x <= GRID16_X4) return NANO_KEY_ctrl;
+        else return NANO_KEY_IDLE;
+    }
+    else if (y >= GRID16_Y3 && y <= GRID16_Y4) {
+        if (x >= GRID16_X0 && x <  GRID16_X1) return NANO_KEY_left;
+        if (x >= GRID16_X1 && x <  GRID16_X2) return NANO_KEY_0;
+        if (x >= GRID16_X2 && x <  GRID16_X3) return NANO_KEY_right;
+        if (x >= GRID16_X3 && x <= GRID16_X4) return NANO_KEY_enter;
+        else return NANO_KEY_IDLE;
+    }
+    else {
+        return NANO_KEY_IDLE;
+    }
+}
+
 void get_input_event(Key_Event *key_event, Global_State *global_state) {
+    // 实体按键读取（无实体键盘的触屏设备恒为 NANO_KEY_IDLE）：
+    // 部分平台需在本调用内完成输入流解复用（ncurses：drain 鼠标事件并转发触屏HAL缓存），
+    // 故须在触屏采样之前调用，保证下方的触屏样本为本帧最新
+    uint8_t key = input_device_read_key();
+
     // 触屏统一采样（本函数在 Core1 每 1-2ms 轮询一次）：坐标与电平填入 key_event，
-    // 供本轮所有消费者（手势识别、软键盘、各业务状态）使用，上层不再直接调 touch_read
+    // 供本轮所有消费者（宫格映射、手势识别、软键盘、各业务状态）使用，上层不再直接调 touch_read
     touch_read(&key_event->touch_x, &key_event->touch_y, &key_event->is_touching);
     key_event->touch_gesture = NANO_TOUCH_GESTURE_NONE;
 
@@ -204,7 +265,11 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 滑动手势识别：方向中性的上滑/下滑（语义由消费者解释，见 ui.c 文本输入控件）
     ui_app_recognize_swipe_gesture(key_event, global_state);
 
-    uint8_t key = input_device_read_key();
+    // 触屏 → 4x4 宫格虚拟按键（兼容适配，见上方注释）：实体键优先，
+    // 无实体键输入时按触点所在宫格映射为虚拟键码
+    if (key == NANO_KEY_IDLE && key_event->is_touching) {
+        key = ui_app_map_touch_to_grid16_key(key_event->touch_x, key_event->touch_y);
+    }
     uint8_t key_is_softkbd = 0;
 
     // 触屏软键盘：可见时，键盘区域内的触摸由软键盘接管——吞掉触屏4x4网格键映射，
