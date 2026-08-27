@@ -174,6 +174,7 @@ typedef struct Key_Event {
     uint8_t  key_mask;   // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
     uint8_t  key_repeat; // 触发一次长按后，只要不松手，该标记置1，直到物理按键松开后置0。若该标记为1，则在按住时触发连续重复动作。
     uint8_t  is_softkbd; // 本事件是否来自触屏软键盘：1-是（键码为直接键码，不再经过九键输入法），0-否（触屏4x4网格键）
+    uint8_t  is_soft_key; // 按键来源：1-触屏派生的软按键（4x4宫格映射或触屏软键盘），0-实体键盘（见 platform.h NANO_HAS_HW_KEYBOARD）。按下时锁存，下降沿事件沿用
 } Key_Event;
 
 typedef struct Widget_Textarea_State {

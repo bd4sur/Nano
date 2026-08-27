@@ -131,6 +131,11 @@ static uint32_t s_animac_prev_ui_font = 0; // 进入 STATE_ANIMAC_* 之前的 ui
 // 触屏路径，造成架构混乱；现上移至输入事件层——HAL 只提供原始触屏（hal_touch）
 // 与实体按键（hal_key），对触屏的一切解释（宫格映射、软键盘、滑动手势、
 // 各业务控件的直读）统一在本层及上层完成。
+//
+// 软硬来源区分：宫格映射/触屏软键盘派生的键码与实体键盘键码取值相同、无法按
+// 键码区分，故在事件上打标 Key_Event.is_soft_key（1-触屏派生软按键，0-实体键盘），
+// 供实体键与触屏并存的平台（NANO_HAS_HW_KEYBOARD==1，如 Linux TTY）的消费者区分；
+// 仅触屏设备（M5Core2/S3，NANO_HAS_HW_KEYBOARD==0）上该标记恒为 1。
 // ===============================================================================
 #define GRID16_X0 (0)
 #define GRID16_X1 (SCREEN_WIDTH / 4 * 1)
@@ -182,6 +187,7 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 部分平台需在本调用内完成输入流解复用（ncurses：drain 鼠标事件并转发触屏HAL缓存），
     // 故须在触屏采样之前调用，保证下方的触屏样本为本帧最新
     uint8_t key = input_device_read_key();
+    uint8_t key_is_soft = 0; // 按键来源：0-实体键盘，1-触屏派生（宫格映射/软键盘）
 
     // 触屏统一采样（本函数在 Core1 每 1-2ms 轮询一次）：坐标与电平填入 key_event，
     // 供本轮所有消费者（宫格映射、软键盘、手势解释及各业务状态）使用，上层不再直接调 touch_read
@@ -203,6 +209,7 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 无实体键输入时按触点所在宫格映射为虚拟键码
     if (key == NANO_KEY_IDLE && key_event->is_touching) {
         key = ui_app_map_touch_to_grid16_key(key_event->touch_x, key_event->touch_y);
+        key_is_soft = (key != NANO_KEY_IDLE); // 宫格映射命中的键来自触屏
     }
     uint8_t key_is_softkbd = 0;
 
@@ -213,6 +220,7 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
         uint8_t softkbd_key = ui_softkbd_poll(key_event->touch_x, key_event->touch_y, key_event->is_touching);
         if (ui_softkbd_touch_claimed()) {
             key = softkbd_key;
+            key_is_soft = (softkbd_key != NANO_KEY_IDLE); // 软键盘键码来自触屏
             key_is_softkbd = (softkbd_key != NANO_KEY_IDLE);
         }
         else if (key != NANO_KEY_esc) {
@@ -275,6 +283,7 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
         }
     }
     if (key != NANO_KEY_IDLE) {
+        key_event->is_soft_key = key_is_soft;   // 记录按键来源（软-触屏派生/硬-实体键盘），下降沿事件沿用它
         key_event->is_softkbd = key_is_softkbd; // 记录按键来源，下降沿事件沿用它
     }
     key_event->prev_key = key;

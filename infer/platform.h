@@ -80,6 +80,27 @@ extern "C" {
 
 #endif
 
+
+// ===============================================================================
+// 实体键盘存在性（由平台宏选择）
+// 1-有实体键盘：带 I2C 十六键矩阵键盘的 Nano-Pod 系列，以及 NANO_TTY（终端键盘）；
+// 0-无实体键盘：M5Core2/M5CoreS3（仅触屏，按键全部由触屏宫格映射/软键盘派生），
+//               以及无 UI 的 CLI/SORT/WSS。
+// 实体键与触屏派生软按键同时存在时（如 NANO_TTY），运行时经 Key_Event.is_soft_key
+// 区分事件来源（见 ui.h / ui_app.c get_input_event）。
+// ===============================================================================
+#if defined(NANO_POD_LITE_RPI5) || defined(NANO_POD_RPI5) \
+    || defined(NANO_POD_LITE_ROCK5BP) \
+    || defined(NANO_POD_LITE_CUBIE_A7Z) || defined(NANO_POD_CUBIE_A7Z) \
+    || defined(NANO_POD_MP135) || defined(NANO_POD_LITE_MARGA) \
+    || defined(NANO_ESP32_S3) || defined(NANO_ESP32_P4) \
+    || defined(NANO_TTY)
+    #define NANO_HAS_HW_KEYBOARD (1)
+#else
+    #define NANO_HAS_HW_KEYBOARD (0)
+#endif
+
+
 // ===============================================================================
 // 全局字符串常量
 // ===============================================================================
@@ -868,6 +889,7 @@ uint8_t platform_get_master_volume(void);
 #else
 
 #endif
+
 
 #ifdef __cplusplus
 }
