@@ -992,6 +992,54 @@ static void ui_widget_input_move_cursor_vertical(Global_State *global_state, Wid
     input_state->cursor_pos = new_s - 1;
 }
 
+// ===============================================================================
+// 垂直滑动手势跟踪器（通用解释器，见 ui.h）
+// ===============================================================================
+
+void ui_swipe_tracker_init(UI_Swipe_Tracker *tracker) {
+    tracker->active = 0;
+    tracker->start_y = 0;
+    tracker->min_y = 0;
+    tracker->max_y = 0;
+}
+
+int8_t ui_swipe_tracker_feed(UI_Swipe_Tracker *tracker, int32_t is_touching, int32_t touch_y, int32_t confirm_px) {
+    if (is_touching) {
+        if (!tracker->active) {
+            tracker->active = 1;
+            tracker->start_y = touch_y;
+            tracker->min_y = touch_y;
+            tracker->max_y = touch_y;
+        }
+        else {
+            if (touch_y < tracker->min_y) tracker->min_y = touch_y;
+            if (touch_y > tracker->max_y) tracker->max_y = touch_y;
+        }
+        return NANO_TOUCH_GESTURE_NONE;
+    }
+    // 松手确认：垂直位移跨越阈值即按方向返回手势
+    if (!tracker->active) return NANO_TOUCH_GESTURE_NONE;
+    tracker->active = 0;
+    if (tracker->start_y - tracker->min_y > confirm_px) return NANO_TOUCH_GESTURE_SWIPE_UP;
+    if (tracker->max_y - tracker->start_y > confirm_px) return NANO_TOUCH_GESTURE_SWIPE_DOWN;
+    return NANO_TOUCH_GESTURE_NONE;
+}
+
+int32_t ui_swipe_tracker_displacement(const UI_Swipe_Tracker *tracker, int8_t direction) {
+    if (!tracker->active) return 0;
+    if (direction == NANO_TOUCH_GESTURE_SWIPE_UP)   return tracker->start_y - tracker->min_y;
+    if (direction == NANO_TOUCH_GESTURE_SWIPE_DOWN) return tracker->max_y - tracker->start_y;
+    return 0;
+}
+
+// 软键盘呼出/收起手势的阈值（文本输入控件策略）：松手确认需跨越阈值；
+// 武装方向位移超 UI_INPUT_SWIPE_MASK_PX 即吞掉本次触摸序列的杂散按键
+#define UI_INPUT_SWIPE_CONFIRM_PX (SCREEN_HEIGHT / 4)
+#define UI_INPUT_SWIPE_MASK_PX    (20)
+
+// 软键盘手势的跟踪器（文本输入控件唯一消费者）
+static UI_Swipe_Tracker s_input_swipe_tracker;
+
 int32_t ui_widget_input_event_handler(
     Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state,
     int32_t prev_focus_state, int32_t current_focus_state, int32_t next_focus_state
@@ -1024,16 +1072,25 @@ int32_t ui_widget_input_event_handler(
         }
     }
 
-    // 触屏软键盘（文本输入控件固有功能）：
-    // 上滑/下滑手势切换显隐（Core1手势识别，见 ui_app.c get_input_event 的
-    // ui_app_recognize_swipe_gesture；识别层只做方向中性的上报，显隐语义在此解释）。
-    // 同时按软键盘显隐维护当前武装的手势方向，供识别层只在武装方向上吞键
-    // （非武装方向上的点按抖动不被误吞）
-    global_state->input_swipe_armed_dir =
-        ui_softkbd_is_visible() ? NANO_TOUCH_GESTURE_SWIPE_DOWN : NANO_TOUCH_GESTURE_SWIPE_UP;
-    if ((key_event->touch_gesture == NANO_TOUCH_GESTURE_SWIPE_UP   && !ui_softkbd_is_visible()) ||
-        (key_event->touch_gesture == NANO_TOUCH_GESTURE_SWIPE_DOWN &&  ui_softkbd_is_visible())) {
+    // 触屏软键盘（文本输入控件固有功能）：上滑呼出（隐藏时）/下滑收起（可见时）。
+    // 手势由本控件从 key_event 的触屏流逐帧解释（通用跟踪器 ui_swipe_tracker_*；
+    // 事件层不参与手势语义），武装方向按软键盘显隐决定（隐藏=上滑，可见=下滑）。
+    // 武装方向位移超 UI_INPUT_SWIPE_MASK_PX 即吞掉本次触摸序列产生的杂散按键
+    // （滑动穿越 4x4 宫格/软键盘键产生的假按键；宫格 60px 以上大于该阈值，
+    // 第一个杂散下降沿产生时滑动已被识别，不会泄漏）；非武装方向不吞，
+    // 避免点按时的手指抖动（>20px）被误吞
+    int8_t armed_dir = ui_softkbd_is_visible() ? NANO_TOUCH_GESTURE_SWIPE_DOWN : NANO_TOUCH_GESTURE_SWIPE_UP;
+    int8_t swipe_gesture = ui_swipe_tracker_feed(&s_input_swipe_tracker,
+        key_event->is_touching, key_event->touch_y, UI_INPUT_SWIPE_CONFIRM_PX);
+    int32_t swipe_ongoing =
+        (ui_swipe_tracker_displacement(&s_input_swipe_tracker, armed_dir) > UI_INPUT_SWIPE_MASK_PX);
+    if (swipe_gesture == armed_dir) {
         ui_widget_input_toggle_softkbd(key_event, global_state);
+    }
+    if (swipe_ongoing || swipe_gesture == armed_dir) {
+        // 吞掉本帧按键事件（对本控件及同帧下游消费者均生效）
+        key_event->key_code = NANO_KEY_IDLE;
+        key_event->key_edge = 0;
     }
     // 软键盘自身状态变化（粘滞修饰键、按下高亮）时，补画键盘并刷新
     if (ui_softkbd_is_visible() && ui_softkbd_take_dirty()) {

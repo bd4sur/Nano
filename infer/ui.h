@@ -61,10 +61,6 @@ typedef struct Global_State {
     volatile int32_t touch_x;       // 触点坐标（is_touching==1 时有效）
     volatile int32_t touch_y;
     volatile int32_t is_touching;   // 触屏电平：1-触摸中，0-未触摸
-    // 文本输入控件当前武装的滑动手势方向（NANO_TOUCH_GESTURE_*）：由 ui.c 文本输入控件按软键盘
-    // 显隐维护（隐藏=武装上滑，可见=武装下滑），Core1 手势识别仅在武装方向上吞键，
-    // 非武装方向上的点按抖动（>20px）不会被误吞
-    volatile int8_t input_swipe_armed_dir;
     int32_t year;
     int32_t month;
     int32_t day;
@@ -143,18 +139,33 @@ typedef struct Global_State {
 
 } Global_State;
 
-// 触屏滑动手势（get_input_event 识别并上报，松手确认，垂直位移跨越半屏）：
-// 事件层只做方向中性的识别与上报，手势的语义解释（如上滑呼出软键盘）由消费者决定
+// 触屏滑动手势方向（通用）：事件层不做手势识别，由消费者用 UI_Swipe_Tracker
+// 从 key_event 的触屏流逐帧自行解释（语义归消费者，如文本输入控件的上滑呼出软键盘）
 #define NANO_TOUCH_GESTURE_NONE        (0)
 #define NANO_TOUCH_GESTURE_SWIPE_UP    (1)
 #define NANO_TOUCH_GESTURE_SWIPE_DOWN  (-1)
+
+// 垂直滑动手势跟踪器（通用解释器）：消费者每帧喂入一次触屏样本（取自 key_event），
+// 松手确认后返回手势方向；触摸期间可查询任意方向上的累计位移（"滑动中"判定用）
+typedef struct UI_Swipe_Tracker {
+    int32_t active;  // 正在跟踪一次触摸序列
+    int32_t start_y; // 序列起点y
+    int32_t min_y;   // 序列中的最小y（最高点）
+    int32_t max_y;   // 序列中的最大y（最低点）
+} UI_Swipe_Tracker;
+
+void ui_swipe_tracker_init(UI_Swipe_Tracker *tracker);
+// 喂入一帧触屏样本：松手时垂直位移跨越 confirm_px 即返回对应方向手势
+// （NANO_TOUCH_GESTURE_SWIPE_UP/DOWN），否则返回 NANO_TOUCH_GESTURE_NONE
+int8_t ui_swipe_tracker_feed(UI_Swipe_Tracker *tracker, int32_t is_touching, int32_t touch_y, int32_t confirm_px);
+// 当前跟踪序列在指定方向（NANO_TOUCH_GESTURE_SWIPE_UP/DOWN）上的累计位移（px）
+int32_t ui_swipe_tracker_displacement(const UI_Swipe_Tracker *tracker, int8_t direction);
 
 typedef struct Key_Event {
     int32_t  event_type; // 事件类型
     int32_t  touch_x;       // 触点坐标（像素；is_touching==1 时有效）
     int32_t  touch_y;
     int32_t  is_touching;   // 触屏电平：1-正在触摸，0-未触摸
-    int8_t   touch_gesture; // 本轮确认的滑动手势：NANO_TOUCH_GESTURE_*（无手势为 NONE）
 
     uint8_t  prev_key;   // 上一次按键的键值
     uint8_t  key_code;   // 大于等于16为没有任何按键，0-15为按键
