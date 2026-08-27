@@ -234,6 +234,12 @@ typedef struct Widget_Menu_State {
     int32_t items_per_page; // 每页容纳的条目数
     const wchar_t *title;   // 菜单标题（借用调用方字符串，不复制；调用方需保证生命周期）
     const wchar_t **items;  // 条目字符串表（借用调用方存储，不复制；调用方需保证生命周期）
+    // 触屏交互状态（一次触摸序列的跟踪；见 ui_widget_menu_event_handler）
+    int32_t touch_active;       // 1-正在跟踪一次触摸序列
+    int32_t touch_is_dragging;  // 1-本序列已构成拖动（累计位移越阈值），松手时不按点击处理
+    int32_t touch_start_x;      // 序列起点坐标（点击判定用）
+    int32_t touch_start_y;
+    int32_t touch_anchor_first; // 按下时的 first_item_intex（拖动滚动的锚点）
 } Widget_Menu_State;
 
 

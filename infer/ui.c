@@ -1581,7 +1581,15 @@ int32_t ui_widget_input_event_handler(
 
 
 
+// 顶栏"返回"标签待绘标记：菜单进入（ui_widget_menu_init）时置位，由 ui_widget_menu_draw
+// 在首次绘制时补绘一次后清除——标签位于页眉带内，页眉仅在状态进入时绘制一次，
+// 而菜单区在滚动/移动高亮时反复重绘，若标签跟随菜单区重绘，抗锯齿边缘会被反复混合而模糊。
+static uint8_t s_menu_back_label_pending = 0;
+
 void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
+    // 顶栏"返回"标签需要在本次菜单进入后的首次绘制时补绘一次（见 ui_widget_menu_draw）
+    s_menu_back_label_pending = 1;
+
     // 菜单位于页眉与页脚之间，页眉/页脚高度与条目行高均跟随当前字体行高
     int32_t line_height = gfx_font_line_height(global_state->ui_font);
     int32_t header_height = line_height + 1;
@@ -1594,6 +1602,13 @@ void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widge
     menu_state->first_item_intex = 0;
     uint32_t max_items_per_page = (menu_state->height - line_height + 2) / line_height;
     menu_state->items_per_page = (menu_state->item_num > max_items_per_page) ? max_items_per_page : menu_state->item_num;
+
+    // 触屏交互状态复位（菜单场景互斥，进入时重新初始化）
+    menu_state->touch_active = 0;
+    menu_state->touch_is_dragging = 0;
+    menu_state->touch_start_x = 0;
+    menu_state->touch_start_y = 0;
+    menu_state->touch_anchor_first = 0;
 
     // 注意：此处不再立即绘制。此前末尾调用 ui_widget_menu_draw（内含 gfx_refresh）会导致
     // 进入菜单状态时先刷出菜单区（页眉/页脚尚未绘制，残留旧画面）、下一拍状态初始化分支
@@ -1663,6 +1678,23 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
         menu_state->first_item_intex, menu_state->item_num, menu_state->items_per_page,
         menu_state->x, menu_state->y, menu_state->width, menu_state->height);
 
+    // 顶栏右侧"返回"标签（仅菜单进入后的首次绘制补绘一次，随后菜单区滚动重绘不再触碰页眉带，
+    // 避免抗锯齿边缘被反复重绘而模糊；标记由 ui_widget_menu_init 置位）：
+    // 12px 抗锯齿字体，靠右对齐（尾随空格作右边距）、在顶栏带内上下居中，配色跟随页眉文字。
+    // 同时作为触屏退出热区提示（顶栏最右侧 1/4 点击退出，见 ui_widget_menu_event_handler）。
+    // 调用点均为"先画页眉、后画菜单"，故此处向页眉带补绘不会被覆盖。
+    if (s_menu_back_label_pending) {
+        s_menu_back_label_pending = 0;
+        wchar_t *back_label = L"返回 ";
+        int32_t label_width = gfx_font_measure_text(GFX_FONT_ALPHA_12, back_label);
+        int32_t header_height = menu_state->y; // 顶栏高度（menu_state->y == 页眉高度，见 ui_widget_menu_init）
+        int32_t label_y = (header_height - gfx_font_line_height(GFX_FONT_ALPHA_12)) / 2;
+        if (label_y < 0) label_y = 0;
+        gfx_font_draw_text(global_state->gfx, GFX_FONT_ALPHA_12, back_label,
+            menu_state->x + menu_state->width - label_width, label_y,
+            S_UI_COLOR_HEADER_TEXT[0], S_UI_COLOR_HEADER_TEXT[1], S_UI_COLOR_HEADER_TEXT[2], 1);
+    }
+
     // NOTE 因fb_draw_textline会额外给文字上方增加一行，因此这个横线在菜单文字绘制之后再绘制
     // gfx_draw_line(global_state->gfx, 0, 12, global_state->gfx->width, 12, 128, 128, 128, 1);
 
@@ -1675,6 +1707,74 @@ int32_t ui_widget_menu_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Menu_State *ms,
     int32_t (*menu_item_action_callback)(Key_Event*, Global_State*, Widget_Menu_State*), int32_t prev_focus_state, int32_t current_focus_state
 ) {
+    int32_t line_height = gfx_font_line_height(gs->ui_font);
+
+    // ========================================================================
+    // 触屏交互（有触屏的设备：is_touching 电平样本逐帧驱动；无触屏设备恒为 0，
+    // 本块不产生任何行为，菜单仍纯按键操作）
+    //   - 拖动屏幕：列表随手指滚动（像素位移折算为整行，首条目索引随动）；
+    //   - 点击条目：选中并执行（同 Enter）；
+    //   - 点击顶栏最右侧 1/4：退出菜单（同 Esc）。
+    // ========================================================================
+    if (ke->is_touching) {
+        if (!ms->touch_active) {
+            // 触摸序列开始：锚定滚动位置与起点坐标
+            ms->touch_active = 1;
+            ms->touch_is_dragging = 0;
+            ms->touch_start_x = ke->touch_x;
+            ms->touch_start_y = ke->touch_y;
+            ms->touch_anchor_first = ms->first_item_intex;
+        }
+        else {
+            int32_t dy = ke->touch_y - ms->touch_start_y; // >0：手指下滑
+            if (!ms->touch_is_dragging && (dy > line_height / 2 || dy < -(line_height / 2))) {
+                ms->touch_is_dragging = 1;
+            }
+            if (ms->touch_is_dragging && ms->item_num > ms->items_per_page) {
+                // 手指下滑 → 内容下移 → 首条目前移；相对锚点取整行数，无累计误差
+                int32_t delta_lines = dy / line_height;
+                int32_t new_first = ms->touch_anchor_first - delta_lines;
+                if (new_first < 0) new_first = 0;
+                if (new_first > ms->item_num - ms->items_per_page) new_first = ms->item_num - ms->items_per_page;
+                if (new_first != ms->first_item_intex) {
+                    ms->first_item_intex = new_first;
+                    // 高亮条目仍跟随其原条目；仅当滚出可见窗口时钳制回窗口边缘
+                    if (ms->current_item_index < new_first) ms->current_item_index = new_first;
+                    if (ms->current_item_index > new_first + ms->items_per_page - 1) ms->current_item_index = new_first + ms->items_per_page - 1;
+                    ui_widget_menu_draw(ke, gs, ms);
+                }
+            }
+        }
+    }
+    else if (ms->touch_active) {
+        // 触摸序列结束（松手）：构成拖动则不按点击处理
+        ms->touch_active = 0;
+        if (!ms->touch_is_dragging) {
+            if (ms->touch_start_y < ms->y && ms->touch_start_x >= ms->x + ms->width * 3 / 4) {
+                // 点击顶栏最右侧 1/4：退出菜单
+                return prev_focus_state;
+            }
+            else if (ms->touch_start_y >= ms->y && ms->touch_start_y < ms->y + ms->height) {
+                // 点击菜单项：选中并执行
+                int32_t row = (ms->touch_start_y - (ms->y + 1)) / line_height;
+                if (row >= 0 && row < ms->items_per_page) {
+                    int32_t tapped_item_index = ms->first_item_intex + row;
+                    if (tapped_item_index < ms->item_num) {
+                        ms->current_item_index = tapped_item_index;
+                        return menu_item_action_callback(ke, gs, ms);
+                    }
+                }
+            }
+        }
+    }
+
+    // 软硬按键仲裁：触屏派生的软按键（4x4宫格映射/软键盘）与上方的触屏直接处理
+    // 重复（同一次触摸既产生触点流又产生软键码），一律忽略，以触屏为准；
+    // 实体按键（is_soft_key==0）照常采纳。无触屏设备不会产生软按键，行为不变。
+    if (ke->key_code != NANO_KEY_IDLE && ke->is_soft_key) {
+        return current_focus_state;
+    }
+
     // 短按1-9数字键：直接选中屏幕上显示的那页的相对第几项
     // NOTE 从1开始
     // if (ke->key_edge == -1 && (ke->key_code >= NANO_KEY_1 && ke->key_code <= NANO_KEY_9)) {
