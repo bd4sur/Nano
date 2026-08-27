@@ -414,10 +414,13 @@ void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_
 
 
 void ui_draw_header(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center) {
-    // 页眉高度跟随当前字体行高（行高 + 1px 边距）
+    // 标准页眉：高度跟随当前字体行高（行高 + 1px 边距）
+    ui_draw_header_ex(key_event, global_state, text, is_center, gfx_font_line_height(global_state->ui_font) + 1);
+}
+
+void ui_draw_header_ex(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center, int32_t header_height) {
     uint32_t font_id = global_state->ui_font;
     int32_t line_height = gfx_font_line_height(font_id);
-    const int header_height = line_height + 1;
     // 浅色模式页眉的渐变蓝色表（每3个字节为一行的RGB），共24级，支持页眉高度最高24px。
     //   前14级为原有配色：R/G通道步进量呈 ease-out 衰减（R约16→4、G约16→6，B收敛至255）。
     //   后10级按同一衰减趋势外插（R的Δ: 4,3,3,2,2,2,1,1,1,1；G的Δ: 6,5,5,4,4,3,3,2,2,2；B保持255封顶），
@@ -1581,26 +1584,44 @@ int32_t ui_widget_input_event_handler(
 
 
 
-// 顶栏"返回"标签待绘标记：菜单进入（ui_widget_menu_init）时置位，由 ui_widget_menu_draw
-// 在首次绘制时补绘一次后清除——标签位于页眉带内，页眉仅在状态进入时绘制一次，
-// 而菜单区在滚动/移动高亮时反复重绘，若标签跟随菜单区重绘，抗锯齿边缘会被反复混合而模糊。
-static uint8_t s_menu_back_label_pending = 0;
+// 顶栏"返回"标签：12px 抗锯齿字体，靠右对齐（尾随空格作右边距）、在顶栏带内上下居中，
+// 配色跟随页眉文字。同时作为触屏退出热区提示（顶栏最右侧 1/4 点击退出，见事件处理器）。
+// 仅由 ui_widget_menu_refresh 调用——其全部调用点均为状态进入/整体重绘分支，且紧跟
+// ui_draw_header 之后，标签与页眉同生命周期、叠绘在页眉上方；菜单区滚动重绘
+// （ui_widget_menu_draw）不触碰页眉带，避免抗锯齿边缘被反复混合而模糊。
+static void ui_widget_menu_draw_back_label(Global_State *global_state, Widget_Menu_State *menu_state) {
+    wchar_t *back_label = L"返回 ";
+    int32_t label_width = gfx_font_measure_text(GFX_FONT_ALPHA_12, back_label);
+    int32_t header_height = menu_state->header_height; // 页眉高度（默认 1.5 倍字体行高，见 ui_widget_menu_init）
+    int32_t label_y = (header_height - gfx_font_line_height(GFX_FONT_ALPHA_12)) / 2;
+    if (label_y < 0) label_y = 0;
+    gfx_font_draw_text(global_state->gfx, GFX_FONT_ALPHA_12, back_label,
+        menu_state->x + menu_state->width - label_width, label_y,
+        S_UI_COLOR_HEADER_TEXT[0], S_UI_COLOR_HEADER_TEXT[1], S_UI_COLOR_HEADER_TEXT[2], 1);
+}
 
 void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
-    // 顶栏"返回"标签需要在本次菜单进入后的首次绘制时补绘一次（见 ui_widget_menu_draw）
-    s_menu_back_label_pending = 1;
-
-    // 菜单位于页眉与页脚之间，页眉/页脚高度与条目行高均跟随当前字体行高
+    // 菜单位于页眉与页脚之间。页眉高度与条目行高与所使用字体行高成倍数关系
+    // （文字在页眉/条目内纵向居中）；页脚不变（字体行高 + 1）。
+    // 密集列表界面（如电子词典候选）可在本函数返回后覆写 header_height/item_height
+    // 并自行修正 y/height（见 ui_dict.c）。
     int32_t line_height = gfx_font_line_height(global_state->ui_font);
-    int32_t header_height = line_height + 1;
+    int32_t footer_height = line_height + 1;
+    menu_state->header_height = line_height * 2;
     menu_state->x = 0;
-    menu_state->y = header_height;
+    menu_state->y = menu_state->header_height;
     menu_state->zindex = 0;
     menu_state->width = global_state->gfx->width;
-    menu_state->height = global_state->gfx->height - ui_softkbd_height() - header_height * 2; // 减去header和footer，并为触屏软键盘让出空间
+    menu_state->height = global_state->gfx->height - ui_softkbd_height() - menu_state->header_height - footer_height; // 减去header和footer，并为触屏软键盘让出空间
     menu_state->current_item_index = 0;
     menu_state->first_item_intex = 0;
-    uint32_t max_items_per_page = (menu_state->height - line_height + 2) / line_height;
+    // 条目行高布局策略：先以基础行高（字体行高的硬编码倍率）估算每页可容纳的条目数，
+    // 再把行高微调为 菜单区高度/条目数（整除向下取整，剩余不足条目数像素，分摊后每行
+    // 至多差1px），使条目恰好撑满一页，页底不再遗留大块空白
+    int32_t base_item_height = line_height * 3 / 2;
+    uint32_t max_items_per_page = menu_state->height / base_item_height;
+    if (max_items_per_page < 1) max_items_per_page = 1;
+    menu_state->item_height = (menu_state->height - 1) / (int32_t)max_items_per_page; // 条目自 y+1 起绘，预留的 1px 从可填充高度中扣除
     menu_state->items_per_page = (menu_state->item_num > max_items_per_page) ? max_items_per_page : menu_state->item_num;
 
     // 触屏交互状态复位（菜单场景互斥，进入时重新初始化）
@@ -1618,7 +1639,13 @@ void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widge
 }
 
 void ui_widget_menu_refresh(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
-    ui_widget_menu_draw(key_event, global_state, menu_state);
+    // 菜单控件自绘页眉（1.5 倍字体行高，标题居中）并叠绘"返回"标签：本函数的全部调用点
+    // 均为状态进入/整体重绘分支，标签与页眉同生命周期。调用点先画的标准高度页眉会被
+    // 此处完整覆盖（同为置色模式，无残影）；标签仅在此处绘制一次，随后在
+    // ui_widget_menu_draw 的 gfx_refresh 中同帧推屏，不会被滚动重绘反复混合。
+    ui_draw_header_ex(key_event, global_state, (wchar_t *)menu_state->title, 1, menu_state->header_height);
+    ui_widget_menu_draw_back_label(global_state, menu_state);
+    ui_widget_menu_draw(key_event, global_state, menu_state); // 内含 gfx_refresh 统一推屏
 }
 
 void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
@@ -1648,6 +1675,7 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
 
     uint32_t font_id = global_state->ui_font;
     int32_t line_height = gfx_font_line_height(font_id);
+    int32_t item_height = menu_state->item_height; // 条目行高（默认 1.5 倍字体行高）
     uint32_t y_pos = menu_state->y + 1;
     uint8_t is_highlight = 0;
     for (uint32_t i = menu_state->first_item_intex; i < menu_state->item_num; i++) {
@@ -1660,16 +1688,17 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
         else {
             is_highlight = 1;
         }
-        // 绘制高亮底色
+        // 绘制高亮底色（覆盖整个条目行高）
         if (is_highlight) {
-            for (uint32_t j = y_pos - 1; j < y_pos + line_height - 1; j++) {
+            for (uint32_t j = y_pos; j < y_pos + item_height; j++) {
                 gfx_draw_line(global_state->gfx, menu_state->x, j, menu_state->x + menu_state->width, j, hl_r, hl_g, hl_b, 1);
             }
         }
-        // 绘制文字
-        gfx_font_draw_text(global_state->gfx, font_id, (wchar_t *)menu_state->items[i], menu_state->x + x_indent, y_pos, fg_r, fg_g, fg_b, 1);
+        // 绘制文字（行顶偏移使文字在条目行内纵向居中）
+        gfx_font_draw_text(global_state->gfx, font_id, (wchar_t *)menu_state->items[i], menu_state->x + x_indent,
+            y_pos + (item_height - line_height) / 2, fg_r, fg_g, fg_b, 1);
 
-        y_pos += line_height;
+        y_pos += item_height;
     }
 
     // 菜单的滚动条
@@ -1677,23 +1706,6 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
         key_event, global_state,
         menu_state->first_item_intex, menu_state->item_num, menu_state->items_per_page,
         menu_state->x, menu_state->y, menu_state->width, menu_state->height);
-
-    // 顶栏右侧"返回"标签（仅菜单进入后的首次绘制补绘一次，随后菜单区滚动重绘不再触碰页眉带，
-    // 避免抗锯齿边缘被反复重绘而模糊；标记由 ui_widget_menu_init 置位）：
-    // 12px 抗锯齿字体，靠右对齐（尾随空格作右边距）、在顶栏带内上下居中，配色跟随页眉文字。
-    // 同时作为触屏退出热区提示（顶栏最右侧 1/4 点击退出，见 ui_widget_menu_event_handler）。
-    // 调用点均为"先画页眉、后画菜单"，故此处向页眉带补绘不会被覆盖。
-    if (s_menu_back_label_pending) {
-        s_menu_back_label_pending = 0;
-        wchar_t *back_label = L"返回 ";
-        int32_t label_width = gfx_font_measure_text(GFX_FONT_ALPHA_12, back_label);
-        int32_t header_height = menu_state->y; // 顶栏高度（menu_state->y == 页眉高度，见 ui_widget_menu_init）
-        int32_t label_y = (header_height - gfx_font_line_height(GFX_FONT_ALPHA_12)) / 2;
-        if (label_y < 0) label_y = 0;
-        gfx_font_draw_text(global_state->gfx, GFX_FONT_ALPHA_12, back_label,
-            menu_state->x + menu_state->width - label_width, label_y,
-            S_UI_COLOR_HEADER_TEXT[0], S_UI_COLOR_HEADER_TEXT[1], S_UI_COLOR_HEADER_TEXT[2], 1);
-    }
 
     // NOTE 因fb_draw_textline会额外给文字上方增加一行，因此这个横线在菜单文字绘制之后再绘制
     // gfx_draw_line(global_state->gfx, 0, 12, global_state->gfx->width, 12, 128, 128, 128, 1);
@@ -1707,7 +1719,7 @@ int32_t ui_widget_menu_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Menu_State *ms,
     int32_t (*menu_item_action_callback)(Key_Event*, Global_State*, Widget_Menu_State*), int32_t prev_focus_state, int32_t current_focus_state
 ) {
-    int32_t line_height = gfx_font_line_height(gs->ui_font);
+    int32_t item_height = ms->item_height; // 条目行高（默认 1.5 倍字体行高，见 ui_widget_menu_init）
 
     // ========================================================================
     // 触屏交互（有触屏的设备：is_touching 电平样本逐帧驱动；无触屏设备恒为 0，
@@ -1715,6 +1727,9 @@ int32_t ui_widget_menu_event_handler(
     //   - 拖动屏幕：列表随手指滚动（像素位移折算为整行，首条目索引随动）；
     //   - 点击条目：选中并执行（同 Enter）；
     //   - 点击顶栏最右侧 1/4：退出菜单（同 Esc）。
+    // 点击的边沿判定依据触屏电平本身（is_touching 1→0），与按键事件的边沿无关。
+    // 菜单激活期间输入层不再生成宫格软按键（ui_app.c get_input_event 按状态抑制），
+    // 触屏流是唯一输入通道，松手帧触发动作不会遗留按键事件泄漏到下一状态。
     // ========================================================================
     if (ke->is_touching) {
         if (!ms->touch_active) {
@@ -1727,12 +1742,12 @@ int32_t ui_widget_menu_event_handler(
         }
         else {
             int32_t dy = ke->touch_y - ms->touch_start_y; // >0：手指下滑
-            if (!ms->touch_is_dragging && (dy > line_height / 2 || dy < -(line_height / 2))) {
+            if (!ms->touch_is_dragging && (dy > item_height / 2 || dy < -(item_height / 2))) {
                 ms->touch_is_dragging = 1;
             }
             if (ms->touch_is_dragging && ms->item_num > ms->items_per_page) {
                 // 手指下滑 → 内容下移 → 首条目前移；相对锚点取整行数，无累计误差
-                int32_t delta_lines = dy / line_height;
+                int32_t delta_lines = dy / item_height;
                 int32_t new_first = ms->touch_anchor_first - delta_lines;
                 if (new_first < 0) new_first = 0;
                 if (new_first > ms->item_num - ms->items_per_page) new_first = ms->item_num - ms->items_per_page;
@@ -1747,7 +1762,7 @@ int32_t ui_widget_menu_event_handler(
         }
     }
     else if (ms->touch_active) {
-        // 触摸序列结束（松手）：构成拖动则不按点击处理
+        // 触摸序列结束（is_touching 1→0 边沿）：构成拖动则丢弃，否则按点击处理
         ms->touch_active = 0;
         if (!ms->touch_is_dragging) {
             if (ms->touch_start_y < ms->y && ms->touch_start_x >= ms->x + ms->width * 3 / 4) {
@@ -1756,11 +1771,13 @@ int32_t ui_widget_menu_event_handler(
             }
             else if (ms->touch_start_y >= ms->y && ms->touch_start_y < ms->y + ms->height) {
                 // 点击菜单项：选中并执行
-                int32_t row = (ms->touch_start_y - (ms->y + 1)) / line_height;
+                int32_t row = (ms->touch_start_y - (ms->y + 1)) / item_height;
                 if (row >= 0 && row < ms->items_per_page) {
                     int32_t tapped_item_index = ms->first_item_intex + row;
                     if (tapped_item_index < ms->item_num) {
                         ms->current_item_index = tapped_item_index;
+                        // 先刷新一帧使被点击项高亮可见（视觉反馈），再执行菜单动作
+                        ui_widget_menu_draw(ke, gs, ms);
                         return menu_item_action_callback(ke, gs, ms);
                     }
                 }
@@ -1768,10 +1785,11 @@ int32_t ui_widget_menu_event_handler(
         }
     }
 
-    // 软硬按键仲裁：触屏派生的软按键（4x4宫格映射/软键盘）与上方的触屏直接处理
-    // 重复（同一次触摸既产生触点流又产生软键码），一律忽略，以触屏为准；
-    // 实体按键（is_soft_key==0）照常采纳。无触屏设备不会产生软按键，行为不变。
-    if (ke->key_code != NANO_KEY_IDLE && ke->is_soft_key) {
+    // 软硬按键仲裁：宫格映射软按键不作为键码采纳（菜单状态下输入层已抑制其生成，
+    // 此处为防御性兜底——如状态切换瞬间跨核可见性延迟产生的零星软按键）；
+    // 触屏软键盘键码（is_softkbd==1，如词典候选菜单的软键盘方向键导航）与
+    // 实体按键（is_soft_key==0）照常走下方按键逻辑。
+    if (ke->key_code != NANO_KEY_IDLE && ke->is_soft_key && !ke->is_softkbd) {
         return current_focus_state;
     }
 

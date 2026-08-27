@@ -228,6 +228,8 @@ typedef struct Widget_Menu_State {
     int32_t zindex;
     int32_t width;
     int32_t height;
+    int32_t header_height; // 页眉高度（ui_widget_menu_init 默认为字体行高的若干倍；密集列表界面如词典可覆写）
+    int32_t item_height;   // 条目行高（同上，默认字体行高的若干倍，文字在行内纵向居中）
     int32_t current_item_index; // 当前选中（高亮）的条目的标号（注意：选中条目不一定在显示的页面范围内）
     int32_t first_item_intex; // 当前页面显示的第一个条目的标号
     int32_t item_num; // 菜单条目数
@@ -244,6 +246,8 @@ typedef struct Widget_Menu_State {
 
 
 void ui_draw_header(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center);
+// 指定高度的页眉绘制（标准页眉为字体行高+1；菜单控件页眉为字体行高的若干倍，见 ui_widget_menu_init）
+void ui_draw_header_ex(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center, int32_t header_height);
 void ui_draw_footer(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center);
 // 软按键提示区页脚：4个字符串依次为十六宫格最底部一行 *、0、#、D 四键的功能提示，
 // 横向与底部4个格子中点对齐，纵向与 ui_draw_footer 一致；NULL或空串表示该键无功能

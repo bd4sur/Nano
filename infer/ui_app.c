@@ -148,6 +148,25 @@ static uint32_t s_animac_prev_ui_font = 0; // 进入 STATE_ANIMAC_* 之前的 ui
 #define GRID16_Y3 (SCREEN_HEIGHT / 4 * 3)
 #define GRID16_Y4 (SCREEN_HEIGHT)
 
+// 菜单控件激活状态表：这些状态下菜单控件（ui_widget_menu_event_handler）直接消费
+// 触屏流（拖动滚动/点按/顶栏退出），get_input_event 不再生成宫格软按键——否则同一次
+// 触摸既产生触点流又产生软按键事件，ESP32 上两者经共享快照/事件队列两条通道到达渲染核，
+// 时刻不同步，滞后的软按键事件会在菜单动作切换状态后泄漏给下一个状态造成误触发。
+// （词典候选菜单 STATE_DICT_QUERY 不在此列：该状态软键盘常驻可见，宫格映射已被软键盘
+//  路径禁用，且候选菜单依赖软键盘方向键导航。）
+static int32_t ui_app_state_is_menu(int32_t state) {
+    switch (state) {
+        case STATE_MODEL_MENU:
+        case STATE_GAME_MENU:
+        case STATE_EBOOK:
+        case STATE_OFDM_MENU:
+        case STATE_MUSICBOX_MENU:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 static uint8_t ui_app_map_touch_to_grid16_key(int32_t x, int32_t y) {
     if (y >= GRID16_Y0 && y < GRID16_Y1) {
         if (x >= GRID16_X0 && x <  GRID16_X1) return NANO_KEY_1;
@@ -206,8 +225,10 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     }
 
     // 触屏 → 4x4 宫格虚拟按键（兼容适配，见上方注释）：实体键优先，
-    // 无实体键输入时按触点所在宫格映射为虚拟键码
-    if (key == NANO_KEY_IDLE && key_event->is_touching) {
+    // 无实体键输入时按触点所在宫格映射为虚拟键码。
+    // 菜单控件激活状态下抑制该映射（见 ui_app_state_is_menu 注释）：菜单直接消费
+    // 触屏流，不再生成软按键事件，杜绝事件队列通道的滞后事件泄漏到下一状态
+    if (key == NANO_KEY_IDLE && key_event->is_touching && !ui_app_state_is_menu(global_state->STATE)) {
         key = ui_app_map_touch_to_grid16_key(key_event->touch_x, key_event->touch_y);
         key_is_soft = (key != NANO_KEY_IDLE); // 宫格映射命中的键来自触屏
     }

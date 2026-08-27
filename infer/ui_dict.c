@@ -438,17 +438,18 @@ static void ui_dict_draw_query_line(Key_Event *key_event, Global_State *gs) {
 }
 
 // 菜单布局微调：为查询前缀行让出一行（ui_widget_menu_init 已扣除软键盘高度与页眉页脚），
-// 并按当前 item_num 重算 items_per_page（与 ui_widget_menu_init 内公式一致；不修改通用组件）
+// 并按当前 item_num 重算 items_per_page（公式含义与 ui_widget_menu_init 一致，行高取
+// 本界面覆写后的 ms->item_height；不修改通用组件）
 static void ui_dict_menu_relayout(Key_Event *key_event, Global_State *gs) {
     Widget_Menu_State *ms = gs->w_menu_main;
-    int32_t line_height = gfx_font_line_height(gs->ui_font);
     ms->current_item_index = 0;
     ms->first_item_intex = 0;
-    // 每页条目数按像素精确撑满菜单区域：首行顶为 y+1、每行占 line_height，
-    // 第 n 行底为 y + n*line_height，故 n_max = height / line_height（比通用公式多利用余量行）
-    uint32_t max_items = (uint32_t)ms->height / (uint32_t)line_height;
+    // 每页条目数按像素精确撑满菜单区域：首行顶为 y+1、每行占 item_height，
+    // 第 n 行底为 y + n*item_height，故 n_max = height / item_height（比通用公式多利用余量行）
+    uint32_t max_items = (uint32_t)ms->height / (uint32_t)ms->item_height;
     ms->items_per_page = (ms->item_num > (int32_t)max_items) ? (int32_t)max_items : ms->item_num;
     if (ms->items_per_page < 1) ms->items_per_page = 1;
+    (void)key_event;
 }
 
 // 按当前前缀重建候选表（item_num 恒 >=1：空前缀/零匹配显示提示行，复用菜单绘制与高亮）
@@ -557,10 +558,13 @@ int32_t ui_dict_enter(Key_Event *key_event, Global_State *global_state) {
     ms->items = s_match_items;
     ms->item_num = 1;
     ui_widget_menu_init(key_event, global_state, ms);
-    // 布局修正（不修改通用组件）：本界面菜单上方是查询前缀行、下方紧贴软键盘（无页脚），
+    // 布局修正（覆写通用组件的n倍行高默认几何，本界面维持原状）：标准高度页眉、
+    // 密集候选行（单倍字体行高）；菜单上方是查询前缀行、下方紧贴软键盘（无页脚），
     // 收回 ui_widget_menu_init 预留的页脚高度，使菜单恰好撑满查询行与软键盘之间的区域
     int32_t line_height = gfx_font_line_height(global_state->ui_font);
-    ms->y += line_height;
+    ms->header_height = line_height + 1;     // 标准页眉（与 ui_draw_header 一致）
+    ms->item_height = line_height;           // 密集候选行
+    ms->y = ms->header_height + line_height; // 页眉 + 查询前缀行
     ms->height = (global_state->gfx->height - ui_softkbd_height()) - ms->y;
 
     ui_dict_rebuild_matches(key_event, global_state);
