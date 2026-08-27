@@ -116,7 +116,6 @@ static UI_Softkbd_Key S_SOFTKBD[UI_SOFTKBD_ROWS][UI_SOFTKBD_COLS] = {
 //   s_press_row/col：写-轮询任务，读-渲染任务（按下高亮）
 //   s_dirty      ：写-轮询任务，读/清-渲染任务
 static volatile uint8_t s_visible = 0;
-static volatile uint8_t s_toggle_request = 0; // 切换显隐请求（写-轮询任务，读/清-渲染任务）
 static volatile uint8_t s_sticky = UI_SOFTKBD_MOD_NONE;
 static volatile int8_t  s_press_row = -1;
 static volatile int8_t  s_press_col = -1;
@@ -129,7 +128,6 @@ static uint8_t s_held_no_repeat = 0;    // 当前按住的键不可重复（Ctrl
 void ui_softkbd_init() {
     touch_init();
     s_visible = 0;
-    s_toggle_request = 0;
     s_sticky = UI_SOFTKBD_MOD_NONE;
     s_press_row = -1;
     s_press_col = -1;
@@ -142,16 +140,6 @@ void ui_softkbd_init() {
 
 uint8_t ui_softkbd_is_visible() {
     return s_visible;
-}
-
-void ui_softkbd_request_toggle() {
-    s_toggle_request = 1;
-}
-
-uint8_t ui_softkbd_take_toggle_request() {
-    uint8_t r = s_toggle_request;
-    s_toggle_request = 0;
-    return r;
 }
 
 void ui_softkbd_show() {
@@ -233,10 +221,7 @@ static int32_t ui_softkbd_hit_test(int32_t x, int32_t y, int32_t *out_row, int32
     return 1;
 }
 
-uint8_t ui_softkbd_poll() {
-    int32_t x = 0, y = 0, is_pressed = 0;
-    touch_read(&x, &y, &is_pressed);
-
+uint8_t ui_softkbd_poll(int32_t x, int32_t y, int32_t is_pressed) {
     s_claimed = 0;
 
     // 松开：清除按下高亮与锁存键码，准备下一次按下沿

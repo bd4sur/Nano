@@ -12,7 +12,7 @@ extern void touch_ncurses_on_mouse(int32_t mx, int32_t my, uint32_t bstate);
 
 // 触屏并行按键：鼠标按住期间，触点按屏幕上 4x4 宫格映射为虚拟按键，
 // 与键盘输入互为备份（映射关系与 input_device_mp135.c 一致，
-// 软键盘可见时框架会吞掉键盘区域的网格映射，改由软键盘接管，见 ui_app.c get_key_event）。
+// 软键盘可见时框架会吞掉键盘区域的网格映射，改由软键盘接管，见 ui_app.c get_input_event）。
 #define X0 (0)
 #define X1 (SCREEN_WIDTH / 4 * 1)
 #define X2 (SCREEN_WIDTH / 4 * 2)

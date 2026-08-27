@@ -78,7 +78,16 @@ void core0_render_task(void *pvParameters) {
             // Serial.println("No event received");
             key_event_0.key_code = NANO_KEY_IDLE;
             key_event_0.key_edge = 0;
+            // 一次性事件：无新事件时清除，防止陈旧手势在后续帧被重复消费
+            key_event_0.touch_gesture = NANO_TOUCH_GESTURE_NONE;
         }
+
+        // 触屏电平/坐标取自 Core1 在 get_input_event 中高频锁存的共享快照
+        // （与 last_touch_timestamp 同一跨核机制）；业务逻辑统一经 key_event 消费触屏，
+        // 不跨层直读触屏HAL，高频电平样本也不进入事件队列
+        key_event_0.touch_x = global_state->touch_x;
+        key_event_0.touch_y = global_state->touch_y;
+        key_event_0.is_touching = global_state->is_touching;
 
         if (key_event_0.key_code != NANO_KEY_IDLE) {
             if (key_event_0.key_edge < 0) {
@@ -243,8 +252,8 @@ void loop() {
     // 物理时间戳
     global_state->timestamp = get_timestamp_in_ms();
 
-    // 获取按键事件
-    get_key_event(&key_event_1, global_state);
+    // 获取输入事件（按键 + 触屏）
+    get_input_event(&key_event_1, global_state);
     if (key_event_1.key_code != NANO_KEY_IDLE && key_event_1.key_edge < 0) {
         // 按键提示-蜂鸣（Core1 即时侧，4000Hz）：OFDM 寻呼机发射/接收、音乐盒播放、声谱图状态下禁用按键音
         if ((global_state->key_feedback_mode & 2) &&
@@ -281,17 +290,30 @@ void loop() {
 
         // gfx_refresh(global_state->gfx);
 
-        // 仅在下降沿发送事件：NOTE 假设业务逻辑只认下降沿
-        if (key_event_1.key_code != NANO_KEY_IDLE && key_event_1.key_edge < 0) {
+        // 发送事件到 Core0。按键事件分两类投递：
+        //  - 可靠类（1ms超时+告警，不可丢弃）：短按下降沿(-1)、滑动手势确认——一次性事件；
+        //  - 可丢弃类（0超时、队列满静默丢弃）：长按/重复动作(-2)。get_input_event 的重复机制
+        //    在按住超过360ms后以 Core1 轮询速率（~1kHz，远高于 Core0 帧率）持续产生 -2 流，
+        //    若对其可靠发送，会占满队列（长度仅2），1ms超时失败后的阻塞式串口告警反过来
+        //    拖垮 Core1，表现为"响应几个事件→卡住→再响应"的循环；静默丢弃后 Core0 每帧
+        //    总能取到最新的重复事件，重复节奏自然对齐 Core0 帧率（与 Linux 单循环端一致）。
+        // 触屏电平不走队列——由 get_input_event 高频锁存到 Global_State 共享快照
+        // （touch_x/touch_y/is_touching），Core0 每帧直接取用覆盖到 key_event_0。
+        int32_t is_gesture  = (key_event_1.touch_gesture != NANO_TOUCH_GESTURE_NONE);
+        int32_t is_key_edge = (key_event_1.key_code != NANO_KEY_IDLE && key_event_1.key_edge < 0);
+        if (is_key_edge || is_gesture) {
+            int32_t is_reliable = (key_event_1.key_edge == -1) || is_gesture;
             // Serial.println("Send");
             // Serial.println(key_event_1.key_code);
             // Serial.println(key_event_1.key_edge);
-            // 仅玲珑仪显示提示
-            if (global_state->STATE == STATE_LINGLONG || global_state->STATE == STATE_ALBUM) {
+            // 仅按键事件在玲珑仪/时光集显示忙提示
+            if (is_key_edge &&
+                (global_state->STATE == STATE_LINGLONG || global_state->STATE == STATE_ALBUM)) {
                 gfx_draw_busy(global_state->gfx);
                 gfx_refresh(global_state->gfx);
             }
-            if (xQueueSend(event_queue, &key_event_1, pdMS_TO_TICKS(1)) != pdTRUE) {
+            if (xQueueSend(event_queue, &key_event_1, (is_reliable) ? pdMS_TO_TICKS(1) : 0) != pdTRUE &&
+                is_reliable) {
                 Serial.println("WARNING: event_queue send timeout!");
             }
         }

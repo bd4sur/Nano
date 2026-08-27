@@ -9,7 +9,6 @@
 #include "ui_color.h"
 #include "ui_almanac.h"
 #include "hal_key.h"
-#include "hal_touch.h"
 
 // 支持显示的年份范围（公历）。
 #define CALENDAR_MIN_YEAR (1900)
@@ -230,13 +229,12 @@ static void ui_calendar_open_almanac(int32_t year, int32_t month, int32_t day, G
 
 
 int32_t ui_calendar_event_handler(Key_Event *key_event, Global_State *global_state) {
-    // 触屏轮询（独立于 16 宫格键；按下沿判定见软键盘同款范式）：
-    // 日期数字的点击无法经 16 宫格键区分（整个屏幕都被映射为 4x4 键），必须直读触屏。
-    int32_t touch_x = 0, touch_y = 0, touch_pressed = 0;
-    int32_t touch_edge = 0;
-    if (touch_read(&touch_x, &touch_y, &touch_pressed) == 0) {
-        touch_edge = (touch_pressed && !s_almanac_touch_prev);
-    }
+    // 触屏按下沿判定（触屏电平/坐标取自 get_input_event 统一采样的 key_event）：
+    // 日期数字的点击无法经 16 宫格键区分（整个屏幕都被映射为 4x4 键），必须消费触屏坐标。
+    int32_t touch_x = key_event->touch_x;
+    int32_t touch_y = key_event->touch_y;
+    int32_t touch_pressed = key_event->is_touching;
+    int32_t touch_edge = (touch_pressed && !s_almanac_touch_prev);
 
     // 黄历模态框激活：任意触屏按下沿、或（打开 300ms 后到达的）按键下降沿关闭。
     // 300ms 门限用于吞掉“打开该模态框的同一手势”经 16 宫格产生的残留按键事件。

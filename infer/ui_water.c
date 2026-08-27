@@ -31,7 +31,6 @@
 #ifndef WATER_HOST_TEST
     #include "ui_water.h"
     #include "hal_key.h"
-    #include "hal_touch.h"
 #endif
 
 // ===============================================================================
@@ -1181,7 +1180,6 @@ int32_t ui_water_event_handler(Key_Event *key_event, Global_State *global_state)
 
 int32_t ui_water_render_frame(Key_Event *key_event, Global_State *global_state) {
     Nano_GFX *gfx = global_state->gfx;
-    (void)key_event;
     if (!s_wt.ready) {
         gfx_soft_clear(gfx);
         gfx_font_draw_text(gfx, GFX_FONT_ALPHA_16, L"水池", 6, 2, 255, 255, 255, 1);
@@ -1192,20 +1190,18 @@ int32_t ui_water_render_frame(Key_Event *key_event, Global_State *global_state) 
     }
 
     // ---- 触屏（按住拖动：圆球移动 / 视角旋转；PC 端对应 mousedown/mousemove/mouseup） ----
-    int32_t t_x = 0, t_y = 0, t_p = 0;
-    if (touch_read(&t_x, &t_y, &t_p) == 0) {
-        if (t_p) {
-            if (!s_wt.mouseDown) {
-                wt_start_drag((int)t_x, (int)t_y);
-                wt_during_drag((int)t_x, (int)t_y);
-            } else {
-                wt_during_drag((int)t_x, (int)t_y);
-            }
+    // 触屏电平/坐标取自 get_input_event 统一采样的 key_event
+    if (key_event->is_touching) {
+        if (!s_wt.mouseDown) {
+            wt_start_drag((int)key_event->touch_x, (int)key_event->touch_y);
+            wt_during_drag((int)key_event->touch_x, (int)key_event->touch_y);
         } else {
-            if (s_wt.mouseDown) {
-                s_wt.mouseDown = 0;                      // stopDrag：回到静止
-                s_wt.mode = -1;
-            }
+            wt_during_drag((int)key_event->touch_x, (int)key_event->touch_y);
+        }
+    } else {
+        if (s_wt.mouseDown) {
+            s_wt.mouseDown = 0;                      // stopDrag：回到静止
+            s_wt.mode = -1;
         }
     }
 

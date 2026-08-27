@@ -998,7 +998,7 @@ int32_t ui_widget_input_event_handler(
 ) {
 
     // 九键按键提示遮罩（全局标志：触屏置位、3 秒无触屏清除）。
-    // 触屏时间戳由 Core1 的 get_key_event 以 1-2ms 周期高频锁存（global_state->last_touch_timestamp，
+    // 触屏时间戳由 Core1 的 get_input_event 以 1-2ms 周期高频锁存（global_state->last_touch_timestamp，
     // 短按不遗漏）；本处于处理器开头只做判定与置位/清除，置位后本帧的正常 UI 刷新推帧前
     // 即被 gfx 刷新钩子叠加遮罩、推帧后恢复帧缓冲（遮罩与正常 GUI 刷新严格同步）。
     {
@@ -1025,8 +1025,14 @@ int32_t ui_widget_input_event_handler(
     }
 
     // 触屏软键盘（文本输入控件固有功能）：
-    // 上滑/下滑手势请求切换显隐（Core1手势识别，见 ui_app.c get_key_event；任何输入状态均在此消费）
-    if (ui_softkbd_take_toggle_request()) {
+    // 上滑/下滑手势切换显隐（Core1手势识别，见 ui_app.c get_input_event 的
+    // ui_app_recognize_swipe_gesture；识别层只做方向中性的上报，显隐语义在此解释）。
+    // 同时按软键盘显隐维护当前武装的手势方向，供识别层只在武装方向上吞键
+    // （非武装方向上的点按抖动不被误吞）
+    global_state->input_swipe_armed_dir =
+        ui_softkbd_is_visible() ? NANO_TOUCH_GESTURE_SWIPE_DOWN : NANO_TOUCH_GESTURE_SWIPE_UP;
+    if ((key_event->touch_gesture == NANO_TOUCH_GESTURE_SWIPE_UP   && !ui_softkbd_is_visible()) ||
+        (key_event->touch_gesture == NANO_TOUCH_GESTURE_SWIPE_DOWN &&  ui_softkbd_is_visible())) {
         ui_widget_input_toggle_softkbd(key_event, global_state);
     }
     // 软键盘自身状态变化（粘滞修饰键、按下高亮）时，补画键盘并刷新

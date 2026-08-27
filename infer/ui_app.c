@@ -114,7 +114,7 @@ static uint32_t s_animac_prev_ui_font = 0; // 进入 STATE_ANIMAC_* 之前的 ui
 
 
 // ===============================================================================
-// UI框架：获取按键事件
+// UI框架：获取输入事件（按键 + 触屏）
 // ===============================================================================
 
 // 滑动手势识别（Core1轮询侧）状态
@@ -123,37 +123,30 @@ static int32_t s_swipe_start_y = 0;  // 序列起点y
 static int32_t s_swipe_min_y = 0;    // 序列中的最小y（最高点）
 static int32_t s_swipe_max_y = 0;    // 序列中的最大y（最低点）
 
-// 滑动手势（均为松手确认，跨越一半以上屏幕高度即>120px）：
-//   键盘隐藏时，从下到上滑动 = 呼出键盘；键盘可见时，从上到下滑动 = 关闭键盘。
-// 有效手势方向上位移超过 UI_SWIPE_MASK_PX 即预备吞掉本次触摸序列的按键事件
-// （key_mask软复位），防止滑动穿越网格键/软键盘键时产生杂散输入。
+// 滑动手势（均为松手确认，跨越一半以上屏幕高度即>120px），方向中性：
+// 识别结果仅按方向上报为 key_event->touch_gesture（NANO_TOUCH_GESTURE_SWIPE_UP/DOWN），
+// 手势语义（如上滑呼出软键盘）由消费者解释（见 ui.c 文本输入控件）。
+// 吞键（key_mask软复位）仅在消费者武装的方向上进行（global_state->input_swipe_armed_dir，
+// 由文本输入控件按软键盘显隐维护）：位移超过 UI_SWIPE_MASK_PX 即预备吞掉本次触摸序列的
+// 按键事件，防止滑动手势穿越网格键/软键盘键时产生杂散输入；非武装方向不吞，
+// 避免点按时手指抖动（>20px）被误吞导致按键失效。
 #define UI_SWIPE_CONFIRM_PX (SCREEN_HEIGHT / 2)
 #define UI_SWIPE_MASK_PX    (20)
 
 
-// 当前状态是否寄宿文本输入控件（w_input_main）：上滑/下滑手势（呼出/收起软键盘）仅在这些状态识别，
+// 当前状态是否寄宿文本输入控件（w_input_main）：上滑/下滑手势仅在这些状态识别，
 // 避免误吞水波、OFDM接收等其他状态的触屏拖动；新增输入状态只改这一处
 static int32_t ui_app_state_hosts_input_widget(int32_t state) {
     return (state == STATE_LLM_INPUT || state == STATE_ANIMAC_CONSOLE ||
             state == STATE_ANIMAC_RUNNING || state == STATE_OFDM_TX);
 }
 
-void get_key_event(Key_Event *key_event, Global_State *global_state) {
-    // 触屏电平锁存（本函数在 Core1 每 1-2ms 轮询一次）：为九键按键提示遮罩提供可靠的
-    // 触发时间戳，避免渲染循环（Core0）帧率不均的低频采样漏掉短按（见 ui.c 遮罩实现）
-    {
-        int32_t touch_pressed = 0;
-        touch_read(NULL, NULL, &touch_pressed);
-        if (touch_pressed) {
-            global_state->last_touch_timestamp = global_state->timestamp;
-        }
-    }
-
-    // 滑动手势识别（仅寄宿文本输入控件的状态）：上滑呼出键盘（隐藏态）/下滑关闭键盘（可见态）
+// 滑动手势识别（仅寄宿文本输入控件的状态）：方向中性的上滑/下滑识别，
+// 松手确认后写入 key_event->touch_gesture；武装方向上超预备阈值即吞掉本次序列的按键边沿事件
+static void ui_app_recognize_swipe_gesture(Key_Event *key_event, Global_State *global_state) {
     if (ui_app_state_hosts_input_widget(global_state->STATE)) {
-        int32_t touch_x = 0, touch_y = 0, touch_pressed = 0;
-        touch_read(&touch_x, &touch_y, &touch_pressed);
-        if (touch_pressed) {
+        if (key_event->is_touching) {
+            int32_t touch_y = key_event->touch_y;
             if (!s_swipe_active) {
                 s_swipe_active = 1;
                 s_swipe_start_y = touch_y;
@@ -163,19 +156,24 @@ void get_key_event(Key_Event *key_event, Global_State *global_state) {
             else {
                 if (touch_y < s_swipe_min_y) s_swipe_min_y = touch_y;
                 if (touch_y > s_swipe_max_y) s_swipe_max_y = touch_y;
-                // 仅在与当前键盘显隐对应的手势方向上，位移超过预备阈值即吞掉本次序列的按键边沿事件
-                if ((!ui_softkbd_is_visible() && s_swipe_start_y - s_swipe_min_y > UI_SWIPE_MASK_PX) ||
-                    ( ui_softkbd_is_visible() && s_swipe_max_y - s_swipe_start_y > UI_SWIPE_MASK_PX)) {
+                // 仅在消费者武装的手势方向上，位移超过预备阈值即吞掉本次序列的按键边沿事件
+                int32_t swipe_up_px   = s_swipe_start_y - s_swipe_min_y;
+                int32_t swipe_down_px = s_swipe_max_y - s_swipe_start_y;
+                if ((global_state->input_swipe_armed_dir == NANO_TOUCH_GESTURE_SWIPE_UP   && swipe_up_px   > UI_SWIPE_MASK_PX) ||
+                    (global_state->input_swipe_armed_dir == NANO_TOUCH_GESTURE_SWIPE_DOWN && swipe_down_px > UI_SWIPE_MASK_PX)) {
                     key_event->key_mask = 1;
                 }
             }
         }
         else if (s_swipe_active) {
-            // 松手确认：隐藏时上滑跨越半屏 = 呼出；可见时下滑跨越半屏 = 关闭
-            if ((!ui_softkbd_is_visible() && s_swipe_start_y - s_swipe_min_y > UI_SWIPE_CONFIRM_PX) ||
-                ( ui_softkbd_is_visible() && s_swipe_max_y - s_swipe_start_y > UI_SWIPE_CONFIRM_PX)) {
+            // 松手确认：垂直位移跨越半屏即按方向上报手势（是否响应由消费者决定）
+            if (s_swipe_start_y - s_swipe_min_y > UI_SWIPE_CONFIRM_PX) {
+                key_event->touch_gesture = NANO_TOUCH_GESTURE_SWIPE_UP;
                 key_event->key_mask = 1;
-                ui_softkbd_request_toggle();
+            }
+            else if (s_swipe_max_y - s_swipe_start_y > UI_SWIPE_CONFIRM_PX) {
+                key_event->touch_gesture = NANO_TOUCH_GESTURE_SWIPE_DOWN;
+                key_event->key_mask = 1;
             }
             s_swipe_active = 0;
         }
@@ -183,6 +181,28 @@ void get_key_event(Key_Event *key_event, Global_State *global_state) {
     else {
         s_swipe_active = 0;
     }
+}
+
+void get_input_event(Key_Event *key_event, Global_State *global_state) {
+    // 触屏统一采样（本函数在 Core1 每 1-2ms 轮询一次）：坐标与电平填入 key_event，
+    // 供本轮所有消费者（手势识别、软键盘、各业务状态）使用，上层不再直接调 touch_read
+    touch_read(&key_event->touch_x, &key_event->touch_y, &key_event->is_touching);
+    key_event->touch_gesture = NANO_TOUCH_GESTURE_NONE;
+
+    // 触屏电平共享快照（与 last_touch_timestamp 同一跨核机制）：ESP32 上 Core0 渲染任务
+    // 每帧取用本快照覆盖到其 key_event，高频电平样本不进入事件队列（见 linglong_m5core2.ino）
+    global_state->touch_x = key_event->touch_x;
+    global_state->touch_y = key_event->touch_y;
+    global_state->is_touching = key_event->is_touching;
+
+    // 触屏电平锁存：为九键按键提示遮罩提供可靠的触发时间戳，避免渲染循环（Core0）
+    // 帧率不均的低频采样漏掉短按（见 ui.c 遮罩实现）
+    if (key_event->is_touching) {
+        global_state->last_touch_timestamp = global_state->timestamp;
+    }
+
+    // 滑动手势识别：方向中性的上滑/下滑（语义由消费者解释，见 ui.c 文本输入控件）
+    ui_app_recognize_swipe_gesture(key_event, global_state);
 
     uint8_t key = input_device_read_key();
     uint8_t key_is_softkbd = 0;
@@ -191,7 +211,7 @@ void get_key_event(Key_Event *key_event, Global_State *global_state) {
     // 改为注入软键盘键码（无边沿时为NANO_KEY_IDLE，仍走下方的边沿检测机制）。
     // 同时禁用键盘区域以外的十六键网格（仅保留右上角Esc键），防止误触。
     if (ui_softkbd_is_visible()) {
-        uint8_t softkbd_key = ui_softkbd_poll();
+        uint8_t softkbd_key = ui_softkbd_poll(key_event->touch_x, key_event->touch_y, key_event->is_touching);
         if (ui_softkbd_touch_claimed()) {
             key = softkbd_key;
             key_is_softkbd = (softkbd_key != NANO_KEY_IDLE);
@@ -296,6 +316,10 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
 
     global_state->timestamp_last = 0;
     global_state->last_touch_timestamp = 0;
+    global_state->touch_x = 0;
+    global_state->touch_y = 0;
+    global_state->is_touching = 0;
+    global_state->input_swipe_armed_dir = NANO_TOUCH_GESTURE_SWIPE_UP; // 软键盘初始隐藏：武装上滑
 
     global_state->is_ctrl_enabled = 0;
     // 鹦鹉笼（LLM）相关字段初始化已提取至 ui_llm 模块

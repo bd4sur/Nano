@@ -65,7 +65,7 @@ void misc_led_init(void) {
 
 void misc_led_set(int32_t on, int32_t color) {
     (void)color; // 自带 LED 为单色，颜色参数忽略
-    M5.Power.setLed(on ? 255 : 0);
+    M5.Power.setLed(on ? 188 : 0);
 }
 
 #endif

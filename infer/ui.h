@@ -54,7 +54,17 @@ typedef struct Global_State {
     // 全局通用信息
     uint64_t timestamp; // 物理时间戳（ms）
     uint64_t timestamp_last; // 上一次主循环的物理时间戳（ms），用于统计帧率、节流等用途
-    volatile uint64_t last_touch_timestamp; // 最后一次触屏按下的物理时间戳（ms；0=从未触摸）。由 Core1 的 get_key_event 以 1-2ms 周期高频锁存（短按不遗漏），供九键按键提示遮罩在 Core0 渲染侧可靠触发（见 ui.c）
+    volatile uint64_t last_touch_timestamp; // 最后一次触屏按下的物理时间戳（ms；0=从未触摸）。由 Core1 的 get_input_event 以 1-2ms 周期高频锁存（短按不遗漏），供九键按键提示遮罩在 Core0 渲染侧可靠触发（见 ui.c）
+    // 触屏电平共享快照（与 last_touch_timestamp 同一机制）：由 Core1 的 get_input_event 高频锁存，
+    // Core0 渲染任务每帧取用并覆盖到 key_event，供业务逻辑统一经 key_event 消费触屏，
+    // 避免把高频电平样本刷入事件队列（挤占一次性按键/手势事件，见 linglong_m5core2.ino）
+    volatile int32_t touch_x;       // 触点坐标（is_touching==1 时有效）
+    volatile int32_t touch_y;
+    volatile int32_t is_touching;   // 触屏电平：1-触摸中，0-未触摸
+    // 文本输入控件当前武装的滑动手势方向（NANO_TOUCH_GESTURE_*）：由 ui.c 文本输入控件按软键盘
+    // 显隐维护（隐藏=武装上滑，可见=武装下滑），Core1 手势识别仅在武装方向上吞键，
+    // 非武装方向上的点按抖动（>20px）不会被误吞
+    volatile int8_t input_swipe_armed_dir;
     int32_t year;
     int32_t month;
     int32_t day;
@@ -133,11 +143,18 @@ typedef struct Global_State {
 
 } Global_State;
 
+// 触屏滑动手势（get_input_event 识别并上报，松手确认，垂直位移跨越半屏）：
+// 事件层只做方向中性的识别与上报，手势的语义解释（如上滑呼出软键盘）由消费者决定
+#define NANO_TOUCH_GESTURE_NONE        (0)
+#define NANO_TOUCH_GESTURE_SWIPE_UP    (1)
+#define NANO_TOUCH_GESTURE_SWIPE_DOWN  (-1)
+
 typedef struct Key_Event {
     int32_t  event_type; // 事件类型
-    int32_t  touch_x;
+    int32_t  touch_x;       // 触点坐标（像素；is_touching==1 时有效）
     int32_t  touch_y;
-    int32_t  is_touching;
+    int32_t  is_touching;   // 触屏电平：1-正在触摸，0-未触摸
+    int8_t   touch_gesture; // 本轮确认的滑动手势：NANO_TOUCH_GESTURE_*（无手势为 NONE）
 
     uint8_t  prev_key;   // 上一次按键的键值
     uint8_t  key_code;   // 大于等于16为没有任何按键，0-15为按键

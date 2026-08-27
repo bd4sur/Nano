@@ -19,8 +19,8 @@ int main() {
     while (1) {
         // 物理时间戳
         global_state->timestamp = get_timestamp_in_ms();
-        // 获取按键事件
-        get_key_event(key_event, global_state);
+        // 获取输入事件（按键 + 触屏）
+        get_input_event(key_event, global_state);
         // 事件处理器
         main_event_handler(key_event, global_state);
         // 周期性任务

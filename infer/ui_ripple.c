@@ -6,7 +6,6 @@
 #include "graphics.h"
 #include "hal_key.h"
 #include "platform.h"
-#include "hal_touch.h"
 
 // ===============================================================================
 // 实现选择：1-定点（默认，ESP32 无 FPU 优化）；0-浮点（JS 原版直译，可读性参考）
@@ -328,7 +327,6 @@ int32_t ui_ripple_event_handler(Key_Event *key_event, Global_State *global_state
 }
 
 int32_t ui_ripple_render_frame(Key_Event *key_event, Global_State *global_state) {
-    (void)key_event;
     Nano_GFX *gfx = global_state->gfx;
 
     // 图像加载失败：黑底红字提示（只画一次），等待 A 键返回
@@ -347,11 +345,11 @@ int32_t ui_ripple_render_frame(Key_Event *key_event, Global_State *global_state)
     if (s_wr.texture == NULL || s_wr.ripple_map == NULL) return -1;
 
     // ---- 触摸激发水波纹（按住拖动持续激发，等价于原网页 click + mousemove） ----
-    int32_t touch_x = 0, touch_y = 0, is_pressed = 0;
-    if (touch_read(&touch_x, &touch_y, &is_pressed) == 0 && is_pressed) {
-        if (touch_x >= 0 && touch_x < WR_WIDTH && touch_y >= 0 && touch_y < WR_HEIGHT) {
-            wr_disturb(touch_x, touch_y);
-        }
+    // 触屏电平/坐标取自 get_input_event 统一采样的 key_event
+    if (key_event->is_touching &&
+        key_event->touch_x >= 0 && key_event->touch_x < WR_WIDTH &&
+        key_event->touch_y >= 0 && key_event->touch_y < WR_HEIGHT) {
+        wr_disturb(key_event->touch_x, key_event->touch_y);
     }
 
     // ---- 波场步进 + 渲染一帧 ----
