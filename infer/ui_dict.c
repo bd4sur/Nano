@@ -444,6 +444,7 @@ static void ui_dict_menu_relayout(Key_Event *key_event, Global_State *gs) {
     Widget_Menu_State *ms = gs->w_menu_main;
     ms->current_item_index = 0;
     ms->first_item_intex = 0;
+    ms->scroll_sub_offset = 0; // 整行路径：吸附回整行（见 ui.h Widget_Menu_State 不变量）
     // 每页条目数按像素精确撑满菜单区域：首行顶为 y+1、每行占 item_height，
     // 第 n 行底为 y + n*item_height，故 n_max = height / item_height（比通用公式多利用余量行）
     uint32_t max_items = (uint32_t)ms->height / (uint32_t)ms->item_height;

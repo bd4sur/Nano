@@ -1629,7 +1629,8 @@ void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widge
     menu_state->touch_is_dragging = 0;
     menu_state->touch_start_x = 0;
     menu_state->touch_start_y = 0;
-    menu_state->touch_anchor_first = 0;
+    menu_state->touch_anchor_scroll_px = 0;
+    menu_state->scroll_sub_offset = 0;
 
     // 注意：此处不再立即绘制。此前末尾调用 ui_widget_menu_draw（内含 gfx_refresh）会导致
     // 进入菜单状态时先刷出菜单区（页眉/页脚尚未绘制，残留旧画面）、下一拍状态初始化分支
@@ -1666,6 +1667,9 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
     // 清除背景
     gfx_draw_rectangle(global_state->gfx, menu_state->x, menu_state->y, menu_state->width, menu_state->height, bg_r, bg_g, bg_b, 1);
 
+    // 裁剪到菜单区：亚行滚动时顶/底条目部分可见，防止文字与高亮块画进页眉/页脚
+    gfx_set_clip(global_state->gfx, menu_state->x, menu_state->y, menu_state->width, menu_state->height);
+
     // 菜单首行：标题和选项数
     // gfx_draw_textline(global_state->gfx, menu_state->title, x_indent, 0, 0, 255, 255, 1);
     // wchar_t item_counter[13];
@@ -1676,10 +1680,13 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
     uint32_t font_id = global_state->ui_font;
     int32_t line_height = gfx_font_line_height(font_id);
     int32_t item_height = menu_state->item_height; // 条目行高（默认 1.5 倍字体行高）
-    uint32_t y_pos = menu_state->y + 1;
+    // 像素级滚动：首条目向上平移 scroll_sub_offset（亚行偏移），循环按可见像素区终止，
+    // 顶/底各可能出现一个被裁剪的部分可见条目（最多比整行时多画 1 个）
+    int32_t y_pos = (int32_t)menu_state->y + 1 - menu_state->scroll_sub_offset;
+    int32_t y_end = (int32_t)menu_state->y + menu_state->height;
     uint8_t is_highlight = 0;
     for (uint32_t i = menu_state->first_item_intex; i < menu_state->item_num; i++) {
-        if (i == menu_state->first_item_intex + menu_state->items_per_page) {
+        if (y_pos >= y_end) {
             break;
         }
         if (i != menu_state->current_item_index) {
@@ -1690,7 +1697,7 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
         }
         // 绘制高亮底色（覆盖整个条目行高）
         if (is_highlight) {
-            for (uint32_t j = y_pos; j < y_pos + item_height; j++) {
+            for (int32_t j = y_pos; j < y_pos + item_height; j++) {
                 gfx_draw_line(global_state->gfx, menu_state->x, j, menu_state->x + menu_state->width, j, hl_r, hl_g, hl_b, 1);
             }
         }
@@ -1701,15 +1708,19 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
         y_pos += item_height;
     }
 
-    // 菜单的滚动条
+    // 菜单的滚动条（像素单位：滚动位置/内容高度/可视高度，随触点平滑移动）
+    int32_t content_px = (int32_t)menu_state->item_num * item_height;
+    int32_t view_px = (int32_t)menu_state->height - 1; // 条目自 y+1 起绘，可视高度少 1px
+    int32_t scroll_px = (int32_t)menu_state->first_item_intex * item_height + menu_state->scroll_sub_offset;
     ui_draw_scroll_bar(
         key_event, global_state,
-        menu_state->first_item_intex, menu_state->item_num, menu_state->items_per_page,
+        scroll_px, content_px, view_px,
         menu_state->x, menu_state->y, menu_state->width, menu_state->height);
 
     // NOTE 因fb_draw_textline会额外给文字上方增加一行，因此这个横线在菜单文字绘制之后再绘制
     // gfx_draw_line(global_state->gfx, 0, 12, global_state->gfx->width, 12, 128, 128, 128, 1);
 
+    gfx_reset_clip(global_state->gfx); // 恢复整屏裁剪，避免泄漏到后续帧的其它绘制
     gfx_refresh(global_state->gfx);
 }
 
@@ -1724,7 +1735,8 @@ int32_t ui_widget_menu_event_handler(
     // ========================================================================
     // 触屏交互（有触屏的设备：is_touching 电平样本逐帧驱动；无触屏设备恒为 0，
     // 本块不产生任何行为，菜单仍纯按键操作）
-    //   - 拖动屏幕：列表随手指滚动（像素位移折算为整行，首条目索引随动）；
+    //   - 拖动屏幕：列表以像素级精度随手指连续滚动（scroll_px = first_item_intex *
+    //     item_height + scroll_sub_offset，1:1 跟手）；
     //   - 点击条目：选中并执行（同 Enter）；
     //   - 点击顶栏最右侧 1/4：退出菜单（同 Esc）。
     // 点击的边沿判定依据触屏电平本身（is_touching 1→0），与按键事件的边沿无关。
@@ -1733,29 +1745,34 @@ int32_t ui_widget_menu_event_handler(
     // ========================================================================
     if (ke->is_touching) {
         if (!ms->touch_active) {
-            // 触摸序列开始：锚定滚动位置与起点坐标
+            // 触摸序列开始：锚定像素级滚动位置与起点坐标
             ms->touch_active = 1;
             ms->touch_is_dragging = 0;
             ms->touch_start_x = ke->touch_x;
             ms->touch_start_y = ke->touch_y;
-            ms->touch_anchor_first = ms->first_item_intex;
+            ms->touch_anchor_scroll_px = (int32_t)ms->first_item_intex * item_height + ms->scroll_sub_offset;
         }
         else {
             int32_t dy = ke->touch_y - ms->touch_start_y; // >0：手指下滑
             if (!ms->touch_is_dragging && (dy > item_height / 2 || dy < -(item_height / 2))) {
                 ms->touch_is_dragging = 1;
             }
-            if (ms->touch_is_dragging && ms->item_num > ms->items_per_page) {
-                // 手指下滑 → 内容下移 → 首条目前移；相对锚点取整行数，无累计误差
-                int32_t delta_lines = dy / item_height;
-                int32_t new_first = ms->touch_anchor_first - delta_lines;
-                if (new_first < 0) new_first = 0;
-                if (new_first > ms->item_num - ms->items_per_page) new_first = ms->item_num - ms->items_per_page;
-                if (new_first != ms->first_item_intex) {
+            // 像素级最大滚动位置：内容总高 - 可视高（条目自 y+1 起绘，可视区少 1px）；
+            // 内容不足一屏时为 0（不可滚），与原 item_num > items_per_page 判定等价
+            int32_t max_scroll_px = (int32_t)ms->item_num * item_height - ((int32_t)ms->height - 1);
+            if (max_scroll_px < 0) max_scroll_px = 0;
+            if (ms->touch_is_dragging && max_scroll_px > 0) {
+                // 手指下滑 → 内容下移 → 滚动位置前移；相对锚点按像素计算，1:1 跟手无累计误差
+                int32_t new_scroll_px = ms->touch_anchor_scroll_px - dy;
+                if (new_scroll_px < 0) new_scroll_px = 0;
+                if (new_scroll_px > max_scroll_px) new_scroll_px = max_scroll_px;
+                int32_t new_first = new_scroll_px / item_height;
+                int32_t new_sub = new_scroll_px % item_height;
+                if (new_first != ms->first_item_intex || new_sub != ms->scroll_sub_offset) {
                     ms->first_item_intex = new_first;
-                    // 高亮条目仍跟随其原条目；仅当滚出可见窗口时钳制回窗口边缘
-                    if (ms->current_item_index < new_first) ms->current_item_index = new_first;
-                    if (ms->current_item_index > new_first + ms->items_per_page - 1) ms->current_item_index = new_first + ms->items_per_page - 1;
+                    ms->scroll_sub_offset = new_sub;
+                    // 触屏拖动不做高亮钳制：高亮条目跟随其原条目，允许滚出可视区
+                    // （按键导航时会在按键分支开头钳制回窗口，见下方）
                     ui_widget_menu_draw(ke, gs, ms);
                 }
             }
@@ -1770,9 +1787,10 @@ int32_t ui_widget_menu_event_handler(
                 return prev_focus_state;
             }
             else if (ms->touch_start_y >= ms->y && ms->touch_start_y < ms->y + ms->height) {
-                // 点击菜单项：选中并执行
-                int32_t row = (ms->touch_start_y - (ms->y + 1)) / item_height;
-                if (row >= 0 && row < ms->items_per_page) {
+                // 点击菜单项：选中并执行（行号补偿亚行滚动偏移；sub_offset 非 0 时底部
+                // 第 items_per_page+1 行部分可见，同样允许点选，故上界取等号）
+                int32_t row = (ms->touch_start_y - (ms->y + 1) + ms->scroll_sub_offset) / item_height;
+                if (row >= 0 && row <= ms->items_per_page) {
                     int32_t tapped_item_index = ms->first_item_intex + row;
                     if (tapped_item_index < ms->item_num) {
                         ms->current_item_index = tapped_item_index;
@@ -1807,10 +1825,21 @@ int32_t ui_widget_menu_event_handler(
     }
     // 短按D键：执行菜单项对应的功能
     else if (ke->key_edge == -1 && ke->key_code == NANO_KEY_enter) {
+        // 触屏拖动可能将高亮条目滚出可视区：此时 Enter 先将其钳制回窗口并重绘
+        // （揭示选中项）而不执行，避免误触发不可见条目；再次按下 Enter 才执行
+        if (ms->current_item_index < ms->first_item_intex || ms->current_item_index > ms->first_item_intex + ms->items_per_page - 1) {
+            if (ms->current_item_index < ms->first_item_intex) ms->current_item_index = ms->first_item_intex;
+            if (ms->current_item_index > ms->first_item_intex + ms->items_per_page - 1) ms->current_item_index = ms->first_item_intex + ms->items_per_page - 1;
+            ui_widget_menu_draw(ke, gs, ms);
+            return current_focus_state;
+        }
         return menu_item_action_callback(ke, gs, ms);
     }
     // 长+短按*键/上键：光标向上移动（上键功能同左键）
     else if ((ke->key_edge == -1 || ke->key_edge == -2) && (ke->key_code == NANO_KEY_left || ke->key_code == NANO_KEY_up)) {
+        // 触屏拖动允许高亮条目滚出可视区；按键导航须先将其钳制回窗口，保证高亮始终可见
+        if (ms->current_item_index < ms->first_item_intex) ms->current_item_index = ms->first_item_intex;
+        if (ms->current_item_index > ms->first_item_intex + ms->items_per_page - 1) ms->current_item_index = ms->first_item_intex + ms->items_per_page - 1;
         if (ms->first_item_intex == 0 && ms->current_item_index == 0) {
             ms->first_item_intex = ms->item_num - ms->items_per_page;
             ms->current_item_index = ms->item_num - 1;
@@ -1822,6 +1851,7 @@ int32_t ui_widget_menu_event_handler(
         else {
             ms->current_item_index--;
         }
+        ms->scroll_sub_offset = 0; // 按键导航吸附回整行
 
         ui_widget_menu_draw(ke, gs, ms);
 
@@ -1829,6 +1859,9 @@ int32_t ui_widget_menu_event_handler(
     }
     // 长+短按#键/下键：光标向下移动（下键功能同右键）
     else if ((ke->key_edge == -1 || ke->key_edge == -2) && (ke->key_code == NANO_KEY_right || ke->key_code == NANO_KEY_down)) {
+        // 触屏拖动允许高亮条目滚出可视区；按键导航须先将其钳制回窗口，保证高亮始终可见
+        if (ms->current_item_index < ms->first_item_intex) ms->current_item_index = ms->first_item_intex;
+        if (ms->current_item_index > ms->first_item_intex + ms->items_per_page - 1) ms->current_item_index = ms->first_item_intex + ms->items_per_page - 1;
         if (ms->first_item_intex == ms->item_num - ms->items_per_page && ms->current_item_index == ms->item_num - 1) {
             ms->first_item_intex = 0;
             ms->current_item_index = 0;
@@ -1840,6 +1873,7 @@ int32_t ui_widget_menu_event_handler(
         else {
             ms->current_item_index++;
         }
+        ms->scroll_sub_offset = 0; // 按键导航吸附回整行
 
         ui_widget_menu_draw(ke, gs, ms);
 

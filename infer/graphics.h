@@ -33,6 +33,14 @@ typedef struct Nano_GFX {
     uint32_t width;
     uint32_t height;
 
+    // 裁剪矩形 [clip_x0,clip_x1) x [clip_y0,clip_y1)，默认整屏（gfx_init 初始化，
+    // gfx_reset_clip 恢复）。在 gfx_draw_point 与抗锯齿字形绘制的像素落点处生效；
+    // 默认整屏时无任何行为变化。供需要亚行像素滚动的控件（如菜单）防止内容画出自身区域。
+    int32_t clip_x0;
+    int32_t clip_y0;
+    int32_t clip_x1;
+    int32_t clip_y1;
+
     uint8_t is_double_buffer;
 
     uint16_t *(*rgb565_access)(struct Nano_GFX *, uint32_t, uint32_t, uint32_t *);
@@ -50,6 +58,11 @@ void gfx_test(Nano_GFX *gfx);
 void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode);
 void gfx_close(Nano_GFX *gfx);
 void gfx_refresh(Nano_GFX *gfx);
+
+// 裁剪矩形：设置后所有绘制仅落在 [x,x+width) x [y,y+height) 内（自动与屏幕求交）；
+// gfx_reset_clip 恢复整屏。调用方须成对使用，绘制完成后立即复位，避免泄漏到后续帧。
+void gfx_set_clip(Nano_GFX *gfx, int32_t x, int32_t y, int32_t width, int32_t height);
+void gfx_reset_clip(Nano_GFX *gfx);
 
 // gfx_refresh 前置/后置钩子：每次推帧前/后各回调一次（单线程渲染任务内同步调用）。
 // 供叠加层与正常 UI 刷新严格同步（如 ui.c 九键按键提示遮罩：前置钩子叠加遮罩、

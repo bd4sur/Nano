@@ -255,6 +255,12 @@ void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mod
     
     display_hal_init();
 
+    // 裁剪矩形默认整屏（不裁剪）
+    gfx->clip_x0 = 0;
+    gfx->clip_y0 = 0;
+    gfx->clip_x1 = (int32_t)width;
+    gfx->clip_y1 = (int32_t)height;
+
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
     GFX_SEM_INIT
 #endif
@@ -264,6 +270,28 @@ void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mod
 
 void gfx_close(Nano_GFX *gfx) {
     // display_hal_close();
+}
+
+// 裁剪矩形（见 graphics.h）：设置后与屏幕范围求交；调用方须成对使用并及时 gfx_reset_clip
+void gfx_set_clip(Nano_GFX *gfx, int32_t x, int32_t y, int32_t width, int32_t height) {
+    int32_t x0 = x, y0 = y, x1 = x + width, y1 = y + height;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int32_t)gfx->width)  x1 = (int32_t)gfx->width;
+    if (y1 > (int32_t)gfx->height) y1 = (int32_t)gfx->height;
+    if (x1 < x0) x1 = x0;
+    if (y1 < y0) y1 = y0;
+    gfx->clip_x0 = x0;
+    gfx->clip_y0 = y0;
+    gfx->clip_x1 = x1;
+    gfx->clip_y1 = y1;
+}
+
+void gfx_reset_clip(Nano_GFX *gfx) {
+    gfx->clip_x0 = 0;
+    gfx->clip_y0 = 0;
+    gfx->clip_x1 = (int32_t)gfx->width;
+    gfx->clip_y1 = (int32_t)gfx->height;
 }
 
 
@@ -669,6 +697,11 @@ inline void gfx_reverse_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y) {
 // mode: 0-置黑  1-置色  2-异或  3-加色 >=4-Alpha混合
 void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
     if (x < 0 || y < 0 || x >= gfx->width || y >= gfx->height) {
+        return;
+    }
+    // 裁剪矩形（默认整屏；int32 比较同时拦掉 uint32 回绕的负坐标）
+    if ((int32_t)x < gfx->clip_x0 || (int32_t)x >= gfx->clip_x1 ||
+        (int32_t)y < gfx->clip_y0 || (int32_t)y >= gfx->clip_y1) {
         return;
     }
 
@@ -1236,11 +1269,13 @@ static int32_t gfx_draw_glyph_alpha_impl(Nano_GFX *gfx, Gfx_Font_Get_Glyph_Fn ge
     for (int32_t j = 0; j < h; j++) {
         int32_t py = draw_y + j;
         if (py < 0 || py >= (int32_t)gfx->height) continue;
+        if (py < gfx->clip_y0 || py >= gfx->clip_y1) continue; // 裁剪矩形（默认整屏）
         for (int32_t i = 0; i < w; i++) {
             uint8_t q = alpha[j * w + i];
             if (q == 0) continue; // 全透明像素，直接跳过
             int32_t px = draw_x + i;
             if (px < 0 || px >= (int32_t)gfx->width) continue;
+            if (px < gfx->clip_x0 || px >= gfx->clip_x1) continue; // 裁剪矩形（默认整屏）
             uint8_t a8 = (uint8_t)((q << 4) | q); // 4bpp -> 8bpp：q * 17，作为覆盖率
             if (mode == 0) {
                 // 置黑：按覆盖率向黑色混合
