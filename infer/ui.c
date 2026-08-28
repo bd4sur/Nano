@@ -1631,6 +1631,13 @@ void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widge
     menu_state->touch_start_y = 0;
     menu_state->touch_anchor_scroll_px = 0;
     menu_state->scroll_sub_offset = 0;
+    // 拖动速度采样与惯性滚动状态复位
+    menu_state->touch_track_scroll = 0;
+    menu_state->touch_track_ts = 0;
+    menu_state->touch_track_vel = 0.0f;
+    menu_state->fling_velocity = 0.0f;
+    menu_state->fling_scroll_px = 0.0f;
+    menu_state->fling_last_timestamp = 0;
 
     // 注意：此处不再立即绘制。此前末尾调用 ui_widget_menu_draw（内含 gfx_refresh）会导致
     // 进入菜单状态时先刷出菜单区（页眉/页脚尚未绘制，残留旧画面）、下一拍状态初始化分支
@@ -1733,6 +1740,50 @@ int32_t ui_widget_menu_event_handler(
     int32_t item_height = ms->item_height; // 条目行高（默认 1.5 倍字体行高，见 ui_widget_menu_init）
 
     // ========================================================================
+    // 松手惯性滚动（fling）：动画激活期间本 handler 每帧推进一次；
+    // 任意新触摸或按键边沿立即终止动画（随后的触摸/按键逻辑以当前 scroll_px 接管）
+    // ========================================================================
+    if (ms->fling_velocity != 0.0f) {
+        if (ke->is_touching || ke->key_edge != 0) {
+            ms->fling_velocity = 0.0f;
+        }
+        else {
+            uint64_t now = get_timestamp_in_ms();
+            float dt_s = (float)(now - ms->fling_last_timestamp) / 1000.0f;
+            ms->fling_last_timestamp = now;
+            if (dt_s > 0.05f) dt_s = 0.05f; // 帧间隔异常（阻塞/掉帧）时限幅，避免跳动
+            if (dt_s > 0.0f) {
+                int32_t max_scroll_px = (int32_t)ms->item_num * item_height - ((int32_t)ms->height - 1);
+                if (max_scroll_px < 0) max_scroll_px = 0;
+                float scroll = ms->fling_scroll_px + ms->fling_velocity * dt_s;
+                // 线性减速度 ~2000px/s²，速度归零即停
+                float decel = 2000.0f * dt_s;
+                if (ms->fling_velocity > 0.0f) {
+                    ms->fling_velocity -= decel;
+                    if (ms->fling_velocity < 0.0f) ms->fling_velocity = 0.0f;
+                }
+                else {
+                    ms->fling_velocity += decel;
+                    if (ms->fling_velocity > 0.0f) ms->fling_velocity = 0.0f;
+                }
+                // 越界即停（不做回弹）
+                if (scroll <= 0.0f) { scroll = 0.0f; ms->fling_velocity = 0.0f; }
+                if (scroll >= (float)max_scroll_px) { scroll = (float)max_scroll_px; ms->fling_velocity = 0.0f; }
+                ms->fling_scroll_px = scroll;
+                int32_t new_scroll_px = (int32_t)scroll;
+                int32_t new_first = new_scroll_px / item_height;
+                int32_t new_sub = new_scroll_px % item_height;
+                if (new_first != ms->first_item_intex || new_sub != ms->scroll_sub_offset) {
+                    ms->first_item_intex = new_first;
+                    ms->scroll_sub_offset = new_sub;
+                    // 与触屏拖动一致：不做高亮钳制，允许高亮条目滚出可视区
+                    ui_widget_menu_draw(ke, gs, ms);
+                }
+            }
+        }
+    }
+
+    // ========================================================================
     // 触屏交互（有触屏的设备：is_touching 电平样本逐帧驱动；无触屏设备恒为 0，
     // 本块不产生任何行为，菜单仍纯按键操作）
     //   - 拖动屏幕：列表以像素级精度随手指连续滚动（scroll_px = first_item_intex *
@@ -1745,12 +1796,15 @@ int32_t ui_widget_menu_event_handler(
     // ========================================================================
     if (ke->is_touching) {
         if (!ms->touch_active) {
-            // 触摸序列开始：锚定像素级滚动位置与起点坐标
+            // 触摸序列开始：锚定像素级滚动位置与起点坐标，复位拖动速度采样
             ms->touch_active = 1;
             ms->touch_is_dragging = 0;
             ms->touch_start_x = ke->touch_x;
             ms->touch_start_y = ke->touch_y;
             ms->touch_anchor_scroll_px = (int32_t)ms->first_item_intex * item_height + ms->scroll_sub_offset;
+            ms->touch_track_scroll = ms->touch_anchor_scroll_px;
+            ms->touch_track_ts = get_timestamp_in_ms();
+            ms->touch_track_vel = 0.0f;
         }
         else {
             int32_t dy = ke->touch_y - ms->touch_start_y; // >0：手指下滑
@@ -1775,13 +1829,35 @@ int32_t ui_widget_menu_event_handler(
                     // （按键导航时会在按键分支开头钳制回窗口，见下方）
                     ui_widget_menu_draw(ke, gs, ms);
                 }
+                // 拖动速度采样：指数平滑（0.6/0.4），供松手惯性初速度估算
+                uint64_t now = get_timestamp_in_ms();
+                uint32_t dt_ms = (uint32_t)(now - ms->touch_track_ts);
+                if (dt_ms > 0) {
+                    float v_inst = (float)(new_scroll_px - ms->touch_track_scroll) * 1000.0f / (float)dt_ms;
+                    ms->touch_track_vel = ms->touch_track_vel * 0.6f + v_inst * 0.4f;
+                    ms->touch_track_scroll = new_scroll_px;
+                    ms->touch_track_ts = now;
+                }
             }
         }
     }
     else if (ms->touch_active) {
-        // 触摸序列结束（is_touching 1→0 边沿）：构成拖动则丢弃，否则按点击处理
+        // 触摸序列结束（is_touching 1→0 边沿）：构成拖动则按松手速度启动惯性滚动，
+        // 否则按点击处理
         ms->touch_active = 0;
-        if (!ms->touch_is_dragging) {
+        if (ms->touch_is_dragging) {
+            // 松手前手指已停顿（>100ms 无新采样）则速度作废，不启动惯性
+            uint64_t now = get_timestamp_in_ms();
+            float v0 = (now - ms->touch_track_ts <= 100) ? ms->touch_track_vel : 0.0f;
+            if (v0 > 4000.0f) v0 = 4000.0f;    // 触点抖动限速
+            if (v0 < -4000.0f) v0 = -4000.0f;
+            if (v0 > 50.0f || v0 < -50.0f) {   // 低于阈值（50px/s）不动画
+                ms->fling_velocity = v0;
+                ms->fling_scroll_px = (float)((int32_t)ms->first_item_intex * item_height + ms->scroll_sub_offset);
+                ms->fling_last_timestamp = now;
+            }
+        }
+        else if (!ms->touch_is_dragging) {
             if (ms->touch_start_y < ms->y && ms->touch_start_x >= ms->x + ms->width * 3 / 4) {
                 // 点击顶栏最右侧 1/4：退出菜单
                 return prev_focus_state;

@@ -246,6 +246,15 @@ typedef struct Widget_Menu_State {
     int32_t touch_start_y;
     int32_t touch_anchor_scroll_px; // 按下时的像素级滚动位置 scroll_px（拖动滚动的锚点）
     int32_t scroll_sub_offset;      // 亚行滚动偏移（px，∈ [0, item_height)）；按键导航时归零
+    // 拖动速度采样（松手惯性初速度估算用；按下时复位，拖动帧指数平滑更新）
+    int32_t  touch_track_scroll;    // 上一采样帧的 scroll_px
+    uint64_t touch_track_ts;        // 上一采样帧的时间戳（ms）
+    float    touch_track_vel;       // 平滑后的拖动速度（px/s，>0 表示 scroll_px 增大/内容上移）
+    // 松手惯性滚动（fling）：松手时以 touch_track_vel 为初速度启动，handler 每帧
+    // 按线性减速度衰减推进，越界/速度归零即停；任意新触摸或按键立即终止动画
+    float    fling_velocity;        // 当前惯性速度（px/s；0=无惯性动画）
+    float    fling_scroll_px;       // 动画中的浮点滚动位置（保留亚像素，避免逐帧取整损耗）
+    uint64_t fling_last_timestamp;  // 上一动画帧的时间戳（ms）
 } Widget_Menu_State;
 
 
