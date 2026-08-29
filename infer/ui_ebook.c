@@ -43,6 +43,16 @@ static uint8_t   s_rbuf[EBOOK_READ_CHUNK];
 
 static int32_t   s_scroll_last_page = -1; // 滚动帧轻量渲染的页码跟踪（-1=首次强制更新）
 
+// 惯性滚动（fling）状态——窗内惯性：滚动范围钳制在当前滑动窗口内，动画全程零 SD 访问；
+// 物理参数（减速 2000px/s²、初速上限 4000px/s、起动阈值 50px/s、停顿 100ms 作废）
+// 与文本控件手势机（ui.c ui_widget_textarea_touch_handler）一致，保证手感统一
+static float     s_eb_fling_vel = 0.0f;   // 惯性速度（px/s，0=未激活）
+static float     s_eb_fling_px  = 0.0f;   // 惯性滚动位置（全局 px，浮点累加）
+static uint64_t  s_eb_fling_ts  = 0;      // 上一帧动画时刻（ms）
+static int32_t   s_eb_track_scroll = 0;   // 拖动速度采样：上次滚动位置（全局 px）
+static uint64_t  s_eb_track_ts  = 0;      // 拖动速度采样：上次采样时刻（ms）
+static float     s_eb_track_vel = 0.0f;   // 拖动速度采样：指数平滑速度（px/s）
+
 // UTF-8 增量解码状态（逐字节喂入，跨块保持）
 static uint32_t  s_dec_cp;
 static int32_t   s_dec_need;
@@ -167,6 +177,7 @@ int32_t ui_ebook_menu_init(Key_Event *key_event, Global_State *global_state) {
 // ===============================================================================
 
 void ui_ebook_close(void) {
+    s_eb_fling_vel = 0.0f; // 复位惯性（离开阅读不残留动画）
     if (s_book_open) {
         platform_file_close();
     }
@@ -294,6 +305,7 @@ int32_t ui_ebook_open(Key_Event *key_event, Global_State *global_state, const ch
         return -1;
     }
     s_book_open = 1;
+    s_eb_fling_vel = 0.0f; // 复位惯性（换书/重开不继承上次动画）
 
     // 标题：仅文件名（最后一个路径分隔符 '/' 之后的部分）
     const char *fname = strrchr(path_mb, '/');
@@ -536,6 +548,55 @@ static void ui_ebook_next_page(Key_Event *key_event, Global_State *global_state)
 }
 
 int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *global_state) {
+    // 惯性滚动动画（窗内惯性：钳制在当前滑动窗口内推进，动画全程零 SD 访问）：
+    // 本处理器每帧被调，惯性逐帧推进；任意新触摸/按键立即终止惯性，事件照常下落处理
+    if (s_eb_fling_vel != 0.0f) {
+        if (key_event->is_touching || key_event->touch_edge != 0 || key_event->key_edge != 0) {
+            s_eb_fling_vel = 0.0f;
+        }
+        else {
+            Widget_Textarea_State *ta = global_state->w_textarea_main;
+            int32_t line_height = gfx_font_line_height(global_state->ui_font);
+            uint64_t now = global_state->timestamp;
+            float dt_s = (float)(now - s_eb_fling_ts) / 1000.0f;
+            s_eb_fling_ts = now;
+            if (dt_s > 0.05f) dt_s = 0.05f;
+            if (dt_s > 0.0f) {
+                float scroll = s_eb_fling_px + s_eb_fling_vel * dt_s;
+                float decel = 2000.0f * dt_s;
+                if (s_eb_fling_vel > 0.0f) {
+                    s_eb_fling_vel -= decel;
+                    if (s_eb_fling_vel < 0.0f) s_eb_fling_vel = 0.0f;
+                }
+                else {
+                    s_eb_fling_vel += decel;
+                    if (s_eb_fling_vel > 0.0f) s_eb_fling_vel = 0.0f;
+                }
+                // 钳制：窗口可用行程 ∩ 全文范围（撞边即停，不回绕、不触发跨窗重载）
+                int32_t max_top = s_buf_start_line + ta->line_num - s_view_lines;
+                if (max_top < s_buf_start_line) max_top = s_buf_start_line;
+                int32_t lo_px = s_buf_start_line * line_height;
+                int32_t hi_px = max_top * line_height;
+                int32_t doc_max_px = s_total_lines * line_height - ta->height;
+                if (doc_max_px < 0) doc_max_px = 0;
+                if (lo_px < 0) lo_px = 0;
+                if (hi_px > doc_max_px) hi_px = doc_max_px;
+                if (scroll <= (float)lo_px) { scroll = (float)lo_px; s_eb_fling_vel = 0.0f; }
+                if (scroll >= (float)hi_px) { scroll = (float)hi_px; s_eb_fling_vel = 0.0f; }
+                s_eb_fling_px = scroll;
+                int32_t new_px = (int32_t)scroll;
+                int32_t top_line = new_px / line_height;
+                int32_t new_sub = new_px % line_height;
+                if (top_line != s_buf_start_line + ta->current_line || new_sub != ta->scroll_sub_offset) {
+                    ta->current_line = top_line - s_buf_start_line;
+                    ta->scroll_sub_offset = new_sub;
+                    ui_ebook_reading_render_scroll(key_event, global_state);
+                }
+            }
+            return 0; // 惯性进行中（无输入）：本帧不再处理其他
+        }
+    }
+
     // 上页/下页触屏按钮的按住反复触发状态（500ms 缓冲：按住不足 500ms 松手=单次触发；
     // 按住满 500ms 后，以最大可能频率（每帧一次）反复触发，直到松手）
     static int32_t  s_pad_hold = 0;      // 0-无 1-按住上页 2-按住下页
@@ -590,10 +651,11 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
         return 0;
     }
 
-    // 触屏拖动像素级连续滚动（全局行空间 + 滑动窗口融合）：
+    // 触屏拖动像素级连续滚动（全局行空间 + 滑动窗口融合）+ 松手惯性（窗内）：
     // 按下沿在文本区内锚定全局滚动位置（px），拖动逐帧 1:1 跟手并拆回行号/亚行偏移，
     // 视口首行越出缓冲窗口时按需从 SD 卡滑动重载（与按键滚行同一窗口语义）；
-    // 不启用惯性（跨窗加载需读 SD，惯性会放大抖动）。
+    // 拖动中做速度采样，松手启动窗内惯性（钳制在当前窗口内推进，动画期间零 SD；
+    // 预计行程超出窗内剩余行程时，先在动画启动前做一次同步重载重定位窗口）。
     static int32_t s_eb_drag_active = 0;     // 1-正在跟踪一次文本区拖动
     static int32_t s_eb_drag_start_y = 0;    // 按下点 y
     static int32_t s_eb_drag_anchor_px = 0;  // 按下时的全局滚动位置（px）
@@ -609,11 +671,55 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
                 s_eb_drag_start_y = ty;
                 s_eb_drag_anchor_px = (s_buf_start_line + ta->current_line) * line_height
                                     + ta->scroll_sub_offset;
+                // 速度采样初始化（供松手惯性初速度估算）
+                s_eb_track_scroll = s_eb_drag_anchor_px;
+                s_eb_track_ts = global_state->timestamp;
+                s_eb_track_vel = 0.0f;
             }
         }
         if (s_eb_drag_active) {
             if ((key_event->touch_edge & TOUCH_EDGE_UP) || !key_event->is_touching) {
                 s_eb_drag_active = 0; // 序列结束（松手边沿为准，电平兜底）
+                // 松手惯性：停顿过久（>100ms 无新采样）速度作废；限速/阈值与文本控件一致
+                uint64_t now = global_state->timestamp;
+                float v0 = (now - s_eb_track_ts <= 100) ? s_eb_track_vel : 0.0f;
+                if (v0 > 4000.0f) v0 = 4000.0f;
+                if (v0 < -4000.0f) v0 = -4000.0f;
+                if (v0 > 50.0f || v0 < -50.0f) {
+                    int32_t top_line = s_buf_start_line + ta->current_line;
+                    int32_t sub = ta->scroll_sub_offset;
+                    int32_t cur_px = top_line * line_height + sub;
+                    float est = v0 * v0 / (2.0f * 2000.0f); // 预计惯性行程（px）
+                    int32_t doc_max_px = s_total_lines * line_height - ta->height;
+                    if (doc_max_px < 0) doc_max_px = 0;
+                    if (v0 > 0.0f) {
+                        // 向前：窗内剩余行程不足且文档未到底 → 窗口起点对齐视口首行（最大前向行程）
+                        int32_t fwd_room = (s_buf_start_line + ta->line_num - s_view_lines) * line_height - cur_px;
+                        if ((float)fwd_room < est && cur_px < doc_max_px
+                            && s_buf_start_line + ta->line_num < s_total_lines) {
+                            ebook_load_window(key_event, global_state, top_line);
+                            ta->current_line = top_line - s_buf_start_line; // 恢复精确视口（含亚行）
+                            ta->scroll_sub_offset = sub;
+                        }
+                    }
+                    else {
+                        // 向后：窗内上方余量不足且文档未到顶 → 窗口起点前移约一窗（最大后向行程）
+                        int32_t bwd_room = cur_px - s_buf_start_line * line_height;
+                        if ((float)bwd_room < est && top_line > 0) {
+                            int32_t back = (ta->line_num - s_view_lines > 0)
+                                ? (ta->line_num - s_view_lines) : s_view_lines;
+                            int32_t new_start = top_line - back;
+                            if (new_start < 0) new_start = 0;
+                            ebook_load_window(key_event, global_state, new_start);
+                            ta->current_line = top_line - s_buf_start_line;
+                            ta->scroll_sub_offset = sub;
+                        }
+                    }
+                    s_eb_fling_vel = v0;
+                    s_eb_fling_px = (float)((s_buf_start_line + ta->current_line) * line_height
+                                            + ta->scroll_sub_offset);
+                    s_eb_fling_ts = now;
+                }
             }
             else if (key_event->is_touching) {
                 int32_t max_px = s_total_lines * line_height - ta->height;
@@ -621,6 +727,17 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
                 int32_t new_px = s_eb_drag_anchor_px - (key_event->touch_y - s_eb_drag_start_y);
                 if (new_px < 0) new_px = 0;
                 if (new_px > max_px) new_px = max_px;
+                // 速度采样：指数平滑（0.6/0.4），逐帧采样（无论是否越行）
+                {
+                    uint64_t now = global_state->timestamp;
+                    uint32_t dt_ms = (uint32_t)(now - s_eb_track_ts);
+                    if (dt_ms > 0) {
+                        float v_inst = (float)(new_px - s_eb_track_scroll) * 1000.0f / (float)dt_ms;
+                        s_eb_track_vel = s_eb_track_vel * 0.6f + v_inst * 0.4f;
+                        s_eb_track_scroll = new_px;
+                        s_eb_track_ts = now;
+                    }
+                }
                 int32_t top_line = new_px / line_height;
                 int32_t new_sub = new_px % line_height;
                 if (top_line != s_buf_start_line + ta->current_line
