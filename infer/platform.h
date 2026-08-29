@@ -49,9 +49,11 @@ extern "C" {
     #define SD_SPI_MISO_PIN  (35)
     #define SD_SPI_MOSI_PIN  (37)
 
-    // 显示屏 SPI 时钟（Hz）；0 = 不设置，使用 M5GFX 默认值。
-    // Core2 上实测 60MHz 稳定（80MHz 闪屏）；CoreS3 未经真机验证，先用默认值。
-    #define DISPLAY_SPI_CLOCK_HZ  (0)
+    // 显示屏 SPI 时钟（Hz）；0 = 不设置，使用 M5GFX 默认值（40MHz）。
+    // Core2 上实测 60MHz 稳定（80MHz 闪屏）；CoreS3 自 2026-08 起对齐 60MHz
+    // （全屏推帧理论耗时 30.7ms → 20.5ms，帧率上限 32fps → 48fps）；
+    // 若真机出现撕裂/闪屏，回退为 0。
+    #define DISPLAY_SPI_CLOCK_HZ  (60000000)
 
     // 麦克风：ES7210 I2S ADC（标准 I2S 模式，非 PDM），与扬声器共用 I2S_NUM_1
     // 引脚（参照 M5Unified）：MCLK=GPIO0, BCLK=GPIO34, WS=GPIO33, DIN=GPIO14

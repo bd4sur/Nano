@@ -45,7 +45,16 @@ typedef struct Nano_GFX {
 
     uint16_t *(*rgb565_access)(struct Nano_GFX *, uint32_t, uint32_t, uint32_t *);
 
-    // 脏区域管理
+    // 脏区域管理（A1 局部推帧）：自上次 gfx_refresh 推帧以来被修改像素的包围盒
+    // [dirty_x0,dirty_x1) x [dirty_y0,dirty_y1)；dirty_valid=0 表示无脏区（推帧跳过）。
+    // 图形层所有写路径内部自动维护（gfx_init 置全屏脏，gfx_refresh 推屏后复位）；
+    // 绕过图形层直写帧缓冲的模块（如 ui_ripple 的行指针直写）必须自行调用
+    // gfx_mark_dirty / gfx_mark_dirty_full，否则改动不会上屏。
+    int32_t dirty_x0;
+    int32_t dirty_y0;
+    int32_t dirty_x1;
+    int32_t dirty_y1;
+    uint8_t dirty_valid;
 
     // 字库
 
@@ -77,6 +86,12 @@ void gfx_set_refresh_hook(GFX_Refresh_Hook pre_hook, GFX_Refresh_Hook post_hook)
 uint32_t gfx_frame_snapshot_bytes(Nano_GFX *gfx);       // 快照所需字节数（不支持的色彩模式返回0）
 void     gfx_frame_snapshot(Nano_GFX *gfx, void *dst);  // 快照整个帧缓冲到 dst（容量须 >= gfx_frame_snapshot_bytes）
 void     gfx_frame_restore(Nano_GFX *gfx, const void *src); // 从 src 恢复整个帧缓冲
+
+// 脏区域标记（A1 局部推帧，见 Nano_GFX 脏区字段注释）：将指定矩形并入脏区
+// （自动裁剪到屏幕）；gfx_mark_dirty_full 置全屏脏。仅供绕过图形层绘制 API、
+// 直写帧缓冲的模块调用；经 gfx_* 绘制接口的写操作由图形层内部自动维护。
+void gfx_mark_dirty(Nano_GFX *gfx, int32_t x, int32_t y, int32_t width, int32_t height);
+void gfx_mark_dirty_full(Nano_GFX *gfx);
 
 // 将一幅与帧缓冲同尺寸的 RGB565 帧整体写入帧缓冲，或以 RGB565 像素值写单个像素
 // （RGB565 单/双缓冲直写、RGB888 逐像素转换；供水池/水波等内部以 RGB565 渲染的模块使用）

@@ -12,6 +12,7 @@
 //////////////////////////////////////////////////////
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <esp_attr.h>
 static SemaphoreHandle_t gfx_refresh_mutex = NULL;
 
 #define GFX_SEM_INIT do { \
@@ -32,6 +33,14 @@ static SemaphoreHandle_t gfx_refresh_mutex = NULL;
     } \
 } while(0);
 //////////////////////////////////////////////////////
+#endif
+
+// B3：热路径函数放内部 RAM（IRAM），避免 SPI DMA 推帧期间 flash 取指 cache miss 停顿；
+// 非 ESP32 宿主（宿主机自测等）为空宏
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+#define GFX_IRAM IRAM_ATTR
+#else
+#define GFX_IRAM
 #endif
 
 
@@ -177,6 +186,7 @@ static void convert_rgb565_to_rgb888(uint16_t *rgb565, uint8_t *rgb888, int widt
 
 void convert_rgb888_to_rgb565_double(Nano_GFX *gfx, uint8_t *rgb888, int32_t width, int32_t height) {
     uint8_t *p = rgb888;
+    gfx_mark_dirty_full(gfx); // 整帧直写上/下半屏缓冲（玲珑仪），置全屏脏
     uint32_t half_height = gfx->height / 2;
     for (int32_t y = 0; y < height; y++) {
         uint16_t *out;
@@ -229,6 +239,50 @@ static uint16_t* gfx_rgb565_ptr_single(Nano_GFX *gfx, uint32_t x, uint32_t y, ui
     return gfx->frame_buffer_rgb565;
 }
 
+// ============================ 脏区域管理（A1 局部推帧） ============================
+// 自上次 gfx_refresh 推帧以来被修改像素的包围盒，见 graphics.h 字段注释。
+// 图形层所有写路径（像素函数/快路径/memcpy 类整帧操作）内部自动维护；
+// 绕过图形层直写帧缓冲的模块（ui_ripple 行指针直写）须自行 gfx_mark_dirty*。
+// 注意：Core1 忙提示（.ino loop 中 STATE_LINGLONG/STATE_ALBUM 的 gfx_draw_busy +
+// gfx_refresh）也会读写脏区字段，与 Core0 的累积非原子——但该场景下 Core0 下一帧
+// 必为全屏重绘（玲珑仪整帧转换/相册整图绘制均置全屏脏），竞争后果有界，可接受。
+
+// 将 [x0,x1) x [y0,y1) 并入脏区（自动裁剪到屏幕；空区间忽略）
+static inline void gfx_dirty_expand(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int32_t)gfx->width)  x1 = (int32_t)gfx->width;
+    if (y1 > (int32_t)gfx->height) y1 = (int32_t)gfx->height;
+    if (x1 <= x0 || y1 <= y0) return;
+    if (!gfx->dirty_valid) {
+        gfx->dirty_x0 = x0; gfx->dirty_y0 = y0;
+        gfx->dirty_x1 = x1; gfx->dirty_y1 = y1;
+        gfx->dirty_valid = 1;
+    } else {
+        if (x0 < gfx->dirty_x0) gfx->dirty_x0 = x0;
+        if (y0 < gfx->dirty_y0) gfx->dirty_y0 = y0;
+        if (x1 > gfx->dirty_x1) gfx->dirty_x1 = x1;
+        if (y1 > gfx->dirty_y1) gfx->dirty_y1 = y1;
+    }
+}
+
+void gfx_mark_dirty(Nano_GFX *gfx, int32_t x, int32_t y, int32_t width, int32_t height) {
+    gfx_dirty_expand(gfx, x, y, x + width, y + height);
+}
+
+void gfx_mark_dirty_full(Nano_GFX *gfx) {
+    gfx->dirty_x0 = 0;
+    gfx->dirty_y0 = 0;
+    gfx->dirty_x1 = (int32_t)gfx->width;
+    gfx->dirty_y1 = (int32_t)gfx->height;
+    gfx->dirty_valid = 1;
+}
+
+// 前向声明：高性能水平线填充（定义在文件后部，B1 快路径提前引用；
+// IRAM_ATTR 只标在定义处——前向声明带段属性会与定义冲突告警）
+static inline void gfx_fill_hline_fast(Nano_GFX *gfx, int32_t x_start, int32_t x_end, int32_t y,
+    uint8_t r, uint8_t g, uint8_t b, uint8_t mode);
+
 void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mode) {
     gfx->color_mode = color_mode;
     gfx->width = width;
@@ -260,6 +314,9 @@ void gfx_init(Nano_GFX *gfx, uint32_t width, uint32_t height, uint32_t color_mod
     gfx->clip_y0 = 0;
     gfx->clip_x1 = (int32_t)width;
     gfx->clip_y1 = (int32_t)height;
+
+    // 脏区初始为全屏（首次 gfx_refresh 整屏推帧；Nano_GFX 字段变更须同步此处）
+    gfx_mark_dirty_full(gfx);
 
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
     GFX_SEM_INIT
@@ -314,15 +371,26 @@ void gfx_refresh(Nano_GFX *gfx) {
         gfx_pre_refresh_hook(gfx);
     }
 
-    if (gfx->is_double_buffer) {
-        display_hal_refresh_rgb565_double(gfx->frame_buffer_rgb565_top, gfx->frame_buffer_rgb565_bottom, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
-    } else {
-        if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
-            display_hal_refresh(gfx->frame_buffer_rgb888, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
+    // A1 局部推帧：只推送脏区包围盒（推屏后复位）。无脏区时跳过推屏——
+    // 事件驱动状态下未重绘的冗余 gfx_refresh 调用不再有 SPI 开销。
+    // 注意遮罩 post 钩子的 gfx_frame_restore 会把脏区重新置为全屏（遮罩残影
+    // 必须在下一帧被完整覆盖），故复位发生在推屏之后、post 钩子之前。
+    if (gfx->dirty_valid) {
+        uint32_t dx0 = (uint32_t)gfx->dirty_x0;
+        uint32_t dy0 = (uint32_t)gfx->dirty_y0;
+        uint32_t dw  = (uint32_t)(gfx->dirty_x1 - gfx->dirty_x0);
+        uint32_t dh  = (uint32_t)(gfx->dirty_y1 - gfx->dirty_y0);
+        if (gfx->is_double_buffer) {
+            display_hal_refresh_rgb565_double(gfx->frame_buffer_rgb565_top, gfx->frame_buffer_rgb565_bottom, gfx->width, gfx->height, dx0, dy0, dw, dh);
+        } else {
+            if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
+                display_hal_refresh(gfx->frame_buffer_rgb888, gfx->width, gfx->height, dx0, dy0, dw, dh);
+            }
+            else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+                display_hal_refresh_rgb565(gfx->frame_buffer_rgb565, gfx->width, gfx->height, dx0, dy0, dw, dh);
+            }
         }
-        else if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
-            display_hal_refresh_rgb565(gfx->frame_buffer_rgb565, gfx->width, gfx->height, 0, 0, gfx->width, gfx->height);
-        }
+        gfx->dirty_valid = 0;
     }
 
     if (gfx_post_refresh_hook != NULL) {
@@ -377,6 +445,9 @@ void gfx_frame_restore(Nano_GFX *gfx, const void *src) {
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         memcpy(gfx->frame_buffer_rgb888, src, gfx->width * gfx->height * 3);
     }
+    // 整帧被覆写（典型场景：遮罩推帧后恢复干净帧——屏幕上仍有遮罩残影，
+    // 下一帧必须全屏推帧才能完整覆盖）
+    gfx_mark_dirty_full(gfx);
 }
 
 // 将一幅与帧缓冲同尺寸的 RGB565 帧整体写入帧缓冲
@@ -388,6 +459,7 @@ void gfx_blit_rgb565(Nano_GFX *gfx, const uint16_t *src) {
             uint16_t *fb = gfx->rgb565_access(gfx, 0, y, &off);
             memcpy(fb + off, src + y * gfx->width, gfx->width * sizeof(uint16_t));
         }
+        gfx_mark_dirty_full(gfx);
     }
     else if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         uint8_t *dst = gfx->frame_buffer_rgb888;
@@ -404,6 +476,7 @@ void gfx_blit_rgb565(Nano_GFX *gfx, const uint16_t *src) {
 // 以 RGB565 像素值写单个像素（RGB565 单/双缓冲直写；RGB888 转换；供增量渲染按像素回写）
 void gfx_write_pixel_rgb565(Nano_GFX *gfx, uint32_t x, uint32_t y, uint16_t v) {
     if (x >= gfx->width || y >= gfx->height) return;
+    gfx_dirty_expand(gfx, (int32_t)x, (int32_t)y, (int32_t)x + 1, (int32_t)y + 1);
     if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
         uint32_t off = 0;
         uint16_t *fb = gfx->rgb565_access(gfx, x, y, &off);
@@ -420,6 +493,7 @@ void gfx_write_pixel_rgb565(Nano_GFX *gfx, uint32_t x, uint32_t y, uint16_t v) {
 // 将帧缓冲整体上移 rows 行（底部 rows 行内容保留，由调用方覆写）
 void gfx_scroll_up(Nano_GFX *gfx, int32_t rows) {
     if (rows <= 0 || rows >= (int32_t)gfx->height) return;
+    gfx_mark_dirty_full(gfx);
 
     if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
         uint32_t row_bytes = gfx->width * sizeof(uint16_t);
@@ -461,6 +535,7 @@ void gfx_set_brightness(Nano_GFX *gfx, int32_t brightness) {
 
 // 清屏函数
 void gfx_clear(Nano_GFX *gfx) {
+    gfx_mark_dirty_full(gfx);
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         memset(gfx->frame_buffer_rgb888, 0, gfx->width * gfx->height * 3);
     }
@@ -480,6 +555,7 @@ void gfx_clear(Nano_GFX *gfx) {
 
 // 清屏函数
 void gfx_soft_clear(Nano_GFX *gfx) {
+    gfx_mark_dirty_full(gfx);
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         memset(gfx->frame_buffer_rgb888, 0, gfx->width * gfx->height * 3);
     }
@@ -498,6 +574,7 @@ void gfx_soft_clear(Nano_GFX *gfx) {
 
 // 用纯白色填充整个屏幕
 void gfx_fill_white(Nano_GFX *gfx) {
+    gfx_mark_dirty_full(gfx);
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         memset(gfx->frame_buffer_rgb888, 255, gfx->width * gfx->height * 3);
     }
@@ -542,6 +619,7 @@ void gfx_get_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t *r, uint8_t *g
 
 // 设置像素
 inline void gfx_set_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b) {
+    gfx_dirty_expand(gfx, (int32_t)x, (int32_t)y, (int32_t)x + 1, (int32_t)y + 1);
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
         uint32_t fb_width = gfx->width;
@@ -559,6 +637,7 @@ inline void gfx_set_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint
 
 // 叠加像素
 inline void gfx_add_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b) {
+    gfx_dirty_expand(gfx, (int32_t)x, (int32_t)y, (int32_t)x + 1, (int32_t)y + 1);
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
         uint32_t fb_width = gfx->width;
@@ -582,6 +661,7 @@ inline void gfx_add_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint
 // a: 0=全透明(保留背景), 255=不透明(完全覆盖为前景色)
 inline void gfx_blend_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     if (a == 0) return;
+    gfx_dirty_expand(gfx, (int32_t)x, (int32_t)y, (int32_t)x + 1, (int32_t)y + 1);
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
         uint32_t fb_width = gfx->width;
@@ -620,6 +700,7 @@ inline void gfx_blend_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t r, ui
 
 // 数乘像素
 inline void gfx_scale_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, float k) {
+    gfx_dirty_expand(gfx, (int32_t)x, (int32_t)y, (int32_t)x + 1, (int32_t)y + 1);
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
         uint32_t fb_width = gfx->width;
@@ -642,6 +723,7 @@ inline void gfx_scale_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y, float k) {
 // Gamma 校正
 void gfx_gamma(Nano_GFX *gfx, float gamma) {
     if (gamma <= 0.0f || gamma == 1.0f) return;
+    gfx_mark_dirty_full(gfx);
 
     uint32_t fb_width = gfx->width;
     uint32_t fb_height = gfx->height;
@@ -675,6 +757,7 @@ void gfx_gamma(Nano_GFX *gfx, float gamma) {
 
 // 反转像素
 inline void gfx_reverse_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y) {
+    gfx_dirty_expand(gfx, (int32_t)x, (int32_t)y, (int32_t)x + 1, (int32_t)y + 1);
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
         uint32_t fb_width = gfx->width;
@@ -695,7 +778,7 @@ inline void gfx_reverse_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y) {
 
 // 画点
 // mode: 0-置黑  1-置色  2-异或  3-加色 >=4-Alpha混合
-void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+void GFX_IRAM gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
     if (x < 0 || y < 0 || x >= gfx->width || y >= gfx->height) {
         return;
     }
@@ -734,6 +817,45 @@ void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_
 
     // 垂直线
     if (x1 == x2 && y1 != y2) {
+        // B1 快路径：RGB565 且 mode<=3 行直写（按裁剪矩形预夹，mode>=4 回退逐像素）
+        if (gfx->color_mode == GFX_COLOR_MODE_RGB565 && mode <= 3) {
+            int32_t x = (int32_t)x1;
+            int32_t ya = (y1 < y2) ? (int32_t)y1 : (int32_t)y2;
+            int32_t yb = (y1 < y2) ? (int32_t)y2 : (int32_t)y1;
+            if (x < gfx->clip_x0 || x >= gfx->clip_x1) return;
+            if (x < 0 || x >= (int32_t)gfx->width) return;
+            if (ya < gfx->clip_y0) ya = gfx->clip_y0;
+            if (yb >= gfx->clip_y1) yb = gfx->clip_y1 - 1;
+            if (ya < 0) ya = 0;
+            if (yb >= (int32_t)gfx->height) yb = (int32_t)gfx->height - 1;
+            if (ya > yb) return;
+            gfx_dirty_expand(gfx, x, ya, x + 1, yb + 1);
+            if (mode == 1 || mode == 0) {
+                uint16_t color = (mode == 1) ? rgb888_to_rgb565(red, green, blue) : 0;
+                for (int32_t y = ya; y <= yb; y++) {
+                    uint32_t off = 0;
+                    uint16_t *fb = gfx->rgb565_access(gfx, (uint32_t)x, (uint32_t)y, &off);
+                    fb[off] = color;
+                }
+            } else if (mode == 2) {
+                for (int32_t y = ya; y <= yb; y++) {
+                    uint32_t off = 0;
+                    uint16_t *fb = gfx->rgb565_access(gfx, (uint32_t)x, (uint32_t)y, &off);
+                    fb[off] = (fb[off] == 0) ? 0xFFFF : 0;
+                }
+            } else { // mode == 3
+                for (int32_t y = ya; y <= yb; y++) {
+                    uint32_t off = 0;
+                    uint16_t *fb = gfx->rgb565_access(gfx, (uint32_t)x, (uint32_t)y, &off);
+                    uint16_t v = fb[off];
+                    fb[off] = rgb888_to_rgb565(
+                        MIN(255, RGB565_R(v) + red),
+                        MIN(255, RGB565_G(v) + green),
+                        MIN(255, RGB565_B(v) + blue));
+                }
+            }
+            return;
+        }
         int32_t delta = y2 - y1;
         for (int32_t y = y1; ((delta >= 0) ? (y <= y2) : (y >= y2)); ((delta >= 0) ? (y++) : (y--))) {
             gfx_draw_point(gfx, x1, y, red, green, blue, mode);
@@ -741,6 +863,18 @@ void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_
     }
     // 水平线（或一点）
     else if (y1 == y2) {
+        // B1 快路径：RGB565 且 mode<=3 行直写（fill_hline_fast 自行标脏）
+        if (gfx->color_mode == GFX_COLOR_MODE_RGB565 && mode <= 3) {
+            int32_t y = (int32_t)y1;
+            if (y < gfx->clip_y0 || y >= gfx->clip_y1) return;
+            int32_t xa = (x1 < x2) ? (int32_t)x1 : (int32_t)x2;
+            int32_t xb = (x1 < x2) ? (int32_t)x2 : (int32_t)x1;
+            if (xa < gfx->clip_x0) xa = gfx->clip_x0;
+            if (xb >= gfx->clip_x1) xb = gfx->clip_x1 - 1;
+            if (xa > xb) return;
+            gfx_fill_hline_fast(gfx, xa, xb, y, red, green, blue, mode);
+            return;
+        }
         int32_t delta = x2 - x1;
         for (int32_t x = x1; ((delta >= 0) ? (x <= x2) : (x >= x2)); ((delta >= 0) ? (x++) : (x--))) {
             gfx_draw_point(gfx, x, y1, red, green, blue, mode);
@@ -1009,7 +1143,7 @@ void gfx_draw_line_anti_aliasing(Nano_GFX *gfx,
 
 // 以RGB565颜色快速填充矩形（供粒子喷溅等高频小矩形绘制：行指针每行只计算一次、
 // 像素直接写入，跳过逐点mode分支与RGB888→RGB565转换；非RGB565色彩模式回退到gfx_draw_rectangle）
-void gfx_fill_rect_rgb565(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t width, int32_t height, uint16_t rgb565) {
+void GFX_IRAM gfx_fill_rect_rgb565(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t width, int32_t height, uint16_t rgb565) {
     if (width <= 0 || height <= 0) return;
     if (gfx->color_mode != GFX_COLOR_MODE_RGB565) {
         gfx_draw_rectangle(gfx, (uint32_t)x0, (uint32_t)y0, (uint32_t)width, (uint32_t)height,
@@ -1024,6 +1158,7 @@ void gfx_fill_rect_rgb565(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t width, 
     if (y0 < 0) y0 = 0;
     if (x1 >= (int32_t)gfx->width)  x1 = (int32_t)gfx->width - 1;
     if (y1 >= (int32_t)gfx->height) y1 = (int32_t)gfx->height - 1;
+    gfx_dirty_expand(gfx, x0, y0, x1 + 1, y1 + 1);
     for (int32_t y = y0; y <= y1; y++) {
         uint32_t i;
         uint16_t *fb = gfx->rgb565_access(gfx, (uint32_t)x0, (uint32_t)y, &i);
@@ -1034,6 +1169,27 @@ void gfx_fill_rect_rgb565(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t width, 
 }
 
 void gfx_draw_rectangle(Nano_GFX *gfx, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    // B1 快路径：RGB565 且 mode<=3 行直写（与屏幕及裁剪矩形求交后逐行 fill_hline_fast，
+    // 其自行标脏；mode>=4 回退逐像素）。菜单背景/高亮条/遮罩等大面积填充的主路径。
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB565 && mode <= 3) {
+        int32_t ix0 = (int32_t)x0, iy0 = (int32_t)y0;
+        int32_t ix1 = (int32_t)x0 + (int32_t)width - 1, iy1 = (int32_t)y0 + (int32_t)height - 1;
+        if (ix1 < 0 || iy1 < 0) return;
+        if (ix0 >= (int32_t)gfx->width || iy0 >= (int32_t)gfx->height) return;
+        if (ix0 < 0) ix0 = 0;
+        if (iy0 < 0) iy0 = 0;
+        if (ix1 >= (int32_t)gfx->width)  ix1 = (int32_t)gfx->width - 1;
+        if (iy1 >= (int32_t)gfx->height) iy1 = (int32_t)gfx->height - 1;
+        if (ix0 < gfx->clip_x0) ix0 = gfx->clip_x0;
+        if (iy0 < gfx->clip_y0) iy0 = gfx->clip_y0;
+        if (ix1 >= gfx->clip_x1) ix1 = gfx->clip_x1 - 1;
+        if (iy1 >= gfx->clip_y1) iy1 = gfx->clip_y1 - 1;
+        if (ix0 > ix1 || iy0 > iy1) return;
+        for (int32_t y = iy0; y <= iy1; y++) {
+            gfx_fill_hline_fast(gfx, ix0, ix1, y, red, green, blue, mode);
+        }
+        return;
+    }
     for (uint32_t y = y0; y < MIN(gfx->height, y0 + height); y++) {
         for (uint32_t x = x0; x < MIN(gfx->width, x0 + width); x++) {
             gfx_draw_point(gfx, x, y, red, green, blue, mode);
@@ -1098,6 +1254,30 @@ void gfx_draw_circle_fill(Nano_GFX *gfx, uint32_t cx, uint32_t cy, uint32_t r, u
     int32_t cx_i = (int32_t)cx;
     int32_t cy_i = (int32_t)cy;
 
+    // B1 快路径：RGB565 且 mode<=3 按行求弦宽（精确整数修正），逐行 fill_hline_fast
+    // （自行标脏）；与原逐像素 x²+y²<=r² 判定边界完全一致
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB565 && mode <= 3) {
+        int32_t y0 = cy_i - (int32_t)r;
+        int32_t y1 = cy_i + (int32_t)r;
+        if (y0 < 0) y0 = 0;
+        if (y0 < gfx->clip_y0) y0 = gfx->clip_y0;
+        if (y1 >= (int32_t)gfx->height) y1 = (int32_t)gfx->height - 1;
+        if (y1 >= gfx->clip_y1) y1 = gfx->clip_y1 - 1;
+        for (int32_t y = y0; y <= y1; y++) {
+            int32_t dy = y - cy_i;
+            int32_t dy_sq = dy * dy;
+            int32_t dx = (int32_t)sqrtf((float)(r_sq - dy_sq));
+            while ((dx + 1) * (dx + 1) + dy_sq <= r_sq) dx++;
+            while (dx * dx + dy_sq > r_sq) dx--;
+            int32_t xa = cx_i - dx, xb = cx_i + dx;
+            if (xa < gfx->clip_x0) xa = gfx->clip_x0;
+            if (xb >= gfx->clip_x1) xb = gfx->clip_x1 - 1;
+            if (xa > xb) continue;
+            gfx_fill_hline_fast(gfx, xa, xb, y, red, green, blue, mode);
+        }
+        return;
+    }
+
     for (int32_t y = cy_i - (int32_t)r; y <= cy_i + (int32_t)r; y++) {
         if (y < 0 || y >= (int32_t)gfx->height) continue;
         int32_t dy = y - cy_i;
@@ -1153,7 +1333,8 @@ void gfx_draw_char(
 void gfx_draw_textline(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
     uint32_t x_pos = x;
     uint32_t y_pos = y;
-    for (uint32_t i = 0; i < wcslen(line); i++) {
+    uint32_t len = wcslen(line); // 循环条件内 wcslen 是 O(n^2)，提出
+    for (uint32_t i = 0; i < len; i++) {
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
@@ -1196,6 +1377,85 @@ static Gfx_Font_Get_Glyph_Fn gfx_font_alpha_accessor(uint32_t font_id) {
     return NULL;
 }
 
+// ===================== alpha 字模缓存（B2 字体渲染优化） =====================
+// 每字符两次 get_glyph（元数据 + 4bpp RLE 解码到 576B 栈缓冲）是文本密集界面的
+// 绘制侧主开销，且 UI 文本字符集高度重复。缓存解码结果（元数据 + 每像素 0..15
+// 覆盖率，定长 576B 槽位）于 PSRAM，tick 式 LRU 淘汰；缺字（字库中不存在）同样
+// 缓存（found=0），避免缺字重的文本（如拼音）反复查表。
+// 仅 Core0 渲染任务使用 alpha 字体（Core1 忙提示走二值点阵路径），无需跨核锁。
+// PSRAM 分配失败时回退原“两次调用 + 栈上解码”路径（行为不变）。
+// 注意：缓存项指针仅在下一次缓存访问前有效（可能被后续 LRU 淘汰覆写）。
+
+#ifndef GFX_GLYPH_CACHE_SIZE
+#define GFX_GLYPH_CACHE_SIZE (192)   // 192 槽 × 约 592B ≈ 111KB PSRAM（常驻）
+#endif
+
+typedef struct {
+    Gfx_Font_Get_Glyph_Fn get_glyph; // 字体身份（12/16px 包装函数地址，天然区分字体）
+    uint32_t codepoint;              // 码点
+    uint32_t tick;                   // LRU 时间戳（单调递增）
+    uint8_t  valid;                  // 槽位有效
+    uint8_t  found;                  // 字库中存在（0 = 缺字缓存）
+    uint8_t  w, h;
+    int8_t   x_offset, y_offset;
+    uint8_t  x_advance;
+    uint8_t  alpha[GFX_ALPHA_GLYPH_MAX_W * GFX_ALPHA_GLYPH_MAX_H]; // 每像素 1 字节，取值 0..15
+} Gfx_Glyph_Cache_Entry;
+
+static Gfx_Glyph_Cache_Entry *s_glyph_cache = NULL;
+static uint32_t s_glyph_cache_tick = 0;
+static uint8_t  s_glyph_cache_alloc_failed = 0;
+
+// 查缓存，未命中则解码填充（解码直写缓存槽，零栈拷贝）；
+// 返回 NULL 表示缓存不可用（PSRAM 分配失败 / 字形超槽容量），调用方走原栈上路径
+static const Gfx_Glyph_Cache_Entry *gfx_glyph_cache_get(Gfx_Font_Get_Glyph_Fn get_glyph, uint32_t codepoint) {
+    if (s_glyph_cache == NULL) {
+        if (s_glyph_cache_alloc_failed) return NULL;
+        s_glyph_cache = (Gfx_Glyph_Cache_Entry *)platform_calloc(GFX_GLYPH_CACHE_SIZE, sizeof(Gfx_Glyph_Cache_Entry));
+        if (s_glyph_cache == NULL) {
+            s_glyph_cache_alloc_failed = 1;
+            return NULL;
+        }
+    }
+
+    Gfx_Glyph_Cache_Entry *victim = &s_glyph_cache[0];
+    for (int32_t i = 0; i < GFX_GLYPH_CACHE_SIZE; i++) {
+        Gfx_Glyph_Cache_Entry *e = &s_glyph_cache[i];
+        if (e->valid && e->get_glyph == get_glyph && e->codepoint == codepoint) {
+            e->tick = ++s_glyph_cache_tick;
+            return e;
+        }
+        if (!e->valid) {
+            victim = e; // 空槽优先（一旦选中空槽，下方 LRU 比较自动失效）
+        }
+        else if (victim->valid && e->tick < victim->tick) {
+            victim = e;
+        }
+    }
+
+    // 未命中：先取元数据（超大字形放不进槽位，不缓存，返回 NULL 走栈上路径）
+    uint8_t w = 0, h = 0, x_advance = 0;
+    int8_t x_offset = 0, y_offset = 0;
+    uint8_t found = get_glyph(codepoint, NULL, &w, &h, &x_offset, &y_offset, &x_advance);
+    if (found && (w > GFX_ALPHA_GLYPH_MAX_W || h > GFX_ALPHA_GLYPH_MAX_H)) {
+        return NULL;
+    }
+    if (found && w > 0 && h > 0) {
+        get_glyph(codepoint, victim->alpha, &w, &h, &x_offset, &y_offset, &x_advance);
+    }
+    victim->get_glyph = get_glyph;
+    victim->codepoint = codepoint;
+    victim->found = found;
+    victim->w = w;
+    victim->h = h;
+    victim->x_offset = x_offset;
+    victim->y_offset = y_offset;
+    victim->x_advance = x_advance;
+    victim->tick = ++s_glyph_cache_tick;
+    victim->valid = 1; // 最后置位（单线程内无并发，仅为可读性）
+    return victim;
+}
+
 // 字体行高：同一套字体行高固定，与字符无关
 int32_t gfx_font_line_height(uint32_t font_id) {
     switch (font_id) {
@@ -1222,14 +1482,22 @@ int32_t gfx_font_char_advance(uint32_t font_id, uint32_t codepoint) {
 
     Gfx_Font_Get_Glyph_Fn get_glyph = gfx_font_alpha_accessor(font_id);
     if (get_glyph) {
-        uint8_t x_advance = 0;
-        if (!get_glyph(codepoint, NULL, NULL, NULL, NULL, NULL, &x_advance)) {
-            // 缺字时用 '?' 代替
-            if (!get_glyph((uint32_t)'?', NULL, NULL, NULL, NULL, NULL, &x_advance)) {
-                x_advance = 0;
+        const Gfx_Glyph_Cache_Entry *ce = gfx_glyph_cache_get(get_glyph, codepoint);
+        if (ce == NULL) {
+            // 缓存不可用：原路径（仅取元数据）
+            uint8_t x_advance = 0;
+            if (!get_glyph(codepoint, NULL, NULL, NULL, NULL, NULL, &x_advance)) {
+                // 缺字时用 '?' 代替
+                if (!get_glyph((uint32_t)'?', NULL, NULL, NULL, NULL, NULL, &x_advance)) {
+                    x_advance = 0;
+                }
             }
+            return (int32_t)x_advance;
         }
-        return (int32_t)x_advance;
+        if (ce->found) return (int32_t)ce->x_advance;
+        // 缺字时用 '?' 代替（'?' 亦经缓存）
+        const Gfx_Glyph_Cache_Entry *cq = gfx_glyph_cache_get(get_glyph, (uint32_t)'?');
+        return (cq != NULL && cq->found) ? (int32_t)cq->x_advance : 0;
     }
 
     // 二值点阵字模：半角 6px，全角 12px
@@ -1242,59 +1510,140 @@ int32_t gfx_font_char_advance(uint32_t font_id, uint32_t codepoint) {
 //       字模 4bpp alpha 作为像素覆盖率参与计算；为保证边缘平滑，
 //       mode 1 与 >=4 均按覆盖率将前景色混合到背景（即抗锯齿渲染）
 // 返回笔位步进宽度（x_advance）；字符不在字库中或字模超大时返回 0（不推进笔位）
-static int32_t gfx_draw_glyph_alpha_impl(Nano_GFX *gfx, Gfx_Font_Get_Glyph_Fn get_glyph,
+//
+// B2 优化：字模经 gfx_glyph_cache_get 取解码缓存（消除每字符两次 get_glyph 与
+// 栈上解码）；RGB565 路径按行直写帧缓冲——行/列范围按屏幕与裁剪矩形预夹，
+// mode 分支外提，混合公式与原逐像素路径逐位一致（a8 = q*17，四舍五入 (…+127)/255）。
+static GFX_IRAM int32_t gfx_draw_glyph_alpha_impl(Nano_GFX *gfx, Gfx_Font_Get_Glyph_Fn get_glyph,
                                          uint32_t codepoint, int32_t pen_x, int32_t baseline_y,
                                          uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
     uint8_t w = 0, h = 0, x_advance = 0;
     int8_t x_offset = 0, y_offset = 0;
+    const uint8_t *alpha = NULL;
+    // 缓存不可用时的回退解码缓冲（维持原栈上路径；渲染任务栈 12KB 可容纳）
+    uint8_t alpha_stack[GFX_ALPHA_GLYPH_MAX_W * GFX_ALPHA_GLYPH_MAX_H];
 
-    // 第 1 次调用：仅取元数据
-    if (!get_glyph(codepoint, NULL, &w, &h, &x_offset, &y_offset, &x_advance)) {
-        return 0;
+    const Gfx_Glyph_Cache_Entry *ce = gfx_glyph_cache_get(get_glyph, codepoint);
+    if (ce != NULL) {
+        if (!ce->found) return 0; // 缺字缓存
+        w = ce->w; h = ce->h;
+        x_offset = ce->x_offset; y_offset = ce->y_offset;
+        x_advance = ce->x_advance;
+        alpha = ce->alpha;
+    } else {
+        // 回退：原两次调用 + 栈上解码
+        if (!get_glyph(codepoint, NULL, &w, &h, &x_offset, &y_offset, &x_advance)) {
+            return 0;
+        }
+        if (w > GFX_ALPHA_GLYPH_MAX_W || h > GFX_ALPHA_GLYPH_MAX_H) {
+            return 0; // 超出解码缓冲容量，安全起见跳过
+        }
+        if (w > 0 && h > 0) {
+            get_glyph(codepoint, alpha_stack, &w, &h, &x_offset, &y_offset, &x_advance);
+        }
+        alpha = alpha_stack;
     }
     if (w == 0 || h == 0) {
         return x_advance; // 空白字形（如空格），只推进笔位
     }
-    if (w > GFX_ALPHA_GLYPH_MAX_W || h > GFX_ALPHA_GLYPH_MAX_H) {
-        return 0; // 超出解码缓冲容量，安全起见跳过
-    }
-
-    // 第 2 次调用：解码 4bpp alpha 位图（每像素 1 字节，取值 0..15）
-    uint8_t alpha[GFX_ALPHA_GLYPH_MAX_W * GFX_ALPHA_GLYPH_MAX_H];
-    get_glyph(codepoint, alpha, &w, &h, &x_offset, &y_offset, &x_advance);
 
     int32_t draw_x = pen_x + x_offset;
     int32_t draw_y = baseline_y - y_offset;
 
-    for (int32_t j = 0; j < h; j++) {
-        int32_t py = draw_y + j;
-        if (py < 0 || py >= (int32_t)gfx->height) continue;
-        if (py < gfx->clip_y0 || py >= gfx->clip_y1) continue; // 裁剪矩形（默认整屏）
-        for (int32_t i = 0; i < w; i++) {
-            uint8_t q = alpha[j * w + i];
-            if (q == 0) continue; // 全透明像素，直接跳过
-            int32_t px = draw_x + i;
-            if (px < 0 || px >= (int32_t)gfx->width) continue;
-            if (px < gfx->clip_x0 || px >= gfx->clip_x1) continue; // 裁剪矩形（默认整屏）
-            uint8_t a8 = (uint8_t)((q << 4) | q); // 4bpp -> 8bpp：q * 17，作为覆盖率
-            if (mode == 0) {
-                // 置黑：按覆盖率向黑色混合
-                gfx_blend_pixel(gfx, (uint32_t)px, (uint32_t)py, 0, 0, 0, a8);
-            }
-            else if (mode == 2) {
-                // 异或无中间态，覆盖率过半才反转
-                if (a8 >= 128) gfx_reverse_pixel(gfx, (uint32_t)px, (uint32_t)py);
-            }
-            else if (mode == 3) {
+    // 行/列范围按屏幕与裁剪矩形预夹（消除逐像素边界与裁剪检查）
+    int32_t i0 = 0;
+    if (draw_x + i0 < 0) i0 = -draw_x;
+    if (draw_x + i0 < gfx->clip_x0) i0 = gfx->clip_x0 - draw_x;
+    int32_t i1 = (int32_t)w;
+    if (draw_x + i1 > (int32_t)gfx->width) i1 = (int32_t)gfx->width - draw_x;
+    if (draw_x + i1 > gfx->clip_x1) i1 = gfx->clip_x1 - draw_x;
+    int32_t j0 = 0;
+    if (draw_y + j0 < 0) j0 = -draw_y;
+    if (draw_y + j0 < gfx->clip_y0) j0 = gfx->clip_y0 - draw_y;
+    int32_t j1 = (int32_t)h;
+    if (draw_y + j1 > (int32_t)gfx->height) j1 = (int32_t)gfx->height - draw_y;
+    if (draw_y + j1 > gfx->clip_y1) j1 = gfx->clip_y1 - draw_y;
+    if (i0 >= i1 || j0 >= j1) return x_advance; // 完全在可视区外
+
+    gfx_dirty_expand(gfx, draw_x + i0, draw_y + j0, draw_x + i1, draw_y + j1);
+
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+        uint16_t fg565 = rgb888_to_rgb565(
+            (mode == 0) ? 0 : red, (mode == 0) ? 0 : green, (mode == 0) ? 0 : blue);
+        for (int32_t j = j0; j < j1; j++) {
+            int32_t py = draw_y + j;
+            uint32_t off = 0;
+            uint16_t *px = gfx->rgb565_access(gfx, (uint32_t)(draw_x + i0), (uint32_t)py, &off);
+            px += off;
+            const uint8_t *ar = alpha + j * w + i0;
+            if (mode == 2) {
+                // 异或无中间态，覆盖率过半才反转（a8=q*17>=128 ⇔ q>=8）
+                for (int32_t i = i0; i < i1; i++) {
+                    uint8_t q = *ar++;
+                    if (q >= 8) {
+                        uint16_t v = *px;
+                        *px = (v == 0) ? 0xFFFF : 0;
+                    }
+                    px++;
+                }
+            } else if (mode == 3) {
                 // 加色：颜色按覆盖率加权后叠加
-                gfx_add_pixel(gfx, (uint32_t)px, (uint32_t)py,
-                              (uint8_t)((red * a8 + 127) / 255),
-                              (uint8_t)((green * a8 + 127) / 255),
-                              (uint8_t)((blue * a8 + 127) / 255));
+                for (int32_t i = i0; i < i1; i++) {
+                    uint8_t q = *ar++;
+                    if (q == 0) { px++; continue; }
+                    uint32_t a8 = (uint32_t)((q << 4) | q);
+                    uint16_t v = *px;
+                    *px = rgb888_to_rgb565(
+                        MIN(255, RGB565_R(v) + (uint8_t)((red   * a8 + 127) / 255)),
+                        MIN(255, RGB565_G(v) + (uint8_t)((green * a8 + 127) / 255)),
+                        MIN(255, RGB565_B(v) + (uint8_t)((blue  * a8 + 127) / 255)));
+                    px++;
+                }
+            } else {
+                // 置黑(mode 0)/置色(mode 1)/Alpha混合(mode >= 4)：按覆盖率将前景色混合到背景
+                for (int32_t i = i0; i < i1; i++) {
+                    uint8_t q = *ar++;
+                    if (q == 0) { px++; continue; }
+                    if (q == 15) { *px = fg565; px++; continue; } // 全覆盖直写
+                    uint32_t a8 = (uint32_t)((q << 4) | q);
+                    uint32_t inv = 255 - a8;
+                    uint16_t v = *px;
+                    *px = rgb888_to_rgb565(
+                        (uint8_t)((a8 * ((mode == 0) ? 0 : red)   + inv * RGB565_R(v) + 127) / 255),
+                        (uint8_t)((a8 * ((mode == 0) ? 0 : green) + inv * RGB565_G(v) + 127) / 255),
+                        (uint8_t)((a8 * ((mode == 0) ? 0 : blue)  + inv * RGB565_B(v) + 127) / 255));
+                    px++;
+                }
             }
-            else {
-                // 置色(mode 1)与 Alpha混合(mode >= 4)：按覆盖率将前景色混合到背景
-                gfx_blend_pixel(gfx, (uint32_t)px, (uint32_t)py, red, green, blue, a8);
+        }
+    } else {
+        // RGB888 等其余色彩模式：保留原逐像素路径（玲珑仪 llgfx 文本，量小）
+        for (int32_t j = 0; j < h; j++) {
+            int32_t py = draw_y + j;
+            if (py < 0 || py >= (int32_t)gfx->height) continue;
+            if (py < gfx->clip_y0 || py >= gfx->clip_y1) continue;
+            for (int32_t i = 0; i < w; i++) {
+                uint8_t q = alpha[j * w + i];
+                if (q == 0) continue;
+                int32_t px = draw_x + i;
+                if (px < 0 || px >= (int32_t)gfx->width) continue;
+                if (px < gfx->clip_x0 || px >= gfx->clip_x1) continue;
+                uint8_t a8 = (uint8_t)((q << 4) | q);
+                if (mode == 0) {
+                    gfx_blend_pixel(gfx, (uint32_t)px, (uint32_t)py, 0, 0, 0, a8);
+                }
+                else if (mode == 2) {
+                    if (a8 >= 128) gfx_reverse_pixel(gfx, (uint32_t)px, (uint32_t)py);
+                }
+                else if (mode == 3) {
+                    gfx_add_pixel(gfx, (uint32_t)px, (uint32_t)py,
+                                  (uint8_t)((red * a8 + 127) / 255),
+                                  (uint8_t)((green * a8 + 127) / 255),
+                                  (uint8_t)((blue * a8 + 127) / 255));
+                }
+                else {
+                    gfx_blend_pixel(gfx, (uint32_t)px, (uint32_t)py, red, green, blue, a8);
+                }
             }
         }
     }
@@ -1332,7 +1681,8 @@ int32_t gfx_font_draw_char(Nano_GFX *gfx, uint32_t font_id, uint32_t codepoint, 
 // 测量一行文本的渲染总宽度（逐字符实际宽度求和），不修改帧缓冲
 int32_t gfx_font_measure_text(uint32_t font_id, wchar_t *line) {
     int32_t total_width = 0;
-    for (uint32_t i = 0; i < wcslen(line); i++) {
+    uint32_t len = wcslen(line); // 循环条件内 wcslen 是 O(n^2)，提出
+    for (uint32_t i = 0; i < len; i++) {
         total_width += gfx_font_char_advance(font_id, (uint32_t)line[i]);
     }
     return total_width;
@@ -1342,7 +1692,8 @@ int32_t gfx_font_measure_text(uint32_t font_id, wchar_t *line) {
 void gfx_font_draw_text(Nano_GFX *gfx, uint32_t font_id, wchar_t *line, int32_t x, int32_t y_top,
                         uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
     int32_t pen_x = x;
-    for (uint32_t i = 0; i < wcslen(line); i++) {
+    uint32_t len = wcslen(line); // 循环条件内 wcslen 是 O(n^2)，提出
+    for (uint32_t i = 0; i < len; i++) {
         pen_x += gfx_font_draw_char(gfx, font_id, (uint32_t)line[i], pen_x, y_top, red, green, blue, mode);
         if (pen_x >= (int32_t)gfx->width) {
             break;
@@ -1400,7 +1751,8 @@ void gfx_draw_textline_centered(Nano_GFX *gfx, wchar_t *line, uint32_t cx, uint3
 
     // 第一遍扫描：计算文本渲染长度
     int32_t total_width = 0;
-    for (uint32_t i = 0; i < wcslen(line); i++) {
+    uint32_t len = wcslen(line); // 循环条件内 wcslen 是 O(n^2)，提出
+    for (uint32_t i = 0; i < len; i++) {
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
@@ -1415,7 +1767,7 @@ void gfx_draw_textline_centered(Nano_GFX *gfx, wchar_t *line, uint32_t cx, uint3
     int32_t x_pos = cx - (total_width/2);
     int32_t y_pos = cy - 6;
     if (y_pos < 0 || y_pos + 6 > gfx->height) return;
-    for (uint32_t i = 0; i < wcslen(line); i++) {
+    for (uint32_t i = 0; i < len; i++) {
         uint32_t current_char = line[i];
         uint8_t font_width = 12;
         uint8_t font_height = 12;
@@ -1487,7 +1839,8 @@ void gfx_draw_textline_mini(Nano_GFX *gfx, wchar_t *line, uint32_t x, uint32_t y
 
     uint32_t x_pos = x;
     uint32_t y_pos = y;
-    for (uint32_t i = 0; i < wcslen(line); i++) {
+    uint32_t len = wcslen(line); // 循环条件内 wcslen 是 O(n^2)，提出
+    for (uint32_t i = 0; i < len; i++) {
         wchar_t current_char = line[i];
         uint8_t font_width = 3;
         uint8_t font_height = 5;
@@ -1557,7 +1910,7 @@ void gfx_draw_busy(Nano_GFX *gfx) {
 
 // 高性能水平线填充辅助函数
 // 直接操作帧缓冲区，绕过 gfx_draw_point 的逐像素函数调用开销
-static inline void gfx_fill_hline_fast(Nano_GFX *gfx, int32_t x_start, int32_t x_end, int32_t y,
+static GFX_IRAM inline void gfx_fill_hline_fast(Nano_GFX *gfx, int32_t x_start, int32_t x_end, int32_t y,
     uint8_t r, uint8_t g, uint8_t b, uint8_t mode) {
     if (x_start > x_end) {
         int32_t t = x_start; x_start = x_end; x_end = t;
@@ -1568,6 +1921,8 @@ static inline void gfx_fill_hline_fast(Nano_GFX *gfx, int32_t x_start, int32_t x
     if (x_start < 0) x_start = 0;
     if (x_end >= (int32_t)gfx->width) x_end = (int32_t)gfx->width - 1;
     if (x_start > x_end) return;
+
+    gfx_dirty_expand(gfx, x_start, y, x_end + 1, y + 1);
 
     int32_t count = x_end - x_start + 1;
 
@@ -1980,6 +2335,7 @@ void gfx_dithering(Nano_GFX *gfx) {
     uint32_t fb_height = gfx->height;
 
     if (fb_width <= 0 || fb_height <= 0) return;
+    gfx_mark_dirty_full(gfx);
 
     if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
         uint8_t *frame_buffer = gfx->frame_buffer_rgb888;
@@ -2223,14 +2579,29 @@ void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uin
     // 裁剪到 gfx 边界
     uint32_t x_end = (x0 + width > gfx->width) ? gfx->width : x0 + width;
     uint32_t y_end = (y0 + height > gfx->height) ? gfx->height : y0 + height;
-    
+
+    // B1 快路径：RGB565 行直写（行指针每行一次，消除逐像素函数调用）
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB565 && x_end > x0 && y_end > y0) {
+        gfx_dirty_expand(gfx, (int32_t)x0, (int32_t)y0, (int32_t)x_end, (int32_t)y_end);
+        for (uint32_t y = y0; y < y_end; y++) {
+            uint32_t off = 0;
+            uint16_t *fb = gfx->rgb565_access(gfx, x0, y, &off);
+            const uint8_t *src = draw_data + ((y - y0) * width) * 3;
+            for (uint32_t x = x0; x < x_end; x++) {
+                fb[off++] = rgb888_to_rgb565(src[0], src[1], src[2]);
+                src += 3;
+            }
+        }
+        return;
+    }
+
     for (uint32_t y = y0; y < y_end; y++) {
         for (uint32_t x = x0; x < x_end; x++) {
             // 计算源图像中的像素位置
             uint32_t src_x = x - x0;
             uint32_t src_y = y - y0;
             uint32_t src_idx = (src_y * width + src_x) * 3;
-            
+
             // 写入frame_buffer
             gfx_set_pixel(gfx, x, y, draw_data[src_idx], draw_data[src_idx + 1], draw_data[src_idx + 2]);
         }
@@ -2627,6 +2998,21 @@ void gfx_draw_rgb888_buffer(Nano_GFX *gfx, uint8_t *rgb888_buffer,
 
     uint32_t x_end = (x0 + img_width > gfx->width) ? gfx->width : x0 + img_width;
     uint32_t y_end = (y0 + img_height > gfx->height) ? gfx->height : y0 + img_height;
+
+    // B1 快路径：RGB565 行直写（行指针每行一次，消除逐像素函数调用）
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB565 && x_end > x0 && y_end > y0) {
+        gfx_dirty_expand(gfx, (int32_t)x0, (int32_t)y0, (int32_t)x_end, (int32_t)y_end);
+        for (uint32_t y = y0; y < y_end; y++) {
+            uint32_t off = 0;
+            uint16_t *fb = gfx->rgb565_access(gfx, x0, y, &off);
+            const uint8_t *src = rgb888_buffer + ((y - y0) * img_width) * 3;
+            for (uint32_t x = x0; x < x_end; x++) {
+                fb[off++] = rgb888_to_rgb565(src[0], src[1], src[2]);
+                src += 3;
+            }
+        }
+        return;
+    }
 
     for (uint32_t y = y0; y < y_end; y++) {
         for (uint32_t x = x0; x < x_end; x++) {

@@ -41,6 +41,8 @@ static int32_t   s_goto_len = 0;
 
 static uint8_t   s_rbuf[EBOOK_READ_CHUNK];
 
+static int32_t   s_scroll_last_page = -1; // 滚动帧轻量渲染的页码跟踪（-1=首次强制更新）
+
 // UTF-8 增量解码状态（逐字节喂入，跨块保持）
 static uint32_t  s_dec_cp;
 static int32_t   s_dec_need;
@@ -466,6 +468,7 @@ int32_t ui_ebook_reading_render(Key_Event *key_event, Global_State *global_state
         int32_t cur_page = (s_buf_start_line + global_state->w_textarea_main->current_line)
             / ((s_view_lines > 0) ? s_view_lines : 1) + 1;
         swprintf(page_info, 24, L"%d/%d", cur_page, s_page_count);
+        s_scroll_last_page = cur_page; // 与滚动帧轻量渲染的页码跟踪同步（避免重复局部更新）
     }
     ui_draw_header_full(key_event, global_state, s_book_title, 1,
         ui_std_header_height(global_state->ui_font), page_info, L"返回 ");
@@ -485,6 +488,33 @@ int32_t ui_ebook_reading_render(Key_Event *key_event, Global_State *global_state
         gfx_refresh(global_state->gfx);
     }
     return 0;
+}
+
+// 轻量滚动渲染（拖动/滚行帧专用，性能专题修复 2026-08）：滚动中页眉标题/页脚软按键/
+// 缓冲区排版均不变，只重绘文本区本体与总进度条；页码仅跨页变化时经页眉左侧文本
+// 局部自清洁更新。否则每帧全量 typeset_line_breaks（4096 wchar）+ 页眉页脚重绘会把
+// 脏区扩满全屏、推帧退化为全屏传输——此为拖动不跟手的根因（对齐自述的滚动帧成本）。
+static void ui_ebook_reading_render_scroll(Key_Event *key_event, Global_State *global_state) {
+    Widget_Textarea_State *ta = global_state->w_textarea_main;
+
+    // 缓冲内容未变：以 is_modified=0 包裹跳过全量重排版（与通用事件处理器同一约定）
+    ta->is_modified = 0;
+    ui_widget_textarea_draw(key_event, global_state, ta);
+    ta->is_modified = 1;
+
+    // 页码仅跨页变化时经页眉左侧文本局部更新（自清洁回填，不触碰标题与“返回”）
+    int32_t cur_page = (s_buf_start_line + ta->current_line) / ((s_view_lines > 0) ? s_view_lines : 1) + 1;
+    if (cur_page != s_scroll_last_page) {
+        s_scroll_last_page = cur_page;
+        wchar_t page_info[24];
+        swprintf(page_info, 24, L"%d/%d", cur_page, s_page_count);
+        ui_draw_header_side_text(key_event, global_state,
+            ui_std_header_height(global_state->ui_font), page_info, NULL);
+    }
+
+    // 总进度滚动条（绘制于文本控件之后，避免被其背景清除覆盖）
+    ui_ebook_draw_progress_bar(key_event, global_state);
+    gfx_refresh(global_state->gfx);
 }
 
 // 上一页（窗口起点对齐上一页页首）
@@ -606,7 +636,7 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
                     }
                     ta->current_line = top_line - s_buf_start_line;
                     ta->scroll_sub_offset = new_sub;
-                    ui_ebook_reading_render(key_event, global_state);
+                    ui_ebook_reading_render_scroll(key_event, global_state); // 轻量滚动渲染（不重排版/不重绘页眉页脚）
                 }
             }
             return 0;
@@ -734,7 +764,7 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
         }
         ta->current_line = top - s_buf_start_line;
         ta->scroll_sub_offset = 0; // 换窗整行跳转：吸附回整行
-        ui_ebook_reading_render(key_event, global_state);
+        ui_ebook_reading_render_scroll(key_event, global_state); // 轻量滚动渲染（不重排版/不重绘页眉页脚）
         return 0;
     }
     // 4：上一页（窗口起点对齐上一页页首）

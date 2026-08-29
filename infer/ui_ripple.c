@@ -120,6 +120,8 @@ static void wr_render(Nano_GFX *gfx) {
             int32_t disp = WR_MAX_AMPLITUDE_I - amp;
             if (last[i] != (int16_t)disp) {
                 last[i] = (int16_t)disp;
+                // A1：下方经行指针直写帧缓冲（绕过图形层绘制 API），须自行标脏
+                gfx_mark_dirty(gfx, 2 * sx, 2 * sy, 2, 2);
                 // 2x2 帧缓冲块逐像素位移采样（全分辨率纹理）
                 for (int32_t oy = 0; oy < 2; oy++) {
                     int32_t y = 2 * sy + oy;
@@ -209,6 +211,8 @@ static void wr_render(Nano_GFX *gfx) {
             float disp = WR_MAX_AMPLITUDE - amp;
             if (last[i] != disp) {
                 last[i] = disp;
+                // A1：下方经行指针直写帧缓冲（绕过图形层绘制 API），须自行标脏
+                gfx_mark_dirty(gfx, 2 * sx, 2 * sy, 2, 2);
                 // 2x2 帧缓冲块逐像素位移采样（全分辨率纹理）
                 for (int32_t oy = 0; oy < 2; oy++) {
                     int32_t y = 2 * sy + oy;
