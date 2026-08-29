@@ -1915,6 +1915,10 @@ void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widge
     menu_state->fling_velocity = 0.0f;
     menu_state->fling_scroll_px = 0.0f;
     menu_state->fling_last_timestamp = 0;
+    // 碰撞回弹状态复位
+    menu_state->bounce_offset_px = 0.0f;
+    menu_state->bounce_velocity = 0.0f;
+    menu_state->bounce_last_timestamp = 0;
 
     // 注意：此处不再立即绘制。此前末尾调用 ui_widget_menu_draw（内含 gfx_refresh）会导致
     // 进入菜单状态时先刷出菜单区（页眉尚未绘制，残留旧画面）、下一拍状态初始化分支
@@ -1964,8 +1968,11 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
     int32_t line_height = gfx_font_line_height(font_id);
     int32_t item_height = menu_state->item_height; // 条目行高（默认 1.5 倍字体行高）
     // 像素级滚动：首条目向上平移 scroll_sub_offset（亚行偏移），循环按可见像素区终止，
-    // 顶/底各可能出现一个被裁剪的部分可见条目（最多比整行时多画 1 个）
-    int32_t y_pos = (int32_t)menu_state->y + 1 - menu_state->scroll_sub_offset;
+    // 顶/底各可能出现一个被裁剪的部分可见条目（最多比整行时多画 1 个）；
+    // bounce_offset_px 为到顶/到底碰撞回弹的纯视觉位移（顶端下拉为正、底端上拉为负，
+    // 拉出的空白区由上方背景清除与裁剪矩形兜底），逻辑滚动位置不含回弹
+    int32_t y_pos = (int32_t)menu_state->y + 1 - menu_state->scroll_sub_offset
+                  + (int32_t)menu_state->bounce_offset_px;
     int32_t y_end = (int32_t)menu_state->y + menu_state->height;
     uint8_t is_highlight = 0;
     for (uint32_t i = menu_state->first_item_intex; i < menu_state->item_num; i++) {
@@ -2008,6 +2015,18 @@ void ui_widget_menu_draw(Key_Event *key_event, Global_State *global_state, Widge
 }
 
 
+// 碰撞回弹物理常数（真机手感可调）
+#define UI_MENU_BOUNCE_RUBBER_DIV  (2.0f)    // 橡皮筋阻尼：过界位移除以该系数
+#define UI_MENU_BOUNCE_MAX_RATIO   (4)       // 最大回弹行程 = 菜单高度 / 该值
+#define UI_MENU_BOUNCE_SPRING_K    (120.0f)  // 弹簧刚度（1/s²；ω≈11rad/s，偏软、回摆可见）
+#define UI_MENU_BOUNCE_SPRING_C    (12.0f)   // 弹簧阻尼（1/s，ζ≈0.55，带一次可见回摆）
+#define UI_MENU_BOUNCE_FLING_GAIN  (13.0f)   // 惯性撞边剩余速度开方映射系数：
+                                             // v0 = 13·√|v剩余|——小剩余速度也有可见过冲
+                                             // （剩余 500px/s→约 20px；4000px/s→约 48px 顶到上限），
+                                             // 线性映射在典型剩余速度（几百 px/s）下过冲仅数像素、肉眼不可见
+#define UI_MENU_BOUNCE_SETTLE_X    (0.5f)    // 收敛判定：位移阈值（px）
+#define UI_MENU_BOUNCE_SETTLE_V    (10.0f)   // 收敛判定：速度阈值（px/s）
+
 // 通用的菜单事件处理+回调注册
 int32_t ui_widget_menu_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Menu_State *ms,
@@ -2042,9 +2061,27 @@ int32_t ui_widget_menu_event_handler(
                     ms->fling_velocity += decel;
                     if (ms->fling_velocity > 0.0f) ms->fling_velocity = 0.0f;
                 }
-                // 越界即停（不做回弹）
-                if (scroll <= 0.0f) { scroll = 0.0f; ms->fling_velocity = 0.0f; }
-                if (scroll >= (float)max_scroll_px) { scroll = (float)max_scroll_px; ms->fling_velocity = 0.0f; }
+                // 撞边回弹：越界且有剩余速度 → 开方映射为弹簧初速度移交回弹动画（过冲→回稳）；
+                // 无剩余速度即停（现状）。顶端：vel<0 → bounce_v>0（内容下拉过冲）；
+                // 底端：vel>0 → bounce_v<0（内容上提过冲）
+                if (scroll <= 0.0f) {
+                    scroll = 0.0f;
+                    if (ms->fling_velocity < -50.0f) {
+                        ms->bounce_offset_px = 0.0f;
+                        ms->bounce_velocity = sqrtf(-ms->fling_velocity) * UI_MENU_BOUNCE_FLING_GAIN;
+                        ms->bounce_last_timestamp = now;
+                    }
+                    ms->fling_velocity = 0.0f;
+                }
+                if (scroll >= (float)max_scroll_px) {
+                    scroll = (float)max_scroll_px;
+                    if (ms->fling_velocity > 50.0f) {
+                        ms->bounce_offset_px = 0.0f;
+                        ms->bounce_velocity = -sqrtf(ms->fling_velocity) * UI_MENU_BOUNCE_FLING_GAIN;
+                        ms->bounce_last_timestamp = now;
+                    }
+                    ms->fling_velocity = 0.0f;
+                }
                 ms->fling_scroll_px = scroll;
                 int32_t new_scroll_px = (int32_t)scroll;
                 int32_t new_first = new_scroll_px / item_height;
@@ -2055,6 +2092,46 @@ int32_t ui_widget_menu_event_handler(
                     // 与触屏拖动一致：不做高亮钳制，允许高亮条目滚出可视区
                     ui_widget_menu_draw(ke, gs, ms);
                 }
+            }
+        }
+    }
+
+    // ========================================================================
+    // 碰撞回弹弹簧动画（与 fling 互斥：fling 撞边即终止并移交本动画）：每帧弹簧积分回位。
+    // 手指驱动期间（拖动过界橡皮筋，touch_active==1）本块整体跳过——offset 由拖动分支逐帧
+    // 赋值，不得在此吸附/积分（实测：误吸附+拖动置回逐帧交替曾致高频抖动）；取消只认新触摸
+    // 序列的 DOWN 沿与按键（电平完底：is_touching 但 touch_active==0，防 DOWN 丢失），
+    // 吸附时重绘一帧消除残留位移，随后的事件照常下落处理
+    // ========================================================================
+    if ((ms->bounce_offset_px != 0.0f || ms->bounce_velocity != 0.0f) && !ms->touch_active) {
+        if ((ke->touch_edge & TOUCH_EDGE_DOWN) || ke->key_edge != 0
+            || (ke->is_touching && !ms->touch_active)) {
+            ms->bounce_offset_px = 0.0f;
+            ms->bounce_velocity = 0.0f;
+            ui_widget_menu_draw(ke, gs, ms);
+        }
+        else {
+            uint64_t now = get_timestamp_in_ms();
+            float dt_s = (float)(now - ms->bounce_last_timestamp) / 1000.0f;
+            ms->bounce_last_timestamp = now;
+            if (dt_s > 0.05f) dt_s = 0.05f; // 帧间隔异常限幅
+            if (dt_s > 0.0f) {
+                float x = ms->bounce_offset_px;
+                float v = ms->bounce_velocity;
+                float a = -UI_MENU_BOUNCE_SPRING_K * x - UI_MENU_BOUNCE_SPRING_C * v;
+                v += a * dt_s;
+                x += v * dt_s;
+                float bounce_cap = (float)(ms->height / UI_MENU_BOUNCE_MAX_RATIO);
+                if (x > bounce_cap)  { x = bounce_cap;  v = 0.0f; }
+                if (x < -bounce_cap) { x = -bounce_cap; v = 0.0f; }
+                // 收敛判定：位移与速度均低于阈值 → 归零停动画
+                if ((x > -UI_MENU_BOUNCE_SETTLE_X && x < UI_MENU_BOUNCE_SETTLE_X)
+                    && (v > -UI_MENU_BOUNCE_SETTLE_V && v < UI_MENU_BOUNCE_SETTLE_V)) {
+                    x = 0.0f; v = 0.0f;
+                }
+                ms->bounce_offset_px = x;
+                ms->bounce_velocity = v;
+                ui_widget_menu_draw(ke, gs, ms);
             }
         }
     }
@@ -2098,27 +2175,44 @@ int32_t ui_widget_menu_event_handler(
             // 内容不足一屏时为 0（不可滚），与原 item_num > items_per_page 判定等价
             int32_t max_scroll_px = (int32_t)ms->item_num * item_height - ((int32_t)ms->height - 1);
             if (max_scroll_px < 0) max_scroll_px = 0;
-            if (ms->touch_is_dragging && max_scroll_px > 0) {
-                // 手指下滑 → 内容下移 → 滚动位置前移；相对锚点按像素计算，1:1 跟手无累计误差
-                int32_t new_scroll_px = ms->touch_anchor_scroll_px - dy;
-                if (new_scroll_px < 0) new_scroll_px = 0;
-                if (new_scroll_px > max_scroll_px) new_scroll_px = max_scroll_px;
+            if (ms->touch_is_dragging) {
+                // 手指下滑 → 内容下移 → 滚动位置前移；相对锚点按像素计算，1:1 跟手无累计误差。
+                // 碰撞回弹：过界部分按 1/RUBBER_DIV 折算为橡皮筋视觉位移（含上限），
+                // 逻辑滚动位置仍钳在合法边界；不可滚动（max=0）的菜单也给纯回弹反馈
+                int32_t raw_scroll_px = ms->touch_anchor_scroll_px - dy;
+                float bounce = 0.0f;
+                int32_t new_scroll_px = raw_scroll_px;
+                if (raw_scroll_px < 0) {
+                    new_scroll_px = 0;
+                    bounce = (float)(-raw_scroll_px) / UI_MENU_BOUNCE_RUBBER_DIV;
+                }
+                else if (raw_scroll_px > max_scroll_px) {
+                    new_scroll_px = max_scroll_px;
+                    bounce = -(float)(raw_scroll_px - max_scroll_px) / UI_MENU_BOUNCE_RUBBER_DIV;
+                }
+                float bounce_cap = (float)(ms->height / UI_MENU_BOUNCE_MAX_RATIO);
+                if (bounce > bounce_cap) bounce = bounce_cap;
+                if (bounce < -bounce_cap) bounce = -bounce_cap;
                 int32_t new_first = new_scroll_px / item_height;
                 int32_t new_sub = new_scroll_px % item_height;
-                if (new_first != ms->first_item_intex || new_sub != ms->scroll_sub_offset) {
+                if (new_first != ms->first_item_intex || new_sub != ms->scroll_sub_offset
+                    || bounce != ms->bounce_offset_px) {
                     ms->first_item_intex = new_first;
                     ms->scroll_sub_offset = new_sub;
+                    ms->bounce_offset_px = bounce;
+                    ms->bounce_velocity = 0.0f; // 手指驱动期间弹簧速度清零
                     // 触屏拖动不做高亮钳制：高亮条目跟随其原条目，允许滚出可视区
                     // （按键导航时会在按键分支开头钳制回窗口，见下方）
                     ui_widget_menu_draw(ke, gs, ms);
                 }
-                // 拖动速度采样：指数平滑（0.6/0.4），供松手惯性初速度估算
+                // 拖动速度采样：指数平滑（0.6/0.4），基于原始位置（过界/回区全程速度连续），
+                // 供松手惯性初速度估算
                 uint64_t now = get_timestamp_in_ms();
                 uint32_t dt_ms = (uint32_t)(now - ms->touch_track_ts);
                 if (dt_ms > 0) {
-                    float v_inst = (float)(new_scroll_px - ms->touch_track_scroll) * 1000.0f / (float)dt_ms;
+                    float v_inst = (float)(raw_scroll_px - ms->touch_track_scroll) * 1000.0f / (float)dt_ms;
                     ms->touch_track_vel = ms->touch_track_vel * 0.6f + v_inst * 0.4f;
-                    ms->touch_track_scroll = new_scroll_px;
+                    ms->touch_track_scroll = raw_scroll_px;
                     ms->touch_track_ts = now;
                 }
             }
@@ -2128,15 +2222,22 @@ int32_t ui_widget_menu_event_handler(
         // 构成拖动则按松手速度启动惯性滚动，否则按点击处理
         ms->touch_active = 0;
         if (ms->touch_is_dragging) {
-            // 松手前手指已停顿（>100ms 无新采样）则速度作废，不启动惯性
-            uint64_t now = get_timestamp_in_ms();
-            float v0 = (now - ms->touch_track_ts <= 100) ? ms->touch_track_vel : 0.0f;
-            if (v0 > 4000.0f) v0 = 4000.0f;    // 触点抖动限速
-            if (v0 < -4000.0f) v0 = -4000.0f;
-            if (v0 > 50.0f || v0 < -50.0f) {   // 低于阈值（50px/s）不动画
-                ms->fling_velocity = v0;
-                ms->fling_scroll_px = (float)((int32_t)ms->first_item_intex * item_height + ms->scroll_sub_offset);
-                ms->fling_last_timestamp = now;
+            if (ms->bounce_offset_px != 0.0f) {
+                // 过界松手：不启动惯性，弹簧回位（从当前位移、零初速释放；顶端下拉为正）
+                ms->bounce_velocity = 0.0f;
+                ms->bounce_last_timestamp = get_timestamp_in_ms();
+            }
+            else {
+                // 松手前手指已停顿（>100ms 无新采样）则速度作废，不启动惯性
+                uint64_t now = get_timestamp_in_ms();
+                float v0 = (now - ms->touch_track_ts <= 100) ? ms->touch_track_vel : 0.0f;
+                if (v0 > 4000.0f) v0 = 4000.0f;    // 触点抖动限速
+                if (v0 < -4000.0f) v0 = -4000.0f;
+                if (v0 > 50.0f || v0 < -50.0f) {   // 低于阈值（50px/s）不动画
+                    ms->fling_velocity = v0;
+                    ms->fling_scroll_px = (float)((int32_t)ms->first_item_intex * item_height + ms->scroll_sub_offset);
+                    ms->fling_last_timestamp = now;
+                }
             }
         }
         else if (!ms->touch_is_dragging) {

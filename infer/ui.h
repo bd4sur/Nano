@@ -289,6 +289,14 @@ typedef struct Widget_Menu_State {
     float    fling_velocity;        // 当前惯性速度（px/s；0=无惯性动画）
     float    fling_scroll_px;       // 动画中的浮点滚动位置（保留亚像素，避免逐帧取整损耗）
     uint64_t fling_last_timestamp;  // 上一动画帧的时间戳（ms）
+    // 到顶/到底碰撞回弹（overscroll bounce，2026-08）：视觉位移与逻辑滚动位置解耦——
+    // bounce 只作绘制端位移（y_pos 附加），first_item_intex/scroll_sub_offset 始终钳在
+    // 合法范围，点击命中/Enter 钳制/按键导航零感知。拖动过界为橡皮筋（手指驱动，
+    // bounce_velocity=0），松手过界/惯性撞边转为弹簧动画（bounce_velocity 驱动）；
+    // 静止时两者恒为 0。与 fling 互斥：fling 撞边即终止并移交弹簧动画。
+    float    bounce_offset_px;      // 回弹位移（px；>0=顶端下拉内容下移，<0=底端上拉）
+    float    bounce_velocity;       // 回弹弹簧速度（px/s）
+    uint64_t bounce_last_timestamp; // 上一回弹动画帧的时间戳（ms）
 } Widget_Menu_State;
 
 
