@@ -423,7 +423,7 @@ static void ui_dict_draw_error(Global_State *gs, const wchar_t *line1, const wch
 static void ui_dict_draw_query_line(Key_Event *key_event, Global_State *gs) {
     uint32_t font_id = gs->ui_font;
     int32_t line_height = gfx_font_line_height(font_id);
-    int32_t y = line_height + 1; // header 高度
+    int32_t y = ui_std_header_height(gs->ui_font); // header 高度（1.5 倍行高）
     // 查询前缀文字颜色随全局色彩风格：暗色黄（#ffff00）、亮色蓝（#1155ee）
     uint8_t bg_R = 255, bg_G = 255, bg_B = 255, fg_R = 17, fg_G = 85, fg_B = 238;
     if (gs->ui_color_style == UI_COLOR_DARK) {
@@ -564,7 +564,7 @@ int32_t ui_dict_enter(Key_Event *key_event, Global_State *global_state) {
     // 密集候选行（单倍字体行高）；菜单上方是查询前缀行、下方紧贴软键盘（无页脚），
     // 收回 ui_widget_menu_init 预留的页脚高度，使菜单恰好撑满查询行与软键盘之间的区域
     int32_t line_height = gfx_font_line_height(global_state->ui_font);
-    ms->header_height = line_height + 1;     // 标准页眉（与 ui_draw_header 一致）
+    ms->header_height = ui_std_header_height(global_state->ui_font); // 标准页眉（1.5 倍行高，与 ui_draw_header 一致）
     ms->item_height = line_height;           // 密集候选行
     ms->y = ms->header_height + line_height; // 页眉 + 查询前缀行
     ms->height = (global_state->gfx->height - ui_softkbd_height()) - ms->y;

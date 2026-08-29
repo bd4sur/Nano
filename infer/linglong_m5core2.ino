@@ -74,21 +74,49 @@ void core0_render_task(void *pvParameters) {
     while (1) {
         // esp_task_wdt_reset();
 
-        if (xQueueReceive(event_queue, &key_event_0, 0) != pdTRUE) {
-            // Serial.println("No event received");
-            key_event_0.key_code = NANO_KEY_IDLE;
-            key_event_0.key_edge = 0;
+        misc_led_poll(); // 指示灯异步熄灭推进（按键反馈灯光已异步化）
+
+        // 每帧排空事件队列（触屏事件队列改造，见 AGENTS.md 第八节）：
+        //  - 触屏 DOWN/UP 边沿事件（key_code==NANO_KEY_IDLE 且 touch_edge!=0）：
+        //    位掩码并入本帧（同帧 DOWN+UP 叠加为 3，亚帧短点按不湮灭），坐标/电平/
+        //    按下点取事件内最新值，继续排空；
+        //  - 按键事件：维持“每帧一个”语义——取出首个按键事件即停止排空，其余留队列下帧处理。
+        key_event_0.touch_edge = 0;
+        uint8_t frame_touch_edge = 0;
+        {
+            Key_Event ev;
+            int32_t got_key = 0;
+            while (xQueueReceive(event_queue, &ev, 0) == pdTRUE) {
+                if (ev.key_code == NANO_KEY_IDLE && ev.touch_edge != 0) {
+                    frame_touch_edge |= ev.touch_edge;
+                    key_event_0.touch_x = ev.touch_x;
+                    key_event_0.touch_y = ev.touch_y;
+                    key_event_0.is_touching = ev.is_touching;
+                    key_event_0.touch_down_x = ev.touch_down_x;
+                    key_event_0.touch_down_y = ev.touch_down_y;
+                    continue;
+                }
+                key_event_0 = ev; // 按键事件：整体沿用（其触屏字段亦为生产端最新值）
+                got_key = 1;
+                break;
+            }
+            if (!got_key) {
+                key_event_0.key_code = NANO_KEY_IDLE;
+                key_event_0.key_edge = 0;
+            }
         }
+        key_event_0.touch_edge = frame_touch_edge;
 
         // 触屏电平/坐标取自 Core1 在 get_input_event 中高频锁存的共享快照
         // （与 last_touch_timestamp 同一跨核机制）；业务逻辑统一经 key_event 消费触屏，
-        // 不跨层直读触屏HAL，高频电平样本也不进入事件队列
+        // 不跨层直读触屏HAL；触屏 DOWN/UP 边沿事件已经上方队列排空合入 touch_edge，
+        // 此处仅刷新轨迹电平（touch_edge/touch_down_* 不被覆盖）
         key_event_0.touch_x = global_state->touch_x;
         key_event_0.touch_y = global_state->touch_y;
         key_event_0.is_touching = global_state->is_touching;
 
         if (key_event_0.key_code != NANO_KEY_IDLE) {
-            if (key_event_0.key_edge < 0) {
+            if (key_event_0.key_edge == -1) { // 反馈仅认短按下降沿：-2 长按重复事件流（1kHz）不做反馈
                 // 按键提示-蜂鸣（Core0 队列侧，6000Hz）：OFDM 寻呼机发射/接收、音乐盒播放、声谱图状态下禁用按键音
                 //（避免抢占麦克风 I2S、污染发射信号、抢占扬声器通道干扰音乐；
                 //  声谱图：tone 经 Speaker 争用 I2S 会导致麦克风采集链路中断、声谱图消失）
@@ -98,7 +126,7 @@ void core0_render_task(void *pvParameters) {
                     global_state->STATE != STATE_SPECTROGRAM) {
                     misc_tone(6000, 10);
                 }
-                // 按键提示-灯光（Core0 队列侧：绿色，同步阻塞点亮 100ms）
+                // 按键提示-灯光（Core0 队列侧：绿色，异步点亮，misc_led_poll 到时熄灭）
                 if (global_state->key_feedback_mode & 1) {
                     misc_led_blink(MISC_LED_COLOR_GREEN, KEY_LED_ON_DURATION_MS);
                 }
@@ -224,7 +252,7 @@ void setup() {
     frame_ready_queue = xQueueCreate(1, sizeof(uint8_t));
     // Core1 → Core0: 帧消费确认
     frame_consumed_queue = xQueueCreate(1, sizeof(uint8_t));
-    event_queue = xQueueCreate(2, sizeof(Key_Event));
+    event_queue = xQueueCreate(8, sizeof(Key_Event)); // 触屏边沿事件入队后为触键混合排队留余量（原长度2）
 
 
     // 创建 Core0 渲染任务（12KB栈：Animac解释器递归求值需要较大栈空间）
@@ -247,25 +275,16 @@ void setup() {
 void loop() {
     M5.update();
 
+    misc_led_poll(); // 指示灯异步熄灭推进（按键反馈灯光已异步化）
+
     // 物理时间戳
     global_state->timestamp = get_timestamp_in_ms();
 
     // 获取输入事件（按键 + 触屏）
+    // NOTE 按键反馈（misc_led_blink 同步阻塞 ~10ms）已移至本循环末尾、事件入队之后：
+    // 若先反馈再入队，阻塞期间触屏电平快照已翻转而边沿事件滞留未发，
+    // Core0 会在窗口内看到“电平0+无边沿”的中间态（2026-08 电子书短按丢失故障之根因）
     get_input_event(&key_event_1, global_state);
-    if (key_event_1.key_code != NANO_KEY_IDLE && key_event_1.key_edge < 0) {
-        // 按键提示-蜂鸣（Core1 即时侧，4000Hz）：OFDM 寻呼机发射/接收、音乐盒播放、声谱图状态下禁用按键音
-        if ((global_state->key_feedback_mode & 2) &&
-            global_state->STATE != STATE_OFDM_TXING && global_state->STATE != STATE_OFDM_RX &&
-            global_state->STATE != STATE_MUSICBOX_PLAYING &&
-            global_state->STATE != STATE_SPECTROGRAM) {
-            misc_tone(4000, 10);
-        }
-        // 按键提示-灯光（Core1 即时侧：蓝色，同步阻塞点亮 100ms；Core0 队列侧为绿色）：
-        // 无 I2S 争用问题，所有状态下均生效
-        if (global_state->key_feedback_mode & 1) {
-            misc_led_blink(MISC_LED_COLOR_BLUE, KEY_LED_ON_DURATION_MS);
-        }
-    }
 
 /*
     if (global_state->STATE == STATE_SPLASH_SCREEN && key_event_1.key_code == KEYCODE_NUM_0 && key_event_1.key_edge < 0) {
@@ -297,6 +316,22 @@ void loop() {
         //    总能取到最新的重复事件，重复节奏自然对齐 Core0 帧率（与 Linux 单循环端一致）。
         // 触屏电平不走队列——由 get_input_event 高频锁存到 Global_State 共享快照
         // （touch_x/touch_y/is_touching），Core0 每帧直接取用覆盖到 key_event_0。
+        // 触屏 DOWN/UP 边沿事件（触屏事件队列改造，见 AGENTS.md 第八节）：
+        // 可靠投递（同短按 -1 策略：1ms 超时+告警，一次性事件不可丢）。
+        // 键码字段置 NANO_KEY_IDLE 以符合“触屏事件=key_code IDLE 且 touch_edge 非0”的身份约定；
+        // 移动轨迹不入队，仍走共享快照（见 get_input_event 注释）。
+        // NOTE 必须先于按键事件投递：同一次松手会同时产生触屏 UP 与宫格软按键下降沿，
+        // 若按键先入队，Core0 会先消费到滞后的软按键（如热点位置被映射为 D 键误提交），
+        // 触屏 UP 后到时热点已无法拦下它；先投触屏事件可保证同帧内热点判定先于按键处理。
+        if (key_event_1.touch_edge != 0) {
+            Key_Event touch_ev = key_event_1;
+            touch_ev.key_code = NANO_KEY_IDLE;
+            touch_ev.key_edge = 0;
+            if (xQueueSend(event_queue, &touch_ev, pdMS_TO_TICKS(1)) != pdTRUE) {
+                Serial.println("WARNING: event_queue touch event send timeout!");
+            }
+        }
+
         if (key_event_1.key_code != NANO_KEY_IDLE && key_event_1.key_edge < 0) {
             int32_t is_reliable = (key_event_1.key_edge == -1);
             // Serial.println("Send");
@@ -321,6 +356,23 @@ void loop() {
 
     // 更新上一轮循环的物理时间戳
     global_state->timestamp_last = global_state->timestamp;
+
+    // 按键提示反馈（Core1 即时侧）：置于事件入队之后，避免阻塞延迟事件投递（见上方 NOTE）
+    // 反馈仅认短按下降沿（-1）：-2 长按重复事件流（1kHz）不做反馈——高频并发访问
+    // LED 驱动（非跨核线程安全）曾致双核死锁卡死（2026-08 实测）
+    if (key_event_1.key_code != NANO_KEY_IDLE && key_event_1.key_edge == -1) {
+        // 蜂鸣（4000Hz）：OFDM 寻呼机发射/接收、音乐盒播放、声谱图状态下禁用按键音
+        if ((global_state->key_feedback_mode & 2) &&
+            global_state->STATE != STATE_OFDM_TXING && global_state->STATE != STATE_OFDM_RX &&
+            global_state->STATE != STATE_MUSICBOX_PLAYING &&
+            global_state->STATE != STATE_SPECTROGRAM) {
+            misc_tone(4000, 10);
+        }
+        // 灯光（蓝色，异步点亮，misc_led_poll 到时熄灭；Core0 队列侧为绿色）：无 I2S 争用问题，所有状态下均生效
+        if (global_state->key_feedback_mode & 1) {
+            misc_led_blink(MISC_LED_COLOR_BLUE, KEY_LED_ON_DURATION_MS);
+        }
+    }
 
     vTaskDelay(1);
 }

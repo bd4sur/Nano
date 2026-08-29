@@ -153,7 +153,13 @@ static uint32_t s_animac_prev_ui_font = 0; // 进入 STATE_ANIMAC_* 之前的 ui
 // 触摸既产生触点流又产生软按键事件，ESP32 上两者经共享快照/事件队列两条通道到达渲染核，
 // 时刻不同步，滞后的软按键事件会在菜单动作切换状态后泄漏给下一个状态造成误触发。
 // （词典候选菜单 STATE_DICT_QUERY 不在此列：该状态软键盘常驻可见，宫格映射已被软键盘
-//  路径禁用，且候选菜单依赖软键盘方向键导航。）
+//  路径禁用，且候选菜单依赖软键盘方向键导航。黄金矿工 STATE_GOLDMINER 非菜单控件，
+//  但同样直接消费触屏流——返回虚拟按钮/点击放钩，故一并抑制。同理：电子书阅读
+//  STATE_EBOOK_READING、本机自述 STATE_README、LLM 结果 STATE_LLM_AFTER_INFER 均经
+//  文本控件手势机/自有拖动直接消费触屏流，抑制后拖动不再产生宫格软按键——否则长按
+//  拖动的 -2 重复事件流会占满队列、触屏 DOWN/UP 可靠投递超时丢失，表现为拖动卡顿、
+//  按键提示灯在拖动时被宫格 -1 事件点亮。OFDM 接收/环回等以宫格软按键为主要触屏
+//  交互的状态不在此列。）
 static int32_t ui_app_state_is_menu(int32_t state) {
     switch (state) {
         case STATE_MODEL_MENU:
@@ -161,6 +167,10 @@ static int32_t ui_app_state_is_menu(int32_t state) {
         case STATE_EBOOK:
         case STATE_OFDM_MENU:
         case STATE_MUSICBOX_MENU:
+        case STATE_GOLDMINER: // 黄金矿工同样直接消费触屏流（返回虚拟按钮/点击放钩），抑制宫格软按键
+        case STATE_EBOOK_READING:  // 电子书阅读：触屏拖动滚动/页脚按钮/返回热点直接消费触屏流
+        case STATE_README:         // 本机自述：文本框拖动滚动+返回热点直接消费触屏流
+        case STATE_LLM_AFTER_INFER: // LLM 结果：文本框拖动滚动+返回热点直接消费触屏流
             return 1;
         default:
             return 0;
@@ -201,7 +211,52 @@ static uint8_t ui_app_map_touch_to_grid16_key(int32_t x, int32_t y) {
     }
 }
 
+// ===============================================================================
+// 输入事件处理：背景、现状与 AI 必读原则
+//
+// 【历史背景】（项目维护者原话）
+// “项目最开始只有硬按键，并设计了键码机制，几乎所有功能都是基于硬按键设计的。
+//  后来项目开始支持触屏，为了平滑过渡，增加了将触屏事件映射为按键键码的机制，
+//  也就是软按键机制，通过一个标记进行区分软按键和硬按键。目前正在对存量功能
+//  进行触屏化改造，这就造成了触屏事件与软按键的混淆，不得不引入
+//  ui_app_state_is_menu 作为临时修补方案。”
+//
+// 【现状：一次触摸的两条到达通道】
+// 一次触屏点击会同时经两条通道到达消费者，且时刻不同步：
+//   1) 触屏电平快照：key_event->touch_x / touch_y / is_touching，经跨核共享
+//      内存传递，快，逐帧可见；
+//   2) 宫格软按键事件：触屏按 4x4 宫格映射为 NANO_KEY_* 键码（或软键盘直接键码），
+//      经 Core1→Core0 事件队列传递，慢，其下降沿可能在状态已切换后才到达，
+//      从而“泄漏”到下一状态造成误触发（黄金矿工返回按钮曾踩此坑）。
+// 软硬来源经 Key_Event.is_soft_key 打标区分：1-触屏派生软按键（宫格映射/软键盘），
+// 0-实体键盘；仅触屏设备（M5Core2/S3，NANO_HAS_HW_KEYBOARD==0）上该标记恒为 1。
+//
+// 【按键/触屏事件处理原则】（触屏化改造过渡期，所有功能开发与修改必须遵守）
+//   1. 存量功能默认仍按硬按键语义工作。仅应响应硬按键的功能，必须显式过滤
+//      key_event->is_soft_key == 0（范式：ui_goldminer_event_handler），
+//      否则同一次触摸会被“触屏流 + 软按键”重复响应。
+//   2. 需要直接消费触屏的功能状态（虚拟按钮/点按/拖动等）：点按边沿认
+//      key_event->touch_edge（TOUCH_EDGE_DOWN/UP，生产端高频检测+队列可靠投递，
+//      亚帧点按不湮灭），按下点坐标取 touch_down_x/y（范式：ui_goldminer.c、
+//      ui_calendar.c、ui.c 菜单控件）；拖动轨迹逐帧读 key_event->touch_x/touch_y
+//      快照。一律不得跨层直读 hal_touch，也不再需要模块自持 prev 电平做沿检测。
+//   3. 直接消费触屏流的状态，必须加入 ui_app_state_is_menu 抑制表，使本层不再
+//      为该触摸生成宫格软按键，从根上杜绝队列通道的滞后事件泄漏到下一状态。
+//   4. 会引发状态切换的触屏动作，必须在松手沿（touch_edge & TOUCH_EDGE_UP）
+//      触发；按下沿只允许锁存坐标/状态。如此状态切换发生在手指抬起之后，
+//      下一状态看到的触屏电平为 0，不会将本次触摸序列误当作新的点击
+//      （范式：ui.c 菜单控件、ui_goldminer.c）。
+//   5. ui_app_state_is_menu 是过渡期的临时修补：随着各功能逐个完成触屏化改造、
+//      转为直接消费触屏流，该表随之扩充；存量功能全部完成改造后，软按键
+//      兼容机制预期整体退场。
+// ===============================================================================
 void get_input_event(Key_Event *key_event, Global_State *global_state) {
+    // 触屏边沿检测状态（本函数在 Core1 以 1-2ms 轮询，静态变量天然单生产者）
+    static int32_t s_input_touch_prev = 0;   // 上一轮询的触屏电平
+    static int32_t s_input_touch_down_x = 0; // 本次触摸序列按下点坐标
+    static int32_t s_input_touch_down_y = 0;
+    static int32_t s_input_touch_last_x = 0; // 触摸期间最后有效触点（UP 事件的松开坐标）
+    static int32_t s_input_touch_last_y = 0;
     // 实体按键读取（无实体键盘的触屏设备恒为 NANO_KEY_IDLE）：
     // 部分平台需在本调用内完成输入流解复用（ncurses：drain 鼠标事件并转发触屏HAL缓存），
     // 故须在触屏采样之前调用，保证下方的触屏样本为本帧最新
@@ -223,6 +278,29 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     if (key_event->is_touching) {
         global_state->last_touch_timestamp = global_state->timestamp;
     }
+
+    // 触屏边沿检测（生产端，与按键边沿同一哲学：消费者零负担，见 AGENTS.md 第八节）：
+    // DOWN/UP 边沿填入 touch_edge，经事件队列可靠投递（见 .ino loop 与 core0_render_task）；
+    // 移动轨迹仍走上方共享快照，不入队。DOWN 时锁存按下点坐标；触摸期间持续记录最新
+    // 触点，供 UP 事件携带有效的松开坐标（松开瞬间 touch_read 坐标不保证有效）。
+    key_event->touch_edge = 0;
+    if (key_event->is_touching) {
+        if (!s_input_touch_prev) {
+            key_event->touch_edge = TOUCH_EDGE_DOWN;
+            s_input_touch_down_x = key_event->touch_x;
+            s_input_touch_down_y = key_event->touch_y;
+        }
+        s_input_touch_last_x = key_event->touch_x;
+        s_input_touch_last_y = key_event->touch_y;
+    }
+    else if (s_input_touch_prev) {
+        key_event->touch_edge = TOUCH_EDGE_UP;
+        key_event->touch_x = s_input_touch_last_x; // 松开坐标不保证有效，以最后有效触点代替
+        key_event->touch_y = s_input_touch_last_y;
+    }
+    s_input_touch_prev = key_event->is_touching;
+    key_event->touch_down_x = s_input_touch_down_x;
+    key_event->touch_down_y = s_input_touch_down_y;
 
     // 触屏 → 4x4 宫格虚拟按键（兼容适配，见上方注释）：实体键优先，
     // 无实体键输入时按触点所在宫格映射为虚拟键码。
@@ -914,6 +992,9 @@ static uint32_t s_ui_app_gol_step_count = 0;
 static int32_t s_gol_width = 0;
 static int32_t s_gol_height = 0;
 
+// 每个格子对应的像素块边长（2px×2px 一个格子，计算量降为 1/4）
+#define UI_APP_GOL_CELL_PX (2)
+
 static inline uint8_t ui_app_gol_get_cell(uint8_t *field, int32_t w, int32_t h, int32_t x, int32_t y) {
     int32_t byte_index = (y * w + x) / 8;
     int32_t bit_rem = (y * w + x) % 8;
@@ -992,7 +1073,9 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
             ui_app_gol_set_cell(field_new, s_gol_width, s_gol_height, x, y, new_state);
 
             if (new_state) {
-                gfx_draw_point(global_state->gfx, x, y, 0, 255, 255, 1);
+                // 每格绘制为 2×2 像素块
+                gfx_draw_rectangle(global_state->gfx, (uint32_t)(x * UI_APP_GOL_CELL_PX), (uint32_t)(y * UI_APP_GOL_CELL_PX),
+                    UI_APP_GOL_CELL_PX, UI_APP_GOL_CELL_PX, 0, 255, 255, 1);
                 total_count++;
             }
         }
@@ -2313,7 +2396,9 @@ void ui_app_setting_grid16_draw(Key_Event *key_event, Global_State *global_state
             2, 3, L"按键提示", KEY_FEEDBACK_MODE_STR[kf_mode], cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
     }
 
-    ui_draw_header(key_event, global_state, L"系统设置", 1);
+    // 顶栏：十六宫格设置窗口专用，固定 1 倍字体行高 + 1（与网格布局留白一致；
+    // 非文本显示控件页眉，不随标准页眉 1.5 倍行高变动）
+    ui_draw_header_ex(key_event, global_state, L"系统设置", 1, gfx_font_line_height(global_state->ui_font) + 1);
     ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
 }
 
@@ -2491,26 +2576,29 @@ void ui_app_setting_value_input_draw(Key_Event *key_event, Global_State *global_
         cell_text0_B = 255;
     }
 
-    // 绘制顶栏（前缀）
+    // 绘制顶栏（前缀；页眉带内垂直居中）
+    int32_t header_h = ui_std_header_height(global_state->ui_font);
+    int32_t header_text_y = (header_h - gfx_font_line_height(GFX_FONT_BITMAP_12)) / 2;
+    if (header_text_y < 0) header_text_y = 0;
     switch (value_type) {
         case 0: {
             ui_draw_header(key_event, global_state, L"", 0);
-            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置时间：", 0, 1, 255, 255, 255, 1);
+            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置时间：", 0, header_text_y, 255, 255, 255, 1);
             break;
         }
         case 1: {
             ui_draw_header(key_event, global_state, L"", 0);
-            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置日期：", 0, 1, 255, 255, 255, 1);
+            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置日期：", 0, header_text_y, 255, 255, 255, 1);
             break;
         }
         case 2: {
             ui_draw_header(key_event, global_state, L"", 0);
-            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置经度：", 0, 1, 255, 255, 255, 1);
+            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置经度：", 0, header_text_y, 255, 255, 255, 1);
             break;
         }
         case 3: {
             ui_draw_header(key_event, global_state, L"", 0);
-            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置纬度：", 0, 1, 255, 255, 255, 1);
+            gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, L"设置纬度：", 0, header_text_y, 255, 255, 255, 1);
             break;
         }
         default: return;
@@ -2519,8 +2607,8 @@ void ui_app_setting_value_input_draw(Key_Event *key_event, Global_State *global_
     // 绘制设置值和光标
     int32_t x0 = 12 * 5; // 与顶栏前缀的长度有关
     int32_t x_cur = x0 + cursor_pos * 6;
-    gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, value_text, x0, 1, 0x00, 0xff, 0xff, 1);
-    gfx_draw_rectangle(global_state->gfx, x_cur, 12, 5, 2, 0x00, 0xff, 0xff, 1);
+    gfx_font_draw_text(global_state->gfx, GFX_FONT_BITMAP_12, value_text, x0, header_text_y, 0x00, 0xff, 0xff, 1);
+    gfx_draw_rectangle(global_state->gfx, x_cur, header_text_y + 11, 5, 2, 0x00, 0xff, 0xff, 1);
 
     // 绘制底栏
     ui_draw_footer(key_event, global_state, L"按数字键输入 光标自动右移", 1);
@@ -3051,7 +3139,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         if (global_state->PREV_STATE != global_state->STATE) {
             // 统一为“页眉页脚先入帧缓冲、菜单绘制最后统一刷屏”，避免两阶段断续感
             ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
-            ui_draw_footer_softkeys(key_event, global_state, L"↑", L"", L"↓", L"选择");
             ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -3096,7 +3183,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
             ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
-            ui_draw_footer_softkeys(key_event, global_state, L"↑", L"", L"↓", L"选择");
             ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -3122,7 +3208,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         if (global_state->PREV_STATE != global_state->STATE) {
             // 统一为“页眉页脚先入帧缓冲、菜单绘制最后统一刷屏”，避免两阶段断续感
             ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
-            ui_draw_footer_softkeys(key_event, global_state, L"↑", L"", L"↓", L"选择");
             ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -3593,7 +3678,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         if (global_state->PREV_STATE != global_state->STATE) {
             // 统一为“页眉页脚先入帧缓冲、菜单绘制最后统一刷屏”，避免两阶段断续感
             ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
-            ui_draw_footer_softkeys(key_event, global_state, L"↑", L"", L"↓", L"选择");
             ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -3703,7 +3787,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 从播放态返回时列表保留，仅重绘）
         if (global_state->PREV_STATE != global_state->STATE) {
             ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
-            ui_draw_footer_softkeys(key_event, global_state, L"↑", L"", L"↓", L"选择");
             ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -3743,7 +3826,8 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
-            ui_app_gol_init(key_event, global_state, global_state->gfx->width, global_state->gfx->height);
+            ui_app_gol_init(key_event, global_state,
+                (int32_t)global_state->gfx->width / UI_APP_GOL_CELL_PX, (int32_t)global_state->gfx->height / UI_APP_GOL_CELL_PX);
         }
         global_state->PREV_STATE = global_state->STATE;
 
@@ -3755,7 +3839,8 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         // 按D键刷新
         else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
-            ui_app_gol_init(key_event, global_state, global_state->gfx->width, global_state->gfx->height);
+            ui_app_gol_init(key_event, global_state,
+                (int32_t)global_state->gfx->width / UI_APP_GOL_CELL_PX, (int32_t)global_state->gfx->height / UI_APP_GOL_CELL_PX);
         }
 
         break;
@@ -4171,6 +4256,13 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         else {
             global_state->STATE = ui_widget_input_event_handler(key_event, global_state, global_state->w_input_main, STATE_MAIN_MENU, STATE_ANIMAC_CONSOLE, STATE_ANIMAC_RUNNING);
+        }
+
+        // 控制台光标钳制（触屏点按定位光标引入）：控制台文本由 [历史][提示符][当前输入] 组成，
+        // 光标不得进入提示符之前的历史区，防止编辑/删除破坏历史与提示符
+        if (global_state->w_input_main->cursor_pos < (int32_t)s_animac_console_text_len - 1) {
+            global_state->w_input_main->cursor_pos = (int32_t)s_animac_console_text_len - 1;
+            ui_draw_input_buffer(key_event, global_state, global_state->w_input_main);
         }
 
         // 离开控制台时销毁解释器上下文释放内存（约2MB PSRAM）

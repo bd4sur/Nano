@@ -175,7 +175,18 @@ typedef struct Key_Event {
     uint8_t  key_repeat; // 触发一次长按后，只要不松手，该标记置1，直到物理按键松开后置0。若该标记为1，则在按住时触发连续重复动作。
     uint8_t  is_softkbd; // 本事件是否来自触屏软键盘：1-是（键码为直接键码，不再经过九键输入法），0-否（触屏4x4网格键）
     uint8_t  is_soft_key; // 按键来源：1-触屏派生的软按键（4x4宫格映射或触屏软键盘），0-实体键盘（见 platform.h NANO_HAS_HW_KEYBOARD）。按下时锁存，下降沿事件沿用
+    // 触屏边沿事件（触屏事件队列改造，见 AGENTS.md 第八节）：
+    // 边沿检测在生产端（Core1 get_input_event，1-2ms 轮询）完成，DOWN/UP 经 event_queue
+    // 可靠投递，Core0 每帧排空合并为位掩码——亚帧短点按不再湮灭。
+    // 队列中触屏事件的身份标识：key_code == NANO_KEY_IDLE 且 touch_edge != 0。
+    uint8_t  touch_edge;    // 触屏边沿位掩码（TOUCH_EDGE_DOWN/TOUCH_EDGE_UP，同帧可叠加），无边沿为 0
+    int32_t  touch_down_x;  // 本次触摸序列按下点坐标（触摸期间及 UP 事件时有效）
+    int32_t  touch_down_y;
 } Key_Event;
+
+// 触屏边沿位掩码（Key_Event.touch_edge）
+#define TOUCH_EDGE_DOWN (1) // 按下沿
+#define TOUCH_EDGE_UP   (2) // 松开沿
 
 typedef struct Widget_Textarea_State {
     int32_t state;
@@ -194,6 +205,23 @@ typedef struct Widget_Textarea_State {
     int32_t current_line;
     int32_t is_show_scroll_bar; // 是否显示滚动条：0不显示 1显示
     int32_t is_modified; // 文本内容是否有修改过？默认1。用于控制是否进行typeset_line_breaks排版
+
+    // 像素级连续滚动（见 AGENTS.md 第九节）：
+    // 不变量 scroll_px = current_line * line_height + scroll_sub_offset（行高恒定）。
+    // current_line 保留为对外行粒度接口；整行路径（按键/外部直写）改写 current_line 时须将 sub 归零。
+    int32_t scroll_sub_offset;      // 亚行滚动偏移（px，∈ [0, line_height)）
+    // 触屏交互状态（一次触摸序列的跟踪，与菜单控件同范式；见 ui_widget_textarea_touch_handler）
+    int32_t touch_active;           // 1-正在跟踪一次触摸序列
+    int32_t touch_is_dragging;      // 1-本序列已构成拖动（位移越阈值），松手时不按点按处理
+    int32_t touch_start_x;          // 序列起点坐标（点按判定用）
+    int32_t touch_start_y;
+    int32_t touch_anchor_scroll_px; // 按下时的像素级滚动位置（拖动锚点）
+    int32_t touch_track_scroll;     // 上一采样帧的 scroll_px
+    uint64_t touch_track_ts;        // 上一采样帧的时间戳（ms）
+    float    touch_track_vel;       // 平滑后的拖动速度（px/s）
+    float    fling_velocity;        // 松手惯性速度（px/s；0=无惯性动画）
+    float    fling_scroll_px;       // 惯性动画中的浮点滚动位置
+    uint64_t fling_last_timestamp;  // 上一动画帧的时间戳（ms）
 } Widget_Textarea_State;
 
 typedef struct Widget_Input_State {
@@ -220,6 +248,12 @@ typedef struct Widget_Input_State {
     uint8_t alphabet_current_key;      // 当前选中的字母按键
     // 杂项
     wchar_t *title_text;  // 顶部标题
+    // 触屏交互（见 AGENTS.md 第九节）：
+    int32_t grid16_mode;            // 十六键输入模式：1-触屏点按=宫格软按键（旧行为，供九键打字）；
+                                    // 0-点按=光标定位、滑动=像素滚动（默认）。页脚 [16键] 热点切换
+    uint64_t softkey_swallow_until; // 热点动作后吞掉宫格残留软按键的截止时间戳（ms；范式同 ui_calendar）
+    int32_t drawn_cursor_pos;       // 上次绘制时的光标位置：光标跟随滚动仅在光标变化时触发，
+                                    // 避免触屏手动滚动后被光标跟随拉回（初始 -2 强制首次跟随）
 } Widget_Input_State;
 
 typedef struct Widget_Menu_State {
@@ -261,6 +295,15 @@ typedef struct Widget_Menu_State {
 void ui_draw_header(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center);
 // 指定高度的页眉绘制（标准页眉为字体行高+1；菜单控件页眉为字体行高的若干倍，见 ui_widget_menu_init）
 void ui_draw_header_ex(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center, int32_t header_height);
+// 页眉完整绘制：底色 + 标题 + 可选左/右侧文本（“返回”等标签作为页眉固有部分，随页眉同时机绘制）。
+// 左右侧文本为 12px 抗锯齿、页眉带内垂直居中、页眉文字同色；左侧自 x=0 左对齐，右侧自右缘右对齐
+//（尾随空格可作右边距）；传 NULL 或空串表示该侧不绘制。
+void ui_draw_header_full(Key_Event *key_event, Global_State *global_state, wchar_t *title, int32_t is_center,
+    int32_t header_height, wchar_t *left_text, wchar_t *right_text);
+// 仅按需更新页眉左/右侧文本（不重绘标题；各自区域先按页眉底色回填再绘制，自清洁）。
+// 典型用途：电子书页眉左侧页码的随页更新。
+void ui_draw_header_side_text(Key_Event *key_event, Global_State *global_state, int32_t header_height,
+    wchar_t *left_text, wchar_t *right_text);
 void ui_draw_footer(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center);
 // 软按键提示区页脚：4个字符串依次为十六宫格最底部一行 *、0、#、D 四键的功能提示，
 // 横向与底部4个格子中点对齐，纵向与 ui_draw_footer 一致；NULL或空串表示该键无功能
@@ -286,6 +329,25 @@ int32_t ui_widget_textarea_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts,
     int32_t prev_focus_state, int32_t current_focus_state
 );
+
+// 文本框触屏手势机（像素级连续滚动，与菜单控件同范式；认 touch_edge 边沿事件，电平兜底）：
+//   DOWN 锚定 / 拖动跟手（钳制不回绕）/ UP 启动惯性或判定点按；序列起点须在文本区内才激活。
+// 返回值：0-无触屏活动；1-滚动活动（拖动/惯性进行中，调用方应重绘并消费本帧）；2-点按（松手且未构成拖动，
+//          按下点坐标取 ke->touch_down_x/y，供调用方做命中判定）
+int32_t ui_widget_textarea_touch_handler(Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts);
+
+// 点按命中测试：像素坐标 → 光标槽位 s（0..length，即光标左侧字符数，cursor_pos = s - 1）；
+// 未命中（坐标在文本区外或文本为空）返回 -1。调用前须保证排版（break_pos）为最新。
+int32_t ui_widget_textarea_char_index_at(Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts,
+    int32_t px, int32_t py);
+
+// “返回”软按钮热区左界（页眉最右侧 1/4，与菜单控件约定一致）
+#define UI_BACK_HOTSPOT_X0(gfx_width) ((gfx_width) * 3 / 4)
+
+// 标准页眉（顶栏）高度：1.5 倍字体行高（与菜单控件页眉 ui_widget_menu_init 数值一致）
+static inline int32_t ui_std_header_height(uint32_t font_id) {
+    return gfx_font_line_height(font_id) * 3 / 2;
+}
 
 void ui_widget_input_init(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, wchar_t *title_text);
 void ui_widget_input_refresh(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);

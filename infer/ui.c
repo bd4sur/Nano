@@ -249,9 +249,10 @@ void typeset_line_breaks(Key_Event *key_event, Global_State *global_state, Widge
 //   line_height - 当前字体的行高（同一套字体行高固定，由 gfx_font_line_height 给出）
 void typeset_view_range(Widget_Textarea_State *textarea_state, int32_t line_height) {
     int32_t view_height = textarea_state->height;
-    //   NOTE 考虑到行末以下无间距，因此分子加1以去除末行无间距的影响。
-    //        例如，高度为64的屏幕，使用行高13的字体时，实际可容纳(64+1)/13=5行。
-    int32_t max_view_lines = (view_height + 1) / line_height;
+    // 视口整行数（排版语义，下取整）：光标跟随/翻页/滚动钳制等排版逻辑一律以此为准。
+    // 视口底部的不完整行不属于排版整行数，由本函数末尾的扩展在【绘制端】多覆盖一行
+    //（workaround 位于绘制端而非排版端，见 AGENTS.md 第九节）
+    int32_t max_view_lines = view_height / line_height;
     int32_t _line_num = textarea_state->line_num;
 
     textarea_state->view_lines = max_view_lines;
@@ -290,6 +291,9 @@ void typeset_view_range(Widget_Textarea_State *textarea_state, int32_t line_heig
         textarea_state->view_start_pos = textarea_state->break_pos[start_line];
         textarea_state->view_end_pos = textarea_state->length - 1;
     }
+
+    // 注：视口底部不完整行由 ui_draw_text_block 在【绘制端】多绘制一行处理
+    //（绘制循环不受 view_end_pos 限制，绘制到行顶触及文本区底缘为止），本函数保持纯排版语义
 }
 
 
@@ -297,8 +301,10 @@ void typeset_view_range(Widget_Textarea_State *textarea_state, int32_t line_heig
 // 折行与绘制均按逐字符实际宽度处理（gfx_font_char_advance / gfx_font_draw_char，
 // 二者对缺字的回退策略一致）；基线对齐由字体接口内部完成。
 void ui_draw_text_block(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state, uint32_t font_id) {
+    // 像素级连续滚动：首行按亚行偏移上移，超出文本区部分经裁剪隐藏
     int x_pos = textarea_state->x;
-    int y_pos = textarea_state->y;
+    int y_pos = textarea_state->y - textarea_state->scroll_sub_offset;
+    gfx_set_clip(global_state->gfx, textarea_state->x, textarea_state->y, textarea_state->width, textarea_state->height);
 
     // 行高：由字体决定（同一套字体行高固定）
     int32_t line_height = gfx_font_line_height(font_id);
@@ -315,7 +321,11 @@ void ui_draw_text_block(Key_Event *key_event, Global_State *global_state, Widget
         current_r = 255; current_g = 255; current_b = 255;
     }
 
-    for (int i = textarea_state->view_start_pos; i <= textarea_state->view_end_pos; i++) {
+    // 绘制端“多绘制一行”：循环不受排版窗口下界（view_end_pos）限制，绘制到文本末尾
+    // 或行顶触及文本区底缘为止——视口底部永远有一行被截断显示（哪怕只剩 1px 可见），
+    // 排版语义（max_view_lines/view_lines）不受此影响
+    for (int i = textarea_state->view_start_pos; i <= textarea_state->length - 1; i++) {
+        if (y_pos >= textarea_state->y + textarea_state->height) break; // 后续行已完全在裁剪区外
         // 首先检查这一位是不是格式控制标签的字符
         if (textarea_state->style[i] & 0x80000000) {
             continue;
@@ -341,6 +351,7 @@ void ui_draw_text_block(Key_Event *key_event, Global_State *global_state, Widget
         }
         x_pos += gfx_font_draw_char(global_state->gfx, font_id, current_char, x_pos, y_pos, current_r, current_g, current_b, 1);
     }
+    gfx_reset_clip(global_state->gfx); // 恢复整屏裁剪，避免泄漏到后续帧的其它绘制
 }
 
 // 绘制滚动条
@@ -414,37 +425,51 @@ void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_
 
 
 void ui_draw_header(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center) {
-    // 标准页眉：高度跟随当前字体行高（行高 + 1px 边距）
-    ui_draw_header_ex(key_event, global_state, text, is_center, gfx_font_line_height(global_state->ui_font) + 1);
+    // 标准页眉：高度为 1.5 倍字体行高（与菜单控件一致）；文本在页眉带内垂直居中
+    ui_draw_header_ex(key_event, global_state, text, is_center, ui_std_header_height(global_state->ui_font));
+}
+
+// 计算渐变色：起止两点色彩沿行的线性内插（内插数量 = 渐变区行数，
+// 首行恰为起始色、末行恰为终止色；行号越界钳制，单行退化为起始色）
+static void ui_gradient_row_color(int32_t row, int32_t rows,
+    uint8_t top_R, uint8_t top_G, uint8_t top_B,
+    uint8_t bottom_R, uint8_t bottom_G, uint8_t bottom_B,
+    uint8_t *out_R, uint8_t *out_G, uint8_t *out_B
+) {
+    if (rows < 2) rows = 2; // 防除零
+    if (row < 0) row = 0;
+    if (row > rows - 1) row = rows - 1;
+    *out_R = (uint8_t)((int32_t)top_R + ((int32_t)bottom_R - (int32_t)top_R) * row / (rows - 1));
+    *out_G = (uint8_t)((int32_t)top_G + ((int32_t)bottom_G - (int32_t)top_G) * row / (rows - 1));
+    *out_B = (uint8_t)((int32_t)top_B + ((int32_t)bottom_B - (int32_t)top_B) * row / (rows - 1));
+}
+
+// 页眉底色填充（[x0, x1) × [0, header_height)）：亮色为计算渐变（上 102,204,255 → 下 17,85,238）、
+// 暗色为纯色（15,16,17）。供 ui_draw_header_ex 与各处页眉标签的自清洁重绘复用。
+static void ui_header_bg_fill(Global_State *global_state, int32_t x0, int32_t x1, int32_t header_height) {
+    for (int32_t y = 0; y < header_height; y++) {
+        uint8_t row_R, row_G, row_B;
+        if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+            ui_gradient_row_color(y, header_height, 102, 204, 255, 17, 85, 238, &row_R, &row_G, &row_B);
+        }
+        else {
+            row_R = 15; row_G = 16; row_B = 17;
+        }
+        gfx_draw_line(global_state->gfx, (uint32_t)x0, (uint32_t)y, (uint32_t)(x1 - 1), (uint32_t)y, row_R, row_G, row_B, 1);
+    }
 }
 
 void ui_draw_header_ex(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center, int32_t header_height) {
     uint32_t font_id = global_state->ui_font;
     int32_t line_height = gfx_font_line_height(font_id);
-    // 浅色模式页眉的渐变蓝色表（每3个字节为一行的RGB），共24级，支持页眉高度最高24px。
-    //   前14级为原有配色：R/G通道步进量呈 ease-out 衰减（R约16→4、G约16→6，B收敛至255）。
-    //   后10级按同一衰减趋势外插（R的Δ: 4,3,3,2,2,2,1,1,1,1；G的Δ: 6,5,5,4,4,3,3,2,2,2；B保持255封顶），
-    //   使渐变压轴到浅蓝 (122,240,255)，更大页眉高度也能保持平滑无跳变。
-    #define UI_HEADER_GRADIENT_STEPS (24)
-    const uint8_t header_bgcolor[UI_HEADER_GRADIENT_STEPS * 3] = {
-        17,85,238, 33,101,239, 44,114,241, 53,126,242, 60,137,243, 66,146,245, 72,155,246,
-        77,163,247, 82,171,249, 86,178,250, 91,185,251, 95,192,252, 98,198,254, 102,204,255,
-        // ---- 以下为按 ease-out 趋势外插的扩展级 ----
-        106,210,255, 109,215,255, 112,220,255, 114,224,255, 116,228,255,
-        118,231,255, 119,234,255, 120,236,255, 121,238,255, 122,240,255
-    };
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-        for (int i = 0; i < header_height; i++) {
-            // 页眉高度超过渐变表级数时，钳制到末级颜色（最浅的蓝色）
-            int32_t step = (i < UI_HEADER_GRADIENT_STEPS) ? i : (UI_HEADER_GRADIENT_STEPS - 1);
-            gfx_draw_line(global_state->gfx, 0, i, global_state->gfx->width - 1, i, header_bgcolor[step*3+0], header_bgcolor[step*3+1], header_bgcolor[step*3+2], 1);
-        }
+        ui_header_bg_fill(global_state, 0, (int32_t)global_state->gfx->width, header_height);
         S_UI_COLOR_HEADER_TEXT[0] = 255;
         S_UI_COLOR_HEADER_TEXT[1] = 255;
         S_UI_COLOR_HEADER_TEXT[2] = 255;
     }
     else if (global_state->ui_color_style == UI_COLOR_DARK) {
-        gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, header_height, 15, 16, 17, 1);
+        ui_header_bg_fill(global_state, 0, (int32_t)global_state->gfx->width, header_height);
         S_UI_COLOR_HEADER_TEXT[0] = 188;
         S_UI_COLOR_HEADER_TEXT[1] = 188;
         S_UI_COLOR_HEADER_TEXT[2] = 188;
@@ -534,13 +559,14 @@ void ui_draw_footer_softkeys(
 void ui_widget_textarea_init(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state,
     uint32_t max_len
 ) {
-    // 文本区位于页眉与页脚之间，页眉/页脚高度跟随当前字体行高（行高 + 1px 边距）
-    int32_t header_height = gfx_font_line_height(global_state->ui_font) + 1;
+    // 文本区位于页眉与页脚之间：页眉高度为 1.5 倍字体行高（与菜单控件一致），页脚为行高 + 1px
+    int32_t line_height = gfx_font_line_height(global_state->ui_font);
+    int32_t header_height = ui_std_header_height(global_state->ui_font);
     textarea_state->state = 0;
     textarea_state->x = 0;
     textarea_state->y = header_height;
     textarea_state->width = global_state->gfx->width;
-    textarea_state->height = global_state->gfx->height - ui_softkbd_height() - header_height * 2; // 减去header和footer，并为触屏软键盘让出空间
+    textarea_state->height = global_state->gfx->height - ui_softkbd_height() - header_height - (line_height + 1); // 减去header和footer，并为触屏软键盘让出空间
     textarea_state->length = 0;
     textarea_state->line_num = 0;
     textarea_state->view_lines = 0;
@@ -549,6 +575,19 @@ void ui_widget_textarea_init(Key_Event *key_event, Global_State *global_state, W
     textarea_state->current_line = 0;
     textarea_state->is_show_scroll_bar = 1;
     textarea_state->is_modified = 1;
+    // 像素级连续滚动与触屏交互状态（见 AGENTS.md 第九节）
+    textarea_state->scroll_sub_offset = 0;
+    textarea_state->touch_active = 0;
+    textarea_state->touch_is_dragging = 0;
+    textarea_state->touch_start_x = 0;
+    textarea_state->touch_start_y = 0;
+    textarea_state->touch_anchor_scroll_px = 0;
+    textarea_state->touch_track_scroll = 0;
+    textarea_state->touch_track_ts = 0;
+    textarea_state->touch_track_vel = 0.0f;
+    textarea_state->fling_velocity = 0.0f;
+    textarea_state->fling_scroll_px = 0.0f;
+    textarea_state->fling_last_timestamp = 0;
     // 重新init时先释放旧缓冲区，避免覆盖式分配造成泄漏（初次init时为NULL，free(NULL)安全）
     if (textarea_state->text)      free(textarea_state->text);
     if (textarea_state->style)     free(textarea_state->style);
@@ -562,6 +601,7 @@ void ui_widget_textarea_set(Key_Event *key_event, Global_State *global_state, Wi
     wchar_t *text, int32_t current_line, int32_t is_show_scroll_bar) {
     textarea_state->is_modified = 1;
     textarea_state->current_line = current_line;
+    textarea_state->scroll_sub_offset = 0; // 整行路径：吸附回整行（像素滚动不变量，见 AGENTS.md 第九节）
     textarea_state->is_show_scroll_bar = is_show_scroll_bar;
     // text缓冲区容量为 UI_STR_BUF_MAX_LENGTH 个 wchar_t（含结尾 L'\0'），截断拷贝防堆溢出
     wcsncpy(textarea_state->text, text, UI_STR_BUF_MAX_LENGTH - 1);
@@ -569,6 +609,10 @@ void ui_widget_textarea_set(Key_Event *key_event, Global_State *global_state, Wi
 }
 
 void ui_widget_textarea_draw(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state) {
+    // “返回”标签的生命周期与页眉一致：仅在内容重排（is_modified，即宿主整体重绘、页眉同步重绘）
+    // 时随页眉绘制一次；滚动重绘（事件处理器以 is_modified==0 包裹的本函数调用）不触碰页眉带，
+    // 避免抗锯齿文字边缘被反复混合而模糊（页眉标签现作为页眉右侧文本经 ui_draw_header_full 固有绘制）
+    int32_t redraw_chrome = textarea_state->is_modified;
     if (textarea_state->is_modified) {
         typeset_line_breaks(key_event, global_state, textarea_state);
     }
@@ -590,10 +634,19 @@ void ui_widget_textarea_draw(Key_Event *key_event, Global_State *global_state, W
     ui_draw_text_block(key_event, global_state, textarea_state, global_state->ui_font);
 
     if (textarea_state->is_show_scroll_bar) {
+        // 像素单位（滚动位置/内容高度/可视高度，随触点平滑移动；与菜单控件同一用法）
+        int32_t line_height = gfx_font_line_height(global_state->ui_font);
         ui_draw_scroll_bar(
             key_event, global_state,
-            textarea_state->current_line, textarea_state->line_num, textarea_state->view_lines,
+            textarea_state->current_line * line_height + textarea_state->scroll_sub_offset,
+            textarea_state->line_num * line_height, textarea_state->height,
             textarea_state->x, textarea_state->y, textarea_state->width, textarea_state->height);
+    }
+
+    // “返回”软按钮：仅随内容重排（页眉重绘）时绘制，滚动重绘不重复混合（见函数头注释）。
+    // 即页眉右侧文本 "返回 "（页眉固有侧文本机制，见 ui_draw_header_side_text）
+    if (redraw_chrome) {
+        ui_draw_header_side_text(key_event, global_state, ui_std_header_height(global_state->ui_font), NULL, L"返回 ");
     }
 
     if (global_state->is_full_refresh) {
@@ -602,10 +655,208 @@ void ui_widget_textarea_draw(Key_Event *key_event, Global_State *global_state, W
 }
 
 // 通用的文本框卷行事件处理
+
+// 页眉左/右侧文本：12px 抗锯齿、页眉带内垂直居中、页眉文字同色；
+// 各自区域先按页眉底色回填（自清洁，可独立按需更新），NULL 或空串表示该侧不绘制
+void ui_draw_header_side_text(Key_Event *key_event, Global_State *global_state, int32_t header_height,
+    wchar_t *left_text, wchar_t *right_text
+) {
+    (void)key_event;
+    const uint32_t font_id = GFX_FONT_ALPHA_12;
+    int32_t label_y = (header_height - gfx_font_line_height(font_id)) / 2;
+    if (label_y < 0) label_y = 0;
+    int32_t w = (int32_t)global_state->gfx->width;
+    if (left_text != NULL && left_text[0] != L'\0') {
+        int32_t lw = gfx_font_measure_text(font_id, left_text);
+        ui_header_bg_fill(global_state, 0, lw, header_height);
+        gfx_font_draw_text(global_state->gfx, font_id, left_text, 0, label_y,
+            S_UI_COLOR_HEADER_TEXT[0], S_UI_COLOR_HEADER_TEXT[1], S_UI_COLOR_HEADER_TEXT[2], 1);
+    }
+    if (right_text != NULL && right_text[0] != L'\0') {
+        int32_t lw = gfx_font_measure_text(font_id, right_text);
+        ui_header_bg_fill(global_state, w - lw, w, header_height);
+        gfx_font_draw_text(global_state->gfx, font_id, right_text, w - lw, label_y,
+            S_UI_COLOR_HEADER_TEXT[0], S_UI_COLOR_HEADER_TEXT[1], S_UI_COLOR_HEADER_TEXT[2], 1);
+    }
+}
+
+// 页眉完整绘制：底色 + 标题 + 可选左/右侧文本（标签作为页眉固有部分，与页眉同时机绘制）
+void ui_draw_header_full(Key_Event *key_event, Global_State *global_state, wchar_t *title, int32_t is_center,
+    int32_t header_height, wchar_t *left_text, wchar_t *right_text
+) {
+    ui_draw_header_ex(key_event, global_state, title, is_center, header_height);
+    ui_draw_header_side_text(key_event, global_state, header_height, left_text, right_text);
+}
+
+// 文本框触屏手势机（像素级连续滚动；认 touch_edge 边沿事件，电平兜底；与菜单控件同范式）
+int32_t ui_widget_textarea_touch_handler(Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts) {
+    int32_t line_height = gfx_font_line_height(gs->ui_font);
+    int32_t max_scroll_px = ts->line_num * line_height - ts->height;
+    if (max_scroll_px < 0) max_scroll_px = 0;
+
+    // 松手惯性滚动（fling）：动画激活期间每帧推进一次；任意新触摸或按键边沿立即终止
+    if (ts->fling_velocity != 0.0f) {
+        if (ke->is_touching || ke->touch_edge != 0 || ke->key_edge != 0) {
+            ts->fling_velocity = 0.0f;
+        }
+        else {
+            uint64_t now = get_timestamp_in_ms();
+            float dt_s = (float)(now - ts->fling_last_timestamp) / 1000.0f;
+            ts->fling_last_timestamp = now;
+            if (dt_s > 0.05f) dt_s = 0.05f;
+            if (dt_s > 0.0f) {
+                float scroll = ts->fling_scroll_px + ts->fling_velocity * dt_s;
+                float decel = 2000.0f * dt_s; // 线性减速度 ~2000px/s²（与菜单一致）
+                if (ts->fling_velocity > 0.0f) {
+                    ts->fling_velocity -= decel;
+                    if (ts->fling_velocity < 0.0f) ts->fling_velocity = 0.0f;
+                }
+                else {
+                    ts->fling_velocity += decel;
+                    if (ts->fling_velocity > 0.0f) ts->fling_velocity = 0.0f;
+                }
+                if (scroll <= 0.0f) { scroll = 0.0f; ts->fling_velocity = 0.0f; }
+                if (scroll >= (float)max_scroll_px) { scroll = (float)max_scroll_px; ts->fling_velocity = 0.0f; }
+                ts->fling_scroll_px = scroll;
+                int32_t new_scroll_px = (int32_t)scroll;
+                int32_t new_line = new_scroll_px / line_height;
+                int32_t new_sub = new_scroll_px % line_height;
+                if (new_line != ts->current_line || new_sub != ts->scroll_sub_offset) {
+                    ts->current_line = new_line;
+                    ts->scroll_sub_offset = new_sub;
+                    return 1;
+                }
+            }
+        }
+    }
+
+    // 触摸序列开始：DOWN 边沿（可靠事件）或电平兜底；起点须在文本区内才激活
+    if (((ke->touch_edge & TOUCH_EDGE_DOWN) || ke->is_touching) && !ts->touch_active) {
+        int32_t sx = (ke->touch_edge & TOUCH_EDGE_DOWN) ? ke->touch_down_x : ke->touch_x;
+        int32_t sy = (ke->touch_edge & TOUCH_EDGE_DOWN) ? ke->touch_down_y : ke->touch_y;
+        if (sx < ts->x || sx >= ts->x + ts->width || sy < ts->y || sy >= ts->y + ts->height) {
+            return 0; // 起点在文本区外：不接管，交由调用方（如热点按钮）处理
+        }
+        ts->touch_active = 1;
+        ts->touch_is_dragging = 0;
+        ts->touch_start_x = sx;
+        ts->touch_start_y = sy;
+        ts->touch_anchor_scroll_px = ts->current_line * line_height + ts->scroll_sub_offset;
+        ts->touch_track_scroll = ts->touch_anchor_scroll_px;
+        ts->touch_track_ts = get_timestamp_in_ms();
+        ts->touch_track_vel = 0.0f;
+        return 1;
+    }
+    // 拖动跟踪（电平驱动，逐帧最新坐标）：1:1 跟手，钳制不回绕
+    else if (ke->is_touching && ts->touch_active) {
+        int32_t dy = ke->touch_y - ts->touch_start_y; // >0：手指下滑
+        if (!ts->touch_is_dragging && (dy > line_height / 2 || dy < -(line_height / 2))) {
+            ts->touch_is_dragging = 1;
+        }
+        if (ts->touch_is_dragging && max_scroll_px > 0) {
+            int32_t new_scroll_px = ts->touch_anchor_scroll_px - dy;
+            if (new_scroll_px < 0) new_scroll_px = 0;
+            if (new_scroll_px > max_scroll_px) new_scroll_px = max_scroll_px;
+            int32_t new_line = new_scroll_px / line_height;
+            int32_t new_sub = new_scroll_px % line_height;
+            int32_t changed = (new_line != ts->current_line || new_sub != ts->scroll_sub_offset);
+            ts->current_line = new_line;
+            ts->scroll_sub_offset = new_sub;
+            // 拖动速度采样：指数平滑（0.6/0.4），供松手惯性初速度估算
+            uint64_t now = get_timestamp_in_ms();
+            uint32_t dt_ms = (uint32_t)(now - ts->touch_track_ts);
+            if (dt_ms > 0) {
+                float v_inst = (float)(new_scroll_px - ts->touch_track_scroll) * 1000.0f / (float)dt_ms;
+                ts->touch_track_vel = ts->touch_track_vel * 0.6f + v_inst * 0.4f;
+                ts->touch_track_scroll = new_scroll_px;
+                ts->touch_track_ts = now;
+            }
+            if (changed) return 1;
+        }
+        return 1; // 序列进行中（未构成拖动也视为活动，防止下游误消费同一次触摸）
+    }
+    // 触摸序列结束：UP 边沿（可靠事件）或电平兜底；构成拖动则启动惯性，否则上报点按
+    else if (((ke->touch_edge & TOUCH_EDGE_UP) || !ke->is_touching) && ts->touch_active) {
+        ts->touch_active = 0;
+        if (ts->touch_is_dragging) {
+            // 松手前手指已停顿（>100ms 无新采样）则速度作废，不启动惯性
+            uint64_t now = get_timestamp_in_ms();
+            float v0 = (now - ts->touch_track_ts <= 100) ? ts->touch_track_vel : 0.0f;
+            if (v0 > 4000.0f) v0 = 4000.0f;    // 触点抖动限速
+            if (v0 < -4000.0f) v0 = -4000.0f;
+            if (v0 > 50.0f || v0 < -50.0f) {   // 低于阈值（50px/s）不动画
+                ts->fling_velocity = v0;
+                ts->fling_scroll_px = (float)(ts->current_line * line_height + ts->scroll_sub_offset);
+                ts->fling_last_timestamp = now;
+            }
+            return 1;
+        }
+        return 2; // 点按
+    }
+    return 0;
+}
+
+// 点按命中测试（实现见 ui.h 声明注释）
+int32_t ui_widget_textarea_char_index_at(Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts,
+    int32_t px, int32_t py
+) {
+    (void)ke;
+    if (px < ts->x || px >= ts->x + ts->width || py < ts->y || py >= ts->y + ts->height) return -1;
+    if (ts->line_num <= 0 || ts->length <= 0) return 0;
+    uint32_t font_id = gs->ui_font;
+    int32_t line_height = gfx_font_line_height(font_id);
+    // 由像素坐标反推行号：scroll_px = current_line*line_height + sub
+    int32_t scroll_px = ts->current_line * line_height + ts->scroll_sub_offset;
+    int32_t line = (py - ts->y + scroll_px) / line_height;
+    if (line < 0) line = 0;
+    if (line >= ts->line_num) line = ts->line_num - 1;
+    int32_t line_start = ts->break_pos[line];
+    int32_t line_end = (line + 1 <= ts->line_num - 1) ? (ts->break_pos[line + 1] - 1) : (ts->length - 1);
+    // 行内逐字符累加实际宽度（与 ui_draw_text_block 的折行/绘制逻辑一致）
+    int32_t x = ts->x;
+    for (int32_t i = line_start; i <= line_end && i < ts->length; i++) {
+        if (ts->style[i] & 0x80000000) continue; // 格式控制标记字符不占位
+        wchar_t ch = ts->text[i];
+        if (ch == L'\0') break;
+        if (ch == L'\n') return i; // 显式换行：槽位在换行符之前
+        int32_t cw = gfx_font_char_advance(font_id, (uint32_t)ch);
+        if (px < x + cw / 2) return i;     // 落在字符左半：光标在该字符左侧 → 槽位 i
+        x += cw;
+        if (px < x) return i + 1;          // 落在字符右半：槽位 i+1
+    }
+    // 行尾之后：槽位为行末（钳制到文本长度）
+    int32_t slot = line_end + 1;
+    if (slot > ts->length) slot = ts->length;
+    return slot;
+}
+
 int32_t ui_widget_textarea_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts,
     int32_t prev_focus_state, int32_t current_focus_state
 ) {
+    // “返回”软按钮：页眉最右侧 1/4 热点（松手沿 + 按下点坐标；页眉带在文本区之外，手势机不会抢占）
+    if ((ke->touch_edge & TOUCH_EDGE_UP)
+        && ke->touch_down_y >= 0 && ke->touch_down_y < ts->y
+        && ke->touch_down_x >= UI_BACK_HOTSPOT_X0((int32_t)gs->gfx->width)) {
+        return prev_focus_state;
+    }
+
+    // 触屏：滑动=像素级连续滚动（含松手惯性）；点按在显示控件无动作（同样消费，防止下游误用）
+    int32_t touch_result = ui_widget_textarea_touch_handler(ke, gs, ts);
+    if (touch_result != 0) {
+        if (touch_result == 1) {
+            ts->is_modified = 0;
+            ui_widget_textarea_draw(ke, gs, ts);
+            ts->is_modified = 1;
+        }
+        return current_focus_state;
+    }
+
+    // 仅响应硬按键事件（软按键——触屏宫格映射/软键盘派生——一律不响应；触屏滚动/返回见上方）
+    if (ke->key_code != NANO_KEY_IDLE && ke->is_soft_key != 0) {
+        return current_focus_state;
+    }
+
     // 短按A键：回到上一个焦点
     if (ke->key_edge == -1 && ke->key_code == NANO_KEY_esc) {
         return prev_focus_state;
@@ -660,13 +911,14 @@ void ui_widget_input_init(
 
     ui_widget_textarea_init(key_event, global_state, ta, UI_STR_BUF_MAX_LENGTH);
 
-    // 文本区位于页眉与页脚之间，页眉/页脚高度跟随当前字体行高
-    int32_t header_height = gfx_font_line_height(global_state->ui_font) + 1;
+    // 文本区位于页眉与页脚之间：页眉高度为 1.5 倍字体行高（与菜单控件一致），页脚为行高 + 1px
+    int32_t line_height = gfx_font_line_height(global_state->ui_font);
+    int32_t header_height = ui_std_header_height(global_state->ui_font);
     ta->state = 0;
     ta->x = 0;
     ta->y = header_height;
     ta->width = global_state->gfx->width;
-    ta->height = global_state->gfx->height - ui_softkbd_height() - header_height * 2; // 减去header和footer NOTE 详见结构体定义处的说明；并为触屏软键盘让出空间
+    ta->height = global_state->gfx->height - ui_softkbd_height() - header_height - (line_height + 1); // 减去header和footer NOTE 详见结构体定义处的说明；并为触屏软键盘让出空间
     ta->length = 0;
     ta->is_show_scroll_bar = 1;
 
@@ -682,6 +934,10 @@ void ui_widget_input_init(
     input_state->alphabet_current_key = 255;
     input_state->alphabet_index = 0;
     input_state->title_text = title_text;
+    // 触屏交互（见 AGENTS.md 第九节）
+    input_state->grid16_mode = 0;
+    input_state->softkey_swallow_until = 0;
+    input_state->drawn_cursor_pos = -2; // 强制首次绘制时光标跟随
 
     // 初始化各个数组
     memset(input_state->candidates, 0, sizeof(input_state->candidates));
@@ -711,8 +967,9 @@ void ui_widget_input_toggle_softkbd(Key_Event *key_event, Global_State *global_s
     ui_ime_hint_mask_set_enabled(!ui_softkbd_is_visible());
     ui_pinyin_ime_reset(); // 键盘显隐切换时，放弃进行中的拼音组字
     // 重新布局：文本区高度扣除软键盘高度（隐藏时 ui_softkbd_height() 为0，布局复原）
-    int32_t header_height = gfx_font_line_height(global_state->ui_font) + 1;
-    global_state->w_input_main->textarea.height = global_state->gfx->height - ui_softkbd_height() - header_height * 2;
+    int32_t line_height = gfx_font_line_height(global_state->ui_font);
+    int32_t header_height = ui_std_header_height(global_state->ui_font);
+    global_state->w_input_main->textarea.height = global_state->gfx->height - ui_softkbd_height() - header_height - (line_height + 1);
     global_state->w_input_main->textarea.is_modified = 1;
     ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
 }
@@ -877,8 +1134,8 @@ static void ui_widget_input_on_leave(Global_State *global_state, Widget_Input_St
         ui_softkbd_hide();
         ui_ime_hint_mask_set_enabled(1);
         ui_pinyin_ime_reset();
-        int32_t header_height = gfx_font_line_height(global_state->ui_font) + 1;
-        input_state->textarea.height = global_state->gfx->height - header_height * 2;
+        int32_t line_height = gfx_font_line_height(global_state->ui_font);
+        input_state->textarea.height = global_state->gfx->height - ui_std_header_height(global_state->ui_font) - (line_height + 1);
         input_state->textarea.is_modified = 1;
     }
 }
@@ -1035,13 +1292,8 @@ int32_t ui_swipe_tracker_displacement(const UI_Swipe_Tracker *tracker, int8_t di
     return 0;
 }
 
-// 软键盘呼出/收起手势的阈值（文本输入控件策略）：松手确认需跨越阈值；
-// 武装方向位移超 UI_INPUT_SWIPE_MASK_PX 即吞掉本次触摸序列的杂散按键
-#define UI_INPUT_SWIPE_CONFIRM_PX (SCREEN_HEIGHT / 4)
-#define UI_INPUT_SWIPE_MASK_PX    (20)
-
-// 软键盘手势的跟踪器（文本输入控件唯一消费者）
-static UI_Swipe_Tracker s_input_swipe_tracker;
+// 软键盘手势的跟踪器已随像素级滚动改造退役（见 AGENTS.md 第九节）：
+// 原“上滑呼出/下滑收起软键盘”手势由页脚热点虚拟按钮替代
 
 int32_t ui_widget_input_event_handler(
     Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state,
@@ -1075,25 +1327,63 @@ int32_t ui_widget_input_event_handler(
         }
     }
 
-    // 触屏软键盘（文本输入控件固有功能）：上滑呼出（隐藏时）/下滑收起（可见时）。
-    // 手势由本控件从 key_event 的触屏流逐帧解释（通用跟踪器 ui_swipe_tracker_*；
-    // 事件层不参与手势语义），武装方向按软键盘显隐决定（隐藏=上滑，可见=下滑）。
-    // 武装方向位移超 UI_INPUT_SWIPE_MASK_PX 即吞掉本次触摸序列产生的杂散按键
-    // （滑动穿越 4x4 宫格/软键盘键产生的假按键；宫格 60px 以上大于该阈值，
-    // 第一个杂散下降沿产生时滑动已被识别，不会泄漏）；非武装方向不吞，
-    // 避免点按时的手指抖动（>20px）被误吞
-    int8_t armed_dir = ui_softkbd_is_visible() ? NANO_TOUCH_GESTURE_SWIPE_DOWN : NANO_TOUCH_GESTURE_SWIPE_UP;
-    int8_t swipe_gesture = ui_swipe_tracker_feed(&s_input_swipe_tracker,
-        key_event->is_touching, key_event->touch_y, UI_INPUT_SWIPE_CONFIRM_PX);
-    int32_t swipe_ongoing =
-        (ui_swipe_tracker_displacement(&s_input_swipe_tracker, armed_dir) > UI_INPUT_SWIPE_MASK_PX);
-    if (swipe_gesture == armed_dir) {
-        ui_widget_input_toggle_softkbd(key_event, global_state);
-    }
-    if (swipe_ongoing || swipe_gesture == armed_dir) {
-        // 吞掉本帧按键事件（对本控件及同帧下游消费者均生效）
-        key_event->key_code = NANO_KEY_IDLE;
-        key_event->key_edge = 0;
+    // 触屏交互（像素级连续滚动改造，见 AGENTS.md 第九节）：
+    //  - 热点虚拟按钮（页脚带左/右 1/4，认松手沿+按下点坐标）：
+    //    [键盘] 呼出/收起软键盘（等价 Ctrl+0）；[16键] 切换十六键输入模式。
+    //    热点动作后 150ms 内吞掉同一次触摸经宫格映射产生的残留软按键（范式同 ui_calendar）。
+    //  - 十六键模式（grid16_mode==1）：触屏点按=宫格软按键（旧行为，供九键打字），不解释滚动/光标；
+    //  - 默认模式：滑动=像素滚动、点按=光标定位（委托 textarea 手势机）；宫格软按键全部丢弃，
+    //    软键盘键码（is_softkbd）与硬按键照常。
+    {
+        // 热点虚拟按钮（页脚带 = 底部 ui_draw_footer 区域，随软键盘显隐上移；
+        // 全键盘拼音组词期间页脚带为拼音候选条，热点停用防误触）
+        if ((key_event->touch_edge & TOUCH_EDGE_UP)
+            && !(ui_softkbd_is_visible() && ui_pinyin_ime_is_composing())) {
+            int32_t footer_height = gfx_font_line_height(global_state->ui_font) + 1;
+            int32_t footer_top = (int32_t)global_state->gfx->height - (int32_t)ui_softkbd_height() - footer_height;
+            int32_t tx = key_event->touch_down_x;
+            int32_t ty = key_event->touch_down_y;
+            if (ty >= footer_top && ty < footer_top + footer_height) {
+                if (tx < (int32_t)global_state->gfx->width / 4) {          // [键盘]
+                    ui_widget_input_toggle_softkbd(key_event, global_state);
+                    input_state->softkey_swallow_until = get_timestamp_in_ms() + 150;
+                    return current_focus_state;
+                }
+                else if (tx >= (int32_t)global_state->gfx->width * 3 / 4) { // [16键]
+                    input_state->grid16_mode = !input_state->grid16_mode;
+                    input_state->softkey_swallow_until = get_timestamp_in_ms() + 150;
+                    ui_draw_input_buffer(key_event, global_state, input_state);
+                    return current_focus_state;
+                }
+            }
+        }
+        // 宫格软按键门控：默认模式全丢（防止点按定位光标时打入杂字）；
+        // 十六键模式下热点动作后的短暂窗口内也丢（吞残留）
+        if (key_event->key_code != NANO_KEY_IDLE && key_event->is_soft_key && !key_event->is_softkbd) {
+            if (!input_state->grid16_mode || get_timestamp_in_ms() < input_state->softkey_swallow_until) {
+                key_event->key_code = NANO_KEY_IDLE;
+                key_event->key_edge = 0;
+            }
+        }
+        // 默认模式：滑动=像素滚动 / 点按=光标定位（委托 textarea 手势机）
+        if (!input_state->grid16_mode) {
+            int32_t touch_result = ui_widget_textarea_touch_handler(key_event, global_state, &input_state->textarea);
+            if (touch_result == 1) {
+                ui_draw_input_buffer(key_event, global_state, input_state);
+                return current_focus_state;
+            }
+            else if (touch_result == 2) {
+                // 点按定位光标（命中辅助返回光标槽位 s，cursor_pos = s - 1）
+                int32_t slot = ui_widget_textarea_char_index_at(key_event, global_state,
+                    &input_state->textarea, key_event->touch_down_x, key_event->touch_down_y);
+                if (slot >= 0) {
+                    input_state->cursor_pos = slot - 1;
+                    input_state->desired_x = -1;
+                    ui_draw_input_buffer(key_event, global_state, input_state);
+                }
+                return current_focus_state;
+            }
+        }
     }
     // 软键盘自身状态变化（粘滞修饰键、按下高亮）时，补画键盘并刷新
     if (ui_softkbd_is_visible() && ui_softkbd_take_dirty()) {
@@ -1584,35 +1874,22 @@ int32_t ui_widget_input_event_handler(
 
 
 
-// 顶栏"返回"标签：12px 抗锯齿字体，靠右对齐（尾随空格作右边距）、在顶栏带内上下居中，
-// 配色跟随页眉文字。同时作为触屏退出热区提示（顶栏最右侧 1/4 点击退出，见事件处理器）。
-// 仅由 ui_widget_menu_refresh 调用——其全部调用点均为状态进入/整体重绘分支，且紧跟
-// ui_draw_header 之后，标签与页眉同生命周期、叠绘在页眉上方；菜单区滚动重绘
+// 顶栏“返回”标签：作为页眉右侧文本经 ui_draw_header_full 固有绘制（见 ui_widget_menu_refresh），
+// 同时作为触屏退出热区提示（顶栏最右侧 1/4 点击退出，见事件处理器）；菜单区滚动重绘
 // （ui_widget_menu_draw）不触碰页眉带，避免抗锯齿边缘被反复混合而模糊。
-static void ui_widget_menu_draw_back_label(Global_State *global_state, Widget_Menu_State *menu_state) {
-    wchar_t *back_label = L"返回 ";
-    int32_t label_width = gfx_font_measure_text(GFX_FONT_ALPHA_12, back_label);
-    int32_t header_height = menu_state->header_height; // 页眉高度（默认 1.5 倍字体行高，见 ui_widget_menu_init）
-    int32_t label_y = (header_height - gfx_font_line_height(GFX_FONT_ALPHA_12)) / 2;
-    if (label_y < 0) label_y = 0;
-    gfx_font_draw_text(global_state->gfx, GFX_FONT_ALPHA_12, back_label,
-        menu_state->x + menu_state->width - label_width, label_y,
-        S_UI_COLOR_HEADER_TEXT[0], S_UI_COLOR_HEADER_TEXT[1], S_UI_COLOR_HEADER_TEXT[2], 1);
-}
 
 void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
-    // 菜单位于页眉与页脚之间。页眉高度与条目行高与所使用字体行高成倍数关系
-    // （文字在页眉/条目内纵向居中）；页脚不变（字体行高 + 1）。
+    // 菜单位于页眉与屏幕底边之间（页脚底栏已取消，菜单有效高度填满原页脚区域）。
+    // 页眉高度与条目行高与所使用字体行高成倍数关系（文字在页眉/条目内纵向居中）。
     // 密集列表界面（如电子词典候选）可在本函数返回后覆写 header_height/item_height
     // 并自行修正 y/height（见 ui_dict.c）。
     int32_t line_height = gfx_font_line_height(global_state->ui_font);
-    int32_t footer_height = line_height + 1;
     menu_state->header_height = line_height * 3 / 2;
     menu_state->x = 0;
     menu_state->y = menu_state->header_height;
     menu_state->zindex = 0;
     menu_state->width = global_state->gfx->width;
-    menu_state->height = global_state->gfx->height - ui_softkbd_height() - menu_state->header_height - footer_height; // 减去header和footer，并为触屏软键盘让出空间
+    menu_state->height = global_state->gfx->height - ui_softkbd_height() - menu_state->header_height; // 减去页眉，并为触屏软键盘让出空间
     menu_state->current_item_index = 0;
     menu_state->first_item_intex = 0;
     // 条目行高布局策略：先以基础行高（字体行高的硬编码倍率）估算每页可容纳的条目数，
@@ -1640,19 +1917,18 @@ void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widge
     menu_state->fling_last_timestamp = 0;
 
     // 注意：此处不再立即绘制。此前末尾调用 ui_widget_menu_draw（内含 gfx_refresh）会导致
-    // 进入菜单状态时先刷出菜单区（页眉/页脚尚未绘制，残留旧画面）、下一拍状态初始化分支
-    // 再补画页眉页脚，形成两阶段断续感。现全部 4 个调用点（model/game/ebook/ofdm 菜单）
-    // 均在随后的状态初始化分支统一“页眉页脚+菜单”画齐后一次刷屏（ui_widget_menu_refresh）。
+    // 进入菜单状态时先刷出菜单区（页眉尚未绘制，残留旧画面）、下一拍状态初始化分支
+    // 再补画页眉，形成两阶段断续感。现全部 4 个调用点（model/game/ebook/ofdm 菜单）
+    // 均在随后的状态初始化分支统一“页眉+菜单”画齐后一次刷屏（ui_widget_menu_refresh）。
     (void)key_event;
 }
 
 void ui_widget_menu_refresh(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state) {
-    // 菜单控件自绘页眉（1.5 倍字体行高，标题居中）并叠绘"返回"标签：本函数的全部调用点
-    // 均为状态进入/整体重绘分支，标签与页眉同生命周期。调用点先画的标准高度页眉会被
-    // 此处完整覆盖（同为置色模式，无残影）；标签仅在此处绘制一次，随后在
-    // ui_widget_menu_draw 的 gfx_refresh 中同帧推屏，不会被滚动重绘反复混合。
-    ui_draw_header_ex(key_event, global_state, (wchar_t *)menu_state->title, 1, menu_state->header_height);
-    ui_widget_menu_draw_back_label(global_state, menu_state);
+    // 菜单控件自绘页眉（若干倍字体行高，标题居中），“返回”标签作为页眉右侧文本固有绘制：
+    // 本函数的全部调用点均为状态进入/整体重绘分支，标签与页眉同生命周期。调用点先画的标准高度
+    // 页眉会被此处完整覆盖（同为置色模式，无残影）；随后在 ui_widget_menu_draw 的 gfx_refresh
+    // 中同帧推屏，不会被滚动重绘反复混合。
+    ui_draw_header_full(key_event, global_state, (wchar_t *)menu_state->title, 1, menu_state->header_height, NULL, L"返回 ");
     ui_widget_menu_draw(key_event, global_state, menu_state); // 内含 gfx_refresh 统一推屏
 }
 
@@ -1744,7 +2020,7 @@ int32_t ui_widget_menu_event_handler(
     // 任意新触摸或按键边沿立即终止动画（随后的触摸/按键逻辑以当前 scroll_px 接管）
     // ========================================================================
     if (ms->fling_velocity != 0.0f) {
-        if (ke->is_touching || ke->key_edge != 0) {
+        if (ke->is_touching || ke->touch_edge != 0 || ke->key_edge != 0) {
             ms->fling_velocity = 0.0f;
         }
         else {
@@ -1784,29 +2060,36 @@ int32_t ui_widget_menu_event_handler(
     }
 
     // ========================================================================
-    // 触屏交互（有触屏的设备：is_touching 电平样本逐帧驱动；无触屏设备恒为 0，
-    // 本块不产生任何行为，菜单仍纯按键操作）
+    // 触屏交互（触屏事件队列改造后：序列开始/结束认 touch_edge 边沿事件——生产端
+    // 高频检测、可靠投递，亚帧短点按不再湮灭；电平条件为投递失败极端情况的兜底。
+    // 拖动跟踪仍由 is_touching 电平逐帧驱动（轨迹走快照最新坐标）。无触屏设备
+    // 恒为 0，本块不产生任何行为，菜单仍纯按键操作）
     //   - 拖动屏幕：列表以像素级精度随手指连续滚动（scroll_px = first_item_intex *
     //     item_height + scroll_sub_offset，1:1 跟手）；
     //   - 点击条目：选中并执行（同 Enter）；
     //   - 点击顶栏最右侧 1/4：退出菜单（同 Esc）。
-    // 点击的边沿判定依据触屏电平本身（is_touching 1→0），与按键事件的边沿无关。
     // 菜单激活期间输入层不再生成宫格软按键（ui_app.c get_input_event 按状态抑制），
     // 触屏流是唯一输入通道，松手帧触发动作不会遗留按键事件泄漏到下一状态。
     // ========================================================================
-    if (ke->is_touching) {
-        if (!ms->touch_active) {
-            // 触摸序列开始：锚定像素级滚动位置与起点坐标，复位拖动速度采样
-            ms->touch_active = 1;
-            ms->touch_is_dragging = 0;
-            ms->touch_start_x = ke->touch_x;
-            ms->touch_start_y = ke->touch_y;
-            ms->touch_anchor_scroll_px = (int32_t)ms->first_item_intex * item_height + ms->scroll_sub_offset;
-            ms->touch_track_scroll = ms->touch_anchor_scroll_px;
-            ms->touch_track_ts = get_timestamp_in_ms();
-            ms->touch_track_vel = 0.0f;
+    // 触摸序列开始：DOWN 边沿（可靠事件，按下点坐标取 touch_down_*）或电平兜底
+    if (((ke->touch_edge & TOUCH_EDGE_DOWN) || ke->is_touching) && !ms->touch_active) {
+        // 触摸序列开始：锚定像素级滚动位置与起点坐标，复位拖动速度采样
+        ms->touch_active = 1;
+        ms->touch_is_dragging = 0;
+        if (ke->touch_edge & TOUCH_EDGE_DOWN) {
+            ms->touch_start_x = ke->touch_down_x;
+            ms->touch_start_y = ke->touch_down_y;
         }
         else {
+            ms->touch_start_x = ke->touch_x;
+            ms->touch_start_y = ke->touch_y;
+        }
+        ms->touch_anchor_scroll_px = (int32_t)ms->first_item_intex * item_height + ms->scroll_sub_offset;
+        ms->touch_track_scroll = ms->touch_anchor_scroll_px;
+        ms->touch_track_ts = get_timestamp_in_ms();
+        ms->touch_track_vel = 0.0f;
+    }
+    else if (ke->is_touching && ms->touch_active) {
             int32_t dy = ke->touch_y - ms->touch_start_y; // >0：手指下滑
             if (!ms->touch_is_dragging && (dy > item_height / 2 || dy < -(item_height / 2))) {
                 ms->touch_is_dragging = 1;
@@ -1839,11 +2122,10 @@ int32_t ui_widget_menu_event_handler(
                     ms->touch_track_ts = now;
                 }
             }
-        }
     }
-    else if (ms->touch_active) {
-        // 触摸序列结束（is_touching 1→0 边沿）：构成拖动则按松手速度启动惯性滚动，
-        // 否则按点击处理
+    // 触摸序列结束：UP 边沿（可靠事件；同帧 DOWN+UP 的亚帧点按亦走到这里）或电平兜底
+    if (((ke->touch_edge & TOUCH_EDGE_UP) || !ke->is_touching) && ms->touch_active) {
+        // 构成拖动则按松手速度启动惯性滚动，否则按点击处理
         ms->touch_active = 0;
         if (ms->touch_is_dragging) {
             // 松手前手指已停顿（>100ms 无新采样）则速度作废，不启动惯性
@@ -2004,8 +2286,27 @@ void ui_draw_input_buffer(Key_Event *key_event, Global_State *global_state, Widg
     ui_draw_header(key_event, global_state, L"", 0);
     uint32_t font_id = global_state->ui_font;
     int32_t line_height = gfx_font_line_height(font_id);
-    int32_t header_text_y = (line_height + 1) / 2 - line_height / 2; // 文本在页眉内垂直居中
+    int32_t header_text_y = (ui_std_header_height(global_state->ui_font) - line_height) / 2; // 文本在页眉内垂直居中
     gfx_font_draw_text(global_state->gfx, font_id, input_state->title_text, 0, header_text_y, title_text_R, title_text_G, title_text_B, 1);
+
+    // 页脚热点虚拟按钮（见 AGENTS.md 第九节）：左 [键盘] 呼出/收起软键盘，右 [16键] 切换十六键输入模式；
+    // 命中判定见 ui_widget_input_event_handler 触屏分支（页脚带左/右 1/4）
+    {
+        const int32_t footer_height = line_height + 1;
+        const int32_t footer_bottom = (int32_t)global_state->gfx->height - (int32_t)ui_softkbd_height();
+        const int32_t footer_text_y = footer_bottom - footer_height + footer_height / 2 - line_height / 2;
+        uint8_t btn_R = 102, btn_G = 204, btn_B = 255; // 暗色：滚动条前景同色系
+        if (global_state->ui_color_style == UI_COLOR_LIGHT) { btn_R = 17; btn_G = 85; btn_B = 238; }
+        gfx_font_draw_text(global_state->gfx, font_id, L"[键盘]", 2, footer_text_y, btn_R, btn_G, btn_B, 1);
+        wchar_t *grid16_label = L"[16键]";
+        int32_t grid16_w = gfx_font_measure_text(font_id, grid16_label);
+        if (input_state->grid16_mode) {
+            gfx_font_draw_text(global_state->gfx, font_id, grid16_label, (int32_t)global_state->gfx->width - 2 - grid16_w, footer_text_y, 255, 255, 0, 1);
+        }
+        else {
+            gfx_font_draw_text(global_state->gfx, font_id, grid16_label, (int32_t)global_state->gfx->width - 2 - grid16_w, footer_text_y, btn_R, btn_G, btn_B, 1);
+        }
+    }
 
     // 右上角状态图标：从右往左按各字符串的实际渲染宽度紧凑排列
     int32_t right_x = (int32_t)global_state->gfx->width - 1;
@@ -2053,27 +2354,35 @@ void ui_draw_input_buffer(Key_Event *key_event, Global_State *global_state, Widg
         }
     }
 
-    // 如果光标的视觉行不在当前视图范围内，则滚动视图跟随
-    if (cursor_line < ta->current_line) {
-        // 光标在当前视图上方：卷到光标所在行
-        ta->current_line = cursor_line;
-        typeset_view_range(ta, gfx_font_line_height(global_state->ui_font));
+    // 如果光标的视觉行不在当前视图范围内，则滚动视图跟随。
+    // 仅在光标位置发生变化时跟随（触屏手动滚动后光标未变，不把视图拉回；
+    // 打字/按键移动光标/控制台追加输出等改变光标时照常跟随）
+    if (input_state->cursor_pos != input_state->drawn_cursor_pos) {
+        if (cursor_line < ta->current_line) {
+            // 光标在当前视图上方：卷到光标所在行
+            ta->current_line = cursor_line;
+            ta->scroll_sub_offset = 0; // 整行路径：吸附回整行
+            typeset_view_range(ta, gfx_font_line_height(global_state->ui_font));
+        }
+        else if (cursor_line > ta->current_line + ta->view_lines - 1) {
+            // 光标在当前视图下方：卷到使光标所在行位于视图末行
+            //   逻辑上，如果出现这种情况，一定有 line_num > view_lines
+            ta->current_line = cursor_line - ta->view_lines + 1;
+            ta->scroll_sub_offset = 0; // 整行路径：吸附回整行
+            typeset_view_range(ta, gfx_font_line_height(global_state->ui_font));
+        }
     }
-    else if (cursor_line > ta->current_line + ta->view_lines - 1) {
-        // 光标在当前视图下方：卷到使光标所在行位于视图末行
-        //   逻辑上，如果出现这种情况，一定有 line_num > view_lines
-        ta->current_line = cursor_line - ta->view_lines + 1;
-        typeset_view_range(ta, gfx_font_line_height(global_state->ui_font));
-    }
+    input_state->drawn_cursor_pos = input_state->cursor_pos;
 
     // 绘制文本
     ui_draw_text_block(key_event, global_state, ta, global_state->ui_font);
 
-    // 绘制滚动条
+    // 绘制滚动条（像素单位：滚动位置/内容高度/可视高度）
     if (ta->is_show_scroll_bar) {
         ui_draw_scroll_bar(
             key_event, global_state,
-            ta->current_line, ta->line_num, ta->view_lines,
+            ta->current_line * line_height + ta->scroll_sub_offset,
+            ta->line_num * line_height, ta->height,
             ta->x, ta->y, ta->width, ta->height);
     }
 
@@ -2120,6 +2429,10 @@ void ui_draw_input_cursor(Key_Event *key_event, Global_State *global_state, Widg
             line_x_pos += char_width;
             if (input_state->cursor_pos == char_index) break;
         }
+        // 触屏手动滚动后光标可能滚出视口（光标跟随仅在光标变化时触发）：不在视口内则不绘制
+        if (input_state->cursor_pos != char_index) {
+            return;
+        }
     }
 
     uint8_t cursor_R = 0, cursor_G = 0, cursor_B = 0;
@@ -2131,9 +2444,12 @@ void ui_draw_input_cursor(Key_Event *key_event, Global_State *global_state, Widg
     }
 
     uint32_t x = line_x_pos;
-    uint32_t y = ta->y + line_height * break_count; // 每行的起始位置是行高的倍数
+    // 亚行偏移：与 ui_draw_text_block 的首行上移保持一致，并裁剪到文本区
+    uint32_t y = ta->y + line_height * break_count - ta->scroll_sub_offset;
+    gfx_set_clip(global_state->gfx, ta->x, ta->y, ta->width, ta->height);
     gfx_draw_line(global_state->gfx, x, y-1, x, y + line_height - 1, cursor_R, cursor_G, cursor_B, 2);
     gfx_draw_line(global_state->gfx, x+1, y-1, x+1, y + line_height - 1, cursor_R, cursor_G, cursor_B, 2);
+    gfx_reset_clip(global_state->gfx);
 }
 
 void ui_draw_input_pinyin(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, uint32_t is_picking) {

@@ -27,8 +27,10 @@ void misc_led_init(void);
 // 非阻塞，熄灭时机由调用方计时控制）
 void misc_led_set(int32_t on, int32_t color);
 
-// 指示灯闪烁一次（同步阻塞：点亮 → 延时 duration_ms → 熄灭）
+// 指示灯闪烁一次（异步非阻塞：立即点亮，由 misc_led_poll 在到达点亮时长后熄灭）
 void misc_led_blink(int32_t color, uint32_t duration_ms);
+// 指示灯异步熄灭的轮询推进：需在双核各自的主循环中高频调用（.ino loop 与 core0_render_task）
+void misc_led_poll(void);
 
 // ---------------- 振动马达 ----------------
 // 振动(0-255)

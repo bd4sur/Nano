@@ -25,7 +25,6 @@ static int32_t s_cal_last_day = 0;
 // 黄历模态框状态：点击日历上的日期数字打开，点击任意处/任意键关闭
 static int32_t s_almanac_active = 0;          // 1=模态框打开（此时黄历模块持有结果）
 static int32_t s_almanac_dirty  = 1;          // 模态框需要重绘
-static int32_t s_almanac_touch_prev = 0;      // 触屏按下沿检测（上一帧是否按住）
 static int32_t s_almanac_open_timestamp = 0;  // 打开时刻，用于吞掉同一手势的残留按键
 static int32_t s_almanac_close_timestamp = 0; // 关闭时刻，同理吞掉关闭手势的残留按键
 // 模态框内容固定：打开时计算并绘制一次，不随年月切换失效
@@ -60,7 +59,7 @@ static int32_t ui_calendar_first_weekday(int32_t year, int32_t month) {
 static int32_t ui_calendar_touch_hit(int32_t touch_x, int32_t touch_y, Global_State *global_state) {
     Nano_GFX *gfx = global_state->gfx;
     int32_t line_height = gfx_font_line_height(global_state->ui_font);
-    int32_t header_height = line_height + 1;
+    int32_t header_height = ui_std_header_height(global_state->ui_font);
     int32_t footer_height = line_height + 1;
     int32_t top = header_height;
     int32_t bottom = gfx->height - footer_height;
@@ -97,7 +96,6 @@ void ui_calendar_init(Key_Event *key_event, Global_State *global_state) {
         ui_almanac_close();
         s_almanac_active = 0;
         s_almanac_dirty = 1;
-        s_almanac_touch_prev = 0;
     }
 }
 
@@ -124,7 +122,7 @@ int32_t ui_calendar_render_frame(Key_Event *key_event, Global_State *global_stat
     Nano_GFX *gfx = global_state->gfx;
     uint32_t font_id = global_state->ui_font;
     int32_t line_height = gfx_font_line_height(font_id);
-    int32_t header_height = line_height + 1;
+    int32_t header_height = ui_std_header_height(font_id);
     int32_t footer_height = line_height + 1;
 
     uint8_t bg_R, bg_G, bg_B;
@@ -229,12 +227,12 @@ static void ui_calendar_open_almanac(int32_t year, int32_t month, int32_t day, G
 
 
 int32_t ui_calendar_event_handler(Key_Event *key_event, Global_State *global_state) {
-    // 触屏按下沿判定（触屏电平/坐标取自 get_input_event 统一采样的 key_event）：
+    // 触屏按下沿判定：认 touch_edge 边沿事件（生产端高频检测+队列可靠投递，亚帧点按不湮灭，
+    // 见 AGENTS.md 第八节），按下点坐标取 touch_down_x/y。
     // 日期数字的点击无法经 16 宫格键区分（整个屏幕都被映射为 4x4 键），必须消费触屏坐标。
-    int32_t touch_x = key_event->touch_x;
-    int32_t touch_y = key_event->touch_y;
-    int32_t touch_pressed = key_event->is_touching;
-    int32_t touch_edge = (touch_pressed && !s_almanac_touch_prev);
+    int32_t touch_x = key_event->touch_down_x;
+    int32_t touch_y = key_event->touch_down_y;
+    int32_t touch_edge = (key_event->touch_edge & TOUCH_EDGE_DOWN);
 
     // 黄历模态框激活：任意触屏按下沿、或（打开 300ms 后到达的）按键下降沿关闭。
     // 300ms 门限用于吞掉“打开该模态框的同一手势”经 16 宫格产生的残留按键事件。
@@ -247,7 +245,6 @@ int32_t ui_calendar_event_handler(Key_Event *key_event, Global_State *global_sta
             s_almanac_close_timestamp = global_state->timestamp; // 吞掉关闭手势的残留按键
             s_cal_dirty = 1;   // 关闭后重绘日历页
         }
-        s_almanac_touch_prev = touch_pressed;
         return 0;
     }
 
@@ -264,11 +261,9 @@ int32_t ui_calendar_event_handler(Key_Event *key_event, Global_State *global_sta
         int32_t day = ui_calendar_touch_hit(touch_x, touch_y, global_state);
         if (day != 0) {
             ui_calendar_open_almanac(s_cal_year, s_cal_month, day, global_state);
-            s_almanac_touch_prev = touch_pressed;
             return 0;
         }
     }
-    s_almanac_touch_prev = touch_pressed;
 
     // UI 事件仅认下降沿
     if (key_event->key_edge != -1 && key_event->key_edge != -2) {

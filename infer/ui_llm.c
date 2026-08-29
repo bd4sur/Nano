@@ -720,7 +720,6 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
         }
         // 加载失败（错误提示已由其显示）：重绘模型菜单并停留（本状态未离开焦点，需手动重绘）
         ui_draw_header(ke, gs, (wchar_t *)gs->w_menu_main->title, 1);
-        ui_draw_footer_softkeys(ke, gs, L"↑", L"", L"↓", L"选择");
         ui_widget_menu_refresh(ke, gs, gs->w_menu_main);
         return STATE_MODEL_MENU;
     }
