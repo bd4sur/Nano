@@ -10,12 +10,12 @@
 void misc_led_init(void) {
 }
 
-void misc_led_set(int32_t on, int32_t color) {
+void misc_led_set(int32_t on, int32_t color, uint8_t brightness) {
     (void)on;
     (void)color;
 }
 
-void misc_led_blink(int32_t color, uint32_t duration_ms) {
+void misc_led_blink(int32_t color, uint8_t brightness, uint32_t duration_ms) {
     (void)color;
     (void)duration_ms;
 }

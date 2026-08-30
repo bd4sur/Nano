@@ -12,6 +12,7 @@
 #include "hal_key.h"
 #include "hal_audio_out.h"
 #include "hal_misc.h"
+#include "hal_power.h"
 #include "ui_app.h"
 #include "platform.h"
 #include "celestial.h"
@@ -34,6 +35,13 @@ static TaskHandle_t core0_task_handle = NULL;
 
 // 按键提示灯光点亮时长（ms，同步阻塞）
 #define KEY_LED_ON_DURATION_MS (10)
+
+// 锁屏激活判定：无 PMIC 电源键平台（NANO_HAS_PWR_KEY=0）恒假，锁屏相关抑制逻辑不参与
+#if NANO_HAS_PWR_KEY
+#define LOCK_SCREEN_ACTIVE(gs) ((gs)->STATE == STATE_LOCK_SCREEN)
+#else
+#define LOCK_SCREEN_ACTIVE(gs) (0)
+#endif
 
 // Core0 → Core1: 帧就绪通知
 static QueueHandle_t frame_ready_queue = NULL;
@@ -107,9 +115,9 @@ void core0_render_task(void *pvParameters) {
         }
         key_event_0.touch_edge = frame_touch_edge;
 
-        // 触屏电平/坐标取自 Core1 在 get_input_event 中高频锁存的共享快照
-        // （与 last_touch_timestamp 同一跨核机制）；业务逻辑统一经 key_event 消费触屏，
-        // 不跨层直读触屏HAL；触屏 DOWN/UP 边沿事件已经上方队列排空合入 touch_edge，
+        // 触屏电平/坐标取自 Core1 在 get_input_event 中高频锁存的共享快照；
+        // 业务逻辑统一经 key_event 消费触屏，不跨层直读触屏HAL；
+        // 触屏 DOWN/UP 边沿事件已经上方队列排空合入 touch_edge，
         // 此处仅刷新轨迹电平（touch_edge/touch_down_* 不被覆盖）
         key_event_0.touch_x = global_state->touch_x;
         key_event_0.touch_y = global_state->touch_y;
@@ -123,12 +131,15 @@ void core0_render_task(void *pvParameters) {
                 if ((global_state->key_feedback_mode & 2) &&
                     global_state->STATE != STATE_OFDM_TXING && global_state->STATE != STATE_OFDM_RX &&
                     global_state->STATE != STATE_MUSICBOX_PLAYING &&
-                    global_state->STATE != STATE_SPECTROGRAM) {
+                    global_state->STATE != STATE_SPECTROGRAM &&
+                    !LOCK_SCREEN_ACTIVE(global_state)) {
                     misc_tone(6000, 10);
                 }
                 // 按键提示-灯光（Core0 队列侧：绿色，异步点亮，misc_led_poll 到时熄灭）
-                if (global_state->key_feedback_mode & 1) {
-                    misc_led_blink(MISC_LED_COLOR_GREEN, KEY_LED_ON_DURATION_MS);
+                // 锁屏态禁用：与锁屏 LED 心跳互斥
+                if ((global_state->key_feedback_mode & 1) &&
+                    !LOCK_SCREEN_ACTIVE(global_state)) {
+                    misc_led_blink(MISC_LED_COLOR_GREEN, 128, KEY_LED_ON_DURATION_MS);
                 }
             }
             // Serial.println("Receive");
@@ -189,6 +200,11 @@ void setup() {
 
     auto cfg = M5.config();
     M5.begin(cfg);
+
+#if NANO_HAS_PWR_KEY
+    // 丢弃上电残留的电源键（PMIC PEK）锁存状态，避免开机即误触发锁屏
+    power_key_poll();
+#endif
 
     //////////////////////////////////////////////////
     // 查看内存用量
@@ -280,6 +296,21 @@ void loop() {
     // 物理时间戳
     global_state->timestamp = get_timestamp_in_ms();
 
+#if NANO_HAS_PWR_KEY
+    // 电源键（PMIC PEK）轮询：经 M5.BtnPWR（M5.update 已在本轮顶部执行，状态机为最新）；
+    // 读取为锁存标志、零 I2C 开销，无需节流。检出短按 → 构造 NANO_KEY_POWER 下降沿事件可靠投递
+    //（锁屏/解锁由 Core0 全局拦截统一处理）。锁屏期间保留本轮询（解锁唯一入口），
+    // 其余按键/触屏事件生产见下方抑制。注意不可旁路直读 getKeyState（读清式，会被 M5.update 抢走）。
+    if (power_key_poll() == 1) {
+        Key_Event pwr_ev = {0};
+        pwr_ev.key_code = NANO_KEY_POWER;
+        pwr_ev.key_edge = -1;
+        if (xQueueSend(event_queue, &pwr_ev, pdMS_TO_TICKS(1)) != pdTRUE) {
+            Serial.println("WARNING: event_queue power key send timeout!");
+        }
+    }
+#endif
+
     // 获取输入事件（按键 + 触屏）
     // NOTE 按键反馈（misc_led_blink 同步阻塞 ~10ms）已移至本循环末尾、事件入队之后：
     // 若先反馈再入队，阻塞期间触屏电平快照已翻转而边沿事件滞留未发，
@@ -323,7 +354,8 @@ void loop() {
         // NOTE 必须先于按键事件投递：同一次松手会同时产生触屏 UP 与宫格软按键下降沿，
         // 若按键先入队，Core0 会先消费到滞后的软按键（如热点位置被映射为 D 键误提交），
         // 触屏 UP 后到时热点已无法拦下它；先投触屏事件可保证同帧内热点判定先于按键处理。
-        if (key_event_1.touch_edge != 0) {
+        // 锁屏期间抑制触屏边沿事件投递（防误触堆积队列；电源键事件不受此限）
+        if (key_event_1.touch_edge != 0 && !LOCK_SCREEN_ACTIVE(global_state)) {
             Key_Event touch_ev = key_event_1;
             touch_ev.key_code = NANO_KEY_IDLE;
             touch_ev.key_edge = 0;
@@ -332,7 +364,9 @@ void loop() {
             }
         }
 
-        if (key_event_1.key_code != NANO_KEY_IDLE && key_event_1.key_edge < 0) {
+        // 锁屏期间抑制按键事件投递（同上）
+        if (key_event_1.key_code != NANO_KEY_IDLE && key_event_1.key_edge < 0 &&
+            !LOCK_SCREEN_ACTIVE(global_state)) {
             int32_t is_reliable = (key_event_1.key_edge == -1);
             // Serial.println("Send");
             // Serial.println(key_event_1.key_code);
@@ -360,17 +394,20 @@ void loop() {
     // 按键提示反馈（Core1 即时侧）：置于事件入队之后，避免阻塞延迟事件投递（见上方 NOTE）
     // 反馈仅认短按下降沿（-1）：-2 长按重复事件流（1kHz）不做反馈——高频并发访问
     // LED 驱动（非跨核线程安全）曾致双核死锁卡死（2026-08 实测）
-    if (key_event_1.key_code != NANO_KEY_IDLE && key_event_1.key_edge == -1) {
+    // 锁屏期间抑制按键反馈（键盘事件本就不投递，此处为兜底）
+    if (key_event_1.key_code != NANO_KEY_IDLE && key_event_1.key_edge == -1 &&
+        !LOCK_SCREEN_ACTIVE(global_state)) {
         // 蜂鸣（4000Hz）：OFDM 寻呼机发射/接收、音乐盒播放、声谱图状态下禁用按键音
         if ((global_state->key_feedback_mode & 2) &&
             global_state->STATE != STATE_OFDM_TXING && global_state->STATE != STATE_OFDM_RX &&
             global_state->STATE != STATE_MUSICBOX_PLAYING &&
-            global_state->STATE != STATE_SPECTROGRAM) {
+            global_state->STATE != STATE_SPECTROGRAM &&
+            !LOCK_SCREEN_ACTIVE(global_state)) {
             misc_tone(4000, 10);
         }
         // 灯光（蓝色，异步点亮，misc_led_poll 到时熄灭；Core0 队列侧为绿色）：无 I2S 争用问题，所有状态下均生效
         if (global_state->key_feedback_mode & 1) {
-            misc_led_blink(MISC_LED_COLOR_BLUE, KEY_LED_ON_DURATION_MS);
+            misc_led_blink(MISC_LED_COLOR_BLUE, 128, KEY_LED_ON_DURATION_MS);
         }
     }
 

@@ -12,11 +12,13 @@
 #include "ui.h"
 #include "ui_icon.h"
 #include "ui_softkbd.h"
+#include "ui_grid16kbd.h"
 #include "ui_pinyin_ime.h"
 
 #include "platform.h"
 
 #include "hal_audio_out.h" // audio_out_set_master_volume：系统设置改音量时应用硬件
+#include "hal_misc.h"       // misc_led_blink/misc_led_set：锁屏 LED 心跳
 
 #include "infer.h"
 
@@ -177,6 +179,24 @@ static int32_t ui_app_state_is_menu(int32_t state) {
     }
 }
 
+// 文本输入控件宿主状态表：这些状态宿主 w_input_main（ui_widget_input_event_handler）。
+// 触屏软按键的唯一来源是显式键盘（触屏软键盘 ui_softkbd / 16键虚拟键盘 ui_grid16kbd，
+// 均在下方接管），全屏 4x4 宫格隐式映射在文本输入场景整体退场（见 ui_grid16kbd.h）。
+// 必须抑制：否则文本区拖动滚动穿越宫格会产生 -2 重复事件流（1kHz 生产 vs Core0 每帧
+// 仅消费 1 个键事件），挤占 8 深事件队列、触屏 DOWN/UP 可靠投递（1ms 超时）被饿死丢失，
+// 表现为拖动滚动失效而点按幸免（点按的 DOWN/UP 在洪泛前到达）。
+static int32_t ui_app_state_hosts_input_widget(int32_t state) {
+    switch (state) {
+        case STATE_LLM_INPUT:       // ui_llm.c
+        case STATE_ANIMAC_CONSOLE:  // ui_app.c
+        case STATE_OFDM_TX:         // ui_ofdm.c
+        case STATE_OFDM_LOOP:       // ui_ofdm.c
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 static uint8_t ui_app_map_touch_to_grid16_key(int32_t x, int32_t y) {
     if (y >= GRID16_Y0 && y < GRID16_Y1) {
         if (x >= GRID16_X0 && x <  GRID16_X1) return NANO_KEY_1;
@@ -267,17 +287,11 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 供本轮所有消费者（宫格映射、软键盘、手势解释及各业务状态）使用，上层不再直接调 touch_read
     touch_read(&key_event->touch_x, &key_event->touch_y, &key_event->is_touching);
 
-    // 触屏电平共享快照（与 last_touch_timestamp 同一跨核机制）：ESP32 上 Core0 渲染任务
-    // 每帧取用本快照覆盖到其 key_event，高频电平样本不进入事件队列（见 linglong_m5core2.ino）
+    // 触屏电平共享快照：ESP32 上 Core0 渲染任务每帧取用本快照覆盖到其 key_event，
+    // 高频电平样本不进入事件队列（见 linglong_m5core2.ino）
     global_state->touch_x = key_event->touch_x;
     global_state->touch_y = key_event->touch_y;
     global_state->is_touching = key_event->is_touching;
-
-    // 触屏电平锁存：为九键按键提示遮罩提供可靠的触发时间戳，避免渲染循环（Core0）
-    // 帧率不均的低频采样漏掉短按（见 ui.c 遮罩实现）
-    if (key_event->is_touching) {
-        global_state->last_touch_timestamp = global_state->timestamp;
-    }
 
     // 触屏边沿检测（生产端，与按键边沿同一哲学：消费者零负担，见 AGENTS.md 第八节）：
     // DOWN/UP 边沿填入 touch_edge，经事件队列可靠投递（见 .ino loop 与 core0_render_task）；
@@ -305,12 +319,31 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 触屏 → 4x4 宫格虚拟按键（兼容适配，见上方注释）：实体键优先，
     // 无实体键输入时按触点所在宫格映射为虚拟键码。
     // 菜单控件激活状态下抑制该映射（见 ui_app_state_is_menu 注释）：菜单直接消费
-    // 触屏流，不再生成软按键事件，杜绝事件队列通道的滞后事件泄漏到下一状态
-    if (key == NANO_KEY_IDLE && key_event->is_touching && !ui_app_state_is_menu(global_state->STATE)) {
+    // 触屏流，不再生成软按键事件，杜绝事件队列通道的滞后事件泄漏到下一状态。
+    // 文本输入控件宿主状态同样整体抑制（见 ui_app_state_hosts_input_widget 注释）：
+    // 软按键只来自显式键盘，且避免拖动滚动产生的软按键洪泛挤占触屏边沿事件。
+    // 16键虚拟键盘（ui_grid16kbd）可见时亦抑制：触屏由键盘接管（见下）。
+    if (key == NANO_KEY_IDLE && key_event->is_touching && !ui_app_state_is_menu(global_state->STATE)
+        && !ui_app_state_hosts_input_widget(global_state->STATE)
+        && !ui_grid16kbd_is_visible()) {
         key = ui_app_map_touch_to_grid16_key(key_event->touch_x, key_event->touch_y);
         key_is_soft = (key != NANO_KEY_IDLE); // 宫格映射命中的键来自触屏
     }
     uint8_t key_is_softkbd = 0;
+
+    // 16键虚拟键盘（文本输入控件固有功能，文本输入场景下替代上方的全屏 4x4 宫格映射）：
+    // 可见时，键盘区域内的触摸由键盘接管——命中按钮产生对应键码（走下方统一的边沿/长按
+    // 机制，与旧宫格软按键等价）；键盘区域外的触屏不再产生任何宫格软按键。
+    if (ui_grid16kbd_is_visible()) {
+        uint8_t grid16_key = ui_grid16kbd_poll(key_event->touch_x, key_event->touch_y, key_event->is_touching);
+        if (ui_grid16kbd_touch_claimed()) {
+            key = grid16_key;
+            key_is_soft = (grid16_key != NANO_KEY_IDLE); // 16键虚拟键盘键码来自触屏
+        }
+        else {
+            key = NANO_KEY_IDLE; // 键盘区域外：不产生软按键
+        }
+    }
 
     // 触屏软键盘：可见时，键盘区域内的触摸由软键盘接管——吞掉触屏4x4网格键映射，
     // 改为注入软键盘键码（无边沿时为NANO_KEY_IDLE，仍走下方的边沿检测机制）。
@@ -418,11 +451,9 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
     // 自动关机（默认关）
     global_state->auto_shutdown_minutes = 0;
     global_state->auto_shutdown_deadline = 0;
-    global_state->ime_hint_timeout_s = 3; // 按键提示遮罩默认显示3秒
     global_state->key_feedback_mode = 1;  // 按键提示（按键反馈方式）默认为灯光
 
     global_state->timestamp_last = 0;
-    global_state->last_touch_timestamp = 0;
     global_state->touch_x = 0;
     global_state->touch_y = 0;
     global_state->is_touching = 0;
@@ -2376,15 +2407,6 @@ void ui_app_setting_grid16_draw(Key_Event *key_event, Global_State *global_state
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
         3, 2, L"自动关机", auto_shutdown_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0xff, 0x00, 0x00, 1);
 
-    wchar_t ime_hint_str[32];
-    if (global_state->ime_hint_timeout_s <= 0) {
-        wcscpy(ime_hint_str, L"关闭");
-    }
-    else {
-        swprintf(ime_hint_str, 32, L"%d秒", (int)global_state->ime_hint_timeout_s);
-    }
-    ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
-        0, 3, L"提示遮罩", ime_hint_str, cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
         1, 3, L"颜色风格", (global_state->ui_color_style == UI_COLOR_LIGHT) ? L"亮" : L"暗",
         cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
@@ -2517,16 +2539,6 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_enter) {
         // TODO
-    }
-    // 提示遮罩（文本输入控件按键提示遮罩显示时长：关闭(0秒)→3秒→6秒 循环）
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
-        static const int32_t IME_HINT_TIMEOUT_OPTIONS[] = {0, 3, 6};
-        int32_t idx = 0;
-        for (int32_t i = 0; i < (int32_t)(sizeof(IME_HINT_TIMEOUT_OPTIONS) / sizeof(IME_HINT_TIMEOUT_OPTIONS[0])); i++) {
-            if (IME_HINT_TIMEOUT_OPTIONS[i] == global_state->ime_hint_timeout_s) { idx = i; break; }
-        }
-        idx = (idx + 1) % (int32_t)(sizeof(IME_HINT_TIMEOUT_OPTIONS) / sizeof(IME_HINT_TIMEOUT_OPTIONS[0]));
-        global_state->ime_hint_timeout_s = IME_HINT_TIMEOUT_OPTIONS[idx];
     }
     // 按键提示（按键反馈方式：无→灯光→蜂鸣→灯光+蜂鸣 循环）
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
@@ -3038,6 +3050,7 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
 
     input_device_init();
     ui_softkbd_init(); // 触屏软键盘（内部初始化触屏HAL）
+    ui_grid16kbd_init(); // 16键虚拟键盘
     key_event->prev_key = NANO_KEY_IDLE;
 
     ///////////////////////////////////////
@@ -3070,6 +3083,105 @@ int32_t main_init(Key_Event *key_event, Global_State *global_state) {
 
 
 
+// ===============================================================================
+// 电源键锁屏（2026-08，仅 NANO_HAS_PWR_KEY 平台（M5Core2/M5CoreS3，PMIC PEK）编译）：
+// 短按电源键（NANO_KEY_POWER，Core1 轮询 PMIC PEK 产事件）任意状态灭屏进锁屏、再短按恢复。
+// 仅灭屏不睡 CPU（AXP IRQ 未接 GPIO，电源键无法唤醒，且灭屏断背光已是最大省电项）；
+// RAM/帧缓冲/状态机原地保留，恢复=唤醒 LCD+重推帧缓冲。
+// 有声/实时外设状态（占用 I2S/DMA）锁屏即走其 A 键退出路径先行退出，解锁后落在其上级菜单。
+// ===============================================================================
+
+// 锁屏激活判定：无 PMIC 电源键平台（NANO_HAS_PWR_KEY=0）恒假，锁屏相关抑制逻辑不参与
+#if NANO_HAS_PWR_KEY
+#define LOCK_SCREEN_ACTIVE(gs) ((gs)->STATE == STATE_LOCK_SCREEN)
+#else
+#define LOCK_SCREEN_ACTIVE(gs) (0)
+#endif
+
+#if NANO_HAS_PWR_KEY
+
+#define LOCK_SCREEN_BLINK_PERIOD_MS (3000)  // LED 心跳周期（表示机器处于开机状态）
+#define LOCK_SCREEN_BLINK_ON_MS     (10)    // 短促闪烁点亮时长
+#define LOCK_SCREEN_BLINK_BRIGHTNESS (32)  // 心跳亮度（0~255，仅支持亮度的机型生效）
+
+// 心跳颜色循环（红→黄→绿→青→蓝→紫→白）：仅 CoreS3 的 WS2812 灯带有真彩；
+// Core2 为 PMIC 单色灯（颜色参数忽略），仅保留单色占位
+#if defined(NANO_PLATFORM_M5CORES3)
+static const int32_t s_lock_blink_colors[] = {
+    MISC_LED_COLOR_RED, MISC_LED_COLOR_YELLOW, MISC_LED_COLOR_GREEN, MISC_LED_COLOR_CYAN,
+    MISC_LED_COLOR_BLUE, MISC_LED_COLOR_PURPLE, MISC_LED_COLOR_WHITE
+};
+#else
+static const int32_t s_lock_blink_colors[] = { MISC_LED_COLOR_GREEN };
+#endif
+#define LOCK_SCREEN_BLINK_COLOR_NUM (sizeof(s_lock_blink_colors) / sizeof(s_lock_blink_colors[0]))
+static uint32_t s_lock_blink_color_idx = 0;
+
+static int32_t  s_lock_resume_state   = STATE_MAIN_MENU; // 解锁后回落的状态
+static int32_t  s_lock_redraw_on_exit = 0;   // 1=锁屏时发生了外设态退出，解锁需走目标态首帧重绘
+// 下一次心跳时刻（对 global_state->timestamp）。注意必须是 uint64_t：
+// get_timestamp_in_ms 返回 gettimeofday 墙钟毫秒（远超 2^32），曾用 uint32_t 截断导致
+// 比较恒真、心跳每帧重触发、LED 常亮不闪（2026-08 CoreS3 实测故障）
+static uint64_t s_lock_next_blink_ms  = 0;
+
+// 有声/实时外设状态锁屏即退出：复用各模块 A 键（NANO_KEY_esc）退出路径（停 I2S/DMA/采集任务），
+// 返回 1 表示发生了状态退出（解锁需走目标态首帧重绘，而非帧缓冲直恢）
+static int32_t lock_screen_exit_peripheral_states(Key_Event *key_event, Global_State *global_state) {
+    Key_Event fake = {0};
+    fake.key_code = NANO_KEY_esc;
+    fake.key_edge = -1;
+    switch (global_state->STATE) {
+        case STATE_MUSICBOX_PLAYING: // 停播+释放解码资源 → 文件列表
+            global_state->STATE = ui_musicbox_playing_event(&fake, global_state);
+            return 1;
+        case STATE_OFDM_TXING:       // 中止发射 → 发射文本输入态
+            global_state->STATE = ui_ofdm_txing_event(&fake, global_state);
+            return 1;
+        case STATE_OFDM_RX:          // 停采集任务+关麦 → 寻呼机模式菜单
+            global_state->STATE = ui_ofdm_rx_event(&fake, global_state);
+            return 1;
+        case STATE_SPECTROGRAM:      // 关麦+释放工作区 → 主菜单
+            ui_spectrogram_deinit(key_event, global_state);
+            global_state->STATE = STATE_MAIN_MENU;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static void lock_screen_enter(Key_Event *key_event, Global_State *global_state) {
+    // 有声/实时外设状态先行退出（全局拦截点在状态机 switch 之前，此处直接改 STATE 安全）
+    s_lock_redraw_on_exit = lock_screen_exit_peripheral_states(key_event, global_state);
+    s_lock_resume_state = global_state->STATE;
+    // 先置态：Core1 生产端检测到锁屏态随即停止按键/触屏事件投递与按键反馈
+    global_state->STATE = STATE_LOCK_SCREEN;
+    // 灭屏：面板背光置0（Core2 物理切断 AXP192 DCDC3 / CoreS3 切断 BLDO1）+ SLPIN 令 LCD 控制器睡眠。
+    // 帧缓冲保持不动（RAM 中仍保留锁屏前画面），安静态解锁直接重推即可。
+    display_sleep();
+    s_lock_next_blink_ms = global_state->timestamp + LOCK_SCREEN_BLINK_PERIOD_MS;
+    printf("lock screen: enter\n");
+}
+
+static void lock_screen_exit(Key_Event *key_event, Global_State *global_state) {
+    display_wakeup(); // SLPOUT + 恢复睡眠前亮度
+    sleep_in_ms(150); // ILI9342 睡眠退出恢复时间（约 120ms），期间推帧会被面板忽略
+    display_set_brightness((uint8_t)global_state->brightness); // 显式恢复到设置值（与 wakeup 内部恢复一致，双保险）
+    global_state->STATE = s_lock_resume_state;
+    if (!s_lock_redraw_on_exit) {
+        // 安静态：抑制目标状态“首帧重初始化”（避免资源类状态重复初始化副作用），
+        // 帧缓冲仍保留锁屏前画面，标脏全屏重推即恢复
+        global_state->PREV_STATE = s_lock_resume_state;
+        gfx_mark_dirty_full(global_state->gfx);
+        gfx_refresh(global_state->gfx);
+    }
+    // 外设态退出情形：PREV_STATE 保持 LOCK_SCREEN，目标菜单态首帧重绘机制自动接管
+    misc_led_set(0, MISC_LED_COLOR_GREEN, 255); // 心跳可能正处于点亮期，确保熄灭
+    printf("lock screen: exit\n");
+}
+
+#endif // NANO_HAS_PWR_KEY
+
+
 
 int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
@@ -3084,6 +3196,16 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
     global_state->second = timeinfo->tm_sec;
     global_state->millisecond = global_state->timestamp % 1000;
 
+
+    // 电源键全局拦截（任何状态，仅认下降沿）：非锁屏态 → 锁屏；锁屏态 → 解锁。
+    // 处理完直接返回，本帧不再进入状态机分支。
+#if NANO_HAS_PWR_KEY
+    if (key_event->key_code == NANO_KEY_POWER && key_event->key_edge == -1) {
+        if (global_state->STATE == STATE_LOCK_SCREEN) lock_screen_exit(key_event, global_state);
+        else                                          lock_screen_enter(key_event, global_state);
+        return 0;
+    }
+#endif
 
     // 主状态机
     switch(global_state->STATE) {
@@ -3927,6 +4049,30 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
 
     /////////////////////////////////////////////
+    // 电源键锁屏：灭屏低功耗。进入/解锁由 main_event_handler 入口的电源键全局拦截处理；
+    // 本分支仅负责 LED 心跳，其余事件一律忽略（锁屏期间 Core1 已停止事件生产，此处为兜底）
+    /////////////////////////////////////////////
+
+#if NANO_HAS_PWR_KEY
+    case STATE_LOCK_SCREEN:
+
+        global_state->PREV_STATE = global_state->STATE;
+
+        // LED 心跳：每 3 秒短促闪烁 10ms，标识机器处于开机状态；颜色逐次循环（红黄绿青蓝紫白）。
+        // 复用 misc_led_blink 异步机制（双核主循环的 misc_led_poll 推进熄灭）；
+        // Core2 为 PMIC 自治 PWM 单色灯（颜色参数忽略），CoreS3 为 WS2812 灯带整带同色。
+        if (global_state->timestamp >= s_lock_next_blink_ms) {
+            s_lock_next_blink_ms = global_state->timestamp + LOCK_SCREEN_BLINK_PERIOD_MS;
+            misc_led_blink(s_lock_blink_colors[s_lock_blink_color_idx],
+                           LOCK_SCREEN_BLINK_BRIGHTNESS, LOCK_SCREEN_BLINK_ON_MS);
+            s_lock_blink_color_idx = (s_lock_blink_color_idx + 1) % LOCK_SCREEN_BLINK_COLOR_NUM;
+        }
+
+        break;
+#endif // NANO_HAS_PWR_KEY
+
+
+    /////////////////////////////////////////////
     // 关机确认
     /////////////////////////////////////////////
 
@@ -4339,10 +4485,14 @@ int32_t main_periodic_task(Key_Event *key_event, Global_State *global_state) {
         global_state->is_asr_server_up = check_asr_server_status();
 #endif
 #ifdef UPS_ENABLED
-        global_state->ups_is_charging = read_ups_is_charging();
-        global_state->ups_voltage = read_ups_voltage();
-        global_state->ups_current = read_ups_current();
-        global_state->ups_soc = read_ups_soc();
+        // 锁屏期间跳过：read_ups_is_charging 内含 setLed 副作用（充电指示灯），
+        // 会与锁屏 LED 心跳争用同一颗指示灯（无电源键平台 LOCK_SCREEN_ACTIVE 恒假，行为同原始）
+        if (!LOCK_SCREEN_ACTIVE(global_state)) {
+            global_state->ups_is_charging = read_ups_is_charging();
+            global_state->ups_voltage = read_ups_voltage();
+            global_state->ups_current = read_ups_current();
+            global_state->ups_soc = read_ups_soc();
+        }
 #endif
     }
     // 逻辑时间戳

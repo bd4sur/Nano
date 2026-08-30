@@ -70,6 +70,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         ui_dict.c \
                         ui_ebook.c \
                         ui_goldminer.c \
+                        ui_grid16kbd.c \
                         ui_icon.c \
                         ui_llm.c \
                         ui_musicbox_mp3.c \
@@ -125,6 +126,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         ui_dict.c \
                         ui_ebook.c \
                         ui_goldminer.c \
+                        ui_grid16kbd.c \
                         ui_icon.c \
                         ui_llm.c \
                         ui_musicbox_mp3.c \

@@ -90,3 +90,11 @@ void display_hal_close(void) {
 void display_set_brightness(uint8_t value) {
     display.setBrightness(value);
 }
+
+void display_sleep(void) {
+    display.sleep();   // 面板背光置0 + SLPIN（LGFX 内部 _brightness 记录不受影响）
+}
+
+void display_wakeup(void) {
+    display.wakeup();  // SLPOUT + 恢复睡眠前亮度（不含 120ms 恢复延时，调用方负责）
+}

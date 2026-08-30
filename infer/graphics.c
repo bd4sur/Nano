@@ -352,7 +352,7 @@ void gfx_reset_clip(Nano_GFX *gfx) {
 }
 
 
-// gfx_refresh 前置/后置钩子（见 graphics.h）
+// gfx_refresh 前置/后置钩子（见 graphics.h；暂无用户，作为图形层通用设施保留）
 static GFX_Refresh_Hook gfx_pre_refresh_hook = NULL;
 static GFX_Refresh_Hook gfx_post_refresh_hook = NULL;
 
@@ -373,8 +373,8 @@ void gfx_refresh(Nano_GFX *gfx) {
 
     // A1 局部推帧：只推送脏区包围盒（推屏后复位）。无脏区时跳过推屏——
     // 事件驱动状态下未重绘的冗余 gfx_refresh 调用不再有 SPI 开销。
-    // 注意遮罩 post 钩子的 gfx_frame_restore 会把脏区重新置为全屏（遮罩残影
-    // 必须在下一帧被完整覆盖），故复位发生在推屏之后、post 钩子之前。
+    // 注意：pre 钩子若在帧缓冲上叠加绘制（经 gfx API 会正确扩脏），post 钩子若直接覆写
+    // 帧缓冲，须自行 gfx_mark_dirty* 保证下一帧覆盖其痕迹。
     if (gfx->dirty_valid) {
         uint32_t dx0 = (uint32_t)gfx->dirty_x0;
         uint32_t dy0 = (uint32_t)gfx->dirty_y0;
@@ -401,53 +401,6 @@ void gfx_refresh(Nano_GFX *gfx) {
     GFX_SEM_GIVE
 #endif
 
-}
-
-// 帧缓冲整体快照/恢复（布局细节封装于此：RGB565 双缓冲为上下半屏两块、单缓冲为一整帧；
-// RGB888 为单块三通道整帧。单/双缓冲一律以显式字段 is_double_buffer 判别）
-uint32_t gfx_frame_snapshot_bytes(Nano_GFX *gfx) {
-    if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
-        return gfx->width * gfx->height * sizeof(uint16_t);
-    }
-    else if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
-        return gfx->width * gfx->height * 3;
-    }
-    return 0;
-}
-
-void gfx_frame_snapshot(Nano_GFX *gfx, void *dst) {
-    if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
-        if (gfx->is_double_buffer) {
-            uint32_t half_bytes = gfx->width * (gfx->height / 2) * sizeof(uint16_t);
-            memcpy(dst, gfx->frame_buffer_rgb565_top, half_bytes);
-            memcpy((uint8_t *)dst + half_bytes, gfx->frame_buffer_rgb565_bottom, half_bytes);
-        }
-        else {
-            memcpy(dst, gfx->frame_buffer_rgb565_top, gfx->width * gfx->height * sizeof(uint16_t));
-        }
-    }
-    else if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
-        memcpy(dst, gfx->frame_buffer_rgb888, gfx->width * gfx->height * 3);
-    }
-}
-
-void gfx_frame_restore(Nano_GFX *gfx, const void *src) {
-    if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
-        if (gfx->is_double_buffer) {
-            uint32_t half_bytes = gfx->width * (gfx->height / 2) * sizeof(uint16_t);
-            memcpy(gfx->frame_buffer_rgb565_top, src, half_bytes);
-            memcpy(gfx->frame_buffer_rgb565_bottom, (const uint8_t *)src + half_bytes, half_bytes);
-        }
-        else {
-            memcpy(gfx->frame_buffer_rgb565_top, src, gfx->width * gfx->height * sizeof(uint16_t));
-        }
-    }
-    else if (gfx->color_mode == GFX_COLOR_MODE_RGB888) {
-        memcpy(gfx->frame_buffer_rgb888, src, gfx->width * gfx->height * 3);
-    }
-    // 整帧被覆写（典型场景：遮罩推帧后恢复干净帧——屏幕上仍有遮罩残影，
-    // 下一帧必须全屏推帧才能完整覆盖）
-    gfx_mark_dirty_full(gfx);
 }
 
 // 将一幅与帧缓冲同尺寸的 RGB565 帧整体写入帧缓冲
@@ -1290,6 +1243,189 @@ void gfx_draw_circle_fill(Nano_GFX *gfx, uint32_t cx, uint32_t cy, uint32_t r, u
             }
         }
     }
+}
+
+// ===============================================================================
+// 抗锯齿圆角矩形（填充语义，GUI 元素用；画质优先）
+// 结构：四条直边与中部为轴对齐区域（边缘覆盖率恒为 0/100%，无需抗锯齿）走行填充快路径；
+// 仅四个 r×r 角部正方形逐像素做 8×8 超采样覆盖率混合（采样点取子像素网格中心）。
+// 边界情况：
+//   - 宽/高 <= 0：不绘制；半径 < 0：按 0 处理；
+//   - 四角全 0：整委托给 gfx_draw_rectangle（含 B1 行直写快路径）；
+//   - 邻角半径和超过所在边长：四角按比例统一缩小（CSS 半径缩放规则，保持形状比例）；
+//   - 半径 1~2px 的小角、宽高仅数像素的退化形状：超采样网格比特征细，覆盖率自然正确；
+//   - 屏幕边界与裁剪矩形（gfx_set_clip）：所有写入前预夹，脏区只覆盖可见部分。
+// ===============================================================================
+
+#define GFX_ROUNDED_RECT_AA (8)  // 角部超采样网格边长（8×8=64 子采样/像素）
+#define GFX_ROUNDED_RECT_AA_N (GFX_ROUNDED_RECT_AA * GFX_ROUNDED_RECT_AA)
+
+// 角部像素覆盖率（0..AA_N）：角弧圆心 (cx, cy)（绝对坐标，浮点），半径 rr，像素 (px, py)
+static int32_t gfx_rounded_corner_coverage(float cx, float cy, float rr, int32_t px, int32_t py) {
+    int32_t count = 0;
+    float r2 = rr * rr;
+    for (int32_t j = 0; j < GFX_ROUNDED_RECT_AA; j++) {
+        float sy = (float)py + ((float)j + 0.5f) / GFX_ROUNDED_RECT_AA;
+        float dy2 = (sy - cy) * (sy - cy);
+        for (int32_t i = 0; i < GFX_ROUNDED_RECT_AA; i++) {
+            float sx = (float)px + ((float)i + 0.5f) / GFX_ROUNDED_RECT_AA;
+            float dx = sx - cx;
+            if (dx * dx + dy2 <= r2) count++;
+        }
+    }
+    return count;
+}
+
+// 角部单像素写入（覆盖率 cov ∈ [0, AA_N]；mode 语义同 alpha 字模绘制：
+// 0-按覆盖率向黑混合 1/>=4-按覆盖率混合前景色 2-覆盖率过半反转 3-覆盖率加权叠加）
+static void gfx_rounded_corner_put(Nano_GFX *gfx, int32_t px, int32_t py, int32_t cov,
+    uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    if (cov <= 0) return;
+    // 像素函数不含裁剪，角部逐像素自查屏幕边界与裁剪矩形
+    if (px < 0 || py < 0 || px >= (int32_t)gfx->width || py >= (int32_t)gfx->height) return;
+    if (px < gfx->clip_x0 || px >= gfx->clip_x1 || py < gfx->clip_y0 || py >= gfx->clip_y1) return;
+    uint8_t a8 = (uint8_t)((cov * 255 + GFX_ROUNDED_RECT_AA_N / 2) / GFX_ROUNDED_RECT_AA_N);
+    if (mode == 0) {
+        gfx_blend_pixel(gfx, (uint32_t)px, (uint32_t)py, 0, 0, 0, a8);
+    }
+    else if (mode == 2) {
+        if (a8 >= 128) gfx_reverse_pixel(gfx, (uint32_t)px, (uint32_t)py);
+    }
+    else if (mode == 3) {
+        gfx_add_pixel(gfx, (uint32_t)px, (uint32_t)py,
+                      (uint8_t)((red * a8 + 127) / 255),
+                      (uint8_t)((green * a8 + 127) / 255),
+                      (uint8_t)((blue * a8 + 127) / 255));
+    }
+    else {
+        gfx_blend_pixel(gfx, (uint32_t)px, (uint32_t)py, red, green, blue, a8);
+    }
+}
+
+// 直边/中部行段填充（端点含）：预夹屏幕与裁剪矩形；mode<=3 走行直写快路径，
+// mode>=4（定值 alpha）逐像素混合
+static void gfx_rounded_span(Nano_GFX *gfx, int32_t x0, int32_t x1, int32_t y,
+    uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    if (y < 0 || y >= (int32_t)gfx->height) return;
+    if (y < gfx->clip_y0 || y >= gfx->clip_y1) return;
+    if (x0 < 0) x0 = 0;
+    if (x0 < gfx->clip_x0) x0 = gfx->clip_x0;
+    if (x1 >= (int32_t)gfx->width) x1 = (int32_t)gfx->width - 1;
+    if (x1 >= gfx->clip_x1) x1 = gfx->clip_x1 - 1;
+    if (x0 > x1) return;
+    if (mode <= 3) {
+        gfx_fill_hline_fast(gfx, x0, x1, y, red, green, blue, mode);
+    }
+    else {
+        for (int32_t x = x0; x <= x1; x++) {
+            gfx_blend_pixel(gfx, (uint32_t)x, (uint32_t)y, red, green, blue, mode);
+        }
+    }
+}
+
+// 单个角部（r>0 时调用）：遍历 r×r 角部正方形逐像素混合
+// corner：0-左上 1-右上 2-右下 3-左下；角弧圆心位于角部正方形靠矩形内部的对角顶点
+static void gfx_rounded_corner(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t w, int32_t h,
+    int32_t corner, int32_t r, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    if (r <= 0) return;
+    // 角部正方形绝对范围 [bx, bx+r) × [by, by+r) 与圆心 (cx, cy)
+    int32_t bx, by;
+    float cx, cy;
+    switch (corner) {
+        case 0:  bx = x0;         by = y0;         cx = (float)(x0 + r);     cy = (float)(y0 + r);     break; // 左上
+        case 1:  bx = x0 + w - r; by = y0;         cx = (float)(x0 + w - r); cy = (float)(y0 + r);     break; // 右上
+        case 2:  bx = x0 + w - r; by = y0 + h - r; cx = (float)(x0 + w - r); cy = (float)(y0 + h - r); break; // 右下
+        default: bx = x0;         by = y0 + h - r; cx = (float)(x0 + r);     cy = (float)(y0 + h - r); break; // 左下
+    }
+    for (int32_t py = by; py < by + r; py++) {
+        for (int32_t px = bx; px < bx + r; px++) {
+            gfx_rounded_corner_put(gfx, px, py,
+                gfx_rounded_corner_coverage(cx, cy, (float)r, px, py), red, green, blue, mode);
+        }
+    }
+}
+
+void gfx_draw_rounded_rectangle(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t width, int32_t height,
+    int32_t radius_tl, int32_t radius_tr, int32_t radius_br, int32_t radius_bl,
+    uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {
+    if (width <= 0 || height <= 0) return;
+    // 整体在屏幕/裁剪区外：直接返回
+    if (x0 + width <= 0 || y0 + height <= 0) return;
+    if (x0 >= (int32_t)gfx->width || y0 >= (int32_t)gfx->height) return;
+    if (x0 + width <= gfx->clip_x0 || y0 + height <= gfx->clip_y0) return;
+    if (x0 >= gfx->clip_x1 || y0 >= gfx->clip_y1) return;
+
+    int32_t r_tl = radius_tl, r_tr = radius_tr, r_br = radius_br, r_bl = radius_bl;
+    if (r_tl < 0) r_tl = 0;
+    if (r_tr < 0) r_tr = 0;
+    if (r_br < 0) r_br = 0;
+    if (r_bl < 0) r_bl = 0;
+
+    // 全直角：委托给 gfx_draw_rectangle（含 B1 行直写快路径）。
+    // 先按屏幕预夹：gfx_draw_rectangle 的 uint32 参数语义对负坐标不安全（回绕）
+    if (r_tl == 0 && r_tr == 0 && r_br == 0 && r_bl == 0) {
+        int32_t cx0 = (x0 < 0) ? 0 : x0;
+        int32_t cy0 = (y0 < 0) ? 0 : y0;
+        int32_t cx1 = (x0 + width > (int32_t)gfx->width) ? (int32_t)gfx->width : x0 + width;
+        int32_t cy1 = (y0 + height > (int32_t)gfx->height) ? (int32_t)gfx->height : y0 + height;
+        if (cx0 < cx1 && cy0 < cy1) {
+            gfx_draw_rectangle(gfx, (uint32_t)cx0, (uint32_t)cy0, (uint32_t)(cx1 - cx0), (uint32_t)(cy1 - cy0),
+                               red, green, blue, mode);
+        }
+        return;
+    }
+
+    // 邻角半径和超过所在边长：四角按比例统一缩小（CSS 半径缩放规则）
+    float k = 1.0f;
+    if (r_tl + r_tr > width)  { float t = (float)width  / (float)(r_tl + r_tr); if (t < k) k = t; }
+    if (r_bl + r_br > width)  { float t = (float)width  / (float)(r_bl + r_br); if (t < k) k = t; }
+    if (r_tl + r_bl > height) { float t = (float)height / (float)(r_tl + r_bl); if (t < k) k = t; }
+    if (r_tr + r_br > height) { float t = (float)height / (float)(r_tr + r_br); if (t < k) k = t; }
+    if (k < 1.0f) {
+        r_tl = (int32_t)((float)r_tl * k);
+        r_tr = (int32_t)((float)r_tr * k);
+        r_br = (int32_t)((float)r_br * k);
+        r_bl = (int32_t)((float)r_bl * k);
+    }
+
+    int32_t r_top = (r_tl > r_tr) ? r_tl : r_tr;       // 顶带高度
+    int32_t r_bottom = (r_bl > r_br) ? r_bl : r_br;    // 底带高度
+
+    // 对角弧行范围重叠的边界情况（如左上/右下角半径均接近全高——同侧边对的约束管不到
+    // 对角）：带模型要求顶/底带不重叠，否则中带语义失效且 mode>=4 会重复混合。
+    // 处理：再按比例统一缩小至顶底带恰好相接（形状仍为合法圆角矩形，比例不变）
+    if (r_top + r_bottom > height) {
+        float k2 = (float)height / (float)(r_top + r_bottom);
+        r_tl = (int32_t)((float)r_tl * k2);
+        r_tr = (int32_t)((float)r_tr * k2);
+        r_br = (int32_t)((float)r_br * k2);
+        r_bl = (int32_t)((float)r_bl * k2);
+        r_top = (r_tl > r_tr) ? r_tl : r_tr;
+        r_bottom = (r_bl > r_br) ? r_bl : r_br;
+    }
+
+    // 顶带：角部弧所在行，直边段在两角之间（角半径不等时，较小角下方的行直边延伸至边）
+    for (int32_t yy = 0; yy < r_top; yy++) {
+        int32_t xl = (yy < r_tl) ? x0 + r_tl : x0;
+        int32_t xr = (yy < r_tr) ? x0 + width - r_tr - 1 : x0 + width - 1;
+        gfx_rounded_span(gfx, xl, xr, y0 + yy, red, green, blue, mode);
+    }
+    // 中带：全宽直填
+    for (int32_t yy = r_top; yy < height - r_bottom; yy++) {
+        gfx_rounded_span(gfx, x0, x0 + width - 1, y0 + yy, red, green, blue, mode);
+    }
+    // 底带：同顶带对称
+    for (int32_t yy = height - r_bottom; yy < height; yy++) {
+        int32_t xl = (yy >= height - r_bl) ? x0 + r_bl : x0;
+        int32_t xr = (yy >= height - r_br) ? x0 + width - r_br - 1 : x0 + width - 1;
+        gfx_rounded_span(gfx, xl, xr, y0 + yy, red, green, blue, mode);
+    }
+
+    // 四个角部：r×r 正方形逐像素覆盖率混合
+    gfx_rounded_corner(gfx, x0, y0, width, height, 0, r_tl, red, green, blue, mode);
+    gfx_rounded_corner(gfx, x0, y0, width, height, 1, r_tr, red, green, blue, mode);
+    gfx_rounded_corner(gfx, x0, y0, width, height, 2, r_br, red, green, blue, mode);
+    gfx_rounded_corner(gfx, x0, y0, width, height, 3, r_bl, red, green, blue, mode);
 }
 
 // 显示汉字

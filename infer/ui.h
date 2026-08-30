@@ -20,8 +20,8 @@ extern "C" {
 #define LONG_PRESS_THRESHOLD (360)
 
 #define MAX_CANDIDATE_NUM (256)     // 候选字最大数量
-#define MAX_CANDIDATE_PAGE_NUM (26) // 候选字最大分页数
-#define MAX_CANDIDATE_NUM_PER_PAGE (10) // 每页最多有几个候选字（每页10个字）
+#define MAX_CANDIDATE_PAGE_NUM (52) // 候选字最大分页数
+#define MAX_CANDIDATE_NUM_PER_PAGE (5) // 每页最多有几个候选字（每页5个字，与全键盘拼音输入法一致）
 
 struct Nano_Context;
 struct Nano_Session;
@@ -54,8 +54,7 @@ typedef struct Global_State {
     // 全局通用信息
     uint64_t timestamp; // 物理时间戳（ms）
     uint64_t timestamp_last; // 上一次主循环的物理时间戳（ms），用于统计帧率、节流等用途
-    volatile uint64_t last_touch_timestamp; // 最后一次触屏按下的物理时间戳（ms；0=从未触摸）。由 Core1 的 get_input_event 以 1-2ms 周期高频锁存（短按不遗漏），供九键按键提示遮罩在 Core0 渲染侧可靠触发（见 ui.c）
-    // 触屏电平共享快照（与 last_touch_timestamp 同一机制）：由 Core1 的 get_input_event 高频锁存，
+    // 触屏电平共享快照：由 Core1 的 get_input_event 高频锁存，
     // Core0 渲染任务每帧取用并覆盖到 key_event，供业务逻辑统一经 key_event 消费触屏，
     // 避免把高频电平样本刷入事件队列（挤占一次性按键/手势事件，见 linglong_m5core2.ino）
     volatile int32_t touch_x;       // 触点坐标（is_touching==1 时有效）
@@ -126,7 +125,6 @@ typedef struct Global_State {
     int32_t volume;     // 全局主音量（0~255；影响按键音、寻呼机OFDM发射音量、音乐盒初始音量；音乐盒内部调节不回写）
     int32_t auto_shutdown_minutes;   // 自动关机时长设置（分钟；0=关，可选 1/2/3/5/10/20/30/60）
     uint64_t auto_shutdown_deadline; // 自动关机到期时间戳（ms，对 timestamp；0=未启用）
-    int32_t ime_hint_timeout_s;      // 九键按键提示遮罩显示时长设置（秒）：0=关闭，可选 0/3/6，默认 3（系统设置中循环切换）
     int32_t key_feedback_mode;       // 按键提示（按键反馈方式）设置：0=无，1=灯光，2=蜂鸣，3=灯光+蜂鸣；默认 1（灯光）（系统设置中循环切换）
 
     // 玲珑天象仪全局配置
@@ -249,8 +247,10 @@ typedef struct Widget_Input_State {
     // 杂项
     wchar_t *title_text;  // 顶部标题
     // 触屏交互（见 AGENTS.md 第九节）：
-    int32_t grid16_mode;            // 十六键输入模式：1-触屏点按=宫格软按键（旧行为，供九键打字）；
-                                    // 0-点按=光标定位、滑动=像素滚动（默认）。页脚 [16键] 热点切换
+    // 十六键虚拟键盘（ui_grid16kbd 模块，显隐为模块全局状态 ui_grid16kbd_is_visible）：
+    // 页脚 [16键] 热点呼出/收起（ui_widget_input_toggle_grid16，与触屏软键盘互斥）。
+    // 键盘可见时：触屏点按键盘按钮=九键软按键（替代旧的全屏4x4宫格隐式映射），
+    // 不解释滚动/光标；键盘隐藏时（默认）：点按=光标定位、滑动=像素滚动。
     uint64_t softkey_swallow_until; // 热点动作后吞掉宫格残留软按键的截止时间戳（ms；范式同 ui_calendar）
     int32_t drawn_cursor_pos;       // 上次绘制时的光标位置：光标跟随滚动仅在光标变化时触发，
                                     // 避免触屏手动滚动后被光标跟随拉回（初始 -2 强制首次跟随）
@@ -359,12 +359,12 @@ static inline int32_t ui_std_header_height(uint32_t font_id) {
 
 void ui_widget_input_init(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, wchar_t *title_text);
 void ui_widget_input_refresh(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
-// 九键按键提示遮罩外部开关：1=启用机制（默认），0=关闭机制（立即解除已激活的遮罩并禁止触发）。
-// 软键盘启用时应由上层关闭本机制，避免遮罩干扰软键盘（见 ui_app.c 软键盘显隐切换处）。
-void ui_ime_hint_mask_set_enabled(int32_t enabled);
-// 切换触屏软键盘显隐（文本输入控件固有功能，供 Ctrl+0 组合键与上滑/下滑手势调用）：
-// 联动按键提示遮罩开关、全键盘拼音组字重置，并重新布局文本区为键盘让出/恢复空间。
+// 切换触屏软键盘显隐（文本输入控件固有功能，供 Ctrl+0 组合键与页脚 [键盘] 热点调用）：
+// 联动全键盘拼音组字重置，并重新布局文本区为键盘让出/恢复空间。
 void ui_widget_input_toggle_softkbd(Key_Event *key_event, Global_State *global_state);
+// 切换16键虚拟键盘显隐（文本输入控件固有功能，供页脚 [16键] 热点调用）：
+// 与触屏软键盘互斥，联动全键盘拼音组字重置，并重新布局文本区为键盘让出/恢复空间。
+void ui_widget_input_toggle_grid16(Key_Event *key_event, Global_State *global_state);
 // 在文本框的光标位置之后插入/删除一个字符（触屏软键盘及其拼音输入法也会调用）
 void insert_char(Widget_Input_State *input_state, wchar_t new_char);
 void delete_char(Widget_Input_State *input_state);

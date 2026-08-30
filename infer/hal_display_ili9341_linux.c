@@ -1454,3 +1454,13 @@ void display_hal_close(void) {
 void display_set_brightness(uint8_t value) {
     // TODO
 }
+
+
+void display_sleep(void) {
+    return;
+}
+
+void display_wakeup(void) {
+    return;
+}
+

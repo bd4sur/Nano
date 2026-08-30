@@ -73,19 +73,12 @@ void gfx_refresh(Nano_GFX *gfx);
 void gfx_set_clip(Nano_GFX *gfx, int32_t x, int32_t y, int32_t width, int32_t height);
 void gfx_reset_clip(Nano_GFX *gfx);
 
-// gfx_refresh 前置/后置钩子：每次推帧前/后各回调一次（单线程渲染任务内同步调用）。
-// 供叠加层与正常 UI 刷新严格同步（如 ui.c 九键按键提示遮罩：前置钩子叠加遮罩、
-// 后置钩子恢复帧缓冲）。传 NULL 清除钩子。
+// gfx_refresh 前置/后置钩子：每次推帧前/后各回调一次（渲染任务内同步调用，互斥量保护内）。
+// 供叠加层/推帧拦截等机制与正常 UI 刷新严格同步（如历史上的九键提示遮罩：前置叠加、
+// 后置恢复）。传 NULL 清除钩子。2026-08 遮罩功能移除后本机制暂无用户，作为图形层通用
+// 设施保留；配套的帧缓冲快照/恢复接口（gfx_frame_snapshot/restore）已移除，需要时再恢复。
 typedef void (*GFX_Refresh_Hook)(Nano_GFX *gfx);
 void gfx_set_refresh_hook(GFX_Refresh_Hook pre_hook, GFX_Refresh_Hook post_hook);
-
-// 帧缓冲整体快照/恢复（不透明操作：单缓冲整帧 / 双缓冲上下半屏的布局细节封装在图形层内部，
-// 调用方只需提供一块 gfx_frame_snapshot_bytes() 字节大小的内存）。
-// 典型用途：叠加层（如 ui.c 九键按键提示遮罩的 gfx_refresh 钩子）在推帧前快照干净帧、
-// 推帧后恢复，避免 alpha 叠加在持久帧缓冲上逐帧累积。
-uint32_t gfx_frame_snapshot_bytes(Nano_GFX *gfx);       // 快照所需字节数（不支持的色彩模式返回0）
-void     gfx_frame_snapshot(Nano_GFX *gfx, void *dst);  // 快照整个帧缓冲到 dst（容量须 >= gfx_frame_snapshot_bytes）
-void     gfx_frame_restore(Nano_GFX *gfx, const void *src); // 从 src 恢复整个帧缓冲
 
 // 脏区域标记（A1 局部推帧，见 Nano_GFX 脏区字段注释）：将指定矩形并入脏区
 // （自动裁剪到屏幕）；gfx_mark_dirty_full 置全屏脏。仅供绕过图形层绘制 API、
@@ -118,6 +111,14 @@ void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t 
 void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 void gfx_draw_line_anti_aliasing(Nano_GFX *gfx, float x1, float y1, float x2, float y2, float line_width, uint8_t r, uint8_t g, uint8_t b, uint8_t mode);
 void gfx_draw_rectangle(Nano_GFX *gfx, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
+// 抗锯齿圆角矩形（填充语义，同 gfx_draw_rectangle；GUI 元素用）
+// 画质优先：四个角部按 8×8 超采样统计覆盖率逐像素混合（内部直行带走行填充快路径）；
+// 四个角半径（px）独立可调（顺序：左上/右上/右下/左下，同 CSS），0 表示直角；
+// 相邻角半径和超过边长时按比例统一缩小（邻角不重叠，同 CSS 半径缩放规则）；
+// mode 语义同 gfx_draw_point（角部覆盖率作为 alpha 参与，同 alpha 字模绘制）。
+void gfx_draw_rounded_rectangle(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t width, int32_t height,
+    int32_t radius_tl, int32_t radius_tr, int32_t radius_br, int32_t radius_bl,
+    uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 // 以RGB565颜色快速填充矩形（供粒子喷溅等高频小矩形绘制：行指针每行只计算一次、
 // 像素直接写入，跳过逐点mode分支与RGB888→RGB565转换；非RGB565色彩模式回退到gfx_draw_rectangle）
 void gfx_fill_rect_rgb565(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t width, int32_t height, uint16_t rgb565);

@@ -22,3 +22,7 @@ int32_t read_ups_current() {
 int32_t read_ups_soc() {
     return 0;
 }
+
+int32_t power_key_poll(void) {
+    return 0;
+}

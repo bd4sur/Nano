@@ -410,14 +410,18 @@ static void ui_ebook_draw_progress_bar(Key_Event *key_event, Global_State *globa
 }
 
 // ===============================================================================
-// “跳转到页”模态框 + 触屏数字键盘
+// “跳转到页”全屏界面（2026-08 重构：原模态框+叠加键盘 → 全屏黑底 + 输入行 + 圆角软键盘）
+// 进入/确认/取消时整屏切换；交互过程（数字/退格）仅重绘输入行条带
+// （ui_ebook_goto_render_input_line），消除旧实现每击键全页重绘（文本区重排版 +
+// 全屏推帧）造成的刷新闪烁。键盘键位为圆角矩形（半径 6px，浅灰底 + 深色文字，
+//  gfx_draw_rounded_rectangle）。
 // ===============================================================================
 
-// 布局：模态框上移（为下方数字键盘留空间）；键盘 3行4列，尽量填满可用空间并留边距/间距
-#define EBOOK_GOTO_MODAL_X   (60)
-#define EBOOK_GOTO_MODAL_Y   (8)
-#define EBOOK_GOTO_MODAL_W   (200)
-#define EBOOK_GOTO_MODAL_H   (44)
+// 输入行条带（页顶）
+#define EBOOK_GOTO_INPUT_Y    (8)
+#define EBOOK_GOTO_INPUT_H    (44)
+
+// 键盘布局：3行4列，尽量填满可用空间并留边距/间距（与原模态框键盘同尺寸）
 #define EBOOK_GOTO_PAD_X0    (8)
 #define EBOOK_GOTO_PAD_Y0    (56)
 #define EBOOK_GOTO_PAD_X1    (312)
@@ -427,6 +431,7 @@ static void ui_ebook_draw_progress_bar(Key_Event *key_event, Global_State *globa
 #define EBOOK_GOTO_PAD_ROWS  (3)
 #define EBOOK_GOTO_PAD_CELL_W ((EBOOK_GOTO_PAD_X1 - EBOOK_GOTO_PAD_X0 - (EBOOK_GOTO_PAD_COLS - 1) * EBOOK_GOTO_PAD_GAP) / EBOOK_GOTO_PAD_COLS)
 #define EBOOK_GOTO_PAD_CELL_H ((EBOOK_GOTO_PAD_Y1 - EBOOK_GOTO_PAD_Y0 - (EBOOK_GOTO_PAD_ROWS - 1) * EBOOK_GOTO_PAD_GAP) / EBOOK_GOTO_PAD_ROWS)
+#define EBOOK_GOTO_KEY_RADIUS (6)
 
 // 跳页确认（硬按键 D 与触屏“确认”按钮共用）
 static void ui_ebook_goto_confirm(Key_Event *key_event, Global_State *global_state) {
@@ -439,23 +444,33 @@ static void ui_ebook_goto_confirm(Key_Event *key_event, Global_State *global_sta
     }
 }
 
-// 绘制“跳转到页”模态框与触屏数字键盘（纯触屏设备上数字输入的唯一渠道；
-// 布局 3行4列：1 2 3 退格 / 4 5 6 0 / 7 8 9 确认）
-static void ui_ebook_goto_modal_render(Key_Event *key_event, Global_State *global_state) {
-    (void)key_event;
+// 输入行绘制（只画不刷帧）：黑底回填条带 + 重绘“跳转到页： NNN_”
+static void ui_ebook_goto_paint_input_line(Global_State *global_state) {
     Nano_GFX *gfx = global_state->gfx;
-    // 模态框（上移）
-    gfx_draw_rectangle(gfx, EBOOK_GOTO_MODAL_X, EBOOK_GOTO_MODAL_Y, EBOOK_GOTO_MODAL_W, EBOOK_GOTO_MODAL_H, 20, 20, 28, 1);
-    gfx_draw_rectangle(gfx, EBOOK_GOTO_MODAL_X, EBOOK_GOTO_MODAL_Y, EBOOK_GOTO_MODAL_W, 2, 90, 90, 110, 1);
-    gfx_draw_rectangle(gfx, EBOOK_GOTO_MODAL_X, EBOOK_GOTO_MODAL_Y + EBOOK_GOTO_MODAL_H - 2, EBOOK_GOTO_MODAL_W, 2, 90, 90, 110, 1);
+    gfx_draw_rectangle(gfx, 0, EBOOK_GOTO_INPUT_Y, gfx->width, EBOOK_GOTO_INPUT_H, 0, 0, 0, 1);
     wchar_t buf[32];
     wchar_t digits_w[EBOOK_MAX_GOTO_DIGITS + 2];
     for (int32_t i = 0; i < s_goto_len; i++) digits_w[i] = (wchar_t)s_goto_digits[i];
     digits_w[s_goto_len] = L'\0';
     swprintf(buf, 32, L"跳转到页： %ls_", digits_w);
-    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, buf, gfx->width / 2, EBOOK_GOTO_MODAL_Y + EBOOK_GOTO_MODAL_H / 2, 255, 255, 255, 1);
+    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, buf, gfx->width / 2,
+        EBOOK_GOTO_INPUT_Y + EBOOK_GOTO_INPUT_H / 2, 255, 255, 255, 1);
+}
 
-    // 触屏数字键盘
+// 输入行局部重绘（交互过程唯一重绘点：数字/退格；脏区门控下仅推该条带，无闪烁）
+static void ui_ebook_goto_render_input_line(Key_Event *key_event, Global_State *global_state) {
+    (void)key_event;
+    ui_ebook_goto_paint_input_line(global_state);
+    gfx_refresh(global_state->gfx);
+}
+
+// “跳转到页”全屏界面整绘（进入时一次）：黑底 + 圆角软键盘 + 输入行，单次推帧
+static void ui_ebook_goto_render_full(Key_Event *key_event, Global_State *global_state) {
+    (void)key_event;
+    Nano_GFX *gfx = global_state->gfx;
+    gfx_soft_clear(gfx); // 全屏黑底（不刷帧，末尾统一推屏）
+
+    // 触屏数字键盘（3行4列：1 2 3 退格 / 4 5 6 0 / 7 8 9 确认；圆角浅灰键 + 深色文字）
     static const wchar_t *pad_label[EBOOK_GOTO_PAD_ROWS][EBOOK_GOTO_PAD_COLS] = {
         {L"1", L"2", L"3", L"退格"},
         {L"4", L"5", L"6", L"0"},
@@ -465,12 +480,16 @@ static void ui_ebook_goto_modal_render(Key_Event *key_event, Global_State *globa
         for (int32_t col = 0; col < EBOOK_GOTO_PAD_COLS; col++) {
             int32_t x = EBOOK_GOTO_PAD_X0 + col * (EBOOK_GOTO_PAD_CELL_W + EBOOK_GOTO_PAD_GAP);
             int32_t y = EBOOK_GOTO_PAD_Y0 + row * (EBOOK_GOTO_PAD_CELL_H + EBOOK_GOTO_PAD_GAP);
-            gfx_draw_rectangle(gfx, (uint32_t)x, (uint32_t)y, EBOOK_GOTO_PAD_CELL_W, EBOOK_GOTO_PAD_CELL_H, 32, 32, 44, 1);
-            gfx_draw_rectangle(gfx, (uint32_t)x, (uint32_t)y, EBOOK_GOTO_PAD_CELL_W, EBOOK_GOTO_PAD_CELL_H, 90, 90, 110, 0);
-            gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, pad_label[row][col],
-                x + EBOOK_GOTO_PAD_CELL_W / 2, y + EBOOK_GOTO_PAD_CELL_H / 2, 230, 230, 230, 1);
+            gfx_draw_rounded_rectangle(gfx, x, y, EBOOK_GOTO_PAD_CELL_W, EBOOK_GOTO_PAD_CELL_H,
+                EBOOK_GOTO_KEY_RADIUS, EBOOK_GOTO_KEY_RADIUS, EBOOK_GOTO_KEY_RADIUS, EBOOK_GOTO_KEY_RADIUS,
+                0x33, 0x33, 0x33, 1);
+            gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, (wchar_t *)pad_label[row][col],
+                x + EBOOK_GOTO_PAD_CELL_W / 2, y + EBOOK_GOTO_PAD_CELL_H / 2, 0xff, 0xff, 0xff, 1);
         }
     }
+
+    ui_ebook_goto_paint_input_line(global_state);
+    gfx_refresh(gfx);
 }
 
 int32_t ui_ebook_reading_render(Key_Event *key_event, Global_State *global_state) {
@@ -493,12 +512,6 @@ int32_t ui_ebook_reading_render(Key_Event *key_event, Global_State *global_state
     // 总进度滚动条（绘制于文本控件之后，避免被其背景清除覆盖）
     ui_ebook_draw_progress_bar(key_event, global_state);
     gfx_refresh(global_state->gfx);
-
-    // “跳转到页”模态框 + 触屏数字键盘
-    if (s_goto_active) {
-        ui_ebook_goto_modal_render(key_event, global_state);
-        gfx_refresh(global_state->gfx);
-    }
     return 0;
 }
 
@@ -765,8 +778,8 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
     if (key_event->touch_edge & TOUCH_EDGE_UP) {
         int32_t tx = key_event->touch_down_x;
         int32_t ty = key_event->touch_down_y;
-        // 跳页模态框激活：触屏数字键盘命中判定（退格/确认/数字）；键盘区域外松手沿视为取消
-        //（模态框数字输入仅认硬按键与虚拟键盘，纯触屏设备上须有触摸逃生通道）
+        // 跳页界面激活：触屏数字键盘命中判定（退格/确认/数字）；键盘区域外松手沿视为取消
+        //（数字输入仅认硬按键与虚拟键盘，纯触屏设备上须有触摸逃生通道）
         if (s_goto_active) {
             if (ty >= EBOOK_GOTO_PAD_Y0 && ty < EBOOK_GOTO_PAD_Y1
                 && tx >= EBOOK_GOTO_PAD_X0 && tx < EBOOK_GOTO_PAD_X1) {
@@ -779,21 +792,24 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
                 if (in_cell && col >= 0 && col < EBOOK_GOTO_PAD_COLS && row >= 0 && row < EBOOK_GOTO_PAD_ROWS) {
                     if (row == 0 && col == 3) {          // 退格
                         if (s_goto_len > 0) s_goto_len--;
+                        ui_ebook_goto_render_input_line(key_event, global_state); // 仅重绘输入行
                     }
                     else if (row == 2 && col == 3) {     // 确认
                         ui_ebook_goto_confirm(key_event, global_state);
+                        ui_ebook_reading_render(key_event, global_state); // 恢复阅读页
                     }
                     else {                               // 数字（第二行第4列为 0）
                         if (s_goto_len < EBOOK_MAX_GOTO_DIGITS) {
                             char d = (row == 1 && col == 3) ? '0' : (char)('1' + row * 3 + col);
                             s_goto_digits[s_goto_len++] = d;
                         }
+                        ui_ebook_goto_render_input_line(key_event, global_state); // 仅重绘输入行
                     }
                 }
-                // 命中键盘区域（含按钮间隙）：不取消模态框
-                ui_ebook_reading_render(key_event, global_state);
+                // 命中键盘区域（含按钮间隙/无效格）：内容未变，不重绘（消除闪烁）
                 return 0;
             }
+            // 键盘区域外松手：取消跳页，恢复阅读页
             s_goto_active = 0;
             ui_ebook_reading_render(key_event, global_state);
             return 0;
@@ -806,12 +822,12 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
         if (ty >= footer_top && ty < footer_top + band_h) {
             int32_t quarter = tx / ((int32_t)global_state->gfx->width / 4);
             // quarter 0/1（上页/下页）由上方按住跟踪分支处理，此处不再响应
+            // quarter == 3：书签（占位符，暂不实现）
             if (quarter == 2) {
                 s_goto_active = 1;
                 s_goto_len = 0;
-                ui_ebook_reading_render(key_event, global_state);
+                ui_ebook_goto_render_full(key_event, global_state); // 全屏跳页界面
             }
-            // quarter == 3：书签（占位符，暂不实现）
             return 0;
         }
     }
@@ -825,23 +841,28 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
         return 0;
     }
 
-    // 模态框激活：数字输入页码，D确认，←删位，A取消
+    // 跳页界面激活：数字输入页码，D确认，←删位，A取消
+    //（交互期仅重绘输入行；确认/取消恢复阅读页整绘）
     if (s_goto_active) {
         if (key_event->key_code >= NANO_KEY_0 && key_event->key_code <= NANO_KEY_9 && key_event->key_edge == -1) {
             if (s_goto_len < EBOOK_MAX_GOTO_DIGITS) {
                 s_goto_digits[s_goto_len++] = (char)key_event->key_code;
             }
+            ui_ebook_goto_render_input_line(key_event, global_state);
         }
         else if (key_event->key_code == NANO_KEY_left && key_event->key_edge == -1) {
             if (s_goto_len > 0) s_goto_len--;
+            ui_ebook_goto_render_input_line(key_event, global_state);
         }
         else if (key_event->key_code == NANO_KEY_enter && key_event->key_edge == -1) {
             ui_ebook_goto_confirm(key_event, global_state);
+            ui_ebook_reading_render(key_event, global_state); // 恢复阅读页
         }
         else if (key_event->key_code == NANO_KEY_esc) {
             s_goto_active = 0;
+            ui_ebook_reading_render(key_event, global_state); // 恢复阅读页
         }
-        ui_ebook_reading_render(key_event, global_state);
+        // 其余按键：内容未变，不重绘（消除闪烁）
         return 0;
     }
 
@@ -851,11 +872,11 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
         global_state->STATE = STATE_EBOOK;
         return 0;
     }
-    // C(Ctrl)：弹出“跳转到页”模态框
+    // C(Ctrl)：进入“跳转到页”全屏界面
     if (key_event->key_code == NANO_KEY_ctrl && key_event->key_edge == -1) {
         s_goto_active = 1;
         s_goto_len = 0;
-        ui_ebook_reading_render(key_event, global_state);
+        ui_ebook_goto_render_full(key_event, global_state);
         return 0;
     }
     // ←/→：逐行滚行，与分页取数融合——缓冲区是以视口为中心的滑动窗口，

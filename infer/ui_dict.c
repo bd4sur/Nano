@@ -547,7 +547,6 @@ int32_t ui_dict_enter(Key_Event *key_event, Global_State *global_state) {
 
     // 固定显示软键盘（无呼出/收起逻辑；词典状态不加入手势门控列表）
     ui_softkbd_show();
-    ui_ime_hint_mask_set_enabled(0);
 
     // 查询现场初始化
     s_prefix[0] = L'\0';
@@ -577,7 +576,6 @@ int32_t ui_dict_enter(Key_Event *key_event, Global_State *global_state) {
 void ui_dict_exit(Key_Event *key_event, Global_State *global_state) {
     global_state->ui_font = s_prev_ui_font; // 恢复全局字体
     ui_softkbd_hide();
-    ui_ime_hint_mask_set_enabled(1);
     platform_file_close();
     if (s_idx_blob)   { free(s_idx_blob);   s_idx_blob = NULL; }
     if (s_match_wbuf) { free(s_match_wbuf); s_match_wbuf = NULL; }

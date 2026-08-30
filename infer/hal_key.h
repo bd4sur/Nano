@@ -152,6 +152,10 @@ extern "C" {
 
 #define NANO_KEY_del (127)
 
+// 电源键（PMIC PEK）。来源为 PMIC 状态寄存器 I2C 轮询（AXP192 reg0x46 / AXP2101 reg0x49），
+// 非键盘矩阵/触屏宫格键码——两机型的 AXP IRQ 引脚均未接 ESP32 GPIO，无法走中断，只能轮询
+#define NANO_KEY_POWER (128)
+
 
 
 

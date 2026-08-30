@@ -54,13 +54,24 @@ void misc_led_init(void) {
     M5.Led.setBrightness(255);      // 亮度调至最亮
     M5.Led.setAutoDisplay(false);   // 改色后统一 display，避免逐颗推帧
     M5.Led.begin();
-    misc_led_set(0, MISC_LED_COLOR_BLUE);
+    misc_led_set(0, MISC_LED_COLOR_BLUE, 255);
 }
 
-static void misc_led_set_raw(int32_t on, int32_t color) {
+static void misc_led_set_raw(int32_t on, int32_t color, uint8_t brightness) {
     if (on) {
-        if (color == MISC_LED_COLOR_GREEN) M5.Led.setAllColor(0, 255, 0);
-        else                               M5.Led.setAllColor(0, 0, 255);
+        // 逐通道按亮度缩放（不写 M5.Led.setBrightness 全局状态，避免并发调用互相干扰）
+        uint32_t base_r = 0, base_g = 0, base_b = 0;
+        switch (color) {
+            case MISC_LED_COLOR_RED:    base_r = 255;                         break;
+            case MISC_LED_COLOR_YELLOW: base_r = 255; base_g = 255;           break;
+            case MISC_LED_COLOR_GREEN:  base_g = 255;                         break;
+            case MISC_LED_COLOR_CYAN:   base_g = 255; base_b = 255;           break;
+            case MISC_LED_COLOR_PURPLE: base_r = 255; base_b = 255;           break;
+            case MISC_LED_COLOR_WHITE:  base_r = 255; base_g = 255; base_b = 255; break;
+            case MISC_LED_COLOR_BLUE:
+            default:                    base_b = 255;                         break;
+        }
+        M5.Led.setAllColor(base_r * brightness / 255, base_g * brightness / 255, base_b * brightness / 255);
     }
     else {
         M5.Led.setAllColor(0, 0, 0);
@@ -75,17 +86,17 @@ void misc_led_init(void) {
     M5.Power.setLed(0);
 }
 
-static void misc_led_set_raw(int32_t on, int32_t color) {
+static void misc_led_set_raw(int32_t on, int32_t color, uint8_t brightness) {
     (void)color; // 自带 LED 为单色，颜色参数忽略
-    M5.Power.setLed(on ? 188 : 0);
+    M5.Power.setLed(on ? brightness : 0); // AXP192 PMIC 自治 PWM，支持亮度
 }
 
 #endif
 
 // 指示灯亮/灭（跨核互斥入口；驱动非线程安全，见文件头部互斥量注释）
-void misc_led_set(int32_t on, int32_t color) {
+void misc_led_set(int32_t on, int32_t color, uint8_t brightness) {
     if (s_led_mutex != NULL) { xSemaphoreTake(s_led_mutex, portMAX_DELAY); }
-    misc_led_set_raw(on, color);
+    misc_led_set_raw(on, color, brightness);
     if (s_led_mutex != NULL) { xSemaphoreGive(s_led_mutex); }
 }
 
@@ -94,8 +105,8 @@ void misc_led_set(int32_t on, int32_t color) {
 static volatile uint32_t s_led_off_at_ms = 0; // 熄灭截止时间戳（ms 低 32 位）
 static volatile uint8_t  s_led_off_armed = 0; // 1-有点亮待熄灭
 
-void misc_led_blink(int32_t color, uint32_t duration_ms) {
-    misc_led_set(1, color);
+void misc_led_blink(int32_t color, uint8_t brightness, uint32_t duration_ms) {
+    misc_led_set(1, color, brightness);
     s_led_off_at_ms = (uint32_t)get_timestamp_in_ms() + duration_ms;
     s_led_off_armed = 1;
 }
@@ -103,7 +114,7 @@ void misc_led_blink(int32_t color, uint32_t duration_ms) {
 void misc_led_poll(void) {
     if (s_led_off_armed && (int32_t)((uint32_t)get_timestamp_in_ms() - s_led_off_at_ms) >= 0) {
         s_led_off_armed = 0;
-        misc_led_set(0, MISC_LED_COLOR_BLUE); // 熄灭与颜色无关（Core2 单色；CoreS3 整带灭）
+        misc_led_set(0, MISC_LED_COLOR_BLUE, 255); // 熄灭与颜色/亮度无关（Core2 单色；CoreS3 整带灭）
     }
 }
 

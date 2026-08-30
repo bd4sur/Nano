@@ -23,6 +23,12 @@ void display_hal_close(void);
 
 void display_set_brightness(uint8_t value);
 
+// LCD 控制器睡眠/唤醒（SLPIN/SLPOUT）。sleep 内含面板背光置0（Core2 物理切断 AXP192 DCDC3 /
+// CoreS3 切断 BLDO1）；wakeup 恢复睡眠前由 setBrightness 记录的亮度。
+// 注意：wakeup 后 ILI9342 需约 120ms 睡眠退出恢复时间，调用方应延时后再推帧。
+void display_sleep(void);
+void display_wakeup(void);
+
 
 #ifdef __cplusplus
 }
