@@ -11,11 +11,26 @@
 // 跨任务共享状态经 volatile 传递（单一写者）。
 // ===============================================================================
 
-// 按钮间距（px）：按钮以 4x4 均布于键盘区域，间隙处不命中（落在间隙的按压被吞掉）
-#define UI_GRID16KBD_GAP      (4)
+// 按钮间距（px）：按钮以 4x4 均布于键盘区域，间隙处不命中（落在间隙的按压被吞掉）。
+// 间距与键盘边缘间距统一为 2px；纵向 150-5*2=140 恰好整除（行高35），
+// 横向 320-5*2=310 不能被 4 整除（77.5），余数 2px 分配给前 2 列（78px）、后 2 列（77px），
+// 由 ui_grid16kbd_col_geometry 统一计算（绘制与命中判定共用，保证严格一致）。
+#define UI_GRID16KBD_GAP      (2)
 #define UI_GRID16KBD_RADIUS   (4)  // 按钮圆角半径
-#define UI_GRID16KBD_CELL_W   ((SCREEN_WIDTH - (UI_GRID16KBD_COLS + 1) * UI_GRID16KBD_GAP) / UI_GRID16KBD_COLS)
 #define UI_GRID16KBD_CELL_H   ((UI_GRID16KBD_HEIGHT - (UI_GRID16KBD_ROWS + 1) * UI_GRID16KBD_GAP) / UI_GRID16KBD_ROWS)
+
+// 逐列几何：列 col 的左缘 x 与宽度 w（横向余数分配给前列，间距/边距严格 UI_GRID16KBD_GAP）
+static void ui_grid16kbd_col_geometry(int32_t col, int32_t *out_x, int32_t *out_w) {
+    int32_t content = SCREEN_WIDTH - (UI_GRID16KBD_COLS + 1) * UI_GRID16KBD_GAP; // 310
+    int32_t base = content / UI_GRID16KBD_COLS; // 77
+    int32_t rem  = content % UI_GRID16KBD_COLS; // 2
+    int32_t x = UI_GRID16KBD_GAP;
+    for (int32_t c = 0; c < col; c++) {
+        x += base + ((c < rem) ? 1 : 0) + UI_GRID16KBD_GAP;
+    }
+    *out_x = x;
+    *out_w = base + ((col < rem) ? 1 : 0);
+}
 
 // 键盘配色（RGB888，与触屏软键盘同色系）
 #define UI_GRID16KBD_COLOR_BORDER    46, 46, 50    // 按钮间隙（键盘区域底色）
@@ -104,13 +119,21 @@ static int32_t ui_grid16kbd_hit_test(int32_t x, int32_t y, int32_t *out_row, int
     if (x < UI_GRID16KBD_GAP || x >= SCREEN_WIDTH - UI_GRID16KBD_GAP) return 0;
     if (y < kbd_y + UI_GRID16KBD_GAP || y >= SCREEN_HEIGHT - UI_GRID16KBD_GAP) return 0;
 
-    int32_t pitch_x = UI_GRID16KBD_CELL_W + UI_GRID16KBD_GAP;
+    // 列：逐列几何（宽度不完全均分，余数分配给前列，见 ui_grid16kbd_col_geometry）
+    int32_t col = -1;
+    for (int32_t c = 0; c < UI_GRID16KBD_COLS; c++) {
+        int32_t cx = 0, cw = 0;
+        ui_grid16kbd_col_geometry(c, &cx, &cw);
+        if (x >= cx && x < cx + cw) { col = c; break; }
+        if (x < cx + cw + UI_GRID16KBD_GAP) return 0; // 落在该列之后的间隙
+    }
+    if (col < 0) return 0;
+
+    // 行：严格均分（CELL_H 整除）
     int32_t pitch_y = UI_GRID16KBD_CELL_H + UI_GRID16KBD_GAP;
-    int32_t col = (x - UI_GRID16KBD_GAP) / pitch_x;
     int32_t row = (y - kbd_y - UI_GRID16KBD_GAP) / pitch_y;
-    if (col < 0 || col >= UI_GRID16KBD_COLS || row < 0 || row >= UI_GRID16KBD_ROWS) return 0;
+    if (row < 0 || row >= UI_GRID16KBD_ROWS) return 0;
     // 排除按钮间隙
-    if ((x - UI_GRID16KBD_GAP) % pitch_x >= UI_GRID16KBD_CELL_W) return 0;
     if ((y - kbd_y - UI_GRID16KBD_GAP) % pitch_y >= UI_GRID16KBD_CELL_H) return 0;
 
     *out_row = row;
@@ -174,9 +197,10 @@ void ui_grid16kbd_draw(Nano_GFX *gfx, uint8_t is_ctrl_active) {
 
     for (int32_t r = 0; r < UI_GRID16KBD_ROWS; r++) {
         for (int32_t c = 0; c < UI_GRID16KBD_COLS; c++) {
-            int32_t x = UI_GRID16KBD_GAP + c * (UI_GRID16KBD_CELL_W + UI_GRID16KBD_GAP);
+            int32_t x = 0, cell_w = 0;
+            ui_grid16kbd_col_geometry(c, &x, &cell_w);
             int32_t y = kbd_y + UI_GRID16KBD_GAP + r * (UI_GRID16KBD_CELL_H + UI_GRID16KBD_GAP);
-            int32_t cx = x + UI_GRID16KBD_CELL_W / 2;
+            int32_t cx = x + cell_w / 2;
             int32_t cy = y + UI_GRID16KBD_CELL_H / 2;
 
             uint8_t bg_R = 0, bg_G = 0, bg_B = 0;
@@ -190,7 +214,7 @@ void ui_grid16kbd_draw(Nano_GFX *gfx, uint8_t is_ctrl_active) {
                 bg_R = 96; bg_G = 96; bg_B = 104;  // 按住高亮
             }
 
-            gfx_draw_rounded_rectangle(gfx, x, y, UI_GRID16KBD_CELL_W, UI_GRID16KBD_CELL_H,
+            gfx_draw_rounded_rectangle(gfx, x, y, cell_w, UI_GRID16KBD_CELL_H,
                 UI_GRID16KBD_RADIUS, UI_GRID16KBD_RADIUS, UI_GRID16KBD_RADIUS, UI_GRID16KBD_RADIUS,
                 bg_R, bg_G, bg_B, 1);
 

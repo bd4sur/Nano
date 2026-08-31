@@ -107,8 +107,10 @@ static uint8_t s_image_decode_ready = 0;
 
 
 
-static uint32_t s_animac_console_text_len = 0;
 static uint32_t s_animac_prev_ui_font = 0; // 进入 STATE_ANIMAC_* 之前的 ui_font，退出时恢复
+// 控制台触屏序列属主：0=无序列 1=日志区 2=输入框 3=穿透（输入框无滚动余量：拖滚日志区+点按定位光标）
+//（DOWN 时按按下点归属，整个序列只喂给属主手势机）
+static int32_t s_animac_touch_owner = 0;
 
 
 
@@ -173,6 +175,7 @@ static int32_t ui_app_state_is_menu(int32_t state) {
         case STATE_EBOOK_READING:  // 电子书阅读：触屏拖动滚动/页脚按钮/返回热点直接消费触屏流
         case STATE_README:         // 本机自述：文本框拖动滚动+返回热点直接消费触屏流
         case STATE_LLM_AFTER_INFER: // LLM 结果：文本框拖动滚动+返回热点直接消费触屏流
+        case STATE_ANIMAC_EXIT_CONFIRM: // 控制台退出确认模态框：触屏按钮直接消费触屏流（否则点按产生的宫格软按键会泄漏到下一状态误触发）
             return 1;
         default:
             return 0;
@@ -272,11 +275,12 @@ static uint8_t ui_app_map_touch_to_grid16_key(int32_t x, int32_t y) {
 // ===============================================================================
 void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 触屏边沿检测状态（本函数在 Core1 以 1-2ms 轮询，静态变量天然单生产者）
-    static int32_t s_input_touch_prev = 0;   // 上一轮询的触屏电平
+    static int32_t s_input_touch_prev = 0;   // 上一轮询的触屏电平（经 UP 去抖后的认定值）
     static int32_t s_input_touch_down_x = 0; // 本次触摸序列按下点坐标
     static int32_t s_input_touch_down_y = 0;
     static int32_t s_input_touch_last_x = 0; // 触摸期间最后有效触点（UP 事件的松开坐标）
     static int32_t s_input_touch_last_y = 0;
+    static int32_t s_input_touch_up_pending = 0; // UP 去抖：已连续无按压的轮询数
     // 实体按键读取（无实体键盘的触屏设备恒为 NANO_KEY_IDLE）：
     // 部分平台需在本调用内完成输入流解复用（ncurses：drain 鼠标事件并转发触屏HAL缓存），
     // 故须在触屏采样之前调用，保证下方的触屏样本为本帧最新
@@ -286,6 +290,22 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 触屏统一采样（本函数在 Core1 每 1-2ms 轮询一次）：坐标与电平填入 key_event，
     // 供本轮所有消费者（宫格映射、软键盘、手势解释及各业务状态）使用，上层不再直接调 touch_read
     touch_read(&key_event->touch_x, &key_event->touch_y, &key_event->is_touching);
+
+    // 触屏 UP 沿去抖（须在共享快照与边沿检测之前，保证三者语义一致）：松开认定要求连续
+    // NANO_TOUCH_UP_DEBOUNCE 次轮询均无按压。背景：触屏挂在多设备共享的 I2C 总线上（Core2 的
+    // FT6336 与 PMIC/IMU 同总线），拖动中偶发单次读抖动会产生假松开。若不去抖，假 UP+DOWN
+    // 对会把一次拖动切成“点按（光标跳变）+重激活（拖动位移阈值重新累计）”循环，
+    // 表现为触屏拖动失灵而点按定位正常（2026-08 定位）。抖动窗口内按按住对待
+    //（key_event 为静态变量，未按压时 touch_read 不写坐标，自然保持上轮最后有效值）。
+    if (!key_event->is_touching && s_input_touch_prev) {
+        if (s_input_touch_up_pending + 1 < NANO_TOUCH_UP_DEBOUNCE) {
+            s_input_touch_up_pending++;
+            key_event->is_touching = 1;
+        }
+    }
+    else {
+        s_input_touch_up_pending = 0;
+    }
 
     // 触屏电平共享快照：ESP32 上 Core0 渲染任务每帧取用本快照覆盖到其 key_event，
     // 高频电平样本不进入事件队列（见 linglong_m5core2.ino）
@@ -311,6 +331,7 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
         key_event->touch_edge = TOUCH_EDGE_UP;
         key_event->touch_x = s_input_touch_last_x; // 松开坐标不保证有效，以最后有效触点代替
         key_event->touch_y = s_input_touch_last_y;
+        s_input_touch_up_pending = 0; // UP 沿确认，去抖计数复位
     }
     s_input_touch_prev = key_event->is_touching;
     key_event->touch_down_x = s_input_touch_down_x;
@@ -3182,6 +3203,107 @@ static void lock_screen_exit(Key_Event *key_event, Global_State *global_state) {
 #endif // NANO_HAS_PWR_KEY
 
 
+// ===============================================================================
+// Animac终端：退出善后（共用）与退出确认模态框
+// ===============================================================================
+
+// 退出控制台善后（离开 STATE_ANIMAC_* 时调用；两条退出路径共用——
+// 页眉“返回”经退出确认模态框确认后调用，控件 prev_focus_state 路径在 CONSOLE 分支尾部调用）：
+// 销毁解释器上下文释放内存（约2MB PSRAM）、复位终端布局关联、恢复字体、日志区单例几何善后。
+//（软键盘收起与布局恢复已由文本输入控件的退出路径固有处理，见 ui.c ui_widget_input_on_leave）
+static void ui_app_animac_cleanup(Key_Event *key_event, Global_State *global_state) {
+    // 控件固有善后（输入法状态机/候选/倒计时/输入模式/全局Ctrl全复位 + 双键盘收起 + 布局恢复）——
+    // 原“返回”经输入控件页眉热点路径固有调用，模态框拦截后须显式补齐，否则键盘可见性/
+    // Ctrl/输入法状态残留会扭曲后续所有状态的布局与触屏热点
+    ui_widget_input_back_cleanup(global_state, global_state->w_input_main);
+    ui_animac_close(key_event, global_state);
+    global_state->w_input_main->dyn_height = 0;
+    global_state->w_input_main->log_view = NULL;
+    global_state->w_textarea_main->is_bare = 0;
+    global_state->ui_font = s_animac_prev_ui_font; // 恢复进入 STATE_ANIMAC_* 之前的字体
+    // 日志区（w_textarea_main 全局单例）善后：先恢复字体，再按恢复后的字体复位
+    // 标准布局几何与滚动位置——否则控制台终端修改过的 y/height 会遗留给下一个使用者
+    ui_widget_textarea_reset_geometry(key_event, global_state, global_state->w_textarea_main);
+}
+
+// 退出确认模态框几何（居中圆角对话框 + 两个圆角按钮）
+#define UI_ANIMAC_EXIT_DIALOG_W   (200)
+#define UI_ANIMAC_EXIT_DIALOG_H   (96)
+#define UI_ANIMAC_EXIT_BTN_W      (84)
+#define UI_ANIMAC_EXIT_BTN_H      (30)
+#define UI_ANIMAC_EXIT_BTN_GAP    (12)
+
+// 模态框按钮排布：返回对话框左上角与按钮区基准（供绘制与命中判定共用，保证严格一致）
+static void ui_animac_exit_confirm_layout(Global_State *global_state,
+    int32_t *out_dx, int32_t *out_dy, int32_t *out_btn_y, int32_t *out_confirm_x, int32_t *out_stay_x
+) {
+    int32_t dx = ((int32_t)global_state->gfx->width - UI_ANIMAC_EXIT_DIALOG_W) / 2;
+    int32_t dy = ((int32_t)global_state->gfx->height - UI_ANIMAC_EXIT_DIALOG_H) / 2;
+    int32_t confirm_x = dx + (UI_ANIMAC_EXIT_DIALOG_W - UI_ANIMAC_EXIT_BTN_W * 2 - UI_ANIMAC_EXIT_BTN_GAP) / 2;
+    *out_dx = dx;
+    *out_dy = dy;
+    *out_btn_y = dy + 54;
+    *out_confirm_x = confirm_x;
+    *out_stay_x = confirm_x + UI_ANIMAC_EXIT_BTN_W + UI_ANIMAC_EXIT_BTN_GAP;
+}
+
+// 绘制退出确认模态框（叠加在当前控制台画面之上；全部元素圆角矩形）
+static void ui_animac_exit_confirm_draw(Key_Event *key_event, Global_State *global_state) {
+    (void)key_event;
+    Nano_GFX *gfx = global_state->gfx;
+    int32_t dx = 0, dy = 0, btn_y = 0, confirm_x = 0, stay_x = 0;
+    ui_animac_exit_confirm_layout(global_state, &dx, &dy, &btn_y, &confirm_x, &stay_x);
+
+    // 配色随全局色彩风格
+    uint8_t border_R = 70,  border_G = 70,  border_B = 78;    // 对话框描边
+    uint8_t dlg_R = 24,     dlg_G = 24,     dlg_B = 28;       // 对话框底色
+    uint8_t btn_R = 46,     btn_G = 46,     btn_B = 50;       // “留下”按钮底色
+    uint8_t ok_R = 16,      ok_G = 72,      ok_B = 176;       // “确认”按钮底色（强调色，同 Ctrl 高亮色系）
+    uint8_t text_R = 240,   text_G = 240,   text_B = 240;     // 文字
+    uint8_t stay_text_R = 240, stay_text_G = 240, stay_text_B = 240;
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        border_R = 180; border_G = 180; border_B = 190;
+        dlg_R = 250; dlg_G = 250; dlg_B = 252;
+        btn_R = 224; btn_G = 230; btn_B = 234;
+        ok_R = 17; ok_G = 85; ok_B = 238;
+        text_R = 17; text_G = 17; text_B = 17;
+        stay_text_R = 17; stay_text_G = 17; stay_text_B = 17;
+    }
+
+    // 描边 + 底色两层圆角矩形（外圈 2px 描边效果）
+    gfx_draw_rounded_rectangle(gfx, dx - 2, dy - 2, UI_ANIMAC_EXIT_DIALOG_W + 4, UI_ANIMAC_EXIT_DIALOG_H + 4,
+        8, 8, 8, 8, border_R, border_G, border_B, 1);
+    gfx_draw_rounded_rectangle(gfx, dx, dy, UI_ANIMAC_EXIT_DIALOG_W, UI_ANIMAC_EXIT_DIALOG_H,
+        6, 6, 6, 6, dlg_R, dlg_G, dlg_B, 1);
+
+    // 标题
+    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, L"是否退出？",
+        (int32_t)gfx->width / 2, dy + 26, text_R, text_G, text_B, 1);
+
+    // 按钮：确认（强调色） / 留下（中性色）
+    gfx_draw_rounded_rectangle(gfx, confirm_x, btn_y, UI_ANIMAC_EXIT_BTN_W, UI_ANIMAC_EXIT_BTN_H,
+        6, 6, 6, 6, ok_R, ok_G, ok_B, 1);
+    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, L"确认",
+        confirm_x + UI_ANIMAC_EXIT_BTN_W / 2, btn_y + UI_ANIMAC_EXIT_BTN_H / 2, 240, 240, 240, 1);
+    gfx_draw_rounded_rectangle(gfx, stay_x, btn_y, UI_ANIMAC_EXIT_BTN_W, UI_ANIMAC_EXIT_BTN_H,
+        6, 6, 6, 6, btn_R, btn_G, btn_B, 1);
+    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, L"留下",
+        stay_x + UI_ANIMAC_EXIT_BTN_W / 2, btn_y + UI_ANIMAC_EXIT_BTN_H / 2, stay_text_R, stay_text_G, stay_text_B, 1);
+
+    gfx_refresh(gfx);
+}
+
+// 模态框命中判定：1=确认 2=留下 0=未命中
+static int32_t ui_animac_exit_confirm_hit(Global_State *global_state, int32_t x, int32_t y) {
+    int32_t dx = 0, dy = 0, btn_y = 0, confirm_x = 0, stay_x = 0;
+    ui_animac_exit_confirm_layout(global_state, &dx, &dy, &btn_y, &confirm_x, &stay_x);
+    if (y >= btn_y && y < btn_y + UI_ANIMAC_EXIT_BTN_H) {
+        if (x >= confirm_x && x < confirm_x + UI_ANIMAC_EXIT_BTN_W) return 1;
+        if (x >= stay_x && x < stay_x + UI_ANIMAC_EXIT_BTN_W) return 2;
+    }
+    return 0;
+}
+
 
 int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
@@ -4327,12 +4449,19 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             // ANIMAC终端临时将文字编辑控件字体改为 GFX_FONT_ALPHA_12，退出时恢复
             s_animac_prev_ui_font = global_state->ui_font;
             global_state->ui_font = GFX_FONT_ALPHA_12;
+            // 输入框：可编辑 input 控件（输入输出分离后为纯输入，不再承载历史与提示符）
             ui_widget_input_init(key_event, global_state, global_state->w_input_main, L"电子核桃控制台");
-            // 提示符
-            wcscat(global_state->w_input_main->textarea.text, UI_ANIMAC_STARTUP_MESSAGE);
-            wcscat(global_state->w_input_main->textarea.text, L"> ");
-            // 刷新input控件，使光标到最后
-            ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
+            // 终端模式：输入框动态高度（下沿锚定页脚上沿，随内容行数以1倍行高步进向上扩张）
+            // + 关联只读日志区（页眉与输入框之间，几何随输入框联动，见 ui_widget_input_dyn_layout）
+            global_state->w_input_main->dyn_height = 1;
+            global_state->w_input_main->log_view = global_state->w_textarea_main;
+            // 日志区：复用全局单例 textarea，嵌入（裸）模式——不绘制自己的页眉侧文本、不自行推帧
+            ui_widget_textarea_init(key_event, global_state, global_state->w_textarea_main, UI_STR_BUF_MAX_LENGTH);
+            global_state->w_textarea_main->is_bare = 1;
+            ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, UI_ANIMAC_STARTUP_MESSAGE, -1, 1);
+            // 终端布局 + 首帧完整重绘（dyn 布局在绘制中按输入框内容行数自动重算，日志区同帧合成）
+            ui_widget_input_dyn_layout(key_event, global_state, global_state->w_input_main);
+            ui_draw_input_buffer(key_event, global_state, global_state->w_input_main);
         }
         global_state->PREV_STATE = global_state->STATE;
 
@@ -4360,63 +4489,97 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
     case STATE_ANIMAC_CONSOLE: {
 
-        // 首次获得焦点：初始化
+        // 首次获得焦点：.load 指令载入的内容注入输入框（注入后内部已重绘）
         if (global_state->PREV_STATE != global_state->STATE) {
-            ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
-            s_animac_console_text_len = wcslen(global_state->w_input_main->textarea.text);
-            // .load 指令载入的内容注入到提示符之后的输入区
-            if (ui_animac_apply_pending_input(global_state, &s_animac_console_text_len)) {
-                ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
-            }
+            ui_animac_apply_pending_input(key_event, global_state);
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        // 编辑器模式：驱动解释器事件循环（定时器等异步任务），并将其输出行搬入控制台
-        ui_animac_idle_pump(key_event, global_state, &s_animac_console_text_len);
+        // 编辑器模式：驱动解释器事件循环（定时器等异步任务），并将其输出行追加到日志区
+        ui_animac_idle_pump(key_event, global_state);
+
+        // 触屏序列属主路由（日志区/输入框两个手势机互斥）：DOWN 时按按下点归属，整个序列只喂给
+        // 属主手势机——否则两侧 DOWN 判定的电平兜底（|| is_touching，取当前坐标）会在拖动穿越
+        // 两区边界时把另一方中途激活，两个手势机同时滚动互抢（软键盘下输入框仅 1~3 行高，
+        // 拖动极易穿越边界；曾表现为“软键盘下输入框偶尔无法滚动/滚动错乱”）
+        // 属主 3（穿透）：DOWN 落在输入框且输入框无滚动余量（max_scroll==0，内容全可见）时，
+        // 日志区与输入控件同喂——输入框手势机不滚动（无互抢），拖动穿透滚日志区、
+        // 点按仍由输入控件定位光标（类聊天应用手感）。
+        if (key_event->touch_edge & TOUCH_EDGE_DOWN) {
+            Widget_Textarea_State *log_ta = global_state->w_textarea_main;
+            Widget_Textarea_State *in_ta = &global_state->w_input_main->textarea;
+            if (key_event->touch_down_x >= log_ta->x && key_event->touch_down_x < log_ta->x + log_ta->width
+                && key_event->touch_down_y >= log_ta->y && key_event->touch_down_y < log_ta->y + log_ta->height) {
+                s_animac_touch_owner = 1;
+            }
+            else {
+                int32_t in_line_height = gfx_font_line_height(global_state->ui_font);
+                int32_t in_scrollable = (in_ta->line_num * in_line_height > in_ta->height) ? 1 : 0;
+                int32_t in_input_box =
+                    (key_event->touch_down_x >= in_ta->x && key_event->touch_down_x < in_ta->x + in_ta->width
+                     && key_event->touch_down_y >= in_ta->y && key_event->touch_down_y < in_ta->y + in_ta->height);
+                s_animac_touch_owner = (in_input_box && !in_scrollable) ? 3 : 2;
+            }
+        }
+        // 日志区触屏手势泵（滑动=像素滚动+惯性；手势机仅在序列起点位于日志区内激活，
+        // 与输入框文本区不相交；点按不响应）。属主为输入框且触摸进行中时跳过（互斥）；
+        // 非触摸帧照常喂入以推进惯性动画（新 DOWN 会先行终止旧惯性，见手势机实现）。
+        // 滚动活动时就地重绘日志区（以 is_modified==0 包裹避免逐帧重排版，范式同
+        // ui_widget_textarea_event_handler；bare 模式不动页眉）并推帧
+        if (s_animac_touch_owner != 2 || !key_event->is_touching) {
+            if (ui_widget_textarea_touch_handler(key_event, global_state, global_state->w_textarea_main) == 1) {
+                global_state->w_textarea_main->is_modified = 0;
+                ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
+                global_state->w_textarea_main->is_modified = 1;
+                gfx_refresh(global_state->gfx);
+            }
+        }
 
         // 注：软键盘切换请求消费与 Ctrl+0 绑定均已下沉到文本输入控件（ui.c），此处不再拦截
 
-        // Ctrl+V（触屏软键盘）：恢复上次提交的输入内容到输入区
+        // Ctrl+V（触屏软键盘）：恢复上次提交的输入内容到输入框
         if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->is_softkbd == 1
             && global_state->is_ctrl_enabled == 1
             && (key_event->key_code == NANO_KEY_v || key_event->key_code == NANO_KEY_V)) {
             global_state->is_ctrl_enabled = 0;
-            ui_animac_restore_last_input(key_event, global_state, s_animac_console_text_len);
+            ui_animac_restore_last_input(key_event, global_state);
             break;
         }
 
-        // Animac控制台交互：Enter换行、Ctrl+Enter提交执行（与通用输入框的语义相反，
-        // 故在此拦截Enter键，不交给 ui_widget_input_event_handler 的原生Enter分支）
-        if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
-            if (global_state->is_ctrl_enabled == 1) {
-                // Ctrl+Enter：提交执行
-                global_state->is_ctrl_enabled = 0;
-                global_state->w_input_main->state = 0;
-                global_state->STATE = STATE_ANIMAC_RUNNING;
-            }
-            else {
-                // Enter：插入换行
-                insert_char(global_state->w_input_main, L'\n');
-                ui_draw_input_buffer(key_event, global_state, global_state->w_input_main);
-            }
+        // 拦截页眉“返回”软按钮（UP 沿 + 按下点，与输入控件固有范式同）：不直接退出，
+        // 转退出确认模态框（STATE_ANIMAC_EXIT_CONFIRM）
+        if ((key_event->touch_edge & TOUCH_EDGE_UP)
+            && key_event->touch_down_y >= 0 && key_event->touch_down_y < ui_std_header_height(global_state->ui_font)
+            && key_event->touch_down_x >= UI_BACK_HOTSPOT_X0((int32_t)global_state->gfx->width)) {
+            global_state->STATE = STATE_ANIMAC_EXIT_CONFIRM;
+            break;
+        }
+
+        // Animac控制台交互：Enter提交执行、Ctrl+Enter插入换行（通用输入框默认语义）。
+        // 无Ctrl的Enter仍在此拦截而不走控件原生分支：控件原生提交路径会经
+        // ui_widget_input_on_leave 收起软键盘/16键键盘，终端提交执行后键盘须保持展开。
+        // 仅拦截控件空闲态（state==0）的Enter：组字/选字/选符态（state 1/2/3）的Enter
+        // 是输入法分页/选定语义，透传给控件
+        if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter
+            && global_state->is_ctrl_enabled == 0 && global_state->w_input_main->state == 0) {
+            global_state->w_input_main->state = 0;
+            global_state->STATE = STATE_ANIMAC_RUNNING;
         }
         else {
-            global_state->STATE = ui_widget_input_event_handler(key_event, global_state, global_state->w_input_main, STATE_MAIN_MENU, STATE_ANIMAC_CONSOLE, STATE_ANIMAC_RUNNING);
+            // 序列属主为日志区时对输入控件屏蔽触屏字段（保留按键/键盘事件），防电平兜底互抢
+            Key_Event ke_input = *key_event;
+            if (s_animac_touch_owner == 1 && (ke_input.is_touching || ke_input.touch_edge != 0)) {
+                ke_input.is_touching = 0;
+                ke_input.touch_edge = 0;
+            }
+            global_state->STATE = ui_widget_input_event_handler(&ke_input, global_state, global_state->w_input_main, STATE_MAIN_MENU, STATE_ANIMAC_CONSOLE, STATE_ANIMAC_RUNNING);
         }
 
-        // 控制台光标钳制（触屏点按定位光标引入）：控制台文本由 [历史][提示符][当前输入] 组成，
-        // 光标不得进入提示符之前的历史区，防止编辑/删除破坏历史与提示符
-        if (global_state->w_input_main->cursor_pos < (int32_t)s_animac_console_text_len - 1) {
-            global_state->w_input_main->cursor_pos = (int32_t)s_animac_console_text_len - 1;
-            ui_draw_input_buffer(key_event, global_state, global_state->w_input_main);
-        }
-
-        // 离开控制台时销毁解释器上下文释放内存（约2MB PSRAM）
-        // （软键盘收起与布局恢复已由文本输入控件的退出路径固有处理，见 ui.c ui_widget_input_on_leave）
-        if (global_state->STATE != STATE_ANIMAC_CONSOLE && global_state->STATE != STATE_ANIMAC_RUNNING) {
-            ui_pinyin_ime_reset();
-            ui_animac_close(key_event, global_state);
-            global_state->ui_font = s_animac_prev_ui_font; // 恢复进入 STATE_ANIMAC_* 之前的字体
+        // 离开控制台（控件 prev_focus_state 路径：输入框为空的 A 键等）：退出善后
+        // （页眉“返回”路径经 STATE_ANIMAC_EXIT_CONFIRM 确认后同样调 ui_app_animac_cleanup）
+        if (global_state->STATE != STATE_ANIMAC_CONSOLE && global_state->STATE != STATE_ANIMAC_RUNNING
+            && global_state->STATE != STATE_ANIMAC_EXIT_CONFIRM) {
+            ui_app_animac_cleanup(key_event, global_state);
         }
 
         break;
@@ -4429,28 +4592,79 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
     case STATE_ANIMAC_RUNNING: {
 
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
-        }
         global_state->PREV_STATE = global_state->STATE;
 
-        wchar_t *console_text = global_state->w_input_main->textarea.text;
+        Widget_Textarea_State *input_ta = &global_state->w_input_main->textarea;
+        Widget_Textarea_State *log_ta = global_state->w_textarea_main;
+
         // 控制台输入缓冲区（一次性分配于PSRAM，避免占用任务栈与紧张的内部RAM；
         // 控制台单线程运行无重入；长度与控制台文本缓冲上限一致）
         static wchar_t *new_input = NULL;
         if (!new_input) new_input = (wchar_t*)platform_calloc(UI_STR_BUF_MAX_LENGTH, sizeof(wchar_t));
-        wcscpy(new_input, &console_text[s_animac_console_text_len]);
+        wcsncpy(new_input, input_ta->text, UI_STR_BUF_MAX_LENGTH - 1);
+        new_input[UI_STR_BUF_MAX_LENGTH - 1] = L'\0';
 
         // 记录本次提交的输入，供 Ctrl+V 恢复
         ui_animac_save_last_input(new_input);
 
-        ui_animac_exec(key_event, global_state, new_input, console_text, &s_animac_console_text_len);
+        // 回显到日志区（"> "+输入），随后解释器输出累加于日志区尾部
+        ui_animac_log_trim(global_state, (uint32_t)wcslen(new_input) + 4);
+        ui_animac_console_append(log_ta->text, L"> ");
+        ui_animac_console_append(log_ta->text, new_input);
+        ui_animac_console_append(log_ta->text, L"\n");
 
-        ui_animac_console_append(console_text, L"> ");
-        ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
+        ui_animac_exec(key_event, global_state, new_input, log_ta->text);
+
+        // 清空输入框、日志区强制滚底（智能滚动“首次更新必滚动”：提交轮的回显+输出无条件滚底）、
+        // 整帧重绘（控制台模式同帧合成日志区）
+        input_ta->text[0] = L'\0';
+        input_ta->length = 0;
+        input_ta->is_modified = 1;
+        global_state->w_input_main->cursor_pos = -1;
+        global_state->w_input_main->desired_x = -1;
+        ui_animac_log_force_bottom(global_state);
+        ui_draw_input_buffer(key_event, global_state, global_state->w_input_main);
 
         global_state->STATE = STATE_ANIMAC_CONSOLE;
+
+        break;
+    }
+
+
+    /////////////////////////////////////////////
+    // Animac终端：退出确认模态框（页眉“返回”拦截后的确认）
+    /////////////////////////////////////////////
+
+    case STATE_ANIMAC_EXIT_CONFIRM: {
+
+        // 首次获得焦点：叠加绘制模态框（控制台画面保留在其下）
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_animac_exit_confirm_draw(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 模态期间不泵编辑器事件循环（ui_animac_idle_pump 暂停）：
+        // 避免异步输出触发整帧重绘覆盖模态框；运行时定时器随之暂停，对话框存续期间可接受
+
+        // 触屏按钮（松手沿 + 按下点命中，全局范式）
+        if (key_event->touch_edge & TOUCH_EDGE_UP) {
+            int32_t hit = ui_animac_exit_confirm_hit(global_state, key_event->touch_down_x, key_event->touch_down_y);
+            if (hit == 1) {
+                // 确认退出：完整善后（解释器内存/字体/终端布局关联/日志区几何）后回主菜单
+                ui_app_animac_cleanup(key_event, global_state);
+                global_state->STATE = STATE_MAIN_MENU;
+            }
+            else if (hit == 2) {
+                // 留下：恢复控制台画面（整帧重绘，终端模式同帧合成日志区）并返回
+                ui_draw_input_buffer(key_event, global_state, global_state->w_input_main);
+                global_state->STATE = STATE_ANIMAC_CONSOLE;
+            }
+        }
+        // A键（退格/返回）等价于“留下”
+        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_esc) {
+            ui_draw_input_buffer(key_event, global_state, global_state->w_input_main);
+            global_state->STATE = STATE_ANIMAC_CONSOLE;
+        }
 
         break;
     }

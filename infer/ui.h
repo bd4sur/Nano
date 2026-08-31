@@ -186,6 +186,10 @@ typedef struct Key_Event {
 #define TOUCH_EDGE_DOWN (1) // 按下沿
 #define TOUCH_EDGE_UP   (2) // 松开沿
 
+// 触屏 UP 沿去抖：松开认定要求连续 N 次轮询（生产端 1-2ms 轮询，N=3 ≈ 3-6ms）均无按压，
+// 容忍共享 I2C 总线上偶发单次读抖动造成的假松开（见 ui_app.c get_input_event）
+#define NANO_TOUCH_UP_DEBOUNCE (3)
+
 typedef struct Widget_Textarea_State {
     int32_t state;
     int32_t x;
@@ -203,6 +207,9 @@ typedef struct Widget_Textarea_State {
     int32_t current_line;
     int32_t is_show_scroll_bar; // 是否显示滚动条：0不显示 1显示
     int32_t is_modified; // 文本内容是否有修改过？默认1。用于控制是否进行typeset_line_breaks排版
+    // 嵌入（裸）模式：1=本控件作为宿主的内嵌区域绘制——ui_widget_textarea_draw 不触碰页眉侧文本、
+    // 不自行 gfx_refresh（由宿主统一推帧）。电子核桃控制台的日志区即以此模式嵌入输入控件画面。
+    int32_t is_bare;
 
     // 像素级连续滚动（见 AGENTS.md 第九节）：
     // 不变量 scroll_px = current_line * line_height + scroll_sub_offset（行高恒定）。
@@ -254,6 +261,11 @@ typedef struct Widget_Input_State {
     uint64_t softkey_swallow_until; // 热点动作后吞掉宫格残留软按键的截止时间戳（ms；范式同 ui_calendar）
     int32_t drawn_cursor_pos;       // 上次绘制时的光标位置：光标跟随滚动仅在光标变化时触发，
                                     // 避免触屏手动滚动后被光标跟随拉回（初始 -2 强制首次跟随）
+    // 终端模式（电子核桃控制台，见 AGENTS.md）：输入框高度随内容排版行数动态调整——
+    // 下沿锚定页脚上沿，以 1 倍行高为步进向上扩张（至少 1 行；上限为日志区至少保留 1 行）。
+    // 布局由 ui_widget_input_dyn_layout 计算（绘制/键盘显隐 toggle 时自动重算）。
+    int32_t dyn_height;             // 1=启用动态高度终端布局，0=标准全高布局（默认）
+    Widget_Textarea_State *log_view; // 关联的只读日志区（绘制于页眉与输入框之间；NULL=无）
 } Widget_Input_State;
 
 typedef struct Widget_Menu_State {
@@ -332,6 +344,9 @@ void ui_widget_textarea_init(Key_Event *key_event, Global_State *global_state, W
     uint32_t max_len);
 void ui_widget_textarea_set(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state,
     wchar_t *text, int32_t current_line, int32_t is_show_scroll_bar);
+// 复位文本框为标准布局几何（页眉与页脚之间的完整文本区，公式同 ui_widget_textarea_init）
+// 与滚动位置清零：供改造过几何的宿主（如电子核桃控制台的日志区）退出时善后。
+void ui_widget_textarea_reset_geometry(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
 void ui_widget_textarea_draw(Key_Event *key_event, Global_State *global_state, Widget_Textarea_State *textarea_state);
 int32_t ui_widget_textarea_event_handler(
     Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts,
@@ -359,6 +374,10 @@ static inline int32_t ui_std_header_height(uint32_t font_id) {
 
 void ui_widget_input_init(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state, wchar_t *title_text);
 void ui_widget_input_refresh(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
+// 终端模式动态布局（dyn_height==1 时由绘制/键盘 toggle 自动调用，宿主进入终端时也可显式调用）：
+// 输入框下沿锚定页脚上沿、高度=clamp(内容行数,1,上限)*行高；日志区上沿钉页眉下沿、下沿接输入框上沿。
+// 调用前须保证输入框已完成排版（line_num 有效，见 typeset_line_breaks）。
+void ui_widget_input_dyn_layout(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
 // 切换触屏软键盘显隐（文本输入控件固有功能，供 Ctrl+0 组合键与页脚 [键盘] 热点调用）：
 // 联动全键盘拼音组字重置，并重新布局文本区为键盘让出/恢复空间。
 void ui_widget_input_toggle_softkbd(Key_Event *key_event, Global_State *global_state);
@@ -372,6 +391,10 @@ int32_t ui_widget_input_event_handler(
     Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state,
     int32_t prev_focus_state, int32_t current_focus_state, int32_t next_focus_state
 );
+
+// 页眉“返回”按钮善后（输入法全状态复位 + 双键盘收起 + 布局恢复，不动文本缓冲区）：
+// 控件原生返回路径固有调用；绕过该路径的宿主退出（如控制台退出确认模态框）须显式调用
+void ui_widget_input_back_cleanup(Global_State *global_state, Widget_Input_State *input_state);
 
 void ui_widget_menu_init(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
 void ui_widget_menu_refresh(Key_Event *key_event, Global_State *global_state, Widget_Menu_State *menu_state);
