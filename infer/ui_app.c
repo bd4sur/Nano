@@ -4546,11 +4546,24 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             break;
         }
 
-        // 拦截页眉“返回”软按钮（UP 沿 + 按下点，与输入控件固有范式同）：不直接退出，
-        // 转退出确认模态框（STATE_ANIMAC_EXIT_CONFIRM）
+        // 退出语义统一封装：页眉“返回”按钮、16键键盘“退格”键、全键盘 Esc 键（后两者键码均为
+        // NANO_KEY_esc）的【返回】语义一律经退出确认模态框（STATE_ANIMAC_EXIT_CONFIRM）+ 统一善后
+        //（ui_app_animac_cleanup），语义完全一致。原语义保留：输入缓冲区非空时 Esc 仍是删除
+        // 光标左侧字符（透传给控件），仅当缓冲区为空（且控件空闲态 state==0）时才是返回语义；
+        // 输入法组字/选字/选符态（state 1/2/3）的 Esc 是取消组字语义，也透传给控件；
+        // Ctrl+Esc 缓冲区非空时的强制退出为控件原语义（不经模态框，由下方兜底善后）
+        // ① 页眉“返回”软按钮（UP 沿 + 按下点，与输入控件固有范式同）
         if ((key_event->touch_edge & TOUCH_EDGE_UP)
             && key_event->touch_down_y >= 0 && key_event->touch_down_y < ui_std_header_height(global_state->ui_font)
             && key_event->touch_down_x >= UI_BACK_HOTSPOT_X0((int32_t)global_state->gfx->width)) {
+            global_state->STATE = STATE_ANIMAC_EXIT_CONFIRM;
+            break;
+        }
+        // ② 16键“退格”键 / ③ 全键盘 Esc 键（NANO_KEY_esc）：仅当输入缓冲区为空时才拦截为返回语义
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2)
+            && key_event->key_code == NANO_KEY_esc
+            && global_state->w_input_main->state == 0
+            && global_state->w_input_main->textarea.text[0] == L'\0') {
             global_state->STATE = STATE_ANIMAC_EXIT_CONFIRM;
             break;
         }
@@ -4575,8 +4588,9 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             global_state->STATE = ui_widget_input_event_handler(&ke_input, global_state, global_state->w_input_main, STATE_MAIN_MENU, STATE_ANIMAC_CONSOLE, STATE_ANIMAC_RUNNING);
         }
 
-        // 离开控制台（控件 prev_focus_state 路径：输入框为空的 A 键等）：退出善后
-        // （页眉“返回”路径经 STATE_ANIMAC_EXIT_CONFIRM 确认后同样调 ui_app_animac_cleanup）
+        // 离开控制台：退出善后（兜底。正常退出统一经退出确认模态框“确认”路径，见上方
+        // “退出语义统一封装”；此处防御控件其他返回路径漏网——模态框中转不算离开，
+        // 故条件排除 STATE_ANIMAC_EXIT_CONFIRM）
         if (global_state->STATE != STATE_ANIMAC_CONSOLE && global_state->STATE != STATE_ANIMAC_RUNNING
             && global_state->STATE != STATE_ANIMAC_EXIT_CONFIRM) {
             ui_app_animac_cleanup(key_event, global_state);
