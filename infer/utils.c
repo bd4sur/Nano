@@ -968,3 +968,213 @@ uint32_t random_u32(uint64_t *state) {
 float random_f32(uint64_t *state) {
     return (random_u32(state) >> 8) / 16777216.0f;
 }
+
+
+// ===============================================================================
+// uClibc 兼容层：可移植宽格式输出（声明与启用条件见 utils.h；仅 uClibc 构建编译）
+// ===============================================================================
+#if defined(__UCLIBC__)
+
+#include <stdarg.h>
+
+typedef struct {
+    wchar_t *buf;
+    size_t   cap;
+    size_t   len;   // 已产生字符数（含被截断部分；snprintf 语义返回值）
+} Nano_Wfmt_Out;
+
+static void nano_wfmt_putc(Nano_Wfmt_Out *o, wchar_t wc) {
+    if (o->cap > 0 && o->len + 1 < o->cap) {
+        o->buf[o->len] = wc;
+    }
+    o->len++;
+}
+
+// 追加宽字符串（%ls/%S 语义：precision 限制字符数，width 不足补空格）
+static void nano_wfmt_putws(Nano_Wfmt_Out *o, const wchar_t *ws, int precision, int width, int left_adjust) {
+    if (ws == NULL) ws = L"(null)";
+    size_t slen = 0;
+    while (ws[slen] != L'\0' && (precision < 0 || slen < (size_t)precision)) slen++;
+    int pad = (width > (int)slen) ? (width - (int)slen) : 0;
+    if (!left_adjust) { while (pad-- > 0) nano_wfmt_putc(o, L' '); }
+    for (size_t i = 0; i < slen; i++) nano_wfmt_putc(o, ws[i]);
+    while (pad-- > 0) nano_wfmt_putc(o, L' ');
+}
+
+// 追加窄字符串（%s 语义）：逐字节 widen（等价 uClibc C locale 的 mbs 行为；ASCII 路径安全）
+static void nano_wfmt_putns(Nano_Wfmt_Out *o, const char *ns, int precision, int width, int left_adjust) {
+    if (ns == NULL) ns = "(null)";
+    size_t slen = 0;
+    while (ns[slen] != '\0' && (precision < 0 || slen < (size_t)precision)) slen++;
+    int pad = (width > (int)slen) ? (width - (int)slen) : 0;
+    if (!left_adjust) { while (pad-- > 0) nano_wfmt_putc(o, L' '); }
+    for (size_t i = 0; i < slen; i++) nano_wfmt_putc(o, (wchar_t)(unsigned char)ns[i]);
+    while (pad-- > 0) nano_wfmt_putc(o, L' ');
+}
+
+int nano_vswprintf(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap) {
+    Nano_Wfmt_Out o = { s, n, 0 };
+    const wchar_t *f = fmt;
+
+    while (*f != L'\0') {
+        if (*f != L'%') {
+            nano_wfmt_putc(&o, *f++);
+            continue;
+        }
+        f++;
+        if (*f == L'%') { nano_wfmt_putc(&o, L'%'); f++; continue; }
+        if (*f == L'\0') { nano_wfmt_putc(&o, L'%'); break; }
+
+        // flags（保留原样供窄格式重建）
+        char flags[8];
+        int nflags = 0, left_adjust = 0;
+        while (*f == L'-' || *f == L'+' || *f == L' ' || *f == L'0' || *f == L'#') {
+            if (*f == L'-') left_adjust = 1;
+            if (nflags < (int)sizeof(flags) - 1) flags[nflags++] = (char)*f;
+            f++;
+        }
+        flags[nflags] = '\0';
+
+        // width
+        int width = -1;
+        if (*f == L'*') {
+            width = va_arg(ap, int);
+            f++;
+            if (width < 0) { left_adjust = 1; width = -width; }
+        } else {
+            while (*f >= L'0' && *f <= L'9') {
+                if (width < 0) width = 0;
+                width = width * 10 + (int)(*f - L'0');
+                f++;
+            }
+        }
+
+        // precision
+        int precision = -1;
+        if (*f == L'.') {
+            f++;
+            precision = 0;
+            if (*f == L'*') {
+                precision = va_arg(ap, int);
+                f++;
+                if (precision < 0) precision = -1;
+            } else {
+                while (*f >= L'0' && *f <= L'9') {
+                    precision = precision * 10 + (int)(*f - L'0');
+                    f++;
+                }
+            }
+        }
+
+        // length modifier（记录原文区间供窄格式重建）
+        const wchar_t *len_start = f;
+        int lenmod = 0; // 0=无 1=h 2=hh 3=l 4=ll 5=j 6=z 7=t 8=L
+        if (*f == L'h')      { f++; if (*f == L'h') { lenmod = 2; f++; } else lenmod = 1; }
+        else if (*f == L'l') { f++; if (*f == L'l') { lenmod = 4; f++; } else lenmod = 3; }
+        else if (*f == L'j') { lenmod = 5; f++; }
+        else if (*f == L'z') { lenmod = 6; f++; }
+        else if (*f == L't') { lenmod = 7; f++; }
+        else if (*f == L'L') { lenmod = 8; f++; }
+
+        wchar_t conv = (*f != L'\0') ? *f++ : L'\0';
+
+        switch (conv) {
+        case L'c': case L'C': {
+            // %c：int（窄字符）；%lc/%C：wint_t（宽字符），均可带 width
+            wchar_t wc;
+            if (lenmod == 3 || conv == L'C') wc = (wchar_t)va_arg(ap, wint_t);
+            else                             wc = (wchar_t)(unsigned char)va_arg(ap, int);
+            int pad = (width > 1) ? width - 1 : 0;
+            if (!left_adjust) { while (pad-- > 0) nano_wfmt_putc(&o, L' '); }
+            nano_wfmt_putc(&o, wc);
+            while (pad-- > 0) nano_wfmt_putc(&o, L' ');
+            break;
+        }
+        case L's': case L'S': {
+            // %s：窄字符串；%ls/%S：宽字符串
+            if (lenmod == 3 || conv == L'S') {
+                nano_wfmt_putws(&o, va_arg(ap, const wchar_t *), precision, (width > 0) ? width : 0, left_adjust);
+            } else {
+                nano_wfmt_putns(&o, va_arg(ap, const char *), precision, (width > 0) ? width : 0, left_adjust);
+            }
+            break;
+        }
+        case L'd': case L'i': case L'u': case L'o': case L'x': case L'X': case L'p':
+        case L'f': case L'F': case L'e': case L'E': case L'g': case L'G': case L'a': case L'A': {
+            // 重建窄格式串（纯 ASCII），委托窄 snprintf 完成数值/浮点格式化
+            char nfmt[40];
+            int m = 0;
+            nfmt[m++] = '%';
+            for (int i = 0; i < nflags && m < (int)sizeof(nfmt) - 2; i++) nfmt[m++] = flags[i];
+            if (width >= 0 && m < (int)sizeof(nfmt) - 12) {
+                int w = width, div = 1000000000;
+                if (w == 0) nfmt[m++] = '0';
+                while (div > 0 && w / div == 0) div /= 10;
+                while (div > 0) { nfmt[m++] = (char)('0' + (w / div) % 10); div /= 10; }
+            }
+            if (precision >= 0 && m < (int)sizeof(nfmt) - 12) {
+                nfmt[m++] = '.';
+                int p = precision, div = 1000000000;
+                if (p == 0) nfmt[m++] = '0';
+                while (div > 0 && p / div == 0) div /= 10;
+                while (div > 0) { nfmt[m++] = (char)('0' + (p / div) % 10); div /= 10; }
+            }
+            while (len_start < f - 1 && m < (int)sizeof(nfmt) - 2) nfmt[m++] = (char)*len_start++;
+            nfmt[m++] = (char)conv;
+            nfmt[m] = '\0';
+
+            char nbuf[160];
+            int produced = 0;
+            switch (conv) {
+            case L'd': case L'i':
+                if (lenmod == 4 || lenmod == 5)      produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, long long));
+                else if (lenmod == 3 || lenmod == 6 || lenmod == 7)
+                                                     produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, long));
+                else                                 produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, int));
+                break;
+            case L'p':
+                produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, void *));
+                break;
+            case L'u': case L'o': case L'x': case L'X':
+                if (lenmod == 4 || lenmod == 5)      produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, unsigned long long));
+                else if (lenmod == 3 || lenmod == 6 || lenmod == 7)
+                                                     produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, unsigned long));
+                else                                 produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, unsigned int));
+                break;
+            default: // 浮点
+                if (lenmod == 8)                     produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, long double));
+                else                                 produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, double));
+                break;
+            }
+            if (produced < 0) produced = 0;
+            if (produced >= (int)sizeof(nbuf)) produced = (int)sizeof(nbuf) - 1;
+            for (int i = 0; i < produced; i++) nano_wfmt_putc(&o, (wchar_t)(unsigned char)nbuf[i]);
+            break;
+        }
+        case L'n':
+            break; // 不支持（本项目未使用）
+        default:
+            // 未识别转换：原样输出
+            nano_wfmt_putc(&o, L'%');
+            if (conv != L'\0') nano_wfmt_putc(&o, conv);
+            break;
+        }
+    }
+
+    if (o.cap > 0) {
+        o.buf[(o.len < o.cap) ? o.len : o.cap - 1] = L'\0';
+    }
+    // 截断语义与 glibc 一致：容量不足时返回负值（区别于 snprintf 的“应有长度”）
+    if (o.len >= o.cap) return -1;
+    return (int)o.len;
+}
+
+int nano_swprintf(wchar_t *s, size_t n, const wchar_t *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int r = nano_vswprintf(s, n, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+#endif // defined(__UCLIBC__)

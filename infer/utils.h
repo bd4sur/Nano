@@ -15,6 +15,8 @@ extern "C" {
 #include <locale.h>
 #include <math.h>
 
+#include "nano_wfmt.h" // uClibc 宽格式兼容层（仅 uClibc 生效，其余平台空包含）
+
 
 // #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
 //     #define uint64_t unsigned long long

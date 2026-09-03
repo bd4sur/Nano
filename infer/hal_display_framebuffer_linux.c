@@ -25,6 +25,24 @@
 #define FB_DEVICE "/dev/fb1"
 #endif
 
+// FB_SWAP_RB：交换输出像素的 R/B 通道（编译期 -DFB_SWAP_RB=1 启用）。
+// 仅用于 Luckfox-Pico-86-Panel（RV1106G3）：其 /dev/fb0 驱动报告标准
+// BGRA8888（R@16,G@8,B@0），但下方 32bpp BGRA 快速路径的打包顺序与之相反，
+// 导致面板红蓝互换（青→黄、蓝→红）。该机型在 luckfox.mk 中定义此宏，
+// 使快速路径按驱动契约打包；其余平台不定义，行为不变。
+#ifndef FB_SWAP_RB
+#define FB_SWAP_RB 0
+#endif
+
+// FB_UPSCALE：逻辑帧缓冲整数倍放大上屏（编译期 -DFB_UPSCALE=N 启用，默认 1）。
+// 仅用于 Luckfox-Pico-86-Panel：业务按 320x240 逻辑分辨率渲染，物理放大 2 倍
+// （1 逻辑像素 -> 2x2 物理像素）得到 640x480，再居中显示于 720x720 面板
+// （左右黑边 40px、上下黑边 120px）。放大路径经 write_pixel 按 px_fmt 打包，
+// 颜色天然正确，与 FB_SWAP_RB 无耦合。其余平台不定义，行为不变。
+#ifndef FB_UPSCALE
+#define FB_UPSCALE 1
+#endif
+
 static int fb_fd = -1;
 static uint8_t *fb_mmap = NULL;
 static uint32_t fb_mmap_size = 0;
@@ -170,6 +188,35 @@ void display_hal_refresh(
         return;
     }
 
+#if FB_UPSCALE > 1
+    // 整数倍放大上屏：完整逻辑帧（fb_width_in x fb_height_in）放大 FB_UPSCALE 倍后居中。
+    // 偏移基于完整逻辑帧（而非当前脏区 view）计算，保证局部刷新落在正确物理位置。
+    {
+        int32_t frame_off_x = ((int32_t)fb_width  - (int32_t)fb_width_in  * FB_UPSCALE) / 2;
+        int32_t frame_off_y = ((int32_t)fb_height - (int32_t)fb_height_in * FB_UPSCALE) / 2;
+        if (frame_off_x >= 0 && frame_off_y >= 0) {
+            for (uint32_t y = 0; y < view_height; y++) {
+                uint32_t src_y = y0 + y;
+                int32_t dst_y = frame_off_y + (int32_t)src_y * FB_UPSCALE;
+                uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
+                for (uint32_t x = 0; x < view_width; x++) {
+                    int32_t dst_x = frame_off_x + (int32_t)(x0 + x) * FB_UPSCALE;
+                    for (int32_t sy = 0; sy < FB_UPSCALE; sy++) {
+                        for (int32_t sx = 0; sx < FB_UPSCALE; sx++) {
+                            write_pixel((uint32_t)(dst_x + sx), (uint32_t)(dst_y + sy),
+                                        src[0], src[1], src[2]);
+                        }
+                    }
+                    src += 3;
+                }
+            }
+            sync_and_throttle();
+            return;
+        }
+        // 放大后超出物理屏幕：回退为原样渲染
+    }
+#endif
+
     // Center the view on the physical screen
     int32_t offset_x = 0;
     int32_t offset_y = 0;
@@ -287,10 +334,18 @@ void display_hal_refresh(
                 uint8_t *src = frame_buffer_rgb888 + (src_y * fb_width_in + x0) * 3;
                 uint8_t *dst = fb_mmap + dst_y * fb_line_length + offset_x * 4;
                 for (uint32_t x = 0; x < copy_width; x++) {
+#if FB_SWAP_RB
+                    // 按驱动契约打包：bits16-23=R, bits8-15=G, bits0-7=B（字节序 B,G,R,A）
+                    uint32_t pix = 0xFF000000U |
+                                  ((uint32_t)src[0] << 16) |
+                                  ((uint32_t)src[1] << 8) |
+                                  src[2];
+#else
                     uint32_t pix = 0xFF000000U |
                                   ((uint32_t)src[2] << 16) |
                                   ((uint32_t)src[1] << 8) |
                                   src[0];
+#endif
                     dst[0] = pix & 0xFF;
                     dst[1] = (pix >> 8) & 0xFF;
                     dst[2] = (pix >> 16) & 0xFF;
