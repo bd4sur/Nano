@@ -272,6 +272,17 @@ void typeset_view_range(Widget_Textarea_State *textarea_state, int32_t line_heig
 
     textarea_state->view_lines = max_view_lines;
 
+    // 内容装不满视口时视口只能位于顶部：将滞留的正偏移吸附回 0。
+    // 背景：布局变高（如控制台终端收起软键盘、输入框随 dyn 布局变大）后，此前滚出的
+    // current_line/scroll_sub_offset 会滞留——文本块前几行“悬”在可视区上方之外，而手势机因
+    // max_scroll_px==0（一屏装得下）禁止拖动，内容被锁死。负值 current_line 是贴底标记
+    //（LLM 解码/控制台日志滚底语义），不在此列。
+    if (_line_num <= max_view_lines
+        && (textarea_state->current_line > 0 || textarea_state->scroll_sub_offset > 0)) {
+        textarea_state->current_line = 0;
+        textarea_state->scroll_sub_offset = 0;
+    }
+
     int32_t start_line = textarea_state->current_line;
 
     // 对start_line的检查和标准化
