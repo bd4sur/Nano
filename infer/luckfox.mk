@@ -19,8 +19,8 @@ ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c, $(wildcard $(ANIMAC_DIR)/*.
 
 # 设备 framebuffer 节点为 /dev/fb0（720x720, 32bpp），覆盖 HAL 默认的 /dev/fb1；
 # FB_SWAP_RB：修正面板红蓝互换（详见 hal_display_framebuffer_linux.c 注释），仅本机型定义；
-# FB_UPSCALE=2：逻辑 320x240 放大 2 倍为 640x480 居中上屏（左右黑边 40、上下黑边 120）；
-# TOUCH_SCALE=2 + 物理量程 720x720：触屏坐标做逆变换，与逻辑坐标对齐
+# FB_UPSCALE=2：逻辑 360x360（platform.h 中 NANO_POD_LUCKFOX 分支）整 2 倍放大，恰好满屏 720x720；
+# TOUCH_SCALE=2 + 物理量程 720x720：触屏坐标做逆变换（p/2，偏移为 0），与逻辑坐标对齐
 CCFLAGS = -I$(EXTRA_ROOT)/include --sysroot=$(SYSROOT) -O3 -ffast-math -Wall -DFB_DEVICE='"/dev/fb0"' -DFB_SWAP_RB=1 -DFB_UPSCALE=2 -DTOUCH_SCALE=2 -DTOUCH_PHYS_WIDTH=720 -DTOUCH_PHYS_HEIGHT=720 -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
 LDFLAGS = -L$(EXTRA_ROOT)/lib --sysroot=$(SYSROOT) -lm
 
@@ -38,8 +38,8 @@ $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
                         hal_os_linux.c \
-                        hal_audio_in_mp135.c \
-                        hal_audio_out_mp135.c \
+                        hal_audio_in_luckfox.c \
+                        hal_audio_out_luckfox.c \
                         hal_display_framebuffer_linux.c \
                         hal_imu_linux.c \
                         hal_key_mp135.c \
@@ -85,7 +85,7 @@ $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) \
                         ui_tetris.c \
                         ui_water.c \
                         | $(BIN_DIR)
-	$(CC) -DNANO_POD_MP135 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -ltinyalsa -ldl -lpthread
+	$(CC) -DNANO_POD_MP135 -DNANO_POD_LUCKFOX -DNANO_UI_SPLIT_EVENT_LOOP $(CCFLAGS) $^ -o $@ $(LDFLAGS) -ltinyalsa -ldl -lpthread
 
 clean:
 	rm -f $(BIN_DIR)/nano_pod_luckfox

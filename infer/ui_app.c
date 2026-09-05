@@ -172,6 +172,7 @@ static int32_t ui_app_state_is_menu(int32_t state) {
         case STATE_OFDM_MENU:
         case STATE_MUSICBOX_MENU:
         case STATE_GOLDMINER: // 黄金矿工同样直接消费触屏流（返回虚拟按钮/点击放钩），抑制宫格软按键
+        case STATE_TETRIS:   // 俄罗斯方块：虚拟按键/退出确认模态框直接消费触屏流，抑制宫格软按键
         case STATE_EBOOK_READING:  // 电子书阅读：触屏拖动滚动/页脚按钮/返回热点直接消费触屏流
         case STATE_README:         // 本机自述：文本框拖动滚动+返回热点直接消费触屏流
         case STATE_LLM_AFTER_INFER: // LLM 结果：文本框拖动滚动+返回热点直接消费触屏流
@@ -465,7 +466,7 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
     global_state->ui_color_style = UI_COLOR_DARK;
 
     // 全局默认背光（与 display_hal_init 的 setBrightness 一致；设置菜单按此值显示/调节）
-    global_state->brightness = 204;
+    global_state->brightness = NANO_DEFAULT_BRIGHTNESS;
 
     // 全局主音量（影响按键音、寻呼机发射音量、音乐盒初始音量）
     global_state->volume = 16;
@@ -1180,6 +1181,15 @@ void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
 
 void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) {
 
+    // 相对布局基准：本函数表层 GUI 的全部硬编码坐标/尺寸均按 320x240 设计，
+    // 此处统一换算为相对当前 gfx 尺寸的比例坐标（x 随宽、y 随高，320x240 下恒等）。
+    // 七段数码管尺寸参数取两方向较小因子 fq_rs，保证数字不变形、任何长宽比下不溢出。
+    const float fq_rx = (float)global_state->gfx->width  / 320.0f;
+    const float fq_ry = (float)global_state->gfx->height / 240.0f;
+    const float fq_rs = (fq_rx < fq_ry) ? fq_rx : fq_ry;
+#define FQ_X(v) ((int32_t)((v) * fq_rx))
+#define FQ_Y(v) ((int32_t)((v) * fq_ry))
+
     static uint64_t frame_count = 0;
     static uint64_t last_time = 0;
     static int fps = 0;
@@ -1248,12 +1258,12 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
         &upper_count, &lower_count
     );
 
-    // 绘制沙漏边界线 NOTE 硬编码
-    gfx_draw_triangle(global_state->gfx, 0, 3, 150, 112, 0, 233, 0, 30, 31, 32, 1);
-    gfx_draw_triangle(global_state->gfx, 150, 112, 0, 233, 150, 120, 0, 30, 31, 32, 1);
+    // 绘制沙漏边界线（比例坐标，基准 320x240）
+    gfx_draw_triangle(global_state->gfx, FQ_X(0), FQ_Y(3), FQ_X(150), FQ_Y(112), FQ_X(0), FQ_Y(233), 0, 30, 31, 32, 1);
+    gfx_draw_triangle(global_state->gfx, FQ_X(150), FQ_Y(112), FQ_X(0), FQ_Y(233), FQ_X(150), FQ_Y(120), 0, 30, 31, 32, 1);
 
-    gfx_draw_triangle(global_state->gfx, 319, 3, 178, 112, 178, 120, 0, 30, 31, 32, 1);
-    gfx_draw_triangle(global_state->gfx, 319, 3, 178, 120, 319, 227, 0, 30, 31, 32, 1);
+    gfx_draw_triangle(global_state->gfx, FQ_X(319), FQ_Y(3), FQ_X(178), FQ_Y(112), FQ_X(178), FQ_Y(120), 0, 30, 31, 32, 1);
+    gfx_draw_triangle(global_state->gfx, FQ_X(319), FQ_Y(3), FQ_X(178), FQ_Y(120), FQ_X(319), FQ_Y(227), 0, 30, 31, 32, 1);
 
     // gfx_draw_line_anti_aliasing(global_state->gfx, 0, 3, 150, 112, 3, 0x00, 0x01, 0x02, 1);
     // gfx_draw_line_anti_aliasing(global_state->gfx, 319, 3, 178, 112, 3, 0x00, 0x01, 0x02, 1);
@@ -1266,11 +1276,11 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
 
     // 进入沙漏画面若干秒内显示提示文字
     if (global_state->timestamp - s_ui_flip_first_load_timestamp < 10000) {
-        gfx_draw_textline(global_state->gfx, L"节流", 0, 0, 59, 59, 59, 1);
-        gfx_draw_textline(global_state->gfx, L"退出", 320-24-2, 0, 59, 59, 59, 1);
-        gfx_draw_textline(global_state->gfx, L"画风", 0, 240-12, 59, 59, 59, 1);
-        gfx_draw_textline(global_state->gfx, L"复位", 320-24-2, 240-12, 59, 59, 59, 1);
-        gfx_draw_textline(global_state->gfx, L"调整节流度", 320-12*5-2, 120+36, 59, 59, 59, 1);
+        gfx_draw_textline(global_state->gfx, L"节流", FQ_X(0), FQ_Y(0), 59, 59, 59, 1);
+        gfx_draw_textline(global_state->gfx, L"退出", FQ_X(320-24-2), FQ_Y(0), 59, 59, 59, 1);
+        gfx_draw_textline(global_state->gfx, L"画风", FQ_X(0), FQ_Y(240-12), 59, 59, 59, 1);
+        gfx_draw_textline(global_state->gfx, L"复位", FQ_X(320-24-2), FQ_Y(240-12), 59, 59, 59, 1);
+        gfx_draw_textline(global_state->gfx, L"调整节流度", FQ_X(320-12*5-2), FQ_Y(120+36), 59, 59, 59, 1);
     }
 
 
@@ -1293,7 +1303,7 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     if (!s_ui_fanqie_is_running) {
         current_timestamp = s_ui_fanqie_stop_timestamp;
     }
-    gfx_draw_textline(global_state->gfx, L"计时", 10, 102 - 20, 128, 128, 128, 1);
+    gfx_draw_textline(global_state->gfx, L"计时", FQ_X(10), FQ_Y(102-20), 128, 128, 128, 1);
     wchar_t time7seg_str[10];
     wchar_t ms_str[5];
     int32_t countdown = (int32_t)((current_timestamp - s_ui_fanqie_start_timestamp) / 1000);
@@ -1303,14 +1313,14 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     int32_t s7seg_width = 0.0f;
     int32_t s7seg_height = 0.0f;
     ui_draw_7seg_string(key_event, global_state,
-        10, 102,
-        time7seg_str, 255, 255, 255, 10.0f, 3.0f, 7.0f, 0, &s7seg_width, &s7seg_height);
-    gfx_draw_textline(global_state->gfx, ms_str, 8 + s7seg_width, 102 + s7seg_height/2 - 6 + 4, 255, 255, 255, 1);
+        FQ_X(10), FQ_Y(102),
+        time7seg_str, 255, 255, 255, 10.0f * fq_rs, 3.0f * fq_rs, 7.0f * fq_rs, 0, &s7seg_width, &s7seg_height);
+    gfx_draw_textline(global_state->gfx, ms_str, FQ_X(8) + s7seg_width, FQ_Y(102) + s7seg_height/2 - FQ_Y(6 - 4), 255, 255, 255, 1);
 
     // FPS
     wchar_t fps_buf[20];
     swprintf(fps_buf, 20, L"FPS=%d", fps);
-    gfx_draw_textline(global_state->gfx, fps_buf, 10, 102 + s7seg_height + 9, 128, 128, 128, 1);
+    gfx_draw_textline(global_state->gfx, fps_buf, FQ_X(10), FQ_Y(102) + s7seg_height + FQ_Y(9), 128, 128, 128, 1);
 
     // 每1000ms统计一次粒子流量
     static float particle_flow_per_sec = 0.0f;
@@ -1333,20 +1343,20 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
 
     // 第一次绘制是获取长宽，清除后再重新绘制
     ui_draw_7seg_string(key_event, global_state,
-        210, 102,
-        percent_str, 255, 255, 255, 10.0f, 3.0f, 7.0f, 0, &s7seg_width, &s7seg_height);
-    gfx_draw_rectangle(global_state->gfx, 210, 102, 320-210, s7seg_height, 30, 31, 32, 1);
+        FQ_X(210), FQ_Y(102),
+        percent_str, 255, 255, 255, 10.0f * fq_rs, 3.0f * fq_rs, 7.0f * fq_rs, 0, &s7seg_width, &s7seg_height);
+    gfx_draw_rectangle(global_state->gfx, FQ_X(210), FQ_Y(102), FQ_X(320) - FQ_X(210), s7seg_height, 30, 31, 32, 1);
     ui_draw_7seg_string(key_event, global_state,
-        320-10-6*3-s7seg_width, 102,
-        percent_str, 255, 255, 255, 10.0f, 3.0f, 7.0f, 0, &s7seg_width, &s7seg_height);
-    gfx_draw_textline(global_state->gfx, percent_decimal_str, 320-10-6*3, 102 + s7seg_height/2 - 6 + 4, 255, 255, 255, 1);
-    gfx_draw_textline(global_state->gfx, count_str, 190, 102 + s7seg_height/2 - 6 + 4, 64, 64, 64, 1);
-    gfx_draw_textline(global_state->gfx, flow_str, 230, 102 - 20, 128, 128, 128, 1);
+        FQ_X(320-10-6*3) - s7seg_width, FQ_Y(102),
+        percent_str, 255, 255, 255, 10.0f * fq_rs, 3.0f * fq_rs, 7.0f * fq_rs, 0, &s7seg_width, &s7seg_height);
+    gfx_draw_textline(global_state->gfx, percent_decimal_str, FQ_X(320-10-6*3), FQ_Y(102) + s7seg_height/2 - FQ_Y(6 - 4), 255, 255, 255, 1);
+    gfx_draw_textline(global_state->gfx, count_str, FQ_X(190), FQ_Y(102) + s7seg_height/2 - FQ_Y(6 - 4), 64, 64, 64, 1);
+    gfx_draw_textline(global_state->gfx, flow_str, FQ_X(230), FQ_Y(102-20), 128, 128, 128, 1);
 
 
     wchar_t throttle_str[10];
     swprintf(throttle_str, 10, L"节流度 %d%%", (s_ui_flip_is_throttle) ? s_ui_flip_throttle : 0);
-    gfx_draw_textline(global_state->gfx, throttle_str, 250, 102 + s7seg_height + 9, 128, 128, 128, 1);
+    gfx_draw_textline(global_state->gfx, throttle_str, FQ_X(250), FQ_Y(102) + s7seg_height + FQ_Y(9), 128, 128, 128, 1);
 
     // 根据沙漏进度调整节流度，避免来自上方的压力过小时，出现几乎不往下流的问题
     s_ui_flip_throttle = roundf((1.0f - (float)s_ui_flip_init_throttle) * hourglass_progress * hourglass_progress + (float)s_ui_flip_init_throttle);
@@ -1383,6 +1393,9 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     }
 
     gfx_refresh(global_state->gfx);
+
+#undef FQ_X
+#undef FQ_Y
 }
 
 
@@ -3226,7 +3239,8 @@ static void ui_app_animac_cleanup(Key_Event *key_event, Global_State *global_sta
     ui_widget_textarea_reset_geometry(key_event, global_state, global_state->w_textarea_main);
 }
 
-// 退出确认模态框几何（居中圆角对话框 + 两个圆角按钮）
+// 退出确认模态框几何（居中圆角对话框 + 两个圆角按钮）——通用组件，
+// 供控制台退出、俄罗斯方块退出等场景共用（ui_app.h 导出）
 #define UI_ANIMAC_EXIT_DIALOG_W   (200)
 #define UI_ANIMAC_EXIT_DIALOG_H   (96)
 #define UI_ANIMAC_EXIT_BTN_W      (84)
@@ -3234,7 +3248,7 @@ static void ui_app_animac_cleanup(Key_Event *key_event, Global_State *global_sta
 #define UI_ANIMAC_EXIT_BTN_GAP    (12)
 
 // 模态框按钮排布：返回对话框左上角与按钮区基准（供绘制与命中判定共用，保证严格一致）
-static void ui_animac_exit_confirm_layout(Global_State *global_state,
+void ui_exit_confirm_layout(Global_State *global_state,
     int32_t *out_dx, int32_t *out_dy, int32_t *out_btn_y, int32_t *out_confirm_x, int32_t *out_stay_x
 ) {
     int32_t dx = ((int32_t)global_state->gfx->width - UI_ANIMAC_EXIT_DIALOG_W) / 2;
@@ -3247,12 +3261,12 @@ static void ui_animac_exit_confirm_layout(Global_State *global_state,
     *out_stay_x = confirm_x + UI_ANIMAC_EXIT_BTN_W + UI_ANIMAC_EXIT_BTN_GAP;
 }
 
-// 绘制退出确认模态框（叠加在当前控制台画面之上；全部元素圆角矩形）
-static void ui_animac_exit_confirm_draw(Key_Event *key_event, Global_State *global_state) {
+// 绘制退出确认模态框（叠加在当前画面之上；全部元素圆角矩形）
+void ui_exit_confirm_draw(Key_Event *key_event, Global_State *global_state) {
     (void)key_event;
     Nano_GFX *gfx = global_state->gfx;
     int32_t dx = 0, dy = 0, btn_y = 0, confirm_x = 0, stay_x = 0;
-    ui_animac_exit_confirm_layout(global_state, &dx, &dy, &btn_y, &confirm_x, &stay_x);
+    ui_exit_confirm_layout(global_state, &dx, &dy, &btn_y, &confirm_x, &stay_x);
 
     // 配色随全局色彩风格
     uint8_t border_R = 70,  border_G = 70,  border_B = 78;    // 对话框描边
@@ -3294,9 +3308,9 @@ static void ui_animac_exit_confirm_draw(Key_Event *key_event, Global_State *glob
 }
 
 // 模态框命中判定：1=确认 2=留下 0=未命中
-static int32_t ui_animac_exit_confirm_hit(Global_State *global_state, int32_t x, int32_t y) {
+int32_t ui_exit_confirm_hit(Global_State *global_state, int32_t x, int32_t y) {
     int32_t dx = 0, dy = 0, btn_y = 0, confirm_x = 0, stay_x = 0;
-    ui_animac_exit_confirm_layout(global_state, &dx, &dy, &btn_y, &confirm_x, &stay_x);
+    ui_exit_confirm_layout(global_state, &dx, &dy, &btn_y, &confirm_x, &stay_x);
     if (y >= btn_y && y < btn_y + UI_ANIMAC_EXIT_BTN_H) {
         if (x >= confirm_x && x < confirm_x + UI_ANIMAC_EXIT_BTN_W) return 1;
         if (x >= stay_x && x < stay_x + UI_ANIMAC_EXIT_BTN_W) return 2;
@@ -4653,7 +4667,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：叠加绘制模态框（控制台画面保留在其下）
         if (global_state->PREV_STATE != global_state->STATE) {
-            ui_animac_exit_confirm_draw(key_event, global_state);
+            ui_exit_confirm_draw(key_event, global_state);
         }
         global_state->PREV_STATE = global_state->STATE;
 
@@ -4662,7 +4676,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 触屏按钮（松手沿 + 按下点命中，全局范式）
         if (key_event->touch_edge & TOUCH_EDGE_UP) {
-            int32_t hit = ui_animac_exit_confirm_hit(global_state, key_event->touch_down_x, key_event->touch_down_y);
+            int32_t hit = ui_exit_confirm_hit(global_state, key_event->touch_down_x, key_event->touch_down_y);
             if (hit == 1) {
                 // 确认退出：完整善后（解释器内存/字体/终端布局关联/日志区几何）后回主菜单
                 ui_app_animac_cleanup(key_event, global_state);

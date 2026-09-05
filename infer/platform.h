@@ -516,8 +516,18 @@ uint8_t platform_get_master_volume(void);
 
     // 屏幕
     #define USE_DEV_LIB
+#if defined(NANO_POD_LUCKFOX)
+    // Luckfox-Pico-86-Panel：720x720 面板按逻辑 360x360 运行，
+    // 显示 HAL 以 FB_UPSCALE=2 整 2 倍放大后恰好满屏（无黑边）。
+    // 仅 luckfox.mk 定义 NANO_POD_LUCKFOX；其余 NANO_POD_MP135 配置项与本块共用。
+    #define SCREEN_WIDTH  (360)
+    #define SCREEN_HEIGHT (360)
+    // 默认背光 100%（覆盖全局默认 204，见本文件末尾 NANO_DEFAULT_BRIGHTNESS）
+    #define NANO_DEFAULT_BRIGHTNESS (255)
+#else
     #define SCREEN_WIDTH  (320)
     #define SCREEN_HEIGHT (240)
+#endif
     #define SCREEN_SPI_CS_CHIP  (7)
     #define SCREEN_SPI_CS_LINE  (5)
     #define SCREEN_SPI_RST_CHIP (8)
@@ -903,6 +913,13 @@ uint8_t platform_get_master_volume(void);
 
 #else
 
+#endif
+
+// 默认 LCD 背光亮度（0~255；业务层全局初值与 display_hal_init 上电默认值共用）。
+// 各平台块可用 #define 覆盖本默认值。
+// Luckfox-Pico-86-Panel 默认 100%（255，见其 NANO_POD_LUCKFOX 分支）。
+#ifndef NANO_DEFAULT_BRIGHTNESS
+#define NANO_DEFAULT_BRIGHTNESS (204)
 #endif
 
 

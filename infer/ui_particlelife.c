@@ -32,19 +32,22 @@
 #define PL_DAMPING      (0.5f)    // 每帧速度衰减系数
 
 // ========== 世界与种群 ==========
-// 世界比例与机器屏幕一致（320x240 = 4:3）：x∈[-1,1]，y∈[-0.75,0.75] 的环面
+// 世界半宽固定 1.0（x∈[-1,1] 环面）；半高为运行时量——按实际逻辑屏幕宽高比取
+// hh = (H−HUD)/W，使世界恰好填满 HUD 以下的整个逻辑屏（原硬编码 320x240 → 0.75）。
 #define PL_WORLD_HW     (1.0f)    // 世界半宽
-#define PL_WORLD_HH     (0.75f)   // 世界半高
 #define PL_WORLD_W      (2.0f * PL_WORLD_HW)  // 回绕周期（宽）
-#define PL_WORLD_H      (2.0f * PL_WORLD_HH)  // 回绕周期（高）
 #define PL_SCATTER_N    (18)      // 初始撒布网格边长（原作 N=30）
 #define PL_NUM_PARTICLES (PL_SCATTER_N * PL_SCATTER_N)  // 粒子数
 
 // ========== 视口 ==========
 #define PL_HUD_H        (16)      // 顶部信息栏高度
-#define PL_SCALE        (149.0f)  // 像素/世界单位（世界 2.0x1.5 -> 约 298x224 像素）
-#define PL_CENTER_X     (160)     // 世界原点的屏幕坐标
-#define PL_CENTER_Y     (PL_HUD_H + 112)
+// （原 PL_SCALE=149.0 / PL_CENTER_X=160 / PL_CENTER_Y=HUD+112 硬编码已运行化）
+
+// 运行时世界/视口几何（ui_particlelife_init 按 gfx 实际尺寸填充）
+static float   s_pl_world_hh = 0.75f;  // 世界半高（= (H−HUD)/W × PL_WORLD_HW）
+static float   s_pl_scale    = 149.0f; // 像素/世界单位（= W/(2×PL_WORLD_HW)，与纵向精确一致）
+static int32_t s_pl_cx       = 160;    // 世界原点屏幕坐标（= W/2）
+static int32_t s_pl_cy       = 128;    // （= HUD + (H−HUD)/2）
 
 // 种类调色板（与原作 palette 一致：#f80 #ff0 #4f0 #0cf #04f #f08）
 static const uint8_t S_PL_PALETTE[PL_NUM_KIND][3] = {
@@ -78,11 +81,8 @@ static float pl_frand(void) {
 // rsqrt 结果钳制 2^25（对应 d≈3e-5，亚像素级重叠；定点实现细节，非物理常数）
 #define PL_S_CLAMP      (33554432LL)
 
-// 均匀网格（实现细节）：格宽恰为 RMAX，格数 = ceil(世界尺寸/RMAX)，
-// 任一距离 ≤ RMAX 的粒子对必落在相邻格内；两维格数均 ≥3，半程壳环绕取模不重复计数
-#define PL_GRID_DIM_X   ((int)(PL_WORLD_W / PL_RMAX + 0.5f))
-#define PL_GRID_DIM_Y   ((int)(PL_WORLD_H / PL_RMAX + 0.5f))
-#define PL_GRID_CELLS   (PL_GRID_DIM_X * PL_GRID_DIM_Y)
+// 均匀网格（实现细节）：格宽恰为 RMAX，格数 = round(世界尺寸/RMAX) 运行时确定，
+// 任一距离 ≤ RMAX 的粒子对必落在相邻格内；两维格数均钳到 ≥3（半程壳环绕取模不重复计数）
 
 // 运行时换算的定点常量（由上方浮点物理常数推导，pl_fixed_const_init() 填充）
 typedef struct {
@@ -101,9 +101,9 @@ static PL_Fixed_Const s_fc;
 
 static void pl_fixed_const_init(void) {
     s_fc.world_hw_q    = PL_Q20(PL_WORLD_HW);
-    s_fc.world_hh_q    = PL_Q20(PL_WORLD_HH);
+    s_fc.world_hh_q    = PL_Q20(s_pl_world_hh);            // 运行时世界半高
     s_fc.world_w_q     = PL_Q20(PL_WORLD_W);
-    s_fc.world_h_q     = PL_Q20(PL_WORLD_H);
+    s_fc.world_h_q     = PL_Q20(2.0f * s_pl_world_hh);     // 回绕周期（高）
     s_fc.cell_q        = PL_Q20(PL_RMAX);
     s_fc.rth1_q20      = PL_Q20(PL_RTH1);
     s_fc.rmax_q20      = PL_Q20(PL_RMAX);
@@ -127,7 +127,8 @@ typedef struct {
     PL_Particle *parts;                        // PSRAM 分配，退出时释放
     int32_t param_a[PL_NUM_KIND][PL_NUM_KIND]; // 近距（<RTH1）作用强度（Q30）
     int32_t param_b[PL_NUM_KIND][PL_NUM_KIND]; // 中远距作用强度（Q30）
-    int32_t head[PL_GRID_CELLS];               // 均匀网格桶链表头
+    int32_t *head;                             // 均匀网格桶链表头（init 按 grid_cells 分配）
+    int32_t grid_dim_x, grid_dim_y, grid_cells; // 运行时网格维度
     uint32_t lcg;                              // 震颤随机数状态（廉价 LCG）
     uint32_t frame;                            // 帧计数
 } PL_State;
@@ -243,7 +244,7 @@ static void pl_generate_world(PL_State *s) {
         for (int32_t ix = 0; ix < PL_SCATTER_N; ix++) {
             PL_Particle *p = &s->parts[n++];
             float xf = (2.0f * (float)ix / (float)(PL_SCATTER_N - 1) - 1.0f) * PL_WORLD_HW + 0.2f * (pl_frand() - 0.5f);
-            float yf = (2.0f * (float)iy / (float)(PL_SCATTER_N - 1) - 1.0f) * PL_WORLD_HH + 0.2f * (pl_frand() - 0.5f);
+            float yf = (2.0f * (float)iy / (float)(PL_SCATTER_N - 1) - 1.0f) * s_pl_world_hh + 0.2f * (pl_frand() - 0.5f);
             p->kind = rand() % PL_NUM_KIND;
             p->x = PL_Q20(xf);
             p->y = PL_Q20(yf);
@@ -260,14 +261,14 @@ static void pl_generate_world(PL_State *s) {
 
 // 重建均匀网格（每帧一次，整数运算）
 static void pl_grid_build(PL_State *s) {
-    for (int32_t c = 0; c < PL_GRID_CELLS; c++) s->head[c] = -1;
+    for (int32_t c = 0; c < s->grid_cells; c++) s->head[c] = -1;
     for (int32_t i = 0; i < PL_NUM_PARTICLES; i++) {
         PL_Particle *p = &s->parts[i];
         int32_t cx = (p->x + s_fc.world_hw_q) / s_fc.cell_q;
         int32_t cy = (p->y + s_fc.world_hh_q) / s_fc.cell_q;
-        if (cx < 0) cx = 0; else if (cx >= PL_GRID_DIM_X) cx = PL_GRID_DIM_X - 1;
-        if (cy < 0) cy = 0; else if (cy >= PL_GRID_DIM_Y) cy = PL_GRID_DIM_Y - 1;
-        int32_t c = cy * PL_GRID_DIM_X + cx;
+        if (cx < 0) cx = 0; else if (cx >= s->grid_dim_x) cx = s->grid_dim_x - 1;
+        if (cy < 0) cy = 0; else if (cy >= s->grid_dim_y) cy = s->grid_dim_y - 1;
+        int32_t c = cy * s->grid_dim_x + cx;
         p->next = s->head[c];
         s->head[c] = i;
     }
@@ -324,9 +325,9 @@ static inline void pl_interact_pair(PL_State *s, int32_t i, int32_t j) {
 static void pl_interact(PL_State *s) {
     // 前向壳偏移（环绕取模；两维格数均 ≥3，无重复计数）
     static const int8_t SHELL[4][2] = {{1, 0}, {-1, 1}, {0, 1}, {1, 1}};
-    for (int32_t gy = 0; gy < PL_GRID_DIM_Y; gy++) {
-        for (int32_t gx = 0; gx < PL_GRID_DIM_X; gx++) {
-            int32_t c = gy * PL_GRID_DIM_X + gx;
+    for (int32_t gy = 0; gy < s->grid_dim_y; gy++) {
+        for (int32_t gx = 0; gx < s->grid_dim_x; gx++) {
+            int32_t c = gy * s->grid_dim_x + gx;
             // 同格内的无序对
             for (int32_t i = s->head[c]; i >= 0; i = s->parts[i].next) {
                 for (int32_t j = s->parts[i].next; j >= 0; j = s->parts[j].next) {
@@ -335,9 +336,9 @@ static void pl_interact(PL_State *s) {
             }
             // 前向邻格对
             for (int32_t k = 0; k < 4; k++) {
-                int32_t nx = (gx + SHELL[k][0] + PL_GRID_DIM_X) % PL_GRID_DIM_X;
-                int32_t ny = (gy + SHELL[k][1]) % PL_GRID_DIM_Y;
-                int32_t nc = ny * PL_GRID_DIM_X + nx;
+                int32_t nx = (gx + SHELL[k][0] + s->grid_dim_x) % s->grid_dim_x;
+                int32_t ny = (gy + SHELL[k][1]) % s->grid_dim_y;
+                int32_t nc = ny * s->grid_dim_x + nx;
                 for (int32_t i = s->head[c]; i >= 0; i = s->parts[i].next) {
                     for (int32_t j = s->head[nc]; j >= 0; j = s->parts[j].next) {
                         pl_interact_pair(s, i, j);
@@ -379,13 +380,8 @@ static void pl_move(PL_State *s) {
 // 浮点实现（直接对照 particle.html，人类可读性参考）
 // ===============================================================================
 
-// 均匀网格加速：格宽不小于 RMAX（宽向 0.4、高向 0.5），5x3 格覆盖整个世界，
-// 任一颗粒的近邻必落在环绕 3x3 格内
-#define PL_GRID_DIM_X   (5)                             // PL_WORLD_W / 0.4
-#define PL_GRID_DIM_Y   (3)                             // PL_WORLD_H / 0.5
-#define PL_GRID_CELL_W  (PL_WORLD_W / PL_GRID_DIM_X)
-#define PL_GRID_CELL_H  (PL_WORLD_H / PL_GRID_DIM_Y)
-#define PL_GRID_CELLS   (PL_GRID_DIM_X * PL_GRID_DIM_Y)
+// 均匀网格加速：格宽不小于 RMAX（宽向 0.4、高向 0.5），格数运行时按世界尺寸确定，
+// 任一颗粒的近邻必落在环绕 3x3 格内；两维格数钳到 ≥3（3x3 环绕取模要求）
 
 typedef struct {
     float x, y;     // 位置（[-1,1) 环面）
@@ -398,7 +394,9 @@ typedef struct {
     PL_Particle *parts;                 // PSRAM 分配，退出时释放
     float param_a[PL_NUM_KIND][PL_NUM_KIND]; // 近距（<RTH1）作用强度
     float param_b[PL_NUM_KIND][PL_NUM_KIND]; // 中远距作用强度
-    int32_t head[PL_GRID_CELLS];        // 均匀网格桶链表头（按行优先索引）
+    int32_t *head;                      // 均匀网格桶链表头（init 按 grid_cells 分配）
+    int32_t grid_dim_x, grid_dim_y, grid_cells; // 运行时网格维度
+    float cell_w, cell_h;               // 运行时格宽（世界单位）
     uint32_t frame;                     // 帧计数（HUD 显示）
 } PL_State;
 
@@ -430,7 +428,7 @@ static void pl_generate_world(PL_State *s) {
             PL_Particle *p = &s->parts[n++];
             p->kind = rand() % PL_NUM_KIND;
             p->x = (2.0f * (float)ix / (float)(PL_SCATTER_N - 1) - 1.0f) * PL_WORLD_HW + 0.2f * (pl_frand() - 0.5f);
-            p->y = (2.0f * (float)iy / (float)(PL_SCATTER_N - 1) - 1.0f) * PL_WORLD_HH + 0.2f * (pl_frand() - 0.5f);
+            p->y = (2.0f * (float)iy / (float)(PL_SCATTER_N - 1) - 1.0f) * s_pl_world_hh + 0.2f * (pl_frand() - 0.5f);
             p->vx = 0.0f;
             p->vy = 0.0f;
         }
@@ -444,14 +442,14 @@ static void pl_generate_world(PL_State *s) {
 
 // 重建均匀网格（每帧一次）
 static void pl_grid_build(PL_State *s) {
-    for (int32_t c = 0; c < PL_GRID_CELLS; c++) s->head[c] = -1;
+    for (int32_t c = 0; c < s->grid_cells; c++) s->head[c] = -1;
     for (int32_t i = 0; i < PL_NUM_PARTICLES; i++) {
         PL_Particle *p = &s->parts[i];
-        int32_t cx = (int32_t)((p->x + PL_WORLD_HW) / PL_GRID_CELL_W);
-        int32_t cy = (int32_t)((p->y + PL_WORLD_HH) / PL_GRID_CELL_H);
-        if (cx < 0) cx = 0; else if (cx >= PL_GRID_DIM_X) cx = PL_GRID_DIM_X - 1;
-        if (cy < 0) cy = 0; else if (cy >= PL_GRID_DIM_Y) cy = PL_GRID_DIM_Y - 1;
-        int32_t c = cy * PL_GRID_DIM_X + cx;
+        int32_t cx = (int32_t)((p->x + PL_WORLD_HW) / s->cell_w);
+        int32_t cy = (int32_t)((p->y + s_pl_world_hh) / s->cell_h);
+        if (cx < 0) cx = 0; else if (cx >= s->grid_dim_x) cx = s->grid_dim_x - 1;
+        if (cy < 0) cy = 0; else if (cy >= s->grid_dim_y) cy = s->grid_dim_y - 1;
+        int32_t c = cy * s->grid_dim_x + cx;
         p->next = s->head[c];
         s->head[c] = i;
     }
@@ -462,22 +460,22 @@ static void pl_interact(PL_State *s) {
     const float rmax2 = PL_RMAX * PL_RMAX;
     for (int32_t i = 0; i < PL_NUM_PARTICLES; i++) {
         PL_Particle *pi = &s->parts[i];
-        int32_t cx = (int32_t)((pi->x + PL_WORLD_HW) / PL_GRID_CELL_W);
-        int32_t cy = (int32_t)((pi->y + PL_WORLD_HH) / PL_GRID_CELL_H);
-        if (cx < 0) cx = 0; else if (cx >= PL_GRID_DIM_X) cx = PL_GRID_DIM_X - 1;
-        if (cy < 0) cy = 0; else if (cy >= PL_GRID_DIM_Y) cy = PL_GRID_DIM_Y - 1;
+        int32_t cx = (int32_t)((pi->x + PL_WORLD_HW) / s->cell_w);
+        int32_t cy = (int32_t)((pi->y + s_pl_world_hh) / s->cell_h);
+        if (cx < 0) cx = 0; else if (cx >= s->grid_dim_x) cx = s->grid_dim_x - 1;
+        if (cy < 0) cy = 0; else if (cy >= s->grid_dim_y) cy = s->grid_dim_y - 1;
         for (int32_t dy = -1; dy <= 1; dy++) {
-            int32_t gy = (cy + dy + PL_GRID_DIM_Y) % PL_GRID_DIM_Y;
+            int32_t gy = (cy + dy + s->grid_dim_y) % s->grid_dim_y;
             for (int32_t dx = -1; dx <= 1; dx++) {
-                int32_t gx = (cx + dx + PL_GRID_DIM_X) % PL_GRID_DIM_X;
-                for (int32_t j = s->head[gy * PL_GRID_DIM_X + gx]; j >= 0; j = s->parts[j].next) {
+                int32_t gx = (cx + dx + s->grid_dim_x) % s->grid_dim_x;
+                for (int32_t j = s->head[gy * s->grid_dim_x + gx]; j >= 0; j = s->parts[j].next) {
                     if (j == i) continue;
                     PL_Particle *pj = &s->parts[j];
                     // 周期边界下的最近镜像距离
                     float ddx = pj->x - pi->x;
                     float ddy = pj->y - pi->y;
                     if (ddx > PL_WORLD_HW) ddx -= PL_WORLD_W; else if (ddx < -PL_WORLD_HW) ddx += PL_WORLD_W;
-                    if (ddy > PL_WORLD_HH) ddy -= PL_WORLD_H; else if (ddy < -PL_WORLD_HH) ddy += PL_WORLD_H;
+                    if (ddy > s_pl_world_hh) ddy -= 2.0f * s_pl_world_hh; else if (ddy < -s_pl_world_hh) ddy += 2.0f * s_pl_world_hh;
                     float dd = ddx * ddx + ddy * ddy;
                     if (dd == 0.0f || dd > rmax2) continue;
                     float d = sqrtf(dd);
@@ -513,8 +511,8 @@ static void pl_move(PL_State *s) {
         p->vy *= PL_DAMPING;
         while (p->x < -PL_WORLD_HW) p->x += PL_WORLD_W;
         while (p->x >  PL_WORLD_HW) p->x -= PL_WORLD_W;
-        while (p->y < -PL_WORLD_HH) p->y += PL_WORLD_H;
-        while (p->y >  PL_WORLD_HH) p->y -= PL_WORLD_H;
+        while (p->y < -s_pl_world_hh) p->y += 2.0f * s_pl_world_hh;
+        while (p->y >  s_pl_world_hh) p->y -= 2.0f * s_pl_world_hh;
     }
 }
 
@@ -525,12 +523,50 @@ static void pl_move(PL_State *s) {
 // ===============================================================================
 
 int32_t ui_particlelife_init(Key_Event *key_event, Global_State *global_state) {
+    // 世界/视口几何：按实际逻辑屏幕尺寸计算，世界填满 HUD 以下的整个屏幕
+    {
+        int32_t W = (int32_t)global_state->gfx->width;
+        int32_t H = (int32_t)global_state->gfx->height;
+        if (W < 8 || H <= PL_HUD_H + 8) { W = 320; H = 240; }  // 异常兜底（不应发生）
+        s_pl_world_hh = PL_WORLD_HW * (float)(H - PL_HUD_H) / (float)W;
+        s_pl_scale    = (float)W / (2.0f * PL_WORLD_HW);
+        s_pl_cx       = W / 2;
+        s_pl_cy       = PL_HUD_H + (H - PL_HUD_H) / 2;
+    }
     // 粒子数组按需从 PSRAM 申请（进入游戏分配，退出释放）
     if (s_pl.parts == NULL) {
         s_pl.parts = (PL_Particle *)platform_malloc(sizeof(PL_Particle) * PL_NUM_PARTICLES);
         if (s_pl.parts == NULL) {
             global_state->STATE = STATE_GAME_MENU;
             return -1;
+        }
+    }
+    // 均匀网格维度（运行时；两维钳到 ≥3 以满足邻域壳环绕取模前提）
+#if PL_USE_FIXED_POINT
+    s_pl.grid_dim_x = (int32_t)(PL_WORLD_W / PL_RMAX + 0.5f);
+    s_pl.grid_dim_y = (int32_t)(2.0f * s_pl_world_hh / PL_RMAX + 0.5f);
+#else
+    s_pl.grid_dim_x = (int32_t)(PL_WORLD_W / PL_RMAX + 0.5f);
+    s_pl.grid_dim_y = (int32_t)(2.0f * s_pl_world_hh / 0.5f + 0.5f);
+#endif
+    if (s_pl.grid_dim_x < 3) s_pl.grid_dim_x = 3;
+    if (s_pl.grid_dim_y < 3) s_pl.grid_dim_y = 3;
+#if !PL_USE_FIXED_POINT
+    s_pl.cell_w = PL_WORLD_W / (float)s_pl.grid_dim_x;
+    s_pl.cell_h = 2.0f * s_pl_world_hh / (float)s_pl.grid_dim_y;
+#endif
+    {
+        int32_t cells = s_pl.grid_dim_x * s_pl.grid_dim_y;
+        if (s_pl.head == NULL || cells != s_pl.grid_cells) {
+            free(s_pl.head);
+            s_pl.head = (int32_t *)platform_malloc(sizeof(int32_t) * (size_t)cells);
+            s_pl.grid_cells = cells;
+            if (s_pl.head == NULL) {
+                free(s_pl.parts);
+                s_pl.parts = NULL;
+                global_state->STATE = STATE_GAME_MENU;
+                return -1;
+            }
         }
     }
     srand((uint32_t)(global_state->timestamp ^ 0x3C3C));
@@ -573,19 +609,19 @@ int32_t ui_particlelife_render_frame(Key_Event *key_event, Global_State *global_
     // ---------------- 渲染 ----------------
     gfx_soft_clear(gfx);
 
-    // 顶栏信息
+    // 顶栏信息（右侧文字按右缘锚定：原文 236 起 84px 宽，贴右缘）
     gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"粒子生命", 6, 2, 255, 255, 255, 1);
-    gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"A返回 D重置", 236, 2, 180, 180, 180, 1);
+    gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"A返回 D重置", (int32_t)gfx->width - 84, 2, 180, 180, 180, 1);
 
     // 粒子（2x2 像素点；周期边界在视口边缘自然截断）
     for (int32_t i = 0; i < PL_NUM_PARTICLES; i++) {
         PL_Particle *p = &s_pl.parts[i];
 #if PL_USE_FIXED_POINT
-        int32_t sx = PL_CENTER_X + ((p->x * (int32_t)PL_SCALE) >> 20);
-        int32_t sy = PL_CENTER_Y + ((p->y * (int32_t)PL_SCALE) >> 20);
+        int32_t sx = s_pl_cx + ((p->x * (int32_t)s_pl_scale) >> 20);
+        int32_t sy = s_pl_cy + ((p->y * (int32_t)s_pl_scale) >> 20);
 #else
-        int32_t sx = PL_CENTER_X + (int32_t)(p->x * PL_SCALE);
-        int32_t sy = PL_CENTER_Y + (int32_t)(p->y * PL_SCALE);
+        int32_t sx = s_pl_cx + (int32_t)(p->x * s_pl_scale);
+        int32_t sy = s_pl_cy + (int32_t)(p->y * s_pl_scale);
 #endif
         const uint8_t *col = S_PL_PALETTE[p->kind];
         for (int32_t oy = 0; oy < 2; oy++) {
@@ -608,4 +644,9 @@ void ui_particlelife_on_exit(void) {
         free(s_pl.parts);
         s_pl.parts = NULL;
     }
+    if (s_pl.head != NULL) {
+        free(s_pl.head);
+        s_pl.head = NULL;
+    }
+    s_pl.grid_cells = 0;
 }

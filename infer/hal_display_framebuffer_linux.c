@@ -5,6 +5,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <linux/fb.h>
@@ -581,6 +582,9 @@ void display_hal_init(void) {
 
     // Clear screen to black on init
     memset(fb_mmap, 0, fb_mmap_size);
+
+    // 默认背光（NANO_DEFAULT_BRIGHTNESS；业务层 ui_init 初值与其他平台 display_hal_init 同源）
+    display_set_brightness(NANO_DEFAULT_BRIGHTNESS);
 }
 
 void display_hal_close(void) {
@@ -595,7 +599,53 @@ void display_hal_close(void) {
 }
 
 void display_set_brightness(uint8_t value) {
-    // TODO
+    // Linux 通用背光调节：经 sysfs backlight 接口（pwm-backlight/gpio-backlight 等
+    // 内核驱动均可，Luckfox-Pico-86-Panel 的 RV1106 镜像暴露 /sys/class/backlight/
+    // backlight，max_brightness=255）。value 0~255 按比例映射到设备量程。
+    static char bl_path[160] = "";   // 背光 brightness 节点路径（首次调用时探测）
+    static int  bl_max = 255;        // 设备 max_brightness
+    static int  bl_probed = 0;
+
+    if (!bl_probed) {
+        bl_probed = 1;
+        char bl_name[64] = "";
+        DIR *d = opendir("/sys/class/backlight");
+        if (d != NULL) {
+            struct dirent *de;
+            while ((de = readdir(d)) != NULL) {
+                if (de->d_name[0] == '.') continue;
+                snprintf(bl_name, sizeof(bl_name), "%s", de->d_name);
+                break; // 取第一个背光设备
+            }
+            closedir(d);
+        }
+        if (bl_name[0] != '\0') {
+            snprintf(bl_path, sizeof(bl_path),
+                     "/sys/class/backlight/%s/brightness", bl_name);
+            char maxpath[176];
+            snprintf(maxpath, sizeof(maxpath),
+                     "/sys/class/backlight/%s/max_brightness", bl_name);
+            int fd = open(maxpath, O_RDONLY);
+            if (fd >= 0) {
+                char buf[16] = {0};
+                if (read(fd, buf, sizeof(buf) - 1) > 0) {
+                    int m = atoi(buf);
+                    if (m > 0) bl_max = m;
+                }
+                close(fd);
+            }
+            printf("Backlight: %s, max=%d\n", bl_path, bl_max);
+        }
+    }
+    if (bl_path[0] == '\0') return; // 无背光设备：忽略
+
+    int v = (int)((value * (uint32_t)bl_max) / 255);
+    int fd = open(bl_path, O_WRONLY);
+    if (fd < 0) return;
+    char buf[8];
+    int n = snprintf(buf, sizeof(buf), "%d", v);
+    if (write(fd, buf, (size_t)n) < 0) { /* 忽略写失败 */ }
+    close(fd);
 }
 
 

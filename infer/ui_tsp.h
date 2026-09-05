@@ -64,7 +64,7 @@ static wchar_t *tsp_city_names[34] = {
 #define TSP_MUTATION_PROB  (0.01f)
 #define TSP_CROSSOVER_PROB (0.2f)
 #define TSP_CITY_NUM       (34)
-#define TSP_POP_SIZE       (1000)
+#define TSP_POP_SIZE       (500)
 #define TSP_HISTORY_SIZE   (300)
 
 // 屏幕布局（固定 320 x 240）

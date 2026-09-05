@@ -423,6 +423,9 @@ void gfx_blit_rgb565(Nano_GFX *gfx, const uint16_t *src) {
             dst[i * 3 + 1] = RGB565_G(v);
             dst[i * 3 + 2] = RGB565_B(v);
         }
+        // 整帧被覆写，必须标脏（此前缺失导致 RGB888 平台上 blit 内容永不上屏，
+        // 如 Linux/fb 目标的水池黑屏；RGB565 分支上方已有同样调用）
+        gfx_mark_dirty_full(gfx);
     }
 }
 

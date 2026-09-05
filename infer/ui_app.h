@@ -112,6 +112,12 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
 
 void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state);
 
+// 退出确认模态框（“是否退出？” 确认/留下；控制台与俄罗斯方块等场景共用）
+void    ui_exit_confirm_layout(Global_State *global_state, int32_t *out_dx, int32_t *out_dy,
+                               int32_t *out_btn_y, int32_t *out_confirm_x, int32_t *out_stay_x);
+void    ui_exit_confirm_draw(Key_Event *key_event, Global_State *global_state);
+int32_t ui_exit_confirm_hit(Global_State *global_state, int32_t x, int32_t y); // 1=确认 2=留下 0=未命中
+
 
 // ===============================================================================
 // Bad Apple
