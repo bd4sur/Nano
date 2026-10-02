@@ -165,6 +165,44 @@ static float worleyFbm(Cv3 p, float freq) {
            worleyNoise(v3mul(p, freq * 4.0f), freq * 4.0f) * 0.125f;
 }
 
+// ---------------------------------------------------------------------------
+// 非平铺哈希值噪声（linglong.html 模型5改进回移）
+// 用途一：cloudMap1/2 的域扭曲破平铺——basic/detail 为 tileable 纹理，大尺度观看
+//   呈周期重复；用两个去相关值噪声通道把采样域逐格错开 ±0.5 纹理周期，相邻瓦片
+//   错相。值噪声无 wrap 周期，不会像 local 纹理那样每 50km 复现同一扭曲场。
+// 用途二：逐像素帧间去相关抖动（见 cloud_core_render）。
+// ---------------------------------------------------------------------------
+static inline uint32_t cloudHashT(uint32_t px, uint32_t py, uint32_t pz) {
+    return (px * 1597334673u) ^ (py * 3812015801u) ^ (pz * 2798796415u);
+}
+// 末尾 avalanche 混合（MurmurHash3 finalizer）：仅乘常数时相邻格点高位几乎相同，
+// 必须充分扩散
+static inline float cloudHashFloat(uint32_t ix, uint32_t iz, uint32_t seed) {
+    uint32_t t = cloudHashT(ix, iz, seed);
+    t ^= t >> 16;
+    t *= 2246822507u;
+    t ^= t >> 13;
+    t *= 3266489909u;
+    t ^= t >> 16;
+    return (float)(t >> 8) * (1.0f / 16777215.0f);
+}
+static float valueNoise2(float x, float z, uint32_t seed) {
+    float fx = floorf(x), fz = floorf(z);
+    float u = x - fx, v = z - fz;
+    u = u * u * (3.0f - 2.0f * u);
+    v = v * v * (3.0f - 2.0f * v);
+    int ix = (int)fx, iz = (int)fz;
+    float n00 = cloudHashFloat((uint32_t)ix, (uint32_t)iz, seed);
+    float n10 = cloudHashFloat((uint32_t)(ix + 1), (uint32_t)iz, seed);
+    float n01 = cloudHashFloat((uint32_t)ix, (uint32_t)(iz + 1), seed);
+    float n11 = cloudHashFloat((uint32_t)(ix + 1), (uint32_t)(iz + 1), seed);
+    return mixf(mixf(n00, n10, u), mixf(n01, n11, u), v);
+}
+// 双频值噪声 FBM（粗 + 细两层，与 linglong cloud_sky_valueNoise2Fbm 一致）
+static float valueNoise2Fbm(float x, float z, uint32_t seed) {
+    return valueNoise2(x, z, seed) * 0.65f + valueNoise2(x * 2.0f, z * 2.0f, seed + 17) * 0.35f;
+}
+
 // ===========================================================================
 // 噪声纹理（CPU 生成，采样为三线性 + wrap）
 // ===========================================================================
@@ -385,6 +423,12 @@ typedef struct {
     Cv3 sunDirection; // 指向太阳
     Cv3 sunColor;
     float sunIntensity;
+    // 天空散射光源（linglong.html 模型5改进回移）：与太阳圆盘观感曲线解耦——
+    // 曲线是“地面观测太阳圆盘”观感，直接用作天空光源会在暮光段“曲线红 × 透射率红”
+    // 双重叠红；物理上太阳光谱恒定，红化由逐采样透射率承担。skySunColor 在低空段
+    // 混入近白并对 ≤0° 暮光施加蓝紫基调（见 cloud_update_sky_light）。
+    Cv3 skySunColor;
+    float skySunIntensity;
 } CloudScene;
 
 static CloudScene s_scene;
@@ -439,6 +483,8 @@ static void cloud_default_scene(CloudScene *s) {
     s->sunDirection = v3norm(v3(0.15f, 0.96f, 0.0f));
     s->sunColor = v3(1.0f, 1.0f, 1.0f);
     s->sunIntensity = 48.0f;
+    s->skySunColor = v3(1.0f, 1.0f, 1.0f);
+    s->skySunIntensity = 48.0f;
 }
 
 // ===========================================================================
@@ -539,7 +585,10 @@ static inline float dualLobPhase(float g0, float g1, float w, float cosTheta) {
 #define MS_LUT_W    48
 #define MS_LUT_H    24
 #define MS_DIR_N    16   // 4x4 球面方向采样
-#define MS_SAMPLE_STEPS 12
+// MS-LUT 每条方向积分的初始采样数：变步长二次分布（近端加密，与逐像素天空积分一致）。
+// 旧固定步数 12 对曙暮光几何欠采样（阴影界上方数公里厚的“照亮带”在近水平方向
+// 一个采样都落不进去）；且旧代码误传 sampleCountFixed=0 实际积分 0 步、LUT 恒为 0。
+#define CLOUD_SKY_MS_VIEW_STEPS_INI 14
 
 // 透射率/多重散射查找表：体积云渲染所用（约 26KB），按功能生命周期放 PSRAM——
 // 原为静态数组，占内部 DRAM（与 DMA 帧缓冲同池）共 26KB，直接把启动 DMA 堆顶破，
@@ -613,7 +662,7 @@ typedef struct {
 static SingleScatteringResult integrateScatteredLuminance(
     Cv3 worldPos, Cv3 worldDir, Cv3 sunDir, const CloudScene *s,
     int bGround, int bMieRayPhase, int sampleCountFixed, int bVariableSampleCount,
-    float tMaxMax, int sampleCountIni)
+    float tMaxMax, int sampleCountIni, int bZeroMsAmbient)
 {
     SingleScatteringResult r;
     r.scatteredLight = v3(0, 0, 0);
@@ -652,7 +701,7 @@ static SingleScatteringResult integrateScatteredLuminance(
     float cosTheta = v3dot(sunDir, worldDir);
     float miePhaseValue = hgPhase(s->miePhaseG, -cosTheta);
     float rayleighPhaseValue = rayleighPhase(cosTheta);
-    Cv3 globalL = v3mul(s->sunColor, s->sunIntensity);
+    Cv3 globalL = v3mul(s->skySunColor, s->skySunIntensity); // 天空散射光源（暮光段近白，见 cloud_update_sky_light）
 
     Cv3 L = v3(0, 0, 0);
     Cv3 throughput = v3(1, 1, 1);
@@ -698,15 +747,16 @@ static SingleScatteringResult integrateScatteredLuminance(
         }
 
         // 地球阴影
-        float tEarth = raySphereIntersectNearest(P, sunDir, v3add(kEarthOrigin,
-            v3mul(upVector, kAtmospherePlanetRadiusOffset)), s->bottomRadius);
+        float tEarth = raySphereIntersectNearest(v3add(P,
+            v3mul(upVector, kAtmospherePlanetRadiusOffset)), sunDir, kEarthOrigin, s->bottomRadius);
         float earthShadow = (tEarth >= 0.0f) ? 0.0f : 1.0f;
-
-        // 多重散射近似（LUT）
         float mh = pHeight - s->bottomRadius;
         Cv2 muv = cv2(saturatef(sunZenithCosAngle * 0.5f + 0.5f),
                       clampf(mh / (s->topRadius - s->bottomRadius), 0.0f, 1.0f));
-        Cv3 multiScatteredLuminance = sampleLut2D(s_msLut, MS_LUT_W, MS_LUT_H, muv.x, muv.y);
+        // bZeroMsAmbient：MS-LUT 构建期以零环境光求一阶散射场（linglong 单遍构建语义，
+        // 等价其零填充 scratch 读取；避免构建中读写同一 LUT 的数据竞争）
+        Cv3 multiScatteredLuminance = bZeroMsAmbient ? v3(0, 0, 0) :
+            sampleLut2D(s_msLut, MS_LUT_W, MS_LUT_H, muv.x, muv.y);
 
         Cv3 earthShadowScale = v3(earthShadow, earthShadow, earthShadow);
         Cv3 directTerm = v3mul3(v3mul3(earthShadowScale, transmittanceToSun), phaseTimesScattering);
@@ -733,12 +783,18 @@ static SingleScatteringResult integrateScatteredLuminance(
         Cv2 uu = lutTransmittanceParamsToUv(s, pHeight, sunZenithCosAngle);
         Cv3 transmittanceToSun = sampleLut2D(s_transLut, TRANS_LUT_W, TRANS_LUT_H, uu.x, uu.y);
         float NdotL = saturatef(v3dot(v3norm(upVector), v3norm(sunDir)));
+        // 地面回弹的地球阴影判定（linglong.html 模型5改进回移）：曙暮光时地面位于
+        // 地影内，回弹应≈0；否则太阳低于地平时透射率 LUT 查询越界被钳制到地平线
+        // 掠射列（最深红），把纯红环境光注入地基环境光/MS-LUT 阴影区（暮光偏红主因）
+        float tEarthG = raySphereIntersectNearest(v3add(P,
+            v3mul(upVector, kAtmospherePlanetRadiusOffset)), sunDir, kEarthOrigin, s->bottomRadius);
+        float bounceShadow = (tEarthG >= 0.0f) ? 0.0f : 1.0f;
         Cv3 groundTerm = v3(NdotL * s->groundAlbedo.x / kPI,
                                NdotL * s->groundAlbedo.y / kPI,
                                NdotL * s->groundAlbedo.z / kPI);
-        Cv3 bounce = v3mul3(v3mul3(v3mul3(globalL, transmittanceToSun),
-                                    v3mul3(throughput, groundTerm)), v3(1, 1, 1));
-        L = v3add(L, bounce);
+        Cv3 bounce = v3mul3(v3mul3(globalL, transmittanceToSun),
+                            v3mul3(throughput, groundTerm));
+        L = v3add(L, v3mul(bounce, bounceShadow));
     }
 
     r.scatteredLight = L;
@@ -760,13 +816,15 @@ static void cloud_compute_transmittance_lut(CloudScene *s) {
                               sqrtf(fmaxf(0.0f, 1.0f - viewZenithCosAngle * viewZenithCosAngle)));
             Cv3 sunDir = s->sunDirection; // flower 中 = -normalize(direction)；本端口 direction 已取“指向太阳”，故直接用
             SingleScatteringResult rr = integrateScatteredLuminance(
-                worldPos, worldDir, sunDir, s, 0, 0, 40, 0, 9e6f, 40);
+                worldPos, worldDir, sunDir, s, 0, 0, 40, 0, 9e6f, 40, 0);
             s_transLut[y * TRANS_LUT_W + x] = v3exp(v3mul(rr.opticalDepth, -1.0f));
         }
     }
 }
 
-// 预计算多重散射 LUT（flower MULTI_SCATTER_PASS：球面 4x4=16 方向采样）
+// 预计算多重散射 LUT（flower MULTI_SCATTER_PASS：球面 4x4=16 方向采样；
+// linglong.html 模型5改进回移：变步长二次采样单遍构建——变步长近端加密使曙暮光
+// “照亮带”能被采样到；单遍以零环境光求一阶散射场（bZeroMsAmbient=1））
 static void cloud_compute_multiscatter_lut(CloudScene *s) {
     const float sphereSolidAngle = 4.0f * kPI;
     const float isotropicPhase = 1.0f / sphereSolidAngle;
@@ -799,7 +857,7 @@ static void cloud_compute_multiscatter_lut(CloudScene *s) {
                 Cv3 worldDir = v3(cosTheta * sinPhi, cosPhi, sinTheta * sinPhi);
 
                 SingleScatteringResult result = integrateScatteredLuminance(
-                    worldPos, worldDir, sunDir, s, 1, 0, 0, 0, 9e6f, MS_SAMPLE_STEPS);
+                    worldPos, worldDir, sunDir, s, 1, 0, 0, 1, 9e6f, CLOUD_SKY_MS_VIEW_STEPS_INI, 1);
                 multiScatAs1 = v3add(multiScatAs1, v3mul(result.multiScatAs1, sphereSolidAngle * invSC));
                 scatteredLight = v3add(scatteredLight, v3mul(result.scatteredLight, sphereSolidAngle * invSC));
             }
@@ -882,8 +940,6 @@ static float cloudMap0(Cv3 posMeter, float normalizeHeight, float appTime, const
                          remapf(normalizeHeight, 0.00f, 0.1f, 0.5f, 1.0f);
 
     float basicNoise = sampleWrap3D(s_basicNoise, BASIC_DIM,
-        v3add(posKm, windOffset)); // scale=1 已并入下面调用
-    basicNoise = sampleWrap3D(s_basicNoise, BASIC_DIM,
         v3mul(v3add(posKm, windOffset), s->cloudBasicNoiseScale));
 
     float basicCloudNoise = gradienShape * basicNoise;
@@ -936,15 +992,25 @@ static float cloudMap1(Cv3 posMeter, float normalizeHeight, float appTime, const
     float gradienShape = remapf(normalizeHeight, 0.00f, 0.01f, 0.1f, 1.0f) *
                          remapf(normalizeHeight, 0.10f, 0.80f, 0.7f, 0.2f);
 
+    // 域扭曲破平铺（linglong.html 模型5改进回移）：本层 basic/detail 平铺周期约
+    // 1.7km/0.8km，用非平铺值噪声两个去相关通道（~0.8km 特征）把采样域在 x/z 方向
+    // 逐格错开 ±0.5 纹理周期，相邻瓦片错相，消除大尺度周期重复感
+    float wA1 = appTime * cloudSpeed * 50.0f;
+    float warpU1 = valueNoise2Fbm((wA1 + posMeter.x) / 800.0f + 0.17f,
+                                  (wA1 + posMeter.z) / 800.0f + 0.17f, 101) - 0.5f;
+    float warpV1 = valueNoise2Fbm((wA1 + posMeter.x) / 800.0f + 0.53f,
+                                  (wA1 + posMeter.z) / 800.0f + 0.53f, 211) - 0.5f;
+    Cv3 bnUv1 = v3mul(v3add(posKm, windOffset), s->cloudBasicNoiseScale * 2.0f);
     float basicNoise = sampleWrap3D(s_basicNoise, BASIC_DIM,
-        v3mul(v3add(posKm, windOffset), s->cloudBasicNoiseScale * 2.0f));
+        v3(bnUv1.x + warpU1, bnUv1.y, bnUv1.z + warpV1));
 
     float basicCloudNoise = gradienShape * basicNoise;
     float basicCloudWithCoverage = coverage * remapf(basicCloudNoise, 1.0f - coverage, 1.0f, 0.0f, 1.0f);
 
     Cv3 sampleDetailNoise = v3sub(posKm, v3mul(windOffset, 0.15f));
+    Cv3 dnUv1 = v3mul(sampleDetailNoise, s->cloudDetailNoiseScale * 2.0f);
     float detailNoiseComposite = sampleWrap3D(s_detailNoise, DETAIL_DIM,
-        v3mul(sampleDetailNoise, s->cloudDetailNoiseScale * 2.0f));
+        v3(dnUv1.x + warpU1, dnUv1.y, dnUv1.z + warpV1));
     float detailNoiseMixByHeight = 0.2f * mixf(detailNoiseComposite, 1.0f - detailNoiseComposite,
                                                saturatef(normalizeHeight * 10.0f));
 
@@ -986,8 +1052,16 @@ static float cloudMap2(Cv3 posMeter, float normalizeHeight, float appTime, const
     float gradienShape = remapf(normalizeHeight, 0.00f, 0.01f, 0.1f, 1.0f) *
                          remapf(normalizeHeight, 0.10f, 0.20f, 0.8f, 0.5f);
 
+    // 域扭曲破平铺（同 cloudMap1；本层 basic 平铺周期约 1.1km）
+    float wA2 = appTime * cloudSpeed * 50.0f;
+    float warpU2 = valueNoise2Fbm((wA2 + posMeter.x) / 800.0f + 0.29f,
+                                  (wA2 + posMeter.z) / 800.0f + 0.29f, 121) - 0.5f;
+    float warpV2 = valueNoise2Fbm((wA2 + posMeter.x) / 800.0f + 0.61f,
+                                  (wA2 + posMeter.z) / 800.0f + 0.61f, 223) - 0.5f;
+    Cv3 bnUv2 = v3mul(v3add(v3add(posKm, windOffset), v3(0.39f, 0.39f, 0.39f)),
+                      s->cloudBasicNoiseScale * 3.0f);
     float basicNoise = sampleWrap3D(s_basicNoise, BASIC_DIM,
-        v3mul(v3add(v3add(posKm, windOffset), v3(0.39f, 0.39f, 0.39f)), s->cloudBasicNoiseScale * 3.0f));
+        v3(bnUv2.x + warpU2, bnUv2.y, bnUv2.z + warpV2));
 
     float basicCloudNoise = gradienShape * basicNoise;
     float basicCloudWithCoverage = coverage * remapf(basicCloudNoise, 1.0f - coverage, 1.0f, 0.0f, 1.0f);
@@ -1092,6 +1166,19 @@ static float powderEffectNew(float depth, float height, float VoL) {
     return depth * height;
 }
 
+// 云的直射光随“样本点处太阳低于其几何地平”衰减（linglong.html 模型5改进回移，
+// 根因修复）：太阳低于样本点几何地平（cosz ≤ -sqrt(1-(R/r)²)）后直射光不存在；
+// 0 → cosz_hor 之间用 smoothstep 平滑过渡，保证曙暮光“红→暗”临界连续、物理合理
+//（高层云地平凹陷角更小、可看夕阳更久——符合实际）
+static float cloudDirectFade(float sunZenithCos, float radiusKm) {
+    float ratio = kEarthBottomRadius / radiusKm;
+    float coszHor = -sqrtf(fmaxf(0.0f, 1.0f - ratio * ratio));
+    if (sunZenithCos >= 0.0f) return 1.0f;
+    if (sunZenithCos <= coszHor) return 0.0f;
+    float t = (sunZenithCos - coszHor) / (0.0f - coszHor);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 // 地面上涌光（见 render_frame 每帧由天顶天空亮度更新）。
 static Cv3 s_groundUpwelling;
 
@@ -1146,7 +1233,6 @@ static CloudPixel cloudPixelCompute(Cv3 worldPos, Cv3 worldDir, float appTime, f
 
     float sampleT = tMin + 0.001f * stepT + stepT * saturatef(jitter);
 
-    Cv3 sunColor = v3mul(s->sunColor, s->sunIntensity);
     Cv3 sunDirection = s->sunDirection;
     float VoL = v3dot(worldDir, sunDirection);
 
@@ -1211,15 +1297,27 @@ static CloudPixel cloudPixelCompute(Cv3 worldPos, Cv3 worldDir, float appTime, f
             float verticalProbability = powf(remapf(actualH01, 0.07f, 0.22f, 0.1f, 1.0f), 0.8f);
             float powderEffect = powderEffectNew(depthProbability, verticalProbability, VoL);
 
+            // 样本点-太阳几何：低于样本点几何地平后直射光平滑衰减到 0
+            //（linglong 根因修复回移；夜间仅余中性环境补光）
+            float sunZenithCosAtSample = v3dot(sunDirection, samplePos) / sampleHeight;
+            float directFade = cloudDirectFade(sunZenithCosAtSample, sampleHeight);
+            // 云直射光用解耦后的天空光（暮光段与天空散射一致，避免“曲线红 × 透射率红”双重叠红）
             Cv3 sunlightTerm = v3mul3(atmosphereTransmittance,
-                v3mul(sunColor, s->cloudShadingSunLightScale));
+                v3mul(v3mul(s->skySunColor, s->skySunIntensity),
+                      s->cloudShadingSunLightScale * directFade));
 
+            // 环境补光用中性化透射率（取三通道最大，linglong.html 改进回移）：
+            // 环境光是天穹下行光，颜色应由上涌光决定，不继承“朝太阳透射率 LUT”
+            // 在 cosz<0 时的深红钳制，否则夜间环境残余被染红
+            float atmosphereNeutral = fmaxf(atmosphereTransmittance.x,
+                fmaxf(atmosphereTransmittance.y, atmosphereTransmittance.z));
             Cv3 ambientLit = v3mul3(v3mul3(s_groundUpwelling, v3(powderEffect, powderEffect, powderEffect)),
                 v3mul3(v3(s->cloudAmbientScale, s->cloudAmbientScale, s->cloudAmbientScale),
                        v3mul3(v3(1.0f - sunDirection.y * sunDirection.y,
                                  1.0f - sunDirection.y * sunDirection.y,
                                  1.0f - sunDirection.y * sunDirection.y),
-                              v3lerp(atmosphereTransmittance, v3(1, 1, 1), saturatef(1.0f - transmittance)))));
+                              v3lerp(v3(atmosphereNeutral, atmosphereNeutral, atmosphereNeutral),
+                                     v3(1, 1, 1), saturatef(1.0f - transmittance)))));
 
             float sigmaS = stepCloudDensity;
             float sigmaE = fmaxf(sigmaS, 1e-8f);
@@ -1498,6 +1596,23 @@ void ui_cloud_sun_color(float elev_deg, float *or_, float *og, float *ob, float 
     *or_ = col.x; *og = col.y; *ob = col.z; *ointen = inten;
 }
 
+// 天空散射光源逐帧更新（linglong.html 模型5改进回移）：
+// skySunColor 在太阳低空段混入近白（<4° 全白 → 4°..15° 渐回曲线色），并对 ≤0°
+// 暮光施加蓝紫基调（0°→-8°：R-22%、G-6%、B+45%；工程近似高空多次散射与臭氧
+// Chappuis 吸收的“蓝小时”观感，单遍 MS-LUT 无法把蓝紫输运到阴影区）；强度沿用
+// 圆盘曲线（无亮度跳变）。云直射光与天空散射共用此光源；太阳圆盘/日冕/镜头
+// 光晕仍用 sunColor 曲线（日落云色不变）。
+static void cloud_update_sky_light(void) {
+    float elevDeg = asinf(saturatef(s_scene.sunDirection.y)) * 180.0f / kPI;
+    float tMix = saturatef(elevDeg / 4.0f);
+    Cv3 sl = v3lerp(v3(1.0f, 1.0f, 1.0f), s_scene.sunColor, tMix);
+    float kTwl = saturatef(-elevDeg / 8.0f);
+    s_scene.skySunColor = v3(sl.x * (1.0f - 0.22f * kTwl),
+                             sl.y * (1.0f - 0.06f * kTwl),
+                             sl.z * (1.0f + 0.45f * kTwl));
+    s_scene.skySunIntensity = s_scene.sunIntensity;
+}
+
 static void cloud_sun_auto_tick(void) {
     if (!s_ui.sun_auto) return;
     float alt = s_ui.sun_alt + (float)s_ui.sun_dir;   // 每帧 ±1° 高度角
@@ -1520,6 +1635,7 @@ static void cloud_sun_auto_tick(void) {
     s_scene.sunColor = v3(cr, cg, cb);
     s_scene.sunIntensity = ci;
     s_ui.sun_dirty = 1;
+    cloud_update_sky_light();
 }
 
 static void cloud_apply_sun_preset(int idx) {
@@ -1530,6 +1646,7 @@ static void cloud_apply_sun_preset(int idx) {
     s_scene.sunColor = p->color;
     s_scene.sunIntensity = p->intensity;
     s_ui.sun_dirty = 1;
+    cloud_update_sky_light();
 }
 
 static int cloud_apply_coverage_level(int level) {
@@ -1850,7 +1967,7 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     {
         Cv3 upDir = v3(0, 1, 0);
         SingleScatteringResult zen = integrateScatteredLuminance(camPos, upDir, s_scene.sunDirection,
-            &s_scene, 0, 1, 0, 1, 9e6f, 14);
+            &s_scene, 0, 1, 0, 1, 9e6f, 14, 0);
         // 地面上涌光：仅用天顶亮度×反照率 会骗低云底亮度（云底可视环境光≈地面漫反射+大气回光）。
         // 抬高尺度：上行辐照≈天顶亮度×(1+反照率) 的半球等效，再随云遮蔽淡出。
         s_groundUpwelling = v3mul(v3mul3(zen.scatteredLight,
@@ -1866,7 +1983,10 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
 
     // 太阳镜头光晕（每帧一次）：太阳在相机前方时投影到屏幕 NDC，并求其被云遮挡的透射率
     s_ui.sun_visible = 0;
-    if (p->enable_sun_lens) {
+    // 太阳低于地平线时无条件关闭光晕（linglong.html 同步）：地平线下无直射光，
+    // 避免太阳盘/光晕绘制在地平线以下的“黑色地面”上
+    float sunElevDeg = asinf(saturatef(s_scene.sunDirection.y)) * 180.0f / kPI;
+    if (p->enable_sun_lens && sunElevDeg >= 0.0f) {
         Cv3 sc = v3(v3dot(s_scene.sunDirection, right),
                     v3dot(s_scene.sunDirection, camUp),
                     v3dot(s_scene.sunDirection, forward));
@@ -1898,7 +2018,6 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     for (int y = 0; y < H; y++) {
         uint8_t rowbuf[CLOUD_MAX_W * 3];
         float vv = 1.0f - ((float)y + 0.5f) / (float)H * 2.0f; // 上正
-        const int32_t fj = s_ui.frame_index % 9973;
         for (int x = 0; x < W; x++) {
             float uu = ((float)x + 0.5f) / (float)W * 2.0f - 1.0f; // 左负右正
 
@@ -1918,14 +2037,17 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
             }
             rayDir = v3norm(rayDir);
 
-            // per-pixel 蓝噪抖动（对应 flower 网格化 blue noise 种子旋转）
-            float njx = (float)x + (float)fj * 0.695f * 47.0f;
-            float njy = (float)y + (float)fj * 0.695f * 17.0f;
-            float jitter = fmodf(52.9829189f * fmodf(njx * 0.06711056f + njy * 0.00583715f, 1.0f), 1.0f);
-
             // 天空
             SingleScatteringResult sky = integrateScatteredLuminance(camPos, rayDir, s_scene.sunDirection,
-                &s_scene, 1, 1, 0, 1, 9e6f, 14);
+                &s_scene, 1, 1, 0, 1, 9e6f, 14, 0);
+
+            // per-pixel 时空去相关抖动（linglong.html 模型5改进回移，替代 IGN+线性帧偏移）：
+            // 原实现每帧对整个 IGN 图案施加全局平移，平移量超过一个空间周期时发生时间
+            // 混叠（“水波纹”式方向性滚动干扰）。改为对 (整数像素坐标, 帧号) 做
+            // full-avalanche 哈希：像素与帧号均为独立哈希输入，帧间/像素间抖动互不相关，
+            // 只呈现无结构的沸腾噪声，不再有可辨识的滚动图案。
+            float jitter = cloudHashFloat((uint32_t)x, (uint32_t)y,
+                                          (uint32_t)(s_ui.frame_index + 1013));
 
             // 云
             CloudPixel cloud = cloudPixelCompute(camPos, rayDir, p->app_time_sec, jitter, &s_scene);
@@ -1964,14 +2086,24 @@ void ui_cloud_render_core(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
 
     // 光源由调用方给出（天象仪 → where_is_the_sun；独立应用 → 预设/自动运动）
     float dl = sqrtf(p->sun_dx * p->sun_dx + p->sun_dy * p->sun_dy + p->sun_dz * p->sun_dz);
-    if (dl < 1e-6f) {
-        s_scene.sunDirection = v3(0, 1, 0);
-    } else {
-        s_scene.sunDirection = v3(p->sun_dx / dl, p->sun_dy / dl, p->sun_dz / dl);
+    Cv3 newSunDir = (dl < 1e-6f) ? v3(0, 1, 0)
+                                 : v3(p->sun_dx / dl, p->sun_dy / dl, p->sun_dz / dl);
+    Cv3 newSunCol = v3(p->sun_r, p->sun_g, p->sun_b);
+    // 太阳方向/颜色/强度变化超过阈值才置脏重算 LUT（linglong.html 同步的按需缓存）：
+    // 独立应用每帧回填相同值时不再逐帧重建 LUT；天象仪太阳连续移动时仍逐帧更新
+    if (fabsf(newSunDir.x - s_scene.sunDirection.x) +
+        fabsf(newSunDir.y - s_scene.sunDirection.y) +
+        fabsf(newSunDir.z - s_scene.sunDirection.z) > 1e-5f ||
+        fabsf(newSunCol.x - s_scene.sunColor.x) +
+        fabsf(newSunCol.y - s_scene.sunColor.y) +
+        fabsf(newSunCol.z - s_scene.sunColor.z) > 1e-5f ||
+        fabsf(p->sun_intensity - s_scene.sunIntensity) > 1e-5f) {
+        s_ui.sun_dirty = 1;
     }
-    s_scene.sunColor = v3(p->sun_r, p->sun_g, p->sun_b);
+    s_scene.sunDirection = newSunDir;
+    s_scene.sunColor = newSunCol;
     s_scene.sunIntensity = p->sun_intensity;
-    s_ui.sun_dirty = 1;
+    cloud_update_sky_light();
 
     // 云参数（云量/云层种类/亮度沿用独立应用已有的控制曲线）
     s_scene.cloudCoverage = clampf(p->coverage, 0.0f, 1.0f);
