@@ -171,8 +171,8 @@ typedef struct Key_Event {
     uint64_t key_timer;  // 按下状态的计时器
     uint8_t  key_mask;   // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
     uint8_t  key_repeat; // 触发一次长按后，只要不松手，该标记置1，直到物理按键松开后置0。若该标记为1，则在按住时触发连续重复动作。
-    uint8_t  is_softkbd; // 本事件是否来自触屏软键盘：1-是（键码为直接键码，不再经过九键输入法），0-否（触屏4x4网格键）
-    uint8_t  is_soft_key; // 按键来源：1-触屏派生的软按键（4x4宫格映射或触屏软键盘），0-实体键盘（见 platform.h NANO_HAS_HW_KEYBOARD）。按下时锁存，下降沿事件沿用
+    uint8_t  is_softkbd; // 键码语义是否与软键盘全键盘对齐：1-是（触屏软键盘或 Faces Keyboard3 硬件全键盘，键码为直接键码，不再经过九键输入法），0-否（触屏4x4网格键/实体16键）
+    uint8_t  is_soft_key; // 按键来源：1-触屏派生的软按键（4x4宫格映射或触屏软键盘），0-实体键盘（见 platform.h NANO_HAS_HW_KEYBOARD；Faces Keyboard3 硬件全键盘亦为0）。按下时锁存，下降沿事件沿用
     // 触屏边沿事件（触屏事件队列改造，见 AGENTS.md 第八节）：
     // 边沿检测在生产端（Core1 get_input_event，1-2ms 轮询）完成，DOWN/UP 经 event_queue
     // 可靠投递，Core0 每帧排空合并为位掩码——亚帧短点按不再湮灭。
