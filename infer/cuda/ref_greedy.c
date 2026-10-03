@@ -4,8 +4,9 @@
 //   用于与 CUDA 引擎做逐 token 正确性对照：固定 temperature=0（argmax）、
 //   repetition_penalty=1.0，对给定 prompt 生成 max_gen 个 token，
 //   每行打印一个 token id（首行为 prompt token 数）。
+//   按模型架构自动分派 prompt 模板（QWEN2/3=ChatML，NANO=instruct 标记）。
 //
-//   用法: ./ref_greedy <model_path> <prompt> <max_gen>
+//   用法: ./ref_greedy <model_path> <prompt> <max_gen> [lora_path]
 //
 
 #include <locale.h>
@@ -24,22 +25,42 @@ int main(int argc, char **argv) {
     const char *model_path = (argc > 1) ? argv[1] : "/home/bd4sur/ai/_model/Nano/qwen3-0b6-q80.bin";
     const char *prompt_str = (argc > 2) ? argv[2] : "请你介绍一下你自己。";
     uint32_t max_gen       = (argc > 3) ? (uint32_t)atoi(argv[3]) : 64;
+    const char *lora_path  = (argc > 4) ? argv[4] : NULL;
     uint32_t max_seq_len   = 2048;
 
-    Nano_Context *ctx = llm_context_init((char *)model_path, NULL, max_seq_len, 1.0f, 0.0f, 1.0f, 0, 42);
+    Nano_Context *ctx = llm_context_init((char *)model_path, (char *)lora_path, max_seq_len, 1.0f, 0.0f, 1.0f, 0, 42);
     ctx->observation = noop_observation;
 
     wchar_t wprompt[REF_MAX_INPUT];
     mbstowcs(wprompt, prompt_str, REF_MAX_INPUT);
 
     uint32_t num_prompt_tokens = 0;
-    uint32_t *prompt_tokens = apply_qwen_chat_template(ctx->tokenizer, wprompt, &num_prompt_tokens, 1);
+    uint32_t *prompt_tokens = NULL;
+    uint32_t arch = ctx->llm->arch;
+
+    if (arch == LLM_ARCH_QWEN2 || arch == LLM_ARCH_QWEN3) {
+        prompt_tokens = apply_qwen_chat_template(ctx->tokenizer, wprompt, &num_prompt_tokens, 1);
+    }
+    else if (arch == LLM_ARCH_NANO) {
+        wchar_t marked[REF_MAX_INPUT];
+        wcscpy(marked, L"<|instruct_mark|>");
+        wcscat(marked, wprompt);
+        wcscat(marked, L"<|response_mark|>");
+        prompt_tokens = encode_nano(ctx->tokenizer, marked, &num_prompt_tokens);
+    }
+    else {
+        fprintf(stderr, "unknown arch %u\n", arch);
+        return -1;
+    }
 
     uint32_t *ids = (uint32_t *)calloc(max_seq_len + 1, sizeof(uint32_t));
     memcpy(ids, prompt_tokens, num_prompt_tokens * sizeof(uint32_t));
 
     printf("%u\n", num_prompt_tokens);
     fflush(stdout);
+
+    uint32_t eos1 = (arch == LLM_ARCH_NANO) ? 0 : 151643;
+    uint32_t eos2 = (arch == LLM_ARCH_NANO) ? 3 : 151645;
 
     uint32_t total = num_prompt_tokens - 1 + max_gen;
     for (uint32_t pos = 0; pos < total; pos++) {
@@ -49,7 +70,7 @@ int main(int argc, char **argv) {
         ids[pos + 1] = next;
         printf("%u\n", next);
         fflush(stdout);
-        if (next == 151643 || next == 151645) break;
+        if (next == eos1 || next == eos2) break;
     }
 
     free(ids);

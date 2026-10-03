@@ -5,7 +5,10 @@
 //   参照 infer.c 从零实现的 CUDA 推理引擎。
 //
 //   支持范围：
-//     - 模型架构：Qwen3（LLM_ARCH_QWEN3），按 qwen3-0b6-q80.bin 调优
+//     - 模型架构：Qwen3（LLM_ARCH_QWEN3，head_dim=128，QK-norm，半区旋转 RoPE）
+//       与自研 Nano（LLM_ARCH_NANO，head_dim 32/48，文件表交织 RoPE，宽字符 trie 词表）
+//     - 已验证：qwen3-0b6 / qwen3-1b7 / qwen3-4b-instruct-2507 / nano-168m / nano-56m(-base)
+//     - LoRA 外挂（仅 NANO 架构，fp32 低秩分支，-lora 传入，语义同 infer.c）
 //     - 量化：仅 int8（Q80，group_size=128），与 infer.c 的 Q80 文件格式完全兼容
 //     - 权重布局：与 infer.c memory_map_params 解析顺序一致
 //
@@ -22,13 +25,15 @@
 //     - 整个 decode step 被捕获为 CUDA Graph，逐步重放，消除 launch 开销
 //     - prefill 阶段逐步异步入队（无逐 step 同步），流水线执行
 //
-//   实测性能（RTX 4070 Laptop / sm_89，qwen3-0b6-q80，贪心解码）：
-//     - 短上下文（pos<200）decode 约 300-330 tok/s（≈0.59 GB/token 权重流，有效带宽
-//       ~250 GB/s，逼近该卡显存带宽上限）
-//     - 512 token 长上下文稳态约 255 tok/s（fp32 KV cache 随上下文线性增读）
-//     - prefill 与 decode 同速率（逐 token GEMV 路径，全异步流水线）
-//   正确性：与 infer.c（CPU 参考，同模型同 prompt 贪心解码）前 44+ token 完全一致，
-//           之后的分歧源于浮点规约顺序差异下的 argmax 近平局（tie）翻转，属预期。
+//   实测性能（RTX 4070 Laptop / sm_89，贪心解码，稳态 TPS）：
+//     - qwen3-0b6-q80 ：约 255-330
+//     - qwen3-1b7-q80 ：约 115
+//     - qwen3-4b-q80  ：约 51-55
+//     - nano-168m-q80 ：约 605
+//     - nano-56m-q80  ：约 1235（+LoRA 约 958）
+//   正确性：与 infer.c（CPU 参考，同模型同 prompt 贪心解码）对照：qwen3-1b7/4b 与
+//           nano-168m 前 48/32 token 完全一致；其余前 11-44 一致（其后为浮点规约
+//           顺序差异下的 argmax 近平局翻转，两侧输出均连贯，属预期）。
 
 #include <cuda_runtime.h>
 
@@ -48,6 +53,7 @@
 #include <cub/cub.cuh>
 
 #include "tokenizer.h"
+#include "../utils.h" // NANO 架构分词器需要 Map/Trie（链接上层 utils.c）
 
 #define CUDA_CHECK(call) do { \
     cudaError_t err_ = (call); \
@@ -69,6 +75,7 @@ static uint64_t now_ms(void) {
 
 #define QUANT_TYPE_Q80 (0x80)
 #define LLM_ARCH_QWEN3 (3)
+#define LLM_ARCH_NANO  (0)
 
 #define GROUP_SIZE   (128)   // Q80 量化分组大小（本引擎固定）
 #define HEAD_DIM     (128)   // Qwen3 head_dim（qknorm/rope/attention 融合内核固定）
@@ -135,10 +142,22 @@ typedef struct {
     int8_t *w13_q;    float *w13_s;   // (L, 2*n_hidden, embd)      按层拼接 w1|w3
     int8_t *w2_q;     float *w2_s;    // (L, embd, n_hidden)
 
-    float *q_norm;    // (L, head_dim)
-    float *k_norm;    // (L, head_dim)
-    float *inv_freq;  // (head_dim/2,) RoPE 逆频率
+    float *q_norm;    // (L, head_dim)（QWEN3 专用，NANO 为 NULL）
+    float *k_norm;    // (L, head_dim)（QWEN3 专用，NANO 为 NULL）
+    float *inv_freq;  // (head_dim/2,) RoPE 逆频率（QWEN3 运行时计算）
+    float *fcr_tab;   // (block_size, head_dim/2) RoPE 余弦表（NANO 从文件读取）
+    float *fci_tab;   // (block_size, head_dim/2) RoPE 正弦表（NANO 从文件读取）
 } DevWeights;
+
+// LoRA 外挂权重（仅 NANO 架构）：fp32 低秩分解，wq/wk/wv/wo 各一对 A(down)/B(up)
+typedef struct {
+    int rank;
+    float alpha;
+    float *wq_a, *wq_b;  // (L, rank, E) (L, E, rank)
+    float *wk_a, *wk_b;  // (L, rank, E) (L, KV, rank)
+    float *wv_a, *wv_b;  // (L, rank, E) (L, KV, rank)
+    float *wo_a, *wo_b;  // (L, rank, Q) (L, E, rank)
+} DevLora;
 
 typedef struct {
     int   *d_step;     // [2] = {token, pos}，每步由主机写入
@@ -147,6 +166,8 @@ typedef struct {
     int8_t *xq;        // (embd,) 量化激活
     float *xs;         // (embd/GS,)
     float *qkv;        // (q_dim+2*kv_dim,) q|k|v 暂存
+    float *xb_f;       // (embd,) attn-rmsnorm 浮点输出（LoRA 输入，use_lora 时分配）
+    float *xba_f;      // (q_dim,) 注意力浮点输出（NANO 架构使用，量化前）
     float *k_cache;    // (L, max_seq, kv_dim)
     float *v_cache;
     float *att;        // (n_head, max_seq) 注意力分数暂存
@@ -227,9 +248,10 @@ __device__ __forceinline__ int pack_i8x4(int q0, int q1, int q2, int q3) {
 //   输入 x (E,)、权重 w (E,)；输出量化激活 xq 与分组 scale xs。
 //   256 线程；每个 warp 处理一个 128 元素分组（E 须为 128 的倍数）。
 // ===============================================================================
-
+//   xf 非空时同时写出归一化后的浮点值（LoRA 分支需要浮点激活）
 __global__ void rmsnorm_quant_kernel(const float *__restrict__ x, const float *__restrict__ w,
-                                     int8_t *__restrict__ xq, float *__restrict__ xs, int E) {
+                                     int8_t *__restrict__ xq, float *__restrict__ xs, int E,
+                                     float *__restrict__ xf) {
     __shared__ float red[32];
     int tid = threadIdx.x;
     int lane = tid & 31, warp = tid >> 5;
@@ -254,6 +276,7 @@ __global__ void rmsnorm_quant_kernel(const float *__restrict__ x, const float *_
         float n1 = v.y * inv_rms * wv.y;
         float n2 = v.z * inv_rms * wv.z;
         float n3 = v.w * inv_rms * wv.w;
+        if (xf) { float4 o = make_float4(n0, n1, n2, n3); *(float4 *)(xf + i) = o; }
         float amax = fmaxf(fmaxf(fabsf(n0), fabsf(n1)), fmaxf(fabsf(n2), fabsf(n3)));
         #pragma unroll
         for (int o = 16; o > 0; o >>= 1) amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, o));
@@ -341,17 +364,23 @@ __global__ void gemv_q80_kernel(const int8_t *__restrict__ wq, const float *__re
     }
 }
 
-// 调用点形状标识：每种层矩阵使用实测最优的调优参数组合
+// 调用点形状标识：每种层矩阵使用实测最优的调优参数组合（按 n 进一步分派）
 typedef enum {
     GEMV_GENERIC = 0,  // 保守默认（warp/row，无 split/ldcs）
-    GEMV_QKV,          // (q+2k)x1024：split2 + ldcs（调用方须先清零 out）
-    GEMV_WO,           // embdx2048  ：split4 + ldcs + atomicAdd（out 已含残差）
-    GEMV_W13,          // 2hx1024    ：128 线程块 + ldcs
-    GEMV_W2,           // embdx3072  ：split3 + ldcs + atomicAdd（out 已含残差）
-    GEMV_CLS,          // vocabx1024 ：2row + ldcs
+    GEMV_QKV,          // (q+2k)xE    ：split2 + ldcs（调用方须先清零 out）
+    GEMV_WO,           // E x q_dim   ：深 split + ldcs + atomicAdd（out 已含残差）
+    GEMV_W13,          // 2H x E      ：128 线程块 + ldcs
+    GEMV_W2,           // E x H       ：split + ldcs + atomicAdd（out 已含残差）
+    GEMV_CLS,          // vocab x E   ：2row + ldcs
 } GemvKind;
 
+#define GEMV_LAUNCH(NN, RPW, SP, LD, BT, GY) \
+    gemv_q80_kernel<NN, RPW, SP, LD, BT><<<dim3(((unsigned)w->d + (BT) / 32 * (RPW) - 1) / ((BT) / 32 * (RPW)), (GY)), (BT), 0, stream>>>( \
+        w->q80.q, w->q80.s, xq, xs, out, residual, w->d)
+
 // 精度分发器：前向流程只面对 WeightMat，不感知具体精度（扩展口）
+//   各调用点的调优参数在 RTX 4070 Laptop 上按 0.6B 形状实测选定；新形状（1.7B/4B/NANO）
+//   使用同族启发式配置（split 数按矩阵规模），如更换 GPU 可重新微调。
 static void gemv_dispatch(const WeightMat *w, GemvKind kind, const int8_t *xq, const float *xs,
                           float *out, float *residual, cudaStream_t stream) {
     if (w->type != WEIGHT_Q80) {
@@ -360,36 +389,54 @@ static void gemv_dispatch(const WeightMat *w, GemvKind kind, const int8_t *xq, c
     }
     switch (kind) {
         case GEMV_QKV:
-            gemv_q80_kernel<1024, 1, 2, 1, 256><<<dim3((unsigned)w->d / 8, 2), 256, 0, stream>>>(
-                w->q80.q, w->q80.s, xq, xs, out, residual, w->d);
+            if (w->n == 512)  { GEMV_LAUNCH(512, 1, 1, 1, 256, 1); return; }
+            if (w->n == 768)  { GEMV_LAUNCH(768, 1, 2, 1, 256, 2); return; }
+            if (w->n == 1024) { GEMV_LAUNCH(1024, 1, 2, 1, 256, 2); return; }
+            if (w->n == 2048) { GEMV_LAUNCH(2048, 1, 2, 1, 256, 2); return; }
+            if (w->n == 2560) { GEMV_LAUNCH(2560, 1, 2, 1, 256, 2); return; }
             break;
         case GEMV_WO:
-            gemv_q80_kernel<2048, 1, 8, 1, 128><<<dim3((unsigned)w->d / 4, 8), 128, 0, stream>>>(
-                w->q80.q, w->q80.s, xq, xs, out, residual, w->d);
+            if (w->n == 512)  { GEMV_LAUNCH(512, 1, 2, 1, 128, 2); return; }
+            if (w->n == 768)  { GEMV_LAUNCH(768, 1, 4, 1, 128, 4); return; }
+            if (w->n == 2048) { GEMV_LAUNCH(2048, 1, 8, 1, 128, 8); return; }
+            if (w->n == 4096) { GEMV_LAUNCH(4096, 1, 4, 1, 128, 4); return; }
             break;
         case GEMV_W13:
-            gemv_q80_kernel<1024, 1, 1, 1, 128><<<dim3((unsigned)w->d / 4, 1), 128, 0, stream>>>(
-                w->q80.q, w->q80.s, xq, xs, out, residual, w->d);
+            if (w->n == 512)  { GEMV_LAUNCH(512, 1, 1, 1, 128, 1); return; }
+            if (w->n == 768)  { GEMV_LAUNCH(768, 1, 1, 1, 128, 1); return; }
+            if (w->n == 1024) { GEMV_LAUNCH(1024, 1, 1, 1, 128, 1); return; }
+            if (w->n == 2048) { GEMV_LAUNCH(2048, 1, 1, 1, 128, 1); return; }
+            if (w->n == 2560) { GEMV_LAUNCH(2560, 1, 1, 1, 128, 1); return; }
             break;
         case GEMV_W2:
-            gemv_q80_kernel<3072, 1, 3, 1, 256><<<dim3((unsigned)w->d / 8, 3), 256, 0, stream>>>(
-                w->q80.q, w->q80.s, xq, xs, out, residual, w->d);
+            if (w->n == 1408) { GEMV_LAUNCH(1408, 1, 2, 1, 256, 2); return; }
+            if (w->n == 2048) { GEMV_LAUNCH(2048, 1, 4, 1, 256, 4); return; }
+            if (w->n == 3072) { GEMV_LAUNCH(3072, 1, 3, 1, 256, 3); return; }
+            if (w->n == 6144) { GEMV_LAUNCH(6144, 1, 3, 1, 256, 3); return; }
+            if (w->n == 9728) { GEMV_LAUNCH(9728, 1, 2, 1, 256, 2); return; }
             break;
         case GEMV_CLS:
-            gemv_q80_kernel<1024, 2, 1, 1, 256><<<dim3(((unsigned)w->d / 2 + 7) / 8, 1), 256, 0, stream>>>(
-                w->q80.q, w->q80.s, xq, xs, out, residual, w->d);
+            if (w->n == 512)  { GEMV_LAUNCH(512, 2, 1, 1, 256, 1); return; }
+            if (w->n == 768)  { GEMV_LAUNCH(768, 2, 1, 1, 256, 1); return; }
+            if (w->n == 1024) { GEMV_LAUNCH(1024, 2, 1, 1, 256, 1); return; }
+            if (w->n == 2048) { GEMV_LAUNCH(2048, 2, 1, 1, 256, 1); return; }
+            if (w->n == 2560) { GEMV_LAUNCH(2560, 2, 1, 1, 256, 1); return; }
             break;
         case GEMV_GENERIC:
         default:
-            switch (w->n) {
-                case 1024: gemv_q80_kernel<1024, 1, 1, 0, 256><<<dim3(((unsigned)w->d + 7) / 8, 1), 256, 0, stream>>>(w->q80.q, w->q80.s, xq, xs, out, residual, w->d); break;
-                case 2048: gemv_q80_kernel<2048, 1, 1, 0, 256><<<dim3(((unsigned)w->d + 7) / 8, 1), 256, 0, stream>>>(w->q80.q, w->q80.s, xq, xs, out, residual, w->d); break;
-                case 3072: gemv_q80_kernel<3072, 1, 1, 0, 256><<<dim3(((unsigned)w->d + 7) / 8, 1), 256, 0, stream>>>(w->q80.q, w->q80.s, xq, xs, out, residual, w->d); break;
-                default:
-                    fprintf(stderr, "gemv_dispatch: unsupported n=%d for Q80\n", w->n);
-                    exit(EXIT_FAILURE);
-            }
             break;
+    }
+    switch (w->n) {
+        case 1024: GEMV_LAUNCH(1024, 1, 1, 0, 256, 1); return;
+        case 2048: GEMV_LAUNCH(2048, 1, 1, 0, 256, 1); return;
+        case 2560: GEMV_LAUNCH(2560, 1, 1, 0, 256, 1); return;
+        case 3072: GEMV_LAUNCH(3072, 1, 1, 0, 256, 1); return;
+        case 4096: GEMV_LAUNCH(4096, 1, 1, 0, 256, 1); return;
+        case 6144: GEMV_LAUNCH(6144, 1, 1, 0, 256, 1); return;
+        case 9728: GEMV_LAUNCH(9728, 1, 1, 0, 256, 1); return;
+        default:
+            fprintf(stderr, "gemv_dispatch: unsupported n=%d for Q80\n", w->n);
+            exit(EXIT_FAILURE);
     }
 }
 
@@ -535,6 +582,130 @@ __global__ void attention_kernel(float *__restrict__ qkv,
     if (tid == 0) xba_s[h] = scale;
 }
 
+// ===============================================================================
+// 融合 kernel（NANO 架构）：RoPE（文件系数表、相邻对交织）+ KV 写入 +
+//   单 token 多头注意力（输出浮点 xba，量化由独立 quantize_kernel 完成：
+//   NANO 的 head_dim(32/48) 不等于 group_size(128)，量化分组跨越头边界，
+//   无法在头内完成，与 infer.c 的全 q_dim 分组量化保持一致）。
+//   每个 block 处理一个 q 头（HD 线程 = head_dim，HD 为模板参数）。
+// ===============================================================================
+
+template <int HD>
+__global__ void attention_nano_kernel(float *__restrict__ qkv,
+                                      float *__restrict__ kc, float *__restrict__ vc,
+                                      const float *__restrict__ fcr_tab, const float *__restrict__ fci_tab,
+                                      float *__restrict__ att,
+                                      float *__restrict__ xba,
+                                      const int *__restrict__ d_pos,
+                                      int max_seq, int n_head, int n_kv_head, int kv_mul) {
+    __shared__ __align__(16) float sq[HD];
+    __shared__ __align__(16) float sk[HD];
+    __shared__ float red[32];
+
+    int h = blockIdx.x, tid = threadIdx.x;
+    int pos = d_pos[0];
+    int kvh = h / kv_mul;
+    int kv_dim = n_kv_head * HD;
+    constexpr int HF = HD / 2;
+
+    // ---- q/k 头 RoPE（相邻对 (2i,2i+1) 交织，系数取自文件表）----
+    const float *fcr_row = fcr_tab + (size_t)pos * HF;
+    const float *fci_row = fci_tab + (size_t)pos * HF;
+    sq[tid] = qkv[h * HD + tid];
+    sk[tid] = qkv[(n_head + kvh) * HD + tid];
+    __syncthreads();
+    float *krow = kc + (size_t)pos * kv_dim + kvh * HD;
+    if (tid < HF) {
+        float fcr = fcr_row[tid], fci = fci_row[tid];
+        float q0 = sq[2 * tid], q1 = sq[2 * tid + 1];
+        float k0 = sk[2 * tid], k1 = sk[2 * tid + 1];
+        sq[2 * tid]     = q0 * fcr - q1 * fci;
+        sq[2 * tid + 1] = q0 * fci + q1 * fcr;
+        krow[2 * tid]     = k0 * fcr - k1 * fci;
+        krow[2 * tid + 1] = k0 * fci + k1 * fcr;
+    }
+    vc[(size_t)pos * kv_dim + kvh * HD + tid] = qkv[(n_head + n_kv_head + kvh) * HD + tid];
+    __syncthreads();
+
+    // ---- 因果自注意力（结构同 Qwen3 版）----
+    float *att_h = att + (size_t)h * max_seq;
+    const float att_scale = 1.0f / sqrtf((float)HD);
+
+    const float4 *q4 = (const float4 *)sq;
+    for (int t = tid; t <= pos; t += blockDim.x) {
+        const float4 *k4 = (const float4 *)(kc + (size_t)t * kv_dim + kvh * HD);
+        float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
+        #pragma unroll
+        for (int j = 0; j < HD / 4; j++) {
+            float4 qvv = q4[j];
+            float4 kvv = k4[j];
+            a0 = fmaf(qvv.x, kvv.x, a0);
+            a1 = fmaf(qvv.y, kvv.y, a1);
+            a2 = fmaf(qvv.z, kvv.z, a2);
+            a3 = fmaf(qvv.w, kvv.w, a3);
+        }
+        att_h[t] = ((a0 + a1) + (a2 + a3)) * att_scale;
+    }
+    __syncthreads();
+
+    float m = -FLT_MAX;
+    for (int t = tid; t <= pos; t += blockDim.x) m = fmaxf(m, att_h[t]);
+    m = block_reduce_max(m, red);
+
+    float s = 0.0f;
+    for (int t = tid; t <= pos; t += blockDim.x) {
+        float e = expf(att_h[t] - m);
+        att_h[t] = e;
+        s += e;
+    }
+    s = block_reduce_sum(s, red);
+    float inv_sum = 1.0f / s;
+
+    float acc = 0.0f;
+    const float *vcol = vc + kvh * HD + tid;
+    {
+        float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
+        int t = 0;
+        for (; t + 4 <= pos + 1; t += 4) {
+            a0 = fmaf(att_h[t + 0], vcol[(size_t)(t + 0) * kv_dim], a0);
+            a1 = fmaf(att_h[t + 1], vcol[(size_t)(t + 1) * kv_dim], a1);
+            a2 = fmaf(att_h[t + 2], vcol[(size_t)(t + 2) * kv_dim], a2);
+            a3 = fmaf(att_h[t + 3], vcol[(size_t)(t + 3) * kv_dim], a3);
+        }
+        for (; t <= pos; t++) a0 = fmaf(att_h[t], vcol[(size_t)t * kv_dim], a0);
+        acc = ((a0 + a1) + (a2 + a3)) * inv_sum;
+    }
+
+    // ---- 输出浮点 xba（量化由 quantize_kernel 按 128 分组完成）----
+    xba[h * HD + tid] = acc;
+}
+
+// ===============================================================================
+// kernel：独立 Q80 量化（x(n,) -> xq/xs，n 为 128 的倍数；warp 负责一个分组）
+// ===============================================================================
+
+__global__ void quantize_kernel(const float *__restrict__ x,
+                                int8_t *__restrict__ xq, float *__restrict__ xs, int n) {
+    int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    int warps = blockDim.x >> 5;
+    int groups = n / GROUP_SIZE;
+    for (int g = warp; g < groups; g += warps) {
+        int i = g * GROUP_SIZE + lane * 4;
+        float4 v = *(const float4 *)(x + i);
+        float amax = fmaxf(fmaxf(fabsf(v.x), fabsf(v.y)), fmaxf(fabsf(v.z), fabsf(v.w)));
+        #pragma unroll
+        for (int o = 16; o > 0; o >>= 1) amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, o));
+        float scale = amax / 127.0f;
+        float inv_scale = 127.0f / amax;
+        int q0 = (amax > 0.0f) ? __float2int_rn(v.x * inv_scale) : 0;
+        int q1 = (amax > 0.0f) ? __float2int_rn(v.y * inv_scale) : 0;
+        int q2 = (amax > 0.0f) ? __float2int_rn(v.z * inv_scale) : 0;
+        int q3 = (amax > 0.0f) ? __float2int_rn(v.w * inv_scale) : 0;
+        *(int *)(xq + i) = pack_i8x4(q0, q1, q2, q3);
+        if (lane == 0) xs[g] = scale;
+    }
+}
+
 __global__ void swiglu_quant_kernel(const float *__restrict__ h13,
                                     int8_t *__restrict__ hq, float *__restrict__ hs, int H) {
     int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
@@ -561,6 +732,76 @@ __global__ void swiglu_quant_kernel(const float *__restrict__ h13,
         if (lane == 0) hs[g] = scale;
     }
 }
+// ===============================================================================
+// LoRA kernels（仅 NANO 架构，fp32 低秩分支，与 infer.c 语义一致）
+//   lora_qkv_kernel：q0/k0/v0 = A_q/k/v @ xb（E -> rank，warp 每个输出一行的点积），
+//                    q1/k1/v1 = B_q/k/v @ z（rank -> E/KV/KV），乘 alpha/rank 后累加进 qkv 暂存。
+//   lora_o_kernel  ：o0 = A_o @ xba（Q -> rank），o1 = B_o @ o0（rank -> E），乘 scale 累加进 x。
+//   均为单块 kernel；rank <= 32（中间值置于共享内存）。
+// ===============================================================================
+
+#define LORA_MAX_RANK (32)
+
+__global__ void lora_qkv_kernel(const float *__restrict__ xb,
+                                const float *__restrict__ wa_q, const float *__restrict__ wb_q,
+                                const float *__restrict__ wa_k, const float *__restrict__ wb_k,
+                                const float *__restrict__ wa_v, const float *__restrict__ wb_v,
+                                float *__restrict__ qkv,
+                                int E, int KV, int rank, float scale) {
+    __shared__ __align__(16) float z[3 * LORA_MAX_RANK];
+    int warp = threadIdx.x >> 5, lane = threadIdx.x & 31, nw = blockDim.x >> 5;
+
+    // down：3*rank 个 rank 维输出，每 warp 负责一个（对 E 做点积）
+    const float *amats[3] = { wa_q, wa_k, wa_v };
+    for (int o = warp; o < 3 * rank; o += nw) {
+        const float *a = amats[o / rank] + (size_t)(o % rank) * E;
+        float acc = 0.0f;
+        for (int i = lane; i < E; i += 32) acc = fmaf(a[i], xb[i], acc);
+        #pragma unroll
+        for (int off = 16; off > 0; off >>= 1) acc += __shfl_down_sync(0xffffffffu, acc, off);
+        if (lane == 0) z[o] = acc;
+    }
+    __syncthreads();
+
+    // up：q1(E) k1(KV) v1(KV)，线程各负责一个输出（对 rank 做点积）后累加进 qkv 暂存
+    const float *bmats[3] = { wb_q, wb_k, wb_v };
+    for (int o = threadIdx.x; o < E + 2 * KV; o += blockDim.x) {
+        int m = (o < E) ? 0 : ((o < E + KV) ? 1 : 2);
+        int i = (m == 0) ? o : ((m == 1) ? o - E : o - E - KV);
+        const float *b = bmats[m] + (size_t)i * rank;
+        const float *zrow = z + m * rank;
+        float acc = 0.0f;
+        for (int r = 0; r < rank; r++) acc = fmaf(b[r], zrow[r], acc);
+        int off = (m == 0) ? i : (E + ((m == 1) ? 0 : KV) + i);
+        qkv[off] += scale * acc;
+    }
+}
+
+__global__ void lora_o_kernel(const float *__restrict__ xba,
+                              const float *__restrict__ wa, const float *__restrict__ wb,
+                              float *__restrict__ x,
+                              int Q, int E, int rank, float scale) {
+    __shared__ __align__(16) float z[LORA_MAX_RANK];
+    int warp = threadIdx.x >> 5, lane = threadIdx.x & 31, nw = blockDim.x >> 5;
+
+    for (int o = warp; o < rank; o += nw) {
+        const float *a = wa + (size_t)o * Q;
+        float acc = 0.0f;
+        for (int i = lane; i < Q; i += 32) acc = fmaf(a[i], xba[i], acc);
+        #pragma unroll
+        for (int off = 16; off > 0; off >>= 1) acc += __shfl_down_sync(0xffffffffu, acc, off);
+        if (lane == 0) z[o] = acc;
+    }
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < E; i += blockDim.x) {
+        const float *b = wb + (size_t)i * rank;
+        float acc = 0.0f;
+        for (int r = 0; r < rank; r++) acc = fmaf(b[r], z[r], acc);
+        x[i] += scale * acc;
+    }
+}
+
 
 // ===============================================================================
 // kernel：复读惩罚（对历史词元的 logits 除以惩罚因子）
@@ -694,6 +935,11 @@ typedef struct {
     float top_p;
     uint64_t rng_state;
 
+    int use_lora;        // 是否启用 LoRA（仅 NANO 架构）
+    DevLora lora;        // LoRA 外挂权重
+    uint32_t eos1, eos2; // 结束词元（随架构：QWEN3=151643/151645，NANO=0/3）
+    const char *lora_path;
+
     uint8_t *file_buffer;
     size_t file_size;
 } CudaEngine;
@@ -712,6 +958,7 @@ static void forward_launch(CudaEngine *e, cudaStream_t stream) {
     int H2 = 2 * (int)c->n_hidden;
     int V = (int)c->vocab_size;
     int *d_pos = e->s.d_step + 1;
+    int is_nano = (c->arch == LLM_ARCH_NANO);
 
     write_id_kernel<<<1, 1, 0, stream>>>(s->d_step, s->d_out_ids);
     embed_kernel<<<1, E / 4, 0, stream>>>(w->emb_q, w->emb_s, s->d_step, s->x, E);
@@ -721,7 +968,7 @@ static void forward_launch(CudaEngine *e, cudaStream_t stream) {
 
     for (uint32_t l = 0; l < c->n_layer; l++) {
         // attention rmsnorm + 量化
-        rmsnorm_quant_kernel<<<1, 256, 0, stream>>>(s->x, w->rms_attn + l * E, s->xq, s->xs, E);
+        rmsnorm_quant_kernel<<<1, 256, 0, stream>>>(s->x, w->rms_attn + l * E, s->xq, s->xs, E, e->use_lora ? s->xb_f : NULL);
 
         // QKV
         mat.q80.q = w->wqkv_q + (size_t)l * QK * E;
@@ -729,22 +976,55 @@ static void forward_launch(CudaEngine *e, cudaStream_t stream) {
         mat.q80.s = w->wqkv_s + (size_t)l * QK * (E / GROUP_SIZE);
         cudaMemsetAsync(s->qkv, 0, (size_t)QK * sizeof(float), stream); // split2 以 atomicAdd 累加，须先清零
         gemv_dispatch(&mat, GEMV_QKV, s->xq, s->xs, s->qkv, NULL, stream);
-        // 注意力（融合 QK-norm + RoPE + KV 写入 + 输出量化）
-        attention_kernel<<<c->n_head, HEAD_DIM, 0, stream>>>(
-            s->qkv, s->k_cache + (size_t)l * e->max_seq_len * e->kv_dim,
-            s->v_cache + (size_t)l * e->max_seq_len * e->kv_dim,
-            w->q_norm + l * HEAD_DIM, w->k_norm + l * HEAD_DIM, w->inv_freq,
-            s->att, s->xba_q, s->xba_s, d_pos, e->max_seq_len,
-            (int)c->n_head, (int)c->n_kv_head, e->kv_mul);
+        // 注意力（QWEN3：融合 QK-norm+RoPE+输出量化；NANO：文件表 RoPE+浮点 xba 输出）
+        if (!is_nano) {
+            attention_kernel<<<c->n_head, HEAD_DIM, 0, stream>>>(
+                s->qkv, s->k_cache + (size_t)l * e->max_seq_len * e->kv_dim,
+                s->v_cache + (size_t)l * e->max_seq_len * e->kv_dim,
+                w->q_norm + l * HEAD_DIM, w->k_norm + l * HEAD_DIM, w->inv_freq,
+                s->att, s->xba_q, s->xba_s, d_pos, e->max_seq_len,
+                (int)c->n_head, (int)c->n_kv_head, e->kv_mul);
+        }
+        else {
+            if (e->use_lora) {
+                lora_qkv_kernel<<<1, 256, 0, stream>>>(
+                    s->xb_f,
+                    e->lora.wq_a + (size_t)l * e->lora.rank * E, e->lora.wq_b + (size_t)l * E * e->lora.rank,
+                    e->lora.wk_a + (size_t)l * e->lora.rank * E, e->lora.wk_b + (size_t)l * e->kv_dim * e->lora.rank,
+                    e->lora.wv_a + (size_t)l * e->lora.rank * E, e->lora.wv_b + (size_t)l * e->kv_dim * e->lora.rank,
+                    s->qkv, E, e->kv_dim, e->lora.rank, e->lora.alpha / (float)e->lora.rank);
+            }
+            int hd = (int)c->head_dim;
+            if (hd == 32) {
+                attention_nano_kernel<32><<<c->n_head, 32, 0, stream>>>(
+                    s->qkv, s->k_cache + (size_t)l * e->max_seq_len * e->kv_dim,
+                    s->v_cache + (size_t)l * e->max_seq_len * e->kv_dim,
+                    w->fcr_tab, w->fci_tab, s->att, s->xba_f, d_pos, e->max_seq_len,
+                    (int)c->n_head, (int)c->n_kv_head, e->kv_mul);
+            }
+            else if (hd == 48) {
+                attention_nano_kernel<48><<<c->n_head, 48, 0, stream>>>(
+                    s->qkv, s->k_cache + (size_t)l * e->max_seq_len * e->kv_dim,
+                    s->v_cache + (size_t)l * e->max_seq_len * e->kv_dim,
+                    w->fcr_tab, w->fci_tab, s->att, s->xba_f, d_pos, e->max_seq_len,
+                    (int)c->n_head, (int)c->n_kv_head, e->kv_mul);
+            }
+            quantize_kernel<<<1, 256, 0, stream>>>(s->xba_f, s->xba_q, s->xba_s, e->q_dim);
+        }
 
         // 输出投影 + 残差
         mat.q80.q = w->wo_q + (size_t)l * E * e->q_dim;
         mat.q80.s = w->wo_s + (size_t)l * E * (e->q_dim / GROUP_SIZE);
         mat.n = e->q_dim; mat.d = E;
         gemv_dispatch(&mat, GEMV_WO, s->xba_q, s->xba_s, s->x, s->x, stream);
-
+        if (is_nano && e->use_lora) {
+            lora_o_kernel<<<1, 256, 0, stream>>>(
+                s->xba_f, e->lora.wo_a + (size_t)l * e->lora.rank * e->q_dim,
+                e->lora.wo_b + (size_t)l * E * e->lora.rank,
+                s->x, e->q_dim, E, e->lora.rank, e->lora.alpha / (float)e->lora.rank);
+        }
         // ffn rmsnorm + 量化
-        rmsnorm_quant_kernel<<<1, 256, 0, stream>>>(s->x, w->rms_ffn + l * E, s->xq, s->xs, E);
+        rmsnorm_quant_kernel<<<1, 256, 0, stream>>>(s->x, w->rms_ffn + l * E, s->xq, s->xs, E, NULL);
 
         // W1|W3
         mat.q80.q = w->w13_q + (size_t)l * H2 * E;
@@ -763,7 +1043,7 @@ static void forward_launch(CudaEngine *e, cudaStream_t stream) {
     }
 
     // 最终 rmsnorm + 量化
-    rmsnorm_quant_kernel<<<1, 256, 0, stream>>>(s->x, w->rms_final, s->xq, s->xs, E);
+    rmsnorm_quant_kernel<<<1, 256, 0, stream>>>(s->x, w->rms_final, s->xq, s->xs, E, NULL);
 
     // 分类器
     mat.q80.q = w->cls_q ? w->cls_q : w->emb_q;
@@ -802,14 +1082,14 @@ static void launch_sampling(CudaEngine *e) {
                                               V, 0, 32, e->stream);
 }
 
-static uint32_t random_u32(uint64_t *state) {
+static uint32_t rng_next_u32(uint64_t *state) {
     *state ^= *state >> 12;
     *state ^= *state << 25;
     *state ^= *state >> 27;
     return (uint32_t)((*state * 2685821657736338717ull) >> 32);
 }
 
-static float random_f32(uint64_t *state) {
+static float rng_next_f32(uint64_t *state) {
     return (random_u32(state) >> 8) / 16777216.0f;
 }
 
@@ -856,7 +1136,7 @@ static int engine_sample(CudaEngine *e) {
     CUDA_CHECK(cudaMemcpyAsync(e->h_sorted_probs, s->d_sorted_probs, (size_t)n_copy * sizeof(float), cudaMemcpyDeviceToHost, e->stream));
     CUDA_CHECK(cudaMemcpyAsync(e->h_sorted_ids, s->d_sorted_ids, (size_t)n_copy * sizeof(int), cudaMemcpyDeviceToHost, e->stream));
     CUDA_CHECK(cudaStreamSynchronize(e->stream));
-    float coin = random_f32(&e->rng_state);
+    float coin = rng_next_f32(&e->rng_state);
     int tok = sample_top_p_host(e, n_copy, coin);
     if (tok < 0) { // 罕见回退：全量拷贝后重采样（同一枚 coin，语义一致）
         CUDA_CHECK(cudaMemcpyAsync(e->h_sorted_probs, s->d_sorted_probs, (size_t)V * sizeof(float), cudaMemcpyDeviceToHost, e->stream));
@@ -876,6 +1156,7 @@ static const uint8_t *walk_q80(const uint8_t *p, int n, int size_each, int gs) {
     return p + (size_t)n * ((size_t)size_each + (size_t)(size_each / gs) * sizeof(float));
 }
 
+static void engine_load_lora(CudaEngine *e, const char *lora_path);
 static void engine_load(CudaEngine *e, const char *model_path, int max_seq_len) {
     // 读文件（mmap）
     int fd = open(model_path, O_RDONLY);
@@ -901,25 +1182,36 @@ static void engine_load(CudaEngine *e, const char *model_path, int max_seq_len) 
     c->quant_type      = header[15];
     c->group_size      = header[16];
 
-    // 结构约束检查（本引擎按 Qwen3-0.6B-Q80 调优）
-    if (c->arch != LLM_ARCH_QWEN3) { fprintf(stderr, "仅支持 Qwen3 架构（arch=%u）\n", c->arch); exit(EXIT_FAILURE); }
+    // 结构约束检查
+    if (c->arch != LLM_ARCH_QWEN3 && c->arch != LLM_ARCH_NANO) {
+        fprintf(stderr, "仅支持 Qwen3/Nano 架构（arch=%u）\n", c->arch); exit(EXIT_FAILURE);
+    }
+    int is_nano = (c->arch == LLM_ARCH_NANO);
+    if (c->n_head % c->n_kv_head != 0) {
+        fprintf(stderr, "n_head(%u) 须为 n_kv_head(%u) 的整数倍\n", c->n_head, c->n_kv_head); exit(EXIT_FAILURE);
+    }
     if (c->quant_type != QUANT_TYPE_Q80) { fprintf(stderr, "仅支持 Q80 量化（quant=%u）\n", c->quant_type); exit(EXIT_FAILURE); }
     if (c->group_size != GROUP_SIZE) { fprintf(stderr, "仅支持 group_size=%d（实际 %u）\n", GROUP_SIZE, c->group_size); exit(EXIT_FAILURE); }
-    if (c->head_dim != HEAD_DIM) { fprintf(stderr, "仅支持 head_dim=%d（实际 %u）\n", HEAD_DIM, c->head_dim); exit(EXIT_FAILURE); }
-    if (c->n_embd % 512 || (c->n_head * c->head_dim) % 512 || c->n_hidden % 512) {
-        fprintf(stderr, "维度须为 512 的倍数（embd=%u q_dim=%u hidden=%u）\n",
-                c->n_embd, c->n_head * c->head_dim, c->n_hidden); exit(EXIT_FAILURE);
+    if (!is_nano && c->head_dim != HEAD_DIM) { fprintf(stderr, "Qwen3 仅支持 head_dim=%d（实际 %u）\n", HEAD_DIM, c->head_dim); exit(EXIT_FAILURE); }
+    if (c->n_embd % GROUP_SIZE || (c->n_head * c->head_dim) % GROUP_SIZE || c->n_hidden % GROUP_SIZE) {
+        fprintf(stderr, "维度须为 %d 的倍数（embd=%u q_dim=%u hidden=%u）\n",
+                GROUP_SIZE, c->n_embd, c->n_head * c->head_dim, c->n_hidden); exit(EXIT_FAILURE);
     }
-    if (c->n_head != 2 * c->n_kv_head) {
-        fprintf(stderr, "注意力配对内核要求 kv_mul==2（n_head=%u n_kv_head=%u）\n", c->n_head, c->n_kv_head); exit(EXIT_FAILURE);
+    if (is_nano && c->head_dim != 32 && c->head_dim != 48) {
+        fprintf(stderr, "NANO 架构当前支持 head_dim 32/48（实际 %u）\n", c->head_dim); exit(EXIT_FAILURE);
     }
     if ((int)c->block_size < max_seq_len) {
-        fprintf(stderr, "max_seq_len(%d) 超过模型 block_size(%u)\n", max_seq_len, c->block_size); exit(EXIT_FAILURE);
+        fprintf(stderr, "[CUDA] max_seq_len(%d) 超过模型 block_size(%u)，已截断\n", max_seq_len, c->block_size);
+        max_seq_len = (int)c->block_size;
     }
-    // 本引擎仅支持共享分类器（目标模型 qwen3-0b6-q80.bin 即如此）
     if (!c->is_shared_classifier) {
         fprintf(stderr, "仅支持共享分类器的模型\n"); exit(EXIT_FAILURE);
     }
+    if (e->use_lora && !is_nano) {
+        fprintf(stderr, "LoRA 仅支持 NANO 架构模型\n"); exit(EXIT_FAILURE);
+    }
+    e->eos1 = is_nano ? 0 : QWEN_EOS_1;
+    e->eos2 = is_nano ? 3 : QWEN_EOS_2;
 
     e->max_seq_len = max_seq_len;
     e->q_dim = (int)(c->n_head * c->head_dim);
@@ -951,13 +1243,18 @@ static void engine_load(CudaEngine *e, const char *model_path, int max_seq_len) 
     const uint8_t *p_w2 = pp;  pp = walk_q80(pp, L, E * H, GS);
     const uint8_t *p_w3 = pp;  pp = walk_q80(pp, L, H * E, GS);
 
-    const float *f_q_norm = (const float *)pp;  pp += (size_t)L * HEAD_DIM * 4;
-    const float *f_k_norm = (const float *)pp;  pp += (size_t)L * HEAD_DIM * 4;
-
-    // 文件在此处还有 RoPE 频率表（本引擎运行时自行计算 inv_freq，不读取）；
-    // 其后仅当分类器非共享时才跟有分类器张量（本引擎不支持，加载时已拒绝）。
+    // QWEN3：QK-norm 权重；文件其后的 RoPE 表跳过（运行时自行计算）
+    // NANO ：无 QK-norm；文件其后即为 RoPE 频率表（读取到设备）
+    const float *f_q_norm = NULL, *f_k_norm = NULL, *f_fcr = NULL, *f_fci = NULL;
+    if (!is_nano) {
+        f_q_norm = (const float *)pp;  pp += (size_t)L * HEAD_DIM * 4;
+        f_k_norm = (const float *)pp;  pp += (size_t)L * HEAD_DIM * 4;
+    }
+    else {
+        f_fcr = (const float *)pp;  pp += (size_t)c->block_size * (c->head_dim / 2) * 4;
+        f_fci = (const float *)pp;  pp += (size_t)c->block_size * (c->head_dim / 2) * 4;
+    }
     if ((size_t)(pp - buf) > e->file_size) { fprintf(stderr, "模型文件损坏：参数区越界\n"); exit(EXIT_FAILURE); }
-
     // ---------------- 设备内存分配 ----------------
     DevWeights *w = &e->w;
     RunState *s = &e->s;
@@ -979,9 +1276,17 @@ static void engine_load(CudaEngine *e, const char *model_path, int max_seq_len) 
     CUDA_CHECK(cudaMalloc(&w->wo_q, wo_qb));      CUDA_CHECK(cudaMalloc(&w->wo_s, wo_sb));
     CUDA_CHECK(cudaMalloc(&w->w13_q, w13_qb));    CUDA_CHECK(cudaMalloc(&w->w13_s, w13_sb));
     CUDA_CHECK(cudaMalloc(&w->w2_q, w2_qb));      CUDA_CHECK(cudaMalloc(&w->w2_s, w2_sb));
-    CUDA_CHECK(cudaMalloc(&w->q_norm, (size_t)L * HEAD_DIM * 4));
-    CUDA_CHECK(cudaMalloc(&w->k_norm, (size_t)L * HEAD_DIM * 4));
-    CUDA_CHECK(cudaMalloc(&w->inv_freq, HEAD_DIM / 2 * 4));
+    if (!is_nano) {
+        CUDA_CHECK(cudaMalloc(&w->q_norm, (size_t)L * HEAD_DIM * 4));
+        CUDA_CHECK(cudaMalloc(&w->k_norm, (size_t)L * HEAD_DIM * 4));
+        CUDA_CHECK(cudaMalloc(&w->inv_freq, HEAD_DIM / 2 * 4));
+    }
+    else {
+        CUDA_CHECK(cudaMalloc(&w->fcr_tab, (size_t)c->block_size * (c->head_dim / 2) * 4));
+        CUDA_CHECK(cudaMalloc(&w->fci_tab, (size_t)c->block_size * (c->head_dim / 2) * 4));
+        CUDA_CHECK(cudaMalloc(&s->xba_f, Q * 4));
+        if (e->use_lora) CUDA_CHECK(cudaMalloc(&s->xb_f, E * 4));
+    }
 
     size_t kv_bytes = (size_t)L * max_seq_len * KV * 4;
     CUDA_CHECK(cudaMalloc(&s->k_cache, kv_bytes));
@@ -1011,8 +1316,14 @@ static void engine_load(CudaEngine *e, const char *model_path, int max_seq_len) 
     CUDA_CHECK(cudaMemcpy(w->rms_attn, f_rms_attn, (size_t)L * E * 4, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(w->rms_ffn, f_rms_ffn, (size_t)L * E * 4, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(w->rms_final, f_rms_final, (size_t)E * 4, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(w->q_norm, f_q_norm, (size_t)L * HEAD_DIM * 4, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(w->k_norm, f_k_norm, (size_t)L * HEAD_DIM * 4, cudaMemcpyHostToDevice));
+    if (!is_nano) {
+        CUDA_CHECK(cudaMemcpy(w->q_norm, f_q_norm, (size_t)L * HEAD_DIM * 4, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(w->k_norm, f_k_norm, (size_t)L * HEAD_DIM * 4, cudaMemcpyHostToDevice));
+    }
+    else {
+        CUDA_CHECK(cudaMemcpy(w->fcr_tab, f_fcr, (size_t)c->block_size * (c->head_dim / 2) * 4, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(w->fci_tab, f_fci, (size_t)c->block_size * (c->head_dim / 2) * 4, cudaMemcpyHostToDevice));
+    }
 
     for (int l = 0; l < L; l++) {
         const int8_t *lq = (const int8_t *)(p_wq + (size_t)l * ((size_t)Q * E + (size_t)(Q * E / GS) * 4));
@@ -1047,13 +1358,13 @@ static void engine_load(CudaEngine *e, const char *model_path, int max_seq_len) 
 
         const int8_t *u2 = (const int8_t *)(p_w2 + (size_t)l * ((size_t)E * H + (size_t)(E * H / GS) * 4));
         const float  *s2 = (const float *)(p_w2 + (size_t)l * ((size_t)E * H + (size_t)(E * H / GS) * 4) + (size_t)E * H);
+        if (getenv("NC_DEBUG")) { fprintf(stderr, "l=%d w2_q=%p u2=%p p_w2=%p size=%zu\n", l, (void*)w->w2_q, (void*)u2, (void*)p_w2, (size_t)E * H); }
         CUDA_CHECK(cudaMemcpy(w->w2_q + (size_t)l * E * H, u2, (size_t)E * H, cudaMemcpyHostToDevice));
         CUDA_CHECK(cudaMemcpy(w->w2_s + (size_t)l * E * (H / GS), s2, (size_t)E * (H / GS) * 4, cudaMemcpyHostToDevice));
     }
 
-
-    // RoPE 逆频率：inv_freq[i] = 1000000^(-2i/head_dim)
-    {
+    // RoPE 逆频率（QWEN3 专用）：inv_freq[i] = 1000000^(-2i/head_dim)
+    if (!is_nano) {
         float h_if[HEAD_DIM / 2];
         for (int i = 0; i < HEAD_DIM / 2; i++) {
             h_if[i] = powf(1000000.0f, -(float)(i * 2) / (float)HEAD_DIM);
@@ -1082,6 +1393,8 @@ static void engine_load(CudaEngine *e, const char *model_path, int max_seq_len) 
     CUDA_CHECK(cudaStreamCreate(&e->stream));
     CUDA_CHECK(cudaDeviceSynchronize());
 
+    if (e->use_lora) engine_load_lora(e, e->lora_path);
+
     // ---------------- 捕获 CUDA Graph ----------------
     cudaStream_t cap;
     CUDA_CHECK(cudaStreamCreate(&cap));
@@ -1108,6 +1421,51 @@ static void engine_free(CudaEngine *e) {
     cudaFreeHost(e->h_sorted_ids);
     munmap(e->file_buffer, e->file_size);
     cudaDeviceReset();
+}
+
+// 解析并上传 LoRA 外挂权重（仅 NANO 架构；布局与 infer.c parse_lora_file 一致）
+static void engine_load_lora(CudaEngine *e, const char *lora_path) {
+    FILE *f = fopen(lora_path, "rb");
+    if (!f) { fprintf(stderr, "无法打开 LoRA 文件 %s\n", lora_path); exit(EXIT_FAILURE); }
+    fseek(f, 0, SEEK_END);
+    size_t fsize = (size_t)ftell(f);
+    rewind(f);
+    uint8_t *lb = (uint8_t *)malloc(fsize);
+    if (!lb || fread(lb, 1, fsize, f) != fsize) { fprintf(stderr, "读取 LoRA 文件失败\n"); exit(EXIT_FAILURE); }
+    fclose(f);
+
+    uint32_t *header = (uint32_t *)lb;
+    int rank       = (int)header[6];
+    float alpha    = (float)header[7];
+    ModelConfig *c = &e->cfg;
+    if ((int)header[8] != (int)c->n_layer || (int)header[9] != (int)c->n_embd ||
+        (int)header[10] != (int)c->n_head || (int)header[11] != (int)c->n_kv_head ||
+        (int)header[12] != (int)c->n_hidden) {
+        fprintf(stderr, "LoRA 与基座模型维度不匹配\n"); exit(EXIT_FAILURE);
+    }
+    if (rank <= 0 || rank > LORA_MAX_RANK) {
+        fprintf(stderr, "LoRA rank=%d 超出支持范围（1..%d）\n", rank, LORA_MAX_RANK); exit(EXIT_FAILURE);
+    }
+
+    int L = (int)c->n_layer, E = (int)c->n_embd, KV = e->kv_dim, Q = e->q_dim;
+    DevLora *a = &e->lora;
+    a->rank = rank;
+    a->alpha = alpha;
+
+    const float *lp = (const float *)(lb + 256);
+    size_t qa = (size_t)L * rank * E * 4, qb = (size_t)L * E * rank * 4;
+    size_t kb = (size_t)L * KV * rank * 4, oa = (size_t)L * rank * Q * 4;
+    CUDA_CHECK(cudaMalloc(&a->wq_a, qa)); CUDA_CHECK(cudaMemcpy(a->wq_a, lp, qa, cudaMemcpyHostToDevice)); lp += (size_t)L * rank * E;
+    CUDA_CHECK(cudaMalloc(&a->wq_b, qb)); CUDA_CHECK(cudaMemcpy(a->wq_b, lp, qb, cudaMemcpyHostToDevice)); lp += (size_t)L * E * rank;
+    CUDA_CHECK(cudaMalloc(&a->wk_a, qa)); CUDA_CHECK(cudaMemcpy(a->wk_a, lp, qa, cudaMemcpyHostToDevice)); lp += (size_t)L * rank * E;
+    CUDA_CHECK(cudaMalloc(&a->wk_b, kb)); CUDA_CHECK(cudaMemcpy(a->wk_b, lp, kb, cudaMemcpyHostToDevice)); lp += (size_t)L * KV * rank;
+    CUDA_CHECK(cudaMalloc(&a->wv_a, qa)); CUDA_CHECK(cudaMemcpy(a->wv_a, lp, qa, cudaMemcpyHostToDevice)); lp += (size_t)L * rank * E;
+    CUDA_CHECK(cudaMalloc(&a->wv_b, kb)); CUDA_CHECK(cudaMemcpy(a->wv_b, lp, kb, cudaMemcpyHostToDevice)); lp += (size_t)L * KV * rank;
+    CUDA_CHECK(cudaMalloc(&a->wo_a, oa)); CUDA_CHECK(cudaMemcpy(a->wo_a, lp, oa, cudaMemcpyHostToDevice)); lp += (size_t)L * rank * Q;
+    CUDA_CHECK(cudaMalloc(&a->wo_b, qb)); CUDA_CHECK(cudaMemcpy(a->wo_b, lp, qb, cudaMemcpyHostToDevice));
+
+    free(lb);
+    fprintf(stderr, "[CUDA] LoRA 已加载：rank=%d alpha=%.1f（scale=%.3f）\n", rank, alpha, alpha / rank);
 }
 
 // ===============================================================================
@@ -1158,7 +1516,7 @@ static void engine_run_session(CudaEngine *e, Tokenizer *tk,
     uint32_t n_gen = 0;
     uint64_t t_mark = td0;
     while (1) {
-        if (!no_eos && (next == QWEN_EOS_1 || next == QWEN_EOS_2)) { stats->stopped_by_eos = 1; break; }
+        if (!no_eos && (next == (int)e->eos1 || next == (int)e->eos2)) { stats->stopped_by_eos = 1; break; }
         if (on_token) on_token((uint32_t)next, env);
         n_gen++;
         if (n_gen == 33) t_mark = now_ms(); // 前 32 token 视为升频预热期
@@ -1231,9 +1589,69 @@ static void freelines(char **lines, int line_count) {
     free(lines);
 }
 
+// NANO 架构词表解析（与 infer.c parse_model_file 的 NANO 分支一致）：
+//   逐条读取 (header, token_id, ucs32...) 词元，构建 unicode map 与多字词元 trie
+static void build_nano_tokenizer(Tokenizer *tk, uint8_t *buffer, uint32_t tokenizer_field_bytes) {
+    uint32_t *vocab_ptr = (uint32_t *)buffer + 1; // 跳过 tokenizer_field_bytes 字段
+
+    uint32_t byte_count = 0;
+    uint32_t char_count = 0;
+
+    tk->vocab_size = *vocab_ptr; vocab_ptr++;
+
+    tk->token_list        = (wchar_t **)calloc(tk->vocab_size, sizeof(wchar_t *));
+    tk->unicode_charset   = (wchar_t  *)calloc(tk->vocab_size, sizeof(wchar_t));
+    tk->unicode_to_id_map = new_map(tk->vocab_size);
+    tk->token_to_id_map   = new_map(tk->vocab_size);
+    tk->vocab_trie        = new_trie(tk->vocab_size, 0);
+
+    while (byte_count < tokenizer_field_bytes - 8) { // 不含 field_bytes 与 vocab_size 的 8 字节
+        uint32_t token_header = *vocab_ptr; vocab_ptr++; byte_count += sizeof(uint32_t);
+        uint32_t token_id     = *vocab_ptr; vocab_ptr++; byte_count += sizeof(uint32_t);
+
+        // 小端序：MSB(reserved_1 reserved_0 is_special token_length)LSB
+        uint32_t token_length = (token_header & 0x000000ff);
+
+        wchar_t *token = (wchar_t *)calloc(token_length + 1, sizeof(wchar_t));
+        if (token_length == 1) {
+            tk->unicode_charset[char_count] = *vocab_ptr;
+            map_set(tk->unicode_to_id_map, *vocab_ptr, token_id);
+            char_count++;
+        }
+        for (uint32_t i = 0; i < token_length; i++) {
+            token[i] = *vocab_ptr; vocab_ptr++; byte_count += sizeof(uint32_t);
+        }
+        token[token_length] = 0;
+        tk->token_list[token_id] = token;
+    }
+
+    for (uint32_t i = 0; i < tk->vocab_size; i++) {
+        wchar_t *utoken = tk->token_list[i];
+        uint32_t len = (uint32_t)wcslen(utoken);
+        if (len > 1) {
+            uint32_t *ids = string_to_ids(tk->unicode_to_id_map, utoken);
+            add_token(tk->vocab_trie, ids, len, i);
+            free(ids);
+        }
+    }
+}
+
+// 输出回调环境：按架构选择 BPE 字节串或 NANO 宽字符解码
+typedef struct {
+    Tokenizer *tk;
+    int is_nano;
+} PrintEnv;
+
 static void print_token_cb(uint32_t id, void *env) {
-    Tokenizer *tk = (Tokenizer *)env;
-    printf("%s", tk->vocab[id]);
+    PrintEnv *pe = (PrintEnv *)env;
+    if (pe->is_nano) {
+        wchar_t *w = decode_nano(pe->tk, &id, 1);
+        printf("%ls", w);
+        free(w);
+    }
+    else {
+        printf("%s", pe->tk->vocab[id]);
+    }
     fflush(stdout);
 }
 
@@ -1242,6 +1660,22 @@ static void print_token_id_cb(uint32_t id, void *env) {
     printf("%u\n", id);
     fflush(stdout);
 }
+
+// 按架构编码 prompt：QWEN3 用 ChatML 模板；NANO 用 instruct/response 标记 + trie 编码
+static uint32_t *encode_prompt(CudaEngine *e, Tokenizer *tk, wchar_t *input, uint32_t *n_out) {
+    if (e->cfg.arch == LLM_ARCH_QWEN3) {
+        return apply_qwen_chat_template(tk, input, n_out, 1);
+    }
+    size_t in_len = wcslen(input);
+    wchar_t *prompt = (wchar_t *)malloc((in_len + 64) * sizeof(wchar_t));
+    wcscpy(prompt, L"<|instruct_mark|>");
+    wcscat(prompt, input);
+    wcscat(prompt, L"<|response_mark|>");
+    uint32_t *ids = encode_nano(tk, prompt, n_out);
+    free(prompt);
+    return ids;
+}
+
 
 // ===============================================================================
 // 微基准：逐 kernel 计时（NC_PROF=1 时在 bench 模式中启用）
@@ -1274,7 +1708,7 @@ PROF_LAUNCH(embed, {
     embed_kernel<<<1, e->cfg.n_embd / 4, 0, st>>>(e->w.emb_q, e->w.emb_s, e->s.d_step, e->s.x, e->cfg.n_embd);
 })
 PROF_LAUNCH(rmsnorm, {
-    rmsnorm_quant_kernel<<<1, 256, 0, st>>>(e->s.x, e->w.rms_attn, e->s.xq, e->s.xs, e->cfg.n_embd);
+    rmsnorm_quant_kernel<<<1, 256, 0, st>>>(e->s.x, e->w.rms_attn, e->s.xq, e->s.xs, e->cfg.n_embd, NULL);
 })
 PROF_LAUNCH(attn, {
     attention_kernel<<<e->cfg.n_head, HEAD_DIM, 0, st>>>(
@@ -1283,34 +1717,33 @@ PROF_LAUNCH(attn, {
         e->s.d_step + 1, e->max_seq_len, (int)e->cfg.n_head, (int)e->cfg.n_kv_head, e->kv_mul);
 })
 PROF_LAUNCH(gemv_qkv, {
-    static int li = 0; li = (li + 1) % 28;
+    static int li = 0; li = (li + 1) % (int)e->cfg.n_layer;
     size_t qk = (size_t)(e->q_dim + 2 * e->kv_dim);
+    WeightMat m = { WEIGHT_Q80, { e->w.wqkv_q + li * qk * e->cfg.n_embd, e->w.wqkv_s + li * qk * (e->cfg.n_embd / GROUP_SIZE) }, (int)e->cfg.n_embd, (int)qk };
     cudaMemsetAsync(e->s.qkv, 0, qk * sizeof(float), st);
-    gemv_q80_kernel<1024, 1, 2, 1, 256><<<dim3((unsigned)(e->q_dim + 2 * e->kv_dim) / 8, 2), 256, 0, st>>>(
-        e->w.wqkv_q + li * qk * e->cfg.n_embd, e->w.wqkv_s + li * qk * (e->cfg.n_embd / GROUP_SIZE),
-        e->s.xq, e->s.xs, e->s.qkv, NULL, e->q_dim + 2 * e->kv_dim);
+    gemv_dispatch(&m, GEMV_QKV, e->s.xq, e->s.xs, e->s.qkv, NULL, st);
 })
 PROF_LAUNCH(gemv_wo, {
-    static int li = 0; li = (li + 1) % 28;
-    gemv_q80_kernel<2048, 1, 4, 1, 256><<<dim3((unsigned)e->cfg.n_embd / 8, 4), 256, 0, st>>>(
-        e->w.wo_q + (size_t)li * e->cfg.n_embd * e->q_dim, e->w.wo_s + (size_t)li * e->cfg.n_embd * (e->q_dim / GROUP_SIZE), e->s.xba_q, e->s.xba_s, e->s.x, e->s.x, e->cfg.n_embd);
+    static int li = 0; li = (li + 1) % (int)e->cfg.n_layer;
+    WeightMat m = { WEIGHT_Q80, { e->w.wo_q + (size_t)li * e->cfg.n_embd * e->q_dim, e->w.wo_s + (size_t)li * e->cfg.n_embd * (e->q_dim / GROUP_SIZE) }, e->q_dim, (int)e->cfg.n_embd };
+    gemv_dispatch(&m, GEMV_WO, e->s.xba_q, e->s.xba_s, e->s.x, e->s.x, st);
 })
 PROF_LAUNCH(gemv_w13, {
-    static int li = 0; li = (li + 1) % 28;
-    gemv_q80_kernel<1024, 1, 1, 1, 128><<<dim3((unsigned)(2 * e->cfg.n_hidden) / 4, 1), 128, 0, st>>>(
-        e->w.w13_q + (size_t)li * 2 * e->cfg.n_hidden * e->cfg.n_embd, e->w.w13_s + (size_t)li * 2 * e->cfg.n_hidden * (e->cfg.n_embd / GROUP_SIZE), e->s.xq, e->s.xs, e->s.h13, NULL, 2 * e->cfg.n_hidden);
+    static int li = 0; li = (li + 1) % (int)e->cfg.n_layer;
+    WeightMat m = { WEIGHT_Q80, { e->w.w13_q + (size_t)li * 2 * e->cfg.n_hidden * e->cfg.n_embd, e->w.w13_s + (size_t)li * 2 * e->cfg.n_hidden * (e->cfg.n_embd / GROUP_SIZE) }, (int)e->cfg.n_embd, 2 * (int)e->cfg.n_hidden };
+    gemv_dispatch(&m, GEMV_W13, e->s.xq, e->s.xs, e->s.h13, NULL, st);
 })
 PROF_LAUNCH(swiglu, {
     swiglu_quant_kernel<<<1, 256, 0, st>>>(e->s.h13, e->s.hq, e->s.hs, e->cfg.n_hidden);
 })
 PROF_LAUNCH(gemv_w2, {
-    static int li = 0; li = (li + 1) % 28;
-    gemv_q80_kernel<3072, 1, 3, 1, 256><<<dim3((unsigned)e->cfg.n_embd / 8, 3), 256, 0, st>>>(
-        e->w.w2_q + (size_t)li * e->cfg.n_embd * e->cfg.n_hidden, e->w.w2_s + (size_t)li * e->cfg.n_embd * (e->cfg.n_hidden / GROUP_SIZE), e->s.hq, e->s.hs, e->s.x, e->s.x, e->cfg.n_embd);
+    static int li = 0; li = (li + 1) % (int)e->cfg.n_layer;
+    WeightMat m = { WEIGHT_Q80, { e->w.w2_q + (size_t)li * e->cfg.n_embd * e->cfg.n_hidden, e->w.w2_s + (size_t)li * e->cfg.n_embd * (e->cfg.n_hidden / GROUP_SIZE) }, (int)e->cfg.n_hidden, (int)e->cfg.n_embd };
+    gemv_dispatch(&m, GEMV_W2, e->s.hq, e->s.hs, e->s.x, e->s.x, st);
 })
 PROF_LAUNCH(gemv_cls, {
-    gemv_q80_kernel<1024, 2, 1, 1, 256><<<dim3(((unsigned)e->cfg.vocab_size / 2 + 7) / 8, 1), 256, 0, st>>>(
-        e->w.emb_q, e->w.emb_s, e->s.xq, e->s.xs, e->s.logits, NULL, e->cfg.vocab_size);
+    WeightMat m = { WEIGHT_Q80, { e->w.emb_q, e->w.emb_s }, (int)e->cfg.n_embd, (int)e->cfg.vocab_size };
+    gemv_dispatch(&m, GEMV_CLS, e->s.xq, e->s.xs, e->s.logits, NULL, st);
 })
 PROF_LAUNCH(argmax, {
     argmax_one_kernel<<<1, 1024, 0, st>>>(e->s.logits, (int)e->cfg.vocab_size, e->s.d_next);
@@ -1358,6 +1791,7 @@ int main(int argc, char **argv) {
     uint64_t seed = now_ms();
     uint32_t max_new = 0;      // 0 = 不限（到 EOS 或序列上限）
     int bench_tokens = 0;      // >0 时进入基准模式
+    const char *lora_path = NULL;
 
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-m") || !strcmp(argv[i], "--model")) && i + 1 < argc) model_path = argv[++i];
@@ -1368,22 +1802,24 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "-s") && i + 1 < argc) seed = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "-n") && i + 1 < argc) max_new = (uint32_t)atoi(argv[++i]);
         else if (!strcmp(argv[i], "-bench") && i + 1 < argc) bench_tokens = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-lora") && i + 1 < argc) lora_path = argv[++i];
         else {
-            printf("用法: %s [-m/--model 模型路径] [-l max_seq_len] [-t temperature] [-p top_p]\n"
+            printf("用法: %s [-m/--model 模型路径] [-lora LoRA路径] [-l max_seq_len] [-t temperature] [-p top_p]\n"
                    "          [-r rep_penalty] [-s seed] [-n max_new_tokens] [-bench N]\n", argv[0]);
             return 0;
         }
     }
 
-    printf("Nano CUDA Inference Engine (Qwen3 / Q80)\n\n");
+    printf("Nano CUDA Inference Engine (Qwen3 / Nano / Q80)\n\n");
     printf("Using model: %s\n", model_path);
 
     CudaEngine engine;
     memset(&engine, 0, sizeof(engine));
     engine.rep_penalty = rep_penalty;
     engine.temperature = temperature;
-    engine.top_p = top_p;
     engine.rng_state = seed;
+    engine.use_lora = (lora_path != NULL);
+    engine.lora_path = lora_path;
 
     engine_load(&engine, model_path, max_seq_len);
 
@@ -1396,24 +1832,29 @@ int main(int argc, char **argv) {
     printf("  max_seq_len = %d  temperature = %.2f  top_p = %.2f  rep_penalty = %.2f  seed = %llu\n",
            max_seq_len, temperature, top_p, rep_penalty, (unsigned long long)seed);
 
-    // 分词器（复用原工程 tokenizer.c）
+    // 分词器（QWEN3 用 BPE；NANO 用宽字符 trie 词表）
     Tokenizer *tk = (Tokenizer *)calloc(1, sizeof(Tokenizer));
-    uint32_t tokenizer_field_bytes = *(uint32_t *)(engine.file_buffer + 256);
-    (void)tokenizer_field_bytes;
-    build_bpe_tokenizer(tk, engine.file_buffer + 256, 151669);
-
+    int is_nano = (engine.cfg.arch == LLM_ARCH_NANO);
+    if (!is_nano) {
+        build_bpe_tokenizer(tk, engine.file_buffer + 256, 151669);
+    }
+    else {
+        uint32_t tokenizer_field_bytes = *(uint32_t *)(engine.file_buffer + 256);
+        build_nano_tokenizer(tk, engine.file_buffer + 256, tokenizer_field_bytes);
+    }
+    PrintEnv penv = { tk, is_nano };
     if (bench_tokens > 0) {
         if (getenv("NC_PROF")) { profile_kernels(&engine); }
         // ---------- 基准模式：固定 prompt，打印统计 ----------
         wchar_t wprompt[MAX_PROMPT_BUFFER_LENGTH];
         mbstowcs(wprompt, "请你介绍一下你自己。", MAX_PROMPT_BUFFER_LENGTH);
         uint32_t n_prompt = 0;
-        uint32_t *prompt_tokens = apply_qwen_chat_template(tk, wprompt, &n_prompt, 1);
+        uint32_t *prompt_tokens = encode_prompt(&engine, tk, wprompt, &n_prompt);
         SessionStats stats = {0};
         printf("\n[bench] prompt_tokens = %u, gen %d tokens, temperature = %.2f\n\n",
                n_prompt, bench_tokens, temperature);
         engine_run_session(&engine, tk, prompt_tokens, n_prompt, (uint32_t)bench_tokens,
-                           getenv("NC_PRINT_IDS") ? print_token_id_cb : print_token_cb, tk, &stats);
+                           getenv("NC_PRINT_IDS") ? print_token_id_cb : print_token_cb, &penv, &stats);
         printf("\n\n[bench] prefill: %u tokens / %llu ms = %.1f tok/s\n",
                stats.n_prompt, (unsigned long long)stats.t_prefill_ms,
                stats.t_prefill_ms ? (double)stats.n_prompt / (double)stats.t_prefill_ms * 1000.0 : 0.0);
@@ -1424,7 +1865,7 @@ int main(int argc, char **argv) {
                stats.n_steady, (unsigned long long)stats.t_steady_ms,
                stats.t_steady_ms ? (double)stats.n_steady / (double)stats.t_steady_ms * 1000.0 : 0.0);
         free(prompt_tokens);
-        free_bpe_tokenizer(tk);
+        if (is_nano) free_tokenizer(tk); else free_bpe_tokenizer(tk);
         free(tk);
         engine_free(&engine);
         return 0;
@@ -1450,7 +1891,7 @@ int main(int argc, char **argv) {
         freelines(lines, line_count);
 
         uint32_t n_prompt = 0;
-        uint32_t *prompt_tokens = apply_qwen_chat_template(tk, input_text, &n_prompt, 1);
+        uint32_t *prompt_tokens = encode_prompt(&engine, tk, input_text, &n_prompt);
         if ((int)n_prompt >= max_seq_len - 2) {
             printf("输入过长（%u tokens），请缩短。\n\n", n_prompt);
             free(prompt_tokens);
@@ -1461,7 +1902,7 @@ int main(int argc, char **argv) {
         fflush(stdout);
 
         SessionStats stats = {0};
-        engine_run_session(&engine, tk, prompt_tokens, n_prompt, max_new, print_token_cb, tk, &stats);
+        engine_run_session(&engine, tk, prompt_tokens, n_prompt, max_new, print_token_cb, &penv, &stats);
 
         double prefill_tps = stats.t_prefill_ms ? (double)stats.n_prompt / (double)stats.t_prefill_ms * 1000.0 : 0.0;
         double decode_tps = stats.t_decode_ms ? (double)stats.n_generated / (double)stats.t_decode_ms * 1000.0 : 0.0;
@@ -1471,7 +1912,7 @@ int main(int argc, char **argv) {
         free(prompt_tokens);
     }
 
-    free_bpe_tokenizer(tk);
+    if (is_nano) free_tokenizer(tk); else free_bpe_tokenizer(tk);
     free(tk);
     engine_free(&engine);
     printf("Bye.\n");

@@ -22,7 +22,7 @@ CFLAGS    ?= -O2 -Wall -ffunction-sections -fdata-sections
 
 all: ../bin/nano_cuda ../bin/ref_greedy
 
-../bin/nano_cuda: nano_cuda.o tokenizer.o | ../bin
+../bin/nano_cuda: nano_cuda.o tokenizer.o utils.o | ../bin
 	$(NVCC) $(NVCCFLAGS) $(LDFLAGS) -o $@ $^
 
 nano_cuda.o: nano_cuda.cu
@@ -32,6 +32,10 @@ nano_cuda.o: nano_cuda.cu
 # 其隐式声明警告属于预期，予以屏蔽
 tokenizer.o: tokenizer.c tokenizer.h platform_shim.h
 	$(CC) $(CFLAGS) -Wno-implicit-function-declaration -c -o $@ tokenizer.c
+
+# NANO 架构分词器依赖的 Map/Trie 实现（独立编译，仅 libc 依赖）
+utils.o: ../utils.c ../utils.h
+	$(CC) $(CFLAGS) -I.. -c -o $@ ../utils.c
 
 # CPU 参考实现：直接复用上层目录的原引擎源码
 ../bin/ref_greedy: ref_greedy.c ../infer.c ../infer.h ../utils.c ../tokenizer.c ../tensor.c ../hal_ram_linux.c | ../bin
