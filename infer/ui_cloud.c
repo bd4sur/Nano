@@ -15,7 +15,9 @@
 //     基础噪声 64^3、细节噪声 32^3，采样为三线性 + wrap（对应 linearRepeatSampler）
 //   * 透射率 LUT（64x16，40 步）与多重散射 LUT（48x24，16 方向球采样）逐帧预计算
 //   * 云步进 128 步 / 光步进 12 步（flower 默认 128/12，保持默认）
-//   * 渲染分辨率 = 屏幕一半（tty 为 320x240 全屏 → 内部 160x120），双线性放大到整屏
+//   * 渲染分辨率 = 屏幕全分辨率（320x240 内渲）；历史上曾用半分辨率（160x120）双线性放大
+//     以降低算力，PocketTerm35（RPI5）算力充足改回全分辨率（半分辨率再经显示 2 倍放大
+//     后颗粒/方块感明显）
 // ===============================================================================
 
 #include <math.h>
@@ -1509,11 +1511,11 @@ static Cv3 cloudAcesFilm(Cv3 x) {
 // ===========================================================================
 // 应用状态与渲染
 // ===========================================================================
-// 内部渲染分辨率 = 屏幕的一半（tty 已修正为 320x240，则内部 160x120），
-// 双线性放大到整屏。步进默认（128/12）下单像素代价约 1.6us，320x240 全屏约 8fps，
-// 半分辨率计算约 30fps，兼顾清晰度与终端吞吐。
-#define CLOUD_MAX_W (256)
-#define CLOUD_MAX_H (192)
+// 内部渲染分辨率 = 屏幕全分辨率（上限 CLOUD_MAX_* = 320x240）。
+// 历史：曾为屏幕的一半（tty 320x240 → 内部 160x120）双线性放大，半分辨率计算约
+// 30fps（全屏约 8fps，单核估计）；PocketTerm35 改全分辨率（颗粒感整改，2026-10）。
+#define CLOUD_MAX_W (320)
+#define CLOUD_MAX_H (240)
 
 // 太阳位置预设：仰角（度）/方位角（度）/颜色/强度
 typedef struct {
@@ -1552,7 +1554,7 @@ static const float CLOUD_COVERAGE_LEVELS[] = {
 //   多重散射出射/损耗      ↑/↓：暗部来自多次散射的回光增强
 //   环境反射 ambientScale  ↑：天空环境下行光对云的补光增强
 // 亮度 b∈[0.5,2.0]，内部归一化为 t∈[0,1]
-#define CLOUD_BRIGHTNESS_DEFAULT (1.4f)
+#define CLOUD_BRIGHTNESS_DEFAULT (0.5f)
 
 
 
@@ -1945,8 +1947,8 @@ static void cloud_setup_camera(float roll_rad, Cv3 *camPos, Cv3 *forward, Cv3 *r
 static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     const int FW = (int)gfx->width, FH = (int)gfx->height;
 
-    // 内部渲染 = 屏幕一半（上限 CLOUD_MAX_*）
-    int W = FW / 2, H = FH / 2;
+    // 内部渲染 = 屏幕全分辨率（上限 CLOUD_MAX_*；1:1 时 cloud_upscale 退化为逐像素拷贝）
+    int W = FW, H = FH;
     if (W < 8) W = 8;
     if (W > CLOUD_MAX_W) W = CLOUD_MAX_W;
     if (H < 8) H = 8;

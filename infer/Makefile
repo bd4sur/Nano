@@ -91,6 +91,9 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
 # 与 pod 的差异：framebuffer 显示（FB_UPSCALE=2 满屏）、控制台 stdin 全键盘、evdev 触屏（TOUCH_SCALE=2）、无IMU/UPS
 # NANO_UI_SPLIT_EVENT_LOOP：输入生产/消费拆分（生产者线程 1~2ms 采样输入、SPSC 队列、主循环按帧消费），
 # 解决玲珑仪/番茄表等重计算场景下串行环每帧才采样一次输入导致的短按丢失、短按误判长按、触屏点按湮灭
+# -fopenmp：RPI5 四核并行（Makefile 的 Pi 分支默认不带 openmp，本目标显式启用）：
+# 体积云全分辨率逐像素 ray-march、噪声/LUT 生成、infer/tensor 的 matmul 均为按行独立
+# 并行（无跨线程归约，数值结果与单线程逐位一致）；线程数可用 OMP_NUM_THREADS 环境变量限制
 pod_pt35: $(BIN_DIR)/nano_pod_pt35
 $(BIN_DIR)/nano_pod_pt35: $(ANIMAC_SRCS) \
                         main.c \
@@ -146,7 +149,7 @@ $(BIN_DIR)/nano_pod_pt35: $(ANIMAC_SRCS) \
                         ui_tetris.c \
                         ui_water.c \
                         | $(BIN_DIR)
-	$(CC) -DNANO_POD_POCKETTERM35 -DNANO_UI_SPLIT_EVENT_LOOP -DFB_UPSCALE=2 -DTOUCH_SCALE=2 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
+	$(CC) -DNANO_POD_POCKETTERM35 -DNANO_UI_SPLIT_EVENT_LOOP -DFB_UPSCALE=2 -DTOUCH_SCALE=2 -fopenmp $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
 
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty

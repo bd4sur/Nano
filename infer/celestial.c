@@ -2696,7 +2696,7 @@ void linglong_init(Linglong_Config *cfg) {
     // 体积云参数（sky_model==4 时生效；档位/亮度与 ui_cloud.c 独立应用的默认一致）
     cfg->cloud_coverage_level = 2;    // 云量档位（半云）
     cfg->cloud_layer_mask = UI_CLOUD_LAYER_ALL; // 显示全部云层
-    cfg->cloud_brightness = 1.4f;     // 云亮度
+    cfg->cloud_brightness = 0.5f;     // 云亮度（默认起始值，2026-10 由 1.4 改为 0.5）
 
     cfg->lut_alt_step = 0.5f;         // Inscatter LUT 高度角步长（度）
     cfg->lut_azi_step = 0.5f;         // Inscatter LUT 方位角步长（度）
