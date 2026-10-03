@@ -28,3 +28,4 @@ bin/
 *.d
 *.a
 chat.jsonl
+agent/
