@@ -23,6 +23,10 @@ void display_hal_close(void);
 
 void display_set_brightness(uint8_t value);
 
+// 当前 framebuffer 色深（bpp）。仅 framebuffer HAL 实现（供业务层决定是否做
+// RGB565 抖动预处理）；其余显示 HAL 不实现本函数，调用方须以平台宏门控。
+uint8_t display_hal_get_color_depth(void);
+
 // LCD 控制器睡眠/唤醒（SLPIN/SLPOUT）。sleep 内含面板背光置0（Core2 物理切断 AXP192 DCDC3 /
 // CoreS3 切断 BLDO1）；wakeup 恢复睡眠前由 setBrightness 记录的亮度。
 // 注意：wakeup 后 ILI9342 需约 120ms 睡眠退出恢复时间，调用方应延时后再推帧。

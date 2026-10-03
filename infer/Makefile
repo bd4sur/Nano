@@ -87,6 +87,67 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         | $(BIN_DIR)
 	$(CC) -DNANO_POD_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
 
+# Nano-Pod-PocketTerm35：微雪PocketTerm35掌机（RPI5 + 3.5寸DPI屏640x480 + USB全键盘 + Goodix触屏）
+# 与 pod 的差异：framebuffer 显示（FB_UPSCALE=2 满屏）、控制台 stdin 全键盘、evdev 触屏（TOUCH_SCALE=2）、无IMU/UPS
+# NANO_UI_SPLIT_EVENT_LOOP：输入生产/消费拆分（生产者线程 1~2ms 采样输入、SPSC 队列、主循环按帧消费），
+# 解决玲珑仪/番茄表等重计算场景下串行环每帧才采样一次输入导致的短按丢失、短按误判长按、触屏点按湮灭
+pod_pt35: $(BIN_DIR)/nano_pod_pt35
+$(BIN_DIR)/nano_pod_pt35: $(ANIMAC_SRCS) \
+                        main.c \
+                        hal_fs_linux.c \
+                        hal_ram_linux.c \
+                        hal_os_linux.c \
+                        hal_audio_in_alsa_linux.c \
+                        hal_audio_out_alsa_linux.c \
+                        hal_display_framebuffer_linux.c \
+                        hal_imu_linux.c \
+                        hal_key_console_linux.c \
+                        hal_touch_evdev_linux.c \
+                        hal_power_linux.c \
+                        hal_misc_linux.c \
+                        asr.c \
+                        celestial.c \
+                        ephemeris.c \
+                        flip.c \
+                        gfx_font_12.c \
+                        gfx_font_16.c \
+                        graphics.c \
+                        infer.c \
+                        nano_fft.c \
+                        nano_min.c \
+                        nongli.c \
+                        ofdm_modem.c \
+                        pinyin_ime.c \
+                        tensor.c \
+                        tokenizer.c \
+                        tts.c \
+                        utils.c \
+                        vsop87c_milli.c \
+                        ui.c \
+                        ui_app.c \
+                        ui_almanac.c \
+                        ui_calendar.c \
+                        ui_cloud.c \
+                        ui_dict.c \
+                        ui_ebook.c \
+                        ui_goldminer.c \
+                        ui_grid16kbd.c \
+                        ui_icon.c \
+                        ui_llm.c \
+                        ui_musicbox_mp3.c \
+                        ui_musicbox.c \
+                        ui_ofdm.c \
+                        ui_particlelife.c \
+                        ui_pedometer.c \
+                        ui_pinyin_ime.c \
+                        ui_ripple.c \
+                        ui_softkbd.c \
+                        ui_spectrogram.c \
+                        ui_tetris.c \
+                        ui_water.c \
+                        | $(BIN_DIR)
+	$(CC) -DNANO_POD_POCKETTERM35 -DNANO_UI_SPLIT_EVENT_LOOP -DFB_UPSCALE=2 -DTOUCH_SCALE=2 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
+
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty
 $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \

@@ -39,7 +39,13 @@ static int touch_x = 0;
 static int touch_y = 0;
 
 int32_t touch_init() {
-    input_fd = open(INPUT_DEVICE, O_RDONLY | O_NONBLOCK);
+    // 设备节点可被 NANO_TOUCH_DEVICE 环境变量覆盖（PocketTerm35 的 Goodix 触屏
+    // 节点号随枚举顺序变化，部署时用 /dev/input/by-path/ 稳定路径指定）
+    const char *dev = getenv("NANO_TOUCH_DEVICE");
+    if (dev == NULL || dev[0] == '\0') {
+        dev = INPUT_DEVICE;
+    }
+    input_fd = open(dev, O_RDONLY | O_NONBLOCK);
     if (input_fd < 0) {
         return -1;
     }

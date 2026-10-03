@@ -1785,7 +1785,13 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->cloud_brightness
     );
 
+#if defined(NANO_POD_POCKETTERM35)
+    // PocketTerm35 的 HDMI 屏经 32bpp framebuffer 输出 8bit/通道时无需 565 抖动
+    //（gfx_dithering 会预量化到 565 色阶，反而成为色深瓶颈）；fb 为 16bpp 时保留
+    if (display_hal_get_color_depth() <= 16) gfx_dithering(global_state->llgfx);
+#else
     gfx_dithering(global_state->llgfx);
+#endif
     // gfx_gamma(global_state->llgfx, 1.3f);
 
     // 显示FPS

@@ -598,6 +598,11 @@ void display_hal_close(void) {
     }
 }
 
+uint8_t display_hal_get_color_depth(void) {
+    // display_hal_init 失败时 fb_bpp 为 0，调用方按 <=16 处理（保守：仍做 565 抖动）
+    return (uint8_t)fb_bpp;
+}
+
 void display_set_brightness(uint8_t value) {
     // Linux 通用背光调节：经 sysfs backlight 接口（pwm-backlight/gpio-backlight 等
     // 内核驱动均可，Luckfox-Pico-86-Panel 的 RV1106 镜像暴露 /sys/class/backlight/

@@ -92,7 +92,7 @@ extern "C" {
 // 区分事件来源（见 ui.h / ui_app.c get_input_event）。
 // ===============================================================================
 #if defined(NANO_POD_LITE_RPI5) || defined(NANO_POD_RPI5) \
-    || defined(NANO_POD_LITE_ROCK5BP) \
+    || defined(NANO_POD_POCKETTERM35) \
     || defined(NANO_POD_LITE_CUBIE_A7Z) || defined(NANO_POD_CUBIE_A7Z) \
     || defined(NANO_POD_MP135) || defined(NANO_POD_LITE_MARGA) \
     || defined(NANO_ESP32_S3) || defined(NANO_ESP32_P4) \
@@ -348,6 +348,42 @@ uint8_t platform_get_master_volume(void);
 
     // BadApple
     #define BADAPPLE_ENABLED
+
+// ===============================================================================
+// Nano-Pod: Waveshare PocketTerm35（树莓派5 + 3.5寸DPI屏640x480 + USB全键盘 + 触屏）
+// ===============================================================================
+// 与 NANO_POD_RPI5 的差异：
+//   显示：微雪 3.5" DPI 屏（dtoverlay=waveshare-35dpi-5b），经 vc4-KMS 暴露为
+//         /dev/fb0（640x480 RGB565）→ hal_display_framebuffer_linux.c，
+//         编译期 -DFB_UPSCALE=2 将 320x240 逻辑帧放大 2 倍满屏；
+//   键盘：外壳键盘为 RP2040 实现的 USB HID 全键盘（无 I2C 十六键矩阵），
+//         走 Linux 控制台 stdin（termios 原始模式 + 转义序列解析），
+//         映射方式参照 hal_key_ncurses_linux.c 在 PC 控制台上的处理
+//         → hal_key_console_linux.c；
+//   触屏：Goodix GT911（I2C 0x5d，/dev/input/eventX）→ hal_touch_evdev_linux.c，
+//         物理量程 640x480，编译期 -DTOUCH_SCALE=2 还原为逻辑坐标；
+//   无 IMU、无 I2C 电量计（UPS 无数据接口）、无蜂鸣器；
+//   音频：扬声器经 HiFiBerry DAC（PCM5102A，ALSA card 2），无麦克风。
+#elif defined(NANO_POD_POCKETTERM35)
+
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
+
+    // 模型目录
+    #define MODEL_ROOT_DIR "/home/bd4sur/ai/_model/Nano"
+
+    // 屏幕（逻辑分辨率；物理 640x480 由 FB_UPSCALE=2 放大）
+    #define SCREEN_WIDTH  (320)
+    #define SCREEN_HEIGHT (240)
+
+    // ASR和TTS（无麦克风，ASR 实际不可用；TTS 经本机或外部 TTS 服务，FIFO 非阻塞，无服务时静默失败）
+    #define ASR_ENABLED
+    #define TTS_ENABLED
+    #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
+
+    // BadApple
+    #define BADAPPLE_ENABLED
+
 
 
 // ===============================================================================

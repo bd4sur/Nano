@@ -15,6 +15,11 @@ static char *LORA_PATH = NULL; // "/home/bd4sur/ai/_model/Nano/nano-56m-lora-nek
 // 是否是第一次decoding：用于判断何时清除Pre-filling进度内容
 int32_t g_is_first_decoding = 1;
 
+// 空观测回调（llm_forward 无条件调用 ctx->observation；签名同 ui_llm.c llm_observation）
+static void cli_noop_observation(Nano_Observation obs, void *env) {
+    (void)obs; (void)env;
+}
+
 
 wchar_t *drop_thinking(wchar_t *input) {
     if (input == NULL) {
@@ -225,6 +230,10 @@ int main() {
     printf("Using model: %s\n", MODEL_PATH);
 
     g_llm_ctx = llm_context_init(MODEL_PATH, LORA_PATH, max_seq_len, 1.0, 0.7, 0.8, 20, random_seed);
+
+    // llm_forward 会无条件回调 ctx->observation（UI 路径在 ui_llm.c 安装 llm_observation），
+    // CLI 无观测需求，安装空回调防止空指针调用崩溃
+    g_llm_ctx->observation = cli_noop_observation;
 
     printf("  block_size = %d\n", g_llm_ctx->llm->config.block_size);
     printf("  vocab_size = %d\n", g_llm_ctx->llm->config.vocab_size);
