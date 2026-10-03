@@ -86,6 +86,21 @@ int32_t audio_out_init(uint32_t sample_rate, uint8_t volume) {
         return -2;
     }
 
+    // 原始 hw 设备（plughw→hw，无桌面声音服务器）的默认 start_threshold 为
+    // "缓冲全满才启动"（= 1s 缓冲全量）。本 HAL 的投喂纪律是"可用空间 ≥ 块长才喂"，
+    // 缓冲将满前必然停喂（如 44100 缓冲、4096 块：喂到 40960 即停），永远够不到
+    // 启动阈值 → PREPARED 死锁、播放假死（2026-10 于 PocketTerm35 实测复现；
+    // 桌面 dmix/PulseAudio 插件有独立时钟、无此阈值语义，故此前在 PC 上未暴露）。
+    // 改为有数据即启动；欠载由 try_write 的 recover 路径兜底。
+    {
+        snd_pcm_sw_params_t *sw;
+        snd_pcm_sw_params_alloca(&sw);
+        if (snd_pcm_sw_params_current(s_pcm, sw) == 0) {
+            snd_pcm_sw_params_set_start_threshold(s_pcm, sw, 1);
+            snd_pcm_sw_params(s_pcm, sw);
+        }
+    }
+
     snd_pcm_prepare(s_pcm);
     // 刚 prepare 完时可用空间即缓冲总帧数
     snd_pcm_sframes_t avail = snd_pcm_avail_update(s_pcm);
