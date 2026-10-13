@@ -18,7 +18,7 @@ endif
 
 BIN_DIR := bin
 
-all: $(BIN_DIR) pod_lite pod tty cli sort wss
+all: $(BIN_DIR) pod_lite pod tty cli sort wss web
 
 $(BIN_DIR):
 	mkdir -p $@
@@ -217,6 +217,73 @@ sort: $(BIN_DIR)/nano_sort
 $(BIN_DIR)/nano_sort: main_sort.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_SORT $(CCFLAGS) $^ -o $@ $(LDFLAGS)
 
+# Nano-Web：C/S 分离架构——服务端渲染 GUI 并经 WebSocket 推流，网页薄客户端远程显示/触屏
+# 与 tty 目标的差异仅在外设 HAL：显示/触屏/键盘换为 web 实现（nano_ws_server 极简
+# HTTP+WebSocket 服务器，零第三方依赖），音频打桩（无声卡/麦）。客户端页面
+# web_remote_client.html 由下方规则嵌入 bin/web_client_html.h（运行时磁盘优先、嵌入兜底）。
+# -DNANO_WEB_TLS + -lssl -lcrypto：HTTPS/WSS 支持（浏览器姿态传感器要求安全上下文；
+# 同端口协议嗅探双模，无证书时自动回退明文）。去掉二者即回退纯明文构建。
+web: $(BIN_DIR)/nano_web
+$(BIN_DIR)/web_client_html.h: web_remote_client.html | $(BIN_DIR)
+	{ echo 'static const char WEB_CLIENT_HTML[] ='; \
+	  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/"/' -e 's/$$/\\n"/' $<; \
+	  echo ';'; } > $@
+
+$(BIN_DIR)/nano_web: $(BIN_DIR)/web_client_html.h $(ANIMAC_SRCS) \
+                        main.c \
+                        hal_fs_linux.c \
+                        hal_ram_linux.c \
+                        hal_os_linux.c \
+                        hal_audio_in_web_linux.c \
+                        hal_audio_out_web_linux.c \
+                        hal_display_web_linux.c \
+                        hal_imu_web_linux.c \
+                        hal_key_web_linux.c \
+                        hal_touch_web_linux.c \
+                        hal_power_linux.c \
+                        hal_misc_linux.c \
+                        nano_ws_server.c \
+                        celestial.c \
+                        ephemeris.c \
+                        flip.c \
+                        gfx_font_12.c \
+                        gfx_font_16.c \
+                        graphics.c \
+                        infer.c \
+                        nano_fft.c \
+                        nano_min.c \
+                        nongli.c \
+                        ofdm_modem.c \
+                        pinyin_ime.c \
+                        tensor.c \
+                        tokenizer.c \
+                        utils.c \
+                        vsop87c_milli.c \
+                        ui.c \
+                        ui_app.c \
+                        ui_almanac.c \
+                        ui_calendar.c \
+                        ui_cloud.c \
+                        ui_dict.c \
+                        ui_ebook.c \
+                        ui_goldminer.c \
+                        ui_grid16kbd.c \
+                        ui_icon.c \
+                        ui_llm.c \
+                        ui_musicbox_mp3.c \
+                        ui_musicbox.c \
+                        ui_ofdm.c \
+                        ui_particlelife.c \
+                        ui_pedometer.c \
+                        ui_pinyin_ime.c \
+                        ui_ripple.c \
+                        ui_softkbd.c \
+                        ui_spectrogram.c \
+                        ui_tetris.c \
+                        ui_water.c \
+                        | $(BIN_DIR)
+	$(CC) -DNANO_WEB -DNANO_WEB_TLS -I$(BIN_DIR) $(CCFLAGS) $(filter %.c,$^) -o $@ $(LDFLAGS) -lssl -lcrypto
+
 # Nano-WSS：WebSocket服务器
 wss: $(BIN_DIR)/nano_wss
 $(BIN_DIR)/nano_wss: main_wss.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
@@ -236,3 +303,5 @@ clean:
 	rm -f $(BIN_DIR)/nano_cli
 	rm -f $(BIN_DIR)/nano_sort
 	rm -f $(BIN_DIR)/nano_wss
+	rm -f $(BIN_DIR)/nano_web
+	rm -f $(BIN_DIR)/web_client_html.h

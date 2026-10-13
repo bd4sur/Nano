@@ -911,6 +911,77 @@ uint8_t platform_get_master_volume(void);
 
 
 // ===============================================================================
+// Nano-Web: C/S 分离架构——服务端渲染 GUI 并经 WebSocket 推流，网页薄客户端远程显示/触屏
+// ===============================================================================
+// 服务端（本目标 nano_web）：完整运行 GUI 渲染与状态机，显示/触屏经 nano_ws_server
+// （极简 HTTP+WebSocket，零第三方依赖）与网页客户端交换帧缓冲脏矩形/触屏事件；
+// 客户端（web_remote_client.html）：薄客户端，类远程桌面——画帧缓冲、上报触屏。
+// 与 NANO_TTY 同为 PC Linux 全功能 GUI，差异仅在显示/输入通路（无实体键盘：
+// NANO_HAS_HW_KEYBOARD=0，对齐 M5Core2 触屏-only 行为）与无音频外设（打桩）。
+#elif defined(NANO_WEB)
+
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
+
+    // 模型目录
+    #define MODEL_ROOT_DIR "/home/bd4sur/ai/_model/Nano"
+
+    // 屏幕（逻辑帧缓冲尺寸；网页客户端按此尺寸渲染 canvas）
+    #define SCREEN_WIDTH  (320)
+    #define SCREEN_HEIGHT (240)
+
+    // Web 服务端默认监听端口（绑定 0.0.0.0；可用环境变量 NANO_WEB_PORT 覆盖）
+    #define NANO_WEB_DEFAULT_PORT (9002)
+
+    // 姿态（IMU）：启用（番茄表重力/玲珑仪视角跟随）。数据由网页客户端浏览器
+    // DeviceMotion/DeviceOrientation 事件经 WebSocket 上报（hal_imu_web_linux.c），
+    // 无串口设备文件（IMU_DEVFILE 不定义，web 目标不编译 hal_imu_imu10_linux.c）。
+    #define IMU_ENABLED
+
+    // ASR和TTS（无麦克风/扬声器，均不启用）
+    // #define ASR_ENABLED
+    // #define TTS_ENABLED
+
+    // BadApple
+    #define BADAPPLE_ENABLED
+
+
+// ===============================================================================
+// Nano-WASM-GUI: 浏览器内运行的 WASM 全功能 GUI（Emscripten）
+// ===============================================================================
+// 与 nano_web 同为「完整 GUI + 触屏交互」目标，差异：本目标把全部业务代码编译为
+// WebAssembly 在浏览器内运行（无需服务端），显示/触屏/姿态经 EM_ASM/ccall 与页面
+// JS 桥接；业务资源（图标/壁纸/电子书/词典等）由 Emscripten --preload-file 打进
+// MEMFS 的 /home/bd4sur/linglong（与 PLATFORM_ROOT_DIR 硬编码一致）。
+// 构建：infer/build_wasm_gui.sh（产物 infer/webgui/）。
+// 区别于 infer/web/（既有 main_wasm.c 的 LLM-only WASM，互不相关）。
+// 单线程（无 -pthread/-fopenmp：OpenMP 退化为串行，OFDM 采集任务等平台任务创建
+// 返回失败并优雅降级）；无音频外设（打桩）；姿态经浏览器传感器事件（尽力而为）。
+#elif defined(NANO_WASM_GUI)
+
+    // UI字符串缓冲区最大长度限制
+    #define UI_STR_BUF_MAX_LENGTH (16384)
+
+    // 模型目录（WASM 版挂载 linglong/llm 下的 nano-168m/56m-q80；菜单按白名单+存在性过滤）
+    #define MODEL_ROOT_DIR PLATFORM_ROOT_DIR "/llm"
+
+    // 屏幕（逻辑帧缓冲尺寸；页面 canvas 按此尺寸）
+    #define SCREEN_WIDTH  (320)
+    #define SCREEN_HEIGHT (240)
+
+    // 姿态（IMU）：启用（番茄表重力/玲珑仪视角跟随）。数据由页面 JS 的
+    // DeviceMotion/DeviceOrientation 事件经 ccall 注入（hal_imu_wasm.c）。
+    #define IMU_ENABLED
+
+    // ASR和TTS（无麦克风/扬声器，均不启用）
+    // #define ASR_ENABLED
+    // #define TTS_ENABLED
+
+    // BadApple（不启用：badapple.h 内嵌数据显著增大 wasm 体积）
+    // #define BADAPPLE_ENABLED
+
+
+// ===============================================================================
 // Nano-WSS
 // ===============================================================================
 #elif defined(NANO_WSS)

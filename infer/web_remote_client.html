@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Nano Web Remote</title>
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    background: #101014;
+    color: #888;
+    font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    height: 100%;
+    overscroll-behavior: none;
+  }
+  #wrap {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 12px;
+    box-sizing: border-box;
+  }
+  #screen {
+    /* 4:3 画面等比放大：不超出视口，上限 3 倍（960x720） */
+    width: min(calc(100vw - 24px), calc((100vh - 76px) * 4 / 3), 960px);
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    background: #000;
+    border-radius: 8px;
+    box-shadow: 0 4px 32px rgba(0,0,0,.6);
+    touch-action: none; /* 触屏手势全部交给程序，浏览器不滚动/缩放 */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: crosshair;
+  }
+  #status {
+    font-size: 13px;
+    letter-spacing: .5px;
+    opacity: .85;
+  }
+  #status .ok  { color: #58a05a; }
+  #status .bad { color: #c06060; }
+  #bar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  #att-btn {
+    background: #26262c;
+    color: #bbb;
+    border: 1px solid #3a3a42;
+    border-radius: 6px;
+    font-size: 13px;
+    padding: 6px 14px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+  }
+  #att-btn.on  { background: #144a7a; border-color: #1b6bb5; color: #e8f2ff; }
+  #att-btn:active { transform: scale(.96); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="screen" width="320" height="240"></canvas>
+  <div id="bar">
+    <div id="status">连接中…</div>
+    <button id="att-btn" type="button">姿态：关</button>
+  </div>
+</div>
+<script>
+"use strict";
+// Nano Web Remote 薄客户端（远程桌面式）：
+//   下行：WebSocket 二进制帧 [0x00 w h]=初始化 / [0x03 seq x y w h rgba8888...]=脏矩形 → 画到 canvas
+//   上行：[0x10 action x y] 触屏事件（action: 0=松开 1=按下 2=移动；坐标为 320x240 画面像素）
+// 不含任何业务逻辑：GUI 渲染与交互全部在服务端。
+const canvas  = document.getElementById("screen");
+// alpha:false：不透明画布，免合成混合（跟手性优化）
+const ctx     = canvas.getContext("2d", { alpha: false });
+const statusEl = document.getElementById("status");
+
+let ws = null;
+let connected = false;
+let frameCount = 0;
+let fps = 0;
+// ImageData 复用（按消息尺寸缓存；避免每条消息重新分配）
+let cachedImg = null, cachedW = 0, cachedH = 0;
+// 帧序号跳帧统计（诊断）
+let lastSeq = -1, skippedFrames = 0;
+
+function updateStatus() {
+  statusEl.innerHTML = connected
+    ? '<span class="ok">● 已连接</span> · ' + fps + " fps · " + canvas.width + "×" + canvas.height
+    : '<span class="bad">○ 未连接</span> · 1 秒后重连…';
+}
+setInterval(() => { fps = frameCount; frameCount = 0; updateStatus(); }, 1000);
+
+function connect() {
+  const proto = (location.protocol === "https:") ? "wss://" : "ws://";
+  ws = new WebSocket(proto + location.host + "/ws");
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { connected = true; frameCount = 0; updateStatus(); };
+  ws.onclose = () => { connected = false; updateStatus(); setTimeout(connect, 1000); };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+  ws.onmessage = (ev) => {
+    const dv = new DataView(ev.data);
+    const type = dv.getUint8(0);
+    if (type === 0x00) {           // 初始化：帧缓冲尺寸
+      const w = dv.getUint16(1, true), h = dv.getUint16(3, true);
+      if (canvas.width !== w)  canvas.width  = w;
+      if (canvas.height !== h) canvas.height = h;
+      cachedImg = null;
+      lastSeq = -1;
+      updateStatus();
+    }
+    else if (type === 0x03) {      // 脏矩形：RGBA8888（服务端已展开，一次原生拷贝）
+      const seq = dv.getUint16(1, true);
+      const x = dv.getUint16(3, true), y = dv.getUint16(5, true);
+      const w = dv.getUint16(7, true), h = dv.getUint16(9, true);
+      if (w === 0 || h === 0) return;
+      if (lastSeq >= 0 && seq !== ((lastSeq + 1) & 0xFFFF)) skippedFrames++;
+      lastSeq = seq;
+      const src = new Uint8Array(ev.data, 11);
+      if (src.length < w * h * 4) return;
+      if (!cachedImg || cachedW !== w || cachedH !== h) {
+        cachedImg = ctx.createImageData(w, h);
+        cachedW = w; cachedH = h;
+      }
+      cachedImg.data.set(src);     // 原生 memcpy，无逐像素 JS 循环
+      ctx.putImageData(cachedImg, x, y);
+      frameCount++;
+    }
+  };
+}
+
+// ---------------- 触屏/鼠标输入（Pointer Events 统一两类设备） ----------------
+let activePointerId = null;
+
+function sendTouch(action, clientX, clientY) {
+  if (!connected || ws.readyState !== WebSocket.OPEN) return;
+  const rect = canvas.getBoundingClientRect();
+  let x = Math.round((clientX - rect.left) * canvas.width  / rect.width);
+  let y = Math.round((clientY - rect.top)  * canvas.height / rect.height);
+  if (x < 0) x = 0; if (x >= canvas.width)  x = canvas.width  - 1;
+  if (y < 0) y = 0; if (y >= canvas.height) y = canvas.height - 1;
+  const buf = new Uint8Array(6);
+  buf[0] = 0x10; buf[1] = action;
+  buf[2] = x & 0xFF; buf[3] = (x >> 8) & 0xFF;
+  buf[4] = y & 0xFF; buf[5] = (y >> 8) & 0xFF;
+  ws.send(buf);
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  if (activePointerId !== null) return; // 单点触控：忽略多余手指
+  activePointerId = e.pointerId;
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  sendTouch(1, e.clientX, e.clientY);
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (activePointerId !== e.pointerId) return;
+  e.preventDefault();
+  sendTouch(2, e.clientX, e.clientY);
+});
+function endPointer(e) {
+  if (activePointerId !== e.pointerId) return;
+  e.preventDefault();
+  sendTouch(0, e.clientX, e.clientY);
+  activePointerId = null;
+}
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+// iOS Safari 的 gesture 事件与双击缩放一并禁用
+document.addEventListener("gesturestart", (e) => e.preventDefault());
+document.addEventListener("dblclick", (e) => e.preventDefault());
+
+// ---------------- 设备姿态上报（重力向量 + 罗盘航向 + 屏幕方向角） ----------------
+// 浏览器事件：devicemotion.accelerationIncludingGravity（设备坐标系重力向量，精确稳定）
+//   与 deviceorientationabsolute/deviceorientation.alpha（罗盘航向）。角度解算（屏幕方向角
+//   修正、坡度/仰角换算）在服务端 IMU HAL（hal_imu_web_linux.c），客户端只上报原始量。
+// iOS 13+ 需在用户手势内显式申请权限（且页面须为 HTTPS 或 localhost）；桌面浏览器无传感器，
+// 事件不会触发（按钮提示无数据，GUI 保持无姿态默认行为，同 nano_tty）。
+const attBtn = document.getElementById("att-btn");
+let attEnabled = false;
+let attHasData = false;
+let lastAcc = null;    // [ax, ay, az] m/s²（设备坐标系）
+let lastYawDeg = 0;
+let lastYawOk = false;
+let lastAttSendTs = 0;
+// 绝对航向源去重（修复方位角周期性跳变）：Android Chrome 会同时派发
+// deviceorientationabsolute（绝对罗盘 alpha）与 deviceorientation（相对 alpha，
+// 与前者差一个固定偏移）——两个事件交替触发会把 lastYawDeg 在两套值之间来回覆写，
+// 玲珑仪方位角随之在两个固定值之间跳变。见到 absolute 后即忽略 relative 事件。
+let absAlphaSeen = false;
+
+function currentOrientDeg() {
+  if (screen.orientation && typeof screen.orientation.angle === "number") {
+    return screen.orientation.angle;
+  }
+  return (typeof window.orientation === "number") ? window.orientation : 0; // 旧 iOS 退化路径
+}
+
+function sendOrientation() {
+  if (!attEnabled || !connected || ws.readyState !== WebSocket.OPEN) return;
+  const now = performance.now();
+  if (now - lastAttSendTs < 50) return;  // 节流 ~20Hz
+  lastAttSendTs = now;
+  const buf = new ArrayBuffer(20);
+  const dv = new DataView(buf);
+  let flags = 0;
+  if (lastAcc) flags |= 1;
+  if (lastYawOk) flags |= 2;
+  dv.setUint8(0, 0x20);
+  dv.setUint8(1, flags);
+  dv.setFloat32(2,  lastAcc ? lastAcc[0] : 0, true);
+  dv.setFloat32(6,  lastAcc ? lastAcc[1] : 0, true);
+  dv.setFloat32(10, lastAcc ? lastAcc[2] : 0, true);
+  dv.setFloat32(14, lastYawDeg, true);
+  dv.setInt16(18, currentOrientDeg(), true);
+  ws.send(buf);
+}
+
+function onDeviceMotion(e) {
+  const g = e.accelerationIncludingGravity;
+  if (!g || g.x === null || g.y === null || g.z === null) return;
+  lastAcc = [g.x, g.y, g.z];
+  attHasData = true;
+  sendOrientation();
+}
+
+// 绝对航向（deviceorientationabsolute：alpha 为罗盘真值，北=0 顺时针）
+function onDeviceOrientationAbs(e) {
+  if (typeof e.alpha !== "number" || e.alpha === null) return;
+  absAlphaSeen = true;
+  lastYawDeg = e.alpha;
+  lastYawOk = true;
+  attHasData = true;
+  sendOrientation();
+}
+
+// 普通事件（deviceorientation）：已有 absolute 源则忽略（防两套 alpha 交替）；
+// 否则 iOS 用 e.webkitCompassHeading（绝对罗盘航向，北=0 顺时针；alpha 在 iOS 为相对值），
+// 其余平台用 e.alpha（多数 Android 设备即为罗盘值）。
+function onDeviceOrientation(e) {
+  if (absAlphaSeen) return;
+  if (typeof e.webkitCompassHeading === "number") {
+    lastYawDeg = e.webkitCompassHeading;
+  }
+  else if (typeof e.alpha === "number" && e.alpha !== null) {
+    lastYawDeg = e.alpha;
+  }
+  else {
+    return;
+  }
+  lastYawOk = true;
+  attHasData = true;
+  sendOrientation();
+}
+
+function updateAttBtn() {
+  attBtn.className = attEnabled ? "on" : "";
+  attBtn.textContent = attEnabled ? (attHasData ? "姿态：开" : "姿态：等待数据…") : "姿态：关";
+}
+
+async function toggleAttitude() {
+  if (attEnabled) {
+    attEnabled = false;
+    window.removeEventListener("devicemotion", onDeviceMotion);
+    window.removeEventListener("deviceorientation", onDeviceOrientation);
+    if ("ondeviceorientationabsolute" in window) {
+      window.removeEventListener("deviceorientationabsolute", onDeviceOrientationAbs);
+    }
+    updateAttBtn();
+    return;
+  }
+  // 安全上下文检查：浏览器传感器 API 仅在 HTTPS/localhost 可用（局域网 HTTP 页面上
+  // 事件不触发、iOS 甚至无 requestPermission）。给出明确指引而非静默无反应。
+  if (!window.isSecureContext) {
+    attBtn.textContent = "需 HTTPS 访问";
+    alert("浏览器仅在安全上下文（HTTPS 或 localhost）中提供设备姿态传感器。\n\n" +
+          "请改用 https://" + location.host + "/ 访问（自签名证书会有警告，点「继续前往」即可），" +
+          "或在服务器上运行 tools/gen_web_cert.sh 生成证书后重启服务。");
+    return;
+  }
+  // iOS 13+ 权限申请（必须在用户手势内调用；非 iOS 环境无此 API，直接跳过）
+  try {
+    if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+      const r = await DeviceMotionEvent.requestPermission();
+      if (r !== "granted") { attBtn.textContent = "姿态：被拒"; return; }
+    }
+    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r !== "granted") { attBtn.textContent = "姿态：被拒"; return; }
+    }
+  } catch (err) { /* 非安全上下文等：监听照挂，能否收到数据看浏览器 */ }
+  attEnabled = true;
+  attHasData = false;
+  absAlphaSeen = false;
+  // deviceorientationabsolute 的 alpha 为绝对罗盘航向（北=0），优先；
+  // 普通 deviceorientation 作退化路径（内部按 absolute 是否已见过去重）
+  if ("ondeviceorientationabsolute" in window) {
+    window.addEventListener("deviceorientationabsolute", onDeviceOrientationAbs);
+  }
+  window.addEventListener("deviceorientation", onDeviceOrientation);
+  window.addEventListener("devicemotion", onDeviceMotion);
+  updateAttBtn();
+  setTimeout(updateAttBtn, 1500); // 1.5s 后仍无事件（桌面端）则提示
+}
+attBtn.addEventListener("click", toggleAttitude);
+setInterval(() => { if (attEnabled) updateAttBtn(); }, 1000);
+
+connect();
+</script>
+</body>
+</html>

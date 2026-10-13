@@ -34,9 +34,11 @@ extern "C" {
     #include "win.h"
 #elif defined __unix__ || defined __unix || (defined(__APPLE__) && defined(__MACH__))
     // 是否使用mmap？
-    #define NANO_USE_MMAP
-    #include <unistd.h>
-    #if defined NANO_USE_MMAP
+    // WASM（Emscripten）不启用：MEMFS 的 mmap 语义受限且会复制整份内容，
+    // 走 fread 全量读入分支更可靠（与 build_wasm.sh 的既有经验一致）
+    #if !defined(NANO_WASM_GUI)
+        #define NANO_USE_MMAP
+        #include <unistd.h>
         #include <sys/mman.h>
     #endif
 #endif

@@ -500,7 +500,67 @@ int32_t on_llm_finished(Key_Event *key_event, Global_State *global_state) {
 }
 
 
+// WASM 版模型菜单：白名单 + 文件存在性动态过滤（外部挂载体系仅含 linglong/llm 的
+// Nano-168M-Q80 / Nano-56M-Q80 两个标准模型；不带 [轻] 前缀的 nano_min 技术试验条目
+// 不列出；其余 preset 条目（Qwen/Q4KS/LoRA 等）文件未挂载自动隐去——其加载路径
+//（infer.c load_llm）缺失时 exit(EXIT_FAILURE) 会中止整个 WASM 运行时，必须隐去）。
+// 菜单序号 → preset 表索引的映射由本表维护（init_model_menu 填、action 查）。
+#if defined(NANO_WASM_GUI)
+#define WASM_MODEL_MENU_MAX (16)
+static int32_t s_wasm_mm_index[WASM_MODEL_MENU_MAX]; // 在 preset_model_configs 中的序号
+static int32_t s_wasm_mm_num = 0;
+
+// WASM 可选模型白名单（按 MODEL_ROOT_DIR 相对文件名匹配）
+static const char *s_wasm_model_whitelist[] = {
+    "nano-168m-q80.bin",
+    "nano-56m-q80.bin",
+};
+#define WASM_MODEL_WHITELIST_NUM ((int32_t)(sizeof(s_wasm_model_whitelist) / sizeof(s_wasm_model_whitelist[0])))
+
+// 文件存在性探测（fopen 直探；不占用 platform_file_open 的全局单句柄）
+static int32_t wasm_model_file_exists(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (fp == NULL) return 0;
+    fclose(fp);
+    return 1;
+}
+#endif
+
 void init_model_menu(Key_Event *key_event, Global_State *global_state) {
+#if defined(NANO_WASM_GUI)
+    static const wchar_t *wasm_items[WASM_MODEL_MENU_MAX];
+    static const wchar_t *wasm_empty_items[] = { L"（无可用模型：资源未挂载）" };
+    s_wasm_mm_num = 0;
+    // preset 标准引擎条目：白名单 + 文件存在性双重过滤
+    for (size_t i = 0; i < sizeof(preset_model_configs) / sizeof(preset_model_configs[0])
+            && s_wasm_mm_num < WASM_MODEL_MENU_MAX; i++) {
+        const char *mp = preset_model_configs[i].model_path;
+        int32_t whitelisted = 0;
+        for (int32_t w = 0; w < WASM_MODEL_WHITELIST_NUM; w++) {
+            size_t wl = strlen(s_wasm_model_whitelist[w]);
+            size_t pl = strlen(mp);
+            if (pl >= wl && strcmp(mp + pl - wl, s_wasm_model_whitelist[w]) == 0) {
+                whitelisted = 1;
+                break;
+            }
+        }
+        if (!whitelisted || !wasm_model_file_exists(mp)) continue;
+        wasm_items[s_wasm_mm_num] = preset_model_configs[i].model_name;
+        s_wasm_mm_index[s_wasm_mm_num] = (int32_t)i;
+        s_wasm_mm_num++;
+    }
+    global_state->w_menu_main->title = L"选择语言模型";
+    if (s_wasm_mm_num > 0) {
+        global_state->w_menu_main->items = wasm_items;
+        global_state->w_menu_main->item_num = s_wasm_mm_num;
+    }
+    else {
+        global_state->w_menu_main->items = wasm_empty_items;
+        global_state->w_menu_main->item_num = 1;
+    }
+    ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
+    return;
+#endif
     size_t model_count = sizeof(preset_model_configs) / sizeof(preset_model_configs[0]);
     int32_t nmchat_count = llm_nm_model_num();
     if (nmchat_count > LLM_NM_MODEL_NUM_MAX) nmchat_count = LLM_NM_MODEL_NUM_MAX;
@@ -705,6 +765,24 @@ void llm_observation(Nano_Observation obs, void *env) {
 }
 
 int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
+#if defined(NANO_WASM_GUI)
+    // WASM：菜单序号经映射表找到 preset 表索引（空表（提示条目）/越界时无动作）
+    int32_t mi = ms->current_item_index;
+    if (mi < 0 || mi >= s_wasm_mm_num) return STATE_MODEL_MENU;
+    {
+        Model_Config mc = preset_model_configs[s_wasm_mm_index[mi]];
+        gs->llm_model_name = mc.model_name;
+        gs->llm_is_thinking_model = mc.is_thinking_model;
+        gs->llm_model_path = mc.model_path;
+        gs->llm_lora_path = mc.lora_path;
+        gs->llm_repetition_penalty = mc.repetition_penalty;
+        gs->llm_temperature = mc.temperature;
+        gs->llm_top_p = mc.top_p;
+        gs->llm_top_k = mc.top_k;
+        gs->llm_max_seq_len = mc.max_seq_len;
+        goto wasm_load_preset_model; // 汇入下方原有加载流程
+    }
+#endif
     int32_t item_index = ms->current_item_index;
 
     // 选中任一模型前，卸载旧模型（释放 infer.c 上下文 / nano_min 引擎），避免并存
@@ -741,6 +819,9 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
     }
 
     wchar_t llm_loading_prompt[88];
+#if defined(NANO_WASM_GUI)
+wasm_load_preset_model: ; // WASM 大模型路径汇入点（字段已在宏门控分支内设置）
+#endif
     swprintf(llm_loading_prompt, 88, L" 正在加载语言模型\n %ls\n 请稍等...", gs->llm_model_name);
 
     ui_widget_textarea_set(ke, gs, gs->w_textarea_main, llm_loading_prompt, 0, 0);

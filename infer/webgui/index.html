@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Nano WASM GUI</title>
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    background: #101014;
+    color: #888;
+    font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    height: 100%;
+    overscroll-behavior: none;
+  }
+  #wrap {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 12px;
+    box-sizing: border-box;
+  }
+  #screen {
+    width: min(calc(100vw - 24px), calc((100vh - 76px) * 4 / 3), 960px);
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    background: #000;
+    border-radius: 8px;
+    box-shadow: 0 4px 32px rgba(0,0,0,.6);
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: crosshair;
+  }
+  #status { font-size: 13px; letter-spacing: .5px; opacity: .85; }
+  #status .ok  { color: #58a05a; }
+  #status .bad { color: #c06060; }
+  #bar { display: flex; gap: 10px; align-items: center; }
+  #att-btn {
+    background: #26262c; color: #bbb; border: 1px solid #3a3a42;
+    border-radius: 6px; font-size: 13px; padding: 6px 14px; cursor: pointer;
+    user-select: none; -webkit-user-select: none; touch-action: manipulation;
+  }
+  #att-btn.on  { background: #144a7a; border-color: #1b6bb5; color: #e8f2ff; }
+  #att-btn:active { transform: scale(.96); }
+  #hint { font-size: 12px; opacity: .5; max-width: 90vw; text-align: center; }
+  /* 加载进度面板（WASM 下载 + 资源挂载） */
+  #load-panel {
+    width: min(calc(100vw - 48px), 480px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    background: #1a1a20;
+    border: 1px solid #2c2c34;
+    border-radius: 10px;
+    font-size: 12px;
+  }
+  .bar {
+    height: 6px;
+    background: #26262c;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .bar > div {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #1b6bb5, #3d9bff);
+    border-radius: 3px;
+    transition: width .15s ease-out;
+  }
+  .bar > div.indet { width: 30%; animation: slide 1.1s ease-in-out infinite alternate; }
+  @keyframes slide { from { margin-left: 0; } to { margin-left: 70%; } }
+  .load-row { display: flex; flex-direction: column; gap: 4px; }
+  .load-text { color: #9a9aa2; letter-spacing: .3px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="screen" width="320" height="240"></canvas>
+  <div id="load-panel">
+    <div class="load-row">
+      <div class="load-text" id="wasm-text">程序：等待下载…</div>
+      <div class="bar"><div id="wasm-bar" class="indet"></div></div>
+    </div>
+    <div class="load-row">
+      <div class="load-text" id="res-text">资源：等待挂载…</div>
+      <div class="bar"><div id="res-bar"></div></div>
+    </div>
+  </div>
+  <div id="bar">
+    <div id="status">加载中…</div>
+    <button id="att-btn" type="button">姿态：关</button>
+  </div>
+  <div id="hint">触屏/鼠标点按操作 · 键盘：方向键/回车=确认/Esc=返回/数字=十六键</div>
+</div>
+<script>
+"use strict";
+// Nano WASM GUI 页面胶水层：
+//   - WASM 内运行完整 GUI（业务代码与 nano_tty/nano_web 同源），本页只做「显示器+输入设备」；
+//   - 显示：rAF 节奏读 wasm 线性内存中的 RGBA 帧缓冲（epoch 计数判新帧，静态零拷贝）；
+//   - 触屏：Pointer Events → ccall wasm_gui_on_touch；键盘：keydown 映射 → wasm_gui_on_key；
+//   - 姿态：DeviceMotion/DeviceOrientation → wasm_gui_on_orientation（localhost/HTTPS 可用）。
+const canvas   = document.getElementById("screen");
+const ctx      = canvas.getContext("2d", { alpha: false });
+const statusEl = document.getElementById("status");
+const attBtn   = document.getElementById("att-btn");
+
+let runtimeReady = false;
+let imgData = null;
+let lastEpoch = -1;
+let wasmFps = 0, frameCount = 0;
+setInterval(() => { wasmFps = frameCount; frameCount = 0; updateStatus(); }, 1000);
+
+function updateStatus() {
+  if (!runtimeReady) return;
+  statusEl.innerHTML = '<span class="ok">● 运行中</span> · ' + wasmFps + " fps · 320×240";
+}
+
+// ---------------- Emscripten Module 配置（先于 nano_gui.js 加载） ----------------
+// 资源外置挂载（不打进 .data）：runtime 就绪后按 manifest.json 清单从本服务器
+// 拉取业务资源写入 MEMFS（路径与 PLATFORM_ROOT_DIR=/home/bd4sur/linglong 一致）；
+// 优先级 1（图标/壁纸等启动必需）就绪后才 callMain 启动；优先级 2/3（电子书/词典/
+// 相册/LLM 模型）后台继续拉取（进度条/状态栏显示进度），保证秒开。
+// 挂载与带进度的下载实现在 loader.js（node 可测）。
+const RES_ROOT = "/home/bd4sur/linglong";
+const wasmBar = document.getElementById("wasm-bar");
+const wasmText = document.getElementById("wasm-text");
+const resBar = document.getElementById("res-bar");
+const resText = document.getElementById("res-text");
+const loadPanel = document.getElementById("load-panel");
+
+function setBar(el, frac, indeterminate) {
+  if (indeterminate) { el.className = "indet"; return; }
+  el.className = "";
+  el.style.width = Math.max(0, Math.min(100, frac * 100)).toFixed(1) + "%";
+}
+
+// WASM 二进制下载进度：接管 instantiateWasm（emscripten 默认的流式实例化不暴露进度，
+// 改为自带进度的 fetch + WebAssembly.instantiate；5MB 规模下流式编译的收益可忽略）
+function wasmInstantiateWithProgress(imports, successCallback) {
+  (async () => {
+    try {
+      const url = (Module.locateFile) ? Module.locateFile("nano_gui.wasm") : "nano_gui.wasm";
+      const buf = await nanoFetchWithProgress(url, (recv, total) => {
+        if (total > 0) {
+          setBar(wasmBar, recv / total, false);
+          wasmText.textContent = `程序：${(recv/1048576).toFixed(1)}/${(total/1048576).toFixed(1)} MB（${(recv/total*100).toFixed(0)}%）`;
+        } else {
+          setBar(wasmBar, 0, true);
+          wasmText.textContent = `程序：已下载 ${(recv/1048576).toFixed(1)} MB…`;
+        }
+      });
+      setBar(wasmBar, 1, false);
+      wasmText.textContent = "程序：编译实例化…";
+      const result = await WebAssembly.instantiate(buf, imports);
+      successCallback(result.instance);
+    } catch (e) {
+      wasmText.textContent = "程序：下载/实例化失败 " + e;
+      throw e;
+    }
+  })();
+  return {}; // 异步接管（emscripten 约定：稍后由 successCallback 完成实例化）
+}
+
+var Module = {
+  canvas: null, // 不使用 emscripten 内建 canvas 集成（自绘）
+  noInitialRun: true, // main 由本页在阶段1资源就绪后手动 callMain
+  instantiateWasm: wasmInstantiateWithProgress,
+  setStatus: function (text) {
+    if (text) statusEl.textContent = "加载中… " + text;
+  },
+  monitorRunDependencies: function (left) { /* 静默（挂载进度由下方汇报） */ },
+  onRuntimeInitialized: function () { mountResourcesAndRun(); },
+  onAbort: function (what) {
+    statusEl.innerHTML = '<span class="bad">● WASM 中止</span> ' + what;
+  },
+  noExitRuntime: true,
+};
+
+// 从服务器拉取清单并挂载业务资源 → 启动 wasm main（进度经 loader.js 回调渲染）
+async function mountResourcesAndRun() {
+  try {
+    await nanoMountResources({
+      FS: Module.FS,
+      manifestUrl: "manifest.json",
+      filesBaseUrl: "files/",
+      resRoot: RES_ROOT,
+      onStage: (text) => { if (text) resText.textContent = text; },
+      onP1Progress: (dc, dn, cur, total) => {
+        if (total > 0) setBar(resBar, cur / total, false);
+        resText.textContent = `资源（启动必需）：${dc}/${dn} 个 · ${(cur/1048576).toFixed(1)}/${(total/1048576).toFixed(1)} MB`;
+      },
+      onP1Ready: async () => {
+        // 阶段 1 就绪 → 启动 wasm main（Splash/主菜单可用）
+        setBar(resBar, 1, false);
+        resText.textContent = "资源（启动必需）：就绪";
+        Module.callMain();
+        runtimeReady = true;
+        startRenderLoop();
+        updateStatus();
+        loadPanel.style.display = "none"; // 进入系统后隐藏进度面板，后台进度转入状态栏
+      },
+      onBgProgress: (text) => {
+        statusEl.innerHTML = '<span class="ok">● 运行中</span> · ' + text;
+      },
+    });
+    updateStatus();
+  } catch (e) {
+    resText.textContent = "资源挂载失败：" + e;
+    statusEl.innerHTML = '<span class="bad">● 资源挂载失败</span>';
+  }
+}
+
+// ---------------- 显示：rAF 从 wasm 内存读 RGBA 帧缓冲上屏 ----------------
+function startRenderLoop() {
+  imgData = ctx.createImageData(320, 240);
+  const FB_BYTES = 320 * 240 * 4;
+  function frame() {
+    if (Module._wasm_gui_get_fb_epoch) {
+      const epoch = Module._wasm_gui_get_fb_epoch();
+      if (epoch !== lastEpoch) {
+        lastEpoch = epoch;
+        const ptr = Module._wasm_gui_get_fb_rgba();
+        imgData.data.set(Module.HEAPU8.subarray(ptr, ptr + FB_BYTES));
+        ctx.putImageData(imgData, 0, 0);
+        frameCount++;
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+// ---------------- 触屏/鼠标输入（Pointer Events 统一两类设备） ----------------
+let activePointerId = null;
+function sendTouch(action, clientX, clientY) {
+  if (!runtimeReady || !Module._wasm_gui_on_touch) return;
+  const rect = canvas.getBoundingClientRect();
+  let x = Math.round((clientX - rect.left) * canvas.width  / rect.width);
+  let y = Math.round((clientY - rect.top)  * canvas.height / rect.height);
+  if (x < 0) x = 0; if (x >= canvas.width)  x = canvas.width  - 1;
+  if (y < 0) y = 0; if (y >= canvas.height) y = canvas.height - 1;
+  Module._wasm_gui_on_touch(action, x, y);
+}
+canvas.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  if (activePointerId !== null) return;
+  activePointerId = e.pointerId;
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  sendTouch(1, e.clientX, e.clientY);
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (activePointerId !== e.pointerId) return;
+  e.preventDefault();
+  sendTouch(2, e.clientX, e.clientY);
+});
+function endPointer(e) {
+  if (activePointerId !== e.pointerId) return;
+  e.preventDefault();
+  sendTouch(0, e.clientX, e.clientY);
+  activePointerId = null;
+}
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+document.addEventListener("gesturestart", (e) => e.preventDefault());
+document.addEventListener("dblclick", (e) => e.preventDefault());
+
+// ---------------- 物理键盘（桌面便利通路；映射对齐 hal_key_ncurses_linux.c） ----------------
+// NANO_KEY_* 逻辑键值（hal_key.h）：up=1 down=2 left=3 right=4 ctrl=5 shift=7
+//   backspace=8 enter=13 esc=27 space=32；十六键：1..0 → 49..57（手机键盘布局）等
+const KEY_MAP = {
+  ArrowUp: 1, ArrowDown: 2, ArrowLeft: 3, ArrowRight: 4,
+  Enter: 13, Escape: 27, Backspace: 27, " ": 32,
+  "-": 7, "+": 5, "*": 27,
+  "0": 48, "7": 49, "8": 50, "9": 51, "4": 52, "5": 53, "6": 54,
+  "1": 55, "2": 56, "3": 57,
+};
+document.addEventListener("keydown", (e) => {
+  if (!runtimeReady || !Module._wasm_gui_on_key) return;
+  const code = KEY_MAP[e.key];
+  if (code === undefined) return;
+  e.preventDefault();
+  Module._wasm_gui_on_key(code);
+});
+
+// ---------------- 设备姿态（localhost/HTTPS 可用；局域网 HTTP 下事件不触发） ----------------
+let attEnabled = false;
+let attHasData = false;
+let lastAcc = null;
+let lastYawDeg = 0, lastYawOk = false, absAlphaSeen = false;
+let lastAttSendTs = 0;
+
+function currentOrientDeg() {
+  if (screen.orientation && typeof screen.orientation.angle === "number") return screen.orientation.angle;
+  return (typeof window.orientation === "number") ? window.orientation : 0;
+}
+function sendOrientation() {
+  if (!attEnabled || !runtimeReady || !Module._wasm_gui_on_orientation) return;
+  const now = performance.now();
+  if (now - lastAttSendTs < 50) return;
+  lastAttSendTs = now;
+  let flags = 0;
+  if (lastAcc) flags |= 1;
+  if (lastYawOk) flags |= 2;
+  Module._wasm_gui_on_orientation(flags,
+    lastAcc ? lastAcc[0] : 0, lastAcc ? lastAcc[1] : 0, lastAcc ? lastAcc[2] : 0,
+    lastYawDeg, currentOrientDeg());
+}
+function onDeviceMotion(e) {
+  const g = e.accelerationIncludingGravity;
+  if (!g || g.x === null || g.y === null || g.z === null) return;
+  lastAcc = [g.x, g.y, g.z];
+  attHasData = true;
+  sendOrientation();
+}
+// 绝对航向优先；见到 absolute 后忽略 relative（防两套 alpha 交替致方位角跳变）
+function onDeviceOrientationAbs(e) {
+  if (typeof e.alpha !== "number" || e.alpha === null) return;
+  absAlphaSeen = true;
+  lastYawDeg = e.alpha;
+  lastYawOk = true;
+  attHasData = true;
+  sendOrientation();
+}
+function onDeviceOrientation(e) {
+  if (absAlphaSeen) return;
+  if (typeof e.webkitCompassHeading === "number")      lastYawDeg = e.webkitCompassHeading;
+  else if (typeof e.alpha === "number" && e.alpha !== null) lastYawDeg = e.alpha;
+  else return;
+  lastYawOk = true;
+  attHasData = true;
+  sendOrientation();
+}
+function updateAttBtn() {
+  attBtn.className = attEnabled ? "on" : "";
+  attBtn.textContent = attEnabled ? (attHasData ? "姿态：开" : "姿态：等待数据…") : "姿态：关";
+}
+async function toggleAttitude() {
+  if (attEnabled) {
+    attEnabled = false;
+    window.removeEventListener("devicemotion", onDeviceMotion);
+    window.removeEventListener("deviceorientation", onDeviceOrientation);
+    if ("ondeviceorientationabsolute" in window) {
+      window.removeEventListener("deviceorientationabsolute", onDeviceOrientationAbs);
+    }
+    updateAttBtn();
+    return;
+  }
+  if (!window.isSecureContext) {
+    attBtn.textContent = "需 HTTPS/localhost";
+    alert("浏览器仅在安全上下文（HTTPS 或 localhost）中提供设备姿态传感器。\n" +
+          "请经 localhost 或 HTTPS 访问本页面。");
+    return;
+  }
+  try {
+    if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+      const r = await DeviceMotionEvent.requestPermission();
+      if (r !== "granted") { attBtn.textContent = "姿态：被拒"; return; }
+    }
+    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r !== "granted") { attBtn.textContent = "姿态：被拒"; return; }
+    }
+  } catch (err) { /* 非 iOS 环境无此 API */ }
+  attEnabled = true;
+  attHasData = false;
+  absAlphaSeen = false;
+  if ("ondeviceorientationabsolute" in window) {
+    window.addEventListener("deviceorientationabsolute", onDeviceOrientationAbs);
+  }
+  window.addEventListener("deviceorientation", onDeviceOrientation);
+  window.addEventListener("devicemotion", onDeviceMotion);
+  updateAttBtn();
+  setTimeout(updateAttBtn, 1500);
+}
+attBtn.addEventListener("click", toggleAttitude);
+setInterval(() => { if (attEnabled) updateAttBtn(); }, 1000);
+</script>
+<!-- 加载器（WASM 下载进度 + 资源挂载；node 可测） -->
+<script src="loader.js"></script>
+<!-- Emscripten 产物（build_wasm_gui.sh 生成）：nano_gui.js + nano_gui.wasm -->
+<script src="nano_gui.js"></script>
+</body>
+</html>

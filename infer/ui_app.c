@@ -3,9 +3,11 @@
 
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
     #include "esp_heap_caps.h"
-    #include "hal_display.h"
     // 内置模型权重头（nano_psycho_230k_q80.h）已随模型加载逻辑移至 ui_llm.c
 #endif
+
+#include "hal_display.h" // display_sleep/wakeup/set_brightness：锁屏路径（NANO_HAS_PWR_KEY）使用；
+                         // 原仅 ESP32 分支包含，其余平台靠隐式声明（clang 下 -Werror 报错），统一包含
 
 #include "graphics.h"
 #include "hal_key.h"
@@ -1180,6 +1182,18 @@ void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
 }
 
 void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) {
+
+    // 帧率节流：模拟按固定步长 dt 推进，帧率即物理流速。设备原生帧率受渲染耗时
+    // 限制（ESP32/树莓派 SPI 推屏、nano_tty 终端 ANSI 渲染，均低于 30fps），表观
+    // 流速正常；但高性能平台（nano_web 于 x86，主循环可达数千 FPS）若不节流，
+    // 流体将以百倍于设计的速度演化（且远端只能采到极少中间步，中间过程全部丢失）。
+    // 此处限制模拟/渲染最高 30fps（未到帧间隔直接返回）：原生帧率低于 30fps 的
+    // 平台上本节流不触发，行为与既有版本完全一致。
+    static uint64_t s_flip_last_frame_ts = 0;
+    if (global_state->timestamp - s_flip_last_frame_ts < 33) {
+        return;
+    }
+    s_flip_last_frame_ts = global_state->timestamp;
 
     // 相对布局基准：本函数表层 GUI 的全部硬编码坐标/尺寸均按 320x240 设计，
     // 此处统一换算为相对当前 gfx 尺寸的比例坐标（x 随宽、y 随高，320x240 下恒等）。
