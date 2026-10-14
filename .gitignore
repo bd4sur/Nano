@@ -29,5 +29,8 @@ bin/
 *.a
 chat.jsonl
 agent/
-# WASM-GUI 构建产物（infer/build_wasm_gui.sh 生成；webgui/index.html 为手写页面，保留入库）
+# WASM-GUI 构建产物（infer/build_wasm_gui.sh 生成；webgui/index.html/loader.js/store.js 为手写页面，保留入库）
 infer/webgui/nano_gui.data
+infer/webgui/nano_gui.js
+infer/webgui/nano_gui.wasm
+infer/webgui/manifest.json

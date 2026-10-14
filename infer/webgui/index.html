@@ -76,6 +76,61 @@
   @keyframes slide { from { margin-left: 0; } to { margin-left: 70%; } }
   .load-row { display: flex; flex-direction: column; gap: 4px; }
   .load-text { color: #9a9aa2; letter-spacing: .3px; }
+  /* 资源管理面板 */
+  #res-btn {
+    background: #26262c; color: #bbb; border: 1px solid #3a3a42;
+    border-radius: 6px; font-size: 13px; padding: 6px 14px; cursor: pointer;
+    user-select: none; -webkit-user-select: none; touch-action: manipulation;
+  }
+  #res-btn:active { transform: scale(.96); }
+  #res-panel {
+    position: fixed; inset: 0;
+    background: rgba(10,10,14,.92);
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    z-index: 50;
+    overflow-y: auto;
+  }
+  #res-panel.open { display: flex; }
+  #res-card {
+    width: min(640px, calc(100vw - 32px));
+    margin: 24px 0;
+    background: #16161b;
+    border: 1px solid #2c2c34;
+    border-radius: 12px;
+    padding: 16px;
+    font-size: 13px;
+    color: #c8c8ce;
+  }
+  #res-card h2 { font-size: 15px; margin: 0 0 10px; color: #e8e8ee; }
+  #res-card h3 { font-size: 13px; margin: 14px 0 6px; color: #9a9aa2; font-weight: normal; }
+  .res-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 6px; border-radius: 6px;
+  }
+  .res-item:hover { background: #202028; }
+  .res-item .p { flex: 1; word-break: break-all; }
+  .res-item .sz { color: #777; white-space: nowrap; }
+  .res-item .src { font-size: 11px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  .res-item .src.store { background: #173a1f; color: #7fd08a; }
+  .res-item .src.http  { background: #233246; color: #8ab8e0; }
+  .res-item button {
+    background: none; border: none; color: #c06060; cursor: pointer;
+    font-size: 12px; padding: 2px 6px;
+  }
+  .res-item button:disabled { color: #444; cursor: default; }
+  .res-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+  .res-row select, .res-row input[type="file"] { font-size: 12px; color: #bbb; }
+  .res-row select { background: #26262c; border: 1px solid #3a3a42; border-radius: 6px; padding: 4px 6px; }
+  .res-btn2 {
+    background: #1b6bb5; color: #eaf3ff; border: none; border-radius: 6px;
+    font-size: 12px; padding: 6px 12px; cursor: pointer;
+  }
+  .res-btn2:disabled { background: #333; color: #777; }
+  #res-quota { color: #777; font-size: 12px; }
+  #res-close { float: right; background: none; border: none; color: #888; font-size: 18px; cursor: pointer; }
+  #upload-progress { color: #8ab8e0; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -94,8 +149,41 @@
   <div id="bar">
     <div id="status">加载中…</div>
     <button id="att-btn" type="button">姿态：关</button>
+    <button id="res-btn" type="button">资源</button>
   </div>
   <div id="hint">触屏/鼠标点按操作 · 键盘：方向键/回车=确认/Esc=返回/数字=十六键</div>
+</div>
+
+<!-- 资源管理面板（浏览器本地存储 IndexedDB：上传/覆盖/删除业务资源，不依赖后端） -->
+<div id="res-panel">
+  <div id="res-card">
+    <button id="res-close" title="关闭">×</button>
+    <h2>资源管理</h2>
+    <div id="res-quota">存储：…</div>
+
+    <h3>语言模型（按需预载；预载后存于本机存储，之后离线可用）</h3>
+    <div id="model-section"></div>
+
+    <h3>上传到本机存储（立即生效；同名覆盖服务器默认资源）</h3>
+    <div class="res-row">
+      <input type="file" id="upload-input" multiple>
+      <select id="upload-dir">
+        <option value="auto">自动识别目录</option>
+        <option value="ebook">电子书 ebook/</option>
+        <option value="image">相册 image/</option>
+        <option value="music">音乐 music/</option>
+        <option value="llm">模型 llm/</option>
+        <option value="icon">图标 icon/</option>
+        <option value="dict">词典 dict/</option>
+        <option value="">根目录（壁纸 wp*.png 等）</option>
+      </select>
+      <button id="upload-btn" class="res-btn2">上传</button>
+    </div>
+    <div id="upload-progress"></div>
+
+    <h3>当前资源清单</h3>
+    <div id="res-list"></div>
+  </div>
 </div>
 <script>
 "use strict";
@@ -110,10 +198,8 @@ const statusEl = document.getElementById("status");
 const attBtn   = document.getElementById("att-btn");
 
 let runtimeReady = false;
-let imgData = null;
-let lastEpoch = -1;
-let wasmFps = 0, frameCount = 0;
-setInterval(() => { wasmFps = frameCount; frameCount = 0; updateStatus(); }, 1000);
+let wasmFps = 0;
+setInterval(() => { wasmFps = Module._nano_frame_count || 0; Module._nano_frame_count = 0; updateStatus(); }, 1000);
 
 function updateStatus() {
   if (!runtimeReady) return;
@@ -125,7 +211,10 @@ function updateStatus() {
 // 拉取业务资源写入 MEMFS（路径与 PLATFORM_ROOT_DIR=/home/bd4sur/linglong 一致）；
 // 优先级 1（图标/壁纸等启动必需）就绪后才 callMain 启动；优先级 2/3（电子书/词典/
 // 相册/LLM 模型）后台继续拉取（进度条/状态栏显示进度），保证秒开。
-// 挂载与带进度的下载实现在 loader.js（node 可测）。
+// 挂载与带进度的下载实现在 loader.js（node 可测）；本地存储在 store.js。
+// 资源面板所需的挂载上下文（供模型按需预载/上传即时生效复用）
+const mountCtx = { FS: null, filesBaseUrl: "files/", resRoot: "/home/bd4sur/linglong", store: null };
+let pendingModels = []; // p3 模型（待用户触发预载）
 const RES_ROOT = "/home/bd4sur/linglong";
 const wasmBar = document.getElementById("wasm-bar");
 const wasmText = document.getElementById("wasm-text");
@@ -189,6 +278,7 @@ async function mountResourcesAndRun() {
       manifestUrl: "manifest.json",
       filesBaseUrl: "files/",
       resRoot: RES_ROOT,
+      store: (typeof nanoStoreGet === "function") ? (mountCtx.store = { get: nanoStoreGet, put: nanoStorePut, list: nanoStoreList, delete: nanoStoreDelete }) : null,
       onStage: (text) => { if (text) resText.textContent = text; },
       onP1Progress: (dc, dn, cur, total) => {
         if (total > 0) setBar(resBar, cur / total, false);
@@ -198,15 +288,25 @@ async function mountResourcesAndRun() {
         // 阶段 1 就绪 → 启动 wasm main（Splash/主菜单可用）
         setBar(resBar, 1, false);
         resText.textContent = "资源（启动必需）：就绪";
+        mountCtx.FS = Module.FS;
+        // 显示上屏为「refresh 即上屏」推模式（hal_display_wasm.c 的 EM_JS present）：
+        // 向 JS 提供 canvas 上下文与 ImageData 单例（display_hal_refresh 同步 putImageData）
+        Module._nano_canvas_ctx = ctx;
+        Module._nano_canvas_img = ctx.createImageData(320, 240);
+        Module._nano_frame_count = 0;
         Module.callMain();
         runtimeReady = true;
-        startRenderLoop();
         updateStatus();
         loadPanel.style.display = "none"; // 进入系统后隐藏进度面板，后台进度转入状态栏
       },
       onBgProgress: (text) => {
         statusEl.innerHTML = '<span class="ok">● 运行中</span> · ' + text;
       },
+      onModelsPending: (models) => {
+        pendingModels = models;
+        updateModelSection();
+      },
+      onManifest: (files) => { gManifestFiles = files; },
     });
     updateStatus();
   } catch (e) {
@@ -215,53 +315,40 @@ async function mountResourcesAndRun() {
   }
 }
 
-// ---------------- 显示：rAF 从 wasm 内存读 RGBA 帧缓冲上屏 ----------------
-function startRenderLoop() {
-  imgData = ctx.createImageData(320, 240);
-  const FB_BYTES = 320 * 240 * 4;
-  function frame() {
-    if (Module._wasm_gui_get_fb_epoch) {
-      const epoch = Module._wasm_gui_get_fb_epoch();
-      if (epoch !== lastEpoch) {
-        lastEpoch = epoch;
-        const ptr = Module._wasm_gui_get_fb_rgba();
-        imgData.data.set(Module.HEAPU8.subarray(ptr, ptr + FB_BYTES));
-        ctx.putImageData(imgData, 0, 0);
-        frameCount++;
-      }
-    }
-    requestAnimationFrame(frame);
-  }
-  requestAnimationFrame(frame);
-}
-
 // ---------------- 触屏/鼠标输入（Pointer Events 统一两类设备） ----------------
+// 事件携带真实时刻（performance.timeOrigin + e.timeStamp，Epoch 毫秒）注入 C 事件队列，
+// 并立即驱动一次生产者采样（wasm_gui_input_tick）：输入采样与渲染帧率解耦
+//（玲珑仪等秒级渲染场景下点按不再被误判为长按连发，见 main_wasm_gui.c 注释）。
 let activePointerId = null;
-function sendTouch(action, clientX, clientY) {
+function eventEpochMs(e) {
+  return performance.timeOrigin + (e ? e.timeStamp : 0);
+}
+function sendTouch(action, clientX, clientY, ts) {
   if (!runtimeReady || !Module._wasm_gui_on_touch) return;
   const rect = canvas.getBoundingClientRect();
   let x = Math.round((clientX - rect.left) * canvas.width  / rect.width);
   let y = Math.round((clientY - rect.top)  * canvas.height / rect.height);
   if (x < 0) x = 0; if (x >= canvas.width)  x = canvas.width  - 1;
   if (y < 0) y = 0; if (y >= canvas.height) y = canvas.height - 1;
-  Module._wasm_gui_on_touch(action, x, y);
+  Module._wasm_gui_on_touch(action, x, y, ts);
+  Module._wasm_gui_input_tick(ts); // 事件到达即采样（生产者）
 }
 canvas.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   if (activePointerId !== null) return;
   activePointerId = e.pointerId;
   try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
-  sendTouch(1, e.clientX, e.clientY);
+  sendTouch(1, e.clientX, e.clientY, eventEpochMs(e));
 });
 canvas.addEventListener("pointermove", (e) => {
   if (activePointerId !== e.pointerId) return;
   e.preventDefault();
-  sendTouch(2, e.clientX, e.clientY);
+  sendTouch(2, e.clientX, e.clientY, eventEpochMs(e));
 });
 function endPointer(e) {
   if (activePointerId !== e.pointerId) return;
   e.preventDefault();
-  sendTouch(0, e.clientX, e.clientY);
+  sendTouch(0, e.clientX, e.clientY, eventEpochMs(e));
   activePointerId = null;
 }
 canvas.addEventListener("pointerup", endPointer);
@@ -270,9 +357,18 @@ canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 document.addEventListener("gesturestart", (e) => e.preventDefault());
 document.addEventListener("dblclick", (e) => e.preventDefault());
 
+// 生产者心跳：无事件时维持持续状态判定（长按到期、持续电平）；渲染阻塞时延后但
+// 事件时刻由 e.timeStamp 保证，回放后判定仍物理正确（对齐 ino 的 1-2ms 生产者语义）
+setInterval(() => {
+  if (runtimeReady && Module._wasm_gui_input_tick) Module._wasm_gui_input_tick(0);
+}, 50);
+
 // ---------------- 物理键盘（桌面便利通路；映射对齐 hal_key_ncurses_linux.c） ----------------
 // NANO_KEY_* 逻辑键值（hal_key.h）：up=1 down=2 left=3 right=4 ctrl=5 shift=7
 //   backspace=8 enter=13 esc=27 space=32；十六键：1..0 → 49..57（手机键盘布局）等
+// 事件模型（hal_key_wasm.c）：keydown 置位电平、keyup 清除（按住期间浏览器 keydown
+// 重复事件无害）；亚帧点按由 C 侧未读锁存保底。组合键（Ctrl+X 等）经「点 Ctrl 激活
+// 再点目标键」的锁存模式工作（is_ctrl_enabled，非同时按下），与本模型兼容。
 const KEY_MAP = {
   ArrowUp: 1, ArrowDown: 2, ArrowLeft: 3, ArrowRight: 4,
   Enter: 13, Escape: 27, Backspace: 27, " ": 32,
@@ -280,13 +376,18 @@ const KEY_MAP = {
   "0": 48, "7": 49, "8": 50, "9": 51, "4": 52, "5": 53, "6": 54,
   "1": 55, "2": 56, "3": 57,
 };
-document.addEventListener("keydown", (e) => {
+function reportKey(e, isDown) {
   if (!runtimeReady || !Module._wasm_gui_on_key) return;
   const code = KEY_MAP[e.key];
   if (code === undefined) return;
   e.preventDefault();
-  Module._wasm_gui_on_key(code);
-});
+  Module._wasm_gui_on_key(code, isDown);
+  // 键盘边沿以事件真实时刻计时（生产者即时采样）；浏览器 keydown 重复事件
+  //（e.repeat）不再重复驱动 tick（电平已置位，心跳会补上持续判定）
+  if (!e.repeat) Module._wasm_gui_input_tick(eventEpochMs(e));
+}
+document.addEventListener("keydown", (e) => reportKey(e, 1));
+document.addEventListener("keyup",   (e) => reportKey(e, 0));
 
 // ---------------- 设备姿态（localhost/HTTPS 可用；局域网 HTTP 下事件不触发） ----------------
 let attEnabled = false;
@@ -380,7 +481,173 @@ async function toggleAttitude() {
 }
 attBtn.addEventListener("click", toggleAttitude);
 setInterval(() => { if (attEnabled) updateAttBtn(); }, 1000);
+
+// ---------------- 资源管理面板（浏览器本地存储 IndexedDB；不依赖后端服务器） ----------------
+// 上传/覆盖/删除业务资源；模型按需预载。存储优先于服务器默认源（loader.js 挂载时合并）。
+// 启动即申请存储持久化（防 Safari 等 7 天闲置自动清理；拒绝/不支持不影响使用）
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist().then((granted) => console.log("[store] persist:", granted));
+}
+const resBtn   = document.getElementById("res-btn");
+const resPanel = document.getElementById("res-panel");
+const resList  = document.getElementById("res-list");
+const resQuota = document.getElementById("res-quota");
+const modelSection = document.getElementById("model-section");
+const uploadInput = document.getElementById("upload-input");
+const uploadDir   = document.getElementById("upload-dir");
+const uploadBtn   = document.getElementById("upload-btn");
+const uploadProg  = document.getElementById("upload-progress");
+let gManifestFiles = []; // loader 合并清单（含 source 标记），onManifest 回调填入
+
+function fmtSize(bytes) {
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
+  if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return bytes + " B";
+}
+
+function guessUploadDir(filename) {
+  const ext = (filename.split(".").pop() || "").toLowerCase();
+  if (ext === "txt" || ext === "md") return "ebook";
+  if (ext === "jpg" || ext === "jpeg" || ext === "gif" || ext === "bmp" || ext === "webp") return "image";
+  if (ext === "png") return "image"; // png 图标请显式选择 icon/
+  if (ext === "mp3" || ext === "wav" || ext === "flac" || ext === "ogg") return "music";
+  if (ext === "bin") return "llm";
+  if (ext === "csv" || ext === "idx") return "dict";
+  if (ext === "scm") return "";
+  return ""; // 根目录（壁纸等）
+}
+
+// MEMFS 中是否已存在（当前会话已挂载/写入）
+function memfsHas(relPath) {
+  if (!mountCtx.FS) return false;
+  try { return !!mountCtx.FS.stat(mountCtx.resRoot + "/" + relPath); } catch (e) { return false; }
+}
+
+function updateModelSection() {
+  if (!modelSection) return;
+  if (!pendingModels.length) {
+    modelSection.innerHTML = '<div style="color:#777">无可预载模型（或已全部就绪）</div>';
+    return;
+  }
+  modelSection.innerHTML = "";
+  for (const m of pendingModels) {
+    const name = m.path.split("/").pop();
+    const ready = memfsHas(m.path);
+    const row = document.createElement("div");
+    row.className = "res-item";
+    const btnHtml = ready
+      ? '<span style="color:#7fd08a">已就绪</span>'
+      : `<button class="res-btn2" data-path="${m.path}">预载（${fmtSize(m.size)}）</button>`;
+    row.innerHTML = `<span class="p">${m.path}</span><span class="sz">${fmtSize(m.size)}</span>` + btnHtml;
+    modelSection.appendChild(row);
+    if (!ready) {
+      row.querySelector("button").onclick = async (ev) => {
+        const btn = ev.target;
+        btn.disabled = true;
+        btn.textContent = "预载中 0%";
+        try {
+          await nanoMountModel(mountCtx, m.path, (recv, total) => {
+            btn.textContent = total > 0
+              ? `预载中 ${(recv / total * 100).toFixed(0)}%`
+              : `预载中 ${fmtSize(recv)}`;
+          });
+          btn.textContent = "已就绪";
+          updateModelSection();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = "失败重试";
+        }
+      };
+    }
+  }
+}
+
+async function refreshResPanel() {
+  // 配额
+  if (navigator.storage && navigator.storage.estimate) {
+    const est = await navigator.storage.estimate();
+    resQuota.textContent = `本机存储占用 ${fmtSize(est.usage || 0)}（配额约 ${fmtSize(est.quota || 0)}）· 清除站点数据即清空`;
+  } else {
+    resQuota.textContent = "（浏览器不支持存储配额查询）";
+  }
+  // 清单（manifest 合并视图已由 loader 提供；store 侧在挂载后可能有新增，重新拉取刷新）
+  let storeFiles = [];
+  try { storeFiles = await nanoStoreList(); } catch (e) {}
+  const storeMap = new Map(storeFiles.map(f => [f.path, f]));
+  const byPath = new Map();
+  for (const f of gManifestFiles) byPath.set(f.path, f);
+  for (const sf of storeFiles) {
+    const ex = byPath.get(sf.path);
+    if (ex) { ex.source = "store"; ex.size = sf.size; }
+    else byPath.set(sf.path, { path: sf.path, size: sf.size, source: "store" });
+  }
+  const items = [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+  resList.innerHTML = "";
+  for (const f of items) {
+    const row = document.createElement("div");
+    row.className = "res-item";
+    const srcHtml = f.source === "store"
+      ? '<span class="src store">本机</span>'
+      : '<span class="src http">服务器</span>';
+    // 仅本机存储来源可删除（删除后下次启动回退服务器默认；服务器默认项只读）
+    const delHtml = f.source === "store"
+      ? `<button data-path="${f.path}" title="从本机存储删除">删除</button>`
+      : '<button disabled title="服务器默认资源，不可删">删除</button>';
+    row.innerHTML = `<span class="p">${f.path}</span><span class="sz">${fmtSize(f.size)}</span>${srcHtml}${delHtml}`;
+    resList.appendChild(row);
+  }
+  for (const btn of resList.querySelectorAll("button[data-path]")) {
+    btn.onclick = async () => {
+      const p = btn.getAttribute("data-path");
+      if (!confirm(`从本机存储删除「${p}」？\n（若为覆盖项，下次启动将回退服务器默认版本）`)) return;
+      try { await nanoStoreDelete(p); } catch (e) {}
+      refreshResPanel();
+      updateModelSection();
+    };
+  }
+}
+
+resBtn.addEventListener("click", () => {
+  resPanel.classList.add("open");
+  refreshResPanel();
+  updateModelSection();
+});
+document.getElementById("res-close").addEventListener("click", () => resPanel.classList.remove("open"));
+resPanel.addEventListener("click", (e) => { if (e.target === resPanel) resPanel.classList.remove("open"); });
+
+uploadBtn.addEventListener("click", async () => {
+  const files = uploadInput.files;
+  if (!files || !files.length) { uploadProg.textContent = "请先选择文件"; return; }
+  uploadBtn.disabled = true;
+  try {
+    let done = 0;
+    for (const file of files) {
+      const dir = uploadDir.value === "auto" ? guessUploadDir(file.name) : uploadDir.value;
+      const rel = dir ? dir + "/" + file.name : file.name;
+      uploadProg.textContent = `上传中 ${done + 1}/${files.length}：${rel}`;
+      const buf = await file.arrayBuffer();
+      // 立即写入 MEMFS（当前会话生效）+ 持久化到 IndexedDB（下次启动/离线可用）
+      if (mountCtx.FS) {
+        try { mountCtx.FS.writeFile(mountCtx.resRoot + "/" + rel, new Uint8Array(buf)); } catch (e) {
+          console.warn("MEMFS write failed:", rel, e);
+        }
+      }
+      await nanoStorePut(rel, file);
+      done++;
+    }
+    uploadProg.textContent = `已上传 ${done}/${files.length} 个（已即时生效）`;
+    uploadInput.value = "";
+  } catch (e) {
+    uploadProg.textContent = "上传失败：" + e;
+  } finally {
+    uploadBtn.disabled = false;
+    refreshResPanel();
+    updateModelSection();
+  }
+});
 </script>
+<!-- 本地存储层（IndexedDB；先于 loader.js） -->
+<script src="store.js"></script>
 <!-- 加载器（WASM 下载进度 + 资源挂载；node 可测） -->
 <script src="loader.js"></script>
 <!-- Emscripten 产物（build_wasm_gui.sh 生成）：nano_gui.js + nano_gui.wasm -->

@@ -32,6 +32,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         ".data": "application/octet-stream",
     }
 
+    def end_headers(self):
+        # 禁用缓存：开发/迭代期浏览器（尤其手机 Chrome）会缓存旧版 wasm/js 导致改动不生效
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=web_dir, **kwargs)
 

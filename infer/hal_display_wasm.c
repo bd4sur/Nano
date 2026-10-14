@@ -15,7 +15,24 @@
 
 // 整屏 RGBA side buffer（静态分配，地址不变，供 JS 直接读）
 static uint8_t  s_fb_rgba[FB_WIDTH * FB_HEIGHT * 4];
-static uint32_t s_fb_epoch = 0;   // 刷新计数（每次 display_hal_refresh +1）
+static uint32_t s_fb_epoch = 0;   // 刷新计数（每次 display_hal_refresh +1；调试/诊断用）
+
+// JS 上屏函数（EM_JS 编译进 glue）：refresh 即上屏。
+// 背景（2026-10-14 修复「忙提示从未可见」）：此前页面以独立 rAF 循环轮询 side buffer
+// 上屏——它与 wasm 主循环的 rAF 帧回调同处一个 rAF 序列，玲珑仪等慢渲染场景下
+// dispatch 画的「正在计算」忙提示总在 JS 上屏回调读到之前就被下一帧业务渲染覆盖，
+// 用户完全看不到。改为对齐 tty/ILI9341 等所有平台的语义：display_hal_refresh 调用
+// 即同步 putImageData 上屏（C 推 JS，零轮询延迟、无覆盖窗口）。
+// 页面侧以 Module._nano_canvas_ctx/_nano_canvas_img 提供 canvas 上下文与 ImageData 单例；
+// 未初始化（node 测试等无 DOM 环境）时直接返回。
+EM_JS(void, wasm_gui_present_js, (const uint8_t *rgba, uint32_t w, uint32_t h), {
+  const ctx = Module["_nano_canvas_ctx"];
+  const img = Module["_nano_canvas_img"];
+  if (!ctx || !img) return;
+  img.data.set(Module.HEAPU8.subarray(rgba, rgba + w * h * 4));
+  ctx.putImageData(img, 0, 0);
+  if (Module["_nano_frame_count"] !== undefined) Module["_nano_frame_count"]++;
+});
 
 // ---- JS 侧访问接口（ccall/cwrap 用） ----
 
@@ -69,6 +86,7 @@ void display_hal_refresh(
         }
     }
     s_fb_epoch++;
+    wasm_gui_present_js(s_fb_rgba, FB_WIDTH, FB_HEIGHT); // refresh 即上屏（同步 putImageData）
 }
 
 // RGB565 路径不参与（gfx 为 RGB888 模式，同其他 Linux 目标）
