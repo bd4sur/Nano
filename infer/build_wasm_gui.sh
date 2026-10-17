@@ -93,6 +93,7 @@ ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
     $ANIMAC_SRCS \
     main_wasm_gui.c \
     hal_fs_linux.c \
+    hal_net_wasm.c \
     hal_ram_wasm.c \
     hal_os_wasm.c \
     hal_audio_in_wasm.c \

@@ -30,6 +30,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
                         hal_os_linux.c \
+                        hal_net_stub.c \
                         hal_audio_in_mp135.c \
                         hal_audio_out_mp135.c \
                         hal_display_ili9342c_linux.c \
@@ -89,6 +90,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         hal_ram_linux.c \
                         hal_fs_linux.c \
                         hal_os_linux.c \
+                        hal_net_stub.c \
                         hal_misc_linux.c \
                         hal_display_ncurses_linux.c \
                         hal_touch_evdev_linux.c \

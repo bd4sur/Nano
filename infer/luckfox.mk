@@ -38,6 +38,7 @@ $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
                         hal_os_linux.c \
+                        hal_net_stub.c \
                         hal_audio_in_luckfox.c \
                         hal_audio_out_luckfox.c \
                         hal_display_framebuffer_linux.c \

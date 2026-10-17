@@ -25,7 +25,7 @@ $(BIN_DIR):
 
 # Nano-Pod-Lite：带键盘和单色I2C屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z/MARGA）
 pod_lite: $(BIN_DIR)/nano_pod_lite
-$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c hal_power_rpi5.c hal_audio_in_alsa_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c hal_display_ssd130x_linux.c hal_touch_evdev_linux.c hal_key_matrix16_linux.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c ui_llm.c nano_min.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c hal_power_rpi5.c hal_net_stub.c hal_audio_in_alsa_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c hal_display_ssd130x_linux.c hal_touch_evdev_linux.c hal_key_matrix16_linux.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c ui_llm.c nano_min.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_LITE_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
 
 
@@ -36,6 +36,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
                         hal_os_linux.c \
+                        hal_net_stub.c \
                         hal_audio_in_alsa_linux.c \
                         hal_audio_out_alsa_linux.c \
                         hal_display_ili9341_linux.c \
@@ -100,6 +101,7 @@ $(BIN_DIR)/nano_pod_pt35: $(ANIMAC_SRCS) \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
                         hal_os_linux.c \
+                        hal_net_stub.c \
                         hal_audio_in_alsa_linux.c \
                         hal_audio_out_alsa_linux.c \
                         hal_display_framebuffer_linux.c \
@@ -158,6 +160,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
                         hal_os_linux.c \
+                        hal_net_linux.c \
                         hal_audio_in_alsa_linux.c \
                         hal_audio_out_alsa_linux.c \
                         hal_display_ncurses_linux.c \
@@ -234,6 +237,7 @@ $(BIN_DIR)/nano_web: $(BIN_DIR)/web_client_html.h $(ANIMAC_SRCS) \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
                         hal_os_linux.c \
+                        hal_net_linux.c \
                         hal_audio_in_web_linux.c \
                         hal_audio_out_web_linux.c \
                         hal_display_web_linux.c \

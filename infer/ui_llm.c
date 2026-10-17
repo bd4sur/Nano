@@ -3,6 +3,8 @@
 //   小鹦鹉笼（nano_min 极小内存引擎）已并入本模块（见下方“引擎适配层”隔离区块）：
 //   二者共用同一套 UI 状态（STATE_MODEL_MENU / STATE_LLM_INPUT / STATE_LLM_ON_INFER /
 //   STATE_LLM_AFTER_INFER），仅在 STATE_LLM_ON_INFER 内按引擎分发 会话建立/单步/销毁 三个钩子。
+//   远端模型（云端 OpenAI 兼容流式 API）同样以引擎适配层形式并入（见“远端模型引擎适配层”
+//   隔离区块）：推理后端为 hal_net 网络抽象层之上的 SSE 流式对话，交互与端侧模型一致。
 // ===============================================================================
 
 #include <stdio.h>
@@ -19,6 +21,7 @@
 
 #include "infer.h"
 #include "tokenizer.h"
+#include "hal_net.h"  // 远端模型：网络通信 HAL（见本文件下方“远端模型引擎适配层”）
 
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
     #include "model/nano_psycho_230k_q80.h"
@@ -340,6 +343,520 @@ static void llm_nm_session_free(Global_State *gs) {
 }
 
 // ===============================================================================
+// 远端模型引擎适配层（云端 OpenAI 兼容流式 API，经 hal_net 网络抽象层）
+//   与 infer.c / nano_min 引擎路径完全隔离：本区块的一切均为 static，仅通过下列
+//   统一钩子被模型菜单与 STATE_LLM_ON_INFER 调用（会话视图统一挂到 gs->llm_session）：
+//     llm_rm_is_active / llm_rm_activate / llm_rm_release（引擎登记与释放，幂等）
+//     llm_rm_session_begin/step/free（会话钩子，语义对齐 infer.c 的 llm_session_*）
+//
+//   与端侧模型的交互完全一致（模型菜单→输入→流式输出→结果页），差异仅在推理
+//   后端：本地权重前向计算 → HTTP POST {API}/chat/completions（stream=true）。
+//   服务端事件流（SSE）在本适配层解析：delta.reasoning_content（思考）与
+//   delta.content（正文）按到达顺序拼接为会话输出文本；思考内容与正文之间以
+//   分隔线区隔（对齐结果页既有的 "--------------------" 风格）。
+//
+//   API 信息（BD4SUR 2026-10；API 为内网自建服务，基址不入源码/文档，避免随仓库泄露内网拓扑）：
+//     - 服务：内网自建 OpenAI 兼容 API（SSE 流式）；基址经环境变量 NANO_RM_API_BASE
+//       或编译期宏 LLM_RM_API_BASE_BUILD 提供（见下方 llm_rm_api_base）
+//     - 模型：GLM-5.3-Flash-EXL3；思考强度：思考模式开（默认）= max（reasoning_effort），
+//       思考模式关（输入态 Ctrl+2 切换）= none（经实测校准，该 API 支持
+//       none/minimal/low/medium/high/xhigh/max 七档）
+//     - WASM（NANO_WASM_GUI）例外：浏览器同源策略下跨源 fetch 被阻（API 不支持
+//       CORS 预检），故经测试服务的同源反向代理 /v1 访问（见 tools/https_static_server.py）
+// ===============================================================================
+
+// API 基址解析（源码不保存任何内网地址）：
+//   WASM（NANO_WASM_GUI）：同源相对路径 /v1（浏览器同源策略下经测试服务反向代理，
+//   规避 CORS，见 tools/https_static_server.py）；
+//   其余平台（直连）：优先运行时环境变量 NANO_RM_API_BASE（如 http://<API主机>:<端口>/v1），
+//   其次编译期宏 LLM_RM_API_BASE_BUILD（由本地私有构建配置注入，不入库）；
+//   均未提供时返回 NULL，会话建立按「未配置」失败（结果页显示连接失败）。
+static const char *llm_rm_api_base(void) {
+#if defined(NANO_WASM_GUI)
+    return "/v1";
+#else
+    const char *env = getenv("NANO_RM_API_BASE");
+    if (env != NULL && env[0] != '\0') return env;
+#ifdef LLM_RM_API_BASE_BUILD
+    return LLM_RM_API_BASE_BUILD;
+#else
+    return NULL;
+#endif
+#endif
+}
+#define LLM_RM_MODEL_ID        "GLM-5.3-Flash-EXL3"
+#define LLM_RM_REASONING_EFFORT_MAX  "max"   // 思考模式开（预设规格：思考强度 max）
+#define LLM_RM_REASONING_EFFORT_NONE "none" // 思考模式关（Ctrl+2 切换）
+#define LLM_RM_MENU_NAME       L"远端模型（云端API）"  // 模型菜单条目名
+#define LLM_RM_MODEL_NAME      L"远端模型"             // 输入/推理/结果页标题名
+#define LLM_RM_MAX_SEQ_LEN     (8192)                  // 结果页统计显示用上限（远端无本地KV限制）
+#define LLM_RM_LINE_BUF_MAX    (64 * 1024)             // SSE 单行累积缓冲（一行即一个JSON对象）
+
+// 引擎登记与会话状态（静态，避免侵入 Global_State）
+static Net_Http_Request *s_rm_req = NULL;        // 进行中的流式请求（NULL-无）
+static wchar_t   *s_rm_out_text = NULL;          // (UI_STR_BUF_MAX_LENGTH,) 累积输出文本
+static char      *s_rm_out_bytes = NULL;         // (UI_STR_BUF_MAX_LENGTH*4,) 累积输出 UTF-8 字节
+static uint32_t   s_rm_out_len = 0;              // s_rm_out_text 当前长度
+static uint32_t   s_rm_out_bytes_len = 0;        // s_rm_out_bytes 当前长度
+static char      *s_rm_line_buf = NULL;          // (LLM_RM_LINE_BUF_MAX,) SSE 行累积缓冲
+static uint32_t   s_rm_line_len = 0;
+static int32_t    s_rm_line_invalid = 0;         // 当前行超长被丢弃（内容无效）
+static uint32_t   s_rm_chunks = 0;               // 已收到的流式块计数（词元数近似，供 TPS 统计）
+static int32_t    s_rm_saw_reasoning = 0;        // 本会话已收到思考内容
+static int32_t    s_rm_content_started = 0;      // 本会话已收到正文内容
+static int32_t    s_rm_done = 0;                 // 已见到 data: [DONE]
+static int32_t    s_rm_active = 0;               // 引擎登记标记
+static int32_t    s_rm_http_status = 0;          // 最近一次响应的 HTTP 状态码（诊断显示用）
+
+// 极简 JSON 巡游：仅服务于远端 API 的 SSE 数据行解析（结构不符一律安全返回 NULL）
+
+// 跳过一个 JSON 值（字符串/对象/数组/数字/字面量），返回其结束后的首个字符指针
+static const char *rm_json_skip_value(const char *p, const char *end) {
+    if (p >= end) return NULL;
+    if (*p == '"') {
+        p++;
+        while (p < end) {
+            if (*p == '\\') { p += 2; continue; }
+            if (*p == '"') return p + 1;
+            p++;
+        }
+        return NULL;
+    }
+    if (*p == '{' || *p == '[') {
+        char open = *p, close = (*p == '{') ? '}' : ']';
+        int32_t depth = 0;
+        while (p < end) {
+            if (*p == '"') {
+                p++;
+                while (p < end && *p != '"') {
+                    if (*p == '\\') p++;
+                    p++;
+                }
+                if (p >= end) return NULL;
+                p++;
+                continue;
+            }
+            if (*p == open) depth++;
+            else if (*p == close) {
+                depth--;
+                if (depth == 0) return p + 1;
+            }
+            p++;
+        }
+        return NULL;
+    }
+    while (p < end && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\n' && *p != '\r') p++;
+    return p;
+}
+
+// 在对象（p 指向 '{'）中查找 key 对应的值，返回指向值首字符的指针；未找到返回 NULL
+static const char *rm_json_find_member(const char *p, const char *end, const char *key) {
+    if (p >= end || *p != '{') return NULL;
+    p++;
+    size_t key_len = strlen(key);
+    for (;;) {
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == ',')) p++;
+        if (p >= end || *p == '}') return NULL;
+        if (*p != '"') return NULL;
+        const char *k0 = p + 1;
+        const char *k1 = k0;
+        while (k1 < end && *k1 != '"') k1++;
+        if (k1 >= end) return NULL;
+        p = k1 + 1;
+        while (p < end && *p != ':') p++;
+        if (p >= end) return NULL;
+        p++;
+        while (p < end && (*p == ' ' || *p == '\t')) p++;
+        if ((size_t)(k1 - k0) == key_len && memcmp(k0, key, key_len) == 0) return p;
+        p = rm_json_skip_value(p, end);
+        if (p == NULL) return NULL;
+    }
+}
+
+// 将 p 指向的 JSON 字符串（'"' 开头）反序列化为 UTF-8 写入 out（容量 out_cap，含 \uXXXX
+// 转义与代理对；\u 输出为 UTF-8）。返回写入字节数（不含末尾 0）；解析失败返回 -1。
+static int32_t rm_json_unescape_string(const char *p, const char *end, char *out, size_t out_cap) {
+    if (p >= end || *p != '"') return -1;
+    p++;
+    size_t w = 0;
+    while (p < end && *p != '"') {
+        if (*p == '\\') {
+            p++;
+            if (p >= end) return -1;
+            char e = *p++;
+            switch (e) {
+                case '"':  if (w < out_cap) out[w++] = '"';  break;
+                case '\\': if (w < out_cap) out[w++] = '\\'; break;
+                case '/':  if (w < out_cap) out[w++] = '/';  break;
+                case 'b':  if (w < out_cap) out[w++] = '\b'; break;
+                case 'f':  if (w < out_cap) out[w++] = '\f'; break;
+                case 'n':  if (w < out_cap) out[w++] = '\n'; break;
+                case 'r':  if (w < out_cap) out[w++] = '\r'; break;
+                case 't':  if (w < out_cap) out[w++] = '\t'; break;
+                case 'u': {
+                    if (end - p < 4) return -1;
+                    uint32_t cp = 0;
+                    for (int32_t i = 0; i < 4; i++) {
+                        char h = *p++;
+                        cp <<= 4;
+                        if (h >= '0' && h <= '9')      cp |= (uint32_t)(h - '0');
+                        else if (h >= 'a' && h <= 'f') cp |= (uint32_t)(h - 'a' + 10);
+                        else if (h >= 'A' && h <= 'F') cp |= (uint32_t)(h - 'A' + 10);
+                        else return -1;
+                    }
+                    // 高代理 + \uXXXX 低代理 → 合成增补平面码点
+                    if (cp >= 0xD800 && cp <= 0xDBFF && end - p >= 6 && p[0] == '\\' && p[1] == 'u') {
+                        uint32_t lo = 0;
+                        int32_t ok = 1;
+                        for (int32_t i = 0; i < 4; i++) {
+                            char h = p[2 + i];
+                            lo <<= 4;
+                            if (h >= '0' && h <= '9')      lo |= (uint32_t)(h - '0');
+                            else if (h >= 'a' && h <= 'f') lo |= (uint32_t)(h - 'a' + 10);
+                            else if (h >= 'A' && h <= 'F') lo |= (uint32_t)(h - 'A' + 10);
+                            else { ok = 0; break; }
+                        }
+                        if (ok && lo >= 0xDC00 && lo <= 0xDFFF) {
+                            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                            p += 6;
+                        }
+                    }
+                    if (cp < 0x80) { if (w < out_cap) out[w++] = (char)cp; }
+                    else if (cp < 0x800) { if (w + 1 < out_cap) { out[w++] = (char)(0xC0 | (cp >> 6)); out[w++] = (char)(0x80 | (cp & 0x3F)); } }
+                    else if (cp < 0x10000) { if (w + 2 < out_cap) { out[w++] = (char)(0xE0 | (cp >> 12)); out[w++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[w++] = (char)(0x80 | (cp & 0x3F)); } }
+                    else { if (w + 3 < out_cap) { out[w++] = (char)(0xF0 | (cp >> 18)); out[w++] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[w++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[w++] = (char)(0x80 | (cp & 0x3F)); } }
+                    break;
+                }
+                default: return -1;
+            }
+        }
+        else {
+            if (w < out_cap) out[w++] = *p; // 非 ASCII 原样 UTF-8 字节
+            p++;
+        }
+    }
+    if (p >= end) return -1; // 字符串未闭合
+    return (int32_t)w;
+}
+
+// 找到 UTF-8 字节缓冲中“完整字符前缀”的长度（多字节序列被截断时截到最后一个完整字符）。
+// 用于增量转换：网络数据块可能把一个多字节字符从中间切开。
+static uint32_t rm_utf8_complete_prefix_len(const char *s, uint32_t len) {
+    uint32_t i = len;
+    uint32_t back = 0;
+    while (back < 4 && i > 0) {
+        i--; back++;
+        uint8_t b = (uint8_t)s[i];
+        if ((b & 0xC0) == 0x80) continue; // continuation 字节，继续回溯
+        uint32_t seq_len = 1;
+        if      ((b & 0xF8) == 0xF0) seq_len = 4;
+        else if ((b & 0xF0) == 0xE0) seq_len = 3;
+        else if ((b & 0xE0) == 0xC0) seq_len = 2;
+        if (i + seq_len <= len) return len; // 末字符完整
+        return i;                            // 末字符不完整，截到它之前
+    }
+    return len; // 末尾全是 continuation（异常流），原样转换
+}
+
+// 追加 UTF-8 文本到输出缓冲（增量转换；空间不足时静默截断，防堆溢出）
+static void rm_append_output(const char *utf8, uint32_t len) {
+    if (s_rm_out_bytes_len + len < (uint32_t)UI_STR_BUF_MAX_LENGTH * 4 - 4) {
+        memcpy(s_rm_out_bytes + s_rm_out_bytes_len, utf8, len);
+        s_rm_out_bytes_len += len;
+        s_rm_out_bytes[s_rm_out_bytes_len] = 0;
+    }
+    // 整体重转换（对齐 nano_min 适配层做法；缓冲有界，开销可接受）。
+    // 末尾被截断的多字节字符留在字节缓冲，待后续数据到齐再转换，不产生 '?'；
+    // 转换上限为 wchar 缓冲容量（纯 ASCII 时字节数可达 wchar 数的 4 倍，必须封顶防溢出）
+    uint32_t complete = rm_utf8_complete_prefix_len(s_rm_out_bytes, s_rm_out_bytes_len);
+    if (complete > (uint32_t)UI_STR_BUF_MAX_LENGTH - 1) complete = (uint32_t)UI_STR_BUF_MAX_LENGTH - 1;
+    if (complete > 0) {
+        _mbstowcs(s_rm_out_text, s_rm_out_bytes, complete);
+        s_rm_out_len = wcslen(s_rm_out_text);
+    }
+}
+
+// 处理一个完整的 SSE 数据载荷（data: 之后的部分）
+static void rm_process_sse_payload(const char *p, size_t len) {
+    if (len == 6 && memcmp(p, "[DONE]", 6) == 0) {
+        s_rm_done = 1;
+        return;
+    }
+    const char *end = p + len;
+    const char *choices = rm_json_find_member(p, end, "choices");
+    if (choices == NULL) return;
+    while (choices < end && (*choices == ' ' || *choices == '\t')) choices++;
+    if (choices >= end || *choices != '[') return;
+    choices++;
+    while (choices < end && (*choices == ' ' || *choices == '\t')) choices++;
+    const char *delta = rm_json_find_member(choices, end, "delta");
+    if (delta == NULL) return;
+
+    char text[8192];
+    // 思考内容（reasoning_content 为主，兼容 reasoning 键）
+    const char *rv = rm_json_find_member(delta, end, "reasoning_content");
+    if (rv == NULL) rv = rm_json_find_member(delta, end, "reasoning");
+    if (rv != NULL && rv < end && *rv == '"') {
+        int32_t n = rm_json_unescape_string(rv, end, text, sizeof(text) - 1);
+        if (n > 0) {
+            if (!s_rm_saw_reasoning) s_rm_saw_reasoning = 1;
+            s_rm_chunks++; // 每个携带内容的流式块 ≈ 1 词元（TPS 统计用）
+            rm_append_output(text, (uint32_t)n);
+        }
+    }
+    // 正文内容
+    const char *cv = rm_json_find_member(delta, end, "content");
+    if (cv != NULL && cv < end && *cv == '"') {
+        int32_t n = rm_json_unescape_string(cv, end, text, sizeof(text) - 1);
+        if (n > 0) {
+            if (s_rm_saw_reasoning && !s_rm_content_started) {
+                rm_append_output("\n--------------------\n", 22); // 思考/正文分隔线（对齐结果页风格）
+            }
+            s_rm_content_started = 1;
+            s_rm_chunks++;
+            rm_append_output(text, (uint32_t)n);
+        }
+    }
+}
+
+// 处理一行完整的 SSE 数据（不含行尾换行符）
+static void rm_process_sse_line(const char *line, size_t len) {
+    if (len > 5 && memcmp(line, "data:", 5) == 0) {
+        const char *p = line + 5;
+        while (len > (size_t)(p - line) && *p == ' ') p++;
+        rm_process_sse_payload(p, len - (size_t)(p - line));
+    }
+    // 其余行（event:/id:/注释行/空行）忽略
+}
+
+// 当前是否由远端引擎承载对话：1-是，0-否
+static int32_t llm_rm_is_active(void) {
+    return s_rm_active;
+}
+
+// 登记远端引擎（菜单选中时调用；会话缓冲在此懒分配）
+static void llm_rm_activate(void) {
+    s_rm_active = 1;
+    if (!s_rm_out_text) {
+        s_rm_out_text  = (wchar_t *)platform_calloc(UI_STR_BUF_MAX_LENGTH, sizeof(wchar_t));
+        s_rm_out_bytes = (char *)platform_calloc(UI_STR_BUF_MAX_LENGTH * 4, sizeof(char));
+        s_rm_line_buf  = (char *)platform_calloc(LLM_RM_LINE_BUF_MAX, sizeof(char));
+    }
+}
+
+// 释放远端引擎与会话遗留资源（选中其他模型 / 退出模型菜单时经 ui_llm_unload_model 调用；幂等）
+static void llm_rm_release(void) {
+    s_rm_active = 0;
+    if (s_rm_req) { net_http_close(s_rm_req); s_rm_req = NULL; }
+    if (s_rm_out_text)  { free(s_rm_out_text);  s_rm_out_text = NULL;  }
+    if (s_rm_out_bytes) { free(s_rm_out_bytes); s_rm_out_bytes = NULL; }
+    if (s_rm_line_buf)  { free(s_rm_line_buf);  s_rm_line_buf = NULL;  }
+    s_rm_out_len = 0; s_rm_out_bytes_len = 0;
+    s_rm_line_len = 0; s_rm_line_invalid = 0;
+    s_rm_chunks = 0; s_rm_saw_reasoning = 0; s_rm_content_started = 0;
+    s_rm_done = 0; s_rm_http_status = 0;
+}
+
+// 组装请求体并发起流式请求，建立会话视图挂到 gs->llm_session
+// （进入 STATE_LLM_ON_INFER 首轮调用一次）；返回 0 成功，-1 失败
+static int32_t llm_rm_session_begin(Key_Event *ke, Global_State *gs) {
+    (void)ke;
+    if (s_rm_active == 0) return -1;
+    wchar_t *text = gs->w_input_main->textarea.text;
+
+    // 输入为空时随机选用一个预置 prompt（与端侧引擎路径一致）
+    if (wcslen(text) == 0) {
+        set_random_prompt(text, gs->timestamp);
+        gs->w_input_main->textarea.length = wcslen(text);
+    }
+
+    // 关闭遗留请求（上一会话异常退出等；幂等）
+    if (s_rm_req) { net_http_close(s_rm_req); s_rm_req = NULL; }
+
+    // 会话缓冲（首次分配，之后复用）
+    if (!s_rm_out_text) {
+        llm_rm_activate();
+        if (!s_rm_out_text || !s_rm_out_bytes || !s_rm_line_buf) return -1;
+    }
+
+    // 重置会话状态
+    s_rm_out_len = 0;        s_rm_out_text[0] = 0;
+    s_rm_out_bytes_len = 0;  s_rm_out_bytes[0] = 0;
+    s_rm_line_len = 0;       s_rm_line_invalid = 0;
+    s_rm_chunks = 0;         s_rm_saw_reasoning = 0;
+    s_rm_content_started = 0; s_rm_done = 0;
+    s_rm_http_status = 0;
+
+    // 用户输入 wchar → UTF-8 → JSON 字符串转义
+    size_t utf8_cap = wcslen(text) * 4 + 16;
+    char *user_utf8 = (char *)platform_calloc(utf8_cap, 1);
+    if (!user_utf8) return -1;
+    _wcstombs(user_utf8, text, utf8_cap);
+
+    size_t esc_cap = strlen(user_utf8) * 6 + 16;
+    char *esc = (char *)platform_calloc(esc_cap, 1);
+    if (!esc) { free(user_utf8); return -1; }
+    {
+        size_t w = 0;
+        for (const uint8_t *p = (const uint8_t *)user_utf8; *p; p++) {
+            const char *e = NULL;
+            switch (*p) {
+                case '"':  e = "\\\""; break;
+                case '\\': e = "\\\\"; break;
+                case '\n': e = "\\n";  break;
+                case '\r': e = "\\r";  break;
+                case '\t': e = "\\t";  break;
+                case '\b': e = "\\b";  break;
+                case '\f': e = "\\f";  break;
+                default:
+                    if (*p < 0x20) {
+                        w += (size_t)snprintf(esc + w, esc_cap - w, "\\u%04x", *p);
+                    }
+                    else if (w + 1 < esc_cap) {
+                        esc[w++] = (char)*p;
+                    }
+                    continue;
+            }
+            size_t l = strlen(e);
+            if (w + l < esc_cap) { memcpy(esc + w, e, l); w += l; }
+        }
+        esc[w] = 0;
+    }
+
+    // 请求体：OpenAI 兼容对话补全（流式）。思考强度：思考模式开（默认）= max（远端模型
+    // 预设规格），思考模式关（输入态 Ctrl+2 可切换，页眉 Ψ 标记）= none（实测该 API
+    // 支持 none/minimal/low/medium/high/xhigh/max，none 时不产生 reasoning_content）
+    size_t body_cap = strlen(esc) + 320;
+    char *body = (char *)platform_calloc(body_cap, 1);
+    if (!body) { free(esc); free(user_utf8); return -1; }
+    snprintf(body, body_cap,
+             "{\"model\": \"%s\", \"messages\": [{\"role\": \"user\", \"content\": \"%s\"}],"
+             " \"stream\": true, \"reasoning_effort\": \"%s\"}",
+             LLM_RM_MODEL_ID, esc, (gs->is_thinking_enabled != 0) ? LLM_RM_REASONING_EFFORT_MAX : LLM_RM_REASONING_EFFORT_NONE);
+
+    // 解析 API 基址并拼接完整 URL（net_http_post_stream 内部深拷贝，此后即可释放本缓冲）
+    const char *api_base = llm_rm_api_base();
+    if (api_base == NULL) {
+        fprintf(stderr, "[llm_rm] API base not configured (set NANO_RM_API_BASE or -DLLM_RM_API_BASE_BUILD)\n");
+        free(body); free(esc); free(user_utf8);
+        return -1;
+    }
+    size_t url_cap = strlen(api_base) + 32;
+    char *url = (char *)platform_calloc(url_cap, 1);
+    if (!url) { free(body); free(esc); free(user_utf8); return -1; }
+    snprintf(url, url_cap, "%s/chat/completions", api_base);
+
+    Net_Http_Request_Config cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.url = url;
+    cfg.body = (const uint8_t *)body;
+    cfg.body_len = strlen(body);
+    cfg.headers[0].key = "Content-Type";        cfg.headers[0].value = "application/json";
+    cfg.headers[1].key = "Accept";              cfg.headers[1].value = "text/event-stream";
+    cfg.header_num = 2;
+
+    printf("[llm_rm] POST %s (model=%s, body=%zu bytes)\n", cfg.url, LLM_RM_MODEL_ID, cfg.body_len);
+    int32_t rc = net_http_post_stream(&cfg, &s_rm_req);
+    free(url); free(body); free(esc); free(user_utf8);
+    if (rc != 0 || s_rm_req == NULL) {
+        s_rm_req = NULL;
+        return -1;
+    }
+
+    // 建立 UI 层会话视图（与 infer.c/nano_min 引擎共用 Nano_Session 结构，UI 回调直接读取）；
+    // output_text 为借用指针（s_rm_out_text），由 llm_rm_session_free 销毁视图时只释放视图本身
+    Nano_Session *session = (Nano_Session *)platform_calloc(1, sizeof(Nano_Session));
+    if (!session) {
+        net_http_close(s_rm_req); s_rm_req = NULL;
+        return -1;
+    }
+    session->num_prompt_tokens = 1; // 远端无 prefill；预取回调永不触发（避免进度条除零）
+    session->max_seq_len = gs->llm_max_seq_len;
+    session->is_prefilling = 0;
+    session->output_text = s_rm_out_text;
+    gs->llm_session = session;
+    return 0;
+}
+
+// 协作式单步推理（每轮主循环拉取一次网络流；返回 LLM 状态码，语义同 infer.h，不做 UI）
+static int32_t llm_rm_session_step(Key_Event *ke, Global_State *gs) {
+    (void)ke;
+    Nano_Session *session = gs->llm_session;
+    if (s_rm_req == NULL || session == NULL) return LLM_STOPPED_WITH_ERROR;
+
+    // 非阻塞拉取全部已到达数据并逐行解析 SSE
+    uint8_t rbuf[4096];
+    int32_t stream_err = 0;
+    for (;;) {
+        int32_t n = net_http_stream_read(s_rm_req, rbuf, sizeof(rbuf));
+        if (n < 0) { stream_err = 1; break; }
+        if (n == 0) break;
+        for (int32_t i = 0; i < n; i++) {
+            if (rbuf[i] == '\n') {
+                if (s_rm_line_len > 0 && s_rm_line_invalid == 0) {
+                    if (s_rm_line_buf[s_rm_line_len - 1] == '\r') s_rm_line_len--;
+                    s_rm_line_buf[s_rm_line_len] = 0;
+                    rm_process_sse_line(s_rm_line_buf, s_rm_line_len);
+                }
+                s_rm_line_len = 0;
+                s_rm_line_invalid = 0;
+            }
+            else if (s_rm_line_len < LLM_RM_LINE_BUF_MAX - 1) {
+                s_rm_line_buf[s_rm_line_len++] = (char)rbuf[i];
+            }
+            else {
+                s_rm_line_invalid = 1; // 行超长：丢弃（正常 SSE 行远小于此）
+            }
+        }
+    }
+
+    s_rm_http_status = net_http_status_code(s_rm_req);
+    Net_Stream_State st = net_http_stream_state(s_rm_req);
+    session->pos = s_rm_chunks;
+    session->output_text = s_rm_out_text;
+
+    // 输出缓冲即将写满：主动结束（远端无 max_seq_len 硬约束，以 UI 缓冲容量为限）
+    if (s_rm_out_len >= (uint32_t)UI_STR_BUF_MAX_LENGTH - 512) {
+        printf("[llm_rm] output buffer full, stop\n");
+        return LLM_STOPPED_NORMALLY;
+    }
+
+    // 见到 data: [DONE]：无论后续连接状态如何，服务端已正常完成
+    if (s_rm_done) {
+        return LLM_STOPPED_NORMALLY;
+    }
+    if (stream_err && st != NET_STREAM_DONE) {
+        // 流错误：把诊断信息附到输出尾部（结果页可见），按异常结束处理
+        if (s_rm_http_status > 0) {
+            char note[64];
+            snprintf(note, sizeof(note), "\n[远端模型：HTTP %ld]", (long)s_rm_http_status);
+            rm_append_output(note, (uint32_t)strlen(note));
+        }
+        else {
+            const char *note = "\n[远端模型：连接失败]";
+            rm_append_output(note, (uint32_t)strlen(note));
+        }
+        return LLM_STOPPED_WITH_ERROR;
+    }
+    if (st == NET_STREAM_DONE) {
+        return LLM_STOPPED_NORMALLY;
+    }
+
+    return LLM_RUNNING_IN_DECODING;
+}
+
+// 销毁会话视图（离开 STATE_LLM_ON_INFER 时调用）：关闭请求、释放视图本身；
+// 引擎登记与静态会话缓冲保留复用，由 llm_rm_release 统一释放
+static void llm_rm_session_free(Global_State *gs) {
+    if (s_rm_req) { net_http_close(s_rm_req); s_rm_req = NULL; }
+    if (gs->llm_session) {
+        free(gs->llm_session);
+        gs->llm_session = NULL;
+    }
+    printf("[llm_rm] session closed (chunks=%u, http_status=%d)\n", s_rm_chunks, s_rm_http_status);
+}
+
+// ===============================================================================
 // 推理过程 UI 回调（两套引擎共用：经 gs->llm_session 会话视图读取进度与输出）
 // ===============================================================================
 
@@ -528,8 +1045,7 @@ static int32_t wasm_model_file_exists(const char *path) {
 
 void init_model_menu(Key_Event *key_event, Global_State *global_state) {
 #if defined(NANO_WASM_GUI)
-    static const wchar_t *wasm_items[WASM_MODEL_MENU_MAX];
-    static const wchar_t *wasm_empty_items[] = { L"（无可用模型：资源未挂载）" };
+    static const wchar_t *wasm_items[WASM_MODEL_MENU_MAX + 1]; // +1：末尾追加“远端模型”条目
     s_wasm_mm_num = 0;
     // preset 标准引擎条目：白名单 + 文件存在性双重过滤
     for (size_t i = 0; i < sizeof(preset_model_configs) / sizeof(preset_model_configs[0])
@@ -551,11 +1067,15 @@ void init_model_menu(Key_Event *key_event, Global_State *global_state) {
     }
     global_state->w_menu_main->title = L"选择语言模型";
     if (s_wasm_mm_num > 0) {
+        // 本地模型之后追加“远端模型”条目（无本地文件依赖，始终可用）
+        wasm_items[s_wasm_mm_num] = LLM_RM_MENU_NAME;
         global_state->w_menu_main->items = wasm_items;
-        global_state->w_menu_main->item_num = s_wasm_mm_num;
+        global_state->w_menu_main->item_num = s_wasm_mm_num + 1;
     }
     else {
-        global_state->w_menu_main->items = wasm_empty_items;
+        // 无可用本地模型：仅提供远端模型
+        static const wchar_t *wasm_remote_only[] = { LLM_RM_MENU_NAME };
+        global_state->w_menu_main->items = wasm_remote_only;
         global_state->w_menu_main->item_num = 1;
     }
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
@@ -565,17 +1085,18 @@ void init_model_menu(Key_Event *key_event, Global_State *global_state) {
     int32_t nmchat_count = llm_nm_model_num();
     if (nmchat_count > LLM_NM_MODEL_NUM_MAX) nmchat_count = LLM_NM_MODEL_NUM_MAX;
     // 条目字符串借用 preset_model_configs 与小鹦鹉笼预设表的静态存储，控件不复制；
-    // 合并菜单 = 大模型（infer.c 引擎） + [轻]小鹦鹉笼模型（nano_min 极小内存引擎）
-    static const wchar_t *model_menu_items[sizeof(preset_model_configs) / sizeof(preset_model_configs[0]) + LLM_NM_MODEL_NUM_MAX];
+    // 合并菜单 = 大模型（infer.c 引擎） + [轻]小鹦鹉笼模型（nano_min 极小内存引擎） + 远端模型
+    static const wchar_t *model_menu_items[sizeof(preset_model_configs) / sizeof(preset_model_configs[0]) + LLM_NM_MODEL_NUM_MAX + 1];
     for (size_t i = 0; i < model_count; i++) {
         model_menu_items[i] = preset_model_configs[i].model_name;
     }
     for (int32_t i = 0; i < nmchat_count; i++) {
         model_menu_items[model_count + i] = llm_nm_model_name(i);
     }
+    model_menu_items[model_count + nmchat_count] = LLM_RM_MENU_NAME;
     global_state->w_menu_main->title = L"选择语言模型";
     global_state->w_menu_main->items = model_menu_items;
-    global_state->w_menu_main->item_num = (int32_t)model_count + nmchat_count;
+    global_state->w_menu_main->item_num = (int32_t)model_count + nmchat_count + 1;
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
 }
 
@@ -764,12 +1285,28 @@ void llm_observation(Nano_Observation obs, void *env) {
     gfx_refresh(gfx);
 }
 
+// 模型菜单“远端模型”条目动作：登记远端引擎并进入输入状态（无本地加载过程，
+// 交互与端侧模型一致；推理时经 hal_net 调云端 OpenAI 兼容流式 API）
+static int32_t ui_llm_remote_model_select(Key_Event *ke, Global_State *gs) {
+    ui_llm_unload_model(gs); // 卸载旧模型（含远端会话遗留资源）
+    gs->llm_model_name = (wchar_t *)LLM_RM_MODEL_NAME;
+    gs->llm_is_thinking_model = 1;
+    gs->llm_max_seq_len = LLM_RM_MAX_SEQ_LEN;
+    llm_rm_activate();
+    ui_widget_input_init(ke, gs, gs->w_input_main, (wchar_t *)LLM_RM_MODEL_NAME);
+    return STATE_LLM_INPUT;
+}
+
 int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
 #if defined(NANO_WASM_GUI)
-    // WASM：菜单序号经映射表找到 preset 表索引（空表（提示条目）/越界时无动作）
+    // WASM：菜单序号经映射表找到 preset 表索引；末尾条目为“远端模型”（空表时唯一条目）
     int32_t mi = ms->current_item_index;
+    if (mi == s_wasm_mm_num) {
+        return ui_llm_remote_model_select(ke, gs);
+    }
     if (mi < 0 || mi >= s_wasm_mm_num) return STATE_MODEL_MENU;
     {
+        ui_llm_unload_model(gs); // 卸载旧模型（远端/本地互斥）
         Model_Config mc = preset_model_configs[s_wasm_mm_index[mi]];
         gs->llm_model_name = mc.model_name;
         gs->llm_is_thinking_model = mc.is_thinking_model;
@@ -785,10 +1322,17 @@ int32_t model_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_Stat
 #endif
     int32_t item_index = ms->current_item_index;
 
-    // 选中任一模型前，卸载旧模型（释放 infer.c 上下文 / nano_min 引擎），避免并存
+    // 选中任一模型前，卸载旧模型（释放 infer.c 上下文 / nano_min 引擎 / 远端引擎），避免并存
     ui_llm_unload_model(gs);
 
     int32_t model_count = (int32_t)(sizeof(preset_model_configs) / sizeof(preset_model_configs[0]));
+    int32_t nm_count = llm_nm_model_num();
+    if (nm_count > LLM_NM_MODEL_NUM_MAX) nm_count = LLM_NM_MODEL_NUM_MAX;
+
+    if (item_index == model_count + nm_count) {
+        // 远端模型（云端 OpenAI 兼容流式 API）：无本地加载过程，直接进入输入状态
+        return ui_llm_remote_model_select(ke, gs);
+    }
 
     if (item_index >= model_count) {
         // [轻] 小鹦鹉笼模型（nano_min 极小内存引擎）：由引擎适配层加载，
@@ -884,6 +1428,7 @@ void ui_llm_unload_model(Global_State *global_state) {
         global_state->llm_ctx = NULL; // 释放后置NULL，避免悬垂指针被二次释放
     }
     llm_nm_release();
+    llm_rm_release();
 }
 
 // LLM 相关全局字段初始化（由 ui_init 调用）
@@ -910,6 +1455,8 @@ void ui_llm_init_config(Global_State *global_state) {
 // LLM 资源释放（由 main_deinit 调用）
 void ui_llm_deinit(Global_State *global_state) {
     llm_context_free(global_state->llm_ctx);
+    llm_nm_release();
+    llm_rm_release();
     free(global_state->llm_output_of_last_session);
 }
 
@@ -935,10 +1482,13 @@ int32_t ui_llm_input_event_handler(Key_Event *key_event, Global_State *global_st
     return ui_widget_input_event_handler(key_event, global_state, global_state->w_input_main, STATE_MODEL_MENU, STATE_LLM_INPUT, STATE_LLM_ON_INFER);
 }
 
-// 按当前引擎销毁对话 session（infer.c 会话 / nano_min 会话视图）
+// 按当前引擎销毁对话 session（infer.c 会话 / nano_min 会话视图 / 远端模型会话）
 static void ui_llm_session_free(Global_State *global_state) {
     if (llm_nm_is_active()) {
         llm_nm_session_free(global_state);
+    }
+    else if (llm_rm_is_active()) {
+        llm_rm_session_free(global_state);
     }
     else {
         llm_session_free(global_state->llm_session);
@@ -952,12 +1502,19 @@ static void ui_llm_session_free(Global_State *global_state) {
 //   UI 回调（on_llm_prefilling/on_llm_decoding/on_llm_finished）经 llm_session 会话视图零分支复用
 int32_t ui_llm_on_infer_event_handler(Key_Event *key_event, Global_State *global_state) {
     int32_t use_nm_engine = llm_nm_is_active(); // 当前由小鹦鹉笼（nano_min 引擎）承载？
+    int32_t use_rm_engine = llm_rm_is_active(); // 当前由远端模型（云端流式 API）承载？
 
     // 首次获得焦点：初始化对话 session
     if (global_state->PREV_STATE != global_state->STATE) {
         if (use_nm_engine) {
             // 小鹦鹉笼：prompt 模板组装与编码由引擎适配层完成，会话视图挂到 llm_session
             if (llm_nm_session_begin(key_event, global_state) != 0) {
+                return STATE_LLM_INPUT;
+            }
+        }
+        else if (use_rm_engine) {
+            // 远端模型：请求体组装与流式请求发起由引擎适配层完成，会话视图挂到 llm_session
+            if (llm_rm_session_begin(key_event, global_state) != 0) {
                 return STATE_LLM_INPUT;
             }
         }
@@ -1012,6 +1569,8 @@ int32_t ui_llm_on_infer_event_handler(Key_Event *key_event, Global_State *global
 
     global_state->llm_status = (use_nm_engine)
         ? llm_nm_session_step(key_event, global_state)
+        : (use_rm_engine)
+        ? llm_rm_session_step(key_event, global_state)
         : llm_session_step(global_state->llm_ctx, global_state->llm_session);
 
     if (global_state->llm_status == LLM_RUNNING_IN_PREFILLING) {
