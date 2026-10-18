@@ -71,6 +71,8 @@
 
 #include "ui_ripple.h"
 
+#include "ui_scheme_app.h"
+
 #include "ui_water.h"
 
 #include "ui_tetris.h"
@@ -574,6 +576,7 @@ void ui_draw_image(Key_Event *key_event, Global_State *global_state, const char 
 void init_game_menu(Key_Event *key_event, Global_State *global_state) {
     // 条目字符串借用字面量的静态存储，控件不复制
     static const wchar_t *game_menu_items[] = {
+        L"灵机应用程序",
         L"黄金矿工",
         L"Bad Apple!",
         L"康威生命游戏",
@@ -585,28 +588,32 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
         L"水池",
         L"体积云",
         L"日历",
+        // L"曼德博集" / L"生命游戏Scheme"：已并入“灵机应用程序”（业务资源目录 app/
+        // 下的 Scheme App 动态列表，见 ui_scheme_app.c）
         // L"小鹦鹉笼",  // 原入口：小鹦鹉笼已并入“鹦鹉笼”的统一模型菜单（[轻] 前缀条目），注释保留备查
     };
     global_state->w_menu_main->title = L"小游戏";
     global_state->w_menu_main->items = game_menu_items;
-    global_state->w_menu_main->item_num = 11;
+    global_state->w_menu_main->item_num = 12;
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
 }
 
 int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
     switch (ms->current_item_index) {
-        case 0: return STATE_GOLDMINER;
-        case 1: return STATE_BADAPPLE;
-        case 2: return STATE_GAMEOFLIFE;
-        case 3: return STATE_GENETIC_TSP;
-        case 4: return STATE_GENETIC;
-        case 5: return STATE_TETRIS;
-        case 6: return STATE_PARTICLELIFE;
-        case 7: return STATE_RIPPLE;
-        case 8: return STATE_WATER;
-        case 9: return STATE_CLOUD;
-        case 10: return STATE_CALENDAR;
-        // case 11: 原“小鹦鹉笼”入口已移除（并入鹦鹉笼模型菜单，条目带 [轻] 前缀）
+        case 0: return STATE_SCHEME_APP_LIST;  // 灵机应用程序（Scheme App 动态列表）
+        case 1: return STATE_GOLDMINER;
+        case 2: return STATE_BADAPPLE;
+        case 3: return STATE_GAMEOFLIFE;
+        case 4: return STATE_GENETIC_TSP;
+        case 5: return STATE_GENETIC;
+        case 6: return STATE_TETRIS;
+        case 7: return STATE_PARTICLELIFE;
+        case 8: return STATE_RIPPLE;
+        case 9: return STATE_WATER;
+        case 10: return STATE_CLOUD;
+        case 11: return STATE_CALENDAR;
+        // 原“曼德博集”/“生命游戏Scheme”入口已并入“灵机应用程序”（case 0）
+        // case 12: 原“小鹦鹉笼”入口已移除（并入鹦鹉笼模型菜单，条目带 [轻] 前缀）
         default: return STATE_MAIN_MENU;
     }
 }
@@ -3817,6 +3824,54 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 触摸激发 + 逻辑更新 + 渲染一帧
         ui_ripple_render_frame(key_event, global_state);
+
+        break;
+    }
+
+
+    /////////////////////////////////////////////
+    // 灵机应用程序：列表（动态扫描业务资源目录 app/ 下的 .scm）
+    /////////////////////////////////////////////
+
+    case STATE_SCHEME_APP_LIST:
+
+        // 首次获得焦点：重新扫描目录并构建菜单（支持 App 热插拔）
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_scheme_app_list_init(key_event, global_state);
+            ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
+            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 菜单事件（上下键/触屏/A返回游戏菜单；enter 经 item_action 转入运行态）
+        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main,
+                                                           ui_scheme_app_list_item_action,
+                                                           STATE_GAME_MENU, STATE_SCHEME_APP_LIST);
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 灵机应用程序：运行（解释执行选中的 .scm）
+    /////////////////////////////////////////////
+
+    case STATE_SCHEME_APP_RUN: {
+
+        // 首次获得焦点：创建解释器运行时并加载选中的 Scheme 进程
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_scheme_app_init(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        // 按键处理（A返回列表）；返回则销毁解释器并跳过一帧渲染
+        ui_scheme_app_event_handler(key_event, global_state);
+        if (global_state->STATE != STATE_SCHEME_APP_RUN) {
+            ui_scheme_app_on_exit();
+            break;
+        }
+
+        // 泵一个时间片（解释器内部抢占分帧）；推屏时机由 App 源码控制
+        ui_scheme_app_render_frame(key_event, global_state);
 
         break;
     }

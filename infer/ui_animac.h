@@ -13,6 +13,7 @@
 #include "am_native_Math.h"
 #include "am_native_String.h"
 #include "am_native_Table.h"
+#include "am_native_Gfx.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -382,6 +383,9 @@ static int32_t ui_animac_editor_start() {
     am_runtime_register_native_lib(s_editor.rt, &am_native_Math_lib);
     am_runtime_register_native_lib(s_editor.rt, &am_native_String_lib);
     am_runtime_register_native_lib(s_editor.rt, &am_native_Table_lib);
+    // Gfx 本地库：绑定全局帧缓冲后注册，控制台内亦可绘图（见 am_native_Gfx.h）
+    am_native_gfx_bind(gfx);
+    am_runtime_register_native_lib(s_editor.rt, &am_native_Gfx_lib);
 
     s_editor.alive = 1;
     return 0;

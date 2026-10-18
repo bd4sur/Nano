@@ -50,10 +50,14 @@ OUT_DIR=webgui
 LINGLONG=/home/bd4sur/linglong
 mkdir -p "$OUT_DIR"
 ln -sfn "$LINGLONG" "$OUT_DIR/files"
+
+# 同步灵机 App 源码（infer/app/*.scm）到业务资源目录
+mkdir -p "$LINGLONG/app"
+cp -f app/*.scm "$LINGLONG/app/" 2>/dev/null || true
 python3 - "$LINGLONG" "$OUT_DIR/manifest.json" <<'EOF'
 import json, os, sys
 root, out = sys.argv[1], sys.argv[2]
-P1_DIRS = {"icon"}
+P1_DIRS = {"icon", "app"}
 P1_FILES = {"mob.scm", "jstest.js"}
 SKIP_DIRS = {"music"}
 # LLM 模型：标准引擎（infer.c）的 Nano-168M/56M-Q80 作为 p3（最后台优先级，鹦鹉笼可用）；
@@ -110,6 +114,7 @@ ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
     gfx_font_12.c \
     gfx_font_16.c \
     graphics.c \
+    am_native_Gfx.c \
     infer.c \
     nano_fft.c \
     nano_min.c \
@@ -142,6 +147,7 @@ ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
     ui_spectrogram.c \
     ui_tetris.c \
     ui_water.c \
+    ui_scheme_app.c \
     -o "$OUT_DIR/nano_gui.js" \
     -s WASM=1 \
     -s ALLOW_MEMORY_GROWTH=1 \
