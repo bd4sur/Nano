@@ -35,3 +35,6 @@ infer/webgui/nano_gui.js
 infer/webgui/nano_gui.wasm
 infer/webgui/manifest.json
 infer/webgui/files
+
+# 安卓子项目（暂不纳入 Git 管理，约 342MB）
+android/
