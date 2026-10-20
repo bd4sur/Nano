@@ -1,12 +1,14 @@
 ////////////////////////////////////////////////////////////////////////////
 //  Native Library : Gfx —— Nano 图形层的灵机（Animac）本地库封装
 //
-//  栈纪律（与本项目 vendored 解释器的语句型内建 display/newline 一致）：
-//    - 语句型函数（clear/fill_white/set_pixel/draw_*/fill_*/refresh）：
-//      弹出全部参数后【不向操作数栈压值】，仅推进 PC——只能用于语句位置；
-//    - 值型函数（width/height）：向操作数栈压入恰好 1 个值。
-//  注意：上游新版编译器采用“单值栈纪律”（语句压 #undefined 后由编译器弹
-//  出），届时语句型函数需改为压入 #undefined（同步自 upstream 时注意）。
+//  栈纪律（遵循上游“编译期单值栈纪律”契约，见解释器文档 doc/todo/stack_bal.md §11）：
+//    - 值型函数（width/height）：弹出全部参数后向操作数栈压入恰好 1 个值（N1）；
+//    - 语句型函数（clear/fill_white/set_pixel/draw_*/fill_*/refresh）：弹全部
+//      参数后压入 1 个 #undefined（N2）——编译器会在语句位置把它弹出，因此这类
+//      函数既可写在语句位置，也可以合法地出现在任何要求“恰好 1 个值”的表达式
+//      位置（其值为 #undefined）。
+//  任何 native 函数都不得压 0 个或 2 个以上值，否则会破坏编译器的栈平衡假设。
+//  同步上游时必须复核本文件与 N1–N10 契约的一致性。
 ////////////////////////////////////////////////////////////////////////////
 
 #include <math.h>
@@ -80,8 +82,10 @@ static bool native_pop_color(am_process_t *proc, uint8_t *out) {
     return true;
 }
 
-// 语句型收尾：不向操作数栈压值，仅推进 PC（与 display/newline 同语义）。
+// 语句型收尾：压 1 个 #undefined 再推进 PC（契约 N2；与 Table.set 等语句型
+// native 同范式）。编译器在语句位置会把这个值弹出，因此栈平衡始终成立。
 static int32_t native_statement_done(am_process_t *proc) {
+    if (am_process_push_operand(proc, AM_VALUE_UNDEFINED) != 0) return -1;
     am_process_step(proc);
     return 0;
 }
