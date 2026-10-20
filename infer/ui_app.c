@@ -1481,9 +1481,15 @@ static uint64_t linglong_timemachine_start_timestamp = 0;
 
 static int32_t linglong_state = 0; // 玲珑仪UI状态
 
+// 启动画面停留截止时刻（非阻塞替代阻塞式 sleep，见 STATE_LINGLONG）
+static uint64_t linglong_splash_until = 0;
+
 #define LL_STATE_SKY (0)
 #define LL_STATE_SETTING (1)
 #define LL_STATE_SETTING_CALLBACK (2)
+
+// 玲珑仪启动画面停留时长（毫秒）：非阻塞跨帧停留，与真机阻塞 sleep 的观感一致
+#define LINGLONG_SPLASH_MS (1000)
 
 
 void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state) {
@@ -3694,11 +3700,29 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
     case STATE_LINGLONG:
 
-        // 首次获得焦点：初始化
+        // 首次获得焦点：初始化 + 启动画面
+        // 注意（2026-10-21 排障）：原实现在此处用 sleep_in_ms(1000) 阻塞停留，
+        // 在 WASM-GUI 上完全失效：① 宿主 sleep 是空实现（GUI 驱动模型下永不主动睡眠）；
+        // ② 启动画面的 gfx_refresh 只更新离屏 RGBA 缓冲，而紧接着的首次渲染（WASM 下约 1 s）
+        //    在同一次 main-loop 回调里同步执行并再次刷新，页面要等回调返回才能上屏，
+        //    于是“启动画面 → 首帧”被压成了一帧，启动画面永远看不到。
+        // 改为非阻塞跨帧停留（与本项目其他动画的状态机惯例一致）：本帧只画启动画面并
+        // 立即返回（让宿主把启动画面上屏），停留期内的后续帧不渲染，到点后才开始首帧渲染。
         if (global_state->PREV_STATE != global_state->STATE) {
             ui_app_linglong_init(key_event, global_state);
             ui_app_linglong_splash(key_event, global_state);
-            sleep_in_ms(1000);
+            linglong_splash_until = get_timestamp_in_ms() + LINGLONG_SPLASH_MS;
+            global_state->PREV_STATE = global_state->STATE;
+            break;
+        }
+        if (linglong_splash_until != 0) {
+            if (get_timestamp_in_ms() < linglong_splash_until) {
+                // 停留期内仍处理按键（可直接按 A 退出 / C 进设置，与真机一致），
+                // 但不渲染首帧，保持启动画面
+                ui_app_linglong_event_handler(key_event, global_state);
+                break;
+            }
+            linglong_splash_until = 0;
         }
         global_state->PREV_STATE = global_state->STATE;
 
