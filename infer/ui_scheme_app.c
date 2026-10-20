@@ -18,6 +18,7 @@
 #include "am_native_String.h"
 #include "am_native_Table.h"
 #include "am_native_Gfx.h"
+#include "am_native_Time.h"
 
 // ===============================================================================
 // 运行时参数
@@ -25,7 +26,14 @@
 
 // 解释器内存池：期望大小、最小可接受大小、自适应申请时留出的安全余量
 //（策略与 ui_animac 一致；WASM/桌面平台堆充裕，实际按期望值分配）
-#define MB_POOL_SIZE   (2ULL * 1024 * 1024)
+// 由 2MB 逐级上调为 12MB：
+//   · 4MB：sky3.scm（scatter_model_3 逐行移植）
+//   · 8MB：ephemeris.scm（月球 10×60 项级数 + VSOP87 + 星历函数集）
+//   · 12MB：nongli.scm + app/lib/ephem.scm（共享星历模块 + 农历年表推算）
+// 编译期的 VM 工作区占用远大于运行期堆占用（后者极小）。
+// 内存受限宿主：pool_size 按「最大连续块 - 余量」自适应下调（见下），
+// 小 App 仍可正常运行；装不下的大 App 会显示「内存不足」错误画面。
+#define MB_POOL_SIZE   (12ULL * 1024 * 1024)
 #define MB_POOL_MIN    (512ULL * 1024)
 #define MB_POOL_MARGIN (64ULL * 1024)
 
@@ -73,6 +81,7 @@ typedef struct {
     am_allocator_t *heap_alloc;
     am_runtime_t *rt;
     am_pid_t pid;
+    size_t pool_size_bytes;           // 实际分配的解释器池大小（错误提示用）
     int32_t alive;                    // 运行时是否就绪
     int32_t load_failed;              // 构建/加载失败（显示错误画面，等待退出）
     wchar_t err_load[MB_ERR_BUF_LEN]; // 加载失败原因（文件缺失/过大/内存不足等）
@@ -327,7 +336,11 @@ static void app_load_source(void) {
     am_module_t *mod = am_compile(linked, 0, 0);
     if (!mod) {
         am_ast_destroy(linked);
-        wcscpy(s_app.err_load, L"Scheme 编译失败");
+        // 32 位宿主的 VM 工作区只有池的一半左右；大 App（含共享星历模块）在
+        // 内存受限宿主上会因 VM 区不足而编译失败，这里给出可诊断的提示。
+        swprintf(s_app.err_load, MB_ERR_BUF_LEN,
+                 L"Scheme 编译失败（解释器池 %u KB，可能内存不足）",
+                 (uint32_t)(s_app.pool_size_bytes / 1024));
         s_app.load_failed = 1;
         return;
     }
@@ -383,6 +396,7 @@ int32_t ui_scheme_app_init(Key_Event *key_event, Global_State *global_state) {
         pool_size = largest - MB_POOL_MARGIN;
     }
     printf("[scheme-app] 解释器内存池：%u 字节（最大连续块 %u）\n", (uint32_t)pool_size, (uint32_t)largest);
+    s_app.pool_size_bytes = pool_size;
 
     s_app.pool = am_allocator_pool_create(pool_size, &am_host_default_vtable);
     if (!s_app.pool) {
@@ -405,12 +419,14 @@ int32_t ui_scheme_app_init(Key_Event *key_event, Global_State *global_state) {
     am_runtime_set_default_timeslice(s_app.rt, MB_TIMESLICE_TICKS);
     am_set_runtime_host_context(s_app.rt, &s_app);
 
-    // 注册本地库：System/Math/String/Table 为灵机标配，Gfx 为本项目新增
+    // 注册本地库：System/Math/String/Table 为灵机标配；Gfx 与 Time 为本项目新增
+    //（Time 用于 32 位宿主上取得不被截断/不失精度的绝对时间，见 am_native_Time.h）
     am_runtime_register_native_lib(s_app.rt, &am_native_System_lib);
     am_runtime_register_native_lib(s_app.rt, &am_native_Math_lib);
     am_runtime_register_native_lib(s_app.rt, &am_native_String_lib);
     am_runtime_register_native_lib(s_app.rt, &am_native_Table_lib);
     am_runtime_register_native_lib(s_app.rt, &am_native_Gfx_lib);
+    am_runtime_register_native_lib(s_app.rt, &am_native_Time_lib);
 
     // 清屏后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）
     gfx_soft_clear(global_state->gfx);

@@ -53,7 +53,9 @@ ln -sfn "$LINGLONG" "$OUT_DIR/files"
 
 # 同步灵机 App 源码（infer/app/*.scm）到业务资源目录
 mkdir -p "$LINGLONG/app"
+mkdir -p "$LINGLONG/app/lib"
 cp -f app/*.scm "$LINGLONG/app/" 2>/dev/null || true
+cp -f app/lib/*.scm "$LINGLONG/app/lib/" 2>/dev/null || true
 python3 - "$LINGLONG" "$OUT_DIR/manifest.json" <<'EOF'
 import json, os, sys
 root, out = sys.argv[1], sys.argv[2]
@@ -115,6 +117,7 @@ ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
     gfx_font_16.c \
     graphics.c \
     am_native_Gfx.c \
+    am_native_Time.c \
     infer.c \
     nano_fft.c \
     nano_min.c \
