@@ -516,10 +516,44 @@
               (String.concat ":" (pad2 ss)))))))))))
   }))
 
-;; 右下角时间：先清掉自己的小块再重画（该块落在天空圆之外的黑角）
+;; ---- 右下角时间：透明底 ----------------------------------------------------
+;; 时钟块横跨天空圆界（左半落在圆内的天空上、右半落在圆外的黑底上），因此每次
+;; 重画前先把这块区域的“真实背景”恢复出来，而不是整块填黑：
+;;   · 与时钟块相交的采样块重新着色：块中心在圆内 → 用当前帧参数重新 shade
+;;     （骑跨圆界的块由 shade 自带的判定转 edge_block 逐像素处理）；块中心在
+;;     圆外 → 置黑，与逐采样点渲染时“圆外一律为黑”一致；
+;;   · 随后把时间文字直接画在天空上（alpha 字模按覆盖率与背景混合，边缘自然）。
+;; 采样块左上角为 (sx·SS, sy·SS)、覆盖 SS×SS、块中心偏移为 (+ px HALF_S − CX)，
+;; 故列/行的相交范围由 hud_clock_* 折算。
+
+(define clock_bg_sx0 (Math.floor (/ (- hud_clock_x 1) SS)))
+(define clock_bg_sx1 (Math.floor (/ (- (+ hud_clock_x hud_clock_w) 1) SS)))
+(define clock_bg_sy0 (Math.floor (/ (- hud_clock_y 1) SS)))
+(define clock_bg_sy1 (Math.floor (/ (- (+ hud_clock_y hud_clock_h) 1) SS)))
+
+(define repaint_clock_bg
+  (lambda () {
+    (define sy clock_bg_sy0)
+    (while (<= sy clock_bg_sy1) {
+      (define py (* sy SS))
+      (define dy (- (+ py HALF_S) CY))
+      (define sx clock_bg_sx0)
+      (while (<= sx clock_bg_sx1) {
+        (define px (* sx SS))
+        (define dx (- (+ px HALF_S) CX))
+        (if (<= (+ (* dx dx) (* dy dy)) R_SCR2)
+            { (shade px py dx dy) }
+            { (Gfx.fill_rect px py SS SS 0 0 0) })
+        (set! sx (+ sx 1))
+      })
+      (set! sy (+ sy 1))
+    })
+  }))
+
+;; 右下角时间：先恢复该块的真实背景（透明底），再画时间
 (define draw_clock
   (lambda () {
-    (Gfx.fill_rect hud_clock_x hud_clock_y hud_clock_w hud_clock_h 0 0 0)
+    (repaint_clock_bg)
     (Gfx.draw_text (now_string) hud_clock_x (+ hud_clock_y 2) 190 202 214)
     (Gfx.refresh)
   }))
