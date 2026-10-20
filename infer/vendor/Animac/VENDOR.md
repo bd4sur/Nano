@@ -7,7 +7,7 @@
 宿主外围   = am_host.c / am_native_*.c / am_repl.c  （按需单独编译链接）
 ```
 
-原始头文件（`include/am_*.h` 23 个）与原始实现（`src/*.c`）**不随附**——它们已被合并进
+原始头文件（`include/am_*.h` 24 个）与原始实现（`src/*.c`）**不随附**——它们已被合并进
 `animac_core.*`；这也是上游对该形态的设计意图（见上游 `amalgamate.sh` 文件头注释）。
 
 ## 上游与版本
@@ -15,7 +15,7 @@
 | 项 | 值 |
 |---|---|
 | 上游仓库 | `/home/bd4sur/Animac`（BD4SUR） |
-| 同步基线 | commit `0f5e9d4`（2026-10-11） |
+| 同步基线 | commit `5c244e9`（2026-10-20 23:10） |
 | 合并产物生成 | `git archive 0f5e9d4` 导出干净源码树 → 在该副本内执行上游 `amalgamate.sh`（**不在上游仓库内生成任何文件**） |
 | 校验 | `animac_core.c/h` 与上游仓库内自带产物、以及本次重新生成物三方内容一致（仅"生成时间"行不同）；其余文件与上游 `src/` `include/` 对应文件 `cmp` 全等 |
 
@@ -38,8 +38,8 @@
 
 | 文件 | 原因 |
 |---|---|
-| `include/am_*.h`（23 个核心头） | 已合并进 `animac_core.h`，单文件形态不再随附 |
-| `src/am_*.c`（23 个核心实现） | 已合并进 `animac_core.c` |
+| `include/am_*.h`（24 个核心头，含 `am_frame.h`） | 已合并进 `animac_core.h`，单文件形态不再随附 |
+| `src/am_*.c`（24 个核心实现，含 `am_frame.c`） | 已合并进 `animac_core.c` |
 | `src/am_highlight.c` + `include/am_highlight.h` | 仅上游桌面 `main.c`（终端语法高亮）使用，本项目不使用 |
 | `src/am_host_esp32.cpp` | ESP32/Arduino 宿主端口；本仓库现有构建脚本只 glob `*.c`，不参与编译 |
 | `Makefile`、`amalgamate.sh`、`main.c`、`test/`、`doc/`、`typescript/` | 上游开发/测试/文档设施，非集成产物 |
@@ -59,6 +59,15 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
 
 # 3) 同步后必须复核本项目自实现的本地库契约（见下）
 ```
+
+## 变更历史
+
+| 同步日期 | 上游基线 | 要点 |
+|---|---|---|
+| 2026-10-21 | `5c244e9` | 闭包变量访问改为「帧描述符 + 静态槽位寻址」（P0–P2）：新增 `am_frame.{h,c}`、5 条槽位指令（`load/store/set/call/tailcall_slot` 63–67）、模块磁盘格式新增帧描述符表；`am_repl.c` 无改动 |
+| 2026-10-20 | `0f5e9d4` | 首次按 amalgam 形态同步（单值栈纪律、`,@`、异步帧 #36、Math 扩展） |
+
+> 宿主侧 ABI 只增不改：本地库（`infer/am_native_Gfx.c`、`infer/am_native_Time.c`）在上游这两次升级中均**无需改动**仍可编译链接（契约 N1–N10 未变）。
 
 ## 本项目自行实现的本地库（不在本目录）
 

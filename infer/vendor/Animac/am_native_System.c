@@ -416,6 +416,10 @@ static am_process_t *am_fork_process_copy(am_runtime_t *rt, am_process_t *parent
     if (!child->ilcode) goto fail;
     memcpy(child->ilcode, parent->ilcode, parent->ilcode_length * sizeof(am_instruction_t));
 
+    // 【P1】帧描述符表必须随 ilcode 一起继承：否则子进程无法按描述符建帧，
+    // 而 ilcode 里的槽位寻址指令依赖描述符，会造成槽位错位。
+    child->frames = am_frame_table_copy(vm_alloc, parent->frames);
+
     child->var_vocab = am_vocab_copy(vm_alloc, parent->var_vocab);
     child->symbol_vocab = am_vocab_copy(vm_alloc, parent->symbol_vocab);
     child->var_type = am_list_copy(vm_alloc, parent->var_type);
@@ -653,7 +657,8 @@ static int32_t exec_replace_process(am_process_t *proc, am_process_t *new_proc) 
     proc->parent_pid = old_parent_pid;
     proc->state = AM_PROCESS_STATE_RUNNING;
     proc->PC = 0;
-    proc->current_closure_handle = AM_HANDLE_NULL;
+    // 注意：memcpy 会把 new_proc 的闭包对象缓存指针一并拷过来，这里必须同时清空
+    am_process_set_current_closure(proc, AM_HANDLE_NULL);
 
     // new_proc 结构体本身不再使用，其字段已归属 proc
     am_free(proc->vm_alloc, new_proc);
@@ -1497,6 +1502,31 @@ static int32_t eval_remap_il_operands(eval_copy_ctx_t *ctx, am_map_t *var_mappin
 }
 
 
+// 【P1/P2】把 eval 编译产物中帧描述符里的 varid 重映射为进程的 varid。
+// 说明：eval 使用孤立 AST 编译（自带一套 varid），编译后统一经 var_mapping 映射回进程的
+//       varid；帧描述符的槽位表同样保存 varid，必须一起映射，否则槽位与变量对不上。
+static int32_t eval_remap_frame_table(eval_copy_ctx_t *ctx, am_map_t *var_mapping,
+                                      am_frame_table_t *frames) {
+    if (!frames || !frames->frames) return 0;
+    if (!ctx || !var_mapping) return -1;
+    for (size_t i = 0; i < frames->length; i++) {
+        am_frame_desc_t *d = frames->frames[i];
+        if (!d) continue;
+        uint32_t nslots = d->nbound + d->nfree;
+        for (uint32_t k = 0; k < nslots; k++) {
+            am_value_t key = am_make_value_of_varid(d->slots[k].varid);
+            am_value_t new_val = am_map_get(ctx->vm_alloc, var_mapping, key);
+            if (!am_value_is_varid(new_val)) {
+                fprintf(stderr, "[System.eval] 帧描述符 varid 映射失败：frame=%zu slot=%u\n",
+                        i, (unsigned)k);
+                return -1;
+            }
+            d->slots[k].varid = am_value_to_varid(new_val);
+        }
+    }
+    return 0;
+}
+
 // 将 evalee IL 追加到 proc->ilcode 尾部
 static int32_t eval_append_ilcode(am_process_t *proc, am_instruction_t *new_ilcode, am_iaddr_t new_length) {
     if (!proc || !new_ilcode || new_length == 0) return -1;
@@ -1658,6 +1688,8 @@ int32_t am_native_System_eval(am_runtime_t *rt, am_process_t *proc) {
     if (!copy_ctx.handle_mapping) goto fail;
 
     if (eval_remap_il_operands(&copy_ctx, var_mapping, mod->ilcode, mod->ilcode_length) != 0) goto fail;
+    // 帧描述符里的 varid 与 IL 操作数同源，必须一起重映射
+    if (eval_remap_frame_table(&copy_ctx, var_mapping, mod->frames) != 0) goto fail;
 
     // 记录 eval 在 proc->heap 中分配的最后一个把柄
     am_handle_t eval_last_handle = (proc->heap->handle_counter > 0)
@@ -1681,6 +1713,23 @@ int32_t am_native_System_eval(am_runtime_t *rt, am_process_t *proc) {
     if (eval_append_ilcode(proc, mod->ilcode, mod->ilcode_length) != 0) {
         fprintf(stderr, "[System.eval] 追加 IL 代码失败\n");
         goto fail;
+    }
+
+    // 【P1/P2】把新代码的帧描述符并入进程帧表（entry 已含本次追加的偏移）
+    if (am_frame_table_merge(proc->vm_alloc, &proc->frames, mod->frames,
+                             (size_t)proc->ilcode_length) != 0) {
+        fprintf(stderr, "[System.eval] 合并帧描述符失败\n");
+        goto fail;
+    }
+
+    // 【P2】降级判断：eval 代码里若出现 set!/capturecc，就可能对"只读变量"写入，
+    // 从而让已存在闭包中的自由变量快照失真；此后关闭快照直读（正确优先）。
+    for (am_iaddr_t k = 0; k < mod->ilcode_length; k++) {
+        uint32_t opk = mod->ilcode[k].opcode;
+        if (opk == AM_VM_OP_set || opk == AM_VM_OP_capturecc) {
+            proc->closure_fast = false;
+            break;
+        }
     }
 
     // 跳转到 evalee 入口

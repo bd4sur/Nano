@@ -5,7 +5,7 @@
  * 内容来源：include/animac.h 伞形头文件登记的解释器核心头文件，
  *           按依赖顺序拓扑排序合并；局部 #include 已剔除。
  *           不含 am_host.h / am_native_*.h / am_highlight.h / am_repl.h 等宿主相关头文件。
- * 生成时间：2026-10-20 15:37:18 +0800
+ * 生成时间：2026-10-20 23:25:41 +0800
  * ============================================================================ */
 
 #ifndef __ANIMAC_CORE_H__
@@ -1913,6 +1913,13 @@ extern "C" {
 #define AM_BINDING_BOUND (1)
 #define AM_BINDING_FREE  (2)
 
+// 绑定标志位（P2，与上面两个类型位同处 type 字段）
+// AM_BINDING_DEFINED：该绑定已被 store/capturecc/set 赋过值。
+//   语义要点：索引帧（见 am_frame.h）会在闭包创建时预置全部槽位，其中尚未执行 define 的
+//   约束变量槽虽有 varid，但**不带** DEFINED 位；所有查找都必须把这种槽视作"不存在"，
+//   以保持"读取未定义变量时穿透到外层作用域"的既有行为。
+#define AM_BINDING_DEFINED (4)
+
 // 闭包中的变量绑定字段
 typedef struct am_binding_t {
     am_varid_t  varid;
@@ -1929,6 +1936,7 @@ typedef struct am_obj_closure_t {
     am_handle_t  parent;     // 亲闭包把柄
     size_t       length;     // 指的是bindings的元素个数
     size_t       capacity;   // bindings数组的容量（涉及动态扩容和重新分配）
+    size_t       frame_len;  // 【P2】索引帧的静态槽位数（0 表示传统布局，槽位下标无语义）
     am_binding_t bindings[]; // 柔性数组，按顺序逐个插入
 } am_obj_closure_t;
 
@@ -2009,6 +2017,34 @@ am_obj_closure_t *am_closure_set_free_var(am_allocator_t *alloc, am_obj_closure_
 
 // 获取自由变量。未找到返回 AM_VALUE_UNDEFINED。
 am_value_t am_closure_get_free_var(am_allocator_t *alloc, am_obj_closure_t *closure, am_varid_t variable);
+
+
+// ===============================================================================
+// 查询（绑定项级）
+// ===============================================================================
+
+// 查找绑定项并返回其指针（未找到返回 NULL）。
+// 说明：暴露内部线性查找，供运行期"一次扫描同时拿到 varid/脏标记/值"的优化使用，
+//       调用者不得在跨越分配（可能触发扩容/移动）之后继续使用返回的指针。
+//       从 P0 起，同一闭包内每个 varid 至多有一个绑定项（见 am_closure_init_bound_var）。
+am_binding_t *am_closure_find_binding(am_obj_closure_t *closure, am_varid_t varid, int32_t type);
+
+
+// 确保绑定数组容量至少为 need，不够时一次性扩容到 need（不倍增试探）。
+// 若发生扩容，返回新的闭包对象指针（旧对象已释放）；否则返回原指针。失败返回 NULL。
+am_obj_closure_t *am_closure_ensure_capacity(am_allocator_t *alloc, am_obj_closure_t *closure, size_t need);
+
+
+// ===============================================================================
+// 批量继承（闭包创建时的一次成型）
+// ===============================================================================
+
+// 功能说明：把 src 的全部绑定一次性复制为 dst 的自由变量绑定（不带脏标记）。
+// 实现说明：dst 必须是新建的空闭包；本函数只做一次容量确保 + 一次顺序拷贝，
+//           O(n) 且无重复查找/无逐条扩容（旧实现逐条 am_closure_init_free_var 是 O(n²)）。
+//           若中途扩容，返回新的 dst 指针（旧对象已释放）；失败返回 NULL。
+//           src 的绑定类型不做区分：对 dst 而言它们都是自由变量（与旧实现语义一致）。
+am_obj_closure_t *am_closure_fill_free_vars(am_allocator_t *alloc, am_obj_closure_t *dst, am_obj_closure_t *src);
 
 
 // ===============================================================================
@@ -2163,6 +2199,128 @@ am_scope_t *am_scope_add_var(am_allocator_t *alloc, am_scope_t *scope, am_varid_
 
 #endif
 /* ===== end:   include/am_scope.h ===== */
+
+/* ===== begin: include/am_frame.h ===== */
+#ifndef __AM_FRAME_H__
+#define __AM_FRAME_H__
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+///////////////////////////////////////////
+// 闭包帧描述符（编译期产物）
+// 说明：一个有 λ 的帧由哪些槽位组成、每个自由变量从父帧的哪一槽取。
+//       它把"变量在闭包中的位置"从运行期的线性查找，前移为编译期的静态布局。
+///////////////////////////////////////////
+
+// 描述符标志
+#define AM_FRAME_FLAG_OPAQUE (0x01) // 含无法静态封闭的引用，创建时退化为"复制全部绑定"
+#define AM_FRAME_FLAG_TEMP   (0x02) // η 变换等编译期合成的临时 λ
+#define AM_FRAME_FLAG_TOP    (0x04) // 顶层 thunk
+
+// 自由变量的来源槽号：无来源（顶层 λ 的未绑定引用）
+#define AM_FRAME_SRC_NONE (0xFFFFFFFFu)
+
+// 槽位
+typedef struct am_frame_slot_t {
+    am_varid_t varid; // 槽位对应的变量
+    uint32_t   type;  // AM_BINDING_BOUND / AM_BINDING_FREE
+    uint32_t   src;   // FREE：在词法父帧中的槽号；BOUND：AM_FRAME_SRC_NONE
+} am_frame_slot_t;
+
+// 描述符：slots[0..nbound-1] 为约束变量槽，slots[nbound..nbound+nfree-1] 为自由变量槽
+typedef struct am_frame_desc_t {
+    am_iaddr_t entry_iaddr; // λ 入口（= 闭包对象的 iaddr 字段）
+    uint32_t   nparam;      // 引数个数
+    uint32_t   nbound;      // 约束变量槽数
+    uint32_t   nfree;       // 自由变量槽数
+    uint32_t   flags;
+    am_frame_slot_t slots[];
+} am_frame_desc_t;
+
+// 帧表：按 iaddr 索引的稀疏数组，frames[i] != NULL 表示指令 i 是某个 λ 的入口
+typedef struct am_frame_table_t {
+    am_frame_desc_t **frames;
+    size_t length; // == ilcode 长度（含 wind 跳板）
+} am_frame_table_t;
+
+
+// 编译期记录的 λ 代码区间（帧分析的输入）
+typedef struct am_lambda_region_t {
+    am_iaddr_t  entry;  // 入口 iaddr（= 闭包 iaddr）
+    am_iaddr_t  end;    // 区间终点（不含）
+    size_t      parent; // 父区间下标；SIZE_MAX = 无父
+    am_handle_t handle; // λ 的 AST 节点把柄；编译期合成的临时 λ 为 AM_HANDLE_NULL
+    uint32_t    nparam; // 引数个数
+    uint32_t    flags;  // AM_FRAME_FLAG_TEMP / AM_FRAME_FLAG_TOP
+} am_lambda_region_t;
+
+
+///////////////////////////////////////////
+// 编译期分析
+///////////////////////////////////////////
+
+// 说明：编译期分析入口 am_frame_analysis 需要编译器上下文，声明见 am_compiler.h
+//       （避免本头文件反向依赖编译器头文件造成循环包含）。
+
+// 功能说明：销毁帧表。
+void am_frame_table_destroy(am_allocator_t *alloc, am_frame_table_t *table);
+
+// 功能说明：深拷贝帧表。
+am_frame_table_t *am_frame_table_copy(am_allocator_t *alloc, am_frame_table_t *table);
+
+// 功能说明：把帧表整体右移 offset（用于 System.eval 在运行期追加 ilcode 的场景）。
+// 说明：描述符的 entry 与数组下标都是"模块内相对 iaddr"，而 ilcode 里的 lambda 地址
+//       已按 offset 重定位，因此追加代码时必须同步右移，二者才能对齐。
+//       成功返回新的帧表（旧表已释放），失败返回 NULL。
+am_frame_table_t *am_frame_table_shift(am_allocator_t *alloc, am_frame_table_t *table, size_t offset);
+
+// 功能说明：把 src 帧表合并进 *pdst（dst 长度至少为 new_length，按需扩容）。
+// 说明：用于 System.eval 追加代码后，把新代码的描述符并入进程帧表。
+int32_t am_frame_table_merge(am_allocator_t *alloc, am_frame_table_t **pdst,
+                             am_frame_table_t *src, size_t new_length);
+
+// 功能说明：按 iaddr 查描述符。未找到返回 NULL。
+static inline am_frame_desc_t *am_frame_lookup(am_frame_table_t *table, am_iaddr_t iaddr) {
+    if (!table || !table->frames || iaddr >= table->length) return NULL;
+    return table->frames[iaddr];
+}
+
+
+///////////////////////////////////////////
+// 序列化（模块持久化用）
+///////////////////////////////////////////
+
+// 返回转储所需字节数；失败返回 SIZE_MAX。
+size_t am_frame_table_dump_size(am_frame_table_t *table);
+
+// 转储到 buffer[offset]，返回新增字节数；buffer 为 NULL 时仅计算大小。
+size_t am_frame_table_dump(am_allocator_t *alloc, am_frame_table_t *table, uint8_t *buffer, size_t offset);
+
+// 从 buffer[offset] 加载帧表，table_length 为 ilcode 长度。
+am_frame_table_t *am_frame_table_load(am_allocator_t *alloc, const uint8_t *buffer, size_t offset, size_t table_length);
+
+
+///////////////////////////////////////////
+// 调试
+///////////////////////////////////////////
+
+// 将帧表摘要打印到 stdout（调试用）。
+void am_frame_table_print(am_frame_table_t *table);
+
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+/* ===== end:   include/am_frame.h ===== */
 
 /* ===== begin: include/am_lexer.h ===== */
 #ifndef __AM_LEXER_H__
@@ -2333,6 +2491,13 @@ extern "C" {
 #define AM_VM_OP_wind                     (61)
 // 追加到枚举末尾，勿插入中间（避免破坏模块磁盘格式中已序列化的指令编号兼容）
 #define AM_VM_OP_splice                   (62) // unquote-splicing：将栈顶值打包为 UNQUOTE_SPLICING 单元素列表
+// 【P2】索引帧槽位寻址指令：操作数为 AM_VALUE_TYPE_UINT，编码 (slot << 2) | 标志位
+//   bit0 = 1 表示该槽位是自由变量快照（进程降级 closure_fast=false 时不得直读）
+#define AM_VM_OP_load_slot                (63)
+#define AM_VM_OP_store_slot               (64)
+#define AM_VM_OP_set_slot                 (65)
+#define AM_VM_OP_call_slot                (66)
+#define AM_VM_OP_tailcall_slot            (67)
 
 
 // 全局内置变量
@@ -2791,14 +2956,30 @@ typedef struct am_compiler_ctx_t {
     am_iaddr_t icount; // 中间语言指令计数器
     am_iaddr_t ilcode_capacity; // ilcode 当前分配的容量（以指令数计）
     am_instruction_t *ilcode; // 编译得到的中间语言指令序列
+    uint8_t *ilcode_posflags; // 【P0】与 ilcode 平行的位置标志数组（长度 = ilcode_capacity）
+                              // bit0 = 该位置是跳转目标（由 am_compiler_locate_label 置位）；
+                              // 用途：peephole 删除指令时不得删除跳转目标，否则跳转会落空
     size_t label_counter; // 用于生成标签枚举值的计数器
     am_map_t *value_label_mapping; // Map<am_value_t(any), am_value_t(label)> 从任何类型的索引TPV到标签TPV的映射
     am_map_t *label_iaddr_mapping; // Map<am_value_t(label), am_value_t(iaddr)> 从label值到iaddr值的映射
     am_list_t *while_tag_stack; // while块的标签跟踪栈：用于处理break/continue
     size_t unique_id_counter; // 用于生成唯一枚举值的计数器
+    // 【P1】λ 代码区间记录：掌握编译期就知道的每一个 λ 的指令区间（帧分析的输入）
+    am_lambda_region_t *lambda_regions;
+    size_t lambda_region_count;
+    size_t lambda_region_capacity;
+    size_t current_lambda_region; // 当前正在编译的区间下标；SIZE_MAX = 无
     am_iaddr_t offset; // 生成的IL代码在目标进程ilcode中的起始偏移量
     am_iaddr_t ret;    // 程序执行完毕后跳转返回的目标iaddr；为0时则使用halt结束
 } am_compiler_ctx_t;
+
+
+// 功能说明：闭包帧分析（P1）。对编译上下文做帧分析，产出按 entry iaddr 索引的帧描述符表。
+// 实现说明：分析输入 = ilcode（绑定/引用事实）+ ctx 记录的 λ 代码区间 + AST 的词法父子关系；
+//           返回的表长度 = ctx->icount，frames[i] != NULL 表示指令 i 是某个 λ 的入口。
+//           调用时机：am_compile_all 之后、am_compiler_label_resolution 之后。
+//           失败返回 NULL（此时运行期全部退化为旧行为）。
+am_frame_table_t *am_frame_analysis(am_compiler_ctx_t *ctx);
 
 
 // 功能描述：创建编译器上下文。
@@ -2870,6 +3051,7 @@ typedef struct am_module_t {
     am_ast_t *ast;
     am_instruction_t *ilcode;
     am_iaddr_t ilcode_length; // ilcode数组长度（指令条数）
+    am_frame_table_t *frames; // 【P1】闭包帧描述符表（按 entry iaddr 索引；可能为 NULL）
 } am_module_t;
 
 
@@ -3002,6 +3184,22 @@ typedef struct am_process_t {
     am_map_t *var_arn_mapping; // 变量ARN（Alpha-renaming）前后的映射（内容同AST）
 
     am_handle_t current_closure_handle; // 指向当前闭包的把柄
+    // 加速缓存：当前闭包的对象指针（等价于 get_closure(current_closure_handle) 但免去每指令一次堆 map 查找）。
+    // 失效规则：① GC 压缩后必须置 NULL（对象被搬移）；② 当前闭包对象被扩容/替换时必须刷新；
+    //           ③ 直接改写 current_closure_handle 的地方必须一并改写本字段。
+    // get_current_closure 对 NULL 做惰性重建，因此"置 NULL"总是安全的。
+    am_obj_closure_t *current_closure_obj;
+    am_frame_table_t *frames; // 【P1】闭包帧描述符表（进程自有副本，可能为 NULL：全退化）
+    // 【P2】快路径降级开关：System.eval 检测到"对只读变量执行 set!/capturecc"时置 false，
+    //       此后自由变量快照不再直读（走通用解引用），保证语义正确。
+    bool closure_fast;
+
+    // 【P1】度量计数器（AM_FRAME_STATS=1 时于进程销毁时汇总打印）
+    size_t stat_frame_closures;   // 按描述符创建的闭包数
+    size_t stat_legacy_closures;  // 退化为"复制全部绑定"的闭包数
+    size_t stat_slots_total;      // 描述符路径创建的槽位总数（用于求平均帧大小）
+    size_t stat_free_slots_total; // 其中自由变量槽总数
+    size_t stat_fill_generic;     // 自由变量填充时走“沿链通用解析”的次数（动态父链场景，非分析缺陷）
 
     bool pending_kill; // 延迟kill标记：在进程自己的native调用中触发kill时，由调度器安全点完成实际销毁
 
@@ -3104,17 +3302,36 @@ size_t am_process_length_of_fstack(am_process_t *proc);
 // 功能说明：新建闭包并返回其handle。成功返回handle，失败返回AM_HANDLE_NULL
 am_handle_t am_process_make_closure(am_process_t *proc, am_iaddr_t iaddr, am_handle_t parent);
 
+// 功能说明：按帧描述符创建闭包（一次性成型）。
+// 实现说明：BOUND 槽按描述符预置（varid 已填、值为 #undefined、未定状态），FREE 槽从父闭包
+//           按 src 索引拉取（逐槽 varid 校验，不匹配则退回沿链通用解析）。
+//           这样闭包创建后帧大小固定、槽位下标语义固定，变量访问不再需要线性查找。
+//           失败返回 AM_HANDLE_NULL。
+am_handle_t am_process_make_closure_desc(am_process_t *proc, am_iaddr_t iaddr,
+                                        am_handle_t parent, am_frame_desc_t *desc);
+
+// 功能说明：以指定闭包为起点做变量解引用（语义同 am_process_dereference）。
+// 失败（未找到）返回 UINTPTR_MAX。
+am_value_t am_process_dereference_from(am_process_t *proc, am_handle_t start_handle, am_varid_t varid);
+
 // 功能说明：根据闭包handle获取闭包对象。成功返回指针，失败返回NULL
 am_obj_closure_t *am_process_get_closure(am_process_t *proc, am_handle_t hd);
 
 // 功能说明：获取进程的当前闭包对象。成功返回指针，失败返回NULL
 am_obj_closure_t *am_process_get_current_closure(am_process_t *proc);
 
-// 功能说明：设置进程的当前闭包handle字段。成功返回0，失败返回-1
+// 功能说明：设置进程的当前闭包 handle 字段，并同步刷新对象指针缓存。成功返回 0，失败返回 -1。
 static inline int32_t am_process_set_current_closure(am_process_t *proc, am_handle_t hd) {
     if (!proc) return -1;
     proc->current_closure_handle = hd;
+    proc->current_closure_obj = am_process_get_closure(proc, hd);
     return 0;
+}
+
+// 功能说明：当前闭包对象被就地替换（扩容/重建）后，刷新缓存指针。
+static inline void am_process_refresh_current_closure_obj(am_process_t *proc, am_obj_closure_t *obj) {
+    if (!proc) return;
+    proc->current_closure_obj = obj;
 }
 
 // 功能说明：变量解引用。成功返回TPV，失败返回UINTPTR_MAX

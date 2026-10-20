@@ -6,7 +6,7 @@
  *           按依赖顺序合并；局部 #include 已剔除；
  *           跨文件重名的 static 符号已按 “<文件基名>__<原名>” 规则改名。
  *           不含 am_host.c / am_native_*.c / am_highlight.c / am_repl.c 等宿主相关实现。
- * 生成时间：2026-10-20 15:37:18 +0800
+ * 生成时间：2026-10-20 23:25:41 +0800
  * ============================================================================ */
 
 #include "animac_core.h"
@@ -3726,9 +3726,17 @@ int32_t am_heap_set(am_allocator_t *container_alloc, am_allocator_t *obj_alloc, 
 
 // 在闭包中线性查找指定 varid 与 type 的绑定。
 // 返回指向匹配 binding 的指针；未找到返回 NULL。
-static am_binding_t *am_closure_find(am_obj_closure_t *closure, am_varid_t varid, int32_t type) {
+// 对外公开（见头文件），供运行期做单次扫描优化。
+am_binding_t *am_closure_find_binding(am_obj_closure_t *closure, am_varid_t varid, int32_t type) {
+    if (!closure) return NULL;
     for (size_t i = 0; i < closure->length; i++) {
-        if (closure->bindings[i].varid == varid && closure->bindings[i].type == type) {
+        const am_binding_t *b = &closure->bindings[i];
+        if (b->varid != varid) continue;
+        if ((b->type & AM_BINDING_DEFINED) == 0) continue; // 预置但未赋值的槽位视作不存在
+        if ((b->type & AM_BINDING_FREE) != 0) {
+            if (type == AM_BINDING_FREE) return &closure->bindings[i];
+        }
+        else if (type == AM_BINDING_BOUND) {
             return &closure->bindings[i];
         }
     }
@@ -3739,9 +3747,9 @@ static am_binding_t *am_closure_find(am_obj_closure_t *closure, am_varid_t varid
 // 返回指向匹配 binding 的指针；未找到返回 NULL。
 static am_binding_t *am_closure_find_by_varid(am_obj_closure_t *closure, am_varid_t varid) {
     for (size_t i = 0; i < closure->length; i++) {
-        if (closure->bindings[i].varid == varid) {
-            return &closure->bindings[i];
-        }
+        if (closure->bindings[i].varid != varid) continue;
+        if ((closure->bindings[i].type & AM_BINDING_DEFINED) == 0) continue;
+        return &closure->bindings[i];
     }
     return NULL;
 }
@@ -3762,6 +3770,13 @@ static am_obj_closure_t *am_closure_resize(am_allocator_t *alloc, am_obj_closure
 
     am_free(alloc, closure);
     return new_closure;
+}
+
+// 确保容量至少为 need（不够时一次性扩容到 need，不做倍增试探）。
+am_obj_closure_t *am_closure_ensure_capacity(am_allocator_t *alloc, am_obj_closure_t *closure, size_t need) {
+    if (!closure) return NULL;
+    if (closure->capacity >= need) return closure;
+    return am_closure_resize(alloc, closure, need);
 }
 
 // 若空间不足则扩容。绝大多数情况下不会触发实际分配。
@@ -3793,6 +3808,7 @@ am_obj_closure_t *am_closure_create(am_allocator_t *alloc, am_iaddr_t iaddr, am_
     closure->parent = parent;
     closure->length = 0;
     closure->capacity = capacity;
+    closure->frame_len = 0;
 
     return closure;
 }
@@ -3822,6 +3838,34 @@ am_obj_closure_t *am_closure_copy(am_allocator_t *alloc, am_obj_closure_t *closu
     }
     return copy;
 }
+
+// ===============================================================================
+// 批量继承
+// ===============================================================================
+
+am_obj_closure_t *am_closure_fill_free_vars(am_allocator_t *alloc, am_obj_closure_t *dst, am_obj_closure_t *src) {
+    if (!dst) return NULL;
+    if (!src || src->length == 0) return dst;
+
+    // 一次性确保容量（留 16 条余量，减少后续 store 触发的再次扩容）
+    dst = am_closure_ensure_capacity(alloc, dst, src->length + 16);
+    if (!dst) return NULL;
+
+    // 顺序拷贝：全部登记为自由变量（不带脏标记），与旧实现逐条 init_free_var 的结果一致。
+    // 说明：自 P0 起"同一闭包内每个 varid 至多一个绑定项"是全局不变量
+    //      （am_closure_init_bound_var 会把同名自由绑定就地转换为约束绑定），
+    //       因此这里无需去重，可直接按原顺序铺平。
+    size_t n = src->length;
+    for (size_t i = 0; i < n; i++) {
+        dst->bindings[i].varid = src->bindings[i].varid;
+        dst->bindings[i].type = AM_BINDING_FREE | (src->bindings[i].type & AM_BINDING_DEFINED);
+        dst->bindings[i].dirty_flag = 0;
+        dst->bindings[i].value = src->bindings[i].value;
+    }
+    dst->length = n;
+    return dst;
+}
+
 
 // ===============================================================================
 // 对象大小
@@ -3945,16 +3989,22 @@ fail:
 
 // 初始化约束变量（不加脏标记）。若已存在则更新 value 并清除脏标记。
 // 如涉及扩容，返回新闭包对象指针；否则返回原指针。失败返回 NULL。
+//
+// 不变量（P0 起）：同一闭包内每个 varid 至多一个绑定项。
+// 若某 varid 此前只以自由绑定（外层快照）形式存在，此处就地升级为约束绑定。
+// 旧实现会同时保留 FREE 与 BOUND 两个条目，但两份的脏标记恒一致（本函数与 set_* 同步维护），
+// 且 dereference 第一步就看本帧 BOUND，因此 FREE 那份对读取路径是死重（仅 dump/GC 能看到）；
+// 合并为一条不改变可观察语义，却把后续查找/复制从 O(2N) 降到 O(N)。
 am_obj_closure_t *am_closure_init_bound_var(am_allocator_t *alloc, am_obj_closure_t *closure, am_varid_t variable, am_value_t value) {
-    am_binding_t *binding = am_closure_find(closure, variable, AM_BINDING_BOUND);
-    if (binding) {
-        binding->value = value;
-        binding->dirty_flag = 0;
-        // 同一 varid 的自由变量绑定也清除脏标记，保持该变量脏标记一致
-        am_binding_t *free_binding = am_closure_find(closure, variable, AM_BINDING_FREE);
-        if (free_binding) {
-            free_binding->dirty_flag = 0;
-        }
+    if (!closure) return NULL;
+
+    // 单次扫描：按 varid 定位
+    for (size_t i = 0; i < closure->length; i++) {
+        if (closure->bindings[i].varid != variable) continue;
+        am_binding_t *b = &closure->bindings[i];
+        b->type = AM_BINDING_BOUND | AM_BINDING_DEFINED;
+        b->value = value;
+        b->dirty_flag = 0;
         return closure;
     }
 
@@ -3962,51 +4012,41 @@ am_obj_closure_t *am_closure_init_bound_var(am_allocator_t *alloc, am_obj_closur
     if (!closure) return NULL;
 
     closure->bindings[closure->length].varid = variable;
-    closure->bindings[closure->length].type = AM_BINDING_BOUND;
+    closure->bindings[closure->length].type = AM_BINDING_BOUND | AM_BINDING_DEFINED;
     closure->bindings[closure->length].dirty_flag = 0;
     closure->bindings[closure->length].value = value;
     closure->length++;
-    // 若已存在同 varid 的自由变量绑定，也将其脏标记清除
-    am_binding_t *free_binding = am_closure_find(closure, variable, AM_BINDING_FREE);
-    if (free_binding) {
-        free_binding->dirty_flag = 0;
-    }
     return closure;
 }
 
 // 设置约束变量（加脏标记，仅用于 set 指令）。若不存在则插入。
 // 返回新指针或原指针；失败返回 NULL。
 am_obj_closure_t *am_closure_set_bound_var(am_allocator_t *alloc, am_obj_closure_t *closure, am_varid_t variable, am_value_t value) {
-    am_binding_t *binding = am_closure_find(closure, variable, AM_BINDING_BOUND);
-    if (binding) {
-        binding->value = value;
-        binding->dirty_flag = 1;
-    }
-    else {
-        closure = am_closure_grow_if_needed(alloc, closure);
-        if (!closure) return NULL;
+    if (!closure) return NULL;
 
-        closure->bindings[closure->length].varid = variable;
-        closure->bindings[closure->length].type = AM_BINDING_BOUND;
-        closure->bindings[closure->length].dirty_flag = 1;
-        closure->bindings[closure->length].value = value;
-        closure->length++;
+    for (size_t i = 0; i < closure->length; i++) {
+        if (closure->bindings[i].varid != variable) continue;
+        closure->bindings[i].type = AM_BINDING_BOUND | AM_BINDING_DEFINED;
+        closure->bindings[i].value = value;
+        closure->bindings[i].dirty_flag = 1;
+        return closure;
     }
 
-    // 同一 varid 的自由变量绑定也置脏，保持变量级脏标记一致
-    am_binding_t *free_binding = am_closure_find(closure, variable, AM_BINDING_FREE);
-    if (free_binding) {
-        free_binding->dirty_flag = 1;
-        free_binding->value = value;
-    }
+    closure = am_closure_grow_if_needed(alloc, closure);
+    if (!closure) return NULL;
 
+    closure->bindings[closure->length].varid = variable;
+    closure->bindings[closure->length].type = AM_BINDING_BOUND | AM_BINDING_DEFINED;
+    closure->bindings[closure->length].dirty_flag = 1;
+    closure->bindings[closure->length].value = value;
+    closure->length++;
     return closure;
 }
 
 // 获取约束变量。未找到返回 AM_VALUE_UNDEFINED。
 am_value_t am_closure_get_bound_var(am_allocator_t *alloc, am_obj_closure_t *closure, am_varid_t variable) {
     (void)alloc;
-    am_binding_t *binding = am_closure_find(closure, variable, AM_BINDING_BOUND);
+    am_binding_t *binding = am_closure_find_binding(closure, variable, AM_BINDING_BOUND);
     return binding ? binding->value : AM_VALUE_UNDEFINED;
 }
 
@@ -4016,14 +4056,13 @@ am_value_t am_closure_get_bound_var(am_allocator_t *alloc, am_obj_closure_t *clo
 
 // 初始化自由变量（不加脏标记）。若已存在则更新 value 并清除脏标记。
 am_obj_closure_t *am_closure_init_free_var(am_allocator_t *alloc, am_obj_closure_t *closure, am_varid_t variable, am_value_t value) {
-    am_binding_t *binding = am_closure_find(closure, variable, AM_BINDING_FREE);
-    if (binding) {
-        binding->value = value;
-        binding->dirty_flag = 0;
-        am_binding_t *bound_binding = am_closure_find(closure, variable, AM_BINDING_BOUND);
-        if (bound_binding) {
-            bound_binding->dirty_flag = 0;
-        }
+    if (!closure) return NULL;
+
+    for (size_t i = 0; i < closure->length; i++) {
+        if (closure->bindings[i].varid != variable) continue;
+        closure->bindings[i].type = AM_BINDING_FREE | AM_BINDING_DEFINED;
+        closure->bindings[i].value = value;
+        closure->bindings[i].dirty_flag = 0;
         return closure;
     }
 
@@ -4031,49 +4070,40 @@ am_obj_closure_t *am_closure_init_free_var(am_allocator_t *alloc, am_obj_closure
     if (!closure) return NULL;
 
     closure->bindings[closure->length].varid = variable;
-    closure->bindings[closure->length].type = AM_BINDING_FREE;
+    closure->bindings[closure->length].type = AM_BINDING_FREE | AM_BINDING_DEFINED;
     closure->bindings[closure->length].dirty_flag = 0;
     closure->bindings[closure->length].value = value;
     closure->length++;
-    am_binding_t *bound_binding = am_closure_find(closure, variable, AM_BINDING_BOUND);
-    if (bound_binding) {
-        bound_binding->dirty_flag = 0;
-    }
     return closure;
 }
 
 // 设置自由变量（加脏标记，仅用于 set 指令）。若不存在则插入。
 am_obj_closure_t *am_closure_set_free_var(am_allocator_t *alloc, am_obj_closure_t *closure, am_varid_t variable, am_value_t value) {
-    am_binding_t *binding = am_closure_find(closure, variable, AM_BINDING_FREE);
-    if (binding) {
-        binding->value = value;
-        binding->dirty_flag = 1;
-    }
-    else {
-        closure = am_closure_grow_if_needed(alloc, closure);
-        if (!closure) return NULL;
+    if (!closure) return NULL;
 
-        closure->bindings[closure->length].varid = variable;
-        closure->bindings[closure->length].type = AM_BINDING_FREE;
-        closure->bindings[closure->length].dirty_flag = 1;
-        closure->bindings[closure->length].value = value;
-        closure->length++;
+    for (size_t i = 0; i < closure->length; i++) {
+        if (closure->bindings[i].varid != variable) continue;
+        closure->bindings[i].type |= AM_BINDING_DEFINED;
+        closure->bindings[i].value = value;
+        closure->bindings[i].dirty_flag = 1;
+        return closure;
     }
 
-    // 同一 varid 的约束变量绑定也置脏，保持变量级脏标记一致
-    am_binding_t *bound_binding = am_closure_find(closure, variable, AM_BINDING_BOUND);
-    if (bound_binding) {
-        bound_binding->dirty_flag = 1;
-        bound_binding->value = value;
-    }
+    closure = am_closure_grow_if_needed(alloc, closure);
+    if (!closure) return NULL;
 
+    closure->bindings[closure->length].varid = variable;
+    closure->bindings[closure->length].type = AM_BINDING_FREE | AM_BINDING_DEFINED;
+    closure->bindings[closure->length].dirty_flag = 1;
+    closure->bindings[closure->length].value = value;
+    closure->length++;
     return closure;
 }
 
 // 获取自由变量。未找到返回 AM_VALUE_UNDEFINED。
 am_value_t am_closure_get_free_var(am_allocator_t *alloc, am_obj_closure_t *closure, am_varid_t variable) {
     (void)alloc;
-    am_binding_t *binding = am_closure_find(closure, variable, AM_BINDING_FREE);
+    am_binding_t *binding = am_closure_find_binding(closure, variable, AM_BINDING_FREE);
     return binding ? binding->value : AM_VALUE_UNDEFINED;
 }
 
@@ -4091,13 +4121,13 @@ int32_t am_closure_is_dirty_var(am_allocator_t *alloc, am_obj_closure_t *closure
 // 是否存在约束变量绑定。存在返回 0，不存在返回 -1。
 int32_t am_closure_has_bound_var(am_allocator_t *alloc, am_obj_closure_t *closure, am_varid_t variable) {
     (void)alloc;
-    return am_closure_find(closure, variable, AM_BINDING_BOUND) ? 0 : -1;
+    return am_closure_find_binding(closure, variable, AM_BINDING_BOUND) ? 0 : -1;
 }
 
 // 是否存在自由变量绑定。存在返回 0，不存在返回 -1。
 int32_t am_closure_has_free_var(am_allocator_t *alloc, am_obj_closure_t *closure, am_varid_t variable) {
     (void)alloc;
-    return am_closure_find(closure, variable, AM_BINDING_FREE) ? 0 : -1;
+    return am_closure_find_binding(closure, variable, AM_BINDING_FREE) ? 0 : -1;
 }
 /* ===== end:   src/am_closure.c ===== */
 
@@ -4384,6 +4414,722 @@ am_scope_t *am_scope_add_var(am_allocator_t *alloc, am_scope_t *scope, am_varid_
     return scope;
 }
 /* ===== end:   src/am_scope.c ===== */
+
+/* ===== begin: src/am_frame.c ===== */
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
+
+
+// ===============================================================================
+// 内部数据结构
+// ===============================================================================
+
+// 一个 λ 的帧分析中间状态
+typedef struct frame_region_t {
+    am_iaddr_t entry;
+    am_iaddr_t end;
+    size_t     parent;      // 父区间下标；SIZE_MAX 表示无父（顶层 λ）
+    am_handle_t handle;     // λ 的 AST 节点把柄；临时 λ 为 AM_HANDLE_NULL
+    uint32_t   nparam;
+    uint32_t   flags;
+
+    // 变量集合（均为去重集合，用简单线性查找；λ 规模小，编译期一次性开销可忽略）
+    am_varid_t *bound;  size_t nbound, cbound;
+    am_varid_t *ref;    size_t nref,  cref;
+    am_varid_t *fv;     size_t nfv,   cfv;
+
+    am_frame_desc_t *desc;
+} frame_region_t;
+
+static int32_t varid_set_add(am_allocator_t *alloc, am_varid_t **set, size_t *len, size_t *cap, am_varid_t v) {
+    for (size_t i = 0; i < *len; i++) {
+        if ((*set)[i] == v) return 0; // 已存在
+    }
+    if (*len >= *cap) {
+        size_t new_cap = *cap ? *cap * 2 : 16;
+        am_varid_t *p = (am_varid_t *)am_realloc(alloc, *set, new_cap * sizeof(am_varid_t));
+        if (!p) return -1;
+        *set = p;
+        *cap = new_cap;
+    }
+    (*set)[(*len)++] = v;
+    return 0;
+}
+
+static int32_t varid_set_contains(am_varid_t *set, size_t len, am_varid_t v) {
+    for (size_t i = 0; i < len; i++) {
+        if (set[i] == v) return 0;
+    }
+    return -1;
+}
+
+
+// ===============================================================================
+// 操作数重写（P2）
+// 说明：把可静态定位的变量访问改写成槽位寻址指令。改写条件严格保守：
+//   - load / call / tailcall / store / set 的目标 varid 必须在该 λ 的帧描述符里有槽位；
+//   - 自由变量（快照）只有在该 varid **全局从未被 set!/capturecc 触碰**时才直读，
+//     否则保留 varid 走通用解引用（保证脏标记/写穿透语义）；
+//   - call/tailcall 跳过 native 引用（它们由 op_call_async 分流到 op_callnative）。
+// 不可判定的情况一律不改写：保持 varid 形态 → 走旧路径，只会慢不会错。
+// ===============================================================================
+
+static int32_t frame_collect_mutated(am_allocator_t *alloc, am_compiler_ctx_t *ctx,
+                                     am_varid_t **set, size_t *len, size_t *cap) {
+    for (am_iaddr_t i = 0; i < ctx->icount; i++) {
+        uint32_t op = ctx->ilcode[i].opcode;
+        if (op != AM_VM_OP_set && op != AM_VM_OP_capturecc) continue;
+        am_value_t operand = ctx->ilcode[i].operand;
+        if (!am_value_is_varid(operand)) continue;
+        if (varid_set_add(alloc, set, len, cap, am_value_to_varid(operand)) != 0) return -1;
+    }
+    return 0;
+}
+
+// 在描述符中查找 varid 对应的槽位。找到返回槽号，否则返回 SIZE_MAX。
+static size_t frame_find_slot(am_frame_desc_t *d, am_varid_t varid, int32_t type) {
+    if (!d) return SIZE_MAX;
+    uint32_t nslots = d->nbound + d->nfree;
+    for (uint32_t s = 0; s < nslots; s++) {
+        if (d->slots[s].varid != varid) continue;
+        if ((d->slots[s].type & (uint32_t)type) != 0) return (size_t)s;
+    }
+    return SIZE_MAX;
+}
+
+static void am_frame_rewrite_operands(am_compiler_ctx_t *ctx, am_frame_table_t *table,
+                                      size_t *owner, frame_region_t *regions, size_t count) {
+    (void)count;
+    am_allocator_t *alloc = ctx->ast->alloc;
+
+    size_t n_load = 0, n_store = 0, n_set = 0, n_call = 0, n_tcall = 0, n_gap = 0;
+    am_varid_t *mutated = NULL;
+    size_t nmut = 0, cmut = 0;
+    if (frame_collect_mutated(alloc, ctx, &mutated, &nmut, &cmut) != 0) {
+        if (mutated) am_free(alloc, mutated);
+        return;
+    }
+
+    for (am_iaddr_t i = 0; i < ctx->icount; i++) {
+        if (owner[i] == SIZE_MAX) continue;
+        size_t entry = regions[owner[i]].entry;
+        if (entry >= table->length) continue;
+        am_frame_desc_t *d = table->frames[entry];
+        if (!d || (d->flags & AM_FRAME_FLAG_OPAQUE)) continue;
+
+        uint32_t op = ctx->ilcode[i].opcode;
+        am_value_t operand = ctx->ilcode[i].operand;
+        if (!am_value_is_varid(operand)) continue;
+        am_varid_t varid = am_value_to_varid(operand);
+
+        switch (op) {
+            case AM_VM_OP_store: {
+                size_t slot = frame_find_slot(d, varid, AM_BINDING_BOUND);
+                if (slot == SIZE_MAX) break;
+                ctx->ilcode[i].opcode = AM_VM_OP_store_slot;
+                ctx->ilcode[i].operand = am_make_value_of_uint((am_uint_t)(slot << 2));
+                n_store++;
+                break;
+            }
+            case AM_VM_OP_set: {
+                size_t slot = frame_find_slot(d, varid, AM_BINDING_BOUND);
+                if (slot == SIZE_MAX) break;
+                ctx->ilcode[i].opcode = AM_VM_OP_set_slot;
+                ctx->ilcode[i].operand = am_make_value_of_uint((am_uint_t)(slot << 2));
+                n_set++;
+                break;
+            }
+            case AM_VM_OP_load:
+            case AM_VM_OP_call:
+            case AM_VM_OP_tailcall: {
+                if (op != AM_VM_OP_load && am_ast_check_native_ref(ctx->ast, varid) == 0) break;
+
+                size_t slot = frame_find_slot(d, varid, AM_BINDING_BOUND);
+                uint32_t flags = 0;
+                if (slot == SIZE_MAX) {
+                    slot = frame_find_slot(d, varid, AM_BINDING_FREE);
+                    if (slot == SIZE_MAX) { n_gap++; break; }   // 分析缺口：保留 varid 走通用路径
+                    if (varid_set_contains(mutated, nmut, varid) == 0) break; // 可变：保留通用路径
+                    flags = 1; // 自由变量快照
+                }
+                am_uint_t enc = (am_uint_t)((slot << 2) | flags);
+                ctx->ilcode[i].opcode = (op == AM_VM_OP_load)    ? AM_VM_OP_load_slot
+                                      : (op == AM_VM_OP_call)    ? AM_VM_OP_call_slot
+                                                                 : AM_VM_OP_tailcall_slot;
+                ctx->ilcode[i].operand = am_make_value_of_uint(enc);
+                if (op == AM_VM_OP_load) n_load++;
+                else if (op == AM_VM_OP_call) n_call++;
+                else n_tcall++;
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    if (mutated) am_free(alloc, mutated);
+
+    const char *tr = getenv("AM_FRAME_TRACE");
+    if (tr && tr[0] == '1') {
+        printf("[frame-rewrite] load_slot=%zu store_slot=%zu set_slot=%zu call_slot=%zu "
+               "tailcall_slot=%zu mutated_varids=%zu analysis_gaps=%zu\n",
+               n_load, n_store, n_set, n_call, n_tcall, nmut, n_gap);
+    }
+}
+
+// ===============================================================================
+// 编译期分析
+// ===============================================================================
+
+// 从 ilcode 的 owner 数组中找出 λ 区间；同时计算可变变量集合。
+// owner[i] = 该指令所属区间的下标（SIZE_MAX 表示不属于任何 λ，如入口存根）。
+
+// 词法父子关系：优先使用 parser 记录的 scope（lambda -> scope -> parent_lambda），
+// 因为编译器的 λ 编译是"平铺"的（每个 λ 独立成块），本身不携带嵌套信息。
+static int32_t frame_link_parents(am_ast_t *ast, frame_region_t *regions, size_t count) {
+    if (!ast) return 0;
+
+    for (size_t i = 0; i < count; i++) {
+        if (regions[i].handle == AM_HANDLE_NULL) continue; // 临时 λ：父区间在编译期已记录
+
+        am_handle_t scope_hd = am_ast_get_scope(ast, regions[i].handle);
+        if (scope_hd == AM_HANDLE_NULL) continue;
+
+        am_value_t scope_val = am_heap_get(ast->alloc, ast->alloc, ast->nodes, scope_hd);
+        if (!am_value_is_ptr(scope_val)) continue;
+        am_object_t *obj = am_value_to_ptr(scope_val);
+        if (obj->type != AM_OBJECT_TYPE_SCOPE) continue;
+
+        am_handle_t parent_lambda = ((am_scope_t *)obj)->parent_lambda_handle;
+        if (parent_lambda == AM_HANDLE_NULL || parent_lambda == regions[i].handle) continue;
+
+        // 由把柄找到对应区间
+        for (size_t j = 0; j < count; j++) {
+            if (regions[j].handle == parent_lambda) {
+                regions[i].parent = j;
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+// 计算区间深度（用于"父先子后"的处理顺序）
+static size_t frame_region_depth(frame_region_t *regions, size_t count, size_t idx) {
+    size_t d = 0;
+    size_t cur = idx;
+    while (regions[cur].parent != SIZE_MAX && d <= count) {
+        cur = regions[cur].parent;
+        d++;
+    }
+    return d;
+}
+
+// 在给定区间内按 ilcode 收集 BOUND / REF 集合
+static int32_t frame_collect_sets(am_allocator_t *alloc, am_compiler_ctx_t *ctx,
+                                  frame_region_t *rgn, size_t *owner, size_t owner_of_tag) {
+    for (am_iaddr_t i = 0; i < ctx->icount; i++) {
+        if (owner[i] != owner_of_tag) continue;
+        uint32_t op = ctx->ilcode[i].opcode;
+        am_value_t operand = ctx->ilcode[i].operand;
+
+        switch (op) {
+            case AM_VM_OP_store:
+            case AM_VM_OP_capturecc:
+                if (am_value_is_varid(operand) &&
+                    varid_set_add(alloc, &rgn->bound, &rgn->nbound, &rgn->cbound,
+                                  am_value_to_varid(operand)) != 0) return -1;
+                break;
+            case AM_VM_OP_load:
+            case AM_VM_OP_call:
+            case AM_VM_OP_tailcall:
+            case AM_VM_OP_set:
+                if (am_value_is_varid(operand) &&
+                    varid_set_add(alloc, &rgn->ref, &rgn->nref, &rgn->cref,
+                                  am_value_to_varid(operand)) != 0) return -1;
+                break;
+            default:
+                break;
+        }
+    }
+    (void)owner;
+    return 0;
+}
+
+am_frame_table_t *am_frame_analysis(am_compiler_ctx_t *ctx) {
+    if (!ctx || !ctx->ilcode || ctx->icount == 0) return NULL;
+    if (!ctx->lambda_regions || ctx->lambda_region_count == 0) return NULL;
+
+    am_allocator_t *alloc = ctx->ast->alloc;
+    size_t count = ctx->lambda_region_count;
+    frame_region_t *regions = (frame_region_t *)am_calloc(alloc, count * sizeof(frame_region_t));
+    if (!regions) return NULL;
+
+    size_t *owner = (size_t *)am_malloc(alloc, (size_t)ctx->icount * sizeof(size_t));
+    if (!owner) {
+        am_free(alloc, regions);
+        return NULL;
+    }
+    for (am_iaddr_t i = 0; i < ctx->icount; i++) owner[i] = SIZE_MAX;
+
+    am_frame_table_t *table = NULL;
+    size_t *order = NULL;
+    size_t *slot_of = NULL;
+
+    for (size_t i = 0; i < count; i++) {
+        regions[i].entry = ctx->lambda_regions[i].entry;
+        regions[i].end = ctx->lambda_regions[i].end;
+        regions[i].parent = ctx->lambda_regions[i].parent;
+        regions[i].handle = ctx->lambda_regions[i].handle;
+        regions[i].nparam = ctx->lambda_regions[i].nparam;
+        regions[i].flags = ctx->lambda_regions[i].flags;
+    }
+
+    // 1. 词法父子关系（临时 λ 的父子关系已在编译期记录）
+    if (frame_link_parents(ctx->ast, regions, count) != 0) goto done;
+
+    // 2. owner：区间可能嵌套（临时 λ 内嵌于所属 λ），按 entry 降序填充使内层优先
+    order = (size_t *)am_malloc(alloc, count * sizeof(size_t));
+    if (!order) goto done;
+    for (size_t i = 0; i < count; i++) order[i] = i;
+    // 插入排序（按 entry 降序；λ 数量小）
+    for (size_t i = 1; i < count; i++) {
+        size_t key = order[i];
+        size_t j = i;
+        while (j > 0 && regions[order[j - 1]].entry < regions[key].entry) {
+            order[j] = order[j - 1];
+            j--;
+        }
+        order[j] = key;
+    }
+    for (size_t k = 0; k < count; k++) {
+        size_t r = order[k];
+        am_iaddr_t begin = regions[r].entry;
+        am_iaddr_t end = regions[r].end;
+        if (end > ctx->icount) end = ctx->icount;
+        for (am_iaddr_t i = begin; i < end; i++) {
+            if (owner[i] == SIZE_MAX) owner[i] = r;
+        }
+    }
+
+    // 调试：打印区间划分与指令归属
+    {
+        const char *tr = getenv("AM_FRAME_TRACE");
+        if (tr && tr[0] == '1') {
+            for (size_t r = 0; r < count; r++) {
+                printf("[frame-trace] region %zu entry=%zu end=%zu nparam=%u parent=%zu flags=%u\n",
+                       r, (size_t)regions[r].entry, (size_t)regions[r].end,
+                       regions[r].nparam, regions[r].parent, regions[r].flags);
+            }
+            for (am_iaddr_t i = 0; i < ctx->icount; i++) {
+                if (owner[i] == SIZE_MAX) continue;
+                am_value_t op = ctx->ilcode[i].operand;
+                printf("[frame-trace] i=%zu owner_entry=%zu op=%u operand=%s%zu\n",
+                       (size_t)i, (size_t)regions[owner[i]].entry,
+                       ctx->ilcode[i].opcode,
+                       am_value_is_varid(op) ? "varid:" : (am_value_is_iaddr(op) ? "iaddr:" : "other:"),
+                       am_value_is_varid(op) ? (size_t)am_value_to_varid(op)
+                                             : (am_value_is_iaddr(op) ? (size_t)am_value_to_iaddr(op) : 0));
+            }
+        }
+    }
+
+    // 3. 逐区间收集 BOUND / REF
+    for (size_t r = 0; r < count; r++) {
+        if (frame_collect_sets(alloc, ctx, &regions[r], owner, r) != 0) goto done;
+    }
+
+    // 4. FV 传递闭包：按深度降序（子先父后）计算
+    //    FV(λ) = (REF(λ) \ BOUND(λ)) ∪ (⋃ 子 λ FV \ BOUND(λ))
+    {
+        size_t *by_depth = (size_t *)am_malloc(alloc, count * sizeof(size_t));
+        if (!by_depth) goto done;
+        for (size_t i = 0; i < count; i++) by_depth[i] = i;
+        // 稳定排序：深度降序
+        for (size_t i = 1; i < count; i++) {
+            size_t key = by_depth[i];
+            size_t dk = frame_region_depth(regions, count, key);
+            size_t j = i;
+            while (j > 0 && frame_region_depth(regions, count, by_depth[j - 1]) < dk) {
+                by_depth[j] = by_depth[j - 1];
+                j--;
+            }
+            by_depth[j] = key;
+        }
+
+        for (size_t k = 0; k < count; k++) {
+            size_t r = by_depth[k];
+            // 4.1 先放入 REF \ BOUND
+            for (size_t i = 0; i < regions[r].nref; i++) {
+                am_varid_t v = regions[r].ref[i];
+                if (varid_set_contains(regions[r].bound, regions[r].nbound, v) == 0) continue;
+                if (varid_set_add(alloc, &regions[r].fv, &regions[r].nfv, &regions[r].cfv, v) != 0) {
+                    am_free(alloc, by_depth);
+                    goto done;
+                }
+            }
+            // 4.2 再把子 λ 的 FV 上提（已被本 λ 绑定的除外）
+            for (size_t c = 0; c < count; c++) {
+                if (regions[c].parent != r) continue;
+                for (size_t i = 0; i < regions[c].nfv; i++) {
+                    am_varid_t v = regions[c].fv[i];
+                    if (varid_set_contains(regions[r].bound, regions[r].nbound, v) == 0) continue;
+                    if (varid_set_add(alloc, &regions[r].fv, &regions[r].nfv, &regions[r].cfv, v) != 0) {
+                        am_free(alloc, by_depth);
+                        goto done;
+                    }
+                }
+            }
+        }
+        am_free(alloc, by_depth);
+    }
+
+    // 5. 分配槽位并解析 src（按深度升序：父先子后，保证父帧槽位已就绪）
+    {
+        size_t *by_depth = (size_t *)am_malloc(alloc, count * sizeof(size_t));
+        if (!by_depth) goto done;
+        for (size_t i = 0; i < count; i++) by_depth[i] = i;
+        for (size_t i = 1; i < count; i++) {
+            size_t key = by_depth[i];
+            size_t dk = frame_region_depth(regions, count, key);
+            size_t j = i;
+            while (j > 0 && frame_region_depth(regions, count, by_depth[j - 1]) > dk) {
+                by_depth[j] = by_depth[j - 1];
+                j--;
+            }
+            by_depth[j] = key;
+        }
+
+        for (size_t k = 0; k < count; k++) {
+            size_t r = by_depth[k];
+            size_t nslots = regions[r].nbound + regions[r].nfv;
+            size_t total = sizeof(am_frame_desc_t) + nslots * sizeof(am_frame_slot_t);
+            am_frame_desc_t *d = (am_frame_desc_t *)am_malloc(alloc, total);
+            if (!d) {
+                am_free(alloc, by_depth);
+                goto done;
+            }
+            memset(d, 0, total);
+            d->entry_iaddr = regions[r].entry;
+            d->nparam = regions[r].nparam;
+            d->nbound = (uint32_t)regions[r].nbound;
+            d->nfree = (uint32_t)regions[r].nfv;
+            d->flags = regions[r].flags;
+
+            // 约束变量槽
+            for (size_t i = 0; i < regions[r].nbound; i++) {
+                d->slots[i].varid = regions[r].bound[i];
+                d->slots[i].type = AM_BINDING_BOUND;
+                d->slots[i].src = AM_FRAME_SRC_NONE;
+            }
+            // 自由变量槽：src = 父帧中的槽号
+            size_t base = regions[r].nbound;
+            for (size_t i = 0; i < regions[r].nfv; i++) {
+                am_varid_t v = regions[r].fv[i];
+                d->slots[base + i].varid = v;
+                d->slots[base + i].type = AM_BINDING_FREE;
+                d->slots[base + i].src = AM_FRAME_SRC_NONE;
+
+                size_t p = regions[r].parent;
+                if (p == SIZE_MAX || !regions[p].desc) continue;
+                am_frame_desc_t *pd = regions[p].desc;
+                for (uint32_t s = 0; s < pd->nbound + pd->nfree; s++) {
+                    if (pd->slots[s].varid == v) {
+                        d->slots[base + i].src = s;
+                        break;
+                    }
+                }
+            }
+            regions[r].desc = d;
+        }
+        am_free(alloc, by_depth);
+    }
+
+    // 6. 汇总成按 iaddr 索引的帧表
+    {
+        table = (am_frame_table_t *)am_calloc(alloc, sizeof(am_frame_table_t));
+        if (!table) goto done;
+        table->length = (size_t)ctx->icount;
+        table->frames = (am_frame_desc_t **)am_calloc(alloc, table->length * sizeof(am_frame_desc_t *));
+        if (!table->frames) {
+            am_free(alloc, table);
+            table = NULL;
+            goto done;
+        }
+        for (size_t r = 0; r < count; r++) {
+            if (!regions[r].desc) continue;
+            if (regions[r].entry >= table->length) continue;
+            table->frames[regions[r].entry] = regions[r].desc;
+            regions[r].desc = NULL; // 所有权移交给帧表
+        }
+    }
+
+    // 7. 操作数重写：把可静态定位的变量访问改写成槽位寻址指令
+    if (table) am_frame_rewrite_operands(ctx, table, owner, regions, count);
+
+done:
+    for (size_t i = 0; i < count; i++) {
+        if (regions[i].bound) am_free(alloc, regions[i].bound);
+        if (regions[i].ref) am_free(alloc, regions[i].ref);
+        if (regions[i].fv) am_free(alloc, regions[i].fv);
+        if (regions[i].desc) am_free(alloc, regions[i].desc);
+    }
+    if (order) am_free(alloc, order);
+    if (slot_of) am_free(alloc, slot_of);
+    am_free(alloc, owner);
+    am_free(alloc, regions);
+    return table;
+}
+
+
+// ===============================================================================
+// 销毁 / 拷贝
+// ===============================================================================
+
+void am_frame_table_destroy(am_allocator_t *alloc, am_frame_table_t *table) {
+    if (!table) return;
+    if (table->frames) {
+        for (size_t i = 0; i < table->length; i++) {
+            if (table->frames[i]) am_free(alloc, table->frames[i]);
+        }
+        am_free(alloc, table->frames);
+    }
+    am_free(alloc, table);
+}
+
+am_frame_table_t *am_frame_table_copy(am_allocator_t *alloc, am_frame_table_t *table) {
+    if (!table || !table->frames) return NULL;
+
+    am_frame_table_t *copy = (am_frame_table_t *)am_calloc(alloc, sizeof(am_frame_table_t));
+    if (!copy) return NULL;
+    copy->length = table->length;
+    copy->frames = (am_frame_desc_t **)am_calloc(alloc, copy->length * sizeof(am_frame_desc_t *));
+    if (!copy->frames) {
+        am_free(alloc, copy);
+        return NULL;
+    }
+    for (size_t i = 0; i < table->length; i++) {
+        am_frame_desc_t *src = table->frames[i];
+        if (!src) continue;
+        size_t total = sizeof(am_frame_desc_t) +
+                       (size_t)(src->nbound + src->nfree) * sizeof(am_frame_slot_t);
+        am_frame_desc_t *d = (am_frame_desc_t *)am_malloc(alloc, total);
+        if (!d) {
+            am_frame_table_destroy(alloc, copy);
+            return NULL;
+        }
+        memcpy(d, src, total);
+        copy->frames[i] = d;
+    }
+    return copy;
+}
+
+
+am_frame_table_t *am_frame_table_shift(am_allocator_t *alloc, am_frame_table_t *table, size_t offset) {
+    if (!table || offset == 0) return table;
+
+    am_frame_table_t *shifted = (am_frame_table_t *)am_calloc(alloc, sizeof(am_frame_table_t));
+    if (!shifted) return NULL;
+    shifted->length = table->length + offset;
+    shifted->frames = (am_frame_desc_t **)am_calloc(alloc, shifted->length * sizeof(am_frame_desc_t *));
+    if (!shifted->frames) {
+        am_free(alloc, shifted);
+        return NULL;
+    }
+    for (size_t i = 0; i < table->length; i++) {
+        am_frame_desc_t *d = table->frames[i];
+        if (!d) continue;
+        d->entry_iaddr += (am_iaddr_t)offset;
+        shifted->frames[i + offset] = d;
+    }
+    am_free(alloc, table->frames);
+    am_free(alloc, table);
+    return shifted;
+}
+
+int32_t am_frame_table_merge(am_allocator_t *alloc, am_frame_table_t **pdst,
+                             am_frame_table_t *src, size_t new_length) {
+    if (!pdst) return -1;
+    if (!src || !src->frames) {
+        // 没有新描述符：仅确保 dst 长度足够（不足则扩容，内容为 NULL）
+        if (*pdst && (*pdst)->length >= new_length) return 0;
+    }
+
+    am_frame_table_t *dst = *pdst;
+    if (!dst) {
+        dst = (am_frame_table_t *)am_calloc(alloc, sizeof(am_frame_table_t));
+        if (!dst) return -1;
+        dst->length = new_length;
+        dst->frames = (am_frame_desc_t **)am_calloc(alloc, (new_length ? new_length : 1) * sizeof(am_frame_desc_t *));
+        if (!dst->frames) { am_free(alloc, dst); return -1; }
+        *pdst = dst;
+        if (!src || !src->frames) return 0;
+    }
+    else if (dst->length < new_length) {
+        size_t old = dst->length;
+        am_frame_desc_t **grown = (am_frame_desc_t **)am_calloc(alloc, (new_length ? new_length : 1) * sizeof(am_frame_desc_t *));
+        if (!grown) return -1;
+        memcpy(grown, dst->frames, old * sizeof(am_frame_desc_t *));
+        am_free(alloc, dst->frames);
+        dst->frames = grown;
+        dst->length = new_length;
+    }
+
+    for (size_t i = 0; i < src->length && i < dst->length; i++) {
+        am_frame_desc_t *s = src->frames[i];
+        if (!s) continue;
+        size_t total = sizeof(am_frame_desc_t) + (size_t)(s->nbound + s->nfree) * sizeof(am_frame_slot_t);
+        am_frame_desc_t *d = (am_frame_desc_t *)am_malloc(alloc, total);
+        if (!d) return -1;
+        memcpy(d, s, total);
+        if (dst->frames[i]) am_free(alloc, dst->frames[i]); // 覆盖同一入口的旧描述符
+        dst->frames[i] = d;
+    }
+    return 0;
+}
+
+// ===============================================================================
+// 序列化
+// ===============================================================================
+
+// 格式：[uvarint 描述符个数]
+//       每项：[uvarint entry][uvarint nparam][uvarint nbound][uvarint nfree][uvarint flags]
+//             随后 (nbound+nfree) 项 [uvarint varid][u8 type][uvarint src]
+size_t am_frame_table_dump_size(am_frame_table_t *table) {
+    return am_frame_table_dump(NULL, table, NULL, 0);
+}
+
+size_t am_frame_table_dump(am_allocator_t *alloc, am_frame_table_t *table, uint8_t *buffer, size_t offset) {
+    (void)alloc;
+    size_t pos = offset;
+
+    size_t count = 0;
+    if (table && table->frames) {
+        for (size_t i = 0; i < table->length; i++) {
+            if (table->frames[i]) count++;
+        }
+    }
+
+    pos += am_disk_write_uvarint(buffer, pos, (uint64_t)count);
+    if (count == 0) return pos - offset;
+
+    for (size_t i = 0; i < table->length; i++) {
+        am_frame_desc_t *d = table->frames[i];
+        if (!d) continue;
+        pos += am_disk_write_uvarint(buffer, pos, (uint64_t)d->entry_iaddr);
+        pos += am_disk_write_uvarint(buffer, pos, (uint64_t)d->nparam);
+        pos += am_disk_write_uvarint(buffer, pos, (uint64_t)d->nbound);
+        pos += am_disk_write_uvarint(buffer, pos, (uint64_t)d->nfree);
+        pos += am_disk_write_uvarint(buffer, pos, (uint64_t)d->flags);
+
+        uint32_t nslots = d->nbound + d->nfree;
+        for (uint32_t s = 0; s < nslots; s++) {
+            pos += am_disk_write_uvarint(buffer, pos, (uint64_t)d->slots[s].varid);
+            if (buffer != NULL && offset != SIZE_MAX) {
+                buffer[pos] = (uint8_t)(d->slots[s].type & 0xFF);
+            }
+            pos += 1;
+            pos += am_disk_write_uvarint(buffer, pos, (uint64_t)d->slots[s].src);
+        }
+    }
+    return pos - offset;
+}
+
+am_frame_table_t *am_frame_table_load(am_allocator_t *alloc, const uint8_t *buffer, size_t offset, size_t table_length) {
+    if (!alloc || !buffer) return NULL;
+
+    size_t pos = offset;
+    uint64_t count = 0;
+    size_t n = am_disk_read_uvarint(buffer, pos, &count);
+    if (!n) return NULL;
+    pos += n;
+
+    am_frame_table_t *table = (am_frame_table_t *)am_calloc(alloc, sizeof(am_frame_table_t));
+    if (!table) return NULL;
+    table->length = table_length;
+    table->frames = (am_frame_desc_t **)am_calloc(alloc, (table_length ? table_length : 1) * sizeof(am_frame_desc_t *));
+    if (!table->frames) {
+        am_free(alloc, table);
+        return NULL;
+    }
+
+    for (uint64_t k = 0; k < count; k++) {
+        uint64_t entry = 0, nparam = 0, nbound = 0, nfree = 0, flags = 0;
+        if (!(n = am_disk_read_uvarint(buffer, pos, &entry))) goto fail;
+        pos += n;
+        if (!(n = am_disk_read_uvarint(buffer, pos, &nparam))) goto fail;
+        pos += n;
+        if (!(n = am_disk_read_uvarint(buffer, pos, &nbound))) goto fail;
+        pos += n;
+        if (!(n = am_disk_read_uvarint(buffer, pos, &nfree))) goto fail;
+        pos += n;
+        if (!(n = am_disk_read_uvarint(buffer, pos, &flags))) goto fail;
+        pos += n;
+
+        if (entry >= table_length) goto fail;
+        size_t nslots = (size_t)nbound + (size_t)nfree;
+        size_t total = sizeof(am_frame_desc_t) + nslots * sizeof(am_frame_slot_t);
+        am_frame_desc_t *d = (am_frame_desc_t *)am_malloc(alloc, total);
+        if (!d) goto fail;
+        memset(d, 0, total);
+        d->entry_iaddr = (am_iaddr_t)entry;
+        d->nparam = (uint32_t)nparam;
+        d->nbound = (uint32_t)nbound;
+        d->nfree = (uint32_t)nfree;
+        d->flags = (uint32_t)flags;
+
+        for (size_t s = 0; s < nslots; s++) {
+            uint64_t varid = 0, src = 0;
+            if (!(n = am_disk_read_uvarint(buffer, pos, &varid))) { am_free(alloc, d); goto fail; }
+            pos += n;
+            uint32_t type = (uint32_t)buffer[pos];
+            pos += 1;
+            if (!(n = am_disk_read_uvarint(buffer, pos, &src))) { am_free(alloc, d); goto fail; }
+            pos += n;
+            d->slots[s].varid = (am_varid_t)varid;
+            d->slots[s].type = type;
+            d->slots[s].src = (uint32_t)src;
+        }
+        table->frames[entry] = d;
+    }
+    return table;
+
+fail:
+    am_frame_table_destroy(alloc, table);
+    return NULL;
+}
+
+
+// ===============================================================================
+// 调试
+// ===============================================================================
+
+void am_frame_table_print(am_frame_table_t *table) {
+    if (!table || !table->frames) {
+        printf("[frame] (empty table)\n");
+        return;
+    }
+    size_t count = 0;
+    size_t max_slots = 0;
+    size_t total_slots = 0;
+    for (size_t i = 0; i < table->length; i++) {
+        am_frame_desc_t *d = table->frames[i];
+        if (!d) continue;
+        count++;
+        size_t nslots = (size_t)d->nbound + d->nfree;
+        total_slots += nslots;
+        if (nslots > max_slots) max_slots = nslots;
+        printf("[frame] iaddr=%zu nparam=%u nbound=%u nfree=%u flags=%u\n",
+               (size_t)d->entry_iaddr, d->nparam, d->nbound, d->nfree, d->flags);
+    }
+    printf("[frame] frames=%zu total_slots=%zu max_slots=%zu avg=%.1f\n",
+           count, total_slots, max_slots,
+           count ? (double)total_slots / (double)count : 0.0);
+}
+/* ===== end:   src/am_frame.c ===== */
 
 /* ===== begin: src/am_lexer.c ===== */
 #include <stdint.h>
@@ -11715,16 +12461,53 @@ static int32_t while_tag_stack_pop(am_compiler_ctx_t *ctx) {
 
 // 功能说明：向am_compiler_ctx_t的ilcode中，增加一个am_instruction_t，并更新icount。
 // 实现说明：成功返回0；失败返回-1
+#define AM_ILCODE_POSFLAG_TARGET (0x01) // 该 iaddr 是跳转目标
+
+// 确保 ilcode 与其平行位置标志数组的容量至少为 need（两者同步扩容）。
+// 说明：位置标志用于 peephole 的保护——跳转目标处的指令不得被删除。
+static int32_t compiler_ensure_ilcode_capacity(am_compiler_ctx_t *ctx, am_iaddr_t need) {
+    if (!ctx) return -1;
+    if (ctx->ilcode_capacity >= need) return 0;
+
+    am_iaddr_t new_cap = ctx->ilcode_capacity;
+    while (new_cap < need) new_cap = new_cap ? new_cap * 2 : 64;
+
+    am_instruction_t *new_ilcode = (am_instruction_t *)am_realloc(
+        ctx->ast->alloc, ctx->ilcode, (size_t)new_cap * sizeof(am_instruction_t));
+    if (!new_ilcode) return -1;
+    ctx->ilcode = new_ilcode;
+
+    uint8_t *new_flags = (uint8_t *)am_realloc(
+        ctx->ast->alloc, ctx->ilcode_posflags, (size_t)new_cap * sizeof(uint8_t));
+    if (!new_flags) return -1;
+    ctx->ilcode_posflags = new_flags;
+    memset(ctx->ilcode_posflags + ctx->ilcode_capacity, 0,
+           (size_t)(new_cap - ctx->ilcode_capacity) * sizeof(uint8_t));
+
+    ctx->ilcode_capacity = new_cap;
+    return 0;
+}
+
+// 指令发射。内含一条 peephole：
+//   相邻的 push #undefined; pop 相互抵消（单值栈纪律为语句型 define/set!/内建调用补出的
+//   push #undefined，在外层“非末尾子表达式”处会立刻被 pop 掉，是纯浪费）。
+//   为保证跳转不错位，若该 push 是跳转目标则不可删。
 static int32_t emit_instruction(am_compiler_ctx_t *ctx, uint32_t opcode, am_value_t operand) {
     if (!ctx) return -1;
+    if (compiler_ensure_ilcode_capacity(ctx, ctx->icount + 1) != 0) return -1;
 
-    if (ctx->icount >= ctx->ilcode_capacity) {
-        am_iaddr_t new_cap = ctx->ilcode_capacity ? ctx->ilcode_capacity * 2 : 64;
-        am_instruction_t *new_ilcode = (am_instruction_t *)am_realloc(
-            ctx->ast->alloc, ctx->ilcode, new_cap * sizeof(am_instruction_t));
-        if (!new_ilcode) return -1;
-        ctx->ilcode = new_ilcode;
-        ctx->ilcode_capacity = new_cap;
+    // peephole：push #undefined; pop → 两条都删掉
+    // 保护：① 被删的 push 不得是跳转目标；② pop 自身不得是跳转目标
+    //       （删掉 pop 会使该跳转目标地址落到下一条指令上，造成错位）。
+    if (opcode == AM_VM_OP_pop && ctx->icount > 0) {
+        am_iaddr_t prev = ctx->icount - 1;
+        if (ctx->ilcode[prev].opcode == AM_VM_OP_push &&
+            ctx->ilcode[prev].operand == AM_VALUE_UNDEFINED &&
+            (ctx->ilcode_posflags[prev] & AM_ILCODE_POSFLAG_TARGET) == 0 &&
+            (ctx->ilcode_posflags[ctx->icount] & AM_ILCODE_POSFLAG_TARGET) == 0) {
+            ctx->icount = prev;
+            return 0;
+        }
     }
 
     ctx->ilcode[ctx->icount].opcode = opcode;
@@ -11761,6 +12544,12 @@ static int32_t am_compiler_locate_label(am_compiler_ctx_t *ctx, am_value_t index
 
     am_value_t label = am_map_get(ctx->ast->alloc, ctx->value_label_mapping, index_value);
     if (!am_value_is_label(label)) return -1;
+
+    // 记录该位置是跳转目标（peephole 不得删除跳转目标处的指令）
+    // 注意：locate_label 的 iaddr 指向“即将发射的下一条指令”，即刚过去的 icount，
+    //       因此这里要按 <= icount 处理（实际只需要预留标志位容量）。
+    if (compiler_ensure_ilcode_capacity(ctx, iaddr + 1) != 0) return -1;
+    ctx->ilcode_posflags[iaddr] |= AM_ILCODE_POSFLAG_TARGET;
 
     am_map_t *new_map = am_map_set(ctx->ast->alloc, ctx->label_iaddr_mapping,
                                     label, am_make_value_of_iaddr(iaddr));
@@ -11835,6 +12624,41 @@ static int32_t compile_while(am_compiler_ctx_t *ctx, am_handle_t handle);
 static int32_t compile_and(am_compiler_ctx_t *ctx, am_handle_t handle);
 static int32_t compile_or(am_compiler_ctx_t *ctx, am_handle_t handle);
 static int32_t compile_quasiquote(am_compiler_ctx_t *ctx, am_handle_t handle);
+
+
+// ===============================================================================
+// λ 代码区间记录（P1：帧分析的输入）
+// 说明：编译器的 λ 编译是“平铺”的（每个 λ 独立成块，内嵌只发生在 η 变换的临时 λ 上），
+//       因此这里只负责把“哪些指令属于哪个 λ”记下来；词法父子关系由帧分析从 AST 的
+//       scope 信息里取。
+// ===============================================================================
+
+static size_t compiler_region_begin(am_compiler_ctx_t *ctx, am_handle_t handle,
+                                    uint32_t nparam, uint32_t flags) {
+    if (ctx->lambda_region_count >= ctx->lambda_region_capacity) {
+        size_t new_cap = ctx->lambda_region_capacity ? ctx->lambda_region_capacity * 2 : 32;
+        am_lambda_region_t *p = (am_lambda_region_t *)am_realloc(
+            ctx->ast->alloc, ctx->lambda_regions, new_cap * sizeof(am_lambda_region_t));
+        if (!p) return SIZE_MAX;
+        ctx->lambda_regions = p;
+        ctx->lambda_region_capacity = new_cap;
+    }
+    size_t idx = ctx->lambda_region_count++;
+    am_lambda_region_t *r = &ctx->lambda_regions[idx];
+    r->entry = ctx->icount;
+    r->end = ctx->icount;
+    r->parent = ctx->current_lambda_region;
+    r->handle = handle;
+    r->nparam = nparam;
+    r->flags = flags;
+    return idx;
+}
+
+static void compiler_region_end(am_compiler_ctx_t *ctx, size_t idx) {
+    if (idx < ctx->lambda_region_count) {
+        ctx->lambda_regions[idx].end = ctx->icount;
+    }
+}
 
 
 // ===============================================================================
@@ -11967,6 +12791,11 @@ static int32_t compile_complex_application(am_compiler_ctx_t *ctx, am_handle_t h
     // 临时lambda标签
     if (am_compiler_locate_label(ctx, temp_lambda_idx, ctx->icount) != 0) return -1;
 
+    // 登记临时 λ 的代码区间（帧分析用）：区间 = [此处, apply_begin 位置)
+    size_t temp_region = compiler_region_begin(ctx, AM_HANDLE_NULL, (uint32_t)n, AM_FRAME_FLAG_TEMP);
+    if (temp_region == SIZE_MAX) return -1;
+    // 临时 λ 的帧只含自己的形参，不引入自由变量；其运行时父闭包 = 所在闭包
+
     // 按逆序存储形式参数
     for (size_t i = n; i-- > 0;) {
         am_varid_t p = am_compiler_make_temp_varid(ctx, L"TEMP_LAMBDA_PARAM", temp_lambda_label, i);
@@ -11991,6 +12820,7 @@ static int32_t compile_complex_application(am_compiler_ctx_t *ctx, am_handle_t h
 
     // apply_begin标签
     if (am_compiler_locate_label(ctx, apply_begin_idx, ctx->icount) != 0) return -1;
+    compiler_region_end(ctx, temp_region);
 
     // 编译实参
     for (size_t i = 0; i < n; i++) {
@@ -12103,6 +12933,16 @@ static int32_t compile_lambda(am_compiler_ctx_t *ctx, am_handle_t handle) {
     // 定位lambda开始标签
     if (am_compiler_locate_label(ctx, am_make_value_of_handle(handle), ctx->icount) != 0) return -1;
 
+    // 登记 λ 代码区间（帧分析用）
+    uint32_t region_flags = 0;
+    am_handle_t top_hd = am_ast_get_top_lambda_node_handle(ctx->ast);
+    if (top_hd != AM_HANDLE_NULL && top_hd == handle) region_flags |= AM_FRAME_FLAG_TOP;
+    size_t region = compiler_region_begin(ctx, handle, (uint32_t)compiler_lambda_param_count(node),
+                                          region_flags);
+    if (region == SIZE_MAX) return -1;
+    size_t saved_region = ctx->current_lambda_region;
+    ctx->current_lambda_region = region;
+
     // 按参数列表逆序，插入store指令
     am_uint_t n_param = compiler_lambda_param_count(node);
     for (am_int_t i = (am_int_t)n_param - 1; i >= 0; i--) {
@@ -12129,6 +12969,9 @@ static int32_t compile_lambda(am_compiler_ctx_t *ctx, am_handle_t handle) {
             if (emit_instruction(ctx, AM_VM_OP_push, AM_VALUE_UNDEFINED) != 0) return -1;
         }
     }
+
+    ctx->current_lambda_region = saved_region;
+    compiler_region_end(ctx, region);
 
     return emit_instruction(ctx, AM_VM_OP_return, AM_VALUE_UNDEFINED);
 }
@@ -12991,6 +13834,15 @@ am_module_t *am_compile(am_ast_t *ast, am_iaddr_t offset, am_iaddr_t ret) {
         return NULL;
     }
 
+    // 【P1】闭包帧分析：产出按 entry iaddr 索引的帧描述符表
+    // 失败不致命：无帧表时运行时全部退化为旧行为（复制全部绑定 + 线性查找）。
+    am_frame_table_t *frames = am_frame_analysis(ctx);
+    if (frames && offset > 0) {
+        // 描述符的 entry/下标是"模块内相对 iaddr"，而 lambda 地址已按 offset 重定位，
+        // 因此追加代码（System.eval）时必须同步右移。
+        frames = am_frame_table_shift(ast->alloc, frames, (size_t)offset);
+    }
+
     am_module_t *mod = (am_module_t *)am_calloc(ast->alloc, sizeof(am_module_t));
     if (!mod) {
         am_compiler_ctx_destroy(ctx);
@@ -13002,6 +13854,7 @@ am_module_t *am_compile(am_ast_t *ast, am_iaddr_t offset, am_iaddr_t ret) {
     mod->ast = ast;
     mod->ilcode = ctx->ilcode;
     mod->ilcode_length = ctx->icount;
+    mod->frames = frames;
 
     // ilcode所有权转移给module，避免ctx销毁时释放ilcode
     ctx->ilcode = NULL;
@@ -13028,6 +13881,10 @@ am_compiler_ctx_t *am_compiler_ctx_create(am_ast_t *ast) {
     ctx->ilcode = NULL;
     ctx->label_counter = 0;
     ctx->unique_id_counter = 0;
+    ctx->lambda_regions = NULL;
+    ctx->lambda_region_count = 0;
+    ctx->lambda_region_capacity = 0;
+    ctx->current_lambda_region = SIZE_MAX;
 
     ctx->value_label_mapping = am_map_create(ast->alloc, 64);
     ctx->label_iaddr_mapping = am_map_create(ast->alloc, 64);
@@ -13051,6 +13908,8 @@ void am_compiler_ctx_destroy(am_compiler_ctx_t *ctx) {
     if (!alloc) return;
 
     if (ctx->ilcode) am_free(alloc, ctx->ilcode);
+    if (ctx->ilcode_posflags) am_free(alloc, ctx->ilcode_posflags);
+    if (ctx->lambda_regions) am_free(alloc, ctx->lambda_regions);
     if (ctx->value_label_mapping) am_map_destroy(alloc, ctx->value_label_mapping);
     if (ctx->label_iaddr_mapping) am_map_destroy(alloc, ctx->label_iaddr_mapping);
     if (ctx->while_tag_stack) am_list_destroy(alloc, ctx->while_tag_stack);
@@ -13066,7 +13925,7 @@ void am_compiler_ctx_destroy(am_compiler_ctx_t *ctx) {
 
 
 #define MODULE_MAGIC     "BD4SURAM"
-#define MODULE_VERSION   ((uint32_t)202607u)
+#define MODULE_VERSION   ((uint32_t)202608u)
 
 // flags 位定义：目前格式固定为小端序（bit0=0），其余位保留
 #define MODULE_FLAGS_LITTLE_ENDIAN ((uint32_t)0u)
@@ -13088,6 +13947,7 @@ void am_compiler_ctx_destroy(am_compiler_ctx_t *ctx) {
 //   [u32] var_arn_mapping_offset / node_token_mapping_offset
 //   [u32] lambda_handles_offset / tailcall_handles_offset / var_top_offset
 //   [u32] strindex_offset
+//   [u32] frames_offset（P1：闭包帧描述符表）
 // 各区段在头部之后紧密排列（无对齐填充），偏移量相对于模块转储起点，0 表示该区段不存在。
 // ilcode 区段：每条指令为 [u8 opcode, dvalue operand]。
 
@@ -13117,9 +13977,10 @@ typedef struct {
     uint32_t tailcall_handles_offset;
     uint32_t var_top_offset;
     uint32_t strindex_offset;
+    uint32_t frames_offset;
 } module_header_t;
 
-#define MODULE_HEADER_DISK_SIZE (104)
+#define MODULE_HEADER_DISK_SIZE (108)
 
 // 将模块头写入 buffer（字段逐个小端写入，与宿主字节序/填充无关）
 static void module_header_write(uint8_t *buffer, size_t offset, const module_header_t *hdr) {
@@ -13148,6 +14009,7 @@ static void module_header_write(uint8_t *buffer, size_t offset, const module_hea
     am_disk_write_u32(buffer, pos, hdr->tailcall_handles_offset); pos += 4;
     am_disk_write_u32(buffer, pos, hdr->var_top_offset);    pos += 4;
     am_disk_write_u32(buffer, pos, hdr->strindex_offset);   pos += 4;
+    am_disk_write_u32(buffer, pos, hdr->frames_offset);     pos += 4;
 }
 
 // 从 buffer 读取模块头。成功返回 0，失败（magic/version/flags 不匹配）返回 -1。
@@ -13190,6 +14052,7 @@ static int32_t module_header_read(const uint8_t *buffer, size_t offset, module_h
     hdr->tailcall_handles_offset = am_disk_read_u32(buffer, pos); pos += 4;
     hdr->var_top_offset    = am_disk_read_u32(buffer, pos); pos += 4;
     hdr->strindex_offset   = am_disk_read_u32(buffer, pos); pos += 4;
+    hdr->frames_offset     = am_disk_read_u32(buffer, pos); pos += 4;
     return 0;
 }
 
@@ -13386,6 +14249,15 @@ size_t am_module_dump(am_allocator_t *container_alloc,
         off += sz;
     }
 
+    /* 闭包帧描述符表（P1） */
+    size_t frames_size = 0;
+    if (mod->frames) {
+        hdr.frames_offset = (uint32_t)(off - offset);
+        frames_size = am_frame_table_dump(ast->alloc, mod->frames, NULL, 0);
+        if (frames_size == SIZE_MAX) return SIZE_MAX;
+        off += frames_size;
+    }
+
     if (off - offset > UINT32_MAX) {
         fprintf(stderr, "[module_dump] module dump exceeds 4GiB\n");
         return SIZE_MAX;
@@ -13456,6 +14328,14 @@ size_t am_module_dump(am_allocator_t *container_alloc,
             am_strindex_dump(ast->alloc, ast->strindex,
                              buffer, offset + hdr.strindex_offset);
         }
+        if (hdr.frames_offset) {
+            size_t fw = am_frame_table_dump(ast->alloc, mod->frames,
+                                            buffer, offset + hdr.frames_offset);
+            if (fw != frames_size) {
+                fprintf(stderr, "[module_dump] frame table dump size mismatch\n");
+                return SIZE_MAX;
+            }
+        }
     }
 
     return (size_t)hdr.total_size;
@@ -13488,6 +14368,7 @@ am_module_t *am_module_load(am_allocator_t *container_alloc,
     mod->header = hdr->header;
     mod->opstack_depth = hdr->opstack_depth;
     mod->ilcode_length = hdr->ilcode_length;
+    mod->frames = NULL;
 
     if ((uint64_t)hdr->ilcode_length * (uint64_t)sizeof(am_instruction_t) > (uint64_t)SIZE_MAX) {
         fprintf(stderr, "[module_load] ilcode too large\n");
@@ -13592,6 +14473,13 @@ am_module_t *am_module_load(am_allocator_t *container_alloc,
         ast->strindex = am_strindex_load(obj_alloc, buffer,
                                          offset + hdr->strindex_offset);
         if (!ast->strindex) goto fail;
+    }
+
+    /* 闭包帧描述符表（P1）：缺失不影响正确性，运行时退化为旧行为 */
+    if (hdr->frames_offset) {
+        mod->frames = am_frame_table_load(container_alloc, buffer,
+                                          offset + hdr->frames_offset,
+                                          (size_t)hdr->ilcode_length);
     }
 
     return mod;
@@ -15174,6 +16062,9 @@ am_process_t *am_process_load_from_module(am_allocator_t *vm_alloc, am_allocator
     proc->current_closure_handle = AM_HANDLE_NULL;
     proc->host_context = NULL;
 
+    // 【P1】复制闭包帧描述符表（与 ilcode 同源，随进程存活）
+    proc->frames = am_frame_table_copy(vm_alloc, mod->frames);
+
     // 复制中间语言代码到进程
     proc->ilcode_length = mod->ilcode_length;
     proc->ilcode = (am_instruction_t *)am_malloc(vm_alloc, (mod->ilcode_length + 1) * sizeof(am_instruction_t));
@@ -15314,6 +16205,26 @@ am_process_t *am_process_load_from_module(am_allocator_t *vm_alloc, am_allocator
 int32_t am_process_destroy(am_process_t *proc) {
     if (!proc) return 0;
 
+    // 【P1】度量输出（AM_FRAME_STATS=1 时打印闭包帧统计）
+    {
+        const char *stats_env = getenv("AM_FRAME_STATS");
+        if (stats_env && stats_env[0] == '1') {
+            size_t n_frame = proc->stat_frame_closures;
+            size_t n_legacy = proc->stat_legacy_closures;
+            size_t n_all = n_frame + n_legacy;
+            printf("[frame-stats] pid=%zu closures=%zu (descriptor=%zu legacy=%zu) "
+                   "avg_slots=%.1f avg_free=%.1f fill_generic=%zu\n",
+                   (size_t)proc->pid, n_all, n_frame, n_legacy,
+                   n_frame ? (double)proc->stat_slots_total / (double)n_frame : 0.0,
+                   n_frame ? (double)proc->stat_free_slots_total / (double)n_frame : 0.0,
+                   proc->stat_fill_generic);
+        }
+    }
+
+    if (proc->frames) {
+        am_frame_table_destroy(proc->vm_alloc, proc->frames);
+        proc->frames = NULL;
+    }
     if (proc->ilcode) {
         am_free(proc->vm_alloc, proc->ilcode);
         proc->ilcode = NULL;
@@ -15486,6 +16397,82 @@ am_handle_t am_process_make_closure(am_process_t *proc, am_iaddr_t iaddr, am_han
 }
 
 
+// 功能说明：按帧描述符创建闭包（一次性成型）。
+// 实现说明：槽位在创建时全部就位（varid + 类型），其中
+//   1) BOUND 槽：值为 #undefined、未定状态，等序言的 store 写入；
+//   2) FREE 槽：从父闭包按 src 索引拉取（逐槽 varid 校验；不匹配或 src 缺失时
+//      退回“以父闭包为起点”的通用链式解析，保证动态父链下也正确）。
+// 由此闭包创建后帧大小固定、槽位下标语义固定，变量访问不再需要跨帧线性查找。
+am_handle_t am_process_make_closure_desc(am_process_t *proc, am_iaddr_t iaddr,
+                                        am_handle_t parent, am_frame_desc_t *desc) {
+    if (!proc || !proc->heap || !proc->heap_alloc || !desc) return AM_HANDLE_NULL;
+
+    size_t nslots = (size_t)desc->nbound + (size_t)desc->nfree;
+
+    am_handle_t hd = am_heap_alloc_handle(proc->vm_alloc, proc->heap_alloc, proc->heap);
+    if (hd == AM_HANDLE_NULL) return AM_HANDLE_NULL;
+
+    // 容量一次到位：静态槽位 + 少量余量（供运行期动态追加绑定使用）
+    am_obj_closure_t *closure_obj = am_closure_create(proc->heap_alloc, iaddr, parent,
+                                                      nslots + 8);
+    if (!closure_obj) {
+        am_heap_free_handle(proc->vm_alloc, proc->heap_alloc, proc->heap, hd);
+        return AM_HANDLE_NULL;
+    }
+
+    for (size_t i = 0; i < nslots; i++) {
+        closure_obj->bindings[i].varid = desc->slots[i].varid;
+        // 约束变量槽：预置但**未定义**（等序言的 store 写入，以保持“未定义穿透外层”的语义）
+        // 自由变量槽：DEFINED 由下面的填充过程按父帧继承
+        closure_obj->bindings[i].type = (int32_t)desc->slots[i].type;
+        closure_obj->bindings[i].dirty_flag = 0;
+        closure_obj->bindings[i].value = AM_VALUE_UNDEFINED;
+    }
+    closure_obj->length = nslots;
+    closure_obj->frame_len = nslots; // 索引帧见证：槽位下标语义固定
+
+    // 自由变量槽：从父闭包拉取快照
+    if (desc->nfree > 0) {
+        am_obj_closure_t *parent_obj = am_process_get_closure(proc, parent);
+        for (uint32_t k = 0; k < desc->nfree; k++) {
+            size_t idx = (size_t)desc->nbound + k;
+            am_varid_t varid = desc->slots[idx].varid;
+            uint32_t src = desc->slots[idx].src;
+
+            int done = 0;
+            if (parent_obj && src != AM_FRAME_SRC_NONE && (size_t)src < parent_obj->length &&
+                parent_obj->bindings[src].varid == varid) {
+                const am_binding_t *pb = &parent_obj->bindings[src];
+                closure_obj->bindings[idx].value = pb->value;
+                closure_obj->bindings[idx].dirty_flag = 0;
+                closure_obj->bindings[idx].type =
+                    AM_BINDING_FREE | (pb->type & AM_BINDING_DEFINED);
+                done = 1;
+            }
+            if (!done) {
+                am_value_t v = am_process_dereference_from(proc, parent, varid);
+                if (v != (am_value_t)UINTPTR_MAX) {
+                    closure_obj->bindings[idx].value = v;
+                    closure_obj->bindings[idx].type = AM_BINDING_FREE | AM_BINDING_DEFINED;
+                }
+            }
+        }
+    }
+
+    am_value_t closure_value = am_make_value_of_ptr((am_object_t *)closure_obj);
+    if (am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, hd, closure_value) != 0) {
+        am_closure_destroy(proc->heap_alloc, closure_obj);
+        am_heap_free_handle(proc->vm_alloc, proc->heap_alloc, proc->heap, hd);
+        return AM_HANDLE_NULL;
+    }
+
+    proc->stat_frame_closures++;
+    proc->stat_slots_total += nslots;
+    proc->stat_free_slots_total += desc->nfree;
+    return hd;
+}
+
+
 // 功能说明：根据闭包handle获取闭包对象。成功返回指针，失败返回NULL
 am_obj_closure_t *am_process_get_closure(am_process_t *proc, am_handle_t hd) {
     if (!proc || !proc->heap) return NULL;
@@ -15501,42 +16488,73 @@ am_obj_closure_t *am_process_get_closure(am_process_t *proc, am_handle_t hd) {
 
 
 // 功能说明：获取进程的当前闭包对象。成功返回指针，失败返回NULL
+// 实现说明：带指针缓存（proc->current_closure_obj）。缓存为 NULL 时惰性重建，
+//           因此 GC 压缩后只需把缓存置 NULL 即可保证正确性。
 am_obj_closure_t *am_process_get_current_closure(am_process_t *proc) {
     if (!proc) return NULL;
-    return am_process_get_closure(proc, proc->current_closure_handle);
+    if (!proc->current_closure_obj) {
+        proc->current_closure_obj = am_process_get_closure(proc, proc->current_closure_handle);
+    }
+    return proc->current_closure_obj;
 }
 
 
-// 功能说明：变量解引用。成功返回TPV，失败返回UINTPTR_MAX
-// 设计说明：先在当前闭包查找约束变量；若不存在，则沿闭包链查找约束变量定义位置，
-//          根据脏标记决定使用定义位置的约束变量值，还是使用当前闭包中的自由变量值。
-am_value_t am_process_dereference(am_process_t *proc, am_varid_t varid) {
-    if (!proc) return (am_value_t)UINTPTR_MAX;
+// 功能说明：以指定闭包为起点做变量解引用（语义同 am_process_dereference）。
+// 设计说明：先在起点闭包查找约束变量；若不存在，则沿闭包链查找约束变量定义位置，
+//          根据脏标记决定使用定义位置的约束变量值，还是使用起点闭包中的自由变量值。
+// 实现说明：P0 起每个闭包内同一 varid 至多一个绑定项，因此原来"先 has_bound_var、
+//          再 get_bound_var、再 is_dirty_var"的三四轮全表扫描合并为每层一次扫描。
+//          P1 起帧变小（不再复制全部绑定），同样代码的常数项随之下降。
+static am_value_t deref_impl(am_process_t *proc, am_handle_t start_handle,
+                             am_obj_closure_t *start_obj, am_varid_t varid) {
+    if (!proc || !start_obj) return (am_value_t)UINTPTR_MAX;
 
-    am_obj_closure_t *current_closure_obj = am_process_get_current_closure(proc);
-    if (!current_closure_obj) return (am_value_t)UINTPTR_MAX;
-
-    // 查找当前闭包的约束变量
-    if (am_closure_has_bound_var(proc->heap_alloc, current_closure_obj, varid) == 0) {
-        return am_closure_get_bound_var(proc->heap_alloc, current_closure_obj, varid);
+    // 查找起点闭包的约束变量
+    am_binding_t *binding = am_closure_find_binding(start_obj, varid, AM_BINDING_BOUND);
+    if (binding) {
+        return binding->value;
     }
 
-    // 查找当前闭包的自由变量（如果存在）对应的词法定义环境
-    am_handle_t closure_handle = proc->current_closure_handle;
+    // 查找起点闭包的自由变量（如果存在）对应的词法定义环境
+    am_handle_t closure_handle = start_handle;
     while (closure_handle != AM_HANDLE_NULL) {
         am_obj_closure_t *closure_obj = am_process_get_closure(proc, closure_handle);
         if (!closure_obj) break;
 
-        if (am_closure_has_bound_var(proc->heap_alloc, closure_obj, varid) == 0) {
+        am_binding_t *def_binding = am_closure_find_binding(closure_obj, varid, AM_BINDING_BOUND);
+        if (def_binding) {
             // 找到约束变量定义位置
-            if (am_closure_is_dirty_var(proc->heap_alloc, closure_obj, varid) == 0) {
+            if (def_binding->dirty_flag) {
                 // 脏标记为真：使用约束变量定义位置的新值
-                return am_closure_get_bound_var(proc->heap_alloc, closure_obj, varid);
+                return def_binding->value;
             }
-            else {
-                // 脏标记为假：使用当前闭包中的自由变量值
-                return am_closure_get_free_var(proc->heap_alloc, current_closure_obj, varid);
+            // 脏标记为假：使用起点闭包中的自由变量值
+            am_binding_t *free_binding = am_closure_find_binding(start_obj, varid, AM_BINDING_FREE);
+            if (free_binding) return free_binding->value;
+
+            // 安全兜底：起点闭包未持有该自由变量快照（帧描述符分析不完备时的情形），
+            // 退而使用定义位置的值（比返回 #undefined 更接近正确语义）。
+            proc->stat_fill_generic++;
+            if (proc->stat_fill_generic <= 40) {
+                const char *dbg = getenv("AM_FRAME_DEBUG");
+                if (dbg && dbg[0] == '1') {
+                    wchar_t *nm = am_vocab_get(proc->vm_alloc, proc->var_vocab, &varid);
+                    printf("[frame-gap] pc=%zu op=%u il_op=%zu cur_hd=%zu from_hd=%zu from_iaddr=%zu varid=%zu name=%ls start_len=%zu | slots:",
+                           (size_t)proc->PC, (unsigned)proc->ilcode[proc->PC].opcode,
+                           am_value_is_varid(proc->ilcode[proc->PC].operand) ? (size_t)am_value_to_varid(proc->ilcode[proc->PC].operand) : (size_t)0,
+                           (size_t)proc->current_closure_handle, (size_t)start_handle,
+                           (size_t)start_obj->iaddr, (size_t)varid,
+                           nm ? nm : L"?", start_obj->length);
+                    for (size_t z = 0; z < start_obj->length; z++) {
+                        wchar_t *sn = am_vocab_get(proc->vm_alloc, proc->var_vocab,
+                                                   &start_obj->bindings[z].varid);
+                        printf(" [%zu v=%zu/%ls t=%d]", z, (size_t)start_obj->bindings[z].varid,
+                               sn ? sn : L"?", (int)start_obj->bindings[z].type);
+                    }
+                    printf("\n");
+                }
             }
+            return def_binding->value;
         }
 
         closure_handle = closure_obj->parent;
@@ -15544,6 +16562,23 @@ am_value_t am_process_dereference(am_process_t *proc, am_varid_t varid) {
 
     // 未找到变量定义
     return (am_value_t)UINTPTR_MAX;
+}
+
+
+// 功能说明：以指定闭包为起点做变量解引用（先查闭包对象，再进入通用实现）。
+am_value_t am_process_dereference_from(am_process_t *proc, am_handle_t start_handle, am_varid_t varid) {
+    if (!proc) return (am_value_t)UINTPTR_MAX;
+    am_obj_closure_t *start_obj = am_process_get_closure(proc, start_handle);
+    return deref_impl(proc, start_handle, start_obj, varid);
+}
+
+
+// 功能说明：变量解引用（当前闭包）。成功返回TPV，失败返回UINTPTR_MAX
+// 实现说明：走 current_closure_obj 指针缓存，避免每条 load/call 指令一次堆 map 查找。
+am_value_t am_process_dereference(am_process_t *proc, am_varid_t varid) {
+    if (!proc) return (am_value_t)UINTPTR_MAX;
+    am_obj_closure_t *cur = am_process_get_current_closure(proc);
+    return deref_impl(proc, proc->current_closure_handle, cur, varid);
 }
 
 
@@ -15726,7 +16761,7 @@ am_iaddr_t am_process_restore_continuation_snapshot(am_process_t *proc, am_handl
     }
     proc->fstack_top = proc->fstack + cont_fstack_length;
 
-    proc->current_closure_handle = cont->current_closure_handle;
+    am_process_set_current_closure(proc, cont->current_closure_handle);
     proc->current_dynamic_wind_entry = cont->current_dynamic_wind_entry_handle;
     proc->current_dynamic_wind_thunk = cont->current_dynamic_wind_thunk_handle;
 
@@ -16753,6 +17788,10 @@ int32_t am_gc_collect(am_allocator_t *heap_alloc, am_process_t **process_pool,
      * force_compact 非 0 时无视 AM_HEAP_COMPACT_INTERVAL 当轮强制压缩。 */
     if ((force_compact || (gc_seq % AM_HEAP_COMPACT_INTERVAL) == 0) && heap_count > 0) {
         if (am_gc_compact(heap_alloc, heaps, heap_count) == 0) {
+            /* 压缩会搬移堆对象，进程内缓存的闭包对象指针必须失效（惰性重建） */
+            for (size_t i = 0; i < process_count; i++) {
+                if (process_pool[i]) process_pool[i]->current_closure_obj = NULL;
+            }
             am_allocator_pool_t *pool = am_allocator_pool_current();
             if (pool) {
                 (void)am_allocator_pool_auto_adjust(pool);
@@ -17132,21 +18171,46 @@ int32_t am_runtime_queue_read(am_runtime_t *rt, am_queue_t *q, am_timestamp_t ti
 
 // 复制当前闭包的所有绑定到新闭包作为自由变量（用于 load/loadclosure/call）
 // new_closure_hd 必须已绑定到一个新创建的 closure 对象。
+static int32_t copy_current_closure_bindings_as_free_vars(am_process_t *proc, am_handle_t new_closure_hd);
+
+// 功能说明：创建闭包并继承自由变量（三条创建路径的唯一入口）。
+// 实现说明：若该 λ 有帧描述符，则按描述符一次性成型（只复制真正引用的自由变量）；
+//           否则退化为旧行为（复制当前闭包的全部绑定）。
+//           P1 度量：descriptor / legacy 两条路径分别计数。
+static am_handle_t make_closure_and_inherit(am_process_t *proc, am_iaddr_t iaddr) {
+    am_frame_desc_t *desc = am_frame_lookup(proc->frames, iaddr);
+    if (desc && (desc->flags & AM_FRAME_FLAG_OPAQUE) == 0) {
+        // 有描述符时必须按描述符建帧：该 λ 的代码可能已含槽位寻址指令，
+        // 退回旧布局会造成槽位错位，因此失败即失败，不做退化。
+        return am_process_make_closure_desc(proc, iaddr, proc->current_closure_handle, desc);
+    }
+
+    am_handle_t hd = am_process_make_closure(proc, iaddr, proc->current_closure_handle);
+    if (hd == AM_HANDLE_NULL) return AM_HANDLE_NULL;
+    if (copy_current_closure_bindings_as_free_vars(proc, hd) != 0) return AM_HANDLE_NULL;
+    proc->stat_legacy_closures++;
+    return hd;
+}
+
+
+// 功能说明：完成闭包创建的最后一步：把当前闭包的全部绑定一次性继承为新闭包的自由变量。
+// 实现说明：new_closure_hd 必须已绑定到一个新创建的、空的 closure 对象。
+//           P0 把原来的"逐条 am_closure_init_free_var"换成单次容量确保 + 顺序拷贝：
+//           旧实现对空闭包逐条插入时，每条要做 2 次必然落空的线性查找，且从容量 16
+//           开始每次翻倍都要 malloc+memcpy+free，总体是 O(n²) 且带 n 次重分配；
+//           新实现是 O(n) 且只可能分配一次。
 static int32_t copy_current_closure_bindings_as_free_vars(am_process_t *proc, am_handle_t new_closure_hd) {
     am_obj_closure_t *current = am_process_get_current_closure(proc);
     am_obj_closure_t *new_closure = am_process_get_closure(proc, new_closure_hd);
     if (!new_closure) return -1;
 
-    if (current) {
-        for (size_t i = 0; i < current->length; i++) {
-            am_binding_t *b = &current->bindings[i];
-            new_closure = am_closure_init_free_var(proc->heap_alloc, new_closure, b->varid, b->value);
-            if (!new_closure) return -1;
-        }
-        if (new_closure != am_process_get_closure(proc, new_closure_hd)) {
-            am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, new_closure_hd,
-                        am_make_value_of_ptr((am_object_t *)new_closure));
-        }
+    if (!current || current->length == 0) return 0;
+
+    am_obj_closure_t *filled = am_closure_fill_free_vars(proc->heap_alloc, new_closure, current);
+    if (!filled) return -1;
+    if (filled != am_process_get_closure(proc, new_closure_hd)) {
+        am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, new_closure_hd,
+                    am_make_value_of_ptr((am_object_t *)filled));
     }
     return 0;
 }
@@ -17281,6 +18345,14 @@ static bool runtime_value_equal(am_process_t *proc, am_value_t a, am_value_t b) 
 }
 
 
+// 前向声明（槽位指令族的退化路径需要调用这些通用实现）
+static int32_t op_load(am_runtime_t *rt, am_process_t *proc, am_value_t operand);
+static int32_t op_store(am_runtime_t *rt, am_process_t *proc, am_value_t operand);
+static int32_t op_set(am_runtime_t *rt, am_process_t *proc, am_value_t operand);
+static int32_t op_call_async(am_runtime_t *rt, am_process_t *proc, am_value_t operand, am_iaddr_t return_target);
+static int32_t op_call_target(am_runtime_t *rt, am_process_t *proc, am_value_t target, am_iaddr_t return_target);
+
+
 // ===============================================================================
 // 第一类：基本存取指令
 // ===============================================================================
@@ -17300,6 +18372,7 @@ static int32_t op_store(am_runtime_t *rt, am_process_t *proc, am_value_t operand
     if (new_current != current) {
         am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, proc->current_closure_handle,
                     am_make_value_of_ptr((am_object_t *)new_current));
+        am_process_refresh_current_closure_obj(proc, new_current);
     }
 
     am_process_step(proc);
@@ -17324,9 +18397,8 @@ static int32_t op_load(am_runtime_t *rt, am_process_t *proc, am_value_t operand)
     // 若值为 iaddr，说明是 lambda 标签解析后的地址，创建闭包
     if (am_value_is_iaddr(value)) {
         am_iaddr_t iaddr = am_value_to_iaddr(value);
-        am_handle_t closure_hd = am_process_make_closure(proc, iaddr, proc->current_closure_handle);
+        am_handle_t closure_hd = make_closure_and_inherit(proc, iaddr);
         if (closure_hd == AM_HANDLE_NULL) return -1;
-        if (copy_current_closure_bindings_as_free_vars(proc, closure_hd) != 0) return -1;
         am_process_push_operand(proc, am_make_value_of_handle(closure_hd));
     }
     else {
@@ -17343,13 +18415,142 @@ static int32_t op_loadclosure(am_runtime_t *rt, am_process_t *proc, am_value_t o
     if (!am_value_is_iaddr(operand)) return -1;
 
     am_iaddr_t iaddr = am_value_to_iaddr(operand);
-    am_handle_t closure_hd = am_process_make_closure(proc, iaddr, proc->current_closure_handle);
+    am_handle_t closure_hd = make_closure_and_inherit(proc, iaddr);
     if (closure_hd == AM_HANDLE_NULL) return -1;
-    if (copy_current_closure_bindings_as_free_vars(proc, closure_hd) != 0) return -1;
 
     am_process_push_operand(proc, am_make_value_of_handle(closure_hd));
     am_process_step(proc);
     return 0;
+}
+
+
+// ===============================================================================
+// 索引帧槽位指令族（P2）
+// 说明：操作数为 (slot << 2) | 标志位。执行前提是该闭包按帧描述符创建（frame_len > 0），
+//       槽位下标语义由编译器静态确定，因此这里不需要任何查找。
+//       任何与前提不符的情况（槽号越界 / 槽位未定义 / 进程降级）都退回带 varid 的通用路径，
+//       而 varid 从槽位自身取得——所以退化只会变慢，不会变错。
+// ===============================================================================
+
+#define AM_SLOT_ENC(slot, flags)   (((am_uint_t)(slot) << 2) | (am_uint_t)(flags))
+#define AM_SLOT_INDEX(enc)         ((size_t)((enc) >> 2))
+#define AM_SLOT_FLAG_FREE_SNAPSHOT (0x1u)
+
+// 槽位直读。失败（需要走通用路径）返回 -1，成功返回 0 并把值写入 *out。
+static inline int32_t slot_read(am_process_t *proc, size_t enc, am_value_t *out) {
+    am_obj_closure_t *cl = proc->current_closure_obj;
+    if (!cl) cl = am_process_get_current_closure(proc);
+    if (!cl) return -1;
+
+    size_t slot = AM_SLOT_INDEX(enc);
+    if (slot >= cl->frame_len) return -1;      // 非索引帧：退化
+
+    am_binding_t *b = &cl->bindings[slot];
+    if ((b->type & AM_BINDING_DEFINED) == 0) return -1;             // 尚未赋值：退化
+    if ((enc & AM_SLOT_FLAG_FREE_SNAPSHOT) && !proc->closure_fast) return -1; // 降级
+
+    *out = b->value;
+
+#ifdef AM_CLOSURE_VERIFY
+    // 影子验证（仅调试构建）：槽位直读的结果必须与通用解引用一致。
+    {
+        am_value_t slow = am_process_dereference_from(proc, proc->current_closure_handle, b->varid);
+        if (slow != b->value) {
+            wchar_t *nm = am_vocab_get(proc->vm_alloc, proc->var_vocab, &b->varid);
+            printf("[closure-verify] 不一致: pc=%zu slot=%zu varid=%zu/%ls fast=%zu slow=%zu\n",
+                   (size_t)proc->PC, slot, (size_t)b->varid, nm ? nm : L"?",
+                   (size_t)b->value, (size_t)slow);
+            fflush(stdout);
+            abort();
+        }
+    }
+#endif
+    return 0;
+}
+
+// 槽位退化时取回该槽位对应的 varid（用于走通用路径）
+static inline am_varid_t slot_varid(am_process_t *proc, size_t enc) {
+    am_obj_closure_t *cl = am_process_get_current_closure(proc);
+    if (cl) {
+        size_t slot = AM_SLOT_INDEX(enc);
+        if (slot < cl->length) return cl->bindings[slot].varid;
+    }
+    return (am_varid_t)SIZE_MAX - 1;
+}
+
+static int32_t op_load_slot(am_runtime_t *rt, am_process_t *proc, am_value_t operand) {
+    size_t enc = (size_t)am_value_to_uint(operand);
+    am_value_t v;
+    if (slot_read(proc, enc, &v) == 0) {
+        if (!am_value_is_iaddr(v)) {
+            am_process_push_operand(proc, v);
+            am_process_step(proc);
+            return 0;
+        }
+        // 变量值是 lambda 地址：创建闭包实例（与原 op_load 的 iaddr 分支一致）
+        am_iaddr_t iaddr = am_value_to_iaddr(v);
+        am_handle_t closure_hd = make_closure_and_inherit(proc, iaddr);
+        if (closure_hd == AM_HANDLE_NULL) return -1;
+        am_process_push_operand(proc, am_make_value_of_handle(closure_hd));
+        am_process_step(proc);
+        return 0;
+    }
+    return op_load(rt, proc, am_make_value_of_varid(slot_varid(proc, enc)));
+}
+
+static int32_t op_store_slot(am_runtime_t *rt, am_process_t *proc, am_value_t operand) {
+    size_t enc = (size_t)am_value_to_uint(operand);
+    am_obj_closure_t *cl = am_process_get_current_closure(proc);
+    size_t slot = AM_SLOT_INDEX(enc);
+    if (cl && slot < cl->frame_len) {
+        am_binding_t *b = &cl->bindings[slot];
+        b->type = AM_BINDING_BOUND | AM_BINDING_DEFINED; // define：赋新值并清除脏标记
+        b->value = am_process_pop_operand(proc);
+        b->dirty_flag = 0;
+        am_process_step(proc);
+        return 0;
+    }
+    if (getenv("AM_SLOT_DEBUG")) {
+        am_obj_closure_t *c2 = am_process_get_current_closure(proc);
+        printf("[store_slot-fallback] pc=%zu enc=%zu slot=%zu cl=%p frame_len=%zu len=%zu\n",
+               (size_t)proc->PC, enc, slot, (void *)c2,
+               c2 ? c2->frame_len : (size_t)0, c2 ? c2->length : (size_t)0);
+    }
+    return op_store(rt, proc, am_make_value_of_varid(slot_varid(proc, enc)));
+}
+
+static int32_t op_set_slot(am_runtime_t *rt, am_process_t *proc, am_value_t operand) {
+    size_t enc = (size_t)am_value_to_uint(operand);
+    am_obj_closure_t *cl = am_process_get_current_closure(proc);
+    size_t slot = AM_SLOT_INDEX(enc);
+    if (cl && slot < cl->frame_len) {
+        am_binding_t *b = &cl->bindings[slot];
+        b->type |= AM_BINDING_DEFINED;                   // set!：置脏，子闭包沿链可见新值
+        b->dirty_flag = 1;
+        b->value = am_process_pop_operand(proc);
+        am_process_step(proc);
+        return 0;
+    }
+    return op_set(rt, proc, am_make_value_of_varid(slot_varid(proc, enc)));
+}
+
+static int32_t op_call_slot(am_runtime_t *rt, am_process_t *proc, am_value_t operand) {
+    size_t enc = (size_t)am_value_to_uint(operand);
+    am_value_t target;
+    if (slot_read(proc, enc, &target) == 0) {
+        return op_call_target(rt, proc, target, proc->PC + 1);
+    }
+    return op_call_async(rt, proc, am_make_value_of_varid(slot_varid(proc, enc)), proc->PC + 1);
+}
+
+// 尾调用版本（返回目标为 SIZE_MAX）
+static int32_t op_tailcall_slot(am_runtime_t *rt, am_process_t *proc, am_value_t operand) {
+    size_t enc = (size_t)am_value_to_uint(operand);
+    am_value_t target;
+    if (slot_read(proc, enc, &target) == 0) {
+        return op_call_target(rt, proc, target, SIZE_MAX);
+    }
+    return op_call_async(rt, proc, am_make_value_of_varid(slot_varid(proc, enc)), SIZE_MAX);
 }
 
 
@@ -17402,6 +18603,7 @@ static int32_t op_set(am_runtime_t *rt, am_process_t *proc, am_value_t operand) 
             am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, current_h,
                         am_make_value_of_ptr((am_object_t *)new_current));
             current = new_current;
+            am_process_refresh_current_closure_obj(proc, new_current);
         }
     }
 
@@ -17416,6 +18618,7 @@ static int32_t op_set(am_runtime_t *rt, am_process_t *proc, am_value_t operand) 
             if (new_closure != closure) {
                 am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, h,
                             am_make_value_of_ptr((am_object_t *)new_closure));
+                if (h == current_h) am_process_refresh_current_closure_obj(proc, new_closure);
             }
             break;
         }
@@ -17570,6 +18773,9 @@ static am_handle_t dynamic_wind_stack_pop(am_process_t *proc) {
 
 
 // call / tailcall 的共享实现。return_target 为 SIZE_MAX 表示尾调用不压栈帧。
+// 按“已解析的调用目标值”执行调用（iaddr 直接调用 lambda / handle 调用闭包或续体）
+static int32_t op_call_target(am_runtime_t *rt, am_process_t *proc, am_value_t target, am_iaddr_t return_target);
+
 static int32_t op_call_async(am_runtime_t *rt, am_process_t *proc, am_value_t operand, am_iaddr_t return_target) {
     (void)rt;
 
@@ -17595,6 +18801,12 @@ static int32_t op_call_async(am_runtime_t *rt, am_process_t *proc, am_value_t op
         target = operand;
     }
 
+    return op_call_target(rt, proc, target, return_target);
+}
+
+static int32_t op_call_target(am_runtime_t *rt, am_process_t *proc, am_value_t target, am_iaddr_t return_target) {
+    (void)rt;
+
     // iaddr：直接调用 lambda
     if (am_value_is_iaddr(target)) {
         am_iaddr_t iaddr = am_value_to_iaddr(target);
@@ -17613,9 +18825,8 @@ static int32_t op_call_async(am_runtime_t *rt, am_process_t *proc, am_value_t op
             }
         }
 
-        am_handle_t closure_hd = am_process_make_closure(proc, iaddr, proc->current_closure_handle);
+        am_handle_t closure_hd = make_closure_and_inherit(proc, iaddr);
         if (closure_hd == AM_HANDLE_NULL) return -1;
-        if (copy_current_closure_bindings_as_free_vars(proc, closure_hd) != 0) return -1;
 
         am_process_set_current_closure(proc, closure_hd);
         am_process_goto(proc, iaddr);
@@ -17663,7 +18874,7 @@ static int32_t op_call_async(am_runtime_t *rt, am_process_t *proc, am_value_t op
         // 判断builtin函数
         int32_t opcode = check_builtin_varid(proc, v);
         if (opcode >= 0) {
-            return am_runtime_op_dispatch(rt, proc, (uint32_t)opcode, operand);
+            return am_runtime_op_dispatch(rt, proc, (uint32_t)opcode, target);
         }
         // 判断 native 调用
         else if (am_runtime_check_native_ref(rt, proc, v) == 0) {
@@ -17671,6 +18882,22 @@ static int32_t op_call_async(am_runtime_t *rt, am_process_t *proc, am_value_t op
         }
     }
 
+    if (getenv("AM_CALL_DEBUG")) {
+        am_obj_closure_t *c = am_process_get_current_closure(proc);
+        printf("[call-dbg] pc=%zu op=%u target_kind=%d target=%zu cur_iaddr=%zu frame_len=%zu len=%zu\n",
+               (size_t)proc->PC, (unsigned)proc->ilcode[proc->PC].opcode,
+               (int)am_value_type(target), (size_t)target,
+               c ? (size_t)c->iaddr : (size_t)-1, c ? c->frame_len : (size_t)0,
+               c ? c->length : (size_t)0);
+        if (c) {
+            for (size_t z = 0; z < c->length; z++) {
+                wchar_t *nm = am_vocab_get(proc->vm_alloc, proc->var_vocab, &c->bindings[z].varid);
+                printf("   slot %zu varid=%zu/%ls type=%d val=%zu\n", z,
+                       (size_t)c->bindings[z].varid, nm ? nm : L"?",
+                       (int)c->bindings[z].type, (size_t)c->bindings[z].value);
+            }
+        }
+    }
     am_runtime_error(rt, L"[Runtime] call: 错误的调用目标\n");
 
     return -1;
@@ -17773,6 +19000,7 @@ static int32_t op_capturecc(am_runtime_t *rt, am_process_t *proc, am_value_t ope
     if (new_current != current) {
         am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, proc->current_closure_handle,
                     am_make_value_of_ptr((am_object_t *)new_current));
+        am_process_refresh_current_closure_obj(proc, new_current);
     }
 
     am_process_step(proc);
@@ -18761,7 +19989,15 @@ static int32_t op_mul(am_runtime_t *rt, am_process_t *proc, am_value_t operand) 
     (void)operand;
     am_value_t a = am_process_pop_operand(proc);
     am_value_t b = am_process_pop_operand(proc);
-    if (!am_value_is_number(a) || !am_value_is_number(b)) return -1;
+    if (!am_value_is_number(a) || !am_value_is_number(b)) {
+        if (getenv("AM_STACK_DEBUG")) {
+            printf("[mul-fail] pc=%zu a=%zu(t=%d) b=%zu(t=%d) olen=%zu\n", (size_t)proc->PC,
+                   (size_t)a, (int)am_value_type(a), (size_t)b, (int)am_value_type(b),
+                   (size_t)(proc->opstack_top - proc->opstack));
+            fflush(stdout);
+        }
+        return -1;
+    }
 
     if (am_value_is_float(a) || am_value_is_float(b)) {
         am_float_t result = am_runtime_number_to_float(b) * am_runtime_number_to_float(a);
@@ -19543,7 +20779,7 @@ static int32_t runtime_process_gut(am_process_t *proc) {
     }
 
     proc->PC = 0;
-    proc->current_closure_handle = AM_HANDLE_NULL;
+    am_process_set_current_closure(proc, AM_HANDLE_NULL);
     proc->gc_count = 0;
     proc->pending_kill = false;
 
@@ -19795,6 +21031,11 @@ int32_t am_runtime_op_dispatch(am_runtime_t *rt, am_process_t *proc, uint32_t op
         case AM_VM_OP_length:      return op_length(rt, proc, operand);
         case AM_VM_OP_concat:      return op_concat(rt, proc, operand);
         case AM_VM_OP_splice:      return op_splice(rt, proc, operand);
+        case AM_VM_OP_load_slot:   return op_load_slot(rt, proc, operand);
+        case AM_VM_OP_store_slot:  return op_store_slot(rt, proc, operand);
+        case AM_VM_OP_set_slot:    return op_set_slot(rt, proc, operand);
+        case AM_VM_OP_call_slot:   return op_call_slot(rt, proc, operand);
+        case AM_VM_OP_tailcall_slot: return op_tailcall_slot(rt, proc, operand);
         case AM_VM_OP_duplicate:   return op_duplicate(rt, proc, operand);
         case AM_VM_OP_evalcleanup: return op_evalcleanup(rt, proc, operand);
         case AM_VM_OP_dynamicwind:              return op_dynamicwind(rt, proc, operand);
@@ -19815,11 +21056,10 @@ int32_t am_runtime_op_dispatch(am_runtime_t *rt, am_process_t *proc, uint32_t op
 int32_t am_runtime_execute(am_runtime_t *rt, am_process_t *proc) {
     if (!rt || !proc) return -1;
 
-    uint32_t opcode;
-    am_value_t operand;
-    if (am_process_current_instruction(proc, &opcode, &operand) != 0) {
-        return -1;
-    }
+    // 取指内联：这是每指令必经路径，独立函数调用 + 两次边界检查的开销可观
+    if (!proc->ilcode || proc->PC >= proc->ilcode_length) return -1;
+    uint32_t opcode = proc->ilcode[proc->PC].opcode;
+    am_value_t operand = proc->ilcode[proc->PC].operand;
 
     // printf("Exec: PC=%zu | OpCode=%u | Oprand=%zu(varid=%zu)\n", proc->PC, opcode, operand, am_value_to_varid(operand));
 
@@ -19870,6 +21110,17 @@ int32_t am_runtime_tick(am_runtime_t *rt, uint32_t timeslice) {
             if (rt->vtable->on_error) rt->vtable->on_error(rt);
             wchar_t errmsg[256];
             swprintf(errmsg, 256, L"[Runtime] 指令执行异常: PID=%zu PC=%zu\n", (size_t)pid, (size_t)proc->PC);
+            if (getenv("AM_STACK_DEBUG")) {
+                size_t n = (size_t)(proc->opstack_top - proc->opstack);
+                printf("[stack-dbg] pc=%zu op=%u opstack_len=%zu fstack_len=%zu:", (size_t)proc->PC,
+                       (unsigned)(proc->PC < proc->ilcode_length ? proc->ilcode[proc->PC].opcode : 999),
+                       n, (size_t)(proc->fstack_top - proc->fstack));
+                for (size_t z = (n > 6 ? n - 6 : 0); z < n; z++) {
+                    printf(" [%zu t=%d v=%zu]", z, (int)am_value_type(proc->opstack[z]), (size_t)proc->opstack[z]);
+                }
+                printf("\n");
+                fflush(stdout);
+            }
             am_runtime_error(rt, errmsg);
             break;
         }
@@ -20837,6 +22088,11 @@ const char *am_debug_opcode_name(uint32_t opcode) {
         case AM_VM_OP_dynamicwind_before_after: return "dynamicwind_before_after";
         case AM_VM_OP_dynamicwind_done:         return "dynamicwind_done";
         case AM_VM_OP_wind:                     return "wind";
+        case AM_VM_OP_load_slot:     return "load_slot";
+        case AM_VM_OP_store_slot:    return "store_slot";
+        case AM_VM_OP_set_slot:      return "set_slot";
+        case AM_VM_OP_call_slot:     return "call_slot";
+        case AM_VM_OP_tailcall_slot: return "tailcall_slot";
         default:                   return "?";
     }
 }
