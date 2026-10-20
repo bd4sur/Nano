@@ -2,51 +2,32 @@
 #define __ANIMAC_H__
 
 /* =============================================================================
- * Animac（灵机）解释器核心公开 API 伞形头文件
+ * Animac（灵机）解释器核心公开 API 伞形头文件 —— 本项目（玲珑）的 amalgam 适配层
  *
- * 嵌入解释器或编写上层工具（REPL、解释器入口、debugger 等）时，
- * 只需包含本头文件即可获得解释器核心的全部公开 API。
+ * 【这个文件不是上游文件，是本项目唯一的自有适配文件，同步上游时不要覆盖】
  *
- * 收录范围：解释器核心（基础设施、前端、运行时）。
- * 明确排除：宿主适配（host.h）、native 库实现（native_*.h）、
- *           终端呈现工具（highlight.h）、上层消费者自身（repl.h）。
- * 上层程序可按需另行包含上述被排除的头文件。
+ * 上游的 include/animac.h 通过 #include 逐个登记 23 个核心头文件
+ * （am_base.h / am_allocator.h / am_object.h / … / am_runtime.h / am_debug.h）。
+ * 本项目采用上游的「单文件（amalgamation）集成形态」：核心的 23 个头文件与全部
+ * 核心实现已被 amalgamate.sh 合并进 animac_core.h / animac_core.c，产物不再随附
+ * 原始头文件。因此本文件把伞形头文件的收录语义等价地转发到合并产物：
  *
- * 约定：新增解释器核心头文件时，必须登记进本文件对应分组。
+ *     animac.h  ==  include/animac.h  （逐个头文件列举）  ==  animac_core.h
+ *
+ * 两者靠同名 include guard（__AM_XXX_H__）互斥，与 animac_core.h 同时包含也不会重复定义。
+ *
+ * 维护约定：
+ *   - 上游新增/调整核心头文件时，无需改本文件（合并产物的收录范围由上游
+ *     amalgamate.sh 依据 include/animac.h 自动同步）；
+ *   - 宿主适配（am_host.h）、本地库（am_native_*.h）、REPL（am_repl.h）按上游
+ *     约定不并入单文件，由使用者按需另行包含。
  * ============================================================================ */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// 基础设施
-#include "am_base.h"
-#include "am_allocator.h"
-#include "am_object.h"
-#include "am_map.h"
-#include "am_list.h"
-#include "am_wstring.h"
-#include "am_vocab.h"
-#include "am_heap.h"
-#include "am_closure.h"
-#include "am_continuation.h"
-#include "am_scope.h"
-#include "am_debug.h"
-
-// 前端（词法/语法/宏/链接/编译/模块/JS 转换）
-#include "am_lexer.h"
-#include "am_ast.h"
-#include "am_parser.h"
-#include "am_macro.h"
-#include "am_linker.h"
-#include "am_compiler.h"
-#include "am_module.h"
-#include "am_js2scm.h"
-
-// 运行时（进程/垃圾回收/虚拟机）
-#include "am_process.h"
-#include "am_gc.h"
-#include "am_runtime.h"
+#include "animac_core.h"
 
 #ifdef __cplusplus
 }
