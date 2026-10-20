@@ -44,6 +44,23 @@ static int32_t native_push_result(am_process_t *proc, am_float_t result) {
     return 0;
 }
 
+// 从操作数栈中弹出一个无符号整数。
+// 成功返回 true，失败（非 uint 值）返回 false。
+static bool native_pop_uint(am_process_t *proc, am_uint_t *out) {
+    am_value_t v = am_process_pop_operand(proc);
+    if (v == (am_value_t)UINTPTR_MAX) return false;
+    if (!am_value_is_uint(v)) return false;
+    *out = am_value_to_uint(v);
+    return true;
+}
+
+// 将 uint 结果压回操作数栈。
+static int32_t native_push_uint_result(am_process_t *proc, am_uint_t result) {
+    if (am_process_push_operand(proc, am_make_value_of_uint(result)) != 0) return -1;
+    am_process_step(proc);
+    return 0;
+}
+
 
 int32_t am_native_Math_PI(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
@@ -132,6 +149,15 @@ int32_t am_native_Math_atan(am_runtime_t *rt, am_process_t *proc) {
 }
 
 
+int32_t am_native_Math_atan2(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    am_float_t x, y;
+    if (!native_pop_number(proc, &x)) return -1;
+    if (!native_pop_number(proc, &y)) return -1;
+    return native_push_result(proc, atan2(y, x));
+}
+
+
 int32_t am_native_Math_floor(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
     am_float_t x;
@@ -180,6 +206,94 @@ int32_t am_native_Math_abs(am_runtime_t *rt, am_process_t *proc) {
 }
 
 
+// uint 值的逻辑位宽：TPV 用低 5 位作类型标签，uint 有效负载为 (指针位宽 - 5) 位，
+// 即 64 位宿主为 59 位、32 位宿主为 27 位。位运算（含符号位解释、移位计数规整）
+// 一律以该逻辑位宽为准，保证结果仍可表示为 uint 值。
+#define AM_UINT_BIT_WIDTH ((am_uint_t)(sizeof(am_value_t) * 8 - 5))
+
+// 移位计数规整：超出位宽时返回位宽（供调用方特判），否则返回原值。
+static am_uint_t native_clamp_shift(am_uint_t n) {
+    return (n >= AM_UINT_BIT_WIDTH) ? AM_UINT_BIT_WIDTH : n;
+}
+
+int32_t am_native_Math_bit_and(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    am_uint_t a, b;
+    if (!native_pop_uint(proc, &b)) return -1;
+    if (!native_pop_uint(proc, &a)) return -1;
+    return native_push_uint_result(proc, a & b);
+}
+
+
+int32_t am_native_Math_bit_or(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    am_uint_t a, b;
+    if (!native_pop_uint(proc, &b)) return -1;
+    if (!native_pop_uint(proc, &a)) return -1;
+    return native_push_uint_result(proc, a | b);
+}
+
+
+int32_t am_native_Math_bit_xor(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    am_uint_t a, b;
+    if (!native_pop_uint(proc, &b)) return -1;
+    if (!native_pop_uint(proc, &a)) return -1;
+    return native_push_uint_result(proc, a ^ b);
+}
+
+
+int32_t am_native_Math_bit_not(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    am_uint_t a;
+    if (!native_pop_uint(proc, &a)) return -1;
+    return native_push_uint_result(proc, ~a);
+}
+
+
+int32_t am_native_Math_bit_shl(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    am_uint_t a, n;
+    if (!native_pop_uint(proc, &n)) return -1;
+    if (!native_pop_uint(proc, &a)) return -1;
+    n = native_clamp_shift(n);
+    return native_push_uint_result(proc, (n >= AM_UINT_BIT_WIDTH) ? 0 : (a << n));
+}
+
+
+int32_t am_native_Math_bit_ashr(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    am_uint_t a, n;
+    if (!native_pop_uint(proc, &n)) return -1;
+    if (!native_pop_uint(proc, &a)) return -1;
+    n = native_clamp_shift(n);
+    if (n >= AM_UINT_BIT_WIDTH) n = AM_UINT_BIT_WIDTH - 1;
+    am_uint_t sign_bit = (am_uint_t)1 << (AM_UINT_BIT_WIDTH - 1);
+    am_uint_t result;
+    if (n == 0) {
+        result = a;
+    }
+    else if (a & sign_bit) {
+        // 负数：算术右移，高位补 1（可移植实现，不依赖有符号右移的具体行为）
+        result = (a >> n) | (~(am_uint_t)0 << (AM_UINT_BIT_WIDTH - n));
+    }
+    else {
+        result = a >> n;
+    }
+    return native_push_uint_result(proc, result);
+}
+
+
+int32_t am_native_Math_bit_lshr(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    am_uint_t a, n;
+    if (!native_pop_uint(proc, &n)) return -1;
+    if (!native_pop_uint(proc, &a)) return -1;
+    n = native_clamp_shift(n);
+    return native_push_uint_result(proc, (n >= AM_UINT_BIT_WIDTH) ? 0 : (a >> n));
+}
+
+
 int32_t am_native_Math_random(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
     static bool seeded = false;
@@ -204,6 +318,14 @@ static const am_native_func_entry_t am_native_Math_funcs[] = {
     { L"cos",      am_native_Math_cos },
     { L"tan",      am_native_Math_tan },
     { L"atan",     am_native_Math_atan },
+    { L"atan2",    am_native_Math_atan2 },
+    { L"bit_and",  am_native_Math_bit_and },
+    { L"bit_or",   am_native_Math_bit_or },
+    { L"bit_xor",  am_native_Math_bit_xor },
+    { L"bit_not",  am_native_Math_bit_not },
+    { L"bit_shl",  am_native_Math_bit_shl },
+    { L"bit_ashr", am_native_Math_bit_ashr },
+    { L"bit_lshr", am_native_Math_bit_lshr },
     { L"floor",    am_native_Math_floor },
     { L"ceil",     am_native_Math_ceil },
     { L"round",    am_native_Math_round },

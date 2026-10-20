@@ -6,7 +6,7 @@
  *           按依赖顺序合并；局部 #include 已剔除；
  *           跨文件重名的 static 符号已按 “<文件基名>__<原名>” 规则改名。
  *           不含 am_host.c / am_native_*.c / am_highlight.c / am_repl.c 等宿主相关实现。
- * 生成时间：2026-07-25 18:08:59 +0800
+ * 生成时间：2026-10-10 11:53:31 +0800
  * ============================================================================ */
 
 #include "animac_core.h"
@@ -4385,755 +4385,6 @@ am_scope_t *am_scope_add_var(am_allocator_t *alloc, am_scope_t *scope, am_varid_
 }
 /* ===== end:   src/am_scope.c ===== */
 
-/* ===== begin: src/am_debug.c ===== */
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
-#include <wchar.h>
-
-
-
-#define AST_PRINT_INDENT 2
-
-
-static void debug_ast_print_indent(FILE *out, int depth) {
-    for (int i = 0; i < depth * AST_PRINT_INDENT; i++) {
-        fputwc(L' ', out);
-    }
-}
-
-
-static int debug_ast_is_handle_visited(am_handle_t *visited, size_t count, am_handle_t handle) {
-    for (size_t i = 0; i < count; i++) {
-        if (visited[i] == handle) return 1;
-    }
-    return 0;
-}
-
-
-static void debug_ast_print_value(am_ast_t *ast, am_value_t value, FILE *out,
-                                  am_handle_t **visited, size_t *visited_count, size_t *visited_capacity, int depth);
-
-
-static void debug_ast_print_ensure_visited_capacity(am_handle_t **visited, size_t *visited_capacity, size_t visited_count) {
-    if (visited_count < *visited_capacity) return;
-    size_t new_capacity = *visited_capacity ? *visited_capacity * 2 : 256;
-    if (new_capacity < visited_count + 1) new_capacity = visited_count + 1;
-    am_handle_t *new_visited = (am_handle_t *)realloc(*visited, new_capacity * sizeof(am_handle_t));
-    if (!new_visited) {
-        fprintf(stderr, "debug_ast_print: failed to allocate visited buffer\n");
-        return;
-    }
-    *visited = new_visited;
-    *visited_capacity = new_capacity;
-}
-
-
-static void debug_ast_print_node(am_ast_t *ast, am_handle_t handle, FILE *out,
-                                 am_handle_t **visited, size_t *visited_count, size_t *visited_capacity, int depth) {
-    am_value_t node_val = am_ast_get_node(ast, handle);
-    if (!am_value_is_ptr(node_val)) {
-        fwprintf(out, L"<H:%zu> (invalid)", (size_t)handle);
-        return;
-    }
-
-    am_object_t *obj = am_value_to_ptr(node_val);
-
-    if (obj->type == AM_OBJECT_TYPE_WSTRING) {
-        am_wstring_t *ws = (am_wstring_t *)obj;
-        fputwc(L'"', out);
-        for (size_t i = 0; i < ws->length; i++) {
-            wchar_t c = (wchar_t)am_value_to_wchar(ws->content[i]);
-            if (c == L'"') fputwc(L'\\', out);
-            fwprintf(out, L"%lc", c);
-        }
-        fputwc(L'"', out);
-        return;
-    }
-
-    if (obj->type != AM_OBJECT_TYPE_LIST) {
-        fwprintf(out, L"<H:%zu> (unknown type %d)", (size_t)handle, obj->type);
-        return;
-    }
-
-    am_list_t *lst = (am_list_t *)obj;
-
-    if (debug_ast_is_handle_visited(*visited, *visited_count, handle)) {
-        fwprintf(out, L"<H:%zu>", (size_t)handle);
-        return;
-    }
-    debug_ast_print_ensure_visited_capacity(visited, visited_capacity, *visited_count);
-    (*visited)[(*visited_count)++] = handle;
-
-    fwprintf(out, L"<H:%zu> {\n", (size_t)handle);
-    debug_ast_print_indent(out, depth + 1);
-    fwprintf(out, L"type: ");
-    switch (lst->type) {
-        case AM_LIST_TYPE_LAMBDA:      fwprintf(out, L"\"LAMBDA\"\n"); break;
-        case AM_LIST_TYPE_APPLICATION: fwprintf(out, L"\"APPLICATION\"\n"); break;
-        case AM_LIST_TYPE_QUOTE:       fwprintf(out, L"\"QUOTE\"\n"); break;
-        case AM_LIST_TYPE_QUASIQUOTE:  fwprintf(out, L"\"QUASIQUOTE\"\n"); break;
-        case AM_LIST_TYPE_UNQUOTE:     fwprintf(out, L"\"UNQUOTE\"\n"); break;
-        default:                       fwprintf(out, L"\"UNKNOWN(%d)\"\n", lst->type); break;
-    }
-
-    debug_ast_print_indent(out, depth + 1);
-    if (lst->parent == AM_HANDLE_NULL) {
-        fwprintf(out, L"parent: null\n");
-    }
-    else {
-        fwprintf(out, L"parent: <H:%zu>\n", (size_t)lst->parent);
-    }
-
-    if (lst->type == AM_LIST_TYPE_LAMBDA) {
-        am_uint_t n_param = 0;
-        if (lst->length >= 2) {
-            am_value_t np = am_list_get(ast->alloc, lst, 1);
-            if (am_value_is_uint(np)) n_param = am_value_to_uint(np);
-        }
-
-        debug_ast_print_indent(out, depth + 1);
-        fwprintf(out, L"parameters: [\n");
-        for (am_uint_t i = 0; i < n_param; i++) {
-            debug_ast_print_indent(out, depth + 2);
-            am_value_t param = am_list_get(ast->alloc, lst, 2 + i);
-            debug_ast_print_value(ast, param, out, visited, visited_count, visited_capacity, depth + 2);
-            if (i + 1 < n_param) fputwc(L',', out);
-            fputwc(L'\n', out);
-        }
-        debug_ast_print_indent(out, depth + 1);
-        fwprintf(out, L"]\n");
-
-        debug_ast_print_indent(out, depth + 1);
-        fwprintf(out, L"bodies: [\n");
-        size_t body_start = 2 + n_param;
-        for (size_t i = body_start; i < lst->length; i++) {
-            debug_ast_print_indent(out, depth + 2);
-            am_value_t body = am_list_get(ast->alloc, lst, i);
-            debug_ast_print_value(ast, body, out, visited, visited_count, visited_capacity, depth + 2);
-            if (i + 1 < lst->length) fputwc(L',', out);
-            fputwc(L'\n', out);
-        }
-        debug_ast_print_indent(out, depth + 1);
-        fwprintf(out, L"]\n");
-    }
-    else {
-        debug_ast_print_indent(out, depth + 1);
-        fwprintf(out, L"children: [\n");
-        for (size_t i = 0; i < lst->length; i++) {
-            debug_ast_print_indent(out, depth + 2);
-            am_value_t child = am_list_get(ast->alloc, lst, i);
-            debug_ast_print_value(ast, child, out, visited, visited_count, visited_capacity, depth + 2);
-            if (i + 1 < lst->length) fputwc(L',', out);
-            fputwc(L'\n', out);
-        }
-        debug_ast_print_indent(out, depth + 1);
-        fwprintf(out, L"]\n");
-    }
-
-    debug_ast_print_indent(out, depth);
-    fwprintf(out, L"}");
-}
-
-
-static void debug_ast_print_value(am_ast_t *ast, am_value_t value, FILE *out,
-                                  am_handle_t **visited, size_t *visited_count, size_t *visited_capacity, int depth) {
-    if (am_value_is_handle(value)) {
-        am_handle_t h = am_value_to_handle(value);
-        debug_ast_print_node(ast, h, out, visited, visited_count, visited_capacity, depth);
-    }
-    else if (am_value_is_varid(value)) {
-        am_varid_t varid = am_value_to_varid(value);
-        size_t idx = (size_t)varid;
-        wchar_t *name = am_vocab_get(ast->alloc, ast->var_vocab, &idx);
-        if (name) {
-            fwprintf(out, L"\"%ls\" (varid=%zu)", name, (size_t)varid);
-        }
-        else {
-            fwprintf(out, L"<varid=%zu>", (size_t)varid);
-        }
-    }
-    else if (am_value_is_symbol(value)) {
-        am_symbol_t sym = am_value_to_symbol(value);
-        size_t idx = (size_t)sym;
-        wchar_t *name = am_vocab_get(ast->alloc, ast->symbol_vocab, &idx);
-        if (name) {
-            fwprintf(out, L"\"%ls\" (symbol=%zu)", name, (size_t)sym);
-        }
-        else {
-            fwprintf(out, L"<symbol=%zu>", (size_t)sym);
-        }
-    }
-    else if (am_value_is_uint(value)) {
-        fwprintf(out, L"%llu", (unsigned long long)am_value_to_uint(value));
-    }
-    else if (am_value_is_int(value)) {
-        fwprintf(out, L"%lld", (long long)am_value_to_int(value));
-    }
-    else if (am_value_is_float(value)) {
-        fwprintf(out, L"%g", (double)am_value_to_float(value));
-    }
-    else if (am_value_is_boolean(value)) {
-        fwprintf(out, L"%ls", am_value_to_boolean(value) ? L"#t" : L"#f");
-    }
-    else if (am_value_is_null(value)) {
-        fwprintf(out, L"#null");
-    }
-    else if (am_value_is_undefined(value)) {
-        fwprintf(out, L"#undefined");
-    }
-    else {
-        fwprintf(out, L"<value=%llu>", (unsigned long long)value);
-    }
-}
-
-
-static void debug_ast_print_vocab(FILE *out, am_ast_t *ast, am_vocab_t *vocab) {
-    fputwc(L'[', out);
-    for (size_t i = 0; i < vocab->length; i++) {
-        size_t idx = i;
-        wchar_t *word = am_vocab_get(ast->alloc, vocab, &idx);
-        if (i > 0) fwprintf(out, L", ");
-        if (word) {
-            fputwc(L'"', out);
-            fwprintf(out, L"%ls", word);
-            fputwc(L'"', out);
-        }
-        else {
-            fwprintf(out, L"null");
-        }
-    }
-    fputwc(L']', out);
-}
-
-
-static void debug_ast_print_handle_list(FILE *out, am_ast_t *ast, am_list_t *lst) {
-    (void)ast;
-    fputwc(L'[', out);
-    for (size_t i = 0; i < lst->length; i++) {
-        if (i > 0) fwprintf(out, L", ");
-        fwprintf(out, L"<H:%zu>", (size_t)am_value_to_handle(am_list_get(ast->alloc, lst, i)));
-    }
-    fputwc(L']', out);
-}
-
-
-static void debug_ast_print_value_inline(am_ast_t *ast, am_value_t value, FILE *out);
-
-
-static void debug_ast_print_value_list(FILE *out, am_ast_t *ast, am_list_t *lst) {
-    fputwc(L'[', out);
-    for (size_t i = 0; i < lst->length; i++) {
-        if (i > 0) fwprintf(out, L", ");
-        debug_ast_print_value_inline(ast, am_list_get(ast->alloc, lst, i), out);
-    }
-    fputwc(L']', out);
-}
-
-
-static void debug_ast_print_map_varid_to_handle(FILE *out, am_ast_t *ast, am_map_t *map) {
-    fputwc(L'{', out);
-    size_t count = am_map_length(ast->alloc, map);
-    am_value_t *keys = am_map_keys(ast->alloc, map);
-    for (size_t i = 0; i < count; i++) {
-        if (i > 0) fwprintf(out, L", ");
-        am_varid_t varid = am_value_to_varid(keys[i]);
-        size_t idx = (size_t)varid;
-        wchar_t *name = am_vocab_get(ast->alloc, ast->var_vocab, &idx);
-        if (name) fwprintf(out, L"\"%ls\": ", name);
-        else fwprintf(out, L"<varid=%zu>: ", (size_t)varid);
-
-        am_value_t v = am_map_get(ast->alloc, map, keys[i]);
-        if (am_value_is_handle(v)) {
-            fwprintf(out, L"<H:%zu>", (size_t)am_value_to_handle(v));
-        }
-        else {
-            fwprintf(out, L"null");
-        }
-    }
-    if (keys) am_free(ast->alloc, keys);
-    fputwc(L'}', out);
-}
-
-
-static const wchar_t *debug_var_type_name(am_uint_t type) {
-    switch (type) {
-        case AM_VAR_TYPE_OLD:          return L"OLD";
-        case AM_VAR_TYPE_NEW:          return L"NEW";
-        case AM_VAR_TYPE_BUILTIN:      return L"BUILTIN";
-        case AM_VAR_TYPE_EXT_REF:      return L"EXT_REF";
-        case AM_VAR_TYPE_IMPORT_REF:   return L"IMPORT_REF";
-        case AM_VAR_TYPE_NATIVE_REF:   return L"NATIVE_REF";
-        case AM_VAR_TYPE_IMPORT_ALIAS: return L"IMPORT_ALIAS";
-        case AM_VAR_TYPE_NATIVE_ID:    return L"NATIVE_ID";
-        default:                       return L"UNKNOWN";
-    }
-}
-
-
-static void debug_ast_print_var_type(FILE *out, am_ast_t *ast, am_list_t *lst) {
-    (void)ast;
-    fputwc(L'[', out);
-    for (size_t i = 0; i < lst->length; i++) {
-        if (i > 0) fwprintf(out, L", ");
-        am_value_t v = am_list_get(ast->alloc, lst, i);
-        if (am_value_is_uint(v)) {
-            am_uint_t t = am_value_to_uint(v);
-            fwprintf(out, L"%ls(%zu)", debug_var_type_name(t), (size_t)t);
-        }
-        else {
-            fwprintf(out, L"?");
-        }
-    }
-    fputwc(L']', out);
-}
-
-
-static void debug_ast_print_var_arn_mapping(FILE *out, am_ast_t *ast, am_map_t *map) {
-    fputwc(L'{', out);
-    size_t count = am_map_length(ast->alloc, map);
-    am_value_t *keys = am_map_keys(ast->alloc, map);
-    for (size_t i = 0; i < count; i++) {
-        if (i > 0) fwprintf(out, L", ");
-        am_varid_t new_varid = am_value_to_varid(keys[i]);
-        size_t new_idx = (size_t)new_varid;
-        wchar_t *new_name = am_vocab_get(ast->alloc, ast->var_vocab, &new_idx);
-        if (new_name) fwprintf(out, L"\"%ls\": ", new_name);
-        else fwprintf(out, L"<varid=%zu>: ", (size_t)new_varid);
-
-        am_value_t v = am_map_get(ast->alloc, map, keys[i]);
-        if (am_value_is_varid(v)) {
-            am_varid_t old_varid = am_value_to_varid(v);
-            size_t old_idx = (size_t)old_varid;
-            wchar_t *old_name = am_vocab_get(ast->alloc, ast->var_vocab, &old_idx);
-            if (old_name) fwprintf(out, L"\"%ls\"", old_name);
-            else fwprintf(out, L"<varid=%zu>", (size_t)old_varid);
-        }
-        else {
-            fwprintf(out, L"null");
-        }
-    }
-    if (keys) am_free(ast->alloc, keys);
-    fputwc(L'}', out);
-}
-
-
-static void debug_ast_print_value_inline(am_ast_t *ast, am_value_t value, FILE *out) {
-    if (am_value_is_handle(value)) {
-        fwprintf(out, L"<H:%zu>", (size_t)am_value_to_handle(value));
-    }
-    else if (am_value_is_varid(value)) {
-        am_varid_t varid = am_value_to_varid(value);
-        size_t idx = (size_t)varid;
-        wchar_t *name = am_vocab_get(ast->alloc, ast->var_vocab, &idx);
-        if (name) fwprintf(out, L"\"%ls\"", name);
-        else fwprintf(out, L"<varid=%zu>", (size_t)varid);
-    }
-    else if (am_value_is_symbol(value)) {
-        am_symbol_t sym = am_value_to_symbol(value);
-        size_t idx = (size_t)sym;
-        wchar_t *name = am_vocab_get(ast->alloc, ast->symbol_vocab, &idx);
-        if (name) fwprintf(out, L"\"%ls\"", name);
-        else fwprintf(out, L"<symbol=%zu>", (size_t)sym);
-    }
-    else if (am_value_is_uint(value)) {
-        fwprintf(out, L"%llu", (unsigned long long)am_value_to_uint(value));
-    }
-    else if (am_value_is_int(value)) {
-        fwprintf(out, L"%lld", (long long)am_value_to_int(value));
-    }
-    else if (am_value_is_float(value)) {
-        fwprintf(out, L"%g", (double)am_value_to_float(value));
-    }
-    else if (am_value_is_boolean(value)) {
-        fwprintf(out, L"%ls", am_value_to_boolean(value) ? L"#t" : L"#f");
-    }
-    else if (am_value_is_null(value)) {
-        fwprintf(out, L"#null");
-    }
-    else if (am_value_is_undefined(value)) {
-        fwprintf(out, L"#undefined");
-    }
-    else {
-        fwprintf(out, L"<value=%llu>", (unsigned long long)value);
-    }
-}
-
-
-void am_debug_ast_print_node_summary(FILE *out, am_ast_t *ast, am_handle_t handle) {
-    am_value_t node_val = am_ast_get_node(ast, handle);
-    if (!am_value_is_ptr(node_val)) {
-        fwprintf(out, L"<H:%zu>: (invalid)\n", (size_t)handle);
-        return;
-    }
-
-    am_object_t *obj = am_value_to_ptr(node_val);
-    if (obj->type == AM_OBJECT_TYPE_WSTRING) {
-        am_wstring_t *ws = (am_wstring_t *)obj;
-        fwprintf(out, L"<H:%zu>: WSTRING len=%zu \"", (size_t)handle, ws->length);
-        for (size_t i = 0; i < ws->length; i++) {
-            wchar_t c = (wchar_t)am_value_to_wchar(ws->content[i]);
-            if (c == L'"') fputwc(L'\\', out);
-            fwprintf(out, L"%lc", c);
-        }
-        fwprintf(out, L"\"\n");
-        return;
-    }
-
-    if (obj->type != AM_OBJECT_TYPE_LIST) {
-        fwprintf(out, L"<H:%zu>: (unknown type %d)\n", (size_t)handle, obj->type);
-        return;
-    }
-
-    am_list_t *lst = (am_list_t *)obj;
-    const wchar_t *type_name = L"UNKNOWN";
-    switch (lst->type) {
-        case AM_LIST_TYPE_LAMBDA:      type_name = L"LAMBDA"; break;
-        case AM_LIST_TYPE_APPLICATION: type_name = L"APPLICATION"; break;
-        case AM_LIST_TYPE_QUOTE:       type_name = L"QUOTE"; break;
-        case AM_LIST_TYPE_QUASIQUOTE:  type_name = L"QUASIQUOTE"; break;
-        case AM_LIST_TYPE_UNQUOTE:     type_name = L"UNQUOTE"; break;
-    }
-
-    fwprintf(out, L"<H:%zu>: %ls parent=", (size_t)handle, type_name);
-    if (lst->parent == AM_HANDLE_NULL) {
-        fwprintf(out, L"null");
-    }
-    else {
-        fwprintf(out, L"<H:%zu>", (size_t)lst->parent);
-    }
-
-    if (lst->type == AM_LIST_TYPE_LAMBDA) {
-        am_uint_t n_param = 0;
-        if (lst->length >= 2) {
-            am_value_t np = am_list_get(ast->alloc, lst, 1);
-            if (am_value_is_uint(np)) n_param = am_value_to_uint(np);
-        }
-        size_t n_body = (lst->length > 2 + n_param) ? (lst->length - 2 - n_param) : 0;
-        fwprintf(out, L" params=%u bodies=%zu", (unsigned)n_param, n_body);
-    }
-    else {
-        fwprintf(out, L" length=%zu", lst->length);
-    }
-
-    fwprintf(out, L" children=[");
-    for (size_t i = 0; i < lst->length; i++) {
-        if (i > 0) fwprintf(out, L", ");
-        debug_ast_print_value_inline(ast, am_list_get(ast->alloc, lst, i), out);
-    }
-    fwprintf(out, L"]\n");
-}
-
-
-typedef struct {
-    am_handle_t *handles;
-    size_t count;
-    size_t capacity;
-} debug_ast_collect_handles_ctx_t;
-
-
-static void debug_ast_collect_handles_cb(am_handle_t handle, am_value_t value, void *user_data) {
-    (void)value;
-    debug_ast_collect_handles_ctx_t *ctx = (debug_ast_collect_handles_ctx_t *)user_data;
-
-    if (ctx->count >= ctx->capacity) {
-        size_t new_capacity = ctx->capacity ? ctx->capacity * 2 : 16;
-        am_handle_t *new_handles = (am_handle_t *)realloc(ctx->handles, new_capacity * sizeof(am_handle_t));
-        if (!new_handles) return;
-        ctx->handles = new_handles;
-        ctx->capacity = new_capacity;
-    }
-
-    ctx->handles[ctx->count++] = handle;
-}
-
-
-static int debug_ast_compare_handles(const void *a, const void *b) {
-    am_handle_t ha = *(const am_handle_t *)a;
-    am_handle_t hb = *(const am_handle_t *)b;
-    if (ha < hb) return -1;
-    if (ha > hb) return 1;
-    return 0;
-}
-
-
-static void debug_ast_print_nodes_map(FILE *out, am_ast_t *ast) {
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"nodes: {\n");
-
-    debug_ast_collect_handles_ctx_t ctx = { NULL, 0, 0 };
-    am_heap_iter(ast->alloc, ast->alloc, ast->nodes, debug_ast_collect_handles_cb, &ctx);
-
-    if (ctx.handles) {
-        qsort(ctx.handles, ctx.count, sizeof(am_handle_t), debug_ast_compare_handles);
-        for (size_t i = 0; i < ctx.count; i++) {
-            debug_ast_print_indent(out, 2);
-            am_debug_ast_print_node_summary(out, ast, ctx.handles[i]);
-        }
-        free(ctx.handles);
-    }
-
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"}\n");
-}
-
-
-void am_debug_ast_print(FILE *out, am_ast_t *ast) {
-    if (!ast) {
-        fwprintf(out, L"null\n");
-        return;
-    }
-
-    size_t visited_capacity = 256;
-    am_handle_t *visited = (am_handle_t *)malloc(visited_capacity * sizeof(am_handle_t));
-    if (!visited) {
-        fwprintf(out, L"(failed to allocate visited buffer)\n");
-        return;
-    }
-    size_t visited_count = 0;
-    (void)visited_count;
-
-    fwprintf(out, L"AST {\n");
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"absolute_path: \"%ls\"\n", ast->absolute_path ? ast->absolute_path : L"(null)");
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"module_id: \"%ls\"\n", ast->module_id ? ast->module_id : L"(null)");
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"top_lambda_handle: <H:%zu>\n", (size_t)ast->top_lambda_handle);
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"token_count: %zu\n", ast->token_count);
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"symbol_vocab: ");
-    debug_ast_print_vocab(out, ast, ast->symbol_vocab);
-    fputwc(L'\n', out);
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"var_vocab: ");
-    debug_ast_print_vocab(out, ast, ast->var_vocab);
-    fputwc(L'\n', out);
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"var_type: ");
-    debug_ast_print_var_type(out, ast, ast->var_type);
-    fputwc(L'\n', out);
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"var_arn_mapping: ");
-    debug_ast_print_var_arn_mapping(out, ast, ast->var_arn_mapping);
-    fputwc(L'\n', out);
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"lambda_handles: ");
-    debug_ast_print_handle_list(out, ast, ast->lambda_handles);
-    fputwc(L'\n', out);
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"tailcall_handles: ");
-    debug_ast_print_handle_list(out, ast, ast->tailcall_handles);
-    fputwc(L'\n', out);
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"var_top: ");
-    debug_ast_print_value_list(out, ast, ast->var_top);
-    fputwc(L'\n', out);
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"dependencies: ");
-    debug_ast_print_map_varid_to_handle(out, ast, ast->dependencies);
-    fputwc(L'\n', out);
-    debug_ast_print_indent(out, 1);
-    fwprintf(out, L"natives: ");
-    debug_ast_print_map_varid_to_handle(out, ast, ast->natives);
-    fputwc(L'\n', out);
-
-    debug_ast_print_nodes_map(out, ast);
-
-    // debug_ast_print_indent(out, 1);
-    // fwprintf(out, L"top_node: ");
-    // am_handle_t top = am_ast_get_top_node_handle(ast);
-    // if (top == AM_HANDLE_NULL) {
-    //     fwprintf(out, L"null\n");
-    // }
-    // else {
-    //     fputwc(L'\n', out);
-    //     debug_ast_print_node(ast, top, out, &visited, &visited_count, &visited_capacity, 2);
-    //     fputwc(L'\n', out);
-    // }
-
-    free(visited);
-    fwprintf(out, L"}\n");
-}
-
-
-void am_debug_ast_print_to_stdout(am_ast_t *ast) {
-    FILE *out = tmpfile();
-    assert(out != NULL);
-
-    am_debug_ast_print(out, ast);
-    rewind(out);
-
-    size_t cap = 4096;
-    size_t len = 0;
-    wchar_t *buf = (wchar_t *)malloc(cap * sizeof(wchar_t));
-    assert(buf != NULL);
-
-    wint_t c;
-    while ((c = fgetwc(out)) != WEOF) {
-        if (len + 1 >= cap) {
-            cap *= 2;
-            wchar_t *new_buf = (wchar_t *)realloc(buf, cap * sizeof(wchar_t));
-            if (!new_buf) {
-                free(buf);
-                fclose(out);
-                return;
-            }
-            buf = new_buf;
-        }
-        buf[len++] = (wchar_t)c;
-    }
-    buf[len] = L'\0';
-    fclose(out);
-
-    printf("\n%ls\n", buf);
-    free(buf);
-}
-
-
-// ===============================================================================
-// 中间语言指令（IL Code）打印辅助
-// ===============================================================================
-
-const char *am_debug_opcode_name(uint32_t opcode) {
-    switch (opcode) {
-        case AM_VM_OP_nop:         return "nop";
-        case AM_VM_OP_store:       return "store";
-        case AM_VM_OP_load:        return "load";
-        case AM_VM_OP_loadclosure: return "loadclosure";
-        case AM_VM_OP_push:        return "push";
-        case AM_VM_OP_pop:         return "pop";
-        case AM_VM_OP_swap:        return "swap";
-        case AM_VM_OP_set:         return "set";
-        case AM_VM_OP_call:        return "call";
-        case AM_VM_OP_callnative:  return "callnative";
-        case AM_VM_OP_tailcall:    return "tailcall";
-        case AM_VM_OP_return:      return "return";
-        case AM_VM_OP_capturecc:   return "capturecc";
-        case AM_VM_OP_iftrue:      return "iftrue";
-        case AM_VM_OP_iffalse:     return "iffalse";
-        case AM_VM_OP_goto:        return "goto";
-        case AM_VM_OP_read:        return "read";
-        case AM_VM_OP_write:       return "write";
-        case AM_VM_OP_pause:       return "pause";
-        case AM_VM_OP_halt:        return "halt";
-        case AM_VM_OP_fork:        return "fork";
-        case AM_VM_OP_display:     return "display";
-        case AM_VM_OP_newline:     return "newline";
-        case AM_VM_OP_add:         return "add";
-        case AM_VM_OP_sub:         return "sub";
-        case AM_VM_OP_mul:         return "mul";
-        case AM_VM_OP_div:         return "div";
-        case AM_VM_OP_mod:         return "mod";
-        case AM_VM_OP_eq:          return "eq";
-        case AM_VM_OP_eqv:         return "eqv";
-        case AM_VM_OP_equal:       return "equal";
-        case AM_VM_OP_ge:          return "ge";
-        case AM_VM_OP_le:          return "le";
-        case AM_VM_OP_gt:          return "gt";
-        case AM_VM_OP_lt:          return "lt";
-        case AM_VM_OP_not:         return "not";
-        case AM_VM_OP_and:         return "and";
-        case AM_VM_OP_or:          return "or";
-        case AM_VM_OP_typeof:      return "typeof";
-        case AM_VM_OP_car:         return "car";
-        case AM_VM_OP_cdr:         return "cdr";
-        case AM_VM_OP_cons:        return "cons";
-        case AM_VM_OP_get_item:    return "get_item";
-        case AM_VM_OP_set_item:    return "set_item";
-        case AM_VM_OP_list_push:   return "list_push";
-        case AM_VM_OP_list_pop:    return "list_pop";
-        case AM_VM_OP_length:      return "length";
-        case AM_VM_OP_concat:      return "concat";
-        case AM_VM_OP_duplicate:   return "duplicate";
-        case AM_VM_OP_evalcleanup: return "evalcleanup";
-        case AM_VM_OP_dynamicwind:              return "dynamicwind";
-        case AM_VM_OP_dynamicwind_after_before: return "dynamicwind_after_before";
-        case AM_VM_OP_dynamicwind_before_after: return "dynamicwind_before_after";
-        case AM_VM_OP_dynamicwind_done:         return "dynamicwind_done";
-        case AM_VM_OP_wind:                     return "wind";
-        default:                   return "?";
-    }
-}
-
-
-void am_debug_print_operand(am_ast_t *ast, am_value_t op) {
-    if (!ast) {
-        printf("?");
-        return;
-    }
-
-    if (am_value_is_varid(op)) {
-        am_varid_t v = am_value_to_varid(op);
-        wchar_t *name = am_vocab_get(ast->alloc, ast->var_vocab, &v);
-        printf("%ls(%zu)", name ? name : L"?", (size_t)v);
-    }
-    else if (am_value_is_handle(op)) {
-        printf("handle_%zu", am_value_to_handle(op));
-    }
-    else if (am_value_is_iaddr(op)) {
-        printf("iaddr_%zu", am_value_to_iaddr(op));
-    }
-    else if (am_value_is_label(op)) {
-        printf("label_%zu", am_value_to_label(op));
-    }
-    else if (am_value_is_symbol(op)) {
-        am_symbol_t s = am_value_to_symbol(op);
-        wchar_t *name = am_vocab_get(ast->alloc, ast->symbol_vocab, &s);
-        printf("%ls", name ? name : L"?");
-    }
-    else if (am_value_is_uint(op)) {
-        printf("%llu", (unsigned long long)am_value_to_uint(op));
-    }
-    else if (am_value_is_int(op)) {
-        printf("%lld", (long long)am_value_to_int(op));
-    }
-    else if (am_value_is_float(op)) {
-        printf("%g", (double)am_value_to_float(op));
-    }
-    else if (am_value_is_boolean(op)) {
-        printf("%s", am_value_to_boolean(op) ? "#t" : "#f");
-    }
-    else if (am_value_is_null(op)) {
-        printf("#null");
-    }
-    else if (am_value_is_undefined(op)) {
-        printf("#undefined");
-    }
-    else {
-        printf("?");
-    }
-}
-
-
-void am_debug_print_ilcode(am_ast_t *ast, am_instruction_t *ilcode, am_iaddr_t icount) {
-    if (!ilcode) return;
-
-    for (am_iaddr_t i = 0; i < icount; i++) {
-        printf("[%4zu] %-12s", (size_t)i, am_debug_opcode_name(ilcode[i].opcode));
-        if (!am_value_is_undefined(ilcode[i].operand)) {
-            printf(" ");
-            am_debug_print_operand(ast, ilcode[i].operand);
-        }
-        printf("\n");
-    }
-}
-
-
-void am_debug_print_ilcode_raw(am_instruction_t *ilcode, am_iaddr_t icount) {
-    if (!ilcode) return;
-
-    for (am_iaddr_t i = 0; i < icount; i++) {
-        printf("[%4zu] %-12s operand=%016llx\n",
-               (size_t)i,
-               am_debug_opcode_name(ilcode[i].opcode),
-               (unsigned long long)ilcode[i].operand);
-    }
-}
-/* ===== end:   src/am_debug.c ===== */
-
 /* ===== begin: src/am_lexer.c ===== */
 #include <stdint.h>
 #include <wchar.h>
@@ -5148,7 +4399,8 @@ const wchar_t* AM_KEYWORDS[] = {
     L"if", L"and", L"or", L"cond", L"else", L"for", L"while", L"break", L"continue", L"case", L"do",
     L"quote", L"quasiquote", L"unquote",
     L"import", L"native",
-    L"define-syntax", L"let-syntax", L"letrec-syntax", L"syntax-rules", NULL
+    L"define-syntax", L"let-syntax", L"letrec-syntax", L"syntax-rules",
+    L"unquote-splicing", NULL
 };
 
 // 关键字对应的保留symbol值，索引与AM_KEYWORDS一一对应
@@ -5180,7 +4432,8 @@ static const am_value_t AM_KEYWORD_SYMBOLS[] = {
     AM_VALUE_KW_define_syntax,
     AM_VALUE_KW_let_syntax,
     AM_VALUE_KW_letrec_syntax,
-    AM_VALUE_KW_syntax_rules
+    AM_VALUE_KW_syntax_rules,
+    AM_VALUE_KW_unquote_splicing
 };
 
 // ===============================================================================
@@ -5406,6 +4659,17 @@ int32_t am_lexer(wchar_t *code, am_token_t *tokens) {
                 t_type = AM_TOKEN_TYPE_UNQUOTE;
             else
                 t_type = AM_TOKEN_TYPE_DELIMITER;
+
+            // ,@ 前瞻：逗号后紧跟 @ 时，合成长度为 2 的 UNQUOTE_SPLICING token
+            if(t_type == AM_TOKEN_TYPE_UNQUOTE && code[pos + 1] == L'@') {
+                buf_line = line; buf_col = col;
+                EMIT(AM_TOKEN_TYPE_UNQUOTE_SPLICING, 2, pos, SIZE_MAX);
+                update_pos(c, &line, &col);
+                pos++;
+                update_pos(code[pos], &line, &col);
+                pos++;
+                continue;
+            }
 
             buf_line = line; buf_col = col;
             EMIT(t_type, 1, pos, SIZE_MAX);
@@ -6486,7 +5750,8 @@ am_handle_t am_ast_make_lambda_node(am_ast_t *ast, am_handle_t parent) {
 am_handle_t am_ast_make_slist_node(am_ast_t *ast, am_handle_t parent, int32_t type) {
     if (!ast || !ast->nodes) return AM_HANDLE_NULL;
     if (type != AM_LIST_TYPE_APPLICATION && type != AM_LIST_TYPE_QUOTE &&
-        type != AM_LIST_TYPE_QUASIQUOTE && type != AM_LIST_TYPE_UNQUOTE) {
+        type != AM_LIST_TYPE_QUASIQUOTE && type != AM_LIST_TYPE_UNQUOTE &&
+        type != AM_LIST_TYPE_UNQUOTE_SPLICING) {
         return AM_HANDLE_NULL;
     }
 
@@ -6879,6 +6144,7 @@ static int32_t am_ast_append_list_to_strbuf(am_ast_strbuf_t *sb, am_ast_t *ast, 
     if (lst->type == AM_LIST_TYPE_QUOTE)       prefix = L"'(";
     else if (lst->type == AM_LIST_TYPE_QUASIQUOTE) prefix = L"`(";
     else if (lst->type == AM_LIST_TYPE_UNQUOTE)    prefix = L",(";
+    else if (lst->type == AM_LIST_TYPE_UNQUOTE_SPLICING) prefix = L",@(";
 
     if (am_ast_strbuf_append_string(sb, prefix) != 0) return -1;
 
@@ -7299,6 +6565,7 @@ static size_t parse_body_tail(parser_ctx_t *ctx, size_t index);
 static size_t parse_body_term(parser_ctx_t *ctx, size_t index);
 static size_t parse_quote(parser_ctx_t *ctx, size_t index);
 static size_t parse_unquote(parser_ctx_t *ctx, size_t index);
+static size_t parse_unquote_splicing(parser_ctx_t *ctx, size_t index);
 static size_t parse_quasiquote(parser_ctx_t *ctx, size_t index);
 static size_t parse_quote_term(parser_ctx_t *ctx, size_t index);
 static size_t parse_unquote_term(parser_ctx_t *ctx, size_t index);
@@ -7479,6 +6746,7 @@ static int is_term_start_token(am_token_t *tok) {
     return tok->type == AM_TOKEN_TYPE_LB ||
            tok->type == AM_TOKEN_TYPE_QUOTE ||
            tok->type == AM_TOKEN_TYPE_UNQUOTE ||
+           tok->type == AM_TOKEN_TYPE_UNQUOTE_SPLICING ||
            tok->type == AM_TOKEN_TYPE_QUASIQUOTE ||
            is_identifier_token(tok);
 }
@@ -7732,6 +7000,17 @@ static size_t am_parser__parse_term(parser_ctx_t *ctx, size_t index) { PARSER_LO
         }
         return next_index + 1;
     }
+    // (unquote-splicing ...)
+    else if (tok->type == AM_TOKEN_TYPE_LB && next && next->type == AM_TOKEN_TYPE_KEYWORD &&
+             next->id == am_value_to_symbol(AM_VALUE_KW_unquote_splicing)) {
+        size_t next_index = parse_unquote_splicing(ctx, index + 1);
+        am_token_t *after = token_at(ctx, next_index);
+        if (!after || after->type != AM_TOKEN_TYPE_RB) {
+            parser_set_error(ctx, L"unquote-splicing 右侧括号未闭合");
+            return index;
+        }
+        return next_index + 1;
+    }
     // (quasiquote ...)
     else if (tok->type == AM_TOKEN_TYPE_LB && next && next->type == AM_TOKEN_TYPE_KEYWORD &&
              next->id == am_value_to_symbol(AM_VALUE_KW_quasiquote)) {
@@ -7750,6 +7029,10 @@ static size_t am_parser__parse_term(parser_ctx_t *ctx, size_t index) { PARSER_LO
     // ,...
     else if (tok->type == AM_TOKEN_TYPE_UNQUOTE) {
         return parse_unquote(ctx, index);
+    }
+    // ,@...
+    else if (tok->type == AM_TOKEN_TYPE_UNQUOTE_SPLICING) {
+        return parse_unquote_splicing(ctx, index);
     }
     // `...
     else if (tok->type == AM_TOKEN_TYPE_QUASIQUOTE) {
@@ -8045,6 +7328,66 @@ static size_t parse_unquote(parser_ctx_t *ctx, size_t index) {
     state_stack_push(ctx, AM_PARSER_STATE_UNQUOTE);
     size_t next_index = parse_unquote_term(ctx, start);
     state_stack_pop(ctx);
+    return next_index;
+}
+
+
+// 解析 unquote-splicing（,@X 与 (unquote-splicing X) 两种形式统一走这里）。
+// 无论 X 是原子还是列表，都按 UNQUOTE 状态的既有规则解析，然后把解析结果包裹为
+// 一个 type=AM_LIST_TYPE_UNQUOTE_SPLICING 的单元素 slist 节点，替换 node_stack 栈顶。
+// 这样 ,@x 与 (unquote-splicing x) 的 AST 完全一致，且与 ,x 可区分。
+static size_t parse_unquote_splicing(parser_ctx_t *ctx, size_t index) {
+    am_token_t *tok = token_at(ctx, index);
+    if (!tok) {
+        parser_set_error(ctx, L"unexpected end of input in unquote-splicing");
+        return index;
+    }
+
+    size_t start = index;
+    if (tok->type == AM_TOKEN_TYPE_UNQUOTE_SPLICING) {
+        start = index + 1;
+    }
+    else if (tok->type == AM_TOKEN_TYPE_KEYWORD && tok->id == am_value_to_symbol(AM_VALUE_KW_unquote_splicing)) {
+        start = index + 1;
+    }
+    else if (tok->type == AM_TOKEN_TYPE_LB) {
+        start = index + 2; // 跳过 ( unquote-splicing
+    }
+    else {
+        parser_set_error(ctx, L"expected unquote-splicing");
+        return index;
+    }
+
+    // 复用 UNQUOTE 状态的既有规则解析 X
+    state_stack_push(ctx, AM_PARSER_STATE_UNQUOTE);
+    size_t next_index = parse_unquote_term(ctx, start);
+    state_stack_pop(ctx);
+    if (ctx->error) return index;
+
+    // 取出解析结果，包裹为 UNQUOTE_SPLICING 单元素 slist 节点
+    am_value_t child = node_stack_pop(ctx);
+    if (ctx->error) return index;
+
+    am_handle_t parent_handle = AM_HANDLE_NULL;
+    am_value_t top = node_stack_top(ctx);
+    if (!ctx->error && am_value_is_handle(top) && top != am_make_value_of_handle(AM_TOP_NODE_HANDLE)) {
+        parent_handle = am_value_to_handle(top);
+    }
+
+    // 显式以 AM_LIST_TYPE_UNQUOTE_SPLICING 创建包裹节点，不受 UNQUOTE 状态打标逻辑影响
+    am_handle_t list_handle = am_ast_make_slist_node(ctx->ast, parent_handle, AM_LIST_TYPE_UNQUOTE_SPLICING);
+    if (list_handle == AM_HANDLE_NULL) {
+        parser_set_error(ctx, L"failed to create unquote-splicing node");
+        return index;
+    }
+
+    node_stack_push(ctx, am_make_value_of_handle(list_handle));
+    am_ast_set_node_token_index(ctx->ast, list_handle, index);
+
+    // 将解析结果 append 进包裹节点（append_child_to_top 会弹出 child 并挂到栈顶节点）
+    node_stack_push(ctx, child);
+    if (append_child_to_top(ctx) < 0) return index;
+
     return next_index;
 }
 
@@ -8755,7 +8098,8 @@ static void arn_rename_iter_cb(am_handle_t handle, am_value_t value, void *user_
     }
     else if (lst->type == AM_LIST_TYPE_APPLICATION ||
              lst->type == AM_LIST_TYPE_QUASIQUOTE ||
-             lst->type == AM_LIST_TYPE_UNQUOTE) {
+             lst->type == AM_LIST_TYPE_UNQUOTE ||
+             lst->type == AM_LIST_TYPE_UNQUOTE_SPLICING) {
         arn_rename_application(ctx, handle, lst);
     }
 }
@@ -9922,7 +9266,8 @@ static am_list_t *macro_as_list(am_ast_t *ast, am_value_t v) {
         lst->type != AM_LIST_TYPE_LAMBDA &&
         lst->type != AM_LIST_TYPE_QUOTE &&
         lst->type != AM_LIST_TYPE_QUASIQUOTE &&
-        lst->type != AM_LIST_TYPE_UNQUOTE) {
+        lst->type != AM_LIST_TYPE_UNQUOTE &&
+        lst->type != AM_LIST_TYPE_UNQUOTE_SPLICING) {
         return NULL;
     }
     return lst;
@@ -11220,10 +10565,11 @@ static am_value_t macro_expand_value(am_macro_expand_ctx_t *ctx, am_value_t valu
         }
     }
 
-    // quote / quasiquote / unquote 内部不展开宏，避免用户 symbol 与关键字冲突
+    // quote / quasiquote / unquote / unquote-splicing 内部不展开宏，避免用户 symbol 与关键字冲突
     if (lst->type == AM_LIST_TYPE_QUOTE ||
         lst->type == AM_LIST_TYPE_QUASIQUOTE ||
-        lst->type == AM_LIST_TYPE_UNQUOTE) {
+        lst->type == AM_LIST_TYPE_UNQUOTE ||
+        lst->type == AM_LIST_TYPE_UNQUOTE_SPLICING) {
         return value;
     }
 
@@ -12132,6 +11478,7 @@ am_ast_t *am_link(am_ast_t *main_ast, wchar_t *base_dir,
 #define AM_COMPILER_NODE_KIND_QUASIQUOTE (3)
 #define AM_COMPILER_NODE_KIND_UNQUOTE   (4)
 #define AM_COMPILER_NODE_KIND_STRING    (5)
+#define AM_COMPILER_NODE_KIND_UNQUOTE_SPLICING (6)
 
 // 编译器视角的值的类型分类
 #define AM_COMPILER_VALUE_TYPE_HANDLE   (0)
@@ -12174,6 +11521,7 @@ static int32_t compiler_node_kind(am_compiler_ctx_t *ctx, am_handle_t h) {
             case AM_LIST_TYPE_QUOTE:       return AM_COMPILER_NODE_KIND_QUOTE;
             case AM_LIST_TYPE_QUASIQUOTE:  return AM_COMPILER_NODE_KIND_QUASIQUOTE;
             case AM_LIST_TYPE_UNQUOTE:     return AM_COMPILER_NODE_KIND_UNQUOTE;
+            case AM_LIST_TYPE_UNQUOTE_SPLICING: return AM_COMPILER_NODE_KIND_UNQUOTE_SPLICING;
             default: break;
         }
     }
@@ -12239,6 +11587,93 @@ static int32_t compiler_varid_name_equals(am_compiler_ctx_t *ctx, am_varid_t var
     wchar_t *vname = am_vocab_get(ctx->ast->alloc, ctx->ast->var_vocab, &varid);
     if (!vname) return -1;
     return wcscmp(vname, name) == 0 ? 0 : -1;
+}
+
+
+// emit_instruction 前向声明（定义见下文“工具函数”一节）
+static int32_t emit_instruction(am_compiler_ctx_t *ctx, uint32_t opcode, am_value_t operand);
+
+
+// ===============================================================================
+// 单值栈纪律（方案A：编译期单值纪律）辅助函数
+//
+// 纪律：任何表达式求值结束后，恰好在 opstack 上留下 1 个值；任何语句序列执行完后，
+// 栈深恢复到序列开始时的水平。语句形式（define/set!/display/newline/push/set_item!/
+// while/单臂if的假分支/cond全部落空/空begin）的值统一为 #undefined。
+// 以下辅助函数用于在代码生成时维持该纪律。VM 指令语义不变。
+// ===============================================================================
+
+// 功能说明：判断编译某个AST值之后，是否会在opstack上产生恰好1个值。
+// 设计说明：绝大多数形式都是产值的；不产生值的“零效应形式”只有两类——
+//   ① 编译期声明/宏形式（import/native/define-syntax/let-syntax/letrec-syntax/syntax-rules），
+//      compile_application 对它们不发射任何指令；
+//   ② 裸符号 break/continue（编译为 goto，无栈效应）。
+// 实现说明：返回0表示产生1个值；返回-1表示不产生值。
+static int32_t compiler_check_produces_value(am_compiler_ctx_t *ctx, am_value_t v) {
+    if (am_value_is_symbol(v)) {
+        int is_break;
+        if (compiler_is_break_continue(v, &is_break) == 0) return -1;
+        return 0;
+    }
+    if (am_value_is_handle(v)) {
+        am_handle_t h = am_value_to_handle(v);
+        if (compiler_node_kind(ctx, h) == AM_COMPILER_NODE_KIND_APPLICATION) {
+            am_value_t node_val = am_ast_get_node(ctx->ast, h);
+            if (!am_value_is_ptr(node_val)) return 0;
+            am_list_t *node = (am_list_t *)am_value_to_ptr(node_val);
+            if (node->length == 0) return -1;
+            am_value_t first = am_list_get(ctx->ast->alloc, node, 0);
+            if (am_value_is_symbol(first)) {
+                am_symbol_t sym = am_value_to_symbol(first);
+                if (sym == am_value_to_symbol(AM_VALUE_KW_import)        ||
+                    sym == am_value_to_symbol(AM_VALUE_KW_native)        ||
+                    sym == am_value_to_symbol(AM_VALUE_KW_define_syntax) ||
+                    sym == am_value_to_symbol(AM_VALUE_KW_let_syntax)    ||
+                    sym == am_value_to_symbol(AM_VALUE_KW_letrec_syntax) ||
+                    sym == am_value_to_symbol(AM_VALUE_KW_syntax_rules)) {
+                    return -1;
+                }
+            }
+        }
+        return 0;
+    }
+    return 0;
+}
+
+
+// 功能说明：语句型内建（builtin）清单——查询某 builtin 指令执行后在 opstack 上残留的参数个数。
+// 设计说明：语句型 builtin 对应的 VM 指令执行后不在 opstack 上留下值（display/newline/
+// list_push/set_item 弹光全部参数；read/write 是空操作，参数残留在栈上；fork 执行即报错）。
+// 该清单与 AM_BUILTIN_OPCODE_MAP 并列维护，集中处理而非散落各点。
+// 实现说明：返回非负数表示是语句型 builtin（数值为指令执行后栈上残留的参数个数）；
+// 返回-1表示表达式型 builtin（指令自身净 +1，无需补偿）。
+static int32_t compiler_statement_builtin_residue(int32_t opcode) {
+    switch (opcode) {
+        case AM_VM_OP_display:    // 弹 1 压 0
+        case AM_VM_OP_newline:    // 不动栈（0 参数）
+        case AM_VM_OP_list_push:  // 弹 2 压 0
+        case AM_VM_OP_set_item:   // 弹 3 压 0
+        case AM_VM_OP_read:       // 空操作（0 参数，无残留）
+        case AM_VM_OP_fork:       // 执行即报错（不可达补偿，仅为静态纪律一致）
+            return 0;
+        case AM_VM_OP_write:      // 空操作，2 个参数残留在栈上
+            return 2;
+        default:
+            return -1;
+    }
+}
+
+
+// 功能说明：语句型内建的补偿代码生成——先弹掉全部残留参数，再压入 #undefined 作为该语句形式的值，
+// 使“任何调用形式净 +1”的单值纪律成立。
+// 实现说明：成功返回0；失败返回-1。表达式型 builtin 不发射任何指令，直接返回0。
+static int32_t compiler_emit_statement_builtin_compensation(am_compiler_ctx_t *ctx, int32_t opcode) {
+    int32_t residue = compiler_statement_builtin_residue(opcode);
+    if (residue < 0) return 0;
+    for (int32_t i = 0; i < residue; i++) {
+        if (emit_instruction(ctx, AM_VM_OP_pop, AM_VALUE_UNDEFINED) != 0) return -1;
+    }
+    return emit_instruction(ctx, AM_VM_OP_push, AM_VALUE_UNDEFINED);
 }
 
 
@@ -12463,6 +11898,11 @@ static int32_t compile_value(am_compiler_ctx_t *ctx, am_value_t v) {
             case AM_COMPILER_NODE_KIND_APPLICATION:
             case AM_COMPILER_NODE_KIND_UNQUOTE:
                 return compile_application(ctx, h);
+            case AM_COMPILER_NODE_KIND_UNQUOTE_SPLICING:
+                // unquote-splicing 节点只能作为 quasiquote 的直接子节点被 compile_quasiquote 处理；
+                // 出现在其他位置（如独立求值、函数参数等）属于编译错误
+                fwprintf(stderr, L"[Compiler] 编译错误: unquote-splicing 仅允许出现在 quasiquote 内\n");
+                return -1;
             default:
                 return -1;
         }
@@ -12627,7 +12067,10 @@ static int32_t compile_application(am_compiler_ctx_t *ctx, am_handle_t handle) {
         if (am_value_is_varid(first)) {
             int32_t opcode = compiler_builtin_opcode_for_varid(ctx, am_value_to_varid(first));
             if (opcode >= 0) {
-                return emit_instruction(ctx, (uint32_t)opcode, AM_VALUE_UNDEFINED);
+                if (emit_instruction(ctx, (uint32_t)opcode, AM_VALUE_UNDEFINED) != 0) return -1;
+                // 语句型内建（display/newline/push/set_item!/read/write/fork）：指令执行后不留下值，
+                // 补偿弹残留并 push #undefined，使调用形式净 +1（单值纪律）
+                return compiler_emit_statement_builtin_compensation(ctx, opcode);
             }
         }
 
@@ -12652,7 +12095,6 @@ static int32_t compile_application(am_compiler_ctx_t *ctx, am_handle_t handle) {
 // Lambda 编译
 // ===============================================================================
 
-// TODO 处理pop问题
 static int32_t compile_lambda(am_compiler_ctx_t *ctx, am_handle_t handle) {
     am_value_t node_val = am_ast_get_node(ctx->ast, handle);
     if (!am_value_is_ptr(node_val)) return -1;
@@ -12668,13 +12110,24 @@ static int32_t compile_lambda(am_compiler_ctx_t *ctx, am_handle_t handle) {
         if (emit_instruction(ctx, AM_VM_OP_store, param) != 0) return -1;
     }
 
-    // 逐个编译函数体
-    for (size_t i = 2 + n_param; i < node->length; i++) {
-        if (compile_value(ctx, node->children[i]) != 0) return -1;
-        // 除最后一个子表达式外，其余表达式的结果都pop掉
-        // if (i < node->length - 1) {
-        //     if (emit_instruction(ctx, AM_VM_OP_pop, AM_VALUE_UNDEFINED) != 0) return -1;
-        // }
+    // 逐个编译函数体（单值纪律：非末尾表达式的结果立即pop；空函数体兑底产出 #undefined；
+    // 由此任何函数返回恰好 1 个值）
+    size_t body_begin = 2 + n_param;
+    if (node->length <= body_begin) {
+        if (emit_instruction(ctx, AM_VM_OP_push, AM_VALUE_UNDEFINED) != 0) return -1;
+    }
+    for (size_t i = body_begin; i < node->length; i++) {
+        am_value_t child = node->children[i];
+        int32_t produces = compiler_check_produces_value(ctx, child);
+        if (compile_value(ctx, child) != 0) return -1;
+        if (i < node->length - 1) {
+            // 除最后一个子表达式外，其余表达式的结果都pop掉
+            if (produces == 0 && emit_instruction(ctx, AM_VM_OP_pop, AM_VALUE_UNDEFINED) != 0) return -1;
+        }
+        else if (produces != 0) {
+            // 末尾子表达式是零效应形式（不产生值），补 push #undefined 维持单值纪律
+            if (emit_instruction(ctx, AM_VM_OP_push, AM_VALUE_UNDEFINED) != 0) return -1;
+        }
     }
 
     return emit_instruction(ctx, AM_VM_OP_return, AM_VALUE_UNDEFINED);
@@ -12764,7 +12217,9 @@ static int32_t compile_define(am_compiler_ctx_t *ctx, am_handle_t handle) {
         if (compile_value(ctx, right) != 0) return -1;
     }
 
-    return emit_instruction(ctx, AM_VM_OP_store, left);
+    // store 之后补 push #undefined：define 作为语句形式，其值统一为 #undefined（净 +1）
+    if (emit_instruction(ctx, AM_VM_OP_store, left) != 0) return -1;
+    return emit_instruction(ctx, AM_VM_OP_push, AM_VALUE_UNDEFINED);
 }
 
 
@@ -12787,24 +12242,34 @@ static int32_t compile_set(am_compiler_ctx_t *ctx, am_handle_t handle) {
         if (compile_value(ctx, right) != 0) return -1;
     }
 
-    return emit_instruction(ctx, AM_VM_OP_set, left);
+    // set 之后补 push #undefined：set! 作为语句形式，其值统一为 #undefined（净 +1）
+    if (emit_instruction(ctx, AM_VM_OP_set, left) != 0) return -1;
+    return emit_instruction(ctx, AM_VM_OP_push, AM_VALUE_UNDEFINED);
 }
 
 
 // 编译begin节点：依次求值并保留最后一个表达式的结果
-// TODO 处理pop问题
+// 单值纪律：非末尾子表达式的结果立即pop；空begin产出 #undefined（净 +1）
 static int32_t compile_begin(am_compiler_ctx_t *ctx, am_handle_t handle) {
     am_value_t node_val = am_ast_get_node(ctx->ast, handle);
     if (!am_value_is_ptr(node_val)) return -1;
     am_list_t *node = (am_list_t *)am_value_to_ptr(node_val);
-    if (node->length <= 1) return 0;
+    if (node->length <= 1) {
+        return emit_instruction(ctx, AM_VM_OP_push, AM_VALUE_UNDEFINED);
+    }
 
     for (size_t i = 1; i < node->length; i++) {
-        if (compile_value(ctx, am_list_get(ctx->ast->alloc, node, i)) != 0) return -1;
-        // 除最后一个子表达式外，其余表达式的结果都pop掉
-        // if (i < node->length - 1) {
-        //     if (emit_instruction(ctx, AM_VM_OP_pop, AM_VALUE_UNDEFINED) != 0) return -1;
-        // }
+        am_value_t child = am_list_get(ctx->ast->alloc, node, i);
+        int32_t produces = compiler_check_produces_value(ctx, child);
+        if (compile_value(ctx, child) != 0) return -1;
+        if (i < node->length - 1) {
+            // 除最后一个子表达式外，其余表达式的结果都pop掉
+            if (produces == 0 && emit_instruction(ctx, AM_VM_OP_pop, AM_VALUE_UNDEFINED) != 0) return -1;
+        }
+        else if (produces != 0) {
+            // 末尾子表达式是零效应形式（不产生值），补 push #undefined 维持单值纪律
+            if (emit_instruction(ctx, AM_VM_OP_push, AM_VALUE_UNDEFINED) != 0) return -1;
+        }
     }
     return 0;
 }
@@ -12823,6 +12288,14 @@ static int32_t compile_cond(am_compiler_ctx_t *ctx, am_handle_t handle) {
     if (end_lbl_varid == SIZE_MAX) return -1;
     am_value_t end_lbl_idx = am_make_value_of_varid(end_lbl_varid);
     am_value_t end_lbl = am_compiler_make_label(ctx, end_lbl_idx);
+
+    // COND_MISS 标签：全部谓词落空（无 else）时的落入点。
+    // 单值纪律：落空路径压入 #undefined 作为 cond 的值（原为“未规定”），使命中与落空路径净效应均为 +1。
+    am_varid_t miss_lbl_varid = am_compiler_make_temp_varid(
+        ctx, L"COND_MISS", am_make_value_of_handle(handle), 1);
+    if (miss_lbl_varid == SIZE_MAX) return -1;
+    am_value_t miss_lbl_idx = am_make_value_of_varid(miss_lbl_varid);
+    am_value_t miss_lbl = am_compiler_make_label(ctx, miss_lbl_idx);
 
     for (size_t i = 1; i < n; i++) {
         // 插入分支开始标签（第一个分支的标签实际上不会被引用，但为统一逻辑仍定位）
@@ -12850,7 +12323,8 @@ static int32_t compile_cond(am_compiler_ctx_t *ctx, am_handle_t handle) {
         if (!is_else) {
             if (compile_predicate(ctx, predicate) != 0) return -1;
             if (i == n - 1) {
-                if (emit_instruction(ctx, AM_VM_OP_iffalse, end_lbl) != 0) return -1;
+                // 最后一个子句（无 else）：谓词为假则进入落空路径
+                if (emit_instruction(ctx, AM_VM_OP_iffalse, miss_lbl) != 0) return -1;
             }
             else {
                 am_varid_t next_branch_lbl_varid = am_compiler_make_temp_varid(
@@ -12864,11 +12338,19 @@ static int32_t compile_cond(am_compiler_ctx_t *ctx, am_handle_t handle) {
 
         if (compile_value(ctx, branch) != 0) return -1;
 
-        if (is_else || i == n - 1) {
+        if (is_else) {
+            // else 子句恒命中：落空路径不可达，无需补值，直接定位 end
             return am_compiler_locate_label(ctx, end_lbl_idx, ctx->icount);
         }
-        else {
-            if (emit_instruction(ctx, AM_VM_OP_goto, end_lbl) != 0) return -1;
+
+        // 命中路径跳过“落空补值”代码，直接到达公共结束点
+        if (emit_instruction(ctx, AM_VM_OP_goto, end_lbl) != 0) return -1;
+
+        if (i == n - 1) {
+            // 落空路径：全部谓词为假且无 else，cond 的值统一为 #undefined
+            if (am_compiler_locate_label(ctx, miss_lbl_idx, ctx->icount) != 0) return -1;
+            if (emit_instruction(ctx, AM_VM_OP_push, AM_VALUE_UNDEFINED) != 0) return -1;
+            return am_compiler_locate_label(ctx, end_lbl_idx, ctx->icount);
         }
     }
 
@@ -12903,8 +12385,13 @@ static int32_t compile_if(am_compiler_ctx_t *ctx, am_handle_t handle) {
         if (compile_value(ctx, true_branch) != 0) return -1;
     }
     else {
-        if (emit_instruction(ctx, AM_VM_OP_iffalse, end_label) != 0) return -1;
+        // 单臂 if（缺省假分支）：假分支路径压入 #undefined（其值原为“未规定”，统一为 #undefined），
+        // 使两个分支的栈效应均为 +1。此处复用 true_label 作为“假分支落入”标签。
+        if (emit_instruction(ctx, AM_VM_OP_iffalse, true_label) != 0) return -1;
         if (compile_value(ctx, true_branch) != 0) return -1;
+        if (emit_instruction(ctx, AM_VM_OP_goto, end_label) != 0) return -1;
+        if (am_compiler_locate_label(ctx, true_label_idx, ctx->icount) != 0) return -1;
+        if (emit_instruction(ctx, AM_VM_OP_push, AM_VALUE_UNDEFINED) != 0) return -1;
     }
 
     return am_compiler_locate_label(ctx, end_label_idx, ctx->icount);
@@ -12929,11 +12416,18 @@ static int32_t compile_while(am_compiler_ctx_t *ctx, am_handle_t handle) {
     if (am_compiler_locate_label(ctx, cond_label_idx, ctx->icount) != 0) return -1;
     if (compile_predicate(ctx, am_list_get(ctx->ast->alloc, node, 1)) != 0) return -1;
     if (emit_instruction(ctx, AM_VM_OP_iffalse, end_label) != 0) return -1;
+    // 循环体每个表达式的结果都立即丢弃（pop），消灭逐迭代的栈累积；
+    // break/continue 编译为 goto，不产生值，无需 pop
     for (size_t i = 2; i < node->length; i++) {
-        if (compile_value(ctx, am_list_get(ctx->ast->alloc, node, i)) != 0) return -1;
+        am_value_t child = am_list_get(ctx->ast->alloc, node, i);
+        int32_t produces = compiler_check_produces_value(ctx, child);
+        if (compile_value(ctx, child) != 0) return -1;
+        if (produces == 0 && emit_instruction(ctx, AM_VM_OP_pop, AM_VALUE_UNDEFINED) != 0) return -1;
     }
     if (emit_instruction(ctx, AM_VM_OP_goto, cond_label) != 0) return -1;
     if (am_compiler_locate_label(ctx, end_label_idx, ctx->icount) != 0) return -1;
+    // while 作为语句形式，其值统一为 #undefined（原为“未规定”），净 +1
+    if (emit_instruction(ctx, AM_VM_OP_push, AM_VALUE_UNDEFINED) != 0) return -1;
 
     return while_tag_stack_pop(ctx);
 }
@@ -13006,6 +12500,46 @@ static int32_t compile_quasiquote(am_compiler_ctx_t *ctx, am_handle_t handle) {
                 kind == AM_COMPILER_NODE_KIND_UNQUOTE) {
                 if (compile_application(ctx, am_value_to_handle(child)) != 0) return -1;
             }
+            else if (kind == AM_COMPILER_NODE_KIND_UNQUOTE_SPLICING) {
+                // ,@X：取其唯一子节点，按 unquote 内容语义编译，再发射 splice 指令打包，
+                // 由 op_concat 在拼表时将其元素展平并入结果列表
+                am_value_t spl_node_val = am_ast_get_node(ctx->ast, am_value_to_handle(child));
+                if (!am_value_is_ptr(spl_node_val)) return -1;
+                am_list_t *spl_node = (am_list_t *)am_value_to_ptr(spl_node_val);
+                if (spl_node->length != 1) return -1; // splicing 节点有且仅有一个子节点
+                am_value_t inner = am_list_get(ctx->ast->alloc, spl_node, 0);
+                int32_t ivt = compiler_value_type(inner);
+                if (ivt == AM_COMPILER_VALUE_TYPE_HANDLE) {
+                    int32_t ikind = compiler_node_kind(ctx, am_value_to_handle(inner));
+                    if (ikind == AM_COMPILER_NODE_KIND_APPLICATION ||
+                        ikind == AM_COMPILER_NODE_KIND_UNQUOTE) {
+                        if (compile_application(ctx, am_value_to_handle(inner)) != 0) return -1;
+                    }
+                    else {
+                        if (emit_instruction(ctx, AM_VM_OP_push, inner) != 0) return -1;
+                    }
+                }
+                else if (ivt == AM_COMPILER_VALUE_TYPE_VARID) {
+                    if (compiler_is_native_ref(ctx, inner) == 0) {
+                        if (emit_instruction(ctx, AM_VM_OP_push, inner) != 0) return -1;
+                    }
+                    else {
+                        if (emit_instruction(ctx, AM_VM_OP_load, inner) != 0) return -1;
+                    }
+                }
+                else if (ivt == AM_COMPILER_VALUE_TYPE_NUMBER ||
+                         ivt == AM_COMPILER_VALUE_TYPE_BOOLEAN ||
+                         ivt == AM_COMPILER_VALUE_TYPE_NULL ||
+                         ivt == AM_COMPILER_VALUE_TYPE_UNDEFINED ||
+                         ivt == AM_COMPILER_VALUE_TYPE_WCHAR ||
+                         ivt == AM_COMPILER_VALUE_TYPE_SYMBOL) {
+                    if (emit_instruction(ctx, AM_VM_OP_push, inner) != 0) return -1;
+                }
+                else {
+                    return -1;
+                }
+                if (emit_instruction(ctx, AM_VM_OP_splice, AM_VALUE_UNDEFINED) != 0) return -1;
+            }
             else if (kind == AM_COMPILER_NODE_KIND_QUASIQUOTE) {
                 if (compile_quasiquote(ctx, am_value_to_handle(child)) != 0) return -1;
             }
@@ -13077,12 +12611,12 @@ static int32_t compiler_stack_effect(am_compiler_ctx_t *ctx, am_iaddr_t iaddr) {
         case AM_VM_OP_iftrue:      return -1;
         case AM_VM_OP_iffalse:     return -1;
         case AM_VM_OP_goto:        return 0;
-        case AM_VM_OP_read:        return 1;
-        case AM_VM_OP_write:       return -2;
+        case AM_VM_OP_read:        return 0;  // 已废弃：空操作
+        case AM_VM_OP_write:       return 0;  // 已废弃：空操作
         case AM_VM_OP_pause:       return 0;
         case AM_VM_OP_halt:        return 0;
-        case AM_VM_OP_fork:        return 0;
-        case AM_VM_OP_display:     return 0;
+        case AM_VM_OP_fork:        return 0;  // 已废弃：执行即报错
+        case AM_VM_OP_display:     return -1; // 弹 1 压 0
         case AM_VM_OP_newline:     return 0;
         case AM_VM_OP_add:
         case AM_VM_OP_sub:
@@ -13101,8 +12635,9 @@ static int32_t compiler_stack_effect(am_compiler_ctx_t *ctx, am_iaddr_t iaddr) {
         case AM_VM_OP_or:
         case AM_VM_OP_cons:
         case AM_VM_OP_get_item:
-        case AM_VM_OP_list_push:
             return -1;
+        case AM_VM_OP_list_push:
+            return -2; // 弹 2 压 0
         case AM_VM_OP_not:
         case AM_VM_OP_isnull:
         case AM_VM_OP_isundef:
@@ -13118,17 +12653,27 @@ static int32_t compiler_stack_effect(am_compiler_ctx_t *ctx, am_iaddr_t iaddr) {
         case AM_VM_OP_duplicate:
             return 0;
         case AM_VM_OP_set_item:
-            return -2;
-        case AM_VM_OP_concat:
+            return -3; // 弹 3 压 0
+        case AM_VM_OP_concat: {
+            // 弹栈顶 count 再弹 count 个元素、压 1 个列表 = 净 -count。
+            // compile_quasiquote 恒在 concat 紧邻前一条指令发射 push <count>，可精确读出；
+            // 若不满足该形态（防御），回退为保守估计 -1。
+            if (iaddr >= 1 && ctx->ilcode[iaddr - 1].opcode == AM_VM_OP_push &&
+                am_value_is_uint(ctx->ilcode[iaddr - 1].operand)) {
+                return -(int32_t)am_value_to_uint(ctx->ilcode[iaddr - 1].operand);
+            }
             return -1;
+        }
+        case AM_VM_OP_splice:
+            return 0; // 弹 1 压 1，栈深不变
         case AM_VM_OP_dynamicwind:
-            return -2;
+            return -3; // 弹 3 闭包
         case AM_VM_OP_dynamicwind_after_before:
-            return 1;
+            return 0;  // 截回 base 后调用 thunk
         case AM_VM_OP_dynamicwind_before_after:
-            return 0;
+            return 0;  // 截回 base、保存 thunk 结果后调用 after
         case AM_VM_OP_dynamicwind_done:
-            return -1;
+            return 1;  // 截回 base 后压回保存的结果
         case AM_VM_OP_wind:
             return 0;
         default:
@@ -13231,8 +12776,28 @@ static void compiler_depth_search(am_compiler_ctx_t *ctx, am_iaddr_t entry, size
                 break;
             }
             case AM_VM_OP_call: {
-                // 不进入被调用函数；假设被调用函数净栈效果为 0，继续在调用点之后执行
-                DEPTH_PUSH(iaddr + 1, next_depth);
+                // 不进入被调用函数。单值纪律下任何函数返回恰好 1 个值（net ≡ 1），
+                // 故 call 的后继深度 = 调用点深度 - argc + 1。
+                // 对 label/iaddr 可解析的直接调用，argc 由被调方序言的 store 串长度精确读出；
+                // 不可解析的间接调用（变量目标、native）保守按效应 0 处理。
+                size_t cont_depth = next_depth;
+                am_value_t target_op = ctx->ilcode[iaddr].operand;
+                am_iaddr_t target = SIZE_MAX;
+                if (am_value_is_label(target_op)) {
+                    target = am_compiler_parse_label_to_iaddr(ctx, target_op);
+                }
+                else if (am_value_is_iaddr(target_op)) {
+                    target = am_value_to_iaddr(target_op);
+                }
+                if (target != SIZE_MAX && target < ctx->icount) {
+                    size_t argc = 0;
+                    for (am_iaddr_t j = target; j < ctx->icount &&
+                         ctx->ilcode[j].opcode == AM_VM_OP_store; j++) {
+                        argc++;
+                    }
+                    cont_depth = (next_depth > argc) ? (next_depth - argc + 1) : 1;
+                }
+                DEPTH_PUSH(iaddr + 1, cont_depth);
                 break;
             }
             case AM_VM_OP_tailcall: {
@@ -15496,7 +15061,8 @@ static size_t dynamic_wind_common_prefix(am_process_t *proc, am_list_t *target) 
 //         超过阈值的字符串直接新建，不参与驻留。
 //         失败返回 AM_HANDLE_NULL。
 am_handle_t am_process_make_wstring_handle(am_process_t *proc, const wchar_t *str, size_t len) {
-    if (!proc || !proc->heap || !proc->heap_alloc || !str) return AM_HANDLE_NULL;
+    // 注意：str 为 NULL 且 len 为 0 是合法的空字符串；仅拒绝无缓冲区的非空串
+    if (!proc || !proc->heap || !proc->heap_alloc || (!str && len > 0)) return AM_HANDLE_NULL;
 
     // 构造以 L'\0' 结尾的临时缓冲区，供 hash 计算和 strindex 查询使用
     wchar_t *tmp = (wchar_t *)am_malloc(proc->vm_alloc, (len + 1) * sizeof(wchar_t));
@@ -15859,7 +15425,8 @@ size_t am_process_length_of_opstack(am_process_t *proc) {
 int32_t am_process_push_stack_frame(am_process_t *proc, am_value_t closure_handle_value, am_value_t return_target_iaddr_value) {
     if (!proc || !proc->fstack || !proc->fstack_top) return -1;
     if (!am_value_is_handle(closure_handle_value)) return -1;
-    if (!am_value_is_iaddr(return_target_iaddr_value)) return -1;
+    /* 工单#36：return_target 允许普通 iaddr 或异步帧标记（定时器回调帧） */
+    if (!am_value_is_iaddr(return_target_iaddr_value) && !AM_VALUE_IS_ASYNC_RET(return_target_iaddr_value)) return -1;
 
     size_t used = (size_t)(proc->fstack_top - proc->fstack);
     if (used + 2 > proc->fstack_capacity) return -1;
@@ -16396,6 +15963,7 @@ static int32_t am_process_append_list_to_strbuf(am_process_strbuf_t *sb, am_proc
     }
     else if (lst->type == AM_LIST_TYPE_QUASIQUOTE) prefix = L"`(";
     else if (lst->type == AM_LIST_TYPE_UNQUOTE)    prefix = L",(";
+    else if (lst->type == AM_LIST_TYPE_UNQUOTE_SPLICING) prefix = L",@(";
 
     if (am_process_strbuf_append_string(sb, prefix) != 0) return -1;
 
@@ -17321,7 +16889,12 @@ static void runtime_queue_wake_process(am_runtime_t *rt, am_pid_t pid, am_value_
     am_process_t *proc = rt->process_pool[pid];
     if (!proc) return;
 
-    if (am_process_push_operand(proc, result) != 0) return;
+    // 唤醒压值失败（内存不足）时不能静默挂起：杀死该进程并报错，避免进程永久停留 BLOCKED
+    if (am_process_push_operand(proc, result) != 0) {
+        am_runtime_error(rt, L"[Runtime] 唤醒阻塞进程失败：操作数栈压值失败，进程终止\n");
+        am_process_set_state(proc, AM_PROCESS_STATE_KILLED);
+        return;
+    }
     am_process_step(proc);
     am_process_set_state(proc, AM_PROCESS_STATE_READY);
 
@@ -18170,6 +17743,12 @@ static int32_t op_return(am_runtime_t *rt, am_process_t *proc, am_value_t operan
     }
 
     am_process_set_current_closure(proc, am_value_to_handle(closure_val));
+    /* 工单#36：异步帧（定时器回调）先丢弃回调留在操作数栈上的返回值，避免栈错位 */
+    if (AM_VALUE_IS_ASYNC_RET(ret_val)) {
+        (void)am_process_pop_operand(proc);
+        am_process_goto(proc, AM_VALUE_ASYNC_RET_TO_IADDR(ret_val));
+        return 0;
+    }
     am_process_goto(proc, am_value_to_iaddr(ret_val));
     return 0;
 }
@@ -18729,7 +18308,6 @@ static int32_t op_length(am_runtime_t *rt, am_process_t *proc, am_value_t operan
 
 
 static int32_t op_concat(am_runtime_t *rt, am_process_t *proc, am_value_t operand) {
-    (void)rt;
     (void)operand;
 
     am_value_t count_val = am_process_pop_operand(proc);
@@ -18751,11 +18329,82 @@ static int32_t op_concat(am_runtime_t *rt, am_process_t *proc, am_value_t operan
     }
 
     for (am_int_t i = 0; i < count; i++) {
-        new_lst = am_list_push(proc->heap_alloc, new_lst, children[i]);
-        if (!new_lst) {
+        am_value_t item = children[i];
+
+        // unquote-splicing：children[i] 指向 type==AM_LIST_TYPE_UNQUOTE_SPLICING 的运行时列表时，
+        // 取其第 0 个元素（必须是列表），把该列表的所有元素依次拼入 new_lst
+        am_list_t *splice_lst = NULL;
+        if (am_value_is_handle(item)) {
+            am_value_t obj_val = am_heap_get(proc->vm_alloc, proc->heap_alloc, proc->heap,
+                                             am_value_to_handle(item));
+            if (am_value_is_ptr(obj_val)) {
+                am_object_t *obj = am_value_to_ptr(obj_val);
+                if (obj->type == AM_OBJECT_TYPE_LIST &&
+                    ((am_list_t *)obj)->type == AM_LIST_TYPE_UNQUOTE_SPLICING) {
+                    splice_lst = (am_list_t *)obj;
+                }
+            }
+        }
+
+        if (!splice_lst) {
+            // 普通 child：按原逻辑压入 new_lst
+            new_lst = am_list_push(proc->heap_alloc, new_lst, item);
+            if (!new_lst) {
+                am_free(proc->vm_alloc, children);
+                return -1;
+            }
+            continue;
+        }
+
+        // splice：被拼接的列表是 splicing 包裹节点的唯一 child
+        if (splice_lst->length != 1) {
+            am_runtime_error(rt, L"[Runtime] unquote-splicing 的参数必须是列表\n");
             am_free(proc->vm_alloc, children);
+            am_list_destroy(proc->heap_alloc, new_lst);
             return -1;
         }
+        am_value_t inner = splice_lst->children[0];
+        if (!am_value_is_handle(inner)) {
+            am_runtime_error(rt, L"[Runtime] unquote-splicing 的参数必须是列表\n");
+            am_free(proc->vm_alloc, children);
+            am_list_destroy(proc->heap_alloc, new_lst);
+            return -1;
+        }
+        am_value_t inner_obj_val = am_heap_get(proc->vm_alloc, proc->heap_alloc, proc->heap,
+                                               am_value_to_handle(inner));
+        if (!am_value_is_ptr(inner_obj_val) ||
+            am_value_to_ptr(inner_obj_val)->type != AM_OBJECT_TYPE_LIST) {
+            am_runtime_error(rt, L"[Runtime] unquote-splicing 的参数必须是列表\n");
+            am_free(proc->vm_alloc, children);
+            am_list_destroy(proc->heap_alloc, new_lst);
+            return -1;
+        }
+        am_list_t *inner_lst = (am_list_t *)am_value_to_ptr(inner_obj_val);
+
+        // 先把元素值拷贝到本地数组，避免 new_lst 扩容期间持有 heap 内对象指针
+        size_t inner_n = inner_lst->length;
+        am_value_t *inner_items = NULL;
+        if (inner_n > 0) {
+            inner_items = (am_value_t *)am_malloc(proc->vm_alloc, inner_n * sizeof(am_value_t));
+            if (!inner_items) {
+                am_free(proc->vm_alloc, children);
+                am_list_destroy(proc->heap_alloc, new_lst);
+                return -1;
+            }
+            for (size_t j = 0; j < inner_n; j++) {
+                inner_items[j] = inner_lst->children[j];
+            }
+        }
+
+        for (size_t j = 0; j < inner_n; j++) {
+            new_lst = am_list_push(proc->heap_alloc, new_lst, inner_items[j]);
+            if (!new_lst) {
+                am_free(proc->vm_alloc, inner_items);
+                am_free(proc->vm_alloc, children);
+                return -1;
+            }
+        }
+        am_free(proc->vm_alloc, inner_items);
     }
 
     am_handle_t new_hd = am_heap_alloc_handle(proc->vm_alloc, proc->heap_alloc, proc->heap);
@@ -18783,6 +18432,37 @@ static int32_t op_concat(am_runtime_t *rt, am_process_t *proc, am_value_t operan
     }
 
     am_free(proc->vm_alloc, children);
+    am_process_push_operand(proc, am_make_value_of_handle(new_hd));
+    am_process_step(proc);
+    return 0;
+}
+
+
+// unquote-splicing：弹出 1 个操作数 v，新建 type=AM_LIST_TYPE_UNQUOTE_SPLICING 的
+// 运行时列表，把 v 作为其唯一 child，入堆后把 handle 压栈。由 op_concat 识别并展平。
+static int32_t op_splice(am_runtime_t *rt, am_process_t *proc, am_value_t operand) {
+    (void)rt;
+    (void)operand;
+
+    am_value_t v = am_process_pop_operand(proc);
+
+    am_list_t *new_lst = am_list_create(proc->heap_alloc, 1, AM_LIST_TYPE_UNQUOTE_SPLICING, AM_HANDLE_NULL);
+    if (!new_lst) return -1;
+
+    new_lst = am_list_push(proc->heap_alloc, new_lst, v);
+    if (!new_lst) {
+        am_list_destroy(proc->heap_alloc, new_lst);
+        return -1;
+    }
+
+    am_handle_t new_hd = am_heap_alloc_handle(proc->vm_alloc, proc->heap_alloc, proc->heap);
+    if (new_hd == AM_HANDLE_NULL) {
+        am_list_destroy(proc->heap_alloc, new_lst);
+        return -1;
+    }
+    am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, new_hd,
+                am_make_value_of_ptr((am_object_t *)new_lst));
+
     am_process_push_operand(proc, am_make_value_of_handle(new_hd));
     am_process_step(proc);
     return 0;
@@ -18977,6 +18657,9 @@ static int32_t op_evalcleanup(am_runtime_t *rt, am_process_t *proc, am_value_t o
             cur_len--;
         }
     }
+
+    // 1.5 单值纪律：System.eval 作为语句形式，截断后补压 #undefined 作为其值（净效应 -1+1）
+    if (am_process_push_operand(proc, AM_VALUE_UNDEFINED) != 0) return -1;
 
     // 2. 截断 eval 追加的 ilcode
     if (proc->ilcode && old_ilen < proc->ilcode_length) {
@@ -19670,7 +19353,8 @@ int32_t am_runtime_call_async(am_runtime_t *rt, am_process_t *proc, am_handle_t 
     if (!closure) return -1;
 
     am_value_t current_closure_val = am_make_value_of_handle(proc->current_closure_handle);
-    am_value_t return_target_val = am_make_value_of_iaddr(return_target);
+    /* 工单#36：异步帧返回地址打 ASYNC_RET 标记，op_return 弹出该帧时先丢弃回调留在栈上的返回值 */
+    am_value_t return_target_val = AM_MAKE_VALUE_OF_ASYNC_RET(return_target);
     if (am_process_push_stack_frame(proc, current_closure_val, return_target_val) != 0) {
         return -1;
     }
@@ -20110,6 +19794,7 @@ int32_t am_runtime_op_dispatch(am_runtime_t *rt, am_process_t *proc, uint32_t op
         case AM_VM_OP_list_pop:    return op_list_pop(rt, proc, operand);
         case AM_VM_OP_length:      return op_length(rt, proc, operand);
         case AM_VM_OP_concat:      return op_concat(rt, proc, operand);
+        case AM_VM_OP_splice:      return op_splice(rt, proc, operand);
         case AM_VM_OP_duplicate:   return op_duplicate(rt, proc, operand);
         case AM_VM_OP_evalcleanup: return op_evalcleanup(rt, proc, operand);
         case AM_VM_OP_dynamicwind:              return op_dynamicwind(rt, proc, operand);
@@ -20479,3 +20164,755 @@ am_native_func_t am_native_find_func(const wchar_t *lib_name, const wchar_t *fun
     return NULL;
 }
 /* ===== end:   src/am_runtime.c ===== */
+
+/* ===== begin: src/am_debug.c ===== */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+#include <wchar.h>
+
+
+
+#define AST_PRINT_INDENT 2
+
+
+static void debug_ast_print_indent(FILE *out, int depth) {
+    for (int i = 0; i < depth * AST_PRINT_INDENT; i++) {
+        fputwc(L' ', out);
+    }
+}
+
+
+static int debug_ast_is_handle_visited(am_handle_t *visited, size_t count, am_handle_t handle) {
+    for (size_t i = 0; i < count; i++) {
+        if (visited[i] == handle) return 1;
+    }
+    return 0;
+}
+
+
+static void debug_ast_print_value(am_ast_t *ast, am_value_t value, FILE *out,
+                                  am_handle_t **visited, size_t *visited_count, size_t *visited_capacity, int depth);
+
+
+static void debug_ast_print_ensure_visited_capacity(am_handle_t **visited, size_t *visited_capacity, size_t visited_count) {
+    if (visited_count < *visited_capacity) return;
+    size_t new_capacity = *visited_capacity ? *visited_capacity * 2 : 256;
+    if (new_capacity < visited_count + 1) new_capacity = visited_count + 1;
+    am_handle_t *new_visited = (am_handle_t *)realloc(*visited, new_capacity * sizeof(am_handle_t));
+    if (!new_visited) {
+        fprintf(stderr, "debug_ast_print: failed to allocate visited buffer\n");
+        return;
+    }
+    *visited = new_visited;
+    *visited_capacity = new_capacity;
+}
+
+
+static void debug_ast_print_node(am_ast_t *ast, am_handle_t handle, FILE *out,
+                                 am_handle_t **visited, size_t *visited_count, size_t *visited_capacity, int depth) {
+    am_value_t node_val = am_ast_get_node(ast, handle);
+    if (!am_value_is_ptr(node_val)) {
+        fwprintf(out, L"<H:%zu> (invalid)", (size_t)handle);
+        return;
+    }
+
+    am_object_t *obj = am_value_to_ptr(node_val);
+
+    if (obj->type == AM_OBJECT_TYPE_WSTRING) {
+        am_wstring_t *ws = (am_wstring_t *)obj;
+        fputwc(L'"', out);
+        for (size_t i = 0; i < ws->length; i++) {
+            wchar_t c = (wchar_t)am_value_to_wchar(ws->content[i]);
+            if (c == L'"') fputwc(L'\\', out);
+            fwprintf(out, L"%lc", c);
+        }
+        fputwc(L'"', out);
+        return;
+    }
+
+    if (obj->type != AM_OBJECT_TYPE_LIST) {
+        fwprintf(out, L"<H:%zu> (unknown type %d)", (size_t)handle, obj->type);
+        return;
+    }
+
+    am_list_t *lst = (am_list_t *)obj;
+
+    if (debug_ast_is_handle_visited(*visited, *visited_count, handle)) {
+        fwprintf(out, L"<H:%zu>", (size_t)handle);
+        return;
+    }
+    debug_ast_print_ensure_visited_capacity(visited, visited_capacity, *visited_count);
+    (*visited)[(*visited_count)++] = handle;
+
+    fwprintf(out, L"<H:%zu> {\n", (size_t)handle);
+    debug_ast_print_indent(out, depth + 1);
+    fwprintf(out, L"type: ");
+    switch (lst->type) {
+        case AM_LIST_TYPE_LAMBDA:      fwprintf(out, L"\"LAMBDA\"\n"); break;
+        case AM_LIST_TYPE_APPLICATION: fwprintf(out, L"\"APPLICATION\"\n"); break;
+        case AM_LIST_TYPE_QUOTE:       fwprintf(out, L"\"QUOTE\"\n"); break;
+        case AM_LIST_TYPE_QUASIQUOTE:  fwprintf(out, L"\"QUASIQUOTE\"\n"); break;
+        case AM_LIST_TYPE_UNQUOTE:     fwprintf(out, L"\"UNQUOTE\"\n"); break;
+        case AM_LIST_TYPE_UNQUOTE_SPLICING: fwprintf(out, L"\"UNQUOTE_SPLICING\"\n"); break;
+        default:                       fwprintf(out, L"\"UNKNOWN(%d)\"\n", lst->type); break;
+    }
+
+    debug_ast_print_indent(out, depth + 1);
+    if (lst->parent == AM_HANDLE_NULL) {
+        fwprintf(out, L"parent: null\n");
+    }
+    else {
+        fwprintf(out, L"parent: <H:%zu>\n", (size_t)lst->parent);
+    }
+
+    if (lst->type == AM_LIST_TYPE_LAMBDA) {
+        am_uint_t n_param = 0;
+        if (lst->length >= 2) {
+            am_value_t np = am_list_get(ast->alloc, lst, 1);
+            if (am_value_is_uint(np)) n_param = am_value_to_uint(np);
+        }
+
+        debug_ast_print_indent(out, depth + 1);
+        fwprintf(out, L"parameters: [\n");
+        for (am_uint_t i = 0; i < n_param; i++) {
+            debug_ast_print_indent(out, depth + 2);
+            am_value_t param = am_list_get(ast->alloc, lst, 2 + i);
+            debug_ast_print_value(ast, param, out, visited, visited_count, visited_capacity, depth + 2);
+            if (i + 1 < n_param) fputwc(L',', out);
+            fputwc(L'\n', out);
+        }
+        debug_ast_print_indent(out, depth + 1);
+        fwprintf(out, L"]\n");
+
+        debug_ast_print_indent(out, depth + 1);
+        fwprintf(out, L"bodies: [\n");
+        size_t body_start = 2 + n_param;
+        for (size_t i = body_start; i < lst->length; i++) {
+            debug_ast_print_indent(out, depth + 2);
+            am_value_t body = am_list_get(ast->alloc, lst, i);
+            debug_ast_print_value(ast, body, out, visited, visited_count, visited_capacity, depth + 2);
+            if (i + 1 < lst->length) fputwc(L',', out);
+            fputwc(L'\n', out);
+        }
+        debug_ast_print_indent(out, depth + 1);
+        fwprintf(out, L"]\n");
+    }
+    else {
+        debug_ast_print_indent(out, depth + 1);
+        fwprintf(out, L"children: [\n");
+        for (size_t i = 0; i < lst->length; i++) {
+            debug_ast_print_indent(out, depth + 2);
+            am_value_t child = am_list_get(ast->alloc, lst, i);
+            debug_ast_print_value(ast, child, out, visited, visited_count, visited_capacity, depth + 2);
+            if (i + 1 < lst->length) fputwc(L',', out);
+            fputwc(L'\n', out);
+        }
+        debug_ast_print_indent(out, depth + 1);
+        fwprintf(out, L"]\n");
+    }
+
+    debug_ast_print_indent(out, depth);
+    fwprintf(out, L"}");
+}
+
+
+static void debug_ast_print_value(am_ast_t *ast, am_value_t value, FILE *out,
+                                  am_handle_t **visited, size_t *visited_count, size_t *visited_capacity, int depth) {
+    if (am_value_is_handle(value)) {
+        am_handle_t h = am_value_to_handle(value);
+        debug_ast_print_node(ast, h, out, visited, visited_count, visited_capacity, depth);
+    }
+    else if (am_value_is_varid(value)) {
+        am_varid_t varid = am_value_to_varid(value);
+        size_t idx = (size_t)varid;
+        wchar_t *name = am_vocab_get(ast->alloc, ast->var_vocab, &idx);
+        if (name) {
+            fwprintf(out, L"\"%ls\" (varid=%zu)", name, (size_t)varid);
+        }
+        else {
+            fwprintf(out, L"<varid=%zu>", (size_t)varid);
+        }
+    }
+    else if (am_value_is_symbol(value)) {
+        am_symbol_t sym = am_value_to_symbol(value);
+        size_t idx = (size_t)sym;
+        wchar_t *name = am_vocab_get(ast->alloc, ast->symbol_vocab, &idx);
+        if (name) {
+            fwprintf(out, L"\"%ls\" (symbol=%zu)", name, (size_t)sym);
+        }
+        else {
+            fwprintf(out, L"<symbol=%zu>", (size_t)sym);
+        }
+    }
+    else if (am_value_is_uint(value)) {
+        fwprintf(out, L"%llu", (unsigned long long)am_value_to_uint(value));
+    }
+    else if (am_value_is_int(value)) {
+        fwprintf(out, L"%lld", (long long)am_value_to_int(value));
+    }
+    else if (am_value_is_float(value)) {
+        fwprintf(out, L"%g", (double)am_value_to_float(value));
+    }
+    else if (am_value_is_boolean(value)) {
+        fwprintf(out, L"%ls", am_value_to_boolean(value) ? L"#t" : L"#f");
+    }
+    else if (am_value_is_null(value)) {
+        fwprintf(out, L"#null");
+    }
+    else if (am_value_is_undefined(value)) {
+        fwprintf(out, L"#undefined");
+    }
+    else {
+        fwprintf(out, L"<value=%llu>", (unsigned long long)value);
+    }
+}
+
+
+static void debug_ast_print_vocab(FILE *out, am_ast_t *ast, am_vocab_t *vocab) {
+    fputwc(L'[', out);
+    for (size_t i = 0; i < vocab->length; i++) {
+        size_t idx = i;
+        wchar_t *word = am_vocab_get(ast->alloc, vocab, &idx);
+        if (i > 0) fwprintf(out, L", ");
+        if (word) {
+            fputwc(L'"', out);
+            fwprintf(out, L"%ls", word);
+            fputwc(L'"', out);
+        }
+        else {
+            fwprintf(out, L"null");
+        }
+    }
+    fputwc(L']', out);
+}
+
+
+static void debug_ast_print_handle_list(FILE *out, am_ast_t *ast, am_list_t *lst) {
+    (void)ast;
+    fputwc(L'[', out);
+    for (size_t i = 0; i < lst->length; i++) {
+        if (i > 0) fwprintf(out, L", ");
+        fwprintf(out, L"<H:%zu>", (size_t)am_value_to_handle(am_list_get(ast->alloc, lst, i)));
+    }
+    fputwc(L']', out);
+}
+
+
+static void debug_ast_print_value_inline(am_ast_t *ast, am_value_t value, FILE *out);
+
+
+static void debug_ast_print_value_list(FILE *out, am_ast_t *ast, am_list_t *lst) {
+    fputwc(L'[', out);
+    for (size_t i = 0; i < lst->length; i++) {
+        if (i > 0) fwprintf(out, L", ");
+        debug_ast_print_value_inline(ast, am_list_get(ast->alloc, lst, i), out);
+    }
+    fputwc(L']', out);
+}
+
+
+static void debug_ast_print_map_varid_to_handle(FILE *out, am_ast_t *ast, am_map_t *map) {
+    fputwc(L'{', out);
+    size_t count = am_map_length(ast->alloc, map);
+    am_value_t *keys = am_map_keys(ast->alloc, map);
+    for (size_t i = 0; i < count; i++) {
+        if (i > 0) fwprintf(out, L", ");
+        am_varid_t varid = am_value_to_varid(keys[i]);
+        size_t idx = (size_t)varid;
+        wchar_t *name = am_vocab_get(ast->alloc, ast->var_vocab, &idx);
+        if (name) fwprintf(out, L"\"%ls\": ", name);
+        else fwprintf(out, L"<varid=%zu>: ", (size_t)varid);
+
+        am_value_t v = am_map_get(ast->alloc, map, keys[i]);
+        if (am_value_is_handle(v)) {
+            fwprintf(out, L"<H:%zu>", (size_t)am_value_to_handle(v));
+        }
+        else {
+            fwprintf(out, L"null");
+        }
+    }
+    if (keys) am_free(ast->alloc, keys);
+    fputwc(L'}', out);
+}
+
+
+static const wchar_t *debug_var_type_name(am_uint_t type) {
+    switch (type) {
+        case AM_VAR_TYPE_OLD:          return L"OLD";
+        case AM_VAR_TYPE_NEW:          return L"NEW";
+        case AM_VAR_TYPE_BUILTIN:      return L"BUILTIN";
+        case AM_VAR_TYPE_EXT_REF:      return L"EXT_REF";
+        case AM_VAR_TYPE_IMPORT_REF:   return L"IMPORT_REF";
+        case AM_VAR_TYPE_NATIVE_REF:   return L"NATIVE_REF";
+        case AM_VAR_TYPE_IMPORT_ALIAS: return L"IMPORT_ALIAS";
+        case AM_VAR_TYPE_NATIVE_ID:    return L"NATIVE_ID";
+        default:                       return L"UNKNOWN";
+    }
+}
+
+
+static void debug_ast_print_var_type(FILE *out, am_ast_t *ast, am_list_t *lst) {
+    (void)ast;
+    fputwc(L'[', out);
+    for (size_t i = 0; i < lst->length; i++) {
+        if (i > 0) fwprintf(out, L", ");
+        am_value_t v = am_list_get(ast->alloc, lst, i);
+        if (am_value_is_uint(v)) {
+            am_uint_t t = am_value_to_uint(v);
+            fwprintf(out, L"%ls(%zu)", debug_var_type_name(t), (size_t)t);
+        }
+        else {
+            fwprintf(out, L"?");
+        }
+    }
+    fputwc(L']', out);
+}
+
+
+static void debug_ast_print_var_arn_mapping(FILE *out, am_ast_t *ast, am_map_t *map) {
+    fputwc(L'{', out);
+    size_t count = am_map_length(ast->alloc, map);
+    am_value_t *keys = am_map_keys(ast->alloc, map);
+    for (size_t i = 0; i < count; i++) {
+        if (i > 0) fwprintf(out, L", ");
+        am_varid_t new_varid = am_value_to_varid(keys[i]);
+        size_t new_idx = (size_t)new_varid;
+        wchar_t *new_name = am_vocab_get(ast->alloc, ast->var_vocab, &new_idx);
+        if (new_name) fwprintf(out, L"\"%ls\": ", new_name);
+        else fwprintf(out, L"<varid=%zu>: ", (size_t)new_varid);
+
+        am_value_t v = am_map_get(ast->alloc, map, keys[i]);
+        if (am_value_is_varid(v)) {
+            am_varid_t old_varid = am_value_to_varid(v);
+            size_t old_idx = (size_t)old_varid;
+            wchar_t *old_name = am_vocab_get(ast->alloc, ast->var_vocab, &old_idx);
+            if (old_name) fwprintf(out, L"\"%ls\"", old_name);
+            else fwprintf(out, L"<varid=%zu>", (size_t)old_varid);
+        }
+        else {
+            fwprintf(out, L"null");
+        }
+    }
+    if (keys) am_free(ast->alloc, keys);
+    fputwc(L'}', out);
+}
+
+
+static void debug_ast_print_value_inline(am_ast_t *ast, am_value_t value, FILE *out) {
+    if (am_value_is_handle(value)) {
+        fwprintf(out, L"<H:%zu>", (size_t)am_value_to_handle(value));
+    }
+    else if (am_value_is_varid(value)) {
+        am_varid_t varid = am_value_to_varid(value);
+        size_t idx = (size_t)varid;
+        wchar_t *name = am_vocab_get(ast->alloc, ast->var_vocab, &idx);
+        if (name) fwprintf(out, L"\"%ls\"", name);
+        else fwprintf(out, L"<varid=%zu>", (size_t)varid);
+    }
+    else if (am_value_is_symbol(value)) {
+        am_symbol_t sym = am_value_to_symbol(value);
+        size_t idx = (size_t)sym;
+        wchar_t *name = am_vocab_get(ast->alloc, ast->symbol_vocab, &idx);
+        if (name) fwprintf(out, L"\"%ls\"", name);
+        else fwprintf(out, L"<symbol=%zu>", (size_t)sym);
+    }
+    else if (am_value_is_uint(value)) {
+        fwprintf(out, L"%llu", (unsigned long long)am_value_to_uint(value));
+    }
+    else if (am_value_is_int(value)) {
+        fwprintf(out, L"%lld", (long long)am_value_to_int(value));
+    }
+    else if (am_value_is_float(value)) {
+        fwprintf(out, L"%g", (double)am_value_to_float(value));
+    }
+    else if (am_value_is_boolean(value)) {
+        fwprintf(out, L"%ls", am_value_to_boolean(value) ? L"#t" : L"#f");
+    }
+    else if (am_value_is_null(value)) {
+        fwprintf(out, L"#null");
+    }
+    else if (am_value_is_undefined(value)) {
+        fwprintf(out, L"#undefined");
+    }
+    else {
+        fwprintf(out, L"<value=%llu>", (unsigned long long)value);
+    }
+}
+
+
+void am_debug_ast_print_node_summary(FILE *out, am_ast_t *ast, am_handle_t handle) {
+    am_value_t node_val = am_ast_get_node(ast, handle);
+    if (!am_value_is_ptr(node_val)) {
+        fwprintf(out, L"<H:%zu>: (invalid)\n", (size_t)handle);
+        return;
+    }
+
+    am_object_t *obj = am_value_to_ptr(node_val);
+    if (obj->type == AM_OBJECT_TYPE_WSTRING) {
+        am_wstring_t *ws = (am_wstring_t *)obj;
+        fwprintf(out, L"<H:%zu>: WSTRING len=%zu \"", (size_t)handle, ws->length);
+        for (size_t i = 0; i < ws->length; i++) {
+            wchar_t c = (wchar_t)am_value_to_wchar(ws->content[i]);
+            if (c == L'"') fputwc(L'\\', out);
+            fwprintf(out, L"%lc", c);
+        }
+        fwprintf(out, L"\"\n");
+        return;
+    }
+
+    if (obj->type != AM_OBJECT_TYPE_LIST) {
+        fwprintf(out, L"<H:%zu>: (unknown type %d)\n", (size_t)handle, obj->type);
+        return;
+    }
+
+    am_list_t *lst = (am_list_t *)obj;
+    const wchar_t *type_name = L"UNKNOWN";
+    switch (lst->type) {
+        case AM_LIST_TYPE_LAMBDA:      type_name = L"LAMBDA"; break;
+        case AM_LIST_TYPE_APPLICATION: type_name = L"APPLICATION"; break;
+        case AM_LIST_TYPE_QUOTE:       type_name = L"QUOTE"; break;
+        case AM_LIST_TYPE_QUASIQUOTE:  type_name = L"QUASIQUOTE"; break;
+        case AM_LIST_TYPE_UNQUOTE:     type_name = L"UNQUOTE"; break;
+        case AM_LIST_TYPE_UNQUOTE_SPLICING: type_name = L"UNQUOTE_SPLICING"; break;
+    }
+
+    fwprintf(out, L"<H:%zu>: %ls parent=", (size_t)handle, type_name);
+    if (lst->parent == AM_HANDLE_NULL) {
+        fwprintf(out, L"null");
+    }
+    else {
+        fwprintf(out, L"<H:%zu>", (size_t)lst->parent);
+    }
+
+    if (lst->type == AM_LIST_TYPE_LAMBDA) {
+        am_uint_t n_param = 0;
+        if (lst->length >= 2) {
+            am_value_t np = am_list_get(ast->alloc, lst, 1);
+            if (am_value_is_uint(np)) n_param = am_value_to_uint(np);
+        }
+        size_t n_body = (lst->length > 2 + n_param) ? (lst->length - 2 - n_param) : 0;
+        fwprintf(out, L" params=%u bodies=%zu", (unsigned)n_param, n_body);
+    }
+    else {
+        fwprintf(out, L" length=%zu", lst->length);
+    }
+
+    fwprintf(out, L" children=[");
+    for (size_t i = 0; i < lst->length; i++) {
+        if (i > 0) fwprintf(out, L", ");
+        debug_ast_print_value_inline(ast, am_list_get(ast->alloc, lst, i), out);
+    }
+    fwprintf(out, L"]\n");
+}
+
+
+typedef struct {
+    am_handle_t *handles;
+    size_t count;
+    size_t capacity;
+} debug_ast_collect_handles_ctx_t;
+
+
+static void debug_ast_collect_handles_cb(am_handle_t handle, am_value_t value, void *user_data) {
+    (void)value;
+    debug_ast_collect_handles_ctx_t *ctx = (debug_ast_collect_handles_ctx_t *)user_data;
+
+    if (ctx->count >= ctx->capacity) {
+        size_t new_capacity = ctx->capacity ? ctx->capacity * 2 : 16;
+        am_handle_t *new_handles = (am_handle_t *)realloc(ctx->handles, new_capacity * sizeof(am_handle_t));
+        if (!new_handles) return;
+        ctx->handles = new_handles;
+        ctx->capacity = new_capacity;
+    }
+
+    ctx->handles[ctx->count++] = handle;
+}
+
+
+static int debug_ast_compare_handles(const void *a, const void *b) {
+    am_handle_t ha = *(const am_handle_t *)a;
+    am_handle_t hb = *(const am_handle_t *)b;
+    if (ha < hb) return -1;
+    if (ha > hb) return 1;
+    return 0;
+}
+
+
+static void debug_ast_print_nodes_map(FILE *out, am_ast_t *ast) {
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"nodes: {\n");
+
+    debug_ast_collect_handles_ctx_t ctx = { NULL, 0, 0 };
+    am_heap_iter(ast->alloc, ast->alloc, ast->nodes, debug_ast_collect_handles_cb, &ctx);
+
+    if (ctx.handles) {
+        qsort(ctx.handles, ctx.count, sizeof(am_handle_t), debug_ast_compare_handles);
+        for (size_t i = 0; i < ctx.count; i++) {
+            debug_ast_print_indent(out, 2);
+            am_debug_ast_print_node_summary(out, ast, ctx.handles[i]);
+        }
+        free(ctx.handles);
+    }
+
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"}\n");
+}
+
+
+void am_debug_ast_print(FILE *out, am_ast_t *ast) {
+    if (!ast) {
+        fwprintf(out, L"null\n");
+        return;
+    }
+
+    size_t visited_capacity = 256;
+    am_handle_t *visited = (am_handle_t *)malloc(visited_capacity * sizeof(am_handle_t));
+    if (!visited) {
+        fwprintf(out, L"(failed to allocate visited buffer)\n");
+        return;
+    }
+    size_t visited_count = 0;
+    (void)visited_count;
+
+    fwprintf(out, L"AST {\n");
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"absolute_path: \"%ls\"\n", ast->absolute_path ? ast->absolute_path : L"(null)");
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"module_id: \"%ls\"\n", ast->module_id ? ast->module_id : L"(null)");
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"top_lambda_handle: <H:%zu>\n", (size_t)ast->top_lambda_handle);
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"token_count: %zu\n", ast->token_count);
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"symbol_vocab: ");
+    debug_ast_print_vocab(out, ast, ast->symbol_vocab);
+    fputwc(L'\n', out);
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"var_vocab: ");
+    debug_ast_print_vocab(out, ast, ast->var_vocab);
+    fputwc(L'\n', out);
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"var_type: ");
+    debug_ast_print_var_type(out, ast, ast->var_type);
+    fputwc(L'\n', out);
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"var_arn_mapping: ");
+    debug_ast_print_var_arn_mapping(out, ast, ast->var_arn_mapping);
+    fputwc(L'\n', out);
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"lambda_handles: ");
+    debug_ast_print_handle_list(out, ast, ast->lambda_handles);
+    fputwc(L'\n', out);
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"tailcall_handles: ");
+    debug_ast_print_handle_list(out, ast, ast->tailcall_handles);
+    fputwc(L'\n', out);
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"var_top: ");
+    debug_ast_print_value_list(out, ast, ast->var_top);
+    fputwc(L'\n', out);
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"dependencies: ");
+    debug_ast_print_map_varid_to_handle(out, ast, ast->dependencies);
+    fputwc(L'\n', out);
+    debug_ast_print_indent(out, 1);
+    fwprintf(out, L"natives: ");
+    debug_ast_print_map_varid_to_handle(out, ast, ast->natives);
+    fputwc(L'\n', out);
+
+    debug_ast_print_nodes_map(out, ast);
+
+    // debug_ast_print_indent(out, 1);
+    // fwprintf(out, L"top_node: ");
+    // am_handle_t top = am_ast_get_top_node_handle(ast);
+    // if (top == AM_HANDLE_NULL) {
+    //     fwprintf(out, L"null\n");
+    // }
+    // else {
+    //     fputwc(L'\n', out);
+    //     debug_ast_print_node(ast, top, out, &visited, &visited_count, &visited_capacity, 2);
+    //     fputwc(L'\n', out);
+    // }
+
+    free(visited);
+    fwprintf(out, L"}\n");
+}
+
+
+void am_debug_ast_print_to_stdout(am_ast_t *ast) {
+    FILE *out = tmpfile();
+    assert(out != NULL);
+
+    am_debug_ast_print(out, ast);
+    rewind(out);
+
+    size_t cap = 4096;
+    size_t len = 0;
+    wchar_t *buf = (wchar_t *)malloc(cap * sizeof(wchar_t));
+    assert(buf != NULL);
+
+    wint_t c;
+    while ((c = fgetwc(out)) != WEOF) {
+        if (len + 1 >= cap) {
+            cap *= 2;
+            wchar_t *new_buf = (wchar_t *)realloc(buf, cap * sizeof(wchar_t));
+            if (!new_buf) {
+                free(buf);
+                fclose(out);
+                return;
+            }
+            buf = new_buf;
+        }
+        buf[len++] = (wchar_t)c;
+    }
+    buf[len] = L'\0';
+    fclose(out);
+
+    printf("\n%ls\n", buf);
+    free(buf);
+}
+
+
+// ===============================================================================
+// 中间语言指令（IL Code）打印辅助
+// ===============================================================================
+
+const char *am_debug_opcode_name(uint32_t opcode) {
+    switch (opcode) {
+        case AM_VM_OP_nop:         return "nop";
+        case AM_VM_OP_store:       return "store";
+        case AM_VM_OP_load:        return "load";
+        case AM_VM_OP_loadclosure: return "loadclosure";
+        case AM_VM_OP_push:        return "push";
+        case AM_VM_OP_pop:         return "pop";
+        case AM_VM_OP_swap:        return "swap";
+        case AM_VM_OP_set:         return "set";
+        case AM_VM_OP_call:        return "call";
+        case AM_VM_OP_callnative:  return "callnative";
+        case AM_VM_OP_tailcall:    return "tailcall";
+        case AM_VM_OP_return:      return "return";
+        case AM_VM_OP_capturecc:   return "capturecc";
+        case AM_VM_OP_iftrue:      return "iftrue";
+        case AM_VM_OP_iffalse:     return "iffalse";
+        case AM_VM_OP_goto:        return "goto";
+        case AM_VM_OP_read:        return "read";
+        case AM_VM_OP_write:       return "write";
+        case AM_VM_OP_pause:       return "pause";
+        case AM_VM_OP_halt:        return "halt";
+        case AM_VM_OP_fork:        return "fork";
+        case AM_VM_OP_display:     return "display";
+        case AM_VM_OP_newline:     return "newline";
+        case AM_VM_OP_add:         return "add";
+        case AM_VM_OP_sub:         return "sub";
+        case AM_VM_OP_mul:         return "mul";
+        case AM_VM_OP_div:         return "div";
+        case AM_VM_OP_mod:         return "mod";
+        case AM_VM_OP_eq:          return "eq";
+        case AM_VM_OP_eqv:         return "eqv";
+        case AM_VM_OP_equal:       return "equal";
+        case AM_VM_OP_ge:          return "ge";
+        case AM_VM_OP_le:          return "le";
+        case AM_VM_OP_gt:          return "gt";
+        case AM_VM_OP_lt:          return "lt";
+        case AM_VM_OP_not:         return "not";
+        case AM_VM_OP_and:         return "and";
+        case AM_VM_OP_or:          return "or";
+        case AM_VM_OP_typeof:      return "typeof";
+        case AM_VM_OP_car:         return "car";
+        case AM_VM_OP_cdr:         return "cdr";
+        case AM_VM_OP_cons:        return "cons";
+        case AM_VM_OP_get_item:    return "get_item";
+        case AM_VM_OP_set_item:    return "set_item";
+        case AM_VM_OP_list_push:   return "list_push";
+        case AM_VM_OP_list_pop:    return "list_pop";
+        case AM_VM_OP_length:      return "length";
+        case AM_VM_OP_concat:      return "concat";
+        case AM_VM_OP_splice:      return "splice";
+        case AM_VM_OP_duplicate:   return "duplicate";
+        case AM_VM_OP_evalcleanup: return "evalcleanup";
+        case AM_VM_OP_dynamicwind:              return "dynamicwind";
+        case AM_VM_OP_dynamicwind_after_before: return "dynamicwind_after_before";
+        case AM_VM_OP_dynamicwind_before_after: return "dynamicwind_before_after";
+        case AM_VM_OP_dynamicwind_done:         return "dynamicwind_done";
+        case AM_VM_OP_wind:                     return "wind";
+        default:                   return "?";
+    }
+}
+
+
+void am_debug_print_operand(am_ast_t *ast, am_value_t op) {
+    if (!ast) {
+        printf("?");
+        return;
+    }
+
+    if (am_value_is_varid(op)) {
+        am_varid_t v = am_value_to_varid(op);
+        wchar_t *name = am_vocab_get(ast->alloc, ast->var_vocab, &v);
+        printf("%ls(%zu)", name ? name : L"?", (size_t)v);
+    }
+    else if (am_value_is_handle(op)) {
+        printf("handle_%zu", am_value_to_handle(op));
+    }
+    else if (am_value_is_iaddr(op)) {
+        printf("iaddr_%zu", am_value_to_iaddr(op));
+    }
+    else if (am_value_is_label(op)) {
+        printf("label_%zu", am_value_to_label(op));
+    }
+    else if (am_value_is_symbol(op)) {
+        am_symbol_t s = am_value_to_symbol(op);
+        wchar_t *name = am_vocab_get(ast->alloc, ast->symbol_vocab, &s);
+        printf("%ls", name ? name : L"?");
+    }
+    else if (am_value_is_uint(op)) {
+        printf("%llu", (unsigned long long)am_value_to_uint(op));
+    }
+    else if (am_value_is_int(op)) {
+        printf("%lld", (long long)am_value_to_int(op));
+    }
+    else if (am_value_is_float(op)) {
+        printf("%g", (double)am_value_to_float(op));
+    }
+    else if (am_value_is_boolean(op)) {
+        printf("%s", am_value_to_boolean(op) ? "#t" : "#f");
+    }
+    else if (am_value_is_null(op)) {
+        printf("#null");
+    }
+    else if (am_value_is_undefined(op)) {
+        printf("#undefined");
+    }
+    else {
+        printf("?");
+    }
+}
+
+
+void am_debug_print_ilcode(am_ast_t *ast, am_instruction_t *ilcode, am_iaddr_t icount) {
+    if (!ilcode) return;
+
+    for (am_iaddr_t i = 0; i < icount; i++) {
+        printf("[%4zu] %-12s", (size_t)i, am_debug_opcode_name(ilcode[i].opcode));
+        if (!am_value_is_undefined(ilcode[i].operand)) {
+            printf(" ");
+            am_debug_print_operand(ast, ilcode[i].operand);
+        }
+        printf("\n");
+    }
+}
+
+
+void am_debug_print_ilcode_raw(am_instruction_t *ilcode, am_iaddr_t icount) {
+    if (!ilcode) return;
+
+    for (am_iaddr_t i = 0; i < icount; i++) {
+        printf("[%4zu] %-12s operand=%016llx\n",
+               (size_t)i,
+               am_debug_opcode_name(ilcode[i].opcode),
+               (unsigned long long)ilcode[i].operand);
+    }
+}
+/* ===== end:   src/am_debug.c ===== */

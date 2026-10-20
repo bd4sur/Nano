@@ -3,7 +3,7 @@
 #include <string.h>
 #include <wchar.h>
 
-#include "animac.h"
+#include "am_native_Table.h"
 
 
 // ===============================================================================

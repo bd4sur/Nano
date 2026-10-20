@@ -6,8 +6,8 @@
 #include <wchar.h>
 #include <time.h>
 
-#include "am_host.h"
 #include "am_native_System.h"
+#include "am_host.h"
 
 
 // 前向声明：System.eval 的辅助函数，供 System.exec 复用
@@ -798,7 +798,8 @@ int32_t am_native_System_set_interval(am_runtime_t *rt, am_process_t *proc) {
 }
 
 
-// (System.clear_timeout timer:Number) : void
+// (System.clear_timeout timer:Number) : undefined
+// 语句型 native（单值纪律 N2）：不产出有意义结果，压 1 个 #undefined 再返回
 int32_t am_native_System_clear_timeout(am_runtime_t *rt, am_process_t *proc) {
     am_float_t timer_id_f;
     if (!native_pop_number(proc, &timer_id_f)) return -1;
@@ -807,12 +808,14 @@ int32_t am_native_System_clear_timeout(am_runtime_t *rt, am_process_t *proc) {
         am_runtime_clear_timer(rt, (size_t)timer_id_f);
     }
 
+    if (am_process_push_operand(proc, AM_VALUE_UNDEFINED) != 0) return -1;
     am_process_step(proc);
     return 0;
 }
 
 
-// (System.clear_interval timer:Number) : void
+// (System.clear_interval timer:Number) : undefined
+// 语句型 native（单值纪律 N2）：不产出有意义结果，压 1 个 #undefined 再返回
 int32_t am_native_System_clear_interval(am_runtime_t *rt, am_process_t *proc) {
     am_float_t timer_id_f;
     if (!native_pop_number(proc, &timer_id_f)) return -1;
@@ -821,6 +824,7 @@ int32_t am_native_System_clear_interval(am_runtime_t *rt, am_process_t *proc) {
         am_runtime_clear_timer(rt, (size_t)timer_id_f);
     }
 
+    if (am_process_push_operand(proc, AM_VALUE_UNDEFINED) != 0) return -1;
     am_process_step(proc);
     return 0;
 }
@@ -1023,6 +1027,8 @@ int32_t am_native_System_read(am_runtime_t *rt, am_process_t *proc) {
 int32_t am_native_System_test(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
     am_value_t v = am_process_pop_operand(proc);
+    // 单值纪律 N5：每次裸 pop 都必须检查 UINTPTR_MAX 哨兵（栈下溢 = 调用方少传参数 = 硬错误）
+    if (v == (am_value_t)UINTPTR_MAX) return -1;
     wchar_t buf[128];
     swprintf(buf, 128, L"Value=%zu", (size_t)v);
     return native_push_wstring_buf(proc, buf, wcslen(buf));

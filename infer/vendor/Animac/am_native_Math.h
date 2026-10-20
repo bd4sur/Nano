@@ -49,8 +49,32 @@ int32_t am_native_Math_tan(am_runtime_t *rt, am_process_t *proc);
 // (Math.atan x:Number) : Number
 int32_t am_native_Math_atan(am_runtime_t *rt, am_process_t *proc);
 
+// (Math.atan2 y:Number x:Number) : Number
+int32_t am_native_Math_atan2(am_runtime_t *rt, am_process_t *proc);
+
 // (Math.floor x:Number) : Number
 int32_t am_native_Math_floor(am_runtime_t *rt, am_process_t *proc);
+
+// (Math.bit_and a:UInt b:UInt) : UInt
+int32_t am_native_Math_bit_and(am_runtime_t *rt, am_process_t *proc);
+
+// (Math.bit_or a:UInt b:UInt) : UInt
+int32_t am_native_Math_bit_or(am_runtime_t *rt, am_process_t *proc);
+
+// (Math.bit_xor a:UInt b:UInt) : UInt
+int32_t am_native_Math_bit_xor(am_runtime_t *rt, am_process_t *proc);
+
+// (Math.bit_not a:UInt) : UInt
+int32_t am_native_Math_bit_not(am_runtime_t *rt, am_process_t *proc);
+
+// (Math.bit_shl a:UInt n:UInt) : UInt    左移，n >= 位宽时结果为 0
+int32_t am_native_Math_bit_shl(am_runtime_t *rt, am_process_t *proc);
+
+// (Math.bit_ashr a:UInt n:UInt) : UInt   算术右移（按位宽解释符号位）
+int32_t am_native_Math_bit_ashr(am_runtime_t *rt, am_process_t *proc);
+
+// (Math.bit_lshr a:UInt n:UInt) : UInt   逻辑右移，n >= 位宽时结果为 0
+int32_t am_native_Math_bit_lshr(am_runtime_t *rt, am_process_t *proc);
 
 // (Math.ceil x:Number) : Number
 int32_t am_native_Math_ceil(am_runtime_t *rt, am_process_t *proc);
