@@ -45,12 +45,11 @@
 ;; 双线性插值逐像素上屏，圆外像素不画。天空辐照度是平滑的低频场，双线性重建在
 ;; 视觉上等同于提高采样密度，而模型求值次数（几乎全部成本）不变。
 ;; 实测：整帧 2.44 s → 2.41 s（插值成本 <2%），5×5 色块消失、圆周边由 5px 阶梯
-;; 变为 1px 锯齿。进一步做圆界 1px 抗锯齿（按覆盖率混合）会在本文件这个形状下
-;; 触发解释器缺陷：render_chunk 里的 (define dx …) 偶发不生效，shade 拿到上一次
-;; 迭代的 dx 求出错误颜色，画面上表现为圆周附近一串规则亮斑（详见
-;; infer/tools/e2e/REPORT-interp-slot-store.md）。上游 0291412 的"闭包帧父链"
-;; 修复解决了该报告里的最小复现件，但"本文件 + 覆盖率补丁"这一形态仍可复现，
-;; 故当前保留硬圆界判定，抗锯齿待上游根因修复后再加。
+;; 变为 1px 锯齿。圆界另做 1px 线性抗锯齿：cov=(R²−r²)/(2R)，圆内深处 cov>1 取 1，
+;; 只影响最外 1px（实测整帧仅圆周带内 617 像素变化、带外 0），圆周由硬锯齿变为平滑过渡。
+;; （该抗锯齿一度被撤下：它在旧核心上会触发"闭包帧分析父链失效"缺陷，表现为圆周
+;;   附近一串规则亮斑；上游 0291412 已修复，复现件与本文件两处载体均已验证正常。
+;;   详见 infer/tools/e2e/REPORT-interp-slot-store.md。）
 
 ;; ---- 业务侧优化记录（B1/B2，2026-10-21）------------------------------------
 ;; B1 内联小函数：phase_r / phase_m / hdr_map 都是 1~2 行数学，原来每个采样点被调用
@@ -464,6 +463,7 @@
 (define grid_g (pad_grid '() GRID_N))
 (define grid_b (pad_grid '() GRID_N))
 (define INV_SS (/ 1.0 SS))
+(define INV_2R (/ 1.0 (* 2.0 R_SCR)))
 (define GRID_ROW_LAST (- ROWS_S 1))
 (define GRID_COL_LAST (- COLS_S 1))
 
@@ -481,7 +481,7 @@
     (define sx 0) (define sc 0)
     (define dr 0.0) (define dg 0.0) (define db 0.0)
     (define kx 0) (define x 0)
-    (define ddx 0.0) (define r2p 0.0)
+    (define ddx 0.0) (define r2p 0.0) (define cov 0.0)
     (set! jA b)
     (set! jB (+ b 1))
     (if (> jB GRID_ROW_LAST) { (set! jB GRID_ROW_LAST) })
@@ -514,7 +514,12 @@
           (set! r2p (+ (* ddx ddx) dyc2))
           (if (<= r2p R_SCR2)
               {
-                (Gfx.set_pixel x y (+ cur_r (* kx dr)) (+ cur_g (* kx dg)) (+ cur_b (* kx db)))
+                (set! cov (* (- R_SCR2 r2p) INV_2R))
+                (if (> cov 1.0) { (set! cov 1.0) })
+                (Gfx.set_pixel x y
+                  (* cov (+ cur_r (* kx dr)))
+                  (* cov (+ cur_g (* kx dg)))
+                  (* cov (+ cur_b (* kx db))))
               })
           (set! kx (+ kx 1))
         })
@@ -682,13 +687,17 @@
               (define i1 (+ i0 1))
               (if (> i1 GRID_COL_LAST) { (set! i1 GRID_COL_LAST) })
               (define t0 (- 1.0 tx))
+              ;; 与 blit_band 用同一个圆界覆盖率：时钟块压在圆周上（框内最近点距圆心 106.7 < 120），
+              ;; 若这里用硬判定，每秒重绘会把那段 1px 抗锯齿带覆盖回"全亮"，出现一条接缝
+              (define cov (* (- R_SCR2 (+ (* ddx ddx) (* ddy ddy))) INV_2R))
+              (if (> cov 1.0) { (set! cov 1.0) })
               (Gfx.set_pixel x y
-                (+ (* t0 (+ (* w0 (get_item grid_r (+ base0 i0))) (* ty (get_item grid_r (+ base1 i0)))))
-                   (* tx (+ (* w0 (get_item grid_r (+ base0 i1))) (* ty (get_item grid_r (+ base1 i1))))))
-                (+ (* t0 (+ (* w0 (get_item grid_g (+ base0 i0))) (* ty (get_item grid_g (+ base1 i0)))))
-                   (* tx (+ (* w0 (get_item grid_g (+ base0 i1))) (* ty (get_item grid_g (+ base1 i1))))))
-                (+ (* t0 (+ (* w0 (get_item grid_b (+ base0 i0))) (* ty (get_item grid_b (+ base1 i0)))))
-                   (* tx (+ (* w0 (get_item grid_b (+ base0 i1))) (* ty (get_item grid_b (+ base1 i1)))))))
+                (* cov (+ (* t0 (+ (* w0 (get_item grid_r (+ base0 i0))) (* ty (get_item grid_r (+ base1 i0)))))
+                          (* tx (+ (* w0 (get_item grid_r (+ base0 i1))) (* ty (get_item grid_r (+ base1 i1)))))))
+                (* cov (+ (* t0 (+ (* w0 (get_item grid_g (+ base0 i0))) (* ty (get_item grid_g (+ base1 i0)))))
+                          (* tx (+ (* w0 (get_item grid_g (+ base0 i1))) (* ty (get_item grid_g (+ base1 i1)))))))
+                (* cov (+ (* t0 (+ (* w0 (get_item grid_b (+ base0 i0))) (* ty (get_item grid_b (+ base1 i0)))))
+                          (* tx (+ (* w0 (get_item grid_b (+ base0 i1))) (* ty (get_item grid_b (+ base1 i1))))))))
             }
             { (Gfx.set_pixel x y 0 0 0) })
         (set! x (+ x 1))
