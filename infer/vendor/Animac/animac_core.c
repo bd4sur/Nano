@@ -6,7 +6,7 @@
  *           按依赖顺序合并；局部 #include 已剔除；
  *           跨文件重名的 static 符号已按 “<文件基名>__<原名>” 规则改名。
  *           不含 am_host.c / am_native_*.c / am_highlight.c / am_repl.c 等宿主相关实现。
- * 生成时间：2026-10-20 23:25:41 +0800
+ * 生成时间：2026-10-21 02:50:11 +0800
  * ============================================================================ */
 
 #include "animac_core.h"
@@ -4587,23 +4587,23 @@ static void am_frame_rewrite_operands(am_compiler_ctx_t *ctx, am_frame_table_t *
 // 从 ilcode 的 owner 数组中找出 λ 区间；同时计算可变变量集合。
 // owner[i] = 该指令所属区间的下标（SIZE_MAX 表示不属于任何 λ，如入口存根）。
 
-// 词法父子关系：优先使用 parser 记录的 scope（lambda -> scope -> parent_lambda），
-// 因为编译器的 λ 编译是"平铺"的（每个 λ 独立成块），本身不携带嵌套信息。
+// 词法父子关系：从 AST 节点的父链接出发，找到最近的祖先 λ。
+// 说明：编译器的 λ 编译是"平铺"的（每个 λ 独立成块），本身不携带嵌套信息；
+//       而 parser 的 scope 对象在宏展开后会被清理（arn cleanup_scope_objects），
+//       不能再作为帧分析的输入（否则 parent 恒为"无"，自由变量 src 全部退化为动态查找）。
+//       AST 节点的 parent 链接在宏展开后仍然有效，且与帧分析所需的词法父子关系一致。
 static int32_t frame_link_parents(am_ast_t *ast, frame_region_t *regions, size_t count) {
     if (!ast) return 0;
 
     for (size_t i = 0; i < count; i++) {
         if (regions[i].handle == AM_HANDLE_NULL) continue; // 临时 λ：父区间在编译期已记录
 
-        am_handle_t scope_hd = am_ast_get_scope(ast, regions[i].handle);
-        if (scope_hd == AM_HANDLE_NULL) continue;
+        am_value_t node_val = am_ast_get_node(ast, regions[i].handle);
+        if (!am_value_is_ptr(node_val)) continue;
+        am_object_t *obj = am_value_to_ptr(node_val);
+        if (obj->type != AM_OBJECT_TYPE_LIST) continue;
 
-        am_value_t scope_val = am_heap_get(ast->alloc, ast->alloc, ast->nodes, scope_hd);
-        if (!am_value_is_ptr(scope_val)) continue;
-        am_object_t *obj = am_value_to_ptr(scope_val);
-        if (obj->type != AM_OBJECT_TYPE_SCOPE) continue;
-
-        am_handle_t parent_lambda = ((am_scope_t *)obj)->parent_lambda_handle;
+        am_handle_t parent_lambda = am_ast_find_nearest_lambda_handle(ast, ((am_list_t *)obj)->parent);
         if (parent_lambda == AM_HANDLE_NULL || parent_lambda == regions[i].handle) continue;
 
         // 由把柄找到对应区间
@@ -8941,6 +8941,14 @@ static void cleanup_scope_objects(parser_ctx_t *ctx) {
     if (!ctx->error) {
         for (size_t i = 0; i < data.count; i++) {
             am_heap_free_handle(ctx->ast->alloc, ctx->ast->alloc, ctx->ast->nodes, data.scope_handles[i]);
+        }
+        // scope 对象已释放，同步清空 ast->scopes：该映射此后没有合法用途，
+        // 若继续保留会在模块转储/调试时暴露已释放的把柄，也会误导后续分析
+        // （闭包帧分析现已改用 AST 节点的父链接确定词法父子关系）。
+        am_map_destroy(ctx->ast->alloc, ctx->ast->scopes);
+        ctx->ast->scopes = am_map_create(ctx->ast->alloc, 16);
+        if (!ctx->ast->scopes) {
+            parser_set_error(ctx, L"failed to reset scopes map");
         }
     }
     free(data.scope_handles);
@@ -20657,6 +20665,18 @@ static bool runtime_has_nonblocked_timer(am_runtime_t *rt, am_timestamp_t *neare
 }
 
 
+// 功能说明：判断进程当前是否正在执行异步回调（即函数调用栈上存在异步帧）。
+// 设计说明：异步帧成对压栈（current_closure_handle, ASYNC_RET(return_target)），
+//           故只需检查每对的第二个元素。返回 1 表示在回调中，0 表示不在。
+static int32_t runtime_process_in_async_callback(am_process_t *proc) {
+    if (!proc || !proc->fstack || !proc->fstack_top) return 0;
+    size_t used = (size_t)(proc->fstack_top - proc->fstack);
+    for (size_t i = 1; i < used; i += 2) {
+        if (AM_VALUE_IS_ASYNC_RET(proc->fstack[i])) return 1;
+    }
+    return 0;
+}
+
 // 触发所有已到期的定时器。
 static void runtime_fire_expired_timers(am_runtime_t *rt) {
     if (!rt || !rt->timer_list) return;
@@ -20683,6 +20703,17 @@ static void runtime_fire_expired_timers(am_runtime_t *rt) {
                 am_timer_t *to_free = *cur;
                 *cur = (*cur)->next;
                 am_free(rt->vm_alloc, to_free);
+                continue;
+            }
+
+            // 定时器回调不可重入：进程正在执行异步回调时，本次到期顺延到该回调返回后再触发。
+            // 说明：主流程（非回调）仍可被定时器打断（工单 #36 语义不变）；这里只禁止
+            //       "回调套回调"——否则一个执行时间超过定时间隔的回调会在自身尚未返回时
+            //       被再次调用，形成重入并共享/篡改其所在计算正在使用的全局状态。
+            //       周期定时器顺延后会在回调返回后的下一轮事件循环触发一次（错过的周期
+            //       按一次合并处理），与 JavaScript 定时器"回调不会与自身重入"的语义一致。
+            if (runtime_process_in_async_callback(proc)) {
+                cur = &timer->next;
                 continue;
             }
 

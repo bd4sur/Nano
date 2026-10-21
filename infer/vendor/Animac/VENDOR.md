@@ -15,7 +15,7 @@
 | 项 | 值 |
 |---|---|
 | 上游仓库 | `/home/bd4sur/Animac`（BD4SUR） |
-| 同步基线 | commit `5c244e9`（2026-10-20 23:10） |
+| 同步基线 | commit `0291412`（2026-10-21 02:47） |
 | 合并产物生成 | `git archive 0f5e9d4` 导出干净源码树 → 在该副本内执行上游 `amalgamate.sh`（**不在上游仓库内生成任何文件**） |
 | 校验 | `animac_core.c/h` 与上游仓库内自带产物、以及本次重新生成物三方内容一致（仅"生成时间"行不同）；其余文件与上游 `src/` `include/` 对应文件 `cmp` 全等 |
 
@@ -64,6 +64,7 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
 
 | 同步日期 | 上游基线 | 要点 |
 |---|---|---|
+| 2026-10-21（第二次） | `0291412` | ①**闭包帧分析父链修复**：词法父子关系改用 AST 父链接（parser 宏展开后释放 scope 对象，原实现导致 parent 恒空、自由变量 src 退化为运行期动态查找）；②**定时器回调不可重入**：进程已在异步回调中时顺延定时器（工单 #38）；`am_parser.c` 清理 scope 后同步清空 `ast->scopes`。本项目的 `am_native_Gfx.c`/`am_native_Time.c` 无需改动 |
 | 2026-10-21 | `5c244e9` | 闭包变量访问改为「帧描述符 + 静态槽位寻址」（P0–P2）：新增 `am_frame.{h,c}`、5 条槽位指令（`load/store/set/call/tailcall_slot` 63–67）、模块磁盘格式新增帧描述符表；`am_repl.c` 无改动 |
 | 2026-10-20 | `0f5e9d4` | 首次按 amalgam 形态同步（单值栈纪律、`,@`、异步帧 #36、Math 扩展） |
 
