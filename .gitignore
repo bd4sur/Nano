@@ -38,3 +38,6 @@ infer/webgui/files
 
 # 安卓子项目（暂不纳入 Git 管理，约 342MB）
 android/
+
+# 灵机回归测试/性能归因脚本（仅工作区，不纳入版本管理）
+infer/tools/e2e/
