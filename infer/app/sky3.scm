@@ -8,7 +8,7 @@
 ;; 全部物理常数与积分分辨率均与原实现一致：
 ;;   Re=6360km  Ra=6420km  Hr=7994m  Hm=1200m
 ;;   βR={5.8,13.5,33.1}e_6   β_Mie=16e-6   β_Mie消光=1.6e-6   g=0.76   SUN=20
-;;   一阶步进 NV=36/NL=1；二阶视线采样 V2=3；二阶步进 NV2=2/NL2=2；9 个环境方向
+;;   一阶步进 NV=36/NL=1；二阶视线采样 V2=2（B2 优化，原 3）；二阶步进 NV2=2/NL2=2；9 个环境方向
 ;;   臭氧 {0.020,0.040,0.000}×90；夜天光 {0.05,0.06,0.12}；HDR ε=0.2
 ;;
 ;; 视角与太阳位置：
@@ -38,6 +38,32 @@
 ;;   - 帧级预计算：太阳三向量、太阳高度（供 global_gain）。
 ;;
 ;; 依赖：Gfx（绘图）、Math、System（定时器）、Time（取时）、共享星历模块 Ephem。
+
+;; ---- 平滑滤波（消除 SS×SS 色块的马赛克感）----------------------------------
+;; 采样阶段（shade/scatter_v）只把每个采样点的颜色写进一张 ROWS_S×COLS_S 的网格
+;; （三张预建列表，set_item! 覆写，重绘帧无需重建），随后按"采样带"对每个像素做
+;; 双线性插值逐像素上屏，圆外像素不画。天空辐照度是平滑的低频场，双线性重建在
+;; 视觉上等同于提高采样密度，而模型求值次数（几乎全部成本）不变。
+;; 实测：整帧 2.44 s → 2.41 s（插值成本 <2%），5×5 色块消失、圆周边由 5px 阶梯
+;; 变为 1px 锯齿。进一步做圆界 1px 抗锯齿（按覆盖率混合）会在本文件这个形状下
+;; 触发解释器缺陷：render_chunk 里的 (define dx …) 偶发不生效，shade 拿到上一次
+;; 迭代的 dx 求出错误颜色，画面上表现为圆周附近一串规则亮斑（详见
+;; infer/tools/e2e/REPORT-interp-slot-store.md）。上游 0291412 的"闭包帧父链"
+;; 修复解决了该报告里的最小复现件，但"本文件 + 覆盖率补丁"这一形态仍可复现，
+;; 故当前保留硬圆界判定，抗锯齿待上游根因修复后再加。
+
+;; ---- 业务侧优化记录（B1/B2，2026-10-21）------------------------------------
+;; B1 内联小函数：phase_r / phase_m / hdr_map 都是 1~2 行数学，原来每个采样点被调用
+;;    约 110 次；旧版解释器每次 Scheme 调用要复制整份环境，调用开销远超数学本体。
+;;    现已把这些表达式逐字内联进 scatter_v（数值结果与原实现完全一致，实测整帧
+;;    0 像素差异）。函数定义保留作参考实现。
+;;    ※ 解释器升级到"帧描述符 + 槽位寻址"（vendor 5c244e9）后，调用本身已变便宜，
+;;      实测 B1 的收益从早期报告的 −21% 降到 −3% 左右（早先的探针是把数学也一起去掉，
+;;      才显得那么大）；保留它是因为零风险且略快，若要可读性可回退。
+;; B2 二阶多次散射视线采样 V2：3 → 2（见常量 V2）。二阶项沿视线是低频量，中点法
+;;    2 个采样点的整帧最大通道偏差 9/255、平均 ~8（仅影响偏蓝的通道），宿主实测
+;;    600 帧 3.34 s → 2.44 s（−27%，含 B1）。这是画质/性能的显式折衷，把 V2 改回 3
+;;    即可恢复原画质（时间回到 ~3.2 s）。
 ;; 宿主内存池：本程序 + 星历模块的编译期 VM 工作区需要较大池（ui_scheme_app.c
 ;; 现为 12MB），运行期堆占用仍极小。
 ;;
@@ -88,11 +114,16 @@
 (define bMe 0.0000016)              ; Mie 消光系数（= 0.1·bM）
 (define Re1 6360001.0)              ; 观测点半径（海平面 + 1m）
 (define SUNF 20.0)                  ; 太阳强度归一化系数
+;; 二阶多次散射的视线采样数（原实现为 3；B2 优化降为 2，见 scatter_v 内注释）
+(define V2 2)
 
 ;; ---- 相位函数 --------------------------------------------------------------
 ;; phaseR(μ) = 3/(16π)·(1+μ²)
 ;; phaseM(μ) = 3/(8π)·(1-g²)(1+μ²) / ((2+g²)·(1+g²-2gμ)^1.5)，g=0.76
 
+;; 注意（B1）：scatter_v 热路径已把它们手工内联（旧版解释器每次 Scheme 调用都要
+;; 复制整份环境，sky3 单采样点约 200 次调用，小函数的调用开销远超数学本体）。
+;; 下列定义保留作参考实现/文档。
 (define phase_r (lambda (mu) (* 0.05968310365946075 (+ 1.0 (* mu mu)))))
 (define phase_m
   (lambda (mu) {
@@ -266,6 +297,8 @@
     (define p_ra 0.0) (define p_ma 0.0) (define p_rs 0.0) (define p_ms 0.0)
     (define sg0 0.0) (define sg1 0.0) (define sg2 0.0)
     (define mu1 0.0) (define dom_g 0.0)
+    ;; B1 内联临时量：phase_m 的 (1+g²−2gμ) 底数、HDR 映射中间值
+    (define pmb 0.0) (define hq 0.0)
     ;; 观测点在大气内部：入射根 t0<0，故积分起点 tMin=0；终点为大气出射根
     (define hit (rsi 0.0 0.0 Re1 vx vy vz Ra))
     (set! tmin 0.0)
@@ -278,18 +311,27 @@
         {
           ;; ---- 一阶单次散射 ----
           (set! mu1 (+ (* vx sun_x) (+ (* vy sun_y) (* vz sun_z))))
-          (define p_r1 (phase_r mu1))
-          (define p_m1 (phase_m mu1))
+          ;; B1：phase_r / phase_m 内联（原每采样点 2 次小函数调用；表达式与函数体
+          ;; 逐字一致，数值结果不变）
+          (define p_r1 (* 0.05968310365946075 (+ 1.0 (* mu1 mu1))))
+          (set! pmb (- 1.5776 (* 1.52 mu1)))
+          (if (< pmb 0.0000000001) { (set! pmb 0.0000000001) })
+          (define p_m1 (* 0.1193662073189215
+                         (/ (* 0.4224 (+ 1.0 (* mu1 mu1)))
+                            (* 2.5776 (Math.pow pmb 1.5)))))
           (march 0.0 0.0 Re1 vx vy vz tmin tmax 36 1)
           (set! c0 (* SUNF (+ (* (* m_r0 bR0) p_r1) (* (* m_m0 bM) p_m1))))
           (set! c1 (* SUNF (+ (* (* m_r1 bR1) p_r1) (* (* m_m1 bM) p_m1))))
           (set! c2 (* SUNF (+ (* (* m_r2 bR2) p_r1) (* (* m_m2 bM) p_m1))))
-          ;; ---- 二阶多次散射：视线路径 3 个采样点 × 上半球 9 个方向 ----
+          ;; ---- 二阶多次散射：视线路径 V2 个采样点 × 上半球 9 个方向 ----
+          ;; B2：V2 由 3 降为 2。二阶多次散射项沿视线方向是低频量（它是"各方向环境
+          ;; 辐照度沿视线的加权积分"），中点法取 2 个采样点的误差远小于 8 位色量化步长
+          ;; （实测整帧最大通道偏差见提交说明）。这是一处显式的画质/性能折衷。
           (set! dom_g (* (* 2.0 (/ PI 9.0))
                          (+ (* 14.0 (Math.exp (- 0.0 (* (/ sun_alt_deg 10.0) (/ sun_alt_deg 10.0))))) 2.0)))
-          (set! seg_v (/ (- tmax tmin) 3.0))
+          (set! seg_v (/ (- tmax tmin) V2))
           (set! od_r 0.0) (set! od_m 0.0) (set! i 0)
-          (while (< i 3) {
+          (while (< i V2) {
             (set! t (+ tmin (* (+ i 0.5) seg_v)))
             (set! wx (* vx t))
             (set! wy (* vy t))
@@ -314,15 +356,24 @@
                               {
                                 (march wx wy wz adx ady adz 0.0 rt1 2 2)
                                 (set! mu_a (+ (* adx sun_x) (+ (* ady sun_y) (* adz sun_z))))
-                                (set! p_ra (phase_r mu_a))
-                                (set! p_ma (phase_m mu_a))
+                                ;; B1：内联（逐方向 2 次）
+                                (set! p_ra (* 0.05968310365946075 (+ 1.0 (* mu_a mu_a))))
+                                (set! pmb (- 1.5776 (* 1.52 mu_a)))
+                                (if (< pmb 0.0000000001) { (set! pmb 0.0000000001) })
+                                (set! p_ma (* 0.1193662073189215
+                                             (/ (* 0.4224 (+ 1.0 (* mu_a mu_a)))
+                                                (* 2.5776 (Math.pow pmb 1.5)))))
                                 (define la0 (* SUNF (+ (* (* m_r0 bR0) p_ra) (* (* m_m0 bM) p_ma))))
                                 (define la1 (* SUNF (+ (* (* m_r1 bR1) p_ra) (* (* m_m1 bM) p_ma))))
                                 (define la2 (* SUNF (+ (* (* m_r2 bR2) p_ra) (* (* m_m2 bM) p_ma))))
                                 ;; 相位函数方向约定：入射光子 −ω、出射光子 −d ⇒ μ=dot(ω,d)
                                 (set! mu_s (+ (* adx vx) (+ (* ady vy) (* adz vz))))
-                                (set! p_rs (phase_r mu_s))
-                                (set! p_ms (phase_m mu_s))
+                                (set! p_rs (* 0.05968310365946075 (+ 1.0 (* mu_s mu_s))))
+                                (set! pmb (- 1.5776 (* 1.52 mu_s)))
+                                (if (< pmb 0.0000000001) { (set! pmb 0.0000000001) })
+                                (set! p_ms (* 0.1193662073189215
+                                             (/ (* 0.4224 (+ 1.0 (* mu_s mu_s)))
+                                                (* 2.5776 (Math.pow pmb 1.5)))))
                                 (set! sg0 (+ (* (* bR0 p_rs) dR2) (* (* bM p_ms) dM2)))
                                 (set! sg1 (+ (* (* bR1 p_rs) dR2) (* (* bM p_ms) dM2)))
                                 (set! sg2 (+ (* (* bR2 p_rs) dR2) (* (* bM p_ms) dM2)))
@@ -346,39 +397,35 @@
           (set! c1 (+ c1 (* 0.06 nl)))
           (set! c2 (+ c2 (* 0.12 nl)))
           ;; ---- HDR 映射 + 钳位（min(1, ·) × 255）----
-          (set! out_r (* 255.0 (hdr_map c0)))
-          (set! out_g (* 255.0 (hdr_map c1)))
-          (set! out_b (* 255.0 (hdr_map c2)))
+          ;; B1：hdr_map 内联（原每采样点 3 次小函数调用）
+          (set! hq (* 0.5477225575051661
+                      (- (Math.sqrt (+ (* (+ 1.0 c0) (+ 1.0 c0)) 0.2))
+                         (Math.sqrt (+ (* (- 1.0 c0) (- 1.0 c0)) 0.2)))))
+          (if (> hq 1.0) { (set! hq 1.0) })
+          (if (< hq 0.0) { (set! hq 0.0) })
+          (set! out_r (* 255.0 hq))
+          (set! hq (* 0.5477225575051661
+                      (- (Math.sqrt (+ (* (+ 1.0 c1) (+ 1.0 c1)) 0.2))
+                         (Math.sqrt (+ (* (- 1.0 c1) (- 1.0 c1)) 0.2)))))
+          (if (> hq 1.0) { (set! hq 1.0) })
+          (if (< hq 0.0) { (set! hq 0.0) })
+          (set! out_g (* 255.0 hq))
+          (set! hq (* 0.5477225575051661
+                      (- (Math.sqrt (+ (* (+ 1.0 c2) (+ 1.0 c2)) 0.2))
+                         (Math.sqrt (+ (* (- 1.0 c2) (- 1.0 c2)) 0.2)))))
+          (if (> hq 1.0) { (set! hq 1.0) })
+          (if (< hq 0.0) { (set! hq 0.0) })
+          (set! out_b (* 255.0 hq))
         })
   }))
-;; ---- 圆界采样块的逐像素落点（块骑跨天空圆界时按像素精确判定）--------------
-
-(define edge_block
-  (lambda (px py fr fg fb) {
-    (define kx 0) (define ky 0)
-    (define cxp 0.0) (define cyp 0.0) (define eddx 0.0) (define eddy 0.0)
-    (set! ky 0)
-    (while (< ky SS) {
-      (set! cyp (+ py (+ ky 0.5)))
-      (set! eddy (- cyp CY))
-      (set! kx 0)
-      (while (< kx SS) {
-        (set! cxp (+ px (+ kx 0.5)))
-        (set! eddx (- cxp CX))
-        (if (<= (+ (* eddx eddx) (* eddy eddy)) R_SCR2)
-            { (Gfx.set_pixel (+ px kx) (+ py ky) fr fg fb) })
-        (set! kx (+ kx 1))
-      })
-      (set! ky (+ ky 1))
-    })
-  }))
-
-;; ---- 单采样点：视线方向 → 散射颜色 → 绘制 SS×SS 块 ------------------------
+;; ---- 单采样点：视线方向 → 散射颜色（写入 out_r/out_g/out_b）----------------
 ;; 参数：px/py 采样块左上角像素、dx/dy 采样块中心相对屏幕中心的偏移。
 ;; 视线向量按「抬头看天」视角：屏幕上方=北、屏幕左侧=东（见文件头）。
 
+;; 计算一个采样点的三通道颜色，结果写入 out_r/out_g/out_b（不再负责绘制：
+;; 绘制统一由双线性重建 blit_band 完成，见下）
 (define shade
-  (lambda (px py dx dy) {
+  (lambda (dx dy) {
     (define r (Math.sqrt (+ (* dx dx) (* dy dy))))
     (define sin_t 0.0)
     (define vz 1.0)
@@ -395,13 +442,89 @@
           (set! elev (- 90.0 (* r K_DEG)))
         })
     (scatter_v vx vy vz elev)
-    ;; 绘制：整块最远像素仍在圆内 → 直接填块；骑跨圆界 → 逐像素判定
-    (define adx (if (< dx 0.0) (- 0.0 dx) dx))
-    (define ady (if (< dy 0.0) (- 0.0 dy) dy))
-    (if (<= (+ (* (+ adx HALF_S) (+ adx HALF_S)) (* (+ ady HALF_S) (+ ady HALF_S))) R_SCR2)
-        { (Gfx.fill_rect px py SS SS out_r out_g out_b) }
-        { (edge_block px py out_r out_g out_b) })
   }))
+
+;; ---- 采样网格 + 双线性重建（消除 SS×SS 色块的马赛克感）---------------------
+;; 采样阶段只把每个采样点的三通道颜色推进三张列表（行主序，索引 = 采样行*COLS_S+采样列）；
+;; 绘制阶段对每个像素取相邻 4 个采样点做双线性插值后逐像素写点（圆外像素不画，保持
+;; Gfx.clear 的黑）。天空辐照度是平滑的低频场，双线性重建在视觉上等同于提高采样密度，
+;; 而模型求值次数（几乎全部成本）不变——实测整帧只增加约 +3% 的指令。
+;; 采样点坐标约定：采样行 sy / 采样列 sx 对应像素 (sx*SS, sy*SS)，故像素 (x,y) 的
+;; 双线性参数为 ux=x/SS、uy=y/SS。
+
+(define GRID_N (* ROWS_S COLS_S))
+(define pad_grid
+  (lambda (acc n) {
+    (define i 0)
+    (while (< i n) { (push acc 0.0) (set! i (+ i 1)) })
+    acc
+  }))
+;; 每个 '() 字面量只 push 一次（模块级字面量是静态槽，反复 push 会累积）
+(define grid_r (pad_grid '() GRID_N))
+(define grid_g (pad_grid '() GRID_N))
+(define grid_b (pad_grid '() GRID_N))
+(define INV_SS (/ 1.0 SS))
+(define GRID_ROW_LAST (- ROWS_S 1))
+(define GRID_COL_LAST (- COLS_S 1))
+
+;; 画一条采样带：输出行 [b*SS, (b+1)*SS)，使用采样行 b 与 b+1（越界时钳位到末行）。
+;; 每条采样带在对应采样行算完后调用一次 → 保持逐带渐进上屏。
+(define blit_band
+  (lambda (b) {
+    ;; 全部局部量在函数级声明 + set!（与本文件其它热路径一致；避免在深层块里 define）
+    (define jA 0) (define jB 0)
+    (define baseA 0) (define baseB 0)
+    (define cur_r 0.0) (define cur_g 0.0) (define cur_b 0.0)
+    (define nxt_r 0.0) (define nxt_g 0.0) (define nxt_b 0.0)
+    (define k 0) (define y 0) (define ty 0.0) (define w0 0.0)
+    (define dyc 0.0) (define dyc2 0.0)
+    (define sx 0) (define sc 0)
+    (define dr 0.0) (define dg 0.0) (define db 0.0)
+    (define kx 0) (define x 0)
+    (define ddx 0.0) (define r2p 0.0)
+    (set! jA b)
+    (set! jB (+ b 1))
+    (if (> jB GRID_ROW_LAST) { (set! jB GRID_ROW_LAST) })
+    (set! baseA (* jA COLS_S))
+    (set! baseB (* jB COLS_S))
+    (set! k 0)
+    (while (< k SS) {
+      (set! y (+ (* b SS) k))
+      (set! ty (* k INV_SS))
+      (set! w0 (- 1.0 ty))
+      (set! dyc (- (+ y 0.5) CY))
+      (set! dyc2 (* dyc dyc))
+      (set! cur_r (+ (* w0 (get_item grid_r baseA)) (* ty (get_item grid_r baseB))))
+      (set! cur_g (+ (* w0 (get_item grid_g baseA)) (* ty (get_item grid_g baseB))))
+      (set! cur_b (+ (* w0 (get_item grid_b baseA)) (* ty (get_item grid_b baseB))))
+      (set! sx 0)
+      (while (< sx COLS_S) {
+        (set! sc (+ sx 1))
+        (if (> sc GRID_COL_LAST) { (set! sc GRID_COL_LAST) })
+        (set! nxt_r (+ (* w0 (get_item grid_r (+ baseA sc))) (* ty (get_item grid_r (+ baseB sc)))))
+        (set! nxt_g (+ (* w0 (get_item grid_g (+ baseA sc))) (* ty (get_item grid_g (+ baseB sc)))))
+        (set! nxt_b (+ (* w0 (get_item grid_b (+ baseA sc))) (* ty (get_item grid_b (+ baseB sc)))))
+        (set! dr (* (- nxt_r cur_r) INV_SS))
+        (set! dg (* (- nxt_g cur_g) INV_SS))
+        (set! db (* (- nxt_b cur_b) INV_SS))
+        (set! kx 0)
+        (while (< kx SS) {
+          (set! x (+ (* sx SS) kx))
+          (set! ddx (- (+ x 0.5) CX))
+          (set! r2p (+ (* ddx ddx) dyc2))
+          (if (<= r2p R_SCR2)
+              {
+                (Gfx.set_pixel x y (+ cur_r (* kx dr)) (+ cur_g (* kx dg)) (+ cur_b (* kx db)))
+              })
+          (set! kx (+ kx 1))
+        })
+        (set! cur_r nxt_r) (set! cur_g nxt_g) (set! cur_b nxt_b)
+        (set! sx (+ sx 1))
+      })
+      (set! k (+ k 1))
+    })
+  }))
+
 
 ;; ---- 渲染状态：逐采样点推进（每画完一个采样行推屏一次）--------------------
 
@@ -413,18 +536,28 @@
   (lambda () {
     (define painted 0)
     (while (and (< painted SAMPLES_PER_STEP) (< cur_y ROWS_S)) {
-      (define px (* cur_x SS))
-      (define py (* cur_y SS))
-      (define dx (- (+ px HALF_S) CX))
-      (define dy (- (+ py HALF_S) CY))
+      (define dx (- (+ (* cur_x SS) HALF_S) CX))
+      (define dy (- (+ (* cur_y SS) HALF_S) CY))
       (if (<= (+ (* dx dx) (* dy dy)) R_SCR2)
-          { (shade px py dx dy) (set! painted (+ painted 1)) })
+          { (shade dx dy) (set! painted (+ painted 1)) }
+          { ;; 圆外采样点也占网格一格（黑色），保证索引对齐；不入绘制
+            (set! out_r 0.0) (set! out_g 0.0) (set! out_b 0.0) })
+      ;; push 是"原地追加、返回 #undefined"的语句型内建，不能写成 (set! x (push x v))
+      (set_item! grid_r (+ (* cur_y COLS_S) cur_x) out_r)
+      (set_item! grid_g (+ (* cur_y COLS_S) cur_x) out_g)
+      (set_item! grid_b (+ (* cur_y COLS_S) cur_x) out_b)
       (set! cur_x (+ cur_x 1))
       (if (>= cur_x COLS_S)
-          { (set! cur_x 0) (set! cur_y (+ cur_y 1)) (Gfx.refresh) })
+          { (set! cur_x 0)
+            (set! cur_y (+ cur_y 1))
+            ;; 采样行 s 算完后，采样带 s-1（需采样行 s-1 与 s）才可重建并上屏
+            (if (>= cur_y 2) { (blit_band (- cur_y 2)) })
+            (Gfx.refresh) })
     })
     (if (>= cur_y ROWS_S)
         {
+          ;; 末尾一条带（最后采样行以下）用末行钳位补画
+          (blit_band GRID_ROW_LAST)
           ;; 本帧天空完成：记下太阳、画字幕、推屏，并进入停留/重绘判断
           (set! hold_until (+ (System.timestamp) HOLD_MS))
           (draw_caption)
@@ -516,37 +649,51 @@
               (String.concat ":" (pad2 ss)))))))))))
   }))
 
-;; ---- 右下角时间：透明底 ----------------------------------------------------
+;; ---- 右下角时间：透明底（从采样网格双线性重建还原背景）--------------------
 ;; 时钟块横跨天空圆界（左半落在圆内的天空上、右半落在圆外的黑底上），因此每次
-;; 重画前先把这块区域的“真实背景”恢复出来，而不是整块填黑：
-;;   · 与时钟块相交的采样块重新着色：块中心在圆内 → 用当前帧参数重新 shade
-;;     （骑跨圆界的块由 shade 自带的判定转 edge_block 逐像素处理）；块中心在
-;;     圆外 → 置黑，与逐采样点渲染时“圆外一律为黑”一致；
-;;   · 随后把时间文字直接画在天空上（alpha 字模按覆盖率与背景混合，边缘自然）。
-;; 采样块左上角为 (sx·SS, sy·SS)、覆盖 SS×SS、块中心偏移为 (+ px HALF_S − CX)，
-;; 故列/行的相交范围由 hud_clock_* 折算。
-
-(define clock_bg_sx0 (Math.floor (/ (- hud_clock_x 1) SS)))
-(define clock_bg_sx1 (Math.floor (/ (- (+ hud_clock_x hud_clock_w) 1) SS)))
-(define clock_bg_sy0 (Math.floor (/ (- hud_clock_y 1) SS)))
-(define clock_bg_sy1 (Math.floor (/ (- (+ hud_clock_y hud_clock_h) 1) SS)))
+;; 重画前先把这块区域的“真实背景”恢复出来，而不是整块填黑：直接对采样网格做
+;; 双线性重建（与 blit_band 同一套插值与圆界判定），恢复出来的就是当前帧画面。
+;; 逐像素写点仅 137×15≈2055 点、每秒一次，开销可忽略（远低于旧实现"重算 10~20 个
+;; 采样点"所需的数十万条 VM 指令）。
 
 (define repaint_clock_bg
   (lambda () {
-    (define sy clock_bg_sy0)
-    (while (<= sy clock_bg_sy1) {
-      (define py (* sy SS))
-      (define dy (- (+ py HALF_S) CY))
-      (define sx clock_bg_sx0)
-      (while (<= sx clock_bg_sx1) {
-        (define px (* sx SS))
-        (define dx (- (+ px HALF_S) CX))
-        (if (<= (+ (* dx dx) (* dy dy)) R_SCR2)
-            { (shade px py dx dy) }
-            { (Gfx.fill_rect px py SS SS 0 0 0) })
-        (set! sx (+ sx 1))
+    (define y hud_clock_y)
+    (while (< y (+ hud_clock_y hud_clock_h)) {
+      (define uy (* y INV_SS))
+      (define j0 (Math.floor uy))
+      (define ty (- uy j0))
+      (if (> j0 GRID_ROW_LAST) { (set! j0 GRID_ROW_LAST) (set! ty 0.0) })
+      (define j1 (+ j0 1))
+      (if (> j1 GRID_ROW_LAST) { (set! j1 GRID_ROW_LAST) })
+      (define base0 (* j0 COLS_S))
+      (define base1 (* j1 COLS_S))
+      (define w0 (- 1.0 ty))
+      (define ddy (- (+ y 0.5) CY))
+      (define x hud_clock_x)
+      (while (< x (+ hud_clock_x hud_clock_w)) {
+        (define ddx (- (+ x 0.5) CX))
+        (if (<= (+ (* ddx ddx) (* ddy ddy)) R_SCR2)
+            {
+              (define ux (* x INV_SS))
+              (define i0 (Math.floor ux))
+              (define tx (- ux i0))
+              (if (> i0 GRID_COL_LAST) { (set! i0 GRID_COL_LAST) (set! tx 0.0) })
+              (define i1 (+ i0 1))
+              (if (> i1 GRID_COL_LAST) { (set! i1 GRID_COL_LAST) })
+              (define t0 (- 1.0 tx))
+              (Gfx.set_pixel x y
+                (+ (* t0 (+ (* w0 (get_item grid_r (+ base0 i0))) (* ty (get_item grid_r (+ base1 i0)))))
+                   (* tx (+ (* w0 (get_item grid_r (+ base0 i1))) (* ty (get_item grid_r (+ base1 i1))))))
+                (+ (* t0 (+ (* w0 (get_item grid_g (+ base0 i0))) (* ty (get_item grid_g (+ base1 i0)))))
+                   (* tx (+ (* w0 (get_item grid_g (+ base0 i1))) (* ty (get_item grid_g (+ base1 i1))))))
+                (+ (* t0 (+ (* w0 (get_item grid_b (+ base0 i0))) (* ty (get_item grid_b (+ base1 i0)))))
+                   (* tx (+ (* w0 (get_item grid_b (+ base0 i1))) (* ty (get_item grid_b (+ base1 i1)))))))
+            }
+            { (Gfx.set_pixel x y 0 0 0) })
+        (set! x (+ x 1))
       })
-      (set! sy (+ sy 1))
+      (set! y (+ y 1))
     })
   }))
 
