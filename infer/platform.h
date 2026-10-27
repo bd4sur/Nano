@@ -126,13 +126,26 @@ extern "C" {
 #else
     #define NANO_HAS_FACES_KBD (0)
 #endif
+// ===============================================================================
+// M5 掌机 ESP32 Arduino 构建目标判定（M5Core2/M5CoreS3）
+// 1-是；0-否。用于 ESP32 资源约束相关的条件编译（内存池上限、纹理分辨率等）。
+// 注意：NANO_PLATFORM_M5CORE2 在非 Arduino 环境会被文首默认分支缺省定义，
+// 单独 defined(NANO_PLATFORM_M5CORE2) 不是可靠的 M5 ESP32 判据——必须如此相与；
+// ARDUINO_ARCH_ESP32 仅 Arduino-ESP32 核心构建定义（纯 IDF 目标不含）。
+// ===============================================================================
+#if defined(ARDUINO_ARCH_ESP32) \
+    && (defined(NANO_PLATFORM_M5CORE2) || defined(NANO_PLATFORM_M5CORES3))
+    #define NANO_IS_M5ESP (1)
+#else
+    #define NANO_IS_M5ESP (0)
+#endif
 
 
 // ===============================================================================
 // 全局字符串常量
 // ===============================================================================
 
-#define NANO_VERSION "2608"
+#define NANO_VERSION "2610"
 
 #define LOG_FILE_PATH PLATFORM_ROOT_DIR "/chat.jsonl"
 
@@ -1029,6 +1042,29 @@ uint8_t platform_get_master_volume(void);
 
     // BadApple
     // #define BADAPPLE_ENABLED
+
+// ===============================================================================
+// 玲珑：M5Stack Core2 / CoreS3（ESP32 掌机；显示/触屏/音频/IMU/电源均经
+// M5Unified 的 *_m5esp.cpp HAL 实现，引脚参数见文首 M5 引脚段）
+// ===============================================================================
+#elif defined(NANO_PLATFORM_M5CORE2) || defined(NANO_PLATFORM_M5CORES3)
+
+    // 模型目录（ESP32 端本地推理经 nano_min 的 SD 业务路径，见 nano_min_esp32.cpp；
+    // 本宏仅供 ui_llm.c 预设模型表编译，设备上不会按此路径打开文件）
+    #define MODEL_ROOT_DIR "/home/bd4sur/ai/_model/Nano"
+
+    // 屏幕（M5GFX，ILI9342C 320x240）
+    #define SCREEN_WIDTH  (320)
+    #define SCREEN_HEIGHT (240)
+
+    // IMU（Core2: MPU6886；CoreS3: BMI270，经 M5Unified）
+    #define IMU_ENABLED
+
+    // UPS（电量/充电状态经 M5.Power，见 hal_power_m5esp.cpp）
+    #define UPS_ENABLED
+
+    // BadApple
+    #define BADAPPLE_ENABLED
 
 #else
 

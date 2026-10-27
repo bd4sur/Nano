@@ -33,7 +33,14 @@
 // 编译期的 VM 工作区占用远大于运行期堆占用（后者极小）。
 // 内存受限宿主：pool_size 按「最大连续块 - 余量」自适应下调（见下），
 // 小 App 仍可正常运行；装不下的大 App 会显示「内存不足」错误画面。
-#define MB_POOL_SIZE   (12ULL * 1024 * 1024)
+// ESP32（M5Core2/CoreS3，8MB PSRAM）：12MB 期望值超过整片 PSRAM，「最大连续块-余量」
+// 自适应会把池子撑到数 MB，几乎吃光 PSRAM 并饿死音频/词典/电子书等其他运行时消费者。
+// 故 ESP32 的期望值与 Animac 控制台（ui_animac.h，ESP32 验证值）对齐为 2MB，
+#if NANO_IS_M5ESP
+    #define MB_POOL_SIZE   (2ULL * 1024 * 1024)
+#else
+    #define MB_POOL_SIZE   (12ULL * 1024 * 1024)
+#endif
 #define MB_POOL_MIN    (512ULL * 1024)
 #define MB_POOL_MARGIN (64ULL * 1024)
 
@@ -68,14 +75,18 @@ typedef struct {
     char    source_rel[192];             // 源码路径（相对解释器工作根，UTF-8）
 } Scheme_App_Desc;
 
-static Scheme_App_Desc s_apps[SCHEME_APP_MAX];  // 扫描结果（进入列表菜单时刷新）
+// 扫描结果与菜单条目表：主堆（ESP32 上为 PSRAM）进入功能时一次性分配，约 9.3KB。
+// 此前为静态 bss，常驻内部 DRAM——Core2 内部 RAM 紧张，曾致开机 DMA 帧缓冲
+//（2×75KB，见 linglong_m5core2.ino）分配失败（"Failed to alloc frame buffers!"）
+static Scheme_App_Desc *s_apps = NULL;                  // 扫描结果（进入列表菜单时刷新）
+static int32_t scheme_app_buffers_init(void);           // 一次性分配（定义见扫描区块前）
 static int32_t s_app_count = 0;                 // 有效 App 数
 static int32_t s_selected = -1;                 // 运行中的 App 下标（-1 无）
 static int32_t s_list_empty = 0;                // app 目录下没有 .scm（菜单显示占位项）
 
-// 菜单条目文本（静态存储供 w_menu_main->items 借用）与指针表
-static wchar_t s_item_text[SCHEME_APP_MAX][SCHEME_APP_NAME_MAX];
-static const wchar_t *s_item_ptrs[SCHEME_APP_MAX];
+// 菜单条目文本（供 w_menu_main->items 借用）与指针表
+static wchar_t (*s_item_text)[SCHEME_APP_NAME_MAX] = NULL;
+static const wchar_t **s_item_ptrs = NULL;
 
 // ===============================================================================
 // 应用状态（单前台模型：同一时刻至多一个 Scheme App 实例）
@@ -142,6 +153,17 @@ static char ascii_lower(char c) {
     return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
 }
 
+// 一次性分配扫描/菜单缓冲（本功能全生命周期持有；ESP32 上落在 PSRAM）。
+// 返回 0 成功；失败（防御，实际不可达）返回 -1
+static int32_t scheme_app_buffers_init(void) {
+    if (s_apps) return 0;
+    s_apps      = (Scheme_App_Desc *)platform_calloc(SCHEME_APP_MAX, sizeof(Scheme_App_Desc));
+    s_item_text = (wchar_t (*)[SCHEME_APP_NAME_MAX])platform_calloc(SCHEME_APP_MAX, SCHEME_APP_NAME_MAX * sizeof(wchar_t));
+    s_item_ptrs = (const wchar_t **)platform_calloc(SCHEME_APP_MAX, sizeof(wchar_t *));
+    return (s_apps && s_item_text && s_item_ptrs) ? 0 : -1;
+}
+
+
 static void scheme_app_scan(void) {
     s_app_count = 0;
     s_list_empty = 0;
@@ -178,6 +200,7 @@ static void scheme_app_scan(void) {
             || ascii_lower(name[len - 2]) != 'c'
             || ascii_lower(name[len - 1]) != 'm') {
             free(name);
+            names[i] = NULL;  // 防止下方统一清理循环二次释放（ESP32 multi_heap 中毒检测会断言）
             continue;
         }
 
@@ -231,11 +254,22 @@ static void scheme_app_scan(void) {
 // ===============================================================================
 // 列表菜单：扫描 + 构建 w_menu_main + 绘制；item_action 选中后转入运行态
 // ===============================================================================
-
 int32_t ui_scheme_app_list_init(Key_Event *key_event, Global_State *global_state) {
+    Widget_Menu_State *ms = global_state->w_menu_main;
+    if (scheme_app_buffers_init() != 0) {
+        // 主堆分配失败（防御，实际不可达）：显示占位项，不触碰未分配的缓冲
+        static const wchar_t *oom_item = L"（内存不足）";
+        static const wchar_t *oom_ptrs[1] = {NULL};
+        oom_ptrs[0] = oom_item;
+        ms->items = oom_ptrs;
+        ms->item_num = 1;
+        ms->title = L"灵机应用程序";
+        s_list_empty = 1;
+        ui_widget_menu_init(key_event, global_state, ms);
+        return -1;
+    }
     scheme_app_scan();
 
-    Widget_Menu_State *ms = global_state->w_menu_main;
     if (s_list_empty || s_app_count == 0) {
         // 空目录占位项（不可进入）
         static const wchar_t *empty_item = L"（app 目录下没有 Scheme App）";

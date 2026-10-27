@@ -19,7 +19,13 @@ extern "C" {
 #define LINGLONG_MOON_RADIUS_MIN          (16.0f)
 #define LINGLONG_STAR_GLOW_RADIUS         (0)
 // 是否开启动态地景：动态地景需动态分配大量堆内存，若内存紧张，可关闭。同时关闭透视转鱼眼功能，详见代码。
-#define LINGLONG_ENABLE_DYNAMIC_LANDSCAPE (1)
+// M5Core2/CoreS3（ESP32）：固件分区 6.5MB 约束 + 堆内存紧张，关闭（与 linglong_m5core2
+// 仓库验证过的固件行为一致；该平台的 128x128 鱼眼纹理头亦不含 FLAT 纹理）
+#if NANO_IS_M5ESP
+    #define LINGLONG_ENABLE_DYNAMIC_LANDSCAPE (0)
+#else
+    #define LINGLONG_ENABLE_DYNAMIC_LANDSCAPE (1)
+#endif
 
 // 二次散射模型相关参数
 #define LINGLONG_SCATTER_MARCHRAY_NV  (36)

@@ -3676,7 +3676,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             else if (global_state->ui_color_style == UI_COLOR_DARK) {
                 wcscpy(color_reset_tag, L"[#ffffff]");
             }
-            swprintf(readme, 1024, L"[#66ccff]Nano-Pod%ls v" NANO_VERSION "\n电子核桃EDC | M5Core2(ESP32)\n(c) 2025-2026 BD4SUR\n\n番茄表：基于FLIP算法实现的流体仿真沙漏，可根据IMU测量到的重力方向定向流动，并具备可调节的瓶颈节流机制，因此可以当作番茄表使用。\n\n鹦鹉笼：与电子鹦鹉（端侧语言模型）对话，可以观测推理状态。在树莓派等算力丰富的硬件平台上，还具备语音输入、语音合成能力，并支持Qwen等更大规模的语言模型。\n\n玲珑仪：是一款天文计算和天空仿真程序，能够根据星历算法、时间地点，计算日月等重要天体的实时位置，同时渲染逼真的天空视觉效果。由于计算量大，在MCU上性能不佳，渲染一帧时间以秒计，但能够实时呈现。\n\n灵机引擎：自研Scheme语言解释器，可通过在电子核桃上直接编写程序控制电子核桃的行为。该功能同时提供了文字终端和软键盘，能够在不依赖任何外部硬件的条件下，独立实现程序代码的输入、执行和结果反馈。\n\ngithub.com/bd4sur/Nano", color_reset_tag);
+            swprintf(readme, 1024, L"[#66ccff]Project Linglong%ls v" NANO_VERSION "\n玲珑电子核桃 | M5Core2(ESP32)\n(c) 2025-2026 BD4SUR\ngithub.com/bd4sur/Nano\n\n# 概述\n\n本机是一款“电子核桃”，试图在各种便携设备上实现尽量多、尽量有趣、尽量实用的功能。固件以C语言编写，可在不同的计算设备上部署运行。图形框架为自主实现，并嵌入了自制的灵机(Animac)解释器，可以执行Scheme或JavaScript程序，未来将逐渐向能够安装应用程序的“操作系统”演进。固件代码起初为BD4SUR手工编写，后来逐渐由HI接手维护，参与编写代码的HI有云端的 Kimi K3、本地部署的 DeepSeek-V4.1-Flash、GLM5.3-Flash 等。\n\n# 功能说明\n\n番茄表：基于FLIP算法实现的流体仿真沙漏，带有重力感应和可调节的瓶颈节流功能，可当作番茄表使用。\n\n鹦鹉笼：完全运行在机器内部的端侧LLM推理，支持Qwen3和BD4SUR自制的Nano系列模型。具体能推理哪些模型，取决于设备的硬件资源。\n\n玲珑仪：是一款星图和天空仿真程序，基于星历算法，计算太阳、月亮等天体的位置，绘制在仿真的天空上。由于计算量大，在ESP32上性能不佳，但至少能实时呈现。\n\n灵机计算引擎：BD4SUR自研的Scheme和JavaScript语言解释器，提供了文字终端和软键盘，可直接在电子核桃上输入代码并执行。\n\n寻呼机：基于声学OFDM(正交频分复用调制)的声波通信功能，在两个电子核桃之间通过声波传输短消息。\n\n", color_reset_tag, color_reset_tag);
 
             ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, readme, 0, 1);
             ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);

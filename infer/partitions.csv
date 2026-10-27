@@ -1,0 +1,11 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# 玲珑固件体积约 4.7MB，CoreS3 预置分区方案的 APP 分区均放不下，
+# 故采用与 Core2 相同的 16MB 布局（2 x 6.5MB OTA APP + 3.6MB SPIFFS）。
+# 使用方式：Arduino IDE 中 Partition Scheme 选择 "Custom"（仅 CoreS3 需要；
+# Core2 默认分区即为此布局，选择默认即可，本文件对 Core2 无影响）。
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x640000,
+app1,     app,  ota_1,   0x650000,0x640000,
+spiffs,   data, spiffs,  0xc90000,0x360000,
+coredump, data, coredump,0xFF0000,0x10000,

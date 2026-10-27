@@ -7,7 +7,13 @@
 #include "platform.h"
 #include "graphics.h"
 
-#include "linglong_texture.h"
+#if NANO_IS_M5ESP
+    // ESP32：128x128 鱼眼纹理（6.5MB 分区约束；与 linglong_m5core2 仓库验证版一致，
+    // 无 FLAT 纹理——动态地景在该平台经 LINGLONG_ENABLE_DYNAMIC_LANDSCAPE=0 关闭）
+    #include "linglong_texture_m5esp.h"
+#else
+    #include "linglong_texture.h"
+#endif
 #include "celestial.h"
 #include "ephemeris.h"
 #include "ui_cloud.h"

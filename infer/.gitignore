@@ -1,0 +1,9 @@
+# PlatformIO 构建产物
+.pio/
+.vscode/
+
+# 仓库根 .gitignore 的 model/ 规则本为 ML 检查点目录而设；infer/model/ 是 ESP32
+# 固件内置模型头文件（ui_llm.c 编译必需，随源码分发），在此解除忽略
+!/model/
+!/model/**
+sdkconfig.*

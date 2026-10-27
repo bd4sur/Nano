@@ -5,6 +5,7 @@
 
 #include "esp_task_wdt.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
 
 #include <M5Unified.h>
 #include <M5GFX.h>
@@ -13,6 +14,7 @@
 #include "hal_audio_out.h"
 #include "hal_misc.h"
 #include "hal_power.h"
+#include "hal_faceskbd.h"
 #include "ui_app.h"
 #include "platform.h"
 #include "celestial.h"
@@ -185,16 +187,34 @@ void setup() {
 
     esp_task_wdt_deinit();
 
-    // 尽早分配帧缓冲区（双缓冲，适配DMA最大连续块）：
-    // 两块76.8KB需位于DMA可寻址的内部RAM，必须在堆最完整、未碎片化时分配，
-    // 否则M5.begin/gfx_init等初始化消耗并切碎内部堆后，很可能找不到足够的连续块
+    // 尽早分配帧缓冲区（双缓冲，每块76.8KB）：优先 DMA 可寻址的内部 RAM。
+    // 内部 RAM 紧张的平台（Core2：启动期分配把内部堆切碎，实测仅剩一块 ≥76.8KB 的
+    // 连续块）逐块回退到 PSRAM——M5GFX 推帧时经其内部 DMA 反弹缓冲（FlipBuffer，见
+    // M5GFX Bus_SPI::writePixels）分块拷贝推送，源缓冲无需 DMA 可寻址，SPI 线速不变。
+    //（2026-10 Core2 修复：曾因第二块 DMA 连续块差 3KB 死于 "Failed to alloc"）
+    Serial.printf("[fb] pre-alloc DMA free=%u largest=%u\n",
+                  heap_caps_get_free_size(MALLOC_CAP_DMA),
+                  heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     uint16_t *frame_buffer_top = (uint16_t *)heap_caps_malloc(
         SCREEN_WIDTH * (SCREEN_HEIGHT / 2) * sizeof(uint16_t), MALLOC_CAP_DMA);
+    if (!frame_buffer_top)
+        frame_buffer_top = (uint16_t *)heap_caps_malloc(
+            SCREEN_WIDTH * (SCREEN_HEIGHT / 2) * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
     uint16_t *frame_buffer_bottom = (uint16_t *)heap_caps_malloc(
         SCREEN_WIDTH * (SCREEN_HEIGHT / 2) * sizeof(uint16_t), MALLOC_CAP_DMA);
+    if (!frame_buffer_bottom)
+        frame_buffer_bottom = (uint16_t *)heap_caps_malloc(
+            SCREEN_WIDTH * (SCREEN_HEIGHT / 2) * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    Serial.printf("[fb] top=%p(%s) bottom=%p(%s)\n",
+                  frame_buffer_top,    (frame_buffer_top    && esp_ptr_dma_capable(frame_buffer_top))    ? "DMA" : "PSRAM",
+                  frame_buffer_bottom, (frame_buffer_bottom && esp_ptr_dma_capable(frame_buffer_bottom)) ? "DMA" : "PSRAM");
 
     if (!frame_buffer_top || !frame_buffer_bottom) {
-        Serial.println("Failed to alloc frame buffers!");
+        // 内部 RAM 与 PSRAM 均告罄才算真正失败（实际不可达）
+        Serial.printf("Failed to alloc frame buffers! (top=%p bottom=%p, DMA-capable free=%u largest=%u)\n",
+                      frame_buffer_top, frame_buffer_bottom,
+                      heap_caps_get_free_size(MALLOC_CAP_DMA),
+                      heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
         while (1) delay(1000);
     }
 
@@ -204,6 +224,12 @@ void setup() {
 #if NANO_HAS_PWR_KEY
     // 丢弃上电残留的电源键（PMIC PEK）锁存状态，避免开机即误触发锁屏
     power_key_poll();
+#endif
+
+#if NANO_HAS_FACES_KBD
+    // Faces Keyboard3 硬件全键盘探测（CoreS3 + Faces Bottom3，内部 I2C 总线 0x08）；
+    // 未插入时返回 -1，轮询自动停用，不影响启动
+    faceskbd_init();
 #endif
 
     //////////////////////////////////////////////////
@@ -381,6 +407,31 @@ void loop() {
                 Serial.println("WARNING: event_queue send timeout!");
             }
         }
+
+#if NANO_HAS_FACES_KBD
+        // Faces Keyboard3 硬件全键盘：Direct 模式矩阵轮询取键（5ms 节流 + 边沿检测），
+        // 映射为与触屏软键盘全键盘对齐的键码后可靠投递（同电源键范式）。
+        // is_soft_key=0（实体键盘来源：文本显示控件/菜单响应其方向键与 Esc）、
+        // is_softkbd=1（键码语义与软键盘全键盘对齐：输入控件走全键盘拼音/直插路径）。
+        // ctrl_reset=1 的事件（FN 导航组合键）注入前先复位全局软件 Ctrl——Fn 按下本身
+        // 会切换软件 Ctrl，不复位则 Fn+← 会被当成 Ctrl+←（光标上移一行）。
+        // 锁屏期间排空但丢弃（键盘常供电会持续积键，防解锁瞬间灌入积压事件）。
+        {
+            Faces_Kbd_Event faces_ev;
+            while (faceskbd_poll(&faces_ev)) {
+                if (LOCK_SCREEN_ACTIVE(global_state)) continue;
+                if (faces_ev.ctrl_reset) global_state->is_ctrl_enabled = 0;
+                Key_Event kbd_ev = {0};
+                kbd_ev.key_code = faces_ev.key_code;
+                kbd_ev.key_edge = -1;
+                kbd_ev.is_soft_key = 0;
+                kbd_ev.is_softkbd = 1;
+                if (xQueueSend(event_queue, &kbd_ev, pdMS_TO_TICKS(1)) != pdTRUE) {
+                    Serial.println("WARNING: event_queue faceskbd send timeout!");
+                }
+            }
+        }
+#endif
 
         // 通知 Core0 帧已消费（非阻塞）
         // if (xQueueSend(frame_consumed_queue, &dummy, 0) != pdTRUE) {
