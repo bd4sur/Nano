@@ -109,7 +109,8 @@
       (set! d 0)
       (while (< d 64) {
         (set! base (+ (* (+ y (Math.floor (/ d 8.0))) GW) (+ x (mod d 8))))
-        (set_item! Bcur (mod base CELLS) 1.0)
+        ;; 手册：mod 恒返回浮点；列表下标一律显式取整（浮点下标会被四舍五入，别依赖它）
+        (set_item! Bcur (Math.floor (mod base CELLS)) 1.0)
         (set! d (+ d 1)) })
       (set! i (+ i 1)) })
     (set! i 0)

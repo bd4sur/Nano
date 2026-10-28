@@ -235,6 +235,21 @@
     d))
 
 ;; 返回格心序列（列表，从当前格之后的第一格开始）
+;; A* 的工作数组是模块级复用的 —— **每次搜索前必须整体重置**。
+;; 不重置的话：上一轮留在开表里的节点 inopen 仍为 1（不会再入表），
+;; g/f 也还是旧值（新路径不再更新），于是第二次及以后的搜索会直接失败、
+;; 返回空路径 —— 表现就是"到了终点却停在原地、小地图上的目标点乱跳"。
+(define astar_reset
+  (lambda ()
+    (define k 0)
+    (set! k 0)
+    (while (< k (* CW CH)) {
+      (set_item! gs k 1e9)
+      (set_item! fs k 1e9)
+      (set_item! came k -1)
+      (set_item! inopen k 0)
+      (set! k (+ k 1)) })))
+
 (define plan_path
   (lambda (sx sy gx gy)
     (define start 0) (define goal 0) (define open (cons 0 (quote ())))
@@ -243,6 +258,7 @@
     (define nb 0) (define nx 0) (define ny 0) (define tg 0) (define tgv 0)
     (define path (cons 0 (quote ()))) (define rev (cons 0 (quote ())))
     (pop open) (pop path) (pop rev)
+    (astar_reset)
     (set! start (Math.floor (+ (* sy CW) sx)))
     (set! goal (Math.floor (+ (* gy CW) gx)))
     (set_item! gs start 0)
@@ -316,31 +332,63 @@
 (define path (cons 0 (quote ())))
 (define path_i 0)
 (define goalx 0) (define goaly 0)
+(define plan_fail 0)             ; 连续规划失败次数（A* 找不到路时的兜底）
+(define rounds 0)                ; 已完成局数
+(define ticks_in_round 0)        ; 本局已走 tick 数（看门狗兜底）
 
 (define plan_leg
   (lambda ()
-    (define tries 0) (define gx 0) (define gy 0)
+    (define cand (cons 0 (quote ())))
+    (define xx 0) (define yy 0) (define d 0) (define n 0) (define pick 0)
     (pop path)
+    (pop cand)
     (set! path_i 0)
-    ;; 目标：远离当前位置的一个格子（A* 保证连通，任意格都能到）
-    (set! tries 0)
-    (while (< tries 30) {
-      (set! gx (rnd_int CW))
-      (set! gy (rnd_int CH))
-      (if (>= (+ (Math.abs (- gx cellx)) (Math.abs (- gy celly))) 10) { (set! tries 100) }
-          { (set! tries (+ tries 1)) })
-      (if (== tries 100) {} {}) })
-    (set! goalx gx) (set! goaly gy)
-    (set! path (plan_path cellx celly gx gy))
-    (set! path_i 0)))
+    ;; 目标：随机取一个"曼哈顿距离 ≥ 10"的格子（先列候选，保证一定能选到远处）
+    (set! yy 0)
+    (while (< yy CH) {
+      (set! xx 0)
+      (while (< xx CW) {
+        (set! d (+ (Math.abs (- xx cellx)) (Math.abs (- yy celly))))
+        (if (>= d 10) { (push cand (Math.floor (+ (* yy CW) xx))) })
+        (set! xx (+ xx 1)) })
+      (set! yy (+ yy 1)) })
+    (set! n (length cand))
+    (if (> n 0)
+        {
+          (set! pick (Math.floor (mod (rnd_int n) n)))
+          (set! goalx (Math.floor (mod (get_item cand pick) CW)))
+          (set! goaly (Math.floor (/ (+ (get_item cand pick) 0.0) (+ CW 0.0)))) }
+        { (set! goalx (mod (+ cellx 6) CW))
+          (set! goaly (mod (+ celly 4) CH)) })
+    (set! path (plan_path cellx celly goalx goaly))
+    (set! path_i 0)
+    (if (== (length path) 0)
+        { (set! plan_fail (+ plan_fail 1)) }
+        { (set! plan_fail 0) })))
+
+;; 一局结束（走到目标格）：换配色 → 生成新迷宫 → 重新出发
+(define next_round
+  (lambda ()
+    (set! rounds (+ rounds 1))
+    (set! maze_seed (+ maze_seed 1))
+    (theme_set (Math.floor (mod maze_seed theme_count)))
+    (gen_maze)
+    (reset_player)
+    (set! ticks_in_round 0)))
 
 ;; 取下一个航点（格心 + 目标朝向）
 (define take_waypoint
   (lambda ()
     (define id 0)
     (if (>= path_i (length path))
-        { (plan_leg) }
+        {
+          ;; 航点走完：若正站在终点格上 → 开下一局；否则再规划一段
+          (if (and (== cellx goalx) (== celly goaly))
+              { (next_round) }
+              { (plan_leg) }) }
         {})
+    ;; 连续规划失败（理论上不该发生）→ 兜底换局，绝不卡死
+    (if (>= plan_fail 3) { (set! plan_fail 0) (next_round) })
     (if (> (length path) 0)
         {
           (set! id (get_item path (Math.floor path_i)))
@@ -654,7 +702,8 @@
 (define draw_hud
   (lambda ()
     (Gfx.fill_rect 0 VIEW_H W HUD_H hudr hudg hudb)
-    (Gfx.draw_text (cat3 "三维迷宫 · " themename " 漫游") 4 (+ VIEW_H 2) hfgr hfgg hfgb)
+    (Gfx.draw_text (cat3 "三维迷宫 · " themename "" ) 4 (+ VIEW_H 2) hfgr hfgg hfgb)
+    (Gfx.draw_text (cat3 "第" (String.atom_to_string (+ rounds 1)) "局") 150 (+ VIEW_H 2) hfgr hfgg hfgb)
     (set! ds (cat3 "A* " (String.atom_to_string path_i)
                    (cat3 "/" (String.atom_to_string (length path))
                          (cat3 "  " (String.atom_to_string frame_ms) "ms"))))
@@ -680,7 +729,9 @@
     (draw_hud)
     (Gfx.refresh)
     (set! tick_no (+ tick_no 1))
-    (if (>= tick_no MAZE_TICKS) { (new_maze) })))
+    (set! ticks_in_round (+ ticks_in_round 1))
+    ;; 看门狗：一局走太久（正常几十拍就到终点）说明出了问题，强制换局
+    (if (> ticks_in_round MAZE_TICKS) { (next_round) })))
 
 ;; ---- 启动 ------------------------------------------------------------------
 
