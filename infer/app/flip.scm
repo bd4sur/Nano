@@ -23,30 +23,30 @@
 ;; 翻卷、贴壁爬——正好把这个算法最有趣的流动现象演出来。
 ;;
 ;; 最终参数与实测（host x86-64）：
-;;   网格 26×18（每格 12 px）、粒子 **290**（RAD=0.40，约 1.7 粒/格）、压力迭代 14 轮；
-;;   平均 **16 ms/拍** → 40 ms 定时器下约 40% CPU；浏览器 wasm32 约 40 ms（≈25 fps）。
+;;   网格 26×18（每格 12 px）、粒子 **248**（RAD=0.42，约 1.4 粒/格）、
+;;   压力迭代 12 轮 + **粒子分离**（桶排序 + 3×3 邻居，照 flip.c 的 push_particles_apart）；
+;;   平均约 **18 ms/拍** → 40 ms 定时器下约 45% CPU；浏览器 wasm32 约 45 ms（≈22 fps）。
 ;;
-;; 重力：二维重力矢量的**大幅缓慢摇摆**（要的就是这个感觉）：
+;; 重力：二维重力矢量的**大幅度缓慢摇摆**（要的就是"船在浪里"）：
 ;;     gang = amp·sin(2π·t/period + phase)        gang=0 即竖直向下
 ;;     gx = G·sin(gang)，gy = G·cos(gang)
-;;     amp 0.45~0.95 rad（26°~54°）、period 90~170 拍（3.6~6.8 s），每 32 拍微调一次
-;;   实测液面左右端的高度差可摆动 **6~11 格**（约 70~130 px），配合 3~7 s 的周期，
-;;   观感就是"船在浪里"：水整体往一侧涌、拍上侧壁、再荡回来。
+;;     amp 基准 1.05 rad（60°），叠一层慢正弦在 0.89~1.21 rad 之间起伏
+;;     period 基准 78 拍（≈3 s），叠慢正弦在 56~100 拍之间起伏
+;;     相位每 40 拍做一次小幅随机游走，避免机械周期
+;;   重力矢量因此在 ±60° 附近来回扫（扫过 120° 弧），液面明显往一侧涌、拍上侧壁再荡回来。
 ;;
-;; 这个"晃动幅度"和粒子数是强耦合的（都是实测结论）：
-;;   · 204 粒（RAD 0.45）+ 大幅摇摆 → 粒子太稀，压力维持不住连贯流体，会**炸成水花**；
-;;   · 290 粒（RAD 0.40）才能既看到明显晃动、又保持成团（偶有浪花拍上顶壁，属正常）；
-;;   · 想更省 CPU 就把 RAD 调回 0.45 并同时把 gr_amp 上限降到 0.6（晃得小一点）。
+;; 两个关键点（都是实测出来的）：
+;;   1) **粒子分离是"敢大幅摇晃"的前提**。没有它，流体在持续晃动下会慢慢扩散成雾气
+;;      （几千帧后彻底散开）；加上它之后，248 粒也能长时间保持成一团水。
+;;   2) 摇摆幅度/阻尼是量级问题：G_RATE 0.005 + VEL_DAMP 0.86 时终端速度只有
+;;      0.018 格/步，液面几乎不动；0.010 + 0.94 才能看到明显晃动。
 ;;
-;; 稳定性经验（都是踩出来的）：
-;;   · 每步重力不能大：G_RATE 超过约 0.015 压力求解就跟不上，流体"沸腾"发散；
-;;   · 压力迭代不能太少：本项目条件下 ≥12 轮才稳；
-;;   · 贴壁面的速度分量必须按"本工程 y 轴向下"的方向归零（flip.c 是 y 向上，
-;;     照抄 j-1 会漏掉贴地那一面，压力永远堵不住流入 → 流体被顶到天花板）；
-;;   · 双线性权重必须先把采样点夹到 [1.5, GW-1.5] 再算，否则贴壁粒子得到负权重，
-;;     等于每步往网格里注射能量；
-;;   · 另加了两个 C 版没有的便宜稳定器：粒子速度阻尼（VEL_DAMP）与按密度梯度
-;;     推开过密粒子（SEP_K，代替 C 版的 push_particles_apart）。
+;; 其它稳定性经验：
+;;   · 每步重力不宜超过约 0.015（格/步²），否则压力求解跟不上、流体沸腾；
+;;   · 压力迭代 ≥12 轮；
+;;   · 贴壁面速度分量必须按"本工程 y 轴向下"归零（flip.c 是 y 向上，照抄 j-1 会漏掉
+;;     贴地那一面，压力堵不住流入 → 流体被顶到天花板）；
+;;   · 双线性权重必须先把采样点夹到 [1.5, GW-1.5]，否则贴壁粒子得到负权重=注入能量。
 ;;
 ;; 按《灵机用户参考手册》编写：算术固定二参数、`/` 与 `mod` 恒浮点（下标一律
 ;; Math.floor）、不用 let/case/do/for/return 与 list/append/map、define 无简写、
@@ -75,12 +75,12 @@
 ;; 物理参数（单位：格 / 步）
 (define G_RATE 0.010)             ; 重力大小（格/步²）
 (define FLIP_RATIO 0.5)          ; FLIP 比例（1=纯 FLIP，0=纯 PIC）
-(define PRESS_ITERS 14)            ; 压力迭代次数（Gauss-Seidel + 超松弛）
+(define PRESS_ITERS 12)            ; 压力迭代次数（Gauss-Seidel + 超松弛）
 (define DRIFT_K 0.0)              ; drift 补偿强度（0=关闭）
 (define VEL_DAMP 0.94)           ; 粒子速度阻尼
 (define SEP_K 0.05)                ; 按密度梯度分离粒子的强度
 (define OVER_RELAX 1.8)           ; 超松弛系数（>1 收敛更快）
-(define RAD 0.40)                 ; 粒子半径（格）：间距 2R，粒子数 ≈ 面积/dx²
+(define RAD 0.42)                 ; 粒子半径（格）：间距 2R，粒子数 ≈ 面积/dx²
 (define VMAX 0.60)                ; 速度上限（格/步），保证 CFL
 
 ;; ---- 网格场（扁平表，索引 i*GH + j）---------------------------------------
@@ -95,6 +95,9 @@
 (define ct (cons 0 (quote ())))   ; 0=流体格 1=空气格
 (define fl (cons 0 (quote ())))   ; 本拍流体格索引表
 (define dens (cons 0 (quote ()))) ; 每格粒子密度（drift 补偿用）
+(define pcount (cons 0 (quote ())))   ; 临时：每格粒子数
+(define pstart (cons 0 (quote ())))   ; 临时：每格起始下标（前缀和）
+(define pids (cons 0 (quote ())))     ; 临时：按格分组的粒子 id
 (define rho0 0.0)                 ; 静止密度（首次自动标定）
 
 ;; ---- 粒子 ------------------------------------------------------------------
@@ -109,8 +112,10 @@
 
 (define gang 0.0)                 ; 重力方向（弧度）
 (define gr_t 0.0)                 ; 摇摆相位（拍）
-(define gr_period 110.0)          ; 摇摆周期（拍，约 7.6 s）
-(define gr_amp 0.65)              ; 摇摆幅度（弧度，约 26°）
+(define gr_period 78.0)           ; 摇摆周期（拍，约 3 s，随慢正弦变化）
+(define GR_PERIOD0 78.0)          ; 周期基准（拍）
+(define GR_AMP0 1.05)             ; 幅度基准（rad ≈ 60°）
+(define gr_amp 1.05)              ; 摇摆幅度（弧度，约 60°，随慢正弦变化）
 (define gr_phase 0.0)
 (define gx 0.0)
 (define gy 0.0)
@@ -138,7 +143,7 @@
             { (push s 0.0) }
             { (push s 1.0) })
         (push u 0.0) (push v 0.0) (push pu 0.0) (push pv 0.0)
-        (push du 0.0) (push dv 0.0) (push ct 1) (push dens 0.0)
+        (push du 0.0) (push dv 0.0) (push ct 1) (push dens 0.0) (push pcount 0) (push pstart 0) (push pw 0)
         (set! j (+ j 1)) })
       (set! i (+ i 1)) })))
 
@@ -167,6 +172,9 @@
     ;; 水块：底部约 1/3 高度（粒子数约为最初的三分之一，换来流畅帧率）
     (fill_block (- GH 1.4) 9.6 (- GW 1.4) 1.4)
     (set! np (length px))
+    ;; pids 需要与粒子数等长的容量（分离步骤里按格分组存放粒子 id）
+    (while (> (length pids) 0) { (pop pids) })
+    (while (< (length pids) np) { (push pids 0) })
     (set! gang 0.0)
     (set! gx 0.0)
     (set! gy G_RATE)
@@ -486,47 +494,109 @@
       (set_item! vy i (* VEL_DAMP (get_item vy i)))
       (set! i (+ i 1)) })))
 
-;; ---- 按密度梯度把过密的粒子推开（廉价的粒子分离）---------------------------
+;; ---- 粒子分离（照 flip.c 的 push_particles_apart：桶排序 + 3×3 邻居）---------
+;; 这是"稀疏粒子也能保持成一团水"的关键。没有它，流体在持续晃动下会慢慢扩散成雾气。
+(define pw (cons 0 (quote ())))       ; 桶写指针
+
+(define cell_of
+  (lambda (i)
+    (define cx 0) (define cy 0)
+    (set! cx (Math.floor (get_item px i)))
+    (set! cy (Math.floor (get_item py i)))
+    (if (< cx 0) { (set! cx 0) })
+    (if (> cx (- GW 1)) { (set! cx (- GW 1)) })
+    (if (< cy 0) { (set! cy 0) })
+    (if (> cy (- GH 1)) { (set! cy (- GH 1)) })
+    (+ (* cx GH) cy)))
+
+(define sep_pass
+  (lambda ()
+    (define i 0) (define j 0) (define k 0) (define c 0) (define cc 0)
+    (define cx 0) (define cy 0) (define bx -1) (define by -1) (define ox 0) (define oy 0)
+    (define acc 0) (define n 0) (define na 0) (define nb2 0)
+    (define dx 0.0) (define dy 0.0) (define d2 0.0) (define dist 0.0)
+    (define mv 0.0) (define lim 0.0) (define mvx 0.0) (define mvy 0.0)
+    (set! lim (* 2.0 RAD))
+    ;; 清零计数与写指针
+    (set! k 0)
+    (while (< k NC) {
+      (set_item! pcount k 0)
+      (set_item! pw k 0)
+      (set! k (+ k 1)) })
+    ;; 计数
+    (set! i 0)
+    (while (< i np) {
+      (set! c (cell_of i))
+      (set_item! pcount c (+ (get_item pcount c) 1))
+      (set! i (+ i 1)) })
+    ;; 前缀和
+    (set! acc 0)
+    (set! k 0)
+    (while (< k NC) {
+      (set_item! pstart k acc)
+      (set! acc (+ acc (get_item pcount k)))
+      (set! k (+ k 1)) })
+    ;; 填充 pids
+    (set! i 0)
+    (while (< i np) {
+      (set! c (cell_of i))
+      (set! n (get_item pw c))
+      (set_item! pids (+ (get_item pstart c) n) i)
+      (set_item! pw c (+ n 1))
+      (set! i (+ i 1)) })
+    ;; 3×3 邻域，成对处理（只处理 j > i，避免重复也避免自我）
+    (set! i 0)
+    (while (< i np) {
+      (set! cx (Math.floor (get_item px i)))
+      (set! cy (Math.floor (get_item py i)))
+      (set! by -1)
+      (while (<= by 1) {
+        (set! bx -1)
+        (while (<= bx 1) {
+          (set! ox (+ cx bx))
+          (set! oy (+ cy by))
+          (if (>= ox 0)
+              { (if (< ox GW)
+                    { (if (>= oy 0)
+                          { (if (< oy GH)
+                                {
+                                  (set! cc (+ (* ox GH) oy))
+                                  (set! na (get_item pstart cc))
+                                  (set! nb2 (+ na (get_item pcount cc)))
+                                  (set! k na)
+                                  (while (< k nb2) {
+                                    (set! j (get_item pids k))
+                                    (if (> j i)
+                                        {
+                                          (set! dx (- (get_item px j) (get_item px i)))
+                                          (set! dy (- (get_item py j) (get_item py i)))
+                                          (set! d2 (+ (* dx dx) (* dy dy)))
+                                          (if (< d2 (* lim lim))
+                                              {
+                                                (set! dist (Math.sqrt d2))
+                                                (if (< dist 0.0001) { (set! dist 0.0001) })
+                                                (set! mv (/ (- lim dist) dist))
+                                                (set! mvx (* 0.5 (* mv dx)))
+                                                (set! mvy (* 0.5 (* mv dy)))
+                                                (set_item! px i (- (get_item px i) mvx))
+                                                (set_item! py i (- (get_item py i) mvy))
+                                                (set_item! px j (+ (get_item px j) mvx))
+                                                (set_item! py j (+ (get_item py j) mvy)) }
+                                              {}) }
+                                        {})
+                                    (set! k (+ k 1)) }) }
+                                {}) }
+                          {}) }
+                    {}) }
+              {})
+          (set! bx (+ bx 1)) })
+        (set! by (+ by 1)) })
+      (set! i (+ i 1)) })))
+
 (define separate
   (lambda ()
-    (define i 0) (define x 0.0) (define y 0.0)
-    (define x0 0) (define y0 0) (define x1 0) (define y1 0)
-    (define n0 0) (define n1 0) (define n2 0) (define n3 0)
-    (define ex 0.0) (define ey 0.0) (define dl 0.0)
-    (if (> SEP_K 0.0)
-        {
-          (set! i 0)
-          (while (< i np) {
-            (set! x (get_item px i))
-            (set! y (get_item py i))
-            (set! x0 (Math.floor x))
-            (set! y0 (Math.floor y))
-            (if (< x0 0) { (set! x0 0) })
-            (if (> x0 (- GW 2)) { (set! x0 (- GW 2)) })
-            (if (< y0 0) { (set! y0 0) })
-            (if (> y0 (- GH 2)) { (set! y0 (- GH 2)) })
-            (set! x1 (+ x0 1))
-            (set! y1 (+ y0 1))
-            (set! n0 (+ (* x0 GH) y0))
-            (set! n1 (+ (* x1 GH) y0))
-            (set! n2 (+ (* x1 GH) y1))
-            (set! n3 (+ (* x0 GH) y1))
-            (set! dl (+ (get_item dens n0) (+ (get_item dens n1)
-                        (+ (get_item dens n2) (get_item dens n3)))))
-            (if (> dl (* 4.0 rho0))
-                {
-                  (set! ex (- (+ (get_item dens n1) (get_item dens n2))
-                              (+ (get_item dens n0) (get_item dens n3))))
-                  (set! ey (- (+ (get_item dens n2) (get_item dens n3))
-                              (+ (get_item dens n0) (get_item dens n1))))
-                  (set_item! px i (+ x (* SEP_K ex)))
-                  (set_item! py i (+ y (* SEP_K ey))) }
-                {})
-            (set! i (+ i 1)) })
-          ;; 分离后夹回容器内
-          (clamp_all) }
-        {})
-    ))
+    (sep_pass)
+    (clamp_all)))
 
 (define clamp_all
   (lambda ()
@@ -546,23 +616,18 @@
 
 (define turn_gravity
   (lambda ()
-    ;; 像船在浪里：主摇摆用正弦（周期 ~8 s），幅度/相位/周期各自再做缓慢随机游走，
-    ;; 于是摇晃既有明显的方向变化，又不会机械地完全周期性。
+    ;; "船在浪里"：主摇摆 = 大振幅正弦（约 60°），周期 2~4 s；
+    ;; 幅度与周期各自再叠一层慢正弦调制（不随机），保证**始终**是大摆幅，
+    ;; 相位做小幅随机游走，避免机械的完全周期性。
     (set! gr_t (+ gr_t 1.0))
+    (set! gr_period (+ GR_PERIOD0 (* 22.0 (Math.sin (* 6.28318 (/ gr_t 620.0))))))
+    (set! gr_amp (+ GR_AMP0 (* 0.16 (Math.sin (+ (* 6.28318 (/ gr_t 430.0)) 1.1)))))
     (if (>= gr_t gr_period) { (set! gr_t (- gr_t gr_period)) })
-    (set! gang (* gr_amp (Math.sin (+ (* 6.28318 (/ gr_t gr_period)) gr_phase))))
-    ;; 每次摆到极端时微调幅度/周期/相位（低频抖动）
-    (if (== (mod tick_no 32) 0)
-        {
-          (set! gr_amp (+ gr_amp (* (- (Math.random) 0.5) 0.30)))
-          (if (> gr_amp 0.95) { (set! gr_amp 0.95) })
-          (if (< gr_amp 0.45) { (set! gr_amp 0.45) })
-          (set! gr_period (+ gr_period (* (- (Math.random) 0.5) 50.0)))
-          (if (> gr_period 170.0) { (set! gr_period 170.0) })
-          (if (< gr_period 90.0) { (set! gr_period 90.0) })
-          (set! gr_phase (+ gr_phase (* (- (Math.random) 0.5) 0.5))) }
+    (if (== (mod tick_no 40) 0)
+        { (set! gr_phase (+ gr_phase (* (- (Math.random) 0.5) 0.35))) }
         {})
-    ;; gang=0 表示竖直向下；这里让重力沿摇摆角倾斜（gx 横向、gy 竖直）
+    (set! gang (* gr_amp (Math.sin (+ (* 6.28318 (/ gr_t gr_period)) gr_phase))))
+    ;; gang=0 表示竖直向下；重力沿摇摆角倾斜（gx 横向、gy 竖直）
     (set! gx (* G_RATE (Math.sin gang)))
     (set! gy (* G_RATE (Math.cos gang)))))
 
@@ -634,6 +699,7 @@
 
 (pop px) (pop py) (pop vx) (pop vy)
 (pop u) (pop v) (pop pu) (pop pv) (pop du) (pop dv) (pop s) (pop ct) (pop fl) (pop dens)
+(pop pcount) (pop pstart) (pop pids) (pop pw)
 (pop F) (pop G) (pop D)
 (build_grid)
 (init_fluid)
