@@ -385,21 +385,21 @@
   (lambda ()
     (define i 0) (define y0 0) (define y1 0) (define c 0) (define half 0)
     (set! half (/ VIEW_H 2))          ; 112
-    ;; 顶棚 6 条（由上到下渐亮）、地板 6 条（由近到远渐暗）；用整数分段保证无缝
+    ;; 浅色风格：顶棚接近白（(246,247,250) → 地平线略暗），地板是浅暖灰
+    ;; 整数分段保证无缝，否则会留下 1px 亮线
     (set! i 0)
-    (while (< i 6) {
-      (set! y0 (/ (* i half) 6))
-      (set! y1 (/ (* (+ i 1) half) 6))
-      (set! c (+ 16 (* i 7)))
-      (Gfx.fill_rect 0 y0 W (- y1 y0) c (+ c 5) (+ c 16))
+    (while (< i 10) {
+      (set! y0 (/ (* i half) 10))
+      (set! y1 (/ (* (+ i 1) half) 10))
+      (set! c (- 253 (* i 2)))
+      (Gfx.fill_rect 0 y0 W (- y1 y0) c c (+ c 2))
       (set! i (+ i 1)) })
     (set! i 0)
-    (while (< i 6) {
-      (set! y0 (+ half (/ (* i half) 6)))
-      (set! y1 (+ half (/ (* (+ i 1) half) 6)))
-      (set! c (- 52 (* i 7)))
-      (if (< c 8) { (set! c 8) })
-      (Gfx.fill_rect 0 y0 W (- y1 y0) (+ c 12) c (+ c 5))
+    (while (< i 10) {
+      (set! y0 (+ half (/ (* i half) 10)))
+      (set! y1 (+ half (/ (* (+ i 1) half) 10)))
+      (set! c (- 219 (* i 3)))
+      (Gfx.fill_rect 0 y0 W (- y1 y0) c (- c 6) (- c 18))
       (set! i (+ i 1)) })))
 
 (define render
@@ -410,7 +410,7 @@
     (define hit 0) (define guard 0) (define pdist 0.0) (define lh 0.0)
     (define y0 0) (define y1 0) (define r 0) (define g 0) (define b 0)
     (define shade 0.0) (define base 0) (define hh 0)
-    (define wallx 0.0) (define stripe 0) (define hm 0)
+    (define wallx 0.0) (define stripe 0) (define hm 0) (define hm2 0)
     (define CX 0.0) (define CY 0.0)
     (draw_backdrop)
     (set! CX (+ posx 0.0))
@@ -450,29 +450,36 @@
       (if (> y1 VIEW_H) { (set! y1 VIEW_H) })
       ;; 墙色：格子哈希选基色，南北/东西面亮度不同，再加距离雾
       (set! base (mod (+ (* mx 5) (* my 3)) 4))
-      (if (== base 0) { (set! r 190) (set! g 170) (set! b 140) })
-      (if (== base 1) { (set! r 165) (set! g 150) (set! b 175) })
-      (if (== base 2) { (set! r 150) (set! g 175) (set! b 160) })
-      (if (== base 3) { (set! r 185) (set! g 155) (set! b 130) })
-      (set! shade (/ 1.0 (+ 1.0 (* (* 0.30 pdist) pdist))))
-      (if (== side 1) { (set! shade (* shade 0.72)) })
+      (if (== base 0) { (set! r 250) (set! g 238) (set! b 205) })   ; 奶油
+      (if (== base 1) { (set! r 190) (set! g 218) (set! b 248) })   ; 淡蓝
+      (if (== base 2) { (set! r 186) (set! g 236) (set! b 206) })   ; 淡薄荷
+      (if (== base 3) { (set! r 252) (set! g 206) (set! b 190) })   ; 淡桃
+      ;; 浅色风格：用"褪色"代替"变暗"——越远越接近空气色 (238,241,246)，
+      ;; 这样远处依然明亮，像白天的走廊
+      (set! shade (/ 1.0 (+ 1.0 (* (* 0.13 pdist) pdist))))
+      (if (== side 1) { (set! shade (* shade 0.90)) })
       ;; 墙面纹理：命中点在格内的横向位置 → 竖条纹；再叠一条"踢脚线"暗带
       (if (== side 0)
           { (set! wallx (+ CY (* pdist rdy))) }
           { (set! wallx (+ CX (* pdist rdx))) })
       (set! wallx (- wallx (Math.floor wallx)))
       (set! stripe (Math.floor (* wallx 6.0)))
-      (if (== (mod stripe 2) 1) { (set! shade (* shade 0.82)) })
-      (set! r (Math.floor (* r shade)))
-      (set! g (Math.floor (* g shade)))
-      (set! b (Math.floor (* b shade)))
+      (if (== (mod stripe 2) 1) { (set! shade (* shade 0.90)) })
+      ;; 混合：base 与空气色按 shade 插值（shade=1 时就是原色，越小越接近空气）
+      (set! r (Math.floor (+ 198.0 (* (- r 198) shade))))
+      (set! g (Math.floor (+ 208.0 (* (- g 208) shade))))
+      (set! b (Math.floor (+ 224.0 (* (- b 224) shade))))
       (set! hh (- y1 y0))
       (if (> hh 0)
           {
-            (set! hm (+ y0 (Math.floor (* hh 0.62))))
-            (Gfx.fill_rect (* col COLPX) y0 COLPX (- hm y0) r g b)
-            (Gfx.fill_rect (* col COLPX) hm COLPX (- y1 hm)
-                           (Math.floor (* r 0.72)) (Math.floor (* g 0.72)) (Math.floor (* b 0.72))) })
+            ;; 三段：顶部"顶角线"略暗、中段原色、下段"踢脚线"更暗
+            (set! hm (+ y0 (Math.floor (* hh 0.08))))
+            (Gfx.fill_rect (* col COLPX) y0 COLPX (- hm y0)
+                           (Math.floor (* r 0.94)) (Math.floor (* g 0.94)) (Math.floor (* b 0.95)))
+            (set! hm2 (+ hm (Math.floor (* hh 0.54))))
+            (Gfx.fill_rect (* col COLPX) hm COLPX (- hm2 hm) r g b)
+            (Gfx.fill_rect (* col COLPX) hm2 COLPX (- y1 hm2)
+                           (Math.floor (* r 0.84)) (Math.floor (* g 0.84)) (Math.floor (* b 0.86))) })
       (set! col (+ col 1)) })
     (draw_minimap)))
 
@@ -485,14 +492,14 @@
     (define mx 0) (define my 0) (define i 0) (define id 0) (define cx 0) (define cy 0)
     (define px 0) (define py 0) (define hx 0) (define hy 0)
     ;; 底板
-    (Gfx.fill_rect MMX MMY (* MW MMS) (* MH MMS) 8 10 18)
+    (Gfx.fill_rect MMX MMY (* MW MMS) (* MH MMS) 246 247 250)
     ;; 墙
     (set! my 0)
     (while (< my MH) {
       (set! mx 0)
       (while (< mx MW) {
         (if (== (map_at mx my) 1)
-            { (Gfx.fill_rect (+ MMX (* mx MMS)) (+ MMY (* my MMS)) MMS MMS 118 138 168) }
+            { (Gfx.fill_rect (+ MMX (* mx MMS)) (+ MMY (* my MMS)) MMS MMS 150 166 194) }
             {})
         (set! mx (+ mx 1)) })
       (set! my (+ my 1)) })
@@ -502,19 +509,19 @@
       (set! id (get_item path (Math.floor i)))
       (set! cx (Math.floor (mod id CW)))
       (set! cy (Math.floor (/ (+ id 0.0) (+ CW 0.0))))
-      (Gfx.fill_rect (+ MMX (* (+ (* cx 2) 1) MMS)) (+ MMY (* (+ (* cy 2) 1) MMS)) MMS MMS 60 150 80)
+      (Gfx.fill_rect (+ MMX (* (+ (* cx 2) 1) MMS)) (+ MMY (* (+ (* cy 2) 1) MMS)) MMS MMS 78 168 104)
       (set! i (+ i 1)) })
     ;; 目标格
-    (Gfx.fill_rect (+ MMX (* (+ (* goalx 2) 1) MMS)) (+ MMY (* (+ (* goaly 2) 1) MMS)) MMS MMS 220 90 90)
+    (Gfx.fill_rect (+ MMX (* (+ (* goalx 2) 1) MMS)) (+ MMY (* (+ (* goaly 2) 1) MMS)) MMS MMS 226 96 92)
     ;; 摄像机：位置 + 朝向短线
     (set! px (+ MMX (Math.floor (* posx MMS))))
     (set! py (+ MMY (Math.floor (* posy MMS))))
-    (Gfx.fill_rect (- px 1) (- py 1) 3 3 255 235 120)
+    (Gfx.fill_rect (- px 1) (- py 1) 3 3 232 106 38)
     (set! hx (+ px (Math.floor (* dirx 7.0))))
     (set! hy (+ py (Math.floor (* diry 7.0))))
-    (Gfx.draw_line px py hx hy 255 215 90)
+    (Gfx.draw_line px py hx hy 214 84 30)
     ;; 边框
-    (Gfx.draw_rect (- MMX 1) (- MMY 1) (+ (* MW MMS) 2) (+ (* MH MMS) 2) 70 90 120)))
+    (Gfx.draw_rect (- MMX 1) (- MMY 1) (+ (* MW MMS) 2) (+ (* MH MMS) 2) 188 196 210)))
 
 ;; ---- HUD -------------------------------------------------------------------
 
@@ -523,12 +530,12 @@
 
 (define draw_hud
   (lambda ()
-    (Gfx.fill_rect 0 VIEW_H W HUD_H 0 0 0)
-    (Gfx.draw_text "三维迷宫 · 自动漫游" 4 (+ VIEW_H 2) 200 215 235)
+    (Gfx.fill_rect 0 VIEW_H W HUD_H 246 247 250)
+    (Gfx.draw_text "三维迷宫 · 自动漫游" 4 (+ VIEW_H 2) 52 64 84)
     (set! ds (cat3 "A* " (String.atom_to_string path_i)
                    (cat3 "/" (String.atom_to_string (length path))
                          (cat3 "  " (String.atom_to_string frame_ms) "ms"))))
-    (Gfx.draw_text ds 220 (+ VIEW_H 2) 110 140 170)))
+    (Gfx.draw_text ds 220 (+ VIEW_H 2) 96 112 138)))
 
 ;; ---- 主流程 ----------------------------------------------------------------
 
