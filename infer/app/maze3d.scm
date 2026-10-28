@@ -383,23 +383,30 @@
 
 (define draw_backdrop
   (lambda ()
-    (define i 0) (define y0 0) (define y1 0) (define c 0) (define half 0)
+    (define i 0) (define y0 0) (define y1 0)
+    (define half 0) (define f 0.0) (define r 0) (define g 0) (define b 0)
     (set! half (/ VIEW_H 2))          ; 112
-    ;; 浅色风格：顶棚接近白（(246,247,250) → 地平线略暗），地板是浅暖灰
-    ;; 整数分段保证无缝，否则会留下 1px 亮线
+    ;; 顶棚：自上而下 lerp(cA → cB)，10 段（段数少能看出台阶）
     (set! i 0)
     (while (< i 10) {
       (set! y0 (/ (* i half) 10))
       (set! y1 (/ (* (+ i 1) half) 10))
-      (set! c (- 253 (* i 2)))
-      (Gfx.fill_rect 0 y0 W (- y1 y0) c c (+ c 2))
+      (set! f (/ (+ i 0.0) 9.0))
+      (set! r (Math.floor (+ cAr (* (- cBr cAr) f))))
+      (set! g (Math.floor (+ cAg (* (- cBg cAg) f))))
+      (set! b (Math.floor (+ cAb (* (- cBb cAb) f))))
+      (Gfx.fill_rect 0 y0 W (- y1 y0) r g b)
       (set! i (+ i 1)) })
+    ;; 地板：地平线 → 底部 lerp(fA → fB)
     (set! i 0)
     (while (< i 10) {
       (set! y0 (+ half (/ (* i half) 10)))
       (set! y1 (+ half (/ (* (+ i 1) half) 10)))
-      (set! c (- 219 (* i 3)))
-      (Gfx.fill_rect 0 y0 W (- y1 y0) c (- c 6) (- c 18))
+      (set! f (/ (+ i 0.0) 9.0))
+      (set! r (Math.floor (+ fAr (* (- fBr fAr) f))))
+      (set! g (Math.floor (+ fAg (* (- fBg fAg) f))))
+      (set! b (Math.floor (+ fAb (* (- fBb fAb) f))))
+      (Gfx.fill_rect 0 y0 W (- y1 y0) r g b)
       (set! i (+ i 1)) })))
 
 (define render
@@ -450,38 +457,153 @@
       (if (> y1 VIEW_H) { (set! y1 VIEW_H) })
       ;; 墙色：格子哈希选基色，南北/东西面亮度不同，再加距离雾
       (set! base (mod (+ (* mx 5) (* my 3)) 4))
-      (if (== base 0) { (set! r 250) (set! g 238) (set! b 205) })   ; 奶油
-      (if (== base 1) { (set! r 190) (set! g 218) (set! b 248) })   ; 淡蓝
-      (if (== base 2) { (set! r 186) (set! g 236) (set! b 206) })   ; 淡薄荷
-      (if (== base 3) { (set! r 252) (set! g 206) (set! b 190) })   ; 淡桃
-      ;; 浅色风格：用"褪色"代替"变暗"——越远越接近空气色 (238,241,246)，
-      ;; 这样远处依然明亮，像白天的走廊
-      (set! shade (/ 1.0 (+ 1.0 (* (* 0.13 pdist) pdist))))
-      (if (== side 1) { (set! shade (* shade 0.90)) })
+      (if (== base 0) { (set! r w0r) (set! g w0g) (set! b w0b) })
+      (if (== base 1) { (set! r w1r) (set! g w1g) (set! b w1b) })
+      (if (== base 2) { (set! r w2r) (set! g w2g) (set! b w2b) })
+      (if (== base 3) { (set! r w3r) (set! g w3g) (set! b w3b) })
+      ;; 距离雾：与"空气色"插值（shade=1 是原色，越小越接近空气色）
+      (set! shade (/ 1.0 (+ 1.0 (* (* fogk pdist) pdist))))
+      (if (== side 1) { (set! shade (* shade sidek)) })
       ;; 墙面纹理：命中点在格内的横向位置 → 竖条纹；再叠一条"踢脚线"暗带
       (if (== side 0)
           { (set! wallx (+ CY (* pdist rdy))) }
           { (set! wallx (+ CX (* pdist rdx))) })
       (set! wallx (- wallx (Math.floor wallx)))
       (set! stripe (Math.floor (* wallx 6.0)))
-      (if (== (mod stripe 2) 1) { (set! shade (* shade 0.90)) })
+      (if (== (mod stripe 2) 1) { (set! shade (* shade stripek)) })
       ;; 混合：base 与空气色按 shade 插值（shade=1 时就是原色，越小越接近空气）
-      (set! r (Math.floor (+ 198.0 (* (- r 198) shade))))
-      (set! g (Math.floor (+ 208.0 (* (- g 208) shade))))
-      (set! b (Math.floor (+ 224.0 (* (- b 224) shade))))
+      (set! r (Math.floor (+ airr (* (- r airr) shade))))
+      (set! g (Math.floor (+ airg (* (- g airg) shade))))
+      (set! b (Math.floor (+ airb (* (- b airb) shade))))
       (set! hh (- y1 y0))
       (if (> hh 0)
           {
             ;; 三段：顶部"顶角线"略暗、中段原色、下段"踢脚线"更暗
             (set! hm (+ y0 (Math.floor (* hh 0.08))))
             (Gfx.fill_rect (* col COLPX) y0 COLPX (- hm y0)
-                           (Math.floor (* r 0.94)) (Math.floor (* g 0.94)) (Math.floor (* b 0.95)))
+                           (Math.floor (* r crownk)) (Math.floor (* g crownk)) (Math.floor (* b crownk)))
             (set! hm2 (+ hm (Math.floor (* hh 0.54))))
             (Gfx.fill_rect (* col COLPX) hm COLPX (- hm2 hm) r g b)
             (Gfx.fill_rect (* col COLPX) hm2 COLPX (- y1 hm2)
-                           (Math.floor (* r 0.84)) (Math.floor (* g 0.84)) (Math.floor (* b 0.86))) })
+                           (Math.floor (* r basek)) (Math.floor (* g basek)) (Math.floor (* b basek))) })
       (set! col (+ col 1)) })
     (draw_minimap)))
+
+;; ---- 配色主题（可切换）-----------------------------------------------------
+;; 所有颜色都提到这里：换主题只是重设这一批变量，绘制函数里不再出现裸颜色值。
+;; 三套：浅色（白天走廊）/ 暗色（原版、夜晚走廊）/ 夜蓝（冷调霓虹）。
+
+(define theme 0)
+(define themename "浅色")
+(define theme_count 3)
+
+;; 顶棚：自上而下 lerp(ceilA → ceilB)；地板：地平线 → 底部 lerp(floorA → floorB)
+(define cAr 0) (define cAg 0) (define cAb 0)
+(define cBr 0) (define cBg 0) (define cBb 0)
+(define fAr 0) (define fAg 0) (define fAb 0)
+(define fBr 0) (define fBg 0) (define fBb 0)
+;; 四面墙的基色
+(define w0r 0) (define w0g 0) (define w0b 0)
+(define w1r 0) (define w1g 0) (define w1b 0)
+(define w2r 0) (define w2g 0) (define w2b 0)
+(define w3r 0) (define w3g 0) (define w3b 0)
+;; 空气色（雾的目标色）与各调制系数
+(define airr 0) (define airg 0) (define airb 0)
+(define fogk 0.13)
+(define sidek 0.90)
+(define stripek 0.90)
+(define crownk 0.94)
+(define basek 0.84)
+;; 小地图与 HUD
+(define mbgr 0) (define mbgg 0) (define mbgb 0)       ; 小地图底
+(define mwllr 0) (define mwllg 0) (define mwllb 0)    ; 小地图墙
+(define mpthr 0) (define mpthg 0) (define mpthb 0)    ; 规划路线
+(define mgolr 0) (define mgolg 0) (define mgolb 0)    ; 目标格
+(define mcamr 0) (define mcamg 0) (define mcamb 0)    ; 摄像机
+(define mhedr 0) (define mhedg 0) (define mhedb 0)    ; 朝向线
+(define mbdrr 0) (define mbdrg 0) (define mbdrb 0)    ; 边框
+(define hudr 0) (define hudg 0) (define hudb 0)       ; HUD 底
+(define hfgr 0) (define hfgg 0) (define hfgb 0)       ; HUD 主文字
+(define hf2r 0) (define hf2g 0) (define hf2b 0)       ; HUD 次文字
+
+(define theme_set
+  (lambda (t)
+    (set! theme t)
+    (if (== t 0)
+        {
+          (set! themename "浅色")
+          (set! cAr 253) (set! cAg 253) (set! cAb 255)
+          (set! cBr 232) (set! cBg 234) (set! cBb 240)
+          (set! fAr 219) (set! fAg 213) (set! fAb 201)
+          (set! fBr 198) (set! fBg 190) (set! fBb 176)
+          (set! w0r 250) (set! w0g 238) (set! w0b 205)
+          (set! w1r 190) (set! w1g 218) (set! w1b 248)
+          (set! w2r 186) (set! w2g 236) (set! w2b 206)
+          (set! w3r 252) (set! w3g 206) (set! w3b 190)
+          (set! airr 198) (set! airg 208) (set! airb 224)
+          (set! fogk 0.13) (set! sidek 0.90) (set! stripek 0.90)
+          (set! crownk 0.94) (set! basek 0.84)
+          (set! mbgr 246) (set! mbgg 247) (set! mbgb 250)
+          (set! mwllr 150) (set! mwllg 166) (set! mwllb 194)
+          (set! mpthr 78) (set! mpthg 168) (set! mpthb 104)
+          (set! mgolr 226) (set! mgolg 96) (set! mgolb 92)
+          (set! mcamr 232) (set! mcamg 106) (set! mcamb 38)
+          (set! mhedr 214) (set! mhedg 84) (set! mhedb 30)
+          (set! mbdrr 188) (set! mbdrg 196) (set! mbdrb 210)
+          (set! hudr 246) (set! hudg 247) (set! hudb 250)
+          (set! hfgr 52) (set! hfgg 64) (set! hfgb 84)
+          (set! hf2r 96) (set! hf2g 112) (set! hf2b 138) }
+        {})
+    (if (== t 1)
+        {
+          (set! themename "暗色")
+          (set! cAr 16) (set! cAg 21) (set! cAb 32)
+          (set! cBr 51) (set! cBg 56) (set! cBb 67)
+          (set! fAr 52) (set! fAg 52) (set! fAb 45)
+          (set! fBr 8) (set! fBg 8) (set! fBb 13)
+          (set! w0r 190) (set! w0g 170) (set! w0b 140)
+          (set! w1r 165) (set! w1g 150) (set! w1b 175)
+          (set! w2r 150) (set! w2g 175) (set! w2b 160)
+          (set! w3r 185) (set! w3g 155) (set! w3b 130)
+          (set! airr 10) (set! airg 12) (set! airb 18)
+          (set! fogk 0.30) (set! sidek 0.72) (set! stripek 0.82)
+          (set! crownk 1.00) (set! basek 0.72)
+          (set! mbgr 8) (set! mbgg 10) (set! mbgb 18)
+          (set! mwllr 118) (set! mwllg 138) (set! mwllb 168)
+          (set! mpthr 60) (set! mpthg 150) (set! mpthb 80)
+          (set! mgolr 220) (set! mgolg 90) (set! mgolb 90)
+          (set! mcamr 255) (set! mcamg 235) (set! mcamb 120)
+          (set! mhedr 255) (set! mhedg 215) (set! mhedb 90)
+          (set! mbdrr 70) (set! mbdrg 90) (set! mbdrb 120)
+          (set! hudr 0) (set! hudg 0) (set! hudb 0)
+          (set! hfgr 200) (set! hfgg 215) (set! hfgb 235)
+          (set! hf2r 110) (set! hf2g 140) (set! hf2b 170) }
+        {})
+    (if (== t 2)
+        {
+          (set! themename "夜蓝")
+          (set! cAr 12) (set! cAg 20) (set! cAb 42)
+          (set! cBr 20) (set! cBg 32) (set! cBb 58)
+          (set! fAr 16) (set! fAg 24) (set! fAb 40)
+          (set! fBr 6) (set! fBg 9) (set! fBb 16)
+          (set! w0r 62) (set! w0g 122) (set! w0b 152)
+          (set! w1r 74) (set! w1g 102) (set! w1b 146)
+          (set! w2r 52) (set! w2g 148) (set! w2b 134)
+          (set! w3r 96) (set! w3g 134) (set! w3b 176)
+          (set! airr 12) (set! airg 20) (set! airb 38)
+          (set! fogk 0.16) (set! sidek 0.80) (set! stripek 0.88)
+          (set! crownk 1.00) (set! basek 0.78)
+          (set! mbgr 10) (set! mbgg 16) (set! mbgb 30)
+          (set! mwllr 60) (set! mwllg 110) (set! mwllb 150)
+          (set! mpthr 60) (set! mpthg 200) (set! mpthb 160)
+          (set! mgolr 250) (set! mgolg 160) (set! mgolb 60)
+          (set! mcamr 255) (set! mcamg 220) (set! mcamb 80)
+          (set! mhedr 255) (set! mhedg 200) (set! mhedb 60)
+          (set! mbdrr 40) (set! mbdrg 70) (set! mbdrb 100)
+          (set! hudr 8) (set! hudg 14) (set! hudb 28)
+          (set! hfgr 170) (set! hfgg 230) (set! hfgb 250)
+          (set! hf2r 90) (set! hf2g 140) (set! hf2b 170) }
+        {})))
 
 ;; ---- 左上角迷宫全图 --------------------------------------------------------
 
@@ -492,14 +614,14 @@
     (define mx 0) (define my 0) (define i 0) (define id 0) (define cx 0) (define cy 0)
     (define px 0) (define py 0) (define hx 0) (define hy 0)
     ;; 底板
-    (Gfx.fill_rect MMX MMY (* MW MMS) (* MH MMS) 246 247 250)
+    (Gfx.fill_rect MMX MMY (* MW MMS) (* MH MMS) mbgr mbgg mbgb)
     ;; 墙
     (set! my 0)
     (while (< my MH) {
       (set! mx 0)
       (while (< mx MW) {
         (if (== (map_at mx my) 1)
-            { (Gfx.fill_rect (+ MMX (* mx MMS)) (+ MMY (* my MMS)) MMS MMS 150 166 194) }
+            { (Gfx.fill_rect (+ MMX (* mx MMS)) (+ MMY (* my MMS)) MMS MMS mwllr mwllg mwllb) }
             {})
         (set! mx (+ mx 1)) })
       (set! my (+ my 1)) })
@@ -509,19 +631,19 @@
       (set! id (get_item path (Math.floor i)))
       (set! cx (Math.floor (mod id CW)))
       (set! cy (Math.floor (/ (+ id 0.0) (+ CW 0.0))))
-      (Gfx.fill_rect (+ MMX (* (+ (* cx 2) 1) MMS)) (+ MMY (* (+ (* cy 2) 1) MMS)) MMS MMS 78 168 104)
+      (Gfx.fill_rect (+ MMX (* (+ (* cx 2) 1) MMS)) (+ MMY (* (+ (* cy 2) 1) MMS)) MMS MMS mpthr mpthg mpthb)
       (set! i (+ i 1)) })
     ;; 目标格
-    (Gfx.fill_rect (+ MMX (* (+ (* goalx 2) 1) MMS)) (+ MMY (* (+ (* goaly 2) 1) MMS)) MMS MMS 226 96 92)
+    (Gfx.fill_rect (+ MMX (* (+ (* goalx 2) 1) MMS)) (+ MMY (* (+ (* goaly 2) 1) MMS)) MMS MMS mgolr mgolg mgolb)
     ;; 摄像机：位置 + 朝向短线
     (set! px (+ MMX (Math.floor (* posx MMS))))
     (set! py (+ MMY (Math.floor (* posy MMS))))
-    (Gfx.fill_rect (- px 1) (- py 1) 3 3 232 106 38)
+    (Gfx.fill_rect (- px 1) (- py 1) 3 3 mcamr mcamg mcamb)
     (set! hx (+ px (Math.floor (* dirx 7.0))))
     (set! hy (+ py (Math.floor (* diry 7.0))))
-    (Gfx.draw_line px py hx hy 214 84 30)
+    (Gfx.draw_line px py hx hy mhedr mhedg mhedb)
     ;; 边框
-    (Gfx.draw_rect (- MMX 1) (- MMY 1) (+ (* MW MMS) 2) (+ (* MH MMS) 2) 188 196 210)))
+    (Gfx.draw_rect (- MMX 1) (- MMY 1) (+ (* MW MMS) 2) (+ (* MH MMS) 2) mbdrr mbdrg mbdrb)))
 
 ;; ---- HUD -------------------------------------------------------------------
 
@@ -530,12 +652,12 @@
 
 (define draw_hud
   (lambda ()
-    (Gfx.fill_rect 0 VIEW_H W HUD_H 246 247 250)
-    (Gfx.draw_text "三维迷宫 · 自动漫游" 4 (+ VIEW_H 2) 52 64 84)
+    (Gfx.fill_rect 0 VIEW_H W HUD_H hudr hudg hudb)
+    (Gfx.draw_text (cat3 "三维迷宫 · " themename " 漫游") 4 (+ VIEW_H 2) hfgr hfgg hfgb)
     (set! ds (cat3 "A* " (String.atom_to_string path_i)
                    (cat3 "/" (String.atom_to_string (length path))
                          (cat3 "  " (String.atom_to_string frame_ms) "ms"))))
-    (Gfx.draw_text ds 220 (+ VIEW_H 2) 96 112 138)))
+    (Gfx.draw_text ds 220 (+ VIEW_H 2) hf2r hf2g hf2b)))
 
 ;; ---- 主流程 ----------------------------------------------------------------
 
@@ -564,6 +686,7 @@
 (pop map) (pop visited)
 (define q 0)
 (while (< q MSIZE) { (push map 1) (push visited 0) (set! q (+ q 1)) })
+(theme_set 0)
 (astar_init)
 (new_maze)
 (set! _timer (System.set_interval TICK_MS tick_fn))
