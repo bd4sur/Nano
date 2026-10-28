@@ -383,25 +383,26 @@
 
 (define draw_backdrop
   (lambda ()
-    (define i 0) (define y0 0) (define y1 0)
+    (define i 0) (define y0 0) (define y1 0) (define y2 0)
     (define half 0) (define f 0.0) (define r 0) (define g 0) (define b 0)
     (set! half (/ VIEW_H 2))          ; 112
-    ;; 顶棚：自上而下 lerp(cA → cB)，10 段（段数少能看出台阶）
+    ;; **分段边界必须先取整再用**：`/` 在本解释器里恒为浮点，若把浮点 y0/y1 直接交给
+    ;; fill_rect，native 会各自截断——高度 (y1-y0) 截断后比 y 的差值小，于是每隔几段
+    ;; 就漏掉一整行（黑线）。这里先 floor 到整数，再用 y1-y0 作为高度，保证首尾相接。
     (set! i 0)
     (while (< i 10) {
-      (set! y0 (/ (* i half) 10))
-      (set! y1 (/ (* (+ i 1) half) 10))
+      (set! y0 (Math.floor (/ (* i half) 10)))
+      (set! y1 (Math.floor (/ (* (+ i 1) half) 10)))
       (set! f (/ (+ i 0.0) 9.0))
       (set! r (Math.floor (+ cAr (* (- cBr cAr) f))))
       (set! g (Math.floor (+ cAg (* (- cBg cAg) f))))
       (set! b (Math.floor (+ cAb (* (- cBb cAb) f))))
       (Gfx.fill_rect 0 y0 W (- y1 y0) r g b)
       (set! i (+ i 1)) })
-    ;; 地板：地平线 → 底部 lerp(fA → fB)
     (set! i 0)
     (while (< i 10) {
-      (set! y0 (+ half (/ (* i half) 10)))
-      (set! y1 (+ half (/ (* (+ i 1) half) 10)))
+      (set! y0 (Math.floor (+ half (/ (* i half) 10))))
+      (set! y1 (Math.floor (+ half (/ (* (+ i 1) half) 10))))
       (set! f (/ (+ i 0.0) 9.0))
       (set! r (Math.floor (+ fAr (* (- fBr fAr) f))))
       (set! g (Math.floor (+ fAg (* (- fBg fAg) f))))
