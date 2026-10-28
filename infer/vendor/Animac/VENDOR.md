@@ -74,6 +74,9 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
 
 - `infer/am_native_Gfx.c/.h` —— Nano 图形层（Nano_GFX）FFI
 - `infer/am_native_Time.c/.h` —— 整数时间（utc_days / utc_sod）
+- `infer/am_native_Diag.c/.h` —— 虚拟机自观测（只读：操作数栈/调用栈深度、PC、指令区长度、
+  闭包帧描述符与退化闭包计数、槽位统计、GC 计数、单调实时毫秒）；供 `app/xray.scm` 的
+  "解释器 X 光"仪表盘使用，也是排查解释器问题时的现场仪器
 
 它们必须遵守上游本地库契约（上游 `doc/todo/stack_bal.md` §11 N1–N10）：
 
