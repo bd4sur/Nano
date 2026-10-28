@@ -130,6 +130,17 @@ void platform_file_close(void) {
 //   filenames ：为 NULL 时仅返回条目数量；
 //               非 NULL 时逐个 platform_malloc 填充文件名（调用方负责 free）。
 // 返回值：>=0 条目数量；-1 目录打开失败；-2 内存分配失败（已填充项回滚释放）。
+// qsort 比较器：让目录列举结果按名字排序（原先直接用 readdir 顺序，
+// 在 ext4 上受目录哈希影响，同一个 App 列表在不同机器/不同构建之间顺序会变——
+// 侧边菜单与 e2e 回归都依赖稳定的顺序）
+static int list_files_name_cmp(const void *a, const void *b) {
+    const char *const *pa = (const char *const *)a;
+    const char *const *pb = (const char *const *)b;
+    if (!*pa) return (*pb) ? 1 : 0;
+    if (!*pb) return -1;
+    return strcmp(*pa, *pb);
+}
+
 int32_t list_files(const char *dir, char **filenames) {
     if (!dir) return -1;
 
@@ -160,6 +171,7 @@ int32_t list_files(const char *dir, char **filenames) {
     }
 
     closedir(dp);
+    if (filenames && count > 0) qsort(filenames, (size_t)count, sizeof(char *), list_files_name_cmp);
     return count;
 }
 
