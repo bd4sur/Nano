@@ -23,24 +23,25 @@
 ;; 翻卷、贴壁爬——正好把这个算法最有趣的流动现象演出来。
 ;;
 ;; 最终参数与实测（host x86-64）：
-;;   网格 32×22（每格 10 px）、粒子 595（交错排列，约 2 粒/格）、压力迭代 20 轮；
-;;   物理每 2 拍推进一次（`PHYS_EVERY=2`），渲染每拍都做；
-;;   平均 17 ms/拍（物理拍约 33 ms）→ 40 ms 定时器下约 40% CPU，
-;;   浏览器 wasm32 上大约 2.5 倍，仍在 40 ms 预算内。
+;;   网格 26×18（每格 12 px）、粒子约 200（交错排列，RAD=0.45）、压力迭代 11 轮；
+;;   物理每拍一步、渲染每拍都做；平均 **11.6 ms/拍** → 40 ms 定时器下约 29% CPU。
+;;   浏览器 wasm32 上约 2.5 倍（~30 ms），仍在预算内。粒子数按"流畅优先"定：
+;;   最初是 595 粒（17 ms/拍），实测在 PC 浏览器上帧率太低，降到现在的约三分之一。
 ;;
-;; 粒子数是最容易调的旋钮：`RAD` 决定交错间距（dx=2R），粒子数 ≈ 面积/dx²。
-;; 想加粒子就调小 RAD——但要同时注意下面这条稳定性经验。
+;; 重力：像"船在浪里"那样缓慢摇摆 —— 主摇摆是正弦（周期约 6~11 s，随机抖动），
+;;   幅度 0.25~0.85 rad（14°~49°）也做低频随机游走，所以方向变化明显但不机械。
+;;   注意 `gang` 是倾斜角、`gx` 横向分量、`gy` 为主；角度过大时流体仍会被甩上侧壁
+;;   （视觉上是浪花，属正常现象）。
 ;;
-;; 稳定性经验（重要，都是踩出来的）：
-;;   · 每步重力不能太大：G_RATE 超过约 0.008（格/步²）时压力求解跟不上，
-;;     流体会"沸腾"式发散（粒子被拍到天花板）。0.004~0.006 稳定；
-;;   · 压力迭代不能太少：本项目条件下 20 轮稳定，12 轮就开始发散；
+;; 稳定性经验（都是踩出来的）：
+;;   · 每步重力不能大：G_RATE 超过约 0.008（格/步²）压力求解就跟不上，流体"沸腾"发散；
+;;   · 压力迭代不能太少：本项目条件下 10~12 轮是下限，再少就开始发散；
 ;;   · 贴壁面的速度分量必须按"本工程 y 轴向下"的方向归零（flip.c 是 y 向上，
-;;     照抄 j-1 会漏掉贴地那一面，压力永远堵不住流入 → 流体会被顶到天花板）；
-;;   · 采样点必须先夹到 [1.5, GW-1.5] 再算双线性权重，否则贴壁粒子会得到负权重，
-;;     等于往网格里注射能量；
-;;   · 另加了两个 C 版没有的便宜稳定器：粒子速度阻尼（VEL_DAMP）与
-;;     按粒子密度梯度推开过密粒子（SEP_K，代替 C 版的 push_particles_apart）。
+;;     照抄 j-1 会漏掉贴地那一面，压力永远堵不住流入 → 流体被顶到天花板）；
+;;   · 双线性权重必须先把采样点夹到 [1.5, GW-1.5] 再算，否则贴壁粒子得到负权重，
+;;     等于每步往网格里注射能量；
+;;   · 另加了两个 C 版没有的便宜稳定器：粒子速度阻尼（VEL_DAMP）与按密度梯度
+;;     推开过密粒子（SEP_K，代替 C 版的 push_particles_apart）。
 ;;
 ;; 按《灵机用户参考手册》编写：算术固定二参数、`/` 与 `mod` 恒浮点（下标一律
 ;; Math.floor）、不用 let/case/do/for/return 与 list/append/map、define 无简写、
@@ -59,22 +60,22 @@
 (define H (Gfx.height))           ; 240
 (define HUD_H 16)
 (define VH (- H HUD_H))           ; 224
-(define CELL 10)                  ; 每格像素
-(define GW 32)                    ; 网格列数
-(define GH 22)                    ; 网格行数
+(define CELL 12)                  ; 每格像素
+(define GW 26)                    ; 网格列数
+(define GH 18)                    ; 网格行数
 (define NC (* GW GH))
 (define TICK_MS 40)
-(define PHYS_EVERY 2)             ; 每 N 拍推进一次物理（渲染每拍都做）
+(define PHYS_EVERY 1)             ; 每 N 拍推进一次物理（渲染每拍都做）
 
 ;; 物理参数（单位：格 / 步）
 (define G_RATE 0.005)             ; 重力大小（格/步²）
 (define FLIP_RATIO 0.5)          ; FLIP 比例（1=纯 FLIP，0=纯 PIC）
-(define PRESS_ITERS 20)            ; 压力迭代次数（Gauss-Seidel + 超松弛）
+(define PRESS_ITERS 11)            ; 压力迭代次数（Gauss-Seidel + 超松弛）
 (define DRIFT_K 0.0)              ; drift 补偿强度（0=关闭）
-(define VEL_DAMP 0.90)           ; 粒子速度阻尼
-(define SEP_K 0.02)                ; 按密度梯度分离粒子的强度
+(define VEL_DAMP 0.86)           ; 粒子速度阻尼
+(define SEP_K 0.05)                ; 按密度梯度分离粒子的强度
 (define OVER_RELAX 1.8)           ; 超松弛系数（>1 收敛更快）
-(define RAD 0.34)                 ; 粒子半径（格）
+(define RAD 0.45)                 ; 粒子半径（格）：间距 2R，粒子数 ≈ 面积/dx²
 (define VMAX 0.60)                ; 速度上限（格/步），保证 CFL
 
 ;; ---- 网格场（扁平表，索引 i*GH + j）---------------------------------------
@@ -101,7 +102,11 @@
 
 ;; ---- 状态 ------------------------------------------------------------------
 
-(define gang 0.0)                 ; 重力方向（弧度，缓慢随机游走）
+(define gang 0.0)                 ; 重力方向（弧度）
+(define gr_t 0.0)                 ; 摇摆相位（拍）
+(define gr_period 190.0)          ; 摇摆周期（拍，约 7.6 s）
+(define gr_amp 0.45)              ; 摇摆幅度（弧度，约 26°）
+(define gr_phase 0.0)
 (define gx 0.0)
 (define gy 0.0)
 (define frame_ms 0)
@@ -154,7 +159,8 @@
     (define i 0)
     (clear_list px) (clear_list py) (clear_list vx) (clear_list vy)
     ;; 水块：宽度 1..GW-1，高度占下方 45%
-    (fill_block (- GH 1.4) (* GH 0.55) (- GW 1.4) 1.4)
+    ;; 水块：底部约 1/3 高度（粒子数约为最初的三分之一，换来流畅帧率）
+    (fill_block (- GH 1.4) 9.6 (- GW 1.4) 1.4)
     (set! np (length px))
     (set! gang 0.0)
     (set! gx 0.0)
@@ -535,12 +541,23 @@
 
 (define turn_gravity
   (lambda ()
-    ;; 缓慢随机游走；把角度限制在 ±50° 内，保证重力始终朝下为主，
-    ;; 否则重力会绕到"朝上"，流体被拍到天花板上去（虽然也物理，但不好看）
-    (set! gang (+ gang (* (- (Math.random) 0.5) 0.06)))
-    (if (> gang 0.87) { (set! gang 0.87) })
-    (if (< gang -0.87) { (set! gang -0.87) })
-    ;; gang=0 表示竖直向下；随随机游走缓慢改变方向
+    ;; 像船在浪里：主摇摆用正弦（周期 ~8 s），幅度/相位/周期各自再做缓慢随机游走，
+    ;; 于是摇晃既有明显的方向变化，又不会机械地完全周期性。
+    (set! gr_t (+ gr_t 1.0))
+    (if (>= gr_t gr_period) { (set! gr_t (- gr_t gr_period)) })
+    (set! gang (* gr_amp (Math.sin (+ (* 6.28318 (/ gr_t gr_period)) gr_phase))))
+    ;; 每次摆到极端时微调幅度/周期/相位（低频抖动）
+    (if (== (mod tick_no 32) 0)
+        {
+          (set! gr_amp (+ gr_amp (* (- (Math.random) 0.5) 0.22)))
+          (if (> gr_amp 0.85) { (set! gr_amp 0.85) })
+          (if (< gr_amp 0.25) { (set! gr_amp 0.25) })
+          (set! gr_period (+ gr_period (* (- (Math.random) 0.5) 40.0)))
+          (if (> gr_period 280.0) { (set! gr_period 280.0) })
+          (if (< gr_period 120.0) { (set! gr_period 120.0) })
+          (set! gr_phase (+ gr_phase (* (- (Math.random) 0.5) 0.5))) }
+        {})
+    ;; gang=0 表示竖直向下；这里让重力沿摇摆角倾斜（gx 横向、gy 竖直）
     (set! gx (* G_RATE (Math.sin gang)))
     (set! gy (* G_RATE (Math.cos gang)))))
 
@@ -564,7 +581,7 @@
       (set! r (Math.floor (+ 40.0 (* 190.0 t))))
       (set! g (Math.floor (+ 110.0 (* 130.0 t))))
       (set! b (Math.floor (+ 210.0 (* 40.0 t))))
-      (Gfx.fill_rect x y 5 5 r g b)
+      (Gfx.fill_rect x y 8 8 r g b)
       (set! i (+ i 1)) })))
 
 ;; ---- HUD -------------------------------------------------------------------
