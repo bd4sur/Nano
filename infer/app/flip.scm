@@ -27,14 +27,11 @@
 ;;   压力迭代 12 轮 + **粒子分离**（桶排序 + 3×3 邻居，照 flip.c 的 push_particles_apart）；
 ;;   平均约 **18 ms/拍** → 40 ms 定时器下约 45% CPU；浏览器 wasm32 约 45 ms（≈22 fps）。
 ;;
-;; 重力：二维重力矢量的**大幅度缓慢摇摆**（要的就是"船在浪里"）：
-;;     gang = amp·sin(2π·t/period + phase)        gang=0 即竖直向下
-;;     gx = G·sin(gang)，gy = G·cos(gang)
-;;     amp 基准 1.05 rad（60°），叠一层慢正弦在 0.89~1.21 rad 之间起伏
-;;     period 基准 39 拍（≈2 s），叠慢正弦在 28~50 拍之间起伏
-;;     相位每 40 拍做一次小幅随机游走，避免机械周期
-;;   重力矢量因此在 ±60° 附近来回扫（扫过 120° 弧），一个来回约 2 s ——
-;;   液面持续往一侧涌、拍上侧壁再荡回来，节奏相当快。
+;; 重力 = **洗衣机滚筒**：重力方向连续旋转 360°（不是来回摆），转速按
+;;   "洗涤（慢转）→ 加速 → 脱水（快转）→ 减速" 循环（周期 900 拍 ≈ 45 s@20fps）：
+;;     drum_ang += ω，ω 在 0.030（约 6 s 一圈）~ 0.170（约 1.1 s 一圈）之间
+;;     gx = gm·sin(drum_ang)，gy = gm·cos(drum_ang)，脱水时 gm = 2.6×G_RATE
+;;     另有离心项 cent_k·(p − 筒心)：脱水时把水压向筒壁，中间留空 —— 就是滚筒甩干的样子。
 ;;
 ;; 两个关键点（都是实测出来的）：
 ;;   1) **粒子分离是"敢大幅摇晃"的前提**。没有它，流体在持续晃动下会慢慢扩散成雾气
@@ -83,6 +80,8 @@
 (define OVER_RELAX 1.8)           ; 超松弛系数（>1 收敛更快）
 (define RAD 0.42)                 ; 粒子半径（格）：间距 2R，粒子数 ≈ 面积/dx²
 (define VMAX 0.60)                ; 速度上限（格/步），保证 CFL
+(define DRUM_CX (/ GW 2.0))       ; 滚筒中心（= 画面中心）
+(define DRUM_CY (/ GH 2.0))
 
 ;; ---- 网格场（扁平表，索引 i*GH + j）---------------------------------------
 
@@ -111,13 +110,20 @@
 
 ;; ---- 状态 ------------------------------------------------------------------
 
-(define gang 0.0)                 ; 重力方向（弧度）
-(define gr_t 0.0)                 ; 摇摆相位（拍）
-(define gr_period 39.0)           ; 摇摆周期（拍，约 3 s，随慢正弦变化）
-(define GR_PERIOD0 39.0)          ; 周期基准（拍）
-(define GR_AMP0 1.05)             ; 幅度基准（rad ≈ 60°）
-(define gr_amp 1.05)              ; 摇摆幅度（弧度，约 60°，随慢正弦变化）
-(define gr_phase 0.0)
+(define drum_ang 0.0)              ; 滚筒当前角度（弧度）
+(define drum_w 0.02)              ; 当前角速度（rad/步）
+(define drum_s 0.0)               ; 0=洗涤 1=脱水
+(define drum_t 0.0)               ; 循环相位
+(define gm G_RATE)                ; 当前表观重力大小
+(define cent_k 0.0)               ; 当前离心系数（由 turn_gravity 设置）
+;; 滚筒循环：0~500 洗涤慢转 → 500~600 加速 → 600~800 脱水快转 → 800~900 减速
+(define CYCLE_T 900.0)
+(define WASH_T 500.0)
+(define RAMP1_T 600.0)
+(define SPIN_T 800.0)
+(define W_WASH 0.030)             ; 洗涤角速度（rad/步，约 6 s 一圈）
+(define W_SPIN 0.170)             ; 脱水角速度（rad/步，约 1.1 s 一圈）
+(define CENT_K 0.0016)            ; 离心加速度系数（×距离）
 (define gx 0.0)
 (define gy 0.0)
 (define frame_ms 0)
@@ -194,6 +200,12 @@
     (while (< i np) {
       (set! ax (+ (get_item vx i) gx))
       (set! ay (+ (get_item vy i) gy))
+      ;; 滚筒离心项：指向筒外（脱水时 cent_k>0）
+      (if (> cent_k 0.0)
+          {
+            (set! ax (+ ax (* cent_k (- (get_item px i) DRUM_CX))))
+            (set! ay (+ ay (* cent_k (- (get_item py i) DRUM_CY)))) }
+          {})
       ;; 速度上限，防止 CFL 崩掉
       (if (> ax VMAX) { (set! ax VMAX) })
       (if (< ax (- 0.0 VMAX)) { (set! ax (- 0.0 VMAX)) })
@@ -617,21 +629,30 @@
 
 (define turn_gravity
   (lambda ()
-    ;; "船在浪里"：主摇摆 = 大振幅正弦（约 60°），周期 2~4 s；
-    ;; 幅度与周期各自再叠一层慢正弦调制（不随机），保证**始终**是大摆幅，
-    ;; 相位做小幅随机游走，避免机械的完全周期性。
-    (set! gr_t (+ gr_t 1.0))
-    (set! gr_period (+ GR_PERIOD0 (* 11.0 (Math.sin (* 6.28318 (/ gr_t 310.0))))))
-    (set! gr_amp (+ GR_AMP0 (* 0.16 (Math.sin (+ (* 6.28318 (/ gr_t 215.0)) 1.1)))))
-    (if (>= gr_t gr_period) { (set! gr_t (- gr_t gr_period)) })
-    (if (== (mod tick_no 20) 0)
-        { (set! gr_phase (+ gr_phase (* (- (Math.random) 0.5) 0.35))) }
-        {})
-    (set! gang (* gr_amp (Math.sin (+ (* 6.28318 (/ gr_t gr_period)) gr_phase))))
-    ;; gang=0 表示竖直向下；重力沿摇摆角倾斜（gx 横向、gy 竖直）
-    (set! gx (* G_RATE (Math.sin gang)))
-    (set! gy (* G_RATE (Math.cos gang)))))
-
+    ;; 洗衣机滚筒：重力方向**连续旋转 360°**（不是来回摆），转速按"洗涤 → 脱水 → 洗涤"
+    ;; 循环变化，脱水时表观重力也加大（转速越快，离心力把水压在筒壁上）。
+    (set! drum_t (+ drum_t 1.0))
+    (if (>= drum_t CYCLE_T) { (set! drum_t 0.0) })
+    ;; s：0=洗涤（慢转），1=脱水（快转）
+    (if (< drum_t WASH_T)
+        { (set! drum_s 0.0) }
+        {
+          (if (< drum_t RAMP1_T)
+              { (set! drum_s (/ (- drum_t WASH_T) (- RAMP1_T WASH_T))) }
+              {
+                (if (< drum_t SPIN_T)
+                    { (set! drum_s 1.0) }
+                    { (set! drum_s (/ (- CYCLE_T drum_t) (- CYCLE_T SPIN_T))) }) }) })
+    ;; 角速度与表观重力随 s 变化
+    (set! drum_w (+ W_WASH (* (- W_SPIN W_WASH) drum_s)))
+    (set! drum_ang (+ drum_ang drum_w))
+    (if (> drum_ang 6.28318) { (set! drum_ang (- drum_ang 6.28318)) })
+    (set! gm (* G_RATE (+ 1.0 (* 1.6 drum_s))))
+    ;; 方向：滚筒转到哪，重力（在筒内的表观方向）就指向哪
+    (set! gx (* gm (Math.sin drum_ang)))
+    (set! gy (* gm (Math.cos drum_ang)))
+    ;; 离心项：离筒心越远越往外推（脱水时明显），让水贴在筒壁上转
+    (set! cent_k (* CENT_K (* drum_s drum_s)))))
 ;; ---- 渲染 ------------------------------------------------------------------
 
 (define render
@@ -665,12 +686,13 @@
   (lambda ()
     (define deg 0)
     (Gfx.fill_rect 0 VH W HUD_H 10 12 20)
-    (Gfx.draw_text "FLIP 流体 · 重力随机游走" 4 (+ VH 2) 200 214 236)
-    (set! deg (Math.floor (/ (* 180.0 gang) (Math.PI))))
-    (set! ds (cat4 (String.atom_to_string np) " 粒 " (String.atom_to_string frame_ms) "ms 重力"))
-    (Gfx.draw_text ds 168 (+ VH 2) 110 130 160)
-    (set! ds (cat3 (String.atom_to_string deg) "°" ""))
-    (Gfx.draw_text ds 296 (+ VH 2) 110 130 160)))
+    (Gfx.draw_text "FLIP 流体 · 洗衣机滚筒" 4 (+ VH 2) 200 214 236)
+    (set! deg (Math.floor (/ (* 180.0 drum_ang) (Math.PI))))
+    (set! ds (cat4 (String.atom_to_string np) " 粒 " (String.atom_to_string frame_ms) "ms "))
+    (Gfx.draw_text ds 170 (+ VH 2) 110 130 160)
+    (set! ds (cat3 (if (> drum_s 0.5) { "脱水 " } { "洗涤 " })
+                   (String.atom_to_string deg) "°"))
+    (Gfx.draw_text ds 262 (+ VH 2) 140 190 220)))
 
 ;; ---- 主流程 ----------------------------------------------------------------
 
