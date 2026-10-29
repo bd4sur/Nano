@@ -31,9 +31,10 @@
 ;;     gang = amp·sin(2π·t/period + phase)        gang=0 即竖直向下
 ;;     gx = G·sin(gang)，gy = G·cos(gang)
 ;;     amp 基准 1.05 rad（60°），叠一层慢正弦在 0.89~1.21 rad 之间起伏
-;;     period 基准 78 拍（≈3 s），叠慢正弦在 56~100 拍之间起伏
+;;     period 基准 39 拍（≈2 s），叠慢正弦在 28~50 拍之间起伏
 ;;     相位每 40 拍做一次小幅随机游走，避免机械周期
-;;   重力矢量因此在 ±60° 附近来回扫（扫过 120° 弧），液面明显往一侧涌、拍上侧壁再荡回来。
+;;   重力矢量因此在 ±60° 附近来回扫（扫过 120° 弧），一个来回约 2 s ——
+;;   液面持续往一侧涌、拍上侧壁再荡回来，节奏相当快。
 ;;
 ;; 两个关键点（都是实测出来的）：
 ;;   1) **粒子分离是"敢大幅摇晃"的前提**。没有它，流体在持续晃动下会慢慢扩散成雾气
@@ -112,8 +113,8 @@
 
 (define gang 0.0)                 ; 重力方向（弧度）
 (define gr_t 0.0)                 ; 摇摆相位（拍）
-(define gr_period 78.0)           ; 摇摆周期（拍，约 3 s，随慢正弦变化）
-(define GR_PERIOD0 78.0)          ; 周期基准（拍）
+(define gr_period 39.0)           ; 摇摆周期（拍，约 3 s，随慢正弦变化）
+(define GR_PERIOD0 39.0)          ; 周期基准（拍）
 (define GR_AMP0 1.05)             ; 幅度基准（rad ≈ 60°）
 (define gr_amp 1.05)              ; 摇摆幅度（弧度，约 60°，随慢正弦变化）
 (define gr_phase 0.0)
@@ -620,10 +621,10 @@
     ;; 幅度与周期各自再叠一层慢正弦调制（不随机），保证**始终**是大摆幅，
     ;; 相位做小幅随机游走，避免机械的完全周期性。
     (set! gr_t (+ gr_t 1.0))
-    (set! gr_period (+ GR_PERIOD0 (* 22.0 (Math.sin (* 6.28318 (/ gr_t 620.0))))))
-    (set! gr_amp (+ GR_AMP0 (* 0.16 (Math.sin (+ (* 6.28318 (/ gr_t 430.0)) 1.1)))))
+    (set! gr_period (+ GR_PERIOD0 (* 11.0 (Math.sin (* 6.28318 (/ gr_t 310.0))))))
+    (set! gr_amp (+ GR_AMP0 (* 0.16 (Math.sin (+ (* 6.28318 (/ gr_t 215.0)) 1.1)))))
     (if (>= gr_t gr_period) { (set! gr_t (- gr_t gr_period)) })
-    (if (== (mod tick_no 40) 0)
+    (if (== (mod tick_no 20) 0)
         { (set! gr_phase (+ gr_phase (* (- (Math.random) 0.5) 0.35))) }
         {})
     (set! gang (* gr_amp (Math.sin (+ (* 6.28318 (/ gr_t gr_period)) gr_phase))))
