@@ -13,6 +13,18 @@
 ;;       间隔线 w·x+b=±1（灰）、支持向量（圈注；线性核另有到间隔线的垂线）；
 ;;   · 左上角显示分类边界的参数（线性核 wx/wy/b；RBF 核 b/支持向量数/样本数）。
 ;;
+;; 训练特征空间（关键设计）：
+;;   线性核在**归一化特征**上训练：x' = (x - 屏幕中心)/160，使绘图区约等于
+;;   [-1,1]x[-0.75,0.75]。原因是线性核的可分性与条件数强烈依赖特征尺度——像素
+;;   坐标（~10²）配 C=1 时，"有 1 个线性不可分点"就会把问题推进病态区：
+;;   目标函数里唯一带几何信息的项 ½‖w‖² 只占 2/(C·margin²) ≈ 1e-5，训练要 1e4 量级
+;;   轮数才收敛（实测 12800~25600 轮），而本 App 的预算只有 2e2 轮，于是边界完全由
+;;   随机 j 决定的"半路点"给出 —— 同一组点时而给出完美边界、时而完全找不到。
+;;   归一化后 ρ = ½‖w‖²/Σα 回到 O(0.1~0.5)，50~100 轮即收敛且结果可复现（详见
+;;   doc/AGENTS.md「线性核弱不可分情形的病态与归一化」）。
+;;   RBF 核的核值只依赖归一化距离与 σ 的比值（σ' = σ/160），与本变换等价，故 RBF
+;;   路径保持像素尺度计算（数值完全不变，也省掉每格一次换算）。
+;;
 ;; 布局约定（平台相关）：
 ;;   · 触屏右上角 80x60（x≥SW*3/4 且 y<SH/4）是宿主 4x4 宫格的 ESC 格，
 ;;     点它会退出本 App（与其它 Scheme App 一致），故不在该处放常驻控件；
@@ -38,28 +50,39 @@
 (define SW (Gfx.width))
 (define SH (Gfx.height))
 
+;; ---- 训练特征空间（归一化） ----------------------------------------------
+;; 中心取屏幕中心，尺度取屏幕半宽：绘图区 ≈ [-1,1] × [-0.75,0.75]
+(define TCX (* 0.5 SW))      ; 特征中心 x（像素）
+(define TCY (* 0.5 SH))      ; 特征中心 y（像素）
+(define TSC (* 0.5 SW))      ; 特征尺度（像素）
+(define TISC (/ 1.0 TSC))    ; 1/尺度：像素 → 归一化
+
 ;; ---- 超参数（对齐参考页面） ----------------------------------------------
 
 (define MAXN 48)          ; 样本容量上限（内核矩阵 MAXN×MAXN）
 (define NUMPASSES 10)     ; 连续多少轮 alpha 无变化即停止（同参考实现的默认值）
 (define MAXITER 300)      ; 迭代轮数硬上限
-;; 单次训练的工作量预算（≈ Σ过 i 的轮数 × n²，"项-求值"次数）。
-;; 参考页面在 JS 里 numpasses=200、maxiter=10000 都跑得起；解释器下每次求值
-;; 约 30~40 条 VM 指令，一帧只给 31 万条指令，故必须限总量：点越多，轮数越少
-;;（样例收敛只需几轮；不可分数据本来就会在最优点附近游走，多跑无益）。
+;; 单次训练的工作量预算：轮数 × n² ≤ TRAIN_WORK（≈ 10 帧、约 170ms 的 VM 指令量）。
+;; 参考页面在 JS 里 numpasses=200、maxiter=10000 都跑得起；解释器一帧只给 31 万条
+;; 指令，故必须限总量：点越多，允许的轮数越少。
+;; 归一化后实测收敛轮数：n=12~15 → 15~72 轮；n=30 → 34~44 轮（都在预算内）；
+;; n=48 时预算只够 17 轮（未完全收敛，但 |w| 只差 ~10%、角度差 2~3°，视觉一致）。
 (define TRAIN_WORK 40000)
 (define TOL 0.001)        ; KKT 违背容忍度（判别值的量级，与 α 无关）
 (define EPSA 0.000001)   ; α 变化量的相对门槛（× C）：小于它视为"这一步没意义"
                           ; 参考页面写死 1e-4，但那个绝对阈值隐含了"α 的量级"——
-                          ; 线性核下坐标量级 10²、α 最优解只有 1e-4 量级，绝对
-                          ; 1e-4 会把**所有**更新都当成噪声跳过（实测：训练后 α 全 0、
-                          ; 分类区域一片蓝、没有边界也没有支持向量）。故改为相对量。
+                          ; 归一化之前线性核的 α 最优解只有 1e-4 量级，绝对 1e-4 会把
+                          ; **所有**更新都当成噪声跳过（实测：训练后 α 全 0、分类区域
+                          ; 一片蓝、没有边界也没有支持向量）。归一化之后 α 已是 O(1)
+                          ; 量级，仍保留相对形式以确保与数据尺度无关。
 (define ALPHA_RATIO 0.01) ; alpha > 该比例 × max(alpha) 视为支持向量
-                          ; （参考页面写死 1e-2 的绝对阈值；本 App 的坐标量级下
-                          ;  α 本身只有 1e-4 量级，绝对阈值会把所有支持向量都滤掉，
-                          ;  故改成与尺度无关的相对阈值）
-(define C_LIN 1.0)        ; 线性核的惩罚系数 C
-(define C_RBF 20.0)       ; RBF 核的惩罚系数 C
+                          ; （参考页面写死 1e-2 的绝对阈值；改为与尺度无关的相对
+                          ;  阈值，任何数据尺度下都能正确挑出支持向量）
+(define C_LIN 1.0)        ; 线性核的惩罚系数 C —— **作用在归一化特征上**，
+                          ; 等价于像素单位下的 C_px = C_LIN/尺度² ≈ 3.9e-5
+                          ; （参考页面的像素单位 C=1 相当于此处 C ≈ 25600，
+                          ;   属"几何几乎不起作用"的病态配置，见头注释）
+(define C_RBF 20.0)       ; RBF 核的惩罚系数 C（核值与归一化前逐位相同，故不变）
 (define SIGMA 20.0)       ; RBF 核宽度 σ
 (define SIGMA2 800.0)     ; 2σ²（= 800，σ=20）
 (define DENS_RBF 4)       ; RBF 核分类区域的采样步长（单点成本高，取 4px；
@@ -78,7 +101,8 @@
 (define n 0)              ; 样本数
 (define cat 1)            ; 当前类别：1 正样本，-1 负样本
 (define kv 0)             ; 当前核：0 线性，1 RBF
-(define b 0.0)            ; 偏置
+(define b 0.0)            ; 偏置（判别函数直接使用；线性核为像素单位，RBF 核与 bn 同）
+(define bn 0.0)           ; 训练空间里的偏置（线性核为归一化特征空间；RBF 核等于 b）
 (define w0 0.0)           ; 线性权重（w0=x 分量，w1=y 分量）
 (define w1 0.0)
 (define use_w 0)          ; 1 = 线性核训练完成，用 (w0,w1,b) 判定（与核展开等价）
@@ -109,8 +133,10 @@
     mk_acc
   }))
 
-(define px (make_zeros MAXN))            ; 样本 x
-(define py (make_zeros MAXN))            ; 样本 y
+(define px (make_zeros MAXN))            ; 样本 x（像素，绘制用）
+(define py (make_zeros MAXN))            ; 样本 y（像素，绘制用）
+(define pxn (make_zeros MAXN))           ; 样本 x（归一化，训练用）
+(define pyn (make_zeros MAXN))           ; 样本 y（归一化，训练用）
 (define plab (make_zeros MAXN))          ; 样本类别 +1 / -1
 (define palpha (make_zeros MAXN))        ; 对偶变量 α
 (define kern (make_zeros (* MAXN MAXN))) ; 内核矩阵（行主序 i*MAXN+j）
@@ -258,9 +284,13 @@
                           (Math.exp (- 0.0 (/ kc_d2 SIGMA2))))
             }
             {
+              ;; 线性核在**归一化特征**上求核：x'·x'。这是本 App 能稳定收敛的关键
+              ;; （像素尺度 ⇒ K ~ 1e5 ⇒ 目标函数的几何项只占 1e-5，见头注释）。
+              ;; RBF 分支仍用像素距离：K = exp(-‖Δx‖²/2σ²) 只依赖 ‖Δx‖/σ 的比值，
+              ;; σ' = σ/尺度 时核值逐位相同，故无需换算。
               (set_item! kern (+ (* kc_i MAXN) kc_j)
-                          (+ (* (get_item px kc_i) (get_item px kc_j))
-                             (* (get_item py kc_i) (get_item py kc_j))))
+                          (+ (* (get_item pxn kc_i) (get_item pxn kc_j))
+                             (* (get_item pyn kc_i) (get_item pyn kc_j))))
             })
         (set! kc_j (+ kc_j 1))
       })
@@ -275,7 +305,7 @@
 (define mg_s 0.0)
 (define margin
   (lambda (k) {
-    (set! mg_s b)
+    (set! mg_s bn)
     (set! mg_j 0)
     (while (< mg_j n) {
       (set! mg_s (+ mg_s (* (* (get_item palpha mg_j) (get_item plab mg_j))
@@ -352,7 +382,7 @@
       (set_item! palpha tr_i 0.0)
       (set! tr_i (+ tr_i 1))
     })
-    (set! b 0.0)
+    (set! bn 0.0)
     (set! tr_iter 0)
     (set! tr_passes 0)
     (set! tr_c (if (== kv 1) C_RBF C_LIN))
@@ -417,15 +447,15 @@
               (set! tr_nai (+ tr_ai (* (* tr_li tr_lj) (- tr_aj tr_naj))))
 
               ;; 先算出两个候选偏置再择优（参考页面 b1/b2 的做法）
-              (set! tr_b1 (- (- (- b tr_ei)
+              (set! tr_b1 (- (- (- bn tr_ei)
                                 (* (* tr_li (- tr_nai tr_ai)) tr_kii))
                              (* (* tr_lj (- tr_naj tr_aj)) tr_kij)))
-              (set! tr_b2 (- (- (- b tr_ej)
+              (set! tr_b2 (- (- (- bn tr_ej)
                                 (* (* tr_li (- tr_nai tr_ai)) tr_kij))
                              (* (* tr_lj (- tr_naj tr_aj)) tr_kjj)))
-              (set! b (* 0.5 (+ tr_b1 tr_b2)))
-              (if (and (> tr_nai 0.0) (< tr_nai tr_c)) (set! b tr_b1))
-              (if (and (> tr_naj 0.0) (< tr_naj tr_c)) (set! b tr_b2))
+              (set! bn (* 0.5 (+ tr_b1 tr_b2)))
+              (if (and (> tr_nai 0.0) (< tr_nai tr_c)) (set! bn tr_b1))
+              (if (and (> tr_naj 0.0) (< tr_naj tr_c)) (set! bn tr_b2))
 
               (set! tr_delta (Math.abs (- tr_naj tr_aj)))
               (if (> tr_delta tr_dmax) (set! tr_dmax tr_delta))
@@ -444,7 +474,11 @@
     })
 
     ;; 线性核：把 α 折算成权重，预测变成一次点积（与核展开完全等价，快得多，
-    ;; 而且分类边界 w·x+b=0 可以直接解析地画出来）
+    ;; 而且分类边界 w·x+b=0 可以直接解析地画出来）。
+    ;; 先在归一化特征空间里累加 w' = Σ α y x'，再换算回像素单位供显示与绘图：
+    ;;   f(x) = w'·x' + b' 且 x' = (x - 中心)/尺度
+    ;;   ⇒ w_px = w'/尺度，b_px = b' - w_px·中心
+    ;; 两种单位下的判别值是同一个数，因此"w·x+b=±1"的间隔线也完全一致。
     (set! use_w 0)
     (if (== kv 0) {
       (set! tr_w0 0.0)
@@ -452,15 +486,17 @@
       (set! tr_i 0)
       (while (< tr_i n) {
         (set! tr_w0 (+ tr_w0 (* (* (get_item palpha tr_i) (get_item plab tr_i))
-                                (get_item px tr_i))))
+                                (get_item pxn tr_i))))
         (set! tr_w1 (+ tr_w1 (* (* (get_item palpha tr_i) (get_item plab tr_i))
-                                (get_item py tr_i))))
+                                (get_item pyn tr_i))))
         (set! tr_i (+ tr_i 1))
       })
-      (set! w0 tr_w0)
-      (set! w1 tr_w1)
+      (set! w0 (* tr_w0 TISC))
+      (set! w1 (* tr_w1 TISC))
+      (set! b (- bn (+ (* w0 TCX) (* w1 TCY))))
       (set! use_w 1)
-    })
+    }
+    (if (== kv 1) (set! b bn)))
 
     (sv_select)
   }))
@@ -794,6 +830,8 @@
       (if (> ad_y (- SH 1)) (set! ad_y (- SH 1)))
       (set_item! px n ad_x)
       (set_item! py n ad_y)
+      (set_item! pxn n (* (- ad_x TCX) TISC))
+      (set_item! pyn n (* (- ad_y TCY) TISC))
       (set_item! plab n cat)
       (set_item! palpha n 0.0)
       (set! n (+ n 1))
@@ -814,6 +852,7 @@
           (set! w0 0.0)
           (set! w1 0.0)
           (set! b 0.0)
+          (set! bn 0.0)
           (set! nsv 0)
           (set! use_w 0)
         })
@@ -838,6 +877,7 @@
       (set! w0 0.0)
       (set! w1 0.0)
       (set! b 0.0)
+      (set! bn 0.0)
       (set! nsv 0)
       (set! use_w 0)
       (set! cat 1)
