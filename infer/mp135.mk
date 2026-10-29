@@ -13,6 +13,12 @@ ANIMAC_DIR  := vendor/Animac
 ANIMAC_INC  := $(ANIMAC_DIR)
 ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c, $(wildcard $(ANIMAC_DIR)/*.c))
 
+# 灵机宿主侧源码：本地库（Gfx/Time/Diag/Touch/Imu，位于 infer/ 而**不在** vendor/Animac 里）
+# + 灵机应用程序运行时。任何链接 ui_app.c 的目标都需要它们，缺一个就链接失败。
+ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
+                    am_native_Touch.c am_native_Imu.c \
+                    ui_scheme_app.c
+
 CCFLAGS = -I$(SYSROOT)/usr/include --sysroot=$(SYSROOT) -O3 -ffast-math -Wall -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
 LDFLAGS = -L$(SYSROOT)/usr/lib --sysroot=$(SYSROOT) -lm
 
@@ -26,6 +32,7 @@ $(BIN_DIR):
 # Nano-Pod：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于CoreMP135），含触屏（hal_touch_evdev_linux.c）
 pod: $(BIN_DIR)/nano_pod
 $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
+                        $(ANIMAC_HOST_SRCS) \
                         main.c \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
@@ -83,6 +90,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty
 $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
+                        $(ANIMAC_HOST_SRCS) \
                         main.c \
                         hal_audio_out_alsa_linux.c \
                         hal_imu_linux.c \

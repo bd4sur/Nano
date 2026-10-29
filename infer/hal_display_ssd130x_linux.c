@@ -266,3 +266,13 @@ void OLED_DisplayTurn(uint8_t i) {
 void display_set_brightness(uint8_t value) {
     // TODO
 }
+
+// 休眠 / 唤醒（hal_display.h 契约）：SSD130x 用面板关断/点亮实现，
+// 业务层（ui_app.c 的锁屏等）会无条件调用这两个函数，故 HAL 必须提供。
+void display_sleep(void) {
+    OLED_Display_Off();
+}
+
+void display_wakeup(void) {
+    OLED_Display_On();
+}

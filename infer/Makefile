@@ -6,6 +6,17 @@ ANIMAC_INC  := $(ANIMAC_DIR)
 ANIMAC_SRCS := $(wildcard $(ANIMAC_DIR)/*.c)
 ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c, $(wildcard $(ANIMAC_DIR)/*.c))
 
+# 灵机宿主侧源码：本地库（Gfx/Time/Diag/Touch/Imu，位于 infer/ 而**不在** vendor/Animac 里）
+# + 灵机应用程序运行时。任何链接 ui_app.c 的目标都需要它们，缺一个就在链接阶段报未定义符号。
+ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
+                    am_native_Touch.c am_native_Imu.c \
+                    ui_scheme_app.c
+
+# ui_app.c 直接引用的业务模块（GUI 目标共用；同样缺一个就链接失败）
+GUI_MODULE_SRCS := ui_almanac.c ui_calendar.c ui_dict.c ui_ebook.c ui_goldminer.c \
+                   ui_grid16kbd.c ui_icon.c ui_musicbox.c ui_musicbox_mp3.c ui_ofdm.c \
+                   ui_particlelife.c ui_ripple.c ui_tetris.c ui_water.c ofdm_modem.c
+
 # 音频HAL（hal_audio_out_alsa_linux.c / hal_audio_in_alsa_linux.c）依赖 ALSA（libasound2-dev）
 # 任务抽象（hal_os_linux.c）依赖 pthread
 ifeq ($(IS_RASPBERRY_PI),yes)
@@ -25,13 +36,16 @@ $(BIN_DIR):
 
 # Nano-Pod-Lite：带键盘和单色I2C屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z/MARGA）
 pod_lite: $(BIN_DIR)/nano_pod_lite
-$(BIN_DIR)/nano_pod_lite: main.c asr.c tts.c hal_power_rpi5.c hal_net_stub.c hal_audio_in_alsa_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c hal_display_ssd130x_linux.c hal_touch_evdev_linux.c hal_key_matrix16_linux.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c ui_llm.c nano_min.c utils.c tokenizer.c tensor.c infer.c | $(BIN_DIR)
+$(BIN_DIR)/nano_pod_lite: $(ANIMAC_SRCS) \
+                        $(ANIMAC_HOST_SRCS) \
+                        main.c asr.c tts.c hal_power_rpi5.c hal_net_stub.c hal_audio_in_alsa_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c hal_display_ssd130x_linux.c hal_imu_linux.c hal_touch_evdev_linux.c hal_key_matrix16_linux.c vsop87c_milli.c celestial.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c ui_llm.c nano_min.c utils.c tokenizer.c tensor.c infer.c $(GUI_MODULE_SRCS) hal_audio_out_alsa_linux.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_LITE_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
 
 
 # Nano-Pod：带键盘和彩色SPI屏幕的电子鹦鹉笼（基于RPI5/CUBIE_A7Z）
 pod: $(BIN_DIR)/nano_pod
 $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
+                        $(ANIMAC_HOST_SRCS) \
                         main.c \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
@@ -97,6 +111,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
 # 并行（无跨线程归约，数值结果与单线程逐位一致）；线程数可用 OMP_NUM_THREADS 环境变量限制
 pod_pt35: $(BIN_DIR)/nano_pod_pt35
 $(BIN_DIR)/nano_pod_pt35: $(ANIMAC_SRCS) \
+                        $(ANIMAC_HOST_SRCS) \
                         main.c \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
@@ -156,6 +171,7 @@ $(BIN_DIR)/nano_pod_pt35: $(ANIMAC_SRCS) \
 # Nano-TTY：适用于文字终端图形交互的终端程序
 tty: $(BIN_DIR)/nano_tty
 $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
+                        $(ANIMAC_HOST_SRCS) \
                         main.c \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
@@ -233,6 +249,7 @@ $(BIN_DIR)/web_client_html.h: web_remote_client.html | $(BIN_DIR)
 	  echo ';'; } > $@
 
 $(BIN_DIR)/nano_web: $(BIN_DIR)/web_client_html.h $(ANIMAC_SRCS) \
+                        $(ANIMAC_HOST_SRCS) \
                         main.c \
                         hal_fs_linux.c \
                         hal_ram_linux.c \

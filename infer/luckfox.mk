@@ -17,6 +17,12 @@ ANIMAC_DIR  := vendor/Animac
 ANIMAC_INC  := $(ANIMAC_DIR)
 ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c, $(wildcard $(ANIMAC_DIR)/*.c))
 
+# 灵机宿主侧源码：本地库（Gfx/Time/Diag/Touch/Imu，位于 infer/ 而**不在** vendor/Animac 里）
+# + 灵机应用程序运行时。任何链接 ui_app.c 的目标都需要它们，缺一个就链接失败。
+ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
+                    am_native_Touch.c am_native_Imu.c \
+                    ui_scheme_app.c
+
 # 设备 framebuffer 节点为 /dev/fb0（720x720, 32bpp），覆盖 HAL 默认的 /dev/fb1；
 # FB_SWAP_RB：修正面板红蓝互换（详见 hal_display_framebuffer_linux.c 注释），仅本机型定义；
 # FB_UPSCALE=2：逻辑 360x360（platform.h 中 NANO_POD_LUCKFOX 分支）整 2 倍放大，恰好满屏 720x720；
@@ -34,6 +40,7 @@ $(BIN_DIR):
 # Nano-Pod：电子鹦鹉笼（Luckfox-Pico-86-Panel），显示走 /dev/fb0 framebuffer
 pod: $(BIN_DIR)/nano_pod_luckfox
 $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) \
+                        $(ANIMAC_HOST_SRCS) \
                         main.c \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
