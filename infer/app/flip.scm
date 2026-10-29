@@ -33,11 +33,17 @@
 ;;     gx = gm·sin(drum_ang)，gy = gm·cos(drum_ang)，脱水时 gm = 2.6×G_RATE
 ;;     另有离心项 cent_k·(p − 筒心)：脱水时把水压向筒壁，中间留空 —— 就是滚筒甩干的样子。
 ;;
-;; 两个关键点（都是实测出来的）：
-;;   1) **粒子分离是"敢大幅摇晃"的前提**。没有它，流体在持续晃动下会慢慢扩散成雾气
-;;      （几千帧后彻底散开）；加上它之后，248 粒也能长时间保持成一团水。
-;;   2) 摇摆幅度/阻尼是量级问题：G_RATE 0.005 + VEL_DAMP 0.86 时终端速度只有
-;;      0.018 格/步，液面几乎不动；0.010 + 0.94 才能看到明显晃动。
+;; 小黄鸭（浮动障碍物）：
+;;   素材来自 openclipart.org/detail/325903/rubber-duck（CC0 / 公有领域，透明底 PNG），
+;;   离线重采样成 30×31 的字符位图，加载时展开成调色板索引表；绘制时按当前倾角
+;;   逐像素旋转贴图（透明像素跳过），画在粒子之前，于是没入水中的部分会被水盖住。
+;;   物理（刚体 + 浮力 + 稳性）：
+;;     · 浮力：把中心弹到"当地液面 + 吃水"，带阻尼 —— 这就是它一直浮着不沉；
+;;     · 稳性（回正力矩）：目标倾角 = 当地液面坡度的 40%（限幅 ±26°），
+;;       用角弹簧 + 角阻尼逼近 —— 水面一平就自己扶正，因此"尽量朝上"；
+;;     · 横向：跟随所在格的流体速度，被水推着在筒里跑；
+;;     · 与水的双向作用：鸭身椭圆内的粒子被推到边缘，并给鸭子一点反作用；
+;;     · 硬夹紧：倾角 ±0.60 rad、位置不越界，绝不翻跟头。
 ;;
 ;; 其它稳定性经验：
 ;;   · 每步重力不宜超过约 0.015（格/步²），否则压力求解跟不上、流体沸腾；
@@ -653,6 +659,221 @@
     (set! gy (* gm (Math.cos drum_ang)))
     ;; 离心项：离筒心越远越往外推（脱水时明显），让水贴在筒壁上转
     (set! cent_k (* CENT_K (* drum_s drum_s)))))
+;; 小黄鸭位图（30×31，来源：openclipart.org/detail/325903/rubber-duck，CC0/公有领域）
+;; 每行 30 个字符：'.'=透明  'y'=身体黄  'o'=橙  'd'=暗  'k'=眼睛  'w'=高光  'b'=深棕
+(define DUCK_W 30)
+(define DUCK_H 31)
+(define DUCK_ART (quote (
+  "..............oyyyyo.........."
+  "............oyyyyyyyyo........"
+  "...........oyyyyyyyyyyo......."
+  "..........oyyyyyyyyyyyyo......"
+  "..........yyyywbbyyyyyyy......"
+  ".........oyyywbkkoyyooooooooo."
+  ".........yyyywbkkoyooooooooooo"
+  ".........yyyyyyboyoooooooooooo"
+  ".........yyyyyyyyooooooooodoo."
+  ".........oyyyyyyyooooooodddo.."
+  ".........oyyyyyyyoooodddddo..."
+  "..........yyyyyyyoooooodddoo.."
+  "....oooo..oyyyyyyyoooooooooo.."
+  "...oyyyyooyyyyyyyyyyooooooo..."
+  "..oyyyyyyyyyyyyyyyyyyooo......"
+  "..oyyyyyyyyyyyyyyyyyyyy......."
+  ".oyyyyyyyyyyyyyyyyyyyyyyo....."
+  ".oyyyyyyyyyyyyyyyyyyyyyyyo...."
+  ".yyyyyyyyyyyyyyyyyyyyyyyyy...."
+  "oyyyyyyyyyyyyyyyyyyyyyyyyyo..."
+  "oyyyyyyyyyyyyyyyyyyyyyyyyyy..."
+  "oyyyyyyyyyyyyyyyyyyyyyyyyyyo.."
+  "yyyyyyyyyyyyyyyyyyyyyyyyyyyo.."
+  "yyyyyyyyyyyyyyyyyyyyyyyyyyyo.."
+  "oyyyyyyyyyyyyyyyyyyyyyyyyyyo.."
+  "oyyyyyyyyyyyyyyyyyyyyyyyyyyo.."
+  ".oyyyyyyyyyyyyyyyyyyyyyyyyyo.."
+  "..yyyyyyyyyyyyyyyyyyyyyyyyy..."
+  "...oyyyyyyyyyyyyyyyyyyyyyyo..."
+  "....oyyyyyyyyyyyyyyyyyyyyo...."
+  "......oyyyyyyyyyyyyyooo......."
+)))
+
+;; 调色板（'.' 为透明，占 0 位）
+(define DUCK_PAL (quote ((0 0 0) (250 206 46) (214 140 26) (168 98 20) (36 34 38) (246 246 246) (120 84 44))))
+
+;; 把字符位图展开成"调色板索引"扁平表（加载时做一次）
+(define DUCK_PIX (cons 0 (quote ())))
+(define duck_build
+  (lambda ()
+    (define r 0) (define cstr "") (define i 0) (define ch "")
+    (define nrow 0) (define idx 0)
+    (while (> (length DUCK_PIX) 0) { (pop DUCK_PIX) })
+    (set! nrow (length DUCK_ART))
+    (set! r 0)
+    (while (< r nrow) {
+      (set! cstr (get_item DUCK_ART (Math.floor r)))
+      (set! i 0)
+      (while (< i DUCK_W) {
+        (set! ch (String.charAt cstr (Math.floor i)))
+        (set! idx 0)
+        (if (String.equals ch "y") { (set! idx 1) })
+        (if (String.equals ch "o") { (set! idx 2) })
+        (if (String.equals ch "d") { (set! idx 3) })
+        (if (String.equals ch "k") { (set! idx 4) })
+        (if (String.equals ch "w") { (set! idx 5) })
+        (if (String.equals ch "b") { (set! idx 6) })
+        (push DUCK_PIX idx)
+        (set! i (+ i 1)) })
+      (set! r (+ r 1)) })))
+
+;; ---- 小黄鸭：浮在水面上的刚性障碍物 ----------------------------------------
+;; 物理：竖向被"吃水线"弹簧拉住（浮力），横向受流体拖曳，倾角受三段浮力样本 +
+;; 显式回正力矩（稳性）共同作用，所以它会自己翻回正、并在浪里摇晃而不翻倒。
+(define dkx 13.0) (define dky 13.0)
+(define dkvx 0.0) (define dkvy 0.0)
+(define dka 0.0) (define dkw 0.0)
+(define DUCK_HW 1.10)             ; 半宽（格）
+(define DUCK_HH 1.15)             ; 半高（格）
+(define DUCK_DRAFT 0.42)          ; 吃水（中心低于水面多少格）
+(define DUCK_KY 0.060)            ; 竖向弹簧（浮力：拉向吃水线）
+(define DUCK_KYD 0.86)            ; 竖向阻尼
+(define DUCK_KX 0.022)            ; 横向跟随流体
+(define DUCK_LD 0.92)             ; 横向阻尼
+(define DUCK_KA 0.10)             ; 稳性弹簧（角：拉向液面坡度 = 回正力矩）
+(define DUCK_KAD 0.84)            ; 角速度阻尼
+(define surf (cons 0 (quote ())))  ; 每列液面高度（格；99=该列无流体）
+
+(define duck_init
+  (lambda ()
+    (while (> (length surf) 0) { (pop surf) })
+    (define i 0)
+    (set! i 0)
+    (while (< i GW) { (push surf 99.0) (set! i (+ i 1)) })
+    (set! dkx (/ GW 2.0)) (set! dky (* GH 0.62))
+    (set! dkvx 0.0) (set! dkvy 0.0) (set! dka 0.0) (set! dkw 0.0)))
+
+;; 每列液面（用 ct：0=流体格），行号越小球越高
+(define update_surf
+  (lambda ()
+    (define i 0) (define col 0) (define row 0) (define v 0.0)
+    (set! i 0)
+    (while (< i GW) { (set_item! surf i 99.0) (set! i (+ i 1)) })
+    (set! i 0)
+    (while (< i NC) {
+      (if (== (get_item ct (Math.floor i)) 0)
+          {
+            (set! col (Math.floor (/ (+ i 0.0) (+ GH 0.0))))
+            (set! row (- i (* col GH)))
+            (set! v (+ row 0.0))
+            (if (< v (get_item surf col)) { (set_item! surf col v) }) }
+          {})
+      (set! i (+ i 1)) })))
+
+;; 采样 (x,y) 处的水面高度（格）；无流体返回该列格底
+(define surf_at
+  (lambda (x)
+    (define c 0) (define v 0.0)
+    (set! c (Math.floor x))
+    (if (< c 0) { (set! c 0) })
+    (if (> c (- GW 1)) { (set! c (- GW 1)) })
+    (set! v (get_item surf c))
+    (if (> v 90.0) { (set! v (+ GH 0.0)) })
+    v))
+
+(define duck_step
+  (lambda ()
+    (define wl 0.0) (define s1 0.0) (define s2 0.0) (define ta 0.0)
+    (define ccol 0) (define crow 0) (define uc 0.0)
+    ;; 浮力：把鸭子中心弹簧式地拉向"当地液面 + 吃水"
+    (set! wl (+ (surf_at dkx) DUCK_DRAFT))
+    (set! dkvy (+ (* dkvy DUCK_KYD) (* (- wl dky) DUCK_KY)))
+    ;; 稳性（回正力矩）：目标倾角 = 当地液面坡度。
+    ;; 船在浪里随波倾斜、水面一平就自己扶正 —— 这就是"有稳性"的观感。
+    (set! s1 (surf_at (- dkx DUCK_HW)))
+    (set! s2 (surf_at (+ dkx DUCK_HW)))
+    ;; 只跟随一小部分坡度：小黄鸭该"尽量朝上"，所以目标倾角取坡度的 40% 并限幅 ±26°
+    (set! ta (* 0.4 (Math.atan2 (- s2 s1) (* 2.0 DUCK_HW))))
+    (if (> ta 0.45) { (set! ta 0.45) })
+    (if (< ta -0.45) { (set! ta -0.45) })
+    (set! dkw (+ (* dkw DUCK_KAD) (* (- ta dka) DUCK_KA)))
+    ;; 横向：跟随所在格的流体速度（水推着鸭子走）
+    (set! ccol (Math.floor dkx))
+    (if (< ccol 0) { (set! ccol 0) })
+    (if (> ccol (- GW 1)) { (set! ccol (- GW 1)) })
+    (set! crow (Math.floor dky))
+    (if (< crow 0) { (set! crow 0) })
+    (if (> crow (- GH 1)) { (set! crow (- GH 1)) })
+    (set! uc (get_item u (+ (* ccol GH) crow)))
+    (set! dkvx (+ (* dkvx DUCK_LD) (* uc DUCK_KX)))
+    ;; 积分 + 夹紧（不允许翻跟头或飞出容器）
+    (set! dka (+ dka dkw))
+    (if (> dka 0.60) { (set! dka 0.60) (set! dkw (* -0.3 dkw)) })
+    (if (< dka -0.60) { (set! dka -0.60) (set! dkw (* -0.3 dkw)) })
+    (set! dkx (+ dkx dkvx))
+    (set! dky (+ dky dkvy))
+    (if (< dkx (+ DUCK_HW 1.0)) { (set! dkx (+ DUCK_HW 1.0)) (set! dkvx (* -0.3 dkvx)) })
+    (if (> dkx (- GW (+ DUCK_HW 1.0))) { (set! dkx (- GW (+ DUCK_HW 1.0))) (set! dkvx (* -0.3 dkvx)) })
+    (if (< dky (+ DUCK_HH 1.0)) { (set! dky (+ DUCK_HH 1.0)) (set! dkvy (* -0.3 dkvy)) })
+    (if (> dky (- GH (+ DUCK_HH 1.0))) { (set! dky (- GH (+ DUCK_HH 1.0))) (set! dkvy (* -0.3 dkvy)) })))
+
+;; 鸭子把水挤开：落在鸭身（旋转后的椭圆）里的粒子被推到边缘，并给鸭子一点反作用
+(define duck_push
+  (lambda ()
+    (define i 0) (define ca 0.0) (define sa 0.0)
+    (define rx 0.0) (define ry 0.0) (define lx 0.0) (define ly 0.0)
+    (define q 0.0) (define sc 0.0) (define push 0.0)
+    (set! ca (Math.cos dka))
+    (set! sa (Math.sin dka))
+    (set! i 0)
+    (while (< i np) {
+      (set! rx (- (get_item px i) dkx))
+      (set! ry (- (get_item py i) dky))
+      (set! lx (+ (* ca rx) (* sa ry)))
+      (set! ly (- (* ca ry) (* sa rx)))
+      ;; 椭圆内 → 推到边界
+      (set! q (+ (* (/ lx DUCK_HW) (/ lx DUCK_HW)) (* (/ ly DUCK_HH) (/ ly DUCK_HH))))
+      (if (< q 1.0)
+          {
+            (if (< q 0.0001) { (set! q 0.0001) })
+            (set! sc (/ 1.0 (Math.sqrt q)))
+            (set_item! px i (+ dkx (- (* ca (* lx sc)) (* sa (* ly sc)))))
+            (set_item! py i (+ dky (+ (* sa (* lx sc)) (* ca (* ly sc)))))
+            (set! push 0.02)
+            (set! dkvx (- dkvx (* push lx)))
+            (set! dkvy (- dkvy (* push ly))) }
+          {})
+      (set! i (+ i 1)) })))
+
+;; 绘制：按当前倾角逐像素旋转贴图（透明像素跳过），画在粒子之前 → 没入水中的部分被水盖住
+(define duck_draw
+  (lambda ()
+    (define ca 0.0) (define sa 0.0)
+    (define i 0) (define j 0) (define idx 0) (define pal 0)
+    (define dx 0.0) (define dy 0.0) (define sx 0) (define sy 0)
+    (define cx 0.0) (define cy 0.0) (define r 0) (define g 0) (define b 0)
+    (set! ca (Math.cos dka))
+    (set! sa (Math.sin dka))
+    (set! cx (* dkx (+ CELL 0.0)))
+    (set! cy (* dky (+ CELL 0.0)))
+    (set! j 0)
+    (while (< j DUCK_H) {
+      (set! i 0)
+      (while (< i DUCK_W) {
+        (set! pal (get_item DUCK_PIX (+ (* j DUCK_W) i)))
+        (if (> pal 0)
+            {
+              (set! dx (- i (* DUCK_W 0.5)))
+              (set! dy (- j (* DUCK_H 0.5)))
+              (set! sx (Math.floor (+ cx (+ (* ca dx) (* sa dy)))))
+              (set! sy (Math.floor (+ cy (+ (- 0.0 (* sa dx)) (* ca dy)))))
+              (set! idx (* pal 3))
+              (set! r (get_item (get_item DUCK_PAL pal) 0))
+              (set! g (get_item (get_item DUCK_PAL pal) 1))
+              (set! b (get_item (get_item DUCK_PAL pal) 2))
+              (Gfx.set_pixel sx sy r g b) }
+            {})
+        (set! i (+ i 1)) })
+      (set! j (+ j 1)) })))
+
 ;; ---- 渲染 ------------------------------------------------------------------
 
 (define render
@@ -660,6 +881,7 @@
     (define i 0) (define x 0) (define y 0) (define sp 0.0) (define t 0.0)
     (define r 0) (define g 0) (define b 0) (define ax 0.0) (define ay 0.0)
     (Gfx.fill_rect 0 0 W VH 8 12 22)
+    (duck_draw)
     (set! i 0)
     (while (< i np) {
       (set! x (Math.floor (* (get_item px i) CELL)))
@@ -702,6 +924,9 @@
     (integrate)
     (p2g)
     (separate)
+    (update_surf)
+    (duck_step)
+    (duck_push)
     (save_prev)
     (solve_pressure)
     (g2p)))
@@ -725,5 +950,7 @@
 (pop pcount) (pop pstart) (pop pids) (pop pw)
 (pop F) (pop G) (pop D)
 (build_grid)
+(duck_build)
 (init_fluid)
+(duck_init)
 (set! _timer (System.set_interval TICK_MS tick_fn))
