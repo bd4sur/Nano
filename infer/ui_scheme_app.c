@@ -20,6 +20,8 @@
 #include "am_native_Gfx.h"
 #include "am_native_Time.h"
 #include "am_native_Diag.h"
+#include "am_native_Touch.h"
+#include "am_native_Imu.h"
 
 // ===============================================================================
 // 运行时参数
@@ -471,6 +473,9 @@ int32_t ui_scheme_app_init(Key_Event *key_event, Global_State *global_state) {
     am_runtime_register_native_lib(s_app.rt, &am_native_Time_lib);
     // Diag：虚拟机自观测（只读栈深/PC/闭包槽位/GC 等），供 app/xray.scm 等仪表盘使用
     am_runtime_register_native_lib(s_app.rt, &am_native_Diag_lib);
+    // Touch/Imu：触屏与姿态（重力）输入，供交互式 App 使用（见 am_native_Touch.h / am_native_Imu.h）
+    am_runtime_register_native_lib(s_app.rt, &am_native_Touch_lib);
+    am_runtime_register_native_lib(s_app.rt, &am_native_Imu_lib);
 
     // 清屏后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）
     gfx_soft_clear(global_state->gfx);

@@ -119,6 +119,8 @@ ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
     am_native_Gfx.c \
     am_native_Time.c \
     am_native_Diag.c \
+    am_native_Touch.c \
+    am_native_Imu.c \
     infer.c \
     nano_fft.c \
     nano_min.c \
