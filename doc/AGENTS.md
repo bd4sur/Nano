@@ -3036,3 +3036,68 @@ VM 栈深），第二行是池级 `System.memstat`。也顺带是 fork/队列的
 - `regress_exit.js`（含后台/恢复/LRU 驱逐，且顺带把 forkqueue 当第 4 个实例）38/38；
   `regress.js` 全 App 存活无 pageerror；`tools/e2e/{host/run_host_regress.sh, browser/regress.js}`
   的 App 清单已加入 `forkqueue`（本目录不入库）。
+
+------------------------------------
+
+# 2026-10-30（十）渐进路径追踪 App：40×30 累积缓冲 + 色调映射显影
+
+新增 `infer/app/pathtracer.scm`（约 15KB）：**渐进式蒙特卡洛路径追踪**——40×30 渲染
+分辨率，每 tick 为每像素追加 1 个采样（1200 采样/帧），累积缓冲取平均后经
+「曝光 → Reinhard → gamma 2.2」色调映射，以 8×8 方块铺满 320×240 上屏。画面从满屏
+噪声开始逐渐收敛（"照片显影"观感；与 sdfprog 的逐行显影同哲学——重活摊到多帧的
+解释器协作调度——但视觉不同：整幅画面同步从噪声里长出来，颗粒即胶片颗粒）。
+编译目标 **Nano-WASM-GUI**，宿主回归台 + 三个无头浏览器端到端验证通过。
+
+## 场景与算法（Cornell box 简版）
+
+- 单位盒子 [0,1]³（前口 z=0 敞开，相机在盒外向内看；开口对盒内即纯黑背景/吸收）；
+  左墙红 (0.65,0.12,0.10)、右墙绿 (0.13,0.45,0.11)、地板/天花板/后墙白 (0.80)；
+  天花板上的 0.24×0.24 矩形**面光源**（暖色 Le=(24,22,16.5)，与天花板共面——
+  同一次平面求交兼顾"天花板"与"光源"两种身份）；盒内三个落在地板上的球
+  （两大一小，其一淡钢蓝）。
+- **NEE（Next-Event Estimation）直接光采样**是低 spp 下可辨识的关键：每次命中非光源
+  表面时，在光源矩形上均匀采点、解析算直接光 `Le·ρ·ndotl·cosl·A/(π·d²)`；可见性的
+  阴影射线**只测 3 个球**——盒子是凸的，墙不可能遮挡盒内点到光源的连线（省一半阴影
+  开销）。随后按**余弦加权半球采样**继续弹射（Lambertian 的 BRDF/pdf 相消，吞吐量只乘
+  反照率）；固定深度 3（无俄罗斯轮盘）；弹射射线命中光源不再加发射项（该连接已由上一
+  命中点的 NEE 采样过，防双计）；相机射线直接看到光源时正常计 Le（画面里能看到灯）。
+- 像素内抖动采样（抗锯齿 + 颗粒感来源）；最后一弹跳过半球采样（方向不再使用，省 ~5%）。
+- 累积缓冲：单张扁平列表 3600 项（rgb 交错），`set_item!` 原地加；spp 上限 4096
+  （wasm32 浮点有效位与显影时长双保险，到顶后 HUD 显示"显影完成"、画面静止）。
+
+## 实测
+
+| 项 | 结果 |
+|---|---|
+| 单 tick（1200 采样 + 1200 次色调映射/上屏） | 宿主回归台 **~50ms**（≈2.5M VM 指令/tick ≈ 2100 指令/采样） |
+| 浏览器 wasm32（chrome-headless-shell / chromium / firefox 一致） | **~106ms/tick ≈ 7.5 spp/秒**（spp 21 → 65 → 170 三阶段截图确认显影过程） |
+| 观感 | spp 2 已能辨认房间轮廓（NEE 的功劳）；spp ~10 结构清晰；spp ~60 柔和成形；spp 170+ 接近干净，球体边缘可见红/绿墙的颜色渗色 |
+
+## 解释器踩坑/合规（本次逐条对照）
+
+- 算术二元嵌套（`check_multi_operand.py` 全绿）；无一元取负（`(- 0.0 x)`）；`/`、`mod`
+  恒浮点（列表下标保持纯整数表达式：`(* (+ (* py 40) px) 3)`）；`Math.PI` 是函数 →
+  π/τ 常数直接硬编码；cond 多表达式子句受限 → 全部平铺 `if` + `{}` 块；
+  `'() 静态槽` → 累积表用 `(cdr '(0.0))` 取新对象后 push 3600 项。
+- `Math.pow(0, γ)` 安全（0 的正次幂为 0），但负值会 NaN→`#null`→类型错误——辐射度量
+  恒非负，无此路径；NEE 的 `ndotl>0` 守卫同时消除了"光源与天花板共面"导致的 0/0 奇异。
+- 退出接口：`(EX.install_with redraw_all)`——确认框"留下"/后台恢复后按累积缓冲重绘
+  同一显影进度；`(EX.check)` 在每 tick 开头（tick 约跨 5~8 个宿主帧，退出响应延迟
+  ≈ 1 个 tick，与 sdfprog 同级）。
+
+## 验证
+
+- 静态：`check_multi_operand.py` ✓；括号/花括号双计数 0/0 ✓。
+- 宿主回归台：spp 2/10/50/187 各阶段 DUMP_PPM 目检（噪声→显影过程正确，墙体红绿、
+  面光源、三球与软阴影、颜色渗色均符合预期）；`err=none`。
+- **浏览器 e2e**（新增 `tools/e2e/browser/regress_pathtracer.js`，按 manifest 推导 App
+  下标=12）：Chromium / chrome-headless-shell / Firefox **三引擎均 PASS**——
+  启动 state 80、epoch 7.5/秒持续推进、无 pageerror、Esc→确认框（state 保持 80）→
+  Enter 回列表（79）。
+- 回归：`run_host_regress.sh` 全 26 App `err=none`；`regress.js`（shell）全 26 App
+  `launch=80 → end=80`（calculator 的 refreshΔ=0 为静态 App 既有现象）；
+  `E2E_APPS=pathtracer` 的 `regress_det.js`（冻结时钟）正常（23 次刷新、913 色）。
+- 清单同步：`run_host_regress.sh` / `regress.js` / `regress_det.js` 的 APPS 已加入
+  `pathtracer`（字母序在 particlelife 与 qrcode 之间）；**顺带修正**了后两者缺失
+  `calculator`（及 regress_det 缺 `forkqueue`）导致的菜单下标整体错位（按下标导航的
+  脚本此前全都错位一位，forkqueue/xray 实际未被覆盖）。
