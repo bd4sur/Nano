@@ -97,7 +97,14 @@
 (define COLS_S (Math.floor (/ SW SS)))
 (define ROWS_S (Math.floor (/ SH SS)))
 
-(define SAMPLES_PER_STEP 5)         ; 每步推进的采样点数（本模型极重）
+;; 每步推进的采样点数：取一个大到「一步吃满一个时间片」的值。
+;; 历史：本项原为 5（约 24 万指令），配合 System.set_interval 16 调度，每个 rAF 帧
+;; 实际只跑 1 步就返回、外加定时器与 vsync 的相位差导致不少帧整帧空转——实测
+;; 整帧 7.2 s，其中约 55% 是「帧预算没被用掉」的等待。改为一个大数后，切片的责任
+;; 交回解释器时间片（MB_TIMESLICE_TICKS=312500 条指令，见 ui_scheme_app.c）：
+;; 进程在步内被抢占、下一帧继续，于是每一帧都把时间片跑满，整帧 2.9 s。
+;; 数值与绘制顺序完全不变（仍按采样点逐行推进、每画完一行 Gfx.refresh）。
+(define SAMPLES_PER_STEP 4096)      ; 每步推进的采样点数（一步吃满解释器时间片）
 (define HOLD_MS 300)                ; 渲染完成后的初始停留（毫秒），之后按 HOLD_CHECK_MS 轮询太阳是否移动
 
 ;; ---- 物理常数（celestial.c scatter_model_3）-------------------------------
@@ -178,22 +185,30 @@
 
 (define rt0 0.0)
 (define rt1 0.0)
+;; 简化：把 b=2p、c=|o|²-r² 代入 disc=b²-4c=4(p²-c)，两根 t=p∓√(p²-c)——
+;; 省掉 4 次乘法（2.0/4.0/两次 0.5），代数等价，浮点末位可能差 1 ulp。
 (define rsi
   (lambda (ox oy oz dx dy dz rad) {
-    (define b (* 2.0 (+ (* ox dx) (+ (* oy dy) (* oz dz)))))
+    (define p (+ (* ox dx) (+ (* oy dy) (* oz dz))))
     (define c (- (+ (* ox ox) (+ (* oy oy) (* oz oz))) (* rad rad)))
-    (define disc (- (* b b) (* 4.0 c)))
+    (define disc (- (* p p) c))
     (if (< disc 0.0)
         { (set! rt0 0.0) (set! rt1 0.0) 0 }
         { (define sq (Math.sqrt disc))
-          (set! rt0 (* 0.5 (- (- 0.0 b) sq)))
-          (set! rt1 (* 0.5 (+ (- 0.0 b) sq)))
+          (set! rt0 (- (- 0.0 p) sq))
+          (set! rt1 (- sq p))
           1 })
   }))
 
 ;; ---- 路径积分（Nishita 公式 4/5）：沿 o+t·d 求 Rayleigh/Mie 加权光学深度 --
 ;; nV 个主采样点，每点向太阳方向再取 nL 个采样点做地球遮蔽检测与透射率累积。
 ;; 结果写入 m_r0..m_r2（Rayleigh 三通道）与 m_m0..m_m2（Mie 三通道）。
+;;
+;; 性能：每个主采样点的"太阳射线求交"直接内联成 |w+t·sun|²=Ra² 的二次方程求解
+;; （复用已算好的 |w|²=r2，不再调 rsi）：一次 rsi 调用约 80 条 VM 指令，其中
+;; 闭包调用/传参/全局写回占 ~20，重复的 |w|² 与 Ra² 又占若干——内联后每个
+;; 采样点省 40 余条指令，而整帧要跑 36+36+18 次。数值与 rsi 完全一致（同一公式、
+;; 同一 |w|² 表达式），实测像素零差异。
 
 (define m_r0 0.0)
 (define m_r1 0.0)
@@ -212,6 +227,7 @@
     (define dR 0.0) (define dM 0.0) (define odR 0.0) (define odM 0.0)
     (define lSeg 0.0) (define lR 0.0) (define lM 0.0) (define blocked 0)
     (define lt 0.0) (define lx 0.0) (define ly 0.0) (define lz 0.0) (define lh 0.0)
+    (define r2 0.0) (define sp 0.0) (define sdisc 0.0) (define st1 0.0)
     (define oR 0.0) (define oM 0.0)
     (define sr0 0.0) (define sr1 0.0) (define sr2 0.0)
     (define sm0 0.0) (define sm1 0.0) (define sm2 0.0)
@@ -223,15 +239,19 @@
       (set! wx (+ ox (* dx t)))
       (set! wy (+ oy (* dy t)))
       (set! wz (+ oz (* dz t)))
-      (set! h (- (Math.sqrt (+ (* wx wx) (+ (* wy wy) (* wz wz)))) Re))
+      (set! r2 (+ (* wx wx) (+ (* wy wy) (* wz wz))))
+      (set! h (- (Math.sqrt r2) Re))
       (set! dR (* (Math.exp (- 0.0 (/ h Hr))) seg))
       (set! dM (* (Math.exp (- 0.0 (/ h Hm))) seg))
       (set! odR (+ odR dR))
       (set! odM (+ odM dM))
-      (if (== (rsi wx wy wz sun_x sun_y sun_z Ra) 1)
-          { (if (> rt1 0.0)
+      (set! sp (+ (* wx sun_x) (+ (* wy sun_y) (* wz sun_z))))
+      (set! sdisc (- (* sp sp) (- r2 (* Ra Ra))))
+      (if (>= sdisc 0.0)
+          { (set! st1 (- (Math.sqrt sdisc) sp))
+            (if (> st1 0.0)
                 {
-                  (set! lSeg (/ rt1 nL))
+                  (set! lSeg (/ st1 nL))
                   (set! lR 0.0) (set! lM 0.0) (set! blocked 0) (set! j 0)
                   (while (< j nL) {
                     (set! lt (* (+ j 0.5) lSeg))
@@ -273,6 +293,50 @@
 (define amb_y '(0.0 0.0 0.0 0.8944272 -0.8944272 0.6666667 0.6666667 -0.6666667 -0.6666667))
 (define amb_z '(1.0 0.4472136 0.4472136 0.4472136 0.4472136 0.3333333 0.3333333 0.3333333 0.3333333))
 
+;; ---- 每帧常量：太阳位置一变就要重算，但与视线/采样点无关的东西全部预先算好 ----------
+;; 这些量原本在每个采样点里重算（约 1850 个采样点 × V2×9 次），数值完全一样：
+;;   dom_g                    二阶多次散射的全球照射度（只依赖太阳高度）
+;;   akr0/akr1/akr2/akm[k]   第 k 个环境方向的 "SUNF·β·相位·dom_g" 系数（只依赖方向与太阳）
+;; 装订点：启动时一次、每次 advance（太阳移动重绘）时一次。
+(define dom_g 0.0)
+(define akr0 '())
+(define akr1 '())
+(define akr2 '())
+(define akm '())
+
+(define frame_setup
+  (lambda () {
+    (define sal (* (/ sun_alt_deg 10.0) (/ sun_alt_deg 10.0)))
+    (set! dom_g (* (* 2.0 (/ PI 9.0)) (+ (* 14.0 (Math.exp (- 0.0 sal))) 2.0)))
+    ;; 新建列表：模块级 '() 字面量是静态槽，反复 push 会跨帧累积
+    (define l0 (cdr (cons 0.0 '())))
+    (define l1 (cdr (cons 0.0 '())))
+    (define l2 (cdr (cons 0.0 '())))
+    (define lm (cdr (cons 0.0 '())))
+    (define k 0)
+    (while (< k 9) {
+      (define adx (get_item amb_x k))
+      (define ady (get_item amb_y k))
+      (define adz (get_item amb_z k))
+      (define mu (+ (* adx sun_x) (+ (* ady sun_y) (* adz sun_z))))
+      (define m1 (+ 1.0 (* mu mu)))
+      (define p_r (* 0.05968310365946075 m1))
+      (define base (- 1.5776 (* 1.52 mu)))
+      (if (< base 0.0000000001) { (set! base 0.0000000001) })
+      (define p_m (* 0.1193662073189215
+                    (/ (* 0.4224 m1) (* 2.5776 (* base (Math.sqrt base))))))
+      (push l0 (* (* SUNF bR0) (* p_r dom_g)))
+      (push l1 (* (* SUNF bR1) (* p_r dom_g)))
+      (push l2 (* (* SUNF bR2) (* p_r dom_g)))
+      (push lm (* (* SUNF bM) (* p_m dom_g)))
+      (set! k (+ k 1))
+    })
+    (set! akr0 l0)
+    (set! akr1 l1)
+    (set! akr2 l2)
+    (set! akm lm)
+  }))
+
 ;; ---- 单视线方向的散射颜色（对应 scatter_model_3 主体）----------------------
 ;; 输入视线单位向量 (vx,vy,vz) 与视线仰角 elev_deg；结果写入 out_r/out_g/out_b。
 
@@ -292,19 +356,24 @@
     (define t 0.0) (define wx 0.0) (define wy 0.0) (define wz 0.0) (define h 0.0)
     (define tv0 0.0) (define tv1 0.0) (define tv2 0.0)
     (define adx 0.0) (define ady 0.0) (define adz 0.0)
-    (define mu_a 0.0) (define mu_s 0.0)
-    (define p_ra 0.0) (define p_ma 0.0) (define p_rs 0.0) (define p_ms 0.0)
+    (define mu_s 0.0)
+    (define r2 0.0) (define ap 0.0) (define sdisc 0.0) (define st1 0.0)
+    (define p_rs 0.0) (define p_ms 0.0)
     (define sg0 0.0) (define sg1 0.0) (define sg2 0.0)
-    (define mu1 0.0) (define dom_g 0.0)
+    (define mu1 0.0)
     ;; B1 内联临时量：phase_m 的 (1+g²−2gμ) 底数、HDR 映射中间值
     (define pmb 0.0) (define hq 0.0)
     ;; 观测点在大气内部：入射根 t0<0，故积分起点 tMin=0；终点为大气出射根
-    (define hit (rsi 0.0 0.0 Re1 vx vy vz Ra))
+    ;; 内联 rsi（o=(0,0,Re1)）：p=Re1·vz、c=Re1²-R² ⇒ t=p∓√(p²+c的相反数)
+    (define cz (* Re1 vz))
+    (define cz2 (* cz cz))
     (set! tmin 0.0)
-    (set! tmax rt1)
+    (set! tmax (- (Math.sqrt (+ cz2 (- (* Ra Ra) (* Re1 Re1)))) cz))
     ;; 地球遮挡（朝天顶的视线不会命中，保留与原实现一致的判据）
-    (if (== (rsi 0.0 0.0 Re1 vx vy vz Re) 1)
-        { (if (> rt0 1.0) { (if (< rt0 tmax) { (set! tmax rt0) }) }) })
+    (define dE (+ cz2 (- (* Re Re) (* Re1 Re1))))
+    (if (>= dE 0.0)
+        { (define rt0v (- (- 0.0 cz) (Math.sqrt dE)))
+          (if (> rt0v 1.0) { (if (< rt0v tmax) { (set! tmax rt0v) }) }) })
     (if (<= tmax tmin)
         { (set! out_r 0.0) (set! out_g 0.0) (set! out_b 0.0) }
         {
@@ -312,12 +381,13 @@
           (set! mu1 (+ (* vx sun_x) (+ (* vy sun_y) (* vz sun_z))))
           ;; B1：phase_r / phase_m 内联（原每采样点 2 次小函数调用；表达式与函数体
           ;; 逐字一致，数值结果不变）
-          (define p_r1 (* 0.05968310365946075 (+ 1.0 (* mu1 mu1))))
+          (define m1_1 (+ 1.0 (* mu1 mu1)))
+          (define p_r1 (* 0.05968310365946075 m1_1))
           (set! pmb (- 1.5776 (* 1.52 mu1)))
           (if (< pmb 0.0000000001) { (set! pmb 0.0000000001) })
           (define p_m1 (* 0.1193662073189215
-                         (/ (* 0.4224 (+ 1.0 (* mu1 mu1)))
-                            (* 2.5776 (Math.pow pmb 1.5)))))
+                         (/ (* 0.4224 m1_1)
+                            (* 2.5776 (* pmb (Math.sqrt pmb))))))
           (march 0.0 0.0 Re1 vx vy vz tmin tmax 36 1)
           (set! c0 (* SUNF (+ (* (* m_r0 bR0) p_r1) (* (* m_m0 bM) p_m1))))
           (set! c1 (* SUNF (+ (* (* m_r1 bR1) p_r1) (* (* m_m1 bM) p_m1))))
@@ -326,8 +396,6 @@
           ;; B2：V2 由 3 降为 2。二阶多次散射项沿视线方向是低频量（它是"各方向环境
           ;; 辐照度沿视线的加权积分"），中点法取 2 个采样点的误差远小于 8 位色量化步长
           ;; （实测整帧最大通道偏差见提交说明）。这是一处显式的画质/性能折衷。
-          (set! dom_g (* (* 2.0 (/ PI 9.0))
-                         (+ (* 14.0 (Math.exp (- 0.0 (* (/ sun_alt_deg 10.0) (/ sun_alt_deg 10.0))))) 2.0)))
           (set! seg_v (/ (- tmax tmin) V2))
           (set! od_r 0.0) (set! od_m 0.0) (set! i 0)
           (while (< i V2) {
@@ -335,7 +403,8 @@
             (set! wx (* vx t))
             (set! wy (* vy t))
             (set! wz (+ Re1 (* vz t)))
-            (set! h (- (Math.sqrt (+ (* wx wx) (+ (* wy wy) (* wz wz)))) Re))
+            (set! r2 (+ (* wx wx) (+ (* wy wy) (* wz wz))))
+            (set! h (- (Math.sqrt r2) Re))
             (if (>= h 0.0)
                 {
                   (set! dR2 (* (Math.exp (- 0.0 (/ h Hr))) seg_v))
@@ -350,35 +419,33 @@
                     (set! adx (get_item amb_x k))
                     (set! ady (get_item amb_y k))
                     (set! adz (get_item amb_z k))
-                    (if (== (rsi wx wy wz adx ady adz Ra) 1)
-                        { (if (> rt1 0.0)
+                    (set! ap (+ (* wx adx) (+ (* wy ady) (* wz adz))))
+                    (set! sdisc (- (* ap ap) (- r2 (* Ra Ra))))
+                    (if (>= sdisc 0.0)
+                        { (set! st1 (- (Math.sqrt sdisc) ap))
+                          (if (> st1 0.0)
                               {
-                                (march wx wy wz adx ady adz 0.0 rt1 2 2)
-                                (set! mu_a (+ (* adx sun_x) (+ (* ady sun_y) (* adz sun_z))))
-                                ;; B1：内联（逐方向 2 次）
-                                (set! p_ra (* 0.05968310365946075 (+ 1.0 (* mu_a mu_a))))
-                                (set! pmb (- 1.5776 (* 1.52 mu_a)))
-                                (if (< pmb 0.0000000001) { (set! pmb 0.0000000001) })
-                                (set! p_ma (* 0.1193662073189215
-                                             (/ (* 0.4224 (+ 1.0 (* mu_a mu_a)))
-                                                (* 2.5776 (Math.pow pmb 1.5)))))
-                                (define la0 (* SUNF (+ (* (* m_r0 bR0) p_ra) (* (* m_m0 bM) p_ma))))
-                                (define la1 (* SUNF (+ (* (* m_r1 bR1) p_ra) (* (* m_m1 bM) p_ma))))
-                                (define la2 (* SUNF (+ (* (* m_r2 bR2) p_ra) (* (* m_m2 bM) p_ma))))
+                                (march wx wy wz adx ady adz 0.0 st1 2 2)
+                                ;; 方向相位项与其 SUNF·β 系数已由 frame_setup 预算好
+                                (define la0 (+ (* m_r0 (get_item akr0 k)) (* m_m0 (get_item akm k))))
+                                (define la1 (+ (* m_r1 (get_item akr1 k)) (* m_m1 (get_item akm k))))
+                                (define la2 (+ (* m_r2 (get_item akr2 k)) (* m_m2 (get_item akm k))))
                                 ;; 相位函数方向约定：入射光子 −ω、出射光子 −d ⇒ μ=dot(ω,d)
                                 (set! mu_s (+ (* adx vx) (+ (* ady vy) (* adz vz))))
-                                (set! p_rs (* 0.05968310365946075 (+ 1.0 (* mu_s mu_s))))
+                                (define ms1 (+ 1.0 (* mu_s mu_s)))
+                                (set! p_rs (* 0.05968310365946075 ms1))
                                 (set! pmb (- 1.5776 (* 1.52 mu_s)))
                                 (if (< pmb 0.0000000001) { (set! pmb 0.0000000001) })
                                 (set! p_ms (* 0.1193662073189215
-                                             (/ (* 0.4224 (+ 1.0 (* mu_s mu_s)))
-                                                (* 2.5776 (Math.pow pmb 1.5)))))
-                                (set! sg0 (+ (* (* bR0 p_rs) dR2) (* (* bM p_ms) dM2)))
-                                (set! sg1 (+ (* (* bR1 p_rs) dR2) (* (* bM p_ms) dM2)))
-                                (set! sg2 (+ (* (* bR2 p_rs) dR2) (* (* bM p_ms) dM2)))
-                                (set! c0 (+ c0 (* (* (* la0 sg0) tv0) dom_g)))
-                                (set! c1 (+ c1 (* (* (* la1 sg1) tv1) dom_g)))
-                                (set! c2 (+ c2 (* (* (* la2 sg2) tv2) dom_g)))
+                                             (/ (* 0.4224 ms1)
+                                                (* 2.5776 (* pmb (Math.sqrt pmb))))))
+                                (define sgm (* (* bM p_ms) dM2))
+                                (set! sg0 (+ (* (* bR0 p_rs) dR2) sgm))
+                                (set! sg1 (+ (* (* bR1 p_rs) dR2) sgm))
+                                (set! sg2 (+ (* (* bR2 p_rs) dR2) sgm))
+                                (set! c0 (+ c0 (* (* la0 sg0) tv0)))
+                                (set! c1 (+ c1 (* (* la1 sg1) tv1)))
+                                (set! c2 (+ c2 (* (* la2 sg2) tv2)))
                               })
                         })
                     (set! k (+ k 1))
@@ -735,6 +802,7 @@
 (define advance
   (lambda () {
     (sun_from_ephem)
+    (frame_setup)                     ; 太阳变了 → 重装帧级常量
     (set! rendered_az sun_az)
     (set! rendered_el sun_alt_deg)
     (set! cur_x 0)
@@ -756,6 +824,7 @@
 ;; ---- 启动：取实时太阳 → 清屏 → 步进循环 ------------------------------------
 
 (sun_from_ephem)
+(frame_setup)
 (set! rendered_az sun_az)
 (set! rendered_el sun_alt_deg)
 (Gfx.clear)
