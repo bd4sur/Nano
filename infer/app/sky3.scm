@@ -26,18 +26,71 @@
 ;; 一般性说明（重要）：本实现**不利用任何镜像/对称性剪枝**，每个采样点都独立
 ;; 完成完整的散射计算；也不做任何跨采样点平滑（采样块原样以 SS×SS 像素块绘制）。
 ;;
-;; 性能设计（宿主每帧一个时间片，约 25 万条 VM 指令）：
-;;   该模型单采样点约 4.8 万条 VM 指令（约为 sky.scm 的 240 倍），故：
-;;   - 采样块 5×5（64×48=3072 采样点，圆内约 1770 个），远粗于 sky/sky2 的 2×2；
-;;   - 每个 step 只推进 SAMPLES_PER_STEP=5 个**圆内**采样点（约 24 万指令，单步
-;;     不跨时间片，避免 interval 回调重入）；圆外采样几乎零成本，可批量略过；
-;;     每画完一个采样行推屏一次（渐进呈现）；
-;;   - 一帧天空约 355 步：原生测试台 ≈6 秒、浏览器 WASM ≈13 秒（实测）；
-;;     渲染完成后显示实时太阳高度/方位与时刻，并每隔 HOLD_MS 检查一次太阳是否
-;;     已移动超过 RE_RENDER_DEG，是则按新太阳位置重绘。
-;;   - 帧级预计算：太阳三向量、太阳高度（供 global_gain）。
+;; 性能剖析与优化（2026-10-30，WASM 目标实测）---------------------------------
 ;;
-;; 依赖：Gfx（绘图）、Math、System（定时器）、Time（取时）、共享星历模块 Ephem。
+;; 一、量测口径（infer/tools/e2e 之外的一次性探针，结论已固化在本文件）
+;;   · 无头 Chromium（playwright）+ 真 wasm 产物，页面内 rAF 钩子逐帧记录
+;;     (performance.now, Gfx.refresh 的 epoch, VM 指令数)，一帧天空 = 48 次采样行推屏；
+;;   · 解释器吞吐（wasm）实测 ≈ 18.7 M 条 VM 指令/秒，与指令种类无关（紧循环
+;;     微基准与 sky3 同值）；因此**一帧墙钟 ≈ 该帧总指令数 / 18.7M 秒**，
+;;     优化只剩两条路：少跑指令，或把每帧的时间片用满。
+;;   · 单帧成本归因（宿主插桩 + 删块消融，全部 1810 个圆内采样点）：
+;;      散射总计 63.2 M 条指令，其中二阶多次散射 41.7 M（66%）
+;;      ——其中 9 方向 × V2 的内层 march 占 30.5 M（48%）；一阶 march 16.8 M（32%）；
+;;      另有双线性重建/字幕 ≈ 6 M。Math.exp/sqrt/pow 共 150 万次调用但只对应
+;;      2.4% 的指令（C 数学本体不是瓶颈，解释器分发开销才是）。
+;;
+;; 二、热点根因 #1（最大项）：**帧预算没被用满** ——
+;;   旧设计每个 step 只算 5 个采样点（约 13 万指令），而解释器每帧给的时间片是
+;;   312500 条指令（MB_TIMESLICE_TICKS）；更糟的是 16 ms 的 interval 与 16.7 ms
+;;   的 vsync 存在拍频，实测 **约 57% 的帧一条指令都没跑**（逐帧探针）。
+;;   修正：把 SAMPLES_PER_STEP 取到「一步吃满一个时间片」的大小，切片责任交回
+;;   解释器时间片（进程在步内被抢占、下一帧继续）。因数值与绘制顺序都不变，
+;;   画面逐像素相同。实测整帧 7.18 s → 2.87 s（−60%）。
+;;
+;; 三、热点根因 #2：解释器每条源级算符约 3 条 VM 指令，于是少写操作就是提速：
+;;   · rsi（射线-球面求交）原来每个采样点调 92 次，现全部内联，且复用 march
+;;     里已算的 |w|²、省掉 b/2、b²−4c 的 4 次乘——每处 ~50 条指令；
+;;   · Math.pow(base,1.5) → base·√base（wasm 里 pow 是 libm 调用）；
+;;   · 帧级常量上提：dom_g 与 9 个环境方向的相位项及其 SUNF·β 系数（原每采样点
+;;     重算 18 次）→ 每帧算一次（frame_setup）；
+;;   · 相位项里的 (1+μ²) 等公共子式只算一次。
+;;   合计散射指令 63.2 M → 53.0 M（−16%），**实测整帧与优化前逐像素零差异**
+;;   （宿主回归台冻结时钟 A/B：76800 像素全等，最终帧 CRC 相同）。
+;;
+;; 四、结果（无头 Chromium，同一场景，各两次）
+;;   基准（原文件）                    7180 / 7130 ms
+;;   仅把帧预算用满                    2870 / 2870 ms（2.5×）
+;;   再加上述指令削减                  2330 / 2330 ms（3.1×，画面逐像素相同）
+;;
+;; 五、还想更快？三个显式画质旋钮（均已实测，按需取舍；默认全部关闭）
+;;   V2 2→1              散射 35.7 M 指令，画质差 ≤ 9/255（与既有 B2 同一量级）
+;;   nV 36→24（一阶）    散射 47.4 M 指令，画质差 ≤ 33/255（地平线附近最明显）
+;;   SS 5→8              采样点 1810→708，散射 21.0 M 指令，画质差（圆内）≤ 49/255
+;;   （SS 只改采样密度与双线性重建的格子大小，不动物理；改 SS 需能整除 320/240）
+;;
+;; 六、解释器侧的下一个杠杆（未在本文件内实施，需改 vendor/Animac）
+;;   指令分布：load_slot 33%、mul 13%、push 11%、add 9%、set_slot 8%、store_slot 6%；
+;;   一条 `(set! x (* a b))` 要 4 条指令（两次取槽、乘、写槽）。若在已有的
+;;   frame-rewrite 后置遍历里再加一个 peephole（[load_slot A][load_slot B][mul]
+;;   → 一条 mul_slots(A,B)，PC 前进 3 并保证没有跳转目标落在被跳过的位置上），
+;;   可去掉约 30%~40% 的指令，即本文件再快 1.3~1.4 倍、所有灵机 App 普适。
+;;   验证路径：vendor/Animac/testall.sh + infer/tools/e2e/host 的呈现序列 A/B。
+;;
+;; 交互：两侧触屏按钮调时刻（2026-10-30 追加）----------------------------------
+;;   · 屏左/右边缘各一个按钮（圆外黑底上，不与天空圆、不与左上 80×60 的触屏宫格冲突）：
+;;     左 = 时刻 −10 分钟，右 = +10 分钟；点一下即重算该时刻的天象。
+;;   · **一旦点过按钮就不再保持实时刷新**：进入「手动」模式后，太阳移动不再触发重绘，
+;;     右下时钟也停在被选中的时刻（顶部左列显示「手动 ±N 分」）。
+;;   · 回到实时：**长按任一按钮 0.7 s**（偏移归零、恢复实时跟随）。
+;;   · 实现：偏移只作用在「取时」处（现在 now_shifted 统一给 cur_days/cur_sod，
+;;     sun_from_ephem 与 now_string 共用），不动物理模型与渲染管线；触屏用 Touch 本地库
+;;     的电平+边沿锁存（Touch.is_pressed / take_press / x / y），在每个 step 开头与每个
+;;     采样行完成时各采一次（长帧渲染途中点按也能在一行内响应），命中即 advance()：
+;;     重取时刻 → 重装帧常量 → 清屏重画按钮 → 从头渲染（渐进行推屏保留）。
+;;   · 无触屏宿主（Touch.is_available 为假）不画按钮，行为与以前完全一致。
+;;
+;; 依赖：Gfx（绘图）、Math、System（定时器）、Time（取时）、Touch（按钮）、共享星历模块 Ephem。
 
 ;; ---- 平滑滤波（消除 SS×SS 色块的马赛克感）----------------------------------
 ;; 采样阶段（shade/scatter_v）只把每个采样点的颜色写进一张 ROWS_S×COLS_S 的网格
@@ -77,6 +130,7 @@
 (native String)
 (native System)
 (native Time)
+(native Touch)
 
 (import Ephem "app/lib/ephem.scm")
 
@@ -162,11 +216,31 @@
 (define sun_alt_deg 90.0)
 (define sun_az 0.0)                 ; 太阳方位角（北=0°，东=90°），显示用
 
+;; ---- 时刻偏移（手动查看其他时刻）-------------------------------------------
+;; 实时跟随模式下偏移为 0；点按屏幕左右两侧按钮 ±10 分钟后进入「手动」，画面不再
+;; 随实时时间自动重绘（冻结在被选中的时刻），长按任一按钮回到实时跟随。
+;; 偏移只作用在「取时」这一处：sun_from_ephem（定太阳）与 now_string（右下时刻），
+;; 因此不动物理模型与渲染管线。
+(define t_shift_min 0)              ; 相对实时的分钟偏移（10 的整数倍）
+(define manual 0)                   ; 0=实时跟随，1=手动（画面冻结在该时刻）
+(define cur_days 0.0)               ; 最近一次取时的 UTC 天数（已含偏移）
+(define cur_sod 0.0)                ; 最近一次取时的 UTC 秒数（已含偏移）
+
+;; 取当前时刻并叠加偏移，写入 cur_days/cur_sod（日/秒进位在这做掉）
+(define now_shifted
+  (lambda () {
+    (define ld (Time.utc_days))
+    (define ls (+ (Time.utc_sod) (* 60 t_shift_min)))
+    (while (>= ls 86400) { (set! ls (- ls 86400)) (set! ld (+ ld 1)) })
+    (while (< ls 0) { (set! ls (+ ls 86400)) (set! ld (- ld 1)) })
+    (set! cur_days ld)
+    (set! cur_sod ls)
+  }))
+
 (define sun_from_ephem
   (lambda () {
-    (define ud (Time.utc_days))
-    (define us (Time.utc_sod))
-    (Ephem.set_time ud us)
+    (now_shifted)                   ; 实时 + 手动偏移
+    (Ephem.set_time cur_days cur_sod)
     (Ephem.set_gmst)
     (Ephem.sun_equatorial)
     (Ephem.sun_altaz)
@@ -182,6 +256,8 @@
 
 ;; ---- 射线-球面求交：|o+t·d|²=r² ⇒ t²+2(o·d)t+(|o|²-r²)=0 ------------------
 ;; 有交点返回 1 并把两根写入 rt0/rt1，无交点返回 0。
+;; 注意：热路径（march 的太阳射线、二阶每方向求交、视线出射根）均已内联求解
+;; （复用已有的 |w|² 并省掉闭包调用），本函数与 rt0/rt1 仅作为参考实现保留。
 
 (define rt0 0.0)
 (define rt1 0.0)
@@ -624,7 +700,10 @@
             (set! cur_y (+ cur_y 1))
             ;; 采样行 s 算完后，采样带 s-1（需采样行 s-1 与 s）才可重建并上屏
             (if (>= cur_y 2) { (blit_band (- cur_y 2)) })
-            (Gfx.refresh) })
+            (Gfx.refresh)
+            ;; 行边界顺带采一次触屏：长帧渲染途中点按钮也能在一行内（~50ms）响应，
+            ;; 响应即把 cur_x/cur_y 复位、清屏并重画按钮（见 touch_poll → advance）。
+            (touch_poll) })
     })
     (if (>= cur_y ROWS_S)
         {
@@ -648,9 +727,8 @@
 ;; 读一次实时太阳位置（不改变本帧渲染所用的 sun_*），判断是否已明显移动
 (define sun_moved_enough
   (lambda () {
-    (define ud (Time.utc_days))
-    (define us (Time.utc_sod))
-    (Ephem.set_time ud us)
+    (now_shifted)
+    (Ephem.set_time cur_days cur_sod)
     (Ephem.set_gmst)
     (Ephem.sun_equatorial)
     (Ephem.sun_altaz)
@@ -701,13 +779,12 @@
 (define hud_clock_h 15)
 (define last_sec -1)
 
-;; 当前本地时间 "YYYY-MM-DD hh:mm:ss"（北京时间 = UTC+8）
+;; 当前本地时间 "YYYY-MM-DD hh:mm:ss"（北京时间 = UTC+8；含手动偏移）
 (define now_string
   (lambda () {
-    (define ud (Time.utc_days))
-    (define us (Time.utc_sod))
-    (define ld ud)
-    (define ls (+ us Ephem.TZ_SEC))
+    (now_shifted)
+    (define ld cur_days)
+    (define ls (+ cur_sod Ephem.TZ_SEC))
     (if (>= ls 86400) { (set! ls (- ls 86400)) (set! ld (+ ld 1)) })
     (Ephem.civil ld)
     (define hh (Math.floor (/ ls 3600.0)))
@@ -782,10 +859,13 @@
   }))
 
 ;; 每秒刷新一次时间（仅在天空渲染完成后调用，避免被逐行绘制覆盖）
+;; 手动模式下冻结：画面停在被选中的时刻，时钟不再走。
 (define clock_tick
   (lambda () {
-    (define us (Time.utc_sod))
-    (if (not (== us last_sec)) { (set! last_sec us) (draw_clock) })
+    (if (== manual 0) {
+      (define us (Time.utc_sod))
+      (if (not (== us last_sec)) { (set! last_sec us) (draw_clock) })
+    })
   }))
 
 ;; 每帧天空完成时：左上一行（太阳高度/方位）、左下标题、右下时间
@@ -799,6 +879,106 @@
     (draw_clock)
   }))
 
+;; ---- 触屏按钮：屏左边缘 = 时刻 −10 分钟，屏右边缘 = +10 分钟 ------------------
+;; 位置选择：天空圆是 240×320 屏的内切圆（半径 120、圆心居中），屏幕两侧约 40px
+;; 恒为黑、且逐行双线性重建只画圆内像素，所以按钮画一次不会被覆盖；纵向放在
+;; 中部（y=94~146）也避开了左上角 80×60 的系统宫格（触屏 esc 格）。
+(define BTN_W 24)
+(define BTN_H 52)
+(define BTN_M 3)
+(define BTN_LX BTN_M)
+(define BTN_RX (- SW (+ BTN_M BTN_W)))
+(define BTN_Y (Math.floor (- (/ SH 2.0) (/ BTN_H 2.0))))
+(define BTN_HOLD_MS 700)            ; 按住超过该时长 = 回到实时跟随
+
+(define has_touch 0)                ; 宿主是否提供触屏（无触屏时不画按钮）
+(define btn_dn_at 0)                ; 本次按下的时刻（长按判定用）
+(define btn_dn_hold 0)              ; 本次按下是否已触发过长按
+
+;; 偏移量文本：+20 / -10（0 时为 +0，但提示行里 0 会特判成“手动”不带数字）
+(define off_str
+  (lambda (v)
+    (if (>= v 0) (String.concat "+" (String.atom_to_string v)) (String.atom_to_string v))))
+
+;; 手动模式提示文本（偏移为 0 时只显示“手动”，避免“手动+0分”这种碎碎念）
+(define manual_txt
+  (lambda ()
+    (if (== t_shift_min 0)
+        "手动"
+        (String.concat "手动" (String.concat (off_str t_shift_min) "分")))))
+
+;; 单个侧边按钮：方向 dir=1 向右（快进）、-1 向左（快退）；label 为 "+10" / "-10"
+(define draw_button
+  (lambda (bx dir label) {
+    (define cr 52) (define cg 78) (define cb 110)
+    ;; 手动模式下边框转金：一眼能看出「已不跟随实时」
+    (if (== manual 1) { (set! cr 200) (set! cg 156) (set! cb 64) })
+    (Gfx.fill_rect bx BTN_Y BTN_W BTN_H 20 26 38)
+    (Gfx.draw_rect bx BTN_Y BTN_W BTN_H cr cg cb)
+    ;; 三角箭头（宽 8、半高 8）
+    (define cx (+ bx 12))
+    (define cy (+ BTN_Y 15))
+    (define i 0)
+    (while (< i 8) {
+      (define half (- 8 i))
+      (define xx (if (== dir 1) (+ (- cx 4) i) (- (+ cx 4) i)))
+      (Gfx.fill_rect xx (- cy half) 1 (* 2 half) 150 190 230)
+      (set! i (+ i 1))
+    })
+    (Gfx.draw_text label (+ bx 2) (+ BTN_Y 30) 150 190 230)
+  }))
+
+(define draw_buttons
+  (lambda () {
+    (if (== has_touch 1)
+        { (draw_button BTN_LX -1 "-10")
+          (draw_button BTN_RX 1 "+10") })
+  }))
+
+;; 手动模式的常驻提示：画在圆外左上黑区（x<96 且 y<45 的像素永不参与逐行重建），
+;; 所以从起帧到上一帧完成都能看到，交互反馈不靠整帧结束。
+(define draw_manual_hint
+  (lambda () {
+    (if (== manual 1)
+        { (Gfx.draw_text (manual_txt) 4 18 224 196 128)
+          (Gfx.draw_text "长按回实时" 4 33 150 142 112) })
+  }))
+
+;; 点按命中判定（返回 #t/#f；注意本语言只有 #f 为假，不能返回 0/1）
+(define in_btn
+  (lambda (px py bx)
+    (and (>= px bx) (< px (+ bx BTN_W)) (>= py BTN_Y) (< py (+ BTN_Y BTN_H)))))
+
+;; 采一次触屏并处理按钮：
+;;   点按左/右按钮 → t_shift_min ∓10 分钟，进入手动模式，重新起帧；
+;;   按住任一按钮 ≥BTN_HOLD_MS → 偏移归零，回到实时跟随。
+;; 返回值：1 表示本拍已换时刻并重新起帧（调用方据此跳过本拍的停留逻辑）。
+(define touch_poll
+  (lambda () {
+    (define acted 0)
+    (if (== has_touch 1)
+        {
+          (define pressed (Touch.is_pressed))
+          (define px (Touch.x))
+          (define py (Touch.y))
+          (if (Touch.take_press)
+              {
+                (if (in_btn px py BTN_LX)
+                    { (set! btn_dn_at (System.timestamp)) (set! btn_dn_hold 0)
+                      (set! t_shift_min (- t_shift_min 10)) (set! manual 1) (set! acted 1) }
+                    { (if (in_btn px py BTN_RX)
+                          { (set! btn_dn_at (System.timestamp)) (set! btn_dn_hold 0)
+                            (set! t_shift_min (+ t_shift_min 10)) (set! manual 1) (set! acted 1) }) })
+              })
+          (if (and pressed (== btn_dn_hold 0) (> btn_dn_at 0))
+              { (if (> (- (System.timestamp) btn_dn_at) BTN_HOLD_MS)
+                    { (set! btn_dn_hold 1) (set! t_shift_min 0) (set! manual 0) (set! acted 1) }) })
+          (if (not pressed) { (set! btn_dn_at 0) })
+        })
+    (if (== acted 1) { (advance) })
+    acted
+  }))
+
 (define advance
   (lambda () {
     (sun_from_ephem)
@@ -807,25 +987,32 @@
     (set! rendered_el sun_alt_deg)
     (set! cur_x 0)
     (set! cur_y 0)
+    (set! last_sec -1)                ; 时刻变了 → 右下时钟重画
     (Gfx.clear)
+    (draw_buttons)                    ; 清屏后重画侧边按钮（圆外黑底，后续逐行不会覆盖）
+    (draw_manual_hint)
   }))
 
 (define step
   (lambda () {
+    (define acted (touch_poll))       ; 触屏按钮在任何阶段都响应
     (if (< cur_y ROWS_S)
         { (render_chunk) }
-        { (clock_tick)                       ; 右下角时间每秒走一次
-          (if (> (System.timestamp) hold_until)
-              { (if (== (sun_moved_enough) 1)
-                    { (advance) }
-                    { (set! hold_until (+ (System.timestamp) HOLD_CHECK_MS)) }) }) })
+        { (if (== acted 1)
+              { #undefined }          ; 刚换了时刻并已重新起帧，本拍不再做停留逻辑
+              { (clock_tick)          ; 右下角时间每秒走一次（手动模式冻结）
+                (if (> (System.timestamp) hold_until)
+                    { (if (== manual 0)
+                          { (if (== (sun_moved_enough) 1)
+                                { (advance) }
+                                { (set! hold_until (+ (System.timestamp) HOLD_CHECK_MS)) }) }
+                          { (set! hold_until (+ (System.timestamp) HOLD_CHECK_MS)) }) }) }) })
   }))
 
-;; ---- 启动：取实时太阳 → 清屏 → 步进循环 ------------------------------------
+;; ---- 启动：实时太阳 → 清屏（含按钮）→ 步进循环 ------------------------------
 
-(sun_from_ephem)
-(frame_setup)
-(set! rendered_az sun_az)
-(set! rendered_el sun_alt_deg)
-(Gfx.clear)
+(set! has_touch (if (Touch.is_available) 1 0))
+(set! t_shift_min 0)
+(set! manual 0)
+(advance)
 (set! update_timer (System.set_interval 16 step))
