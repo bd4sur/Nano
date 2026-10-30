@@ -50,10 +50,26 @@ int32_t ui_scheme_app_list_item_action(Key_Event *key_event, Global_State *globa
                                        Widget_Menu_State *menu_state);
 
 // ---------------- 运行宿主 ----------------
+// 进入运行态时调用：**已有同源实例（后台冻结中）则恢复**，否则冷启动一个新实例。
 int32_t ui_scheme_app_init(Key_Event *key_event, Global_State *global_state);
 int32_t ui_scheme_app_event_handler(Key_Event *key_event, Global_State *global_state);
 int32_t ui_scheme_app_render_frame(Key_Event *key_event, Global_State *global_state);
 void    ui_scheme_app_on_exit(void);
+
+// 是否应该**切后台**（保留实例，1-是）。置位来源：(App.hide)、退出确认框的「后台」按钮。
+// 同样在泵完本帧之后判定；宿主随即调 ui_scheme_app_suspend_to_list()。
+// 单实例平台（ESP32）恒返回 0（hide 退化为退出）。
+int32_t ui_scheme_app_should_hide(Global_State *global_state);
+
+// 切后台：冻结当前实例（保留解释器与内存池）、前台让给应用列表
+void ui_scheme_app_suspend_to_list(void);
+
+// 锁屏等"临时挂起"用：只翻转 active 状态，不切状态机
+void ui_scheme_app_suspend_current(void);
+void ui_scheme_app_resume_current(void);
+
+// 某个 App 是否还有活着的实例（列表「● 运行中」角标用）
+int32_t ui_scheme_app_has_live_instance(const char *source_rel);
 
 // 是否应该销毁本 App 实例（1-是）。由 ui_app.c 的状态机在**泵完本帧之后**调用：
 //   · (App.exit_now) / (App.hide) → 立即退出；

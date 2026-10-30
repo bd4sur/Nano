@@ -258,13 +258,15 @@ int32_t am_native_ui_confirm_is_exit(void) {
     return (s_kind == AM_NATIVE_UI_KIND_CONFIRM) ? s_confirm_is_exit : 0;
 }
 
-void am_native_ui_resolve_confirm(am_runtime_t *rt, int32_t yes) {
+void am_native_ui_resolve_confirm(am_runtime_t *rt, int32_t answer) {
     am_pid_t pid = s_pid;
     am_process_t *proc;
     int32_t is_exit;
+    int32_t yes;
 
     if (s_kind != AM_NATIVE_UI_KIND_CONFIRM) return;
     is_exit = s_confirm_is_exit;
+    yes = (answer == 1);
 
     // 先清状态（同 am_native_ui_resolve 的理由）
     s_kind = AM_NATIVE_UI_KIND_NONE;
@@ -275,6 +277,8 @@ void am_native_ui_resolve_confirm(am_runtime_t *rt, int32_t yes) {
     // 退出型确认框的「确认」：启动 App 的收尾窗口（两段式协议第一段）。
     // 真正销毁要等 App 调 (App.exit_now) 或收尾窗口超时（见 am_native_App.h）。
     if (yes && is_exit) am_native_app_mark_exit_confirmed(rt);
+    // 「后台」：不退出，但请求宿主在帧末把实例冻结（保留解释器与内存池，回应用列表）
+    if (answer == 2 && is_exit) am_native_app_request_hide();
 
     if (!rt) return;
     proc = am_runtime_get_process(rt, pid);

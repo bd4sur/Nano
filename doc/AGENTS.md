@@ -2828,3 +2828,134 @@ particlelife/svm 删旧标记。
 - 各 App 的 `EX.draw_button` 都画在自己 `(Gfx.refresh)` 之前；progressive 类 App（sky*、
   mandelbrot、sdfprog）因此每推一帧都会重画按钮——幂等、成本可忽略，但将来若要更省可以
   只在整帧完成时画。
+
+------------------------------------
+
+# 2026-10-30（七）App 退出接口 P4：后台运行（实例表 / 切后台 / LRU 驱逐）
+
+前三期把"离开"做成了一条显式的通道（`(App.exit)` 三段式：确认 → 收尾 → 销毁）。
+P4 给"离开"加上第二条出路——**切后台**：不销毁实例，冻结后回列表，选中即恢复。
+
+## 1. 实例表（infer/ui_scheme_app.c）
+
+原先是"单前台单实例"的 `static UI_Scheme_App_State s_app;`，现在改成槽位表：
+
+```c
+#define SCHEME_APP_INST_MAX  (NANO_IS_M5ESP ? 1 : 3)   // 前台 1 + 后台 2（ESP32：无后台）
+static UI_Scheme_App_State s_inst[SCHEME_APP_INST_MAX];
+static UI_Scheme_App_State *s_app = NULL;   // 指向**前台**实例
+```
+
+- 实例身份用**源码相对路径**（`source_rel`）而不是 `s_apps[]` 指针——列表每次进入都会重扫描并
+  复用同一块缓冲，指针会失效（这是本期最容易踩的一脚）。
+- `app_instance_find / alloc / foreground / suspend / destroy` 五个原语：
+  - **alloc**：优先空槽；没有空槽就驱逐 `last_active_ms` 最小的**后台**实例（前台永不驱逐，日志
+    `[scheme-app] 实例槽位已满（3），驱逐后台实例：…`）；
+  - **foreground**：清其它槽的 foreground 位、`am_native_app_set_active(1)`、
+    `am_native_app_notify_resumed()`、`am_native_Key_reset()`（后台期间积压的按键不带给 App）、
+    `am_native_ui_abort()`；
+  - **suspend**：`active=0` + 丢弃挂起的模态请求；**运行时与内存池原地保留**。
+- `ui_scheme_app_init` 变成"有同源实例就恢复、否则冷启动"，因此列表里选中带角标的 App 就是
+  **恢复同一运行时**（App 内的状态、定时器、闭包帧全都还在），不是重启。
+
+## 2. 用户可见：三按钮退出确认框 + 列表角标
+
+- 退出确认框对**退出型请求**多画一枚「后台」：`确认 / 后台 / 留下`（三枚 54px 窄按钮、12px 字；
+  控制台的 C 场景仍是两枚 84px）。`ui_exit_confirm_draw_msg_ex/hit_msg_ex` 带 `with_bg` 参数，
+  `am_native_ui_resolve_confirm(rt, answer)` 的 answer 取 0=留下 / 1=确认 / 2=后台。
+- 「后台」→ `am_native_app_request_hide()` → 宿主帧末 `ui_scheme_app_should_hide()` 成立 →
+  `ui_scheme_app_suspend_to_list()`（不动运行时）→ 回列表。
+- 列表项对"有存活实例"的 App 追加 **`● 运行中`** 角标（标题截断到 40 字给角标留位）。
+- `(App.hide)` 是同一条通道的 App 侧入口（无确认框，直接请求）；调用前该落的盘先落完
+  ——冻结后不再有执行机会。
+
+## 3. suspend / resume 成为统一原语
+
+- `ui_scheme_app_suspend_current()` / `ui_scheme_app_resume_current()`：只翻转 active 状态，
+  不切状态机。**锁屏**改用它（`lock_screen_enter/exit` 里对 `STATE_SCHEME_APP_RUN` 调用），
+  不再依赖"没进状态机所以没泵"这种隐含语义；(App.is_active) 在锁屏期间为 #f。
+- `(App.resumed)`：前台化时置位、取走即清零；`app/lib/exit.scm` 的 `(EX.check)` 见到它就调一次
+  登记的重绘函数——挂起期间画面归别人，恢复后 App 需要补一帧（对"有脏才画"的 App 尤其重要）。
+- `(App.is_active)` 的语义统一为：`active && !exit_wanted && !exit_confirmed`。
+
+## 4. 内存预算
+
+每实例一个解释器池（WASM/桌面 12MB、ESP32 2MB），所以槽位上限直接就是内存预算：
+WASM 3 实例最多 36MB（浏览器堆 384MB，充裕）；**ESP32 取 1**——没有后台能力，
+`(App.hide)` 退化为退出（`ui_scheme_app_should_hide()` 恒 0 并打一行日志）。
+
+## 5. 排查记录（本期唯一的真 bug）
+
+重构时把 `am_native_gfx_bind(global_state->gfx)` 从冷启动路径挪丢了（只留在"恢复"分支），
+症状极具误导性：App 能加载、宿主每帧都在泵（`alive=1`、`rt` 非空）、但**屏幕全黑、tick 完全
+不跑**——因为 App 第一次 `(Gfx.*)` 就报"未绑定绘图目标"，进程当场停机；而运行期错误只进
+error FIFO 由宿主画成红色叠加文字（不打印到控制台），所以浏览器 console 里一片安静。
+定位手法：在 `render_frame` 里打一次"pump #N s_app=… alive=… rt=… pid=…"确认宿主侧正常，
+再在 `(App.back_requested)` 里打调用计数——**计数为 0 即证明 Scheme 侧根本没跑到那一行**。
+
+## 6. 验收
+
+- 浏览器 `regress_exit.js` **38/38 × Chromium / headless-shell / Firefox**，新增：
+  - `[8]` 三按钮确认框 → 点「后台」→ 回列表且**不产生新的冷启动**（用控制台里
+    "解释器内存池" 的行数判定）→ 再选中 → 走的是"恢复后台实例"（日志判定）；
+  - `[10]` 实例槽位：连续冷启动并切后台 3 个 App（占满槽位）→ 第 4 个触发
+    `驱逐后台实例` 日志、且新 App 正常运行。
+  - 列表高亮是**有状态**的（`w_menu_main` 单例），故导航一律"先顶到第一项再下移 idx 次"。
+- 宿主台 `test_app_exit.py` 扩到 **36/36**（新增 `(App.hide)`/`(App.resumed)` 契约：
+  hide 只置切后台请求、不等于退出意愿；`RESULT` 新增 `app_hide=` 字段）。
+- 回归：宿主台 24 App `err=none`；`regress_tetris` 20/20（确认框改三按钮几何：确认 x=98 /
+  后台 x=160 / 留下 x=222，y=141）、`regress_key_fs` 23/23、`regress_calculator` 24/24、
+  `regress_uiprompt` 21/21、`regress_qrcode` 21/21、`regress.js` 全 App 存活；
+  `test_ui_prompt/test_key_fs/test_qrcode/test_tetris/test_touch_imu` 全过。
+- 视觉核对：三按钮确认框与"gol ● 运行中"角标截图确认。
+
+## 7. 遗留
+
+- 后台实例**完全不跑**（冻结=不泵）。真后台执行（音乐继续播、定时器照跑）需要给定时器加
+  优先级/预算机制，属于下一步的"后台执行策略"，不要靠"继续泵"糊过去（会与前台抢时间片）。
+- 从列表**直接关闭**某个后台实例的入口还没有（现在只能靠 LRU 驱逐或进去再退出）。
+- 列表角标目前是文本后缀；若将来列表要显示图标/多行，需要扩展 menu 控件的条目渲染。
+
+------------------------------------
+
+# 2026-10-30（八）修复：星历（ephemeris）里「退出」按钮无响应
+
+## 症状与根因
+
+点 App 右上角「退出」按钮完全没反应（硬 A 也不稳）。根因是**点按判定跟着 App 的拍子走**：
+`app/lib/exit.scm` 的 `(EX.check)` 只在 App 自己的 tick 里跑，按钮靠"每拍采样触屏电平"
+（按下→松开两次采样）判定命中。而 `ephemeris.scm` 的 tick 是 **1000ms**，人手一次点按只有
+~100~150ms，几乎永远落在两次采样之间——采样不到，就等于按钮不存在。
+（顺带：硬 A/ESC 置的"返回请求"也可能被宿主 700ms 兜底窗口抢先退掉，因为 1 秒一拍的 App
+还没来得及消费。）
+
+## 修复（三段，前两段是通用的）
+
+1. **按钮命中判定交给宿主（事件级）**：新增 `(App.set_exit_button x y w h)`，`EX.draw_button`
+   在画按钮时把矩形登记给宿主；`ui_scheme_app_event_handler` 在**触摸 UP 边沿**上问
+   `am_native_app_hit_exit_button()`，命中即与硬 A/ESC 走同一条通道（置"返回请求"）——
+   与 App 的轮询快慢无关。App 侧那份电平式判定作为"没有该宿主服务"时的兜底保留。
+   · 无触屏硬件时登记 (0,0,0,0)（= 没有按钮）；实例销毁/前台化时宿主清空。
+2. **兜底窗口 700ms → 1500ms**：该值必须大于**最慢 App 的轮询周期**（星历 1s，其余 ≤100ms）。
+3. **星历自己**：轮询周期 1000ms → **100ms**，但重算（星历级数 + 整屏重绘）只在"秒数变了"
+   时做一次——CPU 与原来相同（实测刷新仍是 1 Hz），退出请求的响应则从"下一次 1 秒拍"变成
+   "下一次 100ms 拍"。
+
+## 验证
+
+- 星历实测（Chromium）：点「退出」按钮 → 确认框 **181ms**；硬 Esc → **70ms**；点「留下」框
+  消失、点「确认」回列表（state 79）；刷新频率不变（3s 内 epoch +3）。
+- `regress_exit.js` **38/38 × Chromium / headless-shell / Firefox**；新增一次慢拍 App 的回归
+  跑法：`E2E_APP=ephemeris E2E_EPOCH=0`（**35/35**）。
+- 其余回归全绿：宿主台 24 App `err=none`、`regress_tetris` 20/20、`regress_key_fs` 23/23、
+  `regress_calculator` 24/24、`regress_uiprompt` 21/21、`regress_qrcode` 21/21、
+  `regress.js` 全 App 存活；原生 `test_app_exit` 36/36、其余四套全过。
+- 测试脚本顺带修：应用列表的高亮**每次进入都重置到第 0 项**，所以"选中第 idx 项"只需
+  `ArrowDown × idx`；原来那种"先连按 ArrowUp 二十次顶到顶部"的写法会撞上按键连发机制，
+  把高亮带到错误条目（曾让 `E2E_APP=ephemeris` 实际测的是 notepad/lenia）。
+
+## 经验
+
+- 凡是"由 App 自己的 tick 驱动的交互"，其可靠性上限就是 tick 周期。系统级入口（退出、返回）
+  不要依赖 App 的节拍：宿主已经有可靠的触摸边沿，让宿主判定 + 通过"请求位"交给 App 处理。
+- 兜底超时是"用户体验的最后一道闸"，取值必须与最慢的合法消费者对齐，否则会误杀正常流程。

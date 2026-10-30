@@ -97,7 +97,9 @@ int32_t am_native_App_exit_with(am_runtime_t *rt, am_process_t *proc);
 // (App.exit_now) : Boolean —— 不询问，立即退出（本帧末销毁）。恒 #t
 int32_t am_native_App_exit_now(am_runtime_t *rt, am_process_t *proc);
 
-// (App.hide) : Boolean —— 请求切后台（**P1 打桩**：宿主按退出处理）。恒 #t
+// (App.hide) : Boolean —— 请求切后台：宿主在本帧末把实例**冻结**（保留解释器与内存池）、
+//   前台让给应用列表；列表里该 App 带「● 运行中」角标，选中即恢复同一实例。
+//   恒 #t。单实例平台（ESP32）无后台能力，宿主按退出处理（见 ui_scheme_app.c）。
 int32_t am_native_App_hide(am_runtime_t *rt, am_process_t *proc);
 
 // (App.back_requested) : Boolean —— 硬 A/ESC 待处理（取走即清零）
@@ -108,8 +110,20 @@ int32_t am_native_App_back_requested(am_runtime_t *rt, am_process_t *proc);
 //  （画面叠加式模态框不做帧缓冲快照，关闭后由 App 自己重绘——见 ui_scheme_app.c）
 int32_t am_native_App_modal_closed(am_runtime_t *rt, am_process_t *proc);
 
-// (App.is_active) : Boolean —— 是否前台活动（退出已获确认、或已宣告退出后为 #f）
+// (App.is_active) : Boolean —— 是否前台活动（切后台/锁屏/退出流程中为 #f）
 int32_t am_native_App_is_active(am_runtime_t *rt, am_process_t *proc);
+
+// (App.resumed) : Boolean —— 刚从后台/挂起恢复（取走即清零）。
+//   App 据此补一次重绘：挂起期间画面归别人，恢复后它自己的下一拍可能还没画。
+int32_t am_native_App_resumed(am_runtime_t *rt, am_process_t *proc);
+
+// (App.set_exit_button x y w h) : #undefined —— 把右上角「退出」按钮的矩形告诉宿主。
+//   **为什么需要**：按钮的点按如果只靠 App 每拍采样触屏电平来判定，慢节奏的 App
+//   （例如星历：1000ms 一拍）会漏掉几乎每一次点按（人手点按 ~100~150ms，两次采样之间
+//   就按完了）。登记热区后，宿主在**事件级**（触摸边沿）判定命中，命中即等同硬 A/ESC
+//   置"返回请求"，App 在下一次轮询里照常弹全局确认框——与 App 的节拍快慢无关。
+//   无触屏硬件时 app/lib/exit.scm 会登记 (0,0,0,0) 表示"没有按钮"。
+int32_t am_native_App_set_exit_button(am_runtime_t *rt, am_process_t *proc);
 
 // (App.name) : String —— 当前 App 名（源码文件名去 .scm）
 int32_t am_native_App_name(am_runtime_t *rt, am_process_t *proc);
@@ -126,6 +140,21 @@ void am_native_app_reset(const wchar_t *name);
 
 // 退出实例时调用：与 am_native_ui_abort() 同一时机，丢弃未处理的请求
 void am_native_app_abort(void);
+
+// 前台/后台切换（宿主调用）：active=0 → (App.is_active) 为 #f（后台冻结 / 锁屏挂起）
+void am_native_app_set_active(int32_t active);
+
+// 恢复通知：置 (App.resumed) 标志（前台化时由宿主调用）
+void am_native_app_notify_resumed(void);
+
+// 「退出」按钮热区（宿主用）：由 (App.set_exit_button x y w h) 登记；
+// 宿主在触摸**边沿**上问一次即可（与 App 的轮询节拍无关）。
+//   hit_exit_button 返回 1 表示该点落在按钮矩形内；未登记（宽或高为 0）恒 0。
+int32_t am_native_app_hit_exit_button(int32_t x, int32_t y);
+
+// 切后台请求：(App.hide) 或退出确认框的「后台」按钮置位，宿主取走后执行冻结
+void am_native_app_request_hide(void);
+int32_t am_native_app_hide_requested(void);   // 1=有未处理的切后台请求
 
 // 宿主要求退出（硬 A/ESC）：置"返回请求"位并记录时刻（am_runtime_now_ms 时间线）
 void am_native_app_set_back_request(am_runtime_t *rt);

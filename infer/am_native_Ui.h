@@ -117,11 +117,13 @@ const wchar_t *am_native_ui_body(void);
 int32_t am_native_ui_confirm_begin(am_runtime_t *rt, am_process_t *proc,
                                    const wchar_t *title, const wchar_t *body, int32_t is_exit);
 
-// 确认框答复：yes!=0 → #t（且若该请求为退出型则置 App 退出意愿），yes==0 → #f
+// 确认框答复：answer 1=确认 → #t（退出型请求顺带启动收尾窗口）；
+//             0=留下 → #f；2=后台 → #f 且置"切后台请求"（退出型请求才有「后台」按钮）。
 //   无请求或请求种类不是 CONFIRM 时为空操作。
-void am_native_ui_resolve_confirm(am_runtime_t *rt, int32_t yes);
+void am_native_ui_resolve_confirm(am_runtime_t *rt, int32_t answer);
 
-// 当前请求是否为退出型确认框（宿主据此决定是否需要「确认即退出」的后续动作）
+// 当前请求是否为退出型确认框（宿主据此画三按钮「确认/后台/留下」、
+// 以及决定「确认」是否启动收尾窗口）
 int32_t am_native_ui_confirm_is_exit(void);
 
 // 结束当前请求并唤醒被阻塞的进程：

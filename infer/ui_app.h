@@ -126,6 +126,14 @@ int32_t ui_exit_confirm_hit(Global_State *global_state, int32_t x, int32_t y); /
 // 带正文版命中判定（with_body 必须与绘制时一致，否则按钮纵向位置不符）
 int32_t ui_exit_confirm_hit_msg(Global_State *global_state, int32_t with_body, int32_t x, int32_t y);
 
+// 三按钮变体（灵机 App 的退出确认框）：确认 / 后台 / 留下。
+//   with_bg=1 时按钮行变成三枚窄按钮（54px）：「确认」「后台」「留下」
+//   ——「后台」= 保留实例、冻结、回应用列表（见 am_native_App.h 的 (App.hide)）。
+void    ui_exit_confirm_draw_msg_ex(Key_Event *key_event, Global_State *global_state,
+                                    const wchar_t *title, const wchar_t *body, int32_t with_bg);
+int32_t ui_exit_confirm_hit_msg_ex(Global_State *global_state, int32_t with_body, int32_t with_bg,
+                                   int32_t x, int32_t y);   // 1=确认 2=留下 3=后台 0=未命中
+
 
 // ===============================================================================
 // Bad Apple

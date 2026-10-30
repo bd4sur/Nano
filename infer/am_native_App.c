@@ -52,6 +52,12 @@ static uint64_t s_exit_confirmed_ms = 0;
 static int32_t s_back_pending = 0; // 1=硬 A/ESC 已按下、尚无消费者
 static uint64_t s_back_ms = 0;     // 请求时刻（am_runtime_now_ms 时间线）
 static int32_t s_modal_closed = 0; // 1=最近一次宿主模态框已关闭（待消费）
+static int32_t s_active = 1;       // 1=前台活动；0=后台冻结/锁屏挂起
+static int32_t s_resumed = 0;      // 1=刚从后台恢复（待消费）
+static int32_t s_hide_pending = 0; // 1=有切后台请求（宿主取走执行）
+
+// 屏幕上「退出」按钮的热区（由 Scheme 侧 app/lib/exit.scm 登记；宿主在触摸边沿上查询）
+static int32_t s_btn_x = 0, s_btn_y = 0, s_btn_w = 0, s_btn_h = 0;
 static wchar_t s_name[APP_NAME_MAX];
 
 // ===============================================================================
@@ -137,10 +143,41 @@ int32_t am_native_App_exit_now(am_runtime_t *rt, am_process_t *proc) {
 
 int32_t am_native_App_hide(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
-    // P1 打桩：切后台 = 关闭（多任务落地时只改这里与宿主侧）
+    // 切后台：宿主在本帧末冻结实例（保留解释器与内存池），前台回应用列表。
+    // App 自己该做的收尾（落盘等）请**先做完**再调用本函数——冻结之后不再有执行机会。
     am_native_app_clear_back_request();
-    s_exit_wanted = 1;
+    s_hide_pending = 1;
     return app_push_bool(proc, 1);
+}
+
+int32_t am_native_App_set_exit_button(am_runtime_t *rt, am_process_t *proc) {
+    int32_t h = 0, w = 0, y = 0, x = 0;
+    am_value_t v;
+
+    (void)rt;
+    // 参数从右往左弹：h, w, y, x（非数字按 0 处理 → 视为"没有按钮"）
+    v = am_process_pop_operand(proc);
+    if (v == (am_value_t)UINTPTR_MAX) return -1;
+    if (am_value_is_int(v)) h = (int32_t)am_value_to_int(v);
+    v = am_process_pop_operand(proc);
+    if (v == (am_value_t)UINTPTR_MAX) return -1;
+    if (am_value_is_int(v)) w = (int32_t)am_value_to_int(v);
+    v = am_process_pop_operand(proc);
+    if (v == (am_value_t)UINTPTR_MAX) return -1;
+    if (am_value_is_int(v)) y = (int32_t)am_value_to_int(v);
+    v = am_process_pop_operand(proc);
+    if (v == (am_value_t)UINTPTR_MAX) return -1;
+    if (am_value_is_int(v)) x = (int32_t)am_value_to_int(v);
+
+    s_btn_x = x; s_btn_y = y; s_btn_w = w; s_btn_h = h;
+    return app_push(proc, AM_VALUE_UNDEFINED);
+}
+
+int32_t am_native_App_resumed(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    int32_t v = s_resumed;
+    s_resumed = 0;
+    return app_push_bool(proc, v);
 }
 
 int32_t am_native_App_back_requested(am_runtime_t *rt, am_process_t *proc) {
@@ -159,7 +196,7 @@ int32_t am_native_App_modal_closed(am_runtime_t *rt, am_process_t *proc) {
 
 int32_t am_native_App_is_active(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
-    return app_push_bool(proc, (s_exit_wanted || s_exit_confirmed) ? 0 : 1);
+    return app_push_bool(proc, (s_active && !s_exit_wanted && !s_exit_confirmed) ? 1 : 0);
 }
 
 int32_t am_native_App_name(am_runtime_t *rt, am_process_t *proc) {
@@ -177,6 +214,10 @@ int32_t am_native_App_platform(am_runtime_t *rt, am_process_t *proc) {
 // ===============================================================================
 
 void am_native_app_reset(const wchar_t *name) {
+    s_btn_x = s_btn_y = s_btn_w = s_btn_h = 0;
+    s_active = 1;
+    s_resumed = 0;
+    s_hide_pending = 0;
     s_exit_wanted = 0;
     s_exit_confirmed = 0;
     s_exit_confirmed_ms = 0;
@@ -192,6 +233,8 @@ void am_native_app_reset(const wchar_t *name) {
 }
 
 void am_native_app_abort(void) {
+    s_btn_x = s_btn_y = s_btn_w = s_btn_h = 0;
+    s_hide_pending = 0;
     s_exit_wanted = 0;
     s_exit_confirmed = 0;
     s_exit_confirmed_ms = 0;
@@ -258,6 +301,37 @@ void am_native_app_notify_modal_closed(void) {
     s_modal_closed = 1;
 }
 
+void am_native_app_set_active(int32_t active) {
+    s_active = active ? 1 : 0;
+    if (!s_active) {
+        // 挂起后这些"待处理"的东西都没有意义了（恢复时由宿主重新通知）
+        s_back_pending = 0;
+        s_hide_pending = 0;
+    }
+}
+
+void am_native_app_notify_resumed(void) {
+    s_resumed = 1;
+    s_modal_closed = 1;   // 恢复后画面归自己了：让 App 补一次重绘（与模态框关闭同一语义）
+}
+
+void am_native_app_request_hide(void) {
+    s_hide_pending = 1;
+}
+
+int32_t am_native_app_hit_exit_button(int32_t x, int32_t y) {
+    if (s_btn_w <= 0 || s_btn_h <= 0) return 0;
+    if (x < s_btn_x || x >= s_btn_x + s_btn_w) return 0;
+    if (y < s_btn_y || y >= s_btn_y + s_btn_h) return 0;
+    return 1;
+}
+
+int32_t am_native_app_hide_requested(void) {
+    int32_t v = s_hide_pending;
+    s_hide_pending = 0;   // 取走即清零（宿主据此只冻结一次）
+    return v;
+}
+
 // ===============================================================================
 // 库注册表
 // ===============================================================================
@@ -270,6 +344,8 @@ static const am_native_func_entry_t am_native_App_funcs[] = {
     { L"back_requested",  am_native_App_back_requested },
     { L"modal_closed",    am_native_App_modal_closed },
     { L"is_active",       am_native_App_is_active },
+    { L"resumed",         am_native_App_resumed },
+    { L"set_exit_button", am_native_App_set_exit_button },
     { L"name",            am_native_App_name },
     { L"platform",        am_native_App_platform },
 };

@@ -160,10 +160,25 @@
       (Gfx.refresh)
   }))
 
-;; ---- 启动：立即算一次并显示，此后每秒刷新 ----------------------------------
+;; ---- 启动：立即算一次并显示，此后每拍判"该不该重算" -----------------------
+;;
+;; 轮询周期取 100ms 而不是 1000ms：退出按钮/硬 A 的响应跟着**拍子**走（(EX.check) 在每拍
+;; 里跑），1 秒一拍的 App 点按钮会明显发木；而重算（星历级数 + 整屏重绘）只在"秒数变了"
+;; 时做一次，CPU 开销与原来相同（实测刷新频率仍是 1 Hz）。
+
+(define last_sec -1)
+
+(define tick
+  (lambda () {
+    (EX.check)
+    (define s (Time.utc_sod))
+    (if (not (== s last_sec))
+        { (set! last_sec s) (update) }
+        #f)
+  }))
 
 (update)
-(set! update_timer (System.set_interval 1000 update))
+(set! update_timer (System.set_interval 100 tick))
 
 ;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
 ;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行（并调 update 擦掉对话框残影）
