@@ -61,7 +61,7 @@ import json, os, sys
 root, out = sys.argv[1], sys.argv[2]
 P1_DIRS = {"icon", "app"}
 P1_FILES = {"mob.scm", "jstest.js"}
-SKIP_DIRS = {"music"}
+SKIP_DIRS = {"music", "data"}   # music 体积过大；data 是 App 运行时数据（不入产物）
 # LLM 模型：标准引擎（infer.c）的 Nano-168M/56M-Q80 作为 p3（最后台优先级，鹦鹉笼可用）；
 # qwen3-0b6（599MB，单线程 WASM 不可用）不挂载。菜单按白名单+存在性过滤（ui_llm.c）。
 P3_FILES = {"llm/nano-168m-q80.bin", "llm/nano-56m-q80.bin"}
@@ -99,6 +99,8 @@ ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
     $ANIMAC_SRCS \
     main_wasm_gui.c \
     hal_fs_linux.c \
+    hal_fs_persist_wasm.c \
+    nano_key_events.c \
     hal_net_wasm.c \
     hal_ram_wasm.c \
     hal_os_wasm.c \
@@ -121,6 +123,9 @@ ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
     am_native_Diag.c \
     am_native_Touch.c \
     am_native_Imu.c \
+    am_native_Key.c \
+    am_native_Fs.c \
+    am_native_Ui.c \
     infer.c \
     nano_fft.c \
     nano_min.c \
@@ -162,7 +167,7 @@ ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
     -s FORCE_FILESYSTEM=1 \
     -s EXIT_RUNTIME=0 \
     -s EXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,FS,callMain \
-    -s EXPORTED_FUNCTIONS=_main,_wasm_gui_get_fb_rgba,_wasm_gui_get_fb_epoch,_wasm_gui_get_fb_width,_wasm_gui_get_fb_height,_wasm_gui_on_touch,_wasm_gui_on_key,_wasm_gui_on_orientation,_wasm_gui_input_tick,_wasm_gui_get_state
+    -s EXPORTED_FUNCTIONS=_main,_wasm_gui_get_fb_rgba,_wasm_gui_get_fb_epoch,_wasm_gui_get_fb_width,_wasm_gui_get_fb_height,_wasm_gui_on_touch,_wasm_gui_on_key,_wasm_gui_on_key_event,_wasm_gui_on_orientation,_wasm_gui_input_tick,_wasm_gui_get_state
 
 echo "built: $OUT_DIR/nano_gui.js / nano_gui.wasm（资源外置：$OUT_DIR/files → $LINGLONG）"
 ls -lh "$OUT_DIR"/nano_gui.js "$OUT_DIR"/nano_gui.wasm "$OUT_DIR"/manifest.json | awk '{print " ", $5, $9}'

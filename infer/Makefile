@@ -10,6 +10,7 @@ ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c, $(wildcard $(ANIMAC_DIR)/*.
 # + 灵机应用程序运行时。任何链接 ui_app.c 的目标都需要它们，缺一个就在链接阶段报未定义符号。
 ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
                     am_native_Touch.c am_native_Imu.c \
+                    am_native_Key.c am_native_Fs.c am_native_Ui.c nano_key_events.c \
                     ui_scheme_app.c
 
 # ui_app.c 直接引用的业务模块（GUI 目标共用；同样缺一个就链接失败）

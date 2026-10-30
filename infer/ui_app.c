@@ -351,7 +351,8 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 16键虚拟键盘（ui_grid16kbd）可见时亦抑制：触屏由键盘接管（见下）。
     if (key == NANO_KEY_IDLE && key_event->is_touching && !ui_app_state_is_menu(global_state->STATE)
         && !ui_app_state_hosts_input_widget(global_state->STATE)
-        && !ui_grid16kbd_is_visible()) {
+        && !ui_grid16kbd_is_visible()
+        && !ui_scheme_app_hosts_input_widget()) { // 灵机 App 的模态输入框显示期间同样抑制宫格
         key = ui_app_map_touch_to_grid16_key(key_event->touch_x, key_event->touch_y);
         key_is_soft = (key != NANO_KEY_IDLE); // 宫格映射命中的键来自触屏
     }

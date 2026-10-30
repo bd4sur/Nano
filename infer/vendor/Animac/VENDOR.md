@@ -77,6 +77,15 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
 - `infer/am_native_Diag.c/.h` —— 虚拟机自观测（只读：操作数栈/调用栈深度、PC、指令区长度、
   闭包帧描述符与退化闭包计数、槽位统计、GC 计数、单调实时毫秒）；供 `app/xray.scm` 的
   "解释器 X 光"仪表盘使用，也是排查解释器问题时的现场仪器
+- `infer/am_native_Key.c/.h` + `infer/nano_key_events.c/.h` —— 键盘输入（按键边沿事件旁路队列 +
+  Scheme 侧 `Key.is_available/is_down/take_press/take_release/dropped`）；HAL 在注入 GUI 电平槽的
+  同时另投一份边沿事件，GUI 读取路径零改动
+- `infer/am_native_Fs.c/.h` —— 文本文件读写（`exists/is_dir/size/list/mkdir/read/write/append`，
+  相对业务资源根、UTF-8、128KB 读入上限；WASM 目标另有 `hal_fs_persist_wasm.c` 把写入同步进
+  浏览器 IndexedDB）
+- `infer/am_native_Ui.c/.h` —— 宿主模态文本输入/输出（`input`/`input_with`/`message`/
+  `message_titled`）：按上游契约 N7 把**进程**置 BLOCKED，宿主用现成的文本控件当模态框，
+  提交后压值 + step + 置 READY + 重新入队（机制与 `System.read` 队列等待同源）
 
 它们必须遵守上游本地库契约（上游 `doc/todo/stack_bal.md` §11 N1–N10）：
 

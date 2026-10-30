@@ -22,6 +22,9 @@
 #include "am_native_Diag.h"
 #include "am_native_Touch.h"
 #include "am_native_Imu.h"
+#include "am_native_Key.h"
+#include "am_native_Fs.h"
+#include "am_native_Ui.h"
 
 // ===============================================================================
 // 运行时参数
@@ -112,6 +115,26 @@ typedef struct {
 } UI_Scheme_App_State;
 
 static UI_Scheme_App_State s_app;
+
+// 模态文本输入/输出（本地库 Ui）宿主侧：状态与服务的定义在文件后半部分，
+// 此处前置声明供 render_frame / on_exit 引用。
+static int32_t s_modal_active = 0;   // 模态框是否在显示
+// 长按重复抑制：事件层的长按（-2）在按住期间会**持续重复**（按键连发机制，见
+// ui_app.c get_input_event），而模态框用「长按 A/Esc」做取消——若不拦截，同一次长按
+// 会连续取消多个模态框、最后一路把 App 也退出。策略：模态框消费掉一个 -2 后置位，
+// 其后相同长按的重复事件一律丢弃，直到看到新的按下沿（key_edge == 1）才解除。
+static int32_t s_modal_ignore_longpress_repeat = 0;
+// 「打开模态框的那次按键」的松开沿抑制：
+//   按键边沿由生产端逐事件投递、消费者每帧只取一个，且生产端只投递**下降沿**
+//   （-1 短按结束 / -2 长按结束），不投递上升沿。App 往往在吃掉按下沿的那一帧里发起
+//   (Ui.input ...)，于是这次按键迟到的 -1 会落进刚打开的模态框，被控件当成"短按 Enter
+//   提交"（症状：输入框一出现就自己交了空串，或消息框一闪而过）。
+//   判据：打开时向 (native Key) 问「最近一次被取走的按下沿是哪个键、什么时候」——
+//   若就在刚才（≤500ms），则丢弃**该键**接下来的第一条 -1/-2 边沿，其余事件照常。
+static uint8_t  s_modal_open_key = 0;   // 打开模态框时"正在收尾"的键（0=无）
+static uint64_t s_modal_open_key_deadline_ms = 0; // 只在这个时刻之前剔除（毫秒）
+#define UI_MODAL_OPEN_KEY_WINDOW_MS (300)
+static void scheme_modal_open(Key_Event *key_event, Global_State *global_state);
 
 // 解释器工作目录宽前缀（带尾斜杠；链接器 import 解析基准，本类 App 无 import 仅备用）
 static wchar_t s_app_root[128] = L"/";
@@ -476,6 +499,13 @@ int32_t ui_scheme_app_init(Key_Event *key_event, Global_State *global_state) {
     // Touch/Imu：触屏与姿态（重力）输入，供交互式 App 使用（见 am_native_Touch.h / am_native_Imu.h）
     am_runtime_register_native_lib(s_app.rt, &am_native_Touch_lib);
     am_runtime_register_native_lib(s_app.rt, &am_native_Imu_lib);
+    // Key/Fs：键盘边沿事件与文本文件读写（见 am_native_Key.h / am_native_Fs.h）
+    am_runtime_register_native_lib(s_app.rt, &am_native_Key_lib);
+    am_runtime_register_native_lib(s_app.rt, &am_native_Fs_lib);
+    // Ui：宿主模态文本输入/输出（借用鹦鹉笼同款文本控件，见 am_native_Ui.h）
+    am_runtime_register_native_lib(s_app.rt, &am_native_Ui_lib);
+    am_native_ui_abort(); // 清掉上一个 App 可能遗留的请求
+    am_native_Key_reset();
 
     // 清屏后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）
     gfx_soft_clear(global_state->gfx);
@@ -550,6 +580,12 @@ int32_t ui_scheme_app_render_frame(Key_Event *key_event, Global_State *global_st
         // （如逐行渐进、逐代演进）不在中途推屏，避免闪烁。
         am_runtime_event_handler(s_app.rt);
         app_drain_error_fifo();
+
+        // 本帧内 App 可能刚发起模态文本请求（(Ui.input ...) 已把进程挂起）：
+        // 立刻打开宿主控件并把画面交给它，后续帧由 scheme_modal_event 服务。
+        if (am_native_ui_pending() && !s_modal_active) {
+            scheme_modal_open(key_event, global_state);
+        }
     }
 
     // 运行期错误一次性叠加提示（虚拟机报错后进程停机，Scheme 帧不再更新）
@@ -565,8 +601,204 @@ int32_t ui_scheme_app_render_frame(Key_Event *key_event, Global_State *global_st
 // 事件：A(ESC) 返回灵机应用程序列表
 // ===============================================================================
 
+// ===============================================================================
+// 模态文本输入/输出（本地库 (native Ui) 的宿主侧）
+//
+//  分工：am_native_Ui.c 负责「把 Scheme 进程挂起 / 唤醒」与文案交接；本段落负责
+//  **界面**——直接借用宿主现成的文本控件（鹦鹉笼的输入框 ui_widget_input_* 与文本显示
+//  控件 ui_widget_textarea_*），因此全键盘拼音 / 16 键九宫格输入法 / 软键盘 / 候选字翻页 /
+//  光标与滚动全部天然可用，Scheme 侧一行不用写。
+//
+//  生命周期：
+//    库发起请求（解释器在 render_frame 里跑出一帧）→ 本帧 scheme_modal_open() 打开控件；
+//    之后每帧 scheme_modal_event() 把事件喂给控件（此前 ui_app.c 的 4x4 宫格映射会被抑制）；
+//    提交/取消 → am_native_ui_resolve() 唤醒进程 → App 自己的下一拍重绘接管画面。
+//
+//  机制细节（易错）：ui_widget_input_event_handler 用「上一/下一焦点状态」表达退出方向，
+//  我们对这两个位置传哨兵值（-1001/-1002），从而在一套控件代码上区分「取消」与「提交」。
+// ===============================================================================
+
+#define UI_MODAL_STATE_CANCEL (-1001) // 控件上一焦点态哨兵：取消（页眉返回热区）
+#define UI_MODAL_STATE_SUBMIT (-1002) // 控件下一焦点态哨兵：提交（短按 Enter）
+
+static int32_t s_modal_kind = AM_NATIVE_UI_KIND_NONE;
+static Widget_Input_State *s_modal_in = NULL;       // 借用 w_input_main
+static Widget_Textarea_State *s_modal_ta = NULL;    // 借用 w_textarea_main（只读消息）
+static wchar_t s_modal_title[AM_NATIVE_UI_TITLE_MAX];   // 页眉文案（控件长期持有指针）
+static wchar_t s_modal_result[AM_NATIVE_UI_BODY_MAX];   // 提交时的文本快照
+
+// 供 ui_app.c 的事件层查询：模态框显示期间抑制触屏 4x4 宫格映射
+//（否则拖动滚动/点按定位会不断产生软按键，且右上角宫格会变成 Esc）
+int32_t ui_scheme_app_hosts_input_widget(void) {
+    return s_modal_active;
+}
+
+static void scheme_modal_finish(Global_State *global_state, int32_t submit, Key_Event *key_event) {
+    if (!s_modal_active) return;
+    s_modal_active = 0;
+    if (key_event != NULL && key_event->key_edge == -2) {
+        s_modal_ignore_longpress_repeat = 1; // 之后的长按重复事件不再生效（见变量注释）
+    }
+
+    // 先唤醒进程：连发提问的 App 会在下一帧重新打开模态框，状态不能残留
+    am_native_ui_resolve(s_app.rt, submit ? s_modal_result : NULL);
+
+    if (s_modal_kind == AM_NATIVE_UI_KIND_INPUT && s_modal_in != NULL) {
+        // 输入法全状态复位 + 双键盘收起 + 布局恢复（不动文本缓冲区）
+        ui_widget_input_back_cleanup(global_state, s_modal_in);
+    }
+    if (key_event != NULL && global_state->gfx != NULL) {
+        // 让 App 的下一拍自行重绘（这里只把控制权交回，不画任何 App 内容）
+        global_state->is_full_refresh = 1;
+    }
+
+    s_modal_in = NULL;
+    s_modal_ta = NULL;
+    s_modal_kind = AM_NATIVE_UI_KIND_NONE;
+}
+
+static void scheme_modal_open(Key_Event *key_event, Global_State *global_state) {
+    const wchar_t *title = am_native_ui_title();
+    s_modal_kind = am_native_ui_kind();
+
+    if (title != NULL && title[0] != L'\0') {
+        wcsncpy(s_modal_title, title, AM_NATIVE_UI_TITLE_MAX - 1);
+        s_modal_title[AM_NATIVE_UI_TITLE_MAX - 1] = L'\0';
+    }
+    else {
+        wcscpy(s_modal_title, (s_modal_kind == AM_NATIVE_UI_KIND_INPUT) ? L"输入" : L"消息");
+    }
+
+    s_modal_active = 1;
+    s_modal_open_key = 0;
+    s_modal_open_key_deadline_ms = 0;
+    {
+        // 剔除打开本次模态框的那次按键的松开沿（见变量注释）
+        uint8_t code = 0;
+        uint64_t ts = 0;
+        am_native_Key_last_press(&code, &ts);
+        if (code != 0 && ts != 0) {
+            uint64_t now = (uint64_t)global_state->timestamp;
+            if (now >= ts && (now - ts) <= 200) {
+                s_modal_open_key = code;
+                s_modal_open_key_deadline_ms = now + UI_MODAL_OPEN_KEY_WINDOW_MS;
+            }
+        }
+    }
+    am_native_Key_reset(); // 打开模态框时清一次：触发本次输入的那次按键残留在队列里也无害
+
+    if (s_modal_kind == AM_NATIVE_UI_KIND_INPUT) {
+        const wchar_t *init = am_native_ui_initial();
+        s_modal_in = global_state->w_input_main;
+        s_modal_ta = NULL;
+        if (s_modal_in == NULL) {
+            // 控件未就绪（理论上不可能）：直接按取消结束，避免进程永远挂着
+            s_modal_result[0] = L'\0';
+            scheme_modal_finish(global_state, 0, NULL);
+            return;
+        }
+        // 控件自绘（页眉标题 + 文本区 + 页脚 + 软键盘状态），预算好标题指针长期有效
+        ui_widget_input_init(key_event, global_state, s_modal_in, s_modal_title);
+        if (init != NULL && init[0] != L'\0') {
+            for (size_t i = 0; init[i] != L'\0'; i++) insert_char(s_modal_in, init[i]);
+            s_modal_in->cursor_pos = s_modal_in->textarea.length - 1;
+            s_modal_in->desired_x = -1;
+            ui_draw_input_buffer(key_event, global_state, s_modal_in);
+        }
+    }
+    else {
+        s_modal_in = NULL;
+        s_modal_ta = global_state->w_textarea_main;
+        if (s_modal_ta == NULL) {
+            scheme_modal_finish(global_state, 0, NULL);
+            return;
+        }
+        ui_widget_textarea_reset_geometry(key_event, global_state, s_modal_ta);
+        ui_widget_textarea_set(key_event, global_state, s_modal_ta,
+                               (wchar_t *)am_native_ui_body(), 0, 1);
+        ui_draw_header(key_event, global_state, s_modal_title, 1);
+        ui_widget_textarea_draw(key_event, global_state, s_modal_ta);
+        ui_draw_footer(key_event, global_state, L"任意键 / 点按返回", 1);
+        gfx_refresh(global_state->gfx);
+    }
+}
+
+static void scheme_modal_event(Key_Event *key_event, Global_State *global_state) {
+    if (!s_modal_active) return;
+
+    // 打开模态框那次按键的松开沿：吃掉一次（见 s_modal_open_key 注释）。
+    // 一旦出现"别的按键活动"或触屏动作，说明用户已经在模态框里操作了，立刻解除剔除，
+    // 免得把用户真正的回车吃掉。
+    if (s_modal_open_key != 0 && key_event->key_code != NANO_KEY_IDLE
+        && (key_event->key_edge == -1 || key_event->key_edge == -2)) {
+        if (key_event->key_code == s_modal_open_key
+            && (uint64_t)global_state->timestamp <= s_modal_open_key_deadline_ms) {
+            s_modal_open_key = 0;
+            return;
+        }
+        s_modal_open_key = 0; // 是别的键：解除剔除，照常交给控件
+    }
+    if (s_modal_open_key != 0 && key_event->touch_edge != 0) {
+        s_modal_open_key = 0; // 触屏活动同样解除
+    }
+
+    if (s_modal_kind == AM_NATIVE_UI_KIND_INPUT) {
+        // 取消：长按 A/Esc（短按 Esc 是控件自己的退格键，平台惯例）
+        if (key_event->key_edge == -2 && key_event->key_code == NANO_KEY_esc) {
+            scheme_modal_finish(global_state, 0, key_event);
+            return;
+        }
+        int32_t next = ui_widget_input_event_handler(
+            key_event, global_state, s_modal_in,
+            UI_MODAL_STATE_CANCEL, global_state->STATE, UI_MODAL_STATE_SUBMIT);
+
+        if (next == UI_MODAL_STATE_SUBMIT) {
+            int32_t n = s_modal_in->textarea.length;
+            if (n < 0) n = 0;
+            if (n > AM_NATIVE_UI_BODY_MAX - 1) n = AM_NATIVE_UI_BODY_MAX - 1;
+            for (int32_t i = 0; i < n; i++) s_modal_result[i] = s_modal_in->textarea.text[i];
+            s_modal_result[n] = L'\0';
+            scheme_modal_finish(global_state, 1, key_event);
+        }
+        else if (next == UI_MODAL_STATE_CANCEL) {
+            scheme_modal_finish(global_state, 0, key_event);
+        }
+        return;
+    }
+
+    // MESSAGE：拖动=滚动、点按或任意键=关闭
+    if (s_modal_ta != NULL) {
+        int32_t r = ui_widget_textarea_touch_handler(key_event, global_state, s_modal_ta);
+        if (r == 1) { // 拖动滚动
+            ui_widget_textarea_draw(key_event, global_state, s_modal_ta);
+            return;
+        }
+        if (r == 2) { // 点按关闭
+            scheme_modal_finish(global_state, 0, key_event);
+            return;
+        }
+    }
+    if (key_event->key_edge == -1 || key_event->key_edge == -2) {
+        scheme_modal_finish(global_state, 0, key_event);
+    }
+}
+
 int32_t ui_scheme_app_event_handler(Key_Event *key_event, Global_State *global_state) {
-    (void)global_state;
+    // 长按连发抑制（见 s_modal_ignore_longpress_repeat 注释）：
+    // 生产端只投递下降沿（-1 短按结束 / -2 长按结束），故用"出现了一次 -1"表示这次长按
+    // 早已结束、用户又按了一下，届时解除抑制。
+    if (key_event->key_edge == -1) s_modal_ignore_longpress_repeat = 0;
+    if (s_modal_ignore_longpress_repeat && key_event->key_edge == -2) return 0;
+
+    // 模态文本输入/输出期间：事件全部交给宿主控件，"A 返回列表"暂时让位
+    if (s_modal_active) {
+        scheme_modal_event(key_event, global_state);
+        // 模态框期间的按键归**控件**所有，不能渗进 (native Key) 的旁路队列：
+        // 否则用户敲的每一次 Enter/退格都会在 App 恢复后被它当成新按键读走
+        //（典型症状：关掉消息框后 App 又"自己按了一次 Enter"）。
+        am_native_Key_reset();
+        return 0;
+    }
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         global_state->STATE = STATE_SCHEME_APP_LIST;
         return 0;
@@ -579,6 +811,16 @@ int32_t ui_scheme_app_event_handler(Key_Event *key_event, Global_State *global_s
 // ===============================================================================
 
 void ui_scheme_app_on_exit(void) {
+    // 丢弃可能挂起的模态输入请求（进程随后会被销毁，不能留悬空 PID）
+    am_native_ui_abort();
+    s_modal_active = 0;
+    s_modal_ignore_longpress_repeat = 0;
+    s_modal_open_key = 0;
+    s_modal_open_key_deadline_ms = 0;
+    s_modal_in = NULL;
+    s_modal_ta = NULL;
+    s_modal_kind = AM_NATIVE_UI_KIND_NONE;
+
     if (s_app.rt) {
         if (s_app.pid != (am_pid_t)-1) {
             am_runtime_kill_process(s_app.rt, s_app.pid);

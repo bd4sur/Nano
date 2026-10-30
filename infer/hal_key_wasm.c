@@ -18,6 +18,7 @@
 
 #include "hal_key.h"
 
+#include "nano_key_events.h"
 #include "platform.h"
 
 #include <emscripten.h>
@@ -27,6 +28,9 @@ static volatile uint8_t s_key_unread = NANO_KEY_IDLE; // 未被轮询消费过�
 
 // 键盘事件入口（页面 JS ccall）：key_code 为 NANO_KEY_* 逻辑键值（hal_key.h）；
 // is_down：1=按下（keydown） 0=松开（keyup）
+//
+// 注：这是 GUI 输入层的「电平槽」通路（get_input_event 消费）。灵机 App 用的
+// 键盘事件走下面的 wasm_gui_on_key_event（旁路），两者互不干扰。
 EMSCRIPTEN_KEEPALIVE
 void wasm_gui_on_key(int32_t key_code, int32_t is_down) {
     if (key_code <= NANO_KEY_IDLE || key_code > 127) return;
@@ -39,7 +43,18 @@ void wasm_gui_on_key(int32_t key_code, int32_t is_down) {
     }
 }
 
+// 键盘事件入口（旁路，供 (native Key) 本地库）：页面 JS 对**每一个**按键都会
+// 调用本函数（包含 letters/符号——GUI 的 KEY_MAP 只映射宫格/方向键，这里的
+// key_code 是忠实键码：可打印字符即其 ASCII 码）。只投递到 nano_key_events，
+// 不改动 s_key_down/s_key_unread，因此 GUI 的输入行为与接库前逐字节一致。
+EMSCRIPTEN_KEEPALIVE
+void wasm_gui_on_key_event(int32_t key_code, int32_t is_down) {
+    if (key_code <= NANO_KEY_IDLE || key_code > 255) return;
+    nano_key_events_push((uint8_t)key_code, is_down ? 1 : 0);
+}
+
 int32_t input_device_init() {
+    nano_key_events_mark_source(); // 声明本平台的键盘 HAL 会投递旁路边沿事件
     return 0;
 }
 

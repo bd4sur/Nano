@@ -1990,6 +1990,102 @@ Chromium / chrome-headless-shell / Firefox **各 12 项断言全 PASS**）
 
 ------------------------------------
 
+# 2026-10-30（键盘 / 文件两个本地库 + 便签 App）
+
+给「灵机应用程序」补上两条此前完全缺失的通道：**键盘输入**与**文件读写**。
+此前 App 只能触屏+姿态（Touch/Imu）且是只读世界（数据只能硬编码或写成数据模块），
+于是便签、存档/高分榜、可打字工具一个都写不出来（app/tetris.scm 只能用触屏虚拟按键即
+此限制的直接后果）。本次 **编译目标 Nano-WASM-GUI**，宿主回归台 + 三个无头浏览器端到端验证。
+
+## 1. 新增文件
+
+| 文件 | 作用 |
+|---|---|
+| `infer/nano_key_events.c/.h` | 按键边沿**旁路队列**（平台无关）：HAL 投递边沿，GUI 读取路径零改动 |
+| `infer/am_native_Key.c/.h` | 本地库 `Key`：`is_available/is_down(code)/take_press/take_release/dropped` |
+| `infer/am_native_Fs.c/.h` | 本地库 `Fs`：`exists/is_dir/size/list/mkdir/read/write/append` |
+| `infer/hal_fs_persist_wasm.c` | WASM 专属：写入成功后把文件同步进浏览器 IndexedDB（弱钩子实现） |
+| `infer/app/notepad.scm` | 便签 App —— 两个库的用法示范兼端到端验收程序（自动保存、载入回显） |
+| `tools/e2e/native/{key_probe,fs_probe}.scm`、`test_key_fs.py` | 宿主台 API 语义 + 端到端测试（44 项断言） |
+| `tools/e2e/browser/regress_key_fs.js` | 真浏览器回归（17 项断言，Chromium/chrome-headless-shell/Firefox 均全过） |
+
+## 2. 关键设计：Key 为什么不能直接读 `input_device_read_key()`
+
+HAL 的键盘接口是「电平 + 单槽位」：wasm 实现读到电平后会清掉未读锁存，ncurses 实现更是
+直接从 stdin 取字节。Scheme 侧若照 Touch 库的写法去读，就会与 GUI 输入层**抢事件**（谁先读
+谁拿到）。因此改为**旁路**：HAL 在注入 GUI 电平槽的同时另投一份边沿事件进
+`nano_key_events`（按每键电平表去重，浏览器 auto-repeat 天然无害；队列满丢最旧并计数，
+投递方永不阻塞）。GUI 的 `get_input_event` / 长按连发 / 宫格映射 / 软复位全部照旧。
+
+- 投递点：`hal_key_wasm.c` 新增 `wasm_gui_on_key_event()`（页面每个按键都调，**忠实键码**：
+  可打印字符即 ASCII，命名键用 `NANO_KEY_*`）；`hal_key_ncurses_linux.c` 在映射表旁另投
+  「按下+松开」成对事件（终端无 keyup/电平，故 `Key.is_down` 在终端恒 #f）。
+- 页面 `webgui/index.html`：新增 `RAW_KEY_MAP` + `rawKeyCode()`；`reportKey` 先投旁路、再走
+  原有 `KEY_MAP`（十六键重排）→ **GUI 行为逐字节不变**，字母等未映射键只进旁路。
+- `am_native_Key` 把两种边沿分栈存放，`take_press`/`take_release` **互不吞噬**（可先取若干
+  按下沿再取松开沿）；`wasm_gui_on_key_event` 上限 255，`NANO_KEY_POWER(128)` 等不冲突。
+- `ui_scheme_app.c` 在创建运行时后调用 `am_native_Key_reset()`：App 未运行期间（菜单里）敲的
+  键不会涌给新启动的 App（e2e 专门验证了这条）。
+- 平台能力声明：HAL 的 `input_device_init()` 调 `nano_key_events_mark_source()`，未接入的
+  平台 `Key.is_available` 返回 #f，App 据此降级为纯触屏（M5 触屏机 / web / android 现状）。
+
+## 3. Fs 的语义取舍
+
+- **路径**：以 `/` 开头 = 宿主绝对路径原样使用；其余 = 相对业务资源根（`PLATFORM_ROOT_DIR`），
+  因此 `"data/note.txt"` 在桌面/WASM/掌机三处通用。含 `..` 与空路径一律拒绝（不穿越资源根）。
+- **只做文本整读整写**（不做随机访问/二进制/删除改名——hal_fs 也没有）；读入上限 128 KB，
+  超限返回 `#null` 而**不截断**（截断会静默损坏数据，App 可先 `Fs.size` 判断）。
+- `Fs.write` 自动逐级创建父目录；`Fs.append` 走「读旧 + 拼接 + 整写」（小文件足够）。
+- 失败一律软失败（`#null`/`#f`），与 manual §1.1.1 一致。
+- `exists`/`size`/`read` 会短暂借用 hal_fs 的**全局单句柄**（ebook/dict 用）；单前台 App 模型
+  下安全，若将来并发读需给 hal_fs 换多句柄（已写进头文件注释）。
+
+## 4. WASM 持久化（写入落 IndexedDB）
+
+MEMFS 是内存文件系统，刷新即丢。`am_native_Fs.c` 在写入成功后调用**可选弱钩子**
+`am_native_fs_on_write()`；`hal_fs_persist_wasm.c` 用 EM_JS 把「资源根相对路径 + 内容」
+`nanoStorePut` 进 `nano-store`（与用户上传资源同一通路），下次启动由 `loader.js` 以「本机来源」
+挂回 MEMFS。未链接该文件的平台零开销（弱符号为空）。页面未加载 store.js（如 node）时静默跳过。
+
+## 5. 同时修掉的三处周边问题
+
+1. `build_wasm_gui.sh` 的 manifest 增加 `SKIP_DIRS={"data"}`：`data/` 是 App **运行时数据**，
+   不该随产物发布（此前一次宿主测试落下的 `data/note.txt` 被当作 p2 资源发布，e2e 因此
+   非确定——现由测试脚本从零构造）。
+2. `tools/e2e/browser/{regress.js,regress_det.js}` 的 `APPS_ALL` 补入 `notepad`（清单须与
+   `app/*.scm` 实际排序一致，否则其后的 App 下标整体错位）。
+3. `notepad.scm` 的光标 y 曾按 `(if (> cw cp) ...)` 分支画，未滚动时落到原点——截图看出来后
+   改为统一按可见行序号算。**教训：这类纯视觉 bug 只能靠截图核对，像素断言抓不到。**
+
+## 6. 验证
+
+- **宿主无头回归台**（`python3 tools/e2e/native/test_key_fs.py`，44 项全 PASS）：边沿序列
+  （按下/松开各恰好一次、多键并存、去重、无事件源软失败）；Fs 全 API（UTF-8 字节数 9/16、
+  append 后码点 12、覆盖写、目录枚举按名升序、`#null`/`#f` 软失败、`..` 拒绝、128KB 上限）；
+  便签端到端（注入 h,i,e,退格,回车,`!` → 落盘 `"hi\n!"` 与键入一致、二次启动读回不清空）。
+- **宿主全 App 回归**（`run_host_regress.sh`，21 个 App）：全部 `err=none`，其余 App 帧序列不变。
+- **浏览器 e2e**（`regress_key_fs.js`，Chromium / chrome-headless-shell / Firefox 各 **17/17 PASS**）：
+  键入上屏（正文区亮像素 0→100）；自动保存进 MEMFS（"abc123"）；Delete 退格（"abc12"）；
+  写入落 IndexedDB；**重开页面后 MEMFS 仍有该文件**（持久化闭环）；再进 App 读回并绘制；
+  Esc 仍返回列表（GUI 通路未受影响）；列表页敲的键不渗入便签（reset 生效）；无 pageerror。
+- **A/B 无回归**：用 `git worktree` 在 HEAD 另建基线构建，同一 `regress_det.js` 跑全部 App ——
+  20 个既有 App 的**帧 CRC 全部逐字节相同**（`svm` 的 `refreshΔ=0` 在基线同样存在，属既有现象）。
+  `notepad` 为新 App，`80→80`、48 次刷新、CRC `83d146cf`。
+- 早前一次全量 det 里 sky3 的刷新数差异经单独重跑证实为机器负载噪声（两次运行 CRC 一致）。
+
+## 7. 已知取舍
+
+- **浏览器里 Backspace = 返回键**：`webgui/index.html` 的 `KEY_MAP.Backspace = 27`（对齐
+  ncurses 的"返回"惯例）是既有行为，本轮**未改动** GUI 语义。因此浏览器里删字请用 **Delete**
+  （ASCII 127，notepad 两者都接受）；终端/掌机上 ASCII 8 直接生效。
+- 多指/组合键：本库只有单键边沿与电平，Shift+字母等组合键需 App 自行看 `is_down(shift)`。
+- ESP32 的键盘 HAL（`hal_key_m5esp.cpp` / `hal_key_m5kb.cpp` / `hal_key_mp135.c`）尚未接
+  `nano_key_events_push`；接上只需在按键采样处加一行投递并在 init 里声明来源（本轮未验证
+  其构建，故未动）。同样，`infer/Makefile` 的 tty/web 目标已加源文件，但本机缺 `libasound2-dev`
+  未做 tty 链接验证。
+
+------------------------------------
+
 # 2026-10-30
 
 sky3.scm（大气散射天空 III）性能剖析与优化：WASM-GUI 目标下一次完整天空渲染（48 个采样行）从
@@ -2077,3 +2173,103 @@ wasm 侧近实时渲染、`advance()` 重绘路径（临时把 `RE_RENDER_DEG` �
   （`HAL_TOUCH_AVAIL=0`）时与改造前**逐像素全等**；`run_host_regress.sh` 全 22 个 App 无回归。
 
 备注：本次只改 Scheme 业务文件，wasm 产物无需重建（资源经 HTTP 挂载，App 源码在 MEMFS 里按需读取）。
+
+------------------------------------
+
+# 2026-10-30（宿主模态文本输入/输出本地库 `(native Ui)`）
+
+给「灵机应用程序」补上**文本输入输出**：App 里写一行 `(Ui.input "请输入名字")`，就会弹出
+宿主（鹦鹉笼同款）的文本输入控件——全键盘拼音 + 16 键九宫格输入法 + 触屏软键盘 + 候选字
+翻页 + 光标/滚动——用户提交后把文本作为返回值交给 Scheme。概念上等价于 J2ME 的 TextBox /
+浏览器 `prompt()`，但「阻塞」是**挂起 Scheme 进程**而非死等界面（宿主事件循环照常跑）。
+编译目标 **Nano-WASM-GUI**，宿主回归台 + 三个无头浏览器端到端验证。
+
+## 1. 新增文件与 API
+
+| 文件 | 作用 |
+|---|---|
+| `infer/am_native_Ui.c/.h` | 本地库 `Ui` + 宿主服务接口（发起/查询/提交） |
+| `infer/app/uinput.scm` | 示范兼验收 App：两问 + 一个消息框 + 落盘汇报，可循环重来 |
+| `tools/e2e/native/ui_probe.scm`、`test_ui_prompt.py` | 宿主台「阻塞/唤醒契约」测试（11 项断言） |
+| `tools/e2e/browser/regress_uiprompt.js` | 真浏览器端到端（20 项断言，Chromium/chrome-headless-shell/Firefox 全过） |
+
+Scheme 侧（`(native Ui)`）：
+
+```
+(Ui.input 标题)              : String | #null   —— 阻塞，提交返回文本；取消返回 #null
+(Ui.input_with 标题 初值)    : String | #null   —— 同上，输入框预置初值
+(Ui.message 正文)            : #undefined       —— 阻塞到用户关闭（只读文本，可拖动滚动）
+(Ui.message_titled 标题 正文) : #undefined
+```
+
+没有可选参数（本地库固定元数），故「带初值」是独立过程而不是重载。
+取消 = **长按 A/Esc** 或点按页眉右侧「返回」热区（短按 Esc 是控件自己的退格键，平台惯例）。
+
+## 2. 阻塞机制（复用上游的 N7 契约，不加新机制）
+
+- native 函数里把**进程**置 `AM_PROCESS_STATE_BLOCKED` 后直接 `return 0`——不压值、不 step
+  （上游本地库契约 N7 的「阻塞型函数」形态，与 `System.read` 队列等待同源）。虚拟机随即把该
+  进程移出调度队列；宿主的事件循环、渲染、其它进程照常运作。
+- 宿主提交时 `am_native_ui_resolve(rt, text)` 照抄 `runtime_queue_wake_process` 的四步：
+  `push_operand` → `am_process_step`（越过 callnative 指令）→ 置 READY → 重新入队 pid。
+  进程于是在**同一条指令**处继续，Scheme 侧看到的就是一个返回文本的函数。
+- 附带语义（有意）：BLOCKED 期间该进程的 `set_interval` 定时器暂停（上游既定行为），
+  App 的动画在模态框期间自然停住，不需要 App 自己判断。
+- 同时只允许一个请求：等待期间第二个 `(Ui.input ...)` 立即返回 `#null`（软失败）。
+
+## 3. 宿主侧（ui_scheme_app.c 的模态框服务）
+
+- 控件**直接借用**宿主现成的：`global_state->w_input_main`（`ui_widget_input_*`，
+  与鹦鹉笼的输入框同一个控件）与 `global_state->w_textarea_main`（消息框）。
+  于是输入法、软键盘、候选字、滚动、粘滞修饰键全部免费，Scheme 侧零输入法代码。
+- 提交/取消的区分：`ui_widget_input_event_handler(... prev, cur, next)` 的上一/下一焦点态
+  传两个哨兵值（`-1001` 取消 / `-1002` 提交），一套控件代码即可表达两种退出方向。
+- `ui_app.c` 的触屏 4x4 宫格映射在模态框期间被抑制（新增
+  `ui_scheme_app_hosts_input_widget()` 查询），触屏归控件所有；否则点按/拖动会不断产生
+  软按键、右上角还会变成 Esc。
+- 关框时不改 App 状态：进程唤醒后由 App 自己下一拍重绘接管画面。
+
+### 三个必须处理的边沿陷阱（都是实测踩出来的）
+
+1. **打开模态框那次按键的松开沿**：按键边沿由生产端逐事件投递、消费者每帧只取一个，
+   且**只投递下降沿**（-1/-2）。App 通常在被取走按下沿的那一帧里发起 `(Ui.input ...)`，
+   于是这次按键迟到的 -1 落进刚打开的模态框 → 控件当成「短按 Enter 提交」，表现为
+   **输入框一出现就自己交了空串**（消息框则是"一闪而过"）。
+   解法：打开时向 Key 库问「最近一次被取走的按下沿是哪个键、什么时刻」
+   （新增 `am_native_Key_last_press()`，用 VM 时钟 `am_runtime_now_ms`，与宿主时间线一致）；
+   若就在刚才（≤200ms），则剔除**该键**接下来的第一条 -1/-2，且只在一个 300ms 窗口内、
+   一旦出现别的按键或触屏动作立即解除。
+2. **长按连发**：事件层的长按（-2）在按住期间会持续重复（按键连发机制）。模态框用长按 Esc
+   取消，若不拦截，同一次长按会连续取消多个模态框、最后把 App 也退出。
+   解法：模态框消费一个 -2 后置位抑制标志，其后相同长按的重复事件丢弃，直到出现一次
+   **-1**（说明这次长按早已结束、用户又按了一下）才解除。**注意：不能用"上升沿(1)"解除**
+   ——生产端从不投递上升沿。
+3. **按键渗漏**：模态框期间的按键属于控件，不能进 `(native Key)` 的旁路队列，否则用户敲的
+   每次 Enter/退格都会在 App 恢复后被它当成新按键读走（症状：关掉消息框后 App 又"自己按了
+   一次 Enter"）。解法：模态框打开时与该期间的每帧都 `am_native_Key_reset()`。
+
+## 4. 验证
+
+- **宿主台阻塞契约**（`python3 tools/e2e/native/test_ui_prompt.py`，**11/11 PASS**）：
+  提交路径（打点前后都执行到、`input_with` 参数顺序、message 关闭后继续）、取消路径
+  （`#null`）、无人应答（全程 `blocked=57` 帧、不崩不自行恢复）。
+  harness 新增脚本化应答 `HAL_UI_AT="帧:动作:文本"` 与 `RESULT ... blocked=N` 计数。
+- **浏览器端到端**（`regress_uiprompt.js`，Chromium / chrome-headless-shell / Firefox
+  **各 20/20 PASS**）：说明画面自绘 → 按 Enter 进输入框后 **epoch 停止增长**（证明进程真的
+  挂起、App 不再自绘）→ 十六键九宫格组字 `ni` + 选字 + 提交 → `Ui.input_with` 直接回车接受
+  初值 → 日志 `data/ui_demo.txt` = `name=你\nnote=你`（中文经输入法进 Scheme 字符串再落盘）
+  → 消息框同样挂起、任意键关闭 → 长按 Esc 取消得到 `#null` → 点按页眉返回热区取消（且不会
+  退出 App）→ 非模态态长按 Esc 仍返回列表。
+- **回归**：宿主全 App（22 个，含 `uinput`）`err=none`；`regress_key_fs`（便签）17/17 仍过；
+  浏览器确定性回归 22 个 App 全部 `launch=80 → end=80`，未改动 App 的帧 CRC 与基线逐字节
+  相同。`svm` 的 `refreshΔ=0` 属既有现象；`verlet`/`xray` 的 CRC 变化经复跑确认是**App 列表
+  下标后移导致启动时刻偏移**（确定性回归按 16ms/帧步进虚拟时钟，时间相关画面因此不同），
+  非行为回归。sky3 当时另有并行改动，未纳入比对。
+
+## 5. 已知取舍 / 后续
+
+- 消息框的滚动复用 `ui_widget_textarea_touch_handler`；键盘翻行未接（点按/拖动可滚）。
+- 一次只服务一个模态请求，且模态框只服务**当前 App**；App 退出时 `am_native_ui_abort()`
+  丢弃挂起请求（进程随后被销毁，不留悬空 PID）。
+- 其他平台（tty/web/android）的宿主侧接线未做：它们同样只差在 `ui_scheme_app.c` 里加同样
+  的模态框服务（本模块与平台无关，控件是共用的 UI 组件），但本机未逐个构建验证。

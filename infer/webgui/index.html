@@ -376,8 +376,33 @@ const KEY_MAP = {
   "0": 48, "7": 49, "8": 50, "9": 51, "4": 52, "5": 53, "6": 54,
   "1": 55, "2": 56, "3": 57,
 };
+
+// 旁路键码（仅供 (native Key) 本地库，见 am_native_Key.h）：忠实映射，不做十六键
+// 重排——可打印字符就是其 ASCII 码，命名键用 hal_key.h 的 NANO_KEY_* 值
+//（两者本来就重合：up=1..right=4、backspace=8、tab=9、enter=13、esc=27、space=32）。
+const RAW_KEY_MAP = {
+  ArrowUp: 1, ArrowDown: 2, ArrowLeft: 3, ArrowRight: 4,
+  Backspace: 8, Tab: 9, Enter: 13, Escape: 27,
+  Delete: 127, Insert: 9, Home: 28, End: 29, PageUp: 30, PageDown: 31,
+};
+function rawKeyCode(e) {
+  if (Object.prototype.hasOwnProperty.call(RAW_KEY_MAP, e.key)) return RAW_KEY_MAP[e.key];
+  if (typeof e.key === "string" && e.key.length === 1) {
+    const cp = e.key.codePointAt(0);
+    if (cp >= 32 && cp <= 126) return cp; // 可打印 ASCII（含 space、数字、字母、标点）
+  }
+  return 0;
+}
+
 function reportKey(e, isDown) {
-  if (!runtimeReady || !Module._wasm_gui_on_key) return;
+  if (!runtimeReady) return;
+  // 旁路：每个按键都投递给灵机 App 的 (native Key) 库（不改动 GUI 电平槽）
+  if (Module._wasm_gui_on_key_event) {
+    const raw = rawKeyCode(e);
+    if (raw) Module._wasm_gui_on_key_event(raw, isDown);
+  }
+  // GUI 电平槽：仍只映射十六键/方向/回车/Esc（行为与接库前完全一致）
+  if (!Module._wasm_gui_on_key) return;
   const code = KEY_MAP[e.key];
   if (code === undefined) return;
   e.preventDefault();
