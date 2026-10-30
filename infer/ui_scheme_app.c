@@ -69,7 +69,7 @@
 #define MB_ERR_BUF_LEN (128)
 
 // App 数量上限与名称长度上限
-#define SCHEME_APP_MAX     (32)   // app/*.scm 上限（当前 23 个；余量留 9 个）
+#define SCHEME_APP_MAX     (32)   // app/*.scm 上限（当前 24 个；余量留 8 个）
 #define SCHEME_APP_NAME_MAX (48)
 
 // ===============================================================================
