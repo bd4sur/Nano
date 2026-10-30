@@ -22,7 +22,11 @@ extern "C" {
 //    这是【旁路】，不是接管。HAL 在把按键注入 GUI 电平槽（input_device_read_key）
 //    的同时，另投一份边沿事件进 nano_key_events 队列；GUI 的 get_input_event /
 //    长按连发 / 4x4 宫格映射 / 软复位 全部照常工作，两边的行为都确定。
-//    因此 App 运行期间 **ESC 依然是宿主的返回键**（触屏右上角宫格同理）。
+//    但与 A/ESC 的**语义归属**变了（2026-10）：宿主不再直接退出 App，只把硬 A/ESC
+//    记成一条「返回请求」（(App.back_requested)，见 am_native_App.h），由 App 自己决定
+//    怎么处理（推荐 app/lib/exit.scm 的 (EX.check) → 弹全局退出确认框）。触屏也不再
+//    派生 esc 软按键（STATE_SCHEME_APP_RUN 已进 ui_app_state_is_menu 抑制表）。
+//    本库仍如实把硬键边沿交给 App：想用 A 做"应用内返回"的 App 可以自己取 27。
 //
 //  事件模型（与 am_native_Touch 同一哲学，但数据源不同）：
 //    Touch 的 HAL 只给电平，因此边沿由本库侧「采样差分」派生（亚帧点按可能漏检）；

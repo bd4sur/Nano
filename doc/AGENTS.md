@@ -2547,3 +2547,203 @@ App 进程不会被打死——这是本 App 能持续运行的前提。
   把参数改写为 `(x*3.14159265358979/180)`——不必动解析器。
 - **`Ui.input` 直接输入表达式**：可加一个"键盘"键走宿主模态输入框（`(native Ui)`），给愿意
   打字的宿主（Nano-Pod/桌面）多一条入口。
+
+------------------------------------
+
+# 2026-10-30（四）灵机 App 退出接口：`App` 本地库 + 全局退出确认框（P1）
+
+把"退出灵机应用程序"从宿主的**统一交互**（无条件拦截 A/ESC → 销毁实例）改成
+「封装良好的、各 App 按需调用的退出接口」，并把"离开"这件事拆成可扩展的词汇，
+为将来的多任务/后台运行留位。编译目标 **Nano-WASM-GUI**，宿主回归台 + 三个无头浏览器
+端到端验证。
+
+## 0. 决策（与需求方确认的六条）
+
+1. **不放 `Ui`**：新建平台库 **`App`**（应用外壳/生命周期）。`Ui` 保持"借用宿主模态控件"
+   的定位；`(Ui.confirm ...)` 作为通用确认框补进去。
+   库名刻意不用设备名（Linglong）——那是杂物袋，设备能力（振动/电量/网络）将来另开 `Device`。
+2. **(App.exit) 阻塞到用户答复**（复用 Ui 的 BLOCKED/唤醒机制，契约 N7）。
+3. **触屏不再派生返回键**：`STATE_SCHEME_APP_RUN` 整体退出 4×4 宫格映射（含右上角 esc 格）；
+   **硬 A/ESC 保留**，但宿主只置"返回请求"，由 App 消费 → 弹全局确认框（J2ME 挂断键语义）；
+   网页工具条新增 **「ESC」按钮**，把硬 Esc 同时送进旁路 `(native Key)` 与 GUI 电平槽。
+4. **零快照**：确认框不做帧缓冲快照/恢复，关闭后由 App 自己重绘（`install_with` 登记重绘函数）。
+5. **同步补 `(Ui.confirm 标题 正文)`**（阻塞、返回 `#t/#f`），与退出确认框共用同一套绘制/命中。
+6. **`(App.hide)` 本期打桩**（宿主按退出处理），接口先立住。
+
+## 1. 新增文件与 Schema 侧 API
+
+| 文件 | 作用 |
+|---|---|
+| `infer/am_native_App.c/.h` | 本地库 `App` + 宿主服务接口（请求位/退出意愿/名字） |
+| `infer/app/lib/exit.scm` | App 侧辅助模块：`(EX.install)` / `(EX.install_with 重绘函数)` |
+| `infer/tools/e2e/native/app_probe.scm`、`test_app_exit.py` | 宿主台「请求/阻塞/唤醒/退出意愿」契约测试（19 项断言） |
+| `infer/tools/e2e/browser/regress_exit.js` | 浏览器端端到端（19 项断言，Chromium/headless-shell/Firefox 全过） |
+
+```
+(native App)
+(App.exit)              : Boolean  —— 弹全局确认框（**阻塞**）；#t=确认（宿主本帧末销毁实例），#f=留下
+(App.exit_with 标题)     : Boolean  —— 同上，自定义标题
+(App.exit_now)          : Boolean  —— 不问，直接退出（App 自己已确认过）
+(App.hide)              : Boolean  —— 请求切后台（P1 打桩 = 退出）
+(App.back_requested)    : Boolean  —— 硬 A/ESC 待处理（**取走即清零**）
+(App.modal_closed)      : Boolean  —— 宿主模态框刚关闭（取走即清零）
+(App.is_active)         : Boolean  —— 是否前台活动（退出流程启动后为 #f）
+(App.name)/（App.platform）: String —— 当前 App 名 / 平台标识
+(native Ui) (Ui.confirm 标题 正文) : Boolean —— 通用确认框（阻塞，#t=确认）
+```
+
+每个 App 只需两行就得到"按挂断键→全局提示是否退出"：
+
+```scheme
+(import EX "app/lib/exit.scm")      ; 头部
+(EX.install)                        ; 启动时（或 (EX.install_with render)）
+```
+
+## 2. 时序与关键语义
+
+```
+硬 A/ESC ─┐                                            App 自己的按钮/菜单项
+          ▼                                                      │
+  宿主置"返回请求"(ui_scheme_app.c)                                │
+          │  ←── App 的 EX.poll（80ms 定时器）消费 ──┐              │
+          └──────────────────────────────────────► (App.exit) ─────┘
+                                                         │ 进程 BLOCKED
+                                    宿主每帧 am_native_ui_pending() → 画确认框
+                                                         │
+                             ┌───────────────────────────┴──────────────┐
+                         「留下」#f                                   「确认」#t
+                   App 继续（可选调重绘函数擦残影）        置退出意愿 → 本帧**泵完之后**销毁实例
+                                                          （App 因此还有一个时间片做收尾，如落盘）
+```
+
+- **不能在 native 函数里销毁运行时**（栈上还压着该进程的上下文）：App 侧只能"发请求"，
+  teardown 必须回到宿主帧末——`ui_app.c` 的 `STATE_SCHEME_APP_RUN` 在 `render_frame` **之后**
+  调 `ui_scheme_app_should_exit()`，成立才 `on_exit()` + 回列表。
+- **阻塞会暂停该进程的全部定时器**（上游既定语义）：确认框存续期间 App 自然定住（J2ME 式暂停），
+  不需要额外代码；也正因如此，"轮询返回请求"必须写在**阻塞之前**（`app_probe.scm` 记了这一条）。
+- **兜底**：返回请求 700ms 内无人消费（App 未迁移/已停机报错）就按旧行为退出，不会把人困在 App 里；
+  模态框期间的 esc 归控件，不参与兜底。
+- **零快照的代价**：确认框关闭后画面上的对话框像素要靠 App 重绘覆盖。绝大多数 App 每拍整屏重绘，
+  `(EX.install)` 足够；事件驱动型（计算器/二维码等）用 `(EX.install_with 重绘函数)`。
+
+## 3. 三个必须处理的边沿（都是实测踩出来的）
+
+1. **退出后"在途触摸序列"会落到列表上变成一次点击**：App 侧 `(native Touch)` 由电平派生边沿，
+   往往先于宿主输入层认定松手（宿主有 UP 去抖），于是 App 已销毁而宿主仍认为"按住"；列表初始化时
+   的电平兜底会把它当成**新的按下**，紧接着的 UP 就成了点击——实测"俄罗斯方块确认退出"会直接
+   又启动 gol。处置：`ui_scheme_app_on_exit()` 置 `s_list_touch_guard`，列表在**新的一次按下**
+   出现前剥掉触摸字段（600ms 窗口兜底解除）。
+2. **长按 A 的 -2 连发**：会把刚弹开的确认框连坐关掉。复用 Ui 模态框的
+   `s_modal_ignore_longpress_repeat`（宿主在收到 -2 返回请求时置位，见到下一次 -1 才解除）。
+3. **列表事件入口走包装函数**：`ui_app.c` 的 LIST 分支原先直接调 `ui_widget_menu_event_handler`，
+   绕过 `ui_scheme_app_list_event_handler`（上面那条抑制就在其中，曾经"改了没生效"）。现已改为
+   调用模块自己的包装。
+
+## 4. 迁移
+
+- **24 个 App 全部接上**（`(import EX ...)` + 末尾 `(EX.install...)`，逐个按其绘制方式选
+  `install` 或 `install_with`），App 列表零改动（仍是放 `.scm` 即出现）。
+- `tetris.scm`：自己的「退出」按钮 → 确认框「确认」改成 `(App.exit_now)`（**真退出**，
+  不再"冻结游戏等 A 返回"），删掉 `stopped/draw_stopped/stopped_drawn` 死代码。
+- 过时注释/布局说明同步更新（calculator/svm/notepad/qrcode/particlelife/uinput/touchgravity）；
+  `am_native_Key.h` 里"ESC 依然是宿主的返回键"改成新的归属说明。
+- 构建清单同步：`build_wasm_gui.sh`、`Makefile`、`mp135.mk`、`android/.../CMakeLists.txt`、
+  `tools/e2e/host/run_host_regress.sh` 各加 `am_native_App.c`；宿主回归台注册 `App` 库并
+  `am_native_app_reset(L"probe")`。
+
+## 5. 验证
+
+- **宿主台契约**（`python3 tools/e2e/native/test_app_exit.py`，**19/19 PASS**）：
+  确认→`#t`+退出意愿置位、留下→`#f`+意愿 0、`(App.back_requested)` 取走即清零、
+  `(Ui.confirm)` 共用机制、无人应答时全程 BLOCKED 且不崩。
+- **浏览器端到端**（`regress_exit.js`，Chromium / chrome-headless-shell / Firefox **各 19/19 PASS**；
+  事件驱动型另跑 `E2E_APP=calculator E2E_EPOCH=0` **16/16**）：触屏右上角不再退出、硬 Esc 弹确认框、
+  确认框期间 App 冻结（epoch 不涨）、点「留下」框消失且 App 恢复推进、网页「ESC」按钮等价、
+  框内非回车键=留下（安全默认）、点「确认」回列表（state 79）、可再次启动。
+- **回归**：宿主回归台 24 个 App `err=none`；浏览器存活回归 23 个 App 全部 `80 → 80`；
+  `regress_tetris` 20/20、`regress_calculator` 24/24、`regress_key_fs` 17/17、
+  `regress_qrcode` 21/21、`regress_uiprompt` 21/21；`test_ui_prompt` 11/11、
+  `test_touch_imu` 36/36、`test_tetris` 21/21、`test_qrcode` 29/29、`test_key_fs` 44/44。
+- 既有测试脚本同步改造：凡"按 Esc 退出 App"的用例都补一步回车（= 确认），
+  `regress_uiprompt` 的第 8 项从"长按 Esc 直接回列表"改为"长按 Esc 弹确认框 → 确认回列表"。
+- 环境备注：`regress_tetris` 的「速降」判据改为"下落 1~2 格"——探针窗口会跨过重力节拍（800ms/格），
+  原先"恰好 +1"的断言本身就不稳（改动前后各复跑均能复现）。
+
+## 6. 遗留（P2~P4）
+
+- **P2 两段式收尾**：`(App.exit)` 确认后给 App 一段显式收尾窗口（现在是"本帧一个时间片"），
+  以及"退出前询问是否保存"的范式（便签/游戏高分）。
+- **P3 各 App 的退出入口**：把右上角让出来的空间用起来，统一 HUD 文案（现在多写"A退出"）；
+  tetris 的自绘确认框可换成 `Ui.confirm`（视觉与宿主框完全一致）。
+- **P4 `hide`/多任务**：实例表（单前台 + N 后台槽）、列表"运行中"角标、统一 `suspend/resume`
+  原语（锁屏现在仍是"伪 esc 硬退外设态"，应改为 suspend + `App.is_active=#f`）、解释器池预算
+  （WASM 12MB / ESP32 2MB）。
+- **触屏宫格整体退场**：本次只让 Scheme App 运行态退出该映射；存量 C 状态仍是过渡态
+  （见 ui_app.c 输入原则第 5 条）。
+
+------------------------------------
+
+# 2026-10-30（五）App 退出接口 P2：两段式收尾 + 退出前落盘范式
+
+P1 的 `(App.exit)` 确认后是"本帧末就销毁"——App 只有**一个时间片**做收尾，靠巧合而不是
+契约。P2 把这段窗口写进协议：**确认 ≠ 可以销毁**，中间加一段显式的收尾窗口。
+
+## 1. 协议（两段式）
+
+```
+用户点「确认」
+   → 本库置「退出已确认」（App.exit_grace 计时开始，is_active 变 #f）
+   → (App.exit) 返回 #t
+App 收尾：落盘 / 停外设 / 画最后一帧 …（可跨多拍，默认上限 2000ms）
+   → (App.exit_now)            ← 第二段：宣告收尾完毕
+宿主：本帧末销毁实例（回应用列表）
+```
+
+- 收尾窗口 `AM_NATIVE_APP_EXIT_GRACE_MS = 2000`；超时由宿主强制销毁并打印
+  `[scheme-app] 退出收尾超时（N ms 仍未 (App.exit_now)），强制销毁实例`。
+- **模态框存续期间自动续期**（`am_native_app_extend_grace`）：App 收尾时再弹
+  `(Ui.confirm ...)` 问用户，不会被收尾窗口从对话中掐断。
+- 判定收敛到库里：`am_native_app_exit_wanted(rt)` 同时表达"`exit_now` 已调"与"收尾超时"，
+  宿主只做执行者（`ui_scheme_app_should_exit`）。
+- 退出流程中再按硬 A/ESC 被忽略（不再重复弹确认框）。
+
+## 2. App 侧：收尾登记（`app/lib/exit.scm`）
+
+```scheme
+(import EX "app/lib/exit.scm")
+...
+(EX.on_exit do_save)        ; 用户确认退出后、实例销毁前调用一次
+(EX.install_with draw_all)  ; 硬 A/ESC 轮询 + “留下”后重绘
+```
+
+`EX.poll` 的确认分支现在是 `(收尾函数) → (App.exit_now)`。原理说明写在模块头：
+"自动保存要等静止 0.5s，刚打完字立刻退出就可能还没落盘——收尾函数补上这一手"。
+
+## 3. 验收（新增/加强）
+
+- **宿主台 `test_app_exit.py` 扩到 30 项**（新增两组，靠 harness 的 `APP_PEEK=帧,...`
+  按帧打印 `wanted/confirmed/grace_ms`）：
+  - 收尾可跨多拍：确认后第 60 帧 `wanted=0 confirmed=1 grace_ms=320`，App 忙 12 拍后
+    `exit_now`；第 200 帧 `wanted=1`；
+  - 收尾超时：确认后一直不调 `exit_now` → 窗口内 `wanted=0`，第 230 帧（virtual 3.0s）
+    `wanted=1 grace_ms=3040`。
+- **浏览器 `regress_key_fs.js` 加第 8 步"退出前落盘"**（23/23）：便签打字后**立刻**退出，
+  断言文件已含该字符，且"输入→确认框出现"仅 93ms ≪ 自动保存阈值 480ms（否则自动保存
+  可能抢先，判据失效）。
+  - 顺带修好该用例的一个**假通过**：退出回列表后直接按回车落在列表第 0 项
+    （每次进列表高亮都会重置），第 7 步其实一直在测 calculator 而不是 notepad；
+    现改为重新下移 idx 项再进入（`enterAppFromList`）。
+- 回归全绿：`regress_exit` 19/19（Chromium；上一轮三引擎均过）、`regress_tetris` 20/20、
+  `regress_calculator` 24/24、`regress_uiprompt` 21/21、`regress_qrcode` 21/21、
+  `regress.js` 全 App 存活（Firefox）、宿主台 24 App `err=none`、
+  `test_ui_prompt` 11/11、`test_tetris` 21/21、`test_key_fs` 44/44。
+
+## 4. 有意留下的口子
+
+- 收尾函数里若发生运行时错误（进程停机），宿主按"进程已停"处理仍会销毁实例，但那时
+  已经没有机会落盘了——所以收尾函数应尽量简单（同步写、不弹框）。要在收尾阶段问用户，
+  用模态框是安全的（会续期），但要意识到"用户可能看到两连问"。
+- 收尾窗口固定 2000ms，不做按 App 配置；真需要更长的收尾（大文件导出）应改为后台任务 +
+  `(App.exit_now)` 延后，而不是拉长窗口。
+- `(App.hide)` 仍是打桩（= 退出）。多任务/后台（P4）落地时会复用同一套"确认→收尾→执行"
+  三段式，只是最后一段从"销毁"变成"冻结 + 登记实例"。

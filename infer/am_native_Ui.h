@@ -22,6 +22,9 @@ extern "C" {
 //    (Ui.input_with 标题 初值)    : String | #null   —— 同上，输入框预置初值
 //    (Ui.message 正文)            : #undefined       —— 弹出只读文本视图，阻塞到用户关闭
 //    (Ui.message_titled 标题 正文) : #undefined       —— 同上，带页眉标题
+//    (Ui.confirm 标题 正文)        : Boolean         —— 弹出两按钮确认框，阻塞到用户选择
+//                                                       #t=确认，#f=留下/取消
+//                                                       正文可为空串（只显示标题）
 //
 //    · 提交（短按 Enter）= 返回输入框里的文本（String，UTF-8/宽字符原样）；
 //    · 取消（长按 A/Esc，或触屏点按页眉右侧「返回」热区）= 返回 #null；
@@ -57,6 +60,7 @@ extern const am_native_lib_entry_t am_native_Ui_lib;
 #define AM_NATIVE_UI_KIND_NONE    (0)
 #define AM_NATIVE_UI_KIND_INPUT   (1) // 文本输入框（ui_widget_input_*）
 #define AM_NATIVE_UI_KIND_MESSAGE (2) // 只读文本视图（ui_widget_textarea_*）
+#define AM_NATIVE_UI_KIND_CONFIRM (3) // 两按钮确认框（ui_exit_confirm_* 绘制/命中）
 
 // 文案缓冲区上限（码点数；超出截断）
 #define AM_NATIVE_UI_TITLE_MAX (128)
@@ -78,6 +82,12 @@ int32_t am_native_Ui_message(am_runtime_t *rt, am_process_t *proc);
 // (Ui.message_titled 标题:String 正文:String) : #undefined
 int32_t am_native_Ui_message_titled(am_runtime_t *rt, am_process_t *proc);
 
+// (Ui.confirm 标题:String 正文:String) : Boolean —— 阻塞式确认框（确认 #t / 留下 #f）
+//   画面由宿主用图形层现成的退出确认框组件（ui_exit_confirm_*）绘制；关闭后**不做
+//   帧缓冲快照恢复**，由调用方自己重绘（多数 App 每拍整屏重绘，天然满足；事件驱动型
+//   App 可用 (App.modal_closed) 得知并补一次重绘）。
+int32_t am_native_Ui_confirm(am_runtime_t *rt, am_process_t *proc);
+
 // ---------------------------------------------------------------------------
 // 宿主服务接口（供 ui_scheme_app.c 的模态框宿主使用；Scheme 侧不可见）
 // ---------------------------------------------------------------------------
@@ -96,6 +106,23 @@ const wchar_t *am_native_ui_initial(void);
 
 // (Ui.message*) 的正文（不会为 NULL）
 const wchar_t *am_native_ui_body(void);
+
+// 发起一个确认框请求（供 (Ui.confirm ...) 与 (native App) 的退出请求共用）
+//   title：标题（NULL 用默认「是否退出？」）；body：正文（NULL/空串表示不画正文）
+//   is_exit：1 表示这是「退出型」确认框——用户按「确认」时本模块会顺带把 App 库的
+//            退出意愿置位（见 am_native_app_mark_exit_confirmed），从而实现
+//            「确认 → 本帧末销毁实例」；0 则只把 #t/#f 交回调用方。
+//   已有请求在等待时软失败：立即压 #f 并 step（不阻塞）。
+//   返回值同其它值型过程：0 成功（含软失败），-1 硬错误。
+int32_t am_native_ui_confirm_begin(am_runtime_t *rt, am_process_t *proc,
+                                   const wchar_t *title, const wchar_t *body, int32_t is_exit);
+
+// 确认框答复：yes!=0 → #t（且若该请求为退出型则置 App 退出意愿），yes==0 → #f
+//   无请求或请求种类不是 CONFIRM 时为空操作。
+void am_native_ui_resolve_confirm(am_runtime_t *rt, int32_t yes);
+
+// 当前请求是否为退出型确认框（宿主据此决定是否需要「确认即退出」的后续动作）
+int32_t am_native_ui_confirm_is_exit(void);
 
 // 结束当前请求并唤醒被阻塞的进程：
 //   result != NULL → 以该字符串为返回值（INPUT 类）；result == NULL → 返回 #null（取消）。

@@ -26,6 +26,7 @@
 (native Math)
 (native String)
 (native System)
+(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 网格参数（细胞 8px；网格随画布尺寸自适应）----------------------------
 
@@ -121,3 +122,7 @@
 (seed)
 (step)
 (set! _timer (System.set_interval 100 step))
+
+;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
+;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行
+(EX.install)

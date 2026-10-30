@@ -26,8 +26,8 @@
 ;;   路径保持像素尺度计算（数值完全不变，也省掉每格一次换算）。
 ;;
 ;; 布局约定（平台相关）：
-;;   · 触屏右上角 80x60（x≥SW*3/4 且 y<SH/4）是宿主 4x4 宫格的 ESC 格，
-;;     点它会退出本 App（与其它 Scheme App 一致），故不在该处放常驻控件；
+;;   · 触屏右上角 80x60 曾是宿主 4x4 宫格的 ESC 格；2026-10 起该格已不再映射为
+;;     返回键（App 运行态整体退出宫格映射），此处仍不放常驻控件只是沿用旧布局；
 ;;   · 左下角按钮区（y 212..233）内的点按只作按钮用，不添加样本。
 ;;
 ;; 解释器约束（详见 Animac manual.md 与 doc/AGENTS.md，逐条遵守）：
@@ -44,6 +44,7 @@
 (native String)
 (native System)
 (native Touch)
+(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 画布 -----------------------------------------------------------------
 
@@ -755,7 +756,8 @@
                    (String.concat "/" (String.concat (i2s MAXN)
                    (String.concat "  SV=" (i2s nsv)))))))
     (Gfx.draw_text hud_s (- SW (+ 4 (tw hud_s))) (- SH 15) 70 75 95)
-    ;; 右上角格是宿主 4x4 宫格的 ESC 格（点它返回列表），标一下免得误当作绘图区
+    ;; 右上角按旧布局标一个「返回」提示（2026-10 起该格不再是宿主返回键，
+    ;; 退出改为硬 A/ESC → 全局确认框；此标记保留以免观众误当绘图区）
     (Gfx.fill_rect (- SW 40) 2 36 16 60 62 72)
     (Gfx.draw_text "返回" (- SW 37) 3 225 228 235)
   }))
@@ -920,3 +922,7 @@
 
 (render)
 (set! _timer (System.set_interval TICK_MS tick))
+
+;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
+;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行（并调 render 擦掉对话框残影）
+(EX.install_with render)

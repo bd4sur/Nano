@@ -83,6 +83,16 @@
     user-select: none; -webkit-user-select: none; touch-action: manipulation;
   }
   #res-btn:active { transform: scale(.96); }
+  /* 硬 ESC 按钮：给触屏/鼠标用户一个等价于实体键盘 Esc 的出口。
+     实体 A/ESC 已不由宿主直接退出，而是置“返回请求”交给 App（J2ME 挂断键语义），
+     所以触屏设备上必须有一个能送出“硬 Esc”的入口。 */
+  #esc-btn {
+    background: #2b2b34; color: #d8d8de; border: 1px solid #4a4a56;
+    border-radius: 6px; font-size: 13px; padding: 6px 14px; cursor: pointer;
+    user-select: none; -webkit-user-select: none; touch-action: manipulation;
+    letter-spacing: .5px;
+  }
+  #esc-btn:active { transform: scale(.96); background: #3a3a46; }
   #res-panel {
     position: fixed; inset: 0;
     background: rgba(10,10,14,.92);
@@ -148,10 +158,11 @@
   </div>
   <div id="bar">
     <div id="status">加载中…</div>
+    <button id="esc-btn" type="button" title="等同于实体键盘 Esc / 设备 A 键">ESC</button>
     <button id="att-btn" type="button">姿态：关</button>
     <button id="res-btn" type="button">资源</button>
   </div>
-  <div id="hint">触屏/鼠标点按操作 · 键盘：方向键/回车=确认/Esc=返回/数字=十六键</div>
+  <div id="hint">触屏/鼠标点按操作 · 键盘：方向键/回车=确认/Esc=返回/数字=十六键 · 「ESC」按钮=硬 Esc</div>
 </div>
 
 <!-- 资源管理面板（浏览器本地存储 IndexedDB：上传/覆盖/删除业务资源，不依赖后端） -->
@@ -413,6 +424,29 @@ function reportKey(e, isDown) {
 }
 document.addEventListener("keydown", (e) => reportKey(e, 1));
 document.addEventListener("keyup",   (e) => reportKey(e, 0));
+
+// ---------------- 硬 ESC 按钮（触屏/鼠标用户的“A 键”） ----------------
+// 语义与实体键盘 Esc 完全一致，同时走两条通道：
+//   ① 旁路 (native Key)：_wasm_gui_on_key_event —— 灵机 App 的 (Key.take_press) 能看到 27；
+//   ② GUI 电平槽：_wasm_gui_on_key —— 宿主输入层照常做边沿判定/长按机制。
+// 按下与松开都即时驱动生产者采样（_wasm_gui_input_tick），因此短按也会被完整判定，
+// 不会像只发 keydown 那样“按住”到下一次心跳。
+// 注意：宿主的 App 运行态已不再直接处理 A/ESC，而是置“返回请求”交给 App
+//（(App.back_requested)），由 App 弹全局退出确认框（见 infer/am_native_App.h）。
+const escBtn = document.getElementById("esc-btn");
+function sendHardKey(code, isDown, ev) {
+  if (!runtimeReady) return;
+  const ts = eventEpochMs(ev);
+  if (Module._wasm_gui_on_key_event) Module._wasm_gui_on_key_event(code, isDown ? 1 : 0);
+  if (Module._wasm_gui_on_key) Module._wasm_gui_on_key(code, isDown ? 1 : 0);
+  if (Module._wasm_gui_input_tick) Module._wasm_gui_input_tick(ts);
+}
+if (escBtn) {
+  escBtn.addEventListener("pointerdown", (e) => { e.preventDefault(); sendHardKey(27, 1, e); });
+  escBtn.addEventListener("pointerup",   (e) => { e.preventDefault(); sendHardKey(27, 0, e); });
+  escBtn.addEventListener("pointercancel", (e) => { sendHardKey(27, 0, e); });
+  escBtn.addEventListener("contextmenu", (e) => e.preventDefault());
+}
 
 // ---------------- 设备姿态（localhost/HTTPS 可用；局域网 HTTP 下事件不触发） ----------------
 let attEnabled = false;

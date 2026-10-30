@@ -23,6 +23,7 @@
 (native Math)
 (native String)
 (native System)
+(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 物理常数（与 ui_particlelife.c 一致；世界半宽 1.0，x∈[-1,1] 环面）-----
 ;; 视口几何先行定义（WORLD_HH 依赖 HUD_H/SW/SH）。
@@ -161,7 +162,8 @@
     (Gfx.clear)
     (Gfx.fill_rect 0 0 SW HUD_H 24 24 28)
     (Gfx.draw_text "粒子生命" 6 2 255 255 255)
-    (Gfx.draw_text "A返回" (- SW 60) 2 180 180 180)
+    ;; 硬 A/ESC 由 app/lib/exit.scm 接管（弹全局确认框）；触屏不再有返回键
+    (Gfx.draw_text "A退出" (- SW 60) 2 180 180 180)
     (while (< i N) {
       (set! px (Math.floor (+ CX (* (get_item xs i) SCALE))))
       (set! py (Math.floor (+ CY (* (get_item ys i) SCALE))))
@@ -236,3 +238,7 @@
 (draw)
 (step)
 (set! _timer (System.set_interval 100 step))
+
+;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
+;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行（并调 draw 擦掉对话框残影）
+(EX.install_with draw)

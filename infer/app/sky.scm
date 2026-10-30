@@ -51,6 +51,7 @@
 (native Time)
 
 (import Ephem "app/lib/ephem.scm")
+(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 画布与投影几何 --------------------------------------------------------
 
@@ -406,3 +407,7 @@
 (set! rendered_el sun_alt_deg)
 (Gfx.clear)
 (set! update_timer (System.set_interval 16 step))
+
+;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
+;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行（并调 advance 擦掉对话框残影）
+(EX.install_with advance)

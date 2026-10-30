@@ -25,6 +25,7 @@
 #include "am_native_Key.h"
 #include "am_native_Fs.h"
 #include "am_native_Ui.h"
+#include "am_native_App.h"
 
 // ===============================================================================
 // 运行时参数
@@ -89,6 +90,18 @@ static int32_t scheme_app_buffers_init(void);           // 一次性分配（定
 static int32_t s_app_count = 0;                 // 有效 App 数
 static int32_t s_selected = -1;                 // 运行中的 App 下标（-1 无）
 static int32_t s_list_empty = 0;                // app 目录下没有 .scm（菜单显示占位项）
+
+// 「在途触摸序列」余波抑制（退出 App → 回列表时置位，序列结束后自动解除）：
+//   退出可能是**在用户手指动作过程中**发生的（点 App 自己的退出按钮 / 点全局确认框的
+//   「确认」）：App 侧的 (native Touch) 由电平派生边沿，往往先于宿主输入层判定到"松手"
+//   （宿主有 UP 去抖），于是 App 已销毁、宿主仍认为"按住中"。此时列表菜单被初始化，
+//   它的电平兜底（`is_touching && !touch_active`）会把这一拍的旧电平当成**新的按下**，
+//   紧接着迟到的 UP 边沿就成了一次"点击"，落到某个菜单项上——症状：确认退出后
+//   立刻自动进入了列表里被点位置的 App（实测从俄罗斯方块退出会直接启动 gol）。
+//   处置：进入列表后的这一小段里剥掉触摸字段（按键照常），序列结束后恢复。
+//   （与 ui_app.c 输入原则第 4 条同一精神：状态切换不得继承在途触摸序列。）
+static int32_t s_list_touch_guard = 0;
+static uint64_t s_list_touch_guard_until_ms = 0;  // 抑制窗口（超时兜底解除，防止永久吞触摸）
 
 // 菜单条目文本（供 w_menu_main->items 借用）与指针表
 static wchar_t (*s_item_text)[SCHEME_APP_NAME_MAX] = NULL;
@@ -326,6 +339,23 @@ int32_t ui_scheme_app_list_item_action(Key_Event *key_event, Global_State *globa
 }
 
 int32_t ui_scheme_app_list_event_handler(Key_Event *key_event, Global_State *global_state) {
+    // 退出 App 后的在途触摸序列余波：剥掉触摸字段后再交给菜单（见 s_list_touch_guard 注释）
+    if (s_list_touch_guard) {
+        // 解除条件：① 出现**新的一次按下**（说明旧序列已彻底结束、用户开始新动作）；
+        //           ② 抑制窗口到期（兜底，窗口内用户未再触摸）
+        if ((key_event->touch_edge & TOUCH_EDGE_DOWN) != 0 || get_timestamp_in_ms() > s_list_touch_guard_until_ms) {
+            s_list_touch_guard = 0;
+        }
+        else {
+            Key_Event ke = *key_event;
+            ke.is_touching = 0;
+            ke.touch_edge = 0;
+            // 菜单控件统一处理（上下键/触屏/惯性滚动；A 返回 STATE_GAME_MENU 由 back_state 给出）
+            return ui_widget_menu_event_handler(&ke, global_state, global_state->w_menu_main,
+                                                ui_scheme_app_list_item_action,
+                                                STATE_GAME_MENU, STATE_SCHEME_APP_LIST);
+        }
+    }
     // 菜单控件统一处理（上下键/触屏/惯性滚动；A 返回 STATE_GAME_MENU 由 back_state 给出）
     return ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main,
                                         ui_scheme_app_list_item_action,
@@ -504,7 +534,10 @@ int32_t ui_scheme_app_init(Key_Event *key_event, Global_State *global_state) {
     am_runtime_register_native_lib(s_app.rt, &am_native_Fs_lib);
     // Ui：宿主模态文本输入/输出（借用鹦鹉笼同款文本控件，见 am_native_Ui.h）
     am_runtime_register_native_lib(s_app.rt, &am_native_Ui_lib);
+    // App：应用生命周期（退出/返回请求/多任务占位，见 am_native_App.h）
+    am_runtime_register_native_lib(s_app.rt, &am_native_App_lib);
     am_native_ui_abort(); // 清掉上一个 App 可能遗留的请求
+    am_native_app_reset((s_app.desc != NULL) ? s_app.desc->title : L"app");
     am_native_Key_reset();
 
     // 清屏后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）
@@ -624,6 +657,7 @@ int32_t ui_scheme_app_render_frame(Key_Event *key_event, Global_State *global_st
 static int32_t s_modal_kind = AM_NATIVE_UI_KIND_NONE;
 static Widget_Input_State *s_modal_in = NULL;       // 借用 w_input_main
 static Widget_Textarea_State *s_modal_ta = NULL;    // 借用 w_textarea_main（只读消息）
+static int32_t s_modal_confirm_with_body = 0;       // 确认框是否带正文（几何/命中判定须与绘制一致）
 static wchar_t s_modal_title[AM_NATIVE_UI_TITLE_MAX];   // 页眉文案（控件长期持有指针）
 static wchar_t s_modal_result[AM_NATIVE_UI_BODY_MAX];   // 提交时的文本快照
 
@@ -640,8 +674,24 @@ static void scheme_modal_finish(Global_State *global_state, int32_t submit, Key_
         s_modal_ignore_longpress_repeat = 1; // 之后的长按重复事件不再生效（见变量注释）
     }
 
+    // 确认框：把 #t/#f 交回 App。若这是「退出型」确认框（(App.exit) 发起的），
+    // 肯定答复会同时置 App 退出意愿 —— 宿主在**本帧泵完之后**销毁实例
+    //（见 ui_scheme_app_should_exit），因此 App 还有整整一个时间片做收尾。
+    // 这里不做帧缓冲快照恢复：关闭后由 App 自己重绘（零快照方案，见文件头说明）。
+    if (s_modal_kind == AM_NATIVE_UI_KIND_CONFIRM) {
+        am_native_ui_resolve_confirm(s_app.rt, submit ? 1 : 0);
+        am_native_app_notify_modal_closed();
+        if (global_state->gfx != NULL) global_state->is_full_refresh = 1;
+        s_modal_in = NULL;
+        s_modal_ta = NULL;
+        s_modal_confirm_with_body = 0;
+        s_modal_kind = AM_NATIVE_UI_KIND_NONE;
+        return;
+    }
+
     // 先唤醒进程：连发提问的 App 会在下一帧重新打开模态框，状态不能残留
     am_native_ui_resolve(s_app.rt, submit ? s_modal_result : NULL);
+    am_native_app_notify_modal_closed();
 
     if (s_modal_kind == AM_NATIVE_UI_KIND_INPUT && s_modal_in != NULL) {
         // 输入法全状态复位 + 双键盘收起 + 布局恢复（不动文本缓冲区）
@@ -666,7 +716,8 @@ static void scheme_modal_open(Key_Event *key_event, Global_State *global_state) 
         s_modal_title[AM_NATIVE_UI_TITLE_MAX - 1] = L'\0';
     }
     else {
-        wcscpy(s_modal_title, (s_modal_kind == AM_NATIVE_UI_KIND_INPUT) ? L"输入" : L"消息");
+        if (s_modal_kind == AM_NATIVE_UI_KIND_CONFIRM) wcscpy(s_modal_title, L"是否退出？");
+        else                                            wcscpy(s_modal_title, L"消息");
     }
 
     s_modal_active = 1;
@@ -686,6 +737,19 @@ static void scheme_modal_open(Key_Event *key_event, Global_State *global_state) 
         }
     }
     am_native_Key_reset(); // 打开模态框时清一次：触发本次输入的那次按键残留在队列里也无害
+
+    // 确认框（(Ui.confirm ...) 与 (App.exit) 共用）：用图形层现成的退出确认框组件绘制，
+    // 与 App 自己弹的框、控制台的退出确认框是同一视觉与命中——无需文本控件。
+    if (s_modal_kind == AM_NATIVE_UI_KIND_CONFIRM) {
+        s_modal_in = NULL;
+        s_modal_ta = NULL;
+        s_modal_confirm_with_body = (am_native_ui_body()[0] != L'\0');
+        // 任何模态框开起来都说明 App 还活着在干活：清除可能挂起的“返回请求”，
+        // 免得框关掉之后被宿主兜底当成未接管的请求而误杀
+        am_native_app_clear_back_request();
+        ui_exit_confirm_draw_msg(key_event, global_state, s_modal_title, am_native_ui_body());
+        return;
+    }
 
     if (s_modal_kind == AM_NATIVE_UI_KIND_INPUT) {
         const wchar_t *init = am_native_ui_initial();
@@ -740,6 +804,26 @@ static void scheme_modal_event(Key_Event *key_event, Global_State *global_state)
     }
     if (s_modal_open_key != 0 && key_event->touch_edge != 0) {
         s_modal_open_key = 0; // 触屏活动同样解除
+    }
+
+    if (s_modal_kind == AM_NATIVE_UI_KIND_CONFIRM) {
+        /* 确认框交互：
+         *   · 触屏——松手沿 + 按下点命中按钮（全局范式，按下沿不结算）；点框外不关闭；
+         *   · 键盘——Enter = 确认；其他任意键（含 Esc）= 留下（安全默认：不做破坏性动作）；
+         *   · 长按重复（-2 连发）已在 ui_scheme_app_event_handler 入口处拦掉，
+         *     否则“长按 A 唤起确认框”会被自己的重复事件连坐关掉。
+         */
+        if (key_event->touch_edge & TOUCH_EDGE_UP) {
+            int32_t hit = ui_exit_confirm_hit_msg(global_state, s_modal_confirm_with_body,
+                                                 key_event->touch_down_x, key_event->touch_down_y);
+            if (hit == 1)      scheme_modal_finish(global_state, 1, key_event);
+            else if (hit == 2) scheme_modal_finish(global_state, 0, key_event);
+            return;
+        }
+        if (key_event->key_edge == -1 || key_event->key_edge == -2) {
+            scheme_modal_finish(global_state, (key_event->key_code == NANO_KEY_enter) ? 1 : 0, key_event);
+        }
+        return;
     }
 
     if (s_modal_kind == AM_NATIVE_UI_KIND_INPUT) {
@@ -799,9 +883,61 @@ int32_t ui_scheme_app_event_handler(Key_Event *key_event, Global_State *global_s
         am_native_Key_reset();
         return 0;
     }
+    // 硬 A/ESC：不再直接退出（见 ui_scheme_app.h 顶部的退出交互说明）。分三种情形：
+    //   ① App 加载失败/无运行时（没有 Scheme 代码可接管）→ 保持旧行为：直接回列表；
+    //   ② 正常：只置“返回请求”位，由 App 自己消费（app/lib/exit.scm 的 (EX.check)）；
+    //      长按（-2）时同时抑制其连发重复，否则后续 -2 会把 App 刚弹开的确认框连坐关掉；
+    //   ③ 700ms 无人接管 → ui_scheme_app_should_exit() 兜底退出（= 旧行为，不会把人困在 App 里）。
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
-        global_state->STATE = STATE_SCHEME_APP_LIST;
+        if (s_app.load_failed || s_app.rt == NULL) {
+            global_state->STATE = STATE_SCHEME_APP_LIST;
+            return 0;
+        }
+        // 已在退出流程中（收尾窗口内）：A/ESC 不再有意义，忽略
+        if (am_native_app_exit_confirmed() || am_native_app_exit_wanted(s_app.rt)) return 0;
+        am_native_app_set_back_request(s_app.rt);
+        if (key_event->key_edge == -2) s_modal_ignore_longpress_repeat = 1;
         return 0;
+    }
+    return 0;
+}
+
+// ===============================================================================
+// 退出判定（由 ui_app.c 在**泵完本帧之后**调用）
+// ===============================================================================
+
+// 返回请求无人接管的兜底窗口（毫秒）：
+// 未迁移的 App（不轮询 (App.back_requested)）、或 App 已经停机报错（没代码可消费）时，
+// 硬件 A/ESC 不应失去意义——超时后按旧行为退出。取值要大于宿主事件循环的帧间隔，
+// 且不能让人感觉“按了没反应”：700ms 在 30~60fps 下约 20~40 帧，观感上仍属“立即”。
+#define SCHEME_APP_BACK_FALLBACK_MS (700)
+
+int32_t ui_scheme_app_should_exit(Global_State *global_state) {
+    int32_t ms;
+    (void)global_state;
+
+    if (s_app.rt == NULL) return 0;
+
+    // 模态框存续期间：App 正在和用户交互（不是卡在收尾），续期收尾窗口、不销毁
+    if (s_modal_active) {
+        am_native_app_extend_grace(s_app.rt);
+        return 0;
+    }
+
+    // (App.exit_now)/(App.hide) → 立即销毁；
+    // (App.exit) 已获确认但**收尾窗口超时**（App 忘了 exit_now）→ 强制销毁
+    if (am_native_app_exit_wanted(s_app.rt)) {
+        int32_t grace = am_native_app_exit_grace_ms(s_app.rt);
+        if (grace >= AM_NATIVE_APP_EXIT_GRACE_MS) {
+            printf("[scheme-app] 退出收尾超时（%d ms 仍未 (App.exit_now)），强制销毁实例\n", grace);
+        }
+        return 1;
+    }
+
+    ms = am_native_app_back_pending_ms(s_app.rt);
+    if (ms >= SCHEME_APP_BACK_FALLBACK_MS) {
+        printf("[scheme-app] 返回请求 %d ms 无人接管，按旧行为退出\n", ms);
+        return 1;
     }
     return 0;
 }
@@ -811,8 +947,13 @@ int32_t ui_scheme_app_event_handler(Key_Event *key_event, Global_State *global_s
 // ===============================================================================
 
 void ui_scheme_app_on_exit(void) {
-    // 丢弃可能挂起的模态输入请求（进程随后会被销毁，不能留悬空 PID）
+    // 丢弃可能挂起的模态输入/退出请求（进程随后会被销毁，不能留悬空 PID）
     am_native_ui_abort();
+    am_native_app_abort();
+    // 退出可能发生在手指动作过程中：列表紧接着收到的"余波"（旧序列的电平与迟到的
+    // UP 边沿）必须吞掉，直到用户真正开始新的一次按下或窗口到期（见 s_list_touch_guard）
+    s_list_touch_guard = 1;
+    s_list_touch_guard_until_ms = get_timestamp_in_ms() + 600;
     s_modal_active = 0;
     s_modal_ignore_longpress_repeat = 0;
     s_modal_open_key = 0;

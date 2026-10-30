@@ -34,6 +34,7 @@
 (native String)
 (native System)
 (native Diag)
+(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 网格与参数 ------------------------------------------------------------
 
@@ -244,3 +245,7 @@
 (apply_preset 0)
 (reseed)
 (set! _timer (System.set_interval TICK_MS tick_fn))
+
+;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
+;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行（并调 render 擦掉对话框残影）
+(EX.install_with render)

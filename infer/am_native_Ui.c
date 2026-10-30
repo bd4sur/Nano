@@ -22,12 +22,14 @@
 #include <wchar.h>
 
 #include "am_native_Ui.h"
+#include "am_native_App.h"
 
 // ===============================================================================
 // 请求状态（同一时刻仅一个）
 // ===============================================================================
 
 static int32_t s_kind = AM_NATIVE_UI_KIND_NONE; // 当前请求种类
+static int32_t s_confirm_is_exit = 0;           // 当前确认框是否为「退出型」（见 am_native_ui_confirm_begin）
 static am_pid_t s_pid = 0;                      // 被阻塞的进程
 static wchar_t s_title[AM_NATIVE_UI_TITLE_MAX];
 static wchar_t s_initial[AM_NATIVE_UI_BODY_MAX];
@@ -121,6 +123,16 @@ int32_t am_native_Ui_message_titled(am_runtime_t *rt, am_process_t *proc) {
     return ui_begin(rt, proc, AM_NATIVE_UI_KIND_MESSAGE);
 }
 
+int32_t am_native_Ui_confirm(am_runtime_t *rt, am_process_t *proc) {
+    wchar_t title[AM_NATIVE_UI_TITLE_MAX];
+    wchar_t body[AM_NATIVE_UI_BODY_MAX];
+
+    // 参数从右往左弹：先正文，再标题
+    ui_pop_wstring_copy(proc, body, AM_NATIVE_UI_BODY_MAX);
+    ui_pop_wstring_copy(proc, title, AM_NATIVE_UI_TITLE_MAX);
+    return am_native_ui_confirm_begin(rt, proc, title, body, 0);
+}
+
 // ===============================================================================
 // 宿主服务接口
 // ===============================================================================
@@ -156,6 +168,7 @@ void am_native_ui_resolve(am_runtime_t *rt, const wchar_t *result) {
     s_kind = AM_NATIVE_UI_KIND_NONE;
     s_pid = 0;
     s_title[0] = s_initial[0] = s_body[0] = L'\0';
+    s_confirm_is_exit = 0;
 
     if (!rt) return;
     proc = am_runtime_get_process(rt, pid);
@@ -198,7 +211,91 @@ void am_native_ui_resolve(am_runtime_t *rt, const wchar_t *result) {
 void am_native_ui_abort(void) {
     s_kind = AM_NATIVE_UI_KIND_NONE;
     s_pid = 0;
+    s_confirm_is_exit = 0;
     s_title[0] = s_initial[0] = s_body[0] = L'\0';
+}
+
+// ===============================================================================
+// 确认框（(Ui.confirm ...) 与 (native App) 的退出请求共用）
+// ===============================================================================
+
+int32_t am_native_ui_confirm_begin(am_runtime_t *rt, am_process_t *proc,
+                                   const wchar_t *title, const wchar_t *body, int32_t is_exit) {
+    (void)rt;
+
+    if (s_kind != AM_NATIVE_UI_KIND_NONE) {
+        // 同时只允许一个模态框：后到者按「取消」软失败（与 ui_begin 同一策略）
+        return ui_push(proc, AM_VALUE_FALSE);
+    }
+
+    if (title != NULL && title[0] != L'\0') {
+        wcsncpy(s_title, title, AM_NATIVE_UI_TITLE_MAX - 1);
+        s_title[AM_NATIVE_UI_TITLE_MAX - 1] = L'\0';
+    }
+    else {
+        wcscpy(s_title, L"是否退出？");
+    }
+
+    if (body != NULL && body[0] != L'\0') {
+        wcsncpy(s_body, body, AM_NATIVE_UI_BODY_MAX - 1);
+        s_body[AM_NATIVE_UI_BODY_MAX - 1] = L'\0';
+    }
+    else {
+        s_body[0] = L'\0';
+    }
+    s_initial[0] = L'\0';
+
+    s_confirm_is_exit = is_exit ? 1 : 0;
+    s_kind = AM_NATIVE_UI_KIND_CONFIRM;
+    s_pid = proc->pid;
+
+    // 阻塞：不压值、不 step（N7）。虚拟机因此把本进程移出调度，宿主每帧接管界面。
+    am_process_set_state(proc, AM_PROCESS_STATE_BLOCKED);
+    return 0;
+}
+
+int32_t am_native_ui_confirm_is_exit(void) {
+    return (s_kind == AM_NATIVE_UI_KIND_CONFIRM) ? s_confirm_is_exit : 0;
+}
+
+void am_native_ui_resolve_confirm(am_runtime_t *rt, int32_t yes) {
+    am_pid_t pid = s_pid;
+    am_process_t *proc;
+    int32_t is_exit;
+
+    if (s_kind != AM_NATIVE_UI_KIND_CONFIRM) return;
+    is_exit = s_confirm_is_exit;
+
+    // 先清状态（同 am_native_ui_resolve 的理由）
+    s_kind = AM_NATIVE_UI_KIND_NONE;
+    s_pid = 0;
+    s_confirm_is_exit = 0;
+    s_title[0] = s_initial[0] = s_body[0] = L'\0';
+
+    // 退出型确认框的「确认」：启动 App 的收尾窗口（两段式协议第一段）。
+    // 真正销毁要等 App 调 (App.exit_now) 或收尾窗口超时（见 am_native_App.h）。
+    if (yes && is_exit) am_native_app_mark_exit_confirmed(rt);
+
+    if (!rt) return;
+    proc = am_runtime_get_process(rt, pid);
+    if (!proc) return; // 进程已被销毁（App 退出等）：无需唤醒
+
+    // 与上游 runtime_queue_wake_process 同一套动作：压值 → step 越过 callnative → READY → 重新入队
+    if (am_process_push_operand(proc, yes ? AM_VALUE_TRUE : AM_VALUE_FALSE) != 0) {
+        am_runtime_error(rt, L"[Ui] 唤醒失败：操作数栈压值失败，进程终止\n");
+        am_process_set_state(proc, AM_PROCESS_STATE_KILLED);
+        return;
+    }
+    am_process_step(proc);
+    am_process_set_state(proc, AM_PROCESS_STATE_READY);
+
+    am_list_t *nq = am_list_push(rt->vm_alloc, rt->process_queue, am_make_value_of_uint((am_uint_t)pid));
+    if (!nq) {
+        am_process_set_state(proc, AM_PROCESS_STATE_STOPPED);
+    }
+    else {
+        rt->process_queue = nq;
+    }
 }
 
 // ===============================================================================
@@ -210,6 +307,7 @@ static const am_native_func_entry_t am_native_Ui_funcs[] = {
     { L"input_with",     am_native_Ui_input_with },
     { L"message",        am_native_Ui_message },
     { L"message_titled", am_native_Ui_message_titled },
+    { L"confirm",        am_native_Ui_confirm },
 };
 
 const am_native_lib_entry_t am_native_Ui_lib = {

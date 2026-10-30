@@ -12,13 +12,12 @@
 ;;
 ;; 与 C 版的三处**平台差异**（源于"Scheme App 没有键盘通道，且运行在宿主 GUI 里"）：
 ;;   1) 输入只有触屏（本地库 Touch）：C 版的 ←/→/1/2/D 硬按键动作全部由虚拟按键提供。
-;;   2) 「退出」按钮从右上角移到**场地右侧空白列**：触屏右上角（x≥SW*3/4 且 y<SH/4）
-;;      是宿主 4x4 宫格映射的 esc 格，点在那一带会被宿主当作"返回列表"直接退出 App
-;;      （C 版把 STATE_TETRIS 列入 ui_app_state_is_menu 抑制表才敢用那个角）；
-;;      「速降」留在顶部左侧：场地横向居中（320 宽时从 x=110 起），顶部四分之一
-;;      （0..SW/4）落在场地左侧，不会遮住入场中的方块。
-;;   3) 退出确认框的「确认」无法真正切回小游戏菜单（Scheme App 不能改宿主 STATE），
-;;      故确认后**冻结游戏**并提示"按 A 返回"（A / 触屏右上角即宿主返回）。
+;;   2) 「退出」按钮放在**场地右侧空白列**、「速降」留在顶部左侧：场地横向居中
+;;      （320 宽时从 x=110 起）。注：STATE_SCHEME_APP_RUN 已进 ui_app_state_is_menu
+;;      抑制表，触屏右上角不再映射为宿主返回键，这里的布局只是"手不挡场地"的选择。
+;;   3) 退出确认框的「确认」现在能真正退出：App 自己弹框 + (App.exit_now)（见下）。
+;;      历史上 Scheme App 改不了宿主 STATE，只能冻结游戏等宿主 A 返回——2026-10 的
+;;      (native App) 接口改造解决了这一点（infer/am_native_App.h）。
 ;;
 ;; 虚拟按键交互（同 C 版）：左移/右移/速降 按下沿武装、松手沿结算，按住满 500ms 后
 ;; 每拍反复触发；旋转/退出 只在松手沿单次触发。确认框打开时游戏暂停。
@@ -33,8 +32,10 @@
 (native String)
 (native System)
 (native Touch)
+(native App)      ; (App.exit_now)：App 自己确认后直接关闭（不再“冻结等 A”）
 
 (import T "app/lib/tetris_core.scm")
+(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 节奏参数 ------------------------------------------------------------
 ;; 定时器周期只是"希望多久跑一拍"；真正的物理步长用 System.timestamp 的实测
@@ -96,8 +97,6 @@
 ;; ---- 界面状态 ------------------------------------------------------------
 
 (define modal 0)        ; 1 = 退出确认框打开（游戏暂停）
-(define stopped 0)      ; 1 = 已确认退出（冻结，等宿主 A 返回）
-(define stopped_drawn 0)
 (define hold_key 0)     ; 按住跟踪中的虚拟键号（0 无 / 1 左移 / 3 右移 / 4 速降）
 (define hold_ms 0)      ; 按下时刻（ms）
 (define now_ms 0)       ; 本拍时间戳
@@ -263,13 +262,6 @@
     (draw_button MSTAY_X MBTN_Y MBTN_W MBTN_H "留下" 46 46 50)
   }))
 
-(define draw_stopped
-  (lambda () {
-    (Gfx.fill_rect (+ FIELD_X 2) (+ FIELD_Y 60) (- FIELD_W 4) 80 0 0 0)
-    (draw_text_c "已退出" (+ FIELD_X (Math.floor (/ FIELD_W 2))) (+ FIELD_Y 84) 200 200 200)
-    (draw_text_c "按 A 返回" (+ FIELD_X (Math.floor (/ FIELD_W 2))) (+ FIELD_Y 108) 160 160 170)
-  }))
-
 (define render
   (lambda () {
     (Gfx.clear)
@@ -279,7 +271,6 @@
     (draw_vkeys)
     (if (== T.game_over 1) (draw_game_over))
     (if (== modal 1) (draw_modal))
-    (if (== stopped 1) (draw_stopped))
     (Gfx.refresh)
   }))
 
@@ -298,8 +289,10 @@
               (if (and (>= press_x MSTAY_X) (< press_x (+ MSTAY_X MBTN_W)))
                   (set! mn_hit 2))))
       (if (== mn_hit 1) {
+        ;; 确认退出：本 App 自己弹的确认框已有答复，直接让宿主关闭实例
+        ;;（宿主在**本帧末**销毁；触屏右上角不再是宿主返回键，故必须走这条通道）
         (set! modal 0)
-        (set! stopped 1)
+        (App.exit_now)
       })
       (if (== mn_hit 2) (set! modal 0))
     })
@@ -348,34 +341,26 @@
 
 (define tick
   (lambda () {
-    (if (== stopped 1)
-        ;; 冻结态：只补画一次"已退出"提示
-        (if (== stopped_drawn 0) {
-          (set! stopped_drawn 1)
-          (render)
-        })
-        {
-          ;; 实测步长（钳到 [0, DT_MAX]）
-          (set! now_ms (System.timestamp))
-          (set! dt (- now_ms last_ms))
-          (set! last_ms now_ms)
-          (if (< dt 0) (set! dt 0))
-          (if (> dt DT_MAX) (set! dt DT_MAX))
+    ;; 实测步长（钳到 [0, DT_MAX]）
+    (set! now_ms (System.timestamp))
+    (set! dt (- now_ms last_ms))
+    (set! last_ms now_ms)
+    (if (< dt 0) (set! dt 0))
+    (if (> dt DT_MAX) (set! dt DT_MAX))
 
-          (set! tp (if (Touch.take_press) 1 0))
-          (set! tr (if (Touch.take_release) 1 0))
-          (if (== tp 1) {
-            (set! press_x (Touch.x))
-            (set! press_y (Touch.y))
-          })
+    (set! tp (if (Touch.take_press) 1 0))
+    (set! tr (if (Touch.take_release) 1 0))
+    (if (== tp 1) {
+      (set! press_x (Touch.x))
+      (set! press_y (Touch.y))
+    })
 
-          (if (== modal 1) (modal_input) (game_input))
+    (if (== modal 1) (modal_input) (game_input))
 
-          ;; 重力（确认框打开 / 已结束时暂停；advance 内部再判 game_over）
-          (if (== modal 0) (T.advance dt))
+    ;; 重力（确认框打开 / 已结束时暂停；advance 内部再判 game_over）
+    (if (== modal 0) (T.advance dt))
 
-          (render)
-        })
+    (render)
   }))
 
 ;; ============================================================================
@@ -386,3 +371,7 @@
 (set! last_ms (System.timestamp))
 (tick)
 (set! _timer (System.set_interval TICK_MS tick))
+
+;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
+;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行（并调 render 擦掉对话框残影）
+(EX.install_with render)

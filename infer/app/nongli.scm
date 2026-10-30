@@ -32,6 +32,7 @@
 (native Time)
 
 (import Ephem "app/lib/ephem.scm")
+(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 农历常量表（与 nongli.c 一致）----------------------------------------
 
@@ -615,3 +616,7 @@
 (build_begin ystart0)
 (draw_frame)
 (set! timer_build (System.set_interval 16 build_tick))
+
+;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
+;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行（并调 draw_frame 擦掉对话框残影）
+(EX.install_with draw_frame)

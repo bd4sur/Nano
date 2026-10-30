@@ -38,6 +38,7 @@
 (native System)
 (native Ui)
 (native Math)
+(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 常量与状态 ----------------------------------------------------------
 
@@ -99,7 +100,7 @@
       (Gfx.draw_text "落盘：" PAD_X 94 150 200 235)
       (Gfx.draw_text (String.concat (String.atom_to_string saved_bytes) " B -> data/ui_demo.txt")
                      (+ PAD_X 48) 94 180 200 220)
-      (draw_hint "再按 Enter 重来 · 长按 A 返回列表")
+      (draw_hint "再按 Enter 重来 · A 退出（全局确认框）")
       (Gfx.refresh))))
 
 ;; ---- 主流程（含三处阻塞式调用） ------------------------------------------
@@ -169,3 +170,7 @@
       (set! ts (System.set_interval 60 on_tick)))))
 
 (boot)
+
+;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
+;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行
+(EX.install)

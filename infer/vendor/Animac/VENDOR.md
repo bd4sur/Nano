@@ -84,8 +84,12 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
   相对业务资源根、UTF-8、128KB 读入上限；WASM 目标另有 `hal_fs_persist_wasm.c` 把写入同步进
   浏览器 IndexedDB）
 - `infer/am_native_Ui.c/.h` —— 宿主模态文本输入/输出（`input`/`input_with`/`message`/
-  `message_titled`）：按上游契约 N7 把**进程**置 BLOCKED，宿主用现成的文本控件当模态框，
-  提交后压值 + step + 置 READY + 重新入队（机制与 `System.read` 队列等待同源）
+  `message_titled`/`confirm`）：按上游契约 N7 把**进程**置 BLOCKED，宿主用现成的文本控件当
+  模态框（`confirm` 借图形层的两按钮确认框），提交后压值 + step + 置 READY + 重新入队
+  （机制与 `System.read` 队列等待同源）
+- `infer/am_native_App.c/.h` —— 应用外壳/生命周期（`exit`/`exit_with`/`exit_now`/`hide`/
+  `back_requested`/`modal_closed`/`is_active`/`name`/`platform`）：退出确认框走 Ui 的
+  「退出型确认框」（N7 阻塞），确认后置退出意愿，由宿主 `ui_scheme_app.c` 在帧末销毁实例
 
 它们必须遵守上游本地库契约（上游 `doc/todo/stack_bal.md` §11 N1–N10）：
 

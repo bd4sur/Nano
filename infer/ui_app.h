@@ -113,10 +113,18 @@ void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_s
 void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state);
 
 // 退出确认模态框（“是否退出？” 确认/留下；控制台与俄罗斯方块等场景共用）
+//   基础版：固定标题（同历史行为，兼容既有调用点）
+//   _msg 版：自定义标题 + 可选正文（正文非空时对话框自动加高一行）——
+//   供 (native Ui) 的 (Ui.confirm 标题 正文) 与 (native App) 的退出确认共用，
+//   保证“全局确认框”与 App 自弹确认框视觉/命中完全一致。
 void    ui_exit_confirm_layout(Global_State *global_state, int32_t *out_dx, int32_t *out_dy,
                                int32_t *out_btn_y, int32_t *out_confirm_x, int32_t *out_stay_x);
 void    ui_exit_confirm_draw(Key_Event *key_event, Global_State *global_state);
+void    ui_exit_confirm_draw_msg(Key_Event *key_event, Global_State *global_state,
+                                 const wchar_t *title, const wchar_t *body);
 int32_t ui_exit_confirm_hit(Global_State *global_state, int32_t x, int32_t y); // 1=确认 2=留下 0=未命中
+// 带正文版命中判定（with_body 必须与绘制时一致，否则按钮纵向位置不符）
+int32_t ui_exit_confirm_hit_msg(Global_State *global_state, int32_t with_body, int32_t x, int32_t y);
 
 
 // ===============================================================================

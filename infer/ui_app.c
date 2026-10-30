@@ -181,6 +181,13 @@ static int32_t ui_app_state_is_menu(int32_t state) {
         case STATE_README:         // 本机自述：文本框拖动滚动+返回热点直接消费触屏流
         case STATE_LLM_AFTER_INFER: // LLM 结果：文本框拖动滚动+返回热点直接消费触屏流
         case STATE_ANIMAC_EXIT_CONFIRM: // 控制台退出确认模态框：触屏按钮直接消费触屏流（否则点按产生的宫格软按键会泄漏到下一状态误触发）
+        case STATE_SCHEME_APP_RUN:  // 灵机 App 运行态：触屏归 App（(native Touch) 直读），
+                                    // **宫格软按键整体退场——包括右上角 esc 格**。
+                                    // 这是 2026-10 的接口改造：A 键退出不再是宿主的统一交互，
+                                    // 触屏不再能派生出“返回”；App 想退出就自己画按钮并调
+                                    // (App.exit)（见 am_native_App.h）。
+                                    // 实体键盘的 ESC 仍由宿主拦下，但只置“返回请求”位
+                                    // （(App.back_requested)），不再直接销毁实例。
             return 1;
         default:
             return 0;
@@ -3274,33 +3281,68 @@ static void ui_app_animac_cleanup(Key_Event *key_event, Global_State *global_sta
 }
 
 // 退出确认模态框几何（居中圆角对话框 + 两个圆角按钮）——通用组件，
-// 供控制台退出、俄罗斯方块退出等场景共用（ui_app.h 导出）
+// 供控制台退出、俄罗斯方块退出、以及灵机 App 的 (Ui.confirm)/(App.exit) 共用
 #define UI_ANIMAC_EXIT_DIALOG_W   (200)
 #define UI_ANIMAC_EXIT_DIALOG_H   (96)
+#define UI_ANIMAC_EXIT_DIALOG_H_MSG (110)  // 带正文时加高一行（12px 字模）
 #define UI_ANIMAC_EXIT_BTN_W      (84)
 #define UI_ANIMAC_EXIT_BTN_H      (30)
 #define UI_ANIMAC_EXIT_BTN_GAP    (12)
+
+// 几何计算（内部共用；with_body 决定对话框高度与按钮纵向位置）
+static void ui_exit_confirm_geom(Global_State *global_state, int32_t with_body,
+    int32_t *out_dx, int32_t *out_dy, int32_t *out_h, int32_t *out_btn_y,
+    int32_t *out_confirm_x, int32_t *out_stay_x
+) {
+    int32_t h  = with_body ? UI_ANIMAC_EXIT_DIALOG_H_MSG : UI_ANIMAC_EXIT_DIALOG_H;
+    int32_t dx = ((int32_t)global_state->gfx->width - UI_ANIMAC_EXIT_DIALOG_W) / 2;
+    int32_t dy = ((int32_t)global_state->gfx->height - h) / 2;
+    int32_t confirm_x = dx + (UI_ANIMAC_EXIT_DIALOG_W - UI_ANIMAC_EXIT_BTN_W * 2 - UI_ANIMAC_EXIT_BTN_GAP) / 2;
+    *out_dx = dx;
+    *out_dy = dy;
+    *out_h = h;
+    *out_btn_y = dy + (with_body ? 66 : 54);
+    *out_confirm_x = confirm_x;
+    *out_stay_x = confirm_x + UI_ANIMAC_EXIT_BTN_W + UI_ANIMAC_EXIT_BTN_GAP;
+}
 
 // 模态框按钮排布：返回对话框左上角与按钮区基准（供绘制与命中判定共用，保证严格一致）
 void ui_exit_confirm_layout(Global_State *global_state,
     int32_t *out_dx, int32_t *out_dy, int32_t *out_btn_y, int32_t *out_confirm_x, int32_t *out_stay_x
 ) {
-    int32_t dx = ((int32_t)global_state->gfx->width - UI_ANIMAC_EXIT_DIALOG_W) / 2;
-    int32_t dy = ((int32_t)global_state->gfx->height - UI_ANIMAC_EXIT_DIALOG_H) / 2;
-    int32_t confirm_x = dx + (UI_ANIMAC_EXIT_DIALOG_W - UI_ANIMAC_EXIT_BTN_W * 2 - UI_ANIMAC_EXIT_BTN_GAP) / 2;
-    *out_dx = dx;
-    *out_dy = dy;
-    *out_btn_y = dy + 54;
-    *out_confirm_x = confirm_x;
-    *out_stay_x = confirm_x + UI_ANIMAC_EXIT_BTN_W + UI_ANIMAC_EXIT_BTN_GAP;
+    int32_t h = 0;
+    ui_exit_confirm_geom(global_state, 0, out_dx, out_dy, &h, out_btn_y, out_confirm_x, out_stay_x);
+}
+
+// 按可用宽度截断一行文本（超出时以省略号结尾；从尾部逐字删，不改动前述码点）
+static void ui_exit_confirm_truncate(uint32_t font_id, wchar_t *line, size_t cap, int32_t max_w) {
+    size_t len = wcslen(line);
+    if (len == 0 || cap < 3) return;
+    if (gfx_font_measure_text(font_id, line) <= max_w) return;
+    if (len > cap - 2) len = cap - 2;   // 保证 line[len+1] 不越界
+    while (len > 0) {
+        line[len] = L'\u2026';
+        line[len + 1] = L'\0';
+        if (gfx_font_measure_text(font_id, line) <= max_w) return;
+        len--;
+    }
+    line[0] = L'\0';
 }
 
 // 绘制退出确认模态框（叠加在当前画面之上；全部元素圆角矩形）
 void ui_exit_confirm_draw(Key_Event *key_event, Global_State *global_state) {
+    ui_exit_confirm_draw_msg(key_event, global_state, L"是否退出？", NULL);
+}
+
+// 绘制可定制标题/正文的确认模态框（(Ui.confirm ...) 与 (native App) 共用）
+void ui_exit_confirm_draw_msg(Key_Event *key_event, Global_State *global_state,
+                              const wchar_t *title, const wchar_t *body) {
     (void)key_event;
     Nano_GFX *gfx = global_state->gfx;
-    int32_t dx = 0, dy = 0, btn_y = 0, confirm_x = 0, stay_x = 0;
-    ui_exit_confirm_layout(global_state, &dx, &dy, &btn_y, &confirm_x, &stay_x);
+    int32_t dx = 0, dy = 0, h = 0, btn_y = 0, confirm_x = 0, stay_x = 0;
+    int32_t has_body = (body != NULL && body[0] != L'\0');
+
+    ui_exit_confirm_geom(global_state, has_body, &dx, &dy, &h, &btn_y, &confirm_x, &stay_x);
 
     // 配色随全局色彩风格
     uint8_t border_R = 70,  border_G = 70,  border_B = 78;    // 对话框描边
@@ -3319,14 +3361,33 @@ void ui_exit_confirm_draw(Key_Event *key_event, Global_State *global_state) {
     }
 
     // 描边 + 底色两层圆角矩形（外圈 2px 描边效果）
-    gfx_draw_rounded_rectangle(gfx, dx - 2, dy - 2, UI_ANIMAC_EXIT_DIALOG_W + 4, UI_ANIMAC_EXIT_DIALOG_H + 4,
+    gfx_draw_rounded_rectangle(gfx, dx - 2, dy - 2, UI_ANIMAC_EXIT_DIALOG_W + 4, h + 4,
         8, 8, 8, 8, border_R, border_G, border_B, 1);
-    gfx_draw_rounded_rectangle(gfx, dx, dy, UI_ANIMAC_EXIT_DIALOG_W, UI_ANIMAC_EXIT_DIALOG_H,
+    gfx_draw_rounded_rectangle(gfx, dx, dy, UI_ANIMAC_EXIT_DIALOG_W, h,
         6, 6, 6, 6, dlg_R, dlg_G, dlg_B, 1);
 
-    // 标题
-    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, L"是否退出？",
-        (int32_t)gfx->width / 2, dy + 26, text_R, text_G, text_B, 1);
+    // 标题（调用方未给标题时退回历史文案）
+    {
+        wchar_t title_buf[40];
+        const wchar_t *t = (title != NULL && title[0] != L'\0') ? title : L"是否退出？";
+        wcsncpy(title_buf, t, sizeof(title_buf) / sizeof(title_buf[0]) - 1);
+        title_buf[sizeof(title_buf) / sizeof(title_buf[0]) - 1] = L'\0';
+        ui_exit_confirm_truncate(GFX_FONT_ALPHA_16, title_buf, sizeof(title_buf) / sizeof(title_buf[0]),
+                                 UI_ANIMAC_EXIT_DIALOG_W - 16);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, title_buf,
+            (int32_t)gfx->width / 2, dy + 26, text_R, text_G, text_B, 1);
+    }
+
+    // 正文（可选；12px 字模，单行居中，超宽截断）
+    if (has_body) {
+        wchar_t body_buf[64];
+        wcsncpy(body_buf, body, sizeof(body_buf) / sizeof(body_buf[0]) - 1);
+        body_buf[sizeof(body_buf) / sizeof(body_buf[0]) - 1] = L'\0';
+        ui_exit_confirm_truncate(GFX_FONT_ALPHA_12, body_buf, sizeof(body_buf) / sizeof(body_buf[0]),
+                                 UI_ANIMAC_EXIT_DIALOG_W - 12);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, body_buf,
+            (int32_t)gfx->width / 2, dy + 46, text_R, text_G, text_B, 1);
+    }
 
     // 按钮：确认（强调色） / 留下（中性色）
     gfx_draw_rounded_rectangle(gfx, confirm_x, btn_y, UI_ANIMAC_EXIT_BTN_W, UI_ANIMAC_EXIT_BTN_H,
@@ -3343,8 +3404,14 @@ void ui_exit_confirm_draw(Key_Event *key_event, Global_State *global_state) {
 
 // 模态框命中判定：1=确认 2=留下 0=未命中
 int32_t ui_exit_confirm_hit(Global_State *global_state, int32_t x, int32_t y) {
-    int32_t dx = 0, dy = 0, btn_y = 0, confirm_x = 0, stay_x = 0;
-    ui_exit_confirm_layout(global_state, &dx, &dy, &btn_y, &confirm_x, &stay_x);
+    return ui_exit_confirm_hit_msg(global_state, 0, x, y);
+}
+
+// 带正文版命中判定（with_body 须与绘制时一致）
+int32_t ui_exit_confirm_hit_msg(Global_State *global_state, int32_t with_body, int32_t x, int32_t y) {
+    int32_t dx = 0, dy = 0, h = 0, btn_y = 0, confirm_x = 0, stay_x = 0;
+    ui_exit_confirm_geom(global_state, with_body, &dx, &dy, &h, &btn_y, &confirm_x, &stay_x);
+    (void)dx; (void)dy; (void)h;
     if (y >= btn_y && y < btn_y + UI_ANIMAC_EXIT_BTN_H) {
         if (x >= confirm_x && x < confirm_x + UI_ANIMAC_EXIT_BTN_W) return 1;
         if (x >= stay_x && x < stay_x + UI_ANIMAC_EXIT_BTN_W) return 2;
@@ -3868,10 +3935,11 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        // 菜单事件（上下键/触屏/A返回游戏菜单；enter 经 item_action 转入运行态）
-        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main,
-                                                           ui_scheme_app_list_item_action,
-                                                           STATE_GAME_MENU, STATE_SCHEME_APP_LIST);
+        // 菜单事件（上下键/触屏/A返回游戏菜单；enter 经 item_action 转入运行态）。
+        // 走模块自己的包装：它在菜单控件外面加了一层「退出 App 后在途触摸序列余波」
+        // 抑制（见 ui_scheme_app.c 的 s_list_touch_guard），避免"确认退出"这一下
+        // 被列表当成一次点击、直接又进入另一个 App。
+        global_state->STATE = ui_scheme_app_list_event_handler(key_event, global_state);
 
         break;
 
@@ -3897,6 +3965,14 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 泵一个时间片（解释器内部抢占分帧）；推屏时机由 App 源码控制
         ui_scheme_app_render_frame(key_event, global_state);
+
+        // 退出判定（(App.exit) 确认 / (App.exit_now) / (App.hide) / 返回请求兜底）：
+        // 放在本帧泵完**之后**——这样 (App.exit) 返回 #t 之后，App 还有整整一个
+        // 时间片把当前这一拍里的收尾代码（落盘/清理）跑完，然后本帧末destroy实例。
+        if (ui_scheme_app_should_exit(global_state)) {
+            ui_scheme_app_on_exit();
+            global_state->STATE = STATE_SCHEME_APP_LIST;
+        }
 
         break;
     }
