@@ -162,8 +162,6 @@
     (Gfx.clear)
     (Gfx.fill_rect 0 0 SW HUD_H 24 24 28)
     (Gfx.draw_text "粒子生命" 6 2 255 255 255)
-    ;; 硬 A/ESC 由 app/lib/exit.scm 接管（弹全局确认框）；触屏不再有返回键
-    (Gfx.draw_text "A退出" (- SW 60) 2 180 180 180)
     (while (< i N) {
       (set! px (Math.floor (+ CX (* (get_item xs i) SCALE))))
       (set! py (Math.floor (+ CY (* (get_item ys i) SCALE))))
@@ -171,7 +169,8 @@
       (Gfx.fill_rect px py 2 2 (get_item pal-r k) (get_item pal-g k) (get_item pal-b k))
       (set! i (+ i 1))
     })
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
   }))
 
 ;; ---- 启动：参数与撒布 → 首帧绘制 → 100ms 周期演进 -----------------------
@@ -228,6 +227,7 @@
 
 (define step
   (lambda () {
+    (EX.check)
     (interact)
     (move)
     (draw)

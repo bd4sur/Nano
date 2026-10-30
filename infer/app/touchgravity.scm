@@ -112,11 +112,12 @@
                         (String.concat "  pitch " (f1 pitch))))
                        4 16 130 180 235)
         (Gfx.draw_text "roll ----  (无姿态数据)" 4 16 120 120 130))
+    ;; 右上角 40x18 留给统一的「退出」按钮（app/lib/exit.scm），读数左移避让
     (Gfx.draw_text (String.concat "g " (String.concat (f1 gx) (String.concat "," (f1 gy))))
-                   (- SW 78) 2 150 150 170)
+                   (- SW 120) 2 150 150 170)
     (if (number? yaw)
-        (Gfx.draw_text (String.concat "yaw " (f1 yaw)) (- SW 78) 16 200 200 140)
-        (Gfx.draw_text "yaw ----" (- SW 78) 16 120 120 130))
+        (Gfx.draw_text (String.concat "yaw " (f1 yaw)) (- SW 120) 16 200 200 140)
+        (Gfx.draw_text "yaw ----" (- SW 120) 16 120 120 130))
   }))
 
 ;; ---- 罗盘（yaw）：黄点指向磁航向 -----------------------------------------
@@ -167,6 +168,7 @@
 
 (define tick
   (lambda () {
+    (EX.check)
     ;; 输入采样（每帧一次；Touch 为电平语义，边沿由本 App 自行判定）
     (set! pressed (if (Touch.is_pressed) 1 0))
     (set! tx (Touch.x))
@@ -207,7 +209,8 @@
     (draw_ball)
     (draw_marker)
     (draw_hud roll pitch yaw)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
   }))
 
 ;; ---- 启动：先画一帧，再以 33ms 周期（≈30fps）推进 ------------------------

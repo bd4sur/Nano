@@ -84,6 +84,7 @@
       (Gfx.draw_text "③ Ui.message    只读文本" PAD_X 164 210 190 120)
       (Gfx.draw_text (String.concat "等待开始 #" (String.atom_to_string tick)) PAD_X 190 90 100 115)
       (draw_hint "按 Enter 或点一下屏幕开始")
+      (EX.draw_button)
       (Gfx.refresh))))
 
 (define draw_result
@@ -100,7 +101,8 @@
       (Gfx.draw_text "落盘：" PAD_X 94 150 200 235)
       (Gfx.draw_text (String.concat (String.atom_to_string saved_bytes) " B -> data/ui_demo.txt")
                      (+ PAD_X 48) 94 180 200 220)
-      (draw_hint "再按 Enter 重来 · A 退出（全局确认框）")
+      (draw_hint "再按 Enter 重来 · 右上角「退出」或 A")
+      (EX.draw_button)
       (Gfx.refresh))))
 
 ;; ---- 主流程（含三处阻塞式调用） ------------------------------------------
@@ -142,6 +144,7 @@
 
 (define on_tick
   (lambda ()
+    (EX.check)
     (begin
       (set! tick (+ tick 1))
       (if (== stage 0)

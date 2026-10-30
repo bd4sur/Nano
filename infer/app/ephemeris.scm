@@ -91,6 +91,7 @@
 
 (define update
   (lambda () {
+    (EX.check)
     (define udays (Time.utc_days))
     (define usod (Time.utc_sod))
     ;; 库的时间基（UT）
@@ -155,7 +156,8 @@
     (Gfx.draw_text (String.concat "VSOP87 黄经 " (String.concat (fixed (Ephem.get_vsop_lon) 3)
                      (String.concat "° " (String.concat (fixed (Ephem.get_vsop_r) 4) " AU"))))
                    6 226 150 160 170)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
   }))
 
 ;; ---- 启动：立即算一次并显示，此后每秒刷新 ----------------------------------

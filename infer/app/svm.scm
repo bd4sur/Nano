@@ -756,10 +756,6 @@
                    (String.concat "/" (String.concat (i2s MAXN)
                    (String.concat "  SV=" (i2s nsv)))))))
     (Gfx.draw_text hud_s (- SW (+ 4 (tw hud_s))) (- SH 15) 70 75 95)
-    ;; 右上角按旧布局标一个「返回」提示（2026-10 起该格不再是宿主返回键，
-    ;; 退出改为硬 A/ESC → 全局确认框；此标记保留以免观众误当绘图区）
-    (Gfx.fill_rect (- SW 40) 2 36 16 60 62 72)
-    (Gfx.draw_text "返回" (- SW 37) 3 225 228 235)
   }))
 
 ;; ---- 左下角三个按钮 ------------------------------------------------------
@@ -814,7 +810,8 @@
     (draw_points)
     (draw_hud)
     (draw_buttons)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
   }))
 
 ;; ---- 数据与重算 ----------------------------------------------------------
@@ -846,7 +843,8 @@
   (lambda () {
     (Gfx.fill_rect (- SW 46) (- SH 17) 40 15 255 255 255)
     (Gfx.draw_text "计算中" (- SW 44) (- SH 15) 60 60 70)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
     (if (> n 0) (kern_build))
     (if (>= n 2)
         (train)
@@ -892,6 +890,7 @@
 (define rl 0)
 (define tick
   (lambda () {
+    (EX.check)
     (set! tp (if (Touch.take_press) 1 0))
     (set! tr (if (Touch.take_release) 1 0))
 

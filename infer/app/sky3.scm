@@ -701,7 +701,8 @@
             (set! cur_y (+ cur_y 1))
             ;; 采样行 s 算完后，采样带 s-1（需采样行 s-1 与 s）才可重建并上屏
             (if (>= cur_y 2) { (blit_band (- cur_y 2)) })
-            (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
             ;; 行边界顺带采一次触屏：长帧渲染途中点按钮也能在一行内（~50ms）响应，
             ;; 响应即把 cur_x/cur_y 复位、清屏并重画按钮（见 touch_poll → advance）。
             (touch_poll) })
@@ -713,7 +714,8 @@
           ;; 本帧天空完成：记下太阳、画字幕、推屏，并进入停留/重绘判断
           (set! hold_until (+ (System.timestamp) HOLD_MS))
           (draw_caption)
-          (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
         })
   }))
 
@@ -856,7 +858,8 @@
   (lambda () {
     (repaint_clock_bg)
     (Gfx.draw_text (now_string) hud_clock_x (+ hud_clock_y 2) 190 202 214)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
   }))
 
 ;; 每秒刷新一次时间（仅在天空渲染完成后调用，避免被逐行绘制覆盖）
@@ -996,6 +999,7 @@
 
 (define step
   (lambda () {
+    (EX.check)
     (define acted (touch_poll))       ; 触屏按钮在任何阶段都响应
     (if (< cur_y ROWS_S)
         { (render_chunk) }

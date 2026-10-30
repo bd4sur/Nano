@@ -721,6 +721,7 @@
 
 (define tick_fn
   (lambda ()
+    (EX.check)
     (define t0 0) (define k 0)
     (set! t0 (Diag.ms))
     (set! k 0)
@@ -728,7 +729,8 @@
     (render)
     (set! frame_ms (- (Diag.ms) t0))
     (draw_hud)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
     (set! tick_no (+ tick_no 1))
     (set! ticks_in_round (+ ticks_in_round 1))
     ;; 看门狗：一局走太久（正常几十拍就到终点）说明出了问题，强制换局

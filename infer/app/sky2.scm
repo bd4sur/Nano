@@ -253,7 +253,8 @@
           (set! hold_until (+ (System.timestamp) HOLD_MS))
           (draw_caption)
         })
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
   }))
 
 ;; ---- 渲染控制：实时太阳 + 移动判据 + 屏幕字幕 -----------------------------
@@ -383,7 +384,8 @@
   (lambda () {
     (repaint_clock_bg)
     (Gfx.draw_text (now_string) hud_clock_x (+ hud_clock_y 2) 190 202 214)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
   }))
 
 ;; 每秒刷新一次时间（仅在天空渲染完成后调用，避免被逐行绘制覆盖）
@@ -415,6 +417,7 @@
 
 (define step
   (lambda () {
+    (EX.check)
     (if (< render_y ROWS_S)
         { (render_band) }
         { (clock_tick)                       ; 右下角时间每秒走一次

@@ -332,7 +332,8 @@
       (draw_key i)
       (set! i (+ i 1))
     })
-    (Gfx.refresh)
+      (EX.draw_button_at 2 2)   ; 顶部整块是显示区：按钮放左上角（表达式右对齐，很少顶到左边）
+      (Gfx.refresh)
     (set! dirty 0)
   }))
 
@@ -589,6 +590,7 @@
 
 (define tick
   (lambda () {
+    (EX.check)
     (define p (Touch.is_pressed))
     ;; 触点坐标在松开后仍保留最后一次按下期间的值（am_native_Touch 的缓存语义），
     ;; 故无条件据此求键位：松开判定要与按下时命中的同一个键比较。

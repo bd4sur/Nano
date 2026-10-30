@@ -250,12 +250,14 @@
     (draw_plot)
     (draw_readouts)
     (draw_footer)
-    (Gfx.refresh)))
+      (EX.draw_button)
+      (Gfx.refresh)))
 
 ;; ---- 主循环 ----------------------------------------------------------------
 
 (define tick_fn
   (lambda ()
+    (EX.check)
     (sample_mem)
     (alloc_step)
     (if (== (mod tick 6) 0) { (run_probe) } {})

@@ -90,6 +90,8 @@
         (set! px (+ px 1))
       })
       ;; 行粒度渐进推屏：宿主不主动推屏，推屏时机由本程序控制
+      (EX.draw_button)
+      (EX.check)
       (Gfx.refresh)
       (set! py (+ py 1))
     })
@@ -101,7 +103,9 @@
   (lambda (elapsed_ms) {
     (Gfx.draw_text (String.concat "Mandelbrot  " (String.concat (String.atom_to_string elapsed_ms) " ms"))
                    4 (- H 15) 255 255 255)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (EX.check)
+      (Gfx.refresh)
   }))
 
 (draw)

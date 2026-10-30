@@ -1355,6 +1355,7 @@
 
 (define tick_fn
   (lambda ()
+    (EX.check)
     (define t0 0)
     (set! t0 (Diag.ms))
     (input_toggle)                   ; 左下角按钮：自动 / 重力感应
@@ -1363,7 +1364,8 @@
     (render)
     (set! frame_ms (- (Diag.ms) t0))
     (draw_hud)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
     (set! tick_no (+ tick_no 1))))
 
 ;; ---- 启动 ------------------------------------------------------------------

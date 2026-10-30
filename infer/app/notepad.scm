@@ -235,14 +235,16 @@
       ;; 底栏
       (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
       (if (== kb_ok 1)
-          (Gfx.draw_text "键盘输入 · 触屏=保存 · Esc 返回" PAD_X (- SH 14) 130 140 155)
+          (Gfx.draw_text "键盘输入 · 触屏=保存 · 右上角／Esc 退出" PAD_X (- SH 14) 130 140 155)
           (Gfx.draw_text "无键盘事件源（本平台仅触屏）" PAD_X (- SH 14) 200 150 120))
+      (EX.draw_button)
       (Gfx.refresh))))
 
 ;; ---- 主循环 --------------------------------------------------------------
 
 (define on_tick
   (lambda ()
+    (EX.check)
     (begin
       (set! idle_ticks (+ idle_ticks 1))
       (drain_keys)

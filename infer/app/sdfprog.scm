@@ -314,6 +314,7 @@
 
 (define tick_fn
   (lambda ()
+    (EX.check)
     (define t0 0) (define k 0)
     (set! t0 (Diag.ms))
     (if (== state 0)
@@ -335,7 +336,8 @@
                 (start_image) }
               {}) })
     (draw_hud)
-    (Gfx.refresh)))
+      (EX.draw_button)
+      (Gfx.refresh)))
 
 ;; ---- 启动 ------------------------------------------------------------------
 

@@ -559,7 +559,8 @@
               }
               { (Gfx.draw_text "（本日不在年表范围内）" 6 60 255 120 120) })
         })
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
   }))
 
 ;; ---- 主循环：分帧推算 → 每秒刷新 -----------------------------------------
@@ -568,6 +569,7 @@
 
 (define display_step
   (lambda () {
+    (EX.check)
     (set! tick_count (+ tick_count 1))
     (if (>= tick_count 20)                     ; 约每 20 步（1 秒）刷新一次
         {

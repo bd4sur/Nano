@@ -480,6 +480,7 @@
 
 (define tick_fn
   (lambda ()
+    (EX.check)
     (define t0 0)
     (set! t0 (Diag.ms))
     (draw_bg)
@@ -487,7 +488,8 @@
     (draw_scene)
     (set! frame_ms (- (Diag.ms) t0))
     (draw_hud)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
     (set! tick_no (+ tick_no 1))
     (set! scene_ticks (+ scene_ticks 1))
     (if (>= scene_ticks SCENE_TICKS)

@@ -351,13 +351,15 @@
 
 (define tick
   (lambda ()
+    (EX.check)
     (define n 0)
     (if (== st 1)
         { (set! n 0)
           (while (and (< n SYM_PER_TICK) (< cursor lenA))
             { (step1 1) (set! n (+ n 1)) })
           (draw_hud)
-          (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
           (if (>= cursor lenA)
               { (set! st 2) (set! hold 0) }) }
         { (if (== st 2)

@@ -477,6 +477,7 @@
 
 (define tick_fn
   (lambda ()
+    (EX.check)
     (define t 0)
     (set! t (Diag.ms))
     (Gfx.fill_rect 0 HUD_TOP W (- (- H HUD_BOT) HUD_TOP) 0 0 0)
@@ -484,7 +485,8 @@
     (set! frame_no (+ frame_no 1))
     (set! fps_ms (- (Diag.ms) t))
     (draw_hud)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
     (if (>= frame_no (* SHAPE_TICKS (+ shape 1)))
         { (set! shape (mod (+ shape 1) 3))
           (if (== shape 0) { (build_torus) })

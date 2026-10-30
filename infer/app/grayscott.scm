@@ -225,6 +225,7 @@
 
 (define tick_fn
   (lambda ()
+    (EX.check)
     (define t 0) (define st 0)
     (set! t (Diag.ms))
     (set! st 0)
@@ -233,7 +234,8 @@
     (set! step_no (+ step_no 1))
     (set! frame_ms (- (Diag.ms) t))
     (draw_hud)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
     (if (>= step_no (* PRESET_TICKS (+ preset 1)))
         { (apply_preset (mod (+ preset 1) pcount))
           (reseed) })

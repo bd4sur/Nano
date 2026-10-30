@@ -2747,3 +2747,84 @@ App 收尾：落盘 / 停外设 / 画最后一帧 …（可跨多拍，默认上
   `(App.exit_now)` 延后，而不是拉长窗口。
 - `(App.hide)` 仍是打桩（= 退出）。多任务/后台（P4）落地时会复用同一套"确认→收尾→执行"
   三段式，只是最后一段从"销毁"变成"冻结 + 登记实例"。
+
+------------------------------------
+
+# 2026-10-30（六）App 退出接口 P3：统一的触屏退出按钮 + 各 App 接入
+
+P1/P2 把"退出"变成了 App 可调用的接口，但**触屏用户在本机却几乎没有出路**：宫格软按键
+（含右上角 esc 格）已经整体退场，屏幕上又没有可见入口，只能靠实体键盘的 A 或网页上的
+ESC 按钮。P3 补上统一入口，并顺手把俄罗斯方块的一处重复实现并掉。
+
+## 1. 统一的「退出」按钮（app/lib/exit.scm）
+
+```
+(EX.install) / (EX.install_with 重绘函数)   ; 启动时一次
+(EX.draw_button)                            ; 画在**右上角**（36x16；无触屏时自动不画）
+(EX.check)                                  ; 每拍一次（画完按钮、推屏之前）
+(EX.draw_button_at x y)                     ; 少数把整屏用满的 App 换位置（计算器用左上角）
+```
+
+- 点按钮 = 与硬 A/ESC 完全相同的流程（全局确认框 → 收尾 → 退出）。落在按钮矩形内的那一次
+  **按下/松开沿由 (EX.check) 吞掉**（`Touch.take_press/take_release`），所以 App 自己的点按
+  逻辑不会也响应这一下；落在别处的沿原样留给 App。
+- 面板统一「深底 + 细描边 + 12px 字」，与各 App 的 HUD 同色系；24 个 App 逐个确认右上角
+  40x18 不被内容占住（gol 状态文案压短、touchgravity 的 g/yaw 读数左移、particlelife 与 svm
+  原先的"A退出/返回"标记直接删掉——按钮取代了它们）。
+- 计算器是唯一换位置的：它的顶部整块是"历史 + 当前行"显示区（表达式右对齐），
+  所以按钮放**左上角**（`EX.draw_button_at 2 2`）；对应 e2e 用 `E2E_BTN="20,10"` 覆盖坐标。
+
+## 2. 关键教训：不要在 App 里另装定时器
+
+第一版 `EX.install` 用 `System.set_interval 80 poll` 轮询退出请求，结果**所有 App 变慢**：
+`tools/e2e/native/test_tetris.py` 的重力断言立刻炸了（960ms 应该落一格，实际没落）。
+用探针（`tools/e2e/native/dt_probe.scm`，同进程装 1 vs 2 个 interval）定位到：
+
+> 上游运行时**每轮事件循环对同一进程只触发一个定时器回调**（回调不可重入，其余顺延到下一轮）。
+> 于是"App 的 tick + 本模块的 poll"会互相错位：实测 tick 间隔从 33ms 拉到约 63ms；
+> 而把 dt 钳到 50ms 防跳变的 App（俄罗斯方块）每拍丢掉十几毫秒——重力/动画整体变慢。
+
+改法：**轮询点回到 App 自己的每拍**——`(EX.check)` 一行，不用任何额外定时器；探针显示
+`dt_sum` 与墙钟一致，各 App 的 refresh 计数也回到基线（tetris 36→40、touchgravity 36→40）。
+副产物：App 的 TIMER 数量回到"每个 App 只有一个"，对多任务（P4）也更友好。
+
+另一处更隐蔽的坑：`(EX.check)` **必须放在每拍无条件执行的位置**。第一版按"顺手机械插入"
+把它放在 `(Gfx.refresh)` 前面，对"有脏标记才重绘"的 App（计算器）就永远轮询不到——
+表现为该 App 里按 A 没反应（`regress_tetris` 复进入后按 Esc 不弹框即此兆）。
+
+## 3. 俄罗斯方块：并掉重复实现
+
+- 删掉自绘确认框（`draw_modal/modal_input/modal` 状态与几何常量），退出入口只保留统一按钮；
+  原"场地右侧空白列"的「退出」虚拟键与 `vkey_hit` 的 5 号分支一并删除（`vkey_hit` 只剩
+  速降 / 左移 / 旋转 / 右移）。
+- 顺带删掉 `(native Ui)`：确认框由 `(App.exit)` 内部走宿主的 `Ui.confirm` 那套，不必自己声明。
+- 测试同步：`regress_tetris.js` 改为点右上角按钮、并在宿主确认框的按钮中心（确认 112,141 /
+  留下 208,141）应答；`test_tetris.py` 的确认框场景改用 `HAL_APP_AT`（帧:1 置返回请求 /
+  2 确认 / 3 留下）驱动，断言从"框的画面"改为"进程是否 BLOCKED + 退出意愿"（画面归浏览器用例）。
+
+## 4. HUD 文案统一（不再教用户"按 A"）
+
+notepad「键盘输入 · 触屏=保存 · 右上角／Esc 退出」、qrcode「右上角=退出」、
+uinput「再按 Enter 重来 · 右上角「退出」或 A」、gol 状态文案压短、touchgravity 读数避让、
+particlelife/svm 删旧标记。
+
+## 5. 验收
+
+- 宿主台：24 App `err=none`（含新增按钮与 (EX.check)）；`test_tetris` 21/21（含"确认框期间
+  不下落"——现在由 `Ui.confirm` 的 BLOCKED 天然保证）、`test_app_exit` 30/30、
+  `test_ui_prompt` 11/11、`test_key_fs` 44/44、`test_qrcode` 29/29、`test_touch_imu` 36/36。
+- 浏览器（WASM，Chromium）：`regress_exit` **21/21**（新增"点右下角旧宫格位置不退出、
+  点统一「退出」按钮弹确认框"）、`regress_tetris` 20/20、`regress_key_fs` 23/23、
+  `regress_calculator` 24/24（探针排除按钮矩形）、`regress_uiprompt` 21/21、
+  `regress_qrcode` 21/21、`regress.js` 全 App 存活；计算器变体
+  `E2E_APP=calculator E2E_EPOCH=0 E2E_BTN="20,10"` 18/18。
+- 视觉核对：把 24 个 App 的右上角 64x26 逐帧裁出来拼成对照图（宿主台 `DUMP_PPM`）逐个过了一遍，
+  确认按钮在这些 App 里都不压内容。
+
+## 6. 遗留
+
+- 按钮是"角标"式的小控件；若将来要更规范的"系统条"，可以考虑宿主级 overlay（需要帧缓冲
+  快照/分层合成，与"零快照"的取舍要重新评估）。
+- 各 App 的 `EX.draw_button` 都画在自己 `(Gfx.refresh)` 之前；progressive 类 App（sky*、
+  mandelbrot、sdfprog）因此每推一帧都会重画按钮——幂等、成本可忽略，但将来若要更省可以
+  只在整帧完成时画。

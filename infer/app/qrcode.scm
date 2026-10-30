@@ -267,7 +267,7 @@
       (draw_button p_s BTN3_Y 44 56 76)
       ;; 底部小提示
       (Gfx.draw_text "Enter=输入" BTN_X 168 C_MUT_R C_MUT_G C_MUT_B)
-      (Gfx.draw_text "A=返回列表" BTN_X 182 C_MUT_R C_MUT_G C_MUT_B))))
+      (Gfx.draw_text "右上角=退出" BTN_X 182 C_MUT_R C_MUT_G C_MUT_B))))
 
 ;; ---- 绘制：底栏（状态） --------------------------------------------------
 
@@ -291,6 +291,7 @@
       (draw_qr)
       (draw_panel)
       (draw_bottom)
+      (EX.draw_button)
       (Gfx.refresh))))
 
 ;; ---- 字符画文本 ----------------------------------------------------------
@@ -419,6 +420,7 @@
 
 (define on_tick
   (lambda ()
+    (EX.check)
     (begin
       ;; 键盘：Enter = 输入（框内提交用，框外触发新一轮）
       (set! t_k (Key.take_press))

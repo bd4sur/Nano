@@ -78,7 +78,8 @@
 (define status
   (lambda (alive_n) {
     (Gfx.fill_rect 0 0 SW 14 24 24 28)
-    (Gfx.draw_text (String.concat "生命游戏 " (String.concat (String.atom_to_string gen) (String.concat " 代  存活 " (String.atom_to_string alive_n))))
+    ;; 文案压短（右上角 40x18 留给统一的「退出」按钮）
+    (Gfx.draw_text (String.concat "生命 " (String.concat (String.atom_to_string gen) (String.concat "代 存活 " (String.atom_to_string alive_n))))
                    2 1 180 220 255)
   }))
 
@@ -87,6 +88,7 @@
 
 (define step
   (lambda () {
+    (EX.check)
     (define src (if (== cur 0) world-a world-b))
     (define dst (if (== cur 0) world-b world-a))
     (define y 0)
@@ -114,7 +116,8 @@
     (set! cur (if (== cur 0) 1 0))
     (set! gen (+ gen 1))
     (status count)
-    (Gfx.refresh)
+      (EX.draw_button)
+      (Gfx.refresh)
   }))
 
 ;; ---- 启动：撒种 → 演进并绘制第一代 → 100ms 周期演进 -----------------------
