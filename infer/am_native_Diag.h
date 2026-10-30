@@ -56,6 +56,11 @@ int32_t am_native_Diag_opstack(am_runtime_t *rt, am_process_t *proc);
 int32_t am_native_Diag_fstack(am_runtime_t *rt, am_process_t *proc);
 // (Diag.pgc) : Number —— 本进程的 GC 次数（proc->gc_count）
 int32_t am_native_Diag_pgc(am_runtime_t *rt, am_process_t *proc);
+// (Diag.heap) : Number —— 本进程堆中的**存活对象数**（把柄表有效条目数）
+//   为什么不用 System.memstat 看"每个进程的堆"：memstat 的 heap_used 是**池级**口径
+//   （解释器池由全部进程共享），fork 之后各进程读到的数字几乎一致。要看"这个进程
+//   自己有多少对象"，只能数它自己那把柄表——本函数就是这个数（O(1)，只读）。
+int32_t am_native_Diag_heap(am_runtime_t *rt, am_process_t *proc);
 
 // ---- 闭包帧统计（诊断"帧描述符 vs 退化复制"两条路径的占比）------------------
 // (Diag.frames) : Number —— 按帧描述符创建的闭包数

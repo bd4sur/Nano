@@ -75,8 +75,10 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
 - `infer/am_native_Gfx.c/.h` —— Nano 图形层（Nano_GFX）FFI
 - `infer/am_native_Time.c/.h` —— 整数时间（utc_days / utc_sod）
 - `infer/am_native_Diag.c/.h` —— 虚拟机自观测（只读：操作数栈/调用栈深度、PC、指令区长度、
-  闭包帧描述符与退化闭包计数、槽位统计、GC 计数、单调实时毫秒）；供 `app/xray.scm` 的
-  "解释器 X 光"仪表盘使用，也是排查解释器问题时的现场仪器
+  闭包帧描述符与退化闭包计数、槽位统计、GC 计数、单调实时毫秒、**本进程堆活对象数**
+  `heap`——`System.memstat` 是池级口径，多进程下要区分单个进程的堆占用只能数它自己的
+  把柄表）；供 `app/xray.scm` 的"解释器 X 光"仪表盘与 `app/forkqueue.scm` 的多进程 HUD
+  使用，也是排查解释器问题时的现场仪器
 - `infer/am_native_Key.c/.h` + `infer/nano_key_events.c/.h` —— 键盘输入（按键边沿事件旁路队列 +
   Scheme 侧 `Key.is_available/is_down/take_press/take_release/dropped`）；HAL 在注入 GUI 电平槽的
   同时另投一份边沿事件，GUI 读取路径零改动

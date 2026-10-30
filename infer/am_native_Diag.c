@@ -100,6 +100,16 @@ int32_t am_native_Diag_pgc(am_runtime_t *rt, am_process_t *proc) {
     return diag_push_uint(proc, proc ? (uint64_t)proc->gc_count : 0);
 }
 
+// 本进程堆中的存活对象数（把柄表有效条目数 O(1)）。
+// 为什么需要它：System.memstat 是**池级**统计（解释器池由全部进程共享，
+// vm_used / heap_used 是整池口径），fork 之后各进程看到的数字几乎一样；
+// 要区分"每个进程自己占了多少"，只能数它自己那把柄表里的活对象。
+int32_t am_native_Diag_heap(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    if (!proc || !proc->heap || !proc->heap->table) return diag_push_uint(proc, 0);
+    return diag_push_uint(proc, (uint64_t)proc->heap->table->length);
+}
+
 // ---- 闭包帧统计 ------------------------------------------------------------
 
 int32_t am_native_Diag_frames(am_runtime_t *rt, am_process_t *proc) {
@@ -145,6 +155,7 @@ static const am_native_func_entry_t am_native_Diag_funcs[] = {
     { L"opstack",      am_native_Diag_opstack },
     { L"fstack",       am_native_Diag_fstack },
     { L"pgc",          am_native_Diag_pgc },
+    { L"heap",         am_native_Diag_heap },
     { L"frames",       am_native_Diag_frames },
     { L"legacy",       am_native_Diag_legacy },
     { L"slots",        am_native_Diag_slots },

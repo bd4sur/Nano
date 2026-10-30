@@ -11,6 +11,7 @@
 //  完全同源，避免两套模态框机制。
 ////////////////////////////////////////////////////////////////////////////
 
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -150,24 +151,32 @@ int32_t am_native_App_hide(am_runtime_t *rt, am_process_t *proc) {
     return app_push_bool(proc, 1);
 }
 
-int32_t am_native_App_set_exit_button(am_runtime_t *rt, am_process_t *proc) {
-    int32_t h = 0, w = 0, y = 0, x = 0;
-    am_value_t v;
+// 弹一个数值并按像素取整（三种数字表示都接受）。
+// **为什么不能只判 am_value_is_int**：非负整数字面量（36、16、2…）在灵机里是
+// **无符号整数**，`-` 的结果才是有符号整数。原实现只认 int，于是 App 里写
+// (App.set_exit_button 280 2 36 16) 会被静默降级成 (280 0 0 0)——宿主侧热区
+// 判定直接失效（按钮画出来却点不动），这正是 app/lib/exit.scm 的宿主热区路径
+// 长期"看起来没生效"的原因（它靠自己的电平兜底才勉强可用）。
+static int32_t app_pop_pixel(am_process_t *proc, int32_t fallback) {
+    am_value_t v = am_process_pop_operand(proc);
+    if (v == (am_value_t)UINTPTR_MAX) return fallback;
+    if (am_value_is_int(v))   return (int32_t)am_value_to_int(v);
+    if (am_value_is_uint(v))  return (int32_t)am_value_to_uint(v);
+    if (am_value_is_float(v)) {
+        am_float_t f = am_value_to_float(v);
+        if (isnan(f)) return fallback;
+        return (int32_t)(f < 0 ? (f - 0.5) : (f + 0.5));
+    }
+    return fallback;   // 非数字：调用方按"没有按钮"处理
+}
 
+int32_t am_native_App_set_exit_button(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
     // 参数从右往左弹：h, w, y, x（非数字按 0 处理 → 视为"没有按钮"）
-    v = am_process_pop_operand(proc);
-    if (v == (am_value_t)UINTPTR_MAX) return -1;
-    if (am_value_is_int(v)) h = (int32_t)am_value_to_int(v);
-    v = am_process_pop_operand(proc);
-    if (v == (am_value_t)UINTPTR_MAX) return -1;
-    if (am_value_is_int(v)) w = (int32_t)am_value_to_int(v);
-    v = am_process_pop_operand(proc);
-    if (v == (am_value_t)UINTPTR_MAX) return -1;
-    if (am_value_is_int(v)) y = (int32_t)am_value_to_int(v);
-    v = am_process_pop_operand(proc);
-    if (v == (am_value_t)UINTPTR_MAX) return -1;
-    if (am_value_is_int(v)) x = (int32_t)am_value_to_int(v);
+    int32_t h = app_pop_pixel(proc, 0);
+    int32_t w = app_pop_pixel(proc, 0);
+    int32_t y = app_pop_pixel(proc, 0);
+    int32_t x = app_pop_pixel(proc, 0);
 
     s_btn_x = x; s_btn_y = y; s_btn_w = w; s_btn_h = h;
     return app_push(proc, AM_VALUE_UNDEFINED);
