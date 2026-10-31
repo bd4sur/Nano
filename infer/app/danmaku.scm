@@ -19,7 +19,11 @@
 ;;   星空   —— 46 颗 fill_rect 星点，分 3 档亮度/速度（视差）。
 ;;
 ;; 玩法：触屏拖动飞船（飞船跟在指尖上方 26px，不被手指挡住），**自动开火**；
-;;       陨石按波次落下，难度随波次递增（下落速度 / 刷怪频率 / 射速 / 第 4 波起三连发）；
+;;       一发「齐射」= 若干条弹道，以飞船为中心按 15px 向两侧展开：弹道数随波次
+;;       **无上限增长**（1 → 每波 +1.5 条 → 上限 = 屏宽能放下的条数 ≈ 21 条）；
+;;       射速同样随波次提高（间隔 118ms → 20ms），并且**允许低于一拍**（一拍内可
+;;       打多轮齐射），所以射速不再被刷新率卡住，真正的天花板是同屏弹数（384）。
+;;       陨石按波次落下，难度随波次递增（下落速度 / 刷怪频率）；
 ;;       大陨石被击碎分裂成两颗小的；第 2 波起掺入**横掠型**陨石——它在飞船的高度带
 ;;       横穿屏幕，垂直弹幕打不到，必须挪位躲开（否则"蹲着不动"几乎无敌）；
 ;;       撞到飞船：1.8s 无敌闪烁 + 红框闪烁；**生命模式可用顶部按钮切换** ——
@@ -69,14 +73,18 @@
 ;; ---- 画面几何 ------------------------------------------------------------
 (define SW (Gfx.width))
 (define SH (Gfx.height))
+;; 弹幕几何：并发弹道按 15px 间隔展开，条数上限 = 屏宽能放下的条数（≈21）
+(define BSPACE 15.0)
+(define BSTREAM_MAX (+ 1 (Math.floor (/ (- SW 12.0) BSPACE))))
 (define HUD_H 19)                       ; 顶部状态栏（EX 的退出按钮画在 y 2..17 内）
 
 ;; ---- 容量（定长表的上限） ------------------------------------------------
-(define NBUL 12)                        ; 子弹
+(define NBUL 384)                       ; 子弹（高波次同屏弹数实测 ~294，留余量）
 (define NAST 20)                        ; 陨石
 (define NPART 96)                       ; 爆炸粒子
 (define NSTAR 46)                       ; 星点
-(define CAP 96)                         ; 零模板长度（>= 上面最大者）
+(define CAP 96)                         ; 通用定长表长度（>= 上面最大者，子弹表另算）
+(define CAPB 384)                       ; 子弹表长度（= NBUL）
 
 ;; ---- 定长表：顶层建一次，此后只 set_item! --------------------------------
 ;; 一张零模板 ZT，其余表用 (cp ZT) 整表复制（cons/cdr 都是整表复制）得到
@@ -87,12 +95,20 @@
   (push ZT 0)
   (set! zti (+ zti 1))
 })
+;; 子弹表单独一张更长（384）的零模板：弹幕宽度/密度随波次无上限增长（上限是屏宽），
+;; 同屏弹数会远超其它表的 96 项上限
+(define ZB (cons 0 '()))
+(define zbi 1)
+(while (< zbi CAPB) {
+  (push ZB 0)
+  (set! zbi (+ zbi 1))
+})
 (define cp (lambda (t) (cdr (cons 0 t))))
 
 ;; 子弹：x / y / 竖直速度（负 = 向上）
-(define bxx (cp ZT))
-(define byy (cp ZT))
-(define bvv (cp ZT))
+(define bxx (cp ZB))
+(define byy (cp ZB))
+(define bvv (cp ZB))
 ;; 陨石：x / y / vx / vy / 半径 / 旋转角 / 角速度 / 形状号
 (define axx (cp ZT))
 (define ayy (cp ZT))
@@ -592,26 +608,61 @@
       })
     }))
 
-;; 开火：射速随波次提高（下限 92ms）；第 4 波起三连发
+;; 弹道数随波次增长：1 条 → 每波 +1.5 条 → 上限 = 屏宽能放下的条数（BSPACE 间隔）
+(define fstreams
+  (lambda ()
+    {
+      (define n 0)
+      (set! n (+ 1 (Math.floor (* (- wave 1) 1.5))))
+      (if (< n 1) (set! n 1) #f)
+      (if (> n BSTREAM_MAX) (set! n BSTREAM_MAX) #f)
+      n
+    }))
+
+;; 弹速随波次略增（上限 620：再快就会出现"跳弹"，一帧跨过 20px 以上）
+(define fbspd
+  (lambda ()
+    {
+      (define v 0)
+      (set! v (+ 390 (* wave 15)))
+      (if (> v 620) (set! v 620) #f)
+      v
+    }))
+
+;; 开火：一发「齐射」= st 条弹道，以飞船为中心按 BSPACE 向两侧展开、夹在游玩区内。
+;; 射速随波次提高，**允许低于一拍**（33ms）：一拍内可以打多轮齐射（上限 3 轮，
+;; 防止一次卡顿之后连喷几十发）。这样射速不再被刷新率卡住，只有屏宽/同屏弹数封顶。
 (define upd_fire
   (lambda ()
     {
       (define fi 0)
+      (define nv 0)
+      (define st 0)
+      (define i 0)
+      (define off 0.0)
+      (define bxp 0.0)
+      (define bv 0.0)
       (set! fire_t (+ fire_t dms))
-      (set! fi (- 122 (* wave 5)))
-      (if (< fi 78) (set! fi 78) #f)
-      (if (>= fire_t fi)
-          {
-            (set! fire_t (- fire_t fi))
-            (addbul ship_x (- ship_y 14.0) -390.0)
-            (if (>= wave 4)
-                {
-                  (addbul (- ship_x 9.0) (- ship_y 6.0) -390.0)
-                  (addbul (+ ship_x 9.0) (- ship_y 6.0) -390.0)
-                }
-                #f)
-          }
-          #f)
+      (set! st (fstreams))
+      (set! bv (fbspd))
+      (set! fi (- 118 (* wave 7)))
+      (if (< fi 20) (set! fi 20) #f)
+      (set! nv 0)
+      (while (and (>= fire_t fi) (< nv 3)) {
+        (set! fire_t (- fire_t fi))
+        (set! nv (+ nv 1))
+        (set! i 0)
+        (while (< i st) {
+          (set! off (* (- i (/ (- st 1) 2.0)) BSPACE))
+          (set! bxp (+ ship_x off))
+          (if (< bxp 6.0) (set! bxp 6.0) #f)
+          (if (> bxp (- SW 6.0)) (set! bxp (- SW 6.0)) #f)
+          (addbul bxp (- ship_y 12.0) (- 0.0 bv))
+          (set! i (+ i 1))
+        })
+      })
+      ;; 积压封顶：卡顿之后不要"欠账"式连喷
+      (if (> fire_t (* fi 3)) (set! fire_t (* fi 3)) #f)
     }))
 
 ;; 刷怪 / 波次推进：本波清场后隔 900ms 进入下一波
