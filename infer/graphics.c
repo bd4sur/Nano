@@ -812,8 +812,14 @@ void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_
             }
             return;
         }
-        int32_t delta = y2 - y1;
-        for (int32_t y = y1; ((delta >= 0) ? (y <= y2) : (y >= y2)); ((delta >= 0) ? (y++) : (y--))) {
+        // 慢路径（非 RGB565 / mode>=4）：两端都先转 int32 再比较。
+        // 历史缺陷：原来写成 `y <= y2` / `y >= y2`（y 为 int32、y2 为 uint32），
+        // C 的常用算术转换会先把 y 提升成 uint32 —— 反向竖线（y1 > y2）递减到 -1 后
+        // 变成 4294967295，比较恒真，循环实际不会结束（表现为整机/整页卡死）。
+        // 只有走到慢路径时才暴露，故 RGB565 快路径下的回归一直没发现。
+        int32_t y_from = (int32_t)y1, y_to = (int32_t)y2;
+        int32_t delta = y_to - y_from;
+        for (int32_t y = y_from; ((delta >= 0) ? (y <= y_to) : (y >= y_to)); ((delta >= 0) ? (y++) : (y--))) {
             gfx_draw_point(gfx, x1, y, red, green, blue, mode);
         }
     }
@@ -831,8 +837,10 @@ void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_
             gfx_fill_hline_fast(gfx, xa, xb, y, red, green, blue, mode);
             return;
         }
-        int32_t delta = x2 - x1;
-        for (int32_t x = x1; ((delta >= 0) ? (x <= x2) : (x >= x2)); ((delta >= 0) ? (x++) : (x--))) {
+        // 慢路径的水平线同理：int32 与 uint32 混比会让反向水平线（x1 > x2）死循环
+        int32_t x_from = (int32_t)x1, x_to = (int32_t)x2;
+        int32_t delta = x_to - x_from;
+        for (int32_t x = x_from; ((delta >= 0) ? (x <= x_to) : (x >= x_to)); ((delta >= 0) ? (x++) : (x--))) {
             gfx_draw_point(gfx, x, y1, red, green, blue, mode);
         }
     }
