@@ -3827,7 +3827,7 @@ ENGINES="chromium shell firefox" ./run_browser_regress.sh      # 全量存活/�
 | 文件 | 作用 |
 |---|---|
 | `infer/app/danmaku.scm` | App 本体：程序化 sprite、触屏拖动、自动开火、波次/难度、粒子、HUD、结局浮层 |
-| `infer/tools/e2e/browser/regress_danmaku.js` | 浏览器端到端回归（25 项帧缓冲像素断言；`tools/e2e/` 不入库） |
+| `infer/tools/e2e/browser/regress_danmaku.js` | 浏览器端到端回归（29 项帧缓冲像素断言；`tools/e2e/` 不入库） |
 | `infer/graphics.c` | **修 bug**：慢路径反向水平/垂直线死循环（见 §3.1） |
 | `infer/ui_scheme_app.c` | **修 bug**：`SCHEME_APP_MAX` 32 → 48（见 §3.2） |
 
@@ -3842,6 +3842,14 @@ ENGINES="chromium shell firefox" ./run_browser_regress.sh      # 全量存活/�
 - **难度**：下落速度 `52 + 7×波 + rand×38` px/s、刷怪间隔 `max(300, 780-70×波)` ms、
   每波数量 `4 + 2×波`、射速随波次提高；3 条命，撞毁后 1.8s 无敌（闪烁）+ 红色边框闪烁；
   命尽 → 「游戏结束」浮层（得分 / 最佳 / 点按屏幕重开）。
+- **生命模式按钮（HUD 中部 146..190，y 2..17）**：点按在「无限命」/「三条命」之间切换，
+  **默认无限命**（撞毁只放烟花 + 红框闪烁 + 1.8s 无敌，不扣命、不结束）；切到「三条命」时
+  命数复位成 3，命尽才弹「游戏结束」浮层。按钮底色即状态（青 = 无限 / 琥珀 = 三条命），
+  生命图标只在三条命模式下画（无限命时扣不了命，图标只会一直亮着）。
+  实现要点：①「按下沿」用 `Touch.is_pressed` 电平 + `prev_down` 自算（`ui_tap`），命中按钮
+  矩形则置 `ui_toggle`，**这一下不参与操船、也不触发结局态的重开**；②`y ≤ HUD_H` 的触摸
+  一律只当按钮用（否则点按钮会把飞船拽到上界）；③切换不碰 `over`/`playing`，所以结局态
+  下也能先切模式再点屏幕重开。
 - **退出**：右上角按钮 / 硬 A/ESC → 宿主全局确认框（`app/lib/exit.scm`）。
 
 ## 2. 图形技法（本题的核心）
@@ -3940,8 +3948,10 @@ C 的常用算术转换会把 `y` 提升成 `uint32`：反向竖线（`y1 > y2`�
   （79/240 帧），40k~312.5k 完全无差别。相对 312500 的时间片余量约 **10 倍**。
 - **节拍**：`TICK_MS=33`；宿主回归台 `refresh=40/120 帧`（与 tetris / touchgravity 同口径）；
   浏览器实测 **30 Hz**（2.5 s 内 epoch +75）。
-- **浏览器端到端**（`regress_danmaku.js`，三引擎各 **25/25**，连续 2 轮稳定）：列表(79) → 启动(80) →
+- **浏览器端到端**（`regress_danmaku.js`，三引擎各 **29/29**）：列表(79) → 启动(80) →
   HUD 条 / 「第N波」横幅 / 星空 / 飞船在下半屏 / 自动开火有子弹 / 陨石在屏 →
+  生命模式默认无限命（按钮青底、无生命图标）→ 点按钮切三条命（琥珀底 + 三枚图标）→
+  再点回无限命 →
   拖动飞船左（x≈109）右（x≈209）、夹边（x 夹到 12 / y 夹到 128）→ 子弹跟着飞船那一列（远侧无残弹）→
   画面持续演化、陨石从顶部进入并穿过游玩区 → 得分区像素变化（说明打掉了东西）→
   右上角「退出」→ 确认框 → Enter 回列表(79)，无 pageerror。
@@ -3986,5 +3996,5 @@ bash build_wasm_gui.sh                                          # 出 wasm 产�
 cd webgui && python3 ../tools/https_static_server.py 9102 . &
 cd ../tools/e2e/browser
 node regress_danmaku.js https://127.0.0.1:9102/index.html chromium /tmp/e2e-danmaku
-node regress_danmaku.js <url> shell|firefox /tmp/e2e-danmaku   # 三引擎各 25/25
+node regress_danmaku.js <url> shell|firefox /tmp/e2e-danmaku   # 三引擎各 29/29
 ```

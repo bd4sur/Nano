@@ -22,7 +22,9 @@
 ;;       陨石按波次落下，难度随波次递增（下落速度 / 刷怪频率 / 射速 / 第 4 波起三连发）；
 ;;       大陨石被击碎分裂成两颗小的；第 2 波起掺入**横掠型**陨石——它在飞船的高度带
 ;;       横穿屏幕，垂直弹幕打不到，必须挪位躲开（否则"蹲着不动"几乎无敌）；
-;;       撞到飞船扣一条命（3 条命，1.8s 无敌闪烁），命尽 → 游戏结束 → 点按重开。
+;;       撞到飞船：1.8s 无敌闪烁 + 红框闪烁；**生命模式可用顶部按钮切换** ——
+;;       默认「无限命」（撞了只放烟花、不结束），切到「三条命」则命尽 → 游戏结束 →
+;;       点按屏幕重开（切模式时命数复位成 3）。
 ;;
 ;; 算力：单拍 ≈ 2.5~3 万条 VM 指令（312500 的时间片余量约 10 倍），TICK_MS=33。
 ;;
@@ -232,6 +234,15 @@
 (define best 0)
 (define wave 1)
 (define lives 3)
+;; 生命模式：1 = 无限命（默认；撞毁只放烟花、扣命数为 0），0 = 三条命（现状）
+;; 顶部 HUD 里的「无限命 / 三条命」按钮切换（点按 = 切换，不参与拖动/重开）
+(define immortal 1)
+(define tog_x 146)                      ; 按钮矩形（HUD 内，避开右上角退出按钮）
+(define tog_y 2)
+(define tog_w 44)
+(define tog_h 15)
+(define ui_tap 0)                       ; 本拍是否有新的"按下"
+(define ui_toggle 0)                    ; 本次按下是否落在模式按钮上
 (define fire_t 0)                       ; 开火计时（ms）
 (define spawn_left 0)                   ; 本波还没刷出的陨石数
 (define spawn_t 0)                      ; 刷怪计时（ms）
@@ -695,10 +706,10 @@
               (burst ship_x ship_y 16 130.0 18.0)
               (burst (get_item axx j) (get_item ayy j) 8 90.0 (get_item arr j))
               (rmast j)
-              (set! lives (- lives 1))
+              (if (== immortal 0) (set! lives (- lives 1)) #f)
               (set! invuln 1.8)
               (set! flash 0.2)
-              (if (<= lives 0)
+              (if (and (== immortal 0) (<= lives 0))
                   {
                     (set! lives 0)
                     (set! playing 0)
@@ -1011,11 +1022,26 @@
       (draw_int wave 1 17 3 225 240 255)
       (Gfx.draw_text "分" 34 3 140 190 245)
       (draw_int score 5 47 3 240 244 250)
-      ;; 生命图标（最多 3 枚；更多时只画到 3，另用数字补）
-      (if (>= lives 1) (draw_life 206 5) #f)
-      (if (>= lives 2) (draw_life 220 5) #f)
-      (if (>= lives 3) (draw_life 234 5) #f)
-      (if (> lives 3) (draw_int lives 1 250 3 190 220 245) #f)
+      ;; 生命模式按钮（点按切换）：无限命 = 青底，三条命 = 琥珀底
+      (if (== immortal 1)
+          {
+            (Gfx.fill_rect tog_x tog_y tog_w tog_h 24 78 96)
+            (Gfx.draw_rect tog_x tog_y tog_w tog_h 74 158 186)
+          }
+          {
+            (Gfx.fill_rect tog_x tog_y tog_w tog_h 96 66 28)
+            (Gfx.draw_rect tog_x tog_y tog_w tog_h 194 146 72)
+          })
+      (Gfx.draw_text (if (== immortal 1) "无限命" "三条命") (+ tog_x 4) (+ tog_y 2) 235 244 250)
+      ;; 生命图标：只在"三条命"模式下有意义（无限命时扣不了命，图标只会一直亮着）
+      (if (== immortal 0)
+          {
+            (if (>= lives 1) (draw_life 206 5) #f)
+            (if (>= lives 2) (draw_life 220 5) #f)
+            (if (>= lives 3) (draw_life 234 5) #f)
+            (if (> lives 3) (draw_int lives 1 250 3 190 220 245) #f)
+          }
+          #f)
     }))
 
 ;; 波次横幅（居中）
@@ -1083,11 +1109,33 @@
 ;;   · 结局态下「松手再按」才重开（避免撞击那一下立刻重来）。
 ;; ============================================================================
 
+;; 模式按钮命中判定（帧缓冲像素坐标）
+(define tog_hit
+  (lambda (px py)
+    (if (and (and (>= px tog_x) (< px (+ tog_x tog_w)))
+             (and (>= py tog_y) (< py (+ tog_y tog_h))))
+        1
+        0)))
+
+;; 切换生命模式：切到哪一边都先把命数复位成 3（避免"三条命"接手时只剩 1 条）
+(define toggle_mode
+  (lambda ()
+    {
+      (set! immortal (if (== immortal 1) 0 1))
+      (set! lives 3)
+    }))
+
 (define input
   (lambda ()
     {
       (set! down (if (Touch.is_pressed) 1 0))
-      (if (== down 1)
+      (set! ui_tap (if (and (== down 1) (== prev_down 0)) 1 0))
+      (set! ui_toggle 0)
+      (if (== ui_tap 1)
+          (if (== (tog_hit (Touch.x) (Touch.y)) 1) (set! ui_toggle 1) #f)
+          #f)
+      ;; 顶部 HUD 带里的触摸只当按钮用，不参与操船（否则点按钮会把飞船拽上去）
+      (if (and (== down 1) (> (Touch.y) HUD_H))
           {
             (set! tgo (Touch.x))
             (set! tgt (Touch.y))
@@ -1123,10 +1171,12 @@
 
       (input)
 
+      (if (== ui_toggle 1) (toggle_mode) #f)
+
       (if (== over 1)
           {
-            ;; 结局：松手后的一次按下 = 重开
-            (if (and (== down 1) (== prev_down 0))
+            ;; 结局：松手后的一次按下 = 重开（落在模式按钮上的那一下只切模式）
+            (if (and (== ui_tap 1) (== ui_toggle 0))
                 (new_game)
                 #f)
           }
