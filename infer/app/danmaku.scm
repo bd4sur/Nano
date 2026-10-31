@@ -19,10 +19,12 @@
 ;;   星空   —— 46 颗 fill_rect 星点，分 3 档亮度/速度（视差）。
 ;;
 ;; 玩法：触屏拖动飞船（飞船跟在指尖上方 26px，不被手指挡住），**自动开火**；
-;;       一发「齐射」= 若干条弹道，以飞船为中心按 15px 向两侧展开：弹道数随波次
-;;       **无上限增长**（1 → 每波 +1.5 条 → 上限 = 屏宽能放下的条数 ≈ 21 条）；
-;;       射速同样随波次提高（间隔 118ms → 20ms），并且**允许低于一拍**（一拍内可
-;;       打多轮齐射），所以射速不再被刷新率卡住，真正的天花板是同屏弹数（384）。
+;;       弹幕强度可用顶部按钮切换（**默认「常规弹幕」**）：
+;;         · 常规 —— 1 条弹道（第 4 波起 3 条），射速间隔下限 78ms；
+;;         · 无限 —— 弹道数随波次**无上限增长**（1 → 每波 +1.5 条 → 上限 = 屏宽能放下的
+;;                   条数 ≈ 21 条，15px 间隔），射速间隔 118ms → 20ms 且**允许低于一拍**
+;;                   （一拍内可打多轮齐射），不再被 33ms 的刷新节拍卡住；真正的天花板是
+;;                   同屏弹数（子弹表 384 项）。
 ;;       陨石按波次落下，难度随波次递增（下落速度 / 刷怪频率）；
 ;;       大陨石被击碎分裂成两颗小的；第 2 波起掺入**横掠型**陨石——它在飞船的高度带
 ;;       横穿屏幕，垂直弹幕打不到，必须挪位躲开（否则"蹲着不动"几乎无敌）；
@@ -253,12 +255,20 @@
 ;; 生命模式：1 = 无限命（默认；撞毁只放烟花、扣命数为 0），0 = 三条命（现状）
 ;; 顶部 HUD 里的「无限命 / 三条命」按钮切换（点按 = 切换，不参与拖动/重开）
 (define immortal 1)
-(define tog_x 146)                      ; 按钮矩形（HUD 内，避开右上角退出按钮）
+;; 弹幕强度：0 = 常规弹幕（默认；1 条弹道，第 4 波起 3 条，射速间隔下限 78ms）
+;;           1 = 无限弹幕（弹道数与射速都随波次增长，上限 = 屏宽 / 同屏弹数）
+(define bmode 0)
+;; HUD 按钮矩形（都在顶部 19px 内，避开右上角退出按钮）
+(define bar_x 140)                      ; 「常规弹幕 / 无限弹幕」
+(define bar_y 2)
+(define bar_w 52)
+(define bar_h 15)
+(define tog_x 200)                      ; 「无限命 / 三条命」
 (define tog_y 2)
 (define tog_w 44)
 (define tog_h 15)
 (define ui_tap 0)                       ; 本拍是否有新的"按下"
-(define ui_toggle 0)                    ; 本次按下是否落在模式按钮上
+(define ui_toggle 0)                    ; 本次按下落在哪个按钮上（0=无 / 1=生命 / 2=弹幕）
 (define fire_t 0)                       ; 开火计时（ms）
 (define spawn_left 0)                   ; 本波还没刷出的陨石数
 (define spawn_t 0)                      ; 刷怪计时（ms）
@@ -629,9 +639,11 @@
       v
     }))
 
-;; 开火：一发「齐射」= st 条弹道，以飞船为中心按 BSPACE 向两侧展开、夹在游玩区内。
-;; 射速随波次提高，**允许低于一拍**（33ms）：一拍内可以打多轮齐射（上限 3 轮，
-;; 防止一次卡顿之后连喷几十发）。这样射速不再被刷新率卡住，只有屏宽/同屏弹数封顶。
+;; 开火：一发「齐射」= st 条弹道，以飞船为中心按固定间隔向两侧展开、夹在游玩区内。
+;; 两种强度（HUD 按钮切换）：
+;;   常规（默认）—— 1 条弹道（第 4 波起 3 条、间隔 9px），射速间隔下限 78ms；
+;;   无限       —— 弹道数 1 → 每波 +1.5 条 → 上限 = 屏宽能放下的条数；射速间隔下限 20ms，
+;;                 **允许低于一拍**（一拍内最多 3 轮齐射），不再被 33ms 的刷新节拍卡住。
 (define upd_fire
   (lambda ()
     {
@@ -642,18 +654,30 @@
       (define off 0.0)
       (define bxp 0.0)
       (define bv 0.0)
+      (define bsp 0.0)
       (set! fire_t (+ fire_t dms))
-      (set! st (fstreams))
-      (set! bv (fbspd))
-      (set! fi (- 118 (* wave 7)))
-      (if (< fi 20) (set! fi 20) #f)
+      (if (== bmode 1)
+          {
+            (set! st (fstreams))
+            (set! bsp BSPACE)
+            (set! bv (fbspd))
+            (set! fi (- 118 (* wave 7)))
+            (if (< fi 20) (set! fi 20) #f)
+          }
+          {
+            (set! st (if (>= wave 4) 3 1))
+            (set! bsp 9.0)
+            (set! bv 390.0)
+            (set! fi (- 122 (* wave 5)))
+            (if (< fi 78) (set! fi 78) #f)
+          })
       (set! nv 0)
       (while (and (>= fire_t fi) (< nv 3)) {
         (set! fire_t (- fire_t fi))
         (set! nv (+ nv 1))
         (set! i 0)
         (while (< i st) {
-          (set! off (* (- i (/ (- st 1) 2.0)) BSPACE))
+          (set! off (* (- i (/ (- st 1) 2.0)) bsp))
           (set! bxp (+ ship_x off))
           (if (< bxp 6.0) (set! bxp 6.0) #f)
           (if (> bxp (- SW 6.0)) (set! bxp (- SW 6.0)) #f)
@@ -1073,6 +1097,17 @@
       (draw_int wave 1 17 3 225 240 255)
       (Gfx.draw_text "分" 34 3 140 190 245)
       (draw_int score 5 47 3 240 244 250)
+      ;; 弹幕强度按钮（点按切换）：常规 = 石板灰，无限 = 青底（与"无限"同一套色语言）
+      (if (== bmode 1)
+          {
+            (Gfx.fill_rect bar_x bar_y bar_w bar_h 24 78 96)
+            (Gfx.draw_rect bar_x bar_y bar_w bar_h 74 158 186)
+          }
+          {
+            (Gfx.fill_rect bar_x bar_y bar_w bar_h 46 56 78)
+            (Gfx.draw_rect bar_x bar_y bar_w bar_h 108 124 156)
+          })
+      (Gfx.draw_text (if (== bmode 1) "无限弹幕" "常规弹幕") (+ bar_x 2) (+ bar_y 2) 235 244 250)
       ;; 生命模式按钮（点按切换）：无限命 = 青底，三条命 = 琥珀底
       (if (== immortal 1)
           {
@@ -1087,10 +1122,10 @@
       ;; 生命图标：只在"三条命"模式下有意义（无限命时扣不了命，图标只会一直亮着）
       (if (== immortal 0)
           {
-            (if (>= lives 1) (draw_life 206 5) #f)
-            (if (>= lives 2) (draw_life 220 5) #f)
-            (if (>= lives 3) (draw_life 234 5) #f)
-            (if (> lives 3) (draw_int lives 1 250 3 190 220 245) #f)
+            (if (>= lives 1) (draw_life 96 5) #f)
+            (if (>= lives 2) (draw_life 110 5) #f)
+            (if (>= lives 3) (draw_life 124 5) #f)
+            (if (> lives 3) (draw_int lives 1 136 3 190 220 245) #f)
           }
           #f)
     }))
@@ -1160,13 +1195,21 @@
 ;;   · 结局态下「松手再按」才重开（避免撞击那一下立刻重来）。
 ;; ============================================================================
 
-;; 模式按钮命中判定（帧缓冲像素坐标）
-(define tog_hit
-  (lambda (px py)
-    (if (and (and (>= px tog_x) (< px (+ tog_x tog_w)))
-             (and (>= py tog_y) (< py (+ tog_y tog_h))))
+;; 按钮命中判定（帧缓冲像素坐标）
+(define hit_rect
+  (lambda (px py rx ry rw rh)
+    (if (and (and (>= px rx) (< px (+ rx rw)))
+             (and (>= py ry) (< py (+ ry rh))))
         1
         0)))
+
+;; 切换弹幕强度（顺手把开火计时清零：切换后从"满间隔"起算，不会立刻喷一发）
+(define toggle_barrage
+  (lambda ()
+    {
+      (set! bmode (if (== bmode 1) 0 1))
+      (set! fire_t 0)
+    }))
 
 ;; 切换生命模式：切到哪一边都先把命数复位成 3（避免"三条命"接手时只剩 1 条）
 (define toggle_mode
@@ -1183,7 +1226,10 @@
       (set! ui_tap (if (and (== down 1) (== prev_down 0)) 1 0))
       (set! ui_toggle 0)
       (if (== ui_tap 1)
-          (if (== (tog_hit (Touch.x) (Touch.y)) 1) (set! ui_toggle 1) #f)
+          {
+            (if (== (hit_rect (Touch.x) (Touch.y) bar_x bar_y bar_w bar_h) 1) (set! ui_toggle 2) #f)
+            (if (== (hit_rect (Touch.x) (Touch.y) tog_x tog_y tog_w tog_h) 1) (set! ui_toggle 1) #f)
+          }
           #f)
       ;; 顶部 HUD 带里的触摸只当按钮用，不参与操船（否则点按钮会把飞船拽上去）
       (if (and (== down 1) (> (Touch.y) HUD_H))
@@ -1223,6 +1269,7 @@
       (input)
 
       (if (== ui_toggle 1) (toggle_mode) #f)
+      (if (== ui_toggle 2) (toggle_barrage) #f)
 
       (if (== over 1)
           {
