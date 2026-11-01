@@ -56,6 +56,9 @@ mkdir -p "$LINGLONG/app"
 mkdir -p "$LINGLONG/app/lib"
 cp -f app/*.scm "$LINGLONG/app/" 2>/dev/null || true
 cp -f app/lib/*.scm "$LINGLONG/app/lib/" 2>/dev/null || true
+# 大块数据（不入 .scm 源码：灵机按源码字符数预分配 token 数组，见 app/hwr.scm 注释）
+mkdir -p "$LINGLONG/app/lib/hwr"
+cp -f app/lib/hwr/* "$LINGLONG/app/lib/hwr/" 2>/dev/null || true
 python3 - "$LINGLONG" "$OUT_DIR/manifest.json" <<'EOF'
 import json, os, sys
 root, out = sys.argv[1], sys.argv[2]
