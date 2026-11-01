@@ -37,6 +37,9 @@
 //   · 4MB：sky3.scm（scatter_model_3 逐行移植）
 //   · 8MB：ephemeris.scm（月球 10×60 项级数 + VSOP87 + 星历函数集）
 //   · 12MB：nongli.scm + app/lib/ephem.scm（共享星历模块 + 农历年表推算）
+//   · 24MB：markdown.scm（连着 md_parse / md_layout / md_demo / exit 四个模块一起编译，
+//          编译期工作区就要 ~13MB；实测 12MB 时连 8KB 的 Markdown 文件都装不下，
+//          24MB 能容纳约 32KB 文档——App 侧据此设了 DOC_MAX 上限并给出友好提示）
 // 编译期的 VM 工作区占用远大于运行期堆占用（后者极小）。
 // 内存受限宿主：pool_size 按「最大连续块 - 余量」自适应下调（见下），
 // 小 App 仍可正常运行；装不下的大 App 会显示「内存不足」错误画面。
@@ -46,7 +49,7 @@
 #if NANO_IS_M5ESP
     #define MB_POOL_SIZE   (2ULL * 1024 * 1024)
 #else
-    #define MB_POOL_SIZE   (12ULL * 1024 * 1024)
+    #define MB_POOL_SIZE   (24ULL * 1024 * 1024)
 #endif
 #define MB_POOL_MIN    (512ULL * 1024)
 #define MB_POOL_MARGIN (64ULL * 1024)
@@ -642,6 +645,40 @@ static void app_drain_error_fifo(void) {
     }
 }
 
+// 把用户输出 FIFO（(display ...) / (newline)）排空并打到宿主 stdout。
+//
+// 为什么需要：灵机程序里的 (display ...) 并不直接写 stdout，而是把字符逐个压进
+// rt->output_fifo，由**宿主**负责取出落地（见 animac_core.h 的 am_runtime_output）。
+// 本宿主此前只排空了 error_fifo，于是 App 的调试输出在 GUI 目标（掌机/浏览器）上
+// 人间蒸发——排查只能靠改 C 代码加 printf。这里统一按 UTF-8 打印，
+// 使 (display ...) 在浏览器控制台 / 串口 / 终端里都可见（端到端测试也据此断言）。
+// 代价：只有真有输出时才进入本函数，逐字符转换；App 里 display 极少，可忽略。
+static void app_drain_output_fifo(void) {
+    if (!s_app->rt || !s_app->rt->output_fifo) return;
+    char line[256];
+    size_t used = 0;
+    while (s_app->rt->output_fifo->length > 0) {
+        am_value_t v = am_list_shift(s_app->vm_alloc, s_app->rt->output_fifo);
+        if (!am_value_is_wchar(v)) continue;
+        wchar_t one[2] = { (wchar_t)am_value_to_wchar(v), L'\0' };
+        char mb[8];
+        uint32_t l = am_wcstombs(mb, one, (uint32_t)sizeof(mb) - 1);
+        if (l == 0) continue;
+        if (used + l + 1 >= sizeof(line)) {
+            line[used] = '\0';
+            fputs(line, stdout);
+            used = 0;
+        }
+        memcpy(line + used, mb, l);
+        used += l;
+    }
+    if (used > 0) {
+        line[used] = '\0';
+        fputs(line, stdout);
+        fflush(stdout);
+    }
+}
+
 int32_t ui_scheme_app_render_frame(Key_Event *key_event, Global_State *global_state) {
     (void)key_event;
     Nano_GFX *gfx = global_state->gfx;
@@ -678,6 +715,7 @@ int32_t ui_scheme_app_render_frame(Key_Event *key_event, Global_State *global_st
         // （如逐行渐进、逐代演进）不在中途推屏，避免闪烁。
         am_runtime_event_handler(s_app->rt);
         app_drain_error_fifo();
+        app_drain_output_fifo();
 
         // 本帧内 App 可能刚发起模态文本请求（(Ui.input ...) 已把进程挂起）：
         // 立刻打开宿主控件并把画面交给它，后续帧由 scheme_modal_event 服务。
