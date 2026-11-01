@@ -1,0 +1,10 @@
+;; 由 tools/train_hwr_online.py 生成（勿手改）：在线手写识别器模型元信息
+(define ncls 3755)
+(define nfeat 512)
+(define nred 128)
+(define npca 2)
+(define nmean 10)
+(define per_rows 400)
+(define sp 0.0527309996)
+(define smax 0.0449424312)
+(define s2max 297.33995)
