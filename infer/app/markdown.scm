@@ -7,9 +7,12 @@
 ;;   app/lib/md_demo.scm    内置示例文档（行数组，覆盖当前支持的整个子集）
 ;;   本文件                 绘制 + 交互（滚动/翻页/点链接/退出）
 ;;
-;; 支持的子集：# 1~3 级标题、**加粗**、`行内代码`、无嵌套无序列表、[链接](url)、
-;;   围栏代码块、分隔线、**表格**（GFM 语法：列对齐、单元格内行内样式、自动列宽、
-;;   单元格内折行）、段落（含 CJK 软换行）。引用块/有序列表/嵌套列表留有扩展位。
+;; 支持的子集：# 1~3 级标题、**加粗**、`行内代码`、无序列表（**可嵌套**）、[链接](url)、
+;;   围栏代码块、分隔线、**表格**（GFM：列对齐、单元格内行内样式、自动列宽、单元格内
+;;   折行）、**引用块**（可嵌套、内部可放任意块）、段落（含 CJK 软换行）。有序列表留有扩展位。
+;;
+;; 标题的视觉区分（字模只有一套 12px，靠装饰而非字号）：H1 粗体 + 2px 通栏横线；
+;; H2 粗体 + 左侧 3px 装饰竖线（#66ccff）；H3 粗体 + 文字下划线。
 ;;
 ;; 文档来源（都走 Fs 真文件链路）：
 ;;   · 业务资源根下的 doc/*.md 与根目录下的 *.md（桌面上即 /home/bd4sur/linglong/）；
@@ -101,6 +104,11 @@
         { (set! cr 130) (set! cg 170) (set! cb 225) (set! style_weight 1) } #f)
     (if (== st MDL.ST_TABLE_SEP)
         { (set! cr 58) (set! cg 70) (set! cb 92) (set! style_weight 1) } #f)
+    (if (== st MDL.ST_QUOTE_BAR)
+        { (set! cr 86) (set! cg 98) (set! cb 120) (set! style_weight 1) } #f)
+    ;; 二级标题左侧装饰竖线的颜色：#66ccff
+    (if (== st MDL.ST_H2BAR)
+        { (set! cr 102) (set! cg 204) (set! cb 255) (set! style_weight 1) } #f)
     #t))
 
 ;; ---- 状态 ----------------------------------------------------------------
@@ -338,11 +346,21 @@
     (if (== st MDL.ST_TABLE_SEP)
         (Gfx.fill_rect x y 1 h cr cg cb)
         #f)
+    (if (== st MDL.ST_QUOTE_BAR)
+        (Gfx.fill_rect x y w h cr cg cb)
+        #f)
+    (if (== st MDL.ST_H2BAR)
+        (Gfx.fill_rect x y w h cr cg cb)
+        #f)
     (if (and (> (String.length txt) 0) (== st MDL.ST_CODE))
         (Gfx.fill_rect (- x 1) (+ y 1) (+ w 2) 13 46 42 34)
         #f)
     (if (and (> (String.length txt) 0) (== st MDL.ST_LINK))
         (Gfx.fill_rect x (+ y 13) w 1 96 160 235)
+        #f)
+    ;; 三级标题：文字下划线（比字形亮一档的暗色，避免和链接下划线混淆）
+    (if (and (> (String.length txt) 0) (== st MDL.ST_H3))
+        (Gfx.fill_rect x (+ y 12) w 1 96 128 168)
         #f)
     (if (> (String.length txt) 0)
         { (set! k 0)

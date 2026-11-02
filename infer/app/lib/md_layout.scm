@@ -23,7 +23,7 @@
 ;; 样式表（绘制端按样式查颜色/字重；这里只给编号，颜色在 app 里）
 ;;   0 正文        1 加粗        2 行内代码    3 链接
 ;;   4 标题1       5 标题2       6 标题3       7 代码块正文   8 列表项目符号
-;;   9 表格竖线
+;;   9 表格竖线    10 引用块竖线   11 二级标题装饰竖线
 ;;
 ;; 字宽：本机 12px alpha 字模是等宽的——半角步进 7px、全角（>= U+2E80）12px
 ;;   （实测：i/M/W/a 均为 7，中文/全角标点为 12；见 infer/glyph_12.h 头注释）。
@@ -52,6 +52,8 @@
 (define ST_CODEBLOCK 7)
 (define ST_BULLET 8)
 (define ST_TABLE_SEP 9)   ;; 表格列间竖线（绘制端画 1px 竖条，文本为空）
+(define ST_QUOTE_BAR 10)  ;; 引用块左侧竖线
+(define ST_H2BAR 11)      ;; 二级标题左侧装饰竖线（#66ccff，3px）
 
 (define BG_NONE 0)
 (define BG_CODE 1)
@@ -61,6 +63,10 @@
 ;; ---- 度量常量 ------------------------------------------------------------
 
 (define LINE_H 15)       ;; 12px 字模的行高（含 3px 行距）
+(define LIST_IND 14)     ;; 列表每级缩进（与项目符号的悬挂缩进一致）
+(define QUOTE_IND 10)    ;; 引用块正文右移量
+(define QUOTE_BAR_W 2)   ;; 引用块左侧竖线宽度
+(define H2_BAR_W 3)      ;; 二级标题装饰竖线宽度
 (define W_HALF 7)        ;; 半角步进
 (define W_FULL 12)       ;; 全角步进
 (define CJK_BASE 11904)  ;; 0x2E80
@@ -344,25 +350,39 @@
     r))
 
 ;; ---- 标题：H1 > H2 > H3（4~6 级按 H3 处理）-----------------------------
-;; 字号无法切换（Gfx 只有一套 12px alpha 字模），因此层级靠
-;; 「粗体强度 + 颜色 + 段前留白 + 分隔线」表达：H1 段前最多且带 2px 通栏线，
-;; H2 带 1px 线，H3 只有粗体与配色差异。
+;; 字号无法切换（Gfx 只有一套 12px alpha 字模），因此层级靠装饰表达：
+;;   H1 —— 粗体 + 段前留白最多 + 2px 通栏横线；
+;;   H2 —— 粗体 + **左侧 3px 装饰竖线**（ST_H2BAR，颜色由绘制端给成 #66ccff）；
+;;   H3 —— 粗体 + 更暗的配色 + 文字下划线（下划线在绘制端画，见 app/markdown.scm）。
+;; 竖线与文字都是"段"，绘制端不需要知道这是标题装饰。
 (define lay_heading
   (lambda (b width)
     (define lvl (get_item b 1))
     (define shown 1)
     (define base ST_H1)
+    (define before 0)
+    (define i 0)
+    (define ln #f)
     (set! shown lvl)
     (if (> shown 3) (set! shown 3) #f)
     (if (== shown 2) (set! base ST_H2) #f)
     (if (== shown 3) (set! base ST_H3) #f)
     (emit_gap (if (> lvl 1) 9 13))
-    (emit_wrapped (get_item b 2) width 0 0 BG_NONE base)
+    (set! before (length cur_lines))
+    ;; H2 要给左侧竖线让出 H2_BAR_W 的宽度（折行时同样少这么多）
+    (if (== shown 2)
+        (emit_wrapped (get_item b 2) (- width H2_BAR_W) 0 0 BG_NONE base)
+        (emit_wrapped (get_item b 2) width 0 0 BG_NONE base))
+    (if (== shown 2)
+        { (set! i before)
+          (while (< i (length cur_lines))
+            { (set! ln (get_item cur_lines i))
+              (relocate_segs (get_item ln 2) H2_BAR_W)
+              (set_item! ln 2 (cons (mk5 "" ST_H2BAR 0 H2_BAR_W "") (get_item ln 2)))
+              (set! i (+ i 1)) }) }
+        #f)
     (if (== shown 1)
         { (emit_gap 3) (emit_line 2 BG_RULE (new_list)) }
-        #f)
-    (if (== shown 2)
-        { (emit_gap 3) (emit_line 1 BG_RULE (new_list)) }
         #f)
     (emit_gap 7)))
 
@@ -373,18 +393,99 @@
     (emit_wrapped (get_item b 1) width 0 0 BG_NONE ST_BODY)
     (emit_gap 7)))
 
-;; ---- 无序列表（无嵌套）：项目符号 14px 悬挂缩进 --------------------------
-(define lay_list
-  (lambda (b width)
-    (define items (get_item b 1))
+;; ---- 无序列表（支持嵌套）：每层缩进 LIST_IND，项目符号悬挂 ------------------
+;; item = (item inlines children)：先排本项的文本（项目符号 14px 悬挂），再递归排 children。
+;; 层级只影响缩进与折行右边界；绘制端依旧只认"段"。
+(define lay_items
+  (lambda (items indent width)
     (define n (length items))
     (define i 0)
+    (define it #f)
     (define inl #f)
     (while (< i n)
-      { (set! inl (cons (mk2 'bullet #f) (get_item items i)))
-        (emit_wrapped inl width 0 14 BG_NONE ST_BODY)
+      { (set! it (get_item items i))
+        (set! inl (cons (mk2 'bullet #f) (get_item it 1)))
+        (emit_wrapped inl width indent (+ indent LIST_IND) BG_NONE ST_BODY)
+        (if (> (length (get_item it 2)) 0)
+            (lay_items (get_item it 2) (+ indent LIST_IND) width)
+            #f)
         (if (< (+ i 1) n) (emit_gap 3) #f)
         (set! i (+ i 1)) })
+    #t))
+
+(define lay_list
+  (lambda (b width)
+    (lay_items (get_item b 1) 0 width)
+    (emit_gap 7)))
+
+;; ---- 引用块 --------------------------------------------------------------
+;; 做法：**先把引用树摊平**成 (层号 块) 序列，再逐块排版、逐块右移并插竖线。
+;; 为什么不写"递归排版（lay_quote 里再调 lay_quote）"：灵机里同一闭包被重入时共用帧，
+;; 嵌套引用会让外层 lay_quote 的 before/i 被内层覆盖（行会重复/错位）。
+;; 摊平用的是**普通自递归**（flatten_quote，直接自递归会新建闭包，帧独立），
+;; 摊平后每次排版调用的都是别的块排版函数，不再重入 lay_quote。
+(define flatten_quote
+  (lambda (blocks depth out)
+    (define n (length blocks))
+    (define i 0)
+    (define b #f)
+    (while (< i n)
+      { (set! b (get_item blocks i))
+        (if (== (get_item b 0) 'quote)
+            (flatten_quote (get_item b 1) (+ depth 1) out)
+            (push out (mk3 depth b 0)))      ;; 第三格留白（保持三元组形状一致）
+        (set! i (+ i 1)) })
+    out))
+
+;; 排一个已摊平的 (层号 块)：按层号右移 + 插 depth 条竖线
+(define lay_quote_items
+  (lambda (flat width)
+    (define n (length flat))
+    (define i 0)
+    (define depth 0)
+    (define b #f)
+    (define before 0)
+    (define ln #f)
+    (define k 0)
+    (while (< i n)
+      { (set! depth (get_item (get_item flat i) 0))
+        (set! b (get_item (get_item flat i) 1))
+        (set! before (length cur_lines))
+        (if (layout_of (get_item b 0))
+            ((layout_of (get_item b 0)) b (- width (* depth QUOTE_IND)))
+            #f)
+        (set! k before)
+        (while (< k (length cur_lines))
+          { (set! ln (get_item cur_lines k))
+            (relocate_segs (get_item ln 2) (* depth QUOTE_IND))
+            ;; 从最外层到最内层依次插竖线（先插的 x 小）
+            (set! depth depth)          ;; 占位：保持 depth 值不变
+            (insert_quote_bars ln (get_item (get_item flat i) 0))
+            (set! k (+ k 1)) })
+        (set! i (+ i 1)) })
+    #t))
+
+;; 给一行插 depth 条竖线（x = 0, QUOTE_IND, 2*QUOTE_IND ...）
+(define insert_quote_bars
+  (lambda (ln depth)
+    (define d 0)
+    (define segs #f)
+    (while (< d depth)
+      { (set! segs (get_item ln 2))
+        (set_item! ln 2 (cons (mk5 "" ST_QUOTE_BAR (* d QUOTE_IND) QUOTE_BAR_W "")
+                              segs))
+        (set! d (+ d 1)) })
+    #t))
+
+(define lay_quote
+  (lambda (b width)
+    (define flat (new_list))
+    (emit_gap 7)
+    (flatten_quote (get_item b 1) 1 flat)
+    (if (== (length flat) 0)
+        (emit_line LINE_H BG_NONE (cons (mk5 "" ST_QUOTE_BAR 0 QUOTE_BAR_W "")
+                                        (new_list)))   ;; 空引用也给一行 + 一条竖线
+        (lay_quote_items flat width))
     (emit_gap 7)))
 
 ;; ---- 围栏代码块 ----------------------------------------------------------
@@ -737,6 +838,7 @@
 (layout_add 'code lay_code)
 (layout_add 'rule lay_rule)
 (layout_add 'table lay_table)
+(layout_add 'quote lay_quote)
 
 ;; ============================================================================
 ;; 四、对外 API

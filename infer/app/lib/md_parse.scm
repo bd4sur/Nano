@@ -8,7 +8,10 @@
 ;;
 ;;        (heading 层级 inlines)      标题，层级 1..6
 ;;        (para inlines)              段落
-;;        (list items)                无序列表，items 为若干 inlines 列表（无嵌套）
+;;        (list items)                无序列表（可嵌套）；每个 item = (item inlines children)，
+;;                                    children 是更深一层的 item 列表
+;;        (quote blocks)              引用块（> 开头），内层是任意块（可以再嵌套引用/列表/代码块）
+;;                                    ——(quote-raw 行数组) 只是解析中间产物，对外 API 里不会出现
 ;;        (code 语言 lines)           围栏代码块，lines 为原始行字符串（不做行内解析）
 ;;        (rule)                      分隔线（--- / *** / ___）
 ;;        (table aligns header cells) 表格：aligns = 每列对齐方式，header = 表头单元格，
@@ -66,6 +69,7 @@
 (define CP_PLUS 43)
 (define CP_DASH 45)
 (define CP_COLON 58)
+(define CP_GT 62)
 (define CP_LBRK 91)
 (define CP_BSLASH 92)
 (define CP_RBRK 93)
@@ -413,22 +417,42 @@
     (while (and (< i n) (== (String.charCodeAt i t) ch)) (set! i (+ i 1)))
     (if (>= i need) (if (== i n) #t #f) #f)))
 
-;; 无序列表项：返回内容起始下标；不是列表项返回 -1。
-;; 允许最多 3 个前导空格（CommonMark 的 0..3 缩进规则）。
-(define list_content_at
+;; 无序列表项识别：'*'/'-'/'+' 后必须跟空白（或行尾）。
+;; 返回 (缩进 内容起点) 或 #f。**不再限制缩进 0..3**——嵌套就是靠缩进表达的：
+;; 缩进比上一层更深 → 成为上一层的子项（层号在 h_list 里用"祖先栈"算，见下）。
+(define list_item_at
   (lambda (line)
     (define n (String.length line))
     (define lead (lead_ws line))
     (define c0 0)
-    (define r -1)
-    (if (> lead 3) -1
-        (if (>= lead n) -1
-            { (set! c0 (String.charCodeAt lead line))
-              (if (or (== c0 CP_DASH) (or (== c0 CP_STAR) (== c0 CP_PLUS)))
-                  (if (>= (+ lead 1) n)
-                      (+ lead 1)
-                      (if (is_ws (String.charCodeAt (+ lead 1) line)) (+ lead 2) -1))
-                  -1) }))))
+    (define r #f)
+    (if (>= lead n) #f
+        { (set! c0 (String.charCodeAt lead line))
+          (if (or (== c0 CP_DASH) (or (== c0 CP_STAR) (== c0 CP_PLUS)))
+              (if (>= (+ lead 1) n)
+                  (set! r (mk2 lead (+ lead 1)))
+                  (if (is_ws (String.charCodeAt (+ lead 1) line))
+                      (set! r (mk2 lead (+ lead 2)))
+                      #f))
+              #f) })
+    r))
+
+;; 兼容旧接口：只要内容起点（不是列表项返回 -1）
+(define list_content_at
+  (lambda (line)
+    (define it (list_item_at line))
+    (if it (get_item it 1) -1)))
+
+;; 取列表前 k 个元素（造新表；用于"层级路径"截断）
+(define list_prefix
+  (lambda (lst k)
+    (define out (new_list))
+    (define i 0)
+    (define m (length lst))
+    (while (and (< i k) (< i m))
+      { (push out (get_item lst i))
+        (set! i (+ i 1)) })
+    out))
 
 ;; ---- 各类块的处理函数（输入 lines/下标，输出 (块 下一行下标)）-------------
 
@@ -480,35 +504,114 @@
               (set! i (+ i 1)) }) })
     (mk2 (mk3 'code lang body) i)))
 
-;; 无序列表（无嵌套）：item 行 + 其后续行（软换行续行）
+;; 无序列表（**支持嵌套**）：item 行 + 其后续行（软换行续行）。
+;;
+;; 嵌套层级用"祖先栈"判定（与 CommonMark 的精神一致）：栈里存每一层的**内容起点缩进**，
+;; 遇到新行先把比它浅的祖先弹出，剩下的栈深就是它的层号：
+;;     - a            ind=0  → 栈 []      → 层 0，栈 [2]
+;;       - b          ind=2  → 栈 [2]     → 层 1，栈 [2,4]
+;;         - c        ind=4  → 栈 [2,4]   → 层 2，栈 [2,4,6]
+;;     - d            ind=0  → 弹到空     → 层 0
+;; 建树时 path[k] = 第 k 层当前 item，新 item 挂到 path[层-1] 的 children 上。
+;; item 形状 (item inlines children)：inlines 在"该 item 的文本收够"时才解析（续行会追加）。
 (define h_list
   (lambda (lines idx)
     (define n (length lines))
     (define i idx)
-    (define items (new_list))
-    (define cur "")
+    (define root (new_list))
+    (define path (new_list))
+    (define stack (new_list))
+    (define cur_item #f)
+    (define cur_text "")
     (define has 0)
     (define stop 0)
     (define line "")
     (define k 'para)
-    (define ca -1)
+    (define pos #f)
+    (define ind 0)
+    (define con 0)
+    (define lvl 0)
+    (define it #f)
+    (define parent #f)
     (while (and (< i n) (== stop 0))
       { (set! line (get_item lines i))
         (set! k (classify lines i))
-        (set! ca (list_content_at line))
+        (set! pos (list_item_at line))
         (if (== k 'blank)
             (set! stop 1)
-            (if (>= ca 0)
-                { (if (== has 1) (push items (parse_inlines (trim cur))) #f)
-                  (set! cur (String.slice line ca (String.length line)))
+            (if pos
+                { ;; 先把上一个 item 的文本定稿（续行可能已经追加过）
+                  (if (== has 1)
+                      (set_item! cur_item 1 (parse_inlines (trim cur_text)))
+                      #f)
+                  (set! ind (get_item pos 0))
+                  (set! con (get_item pos 1))
+                  (while (and (> (length stack) 0)
+                              (< ind (get_item stack (- (length stack) 1))))
+                    (pop stack))
+                  (set! lvl (length stack))
+                  (push stack con)
+                  (set! it (mk3 'item (new_list) (new_list)))
+                  (if (== lvl 0)
+                      (push root it)
+                      { (set! parent (get_item path (- lvl 1)))
+                        (push (get_item parent 2) it) })
+                  (set! path (list_prefix path lvl))
+                  (push path it)
+                  (set! cur_item it)
+                  (set! cur_text (String.slice line con (String.length line)))
                   (set! has 1)
                   (set! i (+ i 1)) }
                 (if (== k 'para)
-                    { (set! cur (soft_join cur (trim line)))
+                    { (set! cur_text (soft_join cur_text (trim line)))
                       (set! i (+ i 1)) }
                     (set! stop 1)))) })
-    (if (== has 1) (push items (parse_inlines (trim cur))) #f)
-    (mk2 (mk2 'list items) i)))
+    (if (== has 1)
+        (set_item! cur_item 1 (parse_inlines (trim cur_text)))
+        #f)
+    (mk2 (mk2 'list root) i)))
+
+;; ---- 引用块 --------------------------------------------------------------
+;; 行首（允许 <=3 空格缩进）是 '>' 时返回其后的内容起点（跳过一个空格），否则 -1。
+(define quote_content_at
+  (lambda (line)
+    (define n (String.length line))
+    (define lead (lead_ws line))
+    (define r -1)
+    (if (> lead 3) -1
+        (if (>= lead n) -1
+            (if (== (String.charCodeAt lead line) CP_GT)
+                { (set! r (+ lead 1))
+                  (if (< r n)
+                      (if (is_ws (String.charCodeAt r line)) (set! r (+ r 1)) #f)
+                      #f)
+                  r }
+                -1)))))
+
+;; 引用块：只剥掉**一层** '>' 前缀，产出中间块 (quote-raw 内层行数组)。
+;;
+;; **为什么不在这里直接递归解析**（这是本轮踩到的一个解释器坑）：
+;; 灵机里"同一个闭包被重入调用"会共用帧——parse_lines → h_quote → parse_lines
+;; 这种两级回调会让外层 h_quote 的局部变量（记录"下一行下标"的 i）在递归返回后
+;; 变成内层的值，表现为引用块被反复重解析（一块变三块）。因此这里不做递归，
+;; 由 fixup_quotes 在同一次 parse_lines **返回之后**逐层展开（见下）——
+;; 那时外层调用已经结束，不存在重入。
+;; 简单子集取舍：不做 CommonMark 的"懒惰续行"（非 '>' 行一律结束引用块）。
+(define h_quote
+  (lambda (lines idx)
+    (define n (length lines))
+    (define i idx)
+    (define inner (new_list))
+    (define stop 0)
+    (define p -1)
+    (while (and (< i n) (== stop 0))
+      { (set! p (quote_content_at (get_item lines i)))
+        (if (>= p 0)
+            { (push inner (String.slice (get_item lines i) p
+                                        (String.length (get_item lines i))))
+              (set! i (+ i 1)) }
+            (set! stop 1)) })
+    (mk2 (mk2 'quote-raw inner) i)))
 
 ;; 分隔线
 (define h_rule
@@ -669,10 +772,11 @@
 
 (rule_add 'fence (lambda (lines idx) (if (fence_open (get_item lines idx)) #t #f)) h_fence)
 (rule_add 'heading (lambda (lines idx) (> (heading_level (get_item lines idx)) 0)) h_heading)
+(rule_add 'quote (lambda (lines idx) (>= (quote_content_at (get_item lines idx)) 0)) h_quote)
 ;; 表格排在 hr/list 之前：分隔行的 `---` 不是分隔线，而是表格的一部分
 (rule_add 'table (lambda (lines idx) (table_start lines idx)) h_table)
 (rule_add 'hr (lambda (lines idx) (is_rule (get_item lines idx))) h_rule)
-(rule_add 'list (lambda (lines idx) (>= (list_content_at (get_item lines idx)) 0)) h_list)
+(rule_add 'list (lambda (lines idx) (if (list_item_at (get_item lines idx)) #t #f)) h_list)
 ;; 段落：兜底规则，谓词即「非空行」——必须**最后**注册（先注册会抢走所有行）
 (rule_add 'para (lambda (lines idx) (not (is_blank (get_item lines idx)))) h_para)
 
@@ -698,8 +802,9 @@
         (if (is_blank (get_item lines idx)) 'blank 'para)
         r)))
 
-;; 行列表 → 块列表（解析主循环：查表分发，不认识的行只占 1 行并跳过，绝不卡住）
-(define parse_lines
+;; 行列表 → 块列表（解析主循环：查表分发，不认识的行只占 1 行并跳过，绝不卡住）。
+;; 注意：**不处理引用块的嵌套**——引用先落成 (quote-raw 行数组)，由 fixup_quotes 摊平。
+(define parse_lines_once
   (lambda (lines)
     (define n (length lines))
     (define i 0)
@@ -720,6 +825,28 @@
                     (if (> nx i) (set! i nx) (set! i (+ i 1))) }
                   (set! i (+ i 1))) }) })
     out))
+
+;; 把块列表里的 (quote-raw 行数组) 逐层展开成 (quote 块列表)。
+;; 关键点：这里对 parse_lines_once 的调用**互不嵌套**（每次都等上一次返回），
+;; 因此不会触发"同一闭包重入共用帧"的问题；递归只发生在 fixup_quotes 自己身上
+;; （直接自递归会按 ISSUES #8 新建闭包，帧是独立的）。
+(define fixup_quotes
+  (lambda (blocks)
+    (define n (length blocks))
+    (define i 0)
+    (define b #f)
+    (while (< i n)
+      { (set! b (get_item blocks i))
+        (if (== (get_item b 0) 'quote-raw)
+            (set_item! blocks i (mk2 'quote (fixup_quotes (parse_lines_once (get_item b 1)))))
+            #f)
+        (set! i (+ i 1)) })
+    blocks))
+
+;; 对外：行列表 → 块列表（解析 + 引用展开）
+(define parse_lines
+  (lambda (lines)
+    (fixup_quotes (parse_lines_once lines))))
 
 ;; 整段文本 → 块列表
 (define parse
