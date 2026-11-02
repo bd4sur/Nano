@@ -108,6 +108,9 @@
         { (set! cr 58) (set! cg 70) (set! cb 92) (set! style_weight 1) } #f)
     (if (== st MDL.ST_QUOTE_BAR)
         { (set! cr 86) (set! cg 98) (set! cb 120) (set! style_weight 1) } #f)
+    ;; 表格的上下框线 / 表头下框线（只在表格宽度内画）
+    (if (== st MDL.ST_HR)
+        { (set! cr 78) (set! cg 98) (set! cb 132) (set! style_weight 1) } #f)
     ;; 二级标题左侧装饰竖线的颜色：#66ccff
     (if (== st MDL.ST_H2BAR)
         { (set! cr 102) (set! cg 204) (set! cb 255) (set! style_weight 1) } #f)
@@ -440,6 +443,9 @@
         #f)
     (if (== st MDL.ST_IMAGE_MISSING)
         (draw_image_missing x y w h txt)
+        #f)
+    (if (== st MDL.ST_HR)
+        (Gfx.fill_rect x y w 1 cr cg cb)
         #f)
     (if (== st MDL.ST_QUOTE_BAR)
         (Gfx.fill_rect x y w h cr cg cb)

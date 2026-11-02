@@ -24,7 +24,7 @@
 ;;   0 正文        1 加粗        2 行内代码    3 链接
 ;;   4 标题1       5 标题2       6 标题3       7 代码块正文   8 列表项目符号
 ;;   9 表格竖线    10 引用块竖线   11 二级标题装饰竖线
-;;   12 块级图片   13 图片占位框   14 行内图片占位文本
+;;   12 块级图片   13 图片占位框   14 行内图片占位文本   15 水平线段
 ;;
 ;; 字宽：本机 12px alpha 字模是等宽的——半角步进 7px、全角（>= U+2E80）12px
 ;;   （实测：i/M/W/a 均为 7，中文/全角标点为 12；见 infer/glyph_12.h 头注释）。
@@ -58,6 +58,8 @@
 (define ST_IMAGE 12)      ;; 块级图片（段的 4 格存图片路径，0 格存 alt）
 (define ST_IMAGE_MISSING 13) ;; 图片取不到时的占位框（方案 D 兜底）
 (define ST_IMAGE_TEXT 14) ;; 行内图片的降级占位文本「[图片: alt]」
+(define ST_HR 15)         ;; 水平线段（宽度由段宽决定；表格上/下框线与表头下框线用它，
+                          ;; 这样框线只画到表格实际宽度，而不是整幅正文宽）
 
 (define BG_NONE 0)
 (define BG_CODE 1)
@@ -836,6 +838,16 @@
         (set! k (+ k 1)) })
     #t))
 
+;; 表格实际宽度 = 各列宽之和 + 列间距
+(define table_span
+  (lambda (widths ncol)
+    (+ (sum_list widths) (* TABLE_GAP (- ncol 1)))))
+
+;; 画一条"只到表格宽度"的横线（1px 高的一行，里面只有一个 ST_HR 段）
+(define emit_span_hr
+  (lambda (w)
+    (emit_line 1 BG_NONE (mk1 (mk5 "" ST_HR 0 w "")))))
+
 (define lay_table
   (lambda (b width)
     (define aligns (get_item b 1))
@@ -843,14 +855,18 @@
     (define widths (table_widths b ncol width))
     (define xs (table_xs widths ncol))
     (define rows (get_item b 3))
+    (define span (table_span widths ncol))
     (define i 0)
     (emit_gap 7)
+    (emit_span_hr span)                       ;; ── 上框线
+    (emit_gap 2)
     (emit_table_row (get_item b 2) widths xs aligns ncol BG_TABLE ST_BOLD)
-    (emit_line 1 BG_RULE (new_list))
+    (emit_span_hr span)                       ;; ── 表头下框线
     (set! i 0)
     (while (< i (length rows))
       { (emit_table_row (get_item rows i) widths xs aligns ncol BG_NONE ST_BODY)
         (set! i (+ i 1)) })
+    (emit_span_hr span)                       ;; ── 下框线
     (emit_gap 9)))
 
 ;; ---- 图片（块级）---------------------------------------------------------
