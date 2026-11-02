@@ -313,6 +313,15 @@ $(BIN_DIR)/nano_wss: main_wss.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c ha
 
 
 # 仅适用于OpenWrt
+# 把内置示例文档导出成资源目录里的 doc/Markdown 示例.md
+#（真源是 app/lib/md_demo.scm；阅读器首次运行时也会自己落盘，这里只是提前摊出来）
+# 资源根（业务资源目录，与 platform.h 的 PLATFORM_ROOT_DIR 一致；可 make LINGLONG=... 覆盖）
+LINGLONG ?= /home/bd4sur/linglong
+
+md-demo:
+	python3 tools/gen_md_demo.py "$(LINGLONG)"
+	@echo "示例文档：$(LINGLONG)/doc/Markdown 示例.md"
+
 install:
 	chmod +x $(BIN_DIR)/nano_pod
 	cp -pR $(BIN_DIR)/nano_pod /usr/bin/

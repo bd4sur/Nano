@@ -59,6 +59,9 @@ cp -f app/lib/*.scm "$LINGLONG/app/lib/" 2>/dev/null || true
 # 大块数据（不入 .scm 源码：灵机按源码字符数预分配 token 数组，见 app/hwr.scm 注释）
 mkdir -p "$LINGLONG/app/lib/hwr"
 cp -f app/lib/hwr/* "$LINGLONG/app/lib/hwr/" 2>/dev/null || true
+# 把内置示例文档导出成真正的 .md（真源是 app/lib/md_demo.scm；阅读器首次运行也会落盘，
+# 但构建期先摊出来，用户才能直接在资源目录里看到/编辑它）
+python3 tools/gen_md_demo.py "$LINGLONG" || true
 python3 - "$LINGLONG" "$OUT_DIR/manifest.json" <<'EOF'
 import json, os, sys
 root, out = sys.argv[1], sys.argv[2]
