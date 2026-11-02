@@ -23,6 +23,7 @@
 ;; 样式表（绘制端按样式查颜色/字重；这里只给编号，颜色在 app 里）
 ;;   0 正文        1 加粗        2 行内代码    3 链接
 ;;   4 标题1       5 标题2       6 标题3       7 代码块正文   8 列表项目符号
+;;   9 表格竖线
 ;;
 ;; 字宽：本机 12px alpha 字模是等宽的——半角步进 7px、全角（>= U+2E80）12px
 ;;   （实测：i/M/W/a 均为 7，中文/全角标点为 12；见 infer/glyph_12.h 头注释）。
@@ -50,6 +51,7 @@
 (define ST_H3 6)
 (define ST_CODEBLOCK 7)
 (define ST_BULLET 8)
+(define ST_TABLE_SEP 9)   ;; 表格列间竖线（绘制端画 1px 竖条，文本为空）
 
 (define BG_NONE 0)
 (define BG_CODE 1)
@@ -257,12 +259,15 @@
         #f)))
 
 ;; 贪心折行：按原子顺序填行，放不下就换行（行首空格丢弃；续行缩进 cont_ind）
-(define pack_atoms
-  (lambda (width first_ind cont_ind bg)
+;; 返回「段列表的列表」——每个元素是一行（一行里的段已按 x 排好），**不落地成显示行**。
+;; 这样表格单元格可以借用同一套折行逻辑，再按列坐标平移；普通块用 emit_wrapped 落地。
+(define pack_segs
+  (lambda (width first_ind cont_ind)
     (define na (length atoms))
     (define k 0)
     (define x first_ind)
     (define segs (new_list))
+    (define out (new_list))
     (define at #f)
     (define txt "")
     (define st 0)
@@ -282,14 +287,26 @@
             (if (> (+ x aw) width)
                 (if (atom_hangs txt)
                     (set! x (place_atom segs txt st x aw url))   ;; 避头点：悬挂不换行
-                    { (emit_line LINE_H bg segs)
+                    { (push out segs)
                       (set! segs (new_list))
                       (set! x cont_ind)
                       (if is_sp #f
                           (set! x (place_atom segs txt st x aw url))) })
                 (set! x (place_atom segs txt st x aw url))))
         (set! k (+ k 1)) })
-    (if (> (length segs) 0) (emit_line LINE_H bg segs) #f)))
+    (if (> (length segs) 0) (push out segs) #f)
+    out))
+
+;; 折行的显示行版本：把 pack_segs 的每一行按背景落地
+(define pack_atoms
+  (lambda (width first_ind cont_ind bg)
+    (define blocks (pack_segs width first_ind cont_ind))
+    (define n (length blocks))
+    (define i 0)
+    (while (< i n)
+      { (emit_line LINE_H bg (get_item blocks i))
+        (set! i (+ i 1)) })
+    #t))
 
 ;; 行内节点 → 显示行（折行 + 缩进 + 背景）
 (define emit_wrapped
@@ -416,72 +433,301 @@
     (emit_line 1 BG_RULE (new_list))
     (emit_gap 9)))
 
-;; ---- 表格（解析端尚未接入；本函数已可用，见 md_parse.scm 的「表格接入指南」）--
-;; 输入 (table 表头行列表 数据行列表)，行 = 单元格字符串列表。
-;; 排版方式：等宽分栏（列宽 = 正文宽 / 列数），单元格超宽用 … 截断，表头后画一条横线。
-;; 将来若要「按内容自适应列宽」，只需在这里先量一遍各列最大宽再按比例分配——
-;; 绘制端无需任何改动（段自带绝对 x）。
+;; ---- 表格 ---------------------------------------------------------------
+;;
+;; 输入 (table aligns header cells)：
+;;   aligns —— 每列对齐码（0 左 / 1 中 / 2 右，来自分隔行的冒号）
+;;   header —— 表头**一行**的单元格列表
+;;   cells  —— 数据行列表，每行是单元格列表
+;;   单元格 —— 行内节点列表（所以单元格里可以再写加粗/行内代码/链接）
+;;
+;; 排版策略（"先量后分"）：
+;;   ① 每列取所有单元格的**自然宽**（该格内容一行排开需要多少像素），夹在
+;;      [TABLE_MINW, TABLE_MAXW] 里——太窄会挤成一条竖排，太宽会独占整行；
+;;   ② 自然宽总和放得下就用自然宽（表格只占需要的宽度，不硬拉到通栏）；
+;;      放不下就按比例压缩到正文宽，每列不小于下限，再对余数做微调；
+;;   ③ 单元格内容用与正文**同一套折行**（pack_segs）排成若干子行，
+;;      行高 = 该行各列子行数的最大值（长单元格自然把行撑高）；
+;;   ④ 每行按列坐标 + 对齐平移段，列间画 1px 竖线（TABLE_GRID），
+;;      表头下画 1px 横线。绘制端只认"段"，不知道这是表格。
+
+(define TABLE_MINW 26)     ;; 单列最小宽（太窄汉字挤成竖排）
+(define TABLE_MAXW 120)    ;; 单列最大宽（避免一列吃掉整行）
+(define TABLE_GAP 10)      ;; 列间空隙（竖线画在空隙中央）
+(define TABLE_PAD 2)       ;; 单元格左右内缩（文字不贴着竖线）
+(define TABLE_GRID 1)      ;; 1 = 画列间竖线；0 = 只靠对齐 + 表头横线
+
+;; 行内节点列表的"一行排开"宽度（忽略换行，只加文本宽）
+(define inl_width
+  (lambda (inls)
+    (define n (length inls))
+    (define i 0)
+    (define w 0)
+    (define nd #f)
+    (define tag 'text)
+    (while (< i n)
+      { (set! nd (get_item inls i))
+        (set! tag (get_item nd 0))
+        (if (== tag 'text)
+            (set! w (+ w (text_w (get_item nd 1))))
+            (if (== tag 'code)
+                (set! w (+ w (text_w (get_item nd 1))))
+                (if (== tag 'bold)
+                    (set! w (+ w (inl_width (get_item nd 1))))
+                    (if (== tag 'link)
+                        (set! w (+ w (inl_width (get_item nd 1))))
+                        #f))))
+        (set! i (+ i 1)) })
+    w))
+
+;; 表格列数 = 表头与所有数据行里最大的单元格个数
+(define table_cols
+  (lambda (b)
+    (define header (get_item b 2))
+    (define rows (get_item b 3))
+    (define n (length header))
+    (define i 0)
+    (define w 0)
+    (while (< i (length rows))
+      { (set! w (length (get_item rows i)))
+        (if (> w n) (set! n w) #f)
+        (set! i (+ i 1)) })
+    (if (== n 0) 1 n)))
+
+;; 取某行的第 i 格（越界给空行内列表）
+(define cell_at
+  (lambda (cells i)
+    (if (< i (length cells)) (get_item cells i) (cdr '(0)))))
+
+;; 取第 i 列的对齐码（越界按左对齐）
+(define align_at
+  (lambda (aligns i)
+    (if (< i (length aligns)) (get_item aligns i) 0)))
+
+;; 刷新第 i 列的最大单元格自然宽到 acc（用列表做累加器避免在循环里 define）
+(define acc_row_widths
+  (lambda (cells acc ncol)
+    (define i 0)
+    (define w 0)
+    (while (< i ncol)
+      { (set! w (inl_width (cell_at cells i)))
+        (if (> w (get_item acc i)) (set_item! acc i w) #f)
+        (set! i (+ i 1)) })
+    #t))
+
+;; 各列自然宽（夹到 [MINW, MAXW]）
+(define table_natural
+  (lambda (b ncol)
+    (define acc (new_list))
+    (define rows (get_item b 3))
+    (define i 0)
+    (define w 0)
+    (define hw 0)
+    (while (< i ncol)
+      { (push acc 0) (set! i (+ i 1)) })
+    (acc_row_widths (get_item b 2) acc ncol)
+    (set! i 0)
+    (while (< i (length rows))
+      { (acc_row_widths (get_item rows i) acc ncol)
+        (set! i (+ i 1)) })
+    (set! i 0)
+    (while (< i ncol)
+      { (set! w (+ (get_item acc i) 2))          ;; 左右各留 1px 余量
+        (if (< w TABLE_MINW) (set! w TABLE_MINW) #f)
+        (if (> w TABLE_MAXW) (set! w TABLE_MAXW) #f)
+        (set_item! acc i w)
+        (set! i (+ i 1)) })
+    acc))
+
+(define sum_list
+  (lambda (lst)
+    (define n (length lst))
+    (define i 0)
+    (define s 0)
+    (while (< i n)
+      { (set! s (+ s (get_item lst i)))
+        (set! i (+ i 1)) })
+    s))
+
+;; 超出可用宽时从最宽列往下削（每轮削 1px，削到下限为止）
+(define shrink_to_fit
+  (lambda (widths avail ncol)
+    (define guard 0)
+    (define widest 0)
+    (define wi 0)
+    (define i 0)
+    (define w 0)
+    (while (and (> (sum_list widths) avail) (< guard 4000))
+      { (set! widest 0) (set! wi -1) (set! i 0)
+        (while (< i ncol)
+          { (set! w (get_item widths i))
+            (if (> w widest)
+                { (set! widest w) (set! wi i) }
+                #f)
+            (set! i (+ i 1)) })
+        (if (>= wi 0)
+            (if (> widest TABLE_MINW)
+                (set_item! widths wi (- widest 1))
+                (set! guard 4000))                     ;; 全部到下限：放弃（极端窄屏多列）
+            (set! guard 4000))
+        (set! guard (+ guard 1)) })
+    widths))
+
+;; 列宽表
+(define table_widths
+  (lambda (b ncol width)
+    (define avail (- width (* TABLE_GAP (- ncol 1))))
+    (define nat (table_natural b ncol))
+    (define total (sum_list nat))
+    (define out (new_list))
+    (define i 0)
+    (define w 0)
+    (define minw TABLE_MINW)
+    (if (<= total avail)
+        nat                                        ;; 放得下：用自然宽
+        { (if (< (Math.floor (/ avail ncol)) minw)
+              (set! minw (Math.floor (/ avail ncol)))
+              #f)
+          (set! i 0)
+          (while (< i ncol)
+            { (set! w (Math.floor (/ (* (get_item nat i) avail) total)))
+              (if (< w minw) (set! w minw) #f)
+              (push out w)
+              (set! i (+ i 1)) })
+          (shrink_to_fit out avail ncol) })))
+
+;; 各列左边缘 x
+(define table_xs
+  (lambda (widths ncol)
+    (define out (new_list))
+    (define i 0)
+    (define x 0)
+    (while (< i ncol)
+      { (push out x)
+        (set! x (+ x (+ (get_item widths i) TABLE_GAP)))
+        (set! i (+ i 1)) })
+    out))
+
+;; 单元格内容 → 若干子行（每子行是一组段，x 从 0 起）
+(define cell_blocks
+  (lambda (inls w base)
+    (set! atoms (new_list))
+    (set! atom_url "")
+    (set! atom_avail w)
+    (atomize inls base)
+    (pack_segs w 0 0)))
+
+;; 一行段的右边缘（= 内容宽）
+(define blk_width
+  (lambda (segs)
+    (define n (length segs))
+    (define i 0)
+    (define e 0)
+    (define r 0)
+    (while (< i n)
+      { (set! e (+ (get_item (get_item segs i) 2) (get_item (get_item segs i) 3)))
+        (if (> e r) (set! r e) #f)
+        (set! i (+ i 1)) })
+    r))
+
+;; 按对齐方式算平移量（slack = 列宽 - 内容宽）
+(define align_shift
+  (lambda (align slack)
+    (if (<= slack 0) 0
+        (if (== align 2) slack
+            (if (== align 1) (Math.floor (/ slack 2)) 0)))))
+
+;; 把一组段的 x 整体平移 dx
+(define relocate_segs
+  (lambda (segs dx)
+    (define n (length segs))
+    (define i 0)
+    (define sg #f)
+    (while (< i n)
+      { (set! sg (get_item segs i))
+        (set_item! sg 2 (+ (get_item sg 2) dx))
+        (set! i (+ i 1)) })
+    #t))
+
+(define append_segs
+  (lambda (dst src)
+    (define n (length src))
+    (define i 0)
+    (while (< i n)
+      { (push dst (get_item src i))
+        (set! i (+ i 1)) })
+    #t))
+
+;; 列间竖线：段文本为空、宽 1，绘制端按 ST_TABLE_SEP 画 1px 竖条
+(define append_grid
+  (lambda (segs xs ncol)
+    (define i 1)
+    (define x 0)
+    (while (< i ncol)
+      { (set! x (- (get_item xs i) (Math.floor (/ (+ TABLE_GAP 1) 2))))
+        (if (> x 0) (push segs (mk5 "" ST_TABLE_SEP x 1 "")) #f)
+        (set! i (+ i 1)) })
+    #t))
+
+;; 逻辑行 → 若干显示行（各列先各自折行，再按键号拼）
+(define emit_table_row
+  (lambda (cells widths xs aligns ncol bg base)
+    (define blocks (new_list))
+    (define i 0)
+    (define maxl 0)
+    (define k 0)
+    (define segs (new_list))
+    (define bl #f)
+    (define w 0)
+    (define shift 0)
+    (set! i 0)
+    (while (< i ncol)
+      { (push blocks (cell_blocks (cell_at cells i) (get_item widths i) base))
+        (set! i (+ i 1)) })
+    (set! i 0)
+    (while (< i ncol)
+      { (if (> (length (get_item blocks i)) maxl)
+            (set! maxl (length (get_item blocks i)))
+            #f)
+        (set! i (+ i 1)) })
+    (set! k 0)
+    (while (< k maxl)
+      { (set! segs (new_list))
+        (set! i 0)
+        (while (< i ncol)
+          { (set! bl (get_item blocks i))
+            (if (< k (length bl))
+                { (set! w (blk_width (get_item bl k)))
+                  (set! shift (align_shift (align_at aligns i)
+                                           (- (- (get_item widths i)
+                                                 (* 2 TABLE_PAD))
+                                              w)))
+                  (relocate_segs (get_item bl k)
+                                 (+ (+ (get_item xs i) TABLE_PAD) shift))
+                  (append_segs segs (get_item bl k)) }
+                #f)
+            (set! i (+ i 1)) })
+        (if (== TABLE_GRID 1) (append_grid segs xs ncol) #f)
+        (emit_line LINE_H bg segs)
+        (set! k (+ k 1)) })
+    #t))
+
 (define lay_table
   (lambda (b width)
-    (define header (get_item b 1))
-    (define rows (get_item b 2))
+    (define aligns (get_item b 1))
     (define ncol (table_cols b))
-    (define colw 0)
+    (define widths (table_widths b ncol width))
+    (define xs (table_xs widths ncol))
+    (define rows (get_item b 3))
     (define i 0)
-    (set! colw (Math.floor (/ width ncol)))
-    (emit_gap 6)
-    (while (< i (length header))
-      { (emit_table_row (get_item header i) colw ST_BOLD)
-        (set! i (+ i 1)) })
+    (emit_gap 7)
+    (emit_table_row (get_item b 2) widths xs aligns ncol BG_TABLE ST_BOLD)
     (emit_line 1 BG_RULE (new_list))
     (set! i 0)
     (while (< i (length rows))
-      { (emit_table_row (get_item rows i) colw ST_BODY)
+      { (emit_table_row (get_item rows i) widths xs aligns ncol BG_NONE ST_BODY)
         (set! i (+ i 1)) })
-    (emit_gap 8)))
-
-;; 表格列数 = 所有行里最大的单元格个数
-(define table_cols
-  (lambda (b)
-    (define n 1)
-    (define i 0)
-    (define r #f)
-    (define w 0)
-    (while (< i 2)
-      { (set! r (get_item b (+ i 1)))
-        (set! w (rows_max_cols r))
-        (if (> w n) (set! n w) #f)
-        (set! i (+ i 1)) })
-    n))
-
-(define rows_max_cols
-  (lambda (rows)
-    (define n (length rows))
-    (define i 0)
-    (define m 0)
-    (while (< i n)
-      { (if (> (length (get_item rows i)) m) (set! m (length (get_item rows i))) #f)
-        (set! i (+ i 1)) })
-    m))
-
-(define emit_table_row
-  (lambda (cells colw style)
-    (define n (length cells))
-    (define i 0)
-    (define segs (new_list))
-    (define t "")
-    (define x 0)
-    (define w 0)
-    (while (< i n)
-      { (set! t (get_item cells i))
-        (set! x (* i (+ colw 2)))
-        (set! w (text_w t))
-        (if (> w (- colw 4))
-            { (set! t (clip_text t (- colw 4))) (set! w (text_w t)) }
-            #f)
-        (push segs (mk5 t style x w ""))
-        (set! i (+ i 1)) })
-    (emit_line LINE_H BG_TABLE segs)))
+    (emit_gap 9)))
 
 ;; ---- 注册块排版（顺序无关，按种类查表）----------------------------------
 

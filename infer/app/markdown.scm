@@ -8,7 +8,8 @@
 ;;   本文件                 绘制 + 交互（滚动/翻页/点链接/退出）
 ;;
 ;; 支持的子集：# 1~3 级标题、**加粗**、`行内代码`、无嵌套无序列表、[链接](url)、
-;;   围栏代码块、分隔线、段落（含 CJK 软换行）。表格/引用/有序列表留有扩展位。
+;;   围栏代码块、分隔线、**表格**（GFM 语法：列对齐、单元格内行内样式、自动列宽、
+;;   单元格内折行）、段落（含 CJK 软换行）。引用块/有序列表/嵌套列表留有扩展位。
 ;;
 ;; 文档来源：
 ;;   · 业务资源根下的 doc/*.md（需要自备；桌面/WASM 上即 <资源根>/doc/）；
@@ -86,6 +87,8 @@
         { (set! cr 172) (set! cg 214) (set! cb 180) (set! style_weight 1) } #f)
     (if (== st MDL.ST_BULLET)
         { (set! cr 130) (set! cg 170) (set! cb 225) (set! style_weight 1) } #f)
+    (if (== st MDL.ST_TABLE_SEP)
+        { (set! cr 58) (set! cg 70) (set! cb 92) (set! style_weight 1) } #f)
     #t))
 
 ;; ---- 状态 ----------------------------------------------------------------
@@ -216,11 +219,12 @@
 
 ;; 段 = (文本 样式 x 宽 url)；行内代码画药丸底、链接画下划线、项目符号画方块。
 ;; 注意：行内代码底 (46,42,34)、链接下划线 (96,160,235)、项目符号 (130,170,225)、
-;; 代码块底 (26,32,29)、分隔线 (78,98,132) 这几个色值是与端到端测试的像素判据共享的
+;; 代码块底 (26,32,29)、分隔线 (78,98,132)、表格竖线 (58,70,92) 这几个色值是与
+;; 端到端测试的像素判据共享的
 ;; 契约（tools/e2e/markdown/test_app.py、tools/e2e/browser/regress_markdown.js），
 ;; 改色请同步改那两处。
 (define draw_seg
-  (lambda (sg y)
+  (lambda (sg y h)
     (define txt (get_item sg 0))
     (define st (get_item sg 1))
     (define x (+ PAD_X (get_item sg 2)))
@@ -229,6 +233,9 @@
     (set_style_color st)
     (if (== st MDL.ST_BULLET)
         (Gfx.fill_rect (+ x 4) (+ y 6) 3 3 cr cg cb)
+        #f)
+    (if (== st MDL.ST_TABLE_SEP)
+        (Gfx.fill_rect x y 1 h cr cg cb)
         #f)
     (if (and (> (String.length txt) 0) (== st MDL.ST_CODE))
         (Gfx.fill_rect (- x 1) (+ y 1) (+ w 2) 13 46 42 34)
@@ -262,7 +269,7 @@
         (Gfx.fill_rect PAD_X y CW h 78 98 132)
         #f)
     (while (< i (length segs))
-      { (draw_seg (get_item segs i) y)
+      { (draw_seg (get_item segs i) y h)
         (set! i (+ i 1)) })
     #t))
 

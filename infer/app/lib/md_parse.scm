@@ -11,7 +11,9 @@
 ;;        (list items)                无序列表，items 为若干 inlines 列表（无嵌套）
 ;;        (code 语言 lines)           围栏代码块，lines 为原始行字符串（不做行内解析）
 ;;        (rule)                      分隔线（--- / *** / ___）
-;;        (table header rows)         表格（**布局端已就绪，解析端待接入**，见下）
+;;        (table aligns header cells) 表格：aligns = 每列对齐方式，header = 表头单元格，
+;;                                    cells = 数据行（行 = 单元格列表），
+;;                                    每个单元格是**行内节点列表**（单元格里可再写加粗/代码/链接）
 ;;
 ;;     行内节点（inlines 的元素）：
 ;;        (text "字符串")             纯文本
@@ -22,14 +24,13 @@
 ;; 设计要点（为「完整 Markdown」预留的三个扩展点）
 ;; ---------------------------------------------------------------------------
 ;; ① 块级规则表 `block_rules`：每行 (种类 谓词 处理函数)。
-;;    · 谓词      (line) → #t/#f          —— 这一行是否开始该种块
+;;    · 谓词      (lines 下标) → #t/#f     —— 从这一行**开始**是否属于该种块
 ;;    · 处理函数  (lines 起始下标) → (块 下一行下标)
 ;;    · 未命中任何规则的行走 "段落" 兜底（段落自己按谓词判断在哪里收尾）。
 ;;    新增块类型 = (rule_add 种类 谓词 处理函数) 一行，**不必改解析主循环**；
 ;;    顺序即优先级（谓词可以重叠，先注册者先匹配）。
-;;    例：表格只需新增 table_pred（本行含 '|' 且下一行形如 |---|---|）+ h_table，
-;;    然后注册在 hr 之前即可（m_table_demo / h_table 已给出可工作的实现，
-;;    只因默认关闭而未注册，见文件末尾「表格接入指南」）。
+;;    谓词带行号而不是只带单行内容：表格这类块必须**前瞻**才能判定（要看下一行是不是
+;;    |---|---| 分隔行），只给单行就只能靠"先猜再回退"，会把普通段落里的一个 '|' 切断。
 ;;
 ;; ② 行内规则表 `inline_rules`：每行 (触发字符 匹配函数)。
 ;;    · 匹配函数  (s 下标) → #f 或 (节点 下一下标)   —— 不匹配时必须返回 #f
@@ -64,6 +65,7 @@
 (define CP_STAR 42)
 (define CP_PLUS 43)
 (define CP_DASH 45)
+(define CP_COLON 58)
 (define CP_LBRK 91)
 (define CP_BSLASH 92)
 (define CP_RBRK 93)
@@ -439,7 +441,7 @@
     (define k 'para)
     (define stop 0)
     (while (and (< i n) (== stop 0))
-      { (set! k (classify (get_item lines i)))
+      { (set! k (classify lines i))
         (if (== k 'para)
             { (set! txt (soft_join txt (trim (get_item lines i))))
               (set! i (+ i 1)) }
@@ -492,7 +494,7 @@
     (define ca -1)
     (while (and (< i n) (== stop 0))
       { (set! line (get_item lines i))
-        (set! k (classify line))
+        (set! k (classify lines i))
         (set! ca (list_content_at line))
         (if (== k 'blank)
             (set! stop 1)
@@ -513,43 +515,175 @@
   (lambda (lines idx)
     (mk2 (mk1 'rule) (+ idx 1))))
 
+;; ---- 表格 --------------------------------------------------------------
+;;
+;; GFM/CommonMark 扩展的表格语法：表头行 + 分隔行（`|---|:--:|`）之后是若干数据行。
+;; 判定要点（全部集中在这里，排版端只管画）：
+;;   · 分隔行**必须**存在且每格只由 - : 空格 组成、且至少有一个 '-'；
+;;   · 表头行与数据行按 '|' 切格（行首/行尾的 '|' 造成的空单元丢弃）；
+;;   · 单元格里的 \| 是字面竖线（反斜杠原样保留，交给行内转义规则处理）；
+;;   · 数据行在遇到空行、或不含 '|' 的行、或围栏代码块时结束；
+;;   · 列数取表头与所有数据行的最大值，缺的格由排版端补空。
+;; 对齐来自分隔行的冒号：---: 右对齐、:---: 居中、:--- 与 --- 左对齐。
+
+;; 本行含有未转义的 '|'（即可能是表格行）
+(define has_pipe
+  (lambda (line)
+    (>= (find_char line 0 CP_PIPE) 0)))
+
+;; 一行按 '|' 切格：保留 \| 的字面竖线（反斜杠不丢，交给行内转义），去首尾空单元
+(define split_cells
+  (lambda (line)
+    (define n (String.length line))
+    (define i 0)
+    (define cp 0)
+    (define esc 0)
+    (define cur "")
+    (define raw (new_list))
+    (define out (new_list))
+    (define a 0)
+    (define b 0)
+    (while (< i n)
+      { (set! cp (String.charCodeAt i line))
+        (if (== esc 1)
+            { (set! cur (String.concat cur (String.charAt line i)))
+              (set! esc 0) }
+            (if (== cp CP_BSLASH)
+                { (set! cur (String.concat cur "\\"))
+                  (set! esc 1) }
+                (if (== cp CP_PIPE)
+                    { (push raw (trim cur))
+                      (set! cur "") }
+                    (set! cur (String.concat cur (String.charAt line i))))))
+        (set! i (+ i 1)) })
+    (push raw (trim cur))
+    ;; 去掉首/尾的空单元（只可能由行首、行尾的 '|' 造成）
+    (set! a 0)
+    (set! b (length raw))
+    (if (> b 0)
+        (if (String.equals (get_item raw 0) "") (set! a 1) #f)
+        #f)
+    (if (> b a)
+        (if (String.equals (get_item raw (- b 1)) "") (set! b (- b 1)) #f)
+        #f)
+    (while (< a b)
+      { (push out (get_item raw a))
+        (set! a (+ a 1)) })
+    out))
+
+;; 单个分隔单元格 → 对齐码（0 左 / 1 中 / 2 右）；不合法返回 -1
+(define delim_cell_align
+  (lambda (c)
+    (define m (String.length c))
+    (define k 0)
+    (define cp 0)
+    (define nd 0)
+    (define left 0)
+    (define right 0)
+    (define ok 1)
+    (if (== m 0) -1
+        { (if (== (String.charCodeAt 0 c) CP_COLON)
+              { (set! left 1) (set! k 1) }
+              (set! k 0))
+          (while (< k m)
+            { (set! cp (String.charCodeAt k c))
+              (if (== cp CP_DASH)
+                  (set! nd (+ nd 1))
+                  (if (== cp CP_COLON)
+                      (if (== k (- m 1)) (set! right 1) (set! ok 0))
+                      (set! ok 0)))
+              (set! k (+ k 1)) })
+          (if (== nd 0) (set! ok 0) #f)
+          (if (== ok 0) -1
+              (if (== left 1)
+                  (if (== right 1) 1 0)
+                  (if (== right 1) 2 0))) })))
+
+;; 分隔行 → 每列对齐码列表；不是分隔行返回 #f
+(define delim_aligns
+  (lambda (line)
+    (define cells (split_cells line))
+    (define n (length cells))
+    (define i 0)
+    (define a 0)
+    (define bad 0)
+    (define out (new_list))
+    (while (< i n)
+      { (set! a (delim_cell_align (get_item cells i)))
+        (if (< a 0) (set! bad 1) #f)
+        (push out a)
+        (set! i (+ i 1)) })
+    (if (== n 0) #f
+        (if (== bad 1) #f out))))
+
+;; 一组单元格字符串 → 单元格行内节点列表（每格再走一遍行内解析）
+(define cells_inlines
+  (lambda (cells)
+    (define n (length cells))
+    (define i 0)
+    (define out (new_list))
+    (while (< i n)
+      { (push out (parse_inlines (get_item cells i)))
+        (set! i (+ i 1)) })
+    out))
+
+;; 从 idx 起是否是表格：表头行含 '|'，下一行是合法分隔行，**且两者格数一致**
+;; （格数一致这条很关键：否则「一行带竖线的普通文字 + 下面的 --- 」会被误判成单列表格，
+;;   而它在 Markdown 里应当是「段落 + 分隔线」。GFM 同样要求列数匹配。）
+(define table_start
+  (lambda (lines idx)
+    (define n (length lines))
+    (define head (new_list))
+    (define dl (new_list))
+    (if (>= (+ idx 1) n) #f
+        (if (has_pipe (get_item lines idx))
+            { (set! head (split_cells (get_item lines idx)))
+              (set! dl (delim_aligns (get_item lines (+ idx 1))))
+              (if dl
+                  (if (== (length head) (length dl)) #t #f)
+                  #f) }
+            #f))))
+
+(define h_table
+  (lambda (lines idx)
+    (define n (length lines))
+    (define aligns (delim_aligns (get_item lines (+ idx 1))))
+    (define header (cells_inlines (split_cells (get_item lines idx))))
+    (define i (+ idx 2))
+    (define rows (new_list))
+    (define stop 0)
+    (define line "")
+    (while (and (< i n) (== stop 0))
+      { (set! line (get_item lines i))
+        (if (has_pipe line)
+            (if (fence_open line)
+                (set! stop 1)                       ;; 围栏开头：表格结束
+                (if (is_blank line)
+                    (set! stop 1)
+                    { (push rows (cells_inlines (split_cells line)))
+                      (set! i (+ i 1)) }))
+            (set! stop 1)) })
+    (mk2 (mk4 'table aligns header rows) i)))
+
 ;; ---- 注册块级规则（顺序即优先级；段落为兜底，不注册）---------------------
 
-(rule_add 'fence (lambda (line) (if (fence_open line) #t #f)) h_fence)
-(rule_add 'heading (lambda (line) (> (heading_level line) 0)) h_heading)
-(rule_add 'hr (lambda (line) (is_rule line)) h_rule)
-(rule_add 'list (lambda (line) (>= (list_content_at line) 0)) h_list)
+(rule_add 'fence (lambda (lines idx) (if (fence_open (get_item lines idx)) #t #f)) h_fence)
+(rule_add 'heading (lambda (lines idx) (> (heading_level (get_item lines idx)) 0)) h_heading)
+;; 表格排在 hr/list 之前：分隔行的 `---` 不是分隔线，而是表格的一部分
+(rule_add 'table (lambda (lines idx) (table_start lines idx)) h_table)
+(rule_add 'hr (lambda (lines idx) (is_rule (get_item lines idx))) h_rule)
+(rule_add 'list (lambda (lines idx) (>= (list_content_at (get_item lines idx)) 0)) h_list)
 ;; 段落：兜底规则，谓词即「非空行」——必须**最后**注册（先注册会抢走所有行）
-(rule_add 'para (lambda (line) (not (is_blank line))) h_para)
-
-;; ============================================================================
-;; 三、表格接入指南（解析端待接入；排版端 md_layout.scm 的 lay_table 已就绪）
-;; ============================================================================
-;;
-;; 待补的两块（合计约 30 行，不改动以下任何现有代码）：
-;;
-;; 1) 行判定 + 处理函数：
-;;      (define table_pair?)   ;; 本行含 '|'，且下一行只由 | - : 空白 组成
-;;      (define h_table        ;; 收集连续的含 '|' 行 → (table 表头各行 数据行)
-;;        (lambda (lines idx) ...))
-;; 2) 注册（必须排在 'hr / 'list 之前，避免 --- 分隔线被误判成表格分隔行）：
-;;      (rule_add 'table (lambda (line) (table_pair? lines? line)) h_table)
-;;
-;; 由于谓词需要看下一行，(rule_add ...) 的谓词签名约定为「只看当前行」——
-;; 表格若需前瞻，请把前瞻放在 h_table 内部（谓词只判「本行含 '|' 且不是围栏行」，
-;; 由 h_table 自己确认下一行是分隔行，确认失败则返回一个段落块并只消费 1 行）。
-;; 这是唯一需要遵守的约定：**处理函数必须总能推进下标**，否则解析主循环会卡住。
-;;
-;; 块的形状已定：(table 表头行列表 数据行列表)，每个行是「单元格字符串列表」。
-;; md_layout.scm 的 lay_table 吃到这个形状即可输出等宽分栏的显示行（含表头分隔线）。
+(rule_add 'para (lambda (lines idx) (not (is_blank (get_item lines idx)))) h_para)
 
 ;; ============================================================================
 ;; 四、解析主循环与对外 API
 ;; ============================================================================
 
 ;; 行分类：第一个谓词命中的规则种类；都不命中 → 'blank / 'para
+;; 谓词需要行号（见文件头扩展点①：表格要前瞻一行）
 (define classify
-  (lambda (line)
+  (lambda (lines idx)
     (define n (length block_rules))
     (define i 0)
     (define r 'none)
@@ -558,10 +692,10 @@
     (while (and (< i n) (== r 'none))
       { (set! row (get_item block_rules i))
         (set! pred (get_item row 1))
-        (if (pred line) (set! r (get_item row 0)) #f)
+        (if (pred lines idx) (set! r (get_item row 0)) #f)
         (set! i (+ i 1)) })
     (if (== r 'none)
-        (if (is_blank line) 'blank 'para)
+        (if (is_blank (get_item lines idx)) 'blank 'para)
         r)))
 
 ;; 行列表 → 块列表（解析主循环：查表分发，不认识的行只占 1 行并跳过，绝不卡住）
@@ -575,7 +709,7 @@
     (define r #f)
     (define nx 0)
     (while (< i n)
-      { (set! kind (classify (get_item lines i)))
+      { (set! kind (classify lines i))
         (if (== kind 'blank)
             (set! i (+ i 1))
             { (set! h (handler_of kind))
