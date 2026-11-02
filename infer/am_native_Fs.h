@@ -18,8 +18,9 @@ extern "C" {
 //    给 Scheme，让 App 能留下数据（浏览器目标还会把写入同步进 IndexedDB，
 //    见下方「持久化」一节）。
 //
-//  能力刻意收窄（与 hal_net 同一取舍）：只做**文本文件**的整读整写 + 目录枚举；
-//  不做随机访问、不做二进制、不做删除/改名（hal_fs 目前也没有）。
+//  能力刻意收窄（与 hal_net 同一取舍）：只做**文本文件**的整读整写 + 目录枚举 +
+//  删除 + 改名/移动；不做随机访问、不做二进制、不做递归删除（递归清空目录树由
+//  App 侧组合这些原语完成，见 app/filemgr.scm）。
 //
 //  路径规则（易错，务必按此书写）：
 //    · 以 '/' 开头的路径 = **宿主绝对路径**，原样使用；
@@ -42,6 +43,11 @@ extern "C" {
 //                                                AM_NATIVE_FS_READ_MAX → #null
 //    (Fs.write path text)  : Boolean          —— 整文件写入（覆盖；自动创建父目录）
 //    (Fs.append path text) : Boolean          —— 追加写入（文件不存在等价于写入）
+//    (Fs.remove path)      : Boolean          —— 删除**文件**或**空目录**（非空目录返回 #f；
+//                                                由 App 先递归清空，见 app/filemgr.scm）；
+//                                                拒绍删除业务资源根本身
+//    (Fs.rename old new)   : Boolean          —— 重命名 / 移动（文件或目录，同一资源根内）；
+//                                                目标已存在时**拒绍**（不静默覆盖）
 //
 //  读入上限：AM_NATIVE_FS_READ_MAX（128 KB）。超限返回 #null 而不是截断——
 //  截断会让 App 在不知情的情况下损坏数据；App 可先用 (Fs.size path) 判断。
@@ -50,6 +56,10 @@ extern "C" {
 //  因此写入成功后本库会调用一个**可选弱钩子** am_native_fs_on_write()；WASM 目标
 //  由 hal_fs_persist_wasm.c 提供实现，把文件同步进浏览器 IndexedDB（nano-store），
 //  下次启动由 loader.js 以「本机来源」挂载（与用户上传的资源同一通路）。
+//  删除/改名同样有**可选弱钩子** am_native_fs_on_remove()：删除成功后删对应键；
+//  改名（含目录树改名）成功后新路径重新 put、旧路径的键删掉——否则刷新页面后
+//  「已删除的文件」会从 IndexedDB 重新活过来。（目录树改名逐文件搬运，因此大树
+//  改名在浏览器里会慢一些，属预期。）
 //  未提供钩子的平台（桌面/掌机）不产生任何额外动作。
 //
 //  与宿主 GUI 的关系：hal_fs 的随机访问 API 是**全局单句柄**（ebook/dict 用），
@@ -89,6 +99,12 @@ int32_t am_native_Fs_write(am_runtime_t *rt, am_process_t *proc);
 
 // (Fs.append path:String text:String) : Boolean
 int32_t am_native_Fs_append(am_runtime_t *rt, am_process_t *proc);
+
+// (Fs.remove path:String) : Boolean —— 删除文件或空目录
+int32_t am_native_Fs_remove(am_runtime_t *rt, am_process_t *proc);
+
+// (Fs.rename old:String new:String) : Boolean —— 重命名/移动（目标已存在则 #f）
+int32_t am_native_Fs_rename(am_runtime_t *rt, am_process_t *proc);
 
 #ifdef __cplusplus
 }

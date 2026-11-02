@@ -88,6 +88,17 @@ int32_t platform_mkdir(const char *path) {
     return (mkdir(path, 0755) == 0) ? 0 : -1;
 }
 
+// POSIX remove() 对文件与**空**目录都适用；非空目录会失败（由上层先递归清空）
+int32_t platform_remove_path(const char *path) {
+    if (!path || path[0] == '\0') return -1;
+    return (remove(path) == 0) ? 0 : -1;
+}
+
+int32_t platform_rename_path(const char *old_path, const char *new_path) {
+    if (!old_path || !new_path) return -1;
+    return (rename(old_path, new_path) == 0) ? 0 : -1;
+}
+
 // ---------------- 随机访问文件读取（全局单句柄，与 ESP32 SD File 语义一致） ----------------
 
 static FILE *s_platform_file = NULL;

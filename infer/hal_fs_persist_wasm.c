@@ -9,6 +9,8 @@
 // am_native_fs_on_write()；本文件就是 WASM 目标的实现：把「业务资源根相对路径」
 // 与文件内容作为 Blob 写进 nano-store。下次启动时 loader.js 把它当作「本机来源」
 // 的资源挂载回 MEMFS，于是 App 的存档/便签在浏览器里真正持久。
+// 删除/改名同理，经可选弱钩子 am_native_fs_on_remove() 把旧键从 nano-store 删掉
+// （目录树改名 = 逐文件重新 put + 删旧键，由 am_native_Fs.c 完成）。
 //
 // 约束与降级：
 //   · 钩子是弱符号——其他平台不链接本文件即可，零改动、零开销；
@@ -48,4 +50,34 @@ EM_JS(void, nano_fs_store_put_js, (const char *path_ptr, const uint8_t *data_ptr
 void am_native_fs_on_write(const char *path, const uint8_t *data, size_t size) {
     if (!path || (!data && size > 0)) return;
     nano_fs_store_put_js(path, data, (int32_t)size, PLATFORM_ROOT_DIR);
+}
+
+// ---------------------------------------------------------------------------
+// 删除/改名通道（2026-11：文件管理器）：MEMFS 里的删除不会影响 IndexedDB，
+// 不同步的话刷新页面后「已删的文件」会从 store 里重新活过来（loader 把 store
+// 当「本机来源」挂载），改名后新旧两份会同时存在。因此 am_native_Fs.c 在删除/改名
+// 成功后会调本钩子，把对应键从 nano-store 删掉；目录树改名由 C 侧逐文件重新 put
+// （新路径）+ 删键（旧路径）完成。
+// ---------------------------------------------------------------------------
+EM_JS(void, nano_fs_store_delete_js, (const char *path_ptr, const char *root_ptr), {
+    if (typeof nanoStoreDelete !== "function") return;
+    try {
+        var abs = UTF8ToString(path_ptr);
+        var root = UTF8ToString(root_ptr);
+        var key = abs;
+        if (root.length > 0 && abs.indexOf(root + "/") === 0) {
+            key = abs.slice(root.length + 1);
+        }
+        else if (abs.charAt(0) === "/") {
+            return; // 资源根之外：本就不在 store 里
+        }
+        var p = nanoStoreDelete(key);
+        if (p && typeof p.catch === "function") p.catch(function () {});
+    }
+    catch (e) { /* 存储不可用：忽略 */ }
+});
+
+void am_native_fs_on_remove(const char *path) {
+    if (!path) return;
+    nano_fs_store_delete_js(path, PLATFORM_ROOT_DIR);
 }

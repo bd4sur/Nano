@@ -29,6 +29,14 @@ int32_t platform_is_directory(const char *path);
 // 创建目录（已存在且为目录则视为成功）。返回0成功，-1失败
 int32_t platform_mkdir(const char *path);
 
+// 删除文件或**空**目录（非空目录由调用方先递归清空）。返回0成功，-1失败
+// （文件管理器的「删除」与 Scheme 侧 (Fs.remove) 的数据通路）
+int32_t platform_remove_path(const char *path);
+
+// 重命名 / 移动（同一文件系统内的文件或目录）。返回0成功，-1失败
+// 目标是否允许已存在由上层（am_native_Fs.c）先做检查，本层按平台原语行为执行
+int32_t platform_rename_path(const char *old_path, const char *new_path);
+
 // 随机访问文件读取（单句柄：同一时刻仅支持一个打开的文件，供电子书/词典等分块读取使用）
 int32_t  platform_file_open(const char *filepath);    // 0成功，-1失败
 uint32_t platform_file_size(void);                    // 当前打开文件的大小（字节）

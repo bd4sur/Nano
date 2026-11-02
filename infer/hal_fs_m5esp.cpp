@@ -86,6 +86,25 @@ int32_t platform_mkdir(const char *path) {
     return SD.mkdir(path) ? 0 : -1;
 }
 
+// 删除文件或空目录（非空目录由上层 am_native_Fs.c / Scheme 侧先递归清空）
+int32_t platform_remove_path(const char *path) {
+    if (!path || path[0] == '\0') {
+        return -1;
+    }
+    if (platform_is_directory(path)) {
+        return SD.rmdir(path) ? 0 : -1;
+    }
+    return SD.remove(path) ? 0 : -1;
+}
+
+// 重命名 / 移动（SD 同一挂载点内）
+int32_t platform_rename_path(const char *old_path, const char *new_path) {
+    if (!old_path || !new_path) {
+        return -1;
+    }
+    return SD.rename(old_path, new_path) ? 0 : -1;
+}
+
 // 随机访问文件读取（单句柄）
 static File s_platform_file;
 

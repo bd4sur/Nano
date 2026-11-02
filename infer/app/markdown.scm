@@ -20,6 +20,8 @@
 ;;   否则直接打开。
 ;;
 ;; 交互：
+;;   · **底栏右侧「打开」按钮**（触屏）= 弹出可复用的文件选择器（app/lib/filepicker.scm），
+;;     在**整个资源根**里挑任意 .md/.markdown 打开——不再受"doc/ 与根目录"扫描范围的限制；
 ;;   · 触屏拖动 = 滚动（手指移动多少滚多少）；轻点链接 = 弹窗显示目标地址；
 ;;   · 实体键盘 ↑↓ 滚动一行，←/→ 翻一页；
 ;;   · 右上角「退出」按钮 / 硬 A(ESC) —— 由 app/lib/exit.scm 统一接管。
@@ -39,6 +41,8 @@
 (native Ui)
 (native App)
 (import EX "app/lib/exit.scm")
+(import FP "app/lib/filepicker.scm")
+(import FSX "app/lib/fsx.scm")
 (import MD "app/lib/md_parse.scm")
 (import MDL "app/lib/md_layout.scm")
 (import MDE "app/lib/md_demo.scm")
@@ -216,41 +220,100 @@
 
 ;; ---- 打开文档：读文本 → 解析 → 排版 --------------------------------------
 
-(define open_doc
-  (lambda (idx)
-    (define d (get_item docs idx))
-    (define path (get_item d 0))
+;; 按**路径**打开（列表选中与文件选择器共用同一条链路）
+(define open_path
+  (lambda (path title)
     (define text "")
     (define bs (new_list))
     (define fsize 0)
-    (set! cur_title (get_item d 1))
-    (if (== (String.length path) 0)
-        (set! bs (MD.parse_lines MDE.lines))        ;; 内置示例
-        { (set! fsize (Fs.size path))
-          (if (null? fsize)
-              (set! bs (notice_blocks "读取失败：文件不存在（或超过 Fs 的 128KB 上限）。"
-                                      "请把文档放到资源目录的 doc/ 下。"))
-              (if (> fsize DOC_MAX)
-                  (set! bs (notice_blocks
-                             (String.concat "文档过大（"
-                                            (String.concat (String.atom_to_string fsize) " 字节）："))
-                             "本阅读器一次排版整篇，请把文档控制在 30KB 以内（当前池装不下）。"))
-                  { (set! text (Fs.read path))
-                    (if (null? text)
-                        (set! bs (notice_blocks "读取失败。" "文件可能已被删除或不可读。"))
-                        ;; 注意：MD.parse 接受**整段文本**（内部自己 split_lines），
-                        ;; 别再把行表传进去
-                        (set! bs (MD.parse text))) })) })
+    (set! cur_title title)
+    (set! fsize (Fs.size path))
+    (if (null? fsize)
+        (set! bs (notice_blocks "读取失败：文件不存在（或超过 Fs 的 128KB 上限）。"
+                                "请把文档放到资源目录的 doc/ 下。"))
+        (if (> fsize DOC_MAX)
+            (set! bs (notice_blocks
+                       (String.concat "文档过大（"
+                                      (String.concat (String.atom_to_string fsize) " 字节）："))
+                       "本阅读器一次排版整篇，请把文档控制在 30KB 以内（当前池装不下）。"))
+            { (set! text (Fs.read path))
+              (if (null? text)
+                  (set! bs (notice_blocks "读取失败。" "文件可能已被删除或不可读。"))
+                  ;; 注意：MD.parse 接受**整段文本**（内部自己 split_lines），
+                  ;; 别再把行表传进去
+                  (set! bs (MD.parse text))) }))
     (set! lines (MDL.layout bs CW))
     (set! content_h (MDL.total_height lines))
     (set! scroll 0)
-    (set! sel idx)
     (set! mode 0)
     ;; 诊断行（宿主 stdout / 浏览器控制台；端到端测试据此断言解析与排版规模）
     (display "MDSTAT blocks=") (display (length bs))
     (display " lines=") (display (length lines))
     (display " height=") (display content_h)
     (display " title=") (display cur_title) (newline)
+    #t))
+
+;; 列表项打开：路径为空串 = 内存里的内置示例（只读文件系统兜底）
+(define open_doc
+  (lambda (idx)
+    (define d (get_item docs idx))
+    (define path (get_item d 0))
+    (set! sel idx)
+    (if (== (String.length path) 0)
+        { (set! cur_title (get_item d 1))
+          (set! lines (MDL.layout (MD.parse_lines MDE.lines) CW))
+          (set! content_h (MDL.total_height lines))
+          (set! scroll 0)
+          (set! mode 0)
+          (display "MDSTAT builtin title=") (display cur_title) (newline)
+          #t }
+        (open_path path (get_item d 1)))))
+
+;; ---- 文件选择器（可复用组件 app/lib/filepicker.scm）---------------------
+;; 为什么要有：列表只扫 doc/ 与资源根，用户把 .md 放在别的目录就打不开。选择器
+;; 在整棵资源树里浏览，选中即按上面的同一条链路打开。
+;; 活动期间**不调 (EX.check)**——返回请求归选择器消费（= 取消选择）。
+
+(define OPEN_BTN_W 44)
+(define OPEN_BTN_H 14)
+
+(define open_btn_x (lambda () (- SW (+ OPEN_BTN_W 6))))
+(define open_btn_y (lambda () (- SH 17)))
+
+(define hit_open_btn
+  (lambda (px py)
+    (if (and (>= px (open_btn_x)) (< px (+ (open_btn_x) OPEN_BTN_W)))
+        (if (and (>= py (open_btn_y)) (< py (+ (open_btn_y) OPEN_BTN_H))) 1 0)
+        0)))
+
+(define draw_open_btn
+  (lambda ()
+    (Gfx.fill_rect (open_btn_x) (open_btn_y) OPEN_BTN_W OPEN_BTN_H 52 58 76)
+    (Gfx.draw_rect (open_btn_x) (open_btn_y) OPEN_BTN_W OPEN_BTN_H 110 118 140)
+    (Gfx.draw_text "打开" (+ (open_btn_x) 7) (+ (open_btn_y) 1) 225 228 235)
+    #t))
+
+(define start_picker
+  (lambda ()
+    { (display "MDOPEN picker") (newline)
+      (FP.start "打开 Markdown 文件" "md,markdown") }))
+
+;; 选择器每拍：0 进行中 / 1 已选中 / 2 已取消
+(define tick_picker
+  (lambda ()
+    (define r 0)
+    (define picked "")
+    (set! r (FP.step))
+    (if (== r 1)
+        { (set! picked (FP.result))
+          (FP.reset)
+          (display "MDOPEN picked ") (display picked) (newline)
+          (open_path picked (FSX.strip_ext (FSX.leaf picked))) }
+        #f)
+    (if (== r 2)
+        { (FP.reset)
+          (draw_all) }
+        #f)
     #t))
 
 ;; ---- 绘制：单个段 --------------------------------------------------------
@@ -355,6 +418,7 @@
     (if (== mode 0)
         (Gfx.draw_text "拖动/↑↓ 滚动 · 点链接看地址" PAD_X (- SH 14) 130 140 155)
         (Gfx.draw_text "↑↓ 选择 · Enter/点按 打开" PAD_X (- SH 14) 130 140 155))
+    (draw_open_btn)   ;; 底栏右侧：打开选择器（触屏唯一入口）
     #t))
 
 (define draw_scrollbar
@@ -506,9 +570,11 @@
         { (if (== prev_down 1)
               { (set! prev_down 0)
                 (if (< (Math.abs drag_total) 8)
-                    (if (== mode 0)
-                        (tap_reader press_x press_y)
-                        (tap_list press_y))
+                    (if (== (hit_open_btn press_x press_y) 1)
+                        (start_picker)
+                        (if (== mode 0)
+                            (tap_reader press_x press_y)
+                            (tap_list press_y)))
                     #f) }
               #f) })
     #t))
@@ -539,10 +605,12 @@
 
 (define on_tick
   (lambda ()
-    { (EX.check)
-      (handle_keys)
-      (handle_touch)
-      (draw_all) }))
+    (if (FP.active)
+        (tick_picker)          ;; 选择器活动期间：输入/绘制全归它，EX 不抢返回请求
+        { (EX.check)
+          (handle_keys)
+          (handle_touch)
+          (draw_all) })))
 
 ;; ---- 启动 ----------------------------------------------------------------
 

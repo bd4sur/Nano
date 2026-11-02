@@ -4492,3 +4492,140 @@ open_doc → Fs.size 上限检查 → Fs.read → MD.parse → MDL.layout → �
 - 种子的文件名即标题（`strip_ext`），改 `DEMO_PATH` 会同时改界面标题；
 - 想换示例内容只改 `md_demo.scm`；已落盘的旧副本不会自动更新（有意为之：不覆盖用户文件）。
   真要强制刷新，删掉资源目录里的那个 .md 再启动即可。
+
+------------------------------------
+
+# 2026-11-02（二）文件管理器 + 可复用文件选择器（灵机应用程序层）
+
+需求：做一个**完全权限**的文件管理器（系统资源根以下所有文件：列表/删除/重命名/新建文件
+（默认 .txt + 时间戳名）/新建目录，为复制与移动留扩展空间），并在其之上实现**可复用的
+文件选择器 UI 组件**（Scheme 应用层），供 Markdown 阅读器等"打开文件"用。
+本轮只针对 WASM 目标（`build_wasm_gui.sh`，不是 `infer/web/` 那条 LLM-only 路线）。
+
+## 1. 分层与新增文件
+
+| 文件 | 作用 |
+|---|---|
+| `infer/hal_fs.h`、`hal_fs_linux.c`、`hal_fs_m5esp.cpp` | HAL 新增 `platform_remove_path` / `platform_rename_path`（Linux：POSIX `remove`/`rename`；ESP32：`SD.rmdir`/`SD.remove`/`SD.rename`，**未编译验证**） |
+| `infer/am_native_Fs.c/.h` | 库过程 `(Fs.remove path)`、`(Fs.rename old new)`；WASM 落盘钩子 `am_native_fs_on_remove`；`Fs.write ""`（空文件）修复 |
+| `infer/hal_fs_persist_wasm.c` | 删除/改名同步进浏览器 IndexedDB（否则刷新后"已删文件"会从 store 复活） |
+| `infer/app/lib/fsx.scm`（新） | 文件系统小工具库：`join/leaf/parent`、**按名字升序排序**（`sort_names`/`sort_pairs`）、12px 文本宽度与裁剪、尺寸格式化、扩展名过滤 |
+| `infer/app/filemgr.scm`（新） | 文件管理器 App（操作表驱动：绘制/命中/键盘全按表走） |
+| `infer/app/lib/filepicker.scm`（新） | 文件选择器组件：`FP.start/start_at`、`FP.active`、`FP.step`、`FP.result`、`FP.reset` |
+| `infer/app/markdown.scm` | 底栏右侧新增「打开」按钮 → 唤起选择器（`open_doc` 抽出 `open_path`，两条入口共用一条打开链路） |
+| `infer/vendor/Animac/VENDOR.md` | 更新本地库清单里的 Fs API 一览 |
+
+## 2. 语义与设计取舍
+
+- **"完全权限"的范围 = 业务资源根**（`PLATFORM_ROOT_DIR`）以下的**全部**文件与目录，包括
+  `icon/ app/ doc/ data/` 这些系统自己在用的目录；边界即根本身——根不可删/不可改名
+  （`am_native_Fs.c` 的 `fs_is_root_path` 在原生层兜一道，`.` 与绝对路径两种写法都认），
+  也没有 `..` 越界（沿用 `(native Fs)` 的路径规则）。三个平台同一套路径语义。
+- **排序在 Scheme 层做**（`FSX.sort_names`，按 Unicode 码点）：`list_files` 的顺序各平台
+  不保证（Linux 为回归稳定按 strcmp 排过，ESP32 是 SD 卷顺序），需求要求"字母升序"，
+  放在 App 层才三平台一致。目录在名字后加 `/` 并用蓝字区分（文件白字 + 右侧尺寸）。
+- **递归删除**：`Fs.remove` 只删文件/空目录（POSIX `remove` 与 `SD.rmdir` 的原语边界），
+  目录树由 `filemgr.scm` 的 `remove_tree` 先递归清空再删自身；删除前弹宿主两按钮确认框
+  并写明"及其全部内容"。
+- **移动 = 重命名**：同一资源根内 `(Fs.rename ...)` 即是移动——重命名框里输入
+  `目标目录/新名字` 即可跨目录搬。改名**拒绝覆盖**（目标已存在返回 `#f`，不像 POSIX
+  `rename` 那样静默覆盖），这是"文件管理器"该有的安全语义。
+- **复制/移动的扩展空间（两处，落地时不用改别的代码）**：
+  ① 操作表 `build_ops` 是唯一按钮清单（每项 = 名称/处理函数/可用标志），绘制、命中、
+  键盘都按表驱动；「复制」「移动」两枚按钮**已占位并灰显**（`enabled=0`），落地 = 标志改 1 +
+  实现 `op_copy`/`op_move`；② 数据通路：小文件用 `(Fs.read)+(Fs.write)` 组合，大文件/目录树
+  建议在 `am_native_Fs.c` 加 `Fs.copy`（`hal_fs` 的 read/write 原语已够用）。
+- **选择器不引入宿主新能力**：`(Ui.input ...)` 那种阻塞模态框靠宿主控件；文件选择器完全用
+  Scheme + Gfx 绘制，形态是"每拍 `(FP.step)` 的状态机"（0 进行中 / 1 已选中 / 2 已取消），
+  与 App 的定时器节拍天然对齐。**活动期间调用方不要调 `(EX.check)`**——返回请求
+  （硬 A/ESC）归选择器消费 = 取消选择；它右上角自己画的「取消」按钮与各 App 的「退出」
+  按钮同一位置，点那儿也会变成"取消"。
+- **时间戳文件名**：用 `Time.utc_days/utc_sod` 而不是 `System.timestamp`（wasm32 上毫秒值被
+  截断成 mod 2^27，见 `am_native_Time.h`），按 Howard Hinnant 的 days→y/m/d 算法算成
+  `20261020-020000.txt`（**UTC**，宿主不提供时区）。
+
+## 3. 踩到的坑（都已修）
+
+1. **`(Fs.write path "")` 永远失败**：`fs_wstring_to_utf8` 的容量检查写成 `cap < 2`，而空串的
+   合法容量恰好是 1（只留一个 NUL）→ 改成 `cap < 1`。"新建空 .txt"必须靠它。
+2. **`(null? x)` 不能用来判断"目录读不出来"**：`null?` 对 `#null` **和** `'()` 都为真，空目录
+   会被误判成错误（表现为进空目录就 `FMERR`）。判空表用 `(list? x)`（`#null` 不是列表）。
+3. **`#t` 不等于 `1`**：`(== (Fs.is_dir p) 1)` 恒为 `#f`（`#t` 是布尔、`1` 是数字）。凡是把
+   布尔结果存进表里再比较的地方，一律先归一化成 `1`/`0`。
+4. **`begin` 是语法关键字**，`(define begin ...)` 会**静默编译失败**（症状只是
+   `RESULT compile_fail`，没有报错行）。选择器入口因此叫 `FP.start` / `FP.start_at`。
+5. **插入排序方向写反**：`while` 条件里要比"已有序项 < 新项"才升序（写反就是降序，症状是
+   列表倒着排）。
+6. **手工数嵌套括号不可靠**：`op_new_file/op_new_dir/op_rename/op_delete` 初版是层层嵌套
+   `if`，四处括号错位；改成**平铺书写**（先归一化参数，再顺序判断），并用脚本逐文件
+   对括号做平衡检查（`depth` 必须归零）后一次通过。
+7. **池子变紧**：markdown 现在连 picker + fsx 一起编译，编译期工作区从 ~13MB 涨到 ~20MB
+   （16MB 池的 8MB VM 区装不下，`RESULT link_fail`）。生产宿主池 `MB_POOL_SIZE=24MB` 仍够
+   （实测 29KB/1600 行的文档照样排版得下，`DOC_MAX` 未动）；dev 回归台
+   （`run_host_regress.sh` / `tools/e2e/markdown/test_app.py`）已对 markdown 单独给 24MB。
+8. **"再点一次已选中的行 = 进入/详情"**（小屏没有双击）：e2e 脚本里点行做选择时要注意
+   "第一下就点中已选行"会直接进入——本轮的浏览器用例就因此误进目录并弹出详情框。
+
+## 4. 验证
+
+- **宿主无头回归台**（`python3 tools/e2e/native/test_filemgr.py`，**43 项全 PASS**）：
+  A 组 15 项 `Fs.remove/rename` 语义（改名成功/目标已存在拒绝/目录改名/源缺失/`..` 拒绝/
+  删文件/非空目录拒绝/空目录/资源根保护）；B 组 21 项文件管理器端到端（进目录、**升序**、
+  新建文件默认时间戳名 `.txt`、无扩展名自动补 `.txt`、重命名、删文件、新建目录、进子目录建文件、
+  上级、**递归删除目录树**、刷新，全部对磁盘实测）；C 组 7 项选择器（唤起、逐级进入、过滤、
+  选中返回相对路径、阅读器按真文件打开取标题）。
+- **全 App 回归**：`run_host_regress.sh` 全部 App `err=none`；markdown 既有用例
+  `tools/e2e/markdown/test_app.py` **40/40 PASS**（重构 `open_path` 无回归）。
+- **浏览器端（真 WASM + 真触屏）** `tools/e2e/browser/regress_filemgr.js`：
+  **Chromium / chrome-headless-shell / Firefox 各 49/49 PASS** —— 布局像素判据、目录导航、
+  新建文件（回车接受默认时间戳名）→ **MEMFS 真有该文件** → **IndexedDB（nano-store）真有该键**、
+  重命名（初值=当前名 → "名字未变"分支）、删除文件（确认框回车）→ MEMFS + IndexedDB 都消失、
+  新建目录/进入/删除、刷新、退出回列表；再进 Markdown 点「打开」→ 选择器（只列目录 +
+  扩展名过滤）→ 选 `data/fmtest/pick_me.md` → `MDSTAT title=pick_me`；**Escape 取消选择器**
+  （`FP cancel`，不弹 App 退出框）。
+- **Markdown 浏览器回归** `regress_markdown.js` **32/32 PASS**（三种引擎）。
+- `git worktree` 之外的既有 App 帧序列未变（新增的是独立 App + 两处本地库能力，
+  不触碰渲染路径）。
+- 另外把 dev 脚本的 `APPS_ALL/APPS`（`regress_det.js`、`regress.js`）同步为 `app/*.scm`
+  的真实升序清单（此前缺 `hwr2`/`markdown`，其后所有 App 的下标整体错位）。
+
+## 5. 已知取舍
+
+- ESP32 的 `hal_fs_m5esp.cpp` 新函数**未编译验证**（本机无 Arduino 工具链）。
+- 选择器目前只能选**文件**（"选目录"留作扩展点，注释在文件头）；单选、无路径手输。
+- 文件管理器把资源根视作"系统根"，不提供越出根的浏览（各平台语义一致，也避免误删系统文件）；
+  目录条目不在顶部聚合，严格按字母升序（需求如此）。
+- 浏览器上目录**改名**会逐文件搬运 IndexedDB 键（深度 ≤8、文件数 ≤512，超出静默跳过），
+  大目录树改名会慢一点；桌面/掌机零开销（没有落盘钩子）。
+
+------------------------------------
+
+# 2026-11-02（三）文件管理器/选择器三处调整（排序、高亮对齐、".." 条目）
+
+用户反馈三项，均已实现并回归：
+
+1. **排序改为"目录永远在前"**：`app/lib/fsx.scm` 的排序入口由 `sort_names`/`sort_pairs`
+   统一为 **`sort_entries`**，比较函数 `cmp_entry` 先比"是否目录"（目录 < 文件），
+   同类再按名字码点升序。条目约定：元素 0 = 名字、元素 1 = 是否目录(1/0)、元素 2 可选 = 字节数。
+   **不依赖 `Fs.list` 的顺序**（Linux 排过、ESP32 是卷顺序），三平台一致。
+2. **高亮条与文字垂直居中对齐**：原来高亮带画在 `y-3`（16px），比文字行框中心高 2~3px。
+   现在统一画在 **`y+1` 起、高 `ROW_H-2`=16px**（`filemgr.scm` 与 `filepicker.scm` 各自的
+   普通行与 ".." 行共 4 处）。像素实测（宿主回归台导出 PPM）：选中行文字墨迹 57..64
+   （中心 60.5）与高亮带 53..68（中心 60.5）**完全同轴**。注意别按"行框"对齐——12px alpha
+   字模的墨迹整体比行框中心低约 2px（基线偏下），按墨迹对齐才是眼睛看到的居中。
+3. **列表顶部新增 ".."（返回上级目录）条目**：列表改成"显示行"模型——
+   **显示行 0 固定是 ".."，显示行 d（d≥1）= rows[d-1]**（`n_disp`/`disp_count`）。
+   进入目录后默认选中第一条**真实条目**（不是 ".."，避免顺手回车退回上级）；选中 ".." 再
+   点按/回车 = 返回上级；根目录下 ".." 变灰、点按只提示"已在资源根"。原来的「上级」按钮
+   保留（两条路都通）。`FM items`/`FP items` 诊断行也随之以 `../` 打头，e2e 直接拿 token
+   下标当显示行号用。
+
+**踩坑（重要）**：空目录进入即崩（`[Runtime] 指令执行异常`）——根因是新增的提示行写了
+`(+ LIST_Y ROW_H 2)`：**Animac 的算术是二元**，三参数 `+` 会让操作数栈失衡。
+已改为 `(+ (+ LIST_Y ROW_H) 2)`，并加了脚本扫描 3 参数算术/比较（顺带核对全文）。
+
+验证：宿主 `tools/e2e/native/test_filemgr.py` **49/49 PASS**（新增：首项为 ".."、目录在前 +
+文件在后各自升序、根目录顺序与 Python 独立算出的期望表逐项比对、".." 条目返回上级）；
+既有 markdown 用例 40/40；`run_host_regress.sh` 全部 App `err=none`；浏览器
+`regress_filemgr.js` **Chromium / chrome-headless-shell / Firefox 各 51/51 PASS**（含选择器里
+".." 首项与"只看目录/扩展名过滤"仍成立）；`regress_markdown.js` 32/32。

@@ -25,10 +25,11 @@
 
 #define FS_PATH_MAX (256)
 
-// 写入成功后的可选落盘钩子（弱符号：未提供实现的平台为空操作）。
+// 写入成功后、删除成功后、改名前后的可选落盘钩子（弱符号：未提供实现的平台为空操作）。
 // WASM 目标由 hal_fs_persist_wasm.c 实现，把文件同步进浏览器 IndexedDB。
 #if defined(__GNUC__)
 extern void am_native_fs_on_write(const char *path, const uint8_t *data, size_t size) __attribute__((weak));
+extern void am_native_fs_on_remove(const char *path) __attribute__((weak));
 #endif
 
 // ===============================================================================
@@ -54,8 +55,10 @@ static bool fs_pop_wstring(am_process_t *proc, am_wstring_t **out) {
 
 // 把 Scheme 字符串按 UTF-8 编码写入 out（容量 cap，含结尾 NUL）。
 // 返回写入的字节数；空间不足或参数非法返回 (size_t)-1。
+// cap 允许为 1 —— 那是**空串**的唯一合法容量（只需留一个 NUL）。此前这里写成
+// cap<2 报错，导致 (Fs.write path "") 永远失败；文件管理器「新建空文件」需要它。
 static size_t fs_wstring_to_utf8(am_wstring_t *ws, char *out, size_t cap) {
-    if (!ws || !out || cap < 2) return (size_t)-1;
+    if (!ws || !out || cap < 1) return (size_t)-1;
     if (ws->length + 1 > cap) return (size_t)-1; // UTF-8 最短也有 1 字节/码点
 
     size_t n = 0;
@@ -121,6 +124,28 @@ static void fs_make_parents(const char *path) {
     }
 }
 
+// 是否是「业务资源根本身」——删除/改名必须拒绝（否则整个资源目录会被干掉）。
+// fs_resolve 把 "." 解析成 "<root>/."、把 "" 拒绝掉，因此这三种写法都要认。
+static bool fs_is_root_path(const char *path) {
+    size_t rl = strlen(PLATFORM_ROOT_DIR);
+
+    if (strncmp(path, PLATFORM_ROOT_DIR, rl) != 0) return false;
+    const char *rest = path + rl; // "" / "/" / "/."
+    if (rest[0] == '\0') return true;
+    if (strcmp(rest, "/") == 0) return true;
+    if (strcmp(rest, "/.") == 0) return true;
+    return false;
+}
+
+// 通知落盘层「旧路径已消失」（仅当平台提供了钩子；桌面/掌机为空操作）
+static void fs_notify_remove(const char *path) {
+#if defined(__GNUC__)
+    if (am_native_fs_on_remove) am_native_fs_on_remove(path);
+#else
+    (void)path;
+#endif
+}
+
 // 判断普通文件是否存在（借 hal_fs 的全局单句柄短暂探测，见头文件说明）。
 static int32_t fs_file_exists(const char *path) {
     if (platform_file_open(path) != 0) return 0;
@@ -170,6 +195,63 @@ static bool fs_write_raw(const char *path, const uint8_t *data, size_t size) {
     if (am_native_fs_on_write) am_native_fs_on_write(path, data, size);
 #endif
     return true;
+}
+
+// 目录树改名后的「落盘搬运」：把新树里的每个文件重新 put，并把旧路径的键删掉。
+// 为什么需要：WASM 的 IndexedDB 是按路径存的键值库，MEMFS 里改了名并不会影响它；
+// 不搬的话，刷新页面后旧路径的文件会从 store 里重新活过来、新路径反而消失。
+// 只在平台提供了钩子时执行（桌面/掌机零开销）；深度与文件数都有硬上限，
+// 超出部分静默跳过——宁可少同步几个文件，也不要把改名操作卡住。
+#define FS_PERSIST_MAX_DEPTH (8)
+#define FS_PERSIST_MAX_FILES (512)
+
+static int32_t s_persist_files = 0;
+
+static void fs_persist_move_tree(const char *old_path, const char *new_path, int32_t depth) {
+#if defined(__GNUC__)
+    if (!am_native_fs_on_write) return;
+    if (depth > FS_PERSIST_MAX_DEPTH) return;
+
+    int32_t n = list_files(new_path, NULL);
+    if (n <= 0) return;
+
+    char **names = (char **)platform_calloc((size_t)n, sizeof(char *));
+    if (!names) return;
+    n = list_files(new_path, names);
+    if (n < 0) {
+        free(names);
+        return;
+    }
+
+    for (int32_t i = 0; i < n; i++) {
+        char child_new[FS_PATH_MAX];
+        char child_old[FS_PATH_MAX];
+        int32_t wn = snprintf(child_new, sizeof child_new, "%s/%s", new_path, names[i]);
+        int32_t wo = snprintf(child_old, sizeof child_old, "%s/%s", old_path, names[i]);
+        if (wn <= 0 || wn >= (int32_t)sizeof child_new || wo <= 0 || wo >= (int32_t)sizeof child_old) continue;
+
+        if (platform_is_directory(child_new)) {
+            fs_persist_move_tree(child_old, child_new, depth + 1);
+            continue;
+        }
+        if (s_persist_files >= FS_PERSIST_MAX_FILES) continue;
+
+        size_t sz = 0;
+        uint8_t *buf = fs_read_raw(child_new, &sz);
+        if (!buf) continue; // 空文件/过大/读失败：跳过（不影响改名本身）
+        s_persist_files++;
+        am_native_fs_on_write(child_new, buf, sz);
+        fs_notify_remove(child_old);
+        free(buf);
+    }
+
+    for (int32_t i = 0; i < n; i++) free(names[i]);
+    free(names);
+#else
+    (void)old_path;
+    (void)new_path;
+    (void)depth;
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +493,69 @@ int32_t am_native_Fs_append(am_runtime_t *rt, am_process_t *proc) {
     return fs_push_bool(proc, ok);
 }
 
+int32_t am_native_Fs_remove(am_runtime_t *rt, am_process_t *proc) {
+    am_wstring_t *ws = NULL;
+    char path[FS_PATH_MAX];
+    bool ok = false;
+    (void)rt;
+
+    if (!fs_pop_wstring(proc, &ws)) return -1;
+    if (fs_resolve(ws, path) && !fs_is_root_path(path)) {
+        // 非空目录会失败（POSIX remove / SD.rmdir 都是如此），由 App 自己递归清空
+        ok = (platform_remove_path(path) == 0);
+        if (ok) fs_notify_remove(path);
+    }
+    return fs_push_bool(proc, ok);
+}
+
+int32_t am_native_Fs_rename(am_runtime_t *rt, am_process_t *proc) {
+    am_wstring_t *ws_new = NULL;
+    am_wstring_t *ws_old = NULL;
+    char old_path[FS_PATH_MAX];
+    char new_path[FS_PATH_MAX];
+    bool ok = false;
+    (void)rt;
+
+    // 参数从右往左弹：先 new，再 old
+    if (!fs_pop_wstring(proc, &ws_new)) return -1;
+    if (!fs_pop_wstring(proc, &ws_old)) return -1;
+
+    if (fs_resolve(ws_old, old_path) && fs_resolve(ws_new, new_path)
+        && !fs_is_root_path(old_path) && !fs_is_root_path(new_path)) {
+        // 源必须存在；目标必须不存在（不静默覆盖——POSIX rename 会覆盖同名文件）
+        bool src_is_dir = (platform_is_directory(old_path) != 0);
+        bool src_exists = src_is_dir || (fs_file_exists(old_path) != 0);
+        bool dst_busy = (platform_is_directory(new_path) != 0) || (fs_file_exists(new_path) != 0);
+        if (src_exists && !dst_busy) {
+            // 普通文件：先把字节读出来，改名成功后按新路径重新落盘（WASM 的 IndexedDB）
+            size_t sz = 0;
+            uint8_t *buf = src_is_dir ? NULL : fs_read_raw(old_path, &sz);
+
+#if defined(__GNUC__)
+            bool persist = (am_native_fs_on_write != NULL) || (am_native_fs_on_remove != NULL);
+#else
+            bool persist = false;
+#endif
+
+            ok = (platform_rename_path(old_path, new_path) == 0);
+            if (ok && persist) {
+                if (src_is_dir) {
+                    s_persist_files = 0;
+                    fs_persist_move_tree(old_path, new_path, 0);
+                }
+                else {
+#if defined(__GNUC__)
+                    if (buf && am_native_fs_on_write) am_native_fs_on_write(new_path, buf, sz);
+#endif
+                    fs_notify_remove(old_path);
+                }
+            }
+            if (buf) free(buf);
+        }
+    }
+    return fs_push_bool(proc, ok);
+}
+
 // ===============================================================================
 // 库注册表
 // ===============================================================================
@@ -424,6 +569,8 @@ static const am_native_func_entry_t am_native_Fs_funcs[] = {
     { L"read",   am_native_Fs_read },
     { L"write",  am_native_Fs_write },
     { L"append", am_native_Fs_append },
+    { L"remove", am_native_Fs_remove },
+    { L"rename", am_native_Fs_rename },
 };
 
 const am_native_lib_entry_t am_native_Fs_lib = {

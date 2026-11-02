@@ -82,9 +82,10 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
 - `infer/am_native_Key.c/.h` + `infer/nano_key_events.c/.h` —— 键盘输入（按键边沿事件旁路队列 +
   Scheme 侧 `Key.is_available/is_down/take_press/take_release/dropped`）；HAL 在注入 GUI 电平槽的
   同时另投一份边沿事件，GUI 读取路径零改动
-- `infer/am_native_Fs.c/.h` —— 文本文件读写（`exists/is_dir/size/list/mkdir/read/write/append`，
-  相对业务资源根、UTF-8、128KB 读入上限；WASM 目标另有 `hal_fs_persist_wasm.c` 把写入同步进
-  浏览器 IndexedDB）
+- `infer/am_native_Fs.c/.h` —— 文本文件读写（`exists/is_dir/size/list/mkdir/read/write/append`
+  以及 `remove`/`rename`），相对业务资源根、UTF-8、128KB 读入上限；WASM 目标另有
+  `hal_fs_persist_wasm.c` 把写入/删除/改名同步进浏览器 IndexedDB（文件管理器 app/filemgr.scm
+  依赖 `remove`/`rename`；递归删除目录树由 Scheme 侧组合原语完成）
 - `infer/am_native_Ui.c/.h` —— 宿主模态文本输入/输出（`input`/`input_with`/`message`/
   `message_titled`/`confirm`）：按上游契约 N7 把**进程**置 BLOCKED，宿主用现成的文本控件当
   模态框（`confirm` 借图形层的两按钮确认框），提交后压值 + step + 置 READY + 重新入队
