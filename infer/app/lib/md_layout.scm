@@ -67,6 +67,7 @@
 (define QUOTE_IND 10)    ;; 引用块正文右移量
 (define QUOTE_BAR_W 2)   ;; 引用块左侧竖线宽度
 (define H2_BAR_W 3)      ;; 二级标题装饰竖线宽度
+(define H2_BAR_GAP 1)    ;; 竖线与右侧文字之间的间距（1px margin）
 (define W_HALF 7)        ;; 半角步进
 (define W_FULL 12)       ;; 全角步进
 (define CJK_BASE 11904)  ;; 0x2E80
@@ -369,15 +370,15 @@
     (if (== shown 3) (set! base ST_H3) #f)
     (emit_gap (if (> lvl 1) 9 13))
     (set! before (length cur_lines))
-    ;; H2 要给左侧竖线让出 H2_BAR_W 的宽度（折行时同样少这么多）
+    ;; H2 要给左侧竖线让出「竖线宽 + 1px 间距」（折行时同样少这么多）
     (if (== shown 2)
-        (emit_wrapped (get_item b 2) (- width H2_BAR_W) 0 0 BG_NONE base)
+        (emit_wrapped (get_item b 2) (- width (+ H2_BAR_W H2_BAR_GAP)) 0 0 BG_NONE base)
         (emit_wrapped (get_item b 2) width 0 0 BG_NONE base))
     (if (== shown 2)
         { (set! i before)
           (while (< i (length cur_lines))
             { (set! ln (get_item cur_lines i))
-              (relocate_segs (get_item ln 2) H2_BAR_W)
+              (relocate_segs (get_item ln 2) (+ H2_BAR_W H2_BAR_GAP))
               (set_item! ln 2 (cons (mk5 "" ST_H2BAR 0 H2_BAR_W "") (get_item ln 2)))
               (set! i (+ i 1)) }) }
         #f)

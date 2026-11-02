@@ -355,12 +355,13 @@
     (if (and (> (String.length txt) 0) (== st MDL.ST_CODE))
         (Gfx.fill_rect (- x 1) (+ y 1) (+ w 2) 13 46 42 34)
         #f)
+    ;; 链接下划线：基线在 y+13，下划线再往下 3px（y+16），与字形留出呼吸感
     (if (and (> (String.length txt) 0) (== st MDL.ST_LINK))
-        (Gfx.fill_rect x (+ y 13) w 1 96 160 235)
+        (Gfx.fill_rect x (+ y 16) w 1 96 160 235)
         #f)
-    ;; 三级标题：文字下划线（比字形亮一档的暗色，避免和链接下划线混淆）
+    ;; 三级标题：文字下划线（比字形亮一档的暗色，避免和链接下划线混淆；同样下移 3px）
     (if (and (> (String.length txt) 0) (== st MDL.ST_H3))
-        (Gfx.fill_rect x (+ y 12) w 1 96 128 168)
+        (Gfx.fill_rect x (+ y 15) w 1 96 128 168)
         #f)
     (if (> (String.length txt) 0)
         { (set! k 0)
