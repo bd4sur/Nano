@@ -252,12 +252,18 @@
         (set! i (+ i 1)) })
     (if (< cut 0) (set! doc_dir "") (set! doc_dir (String.slice path 0 (+ cut 1))))))
 
-;; Markdown 里的图片引用 → 资源根相对路径
+;; Markdown 里的图片引用 → 资源根相对路径。
+;; 查找顺序：① 以 '/' 开头 → 宿主绝对路径，原样交给 Gfx；② 相对**文档所在目录**；
+;; ③ 回退到**资源根**（`icon/xxx.png` 这类公共资源常放在根下，而文档在 doc/ 里，
+;;    又不能写 "../icon/..."——Fs/Gfx 的路径规则明确拒绝 ".."）。
 (define image_path
   (lambda (p)
+    (define r "")
     (if (== (String.length p) 0) p
-        (if (== (String.charCodeAt 0 p) 47) p          ;; 已是绝对路径：原样
-            (String.concat doc_dir p)))))
+        (if (== (String.charCodeAt 0 p) 47) p
+            { (set! r (String.concat doc_dir p))
+              (if (Fs.exists r) r
+                  (if (Fs.exists p) p r)) }))))
 
 ;; 排版期的度量回调：(路径) → (宽 高) | #f
 ;; 注意 (Gfx.image_size ...) 失败时返回 #null，而 #null 在本解释器里是**真值**，
