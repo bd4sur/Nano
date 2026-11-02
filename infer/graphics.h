@@ -7,9 +7,12 @@ extern "C" {
 
 #include "utils.h"
 
-// 图像缓存大小（最大缓存图像数量）
+// 图像缓存大小（最大缓存图像数量，LRU 淘汰；每项是一份**已缩放**的 RGB888 位图）。
+// 2 → 4：Markdown 插图（见 am_native_Gfx 的 draw_image）会在滚动时反复命中不同图片，
+// 2 个槽位几乎必然抖动；4 个槽位约 4×150KB 上限，桌面/WASM/掌机（PSRAM）都放得下。
+// 内存极紧的宿主可用 -DGFX_IMAGE_CACHE_SIZE=2 覆盖。
 #ifndef GFX_IMAGE_CACHE_SIZE
-#define GFX_IMAGE_CACHE_SIZE 2
+#define GFX_IMAGE_CACHE_SIZE 4
 #endif
 
 #define FONT_HEIGHT (12)
@@ -210,7 +213,13 @@ void gfx_dithering(Nano_GFX *gfx);
 
 void convert_rgb888_to_rgb565_double(Nano_GFX *gfx, uint8_t *rgb888, int32_t width, int32_t height);
 
-void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch);
+// 读取图像文件的**原始尺寸**（只读文件头，不解码像素；供排版阶段算行高/缩放用）。
+// 返回 0 成功、-1 失败（文件不存在/格式不支持）。
+int32_t gfx_image_info(const char *img_path, uint32_t *out_width, uint32_t *out_height);
+
+// 从文件读取图像、缩放到 (width,height) 并绘制（带 LRU 缓存）。
+// 返回 0 成功、-1 失败（读文件/解码/分配失败）。
+int32_t gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch);
 void gfx_draw_image_buffer(Nano_GFX *gfx, uint8_t *img_buffer, uint32_t buffer_size, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height);
 
 // 从内存缓冲区解码图像为 RGBA 四通道像素（不缩放、不绘制）

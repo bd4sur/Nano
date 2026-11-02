@@ -1,6 +1,6 @@
 # 报告：Markdown 阅读器渲染插图（图片）的可行性与方案
 
-> 日期：2026-11-02　　状态：**调研（未实施）**
+> 日期：2026-11-02　　状态：**一期已实施**（方案 A + 方案 D 兜底；见文末「实施记录」）
 > 范围：`infer/app/markdown.scm`（灵机 Scheme 应用）+ 宿主侧薄封装（`am_native_Gfx.c`）
 > 结论先行：**可行，而且比预期便宜**——宿主的图形层里已经有"读文件 → 解码 → 缩放 → 带缓存绘制"
 > 的完整实现（`gfx_draw_image`），Scheme 侧不需要实现任何解码器，也不需要持有像素。
@@ -177,3 +177,48 @@ int32_t am_native_Gfx_draw_image(am_runtime_t *rt, am_process_t *proc);
   1. 一期：`Gfx.image_size` + `Gfx.draw_image`、**块级图片**、最大尺寸限制、缺失兜底；
   2. 二期：行内图片、缓存扩容与"每帧一张"渐进解码、alpha 混合；
   3. 兜底：任何平台拿不到图片时用虚线框 + alt（方案 D 的极简形式），保证文档结构不崩。
+
+---
+
+# 附：实施记录（2026-11-02，一期）
+
+按本报告 §4 落地了「方案 A（宿主解码）+ 方案 D（虚线框兜底）」，一期范围是**块级图片**。
+
+## 实际实现与当初设计的差异（都以"更简单"为准）
+
+| 设计稿 | 实施结果 | 原因 |
+|---|---|---|
+| `(Gfx.draw_image path x y maxw maxh)` 内部等比缩放 | **`(Gfx.draw_image path x y w h)` 按给定尺寸绘制**；等比缩放放在排版端 | 排版端本来就要算行高，顺带算出缩放宽高，C 侧少一份逻辑；绘制端只做"画"这一件事 |
+| `(Gfx.image_size path)` 自己解析文件头 | 复用 stb_image 的 `stbi_info`（新增 `gfx_image_info()`，`graphics.c`） | stb 已经编进来了，不必手写 PNG/JPEG 头解析 |
+| 需要新的缓存层 | 复用现有的 `gfx_draw_image`（**LRU 缓存 + 缩放 + 落屏**，本来就有、此前无人调用） | 见 §2；只把返回值从 `void` 改成 `int32_t`（成功/失败），并新增 `gfx_image_info` |
+| 行内图片一期也做 | 一期**只做块级**；行内 `![](...)` 退化为暗色占位文本「[图片] alt」 | 行内图片会让行高与图片高度耦合（一行里有文字又有图），留到二期 |
+| 图片数量无上限 | 单篇最多渲染 `IMG_MAX_COUNT=24` 张，超出退化为占位框 | 防止一次排版把解释器池吃满（一屏都放不下的文档没必要解码） |
+
+## 改动清单
+
+**C 侧**
+- `graphics.c/.h`：新增 `gfx_image_info(path, &w, &h)`（`stbi_info`，只读头）；`gfx_draw_image` 返回值 `void → int32_t`（0 成功/−1 失败），失败点改为 `return -1`。
+- `am_native_Gfx.c/.h`：新增 `(Gfx.image_size path)`（→ `(w h)` | `#null`）与 `(Gfx.draw_image path x y w h)`（→ `#t`/`#f`）；路径解析复用 Fs 的规则。
+- `am_native_Fs.c/.h`：把内部的 `fs_resolve` 提升为公共的 `am_native_fs_resolve()`，供 Gfx 复用同一套路径规则（相对业务资源根、拒绝 `..`）。
+
+**Scheme 侧**
+- `md_parse.scm`：行内规则 `![`→ `(image path alt)`（注册在 `[` 之前）；整段只有一个图片节点时提升为块 `(image path alt)`。
+- `md_layout.scm`：`layout` 新增第三个参数（图片度量回调）；新增 `ST_IMAGE` / `ST_IMAGE_MISSING` / `ST_IMAGE_TEXT` 三个样式、`fit_image`（等比缩放进 `(正文宽, IMG_MAX_H=160)`）、`lay_image`（居中、行高=图片高、缺图走占位框、张数上限）、`image_count()`；行内图片在 `atomize` 里降级为占位文本。
+- `markdown.scm`：`doc_image_size`（`Gfx.image_size` 包装，`#null` → `#f`）、`image_path`（**相对文档所在目录**解析）、`draw_image_missing` + `draw_dashed_rect`（方案 D）；`draw_seg` 增加 `ST_IMAGE`/`ST_IMAGE_MISSING` 分支，并跳过图片段的通用文字绘制（否则 alt 会叠在图上）；`MDSTAT` 增加 `images=N` 诊断字段。
+- `md_demo.scm`：加一节「插图」说明语法与兜底行为（不引用具体文件，保持各平台一致）。
+
+## 踩到的坑（值得记住）
+
+`(Gfx.image_size ...)` 失败返回 `#null`，而**在本解释器里 `#null` 是真值**（只有 `#f` 为假），
+排版端如果只写 `(if dims ...)` 就会把 `#null` 当成尺寸去 `get_item` → 直接
+`[Runtime] 指令执行异常`。两处同时修：App 侧把 `#null` 归一成 `#f`，
+排版端再用 `(list? dims)` 做类型判定（双保险）。
+
+## 验证
+
+- 宿主端到端（真文件系统 + 真图形层）：真 PNG（40×30 品红）画出来（品红像素 720）；
+  缺图路径画出虚线框（`92,104,128` 像素）；`MDSTAT` 里 `images=1`。
+- 浏览器端到端（真 WASM + MEMFS）：base64 → `FS.writeFile` 写入 `doc/img.png` 后，
+  品红像素 1200、虚线框像素 338，无 pageerror。
+- 单测：解析 124/124（新增 13 条图片用例）、排版 89/89（新增 19 条：缩放/居中/行高/
+  占位框/张数上限/行内降级）。

@@ -91,7 +91,7 @@ static size_t fs_wstring_to_utf8(am_wstring_t *ws, char *out, size_t cap) {
 
 // 把相对路径解析为 HAL 路径（见头文件的路径规则）。
 // 返回 true 表示解析成功；路径非法（空、超长、含 ".."）返回 false。
-static bool fs_resolve(am_wstring_t *ws, char *out) {
+bool am_native_fs_resolve(am_wstring_t *ws, char *out) {
     char raw[FS_PATH_MAX];
 
     if (fs_wstring_to_utf8(ws, raw, sizeof raw) == (size_t)-1) return false;
@@ -296,7 +296,7 @@ int32_t am_native_Fs_exists(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
 
     if (!fs_pop_wstring(proc, &ws)) return -1;
-    if (fs_resolve(ws, path)) {
+    if (am_native_fs_resolve(ws, path)) {
         ok = (platform_is_directory(path) != 0) || (fs_file_exists(path) != 0);
     }
     return fs_push_bool(proc, ok);
@@ -309,7 +309,7 @@ int32_t am_native_Fs_is_dir(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
 
     if (!fs_pop_wstring(proc, &ws)) return -1;
-    if (fs_resolve(ws, path)) ok = (platform_is_directory(path) != 0);
+    if (am_native_fs_resolve(ws, path)) ok = (platform_is_directory(path) != 0);
     return fs_push_bool(proc, ok);
 }
 
@@ -319,7 +319,7 @@ int32_t am_native_Fs_size(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
 
     if (!fs_pop_wstring(proc, &ws)) return -1;
-    if (!fs_resolve(ws, path)) return fs_push_null(proc);
+    if (!am_native_fs_resolve(ws, path)) return fs_push_null(proc);
 
     if (platform_file_open(path) != 0) return fs_push_null(proc);
     uint32_t size = platform_file_size();
@@ -335,7 +335,7 @@ int32_t am_native_Fs_list(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
 
     if (!fs_pop_wstring(proc, &ws)) return -1;
-    if (!fs_resolve(ws, path)) return fs_push_null(proc);
+    if (!am_native_fs_resolve(ws, path)) return fs_push_null(proc);
 
     n = list_files(path, NULL);
     if (n < 0) return fs_push_null(proc);
@@ -408,7 +408,7 @@ int32_t am_native_Fs_mkdir(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
 
     if (!fs_pop_wstring(proc, &ws)) return -1;
-    if (fs_resolve(ws, path)) {
+    if (am_native_fs_resolve(ws, path)) {
         fs_make_parents(path);
         ok = (platform_mkdir(path) == 0);
     }
@@ -423,7 +423,7 @@ int32_t am_native_Fs_read(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
 
     if (!fs_pop_wstring(proc, &ws)) return -1;
-    if (!fs_resolve(ws, path)) return fs_push_null(proc);
+    if (!am_native_fs_resolve(ws, path)) return fs_push_null(proc);
 
     buf = fs_read_raw(path, &size);
     if (!buf) return fs_push_null(proc);
@@ -449,7 +449,7 @@ int32_t am_native_Fs_write(am_runtime_t *rt, am_process_t *proc) {
     utf8 = (char *)platform_malloc(cap);
     if (utf8) {
         size_t len = fs_wstring_to_utf8(ws_text, utf8, cap);
-        if (len != (size_t)-1 && fs_resolve(ws_path, path)) {
+        if (len != (size_t)-1 && am_native_fs_resolve(ws_path, path)) {
             ok = fs_write_raw(path, (const uint8_t *)utf8, len);
         }
         free(utf8);
@@ -472,7 +472,7 @@ int32_t am_native_Fs_append(am_runtime_t *rt, am_process_t *proc) {
     utf8 = (char *)platform_malloc(cap);
     if (utf8) {
         size_t len = fs_wstring_to_utf8(ws_text, utf8, cap);
-        if (len != (size_t)-1 && fs_resolve(ws_path, path)) {
+        if (len != (size_t)-1 && am_native_fs_resolve(ws_path, path)) {
             size_t old_size = 0;
             uint8_t *old = fs_read_raw(path, &old_size); // 不存在/读失败 → NULL/0，等价于空文件
 
@@ -500,7 +500,7 @@ int32_t am_native_Fs_remove(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
 
     if (!fs_pop_wstring(proc, &ws)) return -1;
-    if (fs_resolve(ws, path) && !fs_is_root_path(path)) {
+    if (am_native_fs_resolve(ws, path) && !fs_is_root_path(path)) {
         // 非空目录会失败（POSIX remove / SD.rmdir 都是如此），由 App 自己递归清空
         ok = (platform_remove_path(path) == 0);
         if (ok) fs_notify_remove(path);
@@ -520,7 +520,7 @@ int32_t am_native_Fs_rename(am_runtime_t *rt, am_process_t *proc) {
     if (!fs_pop_wstring(proc, &ws_new)) return -1;
     if (!fs_pop_wstring(proc, &ws_old)) return -1;
 
-    if (fs_resolve(ws_old, old_path) && fs_resolve(ws_new, new_path)
+    if (am_native_fs_resolve(ws_old, old_path) && am_native_fs_resolve(ws_new, new_path)
         && !fs_is_root_path(old_path) && !fs_is_root_path(new_path)) {
         // 源必须存在；目标必须不存在（不静默覆盖——POSIX rename 会覆盖同名文件）
         bool src_is_dir = (platform_is_directory(old_path) != 0);

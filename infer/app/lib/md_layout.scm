@@ -24,6 +24,7 @@
 ;;   0 正文        1 加粗        2 行内代码    3 链接
 ;;   4 标题1       5 标题2       6 标题3       7 代码块正文   8 列表项目符号
 ;;   9 表格竖线    10 引用块竖线   11 二级标题装饰竖线
+;;   12 块级图片   13 图片占位框   14 行内图片占位文本
 ;;
 ;; 字宽：本机 12px alpha 字模是等宽的——半角步进 7px、全角（>= U+2E80）12px
 ;;   （实测：i/M/W/a 均为 7，中文/全角标点为 12；见 infer/glyph_12.h 头注释）。
@@ -54,6 +55,9 @@
 (define ST_TABLE_SEP 9)   ;; 表格列间竖线（绘制端画 1px 竖条，文本为空）
 (define ST_QUOTE_BAR 10)  ;; 引用块左侧竖线
 (define ST_H2BAR 11)      ;; 二级标题左侧装饰竖线（#66ccff，3px）
+(define ST_IMAGE 12)      ;; 块级图片（段的 4 格存图片路径，0 格存 alt）
+(define ST_IMAGE_MISSING 13) ;; 图片取不到时的占位框（方案 D 兜底）
+(define ST_IMAGE_TEXT 14) ;; 行内图片的降级占位文本「[图片: alt]」
 
 (define BG_NONE 0)
 (define BG_CODE 1)
@@ -68,6 +72,9 @@
 (define QUOTE_BAR_W 2)   ;; 引用块左侧竖线宽度
 (define H2_BAR_W 3)      ;; 二级标题装饰竖线宽度
 (define H2_BAR_GAP 1)    ;; 竖线与右侧文字之间的间距（1px margin）
+(define IMG_MAX_H 160)      ;; 块级图片的最大高度（约 2/3 屏；超出按比例缩）
+(define IMG_MISS_H 26)      ;; 图片取不到时占位框的高度
+(define IMG_MAX_COUNT 24)   ;; 单篇文档最多渲染多少张图（超出退化为占位文本，防池子被吃光）
 (define W_HALF 7)        ;; 半角步进
 (define W_FULL 12)       ;; 全角步进
 (define CJK_BASE 11904)  ;; 0x2E80
@@ -77,6 +84,7 @@
 ;; ---- 造表小工具 ----------------------------------------------------------
 
 (define new_list (lambda () (cdr '(0))))
+(define mk1 (lambda (a) (cons a (cdr '(0)))))
 (define mk2 (lambda (a b) (cons a (cons b (cdr '(0))))))
 (define mk3 (lambda (a b c) (cons a (cons b (cons c (cdr '(0)))))))
 (define mk4 (lambda (a b c d) (cons a (cons b (cons c (cons d (cdr '(0))))))))
@@ -203,7 +211,13 @@
                           (set! atom_url save) }
                         (if (== tag 'bullet)
                             (push atoms (mk4 "" ST_BULLET 14 atom_url))
-                            #f)))))
+                            (if (== tag 'image)
+                                ;; 行内图片（一期）：退化为占位文本，不参与行高计算
+                                (atomize_text
+                                 (String.concat "[图片] "
+                                                (get_item (get_item inls i) 2))
+                                 ST_IMAGE_TEXT)
+                                #f))))))
         (set! i (+ i 1)) })
     #t))
 
@@ -215,6 +229,14 @@
 ;; ============================================================================
 ;; 二、原子流 → 显示行（贪心折行）
 ;; ============================================================================
+
+;; 图片度量回调：由 layout 的第三个参数注入（App 传 Gfx.image_size 的包装，
+;; 单测传桩函数）。默认返回 #f —— 即"拿不到尺寸"，排版退化为占位框，
+;; 因此纯逻辑单测不传也能跑。
+(define measure_image (lambda (path) #f))
+
+;; 本次 layout 实际画出的图片张数（诊断用：App 会打到 MDSTAT 里）
+(define images_placed 0)
 
 (define cur_lines (new_list))
 
@@ -831,6 +853,64 @@
         (set! i (+ i 1)) })
     (emit_gap 9)))
 
+;; ---- 图片（块级）---------------------------------------------------------
+;; 一期：块级图片独占一行、水平居中、等比缩放进 (正文宽, IMG_MAX_H) 的框里。
+;; 行高 = 图片高（渲染端用行高当图片高来画，见 app/markdown.scm 的 ST_IMAGE 分支）。
+;; 拿不到尺寸（文件缺失/格式不支持/超过张数上限）时产出占位框（方案 D 兜底）。
+;;
+;; 段的 5 格用法与普通文本不同：0 格 = alt 文本（占位框里显示），
+;; 4 格 = 图片路径（渲染端拿去调 (Gfx.draw_image ...)）。
+(define fit_image
+  (lambda (sw sh maxw maxh)
+    (define w sw)
+    (define h sh)
+    (if (> sw maxw)
+        { (set! h (Math.floor (/ (* sh maxw) sw)))
+          (set! w maxw) }
+        #f)
+    (if (> h maxh)
+        { (set! w (Math.floor (/ (* w maxh) h)))
+          (set! h maxh) }
+        #f)
+    (if (< w 1) (set! w 1) #f)
+    (if (< h 1) (set! h 1) #f)
+    (mk2 w h)))
+
+(define emit_image_placeholder
+  (lambda (path alt width)
+    (emit_line IMG_MISS_H BG_NONE
+               (mk1 (mk5 alt ST_IMAGE_MISSING 0 width path)))))
+
+(define lay_image
+  (lambda (b width)
+    (define path (get_item b 1))
+    (define alt (get_item b 2))
+    (define dims #f)
+    (define sw 0)
+    (define sh 0)
+    (define fit #f)
+    (define w 0)
+    (define h 0)
+    (emit_gap 7)
+    (if (>= images_placed IMG_MAX_COUNT)
+        (emit_image_placeholder path alt width)   ;; 超上限：不再解码绘制
+        { (set! dims (measure_image path))
+          ;; 注意：#null 在本解释器里是**真值**（只有 #f 为假），量不到尺寸时
+          ;; 度量回调可能返回 #null，这里必须用 list? 判定，不能只判真假。
+          (if (list? dims)
+              { (set! sw (get_item dims 0))
+                (set! sh (get_item dims 1))
+                (set! fit (fit_image sw sh width IMG_MAX_H))
+                (set! w (get_item fit 0))
+                (set! h (get_item fit 1))
+                (emit_line h BG_NONE
+                           (mk1 (mk5 alt ST_IMAGE
+                                     (Math.floor (/ (- width w) 2))
+                                     w path)))
+                (set! images_placed (+ images_placed 1)) }
+              (emit_image_placeholder path alt width)) })
+    (emit_gap 8)))
+
 ;; ---- 注册块排版（顺序无关，按种类查表）----------------------------------
 
 (layout_add 'heading lay_heading)
@@ -840,25 +920,37 @@
 (layout_add 'rule lay_rule)
 (layout_add 'table lay_table)
 (layout_add 'quote lay_quote)
+(layout_add 'image lay_image)
 
 ;; ============================================================================
 ;; 四、对外 API
 ;; ============================================================================
 
-;; 块列表 + 正文宽 → 显示行列表
+;; 块列表 + 正文宽 + 图片度量函数 → 显示行列表
+;;   measure: (measure path) → (宽 高) | #f（App 传 Gfx.image_size 的包装；
+;;            纯逻辑测试传桩函数或干脆传 #f —— 传 #f 时所有图片都按占位框渲染）
 (define layout
-  (lambda (blocks width)
+  (lambda (blocks width measure)
     (define n (length blocks))
     (define i 0)
     (define b #f)
     (define fn #f)
     (set! cur_lines (new_list))
+    (set! images_placed 0)
+    ;; 容错：调用方漏传第三个参数时 measure 是 #undefined（**不是 #f**，而 #undefined 为真），
+    ;; 直接当真会变成"调用 #undefined"报错，因此显式判 undefined? 后退化为占位框。
+    (set! measure_image (if (undefined? measure) (lambda (path) #f) measure))
     (while (< i n)
       { (set! b (get_item blocks i))
         (set! fn (layout_of (get_item b 0)))
         (if fn (fn b width) #f)          ;; 不认识的块：跳过（容错，不崩）
         (set! i (+ i 1)) })
     cur_lines))
+
+;; 本次 layout 实际画进文档的图片张数（诊断/测试用）
+(define image_count
+  (lambda ()
+    images_placed))
 
 ;; 全部显示行的总像素高
 (define total_height

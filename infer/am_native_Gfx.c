@@ -17,6 +17,7 @@
 #include <wchar.h>
 
 #include "am_native_Gfx.h"
+#include "am_native_Fs.h"   // 路径解析复用 Fs 本地库的规则
 
 
 // 绘图目标（宿主经 am_native_gfx_bind 注入）
@@ -88,6 +89,46 @@ static int32_t native_statement_done(am_process_t *proc) {
     if (am_process_push_operand(proc, AM_VALUE_UNDEFINED) != 0) return -1;
     am_process_step(proc);
     return 0;
+}
+
+// 软失败收尾：压 #null 并推进 PC（与 Fs 本地库的软失败约定一致）。
+static int32_t native_push_null(am_process_t *proc) {
+    if (am_process_push_operand(proc, AM_VALUE_NULL) != 0) return -1;
+    am_process_step(proc);
+    return 0;
+}
+
+// 压入一个两元素数值列表 (a b) 并推进 PC（图片尺寸用）。
+static int32_t native_push_pair(am_process_t *proc, am_float_t a, am_float_t b) {
+    am_list_t *lst = am_list_create(proc->heap_alloc, 2, AM_LIST_TYPE_DEFAULT, AM_HANDLE_NULL);
+    am_list_t *grown;
+    am_handle_t lhd;
+    if (lst == NULL) return native_push_null(proc);
+    grown = am_list_push(proc->heap_alloc, lst, am_make_value_of_float(a));
+    if (grown == NULL) { am_list_destroy(proc->heap_alloc, lst); return native_push_null(proc); }
+    lst = grown;
+    grown = am_list_push(proc->heap_alloc, lst, am_make_value_of_float(b));
+    if (grown == NULL) { am_list_destroy(proc->heap_alloc, lst); return native_push_null(proc); }
+    lst = grown;
+
+    lhd = am_heap_alloc_handle(proc->vm_alloc, proc->heap_alloc, proc->heap);
+    if (lhd == AM_HANDLE_NULL) { am_list_destroy(proc->heap_alloc, lst); return native_push_null(proc); }
+    if (am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, lhd,
+                    am_make_value_of_ptr((am_object_t *)lst)) != 0) {
+        am_list_destroy(proc->heap_alloc, lst);
+        am_heap_free_handle(proc->vm_alloc, proc->heap_alloc, proc->heap, lhd);
+        return native_push_null(proc);
+    }
+    if (am_process_push_operand(proc, am_make_value_of_handle(lhd)) != 0) return -1;
+    am_process_step(proc);
+    return 0;
+}
+
+// 把 Scheme 路径解析为 HAL 路径（规则与 Fs 本地库完全一致：相对业务资源根、
+// 以 '/' 开头视为绝对路径、拒绝含 ".." 的路径）。成功返回 true。
+static bool native_resolve_path(am_wstring_t *ws, char *out, size_t cap) {
+    if (ws == NULL || out == NULL) return false;
+    return am_native_fs_resolve(ws, out) && strlen(out) < cap;
 }
 
 // 数值收尾：压入数值并推进 PC。
@@ -333,6 +374,56 @@ int32_t am_native_Gfx_refresh(am_runtime_t *rt, am_process_t *proc) {
 // 库注册表
 // ===============================================================================
 
+// (Gfx.image_size path:String) : (宽 高) | #null
+// 只读文件头取原始尺寸（stbi_info），不解码像素 —— 供排版阶段算缩放与行高。
+int32_t am_native_Gfx_image_size(am_runtime_t *rt, am_process_t *proc) {
+    am_wstring_t *ws = NULL;
+    char path[256];
+    uint32_t w = 0, h = 0;
+    (void)rt;
+
+    if (!native_pop_wstring(proc, &ws)) return -1;
+    if (!native_resolve_path(ws, path, sizeof path)) return native_push_null(proc);
+    if (gfx_image_info(path, &w, &h) != 0) return native_push_null(proc);
+    return native_push_pair(proc, (am_float_t)w, (am_float_t)h);
+}
+
+// (Gfx.draw_image path:String x:Number y:Number w:Number h:Number) : Boolean
+// 从文件读图、缩放到 (w,h) 并绘制（宿主侧带 LRU 缓存；像素不进解释器堆）。
+// 失败（路径非法/文件缺失/解码失败/尺寸非法）返回 #f —— 调用方据此画占位框。
+int32_t am_native_Gfx_draw_image(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    am_wstring_t *ws = NULL;
+    char path[256];
+    int32_t h = 0, w = 0, y = 0, x = 0;
+    if (g == NULL) return -1;
+
+    if (!native_pop_int(proc, &h)) return -1;
+    if (!native_pop_int(proc, &w)) return -1;
+    if (!native_pop_int(proc, &y)) return -1;
+    if (!native_pop_int(proc, &x)) return -1;
+    if (!native_pop_wstring(proc, &ws)) return -1;
+
+    if (w <= 0 || h <= 0) {
+        if (am_process_push_operand(proc, AM_VALUE_FALSE) != 0) return -1;
+        am_process_step(proc);
+        return 0;
+    }
+    if (!native_resolve_path(ws, path, sizeof path)) {
+        if (am_process_push_operand(proc, AM_VALUE_FALSE) != 0) return -1;
+        am_process_step(proc);
+        return 0;
+    }
+    if (gfx_draw_image(g, path, (uint32_t)x, (uint32_t)y, (uint32_t)w, (uint32_t)h, 0) != 0) {
+        if (am_process_push_operand(proc, AM_VALUE_FALSE) != 0) return -1;
+        am_process_step(proc);
+        return 0;
+    }
+    if (am_process_push_operand(proc, AM_VALUE_TRUE) != 0) return -1;
+    am_process_step(proc);
+    return 0;
+}
+
 static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"width",       am_native_Gfx_width },
     { L"height",      am_native_Gfx_height },
@@ -346,6 +437,8 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"draw_circle", am_native_Gfx_draw_circle },
     { L"fill_circle", am_native_Gfx_fill_circle },
     { L"draw_text",   am_native_Gfx_draw_text },
+    { L"image_size",  am_native_Gfx_image_size },
+    { L"draw_image",  am_native_Gfx_draw_image },
     { L"refresh",     am_native_Gfx_refresh },
 };
 

@@ -14,6 +14,7 @@
 ;;                                    ——(quote-raw 行数组) 只是解析中间产物，对外 API 里不会出现
 ;;        (code 语言 lines)           围栏代码块，lines 为原始行字符串（不做行内解析）
 ;;        (rule)                      分隔线（--- / *** / ___）
+;;        (image "path" "alt")        独占一段的图片（段落里只有一个图片节点时提升为块）
 ;;        (table aligns header cells) 表格：aligns = 每列对齐方式，header = 表头单元格，
 ;;                                    cells = 数据行（行 = 单元格列表），
 ;;                                    每个单元格是**行内节点列表**（单元格里可再写加粗/代码/链接）
@@ -23,6 +24,7 @@
 ;;        (bold inlines)              **加粗** / __加粗__
 ;;        (code "字符串")             `行内代码`
 ;;        (link inlines "url")        [文本](url)
+;;        (image "path" "alt")        ![alt](path)  —— 图片；独占一段时提为块 (image path alt)
 ;;
 ;; 设计要点（为「完整 Markdown」预留的三个扩展点）
 ;; ---------------------------------------------------------------------------
@@ -70,6 +72,7 @@
 (define CP_DASH 45)
 (define CP_COLON 58)
 (define CP_GT 62)
+(define CP_BANG 33)
 (define CP_LBRK 91)
 (define CP_BSLASH 92)
 (define CP_RBRK 93)
@@ -286,6 +289,28 @@
                   #f)) }
         #f)))
 
+;; ![alt](path)：图片。**必须注册在 '[' 规则之前**，否则 `[` 会先把 `!` 后面的方括号吃掉。
+(define m_image
+  (lambda (s i)
+    (define j -1)
+    (define k -1)
+    (define alt "")
+    (define path "")
+    (if (char_is s i CP_BANG)
+        (if (char_is s (+ i 1) CP_LBRK)
+            { (set! j (find_char s (+ i 2) CP_RBRK))
+              (if (< j 0) #f
+                  (if (char_is s (+ j 1) CP_LPAR)
+                      { (set! k (find_char s (+ j 2) CP_RPAR))
+                        (if (< k 0) #f
+                            { (set! alt (String.slice s (+ i 2) j))
+                              (set! path (trim (String.slice s (+ j 2) k)))
+                              (if (== (String.length path) 0) #f
+                                  (mk2 (mk3 'image path alt) (+ k 1))) }) }
+                      #f)) }
+            #f)
+        #f)))
+
 ;; \* 之类转义：反斜杠后的字符按字面收进文本
 (define m_escape
   (lambda (s i)
@@ -300,6 +325,7 @@
 (inline_rule_add CP_TICK m_code)
 (inline_rule_add CP_STAR m_bold_star)
 (inline_rule_add CP_UNDER m_bold_under)
+(inline_rule_add CP_BANG m_image)
 (inline_rule_add CP_LBRK m_link)
 (inline_rule_add CP_BSLASH m_escape)
 
@@ -464,13 +490,19 @@
     (define txt "")
     (define k 'para)
     (define stop 0)
+    (define inl (new_list))
     (while (and (< i n) (== stop 0))
       { (set! k (classify lines i))
         (if (== k 'para)
             { (set! txt (soft_join txt (trim (get_item lines i))))
               (set! i (+ i 1)) }
             (set! stop 1)) })
-    (mk2 (mk2 'para (parse_inlines txt)) i)))
+    (set! inl (parse_inlines txt))
+    ;; 整段只有一个图片节点 → 提升为块级图片（排版时独占一行、居中、按整宽缩放）。
+    ;; 段落里混有文字时仍留在段落内，按"行内图片"处理（一期退化为占位文本，见 md_layout）。
+    (if (and (== (length inl) 1) (== (get_item (get_item inl 0) 0) 'image))
+        (mk2 (mk3 'image (get_item (get_item inl 0) 1) (get_item (get_item inl 0) 2)) i)
+        (mk2 (mk2 'para inl) i))))
 
 ;; 标题：## 文本（去掉可选的收尾 #）
 (define h_heading

@@ -4708,3 +4708,62 @@ open_doc → Fs.size 上限检查 → Fs.read → MD.parse → MDL.layout → �
 所以只需给 `Gfx` 加两个薄封装（`image_size` 用 `stbi_info` 只读文件头、`draw_image` 调 `gfx_draw_image`），
 约 80~120 行 C 代码 + 排版期注入一个"度量回调"。推荐方案 A（约 3~3.5 人日），
 兜底方案 D（虚线框 + alt）。报告含风险表（缓存只有 2 个槽位、alpha、首帧延迟）与分期建议。
+
+------------------------------------
+
+# 2026-11-02（Markdown：插图渲染实施 —— 方案 A + 方案 D 兜底）
+
+按 `doc/Markdown插图渲染可行性调研.md` 落地了插图的**一期**。核心结论没变：
+宿主早就有一条"读文件→解码→缩放→LRU 缓存→落屏"的链路（`gfx_draw_image`），
+本轮只是把它**接出来**给 Scheme 用，外加缺图时的虚线框兜底（方案 D）。
+
+## 1. 接口（新增 2 个 Gfx 本地库函数）
+
+```scheme
+(Gfx.image_size path)                ; → (宽 高) | #null   只读文件头（stbi_info），不解码
+(Gfx.draw_image path x y w h)        ; → #t / #f           按给定尺寸解码+缩放+落屏（宿主 LRU 缓存）
+```
+
+- C 侧新增/改动：`graphics.c` 的 `gfx_image_info()`（`stbi_info`）、`gfx_draw_image()` 返回值
+  `void → int32_t`；`am_native_Gfx.c` 两个 native 包装；`am_native_Fs.c` 把 `fs_resolve`
+  提升为公共 `am_native_fs_resolve()`，Gfx 与 Fs 共用同一套路径规则（相对业务资源根、拒绝 `..`）。
+- **等比缩放放在排版端**（不是 C 侧）：排版本来就要算行高，顺手算出缩放宽高，
+  绘制端只负责"按给定尺寸画"，契约更简单。
+
+## 2. Scheme 侧
+
+- `md_parse.scm`：行内规则 `![alt](path)` → `(image path alt)`（**必须注册在 `[` 之前**）；
+  整段只有一个图片节点时提升为块 `(image path alt)`（块级图片独占一行、居中）。
+- `md_layout.scm`：`layout` 增加第三个参数——**图片度量回调**（`(measure path) → (w h) | #f`），
+  真机传 `Gfx.image_size` 包装、单测传桩（`md_parse/md_layout` 仍是纯逻辑、可脱离 GUI 单测）；
+  新样式 `ST_IMAGE / ST_IMAGE_MISSING / ST_IMAGE_TEXT`；`IMG_MAX_H=160`（等比缩放进
+  「正文宽 × 160」）、`IMG_MAX_COUNT=24`（超出退化为占位框，防一次排版吃光池子）。
+- `markdown.scm`：`image_path` 按**文档所在目录**解析相对路径（Markdown 习惯）；
+  `draw_image_missing` + `draw_dashed_rect` 画虚线框 + alt（方案 D）；`MDSTAT` 增加 `images=N`。
+- `md_demo.scm`：加「插图」一节说明语法与兜底（不引用具体文件，跨平台一致）。
+
+## 3. 坑：`#null` 是**真值**
+
+`(Gfx.image_size ...)` 失败返回 `#null`，而本解释器里除 `#f` 外一切都是真——
+排版端原本写 `(if dims ...)`，于是把 `#null` 当尺寸去 `get_item`，直接
+`[Runtime] 指令执行异常`（表现为"打开含缺图的文档就崩"）。两处同时修：
+App 侧把 `#null` 归一成 `#f`，排版端再用 `(list? dims)` 类型判定（双保险）。
+
+顺带记一个同类事故：`Gfx.draw_image` 的段样式如果继续走"通用画文字"分支，
+**alt 文本会叠在图片上**（第一版就是这样），现在图片/占位框样式跳过通用文字绘制。
+
+## 4. 一期范围与遗留
+
+- 只做**块级图片**；行内 `![..](..)`（段落中间）退化为暗色占位文本「[图片] alt」——
+  行内图片会让行高与图片高度耦合，留到二期。
+- alpha 通道未做混合（置色语义）；`GFX_IMAGE_CACHE_SIZE` 仍是默认 2（多图文档可考虑调大）。
+
+## 5. 验证
+
+- 解析单测 **124/124**（新增 13 条：块级提升、行内节点、无 alt、路径去空白、残缺写法退化）；
+- 排版单测 **89/89**（新增 19 条：行高=图片高、水平居中、路径/alt 存放位置、
+  缺图占位框、超大图等比缩到 160 高、张数上限、行内降级为占位文本）；
+- 宿主端到端 **48/48**（真 PNG 画出来：品红像素 720；缺图虚线框像素 172；`images=1`）；
+- 浏览器端到端（真 WASM）**40/40**（base64→`FS.writeFile` 写 `doc/img.png`，
+  品红 1200 像素、虚线框 338 像素、无 pageerror）；
+- 宿主 35 个 App 回归全 `err=none`。

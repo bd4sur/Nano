@@ -100,6 +100,15 @@ int32_t am_native_Fs_write(am_runtime_t *rt, am_process_t *proc);
 // (Fs.append path:String text:String) : Boolean
 int32_t am_native_Fs_append(am_runtime_t *rt, am_process_t *proc);
 
+// ---------------------------------------------------------------------------
+// 供其它本地库复用的路径解析（Gfx 的图片接口需要与 Fs 完全一致的路径规则）
+// ---------------------------------------------------------------------------
+
+// 把 Scheme 路径字符串解析为 HAL 路径（规则见本文件头注释：相对业务资源根、
+// 以 '/' 开头视为绝对路径、拒绝含 ".." 的路径）。
+// 返回 true 成功；false 表示路径非法（空/超长/含 ".."）。out 需 >= 256 字节。
+bool am_native_fs_resolve(am_wstring_t *ws, char *out);
+
 // (Fs.remove path:String) : Boolean —— 删除文件或空目录
 int32_t am_native_Fs_remove(am_runtime_t *rt, am_process_t *proc);
 

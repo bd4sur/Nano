@@ -109,6 +109,9 @@
     ;; 二级标题左侧装饰竖线的颜色：#66ccff
     (if (== st MDL.ST_H2BAR)
         { (set! cr 102) (set! cg 204) (set! cb 255) (set! style_weight 1) } #f)
+    ;; 行内图片的降级占位文本（一期不支持行内插图）
+    (if (== st MDL.ST_IMAGE_TEXT)
+        { (set! cr 130) (set! cg 146) (set! cb 172) (set! style_weight 1) } #f)
     #t))
 
 ;; ---- 状态 ----------------------------------------------------------------
@@ -226,6 +229,78 @@
   (lambda (line1 line2)
     (MD.parse_lines (cons line1 (cons "" (cons line2 (cdr '(0))))))))
 
+;; ---- 图片支持（方案 A：宿主解码；方案 D：取不到时画虚线框兜底）----------
+;;
+;; 分工（详见 doc/Markdown插图渲染可行性调研.md）：
+;;   · 解析端只产出 (image 路径 alt)，不碰文件；
+;;   · 排版端通过下面的 (doc_image_size) 度量回调拿原始尺寸，按正文宽等比缩放，
+;;     产出一行"高度 = 图片高"的显示行（段样式 ST_IMAGE，段里带路径与 alt）；
+;;   · 绘制端只调 (Gfx.draw_image ...) 让宿主解码+缩放+落屏——像素永不进解释器堆；
+;;     返回 #f（文件缺失/格式不支持）时画虚线框 + alt 文本兜底。
+;;
+;; 路径规则：Markdown 习惯是"以文档所在目录为基准"。文档路径形如 "doc/x.md" 时
+;; 基准是 "doc/"，根目录文档基准是空串；Gfx 的路径规则与 Fs 一致（相对资源根）。
+(define doc_dir "")     ;; 当前文档所在目录（含结尾 '/'；根目录为空串）
+
+(define set_doc_dir
+  (lambda (path)
+    (define n (String.length path))
+    (define i 0)
+    (define cut -1)
+    (while (< i n)
+      { (if (== (String.charCodeAt i path) 47) (set! cut i) #f)   ;; '/'
+        (set! i (+ i 1)) })
+    (if (< cut 0) (set! doc_dir "") (set! doc_dir (String.slice path 0 (+ cut 1))))))
+
+;; Markdown 里的图片引用 → 资源根相对路径
+(define image_path
+  (lambda (p)
+    (if (== (String.length p) 0) p
+        (if (== (String.charCodeAt 0 p) 47) p          ;; 已是绝对路径：原样
+            (String.concat doc_dir p)))))
+
+;; 排版期的度量回调：(路径) → (宽 高) | #f
+;; 注意 (Gfx.image_size ...) 失败时返回 #null，而 #null 在本解释器里是**真值**，
+;; 这里统一归一成 #f，排版端只需判真假/类型即可（见 md_layout 的 lay_image）。
+(define doc_image_size
+  (lambda (p)
+    (define r (Gfx.image_size (image_path p)))
+    (if (null? r) #f r)))
+
+;; 虚线框兜底（方案 D）：沿矩形边画 3px 亮 / 3px 暗的短线段 + alt 文本
+(define draw_dashed_rect
+  (lambda (x y w h r g bl)
+    (define k 0)
+    (define on 1)
+    (while (< k w)
+      { (if (== on 1)
+            { (Gfx.fill_rect (+ x k) y 3 1 r g bl)
+              (Gfx.fill_rect (+ x k) (- (+ y h) 1) 3 1 r g bl) }
+            #f)
+        (set! on (if (== on 1) 0 1))
+        (set! k (+ k 3)) })
+    (set! k 0)
+    (set! on 1)
+    (while (< k h)
+      { (if (== on 1)
+            { (Gfx.fill_rect x (+ y k) 1 3 r g bl)
+              (Gfx.fill_rect (- (+ x w) 1) (+ y k) 1 3 r g bl) }
+            #f)
+        (set! on (if (== on 1) 0 1))
+        (set! k (+ k 3)) })
+    #t))
+
+(define draw_image_missing
+  (lambda (x y w h alt)
+    (draw_dashed_rect x y w h 92 104 128)
+    (Gfx.draw_text (MDL.clip_text (if (> (String.length alt) 0)
+                                       (String.concat "[图片] " alt)
+                                       "[图片缺失]")
+                                   (- w 8))
+                   (+ x 4) (+ y (Math.floor (/ (- h 14) 2)))
+                   150 162 186)
+    #t))
+
 ;; ---- 打开文档：读文本 → 解析 → 排版 --------------------------------------
 
 ;; 按**路径**打开（列表选中与文件选择器共用同一条链路）
@@ -235,6 +310,7 @@
     (define bs (new_list))
     (define fsize 0)
     (set! cur_title title)
+    (set_doc_dir path)
     (set! fsize (Fs.size path))
     (if (null? fsize)
         (set! bs (notice_blocks "读取失败：文件不存在（或超过 Fs 的 128KB 上限）。"
@@ -250,13 +326,14 @@
                   ;; 注意：MD.parse 接受**整段文本**（内部自己 split_lines），
                   ;; 别再把行表传进去
                   (set! bs (MD.parse text))) }))
-    (set! lines (MDL.layout bs CW))
+    (set! lines (MDL.layout bs CW doc_image_size))
     (set! content_h (MDL.total_height lines))
     (set! scroll 0)
     (set! mode 0)
     ;; 诊断行（宿主 stdout / 浏览器控制台；端到端测试据此断言解析与排版规模）
     (display "MDSTAT blocks=") (display (length bs))
     (display " lines=") (display (length lines))
+    (display " images=") (display (MDL.image_count))
     (display " height=") (display content_h)
     (display " title=") (display cur_title) (newline)
     #t))
@@ -269,7 +346,8 @@
     (set! sel idx)
     (if (== (String.length path) 0)
         { (set! cur_title (get_item d 1))
-          (set! lines (MDL.layout (MD.parse_lines MDE.lines) CW))
+          (set_doc_dir "")
+          (set! lines (MDL.layout (MD.parse_lines MDE.lines) CW doc_image_size))
           (set! content_h (MDL.total_height lines))
           (set! scroll 0)
           (set! mode 0)
@@ -346,6 +424,15 @@
     (if (== st MDL.ST_TABLE_SEP)
         (Gfx.fill_rect x y 1 h cr cg cb)
         #f)
+    ;; 块级图片：交给宿主解码（带 LRU 缓存），失败就走虚线框兜底（方案 D）
+    (if (== st MDL.ST_IMAGE)
+        { (if (Gfx.draw_image (image_path (get_item sg 4)) x y w h)
+              #f
+              (draw_image_missing x y w h txt)) }
+        #f)
+    (if (== st MDL.ST_IMAGE_MISSING)
+        (draw_image_missing x y w h txt)
+        #f)
     (if (== st MDL.ST_QUOTE_BAR)
         (Gfx.fill_rect x y w h cr cg cb)
         #f)
@@ -363,7 +450,10 @@
     (if (and (> (String.length txt) 0) (== st MDL.ST_H3))
         (Gfx.fill_rect x (+ y 15) w 1 96 128 168)
         #f)
-    (if (> (String.length txt) 0)
+    ;; 图片段（ST_IMAGE / ST_IMAGE_MISSING）的 alt 已由图片绘制/占位框处理，跳过通用文字绘制
+    (if (and (> (String.length txt) 0)
+             (not (== st MDL.ST_IMAGE))
+             (not (== st MDL.ST_IMAGE_MISSING)))
         { (set! k 0)
           (while (< k style_weight)
             { (Gfx.draw_text txt (+ x k) (+ y 1) cr cg cb)

@@ -2662,12 +2662,25 @@ void gfx_dithering(Nano_GFX *gfx) {
 
 
 
+// 读取图像文件的原始尺寸：stbi_info 只解析文件头（PNG 的 IHDR、JPEG 的 SOFn 等），
+// 不解码像素、不分配位图，因此可以在排版阶段（每帧可能调用多次）安全使用。
+int32_t gfx_image_info(const char *img_path, uint32_t *out_width, uint32_t *out_height) {
+    if (img_path == NULL || out_width == NULL || out_height == NULL) return -1;
+    int w = 0, h = 0, channels = 0;
+    if (!stbi_info(img_path, &w, &h, &channels)) return -1;
+    if (w <= 0 || h <= 0) return -1;
+    *out_width = (uint32_t)w;
+    *out_height = (uint32_t)h;
+    return 0;
+}
+
 // 从指定文件读取图像并绘制到 frame_buffer（带缓存）
 // img_path: 图像文件路径
 // x0, y0: 目标区域左上角坐标
 // width, height: 目标区域宽高（图像将被缩放到此大小）
 // is_force_fetch: 如果非0，忽略缓存，重新读取并resize图像，并更新缓存
-void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch) {
+// 返回: 0 成功，-1 失败（读文件/解码/分配失败）
+int32_t gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch) {
     // 初始化缓存
     init_image_cache();
     
@@ -2697,15 +2710,15 @@ void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uin
         // 加载图像文件，获取 RGB 数据（3通道）
         unsigned char *img_data = stbi_load(img_path, &img_w, &img_h, &channels, 3);
         if (img_data == NULL) {
-            // 加载失败，直接返回
-            return;
+            // 加载失败（文件不存在/格式不支持）：交给调用方兜底
+            return -1;
         }
         
         // 分配缩放后图像的内存（RGB888 格式，3字节/像素）
         draw_data = (uint8_t *)platform_malloc(width * height * 3);
         if (draw_data == NULL) {
             stbi_image_free(img_data);
-            return;
+            return -1;
         }
         
         // 缩放图像到目标尺寸
@@ -2739,7 +2752,7 @@ void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uin
                 src += 3;
             }
         }
-        return;
+        return 0;
     }
 
     for (uint32_t y = y0; y < y_end; y++) {
@@ -2753,6 +2766,7 @@ void gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uin
             gfx_set_pixel(gfx, x, y, draw_data[src_idx], draw_data[src_idx + 1], draw_data[src_idx + 2]);
         }
     }
+    return 0;
 }
 
 // 从内存缓冲区读取图像并绘制到 frame_buffer（无缓存，每次重新解码和缩放）

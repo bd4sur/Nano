@@ -76,6 +76,17 @@ int32_t am_native_Gfx_fill_circle(am_runtime_t *rt, am_process_t *proc);
 // —— 绘制一行文本（12px 平滑字模；(x,y) 为行框左上角）
 int32_t am_native_Gfx_draw_text(am_runtime_t *rt, am_process_t *proc);
 
+// (Gfx.image_size path:String) : List | #null
+// —— 图片原始尺寸 (宽 高)。只读文件头（stbi_info），不解码像素，
+//    供**排版阶段**算等比缩放与行高；文件缺失/格式不支持返回 #null。
+int32_t am_native_Gfx_image_size(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.draw_image path:String x:Number y:Number w:Number h:Number) : Boolean
+// —— 从文件读图、缩放到 (w,h) 并绘制（宿主侧带 LRU 缓存；像素永不进解释器堆）。
+//    路径规则与 (native Fs) 完全一致（相对业务资源根、拒绝 ".."）。
+//    失败（文件缺失/解码失败/尺寸非法）返回 #f —— 供调用方画占位框兜底。
+int32_t am_native_Gfx_draw_image(am_runtime_t *rt, am_process_t *proc);
+
 // (Gfx.refresh) : #undefined —— 推帧上屏（脏区局部刷新）
 int32_t am_native_Gfx_refresh(am_runtime_t *rt, am_process_t *proc);
 
