@@ -240,11 +240,46 @@
 ;; 本次 layout 实际画出的图片张数（诊断用：App 会打到 MDSTAT 里）
 (define images_placed 0)
 
+;; 已排显示行的累计高度（emit_line 维护）：目录条目记的就是"标题在文档里的 y 偏移"，
+;; 点目录跳转 = 直接把这个值当 scroll 用，不需要反查行号。
+(define cur_y 0)
+
+;; 目录：本次 layout 收集到的标题（层级 1~3；4~6 级按 3 级归档），元素 = (层级 y文本 文本)。
+;; 引用块里的标题不进目录（quote_depth > 0 时跳过）——那是"引文"而不是本文的结构。
+(define toc_entries (new_list))
+(define quote_depth 0)
+
+;; 行内节点 → 纯文本（目录条目用；加粗/链接递归取内容，图片取 alt）
+(define inlines_text
+  (lambda (inls)
+    (define n (length inls))
+    (define i 0)
+    (define out "")
+    (define nd #f)
+    (define tag 'text)
+    (while (< i n)
+      { (set! nd (get_item inls i))
+        (set! tag (get_item nd 0))
+        (if (== tag 'text)
+            (set! out (String.concat out (get_item nd 1)))
+            (if (== tag 'code)
+                (set! out (String.concat out (get_item nd 1)))
+                (if (== tag 'bold)
+                    (set! out (String.concat out (inlines_text (get_item nd 1))))
+                    (if (== tag 'link)
+                        (set! out (String.concat out (inlines_text (get_item nd 1))))
+                        (if (== tag 'image)
+                            (set! out (String.concat out (get_item nd 2)))
+                            #f)))))
+        (set! i (+ i 1)) })
+    out))
+
 (define cur_lines (new_list))
 
 (define emit_line
   (lambda (h bg segs)
-    (push cur_lines (mk3 h bg segs))))
+    (push cur_lines (mk3 h bg segs))
+    (set! cur_y (+ cur_y h))))
 
 (define emit_gap
   (lambda (h)
@@ -393,6 +428,10 @@
     (if (== shown 2) (set! base ST_H2) #f)
     (if (== shown 3) (set! base ST_H3) #f)
     (emit_gap (if (> lvl 1) 9 13))
+    ;; 目录条目：层级取"显示层级"（4~6 级按 3 级归档），y 就是标题行的顶端偏移
+    (if (== quote_depth 0)
+        (push toc_entries (mk3 shown cur_y (inlines_text (get_item b 2))))
+        #f)
     (set! before (length cur_lines))
     ;; H2 要给左侧竖线让出「竖线宽 + 1px 间距」（折行时同样少这么多）
     (if (== shown 2)
@@ -510,7 +549,10 @@
     (if (== (length flat) 0)
         (emit_line LINE_H BG_NONE (cons (mk5 "" ST_QUOTE_BAR 0 QUOTE_BAR_W "")
                                         (new_list)))   ;; 空引用也给一行 + 一条竖线
-        (lay_quote_items flat width))
+        { ;; 排引用内容期间置 quote_depth：里面的标题不进目录（见 lay_heading）
+          (set! quote_depth (+ quote_depth 1))
+          (lay_quote_items flat width)
+          (set! quote_depth (- quote_depth 1)) })
     (emit_gap 7)))
 
 ;; ---- 围栏代码块 ----------------------------------------------------------
@@ -959,6 +1001,9 @@
     (define fn #f)
     (set! cur_lines (new_list))
     (set! images_placed 0)
+    (set! cur_y 0)
+    (set! toc_entries (new_list))
+    (set! quote_depth 0)
     ;; 容错：调用方漏传第三个参数时 measure 是 #undefined（**不是 #f**，而 #undefined 为真），
     ;; 直接当真会变成"调用 #undefined"报错，因此显式判 undefined? 后退化为占位框。
     (set! measure_image (if (undefined? measure) (lambda (path) #f) measure))
@@ -973,6 +1018,11 @@
 (define image_count
   (lambda ()
     images_placed))
+
+;; 本次 layout 收集到的目录（元素 = (层级 y偏移 文本)；层级 1~3）
+(define toc
+  (lambda ()
+    toc_entries))
 
 ;; 全部显示行的总像素高
 (define total_height

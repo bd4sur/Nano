@@ -338,6 +338,8 @@
                   ;; 别再把行表传进去
                   (set! bs (MD.parse text))) }))
     (set! lines (MDL.layout bs CW doc_image_size))
+    (set! toc_items (MDL.toc))          ;; 排版顺带收集的目录（层级 1~3）
+    (set! toc_open 0)
     (set! content_h (MDL.total_height lines))
     (set! scroll 0)
     (set! mode 0)
@@ -359,6 +361,8 @@
         { (set! cur_title (get_item d 1))
           (set_doc_dir "")
           (set! lines (MDL.layout (MD.parse_lines MDE.lines) CW doc_image_size))
+          (set! toc_items (MDL.toc))
+          (set! toc_open 0)
           (set! content_h (MDL.total_height lines))
           (set! scroll 0)
           (set! mode 0)
@@ -412,6 +416,169 @@
           (draw_all) }
         #f)
     #t))
+
+;; ---- 目录（TOC）---------------------------------------------------------
+;; 数据来自排版阶段：MDL.layout 顺带收集本次文档的标题（层级 1~3、y 偏移、纯文本），
+;; 引用块里的标题不算（见 md_layout 的 quote_depth）。点条目跳转 = 把该条目的 y 当成
+;; scroll —— 排版期就把坐标定死了，所以"跳转"是一次减法，没有反查。
+;;
+;; 面板是全屏覆盖式：自己消费输入与推屏；活动期间**不调 (EX.check)**，
+;; 返回请求（硬 A/ESC）改为"关闭面板"（与文件选择器同一思路）。
+
+(define toc_items (cdr '(0)))   ;; 当前文档目录：(层级 y 文本) 的列表
+(define toc_open 0)             ;; 1 = 面板打开
+(define toc_sel 0)              ;; 面板里选中的条目
+(define TOC_ROW 15)             ;; 条目行高
+(define TOC_TOP 26)             ;; 条目区起始 y（页眉 18 + 8）
+(define TOC_BTN_W 40)
+(define TOC_BTN_H 14)
+
+(define toc_btn_x (lambda () (- (open_btn_x) (+ TOC_BTN_W 4))))
+(define toc_btn_y (lambda () (- SH 17)))
+
+(define toc_rows          ;; 面板一屏能放几条
+  (lambda ()
+    (Math.floor (/ (- (- SH BOT_H) TOC_TOP) TOC_ROW))))
+
+(define toc_first         ;; 列表窗口首条（跟随选中项滚动）
+  (lambda ()
+    (define rows (toc_rows))
+    (if (>= toc_sel rows) (- (+ toc_sel 1) rows) 0)))
+
+(define hit_toc_btn
+  (lambda (px py)
+    (if (and (>= px (toc_btn_x)) (< px (+ (toc_btn_x) TOC_BTN_W)))
+        (if (and (>= py (toc_btn_y)) (< py (+ (toc_btn_y) TOC_BTN_H))) 1 0)
+        0)))
+
+(define draw_toc_btn
+  (lambda ()
+    (Gfx.fill_rect (toc_btn_x) (toc_btn_y) TOC_BTN_W TOC_BTN_H 52 58 76)
+    (Gfx.draw_rect (toc_btn_x) (toc_btn_y) TOC_BTN_W TOC_BTN_H 110 118 140)
+    (Gfx.draw_text "目录" (+ (toc_btn_x) 7) (+ (toc_btn_y) 1) 225 228 235)
+    #t))
+
+;; 打开面板：选中项默认落在"当前阅读位置之前最近的标题"上
+(define toc_open_panel
+  (lambda ()
+    (define n (length toc_items))
+    (define i 0)
+    (define y 0)
+    (set! toc_sel 0)
+    (while (< i n)
+      { (set! y (get_item (get_item toc_items i) 1))
+        (if (<= y scroll) (set! toc_sel i) #f)
+        (set! i (+ i 1)) })
+    (set! toc_open 1)
+    (display "MDTOC n=") (display n) (newline)
+    #t))
+
+(define toc_close
+  (lambda ()
+    (set! toc_open 0)
+    #t))
+
+;; 跳到第 i 条
+(define toc_jump
+  (lambda (i)
+    (define y 0)
+    (if (and (>= i 0) (< i (length toc_items)))
+        { (set! y (get_item (get_item toc_items i) 1))
+          (set! scroll (- y 6))            ;; 标题上方留一点余量
+          (clamp_scroll)
+          (display "MDJUMP i=") (display i) (display " y=") (display y) (newline)
+          (set! toc_open 0) }
+        #f)
+    #t))
+
+;; 面板绘制
+(define draw_toc_panel
+  (lambda ()
+    (define n (length toc_items))
+    (define first (toc_first))
+    (define last 0)
+    (define i 0)
+    (define y 0)
+    (define it #f)
+    (define lvl 1)
+    (define tx 0)
+    (Gfx.fill_rect 0 0 SW SH 16 19 26)
+    (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
+    (Gfx.draw_text "目录" PAD_X 3 236 242 250)
+    (Gfx.draw_text (String.concat (String.atom_to_string n) " 条") 250 3 150 168 190)
+    (set! last (+ first (toc_rows)))
+    (if (> last n) (set! last n) #f)
+    (set! i first)
+    (while (< i last)
+      { (set! y (+ TOC_TOP (* (- i first) TOC_ROW)))
+        (set! it (get_item toc_items i))
+        (set! lvl (get_item it 0))
+        (set! tx (+ PAD_X (* (- lvl 1) 10)))
+        (if (== i toc_sel)
+            { (Gfx.fill_rect 2 (- y 2) (- SW 4) TOC_ROW 40 50 68)
+              (Gfx.fill_rect 2 (- y 2) 3 TOC_ROW 102 204 255) }
+            #f)
+        ;; 层级用颜色与缩进表达：一级最亮，二三级渐暗
+        (if (== lvl 1)
+            (Gfx.draw_text (MDL.clip_text (get_item it 2) (- SW (+ tx 12))) tx y 238 244 252)
+            (if (== lvl 2)
+                (Gfx.draw_text (MDL.clip_text (get_item it 2) (- SW (+ tx 12))) tx y 206 218 236)
+                (Gfx.draw_text (MDL.clip_text (get_item it 2) (- SW (+ tx 12))) tx y 168 182 204)))
+        (set! i (+ i 1)) })
+    (if (== n 0)
+        (Gfx.draw_text "（本文没有 1~3 级标题）" PAD_X TOC_TOP 150 162 186)
+        #f)
+    (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
+    (Gfx.draw_text "↑↓ 选择 · Enter/点按 跳转 · 返回关闭" PAD_X (- SH 14) 130 140 155)
+    (Gfx.refresh)
+    #t))
+
+;; 面板里的点击：点条目跳转，点页眉区关闭
+(define toc_tap
+  (lambda (px py)
+    (define idx 0)
+    (define n (length toc_items))
+    (if (< py TOC_TOP)
+        (toc_close)
+        { (set! idx (+ (toc_first) (Math.floor (/ (- py TOC_TOP) TOC_ROW))))
+          (if (< idx n) (toc_jump idx) (toc_close)) })
+    #t))
+
+(define apply_key_toc
+  (lambda (k)
+    (define n (length toc_items))
+    (if (== k 1) { (set! toc_sel (- toc_sel 1)) (if (< toc_sel 0) (set! toc_sel 0) #f) } #f)
+    (if (== k 2) { (set! toc_sel (+ toc_sel 1)) (if (>= toc_sel n) (set! toc_sel (- n 1)) #f) } #f)
+    (if (== k 13) (toc_jump toc_sel) #f)
+    (if (== k 27) (toc_close) #f)
+    #t))
+
+(define tick_toc
+  (lambda ()
+    { ;; 返回请求归面板消费（= 关闭面板），不交给 EX 去弹退出确认
+      (if (App.back_requested) (toc_close) #f)
+      (set! key (Key.take_press))
+      (while (not (== key 0))
+        { (apply_key_toc key)
+          (set! key (Key.take_press)) })
+      (if (Touch.is_pressed)
+          { (if (== prev_down 0)
+                { (set! prev_down 1)
+                  (set! drag_total 0)
+                  (set! drag_last (Touch.y))
+                  (set! press_x (Touch.x))
+                  (set! press_y (Touch.y)) }
+                #f)
+            (set! dyy (- (Touch.y) drag_last))
+            (set! drag_last (Touch.y))
+            (set! drag_total (+ drag_total dyy)) }
+          { (if (== prev_down 1)
+                { (set! prev_down 0)
+                  (if (< (Math.abs drag_total) 8)
+                      (toc_tap press_x press_y)
+                      #f) }
+                #f) })
+      (draw_toc_panel) }))
 
 ;; ---- 绘制：单个段 --------------------------------------------------------
 
@@ -541,6 +708,9 @@
     (if (== mode 0)
         (Gfx.draw_text "拖动/↑↓ 滚动 · 点链接看地址" PAD_X (- SH 14) 130 140 155)
         (Gfx.draw_text "↑↓ 选择 · Enter/点按 打开" PAD_X (- SH 14) 130 140 155))
+    (if (and (== mode 0) (> (length toc_items) 0))
+        (draw_toc_btn)      ;; 底栏右侧偏左：目录（仅阅读页且有标题时）
+        #f)
     (draw_open_btn)   ;; 底栏右侧：打开选择器（触屏唯一入口）
     #t))
 
@@ -596,6 +766,12 @@
 ;; ---- 绘制总入口 ----------------------------------------------------------
 
 (define draw_all
+  (lambda ()
+    (if (== toc_open 1)
+        (draw_toc_panel)        ;; 目录面板：整屏归它（含推屏）
+        (draw_page))))
+
+(define draw_page
   (lambda ()
     (Gfx.fill_rect 0 0 SW SH 14 17 22)
     (if (== mode 0)
@@ -695,9 +871,13 @@
                 (if (< (Math.abs drag_total) 8)
                     (if (== (hit_open_btn press_x press_y) 1)
                         (start_picker)
-                        (if (== mode 0)
-                            (tap_reader press_x press_y)
-                            (tap_list press_y)))
+                        (if (and (== mode 0)
+                                 (== (hit_toc_btn press_x press_y) 1)
+                                 (> (length toc_items) 0))
+                            (toc_open_panel)
+                            (if (== mode 0)
+                                (tap_reader press_x press_y)
+                                (tap_list press_y))))
                     #f) }
               #f) })
     #t))
@@ -730,10 +910,12 @@
   (lambda ()
     (if (FP.active)
         (tick_picker)          ;; 选择器活动期间：输入/绘制全归它，EX 不抢返回请求
-        { (EX.check)
-          (handle_keys)
-          (handle_touch)
-          (draw_all) })))
+        (if (== toc_open 1)
+            (tick_toc)         ;; 目录面板同理（返回请求 = 关闭面板）
+            { (EX.check)
+              (handle_keys)
+              (handle_touch)
+              (draw_all) }))))
 
 ;; ---- 启动 ----------------------------------------------------------------
 

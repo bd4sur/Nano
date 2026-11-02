@@ -40,6 +40,8 @@
 //   · 24MB：markdown.scm（连着 md_parse / md_layout / md_demo / exit 四个模块一起编译，
 //          编译期工作区就要 ~13MB；实测 12MB 时连 8KB 的 Markdown 文件都装不下，
 //          24MB 能容纳约 32KB 文档——App 侧据此设了 DOC_MAX 上限并给出友好提示）
+//   · 32MB：markdown.scm 继续长大（又并进 filepicker / fsx 两个模块，且加了目录功能），
+//          24MB 时编译期 VM 区（池的一半）就装不下了；32MB 实测可正常加载
 // 编译期的 VM 工作区占用远大于运行期堆占用（后者极小）。
 // 内存受限宿主：pool_size 按「最大连续块 - 余量」自适应下调（见下），
 // 小 App 仍可正常运行；装不下的大 App 会显示「内存不足」错误画面。
@@ -49,7 +51,7 @@
 #if NANO_IS_M5ESP
     #define MB_POOL_SIZE   (2ULL * 1024 * 1024)
 #else
-    #define MB_POOL_SIZE   (24ULL * 1024 * 1024)
+    #define MB_POOL_SIZE   (32ULL * 1024 * 1024)
 #endif
 #define MB_POOL_MIN    (512ULL * 1024)
 #define MB_POOL_MARGIN (64ULL * 1024)
