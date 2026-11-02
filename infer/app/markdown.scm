@@ -11,10 +11,13 @@
 ;;   围栏代码块、分隔线、**表格**（GFM 语法：列对齐、单元格内行内样式、自动列宽、
 ;;   单元格内折行）、段落（含 CJK 软换行）。引用块/有序列表/嵌套列表留有扩展位。
 ;;
-;; 文档来源：
-;;   · 业务资源根下的 doc/*.md（需要自备；桌面/WASM 上即 <资源根>/doc/）；
-;;   · 一个文件都没有时用内置示例文档（md_demo.scm），保证任何平台开箱可见。
-;;   多于一个文档时先显示列表（↑↓ 选择、Enter/点按打开），否则直接打开。
+;; 文档来源（都走 Fs 真文件链路）：
+;;   · 业务资源根下的 doc/*.md 与根目录下的 *.md（桌面上即 /home/bd4sur/linglong/）；
+;;   · **首次启动会把内置示例（md_demo.scm）写成 doc/Markdown 示例.md** 再按文件打开，
+;;     所以"打开文件系统里的 Markdown"这条链路开箱即被走过一遍；文件已存在则不覆盖
+;;     （可以像便签一样直接编辑它）；只读文件系统写失败时退回内存里的内置示例。
+;;   多于一个文档时先显示列表（↑↓ 选择、Enter/点按打开，列表过长自动滚动），
+;;   否则直接打开。
 ;;
 ;; 交互：
 ;;   · 触屏拖动 = 滚动（手指移动多少滚多少）；轻点链接 = 弹窗显示目标地址；
@@ -50,6 +53,7 @@
 (define CW 308)       ;; 正文宽 = SW - 2*PAD_X（启动时按实际屏宽重算）
 (define ROW_H 20)     ;; 文档列表行高
 (define LIST_Y 26)    ;; 文档列表首行 y
+(define LIST_ROWS 9)  ;; 文档列表一次显示几项（更多时随选中项滚动）
 
 ;; 单篇文档的字节上限。为什么要有：本阅读器是"整篇解析 + 整篇排版"（换来滚动/命中
 ;; 测试全是算术，见 md_layout.scm 的设计说明），排版出的显示行按 ~1KB/行 占堆；
@@ -57,6 +61,10 @@
 ;; 实测（vendor 核心，24MB 池）：31.8KB / 2260 显示行仍可排版，再大就会分配失败。
 ;; 宁可提前给出可读提示，也不要让用户看到一个"指令执行异常"的中断。
 (define DOC_MAX 30720)   ;; 30KB（实测 31.8KB / 678 块仍可排版，留一点余量）
+
+;; 内置示例首次启动时落盘到这里的文件名（标题即去掉扩展名的文件名）
+(define SEED_TITLE "Markdown 示例")
+(define DEMO_PATH "doc/Markdown 示例.md")
 
 ;; ---- 配色 ----------------------------------------------------------------
 
@@ -150,25 +158,55 @@
     (if (ends_with s ".markdown") (String.slice s 0 (- (String.length s) 9))
         (if (ends_with s ".md") (String.slice s 0 (- (String.length s) 3)) s))))
 
-;; 扫描资源根下的 doc/*.md（按名字升序，由宿主 list_files 保证）；末位追加内置示例
-(define scan_docs
+;; 首次启动时把**内置示例**写成真正的 .md 文件（boot 调用），之后一律按文件打开。
+;; 为什么这样设计：
+;;   · 示例内容只有一处真源（md_demo.scm，在 git 里），不额外维护一份 .md 副本；
+;;   · "阅读器打开文件系统中的 Markdown" 这条链路从第一次启动就被真正走过一遍
+;;     （Fs.write → Fs.list → Fs.read → 解析 → 排版 → 渲染），而不是只走内存里的字面量；
+;;   · 文件已存在时**不覆盖**——用户可以直接编辑它（便签式用法），升级 App 也不会被冲掉。
+(define seed_demo_file
   (lambda ()
-    (define nm (Fs.list "doc"))
+    (define ok #f)
+    (if (Fs.exists DEMO_PATH)
+        #f
+        { (set! ok (Fs.write DEMO_PATH (String.concat (MD.join_lines MDE.lines) "\n")))
+          (display "MDSEED ") (display DEMO_PATH)
+          (display (if ok " written" " failed")) (newline) })
+    #t))
+
+;; 扫描一个目录下的 .md/.markdown（dir 为 "" 表示资源根；宿主保证按名字升序）
+(define scan_dir
+  (lambda (dir)
+    (define nm (Fs.list dir))
     (define n 0)
     (define i 0)
-    (define s "")
-    (set! docs (new_list))
+    (define s 0)
+    (define pfx "")
     (if (null? nm)
         #f
         { (set! n (length nm))
+          (if (> (String.length dir) 0)
+              (set! pfx (String.concat dir "/"))
+              #f)
           (set! i 0)
           (while (< i n)
             { (set! s (get_item nm i))
               (if (or (ends_with s ".md") (ends_with s ".markdown"))
-                  (push docs (mk2 (String.concat "doc/" s) (strip_ext s)))
+                  (push docs (mk2 (String.concat pfx s) (strip_ext s)))
                   #f)
               (set! i (+ i 1)) }) })
-    (push docs (mk2 "" "Markdown 语法示例"))
+    #t))
+
+;; 收集可打开的文档：doc/ 目录优先，其次资源根（"把 .md 丢到根目录也能打开"）。
+;; 一个都没有时（只读文件系统、写示例失败）才退回到内存里的内置示例。
+(define scan_docs
+  (lambda ()
+    (set! docs (new_list))
+    (scan_dir "doc")
+    (scan_dir ".")
+    (if (== (length docs) 0)
+        (push docs (mk2 "" SEED_TITLE))
+        #f)
     #t))
 
 ;; 把提示文案做成一个段落块（复用同一条解析路径，免得手工构造 AST）
@@ -338,20 +376,30 @@
 
 ;; ---- 绘制：文档列表 ------------------------------------------------------
 
+;; 文档多于一屏时随选中项滚动：窗口首项 = max(0, sel - LIST_ROWS + 1)
+(define list_first
+  (lambda ()
+    (if (>= sel LIST_ROWS) (- (+ sel 1) LIST_ROWS) 0)))
+
 (define draw_list
   (lambda ()
     (define n (length docs))
+    (define first (list_first))
+    (define last 0)
     (define i 0)
     (define y 0)
     (define d #f)
-    (while (< i n)
-      { (set! y (+ LIST_Y (* i ROW_H)))
+    (set! last (+ first LIST_ROWS))
+    (if (> last n) (set! last n) #f)
+    (set! i first)
+    (while (< i last)
+      { (set! y (+ LIST_Y (* (- i first) ROW_H)))
         (set! d (get_item docs i))
         (if (== i sel)
             { (Gfx.fill_rect 2 (- y 3) (- SW 4) (- ROW_H 2) 40 50 68)
               (Gfx.fill_rect 2 (- y 3) 3 (- ROW_H 2) 120 180 250) }
             #f)
-        (Gfx.draw_text (get_item d 1) (+ PAD_X 8) y 226 232 244)
+        (Gfx.draw_text (MDL.clip_text (get_item d 1) 240) (+ PAD_X 8) y 226 232 244)
         (if (== (String.length (get_item d 0)) 0)
             (Gfx.draw_text "内置" (- SW 40) y 150 168 190)
             (Gfx.draw_text ".md" (- SW 34) y 120 140 165))
@@ -369,6 +417,8 @@
           (draw_header) }
         { (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
           (Gfx.draw_text "Markdown 文档" PAD_X 3 236 242 250)
+          (Gfx.draw_text (String.concat (String.atom_to_string (length docs)) " 篇")
+                         250 3 150 168 190)
           (draw_list) })
     (draw_footer)
     (EX.draw_button)
@@ -428,7 +478,7 @@
   (lambda (py)
     (define idx 0)
     (if (>= py LIST_Y)
-        { (set! idx (Math.floor (/ (- py LIST_Y) ROW_H)))
+        { (set! idx (+ (list_first) (Math.floor (/ (- py LIST_Y) ROW_H))))
           (if (< idx (length docs))
               (open_doc idx)
               #f) }
@@ -501,8 +551,9 @@
     { (set! SW (Gfx.width))
       (set! SH (Gfx.height))
       (set! CW (- SW (* 2 PAD_X)))
+      (seed_demo_file)      ;; 首次启动：把内置示例写成 doc/ 下的真 .md 文件
       (scan_docs)
-      ;; 只有一个候选（内置示例）时直接进阅读页，不为一次点按多绕一圈
+      ;; 只有一个候选时直接进阅读页，不为一次点按多绕一圈
       (if (<= (length docs) 1)
           (open_doc 0)
           (set! mode 1))
