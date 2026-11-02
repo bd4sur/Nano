@@ -574,8 +574,10 @@
 ;;      放不下就按比例压缩到正文宽，每列不小于下限，再对余数做微调；
 ;;   ③ 单元格内容用与正文**同一套折行**（pack_segs）排成若干子行，
 ;;      行高 = 该行各列子行数的最大值（长单元格自然把行撑高）；
-;;   ④ 每行按列坐标 + 对齐平移段，列间画 1px 竖线（TABLE_GRID），
-;;      表头下画 1px 横线。绘制端只认"段"，不知道这是表格。
+;;   ④ 每行按列坐标 + 对齐平移段；列间画 1px 竖线（TABLE_GRID），
+;;      表格上/下、表头下、以及**每两行之间**都画 1px 横线（全网格）。
+;;      横线宽度 = 表格实际宽度（用 ST_HR 段表达，不是满宽的 BG_RULE 行）。
+;;      绘制端只认"段"，不知道这是表格。
 
 (define TABLE_MINW 26)     ;; 单列最小宽（太窄汉字挤成竖排）
 (define TABLE_MAXW 120)    ;; 单列最大宽（避免一列吃掉整行）
@@ -865,6 +867,10 @@
     (set! i 0)
     (while (< i (length rows))
       { (emit_table_row (get_item rows i) widths xs aligns ncol BG_NONE ST_BODY)
+        ;; ── 行间框线：除最后一行外，每行（含被单元格折行撑高的逻辑行）之后画一条
+        (if (< (+ i 1) (length rows))
+            (emit_span_hr span)
+            #f)
         (set! i (+ i 1)) })
     (emit_span_hr span)                       ;; ── 下框线
     (emit_gap 9)))
