@@ -76,6 +76,16 @@ int32_t am_native_Gfx_fill_circle(am_runtime_t *rt, am_process_t *proc);
 // —— 绘制一行文本（12px 平滑字模；(x,y) 为行框左上角）
 int32_t am_native_Gfx_draw_text(am_runtime_t *rt, am_process_t *proc);
 
+// (Gfx.set_font id:Number) : Boolean —— 选择 Gfx.draw_text 使用的字模：
+//   0 = 12px 二值点阵（GFX_FONT_BITMAP_12）、1 = 12px 抗锯齿（默认）、2 = 16px 抗锯齿。
+//   字模决定**行高与字符步进**，切换后调用方应按 (Gfx.font_info id) 重新排版。
+//   非法 id 返回 #f（软失败）。
+int32_t am_native_Gfx_set_font(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.font_info id:Number) : List | #null —— 该字模的 (半角步进 全角步进 行高 基线)；
+//   id 非法返回 #null。排版端用它算折行宽度与行高。
+int32_t am_native_Gfx_font_info(am_runtime_t *rt, am_process_t *proc);
+
 // (Gfx.image_size path:String) : List | #null
 // —— 图片原始尺寸 (宽 高)。只读文件头（stbi_info），不解码像素，
 //    供**排版阶段**算等比缩放与行高；文件缺失/格式不支持返回 #null。

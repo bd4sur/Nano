@@ -60,7 +60,7 @@
 (define BOT_H 16)     ;; 页脚高度
 (define PAD_X 6)      ;; 正文左右留白
 (define CW 308)       ;; 正文宽 = SW - 2*PAD_X（启动时按实际屏宽重算）
-(define ROW_H 20)     ;; 文档列表行高
+(define ROW_H 20)     ;; 文档列表行高（随字模调整）
 (define LIST_Y 26)    ;; 文档列表首行 y
 (define LIST_ROWS 9)  ;; 文档列表一次显示几项（更多时随选中项滚动）
 
@@ -128,6 +128,7 @@
 (define scroll 0)             ;; 纵向滚动偏移（像素）
 (define mode 1)               ;; 0 = 阅读，1 = 文档列表
 (define cur_title "")         ;; 当前文档标题
+(define cur_path "")          ;; 当前文档路径（"" = 内置示例；换字模后据此重新排版）
 (define ts 0)                 ;; 定时器编号
 
 ;; ---- 输入状态 ------------------------------------------------------------
@@ -321,6 +322,7 @@
     (define bs (new_list))
     (define fsize 0)
     (set! cur_title title)
+    (set! cur_path path)
     (set_doc_dir path)
     (set! fsize (Fs.size path))
     (if (null? fsize)
@@ -352,6 +354,20 @@
     #t))
 
 ;; 列表项打开：路径为空串 = 内存里的内置示例（只读文件系统兜底）
+;; 打开内置示例（内存里的那份；只读文件系统兜底）
+(define open_builtin
+  (lambda ()
+    { (set_doc_dir "")
+      (set! cur_path "")
+      (set! lines (MDL.layout (MD.parse_lines MDE.lines) CW doc_image_size))
+      (set! toc_items (MDL.toc))
+      (set! toc_open 0)
+      (set! content_h (MDL.total_height lines))
+      (set! scroll 0)
+      (set! mode 0)
+      (display "MDSTAT builtin title=") (display cur_title) (newline)
+      #t }))
+
 (define open_doc
   (lambda (idx)
     (define d (get_item docs idx))
@@ -359,15 +375,7 @@
     (set! sel idx)
     (if (== (String.length path) 0)
         { (set! cur_title (get_item d 1))
-          (set_doc_dir "")
-          (set! lines (MDL.layout (MD.parse_lines MDE.lines) CW doc_image_size))
-          (set! toc_items (MDL.toc))
-          (set! toc_open 0)
-          (set! content_h (MDL.total_height lines))
-          (set! scroll 0)
-          (set! mode 0)
-          (display "MDSTAT builtin title=") (display cur_title) (newline)
-          #t }
+          (open_builtin) }
         (open_path path (get_item d 1)))))
 
 ;; ---- 文件选择器（可复用组件 app/lib/filepicker.scm）---------------------
@@ -580,6 +588,171 @@
                 #f) })
       (draw_toc_panel) }))
 
+;; ---- 设置（模态框）-------------------------------------------------------
+;; 第一个设置项：字体。系统有三套字模左右可用——
+;;   0 = 12px 二值点阵（锐利、无灰阶）、1 = 12px 抗锯齿（默认）、2 = 16px 抗锯齿（更大更平滑）。
+;; 字模决定**行高与字符步进**，所以换字体后必须：
+;;   ① (Gfx.set_font id) 让绘制端换字模；
+;;   ② 用 (Gfx.font_info id) 拿到 (半角 全角 行高 基线)，喂给 (MDL.set_font_metrics ...)；
+;;   ③ 重新排版当前文档（折行位置、行高、表格列宽、目录 y 全都会变）。
+;; 选择写入 data/md-font.txt，下次启动沿用。
+
+(define FONT_PATH "data/md-font.txt")
+(define font_id 1)       ;; 当前字模
+(define line_h 15)       ;; 当前行高（由字模决定）
+(define font_base 12)    ;; 基线（行顶到基线）
+(define text_pad 1)      ;; 行顶到字模顶的偏移
+(define pill_h 13)       ;; 行内代码药丸底高
+
+(define SET_ROW 15)
+(define SET_TOP 30)
+(define settings_open 0)
+(define settings_sel 1)  ;; 0 = 标题行（不可选），1..3 = 三种字体
+(define SET_BTN_W 40)
+
+(define set_btn_x (lambda () (- (toc_btn_x) (+ SET_BTN_W 4))))
+(define set_btn_y (lambda () (- SH 17)))
+
+(define hit_set_btn
+  (lambda (px py)
+    (if (and (>= px (set_btn_x)) (< px (+ (set_btn_x) SET_BTN_W)))
+        (if (and (>= py (set_btn_y)) (< py (+ (set_btn_y) 14))) 1 0)
+        0)))
+
+(define font_name
+  (lambda (id)
+    (if (== id 0) "点阵 12px"
+        (if (== id 1) "抗锯齿 12px"
+            (if (== id 2) "抗锯齿 16px" "?")))))
+
+;; 按字模 id 应用：查度量 → 设绘制字模 → 设排版度量 → 重新排版当前文档
+(define apply_font
+  (lambda (id)
+    (define info (Gfx.font_info id))
+    (define keep 0)
+    (if info
+        { (set! font_id id)
+          (Gfx.set_font id)
+          (set! text_pad (if (== id 0) 0 1))
+          (set! font_base (get_item info 3))
+          (set! line_h (get_item info 2))
+          (set! pill_h (- line_h 2))
+          (MDL.set_font_metrics (get_item info 0) (get_item info 1) (get_item info 2))
+          ;; 列表/目录/设置的行高跟着字模走（16px 字模下 15px 行距会挤）
+          (set! ROW_H (+ line_h 5))
+          (set! TOC_ROW line_h)
+          (set! SET_ROW line_h)
+          (Fs.write FONT_PATH (String.atom_to_string id))
+          (display "MDFONT id=") (display id)
+          (display " line_h=") (display line_h) (newline)
+          ;; 重新排版当前文档（保留滚动位置）
+          (if (== mode 0)
+              { (set! keep scroll)
+                (if (> (String.length cur_path) 0)
+                    (open_path cur_path cur_title)
+                    (open_builtin))
+                (set! scroll keep)
+                (clamp_scroll) }
+              #f) }
+        #f)
+    #t))
+
+;; 启动时读回上次的选择
+(define load_font
+  (lambda ()
+    (define s (Fs.read FONT_PATH))
+    (define v 1)
+    (if (null? s) #f
+        { (set! v (String.parseNumber s))
+          (if (null? v) #f (apply_font (Math.floor v))) })
+    (if (null? s) (apply_font 1) #f)
+    #t))
+
+;; 设置面板
+(define draw_settings
+  (lambda ()
+    (define i 1)
+    (define y 0)
+    (Gfx.fill_rect 0 0 SW SH 16 19 26)
+    (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
+    (Gfx.draw_text "设置" PAD_X 3 236 242 250)
+    ;; 「字体」小节
+    (Gfx.draw_text "字体" PAD_X SET_TOP 150 168 190)
+    (while (< i 4)
+      { (set! y (+ (+ SET_TOP 18) (* (- i 1) SET_ROW)))
+        (if (== i settings_sel)
+            { (Gfx.fill_rect 2 (- y 2) (- SW 4) SET_ROW 40 50 68)
+              (Gfx.fill_rect 2 (- y 2) 3 SET_ROW 102 204 255) }
+            #f)
+        ;; 单选标记：当前字模前面画一个实心方块
+        (if (== (- i 1) font_id)
+            (Gfx.fill_rect (+ PAD_X 2) (+ y 5) 5 5 102 204 255)
+            (Gfx.draw_rect (+ PAD_X 2) (+ y 5) 5 5 110 118 140))
+        (Gfx.draw_text (font_name (- i 1)) (+ PAD_X 14) y 226 232 244)
+        (set! i (+ i 1)) })
+    ;; 底部说明：当前字模的行高/步进（换字体后立刻能看到数字变化）
+    (Gfx.draw_text (String.concat "当前：" (String.concat (font_name font_id)
+                                                          (String.concat "  行高 "
+                                                                         (String.atom_to_string line_h))))
+                   PAD_X (+ (+ SET_TOP 18) (+ (* 3 SET_ROW) 8)) 150 168 190)
+    (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
+    (Gfx.draw_text "↑↓ 选择 · Enter/点按 切换 · 返回关闭" PAD_X (- SH 14) 130 140 155)
+    (Gfx.refresh)
+    #t))
+
+(define settings_tap
+  (lambda (px py)
+    (define idx 0)
+    (if (< py SET_TOP)
+        (set! settings_open 0)
+        { (set! idx (+ 1 (Math.floor (/ (- py (+ SET_TOP 18)) SET_ROW))))
+          (if (and (>= idx 1) (<= idx 3))
+              { (set! settings_sel idx)
+                (apply_font (- idx 1)) }
+              #f) })
+    #t))
+
+(define apply_key_settings
+  (lambda (k)
+    (if (== k 1) { (set! settings_sel (- settings_sel 1)) (if (< settings_sel 1) (set! settings_sel 1) #f) } #f)
+    (if (== k 2) { (set! settings_sel (+ settings_sel 1)) (if (> settings_sel 3) (set! settings_sel 3) #f) } #f)
+    (if (== k 13) (apply_font (- settings_sel 1)) #f)
+    (if (== k 27) (set! settings_open 0) #f)
+    #t))
+
+(define tick_settings
+  (lambda ()
+    { (if (App.back_requested) (set! settings_open 0) #f)
+      (set! key (Key.take_press))
+      (while (not (== key 0))
+        { (apply_key_settings key)
+          (set! key (Key.take_press)) })
+      (if (Touch.is_pressed)
+          { (if (== prev_down 0)
+                { (set! prev_down 1)
+                  (set! drag_total 0)
+                  (set! drag_last (Touch.y))
+                  (set! press_x (Touch.x))
+                  (set! press_y (Touch.y)) }
+                #f)
+            (set! dyy (- (Touch.y) drag_last))
+            (set! drag_last (Touch.y))
+            (set! drag_total (+ drag_total dyy)) }
+          { (if (== prev_down 1)
+                { (set! prev_down 0)
+                  (if (< (Math.abs drag_total) 8)
+                      (settings_tap press_x press_y)
+                      #f) }
+                #f) })
+      (draw_settings) }))
+
+(define draw_set_btn
+  (lambda ()
+    (Gfx.fill_rect (set_btn_x) (set_btn_y) SET_BTN_W 14 52 58 76)
+    (Gfx.draw_rect (set_btn_x) (set_btn_y) SET_BTN_W 14 110 118 140)
+    (Gfx.draw_text "设置" (+ (set_btn_x) 7) (+ (set_btn_y) 1) 225 228 235)
+    #t))
+
 ;; ---- 绘制：单个段 --------------------------------------------------------
 
 ;; 段 = (文本 样式 x 宽 url)；行内代码画药丸底、链接画下划线、项目符号画方块。
@@ -597,7 +770,7 @@
     (define k 0)
     (set_style_color st)
     (if (== st MDL.ST_BULLET)
-        (Gfx.fill_rect (+ x 4) (+ y 6) 3 3 cr cg cb)
+        (Gfx.fill_rect (+ x 4) (+ y (Math.floor (/ (- line_h 4) 2))) 3 3 cr cg cb)
         #f)
     (if (== st MDL.ST_TABLE_SEP)
         (Gfx.fill_rect x y 1 h cr cg cb)
@@ -621,15 +794,15 @@
         (Gfx.fill_rect x y w h cr cg cb)
         #f)
     (if (and (> (String.length txt) 0) (== st MDL.ST_CODE))
-        (Gfx.fill_rect (- x 1) (+ y 1) (+ w 2) 13 46 42 34)
+        (Gfx.fill_rect (- x 1) (+ y text_pad) (+ w 2) pill_h 46 42 34)
         #f)
     ;; 链接下划线：基线在 y+13，下划线再往下 3px（y+16），与字形留出呼吸感
     (if (and (> (String.length txt) 0) (== st MDL.ST_LINK))
-        (Gfx.fill_rect x (+ y 16) w 1 96 160 235)
+        (Gfx.fill_rect x (+ y (+ text_pad (+ font_base 3))) w 1 96 160 235)
         #f)
     ;; 三级标题：文字下划线（比字形亮一档的暗色，避免和链接下划线混淆；同样下移 3px）
     (if (and (> (String.length txt) 0) (== st MDL.ST_H3))
-        (Gfx.fill_rect x (+ y 15) w 1 96 128 168)
+        (Gfx.fill_rect x (+ y (+ text_pad (+ font_base 2))) w 1 96 128 168)
         #f)
     ;; 图片段（ST_IMAGE / ST_IMAGE_MISSING）的 alt 已由图片绘制/占位框处理，跳过通用文字绘制
     (if (and (> (String.length txt) 0)
@@ -637,7 +810,7 @@
              (not (== st MDL.ST_IMAGE_MISSING)))
         { (set! k 0)
           (while (< k style_weight)
-            { (Gfx.draw_text txt (+ x k) (+ y 1) cr cg cb)
+            { (Gfx.draw_text txt (+ x k) (+ y text_pad) cr cg cb)
               (set! k (+ k 1)) }) }
         #f)
     #t))
@@ -706,11 +879,12 @@
   (lambda ()
     (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
     (if (== mode 0)
-        (Gfx.draw_text "拖动/↑↓ 滚动 · 点链接看地址" PAD_X (- SH 14) 130 140 155)
-        (Gfx.draw_text "↑↓ 选择 · Enter/点按 打开" PAD_X (- SH 14) 130 140 155))
+        (Gfx.draw_text "拖动/↑↓ 滚动" PAD_X (- SH 14) 130 140 155)
+        (Gfx.draw_text "↑↓ 选择 · Enter 打开" PAD_X (- SH 14) 130 140 155))
     (if (and (== mode 0) (> (length toc_items) 0))
         (draw_toc_btn)      ;; 底栏右侧偏左：目录（仅阅读页且有标题时）
         #f)
+    (draw_set_btn)    ;; 设置（两种模式都有：字体是 App 级设置）
     (draw_open_btn)   ;; 底栏右侧：打开选择器（触屏唯一入口）
     #t))
 
@@ -767,9 +941,11 @@
 
 (define draw_all
   (lambda ()
-    (if (== toc_open 1)
-        (draw_toc_panel)        ;; 目录面板：整屏归它（含推屏）
-        (draw_page))))
+    (if (== settings_open 1)
+        (draw_settings)         ;; 设置面板：整屏归它（含推屏）
+        (if (== toc_open 1)
+            (draw_toc_panel)    ;; 目录面板
+            (draw_page)))))
 
 (define draw_page
   (lambda ()
@@ -869,7 +1045,9 @@
         { (if (== prev_down 1)
               { (set! prev_down 0)
                 (if (< (Math.abs drag_total) 8)
-                    (if (== (hit_open_btn press_x press_y) 1)
+                    (if (== (hit_set_btn press_x press_y) 1)
+                        { (set! settings_open 1) (set! settings_sel (+ 1 font_id)) }
+                        (if (== (hit_open_btn press_x press_y) 1)
                         (start_picker)
                         (if (and (== mode 0)
                                  (== (hit_toc_btn press_x press_y) 1)
@@ -877,7 +1055,7 @@
                             (toc_open_panel)
                             (if (== mode 0)
                                 (tap_reader press_x press_y)
-                                (tap_list press_y))))
+                                (tap_list press_y)))))
                     #f) }
               #f) })
     #t))
@@ -910,12 +1088,14 @@
   (lambda ()
     (if (FP.active)
         (tick_picker)          ;; 选择器活动期间：输入/绘制全归它，EX 不抢返回请求
+        (if (== settings_open 1)
+            (tick_settings)    ;; 设置面板同理（返回请求 = 关闭面板）
         (if (== toc_open 1)
-            (tick_toc)         ;; 目录面板同理（返回请求 = 关闭面板）
+            (tick_toc)         ;; 目录面板（返回请求 = 关闭面板）
             { (EX.check)
               (handle_keys)
               (handle_touch)
-              (draw_all) }))))
+              (draw_all) })))))
 
 ;; ---- 启动 ----------------------------------------------------------------
 
@@ -924,6 +1104,7 @@
     { (set! SW (Gfx.width))
       (set! SH (Gfx.height))
       (set! CW (- SW (* 2 PAD_X)))
+      (load_font)           ;; 恢复上次选择的字模（字体影响排版度量，必须在打开文档之前）
       (seed_demo_file)      ;; 首次启动：把内置示例写成 doc/ 下的真 .md 文件
       (scan_docs)
       ;; 只有一个候选时直接进阅读页，不为一次点按多绕一圈

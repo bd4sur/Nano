@@ -23,6 +23,10 @@
 // 绘图目标（宿主经 am_native_gfx_bind 注入）
 static Nano_GFX *s_gfx = NULL;
 
+// 当前字模（0=12px 点阵 / 1=12px 抗锯齿 / 2=16px 抗锯齿），由 (Gfx.set_font id) 切换。
+// 默认沿用历史行为：12px 抗锯齿。
+static uint32_t s_font_id = 1;
+
 void am_native_gfx_bind(Nano_GFX *gfx) {
     s_gfx = gfx;
 }
@@ -354,7 +358,7 @@ int32_t am_native_Gfx_draw_text(am_runtime_t *rt, am_process_t *proc) {
 
     wchar_t *text = wstring_to_buffer(proc, ws);
     if (text != NULL) {
-        gfx_font_draw_text(g, GFX_FONT_ALPHA_12, text, x, y, r, gc, b, 1);
+        gfx_font_draw_text(g, s_font_id, text, x, y, r, gc, b, 1);
         am_free(proc->heap_alloc, text);
     }
     return native_statement_done(proc);
@@ -424,6 +428,68 @@ int32_t am_native_Gfx_draw_image(am_runtime_t *rt, am_process_t *proc) {
     return 0;
 }
 
+// (Gfx.set_font id:Number) : Boolean
+// —— 选择 Gfx.draw_text 使用的字模：0 = 12px 二值点阵、1 = 12px 抗锯齿、2 = 16px 抗锯齿。
+//    非法 id 返回 #f（软失败，不报错）。字模影响**行高与步进**，调用方切换后应按
+//    (Gfx.font_info id) 重新排版（见 app/markdown.scm 的 apply_font）。
+int32_t am_native_Gfx_set_font(am_runtime_t *rt, am_process_t *proc) {
+    int32_t id = 0;
+    (void)rt;
+    if (!native_pop_int(proc, &id)) return -1;
+    if (id < 0 || id > 2) {
+        if (am_process_push_operand(proc, AM_VALUE_FALSE) != 0) return -1;
+        am_process_step(proc);
+        return 0;
+    }
+    s_font_id = (uint32_t)id;
+    if (am_process_push_operand(proc, AM_VALUE_TRUE) != 0) return -1;
+    am_process_step(proc);
+    return 0;
+}
+
+// (Gfx.font_info id:Number) : List | #null
+// —— 该字模的 (半角步进 全角步进 行高 基线)；id 非法返回 #null。
+//    排版端拿它算折行宽度与行高（见 md_layout 的 set_font_metrics）。
+int32_t am_native_Gfx_font_info(am_runtime_t *rt, am_process_t *proc) {
+    int32_t id = 0;
+    am_list_t *lst;
+    am_handle_t lhd;
+    (void)rt;
+    if (!native_pop_int(proc, &id)) return -1;
+    if (id < 0 || id > 2) return native_push_null(proc);
+
+    lst = am_list_create(proc->heap_alloc, 4, AM_LIST_TYPE_DEFAULT, AM_HANDLE_NULL);
+    if (lst == NULL) return native_push_null(proc);
+    am_list_t *grown = am_list_push(proc->heap_alloc, lst,
+        am_make_value_of_float((am_float_t)gfx_font_char_advance((uint32_t)id, (uint32_t)'i')));
+    if (grown == NULL) { am_list_destroy(proc->heap_alloc, lst); return native_push_null(proc); }
+    lst = grown;
+    grown = am_list_push(proc->heap_alloc, lst,
+        am_make_value_of_float((am_float_t)gfx_font_char_advance((uint32_t)id, (uint32_t)0x4E2D)));
+    if (grown == NULL) { am_list_destroy(proc->heap_alloc, lst); return native_push_null(proc); }
+    lst = grown;
+    grown = am_list_push(proc->heap_alloc, lst,
+        am_make_value_of_float((am_float_t)gfx_font_line_height((uint32_t)id)));
+    if (grown == NULL) { am_list_destroy(proc->heap_alloc, lst); return native_push_null(proc); }
+    lst = grown;
+    grown = am_list_push(proc->heap_alloc, lst,
+        am_make_value_of_float((am_float_t)gfx_font_baseline((uint32_t)id)));
+    if (grown == NULL) { am_list_destroy(proc->heap_alloc, lst); return native_push_null(proc); }
+    lst = grown;
+
+    lhd = am_heap_alloc_handle(proc->vm_alloc, proc->heap_alloc, proc->heap);
+    if (lhd == AM_HANDLE_NULL) { am_list_destroy(proc->heap_alloc, lst); return native_push_null(proc); }
+    if (am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, lhd,
+                    am_make_value_of_ptr((am_object_t *)lst)) != 0) {
+        am_list_destroy(proc->heap_alloc, lst);
+        am_heap_free_handle(proc->vm_alloc, proc->heap_alloc, proc->heap, lhd);
+        return native_push_null(proc);
+    }
+    if (am_process_push_operand(proc, am_make_value_of_handle(lhd)) != 0) return -1;
+    am_process_step(proc);
+    return 0;
+}
+
 static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"width",       am_native_Gfx_width },
     { L"height",      am_native_Gfx_height },
@@ -437,6 +503,8 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"draw_circle", am_native_Gfx_draw_circle },
     { L"fill_circle", am_native_Gfx_fill_circle },
     { L"draw_text",   am_native_Gfx_draw_text },
+    { L"set_font",    am_native_Gfx_set_font },
+    { L"font_info",   am_native_Gfx_font_info },
     { L"image_size",  am_native_Gfx_image_size },
     { L"draw_image",  am_native_Gfx_draw_image },
     { L"refresh",     am_native_Gfx_refresh },

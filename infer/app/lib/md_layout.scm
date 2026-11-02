@@ -68,7 +68,20 @@
 
 ;; ---- 度量常量 ------------------------------------------------------------
 
-(define LINE_H 15)       ;; 12px 字模的行高（含 3px 行距）
+;; 字模度量：默认是 12px 抗锯齿（半角 7 / 全角 12 / 行高 15）。App 换字模时用
+;; (MDL.set_font_metrics 半角 全角 行高) 改这三项，再重新 layout —— 因为**折行宽度与
+;; 行高都依赖字模**（16px 抗锯齿是 9/16/18，12px 点阵是 6/12/13）。
+(define LINE_H 15)       ;; 行高（字模行高，含行距）
+(define W_HALF 7)        ;; 半角步进
+(define W_FULL 12)       ;; 全角步进
+
+(define set_font_metrics
+  (lambda (half full line_h)
+    (set! W_HALF half)
+    (set! W_FULL full)
+    (set! LINE_H line_h)
+    #t))
+
 (define LIST_IND 14)     ;; 列表每级缩进（与项目符号的悬挂缩进一致）
 (define QUOTE_IND 10)    ;; 引用块正文右移量
 (define QUOTE_BAR_W 2)   ;; 引用块左侧竖线宽度
@@ -77,8 +90,6 @@
 (define IMG_MAX_H 160)      ;; 块级图片的最大高度（约 2/3 屏；超出按比例缩）
 (define IMG_MISS_H 26)      ;; 图片取不到时占位框的高度
 (define IMG_MAX_COUNT 24)   ;; 单篇文档最多渲染多少张图（超出退化为占位文本，防池子被吃光）
-(define W_HALF 7)        ;; 半角步进
-(define W_FULL 12)       ;; 全角步进
 (define CJK_BASE 11904)  ;; 0x2E80
 (define CP_SP 32)
 (define CP_TAB 9)
