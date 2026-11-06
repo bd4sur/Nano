@@ -221,15 +221,18 @@ int32_t gfx_image_info(const char *img_path, uint32_t *out_width, uint32_t *out_
 // 返回 0 成功、-1 失败（读文件/解码/分配失败）。
 int32_t gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch);
 
-// 位移贴图绘制（水波/放大镜式的"波纹折射"）：图像先缩放到 (width,height)，再对每个
-// 目标像素按 gw×gh 位移栅格做**以矩形中心为原点的径向缩放**采样：
-//     scale = disp[j*gw+i] / neutral;  src = (dst - 中心) * scale + 中心
-// 栅格按行优先、双线性插值到像素（栅格不必与目标尺寸成整数倍关系）；neutral 是
-// "无位移"的基准值（scale=1 时原样输出）。缓存与失败语义同 gfx_draw_image。
-int32_t gfx_draw_image_warp(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0,
-                            uint32_t width, uint32_t height,
-                            uint32_t grid_w, uint32_t grid_h,
-                            const float *disp, float neutral);
+// 高度场折射绘制（水波/水面波纹）：图像先缩放到 (width,height)，再按 gw×gh 的**高度场**
+// （水位/振幅栅格，行优先，0 = 平静；数值为 0 时原样输出）对每个目标像素做折射位移：
+//     src = dst - strength · ∇h       （∇h 为逐格中心差分，双线性插值到像素）
+// 偏移由水面**法向**（即高度场梯度）决定，故对从波源外扩的圆形波纹，折射纹样
+// **圆形对称于波源**，与波源在屏幕何处无关（不能用"以矩形中心为原点的径向缩放"，
+// 那会把位移锛在画面中心上，波纹再圆也会被拉成非对称形变）。
+// 位移栅格不必与目标尺寸成整数倍关系（按格中心双线性插值到像素）；纹理采样为
+// 双线性过滤；缓存/失败语义同 gfx_draw_image。
+int32_t gfx_draw_image_refract(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0,
+                               uint32_t width, uint32_t height,
+                               uint32_t grid_w, uint32_t grid_h,
+                               const float *hgt, float strength);
 
 void gfx_draw_image_buffer(Nano_GFX *gfx, uint8_t *img_buffer, uint32_t buffer_size, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height);
 

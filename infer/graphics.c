@@ -2783,25 +2783,62 @@ static inline float gfx_bilinear_channel(const uint8_t *p00, const uint8_t *p10,
     return top + (bot - top) * ay;
 }
 
-// 位移贴图绘制（水波/放大镜式"波纹折射"）：把图像缩放到 (width,height) 后，对每个
-// 目标像素做**以矩形中心为原点的径向缩放**采样——缩放系数取自 gw×gh 的位移栅格
-// （行优先，双线性插值到像素；栅格不必与屏幕尺寸成整数倍关系）：
+// 折射位移栅格的逐行梯度暂存（跨调用复用；每行 2 组：列方向 Gx 与行方向 Gy）
+static float *s_refract_grad = NULL;
+static size_t s_refract_grad_cap = 0;
+
+// 取得至少 need 个 float 的暂存区；失败返回 NULL。
+static float *gfx_refract_grad_scratch(size_t need) {
+    if (need <= s_refract_grad_cap) return s_refract_grad;
+    float *grown = (float *)platform_malloc(need * sizeof(float));
+    if (grown == NULL) return NULL;
+    if (s_refract_grad != NULL) free(s_refract_grad);
+    s_refract_grad = grown;
+    s_refract_grad_cap = need;
+    return s_refract_grad;
+}
+
+// 计算高度场第 j 行各格的**中心差分梯度**（以格为单位）：越界的行列按钳位取，
+// 因此边界处梯度自然衰减为 0（水面在屏幕边缘也是平的）。gx/gy 各需 grid_w 个 float。
+static void gfx_height_grad_row(const float *hgt, uint32_t grid_w, uint32_t grid_h,
+                                int32_t j, float *gx, float *gy, float strength) {
+    const int32_t j_up = (j > 0) ? j - 1 : 0;
+    const int32_t j_dn = (j + 1 < (int32_t)grid_h) ? j + 1 : (int32_t)grid_h - 1;
+    const float *row_up = hgt + (size_t)j_up * grid_w;
+    const float *row    = hgt + (size_t)j * grid_w;
+    const float *row_dn = hgt + (size_t)j_dn * grid_w;
+
+    for (uint32_t i = 0; i < grid_w; i++) {
+        const int32_t i_l = (i > 0) ? (int32_t)i - 1 : 0;
+        const int32_t i_r = (i + 1 < grid_w) ? (int32_t)i + 1 : (int32_t)grid_w - 1;
+        gx[i] = (row[i_r]  - row[i_l])  * strength;   // 列方向坡度（左右）
+        gy[i] = (row_dn[i] - row_up[i]) * strength;   // 行方向坡度（上下）
+    }
+}
+
+// 高度场折射绘制（水波/水面波纹）：图像缩放到 (width,height)，按 gw×gh 的**高度场**
+// （水位/振幅栅格，行优先；0 = 平静水面）对每个目标像素做折射位移采样：
 //
-//     scale = disp[j*gw+i] / neutral            （neutral 为"无位移"的基准值）
-//     src_x = (x - width/2)  * scale + width/2
-//     src_y = (y - height/2) * scale + height/2
+//     src = dst − strength · ∇h                （∇h 用中心差分，逐格算、双线性插值到像素）
+//     src_x = x − Gx,  src_y = y − Gy,  越界钳位
 //
-// scale<1 与 scale>1 分别对应水面凹陷/隆起的折射方向；纹理采样为**双线性**（水位场
-// 在足够低的栅格上模拟时，最近邻采样会把连续的位移量化成一块块整数像素——正是
-// "马赛克"感的来源，故这里做双线性过滤）。纹理经图像缓存（键 = 路径 + 目标尺寸），
-// 像素不进解释器堆。返回 0 成功、-1 失败（参数非法/读文件/解码失败）。
-int32_t gfx_draw_image_warp(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0,
-                            uint32_t width, uint32_t height,
-                            uint32_t grid_w, uint32_t grid_h,
-                            const float *disp, float neutral) {
-    if (gfx == NULL || disp == NULL) return -1;
+// 为什么用**梯度**而不是"以画面中心为原点的径向缩放"：水面的折射偏移由水面**法向**
+// 决定，法向就是高度场的梯度；对圆形外扩的波纹，梯度天然沿半径方向，于是折射纹样
+// **圆形对称于波源**（一圈圈同心环），与波源在屏幕何处无关。径向缩放那种写法把
+// 位移锚死在矩形中心上，波纹再圆也会被拉成"离屏幕中心越远越夸张"的非对称形变
+// （ui_ripple.c 用的是后者，本工程的水波 App 因此显式改成梯度位移）。
+//
+// 纹理采样为**双线性**（最近邻会把连续位移量化成整数像素 ⇒ 折射出现马赛克）；
+// 位移栅格同样按格中心双线性插值到像素（栅格不必与目标尺寸成整数倍关系）。
+// 纹理经图像缓存（键 = 路径 + 目标尺寸），像素不进解释器堆。
+// 返回 0 成功、-1 失败（参数非法/读文件/解码失败）。
+int32_t gfx_draw_image_refract(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0,
+                               uint32_t width, uint32_t height,
+                               uint32_t grid_w, uint32_t grid_h,
+                               const float *hgt, float strength) {
+    if (gfx == NULL || hgt == NULL) return -1;
     if (width == 0 || height == 0 || grid_w == 0 || grid_h == 0) return -1;
-    if (!(neutral > 0.0f) || !(neutral < 1e9f)) return -1;
+    if (!(strength > 0.0f) || !(strength < 1e6f)) return -1;
 
     const uint8_t *tex = gfx_image_texture_get(img_path, width, height, 0);
     if (tex == NULL) return -1;
@@ -2813,11 +2850,20 @@ int32_t gfx_draw_image_warp(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t
 
     gfx_mark_dirty(gfx, (int32_t)x0, (int32_t)y0, (int32_t)(x_end - x0), (int32_t)(y_end - y0));
 
-    const float cx = (float)width  * 0.5f;            // 径向缩放原点（矩形中心）
-    const float cy = (float)height * 0.5f;
+    // 两行梯度暂存：gx0/gy0 对应格行 j0，gx1/gy1 对应格行 j1（各 grid_w 个）
+    float *scratch = gfx_refract_grad_scratch((size_t)grid_w * 4u);
+    if (scratch == NULL) return -1;
+    float *gx0 = scratch;
+    float *gy0 = gx0 + grid_w;
+    float *gx1 = gy0 + grid_w;
+    float *gy1 = gx1 + grid_w;
+
     const float gsx = (float)grid_w / (float)width;   // 像素 -> 栅格坐标步进
     const float gsy = (float)grid_h / (float)height;
-    const float inv_neutral = 1.0f / neutral;
+    const float max_ox = (float)width  * 0.25f;       // 位移上限（防止极端振幅把画面撕碎）
+    const float max_oy = (float)height * 0.25f;
+
+    int32_t cached_j0 = -1, cached_j1 = -1;
 
     for (uint32_t y = y0; y < y_end; y++) {
         // 每行取一次帧缓冲行指针（RGB565 直写；RGB888 逐像素经图形层转换）
@@ -2835,9 +2881,15 @@ int32_t gfx_draw_image_warp(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t
         if (j0 < 0) { j0 = 0; fy = 0.0f; }
         else if (j0 > (int32_t)grid_h - 1) { j0 = (int32_t)grid_h - 1; fy = 0.0f; }
         int32_t j1 = (j0 + 1 < (int32_t)grid_h) ? j0 + 1 : j0;
-        const float *disp_row0 = disp + (size_t)j0 * grid_w;
-        const float *disp_row1 = disp + (size_t)j1 * grid_w;
-        const float dyc = (float)(y - y0) - cy;
+
+        if (j0 != cached_j0) {
+            gfx_height_grad_row(hgt, grid_w, grid_h, j0, gx0, gy0, strength);
+            cached_j0 = j0;
+        }
+        if (j1 != cached_j1) {
+            gfx_height_grad_row(hgt, grid_w, grid_h, j1, gx1, gy1, strength);
+            cached_j1 = j1;
+        }
 
         for (uint32_t x = x0; x < x_end; x++) {
             // 列方向的栅格插值权重
@@ -2848,24 +2900,31 @@ int32_t gfx_draw_image_warp(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t
             else if (i0 > (int32_t)grid_w - 1) { i0 = (int32_t)grid_w - 1; fx = 0.0f; }
             int32_t i1 = (i0 + 1 < (int32_t)grid_w) ? i0 + 1 : i0;
 
-            float d_top = disp_row0[i0] + (disp_row0[i1] - disp_row0[i0]) * fx;
-            float d_bot = disp_row1[i0] + (disp_row1[i1] - disp_row1[i0]) * fx;
-            float scale = (d_top + (d_bot - d_top) * fy) * inv_neutral;
-            if (!(scale > -1e6f) || !(scale < 1e6f)) scale = 1.0f;   // NaN/Inf 兜底
+            // 双线性插值两个方向的梯度
+            float ox = (gx0[i0] + (gx0[i1] - gx0[i0]) * fx)
+                     + (((gx1[i0] + (gx1[i1] - gx1[i0]) * fx)
+                         - (gx0[i0] + (gx0[i1] - gx0[i0]) * fx)) * fy);
+            float oy = (gy0[i0] + (gy0[i1] - gy0[i0]) * fx)
+                     + (((gy1[i0] + (gy1[i1] - gy1[i0]) * fx)
+                         - (gy0[i0] + (gy0[i1] - gy0[i0]) * fx)) * fy);
+            if (!(ox > -1e6f) || !(ox < 1e6f)) ox = 0.0f;    // NaN/Inf 兜底
+            if (!(oy > -1e6f) || !(oy < 1e6f)) oy = 0.0f;
+            if (ox >  max_ox) ox =  max_ox; else if (ox < -max_ox) ox = -max_ox;
+            if (oy >  max_oy) oy =  max_oy; else if (oy < -max_oy) oy = -max_oy;
 
-            // 以矩形中心为原点做径向缩放采样
-            float fx_src = ((float)(x - x0) - cx) * scale + cx;   // 源坐标（浮点）
-            float fy_src = dyc * scale + cy;
-            if (fx_src < 0.0f) fx_src = 0.0f; else if (fx_src > (float)(width  - 1)) fx_src = (float)(width  - 1);
-            if (fy_src < 0.0f) fy_src = 0.0f; else if (fy_src > (float)(height - 1)) fy_src = (float)(height - 1);
+            // 源坐标（dst 反向偏移；水面法向朝外 ⇒ 该处内容被"吸"向波峰）
+            float src_x = (float)(x - x0) - ox;
+            float src_y = (float)(y - y0) - oy;
+            if (src_x < 0.0f) src_x = 0.0f; else if (src_x > (float)(width  - 1)) src_x = (float)(width  - 1);
+            if (src_y < 0.0f) src_y = 0.0f; else if (src_y > (float)(height - 1)) src_y = (float)(height - 1);
 
-            // 双线性过滤（量化到整数像素会把连续的位移变成一块块像素 ⇒ 块状折射条纹）
-            int32_t sx0 = (int32_t)fx_src;
-            int32_t sy0 = (int32_t)fy_src;
+            // 纹理双线性过滤（量化到整数像素会把连续位移变成一块块像素 ⇒ 块状折射条纹）
+            int32_t sx0 = (int32_t)src_x;
+            int32_t sy0 = (int32_t)src_y;
             int32_t sx1 = (sx0 + 1 < (int32_t)width)  ? sx0 + 1 : sx0;
             int32_t sy1 = (sy0 + 1 < (int32_t)height) ? sy0 + 1 : sy0;
-            float ax = fx_src - (float)sx0;
-            float ay = fy_src - (float)sy0;
+            float ax = src_x - (float)sx0;
+            float ay = src_y - (float)sy0;
             const uint8_t *p00 = tex + ((size_t)sy0 * width + (size_t)sx0) * 3;
             const uint8_t *p10 = tex + ((size_t)sy0 * width + (size_t)sx1) * 3;
             const uint8_t *p01 = tex + ((size_t)sy1 * width + (size_t)sx0) * 3;

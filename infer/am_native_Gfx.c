@@ -186,7 +186,7 @@ static bool native_list_float(am_value_t v, am_float_t *out) {
     return false;
 }
 
-// 位移栅格转换用的暂存缓冲（跨调用复用，避免每帧向堆申请）
+// 高度场栅格转换用的暂存缓冲（跨调用复用，避免每帧向堆申请）
 static float  *s_warp_disp = NULL;
 static size_t  s_warp_disp_cap = 0;
 
@@ -496,27 +496,29 @@ int32_t am_native_Gfx_draw_image(am_runtime_t *rt, am_process_t *proc) {
     return 0;
 }
 
-// (Gfx.draw_image_warp path:String x:Number y:Number w:Number h:Number
-//                      grid_w:Number grid_h:Number disp:List neutral:Number) : Boolean
-// —— 把图像缩放到 (w,h) 后按 grid_w×grid_h 位移栅格做"以矩形中心为原点的径向缩放"
-//    采样（水波/折射效果；几何见 graphics.h 的 gfx_draw_image_warp）。
-//    disp 为行优先的 grid_w*grid_h 个数值，双线性插值到像素：scale = disp/neutral，
-//    neutral 即"无位移"的基准值。像素全部在宿主侧处理（不进解释器堆）。
+// (Gfx.draw_image_refract path:String x:Number y:Number w:Number h:Number
+//                         grid_w:Number grid_h:Number height:List strength:Number) : Boolean
+// —— **高度场折射**：把图像缩放到 (w,h) 后，按 grid_w×grid_h 的**高度场**（水位/振幅
+//    栅格，行优先，0 = 平静水面）对每个像素做折射位移采样：
+//        src = dst - strength · ∇h        （∇h 为逐格中心差分，双线性插值到像素）
+//    偏移由水面法向（高度场梯度）决定，故圆形波纹的折射纹样**圆形对称于波源**，
+//    与波源在屏幕何处无关（详见 graphics.h 的 gfx_draw_image_refract）。
+//    height 为行优先的 grid_w*grid_h 个数值；像素全部在宿主侧处理（不进解释器堆）。
 //    失败（列表长度不足/参数非法/读文件/解码失败）返回 #f。
-// 布尔收尾的前置声明（定义在册表区之间，draw_image_warp 先用到）
+// 布尔收尾的前置声明（定义在册表区之间，draw_image_refract 先用到）
 static int32_t native_push_bool(am_process_t *proc, bool v);
 
-int32_t am_native_Gfx_draw_image_warp(am_runtime_t *rt, am_process_t *proc) {
+int32_t am_native_Gfx_draw_image_refract(am_runtime_t *rt, am_process_t *proc) {
     Nano_GFX *g = native_gfx(rt);
     am_wstring_t *ws = NULL;
-    am_list_t *disp = NULL;
+    am_list_t *height = NULL;
     char path[256];
-    am_float_t neutral = 0.0f;
+    am_float_t strength = 0.0f;
     int32_t gh = 0, grid_w = 0, h = 0, w = 0, y = 0, x = 0;
     if (g == NULL) return -1;
 
-    if (!native_pop_number(proc, &neutral)) return -1;
-    if (!native_pop_list(proc, &disp)) return -1;
+    if (!native_pop_number(proc, &strength)) return -1;
+    if (!native_pop_list(proc, &height)) return -1;
     if (!native_pop_int(proc, &gh)) return -1;
     if (!native_pop_int(proc, &grid_w)) return -1;
     if (!native_pop_int(proc, &h)) return -1;
@@ -526,22 +528,22 @@ int32_t am_native_Gfx_draw_image_warp(am_runtime_t *rt, am_process_t *proc) {
     if (!native_pop_wstring(proc, &ws)) return -1;
 
     if (w <= 0 || h <= 0 || grid_w <= 0 || gh <= 0) return native_push_bool(proc, false);
-    if (!(neutral > 0.0f)) return native_push_bool(proc, false);
+    if (!(strength > 0.0f)) return native_push_bool(proc, false);
     if (!native_resolve_path(ws, path, sizeof path)) return native_push_bool(proc, false);
 
     size_t cells = (size_t)grid_w * (size_t)gh;
-    if (disp == NULL || disp->length < cells) return native_push_bool(proc, false);
+    if (height == NULL || height->length < cells) return native_push_bool(proc, false);
 
     float *buf = native_warp_disp_scratch(cells);
     if (buf == NULL) return native_push_bool(proc, false);
     for (size_t i = 0; i < cells; i++) {
         am_float_t one;
-        if (!native_list_float(disp->children[i], &one)) return native_push_bool(proc, false);
+        if (!native_list_float(height->children[i], &one)) return native_push_bool(proc, false);
         buf[i] = (float)one;
     }
 
-    if (gfx_draw_image_warp(g, path, (uint32_t)x, (uint32_t)y, (uint32_t)w, (uint32_t)h,
-                            (uint32_t)grid_w, (uint32_t)gh, buf, neutral) != 0) {
+    if (gfx_draw_image_refract(g, path, (uint32_t)x, (uint32_t)y, (uint32_t)w, (uint32_t)h,
+                               (uint32_t)grid_w, (uint32_t)gh, buf, (float)strength) != 0) {
         return native_push_bool(proc, false);
     }
     return native_push_bool(proc, true);
@@ -686,7 +688,7 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"font_info",   am_native_Gfx_font_info },
     { L"image_size",  am_native_Gfx_image_size },
     { L"draw_image",  am_native_Gfx_draw_image },
-    { L"draw_image_warp", am_native_Gfx_draw_image_warp },
+    { L"draw_image_refract", am_native_Gfx_draw_image_refract },
     { L"sprite_info", am_native_Gfx_sprite_info },
     { L"draw_sprite", am_native_Gfx_draw_sprite },
     { L"draw_sprite_rotated", am_native_Gfx_draw_sprite_rotated },
