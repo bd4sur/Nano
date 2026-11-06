@@ -5034,22 +5034,24 @@ App 又并进了 `filepicker.scm` / `fsx.scm` 两个模块、且本轮继续长�
 **WASM-GUI**（`build_wasm_gui.sh` 产物，不是 `infer/web/` 那条 LLM-only 路线）。贴图路径必须
 与 C 版一致（`icon/gm_*.png`，透明背景 PNG），读图/绘图参照 Markdown 阅读器的做法。
 
-## 1. 新 App（`infer/app/goldminer.scm` + `infer/app/lib/goldminer_core.scm`）
+## 1. 新 App（`infer/app/goldminer.scm`，**单文件**）
 
-按项目既有分层（同俄罗斯方块/2048）：
+逻辑与界面合在一个模块里，按 C 版的组织顺序排列（规则段 → 绘制/输入/主循环）。
+最初曾拆为 `app/goldminer_core.scm` + `app/goldminer.scm`，用两个注入接口
+（`(set_screen w h)`、`(set_sprite_size id w h)`）换取"无 UI 依赖的纯逻辑单测"；
+但规则量（约 120 行）摊不平这处接缝，且物品槽位表示照样泄漏给绘制端，故**合并为单文件**，
+回归改为「HAL 驱动真实 App + 控制台诊断行」（见下 §3）。
 
-- **`app/lib/goldminer_core.scm`（纯逻辑，无 UI 依赖）**：逐条对照 C 版
+- **规则与状态段**：逐条对照 C 版
   `gm_generate_level` / `ui_goldminer_render_frame` 的逻辑段——摆动
   （`hook_angle = 1.30·sin(phase)`，速度 `2.2 + 0.1·(level-1)` rad/s）、出钩 300px/s、
   边界（`x≤3 / x≥W-3 / y≥H-4`）或抓取即回收、回收 `240/weight` px/s、命中判定
   （钩尖进入"以精灵中心为圆心、直径 = 精灵宽高较小者"的内切圆）、结算加分与过关、
   关卡物品构成（大/中金块各 1，小金块 `3+min(level-1,3)`，岩石 `3+level/2`，
   钻石 `level≥2`，福袋 1，宝箱 `level≥3`）、随机放置 + 拒绝重叠（外扩 8px 椭圆）。
-  单拍步长钳到 50ms（= C 版 `GM_DT_MAX`）。
-  精灵尺寸由调用方经 `(set_sprite_size id w h)` 注入 —— C 版是 `ui_icon_get_size`
-  读贴图实际宽高，Scheme 侧由 App 用 `(Gfx.sprite_info ...)` 读，语义相同而核心库
-  仍可脱离界面单测（`tools/e2e/native/goldminer_logic.scm`，36 条断言）。
-- **`app/goldminer.scm`（布局/绘制/输入）**：天空 `(25,45,75)`、地面 `(110,75,40)`、
+  单拍步长钳到 50ms（= C 版 `GM_DT_MAX`）。精灵尺寸在 `boot` 里用
+  `(Gfx.sprite_info ...)` 一次性填充（C 版是 `ui_icon_get_size`，同一语义）。
+- **绘制/输入段**：天空 `(25,45,75)`、地面 `(110,75,40)`、
   地表线 `(200,160,110)`、顶栏「得分 N  第M关  剩余 K」、物品 → 矿工（`PIVOT_X+20,
   PIVOT_Y-20`）→ 钩绳 → 钩爪的绘制顺序，全部与 C 版同源常量；场景常量直接从核心库
   取（`GM.GROUND_Y` 等，单一事实来源）。节奏 `System.set_interval(33ms)` ≈30fps，
@@ -5058,8 +5060,9 @@ App 又并进了 `filepicker.scm` / `fsx.scm` 两个模块、且本轮继续长�
   （= C 版 D 键/数字 2）；退出统一走 `app/lib/exit.scm`（右上角「退出」按钮 + 硬
   A/ESC → 全局确认框 → 销毁实例），替代 C 版自绘的「返回」按钮（Scheme App 没有
   「小游戏菜单」这个状态，退出即回应用列表——与其它 App 同款约定）。
-  诊断行（只在状态变化时打印）：`GMSTAT` / `GMFIRE` / `GMGRAB` / `GMSCORE` /
-  `GMLEVEL`，供端到端测试断言。
+  诊断行（只在状态变化时打印）：`GMSTAT`（精灵数 / 物品数 / **七类构成 counts** /
+  **物品包围盒 rect** / 分值 / 关卡）、`GMFIRE`、`GMGRAB`、`GMSHOT`（类型/分值/重量/
+  绳长/**出钩与回收耗时**）、`GMSCORE`、`GMLEVEL`（过关后的新构成与包围盒）。
 
 ## 2. 图形层新增"透明精灵"接口（`graphics.c/h` + `am_native_Gfx`）
 
@@ -5094,17 +5097,21 @@ gfx_draw_sprite_rotated(gfx, path, px, py, angle) // 枢轴 = 贴图上缘横向
 
 ## 3. 验证
 
-- `tools/e2e/native/goldminer_logic.scm`：**36/36**（关卡构成/落点约束/摆角与绳长/
-  出钩拍速 4.8px·16ms⁻¹/边界回收/抓取加分=该类型 value/带物回收速度=240/weight/
-  收完整关进入第 2 关且物品数 9→12 且出现钻石）；
-- `tools/e2e/native/test_goldminer.py`：**15/15**（宿主无头回归台，真 `graphics.c` +
-  RGB565 帧缓冲：天空/地面分区、HUD 文字、金块/岩石贴图、**矿工盒内有天空色像素**
-  （透明背景证据）、钩绳/钩爪随摆动移动（两帧差异像素）、键盘/触屏发射、抓取计分、
-  硬 A/ESC 挂起）；
-- `tools/e2e/native/aa_line_probe.scm` + 同一脚本的抗锯齿专项：在同一纯色底上并排画
-  `(Gfx.draw_line)`（整数+置色）与 `(Gfx.draw_line_aa)`（吴小林+加法混合），用"覆盖率
-  反解模型"（`c - bg = min(255-bg, 230a)`，以最晚钳位的蓝通道解 a）证明**抗锯齿侧存在
-  中间覆盖率像素（实测 168 个）、整数侧为 0** —— 这是"钩绳必须是抗锯齿线"的可执行判据；
+- `tools/e2e/native/test_goldminer.py`：**28/28**，三层——
+  ① 抗锯齿专项（`aa_line_probe.scm`：同一纯色底上并排画 `(Gfx.draw_line)`（整数+置色）
+     与 `(Gfx.draw_line_aa)`（吴小林+加法混合），用"覆盖率反解模型"
+     `c - bg = min(255-bg, 230a)`（以最晚钳位的蓝通道解 a）证明**抗锯齿侧存在中间覆盖率
+     像素 168 个、整数侧 0 个**）——这是"钩绳必须是抗锯齿线"的可执行判据；
+  ② 规则与关卡（HAL 按键脚本驱动真实 App，`NANO_VSTEP=50` 压缩虚拟时间，故 6000 帧
+     墙钟约 1s）：第 1 关构成 `1/1/3/3/0/1/0`、物品包围盒落在屏内且在地表以下、
+     `GMSHOT` 的 value/weight 与原型表一致、**出钩耗时 ≈(绳长-16)/300**（实测最大误差
+     50ms）、**带物回收耗时 ≈(绳长-16)/(240/weight)**（最大误差 44ms）、分值累计 =
+     各次结算之和、收完整关后 `GMLEVEL` 显示第 2 关 `items=12 counts=1/1/4/4/1/1/0`
+     （出现钻石）且落点仍合法；
+  ③ 界面与输入（RGB565 帧缓冲像素判据）：天空/地面分区、HUD 文字、金块/岩石贴图、
+     **矿工盒内有天空色像素**（透明背景证据）、钩绳/钩爪随摆动移动（两帧差异像素）、
+     键盘/触屏发射、抓取计分、硬 A/ESC 挂起；
+  （回归台为此新增 `NANO_VSTEP` 每帧虚拟毫秒数、并把 `KEY_MAX_STEPS` 由 64 提到 512。）
 - `tools/e2e/browser/regress_goldminer.js`（真 WASM + 真无头浏览器）：chromium
   **22/22**、firefox **22/22**（导航进入应用列表→启动→贴图/透明/摆动（差异像素质心 +
   中间覆盖率像素）→触屏发射与计分→键盘回车→退出确认框「留下/确认」→硬 Esc 全局确认，
@@ -5119,3 +5126,5 @@ cd infer && bash build_wasm_gui.sh            # 产物 infer/webgui/
 cd infer/webgui && python3 ../tools/https_static_server.py 9002 .
 # 浏览器打开 https://<主机>:9002/ → 任意键 → 主菜单「小游戏」→「灵机应用程序」→「黄金矿工」
 ```
+
+------------------------------------
