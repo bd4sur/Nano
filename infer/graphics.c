@@ -3184,3 +3184,160 @@ void gfx_draw_rgb888_buffer(Nano_GFX *gfx, uint8_t *rgb888_buffer,
         }
     }
 }
+
+
+// ===========================================================================
+// 精灵（透明背景贴图）绘制
+//
+// 用途：icon/ 下的游戏精灵（黄金矿工 gm_*.png 等）都是**透明背景**的小图，
+// 必须按 RGBA alpha 混合、按原始尺寸落屏（gfx_draw_image 会缩放到目标矩形且丢弃
+// alpha 通道，画出来是不透明方块）。缓存策略：解码一次常驻，键为文件路径；
+// 解码失败也占槽（避免每帧反复读盘/解码），LRU 按 stamp 淘汰最久未用。
+// ===========================================================================
+
+#ifndef GFX_SPRITE_CACHE_SIZE
+#define GFX_SPRITE_CACHE_SIZE 12     // 12 个槽位：黄金矿工 9 个精灵 + 余量
+#endif
+#define GFX_SPRITE_PATH_MAX   (128)
+
+typedef struct {
+    char path[GFX_SPRITE_PATH_MAX];
+    uint8_t *rgba;      // 解码后的 RGBA 像素（原始尺寸）；NULL 表示读取/解码失败
+    int32_t width;
+    int32_t height;
+    uint32_t stamp;     // LRU 时戳（越大越新）
+    uint8_t valid;      // 1 = 槽位已占用（含失败结果）
+} SpriteCacheEntry;
+
+static SpriteCacheEntry s_sprite_cache[GFX_SPRITE_CACHE_SIZE];
+static uint32_t s_sprite_stamp = 0;
+
+// 按路径取缓存项（未命中则现场解码）；path 非法返回 NULL。
+static SpriteCacheEntry *sprite_cache_get(const char *img_path) {
+    if (img_path == NULL || img_path[0] == '\0') return NULL;
+
+    SpriteCacheEntry *empty = NULL;
+    for (int32_t i = 0; i < GFX_SPRITE_CACHE_SIZE; i++) {
+        if (!s_sprite_cache[i].valid) {
+            if (empty == NULL) empty = &s_sprite_cache[i];
+            continue;
+        }
+        if (strncmp(s_sprite_cache[i].path, img_path, GFX_SPRITE_PATH_MAX) == 0) {
+            s_sprite_cache[i].stamp = ++s_sprite_stamp;
+            return &s_sprite_cache[i];
+        }
+    }
+
+    // 未命中：优先空槽，否则淘汰最久未用的槽
+    SpriteCacheEntry *slot = empty;
+    if (slot == NULL) {
+        slot = &s_sprite_cache[0];
+        for (int32_t i = 1; i < GFX_SPRITE_CACHE_SIZE; i++) {
+            if (s_sprite_cache[i].stamp < slot->stamp) slot = &s_sprite_cache[i];
+        }
+        if (slot->rgba != NULL) {
+            free(slot->rgba);
+        }
+        memset(slot, 0, sizeof *slot);
+    }
+
+    strncpy(slot->path, img_path, GFX_SPRITE_PATH_MAX - 1);
+    slot->path[GFX_SPRITE_PATH_MAX - 1] = '\0';
+    slot->stamp = ++s_sprite_stamp;
+    slot->valid = 1;
+
+    int img_w = 0, img_h = 0, channels = 0;
+    unsigned char *img_data = stbi_load(img_path, &img_w, &img_h, &channels, 4);
+    if (img_data != NULL && img_w > 0 && img_h > 0) {
+        slot->rgba = img_data;
+        slot->width = img_w;
+        slot->height = img_h;
+    }
+    else if (img_data != NULL) {
+        stbi_image_free(img_data);
+    }
+    return slot;
+}
+
+int32_t gfx_sprite_info(const char *img_path, int32_t *out_width, int32_t *out_height) {
+    SpriteCacheEntry *e = sprite_cache_get(img_path);
+    if (e == NULL || e->rgba == NULL) return -1;
+    if (out_width != NULL)  *out_width = e->width;
+    if (out_height != NULL) *out_height = e->height;
+    return 0;
+}
+
+int32_t gfx_draw_sprite(Nano_GFX *gfx, const char *img_path, int32_t cx, int32_t cy) {
+    if (gfx == NULL) return -1;
+    SpriteCacheEntry *e = sprite_cache_get(img_path);
+    if (e == NULL || e->rgba == NULL) return -1;
+
+    const int32_t w = e->width;
+    const int32_t h = e->height;
+    const int32_t x0 = cx - w / 2;
+    const int32_t y0 = cy - h / 2;
+    int32_t xs = (x0 < 0) ? 0 : x0;
+    int32_t ys = (y0 < 0) ? 0 : y0;
+    int32_t xe = (x0 + w > (int32_t)gfx->width)  ? (int32_t)gfx->width  : x0 + w;
+    int32_t ye = (y0 + h > (int32_t)gfx->height) ? (int32_t)gfx->height : y0 + h;
+
+    for (int32_t y = ys; y < ye; y++) {
+        const uint8_t *row = e->rgba + (size_t)(y - y0) * (size_t)w * 4;
+        for (int32_t x = xs; x < xe; x++) {
+            const uint8_t *src = row + (size_t)(x - x0) * 4;
+            if (src[3] == 0) continue;
+            gfx_blend_pixel(gfx, (uint32_t)x, (uint32_t)y, src[0], src[1], src[2], src[3]);
+        }
+    }
+    return 0;
+}
+
+int32_t gfx_draw_sprite_rotated(Nano_GFX *gfx, const char *img_path, int32_t pivot_x, int32_t pivot_y, float angle_rad) {
+    if (gfx == NULL) return -1;
+    SpriteCacheEntry *e = sprite_cache_get(img_path);
+    if (e == NULL || e->rgba == NULL) return -1;
+
+    const int32_t w = e->width;
+    const int32_t h = e->height;
+    const float s = sinf(angle_rad), c = cosf(angle_rad);
+
+    // 贴图局部坐标系：枢轴 = 上缘中点，局部 x∈[-w/2, w/2)，y∈[0, h)
+    // 正映射：screen = pivot + lx*(c, -s) + ly*(s, c)（局部竖直轴对齐旋转方向）
+    // 先旋转四角求目标包围盒，并裁剪到屏幕
+    const float corner_lx[4] = { -w / 2.0f, w / 2.0f, -w / 2.0f, w / 2.0f };
+    const float corner_ly[4] = { 0.0f, 0.0f, (float)h, (float)h };
+    float min_x = 0.0f, max_x = 0.0f, min_y = 0.0f, max_y = 0.0f;
+    for (int32_t i = 0; i < 4; i++) {
+        float rx = corner_lx[i] * c + corner_ly[i] * s;
+        float ry = -corner_lx[i] * s + corner_ly[i] * c;
+        if (i == 0 || rx < min_x) min_x = rx;
+        if (i == 0 || rx > max_x) max_x = rx;
+        if (i == 0 || ry < min_y) min_y = ry;
+        if (i == 0 || ry > max_y) max_y = ry;
+    }
+    int32_t x0 = pivot_x + (int32_t)min_x;
+    int32_t x1 = pivot_x + (int32_t)max_x + 1;
+    int32_t y0 = pivot_y + (int32_t)min_y;
+    int32_t y1 = pivot_y + (int32_t)max_y + 1;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int32_t)gfx->width)  x1 = (int32_t)gfx->width;
+    if (y1 > (int32_t)gfx->height) y1 = (int32_t)gfx->height;
+
+    // 逆映射逐像素采样（最近邻）+ alpha 混合
+    for (int32_t y = y0; y < y1; y++) {
+        float dy = (float)(y - pivot_y);
+        for (int32_t x = x0; x < x1; x++) {
+            float dx = (float)(x - pivot_x);
+            // 逆旋转：lx = dx*c - dy*s；ly = dx*s + dy*c
+            int32_t sx = (int32_t)(dx * c - dy * s + w / 2.0f);
+            int32_t sy = (int32_t)(dx * s + dy * c);
+            if (sx < 0 || sx >= w || sy < 0 || sy >= h) continue;
+            uint32_t src_idx = ((uint32_t)sy * (uint32_t)w + (uint32_t)sx) * 4;
+            if (e->rgba[src_idx + 3] == 0) continue;
+            gfx_blend_pixel(gfx, (uint32_t)x, (uint32_t)y,
+                e->rgba[src_idx], e->rgba[src_idx + 1], e->rgba[src_idx + 2], e->rgba[src_idx + 3]);
+        }
+    }
+    return 0;
+}

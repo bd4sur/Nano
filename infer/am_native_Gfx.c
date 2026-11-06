@@ -307,6 +307,32 @@ int32_t am_native_Gfx_draw_rect(am_runtime_t *rt, am_process_t *proc) {
 }
 
 
+// (Gfx.draw_line_aa x1:Number y1:Number x2:Number y2:Number width:Number r g b) : #undefined
+// —— 抗锯齿直线（吴小林算法，= C 版 gfx_draw_line_anti_aliasing；黄金矿工的钩绳用它）。
+//    端点与线宽都按**浮点**取，不做取整：抗锯齿的意义就在于亚像素端点。
+//    注意底层是**加法混合**（gfx_add_pixel：底色 + 覆盖率×颜色），因此同一颜色在深色底上
+//    比在浅色底上更暗，与 (Gfx.draw_line ...) 的置色语义不同（后者是整数端点 + 置色）。
+int32_t am_native_Gfx_draw_line_aa(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    am_float_t w = 1.0f, y2 = 0.0f, x2 = 0.0f, y1 = 0.0f, x1 = 0.0f;
+    uint8_t b, gc, r;
+    if (g == NULL) return -1;
+    if (!native_pop_color(proc, &b))  return -1;
+    if (!native_pop_color(proc, &gc)) return -1;
+    if (!native_pop_color(proc, &r))  return -1;
+    if (!native_pop_number(proc, &w)) return -1;
+    if (!native_pop_number(proc, &y2)) return -1;
+    if (!native_pop_number(proc, &x2)) return -1;
+    if (!native_pop_number(proc, &y1)) return -1;
+    if (!native_pop_number(proc, &x1)) return -1;
+    if (isnan(w) || isnan(y2) || isnan(x2) || isnan(y1) || isnan(x1)) return -1;
+    if (w > 0.0f) {
+        gfx_draw_line_anti_aliasing(g, (float)x1, (float)y1, (float)x2, (float)y2,
+                                    (float)w, r, gc, b, 1);
+    }
+    return native_statement_done(proc);
+}
+
 int32_t am_native_Gfx_draw_circle(am_runtime_t *rt, am_process_t *proc) {
     Nano_GFX *g = native_gfx(rt);
     if (g == NULL) return -1;
@@ -428,6 +454,65 @@ int32_t am_native_Gfx_draw_image(am_runtime_t *rt, am_process_t *proc) {
     return 0;
 }
 
+// (Gfx.sprite_info path:String) : List | #null
+// —— 透明背景贴图的**原始尺寸** (宽 高)。内部会解码一次并常驻缓存（后续 draw_sprite
+//    直接命中缓存），因此也用作「进入场景时预热贴图」的手段；失败返回 #null。
+int32_t am_native_Gfx_sprite_info(am_runtime_t *rt, am_process_t *proc) {
+    am_wstring_t *ws = NULL;
+    char path[256];
+    int32_t w = 0, h = 0;
+    (void)rt;
+
+    if (!native_pop_wstring(proc, &ws)) return -1;
+    if (!native_resolve_path(ws, path, sizeof path)) return native_push_null(proc);
+    if (gfx_sprite_info(path, &w, &h) != 0) return native_push_null(proc);
+    return native_push_pair(proc, (am_float_t)w, (am_float_t)h);
+}
+
+// 布尔收尾：压 #t/#f 并推进 PC（值型函数 N1）。
+static int32_t native_push_bool(am_process_t *proc, bool v) {
+    if (am_process_push_operand(proc, v ? AM_VALUE_TRUE : AM_VALUE_FALSE) != 0) return -1;
+    am_process_step(proc);
+    return 0;
+}
+
+// (Gfx.draw_sprite path:String cx:Number cy:Number) : Boolean
+// —— 把透明背景 PNG 按**原始尺寸**、以 (cx,cy) 为**中心** alpha 混合绘制。
+//    与 draw_image 的区别：不缩放、保留 alpha（精灵/图标用这个）。
+//    失败（路径非法/文件缺失/解码失败）返回 #f。
+int32_t am_native_Gfx_draw_sprite(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    am_wstring_t *ws = NULL;
+    char path[256];
+    int32_t cy = 0, cx = 0;
+    if (g == NULL) return -1;
+
+    if (!native_pop_int(proc, &cy)) return -1;
+    if (!native_pop_int(proc, &cx)) return -1;
+    if (!native_pop_wstring(proc, &ws)) return -1;
+    if (!native_resolve_path(ws, path, sizeof path)) return native_push_bool(proc, false);
+    return native_push_bool(proc, gfx_draw_sprite(g, path, cx, cy) == 0);
+}
+
+// (Gfx.draw_sprite_rotated path:String px:Number py:Number angle:Number) : Boolean
+// —— 以 (px,py) 为枢轴（贴图**上缘横向中点**）旋转 angle 弧度（屏幕坐标系，y 轴向下）
+//    绘制贴图，使贴图竖直轴线与绳/杆方向对齐。黄金矿工的钩爪用它。
+int32_t am_native_Gfx_draw_sprite_rotated(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    am_wstring_t *ws = NULL;
+    char path[256];
+    am_float_t angle = 0.0f;
+    int32_t py = 0, px = 0;
+    if (g == NULL) return -1;
+
+    if (!native_pop_number(proc, &angle)) return -1;
+    if (!native_pop_int(proc, &py)) return -1;
+    if (!native_pop_int(proc, &px)) return -1;
+    if (!native_pop_wstring(proc, &ws)) return -1;
+    if (!native_resolve_path(ws, path, sizeof path)) return native_push_bool(proc, false);
+    return native_push_bool(proc, gfx_draw_sprite_rotated(g, path, px, py, (float)angle) == 0);
+}
+
 // (Gfx.set_font id:Number) : Boolean
 // —— 选择 Gfx.draw_text 使用的字模：0 = 12px 二值点阵、1 = 12px 抗锯齿、2 = 16px 抗锯齿。
 //    非法 id 返回 #f（软失败，不报错）。字模影响**行高与步进**，调用方切换后应按
@@ -498,6 +583,7 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"set_pixel",   am_native_Gfx_set_pixel },
     { L"draw_point",  am_native_Gfx_draw_point },
     { L"draw_line",   am_native_Gfx_draw_line },
+    { L"draw_line_aa", am_native_Gfx_draw_line_aa },
     { L"fill_rect",   am_native_Gfx_fill_rect },
     { L"draw_rect",   am_native_Gfx_draw_rect },
     { L"draw_circle", am_native_Gfx_draw_circle },
@@ -507,6 +593,9 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"font_info",   am_native_Gfx_font_info },
     { L"image_size",  am_native_Gfx_image_size },
     { L"draw_image",  am_native_Gfx_draw_image },
+    { L"sprite_info", am_native_Gfx_sprite_info },
+    { L"draw_sprite", am_native_Gfx_draw_sprite },
+    { L"draw_sprite_rotated", am_native_Gfx_draw_sprite_rotated },
     { L"refresh",     am_native_Gfx_refresh },
 };
 

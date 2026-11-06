@@ -232,6 +232,29 @@ uint8_t *gfx_decode_image_rgba(uint8_t *img_buffer, uint32_t buffer_size, int32_
 int32_t gfx_decode_image_buffer(uint8_t *img_buffer, uint32_t buffer_size, uint32_t req_width, uint32_t req_height, uint8_t *out_rgb888, uint32_t *out_width, uint32_t *out_height);
 void gfx_draw_rgb888_buffer(Nano_GFX *gfx, uint8_t *rgb888_buffer, uint32_t img_width, uint32_t img_height, uint32_t x0, uint32_t y0);
 
+// ===========================================================================
+// 精灵（透明背景贴图）绘制
+//
+// 与 gfx_draw_image 的分工：后者把图**缩放到目标矩形**、按 RGB 直写（不保留
+// alpha，适合照片/插图）；本组函数把图按**原始尺寸**、以 **RGBA alpha 混合**
+// 绘制（适合图标/游戏精灵），并带一份 RGBA 解码缓存（键 = 文件路径，LRU 淘汰）。
+// 与 ui_icon.c 的 ui_icon_draw_centered / ui_icon_draw_rotated 同一套几何语义
+// （居中 / 枢轴=上缘中点旋转），但缓存与实现独立于 UI 层，图形层调用方
+// （灵机 App 的 (native Gfx)）无需链接 ui_icon.c。
+// 返回 0 成功、-1 失败（文件不存在/解码失败/参数非法）。
+// ===========================================================================
+
+// 取精灵原始尺寸（必要时解码并缓存）；返回 0 成功、-1 失败。
+int32_t gfx_sprite_info(const char *img_path, int32_t *out_width, int32_t *out_height);
+
+// 以 (cx, cy) 为**中心**绘制精灵（alpha 混合，自动裁剪到屏幕）。
+int32_t gfx_draw_sprite(Nano_GFX *gfx, const char *img_path, int32_t cx, int32_t cy);
+
+// 以 (pivot_x, pivot_y) 为**枢轴**（贴图上缘横向中点）旋转 angle_rad 后绘制精灵。
+// 逆映射最近邻采样 + alpha 混合；枢轴位置不动，贴图竖直轴线对齐旋转方向
+// （与 ui_icon_draw_rotated 完全一致，黄金矿工的钩爪靠它随绳角转动）。
+int32_t gfx_draw_sprite_rotated(Nano_GFX *gfx, const char *img_path, int32_t pivot_x, int32_t pivot_y, float angle_rad);
+
 #ifdef __cplusplus
 }
 #endif

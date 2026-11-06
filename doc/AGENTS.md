@@ -5025,3 +5025,97 @@ App 又并进了 `filepicker.scm` / `fsx.scm` 两个模块、且本轮继续长�
 - 浏览器端到端（真 WASM）**50/50**：同样判据（截图 `/tmp/e2e-set/settings-16px.png`）；
 - 解析 124/124；宿主 35 个 App 回归全 `err=none`；
 - 示例文档加一行「设置」说明（99 行 / 3779 字节，块数仍 29）。
+
+---
+
+# 2026-11-06（黄金矿工：灵机 App 版 + 图形层透明精灵接口）
+
+需求：把 C 版黄金矿工（`infer/ui_goldminer.c`）移植为「灵机应用程序」（Scheme App），只做
+**WASM-GUI**（`build_wasm_gui.sh` 产物，不是 `infer/web/` 那条 LLM-only 路线）。贴图路径必须
+与 C 版一致（`icon/gm_*.png`，透明背景 PNG），读图/绘图参照 Markdown 阅读器的做法。
+
+## 1. 新 App（`infer/app/goldminer.scm` + `infer/app/lib/goldminer_core.scm`）
+
+按项目既有分层（同俄罗斯方块/2048）：
+
+- **`app/lib/goldminer_core.scm`（纯逻辑，无 UI 依赖）**：逐条对照 C 版
+  `gm_generate_level` / `ui_goldminer_render_frame` 的逻辑段——摆动
+  （`hook_angle = 1.30·sin(phase)`，速度 `2.2 + 0.1·(level-1)` rad/s）、出钩 300px/s、
+  边界（`x≤3 / x≥W-3 / y≥H-4`）或抓取即回收、回收 `240/weight` px/s、命中判定
+  （钩尖进入"以精灵中心为圆心、直径 = 精灵宽高较小者"的内切圆）、结算加分与过关、
+  关卡物品构成（大/中金块各 1，小金块 `3+min(level-1,3)`，岩石 `3+level/2`，
+  钻石 `level≥2`，福袋 1，宝箱 `level≥3`）、随机放置 + 拒绝重叠（外扩 8px 椭圆）。
+  单拍步长钳到 50ms（= C 版 `GM_DT_MAX`）。
+  精灵尺寸由调用方经 `(set_sprite_size id w h)` 注入 —— C 版是 `ui_icon_get_size`
+  读贴图实际宽高，Scheme 侧由 App 用 `(Gfx.sprite_info ...)` 读，语义相同而核心库
+  仍可脱离界面单测（`tools/e2e/native/goldminer_logic.scm`，36 条断言）。
+- **`app/goldminer.scm`（布局/绘制/输入）**：天空 `(25,45,75)`、地面 `(110,75,40)`、
+  地表线 `(200,160,110)`、顶栏「得分 N  第M关  剩余 K」、物品 → 矿工（`PIVOT_X+20,
+  PIVOT_Y-20`）→ 钩绳 → 钩爪的绘制顺序，全部与 C 版同源常量；场景常量直接从核心库
+  取（`GM.GROUND_Y` 等，单一事实来源）。节奏 `System.set_interval(33ms)` ≈30fps，
+  物理步长用 `System.timestamp` 实测差（同 C 版按帧时间戳推进）。
+  输入：触屏**松手沿**发射（= C 版 `touch_edge UP`），键盘回车/`'2'` 按下沿发射
+  （= C 版 D 键/数字 2）；退出统一走 `app/lib/exit.scm`（右上角「退出」按钮 + 硬
+  A/ESC → 全局确认框 → 销毁实例），替代 C 版自绘的「返回」按钮（Scheme App 没有
+  「小游戏菜单」这个状态，退出即回应用列表——与其它 App 同款约定）。
+  诊断行（只在状态变化时打印）：`GMSTAT` / `GMFIRE` / `GMGRAB` / `GMSCORE` /
+  `GMLEVEL`，供端到端测试断言。
+
+## 2. 图形层新增"透明精灵"接口（`graphics.c/h` + `am_native_Gfx`）
+
+**为什么不能照抄 Markdown 的 `(Gfx.draw_image ...)`**：那条通道是"缩放到目标矩形 +
+`stbi_load(...,3)` RGB 直写"，**丢弃 alpha**（适合照片/插图）。拿它画透明背景精灵会
+得到不透明方块（实测精灵底色为黑）。故在图形层新增一组精灵接口：
+
+```
+gfx_sprite_info(path, &w, &h)                     // 解码一次并常驻 RGBA 缓存
+gfx_draw_sprite(gfx, path, cx, cy)                // 原点尺寸、中心对齐、alpha 混合
+gfx_draw_sprite_rotated(gfx, path, px, py, angle) // 枢轴 = 贴图上缘横向中点
+```
+
+- 实现：`graphics.c` 末尾新增 RGBA 精灵缓存（键=文件路径，LRU 12 槽，**失败也占槽**
+  避免反复读盘；像素用 `stbi_load(...,4)` 解码），绘制走 `gfx_blend_pixel`
+  （RGB565/RGB888 双路径、自动标脏区）；旋转版与 `ui_icon.c` 的
+  `ui_icon_draw_rotated` **逐行同算法**（逆映射最近邻 + 四角包围盒裁剪），因此与 C 版
+  黄金矿工的钩爪姿态一致。缓存/实现独立于 UI 层，链接 `graphics.c` 的宿主即可用
+  （无需 `ui_icon.c`）。
+- 灵机本地库（`am_native_Gfx`）新增三条，路径规则与 `(native Fs)` 完全一致
+  （相对业务资源根、拒 `..`）：`(Gfx.sprite_info p) : (宽 高) | #null`、
+  `(Gfx.draw_sprite p cx cy) : Boolean`、`(Gfx.draw_sprite_rotated p px py angle) : Boolean`。
+  失败返回 `#f`（软失败），App 可据此降级——但注意贴图缺失时 App 不会画方块：
+  核心库保留了 C 版"无贴图时的原型包围盒"，游戏逻辑仍可玩。
+- **抗锯齿钩绳**（`(Gfx.draw_line_aa x1 y1 x2 y2 width r g b)`，`am_native_Gfx` 第四条新增）：
+  直接转 `gfx_draw_line_anti_aliasing`（1px 走吴小林算法），端点/线宽按**浮点**取、
+  不取整——摆动的绳角是连续的，只有亚像素端点才换来平滑斜线。语义与 `(Gfx.draw_line)`
+  不同：底层 `gfx_add_pixel` 是**加法混合**（底色 + 覆盖率×颜色），不是置色。
+  钩绳绘制即 `(Gfx.draw_line_aa PIVOT_X PIVOT_Y GM.hook_x GM.hook_y 1 230 230 230)`，
+  与 C 版 `gfx_draw_line_anti_aliasing(gfx, 160, 66, hook_x, hook_y, 1.0f, 230,230,230, 1)`
+  逐参数等价（含 C 版同款"绳在浅底上偏亮"的加法效果）。
+
+## 3. 验证
+
+- `tools/e2e/native/goldminer_logic.scm`：**36/36**（关卡构成/落点约束/摆角与绳长/
+  出钩拍速 4.8px·16ms⁻¹/边界回收/抓取加分=该类型 value/带物回收速度=240/weight/
+  收完整关进入第 2 关且物品数 9→12 且出现钻石）；
+- `tools/e2e/native/test_goldminer.py`：**15/15**（宿主无头回归台，真 `graphics.c` +
+  RGB565 帧缓冲：天空/地面分区、HUD 文字、金块/岩石贴图、**矿工盒内有天空色像素**
+  （透明背景证据）、钩绳/钩爪随摆动移动（两帧差异像素）、键盘/触屏发射、抓取计分、
+  硬 A/ESC 挂起）；
+- `tools/e2e/native/aa_line_probe.scm` + 同一脚本的抗锯齿专项：在同一纯色底上并排画
+  `(Gfx.draw_line)`（整数+置色）与 `(Gfx.draw_line_aa)`（吴小林+加法混合），用"覆盖率
+  反解模型"（`c - bg = min(255-bg, 230a)`，以最晚钳位的蓝通道解 a）证明**抗锯齿侧存在
+  中间覆盖率像素（实测 168 个）、整数侧为 0** —— 这是"钩绳必须是抗锯齿线"的可执行判据；
+- `tools/e2e/browser/regress_goldminer.js`（真 WASM + 真无头浏览器）：chromium
+  **22/22**、firefox **22/22**（导航进入应用列表→启动→贴图/透明/摆动（差异像素质心 +
+  中间覆盖率像素）→触屏发射与计分→键盘回车→退出确认框「留下/确认」→硬 Esc 全局确认，
+  无 pageerror）；
+- 宿主回归台 38 个 App 全 `err=none`（含新 App）；Markdown 专项浏览器回归 50/50
+  不受图形层改动影响；`regress.js` 存活回归中 goldminer `refreshΔ=110/4s`（≈27fps）。
+
+## 4. 运行
+
+```bash
+cd infer && bash build_wasm_gui.sh            # 产物 infer/webgui/
+cd infer/webgui && python3 ../tools/https_static_server.py 9002 .
+# 浏览器打开 https://<主机>:9002/ → 任意键 → 主菜单「小游戏」→「灵机应用程序」→「黄金矿工」
+```

@@ -56,6 +56,12 @@ int32_t am_native_Gfx_draw_point(am_runtime_t *rt, am_process_t *proc);
 // —— 画线段
 int32_t am_native_Gfx_draw_line(am_runtime_t *rt, am_process_t *proc);
 
+// (Gfx.draw_line_aa x1:Number y1:Number x2:Number y2:Number width:Number r:Number g:Number b:Number) : #undefined
+// —— 抗锯齿直线（吴小林算法，= C 版 gfx_draw_line_anti_aliasing）。端点/线宽按浮点取，
+//    不做取整（抗锯齿的意义就在亚像素端点）。底层为**加法混合**（底色 + 覆盖率×颜色），
+//    与上面置色语义的 draw_line 不同。
+int32_t am_native_Gfx_draw_line_aa(am_runtime_t *rt, am_process_t *proc);
+
 // (Gfx.fill_rect x:Number y:Number w:Number h:Number r:Number g:Number b:Number) : #undefined
 // —— 实心矩形
 int32_t am_native_Gfx_fill_rect(am_runtime_t *rt, am_process_t *proc);
@@ -95,7 +101,24 @@ int32_t am_native_Gfx_image_size(am_runtime_t *rt, am_process_t *proc);
 // —— 从文件读图、缩放到 (w,h) 并绘制（宿主侧带 LRU 缓存；像素永不进解释器堆）。
 //    路径规则与 (native Fs) 完全一致（相对业务资源根、拒绝 ".."）。
 //    失败（文件缺失/解码失败/尺寸非法）返回 #f —— 供调用方画占位框兜底。
+//    注：这条路径按 **RGB 直写**（丢弃 alpha），用于照片/插图；透明背景的图标/精灵
+//    请用下面的 sprite 系列。
 int32_t am_native_Gfx_draw_image(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.sprite_info path:String) : List | #null
+// —— 透明背景贴图的原始尺寸 (宽 高)。解码一次即常驻宿主侧 RGBA 缓存（预热作用），
+//    失败返回 #null。
+int32_t am_native_Gfx_sprite_info(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.draw_sprite path:String cx:Number cy:Number) : Boolean
+// —— 按**原始尺寸**、以 (cx,cy) 为**中心**做 alpha 混合绘制（透明背景 PNG 专用；
+//    LRU 缓存按路径键，像素不进解释器堆）。失败返回 #f。
+int32_t am_native_Gfx_draw_sprite(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.draw_sprite_rotated path:String px:Number py:Number angle:Number) : Boolean
+// —— 同上，但以 (px,py) 为枢轴（贴图**上缘横向中点**）旋转 angle 弧度后绘制。
+//    几何与 C 版 ui_icon_draw_rotated 一致（黄金矿工的钩爪随绳角转动）。
+int32_t am_native_Gfx_draw_sprite_rotated(am_runtime_t *rt, am_process_t *proc);
 
 // (Gfx.refresh) : #undefined —— 推帧上屏（脏区局部刷新）
 int32_t am_native_Gfx_refresh(am_runtime_t *rt, am_process_t *proc);
