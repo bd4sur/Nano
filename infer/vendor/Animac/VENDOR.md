@@ -15,11 +15,11 @@
 | 项 | 值 |
 |---|---|
 | 上游仓库 | `/home/bd4sur/Animac`（BD4SUR） |
-| 同步基线 | commit `0291412`（2026-10-21 02:47） |
-| 合并产物生成 | `git archive 0f5e9d4` 导出干净源码树 → 在该副本内执行上游 `amalgamate.sh`（**不在上游仓库内生成任何文件**） |
-| 校验 | `animac_core.c/h` 与上游仓库内自带产物、以及本次重新生成物三方内容一致（仅"生成时间"行不同）；其余文件与上游 `src/` `include/` 对应文件 `cmp` 全等 |
+| 同步基线 | commit `5f82267`（2026-11-07 00:34） |
+| 合并产物生成 | `git archive 5f82267` 导出干净源码树 → 在该副本内执行上游 `amalgamate.sh`（**不在上游仓库内生成任何文件**） |
+| 校验 | 重新生成物与「基线前一版（`0291412`）重新生成物」逐行 `diff`，差异**仅**为本次上游改动（GC 静态对象存活标记）与"生成时间"行；其余文件与上游 `src/` `include/` 对应文件 `cmp` 全等 |
 
-## 文件清单（17 个）
+## 文件清单（18 个）
 
 | 文件 | 来源 | 性质 |
 |---|---|---|
@@ -27,6 +27,7 @@
 | `am_host.c`、`am_host.h` | 上游 `src/`、`include/` | 上游原样 |
 | `am_native_{Math,String,System,Table,LLM}.c/.h` | 上游 `src/`、`include/` | 上游原样 |
 | `am_repl.c`、`am_repl.h` | 上游 `src/`、`include/` | 上游原样（线性包含 LLM 库注册，故 LLM 库一并收录） |
+| `am_host_esp32.cpp` | 上游 `src/` | 上游原样；ESP32/Arduino 宿主端口（由本仓库 ESP32 PlatformIO 工程使用，构建脚本 glob `*.c` 时不参与 wasm/Linux 目标） |
 | `animac.h` | **本项目自有** | amalgam 适配层：把上游伞形头文件的收录语义转发为 `#include "animac_core.h"` |
 | `VENDOR.md` | **本项目自有** | 本说明 |
 
@@ -41,7 +42,6 @@
 | `include/am_*.h`（24 个核心头，含 `am_frame.h`） | 已合并进 `animac_core.h`，单文件形态不再随附 |
 | `src/am_*.c`（24 个核心实现，含 `am_frame.c`） | 已合并进 `animac_core.c` |
 | `src/am_highlight.c` + `include/am_highlight.h` | 仅上游桌面 `main.c`（终端语法高亮）使用，本项目不使用 |
-| `src/am_host_esp32.cpp` | ESP32/Arduino 宿主端口；本仓库现有构建脚本只 glob `*.c`，不参与编译 |
 | `Makefile`、`amalgamate.sh`、`main.c`、`test/`、`doc/`、`typescript/` | 上游开发/测试/文档设施，非集成产物 |
 
 ## 同步上游的操作步骤
@@ -64,11 +64,12 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
 
 | 同步日期 | 上游基线 | 要点 |
 |---|---|---|
+| 2026-11-07 | `5f82267` | **GC 误扫静态容器引用的存活对象**：`alive` 位是「本轮已标记」语义，但 `gc_sweep` 对 static 对象直接 `continue` 从不复位，而 `gc_mark` 以 `alive` 作环检测短路——静态对象在第二轮 GC 时短路返回，其运行期子对象再也不会被标记而被 sweep 全部释放（句柄悬空）。触发面：`am_list_resize` 会原样复制对象头，故被 `push` 扩容的列表字面量（如 `'(0)`）即「静态容器 + 运行期子对象」。修复：`gc_sweep` 的 static 分支先 `am_object_set_alive(obj, -1)` 再 `continue`，恢复「每轮 sweep 复位表内全部对象 alive」的不变式。**此缺陷对本项目实际可达**：灵机 `app/` 普遍使用 `(define x '())` 后 `push` 建表的模式（如 `app/forkqueue.scm` 的 `pids`/`qr`/`ql`/`qs`/`qc`、`app/callcc.scm` 的 `u_lane`/`u_ch`），已用最小用例在本仓验证：旧基线编译的二进制 `(define l '())`+5 次 `push`+两轮 `System.gc` 后取元素即报 `[Runtime] 指令执行异常: PID=0 PC=37`，新基线正常输出。本地库契约 N1–N10 未变，`am_native_Gfx.c`/`am_native_Time.c` 等本项目自实现库无需改动。 |
 | 2026-10-21（第二次） | `0291412` | ①**闭包帧分析父链修复**：词法父子关系改用 AST 父链接（parser 宏展开后释放 scope 对象，原实现导致 parent 恒空、自由变量 src 退化为运行期动态查找）；②**定时器回调不可重入**：进程已在异步回调中时顺延定时器（工单 #38）；`am_parser.c` 清理 scope 后同步清空 `ast->scopes`。本项目的 `am_native_Gfx.c`/`am_native_Time.c` 无需改动 |
 | 2026-10-21 | `5c244e9` | 闭包变量访问改为「帧描述符 + 静态槽位寻址」（P0–P2）：新增 `am_frame.{h,c}`、5 条槽位指令（`load/store/set/call/tailcall_slot` 63–67）、模块磁盘格式新增帧描述符表；`am_repl.c` 无改动 |
 | 2026-10-20 | `0f5e9d4` | 首次按 amalgam 形态同步（单值栈纪律、`,@`、异步帧 #36、Math 扩展） |
 
-> 宿主侧 ABI 只增不改：本地库（`infer/am_native_Gfx.c`、`infer/am_native_Time.c`）在上游这两次升级中均**无需改动**仍可编译链接（契约 N1–N10 未变）。
+> 宿主侧 ABI 只增不改：本地库（`infer/am_native_Gfx.c`、`infer/am_native_Time.c` 等）在上游各次升级中均**无需改动**仍可编译链接（契约 N1–N10 未变）。
 
 ## 本项目自行实现的本地库（不在本目录）
 
