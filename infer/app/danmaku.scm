@@ -25,6 +25,10 @@
 ;;                   条数 ≈ 21 条，15px 间隔），射速间隔 118ms → 20ms 且**允许低于一拍**
 ;;                   （一拍内可打多轮齐射），不再被 33ms 的刷新节拍卡住；真正的天花板是
 ;;                   同屏弹数（子弹表 384 项）。
+;;       顶部还可用「手动 / 自动」按钮切**自动驾驶**（默认手动）：AI 每拍在 21 个 x 候选
+;;       （必要时再加两个高度）里挑"最安全又最利于输出"的位置 —— 先躲开 1s 内会撞上的
+;;       陨石（含横掠型，它只能靠上下错开躲），再尽量把弹幕柱对准还来得及打的陨石；
+;;       在游玩区按下手指 = 立刻交还手动。详见 ai_think / ai_cost 的注释。
 ;;       陨石按波次落下，难度随波次递增（下落速度 / 刷怪频率）；
 ;;       大陨石被击碎分裂成两颗小的；第 2 波起掺入**横掠型**陨石——它在飞船的高度带
 ;;       横穿屏幕，垂直弹幕打不到，必须挪位躲开（否则"蹲着不动"几乎无敌）；
@@ -258,15 +262,25 @@
 ;; 弹幕强度：0 = 常规弹幕（默认；1 条弹道，第 4 波起 3 条，射速间隔下限 78ms）
 ;;           1 = 无限弹幕（弹道数与射速都随波次增长，上限 = 屏宽 / 同屏弹数）
 (define bmode 0)
+;; 自动驾驶：0 = 手动（默认） 1 = 自动（AI 接管操船，见 ai_think）
+(define ai_on 0)
+(define ai_tx 160.0)                    ; AI 选定的目标位置（每拍重算）
+(define ai_ty 206.0)
 ;; HUD 按钮矩形（都在顶部 19px 内，避开右上角退出按钮）
-(define bar_x 140)                      ; 「常规弹幕 / 无限弹幕」
+(define ai_x 134)                        ; 「手动 / 自动」
+(define ai_y 2)
+(define ai_w 30)
+(define ai_h 15)
+(define bar_x 168)                      ; 「常规弹幕 / 无限弹幕」
 (define bar_y 2)
 (define bar_w 52)
 (define bar_h 15)
-(define tog_x 200)                      ; 「无限命 / 三条命」
+(define tog_x 224)                      ; 「无限命 / 三条命」
 (define tog_y 2)
 (define tog_w 44)
 (define tog_h 15)
+;; 注意：三枚按钮都放在 x ≥ 134。宿主在**屏幕左上角**（实测 x<20 且 y<100）那一小片
+;; 区域的点按会走别的分支，Touch 电平到不了 App —— 按钮放那儿会点不动。
 (define ui_tap 0)                       ; 本拍是否有新的"按下"
 (define ui_toggle 0)                    ; 本次按下落在哪个按钮上（0=无 / 1=生命 / 2=弹幕）
 (define fire_t 0)                       ; 开火计时（ms）
@@ -1093,6 +1107,17 @@
     {
       (Gfx.fill_rect 0 0 SW HUD_H 14 16 30)
       (Gfx.fill_rect 0 (- HUD_H 1) SW 1 36 42 70)
+      ;; 自动驾驶按钮（点按切换）：手动 = 石板灰，自动 = 绿底
+      (if (== ai_on 1)
+          {
+            (Gfx.fill_rect ai_x ai_y ai_w ai_h 40 110 74)
+            (Gfx.draw_rect ai_x ai_y ai_w ai_h 96 190 140)
+          }
+          {
+            (Gfx.fill_rect ai_x ai_y ai_w ai_h 46 56 78)
+            (Gfx.draw_rect ai_x ai_y ai_w ai_h 108 124 156)
+          })
+      (Gfx.draw_text (if (== ai_on 1) "自动" "手动") (+ ai_x 3) (+ ai_y 2) 235 244 250)
       (Gfx.draw_text "波" 4 3 140 190 245)
       (draw_int wave 1 17 3 225 240 255)
       (Gfx.draw_text "分" 34 3 140 190 245)
@@ -1122,10 +1147,10 @@
       ;; 生命图标：只在"三条命"模式下有意义（无限命时扣不了命，图标只会一直亮着）
       (if (== immortal 0)
           {
-            (if (>= lives 1) (draw_life 96 5) #f)
-            (if (>= lives 2) (draw_life 110 5) #f)
-            (if (>= lives 3) (draw_life 124 5) #f)
-            (if (> lives 3) (draw_int lives 1 136 3 190 220 245) #f)
+            (if (>= lives 1) (draw_life 92 5) #f)
+            (if (>= lives 2) (draw_life 106 5) #f)
+            (if (>= lives 3) (draw_life 120 5) #f)
+            (if (> lives 3) (draw_int lives 1 132 3 190 220 245) #f)
           }
           #f)
     }))
@@ -1195,6 +1220,212 @@
 ;;   · 结局态下「松手再按」才重开（避免撞击那一下立刻重来）。
 ;; ============================================================================
 
+;; ============================================================================
+;; 自动驾驶（AI）—— 先保命，再尽量多打
+;;
+;; 每个候选点 (x, y) 算一个代价，取代价最小的作为本拍的目标位置：
+;;   ① 威胁项 —— 对每颗陨石解一次"未来碰撞时间"：把飞船视作钉在候选点的静止圆，
+;;      陨石按当前速度直线运动，求 |dx+vx·t| < R 与 |dy+vy·t| < R 同时成立的最早 t
+;;      （R = 陨石半径 + 9）。t < 1.6s 就记代价，按平方增长；t < 0.4s 再加一笔硬罚。
+;;      横掠型陨石（vy≈0）走同一条公式（y 轴区间退化），所以它也是被认真躲的。
+;;   ② 瞄准项 —— 对"还来得及打"的陨石（1.2s < 到达候选高度的时间 < 4s），把弹幕柱
+;;      对准它届时所在的列（±11px）就给一点负代价：弹幕柱对准了才打得掉。
+;;   ③ 平滑项 —— 离飞船当前位置（x、y 都算）越远越贵一点，避免每拍横跳。
+;;
+;; **必须两维**：横掠型陨石会横扫整个 x 宽度，横着躲是躲不掉的（实测第一版 1D 版
+;; 在 3 条命模式下 2 分钟就被横掠型连撞三次）—— 它只能靠**上下错开**躲。故候选点
+;; 先试贴下方的常规高度，只有在常规高度"确实不安全"（最小代价仍偏高）时才追加两个
+;; 更高高度再比一遍，避免每拍都做 63×N 的全量计算。
+;;
+;; 代价：常规情况 21 × ≤20 次判定（每次几次除法），实测单拍 +8~12k 条 VM 指令；
+;;       被逼进垂直躲避时最多 63 × ≤20（≈+30k）。AI 是可选开关，手操时零开销。
+;; ============================================================================
+
+(define AI_SY 206.0)                    ; 常规高度：贴下方（预警时间最长）
+(define AI_Y1 172.0)                    ; 第一档垂直躲避高度
+(define AI_Y2 138.0)                    ; 第二档（再往上 34px）
+(define AI_X0 14.0)                     ; 候选 x 起点
+(define AI_STEP (/ (- SW 28.0) 20.0))   ; 21 个候选（14.6px 步长，覆盖整个游玩区）
+(define AI_STEPK 0.30)                  ; 自动驾驶时每拍只走 30%（手操是 0.42）
+
+;; 候选点 (cand, candy) 的代价（越小越安全/越利于输出）
+(define ai_cost
+  (lambda (cand candy)
+    {
+      (define cost 0.0)
+      (define j 0)
+      (define rr 0.0)
+      (define dx 0.0)
+      (define dy 0.0)
+      (define vx 0.0)
+      (define vy 0.0)
+      (define txa 0.0)
+      (define txb 0.0)
+      (define tya 0.0)
+      (define tyb 0.0)
+      (define t0 0.0)
+      (define t1 0.0)
+      (define tw 0.0)
+      (define tc 0.0)
+      (define xa 0.0)
+      (define r2 0.0)
+      (define v2 0.0)
+      (define ts 0.0)
+      (define qx 0.0)
+      (define qy 0.0)
+      (define dm 0.0)
+      (define uu 0.0)
+      (set! cost (* 0.10 (+ (Math.abs (- cand ship_x)) (Math.abs (- candy ship_y)))))
+      (set! j 0)
+      (while (< j nast) {
+        (set! rr (+ (get_item arr j) 9.0))
+        (set! dx (- (get_item axx j) cand))
+        (set! dy (- (get_item ayy j) candy))
+        (set! vx (get_item avx j))
+        (set! vy (get_item avy j))
+        ;; x 轴：|dx + vx·t| < rr 的时间区间（无解时 txb 置 -1）
+        (set! txa 0.0)
+        (set! txb 999.0)
+        (if (> vx 0.01)
+            {
+              (set! txa (/ (- (- 0.0 rr) dx) vx))
+              (set! txb (/ (- rr dx) vx))
+            }
+            #f)
+        (if (< vx -0.01)
+            {
+              (set! txa (/ (- rr dx) vx))
+              (set! txb (/ (- (- 0.0 rr) dx) vx))
+            }
+            #f)
+        (if (and (< (Math.abs vx) 0.01) (>= (Math.abs dx) rr)) (set! txb -1.0) #f)
+        ;; y 轴同理
+        (set! tya 0.0)
+        (set! tyb 999.0)
+        (if (> vy 0.01)
+            {
+              (set! tya (/ (- (- 0.0 rr) dy) vy))
+              (set! tyb (/ (- rr dy) vy))
+            }
+            #f)
+        (if (< vy -0.01)
+            {
+              (set! tya (/ (- rr dy) vy))
+              (set! tyb (/ (- (- 0.0 rr) dy) vy))
+            }
+            #f)
+        (if (and (< (Math.abs vy) 0.01) (>= (Math.abs dy) rr)) (set! tyb -1.0) #f)
+        ;; 两轴区间求交 → 最早碰撞时刻
+        (set! t0 0.0)
+        (if (> txa t0) (set! t0 txa) #f)
+        (if (> tya t0) (set! t0 tya) #f)
+        (set! t1 999.0)
+        (if (< txb t1) (set! t1 txb) #f)
+        (if (< tyb t1) (set! t1 tyb) #f)
+        ;; 近距罚（平滑）：0.9s 内"最近接近距离"小于安全圈 R2 = 半径+16 就开始扣分 ——
+        ;; 光看"会不会撞"不够：擦着过去（余量 2px）也算安全，下一拍任何移动都可能撞上。
+        (set! r2 (+ (get_item arr j) 16.0))
+        (set! v2 (+ (* vx vx) (* vy vy)))
+        (set! ts 0.0)
+        (if (> v2 0.0001)
+            {
+              (set! ts (/ (- 0.0 (+ (* dx vx) (* dy vy))) v2))
+              (if (< ts 0.0) (set! ts 0.0) #f)
+              (if (> ts 0.9) (set! ts 0.9) #f)
+            }
+            #f)
+        (set! qx (+ dx (* vx ts)))
+        (set! qy (+ dy (* vy ts)))
+        (set! dm (Math.sqrt (+ (* qx qx) (* qy qy))))
+        (if (< dm r2)
+            {
+              (set! uu (- 1.0 (/ dm r2)))
+              (set! cost (+ cost (* 80.0 (* uu uu))))
+              (set! cost (+ cost (/ (* 120.0 uu) (+ 0.4 ts))))
+            }
+            #f)
+        ;; 硬罚：1.6s 窗口内确实会撞上，按平方增长；0.4s 内再加一笔
+        (if (and (<= t0 t1) (< t0 1.0))
+            {
+              (set! tw (- 1.0 t0))
+              (set! cost (+ cost (* 200.0 (* tw tw))))
+            }
+            #f)
+        (if (and (<= t0 t1) (< t0 0.35)) (set! cost (+ cost 300.0)) #f)
+        ;; 瞄准项：还来得及打的陨石 → 把弹幕柱对准它届时所在的列
+        (if (> vy 0.5)
+            {
+              (set! tc (/ (- candy (get_item ayy j)) vy))
+              (if (and (> tc 1.0) (< tc 4.0))
+                  {
+                    (set! xa (+ (get_item axx j) (* vx tc)))
+                    (if (< (Math.abs (- xa cand)) 11.0)
+                        (set! cost (- cost (/ 16.0 (+ 1.0 (* tc 0.4)))))
+                        #f)
+                  }
+                  #f)
+            }
+            #f)
+        (set! j (+ j 1))
+      })
+      cost
+    }))
+
+(define ai_think
+  (lambda ()
+    {
+      (define ci 0)
+      (define pass 0)
+      (define cand 0.0)
+      (define cy 0.0)
+      (define cost 0.0)
+      (define bestc 99999.0)
+      (define bestx 160.0)
+      (define besty 0.0)
+      (set! ci 0)
+      (while (< ci 21) {
+        (set! cand (+ AI_X0 (* ci AI_STEP)))
+        (set! cost (+ (ai_cost cand AI_SY)
+                      (* 0.8 (ai_cost (+ ship_x (* AI_STEPK (- cand ship_x))) 
+                                      (+ ship_y (* AI_STEPK (- AI_SY ship_y)))))))
+        (if (< cost bestc)
+            {
+              (set! bestc cost)
+              (set! bestx cand)
+              (set! besty AI_SY)
+            }
+            #f)
+        (set! ci (+ ci 1))
+      })
+      ;; 常规高度"确实不安全"→ 再比两个更高的高度（躲横掠型陨石只能靠上下错开）
+      (if (> bestc 25.0)
+          {
+            (set! pass 0)
+            (while (< pass 2) {
+              (set! cy (if (== pass 0) AI_Y1 AI_Y2))
+              (set! ci 0)
+              (while (< ci 21) {
+                (set! cand (+ AI_X0 (* ci AI_STEP)))
+                (set! cost (+ (ai_cost cand cy)
+                              (* 0.8 (ai_cost (+ ship_x (* AI_STEPK (- cand ship_x)))
+                                              (+ ship_y (* AI_STEPK (- cy ship_y)))))))
+                (if (< cost bestc)
+                    {
+                      (set! bestc cost)
+                      (set! bestx cand)
+                      (set! besty cy)
+                    }
+                    #f)
+                (set! ci (+ ci 1))
+              })
+              (set! pass (+ pass 1))
+            })
+          }
+          #f)
+      (set! ai_tx bestx)
+      (set! ai_ty besty)
+    }))
+
 ;; 按钮命中判定（帧缓冲像素坐标）
 (define hit_rect
   (lambda (px py rx ry rw rh)
@@ -1222,28 +1453,43 @@
 (define input
   (lambda ()
     {
+      (define sm 0.42)
       (set! down (if (Touch.is_pressed) 1 0))
       (set! ui_tap (if (and (== down 1) (== prev_down 0)) 1 0))
       (set! ui_toggle 0)
       (if (== ui_tap 1)
           {
+            (if (== (hit_rect (Touch.x) (Touch.y) ai_x ai_y ai_w ai_h) 1) (set! ui_toggle 3) #f)
             (if (== (hit_rect (Touch.x) (Touch.y) bar_x bar_y bar_w bar_h) 1) (set! ui_toggle 2) #f)
             (if (== (hit_rect (Touch.x) (Touch.y) tog_x tog_y tog_w tog_h) 1) (set! ui_toggle 1) #f)
           }
           #f)
-      ;; 顶部 HUD 带里的触摸只当按钮用，不参与操船（否则点按钮会把飞船拽上去）
+      ;; 目标：默认原地不动；手指在游玩区里则跟手
+      (set! tgx ship_x)
+      (set! tgy ship_y)
       (if (and (== down 1) (> (Touch.y) HUD_H))
           {
             (set! tgo (Touch.x))
             (set! tgt (Touch.y))
             (set! tgx tgo)
             (set! tgy (- tgt 26.0))
-            (if (< tgy 128.0) (set! tgy 128.0) #f)
-            (if (> tgy 212.0) (set! tgy 212.0) #f)
-            (set! ship_x (+ ship_x (* (- tgx ship_x) 0.42)))
-            (set! ship_y (+ ship_y (* (- tgy ship_y) 0.42)))
           }
           #f)
+      ;; 手动接管：自动模式下在游玩区按下 → 立刻交还手动（HUD 按钮不算）
+      (if (and (== ui_tap 1) (== ai_on 1) (> (Touch.y) HUD_H)) (set! ai_on 0) #f)
+      ;; AI 接管操船（自动驾驶时忽略触屏拖动，但 HUD 按钮照常可用）
+      (if (== ai_on 1)
+          {
+            (ai_think)
+            (set! tgx ai_tx)
+            (set! tgy ai_ty)
+          }
+          #f)
+      (if (< tgy 128.0) (set! tgy 128.0) #f)
+      (if (> tgy 212.0) (set! tgy 212.0) #f)
+      (set! sm (if (== ai_on 1) AI_STEPK 0.42))
+      (set! ship_x (+ ship_x (* (- tgx ship_x) sm)))
+      (set! ship_y (+ ship_y (* (- tgy ship_y) sm)))
       (if (< ship_x 12.0) (set! ship_x 12.0) #f)
       (if (> ship_x (- SW 12.0)) (set! ship_x (- SW 12.0)) #f)
       (if (< ship_y 128.0) (set! ship_y 128.0) #f)
@@ -1270,6 +1516,7 @@
 
       (if (== ui_toggle 1) (toggle_mode) #f)
       (if (== ui_toggle 2) (toggle_barrage) #f)
+      (if (== ui_toggle 3) (set! ai_on (if (== ai_on 1) 0 1)) #f)
 
       (if (== over 1)
           {

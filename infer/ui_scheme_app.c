@@ -75,7 +75,7 @@
 #define MB_ERR_BUF_LEN (128)
 
 // App 数量上限与名称长度上限
-#define SCHEME_APP_MAX     (48)   // app/*.scm 上限（当前 33 个；余量留 15 个）
+#define SCHEME_APP_MAX     (48)   // app/*.scm 上限（当前 39 个；余量留 9 个）
 // 2026-11 由 32 上调为 48：沙盒颗粒物理/2048/弹幕陨石等 App 陆续加入后，
 // app/ 下的 .scm 已达 33 个 —— 32 的上限会把按名排序**最后**的 App 悄悄丢掉
 // （当时是 xray.scm，列表里凭空少一项），且没有任何提示。改动 App 数量时务必
