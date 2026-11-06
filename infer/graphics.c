@@ -2674,23 +2674,18 @@ int32_t gfx_image_info(const char *img_path, uint32_t *out_width, uint32_t *out_
     return 0;
 }
 
-// 从指定文件读取图像并绘制到 frame_buffer（带缓存）
-// img_path: 图像文件路径
-// x0, y0: 目标区域左上角坐标
-// width, height: 目标区域宽高（图像将被缩放到此大小）
-// is_force_fetch: 如果非0，忽略缓存，重新读取并resize图像，并更新缓存
-// 返回: 0 成功，-1 失败（读文件/解码/分配失败）
-int32_t gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch) {
-    // 初始化缓存
+// 取（必要时解码、缩放并缓存）路径对应的 RGB888 纹理（width×height，3 字节/像素）。
+// is_force_fetch 非 0 时忽略缓存、重新读盘并更新缓存。
+// 纹理归图像缓存所有，调用方**不得释放**；失败返回 NULL。
+static const uint8_t *gfx_image_texture_get(const char *img_path, uint32_t width, uint32_t height, uint8_t is_force_fetch) {
+    if (img_path == NULL || width == 0 || height == 0) return NULL;
+
     init_image_cache();
-    
-    uint8_t *draw_data = NULL;
-    
+
     if (!is_force_fetch) {
         // 尝试从缓存获取
         ImageCacheEntry *cached = find_in_cache(img_path, width, height);
         if (cached != NULL) {
-            draw_data = cached->data;
             // 更新 LRU：将此缓存项移到最前面
             int idx = (int)(cached - s_image_cache);
             if (idx > 0) {
@@ -2700,40 +2695,50 @@ int32_t gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, 
                 }
                 s_image_cache[0] = temp;
             }
+            return s_image_cache[0].data;
         }
     }
-    
-    // 缓存未命中或强制刷新：从文件读取并resize
+
+    int img_w, img_h, channels;
+
+    // 加载图像文件，获取 RGB 数据（3通道）
+    unsigned char *img_data = stbi_load(img_path, &img_w, &img_h, &channels, 3);
+    if (img_data == NULL) {
+        // 加载失败（文件不存在/格式不支持）：交给调用方兜底
+        return NULL;
+    }
+
+    // 分配缩放后图像的内存（RGB888 格式，3字节/像素）
+    uint8_t *draw_data = (uint8_t *)platform_malloc((size_t)width * (size_t)height * 3);
     if (draw_data == NULL) {
-        int img_w, img_h, channels;
-        
-        // 加载图像文件，获取 RGB 数据（3通道）
-        unsigned char *img_data = stbi_load(img_path, &img_w, &img_h, &channels, 3);
-        if (img_data == NULL) {
-            // 加载失败（文件不存在/格式不支持）：交给调用方兜底
-            return -1;
-        }
-        
-        // 分配缩放后图像的内存（RGB888 格式，3字节/像素）
-        draw_data = (uint8_t *)platform_malloc(width * height * 3);
-        if (draw_data == NULL) {
-            stbi_image_free(img_data);
-            return -1;
-        }
-        
-        // 缩放图像到目标尺寸
-        stbir_resize_uint8_linear(
-            img_data, img_w, img_h, 0,           // 输入图像数据、宽、高、行跨度（0表示连续）
-            draw_data, (int)width, (int)height, 0,  // 输出图像数据、宽、高、行跨度
-            STBIR_RGB                               // 像素布局：RGB
-        );
-        
-        // 释放原始图像数据
         stbi_image_free(img_data);
-        
-        // 存入缓存（缓存接管内存所有权）
-        add_to_cache(img_path, draw_data, width, height);
+        return NULL;
     }
+
+    // 缩放图像到目标尺寸
+    stbir_resize_uint8_linear(
+        img_data, img_w, img_h, 0,           // 输入图像数据、宽、高、行跨度（0表示连续）
+        draw_data, (int)width, (int)height, 0,  // 输出图像数据、宽、高、行跨度
+        STBIR_RGB                               // 像素布局：RGB
+    );
+
+    // 释放原始图像数据
+    stbi_image_free(img_data);
+
+    // 存入缓存（缓存接管内存所有权）
+    add_to_cache(img_path, draw_data, width, height);
+    return s_image_cache[0].data;
+}
+
+// 从指定文件读取图像并绘制到 frame_buffer（带缓存）
+// img_path: 图像文件路径
+// x0, y0: 目标区域左上角坐标
+// width, height: 目标区域宽高（图像将被缩放到此大小）
+// is_force_fetch: 如果非0，忽略缓存，重新读取并resize图像，并更新缓存
+// 返回: 0 成功，-1 失败（读文件/解码/分配失败）
+int32_t gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch) {
+    const uint8_t *draw_data = gfx_image_texture_get(img_path, width, height, is_force_fetch);
+    if (draw_data == NULL) return -1;
     
     // 将图像绘制到 frame_buffer
     // 裁剪到 gfx 边界
@@ -2764,6 +2769,113 @@ int32_t gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, 
 
             // 写入frame_buffer
             gfx_set_pixel(gfx, x, y, draw_data[src_idx], draw_data[src_idx + 1], draw_data[src_idx + 2]);
+        }
+    }
+    return 0;
+}
+
+// 双线性过滤一个颜色通道：p** 为四个角像素，ax/ay 为 [0,1) 的插值权重。
+static inline float gfx_bilinear_channel(const uint8_t *p00, const uint8_t *p10,
+                                         const uint8_t *p01, const uint8_t *p11,
+                                         float ax, float ay, int32_t ch) {
+    float top = (float)p00[ch] + ((float)p10[ch] - (float)p00[ch]) * ax;
+    float bot = (float)p01[ch] + ((float)p11[ch] - (float)p01[ch]) * ax;
+    return top + (bot - top) * ay;
+}
+
+// 位移贴图绘制（水波/放大镜式"波纹折射"）：把图像缩放到 (width,height) 后，对每个
+// 目标像素做**以矩形中心为原点的径向缩放**采样——缩放系数取自 gw×gh 的位移栅格
+// （行优先，双线性插值到像素；栅格不必与屏幕尺寸成整数倍关系）：
+//
+//     scale = disp[j*gw+i] / neutral            （neutral 为"无位移"的基准值）
+//     src_x = (x - width/2)  * scale + width/2
+//     src_y = (y - height/2) * scale + height/2
+//
+// scale<1 与 scale>1 分别对应水面凹陷/隆起的折射方向；纹理采样为**双线性**（水位场
+// 在足够低的栅格上模拟时，最近邻采样会把连续的位移量化成一块块整数像素——正是
+// "马赛克"感的来源，故这里做双线性过滤）。纹理经图像缓存（键 = 路径 + 目标尺寸），
+// 像素不进解释器堆。返回 0 成功、-1 失败（参数非法/读文件/解码失败）。
+int32_t gfx_draw_image_warp(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0,
+                            uint32_t width, uint32_t height,
+                            uint32_t grid_w, uint32_t grid_h,
+                            const float *disp, float neutral) {
+    if (gfx == NULL || disp == NULL) return -1;
+    if (width == 0 || height == 0 || grid_w == 0 || grid_h == 0) return -1;
+    if (!(neutral > 0.0f) || !(neutral < 1e9f)) return -1;
+
+    const uint8_t *tex = gfx_image_texture_get(img_path, width, height, 0);
+    if (tex == NULL) return -1;
+
+    // 目标矩形裁剪到屏幕
+    uint32_t x_end = (x0 + width  > gfx->width)  ? gfx->width  : x0 + width;
+    uint32_t y_end = (y0 + height > gfx->height) ? gfx->height : y0 + height;
+    if (x_end <= x0 || y_end <= y0) return 0;
+
+    gfx_mark_dirty(gfx, (int32_t)x0, (int32_t)y0, (int32_t)(x_end - x0), (int32_t)(y_end - y0));
+
+    const float cx = (float)width  * 0.5f;            // 径向缩放原点（矩形中心）
+    const float cy = (float)height * 0.5f;
+    const float gsx = (float)grid_w / (float)width;   // 像素 -> 栅格坐标步进
+    const float gsy = (float)grid_h / (float)height;
+    const float inv_neutral = 1.0f / neutral;
+
+    for (uint32_t y = y0; y < y_end; y++) {
+        // 每行取一次帧缓冲行指针（RGB565 直写；RGB888 逐像素经图形层转换）
+        uint16_t *fb_row = NULL;
+        if (gfx->color_mode == GFX_COLOR_MODE_RGB565) {
+            uint32_t row_off = 0;
+            fb_row = gfx->rgb565_access(gfx, x0, y, &row_off);
+            fb_row += row_off;
+        }
+
+        // 行方向（y）的栅格插值权重
+        float gy = ((float)(y - y0) + 0.5f) * gsy - 0.5f;
+        int32_t j0 = (int32_t)floorf(gy);
+        float fy = gy - (float)j0;
+        if (j0 < 0) { j0 = 0; fy = 0.0f; }
+        else if (j0 > (int32_t)grid_h - 1) { j0 = (int32_t)grid_h - 1; fy = 0.0f; }
+        int32_t j1 = (j0 + 1 < (int32_t)grid_h) ? j0 + 1 : j0;
+        const float *disp_row0 = disp + (size_t)j0 * grid_w;
+        const float *disp_row1 = disp + (size_t)j1 * grid_w;
+        const float dyc = (float)(y - y0) - cy;
+
+        for (uint32_t x = x0; x < x_end; x++) {
+            // 列方向的栅格插值权重
+            float gx = ((float)(x - x0) + 0.5f) * gsx - 0.5f;
+            int32_t i0 = (int32_t)floorf(gx);
+            float fx = gx - (float)i0;
+            if (i0 < 0) { i0 = 0; fx = 0.0f; }
+            else if (i0 > (int32_t)grid_w - 1) { i0 = (int32_t)grid_w - 1; fx = 0.0f; }
+            int32_t i1 = (i0 + 1 < (int32_t)grid_w) ? i0 + 1 : i0;
+
+            float d_top = disp_row0[i0] + (disp_row0[i1] - disp_row0[i0]) * fx;
+            float d_bot = disp_row1[i0] + (disp_row1[i1] - disp_row1[i0]) * fx;
+            float scale = (d_top + (d_bot - d_top) * fy) * inv_neutral;
+            if (!(scale > -1e6f) || !(scale < 1e6f)) scale = 1.0f;   // NaN/Inf 兜底
+
+            // 以矩形中心为原点做径向缩放采样
+            float fx_src = ((float)(x - x0) - cx) * scale + cx;   // 源坐标（浮点）
+            float fy_src = dyc * scale + cy;
+            if (fx_src < 0.0f) fx_src = 0.0f; else if (fx_src > (float)(width  - 1)) fx_src = (float)(width  - 1);
+            if (fy_src < 0.0f) fy_src = 0.0f; else if (fy_src > (float)(height - 1)) fy_src = (float)(height - 1);
+
+            // 双线性过滤（量化到整数像素会把连续的位移变成一块块像素 ⇒ 块状折射条纹）
+            int32_t sx0 = (int32_t)fx_src;
+            int32_t sy0 = (int32_t)fy_src;
+            int32_t sx1 = (sx0 + 1 < (int32_t)width)  ? sx0 + 1 : sx0;
+            int32_t sy1 = (sy0 + 1 < (int32_t)height) ? sy0 + 1 : sy0;
+            float ax = fx_src - (float)sx0;
+            float ay = fy_src - (float)sy0;
+            const uint8_t *p00 = tex + ((size_t)sy0 * width + (size_t)sx0) * 3;
+            const uint8_t *p10 = tex + ((size_t)sy0 * width + (size_t)sx1) * 3;
+            const uint8_t *p01 = tex + ((size_t)sy1 * width + (size_t)sx0) * 3;
+            const uint8_t *p11 = tex + ((size_t)sy1 * width + (size_t)sx1) * 3;
+            uint16_t v = rgb888_to_rgb565((uint8_t)(gfx_bilinear_channel(p00, p10, p01, p11, ax, ay, 0) + 0.5f),
+                                          (uint8_t)(gfx_bilinear_channel(p00, p10, p01, p11, ax, ay, 1) + 0.5f),
+                                          (uint8_t)(gfx_bilinear_channel(p00, p10, p01, p11, ax, ay, 2) + 0.5f));
+
+            if (fb_row != NULL) fb_row[x - x0] = v;
+            else gfx_write_pixel_rgb565(gfx, x, y, v);
         }
     }
     return 0;

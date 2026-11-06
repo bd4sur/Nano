@@ -14,10 +14,12 @@
 #include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <wchar.h>
 
 #include "am_native_Gfx.h"
 #include "am_native_Fs.h"   // 路径解析复用 Fs 本地库的规则
+#include "hal_ram.h"        // platform_malloc（位移栅格暂存缓冲）
 
 
 // 绘图目标（宿主经 am_native_gfx_bind 注入）
@@ -157,6 +159,46 @@ static bool native_pop_wstring(am_process_t *proc, am_wstring_t **out) {
 
     *out = (am_wstring_t *)obj;
     return true;
+}
+
+// 从操作数栈中弹出一个**列表**对象（不复制，仅返回对象指针）。
+static bool native_pop_list(am_process_t *proc, am_list_t **out) {
+    am_value_t v = am_process_pop_operand(proc);
+    if (v == (am_value_t)UINTPTR_MAX) return false;
+    if (!am_value_is_handle(v)) return false;
+
+    am_handle_t hd = am_value_to_handle(v);
+    am_value_t obj_val = am_heap_get(proc->vm_alloc, proc->heap_alloc, proc->heap, hd);
+    if (!am_value_is_ptr(obj_val)) return false;
+
+    am_object_t *obj = am_value_to_ptr(obj_val);
+    if (obj->type != AM_OBJECT_TYPE_LIST) return false;
+
+    *out = (am_list_t *)obj;
+    return true;
+}
+
+// 把列表元素（任意数值类型）转换为 float；非数值返回 false。
+static bool native_list_float(am_value_t v, am_float_t *out) {
+    if (am_value_is_float(v)) { *out = am_value_to_float(v); return true; }
+    if (am_value_is_int(v))   { *out = (am_float_t)am_value_to_int(v); return true; }
+    if (am_value_is_uint(v))  { *out = (am_float_t)am_value_to_uint(v); return true; }
+    return false;
+}
+
+// 位移栅格转换用的暂存缓冲（跨调用复用，避免每帧向堆申请）
+static float  *s_warp_disp = NULL;
+static size_t  s_warp_disp_cap = 0;
+
+// 取得至少 need 个 float 的暂存缓冲；失败返回 NULL。
+static float *native_warp_disp_scratch(size_t need) {
+    if (need <= s_warp_disp_cap) return s_warp_disp;
+    float *grown = (float *)platform_malloc(need * sizeof(float));
+    if (grown == NULL) return NULL;
+    if (s_warp_disp != NULL) free(s_warp_disp);
+    s_warp_disp = grown;
+    s_warp_disp_cap = need;
+    return s_warp_disp;
 }
 
 // 将 wstring 对象的内容转换为以 L'\0' 结尾的 wchar_t 缓冲区。
@@ -454,6 +496,57 @@ int32_t am_native_Gfx_draw_image(am_runtime_t *rt, am_process_t *proc) {
     return 0;
 }
 
+// (Gfx.draw_image_warp path:String x:Number y:Number w:Number h:Number
+//                      grid_w:Number grid_h:Number disp:List neutral:Number) : Boolean
+// —— 把图像缩放到 (w,h) 后按 grid_w×grid_h 位移栅格做"以矩形中心为原点的径向缩放"
+//    采样（水波/折射效果；几何见 graphics.h 的 gfx_draw_image_warp）。
+//    disp 为行优先的 grid_w*grid_h 个数值，双线性插值到像素：scale = disp/neutral，
+//    neutral 即"无位移"的基准值。像素全部在宿主侧处理（不进解释器堆）。
+//    失败（列表长度不足/参数非法/读文件/解码失败）返回 #f。
+// 布尔收尾的前置声明（定义在册表区之间，draw_image_warp 先用到）
+static int32_t native_push_bool(am_process_t *proc, bool v);
+
+int32_t am_native_Gfx_draw_image_warp(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    am_wstring_t *ws = NULL;
+    am_list_t *disp = NULL;
+    char path[256];
+    am_float_t neutral = 0.0f;
+    int32_t gh = 0, grid_w = 0, h = 0, w = 0, y = 0, x = 0;
+    if (g == NULL) return -1;
+
+    if (!native_pop_number(proc, &neutral)) return -1;
+    if (!native_pop_list(proc, &disp)) return -1;
+    if (!native_pop_int(proc, &gh)) return -1;
+    if (!native_pop_int(proc, &grid_w)) return -1;
+    if (!native_pop_int(proc, &h)) return -1;
+    if (!native_pop_int(proc, &w)) return -1;
+    if (!native_pop_int(proc, &y)) return -1;
+    if (!native_pop_int(proc, &x)) return -1;
+    if (!native_pop_wstring(proc, &ws)) return -1;
+
+    if (w <= 0 || h <= 0 || grid_w <= 0 || gh <= 0) return native_push_bool(proc, false);
+    if (!(neutral > 0.0f)) return native_push_bool(proc, false);
+    if (!native_resolve_path(ws, path, sizeof path)) return native_push_bool(proc, false);
+
+    size_t cells = (size_t)grid_w * (size_t)gh;
+    if (disp == NULL || disp->length < cells) return native_push_bool(proc, false);
+
+    float *buf = native_warp_disp_scratch(cells);
+    if (buf == NULL) return native_push_bool(proc, false);
+    for (size_t i = 0; i < cells; i++) {
+        am_float_t one;
+        if (!native_list_float(disp->children[i], &one)) return native_push_bool(proc, false);
+        buf[i] = (float)one;
+    }
+
+    if (gfx_draw_image_warp(g, path, (uint32_t)x, (uint32_t)y, (uint32_t)w, (uint32_t)h,
+                            (uint32_t)grid_w, (uint32_t)gh, buf, neutral) != 0) {
+        return native_push_bool(proc, false);
+    }
+    return native_push_bool(proc, true);
+}
+
 // (Gfx.sprite_info path:String) : List | #null
 // —— 透明背景贴图的**原始尺寸** (宽 高)。内部会解码一次并常驻缓存（后续 draw_sprite
 //    直接命中缓存），因此也用作「进入场景时预热贴图」的手段；失败返回 #null。
@@ -593,6 +686,7 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"font_info",   am_native_Gfx_font_info },
     { L"image_size",  am_native_Gfx_image_size },
     { L"draw_image",  am_native_Gfx_draw_image },
+    { L"draw_image_warp", am_native_Gfx_draw_image_warp },
     { L"sprite_info", am_native_Gfx_sprite_info },
     { L"draw_sprite", am_native_Gfx_draw_sprite },
     { L"draw_sprite_rotated", am_native_Gfx_draw_sprite_rotated },

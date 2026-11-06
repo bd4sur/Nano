@@ -105,6 +105,21 @@ int32_t am_native_Gfx_image_size(am_runtime_t *rt, am_process_t *proc);
 //    请用下面的 sprite 系列。
 int32_t am_native_Gfx_draw_image(am_runtime_t *rt, am_process_t *proc);
 
+// (Gfx.draw_image_warp path:String x:Number y:Number w:Number h:Number
+//                      grid_w:Number grid_h:Number disp:List neutral:Number) : Boolean
+// —— **位移贴图**：图像缩放到 (w,h) 后，按 grid_w×grid_h 的位移栅格做"以矩形中心
+//    为原点的径向缩放"采样（水波/水面折射、放大镜效果）。位移公式与 ui_ripple 的定点
+//    实现一致：scale = disp[j*grid_w+i] / neutral（neutral 为无位移基准值，如 1024），
+//    src = (dst - 矩形中心) * scale + 矩形中心，越界钳位。
+//    两处平滑：位移栅格按**格中心双线性插值**放大到像素（栅格不必与目标尺寸成整数倍
+//    关系，故 App 可把波场降采样到 80x60 这类低分辨率后再由宿主无块状地放大）；
+//    纹理采样也用双线性过滤（最近邻会把连续位移量化为整数像素 → 折射出现马赛克）。
+//    纹理经图像缓存（键 = 路径 + 目标尺寸），像素不进解释器堆；
+//    失败（列表长度不足 / 参数非法 / 读文件或解码失败）返回 #f。
+//    Scheme 侧示例（绘制 320x240 底图，波场 80x60、neutral=1024）：
+//        (Gfx.draw_image_warp "wp.png" 0 0 320 240 80 60 disp 1024)
+int32_t am_native_Gfx_draw_image_warp(am_runtime_t *rt, am_process_t *proc);
+
 // (Gfx.sprite_info path:String) : List | #null
 // —— 透明背景贴图的原始尺寸 (宽 高)。解码一次即常驻宿主侧 RGBA 缓存（预热作用），
 //    失败返回 #null。

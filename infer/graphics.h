@@ -220,6 +220,17 @@ int32_t gfx_image_info(const char *img_path, uint32_t *out_width, uint32_t *out_
 // 从文件读取图像、缩放到 (width,height) 并绘制（带 LRU 缓存）。
 // 返回 0 成功、-1 失败（读文件/解码/分配失败）。
 int32_t gfx_draw_image(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t is_force_fetch);
+
+// 位移贴图绘制（水波/放大镜式的"波纹折射"）：图像先缩放到 (width,height)，再对每个
+// 目标像素按 gw×gh 位移栅格做**以矩形中心为原点的径向缩放**采样：
+//     scale = disp[j*gw+i] / neutral;  src = (dst - 中心) * scale + 中心
+// 栅格按行优先、双线性插值到像素（栅格不必与目标尺寸成整数倍关系）；neutral 是
+// "无位移"的基准值（scale=1 时原样输出）。缓存与失败语义同 gfx_draw_image。
+int32_t gfx_draw_image_warp(Nano_GFX *gfx, char *img_path, uint32_t x0, uint32_t y0,
+                            uint32_t width, uint32_t height,
+                            uint32_t grid_w, uint32_t grid_h,
+                            const float *disp, float neutral);
+
 void gfx_draw_image_buffer(Nano_GFX *gfx, uint8_t *img_buffer, uint32_t buffer_size, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height);
 
 // 从内存缓冲区解码图像为 RGBA 四通道像素（不缩放、不绘制）

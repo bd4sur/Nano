@@ -5128,3 +5128,79 @@ cd infer/webgui && python3 ../tools/https_static_server.py 9002 .
 ```
 
 ------------------------------------
+
+# 2026-11-06（水波：灵机 App 版 + 图形层位移贴图接口）
+
+参照 `infer/ui_ripple.c`（C 版 `STATE_RIPPLE`）做一份**灵机（Animac）应用程序**版水波，
+只针对 **WASM-GUI** 目标（`build_wasm_gui.sh` 产物，不是 `infer/web/` 那条 LLM-only 路线）。
+
+## 1. 分工：物理在 Scheme，像素在 C
+
+| | C 版（`ui_ripple.c`） | 灵机版（`app/ripple.scm`） |
+|---|---|---|
+| 波场分辨率 | 160×120（半分辨率，2×2 px/格） | **80×60（4×4 px/格）** |
+| 波场推进 | C，定点 int16 | **Scheme，浮点列表 + set_item!** |
+| 逐像素折射采样 | C，2×2 块最近邻直写帧缓冲 | **C（新接口 `Gfx.draw_image_warp`）**，位移栅格双线性放大 + 纹理双线性过滤 |
+| 输入 | `key_event` 触屏电平 | `(native Touch)` 电平采样 |
+| 退出 | 硬 A/ESC 直接切 `STATE_GAME_MENU` | `app/lib/exit.scm`（右上角按钮 + 全局确认框） |
+| 底图 | `PLATFORM_ROOT_DIR "/wp.png"` | `"wp.png"`（相对业务资源根 = 同一文件） |
+
+为什么必须拆：解释器每帧最多只有宿主给的 312500 条 IL 指令，**逐像素读 320×240 个纹素
+在 Scheme 里不可能**（系数差 3 个数量级），而波场推进每格只有十几次读写、量级合适。
+实测（浏览器 wasm32，本机 Chromium）单步耗时 80×60=**18.5 ms**、120×90=40 ms、
+160×120=72 ms（30fps 预算 33 ms）→ 取 80×60，整拍实测稳定 **29~30 fps**。
+
+## 2. 图形层新增：`gfx_draw_image_warp` + `(Gfx.draw_image_warp ...)`
+
+```
+gfx_draw_image_warp(gfx, path, x, y, w, h, gw, gh, const float *disp, float neutral)
+→ (Gfx.draw_image_warp path x y w h gw gh disp neutral) : Boolean
+```
+
+- **语义**：图像先缩放到 `(w,h)`，再对每个目标像素按 `gw×gh` 位移栅格做**以矩形中心为
+  原点的径向缩放**采样：`scale = disp[j*gw+i] / neutral`，`src = (dst − 中心)·scale + 中心`
+  （越界钳位）——即 `ui_ripple.c` 的 `wr_render` 里那两行 dx/dy 位移公式的通用化。
+  `neutral` 是"无位移"的基准值（水波用 1024），故 App 可以直接把 `1024 − amp` 当作位移表。
+- **两处平滑**：栅格不必与目标尺寸成整数倍关系——按**格中心双线性插值**放大到像素
+  （所以 4×4 的粗格子不会露出块状边界）；纹理采样用**双线性过滤**（最近邻会把连续的
+  位移量化为整数像素，折射出现马赛克；实测该问题在 4×4 格上非常明显）。
+- **复用既有设施**：纹理走 `graphics.c` 的图像 LRU 缓存（键 = 路径 + 目标尺寸，RGB888，
+  像素**不进解释器堆**）。为此把 `gfx_draw_image` 里的"查缓存 / 解码缩放 / 回填缓存"
+  抽成 `gfx_image_texture_get()`，两条绘制路径共用（`gfx_draw_image` 行为不变）。
+- **本地库**：`am_native_Gfx` 新增一条；`disp` 为行优先的 `gw*gh` 个数值，逐元素转 float
+  进一份**跨调用复用**的暂存缓冲（`platform_malloc`，不每帧申请）；列表长度不足/参数非法/
+  读图失败一律软失败返回 `#f`。RGB565 帧缓冲走行指针直写，RGB888 走 `gfx_write_pixel_rgb565`。
+
+## 3. App（`infer/app/ripple.scm`）
+
+- 波场与 C 版同一套离散格式：`amp' = (上+下+左+右)×0.5 − amp_上一时刻`，再衰减 1/32
+  （C 版是算术右移 5 位）；双缓冲两页、写完翻页；`disp[i] = 1024 − amp[i]` 每拍原地刷新。
+- **页布局带一圈零填充**（上下左右各 1 格，行跨度 `GW+2`）：邻格读取不必做边界判定，
+  比 C 版"只填上下两行 + 左右分支"少两条 `if`（每格省下的指令在 4800 格 × 30fps 上是实打实的）。
+- 触点激发：触点所在格及其邻域**累加**震源振幅（C 版 `wr_disturb` 同款）。落点半径取
+  2 格（20×20 px，与 C 版 7×7 个半分辨率格 = 14×14 px 同量级），振幅取 1024
+  （C 版 512 的 2 倍：粗格子的位移场要被双线性放大，单次点按的视觉强度会打折）。
+- 与 C 版的观感差异（已在源码头部注明）：格子大 2 倍 ⇒ 波前**在屏幕上**约快 2 倍；
+  折射是平滑的而不是 2×2 方块感。
+- 底图读不到时画与 C 版同文案/同坐标的错误画面（16px「水波」+ 12px 三行提示），并切到
+  200ms 慢拍，只为让硬 A/ESC 仍能弹退出确认框。
+
+## 4. 验证
+
+- 宿主回归台（真图形层 + 真解释器，RGB565 + 虚拟时钟）：`APP=ripple` 120 帧刷新 40 次
+  （33ms/拍）`err=none`；宿主回归台全部 App（36 个，含新 App）`err=none` 无回归（含 `gfx_draw_image`
+  重构涉及的 Markdown/相册读图路径）。
+- 新增 `tools/e2e/browser/regress_ripple.js`（真 WASM + 真无头 Chromium）：**12/12**——
+  静水期两帧逐字节相同、底图确已绘制、按住 (100,150) 出现波纹（与静水帧差异 >1.5 万字节、
+  影响面 >1.5 万像素）、按住期间波场持续演化、拖动生新波源、松开后继续传播、
+  刷新率 29.4 fps、硬 Esc → 确认框 → Enter 回列表、无 pageerror。
+- `regress.js` 存活回归：ripple `refreshΔ=113/4s`，与其它 38 个 App 一同 80 态稳定。
+
+## 5. 运行
+
+```bash
+cd infer && bash build_wasm_gui.sh            # 产物 infer/webgui/
+cd infer/webgui && python3 ../tools/https_static_server.py 9002 .
+# 浏览器打开 https://<主机>:9002/ → 任意键 → 主菜单「小游戏」→「灵机应用程序」→「ripple」
+#   （列表项 = 源码文件名。按住/拖动画面即起波纹；右上角「退出」或硬 Esc 退出）
+```
