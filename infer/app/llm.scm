@@ -13,9 +13,9 @@
 ;;     该小模型在含重复数字的序列上有误差，故**每轮带温度采样、共跑 5 轮，
 ;;     逐位投票取多数**作为最终排序结果，并与 Scheme 侧参考排序比对。
 ;;
-;;   场景 2「LLM 可视化生成」：**无需任何输入**。以当前时间戳作随机种子，从模型
-;;     vocab 里随机取一个字符作 prompt，逐 token 采样并**流式**输出文本，实时统计
-;;     TPS。点「重来」换一个种子/字符重新生成。
+;;   场景 2「LLM 可视化生成」：**无需任何输入**。提示词固定为「人类的本质」，随机
+;;     种子每次取当前时间戳（并随「重来」轮次递增），逐 token 采样并**流式**输出
+;;     文本，实时统计 TPS。点「重来」换种子重新生成（提示词不变）。
 ;;
 ;; 交互与渲染的取舍（灵机 App 的通用约束）：
 ;;   · 每拍（System.set_interval 40ms）只推进一步（读一块模型 / 一次 token 前向），
@@ -1151,33 +1151,19 @@
 
 ;; ------------------------------------------------------------ 场景 2 逻辑
 
-;; 从词表里随机取一个字符作 prompt（避开 <|...|> 特殊词元）
-(define pick_prompt
-  (lambda ()
-    (define k 0)
-    (define id 0)
-    (define s "")
-    (define got "")
-    (set! k 0)
-    (while (< k 40) {
-      (set! id (+ 7 (Math.floor (* (rng_next) (- vocab_size 8)))))
-      (set! s (LLM.decode id))
-      (if (== (String.length s) 1)
-          (if (not (String.equals s "<"))
-              (if (String.equals got "") (set! got s) #f)
-              #f)
-          #f)
-      (if (String.equals got "") (set! k (+ k 1)) (set! k 40))
-    })
-    (if (String.equals got "") (set! got "人") #f)
-    got))
+;; 固定提示词（需求：提示语固定，只有随机种子每次变）
+(define GEN_PROMPT "人类的本质")
 
+;; 每次启动/重来都把种子加一个偏移，保证同一秒内连点「重来」也能拿到不同的随机流
+(define gen_round 0)
+
+;; (重)开始一次生成：种子取当前时间戳（+ 轮次偏移），提示词固定
 (define s2_start
   (lambda ()
-    (define sod (Time.utc_sod))
-    (set! s2_seed (+ sod (* 7 s2_stage)))
+    (set! gen_round (+ gen_round 1))
+    (set! s2_seed (+ (Time.utc_sod) (* 7919 gen_round)))
     (rng_seed s2_seed)
-    (set! s2_prompt (pick_prompt))
+    (set! s2_prompt GEN_PROMPT)
     (set! s2_tps 0.0)
     (gen_begin s2_prompt)
     (set! s2_stage 1)
