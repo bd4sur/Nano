@@ -3608,6 +3608,9 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：初始化
         if (global_state->PREV_STATE != global_state->STATE) {
+            // 从主菜单或灵机应用程序返回时，都重建游戏菜单条目；
+            // 否则状态已切换，w_menu_main 仍保留上一菜单的标题与内容。
+            init_game_menu(key_event, global_state);
             // 统一为“页眉页脚先入帧缓冲、菜单绘制最后统一刷屏”，避免两阶段断续感
             ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
             ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
