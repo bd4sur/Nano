@@ -533,25 +533,6 @@
               (String.concat name
                 (String.concat "/m" (String.concat (i2s2 i) ".b64")))))))
 
-;; 读入一块并喂给流式解码器：1=全部读完，0=还有，-1=文件缺失
-(define load_step
-  (lambda (name nchunk)
-    (define s #f)
-    (define r 0)
-    (if (>= chunk_i nchunk)
-        (set! r 1)
-        {
-          (set! s (read_chunk name chunk_i))
-          (set! chunk_i (+ chunk_i 1))
-          (if (null? s)
-              (set! r -1)
-              {
-                (LLM.init_feed s)
-                (if (>= chunk_i nchunk) (set! r 1) (set! r 0))
-              })
-        })
-    r))
-
 ;; ---------------------------------------------------------- 自检（与本地库比对）
 
 ;; 自检基准值（取自上游 (native LLM) 实跑的记录）。张量指纹取「长度 + 第 0/中/末
@@ -791,7 +772,15 @@
 (define chunk_i 0)
 (define load_nchunk 0)
 (define load_label "")
-(define wait_ticks 0)
+;; 载入子状态：0=读下一块 1=喂当前块的一小段 2=分块缺失，等资源挂载后重试
+;; 为什么不是"一拍喂一整块"：一块 96KB base64 要跑 ~0.4 秒（十几个时间片），
+;; 期间只能画一次 → 进度条看起来"不动、然后突然完成"。改成每拍只喂 LOAD_SUB 个字符
+;; （12288 是 4 的倍数，解码组不跨段），进度条就能一格一格走，退出键也始终可点。
+(define LOAD_SUB 12288)
+(define load_stage 0)
+(define load_buf "")
+(define load_off 0)
+(define load_tick 0)
 (define wait_said #f)
 (define model_str "")        ; 屏幕上显示的模型摘要
 (define chk_str "")
@@ -944,54 +933,115 @@
       (set! load_nchunk (if (== which 1) M6.nchunk MP.nchunk))
       (set! load_label (if (== which 1) M6.label MP.label))
       (set! chunk_i 0)
-      (set! wait_ticks 0)
+      (set! load_stage 0)
+      (set! load_buf "")
+      (set! load_off 0)
+      (set! load_tick 0)
       (set! wait_said #f)
       (set! loading 1)
+      ;; 清掉上一个模型的自检摘要，免得载入期间底部还挂着旧结论
+      (set! chk_str "")
+      (set! dirty #t)
       (LLM.init_begin)
       (log (String.concat "[model] 载入 " load_label))
     }))
 
-;; 载入一块 / 等待资源（每拍一步）
+;; 载入收尾：init_end → 绑定缓冲区 → 自检
+(define finish_load
+  (lambda ()
+    (if (LLM.init_end)
+        {
+          (bind_model)
+          (set! model_loaded load_target)
+          (set! loading 0)
+          (set! load_stage 0)
+          (set! load_buf "")
+          (set! model_str (String.concat (if (== load_target 1) M6.name MP.name)
+            (String.concat " · vocab=" (String.concat (String.atom_to_string vocab_size)
+            (String.concat " · embd=" (String.atom_to_string n_embd))))))
+          (log (String.concat "[model] " (String.concat load_label
+               (String.concat " cfg=" (narr_to_str (LLM.get_config))))))
+          (run_checks load_target)
+          (set! chk_str (String.concat "自检 OK=" (String.concat (String.atom_to_string chk_ok)
+                                  (String.concat " NG=" (String.atom_to_string chk_bad)))))
+        }
+        {
+          (set! loading 0)
+          (set! load_stage 0)
+          (set! load_buf "")
+          (set! model_str "模型解析失败")
+          (log "[model] 解析失败（分块不全或格式不符）")
+        })
+    (set! dirty #t)
+    #t))
+
+;; 载入进度（0..1）：当前块已喂入的比例按块数折算，进度条因此是连续的
+(define load_frac
+  (lambda ()
+    (define done 0)
+    (define blen 0)
+    (if (> load_nchunk 0)
+        {
+          (set! done chunk_i)
+          (if (== load_stage 1)
+              {
+                (set! blen (String.length load_buf))
+                (if (> blen 0) (set! done (- chunk_i 1)) #f)
+                (if (> blen 0) (set! done (+ done (/ (* 1.0 load_off) blen))) #f)
+              }
+              #f)
+          (/ (* 1.0 done) load_nchunk)
+        }
+        0.0)))
+
+;; 载入推进（每拍一步）：读块 → 分小段喂流式解码器 → 全部喂完则收尾
 (define step_load
   (lambda ()
-    (define r 0)
-    (if (== wait_ticks -1)
-        (set! r -1)
-        (set! r (load_step (if (== load_target 1) M6.name MP.name) load_nchunk)))
-    (cond ((== r -1)
+    (define s #f)
+    (define left 0)
+    (define take 0)
+    (set! dirty #t)
+    (cond ((== load_stage 0)
+           (if (>= chunk_i load_nchunk)
+               (finish_load)
+               {
+                 (set! s (read_chunk (if (== load_target 1) M6.name MP.name) chunk_i))
+                 (if (null? s)
+                     {
+                       (set! load_stage 2)
+                       (set! load_tick 0)
+                       (if wait_said #f
+                           { (set! wait_said #t)
+                             (log "[model] 分块未就绪，稍后自动重试") })
+                     }
+                     {
+                       (set! load_buf s)
+                       (set! load_off 0)
+                       (set! chunk_i (+ chunk_i 1))
+                       (set! load_stage 1)
+                     })
+               }))
+          ((== load_stage 1)
            {
-             (if wait_said #f { (set! wait_said #t)
-                                (log "[model] 分块未就绪，稍后自动重试") })
-             (set! wait_ticks (+ wait_ticks 1))
-             (if (>= wait_ticks 25)
+             (set! left (- (String.length load_buf) load_off))
+             (set! take (if (> left LOAD_SUB) LOAD_SUB left))
+             (LLM.init_feed (String.slice load_buf load_off (+ load_off take)))
+             (set! load_off (+ load_off take))
+             (if (>= load_off (String.length load_buf))
                  {
-                   (set! wait_ticks 0)
-                   (set! loading 0)
-                   (begin_load load_target)
+                   (set! load_stage 0)
+                   (set! load_buf "")
+                   (set! load_off 0)
                  }
                  #f)
            })
-          ((== r 1)
-           (if (LLM.init_end)
-               {
-                 (bind_model)
-                 (set! model_loaded load_target)
-                 (set! loading 0)
-                 (set! model_str (String.concat (if (== load_target 1) M6.name MP.name)
-                   (String.concat " · vocab=" (String.concat (String.atom_to_string vocab_size)
-                   (String.concat " · embd=" (String.atom_to_string n_embd))))))
-                 (log (String.concat "[model] " (String.concat load_label
-                      (String.concat " cfg=" (narr_to_str (LLM.get_config))))))
-                 (run_checks load_target)
-                 (set! chk_str (String.concat "自检 OK=" (String.concat (String.atom_to_string chk_ok)
-                                         (String.concat " NG=" (String.atom_to_string chk_bad)))))
-                 (set! dirty #t)
-               }
-               {
-                 (set! loading 0)
-                 (set! model_str "模型解析失败")
-                 (log "[model] 解析失败（分块不全或格式不符）")
-               }))
+          ((== load_stage 2)
+           {
+             (set! load_tick (+ load_tick 1))
+             (if (>= load_tick 25)
+                 { (set! load_tick 0) (set! load_stage 0) }
+                 #f)
+           })
           (else #f))))
 
 ;; 切换场景（互斥：任一时刻只有一个场景在跑）
@@ -1350,25 +1400,31 @@
           (else #f))
     (draw_btn REDO_X REDO_Y REDO_W REDO_H "重来" #t)))
 
-;; 载入中的覆盖面板
+;; 载入中的覆盖面板（进度条按「块 + 当前块已喂比例」连续推进）
 (define draw_loading
   (lambda ()
-    (define w 240)
-    (define x 40)
-    (define y 100)
-    (define frac 0)
-    (Gfx.fill_rect x y w 62 26 30 44)
-    (Gfx.draw_rect x y w 62 90 96 116)
-    (Gfx.draw_text "载入模型数据…" (+ x 12) (+ y 10) 232 236 246)
-    (Gfx.draw_text (String.concat load_label
-                    (String.concat "  " (String.concat (String.atom_to_string chunk_i)
-                    (String.concat "/" (String.atom_to_string load_nchunk)))))
-                   (+ x 12) (+ y 26) 170 200 210)
-    (if (> load_nchunk 0)
-        (set! frac (/ (* 1.0 chunk_i) load_nchunk))
-        (set! frac 0.0))
-    (Gfx.fill_rect (+ x 12) (+ y 44) (- w 24) 6 50 54 70)
-    (Gfx.fill_rect (+ x 12) (+ y 44) (Math.floor (* frac (- w 24))) 6 90 170 255)))
+    (define w 248)
+    (define x 36)
+    (define y 96)
+    (define frac (load_frac))
+    (define bar 0)
+    (define txt "")
+    (Gfx.fill_rect x y w 70 26 30 44)
+    (Gfx.draw_rect x y w 70 90 96 116)
+    (Gfx.draw_text "载入模型数据（base64 流式解码）" (+ x 12) (+ y 8) 232 236 246)
+    ;; "名字  n/总数 块  46%"
+    (set! txt (String.concat load_label (String.concat "   "
+                 (String.concat (String.atom_to_string chunk_i)
+                 (String.concat "/" (String.concat (String.atom_to_string load_nchunk)
+                 (String.concat " 块  " (String.concat
+                   (String.atom_to_string (Math.floor (* 100 frac))) "%"))))))))
+    (Gfx.draw_text txt (+ x 12) (+ y 26) 170 200 210)
+    (Gfx.fill_rect (+ x 12) (+ y 46) (- w 24) 8 50 54 70)
+    (set! bar (Math.floor (* frac (- w 24))))
+    (if (> bar 0) (Gfx.fill_rect (+ x 12) (+ y 46) bar 8 90 170 255) #f)
+    (if (== load_stage 2)
+        (Gfx.draw_text "分块尚未就绪，等待资源挂载…" (+ x 12) (+ y 56) 255 190 120)
+        #f)))
 
 (define draw_frame
   (lambda ()
