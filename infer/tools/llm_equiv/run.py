@@ -67,15 +67,17 @@ def split_forms(s):
 
 
 # 从 App 里抽取的顶层名字：模块状态 + 配置绑定 + 前向/采样 + 生成与排序的步进函数
-KEEP = '''f4,f6,mkbuf,block_size,vocab_size,n_layer,n_embd,n_head,n_kv_head,n_hidden,
-is_shared,head_dim,kv_dim,kv_mul,p_rms_attn,p_rms_ffn,p_rms_final,p_emb,p_wq,p_wk,p_wv,
-p_wo,p_w1,p_w2,p_w3,p_fcr,p_fci,p_cls,bx,bxb,bxba,bxb2,bhb,bhb2,bq,k_cache,v_cache,batt,
-blogits,bind_model,b_accum,b_rms_norm,b_softmax,b_rope,llm_forward,sample_argmax,
-sample_multinomial,sample_token,N_GEN,TEMPERATURE,SORT_LEN,gen_prompt,gen_ids,gen_pos,
-gen_next,gen_line,gen_t0,gen_n,gen_setup,gen_step,sort_input,sort_ids,sort_ref,sort_out,
-sort_setup,sort_pos,sort_prefill_step,sort_gen_step,digits_ok,sorted_ok,concat_of,csv_of'''.replace('\n', '').split(',')
+KEEP = '''f4,mkbuf,block_size,vocab_size,n_layer,n_embd,n_head,n_kv_head,n_hidden,is_shared,
+head_dim,kv_dim,kv_mul,p_rms_attn,p_rms_ffn,p_rms_final,p_emb,p_wq,p_wk,p_wv,p_wo,p_w1,p_w2,
+p_w3,p_fcr,p_fci,p_cls,bx,bxb,bxba,bxb2,bhb,bhb2,bq,k_cache,v_cache,batt,blogits,bind_model,
+b_accum,b_rms_norm,b_softmax,b_rope,llm_forward,sample_argmax,sample_multinomial,sample_token,
+rng,rng_seed,rng_next,seq_str,concat_of,make_ref,vote_at,
+T_SORT,sort_ids,sort_out,sort_pos,sort_prefilled,sort_begin,sort_prefill_step,sort_gen_step,
+S1_ROUNDS,s1_input,s1_ref,s1_runs,s1_voted,s1_agree,s1_diff,
+N_GEN,T_GEN,gen_ids,gen_pos,gen_next,gen_line,gen_t0,gen_n,gen_begin,gen_step'''.replace('\n', '').split(',')
 
-HEAD = '''(import LLM "@@LIB@@")
+HEAD = '''
+(import LLM "@@LIB@@")
 (native String)
 (native Math)
 (native System)
@@ -89,6 +91,7 @@ STUBS = '''
 ;; App 侧的日志/界面函数在无头参考台里空实现（不参与比对内容）
 (define say (lambda (s) #t))
 (define set_status (lambda (s) #t))
+(define f6 (lambda (v) (String.atom_to_string (Math.to_fixed v 6))))
 (define narr_to_str
   (lambda (lst)
     (define n (length lst))
@@ -219,23 +222,49 @@ DRIVER = '''
 ;; ================ 主流程 ================
 (dump_model "sort6" 1)
 (dump_tokens '("0123456789" "a b c"))
-;; 排序任务（全局自注意力，输入 351420）
-(set! sort_input '(3 5 1 4 2 0))
-(sort_setup)
-(display "sort ids ") (display sort_ids) (newline)
-(define pre_done #f)
-(while (== pre_done #f) { (set! pre_done (sort_prefill_step)) })
-(set! sort_pos 0)
-(define gen_done #f)
-(while (== gen_done #f) { (set! gen_done (sort_gen_step)) })
-(display "sort out ") (display sort_out) (newline)
+;; ---------------- 任务 0：6 元素排序 ×5 轮 + 逐位投票 ----------------
+;; 温度 >0（与 App 默认一致）：随机源是 App 内的 LCG（两条实现共用同一份 App 代码），
+;; 因此连"采样出来的结果"都应当逐位相同。
+(set! T_SORT 0.8)
+(rng_seed 12345)
+(set! s1_input '(3 5 1 4 2 0))
+(set! s1_ref (make_ref s1_input))
+(set! s1_runs (cdr '(0)))
+(display "sort ids ") (display (sort_begin s1_input)) (newline)
+(display "  tokenized ") (display sort_ids) (newline)
+(display "  ref ") (display s1_ref) (newline)
+(define rnd 0)
+(define done #f)
+(while (< rnd S1_ROUNDS) {
+  (if (== rnd 0)
+      {
+        ;; 第 1 轮：预填充 k/v 缓存（后续轮次共用，因为 k/v 只由 (token,pos) 决定）
+        (set! done #f)
+        (while (== done #f) { (set! done (sort_prefill_step)) })
+      }
+      {
+        (sort_begin s1_input)
+        (set! sort_prefilled #t)
+      })
+  (set! done #f)
+  (while (== done #f) { (set! done (sort_gen_step)) })
+  (push s1_runs sort_out)
+  (display "  round ") (display (+ rnd 1)) (display " out ") (display sort_out) (newline)
+  (set! rnd (+ rnd 1))
+})
+(set! s1_voted (cdr '(0)))
+(define pos 0)
+(while (< pos block_size) { (push s1_voted (vote_at pos)) (set! pos (+ pos 1)) })
+(display "  voted ") (display s1_voted) (newline)
 
 (dump_model "psycho" 14)
 (dump_tokens '("你好" "人类的本质是" "精神分析" "3,5,1,4,2,6"))
-;; 因果注意力前向（前 6 个位置）
+;; ---------------- 因果注意力前向（前 6 个位置）----------------
 (dump_forward (LLM.encode "人类的本质是") 6 #t)
-;; 自回归生成（贪心，24 步）
-(gen_setup)
+;; ---------------- 任务 1：自回归生成（温度采样）----------------
+(set! T_GEN 0.75)
+(rng_seed 777)
+(gen_begin "人类的本质是")
 (define going #t)
 (define steps 0)
 (while going {

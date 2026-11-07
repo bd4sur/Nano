@@ -3805,7 +3805,7 @@ cd infer
 python3 tools/e2e/native/test_g2048.py          # 107 条内核断言 + 56 条界面断言
 APP=2048 FRAMES=120 ./tools/e2e/host/run_host_regress.sh   # 宿主回归台（err=none / refresh=1）
 bash build_wasm_gui.sh                          # 出 wasm 产物（App 源码拷进 linglong/app + 重生成 manifest）
-cd webgui && python3 ../tools/https_static_server.py 9102 . &
+cd webgui && python3 ../tools/https_static_server.py 9002 .
 cd ../tools/e2e/browser
 node regress_2048.js https://127.0.0.1:9102/index.html chromium /tmp/e2e-2048
 ENGINES="chromium shell firefox" ./run_browser_regress.sh      # 全量存活/确定性回归
@@ -4013,7 +4013,7 @@ C 的常用算术转换会把 `y` 提升成 `uint32`：反向竖线（`y1 > y2`�
 cd infer
 APP=danmaku FRAMES=120 ./tools/e2e/host/run_host_regress.sh     # 宿主回归台（err=none / refresh=40）
 bash build_wasm_gui.sh                                          # 出 wasm 产物（含 App 源码同步 + manifest）
-cd webgui && python3 ../tools/https_static_server.py 9102 . &
+cd webgui && python3 ../tools/https_static_server.py 9002 .
 cd ../tools/e2e/browser
 node regress_danmaku.js https://127.0.0.1:9102/index.html chromium /tmp/e2e-danmaku
 node regress_danmaku.js <url> shell|firefox /tmp/e2e-danmaku   # 三引擎各 32/32
@@ -5326,85 +5326,112 @@ gfx_draw_image_warp(gfx, path, x, y, w, h, gw, gh, const float *disp, float neut
 LLM-only 路线）上写一个**完全纯 Scheme** 的等价 App：不得使用仓库里现成的 LLM 本地库
 （`vendor/Animac/am_native_LLM.c`），而要参照它用 Scheme 重新实现一个**完全功能等价**的
 库（权重读取与解析含 base64 解码、词元编解码 tokenizer、矩阵乘法），整个推理链路跑在
-灵机解释器里。
+灵机解释器里。随后又按需求把交互重做成**两个互斥场景**（见 §2）。
 
 ## 1. 产物
 
 | 文件 | 作用 |
 |---|---|
 | `infer/app/lib/llm_pure.scm` | **纯 Scheme 的 LLM 库**：与 `(native LLM)` 同名同语义的 `init/get_config/get_param/encode/decode/matmul`，外加流式加载三段式 `init_begin/init_feed/init_end` |
-| `infer/app/llm.scm` | 测试台 App（GUI 版测试用例）：分块读模型 → 自检 → 任务 0 序列生成（6 元素排序）→ 任务 1 自回归文本生成；每拍只推进一步 |
+| `infer/app/llm.scm` | 测试台 App（GUI）：顶部两个**互斥**场景标签 + 各自的交互/渲染；每拍只推进一步 |
 | `infer/app/lib/llm/{sort6,psycho}/{meta.scm,mNN.b64}` | 模型数据：base64 分块（sort6 = 1 块 64KB；psycho 230k = 14 块 × 96KB），`meta.scm` 由生成脚本产出 |
 | `infer/tools/gen_llm_model_b64.py` | 把 Nano F32 模型 `.bin` 切成 base64 分块 + 生成 meta（含往返自检） |
 | `infer/tools/llm_equiv/{nref.c,native_shim.scm,run.py,README.md}` | **等价性证明工具**：同一份脚本分别链接本地库与纯 Scheme 库，逐行 diff stdout |
+| `infer/tools/check_scm_arity.py` | 灵机 Scheme 源码的**调用元数 / cond 子句**静态检查（灵机编译器不检查参数个数，见 §5 的坑） |
 | `infer/tools/e2e/browser/regress_llm.js` | 浏览器端回归（真 WASM）——本目录按惯例不入 Git |
 
 `infer/build_wasm_gui.sh` 同步改动两处：①构建期把 `app/lib/llm/{sort6,psycho}` 拷进业务
 资源目录；②manifest 里 `app/lib/llm/**` **降为 p2 后台挂载**（它是 1.4MB 数据，不属于
 "启动必需"，App 侧缺文件会自动等待重试）。
 
-## 2. 为什么这样分层（接口照抄、数据外置、流式加载）
+## 2. 两个互斥场景（2026-11-07 二轮：交互重做）
 
-- **接口照抄**：库里的公开名字与本地库逐一对应（`init/get_config/get_param/encode/
-  decode/matmul`），于是 App 里写 `(import LLM "app/lib/llm_pure.scm")` 之后，调用点
-  `LLM.matmul`、`LLM.encode` … **与上游 `(native LLM)` 的写法完全一样**——上游测试用例
-  几乎是原样搬过来的。
+顶部两个标签页 `[场景1 · LLM 排序] [场景2 · 可视化生成]`，点按即切换，**任一时刻只有一个
+场景在跑**；切场景时该场景的输入/进度归零。模型是全局单例（与上游本地库一致），故切到
+需要另一个模型的场景时会重新载入（载入面板显示 `已读块/总块` 进度条），载入完成后自动跑
+自检。
+
+- **场景 1「LLM 排序」**：6 个数字槽位（像银行密码/短信验证码）+ 数字软键盘
+  （`1 2 3 / 4 5 6 / 7 8 9 / 退格 0 输入`）。按「输入」后把 6 个数字**直接拼成** 6 字符串
+  （如 `351420`）编码成 6 个 token 送进 sort6 模型，用全局自注意力逐位输出排序结果；
+  该小模型在含重复数字的序列上有误差，故**每轮温度采样（T=0.8）、跑 5 轮、逐位投票取多数**
+  （平票取较小值）作为最终结果，并显示每轮输出、`一致 k/5 轮`、`与参考差 n 位`。
+  推理是 6 次预填充 + 6 次生成前向；**k/v 只由 (token,pos) 决定**，所以只有第 1 轮需要
+  预填充，后 4 轮直接生成（省 5×6 次前向，功能完全等价）。
+- **场景 2「可视化生成」**：**没有任何输入入口**。进入即用**当前时间戳**（`Time.utc_sod`）
+  作种子初始化 App 内 LCG，从模型 vocab 里随机取一个**单字符词元**作 prompt（避开
+  `<|...|>` 特殊词元），逐 token 温度采样（T=0.75）、**逐字流式**输出并实时统计 TPS；
+  底部「重来」换一个种子/字符重新生成。
+
+## 3. 为什么这样分层（接口照抄、数据外置、流式加载）
+
+- **接口照抄**：库里的公开名字与本地库逐一对应，于是 App 里写
+  `(import LLM "app/lib/llm_pure.scm")` 之后，调用点 `LLM.matmul`、`LLM.encode` … 与上游
+  `(native LLM)` 的写法完全一样——上游测试用例几乎原样搬过来。
 - **数据外置 + 分块流式解码**：灵机解析器按源码字符数预分配 token 数组（见 app/hwr.scm
-  注释），把 1.3MB base64 塞进 `.scm` 字面量会吃掉解释器内存池；而 `(native Fs)` 单文件
-  读入上限 128KB。故模型切成 96KB 的 base64 分块，运行时逐块 `Fs.read` → `init_feed`
-  流式解码，内存峰值只有一个分块字符串。分块边界**不必对齐 4 字符组**（组状态跨 feed
-  保留），末组按 `=` 个数出 1~3 字节。
+  注释），1.3MB base64 塞进 `.scm` 字面量会吃掉解释器内存池；而 `(native Fs)` 单文件读入
+  上限 128KB。故模型切成 96KB 分块，运行时逐块 `Fs.read` → `init_feed` 流式解码，峰值只有
+  一个分块字符串。分块边界**不必对齐 4 字符组**（组状态跨 feed 保留），末组按 `=` 个数出
+  1~3 字节。
 - **两阶段解码器**：0=头(256B) 1=词表长度(4B) 2=词表数据 3=权重。权重区（占 96% 的字节）
-  走 3 字节一起拼浮点的**内联快路径**，头/词表区与"本组内发生阶段切换"的极少数走逐字节
-  慢路径（见下节的坑）。
+  走 3 字节一起拼浮点的**内联快路径**，其余走逐字节慢路径。
 - **浮点还原不用 32 位整数拼装**：wasm32 宿主的无符号整数有效宽度只有 27 位，F32 的 4 字节
   按 `符号/阶码/尾数` 分解，再由 2 的幂表还原——数学上精确，与 C 侧 `float→double` 逐位一致。
 
-## 3. 与本地库保持一致（照抄不修正）的怪癖
+## 4. 与本地库保持一致（照抄不修正）的怪癖
 
 `token_classifier` 恒与 `token_embedding` **内容相同但把柄不同**（上游 `get_param` 用同一份
 数据另建一个列表，`eq?` 为假、`equal?` 为真）；贪心最长匹配分词（单字符一律取 charset 表
 id、表中没有则 0，多字符最长尝试 17）；base64 跳过所有非 base64 字符；词表同名 token 与
 单字符 charset 映射均**先到先得**；matmul 在 `d<=0 || n<=0` 时不写入、越界位置跳过写入。
 
-## 4. 踩坑记录（都在 WASM 侧先炸，桌面 gcc 正常）
+## 5. 踩坑记录（都在 WASM 侧或交互重做时先炸，桌面/单测正常）
 
 1. **阶段切换落在 4 字符组中间**：词表字段长度通常不是 3 的倍数（psycho 是 49732 字节，
-   1516 = 3×505+1），切换点所在的那一组里 1 个字节属于词表、2 个属于权重。首版按"组开始
-   时的阶段"整组走快路径 → 2 个权重字节被塞进词表缓冲 → 权重整体错位、`init_end` 报失败。
-   修法：加 `gdirty` 标记，本组内发生过阶段切换就整组走逐字节慢路径（慢路径也补上权重区
-   分支），并把 2 个字节的正确归属写进注释。
+   1516 = 3×505+1），切换点所在的那一组里 1 个字节属于词表、2 个属于权重。首版按"组开始时
+   的阶段"整组走快路径 → 2 个权重字节被塞进词表缓冲 → 权重整体错位、`init_end` 报失败。
+   修法：加 `gdirty` 标记，本组内发生过阶段切换就整组走逐字节慢路径。
 2. **`-100000000` 这样的整数字面量在 wasm32 上溢出**：`am_int_t = int32_t` 且逻辑宽度只有
    27 位（约 ±6.7e7）。`sample_argmax` 的 `maxv` 初值写成 `-100000000` 后绕回成正数，
-   于是**永远不更新** `maxv/maxi`，所有位置都取 0 号词元——表现为"排序任务输出全 -1、
-   生成文本全是 `<|padding|>`"。修法：下界改用浮点字面量 `-1e30`（`softmax` 的
-   `-10000000` 一并改）。**教训：灵机里跨 32/64 位移植时，凡"哨兵大数"一律写成浮点。**
-3. **wasm32 的浮点是单精度**（`am_float_t = float`，64 位宿主是 double）：逐元素值与
-   双精度差 1e-6 量级，连加十万项的和甚至漂到百分级（psycho embedding 求和 2987 vs 3195）。
-   因此 App 内自检不能拿"求和"与桌面记录硬比：改为**长度 + 第 0/中/末元素 + 相对容差 1e-3**。
-   上游本地库在 wasm32 上同样走单精度，故这不影响两条实现的一致性。
+   于是**永远不更新** `maxv/maxi`，所有位置都取 0 号词元——表现为"排序输出全 -1、
+   生成文本全是 `<|padding|>`"。修法：下界改用浮点字面量 `-1e30`。**灵机里跨 32/64 位移植
+   时，凡"哨兵大数"一律写成浮点。**
+3. **wasm32 的浮点是单精度**（`am_float_t = float`，64 位宿主是 double）：逐元素值与双精度
+   差 1e-6 量级，连加十万项的和甚至漂到百分级。因此 App 内自检不能拿"求和"与桌面记录硬比：
+   改为**长度 + 第 0/中/末元素 + 相对容差 1e-3**。上游本地库在 wasm32 上同样走单精度。
 4. **上游 `list_to_str` 没有分隔符**：排序任务的输入是 6 个数字**直接拼成**的 `"351420"`
-   （不是我一开始以为的 `"3,5,1,4,2,0"`）。带逗号时输入变成 11 个 token、超过 `block_size=6`，
-   模型输出退化成逗号/字母——表现为"模型输出 1,-1,3,-1,5,-1"。修正后输出与本地库逐位一致
-   `(0 0 1 2 4 5)`（该模型在含重复数字的 6 元序列上本就有误差，(0 0 1 2 4 5) 非降序即算达成）。
+   （不是 `"3,5,1,4,2,0"`）。带逗号时输入变成 11 个 token、超过 `block_size=6`，模型输出
+   退化成逗号/字母。
+5. **灵机 `cond` 的每个子句只接受单个表达式**（manual.md §4.2）：写成
+   `((== s2_stage 1) (if tap_new …) (if (gen_step) …))` 不会报错，但**第二个表达式不会
+   被执行**——表现为"场景 2 一直停在 `推理中 0/28`、画面不再刷新"。
+6. **调用参数个数不符不会报错，而是把多余值留在操作数栈上**（manual.md §4.3）：本 App 曾
+   写出 `(log (String.concat "a" x) (String.concat "b" y))`（`log` 只收 1 个参数）与括号错位
+   的 `(Gfx.draw_text (String.concat …) 10 20 …)`，症状分别是"某分支再也不执行"和"摘要行
+   画不出来"。长 concat 链一律用中间变量拆成几条语句；并加了静态检查工具
+   `infer/tools/check_scm_arity.py`（白名单元数 + cond 子句形状，零误报跑过全部 App）。
 
-## 5. 验证
+## 6. 验证
 
 - **等价性（最强证据）**：`python3 infer/tools/llm_equiv/run.py` →
-  `PASS：本地库与纯 Scheme 库的 68 行输出逐字节相同`。比对内容包括两个模型的配置、
-  14 个权重张量的长度/求和/首中末元素、classifier 的独立性语义、多组文本的 encode id 与
-  decode 往返、词表前 40 项、逐位置前向的 argmax 与 logits 抽样、6 元素排序输出、24 步贪心
-  解码的完整生成文本。测试脚本里的前向/采样代码是**从 app/llm.scm 按顶层 define 名字抽取**
-  的（不是手抄副本），所以它证明的就是 App 真正在跑的那份代码。
+  `PASS：本地库与纯 Scheme 库的 76 行输出逐字节相同`。比对内容包括两个模型的配置、14 个权重
+  张量的长度/求和/首中末元素、classifier 的独立性语义、多组文本的 encode id 与 decode 往返、
+  词表前 40 项、逐位置前向的 argmax 与 logits 抽样、**5 轮温度采样的排序输出与逐位投票**、
+  以及 28 步温度采样生成的完整文本。测试脚本里的前向/采样代码是从 `app/llm.scm` 按顶层
+  define 名字**抽取**的（不是手抄副本），因此它证明的就是 App 真正在跑的那份代码；随机源
+  是 App 内的 LCG（两条实现共用同一份 App 代码），所以连采样结果都逐位相同。
 - **WASM GUI（真浏览器）**：`node tools/e2e/browser/regress_llm.js https://127.0.0.1:9002/index.html chromium`
-  → **7/7 PASS**：跑到「完成」总结、12 条自检全 `[OK]`、生成文本非空且无 `<|padding|>`、
-  TPS = 2.51、无 pageerror。整条流程从进入 App 到总结约 **14 秒**（psycho 230k：18 词元
-  @ ≈2.5 token/s；sort6 载入 + 自检 + 排序任务约 1 秒）。模型分块是 p2 后台挂载，App 侧
-  缺文件时打印「模型分块尚未就绪…稍后自动重试」并每 25 拍重试（已用移走数据目录的方式实测）。
-- **宿主回归台**（gcc，虚拟时钟）：`/tmp/…/run_new app/llm.scm 6000` 输出与浏览器一致
-  （同宿主双精度），12 条自检全 `[OK]`，TPS 2.61。
+  → **19/19 PASS**：软键盘输入（含一次退格）后按「输入」→ `[sort] input=351420` → 5 条
+  `[sort] round` → `[sort] voted=… agree=k/5 diff=n`；切到场景 2 → `[gen] seed=… prompt=…`
+  → 生成中帧缓冲持续刷新 → `[gen] text=…`（非空、无 `<|padding|>`）与
+  `[gen] tokens=27 ms=… tps≈3.0`；切回场景 1 重新载入 sort6（第三次 `[chk] OK=`）；
+  全程无 pageerror、自检无 `[NG]`。
+- **宿主回归台**（gcc，虚拟时钟）：同一 App 用 `HAL_TOUCH_AT` 注入 6 位数字 + 「输入」，
+  5 轮投票后 `voted=0 1 2 3 4 5 ref=0 1 2 3 4 5 agree=4/5 diff=0`；场景 2 生成
+  `血，因为诸体系列的意识的关于它的规律，不是自在存在的形态`（27 词元 / TPS 3.16）。
+- 其它 App 无回归（mandelbrot / mlp / gol 宿主回归台 `err=none`）。
 
-## 6. 运行
+## 7. 运行
 
 ```bash
 cd infer && bash build_wasm_gui.sh                 # 产物 webgui/（模型数据走 p2 后台挂载）
@@ -5422,8 +5449,6 @@ python3 infer/tools/gen_llm_model_b64.py <model.bin> infer/app/lib/llm/<name> \
 两个 F32 nano 模型来自上游 Animac 发行版的 `test/llm_model.scm`（psycho 230k =
 huggingface `bd4sur/Nano-Psycho`；sort6 = 6 元升序序列生成模型）。**本项目自带的
 `linglong/llm/*.bin` 是 Q80 量化权重，本地库与纯 Scheme 库都只支持 F32，不能用于本 App。**
-
-------------------------------------
 
 # 2026-11-07（研究：灵机解释器时间片/GC 参数在 WASM 目标下的调优）
 
