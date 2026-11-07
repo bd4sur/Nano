@@ -70,13 +70,13 @@ def split_forms(s):
 KEEP = '''f4,mkbuf,block_size,vocab_size,n_layer,n_embd,n_head,n_kv_head,n_hidden,is_shared,
 head_dim,kv_dim,kv_mul,p_rms_attn,p_rms_ffn,p_rms_final,p_emb,p_wq,p_wk,p_wv,p_wo,p_w1,p_w2,
 p_w3,p_fcr,p_fci,p_cls,bx,bxb,bxba,bxb2,bhb,bhb2,bq,k_cache,v_cache,batt,blogits,bind_model,
-b_accum,b_rms_norm,b_softmax,b_rope,fw_pos,fw_maxlen,fw_causal,fw_layer,fw_attn_range,
-fw_begin,fw_step,llm_forward,vis_on,obs_layer,obs_phase,obs_pokes,obs_ids,obs_vals,obs_top,
+b_accum,b_rms_norm,b_softmax,b_rope,fw_pos,fw_maxlen,fw_causal,fw_layer,fw_phase,fw_fin,fw_attn_range,fw_k,fw_v,
+fw_begin,fw_phase_step,fw_step,llm_forward,vis_on,obs_layer,obs_phase,obs_pokes,obs_ids,obs_vals,obs_top,
 sample_argmax,sample_multinomial,sample_token,
 rng,rng_seed,rng_next,seq_str,concat_of,make_ref,vote_at,
 T_SORT,sort_ids,sort_out,sort_pos,sort_prefilled,sort_begin,sort_prefill_step,sort_gen_step,
 S1_ROUNDS,s1_input,s1_ref,s1_runs,s1_voted,s1_agree,s1_diff,
-N_GEN,T_GEN,gen_ids,gen_pos,gen_next,gen_line,gen_t0,gen_n,gen_fw_active,gen_begin,gen_take,gen_step,gen_tick'''.replace('\n', '').split(',')
+N_GEN,T_GEN,gen_ids,gen_pos,gen_next,gen_line,gen_t0,gen_n,gen_fw_active,gen_new_token,gen_begin,gen_take,gen_step,gen_tick'''.replace('\n', '').split(',')
 
 HEAD = '''
 (import LLM "@@LIB@@")

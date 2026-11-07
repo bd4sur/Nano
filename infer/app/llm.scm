@@ -54,7 +54,9 @@
 (define SH (Gfx.height))
 (define FONT_S 1)                        ; 12px 抗锯齿
 (define FONT_L 2)                        ; 16px 抗锯齿（槽位数字）
-(define TICK_MS 40)
+(define TICK_MS 40)                      ; 常规节拍（关可视化：一拍一个 token）
+(define TICK_MS_VIS 20)                  ; 开可视化：一相位一帧（≤50 帧/秒，低于 60Hz 合成率，
+                                         ; 保证每一相位都真的被 paint 出来，不跳步）
 
 ;; 顶部标题条与两个标签页
 (define HEAD_H 17)
@@ -400,18 +402,25 @@
       (set! h (+ h 1))
     })))
 
-;; 前向传播：**可以跨拍推进**（每拍跑一层）。这样一拍的耗时被压到 ~1/8 个 token
-;; （wasm 上 ≈46ms），触摸（停止/重来/开关）与画面刷新都保持灵敏；顺序与逐层跑完
-;; 完全相同，数值不变。
+;; 前向传播：**可以按「相位」跨拍推进**（一次调用只跑一个相位）。
+;;
+;; 为什么按相位拆：可视化要"每一步都真的画出来"——浏览器只在 JS 任务之间合成上屏，
+;; 同一拍里画 68 次也只会看到最后一张。因此开可视化时**一拍只跑一个相位**（每拍
+;; 一帧、一帧一个相位，绝不跳帧）；关可视化时同一拍内循环跑完全部相位（全速）。
+;; 拆分只影响调度，不影响运算顺序，数值与"一口气跑完"完全一致。
 ;;
 ;;   is_causal=#t：因果注意力（自回归生成）；#f：全局注意力（序列生成/排序）
 (define fw_pos 0)
 (define fw_maxlen 0)
 (define fw_causal 0)
-(define fw_layer 0)
+(define fw_layer 0)          ; 当前层（>= n_layer 表示进入收尾阶段）
+(define fw_phase 0)          ; 层内相位 0..7
+(define fw_fin 0)            ; 收尾相位：0=final norm 1=classifier 2=sample（完成）
 (define fw_attn_range 1)
+(define fw_k #f)             ; 本层 k/v 缓存切片（QKV 相位写入，MHA 相位使用）
+(define fw_v #f)
 
-;; 开始一次前向：写入 token embedding，复位层号（相位可视化从 EMBED 起）
+;; 开始一次前向：写入 token embedding，复位层号/相位（可视化从 EMBED 起）
 (define fw_begin
   (lambda (token pos max_seq_len is_causal)
     (define i 0)
@@ -420,6 +429,8 @@
     (set! fw_maxlen max_seq_len)
     (set! fw_causal is_causal)
     (set! fw_layer 0)
+    (set! fw_phase 0)
+    (set! fw_fin 0)
     (set! fw_attn_range (if is_causal (+ pos 1) max_seq_len))
     (vis_set -1 PH_EMBED)
     (set! i 0)
@@ -429,15 +440,13 @@
     })
     #t))
 
-;; 推进一步：跑一层；全部层跑完后做 final norm + 分类器（出 logits），返回 1
-(define fw_step
+;; 推进一个相位；整个前向跑完（logits 已就绪）返回 #t
+(define fw_phase_step
   (lambda ()
     (define i 0)
     (define h 0)
     (define m 0)
     (define t 0)
-    (define k #f)
-    (define v #f)
     (define kv_pos_offset 0)
     (define wq_offset 0)
     (define wkv_offset 0)
@@ -451,97 +460,142 @@
     (define layer fw_layer)
     (define pos fw_pos)
     (define attn_range fw_attn_range)
+    (define done #f)
     (if (>= layer n_layer)
-        {
-          (vis_set n_layer PH_FINAL_NORM)
-          (b_rms_norm bx bx p_rms_final 0 n_embd)
-          (vis_set n_layer PH_CLASSIFY)
-          (LLM.matmul blogits bx p_cls 0 0 n_embd vocab_size)
-          (if (== vis_on 1) (top6_scan) #f)
-          (vis_set n_layer PH_SAMPLE)
-          1
-        }
-        {
-          (vis_set layer PH_ATTN_NORM)
-          (b_rms_norm bxb bx p_rms_attn (* layer n_embd) n_embd)
-          (set! k (get_item k_cache layer))
-          (set! v (get_item v_cache layer))
-          (set! wq_offset  (* layer (* n_embd n_embd)))
-          (set! wkv_offset (* layer (* n_embd kv_dim)))
-          (set! kv_pos_offset (* pos kv_dim))
-          (vis_set layer PH_QKV)
-          (LLM.matmul bq  bxb p_wq 0             wq_offset  n_embd n_embd)
-          (LLM.matmul k   bxb p_wk kv_pos_offset wkv_offset n_embd kv_dim)
-          (LLM.matmul v   bxb p_wv kv_pos_offset wkv_offset n_embd kv_dim)
-          (vis_set layer PH_QK_ROPE)
-          (b_rope bq k pos kv_pos_offset)
-          (vis_set layer PH_MHA)
-          (set! h 0)
-          (while (< h n_head) {
-            (set! m (Math.floor (/ h kv_mul)))
-            (set! q_head_offset (* h head_dim))
-            (set! att_head_offset (* h block_size))
-            (set! t 0)
-            (while (< t attn_range) {
-              (set! k_head_offset (+ (* t kv_dim) (* m head_dim)))
-              (set! score 0)
-              (set! i 0)
-              (while (< i head_dim) {
-                (set! score (+ score (* (get_item bq (+ q_head_offset i))
-                                        (get_item k (+ k_head_offset i)))))
-                (set! i (+ i 1))
-              })
-              (set_item! batt (+ att_head_offset t) (/ score (Math.sqrt head_dim)))
-              (set! t (+ t 1))
-            })
-            (b_softmax batt att_head_offset attn_range)
-            (set! xba_head_offset (* h head_dim))
-            (set! i 0)
-            (while (< i head_dim) {
-              (set! score 0)
-              (set! t 0)
-              (while (< t attn_range) {
-                (set! v_head_offset (+ (* t kv_dim) (* m head_dim)))
-                (set! score (+ score (* (get_item batt (+ att_head_offset t))
-                                        (get_item v (+ v_head_offset i)))))
-                (set! t (+ t 1))
-              })
-              (set_item! bxba (+ xba_head_offset i) score)
-              (set! i (+ i 1))
-            })
-            (set! h (+ h 1))
-          })
-          (vis_set layer PH_O)
-          (set! wo_offset (* layer (* n_embd n_embd)))
-          (LLM.matmul bxb2 bxba p_wo 0 wo_offset n_embd n_embd)
-          (b_accum bx bxb2 n_embd)
-          (vis_set layer PH_FFN_NORM)
-          (b_rms_norm bxb bx p_rms_ffn (* layer n_embd) n_embd)
-          (vis_set layer PH_W1W3)
-          (LLM.matmul bhb  bxb p_w1 0 (* layer (* n_hidden n_embd)) n_embd n_hidden)
-          (LLM.matmul bhb2 bxb p_w3 0 (* layer (* n_hidden n_embd)) n_embd n_hidden)
-          (set! i 0)
-          (while (< i n_hidden) {
-            (set! score (get_item bhb i))
-            (set! score (* score (/ 1.0 (+ 1.0 (Math.exp (- 0 score))))))
-            (set! score (* score (get_item bhb2 i)))
-            (set_item! bhb i score)
-            (set! i (+ i 1))
-          })
-          (vis_set layer PH_W2)
-          (LLM.matmul bxb bhb p_w2 0 (* layer (* n_embd n_hidden)) n_hidden n_embd)
-          (b_accum bx bxb n_embd)
-          (set! fw_layer (+ layer 1))
-          0
-        })))
+        (cond ((== fw_fin 0)
+               {
+                 (vis_set n_layer PH_FINAL_NORM)
+                 (b_rms_norm bx bx p_rms_final 0 n_embd)
+                 (set! fw_fin 1)
+               })
+              ((== fw_fin 1)
+               {
+                 (vis_set n_layer PH_CLASSIFY)
+                 (LLM.matmul blogits bx p_cls 0 0 n_embd vocab_size)
+                 (if (== vis_on 1) (top6_scan) #f)
+                 (set! fw_fin 2)
+               })
+              (else
+               {
+                 (vis_set n_layer PH_SAMPLE)
+                 (set! done #t)
+               }))
+        (cond ((== fw_phase 0)                     ; ---- attention rmsnorm ----
+               {
+                 (vis_set layer PH_ATTN_NORM)
+                 (b_rms_norm bxb bx p_rms_attn (* layer n_embd) n_embd)
+                 (set! fw_k (get_item k_cache layer))
+                 (set! fw_v (get_item v_cache layer))
+                 (set! fw_phase 1)
+               })
+              ((== fw_phase 1)                     ; ---- Q / K / V ----
+               {
+                 (vis_set layer PH_QKV)
+                 (set! wq_offset  (* layer (* n_embd n_embd)))
+                 (set! wkv_offset (* layer (* n_embd kv_dim)))
+                 (set! kv_pos_offset (* pos kv_dim))
+                 (LLM.matmul bq    bxb p_wq 0             wq_offset  n_embd n_embd)
+                 (LLM.matmul fw_k  bxb p_wk kv_pos_offset wkv_offset n_embd kv_dim)
+                 (LLM.matmul fw_v  bxb p_wv kv_pos_offset wkv_offset n_embd kv_dim)
+                 (set! fw_phase 2)
+               })
+              ((== fw_phase 2)                     ; ---- RoPE ----
+               {
+                 (vis_set layer PH_QK_ROPE)
+                 (b_rope bq fw_k pos (* pos kv_dim))
+                 (set! fw_phase 3)
+               })
+              ((== fw_phase 3)                     ; ---- GQA 多头注意力 ----
+               {
+                 (vis_set layer PH_MHA)
+                 (set! h 0)
+                 (while (< h n_head) {
+                   (set! m (Math.floor (/ h kv_mul)))
+                   (set! q_head_offset (* h head_dim))
+                   (set! att_head_offset (* h block_size))
+                   (set! t 0)
+                   (while (< t attn_range) {
+                     (set! k_head_offset (+ (* t kv_dim) (* m head_dim)))
+                     (set! score 0)
+                     (set! i 0)
+                     (while (< i head_dim) {
+                       (set! score (+ score (* (get_item bq (+ q_head_offset i))
+                                               (get_item fw_k (+ k_head_offset i)))))
+                       (set! i (+ i 1))
+                     })
+                     (set_item! batt (+ att_head_offset t) (/ score (Math.sqrt head_dim)))
+                     (set! t (+ t 1))
+                   })
+                   (b_softmax batt att_head_offset attn_range)
+                   (set! xba_head_offset (* h head_dim))
+                   (set! i 0)
+                   (while (< i head_dim) {
+                     (set! score 0)
+                     (set! t 0)
+                     (while (< t attn_range) {
+                       (set! v_head_offset (+ (* t kv_dim) (* m head_dim)))
+                       (set! score (+ score (* (get_item batt (+ att_head_offset t))
+                                               (get_item fw_v (+ v_head_offset i)))))
+                       (set! t (+ t 1))
+                     })
+                     (set_item! bxba (+ xba_head_offset i) score)
+                     (set! i (+ i 1))
+                   })
+                   (set! h (+ h 1))
+                 })
+                 (set! fw_phase 4)
+               })
+              ((== fw_phase 4)                     ; ---- 注意力输出投影 O + 残差 ----
+               {
+                 (vis_set layer PH_O)
+                 (set! wo_offset (* layer (* n_embd n_embd)))
+                 (LLM.matmul bxb2 bxba p_wo 0 wo_offset n_embd n_embd)
+                 (b_accum bx bxb2 n_embd)
+                 (set! fw_phase 5)
+               })
+              ((== fw_phase 5)                     ; ---- FFN rmsnorm ----
+               {
+                 (vis_set layer PH_FFN_NORM)
+                 (b_rms_norm bxb bx p_rms_ffn (* layer n_embd) n_embd)
+                 (set! fw_phase 6)
+               })
+              ((== fw_phase 6)                     ; ---- W1 / W3 + SiLU（SwiGLU）----
+               {
+                 (vis_set layer PH_W1W3)
+                 (LLM.matmul bhb  bxb p_w1 0 (* layer (* n_hidden n_embd)) n_embd n_hidden)
+                 (LLM.matmul bhb2 bxb p_w3 0 (* layer (* n_hidden n_embd)) n_embd n_hidden)
+                 (set! i 0)
+                 (while (< i n_hidden) {
+                   (set! score (get_item bhb i))
+                   (set! score (* score (/ 1.0 (+ 1.0 (Math.exp (- 0 score))))))
+                   (set! score (* score (get_item bhb2 i)))
+                   (set_item! bhb i score)
+                   (set! i (+ i 1))
+                 })
+                 (set! fw_phase 7)
+               })
+              (else                                ; ---- W2 + 残差，本层结束 ----
+               {
+                 (vis_set layer PH_W2)
+                 (LLM.matmul bxb bhb p_w2 0 (* layer (* n_embd n_hidden)) n_hidden n_embd)
+                 (b_accum bx bxb n_embd)
+                 (set! fw_layer (+ layer 1))
+                 (set! fw_phase 0)
+               })))
+    done))
 
-;; 整体跑完一次前向（场景 1 的排序任务与等价性工具用；与逐拍推进数值完全一致）
+;; 一口气跑完一次前向（场景 1 的排序任务、等价性工具用；与逐相位推进数值一致）
+(define fw_step
+  (lambda ()
+    (define done #f)
+    (set! done #f)
+    (while (== done #f) { (set! done (fw_phase_step)) })
+    #t))
+
 (define llm_forward
   (lambda (token pos max_seq_len is_causal)
-    (define done 0)
     (fw_begin token pos max_seq_len is_causal)
-    (set! done 0)
-    (while (== done 0) { (set! done (fw_step)) })
+    (fw_step)
     blogits))
 
 ;; ------------------------------------------------------------------ 采样
@@ -804,6 +858,7 @@
     (set! gen_line "")
     (set! gen_n 0)
     (set! gen_fw_active 0)
+    (set! gen_new_token #f)
     (set! gen_t0 (System.timestamp))
     #t))
 
@@ -831,15 +886,39 @@
     (while (== done 0) { (set! done (fw_step)) })
     (gen_take)))
 
-;; 一拍：跑完当前 token 的前向并采样（返回 #t 表示生成结束）。
-;; 说明：前向在内部按层推进（fw_begin/fw_step），但**同一拍内跑完**——把一拍拆成
-;; 多层会让事件循环轮数暴涨，而上游运行时每 32 轮就要跑一轮兜底 GC，实测 59 个词元
-;; 从 20.4s 掉到 36.7s。触摸的"亚帧点按"由 hal_touch_wasm 的锁存兜底（见那里的注释），
-;; 因此长拍不会再丢「停止生成」的点按。
+;; 生成一拍：
+;;   · 开可视化（vis_on=1）——**一拍只推进一个相位**：浏览器只在 JS 任务之间合成上屏，
+;;     一拍里画多少次都只会看到最后一张；一相位一帧才能"每一步都确实画出来"（宁可慢）。
+;;   · 关可视化——同一拍内跑完整个 token（全速，≈2.8 token/s）。
+;; 返回 #t 表示生成结束。
 (define gen_fw_active 0)
+(define gen_new_token #f)    ; 本拍是否刚跑完一个 token（step_s2 据此决定整屏/局部重画）
 (define gen_tick
   (lambda ()
-    (gen_step)))
+    (define fin #f)
+    (if (== gen_fw_active 0)
+        {
+          (fw_begin gen_next gen_pos N_GEN 1)
+          (set! gen_fw_active 1)
+        }
+        #f)
+    (if (== vis_on 1)
+        ;; 一相位一帧（不跳帧）
+        (if (fw_phase_step)
+            {
+              (set! gen_fw_active 0)
+              (set! gen_new_token #t)
+              (set! fin (gen_take))
+            }
+            (set! fin #f))
+        ;; 全速：本拍内跑完全部相位
+        {
+          (fw_step)
+          (set! gen_fw_active 0)
+          (set! gen_new_token #t)
+          (set! fin (gen_take))
+        })
+    fin))
 
 ;; ---------------------------------------------------------------- 应用状态
 
@@ -1074,10 +1153,9 @@
     (dg_top)
     #t))
 
-;; 设置当前相位（fw_step 各阶段入口调用）。命中信号：
-;;   · 标脏（本拍的 draw_frame 会用最新相位重画框图）；
-;;   · 每 VIS_EVERY 个相位就地重绘一次框图并推屏——一拍可能长达几百毫秒（一个 token），
-;;     只靠拍末重画的话相位高亮根本看不出来（这正是"推理过程可视化"的意义）。
+;; 设置当前相位（fw_phase_step 各相位入口调用）：只记录"跑到哪儿了"。
+;; 绘制有两条路径：①开可视化时 step_s2 每相位调一次 draw_s2_phase（一帧一相位，不跳帧）；
+;; ②其余情况（关可视化 / token 完成 / 场景切换）由 draw_frame 整屏重画。
 (define vis_set
   (lambda (layer phase)
     (if (== vis_on 1)
@@ -1085,16 +1163,6 @@
             {
               (set! obs_layer layer)
               (set! obs_phase phase)
-              (set! dirty #t)
-              (set! obs_pokes (+ obs_pokes 1))
-              (if (== (mod obs_pokes VIS_EVERY) 0)
-                  (if (== loading 1)
-                      #f
-                      {
-                        (vis_draw)
-                        (Gfx.refresh)
-                      })
-                  #f)
             }
             #f)
         #f)))
@@ -1553,7 +1621,17 @@
                  }
                  #f)
              (if (== s2_stage 1)
-                 (if (gen_tick) (s2_finish 0) (set! dirty #t))
+                 {
+                   (set! gen_new_token #f)
+                   (if (gen_tick)
+                       (s2_finish 0)
+                       (if (== vis_on 1)
+                           ;; 一个相位 → 一帧（框图 + 状态行局部重绘并立刻推屏）
+                           (if gen_new_token
+                               (set! dirty #t)
+                               (draw_s2_phase))
+                           (set! dirty #t)))
+                 }
                  #f)
            })
           ((== s2_stage 2)
@@ -1720,6 +1798,45 @@
           (center_text "框图 关" TOGGLE_X (+ TOGGLE_Y 1) TOGGLE_W 170 176 190)
         })))
 
+;; 状态行（生成中/完成）——单独抽出来，逐相位重绘时只重画这一行
+(define draw_s2_status
+  (lambda ()
+    (define line "")
+    (define ph "")
+    (Gfx.fill_rect TXT_X 172 (- SW TXT_X) 20 14 16 22)
+    (cond ((== s2_stage 1)
+           {
+             (set! line (String.concat "推理中 " (String.atom_to_string gen_pos)))
+             (set! line (String.concat line "/"))
+             (set! line (String.concat line (String.atom_to_string N_GEN)))
+             (if (== vis_on 1)
+                 {
+                   (set! ph (ph_name obs_phase))
+                   (set! line (String.concat line " · "))
+                   (set! line (String.concat line ph))
+                   (set! line (String.concat line " "))
+                   (set! line (String.concat line (String.atom_to_string obs_layer)))
+                   (set! line (String.concat line "/"))
+                   (set! line (String.concat line (String.atom_to_string n_layer)))
+                 }
+                 #f)
+             (Gfx.draw_text line TXT_X 176 255 210 120)
+           })
+          ((== s2_stage 2)
+           {
+             (set! line (String.concat (if (== s2_stopped 1) "已停止 · TPS " "TPS ")
+                                       (f4 s2_tps)))
+             (set! line (String.concat line " · "))
+             (set! line (String.concat line (String.atom_to_string gen_n)))
+             (set! line (String.concat line " 词元 · "))
+             (set! line (String.concat line (String.atom_to_string
+                                              (- (System.timestamp) gen_t0))))
+             (set! line (String.concat line " ms"))
+             (Gfx.draw_text line TXT_X 176 255 232 120)
+           })
+          (else #f))))
+
+;; 场景 2 的整屏绘制（不含框图本体：框图由 vis_draw 画）
 (define draw_scenario2
   (lambda ()
     (define ls (cdr '(0)))
@@ -1728,7 +1845,6 @@
     (define i 0)
     (define from 0)
     (define y TXT_Y)
-    (define line "")
     (if (== vis_on 1)
         {
           (set! tx TXT_X)
@@ -1740,7 +1856,6 @@
           (set! tu WRAPU)
         })
     (draw_vis_toggle)
-    ;; 信息行：种子 / 提示词（可视化开时放右列，关时占满整行）
     (Gfx.draw_text (String.concat "种子 " (String.concat (String.atom_to_string s2_seed)
                     (String.concat " · " s2_prompt))) tx BODY_Y 150 190 160)
     (if (== s2_stage 0)
@@ -1755,33 +1870,19 @@
       (set! y (+ y TXT_STEP))
       (set! i (+ i 1))
     })
-    ;; 底部状态（右列）
-    (cond ((== s2_stage 1)
-           {
-             (set! line (String.concat "推理中 " (String.concat (String.atom_to_string gen_pos)
-                             (String.concat "/" (String.atom_to_string N_GEN)))))
-             (if (== vis_on 1)
-                 (set! line (String.concat line (String.concat " · "
-                                 (String.concat (ph_name obs_phase)
-                                 (String.concat " " (String.concat (String.atom_to_string obs_layer)
-                                 (String.concat "/" (String.atom_to_string n_layer))))))))
-                 #f)
-             (Gfx.draw_text line tx 176 255 210 120)
-           })
-          ((== s2_stage 2)
-           {
-             (set! line (String.concat (if (== s2_stopped 1) "已停止 · TPS " "TPS ")
-                          (String.concat (f4 s2_tps)
-                             (String.concat " · " (String.concat (String.atom_to_string gen_n)
-                             (String.concat " 词元 · " (String.concat (String.atom_to_string
-                               (- (System.timestamp) gen_t0)) " ms")))))))
-             (Gfx.draw_text line tx 176 255 232 120)
-           })
-          (else #f))
+    (draw_s2_status)
     (if (== s2_stage 1)
         (draw_btn STOP_X STOP_Y STOP_W STOP_H "停止生成" #f)
         #f)
     (draw_btn REDO_X REDO_Y REDO_W REDO_H "重来" #t)))
+
+;; **逐相位**刷新：只重画左列框图 + 右列状态行，然后立刻推屏。
+;; 一帧一个相位（step_s2 每个相位调一次），因此浏览器一定把每一步都合成上屏。
+(define draw_s2_phase
+  (lambda ()
+    (vis_draw)
+    (draw_s2_status)
+    (Gfx.refresh)))
 
 ;; 载入中的覆盖面板（进度条按「块 + 当前块已喂比例」连续推进）
 (define draw_loading
@@ -1848,6 +1949,7 @@
               (if (in_rect tap_x tap_y TOGGLE_X TOGGLE_Y TOGGLE_W TOGGLE_H)
                   {
                     (set! vis_on (if (== vis_on 1) 0 1))
+                    (rearm_tick)
                     (set! dirty #t)
                     (log (String.concat "[ui] 框图 " (if (== vis_on 1) "开" "关")))
                   }
@@ -1865,9 +1967,18 @@
     (set! tap_new #f)
     (if dirty (draw_frame) #f)))
 
+;; 节拍重挂：开可视化用 16ms（一相位一帧才跟得上），关可视化用 40ms
+;; （一拍一 token 的长计算之间给浏览器/输入留出空档，否则 JS 事件会被饿着）
+(define tick_timer 0)
+(define rearm_tick
+  (lambda ()
+    (if (> tick_timer 0) (System.clear_interval tick_timer) #f)
+    (set! tick_timer (System.set_interval (if (== vis_on 1) TICK_MS_VIS TICK_MS) tick))
+    #t))
+
 ;; 启动
 (rng_seed (+ (Time.utc_sod) 1))
 (log "[ui] 灵机 LLM 测试台启动（纯 Scheme 库）")
 (EX.install_with draw_frame)
 (draw_frame)
-(System.set_interval TICK_MS tick)
+(set! tick_timer (System.set_interval TICK_MS tick))
