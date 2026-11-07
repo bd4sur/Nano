@@ -88,19 +88,31 @@
 (define AGAIN_W 100)
 (define AGAIN_H 22)
 
-;; 场景 2：流式文本区与底部
-(define TXT_Y 58)
+;; 场景 2：左侧「模型框图（推理过程可视化）」+ 右侧流式文本
+(define VIS_X 2)                         ; 可视化区（左列）
+(define VIS_Y 42)
+(define VIS_W 146)
+(define VIS_H 190)
+(define DG_X 2)                          ; 框图左上角（内部坐标原点）
+(define DG_Y 44)
+(define TOGGLE_X 170)                    ; 标题栏里的「框图 显示/隐藏」开关
+(define TOGGLE_Y 2)
+(define TOGGLE_W 96)
+(define TOGGLE_H 14)
+(define TXT_X 152)                       ; 右侧文字列起点（可视化开时）
+(define TXT_X_FULL 10)                   ; 可视化关时（占满整行）
+(define TXT_Y 56)
 (define TXT_STEP 13)
 (define TXT_LINES 9)
-(define STOP_X 134)                      ; 「停止生成」按钮（只生成中显示）
+(define STOP_X 152)                      ; 「停止生成」按钮（只生成中显示）
 (define STOP_Y 196)
-(define STOP_W 104)
+(define STOP_W 80)
 (define STOP_H 22)
-(define REDO_X 246)                      ; 「重来」按钮
+(define REDO_X 238)                      ; 「重来」按钮
 (define REDO_Y 196)
-(define REDO_W 68)
+(define REDO_W 80)
 (define REDO_H 22)
-(define WRAPU 50)                        ; 每行最多多少个「半角单位」
+(define WRAPU 51)                        ; 每行最多多少个「半角单位」（可视化关时）
 
 ;; ---------------------------------------------------------------- 日志
 
@@ -388,11 +400,38 @@
       (set! h (+ h 1))
     })))
 
-;; 逐 token 前向传播 → logits（blogits，原地复用）
+;; 前向传播：**可以跨拍推进**（每拍跑一层）。这样一拍的耗时被压到 ~1/8 个 token
+;; （wasm 上 ≈46ms），触摸（停止/重来/开关）与画面刷新都保持灵敏；顺序与逐层跑完
+;; 完全相同，数值不变。
+;;
 ;;   is_causal=#t：因果注意力（自回归生成）；#f：全局注意力（序列生成/排序）
-(define llm_forward
+(define fw_pos 0)
+(define fw_maxlen 0)
+(define fw_causal 0)
+(define fw_layer 0)
+(define fw_attn_range 1)
+
+;; 开始一次前向：写入 token embedding，复位层号（相位可视化从 EMBED 起）
+(define fw_begin
   (lambda (token pos max_seq_len is_causal)
-    (define layer 0)
+    (define i 0)
+    (define emb_base (* token n_embd))
+    (set! fw_pos pos)
+    (set! fw_maxlen max_seq_len)
+    (set! fw_causal is_causal)
+    (set! fw_layer 0)
+    (set! fw_attn_range (if is_causal (+ pos 1) max_seq_len))
+    (vis_set -1 PH_EMBED)
+    (set! i 0)
+    (while (< i n_embd) {
+      (set_item! bx i (get_item p_emb (+ emb_base i)))
+      (set! i (+ i 1))
+    })
+    #t))
+
+;; 推进一步：跑一层；全部层跑完后做 final norm + 分类器（出 logits），返回 1
+(define fw_step
+  (lambda ()
     (define i 0)
     (define h 0)
     (define m 0)
@@ -409,80 +448,100 @@
     (define att_head_offset 0)
     (define xba_head_offset 0)
     (define score 0)
-    (define attn_range (if is_causal (+ pos 1) max_seq_len))
-    (define emb_base (* token n_embd))
-    (set! i 0)
-    (while (< i n_embd) {
-      (set_item! bx i (get_item p_emb (+ emb_base i)))
-      (set! i (+ i 1))
-    })
-    (set! layer 0)
-    (while (< layer n_layer) {
-      (b_rms_norm bxb bx p_rms_attn (* layer n_embd) n_embd)
-      (set! k (get_item k_cache layer))
-      (set! v (get_item v_cache layer))
-      (set! wq_offset  (* layer (* n_embd n_embd)))
-      (set! wkv_offset (* layer (* n_embd kv_dim)))
-      (set! kv_pos_offset (* pos kv_dim))
-      (LLM.matmul bq  bxb p_wq 0             wq_offset  n_embd n_embd)
-      (LLM.matmul k   bxb p_wk kv_pos_offset wkv_offset n_embd kv_dim)
-      (LLM.matmul v   bxb p_wv kv_pos_offset wkv_offset n_embd kv_dim)
-      (b_rope bq k pos kv_pos_offset)
-      (set! h 0)
-      (while (< h n_head) {
-        (set! m (Math.floor (/ h kv_mul)))
-        (set! q_head_offset (* h head_dim))
-        (set! att_head_offset (* h block_size))
-        (set! t 0)
-        (while (< t attn_range) {
-          (set! k_head_offset (+ (* t kv_dim) (* m head_dim)))
-          (set! score 0)
+    (define layer fw_layer)
+    (define pos fw_pos)
+    (define attn_range fw_attn_range)
+    (if (>= layer n_layer)
+        {
+          (vis_set n_layer PH_FINAL_NORM)
+          (b_rms_norm bx bx p_rms_final 0 n_embd)
+          (vis_set n_layer PH_CLASSIFY)
+          (LLM.matmul blogits bx p_cls 0 0 n_embd vocab_size)
+          (if (== vis_on 1) (top6_scan) #f)
+          (vis_set n_layer PH_SAMPLE)
+          1
+        }
+        {
+          (vis_set layer PH_ATTN_NORM)
+          (b_rms_norm bxb bx p_rms_attn (* layer n_embd) n_embd)
+          (set! k (get_item k_cache layer))
+          (set! v (get_item v_cache layer))
+          (set! wq_offset  (* layer (* n_embd n_embd)))
+          (set! wkv_offset (* layer (* n_embd kv_dim)))
+          (set! kv_pos_offset (* pos kv_dim))
+          (vis_set layer PH_QKV)
+          (LLM.matmul bq  bxb p_wq 0             wq_offset  n_embd n_embd)
+          (LLM.matmul k   bxb p_wk kv_pos_offset wkv_offset n_embd kv_dim)
+          (LLM.matmul v   bxb p_wv kv_pos_offset wkv_offset n_embd kv_dim)
+          (vis_set layer PH_QK_ROPE)
+          (b_rope bq k pos kv_pos_offset)
+          (vis_set layer PH_MHA)
+          (set! h 0)
+          (while (< h n_head) {
+            (set! m (Math.floor (/ h kv_mul)))
+            (set! q_head_offset (* h head_dim))
+            (set! att_head_offset (* h block_size))
+            (set! t 0)
+            (while (< t attn_range) {
+              (set! k_head_offset (+ (* t kv_dim) (* m head_dim)))
+              (set! score 0)
+              (set! i 0)
+              (while (< i head_dim) {
+                (set! score (+ score (* (get_item bq (+ q_head_offset i))
+                                        (get_item k (+ k_head_offset i)))))
+                (set! i (+ i 1))
+              })
+              (set_item! batt (+ att_head_offset t) (/ score (Math.sqrt head_dim)))
+              (set! t (+ t 1))
+            })
+            (b_softmax batt att_head_offset attn_range)
+            (set! xba_head_offset (* h head_dim))
+            (set! i 0)
+            (while (< i head_dim) {
+              (set! score 0)
+              (set! t 0)
+              (while (< t attn_range) {
+                (set! v_head_offset (+ (* t kv_dim) (* m head_dim)))
+                (set! score (+ score (* (get_item batt (+ att_head_offset t))
+                                        (get_item v (+ v_head_offset i)))))
+                (set! t (+ t 1))
+              })
+              (set_item! bxba (+ xba_head_offset i) score)
+              (set! i (+ i 1))
+            })
+            (set! h (+ h 1))
+          })
+          (vis_set layer PH_O)
+          (set! wo_offset (* layer (* n_embd n_embd)))
+          (LLM.matmul bxb2 bxba p_wo 0 wo_offset n_embd n_embd)
+          (b_accum bx bxb2 n_embd)
+          (vis_set layer PH_FFN_NORM)
+          (b_rms_norm bxb bx p_rms_ffn (* layer n_embd) n_embd)
+          (vis_set layer PH_W1W3)
+          (LLM.matmul bhb  bxb p_w1 0 (* layer (* n_hidden n_embd)) n_embd n_hidden)
+          (LLM.matmul bhb2 bxb p_w3 0 (* layer (* n_hidden n_embd)) n_embd n_hidden)
           (set! i 0)
-          (while (< i head_dim) {
-            (set! score (+ score (* (get_item bq (+ q_head_offset i))
-                                    (get_item k (+ k_head_offset i)))))
+          (while (< i n_hidden) {
+            (set! score (get_item bhb i))
+            (set! score (* score (/ 1.0 (+ 1.0 (Math.exp (- 0 score))))))
+            (set! score (* score (get_item bhb2 i)))
+            (set_item! bhb i score)
             (set! i (+ i 1))
           })
-          (set_item! batt (+ att_head_offset t) (/ score (Math.sqrt head_dim)))
-          (set! t (+ t 1))
-        })
-        (b_softmax batt att_head_offset attn_range)
-        (set! xba_head_offset (* h head_dim))
-        (set! i 0)
-        (while (< i head_dim) {
-          (set! score 0)
-          (set! t 0)
-          (while (< t attn_range) {
-            (set! v_head_offset (+ (* t kv_dim) (* m head_dim)))
-            (set! score (+ score (* (get_item batt (+ att_head_offset t))
-                                    (get_item v (+ v_head_offset i)))))
-            (set! t (+ t 1))
-          })
-          (set_item! bxba (+ xba_head_offset i) score)
-          (set! i (+ i 1))
-        })
-        (set! h (+ h 1))
-      })
-      (set! wo_offset (* layer (* n_embd n_embd)))
-      (LLM.matmul bxb2 bxba p_wo 0 wo_offset n_embd n_embd)
-      (b_accum bx bxb2 n_embd)
-      (b_rms_norm bxb bx p_rms_ffn (* layer n_embd) n_embd)
-      (LLM.matmul bhb  bxb p_w1 0 (* layer (* n_hidden n_embd)) n_embd n_hidden)
-      (LLM.matmul bhb2 bxb p_w3 0 (* layer (* n_hidden n_embd)) n_embd n_hidden)
-      (set! i 0)
-      (while (< i n_hidden) {
-        (set! score (get_item bhb i))
-        (set! score (* score (/ 1.0 (+ 1.0 (Math.exp (- 0 score))))))
-        (set! score (* score (get_item bhb2 i)))
-        (set_item! bhb i score)
-        (set! i (+ i 1))
-      })
-      (LLM.matmul bxb bhb p_w2 0 (* layer (* n_embd n_hidden)) n_hidden n_embd)
-      (b_accum bx bxb n_embd)
-      (set! layer (+ layer 1))
-    })
-    (b_rms_norm bx bx p_rms_final 0 n_embd)
-    (LLM.matmul blogits bx p_cls 0 0 n_embd vocab_size)
+          (vis_set layer PH_W2)
+          (LLM.matmul bxb bhb p_w2 0 (* layer (* n_embd n_hidden)) n_hidden n_embd)
+          (b_accum bx bxb n_embd)
+          (set! fw_layer (+ layer 1))
+          0
+        })))
+
+;; 整体跑完一次前向（场景 1 的排序任务与等价性工具用；与逐拍推进数值完全一致）
+(define llm_forward
+  (lambda (token pos max_seq_len is_causal)
+    (define done 0)
+    (fw_begin token pos max_seq_len is_causal)
+    (set! done 0)
+    (while (== done 0) { (set! done (fw_step)) })
     blogits))
 
 ;; ------------------------------------------------------------------ 采样
@@ -744,25 +803,43 @@
     (set! gen_next (get_item gen_ids 0))
     (set! gen_line "")
     (set! gen_n 0)
+    (set! gen_fw_active 0)
     (set! gen_t0 (System.timestamp))
     #t))
 
-;; 一步：前向当前 token，然后或取下一个提示词 token，或采样（上游 generate 同构）
-(define gen_step
+;; 一个 token 的收尾：或取下一个提示词 token，或采样（上游 generate 同构）
+(define gen_take
   (lambda ()
-    (define logits #f)
     (define tk "")
-    (set! logits (llm_forward gen_next gen_pos N_GEN #t))
     (if (< gen_pos (length gen_ids))
         (set! gen_next (get_item gen_ids gen_pos))
         {
-          (set! gen_next (sample_token logits vocab_size T_GEN))
+          (set! gen_next (sample_token blogits vocab_size T_GEN))
           (set! gen_n (+ gen_n 1))
         })
     (set! tk (LLM.decode gen_next))
     (set! gen_line (String.concat gen_line tk))
     (set! gen_pos (+ gen_pos 1))
     (if (String.equals tk "<|eos|>") #t (if (>= gen_pos N_GEN) #t #f))))
+
+;; 整 token 跑完（等价性工具/回归用；与逐拍推进数值一致）
+(define gen_step
+  (lambda ()
+    (define done 0)
+    (fw_begin gen_next gen_pos N_GEN 1)
+    (set! done 0)
+    (while (== done 0) { (set! done (fw_step)) })
+    (gen_take)))
+
+;; 一拍：跑完当前 token 的前向并采样（返回 #t 表示生成结束）。
+;; 说明：前向在内部按层推进（fw_begin/fw_step），但**同一拍内跑完**——把一拍拆成
+;; 多层会让事件循环轮数暴涨，而上游运行时每 32 轮就要跑一轮兜底 GC，实测 59 个词元
+;; 从 20.4s 掉到 36.7s。触摸的"亚帧点按"由 hal_touch_wasm 的锁存兜底（见那里的注释），
+;; 因此长拍不会再丢「停止生成」的点按。
+(define gen_fw_active 0)
+(define gen_tick
+  (lambda ()
+    (gen_step)))
 
 ;; ---------------------------------------------------------------- 应用状态
 
@@ -814,6 +891,272 @@
 (define s2_seed 0)
 (define s2_tps 0.0)
 (define s2_stopped 0)        ; 1=用户中途点了「停止生成」
+
+;; ---------------- 可视化状态（模型框图 + 相位高亮 + 候选词元）----------------
+;; 相位编号与 infer.h 的 NANO_LLM_PHASE_* 对齐（上游 ui_llm.c 的框图按同一套相位高亮）
+(define PH_EMBED 1)
+(define PH_ATTN_NORM 2)
+(define PH_QKV 3)
+(define PH_QK_ROPE 4)
+(define PH_MHA 5)
+(define PH_O 6)
+(define PH_FFN_NORM 7)
+(define PH_W1W3 8)
+(define PH_W2 9)
+(define PH_FINAL_NORM 10)
+(define PH_CLASSIFY 11)
+(define PH_SAMPLE 12)
+
+(define vis_on 1)            ; 1=显示框图（标题栏开关切换）
+(define obs_layer 0)         ; 当前层（-1=embedding，n_layer=分类器）
+(define obs_phase PH_EMBED)  ; 当前相位
+(define obs_pokes 0)         ; 相位推进计数（用于节流重绘）
+(define VIS_EVERY 6)         ; 每推进 N 个相位重绘一次框图（wasm 上逐相位推屏太贵）
+(define obs_ids (cdr '(0)))  ; top-6 候选词元 id
+(define obs_vals (cdr '(0))) ; top-6 候选词元 logits
+(define obs_top (cdr '(0)))  ; top-6 候选词元文本
+
+;; ---------------------------------- 场景 2 可视化：模型框图 + 推理过程（参照 ui_llm.c）
+;;
+;; 上游 ui_llm.c 的 ui_app_llm_model_diagram_draw 在推理过程中由 llm_observation 钩子
+;; 反复重画：①左侧是 Nano 变换块的结构框图（残差 ×2、Attn Norm、Q/K/V、RoPE、Q*K、
+;; Mask→softmax→A*V、O、FFN Norm、W1/W3/SiLU、⊗、W2），②中间一列层条（当前层青色），
+;; ③右侧 top-6 候选词元。相位（NANO_LLM_PHASE_*）命中哪个部件就把哪个部件点亮成绿色。
+;;
+;; 本 App 的框图是同一套拓扑的**紧凑版**（纵向按 4/5 压缩以塞进 146x190 的左列），
+;; 数据自下而上流动（输入端在最下方，与上游一致）；相位高亮由 llm_forward 在各阶段
+;; 入口调用 (vis_set …) 驱动，逐相位推屏太贵，故每 VIS_EVERY 个相位重绘一次。
+
+;; 框图内部坐标 → 屏幕坐标（纵向 4/5 压缩）
+(define dgx (lambda (dx) (+ DG_X dx)))
+(define dgy (lambda (dy) (+ DG_Y (Math.floor (/ (* dy 4) 5)))))
+(define dgh (lambda (h) (Math.floor (/ (* h 4) 5))))
+
+(define dg_line
+  (lambda (ax ay bx by r g b)
+    (Gfx.draw_line (dgx ax) (dgy ay) (dgx bx) (dgy by) r g b)))
+
+;; 30x14 的方框（内含 12px 文字居中）；active=当前相位命中 → 绿色填充 + 白字
+(define dg_box
+  (lambda (dx dy label phase)
+    (define x (dgx dx))
+    (define y (dgy dy))
+    (define hh (dgh 14))
+    (define u (str_units label))
+    (define active (== obs_phase phase))
+    (if active
+        {
+          (Gfx.fill_rect x y 30 hh 0 150 60)
+          (Gfx.draw_rect x y 30 hh 130 255 150)
+        }
+        {
+          (Gfx.fill_rect x y 30 hh 48 50 62)
+          (Gfx.draw_rect x y 30 hh 86 90 104)
+        })
+    (Gfx.draw_text label (+ x (Math.floor (/ (- 30 (* u 6)) 2)))
+                   (+ y (Math.floor (/ (- hh 12) 2)))
+                   (if active 255 255 255) (if active 255 255 255) 255)))
+
+;; 圆 + 叉（⊗：Hadamard / Q*K / A*V）
+(define dg_circle
+  (lambda (cx cy phase)
+    (define active (== obs_phase phase))
+    (define x (dgx cx))
+    (define y (dgy cy))
+    (if active
+        (Gfx.fill_circle x y 6 0 150 60)
+        (Gfx.fill_circle x y 6 48 50 62))
+    (Gfx.draw_line (- x 4) (- y 4) (+ x 4) (+ y 4) 20 22 30)
+    (Gfx.draw_line (+ x 4) (- y 4) (- x 4) (+ y 4) 20 22 30)))
+
+;; 层条（n_layer + 2：顶层=分类器，底层=embedding；当前层青色）
+(define dg_layers
+  (lambda ()
+    (define n (+ n_layer 2))
+    (define span (- (+ DG_Y 178) DG_Y))
+    (define lh (Math.floor (/ span (* 2 n))))
+    (define dy (Math.floor (/ (- span lh) (- n 1))))
+    (define y DG_Y)
+    (define ll (- n 1))
+    (while (> ll -1) {
+      (if (or (and (== obs_layer -1) (== ll 0))
+              (and (== obs_layer n_layer) (== ll (- n 1)))
+              (== ll (+ obs_layer 1)))
+          {
+            (Gfx.fill_rect (+ DG_X 120) y 10 lh 0 220 220)
+          }
+          (Gfx.fill_rect (+ DG_X 120) y 10 lh 48 50 62))
+      (set! y (+ y dy))
+      (set! ll (- ll 1))
+    })))
+
+;; top-6 候选词元（右侧小列）
+(define dg_top
+  (lambda ()
+    (define i 0)
+    (define s "")
+    (define y (+ DG_Y 58))
+    (while (< i (length obs_top)) {
+      (set! s (get_item obs_top i))
+      (if (> (String.length s) 1) (set! s (String.slice s 0 1)) #f)
+      (Gfx.draw_text s (+ DG_X 134) y 255 230 90)
+      (set! y (+ y 13))
+      (set! i (+ i 1))
+    })))
+
+;; 相位名（右侧状态行用）
+(define ph_name
+  (lambda (p)
+    (cond ((== p PH_EMBED) "embed")
+          ((== p PH_ATTN_NORM) "attn norm")
+          ((== p PH_QKV) "q/k/v")
+          ((== p PH_QK_ROPE) "rope")
+          ((== p PH_MHA) "attn")
+          ((== p PH_O) "wo")
+          ((== p PH_FFN_NORM) "ffn norm")
+          ((== p PH_W1W3) "w1/w3")
+          ((== p PH_W2) "w2")
+          ((== p PH_FINAL_NORM) "final norm")
+          ((== p PH_CLASSIFY) "classify")
+          ((== p PH_SAMPLE) "sample")
+          (else ""))))
+
+;; 画整张框图（先清左列）
+(define vis_draw
+  (lambda ()
+    (Gfx.fill_rect VIS_X VIS_Y VIS_W VIS_H 14 16 22)
+    ;; ---- 连线（自下而上：Attn Norm → QKV → RoPE → Q*K → A*V → O → Norm → W1/W3 → ⊗ → W2）----
+    (dg_line 55 14 55 50 150 150 150)
+    (dg_line 15 50 95 50 150 150 150)
+    (dg_line 15 79 95 79 150 150 150)
+    (dg_line 15 50 15 79 150 150 150)
+    (dg_line 95 50 95 79 150 150 150)
+    (dg_line 55 79 55 133 150 150 150)
+    (dg_line 35 133 95 133 150 150 150)
+    (dg_line 35 133 35 160 150 150 150)
+    (dg_line 95 133 95 203 150 150 150)
+    (dg_line 15 160 55 160 150 150 150)
+    (dg_line 15 203 15 160 150 150 150)
+    (dg_line 55 160 55 227 150 150 150)
+    (dg_line 15 203 95 203 150 150 150)
+    ;; 残差支路（X1 / X2）
+    (dg_line 36 103 55 103 150 150 150)
+    (Gfx.draw_text "X1" (dgx 22) (- (dgy 103) 6) 150 150 150)
+    (dg_line 36 20 55 20 150 150 150)
+    (Gfx.draw_text "X2" (dgx 22) (- (dgy 20) 6) 150 150 150)
+    ;; ---- 部件 ----
+    (dg_box 40 25 "W2" PH_W2)
+    (dg_circle 55 50 PH_W2)              ; FFN 的 ⊗（与 W2 同相位，同上游）
+    (dg_box 0 61 "W1" PH_W1W3)
+    (dg_box 80 43 "SiLU" PH_W1W3)
+    (dg_box 80 61 "W3" PH_W1W3)
+    (dg_box 40 83 "Norm" PH_FFN_NORM)
+    (dg_box 40 109 "O" PH_O)
+    ;; Mask（12x12 小方块 + 斜线）与 A*V / Q*K
+    (if (== obs_phase PH_MHA)
+        {
+          (Gfx.fill_rect (dgx 29) (dgy 138) 12 (dgh 12) 0 150 60)
+        }
+        {
+          (Gfx.fill_rect (dgx 29) (dgy 138) 12 (dgh 12) 48 50 62)
+        })
+    (Gfx.draw_line (dgx 29) (dgy 138) (+ (dgx 29) 11) (+ (dgy 138) (dgh 12)) 20 22 30)
+    (dg_circle 55 133 PH_MHA)            ; A*V
+    (dg_circle 35 160 PH_MHA)            ; Q*K
+    (dg_box 0 168 "RoPE" PH_QK_ROPE)
+    (dg_box 40 168 "RoPE" PH_QK_ROPE)
+    (dg_box 0 185 "Q" PH_QKV)
+    (dg_box 40 185 "K" PH_QKV)
+    (dg_box 80 185 "V" PH_QKV)
+    (dg_box 40 207 "Norm" PH_ATTN_NORM)  ; Attn Norm（数据入口）
+    ;; ---- 层条 / 候选 / 相位名 ----
+    (dg_layers)
+    (dg_top)
+    #t))
+
+;; 设置当前相位（fw_step 各阶段入口调用）。命中信号：
+;;   · 标脏（本拍的 draw_frame 会用最新相位重画框图）；
+;;   · 每 VIS_EVERY 个相位就地重绘一次框图并推屏——一拍可能长达几百毫秒（一个 token），
+;;     只靠拍末重画的话相位高亮根本看不出来（这正是"推理过程可视化"的意义）。
+(define vis_set
+  (lambda (layer phase)
+    (if (== vis_on 1)
+        (if (== scenario SC_GEN)
+            {
+              (set! obs_layer layer)
+              (set! obs_phase phase)
+              (set! dirty #t)
+              (set! obs_pokes (+ obs_pokes 1))
+              (if (== (mod obs_pokes VIS_EVERY) 0)
+                  (if (== loading 1)
+                      #f
+                      {
+                        (vis_draw)
+                        (Gfx.refresh)
+                      })
+                  #f)
+            }
+            #f)
+        #f)))
+
+;; 单遍扫描 logits，维护 top-6 候选（插入排序；每 token 一次，代价 O(vocab)）
+(define top6_add
+  (lambda (id val)
+    (define nv (cdr '(0)))
+    (define ni (cdr '(0)))
+    (define i 0)
+    (define placed #f)
+    (while (< i (length obs_vals)) {
+      (if placed
+          {
+            (push nv (get_item obs_vals i))
+            (push ni (get_item obs_ids i))
+          }
+          (if (> val (get_item obs_vals i))
+              {
+                (push nv val)
+                (push ni id)
+                (set! placed #t)
+              }
+              {
+                (push nv (get_item obs_vals i))
+                (push ni (get_item obs_ids i))
+              }))
+      (set! i (+ i 1))
+    })
+    (if placed
+        #f
+        {
+          (push nv val)
+          (push ni id)
+        })
+    (while (> (length nv) 6) (pop nv))
+    (while (> (length ni) 6) (pop ni))
+    (set! obs_vals nv)
+    (set! obs_ids ni)))
+
+(define top6_scan
+  (lambda ()
+    (define i 0)
+    (define v 0)
+    (define n 0)
+    (set! obs_vals (cdr '(0)))
+    (set! obs_ids (cdr '(0)))
+    (set! i 0)
+    (while (< i vocab_size) {
+      (set! v (get_item blogits i))
+      (set! n (length obs_vals))
+      (if (or (< n 6) (> v (get_item obs_vals (- n 1))))
+          (top6_add i v)
+          #f)
+      (set! i (+ i 1))
+    })
+    (set! obs_top (cdr '(0)))
+    (set! i 0)
+    (while (< i (length obs_ids)) {
+      (push obs_top (LLM.decode (get_item obs_ids i)))
+      (set! i (+ i 1))
+    })))
 
 ;; ---------------------------------------------------------------- 触屏辅助
 
@@ -1210,7 +1553,7 @@
                  }
                  #f)
              (if (== s2_stage 1)
-                 (if (gen_step) (s2_finish 0) (set! dirty #t))
+                 (if (gen_tick) (s2_finish 0) (set! dirty #t))
                  #f)
            })
           ((== s2_stage 2)
@@ -1223,8 +1566,8 @@
 
 ;; ---------------------------------------------------------------- 折行与绘制
 
-(define wrap_lines
-  (lambda (s)
+(define wrap_lines_n
+  (lambda (s maxu)
     (define out (cdr '(0)))
     (define n (String.length s))
     (define i 0)
@@ -1235,7 +1578,7 @@
     (while (< i n) {
       (set! code (String.charCodeAt i s))
       (set! w (if (is_wide code) 2 1))
-      (if (> (+ u w) WRAPU)
+      (if (> (+ u w) maxu)
           {
             (push out (String.slice s start i))
             (set! start i)
@@ -1247,6 +1590,9 @@
     })
     (if (< start n) (push out (String.slice s start n)) #f)
     out))
+
+;; 默认宽度（可视化关闭 = 整行）
+(define wrap_lines (lambda (s) (wrap_lines_n s WRAPU)))
 
 ;; 12px 字一行（在 (x,y,w) 内居中）
 (define center_text
@@ -1275,7 +1621,7 @@
   (lambda ()
     (Gfx.set_font FONT_S)
     (Gfx.fill_rect 0 0 SW HEAD_H 30 34 48)
-    (Gfx.draw_text "灵机 LLM 测试台（纯 Scheme）" 6 2 226 232 242)
+    (Gfx.draw_text "灵机 LLM 测试台（Scheme）" 6 2 226 232 242)
     (EX.draw_button)
     (draw_btn TAB1_X TAB_Y TAB_W TAB_H "场景1 · LLM 排序" (== scenario SC_SORT))
     (draw_btn TAB2_X TAB_Y TAB_W TAB_H "场景2 · 可视化生成" (== scenario SC_GEN))))
@@ -1359,43 +1705,77 @@
     (draw_slots)
     (if (== s1_stage 0) (draw_keypad) (draw_result))))
 
-;; 场景 2：流式文本 + 速度
+;; 场景 2：左「模型框图」+ 右「流式文本」+ 标题栏「框图」开关
+(define draw_vis_toggle
+  (lambda ()
+    (if (== vis_on 1)
+        {
+          (Gfx.fill_rect TOGGLE_X TOGGLE_Y TOGGLE_W TOGGLE_H 40 90 70)
+          (Gfx.draw_rect TOGGLE_X TOGGLE_Y TOGGLE_W TOGGLE_H 120 210 160)
+          (center_text "框图 开" TOGGLE_X (+ TOGGLE_Y 1) TOGGLE_W 200 255 210)
+        }
+        {
+          (Gfx.fill_rect TOGGLE_X TOGGLE_Y TOGGLE_W TOGGLE_H 40 44 56)
+          (Gfx.draw_rect TOGGLE_X TOGGLE_Y TOGGLE_W TOGGLE_H 84 88 102)
+          (center_text "框图 关" TOGGLE_X (+ TOGGLE_Y 1) TOGGLE_W 170 176 190)
+        })))
+
 (define draw_scenario2
   (lambda ()
-    (define ls (wrap_lines gen_line))
+    (define ls (cdr '(0)))
+    (define tx 0)
+    (define tu 0)
     (define i 0)
     (define from 0)
     (define y TXT_Y)
     (define line "")
+    (if (== vis_on 1)
+        {
+          (set! tx TXT_X)
+          (set! tu (Math.floor (/ (- SW (+ TXT_X 8)) 6)))   ; 右列可用半角单位数
+          (vis_draw)
+        }
+        {
+          (set! tx TXT_X_FULL)
+          (set! tu WRAPU)
+        })
+    (draw_vis_toggle)
+    ;; 信息行：种子 / 提示词（可视化开时放右列，关时占满整行）
     (Gfx.draw_text (String.concat "种子 " (String.concat (String.atom_to_string s2_seed)
-                    (String.concat "   提示 " s2_prompt))) 10 BODY_Y 150 190 160)
+                    (String.concat " · " s2_prompt))) tx BODY_Y 150 190 160)
     (if (== s2_stage 0)
-        (Gfx.draw_text "准备中…" 10 (+ BODY_Y 16) 200 200 200)
+        (Gfx.draw_text "准备中…" tx (+ BODY_Y 14) 200 200 200)
         #f)
-    ;; 只显示最后 TXT_LINES 行
+    ;; 流式文本：只显示最后 TXT_LINES 行
+    (set! ls (wrap_lines_n gen_line tu))
     (if (> (length ls) TXT_LINES) (set! from (- (length ls) TXT_LINES)) #f)
     (set! i from)
     (while (< i (length ls)) {
-      (Gfx.draw_text (get_item ls i) 10 y 232 236 226)
+      (Gfx.draw_text (get_item ls i) tx y 232 236 226)
       (set! y (+ y TXT_STEP))
       (set! i (+ i 1))
     })
-    ;; 底部状态
+    ;; 底部状态（右列）
     (cond ((== s2_stage 1)
            {
              (set! line (String.concat "推理中 " (String.concat (String.atom_to_string gen_pos)
-                             (String.concat "/" (String.concat (String.atom_to_string N_GEN)
-                             " 词元（温度采样，逐字流式）")))))
-             (Gfx.draw_text line 10 178 255 210 120)
+                             (String.concat "/" (String.atom_to_string N_GEN)))))
+             (if (== vis_on 1)
+                 (set! line (String.concat line (String.concat " · "
+                                 (String.concat (ph_name obs_phase)
+                                 (String.concat " " (String.concat (String.atom_to_string obs_layer)
+                                 (String.concat "/" (String.atom_to_string n_layer))))))))
+                 #f)
+             (Gfx.draw_text line tx 176 255 210 120)
            })
           ((== s2_stage 2)
            {
              (set! line (String.concat (if (== s2_stopped 1) "已停止 · TPS " "TPS ")
                           (String.concat (f4 s2_tps)
-                             (String.concat "   " (String.concat (String.atom_to_string gen_n)
-                             (String.concat " 词元，用时 " (String.concat (String.atom_to_string
+                             (String.concat " · " (String.concat (String.atom_to_string gen_n)
+                             (String.concat " 词元 · " (String.concat (String.atom_to_string
                                (- (System.timestamp) gen_t0)) " ms")))))))
-             (Gfx.draw_text line 10 178 255 232 120)
+             (Gfx.draw_text line tx 176 255 232 120)
            })
           (else #f))
     (if (== s2_stage 1)
@@ -1440,7 +1820,8 @@
     ;; 底部一行：自检结果（只有载入完成后才有）
     (if (String.equals chk_str "")
         #f
-        (Gfx.draw_text chk_str 10 (- SH 14) 110 150 130))
+        (Gfx.draw_text chk_str (if (and (== vis_on 1) (== scenario SC_GEN)) TXT_X 10)
+                       (- SH 14) 110 150 130))
     (Gfx.refresh)
     (set! dirty #f)))
 
@@ -1458,11 +1839,20 @@
           (set! tap_y (Math.floor (Touch.y)))
         }
         #f)
-    ;; 标签页优先（任何时候都能切）
+    ;; 标签页优先（任何时候都能切）；场景 2 的标题栏还有「框图」开关
     (if tap_new
         {
           (if (in_rect tap_x tap_y TAB1_X TAB_Y TAB_W TAB_H) (switch_scenario SC_SORT) #f)
           (if (in_rect tap_x tap_y TAB2_X TAB_Y TAB_W TAB_H) (switch_scenario SC_GEN) #f)
+          (if (== scenario SC_GEN)
+              (if (in_rect tap_x tap_y TOGGLE_X TOGGLE_Y TOGGLE_W TOGGLE_H)
+                  {
+                    (set! vis_on (if (== vis_on 1) 0 1))
+                    (set! dirty #t)
+                    (log (String.concat "[ui] 框图 " (if (== vis_on 1) "开" "关")))
+                  }
+                  #f)
+              #f)
         }
         #f)
     ;; 需要的模型没载入 → 先载入（互斥：模型是全局单例，切场景按需换）

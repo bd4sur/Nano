@@ -5364,6 +5364,50 @@ LLM-only 路线）上写一个**完全纯 Scheme** 的等价 App：不得使用�
   实时统计 TPS；生成长度 `N_GEN = 64` 步（含 5 步提示词预填充 → 约 59 个词元，
   wasm 上 ≈24 秒）。底部两个按钮：生成中显示「停止生成」（保留已输出部分并显示
   `已停止 · TPS …`，`[gen] … stopped=1`），常驻「重来」只换种子、提示词不变。
+  **左列是模型框图 + 推理过程可视化**（见下），标题栏有「框图 开/关」开关：
+  关掉后文字占满整行。
+
+### 场景 2 的推理过程可视化（参照 `ui_llm.c`）
+
+上游 `ui_app_llm_model_diagram_draw` 在推理中由 `llm_observation` 钩子反复重画：
+左侧是 Nano 变换块的结构框图（残差 ×2、Attn Norm、Q/K/V、RoPE、Q*K、Mask→softmax→A*V、
+O、FFN Norm、W1/W3/SiLU、⊗、W2），中间一列层条（当前层青色），右侧 top-6 候选词元；
+相位（`NANO_LLM_PHASE_*`）命中哪个部件就把哪个部件点亮成绿色。
+
+本 App 用 Scheme 复刻了同一套（`vis_set` / `vis_draw` / `dg_*`）：
+
+- **左列（146x190）**：同一拓扑的紧凑版，纵向按 4/5 压缩（数据自下而上，与上游一致）；
+  层条 `n_layer+2`（顶层=分类器、底层=embedding），top-6 候选词元在层条右侧。
+- **相位驱动**：`llm_forward` 在每个阶段入口调 `(vis_set layer 相位)`（8 处 + embed /
+  final norm / classify / sample），命中即把对应部件填成绿色。
+- **节流**：逐相位推屏太贵（wasm 上一次刷新要推 ~27k 像素 RGBA），故每 `VIS_EVERY = 6`
+  个相位重绘一次（≈11 次/token，肉眼看到高亮在层间/部件间移动）。实测开框图
+  21088ms / 关 20448ms（59 词元）→ 只慢 3%。
+- **top-6**：单遍扫描 logits 维护长度 6 的降序表（插入排序，O(vocab)），每 token 一次。
+- **开关**：标题栏「框图 开/关」（`170,2,96,14`）翻转 `vis_on`；关闭时跳过所有
+  `vis_set`/`vis_draw`（零开销），文字宽度从 27 个半角单位回到 51 个。
+- **前向拆成「层」但同一拍跑完**：`fw_begin`/`fw_step`（等价性工具与排序任务走
+  `llm_forward` 的 while 包装，数值完全一致）。**不要**把一拍拆成多层推进：
+  事件循环轮数暴涨后，上游运行时每 32 轮一次的兜底 GC 也跟着暴涨，实测 59 个词元
+  从 20.4s 掉到 36.7s（TPS 2.89 → 1.61）。
+
+### 顺带修的 WASM 触屏缺陷：亚帧点按被吞（`hal_touch_wasm.c`）
+
+场景 2 一拍要几百毫秒，期间浏览器事件全排队；恢复后一次点按的 DOWN/UP 会**背靠背**
+回放在同一个生产者批次里，而 Scheme App 的 `(native Touch)` 是**按电平采样**（一拍一次），
+于是「停止生成」按钮偶尔点不动。修法（只在 Scheme App 运行态启用，不影响菜单等 GUI
+状态的点按语义）：
+
+- `hal_touch_wasm.c` 新增 `wasm_touch_set_sticky()` / `wasm_touch_frame_boundary()` 与
+  一个「亚帧点按锁存」：同批次内 DOWN 后又 UP 时记下坐标并锁存 **4 帧**（Scheme 的
+  tick 约 2.5 帧一次，必须覆盖到它被采样一次），`touch_read` 在未按压但存在锁存时仍
+  报"按下"，锁存过期后自然得到松开沿。
+- `main_wasm_gui.c` 每帧开头调 `wasm_touch_frame_boundary()`，并按
+  `global_state->STATE == STATE_SCHEME_APP_RUN` 设置 sticky。
+- 不能用"读一次就清"：生产者的 `get_input_event` 也会读，会抢先把锁存吃掉（踩过）。
+- 这也解释了 **e2e 脚本的坑**：生成进行中调用 `page.screenshot()` 会卡几十秒
+  （主线程被推理占满 + 每帧推 300KB 帧缓冲），把后续点按全部推迟——实测「停止生成」
+  的点按因此晚到 35 秒。回归脚本改成生成期间只转存 RGBA（判据用得到），收尾时才截图。
 
 ## 3. 为什么这样分层（接口照抄、数据外置、流式加载）
 
@@ -5427,7 +5471,8 @@ id、表中没有则 0，多字符最长尝试 17）；base64 跳过所有非 ba
   define 名字**抽取**的（不是手抄副本），因此它证明的就是 App 真正在跑的那份代码；随机源
   是 App 内的 LCG（两条实现共用同一份 App 代码），所以连采样结果都逐位相同。
 - **WASM GUI（真浏览器）**：`node tools/e2e/browser/regress_llm.js https://127.0.0.1:9002/index.html chromium`
-  → **19/19 PASS**：软键盘输入（含一次退格）后按「输入」→ `[sort] input=351420` → 5 条
+  → **33/33 PASS**（含可视化：左列框图非背景像素 > 3000、生成中"高亮绿"质心出现
+  ≥2 个不同位置（相位高亮在推进）、「框图 关」后左列清空、「框图 开」后恢复）：软键盘输入（含一次退格）后按「输入」→ `[sort] input=351420` → 5 条
   `[sort] round` → `[sort] voted=… agree=k/5 diff=n`；切到场景 2 → `[gen] seed=… prompt=…`
   → 生成中帧缓冲持续刷新 → `[gen] text=…`（非空、无 `<|padding|>`）与
   `[gen] tokens=27 ms=… tps≈3.0`；切回场景 1 重新载入 sort6（第三次 `[chk] OK=`）；

@@ -70,11 +70,13 @@ def split_forms(s):
 KEEP = '''f4,mkbuf,block_size,vocab_size,n_layer,n_embd,n_head,n_kv_head,n_hidden,is_shared,
 head_dim,kv_dim,kv_mul,p_rms_attn,p_rms_ffn,p_rms_final,p_emb,p_wq,p_wk,p_wv,p_wo,p_w1,p_w2,
 p_w3,p_fcr,p_fci,p_cls,bx,bxb,bxba,bxb2,bhb,bhb2,bq,k_cache,v_cache,batt,blogits,bind_model,
-b_accum,b_rms_norm,b_softmax,b_rope,llm_forward,sample_argmax,sample_multinomial,sample_token,
+b_accum,b_rms_norm,b_softmax,b_rope,fw_pos,fw_maxlen,fw_causal,fw_layer,fw_attn_range,
+fw_begin,fw_step,llm_forward,vis_on,obs_layer,obs_phase,obs_pokes,obs_ids,obs_vals,obs_top,
+sample_argmax,sample_multinomial,sample_token,
 rng,rng_seed,rng_next,seq_str,concat_of,make_ref,vote_at,
 T_SORT,sort_ids,sort_out,sort_pos,sort_prefilled,sort_begin,sort_prefill_step,sort_gen_step,
 S1_ROUNDS,s1_input,s1_ref,s1_runs,s1_voted,s1_agree,s1_diff,
-N_GEN,T_GEN,gen_ids,gen_pos,gen_next,gen_line,gen_t0,gen_n,gen_begin,gen_step'''.replace('\n', '').split(',')
+N_GEN,T_GEN,gen_ids,gen_pos,gen_next,gen_line,gen_t0,gen_n,gen_fw_active,gen_begin,gen_take,gen_step,gen_tick'''.replace('\n', '').split(',')
 
 HEAD = '''
 (import LLM "@@LIB@@")
@@ -85,9 +87,26 @@ HEAD = '''
 
 ;; 模型数据目录（绝对路径：(native Fs) 对以 '/' 开头的路径按宿主绝对路径处理）
 (define MODEL_DIR "@@MODEL_DIR@@")
+
+;; 相位常量（与 app/llm.scm 一致；抽取出来的 fw_step 会引用它们）
+(define PH_EMBED 1)
+(define PH_ATTN_NORM 2)
+(define PH_QKV 3)
+(define PH_QK_ROPE 4)
+(define PH_MHA 5)
+(define PH_O 6)
+(define PH_FFN_NORM 7)
+(define PH_W1W3 8)
+(define PH_W2 9)
+(define PH_FINAL_NORM 10)
+(define PH_CLASSIFY 11)
+(define PH_SAMPLE 12)
 '''
 
 STUBS = '''
+;; 可视化与界面相关的名字在无头参考台里空实现（不参与"库是否等价"的比对）
+(define vis_set (lambda (layer phase) #t))
+(define top6_scan (lambda () #t))
 ;; App 侧的日志/界面函数在无头参考台里空实现（不参与比对内容）
 (define say (lambda (s) #t))
 (define set_status (lambda (s) #t))

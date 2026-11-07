@@ -30,6 +30,7 @@
 
 #include "platform.h"
 #include "ui_app.h"
+#include "ui_scheme_app.h" // STATE_SCHEME_APP_RUN（亚帧点按保底的启用条件）
 #include "graphics.h"
 #include "hal_key.h" // NANO_KEY_IDLE（队列事件判别用）
 
@@ -76,6 +77,8 @@ static int32_t wasm_evtq_pop(Key_Event *ev) {
 // 触屏 HAL 的事件队列接口（hal_touch_wasm.c）
 extern int32_t wasm_touch_pop(int32_t *action, int32_t *x, int32_t *y, double *ts);
 extern void    wasm_touch_set_level(int32_t action, int32_t x, int32_t y);
+extern void    wasm_touch_set_sticky(int32_t on);       // 亚帧点按保底开关
+extern void    wasm_touch_frame_boundary(void);         // 帧边界：清点按锁存
 
 // 忙提示刚上屏标记（dispatch 置位，frame 消费）：见 wasm_dispatch_input_events 注释
 static int32_t s_busy_just_drawn = 0;
@@ -154,6 +157,11 @@ int32_t wasm_gui_get_state(void) {
 }
 
 static void wasm_gui_frame(void) {
+    // 帧边界：清掉上一帧的亚帧点按锁存（Scheme App 的 Touch 采样已看到过按下）
+    wasm_touch_frame_boundary();
+    // 亚帧点按保底（DOWN/UP 落在同一生产者批次时仍能被 Scheme 的 Touch 采样到）
+    // 只在 Scheme App 运行态启用，避免影响菜单等 GUI 状态的点按语义
+    wasm_touch_set_sticky(global_state->STATE == STATE_SCHEME_APP_RUN);
     // 忙提示刚上屏：本帧跳过（不消费不渲染），让浏览器先把提示 paint 出来
     if (s_busy_just_drawn) {
         s_busy_just_drawn = 0;

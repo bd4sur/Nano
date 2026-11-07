@@ -37,6 +37,36 @@ static int32_t s_pressed = 0;
 static int32_t s_x = 0;
 static int32_t s_y = 0;
 
+// ---- 亚帧点按保底锁存（只在 Scheme App 运行态启用，见 wasm_touch_set_sticky）----
+//
+// 为什么需要：Scheme App 在自己的定时器/帧回调里按**电平**采样（am_native_Touch 用它
+// 派生按下/松开沿），而一次点按的 DOWN/UP 可能被归到同一个生产者批次里回放（App 的
+// 一拍很长——例如 LLM 推理一 token 要几百毫秒——期间 JS 事件全部排队，恢复后 DOWN、UP
+// 背靠背回放）。此时 App 下一次采样只能看到"已松开"，点按就此丢失（场景里表现为
+// 「停止生成」按钮偶尔点不动）。
+//
+// 做法：记下"本帧内出现过按下"（s_latch_pending + 坐标），touch_read 在未按压但存在
+// 本帧锁存时**仍报一次按下**；帧边界（wasm_gui_frame 开头）清锁存 → 下一次采样自然
+// 得到松开沿。GUI 菜单等非 Scheme 状态不受影响（只有 sticky 打开时才锁存）。
+static int32_t s_sticky = 0;        // 1=启用亚帧点按保底（Scheme App 运行态）
+static int32_t s_latch_pending = 0; // 1=有"已按下又已松开"的点按待上报
+static int32_t s_latch_frames = 0;  // 锁存还能存活几帧（Scheme 的 tick 不一定每帧都跑）
+static int32_t s_latch_x = 0;
+static int32_t s_latch_y = 0;
+
+// 开关亚帧点按保底（main_wasm_gui.c 每帧按当前状态设置）
+void wasm_touch_set_sticky(int32_t on) { s_sticky = on ? 1 : 0; }
+
+// 帧边界：锁存只存活若干帧（Scheme 的 tick 间隔约 2.5 帧，必须覆盖到它被采样一次）。
+// 不能用"读一次就清"：生产者的 get_input_event 也会读，会抢先把锁存吃掉。
+#define WASM_TOUCH_LATCH_FRAMES (4)
+void wasm_touch_frame_boundary(void) {
+    if (s_latch_pending) {
+        s_latch_frames -= 1;
+        if (s_latch_frames <= 0) s_latch_pending = 0;
+    }
+}
+
 // 触屏事件入口（页面 JS ccall）：ts 为事件真实时刻（Epoch 毫秒，double）
 EMSCRIPTEN_KEEPALIVE
 void wasm_gui_on_touch(int32_t action, int32_t x, int32_t y, double ts) {
@@ -79,6 +109,8 @@ void wasm_touch_set_level(int32_t action, int32_t x, int32_t y) {
         s_pressed = 1;
         s_x = x;
         s_y = y;
+        s_latch_pending = 0;    // 真按下：清掉旧锁存，本次按电平上报
+        s_latch_frames = 0;
     }
     else if (action == 2) {     // 移动（仅触摸期间更新坐标）
         if (s_pressed) {
@@ -87,6 +119,14 @@ void wasm_touch_set_level(int32_t action, int32_t x, int32_t y) {
         }
     }
     else {                      // 松开：保持最后有效坐标不写
+        if (s_sticky && s_pressed) {
+            // 同一帧内就松开了（App 还没机会采样到"按下"）→ 锁存若干帧，
+            // 让 App 的定时器/帧回调至少采样到一次"按下"，随后自然得到松开沿
+            s_latch_pending = 1;
+            s_latch_frames = WASM_TOUCH_LATCH_FRAMES;
+            s_latch_x = s_x;
+            s_latch_y = s_y;
+        }
         s_pressed = 0;
     }
 }
@@ -99,6 +139,12 @@ int32_t touch_read(int32_t *x, int32_t *y, int32_t *is_pressed) {
     if (s_pressed) {
         if (x) *x = s_x;
         if (y) *y = s_y;
+        if (is_pressed) *is_pressed = 1;
+    }
+    else if (s_latch_pending) {
+        // 亚帧点按保底：本帧曾按下又松开，仍按"按下"上报一次（帧边界清锁存）
+        if (x) *x = s_latch_x;
+        if (y) *y = s_latch_y;
         if (is_pressed) *is_pressed = 1;
     }
     else {
