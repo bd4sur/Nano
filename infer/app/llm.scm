@@ -87,11 +87,11 @@
 (define RES_STEP 12)
 (define S1_ROUND_Y 110)                  ; 第 1 轮的 y
 (define S1_SUM_Y 172)                    ; 一致/差异 摘要行
-(define BIG_Y 186)                       ; 六个大方框的顶部
-(define BIG_X0 18)
-(define BIG_STEP 48)
-(define BIG_W 44)
-(define BIG_H 48)
+(define BIG_Y 190)                       ; 结果六框的顶部（与输入槽位同尺寸、同排布）
+(define BIG_X0 20)                       ; = SLOT_X0
+(define BIG_STEP 48)                     ; = SLOT_STEP
+(define BIG_W 40)                        ; = SLOT_W
+(define BIG_H 30)                        ; = SLOT_H
 (define AGAIN_X 208)                     ; 「重新输入」按钮（结果区右上，六个大方框正上方）
 (define AGAIN_Y 165)
 (define AGAIN_W 92)
@@ -1860,10 +1860,10 @@
           {
             (Gfx.set_font FONT_L)
             (Gfx.draw_text (String.atom_to_string d)
-                           (+ (+ BIG_X0 (* i BIG_STEP)) 17) (+ BIG_Y 16) 255 236 130)
+                           (+ (+ BIG_X0 (* i BIG_STEP)) 16) (+ BIG_Y 7) 255 236 130)
             (Gfx.set_font FONT_S)
           }
-          (Gfx.draw_text "-" (+ (+ BIG_X0 (* i BIG_STEP)) 19) (+ BIG_Y 17) 90 96 110))
+          (Gfx.draw_text "-" (+ (+ BIG_X0 (* i BIG_STEP)) 17) (+ BIG_Y 10) 90 96 110))
       (set! i (+ i 1))
     })))
 
