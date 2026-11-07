@@ -82,13 +82,20 @@
 (define KP_GX 6)
 (define KP_GY 6)
 
-;; 场景 1：结果面板
-(define RES_Y 95)
+;; 场景 1：结果面板（各轮明细在上，"排序结果"用**六个大方框**放在下方）
+(define RES_Y 95)                        ; 输入/参考 行
 (define RES_STEP 12)
-(define AGAIN_X 110)                     ; 「重新输入」按钮
-(define AGAIN_Y 196)
-(define AGAIN_W 100)
-(define AGAIN_H 22)
+(define S1_ROUND_Y 110)                  ; 第 1 轮的 y
+(define S1_SUM_Y 172)                    ; 一致/差异 摘要行
+(define BIG_Y 186)                       ; 六个大方框的顶部
+(define BIG_X0 18)
+(define BIG_STEP 48)
+(define BIG_W 44)
+(define BIG_H 48)
+(define AGAIN_X 208)                     ; 「重新输入」按钮（结果区右上，六个大方框正上方）
+(define AGAIN_Y 165)
+(define AGAIN_W 92)
+(define AGAIN_H 17)
 
 ;; 场景 2：左侧「模型框图（推理过程可视化）」+ 右侧流式文本
 (define VIS_X 2)                         ; 可视化区（左列）
@@ -1361,7 +1368,8 @@
     })
     best))
 
-(define vote_all
+;; 按"目前已完成的轮次"逐位投票（运行中也会调用 → 大方框里能看到实时多数）
+(define vote_collect
   (lambda ()
     (define i 0)
     (set! s1_voted (cdr '(0)))
@@ -1369,6 +1377,12 @@
       (push s1_voted (vote_at i))
       (set! i (+ i 1))
     })
+    #t))
+
+(define vote_all
+  (lambda ()
+    (define i 0)
+    (vote_collect)
     ;; 与投票结果完全一致（逐位）的轮数
     (set! s1_agree 0)
     (set! i 0)
@@ -1591,6 +1605,7 @@
                (if (sort_gen_step)
                    {
                      (push s1_runs sort_out)
+                     (vote_collect)
                      (log (String.concat "[sort] round "
                            (String.concat (String.atom_to_string s1_round)
                            (String.concat " out=" (seq_str sort_out)))))
@@ -1752,7 +1767,7 @@
   (lambda ()
     (Gfx.set_font FONT_S)
     (Gfx.fill_rect 0 0 SW HEAD_H 30 34 48)
-    (Gfx.draw_text "灵机 LLM 测试台（Scheme）" 6 2 226 232 242)
+    (Gfx.draw_text "灵机 LLM 测试台" 6 2 226 232 242)
     (EX.draw_button)
     (draw_btn TAB1_X TAB_Y TAB_W TAB_H "场景1 · LLM 排序" (== scenario SC_SORT))
     (draw_btn TAB2_X TAB_Y TAB_W TAB_H "场景2 · 可视化生成" (== scenario SC_GEN))))
@@ -1796,39 +1811,61 @@
 (define draw_result
   (lambda ()
     (define i 0)
-    (define y RES_Y)
+    (define y 0)
     (define line "")
-    (Gfx.draw_text (String.concat "输入 " (seq_str s1_input)) 10 y 140 200 150)
-    (Gfx.draw_text (String.concat "参考 " (seq_str s1_ref)) 170 y 140 200 150)
-    (set! y (+ y RES_STEP))
+    (define d #f)
+    (define nv 0)
+    ;; ① 输入 / 参考
+    (Gfx.draw_text (String.concat "输入 " (seq_str s1_input)) 10 RES_Y 140 200 150)
+    (Gfx.draw_text (String.concat "参考 " (seq_str s1_ref)) 178 RES_Y 140 200 150)
+    ;; ② 5 轮明细
     (set! i 0)
+    (set! y S1_ROUND_Y)
     (while (< i (length s1_runs)) {
       (set! line (String.concat "第 " (String.concat (String.atom_to_string (+ i 1))
-                       (String.concat " 轮   " (seq_str (get_item s1_runs i))))))
+                       (String.concat " 轮    " (seq_str (get_item s1_runs i))))))
       (Gfx.draw_text line 10 y 200 206 196)
       (set! y (+ y RES_STEP))
       (set! i (+ i 1))
     })
+    ;; ③ 摘要行：左标题 + 右统计（单行，别压住下面的方框）
     (cond ((== s1_stage 1)
            {
-             (set! line (String.concat "排序中 " (String.concat (String.atom_to_string s1_round)
+             (Gfx.draw_text "实时投票" 10 S1_SUM_Y 255 210 120)
+             (set! line (String.concat "第 " (String.concat (String.atom_to_string s1_round)
                               (String.concat "/" (String.concat (String.atom_to_string S1_ROUNDS)
                               " 轮（温度采样）")))))
-             (Gfx.draw_text line 10 y 255 210 120)
+             (Gfx.draw_text line 96 S1_SUM_Y 200 206 196)
            })
           ((== s1_stage 2)
            {
-             (set! line (String.concat "投票   " (seq_str s1_voted)))
-             (Gfx.draw_text line 10 y 255 232 120)
-             (set! y (+ y RES_STEP))
+             (Gfx.draw_text "排序结果" 10 S1_SUM_Y 255 232 120)
              (set! line (String.concat "一致 " (String.concat (String.atom_to_string s1_agree)
                               (String.concat "/" (String.concat (String.atom_to_string S1_ROUNDS)
-                              " 轮，与参考差 ")))))
-             (set! line (String.concat line (String.concat (String.atom_to_string s1_diff) " 位")))
-             (Gfx.draw_text line 10 y 170 200 210)
+                              " 次")))))
+             (set! line (String.concat line (String.concat " 差 " (String.atom_to_string s1_diff))))
+             (Gfx.draw_text line 96 S1_SUM_Y 170 200 210)
              (draw_btn AGAIN_X AGAIN_Y AGAIN_W AGAIN_H "重新输入" #t)
            })
-          (else #f))))
+          (else #f))
+    ;; ④ 排序结果：六个大方框（一目了然）
+    (set! nv (length s1_voted))
+    (set! i 0)
+    (while (< i block_size) {
+      (set! d #f)
+      (if (< i nv) (set! d (get_item s1_voted i)) #f)
+      (Gfx.fill_rect (+ BIG_X0 (* i BIG_STEP)) BIG_Y BIG_W BIG_H 26 30 42)
+      (Gfx.draw_rect (+ BIG_X0 (* i BIG_STEP)) BIG_Y BIG_W BIG_H 110 150 210)
+      (if d
+          {
+            (Gfx.set_font FONT_L)
+            (Gfx.draw_text (String.atom_to_string d)
+                           (+ (+ BIG_X0 (* i BIG_STEP)) 17) (+ BIG_Y 16) 255 236 130)
+            (Gfx.set_font FONT_S)
+          }
+          (Gfx.draw_text "-" (+ (+ BIG_X0 (* i BIG_STEP)) 19) (+ BIG_Y 17) 90 96 110))
+      (set! i (+ i 1))
+    })))
 
 (define draw_scenario1
   (lambda ()
@@ -2076,11 +2113,12 @@
     (if (== loading 1)
         (draw_loading)
         (if (== scenario SC_SORT) (draw_scenario1) (draw_scenario2)))
-    ;; 底部一行：自检结果（只有载入完成后才有）
+    ;; 自检结果：场景 1 放标题栏右侧（底部六个大方框占满了），场景 2 放右列底部
     (if (String.equals chk_str "")
         #f
-        (Gfx.draw_text chk_str (if (and (== vis_on 1) (== scenario SC_GEN)) TXT_X 10)
-                       (- SH 14) 110 150 130))
+        (if (== scenario SC_SORT)
+            (Gfx.draw_text chk_str 150 2 110 150 130)
+            (Gfx.draw_text chk_str TXT_X (- SH 14) 110 150 130)))
     (Gfx.refresh)
     (set! dirty #f)))
 
