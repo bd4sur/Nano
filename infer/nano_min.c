@@ -547,8 +547,9 @@ static int nm_bpe_index_build(NM_Engine *e, const char *idx_path, uint32_t tok_f
     NM_BpeRec *recs = (NM_BpeRec *)platform_malloc((size_t)count * sizeof(NM_BpeRec));
     uint8_t   *blob = (uint8_t   *)platform_malloc(total_bytes + count);
     if (!recs || !blob) {
-        fprintf(stderr, "nano_min: bpe build alloc failed (recs=%zuKB blob=%zuKB)\n",
-                (size_t)count * sizeof(NM_BpeRec) / 1024, (total_bytes + count) / 1024);
+        fprintf(stderr, "nano_min: bpe build alloc failed (recs=%lluKB blob=%lluKB)\n",
+                (unsigned long long)((size_t)count * sizeof(NM_BpeRec) / 1024),
+                (unsigned long long)((total_bytes + count) / 1024));
         free(recs); free(blob);
         return -1;
     }

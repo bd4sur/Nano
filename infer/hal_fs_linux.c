@@ -270,8 +270,8 @@ int32_t write_chat_log(char *filepath, uint64_t timestamp, wchar_t* prompt, wcha
         return -1;
     }
 
-    fprintf(fp, "{\"timestamp\": %ld, \"prompt\": \"%s\", \"response\": \"%s\"}\n",
-            timestamp, escaped_prompt, escaped_response);
+    fprintf(fp, "{\"timestamp\": %llu, \"prompt\": \"%s\", \"response\": \"%s\"}\n",
+            (unsigned long long)timestamp, escaped_prompt, escaped_response);
 
     fclose(fp);
     free(escaped_prompt);

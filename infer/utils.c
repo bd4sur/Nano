@@ -976,6 +976,7 @@ float random_f32(uint64_t *state) {
 #if defined(__UCLIBC__)
 
 #include <stdarg.h>
+#include <sys/types.h>
 
 typedef struct {
     wchar_t *buf;
@@ -1127,18 +1128,22 @@ int nano_vswprintf(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap) {
             int produced = 0;
             switch (conv) {
             case L'd': case L'i':
-                if (lenmod == 4 || lenmod == 5)      produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, long long));
-                else if (lenmod == 3 || lenmod == 6 || lenmod == 7)
-                                                     produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, long));
+                if (lenmod == 4)                     produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, long long));
+                else if (lenmod == 5)                produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, intmax_t));
+                else if (lenmod == 3)                produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, long));
+                else if (lenmod == 6)                produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, ssize_t));
+                else if (lenmod == 7)                produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, ptrdiff_t));
                 else                                 produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, int));
                 break;
             case L'p':
                 produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, void *));
                 break;
             case L'u': case L'o': case L'x': case L'X':
-                if (lenmod == 4 || lenmod == 5)      produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, unsigned long long));
-                else if (lenmod == 3 || lenmod == 6 || lenmod == 7)
-                                                     produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, unsigned long));
+                if (lenmod == 4)                     produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, unsigned long long));
+                else if (lenmod == 5)                produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, uintmax_t));
+                else if (lenmod == 3)                produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, unsigned long));
+                else if (lenmod == 6)                produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, size_t));
+                else if (lenmod == 7)                produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, uintptr_t));
                 else                                 produced = snprintf(nbuf, sizeof(nbuf), nfmt, va_arg(ap, unsigned int));
                 break;
             default: // 浮点

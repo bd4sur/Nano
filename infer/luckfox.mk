@@ -15,20 +15,26 @@ STRIP   = $(TOOLCHAIN_DIR)/bin/$(CROSS_COMPILE)strip
 
 ANIMAC_DIR  := vendor/Animac
 ANIMAC_INC  := $(ANIMAC_DIR)
-ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c, $(wildcard $(ANIMAC_DIR)/*.c))
+ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c $(ANIMAC_DIR)/am_native_String.c, $(wildcard $(ANIMAC_DIR)/*.c))
+# String 原文件仅由根目录 ABI 适配翻译单元包含；作为依赖跟踪，但不直接编译。
+ANIMAC_HEADERS := $(wildcard $(ANIMAC_DIR)/*.h)
 
 # 灵机宿主侧源码：本地库（Gfx/Time/Diag/Touch/Imu，位于 infer/ 而**不在** vendor/Animac 里）
 # + 灵机应用程序运行时。任何链接 ui_app.c 的目标都需要它们，缺一个就链接失败。
 ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
                     am_native_Touch.c am_native_Imu.c \
-                    am_native_Key.c am_native_Fs.c am_native_Ui.c nano_key_events.c \
-                    ui_scheme_app.c
+                    am_native_Key.c am_native_Fs.c am_native_Ui.c am_native_App.c nano_key_events.c \
+                    ui_scheme_app.c luckfox_am_native_String.c
+ANIMAC_HOST_HEADERS := $(wildcard $(ANIMAC_HOST_SRCS:.c=.h))
 
 # 设备 framebuffer 节点为 /dev/fb0（720x720, 32bpp），覆盖 HAL 默认的 /dev/fb1；
 # FB_SWAP_RB：修正面板红蓝互换（详见 hal_display_framebuffer_linux.c 注释），仅本机型定义；
 # FB_UPSCALE=2：逻辑 360x360（platform.h 中 NANO_POD_LUCKFOX 分支）整 2 倍放大，恰好满屏 720x720；
 # TOUCH_SCALE=2 + 物理量程 720x720：触屏坐标做逆变换（p/2，偏移为 0），与逻辑坐标对齐
-CCFLAGS = -I$(EXTRA_ROOT)/include --sysroot=$(SYSROOT) -O3 -ffast-math -Wall -DFB_DEVICE='"/dev/fb0"' -DFB_SWAP_RB=1 -DFB_UPSCALE=2 -DTOUCH_SCALE=2 -DTOUCH_PHYS_WIDTH=720 -DTOUCH_PHYS_HEIGHT=720 -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
+# uClibc 的宽格式输出遇非 ASCII 会退化为 "Invalid wide format string."。
+# 强制包含现有兼容层，覆盖 ui_scheme_app 之外的 Animac 核心及全部宿主翻译单元。
+# _GNU_SOURCE 须先于强制包含生效，否则 features.h 会提前封口，丢失 CPU_ZERO/CPU_SET。
+CCFLAGS = -D_GNU_SOURCE -I$(EXTRA_ROOT)/include --sysroot=$(SYSROOT) -O3 -ffast-math -Wall -DFB_DEVICE='"/dev/fb0"' -DFB_SWAP_RB=1 -DFB_UPSCALE=2 -DTOUCH_SCALE=2 -DTOUCH_PHYS_WIDTH=720 -DTOUCH_PHYS_HEIGHT=720 -I$(ANIMAC_INC) -I$(ANIMAC_DIR) -include nano_wfmt.h
 LDFLAGS = -L$(EXTRA_ROOT)/lib --sysroot=$(SYSROOT) -lm
 
 BIN_DIR := bin
@@ -40,8 +46,8 @@ $(BIN_DIR):
 
 # Nano-Pod：电子鹦鹉笼（Luckfox-Pico-86-Panel），显示走 /dev/fb0 framebuffer
 pod: $(BIN_DIR)/nano_pod_luckfox
-$(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) \
-                        $(ANIMAC_HOST_SRCS) \
+$(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) $(ANIMAC_HEADERS) $(ANIMAC_DIR)/am_native_String.c \
+                        $(ANIMAC_HOST_SRCS) $(ANIMAC_HOST_HEADERS) nano_wfmt.h \
                         main.c \
                         hal_fs_linux.c \
                         hal_ram_linux.c \
@@ -94,7 +100,7 @@ $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) \
                         ui_tetris.c \
                         ui_water.c \
                         | $(BIN_DIR)
-	$(CC) -DNANO_POD_MP135 -DNANO_POD_LUCKFOX -DNANO_UI_SPLIT_EVENT_LOOP $(CCFLAGS) $^ -o $@ $(LDFLAGS) -ltinyalsa -ldl -lpthread
+	$(CC) -DNANO_POD_MP135 -DNANO_POD_LUCKFOX -DNANO_UI_SPLIT_EVENT_LOOP $(CCFLAGS) $(filter-out $(ANIMAC_DIR)/am_native_String.c,$(filter %.c,$^)) -o $@ $(LDFLAGS) -ltinyalsa -ldl -lpthread
 
 clean:
 	rm -f $(BIN_DIR)/nano_pod_luckfox

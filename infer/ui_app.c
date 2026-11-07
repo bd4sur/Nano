@@ -4561,12 +4561,12 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             }
 
             // 显示文件列表
-            printf("目录 %s 中有 %ld 个文件:\n", path, actual);
+            printf("目录 %s 中有 %d 个文件:\n", path, (int)actual);
             for (int32_t i = 0; i < actual; i++) {
                 wchar_t namew[128];
                 _mbstowcs(namew, s_album_path_list[i], 128);
                 gfx_draw_textline_centered(global_state->gfx, namew, 160, 10 + (i+1) * 17, 0xff, 0xff, 0xff, 1);
-                printf("  [%ld] %s\n", i, s_album_path_list[i]);
+                printf("  [%d] %s\n", (int)i, s_album_path_list[i]);
             }
 
 

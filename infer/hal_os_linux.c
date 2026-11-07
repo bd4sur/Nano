@@ -4,7 +4,9 @@
 //   - pthread（任务抽象基于 pthread 实现，编译/链接需加 -pthread）
 //   - 其余均为 glibc / POSIX 标准接口，无额外第三方依赖。
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE // pthread_setaffinity_np / CPU_ZERO / CPU_SET / timegm
+#endif
 
 #include "platform.h"
 #include "hal_os.h"
