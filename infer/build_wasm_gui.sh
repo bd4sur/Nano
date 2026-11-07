@@ -59,6 +59,12 @@ cp -f app/lib/*.scm "$LINGLONG/app/lib/" 2>/dev/null || true
 # 大块数据（不入 .scm 源码：灵机按源码字符数预分配 token 数组，见 app/hwr.scm 注释）
 mkdir -p "$LINGLONG/app/lib/hwr"
 cp -f app/lib/hwr/* "$LINGLONG/app/lib/hwr/" 2>/dev/null || true
+# LLM 模型数据（app/lib/llm/{sort6,psycho}/mNN.b64 + meta.scm）：base64 分块，
+# 供纯 Scheme 的 LLM 测试台（app/llm.scm + app/lib/llm_pure.scm）流式读入解码。
+# 真源由 tools/gen_llm_model_b64.py 生成并随仓库提供。
+mkdir -p "$LINGLONG/app/lib/llm/sort6" "$LINGLONG/app/lib/llm/psycho"
+cp -f app/lib/llm/sort6/* "$LINGLONG/app/lib/llm/sort6/" 2>/dev/null || true
+cp -f app/lib/llm/psycho/* "$LINGLONG/app/lib/llm/psycho/" 2>/dev/null || true
 # 把内置示例文档导出成真正的 .md（真源是 app/lib/md_demo.scm；阅读器首次运行也会落盘，
 # 但构建期先摊出来，用户才能直接在资源目录里看到/编辑它）
 python3 tools/gen_md_demo.py "$LINGLONG" || true
@@ -66,6 +72,8 @@ python3 - "$LINGLONG" "$OUT_DIR/manifest.json" <<'EOF'
 import json, os, sys
 root, out = sys.argv[1], sys.argv[2]
 P1_DIRS = {"icon", "app"}
+# app/ 下的大块模型数据不算「启动必需」：降为 p2 后台挂载（App 侧缺文件会自动等重试）
+P2_PREFIX = "app/lib/llm/"
 P1_FILES = {"mob.scm", "jstest.js"}
 SKIP_DIRS = {"music", "data"}   # music 体积过大；data 是 App 运行时数据（不入产物）
 # LLM 模型：标准引擎（infer.c）的 Nano-168M/56M-Q80 作为 p3（最后台优先级，鹦鹉笼可用）；
@@ -81,7 +89,7 @@ for dirpath, dirnames, filenames in os.walk(root):
     for fn in filenames:
         rel = fn if rel_dir == "." else os.path.join(rel_dir, fn)
         if top in P1_DIRS or (rel_dir == "." and (fn in P1_FILES or fn.startswith("wp"))):
-            pri = 1
+            pri = 2 if rel.startswith(P2_PREFIX) else 1
         elif rel in P3_FILES:
             pri = 3
         elif top == "llm":

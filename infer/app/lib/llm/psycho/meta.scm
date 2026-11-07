@@ -1,0 +1,16 @@
+;; 由 infer/tools/gen_llm_model_b64.py 生成，请勿手改
+;; 源：PSYCHO_230K_MODEL.bin（986052 字节，sha256:7394d60248493f8a…）
+(define name "psycho")
+(define label "精神分析黑话 230k")
+(define nchunk 14)
+(define nbytes 986052)
+(define b64len 1314736)
+(define chunk_chars 98304)
+(define block_size 512)
+(define vocab_size 4096)
+(define n_layer 8)
+(define n_embd 32)
+(define n_head 4)
+(define n_kv_head 2)
+(define n_hidden 96)
+(define head_dim 8)

@@ -5316,3 +5316,178 @@ gfx_draw_image_warp(gfx, path, x, y, w, h, gw, gh, const float *disp, float neut
   不动"，用像素位移当判据会假失败）。
 - 宿主回归台：39 个 App 全 `err=none`。顺带把 `SCHEME_APP_MAX` 的注释从"当前 33 个"更新到 39 个
   （上限 48 仍有余量；这个数变了要一起改）。
+
+------------------------------------
+
+# 2026-11-07（鹦鹉笼之外：纯 Scheme 的语言模型推理测试台 —— 不依赖 LLM 本地库）
+
+需求：参照上游 `/home/bd4sur/Animac/test/llm.scm` 这个语言模型推理测试用例，在本项目的
+**WASM 目标**（`build_wasm_gui.sh` → Emscripten WebAssembly GUI，不是 `infer/web/` 那条
+LLM-only 路线）上写一个**完全纯 Scheme** 的等价 App：不得使用仓库里现成的 LLM 本地库
+（`vendor/Animac/am_native_LLM.c`），而要参照它用 Scheme 重新实现一个**完全功能等价**的
+库（权重读取与解析含 base64 解码、词元编解码 tokenizer、矩阵乘法），整个推理链路跑在
+灵机解释器里。
+
+## 1. 产物
+
+| 文件 | 作用 |
+|---|---|
+| `infer/app/lib/llm_pure.scm` | **纯 Scheme 的 LLM 库**：与 `(native LLM)` 同名同语义的 `init/get_config/get_param/encode/decode/matmul`，外加流式加载三段式 `init_begin/init_feed/init_end` |
+| `infer/app/llm.scm` | 测试台 App（GUI 版测试用例）：分块读模型 → 自检 → 任务 0 序列生成（6 元素排序）→ 任务 1 自回归文本生成；每拍只推进一步 |
+| `infer/app/lib/llm/{sort6,psycho}/{meta.scm,mNN.b64}` | 模型数据：base64 分块（sort6 = 1 块 64KB；psycho 230k = 14 块 × 96KB），`meta.scm` 由生成脚本产出 |
+| `infer/tools/gen_llm_model_b64.py` | 把 Nano F32 模型 `.bin` 切成 base64 分块 + 生成 meta（含往返自检） |
+| `infer/tools/llm_equiv/{nref.c,native_shim.scm,run.py,README.md}` | **等价性证明工具**：同一份脚本分别链接本地库与纯 Scheme 库，逐行 diff stdout |
+| `infer/tools/e2e/browser/regress_llm.js` | 浏览器端回归（真 WASM）——本目录按惯例不入 Git |
+
+`infer/build_wasm_gui.sh` 同步改动两处：①构建期把 `app/lib/llm/{sort6,psycho}` 拷进业务
+资源目录；②manifest 里 `app/lib/llm/**` **降为 p2 后台挂载**（它是 1.4MB 数据，不属于
+"启动必需"，App 侧缺文件会自动等待重试）。
+
+## 2. 为什么这样分层（接口照抄、数据外置、流式加载）
+
+- **接口照抄**：库里的公开名字与本地库逐一对应（`init/get_config/get_param/encode/
+  decode/matmul`），于是 App 里写 `(import LLM "app/lib/llm_pure.scm")` 之后，调用点
+  `LLM.matmul`、`LLM.encode` … **与上游 `(native LLM)` 的写法完全一样**——上游测试用例
+  几乎是原样搬过来的。
+- **数据外置 + 分块流式解码**：灵机解析器按源码字符数预分配 token 数组（见 app/hwr.scm
+  注释），把 1.3MB base64 塞进 `.scm` 字面量会吃掉解释器内存池；而 `(native Fs)` 单文件
+  读入上限 128KB。故模型切成 96KB 的 base64 分块，运行时逐块 `Fs.read` → `init_feed`
+  流式解码，内存峰值只有一个分块字符串。分块边界**不必对齐 4 字符组**（组状态跨 feed
+  保留），末组按 `=` 个数出 1~3 字节。
+- **两阶段解码器**：0=头(256B) 1=词表长度(4B) 2=词表数据 3=权重。权重区（占 96% 的字节）
+  走 3 字节一起拼浮点的**内联快路径**，头/词表区与"本组内发生阶段切换"的极少数走逐字节
+  慢路径（见下节的坑）。
+- **浮点还原不用 32 位整数拼装**：wasm32 宿主的无符号整数有效宽度只有 27 位，F32 的 4 字节
+  按 `符号/阶码/尾数` 分解，再由 2 的幂表还原——数学上精确，与 C 侧 `float→double` 逐位一致。
+
+## 3. 与本地库保持一致（照抄不修正）的怪癖
+
+`token_classifier` 恒与 `token_embedding` **内容相同但把柄不同**（上游 `get_param` 用同一份
+数据另建一个列表，`eq?` 为假、`equal?` 为真）；贪心最长匹配分词（单字符一律取 charset 表
+id、表中没有则 0，多字符最长尝试 17）；base64 跳过所有非 base64 字符；词表同名 token 与
+单字符 charset 映射均**先到先得**；matmul 在 `d<=0 || n<=0` 时不写入、越界位置跳过写入。
+
+## 4. 踩坑记录（都在 WASM 侧先炸，桌面 gcc 正常）
+
+1. **阶段切换落在 4 字符组中间**：词表字段长度通常不是 3 的倍数（psycho 是 49732 字节，
+   1516 = 3×505+1），切换点所在的那一组里 1 个字节属于词表、2 个属于权重。首版按"组开始
+   时的阶段"整组走快路径 → 2 个权重字节被塞进词表缓冲 → 权重整体错位、`init_end` 报失败。
+   修法：加 `gdirty` 标记，本组内发生过阶段切换就整组走逐字节慢路径（慢路径也补上权重区
+   分支），并把 2 个字节的正确归属写进注释。
+2. **`-100000000` 这样的整数字面量在 wasm32 上溢出**：`am_int_t = int32_t` 且逻辑宽度只有
+   27 位（约 ±6.7e7）。`sample_argmax` 的 `maxv` 初值写成 `-100000000` 后绕回成正数，
+   于是**永远不更新** `maxv/maxi`，所有位置都取 0 号词元——表现为"排序任务输出全 -1、
+   生成文本全是 `<|padding|>`"。修法：下界改用浮点字面量 `-1e30`（`softmax` 的
+   `-10000000` 一并改）。**教训：灵机里跨 32/64 位移植时，凡"哨兵大数"一律写成浮点。**
+3. **wasm32 的浮点是单精度**（`am_float_t = float`，64 位宿主是 double）：逐元素值与
+   双精度差 1e-6 量级，连加十万项的和甚至漂到百分级（psycho embedding 求和 2987 vs 3195）。
+   因此 App 内自检不能拿"求和"与桌面记录硬比：改为**长度 + 第 0/中/末元素 + 相对容差 1e-3**。
+   上游本地库在 wasm32 上同样走单精度，故这不影响两条实现的一致性。
+4. **上游 `list_to_str` 没有分隔符**：排序任务的输入是 6 个数字**直接拼成**的 `"351420"`
+   （不是我一开始以为的 `"3,5,1,4,2,0"`）。带逗号时输入变成 11 个 token、超过 `block_size=6`，
+   模型输出退化成逗号/字母——表现为"模型输出 1,-1,3,-1,5,-1"。修正后输出与本地库逐位一致
+   `(0 0 1 2 4 5)`（该模型在含重复数字的 6 元序列上本就有误差，(0 0 1 2 4 5) 非降序即算达成）。
+
+## 5. 验证
+
+- **等价性（最强证据）**：`python3 infer/tools/llm_equiv/run.py` →
+  `PASS：本地库与纯 Scheme 库的 68 行输出逐字节相同`。比对内容包括两个模型的配置、
+  14 个权重张量的长度/求和/首中末元素、classifier 的独立性语义、多组文本的 encode id 与
+  decode 往返、词表前 40 项、逐位置前向的 argmax 与 logits 抽样、6 元素排序输出、24 步贪心
+  解码的完整生成文本。测试脚本里的前向/采样代码是**从 app/llm.scm 按顶层 define 名字抽取**
+  的（不是手抄副本），所以它证明的就是 App 真正在跑的那份代码。
+- **WASM GUI（真浏览器）**：`node tools/e2e/browser/regress_llm.js https://127.0.0.1:9002/index.html chromium`
+  → **7/7 PASS**：跑到「完成」总结、12 条自检全 `[OK]`、生成文本非空且无 `<|padding|>`、
+  TPS = 2.51、无 pageerror。整条流程从进入 App 到总结约 **14 秒**（psycho 230k：18 词元
+  @ ≈2.5 token/s；sort6 载入 + 自检 + 排序任务约 1 秒）。模型分块是 p2 后台挂载，App 侧
+  缺文件时打印「模型分块尚未就绪…稍后自动重试」并每 25 拍重试（已用移走数据目录的方式实测）。
+- **宿主回归台**（gcc，虚拟时钟）：`/tmp/…/run_new app/llm.scm 6000` 输出与浏览器一致
+  （同宿主双精度），12 条自检全 `[OK]`，TPS 2.61。
+
+## 6. 运行
+
+```bash
+cd infer && bash build_wasm_gui.sh                 # 产物 webgui/（模型数据走 p2 后台挂载）
+cd webgui && python3 ../tools/https_static_server.py 9002 .
+# 浏览器打开 https://<主机>:9002/ → 主菜单 [7] 小游戏 → 灵机应用程序 → llm
+```
+
+模型数据重新生成（换模型时）：
+
+```bash
+python3 infer/tools/gen_llm_model_b64.py <model.bin> infer/app/lib/llm/<name> \
+        --name <name> --label "<中文名>"
+```
+
+两个 F32 nano 模型来自上游 Animac 发行版的 `test/llm_model.scm`（psycho 230k =
+huggingface `bd4sur/Nano-Psycho`；sort6 = 6 元升序序列生成模型）。**本项目自带的
+`linglong/llm/*.bin` 是 Q80 量化权重，本地库与纯 Scheme 库都只支持 F32，不能用于本 App。**
+
+------------------------------------
+
+# 2026-11-07（研究：灵机解释器时间片/GC 参数在 WASM 目标下的调优）
+
+需求：研究 `infer/vendor/Animac` 里与时间片长度、GC 周期与策略相关的可调参数，
+在 **WASM-GUI 目标**（`build_wasm_gui.sh`，不是 `infer/web/`）下、针对 `app/` 现有 39 个
+App，在**内存波动平稳**的前提下尽量提升性能。**本轮只做研究、不改产品代码**，
+报告见 `doc/灵机解释器参数调优研究-WASM.md`，结论如下（供决定是否落地）。
+
+## 1. 结论（推荐改两个宏，其余保持）
+
+```diff
+-"$EMCC" -O3 -ffast-math -DNANO_WASM_GUI \
++"$EMCC" -O3 -ffast-math -DNANO_WASM_GUI \
++    -DAM_GC_HEAP_HIGH_WATER_RATIO=0.65 \
++    -DAM_GC_HEAP_CRITICAL_RATIO=0.80 \
++    -DAM_GC_PERIODIC_INTERVAL=16 \
+```
+
+保持默认：`AM_HEAP_COMPACT_INTERVAL=1`、`AM_GC_WATERMARK_CHECK_STRIDE=256`、
+`AM_GC_HEAP_FRAG_*`、`MB_TIMESLICE_TICKS=312500`、池 32MB。三者都有实测理由，
+不是"没试"（详见报告 §4）。
+
+## 2. 三条关键事实（解释了为什么是这样调）
+
+1. **GC 成本 ∝ 把柄表长度（两趟 O(N) 扫描 + 逐把柄哈希查找），不 ∝ 活跃字节**：
+   `mandelbrot` 稳态活跃堆仅 30KB 却每轮扫 16.7k 个把柄（1.4ms/宿主、≈5ms/浏览器）；
+   `2048` 只有 1.5k 把柄（0.14ms）。所以"回收得更勤"只多付 ~30% 扫描量
+   （垃圾没长大就被收），单次停顿却能减半 —— 这是本次最有效的旋钮。
+2. **"堆水位比例"其实是唯一能设"堆绝对上限"的旋钮**：池 50/50 切开，运行期
+   `am_allocator_pool_adjust_boundary()` 要求"堆扩张时 VM 区必须为空"（永不成立），
+   所以堆 16MB 是硬上限，`0.75` 就是"12MB 回收"。但水位**有硬下限**：低于 App 的
+   **瞬时活跃集**（实测最坏 `xray` 8.58MB / `hwr2` 常驻 5.01MB）就会 GC 风暴
+   （0.50→xray 746 次 GC/600 帧；0.25→41,969 次，占运行时间 66%）。故取 0.65（10.4MB）。
+3. **压缩频率不能降**：直觉"少压缩省时间"是错的 —— 不压缩后堆碎片化，标记/清除的
+   局部性变差，总 GC 时间反而上升（7 App 实测 200.6ms → 235.0ms），峰值也更高；
+   1200 帧长跑下 `COMPACT_INTERVAL=4/0` 让 `xray` 直接分配失败（堆无法扩界）。
+
+## 3. 实测收益（宿主确定性台 + 真 WASM）
+
+- 39 App × 600 帧（两配置交替跑、取 min-of-2 CPU 时钟，两者总 CPU 25115ms vs 25102ms）：
+  GC 次数 762→1476，GC CPU 422.9→580.9ms（占 CPU **1.68%→2.31%**，+0.63pp），
+  堆峰值均值 4796K→**3687K（−23%）**、最坏 12272K→**10594K（−14%）**，
+  每 App 平均停顿普遍 −20%~−50%（mlp 1.89→0.91ms、xray 1.48→0.99ms、gol 2.08→1.48ms）。
+- 长跑 2000 帧（8 个最重 App，`oom=0 / level2=0 / err=none`，`refresh` 完全一致）：
+  峰值 hwr2 11.4→7.6MB、pathtracer 12.3→6.9MB、mlp 9.2→4.6MB、gol 12.2→10.3MB；
+  最大停顿全部下降（mlp 2.92→1.52ms、fallingsand 3.88→2.84ms、mandelbrot 3.17→2.45ms）。
+- 真 WASM（Chromium 无头，每 App 5s，顺序交替）：fps 全部不变；
+  `mandelbrot` 堆峰值 12.0→8.8MB、>16.7ms 的帧 7→1；GC CPU 增量 5~20ms/5s。
+- **语义不变**：用产品构建脚本编两份产物跑 `regress_det.js`，37 App 的
+  state/refreshΔ/CRC 逐项相等（`forkqueue` 例外——它显示 `Diag.heap` 活对象数，
+  同一产物连跑两次 CRC 都不同，本身不能当判据；`2048` 首轮的差异是 refresh 抖动，
+  单独重跑一致）。
+
+## 4. 时间片：现在这个 312500 是对的
+
+WASM 实测 **22–23ns/指令**（与宿主 x86 的 20.7ns 几乎一致）：312500 → 最重 App
+每帧 7.3ms（60Hz 预算 44%）；450000 → 10.5ms（63%，推进 +44%）；625000 → 13.7ms（82%，
+pathtracer/flip/sky3/gol 开始掉帧 6~11 帧/4s）。时间片只决定"每帧推进量上限"，
+不影响自定拍 App、也不影响峰值内存，动它等于拿掉慢设备的余量 → **不改**。
+
+## 5. 复现
+
+计测脚手架本轮放在 `/tmp/gcbench`（宿主 bench + 带 `AM_BENCH_GC` 的 vendor 副本 +
+变体矩阵脚本）与 `/tmp/wsbench`（wasm 测量构建 + 浏览器 bench.js），未进仓库；
+报告 §8 给了完整复现命令与判据。**注意两件事**：WASM 下 `CLOCK_THREAD_CPUTIME_ID`
+不可用（返回 0，须用 `CLOCK_MONOTONIC`/`emscripten_get_now()`）；本机负载会让单跑
+时间差到 ±30%，多配置比较必须**交替重复**并看 CPU 时钟。

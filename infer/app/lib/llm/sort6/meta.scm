@@ -1,0 +1,16 @@
+;; 由 infer/tools/gen_llm_model_b64.py 生成，请勿手改
+;; 源：SORT_6_MODEL.bin（49452 字节，sha256:87919773a79c63c1…）
+(define name "sort6")
+(define label "序列生成（6 元素排序）")
+(define nchunk 1)
+(define nbytes 49452)
+(define b64len 65936)
+(define chunk_chars 98304)
+(define block_size 6)
+(define vocab_size 80)
+(define n_layer 2)
+(define n_embd 32)
+(define n_head 4)
+(define n_kv_head 2)
+(define n_hidden 16)
+(define head_dim 8)
