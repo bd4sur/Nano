@@ -211,7 +211,11 @@ void encode_bpe(Tokenizer* t, char *text, uint32_t *tokens, uint32_t *n_tokens) 
     free(str_buffer);
 }
 
-uint32_t *apply_qwen_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uint32_t *prompt_length, int32_t enable_thinking) {
+static uint32_t *apply_qwen_chat_template_impl(
+    Tokenizer *t, wchar_t *user_prompt_wchar, uint32_t *prompt_length, int32_t enable_thinking,
+    uint32_t tok_im_start, uint32_t tok_user, uint32_t tok_newline, uint32_t tok_im_end,
+    uint32_t tok_assistant, uint32_t tok_think_start, uint32_t tok_think_end
+) {
     if (wcslen(user_prompt_wchar) <= 0) {
         printf("Warning: empty prompt string. Use default prompt '请你自我介绍。'.\n");
         user_prompt_wchar = L"请你自我介绍。";
@@ -226,27 +230,27 @@ uint32_t *apply_qwen_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uin
 
     uint32_t *prompt_tokens = (uint32_t*)platform_calloc(num_user_prompt_tokens + 16, sizeof(uint32_t));
 
-    prompt_tokens[0] = 151644; // <|im_start|>
-    prompt_tokens[1] = 872;    // user
-    prompt_tokens[2] = 198;    // \n
+    prompt_tokens[0] = tok_im_start;
+    prompt_tokens[1] = tok_user;
+    prompt_tokens[2] = tok_newline;
     for(uint32_t i = 0; i < num_user_prompt_tokens; i++) *(prompt_tokens + 3 + i) = user_prompt_tokens[i];
-    prompt_tokens[3 + num_user_prompt_tokens] = 151645; // <|im_end|>
-    prompt_tokens[4 + num_user_prompt_tokens] = 198;    // \n
-    prompt_tokens[5 + num_user_prompt_tokens] = 151644; // <|im_start|>
-    prompt_tokens[6 + num_user_prompt_tokens] = 77091;  // assistant
-    prompt_tokens[7 + num_user_prompt_tokens] = 198;    // \n
+    prompt_tokens[3 + num_user_prompt_tokens] = tok_im_end;
+    prompt_tokens[4 + num_user_prompt_tokens] = tok_newline;
+    prompt_tokens[5 + num_user_prompt_tokens] = tok_im_start;
+    prompt_tokens[6 + num_user_prompt_tokens] = tok_assistant;
+    prompt_tokens[7 + num_user_prompt_tokens] = tok_newline;
 
     if (enable_thinking) {
         prompt_tokens[8 + num_user_prompt_tokens] = 0;
         *prompt_length = 8 + num_user_prompt_tokens;
     }
     else {
-        prompt_tokens[8 + num_user_prompt_tokens] = 151667; // <think>
-        prompt_tokens[9 + num_user_prompt_tokens] = 198;    // \n
-        prompt_tokens[10 + num_user_prompt_tokens] = 198;    // \n
-        prompt_tokens[11 + num_user_prompt_tokens] = 151668; // </think>
-        prompt_tokens[12 + num_user_prompt_tokens] = 198;    // \n
-        prompt_tokens[13 + num_user_prompt_tokens] = 198;    // \n
+        prompt_tokens[8 + num_user_prompt_tokens] = tok_think_start;
+        prompt_tokens[9 + num_user_prompt_tokens] = tok_newline;
+        prompt_tokens[10 + num_user_prompt_tokens] = tok_newline;
+        prompt_tokens[11 + num_user_prompt_tokens] = tok_think_end;
+        prompt_tokens[12 + num_user_prompt_tokens] = tok_newline;
+        prompt_tokens[13 + num_user_prompt_tokens] = tok_newline;
         prompt_tokens[14 + num_user_prompt_tokens] = 0;
         *prompt_length = 14 + num_user_prompt_tokens;
     }
@@ -254,6 +258,34 @@ uint32_t *apply_qwen_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uin
     free(user_prompt_tokens);
     free(user_prompt);
     return prompt_tokens;
+}
+
+uint32_t *apply_qwen_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uint32_t *prompt_length, int32_t enable_thinking) {
+    // Qwen2 / Qwen3 的词元 ID
+    return apply_qwen_chat_template_impl(
+        t, user_prompt_wchar, prompt_length, enable_thinking,
+        151644,  // <|im_start|>
+        872,     // user
+        198,     // newline
+        151645,  // <|im_end|>
+        77091,   // assistant
+        151667,  // think start
+        151668   // think end
+    );
+}
+
+uint32_t *apply_qwen35_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uint32_t *prompt_length, int32_t enable_thinking) {
+    // Qwen3.5 的词元 ID（tokenizer.json: model.vocab 248044 + added_tokens 26）
+    return apply_qwen_chat_template_impl(
+        t, user_prompt_wchar, prompt_length, enable_thinking,
+        248045,  // <|im_start|>
+        846,     // user
+        198,     // newline
+        248046,  // <|im_end|>
+        74455,   // assistant
+        248068,  // think start
+        248069   // think end
+    );
 }
 
 

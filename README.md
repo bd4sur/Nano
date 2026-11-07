@@ -62,7 +62,7 @@
 
 ### 通用CPU推理
 
-基于[karpathy/llama2.c](https://github.com/karpathy/llama2.c)实现的纯C语言推理引擎。支持FP32(W32A32)、Q80(W8A32)、Q4K(W4A32)等量化方式。依赖很少，容易移植，可部署于各类设备，如树莓派、路由器、单片机、PC、服务器等。除了Nano，还适配了Qwen2-0.5B、Qwen3-0.6B/1.7B/4B。
+基于[karpathy/llama2.c](https://github.com/karpathy/llama2.c)实现的纯C语言推理引擎。支持FP32(W32A32)、Q80(W8A32)、Q4K(W4A32)等量化方式。依赖很少，容易移植，可部署于各类设备，如树莓派、路由器、单片机、PC、服务器等。除了Nano，还适配了Qwen2-0.5B、Qwen3-0.6B/1.7B/4B，以及采用 Gated DeltaNet 线性注意力与全注意力混合架构的 Qwen3.5-0.8B。
 
 提供3种形态：Nano-CLI（终端交互）、Nano-WSS（WebSocket服务端）和Nano-Pod（有键盘输入和GUI的，能够语音输入输出的电子鹦鹉笼）。在`infer`目录下，执行`make`进行构建，构建得到的二进制文件位于`infer/bin`目录。执行以下命令以启动推理：
 
@@ -231,9 +231,32 @@ python export.py model.bin [--checkpoint | --quant | --lora] checkpoint.pt
 Qwen2/Qwen3模型转换，执行以下命令：
 
 ```bash
-python infer_marga/tools/export_qwen.py qwen3-0b6.bin --hf /home/bd4sur/ai/_model/Qwen3/Qwen3-0.6B
+python infer/tools/export_qwen.py qwen3-0b6.bin --hf /home/bd4sur/ai/_model/Qwen3/Qwen3-0.6B
 
-python infer_marga/tools/export_qwen.py qwen3-1b7.bin --hf /home/bd4sur/ai/_model/Qwen3/Qwen3-1.7B
+python infer/tools/export_qwen.py qwen3-1b7.bin --hf /home/bd4sur/ai/_model/Qwen3/Qwen3-1.7B
+```
+
+Qwen3.5模型转换（导出工具只依赖 numpy，不需要 torch/transformers）：
+
+```bash
+# FP32
+python3 infer/tools/export_qwen35.py --hf /path/to/Qwen3.5-0.8B \
+    -o qwen35-0b8.f32.bin --quant f32
+
+# Q80（W8A32）
+python3 infer/tools/export_qwen35.py --hf /path/to/Qwen3.5-0.8B \
+    -o qwen35-0b8.q80.bin --quant q80 --gs 32
+
+# Q4K（W4A32）
+python3 infer/tools/export_qwen35.py --hf /path/to/Qwen3.5-0.8B \
+    -o qwen35-0b8.q4k.bin --quant q4k
+```
+
+CLI 可直接把模型文件作为参数传入，也可通过环境变量 `NANO_MODEL` 指定：
+
+```bash
+./bin/nano_cli /path/to/qwen35-0b8.q80.bin
+NANO_MODEL=/path/to/qwen35-0b8.q4k.bin ./bin/nano_cli
 ```
 
 模型文件的格式参考了[karpathy/llama2.c](https://github.com/karpathy/llama2.c)，但是有不同之处。描述如下：

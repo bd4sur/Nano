@@ -48,6 +48,7 @@ wchar_t *decode_bpe(Tokenizer *t, uint32_t *ids, uint32_t len);
 void encode_bpe(Tokenizer* t, char *text, uint32_t *tokens, uint32_t *n_tokens);
 
 uint32_t *apply_qwen_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uint32_t *prompt_length, int32_t enable_thinking);
+uint32_t *apply_qwen35_chat_template(Tokenizer *t, wchar_t *user_prompt_wchar, uint32_t *prompt_length, int32_t enable_thinking);
 
 // ===============================================================================
 // 朴素分词器和词元编解码（用于自研Nano模型）

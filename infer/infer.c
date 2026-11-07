@@ -9,6 +9,33 @@
 #include "infer.h"
 
 // ===============================================================================
+// Qwen3.5 辅助函数
+// ===============================================================================
+
+static uint32_t popcount32(uint32_t x) {
+    uint32_t n = 0;
+    while (x) { x &= (x - 1); n++; }
+    return n;
+}
+
+static uint32_t qwen35_n_full_layers(const LLM_Config *cfg) {
+    return popcount32(cfg->layer_type_mask);
+}
+
+static int qwen35_is_full_layer(const LLM_Config *cfg, uint32_t layer) {
+    return ((cfg->layer_type_mask >> layer) & 1u) ? 1 : 0;
+}
+
+// 返回 layer 之前（不含 layer）同类层的数量，即该层在 compact 数组中的下标
+static uint32_t qwen35_compact_index(const LLM_Config *cfg, uint32_t layer, int full) {
+    uint32_t idx = 0;
+    for (uint32_t i = 0; i < layer; i++) {
+        if (qwen35_is_full_layer(cfg, i) == full) idx++;
+    }
+    return idx;
+}
+
+// ===============================================================================
 // 模型文件解析·内存管理
 // ===============================================================================
 
@@ -18,6 +45,11 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
 
     uint32_t q_dim = llm_cfg->n_embd;
     uint32_t kv_dim = (llm_cfg->n_embd * llm_cfg->n_kv_head) / llm_cfg->n_head;
+    uint32_t value_dim = 0;
+    uint32_t key_dim = 0;
+    uint32_t conv_dim = 0;
+    uint32_t n_full = 0;
+    uint32_t n_linear = 0;
 
     if (llm->arch == LLM_ARCH_NANO || llm->arch == LLM_ARCH_QWEN2) {
         q_dim = llm_cfg->n_embd;
@@ -27,15 +59,26 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
         q_dim = llm_cfg->head_dim * llm_cfg->n_head;
         kv_dim = llm_cfg->head_dim * llm_cfg->n_kv_head;
     }
+    else if (llm->arch == LLM_ARCH_QWEN35) {
+        n_full = qwen35_n_full_layers(llm_cfg);
+        n_linear = llm_cfg->n_layer - n_full;
+        q_dim = llm_cfg->head_dim * llm_cfg->n_head;
+        kv_dim = llm_cfg->head_dim * llm_cfg->n_kv_head;
+        key_dim = llm_cfg->linear_n_k_head * llm_cfg->linear_k_head_dim;
+        value_dim = llm_cfg->linear_n_v_head * llm_cfg->linear_v_head_dim;
+        conv_dim = 2 * key_dim + value_dim;
+    }
 
-    uint32_t xbuf_length = llm_cfg->n_embd + llm_cfg->n_embd + q_dim + llm_cfg->n_embd + llm_cfg->n_hidden + llm_cfg->n_hidden
-                         + q_dim + llm_cfg->n_head * max_seq_len + llm_cfg->vocab_size;        
+    uint32_t xba_dim = (value_dim > q_dim) ? value_dim : q_dim;
+
+    uint32_t xbuf_length = llm_cfg->n_embd + llm_cfg->n_embd + xba_dim + llm_cfg->n_embd + llm_cfg->n_hidden + llm_cfg->n_hidden
+                         + q_dim + llm_cfg->n_head * max_seq_len + llm_cfg->vocab_size;
     s->xbuf = (float *)platform_calloc(xbuf_length, sizeof(float));
     float *xbuf = s->xbuf;
 
     s->x       = xbuf;  xbuf += llm_cfg->n_embd;
     s->xb      = xbuf;  xbuf += llm_cfg->n_embd;
-    s->xba     = xbuf;  xbuf += q_dim;
+    s->xba     = xbuf;  xbuf += xba_dim;
     s->xb2     = xbuf;  xbuf += llm_cfg->n_embd;
     s->hb      = xbuf;  xbuf += llm_cfg->n_hidden;
     s->hb2     = xbuf;  xbuf += llm_cfg->n_hidden;
@@ -43,42 +86,87 @@ void malloc_fwd_buffer(LLM *llm, uint32_t max_seq_len) {
     s->att     = xbuf;  xbuf += llm_cfg->n_head * max_seq_len;
     s->logits  = xbuf;  xbuf += llm_cfg->vocab_size;
 
-    uint32_t kvcache_length = llm_cfg->n_layer * max_seq_len * kv_dim * 2;        
+    // Qwen3.5 只有 full_attention 层需要 KV cache
+    uint32_t n_kv_layers = (llm->arch == LLM_ARCH_QWEN35) ? n_full : llm_cfg->n_layer;
+    uint32_t kvcache_length = n_kv_layers * max_seq_len * kv_dim * 2;
     s->kvcache = (float *)platform_calloc(kvcache_length, sizeof(float));
     float *kvcache = s->kvcache;
 
-    s->k_cache = kvcache;  kvcache += llm_cfg->n_layer * max_seq_len * kv_dim;
-    s->v_cache = kvcache;  kvcache += llm_cfg->n_layer * max_seq_len * kv_dim;
+    s->k_cache = kvcache;  kvcache += n_kv_layers * max_seq_len * kv_dim;
+    s->v_cache = kvcache;  kvcache += n_kv_layers * max_seq_len * kv_dim;
 
     if (llm->quant_type == QUANT_TYPE_Q80) {
         uint32_t gs = llm->group_size;
 
-        uint32_t qvbuf_length = llm_cfg->n_embd + q_dim + llm_cfg->n_hidden;
-        uint32_t qsbuf_length = llm_cfg->n_embd / gs + q_dim / gs + llm_cfg->n_hidden / gs;
+        uint32_t qvbuf_length = llm_cfg->n_embd + xba_dim + llm_cfg->n_hidden + ((llm->arch == LLM_ARCH_QWEN35) ? value_dim : 0);
+        uint32_t qsbuf_length = llm_cfg->n_embd / gs + xba_dim / gs + llm_cfg->n_hidden / gs
+                              + ((llm->arch == LLM_ARCH_QWEN35) ? value_dim / gs : 0);
         s->qvbuf = (QTYPE *)platform_calloc(qvbuf_length, sizeof(QTYPE));
         s->qsbuf = (float *)platform_calloc(qsbuf_length, sizeof(float));
         QTYPE *qvbuf = s->qvbuf;
         float *qsbuf = s->qsbuf;
 
         Q80_Tensor xq_tmp   = (Q80_Tensor) { .q = qvbuf, .s = qsbuf };  qvbuf += llm_cfg->n_embd; qsbuf += llm_cfg->n_embd / gs;
-        Q80_Tensor xbaq_tmp = (Q80_Tensor) { .q = qvbuf, .s = qsbuf };  qvbuf += q_dim; qsbuf += q_dim / gs;
+        Q80_Tensor xbaq_tmp = (Q80_Tensor) { .q = qvbuf, .s = qsbuf };  qvbuf += xba_dim; qsbuf += xba_dim / gs;
         Q80_Tensor hq_tmp   = (Q80_Tensor) { .q = qvbuf, .s = qsbuf };  qvbuf += llm_cfg->n_hidden; qsbuf += llm_cfg->n_hidden / gs;
         
         s->xq               = (Typed_Tensor) { .tensor_q80 = xq_tmp };
         s->xbaq             = (Typed_Tensor) { .tensor_q80 = xbaq_tmp };
         s->hq               = (Typed_Tensor) { .tensor_q80 = hq_tmp };
+
+        if (llm->arch == LLM_ARCH_QWEN35) {
+            Q80_Tensor vq_tmp = (Q80_Tensor) { .q = qvbuf, .s = qsbuf };  qvbuf += value_dim; qsbuf += value_dim / gs;
+            s->lin_vq = (Typed_Tensor) { .tensor_q80 = vq_tmp };
+        }
     }
     else if (llm->quant_type == QUANT_TYPE_Q4K) {
         Q4k_Tensor *xq_q4k   = make_q4k_tensor(1, (uint32_t[]){llm_cfg->n_embd});
-        Q4k_Tensor *xbaq_q4k = make_q4k_tensor(1, (uint32_t[]){q_dim});
+        Q4k_Tensor *xbaq_q4k = make_q4k_tensor(1, (uint32_t[]){xba_dim});
         Q4k_Tensor *hq_q4k   = make_q4k_tensor(1, (uint32_t[]){llm_cfg->n_hidden});
         s->xq   = (Typed_Tensor) { .tensor_q4k = xq_q4k };
         s->xbaq = (Typed_Tensor) { .tensor_q4k = xbaq_q4k };
         s->hq   = (Typed_Tensor) { .tensor_q4k = hq_q4k };
+        if (llm->arch == LLM_ARCH_QWEN35) {
+            Q4k_Tensor *vq_q4k = make_q4k_tensor(1, (uint32_t[]){value_dim});
+            s->lin_vq = (Typed_Tensor) { .tensor_q4k = vq_q4k };
+        }
+    }
+
+    // Qwen3.5 线性注意力：scratch + conv 状态 + recurrent 状态，统一分配
+    if (llm->arch == LLM_ARCH_QWEN35) {
+        uint32_t n_v = llm_cfg->linear_n_v_head;
+        uint32_t k_dim = llm_cfg->linear_k_head_dim;
+        uint32_t v_dim = llm_cfg->linear_v_head_dim;
+        uint32_t k_hist = (llm_cfg->conv_kernel_dim > 1) ? (llm_cfg->conv_kernel_dim - 1) : 0;
+
+        uint32_t scratch_len = 2 * q_dim      // qg
+                             + conv_dim       // lin_conv
+                             + value_dim      // lin_z
+                             + 2 * n_v        // lin_b, lin_a
+                             + conv_dim       // lin_conv_out
+                             + value_dim      // lin_out
+                             + 2 * n_v * v_dim; // kv_mem, delta
+        uint32_t conv_state_len = n_linear * conv_dim * k_hist;
+        uint32_t rec_state_len = n_linear * n_v * k_dim * v_dim;
+
+        s->lin_buf = (float *)platform_calloc((uint64_t)scratch_len + conv_state_len + rec_state_len, sizeof(float));
+        float *lb = s->lin_buf;
+
+        s->qg          = lb;  lb += 2 * q_dim;
+        s->lin_conv    = lb;  lb += conv_dim;
+        s->lin_z       = lb;  lb += value_dim;
+        s->lin_b       = lb;  lb += n_v;
+        s->lin_a       = lb;  lb += n_v;
+        s->lin_conv_out= lb;  lb += conv_dim;
+        s->lin_out     = lb;  lb += value_dim;
+        s->lin_kv_mem  = lb;  lb += n_v * v_dim;  // 每个 v head 一份，便于 OpenMP 并行
+        s->lin_delta   = lb;  lb += n_v * v_dim;
+        s->lin_conv_state = lb;  lb += conv_state_len;
+        s->lin_recurrent  = lb;  lb += rec_state_len;
     }
 
     // ensure all mallocs went fine
-    if (!s->xbuf || !s->kvcache) {
+    if (!s->xbuf || !s->kvcache || (llm->arch == LLM_ARCH_QWEN35 && !s->lin_buf)) {
         fprintf(stderr, "mem alloc failed!\n");
         exit(EXIT_FAILURE);
     }
@@ -95,9 +183,170 @@ void free_fwd_buffer(LLM* llm) {
         free(s->qvbuf);
         free(s->qsbuf);
     }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        free(s->xq.tensor_q4k);
+        free(s->xbaq.tensor_q4k);
+        free(s->hq.tensor_q4k);
+        if (llm->arch == LLM_ARCH_QWEN35) free(s->lin_vq.tensor_q4k);
+    }
+
+    if (llm->arch == LLM_ARCH_QWEN35) {
+        free(s->lin_buf);
+    }
+}
+
+
+static Typed_Tensor *qwen35_unpack_q4k_group(void **ptr) {
+    uint64_t tlen = 0;
+    Q4k_Tensor *t = unpack_q4k_tensor(*ptr, &tlen);
+    Typed_Tensor *tt = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+    tt->tensor_q4k = t;
+    *ptr = (uint8_t *)(*ptr) + tlen;
+    return tt;
+}
+
+// Qwen3.5 的参数文件布局（与 tools/export_qwen35.py 一一对应）
+static void memory_map_params_qwen35(LLM *llm, void *ptr) {
+    LLM_Param *w = &(llm->params);
+    LLM_Config *cfg = &(llm->config);
+
+    uint32_t n_layer = cfg->n_layer;
+    uint32_t n_embd = cfg->n_embd;
+    uint32_t head_dim = cfg->head_dim;
+    uint32_t q_dim = cfg->n_head * head_dim;
+    uint32_t kv_dim = cfg->n_kv_head * head_dim;
+    uint32_t n_full = qwen35_n_full_layers(cfg);
+    uint32_t n_linear = n_layer - n_full;
+    uint32_t key_dim = cfg->linear_n_k_head * cfg->linear_k_head_dim;
+    uint32_t value_dim = cfg->linear_n_v_head * cfg->linear_v_head_dim;
+    uint32_t conv_dim = 2 * key_dim + value_dim;
+    uint32_t n_v = cfg->linear_n_v_head;
+    uint32_t v_dim = cfg->linear_v_head_dim;
+
+    float *fptr = (float *)ptr;
+
+    // 所有层的输入/后注意力 RMSNorm，以及最终 RMSNorm
+    w->rms_norm_attn  = fptr;  fptr += n_layer * n_embd;
+    w->rms_norm_ffn   = fptr;  fptr += n_layer * n_embd;
+    w->rms_norm_final = fptr;  fptr += n_embd;
+
+    // 线性注意力的非量化参数（紧凑排列）
+    w->conv1d  = fptr;  fptr += n_linear * conv_dim * cfg->conv_kernel_dim;
+    w->A_log   = fptr;  fptr += n_linear * n_v;
+    w->dt_bias = fptr;  fptr += n_linear * n_v;
+    w->lin_norm= fptr;  fptr += n_linear * v_dim;
+
+    w->in_proj_b = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+    w->in_proj_b->tensor_f32 = fptr;  fptr += n_linear * n_v * n_embd;
+    w->in_proj_a = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+    w->in_proj_a->tensor_f32 = fptr;  fptr += n_linear * n_v * n_embd;
+
+    // 全注意力层的 q_norm / k_norm（紧凑排列）
+    w->q_norm = fptr;  fptr += n_full * head_dim;
+    w->k_norm = fptr;  fptr += n_full * head_dim;
+
+    // RoPE 表在 C 端按 rope_theta 生成，避免把 262144 长度的表写进模型文件
+    uint32_t rope_half = cfg->rope_dim / 2;
+    w->freq_cis_real = (float *)platform_calloc(cfg->block_size * rope_half, sizeof(float));
+    w->freq_cis_imag = (float *)platform_calloc(cfg->block_size * rope_half, sizeof(float));
+    for (uint32_t pos = 0; pos < cfg->block_size; pos++) {
+        for (uint32_t i = 0; i < rope_half; i++) {
+            float freq = 1.0f / powf(cfg->rope_theta, (float)(i * 2) / (float)cfg->rope_dim);
+            w->freq_cis_real[pos * rope_half + i] = cosf(pos * freq);
+            w->freq_cis_imag[pos * rope_half + i] = sinf(pos * freq);
+        }
+    }
+
+    // 主参数（量化或 FP32）
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        w->token_embedding = fptr;  fptr += (uint64_t)cfg->vocab_size * n_embd;
+
+        w->w1 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+        w->w1->tensor_f32 = fptr;  fptr += (uint64_t)n_layer * cfg->n_hidden * n_embd;
+        w->w2 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+        w->w2->tensor_f32 = fptr;  fptr += (uint64_t)n_layer * n_embd * cfg->n_hidden;
+        w->w3 = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+        w->w3->tensor_f32 = fptr;  fptr += (uint64_t)n_layer * cfg->n_hidden * n_embd;
+
+        w->wq = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+        w->wq->tensor_f32 = fptr;  fptr += (uint64_t)n_full * (2 * q_dim) * n_embd;
+        w->wk = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+        w->wk->tensor_f32 = fptr;  fptr += (uint64_t)n_full * kv_dim * n_embd;
+        w->wv = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+        w->wv->tensor_f32 = fptr;  fptr += (uint64_t)n_full * kv_dim * n_embd;
+        w->wo = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+        w->wo->tensor_f32 = fptr;  fptr += (uint64_t)n_full * n_embd * q_dim;
+
+        w->wqkv = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+        w->wqkv->tensor_f32 = fptr;  fptr += (uint64_t)n_linear * conv_dim * n_embd;
+        w->wz = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+        w->wz->tensor_f32 = fptr;  fptr += (uint64_t)n_linear * value_dim * n_embd;
+        w->wlo = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+        w->wlo->tensor_f32 = fptr;  fptr += (uint64_t)n_linear * n_embd * value_dim;
+
+        w->token_classifier = (Typed_Tensor *)platform_calloc(1, sizeof(Typed_Tensor));
+        w->token_classifier->tensor_f32 = cfg->is_shared_classifier ? w->token_embedding : fptr;
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        uint32_t gs = llm->group_size;
+        void *p = (void *)fptr;
+
+        w->q_tokens = parse_quantized_tensors(&p, 1, cfg->vocab_size * n_embd, gs);
+        w->token_embedding = (float *)platform_calloc((uint64_t)cfg->vocab_size * n_embd, sizeof(float));
+        dequantize(&w->q_tokens->tensor_q80, w->token_embedding, cfg->vocab_size * n_embd, gs);
+
+        w->w1 = parse_quantized_tensors(&p, n_layer, cfg->n_hidden * n_embd, gs);
+        w->w2 = parse_quantized_tensors(&p, n_layer, n_embd * cfg->n_hidden, gs);
+        w->w3 = parse_quantized_tensors(&p, n_layer, cfg->n_hidden * n_embd, gs);
+
+        w->wq = parse_quantized_tensors(&p, n_full, (2 * q_dim) * n_embd, gs);
+        w->wk = parse_quantized_tensors(&p, n_full, kv_dim * n_embd, gs);
+        w->wv = parse_quantized_tensors(&p, n_full, kv_dim * n_embd, gs);
+        w->wo = parse_quantized_tensors(&p, n_full, n_embd * q_dim, gs);
+
+        w->wqkv = parse_quantized_tensors(&p, n_linear, conv_dim * n_embd, gs);
+        w->wz   = parse_quantized_tensors(&p, n_linear, value_dim * n_embd, gs);
+        w->wlo  = parse_quantized_tensors(&p, n_linear, n_embd * value_dim, gs);
+
+        w->token_classifier = cfg->is_shared_classifier ? w->q_tokens
+                             : parse_quantized_tensors(&p, 1, n_embd * cfg->vocab_size, gs);
+        fptr = (float *)p;
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        void *p = (void *)fptr;
+        uint32_t ndim = 0;
+
+        w->q_tokens = qwen35_unpack_q4k_group(&p);
+        w->token_embedding = (float *)platform_calloc((uint64_t)cfg->vocab_size * n_embd, sizeof(float));
+        uint32_t edim[2] = {cfg->vocab_size, n_embd};
+        dequantize_tensor_q4k(w->q_tokens->tensor_q4k, w->token_embedding, &ndim, edim);
+
+        w->w1 = qwen35_unpack_q4k_group(&p);
+        w->w2 = qwen35_unpack_q4k_group(&p);
+        w->w3 = qwen35_unpack_q4k_group(&p);
+
+        w->wq = qwen35_unpack_q4k_group(&p);
+        w->wk = qwen35_unpack_q4k_group(&p);
+        w->wv = qwen35_unpack_q4k_group(&p);
+        w->wo = qwen35_unpack_q4k_group(&p);
+
+        w->wqkv = qwen35_unpack_q4k_group(&p);
+        w->wz   = qwen35_unpack_q4k_group(&p);
+        w->wlo  = qwen35_unpack_q4k_group(&p);
+
+        w->token_classifier = cfg->is_shared_classifier ? w->q_tokens : qwen35_unpack_q4k_group(&p);
+        fptr = (float *)p;
+    }
+
+    (void)fptr;
 }
 
 void memory_map_params(LLM *llm, void* ptr) {
+    if (llm->arch == LLM_ARCH_QWEN35) {
+        memory_map_params_qwen35(llm, ptr);
+        return;
+    }
+
     LLM_Param *w = &(llm->params);
     LLM_Config *cfg = &(llm->config);
 
@@ -250,6 +499,18 @@ void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
     uint32_t quant_type     = header[offset]; offset++;
     uint32_t group_size     = header[offset]; offset++;
 
+    if (model_type == LLM_ARCH_QWEN35) {
+        config->layer_type_mask   = header[offset]; offset++;
+        config->conv_kernel_dim   = header[offset]; offset++;
+        config->linear_n_k_head   = header[offset]; offset++;
+        config->linear_n_v_head   = header[offset]; offset++;
+        config->linear_k_head_dim = header[offset]; offset++;
+        config->linear_v_head_dim = header[offset]; offset++;
+        config->rope_dim          = header[offset]; offset++;
+        uint32_t theta_bits       = header[offset]; offset++;
+        memcpy(&config->rope_theta, &theta_bits, sizeof(float));
+    }
+
     llm->arch = model_type;
 
     llm->quant_type = (quant_type == QUANT_TYPE_F32 || quant_type == QUANT_TYPE_Q80 || quant_type == QUANT_TYPE_Q4K) ? quant_type : QUANT_TYPE_Q80;
@@ -308,6 +569,10 @@ void parse_model_file(uint8_t* buffer, LLM *llm, Tokenizer *tk) {
                 free(ids); // add_token为拷贝语义（memcpy），ids由本函数释放
             }
         }
+    }
+    else if (llm->arch == LLM_ARCH_QWEN35) {
+        // Qwen3.5 的导出工具会为全部 vocab_size 个条目写入词表（含尾部空槽位）
+        build_bpe_tokenizer(tk, (uint8_t*)tokenzier_ptr, config->vocab_size);
     }
     else if (llm->arch == LLM_ARCH_QWEN2 || llm->arch == LLM_ARCH_QWEN3) {
         build_bpe_tokenizer(tk, (uint8_t*)tokenzier_ptr, 151669);
@@ -372,11 +637,12 @@ void free_llm(LLM* llm, Tokenizer *tk) {
     free(llm->buffer);
 #endif
 
-    if (llm->quant_type == QUANT_TYPE_Q80) {
+    if (llm->quant_type == QUANT_TYPE_Q80 || llm->quant_type == QUANT_TYPE_Q4K) {
         free(llm->params.token_embedding);
     }
     free(llm->params.q_tokens);
-    if (llm->config.is_shared_classifier == 0) {
+    // 共享分类器时 token_classifier 与 q_tokens 指向同一对象，不能重复释放
+    if (llm->params.token_classifier && llm->params.token_classifier != llm->params.q_tokens) {
         free(llm->params.token_classifier);
     }
     free(llm->params.wq);
@@ -390,11 +656,20 @@ void free_llm(LLM* llm, Tokenizer *tk) {
     if (llm->arch == LLM_ARCH_NANO) {
         free_tokenizer(tk);
     }
-    else if (llm->arch == LLM_ARCH_QWEN2 || llm->arch == LLM_ARCH_QWEN3) {
+    else if (llm->arch == LLM_ARCH_QWEN2 || llm->arch == LLM_ARCH_QWEN3 || llm->arch == LLM_ARCH_QWEN35) {
         free_bpe_tokenizer(tk);
         if (llm->arch == LLM_ARCH_QWEN3) {
             free(llm->params.freq_cis_real);
             free(llm->params.freq_cis_imag);
+        }
+        else if (llm->arch == LLM_ARCH_QWEN35) {
+            free(llm->params.freq_cis_real);
+            free(llm->params.freq_cis_imag);
+            free(llm->params.in_proj_b);
+            free(llm->params.in_proj_a);
+            free(llm->params.wqkv);
+            free(llm->params.wz);
+            free(llm->params.wlo);
         }
     }
 
@@ -598,19 +873,23 @@ void scale(float *a, float k, int size) {
     }
 }
 
-void rmsnorm(float* o, float* x, float* weight, int size) {
+void rmsnorm_eps(float* o, float* x, float* weight, int size, float eps) {
     // calculate sum of squares
     float ss = 0.0f;
     for (int j = 0; j < size; j++) {
         ss += x[j] * x[j];
     }
     ss /= size;
-    ss += 1e-5f;
+    ss += eps;
     ss = 1.0f / sqrtf(ss);
     // normalize and scale
     for (int j = 0; j < size; j++) {
         o[j] = weight[j] * (ss * x[j]);
     }
+}
+
+void rmsnorm(float* o, float* x, float* weight, int size) {
+    rmsnorm_eps(o, x, weight, size, 1e-5f);
 }
 
 void softmax(float* x, int size) {
@@ -706,11 +985,419 @@ void rope_qwen3(float *head, uint32_t head_dim, uint32_t pos, float *freq_cis_re
 }
 
 
+
+// ===============================================================================
+// Qwen3.5 前向传播
+// ===============================================================================
+
+#define QWEN35_RMS_EPS (1e-6f)
+
+
+static float qwen35_silu(float x) {
+    return x / (1.0f + expf(-x));
+}
+
+static float qwen35_softplus(float x) {
+    // log(1 + exp(x))，x 较大时直接返回 x 以避免溢出
+    return (x > 20.0f) ? x : log1pf(expf(x));
+}
+
+static void qwen35_l2norm_inplace(float *x, uint32_t n) {
+    float ss = 0.0f;
+    for (uint32_t i = 0; i < n; i++) ss += x[i] * x[i];
+    float inv = 1.0f / sqrtf(ss + 1e-6f);
+    for (uint32_t i = 0; i < n; i++) x[i] *= inv;
+}
+
+// Gated DeltaNet 线性注意力（单 token 递推形式）
+static void qwen35_linear_attention(
+    Nano_Context *ctx, float *xb, float *xb2,
+    uint32_t layer, uint32_t lin_idx, uint32_t pos, LLM *llm)
+{
+    LLM_Config *cfg = &llm->config;
+    LLM_Param *w = &llm->params;
+    FwdBuffer *s = &llm->state;
+
+    uint32_t n_embd = cfg->n_embd;
+    uint32_t key_dim = cfg->linear_n_k_head * cfg->linear_k_head_dim;
+    uint32_t value_dim = cfg->linear_n_v_head * cfg->linear_v_head_dim;
+    uint32_t conv_dim = 2 * key_dim + value_dim;
+    uint32_t k_dim = cfg->linear_k_head_dim;
+    uint32_t v_dim = cfg->linear_v_head_dim;
+    uint32_t n_v = cfg->linear_n_v_head;
+    uint32_t n_k = cfg->linear_n_k_head;
+    uint32_t ratio = n_v / n_k;
+    uint32_t gs = llm->group_size;
+
+    // 1) QKV / gate / beta / decay 投影
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_QKV}, ctx->observation_env);
+#endif
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(s->lin_conv, xb, w->wqkv->tensor_f32 + (uint64_t)lin_idx * conv_dim * n_embd, n_embd, conv_dim);
+        matmul(s->lin_z,    xb, w->wz->tensor_f32   + (uint64_t)lin_idx * value_dim * n_embd, n_embd, value_dim);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->xq.tensor_q80, xb, n_embd, gs);
+        matmul_quant(s->lin_conv, &s->xq, w->wqkv + lin_idx, n_embd, conv_dim, gs);
+        matmul_quant(s->lin_z,    &s->xq, w->wz   + lin_idx, n_embd, value_dim, gs);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(xb, 1, (uint32_t[]){n_embd}, s->xq.tensor_q4k);
+        matmul_q4k(s->lin_conv, s->xq.tensor_q4k, w->wqkv->tensor_q4k, lin_idx);
+        matmul_q4k(s->lin_z,    s->xq.tensor_q4k, w->wz->tensor_q4k,   lin_idx);
+    }
+
+    matmul(s->lin_a, xb, w->in_proj_a->tensor_f32 + (uint64_t)lin_idx * n_v * n_embd, n_embd, n_v);
+    matmul(s->lin_b, xb, w->in_proj_b->tensor_f32 + (uint64_t)lin_idx * n_v * n_embd, n_embd, n_v);
+
+    // 2) depthwise causal conv1d + SiLU
+    uint32_t K = cfg->conv_kernel_dim;
+    uint32_t hist_len = (K > 1) ? (K - 1) : 0;
+    float *hist = s->lin_conv_state + (uint64_t)lin_idx * conv_dim * hist_len;
+
+    // conv 计算需要 K 个输入：state 保存前 K-1 个，当前 token 直接从 lin_conv 取。
+    // 结果先写到 lin_conv_out，再更新 state、最后覆盖 lin_conv，避免丢失当前 token 的原始值。
+    float *conv_out = s->lin_conv_out;
+    float *cw = w->conv1d + (uint64_t)lin_idx * conv_dim * K;
+    for (uint32_t c = 0; c < conv_dim; c++) {
+        float val = cw[c * K + (K - 1)] * s->lin_conv[c];
+        for (uint32_t k = 0; k + 1 < K; k++) {
+            val += cw[c * K + k] * hist[k * conv_dim + c];
+        }
+        conv_out[c] = qwen35_silu(val);
+    }
+
+    if (hist_len > 0) {
+        if (hist_len > 1) {
+            memmove(hist, hist + conv_dim, (hist_len - 1) * conv_dim * sizeof(float));
+        }
+        memcpy(hist + (hist_len - 1) * conv_dim, s->lin_conv, conv_dim * sizeof(float));
+    }
+    memcpy(s->lin_conv, conv_out, conv_dim * sizeof(float));
+
+
+    float *q = s->lin_conv;
+    float *k = s->lin_conv + key_dim;
+    float *v = s->lin_conv + 2 * key_dim;
+
+    // beta / decay：直接用 lin_b/lin_a 原地替换
+    for (uint32_t hv = 0; hv < n_v; hv++) {
+        float bval = s->lin_b[hv];
+        float aval = s->lin_a[hv];
+        s->lin_b[hv] = 1.0f / (1.0f + expf(-bval));
+        s->lin_a[hv] = -expf(w->A_log[lin_idx * n_v + hv]) * qwen35_softplus(aval + w->dt_bias[lin_idx * n_v + hv]);
+    }
+
+    // 3) 先对每个 key head 做 l2norm（若 n_v > n_k，多个 v head 共享同一 key head）
+    for (uint32_t kh = 0; kh < n_k; kh++) {
+        qwen35_l2norm_inplace(q + kh * k_dim, k_dim);
+        qwen35_l2norm_inplace(k + kh * k_dim, k_dim);
+    }
+
+    // 4) 逐 v head 递推更新 recurrent state，并计算输出
+    float *rec_base = s->lin_recurrent + (uint64_t)lin_idx * n_v * k_dim * v_dim;
+
+    int hv_i;
+    #pragma omp parallel for private(hv_i)
+    for (hv_i = 0; hv_i < (int)n_v; hv_i++) {
+        uint32_t hv = (uint32_t)hv_i;
+        uint32_t kh = hv / ratio;
+
+        float *qh = q + kh * k_dim;
+        float *khp = k + kh * k_dim;
+        float *vh = v + hv * v_dim;
+        float *S = rec_base + (uint64_t)hv * k_dim * v_dim;
+        float *kv_mem = s->lin_kv_mem + hv * v_dim;
+        float *delta = s->lin_delta + hv * v_dim;
+        float *out = s->lin_out + hv * v_dim;
+
+        float decay = expf(s->lin_a[hv]);
+        for (uint32_t i = 0; i < k_dim * v_dim; i++) S[i] *= decay;
+
+        memset(kv_mem, 0, v_dim * sizeof(float));
+        for (uint32_t i = 0; i < k_dim; i++) {
+            float ki = khp[i];
+            float *row = S + (uint64_t)i * v_dim;
+            for (uint32_t j = 0; j < v_dim; j++) kv_mem[j] += ki * row[j];
+        }
+
+        float bval = s->lin_b[hv];
+        for (uint32_t j = 0; j < v_dim; j++) delta[j] = (vh[j] - kv_mem[j]) * bval;
+
+        for (uint32_t i = 0; i < k_dim; i++) {
+            float ki = khp[i];
+            float *row = S + (uint64_t)i * v_dim;
+            for (uint32_t j = 0; j < v_dim; j++) row[j] += ki * delta[j];
+        }
+
+        float qscale = 1.0f / sqrtf((float)k_dim);
+        for (uint32_t j = 0; j < v_dim; j++) out[j] = 0.0f;
+        for (uint32_t i = 0; i < k_dim; i++) {
+            float qi = qh[i] * qscale;
+            float *row = S + (uint64_t)i * v_dim;
+            for (uint32_t j = 0; j < v_dim; j++) out[j] += qi * row[j];
+        }
+
+        // 5) RMSNormGated：norm -> weight -> silu(gate)
+        float ss = 0.0f;
+        for (uint32_t j = 0; j < v_dim; j++) ss += out[j] * out[j];
+        float scale = 1.0f / sqrtf(ss / (float)v_dim + QWEN35_RMS_EPS);
+        float *zn = s->lin_z + hv * v_dim;
+        float *ln = w->lin_norm + (uint64_t)lin_idx * v_dim;
+        for (uint32_t j = 0; j < v_dim; j++) {
+            out[j] = ln[j] * (out[j] * scale) * qwen35_silu(zn[j]);
+        }
+    }
+
+
+    // 6) out_proj
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_O}, ctx->observation_env);
+#endif
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(xb2, s->lin_out, w->wlo->tensor_f32 + (uint64_t)lin_idx * n_embd * value_dim, value_dim, n_embd);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->lin_vq.tensor_q80, s->lin_out, value_dim, gs);
+        matmul_quant(xb2, &s->lin_vq, w->wlo + lin_idx, value_dim, n_embd, gs);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(s->lin_out, 1, (uint32_t[]){value_dim}, s->lin_vq.tensor_q4k);
+        matmul_q4k(xb2, s->lin_vq.tensor_q4k, w->wlo->tensor_q4k, lin_idx);
+    }
+
+}
+
+// 全注意力层（部分旋转 RoPE + 输出 gate）
+static void qwen35_full_attention(
+    Nano_Context *ctx, float *xb, float *xb2,
+    uint32_t layer, uint32_t full_idx, uint32_t pos,
+    uint32_t max_seq_len, uint32_t is_causal, LLM *llm)
+{
+    LLM_Config *cfg = &llm->config;
+    LLM_Param *w = &llm->params;
+    FwdBuffer *s = &llm->state;
+
+    uint32_t n_embd = cfg->n_embd;
+    uint32_t head_dim = cfg->head_dim;
+    uint32_t q_dim = cfg->n_head * head_dim;
+    uint32_t kv_dim = cfg->n_kv_head * head_dim;
+    uint32_t kv_mul = cfg->n_head / cfg->n_kv_head;
+    uint32_t gs = llm->group_size;
+
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_QKV}, ctx->observation_env);
+#endif
+
+    // q_proj 输出 2*q_dim：每个 head 依次是 [query(head_dim), gate(head_dim)]
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(s->qg, xb, w->wq->tensor_f32 + (uint64_t)full_idx * (2 * q_dim) * n_embd, n_embd, 2 * q_dim);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->xq.tensor_q80, xb, n_embd, gs);
+        matmul_quant(s->qg, &s->xq, w->wq + full_idx, n_embd, 2 * q_dim, gs);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(xb, 1, (uint32_t[]){n_embd}, s->xq.tensor_q4k);
+        matmul_q4k(s->qg, s->xq.tensor_q4k, w->wq->tensor_q4k, full_idx);
+    }
+
+
+    uint32_t layer_offset = full_idx * max_seq_len * kv_dim;
+    s->k = s->k_cache + layer_offset + pos * kv_dim;
+    s->v = s->v_cache + layer_offset + pos * kv_dim;
+
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(s->k, xb, w->wk->tensor_f32 + (uint64_t)full_idx * kv_dim * n_embd, n_embd, kv_dim);
+        matmul(s->v, xb, w->wv->tensor_f32 + (uint64_t)full_idx * kv_dim * n_embd, n_embd, kv_dim);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->xq.tensor_q80, xb, n_embd, gs);
+        matmul_quant(s->k, &s->xq, w->wk + full_idx, n_embd, kv_dim, gs);
+        matmul_quant(s->v, &s->xq, w->wv + full_idx, n_embd, kv_dim, gs);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(xb, 1, (uint32_t[]){n_embd}, s->xq.tensor_q4k);
+        matmul_q4k(s->k, s->xq.tensor_q4k, w->wk->tensor_q4k, full_idx);
+        matmul_q4k(s->v, s->xq.tensor_q4k, w->wv->tensor_q4k, full_idx);
+    }
+
+    // q/k norm + 部分旋转 RoPE
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_QK_ROPE}, ctx->observation_env);
+#endif
+    uint32_t rope_half = cfg->rope_dim / 2;
+    float *freq_r = w->freq_cis_real + (uint64_t)pos * rope_half;
+    float *freq_i = w->freq_cis_imag + (uint64_t)pos * rope_half;
+
+    for (uint32_t h = 0; h < cfg->n_head; h++) {
+        float *q = s->q + h * head_dim;
+        memcpy(q, s->qg + h * 2 * head_dim, head_dim * sizeof(float));
+        rmsnorm_eps(q, q, w->q_norm + (uint64_t)full_idx * head_dim, head_dim, QWEN35_RMS_EPS);
+        rope_qwen3(q, cfg->rope_dim, pos, freq_r, freq_i);
+    }
+    for (uint32_t h = 0; h < cfg->n_kv_head; h++) {
+        float *k = s->k + h * head_dim;
+        rmsnorm_eps(k, k, w->k_norm + (uint64_t)full_idx * head_dim, head_dim, QWEN35_RMS_EPS);
+        rope_qwen3(k, cfg->rope_dim, pos, freq_r, freq_i);
+    }
+
+
+    // attention
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_MHA}, ctx->observation_env);
+#endif
+    int h_i;
+    #pragma omp parallel for private(h_i)
+    for (h_i = 0; h_i < (int)cfg->n_head; h_i++) {
+        uint32_t h = (uint32_t)h_i;
+        float *q = s->q + h * head_dim;
+        float *att = s->att + (uint64_t)h * max_seq_len;
+        uint32_t attn_range = is_causal ? (pos + 1) : max_seq_len;
+
+        for (uint32_t t = 0; t < attn_range; t++) {
+            float *k = s->k_cache + layer_offset + (uint64_t)t * kv_dim + (h / kv_mul) * head_dim;
+            float score = 0.0f;
+            for (uint32_t i = 0; i < head_dim; i++) score += q[i] * k[i];
+            att[t] = score / sqrtf((float)head_dim);
+        }
+        softmax(att, attn_range);
+
+        float *xba = s->xba + h * head_dim;
+        memset(xba, 0, head_dim * sizeof(float));
+        for (uint32_t t = 0; t < attn_range; t++) {
+            float *v = s->v_cache + layer_offset + (uint64_t)t * kv_dim + (h / kv_mul) * head_dim;
+            float a = att[t];
+            for (uint32_t i = 0; i < head_dim; i++) xba[i] += a * v[i];
+        }
+    }
+
+
+    // 输出 gate：sigmoid(gate)
+    for (uint32_t h = 0; h < cfg->n_head; h++) {
+        float *xba = s->xba + h * head_dim;
+        float *gate = s->qg + h * 2 * head_dim + head_dim;
+        for (uint32_t i = 0; i < head_dim; i++) {
+            xba[i] *= 1.0f / (1.0f + expf(-gate[i]));
+        }
+    }
+
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_O}, ctx->observation_env);
+#endif
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(xb2, s->xba, w->wo->tensor_f32 + (uint64_t)full_idx * n_embd * q_dim, q_dim, n_embd);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->xbaq.tensor_q80, s->xba, q_dim, gs);
+        matmul_quant(xb2, &s->xbaq, w->wo + full_idx, q_dim, n_embd, gs);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(s->xba, 1, (uint32_t[]){q_dim}, s->xbaq.tensor_q4k);
+        matmul_q4k(xb2, s->xbaq.tensor_q4k, w->wo->tensor_q4k, full_idx);
+    }
+}
+
+// Qwen3.5 的 FFN（与 Nano/Qwen3 的 SwiGLU 相同）
+static void qwen35_ffn(Nano_Context *ctx, float *x, uint32_t layer, LLM *llm) {
+    LLM_Config *cfg = &llm->config;
+    LLM_Param *w = &llm->params;
+    FwdBuffer *s = &llm->state;
+    uint32_t n_embd = cfg->n_embd;
+    uint32_t n_hidden = cfg->n_hidden;
+    uint32_t gs = llm->group_size;
+
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_FFN_NORM}, ctx->observation_env);
+#endif
+    rmsnorm_eps(s->xb, x, w->rms_norm_ffn + (uint64_t)layer * n_embd, n_embd, QWEN35_RMS_EPS);
+
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_W1W3}, ctx->observation_env);
+#endif
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(s->hb,  s->xb, w->w1->tensor_f32 + (uint64_t)layer * n_hidden * n_embd, n_embd, n_hidden);
+        matmul(s->hb2, s->xb, w->w3->tensor_f32 + (uint64_t)layer * n_hidden * n_embd, n_embd, n_hidden);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->xq.tensor_q80, s->xb, n_embd, gs);
+        matmul_quant(s->hb,  &s->xq, w->w1 + layer, n_embd, n_hidden, gs);
+        matmul_quant(s->hb2, &s->xq, w->w3 + layer, n_embd, n_hidden, gs);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(s->xb, 1, (uint32_t[]){n_embd}, s->xq.tensor_q4k);
+        matmul_q4k(s->hb,  s->xq.tensor_q4k, w->w1->tensor_q4k, layer);
+        matmul_q4k(s->hb2, s->xq.tensor_q4k, w->w3->tensor_q4k, layer);
+    }
+
+    for (uint32_t i = 0; i < n_hidden; i++) {
+        float val = s->hb[i];
+        val *= 1.0f / (1.0f + expf(-val));
+        val *= s->hb2[i];
+        s->hb[i] = val;
+    }
+
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_W2}, ctx->observation_env);
+#endif
+    if (llm->quant_type == QUANT_TYPE_F32) {
+        matmul(s->xb, s->hb, w->w2->tensor_f32 + (uint64_t)layer * n_embd * n_hidden, n_hidden, n_embd);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q80) {
+        quantize(&s->hq.tensor_q80, s->hb, n_hidden, gs);
+        matmul_quant(s->xb, &s->hq, w->w2 + layer, n_hidden, n_embd, gs);
+    }
+    else if (llm->quant_type == QUANT_TYPE_Q4K) {
+        quantize_tensor_q4k_in_situ(s->hb, 1, (uint32_t[]){n_hidden}, s->hq.tensor_q4k);
+        matmul_q4k(s->xb, s->hq.tensor_q4k, w->w2->tensor_q4k, layer);
+    }
+
+
+    for (uint32_t i = 0; i < n_embd; i++) x[i] += s->xb[i];
+}
+
+static void transformer_block_forward_qwen35(
+    Nano_Context *ctx, float *x, uint32_t layer, uint32_t pos,
+    uint32_t max_seq_len, uint32_t is_causal, LLM *llm, LoRA *lora)
+{
+    (void)lora; // Qwen3.5 暂不支持 LoRA
+
+    LLM_Config *cfg = &llm->config;
+    LLM_Param *w = &llm->params;
+    FwdBuffer *s = &llm->state;
+    uint32_t n_embd = cfg->n_embd;
+
+#if ENABLE_NANO_OBSERVATION
+    ctx->observation((Nano_Observation){.layer = layer, .phase = NANO_LLM_PHASE_ATTN_NORM}, ctx->observation_env);
+#endif
+    rmsnorm_eps(s->xb, x, w->rms_norm_attn + (uint64_t)layer * n_embd, n_embd, QWEN35_RMS_EPS);
+
+    int is_full = qwen35_is_full_layer(cfg, layer);
+    uint32_t compact_idx = qwen35_compact_index(cfg, layer, is_full);
+
+    if (is_full) {
+        qwen35_full_attention(ctx, s->xb, s->xb2, layer, compact_idx, pos, max_seq_len, is_causal, llm);
+    }
+    else {
+        qwen35_linear_attention(ctx, s->xb, s->xb2, layer, compact_idx, pos, llm);
+    }
+
+    for (uint32_t i = 0; i < n_embd; i++) x[i] += s->xb2[i];
+
+    qwen35_ffn(ctx, x, layer, llm);
+}
+
 // 前向传播一个Transformer块
 // 函数的输入输出都是x，输入的x是上一层传入的值，输出即为本层输出。复用同一块内存（原地更新），波动传递中间激活值。
 // NOTE is_causal参数的说明详见llm_forward函数
 // NOTE 本函数每次执行都会重新计算一次模型的结构参数，但是开销很小。比起逻辑上的清晰和后续流水线并行改造，这点代价是值得的。
 void transformer_block_forward(Nano_Context *ctx, float *x, uint32_t layer, uint32_t pos, uint32_t max_seq_len, uint32_t is_causal, LLM* llm, LoRA *lora) {
+
+    if (llm->arch == LLM_ARCH_QWEN35) {
+        transformer_block_forward_qwen35(ctx, x, layer, pos, max_seq_len, is_causal, llm, lora);
+        return;
+    }
 
     LLM_Config *cfg = &llm->config;
     LLM_Param *w = &llm->params;
@@ -980,6 +1667,18 @@ float* llm_forward(Nano_Context *ctx, uint32_t token, uint32_t pos, uint32_t max
     // Transformer层间传递的中间激活值
     float *x = s->x;
 
+    // Qwen3.5 的线性注意力使用跨 token 的 recurrent 状态：每个新序列开始时清零
+    if (llm->arch == LLM_ARCH_QWEN35 && pos == 0) {
+        uint32_t n_full = qwen35_n_full_layers(cfg);
+        uint32_t n_linear = cfg->n_layer - n_full;
+        uint32_t key_dim = cfg->linear_n_k_head * cfg->linear_k_head_dim;
+        uint32_t value_dim = cfg->linear_n_v_head * cfg->linear_v_head_dim;
+        uint32_t conv_dim = 2 * key_dim + value_dim;
+        uint32_t k_hist = (cfg->conv_kernel_dim > 1) ? (cfg->conv_kernel_dim - 1) : 0;
+        memset(s->lin_conv_state, 0, (uint64_t)n_linear * conv_dim * k_hist * sizeof(float));
+        memset(s->lin_recurrent, 0, (uint64_t)n_linear * cfg->linear_n_v_head * cfg->linear_k_head_dim * cfg->linear_v_head_dim * sizeof(float));
+    }
+
     // 模型入口：将输入token的one-hot转为嵌入向量，等价于直接查token_embedding表
 #if ENABLE_NANO_OBSERVATION
     ctx->observation((Nano_Observation){.layer = -1, .phase = NANO_LLM_PHASE_EMBEDDING}, ctx->observation_env);
@@ -1222,6 +1921,9 @@ Nano_Session *llm_session_init(Nano_Context *ctx, wchar_t *prompt, uint32_t max_
     else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
         prompt_tokens = apply_qwen_chat_template(tokenizer, session->prompt, &(session->num_prompt_tokens), is_thinking_enabled);
     }
+    else if (ctx->llm->arch == LLM_ARCH_QWEN35) {
+        prompt_tokens = apply_qwen35_chat_template(tokenizer, session->prompt, &(session->num_prompt_tokens), is_thinking_enabled);
+    }
     else {
         printf("Error: unknown LLM arch.\n");
         return NULL;
@@ -1264,7 +1966,7 @@ int32_t llm_session_step(Nano_Context *ctx, Nano_Session *session) {
             if (ctx->llm->arch == LLM_ARCH_NANO) {
                 session->output_text = decode_nano(ctx->tokenizer, session->output_ids, session->pos);
             }
-            else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
+            else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3 || ctx->llm->arch == LLM_ARCH_QWEN35) {
                 session->output_text = decode_bpe(ctx->tokenizer, session->output_ids, session->pos);
             }
             else {
@@ -1278,7 +1980,7 @@ int32_t llm_session_step(Nano_Context *ctx, Nano_Session *session) {
             if (ctx->llm->arch == LLM_ARCH_NANO) {
                 session->output_text = decode_nano(ctx->tokenizer, session->output_ids + session->num_prompt_tokens, session->output_count);
             }
-            else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) {
+            else if (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3 || ctx->llm->arch == LLM_ARCH_QWEN35) {
                 session->output_text = decode_bpe(ctx->tokenizer, session->output_ids + session->num_prompt_tokens, session->output_count);
             }
             else {
@@ -1293,9 +1995,13 @@ int32_t llm_session_step(Nano_Context *ctx, Nano_Session *session) {
             return LLM_STOPPED_NORMALLY; // 遇到结束符号，主动结束
         }
         else if (
-            (ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) && 
             (session->is_prefilling == 0) &&
-            (session->next_token == 151643 || session->next_token == 151645)) {
+            (
+                ((ctx->llm->arch == LLM_ARCH_QWEN2 || ctx->llm->arch == LLM_ARCH_QWEN3) &&
+                 (session->next_token == 151643 || session->next_token == 151645)) ||
+                (ctx->llm->arch == LLM_ARCH_QWEN35 &&
+                 (session->next_token == 248044 || session->next_token == 248046))
+            )) {
             return LLM_STOPPED_NORMALLY; // 遇到结束符号，主动结束
         }
         else {

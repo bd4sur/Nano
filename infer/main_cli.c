@@ -182,7 +182,7 @@ int32_t on_decoding(Nano_Session *session) {
         new_token[0] = session->next_token;
         printf("%ls", decode_nano(g_llm_ctx->tokenizer, new_token, 1));
     }
-    else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
+    else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN35) {
         printf("%s", g_llm_ctx->tokenizer->vocab[session->next_token]);
     }
     else {
@@ -219,8 +219,13 @@ wchar_t *get_current_time_wstring() {
     return wbuf;
 }
 
-int main() {
+int main(int argc, char **argv) {
     if(!setlocale(LC_CTYPE, "")) return -1;
+
+    // 允许通过命令行或环境变量覆盖模型路径，方便冒烟测试
+    const char *env_model = getenv("NANO_MODEL");
+    if (argc > 1) MODEL_PATH = argv[1];
+    else if (env_model && env_model[0]) MODEL_PATH = (char *)env_model;
 
     printf("Nano Language Model Inference Engine CLI\n\n");
 
@@ -277,7 +282,7 @@ int main() {
             wcscat(prompt, input_text);
             wcscat(prompt, L"<|response_mark|>");
         }
-        else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3) {
+        else if (g_llm_ctx->llm->arch == LLM_ARCH_QWEN2 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN3 || g_llm_ctx->llm->arch == LLM_ARCH_QWEN35) {
             wcscpy(prompt, input_text);
             // wcscat(prompt, L" /no_think");
         }

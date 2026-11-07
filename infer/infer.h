@@ -44,9 +44,10 @@ extern "C" {
 #endif
 
 
-#define LLM_ARCH_NANO  (0)
-#define LLM_ARCH_QWEN2 (2)
-#define LLM_ARCH_QWEN3 (3)
+#define LLM_ARCH_NANO   (0)
+#define LLM_ARCH_QWEN2  (2)
+#define LLM_ARCH_QWEN3  (3)
+#define LLM_ARCH_QWEN35 (4)
 
 #define LLM_RUNNING_IN_PREFILLING (11)
 #define LLM_RUNNING_IN_DECODING   (12)
@@ -97,7 +98,17 @@ typedef struct {
     uint32_t n_kv_head;
     uint32_t n_hidden;
     uint32_t is_shared_classifier;
-    uint32_t head_dim; // 对于Nano和Qwen2为0，head_dim等于n_embd/n_head，q、k、v向量的维数固定为n_embd。对于Qwen3为固定值，该值决定了q、k、v向量的维数。
+    uint32_t head_dim; // 对于Nano和Qwen2为0，head_dim等于n_embd/n_head，q、k、v向量的维数固定为n_embd。对于Qwen3/Qwen3.5为固定值，该值决定了q、k、v向量的维数。
+
+    // Qwen3.5 only：混合注意力（Gated DeltaNet 线性注意力 + 全注意力）
+    uint32_t layer_type_mask;    // bit i = 1 表示第 i 层为 full_attention
+    uint32_t conv_kernel_dim;    // 线性注意力短卷积核长度
+    uint32_t linear_n_k_head;    // 线性注意力 key head 数
+    uint32_t linear_n_v_head;    // 线性注意力 value head 数
+    uint32_t linear_k_head_dim;  // 线性注意力 key head 维数
+    uint32_t linear_v_head_dim;  // 线性注意力 value head 维数
+    uint32_t rope_dim;           // 部分旋转 RoPE 的旋转维数
+    float    rope_theta;         // RoPE base
 } LLM_Config;
 
 typedef struct {
@@ -121,6 +132,18 @@ typedef struct {
     // Qwen3 only
     float *q_norm;          // (layer, head_size)
     float *k_norm;          // (layer, head_size)
+
+    // Qwen3.5 only
+    // 线性注意力层按 compact 方式排列（仅对 linear_attention 层计数）
+    float *conv1d;          // (n_linear, conv_dim * conv_kernel)
+    float *A_log;           // (n_linear, linear_n_v_head)
+    float *dt_bias;         // (n_linear, linear_n_v_head)
+    float *lin_norm;        // (n_linear, linear_v_head_dim)
+    Typed_Tensor *in_proj_b; // (n_linear, linear_n_v_head, n_embd)
+    Typed_Tensor *in_proj_a; // (n_linear, linear_n_v_head, n_embd)
+    Typed_Tensor *wqkv;      // (n_linear, conv_dim, n_embd)
+    Typed_Tensor *wz;        // (n_linear, value_dim, n_embd)
+    Typed_Tensor *wlo;       // (n_linear, n_embd, value_dim)
 
     Typed_Tensor *w1;    // (layer, n_hidden, n_embd)
     Typed_Tensor *w2;    // (layer, n_embd, n_hidden)
@@ -154,6 +177,21 @@ typedef struct {
     float *v_cache; // (layer, block_size, kv_dim)
     float *att;     // buffer for scores/attention values (n_head, block_size)
     float *logits;  // output logits
+
+    // Qwen3.5 only
+    float *lin_buf;          // 线性注意力统一内存块（scratch + conv state + recurrent state）
+    float *qg;               // full attention 的 q_proj 输出（2*q_dim，含 gate）
+    float *lin_conv;         // in_proj_qkv 输出 / conv 输入 (conv_dim,)
+    float *lin_z;            // gate 分支 (value_dim,)
+    float *lin_b;            // beta 输入 (linear_n_v_head,)
+    float *lin_a;            // decay 输入 (linear_n_v_head,)
+    float *lin_conv_out;     // 短卷积输出 (conv_dim,)
+    float *lin_out;          // 线性注意力输出 (value_dim,)
+    float *lin_kv_mem;       // (linear_n_v_head, linear_v_head_dim)
+    float *lin_delta;        // (linear_n_v_head, linear_v_head_dim)
+    float *lin_conv_state;   // (n_linear, conv_dim, conv_kernel-1)
+    float *lin_recurrent;    // (n_linear, linear_n_v_head, linear_k_head_dim, linear_v_head_dim)
+    Typed_Tensor lin_vq;     // 量化后的 value_dim 激活值
 
     // LoRA激活值暂不做池化
     float *q0;      // query  LoRA branch (lora_cfg.lora_rank,)
