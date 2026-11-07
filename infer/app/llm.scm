@@ -1083,6 +1083,9 @@
     (define dy (Math.floor (/ (- span lh) (- n 1))))
     (define y DG_Y)
     (define ll (- n 1))
+    (define sx (+ DG_X 125))          ; 小方块的水平中心
+    ;; 脊线：一条竖线把各层小方块串起来（方块随后画在线上，缝隙处就露出这段直线）
+    (Gfx.draw_line sx DG_Y sx (+ DG_Y (+ (* dy (- n 1)) lh)) 104 108 126)
     (while (> ll -1) {
       (if (or (and (== obs_layer -1) (== ll 0))
               (and (== obs_layer n_layer) (== ll (- n 1)))
@@ -1093,20 +1096,6 @@
           (Gfx.fill_rect (+ DG_X 120) y 10 lh 48 50 62))
       (set! y (+ y dy))
       (set! ll (- ll 1))
-    })))
-
-;; top-6 候选词元（右侧小列）
-(define dg_top
-  (lambda ()
-    (define i 0)
-    (define s "")
-    (define y (+ DG_Y 58))
-    (while (< i (length obs_top)) {
-      (set! s (get_item obs_top i))
-      (if (> (String.length s) 1) (set! s (String.slice s 0 1)) #f)
-      (Gfx.draw_text s (+ DG_X 134) y 255 230 90)
-      (set! y (+ y 13))
-      (set! i (+ i 1))
     })))
 
 ;; 相位名（右侧状态行用）
@@ -1176,7 +1165,6 @@
     (dg_box 40 207 "Norm" PH_ATTN_NORM)  ; Attn Norm（数据入口）
     ;; ---- 层条 / 候选 / 相位名 ----
     (dg_layers)
-    (dg_top)
     #t))
 
 ;; 设置当前相位（fw_phase_step 各相位入口调用）：只记录"跑到哪儿了"。
