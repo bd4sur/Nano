@@ -163,12 +163,18 @@
 ;;   (App.exit) 确认（#t）→ 收尾函数 → 宣告收尾完毕（宿主帧末销毁）；留下（#f）→ 重绘。
 (define do_exit
   (lambda ()
-    (if (App.exit)
-        {
-          (if cleanup_fn (cleanup_fn) #f)
-          (App.exit_now)
-        }
-        (if redraw_fn (redraw_fn) #f))))
+    {
+      ;; App.exit 会阻塞解释器。先结束本次按钮手势，避免返回后旧释放分支再次进入这里。
+      (set! armed 0)
+      (set! prev_down 0)
+      (Touch.take_release)
+      (if (App.exit)
+          {
+            (if cleanup_fn (cleanup_fn) #f)
+            (App.exit_now)
+          }
+          (if redraw_fn (redraw_fn) #f))
+    }))
 
 ;; 每拍调用一次（App 自己的 tick 里，画完按钮、推屏之前）：
 ;;   ① 硬 A/ESC 的返回请求 → 全局确认框；

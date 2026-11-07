@@ -23,8 +23,6 @@ static void nano_init_timezone(void) {
 
 #if defined(NANO_UI_SPLIT_EVENT_LOOP)
 // ===============================================================================
-// 事件生产/消费拆分架构（移植 linglong_m5core2.ino 的 Core1→Core0 模型，宏门控，
-// 仅定义 NANO_UI_SPLIT_EVENT_LOOP 的目标启用——当前为 Luckfox-Pico-86-Panel）：
 //   生产者线程：1~2ms 高频调用 get_input_event（零改动，其设计本为生产端），
 //               触屏 DOWN/UP 边沿与短按(-1)可靠投递、长按重复(-2)可丢弃投递，
 //               触屏电平/坐标经 global_state 共享快照传递（不入队）；
@@ -132,6 +130,7 @@ int main() {
     }
 
     while (1) {
+
         // 排空事件队列（语义同 .ino core0_render_task）：
         // 触屏边沿事件位掩码并入本帧，按键事件取出首个即停（每帧至多一个）
         key_event->touch_edge = 0;
