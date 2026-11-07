@@ -102,10 +102,22 @@
 (define TOGGLE_W 96)
 (define TOGGLE_H 14)
 (define TXT_X 152)                       ; 右侧文字列起点（可视化开时）
+;; 右侧「候选词元概率图」：6 根竖柱（柱高∝采样概率），选中那根上方有指针 ▼
+(define CH_X 152)                        ; 图表左边界
+(define CH_COLW 27)                      ; 每列宽（6 列 = 162px）
+(define CH_BAR_W 19)                     ; 柱宽
+(define CH_PTR_Y 56)                     ; 指针行（选中柱上方的小三角）
+(define CH_BASE 96)                      ; 柱子基线
+(define CH_MAXH 30)                      ; 最高柱高（对应最大概率）
+(define CH_LBL_Y 98)                     ; 词元文本行
+(define CH_PCT_Y 110)                    ; 概率百分数行
 (define TXT_X_FULL 10)                   ; 可视化关时（占满整行）
-(define TXT_Y 56)
+(define TXT_Y 56)                        ; 可视化关时的首行 y
 (define TXT_STEP 13)
-(define TXT_LINES 9)
+(define TXT_LINES 9)                      ; 可视化关时显示的行数
+(define TXT_Y_VIS 124)                   ; 可视化开时：首行下移到概率图之下
+(define TXT_STEP_VIS 12)
+(define TXT_LINES_VIS 4)
 (define STOP_X 152)                      ; 「停止生成」按钮（只生成中显示）
 (define STOP_Y 196)
 (define STOP_W 80)
@@ -867,10 +879,18 @@
   (lambda ()
     (define tk "")
     (if (< gen_pos (length gen_ids))
-        (set! gen_next (get_item gen_ids gen_pos))
+        {
+          ;; 预填充步：喂提示词词元，没有"采样"这回事
+          (set! gen_next (get_item gen_ids gen_pos))
+          (set! obs_pick -1)
+          (set! obs_pick_p 0.0)
+        }
         {
           (set! gen_next (sample_token blogits vocab_size T_GEN))
           (set! gen_n (+ gen_n 1))
+          ;; 记下"本次采样选中了谁 + 它的概率"（概率图上的指针用它）
+          (set! obs_pick gen_next)
+          (if (== vis_on 1) (set! obs_pick_p (prob_of gen_next)) (set! obs_pick_p 0.0))
         })
     (set! tk (LLM.decode gen_next))
     (set! gen_line (String.concat gen_line tk))
@@ -994,6 +1014,12 @@
 (define obs_ids (cdr '(0)))  ; top-6 候选词元 id
 (define obs_vals (cdr '(0))) ; top-6 候选词元 logits
 (define obs_top (cdr '(0)))  ; top-6 候选词元文本
+(define obs_probs (cdr '(0))); top-6 候选的**采样概率**（温度 softmax，全词表归一）
+(define obs_max 0.0)         ; 全词表最大 logit
+(define obs_sum 1.0)         ; 温度 softmax 的分母（全词表）
+(define obs_temp 1.0)        ; 采样温度（0=贪心时图上按 1.0 归一化显示）
+(define obs_pick -1)         ; 本次采样选中的词元 id（-1=预填充步，尚未采样）
+(define obs_pick_p 0.0)      ; 选中词元的采样概率
 
 ;; ---------------------------------- 场景 2 可视化：模型框图 + 推理过程（参照 ui_llm.c）
 ;;
@@ -1224,7 +1250,46 @@
     (while (< i (length obs_ids)) {
       (push obs_top (LLM.decode (get_item obs_ids i)))
       (set! i (+ i 1))
-    })))
+    })
+    ;; 采样概率：p_i = exp((v_i - max)/T) / Σ_j exp((v_j - max)/T)（全词表归一，
+    ;; 与 sample_token 的分布一致，因此"指针指的那根柱"就是本次采样的真实概率）
+    (set! obs_temp (if (> T_GEN 0) T_GEN 1.0))
+    (if (> (length obs_vals) 0)
+        {
+          (set! obs_max (get_item obs_vals 0))
+          (set! obs_sum 0.0)
+          (set! i 0)
+          (while (< i vocab_size) {
+            (set! obs_sum (+ obs_sum (Math.exp (/ (- (get_item blogits i) obs_max) obs_temp))))
+            (set! i (+ i 1))
+          })
+          (if (< obs_sum 0.000001) (set! obs_sum 1.0) #f)
+          (set! obs_probs (cdr '(0)))
+          (set! i 0)
+          (while (< i (length obs_vals)) {
+            (push obs_probs (/ (Math.exp (/ (- (get_item obs_vals i) obs_max) obs_temp)) obs_sum))
+            (set! i (+ i 1))
+          })
+        }
+        #f)))
+
+;; 数值是否在列表里（用于判断"本次采样选中的词元是否落在 top-6 候选内"）
+(define in_obs_ids
+  (lambda (id)
+    (define i 0)
+    (define hit #f)
+    (while (< i (length obs_ids)) {
+      (if (== (get_item obs_ids i) id) (set! hit #t) #f)
+      (set! i (+ i 1))
+    })
+    hit))
+
+;; 单个 id 的采样概率（与 top6_scan 同一口径；供"选中词元"标注用）
+(define prob_of
+  (lambda (id)
+    (if (> obs_sum 0.000001)
+        (/ (Math.exp (/ (- (get_item blogits id) obs_max) obs_temp)) obs_sum)
+        0.0)))
 
 ;; ---------------------------------------------------------------- 触屏辅助
 
@@ -1798,6 +1863,92 @@
           (center_text "框图 关" TOGGLE_X (+ TOGGLE_Y 1) TOGGLE_W 170 176 190)
         })))
 
+;; ---------------- 右侧「候选词元概率图」（可视化开时）----------------
+;;
+;; 6 根竖柱：柱高 ∝ 候选词元的**采样概率**（温度 softmax，全词表归一，见 top6_scan）；
+;; 柱下是词元文本与整数百分比；**本次采样选中的那根**用橙色 + 上方小三角指针标出
+;; （若采到的词元不在 top-6 内，则指针不出现，概率写在状态行里）。
+(define draw_pointer
+  (lambda (cx ytop)
+    (Gfx.fill_rect (- cx 4) ytop 9 2 255 170 60)
+    (Gfx.fill_rect (- cx 3) (+ ytop 2) 7 2 255 170 60)
+    (Gfx.fill_rect (- cx 2) (+ ytop 4) 5 2 255 170 60)
+    (Gfx.fill_rect (- cx 1) (+ ytop 6) 3 2 255 170 60)
+    (Gfx.fill_rect cx (+ ytop 8) 1 2 255 170 60)
+    #t))
+
+(define draw_prob_chart
+  (lambda ()
+    (define n (length obs_probs))
+    (define m 0)
+    (define colw 0)
+    (define bw 0)
+    (define pmax 0.000001)
+    (define i 0)
+    (define p 0.0)
+    (define h 0)
+    (define x 0)
+    (define cx 0)
+    (define id 0)
+    (define s "")
+    (define sel #f)
+    (define pct 0)
+    (define extra #f)
+    ;; 采样选中的词元有可能不在 top-6 里（温度采样从全词表抽），那时追加一列把它画出来，
+    ;; 这样"指针"永远指着本次真正选中的那个词元，图与事实一致。
+    (set! extra (if (> obs_pick -1) (not (in_obs_ids obs_pick)) #f))
+    (Gfx.fill_rect CH_X CH_PTR_Y (- SW CH_X) (- (+ CH_PCT_Y 12) CH_PTR_Y) 14 16 22)
+    (cond ((== n 0)
+           (Gfx.draw_text "候选概率：等待首次分类…" CH_X (+ CH_PTR_Y 2) 120 130 140))
+          (else
+           {
+             (set! m (if extra (+ n 1) n))
+             (set! colw (Math.floor (/ (- SW (+ CH_X 2)) m)))
+             (set! bw (if (> colw 14) (- colw 8) 6))
+             ;; 归一化用的最大概率
+             (set! i 0)
+             (while (< i n) {
+               (set! p (get_item obs_probs i))
+               (if (> p pmax) (set! pmax p) #f)
+               (set! i (+ i 1))
+             })
+             (if extra (if (> obs_pick_p pmax) (set! pmax obs_pick_p) #f) #f)
+             (set! i 0)
+             (while (< i m) {
+               (if (if extra (== i n) #f)
+                   {
+                     (set! id obs_pick)
+                     (set! p obs_pick_p)
+                     (set! s (LLM.decode obs_pick))
+                     (set! sel #t)
+                   }
+                   {
+                     (set! id (get_item obs_ids i))
+                     (set! p (get_item obs_probs i))
+                     (set! s (get_item obs_top i))
+                     (set! sel (== id obs_pick))
+                   })
+               (if (> (str_units s) 2) (set! s (String.slice s 0 1)) #f)
+               (set! x (+ CH_X (* i colw)))
+               (set! cx (+ x (Math.floor (/ colw 2))))
+               (set! h (Math.floor (* (/ p pmax) CH_MAXH)))
+               (if (< h 2) (set! h 2) #f)
+               (if sel
+                   {
+                     (Gfx.fill_rect (+ x 4) (- CH_BASE h) bw h 255 170 60)
+                     (draw_pointer cx (+ CH_PTR_Y 1))
+                   }
+                   (Gfx.fill_rect (+ x 4) (- CH_BASE h) bw h 72 128 208))
+               (Gfx.draw_text s (- cx (Math.floor (/ (* (str_units s) 6) 2))) CH_LBL_Y
+                              (if sel 255 240 170) (if sel 220 240 190) (if sel 120 160 230))
+               (set! pct (Math.floor (* 100 p)))
+               (set! s (String.concat (String.atom_to_string pct) "%"))
+               (Gfx.draw_text s (- cx (Math.floor (/ (* (str_units s) 6) 2))) CH_PCT_Y
+                              (if sel 255 170 60) (if sel 170 170 60) (if sel 60 60 60))
+               (set! i (+ i 1))
+             })
+           }))))
+
 ;; 状态行（生成中/完成）——单独抽出来，逐相位重绘时只重画这一行
 (define draw_s2_status
   (lambda ()
@@ -1818,6 +1969,17 @@
                    (set! line (String.concat line (String.atom_to_string obs_layer)))
                    (set! line (String.concat line "/"))
                    (set! line (String.concat line (String.atom_to_string n_layer)))
+                   ;; 选中的词元若不在 top-6 里（图上没有它的柱子），用文字补一句
+                   (if (> obs_pick -1)
+                       (if (in_obs_ids obs_pick)
+                           #f
+                           {
+                             (set! line (String.concat line " · 采样 "))
+                             (set! line (String.concat line (LLM.decode obs_pick)))
+                             (set! line (String.concat line " "))
+                             (set! line (String.concat line (f4 obs_pick_p)))
+                           })
+                       #f)
                  }
                  #f)
              (Gfx.draw_text line TXT_X 176 255 210 120)
@@ -1842,14 +2004,21 @@
     (define ls (cdr '(0)))
     (define tx 0)
     (define tu 0)
+    (define ty TXT_Y)
+    (define ts TXT_STEP)
+    (define tn TXT_LINES)
     (define i 0)
     (define from 0)
-    (define y TXT_Y)
+    (define y 0)
     (if (== vis_on 1)
         {
           (set! tx TXT_X)
           (set! tu (Math.floor (/ (- SW (+ TXT_X 8)) 6)))   ; 右列可用半角单位数
+          (set! ty TXT_Y_VIS)                               ; 概率图之下
+          (set! ts TXT_STEP_VIS)
+          (set! tn TXT_LINES_VIS)
           (vis_draw)
+          (draw_prob_chart)
         }
         {
           (set! tx TXT_X_FULL)
@@ -1861,13 +2030,14 @@
     (if (== s2_stage 0)
         (Gfx.draw_text "准备中…" tx (+ BODY_Y 14) 200 200 200)
         #f)
-    ;; 流式文本：只显示最后 TXT_LINES 行
+    ;; 流式文本：只显示最后 tn 行
     (set! ls (wrap_lines_n gen_line tu))
-    (if (> (length ls) TXT_LINES) (set! from (- (length ls) TXT_LINES)) #f)
+    (if (> (length ls) tn) (set! from (- (length ls) tn)) #f)
     (set! i from)
+    (set! y ty)
     (while (< i (length ls)) {
       (Gfx.draw_text (get_item ls i) tx y 232 236 226)
-      (set! y (+ y TXT_STEP))
+      (set! y (+ y ts))
       (set! i (+ i 1))
     })
     (draw_s2_status)

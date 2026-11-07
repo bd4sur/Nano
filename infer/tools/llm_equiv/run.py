@@ -71,7 +71,8 @@ KEEP = '''f4,mkbuf,block_size,vocab_size,n_layer,n_embd,n_head,n_kv_head,n_hidde
 head_dim,kv_dim,kv_mul,p_rms_attn,p_rms_ffn,p_rms_final,p_emb,p_wq,p_wk,p_wv,p_wo,p_w1,p_w2,
 p_w3,p_fcr,p_fci,p_cls,bx,bxb,bxba,bxb2,bhb,bhb2,bq,k_cache,v_cache,batt,blogits,bind_model,
 b_accum,b_rms_norm,b_softmax,b_rope,fw_pos,fw_maxlen,fw_causal,fw_layer,fw_phase,fw_fin,fw_attn_range,fw_k,fw_v,
-fw_begin,fw_phase_step,fw_step,llm_forward,vis_on,obs_layer,obs_phase,obs_pokes,obs_ids,obs_vals,obs_top,
+fw_begin,fw_phase_step,fw_step,llm_forward,vis_on,obs_layer,obs_phase,obs_pokes,obs_ids,obs_vals,obs_top,obs_probs,obs_max,
+obs_sum,obs_temp,obs_pick,obs_pick_p,
 sample_argmax,sample_multinomial,sample_token,
 rng,rng_seed,rng_next,seq_str,concat_of,make_ref,vote_at,
 T_SORT,sort_ids,sort_out,sort_pos,sort_prefilled,sort_begin,sort_prefill_step,sort_gen_step,
@@ -107,6 +108,8 @@ STUBS = '''
 ;; 可视化与界面相关的名字在无头参考台里空实现（不参与"库是否等价"的比对）
 (define vis_set (lambda (layer phase) #t))
 (define top6_scan (lambda () #t))
+(define prob_of (lambda (id) 0.0))
+(define in_obs_ids (lambda (id) #f))
 ;; App 侧的日志/界面函数在无头参考台里空实现（不参与比对内容）
 (define say (lambda (s) #t))
 (define set_status (lambda (s) #t))
