@@ -5,10 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Nano WASM GUI</title>
 <style>
+  /* 浅色亮色主题：白底 + 中性灰文本 + 蓝色强调 */
   html, body {
     margin: 0; padding: 0;
-    background: #101014;
-    color: #888;
+    background: #f5f6f8;
+    color: #454a52;
     font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
     height: 100%;
     overscroll-behavior: none;
@@ -23,30 +24,34 @@
     padding: 12px;
     box-sizing: border-box;
   }
+  /* 主显示区：PC 上最宽 480px（移动端仍占满可视宽度） */
   #screen {
-    width: min(calc(100vw - 24px), calc((100vh - 76px) * 4 / 3), 960px);
+    width: min(calc(100vw - 24px), calc((100vh - 76px) * 4 / 3), 480px);
+    max-width: 480px;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
-    background: #000;
+    background: #ffffff;
+    border: 1px solid #dfe2e8;
     border-radius: 8px;
-    box-shadow: 0 4px 32px rgba(0,0,0,.6);
+    box-shadow: 0 4px 20px rgba(30,40,60,.10);
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
-    cursor: crosshair;
+    cursor: default;
   }
-  #status { font-size: 13px; letter-spacing: .5px; opacity: .85; }
-  #status .ok  { color: #58a05a; }
-  #status .bad { color: #c06060; }
+  #status { font-size: 13px; letter-spacing: .5px; opacity: .9; }
+  #status .ok  { color: #2f8f45; }
+  #status .bad { color: #c0392b; }
   #bar { display: flex; gap: 10px; align-items: center; }
   #att-btn {
-    background: #26262c; color: #bbb; border: 1px solid #3a3a42;
+    background: #ffffff; color: #4a4f57; border: 1px solid #d6dae1;
     border-radius: 6px; font-size: 13px; padding: 6px 14px; cursor: pointer;
     user-select: none; -webkit-user-select: none; touch-action: manipulation;
+    box-shadow: 0 1px 2px rgba(30,40,60,.06);
   }
-  #att-btn.on  { background: #144a7a; border-color: #1b6bb5; color: #e8f2ff; }
+  #att-btn.on  { background: #e6f0fb; border-color: #7cb0e2; color: #12518c; }
   #att-btn:active { transform: scale(.96); }
-  #hint { font-size: 12px; opacity: .5; max-width: 90vw; text-align: center; }
+  #hint { font-size: 12px; opacity: .6; max-width: 90vw; text-align: center; color: #6b7280; }
   /* 加载进度面板（WASM 下载 + 资源挂载） */
   #load-panel {
     width: min(calc(100vw - 48px), 480px);
@@ -54,48 +59,50 @@
     flex-direction: column;
     gap: 10px;
     padding: 14px 16px;
-    background: #1a1a20;
-    border: 1px solid #2c2c34;
+    background: #ffffff;
+    border: 1px solid #e2e5ea;
     border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(30,40,60,.06);
     font-size: 12px;
   }
   .bar {
     height: 6px;
-    background: #26262c;
+    background: #eceef2;
     border-radius: 3px;
     overflow: hidden;
   }
   .bar > div {
     height: 100%;
     width: 0%;
-    background: linear-gradient(90deg, #1b6bb5, #3d9bff);
+    background: linear-gradient(90deg, #3d8ad6, #6fb3f2);
     border-radius: 3px;
     transition: width .15s ease-out;
   }
   .bar > div.indet { width: 30%; animation: slide 1.1s ease-in-out infinite alternate; }
   @keyframes slide { from { margin-left: 0; } to { margin-left: 70%; } }
   .load-row { display: flex; flex-direction: column; gap: 4px; }
-  .load-text { color: #9a9aa2; letter-spacing: .3px; }
+  .load-text { color: #5b6270; letter-spacing: .3px; }
   /* 资源管理面板 */
   #res-btn {
-    background: #26262c; color: #bbb; border: 1px solid #3a3a42;
+    background: #ffffff; color: #4a4f57; border: 1px solid #d6dae1;
     border-radius: 6px; font-size: 13px; padding: 6px 14px; cursor: pointer;
     user-select: none; -webkit-user-select: none; touch-action: manipulation;
+    box-shadow: 0 1px 2px rgba(30,40,60,.06);
   }
   #res-btn:active { transform: scale(.96); }
   /* 硬 ESC 按钮：给触屏/鼠标用户一个等价于实体键盘 Esc 的出口。
      实体 A/ESC 已不由宿主直接退出，而是置“返回请求”交给 App（J2ME 挂断键语义），
      所以触屏设备上必须有一个能送出“硬 Esc”的入口。 */
   #esc-btn {
-    background: #2b2b34; color: #d8d8de; border: 1px solid #4a4a56;
+    background: #f0f2f5; color: #3f444b; border: 1px solid #cdd2da;
     border-radius: 6px; font-size: 13px; padding: 6px 14px; cursor: pointer;
     user-select: none; -webkit-user-select: none; touch-action: manipulation;
     letter-spacing: .5px;
   }
-  #esc-btn:active { transform: scale(.96); background: #3a3a46; }
+  #esc-btn:active { transform: scale(.96); background: #e2e6ec; }
   #res-panel {
     position: fixed; inset: 0;
-    background: rgba(10,10,14,.92);
+    background: rgba(240,242,246,.92);
     display: none;
     align-items: flex-start;
     justify-content: center;
@@ -106,41 +113,42 @@
   #res-card {
     width: min(640px, calc(100vw - 32px));
     margin: 24px 0;
-    background: #16161b;
-    border: 1px solid #2c2c34;
+    background: #ffffff;
+    border: 1px solid #e2e5ea;
     border-radius: 12px;
+    box-shadow: 0 8px 28px rgba(30,40,60,.12);
     padding: 16px;
     font-size: 13px;
-    color: #c8c8ce;
+    color: #3f444b;
   }
-  #res-card h2 { font-size: 15px; margin: 0 0 10px; color: #e8e8ee; }
-  #res-card h3 { font-size: 13px; margin: 14px 0 6px; color: #9a9aa2; font-weight: normal; }
+  #res-card h2 { font-size: 15px; margin: 0 0 10px; color: #23272e; }
+  #res-card h3 { font-size: 13px; margin: 14px 0 6px; color: #6b7280; font-weight: normal; }
   .res-item {
     display: flex; align-items: center; gap: 8px;
     padding: 4px 6px; border-radius: 6px;
   }
-  .res-item:hover { background: #202028; }
+  .res-item:hover { background: #f2f5f9; }
   .res-item .p { flex: 1; word-break: break-all; }
-  .res-item .sz { color: #777; white-space: nowrap; }
+  .res-item .sz { color: #8b919b; white-space: nowrap; }
   .res-item .src { font-size: 11px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
-  .res-item .src.store { background: #173a1f; color: #7fd08a; }
-  .res-item .src.http  { background: #233246; color: #8ab8e0; }
+  .res-item .src.store { background: #e7f5ea; color: #2f7d3d; }
+  .res-item .src.http  { background: #e6f0fa; color: #2b6ca8; }
   .res-item button {
-    background: none; border: none; color: #c06060; cursor: pointer;
+    background: none; border: none; color: #c0392b; cursor: pointer;
     font-size: 12px; padding: 2px 6px;
   }
-  .res-item button:disabled { color: #444; cursor: default; }
+  .res-item button:disabled { color: #c2c7cf; cursor: default; }
   .res-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
-  .res-row select, .res-row input[type="file"] { font-size: 12px; color: #bbb; }
-  .res-row select { background: #26262c; border: 1px solid #3a3a42; border-radius: 6px; padding: 4px 6px; }
+  .res-row select, .res-row input[type="file"] { font-size: 12px; color: #4a4f57; }
+  .res-row select { background: #ffffff; border: 1px solid #d6dae1; border-radius: 6px; padding: 4px 6px; }
   .res-btn2 {
-    background: #1b6bb5; color: #eaf3ff; border: none; border-radius: 6px;
+    background: #2f7fd1; color: #ffffff; border: none; border-radius: 6px;
     font-size: 12px; padding: 6px 12px; cursor: pointer;
   }
-  .res-btn2:disabled { background: #333; color: #777; }
-  #res-quota { color: #777; font-size: 12px; }
-  #res-close { float: right; background: none; border: none; color: #888; font-size: 18px; cursor: pointer; }
-  #upload-progress { color: #8ab8e0; font-size: 12px; }
+  .res-btn2:disabled { background: #dfe3e9; color: #9aa1ab; }
+  #res-quota { color: #8b919b; font-size: 12px; }
+  #res-close { float: right; background: none; border: none; color: #8b919b; font-size: 18px; cursor: pointer; }
+  #upload-progress { color: #2b6ca8; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -162,7 +170,7 @@
     <button id="att-btn" type="button">姿态：关</button>
     <button id="res-btn" type="button">资源</button>
   </div>
-  <div id="hint">触屏/鼠标点按操作 · 键盘：方向键/回车=确认/Esc=返回/数字=十六键 · 「ESC」按钮=硬 Esc</div>
+  <div id="hint">触屏/鼠标点按操作 · 滚轮=上下滑动 · 键盘：方向键/回车=确认/Esc=返回/数字=十六键 · 「ESC」按钮=硬 Esc</div>
 </div>
 
 <!-- 资源管理面板（浏览器本地存储 IndexedDB：上传/覆盖/删除业务资源，不依赖后端） -->
@@ -334,19 +342,28 @@ let activePointerId = null;
 function eventEpochMs(e) {
   return performance.timeOrigin + (e ? e.timeStamp : 0);
 }
-function sendTouch(action, clientX, clientY, ts) {
+function nowEpochMs() {
+  return performance.timeOrigin + performance.now(); // 「现在」的 Epoch 毫秒（无事件对象时用）
+}
+// 帧缓冲坐标投递（滚轮合成手势也复用这条通路：直接给 320×240 坐标，不经 DOM 反算）
+function sendTouchFb(action, x, y, ts) {
   if (!runtimeReady || !Module._wasm_gui_on_touch) return;
-  const rect = canvas.getBoundingClientRect();
-  let x = Math.round((clientX - rect.left) * canvas.width  / rect.width);
-  let y = Math.round((clientY - rect.top)  * canvas.height / rect.height);
   if (x < 0) x = 0; if (x >= canvas.width)  x = canvas.width  - 1;
   if (y < 0) y = 0; if (y >= canvas.height) y = canvas.height - 1;
   Module._wasm_gui_on_touch(action, x, y, ts);
   Module._wasm_gui_input_tick(ts); // 事件到达即采样（生产者）
 }
+function sendTouch(action, clientX, clientY, ts) {
+  if (!runtimeReady || !Module._wasm_gui_on_touch) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.round((clientX - rect.left) * canvas.width  / rect.width);
+  const y = Math.round((clientY - rect.top)  * canvas.height / rect.height);
+  sendTouchFb(action, x, y, ts);
+}
 canvas.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   if (activePointerId !== null) return;
+  endWheelSession(eventEpochMs(e), true); // 真手指/鼠标按下优先：先结束滚轮合成手势，避免两路电平打架
   activePointerId = e.pointerId;
   try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   sendTouch(1, e.clientX, e.clientY, eventEpochMs(e));
@@ -367,6 +384,126 @@ canvas.addEventListener("pointercancel", endPointer);
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 document.addEventListener("gesturestart", (e) => e.preventDefault());
 document.addEventListener("dblclick", (e) => e.preventDefault());
+
+// ---------------- 鼠标滚轮 → 触屏滑动（合成拖动手势） ----------------
+// 宿主 UI 的滚动只有「手指 1:1 拖动」这一条通路（菜单/阅读器/列表按触点位移跟手滚动，
+// 松手可甩动，见 ui.c 的 touch_is_dragging 逻辑），没有滚轮语义。这里纯前端把滚轮
+// 增量合成为一个连续的拖动序列，WASM 后端无需任何改动：
+//   首次滚动 → 在画布中心按下（DOWN）→ 按累计位移移动（MOVE）→ 停止滚动一段时间后
+//   抬起（UP），等价于一次真手指滑动。
+// 细节约束（都是为了让后端把它认成「拖动」而不是「点按」）：
+//   1) 位移用帧缓冲像素累计，一格滚轮 ≈ 一条菜单项高度，手感随 delta 线性；
+//   2) 不足「拖动判定阈值」的位移先攒着不起手 —— 后端以 item_height/2、line_height/2
+//      判拖动，未越阈值的序列在松手时会被当成点按（会误触/误启动中心处的条目）；
+//   3) 手指走不出画布：位移到边界即截断，余量立刻起新的一段手势接着滑（总量不丢）；
+//   4) 抬起刻意晚于最后一次移动 >100ms：后端据此丢弃甩动初速度（滚轮是离散输入，
+//      惯性会让一格滚出很远）；单段手势也限时，避免长时间按住触发长按连发。
+const WHEEL_NOTCH_PX     = 100; // 一格滚轮在像素模式（deltaMode=0）下的典型 deltaY
+const WHEEL_NOTCH_FB     = 28;  // 一格滚轮折算成多少帧缓冲像素的滑动（≈ 一条菜单项）
+const WHEEL_IDLE_END_MS  = 140; // 停止滚动多久后抬起（须 > 100ms，见上）
+const WHEEL_SEG_MAX_MS   = 260; // 单段手势最长存活（< 后端长按阈值 ~360ms）
+const WHEEL_MIN_DRAG_PX  = Math.max(12, Math.round(canvas.height / 10)); // 起手门槛（见 2）
+
+let wheelSession = null; // 进行中的合成手势：{ startX, startY, acc, startTs }
+let wheelAccum   = 0;    // 尚未越过起手门槛的累计位移（跨滚轮事件保留）
+let wheelEndTimer = 0;
+
+// 浏览器滚轮三档 deltaMode（0=像素 1=行 2=页）→ 统一折算成帧缓冲像素
+function wheelDeltaToFb(e) {
+  let dy = e.deltaY;
+  if (e.deltaMode === 1) dy *= WHEEL_NOTCH_PX / 3;      // 3 行 ≈ 一格
+  else if (e.deltaMode === 2) dy *= WHEEL_NOTCH_PX * 3; // 一页
+  return dy * (WHEEL_NOTCH_FB / WHEEL_NOTCH_PX);
+}
+
+// 起一段手势：中心按下（中心在多数界面属滚动区主体，阅读器/列表都能接管）
+function beginWheelSession(ts) {
+  wheelSession = {
+    startX: Math.round(canvas.width / 2),
+    startY: Math.round(canvas.height / 2),
+    acc: 0,
+    startTs: ts,
+  };
+  sendTouchFb(1, wheelSession.startX, wheelSession.startY, ts);
+}
+
+// 喂入一段位移：正位移=手指上移（内容上滚，看后面的内容），负位移=手指下移。
+// 返回未能消化的余量（位移撞到画布边界时产生，交给调用方起下一段手势）
+function wheelSessionMove(delta, ts) {
+  const s = wheelSession;
+  const yMin = 1, yMax = canvas.height - 2;
+  s.acc += delta;
+  let used = s.acc;
+  let y = s.startY - used; // 滚轮向下滚（delta>0）→ 手指上移
+  if (y < yMin) { y = yMin; used = s.startY - yMin; }
+  else if (y > yMax) { y = yMax; used = s.startY - yMax; }
+  const rest = s.acc - used;
+  s.acc = used;
+  sendTouchFb(2, s.startX, Math.round(y), ts);
+  return rest;
+}
+
+// 结束一段手势。padToMin=true 时若累计位移不足阈值，则补足到阈值再抬起
+//（宁可多滑十几像素，也不能让后端把这段序列判成「点按」而误触发中心处的条目）
+function endWheelSession(ts, padToMin) {
+  if (!wheelSession) return;
+  if (padToMin) {
+    const need = WHEEL_MIN_DRAG_PX - Math.abs(wheelSession.acc);
+    if (need > 0) {
+      const dir = wheelSession.acc < 0 ? -1 : 1;
+      const rest = wheelSessionMove(dir * need, ts);
+      if (rest !== 0) wheelAccum += rest;
+    }
+  }
+  sendTouchFb(0, wheelSession.startX, Math.round(wheelSession.startY - wheelSession.acc), ts);
+  wheelSession = null;
+}
+
+function scheduleWheelEnd() {
+  if (wheelEndTimer) clearTimeout(wheelEndTimer);
+  wheelEndTimer = setTimeout(() => {
+    wheelEndTimer = 0;
+    endWheelSession(nowEpochMs(), true);
+  }, WHEEL_IDLE_END_MS);
+}
+
+function onWheel(e) {
+  e.preventDefault(); // 画布上的滚轮不再滚动页面
+  if (e.ctrlKey) return; // Ctrl+滚轮：浏览器缩放组合，忽略（不误判为滑动）
+  if (!runtimeReady || !Module._wasm_gui_on_touch) return;
+  if (activePointerId !== null) return; // 指针按下期间以真实拖动为准
+
+  const ts = eventEpochMs(e);
+  let delta = wheelDeltaToFb(e);
+  if (!delta) return;
+
+  // 手势存活过久：先收手（避免按住超过后端长按阈值导致连发），再按常规流程重新起手
+  if (wheelSession && ts - wheelSession.startTs > WHEEL_SEG_MAX_MS) {
+    endWheelSession(ts, true);
+  }
+
+  if (!wheelSession) {
+    wheelAccum += delta;
+    if (Math.abs(wheelAccum) < WHEEL_MIN_DRAG_PX) { scheduleWheelEnd(); return; } // 攒着，先不起手
+    delta = wheelAccum;
+    wheelAccum = 0;
+    beginWheelSession(ts);
+  }
+
+  let rest = wheelSessionMove(delta, ts);
+  // 撞到画布边界：余量足够构成新的一段手势就接着滑，否则留着等后续滚轮事件
+  while (Math.abs(rest) >= WHEEL_MIN_DRAG_PX) {
+    endWheelSession(ts, false);
+    beginWheelSession(ts);
+    rest = wheelSessionMove(rest, ts);
+  }
+  wheelAccum = rest;
+  scheduleWheelEnd();
+}
+
+canvas.addEventListener("wheel", onWheel, { passive: false });
+// 页面切走/失焦时收手，避免后端电平一直停在「按住」
+window.addEventListener("blur", () => endWheelSession(nowEpochMs(), true));
 
 // 生产者心跳：无事件时维持持续状态判定（长按到期、持续电平）；渲染阻塞时延后但
 // 事件时刻由 e.timeStamp 保证，回放后判定仍物理正确（对齐 ino 的 1-2ms 生产者语义）
@@ -585,7 +722,7 @@ function memfsHas(relPath) {
 function updateModelSection() {
   if (!modelSection) return;
   if (!pendingModels.length) {
-    modelSection.innerHTML = '<div style="color:#777">无可预载模型（或已全部就绪）</div>';
+    modelSection.innerHTML = '<div style="color:#8b919b">无可预载模型（或已全部就绪）</div>';
     return;
   }
   modelSection.innerHTML = "";
@@ -595,7 +732,7 @@ function updateModelSection() {
     const row = document.createElement("div");
     row.className = "res-item";
     const btnHtml = ready
-      ? '<span style="color:#7fd08a">已就绪</span>'
+      ? '<span style="color:#2f8f45">已就绪</span>'
       : `<button class="res-btn2" data-path="${m.path}">预载（${fmtSize(m.size)}）</button>`;
     row.innerHTML = `<span class="p">${m.path}</span><span class="sz">${fmtSize(m.size)}</span>` + btnHtml;
     modelSection.appendChild(row);
