@@ -263,6 +263,8 @@ DRIVER = '''
 (dump_forward (LLM.encode "人类的本质是") 6 #t)
 ;; ---------------- 任务 1：自回归生成（温度采样）----------------
 (set! T_GEN 0.75)
+;; App 里 N_GEN = 64（演示用）；等价性验证用 16 步即可，省一半对跑时间
+(set! N_GEN 16)
 (rng_seed 777)
 (gen_begin "人类的本质是")
 (define going #t)

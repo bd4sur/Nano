@@ -92,6 +92,10 @@
 (define TXT_Y 58)
 (define TXT_STEP 13)
 (define TXT_LINES 9)
+(define STOP_X 134)                      ; 「停止生成」按钮（只生成中显示）
+(define STOP_Y 196)
+(define STOP_W 104)
+(define STOP_H 22)
 (define REDO_X 246)                      ; 「重来」按钮
 (define REDO_Y 196)
 (define REDO_W 68)
@@ -723,7 +727,7 @@
 
 ;; ------------------------------------------- 任务：自回归文本生成（场景 2）
 
-(define N_GEN 28)            ; 生成步数（含预填充的那一步）
+(define N_GEN 64)            ; 生成步数（含预填充的提示词那几步）
 (define T_GEN 0.75)          ; 生成温度
 
 (define gen_ids (cdr '(0)))
@@ -809,6 +813,7 @@
 (define s2_prompt "")
 (define s2_seed 0)
 (define s2_tps 0.0)
+(define s2_stopped 0)        ; 1=用户中途点了「停止生成」
 
 ;; ---------------------------------------------------------------- 触屏辅助
 
@@ -1165,6 +1170,7 @@
     (rng_seed s2_seed)
     (set! s2_prompt GEN_PROMPT)
     (set! s2_tps 0.0)
+    (set! s2_stopped 0)
     (gen_begin s2_prompt)
     (set! s2_stage 1)
     (log (String.concat "[gen] seed=" (String.concat (String.atom_to_string s2_seed)
@@ -1173,14 +1179,16 @@
     #t))
 
 (define s2_finish
-  (lambda ()
+  (lambda (stopped)
     (define el (- (System.timestamp) gen_t0))
     (if (> el 0) (set! s2_tps (/ (* 1.0 gen_n 1000.0) el)) (set! s2_tps 0.0))
+    (set! s2_stopped stopped)
     (set! s2_stage 2)
     (log (String.concat "[gen] text=" gen_line))
     (log (String.concat "[gen] tokens=" (String.concat (String.atom_to_string gen_n)
          (String.concat " ms=" (String.concat (String.atom_to_string el)
-         (String.concat " tps=" (f4 s2_tps)))))))
+         (String.concat " tps=" (String.concat (f4 s2_tps)
+         (String.concat " stopped=" (String.atom_to_string stopped)))))))))
     (set! dirty #t)
     #t))
 
@@ -1190,14 +1198,19 @@
            (if (== model_loaded 2) (s2_start) #f))
           ((== s2_stage 1)
            {
-             ;; 「重来」可在生成中随时点（点完 s2_stage 归 1，本拍直接开始新的一轮）
+             ;; 生成中可点「停止生成」（保留已生成的部分）或「重来」（换种子重跑）
              (if tap_new
-                 (if (in_rect tap_x tap_y REDO_X REDO_Y REDO_W REDO_H)
-                     (s2_start)
-                     #f)
+                 {
+                   (if (in_rect tap_x tap_y STOP_X STOP_Y STOP_W STOP_H)
+                       (s2_finish 1)
+                       #f)
+                   (if (in_rect tap_x tap_y REDO_X REDO_Y REDO_W REDO_H)
+                       (s2_start)
+                       #f)
+                 }
                  #f)
              (if (== s2_stage 1)
-                 (if (gen_step) (s2_finish) (set! dirty #t))
+                 (if (gen_step) (s2_finish 0) (set! dirty #t))
                  #f)
            })
           ((== s2_stage 2)
@@ -1377,13 +1390,17 @@
            })
           ((== s2_stage 2)
            {
-             (set! line (String.concat "TPS " (String.concat (f4 s2_tps)
+             (set! line (String.concat (if (== s2_stopped 1) "已停止 · TPS " "TPS ")
+                          (String.concat (f4 s2_tps)
                              (String.concat "   " (String.concat (String.atom_to_string gen_n)
                              (String.concat " 词元，用时 " (String.concat (String.atom_to_string
                                (- (System.timestamp) gen_t0)) " ms")))))))
              (Gfx.draw_text line 10 178 255 232 120)
            })
           (else #f))
+    (if (== s2_stage 1)
+        (draw_btn STOP_X STOP_Y STOP_W STOP_H "停止生成" #f)
+        #f)
     (draw_btn REDO_X REDO_Y REDO_W REDO_H "重来" #t)))
 
 ;; 载入中的覆盖面板（进度条按「块 + 当前块已喂比例」连续推进）
