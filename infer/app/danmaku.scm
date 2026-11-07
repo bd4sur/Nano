@@ -266,6 +266,7 @@
 (define ai_on 0)
 (define ai_tx 160.0)                    ; AI 选定的目标位置（每拍重算）
 (define ai_ty 206.0)
+(define ai_bv 390.0)                    ; 本拍子弹速度（算瞄准提前量用）
 ;; HUD 按钮矩形（都在顶部 19px 内，避开右上角退出按钮）
 (define ai_x 134)                        ; 「手动 / 自动」
 (define ai_y 2)
@@ -1267,6 +1268,8 @@
       (define t1 0.0)
       (define tw 0.0)
       (define tc 0.0)
+      (define tb 0.0)
+      (define ta 0.0)
       (define xa 0.0)
       (define r2 0.0)
       (define v2 0.0)
@@ -1274,8 +1277,11 @@
       (define qx 0.0)
       (define qy 0.0)
       (define dm 0.0)
+      (define du 0.0)
       (define uu 0.0)
-      (set! cost (* 0.10 (+ (Math.abs (- cand ship_x)) (Math.abs (- candy ship_y)))))
+      (set! cost (* 0.08 (+ (Math.abs (- cand ship_x)) (Math.abs (- candy ship_y)))))
+      ;; 粘性：离上一拍的目标越远略贵 —— 少在两块陨石之间来回横跳，把"在路上"的时间换成命中
+      (set! cost (+ cost (* 0.05 (Math.abs (- cand ai_tx)))))
       (set! j 0)
       (while (< j nast) {
         (set! rr (+ (get_item arr j) 9.0))
@@ -1352,16 +1358,23 @@
             }
             #f)
         (if (and (<= t0 t1) (< t0 0.35)) (set! cost (+ cost 300.0)) #f)
-        ;; 瞄准项：还来得及打的陨石 → 把弹幕柱对准它届时所在的列
-        (if (> vy 0.5)
+        ;; 瞄准项（**进攻**）：把弹幕柱对准陨石"子弹飞到它那个高度时它会在的列"。
+        ;; 提前量必须用**子弹飞行时间** tb = (飞船高度 − 陨石高度)/弹速 —— 老版本误用了
+        ;; "陨石落到飞船高度的时间"，提前量大了 5~8 倍，AI 于是总在对着空气开火，看起来
+        ;; 就是"远处有石头也不出击、只待原地躲"。
+        ;; 价值随"它压到头顶还剩多久"上升（ta 越小越值钱）：一颗弹就能拆掉威胁，越近越急；
+        ;; 远处也给足基础分，AI 才会主动跑过去打。
+        (if (< (get_item ayy j) (- candy 14.0))
             {
-              (set! tc (/ (- candy (get_item ayy j)) vy))
-              (if (and (> tc 1.0) (< tc 4.0))
+              (set! tb (/ (- candy (get_item ayy j)) ai_bv))
+              (set! xa (+ (get_item axx j) (* vx tb)))
+              (set! du (Math.abs (- xa cand)))
+              (if (< du 13.0)
                   {
-                    (set! xa (+ (get_item axx j) (* vx tc)))
-                    (if (< (Math.abs (- xa cand)) 11.0)
-                        (set! cost (- cost (/ 16.0 (+ 1.0 (* tc 0.4)))))
-                        #f)
+                    (set! ta (/ (- candy (get_item ayy j)) (if (> vy 20.0) vy 20.0)))
+                    (if (> ta 4.5) (set! ta 4.5) #f)
+                    ;; 距离梯度：正对着最值钱，偏 13px 以上就不值钱
+                    (set! cost (- cost (* (- 1.0 (/ du 13.0)) (/ 120.0 (+ 0.6 ta)))))
                   }
                   #f)
             }
@@ -1382,6 +1395,7 @@
       (define bestc 99999.0)
       (define bestx 160.0)
       (define besty 0.0)
+      (set! ai_bv (if (== bmode 1) (fbspd) 390.0))
       (set! ci 0)
       (while (< ci 21) {
         (set! cand (+ AI_X0 (* ci AI_STEP)))
