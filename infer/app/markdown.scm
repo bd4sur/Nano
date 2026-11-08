@@ -1,11 +1,23 @@
 ;; ============================================================================
 ;; Markdown 阅读器 —— 灵机应用程序（解析 / 排版 / 渲染全部用 Scheme 实现）
 ;;
-;; 结构（三个模块，各管一段，可分别单测）：
+;; 结构（四个模块，各管一段，可分别单测）：
 ;;   app/lib/md_parse.scm   文本 → 块树（块级规则表 + 行内规则表，扩展点见其文件头）
 ;;   app/lib/md_layout.scm  块树 → 显示行（行 = 高度/背景/段列表；段自带绝对 x 与宽度）
 ;;   app/lib/md_demo.scm    内置示例文档（行数组，覆盖当前支持的整个子集）
+;;   app/lib/md_stream.scm  分段流式读取（大文件底座：字节流 → 段；见其文件头）
+;;   app/lib/md_view.scm    分段视图（段缓存 / 锚点滚动 / 预取 / 高度估算 / 目录）
 ;;   本文件                 绘制 + 交互（滚动/翻页/点链接/退出）
+;;
+;; 大文件（≤1MB）怎么读：**不再整篇解析+整篇排版**，而是
+;;   ① 打开：只切出并排版**第一段**（4KB 源码，首屏 ~90ms），其余段在后台按拍建索引；
+;;   ② 滚动：视口附近的若干段被排版并缓存（上限 CACHE_LINES 行），段内滚动零重排，
+;;      跨界时才布局相邻段（预取保证提前一两屏就做好了）；
+;;   ③ 段高度只有排版过才精确：未访问段按"码点数 × 实测校准系数"估算，而滚动位置由
+;;      **锚点 (段号, 段内 dy)** 决定，所以估算被修正时画面不跳；页眉百分比在索引
+;;      未覆盖全文时显示 "≈"。
+;;   实测（WASM，池 32MB / heap 16MB）：1MB 文档开屏 ~90ms、堆 ~5.8MB、翻页 0.4ms/屏；
+;;   而改造前整篇物化在 128KB 就接近 16MB 上限、1MB 需要 >60MB 与 ~15s。
 ;;
 ;; 支持的子集：# 1~3 级标题、**加粗**、`行内代码`、无序列表（**可嵌套**）、[链接](url)、
 ;;   围栏代码块、分隔线、**表格**（GFM：列对齐、单元格内行内样式、自动列宽、单元格内
@@ -51,6 +63,7 @@
 (import MD "app/lib/md_parse.scm")
 (import MDL "app/lib/md_layout.scm")
 (import MDE "app/lib/md_demo.scm")
+(import MDV "app/lib/md_view.scm")
 
 ;; ---- 布局常量 ------------------------------------------------------------
 
@@ -64,12 +77,17 @@
 (define LIST_Y 26)    ;; 文档列表首行 y
 (define LIST_ROWS 9)  ;; 文档列表一次显示几项（更多时随选中项滚动）
 
-;; 单篇文档的字节上限。为什么要有：本阅读器是"整篇解析 + 整篇排版"（换来滚动/命中
-;; 测试全是算术，见 md_layout.scm 的设计说明），排版出的显示行按 ~1KB/行 占堆；
-;; 而灵机 App 的解释器池是 12~24MB（ui_scheme_app.c），编译期已占去大部分。
-;; 实测（vendor 核心，24MB 池）：31.8KB / 2260 显示行仍可排版，再大就会分配失败。
-;; 宁可提前给出可读提示，也不要让用户看到一个"指令执行异常"的中断。
-(define DOC_MAX 30720)   ;; 30KB（实测 31.8KB / 678 块仍可排版，留一点余量）
+;; 单篇文档的字节上限：1MB。
+;; 为什么能放开到 1MB：本阅读器已改为**分段流式**——文档按 4KB 源码切成段，只有
+;; 视口附近的若干段会被解析/排版并缓存在堆上（见 app/lib/md_stream.scm 与
+;; app/lib/md_view.scm）。实测（WASM，32MB 池 / 16MB heap）：每 KB 源码要 ~40KB 堆
+;; （块树）+ ~26KB（显示行，折合 ~1.1KB/显示行）+ ~15ms；整篇物化在 128KB 时就已
+;; 接近 16MB 上限，1MB 需要 >60MB —— 所以必须分段，而不是放大上限。
+(define DOC_MAX 1048576)  ;; 1MB
+
+;; 分段参数（实测：布局 4KB 源码 ≈ 60ms ≈ 一个 GUI 节拍，段内滚动零重排）
+(define SEG_TARGET 4096)      ;; 目标段大小（字节）；切点落在围栏外的空行处
+(define CACHE_LINES 4000)     ;; 段缓存显示行上限（≈4MB 堆，见 md_view.scm）
 
 ;; 内置示例首次启动时落盘到这里的文件名（标题即去掉扩展名的文件名）
 (define SEED_TITLE "Markdown 示例")
@@ -123,9 +141,12 @@
 
 (define docs (cdr '(0)))      ;; 文档表：每项 (路径 标题)；路径为空串 = 内置示例
 (define sel 0)                ;; 文档列表选中项
-(define lines (cdr '(0)))     ;; 当前文档的显示行
-(define content_h 0)          ;; 全部显示行的总高（像素）
-(define scroll 0)             ;; 纵向滚动偏移（像素）
+(define MDV_ok 0)              ;; 1 = 流式文档（md_view），0 = 提示文案（notice）
+(define notice_lines (cdr '(0)))  ;; 提示文案的显示行（整篇排版，内容极小）
+(define notice_h 0)           ;; 提示文案总高
+(define toc_scanned 0)        ;; 目录廉价扫描已经推进的段数（诊断/进度）
+(define content_h 0)          ;; 全文档总高（像素；未索引部分为估算，仅用于滚动条/百分比）
+(define scroll 0)             ;; 纵向滚动偏移（像素，**由锚点派生**的只读快照）
 (define mode 1)               ;; 0 = 阅读，1 = 文档列表
 (define cur_title "")         ;; 当前文档标题
 (define cur_path "")          ;; 当前文档路径（"" = 内置示例；换字模后据此重新排版）
@@ -160,15 +181,34 @@
   (lambda ()
     (- (- SH TOP_H) BOT_H)))
 
+;; 滚动位置由 md_view 的锚点 (段号, 段内 dy) 决定；这里只做"读快照"与"刷新全局量"。
+;; 统一的滚动入口：流式文档交给 md_view（跨界自动按需布局），
+;; 提示文案按像素直接夹取（内容极小，无分段）。
+(define scroll_by_px
+  (lambda (px)
+    (if (== MDV_ok 1)
+        { (MDV.scroll_by px (view_h))
+          (sync_scroll) }
+        { (set! scroll (+ scroll px))
+          (if (< scroll 0) (set! scroll 0) #f)
+          (if (> scroll (max_scroll)) (set! scroll (max_scroll)) #f)
+          (sync_scroll) })
+    #t))
+
+(define sync_scroll
+  (lambda ()
+    (set! scroll (if (== MDV_ok 1) (MDV.top_y) scroll))
+    (set! content_h (if (== MDV_ok 1) (MDV.total_height) notice_h))
+    #t))
+
 (define max_scroll
   (lambda ()
-    (define m (- content_h (view_h)))
+    (define m (- (if (== MDV_ok 1) (MDV.total_height) notice_h) (view_h)))
     (if (< m 0) 0 m)))
 
 (define clamp_scroll
   (lambda ()
-    (if (< scroll 0) (set! scroll 0) #f)
-    (if (> scroll (max_scroll)) (set! scroll (max_scroll)) #f)
+    (sync_scroll)
     #t))
 
 ;; ---- 文档来源 ------------------------------------------------------------
@@ -315,56 +355,79 @@
 
 ;; ---- 打开文档：读文本 → 解析 → 排版 --------------------------------------
 
-;; 按**路径**打开（列表选中与文件选择器共用同一条链路）
+;; 按**路径**打开（列表选中与文件选择器共用同一条链路）。
+;;
+;; 两种显示模式：
+;;   stream（正常）：一切交给 md_view —— 打开时只切出并布局**第一段**（首屏 ~60-80ms），
+;;                   其余段在后台按拍建索引，滚动时按需布局（见 on_tick / handle_touch）。
+;;   notice（兜底）：文件读不出来/超上限时，把两条提示排成一个小文档（整篇排版，
+;;                   内容只有两段），仍用同一套绘制代码。
 (define open_path
   (lambda (path title)
-    (define text "")
-    (define bs (new_list))
     (define fsize 0)
+    (define ok #f)
+    (define msg #f)
     (set! cur_title title)
     (set! cur_path path)
     (set_doc_dir path)
     (set! fsize (Fs.size path))
     (if (null? fsize)
-        (set! bs (notice_blocks "读取失败：文件不存在（或超过 Fs 的 128KB 上限）。"
-                                "请把文档放到资源目录的 doc/ 下。"))
+        (set! msg (notice_blocks "读取失败：文件不存在或不可读。"
+                                 "请把文档放到资源目录的 doc/ 下。"))
         (if (> fsize DOC_MAX)
-            (set! bs (notice_blocks
-                       (String.concat "文档过大（"
-                                      (String.concat (String.atom_to_string fsize) " 字节）："))
-                       "本阅读器一次排版整篇，请把文档控制在 30KB 以内（当前池装不下）。"))
-            { (set! text (Fs.read path))
-              (if (null? text)
-                  (set! bs (notice_blocks "读取失败。" "文件可能已被删除或不可读。"))
-                  ;; 注意：MD.parse 接受**整段文本**（内部自己 split_lines），
-                  ;; 别再把行表传进去
-                  (set! bs (MD.parse text))) }))
-    (set! lines (MDL.layout bs CW doc_image_size))
-    (set! toc_items (MDL.toc))          ;; 排版顺带收集的目录（层级 1~3）
-    (set! toc_open 0)
-    (set! content_h (MDL.total_height lines))
-    (set! scroll 0)
-    (set! mode 0)
-    ;; 诊断行（宿主 stdout / 浏览器控制台；端到端测试据此断言解析与排版规模）
-    (display "MDSTAT blocks=") (display (length bs))
-    (display " lines=") (display (length lines))
-    (display " images=") (display (MDL.image_count))
-    (display " height=") (display content_h)
-    (display " title=") (display cur_title) (newline)
+            (set! msg (notice_blocks
+                        (String.concat "文档过大（"
+                                       (String.concat (String.atom_to_string fsize) " 字节）："))
+                        "本阅读器上限 1MB。"))
+            { (set! ok (MDV.open path CW doc_image_size SEG_TARGET CACHE_LINES))
+              (if ok #f (set! msg (notice_blocks "读取失败。" "文件可能已被删除或不可读。"))) }))
+    (open_finish ok msg)
     #t))
 
-;; 列表项打开：路径为空串 = 内存里的内置示例（只读文件系统兜底）
-;; 打开内置示例（内存里的那份；只读文件系统兜底）
+;; 打开完成后的公共收尾（正常/兜底两条路共用）
+(define open_finish
+  (lambda (ok msg)
+    (set! toc_items (cdr '(0)))
+    (set! toc_open 0)
+    (set! toc_scanned 0)
+    (set! scroll 0)
+    (set! mode 0)
+    (if ok
+        { (set! MDV_ok 1)
+          (set! notice_lines (cdr '(0)))
+          (set! notice_h 0)
+          (MDV.toc_scan 1) }
+        { (set! MDV_ok 0)
+          (set! notice_lines (MDL.layout msg CW doc_image_size))
+          (set! notice_h (MDL.total_height notice_lines)) })
+    (sync_scroll)
+    ;; 诊断行（宿主 stdout / 浏览器控制台；端到端测试据此断言解析与排版规模）
+    (display "MDSTAT blocks=")
+    (display (if (== MDV_ok 1) (MDV.blocks_total) 1))
+    (display " lines=")
+    (display (if (== MDV_ok 1) (MDV.lines_total) (length notice_lines)))
+    (display " images=")
+    (display (if (== MDV_ok 1) (MDV.images) 0))
+    (display " height=")
+    (display content_h)
+    (display " title=")
+    (display cur_title)
+    (display " seg=")
+    (display (if (== MDV_ok 1) (MDV.count) 0))
+    ;; 内存/分段诊断（工具链与回归测试用于守"不涨池也能读大文件"的预算）
+    (display " heap=")
+    (display (get_item (System.memstat) 3))
+    (display " cache=")
+    (display (if (== MDV_ok 1) (MDV.cache_lines) 0))
+    (newline)
+    #t))
+
+;; 内置示例（内存行表；只读文件系统写不出 .md 时的兜底）：同样走 md_view 的单段模式
 (define open_builtin
   (lambda ()
     { (set_doc_dir "")
       (set! cur_path "")
-      (set! lines (MDL.layout (MD.parse_lines MDE.lines) CW doc_image_size))
-      (set! toc_items (MDL.toc))
-      (set! toc_open 0)
-      (set! content_h (MDL.total_height lines))
-      (set! scroll 0)
-      (set! mode 0)
+      (open_finish (MDV.open_mem MDE.lines CW doc_image_size) #f)
       (display "MDSTAT builtin title=") (display cur_title) (newline)
       #t }))
 
@@ -426,14 +489,17 @@
     #t))
 
 ;; ---- 目录（TOC）---------------------------------------------------------
-;; 数据来自排版阶段：MDL.layout 顺带收集本次文档的标题（层级 1~3、y 偏移、纯文本），
-;; 引用块里的标题不算（见 md_layout 的 quote_depth）。点条目跳转 = 把该条目的 y 当成
-;; scroll —— 排版期就把坐标定死了，所以"跳转"是一次减法，没有反查。
+;; 分段视图下"整篇一次性排版"不存在了，因此目录来自两个互补的来源（都在 md_view）：
+;;   · 段被布局时顺带收集的**精确**条目（层级、段内 y、文本）——最准；
+;;   · 尚未布局的段用**廉价扫描**（只判行首 '#'，跳过围栏与引用块，不解析不排版）
+;;     补出的条目（层级、段内码点偏移、文本）——成本约 0.5ms/4KB，可在后台逐拍推进。
+;; 跳转 = 设锚点 → 布局该段 → 用标题文本把估算 dy 精修到精确 y（见 md_view.toc_jump）。
+;; 面板活动期间每拍推进一点扫描，条目会逐渐补齐（标题栏显示"扫描中"）。
 ;;
 ;; 面板是全屏覆盖式：自己消费输入与推屏；活动期间**不调 (EX.check)**，
 ;; 返回请求（硬 A/ESC）改为"关闭面板"（与文件选择器同一思路）。
 
-(define toc_items (cdr '(0)))   ;; 当前文档目录：(层级 y 文本) 的列表
+(define toc_items (cdr '(0)))   ;; 当前文档目录：(层级 段号 种类 数值 文本) 的列表
 (define toc_open 0)             ;; 1 = 面板打开
 (define toc_sel 0)              ;; 面板里选中的条目
 (define TOC_ROW 15)             ;; 条目行高
@@ -466,16 +532,34 @@
     (Gfx.draw_text "目录" (+ (toc_btn_x) 7) (+ (toc_btn_y) 1) 225 228 235)
     #t))
 
-;; 打开面板：选中项默认落在"当前阅读位置之前最近的标题"上
+;; 打开面板：选中项默认落在"当前阅读位置之前最近的标题"上。
+;; 条目形状 = (层级 段号 种类 数值 文本)；种类 0 = 段内精确 y，1 = 段内码点偏移（估算）。
+(define toc_refresh
+  (lambda ()
+    (set! toc_items (MDV.toc_list))
+    #t))
+
 (define toc_open_panel
   (lambda ()
-    (define n (length toc_items))
+    (define n 0)
     (define i 0)
-    (define y 0)
+    (define it #f)
+    (define seg 0)
+    (define a (MDV.anchor))
+    (define aseg (get_item a 0))
+    (define ady (get_item a 1))
+    (toc_refresh)
+    (set! n (length toc_items))
     (set! toc_sel 0)
+    (set! i 0)
     (while (< i n)
-      { (set! y (get_item (get_item toc_items i) 1))
-        (if (<= y scroll) (set! toc_sel i) #f)
+      { (set! it (get_item toc_items i))
+        (set! seg (get_item it 1))
+        (if (< seg aseg)
+            (set! toc_sel i)
+            (if (and (== seg aseg) (== (get_item it 2) 0) (<= (get_item it 3) ady))
+                (set! toc_sel i)
+                #f))
         (set! i (+ i 1)) })
     (set! toc_open 1)
     (display "MDTOC n=") (display n) (newline)
@@ -486,15 +570,14 @@
     (set! toc_open 0)
     #t))
 
-;; 跳到第 i 条
+;; 跳到第 i 条（视图层负责：设锚点 → 布局该段 → 用标题文本精修到精确 y）
 (define toc_jump
   (lambda (i)
-    (define y 0)
-    (if (and (>= i 0) (< i (length toc_items)))
-        { (set! y (get_item (get_item toc_items i) 1))
-          (set! scroll (- y 6))            ;; 标题上方留一点余量
-          (clamp_scroll)
-          (display "MDJUMP i=") (display i) (display " y=") (display y) (newline)
+    (define n (length toc_items))
+    (if (and (>= i 0) (< i n))
+        { (MDV.toc_jump i)
+          (sync_scroll)
+          (display "MDJUMP i=") (display i) (newline)
           (set! toc_open 0) }
         #f)
     #t))
@@ -513,7 +596,10 @@
     (Gfx.fill_rect 0 0 SW SH 16 19 26)
     (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
     (Gfx.draw_text "目录" PAD_X 3 236 242 250)
-    (Gfx.draw_text (String.concat (String.atom_to_string n) " 条") 250 3 150 168 190)
+    (if (< (MDV.toc_count) (MDV.count))
+        (Gfx.draw_text (String.concat (String.atom_to_string n) " 条（扫描中）")
+                       220 3 150 168 190)
+        (Gfx.draw_text (String.concat (String.atom_to_string n) " 条") 250 3 150 168 190))
     (set! last (+ first (toc_rows)))
     (if (> last n) (set! last n) #f)
     (set! i first)
@@ -528,13 +614,14 @@
             #f)
         ;; 层级用颜色与缩进表达：一级最亮，二三级渐暗
         (if (== lvl 1)
-            (Gfx.draw_text (MDL.clip_text (get_item it 2) (- SW (+ tx 12))) tx y 238 244 252)
+            (Gfx.draw_text (MDL.clip_text (get_item it 4) (- SW (+ tx 12))) tx y 238 244 252)
             (if (== lvl 2)
-                (Gfx.draw_text (MDL.clip_text (get_item it 2) (- SW (+ tx 12))) tx y 206 218 236)
-                (Gfx.draw_text (MDL.clip_text (get_item it 2) (- SW (+ tx 12))) tx y 168 182 204)))
+                (Gfx.draw_text (MDL.clip_text (get_item it 4) (- SW (+ tx 12))) tx y 206 218 236)
+                (Gfx.draw_text (MDL.clip_text (get_item it 4) (- SW (+ tx 12))) tx y 168 182 204)))
         (set! i (+ i 1)) })
     (if (== n 0)
-        (Gfx.draw_text "（本文没有 1~3 级标题）" PAD_X TOC_TOP 150 162 186)
+        (Gfx.draw_text (if (== (MDV.toc_count) 0) "（本文没有 1~3 级标题）" "（正在扫描标题…）")
+                       PAD_X TOC_TOP 150 162 186)
         #f)
     (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
     (Gfx.draw_text "↑↓ 选择 · Enter/点按 跳转 · 返回关闭" PAD_X (- SH 14) 130 140 155)
@@ -586,6 +673,11 @@
                       (toc_tap press_x press_y)
                       #f) }
                 #f) })
+      ;; 面板每拍推进一点"廉价标题扫描"：大文档的目录会在几秒内补齐
+      (if (< (MDV.toc_count) (MDV.count))
+          { (MDV.toc_scan 4)
+            (toc_refresh) }
+          #f)
       (draw_toc_panel) }))
 
 ;; ---- 设置（模态框）-------------------------------------------------------
@@ -630,6 +722,9 @@
   (lambda (id)
     (define info (Gfx.font_info id))
     (define keep 0)
+    (define old_h line_h)
+    (define keep_a #f)
+    (define keep_ratio 1)
     (if info
         { (set! font_id id)
           (Gfx.set_font id)
@@ -645,14 +740,20 @@
           (Fs.write FONT_PATH (String.atom_to_string id))
           (display "MDFONT id=") (display id)
           (display " line_h=") (display line_h) (newline)
-          ;; 重新排版当前文档（保留滚动位置）
+          ;; 换字模后所有段的折行/行高都变了：清空段缓存重来，但**保留阅读位置**——
+          ;; 锚点按"段号 + 段内 dy 比例"换算（新行高/旧行高），重开文档后落回原处。
           (if (== mode 0)
-              { (set! keep scroll)
+              { (set! keep_a (MDV.anchor))
+                (set! keep_ratio (/ line_h old_h))
                 (if (> (String.length cur_path) 0)
                     (open_path cur_path cur_title)
                     (open_builtin))
-                (set! scroll keep)
-                (clamp_scroll) }
+                (if (== MDV_ok 1)
+                    { (MDV.set_anchor (get_item keep_a 0)
+                                      (Math.floor (* (get_item keep_a 1) keep_ratio)))
+                      (MDV.ensure (get_item keep_a 0))
+                      (sync_scroll) }
+                    #f) }
               #f) }
         #f)
     #t))
@@ -842,7 +943,46 @@
 
 (define draw_content
   (lambda ()
-    (define n (length lines))
+    (if (== MDV_ok 1)
+        (draw_content_stream)
+        (draw_content_notice))))
+
+;; 流式文档：只遍历**缓存里的段**（视口 ± 若干屏），且段内一越界就收工。
+;; 这与"整篇从第 0 行开始累加 y"的旧实现相比，每帧成本与文档大小无关。
+(define draw_content_stream
+  (lambda ()
+    (define vt (MDV.top_y))
+    (define n (MDV.n_cached))
+    (define j 0)
+    (define m #f)
+    (define lines #f)
+    (define i 0)
+    (define y 0)
+    (define bottom (- SH BOT_H))
+    (define ln #f)
+    (define stop 0)
+    (while (< j n)
+      { (set! m (MDV.cached j))
+        (set! y (+ TOP_H (- (get_item m 1) vt)))     ;; 段首行的屏幕 y
+        (set! lines (get_item m 3))
+        (set! i 0)
+        (set! stop 0)
+        (while (and (< i (length lines)) (== stop 0))
+          { (set! ln (get_item lines i))
+            (if (> y bottom)
+                (set! stop 1)                        ;; 屏外：本段收工
+                (if (< (+ y (get_item ln 0)) TOP_H)
+                    #f                               ;; 整行在页眉之上：跳过
+                    (draw_line ln y)))
+            (set! y (+ y (get_item ln 0)))
+            (set! i (+ i 1)) })
+        (set! j (+ j 1)) })
+    #t))
+
+;; 提示文案（内容只有两段，整篇排版即可）
+(define draw_content_notice
+  (lambda ()
+    (define n (length notice_lines))
     (define i 0)
     (define y 0)
     (define ln #f)
@@ -850,11 +990,11 @@
     (define stop 0)
     (set! y (- TOP_H scroll))
     (while (and (< i n) (== stop 0))
-      { (set! ln (get_item lines i))
+      { (set! ln (get_item notice_lines i))
         (if (> y bottom)
-            (set! stop 1)                       ;; 后面全是屏外，收工
+            (set! stop 1)
             (if (< (+ y (get_item ln 0)) TOP_H)
-                #f                              ;; 整行在页眉之上：跳过
+                #f
                 (draw_line ln y)))
         (set! y (+ y (get_item ln 0)))
         (set! i (+ i 1)) })
@@ -866,12 +1006,18 @@
   (lambda ()
     (define pct 0)
     (define mx (max_scroll))
+    (define txt "100%")
     (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
     ;; 标题按可用宽度裁剪（右侧留给百分比与右上角的「退出」按钮，见 tools/e2e 的像素判据）
     (Gfx.draw_text (MDL.clip_text cur_title 232) PAD_X 3 236 242 250)
     (if (> mx 0)
-        { (set! pct (Math.floor (/ (* scroll 100) mx)))
-          (Gfx.draw_text (String.concat (String.atom_to_string pct) "%") 250 3 150 168 190) }
+        { (set! pct (Math.floor (/ (* (MDV.top_y) 100) (MDV.total_height))))
+          (if (> pct 100) (set! pct 100) #f)
+          ;; 索引还没走到文件尾时百分比是**估算**，用 ≈ 如实标注（宁可不精确也要诚实）
+          (set! txt (if (== (MDV.scan_done) 1)
+                        (String.concat (String.atom_to_string pct) "%")
+                        (String.concat "≈" (String.concat (String.atom_to_string pct) "%"))))
+          (Gfx.draw_text txt 250 3 150 168 190) }
         (Gfx.draw_text "100%" 250 3 150 168 190))
     #t))
 
@@ -881,7 +1027,7 @@
     (if (== mode 0)
         (Gfx.draw_text "拖动/↑↓ 滚动" PAD_X (- SH 14) 130 140 155)
         (Gfx.draw_text "↑↓ 选择 · Enter 打开" PAD_X (- SH 14) 130 140 155))
-    (if (and (== mode 0) (> (length toc_items) 0))
+    (if (and (== mode 0) (== MDV_ok 1) (> (MDV.toc_count) 0))
         (draw_toc_btn)      ;; 底栏右侧偏左：目录（仅阅读页且有标题时）
         #f)
     (draw_set_btn)    ;; 设置（两种模式都有：字体是 App 级设置）
@@ -892,14 +1038,16 @@
   (lambda ()
     (define vh 0)
     (define mx 0)
+    (define th 0)
     (define bar 0)
     (define by 0)
     (set! mx (max_scroll))
     (if (> mx 0)
         { (set! vh (view_h))
-          (set! bar (Math.floor (/ (* vh vh) content_h)))
+          (set! th (MDV.total_height))
+          (set! bar (Math.floor (/ (* vh vh) th)))
           (if (< bar 10) (set! bar 10) #f)
-          (set! by (+ TOP_H (Math.floor (/ (* scroll (- vh bar)) mx))))
+          (set! by (+ TOP_H (Math.floor (/ (* (MDV.top_y) (- vh bar)) mx))))
           (Gfx.fill_rect (- SW 3) TOP_H 3 vh 34 40 52)
           (Gfx.fill_rect (- SW 3) by 3 bar 96 116 148) }
         #f)
@@ -969,36 +1117,10 @@
 ;; 因此命中测试就是"滚动偏移 + 行高累加"的算术。
 (define hit_link
   (lambda (px py)
-    (define n (length lines))
-    (define i 0)
-    (define y 0)
-    (define ln #f)
-    (define segs #f)
-    (define k 0)
-    (define sg #f)
-    (define sx 0)
-    (define r "")
-    (define stop 0)
-    (set! y (- TOP_H scroll))
-    (while (and (< i n) (== stop 0))
-      { (set! ln (get_item lines i))
-        (if (and (>= py y) (< py (+ y (get_item ln 0))))
-            { (set! segs (get_item ln 2))
-              (set! k 0)
-              (while (< k (length segs))
-                { (set! sg (get_item segs k))
-                  (if (== (get_item sg 1) MDL.ST_LINK)
-                      { (set! sx (+ PAD_X (get_item sg 2)))
-                        (if (and (>= px sx) (< px (+ sx (get_item sg 3))))
-                            { (set! r (get_item sg 4))
-                              (set! k (length segs)) }
-                            #f) }
-                      #f)
-                  (set! k (+ k 1)) })
-              (set! stop 1) }
-            (set! y (+ y (get_item ln 0))))
-        (set! i (+ i 1)) })
-    r))
+    ;; 屏幕 y → 文档绝对 y 需要减去页眉高度：视图层的 top 参数按"内容坐标原点"给
+    (if (== MDV_ok 1)
+        (MDV.hit_link px py (- (MDV.top_y) TOP_H))
+        "")))
 
 ;; 阅读区轻点：命中链接 → 弹窗显示地址（模态期间解释器进程挂起，界面照常刷新）
 (define tap_reader
@@ -1039,8 +1161,8 @@
           (set! drag_last (Touch.y))
           (set! drag_total (+ drag_total dyy))
           (if (== mode 0)
-              { (set! scroll (- scroll dyy))
-                (clamp_scroll) }
+              { (scroll_by_px (- 0 dyy))
+                (sync_scroll) }
               #f) }
         { (if (== prev_down 1)
               { (set! prev_down 0)
@@ -1051,7 +1173,8 @@
                         (start_picker)
                         (if (and (== mode 0)
                                  (== (hit_toc_btn press_x press_y) 1)
-                                 (> (length toc_items) 0))
+                                 (== MDV_ok 1)
+                                 (> (MDV.toc_count) 0))
                             (toc_open_panel)
                             (if (== mode 0)
                                 (tap_reader press_x press_y)
@@ -1068,10 +1191,10 @@
         { (if (== k 1) { (set! sel (- sel 1)) (if (< sel 0) (set! sel 0) #f) } #f)
           (if (== k 2) { (set! sel (+ sel 1)) (if (>= sel (length docs)) (set! sel (- (length docs) 1)) #f) } #f)
           (if (== k 13) (open_doc sel) #f) }
-        { (if (== k 1) { (set! scroll (- scroll 15)) (clamp_scroll) } #f)
-          (if (== k 2) { (set! scroll (+ scroll 15)) (clamp_scroll) } #f)
-          (if (== k 3) { (set! scroll (- scroll (view_h))) (clamp_scroll) } #f)
-          (if (== k 4) { (set! scroll (+ scroll (view_h))) (clamp_scroll) } #f) })
+        { (if (== k 1) { (scroll_by_px (- 0 15)) (sync_scroll) } #f)
+          (if (== k 2) { (scroll_by_px 15) (sync_scroll) } #f)
+          (if (== k 3) { (scroll_by_px (- 0 (view_h))) (sync_scroll) } #f)
+          (if (== k 4) { (scroll_by_px (view_h)) (sync_scroll) } #f) })
     #t))
 
 (define handle_keys
@@ -1084,6 +1207,32 @@
 
 ;; ---- 主循环 --------------------------------------------------------------
 
+;; 后台工作（每拍最多做一件，保证 GUI 不掉帧）：
+;;   1) 索引：文档还没切到文件尾 → 再切 1 段（只读+切行，不解析，≈2~4ms）
+;;   2) 预取：当前段的下/上一段还没布局 → 布局 1 段（≈60ms，正好一拍）
+;; 方向跟随阅读位置：段内剩余不足一屏时优先预取下一段。
+(define bg_work
+  (lambda ()
+    (define a #f)
+    (define seg 0)
+    (define dy 0)
+    (define dir 1)
+    (if (== MDV_ok 1)
+        { (set! a (MDV.anchor))
+          (set! seg (get_item a 0))
+          (set! dy (get_item a 1))
+          ;; 段内剩余不足一屏 → 预取下一段；否则预取上一段（回滚更顺）
+          (if (< (- (MDV.height seg) dy) (view_h))
+              (set! dir 1)
+              (set! dir -1))
+          (if (== (MDV.prefetch dir) 0)
+              (if (== (MDV.scan_done) 0)
+                  (MDV.scan 1)
+                  (MDV.prefetch (- 0 dir)))
+              #f) }
+        #f)
+    #t))
+
 (define on_tick
   (lambda ()
     (if (FP.active)
@@ -1095,6 +1244,8 @@
             { (EX.check)
               (handle_keys)
               (handle_touch)
+              (bg_work)
+              (sync_scroll)
               (draw_all) })))))
 
 ;; ---- 启动 ----------------------------------------------------------------

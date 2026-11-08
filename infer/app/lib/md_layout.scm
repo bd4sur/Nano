@@ -6,6 +6,14 @@
 ;;
 ;; 输入：md_parse.scm 产出的块列表；输出：**显示行列表**。
 ;;
+;; 两种入口（同一套块排版器，语义一致）：
+;;   (layout 块表 宽 度量)                     —— 整篇排版（小文档 / 单元测试 / 提示文案）
+;;   (layout_segment 块表 宽 度量 尾续接 代码上续 代码下续 已画图数)
+;;                                            —— **分段排版**（大文件流式阅读，见
+;;                                               app/lib/md_view.scm）。后三个开关只在段与段
+;;                                               之间"缝"上生效：抑制多出来的间隙与代码块
+;;                                               内边距行，使被强制切开的段落/代码块画成一整块。
+;;
 ;;   行 = (高度 背景 段列表)
 ;;        高度：该行占用的像素高（正文 15；间隔行可以是 3~12 的小值）
 ;;        背景：BG_NONE / BG_CODE（代码块底） / BG_RULE（横线）
@@ -287,14 +295,31 @@
 
 (define cur_lines (new_list))
 
+;; ---- 分段渲染的"续接"支持（大文件流式阅读，见 app/lib/md_stream.scm）------
+;; 段与段之间的缝本来会多出一份间隙（上一段的尾间隙 + 下一段的首间隙），
+;; 对"被强制切开的一段正文/代码块"就是可见的断层。这里用两个开关抹平：
+;;   seg_skip_tail : 本段**最后**一个间隙丢弃（挂起到段尾，若无后续内容则丢掉）
+;;   seg_code_top  : 本段首块是"接上来"的代码块 → 跳过它的上间隙与上内边距行
+;;   seg_code_bot  : 本段末块是"还要接下去"的代码块 → 跳过它的下内边距行
+;; （下间隙由 seg_skip_tail 统一丢弃。）整篇排版时三者都是 0，行为与改前一致。
+(define seg_skip_tail 0)
+(define seg_code_top 0)
+(define seg_code_bot 0)
+
 (define emit_line
   (lambda (h bg segs)
-    (push cur_lines (mk3 h bg segs))
-    (set! cur_y (+ cur_y h))))
+    { (push cur_lines (mk3 h bg segs))
+      (set! cur_y (+ cur_y h))
+      #t }))
+
+(define push_gap
+  (lambda (h)
+    (emit_line h BG_NONE (new_list))))
 
 (define emit_gap
   (lambda (h)
-    (emit_line h BG_NONE (new_list))))
+    (push_gap h)
+    #t))
 
 ;; 把一段文本放进当前行的段表：与上一段样式/链接相同且首尾相接时合并（减少绘制调用）
 (define place_atom
@@ -572,15 +597,30 @@
     (define lns (get_item b 2))
     (define n (length lns))
     (define i 0)
-    (emit_gap 6)
-    (emit_line LINE_H BG_CODE (new_list))          ;; 上内边距
+    ;; 分段续接：首块是"接上来"的代码块时，不再留上间隙与上内边距（缝上无缝拼接）
+    (if (== seg_code_top 1)
+        (set! seg_code_top 0)
+        { (emit_gap 6)
+          (emit_line LINE_H BG_CODE (new_list)) })   ;; 上内边距
     (while (< i n)
       { (emit_code_line (get_item lns i) width)
         (set! i (+ i 1)) })
-    (emit_line LINE_H BG_CODE (new_list))          ;; 下内边距
+    (if (== seg_code_bot 1)
+        (set! seg_code_bot 0)
+        (emit_line LINE_H BG_CODE (new_list)))       ;; 下内边距
     (emit_gap 8)))
 
-;; 代码块的一行：逐字符排（等宽字模），超出正文宽就续行；制表符按 4 个空格
+;; 代码块的一行：等宽字模，超出正文宽就续行；制表符按 4 个空格。
+;;
+;; 实现要点（性能）：**按"能放下的最长片段"整段落位**，而不是每字符都
+;; `String.concat` 一次——后者对长代码行是 O(n²) 的分配（一行 50 字符 ≈ 50 次
+;; 增长串拼接），实测在"16KB 巨型代码块"这类病态输入上会白烧掉数 MB 临时对象。
+;; 与逐字符版渲染结果**逐段等价**（place_atom 本来就会把相邻同样式同位置的文本合并）。
+(define flush_code_chunk
+  (lambda (segs s a b x w)
+    (if (> b a) (place_atom segs (String.slice s a b) ST_CODEBLOCK x w "") #f)
+    #t))
+
 (define emit_code_line
   (lambda (s width)
     (define n (String.length s))
@@ -590,19 +630,39 @@
     (define x 6)
     (define lim (- width 8))
     (define cw 0)
+    (define start 0)      ;; 当前片段的起始下标
+    (define x0 0)         ;; 当前片段的起始 x
+    (define cwsum 0)      ;; 当前片段累计宽度
+    (set! x0 x)
     (while (< i n)
       { (set! cp (String.charCodeAt i s))
-        (set! cw (char_w cp))
-        (if (== cp CP_TAB) (set! cw (+ W_HALF (+ W_HALF (+ W_HALF W_HALF)))) #f)
-        (if (> (+ x cw) lim)
-            { (emit_line LINE_H BG_CODE segs)
-              (set! segs (new_list))
-              (set! x 6) }
-            #f)
         (if (== cp CP_TAB)
-            (set! x (place_atom segs "    " ST_CODEBLOCK x cw ""))
-            (set! x (place_atom segs (String.charAt s i) ST_CODEBLOCK x cw "")))
-        (set! i (+ i 1)) })
+            { (flush_code_chunk segs s start i x0 cwsum)
+              (set! cw (+ W_HALF (+ W_HALF (+ W_HALF W_HALF))))
+              (if (> (+ x cw) lim)
+                  { (emit_line LINE_H BG_CODE segs)
+                    (set! segs (new_list))
+                    (set! x 6) }
+                  #f)
+              (set! x (place_atom segs "    " ST_CODEBLOCK x cw ""))
+              (set! i (+ i 1))
+              (set! start i)
+              (set! x0 x)
+              (set! cwsum 0) }
+            { (set! cw (char_w cp))
+              (if (> (+ x cw) lim)
+                  { (flush_code_chunk segs s start i x0 cwsum)
+                    (emit_line LINE_H BG_CODE segs)
+                    (set! segs (new_list))
+                    (set! x 6)
+                    (set! start i)
+                    (set! x0 6)
+                    (set! cwsum 0) }
+                  #f)
+              (set! x (+ x cw))
+              (set! cwsum (+ cwsum cw))
+              (set! i (+ i 1)) }) })
+    (flush_code_chunk segs s start n x0 cwsum)
     (emit_line LINE_H BG_CODE segs)))
 
 ;; ---- 分隔线 --------------------------------------------------------------
@@ -1006,15 +1066,23 @@
 ;;            纯逻辑测试传桩函数或干脆传 #f —— 传 #f 时所有图片都按占位框渲染）
 (define layout
   (lambda (blocks width measure)
+    (layout_full blocks width measure 0 0 0 0)))
+
+;; 整篇排版（原有语义，等价于 layout_segment 的三个续接开关都取 0）
+(define layout_full
+  (lambda (blocks width measure skip_tail code_top code_bot img_done)
     (define n (length blocks))
     (define i 0)
     (define b #f)
     (define fn #f)
     (set! cur_lines (new_list))
-    (set! images_placed 0)
+    (set! images_placed img_done)
     (set! cur_y 0)
     (set! toc_entries (new_list))
     (set! quote_depth 0)
+    (set! seg_skip_tail skip_tail)
+    (set! seg_code_top code_top)
+    (set! seg_code_bot code_bot)
     ;; 容错：调用方漏传第三个参数时 measure 是 #undefined（**不是 #f**，而 #undefined 为真），
     ;; 直接当真会变成"调用 #undefined"报错，因此显式判 undefined? 后退化为占位框。
     (set! measure_image (if (undefined? measure) (lambda (path) #f) measure))
@@ -1023,7 +1091,28 @@
         (set! fn (layout_of (get_item b 0)))
         (if fn (fn b width) #f)          ;; 不认识的块：跳过（容错，不崩）
         (set! i (+ i 1)) })
+    ;; 段尾续接：弹掉本段最后一个"纯间隙行"（= 最后一个块的后间隙），使缝上无缝。
+    ;; 用"弹"而不是"挂起"：挂起会在 emit_line 内部插入行，破坏 lay_heading 这类
+    ;; 「先记 before、再回头改这段行」的块排版器的行下标（踩过）。
+    (if (and (== skip_tail 1) (> (length cur_lines) 0))
+        { (set! b (get_item cur_lines (- (length cur_lines) 1)))
+          (if (and (== (get_item b 1) BG_NONE) (== (length (get_item b 2)) 0))
+              { (set! cur_y (- cur_y (get_item b 0)))
+                (pop cur_lines) }
+              #f) }
+        #f)
+    (set! seg_skip_tail 0)
     cur_lines))
+
+;; 分段排版入口（大文件流式阅读）：
+;;   skip_tail —— 丢弃本段最后一个间隙（正文/列表/表格/引用被强制切开时抹平缝）
+;;   code_top  —— 本段首块是"接上来"的代码块（跳过上间隙与上内边距）
+;;   code_bot  —— 本段末块是"还要接下去"的代码块（跳过下内边距）
+;;   img_done  —— 已画出的图片数（IMG_MAX_COUNT 按整篇而不是按段计数）
+(define layout_segment
+  (lambda (blocks width measure skip_tail code_top code_bot img_done)
+    (layout_full blocks width measure skip_tail code_top code_bot
+                 (if (undefined? img_done) 0 img_done))))
 
 ;; 本次 layout 实际画进文档的图片张数（诊断/测试用）
 (define image_count

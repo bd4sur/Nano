@@ -36,6 +36,28 @@ extern void am_native_fs_on_remove(const char *path) __attribute__((weak));
 // 内部辅助
 // ===============================================================================
 
+// 从操作数栈弹出一个数值，统一转换为 double（模式与 am_native_Gfx.c 一致）。
+static bool fs_pop_number(am_process_t *proc, double *out) {
+    am_value_t v = am_process_pop_operand(proc);
+    if (v == (am_value_t)UINTPTR_MAX) return false;
+
+    if (am_value_is_float(v)) { *out = (double)am_value_to_float(v); return true; }
+    if (am_value_is_int(v))   { *out = (double)am_value_to_int(v);   return true; }
+    if (am_value_is_uint(v))  { *out = (double)am_value_to_uint(v);  return true; }
+    return false;
+}
+
+// 弹出数值并截断为 int32（NaN 视为失败）。
+static bool fs_pop_int(am_process_t *proc, int32_t *out) {
+    double f;
+    if (!fs_pop_number(proc, &f)) return false;
+    if (f != f) return false; // NaN
+    if (f > 2147483647.0)  f = 2147483647.0;
+    if (f < -2147483648.0) f = -2147483648.0;
+    *out = (int32_t)f;
+    return true;
+}
+
 // 从操作数栈弹出一个字符串对象（模式与 vendor 的 am_native_String.c 一致）。
 static bool fs_pop_wstring(am_process_t *proc, am_wstring_t **out) {
     am_value_t v = am_process_pop_operand(proc);
@@ -271,17 +293,22 @@ static int32_t fs_push_null(am_process_t *proc) {
     return fs_push(proc, AM_VALUE_NULL);
 }
 
-// 由 UTF-8 缓冲区构造 Scheme 字符串并压栈（失败压 #null）
-static int32_t fs_push_string(am_process_t *proc, const char *utf8, size_t len) {
+// 由 UTF-8 缓冲区构造 Scheme 字符串把柄（失败返回 AM_HANDLE_NULL）。
+static am_handle_t fs_make_string_handle(am_process_t *proc, const char *utf8, size_t len) {
     // 最坏情况：每个字节一个码点
     wchar_t *wbuf = (wchar_t *)am_malloc(proc->heap_alloc, (len + 1) * sizeof(wchar_t));
-    if (!wbuf) return fs_push_null(proc);
+    if (!wbuf) return AM_HANDLE_NULL;
 
     uint32_t wlen = _mbstowcs(wbuf, utf8, (uint32_t)len);
     am_handle_t hd = am_process_make_wstring_handle(proc, wbuf, (size_t)wlen);
     am_free(proc->heap_alloc, wbuf);
-    if (hd == AM_HANDLE_NULL) return fs_push_null(proc);
+    return hd;
+}
 
+// 由 UTF-8 缓冲区构造 Scheme 字符串并压栈（失败压 #null）
+static int32_t fs_push_string(am_process_t *proc, const char *utf8, size_t len) {
+    am_handle_t hd = fs_make_string_handle(proc, utf8, len);
+    if (hd == AM_HANDLE_NULL) return fs_push_null(proc);
     return fs_push(proc, am_make_value_of_handle(hd));
 }
 
@@ -433,6 +460,131 @@ int32_t am_native_Fs_read(am_runtime_t *rt, am_process_t *proc) {
     return ret;
 }
 
+// (Fs.read_range path:String offset:Number maxbytes:Number) : (文本 下一偏移) | #null
+//
+// 分段读取（大文件流式处理的底座，见 app/lib/md_stream.scm）：
+//   · offset 为**字节**偏移，从文件头算起；maxbytes 是**期望**上限（钳到 64KB）；
+//   · 返回值第一个元素是从 offset 起的文本，第二个元素是**下一偏移**（offset + 实际
+//     消费字节数），调用方用它推进；offset >= 文件大小 时返回空串（=EOF）；
+//   · **不切断 UTF-8 码点**：非 EOF 情况下实际消费量回退到最后一个完整码点的边界，
+//     因此相邻两次读取拼起来恰是原文件的 UTF-8 分解（Scheme 侧因此不会看到半个字）；
+//   · 路径不存在/非法/读失败 → #null（与 Fs.read 的软失败约定一致）。
+int32_t am_native_Fs_read_range(am_runtime_t *rt, am_process_t *proc) {
+    am_wstring_t *ws = NULL;
+    char path[FS_PATH_MAX];
+    int32_t off = 0;
+    int32_t want = 0;
+    uint8_t *buf = NULL;
+    size_t got = 0;
+    size_t take = 0;
+    size_t cap = 0;
+    uint32_t size = 0;
+    (void)rt;
+
+    // 参数从右往左弹：maxbytes → offset → path（与求值顺序相反）
+    if (!fs_pop_int(proc, &want)) return -1;
+    if (!fs_pop_int(proc, &off)) return -1;
+    if (!fs_pop_wstring(proc, &ws)) return -1;
+
+    if (off < 0 || want <= 0) return fs_push_null(proc);
+    if (want > (int32_t)AM_NATIVE_FS_RANGE_MAX) want = (int32_t)AM_NATIVE_FS_RANGE_MAX;
+    if (!am_native_fs_resolve(ws, path)) return fs_push_null(proc);
+
+    if (platform_file_open(path) != 0) return fs_push_null(proc);
+    size = platform_file_size();
+    if ((uint32_t)off > size) {
+        platform_file_close();
+        return fs_push_null(proc);
+    }
+    if (platform_file_seek((uint32_t)off) != 0) {
+        platform_file_close();
+        return fs_push_null(proc);
+    }
+
+    // 多读 4 字节：保证至少能凑出一个完整码点（见下面 take 的算法）
+    cap = (size_t)want + 4u;
+    buf = (uint8_t *)platform_malloc(cap);
+    if (!buf) {
+        platform_file_close();
+        return fs_push_null(proc);
+    }
+    while (got < cap) {
+        int32_t r = platform_file_read(buf + got, cap - got);
+        if (r <= 0) break; // 读失败或提前 EOF：按实际读到的字节数处理
+        got += (size_t)r;
+    }
+    platform_file_close();
+
+    bool eof = ((uint32_t)off + (uint32_t)got >= size);
+    // offset 允许落在码点中间（调用方从文件尾倒推、按固定步长跳读等场景）：
+    // 前移到下一个码点起始字节再算，保证返回的必然是完整码点序列。
+    size_t skip = 0;
+    while (skip < got && skip < 3 && (buf[skip] & 0xC0) == 0x80) skip++;
+
+    const uint8_t *d = buf + skip;
+    size_t gn = got - skip;
+    uint32_t base = (uint32_t)off + (uint32_t)skip;
+    take = eof ? gn : (gn < (size_t)want ? gn : (size_t)want);
+    // 非 EOF 时保证返回的是**完整码点**的前缀：定位 take 处最后一个码点的起始字节，
+    // 若该码点被截断，则把它整体留给下一次读取；take 退到 0 时至少返回一个完整码点
+    // （因此返回字节数可能比 maxbytes 多 1..3，属预期）。
+    if (!eof && take > 0) {
+        size_t p = take;
+        while (p > 0 && (d[p - 1] & 0xC0) == 0x80) p--; // p-1 = 最后那个码点的起始字节
+        if (p > 0) {
+            size_t lead = d[p - 1];
+            size_t clen = (lead < 0x80) ? 1
+                        : ((lead & 0xE0) == 0xC0) ? 2
+                        : ((lead & 0xF0) == 0xE0) ? 3 : 4;
+            if ((p - 1) + clen > take) take = p - 1; // 该码点不完整 → 让给下一次
+        }
+        if (take == 0) {
+            size_t lead = d[0];
+            size_t clen = (lead < 0x80) ? 1
+                        : ((lead & 0xE0) == 0xC0) ? 2
+                        : ((lead & 0xF0) == 0xE0) ? 3 : 4;
+            take = (gn < clen) ? gn : clen;   // 极端小 maxbytes：至少 1 个码点
+        }
+    }
+
+    am_handle_t shd = fs_make_string_handle(proc, (const char *)d, take);
+    free(buf);
+    if (shd == AM_HANDLE_NULL) return fs_push_null(proc);
+
+    am_list_t *lst = am_list_create(proc->heap_alloc, 2, AM_LIST_TYPE_DEFAULT, AM_HANDLE_NULL);
+    if (!lst) {
+        am_heap_free_handle(proc->vm_alloc, proc->heap_alloc, proc->heap, shd);
+        return fs_push_null(proc);
+    }
+    am_list_t *grown = am_list_push(proc->heap_alloc, lst, am_make_value_of_handle(shd));
+    if (!grown) {
+        am_list_destroy(proc->heap_alloc, lst);
+        am_heap_free_handle(proc->vm_alloc, proc->heap_alloc, proc->heap, shd);
+        return fs_push_null(proc);
+    }
+    lst = grown;
+    grown = am_list_push(proc->heap_alloc, lst,
+                         am_make_value_of_uint((am_uint_t)(base + (uint32_t)take)));
+    if (!grown) {
+        am_list_destroy(proc->heap_alloc, lst);
+        return fs_push_null(proc);
+    }
+    lst = grown;
+
+    am_handle_t lhd = am_heap_alloc_handle(proc->vm_alloc, proc->heap_alloc, proc->heap);
+    if (lhd == AM_HANDLE_NULL) {
+        am_list_destroy(proc->heap_alloc, lst);
+        return fs_push_null(proc);
+    }
+    if (am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, lhd,
+                    am_make_value_of_ptr((am_object_t *)lst)) != 0) {
+        am_list_destroy(proc->heap_alloc, lst);
+        am_heap_free_handle(proc->vm_alloc, proc->heap_alloc, proc->heap, lhd);
+        return fs_push_null(proc);
+    }
+    return fs_push(proc, am_make_value_of_handle(lhd));
+}
+
 int32_t am_native_Fs_write(am_runtime_t *rt, am_process_t *proc) {
     am_wstring_t *ws_text = NULL;
     am_wstring_t *ws_path = NULL;
@@ -567,6 +719,7 @@ static const am_native_func_entry_t am_native_Fs_funcs[] = {
     { L"list",   am_native_Fs_list },
     { L"mkdir",  am_native_Fs_mkdir },
     { L"read",   am_native_Fs_read },
+    { L"read_range", am_native_Fs_read_range },
     { L"write",  am_native_Fs_write },
     { L"append", am_native_Fs_append },
     { L"remove", am_native_Fs_remove },

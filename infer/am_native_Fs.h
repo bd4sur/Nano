@@ -41,6 +41,14 @@ extern "C" {
 //    (Fs.read path)        : String | #null   —— 整文件读入并按 UTF-8 解码为字符串；
 //                                                不存在 / 读失败 / 超过
 //                                                AM_NATIVE_FS_READ_MAX → #null
+//    (Fs.read_range path offset maxbytes) : (String Number) | #null
+//                                              —— **分段读取**（大文件流式处理的底座）：
+//                                                 offset 为字节偏移；返回 (文本 下一偏移)
+//                                                 （下一偏移 = offset + 实际消费字节数）；
+//                                                 offset 越界返回空串（=EOF）；不切断
+//                                                 UTF-8 码点；maxbytes 钳到
+//                                                 AM_NATIVE_FS_RANGE_MAX。用法见
+//                                                 app/lib/md_stream.scm（Markdown 大文件）。
 //    (Fs.write path text)  : Boolean          —— 整文件写入（覆盖；自动创建父目录）
 //    (Fs.append path text) : Boolean          —— 追加写入（文件不存在等价于写入）
 //    (Fs.remove path)      : Boolean          —— 删除**文件**或**空目录**（非空目录返回 #f；
@@ -73,6 +81,9 @@ extern "C" {
 // 单次读入的字节上限（超出返回 #null，见上）
 #define AM_NATIVE_FS_READ_MAX (128u * 1024u)
 
+// Fs.read_range 单次返回的字节上限（超过则钳到本值；一次调用的堆开销因此有界）
+#define AM_NATIVE_FS_RANGE_MAX (64u * 1024u)
+
 // 由本文件定义
 extern const am_native_lib_entry_t am_native_Fs_lib;
 
@@ -93,6 +104,9 @@ int32_t am_native_Fs_mkdir(am_runtime_t *rt, am_process_t *proc);
 
 // (Fs.read path:String) : String | #null
 int32_t am_native_Fs_read(am_runtime_t *rt, am_process_t *proc);
+
+// (Fs.read_range path:String offset:Number maxbytes:Number) : (String Number) | #null
+int32_t am_native_Fs_read_range(am_runtime_t *rt, am_process_t *proc);
 
 // (Fs.write path:String text:String) : Boolean
 int32_t am_native_Fs_write(am_runtime_t *rt, am_process_t *proc);
