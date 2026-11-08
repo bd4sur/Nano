@@ -144,7 +144,8 @@
 (define MDV_ok 0)              ;; 1 = 流式文档（md_view），0 = 提示文案（notice）
 (define notice_lines (cdr '(0)))  ;; 提示文案的显示行（整篇排版，内容极小）
 (define notice_h 0)           ;; 提示文案总高
-(define toc_scanned 0)        ;; 目录廉价扫描已经推进的段数（诊断/进度）
+(define toc_scanned 0)        ;; 目录已覆盖的段数（= 索引推进到的段数，诊断/进度）
+(define toc_gen_seen -1)      ;; 已反映到 toc_items 的目录世代号（增量刷新用）
 (define content_h 0)          ;; 全文档总高（像素；未索引部分为估算，仅用于滚动条/百分比）
 (define scroll 0)             ;; 纵向滚动偏移（像素，**由锚点派生**的只读快照）
 (define mode 1)               ;; 0 = 阅读，1 = 文档列表
@@ -396,7 +397,8 @@
         { (set! MDV_ok 1)
           (set! notice_lines (cdr '(0)))
           (set! notice_h 0)
-          (MDV.toc_scan 1) }
+          (index_work IDX_BYTES)         ;; 开屏后立刻推进一点索引（目录/估算随之更新）
+          (set! toc_gen_seen -1) }
         { (set! MDV_ok 0)
           (set! notice_lines (MDL.layout msg CW doc_image_size))
           (set! notice_h (MDL.total_height notice_lines)) })
@@ -489,12 +491,18 @@
     #t))
 
 ;; ---- 目录（TOC）---------------------------------------------------------
-;; 分段视图下"整篇一次性排版"不存在了，因此目录来自两个互补的来源（都在 md_view）：
-;;   · 段被布局时顺带收集的**精确**条目（层级、段内 y、文本）——最准；
-;;   · 尚未布局的段用**廉价扫描**（只判行首 '#'，跳过围栏与引用块，不解析不排版）
-;;     补出的条目（层级、段内码点偏移、文本）——成本约 0.5ms/4KB，可在后台逐拍推进。
-;; 跳转 = 设锚点 → 布局该段 → 用标题文本把估算 dy 精修到精确 y（见 md_view.toc_jump）。
-;; 面板活动期间每拍推进一点扫描，条目会逐渐补齐（标题栏显示"扫描中"）。
+;; 策略与主流低资源长文本阅读器一致：**快速打开 → 流式渲染 → 后台异步扫全文建目录**。
+;;
+;;   · 打开时只切/排第一段（~90ms），用户立刻可读；与此同时 `bg_work` 每拍用
+;;     IDX_BYTES 的预算往后切段，**切段时顺手提取该段标题**（md_view.scan 里的
+;;     headings_of：只判行首 '#'，跳过围栏与引用块，不解析不排版、不额外读盘）
+;;     ⇒ 目录是索引的副产品，1MB 文档约 5s 就长齐（实测 153 → 2221 条）。
+;;   · 段真正被排版时，md_view 会用**布局给出的精确 y** 覆盖该段的廉价条目。
+;;   · 面板打开期间索引继续跑（IDX_BYTES_TOC 放大预算，面板渲染很轻），并用
+;;     目录世代号 `(MDV.toc_gen)` 做**增量刷新**——只有条目真的变了才重建列表，
+;;     不每拍 O(条目数) 重算；条目只追加在尾部，选中项下标不会失效。
+;;   · 标题栏在未扫完时显示 "n 条 · x%"；跳转 = 设锚点 → 布局该段 → 用标题文本
+;;     把估算 dy 精修到精确 y（见 md_view.toc_jump）。
 ;;
 ;; 面板是全屏覆盖式：自己消费输入与推屏；活动期间**不调 (EX.check)**，
 ;; 返回请求（硬 A/ESC）改为"关闭面板"（与文件选择器同一思路）。
@@ -549,6 +557,7 @@
     (define aseg (get_item a 0))
     (define ady (get_item a 1))
     (toc_refresh)
+    (set! toc_gen_seen (MDV.toc_gen))
     (set! n (length toc_items))
     (set! toc_sel 0)
     (set! i 0)
@@ -596,9 +605,11 @@
     (Gfx.fill_rect 0 0 SW SH 16 19 26)
     (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
     (Gfx.draw_text "目录" PAD_X 3 236 242 250)
-    (if (< (MDV.toc_count) (MDV.count))
-        (Gfx.draw_text (String.concat (String.atom_to_string n) " 条（扫描中）")
-                       220 3 150 168 190)
+    (if (not (MDV.toc_done))
+        (Gfx.draw_text (String.concat (String.atom_to_string n)
+                                      (String.concat " 条 · "
+                                        (String.concat (String.atom_to_string (MDV.index_progress)) "%")))
+                       208 3 150 168 190)
         (Gfx.draw_text (String.concat (String.atom_to_string n) " 条") 250 3 150 168 190))
     (set! last (+ first (toc_rows)))
     (if (> last n) (set! last n) #f)
@@ -620,7 +631,7 @@
                 (Gfx.draw_text (MDL.clip_text (get_item it 4) (- SW (+ tx 12))) tx y 168 182 204)))
         (set! i (+ i 1)) })
     (if (== n 0)
-        (Gfx.draw_text (if (== (MDV.toc_count) 0) "（本文没有 1~3 级标题）" "（正在扫描标题…）")
+        (Gfx.draw_text (if (MDV.toc_done) "（本文没有 1~3 级标题）" "（正在扫描全文标题…）")
                        PAD_X TOC_TOP 150 162 186)
         #f)
     (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
@@ -673,10 +684,17 @@
                       (toc_tap press_x press_y)
                       #f) }
                 #f) })
-      ;; 面板每拍推进一点"廉价标题扫描"：大文档的目录会在几秒内补齐
-      (if (< (MDV.toc_count) (MDV.count))
-          { (MDV.toc_scan 4)
-            (toc_refresh) }
+      ;; 面板打开期间**索引继续跑**（预算放大）：全文目录几秒内补齐，
+      ;; 条目只会追加在尾部，选中项下标不会失效。
+      (index_work IDX_BYTES_TOC)
+      ;; 只在"目录世代号变化"时重建条目表（避免每拍 O(条目数) 重建）
+      (if (not (== (MDV.toc_gen) toc_gen_seen))
+          { (set! toc_gen_seen (MDV.toc_gen))
+            (toc_refresh)
+            (set! toc_scanned (MDV.toc_scanned_count))
+            (if (>= toc_sel (length toc_items))
+                (set! toc_sel (if (> (length toc_items) 0) (- (length toc_items) 1) 0))
+                #f) }
           #f)
       (draw_toc_panel) }))
 
@@ -1014,7 +1032,7 @@
         { (set! pct (Math.floor (/ (* (MDV.top_y) 100) (MDV.total_height))))
           (if (> pct 100) (set! pct 100) #f)
           ;; 索引还没走到文件尾时百分比是**估算**，用 ≈ 如实标注（宁可不精确也要诚实）
-          (set! txt (if (== (MDV.scan_done) 1)
+          (set! txt (if (MDV.scan_done)
                         (String.concat (String.atom_to_string pct) "%")
                         (String.concat "≈" (String.concat (String.atom_to_string pct) "%"))))
           (Gfx.draw_text txt 250 3 150 168 190) }
@@ -1207,10 +1225,31 @@
 
 ;; ---- 主循环 --------------------------------------------------------------
 
-;; 后台工作（每拍最多做一件，保证 GUI 不掉帧）：
-;;   1) 索引：文档还没切到文件尾 → 再切 1 段（只读+切行，不解析，≈2~4ms）
-;;   2) 预取：当前段的下/上一段还没布局 → 布局 1 段（≈60ms，正好一拍）
+;; ---- 后台异步工作（流式加载的第二半：**阅读不被打断，索引/目录在后面追**）------
+;; 每拍做两件事，各有预算，保证 GUI 不掉帧：
+;;   ① **索引**：从当前位置往后切段（只读块 + 切行 + 顺手提取标题，≈0.2~4ms/段）。
+;;      索引是**目录的副产品**——扫到哪，目录就完整到哪，所以不需要"打开目录时再
+;;      全篇扫一遍"的二次读盘；页眉百分比也随索引推进从估算变成实测。
+;;      预算按字节给（IDX_BYTES），文档多大都不改变单拍开销。
+;;   ② **预取**：把锚点相邻的一段排版进缓存（≈60ms，正好一拍），滚动才不卡。
 ;; 方向跟随阅读位置：段内剩余不足一屏时优先预取下一段。
+(define IDX_BYTES 12288)       ;; 每拍索引预算（字节）≈ 3 段
+(define IDX_BYTES_TOC 40960)   ;; 目录面板打开时的索引预算（面板渲染轻，可以快点）
+
+(define index_work
+  (lambda (budget_bytes)
+    (define b0 (MDV.bytes_indexed))
+    (define segs 0)
+    (define go 1)
+    (while (and (== go 1) (< segs 16))
+      { (if (and (not (MDV.scan_done))
+                 (< (- (MDV.bytes_indexed) b0) budget_bytes))
+            { (if (> (MDV.index_step 1) 0)
+                  (set! segs (+ segs 1))
+                  (set! go 0)) }
+            (set! go 0)) })
+    segs))
+
 (define bg_work
   (lambda ()
     (define a #f)
@@ -1218,7 +1257,8 @@
     (define dy 0)
     (define dir 1)
     (if (== MDV_ok 1)
-        { (set! a (MDV.anchor))
+        { (index_work IDX_BYTES)
+          (set! a (MDV.anchor))
           (set! seg (get_item a 0))
           (set! dy (get_item a 1))
           ;; 段内剩余不足一屏 → 预取下一段；否则预取上一段（回滚更顺）
@@ -1226,9 +1266,7 @@
               (set! dir 1)
               (set! dir -1))
           (if (== (MDV.prefetch dir) 0)
-              (if (== (MDV.scan_done) 0)
-                  (MDV.scan 1)
-                  (MDV.prefetch (- 0 dir)))
+              (MDV.prefetch (- 0 dir))
               #f) }
         #f)
     #t))

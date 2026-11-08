@@ -7,6 +7,13 @@
 ;;   md_layout.scm  块树 → 显示行             （仅加"续接缝"开关与整篇图片预算）
 ;;   本模块         段 → **窗口**：按需布局、缓存若干段、锚点滚动、预取、高度估算、目录
 ;;
+;; 目录（TOC）的设计：**后台异步扫全文，目录是索引的副产品**。
+;;   · scan() 每切一段，就在**同一份行表**上顺手提取标题（headings_of，只判行首 '#'
+;;     并跳过围栏/引用块）——不解析、不排版、不额外读盘，≈0.2ms/4KB；
+;;   · 因此"索引推进到哪，目录就完整到哪"，App 无需"打开目录时再全篇扫一遍"；
+;;   · 段真正被排版时，用布局给出的**精确 y** 覆盖该段的廉价条目（种类 0 vs 1）；
+;;   · toc_gen 世代号供 App 做增量刷新；toc_done = 索引已扫到文件尾。
+;;
 ;; 为什么这样设计（WASM 实测：每 KB 源码 ≈ 40KB 堆（块树）+ 26KB（显示行）+ 15ms）：
 ;;   · 整篇物化需要 >60MB 堆（1MB 文档），而解释器池只有 16MB heap → 必须分窗口；
 ;;   · 布局一段 4KB 源码 ≈ 60ms，因此段要小、要预取，且**段内滚动零重排**；
@@ -44,7 +51,8 @@
 (define vw_nlines (new_list))   ;; 每段显示行数（诊断）
 (define vw_nblocks (new_list))  ;; 每段块数（诊断）
 (define vw_toc (new_list))      ;; 每段 TOC 条目（列表）
-(define vw_toc_scanned 0)       ;; 目录廉价扫描已覆盖的段数
+(define vw_toc_scanned 0)       ;; 已建好目录条目的段数（与段扫描同步推进）
+(define vw_toc_gen 0)           ;; 目录世代号：条目集合每变一次 +1（App 据此增量刷新）
 (define vw_scan_done 0)         ;; 1 = 段扫描已到文件尾
 (define vw_bytes_done 0)        ;; 已切段覆盖的源码字节数
 (define vw_chars_done 0)        ;; 已切段覆盖的源码码点数
@@ -77,6 +85,7 @@
     (set! vw_nblocks (new_list))
     (set! vw_toc (new_list))
     (set! vw_toc_scanned 0)
+    (set! vw_toc_gen 0)
     (set! vw_scan_done 0)
     (set! vw_bytes_done 0)
     (set! vw_chars_done 0)
@@ -114,6 +123,7 @@
     (set! vw_nblocks (new_list))
     (set! vw_toc (new_list))
     (set! vw_toc_scanned 0)
+    (set! vw_toc_gen 0)
     (set! vw_scan_done 1)
     (set! vw_bytes_done 0)
     (set! vw_chars_done 0)
@@ -156,7 +166,46 @@
 (define cal (lambda () vw_cal))
 (define evicted (lambda () vw_evicted))
 
-;; ---- 段扫描（切段，不排版）--------------------------------------------
+;; ---- 段的标题提取（廉价扫描：只判行首 '#'，跳过围栏与引用块）----------
+;;
+;; 为什么可以在"切段的同时"顺手做：段扫描本来就要把这段的行表读进内存
+;; （MDST.next 的返回值），这里只是同一份行表上多扫一遍行首字符——不解析、不排版、
+;; 不额外读文件，实测 ≈0.2ms/4KB。因此**目录是后台索引的副产品**：索引扫到哪里，
+;; 目录就完整到哪里，用户打开目录面板时通常已经是全文目录。
+;;
+;; 每段都从"无围栏"开始是**正确**的：正常切点必然在围栏外的空行处；若某段是被强制
+;; 切断在围栏内，它的首行就是合成围栏开启行（见 md_stream.scm），状态同样自洽。
+(define headings_of
+  (lambda (lines)
+    (define n (length lines))
+    (define i 0)
+    (define ln "")
+    (define fence #f)
+    (define info #f)
+    (define lvl 0)
+    (define off 0)          ;; 段内码点偏移（跳转时按比例估算 dy，布局后再精修）
+    (define out (new_list))
+    (define txt "")
+    (while (< i n)
+      { (set! ln (get_item lines i))
+        (if fence
+            { (if (MD.fence_close ln fence) (set! fence #f) #f) }
+            { (set! info (MD.fence_open ln))
+              (if info
+                  (set! fence info)
+                  { (if (>= (MD.quote_content_at ln) 0)
+                        #f                       ;; 引用块里的标题不算本文结构
+                        { (set! lvl (MD.heading_level ln))
+                          (if (> lvl 0)
+                              { (set! txt (MD.trim (String.slice ln lvl (String.length ln))))
+                                (push out (cons (min2 lvl 3)
+                                            (cons 1 (cons off (cons txt (cdr '(0))))))) }
+                              #f) }) }) })
+        (set! off (+ off (+ (String.length ln) 1)))
+        (set! i (+ i 1)) })
+    out))
+
+;; ---- 段扫描（切段，不排版；**顺手建目录**）----------------------------
 
 (define scan
   (lambda (budget)
@@ -172,7 +221,9 @@
               (push vw_h 0)
               (push vw_nlines 0)
               (push vw_nblocks 0)
-              (push vw_toc (new_list))
+              (push vw_toc (headings_of (get_item r 1)))   ;; 目录 = 索引副产品
+              (set! vw_toc_scanned (+ vw_toc_scanned 1))
+              (set! vw_toc_gen (+ vw_toc_gen 1))
               (set! vw_bytes_done (+ vw_bytes_done (get_item rec 1)))
               (set! vw_chars_done (+ vw_chars_done (get_item rec 3)))
               (set! added (+ added 1)) }
@@ -323,6 +374,7 @@
             #f)
         (set! k (+ k 1)) })
     (set_item! vw_toc i out)
+    (set! vw_toc_gen (+ vw_toc_gen 1))
     #t))
 
 ;; ---- 布局一段 -----------------------------------------------------------
@@ -568,61 +620,25 @@
 
 ;; ---- 目录（TOC）--------------------------------------------------------
 
-;; 廉价扫描：只判行首 '#'（跳过围栏与引用块），不解析、不排版。
-;; 记录段内码点偏移，跳转时先估算 dy、布局后再精确定位（见 toc_jump）。
-(define toc_scan
+;; 让索引继续往前推进（目录随之变长）。返回本次新增的段数。
+;; 这是给"目录面板打开期间"用的：面板渲染很轻，可以把每拍预算调大一点，
+;; 让全文目录尽快补齐；正常阅读时由 bg_work 以更小的预算推进。
+(define index_step
   (lambda (budget)
-    (define total (length vw_segs))
-    (define done 0)
-    (define rec #f)
-    (define lines #f)
-    (define i 0)
-    (define ln "")
-    (define fence #f)
-    (define info #f)
-    (define lvl 0)
-    (define off 0)
-    (define out (new_list))
-    (define txt "")
-    (while (and (< vw_toc_scanned total) (< done budget))
-      { (set! rec (get_item vw_segs vw_toc_scanned))
-        ;; 已布局的段用布局给出的精确条目，不再重复扫描
-        (if (> (get_item vw_h vw_toc_scanned) 0)
-            #f
-            { (set! lines (MDST.at (get_item rec 0) (get_item rec 2)
-                                   (get_item rec 4) (get_item rec 5)
-                                   (get_item rec 6) (get_item rec 7) (get_item rec 8)))
-              (if lines
-                  { (set! out (new_list))
-                    (set! fence #f)
-                    (set! off 0)
-                    (set! i 0)
-                    (while (< i (length lines))
-                      { (set! ln (get_item lines i))
-                        (if fence
-                            { (if (MD.fence_close ln fence) (set! fence #f) #f) }
-                            { (set! info (MD.fence_open ln))
-                              (if info
-                                  (set! fence info)
-                                  { (if (>= (MD.quote_content_at ln) 0)
-                                        #f
-                                        { (set! lvl (MD.heading_level ln))
-                                          (if (> lvl 0)
-                                              { (set! txt (MD.trim (String.slice ln lvl (String.length ln))))
-                                                (push out (cons (min2 lvl 3)
-                                                            (cons 1 (cons off
-                                                              (cons txt (cdr '(0))))))) }
-                                              #f) }) }) })
-                        (set! off (+ off (+ (String.length ln) 1)))
-                        (set! i (+ i 1)) })
-                    (set_item! vw_toc vw_toc_scanned out) }
-                  #f) })
-        (set! vw_toc_scanned (+ vw_toc_scanned 1))
-        (set! done (+ done 1)) })
-    (== vw_toc_scanned total)))
+    (scan budget)))
 
-(define toc_done (lambda () (>= vw_toc_scanned (length vw_segs))))
+;; 全文目录是否已完整 = 索引是否已扫到文件尾（条目是索引的副产品）
+(define toc_done (lambda () (== vw_scan_done 1)))
 (define toc_scanned_count (lambda () vw_toc_scanned))
+;; 目录世代号：App 只在它变过时才重建条目表（避免每拍 O(条目数) 的重建）
+(define toc_gen (lambda () vw_toc_gen))
+;; 索引进度（0~100，按字节；未扫到文件尾时页眉百分比也是估算）
+(define index_progress
+  (lambda ()
+    (define size (MDST.size))
+    (if (and (> size 0) (< vw_bytes_done size))
+        (Math.floor (/ (* vw_bytes_done 100) size))
+        100)))
 
 ;; 全量目录（按段顺序拼接）：元素 = (层级 段号 种类 数值 文本)
 (define toc_list
