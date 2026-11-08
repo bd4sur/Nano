@@ -18,8 +18,8 @@
 ;;     sinθ 与 cosθ 两次。
 ;;
 ;; 太阳位置：
-;;   取自共享星历模块（app/lib/ephem.scm，同一份库也被 ephemeris.scm /
-;;   nongli.scm / sky2.scm / sky3.scm 复用）：按当前系统时间与项目默认观测点
+;;   取自共享星历模块（app/lib/ephem.scm，同一份库也被 ephemeris.scm（星历 ·
+;;   农历单页）/ sky2.scm / sky3.scm 复用）：按当前系统时间与项目默认观测点
 ;;   南京 119.0°E / 32.0°N / UTC+8 求太阳地平坐标，再换成三分量单位向量送入
 ;;   散射模型。渲染完成后显示太阳高度/方位与时刻；太阳移动超过
 ;;   RE_RENDER_DEG 后自动按新位置重绘。

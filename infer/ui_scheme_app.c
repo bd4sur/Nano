@@ -35,8 +35,9 @@
 //（策略与 ui_animac 一致；WASM/桌面平台堆充裕，实际按期望值分配）
 // 由 2MB 逐级上调为 12MB：
 //   · 4MB：sky3.scm（scatter_model_3 逐行移植）
-//   · 8MB：ephemeris.scm（月球 10×60 项级数 + VSOP87 + 星历函数集）
-//   · 12MB：nongli.scm + app/lib/ephem.scm（共享星历模块 + 农历年表推算）
+//   · 12MB：ephemeris.scm（星历 · 农历单页：月球 10×60 项级数 + VSOP87 + 星历
+//          函数集 + app/lib/ephem.scm + 农历年表推算）。合并前是两个 App
+//          （ephemeris.scm 8MB、nongli.scm 12MB），合并后实测 12MB 即可
 //   · 24MB：markdown.scm（连着 md_parse / md_layout / md_demo / exit 四个模块一起编译，
 //          编译期工作区就要 ~13MB；实测 12MB 时连 8KB 的 Markdown 文件都装不下，
 //          24MB 能容纳约 32KB 文档——App 侧据此设了 DOC_MAX 上限并给出友好提示）
@@ -75,7 +76,7 @@
 #define MB_ERR_BUF_LEN (128)
 
 // App 数量上限与名称长度上限
-#define SCHEME_APP_MAX     (48)   // app/*.scm 上限（当前 39 个；余量留 9 个）
+#define SCHEME_APP_MAX     (48)   // app/*.scm 上限（当前 40 个；余量留 8 个）
 // 2026-11 由 32 上调为 48：沙盒颗粒物理/2048/弹幕陨石等 App 陆续加入后，
 // app/ 下的 .scm 已达 33 个 —— 32 的上限会把按名排序**最后**的 App 悄悄丢掉
 // （当时是 xray.scm，列表里凭空少一项），且没有任何提示。改动 App 数量时务必
