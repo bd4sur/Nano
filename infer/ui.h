@@ -30,6 +30,10 @@ struct Linglong_Config;
 typedef struct Nano_Context Nano_Context;
 typedef struct Nano_Session Nano_Session;
 
+// 启动画面时钟样式（Global_State.splash_clock_style，系统设置中切换）
+#define SPLASH_CLOCK_SMALL (0) // 小（默认）：不绘制七段码，hh:mm:ss 并入顶部日期行（整体居中）
+#define SPLASH_CLOCK_BIG   (1) // 大：七段码时钟绘制在画面中央
+
 typedef struct Widget_Textarea_State Widget_Textarea_State;
 typedef struct Widget_Input_State Widget_Input_State;
 typedef struct Widget_Menu_State Widget_Menu_State;
@@ -126,6 +130,7 @@ typedef struct Global_State {
     int32_t auto_shutdown_minutes;   // 自动关机时长设置（分钟；0=关，可选 1/2/3/5/10/20/30/60）
     uint64_t auto_shutdown_deadline; // 自动关机到期时间戳（ms，对 timestamp；0=未启用）
     int32_t key_feedback_mode;       // 按键提示（按键反馈方式）设置：0=无，1=灯光，2=蜂鸣，3=灯光+蜂鸣；默认 1（灯光）（系统设置中循环切换）
+    int32_t splash_clock_style;      // 启动画面时钟样式：SPLASH_CLOCK_SMALL（默认，时间并入顶部日期行）/ SPLASH_CLOCK_BIG（七段码居中央）
 
     // 玲珑天象仪全局配置
     Linglong_Config *linglong_cfg;

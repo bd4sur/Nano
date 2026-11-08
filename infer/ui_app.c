@@ -486,6 +486,7 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
     global_state->auto_shutdown_minutes = 0;
     global_state->auto_shutdown_deadline = 0;
     global_state->key_feedback_mode = 1;  // 按键提示（按键反馈方式）默认为灯光
+    global_state->splash_clock_style = SPLASH_CLOCK_SMALL;  // 启动画面时钟样式默认为“小”（时间并入顶部日期行）
 
     global_state->timestamp_last = 0;
     global_state->touch_x = 0;
@@ -860,6 +861,10 @@ static void ui_draw_copyright_notice(Key_Event *key_event, Global_State *global_
 }
 
 
+// 启动画面底部两行（自下而上：农历 / 电量信息）的排版常量
+#define SPLASH_FOOTER_LINE_GAP      (6)  // 两行之间的行间距（px）
+#define SPLASH_FOOTER_BOTTOM_MARGIN (11) // 最底一行行框下边界距屏幕底边的留白（px，沿用旧电量行的留白）
+
 void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state) {
 
     // 清屏
@@ -913,28 +918,35 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
         sevenseg_shadow = 1;
     }
 
-    // 底部状态行（电量信息行）的行框几何。电量行是 splash 的最底一行，其 y 位置由屏幕高度
-    // 决定（gfx->height-13*1-6 为居中绘制的行框中心）；下面的农历行以它为锚点自适应定位，
-    // 保证任意屏幕高度下农历行都紧贴电量行上方、且保持固定行间距。
-    const int32_t footer_line_h = gfx_font_line_height(GFX_FONT_ALPHA_12);
-    const int32_t footer_center_y = global_state->gfx->height - 13 * 1 - 6;
-    const int32_t footer_top_y = footer_center_y - footer_line_h / 2;
+    // 底部两行排版（按屏幕高度自适应）：最底一行是农历（ui_font），其上一行是电量信息
+    // （GFX_FONT_ALPHA_12），最底一行行框下边界距屏幕底边 SPLASH_FOOTER_BOTTOM_MARGIN，
+    // 两行之间留 SPLASH_FOOTER_LINE_GAP 行间距。
+    // 居中绘制时行框下边界 = 行框中心 + (行高 - 行高/2)（见 gfx_font_draw_text_centered）。
+    const int32_t nongli_line_h = gfx_font_line_height(global_state->ui_font);
+    const int32_t nongli_center_y = global_state->gfx->height - SPLASH_FOOTER_BOTTOM_MARGIN
+                                  - (nongli_line_h - nongli_line_h / 2);
 
     const wchar_t *weekdays[] = {L"日", L"一", L"二", L"三", L"四", L"五", L"六"};
-    swprintf(datetime_wcs_buffer, 33, L"%04d年%02d月%02d日 星期%ls", year, month, day, weekdays[timeinfo->tm_wday]);
-    // 背景（阴影）
-    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, datetime_wcs_buffer, global_state->gfx->width / 2 + 1, 16 + 1, 0x66, 0x66, 0x66, 1);
-    // 前景
-    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, datetime_wcs_buffer, global_state->gfx->width / 2, 16, time_red, time_green, time_blue, 1);
-
-    // 农历日期：行框中心由电量行行框顶边向上让出 SPLASH_LINE_GAP 行间距得到（自适应屏幕高度）
-    const int32_t SPLASH_LINE_GAP = 6; // 农历行与底部电量行之间的行间距（像素）
-    const int32_t nongli_line_h = gfx_font_line_height(global_state->ui_font);
-    int32_t nongli_center_y = footer_top_y - SPLASH_LINE_GAP - nongli_line_h / 2;
-    if (nongli_center_y < nongli_line_h / 2) {
-        nongli_center_y = nongli_line_h / 2; // 极小屏兜底：不越出屏幕上边界
+    uint32_t datetime_font = global_state->ui_font;
+    if (global_state->splash_clock_style == SPLASH_CLOCK_SMALL) {
+        // 小样式：日期与 hh:mm:ss 合成一个字符串，整体居中；16px 字体在窄屏上放不下时
+        // （如 320 宽约需 360px）自动降一号字体，保证仍居中且不被截断
+        swprintf(datetime_wcs_buffer, 33, L"%04d年%02d月%02d日 星期%ls %02d:%02d:%02d",
+                 year, month, day, weekdays[timeinfo->tm_wday], hour, minute, second);
+        if (gfx_font_measure_text(datetime_font, datetime_wcs_buffer) > (int32_t)global_state->gfx->width - 4) {
+            datetime_font = GFX_FONT_ALPHA_12;
+        }
     }
+    else {
+        // 大样式：顶部只显示日期，时间由画面中央的七段码时钟表现
+        swprintf(datetime_wcs_buffer, 33, L"%04d年%02d月%02d日 星期%ls", year, month, day, weekdays[timeinfo->tm_wday]);
+    }
+    // 背景（阴影）
+    gfx_font_draw_text_centered(global_state->gfx, datetime_font, datetime_wcs_buffer, global_state->gfx->width / 2 + 1, 16 + 1, 0x66, 0x66, 0x66, 1);
+    // 前景
+    gfx_font_draw_text_centered(global_state->gfx, datetime_font, datetime_wcs_buffer, global_state->gfx->width / 2, 16, time_red, time_green, time_blue, 1);
 
+    // 农历日期（最底一行）
     LunarDate *nongli = lunar_calculate(year, month, day, hour, minute, second, timezone);
     _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
     // 背景（阴影）
@@ -942,15 +954,17 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     // 前景
     gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2, nongli_center_y, nongli_red, nongli_green, nongli_blue, 1);
 
-    // 七段码时钟
-    wchar_t time7seg_str[10];
-    swprintf(time7seg_str, 10, L"%02d:%02d:%02d", hour, minute, second);
-    int32_t s7seg_width = 0.0f;
-    int32_t s7seg_height = 0.0f;
-    ui_draw_7seg_string_centered(key_event, global_state,
-        global_state->gfx->width / 2 + 6, 55,
-        time7seg_str, sevenseg_red, sevenseg_green, sevenseg_blue, 12.0f, 4.0f, 8.0f, sevenseg_shadow,
-        &s7seg_width, &s7seg_height);
+    // 七段码时钟（仅“大”样式：绘制在画面中央）
+    if (global_state->splash_clock_style == SPLASH_CLOCK_BIG) {
+        wchar_t time7seg_str[10];
+        swprintf(time7seg_str, 10, L"%02d:%02d:%02d", hour, minute, second);
+        int32_t s7seg_width = 0.0f;
+        int32_t s7seg_height = 0.0f;
+        ui_draw_7seg_string_centered(key_event, global_state,
+            global_state->gfx->width / 2 + 6, 55,
+            time7seg_str, sevenseg_red, sevenseg_green, sevenseg_blue, 12.0f, 4.0f, 8.0f, sevenseg_shadow,
+            &s7seg_width, &s7seg_height);
+    }
 
 
     // 玲珑仪（青春版）
@@ -976,6 +990,14 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 
 
 #ifdef UPS_ENABLED
+    // 电量信息行（农历行的上一行）：行框下边界 = 农历行行框上边界 - SPLASH_FOOTER_LINE_GAP
+    const int32_t battery_line_h = gfx_font_line_height(GFX_FONT_ALPHA_12);
+    int32_t battery_center_y = nongli_center_y - nongli_line_h / 2 - SPLASH_FOOTER_LINE_GAP
+                             - (battery_line_h - battery_line_h / 2);
+    if (battery_center_y < battery_line_h / 2) {
+        battery_center_y = battery_line_h / 2; // 极小屏兜底：不越出屏幕上边界
+    }
+
     // 绘制电池电量
     uint32_t icon_x = global_state->gfx->width - 17;
     uint32_t icon_y = 3;
@@ -1004,9 +1026,9 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     }
     swprintf(battery_info_buf, 112, L"电量:%d%% | %dmV | %dmA%ls%ls", global_state->ups_soc, global_state->ups_voltage, global_state->ups_current, (global_state->ups_is_charging ? L"  |  正在充电" : L""), auto_shutdown_buf);
     // 背景（阴影）
-    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2 + 1, footer_center_y + 1, 0x66, 0x66, 0x66, 1);
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2 + 1, battery_center_y + 1, 0x66, 0x66, 0x66, 1);
     // 前景
-    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2, footer_center_y, time_red, time_green, time_blue, 1);
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2, battery_center_y, time_red, time_green, time_blue, 1);
 
 #endif
 
@@ -2499,6 +2521,10 @@ void ui_app_setting_grid16_draw(Key_Event *key_event, Global_State *global_state
     ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
         1, 3, L"颜色风格", (global_state->ui_color_style == UI_COLOR_LIGHT) ? L"亮" : L"暗",
         cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
+    // 时钟样式（启动画面：小=时间并入顶部日期行；大=七段码钟居画面中央）
+    ui_app_setting_grid16_refresh_button(key_event, global_state, 0,
+        0, 3, L"时钟样式", (global_state->splash_clock_style == SPLASH_CLOCK_SMALL) ? L"小" : L"大",
+        cell_bg_R, cell_bg_G, cell_bg_B, 1, cell_text0_R, cell_text0_G, cell_text0_B, 1, 0x00, 0xff, 0xff, 1);
     // 按键提示（按键反馈方式：无/灯光/蜂鸣/灯光+蜂鸣）
     {
         static const wchar_t *KEY_FEEDBACK_MODE_STR[] = {L"无", L"灯光", L"蜂鸣", L"灯光+蜂鸣"};
@@ -2607,6 +2633,11 @@ void ui_app_setting_grid16_event_handler(Key_Event *key_event, Global_State *glo
         else {
             global_state->ui_color_style = UI_COLOR_LIGHT;
         }
+    }
+    // 时钟样式（启动画面时钟：小↔大切换；十六宫格左下角键 = NANO_KEY_left）
+    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
+        global_state->splash_clock_style = (global_state->splash_clock_style == SPLASH_CLOCK_SMALL)
+            ? SPLASH_CLOCK_BIG : SPLASH_CLOCK_SMALL;
     }
     else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         global_state->STATE = STATE_SPLASH_SCREEN;
