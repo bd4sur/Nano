@@ -45,7 +45,9 @@ int32_t am_native_System_clear_interval(am_runtime_t *rt, am_process_t *proc);
 int32_t am_native_System_timestamp(am_runtime_t *rt, am_process_t *proc);
 
 // (System.memstat) : List
-// 返回 '(vm_capacity vm_used heap_capacity heap_used)，单位 bytes。
+// 返回 '(vm_capacity vm_used heap_capacity heap_used interned_count interned_bytes)，单位 bytes。
+// interned_count/interned_bytes 为运行期短串驻留表的有效表项数与对应字符串对象字节数，
+// 用于观察短串驻留是否随程序运行时长异常增长。
 int32_t am_native_System_memstat(am_runtime_t *rt, am_process_t *proc);
 
 // (System.test x:any) : String

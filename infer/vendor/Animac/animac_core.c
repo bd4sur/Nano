@@ -6,7 +6,7 @@
  *           按依赖顺序合并；局部 #include 已剔除；
  *           跨文件重名的 static 符号已按 “<文件基名>__<原名>” 规则改名。
  *           不含 am_host.c / am_native_*.c / am_highlight.c / am_repl.c 等宿主相关实现。
- * 生成时间：2026-11-07 01:02:15 +0800
+ * 生成时间：2026-11-08 21:42:55 +0800
  * ============================================================================ */
 
 #include "animac_core.h"
@@ -1346,6 +1346,17 @@ int32_t am_object_set_alive(am_object_t *obj, int32_t is_alive) {
     }
     return -1;
 }
+
+uint32_t am_object_get_gc_epoch(am_object_t *obj) {
+    if (obj == NULL) return 0;
+    return obj->gcmark & AM_OBJECT_EPOCH_MASK;
+}
+
+int32_t am_object_set_gc_epoch(am_object_t *obj, uint32_t epoch) {
+    if (obj == NULL) return -1;
+    obj->gcmark = (obj->gcmark & ~AM_OBJECT_EPOCH_MASK) | (epoch & AM_OBJECT_EPOCH_MASK);
+    return 0;
+}
 /* ===== end:   src/am_object.c ===== */
 
 /* ===== begin: src/am_map.c ===== */
@@ -2496,6 +2507,42 @@ static am_strindex_t *am_strindex_resize(am_allocator_t *alloc, am_strindex_t *s
     return new_si;
 }
 
+// 重建到更小的容量（仅用于压缩，new_capacity 必须小于当前 capacity）。
+// 成功返回新表并释放旧表；容量不需要缩小或分配失败时原样返回 si。
+static am_strindex_t *am_strindex_shrink(am_allocator_t *alloc, am_strindex_t *si, size_t new_capacity) {
+    size_t cap = am_strindex_round_up_capacity(new_capacity);
+    if (cap < 8) cap = 8;
+    if (cap >= si->capacity) return si;
+
+    size_t new_total_size = sizeof(am_strindex_t) + cap * sizeof(am_strindex_entry_t);
+    am_strindex_t *new_si = (am_strindex_t *)am_malloc(alloc, new_total_size);
+    if (!new_si) return si;
+
+    new_si->base = si->base;
+    new_si->capacity = cap;
+    new_si->mask = cap - 1;
+    new_si->length = 0;
+    new_si->tombstones = 0;
+
+    for (size_t i = 0; i < cap; i++) {
+        new_si->slots[i].hash = AM_STRINDEX_KEY_EMPTY;
+        new_si->slots[i].value = AM_VALUE_NULL;
+    }
+
+    for (size_t i = 0; i < si->capacity; i++) {
+        if (si->slots[i].hash != AM_STRINDEX_KEY_EMPTY &&
+            si->slots[i].hash != AM_STRINDEX_KEY_TOMBSTONE) {
+            size_t insert_idx = am_strindex_find_insert_slot(new_si, si->slots[i].hash);
+            new_si->slots[insert_idx].hash = si->slots[i].hash;
+            new_si->slots[insert_idx].value = si->slots[i].value;
+            new_si->length++;
+        }
+    }
+
+    am_free(alloc, si);
+    return new_si;
+}
+
 // ===============================================================================
 // 构造函数
 // ===============================================================================
@@ -2763,6 +2810,45 @@ int32_t am_strindex_delete(am_allocator_t *alloc, am_strindex_t *obj, am_value_t
         }
     }
     return -1;
+}
+
+// 弱驻留扫尾：单趟剔除 keep 为 false 的表项，并在存活率过低时重建压缩表。
+// 设计说明：运行期短串驻留表不再是 GC 根，GC 之后由调用方（gc 模块）按“本轮仍存活”
+//         谓词清掉已死字符串的表项。只要两个同内容字符串同时存活，它们在创建时就已去重，
+//         因此丢弃死串表项不会破坏 eq? 的短串保证；同时表项数随存活字符串数有界，
+//         而不再随程序运行时长单调增长。
+am_strindex_t *am_strindex_prune(am_allocator_t *alloc, am_strindex_t *obj,
+                                 am_strindex_keep_fn keep, void *ctx) {
+    if (!alloc || !obj || !keep) return obj;
+
+    // 第一趟：就地删除不保留的条目（转墓碑），无需额外内存
+    for (size_t i = 0; i < obj->capacity; i++) {
+        uint32_t hash = obj->slots[i].hash;
+        if (hash == AM_STRINDEX_KEY_EMPTY || hash == AM_STRINDEX_KEY_TOMBSTONE) continue;
+        if (!keep(obj->slots[i].value, ctx)) {
+            obj->slots[i].hash = AM_STRINDEX_KEY_TOMBSTONE;
+            obj->slots[i].value = AM_VALUE_NULL;
+            obj->length--;
+            obj->tombstones++;
+        }
+    }
+
+    // 第二趟：存活率低于 50% 时重建到按当前表项数计算的容量（VM 区有界，避免只增不减）
+    if (obj->capacity > 8 && obj->length * 2 < obj->capacity) {
+        size_t target = obj->length * 2 + 8;
+        if (target < 8) target = 8;
+        obj = am_strindex_shrink(alloc, obj, target);
+        if (obj->tombstones * 2 > obj->capacity) {
+            (void)am_strindex_rehash(alloc, obj);
+        }
+        return obj;
+    }
+
+    // 容量合适但墓碑过多：原地重哈希，避免探测链被墓碑拉长
+    if (obj->tombstones > 0 && obj->tombstones * 2 > obj->capacity) {
+        (void)am_strindex_rehash(alloc, obj);
+    }
+    return obj;
 }
 
 // 当前有效键值对数量
@@ -15871,7 +15957,9 @@ wchar_t *am_js_to_scheme(const wchar_t *js_source) {
 // 内部辅助函数
 // ===============================================================================
 
-// 将proc->heap中所有对象标记为静态对象（通常用于从模块加载的初始AST数据）
+// 将proc->heap中所有对象标记为静态对象（通常用于从模块加载的初始AST数据），
+// 同时清空 GC 轮次戳：模块转储可能携带旧的 gcmark 位，新进程的 GC 轮次从 0 重新开始，
+// 不清空会让驻留表的弱引用扫尾把旧轮次误判为“本轮存活”。
 static void set_all_heap_objects_static(am_handle_t handle, am_value_t value, void *user_data) {
     (void)handle;
     (void)user_data;
@@ -15879,6 +15967,7 @@ static void set_all_heap_objects_static(am_handle_t handle, am_value_t value, vo
         am_object_t *obj = am_value_to_ptr(value);
         if (obj != NULL) {
             am_object_set_static(obj, 0);
+            obj->gcmark = 0;
         }
     }
 }
@@ -15955,14 +16044,28 @@ static size_t dynamic_wind_common_prefix(am_process_t *proc, am_list_t *target) 
 // 实现说明：当 len <= AM_PROCESS_STRINDEX_MAX_LEN 时，会先查询 proc->strindex；
 //         若已存在内容相同的字符串则复用其 handle，否则新建并登记。
 //         超过阈值的字符串直接新建，不参与驻留。
+//         短串（<= 阈值）使用栈上定长缓冲区计算 hash/查询，不向 VM 区申请临时缓冲；
+//         只有长串才向 VM 区申请 len+1 的临时缓冲区，以减少 VM 区抖动与碎片。
+//         驻留表是“弱驻留”：GC 时不是根，只保留仍被引用的表项（见 src/am_gc.c）。
 //         失败返回 AM_HANDLE_NULL。
 am_handle_t am_process_make_wstring_handle(am_process_t *proc, const wchar_t *str, size_t len) {
     // 注意：str 为 NULL 且 len 为 0 是合法的空字符串；仅拒绝无缓冲区的非空串
     if (!proc || !proc->heap || !proc->heap_alloc || (!str && len > 0)) return AM_HANDLE_NULL;
 
-    // 构造以 L'\0' 结尾的临时缓冲区，供 hash 计算和 strindex 查询使用
-    wchar_t *tmp = (wchar_t *)am_malloc(proc->vm_alloc, (len + 1) * sizeof(wchar_t));
-    if (!tmp) return AM_HANDLE_NULL;
+    bool internable = (proc->strindex != NULL && len <= AM_PROCESS_STRINDEX_MAX_LEN);
+
+    // 构造以 L'\0' 结尾的临时缓冲区，供 hash 计算和 strindex 查询使用。
+    // 短串走栈上定长缓冲；长串才使用 VM 区临时缓冲。
+    wchar_t stack_buf[AM_PROCESS_STRINDEX_MAX_LEN + 1];
+    wchar_t *tmp = NULL;
+    bool tmp_on_heap = false;
+    if (internable) {
+        tmp = stack_buf;
+    } else {
+        tmp = (wchar_t *)am_malloc(proc->vm_alloc, (len + 1) * sizeof(wchar_t));
+        if (!tmp) return AM_HANDLE_NULL;
+        tmp_on_heap = true;
+    }
     if (len > 0) {
         memcpy(tmp, str, len * sizeof(wchar_t));
     }
@@ -15971,11 +16074,16 @@ am_handle_t am_process_make_wstring_handle(am_process_t *proc, const wchar_t *st
     uint32_t hash = am_strindex_hash_string(tmp);
     am_handle_t result = AM_HANDLE_NULL;
 
-    if (proc->strindex && len <= AM_PROCESS_STRINDEX_MAX_LEN) {
+    if (internable) {
         size_t n_candidates = am_strindex_get_all(proc->vm_alloc, proc->strindex, tmp, NULL, 0);
         if (n_candidates != SIZE_MAX && n_candidates > 0) {
-            am_value_t *candidates = (am_value_t *)am_malloc(proc->vm_alloc,
-                                                              n_candidates * sizeof(am_value_t));
+            // 常见情况只有 1 个候选：优先用栈上数组，避免每次建串都扰动 VM 区
+            am_value_t cand_stack[8];
+            am_value_t *candidates = cand_stack;
+            if (n_candidates > 8) {
+                candidates = (am_value_t *)am_malloc(proc->vm_alloc,
+                                                     n_candidates * sizeof(am_value_t));
+            }
             if (candidates) {
                 size_t got = am_strindex_get_all(proc->vm_alloc, proc->strindex, tmp,
                                                  candidates, n_candidates);
@@ -16001,7 +16109,9 @@ am_handle_t am_process_make_wstring_handle(am_process_t *proc, const wchar_t *st
                         break;
                     }
                 }
-                am_free(proc->vm_alloc, candidates);
+                if (candidates != cand_stack) {
+                    am_free(proc->vm_alloc, candidates);
+                }
             }
         }
     }
@@ -16009,7 +16119,7 @@ am_handle_t am_process_make_wstring_handle(am_process_t *proc, const wchar_t *st
     if (result == AM_HANDLE_NULL) {
         am_wstring_t *ws = am_wstring_create(proc->heap_alloc, tmp, len);
         if (!ws) {
-            am_free(proc->vm_alloc, tmp);
+            if (tmp_on_heap) am_free(proc->vm_alloc, tmp);
             return AM_HANDLE_NULL;
         }
         ws->base.hash = hash;
@@ -16017,7 +16127,7 @@ am_handle_t am_process_make_wstring_handle(am_process_t *proc, const wchar_t *st
         am_handle_t hd = am_heap_alloc_handle(proc->vm_alloc, proc->heap_alloc, proc->heap);
         if (hd == AM_HANDLE_NULL) {
             am_wstring_destroy(proc->heap_alloc, ws);
-            am_free(proc->vm_alloc, tmp);
+            if (tmp_on_heap) am_free(proc->vm_alloc, tmp);
             return AM_HANDLE_NULL;
         }
 
@@ -16025,14 +16135,14 @@ am_handle_t am_process_make_wstring_handle(am_process_t *proc, const wchar_t *st
                         am_make_value_of_ptr((am_object_t *)ws)) != 0) {
             am_wstring_destroy(proc->heap_alloc, ws);
             am_heap_free_handle(proc->vm_alloc, proc->heap_alloc, proc->heap, hd);
-            am_free(proc->vm_alloc, tmp);
+            if (tmp_on_heap) am_free(proc->vm_alloc, tmp);
             return AM_HANDLE_NULL;
         }
 
         result = hd;
 
         // 短字符串登记到 strindex
-        if (proc->strindex && len <= AM_PROCESS_STRINDEX_MAX_LEN) {
+        if (internable) {
             am_strindex_t *new_si = am_strindex_set(proc->vm_alloc, proc->strindex, tmp,
                                                      am_make_value_of_handle(hd));
             if (new_si) {
@@ -16041,7 +16151,7 @@ am_handle_t am_process_make_wstring_handle(am_process_t *proc, const wchar_t *st
         }
     }
 
-    am_free(proc->vm_alloc, tmp);
+    if (tmp_on_heap) am_free(proc->vm_alloc, tmp);
     return result;
 }
 
@@ -17156,6 +17266,43 @@ wchar_t *am_process_list_to_string(am_process_t *proc, am_handle_t hd, size_t *l
 // 标记-清除：GC 根收集
 // ===============================================================================
 
+// 弱驻留扫尾：strindex 中的表项只在“本轮仍存活”时保留。
+// 驻留表不再是 GC 根，因此运行期产生的短字符串可随其引用者一起被回收；
+// 两个同内容字符串只要同时存活，创建时仍会去重为同一 handle，eq? 保证不变。
+typedef struct {
+    am_process_t *proc;
+    uint32_t epoch; // 本轮 GC 的轮次戳
+} gc_strindex_prune_ctx_t;
+
+// 返回本轮 GC 的轮次戳（1..0x7FFFFFFF，0 保留为“尚未打过戳”）。
+static uint32_t gc_epoch_for_round(const am_process_t *proc) {
+    uint32_t epoch = (uint32_t)((proc->gc_count + 1) & AM_OBJECT_EPOCH_MASK);
+    if (epoch == 0) epoch = 1;
+    return epoch;
+}
+
+// strindex 保留谓词：仅保留指向“本轮存活字符串对象”的表项。
+// 静态/keepalive 对象在 gc_sweep 中也会被戳上本轮轮次，因此其驻留表项永久保留。
+static bool gc_strindex_entry_is_live(am_value_t value, void *ctx) {
+    gc_strindex_prune_ctx_t *pc = (gc_strindex_prune_ctx_t *)ctx;
+    if (!pc || !pc->proc || !pc->proc->heap) return false;
+    if (!am_value_is_handle(value)) return false;
+
+    am_handle_t hd = am_value_to_handle(value);
+    if (hd == AM_HANDLE_NULL) return false;
+
+    am_process_t *proc = pc->proc;
+    if (am_heap_has_handle(proc->vm_alloc, proc->heap_alloc, proc->heap, hd) != 0) return false;
+
+    am_value_t obj_value = am_heap_get(proc->vm_alloc, proc->heap_alloc, proc->heap, hd);
+    if (!am_value_is_ptr(obj_value)) return false;
+
+    am_object_t *obj = am_value_to_ptr(obj_value);
+    if (!obj || obj->type != AM_OBJECT_TYPE_WSTRING) return false;
+
+    return am_object_get_gc_epoch(obj) == pc->epoch;
+}
+
 // 判断一个am_value_t是否为指向堆对象的把柄（handle）
 static inline bool is_handle_value(am_value_t v) {
     return am_value_is_handle(v);
@@ -17260,20 +17407,10 @@ static int32_t gc_root(am_process_t *proc, am_list_t **gcroots) {
         return -1;
     }
 
-    // 将 strindex 中所有有效 handle 加入 GC 根，防止驻留字符串被回收后产生悬空引用
-    if (proc->strindex) {
-        for (size_t i = 0; i < proc->strindex->capacity; i++) {
-            uint32_t hash = proc->strindex->slots[i].hash;
-            if (hash == AM_STRINDEX_KEY_EMPTY || hash == AM_STRINDEX_KEY_TOMBSTONE) continue;
-
-            am_value_t h_val = proc->strindex->slots[i].value;
-            if (!am_value_is_handle(h_val)) continue;
-
-            am_list_t *new_roots = am_list_push(proc->vm_alloc, *gcroots, h_val);
-            if (!new_roots) return -1;
-            *gcroots = new_roots;
-        }
-    }
+    // 注意：strindex（运行期短串驻留表）不是 GC 根。
+    // 旧实现把表中所有 handle 加入根集合，导致任何运行期短串（含 String.concat 的
+    // 每层中间结果）永久占住堆区。现在改为“弱驻留”：GC 后在 am_gc_process 末尾
+    // 按本轮存活判定扫尾，只保留仍被引用的字符串表项（见 gc_strindex_entry_is_live）。
 
     // 将当前 dynamic-wind 栈中的 entry handle 加入 GC 根
     if (proc->dynamic_wind_stack) {
@@ -17505,8 +17642,10 @@ static int32_t gc_mark(am_process_t *proc, am_value_t v) {
 }
 
 
-// 功能说明：基于存活标记结果，删除所有未被标记存活的非静态对象和对应的handle。成功返回0，失败返回-1
-static int32_t gc_sweep(am_process_t *proc) {
+// 功能说明：基于存活标记结果，删除所有未被标记存活的非静态对象和对应的handle。
+// 实现说明：同时为每个存活对象（含静态/keepalive 对象）打上本轮 GC 轮次戳，
+//         供 am_gc_process 末尾的驻留表弱引用扫尾使用。成功返回0，失败返回-1
+static int32_t gc_sweep(am_process_t *proc, uint32_t epoch) {
     if (!proc || !proc->heap || !proc->heap->table) return -1;
 
     size_t gcount = 0;
@@ -17533,12 +17672,14 @@ static int32_t gc_sweep(am_process_t *proc) {
         // 使得被 push 扩容的静态列表字面量（如 '(0)）持有运行期句柄。
         // 见 test/test_gc_static_alive.scm。
         if (am_object_check_static(obj) == 0) {
+            am_object_set_gc_epoch(obj, epoch);
             am_object_set_alive(obj, -1);
             continue;
         }
 
         // keepalive 对象（如异步回调闭包）应跳过清理
         if (am_object_check_keepalive(obj) == 0) {
+            am_object_set_gc_epoch(obj, epoch);
             am_object_set_alive(obj, -1);
             continue;
         }
@@ -17556,7 +17697,8 @@ static int32_t gc_sweep(am_process_t *proc) {
                 gcount++;
             }
             else {
-                // 对于存活对象，将其alive标识清空为否，以便下次gc重新标记
+                // 对于存活对象，打上本轮轮次戳并清空 alive 标记，以便下次 gc 重新标记
+                am_object_set_gc_epoch(obj, epoch);
                 am_object_set_alive(obj, -1);
             }
         }
@@ -17615,9 +17757,20 @@ int32_t am_gc_process(am_process_t *proc) {
         }
     }
 
-    // 清除未被标记为存活的非静态对象及其handle
-    if (gc_sweep(proc) != 0) {
+    // 清除未被标记为存活的非静态对象及其handle，并为存活对象打本轮轮次戳
+    uint32_t epoch = gc_epoch_for_round(proc);
+    if (gc_sweep(proc, epoch) != 0) {
         ret = -1;
+    }
+
+    // 弱驻留扫尾：驻留表不是根，这里丢弃本轮未被标记的字符串表项。
+    // 必须在 sweep 之后、任何新分配之前执行：此时死对象的 handle 已释放且尚未被复用，
+    // 存活的字符串对象都已打上 epoch，判定不会误保留也不会误删除。
+    if (proc->strindex) {
+        gc_strindex_prune_ctx_t prune_ctx = { proc, epoch };
+        am_strindex_t *pruned = am_strindex_prune(proc->vm_alloc, proc->strindex,
+                                                  gc_strindex_entry_is_live, &prune_ctx);
+        if (pruned) proc->strindex = pruned;
     }
 
     proc->gc_count++;
@@ -21143,12 +21296,38 @@ int32_t am_runtime_tick(am_runtime_t *rt, uint32_t timeslice) {
     uint32_t since_check = 0;
     while (timeslice > 0 && proc->state == AM_PROCESS_STATE_RUNNING) {
         if (am_runtime_execute(rt, proc) != 0) {
-            // 补救：若失败由堆分配失败（OOM）引起，立即做一轮 GC 以挽救其余进程
-            runtime_gc_watermark_check(rt);
+            // 将“分配失败（OOM）”从笼统的“指令执行异常”中拆出来：
+            // heap 分配器彻底失败时会置 oom_flag（L0 已经尝试过向 VM 区让渡边界）。
+            // 这里先读取并清除标志，再按 OOM 路径做强制压缩补救与专项报错。
+            int32_t oom = (am_allocator_heap_take_oom_flag(rt->heap_alloc) == 1);
+            if (oom) {
+                // oom_flag 已被本处消费，显式做一轮强制标记-压缩，为其余进程争取空间
+                rt->gc_count++;
+                (void)am_gc_collect(rt->heap_alloc, rt->process_pool, rt->process_poll_counter,
+                                    rt->gc_count, 1);
+            } else {
+                runtime_gc_watermark_check(rt);
+            }
             proc->state = AM_PROCESS_STATE_STOPPED;
             if (rt->vtable->on_error) rt->vtable->on_error(rt);
-            wchar_t errmsg[256];
-            swprintf(errmsg, 256, L"[Runtime] 指令执行异常: PID=%zu PC=%zu\n", (size_t)pid, (size_t)proc->PC);
+            wchar_t errmsg[512];
+            if (oom) {
+                am_runtime_memory_stats_t ms;
+                if (am_runtime_get_memory_stats(rt, &ms) == 0) {
+                    swprintf(errmsg, 512,
+                             L"[Runtime] 内存耗尽(OOM): PID=%zu PC=%zu; VM=%zu/%zu B, heap=%zu/%zu B\n",
+                             (size_t)pid, (size_t)proc->PC,
+                             (size_t)ms.vm_used, (size_t)ms.vm_capacity,
+                             (size_t)ms.heap_used, (size_t)ms.heap_capacity);
+                } else {
+                    swprintf(errmsg, 512,
+                             L"[Runtime] 内存耗尽(OOM): PID=%zu PC=%zu (内存池统计不可用)\n",
+                             (size_t)pid, (size_t)proc->PC);
+                }
+            } else {
+                swprintf(errmsg, 512, L"[Runtime] 指令执行异常: PID=%zu PC=%zu\n",
+                         (size_t)pid, (size_t)proc->PC);
+            }
             if (getenv("AM_STACK_DEBUG")) {
                 size_t n = (size_t)(proc->opstack_top - proc->opstack);
                 printf("[stack-dbg] pc=%zu op=%u opstack_len=%zu fstack_len=%zu:", (size_t)proc->PC,

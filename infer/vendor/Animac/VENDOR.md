@@ -15,9 +15,9 @@
 | 项 | 值 |
 |---|---|
 | 上游仓库 | `/home/bd4sur/Animac`（BD4SUR） |
-| 同步基线 | commit `5f82267`（2026-11-07 00:34） |
-| 合并产物生成 | `git archive 5f82267` 导出干净源码树 → 在该副本内执行上游 `amalgamate.sh`（**不在上游仓库内生成任何文件**） |
-| 校验 | 重新生成物与「基线前一版（`0291412`）重新生成物」逐行 `diff`，差异**仅**为本次上游改动（GC 静态对象存活标记）与"生成时间"行；其余文件与上游 `src/` `include/` 对应文件 `cmp` 全等 |
+| 同步基线 | commit `771b7c7`（2026-11-08 21:39） |
+| 合并产物生成 | `git archive 771b7c7` 导出干净源码树 → 在该副本内执行上游 `amalgamate.sh`（**不在上游仓库内生成任何文件**） |
+| 校验 | 重新生成物与「上一基线（`5f82267`）重新生成物」逐行 `diff`，差异**仅**为本次上游改动（短串弱驻留、memstat 六元组、OOM 单独报错）与"生成时间"行；`am_host.c`/`am_repl.c`/`am_native_{Math,String,Table,LLM}.*` 自上一基线起未变（`cmp` 全等），`am_native_System.c/h` 随本次改动更新 |
 
 ## 文件清单（18 个）
 
@@ -64,6 +64,7 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
 
 | 同步日期 | 上游基线 | 要点 |
 |---|---|---|
+| 2026-11-08 | `771b7c7` | **短字符串驻留改为弱驻留（工单 #39，修内存泄漏）**：`proc->strindex` 不再作为 GC 根，降级为"活串去重缓存"——`gc_sweep` 给每个存活对象（含 static/keepalive）打本轮 GC 轮次戳（复用 `gcmark` 低 31 位，新增 `am_object_get/set_gc_epoch`），sweep 之后 `am_strindex_prune` 只保留指向本轮存活 WSTRING 的表项；存活率低于 50% 时重建压缩驻留表，避免驻留表占的 VM 区只增不减；短串 hash/查询与候选 handle 改用栈上缓冲（不再每串向 VM 区申请临时缓冲）；模块加载时清空 gcmark 低位轮次戳。语义不变量：同内容短串只要**同时存活**仍在创建期去重，`eq?` 与 Table 字符串键保证不变。<br>配套可观测性：`System.memstat` 由四元组扩为**六元组** `(vm_capacity vm_used heap_capacity heap_used interned_count interned_bytes)`；OOM 从笼统的"指令执行异常"中拆出为 `[Runtime] 内存耗尽(OOM)` 并附内存池用量。<br>**对本项目的影响**：①memstat 是**末尾追加**，`app/xray.scm` 与 `app/forkqueue.scm` 只读 0–3 号元素（vm_cap/vm_used/heap_cap/heap_used），语义不变、无需改动；②这两个 App 显示的 VM/堆百分比与 `Diag.heap` 会**合法地变小**（不再有泄漏的驻留串），回归基线与上一版不同属预期；③本项目自实现本地库均不在 C 侧跨调用持有 Scheme 句柄（只存 wchar 文本缓冲），因此驻留表失去"永久根"属性不会造成悬空把柄；④修复对本项目**实际有效**：App 的 HUD/状态条普遍每帧 `String.concat` 拼文本，旧核心下这些短串永不回收。 |
 | 2026-11-07 | `5f82267` | **GC 误扫静态容器引用的存活对象**：`alive` 位是「本轮已标记」语义，但 `gc_sweep` 对 static 对象直接 `continue` 从不复位，而 `gc_mark` 以 `alive` 作环检测短路——静态对象在第二轮 GC 时短路返回，其运行期子对象再也不会被标记而被 sweep 全部释放（句柄悬空）。触发面：`am_list_resize` 会原样复制对象头，故被 `push` 扩容的列表字面量（如 `'(0)`）即「静态容器 + 运行期子对象」。修复：`gc_sweep` 的 static 分支先 `am_object_set_alive(obj, -1)` 再 `continue`，恢复「每轮 sweep 复位表内全部对象 alive」的不变式。**此缺陷对本项目实际可达**：灵机 `app/` 普遍使用 `(define x '())` 后 `push` 建表的模式（如 `app/forkqueue.scm` 的 `pids`/`qr`/`ql`/`qs`/`qc`、`app/callcc.scm` 的 `u_lane`/`u_ch`），已用最小用例在本仓验证：旧基线编译的二进制 `(define l '())`+5 次 `push`+两轮 `System.gc` 后取元素即报 `[Runtime] 指令执行异常: PID=0 PC=37`，新基线正常输出。本地库契约 N1–N10 未变，`am_native_Gfx.c`/`am_native_Time.c` 等本项目自实现库无需改动。 |
 | 2026-10-21（第二次） | `0291412` | ①**闭包帧分析父链修复**：词法父子关系改用 AST 父链接（parser 宏展开后释放 scope 对象，原实现导致 parent 恒空、自由变量 src 退化为运行期动态查找）；②**定时器回调不可重入**：进程已在异步回调中时顺延定时器（工单 #38）；`am_parser.c` 清理 scope 后同步清空 `ast->scopes`。本项目的 `am_native_Gfx.c`/`am_native_Time.c` 无需改动 |
 | 2026-10-21 | `5c244e9` | 闭包变量访问改为「帧描述符 + 静态槽位寻址」（P0–P2）：新增 `am_frame.{h,c}`、5 条槽位指令（`load/store/set/call/tailcall_slot` 63–67）、模块磁盘格式新增帧描述符表；`am_repl.c` 无改动 |

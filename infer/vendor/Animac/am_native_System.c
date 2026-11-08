@@ -845,14 +845,41 @@ int32_t am_native_System_timestamp(am_runtime_t *rt, am_process_t *proc) {
 
 
 // (System.memstat) : List
-// 返回一个包含四项的列表：'(vm_capacity vm_used heap_capacity heap_used)，单位 bytes。
+// 返回六元素列表：(vm_capacity vm_used heap_capacity heap_used interned_count interned_bytes)，
+// 前三项单位 bytes；后两项为运行期短串驻留表的有效表项数与这些字符串对象的字节数。
+// 驻留计数用于宿主/App 自测“是否在制造大量短串垃圾”（修复前驻留表只增不减会持续上涨）。
 int32_t am_native_System_memstat(am_runtime_t *rt, am_process_t *proc) {
     if (!rt || !proc || !proc->heap) return -1;
 
     am_runtime_memory_stats_t stats;
     if (am_runtime_get_memory_stats(rt, &stats) != 0) return -1;
 
-    am_list_t *lst = am_list_create(proc->heap_alloc, 4, AM_LIST_TYPE_DEFAULT, AM_HANDLE_NULL);
+    // 统计驻留表中的有效短串（已死但尚未经过 GC 扫尾的表项不计入）
+    size_t interned_count = 0;
+    size_t interned_bytes = 0;
+    if (proc->strindex) {
+        for (size_t i = 0; i < proc->strindex->capacity; i++) {
+            uint32_t hash = proc->strindex->slots[i].hash;
+            if (hash == AM_STRINDEX_KEY_EMPTY || hash == AM_STRINDEX_KEY_TOMBSTONE) continue;
+
+            am_value_t hv = proc->strindex->slots[i].value;
+            if (!am_value_is_handle(hv)) continue;
+            am_handle_t hd = am_value_to_handle(hv);
+            if (hd == AM_HANDLE_NULL) continue;
+            if (am_heap_has_handle(proc->vm_alloc, proc->heap_alloc, proc->heap, hd) != 0) continue;
+
+            am_value_t ov = am_heap_get(proc->vm_alloc, proc->heap_alloc, proc->heap, hd);
+            if (!am_value_is_ptr(ov)) continue;
+            am_object_t *obj = am_value_to_ptr(ov);
+            if (!obj || obj->type != AM_OBJECT_TYPE_WSTRING) continue;
+
+            interned_count++;
+            size_t sz = am_wstring_size(proc->heap_alloc, (am_wstring_t *)obj);
+            if (sz != SIZE_MAX) interned_bytes += sz;
+        }
+    }
+
+    am_list_t *lst = am_list_create(proc->heap_alloc, 6, AM_LIST_TYPE_DEFAULT, AM_HANDLE_NULL);
     if (!lst) return -1;
 
     lst = am_list_push(proc->heap_alloc, lst, am_make_value_of_uint((am_uint_t)stats.vm_capacity));
@@ -862,6 +889,10 @@ int32_t am_native_System_memstat(am_runtime_t *rt, am_process_t *proc) {
     lst = am_list_push(proc->heap_alloc, lst, am_make_value_of_uint((am_uint_t)stats.heap_capacity));
     if (!lst) return -1;
     lst = am_list_push(proc->heap_alloc, lst, am_make_value_of_uint((am_uint_t)stats.heap_used));
+    if (!lst) return -1;
+    lst = am_list_push(proc->heap_alloc, lst, am_make_value_of_uint((am_uint_t)interned_count));
+    if (!lst) return -1;
+    lst = am_list_push(proc->heap_alloc, lst, am_make_value_of_uint((am_uint_t)interned_bytes));
     if (!lst) return -1;
 
     am_handle_t hd = am_heap_alloc_handle(proc->vm_alloc, proc->heap_alloc, proc->heap);

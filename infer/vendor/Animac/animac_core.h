@@ -5,7 +5,7 @@
  * 内容来源：include/animac.h 伞形头文件登记的解释器核心头文件，
  *           按依赖顺序拓扑排序合并；局部 #include 已剔除。
  *           不含 am_host.h / am_native_*.h / am_highlight.h / am_repl.h 等宿主相关头文件。
- * 生成时间：2026-11-07 01:02:15 +0800
+ * 生成时间：2026-11-08 21:42:55 +0800
  * ============================================================================ */
 
 #ifndef __ANIMAC_CORE_H__
@@ -929,6 +929,17 @@ int32_t am_object_set_keepalive(am_object_t *obj, int32_t is_keepalive);
 int32_t am_object_check_alive(am_object_t *obj);
 int32_t am_object_set_alive(am_object_t *obj, int32_t is_alive);
 
+// 获取/设置对象“GC 轮次戳”，用于弱驻留（strindex）扫尾。
+// gcmark 的低 31 位记录最近一次将其标记为存活的 GC 轮次（0 表示尚未打过戳）。
+// 每轮 GC 只保留“轮次戳 == 本轮轮次”的驻留表项，从而让驻留表不再充当永久根。
+#define AM_OBJECT_EPOCH_MASK ((uint32_t)0x7FFFFFFFu)
+
+// 返回对象的 GC 轮次戳（对象为 NULL 时返回 0）。
+uint32_t am_object_get_gc_epoch(am_object_t *obj);
+
+// 设置对象的 GC 轮次戳（保留 gcmark 最高位的 alive 标记）。成功返回 0，失败返回 -1。
+int32_t am_object_set_gc_epoch(am_object_t *obj, uint32_t epoch);
+
 
 
 
@@ -1552,6 +1563,7 @@ am_list_t *am_list_lambda_set_bodies(am_allocator_t *alloc, am_list_t *lst, am_v
 extern "C" {
 #endif
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1697,6 +1709,15 @@ am_strindex_t *am_strindex_set_raw(am_allocator_t *alloc, am_strindex_t *obj, ui
 
 // 删除指定 value（handle）所在的条目。按 value 的位模式精确匹配；删除成功返回 0；未找到返回 -1。
 int32_t am_strindex_delete(am_allocator_t *alloc, am_strindex_t *obj, am_value_t value);
+
+// 弱驻留扫尾用的保留谓词：返回 true 表示保留该表项，false 表示丢弃。
+typedef bool (*am_strindex_keep_fn)(am_value_t value, void *ctx);
+
+// 弱驻留扫尾：单趟扫描删除 keep 返回 false 的表项；若表项存活率过低（length*2 < capacity）
+// 则重建并压缩到按当前表项数计算的较小容量，避免 strindex 占据的 VM 区只增不减。
+// 重建失败时保留已就地删除墓碑的原表。返回可继续使用的表指针（通常等于 obj，压缩时为新指针）。
+am_strindex_t *am_strindex_prune(am_allocator_t *alloc, am_strindex_t *obj,
+                                 am_strindex_keep_fn keep, void *ctx);
 
 // 当前有效键值对数量
 size_t am_strindex_length(am_allocator_t *alloc, am_strindex_t *obj);
