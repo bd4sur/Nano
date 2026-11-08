@@ -913,6 +913,13 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
         sevenseg_shadow = 1;
     }
 
+    // 底部状态行（电量信息行）的行框几何。电量行是 splash 的最底一行，其 y 位置由屏幕高度
+    // 决定（gfx->height-13*1-6 为居中绘制的行框中心）；下面的农历行以它为锚点自适应定位，
+    // 保证任意屏幕高度下农历行都紧贴电量行上方、且保持固定行间距。
+    const int32_t footer_line_h = gfx_font_line_height(GFX_FONT_ALPHA_12);
+    const int32_t footer_center_y = global_state->gfx->height - 13 * 1 - 6;
+    const int32_t footer_top_y = footer_center_y - footer_line_h / 2;
+
     const wchar_t *weekdays[] = {L"日", L"一", L"二", L"三", L"四", L"五", L"六"};
     swprintf(datetime_wcs_buffer, 33, L"%04d年%02d月%02d日 星期%ls", year, month, day, weekdays[timeinfo->tm_wday]);
     // 背景（阴影）
@@ -920,13 +927,20 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     // 前景
     gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, datetime_wcs_buffer, global_state->gfx->width / 2, 16, time_red, time_green, time_blue, 1);
 
-    // 农历日期
+    // 农历日期：行框中心由电量行行框顶边向上让出 SPLASH_LINE_GAP 行间距得到（自适应屏幕高度）
+    const int32_t SPLASH_LINE_GAP = 6; // 农历行与底部电量行之间的行间距（像素）
+    const int32_t nongli_line_h = gfx_font_line_height(global_state->ui_font);
+    int32_t nongli_center_y = footer_top_y - SPLASH_LINE_GAP - nongli_line_h / 2;
+    if (nongli_center_y < nongli_line_h / 2) {
+        nongli_center_y = nongli_line_h / 2; // 极小屏兜底：不越出屏幕上边界
+    }
+
     LunarDate *nongli = lunar_calculate(year, month, day, hour, minute, second, timezone);
     _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
     // 背景（阴影）
-    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2 + 1, 190 + 1, 0x66, 0x66, 0x66, 1);
+    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2 + 1, nongli_center_y + 1, 0x66, 0x66, 0x66, 1);
     // 前景
-    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2, 190, nongli_red, nongli_green, nongli_blue, 1);
+    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2, nongli_center_y, nongli_red, nongli_green, nongli_blue, 1);
 
     // 七段码时钟
     wchar_t time7seg_str[10];
@@ -990,9 +1004,9 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     }
     swprintf(battery_info_buf, 112, L"电量:%d%% | %dmV | %dmA%ls%ls", global_state->ups_soc, global_state->ups_voltage, global_state->ups_current, (global_state->ups_is_charging ? L"  |  正在充电" : L""), auto_shutdown_buf);
     // 背景（阴影）
-    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2 + 1, global_state->gfx->height-13*1-6 + 1, 0x66, 0x66, 0x66, 1);
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2 + 1, footer_center_y + 1, 0x66, 0x66, 0x66, 1);
     // 前景
-    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2, global_state->gfx->height-13*1-6, time_red, time_green, time_blue, 1);
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, battery_info_buf, global_state->gfx->width/2, footer_center_y, time_red, time_green, time_blue, 1);
 
 #endif
 
