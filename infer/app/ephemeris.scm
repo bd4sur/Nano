@@ -13,7 +13,7 @@
 ;;
 ;; ---- 单页排版（320x240，12px 平滑字模：全角 12px / 半角 7px / 行高 15px）------
 ;;
-;;   y=3   星历 · 农历 · 南京 119.0°E 32.0°N            [退出 36x16 @ x=280]
+;;   y=3   玲珑仪简版 · 南京 119.0°E 32.0°N            [退出 36x16 @ x=280]
 ;;   y=19  2026-10-20 10:00:03 UTC+8
 ;;   y=36  ───── 分组分隔线 ─────
 ;;   y=44  太阳   高度 +40.34°   方位 143.82°
@@ -27,8 +27,7 @@
 ;;   y=166 中气   霜降 10-23 17:36
 ;;   y=184 节气   霜降 10-23 17:36   下朔 11-09 15:04
 ;;   y=201 ─────
-;;   y=209 VSOP87 黄经 206.703°   日地 0.9959 AU
-;;   y=224 年表   农历 2026 年（表 2026）
+;;   y=207 VSOP87 黄经 206.703°   日地 0.9959 AU
 ;;
 ;; 排版约定：
 ;;   · 标签列固定在 x=6（暗灰蓝），字段名（高度/方位/…）中灰，数值按主题着色；
@@ -66,6 +65,7 @@
 (native String)
 (native System)
 (native Time)
+(native Touch)
 
 (import Ephem "app/lib/ephem.scm")
 (import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
@@ -85,18 +85,29 @@
 (define Y_GANZHI 148)
 (define Y_TERM 166)
 (define Y_TERM2 184)
-(define Y_VSOP 209)
-(define Y_TABLE 224)
+(define Y_VSOP 207)
 
 ;; 分组分隔线
 (define Y_SEP1 36)
 (define Y_SEP2 79)
 (define Y_SEP3 122)
-(define Y_SEP4 201)
+(define Y_SEP4 200)
 
 ;; 列：标签列 6；字段值列 44（月相/月盘/VSOP 组按字段名宽度顺延，见各行）
 (define LX 6)
 (define VX 44)
+
+;; 标题（数据页与天空页共用）
+(define TITLE "玲珑仪简版 · 南京 119.0°E 32.0°N")
+
+;; 页签（两页共用，右下角）：[数据][天空]
+(define page 0)                 ; 0 = 数据页（文字），1 = 天空页（地平坐标图）
+(define page_dirty 0)           ; 1 = 换页后本拍需要重绘
+(define TAB_Y 221)
+(define TAB_W 36)
+(define TAB_H 16)
+(define TAB_X0 244)             ; 「数据」
+(define TAB_X1 280)             ; 「天空」
 
 ;; ============================================================================
 ;; 通用格式化（两页共用）
@@ -150,6 +161,7 @@
 (define v_north 0.0)                ; 天球北向角（度）
 (define v_vsop_lon 0.0)             ; VSOP87 校对黄经（度）
 (define v_vsop_r 0.0)               ; 日地距离（AU）
+(define v_ldays 0)                  ; 本地民用日编号（天空页按它缓存周日轨迹）
 
 (define phase_name
   (lambda (e) (cond ((< e 22.5) "新月（朔）")
@@ -182,6 +194,7 @@
     (set! v_h (Math.floor (/ lsod 3600.0)))
     (set! v_mi (Math.floor (/ (- lsod (* v_h 3600.0)) 60.0)))
     (set! v_s (- lsod (+ (* v_h 3600.0) (* v_mi 60.0))))
+    (set! v_ldays ldays)
     ;; 日月位置与各种角度
     (Ephem.moon_equatorial)
     (Ephem.sun_equatorial)
@@ -854,22 +867,16 @@
                 (if (== next_nm_ok 1)
                     (draw_time_bj Y_TERM2 198 next_nm_dn next_nm_sod)
                     (Gfx.draw_text "—" 198 Y_TERM2 150 210 255))
-                (lbl Y_TABLE "年表")
-                (Gfx.draw_text (String.concat "农历 "
-                                 (String.concat (String.atom_to_string out_year)
-                                   (String.concat " 年（表 "
-                                     (String.concat (String.atom_to_string cache_year) "）"))))
-                               VX Y_TABLE 140 150 160)
               }
               { (Gfx.draw_text "（本日不在年表范围内）" LX Y_LUNAR 255 120 120) })
         })
   ))
 
-(define draw_screen
+(define draw_data
   (lambda () {
     (Gfx.clear)
     ;; ---- 标题与公历时刻 ----
-    (Gfx.draw_text "星历 · 农历 · 南京 119.0°E 32.0°N" LX Y_TITLE 255 255 255)
+    (Gfx.draw_text TITLE LX Y_TITLE 255 255 255)
     (draw_clock)
     (sep Y_SEP1)
     ;; ---- 太阳 ----
@@ -921,7 +928,469 @@
     (mfd Y_VSOP 146 "日地")
     (set_ink 150 160 170)
     (draw_fix Y_VSOP 174 v_vsop_r 4 1 " AU")
+    (draw_tabs)
   }))
+
+
+;; ============================================================================
+;; 页 1：天空 —— 地平坐标可视化（太阳/月亮实时位置 + 周日轨迹 + 日出日落）
+;; ============================================================================
+;;
+;; 圆盘投影（天顶等距）：
+;;   圆心 = 天顶；半径 R 对应高度 0°（地平圈）；半径 R/3、2R/3 为高度 60°、30° 的等高圈。
+;;   r = R·(90 − alt)/90，x = CX − r·sin(az)，y = CY − r·cos(az)。
+;;   方位按**人抬头看天**的视角：北在上、南在下、东在左、西在右
+;;   （与"从天上往下看"的星图左右相反；也正好是躺下头朝北看天的样子）。
+;;   两条正交轴就是天球子午圈方向（北-天顶-南）与卯酉圈方向（东-天顶-西）。
+
+(define SKY_CX 160)
+(define SKY_CY 124)
+(define SKY_R  86)
+(define SKY_R60 29)               ; R/3（高度 60° 圈）
+(define SKY_R30 57)               ; 2R/3（高度 30° 圈）
+
+(define sky_radius (lambda (alt) (/ (* SKY_R (- 90.0 alt)) 90.0)))
+(define sky_x (lambda (az alt) (- SKY_CX (* (sky_radius alt) (Math.sin (Ephem.to_rad az))))))
+(define sky_y (lambda (az alt) (- SKY_CY (* (sky_radius alt) (Math.cos (Ephem.to_rad az))))))
+
+;; ---- 太阳周日轨迹 / 日出日落（按本地民用日缓存，**分拍**推进）----------------
+;; 一天需 ≈290 次太阳位置求值（144 个样本 + 升落二分细化）。**不能在一拍里做完**：
+;; 每次求值都会产生一批短命闭包，290 次叠在一起足以把 16MB 池（VM 8MB + 堆 8MB）
+;; 的堆峰值顶到 5MB 以上，进而让同拍的农历年表推算分配失败（实测：点开天空页后
+;; `[Runtime] 指令执行异常`）。改为每拍推进 TRK_BATCH 个样本（默认 12 个 = 2 小时），
+;; 约 1.3 s 建完，期间已算出的那段轨迹逐拍长出来。
+;; 日出日落判据：太阳中心高度 = −0.833°（34′ 大气折射 + 16′ 太阳视半径）。
+
+(define SUN_H0 -0.833)
+(define TRK_BATCH 12)             ; 每拍推进的采样数（10 分钟/样本）
+
+(define trk_day -999999)          ; 缓存对应的本地日（v_ldays）
+(define trk_building 0)           ; 1 = 正在分拍推算
+(define trk_k 0)                  ; 下一个待采样的序号（0..144）
+(define trk_prev_alt 99.0)
+(define trk_prev_off 0.0)
+(define trk_above 0)
+(define trk_xs '())               ; 轨迹点 x（预分配 145 个，原地 set_item! 写）
+(define trk_ys '())               ; 轨迹点 y（同上）
+(define trk_n 0)                  ; 已写入的可见点数
+(define trk_rise_x 0)             ; 升/落端点（画在地平圈上，接上弧线两端）
+(define trk_rise_y 0)
+(define trk_set_x 0)
+(define trk_set_y 0)
+(define trk_rise_ok 0)
+(define trk_set_ok 0)
+(define trk_rise_az 0.0)
+(define trk_set_az 0.0)
+(define trk_rise_str "")
+(define trk_set_str "")
+(define trk_polar 0)              ; 1 = 全天在地平上，2 = 全天在地平下
+
+;; 本地方午夜对应的 UTC 时刻（写 mid_dn / mid_sod）
+(define mid_dn 0)
+(define mid_sod 0.0)
+(define set_local_midnight
+  (lambda (ldays) {
+    (normalize_time ldays (- 0 Ephem.TZ_SEC))
+    (set! mid_dn nrm_dn)
+    (set! mid_sod nrm_sod)
+  }))
+
+;; 本地方午夜之后 off 秒处的太阳地平坐标（写 sa_alt / sa_az，返回高度）
+(define sa_alt 0.0)
+(define sa_az 0.0)
+(define sun_at_off
+  (lambda (off) {
+    (normalize_time mid_dn (+ mid_sod off))
+    (Ephem.set_time nrm_dn nrm_sod)
+    (Ephem.set_gmst)
+    (Ephem.sun_equatorial)
+    (Ephem.sun_altaz)
+    (set! sa_alt (Ephem.get_alt))
+    (set! sa_az (Ephem.get_az))
+    sa_alt
+  }))
+
+;; 在 [lo, hi] 秒区间内二分求高度穿过 SUN_H0 的时刻（写 cr_off / cr_az）
+(define cr_off 0.0)
+(define cr_az 0.0)
+(define refine_cross
+  (lambda (lo hi rising) {
+    (define a lo)
+    (define b hi)
+    (define i 0)
+    (define al 0.0)
+    (while (< i 14) {
+      (set! al (sun_at_off (/ (+ a b) 2.0)))
+      (if (if (== rising 1) (< al SUN_H0) (>= al SUN_H0))
+          { (set! a (/ (+ a b) 2.0)) }
+          { (set! b (/ (+ a b) 2.0)) })
+      (set! i (+ i 1))
+    })
+    (set! cr_off (/ (+ a b) 2.0))
+    (sun_at_off cr_off)           ; 取该时刻的方位（写 sa_az）
+    (set! cr_az sa_az)
+  }))
+
+;; 长度 n 的全零列表（一次 cons 构建，之后用 set_item! 原地写，不再复制）
+(define zero_list
+  (lambda (n) {
+    (define out '())
+    (define i 0)
+    (while (< i n) { (set! out (cons 0 out)) (set! i (+ i 1)) })
+    out
+  }))
+
+;; 开始（或重启）某一天的分拍推算
+(define trk_begin
+  (lambda (ldays) {
+    (set! trk_day ldays)
+    (set! trk_building 1)
+    (set! trk_k 0)
+    (set! trk_prev_alt 99.0)
+    (set! trk_prev_off 0.0)
+    (set! trk_above 0)
+    (set! trk_xs (zero_list 145))
+    (set! trk_ys (zero_list 145))
+    (set! trk_n 0)
+    (set! trk_rise_ok 0)
+    (set! trk_set_ok 0)
+    (set! trk_rise_str "")
+    (set! trk_set_str "")
+    (set! trk_polar 0)
+    (set_local_midnight ldays)
+  }))
+
+;; 收尾：接上精确的升/落端点、反转成升序、标注极昼/极夜
+(define trk_finish
+  (lambda () {
+    (if (== trk_rise_ok 1)
+        { (set! trk_rise_x (Math.round (sky_x trk_rise_az 0.0)))
+          (set! trk_rise_y (Math.round (sky_y trk_rise_az 0.0))) }
+        #f)
+    (if (== trk_set_ok 1)
+        { (set! trk_set_x (Math.round (sky_x trk_set_az 0.0)))
+          (set! trk_set_y (Math.round (sky_y trk_set_az 0.0))) }
+        #f)
+    (if (and (== trk_rise_ok 0) (== trk_set_ok 0))
+        { (if (> trk_above 0) (set! trk_polar 1) (set! trk_polar 2)) }
+        #f)
+    (set! trk_building 0)
+  }))
+
+;; 每拍推进一批样本（返回 1 表示本拍动过）
+(define trk_step
+  (lambda () {
+    (define moved 0)
+    (define n 0)
+    (while (and (== trk_building 1) (< n TRK_BATCH)) {
+      (define off (* trk_k 600.0))
+      (define cur_alt (sun_at_off off))
+      (define cur_az sa_az)
+      (if (> trk_k 0)
+          {
+            (if (and (< trk_prev_alt SUN_H0) (>= cur_alt SUN_H0))
+                {
+                  (refine_cross trk_prev_off off 1)
+                  (set! trk_rise_ok 1)
+                  (set! trk_rise_str (hhmm cr_off))
+                  (set! trk_rise_az cr_az)
+                }
+                #f)
+            (if (and (>= trk_prev_alt SUN_H0) (< cur_alt SUN_H0))
+                {
+                  (refine_cross trk_prev_off off 0)
+                  (set! trk_set_ok 1)
+                  (set! trk_set_str (hhmm cr_off))
+                  (set! trk_set_az cr_az)
+                }
+                #f)
+          }
+          #f)
+      (if (>= cur_alt 0.0)
+          {
+            (set! trk_above (+ trk_above 1))
+            {
+              (set_item! trk_xs trk_n (Math.round (sky_x cur_az cur_alt)))
+              (set_item! trk_ys trk_n (Math.round (sky_y cur_az cur_alt)))
+              (set! trk_n (+ trk_n 1))
+            }
+          }
+          #f)
+      (set! trk_prev_alt cur_alt)
+      (set! trk_prev_off off)
+      (set! trk_k (+ trk_k 1))
+      (set! moved 1)
+      (if (> trk_k 144) { (trk_finish) } #f)
+      (set! n (+ n 1))
+    })
+    moved
+  }))
+
+;; ---- 绘制：天空页 ---------------------------------------------------------
+
+;; 等高圈 + 两条正交轴 + 方位/高度标注
+(define sky_grid
+  (lambda () {
+    (Gfx.draw_circle SKY_CX SKY_CY SKY_R60 56 62 76)
+    (Gfx.draw_circle SKY_CX SKY_CY SKY_R30 56 62 76)
+    (Gfx.draw_circle SKY_CX SKY_CY SKY_R 92 100 120)         ; 地平圈
+    (Gfx.draw_line SKY_CX (- SKY_CY SKY_R) SKY_CX (+ SKY_CY SKY_R) 48 54 66)
+    (Gfx.draw_line (- SKY_CX SKY_R) SKY_CY (+ SKY_CX SKY_R) SKY_CY 48 54 66)
+    ;; 四正方向（圈外；算术恒二参数，故多层嵌套而不写三参）
+    (Gfx.draw_text "北" (- SKY_CX 6) (- (- SKY_CY SKY_R) 15) 150 158 172)
+    (Gfx.draw_text "南" (- SKY_CX 6) (+ (+ SKY_CY SKY_R) 3) 150 158 172)
+    (Gfx.draw_text "东" (- (- SKY_CX SKY_R) 18) (- SKY_CY 6) 150 158 172)
+    (Gfx.draw_text "西" (+ (+ SKY_CX SKY_R) 6) (- SKY_CY 6) 150 158 172)
+    ;; 高度标注：放在**上半部分**（沿北向轴线、各圈内侧）
+    (Gfx.draw_text "60°" (+ SKY_CX 5) (- (- SKY_CY SKY_R60) 12) 112 120 136)
+    (Gfx.draw_text "30°" (+ SKY_CX 5) (- (- SKY_CY SKY_R30) 12) 112 120 136)
+  }))
+
+;; 太阳周日轨迹（地平以上部分，暖色细线）
+(define draw_sun_track
+  (lambda () {
+    (define px 0)
+    (define py 0)
+    (define first 1)
+    (if (== trk_rise_ok 1)
+        { (set! px trk_rise_x) (set! py trk_rise_y) (set! first 0) }
+        #f)
+    (define i 0)
+    (while (< i trk_n) {
+      (define pxx (get_item trk_xs i))
+      (define pyy (get_item trk_ys i))
+      (if (== first 1)
+          { (set! px pxx) (set! py pyy) (set! first 0) }
+          {
+            (Gfx.draw_line px py pxx pyy 138 106 62)
+            (set! px pxx)
+            (set! py pyy)
+          })
+      (set! i (+ i 1))
+    })
+    (if (if (== trk_set_ok 1) (== first 0) #f)
+        { (Gfx.draw_line px py trk_set_x trk_set_y 138 106 62) }
+        #f)
+  }))
+
+;; 日出/日落标记 + 时刻（写在地平圈外侧、标记附近；越界时夹回屏内）
+(define draw_rise_set
+  (lambda (az txt r g b) {
+    (define hx (sky_x az 0.0))
+    (define hy (sky_y az 0.0))
+    (define ox (* 16.0 (- 0.0 (Math.sin (Ephem.to_rad az)))))
+    (define oy (* 16.0 (- 0.0 (Math.cos (Ephem.to_rad az)))))
+    (define tx (- (+ hx ox) 17.0))
+    (define ty (- (+ hy oy) 6.0))
+    (if (< tx 2.0) (set! tx 2.0) #f)
+    (if (> tx 283.0) (set! tx 283.0) #f)
+    (if (< ty 22.0) (set! ty 22.0) #f)
+    (if (> ty 222.0) (set! ty 222.0) #f)
+    (Gfx.fill_circle (Math.round hx) (Math.round hy) 2 r g b)
+    (Gfx.draw_text txt (Math.round tx) (Math.round ty) r g b)
+  }))
+
+;; 太阳：地平以上画红色圆面；以下在对应方位的地平圈上画空心标记
+(define draw_sun
+  (lambda () {
+    (if (>= v_sun_alt 0.0)
+        {
+          (Gfx.fill_circle (Math.round (sky_x v_sun_az v_sun_alt))
+                           (Math.round (sky_y v_sun_az v_sun_alt)) 5 240 76 52)
+          (Gfx.draw_circle (Math.round (sky_x v_sun_az v_sun_alt))
+                           (Math.round (sky_y v_sun_az v_sun_alt)) 7 150 62 48)
+        }
+        {
+          (Gfx.draw_circle (Math.round (sky_x v_sun_az 0.0))
+                           (Math.round (sky_y v_sun_az 0.0)) 4 146 78 62)
+        })
+  }))
+
+;; 亮瓣朝向：图面上"亮侧"的单位向量（limb_ux, limb_uy，屏幕坐标 x 右 / y 下）
+;;
+;; 做法：取太阳相对月亮的天球切向分量——沿"高度增大"方向 dalt、沿"方位增大"方向
+;; daz·cos(malt)——再乘图面投影的**局部尺度**换成屏幕位移：
+;;   · 高度方向 → 径向（朝圆心），每度 R/90 像素；
+;;   · 方位方向 → 切向，每度 ρ·π/180 像素（ρ = 该点的图面半径）。
+;; 这样得到的是"站在该点看月亮"的真实亮瓣朝向经同一投影映射后的结果（与库的
+;; bright_pa/tilt_north 同源；用有限差分核对过，差 < 0.5°）。
+(define limb_ux 0.0)
+(define limb_uy -1.0)
+(define compute_limb_dir
+  (lambda () {
+    (define dalt (- v_sun_alt v_moon_alt))
+    (define daz (Ephem.norm360 (- v_sun_az v_moon_az)))
+    (if (> daz 180.0) (set! daz (- daz 360.0)) #f)
+    (define we (* daz (Math.cos (Ephem.to_rad v_moon_alt))))
+    (define rho (sky_radius v_moon_alt))
+    (define kr (/ SKY_R 90.0))
+    (define kt (* rho (/ 3.141592653589793 180.0)))
+    (define azr (Ephem.to_rad v_moon_az))
+    (define gx (- (* (* kr dalt) (Math.sin azr)) (* (* kt we) (Math.cos azr))))
+    (define gy (+ (* (* kr dalt) (Math.cos azr)) (* (* kt we) (Math.sin azr))))
+    ;; 自屏幕上方顺时针的角度 → 单位向量
+    (define ang (Ephem.to_deg (Math.atan2 gx (- 0.0 gy))))
+    (set! limb_ux (Math.sin (Ephem.to_rad ang)))
+    (set! limb_uy (- 0.0 (Math.cos (Ephem.to_rad ang))))
+  }))
+
+;; 月盘：暗部深灰、亮部月白；明暗界线为投圆的半椭圆
+;;   局部坐标 u 沿亮侧、v 垂直于它；相位角 i（0=满月，180=新月），r 为盘半径：
+;;   盘内（u²+v² ≤ r²）且 u ≥ −cos(i)·√(r²−v²) ⇒ 亮部。
+(define draw_moon_disc
+  (lambda (mx my r) {
+    (compute_limb_dir)
+    (define ci (Math.cos (Ephem.to_rad v_phase)))
+    (define ux limb_ux)
+    (define uy limb_uy)
+    (define vx (- 0.0 uy))                ; 局部 v 轴（垂直于 u）
+    (define vy ux)
+    (define rr (* r r))
+    (Gfx.fill_circle mx my r 52 54 62)    ; 暗部：整盘深灰
+    ;; 亮部：**按屏幕像素**逐点反算局部坐标（避免按局部栅格正算时旋转造成的漏点）
+    (define dy (- 0 r))
+    (while (<= dy r) {
+      (define py (+ my dy))
+      (define dx (- 0 r))
+      (while (<= dx r) {
+        (define u (+ (* dx ux) (* dy uy)))
+        (define v (+ (* dx vx) (* dy vy)))
+        (define q (- rr (* v v)))
+        (if (>= q 0.0)
+            {
+              (define e (Math.sqrt q))          ; 该行的盘面半宽
+              (if (if (>= u (* (- 0.0 ci) e)) (<= u e) #f)
+                  { (Gfx.set_pixel (+ mx dx) py 250 248 214) }
+                  #f)
+            }
+            #f)
+        (set! dx (+ dx 1))
+      })
+      (set! dy (+ dy 1))
+    })
+    (Gfx.draw_circle mx my r 96 98 110)   ; 盘缘
+  }))
+
+;; 月亮：地平以上按月相绘制；以下画空心标记
+(define draw_moon
+  (lambda () {
+    (define mx (Math.round (sky_x v_moon_az v_moon_alt)))
+    (define my (Math.round (sky_y v_moon_az v_moon_alt)))
+    (if (>= v_moon_alt 0.0)
+        (draw_moon_disc mx my 7)
+        {
+          (Gfx.draw_circle (Math.round (sky_x v_moon_az 0.0))
+                           (Math.round (sky_y v_moon_az 0.0)) 4 104 106 118)
+        })
+  }))
+
+;; 指标栏（要求：太阳高/方在左下、月亮高/方在右下、月亮相位在右上；至少含当前时间）
+(define draw_sky_info
+  (lambda () {
+    ;; 标题（与数据页一致）
+    (Gfx.draw_text TITLE LX Y_TITLE 255 255 255)
+    ;; 左上：日期 / 时刻 / 时区
+    (Gfx.draw_text (clock_date) 3 24 130 200 255)
+    (Gfx.draw_text (pad2 v_h) 3 38 205 225 245)
+    (Gfx.draw_text ":" 17 38 205 225 245)
+    (Gfx.draw_text (pad2 v_mi) 24 38 205 225 245)
+    (Gfx.draw_text ":" 38 38 205 225 245)
+    (Gfx.draw_text (pad2 v_s) 45 38 205 225 245)
+    (Gfx.draw_text "UTC+8" 3 52 118 136 160)
+    (if (== trk_polar 1) { (Gfx.draw_text "极昼" 3 66 150 158 172) } #f)
+    (if (== trk_polar 2) { (Gfx.draw_text "极夜" 3 66 150 158 172) } #f)
+    ;; 右上：月亮相位参数（标题/数值分行，避免"照亮 100.0%"这类宽度溢出 316）
+    (Gfx.draw_text "月相" 250 24 150 158 172)
+    (Gfx.draw_text "照亮" 250 38 150 158 172)
+    (set_ink 235 235 235)
+    (draw_fix 52 250 (* 100.0 v_k) 1 3 "%")
+    (Gfx.draw_text "相位角" 250 68 150 158 172)
+    (set_ink 235 235 235)
+    (draw_fix 82 250 v_phase 1 3 "°")
+    (Gfx.draw_text (phase_name v_elong) 250 98 235 235 160)
+    ;; 左下：太阳高度 / 方位
+    (Gfx.draw_text "太阳" 3 180 255 205 70)
+    (Gfx.draw_text "高" 3 194 150 158 172)
+    (set_ink 255 232 140)
+    (draw_fix_signed 194 23 v_sun_alt 1 2 "°")
+    (Gfx.draw_text "方" 3 208 150 158 172)
+    (set_ink 255 232 140)
+    (draw_fix 208 23 v_sun_az 1 3 "°")
+    ;; 右下：月亮高度 / 方位
+    (Gfx.draw_text "月亮" 250 180 130 200 255)
+    (Gfx.draw_text "高" 250 194 150 158 172)
+    (set_ink 180 220 255)
+    (draw_fix_signed 194 270 v_moon_alt 1 2 "°")
+    (Gfx.draw_text "方" 250 208 150 158 172)
+    (set_ink 180 220 255)
+    (draw_fix 208 270 v_moon_az 1 3 "°")
+  }))
+
+(define draw_sky
+  (lambda () {
+    (if (not (== trk_day v_ldays)) { (trk_begin v_ldays) } #f)
+    (Gfx.clear)
+    (draw_sky_info)
+    (sky_grid)
+    (draw_sun_track)
+    (if (== trk_rise_ok 1) { (draw_rise_set trk_rise_az trk_rise_str 232 186 96) } #f)
+    (if (== trk_set_ok 1) { (draw_rise_set trk_set_az trk_set_str 232 156 96) } #f)
+    (draw_sun)
+    (draw_moon)
+    (draw_tabs)
+  }))
+
+;; ============================================================================
+;; 页签（两页共用，右下角 [数据][天空]；点按切换）
+;; ============================================================================
+
+(define draw_tab
+  (lambda (x label on) {
+    (if (== on 1)
+        { (Gfx.fill_rect x TAB_Y TAB_W TAB_H 46 92 140)
+          (Gfx.draw_rect x TAB_Y TAB_W TAB_H 130 180 230)
+          (Gfx.draw_text label (+ x 6) (+ TAB_Y 2) 245 250 255) }
+        { (Gfx.fill_rect x TAB_Y TAB_W TAB_H 40 42 52)
+          (Gfx.draw_rect x TAB_Y TAB_W TAB_H 96 100 116)
+          (Gfx.draw_text label (+ x 6) (+ TAB_Y 2) 150 156 172) })
+  }))
+
+(define draw_tabs
+  (lambda () {
+    (if (== page 0)
+        { (draw_tab TAB_X0 "数据" 1) (draw_tab TAB_X1 "天空" 0) }
+        { (draw_tab TAB_X0 "数据" 0) (draw_tab TAB_X1 "天空" 1) })
+  }))
+
+;; 点按落在哪枚页签上：0 / 1，都不在返回 -1
+(define tab_at
+  (lambda (px py)
+    (if (and (>= py TAB_Y) (< py (+ TAB_Y TAB_H)))
+        (if (and (>= px TAB_X0) (< px (+ TAB_X0 TAB_W))) 0
+            (if (and (>= px TAB_X1) (< px (+ TAB_X1 TAB_W))) 1 -1))
+        -1)))
+
+(define select_page
+  (lambda (p)
+    (if (not (== p page))
+        { (set! page p) (set! page_dirty 1) }
+        #f)))
+
+;; 每拍一次：只消费「按下」沿（EX.check 已先跑，落在退出按钮上的沿由它吞掉）。
+;; tab_at 的越界返回值 -1 必须挡掉，否则会切到不存在的页。
+(define tab_poll
+  (lambda ()
+    (if (Touch.take_press)
+        {
+          (define t (tab_at (Touch.x) (Touch.y)))
+          (if (>= t 0) (select_page t) #f)
+        }
+        #f)))
+
+;; 页分发
+(define draw_page
+  (lambda ()
+    (if (== page 0) (draw_data) (draw_sky))))
 
 ;; ============================================================================
 ;; 每拍与启动/退出
@@ -931,7 +1400,7 @@
 ;; 也被 (EX.install_with ...) 在"留下/后台恢复"之后调用，用来擦掉确认框残影。
 (define redraw_all
   (lambda () {
-    (draw_screen)
+    (draw_page)
     (EX.draw_button)
     (Gfx.refresh)
   }))
@@ -944,12 +1413,14 @@
 
 ;; 每拍：
 ;;   ① 退出检查（硬 A/ESC + 右上角按钮）；
-;;   ② 年表推算推进（每拍 4 步，约 1.3 s 算完）；
-;;   ③ 秒数变了 → 重算星历 + 农历，重绘一次（1 Hz）；
-;;   ④ 本拍推进过年表推算 → 重绘（进度条/刚算完的结果，推算期约 10 Hz）。
+;;   ② 页签点按 → 换页（置 page_dirty）；
+;;   ③ 年表推算推进（每拍 4 步，约 1.3 s 算完；进度只在数据页显示）；
+;;   ④ 秒数变了 / 换了页 / 数据页在推算中 → 重绘一次（1 Hz，推算期约 10 Hz）。
 (define tick
   (lambda () {
     (EX.check)
+    (tab_poll)
+    (define trk_moved (if (== page 1) (trk_step) 0))
     (define building (build_batch))
     (define s (Time.utc_sod))
     (define need 0)
@@ -961,13 +1432,21 @@
           (set! need 1)
         }
         #f)
+    (if (== page_dirty 1)
+        {
+          (set! page_dirty 0)
+          (set! need 1)
+        }
+        #f)
     (if (== building 1)
         {
           ;; 本拍刚好算完年表 → 立刻补算农历结果，本拍就把数字画出来
           (if (== tbl_ready 1) { (lunar_refresh) })
-          (set! need 1)
+          (if (== page 0) { (set! need 1) })
         }
         #f)
+    ;; 天空页：轨迹推算每拍推进一批 → 逐拍重绘（弧线长出来的过程可见）
+    (if (== trk_moved 1) { (set! need 1) } #f)
     (if (== need 1) (redraw_all) #f)
   }))
 
@@ -977,7 +1456,7 @@
 (define us0 (Time.utc_sod))
 (build_begin (year_start_of ud0 us0))   ; 农历年表在后台分拍推进
 (astro_compute)
-(draw_screen)
+(draw_page)
 (EX.draw_button)
 (Gfx.refresh)
 (set! last_sec us0)
