@@ -24,6 +24,12 @@
 ;; （app/lib/exit.scm 的 EX.draw_button/EX.check：硬 A/ESC 与触屏按钮同一条通道），
 ;; 确认框一开，本进程即 BLOCKED（定时器暂停）= 游戏自动暂停。
 ;;
+;; 自动游玩（AI，本 App 独有，C 版没有）：右侧「AI 手动 / AI 自动」按钮切换。
+;;   打开后由 app/lib/tetris_ai.scm 接管：每块算一次最优落点（4 个旋转态 × 全部
+;;   合法横位的全枚举 + 六特征线性评估），随后每拍做一个动作（旋转 → 逐格横移 →
+;;   硬降），于是落子过程看得见；临近落点时当拍做完剩余动作，免得被重力抢先锁定。
+;;   在别处按下手指 = 立刻交还手动（同弹幕陨石的约定），按下的那个虚拟键照常生效。
+;;
 ;; 解释器约束（manual.md）：算术固定二参数、无一元取负、无 list/let/map、
 ;; cond 每子句单个表达式、/ 与 mod 恒浮点、Math.PI 是函数、while 体非独立词法区域
 ;; → 所有局部量都用模块级 define + set!。
@@ -38,6 +44,7 @@
 
 (import T "app/lib/tetris_core.scm")
 (import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
+(import AI "app/lib/tetris_ai.scm")  ; 自动游玩（AI 每块算一次落点，每拍做一个动作）
 
 ;; ---- 节奏参数 ------------------------------------------------------------
 ;; 定时器周期只是"希望多久跑一拍"；真正的物理步长用 System.timestamp 的实测
@@ -80,6 +87,18 @@
 
 (define VK_W (Math.floor (/ SW 4)))     ; 顶部「速降」宽（在场地上方左侧）
 (define VB_W (Math.floor (/ SW 3)))     ; 底部三等分
+
+;; ---- AI（自动游玩）按钮 ----
+;; 放在场地右侧空列里（场地 100px 宽、横向居中，x 210..320 是空的）：
+;; 右上角 280..316 已被统一的「退出」按钮占住，故往下让开一行（y=28）。
+;; 不能放左上角：宿主在屏幕最左上角那一小片区域的点按走别的分支，Touch 到不了 App。
+
+(define AI_X 214)
+(define AI_Y 28)
+(define AI_W 96)
+(define AI_H 20)
+(define ai_on 0)        ; 0 = 手动（默认） 1 = AI 自动游玩
+(define last_lines 0)   ; 行数变化时打印一行诊断（只在自动模式下，供 tools/e2e 断言）
 
 ;; ---- 界面状态 ------------------------------------------------------------
 
@@ -138,6 +157,15 @@
   (lambda (s cx cy r g b)
     (Gfx.draw_text s (- cx (* 6 (String.length s))) (- cy 7) r g b)))
 
+;; 点 (x,y) 是否落在矩形内（触屏命中，同弹幕陨石的 hit_rect）
+(define hit_rect
+  (lambda (x y rx ry rw rh)
+    (if (>= x rx)
+        (if (< x (+ rx rw))
+            (if (>= y ry) (if (< y (+ ry rh)) 1 0) 0)
+            0)
+        0)))
+
 (define draw_button
   (lambda (x y w h label r g b) {
     (Gfx.fill_rect x y w h r g b)
@@ -152,6 +180,21 @@
     (draw_button 0 (- SH BOT_H) VB_W BOT_H "左移" 46 46 50)
     (draw_button VB_W (- SH BOT_H) VB_W BOT_H "旋转" 46 46 50)
     (draw_button (* VB_W 2) (- SH BOT_H) (- SW (* VB_W 2)) BOT_H "右移" 46 46 50)
+  }))
+
+;; AI 开关按钮：手动 = 石板灰，自动 = 绿底（同弹幕陨石的「手动/自动」配色）
+(define draw_ai_button
+  (lambda () {
+    (if (== ai_on 1)
+        {
+          (Gfx.fill_rect AI_X AI_Y AI_W AI_H 40 110 74)
+          (Gfx.draw_rect AI_X AI_Y AI_W AI_H 96 190 140)
+        }
+        {
+          (Gfx.fill_rect AI_X AI_Y AI_W AI_H 46 46 50)
+          (Gfx.draw_rect AI_X AI_Y AI_W AI_H 12 12 16)
+        })
+    (Gfx.draw_text (if (== ai_on 1) "AI 自动" "AI 手动") (+ AI_X 6) (+ AI_Y 4) 235 244 250)
   }))
 
 ;; 一个场地格子：填色 + 底部 2px 暗条（同 C 版 trs_draw_cell）
@@ -235,6 +278,20 @@
                  (+ (+ dk_y (Math.floor (/ dk_h 2))) 22) 255 255 255)
   }))
 
+;; 行数变化时打印一次进度（只在自动模式下）：宿主无头回归台靠这行断言"AI 真的在玩"
+(define report_progress
+  (lambda () {
+    (if (not (== T.lines last_lines)) {
+      (set! last_lines T.lines)
+      (if (== ai_on 1) {
+        (display "[tetris] lines=") (display T.lines)
+        (display " score=") (display T.score)
+        (display " level=") (display T.level)
+        (newline)
+      })
+    })
+  }))
+
 (define render
   (lambda () {
     (Gfx.clear)
@@ -242,6 +299,7 @@
     (draw_board)
     (draw_panel)
     (draw_vkeys)
+    (draw_ai_button)
     (if (== T.game_over 1) (draw_game_over))
       (EX.draw_button)
       (Gfx.refresh)
@@ -253,15 +311,27 @@
 
 (define game_input
   (lambda () {
-    ;; 按下沿：命中 左移/右移/速降 → 武装按住跟踪（松手才结算，同 C 版）
+    ;; 按下沿：AI 按钮 → 切换自动/手动；其它位置按下 → 交还手动（同弹幕陨石的约定），
+    ;; 且该次按下照常交给虚拟按键（于是「一按即接管，且这一下就生效」）。
     (if (== tp 1)
         (if (== tr 0) {
-          (set! vh (vkey_hit (Touch.x) (Touch.y)))
-          (if (or (== vh 1) (or (== vh 3) (== vh 4))) {
-            (set! hold_key vh)
-            (set! hold_ms now_ms)
-            (set! repeating 0)
-          })
+          (if (== (hit_rect (Touch.x) (Touch.y) AI_X AI_Y AI_W AI_H) 1)
+              { (set! ai_on (if (== ai_on 1) 0 1))
+                (AI.reset)      ; 换模式必清计划：避免沿用上一块的落点
+                (display "[tetris] ai=") (display ai_on) (newline) }
+              {
+                (if (== ai_on 1)
+                    { (set! ai_on 0)
+                      (AI.reset)
+                      (display "[tetris] ai=0") (newline) }
+                    #f)
+                (set! vh (vkey_hit (Touch.x) (Touch.y)))
+                (if (or (== vh 1) (or (== vh 3) (== vh 4))) {
+                  (set! hold_key vh)
+                  (set! hold_ms now_ms)
+                  (set! repeating 0)
+                })
+              })
         }))
 
     (if (> hold_key 0)
@@ -311,9 +381,13 @@
 
     (game_input)
 
+    ;; AI 自动游玩：每拍一个动作（旋转 → 横移 → 硬降），计划每块只算一次
+    (if (== ai_on 1) (AI.tick))
+
     ;; 重力（游戏结束由 advance 内部判定）
     (T.advance dt)
 
+    (report_progress)
     (render)
   }))
 

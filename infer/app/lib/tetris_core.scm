@@ -63,6 +63,9 @@
 (define level 1)
 (define fall_acc 0)     ; 重力累计（ms）
 (define game_over 0)
+(define serial 0)       ; 方块序号：每生成一块（含开局首块）+1，只增不减。
+                        ; AI（app/lib/tetris_ai.scm）与录像回放靠它判断"又换块了"——
+                        ; 单看 piece 不行（连着两块可能同型）。
 
 ;; ---- 模块级临时量（热路径局部量一律提到模块级：解释器对块内 define/嵌套区域
 ;;      存在布局敏感的槽位问题，见 doc/AGENTS.md）----------------------------
@@ -166,6 +169,7 @@
     (set! rot 0)
     (set! px 3)
     (set! py -1)
+    (set! serial (+ serial 1))
     (if (== (collide piece rot px py) 1) (set! game_over 1))
   }))
 
