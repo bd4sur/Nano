@@ -6010,3 +6010,63 @@ Chromium / chrome-headless-shell / Firefox **各 23/23 PASS** —— 进列表 �
 - `infer/tools/e2e/browser/regress_ephemeris.js`（新增，含 `E2E_LONG_SECS` 长跑段）、
   `run_browser_regress.sh`、`README.md`；`browser/regress.js`、`browser/regress_det.js`、
   `host/run_host_regress.sh`（App 清单去 nongli）
+
+------------------------------------
+
+# 2026-11-08（验证：vendor/Animac 同步上游 771b7c7「短串弱驻留」）
+
+上游按"弱驻留"修掉了上一轮发现的字符串驻留泄漏（旧实现把 strindex 全部 handle 当 GC 根 →
+运行期短串永不回收，见上一条目）。本次同步带来三项改动，逐项验证：
+
+1. **弱驻留**：`strindex` 不再是 GC 根；GC 后由 `am_strindex_prune` 按"本轮轮次戳"
+   （`gc_epoch_for_round` / `gc_strindex_entry_is_live`）扫尾，存活率 <50% 时 `shrink`
+   压缩表、墓碑过多时原地 rehash。静态/keepalive 对象每轮被重新戳章，其字面量表项永久保留。
+2. **`System.memstat` 六元组**：`(vm_cap vm_used heap_cap heap_used interned_count interned_bytes)`。
+3. **OOM 单独报错**：分配失败不再落成笼统的"指令执行异常"，改报
+   `[Runtime] 内存耗尽(OOM): PID=… PC=…; VM=…/… B, heap=…/… B`。
+
+## 语义正确性（新增 `tools/e2e/native/intern_test.scm`，**20/20 PASS**）
+
+- 手册 §3.4 的 `eq?` 示例保持：`(eq? (String.concat "ab" "c") …)` ⇒ `#t`；>32 字符长串 `eq?` ⇒ `#f`、
+  `equal?` ⇒ `#t`；
+- **去重未被破坏**：churn 5000 / 2 万唯一短串 + `System.gc` 后，先前保留的同内容串与新构造串仍 `eq?`；
+- **Table 字符串键跨 GC**：字面量键、运行期构造键、中文键在 `System.gc` 后仍可查；
+  两轮 2 万 churn + GC 后键值仍正确；`contains` / `delete` 正常；
+- **驻留表有界**：基线 57 项 / 6304 B → 2 万唯一短串 + GC 后仍 **57 项 / 6304 B**；
+  再 5 轮（合计 10 万条唯一短串）后仍 57 项 —— 与"只随存活串有界"的设计一致。
+
+## 压力与长跑
+
+- `tools/e2e/native/intern_stress.scm`（每拍生成 20 个唯一短串，100ms 拍）：36000 拍 = 1 h 虚拟时间
+  = **72 万个唯一短串** → 驻留项数在 126~1274 之间锯齿（GC 时机所致，**无单调增长**），
+  VM 工作区 334~391 KB、堆 40~165 KB 平稳，`err=none`。
+- **修复前必死的那份 App**（两页版 + 整串拼时钟的 `/tmp/eph-backup.scm`，旧 vendor 在 390 s 报
+  `指令执行异常`）：新 vendor 下 390 s、1 h、**12 h（432000 拍）** 均 `err=none`。
+- 当前单页 `ephemeris.scm`：12 h（432000 拍）`err=none`。
+- **WASM 端**（浏览器，32MB 池）：同一"整串拼"写法的 App 在 Chromium 里虚拟时间 600 s → `epochΔ=611`、
+  **1800 s → `epochΔ=1811`**、无 pageerror（用 app 列表按名启动 + `page.clock` 步进的临时脚本跑）。
+- **OOM 文案**：4MB 小池 + 持续 `push` 撑爆 → 实测输出
+  `[Runtime] 内存耗尽(OOM): PID=0 PC=23; VM=922432/2097152 B, heap=934688/2097152 B`。
+
+## 回归
+
+宿主回归台 36 个 App 全 `err=none`；浏览器专项（`regress_ephemeris.js`）3 引擎各 **23/23**、
+`E2E_LONG_SECS=900` 长跑 **25/25**（`epochΔ=900`）；`System.memstat` 的既有消费者
+（`app/xray.scm`、`app/forkqueue.scm`）只取 `get_item 0..3`，六元组向后兼容，画面正常。
+
+## 顺带发现的**既有**上游缺陷（与本修复无关，未改动）
+
+`System.fork` 后子进程**没有运行期字符串驻留**：`am_fork_process_copy`（`am_native_System.c`）
+深拷贝了堆、并对 opstack/fstack/dynamic-wind 条目做了 handle 重映射，但**没有拷贝 `strindex`**
+（子进程为 NULL）。后果：子进程里 `(eq? (String.concat "ab" "c") (String.concat "a" "bc"))` ⇒ `#f`
+（违背手册 §3.4 示例），用运行期构造的串作 Table 键查不到（字面量键不受影响）。
+已用旧基线 5f82267 复现同样行为 ⇒ **不是本次同步引入的回归**。建议修法：在
+`am_fork_process_copy` 里对 `parent->strindex` 做 `am_strindex_copy`，再用
+`am_fork_heap_map_handle` 逐个重映射表项 handle（映射失败者丢弃），最后赋给 `child->strindex`。
+`intern_test.scm` 已把这一现状打印为 note（上游修好后该行会变成"已继承"，届时可改为断言）。
+
+## App 侧
+
+`infer/app/ephemeris.scm` 的分片数值绘制**保留**：不再是正确性必需（整串拼也已能长跑），但每秒
+少生成上百个中间串 ⇒ 更少 GC 轮次、WASM 端停顿更小；文件内注释已改为"上游已修复，此处保留为
+降垃圾量"。`tools/e2e/README.md` 已登记 `intern_test.scm` / `intern_stress.scm` 两个新用例。
