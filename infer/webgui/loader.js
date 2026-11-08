@@ -58,6 +58,10 @@ function nanoInferPriority(path) {
   if (top === "icon") return 1;
   if (!path.includes("/") && (path.startsWith("wp") || path === "mob.scm" || path === "jstest.js")) return 1;
   if (top === "llm") return 3;
+  // data/ 是「灵机应用程序」自己的存档/模型（便签、2048 存档、Flappy 的 Q 表……），
+  // 都是 KB 级小文件；提到 p1 让 App 启动时就能读到自己的存档，否则首帧读不到、
+  // 训练一轮就把旧模型覆盖掉（2026-11 Flappy Bird 条目）。
+  if (top === "data") return 1;
   return 2;
 }
 
