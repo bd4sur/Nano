@@ -594,15 +594,15 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
         L"粒子生命",
         L"水波",
         L"水池",
-        L"体积云",
         L"日历",
+        // L"体积云",  // 原入口：已移除（体积云渲染保留在天象仪“大气散射”档位中，见 celestial.c）
         // L"曼德博集" / L"生命游戏Scheme"：已并入“灵机应用程序”（业务资源目录 app/
         // 下的 Scheme App 动态列表，见 ui_scheme_app.c）
         // L"小鹦鹉笼",  // 原入口：小鹦鹉笼已并入“鹦鹉笼”的统一模型菜单（[轻] 前缀条目），注释保留备查
     };
     global_state->w_menu_main->title = L"小游戏";
     global_state->w_menu_main->items = game_menu_items;
-    global_state->w_menu_main->item_num = 12;
+    global_state->w_menu_main->item_num = 11;
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
 }
 
@@ -618,8 +618,8 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
         case 7: return STATE_PARTICLELIFE;
         case 8: return STATE_RIPPLE;
         case 9: return STATE_WATER;
-        case 10: return STATE_CLOUD;
-        case 11: return STATE_CALENDAR;
+        case 10: return STATE_CALENDAR;
+        // case 11: 原“体积云”入口已移除（保留 STATE_CLOUD 状态处理，当前无菜单入口）
         // 原“曼德博集”/“生命游戏Scheme”入口已并入“灵机应用程序”（case 0）
         // case 12: 原“小鹦鹉笼”入口已移除（并入鹦鹉笼模型菜单，条目带 [轻] 前缀）
         default: return STATE_MAIN_MENU;
