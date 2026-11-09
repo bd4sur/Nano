@@ -99,6 +99,7 @@
   "\\oint_{\\partial S}\\vec{B}\\cdot d\\vec{l}=\\mu_0 I+\\mu_0\\varepsilon_0\\frac{d\\Phi_E}{dt}"
   "\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}\\begin{pmatrix}x\\\\y\\end{pmatrix}=\\begin{pmatrix}ax+by\\\\cx+dy\\end{pmatrix}"
   "\\begin{vmatrix}\\frac{a}{b}&1\\\\0&\\frac{c}{d}\\end{vmatrix}=\\frac{ad-bc}{bd}"
+  "\\left\\{\\frac{1}{n}\\right\\}_{n=1}^{\\infty},\\qquad \\begin{pmatrix}1&0\\\\[4pt]0&1\\end{pmatrix}"
   "|x|=\\begin{cases}x,&x\\ge 0\\\\-x,&x<0\\end{cases}"
   "(a+b)^n=\\sum_{k=0}^{n}\\binom{n}{k}a^{n-k}b^k"
   "\\forall\\varepsilon>0,\\ \\exists\\delta>0:\\ |x-a|<\\delta\\Rightarrow|f(x)-f(a)|<\\varepsilon"

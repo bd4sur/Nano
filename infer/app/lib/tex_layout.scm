@@ -668,11 +668,14 @@
   (define w 0.0)
   (define PI (Math.PI))
   (cond
-    ;; 圆括号：半椭圆
+    ;; 圆括号：半椭圆。**方向务必核对**：圆心放在 (x+w, mid)、半径 = w 时，
+    ;; 角度 0° 是"最右"、180° 是"最左"。左括号要经过 180°（90° → 270°），
+    ;; 右括号才经过 0°（-90° → 90°）。早期左括号写成了 -90° → +90°（经过 0°），
+    ;; 于是所有走高定界符路径的 `(` 都画成了 `)`——用户报的"左括号方向反了"正是它。
     ((== cp 40)
       {
         (set! w (+ (* 0.28 em) (* 0.12 H)))
-        (B.arc (+ x w) mid w (/ H 2) (- 0 (/ PI 2)) (/ PI 2) 14 lw)
+        (B.arc (+ x w) mid w (/ H 2) (* 0.5 PI) (* 1.5 PI) 14 lw)
         `(,w ,hr ,dr)
       })
     ((== cp 41)
@@ -698,23 +701,18 @@
         (B.l x bot (+ x (- w (* 0.1 em))) bot lw)
         `(,w ,hr ,dr)
       })
-    ;; 花括号：两段四分之一椭圆 + 中央尖角
+    ;; 花括号：**上下钩 + 竖段 + 中央尖角**四段拼（原实现是两个"半椭圆"，
+    ;; 那画出来就是个圆括号，正是 "\left\{ … \right\}" 显示成 ( ) 的原因）。
     ((== cp 123)
       {
         (set! w (* 0.42 em))
-        (B.arc (+ x w) mid w (- 0 (/ H 2)) (/ PI 2) (* 0.94 PI) 10 lw)
-        (B.arc (+ x w) mid w (/ H 2) (* 1.06 PI) (* 1.5 PI) 10 lw)
-        (B.l (+ x (* 0.04 w)) (- mid (* 0.16 H)) x mid lw)
-        (B.l x mid (+ x (* 0.04 w)) (+ mid (* 0.16 H)) lw)
+        (B.brace_left x top mid bot w lw)
         `(,w ,hr ,dr)
       })
     ((== cp 125)
       {
         (set! w (* 0.42 em))
-        (B.arc x mid w (- 0 (/ H 2)) (* 0.5 PI) (* 0.94 PI) 10 lw)
-        (B.arc x mid w (/ H 2) (* 1.06 PI) (* 1.5 PI) 10 lw)
-        (B.l (+ x (* 0.96 w)) (- mid (* 0.16 H)) (+ x w) mid lw)
-        (B.l (+ x w) mid (+ x (* 0.96 w)) (+ mid (* 0.16 H)) lw)
+        (B.brace_right x top mid bot w lw)
         `(,w ,hr ,dr)
       })
     ;; 尖括号
@@ -810,8 +808,9 @@
               (B.g x y em 1 1 cp 0 cur_bold fid)
               `(,adv ,(B.mx asc hr) ,(B.mx dsc dr))
             })
-          ;; ② 中等拉伸（≤2.4 倍）：字形纵向拉伸——形状（尤其花括号的尖角）比矢量近似更准
-          ((<= sy 2.4)
+          ;; ② 中等拉伸：字形纵向拉伸——形状（尤其花括号的尖角）比矢量更准。
+          ;;    花括号允许拉到 3.2 倍（再长才用矢量），圆/方括号 2.8 倍。
+          ((<= sy (if (or (== cp 123) (== cp 125)) 3.2 2.8))
             {
               ;; 拉伸后的墨迹占 [gy - sy*asc, gy + sy*dsc]；要让它正好等于 [y - hr, y + dr]，
               ;; 故 gy = y - hr + sy*asc。（早期把 hr 的符号写成了 +：定界符整块上浮一个
@@ -1016,6 +1015,8 @@
 (define  lay_matrix (lambda (node st x y)
   (define kind (get_item node 1))
   (define rows (get_item node 2))
+  (define gaps (get_item node 3))
+  (define gn 0)
   (define em (em_of st))
   (define colgap (* 0.8 em))
   (define rowgap (* 0.45 em))
@@ -1053,6 +1054,13 @@
   (define mr #f)
   (define mst0 0)
   (define mbx #f)
+  ;; `\\[4pt]` 这类可选行距：gaps[r] = (数值 是否em)，作用在第 r 行与第 r+1 行之间
+  (set! gn (if (list? gaps) (length gaps) 0))
+  (define gapv (lambda (r)
+    (define gg '(0.0 0))
+    (if (< r gn) (set! gg (get_item gaps r)) #f)
+    (if (not (list? gg)) (set! gg '(0.0 0)) #f)
+    (if (== (get_item gg 1) 1) (* (get_item gg 0) em) (get_item gg 0)))) 
   ;; ① 逐个单元格排版到原点，记录区间与尺寸
   (set! r 0)
   (while (< r mnrow)
@@ -1112,7 +1120,7 @@
       (set! rec (get_item mrowrec r))
       (set! mtotal (+ mtotal (get_item rec 0)))
       (set! mtotal (+ mtotal (get_item rec 1)))
-      (if (> r 0) (set! mtotal (+ mtotal rowgap)) #f)
+      (if (> r 0) (set! mtotal (+ mtotal (+ rowgap (gapv (- r 1))))) #f)
       (set! r (+ r 1))
     })
   ;; ④ 定界符宽度（先算，单元格整体右移让开）
@@ -1162,7 +1170,7 @@
           (set! cbase (+ cbase (+ (get_item mcolw c) colgap)))
           (set! c (+ c 1))
         })
-      (set! ytop (+ ytop (B.sum3 (get_item rec 0) (get_item rec 1) rowgap)))
+      (set! ytop (+ ytop (B.sum3 (get_item rec 0) (get_item rec 1) (+ rowgap (gapv r)))))
       (set! r (+ r 1))
     })
   ;; ⑥ 闭合定界符

@@ -98,6 +98,41 @@
 (define  lerp (lambda (a b t) (+ a (* t (- b a)))))
 
 ;; 三个/四个数相加（灵机 + 恒二元，这里显式嵌套，避免误写成 (+ a b c d)）
+
+;; 花括号（左 { / 右 }）：上钩 → 竖段 → 中央尖角 → 竖段 → 下钩。
+;; 四段都是"1/4 椭圆 + 直线"，这是字体里可延伸花括号的标准拼法；若像早期那样用两个
+;; 半椭圆拼，画出来与圆括号无从区分。
+(define  brace_left (lambda (x top mid bot w lw)
+  (define hh (/ (- bot top) 2))
+  (define hk (/ hh 2.4))       ;; 钩子的竖直高度
+  (define bw (/ w 2.2))        ;; 钩子的水平深度
+  (define sx (+ x (- w bw)))   ;; 竖段所在的 x（左侧留出尖角的宽度）
+  ;; 上钩：(x+w, top) → (sx, top+hk)
+  (arc (+ x w) (+ top hk) bw hk (- 0 (/ 3.14159265 2)) (- 0 3.14159265) 8 lw)
+  ;; 上竖段
+  (l sx (+ top hk) sx (- mid hk) lw)
+  ;; 上尖角：(sx, mid-hk) → (x, mid)
+  (arc x (- mid hk) (- w bw) hk 0 (/ 3.14159265 2) 8 lw)
+  ;; 下尖角
+  (arc x (+ mid hk) (- w bw) hk (- 0 (/ 3.14159265 2)) 0 8 lw)
+  ;; 下竖段
+  (l sx (+ mid hk) sx (- bot hk) lw)
+  ;; 下钩
+  (arc (+ x w) (- bot hk) bw hk 3.14159265 (/ 3.14159265 2) 8 lw)))
+
+;; 右 }：左括号的水平镜像
+(define  brace_right (lambda (x top mid bot w lw)
+  (define hh (/ (- bot top) 2))
+  (define hk (/ hh 2.4))
+  (define bw (/ w 2.2))
+  (define sx (+ x bw))
+  (arc x (+ top hk) bw hk (- 0 (/ 3.14159265 2)) 0 8 lw)
+  (l sx (+ top hk) sx (- mid hk) lw)
+  (arc (+ x w) (- mid hk) (- w bw) hk 3.14159265 (/ 3.14159265 2) 8 lw)
+  (arc (+ x w) (+ mid hk) (- w bw) hk 0 3.14159265 8 lw)
+  (l sx (+ mid hk) sx (- bot hk) lw)
+  (arc x (- bot hk) bw hk 0 (- 0 (/ 3.14159265 2)) 8 lw)))
+
 (define  sum3 (lambda (a b c) (+ a (+ b c))))
 (define  sum4 (lambda (a b c d) (+ a (+ b (+ c d)))))
 

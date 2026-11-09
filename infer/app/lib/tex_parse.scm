@@ -396,13 +396,42 @@
 
 (define mrows (empty))
 (define mcells (empty))
+(define mgaps (empty))
+;; 行距可选参数 \\[4pt] / \\[0.5em]：返回 (数值 是否em单位)。
+;; pt 直接按像素算（本引擎 1px ≈ 1pt），em 由排版层乘以当前 em。
+(define  read_row_gap (lambda ()
+  (define str "")
+  (define i 0)
+  (define c 0)
+  (define numstr "")
+  (define unit "")
+  (define v 0.0)
+  (define go #t)
+  (while (and (not (at_end)) (not (equal? (tk) "]")))
+    { (set! str (String.concat str (tk))) (adv) })
+  (if (equal? (tk) "]") (adv) #f)
+  (while (and go (< i (String.length str)))
+    {
+      (set! c (String.charCodeAt i str))
+      (if (or (and (>= c 48) (<= c 57)) (== c 46) (== c 45))
+          (set! i (+ i 1))
+          (set! go #f))
+    })
+  (set! numstr (String.slice str 0 i))
+  (set! unit (String.slice str i (String.length str)))
+  (set! v (String.parseNumber numstr))
+  (if (undefined? v) (set! v 0.0) #f)
+  (if (equal? unit "em") `(,v 1) `(,v 0))))
+
 (define  parse_matrix (lambda ()
   (define env (read_env_name))
   (define go #t)
   (define mcell #f)
+  (define mgap (cons 0.0 (cons 0 '())))
   (if (equal? env "array") (read_env_name) #f)   ;; 列格式 {cc} 丢弃
   (set! mrows (empty))
   (set! mcells (empty))
+  (set! mgaps (empty))
   (set! go #t)
   (while go
     {
@@ -413,22 +442,26 @@
         ((equal? (tk) "\\\\")
           {
             (adv)
-            ;; 可选的行距参数 \\[2pt] 丢弃
+            ;; 可选的行距参数 \\[4pt] / \\[0.5em]：记在该行上（该行与下一行之间）
+            (set! mgap (cons 0.0 (cons 0 '())))
             (if (equal? (tk) "[")
-                {
-                  (while (and (not (at_end)) (not (equal? (tk) "]"))) (adv))
-                  (if (equal? (tk) "]") (adv) #f)
-                }
+                { (adv) (set! mgap (read_row_gap)) }
                 #f)
             (push mrows mcells)
+            (push mgaps mgap)
             (set! mcells (empty))
           })
-        (else { (push mrows mcells) (set! go #f) })
+        (else
+          {
+            (push mrows mcells)
+            (push mgaps (cons 0.0 (cons 0 '())))
+            (set! go #f)
+          })
       )
     })
   ;; 吃掉 \end{env}
   (if (equal? (tk) "\\end") { (adv) (read_env_name) } #f)
-  `("m" ,(env_kind env) ,mrows)))
+  `("m" ,(env_kind env) ,mrows ,mgaps)))
 
 ;; 控制序列分发。**局部量必须声明在 lambda 内**：parse_control 会递归（分组、参数里
 ;; 都可能有控制序列），模块级的临时槽会被内层调用冲掉（曾因此把 \left( 的定界符读成
