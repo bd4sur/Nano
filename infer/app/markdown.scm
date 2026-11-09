@@ -64,6 +64,7 @@
 (import MDL "app/lib/md_layout.scm")
 (import MDE "app/lib/md_demo.scm")
 (import MDV "app/lib/md_view.scm")
+(import ML "app/lib/menu_list.scm")
 
 ;; ---- 布局常量 ------------------------------------------------------------
 
@@ -509,7 +510,6 @@
 
 (define toc_items (cdr '(0)))   ;; 当前文档目录：(层级 段号 种类 数值 文本) 的列表
 (define toc_open 0)             ;; 1 = 面板打开
-(define toc_sel 0)              ;; 面板里选中的条目
 (define TOC_ROW 15)             ;; 条目行高
 (define TOC_TOP 26)             ;; 条目区起始 y（页眉 18 + 8）
 (define TOC_BTN_W 40)
@@ -517,15 +517,6 @@
 
 (define toc_btn_x (lambda () (- (open_btn_x) (+ TOC_BTN_W 4))))
 (define toc_btn_y (lambda () (- SH 17)))
-
-(define toc_rows          ;; 面板一屏能放几条
-  (lambda ()
-    (Math.floor (/ (- (- SH BOT_H) TOC_TOP) TOC_ROW))))
-
-(define toc_first         ;; 列表窗口首条（跟随选中项滚动）
-  (lambda ()
-    (define rows (toc_rows))
-    (if (>= toc_sel rows) (- (+ toc_sel 1) rows) 0)))
 
 (define hit_toc_btn
   (lambda (px py)
@@ -540,13 +531,35 @@
     (Gfx.draw_text "目录" (+ (toc_btn_x) 7) (+ (toc_btn_y) 1) 225 228 235)
     #t))
 
-;; 打开面板：选中项默认落在"当前阅读位置之前最近的标题"上。
-;; 条目形状 = (层级 段号 种类 数值 文本)；种类 0 = 段内精确 y，1 = 段内码点偏移（估算）。
 (define toc_refresh
   (lambda ()
     (set! toc_items (MDV.toc_list))
     #t))
 
+;; 目录条目 → 通用菜单条目（样式全在这里配：层级颜色 / 缩进 / 高亮态颜色）
+;;   一级最亮、二三级渐暗；缩进按层级；被高亮时统一用更亮一档的同色系。
+(define toc_menu_items
+  (lambda ()
+    (define n (length toc_items))
+    (define i 0)
+    (define it #f)
+    (define lvl 0)
+    (define out (new_list))
+    (define txt "")
+    (while (< i n)
+      { (set! it (get_item toc_items i))
+        (set! lvl (get_item it 0))
+        (set! txt (get_item it 4))
+        (if (== lvl 1)
+            (push out (ML.item txt 238 244 252 (- lvl 1) 0 255 255 255))
+            (if (== lvl 2)
+                (push out (ML.item txt 206 218 236 (- lvl 1) 0 236 244 254))
+                (push out (ML.item txt 168 182 204 (- lvl 1) 0 210 224 244))))
+        (set! i (+ i 1)) })
+    out))
+
+;; 打开面板：选中项默认落在"当前阅读位置之前最近的标题"上。
+;; 条目形状 = (层级 段号 种类 数值 文本)；种类 0 = 段内精确 y，1 = 段内码点偏移（估算）。
 (define toc_open_panel
   (lambda ()
     (define n 0)
@@ -556,20 +569,24 @@
     (define a (MDV.anchor))
     (define aseg (get_item a 0))
     (define ady (get_item a 1))
+    (define near 0)
     (toc_refresh)
     (set! toc_gen_seen (MDV.toc_gen))
     (set! n (length toc_items))
-    (set! toc_sel 0)
     (set! i 0)
     (while (< i n)
       { (set! it (get_item toc_items i))
         (set! seg (get_item it 1))
         (if (< seg aseg)
-            (set! toc_sel i)
+            (set! near i)
             (if (and (== seg aseg) (== (get_item it 2) 0) (<= (get_item it 3) ady))
-                (set! toc_sel i)
+                (set! near i)
                 #f))
         (set! i (+ i 1)) })
+    ;; 交给通用菜单组件：条目样式 + 行高 + 视口（页眉与页脚之间）
+    (ML.reset (toc_menu_items) TOC_ROW)
+    (ML.geom 0 TOC_TOP SW (- (- SH BOT_H) TOC_TOP))
+    (ML.set_sel near)
     (set! toc_open 1)
     (display "MDTOC n=") (display n) (newline)
     #t))
@@ -591,18 +608,16 @@
         #f)
     #t))
 
-;; 面板绘制
+;; 面板绘制：底色 → **列表（组件绘制，含拖动滚动/高亮/滚动条）** → 页眉页脚盖住边界半行
 (define draw_toc_panel
   (lambda ()
     (define n (length toc_items))
-    (define first (toc_first))
-    (define last 0)
-    (define i 0)
-    (define y 0)
-    (define it #f)
-    (define lvl 1)
-    (define tx 0)
     (Gfx.fill_rect 0 0 SW SH 16 19 26)
+    (ML.draw)
+    (if (== n 0)
+        (Gfx.draw_text (if (MDV.toc_done) "（本文没有 1~3 级标题）" "（正在扫描全文标题…）")
+                       PAD_X TOC_TOP 150 162 186)
+        #f)
     (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
     (Gfx.draw_text "目录" PAD_X 3 236 242 250)
     (if (not (MDV.toc_done))
@@ -611,79 +626,38 @@
                                         (String.concat (String.atom_to_string (MDV.index_progress)) "%")))
                        208 3 150 168 190)
         (Gfx.draw_text (String.concat (String.atom_to_string n) " 条") 250 3 150 168 190))
-    (set! last (+ first (toc_rows)))
-    (if (> last n) (set! last n) #f)
-    (set! i first)
-    (while (< i last)
-      { (set! y (+ TOC_TOP (* (- i first) TOC_ROW)))
-        (set! it (get_item toc_items i))
-        (set! lvl (get_item it 0))
-        (set! tx (+ PAD_X (* (- lvl 1) 10)))
-        (if (== i toc_sel)
-            { (Gfx.fill_rect 2 (- y 2) (- SW 4) TOC_ROW 40 50 68)
-              (Gfx.fill_rect 2 (- y 2) 3 TOC_ROW 102 204 255) }
-            #f)
-        ;; 层级用颜色与缩进表达：一级最亮，二三级渐暗
-        (if (== lvl 1)
-            (Gfx.draw_text (MDL.clip_text (get_item it 4) (- SW (+ tx 12))) tx y 238 244 252)
-            (if (== lvl 2)
-                (Gfx.draw_text (MDL.clip_text (get_item it 4) (- SW (+ tx 12))) tx y 206 218 236)
-                (Gfx.draw_text (MDL.clip_text (get_item it 4) (- SW (+ tx 12))) tx y 168 182 204)))
-        (set! i (+ i 1)) })
-    (if (== n 0)
-        (Gfx.draw_text (if (MDV.toc_done) "（本文没有 1~3 级标题）" "（正在扫描全文标题…）")
-                       PAD_X TOC_TOP 150 162 186)
-        #f)
     (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
-    (Gfx.draw_text "↑↓ 选择 · Enter/点按 跳转 · 返回关闭" PAD_X (- SH 14) 130 140 155)
+    (Gfx.draw_text "拖动/↑↓ 选择 · Enter/点按 跳转 · 返回关闭" PAD_X (- SH 14) 130 140 155)
     (Gfx.refresh)
-    #t))
-
-;; 面板里的点击：点条目跳转，点页眉区关闭
-(define toc_tap
-  (lambda (px py)
-    (define idx 0)
-    (define n (length toc_items))
-    (if (< py TOC_TOP)
-        (toc_close)
-        { (set! idx (+ (toc_first) (Math.floor (/ (- py TOC_TOP) TOC_ROW))))
-          (if (< idx n) (toc_jump idx) (toc_close)) })
     #t))
 
 (define apply_key_toc
   (lambda (k)
-    (define n (length toc_items))
-    (if (== k 1) { (set! toc_sel (- toc_sel 1)) (if (< toc_sel 0) (set! toc_sel 0) #f) } #f)
-    (if (== k 2) { (set! toc_sel (+ toc_sel 1)) (if (>= toc_sel n) (set! toc_sel (- n 1)) #f) } #f)
-    (if (== k 13) (toc_jump toc_sel) #f)
+    (if (== k 1) (ML.move (- 0 1)) #f)
+    (if (== k 2) (ML.move 1) #f)
+    (if (== k 3) (ML.page (- 0 1)) #f)
+    (if (== k 4) (ML.page 1) #f)
+    (if (== k 13) (toc_jump (ML.sel_of)) #f)
     (if (== k 27) (toc_close) #f)
     #t))
 
 (define tick_toc
   (lambda ()
+    (define hit 0)
     { ;; 返回请求归面板消费（= 关闭面板），不交给 EX 去弹退出确认
       (if (App.back_requested) (toc_close) #f)
       (set! key (Key.take_press))
       (while (not (== key 0))
         { (apply_key_toc key)
           (set! key (Key.take_press)) })
-      (if (Touch.is_pressed)
-          { (if (== prev_down 0)
-                { (set! prev_down 1)
-                  (set! drag_total 0)
-                  (set! drag_last (Touch.y))
-                  (set! press_x (Touch.x))
-                  (set! press_y (Touch.y)) }
-                #f)
-            (set! dyy (- (Touch.y) drag_last))
-            (set! drag_last (Touch.y))
-            (set! drag_total (+ drag_total dyy)) }
-          { (if (== prev_down 1)
-                { (set! prev_down 0)
-                  (if (< (Math.abs drag_total) 8)
-                      (toc_tap press_x press_y)
-                      #f) }
-                #f) })
+      ;; 触屏：拖动 = 滑动滚动（1:1 跟手）；轻点条目 = 选中并跳转；
+      ;; 轻点页眉/页脚区 = 关闭（组件只报"视口内的条目"，区外由这里处理）
+      (set! hit (ML.step_touch))
+      (if (>= hit 0)
+          (toc_jump hit)
+          (if (== hit -2)
+              (if (< (ML.tap_y) TOC_TOP) (toc_close) #f)   ;; 点页眉 = 关闭
+              #f))
       ;; 面板打开期间**索引继续跑**（预算放大）：全文目录几秒内补齐，
       ;; 条目只会追加在尾部，选中项下标不会失效。
       (index_work IDX_BYTES_TOC)
@@ -692,9 +666,9 @@
           { (set! toc_gen_seen (MDV.toc_gen))
             (toc_refresh)
             (set! toc_scanned (MDV.toc_scanned_count))
-            (if (>= toc_sel (length toc_items))
-                (set! toc_sel (if (> (length toc_items) 0) (- (length toc_items) 1) 0))
-                #f) }
+            ;; 增量换表：组件保留滚动位置与选中项（条目只追加在尾部）
+            (ML.set_items (toc_menu_items))
+            (ML.ensure_sel) }
           #f)
       (draw_toc_panel) }))
 
@@ -717,7 +691,6 @@
 (define SET_ROW 15)
 (define SET_TOP 30)
 (define settings_open 0)
-(define settings_sel 1)  ;; 0 = 标题行（不可选），1..3 = 三种字体
 (define SET_BTN_W 40)
 
 (define set_btn_x (lambda () (- (toc_btn_x) (+ SET_BTN_W 4))))
@@ -787,82 +760,77 @@
     (if (null? s) (apply_font 1) #f)
     #t))
 
-;; 设置面板
+;; 设置面板：同样交给通用菜单组件（三个字体单选项 = 三行"带琴键指示灯"的菜单条目）
+;;   视口 = 「字体」小节标签下方到页脚之间；指示灯：当前字模实心、其余空心。
+(define settings_menu_items
+  (lambda ()
+    (define i 0)
+    (define out (new_list))
+    (while (< i 3)
+      { ;; 指示灯 2 = 实心（当前字模）/ 1 = 空心；文字色随主题，高亮态更亮
+        (if (== i font_id)
+            (push out (ML.item (font_name i) 236 242 250 0 2 255 255 255))
+            (push out (ML.item (font_name i) 226 232 244 0 1 250 252 255)))
+        (set! i (+ i 1)) })
+    out))
+
+(define settings_view_y (lambda () (+ SET_TOP 18)))
+(define settings_view_h (lambda () (- (- SH BOT_H) (+ SET_TOP 18))))
+
 (define draw_settings
   (lambda ()
-    (define i 1)
-    (define y 0)
     (Gfx.fill_rect 0 0 SW SH 16 19 26)
-    (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
-    (Gfx.draw_text "设置" PAD_X 3 236 242 250)
-    ;; 「字体」小节
+    ;; 列表（组件绘制：高亮行只有底色，无左侧竖条；指示灯在左）
+    (ML.set_items (settings_menu_items))
+    (ML.draw)
+    ;; 「字体」小节标签 + 底部说明（页眉页脚最后画，盖住边界半行）
     (Gfx.draw_text "字体" PAD_X SET_TOP 150 168 190)
-    (while (< i 4)
-      { (set! y (+ (+ SET_TOP 18) (* (- i 1) SET_ROW)))
-        (if (== i settings_sel)
-            { (Gfx.fill_rect 2 (- y 2) (- SW 4) SET_ROW 40 50 68)
-              (Gfx.fill_rect 2 (- y 2) 3 SET_ROW 102 204 255) }
-            #f)
-        ;; 单选标记：当前字模前面画一个实心方块
-        (if (== (- i 1) font_id)
-            (Gfx.fill_rect (+ PAD_X 2) (+ y 5) 5 5 102 204 255)
-            (Gfx.draw_rect (+ PAD_X 2) (+ y 5) 5 5 110 118 140))
-        (Gfx.draw_text (font_name (- i 1)) (+ PAD_X 14) y 226 232 244)
-        (set! i (+ i 1)) })
-    ;; 底部说明：当前字模的行高/步进（换字体后立刻能看到数字变化）
     (Gfx.draw_text (String.concat "当前：" (String.concat (font_name font_id)
                                                           (String.concat "  行高 "
                                                                          (String.atom_to_string line_h))))
-                   PAD_X (+ (+ SET_TOP 18) (+ (* 3 SET_ROW) 8)) 150 168 190)
+                   PAD_X (- (- SH BOT_H) 16) 150 168 190)
+    (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
+    (Gfx.draw_text "设置" PAD_X 3 236 242 250)
     (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
     (Gfx.draw_text "↑↓ 选择 · Enter/点按 切换 · 返回关闭" PAD_X (- SH 14) 130 140 155)
     (Gfx.refresh)
     #t))
 
-(define settings_tap
-  (lambda (px py)
-    (define idx 0)
-    (if (< py SET_TOP)
-        (set! settings_open 0)
-        { (set! idx (+ 1 (Math.floor (/ (- py (+ SET_TOP 18)) SET_ROW))))
-          (if (and (>= idx 1) (<= idx 3))
-              { (set! settings_sel idx)
-                (apply_font (- idx 1)) }
-              #f) })
+(define settings_open_panel
+  (lambda ()
+    (ML.reset (settings_menu_items) SET_ROW)
+    (ML.geom 0 (settings_view_y) SW (settings_view_h))
+    (ML.set_sel font_id)          ;; 高亮项默认落在当前字模上
+    (set! settings_open 1)
+    (display "MDSET open") (newline)
     #t))
 
 (define apply_key_settings
   (lambda (k)
-    (if (== k 1) { (set! settings_sel (- settings_sel 1)) (if (< settings_sel 1) (set! settings_sel 1) #f) } #f)
-    (if (== k 2) { (set! settings_sel (+ settings_sel 1)) (if (> settings_sel 3) (set! settings_sel 3) #f) } #f)
-    (if (== k 13) (apply_font (- settings_sel 1)) #f)
+    (if (== k 1) (ML.move (- 0 1)) #f)
+    (if (== k 2) (ML.move 1) #f)
+    (if (== k 3) (ML.page (- 0 1)) #f)
+    (if (== k 4) (ML.page 1) #f)
+    (if (== k 13) (apply_font (ML.sel_of)) #f)
     (if (== k 27) (set! settings_open 0) #f)
     #t))
 
 (define tick_settings
   (lambda ()
+    (define hit 0)
     { (if (App.back_requested) (set! settings_open 0) #f)
       (set! key (Key.take_press))
       (while (not (== key 0))
         { (apply_key_settings key)
           (set! key (Key.take_press)) })
-      (if (Touch.is_pressed)
-          { (if (== prev_down 0)
-                { (set! prev_down 1)
-                  (set! drag_total 0)
-                  (set! drag_last (Touch.y))
-                  (set! press_x (Touch.x))
-                  (set! press_y (Touch.y)) }
-                #f)
-            (set! dyy (- (Touch.y) drag_last))
-            (set! drag_last (Touch.y))
-            (set! drag_total (+ drag_total dyy)) }
-          { (if (== prev_down 1)
-                { (set! prev_down 0)
-                  (if (< (Math.abs drag_total) 8)
-                      (settings_tap press_x press_y)
-                      #f) }
-                #f) })
+      ;; 触屏：拖动 = 滑动滚动（条目只有三条，实际不会滚，但手感一致）；
+      ;; 轻点条目 = 选中并立即应用；轻点页眉 = 关闭
+      (set! hit (ML.step_touch))
+      (if (>= hit 0)
+          (apply_font (ML.sel_of))
+          (if (== hit -2)
+              (if (< (ML.tap_y) SET_TOP) (set! settings_open 0) #f)
+              #f))
       (draw_settings) }))
 
 (define draw_set_btn
@@ -1186,7 +1154,7 @@
               { (set! prev_down 0)
                 (if (< (Math.abs drag_total) 8)
                     (if (== (hit_set_btn press_x press_y) 1)
-                        { (set! settings_open 1) (set! settings_sel (+ 1 font_id)) }
+                        { (settings_open_panel) }
                         (if (== (hit_open_btn press_x press_y) 1)
                         (start_picker)
                         (if (and (== mode 0)
