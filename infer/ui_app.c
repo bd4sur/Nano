@@ -16,6 +16,7 @@
 #include "ui_softkbd.h"
 #include "ui_grid16kbd.h"
 #include "ui_pinyin_ime.h"
+#include "ui_linglong_ctrl.h"
 
 #include "platform.h"
 
@@ -110,6 +111,12 @@ static uint32_t s_image_height = 0;
 static uint8_t s_image_decode_ready = 0;
 
 
+
+// 玲珑仪主界面显式触屏控件是否接管触屏（1-接管；0-设置界面/其他状态）。
+// get_input_event（输入生产侧）据此抑制全屏 4x4 宫格软键映射；显式控件只在
+// 主天空界面使用，玲珑仪设置界面继续沿用十六宫格软键（遗留兜底），
+// 实体硬键在两种界面下均照常工作。
+static volatile int32_t s_linglong_touch_owned = 0;
 
 static uint32_t s_animac_prev_ui_font = 0; // 进入 STATE_ANIMAC_* 之前的 ui_font，退出时恢复
 // 控制台触屏序列属主：0=无序列 1=日志区 2=输入框 3=穿透（输入框无滚动余量：拖滚日志区+点按定位光标）
@@ -359,7 +366,8 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     if (key == NANO_KEY_IDLE && key_event->is_touching && !ui_app_state_is_menu(global_state->STATE)
         && !ui_app_state_hosts_input_widget(global_state->STATE)
         && !ui_grid16kbd_is_visible()
-        && !ui_scheme_app_hosts_input_widget()) { // 灵机 App 的模态输入框显示期间同样抑制宫格
+        && !ui_scheme_app_hosts_input_widget() // 灵机 App 的模态输入框显示期间同样抑制宫格
+        && !(global_state->STATE == STATE_LINGLONG && s_linglong_touch_owned)) { // 玲珑仪主界面：显式触屏控件接管触屏，不再生成宫格软键
         key = ui_app_map_touch_to_grid16_key(key_event->touch_x, key_event->touch_y);
         key_is_soft = (key != NANO_KEY_IDLE); // 宫格映射命中的键来自触屏
     }
@@ -1522,6 +1530,7 @@ static int32_t linglong_refreshed = 0; // 记录暂停状态下是否已刷新
 static int32_t linglong_timemachine_running_state = 2; // 0-停止；1-时光机运行；2-实时
 static int32_t linglong_timemachine_speed = 0; // 时光机速度，正数为未来，负数为过去，单位秒
 static uint64_t linglong_timemachine_start_timestamp = 0;
+static int32_t linglong_paused_resume_state = 2; // 暂停前的运行状态（1-时光机；2-实时），供“运行/暂停”按钮恢复
 
 static int32_t linglong_state = 0; // 玲珑仪UI状态
 
@@ -1539,6 +1548,9 @@ static uint64_t linglong_splash_until = 0;
 void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state) {
     linglong_refreshed = 0;
     linglong_state = LL_STATE_SKY;
+    linglong_paused_resume_state = 2;
+    ui_linglong_ctrl_init();
+    s_linglong_touch_owned = 1; // 主天空界面（含启动画面停留期）：触屏归显式控件，抑制宫格软键
 }
 
 void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state) {
@@ -1773,7 +1785,9 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
 
 
 
-void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state) {
+// 返回值：1-本帧真正重绘了星图（调用方可安全叠加半透明控件）；
+// 0-暂停且已刷新过，提前返回，帧缓冲保留上一帧（不可再次叠加控件，否则 alpha 会逐帧累积加深）。
+int32_t ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state) {
 
     Linglong_Config *llcfg = global_state->linglong_cfg;
 
@@ -1796,7 +1810,7 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
 
     if (linglong_timemachine_running_state == 0) {
         if (linglong_refreshed && (!(llcfg->enable_imu))) {
-            return;
+            return 0;
         }
     }
     else if (linglong_timemachine_running_state == 1) {
@@ -1871,6 +1885,7 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
     gfx_draw_textline(global_state->llgfx, fps_str, 1, 0, 0, 255, 0, 1);
 
     linglong_refreshed = 1;
+    return 1;
 }
 
 void ui_app_linglong_draw_lite(
@@ -2009,22 +2024,34 @@ void ui_app_linglong_splash(Key_Event *key_event, Global_State *global_state) {
 void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_state) {
     // ui_app_linglong_draw_full(key_event, global_state);
 
+    int32_t frame_rendered = 1;
     if (linglong_state == LL_STATE_SETTING || linglong_state == LL_STATE_SETTING_CALLBACK) {
         ui_app_linglong_setting_draw(key_event, global_state);
     }
     else {
-        ui_app_linglong_draw_full(key_event, global_state);
+        frame_rendered = ui_app_linglong_draw_full(key_event, global_state);
     }
 
-    gfx_draw_textline(global_state->llgfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->llgfx->height - 13, 255, 255, 255, 200);
+    // 只有本帧真正重绘过星图/设置界面时才叠加文字与控件。暂停静止时 draw_full
+    // 会提前返回、帧缓冲保留上一帧；若此时再次叠加半透明控件，alpha 会逐帧累积，
+    // 按钮越来越深（最终接近不透明，圆角处尤其明显）。
+    if (frame_rendered) {
+        gfx_draw_textline(global_state->llgfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->llgfx->height - 13, 255, 255, 255, 200);
 
-    wchar_t timestr[30];
-    swprintf(timestr, 30, L"%ls %04d-%02d-%02d %02d:%02d:%02d",
-        (linglong_timemachine_running_state == 0) ? L"  " :
-            (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed > 0)) ? L">>" :
-            (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed < 0)) ? L"<<" : L" >")),
-        global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->second);
-    gfx_draw_textline(global_state->llgfx, timestr, global_state->llgfx->width - 134, global_state->llgfx->height - 13, 255, 255, 255, 1);
+        wchar_t timestr[30];
+        swprintf(timestr, 30, L"%ls %04d-%02d-%02d %02d:%02d:%02d",
+            (linglong_timemachine_running_state == 0) ? L"  " :
+                (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed > 0)) ? L">>" :
+                (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed < 0)) ? L"<<" : L" >")),
+            global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->second);
+        gfx_draw_textline(global_state->llgfx, timestr, global_state->llgfx->width - 134, global_state->llgfx->height - 13, 255, 255, 255, 1);
+
+        // 主天空界面：叠加显式触屏控件（顶部按钮栏 + 可选的时间/视角面板）。
+        // 设置界面（LL_STATE_SETTING*）不绘制，继续沿用原有十六宫格软键布局。
+        if (linglong_state == LL_STATE_SKY) {
+            ui_linglong_ctrl_draw(global_state->llgfx, linglong_timemachine_running_state, linglong_timemachine_speed);
+        }
+    }
 
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
     convert_rgb888_to_rgb565_double(global_state->gfx, global_state->llgfx->frame_buffer_rgb888, global_state->llgfx->width, global_state->llgfx->height);
@@ -2084,6 +2111,39 @@ void ui_app_linglong_set_realtime(Key_Event *key_event, Global_State *global_sta
     }
 }
 
+// 显式触屏控件：恢复当前时间（始终回到实时，不做“再按一次暂停”的开关语义）
+static void ui_app_linglong_control_realtime(Global_State *global_state) {
+    Linglong_Config *llcfg = global_state->linglong_cfg;
+    time_t ts = (time_t)(global_state->timestamp / 1000);
+    struct tm *timeinfo = localtime(&ts);
+    llcfg->second = timeinfo->tm_sec;
+    llcfg->minute = timeinfo->tm_min;
+    llcfg->hour   = timeinfo->tm_hour;
+    llcfg->day    = timeinfo->tm_mday;
+    llcfg->month  = timeinfo->tm_mon + 1;
+    llcfg->year   = timeinfo->tm_year + 1900;
+
+    linglong_timemachine_running_state = 2;
+    linglong_paused_resume_state = 2;
+    linglong_refreshed = 0;
+}
+
+// 显式触屏控件：运行/暂停（暂停记住暂停前的模式，恢复时回到该模式）
+static void ui_app_linglong_control_runpause(Global_State *global_state) {
+    if (linglong_timemachine_running_state == 0) {
+        linglong_timemachine_running_state = linglong_paused_resume_state;
+        // 兜底：只可能恢复到“时光机”或“实时”
+        if (linglong_timemachine_running_state != 1) {
+            linglong_timemachine_running_state = 2;
+        }
+    }
+    else {
+        linglong_paused_resume_state = linglong_timemachine_running_state;
+        linglong_timemachine_running_state = 0;
+    }
+    linglong_refreshed = 0;
+}
+
 void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_state) {
     // 获取机器姿态（欧拉角）
 #ifdef IMU_ENABLED
@@ -2098,6 +2158,106 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
 #endif
 
 #endif
+
+    // 显式触屏控件（仅主天空界面；启动画面停留期内控件尚未绘制，不处理触屏）。
+    // 设置界面继续沿用十六宫格软键（s_linglong_touch_owned=0），此处不接管。
+    if (linglong_state == LL_STATE_SKY && linglong_splash_until == 0) {
+        // 触屏拖动变换视角：仅在控制面板隐藏时启用（控制模块内部判断），
+        // 按下点落在顶部按钮上时不启动拖动。像素增量按实际画布尺寸归一化：
+        // 横/纵向拖满整屏分别对应 180° 方位/俯仰变化，不写死屏幕宽高。
+        // 方向为“抓取天空”：画面随手指同向移动——右拖天空右移（视角左转）、
+        // 下拖天空下移（视角抬头）；即与十六宫格数字键的“相机转向”方向相反。
+        int32_t drag_dx = 0, drag_dy = 0;
+        if (ui_linglong_ctrl_poll_drag(
+                key_event->touch_edge, key_event->is_touching,
+                key_event->touch_x, key_event->touch_y,
+                key_event->touch_down_x, key_event->touch_down_y,
+                &drag_dx, &drag_dy)) {
+            Linglong_Config *llcfg = global_state->linglong_cfg;
+            int32_t canvas_w = (int32_t)global_state->llgfx->width;
+            int32_t canvas_h = (int32_t)global_state->llgfx->height;
+            if (canvas_w > 0 && canvas_h > 0) {
+                llcfg->enable_imu = 0; // 手动拖动，关闭IMU
+                llcfg->view_azi -= (float)drag_dx * 180.0f / (float)canvas_w;
+                while (llcfg->view_azi >= 360.0f) llcfg->view_azi -= 360.0f;
+                while (llcfg->view_azi < 0.0f) llcfg->view_azi += 360.0f;
+                llcfg->view_alt += (float)drag_dy * 180.0f / (float)canvas_h;
+                if (llcfg->view_alt > 90.0f) llcfg->view_alt = 90.0f;
+                if (llcfg->view_alt < -90.0f) llcfg->view_alt = -90.0f;
+                linglong_refreshed = 0;
+            }
+        }
+
+        int32_t action = ui_linglong_ctrl_handle_touch(
+            key_event->touch_edge, key_event->touch_x, key_event->touch_y,
+            key_event->touch_down_x, key_event->touch_down_y);
+
+        // 控件显隐/按住高亮变化才需要重绘当前帧（暂停时 draw_full 会提前返回，
+        // 必须置 refreshed=0 让下一帧重绘天空后再叠加控件）。点击空白天空不触发重绘，
+        // 避免在 ESP32 等慢设备上因误触而重算整幅星图。
+        if (ui_linglong_ctrl_take_dirty()) {
+            linglong_refreshed = 0;
+        }
+
+        if (action != UI_LL_CTRL_NONE) {
+            linglong_refreshed = 0;
+            int32_t synth_key = NANO_KEY_IDLE;
+
+            switch (action) {
+                case UI_LL_CTRL_SETTINGS:
+                    // 等价于十六宫格 C 键：打开现有玲珑仪设置界面
+                    global_state->is_ctrl_enabled = 1;
+                    linglong_state = LL_STATE_SETTING;
+                    ui_linglong_ctrl_reset();
+                    s_linglong_touch_owned = 0; // 设置界面：恢复十六宫格软键（遗留兜底）
+                    return;
+
+                case UI_LL_CTRL_EXIT:
+                    // 等价于十六宫格 A 键：退出玲珑仪
+                    global_state->is_ctrl_enabled = 0;
+                    global_state->STATE = STATE_MAIN_MENU;
+                    s_linglong_touch_owned = 0;
+                    return;
+
+                case UI_LL_CTRL_REWIND:
+                    // 沿用十六宫格“*”键行为：设置快退速度并切换启停（再点一次即暂停）
+                    ui_app_linglong_set_timemachine_speed(key_event, global_state, -120);
+                    linglong_paused_resume_state = 1;
+                    break;
+                case UI_LL_CTRL_REALTIME:
+                    ui_app_linglong_control_realtime(global_state);
+                    break;
+                case UI_LL_CTRL_RUNPAUSE:
+                    ui_app_linglong_control_runpause(global_state);
+                    break;
+                case UI_LL_CTRL_FORWARD:
+                    // 沿用十六宫格“#”键行为：设置快进速度并切换启停（再点一次即暂停）
+                    ui_app_linglong_set_timemachine_speed(key_event, global_state, 120);
+                    linglong_paused_resume_state = 1;
+                    break;
+
+                default:
+                    // 视角九宫格：合成对应的 NANO_KEY_1~9 短按事件，
+                    // 复用下方既有硬键处理逻辑（功能与十六宫格软键 1~9 一一对应）
+                    if (action >= UI_LL_CTRL_VIEW_1 && action <= UI_LL_CTRL_VIEW_9) {
+                        global_state->is_ctrl_enabled = 0;
+                        synth_key = NANO_KEY_1 + (action - UI_LL_CTRL_VIEW_1);
+                    }
+                    break;
+            }
+
+            if (synth_key != NANO_KEY_IDLE) {
+                key_event->key_code = (uint8_t)synth_key;
+                key_event->key_edge = -1; // 合成短按（松手沿已过，直接视为一次完整点击）
+                key_event->is_soft_key = 1;
+            }
+            else {
+                // 时间控制已直接处理，吞掉本次事件，避免与同时按下的硬键重复响应
+                key_event->key_code = NANO_KEY_IDLE;
+                key_event->key_edge = 0;
+            }
+        }
+    }
 
     int32_t is_setting_refresh = 0;
 
@@ -2306,6 +2466,15 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
     // 按#键时光机向后（未来）（反复按运行/暂停）
     else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_right) {
         ui_app_linglong_set_timemachine_speed(key_event, global_state, 120);
+    }
+
+    // 维护触屏控件接管标志：主天空界面由显式控件接管触屏（抑制宫格软键），
+    // 设置界面/设置回调继续沿用十六宫格软键（遗留兜底）。
+    s_linglong_touch_owned = (linglong_state == LL_STATE_SKY);
+    if (!s_linglong_touch_owned) {
+        // 设置界面不显示主界面控件；无论经顶部按钮还是硬 C 键进入，返回主界面时
+        // 时间/视角面板都从隐藏状态开始，避免旧面板状态残留。
+        ui_linglong_ctrl_reset();
     }
 }
 

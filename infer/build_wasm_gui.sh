@@ -160,6 +160,7 @@ ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
     ui_ebook.c \
     ui_goldminer.c \
     ui_grid16kbd.c \
+    ui_linglong_ctrl.c \
     ui_icon.c \
     ui_llm.c \
     ui_musicbox_mp3.c \

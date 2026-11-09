@@ -1308,7 +1308,14 @@ static void gfx_rounded_corner_put(Nano_GFX *gfx, int32_t px, int32_t py, int32_
                       (uint8_t)((green * a8 + 127) / 255),
                       (uint8_t)((blue * a8 + 127) / 255));
     }
+    else if (mode >= 4) {
+        // mode>=4 为定值 alpha（语义同 gfx_draw_point）：角部须把覆盖率乘进 alpha，
+        // 否则满覆盖像素会按不透明色写入，四角出现比直边更深的“扇形阴影”（半透明圆角矩形）。
+        uint8_t alpha = (uint8_t)((a8 * mode + 127) / 255);
+        gfx_blend_pixel(gfx, (uint32_t)px, (uint32_t)py, red, green, blue, alpha);
+    }
     else {
+        // mode==1：按覆盖率混合前景色（抗锯齿圆角的既有语义）
         gfx_blend_pixel(gfx, (uint32_t)px, (uint32_t)py, red, green, blue, a8);
     }
 }
