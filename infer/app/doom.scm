@@ -28,6 +28,9 @@
 ;;     命中判定是 hitscan（沿射线做 DDA 求墙距，只有比墙更近的敌人才算命中）；
 ;;   · 拾取：医疗包 +25、弹药 +20 弹/+4 霰弹、护甲 +25；受击有 0.24s 无敌帧防围殴瞬秒；
 ;;   · 踩上绿色发光柱＝出口 → 过关；死亡/过关/通关三套结算画面，点击或按键继续。
+;;   · **AI 自动游玩**（左上「AI 手动 / AI 自动」按钮或键盘 G）：BFS 距离场寻路 + 交战
+;;     目标获取 + 自动开门/换枪/拾取 + 卡住自愈，能自己把三关打完并自动续关（演示模式）；
+;;     AI 的输出走与人类输入**同一条通路**，物理/命中判定完全一致。详见文件内 AI 段落。
 ;;
 ;; 触屏适配（本平台只有**单点**触控：页面 Pointer Events 只跟踪一个 activePointerId，
 ;; Touch 本地库也只给电平 + 一个坐标，因此不能「左手走 + 右手转 + 同时开火」）：
@@ -36,7 +39,8 @@
 ;;   · 右下「开火」按住连发；其上方「开门」「换枪」单次；左上「自动开火」开关：
 ;;     打开后若 30° 锥内有看得见的敌人，视角会被**限速**拉向它（95°/s，不抢手动转向）
 ;;     并在对准时自动扣扳机 —— 这是单指也能走位+输出、且不会从背后被白打的关键；
-;;   · 物理键盘同样可用（WASD 走、←→ 转、空格开火、E 开门、1/2/3 换枪、T 自动开火）。
+;;   · 物理键盘同样可用（WASD 走、←→ 转、空格开火、E 开门、1/2/3 换枪、T 自动开火、
+;;     G 切换 AI）；AI 运行中在屏幕别处按下手指立刻交还手动（与俄罗斯方块同约定）。
 ;;
 ;; 解释器约束（manual.md，逐条遵守）：算术恒二参数（多操作数会污染操作数栈）；
 ;; 无一元取负、无 let/list/map/apply；cond 每子句只能一个表达式（本文件一律用 if）；
@@ -486,6 +490,13 @@
     (set! st_timer 0.0)
     (set! msg_text (String.concat "第 " (String.concat (String.atom_to_string (+ li 1)) " 关 · 找到绿色出口")))
     (set! msg_ms 2600)
+    (ai_build_walk)              ; AI 可通行表（门/出口算路）
+    (set! ai_replan 0.0)
+    (set! ai_stuck 0.0)
+    (set! ai_detour 0.0)
+    (set! ai_ti -1)
+    (set! ai_px_prev px)
+    (set! ai_py_prev py)
     (update_cam)))
 
 ;; ============================================================================
@@ -1132,8 +1143,12 @@
     (draw_panel 81 77)
     (draw_panel 160 77)
     (draw_panel 239 79)
-    ;; 生命
+    ;; 生命（AI 自动游玩时面板上打「AI」角标）
     (Gfx.draw_text "生命" 6 yl 196 186 168)
+    (if (== ai_on 1) {
+      (Gfx.fill_rect 46 yl 18 12 40 110 74)
+      (Gfx.draw_text "AI" 49 (+ yl 1) 235 244 236)
+    })
     (Gfx.draw_text (String.atom_to_string hp) 6 yv (if (< hp 31) 236 96 92) 226 214)
     ;; 弹药
     (Gfx.draw_text (if (== wsel 0) "弹药·手枪" (if (== wsel 1) "弹药·霰弹" "弹药·链枪")) 85 yl 196 186 168)
@@ -1155,7 +1170,8 @@
 (define FIREx 286) (define FIREy (- VH 32)) (define FIREr 24)
 (define USEx 240) (define USEy (- VH 26)) (define USEr 17)
 (define SWX 240) (define SWY (- VH 70)) (define SWr 15)
-(define AFx 10) (define AFy 26) (define AFw 66) (define AFh 16)
+(define AFx 6) (define AFy 26) (define AFw 60) (define AFh 16)     ; 自动开火
+(define AIBx 70) (define AIBy 26) (define AIBw 56) (define AIBh 16) ; AI 手动/自动
 
 (define draw_crosshair
   (lambda ()
@@ -1173,16 +1189,26 @@
 
 (define draw_touch_ui
   (lambda ()
-    ;; 自动开火开关
+    ;; 自动开火 / AI 自动游玩 两枚开关
     (if (== auto_fire 1) {
       (Gfx.fill_rect AFx AFy AFw AFh 40 110 74)
       (Gfx.draw_rect AFx AFy AFw AFh 96 190 140)
-      (Gfx.draw_text "自动开火" (+ AFx 4) (+ AFy 2) 235 244 236)
+      (Gfx.draw_text "自动开火" (+ AFx 3) (+ AFy 2) 235 244 236)
     }
     {
       (Gfx.fill_rect AFx AFy AFw AFh 46 46 50)
       (Gfx.draw_rect AFx AFy AFw AFh 12 12 16)
-      (Gfx.draw_text "自动开火" (+ AFx 4) (+ AFy 2) 150 152 158)
+      (Gfx.draw_text "自动开火" (+ AFx 3) (+ AFy 2) 150 152 158)
+    })
+    (if (== ai_on 1) {
+      (Gfx.fill_rect AIBx AIBy AIBw AIBh 40 110 74)
+      (Gfx.draw_rect AIBx AIBy AIBw AIBh 96 190 140)
+      (Gfx.draw_text "AI 自动" (+ AIBx 3) (+ AIBy 2) 235 244 236)
+    }
+    {
+      (Gfx.fill_rect AIBx AIBy AIBw AIBh 46 46 50)
+      (Gfx.draw_rect AIBx AIBy AIBw AIBh 12 12 16)
+      (Gfx.draw_text "AI 手动" (+ AIBx 3) (+ AIBy 2) 150 152 158)
     })
     (draw_btn FIREx FIREy FIREr "开火" 168 54 48)
     (draw_btn USEx USEy USEr "开门" 62 86 130)
@@ -1260,6 +1286,7 @@
     (draw_text_c "触屏：左半屏拖动=移动 · 右半屏拖动=转向" (/ W 2.0) 164 196 196 206)
     (draw_text_c "轻点右半屏 / 右下角按钮=开火 · T 自动开火" (/ W 2.0) 180 196 196 206)
     (draw_text_c "键盘：WASD 走 · ←→ 转 · 空格开火 · E 开门" (/ W 2.0) 196 158 160 172)
+    (draw_text_c "G = AI 自动游玩（自己寻路/交战/开门/拾取）" (/ W 2.0) 212 176 200 176)
     (Gfx.fill_rect (- (/ W 2.0) 72) 214 144 20 150 52 40)
     (Gfx.fill_rect (- (/ W 2.0) 72) 214 144 2 226 128 80)
     (draw_text_c "点  击  开  始" (/ W 2.0) 217 250 240 232)))
@@ -1327,6 +1354,9 @@
 (define touch_begin
   (lambda (x y)
     (set! tap_now 1)
+    ;; AI 自动运行中：除「AI 开关」外任意位置按下 → 立刻交还手动（这一下照常生效）
+    (if (== ai_on 1)
+        (if (== (hit_rect x y AIBx AIBy AIBw AIBh) 0) (ai_set 0)))
     (set! t_down 1)
     (set! t_move 0.0)
     (set! t_start now_ms)
@@ -1336,6 +1366,7 @@
     (if (and (== t_mode 0) (== (hit_circle x y USEx USEy (+ USEr 6)) 1)) { (set! btn 2) (set! t_mode 3) })
     (if (and (== t_mode 0) (== (hit_circle x y SWX SWY (+ SWr 6)) 1)) { (set! btn 3) (set! t_mode 3) })
     (if (and (== t_mode 0) (== (hit_rect x y AFx AFy AFw AFh) 1)) { (set! btn 4) (set! t_mode 3) })
+    (if (and (== t_mode 0) (== (hit_rect x y AIBx AIBy AIBw AIBh) 1)) { (set! btn 5) (set! t_mode 3) })
     (if (and (== t_mode 0) (< x 150)) {
       (set! t_mode 1)
       (set! t_ox x) (set! t_oy y)
@@ -1350,6 +1381,7 @@
     (if (== btn 2) (set! want_use 1))
     (if (== btn 3) (set! want_swap 1))
     (if (== btn 4) (set! auto_fire (if (== auto_fire 1) 0 1)))
+    (if (== btn 5) (ai_set (if (== ai_on 1) 0 1)))
     (if (== btn 1) (set! want_fire 1))))
 
 (define touch_move
@@ -1394,6 +1426,7 @@
             (if (== d 50) (set! want_swap 102))               ; 2 霰弹枪
             (if (== d 51) (set! want_swap 103))               ; 3 链枪
             (if (== d 116) (set! auto_fire (if (== auto_fire 1) 0 1)))  ; t 自动开火
+            (if (== d 103) (ai_set (if (== ai_on 1) 0 1)))              ; g AI 自动
           })
     })
     (set! kb_fwd (if (or (Key.is_down 119) (Key.is_down 1)) 1 0))
@@ -1800,6 +1833,7 @@
         (display " nd=") (display (Math.to_fixed dbg_nd 1))
         (display " na=") (display (Math.floor dbg_na))
         (display " ns=") (display dbg_ns)
+        (display " ai=") (display ai_on)
         (display " fps=") (display fps_v)
         (newline)
       })))
@@ -1823,6 +1857,404 @@
       (set! i (+ i 1))
     })))
 
+;; ============================================================================
+;; AI 自动游玩（自动寻路 + 交战 + 开门 + 拾取）
+;;
+;; 目标：一个「会自己把一关打完」的演示模式（对齐 app/tetris.scm、app/flappy.scm 里
+;; 已有的「AI 手动 / AI 自动」开关惯例）。每拍做一次决策，输出与人类输入**同一条通路**
+;; （ai_aim 直接加到朝向上、ai_fwd/ai_strafe 走 move_player、ai_fire 走 do_fire），
+;; 因此 AI 与玩家的物理/碰撞/命中判定完全一致，没有"作弊穿墙"的旁路。
+;;
+;; 三层决策（每拍）：
+;;   ① **交战**：9 格内有视线（los_clear）的最近敌人 → 限速转向对准它，对准即开火
+;;      （目标每 0.25 秒重取一次，且只对由近到远前 3 个候选做视线检测 —— 每拍全量检测
+;;      在 L2 大厅会同时命中七八只怪，帧率掉到 14fps）；
+;;      按距离换枪（<3 格霰弹枪、<7 格链枪、否则手枪，弹药不足自动退回手枪）；
+;;      远程怪（火球兵）在 2.5 格外时左右横移躲火球。
+;;   ② **寻路**：没有可见敌人时，沿「目标距离场」的梯度走进下一格。
+;;      距离场只有一张 MSIZE 长的表 ai_dist：以**候选目标格**为源做 BFS，既用于梯度下降
+;;      （每拍取四邻里距离最小且小于自身的那一格，朝它的格心走），也用于可达性判定
+;;      （玩家格在该场里的距离 ≥ 0 才算可达；否则换下一个候选）。
+;;      目标优先级：最近的活敌 → 血量低于 45 时的医疗包 → 出口。
+;;      BFS 只在「重规划时刻（1.5 秒）/目标失效/卡住」时跑，一次约 700 格 × 4 邻；
+;;      寻路期间实测仍是 28~30fps（见 regress_doom.js 的帧率判据）。
+;;   ③ **脱困**：连续 0.4 秒想走却走不动 → 强制重规划 + 侧移 0.35 秒（左右交替），
+;;      避免卡在门框/墙角上原地磨。
+;;
+;; 门：距离场把门当成可通行格（否则一整片房间会被判成不可达）；真正走到门前时
+;;     AI 面向门并调 (try_use) 开门，门没开满就不往前顶。
+;;
+;; 人机切换：左上「AI 手动 / AI 自动」按钮、键盘 G；AI 运行中在屏幕别处按下手指
+;; 立刻交还手动（与俄罗斯方块/弹幕陨石的约定一致，按下的那一下照常生效）。
+;; ============================================================================
+
+(define ai_on 0)                  ; 0 手动 1 AI 自动
+(define ai_walk (quote ()))       ; 可通行查表（0/1，随关卡预计算；门与出口算可通行）
+(define ai_skip (quote ()))       ; 候选跳过表（选目标时避免重复试同一只怪）
+(define ai_dist (quote ()))       ; BFS：以目标格为源的距离场（梯度用）
+(define ai_gx 0) (define ai_gy 0) ; 当前目标格（只用于调试观察；寻路走 ai_dist）
+(define ai_gk 0)                  ; 目标类型：1 敌人 2 医疗包 3 出口
+(define ai_replan 0.0)            ; 距下次重规划的秒数
+(define ai_stuck 0.0)             ; 「想走走不动」累计秒数
+(define ai_px_prev 0.0)           ; 上次记录的位置（判进度）
+(define ai_py_prev 0.0)
+(define ai_detour 0.0)            ; 侧移脱困剩余秒数
+(define ai_detour_dir 1)          ; 侧移方向 ±1
+(define ai_aim 0.0)               ; 本拍 AI 转向量（度，已含限速）
+(define ai_fwd 0.0)               ; 本拍 AI 前进量（-1..1）
+(define ai_strafe 0.0)            ; 本拍 AI 平移量（-1..1）
+(define ai_fire 0)                ; 本拍 AI 是否要开火
+(define ai_ti -1)                 ; 当前交战目标下标（-1 无）
+(define ai_td 0.0)                ; 交战目标距离
+(define ai_acq 0.0)               ; 交战目标重取倒计时（秒）
+(define ai_ndoor 0)               ; 本拍是否要开门
+
+(define init_ai
+  (lambda ()
+    (set! ai_walk (mklist MSIZE))
+    (set! ai_skip (mklist EMAX))
+    (set! ai_dist (mklist MSIZE))))
+
+;; 重算可通行表：空地/门/出口算可通行（门要走到跟前才开，寻路阶段先当路）
+(define ai_build_walk
+  (lambda ()
+    (define i 0) (define t 0)
+    (set! i 0)
+    (while (< i MSIZE) {
+      (set! t (get_item map i))
+      (set_item! ai_walk i (if (== t 0) 1 (if (== t 6) 1 (if (== t 9) 1 0))))
+      (set! i (+ i 1))
+    })))
+
+;; 以 (tx,ty) 为源做 BFS，把距离写进 field（-1 = 不可达）。
+;; 队列是「push 到尾部 + 头指针前移」的 FIFO（本解释器的 push 是尾插、pop 是尾取，
+;; 直接用 pop 会变成 DFS，得不到最短路）。
+(define ai_bfs
+  (lambda (field tx ty)
+    (define i 0) (define head 0) (define cur 0) (define cx 0) (define cy 0)
+    (define d0 0) (define q (cons 0 (quote ())))
+    (define nxt 0)
+    (pop q)
+    (set! i 0)
+    (while (< i MSIZE) {
+      (set_item! field i -1)
+      (set! i (+ i 1))
+    })
+    (if (== (get_item ai_walk (+ (* ty MW) tx)) 1) {
+      (set_item! field (+ (* ty MW) tx) 0)
+      (push q (+ (* ty MW) tx))
+    })
+    (set! head 0)
+    (while (< head (length q)) {
+      (set! cur (get_item q head))
+      (set! d0 (+ (get_item field cur) 1))
+      (set! cx (Math.floor (mod cur MW)))
+      (set! cy (Math.floor (/ cur MW)))
+      (if (> cx 0) {
+        (set! nxt (- cur 1))
+        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1))
+            { (set_item! field nxt d0) (push q nxt) })
+      })
+      (if (< cx (- MW 1)) {
+        (set! nxt (+ cur 1))
+        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1))
+            { (set_item! field nxt d0) (push q nxt) })
+      })
+      (if (> cy 0) {
+        (set! nxt (- cur MW))
+        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1))
+            { (set_item! field nxt d0) (push q nxt) })
+      })
+      (if (< cy (- MH 1)) {
+        (set! nxt (+ cur MW))
+        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1))
+            { (set_item! field nxt d0) (push q nxt) })
+      })
+      (set! head (+ head 1))
+    })))
+
+;; 选目标：最近的「可达」活敌 → （血量 < 45 时）最近的医疗包 → 出口。
+;;
+;; 只跑**一次** BFS：以候选目标格为源算距离场，顺带用「玩家格在该场里的距离是否 ≥ 0」
+;; 回答可达性；不可达就换下一个候选（最多各试 4 / 3 个）。因为门在可通行表里算路，
+;; 全图基本连通，所以绝大多数重规划只跑一次 BFS（这是 AI 模式不拖慢节拍的关键：
+;; 早先版本每次重规划跑两次 BFS，浏览器里帧率一度掉到 ~14fps）。
+(define ai_choose_goal
+  (lambda ()
+    (define i 0) (define pass 0) (define bi -1) (define bd 999.0) (define d 0.0)
+    (define gk 0) (define gx 0) (define gy 0) (define pc 0)
+    (set! pc (+ (* (Math.floor py) MW) (Math.floor px)))
+    (set! gk 0)
+    (set! i 0)
+    (while (< i EMAX) {
+      (set_item! ai_skip i 0)
+      (set! i (+ i 1))
+    })
+    ;; ① 敌人：按欧氏距离由近到远试，最多 4 个
+    (set! pass 0)
+    (while (and (< pass 4) (== gk 0)) {
+      (set! bi -1)
+      (set! bd 999.0)
+      (set! i 0)
+      (while (< i en_n) {
+        (if (and (> (get_item en_hp i) 0) (== (get_item ai_skip i) 0)) {
+          (set! d (dist2d (get_item en_x i) (get_item en_y i) px py))
+          (if (< d bd) {
+            (set! bd d)
+            (set! bi i)
+          })
+        })
+        (set! i (+ i 1))
+      })
+      (if (>= bi 0) {
+        (set_item! ai_skip bi 1)
+        (set! gx (Math.floor (get_item en_x bi)))
+        (set! gy (Math.floor (get_item en_y bi)))
+        (ai_bfs ai_dist gx gy)
+        (if (>= (get_item ai_dist pc) 0) (set! gk 1))
+      })
+      (set! pass (+ pass 1))
+    })
+    ;; ② 血量偏低时找医疗包（同样按距离由近到远试，最多 3 个）
+    (set! pass 0)
+    (while (and (== gk 0) (< hp 45) (< pass 3)) {
+      (set! bi -1)
+      (set! bd 999.0)
+      (set! i 0)
+      (while (< i it_n) {
+        (if (and (== (get_item it_al i) 1) (== (get_item it_k i) 10)
+                 (== (get_item ai_skip i) 0)) {
+          (set! d (dist2d (get_item it_x i) (get_item it_y i) px py))
+          (if (< d bd) {
+            (set! bd d)
+            (set! bi i)
+          })
+        })
+        (set! i (+ i 1))
+      })
+      (if (>= bi 0) {
+        (set_item! ai_skip bi 1)
+        (set! gx (Math.floor (get_item it_x bi)))
+        (set! gy (Math.floor (get_item it_y bi)))
+        (ai_bfs ai_dist gx gy)
+        (if (>= (get_item ai_dist pc) 0) (set! gk 2))
+      })
+      (set! pass (+ pass 1))
+    })
+    ;; ③ 出口
+    (if (== gk 0) {
+      (set! gx (Math.floor exit_x))
+      (set! gy (Math.floor exit_y))
+      (ai_bfs ai_dist gx gy)
+      (if (>= (get_item ai_dist pc) 0) (set! gk 3))
+    })
+    (set! ai_gk gk)
+    (set! ai_gx gx)
+    (set! ai_gy gy)))
+
+;; 限速转向：把朝向朝 target 角转最多 maxdeg 度，写进 ai_aim
+(define ai_face
+  (lambda (target maxdeg)
+    (define ad 0.0)
+    (set! ad (ang_diff target pang))
+    (set! ad (clampf ad (- 0.0 maxdeg) maxdeg))
+    (set! ai_aim ad)))
+
+;; 交战目标获取（每 0.25 秒一次，或目标死亡/跑远时立刻重取）。
+;; 只对「由近到远的前 3 个候选」做视线检测：L2 的大厅里同时可见的怪可能有七八只，
+;; 每拍全量 los_clear 会把帧率拖到 14fps（实测），而目标并不会每帧都变。
+(define ai_acquire
+  (lambda ()
+    (define i 0) (define pass 0) (define bi -1) (define bd 999.0) (define d 0.0)
+    (set! ai_ti -1)
+    (set! ai_td 999.0)
+    (set! i 0)
+    (while (< i en_n) {
+      (set_item! ai_skip i 0)
+      (set! i (+ i 1))
+    })
+    (set! pass 0)
+    (while (and (< pass 3) (< ai_ti 0)) {
+      (set! bi -1)
+      (set! bd 999.0)
+      (set! i 0)
+      (while (< i en_n) {
+        (if (and (> (get_item en_hp i) 0) (== (get_item ai_skip i) 0)) {
+          (set! d (dist2d (get_item en_x i) (get_item en_y i) px py))
+          (if (< d bd) {
+            (set! bd d)
+            (set! bi i)
+          })
+        })
+        (set! i (+ i 1))
+      })
+      (if (>= bi 0) {
+        (set_item! ai_skip bi 1)
+        (if (< bd 9.0)
+            (if (== (los_clear px py (get_item en_x bi) (get_item en_y bi)) 1) {
+              (set! ai_ti bi)
+              (set! ai_td bd)
+            }))
+      })
+      (set! pass (+ pass 1))
+    })))
+
+;; 交战：返回 1 表示本拍进入交战（已写好 ai_aim / ai_fwd / ai_fire）
+(define ai_combat
+  (lambda ()
+    (define ex 0.0) (define ey 0.0) (define a 0.0) (define ad 0.0) (define k 0)
+    ;; 目标维护：没有/已死/跑远/定时到期 → 重新获取
+    (if (< ai_ti 0) (set! ai_acq 0.0))
+    (if (>= ai_ti 0)
+        (if (<= (get_item en_hp ai_ti) 0) (set! ai_acq 0.0)))
+    (if (>= ai_ti 0)
+        (if (> (dist2d (get_item en_x ai_ti) (get_item en_y ai_ti) px py) 10.0)
+            (set! ai_acq 0.0)))
+    (set! ai_acq (- ai_acq dt))
+    (if (<= ai_acq 0.0) {
+      (set! ai_acq 0.25)
+      (ai_acquire)
+    })
+    (if (>= ai_ti 0) {
+      (set! ex (get_item en_x ai_ti))
+      (set! ey (get_item en_y ai_ti))
+      (set! k (get_item en_k ai_ti))
+      (set! ai_td (dist2d ex ey px py))
+      (set! a (/ (* (Math.atan2 (- ey py) (- ex px)) 180.0) (Math.PI)))
+      ;; 转向（300°/s 上限）
+      (ai_face a (* 300.0 dt))
+      (set! ad (Math.abs (ang_diff a pang)))
+      ;; 换枪：贴身霰弹、中距离链枪、其余手枪；对应弹药为 0 就退回手枪
+      (set! wsel (if (and (< ai_td 3.0) (> shells 0)) 1
+                     (if (and (< ai_td 7.0) (> bullets 0)) 2 0)))
+      ;; 开火：对准（±7°）且冷却就绪
+      (if (and (< ad 7.0) (<= fire_cd 0.0)) (set! ai_fire 1))
+      ;; 走位：>2.6 格就往前压；对火球兵再加左右横移躲弹
+      (set! ai_fwd (if (> ai_td 2.6) 0.85 0.0))
+      (if (and (== k 1) (> ai_td 2.5))
+          (set! ai_strafe (* 0.7 (Math.sin (* 0.006 now_ms)))))
+      (set! ai_ndoor 0)
+      1
+    }
+    (if (< ai_ti 0) 0))))
+
+;; 寻路：沿 ai_dist 梯度走（返回 1 表示已在走）
+(define ai_nav
+  (lambda ()
+    (define cx 0) (define cy 0) (define cur 0) (define d 0) (define bd 9999)
+    (define ni -1) (define t 0) (define nx 0.0) (define ny 0.0) (define a 0.0)
+    (define ad 0.0)
+    (set! cx (Math.floor px))
+    (set! cy (Math.floor py))
+    (set! cur (+ (* cy MW) cx))
+    (set! d (get_item ai_dist cur))
+    (set! ni -1)
+    (set! bd 9999)
+    (if (> cx 0) {
+      (set! t (get_item ai_dist (- cur 1)))
+      (if (and (>= t 0) (< t d) (< t bd)) { (set! bd t) (set! ni (- cur 1)) })
+    })
+    (if (< cx (- MW 1)) {
+      (set! t (get_item ai_dist (+ cur 1)))
+      (if (and (>= t 0) (< t d) (< t bd)) { (set! bd t) (set! ni (+ cur 1)) })
+    })
+    (if (> cy 0) {
+      (set! t (get_item ai_dist (- cur MW)))
+      (if (and (>= t 0) (< t d) (< t bd)) { (set! bd t) (set! ni (- cur MW)) })
+    })
+    (if (< cy (- MH 1)) {
+      (set! t (get_item ai_dist (+ cur MW)))
+      (if (and (>= t 0) (< t d) (< t bd)) { (set! bd t) (set! ni (+ cur MW)) })
+    })
+    (if (>= ni 0) {
+      ;; 下一格若是没开满的门 → 面向它、开门，不往前顶
+      (set! t (get_item map ni))
+      (if (and (== t 6) (< (get_item doorf ni) 0.9)) {
+        (set! nx (+ (Math.floor (mod ni MW)) 0.5))
+        (set! ny (+ (Math.floor (/ ni MW)) 0.5))
+        (set! a (/ (* (Math.atan2 (- ny py) (- nx px)) 180.0) (Math.PI)))
+        (ai_face a (* 260.0 dt))
+        (set! ad (Math.abs (ang_diff a pang)))
+        (if (< ad 22.0) (set! ai_ndoor 1))
+        (set! ai_fwd 0.0)
+      }
+      {
+        (set! nx (+ (Math.floor (mod ni MW)) 0.5))
+        (set! ny (+ (Math.floor (/ ni MW)) 0.5))
+        (set! a (/ (* (Math.atan2 (- ny py) (- nx px)) 180.0) (Math.PI)))
+        (ai_face a (* 260.0 dt))
+        (set! ad (Math.abs (ang_diff a pang)))
+        ;; 大致对准才前进（否则原地转），避免贴墙磨
+        (set! ai_fwd (if (< ad 45.0) 1.0 0.0))
+      })
+    })
+    (if (>= ni 0) 1 0)))
+
+;; 每拍 AI 决策入口（在 update_world 里、应用移动之前调用）
+(define ai_tick
+  (lambda ()
+    (define moving 0) (define prog 0.0)
+    (set! ai_aim 0.0)
+    (set! ai_fwd 0.0)
+    (set! ai_strafe 0.0)
+    (set! ai_fire 0)
+    (set! ai_ndoor 0)
+    ;; 重规划倒计时 / 目标失效时重规划
+    (set! ai_replan (- ai_replan dt))
+    (if (<= ai_replan 0.0) {
+      (set! ai_replan 1.5)
+      (ai_choose_goal)
+    })
+    ;; 目标敌人已死 → 立刻重规划（不必等 1.2 秒）
+    (if (and (== ai_gk 1) (>= ai_ti 0) (<= (get_item en_hp ai_ti) 0)) (set! ai_replan 0.0))
+    ;; ① 交战优先
+    (set! moving (ai_combat))
+    ;; ② 无可见敌人 → 寻路
+    (if (== moving 0) (ai_nav))
+    ;; ③ 脱困：想走却几乎没动 → 侧移 + 重规划（显式嵌套 if，避免把 else 写成
+    ;;    "无条件执行的额外语句"）
+    (if (> ai_fwd 0.5)
+        (if (< ai_detour 0.0)
+            (if (< (dist2d px py ai_px_prev ai_py_prev) 0.02)
+                {
+                  (set! prog 0.0)
+                  (set! ai_stuck (+ ai_stuck dt))
+                  (if (> ai_stuck 0.4) {
+                    (set! ai_stuck 0.0)
+                    (set! ai_detour 0.35)
+                    (set! ai_detour_dir (- 0.0 ai_detour_dir))
+                    (set! ai_replan 0.0)
+                  })
+                }
+                {
+                  (set! ai_stuck 0.0)
+                  (set! ai_px_prev px)
+                  (set! ai_py_prev py)
+                })
+            #f)
+        #f)
+    (if (> ai_detour 0.0) {
+      (set! ai_detour (- ai_detour dt))
+      (set! ai_strafe ai_detour_dir)
+      (set! ai_fwd 0.55)
+    })
+    ;; 开门：寻路请求或贴身时兜底
+    (if (== ai_ndoor 1) (set! want_use 1))
+    (if (== ai_fire 1) (set! want_fire 1))))
+
+;; 开关 AI（按钮 / 键盘 G 共用）；切换时重置内部状态
+(define ai_set
+  (lambda (v)
+    (set! ai_on v)
+    (set! ai_replan 0.0)
+    (set! ai_stuck 0.0)
+    (set! ai_detour 0.0)
+    (set! ai_px_prev px)
+    (set! ai_py_prev py)
+    (if (== v 1) (msg_show "AI 自动游玩：寻路 · 交战 · 开门 · 拾取" 2200)
+                 (msg_show "已交还手动控制" 1400))
+    (display "[doom] ai=") (display ai_on) (newline)))
+
 ;; 一拍的世界推进
 (define update_world
   (lambda ()
@@ -1838,18 +2270,27 @@
     (if (> msg_ms 0) (set! msg_ms (- msg_ms (Math.floor (* dt 1000.0)))))
     (if (or (== kb_turnl 1) (== kb_turnr 1)) (set! turn_in 1))
     (if (> (Math.abs turn_drag) 0.01) (set! turn_in 1))
+    ;; AI 自动游玩：决策先跑，随后把它的输出并进与人类输入同一条通路
+    (if (== ai_on 1) {
+      (ai_tick)
+      (set! turn_in 1)              ; 让辅助瞄准让路（AI 自己负责瞄准）
+    })
     ;; 键盘转向是角速度（°/s），触屏拖动是"本拍的角度增量"（°，已按像素折算）——
     ;; 两者量纲不同，必须分别处理：早先把 turn_drag 也乘了 dt，拖动转向几乎不动。
     (set! trn 0.0)
     (if (== kb_turnl 1) (set! trn (- 0.0 150.0)))
     (if (== kb_turnr 1) (set! trn 150.0))
-    (set! pang (wrap360 (+ pang (+ (* trn dt) turn_drag))))
+    (set! pang (wrap360 (+ pang (+ (* trn dt) (+ turn_drag ai_aim)))))
     (update_cam)
     ;; 前后/平移
     (set! fwd (- (+ kb_fwd 0.0) (+ kb_back 0.0)))
     (set! fwd (+ fwd (- 0.0 joy_dy)))
     (set! str (- (+ kb_right 0.0) (+ kb_left 0.0)))
     (set! str (+ str joy_dx))
+    (if (== ai_on 1) {
+      (set! fwd ai_fwd)
+      (set! str ai_strafe)
+    })
     (set! fwd (clampf fwd (- 0.0 1.0) 1.0))
     (set! str (clampf str (- 0.0 1.0) 1.0))
     (set! vx (+ (* fwd pdirx) (* str (- 0.0 pdiry))))
@@ -1857,7 +2298,7 @@
     (move_player vx vy)
     ;; 动作
     (if (== want_use 1) (try_use))
-    (combat_assist)
+    (if (== ai_on 0) (combat_assist))
     (if (== want_fire 1) (if (<= fire_cd 0.0) (do_fire)))
     ;; 世界
     (update_enemies)
@@ -1910,6 +2351,8 @@
       (set! st_timer (+ st_timer dt))
       (if (> st_timer 0.6)
           (if (== tap_now 1) (advance_state)))
+      ;; AI 自动游玩时自行续关/重来（演示模式可以一直跑下去）
+      (if (and (== ai_on 1) (> st_timer 1.4)) (advance_state))
     })
     (render)
     (set! dbg_ms (+ dbg_ms (Math.floor (* dt 1000.0))))
@@ -1935,6 +2378,7 @@
 ;; ---- 启动：形状表 / 数组 / 第 1 关 → 标题页 ----
 (init_shapes)
 (init_sl)
+(init_ai)
 (set! last_ms (System.timestamp))
 (set! now_ms last_ms)
 (load_level 0)
