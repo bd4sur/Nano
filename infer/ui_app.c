@@ -1551,246 +1551,191 @@ void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state) {
     s_linglong_touch_owned = 1; // 主天空界面（含启动画面停留期）：触屏归显式控件，抑制宫格软键
 }
 
-void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state) {
-    uint8_t txt_color[4][4][3] = {
-        {{0,0,0}, {0,0,0}, {0,0,0}, {0,0,0},},
-        {{0,0,0}, {0,0,0}, {0,0,0}, {0,0,0},},
-        {{0,0,0}, {0,0,0}, {0,0,0}, {0,0,0},},
-        {{0,0,0}, {0,0,0}, {0,0,0}, {0,0,0},},
-    };
-    wchar_t cell_text[4][4][2][10] = {
-        { {L"投影算法", L"鱼眼",}, {L"赤道坐标", L"关",}, {L"地平坐标", L"方位角",}, {L"退出玲珑仪", L"",}, },
-        { {L"黄道", L"关",}, {L"天体名称", L"关",}, {L"姿态指示", L"关",}, {L"校准IMU", L"",}, },
-        { {L"大气散射", L"二次散射",}, {L"地景", L"草原全景",}, {L"平滑滤波", L"开",}, {L"返回", L"",}, },
-        { {L"时间", L"",}, {L"跟踪太阳", L"关",}, {L"位置", L"",}, {L"", L"",}, },
-    };
-
-    // (0,0)投影算法
-    if (global_state->linglong_cfg->projection == 0) {
-        wcscpy(cell_text[0][0][1], L"鱼眼");
-        txt_color[0][0][0] = 0;
-        txt_color[0][0][1] = 255;
-        txt_color[0][0][2] = 255;
+// 设置界面的功能格映射：返回现有处理链使用的键码（调用前会置 Ctrl 激活）。
+// 顺序按新 5x4 布局的行优先排列；无功能备用格返回 NANO_KEY_IDLE。
+static int32_t ui_app_linglong_setting_cell_key(int32_t cell) {
+    switch (cell) {
+        case 0:  return NANO_KEY_1;    // 投影算法
+        case 1:  return NANO_KEY_2;    // 赤道坐标
+        case 2:  return NANO_KEY_3;    // 地平坐标
+        case 3:  return NANO_KEY_4;    // 黄道
+        case 4:  return NANO_KEY_ctrl; // 返回
+        case 5:  return NANO_KEY_7;    // 大气散射
+        case 6:  return NANO_KEY_8;    // 地景
+        case 7:  return NANO_KEY_5;    // 天体名称
+        case 8:  return NANO_KEY_9;    // 平滑滤波
+        case 9:  return NANO_KEY_0;    // 跟踪太阳
+        case 10: return NANO_KEY_0;    // 跟踪太阳（第 3 行首格，按需求保留的第二枚）
+        default: return NANO_KEY_IDLE;
     }
-    else {
-        wcscpy(cell_text[0][0][1], L"透视");
-        txt_color[0][0][0] = 0;
-        txt_color[0][0][1] = 255;
-        txt_color[0][0][2] = 255;
-    }
-
-    // (0,1)赤道坐标
-    if (global_state->linglong_cfg->enable_equatorial_coord == 0) {
-        wcscpy(cell_text[0][1][1], L"关");
-        txt_color[0][1][0] = 222;
-        txt_color[0][1][1] = 0;
-        txt_color[0][1][2] = 0;
-    }
-    else {
-        wcscpy(cell_text[0][1][1], L"开");
-        txt_color[0][1][0] = 0;
-        txt_color[0][1][1] = 255;
-        txt_color[0][1][2] = 0;
-    }
-
-    // (0,2)地平坐标
-    switch (global_state->linglong_cfg->enable_horizontal_coord) {
-        case 0:
-            wcscpy(cell_text[0][2][1], L"关");
-            txt_color[0][2][0] = 222;
-            txt_color[0][2][1] = 0;
-            txt_color[0][2][2] = 0;
-            break;
-        case 1:
-            wcscpy(cell_text[0][2][1], L"方位角");
-            txt_color[0][2][0] = 0;
-            txt_color[0][2][1] = 255;
-            txt_color[0][2][2] = 255;
-            break;
-        case 2:
-            wcscpy(cell_text[0][2][1], L"坐标圈");
-            txt_color[0][2][0] = 0;
-            txt_color[0][2][1] = 255;
-            txt_color[0][2][2] = 255;
-            break;
-        default: break;
-    }
-
-    // (1,0)黄道
-    if (global_state->linglong_cfg->enable_ecliptic_circle == 0) {
-        wcscpy(cell_text[1][0][1], L"关");
-        txt_color[1][0][0] = 222;
-        txt_color[1][0][1] = 0;
-        txt_color[1][0][2] = 0;
-    }
-    else {
-        wcscpy(cell_text[1][0][1], L"开");
-        txt_color[1][0][0] = 0;
-        txt_color[1][0][1] = 255;
-        txt_color[1][0][2] = 0;
-    }
-
-    // (1,1)地平坐标
-    switch (global_state->linglong_cfg->enable_star_name) {
-        case 0:
-            wcscpy(cell_text[1][1][1], L"关");
-            txt_color[1][1][0] = 222;
-            txt_color[1][1][1] = 0;
-            txt_color[1][1][2] = 0;
-            break;
-        case 1:
-            wcscpy(cell_text[1][1][1], L"仅恒星");
-            txt_color[1][1][0] = 0;
-            txt_color[1][1][1] = 255;
-            txt_color[1][1][2] = 255;
-            break;
-        case 2:
-            wcscpy(cell_text[1][1][1], L"仅行星");
-            txt_color[1][1][0] = 0;
-            txt_color[1][1][1] = 255;
-            txt_color[1][1][2] = 255;
-            break;
-        case 3:
-            wcscpy(cell_text[1][1][1], L"全部显示");
-            txt_color[1][1][0] = 0;
-            txt_color[1][1][1] = 255;
-            txt_color[1][1][2] = 255;
-            break;
-        default: break;
-    }
-
-    // (1,2)姿态指示
-    if (global_state->linglong_cfg->enable_att_indicator == 0) {
-        wcscpy(cell_text[1][2][1], L"关");
-        txt_color[1][2][0] = 222;
-        txt_color[1][2][1] = 0;
-        txt_color[1][2][2] = 0;
-    }
-    else {
-        wcscpy(cell_text[1][2][1], L"开");
-        txt_color[1][2][0] = 0;
-        txt_color[1][2][1] = 255;
-        txt_color[1][2][2] = 0;
-    }
-
-    // (2,0)大气散射
-    switch (global_state->linglong_cfg->sky_model) {
-        case 0:
-            wcscpy(cell_text[2][0][1], L"关");
-            txt_color[2][0][0] = 222;
-            txt_color[2][0][1] = 0;
-            txt_color[2][0][2] = 0;
-            break;
-        case 1:
-            wcscpy(cell_text[2][0][1], L"简化模型");
-            txt_color[2][0][0] = 0;
-            txt_color[2][0][1] = 255;
-            txt_color[2][0][2] = 255;
-            break;
-        case 2:
-            wcscpy(cell_text[2][0][1], L"一次散射");
-            txt_color[2][0][0] = 0;
-            txt_color[2][0][1] = 255;
-            txt_color[2][0][2] = 255;
-            break;
-        case 3:
-            wcscpy(cell_text[2][0][1], L"二次散射");
-            txt_color[2][0][0] = 0;
-            txt_color[2][0][1] = 255;
-            txt_color[2][0][2] = 255;
-            break;
-        case 4:
-            wcscpy(cell_text[2][0][1], L"体积云");
-            txt_color[2][0][0] = 255;
-            txt_color[2][0][1] = 170;
-            txt_color[2][0][2] = 0;
-            break;
-        case 5:
-            wcscpy(cell_text[2][0][1], L"海洋天空");
-            txt_color[2][0][0] = 0;
-            txt_color[2][0][1] = 200;
-            txt_color[2][0][2] = 255;
-            break;
-        default: break;
-    }
-
-    // (2,1)地景
-    switch (global_state->linglong_cfg->landscape_index) {
-        case 0:
-            wcscpy(cell_text[2][1][1], L"关");
-            txt_color[2][1][0] = 222;
-            txt_color[2][1][1] = 0;
-            txt_color[2][1][2] = 0;
-            break;
-        case 1:
-            wcscpy(cell_text[2][1][1], L"草原");
-            txt_color[2][1][0] = 0;
-            txt_color[2][1][1] = 255;
-            txt_color[2][1][2] = 255;
-            break;
-        case 2:
-            wcscpy(cell_text[2][1][1], L"卫星照片");
-            txt_color[2][1][0] = 0;
-            txt_color[2][1][1] = 255;
-            txt_color[2][1][2] = 255;
-            break;
-        case 3:
-            wcscpy(cell_text[2][1][1], L"实时海洋");
-            txt_color[2][1][0] = 0;
-            txt_color[2][1][1] = 200;
-            txt_color[2][1][2] = 255;
-            break;
-        default: break;
-    }
-
-    // (2,2)平滑滤波
-    if (global_state->linglong_cfg->enable_opt_bilinear == 0) {
-        wcscpy(cell_text[2][2][1], L"关");
-        txt_color[2][2][0] = 222;
-        txt_color[2][2][1] = 0;
-        txt_color[2][2][2] = 0;
-    }
-    else {
-        wcscpy(cell_text[2][2][1], L"开");
-        txt_color[2][2][0] = 0;
-        txt_color[2][2][1] = 255;
-        txt_color[2][2][2] = 0;
-    }
-
-    // (3,1)跟踪太阳
-    if (global_state->linglong_cfg->enable_tracking_sun == 0) {
-        wcscpy(cell_text[3][1][1], L"关");
-        txt_color[3][1][0] = 222;
-        txt_color[3][1][1] = 0;
-        txt_color[3][1][2] = 0;
-    }
-    else {
-        wcscpy(cell_text[3][1][1], L"开");
-        txt_color[3][1][0] = 0;
-        txt_color[3][1][1] = 255;
-        txt_color[3][1][2] = 0;
-    }
-
-
-    gfx_soft_clear(global_state->llgfx);
-
-    // 网格布局：上下留白与顶/底栏高度一致（当前 UI 字体行高 + 1）
-    const int32_t bar_height = gfx_font_line_height(global_state->ui_font) + 1;
-    UI_Grid_Layout grid = ui_grid_layout_make(global_state->llgfx->width, global_state->llgfx->height, bar_height, bar_height, 0, 0, 4, 4);
-
-    for (int32_t row = 0; row < 4; row++) {
-        for (int32_t col = 0; col < 4; col++) {
-            int32_t bx = (col == 0) ? 1 : 0;
-            int32_t by = (row == 0) ? 1 : 0;
-            gfx_draw_rectangle(global_state->llgfx, ui_grid_cell_x0(&grid,col)+bx, ui_grid_cell_y0(&grid,row)+by, ui_grid_cell_width(&grid)-1-bx, ui_grid_cell_height(&grid)-1-by, 37, 38, 41, 1);
-            gfx_draw_textline_centered(global_state->llgfx, cell_text[row][col][0], ui_grid_cell_center_x(&grid,col), ui_grid_cell_center_y(&grid,row)-8, 255, 255, 255, 1);
-            gfx_draw_textline_centered(global_state->llgfx, cell_text[row][col][1], ui_grid_cell_center_x(&grid,col), ui_grid_cell_center_y(&grid,row)+10, txt_color[row][col][0], txt_color[row][col][1], txt_color[row][col][2], 1);
-        }
-    }
-
-    gfx_draw_textline_centered(global_state->llgfx, L"玲珑天象仪设置", global_state->llgfx->width/2, grid.padding_top/2, 222, 222, 222, 1);
 }
 
+// 填设置界面 5x4 单元格：标签 / 现值 / 现值颜色；返回按钮特殊样式，其余空位保留备用。
+static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLinglongSettingCell *cells) {
+    Linglong_Config *cfg = global_state->linglong_cfg;
+
+    for (int32_t i = 0; i < UI_LL_SETTING_COUNT; i++) {
+        cells[i].label = NULL;
+        cells[i].value = NULL;
+        cells[i].value_r = 224;
+        cells[i].value_g = 224;
+        cells[i].value_b = 224;
+        cells[i].is_special = 0;
+    }
+
+    // 第 1 行：投影算法、赤道坐标、地平坐标、黄道、返回
+    cells[0].label = L"投影算法";
+    cells[0].value = (cfg->projection == 0) ? L"鱼眼" : L"透视";
+    cells[0].value_r = 0; cells[0].value_g = 255; cells[0].value_b = 255;
+
+    cells[1].label = L"赤道坐标";
+    if (cfg->enable_equatorial_coord == 0) {
+        cells[1].value = L"关";
+        cells[1].value_r = 222; cells[1].value_g = 0; cells[1].value_b = 0;
+    }
+    else {
+        cells[1].value = L"开";
+        cells[1].value_r = 0; cells[1].value_g = 255; cells[1].value_b = 0;
+    }
+
+    cells[2].label = L"地平坐标";
+    switch (cfg->enable_horizontal_coord) {
+        case 0:
+            cells[2].value = L"关";
+            cells[2].value_r = 222; cells[2].value_g = 0; cells[2].value_b = 0;
+            break;
+        case 1:
+            cells[2].value = L"方位角";
+            cells[2].value_r = 0; cells[2].value_g = 255; cells[2].value_b = 255;
+            break;
+        case 2:
+            cells[2].value = L"坐标圈";
+            cells[2].value_r = 0; cells[2].value_g = 255; cells[2].value_b = 255;
+            break;
+        default: break;
+    }
+
+    cells[3].label = L"黄道";
+    if (cfg->enable_ecliptic_circle == 0) {
+        cells[3].value = L"关";
+        cells[3].value_r = 222; cells[3].value_g = 0; cells[3].value_b = 0;
+    }
+    else {
+        cells[3].value = L"开";
+        cells[3].value_r = 0; cells[3].value_g = 255; cells[3].value_b = 0;
+    }
+
+    cells[4].label = L"返回";
+    cells[4].is_special = 1;
+
+    // 第 2 行：大气散射、地景、天体名称、平滑滤波、跟踪太阳
+    cells[5].label = L"大气散射";
+    switch (cfg->sky_model) {
+        case 0:
+            cells[5].value = L"关";
+            cells[5].value_r = 222; cells[5].value_g = 0; cells[5].value_b = 0;
+            break;
+        case 1:
+            cells[5].value = L"简化模型";
+            cells[5].value_r = 0; cells[5].value_g = 255; cells[5].value_b = 255;
+            break;
+        case 2:
+            cells[5].value = L"一次散射";
+            cells[5].value_r = 0; cells[5].value_g = 255; cells[5].value_b = 255;
+            break;
+        case 3:
+            cells[5].value = L"二次散射";
+            cells[5].value_r = 0; cells[5].value_g = 255; cells[5].value_b = 255;
+            break;
+        case 4:
+            cells[5].value = L"体积云";
+            cells[5].value_r = 255; cells[5].value_g = 170; cells[5].value_b = 0;
+            break;
+        case 5:
+            cells[5].value = L"海洋天空";
+            cells[5].value_r = 0; cells[5].value_g = 200; cells[5].value_b = 255;
+            break;
+        default: break;
+    }
+
+    cells[6].label = L"地景";
+    switch (cfg->landscape_index) {
+        case 0:
+            cells[6].value = L"关";
+            cells[6].value_r = 222; cells[6].value_g = 0; cells[6].value_b = 0;
+            break;
+        case 1:
+            cells[6].value = L"草原";
+            cells[6].value_r = 0; cells[6].value_g = 255; cells[6].value_b = 255;
+            break;
+        case 2:
+            cells[6].value = L"卫星照片";
+            cells[6].value_r = 0; cells[6].value_g = 255; cells[6].value_b = 255;
+            break;
+        case 3:
+            cells[6].value = L"实时海洋";
+            cells[6].value_r = 0; cells[6].value_g = 200; cells[6].value_b = 255;
+            break;
+        default: break;
+    }
+
+    cells[7].label = L"天体名称";
+    switch (cfg->enable_star_name) {
+        case 0:
+            cells[7].value = L"关";
+            cells[7].value_r = 222; cells[7].value_g = 0; cells[7].value_b = 0;
+            break;
+        case 1:
+            cells[7].value = L"仅恒星";
+            cells[7].value_r = 0; cells[7].value_g = 255; cells[7].value_b = 255;
+            break;
+        case 2:
+            cells[7].value = L"仅行星";
+            cells[7].value_r = 0; cells[7].value_g = 255; cells[7].value_b = 255;
+            break;
+        case 3:
+            cells[7].value = L"全部显示";
+            cells[7].value_r = 0; cells[7].value_g = 255; cells[7].value_b = 255;
+            break;
+        default: break;
+    }
+
+    cells[8].label = L"平滑滤波";
+    if (cfg->enable_opt_bilinear == 0) {
+        cells[8].value = L"关";
+        cells[8].value_r = 222; cells[8].value_g = 0; cells[8].value_b = 0;
+    }
+    else {
+        cells[8].value = L"开";
+        cells[8].value_r = 0; cells[8].value_g = 255; cells[8].value_b = 0;
+    }
+
+    cells[9].label = L"跟踪太阳";
+    if (cfg->enable_tracking_sun == 0) {
+        cells[9].value = L"关";
+        cells[9].value_r = 222; cells[9].value_g = 0; cells[9].value_b = 0;
+    }
+    else {
+        cells[9].value = L"开";
+        cells[9].value_r = 0; cells[9].value_g = 255; cells[9].value_b = 0;
+    }
+
+    // 第 3 行首格：按需求保留第二枚“跟踪太阳”；其余 9 格无功能备用。
+    cells[10].label = L"跟踪太阳";
+    cells[10].value = cells[9].value;
+    cells[10].value_r = cells[9].value_r;
+    cells[10].value_g = cells[9].value_g;
+    cells[10].value_b = cells[9].value_b;
+}
+
+void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state) {
+    (void)key_event;
+    // 不清屏：设置界面直接叠加在每帧新绘制的天象仪主界面上（与控制面板同一做法），
+    // 5x4 按钮使用与控制按钮一致的圆角半透明样式。
+    UiLinglongSettingCell cells[UI_LL_SETTING_COUNT];
+    ui_app_linglong_setting_fill_cells(global_state, cells);
+    ui_linglong_ctrl_draw_settings(global_state->llgfx, cells);
+}
 
 
 
@@ -2028,15 +1973,13 @@ void ui_app_linglong_splash(Key_Event *key_event, Global_State *global_state) {
 }
 
 void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_state) {
+    // 天空每帧都完整重绘；设置界面与主控制面板都是叠加在其上的半透明控件，
+    // 因此不会出现 alpha 逐帧累积加深。
+    ui_app_linglong_draw_full(key_event, global_state);
+
     if (linglong_state == LL_STATE_SETTING || linglong_state == LL_STATE_SETTING_CALLBACK) {
         ui_app_linglong_setting_draw(key_event, global_state);
     }
-    else {
-        ui_app_linglong_draw_full(key_event, global_state);
-    }
-
-    // 上面两条路径都会先把整幅画面重绘一遍（gfx_soft_clear + 全屏绘制），因此文字与
-    // 半透明控件每帧都叠在全新画面上，不会出现 alpha 逐帧累积加深。
     gfx_draw_textline(global_state->llgfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->llgfx->height - 13, 255, 255, 255, 200);
 
     wchar_t timestr[30];
@@ -2164,8 +2107,8 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
 
 #endif
 
-    // 显式触屏控件（仅主天空界面；启动画面停留期内控件尚未绘制，不处理触屏）。
-    // 设置界面继续沿用十六宫格软键（s_linglong_touch_owned=0），此处不接管。
+    // 主天空界面显式触屏控件（启动画面停留期内控件尚未绘制，不处理触屏）。
+    // 设置界面另有 5x4 显式按钮，见下方独立分支。
     if (linglong_state == LL_STATE_SKY && linglong_splash_until == 0) {
         // 触屏拖动变换视角：仅在控制面板隐藏时启用（控制模块内部判断），
         // 按下点落在顶部按钮上时不启动拖动。像素增量按实际画布尺寸归一化：
@@ -2205,11 +2148,12 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
 
             switch (action) {
                 case UI_LL_CTRL_SETTINGS:
-                    // 等价于十六宫格 C 键：打开现有玲珑仪设置界面
+                    // 控制面板右上角“设置”：打开 5x4 显式触屏设置界面
                     global_state->is_ctrl_enabled = 1;
                     linglong_state = LL_STATE_SETTING;
                     ui_linglong_ctrl_reset();
-                    s_linglong_touch_owned = 0; // 设置界面：恢复十六宫格软键（遗留兜底）
+                    ui_linglong_ctrl_settings_reset();
+                    s_linglong_touch_owned = 1; // 设置界面也用显式触屏控件
                     return;
 
                 case UI_LL_CTRL_EXIT:
@@ -2285,6 +2229,24 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                 // 时间控制已直接处理，吞掉本次事件，避免与同时按下的硬键重复响应
                 key_event->key_code = NANO_KEY_IDLE;
                 key_event->key_edge = 0;
+            }
+        }
+    }
+
+    // 设置界面显式触屏控件：5x4 按钮，替代旧 4x4 宫格软键。
+    // 命中功能格后合成对应 NANO_KEY_* 短按事件，复用下方既有 Ctrl+键 处理链。
+    if ((linglong_state == LL_STATE_SETTING || linglong_state == LL_STATE_SETTING_CALLBACK)
+        && linglong_splash_until == 0) {
+        int32_t cell = ui_linglong_ctrl_settings_handle_touch(
+            key_event->touch_edge, key_event->touch_x, key_event->touch_y,
+            key_event->touch_down_x, key_event->touch_down_y);
+        if (cell >= 0) {
+            int32_t synth_key = ui_app_linglong_setting_cell_key(cell);
+            if (synth_key != NANO_KEY_IDLE) {
+                global_state->is_ctrl_enabled = 1;
+                key_event->key_code = (uint8_t)synth_key;
+                key_event->key_edge = -1;
+                key_event->is_soft_key = 1;
             }
         }
     }
@@ -2466,6 +2428,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         if (global_state->is_ctrl_enabled == 0) {
             global_state->is_ctrl_enabled = 1;
             linglong_state = LL_STATE_SETTING;
+            ui_linglong_ctrl_settings_reset();
         }
         else {
             global_state->is_ctrl_enabled = 0;
@@ -2493,13 +2456,17 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         ui_app_linglong_set_timemachine_speed(key_event, global_state, 120);
     }
 
-    // 维护触屏控件接管标志：主天空界面由显式控件接管触屏（抑制宫格软键），
-    // 设置界面/设置回调继续沿用十六宫格软键（遗留兜底）。
-    s_linglong_touch_owned = (linglong_state == LL_STATE_SKY);
-    if (!s_linglong_touch_owned) {
-        // 设置界面不显示主界面控件；无论经顶部按钮还是硬 C 键进入，返回主界面时
+    // 主天空界面与设置界面都由显式触屏控件接管，抑制旧 4x4 宫格软键；实体硬键兜底。
+    s_linglong_touch_owned = (linglong_state == LL_STATE_SKY ||
+                              linglong_state == LL_STATE_SETTING ||
+                              linglong_state == LL_STATE_SETTING_CALLBACK);
+    if (linglong_state != LL_STATE_SKY) {
+        // 设置界面不显示主界面控件；无论经控制面板还是硬 C 键进入，返回主界面时
         // 时间/视角面板都从隐藏状态开始，避免旧面板状态残留。
         ui_linglong_ctrl_reset();
+    }
+    if (linglong_state != LL_STATE_SETTING && linglong_state != LL_STATE_SETTING_CALLBACK) {
+        ui_linglong_ctrl_settings_reset();
     }
 }
 

@@ -12,17 +12,18 @@
 // 玲珑天象仪主界面显式触屏控件
 //
 // 布局（320x240 逻辑屏；位置按 SCREEN_WIDTH/HEIGHT 推导，按钮尺寸取适合掌机的固定触控尺寸）：
-//   顶部靠右：控制 设置 退出（3 个按钮）
-//   “控制”同显同隐的两组控件：
+//   顶部靠右：控制 退出（2 个按钮）
+//   “控制”同显同隐的控件：
 //     底部四分之一区域（让出最底部状态栏）：<< 实时 运行/暂停 >>
 //     画面中央：3x3 半透明视角九宫格（对应十六宫格软键 1~9）
 //     九宫格左侧竖排：云量 / 云类 / 云精度（与九宫格三行齐平，不改动已有按钮位置）
+//     九宫格右上角空位（“右转”右侧）：设置
 //
 // 绘制与命中判定共用下方几何常量，保证“看得见的一定点得到”。
 // ===============================================================================
 
 // ---- 顶部按钮栏 -----------------------------------------------------------
-#define LL_TOP_COUNT      (3)
+#define LL_TOP_COUNT      (2)
 #define LL_TOP_BTN_W      (52)
 #define LL_TOP_BTN_H      (22)
 #define LL_TOP_GAP        (4)
@@ -68,6 +69,25 @@
 // 第 i 枚按钮的 y（直接沿用九宫格行距，视觉上三行对齐）
 #define LL_CLOUD_Y(i)     (LL_VIEW_Y0 + (i) * LL_CLOUD_ROW_H)
 
+// ---- “设置”按钮（控制面板右上角空位，即“右转”右侧；与面板同显同隐）------
+#define LL_SETTINGS_BTN_X (LL_VIEW_X0 + LL_VIEW_TOTAL_W + LL_VIEW_GAP)
+#define LL_SETTINGS_BTN_Y (LL_VIEW_Y0)
+#define LL_SETTINGS_BTN_W (LL_VIEW_BTN_W)
+#define LL_SETTINGS_BTN_H (LL_VIEW_BTN_H)
+
+// ---- 设置界面（5x4 显式按钮；标题在第一行按钮上方）--------------------------
+#define LL_SET_COLS        (UI_LL_SETTING_COLS)
+#define LL_SET_ROWS        (UI_LL_SETTING_ROWS)
+// 与控制按钮完全一致的尺寸/间距：56x40、间隙 6；5 列正好横跨 x=8..312，
+// 4 行从控制面板首行 y=46 开始，末行到 y=224（底部状态栏 y>=227）。
+#define LL_SET_BTN_W       (56)
+#define LL_SET_BTN_H       (40)
+#define LL_SET_GAP         (6)
+#define LL_SET_X0          ((SCREEN_WIDTH - (LL_SET_COLS * LL_SET_BTN_W + (LL_SET_COLS - 1) * LL_SET_GAP)) / 2)
+#define LL_SET_Y0          (LL_VIEW_Y0)
+#define LL_SET_TITLE_X     (LL_SET_X0)
+#define LL_SET_TITLE_Y     (LL_SET_Y0 - 18) // 标题行在第一行按钮上方，紧接顶部按钮下方
+
 // ---- 配色 -----------------------------------------------------------------
 #define LL_COLOR_BG_R       (18)
 #define LL_COLOR_BG_G       (20)
@@ -104,12 +124,15 @@ static int32_t s_drag_active = 0;
 static int32_t s_drag_last_x = 0;
 static int32_t s_drag_last_y = 0;
 
+// 设置界面按住高亮（-1=无；0..19=单元格索引）
+static int32_t s_setting_pressed = -1;
+
 // 顶部按钮从左到右的动作
 static const int32_t S_TOP_ACTION[LL_TOP_COUNT] = {
-    UI_LL_CTRL_CONTROLS, UI_LL_CTRL_SETTINGS, UI_LL_CTRL_EXIT,
+    UI_LL_CTRL_CONTROLS, UI_LL_CTRL_EXIT,
 };
 static const wchar_t *S_TOP_LABEL[LL_TOP_COUNT] = {
-    L"控制", L"设置", L"退出",
+    L"控制", L"退出",
 };
 
 // 时间按钮从左到右的动作
@@ -150,6 +173,11 @@ static int32_t ll_hit_test(int32_t x, int32_t y) {
             }
         }
         return UI_LL_CTRL_NONE;
+    }
+
+    // “设置”按钮（控制面板右上角空位，仅面板可见时）
+    if (s_controls_visible && ll_in_rect(x, y, LL_SETTINGS_BTN_X, LL_SETTINGS_BTN_Y, LL_SETTINGS_BTN_W, LL_SETTINGS_BTN_H)) {
+        return UI_LL_CTRL_SETTINGS;
     }
 
     // 时间控制按钮（仅“控制”面板可见时）
@@ -201,6 +229,10 @@ void ui_linglong_ctrl_reset(void) {
     s_drag_active = 0;
     s_drag_last_x = 0;
     s_drag_last_y = 0;
+}
+
+void ui_linglong_ctrl_settings_reset(void) {
+    s_setting_pressed = -1;
 }
 
 uint8_t ui_linglong_ctrl_take_dirty(void) {
@@ -301,6 +333,40 @@ int32_t ui_linglong_ctrl_handle_touch(int32_t touch_edge, int32_t x, int32_t y,
     }
 
     return action;
+}
+
+// 设置界面命中：返回单元格索引，未命中 -1
+static int32_t ll_setting_hit_test(int32_t x, int32_t y) {
+    for (int32_t r = 0; r < LL_SET_ROWS; r++) {
+        for (int32_t c = 0; c < LL_SET_COLS; c++) {
+            int32_t bx = LL_SET_X0 + c * (LL_SET_BTN_W + LL_SET_GAP);
+            int32_t by = LL_SET_Y0 + r * (LL_SET_BTN_H + LL_SET_GAP);
+            if (ll_in_rect(x, y, bx, by, LL_SET_BTN_W, LL_SET_BTN_H)) {
+                return r * LL_SET_COLS + c;
+            }
+        }
+    }
+    return -1;
+}
+
+int32_t ui_linglong_ctrl_settings_handle_touch(int32_t touch_edge, int32_t x, int32_t y,
+                                               int32_t down_x, int32_t down_y) {
+    int32_t cell = -1;
+
+    if (touch_edge & TOUCH_EDGE_DOWN) {
+        s_setting_pressed = ll_setting_hit_test(down_x, down_y);
+    }
+
+    if (touch_edge & TOUCH_EDGE_UP) {
+        int32_t down_cell = ll_setting_hit_test(down_x, down_y);
+        int32_t up_cell = ll_setting_hit_test(x, y);
+        if (down_cell >= 0 && down_cell == s_setting_pressed && up_cell == down_cell) {
+            cell = down_cell;
+        }
+        s_setting_pressed = -1;
+    }
+
+    return cell;
 }
 
 // 单个按钮：底色 + 居中文字（active=功能激活，pressed=当前按住）
@@ -438,9 +504,83 @@ static void ll_draw_cloud(Nano_GFX *gfx, const UiLinglongCtrlState *st) {
     }
 }
 
+// 控制面板右上角的“设置”按钮（与视角按钮同一半透明样式）
+static void ll_draw_settings_button(Nano_GFX *gfx) {
+    if (!s_controls_visible) return;
+    int32_t pressed = (s_pressed == UI_LL_CTRL_SETTINGS);
+    ll_draw_button(gfx, LL_SETTINGS_BTN_X, LL_SETTINGS_BTN_Y, LL_SETTINGS_BTN_W, LL_SETTINGS_BTN_H,
+        L"设置", 0, pressed, pressed ? 180 : LL_ALPHA_VIEW);
+}
+
+// 设置界面的单个按钮：圆角半透明底 + 标签/现值两行；返回按钮用特殊配色与单行大字。
+// 调用方已把背景清成深色，故这里用略实的底色保证文字可读。
+static void ll_draw_setting_button(Nano_GFX *gfx, int32_t x, int32_t y, int32_t w, int32_t h,
+                                   const UiLinglongSettingCell *cell, int32_t pressed) {
+    // 与云参数按钮同一半透明底色（两行文字需要比单行视角按钮更实一点）
+    uint8_t r = LL_COLOR_BG_R, g = LL_COLOR_BG_G, b = LL_COLOR_BG_B;
+    uint8_t alpha = LL_ALPHA_CLOUD;
+
+    if (cell->is_special) {
+        // “返回”特殊样式：红色系，略实以保证亮天空上仍明显
+        r = 150; g = 60; b = 50;
+        alpha = 230;
+    }
+    else if (cell->label == NULL) {
+        // 无功能备用按钮：更透、无文字，只保留 5x4 网格的占位感
+        alpha = 100;
+    }
+
+    if (pressed) {
+        if (cell->is_special) { r = 200; g = 100; b = 80; }
+        else { r = LL_COLOR_PRESS_R; g = LL_COLOR_PRESS_G; b = LL_COLOR_PRESS_B; }
+        alpha = 210;
+    }
+
+    gfx_draw_rounded_rectangle(gfx, x, y, w, h,
+        LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS,
+        r, g, b, alpha);
+
+    if (cell->label == NULL) return;
+
+    if (cell->is_special) {
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, (wchar_t *)cell->label,
+            x + w / 2, y + h / 2,
+            LL_COLOR_TEXT_R, LL_COLOR_TEXT_G, LL_COLOR_TEXT_B, 255);
+    }
+    else {
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)cell->label,
+            x + w / 2, y + h / 2 - 8,
+            LL_COLOR_TEXT_R, LL_COLOR_TEXT_G, LL_COLOR_TEXT_B, 255);
+        if (cell->value != NULL) {
+            gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)cell->value,
+                x + w / 2, y + h / 2 + 8,
+                cell->value_r, cell->value_g, cell->value_b, 255);
+        }
+    }
+}
+
+void ui_linglong_ctrl_draw_settings(Nano_GFX *gfx, const UiLinglongSettingCell *cells) {
+    // 标题：左上角、第一行按钮上方；黑色阴影保证亮天空上仍可读
+    gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, (wchar_t *)L"玲珑天象仪设置",
+        LL_SET_TITLE_X + 1, LL_SET_TITLE_Y + 1, 0, 0, 0, 220);
+    gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, (wchar_t *)L"玲珑天象仪设置",
+        LL_SET_TITLE_X, LL_SET_TITLE_Y, 240, 240, 240, 255);
+
+    for (int32_t r = 0; r < LL_SET_ROWS; r++) {
+        for (int32_t c = 0; c < LL_SET_COLS; c++) {
+            int32_t idx = r * LL_SET_COLS + c;
+            int32_t x = LL_SET_X0 + c * (LL_SET_BTN_W + LL_SET_GAP);
+            int32_t y = LL_SET_Y0 + r * (LL_SET_BTN_H + LL_SET_GAP);
+            ll_draw_setting_button(gfx, x, y, LL_SET_BTN_W, LL_SET_BTN_H,
+                &cells[idx], s_setting_pressed == idx);
+        }
+    }
+}
+
 void ui_linglong_ctrl_draw(Nano_GFX *gfx, const UiLinglongCtrlState *st) {
     ll_draw_top(gfx);
     ll_draw_time(gfx, st->running_state, st->speed);
     ll_draw_view(gfx);
     ll_draw_cloud(gfx, st);
+    ll_draw_settings_button(gfx);
 }
