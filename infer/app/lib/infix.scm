@@ -2,12 +2,13 @@
 ;; 中缀表达式解析器（Infix Expression Parser）—— 灵机（Animac）应用库
 ;;
 ;; 来源：上游 Animac 回归用例 /home/bd4sur/Animac/test/calculator.scm（2017, 2025-07-11）
-;;       **lexer / parser / type_of_token / eval / show_* 逐字照抄**，仅做两处机械适配：
+;;       **lexer / parser / type_of_token / show_* 逐字照抄**，仅做两处机械适配：
 ;;         1) import 路径 "list.scm" → "app/lib/list.scm"（本项目的模块搜索基准是资源根，
 ;;            见 ui_scheme_app.c 的 s_app_root；app/lib/list.scm 是该文件的逐字副本）；
 ;;         2) 删去上游的 `run` 演示入口（它是自带表达式与断言的冒烟测试，界面由
 ;;            app/calculator.scm 承担）。
 ;;       因此语法、优先级、结合性、词法规则与上游完全一致，行为可直接对照上游用例。
+;;       唯一被改写的求值语义是 eval 的**算子表**（见下方 eval 注释：接入数值塔）。
 ;;
 ;; 文法（BNF，同上游文件头注释）：
 ;;      <expr_list> ::= <expr> <expr_list_tail>
@@ -27,21 +28,24 @@
 ;; 对外接口（供 import 方以 infix. 前缀调用，别名由 import 方决定）：
 ;;   (lexer 表达式字符串)              → 词元列表，每个词元为 (位置 类型 文本)
 ;;   (parser 词元列表)                 → 抽象语法树；语法错误时返回 #f（并 display 提示）
-;;   (eval AST)                        → 数值；无法识别的算子返回 #f（并 display 提示）
+;;   (eval AST)                        → 数值（精确数或浮点）；无法识别的算子返回符号 'err
 ;;
 ;; 支持的内建运算符与函数（同上游 eval）：+ - * / % ^ 与
 ;;   sqrt exp log sin cos tan atan floor ceil（写作 sqrt(9) 这种函数调用形式）
 ;;
 ;; 注意（调用方须自行防御，本库不抛异常也不报错）：
 ;;   · 语法错误：parser 返回 #f，需要判断 `list?` / `#f` 再决定是否 eval；
-;;   · 除零、非法算子、数字解析失败（String.parseNumber → #undefined）会触发虚拟机
-;;     运行时错误并**终止出错进程**——界面侧须把求值放在 fork 出的子进程里做，
-;;     见 app/calculator.scm 的「= 键求值」段落。
+;;   · 除零、非法算子、非实数结果统一返回符号 'err，**不会**触发虚拟机运行时
+;;     错误（上游用原生 ( / x 0) 会直接杀掉进程，这一点已在本项目里改掉）；
+;;   · eval 的结果可能是**精确数**（列表形式），判断“是不是数”请用 NT.num?，
+;;     不要用 number?（后者只认原生整/浮点）。
 ;; ============================================================================
 
 (native String)
 (native Math)
 (import List "app/lib/list.scm")
+;; 数值塔：精确整数（大整数）+ 精确分数，见 app/lib/numtower.scm
+(import NT "app/lib/numtower.scm")
 
 (define lexer
   (lambda (expr)
@@ -300,23 +304,36 @@
     })))
 
 ;; ---------------------------------------------------------------------------
-;; eval —— 求值（上游逻辑 + 交互式安全加固）
+;; eval —— 求值（上游逻辑 + 交互式安全加固 + 精确数数值塔）
 ;;
-;; 与上游的差异只有「失效路径」：上游对非法输入会落到 (eval #f) / (/ x 0) /
-;; (#null 参与算术) 等情形，这些都会**触发虚拟机运行时错误并终止进程**。
-;; 交互式计算器上这些都是常见输入（残缺表达式、5/0、log(-1)），故统一改为返回
-;; 符号 'err（任意层级的操作数非数字 → 整体 'err，天然向上传播），运算表本身与
-;; 上游逐条一致（含一元/二元 '-' 的区分）。
+;; 与上游的差异有两处：
+;;
+;;  1) 失效路径：上游对非法输入会落到 (eval #f) / (/ x 0) / (#null 参与算术)
+;;     等情形，这些都会**触发虚拟机运行时错误并终止进程**。交互式计算器上这些
+;;     都是常见输入（残缺表达式、5/0、log(-1)），故统一改为返回符号 'err（任意
+;;     层级的操作数非数字 → 整体 'err，天然向上传播）。
+;;  2) 数值域：数字字面量与 +  - * / % ^ 不再用解释器原生算术（整数会静默溢出、
+;;     / 恒为浮点），改走 app/lib/numtower.scm 的**数值塔**——整数/分数全程精确，
+;;     只在超越函数（sin/cos/tan/exp/log、非完全平方的 sqrt、非整数指数）处落入
+;;     浮点。于是 1/3 得 "1/3"、0.1+0.2 得 0.3，而 123456789012345×987654321012345
+;;     这类乘积也不再溢出（内部走十进制大整数 + FFT/Karatsuba）。
+;;     运算表与上游逐条对应（含一元/二元 '-' 的区分），只是把算子换成了 NT.*。
 ;; ---------------------------------------------------------------------------
 
+;; 数值塔成员判定：精确数（eint/efrac，是列表）与原生数字都算「数是有效的」
 (define num_or_err
-  (lambda (v) (if (number? v) v 'err)))
+  (lambda (v) (if (NT.num? v) v 'err)))
+
+;; 精确值 → 浮点（超越函数入口）
+(define real_or_err
+  (lambda (v) (num_or_err (NT.to_float v))))
 
 (define eval
   (lambda (ast)
     (define tot (if (list? ast) (type_of_token ast) 'bad))
     (cond ((eq? tot 'number) {
-            (num_or_err (String.parseNumber (get_item ast 2)))
+            ;; 字面量按十进制串精确解析（"0.1" 是 1/10 而不是二进制近似）
+            (num_or_err (NT.parse_literal (get_item ast 2)))
           })
           ((eq? tot 'application) {
             (define op (get_item (get_item ast 0) 2))
@@ -325,23 +342,23 @@
             (define lv (eval left))
             (define u (eq? #undefined right))            ;; 一元运算（'-' 单目）
             (define rv (if u #undefined (eval right)))
-            (if (or (not (number? lv)) (and (not u) (not (number? rv))))
+            (if (or (not (NT.num? lv)) (and (not u) (not (NT.num? rv))))
                 'err
-                (cond ((String.equals op "+") (+ lv rv))
-                      ((String.equals op "-") (if u (- 0 lv) (- lv rv))) ;; 区分一元和二元运算
-                      ((String.equals op "*") (* lv rv))
-                      ((String.equals op "/") (if (== 0 rv) 'err (/ lv rv)))
-                      ((String.equals op "%") (mod lv rv))
-                      ((String.equals op "^") (pow lv rv))
-                      ((String.equals op "sqrt") (pow lv 0.5))
-                      ((String.equals op "exp") (num_or_err (Math.exp lv)))
-                      ((String.equals op "log") (num_or_err (Math.log lv)))
-                      ((String.equals op "sin") (num_or_err (Math.sin lv)))
-                      ((String.equals op "cos") (num_or_err (Math.cos lv)))
-                      ((String.equals op "tan") (num_or_err (Math.tan lv)))
-                      ((String.equals op "atan") (num_or_err (Math.atan lv)))
-                      ((String.equals op "floor") (num_or_err (Math.floor lv)))
-                      ((String.equals op "ceil") (num_or_err (Math.ceil lv)))
+                (cond ((String.equals op "+") (NT.add lv rv))
+                      ((String.equals op "-") (if u (NT.neg lv) (NT.sub lv rv))) ;; 区分一元和二元运算
+                      ((String.equals op "*") (NT.mul lv rv))
+                      ((String.equals op "/") (NT.div lv rv))          ;; 除零 → 'err（精确分数）
+                      ((String.equals op "%") (NT.remainder lv rv))
+                      ((String.equals op "^") (NT.power lv rv))
+                      ((String.equals op "sqrt") (NT.sqrt lv))         ;; 完全平方给精确值
+                      ((String.equals op "exp") (num_or_err (Math.exp (NT.to_float lv))))
+                      ((String.equals op "log") (num_or_err (Math.log (NT.to_float lv))))
+                      ((String.equals op "sin") (num_or_err (Math.sin (NT.to_float lv))))
+                      ((String.equals op "cos") (num_or_err (Math.cos (NT.to_float lv))))
+                      ((String.equals op "tan") (num_or_err (Math.tan (NT.to_float lv))))
+                      ((String.equals op "atan") (num_or_err (Math.atan (NT.to_float lv))))
+                      ((String.equals op "floor") (NT.floor lv))
+                      ((String.equals op "ceil") (NT.ceil lv))
                       (else 'err))
             )})
           (else 'err))))
@@ -425,7 +442,7 @@
         (if want_operand #f
             (if (not (== depth 0)) { (set! v_reason "括号不匹配") #f } #t)))))
 
-;; 一站式求值：表达式字符串 → 数值；失败返回符号 'syntax 或 'value
+;; 一站式求值：表达式字符串 → 数值（原生数字或精确数）；失败返回符号 'syntax 或 'value
 ;; （原因经 calc_reason 取；界面只做文案，不做语法/求值判断）
 (define calc
   (lambda (s)
@@ -441,7 +458,7 @@
               { (set! c_reason "表达式语法错误") 'syntax }
               {
                 (set! v (eval ast))
-                (if (number? v)
+                (if (NT.num? v)
                     v
                     { (set! c_reason "无法计算（除数为零或结果非实数）") 'value })
               })

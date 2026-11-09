@@ -125,6 +125,18 @@ ARITY = {
     'Diag.fillgeneric': 0, 'Diag.fastcl': 0,
 }
 
+# 裸算术/比较运算符**固定二元**（manual.md §6.2.4 / §6.2.5）。灵机编译器不检查参数
+# 个数，多写一个参数（`(- la 1 i)`）不会报错，只会把操作数栈搞乱——症状是别处莫名其
+# 妙地「[Runtime] 指令执行异常」，极难归因（本项目 2026-11 写大整数库时踩过一次）。
+# 这类名字在实践中**不会**被 App 遮蔽，故只在「本文件没有 define / 当形参用过它」
+# 时才检查（见 check() 的 local_names）。
+ARITH_ARITY = {
+    '+': 2, '-': 2, '*': 2, '/': 2, 'mod': 2, 'pow': 2,
+    '>': 2, '<': 2, '>=': 2, '<=': 2, '==': 2, 'eq?': 2, 'eqv?': 2, 'equal?': 2,
+    'not': 1, 'nan?': 1, 'number?': 1, 'list?': 1, 'null?': 1, 'atom?': 1,
+    'undefined?': 1, 'typeof': 1, 'String.concat': 2, 'Math.floor': 1,
+}
+
 # 空白（含 BOM，否则文件开头的 BOM 会被当成第一个参数而误报）。
 WS = ' \t\r\n\ufeff'
 # 括号：LB = '(' '[' '{'，RB = ')' ']' '}' —— 与灵机词法一致，可混用
@@ -369,6 +381,23 @@ def local_arities(forms):
     return arity
 
 
+def local_names(forms):
+    """本文件里出现过的「自己定义的名字」——用于判断裸运算符是否被遮蔽。"""
+    names = set()
+    for node in iter_forms(forms):
+        if not isinstance(node, Form) or node.opener == '{':
+            continue
+        kids = node.children
+        head = kids[0].text if kids and isinstance(kids[0], Atom) else ''
+        if head == 'define' and len(kids) >= 2 and isinstance(kids[1], Atom):
+            names.add(kids[1].text)
+        elif (head == 'lambda' and len(kids) >= 2 and isinstance(kids[1], Form)):
+            for p in kids[1].children:
+                if isinstance(p, Atom):
+                    names.add(p.text)
+    return names
+
+
 def check(path):
     with open(path, encoding='utf-8', errors='replace') as f:
         src = f.read()
@@ -377,6 +406,7 @@ def check(path):
     forms, parse_errors = parse_source(src)
     bad = [(line_of(pos), msg) for pos, msg in parse_errors]
     own = local_arities(forms)
+    shadowed = local_names(forms)
 
     # 迭代式遍历（不递归），顺带做元数与 cond 子句形状检查
     stack = list(forms)
@@ -393,6 +423,9 @@ def check(path):
                 src_tag = '（本文件 define）'
             else:
                 src_tag = ''
+            if want is None and head in ARITH_ARITY and head not in shadowed:
+                want = ARITH_ARITY[head]
+                src_tag = '（灵机算术/比较固定二元）'
             if want is not None and len(kids) - 1 != want:
                 bad.append((line_of(node.start),
                             '%s 参数 %d 个，应为 %d%s' % (head, len(kids) - 1, want, src_tag)))
