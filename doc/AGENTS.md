@@ -6751,3 +6751,55 @@ wasm32，用 node 跑任意 `.scm`（`(display ...)` 直通 stdout）。**意义
   （LaTeX 解析器对残缺输入不崩），不做合成 `$$` 接续（围栏代码块才有那套机制）。
 - 公式行**不吃字模设置**：TeX 引擎自己按 em 选 12px/16px 字模，阅读器换字体只影响正文；
   公式缓存不随字体清空（重排时命中缓存，行高不变）。
+
+## 五轮：内置示例扩成「数学公式特性全覆盖」素材（并修掉解析器的“忽略指令”缺陷）
+
+需求：在示例文档（`app/lib/md_demo.scm`）里加**大量**公式用例，完整覆盖 TeX 引擎支持的
+所有 LaTeX 特性；每条公式前面配**格式丰富的说明文本**（加粗/行内代码/列表/引用），
+讲清数理背景与该公式检验的写法——顺带成为「正文与公式混排」的验收素材。
+
+### 1. 素材：24 组 / 79 条块级公式
+
+按特性分组，每组先一段说明再给 1~4 条公式（每条都控制到**自然宽度 ≤ 正文宽**，
+避免被缩小得看不清；只有 2 条故意略超宽以演示自适应）：
+
+分式/根号/±、希腊字母与嵌套上标、`\sum` 上下限与 `\limits`、`\int` 与细空格、
+`\iint`/`\iiint`/`\oint`、带限算子名（`\lim \limsup \max \min \sup \inf \det \gcd \Pr \arg`）、
+正体函数名 21 个 + `\operatorname`、`\left…\right` 七种括号与 `\left.`、`\big/\Big/\bigg/\Bigg`
+四档定界符、18 种重音与上下线、六种字体、`\text` 与五种空白、六种矩阵环境 + 行距参数
+`\\[4pt]` + `smallmatrix/gathered/array`、`aligned/split/cases`、`\binom` 三变体、
+`\sqrt[n]{}` 与 `\surd`、八种大运算符与 `\nolimits`、关系与箭头（60 个符号）、
+运算/集合符号、24 个小写 + 11 个大写希腊字母与 6 个变体写法、杂项符号与
+`\{\} \% \& \# \_ \$` 转义、被忽略的 `\displaystyle/\not`、引用块与列表里的公式、
+超长公式自适应。示例因此从 4.2KB/33 块长到 **18KB/160 块（423 行）**，走分段流式渲染
+（首段 4KB 仍含两张插图，既有断言不受影响）。
+
+### 2. 顺带修掉的**解析器缺陷**（`app/lib/tex_parse.scm`，两个真实 bug）
+
+写素材时踩到 `\displaystyle`/`\not` 一类“被忽略的排版指令”，暴露出两条老问题：
+
+1. **`attach_scripts` 对 `#f` 取 `get_item` → 运行时崩**：`\displaystyle` 单独出现时
+   `parse_control` 返回 `#f`，`attach_scripts` 却无条件 `(get_item base 0)`，直接
+   `[Runtime] 指令执行异常`（连 `\displaystyle\sum…` 都排不出来）。修法：`base` 为 `#f`
+   时直接返回 `#f`（调用方跳过）。
+2. **`parse_row` 遇到 `#f` 节点就 `(set! go #f)` → 静默吞掉该行剩下的内容**：
+   `\not\subset` 只剩空公式；`\displaystyle\sum_{i=1}^{n}i` 只剩前面一个 `#f`。
+   修法：`#f` 只表示“这个记号没有产出节点”，继续解析；用 `tp_` 是否推进来判断
+   “孤立的 `} & \\ \right \end`”，没推进就自己 `adv` 一格，避免死循环。
+
+单元测试补在 `tools/e2e/tex/test_tex.scm`（42 → **51/51**）：`\displaystyle` 之后的内容
+仍在、行中的 `\textstyle` 不打断、`\not\subset` 保留 `\subset`、只有忽略指令时得空节点表
+且不崩、顶层孤立右括号不死循环。
+
+### 3. 验证（全绿）
+
+- TeX 引擎单测 `test_tex.scm` **51/51**（含上面 9 条新断言）。
+- 宿主：`test_parse` 135/135、`test_layout` 113/113、`test_stream` 18/18、
+  `test_view` 24/24、`test_layout_ab` 6/6、`test_menu_list` 24/24、
+  `test_app.py` **106/106**（示例相关用例 F/C/D/T 全部原样通过）。
+- WASM（真 WASM + 三种引擎）：`regress_markdown_math.js` **各 20/20**、
+  `regress_markdown.js` **55/55**、`regress_mathjax.js` **22/22**、
+  `regress_markdown_big.js` mix **23/23**（翻页 0.5ms/屏、WASM 线性内存零增长）。
+- 肉眼核对（宿主帧缓冲截图）：公式与说明文本混排、`\overbrace`/`\underbrace`、
+  定界符伸缩、`\nolimits`、希腊字母表、超长公式自适应等区域均正常；
+  逐段滚动全程 `err=none`。

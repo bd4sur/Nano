@@ -251,10 +251,15 @@
         ((equal? t "\\nolimits") { (adv) (set! lim 2) })
         (else break))
     })
-  (if (and (equal? (get_item base 0) "o") (> lim 0))
-      (set! base `("o" ,(get_item base 1) ,(get_item base 2) ,lim))
-      #f)
-  (if (or sub sup) `("s" ,base ,sub ,sup) base)))
+  ;; base 可能是 #f：前面是 \displaystyle / \textstyle / \not 一类"被忽略"的控制词，
+  ;; 或孤立的 ^ _（容错路径）。此时没有节点可挂，直接返回 #f（调用方跳过它）。
+  ;; **不要**在这里对 #f 取 get_item —— 那会直接炸成「指令执行异常」（早期踩过）。
+  (if base
+      { (if (and (equal? (get_item base 0) "o") (> lim 0))
+            (set! base `("o" ,(get_item base 1) ,(get_item base 2) ,lim))
+            #f)
+        (if (or sub sup) `("s" ,base ,sub ,sup) base) }
+      #f)))
 
 ;; 原子（含其后的上下标）
 (define atmp #f)
@@ -279,6 +284,7 @@
   (define nodes (empty))
   (define node #f)
   (define go #t)
+  (define before 0)
   (while go
     (cond
       ((at_end) (set! go #f))
@@ -286,8 +292,16 @@
       ((is_space_tok (tk)) (adv))
       (else
         {
+          (set! before tp_)
           (set! node (parse_atom))
-          (if node (push nodes node) (set! go #f))
+          (if node (push nodes node) #f)
+          ;; parse_atom 返回 #f 有两种情况：
+          ;;   ① 被**忽略**的控制词（\displaystyle \textstyle \not \hline …）——
+          ;;      它已经消费掉记号，这里什么都不做、继续往下解析（早先这里直接
+          ;;      (set! go #f)，会把该词之后整行内容静默丢掉）；
+          ;;   ② 停在这里的孤立记号（} & \\ \right \end 等，stop 表里通常已拦住）——
+          ;;      没人消费，必须自己推进一格，否则死循环。
+          (if (== tp_ before) (adv) #f)
         })))
   nodes))
 
