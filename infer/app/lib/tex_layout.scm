@@ -609,43 +609,50 @@
   (define bh 0.0)
   (define bd 0.0)
   (define rth 0.0)
-  (define top 0.0)
-  (define radw 0.0)
   (define lw 0.0)
+  (define top 0.0)
+  (define vtx 0.0)
+  (define hgt 0.0)
+  (define radw 0.0)
   (define i0 0)
   (define ibx #f)
   (define iw 0.0)
   (define ih 0.0)
   (define idx_shift 0.0)
-  (set! rth (B.mx 0.9 (* 0.05 em)))
+  (set! rth (B.mx 1.0 (* 0.05 em)))
   (set! lw 0.9)
   (set! b0 (B.count))
   (set! bbx (lay body st 0.0 y))
   (set! bw (get_item bbx 0))
   (set! bh (get_item bbx 1))
   (set! bd (get_item bbx 2))
-  (set! top (- y (+ bh (* 0.17 em))))
-  (set! radw (+ (* 0.34 em) (* 0.10 (B.mx bh 0.0))))
+  ;; 上横线（上挑笔画的终点）贴着本体顶端；谷底（起笔与斜杆的交点）跟着本体的**深度**
+  ;; 走 —— 这样分式/求和/积分/行列式这类又高又深的本体，左侧的根号也会完整覆盖。
+  (set! top (- y (+ bh (* 0.16 em))))
+  (set! vtx (+ y (+ bd (* 0.13 em))))
+  (set! hgt (- vtx top))
+  ;; 根号左侧的横向宽度随总高度增长（斜杆因此不会变成一条陡到看不清的竖线）
+  (set! radw (+ (* 0.24 em) (* 0.20 hgt)))
   (B.shift b0 (B.count) (+ x radw) 0.0)
-  ;; 钩 + 斜杆 + 横线
-  (B.l (+ x (* 0.02 em)) (- y (* 0.16 em)) (+ x (* 0.12 em)) (- y (* 0.24 em)) lw)
-  (B.l (+ x (* 0.12 em)) (- y (* 0.24 em)) (+ x (* 0.24 em)) top lw)
-  (B.r (+ x (* 0.22 em)) (- top (/ rth 2)) (+ (- (+ radw bw) (* 0.22 em)) (* 0.08 em)) rth)
-  ;; 指数
+  ;; 起笔（左上→右下的短笔，v1 漏掉的就是这一笔）→ 谷底 → 长斜杆 → 上横线
+  (B.l (+ x (* 0.01 em)) (- vtx (* 0.26 em)) (+ x (* 0.14 em)) vtx lw)
+  (B.l (+ x (* 0.14 em)) vtx (+ x (- radw (* 0.08 em))) top lw)
+  (B.r (+ x (- radw (* 0.10 em))) (- top (/ rth 2)) (+ bw (* 0.12 em)) rth)
+  ;; 指数（n 次根）：贴在横线上方、斜杆顶端附近
   (if idx
       {
         (set! i0 (B.count))
         (set! ibx (lay idx 3 0.0 top))
         (set! iw (get_item ibx 0))
         (set! ih (get_item ibx 1))
-        (set! idx_shift (- (* 0.30 em) iw))
+        (set! idx_shift (- (* radw 0.8) iw))
         (if (< idx_shift 0.0) (set! idx_shift 0.0) #f)
-        (B.shift i0 (B.count) (+ x idx_shift) (* 0.08 em))
+        (B.shift i0 (B.count) (+ x idx_shift) (* 0.04 em))
       }
       #f)
   `(,(B.sum3 radw bw (* 0.06 em))
     ,(B.sum3 (- y top) (/ rth 2) (if idx (+ ih (* 0.1 em)) 0.0))
-    ,bd)))
+    ,(+ (- vtx y) (/ lw 2)))))
 
 ;; ---------------------------------------------------------------------------
 ;; 定界符：小尺寸用字形，大尺寸用矢量曲线
