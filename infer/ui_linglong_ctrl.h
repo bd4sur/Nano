@@ -18,6 +18,9 @@ extern "C" {
 //       · 底部四分之一区域的四个时间控制按钮：
 //           <<（快退） 实时（恢复当前时间） 运行/暂停（时间流逝开关） >>（快进）；
 //       · 画面中央的 3x3 半透明九宫格，功能与十六宫格软键 1~9 一一对应；
+//       · 九宫格左侧竖排三枚体积云参数按钮（与九宫格三行齐平）：
+//           云量（档位循环）、云类（云层组合循环）、云精度（渲染档位循环），
+//           按钮上直接显示现值（如“云量/半云”）——仅在 sky_model==4 时影响画面；
 //   - “设置”等价于十六宫格 C 键（Ctrl），打开现有玲珑仪设置界面；
 //   - “退出”等价于十六宫格 A 键（Esc），退出玲珑仪。
 //
@@ -41,8 +44,22 @@ extern "C" {
 // 视角九宫格：UI_LL_CTRL_VIEW_1 + (n-1)，n=1..9，对应软键 NANO_KEY_1..9
 #define UI_LL_CTRL_VIEW_1     (10)
 #define UI_LL_CTRL_VIEW_9     (18)
+// 体积云参数按钮（左侧竖排三枚，仅在 sky_model==4 时影响画面）
+#define UI_LL_CTRL_CLOUD_COVERAGE  (19)  // 云量：档位循环
+#define UI_LL_CTRL_CLOUD_LAYER     (20)  // 云类：云层掩码循环
+#define UI_LL_CTRL_CLOUD_PRECISION (21)  // 云精度：渲染档位循环
 
-// 初始化/复位：隐藏控制面板（时间按钮 + 视角九宫格）并清除按住高亮
+// 绘制/命中所需的控件状态（由调用方从玲珑仪当前配置回填；按钮上直接显示现值）
+typedef struct {
+    int32_t running_state;          // 时光机状态（0-停止 1-运行 2-实时），用于时间按钮高亮
+    int32_t speed;                  // 时光机速度（正未来/负过去）
+    int32_t cloud_coverage_level;   // 云量档位
+    int32_t cloud_layer_mask;       // 云类（云层掩码）
+    int32_t cloud_precision_level;  // 云精度档位
+    int32_t cloud_enabled;          // 当前天空模型是否吃体积云参数（sky_model==4）；否则三个按钮画暗
+} UiLinglongCtrlState;
+
+// 初始化/复位：隐藏控制面板（时间按钮 + 视角九宫格 + 云参数按钮）并清除按住高亮
 void    ui_linglong_ctrl_init(void);
 void    ui_linglong_ctrl_reset(void);
 
@@ -68,8 +85,8 @@ int32_t ui_linglong_ctrl_poll_drag(int32_t touch_edge, int32_t is_touching,
 uint8_t ui_linglong_ctrl_take_dirty(void);
 
 // 绘制控件（不刷新屏幕，由调用方统一 gfx_refresh）。
-// running_state/speed 用于时间按钮的状态高亮（语义同 ui_app.c 的时光机状态）。
-void    ui_linglong_ctrl_draw(Nano_GFX *gfx, int32_t running_state, int32_t speed);
+// st 中的时光机状态用于时间按钮高亮，云量/云类/云精度用于按钮上直接显示现值。
+void    ui_linglong_ctrl_draw(Nano_GFX *gfx, const UiLinglongCtrlState *st);
 
 #ifdef __cplusplus
 }

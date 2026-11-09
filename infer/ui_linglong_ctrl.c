@@ -3,6 +3,8 @@
 #include "platform.h"
 #include "graphics.h"
 #include "ui.h" // TOUCH_EDGE_DOWN / TOUCH_EDGE_UP
+#include "ui_cloud.h"   // 云量档位名称（档位语义的唯一真源）
+#include "celestial.h"  // 云类 / 云精度 档位表
 
 #include "ui_linglong_ctrl.h"
 
@@ -14,6 +16,7 @@
 //   “控制”同显同隐的两组控件：
 //     底部四分之一区域（让出最底部状态栏）：<< 实时 运行/暂停 >>
 //     画面中央：3x3 半透明视角九宫格（对应十六宫格软键 1~9）
+//     九宫格左侧竖排：云量 / 云类 / 云精度（与九宫格三行齐平，不改动已有按钮位置）
 //
 // 绘制与命中判定共用下方几何常量，保证“看得见的一定点得到”。
 // ===============================================================================
@@ -54,6 +57,17 @@
 #define LL_VIEW_Y0_ABOVE_TIME (LL_TIME_BG_Y - 6 - LL_VIEW_TOTAL_H)
 #define LL_VIEW_Y0        ((LL_VIEW_Y0_CENTER < LL_VIEW_Y0_ABOVE_TIME) ? LL_VIEW_Y0_CENTER : LL_VIEW_Y0_ABOVE_TIME)
 
+// ---- 体积云参数按钮（九宫格左侧竖排，与九宫格三行齐平；不改动已有按钮位置）------
+#define LL_CLOUD_COUNT    (3)
+#define LL_CLOUD_BTN_W    (LL_VIEW_BTN_W)
+#define LL_CLOUD_BTN_H    (LL_VIEW_BTN_H)
+#define LL_CLOUD_GAP_X    (6)
+#define LL_CLOUD_X0       (LL_VIEW_X0 - LL_CLOUD_GAP_X - LL_CLOUD_BTN_W)
+#define LL_CLOUD_ROW_H    (LL_VIEW_BTN_H + LL_VIEW_GAP)
+#define LL_CLOUD_TOTAL_H  (LL_CLOUD_COUNT * LL_CLOUD_ROW_H - LL_VIEW_GAP)
+// 第 i 枚按钮的 y（直接沿用九宫格行距，视觉上三行对齐）
+#define LL_CLOUD_Y(i)     (LL_VIEW_Y0 + (i) * LL_CLOUD_ROW_H)
+
 // ---- 配色 -----------------------------------------------------------------
 #define LL_COLOR_BG_R       (18)
 #define LL_COLOR_BG_G       (20)
@@ -73,6 +87,13 @@
 #define LL_ALPHA_TOP        (210)
 #define LL_ALPHA_TIME       (210)
 #define LL_ALPHA_VIEW       (100)
+// 云参数按钮：两行文字（名称+现值）信息密度高，半透明 100 在正午亮天空上会洗掉
+// 文字对比度，故单独用更实的底色（仍能透出背景）
+#define LL_ALPHA_CLOUD      (168)
+#define LL_ALPHA_CLOUD_DIM  (110)
+#define LL_COLOR_DIM_R      (168)
+#define LL_COLOR_DIM_G      (176)
+#define LL_COLOR_DIM_B      (190)
 
 static int32_t s_controls_visible = 0; // 时间按钮与视角九宫格同显同隐
 static int32_t s_pressed = UI_LL_CTRL_NONE; // 当前按住的控件动作（用于高亮）
@@ -104,6 +125,14 @@ static const wchar_t *S_VIEW_LABEL[LL_VIEW_ROWS][LL_VIEW_COLS] = {
     {L"左转", L"低头", L"右转"},
     {L"左倾", L"归中", L"右倾"},
     {L"拉远", L"抬头", L"推近"},
+};
+
+// 体积云参数按钮（从上到下）：动作与名称（现值另外从玲珑仪配置读取并显示在下行）
+static const int32_t S_CLOUD_ACTION[LL_CLOUD_COUNT] = {
+    UI_LL_CTRL_CLOUD_COVERAGE, UI_LL_CTRL_CLOUD_LAYER, UI_LL_CTRL_CLOUD_PRECISION,
+};
+static const wchar_t *S_CLOUD_LABEL[LL_CLOUD_COUNT] = {
+    L"云量", L"云类", L"云精度",
 };
 
 static int32_t ll_in_rect(int32_t x, int32_t y, int32_t rx, int32_t ry, int32_t rw, int32_t rh) {
@@ -143,6 +172,16 @@ static int32_t ll_hit_test(int32_t x, int32_t y) {
                 if (ll_in_rect(x, y, bx, by, LL_VIEW_BTN_W, LL_VIEW_BTN_H)) {
                     return UI_LL_CTRL_VIEW_1 + r * LL_VIEW_COLS + c;
                 }
+            }
+        }
+        return UI_LL_CTRL_NONE;
+    }
+
+    // 体积云参数按钮（九宫格左侧竖排；仅“控制”面板可见时）
+    if (s_controls_visible && ll_in_rect(x, y, LL_CLOUD_X0, LL_VIEW_Y0, LL_CLOUD_BTN_W, LL_CLOUD_TOTAL_H)) {
+        for (int32_t i = 0; i < LL_CLOUD_COUNT; i++) {
+            if (ll_in_rect(x, y, LL_CLOUD_X0, LL_CLOUD_Y(i), LL_CLOUD_BTN_W, LL_CLOUD_BTN_H)) {
+                return S_CLOUD_ACTION[i];
             }
         }
         return UI_LL_CTRL_NONE;
@@ -340,8 +379,68 @@ static void ll_draw_view(Nano_GFX *gfx) {
     }
 }
 
-void ui_linglong_ctrl_draw(Nano_GFX *gfx, int32_t running_state, int32_t speed) {
+// 两行按钮：上行名称，下行现值（体积云三个参数按钮用，现值直接可见）
+// enabled=0 时（当前天空模型不吃体积云参数）整枚画暗，避免“点了没反应”的困惑；
+// 点按仍然生效（参数被记住，切到体积云档位即体现）。
+static void ll_draw_option_button(Nano_GFX *gfx, int32_t x, int32_t y, int32_t w, int32_t h,
+                                 const wchar_t *label, const wchar_t *value,
+                                 int32_t pressed, int32_t enabled) {
+    uint8_t r = LL_COLOR_BG_R, g = LL_COLOR_BG_G, b = LL_COLOR_BG_B;
+    if (pressed) {
+        r = LL_COLOR_PRESS_R;
+        g = LL_COLOR_PRESS_G;
+        b = LL_COLOR_PRESS_B;
+    }
+    uint8_t alpha = enabled ? LL_ALPHA_CLOUD : LL_ALPHA_CLOUD_DIM;
+    gfx_draw_rounded_rectangle(gfx, x, y, w, h,
+        LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS,
+        r, g, b, pressed ? 205 : alpha);
+    // 名称行（白/暗灰）与现值行（淡青/暗青，突出可变量）
+    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)label,
+        x + w / 2, y + h / 2 - 9,
+        enabled ? LL_COLOR_TEXT_R : LL_COLOR_DIM_R,
+        enabled ? LL_COLOR_TEXT_G : LL_COLOR_DIM_G,
+        enabled ? LL_COLOR_TEXT_B : LL_COLOR_DIM_B,
+        enabled ? 235 : 200);
+    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)value,
+        x + w / 2, y + h / 2 + 9,
+        enabled ? 200 : LL_COLOR_DIM_R,
+        enabled ? 232 : LL_COLOR_DIM_G,
+        enabled ? 255 : LL_COLOR_DIM_B,
+        enabled ? 245 : 200);
+}
+
+static void ll_draw_cloud(Nano_GFX *gfx, const UiLinglongCtrlState *st) {
+    if (!s_controls_visible) return;
+
+    // 云类：按掩码在档位表里找回显名（表由 celestial.c 维护，UI 与控制逻辑共用）
+    int32_t layer_num = 0;
+    const Linglong_Cloud_Option *layers = linglong_cloud_layer_options(&layer_num);
+    const wchar_t *layer_name = layers[0].name;
+    for (int32_t i = 0; i < layer_num; i++) {
+        if (layers[i].value == st->cloud_layer_mask) { layer_name = layers[i].name; break; }
+    }
+    // 云精度：档位序号直接索引
+    int32_t prec_num = 0;
+    const Linglong_Cloud_Option *precs = linglong_cloud_precision_options(&prec_num);
+    int32_t prec = st->cloud_precision_level;
+    if (prec < 0 || prec >= prec_num) prec = 0;
+
+    const wchar_t *values[LL_CLOUD_COUNT];
+    values[0] = ui_cloud_coverage_level_name(st->cloud_coverage_level);
+    values[1] = layer_name;
+    values[2] = precs[prec].name;
+
+    for (int32_t i = 0; i < LL_CLOUD_COUNT; i++) {
+        int32_t pressed = (s_pressed == S_CLOUD_ACTION[i]);
+        ll_draw_option_button(gfx, LL_CLOUD_X0, LL_CLOUD_Y(i), LL_CLOUD_BTN_W, LL_CLOUD_BTN_H,
+            S_CLOUD_LABEL[i], values[i], pressed, st->cloud_enabled);
+    }
+}
+
+void ui_linglong_ctrl_draw(Nano_GFX *gfx, const UiLinglongCtrlState *st) {
     ll_draw_top(gfx);
-    ll_draw_time(gfx, running_state, speed);
+    ll_draw_time(gfx, st->running_state, st->speed);
     ll_draw_view(gfx);
+    ll_draw_cloud(gfx, st);
 }

@@ -74,10 +74,15 @@ typedef struct UiCloud_Render_Params {
     int   layer_mask;       // 云层种类掩码（UI_CLOUD_LAYER_* 组合）
     float brightness;       // 云亮度 0.5~2.0
     int   enable_sun_lens;  // 是否绘制云内核自带的太阳镜头光晕（天象仪集成时关闭，因为它自己画太阳）
+    // ---- 性能档位覆盖（0 = 用 ui_cloud 内部默认值，见 CLOUD_OPT_* 宏） ----
+    int   render_scale;     // 内部渲染降采样倍数（1=全分辨率，2=半分辨率…）
+    float step_nominal_km;  // 云区裁剪后的目标采样步距（km）
 } UiCloud_Render_Params;
 
 // 云量档位数（与独立应用 4/6 键的档位表一致，默认 6 档）
 int   ui_cloud_coverage_level_num(void);
+// 档位名称（“晴空/疏云/半云/多云/阴天/满云”；越界钳制到有效范围）
+const wchar_t *ui_cloud_coverage_level_name(int level);
 // 档位 → 云覆盖度标定值（档位钳制到有效范围）
 float ui_cloud_coverage_for_level(int level);
 

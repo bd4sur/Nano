@@ -2651,6 +2651,49 @@ static inline void sky_inscatter_lut_lookup(
 
 
 // ===============================================================================
+// 云类 / 云精度 档位表（玲珑仪触屏控制面板与控制逻辑共用，见 celestial.h）
+// ===============================================================================
+
+// 云类：云层掩码循环（默认仅低层；中/高层叠满时逐像素 ray-march 成本成倍上升）
+static const Linglong_Cloud_Option S_CLOUD_LAYER_OPTIONS[] = {
+    { UI_CLOUD_LAYER_LOW,                            L"低层" },
+    { UI_CLOUD_LAYER_LOW | UI_CLOUD_LAYER_MID,       L"低中" },
+    { UI_CLOUD_LAYER_ALL,                            L"全部" },
+    { 0,                                             L"无云" },
+};
+#define S_CLOUD_LAYER_OPTION_NUM ((int32_t)(sizeof(S_CLOUD_LAYER_OPTIONS) / sizeof(S_CLOUD_LAYER_OPTIONS[0])))
+
+// 云精度：档位序号 → 内部渲染降采样倍数 + ray-march 目标采样步距（km）。
+// 中间档 = ui_cloud.c 的 CLOUD_OPT_* 默认（发布值），实测见 doc/AGENTS.md。
+static const Linglong_Cloud_Option S_CLOUD_PRECISION_OPTIONS[] = {
+    { 0, L"高" },   // 全分辨率 + flower 原步距 0.0625km（WASM 单线程仅低层 ≈3fps）
+    { 1, L"中" },   // 半分辨率 + 0.25km（默认，≈12fps）
+    { 2, L"低" },   // 1/3 分辨率 + 0.5km（≈20fps，云边缘明显变柔）
+};
+#define S_CLOUD_PRECISION_OPTION_NUM ((int32_t)(sizeof(S_CLOUD_PRECISION_OPTIONS) / sizeof(S_CLOUD_PRECISION_OPTIONS[0])))
+
+// 云精度档位 → 渲染参数（与 S_CLOUD_PRECISION_OPTIONS 一一对应）
+typedef struct {
+    int   render_scale;
+    float step_nominal_km;
+} Linglong_Cloud_Precision;
+static const Linglong_Cloud_Precision S_CLOUD_PRECISION_PARAMS[] = {
+    { 1, 0.0625f },
+    { 2, 0.25f },
+    { 3, 0.5f },
+};
+
+const Linglong_Cloud_Option *linglong_cloud_layer_options(int32_t *count) {
+    if (count) *count = S_CLOUD_LAYER_OPTION_NUM;
+    return S_CLOUD_LAYER_OPTIONS;
+}
+
+const Linglong_Cloud_Option *linglong_cloud_precision_options(int32_t *count) {
+    if (count) *count = S_CLOUD_PRECISION_OPTION_NUM;
+    return S_CLOUD_PRECISION_OPTIONS;
+}
+
+// ===============================================================================
 // 初始化天象仪语境
 // ===============================================================================
 
@@ -2706,6 +2749,7 @@ void linglong_init(Linglong_Config *cfg) {
     // 需要全层观感时可把掩码改成 UI_CLOUD_LAYER_ALL（低|中|高）。
     cfg->cloud_layer_mask = UI_CLOUD_LAYER_LOW;
     cfg->cloud_brightness = 0.5f;     // 云亮度（默认起始值，2026-10 由 1.4 改为 0.5）
+    cfg->cloud_precision_level = 1;   // 云精度档位（0-高 1-中 2-低；中 = 半分辨率 + 0.25km 步距）
 
     cfg->lut_alt_step = 0.5f;         // Inscatter LUT 高度角步长（度）
     cfg->lut_azi_step = 0.5f;         // Inscatter LUT 方位角步长（度）
@@ -2773,7 +2817,8 @@ void render_sky(Nano_GFX *gfx,
     // 体积云参数（仅 sky_model==4 时有效）
     int32_t cloud_coverage_level,    // 云量档位 0-5
     int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
-    float   cloud_brightness         // 云亮度 0.5~2.0
+    float   cloud_brightness,        // 云亮度 0.5~2.0
+    int32_t cloud_precision_level    // 云精度档位 0-2（高/中/低）
 ) {
 
     uint32_t fb_width = gfx->width;
@@ -2890,6 +2935,13 @@ void render_sky(Nano_GFX *gfx,
         cp.coverage = ui_cloud_coverage_for_level(cloud_coverage_level);
         cp.layer_mask = cloud_layer_mask;
         cp.brightness = cloud_brightness;
+        // 云精度档位 → 内部渲染降采样倍数 + ray-march 步距（越界钳制到中间档）
+        {
+            int32_t lv = cloud_precision_level;
+            if (lv < 0 || lv >= S_CLOUD_PRECISION_OPTION_NUM) lv = 1;
+            cp.render_scale = S_CLOUD_PRECISION_PARAMS[lv].render_scale;
+            cp.step_nominal_km = S_CLOUD_PRECISION_PARAMS[lv].step_nominal_km;
+        }
         cp.enable_sun_lens = 0; // 天象仪绘制太阳
 
         ui_cloud_render_core(gfx, &cp);

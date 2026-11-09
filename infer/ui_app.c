@@ -1867,7 +1867,8 @@ int32_t ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_sta
         llcfg->enable_tracking_sun,
         llcfg->cloud_coverage_level,
         llcfg->cloud_layer_mask,
-        llcfg->cloud_brightness
+        llcfg->cloud_brightness,
+        llcfg->cloud_precision_level
     );
 
 #if defined(NANO_POD_POCKETTERM35)
@@ -2049,7 +2050,14 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
         // 主天空界面：叠加显式触屏控件（顶部按钮栏 + 可选的时间/视角面板）。
         // 设置界面（LL_STATE_SETTING*）不绘制，继续沿用原有十六宫格软键布局。
         if (linglong_state == LL_STATE_SKY) {
-            ui_linglong_ctrl_draw(global_state->llgfx, linglong_timemachine_running_state, linglong_timemachine_speed);
+            UiLinglongCtrlState ctrl_state;
+            ctrl_state.running_state = linglong_timemachine_running_state;
+            ctrl_state.speed = linglong_timemachine_speed;
+            ctrl_state.cloud_coverage_level = global_state->linglong_cfg->cloud_coverage_level;
+            ctrl_state.cloud_layer_mask = global_state->linglong_cfg->cloud_layer_mask;
+            ctrl_state.cloud_precision_level = global_state->linglong_cfg->cloud_precision_level;
+            ctrl_state.cloud_enabled = (global_state->linglong_cfg->sky_model == 4);
+            ui_linglong_ctrl_draw(global_state->llgfx, &ctrl_state);
         }
     }
 
@@ -2235,6 +2243,36 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                     ui_app_linglong_set_timemachine_speed(key_event, global_state, 120);
                     linglong_paused_resume_state = 1;
                     break;
+
+                case UI_LL_CTRL_CLOUD_COVERAGE: {
+                    // 云量档位循环（晴空→疏云→半云→多云→阴天→满云）
+                    int32_t n = ui_cloud_coverage_level_num();
+                    if (n < 1) n = 1;
+                    global_state->linglong_cfg->cloud_coverage_level = (global_state->linglong_cfg->cloud_coverage_level + 1) % n;
+                    break;
+                }
+
+                case UI_LL_CTRL_CLOUD_LAYER: {
+                    // 云类（云层掩码）档位循环：低层 → 低+中 → 全部 → 无云 → 低层…
+                    int32_t n = 0;
+                    const Linglong_Cloud_Option *opt = linglong_cloud_layer_options(&n);
+                    int32_t idx = 0;
+                    for (int32_t i = 0; i < n; i++) {
+                        if (opt[i].value == global_state->linglong_cfg->cloud_layer_mask) { idx = i; break; }
+                    }
+                    idx = (n > 0) ? (idx + 1) % n : 0;
+                    global_state->linglong_cfg->cloud_layer_mask = opt[idx].value;
+                    break;
+                }
+
+                case UI_LL_CTRL_CLOUD_PRECISION: {
+                    // 云精度档位循环：高 → 中 → 低（内部渲染降采样倍数 + ray-march 步距）
+                    int32_t n = 0;
+                    (void)linglong_cloud_precision_options(&n);
+                    if (n < 1) n = 1;
+                    global_state->linglong_cfg->cloud_precision_level = (global_state->linglong_cfg->cloud_precision_level + 1) % n;
+                    break;
+                }
 
                 default:
                     // 视角九宫格：合成对应的 NANO_KEY_1~9 短按事件，

@@ -76,6 +76,7 @@ typedef struct Linglong_Config {
     int32_t cloud_coverage_level;    // 云量档位 0-5（晴空→疏云→半云→多云→阴天→满云）
     int32_t cloud_layer_mask;        // 云层种类掩码；bit0-低层 bit1-中层 bit2-高层（7=全部，0=无云）
     float   cloud_brightness;        // 云亮度 0.5~2.0（联动云介质光学参数，物理地改变观感）
+    int32_t cloud_precision_level;   // 云精度档位 0-2（高/中/低：内部渲染降采样倍数 + ray-march 步距）
 
     // 以下与天空渲染无关（非render_sky参数）
     int32_t enable_imu;              // 是否启用IMU（使视角随机器姿态旋转）
@@ -89,6 +90,19 @@ typedef struct Linglong_Config {
 
 void linglong_init(Linglong_Config *cfg);
 void linglong_free(void);
+
+// ===============================================================================
+// 「云类」（云层掩码）与「云精度」档位表
+// 玲珑仪触屏控制面板的对应按钮与控制逻辑共用这一份唯一真源（选项值 + 显示名）。
+// ===============================================================================
+typedef struct {
+    int32_t        value;   // 云类：云层掩码（UI_CLOUD_LAYER_*）；云精度：档位序号
+    const wchar_t *name;    // 按钮上显示的名称
+} Linglong_Cloud_Option;
+
+// 返回档位表首地址，*count 写入项数（不会为 0）
+const Linglong_Cloud_Option *linglong_cloud_layer_options(int32_t *count);
+const Linglong_Cloud_Option *linglong_cloud_precision_options(int32_t *count);
 
 void render_sky(Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
@@ -114,7 +128,8 @@ void render_sky(Nano_GFX *gfx,
     // 体积云参数（仅 sky_model==4 时有效）
     int32_t cloud_coverage_level,    // 云量档位 0-5
     int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
-    float   cloud_brightness         // 云亮度 0.5~2.0
+    float   cloud_brightness,        // 云亮度 0.5~2.0
+    int32_t cloud_precision_level    // 云精度档位 0-2（高/中/低）
 );
 
 #ifdef __cplusplus

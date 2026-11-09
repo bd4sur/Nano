@@ -6926,3 +6926,55 @@ wasm32，用 node 跑任意 `.scm`（`(display ...)` 直通 stdout）。**意义
   Ctrl+7 切到 sky_model=4 → 用时光机按帧数倒放到当日 12:00（不同构建落在同一太阳位置）→
   量 `fb_epoch` 增量、截屏、统计上半屏云像素；`bench_cloud_opt.sh` 逐档改宏重建并汇总。
 - `regress_linglong_ui.js` 玲珑仪 UI 回归全通过；页面无 pageerror。
+
+# 2026-11-09（玲珑仪“控制”面板新增 云量 / 云类 / 云精度 三枚按钮）
+
+在“控制”按钮控制显隐的面板中增加三枚体积云参数按钮，默认值即当前值，已有按钮位置不动。
+
+## 实现摘要（玲珑仪触屏控件 + 体积云参数打通）
+
+- **布局**（`ui_linglong_ctrl.c`）：三枚按钮竖排在视角九宫格左侧（`LL_CLOUD_X0 = LL_VIEW_X0 - 6 - 56`），
+  行距沿用九宫格的三行（46/92/138，高 40），与九宫格三行齐平；顶部按钮、时间按钮、九宫格
+  的坐标与尺寸一律未动。按钮为两行文字：上行名称、下行现值（如“云量/半云”“云类/低层”
+  “云精度/中”）。填充透明度单独取 168（九宫格是 100）：两行文字信息密度高，100 在正午亮天空
+  上会洗掉对比度（实测按钮底色 (79,93,104) vs 九宫格 (112,146,165)）。
+  当前天空模型不是体积云（`sky_model != 4`）时三枚按钮画暗（透明度 110 + 灰字），避免
+  “点了没反应”的困惑；参数仍被记住，切到体积云档位即生效。
+- **动作与状态机**（`ui_app.c`）：新增 `UI_LL_CTRL_CLOUD_COVERAGE/LAYER/PRECISION`(19/20/21)，
+  松手沿各自循环一档并置 `linglong_refreshed=0` 重绘。控件显隐/按住高亮/现值变化的
+  dirty 机制沿用原逻辑。
+- **档位表单一真源**：
+  - 云量：`ui_cloud.c` 新增 `ui_cloud_coverage_level_name()`（晴空/疏云/半云/多云/阴天/满云），
+    与既有 `ui_cloud_coverage_level_num()/for_level()` 同表；默认半云。
+  - 云类与云精度：`celestial.c` 新增 `linglong_cloud_layer_options()/linglong_cloud_precision_options()`
+    （`Linglong_Cloud_Option{value,name}`），UI 与事件处理共用，不重复写字符串。
+    云类循环：低层（默认）→ 低中 → 全部 → 无云；云精度循环：高 → 中（默认）→ 低。
+- **打通到渲染**：`UiCloud_Render_Params` 新增 `render_scale` / `step_nominal_km`（0 = 用
+  `CLOUD_OPT_*` 内部默认），`ui_cloud_render_core` 里按非 0 覆盖场景档位；
+  `Linglong_Config` 新增 `cloud_precision_level`，`render_sky()` 新增同名形参，
+  `celestial.c` 用 `S_CLOUD_PRECISION_PARAMS` 映射成（内部降采样倍数，ray-march 步距）。
+- **云类=无云**：`cloud_layer_band()` 返回 0，`cloudPixelCompute` 整条光线早退（只剩大气积分）。
+
+## 云精度三档实测（真 WASM + 无头 chromium，玲珑仪 sky_model=4，默认 仅低层+半云）
+
+| 云精度 | 内部渲染 | 目标步距 | 帧率 |
+|---|---|---|---|
+| 高 | 320x240（1:1） | 0.0625km（flower 原步距） | 2.1 fps |
+| 中（默认） | 160x120（1/2） | 0.25km | 12.2 fps |
+| 低 | 约 106x80（1/3） | 0.5km | 26.8 fps |
+
+（“高”比优化前的 2.8fps 略慢：裁剪后云带内按 0.0625km 均匀采样，掠射光线的采样比原来更密，
+属画质升级项；“高”档在 云类=低中 时约 1.2fps，可见中/高层叠满的代价。）
+
+## 验证
+
+- 新增探针 `infer/tools/e2e/browser/probe_linglong_cloudpanel.js`：面板显隐/暗亮态、
+  三枚按钮各自“现值文字改变 + 天空画面改变”、云精度三档帧率排序（中<低、高<中）、
+  九宫格 9 个按钮仍逐一生效、云类循环到“无云”后帧率回升（体积云 ray-march 整条早退）、
+  页面无 pageerror——全通过。
+- `regress_linglong_ui.js` 全通过。顺带修了该回归两处时间/布局相关的不稳定判据：
+  ① “控制面板可见时拖动不改变视角”的拖动点原取左侧 (20,100)→(50,100)（现已让给云类按钮），
+  改到右侧空白区 (270,100)→(300,100)；
+  ② “实时恢复当前时间”原只比 `sky()` 区域，夜里天体每秒只转 0.004°、天空本身几乎静止，
+  会误判为“未变化”（已在优化前的构建上复现），判据改为包含底部状态栏（秒数逐秒必变）。
+- 构建：`infer/build_wasm_gui.sh`（仅 WASM GUI 目标）；四个改动文件另做 `gcc -fsyntax-only` 通过。

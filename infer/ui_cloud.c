@@ -1624,6 +1624,10 @@ static const SunPreset SUN_PRESETS[] = {
 static const float CLOUD_COVERAGE_LEVELS[] = {
     0.000f, 0.325f, 0.340f, 0.353f, 0.368f, 0.395f
 };
+// 档位名称（玲珑仪“云量”按钮直接显示；档位语义的唯一真源在此处）
+static const wchar_t *CLOUD_COVERAGE_NAMES[] = {
+    L"晴空", L"疏云", L"半云", L"多云", L"阴天", L"满云",
+};
 #define CLOUD_COVERAGE_LEVEL_NUM ((int)(sizeof(CLOUD_COVERAGE_LEVELS) / sizeof(CLOUD_COVERAGE_LEVELS[0])))
 // 默认档位（默认偏少，避免挡住蓝天与太阳）
 #define CLOUD_COVERAGE_DEFAULT_LEVEL (2)
@@ -1746,6 +1750,12 @@ float ui_cloud_coverage_for_level(int level) {
     if (level < 0) level = 0;
     if (level >= CLOUD_COVERAGE_LEVEL_NUM) level = CLOUD_COVERAGE_LEVEL_NUM - 1;
     return CLOUD_COVERAGE_LEVELS[level];
+}
+
+const wchar_t *ui_cloud_coverage_level_name(int level) {
+    if (level < 0) level = 0;
+    if (level >= CLOUD_COVERAGE_LEVEL_NUM) level = CLOUD_COVERAGE_LEVEL_NUM - 1;
+    return CLOUD_COVERAGE_NAMES[level];
 }
 
 static void cloud_apply_brightness(float b) {
@@ -2195,6 +2205,10 @@ void ui_cloud_render_core(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     s_scene.cloudCoverage = clampf(p->coverage, 0.0f, 1.0f);
     s_ui.layer_mask = p->layer_mask;
     cloud_apply_brightness(p->brightness);
+
+    // 性能档位覆盖（0 = 用 CLOUD_OPT_* 的内部默认值；玲珑仪“云精度”按钮走这条路）
+    if (p->render_scale > 0) s_scene.cloudRenderScale = p->render_scale;
+    if (p->step_nominal_km > 0.0f) s_scene.cloudStepNominalKm = p->step_nominal_km;
 
     // 相机与投影（天象仪视角 → 云渲染 yaw/pitch/roll；独立应用直接传入自身状态）
     s_ui.yaw = p->yaw_rad;
