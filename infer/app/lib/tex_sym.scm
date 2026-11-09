@@ -268,17 +268,26 @@
   (B.l (+ x (* 0.12 em)) (+ y (* 0.02 em)) (- (+ x w) (* 0.08 em)) (- y (* 0.66 em)) lw)
   `(,w ,(get_item m 1) ,(get_item m 2))))
 
-;; ∂：左侧一个近闭合的环 + 右上一条上扬的尾巴（字形没有该字，按形状画）
+;; ∂：**近乎闭合的环**（缺口只有 25°，落在右上方）+ 从缺口上端向右上挑出的尾巴。
+;; 四次返工的结论（省后人时间）：这个字形要"认得出是 ∂"，
+;;   ① 环必须看起来是**闭合的**——缺口开在右侧 40°+ 会让它读成字母 "c"；
+;;   ② 尾巴必须是"高而略右凸"的一段（≥0.3em），且与环相接**不穿入**环内；
+;;   ③ 缺口位置要在**右上方**（不是右侧）：环的右中与右下都要有笔画。
+;; 于是：弧从 327.5° 反向扫 335° 到 -7.5°（缺口 25° 居中在 315°），尾巴从 327.5°
+;; 那端用二次贝塞尔挑出。
 (define  sym_partial (lambda (x y em fid bold)
   (define lw (lw_of em))
-  (define cx (+ x (* 0.25 em)))
-  (define cy (- y (* 0.34 em)))
-  (define rx (* 0.23 em))
-  (define ry (* 0.32 em))
-  (B.arc cx cy rx ry (* -0.34 PI) (* 1.52 PI) 18 lw)
-  (B.l (+ cx (* rx (Math.cos (* -0.34 PI)))) (+ cy (* ry (Math.sin (* -0.34 PI))))
-       (+ x (* 0.5 em)) (- y (* 0.75 em)) lw)
-  `(,(* 0.56 em) ,(* 0.8 em) ,(* 0.05 em))))
+  (define rx (* 0.21 em))
+  (define ry (* 0.23 em))
+  (define cx (+ x (* rx 1.2)))
+  (define cy (- y (* ry 1.28)))
+  (define ex 0.0)
+  (define ey 0.0)
+  (B.arc cx cy rx ry (* 1.8194 PI) (* -0.0417 PI) 28 lw)
+  (set! ex (+ cx (* rx (Math.cos (* 1.8194 PI)))))
+  (set! ey (+ cy (* ry (Math.sin (* 1.8194 PI)))))
+  (B.quad ex ey (+ ex (* 0.15 em)) (- ey (* 0.05 em)) (+ ex (* 0.06 em)) (- ey (* 0.34 em)) 9 lw)
+  `(,(+ (* 2.4 rx) (* 0.08 em)) ,(+ (* ry 1.28) (* 0.34 em)) ,(* 0.06 em))))
 
 (define  sym_nabla (lambda (x y em fid bold)
   (define m (emit_glyph 916 x y em fid 1.0 -1.0 0.0 bold))
