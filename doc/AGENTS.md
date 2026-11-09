@@ -6474,6 +6474,24 @@ cd webgui && python3 ../tools/https_static_server.py 9002 .
 对应单测新增两条：`√|a b;c d|` 的深度 > 行列式本身深度（向下伸展）、
 `√(a/b)` 比 `√5` 宽（随高度加宽）。
 
+**（4）`\begin{matrix}` 被凭空套上一对圆括号（行列式"两端括号方向反了"）**——
+`lay_matrix` 里判断要不要画定界符写成了 `(if (<= kind 6) …)`，把 **kind = 0**
+（`matrix` / `array` / `gathered` / `smallmatrix`，语义上**没有定界符**）也算进去了；
+而 `delim_open` / `delim_close` 的兜底分支返回 `(` / `)`，于是一个普通的 `matrix`
+被套上圆括号。表现最刺眼的是 `\left| \begin{matrix}…\end{matrix} \right|`：
+定界符变成 `| ( 内容 ) |`，看上去就是"行列式两端的高括号旁边多出一对方向怪异的括号"。
+
+修法：开定界符只在 `1 ≤ kind ≤ 6` 发射、闭合只在 `1 ≤ kind ≤ 5` 发射（cases=6 只有左
+花括号、aligned=7 与 matrix=0 没有）；`delim_open/close` 的兜底改为 `#f`（"无定界符"），
+不再返回括号。单测新增三条：matrix 比 pmatrix 窄、matrix 的绘制操作比 pmatrix 少 2 个、
+`\left|matrix\right|` 恰好 6 个操作（4 个单元格 + 2 根竖线）；另加了一条 19/19 的
+内置示例（行列式里含分式，正是用户报的那个形状）。
+
+> 顺带记一个**编辑器陷阱**：用 Python 批量改 `.scm` 的注释时，注释里若直接写
+> `\begin{matrix}` / `\right|`，Python 会把 `\b`、`\r` 当转义 → 写进文件的注释里
+> 出现了退格与回车，**回车把注释提前截断**，后面的 `ight|` 变成了代码，报
+> `[Runtime] load: 变量 ight| 未定义`。改注释也要用 raw string（或 `\\\\`）。
+
 
 ## 三轮：目录支持**滑动滚动**，抽出通用滚动菜单组件
 

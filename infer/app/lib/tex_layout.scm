@@ -1121,7 +1121,11 @@
   (set! ow 0.0)
   (set! cw2 0.0)
   (set! pad (* 0.1 em))
-  (if (<= kind 6)
+  ;; 只有 1..6 有开定界符：matrix/array/gathered/smallmatrix(0) 与 aligned/split(7)
+  ;; **没有定界符**。早期写成 (<= kind 6) 把 kind=0 也算了进去，而 delim_open 的兜底
+  ;; 分支返回 '('，于是 \\begin{matrix}…\end{matrix} 被凭空套上一对圆括号
+  ;; （配合 \\left|…\\right| 就表现为"行列式两端的高括号方向反了"）。
+  (if (and (>= kind 1) (<= kind 6))
       {
         (set! obx (draw_delim (delim_open kind) x y hr dr em))
         (set! ow (+ (get_item obx 0) pad))
@@ -1162,7 +1166,7 @@
       (set! r (+ r 1))
     })
   ;; ⑥ 闭合定界符
-  (if (<= kind 5)
+  (if (and (>= kind 1) (<= kind 5))
       {
         (set! cbx (draw_delim (delim_close kind) (+ x (+ ow totw)) y hr dr em))
         (set! cw2 (+ (get_item cbx 0) pad))
@@ -1172,11 +1176,11 @@
 
 (define  delim_open (lambda (kind)
   (cond ((== kind 1) 40) ((== kind 2) 91) ((== kind 3) 123)
-        ((== kind 4) 124) ((== kind 5) 8214) ((== kind 6) 123) (else 40))))
+        ((== kind 4) 124) ((== kind 5) 8214) ((== kind 6) 123) (else #f))))
 
 (define  delim_close (lambda (kind)
   (cond ((== kind 1) 41) ((== kind 2) 93) ((== kind 3) 125)
-        ((== kind 4) 124) ((== kind 5) 8214) (else 41))))
+        ((== kind 4) 124) ((== kind 5) 8214) (else #f))))
 
 ;; ---------------------------------------------------------------------------
 ;; 分发
