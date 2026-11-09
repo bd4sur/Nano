@@ -32,7 +32,7 @@
 ;;   0 正文        1 加粗        2 行内代码    3 链接
 ;;   4 标题1       5 标题2       6 标题3       7 代码块正文   8 列表项目符号
 ;;   9 表格竖线    10 引用块竖线   11 二级标题装饰竖线
-;;   12 块级图片   13 图片占位框   14 行内图片占位文本   15 水平线段
+;;   12 块级图片   13 图片占位框   14 行内图片占位文本   15 水平线段   16 块级数学公式
 ;;
 ;; 字宽：本机 12px alpha 字模是等宽的——半角步进 7px、全角（>= U+2E80）12px
 ;;   （实测：i/M/W/a 均为 7，中文/全角标点为 12；见 infer/glyph_12.h 头注释）。
@@ -68,6 +68,7 @@
 (define ST_IMAGE_TEXT 14) ;; 行内图片的降级占位文本「[图片: alt]」
 (define ST_HR 15)         ;; 水平线段（宽度由段宽决定；表格上/下框线与表头下框线用它，
                           ;; 这样框线只画到表格实际宽度，而不是整幅正文宽）
+(define ST_MATH 16)       ;; 块级数学公式（段的 0 格存 LaTeX 源串，绘制端按它取缓存的 op 流）
 
 (define BG_NONE 0)
 (define BG_CODE 1)
@@ -256,8 +257,18 @@
 ;; 因此纯逻辑单测不传也能跑。
 (define measure_image (lambda (path) #f))
 
+;; 数学公式度量回调：(源串, 最大宽) → (宽 上高 下深) | #f
+;;   由 App 注入（内部调 tex_parse / tex_layout 排版并缓存绘制 op 流，超宽时按比例
+;;   缩小 em 重排 —— 不是位图缩放）。不注入时（纯逻辑单测）公式退化为
+;;   "原样显示 $$ 源码" 的文本行，测试照样能跑、不依赖 tex 模块。
+(define math_measure #f)
+(define set_math_measure (lambda (fn) (set! math_measure fn) #t))
+(define MATH_PAD 3)       ;; 公式行内上下内边距（px）
+
 ;; 本次 layout 实际画出的图片张数（诊断用：App 会打到 MDSTAT 里）
 (define images_placed 0)
+;; 本次 layout 实际排出的数学公式条数（诊断用）
+(define math_placed 0)
 
 ;; 已排显示行的累计高度（emit_line 维护）：目录条目记的就是"标题在文档里的 y 偏移"，
 ;; 点目录跳转 = 直接把这个值当 scroll 用，不需要反查行号。
@@ -1046,6 +1057,40 @@
               (emit_image_placeholder path alt width)) })
     (emit_gap 8)))
 
+;; ---- 块级数学公式 -------------------------------------------------------
+;; 独占一行、**水平居中**；超宽时由注入的度量回调按比例缩小字号**重排**到与正文等宽
+;; （不是位图缩放，字形仍落在字模的清晰尺度上，与 app/mathjax.scm 同一套逻辑）。
+;;
+;; 段的 5 格用法与普通文本不同：0 格 = LaTeX 源串（绘制端按它取缓存的 op 流），
+;; 1 格 = ST_MATH，2 格 = 居中后的 x，3 格 = 公式宽，4 格留空。
+;; 行高 = 上高 + 下深 + 上下各 MATH_PAD 的内边距（绘制端用同一个 MATH_PAD 复原基线）。
+(define lay_math
+  (lambda (b width)
+    (define src (get_item b 1))
+    (define dims #f)
+    (define w 0)
+    (define h 0)
+    (define d 0)
+    (define x 0)
+    (emit_gap 7)
+    (if math_measure
+        (set! dims (math_measure src width))
+        #f)
+    (if (list? dims)
+        { (set! w (get_item dims 0))
+          (set! h (get_item dims 1))
+          (set! d (get_item dims 2))
+          (set! x (Math.floor (/ (- width w) 2)))
+          (if (< x 0) (set! x 0) #f)
+          (emit_line (+ (+ h d) (* 2 MATH_PAD)) BG_NONE
+                     (mk1 (mk5 src ST_MATH x w "")))
+          (set! math_placed (+ math_placed 1)) }
+        ;; 没有排版引擎 / 排版失败：原样显示公式源码（不吞内容，便于自查）
+        (emit_wrapped (mk1 (mk2 'text (String.concat "$$ "
+                                        (String.concat src " $$"))))
+                      width 0 0 BG_NONE ST_CODE))
+    (emit_gap 8)))
+
 ;; ---- 注册块排版（顺序无关，按种类查表）----------------------------------
 
 (layout_add 'heading lay_heading)
@@ -1056,6 +1101,7 @@
 (layout_add 'table lay_table)
 (layout_add 'quote lay_quote)
 (layout_add 'image lay_image)
+(layout_add 'math lay_math)
 
 ;; ============================================================================
 ;; 四、对外 API
@@ -1077,6 +1123,7 @@
     (define fn #f)
     (set! cur_lines (new_list))
     (set! images_placed img_done)
+    (set! math_placed 0)
     (set! cur_y 0)
     (set! toc_entries (new_list))
     (set! quote_depth 0)
@@ -1118,6 +1165,11 @@
 (define image_count
   (lambda ()
     images_placed))
+
+;; 本次 layout 实际排出的数学公式条数（诊断/测试用）
+(define math_count
+  (lambda ()
+    math_placed))
 
 ;; 本次 layout 收集到的目录（元素 = (层级 y偏移 文本)；层级 1~3）
 (define toc

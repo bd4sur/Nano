@@ -43,6 +43,11 @@
 //          24MB 能容纳约 32KB 文档——App 侧据此设了 DOC_MAX 上限并给出友好提示）
 //   · 32MB：markdown.scm 继续长大（又并进 filepicker / fsx 两个模块，且加了目录功能），
 //          24MB 时编译期 VM 区（池的一半）就装不下了；32MB 实测可正常加载
+//   · 48MB：markdown.scm 加入**块级数学公式**（复用 mathjax 的 TeX 引擎，连
+//          tex_parse / tex_layout / tex_sym / tex_draw / tex_base 五个模块一起编译）
+//          后编译期工作区又涨了一截：wasm32 实测 40MB 池仍 link_fail、44MB 可链接，
+//          故期望值上调到 48MB（WASM/桌面的线性内存充裕，实测 384MB 从不增长；
+//          ESP32 仍是 2MB——本 App 本来也装不下，见下）
 // 编译期的 VM 工作区占用远大于运行期堆占用（后者极小）。
 // 内存受限宿主：pool_size 按「最大连续块 - 余量」自适应下调（见下），
 // 小 App 仍可正常运行；装不下的大 App 会显示「内存不足」错误画面。
@@ -52,7 +57,7 @@
 #if NANO_IS_M5ESP
     #define MB_POOL_SIZE   (2ULL * 1024 * 1024)
 #else
-    #define MB_POOL_SIZE   (32ULL * 1024 * 1024)
+    #define MB_POOL_SIZE   (48ULL * 1024 * 1024)
 #endif
 #define MB_POOL_MIN    (512ULL * 1024)
 #define MB_POOL_MARGIN (64ULL * 1024)

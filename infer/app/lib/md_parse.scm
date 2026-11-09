@@ -18,6 +18,9 @@
 ;;        (table aligns header cells) 表格：aligns = 每列对齐方式，header = 表头单元格，
 ;;                                    cells = 数据行（行 = 单元格列表），
 ;;                                    每个单元格是**行内节点列表**（单元格里可再写加粗/代码/链接）
+;;        (math "源串")              块级数学公式（$$...$$ / $$ + 若干行 + $$）；
+;;                                    只收 LaTeX 源串，排版与绘制在 md_layout / App 端。
+;;                                    行内 $...$ **不** 解析（保持字面文本）。
 ;;
 ;;     行内节点（inlines 的元素）：
 ;;        (text "字符串")             纯文本
@@ -80,6 +83,7 @@
 (define CP_TICK 96)
 (define CP_PIPE 124)
 (define CP_TILDE 126)
+(define CP_DOLLAR 36)
 
 ;; 全角/宽字符起点（0x2E80）。与 12px 字模一致：>= 此值者宽 12px，否则 7px。
 (define CJK_BASE 11904)
@@ -432,6 +436,76 @@
                 (if (>= (- i ind) 3) (mk3 c0 (- i ind) ind) #f) }
               #f) })))
 
+;; ---- 块级数学公式（$$...$$）---------------------------------------------
+;; 只认**块级**：行首（去缩进后）是 $$。行内 $...$ 一律按普通文本处理（不解析）。
+;;
+;; 两种写法都支持：
+;;     $$ E = mc^2 $$                 —— 同一行内闭合（单行公式）
+;;     $$                             —— 多行公式（各行以空格拼接；TeX 里空白无所谓）
+;;     \int_0^1 x\,dx = \frac12
+;;     $$
+;; 未闭合时吃到文末（与围栏代码块同策略，不丢内容）。
+;; md_stream.scm 的切段器也查这两个谓词，避免在公式内部的空行处切段。
+
+;; 从 from 起找 "$$" 的下标（找不到返回 -1）
+(define dd_at
+  (lambda (s from)
+    (define n (String.length s))
+    (define i from)
+    (define r -1)
+    (while (and (< i (- n 1)) (< r 0))
+      { (if (and (== (String.charCodeAt i s) CP_DOLLAR)
+                 (== (String.charCodeAt (+ i 1) s) CP_DOLLAR))
+            (set! r i)
+            (set! i (+ i 1))) })
+    r))
+
+;; 公式块起始行
+(define math_open
+  (lambda (line)
+    (define t (trim line))
+    (define n (String.length t))
+    (if (>= n 2)
+        (if (== (String.charCodeAt 0 t) CP_DOLLAR)
+            (== (String.charCodeAt 1 t) CP_DOLLAR)
+            #f)
+        #f)))
+
+;; 单行公式：本行内闭合（`$$...$$`）
+(define math_single_line
+  (lambda (line)
+    (if (math_open line)
+        (>= (dd_at (trim line) 2) 2)
+        #f)))
+
+;; 公式结束行：内容以 "$$" 收尾（整行 `$$` 或 `... $$`）
+(define math_close_line
+  (lambda (line)
+    (define t (trim line))
+    (define n (String.length t))
+    (if (>= n 2)
+        (if (== (String.charCodeAt (- n 1) t) CP_DOLLAR)
+            (== (String.charCodeAt (- n 2) t) CP_DOLLAR)
+            #f)
+        #f)))
+
+;; 多行公式的行 → 源串（以空格拼接，空行略过）
+(define join_math
+  (lambda (parts)
+    (define n (length parts))
+    (define i 0)
+    (define out "")
+    (define p "")
+    (while (< i n)
+      { (set! p (get_item parts i))
+        (if (> (String.length p) 0)
+            (if (== (String.length out) 0)
+                (set! out p)
+                (set! out (String.concat out (String.concat " " p))))
+            #f)
+        (set! i (+ i 1)) })
+    out))
+
 ;; 围栏代码块结束行：同标记字符、个数不少于起始个数
 (define fence_close
   (lambda (line info)
@@ -535,6 +609,34 @@
             { (push body (strip_lead (get_item lines i) ind))
               (set! i (+ i 1)) }) })
     (mk2 (mk3 'code lang body) i)))
+
+;; 块级数学公式：$$...$$（单行）或 $$ + 若干行 + $$（见上文的谓词说明）
+(define h_math
+  (lambda (lines idx)
+    (define n (length lines))
+    (define head (trim (get_item lines idx)))
+    (define rest (String.slice head 2 (String.length head)))
+    (define cut (dd_at rest 0))
+    (define body (new_list))
+    (define i (+ idx 1))
+    (define stop 0)
+    (define t "")
+    (define src "")
+    (if (>= cut 0)
+        (set! src (trim (String.slice rest 0 cut)))
+        { ;; 多行：首行 $$ 之后的内容 + 后续行，直到以 $$ 收尾的行
+          (push body rest)
+          (while (and (< i n) (== stop 0))
+            { (set! t (trim (get_item lines i)))
+              (if (math_close_line t)
+                  { (push body (String.slice t 0 (- (String.length t) 2)))
+                    (set! stop 1) }
+                  (push body t))
+              (set! i (+ i 1)) })
+          (set! src (trim (join_math body))) })
+    (if (== (String.length src) 0)
+        (mk2 (mk2 'para (new_list)) i)      ;; 空公式：什么都不画（不占位、不留间隙）
+        (mk2 (mk2 'math src) i))))
 
 ;; 无序列表（**支持嵌套**）：item 行 + 其后续行（软换行续行）。
 ;;
@@ -803,6 +905,8 @@
 ;; ---- 注册块级规则（顺序即优先级；段落为兜底，不注册）---------------------
 
 (rule_add 'fence (lambda (lines idx) (if (fence_open (get_item lines idx)) #t #f)) h_fence)
+;; 数学公式排在 table/hr 之前：`$$ |x| $$` 里的竖线不该被误判成表格
+(rule_add 'math (lambda (lines idx) (math_open (get_item lines idx))) h_math)
 (rule_add 'heading (lambda (lines idx) (> (heading_level (get_item lines idx)) 0)) h_heading)
 (rule_add 'quote (lambda (lines idx) (>= (quote_content_at (get_item lines idx)) 0)) h_quote)
 ;; 表格排在 hr/list 之前：分隔行的 `---` 不是分隔线，而是表格的一部分

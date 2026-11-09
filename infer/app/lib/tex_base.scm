@@ -40,6 +40,11 @@
 (define  count (lambda () n))
 (define  at (lambda (i) (get_item ops i)))
 
+;; 把缓冲换回一组**已经排好**的操作（缓存复用）：Markdown 阅读器把每条公式的 op 流
+;; 连同操作数一起缓存，绘制时先换回来再 (D.draw ...)，避免每帧重排公式。
+;; 只读语义：换回来的流不应再被 shift 之类原地修改（排版器每次布局都会先 reset）。
+(define  set_ops (lambda (lst k) { (set! ops lst) (set! n k) }))
+
 (define  g (lambda (x y em sx sy cp shear bold fid)
   { (push ops `("g" ,x ,y ,em ,sx ,sy ,cp ,shear ,bold ,fid))
     (set! n (+ n 1)) }))

@@ -24,6 +24,9 @@
 ;;       因此同长度既安全又与原文档逐行等价（用 +4 之类更长标记会让"真正的结束行"
 ;;       在后续段里变成内容，实测会多出一行）；
 ;;     · 段尾在段落/列表/表格内 → 只置续接标志，让排版端**抑制缝上的间隙/内边距**。
+;;   块级数学公式（$$...$$）与围栏代码块同样对待：**不在公式内部的空行处切段**
+;;   （否则一段 $$...$$ 会被切成两段、两边都退化成普通文本）。公式块通常很短，
+;;   只有病态输入（>16KB 的巨型公式）才会在硬上限处被切断。
 ;;
 ;; 段的表示（列表，元素固定 9 个）：
 ;;   (字节起点 字节长度 源码行数 码点数 首续接 尾续接 围栏字符 合成开启长度 合成闭合长度)
@@ -265,6 +268,7 @@
     (define n (length sr_lines))
     (define i 0)
     (define fence #f)
+    (define imath 0)         ;; 1 = 正在一段 $$ 公式块内部（不在其内部的空行处切段）
     (define info #f)
     (define line "")
     (define chars 0)
@@ -276,14 +280,22 @@
     (set! plan_fence #f)
     (while (and (< i n) (== stop 0))
       { (set! line (get_item sr_lines i))
-        ;; 围栏状态推进（与 md_parse 的 h_fence 判定完全一致）
+        ;; 围栏状态推进（与 md_parse 的 h_fence 判定完全一致）；
+        ;; 数学公式块只在**围栏外**识别，且与围栏互斥（公式内不可能开代码围栏）。
         (if fence
             { (if (MD.fence_close line fence) (set! fence #f) #f) }
-            { (set! info (MD.fence_open line))
-              (if info (set! fence info) #f) })
+            { (if (== imath 1)
+                  { (if (MD.math_close_line line) (set! imath 0) #f) }
+                  { (set! info (MD.fence_open line))
+                    (if info
+                        (set! fence info)
+                        (if (and (MD.math_open line)
+                                 (not (MD.math_single_line line)))
+                            (set! imath 1)
+                            #f)) }) })
         (set! chars (+ chars (String.length line)))
         (set! bytes (+ bytes (+ (utf8_len line) 1)))
-        (if (and (>= bytes sr_seg_target) (== fence #f) (MD.is_blank line))
+        (if (and (>= bytes sr_seg_target) (== fence #f) (== imath 0) (MD.is_blank line))
             { (set! plan_cut (+ i 1)) (set! stop 1) }
             (if (>= bytes sr_seg_hard)
                 { (set! plan_cut (+ i 1)) (set! stop 1) }
