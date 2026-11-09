@@ -1526,7 +1526,6 @@ static uint32_t linglong_last_day = 0;
 static uint32_t linglong_sunrise_time[2] = {0, 0}; // hour, minute
 static uint32_t linglong_sunset_time[2] = {0, 0}; // hour, minute
 
-static int32_t linglong_refreshed = 0; // 记录暂停状态下是否已刷新
 static int32_t linglong_timemachine_running_state = 2; // 0-停止；1-时光机运行；2-实时
 static int32_t linglong_timemachine_speed = 0; // 时光机速度，正数为未来，负数为过去，单位秒
 static uint64_t linglong_timemachine_start_timestamp = 0;
@@ -1546,7 +1545,6 @@ static uint64_t linglong_splash_until = 0;
 
 
 void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state) {
-    linglong_refreshed = 0;
     linglong_state = LL_STATE_SKY;
     linglong_paused_resume_state = 2;
     ui_linglong_ctrl_init();
@@ -1797,9 +1795,13 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
 
 
 
-// 返回值：1-本帧真正重绘了星图（调用方可安全叠加半透明控件）；
-// 0-暂停且已刷新过，提前返回，帧缓冲保留上一帧（不可再次叠加控件，否则 alpha 会逐帧累积加深）。
-int32_t ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state) {
+// 玲珑仪主天空界面渲染。
+// 每帧总是完整重绘（没有“暂停就只画一次”的跳过逻辑）：实时海洋的波场、体积云的
+// 飘移都按墙钟推进（get_timestamp_in_ms），与模拟时间是否流动无关——时钟暂停时画面
+// 仍在持续变化，跳过重绘会把它们冻住；太阳移动时还需要按帧重建大气 LUT。
+// 故本函数无返回值，调用方每帧都会得到一帧全新画面，可安全叠加半透明控件
+// （不会出现 alpha 逐帧累积加深）。
+void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state) {
 
     Linglong_Config *llcfg = global_state->linglong_cfg;
 
@@ -1820,12 +1822,7 @@ int32_t ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_sta
 
     time_t ts = (time_t)(global_state->timestamp / 1000);
 
-    if (linglong_timemachine_running_state == 0) {
-        if (linglong_refreshed && (!(llcfg->enable_imu))) {
-            return 0;
-        }
-    }
-    else if (linglong_timemachine_running_state == 1) {
+    if (linglong_timemachine_running_state == 1) {
         linglong_timemachine_start_timestamp += (linglong_timemachine_speed * 1000);
         ts = (time_t)(linglong_timemachine_start_timestamp / 1000);
         struct tm *timeinfo = localtime(&ts); // 转换为本地时间
@@ -1895,9 +1892,6 @@ int32_t ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_sta
     wchar_t fps_str[16];
     swprintf(fps_str, 16, L"FPS=%.1f", fps_display_value);
     gfx_draw_textline(global_state->llgfx, fps_str, 1, 0, 0, 255, 0, 1);
-
-    linglong_refreshed = 1;
-    return 1;
 }
 
 void ui_app_linglong_draw_lite(
@@ -2034,42 +2028,36 @@ void ui_app_linglong_splash(Key_Event *key_event, Global_State *global_state) {
 }
 
 void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_state) {
-    // ui_app_linglong_draw_full(key_event, global_state);
-
-    int32_t frame_rendered = 1;
     if (linglong_state == LL_STATE_SETTING || linglong_state == LL_STATE_SETTING_CALLBACK) {
         ui_app_linglong_setting_draw(key_event, global_state);
     }
     else {
-        frame_rendered = ui_app_linglong_draw_full(key_event, global_state);
+        ui_app_linglong_draw_full(key_event, global_state);
     }
 
-    // 只有本帧真正重绘过星图/设置界面时才叠加文字与控件。暂停静止时 draw_full
-    // 会提前返回、帧缓冲保留上一帧；若此时再次叠加半透明控件，alpha 会逐帧累积，
-    // 按钮越来越深（最终接近不透明，圆角处尤其明显）。
-    if (frame_rendered) {
-        gfx_draw_textline(global_state->llgfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->llgfx->height - 13, 255, 255, 255, 200);
+    // 上面两条路径都会先把整幅画面重绘一遍（gfx_soft_clear + 全屏绘制），因此文字与
+    // 半透明控件每帧都叠在全新画面上，不会出现 alpha 逐帧累积加深。
+    gfx_draw_textline(global_state->llgfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->llgfx->height - 13, 255, 255, 255, 200);
 
-        wchar_t timestr[30];
-        swprintf(timestr, 30, L"%ls %04d-%02d-%02d %02d:%02d:%02d",
-            (linglong_timemachine_running_state == 0) ? L"  " :
-                (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed > 0)) ? L">>" :
-                (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed < 0)) ? L"<<" : L" >")),
-            global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->second);
-        gfx_draw_textline(global_state->llgfx, timestr, global_state->llgfx->width - 134, global_state->llgfx->height - 13, 255, 255, 255, 1);
+    wchar_t timestr[30];
+    swprintf(timestr, 30, L"%ls %04d-%02d-%02d %02d:%02d:%02d",
+        (linglong_timemachine_running_state == 0) ? L"  " :
+            (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed > 0)) ? L">>" :
+            (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed < 0)) ? L"<<" : L" >")),
+        global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->second);
+    gfx_draw_textline(global_state->llgfx, timestr, global_state->llgfx->width - 134, global_state->llgfx->height - 13, 255, 255, 255, 1);
 
-        // 主天空界面：叠加显式触屏控件（顶部按钮栏 + 可选的时间/视角面板）。
-        // 设置界面（LL_STATE_SETTING*）不绘制，继续沿用原有十六宫格软键布局。
-        if (linglong_state == LL_STATE_SKY) {
-            UiLinglongCtrlState ctrl_state;
-            ctrl_state.running_state = linglong_timemachine_running_state;
-            ctrl_state.speed = linglong_timemachine_speed;
-            ctrl_state.cloud_coverage_level = global_state->linglong_cfg->cloud_coverage_level;
-            ctrl_state.cloud_layer_mask = global_state->linglong_cfg->cloud_layer_mask;
-            ctrl_state.cloud_precision_level = global_state->linglong_cfg->cloud_precision_level;
-            ctrl_state.cloud_enabled = (global_state->linglong_cfg->sky_model == 4);
-            ui_linglong_ctrl_draw(global_state->llgfx, &ctrl_state);
-        }
+    // 主天空界面：叠加显式触屏控件（顶部按钮栏 + 可选的时间/视角面板）。
+    // 设置界面（LL_STATE_SETTING*）不绘制，继续沿用原有十六宫格软键布局。
+    if (linglong_state == LL_STATE_SKY) {
+        UiLinglongCtrlState ctrl_state;
+        ctrl_state.running_state = linglong_timemachine_running_state;
+        ctrl_state.speed = linglong_timemachine_speed;
+        ctrl_state.cloud_coverage_level = global_state->linglong_cfg->cloud_coverage_level;
+        ctrl_state.cloud_layer_mask = global_state->linglong_cfg->cloud_layer_mask;
+        ctrl_state.cloud_precision_level = global_state->linglong_cfg->cloud_precision_level;
+        ctrl_state.cloud_enabled = (global_state->linglong_cfg->sky_model == 4);
+        ui_linglong_ctrl_draw(global_state->llgfx, &ctrl_state);
     }
 
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
@@ -2144,7 +2132,6 @@ static void ui_app_linglong_control_realtime(Global_State *global_state) {
 
     linglong_timemachine_running_state = 2;
     linglong_paused_resume_state = 2;
-    linglong_refreshed = 0;
 }
 
 // 显式触屏控件：运行/暂停（暂停记住暂停前的模式，恢复时回到该模式）
@@ -2160,7 +2147,6 @@ static void ui_app_linglong_control_runpause(Global_State *global_state) {
         linglong_paused_resume_state = linglong_timemachine_running_state;
         linglong_timemachine_running_state = 0;
     }
-    linglong_refreshed = 0;
 }
 
 void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_state) {
@@ -2203,7 +2189,6 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                 llcfg->view_alt += (float)drag_dy * 180.0f / (float)canvas_h;
                 if (llcfg->view_alt > 90.0f) llcfg->view_alt = 90.0f;
                 if (llcfg->view_alt < -90.0f) llcfg->view_alt = -90.0f;
-                linglong_refreshed = 0;
             }
         }
 
@@ -2211,15 +2196,11 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             key_event->touch_edge, key_event->touch_x, key_event->touch_y,
             key_event->touch_down_x, key_event->touch_down_y);
 
-        // 控件显隐/按住高亮变化才需要重绘当前帧（暂停时 draw_full 会提前返回，
-        // 必须置 refreshed=0 让下一帧重绘天空后再叠加控件）。点击空白天空不触发重绘，
-        // 避免在 ESP32 等慢设备上因误触而重算整幅星图。
-        if (ui_linglong_ctrl_take_dirty()) {
-            linglong_refreshed = 0;
-        }
+        // 控件显隐/按住高亮变化无需特殊处理：玲珑仪每帧都完整重绘（暂停也不例外），
+        // 控件状态每帧都会被重画在新画面上；这里只把脏标记消费掉，避免它一直挂着。
+        (void)ui_linglong_ctrl_take_dirty();
 
         if (action != UI_LL_CTRL_NONE) {
-            linglong_refreshed = 0;
             int32_t synth_key = NANO_KEY_IDLE;
 
             switch (action) {
@@ -2309,11 +2290,6 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
     }
 
     int32_t is_setting_refresh = 0;
-
-    // 按任意键都重置玲珑仪刷新状态，以便响应按键活动
-    if (key_event->key_edge < 0 && key_event->key_code != NANO_KEY_IDLE) {
-        linglong_refreshed = 0;
-    }
 
     // 按1键向左偏航（yaw--），或者Ctrl时切换投影算法
     if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_1) {
