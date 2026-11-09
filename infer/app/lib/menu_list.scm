@@ -42,15 +42,22 @@
 (define min2 (lambda (a b) (if (< a b) a b)))
 (define max2 (lambda (a b) (if (> a b) a b)))
 
-;; ---- 字模度量（调用方按当前字模喂进来，用于按像素裁剪文字）----------------
+;; ---- 字模度量（调用方按当前字模喂进来）----------------------------------
+;;   half/full —— 半角/全角步进（按像素裁剪文字用）
+;;   ink_h     —— 字形墨高（12px 字模 = 12，16px 字模 = 16；行内垂直居中用）
+;;   pad       —— 绘制时墨顶相对文字框顶的内缩（点阵字模 0，抗锯齿字模 1）
 
 (define w_half 7)
 (define w_full 12)
+(define ink_h 12)
+(define ink_pad 1)
 
 (define metrics
-  (lambda (half full)
+  (lambda (half full h pad)
     (set! w_half half)
     (set! w_full full)
+    (set! ink_h (if (undefined? h) 12 h))
+    (set! ink_pad (if (undefined? pad) 0 pad))
     #t))
 
 (define char_w (lambda (cp) (if (>= cp 11904) w_full w_half)))   ;; 0x2E80 起算全角
@@ -91,8 +98,9 @@
 (define t_py 0)
 ;; 配色
 (define HL_R 40) (define HL_G 50) (define HL_B 68)      ;; 高亮行底色
-(define BAR_R 34) (define BAR_G 40) (define BAR_B 52)    ;; 滚动条槽
-(define TH_R 96) (define TH_G 116) (define TH_B 148)     ;; 滚动条滑块
+(define BAR_R 40) (define BAR_G 47) (define BAR_B 62)    ;; 滚动条槽
+(define TH_R 130) (define TH_G 150) (define TH_B 184)    ;; 滚动条滑块
+(define BAR_W 3)                                        ;; 滚动条宽（贴视口右缘）
 (define LAMP_ON_R 102) (define LAMP_ON_G 204) (define LAMP_ON_B 255)  ;; 指示灯亮
 (define LAMP_OFF_R 110) (define LAMP_OFF_G 118) (define LAMP_OFF_B 140)
 
@@ -270,6 +278,39 @@
 (define tap_y (lambda () t_py))
 (define tap_x (lambda () t_px))
 
+;; ---- 菜单自己的返回键（右上角）------------------------------------------
+;; 面板是全屏覆盖式的，阅读页右上角那个「退出」按钮在面板里不存在；因此每个菜单都要有
+;; 自己的**返回**入口。样式与 app/lib/exit.scm 的「退出」按钮一致（36x16、同配色），
+;; 位置也一致（右上角），用户的肌肉记忆不用改。
+(define back_x 0)
+(define back_y 2)
+(define back_w 36)
+(define back_h 16)
+(define back_label "返回")
+
+(define back_geom
+  (lambda (x y w h)
+    (set! back_x x) (set! back_y y) (set! back_w w) (set! back_h h)
+    #t))
+
+;; 按屏幕宽自动放到右上角（默认 36x16，右边留 4px、上边留 2px）
+(define back_top_right
+  (lambda (sw)
+    (back_geom (- sw (+ back_w 4)) 2 back_w back_h)))
+
+(define hit_back
+  (lambda (px py)
+    (if (and (>= px back_x) (< px (+ back_x back_w)))
+        (if (and (>= py back_y) (< py (+ back_y back_h))) 1 0)
+        0)))
+
+(define draw_back
+  (lambda ()
+    (Gfx.fill_rect back_x back_y back_w back_h 60 62 74)
+    (Gfx.draw_rect back_x back_y back_w back_h 120 124 140)
+    (Gfx.draw_text back_label (+ back_x 6) (+ back_y 2) 225 228 235)
+    #t))
+
 ;; ---- 绘制 ---------------------------------------------------------------
 
 (define draw_row
@@ -279,18 +320,21 @@
     (define ind (get_item it 4))
     (define lamp (get_item it 5))
     (define tx (+ vx (+ 6 (* ind 10))))
+    ;; 行内**垂直居中**：墨高居中后再减掉字模的顶部内缩（点阵 0 / 抗锯齿 1）
+    (define ty (+ y (- (Math.floor (/ (- row_h ink_h) 2)) ink_pad)))
+    (define ly (+ y (Math.floor (/ (- row_h 5) 2))))
     (if (== i sel)
         { (Gfx.fill_rect vx y vw row_h HL_R HL_G HL_B)
           (Gfx.draw_text (clip_text txt (- (- vw (- tx vx)) 12))
-                         tx (+ y 1) (get_item it 6) (get_item it 7) (get_item it 8)) }
+                         tx ty (get_item it 6) (get_item it 7) (get_item it 8)) }
         (Gfx.draw_text (clip_text txt (- (- vw (- tx vx)) 12))
-                       tx (+ y 1) (get_item it 1) (get_item it 2) (get_item it 3)))
+                       tx ty (get_item it 1) (get_item it 2) (get_item it 3)))
     ;; 琴键开关指示灯：实心 = 开，空心 = 关（画在文字左侧，与缩进/高亮底色都不冲突）
     (if (> lamp 0)
         { (set! tx (+ vx (+ 2 (* ind 10))))
           (if (== lamp 2)
-              (Gfx.fill_rect tx (+ y 5) 5 5 LAMP_ON_R LAMP_ON_G LAMP_ON_B)
-              (Gfx.draw_rect tx (+ y 5) 5 5 LAMP_OFF_R LAMP_OFF_G LAMP_OFF_B)) }
+              (Gfx.fill_rect tx ly 5 5 LAMP_ON_R LAMP_ON_G LAMP_ON_B)
+              (Gfx.draw_rect tx ly 5 5 LAMP_OFF_R LAMP_OFF_G LAMP_OFF_B)) }
         #f)
     #t))
 
@@ -309,14 +353,15 @@
             (set! stop 1)
             (draw_row i y))
         (set! i (+ i 1)) })
-    ;; 细滚动条（内容超过视口时才画；不干扰文字：画在视口右内缘 2px）
+    ;; 滚动条（内容超过视口时才画）：贴视口右缘 3px，槽 + 滑块；
+    ;; 滑块长度按"视口/内容"比例，位置按滚动比例——目录上千条时也能一眼看出位置。
     (if (> ch vh)
         { (set! slot (Math.floor (/ (* vh vh) ch)))
-          (if (< slot 12) (set! slot 12) #f)
+          (if (< slot 14) (set! slot 14) #f)
           (if (> slot vh) (set! slot vh) #f)
-          (Gfx.fill_rect (- (+ vx vw) 2) vy 2 vh BAR_R BAR_G BAR_B)
-          (Gfx.fill_rect (- (+ vx vw) 2)
+          (Gfx.fill_rect (- (+ vx vw) BAR_W) vy BAR_W vh BAR_R BAR_G BAR_B)
+          (Gfx.fill_rect (- (+ vx vw) BAR_W)
                          (+ vy (Math.floor (/ (* scroll (- vh slot)) (max_scroll))))
-                         2 slot TH_R TH_G TH_B) }
+                         BAR_W slot TH_R TH_G TH_B) }
         #f)
     #t))

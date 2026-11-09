@@ -147,6 +147,12 @@
 (define notice_h 0)           ;; 提示文案总高
 (define toc_scanned 0)        ;; 目录已覆盖的段数（= 索引推进到的段数，诊断/进度）
 (define toc_gen_seen -1)      ;; 已反映到 toc_items 的目录世代号（增量刷新用）
+;; 面板关闭后的若干帧里把宿主「退出」热区清零（>0 生效）：
+;;   面板的「返回」键与阅读页的「退出」键**同位置**，而宿主的退出热区判定发生在触摸**边沿**
+;;   （早于 App 的下一拍）。面板关闭的那一帧阅读页会重新登记热区，于是同一次点按会被宿主
+;;   再判成"返回请求"，进而在阅读页弹出全局退出确认框（WASM 实测踩到）。静音几帧即可，
+;;   阅读页的退出键本身仍由 EX 的电平兜底路径响应，不丢功能。
+(define exitbtn_mute 0)
 (define content_h 0)          ;; 全文档总高（像素；未索引部分为估算，仅用于滚动条/百分比）
 (define scroll 0)             ;; 纵向滚动偏移（像素，**由锚点派生**的只读快照）
 (define mode 1)               ;; 0 = 阅读，1 = 文档列表
@@ -510,8 +516,19 @@
 
 (define toc_items (cdr '(0)))   ;; 当前文档目录：(层级 段号 种类 数值 文本) 的列表
 (define toc_open 0)             ;; 1 = 面板打开
-(define TOC_ROW 15)             ;; 条目行高
 (define TOC_TOP 26)             ;; 条目区起始 y（页眉 18 + 8）
+(define MENU_ROW_K 1.6)         ;; 菜单项高度 = 字号行高 × 1.6（触屏点按更好按）
+
+;; 当前字模下菜单项的统一样式参数（行高 / 墨高 / 顶部内缩）
+(define menu_row_h (lambda () (Math.floor (* line_h MENU_ROW_K))))
+(define menu_ink_h (lambda () (if (== font_id 2) 16 12)))
+(define menu_ink_pad (lambda () text_pad))
+
+(define menu_metrics
+  (lambda (info)
+    ;; info = (Gfx.font_info id) → (半角 全角 行高 基线)
+    (ML.metrics (get_item info 0) (get_item info 1) (menu_ink_h) (menu_ink_pad))
+    #t))
 (define TOC_BTN_W 40)
 (define TOC_BTN_H 14)
 
@@ -583,9 +600,11 @@
                 (set! near i)
                 #f))
         (set! i (+ i 1)) })
-    ;; 交给通用菜单组件：条目样式 + 行高 + 视口（页眉与页脚之间）
-    (ML.reset (toc_menu_items) TOC_ROW)
+    ;; 交给通用菜单组件：条目样式 + 行高（字号行高 × 1.6）+ 视口（页眉与页脚之间）
+    (ML.reset (toc_menu_items) (menu_row_h))
     (ML.geom 0 TOC_TOP SW (- (- SH BOT_H) TOC_TOP))
+    (ML.back_top_right SW)          ;; 菜单自己的返回键（右上角，与阅读页「退出」同位）
+    (App.set_exit_button 0 0 0 0)   ;; 停用宿主「退出」热区（右上角归本面板，避免误触全局退出）
     (ML.set_sel near)
     (set! toc_open 1)
     (display "MDTOC n=") (display n) (newline)
@@ -594,6 +613,7 @@
 (define toc_close
   (lambda ()
     (set! toc_open 0)
+    (set! exitbtn_mute 4)      ;; 见 exitbtn_mute 注释
     #t))
 
 ;; 跳到第 i 条（视图层负责：设锚点 → 布局该段 → 用标题文本精修到精确 y）
@@ -618,16 +638,18 @@
         (Gfx.draw_text (if (MDV.toc_done) "（本文没有 1~3 级标题）" "（正在扫描全文标题…）")
                        PAD_X TOC_TOP 150 162 186)
         #f)
+    ;; 页眉：标题 + 条目数/扫描进度（左对齐排在标题后，右侧留给返回键）
     (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
     (Gfx.draw_text "目录" PAD_X 3 236 242 250)
     (if (not (MDV.toc_done))
         (Gfx.draw_text (String.concat (String.atom_to_string n)
                                       (String.concat " 条 · "
                                         (String.concat (String.atom_to_string (MDV.index_progress)) "%")))
-                       208 3 150 168 190)
-        (Gfx.draw_text (String.concat (String.atom_to_string n) " 条") 250 3 150 168 190))
+                       38 3 150 168 190)
+        (Gfx.draw_text (String.concat (String.atom_to_string n) " 条") 38 3 150 168 190))
+    (ML.draw_back)
     (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
-    (Gfx.draw_text "拖动/↑↓ 选择 · Enter/点按 跳转 · 返回关闭" PAD_X (- SH 14) 130 140 155)
+    (Gfx.draw_text "拖动/↑↓ 选择 · 点按跳转 · 右上返回" PAD_X (- SH 14) 130 140 155)
     (Gfx.refresh)
     #t))
 
@@ -656,7 +678,7 @@
       (if (>= hit 0)
           (toc_jump hit)
           (if (== hit -2)
-              (if (< (ML.tap_y) TOC_TOP) (toc_close) #f)   ;; 点页眉 = 关闭
+              (if (== (ML.hit_back (ML.tap_x) (ML.tap_y)) 1) (toc_close) #f)  ;; 右上返回键
               #f))
       ;; 面板打开期间**索引继续跑**（预算放大）：全文目录几秒内补齐，
       ;; 条目只会追加在尾部，选中项下标不会失效。
@@ -688,7 +710,6 @@
 (define text_pad 1)      ;; 行顶到字模顶的偏移
 (define pill_h 13)       ;; 行内代码药丸底高
 
-(define SET_ROW 15)
 (define SET_TOP 30)
 (define settings_open 0)
 (define SET_BTN_W 40)
@@ -726,8 +747,7 @@
           (MDL.set_font_metrics (get_item info 0) (get_item info 1) (get_item info 2))
           ;; 列表/目录/设置的行高跟着字模走（16px 字模下 15px 行距会挤）
           (set! ROW_H (+ line_h 5))
-          (set! TOC_ROW line_h)
-          (set! SET_ROW line_h)
+          (menu_metrics info)             ;; 把新字模的步进/墨高/内缩同步给菜单组件
           (Fs.write FONT_PATH (String.atom_to_string id))
           (display "MDFONT id=") (display id)
           (display " line_h=") (display line_h) (newline)
@@ -791,15 +811,18 @@
                    PAD_X (- (- SH BOT_H) 16) 150 168 190)
     (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
     (Gfx.draw_text "设置" PAD_X 3 236 242 250)
+    (ML.draw_back)
     (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
-    (Gfx.draw_text "↑↓ 选择 · Enter/点按 切换 · 返回关闭" PAD_X (- SH 14) 130 140 155)
+    (Gfx.draw_text "↑↓ 选择 · 点按切换 · 右上返回" PAD_X (- SH 14) 130 140 155)
     (Gfx.refresh)
     #t))
 
 (define settings_open_panel
   (lambda ()
-    (ML.reset (settings_menu_items) SET_ROW)
+    (ML.reset (settings_menu_items) (menu_row_h))
     (ML.geom 0 (settings_view_y) SW (settings_view_h))
+    (ML.back_top_right SW)
+    (App.set_exit_button 0 0 0 0)   ;; 同上：右上角归设置面板自己的返回键
     (ML.set_sel font_id)          ;; 高亮项默认落在当前字模上
     (set! settings_open 1)
     (display "MDSET open") (newline)
@@ -812,13 +835,13 @@
     (if (== k 3) (ML.page (- 0 1)) #f)
     (if (== k 4) (ML.page 1) #f)
     (if (== k 13) (apply_font (ML.sel_of)) #f)
-    (if (== k 27) (set! settings_open 0) #f)
+    (if (== k 27) { (set! settings_open 0) (set! exitbtn_mute 4) } #f)
     #t))
 
 (define tick_settings
   (lambda ()
     (define hit 0)
-    { (if (App.back_requested) (set! settings_open 0) #f)
+    { (if (App.back_requested) { (set! settings_open 0) (set! exitbtn_mute 4) } #f)
       (set! key (Key.take_press))
       (while (not (== key 0))
         { (apply_key_settings key)
@@ -829,7 +852,9 @@
       (if (>= hit 0)
           (apply_font (ML.sel_of))
           (if (== hit -2)
-              (if (< (ML.tap_y) SET_TOP) (set! settings_open 0) #f)
+              (if (== (ML.hit_back (ML.tap_x) (ML.tap_y)) 1)
+                  { (set! settings_open 0) (set! exitbtn_mute 4) }
+                  #f)
               #f))
       (draw_settings) }))
 
@@ -1095,6 +1120,11 @@
           (draw_list) })
     (draw_footer)
     (EX.draw_button)
+    ;; 面板刚关闭的几帧：把宿主热区清零，避免同一次点按被"面板返回键 + 宿主退出键"重复解释
+    (if (> exitbtn_mute 0)
+        { (App.set_exit_button 0 0 0 0)
+          (set! exitbtn_mute (- exitbtn_mute 1)) }
+        #f)
     (Gfx.refresh)
     #t))
 
