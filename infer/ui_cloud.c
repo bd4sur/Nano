@@ -382,6 +382,35 @@ static void cloud_generate_noise_textures(void) {
 #define kAtmospherePlanetRadiusOffset (21.0f * 0.001f)
 #define kAtmosphereCameraOffset      kAtmospherePlanetRadiusOffset
 
+// ===========================================================================
+// 性能档位（可用 -D 覆盖做基准测试；默认值即发布值，实测数据见 doc/AGENTS.md）
+//   CLOUD_OPT_RENDER_SCALE   内部渲染降采样倍数（1=全分辨率，2=半分辨率→像素数÷4）
+//                            实测 2.8 → 10.4fps（仅低层云、320x240）
+//   CLOUD_OPT_AMBIENT_SHADOW 1=每个受光样本再算一次竖直(环境)阴影，0=只算直射阴影
+//                            实测（仅低层）两者相差 <2%：竖直阴影射线离开 3.0~6.2km
+//                            低层云带后样本全为空（cloudMap 早退），故默认保持 1（不丢暗部
+//                            遮蔽）；恢复三层渲染时这一项才是有意义的旋钮
+//   CLOUD_OPT_BAND_TRIM      1=把 ray-march 区间裁到当前云层掩码的高度带，并按路径长度
+//                            收缩步数；0=固定走满整层云区（3~11km）
+//   CLOUD_OPT_STEP_NOMINAL_KM 裁剪后的目标采样步距（km）。0.25 为实测折中：
+//                            1/128 厚度（0.0625，flower 原步距）在裁剪后路径变短时会
+//                            把掠射光线的采样加密到反而更慢，0.25 约等于 160x120 内部
+//                            分辨率下的像素足迹，画面无可辨差异而快 ~1.6×
+// ===========================================================================
+#ifndef CLOUD_OPT_RENDER_SCALE
+#define CLOUD_OPT_RENDER_SCALE (2)
+#endif
+#ifndef CLOUD_OPT_AMBIENT_SHADOW
+#define CLOUD_OPT_AMBIENT_SHADOW (1)
+#endif
+#ifndef CLOUD_OPT_BAND_TRIM
+#define CLOUD_OPT_BAND_TRIM (1)
+#endif
+#ifndef CLOUD_OPT_STEP_NOMINAL_KM
+#define CLOUD_OPT_STEP_NOMINAL_KM (0.25f)
+#endif
+#define CLOUD_MARCHING_STEP_MIN (24)
+
 typedef struct {
     // ---- atmosphere ----
     Cv3 rayleighScattering;
@@ -421,6 +450,11 @@ typedef struct {
     int   cloudLightStepNum;
     int   cloudMarchingStepNum;
     float cloudAmbientScale;
+    // ---- 性能档位（见文件头 CLOUD_OPT_* 宏；默认值在 cloud_default_scene 里落地） ----
+    int   cloudRenderScale;     // 内部渲染降采样倍数（1=全分辨率，2=半分辨率）
+    int   cloudAmbientShadow;   // 1=额外算竖直(环境)阴影，0=只算直射阴影
+    int   cloudBandTrim;        // 1=ray-march 区间/步数按云层掩码裁剪
+    float cloudStepNominalKm;   // 裁剪后的目标采样步距（km）
     // ---- light ----
     Cv3 sunDirection; // 指向太阳
     Cv3 sunColor;
@@ -480,6 +514,12 @@ static void cloud_default_scene(CloudScene *s) {
     s->cloudLightStepNum = 12;
     s->cloudMarchingStepNum = 128;
     s->cloudAmbientScale = 1.0f;
+
+    // 性能档位（默认值见文件头 CLOUD_OPT_* 宏的说明）
+    s->cloudRenderScale   = CLOUD_OPT_RENDER_SCALE;
+    s->cloudAmbientShadow = CLOUD_OPT_AMBIENT_SHADOW;
+    s->cloudBandTrim      = CLOUD_OPT_BAND_TRIM;
+    s->cloudStepNominalKm = CLOUD_OPT_STEP_NOMINAL_KM;
 
     // 太阳（正午；纯白，同 ui_cloud_sun_color 白天段）
     s->sunDirection = v3norm(v3(0.15f, 0.96f, 0.0f));
@@ -1082,6 +1122,11 @@ static float cloudMap2(Cv3 posMeter, float normalizeHeight, float appTime, const
 #define CLOUD_LAYER1 (2)
 #define CLOUD_LAYER2 (4)
 
+// 云层归一化高度分界（cloudMap 与 ray-march 云区裁剪共用同一套边界）：
+//   低 0.00~0.40 / 中 0.40~0.80 / 高 0.80~1.00（云区 3.0~11.0km → 3.0/6.2/9.4/11.0km）
+#define CLOUD_BAND_LOW_END  (0.4f)
+#define CLOUD_BAND_MID_END  (0.8f)
+
 // 投影算法（7 键循环）：0=透视投影（默认），1=等距鱼眼投影
 #define CLOUD_PROJ_PERSP    0
 #define CLOUD_PROJ_FISHEYE  1
@@ -1100,23 +1145,38 @@ static float cloudMap(Cv3 posMeter, float normalizeHeight, float appTime, const 
     float *actualH01, int shadowDepth)
 {
     // 按当前云层掩码决定该样本是否参与密度场（光线阴影与视线采样一致）
-    if (normalizeHeight < 0.4f) {
+    if (normalizeHeight < CLOUD_BAND_LOW_END) {
         if (!(s_ui.layer_mask & CLOUD_LAYER0)) { *actualH01 = 0.0f; return 0.0f; }
-        *actualH01 = normalizeHeight / 0.4f;
+        *actualH01 = normalizeHeight / CLOUD_BAND_LOW_END;
         return cloudMap0(posMeter, *actualH01, appTime, s);
     }
     if (!shadowDepth) {
-        if (normalizeHeight < 0.8f) {
+        if (normalizeHeight < CLOUD_BAND_MID_END) {
             if (!(s_ui.layer_mask & CLOUD_LAYER1)) { *actualH01 = 0.0f; return 0.0f; }
-            *actualH01 = (normalizeHeight - 0.4f) / 0.4f;
+            *actualH01 = (normalizeHeight - CLOUD_BAND_LOW_END) /
+                         (CLOUD_BAND_MID_END - CLOUD_BAND_LOW_END);
             return cloudMap1(posMeter, *actualH01, appTime, s);
         }
         if (!(s_ui.layer_mask & CLOUD_LAYER2)) { *actualH01 = 0.0f; return 0.0f; }
-        *actualH01 = (normalizeHeight - 0.8f) / 0.2f;
+        *actualH01 = (normalizeHeight - CLOUD_BAND_MID_END) / (1.0f - CLOUD_BAND_MID_END);
         return cloudMap2(posMeter, *actualH01, appTime, s);
     }
     *actualH01 = 0.0f;
     return 0.0f;
+}
+
+// 当前云层掩码覆盖的归一化高度区间 [h0, h1]（三层是连续的，故并集即 [最小起点, 最大终点]）。
+// 返回 0 表示当前无任何云层启用（可用作 early-out，省掉整条 ray-march）。
+static int cloud_layer_band(float *h0, float *h1) {
+    const int m = s_ui.layer_mask & (CLOUD_LAYER0 | CLOUD_LAYER1 | CLOUD_LAYER2);
+    if (m == 0) return 0;
+    float lo = 2.0f, hi = -1.0f;
+    if (m & CLOUD_LAYER0) { lo = fminf(lo, 0.0f);              hi = fmaxf(hi, CLOUD_BAND_LOW_END); }
+    if (m & CLOUD_LAYER1) { lo = fminf(lo, CLOUD_BAND_LOW_END); hi = fmaxf(hi, CLOUD_BAND_MID_END); }
+    if (m & CLOUD_LAYER2) { lo = fminf(lo, CLOUD_BAND_MID_END); hi = fmaxf(hi, 1.0f); }
+    *h0 = lo;
+    *h1 = hi;
+    return 1;
 }
 
 typedef struct {
@@ -1199,6 +1259,15 @@ static CloudPixel cloudPixelCompute(Cv3 worldPos, Cv3 worldDir, float appTime, f
     float radiusCloudEnd = radiusCloudStart + s->cloudAreaThickness;
     float viewHeight = v3len(worldPos);
 
+    // 云区裁剪：ray-march 区间限制在当前云层掩码对应的归一化高度带内
+    // （默认只渲染低层时，整层云区 3.0~11.0km 中的 6.2~11.0km 根本不用走）。
+    float bandH0 = 0.0f, bandH1 = 1.0f;
+    if (s->cloudBandTrim) {
+        if (!cloud_layer_band(&bandH0, &bandH1)) return out; // 无云层：整条光线提前返回
+        radiusCloudStart = s->cloudAreaStartHeight + bandH0 * s->cloudAreaThickness;
+        radiusCloudEnd   = s->cloudAreaStartHeight + bandH1 * s->cloudAreaThickness;
+    }
+
     float tMin = 0.0f, tMax = 0.0f;
     int bEarlyOut = 0;
     if (viewHeight < radiusCloudStart) {
@@ -1229,8 +1298,15 @@ static CloudPixel cloudPixelCompute(Cv3 worldPos, Cv3 worldDir, float appTime, f
     tMax = tMin + marchingDistance;
     if (bEarlyOut) return out;
 
-    const int stepCountUnit = s->cloudMarchingStepNum;
-    const float stepCount = (float)stepCountUnit;
+    const int stepCountUnitMax = s->cloudMarchingStepNum;
+    float stepCount = (float)stepCountUnitMax;
+    // 按目标步距定步数（只减不增）：裁剪后路径变短，若仍固定 128 步，掠射光线的采样会被
+    // 加密（更精细但更慢）；反之放宽步距则采样变稀。上限仍是 cloudMarchingStepNum。
+    if (s->cloudBandTrim && s->cloudStepNominalKm > 0.0f) {
+        float need = ceilf(marchingDistance / s->cloudStepNominalKm);
+        if (need < (float)CLOUD_MARCHING_STEP_MIN) need = (float)CLOUD_MARCHING_STEP_MIN;
+        if (need < stepCount) stepCount = need;
+    }
     const float stepT = (tMax - tMin) / stepCount;
 
     float sampleT = tMin + 0.001f * stepT + stepT * saturatef(jitter);
@@ -1267,7 +1343,7 @@ static CloudPixel cloudPixelCompute(Cv3 worldPos, Cv3 worldDir, float appTime, f
     // 日落时多重散射增强
     float sunSetScale = 1.0f + saturatef(1.0f - sunDirection.y * 2.0f);
 
-    for (int i = 0; i < stepCountUnit; i++) {
+    for (int i = 0; i < (int)stepCount; i++) {
         Cv3 samplePos = v3add(worldPos, v3mul(worldDir, sampleT));
         float sampleHeight = v3len(samplePos);
         Cv3 atmosphereTransmittance = v3lerp(atmosphereTransmittance0, atmosphereTransmittance1,
@@ -1285,7 +1361,10 @@ static CloudPixel cloudPixelCompute(Cv3 worldPos, Cv3 worldDir, float appTime, f
             CloudShadow shadow = volumetricShadow(samplePos, sunDirection, appTime, s,
                                                   s->cloudMultiScatterExtinction);
             CloudShadow shadowAmbient;
-            int bGroundContrib = (s->cloudFogFade > 0.0f);
+            // 环境（竖直）阴影：再跑一遭 12 步 ray-march。关掉后环境光退化为均匀天空光
+            // （云底暗部略变平）；仅低层云时竖直阴影射线大多落在空云层（cloudMap 早退），
+            // 实测收益 <2%，故默认保持开启（见 CLOUD_OPT_AMBIENT_SHADOW）。
+            int bGroundContrib = (s->cloudFogFade > 0.0f) && (s->cloudAmbientShadow != 0);
             if (bGroundContrib) {
                 shadowAmbient = volumetricShadow(samplePos, v3(0, 1, 0), appTime, s,
                                                  s->cloudMultiScatterExtinction);
@@ -1835,7 +1914,7 @@ int32_t ui_cloud_event_handler(Key_Event *key_event, Global_State *global_state)
     return 0;
 }
 
-// 内部渲染缓冲（半分辨率，动态分配）+ 全屏输出缓冲
+// 内部渲染缓冲（可降采样，动态分配）+ 全屏输出缓冲
 static uint8_t *s_scene_img = NULL;
 static size_t  s_scene_img_bytes = 0;
 static uint8_t *s_fb = NULL;      // 全屏（整机帧缓冲尺寸）
@@ -1947,8 +2026,13 @@ static void cloud_setup_camera(float roll_rad, Cv3 *camPos, Cv3 *forward, Cv3 *r
 static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     const int FW = (int)gfx->width, FH = (int)gfx->height;
 
-    // 内部渲染 = 屏幕全分辨率（上限 CLOUD_MAX_*；1:1 时 cloud_upscale 退化为逐像素拷贝）
-    int W = FW, H = FH;
+    // 内部渲染分辨率 = 屏幕 / cloudRenderScale（上限 CLOUD_MAX_*）。
+    // 倍数 2（默认）→ 160x120：ray-march 的逐像素成本是线性量，像素数÷4 即约 4× 提速；
+    // 结果由 cloud_upscale 双线性放大（天空/云都是低频渐变，放大后观感损失远小于
+    // 体积云步进噪声的损失）。倍数 1 时 cloud_upscale 退化为逐像素拷贝。
+    int scale = s_scene.cloudRenderScale;
+    if (scale < 1) scale = 1;
+    int W = FW / scale, H = FH / scale;
     if (W < 8) W = 8;
     if (W > CLOUD_MAX_W) W = CLOUD_MAX_W;
     if (H < 8) H = 8;
