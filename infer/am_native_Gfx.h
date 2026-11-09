@@ -92,6 +92,29 @@ int32_t am_native_Gfx_set_font(am_runtime_t *rt, am_process_t *proc);
 //   id 非法返回 #null。排版端用它算折行宽度与行高。
 int32_t am_native_Gfx_font_info(am_runtime_t *rt, am_process_t *proc);
 
+// (Gfx.glyph_metrics font:Number cp:Number) : List | #null
+// —— 单字形度量 `(步进 基线上高 基线下深 位图宽 左侧留白)`，均为**字模单位**
+//    （12px 字模 em = 12，16px 字模 em = 16；排版端按 em/native 缩放）。
+//    缺字时位图宽为 0、第 1 项为回退字符步进——数学排版模块据此改用矢量符号表
+//    （\partial、\nabla、\Rightarrow 等本字模没有的字形由 Scheme 侧用线段绘制）。
+int32_t am_native_Gfx_glyph_metrics(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.draw_glyph font:Number cp:Number penx baseliney em sx sy shear bold r g b) : Number
+// —— 以 (penx,baseliney) 为笔位/基线绘制一个**可缩放字形**，返回笔位步进（px）。
+//    em 为目标字号（px）；sx/sy 为相对该字模原生尺寸的横/纵拉伸（1 = 不变）；
+//    shear 为切变（0 = 正体，0.2 ≈ 数学斜体）；bold 非 0 时右移 0.5px 再描一次加粗。
+//    缺字返回 0 且不绘制（软失败）。底层为 2×2 超采样 + 双线性重采样，
+//    像素不进解释器堆；实现为 graphics.h 的 gfx_font_draw_glyph_scaled。
+//    用途：数学公式排版（app/lib/tex_*.scm）需要 TeX 的 D/T/S/SS 四级字号、
+//    斜体变量与按高度拉伸的定界符，而 GUI 只有 12/16px 两套固定字号。
+int32_t am_native_Gfx_draw_glyph(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.set_clip x y w h) : #undefined —— 设直裁剪矩形（公式视口滚动/缩放时用）
+int32_t am_native_Gfx_set_clip(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.reset_clip) : #undefined —— 恢复整屏裁剪矩形
+int32_t am_native_Gfx_reset_clip(am_runtime_t *rt, am_process_t *proc);
+
 // (Gfx.image_size path:String) : List | #null
 // —— 图片原始尺寸 (宽 高)。只读文件头（stbi_info），不解码像素，
 //    供**排版阶段**算等比缩放与行高；文件缺失/格式不支持返回 #null。

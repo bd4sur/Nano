@@ -1835,6 +1835,153 @@ int32_t gfx_font_measure_text(uint32_t font_id, wchar_t *line) {
     return total_width;
 }
 
+/* ============================================================================
+ * 可缩放字形（数学排版用，声明与变换约定见 graphics.h）
+ *
+ * 采样方式：对目标像素做 2×2 超采样，每份样本按逆变换回字模位图做双线性插值
+ * （字模位图外一律按 0 处理，即“零填充”，这样缩小后边缘不会发胖）。
+ * 缩小（<1.0）时覆盖率偏低是抗锯齿的正常表现；放大时双线性插值足够平滑。
+ * ========================================================================== */
+
+float gfx_font_native_size(uint32_t font_id) {
+    if (font_id == GFX_FONT_ALPHA_12) return 12.0f;
+    if (font_id == GFX_FONT_ALPHA_16) return 16.0f;
+    return 0.0f;
+}
+
+// 取字形元数据（走 alpha 字模缓存；缺字返回 0，adv 为 0）
+static const Gfx_Glyph_Cache_Entry *gfx_scaled_glyph_entry(uint32_t font_id, uint32_t codepoint) {
+    Gfx_Font_Get_Glyph_Fn get_glyph = gfx_font_alpha_accessor(font_id);
+    if (get_glyph == NULL) return NULL;
+    const Gfx_Glyph_Cache_Entry *ce = gfx_glyph_cache_get(get_glyph, codepoint);
+    return ce;
+}
+
+int32_t gfx_font_glyph_metrics(uint32_t font_id, uint32_t codepoint,
+                               float *adv, float *asc, float *desc, float *w, float *lsb) {
+    const Gfx_Glyph_Cache_Entry *ce = gfx_scaled_glyph_entry(font_id, codepoint);
+    if (ce == NULL) return 0;
+    if (!ce->found) {
+        // 缺字：给出回退字符（'?'）的步进，其余为 0，便于调用方兜底
+        const Gfx_Glyph_Cache_Entry *cq = gfx_glyph_cache_get(gfx_font_alpha_accessor(font_id), (uint32_t)'?');
+        if (adv) *adv = (cq != NULL && cq->found) ? (float)cq->x_advance : 0.0f;
+        if (asc) *asc = 0.0f;
+        if (desc) *desc = 0.0f;
+        if (w) *w = 0.0f;
+        if (lsb) *lsb = 0.0f;
+        return 0;
+    }
+    if (adv) *adv = (float)ce->x_advance;
+    if (asc) *asc = (float)ce->y_offset;
+    if (desc) *desc = (float)((int32_t)ce->h - (int32_t)ce->y_offset);
+    if (w) *w = (float)ce->w;
+    if (lsb) *lsb = (float)ce->x_offset;
+    return 1;
+}
+
+// 字模位图双线性采样（零填充），返回 0..255 覆盖率
+static inline float gfx_scaled_sample(const uint8_t *alpha, int32_t w, int32_t h, float i, float j) {
+    if (i < -1.0f || j < -1.0f || i > (float)w + 1.0f || j > (float)h + 1.0f) return 0.0f;
+    int32_t i0 = (int32_t)floorf(i), j0 = (int32_t)floorf(j);
+    float fi = i - (float)i0, fj = j - (float)j0;
+    float s = 0.0f;
+    for (int32_t dj = 0; dj <= 1; dj++) {
+        int32_t jj = j0 + dj;
+        if (jj < 0 || jj >= h) continue;
+        float wy = (dj == 0) ? (1.0f - fj) : fj;
+        if (wy <= 0.0f) continue;
+        const uint8_t *row = alpha + (size_t)jj * (size_t)w;
+        for (int32_t di = 0; di <= 1; di++) {
+            int32_t ii = i0 + di;
+            if (ii < 0 || ii >= w) continue;
+            float wx = (di == 0) ? (1.0f - fi) : fi;
+            if (wx <= 0.0f) continue;
+            s += wx * wy * (float)row[ii];
+        }
+    }
+    s *= 17.0f; // 4bpp(0..15) → 0..255
+    return s > 255.0f ? 255.0f : s;
+}
+
+float gfx_font_draw_glyph_scaled(Nano_GFX *gfx, uint32_t font_id, uint32_t codepoint,
+                                 float pen_x, float baseline_y, float em,
+                                 float sx, float sy, float shear, int32_t bold,
+                                 uint8_t red, uint8_t green, uint8_t blue) {
+    const Gfx_Glyph_Cache_Entry *ce = gfx_scaled_glyph_entry(font_id, codepoint);
+    if (ce == NULL) return 0.0f;
+    float native = gfx_font_native_size(font_id);
+    if (native <= 0.0f || em <= 0.0f) return 0.0f;
+    float kx = em * sx / native;
+    float ky = em * sy / native;
+    if (kx == 0.0f || ky == 0.0f) return 0.0f;
+    float advance = (float)ce->x_advance * kx;
+    if (!ce->found || ce->w == 0 || ce->h == 0) return advance; // 空格/缺字
+
+    const uint8_t *alpha = ce->alpha;
+    int32_t w = (int32_t)ce->w, h = (int32_t)ce->h;
+    float xo = (float)ce->x_offset, yo = (float)ce->y_offset;
+
+    // 目标包围盒：字模四角经变换后的外接矩形
+    float v_top = yo, v_bot = yo - (float)h;
+    float x0 = INFINITY, x1 = -INFINITY, y0 = INFINITY, y1 = -INFINITY;
+    for (int32_t c = 0; c < 4; c++) {
+        float u = (c & 1) ? (xo + (float)w) : xo;
+        float v = (c & 2) ? v_bot : v_top;
+        float X = pen_x + kx * (u + shear * v);
+        float Y = baseline_y - ky * v;
+        if (X < x0) x0 = X;
+        if (X > x1) x1 = X;
+        if (Y < y0) y0 = Y;
+        if (Y > y1) y1 = Y;
+    }
+    int32_t px0 = (int32_t)floorf(x0) - 1, px1 = (int32_t)ceilf(x1) + 1;
+    int32_t py0 = (int32_t)floorf(y0) - 1, py1 = (int32_t)ceilf(y1) + 1;
+
+    // 屏幕与裁剪矩形夹取
+    int32_t cx0 = gfx->clip_x0 > 0 ? gfx->clip_x0 : 0;
+    int32_t cy0 = gfx->clip_y0 > 0 ? gfx->clip_y0 : 0;
+    int32_t cx1 = gfx->clip_x1 < (int32_t)gfx->width ? gfx->clip_x1 : (int32_t)gfx->width;
+    int32_t cy1 = gfx->clip_y1 < (int32_t)gfx->height ? gfx->clip_y1 : (int32_t)gfx->height;
+    if (px0 < cx0) px0 = cx0;
+    if (py0 < cy0) py0 = cy0;
+    if (px1 > cx1) px1 = cx1;
+    if (py1 > cy1) py1 = cy1;
+    if (px0 >= px1 || py0 >= py1) return advance;
+
+    gfx_dirty_expand(gfx, px0, py0, px1, py1);
+
+    // 覆盖率：在目标像素内 2×2 超采样
+    for (int32_t py = py0; py < py1; py++) {
+        for (int32_t px = px0; px < px1; px++) {
+            float cov = 0.0f, cov_b = 0.0f;
+            for (int32_t s = 0; s < 4; s++) {
+                float X = (float)px + ((s & 1) ? 0.75f : 0.25f);
+                float Y = (float)py + ((s & 2) ? 0.75f : 0.25f);
+                float v = (baseline_y - Y) / ky;
+                float u = (X - pen_x) / kx - shear * v;
+                float i = u - xo - 0.5f;
+                float j = yo - v - 0.5f;
+                cov += gfx_scaled_sample(alpha, w, h, i, j);
+                if (bold) {
+                    float Xb = X + 0.5f;
+                    float ub = (Xb - pen_x) / kx - shear * v;
+                    cov_b += gfx_scaled_sample(alpha, w, h, ub - xo - 0.5f, j);
+                }
+            }
+            cov *= 0.25f;
+            if (bold) {
+                cov_b *= 0.25f;
+                if (cov_b > cov) cov = cov_b;
+            }
+            int32_t a = (int32_t)(cov + 0.5f);
+            if (a <= 0) continue;
+            if (a > 255) a = 255;
+            gfx_blend_pixel(gfx, (uint32_t)px, (uint32_t)py, red, green, blue, (uint8_t)a);
+        }
+    }
+    return advance;
+}
+
 // 绘制一行文本，(x, y_top) 为行框左上角；超宽截断
 void gfx_font_draw_text(Nano_GFX *gfx, uint32_t font_id, wchar_t *line, int32_t x, int32_t y_top,
                         uint8_t red, uint8_t green, uint8_t blue, uint8_t mode) {

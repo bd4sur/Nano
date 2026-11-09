@@ -189,6 +189,41 @@ void gfx_font_draw_text_centered(Nano_GFX *gfx, uint32_t font_id, wchar_t *line,
                                  uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 
 // ----------------------------------------------------------------------------
+// 可缩放字形（数学排版用）：同一字模按任意 em 大小、横纵独立拉伸、倾斜（斜体）绘制。
+//
+// 为什么需要：GUI 只有 12/16px 两套固定字号，而数学公式排版要求
+//   · 分式/上下标/根号指数按 TeX 的 D/T/S/SS 四级字号逐级缩小（12px → 8.6px → 6.2px）；
+//   · 数学变量用斜体（本字模没有斜体字形，用切变合成）；
+//   · 括号/积分号/根号按内容高度纵向拉伸。
+// 本组接口把「字模位图 → 任意仿射变换 → 覆盖率双线性重采样（2×2 超采样）」做在图形层，
+// 字形数据仍走 alpha 字模缓存，像素不进解释器堆。
+//
+// 变换（字模单位：1 em = 字模自身尺寸，12px 字体为 12、16px 字体为 16）：
+//     scale_x = em * sx / native_size,  scale_y = em * sy / native_size
+//     X = pen_x + scale_x * (u + shear * v)      v 为基线上方高度（向上为正）
+//     Y = baseline_y - scale_y * v
+// 即 sx/sy 是「相对该字号原生宽度/高度」的拉伸系数（1 = 不拉伸），shear 是切变
+// （0 = 正体，0.2 ≈ 典型数学斜体）。
+// ----------------------------------------------------------------------------
+
+// 该字模的原生字号（em 单位，12 或 16）；非法 font_id 返回 0
+float gfx_font_native_size(uint32_t font_id);
+
+// 单字形度量（**字模单位**，调用方自行按 em/native_size 缩放）：
+//   adv 笔位步进、asc 基线上方高度、desc 基线下方高度（可为负）、w 位图宽、lsb 左侧留白
+// 返回值：1 = 字库中存在该码点，0 = 缺字（此时仅 adv 有效，为回退字符的步进）
+int32_t gfx_font_glyph_metrics(uint32_t font_id, uint32_t codepoint,
+                               float *adv, float *asc, float *desc, float *w, float *lsb);
+
+// 以 (pen_x, baseline_y) 为笔位/基线绘制单个字形，参数见上方说明；
+// bold != 0 时做「右移 0.5px 再描一次」的加粗（矢量粗体，用于 \mathbf）。
+// 返回笔位步进宽度（px，已按 scale_x 缩放）；缺字返回 0 且不绘制。
+float gfx_font_draw_glyph_scaled(Nano_GFX *gfx, uint32_t font_id, uint32_t codepoint,
+                                 float pen_x, float baseline_y, float em,
+                                 float sx, float sy, float shear, int32_t bold,
+                                 uint8_t red, uint8_t green, uint8_t blue);
+
+// ----------------------------------------------------------------------------
 // 以下为 16px alpha 字模（GFX_FONT_ALPHA_16）的兼容接口，
 // 实现已迁移到统一字体接口之上，新代码请直接使用 gfx_font_* 系列。
 // ----------------------------------------------------------------------------

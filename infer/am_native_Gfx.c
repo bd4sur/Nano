@@ -144,6 +144,29 @@ static int32_t native_push_number(am_process_t *proc, am_float_t result) {
     return 0;
 }
 
+// 压入一个 n 元数值列表并推进 PC（字形度量用）。
+static int32_t native_push_number_list(am_process_t *proc, const am_float_t *vals, int32_t n) {
+    am_list_t *lst = am_list_create(proc->heap_alloc, (size_t)n, AM_LIST_TYPE_DEFAULT, AM_HANDLE_NULL);
+    am_handle_t lhd;
+    if (lst == NULL) return native_push_null(proc);
+    for (int32_t i = 0; i < n; i++) {
+        am_list_t *grown = am_list_push(proc->heap_alloc, lst, am_make_value_of_float(vals[i]));
+        if (grown == NULL) { am_list_destroy(proc->heap_alloc, lst); return native_push_null(proc); }
+        lst = grown;
+    }
+    lhd = am_heap_alloc_handle(proc->vm_alloc, proc->heap_alloc, proc->heap);
+    if (lhd == AM_HANDLE_NULL) { am_list_destroy(proc->heap_alloc, lst); return native_push_null(proc); }
+    if (am_heap_set(proc->vm_alloc, proc->heap_alloc, proc->heap, lhd,
+                    am_make_value_of_ptr((am_object_t *)lst)) != 0) {
+        am_list_destroy(proc->heap_alloc, lst);
+        am_heap_free_handle(proc->vm_alloc, proc->heap_alloc, proc->heap, lhd);
+        return native_push_null(proc);
+    }
+    if (am_process_push_operand(proc, am_make_value_of_handle(lhd)) != 0) return -1;
+    am_process_step(proc);
+    return 0;
+}
+
 // 从操作数栈中弹出一个字符串对象。
 static bool native_pop_wstring(am_process_t *proc, am_wstring_t **out) {
     am_value_t v = am_process_pop_operand(proc);
@@ -670,6 +693,86 @@ int32_t am_native_Gfx_font_info(am_runtime_t *rt, am_process_t *proc) {
     return 0;
 }
 
+// (Gfx.glyph_metrics font:Number cp:Number) : List | #null
+// —— 单字形度量 (步进 基线上高 基线下深 位图宽 左侧留白)，均为**字模单位**
+//    （12px 字模的 em = 12，16px 字模的 em = 16）；font 非法返回 #null。
+//    缺字时：第 1 项为回退字符步进，其余为 0，返回值本身仍是一个 5 元列表（调用方
+//    用 “位图宽 = 0” 判缺字；数学排版模块据此改用矢量符号表或 '?' 兵底）。
+int32_t am_native_Gfx_glyph_metrics(am_runtime_t *rt, am_process_t *proc) {
+    int32_t cp = 0, id = 0;
+    float adv = 0.0f, asc = 0.0f, desc = 0.0f, gw = 0.0f, lsb = 0.0f;
+    am_float_t vals[5];
+    (void)rt;
+    if (!native_pop_int(proc, &cp)) return -1;
+    if (!native_pop_int(proc, &id)) return -1;
+    if (id < 0 || id > 2 || gfx_font_native_size((uint32_t)id) <= 0.0f) return native_push_null(proc);
+    gfx_font_glyph_metrics((uint32_t)id, (uint32_t)cp, &adv, &asc, &desc, &gw, &lsb);
+    vals[0] = (am_float_t)adv;
+    vals[1] = (am_float_t)asc;
+    vals[2] = (am_float_t)desc;
+    vals[3] = (am_float_t)gw;
+    vals[4] = (am_float_t)lsb;
+    return native_push_number_list(proc, vals, 5);
+}
+
+// (Gfx.draw_glyph font:Number cp:Number penx:Number baseliney:Number em:Number
+//                sx:Number sy:Number shear:Number bold:Number r g b) : Number
+// —— 以 (penx, baseliney) 为笔位/基线绘制一个可缩放字形（数学排版用，语义见
+//    graphics.h 的 gfx_font_draw_glyph_scaled）：em 为目标字号（px），sx/sy 为相对该
+//    字模原生尺寸的横/纵拉伸（1 = 不变），shear 为切变（0.2 ≈ 数学斜体），bold 非 0
+//    时加粗。返回笔位步进（px）；缺字返回 0 且不绘制。
+int32_t am_native_Gfx_draw_glyph(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    am_float_t shear = 0.0f, sx = 1.0f, sy = 1.0f, em = 0.0f, by = 0.0f, px = 0.0f;
+    int32_t blue = 0, green = 0, red = 0, bold = 0, cp = 0, id = 0;
+    int32_t adv;
+    if (g == NULL) return -1;
+    if (!native_pop_int(proc, &blue)) return -1;
+    if (!native_pop_int(proc, &green)) return -1;
+    if (!native_pop_int(proc, &red)) return -1;
+    if (!native_pop_int(proc, &bold)) return -1;
+    if (!native_pop_number(proc, &shear)) return -1;
+    if (!native_pop_number(proc, &sy)) return -1;
+    if (!native_pop_number(proc, &sx)) return -1;
+    if (!native_pop_number(proc, &em)) return -1;
+    if (!native_pop_number(proc, &by)) return -1;
+    if (!native_pop_number(proc, &px)) return -1;
+    if (!native_pop_int(proc, &cp)) return -1;
+    if (!native_pop_int(proc, &id)) return -1;
+    adv = (int32_t)(gfx_font_draw_glyph_scaled(g, (uint32_t)id, (uint32_t)cp,
+                                               (float)px, (float)by, (float)em,
+                                               (float)sx, (float)sy, (float)shear,
+                                               bold != 0,
+                                               (uint8_t)(red < 0 ? 0 : (red > 255 ? 255 : red)),
+                                               (uint8_t)(green < 0 ? 0 : (green > 255 ? 255 : green)),
+                                               (uint8_t)(blue < 0 ? 0 : (blue > 255 ? 255 : blue))) + 0.5f);
+    return native_push_number(proc, (am_float_t)adv);
+}
+
+// (Gfx.set_clip x:Number y:Number w:Number h:Number) : #undefined
+// —— 设直裁剪矩形（自动与屏幕求交）。此后所有绘制（含 draw_glyph 的重采样、
+//    fill_rect / fill_circle）均只落在矩形内，供“公式视口”滚动/缩放时遮住溢出部分。
+//    调用方必须成对使用 (Gfx.reset_clip)（见 app/lib/tex_draw.scm）。
+int32_t am_native_Gfx_set_clip(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    int32_t h = 0, w = 0, y = 0, x = 0;
+    if (g == NULL) return -1;
+    if (!native_pop_int(proc, &h)) return -1;
+    if (!native_pop_int(proc, &w)) return -1;
+    if (!native_pop_int(proc, &y)) return -1;
+    if (!native_pop_int(proc, &x)) return -1;
+    gfx_set_clip(g, x, y, w, h);
+    return native_statement_done(proc);
+}
+
+// (Gfx.reset_clip) : #undefined —— 恢复整屏裁剪矩形
+int32_t am_native_Gfx_reset_clip(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    if (g == NULL) return -1;
+    gfx_reset_clip(g);
+    return native_statement_done(proc);
+}
+
 static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"width",       am_native_Gfx_width },
     { L"height",      am_native_Gfx_height },
@@ -686,6 +789,10 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"draw_text",   am_native_Gfx_draw_text },
     { L"set_font",    am_native_Gfx_set_font },
     { L"font_info",   am_native_Gfx_font_info },
+    { L"glyph_metrics", am_native_Gfx_glyph_metrics },
+    { L"draw_glyph",  am_native_Gfx_draw_glyph },
+    { L"set_clip",    am_native_Gfx_set_clip },
+    { L"reset_clip",  am_native_Gfx_reset_clip },
     { L"image_size",  am_native_Gfx_image_size },
     { L"draw_image",  am_native_Gfx_draw_image },
     { L"draw_image_refract", am_native_Gfx_draw_image_refract },

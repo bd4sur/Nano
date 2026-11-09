@@ -6288,3 +6288,143 @@ Markdown 阅读器（`infer/app/markdown.scm`）**大文件流式渲染**：单�
   （mix **21/21**、plain 16/16、onefence 16/16）——**异步目录**实测：刚打开面板
   `MDTOC n=153`，不滚动、等 5s 后重开面板 `n=2221`（= 全文标题数），跳转正常；
   既有 `regress_markdown.js` 50/50 原样通过。
+
+------------------------------------
+
+# 2026-11-09（数学公式排版 App：Scheme 实现的类 MathJax LaTeX 排版引擎）
+
+需求：用灵机 Scheme 写一个「类 MathJax」的数学公式渲染器 App——输入 MathJax 兼容的
+LaTeX 数学串，输出排好版的公式。只针对 **WASM-GUI** 目标（`infer/build_wasm_gui.sh`
+→ `infer/webgui/`，与 `infer/web/` 那条 LLM-only 路线无关）。
+
+## 1. 产物
+
+| 文件 | 作用 |
+|---|---|
+| `infer/app/mathjax.scm` | **App 本体**：18 条内置示例公式、页眉/视口/按钮布局、触屏交互（换式/编辑/缩放/拖动平移）、退出 |
+| `infer/app/lib/tex_parse.scm` | LaTeX **词法 + 语法分析**（控制词/分组/上下标/分式/根号/定界符/矩阵/字体/正文/符号表，约 200 个控制词） |
+| `infer/app/lib/tex_layout.scm` | **盒子排版**（TeX 风格：四级字号、8 类 atom 间距、分数轴线、上下标移位、定界符伸缩、大运算符上下限、矩阵/aligned/cases、重音） |
+| `infer/app/lib/tex_sym.scm` | **字模里没有的数学符号**：矢量绘制 + 字形翻转/镜像/叠加合成（∂ ∇ ∀ ∃ ⊂ ⊃ ⇒ ⇔ ↦ ∼ ≃ ≪ ⋯ ∘ ⊕ ⊗ ∓ ℏ ℓ ℝ ⟨⟩ ∉ † ‡ ↗↘ 等） |
+| `infer/app/lib/tex_draw.scm` | **绘制操作流**：把布局产出的扁平 op 流画到帧缓冲（视口裁剪 + Cohen–Sutherland 线段裁剪） |
+| `infer/app/lib/tex_base.scm` | 公共底座：op 缓冲（`g` 字形/`r` 规则块/`l` 线段/`f`·`o` 圆点）、二次/三次贝塞尔与椭圆弧折线、数值小工具 |
+| `infer/graphics.c/.h` | **新增** `gfx_font_draw_glyph_scaled()`（任意 em + 横纵独立拉伸 + 斜体切变 + 伪粗体重采样）、`gfx_font_glyph_metrics()`、`gfx_font_native_size()` |
+| `infer/am_native_Gfx.c/.h` | **新增** `(Gfx.glyph_metrics font cp)`、`(Gfx.draw_glyph font cp x y em sx sy shear bold r g b)`、`(Gfx.set_clip …)`/`(Gfx.reset_clip)` |
+| `infer/tools/e2e/tex/test_tex.scm` + `run_tests.sh` | 宿主层单测（42 条断言：语法树结构 / 盒子尺寸定性关系 / 幂等 / 18 条示例全部可排版） |
+| `infer/tools/e2e/tex/check_quasi.py` | 新静态检查器：quasiquote 模板里**漏写逗号**的求值表达式（见 §5 坑 5） |
+| `infer/tools/e2e/browser/regress_mathjax.js` | 浏览器端回归（真 WASM + 真触屏，22 条断言） |
+
+## 2. 为什么要在图形层加「可缩放字形」
+
+GUI 只有 12/16px 两套固定字号，而数学排版要求三件事：D/T/S/SS 四级字号（16 → 11.2 →
+7.2px）、数学变量斜体、定界符按内容高度伸缩。位图字体做不到任意尺寸，所以把
+"字模位图 → 仿射变换（em/sx/sy/shear）→ 2×2 超采样 + 双线性重采样" 做进 `graphics.c`
+（`gfx_font_draw_glyph_scaled`）：字形数据仍走既有 alpha 字模缓存，像素不进解释器堆。
+
+- 源字模按目标 em 选：`em >= 13.5` 用 16px 字模（scale=em/16，em=16 时正好 1.0 最锐），
+  否则用 12px 字模（em=11.2 时 scale=0.93）。
+- 负的 `sx/sy` 就是**镜像/翻转**：`∀` = 倒 `A`、`∃` = 反 `E`、`∇` = 倒 `Δ`、`∋` = 反 `∈`。
+- `bold` 是"右移 0.5px 再描一遍"的伪粗体（`\mathbf`）。
+- 矢量符号走 `(Gfx.draw_line_aa …)`；**线宽必须 ≤1**：>1 会切到图形层的"粗线"路径，
+  该路径是加法混合，分段接头会冒出亮点（实测 1.5/2.0 线宽的圆弧像虚线）。1px 线段
+  偏"虚"的观感用**画两遍（水平错开 0.45px）**补足。
+
+## 3. 排版模型（与 TeX 的对应）
+
+- **四级字号**：`EMS = (16 16 11.2 7.2)`——D 与 T **同号**（与 TeX 一致：`\displaystyle`
+  不改变基准字号，只改变分子分母风格与大运算符尺寸/限位方式）；S = 0.7×基准，SS = 0.45×基准。
+  上下标降一级（D/T→S，S→SS），分式的分子分母降一级。
+- **atom 间距**：8 个原子类（Ord Op Bin Rel Open Close Punct Inner）× 18 分制薄/中/厚表；
+  行首、以及 Bin 在 Bin/Op/Rel/Open/Punct 之后**降为 Ord**（一元负号）。
+- **分数轴** `axis = 0.26em`：分式横线、大运算符的垂直中心都对齐到它。
+- **上下标**：上标基线抬高 `max(0.42em, 底高−0.06em)`，下标下移 `0.2em`；二者重叠时
+  把下标再压低（`subdr ≥ dh + ud + 0.08em − supsh`，早期写成 `−dh` 导致下标穿到上标里）。
+- **大运算符**：显示/正文样式的"限额型"（∑ ∏ ⋃ ⋂ lim max min sup inf）排成上下限，
+  ∫ ∮ 与函数名排成同侧；符号本体放大 1.45 倍并**垂直居中到轴线**。
+- **定界符**：天然尺寸够就用字形；≤2.4 倍纵向拉伸仍用**字形拉伸**（花括号的尖角、
+  圆括号的曲率比矢量近似更准）；更长才用矢量曲线（位图拉长了会退化成一根竖线）。
+- **根号**：矢量绘制（短钩 + 斜杆 + 横线），指数塞进拐角；不用字形拉伸。
+- **分式/根号/矩阵**的排版用"区间平移"：先按原点排子结构，记下它在 op 流里的 `[from,to)`
+  区间，再用 `(B.shift from to dx dy)` 原地平移——等价于 TeX 的 shift_amount，不复制任何 op。
+  **踩过的坑**：`\left..\right` 里若先画开括号再平移本体，开括号会跟着一起被平移（区间
+  起点在开括号之前）；必须先量本体、记 `b1`、只平移 `[b0,b1)`、最后画括号。
+
+## 4. 内置示例与交互
+
+- 18 条示例覆盖：二次公式/欧拉恒等式/泰勒级数/高斯积分/重要极限/求导/牛顿定律与万有引力/
+  麦克斯韦旋度散度/薛定谔方程/安培-麦克斯韦/矩阵乘法/cases 绝对值/二项式定理/
+  ε-δ 极限定义/aligned 因式分解/`\text` 中文混排/耦合振子/`\mathbb` 与 `\mathbf`。
+- 交互：`←/→` 换式、`编辑` 弹宿主输入框（触屏软键盘含 `\ { } ^ _`）、`−/+` 缩放、
+  `1:1` 回自适应；公式区按住拖动**平移**（只重画不重排）；右上「退出」与硬 ESC 走
+  `app/lib/exit.scm` 的全局确认框。
+- **自适应不是位图缩放**：先排一遍量出盒子，超宽/超高就按比例缩小 emul **重排**一遍，
+  字形因此始终落在字模的清晰尺度上（emul 变化只影响 `em_of`，度量缓存存的是字模单位）。
+- 只在脏时推屏（换式/缩放/平移/编辑返回），实测静止时连续两帧逐字节相同（回归里有这条）。
+
+## 5. 解释器/宿主坑位（全部踩过，写在这里省后人时间）
+
+1. **`(define (f x) …)` 简写不存在**（manual §5.2）：写简写会在 ARN 阶段报
+   `[Parser Error] failed to add defines to scope`（错误文本完全看不出是这个原因，
+   而且**没有行列号**）。全部写成 `(define f (lambda (x) …))`。
+2. **`0` 是真值**（只有 `#f` 为假）：App 里用 `dirty = 0/1` 做"是否需要重绘"，
+   结果 `(if dirty …)` 恒成立——每拍都整屏重绘（实测 40 帧推了 13 次屏）。
+   布尔状态一律 `#t/#f`。
+3. **`'()` 是编译期静态共享对象，push 上去会永久污染它**：`(push '() v)` 之后
+   `(cdr (cons #f '()))`（"新建空表"的办法）拿到的表里居然带着上一次 push 的元素。
+   本 App 的 `(empty)` = `(cdr (cons #f '()))` 是唯一允许的空表构造方式；解析器的
+   矩阵分行处曾写成 `(set! mcells '())`，导致**先解析一个 cases 再解析矩阵**时矩阵
+   第二行凭空多出一格。**规则：任何累加器都用 `(empty)` 新建，永远不对 `'()` 做 push。**
+4. **模块级临时变量在递归里会被冲掉**：`parse_control` 用模块级 `a1/a2/a3` 存
+   `\left` 的定界符与本体，而 `parse_row` 会递归回到 `parse_control`——实测 `\left(`
+   的开括号被读成了分子的分组节点。临时量必须声明在 lambda 内（`lay_matrix` 的
+   行/列状态同理：单元格里可以再嵌矩阵）。
+5. **quasiquote 模板里漏写逗号不会报错**：`` `(,w (* 0.42 em) 0.0) `` 会把
+   `(* 0.42 em)` 原样当列表塞进结果，盒子尺寸就变成列表，后续算术乱成一团（症状是
+   "宽度莫名变成 3.12"）。写了 `tools/e2e/tex/check_quasi.py` 做静态扫描。
+6. **算术恒二元**（`(+ a b c)` 未规定）：三参数写法会留下多余操作数，把**后续所有
+   表达式的结果**搅乱（本 App 早期表现为"分式返回 w=3.12、h 也对不上"）。
+   已用 `tools/check_scm_arity.py` 全量扫描（0 处问题）；需要多数相加时用
+   `B.sum3/B.sum4`（显式嵌套）。
+7. **`cond` 是关键字，不能当引数名**：单测里 `(lambda (name cond detail) …)` 直接
+   `[Parser Error] lambda parameter must be variable`（同 `else/begin/if/while`）。
+8. **`import` 的相对路径不解析 `..`**：`(import P "app/lib/x.scm")` 是相对于**主模块
+   所在目录**拼的，`../../../app/lib/…` 这种写法链接会静默失败（`link_fail`，无消息）；
+   绝对路径的 import 同样 link_fail。所以 `tools/e2e/tex/run_tests.sh` 把用例临时拷到
+   `infer/` 下跑（base_dir=infer/），跑完删掉。
+9. **编译期内存**：`mathjax` 连着 `tex_parse/tex_layout/tex_sym/tex_draw/tex_base`
+   五个模块一起编译，宿主 64 位下 24MB 池不够、**28MB 起可跑**（WASM 32MB 池有富余）。
+   回归清单里与 `markdown` 一样单独给 32MB（`run_host_regress.sh`）。
+10. **字模覆盖度**：12px 字模没有 ∂ ∇ ∅ ∀ ∃ ⊂ ⊃ ⊆ ⊇ ⇒ ⇔ ↔ ↦ ∼ ≪ ≫ ⋯ ∘ ⊕ ⊗ ∓ ℏ ℓ ℝ ⟨⟩ 等
+    常用数学符号，但有 ∫ ∮ ∑ ∏ √ ∈ ∪ ∩ ⊥ ∠ ∝ ≈ ≤ ≥ → ← ↑ ↓ ∞ ′ ″。缺的字用
+    `tex_sym.scm` 补（矢量或字形变形）；变体希腊字母（`\varepsilon \vartheta \varphi
+    \varrho \varkappa \varsigma`）字模没有，解析时就映射到对应的基本字母。
+
+## 6. 验证
+
+- **宿主单测**（`tools/e2e/tex/run_tests.sh`）：**42/42 PASS** —— 语法树结构 26 条
+  （含 `\left.`、`\limits` 覆盖、矩阵行列数、未知控制词降级）、盒子尺寸定性关系 14 条
+  （分式高/深、上下标抬高压低、根号覆盖、定界符伸展、矩阵上下对称、重音增高）、
+  幂等 2 条（连排两次盒子与 op 数完全相同、改字号宽度按比例缩小）、18 条内置示例全部可排版。
+- **畸形输入**（32 条：空串、`\frac{`、`\sqrt[`、`\begin{matrix}`、`\\`、`&`、`x^`、
+  `^^`、`\text{`、`$`、`%%%%` 等）：全部 `err=none`、盒子有限非负，不崩进程。
+- **浏览器端到端**（`regress_mathjax.js`，真 WASM + Pointer Events 触屏）：
+  Chromium / chrome-headless-shell / Firefox **各 22/22 PASS** —— 启动（state 80）→
+  标题/公式区/源文本/按钮四区墨迹 → 公式不溢出视口 → 静止不重绘（逐字节相同）→
+  `→` 换式画面变化 → `←` 逐字节复原 → `+` 包围盒变大、`1:1` 逐字节复原 →
+  拖动后质心右移而尺寸不变（平移不重排）→ `编辑` 弹模态框、回车提交后画面复原 →
+  ESC 全局确认框 → 回车回列表（state 79）、无 pageerror。
+- **18 条示例全部不溢出**：逐条以 App 的真实流程（自适应 + 重排）渲染并量墨迹包围盒，
+  全部落在 `x∈[4,314] y∈[20,199]` 内（最小 1 条 x=126..194，最宽一条 x=4..314）。
+- **宿主回归台**：36 个 App 全 `err=none`（`mathjax` frames=120 refresh=1，即空闲不重绘）。
+- **浏览器存活回归**（`regress.js`，chromium）：`mathjax` 停在 state 80；它的
+  `refreshΔ=0` 与 calculator/cnn/gomoku/hwr/llm/qrcode/svm 同类——事件驱动型 App
+  空闲不推屏，属预期（该脚本把"刷新不推进"标 ABNORMAL 是粗糙判据）。
+
+## 7. 运行
+
+```bash
+cd infer && bash build_wasm_gui.sh            # 产物 infer/webgui/
+cd webgui && python3 ../tools/https_static_server.py 9002 .
+# 浏览器打开 https://<主机>:9002/ → 任意键 → 主菜单「小游戏」→「灵机应用程序」→ mathjax
+#   ← / →：切换 18 条内置示例；「编辑」：弹出输入框改 LaTeX；− / +：缩放；1:1：自适应；
+#   公式区按住拖动：平移；右上「退出」或硬 ESC：全局确认框
+```
