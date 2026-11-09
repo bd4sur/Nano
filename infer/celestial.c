@@ -15,6 +15,7 @@
     #include "linglong_texture.h"
 #endif
 #include "celestial.h"
+#include "celestial_ocean.h"
 #include "ephemeris.h"
 #include "ui_cloud.h"
 
@@ -2273,6 +2274,15 @@ void calculate_scattered_pixel(
     else if (model_index == 3) {
         scatter_model_3(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, red, green, blue, enable_opt_lut);
     }
+    else if (model_index == 5) {
+        // 海洋天空（web-ocean 移植）：三张 LUT 由 linglong_ocean_prepare 每帧准备
+#if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
+        linglong_ocean_sky_pixel(ray_x, ray_y, ray_z, red, green, blue);
+#else
+        // 内存紧缺平台（M5Stack）未编入海洋模块：退化为二次散射，避免选到该档时全黑
+        scatter_model_3(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, red, green, blue, enable_opt_lut);
+#endif
+    }
     else {
         *red   = 0.0f;
         *green = 0.0f;
@@ -2785,6 +2795,7 @@ void linglong_free(void) {
         s3_transmittance_lut = NULL;
         s3_transmittance_lut_valid = 0;
     }
+    linglong_ocean_free();
 }
 
 
@@ -2803,8 +2814,8 @@ void render_sky(Nano_GFX *gfx,
     int32_t enable_opt_bilinear,     // 是否启用双线性插值以优化画质
 
     int32_t projection,              // 投影算法（0-鱼眼；1-线性透视）
-    int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
-    int32_t landscape_index,         // 选择地景贴图（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景）
+    int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射；4-体积云+大气渲染；5-海洋天空）
+    int32_t landscape_index,         // 选择地景（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景；3-实时海洋）
     int32_t enable_equatorial_coord, // 是否启用赤道坐标圈
     int32_t enable_horizontal_coord, // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst,       // 是否启用星芒效果
@@ -2855,6 +2866,12 @@ void render_sky(Nano_GFX *gfx,
         sky_dir_map_update(sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection);
         sky_transmittance_lut_init();
         sky_inscatter_lut_update(sun_x, sun_y, sun_z, (float)sun_alt, (float)sun_azi, sky_model);
+    }
+
+    // 实时海洋 / 海洋天空（web-ocean 移植）：每帧准备
+    // （推进海面动画时间 + 按需重建三张大气 LUT + 烘焙波场；两者共用同一份数据）
+    if (sky_model == 5 || landscape_index == 3) {
+        linglong_ocean_prepare((float)sun_alt, (float)sun_azi, f, sky_radius, projection);
     }
 
     // 天空绘制范围的屏幕坐标
@@ -3005,7 +3022,9 @@ void render_sky(Nano_GFX *gfx,
                 float ray_x = 0.0f;
                 float ray_y = 0.0f;
                 float ray_z = 0.0f;
-                if (enable_opt_lut && g_sky_dir_map.valid) {
+                // 方向图 / 预积分 LUT 只对散射模型 1~3 有效（模型 4 走云渲染、模型 5 自带 LUT）；
+                // 否则上一切换模型留下的缓存会对新模型/新视角生效
+                if (enable_opt_lut && sky_model < 4 && g_sky_dir_map.valid) {
                     sky_dir_map_get(x, y, &ray_x, &ray_y, &ray_z);
                 }
                 else {
@@ -3015,7 +3034,7 @@ void render_sky(Nano_GFX *gfx,
                 float red = 0.0f;
                 float green = 0.0f;
                 float blue = 0.0f;
-                if (enable_opt_lut && g_sky_inscatter_lut.valid) {
+                if (enable_opt_lut && sky_model < 4 && g_sky_inscatter_lut.valid) {
                     sky_inscatter_lut_lookup(ray_x, ray_y, ray_z, sun_x, sun_y, sun_z, &red, &green, &blue);
                 }
                 else {
@@ -3226,27 +3245,44 @@ void render_sky(Nano_GFX *gfx,
     float fov = 1.1f;
     float view_height = 1.0f;
     int32_t enable_atmosphere_scattering = 0; // 是否启用大气散射效果（只有在高空时启用）
-    // 鱼眼照片
-    if (landscape_index == 1) {
-        update_landscape((uint8_t*)FISHEYE_TEXTURE_BUFFER, FISHEYE_TEXTURE_WIDTH, FISHEYE_TEXTURE_HEIGHT, 0, fov);
-        enable_atmosphere_scattering = 0;
-    }
-    // 卫星图（动态地景）
-    else if (landscape_index == 2) {
+    if (landscape_index == 3) {
+        // 实时海洋（web-ocean 移植）：逐像素射线步进海面 + 物理着色，只覆盖地平线以下。
+        // 与参考实现一致：该地景不画贴图、也不做地平线大气混合（大气透视由着色本身完成）。
 #if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
-        // TODO 几何关系待优化
-        fov = (0.45f/90.0f) * fabsf(sun_alt) + 1.1f;
-        update_landscape((uint8_t*)FLAT_TEXTURE_BUFFER, FLAT_TEXTURE_WIDTH, FLAT_TEXTURE_HEIGHT, 1, fov);
-        view_height = 1.0f;
-        // float view_height = 0.01f * fabsf(sun_alt) + 1.0f;
-        enable_atmosphere_scattering = 1;
+        linglong_ocean_draw_landscape(gfx,
+            sky_radius, center_x, center_y,
+            view_alt, view_azi, view_roll, f, projection);
+#else
+        // 内存紧缺平台（M5Stack）未编入海洋模块：退化为纯黑地景（同 landscape_index==0）
+        draw_horizon(gfx,
+            sky_radius, center_x, center_y,
+            view_alt, view_azi, view_roll, f, projection,
+            view_height, sun_alt, 0, 0, 0, 0, 0);
 #endif
     }
+    else {
+        // 鱼眼照片
+        if (landscape_index == 1) {
+            update_landscape((uint8_t*)FISHEYE_TEXTURE_BUFFER, FISHEYE_TEXTURE_WIDTH, FISHEYE_TEXTURE_HEIGHT, 0, fov);
+            enable_atmosphere_scattering = 0;
+        }
+        // 卫星图（动态地景）
+        else if (landscape_index == 2) {
+#if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
+            // TODO 几何关系待优化
+            fov = (0.45f/90.0f) * fabsf(sun_alt) + 1.1f;
+            update_landscape((uint8_t*)FLAT_TEXTURE_BUFFER, FLAT_TEXTURE_WIDTH, FLAT_TEXTURE_HEIGHT, 1, fov);
+            view_height = 1.0f;
+            // float view_height = 0.01f * fabsf(sun_alt) + 1.0f;
+            enable_atmosphere_scattering = 1;
+#endif
+        }
 
-    draw_horizon(gfx,
-        sky_radius, center_x, center_y,
-        view_alt, view_azi, view_roll, f, projection,
-        view_height, sun_alt, landscape_index, enable_atmosphere_scattering, (uint8_t)atmo_r, (uint8_t)atmo_g, (uint8_t)atmo_b);
+        draw_horizon(gfx,
+            sky_radius, center_x, center_y,
+            view_alt, view_azi, view_roll, f, projection,
+            view_height, sun_alt, landscape_index, enable_atmosphere_scattering, (uint8_t)atmo_r, (uint8_t)atmo_g, (uint8_t)atmo_b);
+    }
 
 
 

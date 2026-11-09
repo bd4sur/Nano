@@ -48,6 +48,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         hal_power_coremp135.c \
                         hal_misc_linux.c \
                         celestial.c \
+                        celestial_ocean.c \
                         ephemeris.c \
                         flip.c \
                         gfx_font_12.c \
@@ -107,6 +108,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         hal_key_ncurses_linux.c \
                         vsop87c_milli.c \
                         celestial.c \
+                        celestial_ocean.c \
                         ephemeris.c \
                         nongli.c \
                         flip.c \

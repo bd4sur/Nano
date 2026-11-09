@@ -62,6 +62,7 @@ $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) $(ANIMAC_HEADERS) $(ANIMAC_DIR)/am_n
                         hal_power_coremp135.c \
                         hal_misc_linux.c \
                         celestial.c \
+                        celestial_ocean.c \
                         ephemeris.c \
                         flip.c \
                         gfx_font_12.c \

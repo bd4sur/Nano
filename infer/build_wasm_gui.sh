@@ -127,6 +127,7 @@ ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
     hal_power_linux.c \
     hal_misc_linux.c \
     celestial.c \
+    celestial_ocean.c \
     ephemeris.c \
     flip.c \
     gfx_font_12.c \

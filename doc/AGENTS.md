@@ -7025,3 +7025,76 @@ wasm32，用 node 跑任意 `.scm`（`(display ...)` 直通 stdout）。**意义
 - 15:30 的 A/B 最直观（旧构建亮度 0.5 vs 新≈1.98）：新构建的云明显更白、明暗对比更强、
   云顶蓬松感更足；日落时段两者都接近漆黑（曲线在 h<0 后迅速逼近 0.5 下限）。
 - `regress_linglong_ui.js` 全通过；页面无 pageerror；三个改动文件 `gcc -fsyntax-only` 通过。
+
+# 2026-11-09（玲珑仪新增「海洋天空」+「实时海洋」：web-ocean 移植）
+
+把 `/home/bd4sur/bd4sur.github.io/html/linglong.html` 中 `=== [WebOcean] ===` 一节
+（Hillaire 式 LUT 大气 + web-ocean 实时海洋，JS 与 GLSL 两套等价实现）逐式移植到 C，
+作为天象仪的动态地景。**本阶段目标是忠实移植，未做性能优化。**
+
+## 参考实现（linglong.html）
+
+- 天空（该页 `enable_atmospheric_scattering = 6`）：透射率 LUT（256×64）+ 多重散射 LUT
+  （32×32）+ 天空视图 LUT（256×144，太阳或观察高度变化才重建）+ `wo_agx_tonemap`；
+  气溶胶霾倍率 `WO_HAZE` 进 `wo_medium()`（默认 0 = 清透空气，与页面一致）。
+- 海洋（该页 `LANDSCAPES[7]`，类型 2）：
+  - 波场：JONSWAP 风浪谱 × Donelan-Banner 方向分布 + 窄涌浪（cos^2s）+ 表面张力色散；
+    整数波数格点上按 `S^flat` 分层系统抽样得 384 条波列/级联（方差无偏），
+    烘焙为两级可平铺纹理（L=512m / 16m，各 256²，通道 h、sx、sz、雅可比迹），
+    按各波段群速度平流；烘焙结果过一遍 f16 往返（原为 CPU/GLSL 逐位一致）。
+  - 着色：LEAN 坡度协方差 + 像素足迹展宽、各向异性高斯太阳耀光（Smith 掩蔽 + Schlick
+    Fresnel）、天空环境反射（粗糙度按半球均值混合）、水体上涌散射 + 背光波峰透射辉光、
+    雅可比白帽（程序化 256² 泡沫纹理）、大气透视、AgX。
+  - 求交：`WO_HMAX` 起点的射线步进 + 二分细化（收敛到 1mm）；`> WO_MARCH_FAR(900m)`
+    直接取平均海平面。
+
+## 本项目实现
+
+- 新增 `infer/celestial_ocean.{c,h}`：`Linglong_Ocean_Config`（海况/大气参数，默认值同参考）
+  + `linglong_ocean_prepare/ sky_pixel/ draw_landscape/ free`。
+  - LUT 构建与波场烘焙用 double（原实现是 JS Number），逐像素着色也用 double；
+    LUT/波场以 float32 存储；`wo_to_half_round()` 复刻 f16 就近舍入偶数，
+    因此波场纹理与参考实现逐 texel 一致。
+  - 与原网页实现的差异（均已注释在文件头）：① 无岛屿/机场高程场，海底恒为深水
+    （等价参考实现 `isl_on=0`、`bathy=-70m`，故浅水色与拍岸泡沫不出现）；
+    ② 不做 CPU/GLSL 双路一致性所需的 LUT 上传，纹理直接留 float32；
+    ③ 观察者水平位置固定在原点（天象仪不飞行），波场仍按群速度平流；
+    ④ 未移植 WebGL 路径（本项目是软件光栅）。
+- 接入 `render_sky()`：`sky_model == 5` = 海洋天空（走既有散射循环 →
+  `calculate_scattered_pixel()` 新增分支 → `linglong_ocean_sky_pixel()`）；
+  `landscape_index == 3` = 实时海洋（跳过贴图/`draw_horizon`，改由
+  `linglong_ocean_draw_landscape()` 只覆盖地平线以下像素）。
+  两者共用同一份 LUT/波场，每帧在 `render_sky()` 开头调一次 `linglong_ocean_prepare()`
+  （推进海面动画时间 + 按需重建 LUT + 烘焙波场；重建阈值 0.25° 太阳移动，同参考实现）。
+  索引映射与参考页不同（参考为 6 / 7）：本项目的 0~4 已被占用。
+- 设置界面（C 键）的大气散射/地景两格新增「海洋天空」「实时海洋」；
+  Ctrl+7 / Ctrl+8 的循环范围相应改为 `%6` / `%4`。
+- 构建：`Makefile`（5 个目标）、`luckfox.mk`、`mp135.mk`（2 个目标）、
+  `build_wasm_gui.sh` 增加 `celestial_ocean.c`。ESP32（PlatformIO `src_dir=.` 自动收编）
+  由 `LINGLONG_ENABLE_DYNAMIC_LANDSCAPE=0` 退化为空实现，零内存/零代码增量。
+- 海况参数（风速/风向/风区/涌浪/泡沫/浑浊度/霾/能见度/观察高度）已通过
+  `Linglong_Ocean_Config` 暴露，但**暂未接 UI 滑块**，先用默认值（7 m/s @118°、
+  涌浪 1.8m/120m、观察高度 50m、泡沫 0、浑浊度 0.2、霾 0、能见度 ~150km）。
+
+## 验证（与参考 JS 逐像素比对）
+
+从 `linglong.html` 原文件里按行号提取同一段 JS（10663~11477、13064~13397）在 node 里跑，
+与本实现对比（`enable_islands=false`、同一太阳/相机参数、冻结动画时间）：
+
+| 项目 | 结果 |
+|---|---|
+| 波场坡度协方差 cov | 与 JS 一致到 1e-10 |
+| 波场纹理前 64 texel（两级联） | 逐 texel 一致（≤1e-10） |
+| SKY 采样 300 像素（320×240，视角 45°/70°） | max |Δ| = 1e-6（0..1） |
+| OCEAN 采样 126~128 像素 | 中位 7e-6、max 1e-3（耀光敏感像素） |
+| 整幅 320×240（含天空+海面，70° 视角 / 2km 观测高度两组） | max 2/255、mean 0.5/255 |
+
+- 残余差异来自 float32 的 `fisheye_unproject()`（天象仪既有实现）与 double 参考实现
+  在射线方向上的 1e-6 相对差，经耀光（指数放大）放大到 1e-3；视觉不可分辨。
+- 目视：日落（太阳 8°）时海面镜面耀光带、天空环带、地平线过渡均与参考一致；
+  夜间（太阳 −12°）全黑（参考模型无夜天光，恒星仍由天象仪叠加绘制）。
+- 性能（Linux，8 线程，320×240）：`prepare` 128ms（三张 LUT + 两级波场烘焙，一次性/
+  太阳移动 0.25° 时）、整幅天空 15ms、海面 8ms。WASM 单线程约为 1/8 线程的 5~8 倍；
+  时光机快进时太阳每帧移动 >0.25° 会每帧重建天空视图 LUT（本阶段按要求不优化）。
+- `gcc -Wall -Wextra`（celestial.c / celestial_ocean.c）零告警。本机缺 ALSA 头文件，
+  无法完成 `nano_tty` 全量链接（与本次改动无关）。

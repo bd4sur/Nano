@@ -1707,6 +1707,12 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
             txt_color[2][0][1] = 170;
             txt_color[2][0][2] = 0;
             break;
+        case 5:
+            wcscpy(cell_text[2][0][1], L"海洋天空");
+            txt_color[2][0][0] = 0;
+            txt_color[2][0][1] = 200;
+            txt_color[2][0][2] = 255;
+            break;
         default: break;
     }
 
@@ -1728,6 +1734,12 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
             wcscpy(cell_text[2][1][1], L"卫星照片");
             txt_color[2][1][0] = 0;
             txt_color[2][1][1] = 255;
+            txt_color[2][1][2] = 255;
+            break;
+        case 3:
+            wcscpy(cell_text[2][1][1], L"实时海洋");
+            txt_color[2][1][0] = 0;
+            txt_color[2][1][1] = 200;
             txt_color[2][1][2] = 255;
             break;
         default: break;
@@ -2418,7 +2430,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         else {
             // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->sky_model++;
-            global_state->linglong_cfg->sky_model = global_state->linglong_cfg->sky_model % 5;
+            global_state->linglong_cfg->sky_model = global_state->linglong_cfg->sky_model % 6;
             linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
@@ -2434,7 +2446,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         else {
             // global_state->is_ctrl_enabled = 0;
             global_state->linglong_cfg->landscape_index++;
-            global_state->linglong_cfg->landscape_index = global_state->linglong_cfg->landscape_index % 3;
+            global_state->linglong_cfg->landscape_index = global_state->linglong_cfg->landscape_index % 4;
             linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }

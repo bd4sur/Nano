@@ -61,8 +61,8 @@ typedef struct Linglong_Config {
     int32_t enable_opt_bilinear;     // 是否启用双线性插值以优化画质
  
     int32_t projection;              // 投影算法（0-鱼眼；1-线性透视）
-    int32_t sky_model;               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射；4-体积云+大气渲染）
-    int32_t landscape_index;         // 选择地景贴图（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景）
+    int32_t sky_model;               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射；4-体积云+大气渲染；5-海洋天空）
+    int32_t landscape_index;         // 选择地景（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景；3-实时海洋）
     int32_t enable_equatorial_coord; // 是否启用赤道坐标圈
     int32_t enable_horizontal_coord; // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst;       // 是否启用星芒效果
@@ -104,6 +104,14 @@ typedef struct {
 const Linglong_Cloud_Option *linglong_cloud_layer_options(int32_t *count);
 const Linglong_Cloud_Option *linglong_cloud_precision_options(int32_t *count);
 
+// 鱼眼/透视投影互为逆运算（屏幕坐标 ↔ 地平天球笛卡尔坐标）；celestial_ocean.c 复用
+void fisheye_unproject(
+    float scr_x, float scr_y,
+    float radius, float center_x, float center_y,
+    float view_alt, float view_azi, float view_roll, float f, int32_t projection,
+    float *x, float *y, float *z
+);
+
 void render_sky(Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f,
@@ -115,8 +123,8 @@ void render_sky(Nano_GFX *gfx,
     int32_t enable_opt_bilinear,     // 是否启用双线性插值以优化画质
 
     int32_t projection,              // 投影算法（0-鱼眼；1-线性透视）
-    int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
-    int32_t landscape_index,         // 选择地景贴图（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景）
+    int32_t sky_model,               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射；4-体积云+大气渲染；5-海洋天空）
+    int32_t landscape_index,         // 选择地景（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景；3-实时海洋）
     int32_t enable_equatorial_coord, // 是否启用赤道坐标圈
     int32_t enable_horizontal_coord, // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst,       // 是否启用星芒效果
