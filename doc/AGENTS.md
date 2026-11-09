@@ -6978,3 +6978,50 @@ wasm32，用 node 跑任意 `.scm`（`(display ...)` 直通 stdout）。**意义
   ② “实时恢复当前时间”原只比 `sky()` 区域，夜里天体每秒只转 0.004°、天空本身几乎静止，
   会误判为“未变化”（已在优化前的构建上复现），判据改为包含底部状态栏（秒数逐秒必变）。
 - 构建：`infer/build_wasm_gui.sh`（仅 WASM GUI 目标）；四个改动文件另做 `gcc -fsyntax-only` 通过。
+
+# 2026-11-09（体积云亮度改为按太阳高度自动调制，对齐 linglong.html）
+
+参考 `/home/bd4sur/bd4sur.github.io/html/linglong.html` 的做法：云亮度不再是固定档/手动档，
+而是太阳高度角的经验函数，逐帧重算。
+
+## 参考实现（linglong.html）
+
+- `cloud_sky_brightness_from_sun_alt(sun_alt_deg)` = `0.75·tanh(0.2·h − 0.6) + 1.25`
+  （h = 太阳高度角，度）；值域天然落在亮度区间 [0.5, 2.0]：
+  h≈3° → 1.25、h≳25° 饱和到 2.0、h=0° → 0.85、h=−6° → 0.54、h≲−18° → 0.5。
+- 由 `cloud_sky_prepare_frame()` 每帧调用 `cloud_sky_apply_brightness(...)`；
+  作者注释明确“云亮度不可手动调节”，初值按 `from_sun_alt(3.0)` 占位。
+- 亮度本身不是乘颜色，而是联动介质光学参数（albedo / 直射辐照 / 多重散射出射与损耗 /
+  环境补光），见其 `cloud_sky_apply_brightness`。
+
+## 本项目实现
+
+- `ui_cloud.c` 新增 `ui_cloud_brightness_for_sun_alt(float elev_deg)`，与上式逐字一致
+  （`0.75f * tanhf(0.2f * elev_deg - 0.6f) + 1.25f`），在 `ui_cloud.h` 公开。
+  它喂给既有的 `cloud_apply_brightness()`（早就是 linglong.html 的同款联动，无需改动），
+  因此亮度仍然通过介质光学参数生效。
+- `celestial.c` 的体积云分支（`sky_model==4`）用
+  `cp.brightness = ui_cloud_brightness_for_sun_alt((float)sun_alt)` 取代原来的固定值；
+  `sun_alt` 就是 `where_is_the_sun()` 给出、原本已在给 `ui_cloud_sun_color()` 用的太阳高度角。
+- 随之删除已无意义的 `cloud_brightness` 手动档：`Linglong_Config.cloud_brightness`
+  与 `render_sky()` 的同名形参一起移除（天象仪不再有固定亮度来源）。
+  独立“体积云”演示 App 的 2/8 键手动亮度保留（它是渲染器演示程序，且当前无菜单入口）。
+
+## 验证（真 WASM + 无头 chromium，新增 probe_linglong_cloudday.js）
+
+用时光机按帧数（每帧 ±120s）把模拟时间精确走到指定时刻，统计上半屏亮度
+（`fb_epoch`/`p90`/亮像素占比）：
+
+| 时刻 | 旧（固定亮度 0.5）p90 | 新（自动调制）p90 |
+|---|---|---|
+| 12:00 | 248.7 | 255.0 |
+| 15:30 | 250.4 | 253.3 |
+| 17:20 | 81.4 | 66.8 |
+| 18:40 | 2.9 | 2.9 |
+| 20:00 | 2.9 | 2.9 |
+
+- 新构建满足“正午 → 下午 → 日落 → 暮光后”单调下降；旧构建在 12:00/15:30 之间不单调
+  （亮度固定，天空本身反而更亮），说明调制确实生效。
+- 15:30 的 A/B 最直观（旧构建亮度 0.5 vs 新≈1.98）：新构建的云明显更白、明暗对比更强、
+  云顶蓬松感更足；日落时段两者都接近漆黑（曲线在 h<0 后迅速逼近 0.5 下限）。
+- `regress_linglong_ui.js` 全通过；页面无 pageerror；三个改动文件 `gcc -fsyntax-only` 通过。

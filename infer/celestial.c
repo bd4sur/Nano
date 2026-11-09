@@ -2748,7 +2748,6 @@ void linglong_init(Linglong_Config *cfg) {
     // 低层（云区 3.0~6.2km，高积云/层积云观感）占云量主体且开销可控，故默认只渲染它。
     // 需要全层观感时可把掩码改成 UI_CLOUD_LAYER_ALL（低|中|高）。
     cfg->cloud_layer_mask = UI_CLOUD_LAYER_LOW;
-    cfg->cloud_brightness = 0.5f;     // 云亮度（默认起始值，2026-10 由 1.4 改为 0.5）
     cfg->cloud_precision_level = 1;   // 云精度档位（0-高 1-中 2-低；中 = 半分辨率 + 0.25km 步距）
 
     cfg->lut_alt_step = 0.5f;         // Inscatter LUT 高度角步长（度）
@@ -2817,7 +2816,6 @@ void render_sky(Nano_GFX *gfx,
     // 体积云参数（仅 sky_model==4 时有效）
     int32_t cloud_coverage_level,    // 云量档位 0-5
     int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
-    float   cloud_brightness,        // 云亮度 0.5~2.0
     int32_t cloud_precision_level    // 云精度档位 0-2（高/中/低）
 ) {
 
@@ -2931,10 +2929,13 @@ void render_sky(Nano_GFX *gfx,
         ui_cloud_sun_color((float)sun_alt, &sr, &sg, &sb, &si);
         cp.sun_r = sr; cp.sun_g = sg; cp.sun_b = sb; cp.sun_intensity = si;
 
-        // 云参数（沿用 ui_cloud.c 已有的云量/云层/亮度控制曲线）
+        // 云参数：云量与云层来自用户档位；云亮度不做手动档，而是每帧按太阳高度
+        // 自动调制（与 linglong.html 同式）：太阳高时云白亮（上限 2.0），日落后转暗，
+        // 天文暮光之后压到下限 0.5。亮度值本身经 cloud_apply_brightness 联动反照率/
+        // 直射辐照/多重散射/环境补光，是介质光学参数而不是事后乘颜色。
         cp.coverage = ui_cloud_coverage_for_level(cloud_coverage_level);
         cp.layer_mask = cloud_layer_mask;
-        cp.brightness = cloud_brightness;
+        cp.brightness = ui_cloud_brightness_for_sun_alt((float)sun_alt);
         // 云精度档位 → 内部渲染降采样倍数 + ray-march 步距（越界钳制到中间档）
         {
             int32_t lv = cloud_precision_level;

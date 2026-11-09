@@ -72,10 +72,10 @@ typedef struct Linglong_Config {
     int32_t enable_att_indicator;    // 是否显示姿态指示标记
     int32_t enable_tracking_sun;     // 视线偏航角是否跟踪太阳
 
-    // 体积云参数（仅 sky_model==4 时有效；对应 ui_cloud.c 中已有的云量/云层/亮度控制）
+    // 体积云参数（仅 sky_model==4 时有效；对应 ui_cloud.c 中已有的云量/云层/精度控制）。
+    // 云亮度不在此列：它每帧由太阳高度自动调制（ui_cloud_brightness_for_sun_alt）。
     int32_t cloud_coverage_level;    // 云量档位 0-5（晴空→疏云→半云→多云→阴天→满云）
     int32_t cloud_layer_mask;        // 云层种类掩码；bit0-低层 bit1-中层 bit2-高层（7=全部，0=无云）
-    float   cloud_brightness;        // 云亮度 0.5~2.0（联动云介质光学参数，物理地改变观感）
     int32_t cloud_precision_level;   // 云精度档位 0-2（高/中/低：内部渲染降采样倍数 + ray-march 步距）
 
     // 以下与天空渲染无关（非render_sky参数）
@@ -128,7 +128,6 @@ void render_sky(Nano_GFX *gfx,
     // 体积云参数（仅 sky_model==4 时有效）
     int32_t cloud_coverage_level,    // 云量档位 0-5
     int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
-    float   cloud_brightness,        // 云亮度 0.5~2.0
     int32_t cloud_precision_level    // 云精度档位 0-2（高/中/低）
 );
 

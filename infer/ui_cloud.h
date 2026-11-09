@@ -72,7 +72,8 @@ typedef struct UiCloud_Render_Params {
     // ---- 云参数 ----
     float coverage;         // 云量（建议使用 ui_cloud_coverage_for_level 的标定档位值）
     int   layer_mask;       // 云层种类掩码（UI_CLOUD_LAYER_* 组合）
-    float brightness;       // 云亮度 0.5~2.0
+    float brightness;       // 云亮度 0.5~2.0（天象仪传入 ui_cloud_brightness_for_sun_alt() 的
+                            // 自动调制值；独立应用仍可用 2/8 键手动调节）
     int   enable_sun_lens;  // 是否绘制云内核自带的太阳镜头光晕（天象仪集成时关闭，因为它自己画太阳）
     // ---- 性能档位覆盖（0 = 用 ui_cloud 内部默认值，见 CLOUD_OPT_* 宏） ----
     int   render_scale;     // 内部渲染降采样倍数（1=全分辨率，2=半分辨率…）
@@ -89,6 +90,14 @@ float ui_cloud_coverage_for_level(int level);
 // 由太阳高度角（度）推导太阳色温/辐照（线性 RGB + 强度），
 // 供天象仪以 where_is_the_sun 提供的太阳角度驱动体积云/大气渲染的光源。
 void ui_cloud_sun_color(float elev_deg, float *r, float *g, float *b, float *intensity);
+
+// 云亮度（0.5~2.0）随太阳高度的经验调制（与 bd4sur.github.io/html/linglong.html 同式）：
+//   brightness = 0.75·tanh(0.2·h − 0.6) + 1.25    （h = 太阳高度角，度）
+// 值域恰好落在亮度区间 [0.5, 2.0]：h≈3° → 1.25；h≳25° 饱和到上限 2.0（云白亮）；
+// 日落后急降；天文暮光（h≲−18°）之后压到下限 0.5。
+// 与 ui_cloud_sun_color 一样是“每帧按太阳位置重算”的曲线：亮度经 cloud_apply_brightness
+// 联动反照率/直射辐照/多重散射/环境补光等介质光学参数，而不是事后乘颜色。
+float ui_cloud_brightness_for_sun_alt(float elev_deg);
 
 // 将 UiCloud_Render_Params 应用到内部场景并渲染一帧（结果在 ui_cloud 内部缓冲，
 // 需调用 ui_cloud_flush 输出到显存；若调用方还要在其上叠加绘制，先 flush 再画）

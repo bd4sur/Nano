@@ -1758,6 +1758,16 @@ const wchar_t *ui_cloud_coverage_level_name(int level) {
     return CLOUD_COVERAGE_NAMES[level];
 }
 
+// 云亮度随太阳高度的经验调制（与 linglong.html 的 cloud_sky_brightness_from_sun_alt 同式）：
+//   0.75·tanh(0.2·h − 0.6) + 1.25
+// tanh 的值域把结果天然夹在 [0.5, 2.0]，正好是 cloud_apply_brightness 的亮度区间：
+//   h=+90° → 2.00   h=25° → 2.00   h=10° → 1.91   h=3° → 1.25
+//   h= 0°  → 0.85   h=-6° → 0.54   h=-18° → 0.50
+// 太阳越高云越白亮（上限 2.0），日落后转暗，天文暮光之后压到下限 0.5。
+float ui_cloud_brightness_for_sun_alt(float elev_deg) {
+    return 0.75f * tanhf(0.2f * elev_deg - 0.6f) + 1.25f;
+}
+
 static void cloud_apply_brightness(float b) {
     b = clampf(b, 0.5f, 2.0f);
     s_ui.brightness = b;

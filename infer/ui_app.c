@@ -1867,7 +1867,6 @@ int32_t ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_sta
         llcfg->enable_tracking_sun,
         llcfg->cloud_coverage_level,
         llcfg->cloud_layer_mask,
-        llcfg->cloud_brightness,
         llcfg->cloud_precision_level
     );
 
