@@ -1154,9 +1154,27 @@ void gfx_draw_rectangle(Nano_GFX *gfx, uint32_t x0, uint32_t y0, uint32_t width,
         }
         return;
     }
-    for (uint32_t y = y0; y < MIN(gfx->height, y0 + height); y++) {
-        for (uint32_t x = x0; x < MIN(gfx->width, x0 + width); x++) {
-            gfx_draw_point(gfx, x, y, red, green, blue, mode);
+    // 慢路径（RGB888 / mode>=4）：入参是 uint32，负坐标（如精灵/图形部分探出左边界时的
+    // x0<0）会回绕成巨大正数，`x0 + width` 也跟着回绕 —— 整个矩形被静默丢弃。RGB565 快
+    // 路径一直是有符号裁剪的，两条路径行为必须一致，故这里统一按有符号矩形与屏幕/裁剪区求交。
+    {
+        int32_t ix0 = (int32_t)x0, iy0 = (int32_t)y0;
+        int32_t ix1 = (int32_t)x0 + (int32_t)width - 1, iy1 = (int32_t)y0 + (int32_t)height - 1;
+        if (ix1 < 0 || iy1 < 0) return;
+        if (ix0 >= (int32_t)gfx->width || iy0 >= (int32_t)gfx->height) return;
+        if (ix0 < 0) ix0 = 0;
+        if (iy0 < 0) iy0 = 0;
+        if (ix1 >= (int32_t)gfx->width)  ix1 = (int32_t)gfx->width - 1;
+        if (iy1 >= (int32_t)gfx->height) iy1 = (int32_t)gfx->height - 1;
+        if (ix0 < gfx->clip_x0) ix0 = gfx->clip_x0;
+        if (iy0 < gfx->clip_y0) iy0 = gfx->clip_y0;
+        if (ix1 >= gfx->clip_x1) ix1 = gfx->clip_x1 - 1;
+        if (iy1 >= gfx->clip_y1) iy1 = gfx->clip_y1 - 1;
+        if (ix0 > ix1 || iy0 > iy1) return;
+        for (int32_t y = iy0; y <= iy1; y++) {
+            for (int32_t x = ix0; x <= ix1; x++) {
+                gfx_draw_point(gfx, (uint32_t)x, (uint32_t)y, red, green, blue, mode);
+            }
         }
     }
 }
