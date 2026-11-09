@@ -2701,7 +2701,10 @@ void linglong_init(Linglong_Config *cfg) {
 
     // 体积云参数（sky_model==4 时生效；档位/亮度与 ui_cloud.c 独立应用的默认一致）
     cfg->cloud_coverage_level = 2;    // 云量档位（半云）
-    cfg->cloud_layer_mask = UI_CLOUD_LAYER_ALL; // 显示全部云层
+    // 云层种类默认仅低层：高/中/低三层叠满时逐像素 ray-march 成本过高（WASM 单线程下约 1fps），
+    // 低层（云区 3.0~6.2km，高积云/层积云观感）占云量主体且开销可控，故默认只渲染它。
+    // 需要全层观感时可把掩码改成 UI_CLOUD_LAYER_ALL（低|中|高）。
+    cfg->cloud_layer_mask = UI_CLOUD_LAYER_LOW;
     cfg->cloud_brightness = 0.5f;     // 云亮度（默认起始值，2026-10 由 1.4 改为 0.5）
 
     cfg->lut_alt_step = 0.5f;         // Inscatter LUT 高度角步长（度）
