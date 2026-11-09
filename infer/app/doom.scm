@@ -22,6 +22,10 @@
 ;; 游戏内容：
 ;;   · 3 张手工关卡（房间 + 走廊 + 门 + 柱子，砖/钢/石/大理石/木五种材质）；
 ;;     全部格子连通性/实体可达性在离线脚本里做过 BFS 校验；
+;;   · **随机刷怪**：关卡开局在空地上随机布 7~13 只（位置/类型都随机，重甲兵第 2 关起
+;;     出现）；游戏过程中每 9~15 秒在"离玩家 >6.5 格且不在视野里"的空地补刷一只
+;;     （同时存活上限 5）；**某一刻本关活敌归零即封盘**，之后不再刷怪，玩家可以安心
+;;     搜刮道具、找出口。敌人阵亡 40% 概率掉落（弹药/医疗包/护甲）；
 ;;   · 3 种敌人：僵尸兵（近战）、火球兵（远程火球）、重甲兵（高血近战）；
 ;;     各有待机→追击→攻击蓄力→硬直→死亡状态机、视线检测（LOS）、贴墙滑动碰撞；
 ;;   · 3 把武器：手枪（无限弹、15 伤害）、霰弹枪（8 弹丸扇形 ×9）、链枪（8 伤害、高射速）；
@@ -29,8 +33,10 @@
 ;;   · 拾取：医疗包 +25、弹药 +20 弹/+4 霰弹、护甲 +25；受击有 0.24s 无敌帧防围殴瞬秒；
 ;;   · 踩上绿色发光柱＝出口 → 过关；死亡/过关/通关三套结算画面，点击或按键继续。
 ;;   · **AI 自动游玩**（左上「AI 手动 / AI 自动」按钮或键盘 G）：BFS 距离场寻路 + 交战
-;;     目标获取 + 自动开门/换枪/拾取 + 卡住自愈，能自己把三关打完并自动续关（演示模式）；
-;;     AI 的输出走与人类输入**同一条通路**，物理/命中判定完全一致。详见文件内 AI 段落。
+;;     目标获取 + 自动开门/换枪/拾取 + 卡住自愈，会**把每关的敌人清空、再把场上道具
+;;     一件件捡干净**（有道具没捡完时寻路绕开出口格，不会顺路提前过关），最后才去出口；
+;;     能自己把三关打完并自动续关（演示模式）；AI 的输出走与人类输入**同一条通路**，
+;;     物理/命中判定完全一致。详见文件内 AI 段落。
 ;;
 ;; 触屏适配（本平台只有**单点**触控：页面 Pointer Events 只跟踪一个 activePointerId，
 ;; Touch 本地库也只给电平 + 一个坐标，因此不能「左手走 + 右手转 + 同时开火」）：
@@ -96,72 +102,72 @@
   ( ; L1
    "################################"
    "#........####MMMMMMMMMMMMMSSSSSS"
-   "#....z...####M......i....M.....S"
-   "#........####M..z........M..a..S"
+   "#........####M...........M.....S"
+   "#........####M...........M..a..S"
    "#.p......D...D........M..D.....S"
    "#........####M...MMM..M..M.....S"
    "#........####M...MMM..M..M...h.S"
    "#.....h..####M...MMM.....M.....S"
-   "#......a.####M.........i.M.....S"
+   "#......a.####M...........M.....S"
    "####D########M...MMM.....MSSSSSS"
    "####.########M...MMM.....M######"
-   "####D########M...MMM..z..M######"
+   "####D########M...MMM.....M######"
    "##.....######M...........M######"
    "##..a..######MMMMMMDMMMMMM######"
    "##.....############.BBBBBBBBBBBB"
    "###################.B..........B"
    "##W....D............D........h.B"
-   "##Wh........W#######B..z.......B"
-   "##W......i..W#######B.a.....E..B"
-   "##W..z......W#######B......i...B"
-   "##W.b.......W#######B..........B"
+   "##Wh........W#######B..........B"
+   "##W.........W#######B.a.....E..B"
+   "##W.........W#######B..........B"
+   "##W.........W#######B..........B"
    "##WWWWWWWWWWW#######BBBBBBBBBBBB"
   )
   ( ; L2
    "#########MMMMMMMMMMMMMMM########"
-   "#.......#M...........z.MSSSSSSSS"
-   "#.p.....#M.z...........M....a..S"
+   "#.......#M.............MSSSSSSSS"
+   "#.p.....#M.............M....a..S"
    "#.......#M..SSS...SSS..M.......S"
    "#.a...h.#M..SSS...SSS..D.......S"
-   "#.......D.......i......M..h....S"
-   "#...z...#M..SSS...SSS..M.....i.S"
+   "#.......D..............M..h....S"
+   "#.......#M..SSS...SSS..M.......S"
    "#.......#M..SSS...SSS..M.......S"
    "####.####M...........a.MSSSSSSSS"
    "####.####M.............M########"
    "WWWWDWWWWMMMMMMM.MMMMMMMMMMMMMMM"
    "W........W######.######M.....h.M"
-   "W......a.WSSSSSSDSSSSSSS.z.....M"
+   "W......a.WSSSSSSDSSSSSSS.......M"
    "W........W.............S.......M"
-   "W..WWW...W.z........i..S..MMM..M"
+   "W..WWW...W.............S..MMM..M"
    "W..WWW...W.....MMM.....D..MMM..M"
    "W........W.....MMM.....S.......M"
-   "W.z......W.............S....E..M"
-   "W........D........z....S..MMM..M"
-   "W..h...z.W.....MMM.....S..MMMi.M"
-   "W........W..a........b.S..a....M"
+   "W........W.............S....E..M"
+   "W........D.............S..MMM..M"
+   "W..h.....W.....MMM.....S..MMM..M"
+   "W........W..a..........S..a....M"
    "WWWWWWWWWWSSSSSSSSSSSSSSMMMMMMMM"
   )
   ( ; L3
    "SSSSSSSSBBBBBBBBBBBBBBBBBBBBBBBB"
    "S......SB......................B"
-   "S....z.SB...BBi......BB...BB.h.B"
-   "S......SB.z.BB.....z.BB.i.BB...B"
+   "S......SB...BB.......BB...BB.h.B"
+   "S......SB...BB.......BB...BB...B"
    "S.p....D.......................B"
    "S......SBBBBBBB....BBBBBBBBBBBBB"
    "S.a..h.S#######....#############"
-   "S......S#######..b.#############"
+   "S......S#######....#############"
    "SSSSSSSSBBBBBBB....BBBBBBB######"
    "########B....a...........B######"
    "########B..BB........BBh.B######"
-   "########B.iBB...z....BB..B######"
+   "########B..BB........BB..B######"
    "########B................B######"
    "########BBBBBBBBDBBBBBBBBB######"
    "WWWWWWWWWWWWWWWW.WWWWWWWWWWWWWWW"
-   "W.z.............D....i.........W"
+   "W...............D..............W"
    "WWWWWDWWWWWWWWWW.WWWWWWWWWDWWWWW"
    "#W..W.....W########W....W....h.W"
    "#W..W...a.W########W.a..W...E..W"
-   "#W....h...W########W......z....W"
+   "#W....h...W########W...........W"
    "#W........W########W...........W"
    "#WWWWWWWWWW########WWWWWWWWWWWWW"
   )
@@ -194,7 +200,7 @@
 (define en_ph (quote ()))    ; 走路动画相位
 
 ;; 道具槽：x y 类型 存活
-(define IMAX 24)
+(define IMAX 40)
 (define it_n 0)
 (define it_x (quote ()))
 (define it_y (quote ()))
@@ -258,6 +264,7 @@
 (define dbg_nd 0.0)               ; 最近活敌距离
 (define dbg_na 0.0)               ; 最近活敌方位角差
 (define dbg_ns 0)                 ; 本帧精灵数
+(define dbg_items 0)              ; 场上剩余（未拾取）道具数
 
 ;; ============================================================================
 ;; 数学 / 小工具
@@ -379,8 +386,154 @@
 ;; 关卡解析
 ;; ============================================================================
 
+;; ============================================================================
+;; 随机刷怪（关卡初始化随机布怪 + 游戏过程中动态补充）
+;;
+;; 规则（对齐需求）：
+;;   · **关卡开始时随机布怪**：敌人数取「关卡基数 + 0..3 随机」，位置在可站立格上随机
+;;     （离玩家 > 5.5 格、不与已生成的怪重叠）；类型按关卡加权（重甲兵第 2 关起出现）。
+;;   · **游戏过程中动态刷怪**：每 9~15 秒在「离玩家 > 6.5 格、不在玩家视野里」的空地刷
+;;     一只，同时存活数上限 5 只 —— 既保持压力，又不至于把人堵死、也不至于清不完。
+;;   · **全灭即封盘**：某一刻本关活敌数归零 → `spawn_stop` 锁存，本关之后不再刷怪，
+;;     玩家可以安心去搜刮道具、找出口。这条是「能通关」的保证。
+;;   · 敌人阵亡有 40% 概率掉落（弹药 25% / 医疗包 10% / 护甲 5%），保证动态刷怪下的
+;;     弹药经济不至于枯竭，也给"把道具拾干净"提供更多目标。
+;; ============================================================================
+
+(define sp_cx 0.0) (define sp_cy 0.0)   ; 选点结果
+(define spawn_t 0.0)                    ; 距下次动态刷怪的秒数
+(define spawn_stop 0)                   ; 1 = 本关已封盘（活敌曾归零）
+(define spawn_cap 5)                    ; 同时存活上限
+(define rs_n 0)                         ; 本关动态刷出的敌人数（诊断用）
+(define en_alive 0)                     ; 当前活敌数（每拍统计）
+
+;; 各关初始敌人基数（实际数 = 基数 + rand(0..3)）
+(define ENEMY_BASE (quote (7 9 10)))
+
+;; 按关卡加权掷敌人类型：0 僵尸兵 1 火球兵 2 重甲兵（第 2 关起出现）
+(define roll_kind
+  (lambda (li)
+    (define r 0.0) (define b 0.0)
+    (set! r (Math.random))
+    (set! b (if (>= li 1) 0.20 0.0))
+    (if (< r b) 2 (if (< r (+ b 0.35)) 1 0))))
+
+;; 随机挑一个可站立格（离玩家至少 mind 格、不与活敌重叠、避开门与出口）。
+;; 动态刷怪（avoid_vis=1）还要求玩家看不见它，避免"眼前凭空出现"。
+(define pick_enemy_cell
+  (lambda (mind avoid_vis)
+    (define tries 0) (define ok 0) (define ix 0) (define iy 0) (define j 0)
+    (define x 0.0) (define y 0.0) (define d 0.0)
+    (set! tries 0) (set! ok 0)
+    (while (and (< tries 80) (== ok 0)) {
+      (set! ix (Math.floor (* (Math.random) MW)))
+      (set! iy (Math.floor (* (Math.random) MH)))
+      (if (== (get_item ai_walk (+ (* iy MW) ix)) 1) {
+        ;; 只允许空地（门/出口格不刷怪）
+        (if (== (get_item map (+ (* iy MW) ix)) 0) {
+          (set! x (+ ix 0.5))
+          (set! y (+ iy 0.5))
+          (set! d (dist2d x y px py))
+          (if (> d mind) {
+            (set! ok 1)
+            ;; 不与活敌重叠
+            (set! j 0)
+            (while (< j en_n) {
+              (if (> (get_item en_hp j) 0)
+                  (if (< (dist2d x y (get_item en_x j) (get_item en_y j)) 1.0) (set! ok 0)))
+              (set! j (+ j 1))
+            })
+            ;; 不在玩家视野里
+            (if (and (== ok 1) (== avoid_vis 1))
+                (if (== (los_clear px py x y) 1) (set! ok 0)))
+            (if (== ok 1) {
+              (set! sp_cx x)
+              (set! sp_cy y)
+            })
+          })
+        })
+      })
+      (set! tries (+ tries 1))
+    })
+    ok))
+
+;; 在 (x,y) 放一只 k 型敌人。槽位优先复用"已阵亡"的，满了再追加。
+(define spawn_enemy
+  (lambda (x y k)
+    (define i 0) (define slot -1)
+    (set! i 0)
+    (while (< i en_n) {
+      (if (and (== slot -1) (== (get_item en_st i) 4)) (set! slot i))
+      (set! i (+ i 1))
+    })
+    (if (and (< slot 0) (< en_n EMAX)) {
+      (set! slot en_n)
+      (set! en_n (+ en_n 1))
+    })
+    (if (>= slot 0) {
+      (set_item! en_x slot x)
+      (set_item! en_y slot y)
+      (set_item! en_hp slot (get_item (quote (34 26 90)) k))
+      (set_item! en_st slot 0)
+      (set_item! en_t slot 0.0)
+      (set_item! en_k slot k)
+      (set_item! en_fl slot 0.0)
+      (set_item! en_ph slot 0.0)
+      (set! level_enemies (+ level_enemies 1))
+    })
+    (if (>= slot 0) 1 0)))
+
+;; 在 (x,y) 放一件道具（槽位优先复用已拾取的）
+(define spawn_item
+  (lambda (x y k)
+    (define i 0) (define slot -1)
+    (set! i 0)
+    (while (< i it_n) {
+      (if (and (== slot -1) (== (get_item it_al i) 0)) (set! slot i))
+      (set! i (+ i 1))
+    })
+    (if (and (< slot 0) (< it_n IMAX)) {
+      (set! slot it_n)
+      (set! it_n (+ it_n 1))
+    })
+    (if (>= slot 0) {
+      (set_item! it_x slot x)
+      (set_item! it_y slot y)
+      (set_item! it_k slot k)
+      (set_item! it_al slot 1)
+    })
+    (if (>= slot 0) 1 0)))
+
+;; 每拍：统计活敌 → 全灭封盘 → 动态刷怪
+(define update_spawner
+  (lambda ()
+    (define i 0) (define n 0)
+    (set! i 0) (set! n 0)
+    (while (< i en_n) {
+      (if (> (get_item en_hp i) 0) (set! n (+ n 1)))
+      (set! i (+ i 1))
+    })
+    (set! en_alive n)
+    ;; 全灭 → 本关封盘（锁存），给一句提示
+    (if (and (== n 0) (== spawn_stop 0)) {
+      (set! spawn_stop 1)
+      (msg_show "本区域已肃清 · 不会再出现新的敌人" 2800)
+    })
+    (if (== spawn_stop 0) {
+      (set! spawn_t (- spawn_t dt))
+      (if (<= spawn_t 0.0) {
+        (set! spawn_t (+ 9.0 (* 6.0 (Math.random))))
+        (if (< n spawn_cap)
+            (if (== (pick_enemy_cell 6.5 1) 1) {
+              (spawn_enemy sp_cx sp_cy (roll_kind lv))
+              (set! rs_n (+ rs_n 1))
+            }))
+      })
+    })))
+
 ;; 行内字符： # 砖  M 钢  S 石  B 大理石  W 木  D 门  E 出口  . 空地
-;;           p 玩家起点  z 僵尸兵  i 火球兵  b 重甲兵  h 医疗包  a 弹药  r 护甲
+;;           p 玩家起点  h 医疗包  a 弹药  r 护甲
+;; 敌人**不在**地图里，由 (update_spawner) / load_level 随机布置（见上方"随机刷怪"段）
 (define load_level
   (lambda (li)
     (define rows (get_item LEVELS li))
@@ -411,16 +564,17 @@
         (if (== ch 68) (set! t 6))      ; D
         (if (== ch 69) (set! t 9))      ; E
         (if (== ch 112) { (set! sp_x (+ c 0.5)) (set! sp_y (+ r 0.5)) })   ; p
-        (if (== ch 122) (set! bk 1))    ; z
-        (if (== ch 105) (set! bk 2))    ; i
-        (if (== ch 98) (set! bk 3))     ; b
         (if (== ch 104) (set! bk 10))   ; h
         (if (== ch 97) (set! bk 11))    ; a
         (if (== ch 114) (set! bk 12))   ; r
         (set! idx (+ (* r MW) c))
         (set_item! map idx t)
         (if (== t 6) (push doors idx))
-        (if (== t 9) { (set! exit_x (+ c 0.5)) (set! exit_y (+ r 0.5)) })
+        (if (== t 9) {
+          (set! exit_x (+ c 0.5))
+          (set! exit_y (+ r 0.5))
+          (set! exit_idx idx)
+        })
         (if (> bk 0) {
           (push sx (+ c 0.5))
           (push sy (+ r 0.5))
@@ -444,22 +598,6 @@
       (set! bx (get_item sx ne))
       (set! by (get_item sy ne))
       (set! bk (get_item sk ne))
-      (if (== bk 1) (set! bk 0))
-      (if (== bk 2) (set! bk 1))
-      (if (== bk 3) (set! bk 2))
-      (if (< bk 3) {
-        (if (< en_n EMAX) {
-          (set_item! en_x en_n bx)
-          (set_item! en_y en_n by)
-          (set_item! en_hp en_n (get_item (quote (34 26 90)) bk))
-          (set_item! en_st en_n 0)
-          (set_item! en_t en_n 0.0)
-          (set_item! en_k en_n bk)
-          (set_item! en_fl en_n 0.0)
-          (set_item! en_ph en_n 0.0)
-          (set! en_n (+ en_n 1))
-        })
-      })
       (if (and (>= bk 10) (<= bk 12)) {
         (if (< it_n IMAX) {
           (set_item! it_x it_n bx)
@@ -471,10 +609,22 @@
       })
       (set! ne (+ ne 1))
     })
-    ;; 玩家与全局状态
+    ;; 玩家位置先落定（随机布怪要用它算距离）
     (set! px sp_x)
     (set! py sp_y)
     (set! pang 0.0)
+    (ai_build_walk)                      ; 可通行表（随机布怪/寻路都要用）
+    ;; 随机布怪：基数 + rand(0..3)，位置随机（离玩家 > 5.5 格、互不重叠）
+    (set! level_enemies 0)
+    (set! rs_n 0)
+    (set! spawn_stop 0)
+    (set! spawn_t 5.0)
+    (set! ne 0)
+    (set! ni (+ (get_item ENEMY_BASE li) (Math.floor (* (Math.random) 4.0))))
+    (while (< ne ni) {
+      (if (== (pick_enemy_cell 5.5 0) 1) (spawn_enemy sp_cx sp_cy (roll_kind li)))
+      (set! ne (+ ne 1))
+    })
     (set! hp 100)
     (set! armor 0)
     (set! bullets 60)
@@ -490,7 +640,7 @@
     (set! st_timer 0.0)
     (set! msg_text (String.concat "第 " (String.concat (String.atom_to_string (+ li 1)) " 关 · 找到绿色出口")))
     (set! msg_ms 2600)
-    (ai_build_walk)              ; AI 可通行表（门/出口算路）
+    (set! en_alive en_n)
     (set! ai_replan 0.0)
     (set! ai_stuck 0.0)
     (set! ai_detour 0.0)
@@ -1522,7 +1672,7 @@
 ;; 对敌人造成伤害
 (define damage_enemy
   (lambda (i dmg)
-    (define h 0)
+    (define h 0) (define dr 0.0)
     (if (>= i 0) {
       (set! h (- (get_item en_hp i) dmg))
       (set_item! en_hp i h)
@@ -1531,7 +1681,14 @@
         (set_item! en_st i 4)
         (set! kills (+ kills 1))
         (set! total_kills (+ total_kills 1))
-        (if (== kills level_enemies) (msg_show "区域肃清 · 前往绿色出口" 2000))
+        ;; 阵亡掉落（动态刷怪下保证弹药经济，也给"清扫道具"更多目标）
+        (set! dr (Math.random))
+        (if (< dr 0.25)
+            (spawn_item (get_item en_x i) (get_item en_y i) 11)
+            (if (< dr 0.35)
+                (spawn_item (get_item en_x i) (get_item en_y i) 10)
+                (if (< dr 0.40)
+                    (spawn_item (get_item en_x i) (get_item en_y i) 12))))
       })
       (if (and (> h 0) (< (get_item en_st i) 2)) (set_item! en_st i 1)))
     }))
@@ -1742,7 +1899,7 @@
     (while (< i it_n) {
       (if (== (get_item it_al i) 1) {
         (set! d (dist2d (get_item it_x i) (get_item it_y i) px py))
-        (if (< d 0.62) {
+        (if (< d 0.72) {
           (set! k (get_item it_k i))
           (if (== k 10) { (set! hp (minf 100 (+ hp 25))) (msg_show "拾取医疗包 +25" 900) })
           (if (== k 11) { (set! bullets (+ bullets 20)) (set! shells (+ shells 4)) (msg_show "拾取弹药 +20/+4" 900) })
@@ -1826,7 +1983,10 @@
         (display " a=") (display (Math.floor pang))
         (display " hp=") (display hp)
         (display " ar=") (display armor)
+        (display " lv=") (display (+ lv 1))
         (display " k=") (display kills) (display "/") (display level_enemies)
+        (display " al=") (display en_alive) (display " rs=") (display rs_n)
+        (display " il=") (display dbg_items)
         (display " w=") (display wsel) (display " b=") (display bullets) (display " s=") (display shells)
         (display " sh=") (display shots_n)
         (display " st=") (display st_state)
@@ -1834,6 +1994,7 @@
         (display " na=") (display (Math.floor dbg_na))
         (display " ns=") (display dbg_ns)
         (display " ai=") (display ai_on)
+        (display " gk=") (display ai_gk)
         (display " fps=") (display fps_v)
         (newline)
       })))
@@ -1844,6 +2005,12 @@
     (define i 0) (define ed 0.0) (define ea 0.0)
     (set! dbg_nd 999.0)
     (set! dbg_na 0.0)
+    (set! dbg_items 0)
+    (set! i 0)
+    (while (< i it_n) {
+      (if (== (get_item it_al i) 1) (set! dbg_items (+ dbg_items 1)))
+      (set! i (+ i 1))
+    })
     (set! i 0)
     (while (< i en_n) {
       (if (> (get_item en_hp i) 0) {
@@ -1875,7 +2042,9 @@
 ;;      距离场只有一张 MSIZE 长的表 ai_dist：以**候选目标格**为源做 BFS，既用于梯度下降
 ;;      （每拍取四邻里距离最小且小于自身的那一格，朝它的格心走），也用于可达性判定
 ;;      （玩家格在该场里的距离 ≥ 0 才算可达；否则换下一个候选）。
-;;      目标优先级：最近的活敌 → 血量低于 45 时的医疗包 → 出口。
+;;      目标优先级：血量 < 45 时的医疗包 → 最近的可达活敌 / 顺路道具（道具明显更近
+;;      （di+3 < de）就先捡）→ 其余道具（保证"场上道具捡干净"）→ 出口。
+;;      **有道具没捡完时 BFS 绕开出口格**，避免去捡道具的路上踩到出口提前过关。
 ;;      BFS 只在「重规划时刻（1.5 秒）/目标失效/卡住」时跑，一次约 700 格 × 4 邻；
 ;;      寻路期间实测仍是 28~30fps（见 regress_doom.js 的帧率判据）。
 ;;   ③ **脱困**：连续 0.4 秒想走却走不动 → 强制重规划 + 侧移 0.35 秒（左右交替），
@@ -1890,10 +2059,13 @@
 
 (define ai_on 0)                  ; 0 手动 1 AI 自动
 (define ai_walk (quote ()))       ; 可通行查表（0/1，随关卡预计算；门与出口算可通行）
-(define ai_skip (quote ()))       ; 候选跳过表（选目标时避免重复试同一只怪）
+(define ai_skip (quote ()))       ; 候选跳过表（选目标时避免重复试同一只怪/道具）
+(define AISKIP_MAX 48)            ; 跳过表容量（要覆盖敌人 EMAX 与道具 IMAX 两者的下标）
 (define ai_dist (quote ()))       ; BFS：以目标格为源的距离场（梯度用）
-(define ai_gx 0) (define ai_gy 0) ; 当前目标格（只用于调试观察；寻路走 ai_dist）
-(define ai_gk 0)                  ; 目标类型：1 敌人 2 医疗包 3 出口
+(define exit_idx 0)               ; 出口格下标（AI 有道具没捡完时会绕开它）
+(define ai_gx 0) (define ai_gy 0) ; 当前目标格（BFS 源格）
+(define ai_tx 0.0) (define ai_ty 0.0) ; 当前目标的精确位置（同格内微调用）
+(define ai_gk 0)                  ; 目标类型：1 敌人 2 医疗包 3 出口 4 其他道具
 (define ai_replan 0.0)            ; 距下次重规划的秒数
 (define ai_stuck 0.0)             ; 「想走走不动」累计秒数
 (define ai_px_prev 0.0)           ; 上次记录的位置（判进度）
@@ -1912,7 +2084,7 @@
 (define init_ai
   (lambda ()
     (set! ai_walk (mklist MSIZE))
-    (set! ai_skip (mklist EMAX))
+    (set! ai_skip (mklist AISKIP_MAX))
     (set! ai_dist (mklist MSIZE))))
 
 ;; 重算可通行表：空地/门/出口算可通行（门要走到跟前才开，寻路阶段先当路）
@@ -1930,7 +2102,7 @@
 ;; 队列是「push 到尾部 + 头指针前移」的 FIFO（本解释器的 push 是尾插、pop 是尾取，
 ;; 直接用 pop 会变成 DFS，得不到最短路）。
 (define ai_bfs
-  (lambda (field tx ty)
+  (lambda (field tx ty avoid_exit)
     (define i 0) (define head 0) (define cur 0) (define cx 0) (define cy 0)
     (define d0 0) (define q (cons 0 (quote ())))
     (define nxt 0)
@@ -1950,49 +2122,43 @@
       (set! d0 (+ (get_item field cur) 1))
       (set! cx (Math.floor (mod cur MW)))
       (set! cy (Math.floor (/ cur MW)))
+      ;; 四个邻居统一走同一套判定（bounds 已由 cx/cy 条件保证）
       (if (> cx 0) {
         (set! nxt (- cur 1))
-        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1))
+        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1)
+                 (not (and (== avoid_exit 1) (== nxt exit_idx))))
             { (set_item! field nxt d0) (push q nxt) })
       })
       (if (< cx (- MW 1)) {
         (set! nxt (+ cur 1))
-        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1))
+        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1)
+                 (not (and (== avoid_exit 1) (== nxt exit_idx))))
             { (set_item! field nxt d0) (push q nxt) })
       })
       (if (> cy 0) {
         (set! nxt (- cur MW))
-        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1))
+        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1)
+                 (not (and (== avoid_exit 1) (== nxt exit_idx))))
             { (set_item! field nxt d0) (push q nxt) })
       })
       (if (< cy (- MH 1)) {
         (set! nxt (+ cur MW))
-        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1))
+        (if (and (== (get_item field nxt) -1) (== (get_item ai_walk nxt) 1)
+                 (not (and (== avoid_exit 1) (== nxt exit_idx))))
             { (set_item! field nxt d0) (push q nxt) })
       })
       (set! head (+ head 1))
     })))
 
-;; 选目标：最近的「可达」活敌 → （血量 < 45 时）最近的医疗包 → 出口。
-;;
-;; 只跑**一次** BFS：以候选目标格为源算距离场，顺带用「玩家格在该场里的距离是否 ≥ 0」
-;; 回答可达性；不可达就换下一个候选（最多各试 4 / 3 个）。因为门在可通行表里算路，
-;; 全图基本连通，所以绝大多数重规划只跑一次 BFS（这是 AI 模式不拖慢节拍的关键：
-;; 早先版本每次重规划跑两次 BFS，浏览器里帧率一度掉到 ~14fps）。
-(define ai_choose_goal
-  (lambda ()
-    (define i 0) (define pass 0) (define bi -1) (define bd 999.0) (define d 0.0)
-    (define gk 0) (define gx 0) (define gy 0) (define pc 0)
+;; 按「由近到远」试候选敌人（最多 4 个）；成功则定下目标并返回 1。
+;; 只跑一次 BFS：以候选格为源算距离场，顺带用「玩家格在该场里的距离 ≥ 0」判可达。
+(define ai_goal_enemy
+  (lambda (avoid)
+    (define pass 0) (define i 0) (define bi -1) (define bd 999.0) (define d 0.0)
+    (define pc 0) (define gx 0) (define gy 0) (define ok 0)
     (set! pc (+ (* (Math.floor py) MW) (Math.floor px)))
-    (set! gk 0)
-    (set! i 0)
-    (while (< i EMAX) {
-      (set_item! ai_skip i 0)
-      (set! i (+ i 1))
-    })
-    ;; ① 敌人：按欧氏距离由近到远试，最多 4 个
     (set! pass 0)
-    (while (and (< pass 4) (== gk 0)) {
+    (while (and (< pass 4) (== ok 0)) {
       (set! bi -1)
       (set! bd 999.0)
       (set! i 0)
@@ -2010,20 +2176,34 @@
         (set_item! ai_skip bi 1)
         (set! gx (Math.floor (get_item en_x bi)))
         (set! gy (Math.floor (get_item en_y bi)))
-        (ai_bfs ai_dist gx gy)
-        (if (>= (get_item ai_dist pc) 0) (set! gk 1))
+        (ai_bfs ai_dist gx gy avoid)
+        (if (>= (get_item ai_dist pc) 0) {
+          (set! ok 1)
+          (set! ai_gk 1)
+          (set! ai_gx gx)
+          (set! ai_gy gy)
+          (set! ai_tx (get_item en_x bi))
+          (set! ai_ty (get_item en_y bi))
+        })
       })
       (set! pass (+ pass 1))
     })
-    ;; ② 血量偏低时找医疗包（同样按距离由近到远试，最多 3 个）
+    ok))
+
+;; 按「由近到远」试候选道具（mode=1 只看医疗包），最多 4 个；成功返回 1。
+(define ai_goal_item
+  (lambda (mode avoid)
+    (define pass 0) (define i 0) (define bi -1) (define bd 999.0) (define d 0.0)
+    (define pc 0) (define gx 0) (define gy 0) (define ok 0) (define k 0)
+    (set! pc (+ (* (Math.floor py) MW) (Math.floor px)))
     (set! pass 0)
-    (while (and (== gk 0) (< hp 45) (< pass 3)) {
+    (while (and (< pass 4) (== ok 0)) {
       (set! bi -1)
       (set! bd 999.0)
       (set! i 0)
       (while (< i it_n) {
-        (if (and (== (get_item it_al i) 1) (== (get_item it_k i) 10)
-                 (== (get_item ai_skip i) 0)) {
+        (if (and (== (get_item it_al i) 1) (== (get_item ai_skip i) 0)
+                 (or (== mode 0) (== (get_item it_k i) 10))) {
           (set! d (dist2d (get_item it_x i) (get_item it_y i) px py))
           (if (< d bd) {
             (set! bd d)
@@ -2036,21 +2216,87 @@
         (set_item! ai_skip bi 1)
         (set! gx (Math.floor (get_item it_x bi)))
         (set! gy (Math.floor (get_item it_y bi)))
-        (ai_bfs ai_dist gx gy)
-        (if (>= (get_item ai_dist pc) 0) (set! gk 2))
+        (set! k (get_item it_k bi))
+        (ai_bfs ai_dist gx gy avoid)
+        (if (>= (get_item ai_dist pc) 0) {
+          (set! ok 1)
+          (set! ai_gk (if (== k 10) 2 4))
+          (set! ai_gx gx)
+          (set! ai_gy gy)
+          (set! ai_tx (get_item it_x bi))
+          (set! ai_ty (get_item it_y bi))
+        })
       })
       (set! pass (+ pass 1))
     })
-    ;; ③ 出口
-    (if (== gk 0) {
-      (set! gx (Math.floor exit_x))
-      (set! gy (Math.floor exit_y))
-      (ai_bfs ai_dist gx gy)
-      (if (>= (get_item ai_dist pc) 0) (set! gk 3))
+    ok))
+
+;; 选目标（每次重规划调一次）。
+;;
+;; 优先级（都用欧氏距离先做粗排，只有选中的那一类才跑 BFS）：
+;;   ① 血 < 45 且有医疗包 → 医疗包；
+;;   ② 敌人与道具都有时：**道具明显更近**（di + 3 < de）就先顺路捡道具，否则先清怪 ——
+;;      这样"清扫道具"大部分发生在交战途中，全灭后的收尾不会太长；
+;;   ③ 剩下的那一类（敌人 / 任意道具）；
+;;   ④ 出口（有道具没捡完时寻路绕开出口格，避免顺路踩出口提前过关）。
+(define ai_choose_goal
+  (lambda ()
+    (define i 0) (define d 0.0) (define de 999.0) (define di 999.0)
+    (define dm 999.0) (define left 0) (define avoid 0)
+    (set! ai_gk 0)
+    ;; ① 粗排：最近活敌 / 最近道具 / 最近医疗包（欧氏距离）
+    (set! i 0)
+    (while (< i en_n) {
+      (if (> (get_item en_hp i) 0) {
+        (set! d (dist2d (get_item en_x i) (get_item en_y i) px py))
+        (if (< d de) (set! de d))
+      })
+      (set! i (+ i 1))
     })
-    (set! ai_gk gk)
-    (set! ai_gx gx)
-    (set! ai_gy gy)))
+    (set! i 0)
+    (while (< i it_n) {
+      (if (== (get_item it_al i) 1) {
+        (set! left (+ left 1))
+        (set! d (dist2d (get_item it_x i) (get_item it_y i) px py))
+        (if (< d di) (set! di d))
+        (if (== (get_item it_k i) 10)
+            (if (< d dm) (set! dm d)))
+      })
+      (set! i (+ i 1))
+    })
+    ;; 有道具没捡完 → 寻路绕开出口格
+    (set! avoid (if (> left 0) 1 0))
+    ;; 清空跳过表（覆盖敌人与道具两者的下标）
+    (set! i 0)
+    (while (< i AISKIP_MAX) {
+      (set_item! ai_skip i 0)
+      (set! i (+ i 1))
+    })
+    ;; ② 低血且附近有医疗包 → 先补给
+    (if (and (< hp 45) (< dm 999.0)) (if (== ai_gk 0) (ai_goal_item 1 avoid)))
+    ;; ③ 敌人 vs 道具：道具明显更近就先顺路捡
+    (if (== ai_gk 0)
+        (if (< de 999.0)
+            (if (< di 999.0)
+                (if (< (+ di 3.0) de)
+                    (ai_goal_item 0 avoid)
+                    (ai_goal_enemy avoid))
+                (ai_goal_enemy avoid))
+            (ai_goal_item 0 avoid)))
+    ;; ④ 回退：上一步没成功（不可达/无候选）就换另一类
+    (if (== ai_gk 0) (ai_goal_enemy avoid))
+    (if (== ai_gk 0) (ai_goal_item 0 avoid))
+    ;; ⑤ 出口（此时允许穿过出口格）
+    (if (== ai_gk 0) {
+      (set! ai_gx (Math.floor exit_x))
+      (set! ai_gy (Math.floor exit_y))
+      (ai_bfs ai_dist ai_gx ai_gy 0)
+      (if (>= (get_item ai_dist (+ (* (Math.floor py) MW) (Math.floor px))) 0) {
+        (set! ai_gk 3)
+        (set! ai_tx exit_x)
+        (set! ai_ty exit_y)
+      })
+    })))
 
 ;; 限速转向：把朝向朝 target 角转最多 maxdeg 度，写进 ai_aim
 (define ai_face
@@ -2148,7 +2394,17 @@
     (set! cy (Math.floor py))
     (set! cur (+ (* cy MW) cx))
     (set! d (get_item ai_dist cur))
-    (set! ni -1)
+    ;; 已经在目标格里（BFS 距离 0）但目标点不在格心时，梯度法是"原地不动"——
+    ;; 掉落道具常见这种情形（敌人死在格子边角），必须按精确坐标走过去。
+    (if (== d 0) {
+      (if (> (dist2d px py ai_tx ai_ty) 0.40) {
+        (set! a (/ (* (Math.atan2 (- ai_ty py) (- ai_tx px)) 180.0) (Math.PI)))
+        (ai_face a (* 260.0 dt))
+        (set! ad (Math.abs (ang_diff a pang)))
+        (set! ai_fwd (if (< ad 50.0) 0.8 0.0))
+      })
+      ;; ni 保持 -1：不走下面的"邻格梯度"分支（d==0 时它本来也找不到更小的邻居）
+    })
     (set! bd 9999)
     (if (> cx 0) {
       (set! t (get_item ai_dist (- cur 1)))
@@ -2193,7 +2449,7 @@
 ;; 每拍 AI 决策入口（在 update_world 里、应用移动之前调用）
 (define ai_tick
   (lambda ()
-    (define moving 0) (define prog 0.0)
+    (define moving 0)
     (set! ai_aim 0.0)
     (set! ai_fwd 0.0)
     (set! ai_strafe 0.0)
@@ -2211,27 +2467,32 @@
     (set! moving (ai_combat))
     ;; ② 无可见敌人 → 寻路
     (if (== moving 0) (ai_nav))
-    ;; ③ 脱困：想走却几乎没动 → 侧移 + 重规划（显式嵌套 if，避免把 else 写成
-    ;;    "无条件执行的额外语句"）
-    (if (> ai_fwd 0.5)
-        (if (< ai_detour 0.0)
-            (if (< (dist2d px py ai_px_prev ai_py_prev) 0.02)
-                {
-                  (set! prog 0.0)
-                  (set! ai_stuck (+ ai_stuck dt))
-                  (if (> ai_stuck 0.4) {
-                    (set! ai_stuck 0.0)
-                    (set! ai_detour 0.35)
-                    (set! ai_detour_dir (- 0.0 ai_detour_dir))
-                    (set! ai_replan 0.0)
-                  })
-                }
-                {
-                  (set! ai_stuck 0.0)
-                  (set! ai_px_prev px)
-                  (set! ai_py_prev py)
+    ;; ③ 脱困看门狗：**不看有没有前进意图**，只要一段时间内几乎没位移就判定卡住。
+    ;;    会卡住的典型情形：贴墙磨、目标点在格内但被家具挡住、两只等距的怪让目标来回翻，
+    ;;    以及"隔墙角对射"——视线检测（0.35 格步长采样）从门框斜缝里穿过去判定为可见，
+    ;;    但直着走过去被门框挡住、子弹也被墙吃掉了 → 站着打到天荒地老。
+    ;;    处置：重规划 + 侧移 0.4~0.6 秒（左右交替）；不在交战时再随机甩一次视角。
+    ;;    阈值：非交战 1.2 秒；交战中站桩对射本来就不动，放宽到 2.5 秒。
+    (if (< ai_detour 0.0)
+        (if (< (dist2d px py ai_px_prev ai_py_prev) 0.06)
+            {
+              (set! ai_stuck (+ ai_stuck dt))
+              (if (> ai_stuck (if (>= ai_ti 0) 2.5 1.2)) {
+                (set! ai_stuck 0.0)
+                (set! ai_detour (if (>= ai_ti 0) 0.6 0.4))
+                (set! ai_detour_dir (- 0.0 ai_detour_dir))
+                (set! ai_replan 0.0)
+                (if (< ai_ti 0) {
+                  (set! pang (wrap360 (+ pang (* 120.0 (+ 1.0 (Math.random))))))
+                  (update_cam)
                 })
-            #f)
+              })
+            }
+            {
+              (set! ai_stuck 0.0)
+              (set! ai_px_prev px)
+              (set! ai_py_prev py)
+            })
         #f)
     (if (> ai_detour 0.0) {
       (set! ai_detour (- ai_detour dt))
@@ -2304,6 +2565,7 @@
     (update_enemies)
     (update_projectiles)
     (update_items)
+    (update_spawner)
     (update_world_extras)
     (dbg_nearest)))
 
