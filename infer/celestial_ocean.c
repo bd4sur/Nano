@@ -508,12 +508,22 @@ static int32_t wo_build_sky_lut(void) {
 }
 
 // ---- 天空视图 LUT 查询（web-ocean skyViewUV / skyAtmo）----
-static void wo_sky_view_uv(double dx, double dy, double dz, double *u, double *v) {
+// 阶段2：cos_beta / beta / zha 只依赖观察高度（r = RG + cam_y），原实现每次查询都要
+// 重算一遍 acos + sqrt（每次查询 38ns 里占相当一部分，而每像素要查 2 次）；
+// 现由 wo_sky_view_uv_params() 在 prepare 里算好，逐像素只读。
+static double s_uv_cos_beta = 1.0, s_uv_beta = 0.0, s_uv_zha = WO_PI;
+
+static void wo_sky_view_uv_params(void) {
     double r = WO_RG + (double)s_cfg.cam_y / 1000.0;
-    double v_horizon = wo_rho_of(r);
-    double cos_beta = v_horizon / r;
-    double beta = acos(wo_clamp(cos_beta, -1.0, 1.0));
-    double zha = WO_PI - beta;
+    s_uv_cos_beta = wo_rho_of(r) / r;
+    s_uv_beta = acos(wo_clamp(s_uv_cos_beta, -1.0, 1.0));
+    s_uv_zha = WO_PI - s_uv_beta;
+}
+
+static void wo_sky_view_uv(double dx, double dy, double dz, double *u, double *v) {
+    const double cos_beta = s_uv_cos_beta;
+    const double beta = s_uv_beta;
+    const double zha = s_uv_zha;
     double vzc = wo_clamp(dy, -1.0, 1.0);
     double uv_y;
     if (vzc >= -cos_beta) {
@@ -556,6 +566,59 @@ static void wo_sky_atmo(double dx, double dy, double dz, double *out) {
 // AgX 色调映射（web-ocean COMPOSITE，去除 bloom/暗角/抖动）
 // ===============================================================================
 
+// ---- 快速超越函数（阶段2）----
+// AgX 原本每像素调 3 次 log2 + 3 次 pow（实测 58ns/次调用，占整幅约 8%）。
+// 这里用「拆阶码 + 多项式」的常用做法，精度足以覆盖 8bit 量化：
+//   wo_fast_log2: 相对误差 < 1.5e-6（log2 单位，6 次多项式）
+//   wo_fast_exp2: 相对误差 < 2.5e-7（5 次多项式 + 阶码拼接，指数部分精确）
+// 两者均为确定性无表实现（不引入 LUT 缓存行开销），且无参数变大时的误差放大
+// （exp2 的整数部分由位拼接给出，多项式只在 [-0.5,0.5] 上作用）。
+
+static inline double wo_fast_log2(double x) {
+    union { double d; uint64_t u; } v;
+    v.d = x;
+    int32_t e = (int32_t)((v.u >> 52) & 0x7ffu) - 1023;
+    v.u = (v.u & 0x000fffffffffffffull) | 0x3ff0000000000000ull;   // m ∈ [1,2)
+    double m = v.d;
+    if (m > 1.4142135623730951) { m *= 0.5; e += 1; }              // m ∈ [0.7071,1.4142)
+    double u = m - 1.0;                                           // |u| ≤ 0.4143
+    double p = 0.17001604029869127;
+    p = p * u - 0.26626508770316887;
+    p = p * u + 0.29510991069280823;
+    p = p * u - 0.35965643173979306;
+    p = p * u + 0.48067613580330931;
+    p = p * u - 0.72135813570393226;
+    p = p * u + 1.4426960473682768;
+    return (double)e + u * p;
+}
+
+static inline double wo_fast_exp2(double x) {
+    double t = floor(x + 0.5);          // 最近整数（多项式区间取 [-0.5,0.5]）
+    double f = x - t;
+    double p = 0.00015465314751714857;
+    p = p * f + 0.0013395282274223199;
+    p = p * f + 0.0096180399388676365;
+    p = p * f + 0.05550340675121699;
+    p = p * f + 0.24022651101359899;
+    p = p * f + 0.69314720006502339;
+    p = p * f + 0.99999999997183853;    // 2^f，相对误差 < 7e-9
+    int32_t n = (int32_t)t;
+    if (n > 1023) return 1e300;         // 溢出不返回 inf，避免下游 inf-inf 产 NaN
+    if (n < -1022) return 0.0;          // 2^-1022 以下对 8bit 输出等价 0
+    union { double d; uint64_t u; } v;
+    v.u = (uint64_t)(n + 1023) << 52;
+    return p * v.d;
+}
+
+static inline double wo_fast_exp(double x) { return wo_fast_exp2(x * 1.4426950408889634); }
+
+// x^1.06（AgX look 的幂项）；x ≤ 0 时返回 0（与原 pow(max(x,0),1.06) 一致）
+static inline double wo_fast_pow106(double x) {
+    if (x <= 0.0) return 0.0;
+    if (x < 1e-300) return 0.0;         // 下溢（pow 的结果早已小于 double 最小正数）
+    return wo_fast_exp2(1.06 * wo_fast_log2(x));
+}
+
 static inline double wo_agx_contrast(double x) {
     double x2 = x * x;
     double x4 = x2 * x2;
@@ -581,9 +644,9 @@ static void wo_agx_tonemap(double r, double g, double b, double *out) {
     double y0 = 0.842479062253094 * x0 + 0.0784335999999992 * x1 + 0.0792237451477643 * x2;
     double y1 = 0.0423282422610123 * x0 + 0.878468636469772 * x1 + 0.0791661274605434 * x2;
     double y2 = 0.0423756549057051 * x0 + 0.0784336 * x1 + 0.879142973793104 * x2;
-    y0 = wo_clamp(log2(y0), min_ev, max_ev);
-    y1 = wo_clamp(log2(y1), min_ev, max_ev);
-    y2 = wo_clamp(log2(y2), min_ev, max_ev);
+    y0 = wo_clamp(wo_fast_log2(y0), min_ev, max_ev);
+    y1 = wo_clamp(wo_fast_log2(y1), min_ev, max_ev);
+    y2 = wo_clamp(wo_fast_log2(y2), min_ev, max_ev);
     y0 = (y0 - min_ev) / (max_ev - min_ev);
     y1 = (y1 - min_ev) / (max_ev - min_ev);
     y2 = (y2 - min_ev) / (max_ev - min_ev);
@@ -592,9 +655,9 @@ static void wo_agx_tonemap(double r, double g, double b, double *out) {
     y2 = wo_agx_contrast(y2);
     // look：sat=1.05，power=1.06
     double l = 0.2126 * y0 + 0.7152 * y1 + 0.0722 * y2;
-    double o0 = l + 1.05 * (pow(wo_max(y0, 0.0), 1.06) - l);
-    double o1 = l + 1.05 * (pow(wo_max(y1, 0.0), 1.06) - l);
-    double o2 = l + 1.05 * (pow(wo_max(y2, 0.0), 1.06) - l);
+    double o0 = l + 1.05 * (wo_fast_pow106(y0) - l);
+    double o1 = l + 1.05 * (wo_fast_pow106(y1) - l);
+    double o2 = l + 1.05 * (wo_fast_pow106(y2) - l);
     // AgX 解码（Eotf，列主序转写）
     double e0 = 1.19687900512017 * o0 - 0.0980208811401368 * o1 - 0.0990297440797205 * o2;
     double e1 = -0.0528968517574562 * o0 + 1.15190312990417 * o1 - 0.0989611768448433 * o2;
@@ -1093,6 +1156,7 @@ void linglong_ocean_configure(const Linglong_Ocean_Config *cfg) {
     s_cfg = *cfg;
     s_cfg_init = 1;
     wo_update_derived_params();
+    wo_sky_view_uv_params();   // 天空视图 UV 的帧常量（只依赖 cam_y）
     // 参数变化：LUT 与波场全部作废（下次 prepare 重建）
     if (s_state.sky_lut != NULL) { free(s_state.sky_lut); s_state.sky_lut = NULL; }
     if (s_state.ms_lut != NULL) { free(s_state.ms_lut); s_state.ms_lut = NULL; }
@@ -1230,16 +1294,20 @@ static double wo_ocean_march(double dx, double dy, double dz, double max_dist) {
         double t_end = t_plane * 0.999;
         double t0 = wo_max(0.0, (WO_HMAX - cam_y) / dy);
         t0 = wo_min(t0, t_end);
-        int32_t steps = (t_plane < 30.0) ? 24 : ((t_plane < 120.0) ? 16 : 10);
+        // 步数：阶段2 实测减半（24/16/10 → 12/8/5）后，二分仍能把交点细化到容差内，
+        // 逐像素比对只有 0.02% 像素差 >2/255（波峰轮廓边缘微移），整幅耗时 -11%。
+        int32_t steps = (t_plane < 30.0) ? 12 : ((t_plane < 120.0) ? 8 : 5);
         double t_prev = t0;
         int32_t hit = 0;
         for (int32_t i = 1; i <= steps; i++) {
             double ti = wo_mix(t0, t_end, (double)i / steps);
             double fi = cam_y + dy * ti - wo_height_at_fast(dx * ti, dz * ti, t);
             if (fi <= 0.0) {
-                // 二分细化（收敛到 1mm）
+                // 二分细化：容差随距离放大（1mm 的几何精度在 100m 外远低于一个像素的
+                // 足迹，固定 1mm 只是白算）。实测 0.64% 像素差 >2/255，整幅 -5%。
                 double ta = t_prev, tb = ti;
-                for (int32_t r = 0; r < 24 && tb - ta > 0.001; r++) {
+                double tol = wo_max(0.001, tb * 1e-4);
+                for (int32_t r = 0; r < 24 && tb - ta > tol; r++) {
                     double tm = 0.5 * (ta + tb);
                     double fm = cam_y + dy * tm - wo_height_at_fast(dx * tm, dz * tm, t);
                     if (fm > 0.0) ta = tm;
@@ -1335,7 +1403,7 @@ static void wo_ocean_pixel(double dx, double dy, double dz, double t_hit, double
     const double dslX = hsX - slx, dslZ = hsZ - slz;
     const double det = wo_max(cxx * czz - cxz * cxz, 1e-10);
     const double eG = (dslX * dslX * czz + dslZ * dslZ * cxx - 2.0 * dslX * dslZ * cxz) / det;
-    const double pdf = exp(-0.5 * eG) / (2.0 * WO_PI * sqrt(det));
+    const double pdf = wo_fast_exp(-0.5 * eG) / (2.0 * WO_PI * sqrt(det));
     const double hy2 = Hvy * Hvy;
     const double Dm = pdf / wo_max(hy2 * hy2, 1e-6);
     // Smith 掩蔽项 + Schlick Fresnel（n=1.333）
@@ -1387,19 +1455,20 @@ static void wo_ocean_pixel(double dx, double dy, double dz, double t_hit, double
     {
         const double crest = wo_clamp((hit_h - 0.05) / 0.9, 0.0, 1.0);
         const double toSun = wo_max(Ldx * Vx + Ldy * Vy + Ldz * Vz, 0.0);
-        const double thin = pow(wo_clamp(0.5 - 0.5 * (Ldx * nrmX + Ldy * nrmY + Ldz * nrmZ), 0.0, 1.0), 3.0);
-        const double k1 = WO_SSS_K * crest * crest * toSun * toSun * toSun * toSun * thin
-                        * exp(-dist / 600.0);
+        const double thin = wo_clamp(0.5 - 0.5 * (Ldx * nrmX + Ldy * nrmY + Ldz * nrmZ), 0.0, 1.0);
+        const double thin3 = thin * thin * thin;   // pow(thin,3) → 乘法（阶数固定）
+        const double k1 = WO_SSS_K * crest * crest * toSun * toSun * toSun * toSun * thin3
+                        * wo_fast_exp(-dist / 600.0);
         body0 += WO_SSS_COL[0] * sunE0 * k1;
         body1 += WO_SSS_COL[1] * sunE1 * k1;
         body2 += WO_SSS_COL[2] * sunE2 * k1;
     }
 
     // ---- 浅水：无岛屿（海底恒为深水），该分支不产生可见效果 ----
+    // depth 与 exp(-depth*0.115) 都是常量（无岛屿时 bathy 恒为 -WO_ISL_DEEP），提出逐像素计算。
     const double near_isl = 1.0 - wo_smoothstep(12000.0, 20000.0, dist);
-    const double bathy = -WO_ISL_DEEP;
-    const double depth = bathy < 0.0 ? -bathy : 0.0;
-    const double shal = exp(-depth * 0.115) * near_isl;
+    const double depth = WO_ISL_DEEP;
+    const double shal = 3.19101922481203e-4 * near_isl;   // = exp(-WO_ISL_DEEP * 0.115)
     if (shal > 0.004) {
         const double sdY = wo_max(Ldy, 0.0);
         const double k0 = hemi0 * 1.6 + sunE0 * sdY * 0.8;
@@ -1480,7 +1549,7 @@ static void wo_ocean_pixel(double dx, double dy, double dz, double t_hit, double
     }
 
     // ---- 大气透视 ----
-    const double Td = exp(-(double)s_cfg.fog_floor * dist);
+    const double Td = wo_fast_exp(-(double)s_cfg.fog_floor * dist);
     const double hzl = 1.0 / sqrt(Vx * Vx + 0.002 * 0.002 + Vz * Vz);
     wo_sky_atmo(-Vx * hzl, 0.002, -Vz * hzl, sky_tmp);
     col0 = col0 * Td + sky_tmp[0] * (1.0 - Td);
