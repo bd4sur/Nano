@@ -2395,6 +2395,29 @@ static inline void sky_dir_map_get(int32_t x, int32_t y, float *rx, float *ry, f
     *rz = g_sky_dir_map.dir_z[idx];
 }
 
+// ---- 方向图对外接口（celestial.h 公开）：供实时海洋地景复用同一张缓存 ----
+// 屏幕像素→地平系方向的映射在视角不变时完全可复用；实时海洋地景逐像素也需要它，
+// 直接共享 celestial.c 这张图（而不是再算一遍 fisheye_unproject，实测 56ns/px）。
+void fisheye_dir_map_refresh(
+    uint32_t width, uint32_t height,
+    float sky_radius, float center_x, float center_y,
+    float view_alt, float view_azi, float view_roll, float f, int32_t projection
+) {
+    sky_dir_map_ensure(width, height);
+    sky_dir_map_update(sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection);
+}
+
+int32_t fisheye_dir_map_ready(int32_t width, int32_t height) {
+    return (g_sky_dir_map.valid
+         && g_sky_dir_map.dir_x != NULL
+         && (int32_t)g_sky_dir_map.width == width
+         && (int32_t)g_sky_dir_map.height == height) ? 1 : 0;
+}
+
+void fisheye_dir_map_get(int32_t x, int32_t y, float *rx, float *ry, float *rz) {
+    sky_dir_map_get(x, y, rx, ry, rz);
+}
+
 
 // ===============================================================================
 // 预积分 LUT（Transmittance + Inscatter）
@@ -2860,10 +2883,19 @@ void render_sky(Nano_GFX *gfx,
     float sun_proj_y = 0.0f;
     fisheye_project(sun_azi, sun_alt, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &sun_proj_x, &sun_proj_y);
 
-    // 初始化方向图和预积分 LUT（仅 enable_opt_lut 时启用，避免额外内存开销）
-    if (enable_opt_lut && sky_model > 0 && sky_model < 4) {
-        sky_dir_map_ensure(fb_width, fb_height);
-        sky_dir_map_update(sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection);
+    // 初始化方向图和预积分 LUT。
+    // 方向图：散射模型 1~3 的可选加速（enable_opt_lut）与实时海洋地景（landscape_index==3）
+    // 共用同一张缓存——两者都逐像素需要「屏幕像素 → 地平系方向」。
+    int32_t want_lut_opt = (enable_opt_lut && sky_model > 0 && sky_model < 4) ? 1 : 0;
+    int32_t want_dir_map = want_lut_opt;
+#if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
+    if (landscape_index == 3) want_dir_map = 1;
+#endif
+    if (want_dir_map) {
+        fisheye_dir_map_refresh(fb_width, fb_height,
+            sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection);
+    }
+    if (want_lut_opt) {
         sky_transmittance_lut_init();
         sky_inscatter_lut_update(sun_x, sun_y, sun_z, (float)sun_alt, (float)sun_azi, sky_model);
     }

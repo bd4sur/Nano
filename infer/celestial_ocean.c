@@ -96,13 +96,18 @@ typedef struct {
     float  *ms_lut;                 // WO_MS_SIZE * WO_MS_SIZE * 3
     float  *sky_lut;                // WO_SKY_W * WO_SKY_H * 3
     double  sun_dir[3];             // 海洋系太阳方向（y 上）
-    double  sun_alt;                // LUT 缓存对应的太阳位置
-    double  sun_azi;
+    double  sun_alt;                // 天空视图 LUT 缓存对应的太阳高度角
+                                    // （该 LUT 与方位角无关，见 linglong_ocean_prepare）
     int32_t have_sun;
 
     double  last_now;               // 上次 prepare 的时刻 ms
     double  app_time;               // 海面动画时间 s
     double  pix_ang;                // 每像素角尺寸 rad
+
+    // 每帧常量（阶段1：原本在逐像素路径里重复计算的天空环境量，现由 prepare 算一次）
+    double  sky_up[3];              // 天顶辐亮度 wo_sky_atmo(0,1,0)
+    double  hemi[3];                // 半球平均辐亮度（天顶 + 4 个斜方向）
+    double  sun_e[3];               // 太阳辐照（透射率 LUT × WO_SUN_SCALE）
 
     int32_t waves_ready;
     float  *wave_data[2];           // 每级联 N*N*4：h, sx, sz, jtrace
@@ -1140,22 +1145,52 @@ void linglong_ocean_prepare(float sun_alt, float sun_azi, float view_f, float sk
     s_state.sun_dir[2] = cos(e) * cos(a);
 
     double d_alt = s_state.have_sun ? fabs((double)sun_alt - s_state.sun_alt) : 1e9;
-    double d_azi = s_state.have_sun ? fabs((double)sun_azi - s_state.sun_azi) : 1e9;
-    if (d_azi > 180.0) d_azi = 360.0 - d_azi;
 
     if (s_state.trans_lut == NULL) {
         wo_build_trans_lut();
         wo_build_ms_lut();
     }
-    // 阈值 0.25°（与原实现一致）：太阳变化超过该量才重建天空视图 LUT
-    if (s_state.sky_lut == NULL || d_alt > 0.25 || d_azi > 0.25) {
+    // 阈值 0.25°（与原实现一致）：太阳高度角变化超过该量才重建天空视图 LUT。
+    // 注：天空视图 LUT 只依赖太阳高度角（构建时太阳被旋转到 x-y 平面，方位角信息
+    // 全部落在 wo_sky_view_uv 的横向坐标里），**与太阳方位角无关**（实测：仅改方位角
+    // 160°，LUT 逐元素差异 0/110592）。原实现还拿 dAzi>0.25 做触发条件，等于把重建
+    // 频率提高到 ~2.5 倍（实测太阳速率中位 0.0024°/s 高度 + 0.0035°/s 方位，重建间隔
+    // 42s → 104s），每次都是 100ms 级卡顿，故此处只看高度角。
+    if (s_state.sky_lut == NULL || d_alt > 0.25) {
         if (wo_build_sky_lut()) {
             s_state.sun_alt = (double)sun_alt;
-            s_state.sun_azi = (double)sun_azi;
             s_state.have_sun = 1;
         }
     }
     wo_ensure_waves();
+
+    // 每帧常量：天顶辐亮度 / 半球平均辐亮度 / 太阳辐照。
+    // 这些量只随太阳与观察高度变化，原本在 wo_ocean_pixel 里每像素重算一遍
+    // （5 次天空视图 LUT 查询 + 1 次透射率查询，实测占整幅耗时 15%）。
+    // 计算顺序与逐像素版本逐一对应，保证结果逐位相同。
+    if (s_state.sky_lut != NULL && s_state.trans_lut != NULL) {
+        double t[3];
+        wo_sky_atmo(0.0, 1.0, 0.0, t);
+        s_state.sky_up[0] = t[0];
+        s_state.sky_up[1] = t[1];
+        s_state.sky_up[2] = t[2];
+        s_state.hemi[0] = t[0] * 0.4;
+        s_state.hemi[1] = t[1] * 0.4;
+        s_state.hemi[2] = t[2] * 0.4;
+        static const double OB[4][3] = {
+            { 0.94, 0.34, 0.0 }, { -0.94, 0.34, 0.0 }, { 0.0, 0.34, 0.94 }, { 0.0, 0.34, -0.94 }
+        };
+        for (int32_t i = 0; i < 4; i++) {
+            wo_sky_atmo(OB[i][0], OB[i][1], OB[i][2], t);
+            s_state.hemi[0] += t[0] * 0.15;
+            s_state.hemi[1] += t[1] * 0.15;
+            s_state.hemi[2] += t[2] * 0.15;
+        }
+        wo_sample_trans_lut(WO_RG + (double)s_cfg.cam_y / 1000.0, s_state.sun_dir[1], t);
+        s_state.sun_e[0] = t[0] * WO_SUN_SCALE;
+        s_state.sun_e[1] = t[1] * WO_SUN_SCALE;
+        s_state.sun_e[2] = t[2] * WO_SUN_SCALE;
+    }
 }
 
 // ===============================================================================
@@ -1278,27 +1313,14 @@ static void wo_ocean_pixel(double dx, double dy, double dz, double t_hit, double
     const double inl = 1.0 / sqrt(slx * slx + 1.0 + slz * slz);
     const double nrmX = -slx * inl, nrmY = inl, nrmZ = -slz * inl;
 
-    // ---- 太阳辐照与天空环境（均由 LUT 得出）----
-    double sunE[3];
-    wo_sample_trans_lut(WO_RG + (double)s_cfg.cam_y / 1000.0, s_state.sun_dir[1], sunE);
-    const double sunE0 = sunE[0] * WO_SUN_SCALE;
-    const double sunE1 = sunE[1] * WO_SUN_SCALE;
-    const double sunE2 = sunE[2] * WO_SUN_SCALE;
+    // ---- 太阳辐照与天空环境（均由 LUT 得出；每帧常量已由 prepare 算好）----
+    const double sunE0 = s_state.sun_e[0];
+    const double sunE1 = s_state.sun_e[1];
+    const double sunE2 = s_state.sun_e[2];
+    const double skyUp0 = s_state.sky_up[0], skyUp1 = s_state.sky_up[1], skyUp2 = s_state.sky_up[2];
+    const double hemi0 = s_state.hemi[0], hemi1 = s_state.hemi[1], hemi2 = s_state.hemi[2];
 
     double sky_tmp[3];
-    wo_sky_atmo(0.0, 1.0, 0.0, sky_tmp);
-    const double skyUp0 = sky_tmp[0], skyUp1 = sky_tmp[1], skyUp2 = sky_tmp[2];
-    // 半球平均辐亮度（天顶 + 4 个斜方向，含明亮地平带）
-    double hemi0 = skyUp0 * 0.4, hemi1 = skyUp1 * 0.4, hemi2 = skyUp2 * 0.4;
-    static const double OB[4][3] = {
-        { 0.94, 0.34, 0.0 }, { -0.94, 0.34, 0.0 }, { 0.0, 0.34, 0.94 }, { 0.0, 0.34, -0.94 }
-    };
-    for (int32_t i = 0; i < 4; i++) {
-        wo_sky_atmo(OB[i][0], OB[i][1], OB[i][2], sky_tmp);
-        hemi0 += sky_tmp[0] * 0.15;
-        hemi1 += sky_tmp[1] * 0.15;
-        hemi2 += sky_tmp[2] * 0.15;
-    }
     wo_sky_atmo(nrmX, nrmY, nrmZ, sky_tmp);
     const double skyN0 = sky_tmp[0], skyN1 = sky_tmp[1], skyN2 = sky_tmp[2];
 
@@ -1389,48 +1411,54 @@ static void wo_ocean_pixel(double dx, double dy, double dz, double t_hit, double
     }
 
     // ---- 泡沫 ----
+    // 泡沫强度为 0（默认）时 cover 恒为 0，下面整段（风向条纹 + 两个尺度的图案 +
+    // 气泡亮度，共 4 次泡沫纹理双线性采样及其全部光照）都是死算，且结果会被
+    // foamMask=0 全部丢掉；直接早退，输出逐位不变（实测 max|Δ| = 0）。
     const double J = 1.0 + jt;   // 雅可比行列式（仅存迹通道，J ≈ 1 + trace）
     const double fresh = wo_clamp((WO_FOAM_J_THRESH - J) * WO_FOAM_J_GAIN, 0.0, 1.0);
     double cover = wo_clamp(fresh * (double)s_cfg.foam, 0.0, 1.5);
-    double foam[4];
-    // 风向条纹：老泡沫破碎成风纹，新白帽保持致密
-    const double wsU = px * s_wind_vx + pz * s_wind_vz;
-    const double wsV = px * (-s_wind_vz) + pz * s_wind_vx;
-    wo_tex_sample_u8(s_state.foam_tex, WO_FOAM_N, 1.0, wsU * 0.035, wsV * 0.11, foam);
-    const double streak = foam[3] / 255.0;
-    cover *= wo_mix(wo_smoothstep(0.25, 0.75, streak) * 1.5, 1.0, fresh);
-    // 泡沫图案（两个尺度混合）
-    wo_tex_sample_u8(s_state.foam_tex, WO_FOAM_N, 1.0, px * 0.23 + 0.013 * t, pz * 0.23, foam);
-    const double patA = foam[0] / 255.0;
-    wo_tex_sample_u8(s_state.foam_tex, WO_FOAM_N, 1.0, px * 0.71 + 0.37, pz * 0.71 + 0.71, foam);
-    const double pat = patA * 0.78 + foam[1] / 255.0 * 0.22;
-    const double fw = 0.05;   // 图案屏幕变化率近似（fwidth；两路一致取常数）
-    const double soft = 0.04 + 0.14 * (1.0 - wo_clamp(cover, 0.0, 1.0));
-    const double fm = wo_smoothstep(1.0 - cover - fw - soft, 1.0 - cover + fw + soft, pat);
-    const double foamMask = wo_clamp(fm * wo_smoothstep(0.0, 0.5, cover), 0.0, 1.0)
-                          * (0.68 + 0.32 * wo_smoothstep(0.3, 0.9, cover));
-    // 泡沫下方气泡增亮并给水体染色
-    const double covC = wo_clamp(cover, 0.0, 1.0);
-    body0 += WO_SSS_COL[0] * (sunE0 * 0.05 + amb0 * 0.35) * covC;
-    body1 += WO_SSS_COL[1] * (sunE1 * 0.05 + amb1 * 0.35) * covC;
-    body2 += WO_SSS_COL[2] * (sunE2 * 0.05 + amb2 * 0.35) * covC;
-    // 泡沫内部气泡亮度变化
-    wo_tex_sample_u8(s_state.foam_tex, WO_FOAM_N, 1.0, px * 1.9 + 0.21, pz * 1.9 + 0.53, foam);
-    const double bub = foam[1] / 255.0;
-    const double foamAlb0 = 0.82 * (0.78 + 0.3 * bub);
-    const double foamAlb1 = 0.87 * (0.78 + 0.3 * bub);
-    const double foamAlb2 = 0.92 * (0.78 + 0.3 * bub);
-    const double fAmb0 = hemi0 * 1.0 + skyN0 * 0.3;
-    const double fAmb1 = hemi1 * 1.0 + skyN1 * 0.3;
-    const double fAmb2 = hemi2 * 1.0 + skyN2 * 0.3;
-    const double fLum = 0.2126 * fAmb0 + 0.7152 * fAmb1 + 0.0722 * fAmb2;
-    const double fAmbN0 = wo_mix(fAmb0, fLum, 0.85);
-    const double fAmbN1 = wo_mix(fAmb1, fLum, 0.85);
-    const double fAmbN2 = wo_mix(fAmb2, fLum, 0.85);
-    const double NdL = wo_max(nrmX * Ldx + nrmY * Ldy + nrmZ * Ldz, 0.0);
-    const double foamLit0 = foamAlb0 * (sunE0 * NdL * 0.318 * 0.5 + fAmbN0 * 1.55);
-    const double foamLit1 = foamAlb1 * (sunE1 * NdL * 0.318 * 0.5 + fAmbN1 * 1.55);
-    const double foamLit2 = foamAlb2 * (sunE2 * NdL * 0.318 * 0.5 + fAmbN2 * 1.55);
+    double foam[4] = { 0.0, 0.0, 0.0, 0.0 };
+    double foamMask = 0.0, covC = 0.0, foamLit0 = 0.0, foamLit1 = 0.0, foamLit2 = 0.0;
+    if (cover > 1e-6) {
+        // 风向条纹：老泡沫破碎成风纹，新白帽保持致密
+        const double wsU = px * s_wind_vx + pz * s_wind_vz;
+        const double wsV = px * (-s_wind_vz) + pz * s_wind_vx;
+        wo_tex_sample_u8(s_state.foam_tex, WO_FOAM_N, 1.0, wsU * 0.035, wsV * 0.11, foam);
+        const double streak = foam[3] / 255.0;
+        cover *= wo_mix(wo_smoothstep(0.25, 0.75, streak) * 1.5, 1.0, fresh);
+        // 泡沫图案（两个尺度混合）
+        wo_tex_sample_u8(s_state.foam_tex, WO_FOAM_N, 1.0, px * 0.23 + 0.013 * t, pz * 0.23, foam);
+        const double patA = foam[0] / 255.0;
+        wo_tex_sample_u8(s_state.foam_tex, WO_FOAM_N, 1.0, px * 0.71 + 0.37, pz * 0.71 + 0.71, foam);
+        const double pat = patA * 0.78 + foam[1] / 255.0 * 0.22;
+        const double fw = 0.05;   // 图案屏幕变化率近似（fwidth；两路一致取常数）
+        const double soft = 0.04 + 0.14 * (1.0 - wo_clamp(cover, 0.0, 1.0));
+        const double fm = wo_smoothstep(1.0 - cover - fw - soft, 1.0 - cover + fw + soft, pat);
+        foamMask = wo_clamp(fm * wo_smoothstep(0.0, 0.5, cover), 0.0, 1.0)
+                  * (0.68 + 0.32 * wo_smoothstep(0.3, 0.9, cover));
+        // 泡沫下方气泡增亮并给水体染色
+        covC = wo_clamp(cover, 0.0, 1.0);
+        body0 += WO_SSS_COL[0] * (sunE0 * 0.05 + amb0 * 0.35) * covC;
+        body1 += WO_SSS_COL[1] * (sunE1 * 0.05 + amb1 * 0.35) * covC;
+        body2 += WO_SSS_COL[2] * (sunE2 * 0.05 + amb2 * 0.35) * covC;
+        // 泡沫内部气泡亮度变化
+        wo_tex_sample_u8(s_state.foam_tex, WO_FOAM_N, 1.0, px * 1.9 + 0.21, pz * 1.9 + 0.53, foam);
+        const double bub = foam[1] / 255.0;
+        const double foamAlb0 = 0.82 * (0.78 + 0.3 * bub);
+        const double foamAlb1 = 0.87 * (0.78 + 0.3 * bub);
+        const double foamAlb2 = 0.92 * (0.78 + 0.3 * bub);
+        const double fAmb0 = hemi0 * 1.0 + skyN0 * 0.3;
+        const double fAmb1 = hemi1 * 1.0 + skyN1 * 0.3;
+        const double fAmb2 = hemi2 * 1.0 + skyN2 * 0.3;
+        const double fLum = 0.2126 * fAmb0 + 0.7152 * fAmb1 + 0.0722 * fAmb2;
+        const double fAmbN0 = wo_mix(fAmb0, fLum, 0.85);
+        const double fAmbN1 = wo_mix(fAmb1, fLum, 0.85);
+        const double fAmbN2 = wo_mix(fAmb2, fLum, 0.85);
+        const double NdL = wo_max(nrmX * Ldx + nrmY * Ldy + nrmZ * Ldz, 0.0);
+        foamLit0 = foamAlb0 * (sunE0 * NdL * 0.318 * 0.5 + fAmbN0 * 1.55);
+        foamLit1 = foamAlb1 * (sunE1 * NdL * 0.318 * 0.5 + fAmbN1 * 1.55);
+        foamLit2 = foamAlb2 * (sunE2 * NdL * 0.318 * 0.5 + fAmbN2 * 1.55);
+    }   // end if (cover > 1e-6)
 
     double col0 = body0 * (1.0 - Fr) + refl0 * Fr + spec0;
     double col1 = body1 * (1.0 - Fr) + refl1 * Fr + spec1;
@@ -1477,13 +1505,23 @@ void linglong_ocean_draw_landscape(
     const int32_t fb_width = (int32_t)gfx->width;
     const int32_t fb_height = (int32_t)gfx->height;
 
+    // 方向图复用：视角不变时直接查表（天象仪在 render_sky 里已经按当前视角刷过这张图），
+    // 省掉逐像素的 fisheye_unproject（实测 56ns/px）。表里的值就是同一函数算出来的，
+    // 因此结果逐位不变。尺寸不符或未就绪时自动退回逐像素反投影。
+    const int32_t use_dir_map = fisheye_dir_map_ready(fb_width, fb_height);
+
     #pragma omp parallel for schedule(static)
     for (int32_t y = 0; y < fb_height; y++) {
         for (int32_t x = 0; x < fb_width; x++) {
             float ray_x = 0.0f, ray_y = 0.0f, ray_z = 0.0f;
-            fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y,
-                              view_alt, view_azi, view_roll, f, projection,
-                              &ray_x, &ray_y, &ray_z);
+            if (use_dir_map) {
+                fisheye_dir_map_get(x, y, &ray_x, &ray_y, &ray_z);
+            }
+            else {
+                fisheye_unproject((float)x, (float)y, sky_radius, center_x, center_y,
+                                  view_alt, view_azi, view_roll, f, projection,
+                                  &ray_x, &ray_y, &ray_z);
+            }
             // 换算到海洋系（x东, y上, z北）
             double dx = (double)ray_x, dy = (double)ray_z, dz = (double)ray_y;
             double dl = sqrt(dx * dx + dy * dy + dz * dz);

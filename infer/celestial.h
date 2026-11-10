@@ -112,6 +112,16 @@ void fisheye_unproject(
     float *x, float *y, float *z
 );
 
+// 屏幕方向图（celestial.c 内缓存：每个屏幕像素 → 地平系方向）：视角不变时完全可复用。
+// refresh 按需重建（参数未变时立即返回），ready 校验尺寸与有效性（宽高不符返回 0）。
+void    fisheye_dir_map_refresh(
+    uint32_t width, uint32_t height,
+    float sky_radius, float center_x, float center_y,
+    float view_alt, float view_azi, float view_roll, float f, int32_t projection
+);
+int32_t fisheye_dir_map_ready(int32_t width, int32_t height);
+void    fisheye_dir_map_get(int32_t x, int32_t y, float *rx, float *ry, float *rz);
+
 void render_sky(Nano_GFX *gfx,
     float sky_radius, float center_x, float center_y,
     float view_alt, float view_azi, float view_roll, float f,
