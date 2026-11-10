@@ -3,20 +3,21 @@
 ;;
 ;; 运行环境：灵机（Animac）解释器 + Nano Gfx 本地库
 ;; 参考实现：ui_particlelife.c（particle.html 移植）：6 种颜色的粒子在环面世界中
-;; 按随机种间吸引/排斥参数自组织。差异：81 粒子（C 版 324，帧预算约束）、
-;; System.set_interval 每帧一步（8ms 定时器，见文件末）——C 版是每帧全速，
+;; 按随机种间吸引/排斥参数自组织。差异：100 粒子（10x10；C 版 324，解释器帧预算
+;; 约束）、System.set_interval 每帧一步（8ms 定时器，见文件末）——C 版是每帧全速，
 ;; 解释器则由宿主 GUI 按时间片驱动，定时器回调即演进一步。
 ;;
 ;; 【性能结构】2026-11 重写 interact：从「全对 O(N²) + 逐对环面回绕」改为
 ;; C 版同构的「均匀网格 + 半程邻域壳 + 对称化（一次距离、双向加力）」：
-;;   · 候选对从全对 6561（无序 3320）降到 ~1400（只查同格 + 7 个前向邻格）；
+;;   · 候选对从全对 10000（无序 4950）降到 ~2100（只查同格 + 7 个前向邻格）；
 ;;   · 每对只算一次距离，两方向的力同时施加（力矩阵非对称性照样保留）；
 ;;   · 回绕不再是「逐对 4 个 if」：格子按环面精确等分，跨格接缝的整格平移
 ;;     在邻格循环外一次算好（见 interact 第 2 段），内层只剩两次加法；
 ;;   · 网格用 head/next 下标链表表示，每步只覆写元素、不分配对象。
 ;; 力的系数按 C 版取：近距 param-a、中/远距 param-b，两方向分别用 [ki][kj]/[kj][ki]
 ;; （矩阵非对称，必须转置取），因此每次启动的团簇图案都不同。
-;; 实测（WASM-GUI）：每步 VM 指令 57.8 万 → ~25 万（-57%），帧率 10fps → 60fps（每帧一步）。
+;; 实测（WASM-GUI）：81 粒子时每步 VM 指令 57.8 万 → 18~24 万（-60%），帧率 10fps →
+;; 60fps（每帧一步）；加到 100 粒子后每步约 24 万，仍是一步一帧（浏览器实测 60/s）。
 ;;
 ;; 实现要点：
 ;;   - 粒子状态为 5 个平行一维列表（xs/ys/ks/vxs/vys；get_item/set_item! O(1)）；
@@ -29,13 +30,15 @@
 ;;   - while 循环体内不调用 lambda（vendor 版 ARN 在 while 内 call lambda 有作用域
 ;;     缺陷，见 doc/AGENTS.md 2026-10-18 sky.scm 条目），故 interact 全部内联。
 ;;
-;; 玩法：进入即随机生成相互作用参数与初始分布并开始演化；A(ESC) 返回列表。
+;; 玩法：进入即随机生成相互作用参数与初始分布并开始演化；A(ESC) 返回列表；
+;; HUD 右侧「重置」按钮 = 重新抽参数 + 重新撒布（同 C 版按 D 重置），「退出」= 硬 A。
 ;; ============================================================================
 
 (native Gfx)
 (native Math)
 (native String)
 (native System)
+(native Touch)
 (import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 物理常数（与 ui_particlelife.c 一致；世界半宽 1.0，x∈[-1,1] 环面）-----
@@ -70,8 +73,9 @@
 
 ;; ---- 粒子状态（5 个平行一维列表）与相互作用参数矩阵 -----------------------
 
-(define N (* 9 9))                ; 粒子数（9x9 撒布）
-(define SCATTER_N 9)
+(define N (* 10 10))               ; 粒子数（10x10 撒布；每步约 24 万 VM 指令，
+                                  ; 仍在宿主每帧时间片 312500 之内，故 60 步/秒）
+(define SCATTER_N 10)
 (define xs '())
 (define ys '())
 (define ks '())
@@ -277,8 +281,8 @@
     (define py 0)
     (define k 0)
     (Gfx.clear)
-    (Gfx.fill_rect 0 0 SW HUD_H 24 24 28)
-    (Gfx.draw_text "粒子生命" 6 2 255 255 255)
+    ;; 先画粒子、后画 HUD 条与按钮：HUD 是不透明覆盖层，这样贴到顶部的粒子
+    ;; 不会压在「重置/退出」按钮的描边上（按钮占 y=2..18，越过了 HUD 条 0..15）。
     (while (< i N) {
       (set! px (Math.floor (+ CX (* (get_item xs i) SCALE))))
       (set! py (Math.floor (+ CY (* (get_item ys i) SCALE))))
@@ -286,88 +290,143 @@
       (Gfx.fill_rect px py 2 2 (get_item pal-r k) (get_item pal-g k) (get_item pal-b k))
       (set! i (+ i 1))
     })
-      (EX.draw_button)
-      (Gfx.refresh)
+    (Gfx.fill_rect 0 0 SW HUD_H 24 24 28)
+    (Gfx.draw_text "粒子生命" 6 2 255 255 255)
+    (draw_reset_button)
+    (EX.draw_button)
+    (Gfx.refresh)
   }))
 
 ;; ---- 启动：参数与撒布 → 首帧绘制 → 每帧一步演进 -------------------------
 
-(define init-params
+;; ---- 状态表：一次性分配（长度固定），之后只 set_item! 覆写 ------------------
+;; 为什么不在每次重置时重新 push：'() 是模块级静态字面量，重复 push 会让同一个
+;; 对象越来越长（本解释器不回收语句位置的残留值，且字面量是共享的）；而 set_item!
+;; 覆写既没有这个坑，也不产生任何分配（重置不触发 GC）。
+
+(define state-alloc
   (lambda () {
-    (define pa '())
-    (define pb '())
+    (define i 0)
+    (while (< i N)
+      { (push xs 0.0) (push ys 0.0) (push ks 0) (push vxs 0.0) (push vys 0.0)
+        (set! i (+ i 1)) })
+    (set! i 0)
+    (while (< i (* NK NK)) { (push param-a 0.0) (push param-b 0.0) (set! i (+ i 1)) })
+  }))
+
+;; 重置世界：重新抽相互作用参数 + 重新撒布粒子（同 C 版 pl_generate_world 的分布）
+(define world-reset
+  (lambda () {
     (define i 0)
     (define j 0)
+    (define ix 0)
+    (define iy 0)
+    (define idx 0)
+    (define px 0.0)
+    (define py 0.0)
+    ;; 相互作用参数：同种更近距（param-a 恒为负 = 近距排斥），param-b 可正可负
+    (set! i 0)
     (while (< i NK) {
       (set! j 0)
       (while (< j NK) {
+        (set! idx (+ (* i NK) j))
         (if (== i j)
-            { (push pa (- 0.0 (+ 0.001 (* 0.0005 (Math.random)))))
-              (push pb (* 0.001 (- (Math.random) 0.5))) }
-            { (push pa (- 0.0 (+ 0.0005 (* 0.0005 (Math.random)))))
-              (push pb (* 0.001 (- (Math.random) 0.5))) })
+            { (set_item! param-a idx (- 0.0 (+ 0.001 (* 0.0005 (Math.random))))) }
+            { (set_item! param-a idx (- 0.0 (+ 0.0005 (* 0.0005 (Math.random))))) })
+        (set_item! param-b idx (* 0.001 (- (Math.random) 0.5)))
         (set! j (+ j 1))
       })
       (set! i (+ i 1))
     })
-    (set! param-a pa)
-    (set! param-b pb)
-  }))
-
-(define scatter
-  (lambda () {
-    (define xs2 '())
-    (define ys2 '())
-    (define ks2 '())
-    (define vs2 '())
-    (define iy 0)
-    (define ix 0)
-    (define px 0.0)
-    (define py 0.0)
+    ;; 粒子撒布：均匀格 + 抖动，种类随机，速度归零
+    (set! iy 0)
     (while (< iy SCATTER_N) {
       (set! ix 0)
       (while (< ix SCATTER_N) {
+        (set! idx (+ (* iy SCATTER_N) ix))
         ;; 撒布后立即回绕到世界内：网格划分要求坐标在 [-HW,HW]/[-HH,HH] 内
         ;; （否则会被 clamp 到边格，邻域壳算出的镜像位移会偏），而 move 是下一步
         ;; 才回绕的。环面下回绕只是同一个点的另一种写法，物理不变。
         (set! px (+ (* (- (* 2.0 (/ ix (- SCATTER_N 1))) 1.0) WORLD_HW) (* 0.2 (- (Math.random) 0.5))))
         (if (> px WORLD_HW) { (set! px (- px WORLD_W)) })
         (if (< px WORLD_HW_NEG) { (set! px (+ px WORLD_W)) })
-        (push xs2 px)
+        (set_item! xs idx px)
         (set! py (+ (* (- (* 2.0 (/ iy (- SCATTER_N 1))) 1.0) WORLD_HH) (* 0.2 (- (Math.random) 0.5))))
         (if (> py WORLD_HH) { (set! py (- py WORLD_HH2)) })
         (if (< py WORLD_HW_NEG2) { (set! py (+ py WORLD_HH2)) })
-        (push ys2 py)
-        (push ks2 (Math.floor (* NK (Math.random))))
-        (push vs2 0)
+        (set_item! ys idx py)
+        (set_item! ks idx (Math.floor (* NK (Math.random))))
+        (set_item! vxs idx 0.0)
+        (set_item! vys idx 0.0)
         (set! ix (+ ix 1))
       })
       (set! iy (+ iy 1))
     })
-    (set! xs xs2)
-    (set! ys ys2)
-    (set! ks ks2)
-    (set! vxs vs2)
-    (set! vys (cdr (cons 0 vs2)))
+  }))
+
+;; ---- 「重置」按钮（HUD 右侧，紧挨「退出」）---------------------------------
+;; 命中判定用「电平 + 按下沿」：本 App 每帧一拍（≈16ms），一次点按跨好几拍，
+;; 电平采样不会漏；命中后把该按下沿取走，避免同一手势被判两次。
+(define RB_W 36)
+(define RB_H 16)
+(define RB_Y 2)
+(define rb_x (- SW 80))           ; 退出按钮在 SW-40，这里留 4px 间距
+(define prev_down 0)
+(define reset_req 0)
+
+(define rb_hit
+  (lambda (px py)
+    (if (and (>= px rb_x) (< px (+ rb_x RB_W)))
+        (if (and (>= py RB_Y) (< py (+ RB_Y RB_H))) 1 0)
+        0)))
+
+(define draw_reset_button
+  (lambda ()
+    (if (Touch.is_available)
+        {
+          (Gfx.fill_rect rb_x RB_Y RB_W RB_H 60 62 74)
+          (Gfx.draw_rect rb_x RB_Y RB_W RB_H 120 124 140)
+          (Gfx.draw_text "重置" (+ rb_x 6) (+ RB_Y 2) 225 228 235)
+        }
+        #f)))
+
+(define read_touch
+  (lambda () {
+    (if (Touch.is_available)
+        {
+          (if (Touch.is_pressed)
+              {
+                (if (== prev_down 0)
+                    (if (== (rb_hit (Touch.x) (Touch.y)) 1)
+                        { (set! reset_req 1) (Touch.take_press) }
+                        #f)
+                    #f)
+                (set! prev_down 1)
+              }
+              { (set! prev_down 0) })
+        }
+        #f)
   }))
 
 (define step
   (lambda () {
-    (EX.check)
-    (interact)
-    (move)
+    (EX.check)                       ; 返回请求 / 右上角「退出」按钮
+    (read_touch)                     ; 「重置」按钮（命中即置 reset_req）
+    (if (== reset_req 1)
+        { (set! reset_req 0) (world-reset) }
+        { (interact) (move) })
     (draw)
   }))
 
-(init-params)
-(scatter)
+(state-alloc)
+(world-reset)
 (grid-init)
 (draw)
 (step)
 ;; 节奏：每帧一步（≈60fps）。周期取「半帧」而非整帧——宿主只在 GUI 帧边界触发
 ;; 定时器（浏览器 rAF ≈16.7ms），16ms 周期会被向上量化成「有时隔两帧」，实测
-;; 60fps 下只有 50 步/秒；8ms 则每帧必到期，实测稳定 60 步/秒。每步约 17 万 VM
-;; 指令 < 宿主每帧时间片（ui_scheme_app.c 的 312500），一步恰好占一帧。
+;; 60fps 下只有 50 步/秒；8ms 则每帧必到期，实测稳定 60 步/秒。每步约 24 万 VM
+;; 指令（10x10 粒子）< 宿主每帧时间片（ui_scheme_app.c 的 312500），一步占一帧。
 (set! _timer (System.set_interval 8 step))
 
 ;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
