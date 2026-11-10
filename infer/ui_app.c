@@ -1619,17 +1619,24 @@ static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLin
     }
 
     // 第 1 行：云量、云类、云精度、黄道、返回
+    // 云参数只在 sky_model==4（体积云）时影响画面；其它档位现值画灰但可预调
+    // （与旧控制面板云参数按钮“不吃参数时画暗”的语义一致）。
+    const int32_t cloud_active = (cfg->sky_model == 4);
+    const uint8_t cloud_r = cloud_active ? 0 : 168;
+    const uint8_t cloud_g = cloud_active ? 255 : 176;
+    const uint8_t cloud_b = cloud_active ? 255 : 190;
+
     cells[0].label = L"云量";
     cells[0].value = ui_cloud_coverage_level_name(cfg->cloud_coverage_level);
-    cells[0].value_r = 0; cells[0].value_g = 255; cells[0].value_b = 255;
+    cells[0].value_r = cloud_r; cells[0].value_g = cloud_g; cells[0].value_b = cloud_b;
 
     cells[1].label = L"云类";
     cells[1].value = ui_app_linglong_cloud_layer_name(cfg);
-    cells[1].value_r = 0; cells[1].value_g = 255; cells[1].value_b = 255;
+    cells[1].value_r = cloud_r; cells[1].value_g = cloud_g; cells[1].value_b = cloud_b;
 
     cells[2].label = L"云精度";
     cells[2].value = ui_app_linglong_cloud_precision_name(cfg);
-    cells[2].value_r = 0; cells[2].value_g = 255; cells[2].value_b = 255;
+    cells[2].value_r = cloud_r; cells[2].value_g = cloud_g; cells[2].value_b = cloud_b;
 
     cells[3].label = L"黄道";
     if (cfg->enable_ecliptic_circle == 0) {
@@ -1686,7 +1693,35 @@ static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLin
         cells[9].value_r = 0; cells[9].value_g = 255; cells[9].value_b = 0;
     }
 
-    // 第 3、4 行全部为无功能备用按钮（不再重复“跟踪太阳”）。
+    // 第 3 行第 2~4 格：海洋参数（观察高度 / 涌浪波高 / 涌浪波长）。
+    // 只在 sky_model==5 或 landscape_index==3 时影响画面；其它档位现值画灰但可预调。
+    {
+        const int32_t ocean_active = (cfg->sky_model == 5 || cfg->landscape_index == 3);
+        int32_t n = 0;
+        const Linglong_Ocean_Option *opt;
+        struct { int32_t cell; int32_t level; const Linglong_Ocean_Option *(*get)(int32_t *); } m[3] = {
+            { 11, cfg->ocean_height_level,    linglong_ocean_height_options },
+            { 12, cfg->ocean_swell_hs_level,  linglong_ocean_swell_hs_options },
+            { 13, cfg->ocean_swell_len_level, linglong_ocean_swell_len_options },
+        };
+        static const wchar_t *labels[3] = { L"观察高度", L"涌浪波高", L"涌浪波长" };
+        for (int32_t i = 0; i < 3; i++) {
+            opt = m[i].get(&n);
+            if (opt == NULL || n <= 0) continue;
+            int32_t lv = m[i].level;
+            if (lv < 0 || lv >= n) lv = 0;
+            cells[m[i].cell].label = labels[i];
+            cells[m[i].cell].value = opt[lv].name;
+            if (ocean_active) {
+                cells[m[i].cell].value_r = 0; cells[m[i].cell].value_g = 200; cells[m[i].cell].value_b = 255;
+            }
+            else {
+                cells[m[i].cell].value_r = 168; cells[m[i].cell].value_g = 176; cells[m[i].cell].value_b = 190;
+            }
+        }
+    }
+
+    // 第 3 行首格与第 4 行全部为无功能备用按钮（不再重复“跟踪太阳”）。
 }
 
 void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state) {
