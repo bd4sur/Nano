@@ -160,8 +160,21 @@ static void wasm_gui_frame(void) {
     // 帧边界：清掉上一帧的亚帧点按锁存（Scheme App 的 Touch 采样已看到过按下）
     wasm_touch_frame_boundary();
     // 亚帧点按保底（DOWN/UP 落在同一生产者批次时仍能被 Scheme 的 Touch 采样到）
-    // 只在 Scheme App 运行态启用，避免影响菜单等 GUI 状态的点按语义
-    wasm_touch_set_sticky(global_state->STATE == STATE_SCHEME_APP_RUN);
+    // 只在 Scheme App 运行态启用，避免影响菜单等 GUI 状态的点按语义。
+    //
+    // 【必须排除模态框期间】(ui_scheme_app_hosts_input_widget)：
+    //   该锁存的做法是"点按已松开后，仍按'按下'电平再上报若干帧"（见 hal_touch_wasm.c），
+    //   而 `touch_read` 同时被**宿主 GUI 的事件层**（get_input_event → 软键盘/16 键
+    //   轮询 ui_softkbd_poll）读取。模态输入框打开时 Scheme 进程是 BLOCKED、根本不会
+    //   采样触屏，锁存就只会污染控件侧：一次点按后控件又看到"幻影按下"（同一键位、
+    //   电平持续），键状态迟迟回不到 IDLE → 紧接着的下一次点按被并进同一次"按住"，
+    //   松手时按"按住时长"判成**长按**（-2）而不是短按（-1）→ 丢字、键位高亮卡住、
+    //   手感发粘。这就是"应用里调 Ui.input 后软键盘输入卡顿/丢触屏事件"的根因：
+    //   与 App 无关（所有 Scheme App 的模态框都受同一污染），只是像 nanochat 这样
+    //   连续快速打字（拼音组字）时最明显。GUI 侧本来就有可靠的按下/松开边沿事件
+    //   （wasm_evtq），不需要这个电平兜底。
+    wasm_touch_set_sticky((global_state->STATE == STATE_SCHEME_APP_RUN)
+                          && !ui_scheme_app_hosts_input_widget());
     // 忙提示刚上屏：本帧跳过（不消费不渲染），让浏览器先把提示 paint 出来
     if (s_busy_just_drawn) {
         s_busy_just_drawn = 0;

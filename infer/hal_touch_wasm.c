@@ -54,8 +54,17 @@ static int32_t s_latch_frames = 0;  // 锁存还能存活几帧（Scheme 的 tic
 static int32_t s_latch_x = 0;
 static int32_t s_latch_y = 0;
 
-// 开关亚帧点按保底（main_wasm_gui.c 每帧按当前状态设置）
-void wasm_touch_set_sticky(int32_t on) { s_sticky = on ? 1 : 0; }
+// 开关亚帧点按保底（main_wasm_gui.c 每帧按当前状态设置）。
+// 关闭时**立即清掉残留锁存**：锁存是"为 Scheme 侧电平采样补一次按下"，一旦 Scheme 侧
+// 不该再采样（如模态文本输入框期间进程被挂起），残留的锁存会让宿主控件的触屏电平
+// 凭空多出一段"按下"，把随后的点按并进同一次按住（详见 main_wasm_gui.c 处的说明）。
+void wasm_touch_set_sticky(int32_t on) {
+    if (!on) {
+        s_latch_pending = 0;
+        s_latch_frames = 0;
+    }
+    s_sticky = on ? 1 : 0;
+}
 
 // 帧边界：锁存只存活若干帧（Scheme 的 tick 间隔约 2.5 帧，必须覆盖到它被采样一次）。
 // 不能用"读一次就清"：生产者的 get_input_event 也会读，会抢先把锁存吃掉。
