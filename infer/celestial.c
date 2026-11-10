@@ -2762,8 +2762,15 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->enable_opt_bilinear = 1;     // 是否启用双线性插值以优化画质
 
     cfg->projection = 0;              // 投影算法（0-鱼眼；1-线性透视）
+#if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
+    cfg->sky_model = 5;               // 默认天空模型：海洋天空（Hillaire LUT 大气）
+    cfg->landscape_index = 3;         // 默认地景：实时海洋（web-ocean 移植）
+#else
+    // 未编入海洋模块的平台（动态地景关闭，如 M5Stack）退回二次散射 + 鱼眼地景贴图：
+    // 模型 5 / 地景 3 在该平台上分别退化为二次散射 / 纯黑地景，观感不如原默认值。
     cfg->sky_model = 3;               // 选择天空模型（0-不启用散射；1-简单散射；2-一次散射；3-二次散射）
-    cfg->landscape_index = 1;         // 选择地景贴图（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景）
+    cfg->landscape_index = 1;         // 选择地景（0-不启用，地景设为纯黑；1-鱼眼贴图；2-动态地景）
+#endif
     cfg->enable_equatorial_coord = 0; // 是否启用赤道坐标圈
     cfg->enable_horizontal_coord = 1; // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     cfg->enable_star_burst = 1;       // 是否启用星芒效果

@@ -1534,22 +1534,16 @@ static int32_t linglong_paused_resume_state = 2; // 暂停前的运行状态（1
 
 static int32_t linglong_state = 0; // 玲珑仪UI状态
 
-// 启动画面停留截止时刻（非阻塞替代阻塞式 sleep，见 STATE_LINGLONG）
-static uint64_t linglong_splash_until = 0;
-
 #define LL_STATE_SKY (0)
 #define LL_STATE_SETTING (1)
 #define LL_STATE_SETTING_CALLBACK (2)
-
-// 玲珑仪启动画面停留时长（毫秒）：非阻塞跨帧停留，与真机阻塞 sleep 的观感一致
-#define LINGLONG_SPLASH_MS (1000)
 
 
 void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state) {
     linglong_state = LL_STATE_SKY;
     linglong_paused_resume_state = 2;
     ui_linglong_ctrl_init();
-    s_linglong_touch_owned = 1; // 主天空界面（含启动画面停留期）：触屏归显式控件，抑制宫格软键
+    s_linglong_touch_owned = 1; // 主天空界面：触屏归显式控件，抑制宫格软键
 }
 
 // 设置界面的功能格映射：返回现有处理链使用的键码（调用前会置 Ctrl 激活）。
@@ -1989,21 +1983,6 @@ void ui_app_linglong_draw_lite(
     gfx_draw_textline_mini(global_state->gfx, L"    BD4SUR\n 2011-2026", x+86, y+53, TEXT_R, TEXT_G, TEXT_B, 1);
 }
 
-void ui_app_linglong_splash(Key_Event *key_event, Global_State *global_state) {
-    Nano_GFX *gfx = global_state->gfx;
-    gfx_soft_clear(gfx);
-    gfx_draw_textline_centered(gfx, L"玲珑天象仪 V" NANO_VERSION, gfx->width/2, gfx->height/2 - 14 * 6, 0, 255, 255, 1);
-    gfx_draw_textline_centered(gfx, L"Der bestirnte Himmel ueber mir.", gfx->width/2, gfx->height/2 - 14 * 5, 222, 222, 230, 1);
-    gfx_draw_textline_centered(gfx, L"(c) 2011-2026 BD4SUR", gfx->width/2, gfx->height/2 - 14 * 4, 96, 96, 96, 1);
-    gfx_draw_textline_centered(gfx, L"正在渲染首帧...请稍等", gfx->width/2, gfx->height/2 - 14 * 1, 255, 255, 255, 1);
-    gfx_draw_textline_centered(gfx, L"1左转   2推杆   3右转   A退出", gfx->width/2, gfx->height/2 + 14 * 3, 96, 96, 96, 1);
-    gfx_draw_textline_centered(gfx, L"4左倾   5归中   6右倾   B    ", gfx->width/2, gfx->height/2 + 14 * 4, 96, 96, 96, 1);
-    gfx_draw_textline_centered(gfx, L"7拉远   8拉杆   9推进   C设置", gfx->width/2, gfx->height/2 + 14 * 5, 96, 96, 96, 1);
-    gfx_draw_textline_centered(gfx, L"*快退   0实时   #快进   D    ", gfx->width/2, gfx->height/2 + 14 * 6, 96, 96, 96, 1);
-
-    gfx_refresh(gfx);
-}
-
 void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_state) {
     // 天空每帧都完整重绘；设置界面与主控制面板都是叠加在其上的半透明控件，
     // 因此不会出现 alpha 逐帧累积加深。
@@ -2139,9 +2118,9 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
 
 #endif
 
-    // 主天空界面显式触屏控件（启动画面停留期内控件尚未绘制，不处理触屏）。
+    // 主天空界面显式触屏控件（已无启动画面停留期，进入即刻接管触屏）。
     // 设置界面另有 5x4 显式按钮，见下方独立分支。
-    if (linglong_state == LL_STATE_SKY && linglong_splash_until == 0) {
+    if (linglong_state == LL_STATE_SKY) {
         // 触屏拖动变换视角：仅在控制面板隐藏时启用（控制模块内部判断），
         // 按下点落在顶部按钮上时不启动拖动。像素增量按实际画布尺寸归一化：
         // 横/纵向拖满整屏分别对应 180° 方位/俯仰变化，不写死屏幕宽高。
@@ -2267,8 +2246,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
 
     // 设置界面显式触屏控件：5x4 按钮，替代旧 4x4 宫格软键。
     // 命中功能格后合成对应 NANO_KEY_* 短按事件，复用下方既有 Ctrl+键 处理链。
-    if ((linglong_state == LL_STATE_SETTING || linglong_state == LL_STATE_SETTING_CALLBACK)
-        && linglong_splash_until == 0) {
+    if (linglong_state == LL_STATE_SETTING || linglong_state == LL_STATE_SETTING_CALLBACK) {
         int32_t cell = ui_linglong_ctrl_settings_handle_touch(
             key_event->touch_edge, key_event->touch_x, key_event->touch_y,
             key_event->touch_down_x, key_event->touch_down_y);
@@ -4070,31 +4048,15 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
     case STATE_LINGLONG:
 
-        // 首次获得焦点：初始化 + 启动画面
-        // 注意（2026-10-21 排障）：原实现在此处用 sleep_in_ms(1000) 阻塞停留，
-        // 在 WASM-GUI 上完全失效：① 宿主 sleep 是空实现（GUI 驱动模型下永不主动睡眠）；
-        // ② 启动画面的 gfx_refresh 只更新离屏 RGBA 缓冲，而紧接着的首次渲染（WASM 下约 1 s）
-        //    在同一次 main-loop 回调里同步执行并再次刷新，页面要等回调返回才能上屏，
-        //    于是“启动画面 → 首帧”被压成了一帧，启动画面永远看不到。
-        // 改为非阻塞跨帧停留（与本项目其他动画的状态机惯例一致）：本帧只画启动画面并
-        // 立即返回（让宿主把启动画面上屏），停留期内的后续帧不渲染，到点后才开始首帧渲染。
+        // 首次获得焦点：初始化后立即渲染首帧，不再有启动画面的有意停留。
+        // 历史：此处曾用 sleep_in_ms(1000) 阻塞停留，后改为非阻塞跨帧停留 1s（因为 WASM-GUI
+        // 下阻塞 sleep 是空实现、且启动画面与首帧会被压进同一次回调而看不到）；现按需求
+        // 把这段延时整个去掉——进玲珑仪后第一帧就是星图/海面本身。
+        // 首帧需要烘焙大气 LUT 与波场（WASM 下单线程约 1s），这段时间宿主仍显示上一界面。
         if (global_state->PREV_STATE != global_state->STATE) {
             ui_app_linglong_init(key_event, global_state);
-            ui_app_linglong_splash(key_event, global_state);
-            linglong_splash_until = get_timestamp_in_ms() + LINGLONG_SPLASH_MS;
             global_state->PREV_STATE = global_state->STATE;
-            break;
         }
-        if (linglong_splash_until != 0) {
-            if (get_timestamp_in_ms() < linglong_splash_until) {
-                // 停留期内仍处理按键（可直接按 A 退出 / C 进设置，与真机一致），
-                // 但不渲染首帧，保持启动画面
-                ui_app_linglong_event_handler(key_event, global_state);
-                break;
-            }
-            linglong_splash_until = 0;
-        }
-        global_state->PREV_STATE = global_state->STATE;
 
         ui_app_linglong_event_handler(key_event, global_state);
         ui_app_linglong_render_frame(key_event, global_state);
