@@ -8061,3 +8061,58 @@ Scheme 看不到 C 的静态数组，而 `(native Fs)` 只读**文本**（整读
 就开始有单步跨两帧的风险）；324（C 版规模）约需 100 万/步 → 会退回 15~30fps。
 若真要上 324，需要把每步挪到多帧时间片（改宿主 `MB_TIMESLICE_TICKS`）或给
 `interact` 做分帧（把网格按行分批，每帧只算一部分）——两者都超出「只改 Scheme」的范围。
+
+# 2026-11-10（水池（ui_water.c）：触屏化改造——屏幕自绘控件栏 + 拖动旋转视角）
+
+## 背景
+
+水池（WebGL Water 移植）原先把全部操作绑在十六宫格触屏软按键上（A 返回 / D 暂停 /
+* 重力 / 0 光源 / 2-4-6-8 旋转视角），视角旋转只能靠按键步进（`WT_ROTATE_STEP`），
+拖动旋转还留着一个默认关闭的宏 `WT_ENABLE_DRAG_ROTATE`。要求：① 不响应触屏软按键，
+功能改为屏幕自绘按钮控件；② 视角旋转改为触屏拖动（不需要按键），同时保留圆球拖动。
+
+## 改动
+
+- `infer/ui_water.c`
+  - **屏幕控件栏**（`wt_button_rect` / `wt_button_hit` / `wt_draw_ui` /
+    `wt_button_action`）：底部 34px 半透明底板 + 4 个等宽圆角按钮，几何只由屏宽推出，
+    绘制与命中判定**共用同一几何函数**（范式同 `ui_tetris.c` 的虚拟按键）：
+    `返回` / `暂停⇄继续` / `重力开⇄重力关` / `光源`。
+    - 命中用**按下点**坐标、结算用**松手沿**（`TOUCH_EDGE_UP`）；松手点须仍落在同一按钮内，
+      否则视为拖出取消。`返回` 的状态切换同样发生在松手沿（不会泄漏到下一状态）。
+    - 按下期间 `pressed_btn` 高亮；`暂停/重力` 用绿底表示“激活态”，标签随状态改写。
+  - **拖动交互**：删掉 `WT_ENABLE_DRAG_ROTATE`（恒开）与 `WT_ROTATE_STEP`；
+    `wt_start_drag` 先测按钮（命中则 `WT_MODE_BUTTON`，不拖动），再测圆球
+    （`WT_MODE_SPHERE`，原 `duringDrag` 语义原样保留），其余为 `WT_MODE_ROTATE`
+    （1px ≈ 1°，俯仰仍钳制 ±89.999°）。
+  - **暂停不再整帧跳过**：暂停时冻结物理/仿真，但仍推帧并重绘控件，且
+    `view_dirty`（拖动视角/拖球/按下控件置位）时重画一次场景——否则暂停后按钮标签
+    （`暂停→继续`）和拖动操作都看不到反馈。
+  - 实体键盘只保留 `ESC`（返回）、`ENTER`（暂停）兜底，并且显式过滤
+    `key_event->is_soft_key == 0`（触屏派生软按键一律不响应）。
+- `infer/ui_app.c`：`STATE_WATER` 加入 `ui_app_state_is_menu` 抑制表——从源头不再为
+  本状态的触摸生成十六宫格软按键（AGENTS.md 第八节原则 3）。
+- `infer/ui_water.h`：头部注释同步（交互说明）。
+
+## 验证（只验 WASM 目标：真 WASM + 真无头浏览器 + 真触屏链路）
+
+新增 `infer/tools/e2e/browser/regress_water.js`（16 条断言，判据全部是帧缓冲像素 +
+状态机 + 帧缓冲 epoch，不做 OCR）。`bash infer/build_wasm_gui.sh` 重建产物后，
+三种引擎全绿：chromium **16/16**、headless shell **16/16**、firefox **16/16**，
+无 pageerror。关键断言：
+
+- 进入水池（state=71）；水池在动（仿真推进）；
+- 控件栏 4 个按钮的标签白字像素可见（`whitepx` 57~117）；
+- 点「暂停」后连续两帧**逐字节相同**（`changed=0 maxd=0`）→ 冻结生效；
+- 冻结期间逐个点按旧宫格位置（A/2/4/6/8/0）→ `changed=0`、state 仍 71
+  → **软按键彻底退场**（改造前 A 格会直接返回、2/4/6/8 会转视角）；
+- 「重力」「光源」可点按生效（控件重绘 2134px / 全局重光照 14390px），
+  重力再点一次可回到原状态；
+- 圆球拖动：在圆球屏幕位置拖动 → 变化 976px、质心 (191,81) 紧贴球位置
+  （相机若被转动则会是 2.3 万像素量级、差异铺满画幅）→ 球可拖动且不带动相机；
+- 空白处拖动 → 23454px 变化、包围盒 233x159 → 视角旋转生效；
+- 点「继续」恢复推进；点「返回」回到小游戏菜单（state=54）。
+
+复现：`cd infer/webgui && python3 ../tools/https_static_server.py 9012 .`，然后
+`node tools/e2e/browser/regress_water.js https://127.0.0.1:9012/index.html chromium /tmp/out`
+（`shell` 引擎需 `E2E_SHELL=.../chrome-headless-shell`，仓库既有 EXEC_MAP 默认值少了末段路径）。

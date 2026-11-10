@@ -185,6 +185,7 @@ static int32_t ui_app_state_is_menu(int32_t state) {
         case STATE_MUSICBOX_MENU:
         case STATE_GOLDMINER: // 黄金矿工同样直接消费触屏流（返回虚拟按钮/点击放钩），抑制宫格软按键
         case STATE_TETRIS:   // 俄罗斯方块：虚拟按键/退出确认模态框直接消费触屏流，抑制宫格软按键
+        case STATE_WATER:    // 水池：屏幕底部自绘控件栏+拖动旋转/拖球直接消费触屏流，抑制宫格软按键
         case STATE_EBOOK_READING:  // 电子书阅读：触屏拖动滚动/页脚按钮/返回热点直接消费触屏流
         case STATE_README:         // 本机自述：文本框拖动滚动+返回热点直接消费触屏流
         case STATE_LLM_AFTER_INFER: // LLM 结果：文本框拖动滚动+返回热点直接消费触屏流
@@ -4259,14 +4260,14 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        // 按键处理（A返回 / D或2雨滴）；返回则释放全部内存并跳过一帧渲染
+        // 事件处理（屏幕控件/拖动/实体键盘）；返回则释放全部内存并跳过一帧渲染
         ui_water_event_handler(key_event, global_state);
         if (global_state->STATE != STATE_WATER) {
             ui_water_on_exit();
             break;
         }
 
-        // 模拟 + 渲染一帧（触摸落水在 render_frame 内完成）
+        // 模拟 + 渲染一帧（拖动交互在 render_frame 内完成）
         ui_water_render_frame(key_event, global_state);
 
         break;

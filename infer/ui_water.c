@@ -15,7 +15,12 @@
  *      焦散 pass ：水面网格沿折射光投影到池底，生成聚焦亮度 + 圆球挡光 + 池沿阴影
  *  - 相机（main.js）：perspective(45,…) + modelview（translate/rotate 组合），
  *                     拖动旋转视角；Raytracer 复刻（eye + 四角射线 + 逐像素射线）
- *  - 圆球物理（main.js）：重力、水中黏滞浮力、池底反弹；G 切换重力、空格暂停、L 定向光
+ *  - 圆球物理（main.js）：重力、水中黏滞浮力、池底反弹（原 G/空格/L 按键改为屏幕控件）
+ *
+ * 交互（全部触屏化，不响应十六宫格软按键）：
+ *  - 屏幕底部自绘控件栏：返回 / 暂停·继续 / 重力开关 / 定向光源；
+ *  - 拖动空白处旋转视角（无需按键），拖动圆球移动圆球；
+ *  - 实体键盘仅保留 ESC（返回）、ENTER（暂停）作为兜底。
  *
  * 天空/瓷砖按要求保留为“直接绘制”（程序化生成），不加载贴图。
  * 软渲染、float 全精度、无性能优先级——帧率低是刻意为之。
@@ -72,6 +77,20 @@
 // 圆球（main.js）
 #define WT_RADIUS          (0.25f)
 #define WT_GRAVITY         (-4.0f)
+
+// ---- 触屏控件（屏幕底部自绘控件栏，取代十六宫格软按键） ----
+#define WT_MODE_NONE       (-1)
+#define WT_MODE_ROTATE     (0)      // 拖动空白处：旋转视角
+#define WT_MODE_SPHERE     (1)      // 拖动圆球：移动圆球（main.js duringDrag 原语义）
+#define WT_MODE_BUTTON     (2)      // 按住控件：不产生拖动
+
+#define WT_BTN_BACK        (0)
+#define WT_BTN_PAUSE       (1)
+#define WT_BTN_GRAVITY     (2)
+#define WT_BTN_LIGHT       (3)
+#define WT_BTN_N           (4)
+#define WT_BTN_BAR_H       (34)     // 控件栏总高（px）
+#define WT_BTN_GAP         (4)      // 栏内边距与按钮间距（px）
 
 // ===============================================================================
 // 向量/矩阵（与 lightgl.js 一致：行主序、v'=M·v、transformPoint 含除法）
@@ -204,9 +223,11 @@ typedef struct {
     V3 center, oldCenter, velocity, gravity;
     float radius;
     int useSpherePhysics, paused;
-    int mode;                        // -1 无；0 旋转相机；1 拖动圆球
+    int mode;                        // WT_MODE_*：无 / 旋转相机 / 拖动圆球 / 按住控件
     V3 prevHit, planeNormal;
     int mouseDown, prevX, prevY;
+    int pressed_btn;                 // 当前按住的控件序号（-1 无），仅用于按下高亮
+    int view_dirty;                  // 暂停期间视角/圆球被拖动过：需重画场景
     float *water[2];                 // 每页：RGBA float = (h, v, n.x, n.z)
     int cur;
     float *caustR, *caustG;          // 焦散 C*C
@@ -998,20 +1019,95 @@ static void wt_update(float seconds) {
     wt_update_caustics();
 }
 
-// 拖动旋转视角开关：1=启用（按住除圆球外的区域拖动旋转相机），0=关闭（默认，
-// 视角仅由 2/4/6/8 键旋转）。圆球拖动移动不受本宏影响。
-#ifndef WT_ENABLE_DRAG_ROTATE
-    #define WT_ENABLE_DRAG_ROTATE (0)
-#endif
+// ===============================================================================
+// 屏幕控件（触屏按钮）：几何只由屏幕尺寸决定，绘制与命中判定共用 wt_button_rect，
+// 二者严格一致（范式同 ui_tetris.c 的虚拟按键）。
+// ===============================================================================
+static void wt_button_rect(int idx, int *bx, int *by, int *bw, int *bh) {
+    int W = s_wt.WW, H = s_wt.HH;
+    int n = (WT_BTN_N > 0) ? WT_BTN_N : 1;
+    int bw_ = (W - WT_BTN_GAP * (n + 1)) / n;
+    if (bw_ < 1) bw_ = 1;
+    int bh_ = WT_BTN_BAR_H - WT_BTN_GAP;
+    if (bh_ < 1) bh_ = 1;
+    *bx = WT_BTN_GAP + idx * (bw_ + WT_BTN_GAP);
+    *by = H - WT_BTN_BAR_H + WT_BTN_GAP / 2;
+    *bw = bw_;
+    *bh = bh_;
+}
 
-// 按键步进（2/4/6/8 一次旋转的角度，度）
-#define WT_ROTATE_STEP  (4.0f)
+// 命中测试：返回控件序号，未命中返回 -1
+static int wt_button_hit(int x, int y) {
+    if (s_wt.WW <= 0 || s_wt.HH <= 0) return -1;
+    for (int i = 0; i < WT_BTN_N; i++) {
+        int bx, by, bw, bh;
+        wt_button_rect(i, &bx, &by, &bw, &bh);
+        if (x >= bx && x < bx + bw && y >= by && y < by + bh) return i;
+    }
+    return -1;
+}
+
+// 定向光源：与原版 L 键一致（当前视角正对方向作为平行光）
+static void wt_light_follow_view(void) {
+    s_wt.lightDir = v3f(
+        cosf((90 - s_wt.angleY) * (float)M_PI / 180.0f) * cosf(-s_wt.angleX * (float)M_PI / 180.0f),
+        sinf(-s_wt.angleX * (float)M_PI / 180.0f),
+        sinf((90 - s_wt.angleY) * (float)M_PI / 180.0f) * cosf(-s_wt.angleX * (float)M_PI / 180.0f));
+}
+
+// 控件动作（返回除外——状态切换必须发生在松手沿，由事件处理器处理）
+static void wt_button_action(int idx) {
+    switch (idx) {
+        case WT_BTN_PAUSE:   s_wt.paused = !s_wt.paused; break;
+        case WT_BTN_GRAVITY: s_wt.useSpherePhysics = !s_wt.useSpherePhysics; break;
+        case WT_BTN_LIGHT:   wt_light_follow_view(); break;
+        default: break;
+    }
+}
+
+// 绘制控件栏（先于帧推屏，直接叠在渲染结果之上）
+static void wt_draw_ui(Nano_GFX *gfx) {
+    int W = s_wt.WW, H = s_wt.HH;
+    // 栏底板：半透明深色，保证任何水面/池壁底色下按钮都可辨
+    gfx_draw_rounded_rectangle(gfx, 0, H - WT_BTN_BAR_H, W, WT_BTN_BAR_H, 0, 0, 0, 0, 0, 0, 0, 110);
+    for (int i = 0; i < WT_BTN_N; i++) {
+        int bx, by, bw, bh;
+        wt_button_rect(i, &bx, &by, &bw, &bh);
+        const wchar_t *label = L"";
+        int active = 0;
+        switch (i) {
+            case WT_BTN_BACK:    label = L"返回"; break;
+            case WT_BTN_PAUSE:   label = s_wt.paused ? L"继续" : L"暂停"; active = s_wt.paused; break;
+            case WT_BTN_GRAVITY: label = s_wt.useSpherePhysics ? L"重力开" : L"重力关";
+                                 active = s_wt.useSpherePhysics; break;
+            case WT_BTN_LIGHT:   label = L"光源"; break;
+            default: break;
+        }
+        int pressed = (s_wt.pressed_btn == i);
+        uint8_t r = 34, g = 46, b = 62;
+        if (active) { r = 28; g = 104; b = 92; }
+        if (pressed) { r = 116; g = 172; b = 226; }
+        gfx_draw_rounded_rectangle(gfx, bx, by, bw, bh, 7, 7, 7, 7, r, g, b, pressed ? 240 : 200);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)label,
+            bx + bw / 2, by + bh / 2, 240, 246, 255, 1);
+    }
+}
 
 // ===============================================================================
 // 交互（main.js startDrag/duringDrag/stopDrag 直译；原“向水面落水”分支改为旋转相机）
 // ===============================================================================
 static void wt_start_drag(int x, int y) {
     s_wt.prevX = x; s_wt.prevY = y;
+    // 控件优先：按下点落在控件栏内则不进入拖动，松手沿结算控件动作
+    {
+        int btn = wt_button_hit(x, y);
+        if (btn >= 0) {
+            s_wt.mode = WT_MODE_BUTTON;
+            s_wt.pressed_btn = btn;
+            s_wt.mouseDown = 1;
+            return;
+        }
+    }
     V3 ray = wt_get_ray_for_pixel(x, y);
     // 圆球命中检测（hitTestSphere）
     V3 toSphere = v3s(s_wt.eye, s_wt.center);
@@ -1022,32 +1118,26 @@ static void wt_start_drag(int x, int y) {
     if (disc > 0) {
         float t = (-b - sqrtf(disc)) / (2.0f * a);
         if (t > 0) {
-            s_wt.mode = 1;
+            s_wt.mode = WT_MODE_SPHERE;
             s_wt.prevHit = v3a(s_wt.eye, v3k(ray, t));
             s_wt.planeNormal = v3n(wt_get_ray_for_pixel(s_wt.WW / 2, s_wt.HH / 2));
             s_wt.mouseDown = 1;
             return;
         }
     }
-#if WT_ENABLE_DRAG_ROTATE
-    s_wt.mode = 0;                              // 其余：拖动旋转相机
-#else
-    s_wt.mode = -1;                             // 未启用：非球区域拖动无操作
-#endif
+    s_wt.mode = WT_MODE_ROTATE;                 // 其余：拖动旋转相机（无需按键）
     s_wt.mouseDown = 1;
 }
 
 static void wt_during_drag(int x, int y) {
-#if WT_ENABLE_DRAG_ROTATE
-    if (s_wt.mode == 0) {
+    if (s_wt.mode == WT_MODE_ROTATE) {
+        // main.js duringDrag：视角随位移量线性旋转（1px ≈ 1°），俯仰限制 ±89.999°
         s_wt.angleY -= (float)(x - s_wt.prevX);
         s_wt.angleX -= (float)(y - s_wt.prevY);
         if (s_wt.angleX > 89.999f) s_wt.angleX = 89.999f;
         else if (s_wt.angleX < -89.999f) s_wt.angleX = -89.999f;
-    } else if (s_wt.mode == 1) {
-#else
-    if (s_wt.mode == 1) {
-#endif
+        s_wt.view_dirty = 1;
+    } else if (s_wt.mode == WT_MODE_SPHERE) {
         V3 ray = wt_get_ray_for_pixel(x, y);
         // 圆球在平行于视线的平面内移动：t = -(N·(eye-prevHit))/(N·ray)
         float denom = v3d(s_wt.planeNormal, ray);
@@ -1059,6 +1149,7 @@ static void wt_during_drag(int x, int y) {
             s_wt.center.y = v3clmp(s_wt.center.y, s_wt.radius - 1, 10);
             s_wt.center.z = v3clmp(s_wt.center.z, s_wt.radius - 1, 1 - s_wt.radius);
             s_wt.prevHit = nextHit;
+            s_wt.view_dirty = 1;
         }
     }
     s_wt.prevX = x; s_wt.prevY = y;
@@ -1114,8 +1205,10 @@ static int wt_alloc(int WW, int HH) {
     s_wt.radius   = WT_RADIUS;
     s_wt.useSpherePhysics = 1;
     s_wt.paused = 0;
-    s_wt.mode = -1;
+    s_wt.mode = WT_MODE_NONE;
     s_wt.mouseDown = 0;
+    s_wt.pressed_btn = -1;
+    s_wt.view_dirty = 0;
     s_wt.cur = 0;
     return 1;
 }
@@ -1138,40 +1231,32 @@ int32_t ui_water_init(Key_Event *key_event, Global_State *global_state) {
 }
 
 int32_t ui_water_event_handler(Key_Event *key_event, Global_State *global_state) {
-    (void)global_state;
-    // A键(十六宫格右上角)返回
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
-        global_state->STATE = STATE_GAME_MENU;
-        return 0;
+    // ---- 触屏控件：认松手沿（生产端高频检测+队列可靠投递，亚帧点按不湮灭），
+    //      命中判定用按下点坐标；松手点仍须落在同一控件内，否则视为拖出取消。
+    //      状态切换（返回）同样在松手沿发生，本次触摸序列不会泄漏到下一状态。
+    //      本状态已列入 ui_app_state_is_menu 抑制表，输入层不再为该触摸生成
+    //      十六宫格软按键——“触屏软按键”在本状态已整体退场。
+    if (key_event->touch_edge & TOUCH_EDGE_UP) {
+        int btn = wt_button_hit(key_event->touch_down_x, key_event->touch_down_y);
+        s_wt.pressed_btn = -1;
+        if (btn >= 0 && wt_button_hit(key_event->touch_x, key_event->touch_y) == btn) {
+            if (btn == WT_BTN_BACK) {
+                global_state->STATE = STATE_GAME_MENU;
+                return 0;
+            }
+            wt_button_action(btn);
+            s_wt.view_dirty = 1;   // 控件可能改变画面（光源/重力）：暂停时也要重画一次
+        }
     }
-    // D键(十六宫格右下角)：开始/暂停（短按）
-    if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
-        s_wt.paused = !s_wt.paused;
-        return 0;
-    }
-    // *键(十六宫格最左下角)：重力开关（短按）
-    if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_left) {
-        s_wt.useSpherePhysics = !s_wt.useSpherePhysics;
-        return 0;
-    }
-    // 0键(*键右边的相邻键)：定向光源（短按）
-    if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_0) {
-        s_wt.lightDir = v3f(cosf((90 - s_wt.angleY) * (float)M_PI / 180.0f) * cosf(-s_wt.angleX * (float)M_PI / 180.0f),
-                            sinf(-s_wt.angleX * (float)M_PI / 180.0f),
-                            sinf((90 - s_wt.angleY) * (float)M_PI / 180.0f) * cosf(-s_wt.angleX * (float)M_PI / 180.0f));
-        return 0;
-    }
-    // 2/4/6/8 键旋转视角（按住连转）
-    if (key_event->key_edge == -1 || key_event->key_edge == -2) {
-        if (key_event->key_code == NANO_KEY_8)       s_wt.angleX += WT_ROTATE_STEP;       // 上
-        else if (key_event->key_code == NANO_KEY_2)  s_wt.angleX -= WT_ROTATE_STEP;       // 下
-        else if (key_event->key_code == NANO_KEY_4)  s_wt.angleY += WT_ROTATE_STEP;       // 左
-        else if (key_event->key_code == NANO_KEY_6)  s_wt.angleY -= WT_ROTATE_STEP;       // 右
-        if (key_event->key_code == NANO_KEY_8 || key_event->key_code == NANO_KEY_2 ||
-            key_event->key_code == NANO_KEY_4 || key_event->key_code == NANO_KEY_6) {
-            if (s_wt.angleX > 89.999f) s_wt.angleX = 89.999f;
-            else if (s_wt.angleX < -89.999f) s_wt.angleX = -89.999f;
-            s_wt.prevX = s_wt.WW; s_wt.prevY = s_wt.HH;   // 丢弃可能残留的拖动起点
+
+    // ---- 实体键盘兜底（触屏派生的软按键一律不响应：is_soft_key == 0） ----
+    if (key_event->is_soft_key == 0) {
+        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
+            global_state->STATE = STATE_GAME_MENU;
+            return 0;
+        }
+        if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
+            s_wt.paused = !s_wt.paused;
             return 0;
         }
     }
@@ -1184,7 +1269,7 @@ int32_t ui_water_render_frame(Key_Event *key_event, Global_State *global_state) 
         gfx_soft_clear(gfx);
         gfx_font_draw_text(gfx, GFX_FONT_ALPHA_16, L"水池", 6, 2, 255, 255, 255, 1);
         gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"内存不足", 6, 100, 255, 80, 80, 1);
-        gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"A返回", 6, 220, 180, 180, 180, 1);
+        gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"返回", 6, 220, 180, 180, 180, 1);
         gfx_refresh(gfx);
         return -1;
     }
@@ -1201,7 +1286,8 @@ int32_t ui_water_render_frame(Key_Event *key_event, Global_State *global_state) 
     } else {
         if (s_wt.mouseDown) {
             s_wt.mouseDown = 0;                      // stopDrag：回到静止
-            s_wt.mode = -1;
+            s_wt.mode = WT_MODE_NONE;
+            s_wt.pressed_btn = -1;
         }
     }
 
@@ -1209,17 +1295,25 @@ int32_t ui_water_render_frame(Key_Event *key_event, Global_State *global_state) 
     uint64_t now = global_state->timestamp;
     float dt = (float)((now - s_wt.last_t) / 1000.0);
     s_wt.last_t = now;
-    if (s_wt.paused) return 0;                            // 暂停：画面冻结
 
-    // ---- 物理 + 仿真 + 渲染 ----
-    wt_update(dt);
-    wt_compose_camera();
-    wt_scene_render();
+    if (!s_wt.paused) {
+        // ---- 物理 + 仿真 + 渲染 ----
+        wt_update(dt);
+        wt_compose_camera();
+        wt_scene_render();
+        s_wt.view_dirty = 0;
+    } else if (s_wt.view_dirty) {
+        // 暂停：物理与仿真冻结，但仍允许拖动旋转视角/移动圆球（只重画，不推进状态）
+        wt_compose_camera();
+        wt_scene_render();
+        s_wt.view_dirty = 0;
+    }
 
     // ---- 拷贝到帧缓冲（仿真帧为 RGB565；单/双缓冲布局与色彩模式转换由图形层封装） ----
     gfx_blit_rgb565(gfx, s_wt.frame);
+    wt_draw_ui(gfx);
     gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"水池", 4, 2, 208, 232, 255, 1);
-    gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"A返回 D暂停 *重力 0光 2/4/6/8视角", 120, 2, 130, 130, 130, 1);
+    gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"拖动旋转视角·拖动圆球", 56, 2, 190, 205, 225, 1);
     gfx_refresh(gfx);
     return 0;
 }
