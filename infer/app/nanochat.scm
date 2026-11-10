@@ -54,7 +54,7 @@
 (define SW 320)
 (define SH 240)
 (define FONT_S 1)               ; 12px 抗锯齿
-(define LINE_H 12)              ; 正文字行距
+(define LINE_H 13)              ; 正文字行距（比 12px 字模多 1px，行间透气）
 
 (define HEAD_H 16)              ; 页眉
 (define CONV_Y 16)              ; 对话区上沿
@@ -258,7 +258,8 @@
             (wrap_push (get_item c_text i) 3 mu)
           }
           {
-            (push ln_text "Nano")
+            ;; 身份标题用**具体模型名**（如 Nano-56M），不是笼统的 "Nano"
+            (push ln_text model_name)
             (push ln_kind 2)
             (wrap_push (get_item c_text i) 4 mu)
           })
@@ -274,7 +275,7 @@
                 (push ln_kind 0)
               }
               #f)
-          (push ln_text "Nano")
+          (push ln_text model_name)
           (push ln_kind 2)
           (if (String.equals gen_text "")
               {
@@ -419,9 +420,11 @@
   (lambda (s kind x y)
     (cond ((== kind 1) (Gfx.draw_text s x y 110 170 250))
           ((== kind 2) (Gfx.draw_text s x y 110 226 160))
-          ((== kind 3) (Gfx.draw_text s x y 230 236 244))
-          ((== kind 0) #f)                       ; 空行（记录分隔）
-          (else        (Gfx.draw_text s x y 206 244 220)))))
+          ((== kind 3) (Gfx.draw_text s x y 230 236 244))   ; 用户正文
+          ((== kind 0) #f)                                  ; 空行（记录分隔）
+          ;; 助手正文：与用户正文同色（略偏蓝的亮灰，避免纯白对比度过高）；
+          ;; 「谁在说」由上方绿色/蓝色的身份标题区分，不靠正文颜色
+          (else        (Gfx.draw_text s x y 230 236 244)))))
 
 ;; 对话区滚动条：滑块长度 ∝ 可视行/总行，位置 ∝ 当前滚动；内容或滚动一变就重画
 ;; （draw_conv 每帧都按最新的 (line_num) 与 scroll 计算，因此随生成/滚动即时刷新）
@@ -1156,7 +1159,10 @@
     (define n (length c_text))
     (define s "")
     (while (< i n) {
-      (set! s (String.concat s (if (== (get_item c_role i) 1) "我: " "Nano: ")))
+      (set! s (String.concat s
+                (if (== (get_item c_role i) 1)
+                    "我: "
+                    (String.concat model_name ": "))))
       (set! s (String.concat s (get_item c_text i)))
       (set! s (String.concat s "\n"))
       (set! i (+ i 1))
