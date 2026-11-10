@@ -26,12 +26,18 @@
 #include "celestial_ocean.h"
 
 // ---- 设置界面档位表（单一真源：档位序号 → 显示名 + 物理量）----
+// 观察高度档位：海洋天空/实时海洋与体积云（sky_model==4）共用同一张表。
+// 云区 3.0~11.0 km，故 1000 m 仍在云下、4000 m 起进入低层云带、12000/20000 m 在云顶之上
+// （用于“观察者漂浮在云上”的俯视视角；是否在云上由 ui_cloud_lowest_layer_base_km 判定）。
 static const Linglong_Ocean_Option S_OCEAN_HEIGHT_OPTIONS[] = {
     { 0, L"5m",     5.0f },
     { 1, L"50m",   50.0f },
     { 2, L"200m",  200.0f },
     { 3, L"1000m", 1000.0f },
-    { 4, L"20000m", 20000.0f },
+    { 4, L"4000m", 4000.0f },
+    { 5, L"8000m", 8000.0f },
+    { 6, L"12000m", 12000.0f },
+    { 7, L"20000m", 20000.0f },
 };
 static const Linglong_Ocean_Option S_OCEAN_SWELL_HS_OPTIONS[] = {
     { 0, L"无",    0.0f },

@@ -78,9 +78,10 @@ typedef struct Linglong_Config {
     int32_t cloud_layer_mask;        // 云层种类掩码；bit0-低层 bit1-中层 bit2-高层（7=全部，0=无云）
     int32_t cloud_precision_level;   // 云精度档位 0-2（高/中/低：内部渲染降采样倍数 + ray-march 步距）
 
-    // 海洋参数（仅 sky_model==5 或 landscape_index==3 时有效；档位表见 celestial_ocean.h）
+    // 海洋/观察高度参数（观察高度对 sky_model==4/5 或 landscape_index==3 均有效；
+    // 档位表见 celestial_ocean.h）。体积云用它决定相机海拔（天空+云层 ray-march 同一来源）。
     // 其余海况（风/泡沫/浑浊度/霾/能见度）按需求固定为模块默认值，不开放给用户。
-    int32_t ocean_height_level;      // 观察高度档位 0-4（5m/50m/200m/1000m/20000m；默认 0=5m）
+    int32_t ocean_height_level;      // 观察高度档位 0-7（5m/50m/200m/1000m/4000m/8000m/12000m/20000m；默认 0=5m）
     int32_t ocean_swell_hs_level;    // 涌浪波高档位 0-5（无/0.5/1.0/1.8/2.5/3.5 m；默认 3=1.8m）
     int32_t ocean_swell_len_level;   // 涌浪波长档位 0-6（30/60/90/120/160/220/300 m；默认 3=120m）
 
@@ -153,8 +154,8 @@ void render_sky(Nano_GFX *gfx,
     int32_t cloud_coverage_level,    // 云量档位 0-5
     int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
     int32_t cloud_precision_level,   // 云精度档位 0-2（高/中/低）
-    // 海洋参数（仅 sky_model==5 或 landscape_index==3 时有效；档位表见 celestial_ocean.h）
-    int32_t ocean_height_level,      // 观察高度档位 0-4
+    // 海洋/观察高度参数（观察高度对 sky_model==4/5 或 landscape_index==3 均有效）
+    int32_t ocean_height_level,      // 观察高度档位 0-7（体积云也用它决定相机海拔）
     int32_t ocean_swell_hs_level,    // 涌浪波高档位 0-5
     int32_t ocean_swell_len_level    // 涌浪波长档位 0-6
 );

@@ -56,6 +56,16 @@ extern "C" {
 #define UI_CLOUD_LAYER_HIGH (4)
 #define UI_CLOUD_LAYER_ALL  (7)
 
+// 渲染遍：把“天空/大气”和“体积云”拆成两遍，云层才能在任意时机合成到帧缓冲上
+// （照搬 linglong.html 的解耦云层：sky_only + render_decoupled_volumetric_clouds）。
+//   0 = BOTH   天空+云一起算（历史行为，独立“体积云”演示 App 用）
+//   1 = SKY    只算大气天空（不透明，走 ui_cloud_flush）
+//   2 = CLOUDS 只算体积云，输出“预乘覆盖率的显示空间云色 + 云透射率 alpha”，
+//              由 ui_cloud_flush_over 叠加到当前帧缓冲（地景/天体之上或之下）
+#define UI_CLOUD_PASS_BOTH   (0)
+#define UI_CLOUD_PASS_SKY    (1)
+#define UI_CLOUD_PASS_CLOUDS (2)
+
 typedef struct UiCloud_Render_Params {
     // ---- 相机（ui_cloud 内部为 y-up 世界，X 东 / Y 上 / Z 南） ----
     float yaw_rad;          // 偏航（弧度）；yaw=0 朝南，+方向逆时针旋转
@@ -63,6 +73,8 @@ typedef struct UiCloud_Render_Params {
     float roll_rad;         // 滚转（弧度，绕视线轴；正值为顺时针，与天象仪 fisheye_project 约定一致）
     int   proj;             // 投影：0=透视  1=等距鱼眼（ui_cloud 内部约定）
     int   fov_deg;          // 当前投影的半视场角（度）
+    float cam_alt_km;       // 观察高度（km，地面以上；<=0 用内部默认 2.0 km）
+    int   pass;             // UI_CLOUD_PASS_*（0 = BOTH，见上）
     // ---- 时间（驱动云飘移动画，秒） ----
     float app_time_sec;
     // ---- 光源（指向太阳的单位向量，y-up 世界坐标）+ 颜色/强度 ----
@@ -100,10 +112,20 @@ void ui_cloud_sun_color(float elev_deg, float *r, float *g, float *b, float *int
 float ui_cloud_brightness_for_sun_alt(float elev_deg);
 
 // 将 UiCloud_Render_Params 应用到内部场景并渲染一帧（结果在 ui_cloud 内部缓冲，
-// 需调用 ui_cloud_flush 输出到显存；若调用方还要在其上叠加绘制，先 flush 再画）
+// 需调用 ui_cloud_flush / ui_cloud_flush_over 输出到显存；若调用方还要在其上叠加
+// 绘制，先 flush 再画）
 void ui_cloud_render_core(Nano_GFX *gfx, const UiCloud_Render_Params *p);
 // 将最近一帧的渲染结果拷贝到 gfx 的帧缓冲（RGB888 整屏 / 其它色彩模式逐像素回退）
+// —— 用于 PASS_SKY / PASS_BOTH（不透明）。
 void ui_cloud_flush(Nano_GFX *gfx);
+// 将最近一帧 PASS_CLOUDS 的结果按标准 alpha 合成叠加到 gfx 当前帧缓冲：
+//   dst = dst·T + premul_rgb     （T = 云透射率，premul_rgb = 云色·(1−T)）
+// 天空、天体、地景都可以先在帧缓冲里，再调用本函数让云遮住它们（云上俯视），
+// 也可以先调用本函数再画地景（地面视角，近景遮远云）。
+void ui_cloud_flush_over(Nano_GFX *gfx);
+// 当前启用云层里最低的云底（km，地面以上）；无云（掩码 0）或尚未初始化时返回 -1。
+// 用于决定“云比地景近还是远”：观察高度 >= 该值时云在脚下，必须先画地景再合成云。
+float ui_cloud_lowest_layer_base_km(void);
 
 int32_t ui_cloud_init(Key_Event *key_event, Global_State *global_state);
 int32_t ui_cloud_event_handler(Key_Event *key_event, Global_State *global_state);

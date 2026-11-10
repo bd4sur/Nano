@@ -2943,12 +2943,18 @@ void render_sky(Nano_GFX *gfx,
     float atmo_g = 0;
     float atmo_b = 0;
 
+    // 体积云：天空与云拆成两遍渲染（见 ui_cloud.h 的 UI_CLOUD_PASS_* / linglong.html 的
+    // “sky_only + 解耦云层”）。本帧参数在天空遍填好，云遍复用；cloud_pass_valid 仅模型 4 置 1。
+    UiCloud_Render_Params cp;
+    memset(&cp, 0, sizeof(cp));
+    int32_t cloud_pass_valid = 0;
+    int32_t clouds_nearer_ground = 0;
+    float cloud_cam_alt_km = 0.0f;
+
     if (sky_model == 4) {
         // 体积云+大气渲染（ui_cloud.c 的 flower port）作为天空背景，光源/相机/坐标出自天象仪。
         // 太阳镜头光晕在云内核中关闭（天象仪自己绘制太阳与星芒），太阳/月亮/恒星/坐标圈/地景
-        // 仍由 render_sky 后续步骤叠加绘制。
-        UiCloud_Render_Params cp;
-        memset(&cp, 0, sizeof(cp));
+        // 仍由 render_sky 后续步骤叠加绘制。云层本身在天空遍之后单独合成（见下文顺序说明）。
 
         // 相机姿态：地平天球（方位角自北、仰角；roll 绕视线轴）
         // → 云渲染 y-up 世界（x东 y上 z南）：yaw=180°-azi, pitch=alt, roll=view_roll
@@ -3012,8 +3018,33 @@ void render_sky(Nano_GFX *gfx,
         }
         cp.enable_sun_lens = 0; // 天象仪绘制太阳
 
+        // 观察高度：与「海洋天空 / 实时海洋」共用同一档位表（celestial_ocean.c 的
+        // S_OCEAN_HEIGHT_OPTIONS：5 m / 50 / 200 / 1000 / 4000 / 8000 / 12000 / 20000）。
+        // 相机海拔同时进入天空积分与云层 ray-march：天空的视角高度、云的透视/相对高度
+        // 都由它决定（对应 linglong.html 的 cloud_sky_sync_camera + WO_CAM_Y）。
+        {
+            int32_t hn = 0;
+            const Linglong_Ocean_Option *ho = linglong_ocean_height_options(&hn);
+            if (ho != NULL && ocean_height_level >= 0 && ocean_height_level < hn) {
+                cloud_cam_alt_km = ho[ocean_height_level].value / 1000.0f;
+            }
+            cp.cam_alt_km = cloud_cam_alt_km;
+        }
+        cp.pass = UI_CLOUD_PASS_SKY;
+
         ui_cloud_render_core(gfx, &cp);
-        ui_cloud_flush(gfx);
+        ui_cloud_flush(gfx);   // 不透明天空底
+
+        // 云与地景的遮挡顺序（照搬 linglong.html render_all 的规则）：
+        //   观察者 >= 当前最低云底（3.0/6.2/9.4 km）→ 云比脚下的地景近，必须“地景先、云后”；
+        //   否则视野里所有云都在头顶 → “云先、地景后”，近处山/海自然遮住远处地平线上的云。
+        // 无云（掩码 0）时 ui_cloud_lowest_layer_base_km 返回 -1，云遍整体跳过。
+        {
+            float base_km = ui_cloud_lowest_layer_base_km();
+            // 云量为 0（“晴空”档）时云遍没有可画的东西，直接跳过（省一次全屏 ray-march）
+            cloud_pass_valid = (base_km >= 0.0f) && (cp.coverage > 0.001f);
+            clouds_nearer_ground = cloud_pass_valid && (cloud_cam_alt_km >= base_km);
+        }
     }
     else if (sky_model > 0) {
 
@@ -3291,6 +3322,17 @@ void render_sky(Nano_GFX *gfx,
     }
 
 
+    // 云层与地景的合成顺序（linglong.html render_all 的同款规则）：
+    //   · 观察者在云下：云先合成（叠在天空/天体上），随后地景覆盖地平线以下 —— 近景遮远云；
+    //   · 观察者在云上：地景先画，云最后合成（云海盖住脚下的地面/海面）。
+    // 云遍输出预乘云色 + 透射率，由 ui_cloud_flush_over 做标准 alpha 合成，
+    // 云隙处保留底层（地景/天空），云层处正确遮挡太阳/月/星与地面。
+    if (cloud_pass_valid && !clouds_nearer_ground) {
+        cp.pass = UI_CLOUD_PASS_CLOUDS;
+        ui_cloud_render_core(gfx, &cp);
+        ui_cloud_flush_over(gfx);
+    }
+
     // 绘制地景（天空投影圆盘之外的部分）
     float fov = 1.1f;
     float view_height = 1.0f;
@@ -3334,6 +3376,12 @@ void render_sky(Nano_GFX *gfx,
             view_height, sun_alt, landscape_index, enable_atmosphere_scattering, (uint8_t)atmo_r, (uint8_t)atmo_g, (uint8_t)atmo_b);
     }
 
+    // 观察者在云层上方：地景已经画完，云最后合成，才能看到“脚下的云海”
+    if (cloud_pass_valid && clouds_nearer_ground) {
+        cp.pass = UI_CLOUD_PASS_CLOUDS;
+        ui_cloud_render_core(gfx, &cp);
+        ui_cloud_flush_over(gfx);
+    }
 
 
     // 绘制地平坐标网格

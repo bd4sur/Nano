@@ -1694,9 +1694,12 @@ static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLin
     }
 
     // 第 3 行第 2~4 格：海洋参数（观察高度 / 涌浪波高 / 涌浪波长）。
-    // 只在 sky_model==5 或 landscape_index==3 时影响画面；其它档位现值画灰但可预调。
+    // 观察高度对 sky_model==4（体积云相机海拔）/5 或 landscape_index==3 都有效；
+    // 涌浪波高/波长只对海洋有效。不影响的档位现值画灰但可预调。
     {
-        const int32_t ocean_active = (cfg->sky_model == 5 || cfg->landscape_index == 3);
+        const int32_t height_active = (cfg->sky_model == 4 || cfg->sky_model == 5 ||
+                                       cfg->landscape_index == 3);
+        const int32_t ocean_active  = (cfg->sky_model == 5 || cfg->landscape_index == 3);
         int32_t n = 0;
         const Linglong_Ocean_Option *opt;
         struct { int32_t cell; int32_t level; const Linglong_Ocean_Option *(*get)(int32_t *); } m[3] = {
@@ -1712,7 +1715,7 @@ static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLin
             if (lv < 0 || lv >= n) lv = 0;
             cells[m[i].cell].label = labels[i];
             cells[m[i].cell].value = opt[lv].name;
-            if (ocean_active) {
+            if ((m[i].cell == 11) ? height_active : ocean_active) {
                 cells[m[i].cell].value_r = 0; cells[m[i].cell].value_g = 200; cells[m[i].cell].value_b = 255;
             }
             else {

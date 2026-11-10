@@ -495,7 +495,9 @@ static void cloud_default_scene(CloudScene *s) {
     s->cloudDensity         = 1.0f;
     s->cloudShadingSunLightScale = 1.3f; // 太阳光对云的直射增强（默认 1.0，观感更亮）
     s->cloudFogFade         = 1.0f;
-    s->cloudMaxTraceingDistance     = 100.0f;
+    // 远场裁剪：与 linglong.html 的 CLOUD_SKY_MAX_TRACE_KM=150 对齐（原 100 km）。
+    // 云上俯视时云层延伸到地平线附近，100 km 会在约 5° 俯角处切出一条硬边。
+    s->cloudMaxTraceingDistance     = 150.0f;
     s->cloudTracingStartMaxDistance = 350.0f;
     s->cloudDirection = v3norm(v3(0.8f, 0.0f, 0.4f));
     s->cloudSpeed = 0.05f;
@@ -1328,7 +1330,9 @@ static CloudPixel cloudPixelCompute(Cv3 worldPos, Cv3 worldDir, float appTime, f
         float sh = v3len(sp);
         Cv3 upv = v3div(sp, sh);
         float cosz = v3dot(sunDirection, upv);
-        Cv2 uu = lutTransmittanceParamsToUv(s, viewHeight, cosz);
+        // 用样本点半径 sh（原为相机半径 viewHeight）：高空观察时相机在云层上方数公里，
+        // 用相机半径会显著高估太阳透射率，云海发白。透射率只取决于样本点到太阳的路径。
+        Cv2 uu = lutTransmittanceParamsToUv(s, sh, cosz);
         atmosphereTransmittance0 = sampleLut2D(s_transLut, TRANS_LUT_W, TRANS_LUT_H, uu.x, uu.y);
     }
     {
@@ -1336,7 +1340,7 @@ static CloudPixel cloudPixelCompute(Cv3 worldPos, Cv3 worldDir, float appTime, f
         float sh = v3len(sp);
         Cv3 upv = v3div(sp, sh);
         float cosz = v3dot(sunDirection, upv);
-        Cv2 uu = lutTransmittanceParamsToUv(s, viewHeight, cosz);
+        Cv2 uu = lutTransmittanceParamsToUv(s, sh, cosz);   // 同上：样本点半径
         atmosphereTransmittance1 = sampleLut2D(s_transLut, TRANS_LUT_W, TRANS_LUT_H, uu.x, uu.y);
     }
 
@@ -1804,16 +1808,39 @@ static void cloud_ensure_luts(void) {
 // “不够蓝”的主因之一；白色云天饱和度为 0，不受影响）。经宿主机仿真标定。
 #define CLOUD_SATURATION_BOOST (1.25f)
 
-// 色调映射 → 8bit 行缓冲
-static void cloud_write_pixel(int32_t x, Cv3 hdr, uint8_t *rgb_line) {
+// 色调映射 → 显示空间 RGB（0..1）：ACES + 饱和度提升 + sRGB 伽马
+static Cv3 cloud_tonemap(Cv3 hdr) {
     Cv3 t = cloudAcesFilm(hdr);
     // 饱和度提升（亮度保持，仅拉伸色度）
     float lum = 0.2126f * t.x + 0.7152f * t.y + 0.0722f * t.z;
     t = v3clamp(v3add(v3(lum, lum, lum), v3mul(v3sub(t, v3(lum, lum, lum)), CLOUD_SATURATION_BOOST)), 0.0f, 1.0f);
     t = v3(powf(t.x, 1.0f/2.2f), powf(t.y, 1.0f/2.2f), powf(t.z, 1.0f/2.2f)); // sRGB 伽马
-    rgb_line[x * 3 + 0] = (uint8_t)(clampf(t.x, 0.0f, 1.0f) * 255.0f + 0.5f);
-    rgb_line[x * 3 + 1] = (uint8_t)(clampf(t.y, 0.0f, 1.0f) * 255.0f + 0.5f);
-    rgb_line[x * 3 + 2] = (uint8_t)(clampf(t.z, 0.0f, 1.0f) * 255.0f + 0.5f);
+    return v3clamp(t, 0.0f, 1.0f);
+}
+
+// 不透明像素写出（PASS_SKY / PASS_BOTH）
+static void cloud_write_pixel(int32_t x, Cv3 hdr, uint8_t *rgb_line) {
+    Cv3 t = cloud_tonemap(hdr);
+    rgb_line[x * 3 + 0] = (uint8_t)(t.x * 255.0f + 0.5f);
+    rgb_line[x * 3 + 1] = (uint8_t)(t.y * 255.0f + 0.5f);
+    rgb_line[x * 3 + 2] = (uint8_t)(t.z * 255.0f + 0.5f);
+}
+
+// 云层像素写出（PASS_CLOUDS）：照搬 linglong.html render_decoupled_volumetric_clouds——
+//   ① 先把累积内散射还原成“完全覆盖时的云色”（除以覆盖率），单独做一次 ACES；
+//   ② 再乘回覆盖率，得到预乘前景色 rgb；alpha 存云透射率 T；
+//   ③ 合成时 dst = dst·T + rgb，即标准 alpha 合成，两层只在 0..1 显示空间内混合，
+//      不会因“各自色调映射后相加”而过曝，云边缘也不会出现暗边。
+static void cloud_write_pixel_premul(int32_t x, Cv3 cloudHDR, float transmittance,
+                                     uint8_t *rgb_line, uint8_t *a_line) {
+    float T = clampf(transmittance, 0.0f, 1.0f);
+    float cov = 1.0f - T;
+    Cv3 d = v3(0, 0, 0);
+    if (cov > 1e-3f) d = cloud_tonemap(v3mul(cloudHDR, 1.0f / cov));
+    rgb_line[x * 3 + 0] = (uint8_t)(clampf(d.x * cov, 0.0f, 1.0f) * 255.0f + 0.5f);
+    rgb_line[x * 3 + 1] = (uint8_t)(clampf(d.y * cov, 0.0f, 1.0f) * 255.0f + 0.5f);
+    rgb_line[x * 3 + 2] = (uint8_t)(clampf(d.z * cov, 0.0f, 1.0f) * 255.0f + 0.5f);
+    a_line[x] = (uint8_t)(T * 255.0f + 0.5f);
 }
 
 int32_t ui_cloud_init(Key_Event *key_event, Global_State *global_state) {
@@ -1935,24 +1962,45 @@ int32_t ui_cloud_event_handler(Key_Event *key_event, Global_State *global_state)
 }
 
 // 内部渲染缓冲（可降采样，动态分配）+ 全屏输出缓冲
+// 另有一份“云透射率”平面（每像素 1 字节），仅 PASS_CLOUDS 需要：与预乘云色一起
+// 双线性放大，供 ui_cloud_flush_over 做 dst = dst·T + premul_rgb 的 alpha 合成。
+// 独立“体积云”演示 App 走 PASS_BOTH，不会申请这块内存。
 static uint8_t *s_scene_img = NULL;
 static size_t  s_scene_img_bytes = 0;
 static uint8_t *s_fb = NULL;      // 全屏（整机帧缓冲尺寸）
 static size_t  s_fb_bytes = 0;
+static uint8_t *s_scene_a = NULL; // 低分辨率云透射率（iw*ih）
+static size_t  s_scene_a_bytes = 0;
+static uint8_t *s_fb_a = NULL;    // 全屏云透射率（fw*fh）
+static size_t  s_fb_a_bytes = 0;
 static int s_out_fw = 0, s_out_fh = 0; // 最近一帧的全屏尺寸（供 flush 使用）
 
-static void cloud_ensure_buffers(int iw, int ih, int fw, int fh) {
+static void cloud_ensure_buffers(int iw, int ih, int fw, int fh, int need_alpha) {
     size_t scene_need = (size_t)iw * ih * 3;
     if (scene_need > s_scene_img_bytes) {
         if (s_scene_img) free(s_scene_img);
         s_scene_img = (uint8_t *)malloc(scene_need);
-        s_scene_img_bytes = scene_need;
+        s_scene_img_bytes = s_scene_img ? scene_need : 0;
     }
     size_t fb_need = (size_t)fw * fh * 3;
     if (fb_need > s_fb_bytes) {
         if (s_fb) free(s_fb);
         s_fb = (uint8_t *)malloc(fb_need);
-        s_fb_bytes = fb_need;
+        s_fb_bytes = s_fb ? fb_need : 0;
+    }
+    if (need_alpha) {
+        size_t sa_need = (size_t)iw * ih;
+        if (sa_need > s_scene_a_bytes) {
+            if (s_scene_a) free(s_scene_a);
+            s_scene_a = (uint8_t *)malloc(sa_need);
+            s_scene_a_bytes = s_scene_a ? sa_need : 0;
+        }
+        size_t fa_need = (size_t)fw * fh;
+        if (fa_need > s_fb_a_bytes) {
+            if (s_fb_a) free(s_fb_a);
+            s_fb_a = (uint8_t *)malloc(fa_need);
+            s_fb_a_bytes = s_fb_a ? fa_need : 0;
+        }
     }
 }
 
@@ -1986,8 +2034,9 @@ static void cloud_stamp_text(Nano_GFX *gfx, uint8_t *img, int Wimg, int Himg,
     }
 }
 
-// 双线性放大 s_scene_img(iw,ih) → s_fb(fw,fh)
-static void cloud_upscale(int iw, int ih, int fw, int fh) {
+// 双线性放大 s_scene_img/s_scene_a(iw,ih) → s_fb/s_fb_a(fw,fh)
+// RGB 与透射率用同一套中心对齐权重（预乘色对覆盖率是线性的，可一起插值）。
+static void cloud_upscale(int iw, int ih, int fw, int fh, int with_alpha) {
     const uint8_t *s = s_scene_img;
     uint8_t *d = s_fb;
     for (int Y = 0; Y < fh; Y++) {
@@ -1995,29 +2044,46 @@ static void cloud_upscale(int iw, int ih, int fw, int fh) {
         int y0 = (int)floorf(sy);
         y0 = (y0 < 0) ? 0 : (y0 > ih - 2 ? ih - 2 : y0);
         float fy = sy - (float)y0;
+        // 边缘钳制（与 linglong.html 的 v=0/1 处理一致）：y0 被钳到 [0, ih-2] 后，
+        // 首/末行的 sy-y0 会超出 [0,1]（如末行 1.25、首行 -0.25），直接当权重会
+        // 外推采样值 → 画面最外一行偏黑/偏亮，云遍带抖动的预乘色还会逐帧闪。
         if (fy < 0.0f) fy = 0.0f;
+        else if (fy > 1.0f) fy = 1.0f;
         const uint8_t *row0 = s + ((size_t)y0 * iw) * 3;
         const uint8_t *row1 = row0 + (size_t)iw * 3;
         uint8_t *out = d + ((size_t)Y * fw) * 3;
+        const uint8_t *a0 = with_alpha ? (s_scene_a + (size_t)y0 * iw) : NULL;
+        const uint8_t *a1 = with_alpha ? (a0 + iw) : NULL;
+        uint8_t *aout = with_alpha ? (s_fb_a + (size_t)Y * fw) : NULL;
         for (int X = 0; X < fw; X++) {
             float sx = ((float)X + 0.5f) * (float)iw / (float)fw - 0.5f;
             int x0 = (int)floorf(sx);
             x0 = (x0 < 0) ? 0 : (x0 > iw - 2 ? iw - 2 : x0);
             float fx = sx - (float)x0;
             if (fx < 0.0f) fx = 0.0f;
+            else if (fx > 1.0f) fx = 1.0f;   // 同上：首/末列不外推
             int a = x0 * 3, b2 = (x0 + 1) * 3;
             for (int c = 0; c < 3; c++) {
                 float p0 = mixf(row0[a + c], row0[b2 + c], fx);
                 float p1 = mixf(row1[a + c], row1[b2 + c], fx);
                 out[c] = (uint8_t)(mixf(p0, p1, fy) + 0.5f);
             }
+            if (with_alpha) {
+                float q0 = mixf(a0[x0], a0[x0 + 1], fx);
+                float q1 = mixf(a1[x0], a1[x0 + 1], fx);
+                aout[X] = (uint8_t)(mixf(q0, q1, fy) + 0.5f);
+            }
             out += 3;
         }
     }
 }
 
-static void cloud_setup_camera(float roll_rad, Cv3 *camPos, Cv3 *forward, Cv3 *right, Cv3 *camUp) {
-    *camPos = v3(0, s_scene.bottomRadius + 2.0f, 0); // 地面 2km
+static void cloud_setup_camera(float roll_rad, float cam_alt_km, Cv3 *camPos, Cv3 *forward, Cv3 *right, Cv3 *camUp) {
+    // 观察高度（km，地面以上）：与 linglong.html 的 cloud_sky_sync_camera 同源。
+    // 未传（<=0）时保持历史默认 2 km（独立“体积云”演示 App 的取景高度）。
+    if (!(cam_alt_km > 0.0f)) cam_alt_km = 2.0f;
+    if (cam_alt_km > 100.0f) cam_alt_km = 100.0f; // 大气顶 60 km，留余量
+    *camPos = v3(0, s_scene.bottomRadius + cam_alt_km, 0);
     *forward = v3norm(v3(cosf(s_ui.pitch) * sinf(s_ui.yaw), sinf(s_ui.pitch),
                          cosf(s_ui.pitch) * cosf(s_ui.yaw)));
     Cv3 worldUp = v3(0, 1, 0);
@@ -2045,6 +2111,8 @@ static void cloud_setup_camera(float roll_rad, Cv3 *camPos, Cv3 *forward, Cv3 *r
 // ---------------------------------------------------------------------------
 static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     const int FW = (int)gfx->width, FH = (int)gfx->height;
+    int pass = p->pass;
+    if (pass < UI_CLOUD_PASS_BOTH || pass > UI_CLOUD_PASS_CLOUDS) pass = UI_CLOUD_PASS_BOTH;
 
     // 内部渲染分辨率 = 屏幕 / cloudRenderScale（上限 CLOUD_MAX_*）。
     // 倍数 2（默认）→ 160x120：ray-march 的逐像素成本是线性量，像素数÷4 即约 4× 提速；
@@ -2057,9 +2125,12 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     if (W > CLOUD_MAX_W) W = CLOUD_MAX_W;
     if (H < 8) H = 8;
     if (H > CLOUD_MAX_H) H = CLOUD_MAX_H;
-    cloud_ensure_buffers(W, H, FW, FH);
+    cloud_ensure_buffers(W, H, FW, FH, pass == UI_CLOUD_PASS_CLOUDS);
     s_out_fw = FW;
     s_out_fh = FH;
+    // 缓冲不可用（内存不足）：跳过本帧（PASS_CLOUDS 时调用方只会得到“没有云”）
+    if (s_scene_img == NULL || s_fb == NULL) return;
+    if (pass == UI_CLOUD_PASS_CLOUDS && (s_scene_a == NULL || s_fb_a == NULL)) return;
 
     // 防御：LUT 未就绪（PSRAM 申请失败）时跳过本帧渲染（调用方负责退出状态）
     if (!s_transLut || !s_msLut) return;
@@ -2067,7 +2138,7 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     cloud_ensure_luts();
 
     Cv3 camPos, forward, right, camUp;
-    cloud_setup_camera(p->roll_rad, &camPos, &forward, &right, &camUp);
+    cloud_setup_camera(p->roll_rad, p->cam_alt_km, &camPos, &forward, &right, &camUp);
 
     // 地面上涌光：天顶方向的天空亮度（除地面回弹的纯大气散射），加权漫反射等效
     {
@@ -2120,9 +2191,12 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     }
 
     // 半分辨率逐像素 ray-march 渲染
+    // PASS_SKY：只积分大气；PASS_CLOUDS：只 ray-march 云（输出预乘色 + 透射率）；
+    // PASS_BOTH：两者一次算完（历史行为）。
     #pragma omp parallel for schedule(static) if (H >= 8)
     for (int y = 0; y < H; y++) {
         uint8_t rowbuf[CLOUD_MAX_W * 3];
+        uint8_t rowa[CLOUD_MAX_W];
         float vv = 1.0f - ((float)y + 0.5f) / (float)H * 2.0f; // 上正
         for (int x = 0; x < W; x++) {
             float uu = ((float)x + 0.5f) / (float)W * 2.0f - 1.0f; // 左负右正
@@ -2143,9 +2217,23 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
             }
             rayDir = v3norm(rayDir);
 
-            // 天空
-            SingleScatteringResult sky = integrateScatteredLuminance(camPos, rayDir, s_scene.sunDirection,
-                &s_scene, 1, 1, 0, 1, 9e6f, 14, 0);
+            if (pass == UI_CLOUD_PASS_SKY) {
+                // 只算天空（供解耦云层的底层；天体/地景随后叠加）。
+                // 视线仰角钳到地平线以上 ε（同 linglong.html 的 wo_sky_atmo：dy<0.0005 → 0.0005）：
+                // 内部 160x120 的“地平线行”在 ±0.43°，天顶/地平视角时上采样会按 50/50 把
+                // 地平线下一行（地面回弹项，低空时暗红）混进地平线像素，形成一条绕地平线的
+                // 暗带。钳到 +ε 后该行取“地平线天空”，与其它散射模型一致；真正的地平线以下
+                // 区域仍由地景（海洋/黑色）覆盖。
+                Cv3 skyDir = rayDir;
+                if (skyDir.y < 0.0005f) {
+                    skyDir.y = 0.0005f;
+                    skyDir = v3norm(skyDir);
+                }
+                SingleScatteringResult sky = integrateScatteredLuminance(camPos, skyDir, s_scene.sunDirection,
+                    &s_scene, 1, 1, 0, 1, 9e6f, 14, 0);
+                cloud_write_pixel(x, sky.scatteredLight, rowbuf);
+                continue;
+            }
 
             // per-pixel 时空去相关抖动（linglong.html 模型5改进回移，替代 IGN+线性帧偏移）：
             // 原实现每帧对整个 IGN 图案施加全局平移，平移量超过一个空间周期时发生时间
@@ -2158,7 +2246,16 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
             // 云
             CloudPixel cloud = cloudPixelCompute(camPos, rayDir, p->app_time_sec, jitter, &s_scene);
 
-            // 合成：天空透过后方云层 + 云本身散射
+            if (pass == UI_CLOUD_PASS_CLOUDS) {
+                // 解耦云层：输出预乘覆盖率的显示空间云色 + 透射率 alpha
+                // （镜头光晕不在此处：天象仪自己画太阳/星芒；独立 App 走 PASS_BOTH）
+                cloud_write_pixel_premul(x, cloud.color, cloud.transmittance, rowbuf, rowa);
+                continue;
+            }
+
+            // PASS_BOTH：天空透过后方云层 + 云本身散射，再统一色调映射（历史行为）
+            SingleScatteringResult sky = integrateScatteredLuminance(camPos, rayDir, s_scene.sunDirection,
+                &s_scene, 1, 1, 0, 1, 9e6f, 14, 0);
             // 亮度已由介质光学参数（albedo/辐照/多重散射/环境）在着色阶段体现，不再后乘
             Cv3 final = v3add(v3mul(sky.scatteredLight, cloud.transmittance), cloud.color);
 
@@ -2171,10 +2268,11 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
             cloud_write_pixel(x, final, rowbuf);
         }
         memcpy(&s_scene_img[((size_t)y * W) * 3], rowbuf, W * 3);
+        if (pass == UI_CLOUD_PASS_CLOUDS) memcpy(&s_scene_a[(size_t)y * W], rowa, W);
     }
 
     // 放大到整屏
-    cloud_upscale(W, H, FW, FH);
+    cloud_upscale(W, H, FW, FH, pass == UI_CLOUD_PASS_CLOUDS);
 }
 
 // 将外部参数应用到内部场景（光源/相机/云参数），并执行一次核心渲染。
@@ -2222,16 +2320,32 @@ void ui_cloud_render_core(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
 
     // 相机与投影（天象仪视角 → 云渲染 yaw/pitch/roll；独立应用直接传入自身状态）
     s_ui.yaw = p->yaw_rad;
-    s_ui.pitch = clampf(p->pitch_rad, -85.0f * kPI / 180.0f, 85.0f * kPI / 180.0f);
+    // 俯仰上限必须与天象仪 fisheye 的“天顶数值稳定角”（89.99°）对齐：原 ±85° 会让
+    // 云/大气图像整体低 5°，天顶视角时画面底部 5° 露出云渲染器的地平线下地面项——
+    // 即“画面下方固定宽度的暗带”。89.9° 时 cross(forward,worldUp) 仍非退化（≠0），
+    // 屏幕基向量与 fisheye_unproject 一致；0.09° 残差 ≈ 0.1 像素。
+    s_ui.pitch = clampf(p->pitch_rad, -89.9f * kPI / 180.0f, 89.9f * kPI / 180.0f);
     s_ui.roll = p->roll_rad;
     s_ui.proj = (p->proj == CLOUD_PROJ_FISHEYE) ? CLOUD_PROJ_FISHEYE : CLOUD_PROJ_PERSP;
     s_ui.fov_cur = p->fov_deg;
     if (s_ui.fov_cur < 1) s_ui.fov_cur = 1;
     if (s_ui.fov_cur > 170) s_ui.fov_cur = 170;
     s_ui.app_time = p->app_time_sec;
-    s_ui.frame_index++;
+    // 解耦后一帧会调用两次（PASS_SKY + PASS_CLOUDS）：帧号只在“算云”的那一遍推进，
+    // 保证抖动/动画序列每帧只前进一步。
+    if (p->pass != UI_CLOUD_PASS_SKY) s_ui.frame_index++;
 
     cloud_core_render(gfx, p);
+}
+
+// 当前启用云层里最低的云底（km，地面以上）。云区 3.0~11.0 km，按层带裁剪后
+// 低层底 = 3.0 km、中层底 = 6.2 km、高层底 = 9.4 km（见 cloud_layer_band）。
+// 无云层或场景尚未初始化时返回 -1。
+float ui_cloud_lowest_layer_base_km(void) {
+    if (s_scene.bottomRadius < 1.0f) return -1.0f;
+    float h0 = 0.0f, h1 = 1.0f;
+    if (!cloud_layer_band(&h0, &h1)) return -1.0f;
+    return s_scene.cloudAreaStartHeight + h0 * s_scene.cloudAreaThickness - s_scene.bottomRadius;
 }
 
 // 将最近一帧的内部渲染结果输出到 gfx 显存（整屏，按 gfx->width stride）。
@@ -2269,6 +2383,52 @@ void ui_cloud_flush(Nano_GFX *gfx) {
                 int32_t i = (y * FW + x) * 3;
                 gfx_set_pixel(gfx, (uint32_t)x, (uint32_t)y, s_fb[i], s_fb[i + 1], s_fb[i + 2]);
             }
+        }
+    }
+}
+
+// 将最近一帧 PASS_CLOUDS 的结果按标准 alpha 合成叠加到当前帧缓冲：
+//   dst = dst·T + premul_rgb
+// T 为云透射率（0=完全不透明云，255=无云），premul_rgb 为云色×(1−T)。
+// 照搬 linglong.html render_decoupled_volumetric_clouds 的显示空间合成：
+// 两层各自完成色调映射后只在 0..1 内混合，不会过曝；云隙处 T≈255 保留底层（地景/天空）。
+void ui_cloud_flush_over(Nano_GFX *gfx) {
+    const int FW = s_out_fw, FH = s_out_fh;
+    if (s_fb == NULL || s_fb_a == NULL || FW <= 0 || FH <= 0) return;
+    const int W = (int)gfx->width, H = (int)gfx->height;
+    if (gfx->color_mode == GFX_COLOR_MODE_RGB888 && gfx->frame_buffer_rgb888 != NULL) {
+        uint8_t *fb = gfx->frame_buffer_rgb888;
+        for (int32_t y = 0; y < FH && y < H; y++) {
+            for (int32_t x = 0; x < FW && x < W; x++) {
+                size_t i = (size_t)y * FW + x;
+                uint32_t a = s_fb_a[i];
+                if (a == 255) continue;                       // 无云：完全保留底层
+                uint8_t *d = fb + ((size_t)y * W + x) * 3;
+                const uint8_t *s = s_fb + i * 3;
+                if (a == 0) { d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; continue; }
+                // 预乘合成：dst = dst·T + premul（s 已含 (1−T)，不要再乘）
+                d[0] = (uint8_t)(((uint32_t)d[0] * a + (uint32_t)s[0] * 255u + 127u) / 255u);
+                d[1] = (uint8_t)(((uint32_t)d[1] * a + (uint32_t)s[1] * 255u + 127u) / 255u);
+                d[2] = (uint8_t)(((uint32_t)d[2] * a + (uint32_t)s[2] * 255u + 127u) / 255u);
+            }
+        }
+        return;
+    }
+    // 非 RGB888（RGB565 等）或尺寸不一致：逐像素读写
+    for (int32_t y = 0; y < FH && y < H; y++) {
+        for (int32_t x = 0; x < FW && x < W; x++) {
+            size_t i = (size_t)y * FW + x;
+            uint32_t a = s_fb_a[i];
+            if (a == 255) continue;
+            const uint8_t *s = s_fb + i * 3;
+            if (a == 0) { gfx_set_pixel(gfx, (uint32_t)x, (uint32_t)y, s[0], s[1], s[2]); continue; }
+            uint8_t dr = 0, dg = 0, db = 0;
+            gfx_get_pixel(gfx, (uint32_t)x, (uint32_t)y, &dr, &dg, &db);
+            // 预乘合成：dst = dst·T + premul
+            gfx_set_pixel(gfx, (uint32_t)x, (uint32_t)y,
+                (uint8_t)(((uint32_t)dr * a + (uint32_t)s[0] * 255u + 127u) / 255u),
+                (uint8_t)(((uint32_t)dg * a + (uint32_t)s[1] * 255u + 127u) / 255u),
+                (uint8_t)(((uint32_t)db * a + (uint32_t)s[2] * 255u + 127u) / 255u));
         }
     }
 }
