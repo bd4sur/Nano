@@ -26,6 +26,7 @@
 #include "am_native_Fs.h"
 #include "am_native_Ui.h"
 #include "am_native_App.h"
+#include "am_native_Chat.h"   // 鹦鹉笼端侧 LLM 推理引擎（(native Chat)）
 
 // ===============================================================================
 // 运行时参数
@@ -605,6 +606,9 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     am_runtime_register_native_lib(s_app->rt, &am_native_Ui_lib);
     // App：应用生命周期（退出/返回请求/多任务占位，见 am_native_App.h）
     am_runtime_register_native_lib(s_app->rt, &am_native_App_lib);
+    // Chat：鹦鹉笼端侧 LLM 推理引擎（模型/分词器/推理内核/推理可视化，见 am_native_Chat.h）。
+    // 引擎是**虚拟机全局单例**（与 C 版鹦鹉笼一致），实例销毁时由 on_exit 释放。
+    am_runtime_register_native_lib(s_app->rt, &am_native_Chat_lib);
     am_native_ui_abort(); // 清掉上一个 App 可能遗留的请求
     am_native_app_reset(s_app->title);
     am_native_Key_reset();
@@ -1177,6 +1181,9 @@ void ui_scheme_app_on_exit(void) {
     // 丢弃可能挂起的模态输入/退出请求（进程随后会被销毁，不能留悬空 PID）
     am_native_ui_abort();
     am_native_app_abort();
+    // 释放 (native Chat) 的推理引擎（模型权重 + KV-Cache 可达数百 MB，不随解释器池回收；
+    // Scheme 进程已销毁，留着只会挤占内存。恢复后台实例时 App 会按 (Chat.loaded) 重新载入）
+    am_native_chat_release();
     // 退出可能发生在手指动作过程中：列表紧接着收到的"余波"（旧序列的电平与迟到的
     // UP 边沿）必须吞掉，直到用户真正开始新的一次按下或窗口到期（见 s_list_touch_guard）
     s_list_touch_guard = 1;
