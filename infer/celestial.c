@@ -2783,6 +2783,11 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->cloud_layer_mask = UI_CLOUD_LAYER_LOW;
     cfg->cloud_precision_level = 1;   // 云精度档位（0-高 1-中 2-低；中 = 半分辨率 + 0.25km 步距）
 
+    // 海洋参数（sky_model==5 或 landscape_index==3 时生效；与 celestial_ocean.c 的模块默认一致）
+    cfg->ocean_height_level = 0;      // 观察高度：5m（档位 5/50/200/1000/20000m）
+    cfg->ocean_swell_hs_level = 3;    // 涌浪波高：1.8m（档位 无/0.5/1.0/1.8/2.5/3.5m）
+    cfg->ocean_swell_len_level = 3;   // 涌浪波长：120m（档位 30/60/90/120/160/220/300m）
+
     cfg->lut_alt_step = 0.5f;         // Inscatter LUT 高度角步长（度）
     cfg->lut_azi_step = 0.5f;         // Inscatter LUT 方位角步长（度）
     cfg->lut_transmittance_step = 0.5f; // Transmittance LUT 天顶角步长（度）
@@ -2850,7 +2855,11 @@ void render_sky(Nano_GFX *gfx,
     // 体积云参数（仅 sky_model==4 时有效）
     int32_t cloud_coverage_level,    // 云量档位 0-5
     int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
-    int32_t cloud_precision_level    // 云精度档位 0-2（高/中/低）
+    int32_t cloud_precision_level,   // 云精度档位 0-2（高/中/低）
+    // 海洋参数（仅 sky_model==5 或 landscape_index==3 时有效；档位表见 celestial_ocean.h）
+    int32_t ocean_height_level,      // 观察高度档位 0-4
+    int32_t ocean_swell_hs_level,    // 涌浪波高档位 0-5
+    int32_t ocean_swell_len_level    // 涌浪波长档位 0-6
 ) {
 
     uint32_t fb_width = gfx->width;
@@ -2900,9 +2909,11 @@ void render_sky(Nano_GFX *gfx,
         sky_inscatter_lut_update(sun_x, sun_y, sun_z, (float)sun_alt, (float)sun_azi, sky_model);
     }
 
-    // 实时海洋 / 海洋天空（web-ocean 移植）：每帧准备
-    // （推进海面动画时间 + 按需重建三张大气 LUT + 烘焙波场；两者共用同一份数据）
+    // 实时海洋 / 海洋天空（web-ocean 移植）：先应用设置界面里的海况档位，再每帧准备
+    // （推进海面动画时间 + 按需重建三张大气 LUT + 烘焙波场；两者共用同一份数据）。
+    // set_levels 内部做参数比对，档位未变时是空操作（不会每帧重烘）。
     if (sky_model == 5 || landscape_index == 3) {
+        linglong_ocean_set_levels(ocean_height_level, ocean_swell_hs_level, ocean_swell_len_level);
         linglong_ocean_prepare((float)sun_alt, (float)sun_azi, f, sky_radius, projection);
     }
 

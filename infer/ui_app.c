@@ -55,6 +55,7 @@
 #include "ui_llm.h"
 #include "ephemeris.h"
 #include "celestial.h"
+#include "celestial_ocean.h"
 #include "nongli.h"
 
 #include "ui_color.h"
@@ -1726,6 +1727,34 @@ static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLin
     cells[10].value_r = cells[9].value_r;
     cells[10].value_g = cells[9].value_g;
     cells[10].value_b = cells[9].value_b;
+
+    // 第 3 行第 2~4 格：海洋参数（观察高度 / 涌浪波高 / 涌浪波长）。
+    // 只在 sky_model==5 或 landscape_index==3 时影响画面；其它档位现值画灰但可预调。
+    {
+        const int32_t ocean_active = (cfg->sky_model == 5 || cfg->landscape_index == 3);
+        int32_t n = 0;
+        const Linglong_Ocean_Option *opt;
+        struct { int32_t cell; int32_t level; const Linglong_Ocean_Option *(*get)(int32_t *); } m[3] = {
+            { 11, cfg->ocean_height_level,    linglong_ocean_height_options },
+            { 12, cfg->ocean_swell_hs_level,  linglong_ocean_swell_hs_options },
+            { 13, cfg->ocean_swell_len_level, linglong_ocean_swell_len_options },
+        };
+        static const wchar_t *labels[3] = { L"观察高度", L"涌浪波高", L"涌浪波长" };
+        for (int32_t i = 0; i < 3; i++) {
+            opt = m[i].get(&n);
+            if (opt == NULL || n <= 0) continue;
+            int32_t lv = m[i].level;
+            if (lv < 0 || lv >= n) lv = 0;
+            cells[m[i].cell].label = labels[i];
+            cells[m[i].cell].value = opt[lv].name;
+            if (ocean_active) {
+                cells[m[i].cell].value_r = 0; cells[m[i].cell].value_g = 200; cells[m[i].cell].value_b = 255;
+            }
+            else {
+                cells[m[i].cell].value_r = 168; cells[m[i].cell].value_g = 176; cells[m[i].cell].value_b = 190;
+            }
+        }
+    }
 }
 
 void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state) {
@@ -1821,7 +1850,10 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->enable_tracking_sun,
         llcfg->cloud_coverage_level,
         llcfg->cloud_layer_mask,
-        llcfg->cloud_precision_level
+        llcfg->cloud_precision_level,
+        llcfg->ocean_height_level,
+        llcfg->ocean_swell_hs_level,
+        llcfg->ocean_swell_len_level
     );
 
 #if defined(NANO_POD_POCKETTERM35)
@@ -2240,7 +2272,25 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         int32_t cell = ui_linglong_ctrl_settings_handle_touch(
             key_event->touch_edge, key_event->touch_x, key_event->touch_y,
             key_event->touch_down_x, key_event->touch_down_y);
-        if (cell >= 0) {
+        if (cell >= 11 && cell <= 13) {
+            // 海洋参数：直接循环档位（硬键没有空位可映射，与云参数按钮同为触屏专用）
+            Linglong_Config *oc = global_state->linglong_cfg;
+            int32_t n = 0;
+            if (cell == 11) {
+                linglong_ocean_height_options(&n);
+                oc->ocean_height_level = (oc->ocean_height_level + 1) % (n > 0 ? n : 1);
+            }
+            else if (cell == 12) {
+                linglong_ocean_swell_hs_options(&n);
+                oc->ocean_swell_hs_level = (oc->ocean_swell_hs_level + 1) % (n > 0 ? n : 1);
+            }
+            else {
+                linglong_ocean_swell_len_options(&n);
+                oc->ocean_swell_len_level = (oc->ocean_swell_len_level + 1) % (n > 0 ? n : 1);
+            }
+            linglong_state = LL_STATE_SETTING_CALLBACK;   // 重绘设置界面（现值已变）
+        }
+        else if (cell >= 0) {
             int32_t synth_key = ui_app_linglong_setting_cell_key(cell);
             if (synth_key != NANO_KEY_IDLE) {
                 global_state->is_ctrl_enabled = 1;

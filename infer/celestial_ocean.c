@@ -25,6 +25,46 @@
 #include "celestial.h"
 #include "celestial_ocean.h"
 
+// ---- 设置界面档位表（单一真源：档位序号 → 显示名 + 物理量）----
+static const Linglong_Ocean_Option S_OCEAN_HEIGHT_OPTIONS[] = {
+    { 0, L"5m",     5.0f },
+    { 1, L"50m",   50.0f },
+    { 2, L"200m",  200.0f },
+    { 3, L"1000m", 1000.0f },
+    { 4, L"20000m", 20000.0f },
+};
+static const Linglong_Ocean_Option S_OCEAN_SWELL_HS_OPTIONS[] = {
+    { 0, L"无",    0.0f },
+    { 1, L"0.5m",  0.5f },
+    { 2, L"1.0m",  1.0f },
+    { 3, L"1.8m",  1.8f },
+    { 4, L"2.5m",  2.5f },
+    { 5, L"3.5m",  3.5f },
+};
+static const Linglong_Ocean_Option S_OCEAN_SWELL_LEN_OPTIONS[] = {
+    { 0, L"30m",   30.0f },
+    { 1, L"60m",   60.0f },
+    { 2, L"90m",   90.0f },
+    { 3, L"120m", 120.0f },
+    { 4, L"160m", 160.0f },
+    { 5, L"220m", 220.0f },
+    { 6, L"300m", 300.0f },
+};
+#define S_OCEAN_OPT_NUM(t) ((int32_t)(sizeof(t) / sizeof((t)[0])))
+
+const Linglong_Ocean_Option *linglong_ocean_height_options(int32_t *count) {
+    if (count) *count = S_OCEAN_OPT_NUM(S_OCEAN_HEIGHT_OPTIONS);
+    return S_OCEAN_HEIGHT_OPTIONS;
+}
+const Linglong_Ocean_Option *linglong_ocean_swell_hs_options(int32_t *count) {
+    if (count) *count = S_OCEAN_OPT_NUM(S_OCEAN_SWELL_HS_OPTIONS);
+    return S_OCEAN_SWELL_HS_OPTIONS;
+}
+const Linglong_Ocean_Option *linglong_ocean_swell_len_options(int32_t *count) {
+    if (count) *count = S_OCEAN_OPT_NUM(S_OCEAN_SWELL_LEN_OPTIONS);
+    return S_OCEAN_SWELL_LEN_OPTIONS;
+}
+
 #if LINGLONG_ENABLE_DYNAMIC_LANDSCAPE
 
 // ===============================================================================
@@ -1138,31 +1178,87 @@ static void wo_update_derived_params(void) {
 
 void linglong_ocean_config_default(Linglong_Ocean_Config *cfg) {
     if (cfg == NULL) return;
-    cfg->cam_y     = 50.0f;
+    cfg->cam_y     = 5.0f;      // 观察高度默认 5m（设置界面共 5 档）
     cfg->wind_u    = 7.0f;
     cfg->wind_dir  = 118.0f;
     cfg->fetch     = 90000.0f;
     cfg->swell_hs  = 1.8f;
     cfg->swell_dir = 94.0f;
     cfg->swell_len = 120.0f;
-    cfg->foam      = 0.0f;
-    cfg->turbidity = 0.2f;
-    cfg->haze      = 0.0f;
-    cfg->fog_floor = 2.0e-5f;
+    cfg->foam      = 0.0f;      // 泡沫强度最弱（无泡沫）
+    cfg->turbidity = 0.2f;      // 水体泱浊度取区间最小值
+    cfg->haze      = 0.0f;      // 霾最小（清透空气）
+    cfg->fog_floor = 2.0e-5f;   // 能见度最大（≈150km）
+}
+
+void linglong_ocean_set_levels(int32_t height_level, int32_t swell_hs_level, int32_t swell_len_level) {
+    if (!s_cfg_init) {
+        Linglong_Ocean_Config c;
+        linglong_ocean_config_default(&c);
+        linglong_ocean_configure(&c);
+    }
+    if (height_level    < 0 || height_level    >= S_OCEAN_OPT_NUM(S_OCEAN_HEIGHT_OPTIONS))    height_level = 0;
+    if (swell_hs_level  < 0 || swell_hs_level  >= S_OCEAN_OPT_NUM(S_OCEAN_SWELL_HS_OPTIONS))  swell_hs_level = 3;
+    if (swell_len_level < 0 || swell_len_level >= S_OCEAN_OPT_NUM(S_OCEAN_SWELL_LEN_OPTIONS)) swell_len_level = 3;
+
+    Linglong_Ocean_Config c = s_cfg;   // 其余参数保持原值（模块默认）
+    c.cam_y     = S_OCEAN_HEIGHT_OPTIONS[height_level].value;
+    c.swell_hs  = S_OCEAN_SWELL_HS_OPTIONS[swell_hs_level].value;
+    c.swell_len = S_OCEAN_SWELL_LEN_OPTIONS[swell_len_level].value;
+    linglong_ocean_configure(&c);       // 内部只重建变动的部分
 }
 
 void linglong_ocean_configure(const Linglong_Ocean_Config *cfg) {
     if (cfg == NULL) return;
+
+    // 选择性失效：只重建真正受影响的缓存，避免「调一个值就把三张 LUT + 波场全重烘」。
+    //   观察高度  → 天空视图 LUT（依赖 r = RG + cam_y）、天空视图 UV 参数
+    //   霾        → 介质 → 透射率 + 多重散射 + 天空视图 LUT 全部
+    //   风/涌浪参数 → 波场（波谱 + 烘焙）/ 平流速度
+    //   浑浊度/雾  → 只在派生量里（水体色 / 大气透视消光）
+    const Linglong_Ocean_Config old = s_cfg;
+    const int32_t had = s_cfg_init;
+
     s_cfg = *cfg;
     s_cfg_init = 1;
     wo_update_derived_params();
     wo_sky_view_uv_params();   // 天空视图 UV 的帧常量（只依赖 cam_y）
-    // 参数变化：LUT 与波场全部作废（下次 prepare 重建）
-    if (s_state.sky_lut != NULL) { free(s_state.sky_lut); s_state.sky_lut = NULL; }
-    if (s_state.ms_lut != NULL) { free(s_state.ms_lut); s_state.ms_lut = NULL; }
-    if (s_state.trans_lut != NULL) { free(s_state.trans_lut); s_state.trans_lut = NULL; }
-    s_state.waves_ready = 0;
-    s_state.have_sun = 0;
+
+    if (!had) {
+        // 首次配置：全部作废，由 prepare 统一构建
+        if (s_state.sky_lut != NULL) { free(s_state.sky_lut); s_state.sky_lut = NULL; }
+        if (s_state.ms_lut != NULL) { free(s_state.ms_lut); s_state.ms_lut = NULL; }
+        if (s_state.trans_lut != NULL) { free(s_state.trans_lut); s_state.trans_lut = NULL; }
+        s_state.waves_ready = 0;
+        s_state.have_sun = 0;
+        return;
+    }
+
+    const int32_t haze_changed = (old.haze != s_cfg.haze) ? 1 : 0;
+    const int32_t cam_changed = (old.cam_y != s_cfg.cam_y) ? 1 : 0;
+    const int32_t wave_changed = (old.wind_u != s_cfg.wind_u
+                               || old.wind_dir != s_cfg.wind_dir
+                               || old.fetch != s_cfg.fetch
+                               || old.swell_hs != s_cfg.swell_hs
+                               || old.swell_dir != s_cfg.swell_dir
+                               || old.swell_len != s_cfg.swell_len) ? 1 : 0;
+
+    if (haze_changed) {
+        // 霾进介质：三张 LUT 都要重算（prepare 里按 NULL 重建）
+        if (s_state.sky_lut != NULL) { free(s_state.sky_lut); s_state.sky_lut = NULL; }
+        if (s_state.ms_lut != NULL) { free(s_state.ms_lut); s_state.ms_lut = NULL; }
+        if (s_state.trans_lut != NULL) { free(s_state.trans_lut); s_state.trans_lut = NULL; }
+        s_state.have_sun = 0;
+    }
+    else if (cam_changed) {
+        // 只有天空视图 LUT 依赖观察高度（多重散射/透射率只与介质有关）
+        if (s_state.sky_lut != NULL) { free(s_state.sky_lut); s_state.sky_lut = NULL; }
+        s_state.have_sun = 0;
+    }
+
+    if (wave_changed) {
+        s_state.waves_ready = 0;   // 下次 prepare 重烘焙波场
+    }
 }
 
 void linglong_ocean_free(void) {
@@ -1614,20 +1710,8 @@ void linglong_ocean_draw_landscape(
 // 内存紧缺平台（M5Stack 等）：动态地景关闭，海洋模块退化为空实现
 void linglong_ocean_config_default(Linglong_Ocean_Config *cfg) { (void)cfg; }
 void linglong_ocean_configure(const Linglong_Ocean_Config *cfg) { (void)cfg; }
-void linglong_ocean_prepare(float sun_alt, float sun_azi, float view_f, float sky_radius, int32_t projection) {
-    (void)sun_alt; (void)sun_azi; (void)view_f; (void)sky_radius; (void)projection;
-}
-void linglong_ocean_sky_pixel(float ray_x, float ray_y, float ray_z,
-                               float *red, float *green, float *blue) {
-    (void)ray_x; (void)ray_y; (void)ray_z;
-    if (red) *red = 0.0f;
-    if (green) *green = 0.0f;
-    if (blue) *blue = 0.0f;
-}
-void linglong_ocean_draw_landscape(Nano_GFX *gfx, float sky_radius, float center_x, float center_y,
-                                   float view_alt, float view_azi, float view_roll, float f, int32_t projection) {
-    (void)gfx; (void)sky_radius; (void)center_x; (void)center_y;
-    (void)view_alt; (void)view_azi; (void)view_roll; (void)f; (void)projection;
+void linglong_ocean_set_levels(int32_t height_level, int32_t swell_hs_level, int32_t swell_len_level) {
+    (void)height_level; (void)swell_hs_level; (void)swell_len_level;
 }
 void linglong_ocean_free(void) {}
 

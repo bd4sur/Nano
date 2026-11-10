@@ -27,7 +27,8 @@ extern "C" {
 //   · 观察者水平位置固定为世界原点（相机不随飞行移动），波场仍按群速度平流。
 // ===============================================================================
 
-// 海况 / 大气可调参数（默认值 = linglong.html 中 web-ocean 移植的默认值）
+// 海况 / 大气可调参数（默认值 = linglong.html 中 web-ocean 移植的默认值，
+// 其中观察高度按需求取 5m、泡沫 0、浑浊度取区间最小值、霾 0、能见度取最大值）
 typedef struct Linglong_Ocean_Config {
     float cam_y;        // 观察者高度（平均海平面以上，m）
     float wind_u;       // 10m 风速 m/s
@@ -41,6 +42,31 @@ typedef struct Linglong_Ocean_Config {
     float haze;         // 气溶胶霾倍率（0 = 清透空气）
     float fog_floor;    // 大气透视消光系数 1/m（默认 2e-5 ≈ 150km 能见度）
 } Linglong_Ocean_Config;
+
+// ===============================================================================
+// 可调档位表（玲珑仪设置界面用；档位序号存在 Linglong_Config，本模块负责映射到物理量）
+//   level   ：档位序号（0 起；Linglong_Config 里存的就是它）
+//   name    ：设置按钮上显示的现值文字
+//   value   ：该档对应的物理量（m）
+// ===============================================================================
+typedef struct {
+    int32_t        level;
+    const wchar_t *name;
+    float          value;
+} Linglong_Ocean_Option;
+
+// 观察高度：5 / 50 / 200 / 1000 / 20000 m（默认 5m）
+// 涌浪波高：无 / 0.5 / 1.0 / 1.8（默认）/ 2.5 / 3.5 m
+// 涌浪波长：30 / 60 / 90 / 120（默认）/ 160 / 220 / 300 m
+const Linglong_Ocean_Option *linglong_ocean_height_options(int32_t *count);
+const Linglong_Ocean_Option *linglong_ocean_swell_hs_options(int32_t *count);
+const Linglong_Ocean_Option *linglong_ocean_swell_len_options(int32_t *count);
+
+// 按三个档位序号更新海况（其余参数保持模块默认：风速 7m/s@118°、风区 90km、
+// 涌浪方向 94°、泡沫 0、浑浊度 0.2、霾 0、能见度 150km）。
+// 内部只重建真正受影响的部分（观察高度 → 只在天空视图 LUT；涌浪 → 只重烘波场），
+// 因此切档不会像整份 configure 那样付出全部烘焙代价。
+void linglong_ocean_set_levels(int32_t height_level, int32_t swell_hs_level, int32_t swell_len_level);
 
 // 取默认参数（与参考网页一致）
 void linglong_ocean_config_default(Linglong_Ocean_Config *cfg);
