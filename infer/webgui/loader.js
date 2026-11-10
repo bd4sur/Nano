@@ -90,15 +90,23 @@ async function nanoMountResources(opts) {
   // 拉取清单
   const manifest = await (await fetchImpl(manifestUrl)).json();
 
-  // 合并浏览器本地存储清单：同名覆盖（用户上传优先），store 独有按目录推断优先级并入
+  // 合并浏览器本地存储清单：同名覆盖（用户上传优先），store 独有按目录推断优先级并入；
+  // store 里的目录条目（网页文件管理器“新建目录”，可为空目录）同样并入；
+  // store 里的**墓碑**（deleted 标记）在最后统一剔除——把同路径的服务器默认资源一并隐藏。
   const byPath = new Map();
   for (const f of (manifest.files || [])) byPath.set(f.path, { ...f, source: "http" });
+  const tombstones = new Set();
   if (opts.store) {
     let storeFiles = [];
     try { storeFiles = await opts.store.list(); } catch (e) { console.warn("[mount] store list failed:", e); }
     for (const sf of storeFiles) {
+      if (sf.deleted) { tombstones.add(sf.path); continue; }
       const existing = byPath.get(sf.path);
-      if (existing) {
+      if (sf.dir) {
+        // 目录条目：不挂载内容，只保证 MEMFS 里有这个（可能是空的）目录
+        byPath.set(sf.path, { path: sf.path, size: 0, dir: true, priority: nanoInferPriority(sf.path), source: "store" });
+      }
+      else if (existing) {
         existing.source = "store";
         existing.size = sf.size;
       }
@@ -107,15 +115,18 @@ async function nanoMountResources(opts) {
       }
     }
   }
-  const files = [...byPath.values()];
+  for (const p of tombstones) byPath.delete(p);
+  const all = [...byPath.values()];
+  const files = all.filter(f => !f.dir);
+  const dirsExplicit = all.filter(f => f.dir);
   const p1 = files.filter(f => f.priority === 1);
   const p2 = files.filter(f => f.priority === 2);
   const p3 = files.filter(f => f.priority === 3); // LLM 模型：不自动挂载，页面按需预载
-  if (opts.onManifest) opts.onManifest(files); // 合并清单（含 source 标记），资源面板展示用
+  if (opts.onManifest) opts.onManifest(all); // 合并清单（含 source/dir 标记），资源面板展示用
 
-  // 建目录树（createPath 递归逐层创建）
+  // 建目录树（createPath 递归逐层创建；显式目录条目也要建，空目录才留得住）
   const dirs = new Set();
-  for (const f of files) {
+  for (const f of all) {
     const parts = f.path.split("/");
     for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
   }
@@ -123,6 +134,7 @@ async function nanoMountResources(opts) {
   try { FS.createPath("/home", "bd4sur"); } catch (e) {}
   try { FS.createPath("/home/bd4sur", "linglong"); } catch (e) {}
   for (const d of [...dirs].sort()) { try { FS.createPath(resRoot, d); } catch (e) {} }
+  for (const d of dirsExplicit) { try { FS.createPath(resRoot, d.path); } catch (e) {} }
 
   // 挂载单文件（store 优先，HTTP 回退；失败重试一次）
   async function mountFile(f, onFileProgress) {

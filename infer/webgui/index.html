@@ -130,17 +130,11 @@
   .res-item:hover { background: #f2f5f9; }
   .res-item .p { flex: 1; word-break: break-all; }
   .res-item .sz { color: #8b919b; white-space: nowrap; }
-  .res-item .src { font-size: 11px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
-  .res-item .src.store { background: #e7f5ea; color: #2f7d3d; }
-  .res-item .src.http  { background: #e6f0fa; color: #2b6ca8; }
   .res-item button {
     background: none; border: none; color: #c0392b; cursor: pointer;
     font-size: 12px; padding: 2px 6px;
   }
   .res-item button:disabled { color: #c2c7cf; cursor: default; }
-  .res-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
-  .res-row select, .res-row input[type="file"] { font-size: 12px; color: #4a4f57; }
-  .res-row select { background: #ffffff; border: 1px solid #d6dae1; border-radius: 6px; padding: 4px 6px; }
   .res-btn2 {
     background: #2f7fd1; color: #ffffff; border: none; border-radius: 6px;
     font-size: 12px; padding: 6px 12px; cursor: pointer;
@@ -148,7 +142,88 @@
   .res-btn2:disabled { background: #dfe3e9; color: #9aa1ab; }
   #res-quota { color: #8b919b; font-size: 12px; }
   #res-close { float: right; background: none; border: none; color: #8b919b; font-size: 18px; cursor: pointer; }
-  #upload-progress { color: #2b6ca8; font-size: 12px; }
+
+  /* ---------- 文件管理器：目录树 ---------- */
+  #fm-toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0 8px; }
+  .fm-btn {
+    background: #ffffff; color: #4a4f57; border: 1px solid #d6dae1;
+    border-radius: 6px; font-size: 12px; padding: 5px 10px; cursor: pointer;
+    user-select: none; -webkit-user-select: none; touch-action: manipulation;
+  }
+  .fm-btn:hover { background: #f2f6fb; border-color: #b9cde4; }
+  .fm-btn:active { transform: scale(.97); }
+  .fm-btn.primary { background: #2f7fd1; border-color: #2f7fd1; color: #ffffff; }
+  .fm-btn.primary:hover { background: #2a72bd; }
+  .fm-btn.danger { color: #c0392b; border-color: #e8c4bf; }
+  .fm-btn[disabled] { opacity: .45; cursor: default; }
+  #fm-tree {
+    max-height: min(56vh, 460px);
+    overflow: auto;
+    background: #ffffff;
+    border: 1px solid #e2e7ee; border-radius: 8px;
+    padding: 4px 0; font-size: 13px;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  .fm-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 8px 5px 0; cursor: pointer;
+    white-space: nowrap; user-select: none; -webkit-user-select: none;
+  }
+  .fm-row:hover { background: #f4f7fb; }
+  .fm-row.selected { background: #e6f0fb; }
+  .fm-row.drop-target { background: #e7f5ea; box-shadow: inset 0 0 0 1px #4aa96c; }
+  .fm-caret {
+    flex: none; width: 14px; text-align: center; color: #8b919b;
+    font-size: 9px; line-height: 1; transition: transform .12s ease-out;
+  }
+  .fm-caret.open { transform: rotate(90deg); }
+  .fm-caret.slot { visibility: hidden; }
+  .fm-ico { flex: none; width: 16px; height: 16px; display: inline-flex; align-items: center; }
+  .fm-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #3f444b; }
+  .fm-name.dir { color: #23272e; font-weight: 600; }
+  .fm-meta { flex: none; color: #98a0ab; font-size: 11px; }
+  .fm-tag {
+    flex: none; font-size: 10px; color: #2f7d3d; background: #e7f5ea;
+    border-radius: 4px; padding: 1px 5px;
+  }
+  .fm-empty { padding: 10px 12px; color: #8b919b; font-size: 12px; }
+  #fm-detail { margin-top: 8px; font-size: 12px; color: #5b6270; word-break: break-all; }
+  #fm-detail .fm-path { color: #23272e; font-weight: 600; }
+  #fm-detail .fm-dot { margin: 0 6px; color: #b8bfc9; }
+  #fm-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  #fm-actions:empty { display: none; }
+  #fm-progress { font-size: 12px; color: #2b6ca8; min-height: 16px; margin-top: 6px; }
+  #fm-hidden { margin-top: 8px; font-size: 12px; }
+  #fm-hidden summary { cursor: pointer; color: #8b919b; }
+  #fm-ghost {
+    position: fixed; z-index: 99; pointer-events: none;
+    background: #ffffff; border: 1px solid #9fb6cf; border-radius: 999px;
+    padding: 4px 10px; font-size: 12px; color: #2b3440;
+    box-shadow: 0 4px 14px rgba(30,50,80,.22);
+    max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* 通用小模态框（新建目录 / 重命名 / 复制 / 移动） */
+  #fm-modal {
+    position: fixed; inset: 0; z-index: 60; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(32,42,56,.28);
+  }
+  #fm-modal.open { display: flex; }
+  #fm-modal .fm-card {
+    width: min(380px, calc(100vw - 40px));
+    background: #ffffff; border-radius: 12px; padding: 16px;
+    box-shadow: 0 12px 36px rgba(20,32,50,.28); font-size: 13px;
+  }
+  #fm-modal h4 { margin: 0 0 12px; font-size: 14px; color: #23272e; word-break: break-all; }
+  #fm-modal label { display: block; margin: 0 0 10px; color: #6b7280; font-size: 12px; }
+  #fm-modal input[type="text"], #fm-modal select {
+    width: 100%; box-sizing: border-box; margin-top: 4px;
+    background: #ffffff; border: 1px solid #d6dae1; border-radius: 6px;
+    padding: 7px 8px; font-size: 13px; color: #23272e;
+  }
+  #fm-modal .fm-err { color: #c0392b; font-size: 12px; min-height: 16px; }
+  #fm-modal .fm-card-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -173,7 +248,7 @@
   <div id="hint">触屏/鼠标点按操作 · 滚轮=上下滑动 · 键盘：方向键/回车=确认/Esc=返回/数字=十六键 · 「ESC」按钮=硬 Esc</div>
 </div>
 
-<!-- 资源管理面板（浏览器本地存储 IndexedDB：上传/覆盖/删除业务资源，不依赖后端） -->
+<!-- 资源管理面板（浏览器本地存储 IndexedDB：目录树文件管理器 + 按需预载模型，不依赖后端） -->
 <div id="res-panel">
   <div id="res-card">
     <button id="res-close" title="关闭">×</button>
@@ -183,27 +258,35 @@
     <h3>语言模型（按需预载；预载后存于本机存储，之后离线可用）</h3>
     <div id="model-section"></div>
 
-    <h3>上传到本机存储（立即生效；同名覆盖服务器默认资源）</h3>
-    <div class="res-row">
-      <input type="file" id="upload-input" multiple>
-      <select id="upload-dir">
-        <option value="auto">自动识别目录</option>
-        <option value="ebook">电子书 ebook/</option>
-        <option value="image">相册 image/</option>
-        <option value="music">音乐 music/</option>
-        <option value="llm">模型 llm/</option>
-        <option value="icon">图标 icon/</option>
-        <option value="dict">词典 dict/</option>
-        <option value="">根目录（壁纸 wp*.png 等）</option>
-      </select>
-      <button id="upload-btn" class="res-btn2">上传</button>
+    <h3>文件（点目录前的箭头展开/折叠 · 点名字选中 · 拖动行到目录=移动/复制）</h3>
+    <div id="fm-toolbar">
+      <button class="fm-btn primary" id="fm-mkdir" type="button">新建目录</button>
+      <button class="fm-btn" id="fm-upload" type="button">上传文件</button>
+      <button class="fm-btn" id="fm-collapse" type="button">全部折叠</button>
+      <button class="fm-btn" id="fm-refresh" type="button">刷新</button>
     </div>
-    <div id="upload-progress"></div>
-
-    <h3>当前资源清单</h3>
-    <div id="res-list"></div>
+    <div id="fm-tree"></div>
+    <div id="fm-detail"></div>
+    <div id="fm-actions"></div>
+    <div id="fm-progress"></div>
+    <details id="fm-hidden"></details>
   </div>
 </div>
+
+<!-- 文件操作模态框（新建目录 / 重命名 / 复制 / 移动） -->
+<div id="fm-modal">
+  <div class="fm-card">
+    <h4 id="fm-modal-title">新建目录</h4>
+    <label id="fm-modal-dirwrap">目标目录<select id="fm-modal-dir"></select></label>
+    <label>名称<input type="text" id="fm-modal-name" autocomplete="off" spellcheck="false"></label>
+    <div class="fm-err" id="fm-modal-err"></div>
+    <div class="fm-card-actions">
+      <button class="fm-btn" id="fm-modal-cancel" type="button">取消</button>
+      <button class="fm-btn primary" id="fm-modal-ok" type="button">确定</button>
+    </div>
+  </div>
+</div>
+<input type="file" id="upload-input" multiple style="display:none">
 <script>
 "use strict";
 // Nano WASM GUI 页面胶水层：
@@ -544,6 +627,11 @@ function rawKeyCode(e) {
 
 function reportKey(e, isDown) {
   if (!runtimeReady) return;
+  // 页面自己的输入控件（资源管理面板的模态框）里打字：不投递给 WASM，否则回车/退格
+  // 会被宿主当成设备按键（Enter=确认 / Backspace=返回）。
+  const t = e.target;
+  if (t && t.tagName && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
+      t.tagName === "SELECT" || t.isContentEditable)) return;
   // 旁路：每个按键都投递给灵机 App 的 (native Key) 库（不改动 GUI 电平槽）
   if (Module._wasm_gui_on_key_event) {
     const raw = rawKeyCode(e);
@@ -678,46 +766,197 @@ async function toggleAttitude() {
 attBtn.addEventListener("click", toggleAttitude);
 setInterval(() => { if (attEnabled) updateAttBtn(); }, 1000);
 
-// ---------------- 资源管理面板（浏览器本地存储 IndexedDB；不依赖后端服务器） ----------------
-// 上传/覆盖/删除业务资源；模型按需预载。存储优先于服务器默认源（loader.js 挂载时合并）。
+// ---------------- 资源管理面板：目录树文件管理器 + 模型按需预载 ----------------
+// 数据来源 = 服务器默认源（manifest.json + files/）∪ 浏览器本地存储（IndexedDB）。
+// 文件操作（新建目录/上传/删除/改名/移动/复制/下载）同时写存储层与当前会话的 MEMFS，
+// 因此「立即生效」且「刷新页面仍在」；删除服务器默认资源落墓碑（见 store.js），
+// loader 启动时据此不挂载，可在「已隐藏」里恢复。
+// 视图是**传统缩进目录树**：同级目录在前、文件在后，同类按名称升序；目录默认折叠
+// （fmExpanded 初始为空），点箭头展开/折叠，点名字选中。
 // 启动即申请存储持久化（防 Safari 等 7 天闲置自动清理；拒绝/不支持不影响使用）
 if (navigator.storage && navigator.storage.persist) {
   navigator.storage.persist().then((granted) => console.log("[store] persist:", granted));
 }
 const resBtn   = document.getElementById("res-btn");
 const resPanel = document.getElementById("res-panel");
-const resList  = document.getElementById("res-list");
 const resQuota = document.getElementById("res-quota");
 const modelSection = document.getElementById("model-section");
-const uploadInput = document.getElementById("upload-input");
-const uploadDir   = document.getElementById("upload-dir");
-const uploadBtn   = document.getElementById("upload-btn");
-const uploadProg  = document.getElementById("upload-progress");
-let gManifestFiles = []; // loader 合并清单（含 source 标记），onManifest 回调填入
+const uploadInput  = document.getElementById("upload-input");
+
+const fmTreeEl     = document.getElementById("fm-tree");
+const fmDetail     = document.getElementById("fm-detail");
+const fmActions    = document.getElementById("fm-actions");
+const fmProgress   = document.getElementById("fm-progress");
+const fmHiddenBox  = document.getElementById("fm-hidden");
+const fmModal      = document.getElementById("fm-modal");
+const fmModalTitle = document.getElementById("fm-modal-title");
+const fmModalDirWrap = document.getElementById("fm-modal-dirwrap");
+const fmModalDir   = document.getElementById("fm-modal-dir");
+const fmModalName  = document.getElementById("fm-modal-name");
+const fmModalErr   = document.getElementById("fm-modal-err");
+const fmModalOk    = document.getElementById("fm-modal-ok");
+const fmModalCancel = document.getElementById("fm-modal-cancel");
+
+let gManifestFiles = [];       // loader 合并清单（含 source / dir 标记），onManifest 回调填入
+let fmDefaults = null;         // Map<path, {size}>：服务器默认资源（manifest.json 原始清单）
+let fmTree = null;             // 根节点（path === ""）
+let fmIndex = new Map();       // path → 节点
+let fmExpanded = new Set();    // 已展开的目录（默认空 = 全部折叠）
+let fmSelected = "";           // 选中项（"" = 根）
+let fmUploadTarget = "";
+let fmDrag = null;
+let fmSuppressClick = false;
 
 function fmtSize(bytes) {
   if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
   if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
   return bytes + " B";
 }
-
-function guessUploadDir(filename) {
-  const ext = (filename.split(".").pop() || "").toLowerCase();
-  if (ext === "txt" || ext === "md") return "ebook";
-  if (ext === "jpg" || ext === "jpeg" || ext === "gif" || ext === "bmp" || ext === "webp") return "image";
-  if (ext === "png") return "image"; // png 图标请显式选择 icon/
-  if (ext === "mp3" || ext === "wav" || ext === "flac" || ext === "ogg") return "music";
-  if (ext === "bin") return "llm";
-  if (ext === "csv" || ext === "idx") return "dict";
-  if (ext === "scm") return "";
-  return ""; // 根目录（壁纸等）
+function fmEsc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function fmTimestampName() {
+  const d = new Date();
+  const p2 = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
 }
 
-// MEMFS 中是否已存在（当前会话已挂载/写入）
+// ---------------- MEMFS 镜像（当前会话立即生效） ----------------
+// 存储层是“下次启动还在”，MEMFS 是“现在就能读到”；两者必须同步，业务代码零改动。
+function memfsRel(rel) { return RES_ROOT + "/" + rel; }
+
+function fmMemRemoveTree(abs) {
+  const FS = mountCtx.FS;
+  if (!FS) return;
+  let st;
+  try { st = FS.stat(abs); } catch (e) { return; }
+  if (!FS.isDir(st.mode)) {
+    try { FS.unlink(abs); } catch (e) {}
+    return;
+  }
+  let names = [];
+  try { names = FS.readdir(abs); } catch (e) {}
+  for (const n of names) {
+    if (n === "." || n === "..") continue;
+    fmMemRemoveTree(abs + "/" + n);
+  }
+  try { FS.rmdir(abs); } catch (e) {}
+}
+
+function fmMemCopyTree(absFrom, absTo) {
+  const FS = mountCtx.FS;
+  if (!FS) return;
+  let st;
+  try { st = FS.stat(absFrom); } catch (e) { return; }
+  if (!FS.isDir(st.mode)) {
+    try { FS.writeFile(absTo, FS.readFile(absFrom)); } catch (e) {}
+    return;
+  }
+  try { FS.mkdir(absTo); } catch (e) {}
+  let names = [];
+  try { names = FS.readdir(absFrom); } catch (e) {}
+  for (const n of names) {
+    if (n === "." || n === "..") continue;
+    fmMemCopyTree(absFrom + "/" + n, absTo + "/" + n);
+  }
+}
+
+const fmMemfs = {
+  read(rel) {
+    if (!mountCtx.FS) return null;
+    try { return mountCtx.FS.readFile(memfsRel(rel)); } catch (e) { return null; }
+  },
+  write(rel, bytes) {
+    if (!mountCtx.FS) return;
+    fmMemfs.mkdir(nanoPathParent(rel));
+    try { mountCtx.FS.writeFile(memfsRel(rel), bytes); } catch (e) { console.warn("[fm] MEMFS write failed:", rel, e); }
+  },
+  mkdir(rel) {
+    if (!mountCtx.FS || !rel) return;
+    try { mountCtx.FS.createPath(RES_ROOT, rel); } catch (e) {}
+  },
+  remove(rel) {
+    if (!mountCtx.FS || !rel) return;
+    fmMemRemoveTree(memfsRel(rel));
+  },
+  move(from, to, isDir) {
+    if (!mountCtx.FS) return;
+    const a = memfsRel(from), b = memfsRel(to);
+    fmMemfs.mkdir(nanoPathParent(to));
+    try { mountCtx.FS.rename(a, b); return; } catch (e) { /* 退化：拷贝+删除 */ }
+    if (isDir) { fmMemCopyTree(a, b); fmMemRemoveTree(a); }
+    else {
+      try {
+        mountCtx.FS.writeFile(b, mountCtx.FS.readFile(a));
+        mountCtx.FS.unlink(a);
+      } catch (err) { console.warn("[fm] MEMFS move failed:", from, to, err); }
+    }
+  },
+  copy(from, to, isDir) {
+    if (!mountCtx.FS) return;
+    fmMemfs.mkdir(nanoPathParent(to));
+    if (isDir) fmMemCopyTree(memfsRel(from), memfsRel(to));
+    else {
+      try { mountCtx.FS.writeFile(memfsRel(to), mountCtx.FS.readFile(memfsRel(from))); }
+      catch (e) { console.warn("[fm] MEMFS copy failed:", from, to, e); }
+    }
+  },
+};
+
+// 从服务器默认源读一个文件（带进度；用于“下载服务器资源”“恢复隐藏项”“移动默认资源”）
+async function fmFetchDefault(rel) {
+  const bytes = await nanoFetchWithProgress("files/" + encodeURI(rel), (recv, total) => {
+    fmProgress.textContent = total > 0
+      ? `读取 ${rel} … ${(recv / 1048576).toFixed(1)}/${(total / 1048576).toFixed(1)} MB`
+      : `读取 ${rel} … ${fmtSize(recv)}`;
+  });
+  return bytes;
+}
+
+// VFS 依赖注入（见 vfs.js）
+const fmDeps = {
+  store: {
+    list: () => nanoStoreList(),
+    get: (p) => nanoStoreGet(p),
+    put: (p, blob) => nanoStorePut(p, blob),
+    putDir: (p) => nanoStorePutDir(p),
+    del: (p) => nanoStoreDelete(p),
+    rename: (a, b) => nanoStoreRename(a, b),
+    tombstone: (p, size) => nanoStoreTombstone(p, size),
+  },
+  defaults: () => fmDefaults,
+  memfs: fmMemfs,
+  fetchDefault: fmFetchDefault,
+  mountDefault: async (rel) => {
+    await fmMemfs.write(rel, await fmFetchDefault(rel));
+    return true;
+  },
+};
+
+// 服务器默认清单（含被本机覆盖的路径）。独立拉一次 manifest.json：loader 的合并清单
+// 会把“被本机覆盖”的条目标成 store，丢失“这里原本有默认资源”的事实，而删除时要靠它立墓碑。
+async function fmLoadDefaults() {
+  if (fmDefaults) return fmDefaults;
+  fmDefaults = new Map();
+  try {
+    const resp = await fetch("manifest.json");
+    const m = await resp.json();
+    for (const f of (m.files || [])) if (!f.dir) fmDefaults.set(f.path, { size: f.size || 0 });
+  } catch (e) {
+    for (const f of gManifestFiles) {
+      if (f.source === "http" && !f.dir) fmDefaults.set(f.path, { size: f.size || 0 });
+    }
+  }
+  return fmDefaults;
+}
+
+// MEMFS 中是否已存在（模型预载状态用）
 function memfsHas(relPath) {
   if (!mountCtx.FS) return false;
   try { return !!mountCtx.FS.stat(mountCtx.resRoot + "/" + relPath); } catch (e) { return false; }
 }
+
+// ---------------- 模型按需预载 ----------------
 
 function updateModelSection() {
   if (!modelSection) return;
@@ -727,14 +966,13 @@ function updateModelSection() {
   }
   modelSection.innerHTML = "";
   for (const m of pendingModels) {
-    const name = m.path.split("/").pop();
     const ready = memfsHas(m.path);
     const row = document.createElement("div");
     row.className = "res-item";
     const btnHtml = ready
       ? '<span style="color:#2f8f45">已就绪</span>'
-      : `<button class="res-btn2" data-path="${m.path}">预载（${fmtSize(m.size)}）</button>`;
-    row.innerHTML = `<span class="p">${m.path}</span><span class="sz">${fmtSize(m.size)}</span>` + btnHtml;
+      : `<button class="res-btn2" data-path="${fmEsc(m.path)}">预载（${fmtSize(m.size)}）</button>`;
+    row.innerHTML = `<span class="p">${fmEsc(m.path)}</span><span class="sz">${fmtSize(m.size)}</span>` + btnHtml;
     modelSection.appendChild(row);
     if (!ready) {
       row.querySelector("button").onclick = async (ev) => {
@@ -749,6 +987,7 @@ function updateModelSection() {
           });
           btn.textContent = "已就绪";
           updateModelSection();
+          fmReload();
         } catch (e) {
           btn.disabled = false;
           btn.textContent = "失败重试";
@@ -758,50 +997,531 @@ function updateModelSection() {
   }
 }
 
+// ---------------- 目录树渲染（传统缩进树） ----------------
+
+const FM_ICO_DIR =
+  '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">' +
+  '<path d="M1.5 3.2h4l1.3 1.6h7.7v7.9h-13z" fill="#5b93d6"/></svg>';
+const FM_ICO_FILE =
+  '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">' +
+  '<path d="M3.5 1.5h6.2l2.8 2.8v10.2h-9z" fill="#eef2f8" stroke="#b6c1d2" stroke-width="1"/>' +
+  '<path d="M9.6 1.7v2.9h2.9" fill="none" stroke="#b6c1d2" stroke-width="1"/></svg>';
+
+// 可见行（展开 → 前序行表；排序已由 nanoBuildTree 做好）
+function fmVisibleRows() { return nanoFlattenTree(fmTree, fmExpanded); }
+
+function fmRenderTree() {
+  if (!fmTree) return;
+  const scrollTop = fmTreeEl.scrollTop;
+  fmTreeEl.innerHTML = "";
+  const rows = fmVisibleRows();
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "fm-empty";
+    empty.textContent = "（空：用「上传文件」或「新建目录」放点东西进来）";
+    fmTreeEl.appendChild(empty);
+  }
+  for (const { node, depth } of rows) {
+    const row = document.createElement("div");
+    row.className = "fm-row" + (node.dir ? " dir" : " file") + (node.path === fmSelected ? " selected" : "");
+    row.setAttribute("data-path", node.path);
+    row.setAttribute("data-depth", String(depth));
+    row.style.paddingLeft = (6 + depth * 14) + "px";
+
+    const hasKids = node.dir && node.children.length > 0;
+    const open = hasKids && fmExpanded.has(node.path);
+    const caret = document.createElement("span");
+    caret.className = "fm-caret" + (hasKids ? "" : " slot") + (open ? " open" : "");
+    caret.textContent = "\u25B6"; // ▶
+    row.appendChild(caret);
+
+    const ico = document.createElement("span");
+    ico.className = "fm-ico";
+    ico.innerHTML = node.dir ? FM_ICO_DIR : FM_ICO_FILE;
+    row.appendChild(ico);
+
+    const name = document.createElement("span");
+    name.className = "fm-name" + (node.dir ? " dir" : "");
+    name.textContent = node.name + (node.dir ? "/" : "");
+    name.title = node.path;
+    row.appendChild(name);
+
+    const meta = document.createElement("span");
+    meta.className = "fm-meta";
+    meta.textContent = node.dir ? node.children.length + " 项" : fmtSize(node.size || 0);
+    row.appendChild(meta);
+
+    if (!node.dir && node.source === "store") {
+      const tag = document.createElement("span");
+      tag.className = "fm-tag";
+      tag.textContent = "本机";
+      row.appendChild(tag);
+    }
+    fmTreeEl.appendChild(row);
+  }
+  fmTreeEl.scrollTop = scrollTop;
+  fmRenderDetail();
+  const sel = fmTreeEl.querySelector(".fm-row.selected");
+  if (sel && sel.scrollIntoView) sel.scrollIntoView({ block: "nearest" });
+}
+
+// 目录下拉选项（根 + 全部目录，缩进表示层级）
+function fmDirOptions() {
+  const out = [{ path: "", label: "/（资源根）" }];
+  if (!fmTree) return out;
+  (function walk(node, depth) {
+    for (const c of node.children) {
+      if (!c.dir) continue;
+      out.push({ path: c.path, label: "\u3000".repeat(depth) + c.name + "/" });
+      walk(c, depth + 1);
+    }
+  })(fmTree, 0);
+  return out;
+}
+
+function fmRenderDetail() {
+  const n = fmIndex.get(fmSelected);
+  if (!n) {
+    fmDetail.innerHTML = '<span class="fm-path">/</span><span class="fm-dot">·</span>点箭头展开、点名字选中';
+    fmActions.innerHTML = "";
+    return;
+  }
+  const bits = [`<span class="fm-path">${fmEsc(n.path || "/")}</span>`];
+  if (n.dir) {
+    bits.push(`${n.children.length} 个直接子项`);
+    bits.push(`共 ${nanoCountDescendants(n)} 项`);
+  } else {
+    bits.push(fmtSize(n.size || 0));
+    bits.push(n.source === "store" ? "本机存储" : "服务器默认");
+  }
+  fmDetail.innerHTML = bits.join('<span class="fm-dot">·</span>');
+
+  const acts = [];
+  if (n.dir) acts.push(["upload", "上传到此目录"]);
+  else acts.push(["download", "下载"]);
+  if (n.path) {
+    acts.push(["rename", "重命名"]);
+    acts.push(["copy", "复制到…"]);
+    acts.push(["move", "移动到…"]);
+    acts.push(["delete", "删除", "danger"]);
+  } else {
+    acts.push(["mkdir", "新建目录"]);
+  }
+  fmActions.innerHTML = acts
+    .map(([a, t, c]) => `<button class="fm-btn ${c || ""}" data-act="${a}" type="button">${t}</button>`)
+    .join("");
+}
+
+// ---------------- 选择 / 展开折叠 ----------------
+
+function fmSelect(path) {
+  fmSelected = path;
+  fmRenderTree();
+}
+
+// 只切换展开状态，不改变选中（点箭头 / 双击目录行）
+function fmToggle(path) {
+  const n = fmIndex.get(path);
+  if (!n || !n.dir) return;
+  if (fmExpanded.has(path)) fmExpanded.delete(path);
+  else fmExpanded.add(path);
+  fmRenderTree();
+}
+
+fmTreeEl.addEventListener("click", (e) => {
+  if (fmSuppressClick) { fmSuppressClick = false; return; }
+  const row = e.target.closest ? e.target.closest(".fm-row") : null;
+  if (!row || !fmTreeEl.contains(row)) return;
+  const path = row.getAttribute("data-path");
+  const node = fmIndex.get(path);
+  if (e.target.closest(".fm-caret") && node && node.dir && node.children.length) {
+    fmToggle(path);
+    return;
+  }
+  fmSelect(path);
+});
+
+fmTreeEl.addEventListener("dblclick", (e) => {
+  const row = e.target.closest ? e.target.closest(".fm-row") : null;
+  if (!row) return;
+  const node = fmIndex.get(row.getAttribute("data-path"));
+  if (node && node.dir && node.children.length) { e.preventDefault(); fmToggle(node.path); }
+});
+
+// ---------------- 刷新 ----------------
+
+async function fmReload() {
+  await fmLoadDefaults();
+  try {
+    const entries = await nanoVfsList(fmDeps);
+    const tree = nanoBuildTree(entries);
+    fmTree = tree.root;
+    fmIndex = tree.index;
+    for (const p of [...fmExpanded]) {
+      const n = fmIndex.get(p);
+      if (!n || !n.dir) fmExpanded.delete(p);
+    }
+    if (!fmIndex.has(fmSelected)) fmSelected = "";
+    fmRenderTree();
+    await fmRenderHidden();
+  } catch (e) {
+    fmProgress.textContent = "读取文件系统失败：" + e;
+  }
+}
+
 async function refreshResPanel() {
-  // 配额
   if (navigator.storage && navigator.storage.estimate) {
     const est = await navigator.storage.estimate();
     resQuota.textContent = `本机存储占用 ${fmtSize(est.usage || 0)}（配额约 ${fmtSize(est.quota || 0)}）· 清除站点数据即清空`;
   } else {
     resQuota.textContent = "（浏览器不支持存储配额查询）";
   }
-  // 清单（manifest 合并视图已由 loader 提供；store 侧在挂载后可能有新增，重新拉取刷新）
-  let storeFiles = [];
-  try { storeFiles = await nanoStoreList(); } catch (e) {}
-  const storeMap = new Map(storeFiles.map(f => [f.path, f]));
-  const byPath = new Map();
-  for (const f of gManifestFiles) byPath.set(f.path, f);
-  for (const sf of storeFiles) {
-    const ex = byPath.get(sf.path);
-    if (ex) { ex.source = "store"; ex.size = sf.size; }
-    else byPath.set(sf.path, { path: sf.path, size: sf.size, source: "store" });
+  await fmReload();
+}
+
+async function fmRenderHidden() {
+  let deleted = [];
+  try { deleted = await nanoVfsListDeleted(fmDeps); } catch (e) {}
+  deleted = deleted.filter((d) => d.inDefault);
+  if (!deleted.length) {
+    fmHiddenBox.style.display = "none";
+    fmHiddenBox.innerHTML = "";
+    return;
   }
-  const items = [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
-  resList.innerHTML = "";
-  for (const f of items) {
-    const row = document.createElement("div");
-    row.className = "res-item";
-    const srcHtml = f.source === "store"
-      ? '<span class="src store">本机</span>'
-      : '<span class="src http">服务器</span>';
-    // 仅本机存储来源可删除（删除后下次启动回退服务器默认；服务器默认项只读）
-    const delHtml = f.source === "store"
-      ? `<button data-path="${f.path}" title="从本机存储删除">删除</button>`
-      : '<button disabled title="服务器默认资源，不可删">删除</button>';
-    row.innerHTML = `<span class="p">${f.path}</span><span class="sz">${fmtSize(f.size)}</span>${srcHtml}${delHtml}`;
-    resList.appendChild(row);
-  }
-  for (const btn of resList.querySelectorAll("button[data-path]")) {
+  fmHiddenBox.style.display = "";
+  fmHiddenBox.open = fmHiddenBox.open || false;
+  fmHiddenBox.innerHTML = `<summary>已隐藏 ${deleted.length} 项（删除的服务器默认资源，可恢复）</summary>` +
+    deleted.map((d) =>
+      `<div class="res-item"><span class="p">${fmEsc(d.path)}</span>` +
+      `<span class="sz">${fmtSize(d.size)}</span>` +
+      `<button class="fm-btn" type="button" data-restore="${fmEsc(d.path)}">恢复</button></div>`).join("");
+  fmHiddenBox.querySelectorAll("button[data-restore]").forEach((btn) => {
     btn.onclick = async () => {
-      const p = btn.getAttribute("data-path");
-      if (!confirm(`从本机存储删除「${p}」？\n（若为覆盖项，下次启动将回退服务器默认版本）`)) return;
-      try { await nanoStoreDelete(p); } catch (e) {}
-      refreshResPanel();
-      updateModelSection();
+      const p = btn.getAttribute("data-restore");
+      btn.disabled = true;
+      fmProgress.textContent = "恢复中：" + p;
+      const r = await nanoVfsRestore(fmDeps, p);
+      await fmReload();
+      fmProgress.textContent = r.mounted
+        ? "已恢复 " + p
+        : "已取消隐藏（内容将在下次启动重新挂载）" + (r.error ? "：" + r.error : "");
     };
+  });
+}
+
+// ---------------- 模态框（新建目录 / 重命名 / 复制 / 移动） ----------------
+
+let fmModalOnOk = null;
+
+function fmCloseModal() {
+  fmModal.classList.remove("open");
+  fmModalOnOk = null;
+  fmModalErr.textContent = "";
+}
+
+function fmOpenModal(opt) {
+  fmModalTitle.textContent = opt.title;
+  fmModalDirWrap.style.display = opt.dirs ? "" : "none";
+  fmModalName.value = opt.name || "";
+  fmModalErr.textContent = "";
+  fmModalDir.innerHTML = "";
+  if (opt.dirs) {
+    for (const o of fmDirOptions()) {
+      const op = document.createElement("option");
+      op.value = o.path;
+      op.textContent = o.label;
+      fmModalDir.appendChild(op);
+    }
+    fmModalDir.value = opt.dir || "";
+  }
+  fmModalOk.textContent = opt.okText || "确定";
+  fmModalOnOk = opt.onOk;
+  fmModal.classList.add("open");
+  setTimeout(() => { fmModalName.focus(); fmModalName.select(); }, 30);
+}
+
+fmModalOk.addEventListener("click", async () => {
+  if (!fmModalOnOk) return;
+  const name = fmModalName.value.trim();
+  const dir = fmModalDirWrap.style.display === "none" ? null : fmModalDir.value;
+  fmModalOk.disabled = true;
+  let err = null;
+  try { err = await fmModalOnOk({ name, dir }); }
+  catch (e) { err = "操作失败：" + e.message; }
+  fmModalOk.disabled = false;
+  if (err) { fmModalErr.textContent = err; return; }
+  fmCloseModal();
+});
+fmModalCancel.addEventListener("click", fmCloseModal);
+fmModal.addEventListener("click", (e) => { if (e.target === fmModal) fmCloseModal(); });
+fmModalName.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); fmModalOk.click(); }
+  else if (e.key === "Escape") { e.preventDefault(); fmCloseModal(); }
+  else if (e.key === "Tab") { /* 焦点留在输入框，避免跳去被隐藏的控件 */ e.preventDefault(); }
+});
+
+// 当前操作的目标目录（选中目录本身；选中文件时是它的父目录；未选时是根）
+function fmTargetDir() {
+  const n = fmIndex.get(fmSelected);
+  if (!n) return "";
+  return n.dir ? n.path : nanoPathParent(n.path);
+}
+
+function fmOpenMkdir() {
+  const parent = fmTargetDir();
+  fmOpenModal({
+    title: "新建目录",
+    dirs: true,
+    dir: parent,
+    name: fmTimestampName(),
+    okText: "创建",
+    onOk: async ({ name, dir }) => {
+      if (!nanoNameValid(name)) return "名称不能为空，且不能含 / 或首尾空格";
+      const path = nanoPathJoin(dir, name);
+      if (fmIndex.has(path)) return "同名目录或文件已存在";
+      await nanoVfsMkdir(fmDeps, path);
+      if (dir) fmExpanded.add(dir);
+      fmSelected = path;
+      await fmReload();
+      fmProgress.textContent = "已创建目录 " + path;
+      return null;
+    },
+  });
+}
+
+// mode: "rename" | "copy" | "move"；presetDir 用于拖放（目标目录预先指定）
+function fmOpenTransfer(n, mode, presetDir) {
+  if (!n) return;
+  const src = n.path;
+  const parent = nanoPathParent(src);
+  const titles = { rename: "重命名", copy: "复制", move: "移动" };
+  const okText = { rename: "重命名", copy: "复制", move: "移动" };
+  fmOpenModal({
+    title: `${titles[mode]}：${src}`,
+    dirs: mode !== "rename",
+    dir: presetDir !== undefined ? presetDir : parent,
+    name: n.name,
+    okText: okText[mode],
+    onOk: async ({ name }) => {
+      if (!nanoNameValid(name)) return "名称不能为空，且不能含 / 或首尾空格";
+      const targetDir = mode === "rename" ? parent : fmModalDir.value;
+      const dst = nanoPathJoin(targetDir, name);
+      if (dst === src) return null;
+      if (nanoPathWithin(targetDir, src)) return "不能放进自己的子目录";
+      if (fmIndex.has(dst)) {
+        if (!confirm(`目标「${dst}」已存在，覆盖？`)) return "已取消（同名目标存在）";
+        await nanoVfsDelete(fmDeps, dst).catch(() => {});
+      }
+      await nanoVfsTransfer(fmDeps, src, dst, mode === "copy" ? "copy" : "move");
+      fmSelected = dst;
+      if (targetDir) fmExpanded.add(targetDir);
+      await fmReload();
+      fmProgress.textContent = `${mode === "copy" ? "已复制" : "已移动"}：${dst}`;
+      return null;
+    },
+  });
+}
+
+async function fmDelete(n) {
+  if (!n || !n.path) return;
+  const what = n.dir ? `目录「${n.path}」及其全部内容` : `文件「${n.path}」`;
+  const extra = (n.source === "http" || (fmDefaults && fmDefaults.has(n.path)))
+    ? "\n\n（服务器默认资源：删除后会在本机隐藏，可在「已隐藏」里恢复。）"
+    : "";
+  if (!confirm(`删除${what}？${extra}`)) return;
+  fmProgress.textContent = "删除中…";
+  try {
+    await nanoVfsDelete(fmDeps, n.path);
+    fmSelected = nanoPathParent(n.path);
+    await fmReload();
+    fmProgress.textContent = "已删除 " + n.path;
+  } catch (e) {
+    fmProgress.textContent = "删除失败：" + e.message;
   }
 }
+
+async function fmDownload(n) {
+  if (!n || n.dir) return;
+  fmProgress.textContent = "准备下载 " + n.path + " …";
+  try {
+    const bytes = await nanoVfsReadBytes(fmDeps, n.path);
+    const blob = new Blob([bytes], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = n.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    fmProgress.textContent = `已下载 ${n.name}（${fmtSize(bytes.length)}）`;
+  } catch (e) {
+    fmProgress.textContent = "下载失败：" + e.message;
+  }
+  return;
+}
+
+function fmRunAction(act, path) {
+  const n = fmIndex.get(path);
+  if (act === "mkdir") return fmOpenMkdir();
+  if (act === "upload") return fmTriggerUpload(path);
+  if (!n) return;
+  if (act === "download") return fmDownload(n);
+  if (act === "rename") return fmOpenTransfer(n, "rename");
+  if (act === "copy") return fmOpenTransfer(n, "copy");
+  if (act === "move") return fmOpenTransfer(n, "move");
+  if (act === "delete") return fmDelete(n);
+}
+
+fmActions.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  fmRunAction(btn.getAttribute("data-act"), fmSelected);
+});
+
+// ---------------- 上传 ----------------
+
+function fmTriggerUpload(dir) {
+  fmUploadTarget = dir || "";
+  uploadInput.value = "";
+  uploadInput.click();
+}
+
+async function fmUploadFiles(fileList, dir) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  dir = dir || "";
+  let ok = 0, skipped = 0;
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    if (!nanoNameValid(f.name)) { skipped++; continue; }
+    const rel = nanoPathJoin(dir, f.name);
+    if (fmIndex.has(rel) && !confirm(`「${rel}」已存在，覆盖？`)) { skipped++; continue; }
+    fmProgress.textContent = `上传 ${i + 1}/${files.length}：${rel}（${fmtSize(f.size)}）`;
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      await nanoVfsWriteFile(fmDeps, rel, bytes);
+      ok++;
+    } catch (e) {
+      fmProgress.textContent = "上传失败：" + f.name + " " + e.message;
+    }
+  }
+  if (dir) fmExpanded.add(dir);
+  fmSelected = dir;
+  await fmReload();
+  fmProgress.textContent = `已上传 ${ok}/${files.length} 个到 ${dir || "/"}${skipped ? `（跳过 ${skipped}）` : ""}`;
+}
+
+uploadInput.addEventListener("change", () => {
+  const target = fmUploadTarget;
+  fmUploadFiles(uploadInput.files, target);
+});
+
+// ---------------- 拖放：行→目录行（内部移动/复制）、系统文件→目录行（上传） ----------------
+
+function fmDropTargetPath(x, y) {
+  if (!x && !y) return null;
+  const el = document.elementFromPoint(x, y);
+  if (!el || !el.closest) return null;
+  const row = el.closest(".fm-row");
+  if (!row || !fmTreeEl.contains(row)) return null;
+  const p = row.getAttribute("data-path");
+  const n = fmIndex.get(p);
+  if (n && n.dir) return p;
+  return nanoPathParent(p); // 落在文件行上 → 放进它所在目录
+}
+
+function fmMarkDropTarget(x, y) {
+  for (const el of fmTreeEl.querySelectorAll(".fm-row.drop-target")) el.classList.remove("drop-target");
+  const dir = fmDropTargetPath(x, y);
+  if (dir === null) return;
+  for (const el of fmTreeEl.querySelectorAll(".fm-row")) {
+    if (el.getAttribute("data-path") === dir) el.classList.add("drop-target");
+  }
+}
+
+// 内部拖放（鼠标/笔；触屏用「移动到…/复制到…」对话框，避免与滚动手势打架）
+fmTreeEl.addEventListener("pointerdown", (e) => {
+  fmSuppressClick = false;
+  if (e.pointerType === "touch") return;
+  const row = e.target.closest ? e.target.closest(".fm-row") : null;
+  if (!row) return;
+  const path = row.getAttribute("data-path");
+  if (!path) return;
+  fmDrag = { path, x0: e.clientX, y0: e.clientY, active: false, ghost: null };
+});
+fmTreeEl.addEventListener("pointermove", (e) => {
+  if (!fmDrag) return;
+  const dx = e.clientX - fmDrag.x0, dy = e.clientY - fmDrag.y0;
+  if (!fmDrag.active) {
+    if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+    fmDrag.active = true;
+    const n = fmIndex.get(fmDrag.path);
+    fmDrag.ghost = document.createElement("div");
+    fmDrag.ghost.id = "fm-ghost";
+    fmDrag.ghost.textContent = nanoPathBase(fmDrag.path) + (n && n.dir ? "/" : "");
+    document.body.appendChild(fmDrag.ghost);
+  }
+  e.preventDefault();
+  fmDrag.ghost.style.left = (e.clientX + 12) + "px";
+  fmDrag.ghost.style.top = (e.clientY + 12) + "px";
+  fmMarkDropTarget(e.clientX, e.clientY);
+});
+function fmEndDrag(e) {
+  if (!fmDrag) return;
+  const drag = fmDrag;
+  fmDrag = null;
+  if (!drag.active) return;
+  if (drag.ghost) drag.ghost.remove();
+  fmMarkDropTarget(0, 0);
+  fmSuppressClick = true;
+  const targetDir = fmDropTargetPath(e.clientX, e.clientY);
+  if (targetDir === null) return;
+  const n = fmIndex.get(drag.path);
+  if (!n || nanoPathWithin(targetDir, drag.path)) {
+    fmProgress.textContent = "不能放进自己的子目录";
+    return;
+  }
+  if (nanoPathParent(drag.path) === targetDir) {
+    fmProgress.textContent = "已经在该目录里，未做改动";
+    return;
+  }
+  fmOpenTransfer(n, "move", targetDir);
+}
+fmTreeEl.addEventListener("pointerup", fmEndDrag);
+fmTreeEl.addEventListener("pointercancel", () => { if (fmDrag) { if (fmDrag.ghost) fmDrag.ghost.remove(); fmDrag = null; } });
+
+// 系统文件拖入（桌面便利通路）
+fmTreeEl.addEventListener("dragover", (e) => {
+  if (!e.dataTransfer) return;
+  const hasFiles = Array.from(e.dataTransfer.types || []).includes("Files");
+  if (!hasFiles) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+  fmMarkDropTarget(e.clientX, e.clientY);
+});
+fmTreeEl.addEventListener("dragleave", () => fmMarkDropTarget(0, 0));
+fmTreeEl.addEventListener("drop", (e) => {
+  if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+  e.preventDefault();
+  const dir = fmDropTargetPath(e.clientX, e.clientY);
+  fmMarkDropTarget(0, 0);
+  fmUploadFiles(e.dataTransfer.files, dir === null ? fmTargetDir() : dir);
+});
+
+// ---------------- 工具栏 / 面板开关 ----------------
+
+document.getElementById("fm-mkdir").addEventListener("click", fmOpenMkdir);
+document.getElementById("fm-upload").addEventListener("click", () => fmTriggerUpload(fmTargetDir()));
+document.getElementById("fm-collapse").addEventListener("click", () => {
+  fmExpanded.clear();
+  fmRenderTree();
+  fmProgress.textContent = "已全部折叠";
+});
+document.getElementById("fm-refresh").addEventListener("click", () => {
+  fmProgress.textContent = "刷新中…";
+  fmReload().then(() => { fmProgress.textContent = "已刷新"; });
+});
 
 resBtn.addEventListener("click", () => {
   resPanel.classList.add("open");
@@ -810,40 +1530,12 @@ resBtn.addEventListener("click", () => {
 });
 document.getElementById("res-close").addEventListener("click", () => resPanel.classList.remove("open"));
 resPanel.addEventListener("click", (e) => { if (e.target === resPanel) resPanel.classList.remove("open"); });
-
-uploadBtn.addEventListener("click", async () => {
-  const files = uploadInput.files;
-  if (!files || !files.length) { uploadProg.textContent = "请先选择文件"; return; }
-  uploadBtn.disabled = true;
-  try {
-    let done = 0;
-    for (const file of files) {
-      const dir = uploadDir.value === "auto" ? guessUploadDir(file.name) : uploadDir.value;
-      const rel = dir ? dir + "/" + file.name : file.name;
-      uploadProg.textContent = `上传中 ${done + 1}/${files.length}：${rel}`;
-      const buf = await file.arrayBuffer();
-      // 立即写入 MEMFS（当前会话生效）+ 持久化到 IndexedDB（下次启动/离线可用）
-      if (mountCtx.FS) {
-        try { mountCtx.FS.writeFile(mountCtx.resRoot + "/" + rel, new Uint8Array(buf)); } catch (e) {
-          console.warn("MEMFS write failed:", rel, e);
-        }
-      }
-      await nanoStorePut(rel, file);
-      done++;
-    }
-    uploadProg.textContent = `已上传 ${done}/${files.length} 个（已即时生效）`;
-    uploadInput.value = "";
-  } catch (e) {
-    uploadProg.textContent = "上传失败：" + e;
-  } finally {
-    uploadBtn.disabled = false;
-    refreshResPanel();
-    updateModelSection();
-  }
-});
+window.addEventListener("resize", () => { if (fmTree && resPanel.classList.contains("open")) fmRenderTree(); });
 </script>
 <!-- 本地存储层（IndexedDB；先于 loader.js） -->
 <script src="store.js"></script>
+<!-- 虚拟文件系统逻辑层（路径/目录树/可见行/文件操作；node 可测） -->
+<script src="vfs.js"></script>
 <!-- 加载器（WASM 下载进度 + 资源挂载；node 可测） -->
 <script src="loader.js"></script>
 <!-- Emscripten 产物（build_wasm_gui.sh 生成）：nano_gui.js + nano_gui.wasm -->
