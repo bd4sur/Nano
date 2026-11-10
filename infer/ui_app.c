@@ -1547,21 +1547,60 @@ void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state) {
     s_linglong_touch_owned = 1; // 主天空界面：触屏归显式控件，抑制宫格软键
 }
 
-// 设置界面的功能格映射：返回现有处理链使用的键码（调用前会置 Ctrl 激活）。
-// 顺序按新 5x4 布局的行优先排列；无功能备用格返回 NANO_KEY_IDLE。
+// 云参数现值名称与控制（设置界面第 1 行前三格；原主控制面板左列）
+static const wchar_t *ui_app_linglong_cloud_layer_name(Linglong_Config *cfg) {
+    int32_t n = 0;
+    const Linglong_Cloud_Option *opt = linglong_cloud_layer_options(&n);
+    if (n <= 0) return L"关";
+    for (int32_t i = 0; i < n; i++) {
+        if (opt[i].value == cfg->cloud_layer_mask) return opt[i].name;
+    }
+    return opt[0].name;
+}
+
+static const wchar_t *ui_app_linglong_cloud_precision_name(Linglong_Config *cfg) {
+    int32_t n = 0;
+    const Linglong_Cloud_Option *opt = linglong_cloud_precision_options(&n);
+    int32_t idx = cfg->cloud_precision_level;
+    if (idx < 0 || idx >= n) idx = 0;
+    return (n > 0) ? opt[idx].name : L"中";
+}
+
+static void ui_app_linglong_cloud_next_coverage(Global_State *global_state) {
+    int32_t n = ui_cloud_coverage_level_num();
+    if (n < 1) n = 1;
+    global_state->linglong_cfg->cloud_coverage_level =
+        (global_state->linglong_cfg->cloud_coverage_level + 1) % n;
+}
+
+static void ui_app_linglong_cloud_next_layer(Global_State *global_state) {
+    int32_t n = 0;
+    const Linglong_Cloud_Option *opt = linglong_cloud_layer_options(&n);
+    int32_t idx = 0;
+    for (int32_t i = 0; i < n; i++) {
+        if (opt[i].value == global_state->linglong_cfg->cloud_layer_mask) { idx = i; break; }
+    }
+    idx = (n > 0) ? (idx + 1) % n : 0;
+    if (n > 0) global_state->linglong_cfg->cloud_layer_mask = opt[idx].value;
+}
+
+static void ui_app_linglong_cloud_next_precision(Global_State *global_state) {
+    int32_t n = 0;
+    (void)linglong_cloud_precision_options(&n);
+    if (n < 1) n = 1;
+    global_state->linglong_cfg->cloud_precision_level =
+        (global_state->linglong_cfg->cloud_precision_level + 1) % n;
+}
+
+// 设置界面剩余功能格映射：返回现有处理链使用的键码（调用前会置 Ctrl 激活）。
+// 第 1 行前三格（云量/云类/云精度）由调用方直接循环配置，不合成按键。
 static int32_t ui_app_linglong_setting_cell_key(int32_t cell) {
     switch (cell) {
-        case 0:  return NANO_KEY_1;    // 投影算法
-        case 1:  return NANO_KEY_2;    // 赤道坐标
-        case 2:  return NANO_KEY_3;    // 地平坐标
         case 3:  return NANO_KEY_4;    // 黄道
         case 4:  return NANO_KEY_ctrl; // 返回
-        case 5:  return NANO_KEY_7;    // 大气散射
-        case 6:  return NANO_KEY_8;    // 地景
         case 7:  return NANO_KEY_5;    // 天体名称
         case 8:  return NANO_KEY_9;    // 平滑滤波
         case 9:  return NANO_KEY_0;    // 跟踪太阳
-        case 10: return NANO_KEY_0;    // 跟踪太阳（第 3 行首格，按需求保留的第二枚）
         default: return NANO_KEY_IDLE;
     }
 }
@@ -1579,37 +1618,18 @@ static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLin
         cells[i].is_special = 0;
     }
 
-    // 第 1 行：投影算法、赤道坐标、地平坐标、黄道、返回
-    cells[0].label = L"投影算法";
-    cells[0].value = (cfg->projection == 0) ? L"鱼眼" : L"透视";
+    // 第 1 行：云量、云类、云精度、黄道、返回
+    cells[0].label = L"云量";
+    cells[0].value = ui_cloud_coverage_level_name(cfg->cloud_coverage_level);
     cells[0].value_r = 0; cells[0].value_g = 255; cells[0].value_b = 255;
 
-    cells[1].label = L"赤道坐标";
-    if (cfg->enable_equatorial_coord == 0) {
-        cells[1].value = L"关";
-        cells[1].value_r = 222; cells[1].value_g = 0; cells[1].value_b = 0;
-    }
-    else {
-        cells[1].value = L"开";
-        cells[1].value_r = 0; cells[1].value_g = 255; cells[1].value_b = 0;
-    }
+    cells[1].label = L"云类";
+    cells[1].value = ui_app_linglong_cloud_layer_name(cfg);
+    cells[1].value_r = 0; cells[1].value_g = 255; cells[1].value_b = 255;
 
-    cells[2].label = L"地平坐标";
-    switch (cfg->enable_horizontal_coord) {
-        case 0:
-            cells[2].value = L"关";
-            cells[2].value_r = 222; cells[2].value_g = 0; cells[2].value_b = 0;
-            break;
-        case 1:
-            cells[2].value = L"方位角";
-            cells[2].value_r = 0; cells[2].value_g = 255; cells[2].value_b = 255;
-            break;
-        case 2:
-            cells[2].value = L"坐标圈";
-            cells[2].value_r = 0; cells[2].value_g = 255; cells[2].value_b = 255;
-            break;
-        default: break;
-    }
+    cells[2].label = L"云精度";
+    cells[2].value = ui_app_linglong_cloud_precision_name(cfg);
+    cells[2].value_r = 0; cells[2].value_g = 255; cells[2].value_b = 255;
 
     cells[3].label = L"黄道";
     if (cfg->enable_ecliptic_circle == 0) {
@@ -1624,57 +1644,7 @@ static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLin
     cells[4].label = L"返回";
     cells[4].is_special = 1;
 
-    // 第 2 行：大气散射、地景、天体名称、平滑滤波、跟踪太阳
-    cells[5].label = L"大气散射";
-    switch (cfg->sky_model) {
-        case 0:
-            cells[5].value = L"关";
-            cells[5].value_r = 222; cells[5].value_g = 0; cells[5].value_b = 0;
-            break;
-        case 1:
-            cells[5].value = L"简化模型";
-            cells[5].value_r = 0; cells[5].value_g = 255; cells[5].value_b = 255;
-            break;
-        case 2:
-            cells[5].value = L"一次散射";
-            cells[5].value_r = 0; cells[5].value_g = 255; cells[5].value_b = 255;
-            break;
-        case 3:
-            cells[5].value = L"二次散射";
-            cells[5].value_r = 0; cells[5].value_g = 255; cells[5].value_b = 255;
-            break;
-        case 4:
-            cells[5].value = L"体积云";
-            cells[5].value_r = 255; cells[5].value_g = 170; cells[5].value_b = 0;
-            break;
-        case 5:
-            cells[5].value = L"海洋天空";
-            cells[5].value_r = 0; cells[5].value_g = 200; cells[5].value_b = 255;
-            break;
-        default: break;
-    }
-
-    cells[6].label = L"地景";
-    switch (cfg->landscape_index) {
-        case 0:
-            cells[6].value = L"关";
-            cells[6].value_r = 222; cells[6].value_g = 0; cells[6].value_b = 0;
-            break;
-        case 1:
-            cells[6].value = L"草原";
-            cells[6].value_r = 0; cells[6].value_g = 255; cells[6].value_b = 255;
-            break;
-        case 2:
-            cells[6].value = L"卫星照片";
-            cells[6].value_r = 0; cells[6].value_g = 255; cells[6].value_b = 255;
-            break;
-        case 3:
-            cells[6].value = L"实时海洋";
-            cells[6].value_r = 0; cells[6].value_g = 200; cells[6].value_b = 255;
-            break;
-        default: break;
-    }
-
+    // 第 2 行：前两格空出（原大气散射/地景已移到控制面板），后三格保留
     cells[7].label = L"天体名称";
     switch (cfg->enable_star_name) {
         case 0:
@@ -1716,40 +1686,7 @@ static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLin
         cells[9].value_r = 0; cells[9].value_g = 255; cells[9].value_b = 0;
     }
 
-    // 第 3 行首格：按需求保留第二枚“跟踪太阳”；其余 9 格无功能备用。
-    cells[10].label = L"跟踪太阳";
-    cells[10].value = cells[9].value;
-    cells[10].value_r = cells[9].value_r;
-    cells[10].value_g = cells[9].value_g;
-    cells[10].value_b = cells[9].value_b;
-
-    // 第 3 行第 2~4 格：海洋参数（观察高度 / 涌浪波高 / 涌浪波长）。
-    // 只在 sky_model==5 或 landscape_index==3 时影响画面；其它档位现值画灰但可预调。
-    {
-        const int32_t ocean_active = (cfg->sky_model == 5 || cfg->landscape_index == 3);
-        int32_t n = 0;
-        const Linglong_Ocean_Option *opt;
-        struct { int32_t cell; int32_t level; const Linglong_Ocean_Option *(*get)(int32_t *); } m[3] = {
-            { 11, cfg->ocean_height_level,    linglong_ocean_height_options },
-            { 12, cfg->ocean_swell_hs_level,  linglong_ocean_swell_hs_options },
-            { 13, cfg->ocean_swell_len_level, linglong_ocean_swell_len_options },
-        };
-        static const wchar_t *labels[3] = { L"观察高度", L"涌浪波高", L"涌浪波长" };
-        for (int32_t i = 0; i < 3; i++) {
-            opt = m[i].get(&n);
-            if (opt == NULL || n <= 0) continue;
-            int32_t lv = m[i].level;
-            if (lv < 0 || lv >= n) lv = 0;
-            cells[m[i].cell].label = labels[i];
-            cells[m[i].cell].value = opt[lv].name;
-            if (ocean_active) {
-                cells[m[i].cell].value_r = 0; cells[m[i].cell].value_g = 200; cells[m[i].cell].value_b = 255;
-            }
-            else {
-                cells[m[i].cell].value_r = 168; cells[m[i].cell].value_g = 176; cells[m[i].cell].value_b = 190;
-            }
-        }
-    }
+    // 第 3、4 行全部为无功能备用按钮（不再重复“跟踪太阳”）。
 }
 
 void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state) {
@@ -2008,10 +1945,11 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
         UiLinglongCtrlState ctrl_state;
         ctrl_state.running_state = linglong_timemachine_running_state;
         ctrl_state.speed = linglong_timemachine_speed;
-        ctrl_state.cloud_coverage_level = global_state->linglong_cfg->cloud_coverage_level;
-        ctrl_state.cloud_layer_mask = global_state->linglong_cfg->cloud_layer_mask;
-        ctrl_state.cloud_precision_level = global_state->linglong_cfg->cloud_precision_level;
-        ctrl_state.cloud_enabled = (global_state->linglong_cfg->sky_model == 4);
+        ctrl_state.projection = global_state->linglong_cfg->projection;
+        ctrl_state.equatorial_coord = global_state->linglong_cfg->enable_equatorial_coord;
+        ctrl_state.horizontal_coord = global_state->linglong_cfg->enable_horizontal_coord;
+        ctrl_state.sky_model = global_state->linglong_cfg->sky_model;
+        ctrl_state.landscape_index = global_state->linglong_cfg->landscape_index;
         ui_linglong_ctrl_draw(global_state->llgfx, &ctrl_state);
     }
 
@@ -2192,35 +2130,31 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                     linglong_paused_resume_state = 1;
                     break;
 
-                case UI_LL_CTRL_CLOUD_COVERAGE: {
-                    // 云量档位循环（晴空→疏云→半云→多云→阴天→满云）
-                    int32_t n = ui_cloud_coverage_level_num();
-                    if (n < 1) n = 1;
-                    global_state->linglong_cfg->cloud_coverage_level = (global_state->linglong_cfg->cloud_coverage_level + 1) % n;
+                case UI_LL_CTRL_PROJECTION:
+                    // 投影算法：鱼眼 ↔ 透视
+                    global_state->linglong_cfg->projection =
+                        (global_state->linglong_cfg->projection == 0) ? 1 : 0;
                     break;
-                }
-
-                case UI_LL_CTRL_CLOUD_LAYER: {
-                    // 云类（云层掩码）档位循环：低层 → 低+中 → 全部 → 无云 → 低层…
-                    int32_t n = 0;
-                    const Linglong_Cloud_Option *opt = linglong_cloud_layer_options(&n);
-                    int32_t idx = 0;
-                    for (int32_t i = 0; i < n; i++) {
-                        if (opt[i].value == global_state->linglong_cfg->cloud_layer_mask) { idx = i; break; }
-                    }
-                    idx = (n > 0) ? (idx + 1) % n : 0;
-                    global_state->linglong_cfg->cloud_layer_mask = opt[idx].value;
+                case UI_LL_CTRL_EQUATORIAL:
+                    // 赤道坐标：关 → 开 → 关
+                    global_state->linglong_cfg->enable_equatorial_coord =
+                        (global_state->linglong_cfg->enable_equatorial_coord + 1) % 2;
                     break;
-                }
-
-                case UI_LL_CTRL_CLOUD_PRECISION: {
-                    // 云精度档位循环：高 → 中 → 低（内部渲染降采样倍数 + ray-march 步距）
-                    int32_t n = 0;
-                    (void)linglong_cloud_precision_options(&n);
-                    if (n < 1) n = 1;
-                    global_state->linglong_cfg->cloud_precision_level = (global_state->linglong_cfg->cloud_precision_level + 1) % n;
+                case UI_LL_CTRL_HORIZONTAL:
+                    // 地平坐标：关 → 方位角 → 坐标圈 → 关
+                    global_state->linglong_cfg->enable_horizontal_coord =
+                        (global_state->linglong_cfg->enable_horizontal_coord + 1) % 3;
                     break;
-                }
+                case UI_LL_CTRL_SKY_MODEL:
+                    // 大气散射：0..5 循环
+                    global_state->linglong_cfg->sky_model =
+                        (global_state->linglong_cfg->sky_model + 1) % 6;
+                    break;
+                case UI_LL_CTRL_LANDSCAPE:
+                    // 地景：0..3 循环
+                    global_state->linglong_cfg->landscape_index =
+                        (global_state->linglong_cfg->landscape_index + 1) % 4;
+                    break;
 
                 default:
                     // 视角九宫格：合成对应的 NANO_KEY_1~9 短按事件，
@@ -2251,7 +2185,20 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         int32_t cell = ui_linglong_ctrl_settings_handle_touch(
             key_event->touch_edge, key_event->touch_x, key_event->touch_y,
             key_event->touch_down_x, key_event->touch_down_y);
-        if (cell >= 11 && cell <= 13) {
+        if (cell >= 0 && cell <= 2) {
+            // 云参数：直接循环档位（硬键没有空位可映射，与海洋参数按钮同为触屏专用）
+            if (cell == 0) {
+                ui_app_linglong_cloud_next_coverage(global_state);
+            }
+            else if (cell == 1) {
+                ui_app_linglong_cloud_next_layer(global_state);
+            }
+            else {
+                ui_app_linglong_cloud_next_precision(global_state);
+            }
+            linglong_state = LL_STATE_SETTING_CALLBACK;   // 重绘设置界面（现值已变）
+        }
+        else if (cell >= 11 && cell <= 13) {
             // 海洋参数：直接循环档位（硬键没有空位可映射，与云参数按钮同为触屏专用）
             Linglong_Config *oc = global_state->linglong_cfg;
             int32_t n = 0;

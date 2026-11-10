@@ -18,11 +18,10 @@ extern "C" {
 //       · 底部四分之一区域的四个时间控制按钮：
 //           <<（快退） 实时（恢复当前时间） 运行/暂停（时间流逝开关） >>（快进）；
 //       · 画面中央的 3x3 半透明九宫格，功能与十六宫格软键 1~9 一一对应；
-//       · 九宫格左侧竖排三枚体积云参数按钮（与九宫格三行齐平）：
-//           云量（档位循环）、云类（云层组合循环）、云精度（渲染档位循环），
-//           按钮上直接显示现值（如“云量/半云”）——仅在 sky_model==4 时影响画面；
-//       · 九宫格右上角空位（“右转”右侧）的“设置”按钮，等价于 C 键（Ctrl），
-//           打开玲珑仪设置界面；
+//       · 九宫格左侧竖排三枚设置按钮（与九宫格三行齐平）：投影算法、赤道坐标、
+//           地平坐标，按钮上直接显示现值；
+//       · 九宫格右侧竖排：顶部“设置”（等价 C 键，打开设置界面），下方两枚
+//           大气散射、地景（显示现值）；
 //   - “退出”等价于十六宫格 A 键（Esc），退出玲珑仪。
 //
 // 设计约束（与项目触屏化改造的既有范式一致）：
@@ -35,10 +34,11 @@ extern "C" {
 // ---------------------------------------------------------------------------
 // 玲珑天象仪设置界面（5 列 x 4 行显式按钮，与控制面板同一圆角半透明样式）
 //
-// 布局（320x240）：左上角标题“玲珑天象仪设置”位于第一行按钮上方；20 枚按钮
-// 排成 5x4，前 10 枚为功能按钮（第 5 枚“返回”用特殊样式），第 11 枚为第二个
-// “跟踪太阳”（按需求放在第 3 行首格），其余 9 枚为无功能备用按钮。
-// 调用方负责先清屏（深色背景）并填充 cells 数组；本模块只按固定布局绘制。
+// 布局（320x240）：直接叠加在主画面上，不清屏；按钮几何与控制面板一致。
+// 第 1 行：云量、云类、云精度、黄道、返回（红色特殊样式）；
+// 第 2 行：空、空、天体名称、平滑滤波、跟踪太阳；
+// 第 3、4 行全部为无功能备用按钮。
+// 调用方填充 cells 数组；本模块只按固定布局绘制。
 // ---------------------------------------------------------------------------
 #define UI_LL_SETTING_COLS   (5)
 #define UI_LL_SETTING_ROWS   (4)
@@ -51,7 +51,7 @@ typedef struct {
     uint8_t is_special;     // 1=返回按钮（特殊配色/单行大字）
 } UiLinglongSettingCell;
 
-// 绘制设置界面（不刷新屏幕；调用方先清屏）
+// 绘制设置界面（不刷新屏幕；调用方先绘制主画面，本函数直接叠加）
 void    ui_linglong_ctrl_draw_settings(Nano_GFX *gfx, const UiLinglongSettingCell *cells);
 
 // 设置界面触屏：命中并松手在同一按钮时返回 0..UI_LL_SETTING_COUNT-1；无动作返回 -1。
@@ -74,22 +74,25 @@ void    ui_linglong_ctrl_settings_reset(void);
 // 视角九宫格：UI_LL_CTRL_VIEW_1 + (n-1)，n=1..9，对应软键 NANO_KEY_1..9
 #define UI_LL_CTRL_VIEW_1     (10)
 #define UI_LL_CTRL_VIEW_9     (18)
-// 体积云参数按钮（左侧竖排三枚，仅在 sky_model==4 时影响画面）
-#define UI_LL_CTRL_CLOUD_COVERAGE  (19)  // 云量：档位循环
-#define UI_LL_CTRL_CLOUD_LAYER     (20)  // 云类：云层掩码循环
-#define UI_LL_CTRL_CLOUD_PRECISION (21)  // 云精度：渲染档位循环
+// 控制面板左侧/右侧的设置按钮（点击后直接改配置，不切换界面）
+#define UI_LL_CTRL_PROJECTION   (19)  // 投影算法（鱼眼/透视）
+#define UI_LL_CTRL_EQUATORIAL   (20)  // 赤道坐标（关/开）
+#define UI_LL_CTRL_HORIZONTAL   (21)  // 地平坐标（关/方位角/坐标圈）
+#define UI_LL_CTRL_SKY_MODEL    (22)  // 大气散射（0..5 循环）
+#define UI_LL_CTRL_LANDSCAPE    (23)  // 地景（0..3 循环）
 
 // 绘制/命中所需的控件状态（由调用方从玲珑仪当前配置回填；按钮上直接显示现值）
 typedef struct {
     int32_t running_state;          // 时光机状态（0-停止 1-运行 2-实时），用于时间按钮高亮
     int32_t speed;                  // 时光机速度（正未来/负过去）
-    int32_t cloud_coverage_level;   // 云量档位
-    int32_t cloud_layer_mask;       // 云类（云层掩码）
-    int32_t cloud_precision_level;  // 云精度档位
-    int32_t cloud_enabled;          // 当前天空模型是否吃体积云参数（sky_model==4）；否则三个按钮画暗
+    int32_t projection;             // 投影算法 0-鱼眼 1-透视
+    int32_t equatorial_coord;       // 赤道坐标 0-关 1-开
+    int32_t horizontal_coord;       // 地平坐标 0-关 1-方位角 2-坐标圈
+    int32_t sky_model;              // 大气散射 0..5
+    int32_t landscape_index;        // 地景 0..3
 } UiLinglongCtrlState;
 
-// 初始化/复位：隐藏控制面板（时间按钮 + 视角九宫格 + 云参数按钮）并清除按住高亮
+// 初始化/复位：隐藏控制面板（时间按钮 + 视角九宫格 + 设置按钮）并清除按住高亮
 void    ui_linglong_ctrl_init(void);
 void    ui_linglong_ctrl_reset(void);
 
@@ -115,7 +118,7 @@ int32_t ui_linglong_ctrl_poll_drag(int32_t touch_edge, int32_t is_touching,
 uint8_t ui_linglong_ctrl_take_dirty(void);
 
 // 绘制控件（不刷新屏幕，由调用方统一 gfx_refresh）。
-// st 中的时光机状态用于时间按钮高亮，云量/云类/云精度用于按钮上直接显示现值。
+// st 中的时光机状态用于时间按钮高亮，其余设置项用于按钮上直接显示现值。
 void    ui_linglong_ctrl_draw(Nano_GFX *gfx, const UiLinglongCtrlState *st);
 
 #ifdef __cplusplus

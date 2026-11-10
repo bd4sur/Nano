@@ -3,8 +3,6 @@
 #include "platform.h"
 #include "graphics.h"
 #include "ui.h" // TOUCH_EDGE_DOWN / TOUCH_EDGE_UP
-#include "ui_cloud.h"   // 云量档位名称（档位语义的唯一真源）
-#include "celestial.h"  // 云类 / 云精度 档位表
 
 #include "ui_linglong_ctrl.h"
 
@@ -58,16 +56,17 @@
 #define LL_VIEW_Y0_ABOVE_TIME (LL_TIME_BG_Y - 6 - LL_VIEW_TOTAL_H)
 #define LL_VIEW_Y0        ((LL_VIEW_Y0_CENTER < LL_VIEW_Y0_ABOVE_TIME) ? LL_VIEW_Y0_CENTER : LL_VIEW_Y0_ABOVE_TIME)
 
-// ---- 体积云参数按钮（九宫格左侧竖排，与九宫格三行齐平；不改动已有按钮位置）------
-#define LL_CLOUD_COUNT    (3)
-#define LL_CLOUD_BTN_W    (LL_VIEW_BTN_W)
-#define LL_CLOUD_BTN_H    (LL_VIEW_BTN_H)
-#define LL_CLOUD_GAP_X    (6)
-#define LL_CLOUD_X0       (LL_VIEW_X0 - LL_CLOUD_GAP_X - LL_CLOUD_BTN_W)
-#define LL_CLOUD_ROW_H    (LL_VIEW_BTN_H + LL_VIEW_GAP)
-#define LL_CLOUD_TOTAL_H  (LL_CLOUD_COUNT * LL_CLOUD_ROW_H - LL_VIEW_GAP)
-// 第 i 枚按钮的 y（直接沿用九宫格行距，视觉上三行对齐）
-#define LL_CLOUD_Y(i)     (LL_VIEW_Y0 + (i) * LL_CLOUD_ROW_H)
+// ---- 控制面板左右两列设置按钮（与九宫格三行齐平，不改动已有按钮位置）------
+// 左列（原云量/云类/云精度位置）：投影算法、赤道坐标、地平坐标
+// 右列：设置（顶格）、大气散射、地景（设置下方两格）
+#define LL_OPT_COUNT      (3)
+#define LL_OPT_BTN_W      (LL_VIEW_BTN_W)
+#define LL_OPT_BTN_H      (LL_VIEW_BTN_H)
+#define LL_OPT_GAP_X      (6)
+#define LL_OPT_LEFT_X0    (LL_VIEW_X0 - LL_OPT_GAP_X - LL_OPT_BTN_W)
+#define LL_OPT_RIGHT_X0   (LL_SETTINGS_BTN_X)
+#define LL_OPT_ROW_H      (LL_VIEW_BTN_H + LL_VIEW_GAP)
+#define LL_OPT_Y(i)       (LL_VIEW_Y0 + (i) * LL_OPT_ROW_H)
 
 // ---- “设置”按钮（控制面板右上角空位，即“右转”右侧；与面板同显同隐）------
 #define LL_SETTINGS_BTN_X (LL_VIEW_X0 + LL_VIEW_TOTAL_W + LL_VIEW_GAP)
@@ -107,10 +106,10 @@
 #define LL_ALPHA_TOP        (210)
 #define LL_ALPHA_TIME       (210)
 #define LL_ALPHA_VIEW       (100)
-// 云参数按钮：两行文字（名称+现值）信息密度高，半透明 100 在正午亮天空上会洗掉
-// 文字对比度，故单独用更实的底色（仍能透出背景）
-#define LL_ALPHA_CLOUD      (168)
-#define LL_ALPHA_CLOUD_DIM  (110)
+// 两行文字按钮（控制面板左右设置列 + 设置界面）：名称+现值信息密度高，
+// 半透明 100 在正午亮天空上会洗掉文字对比度，故用更实的底色（仍能透出背景）
+#define LL_ALPHA_OPTION      (168)
+#define LL_ALPHA_OPTION_DIM  (110)
 #define LL_COLOR_DIM_R      (168)
 #define LL_COLOR_DIM_G      (176)
 #define LL_COLOR_DIM_B      (190)
@@ -150,13 +149,28 @@ static const wchar_t *S_VIEW_LABEL[LL_VIEW_ROWS][LL_VIEW_COLS] = {
     {L"拉远", L"抬头", L"推近"},
 };
 
-// 体积云参数按钮（从上到下）：动作与名称（现值另外从玲珑仪配置读取并显示在下行）
-static const int32_t S_CLOUD_ACTION[LL_CLOUD_COUNT] = {
-    UI_LL_CTRL_CLOUD_COVERAGE, UI_LL_CTRL_CLOUD_LAYER, UI_LL_CTRL_CLOUD_PRECISION,
+// 控制面板左列（原云参数位置）：动作与名称
+static const int32_t S_LEFT_ACTION[LL_OPT_COUNT] = {
+    UI_LL_CTRL_PROJECTION, UI_LL_CTRL_EQUATORIAL, UI_LL_CTRL_HORIZONTAL,
 };
-static const wchar_t *S_CLOUD_LABEL[LL_CLOUD_COUNT] = {
-    L"云量", L"云类", L"云精度",
+static const wchar_t *S_LEFT_LABEL[LL_OPT_COUNT] = {
+    L"投影算法", L"赤道坐标", L"地平坐标",
 };
+
+// 控制面板右列（设置按钮下方两格）：动作与名称
+static const int32_t S_RIGHT_ACTION[2] = {
+    UI_LL_CTRL_SKY_MODEL, UI_LL_CTRL_LANDSCAPE,
+};
+static const wchar_t *S_RIGHT_LABEL[2] = {
+    L"大气散射", L"地景",
+};
+
+// 各设置项的现值名称（索引越界时统一回退到 0）
+static const wchar_t *S_PROJECTION_NAME[2] = {L"鱼眼", L"透视"};
+static const wchar_t *S_OFF_ON_NAME[2] = {L"关", L"开"};
+static const wchar_t *S_HORIZONTAL_NAME[3] = {L"关", L"方位角", L"坐标圈"};
+static const wchar_t *S_SKY_MODEL_NAME[6] = {L"关", L"简化模型", L"一次散射", L"二次散射", L"体积云", L"海洋天空"};
+static const wchar_t *S_LANDSCAPE_NAME[4] = {L"关", L"草原", L"卫星照片", L"实时海洋"};
 
 static int32_t ll_in_rect(int32_t x, int32_t y, int32_t rx, int32_t ry, int32_t rw, int32_t rh) {
     return (x >= rx && x < rx + rw && y >= ry && y < ry + rh);
@@ -205,11 +219,23 @@ static int32_t ll_hit_test(int32_t x, int32_t y) {
         return UI_LL_CTRL_NONE;
     }
 
-    // 体积云参数按钮（九宫格左侧竖排；仅“控制”面板可见时）
-    if (s_controls_visible && ll_in_rect(x, y, LL_CLOUD_X0, LL_VIEW_Y0, LL_CLOUD_BTN_W, LL_CLOUD_TOTAL_H)) {
-        for (int32_t i = 0; i < LL_CLOUD_COUNT; i++) {
-            if (ll_in_rect(x, y, LL_CLOUD_X0, LL_CLOUD_Y(i), LL_CLOUD_BTN_W, LL_CLOUD_BTN_H)) {
-                return S_CLOUD_ACTION[i];
+    // 控制面板左列设置按钮（原云量/云类/云精度位置）
+    if (s_controls_visible && ll_in_rect(x, y, LL_OPT_LEFT_X0, LL_VIEW_Y0,
+            LL_OPT_BTN_W, LL_OPT_COUNT * LL_OPT_ROW_H - LL_VIEW_GAP)) {
+        for (int32_t i = 0; i < LL_OPT_COUNT; i++) {
+            if (ll_in_rect(x, y, LL_OPT_LEFT_X0, LL_OPT_Y(i), LL_OPT_BTN_W, LL_OPT_BTN_H)) {
+                return S_LEFT_ACTION[i];
+            }
+        }
+        return UI_LL_CTRL_NONE;
+    }
+
+    // 设置按钮下方两格：大气散射、地景
+    if (s_controls_visible && ll_in_rect(x, y, LL_OPT_RIGHT_X0, LL_VIEW_Y0 + LL_OPT_ROW_H,
+            LL_OPT_BTN_W, 2 * LL_OPT_ROW_H - LL_VIEW_GAP)) {
+        for (int32_t i = 0; i < 2; i++) {
+            if (ll_in_rect(x, y, LL_OPT_RIGHT_X0, LL_OPT_Y(i + 1), LL_OPT_BTN_W, LL_OPT_BTN_H)) {
+                return S_RIGHT_ACTION[i];
             }
         }
         return UI_LL_CTRL_NONE;
@@ -457,7 +483,7 @@ static void ll_draw_option_button(Nano_GFX *gfx, int32_t x, int32_t y, int32_t w
         g = LL_COLOR_PRESS_G;
         b = LL_COLOR_PRESS_B;
     }
-    uint8_t alpha = enabled ? LL_ALPHA_CLOUD : LL_ALPHA_CLOUD_DIM;
+    uint8_t alpha = enabled ? LL_ALPHA_OPTION : LL_ALPHA_OPTION_DIM;
     gfx_draw_rounded_rectangle(gfx, x, y, w, h,
         LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS,
         r, g, b, pressed ? 205 : alpha);
@@ -476,31 +502,32 @@ static void ll_draw_option_button(Nano_GFX *gfx, int32_t x, int32_t y, int32_t w
         enabled ? 245 : 200);
 }
 
-static void ll_draw_cloud(Nano_GFX *gfx, const UiLinglongCtrlState *st) {
+static const wchar_t *ll_option_name(const wchar_t *const *table, int32_t count, int32_t index) {
+    if (index < 0 || index >= count) index = 0;
+    return table[index];
+}
+
+// 控制面板左右两列设置按钮：两行文字，上行名称、下行现值
+static void ll_draw_control_options(Nano_GFX *gfx, const UiLinglongCtrlState *st) {
     if (!s_controls_visible) return;
 
-    // 云类：按掩码在档位表里找回显名（表由 celestial.c 维护，UI 与控制逻辑共用）
-    int32_t layer_num = 0;
-    const Linglong_Cloud_Option *layers = linglong_cloud_layer_options(&layer_num);
-    const wchar_t *layer_name = layers[0].name;
-    for (int32_t i = 0; i < layer_num; i++) {
-        if (layers[i].value == st->cloud_layer_mask) { layer_name = layers[i].name; break; }
+    const wchar_t *left_values[LL_OPT_COUNT];
+    left_values[0] = ll_option_name(S_PROJECTION_NAME, 2, st->projection);
+    left_values[1] = ll_option_name(S_OFF_ON_NAME, 2, st->equatorial_coord);
+    left_values[2] = ll_option_name(S_HORIZONTAL_NAME, 3, st->horizontal_coord);
+    for (int32_t i = 0; i < LL_OPT_COUNT; i++) {
+        int32_t pressed = (s_pressed == S_LEFT_ACTION[i]);
+        ll_draw_option_button(gfx, LL_OPT_LEFT_X0, LL_OPT_Y(i), LL_OPT_BTN_W, LL_OPT_BTN_H,
+            S_LEFT_LABEL[i], left_values[i], pressed, 1);
     }
-    // 云精度：档位序号直接索引
-    int32_t prec_num = 0;
-    const Linglong_Cloud_Option *precs = linglong_cloud_precision_options(&prec_num);
-    int32_t prec = st->cloud_precision_level;
-    if (prec < 0 || prec >= prec_num) prec = 0;
 
-    const wchar_t *values[LL_CLOUD_COUNT];
-    values[0] = ui_cloud_coverage_level_name(st->cloud_coverage_level);
-    values[1] = layer_name;
-    values[2] = precs[prec].name;
-
-    for (int32_t i = 0; i < LL_CLOUD_COUNT; i++) {
-        int32_t pressed = (s_pressed == S_CLOUD_ACTION[i]);
-        ll_draw_option_button(gfx, LL_CLOUD_X0, LL_CLOUD_Y(i), LL_CLOUD_BTN_W, LL_CLOUD_BTN_H,
-            S_CLOUD_LABEL[i], values[i], pressed, st->cloud_enabled);
+    const wchar_t *right_values[2];
+    right_values[0] = ll_option_name(S_SKY_MODEL_NAME, 6, st->sky_model);
+    right_values[1] = ll_option_name(S_LANDSCAPE_NAME, 4, st->landscape_index);
+    for (int32_t i = 0; i < 2; i++) {
+        int32_t pressed = (s_pressed == S_RIGHT_ACTION[i]);
+        ll_draw_option_button(gfx, LL_OPT_RIGHT_X0, LL_OPT_Y(i + 1), LL_OPT_BTN_W, LL_OPT_BTN_H,
+            S_RIGHT_LABEL[i], right_values[i], pressed, 1);
     }
 }
 
@@ -513,12 +540,12 @@ static void ll_draw_settings_button(Nano_GFX *gfx) {
 }
 
 // 设置界面的单个按钮：圆角半透明底 + 标签/现值两行；返回按钮用特殊配色与单行大字。
-// 调用方已把背景清成深色，故这里用略实的底色保证文字可读。
+// 设置界面叠加在天空上，用略实的底色保证文字可读。
 static void ll_draw_setting_button(Nano_GFX *gfx, int32_t x, int32_t y, int32_t w, int32_t h,
                                    const UiLinglongSettingCell *cell, int32_t pressed) {
-    // 与云参数按钮同一半透明底色（两行文字需要比单行视角按钮更实一点）
+    // 与两行控制按钮同一半透明底色（两行文字需要比单行视角按钮更实一点）
     uint8_t r = LL_COLOR_BG_R, g = LL_COLOR_BG_G, b = LL_COLOR_BG_B;
-    uint8_t alpha = LL_ALPHA_CLOUD;
+    uint8_t alpha = LL_ALPHA_OPTION;
 
     if (cell->is_special) {
         // “返回”特殊样式：红色系，略实以保证亮天空上仍明显
@@ -581,6 +608,6 @@ void ui_linglong_ctrl_draw(Nano_GFX *gfx, const UiLinglongCtrlState *st) {
     ll_draw_top(gfx);
     ll_draw_time(gfx, st->running_state, st->speed);
     ll_draw_view(gfx);
-    ll_draw_cloud(gfx, st);
+    ll_draw_control_options(gfx, st);
     ll_draw_settings_button(gfx);
 }
