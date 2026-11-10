@@ -331,6 +331,12 @@ md-demo:
 	python3 tools/gen_md_demo.py "$(LINGLONG)"
 	@echo "示例文档：$(LINGLONG)/doc/Markdown 示例.md"
 
+# Bad Apple 帧数据：真源是 badapple.h 的 C 数组，App（app/badapple.scm）读到的是资源目录里
+# 的定长记录文本（(native Fs) 只读文本）。重新生成并部署：make badapple-data
+badapple-data:
+	python3 tools/gen_badapple_data.py --deploy "$(LINGLONG)"
+	@echo "帧数据：$(LINGLONG)/app/lib/badapple/frames.txt"
+
 install:
 	chmod +x $(BIN_DIR)/nano_pod
 	cp -pR $(BIN_DIR)/nano_pod /usr/bin/

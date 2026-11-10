@@ -65,6 +65,16 @@ cp -f app/lib/hwr/* "$LINGLONG/app/lib/hwr/" 2>/dev/null || true
 mkdir -p "$LINGLONG/app/lib/llm/sort6" "$LINGLONG/app/lib/llm/psycho"
 cp -f app/lib/llm/sort6/* "$LINGLONG/app/lib/llm/sort6/" 2>/dev/null || true
 cp -f app/lib/llm/psycho/* "$LINGLONG/app/lib/llm/psycho/" 2>/dev/null || true
+# Bad Apple 帧数据（app/lib/badapple/frames.txt + meta.scm）：定长记录文本，一帧一条，
+# 由 app/badapple.scm 逐帧 (Fs.read_range) 读取；(native Fs) 只读文本，故数据必须落在这里。
+# 真源是 tools/gen_badapple_data.py（从 badapple.h 的 C 数组生成）——真源改过就自动重生，
+# 避免「改了 badapple.h 却忘了 make badapple-data」的隐患。
+if [ "badapple.h" -nt "app/lib/badapple/frames.txt" ]; then
+    echo "badapple.h 比 frames.txt 新，重新生成帧数据…"
+    python3 tools/gen_badapple_data.py
+fi
+mkdir -p "$LINGLONG/app/lib/badapple"
+cp -f app/lib/badapple/* "$LINGLONG/app/lib/badapple/" 2>/dev/null || true
 # 把内置示例文档导出成真正的 .md（真源是 app/lib/md_demo.scm；阅读器首次运行也会落盘，
 # 但构建期先摊出来，用户才能直接在资源目录里看到/编辑它）
 python3 tools/gen_md_demo.py "$LINGLONG" || true
@@ -72,8 +82,10 @@ python3 - "$LINGLONG" "$OUT_DIR/manifest.json" <<'EOF'
 import json, os, sys
 root, out = sys.argv[1], sys.argv[2]
 P1_DIRS = {"icon", "app"}
-# app/ 下的大块模型数据不算「启动必需」：降为 p2 后台挂载（App 侧缺文件会自动等重试）
-P2_PREFIX = "app/lib/llm/"
+# app/ 下的大块数据不算「启动必需」：降为 p2 后台挂载（App 侧缺文件会自动等重试）
+#   app/lib/llm/      —— 纯 Scheme LLM 测试台的 base64 模型分块
+#   app/lib/badapple/ —— Bad Apple 帧数据（1.4MB 定长记录文本）
+P2_PREFIXES = ("app/lib/llm/", "app/lib/badapple/")
 P1_FILES = {"mob.scm", "jstest.js"}
 SKIP_DIRS = {"music", "data"}   # music 体积过大；data 是 App 运行时数据（不入产物）
 # LLM 模型：标准引擎（infer.c）的 Nano-168M/56M-Q80 作为 p3（最后台优先级，鹦鹉笼可用）；
@@ -89,7 +101,7 @@ for dirpath, dirnames, filenames in os.walk(root):
     for fn in filenames:
         rel = fn if rel_dir == "." else os.path.join(rel_dir, fn)
         if top in P1_DIRS or (rel_dir == "." and (fn in P1_FILES or fn.startswith("wp"))):
-            pri = 2 if rel.startswith(P2_PREFIX) else 1
+            pri = 2 if rel.startswith(P2_PREFIXES) else 1
         elif rel in P3_FILES:
             pri = 3
         elif top == "llm":
