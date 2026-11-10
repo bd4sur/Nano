@@ -963,13 +963,16 @@ uint8_t platform_get_master_volume(void);
 // Nano-WASM-GUI: 浏览器内运行的 WASM 全功能 GUI（Emscripten）
 // ===============================================================================
 // 与 nano_web 同为「完整 GUI + 触屏交互」目标，差异：本目标把全部业务代码编译为
-// WebAssembly 在浏览器内运行（无需服务端），显示/触屏/姿态经 EM_ASM/ccall 与页面
-// JS 桥接；业务资源（图标/壁纸/电子书/词典等）由 Emscripten --preload-file 打进
-// MEMFS 的 /home/bd4sur/linglong（与 PLATFORM_ROOT_DIR 硬编码一致）。
+// WebAssembly 在浏览器内运行（无需服务端），显示/触屏/姿态/音频经 EM_JS/EM_ASM 与
+// 页面 JS 桥接；业务资源（图标/壁纸/电子书/词典/音乐/模型等）**不进产物**，
+// 由页面按 manifest.json 分级挂载到 MEMFS 的 /home/bd4sur/linglong。
 // 构建：infer/build_wasm_gui.sh（产物 infer/webgui/）。
 // 区别于 infer/web/（既有 main_wasm.c 的 LLM-only WASM，互不相关）。
-// 单线程（无 -pthread/-fopenmp：OpenMP 退化为串行，OFDM 采集任务等平台任务创建
-// 返回失败并优雅降级）；无音频外设（打桩）；姿态经浏览器传感器事件（尽力而为）。
+// 单线程（无 -pthread/-fopenmp：OpenMP 退化为串行；platform_task_create 恒失败，
+// 寻呼机接收等依赖采集任务的调用点降级为「渲染循环内轮询采集」）。
+// 音频：扬声器 = Web Audio 时间轴调度（hal_audio_out_wasm.c）；
+//       麦克风 = getUserMedia + AudioWorklet 环（hal_audio_in_wasm.c）。
+// 姿态经浏览器传感器事件（尽力而为）。
 #elif defined(NANO_WASM_GUI)
 
     // UI字符串缓冲区最大长度限制
@@ -986,7 +989,8 @@ uint8_t platform_get_master_volume(void);
     // DeviceMotion/DeviceOrientation 事件经 ccall 注入（hal_imu_wasm.c）。
     #define IMU_ENABLED
 
-    // ASR和TTS（无麦克风/扬声器，均不启用）
+    // ASR和TTS（未启用；注意：麦克风/扬声器采集播放**已具备**，这里只是两个
+    // 上层业务开关——ASR 需语音模型、TTS 需 Piper，均未移植到本目标）
     // #define ASR_ENABLED
     // #define TTS_ENABLED
 

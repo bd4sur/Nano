@@ -8172,3 +8172,107 @@ Scheme 看不到 C 的静态数组，而 `(native Fs)` 只读**文本**（整读
   `opstack=1 fstack=1 heap=875B gcs=28`、`err=none` → 重置路径无栈/堆/对象泄漏，
   900 帧 = 902 次推屏（含首帧）。
 - 回归：`run_profile.sh` 900 帧 `refresh=900 err=none`；每步 24 万指令。
+
+---
+
+# WASM-GUI 音频子系统：扬声器输出 + 麦克风采集（2026-11-10）
+
+WASM 目标此前 `hal_audio_out_wasm.c` / `hal_audio_in_wasm.c` 全是打桩（"Web Audio 接入
+属「做不到就不做」项"），于是音乐盒空有声卡却无声、频谱仪/寻呼机接收直接报"麦克风
+初始化失败"。本次把两侧都补齐，并顺带打通音乐资源通路。
+
+## 1) 输出（`hal_audio_out_wasm.c` 重写）
+
+- **队列不落在数组里，落在 AudioContext 时间轴上**：
+  `audio_out_queue_free() = (nextTime - ctx.currentTime) < LOOKAHEAD(0.30s)`。
+  音乐盒一块 4096@44.1k≈93ms、OFDM 一帧 31680@48k≈660ms，稳态下"接受一块就推进
+  n/rate 秒"→ 生产速率自动等于消费速率。**这是本实现最容易写错的地方**：若
+  `queue_free` 恒真，60fps 主循环会把音乐灌成 5.6 倍速。
+- `enqueue` 是**拷贝语义**（与 ALSA 版一致，`AudioBuffer` 建立时即复制）：C 侧乒乓
+  双缓冲"须保持有效至播完"的纪律在本平台是安全超集，业务代码零改动。
+- **采样率交给浏览器**：AudioBuffer 按源采样率建，`AudioBufferSourceNode` 自动重采样
+  到上下文速率（相等时直通）。因此"切歌先 close 再 init(新采样率)"的既有逻辑原样
+  可用，不像 ALSA 需要协商设备。
+- 音量：`0..255 → 线性幅度`（16 静音档 ≈ -24dB、128 ≈ -6dB、255 满幅），GainNode 上
+  `setTargetAtTime(0.015s)` 平滑防爆音；`set_master_volume` 与 ALSA 版同语义（立即
+  作用于当前增益）。
+- 自动播放策略：`audio_out_init` 是在 rAF 帧回调里调的，不在手势栈内。页面在
+  `pointerdown`/`keydown` 里调 `nanoAudioUnlock()` 恢复上下文；若仍被挂起，
+  `queue_free` 返回假（不推进的 currentTime 会让队列无限堆积），状态栏提示
+  "音频被浏览器挂起（点一下画面）"。
+- **不做 AudioWorklet + SharedArrayBuffer**：那需要 COOP/COEP，会丢掉"任意静态 HTTP
+  服务可托管"的部署形态；主线程按时间轴调度已足够（实测 2s 内时间轴 Δ=2.04s）。
+
+## 2) 输入（`hal_audio_in_wasm.c` 重写）
+
+- `getUserMedia`（`channelCount:1`、**关 echoCancellation / autoGainControl /
+  noiseSuppression**——AEC 会把 OFDM 波形当回声抹掉，AGC 破坏幅度，降噪啃窄带子载波）
+  → **AudioWorklet**（内联为 Blob URL，不新增静态文件；2048 采样一块）→ 主线程
+  4 秒 int16 环形缓冲；无 AudioWorklet 时退化 ScriptProcessorNode。
+  采集跑在音频线程，`postMessage` 无损送主线程：主线程卡顿只增延迟、不丢样。
+- `mic_init` **乐观返回**：授权是异步的，无法在同步接口里等；有 getUserMedia 就返回 0，
+  采样随后到达。`mic_read` **不阻塞**（阻塞会冻结整个单线程 UI），约定：
+  `n==samples` 已取一帧 / `0` 环内不足一帧且**未消费** / `-1` 硬错误（拒绝授权等）。
+  "不足一帧不消费"是关键——频谱仪与 OFDM 都对 `n < 请求` 做跳过，返回半帧并被丢弃
+  等于持续丢样。
+- 采集上下文**按请求速率建立**（`new AudioContext({sampleRate})`），浏览器把设备流
+  重采样到此速率：频谱仪 44100 精确、寻呼机 48000 精确（实测 `rate=44100/48000`）。
+  速率不符时状态栏明示（否则频谱轴与 OFDM 时序会整体偏移）。
+- 需要安全上下文（https 或 localhost），与 DeviceMotion 要求一致。
+
+## 3) 寻呼机接收：单线程平台的轮询采集（`ui_ofdm.c`，业务侧唯一改动）
+
+原来 RX 依赖 `platform_task_create`（Core1 采集任务），WASM 单线程建不出任务 →
+`s_mic_ok=0` → "麦克风初始化失败"。改为：任务创建失败时置 `s_mic_poll=1` 并**继续**
+（不再清 `s_mic_ok`），渲染循环每帧先 `ui_ofdm_mic_pump()`（读一块→入 SPSC 环）。
+`ui_ofdm_mic_push()` 由采集任务与轮询路径共用，其它平台行为一字不变。
+
+## 4) 音乐资源：p4「按需挂载」层
+
+- `build_wasm_gui.sh`：music 不再 `SKIP_DIRS`，改为 `P4_DIRS` → manifest 里
+  `priority=4`（93MB / 7 个文件），**不进启动路径、不自动拉取**（wasm/js 内仍无业务
+  文件内容，隐私要求不变）。
+- `loader.js`：新增 `nanoMountTier(opts, tier, onProgress, persist)`（清单 ∪ 本机存储、
+  尊重墓碑、已在 MEMFS 的跳过、8 并发带字节进度）；`nanoInferPriority` 把 `music/`
+  也判为 4（上传/落盘的音乐同样只在进入音乐盒时挂）。
+- `index.html`：500ms 轮询 `_wasm_gui_get_state()`，进入 `STATE_MUSICBOX_MENU(64)` 时
+  调 `nanoMountTier(mountCtx, 4, …, persist=true)`——首次从 HTTP 拉取并**顺手写入
+  IndexedDB**，之后进音乐盒直接读本机（离线可用、不重复耗流量）。状态栏显示进度，
+  完成后提示"音乐已就绪：按 A 返回后再按 5 进入"（列表在进入那一刻由 C 侧重建，
+  不做 C 改动的最小代价）。
+- 顺带修掉旧问题：`mountCtx` 缺 `manifestUrl`（`nanoMountTier` 会 fetch 到
+  `undefined`）。
+
+## 5) 验证
+
+- **新 e2e `tools/e2e/browser/regress_audio.js`（30 项全 PASS）**，无头 chromium +
+  `--use-fake-device-for-media-stream --autoplay-policy=no-user-gesture-required`：
+  - 音乐盒：进入 64 → 页面自动挂载 7 个文件进 MEMFS → 7 个键落入 IndexedDB →
+    重进列表 → Enter 进 65 → `ctx.state=running`、已调度 4 个源、**2s 内时间轴
+    推进 2.04s**、进度条重绘（epoch 增）→ 暂停立即清空源 → 恢复重新投块 → 退出清空；
+  - 频谱仪（53）：`micCtx rate=44100`、micW 持续增长、画面滚动 **≈43 行/秒**
+    （=44100/1024，与 FFT 设计一致）；
+  - 寻呼机接收（60）：`rate=48000`、单线程轮询路径 `micW` 增长 116736 采样/2.5s、
+    `micErr=0`；
+  - 寻呼机发射（61）：块被持续调度（Δ=1.98s/1.5s），停止后清空。
+- **旧回归不回退**：`regress_key_fs.js` PASS 23/23（键/Fs/IndexedDB/MEMFS 持久化全过）；
+  `regress.js`（gol/tetris 子集）无 ABNORMAL、无 pageerror。
+- 编译：`build_wasm_gui.sh` 全量通过（manifest: 166 files，p1=4.0MB / p2=14.1MB /
+  p3=231.9MB / p4=93.0MB）。
+
+## 6) 已知边界（都不是本次可解，写下来免得当 bug 报）
+
+1. **切到后台标签页会停声**：音频喂入由渲染循环驱动（每帧最多一块），rAF 隐藏即停，
+   前瞻窗口（0.3s）耗尽后静音。后台播放需 AudioWorklet+SharedArrayBuffer（要
+   COOP/COEP）或整曲预调度。
+2. 前瞻 0.3s 意味着暂停/切曲有 ~0.3s 的"已排掉"音频被丢弃（`stop()` 立即截断，
+   听感是干脆的一声停，不是渐隐）。
+3. 麦克风需 https/localhost；拒绝授权时状态栏提示 `麦克风不可用：NotAllowedError`，
+   频谱仪画面静止、寻呼机接收计数 `err` 增长（不崩）。
+4. 外放 + 麦克风同时工作会有声学回授（ESP32 上 mic_init 会先关扬声器，浏览器不关）；
+   OFDM 自发自收请用"软件环路自测"条目或戴耳机。
+5. iOS 上 GainNode 无法超过系统音量（硬件音量键无效）；`new AudioContext({sampleRate})`
+   被拒时自动退让并在状态栏说明。
+6. 音乐盒既有约束（与平台无关）：ID3v2 > ~1MB 的 MP3 打不开（`mp3_open` 64 次 × 16KB
+   上限）；`hal_fs` 全局单句柄，播放期间别在 C 侧再开文件。
+7. 音乐 93MB 常驻 MEMFS（JS 堆）+ 同量落在 IndexedDB，移动端注意配额。

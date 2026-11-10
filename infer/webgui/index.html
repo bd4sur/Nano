@@ -305,7 +305,274 @@ setInterval(() => { wasmFps = Module._nano_frame_count || 0; Module._nano_frame_
 
 function updateStatus() {
   if (!runtimeReady) return;
-  statusEl.innerHTML = '<span class="ok">● 运行中</span> · ' + wasmFps + " fps · 320×240";
+  statusEl.innerHTML = '<span class="ok">● 运行中</span> · ' + wasmFps + " fps · 320×240"
+    + (nanoAudio.msg ? " · " + nanoAudio.msg : "");
+}
+
+// =============================================================================
+// 音频子系统（Web Audio）：扬声器输出 + 麦克风采集
+// -----------------------------------------------------------------------------
+// 与 C 侧 HAL 的契约见 infer/hal_audio_out_wasm.c 与 infer/hal_audio_in_wasm.c。
+//   输出：C 侧 int16 单声道块 → AudioBuffer(源采样率) → AudioBufferSourceNode
+//         按 AudioContext 时间轴顺序 start() → GainNode → destination。
+//         「队列空槽」= 已调度前瞻 < NANO_AO_LOOKAHEAD（由 C 侧每帧询问）。
+//   输入：getUserMedia（关 AEC/AGC/降噪）→ AudioWorklet（无则 ScriptProcessor）
+//         → int16 环形缓冲（4s）→ C 侧 mic_read 按帧拷出（不足一帧不消费）。
+// 无 SharedArrayBuffer / COOP-COEP 依赖：输出调度全在主线程；采集在音频线程完成，
+// 经 postMessage 无损送到主线程（主线程卡顿只增加延迟，不丢样）。
+// 需要安全上下文（https 或 localhost）才能用麦克风。
+// =============================================================================
+const NANO_AO_LOOKAHEAD = 0.30; // 秒：音频前瞻窗口（抗主线程卡顿；过大会让暂停/切换滞后）
+
+// AudioWorklet 采集器（内联为 Blob URL，不额外增加静态文件）
+const NANO_MIC_WORKLET = `
+class NanoMicTap extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buf = new Float32Array(2048);
+    this.n = 0;
+  }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    for (let i = 0; i < ch.length; i++) {
+      this.buf[this.n++] = ch[i];
+      if (this.n === this.buf.length) {
+        this.port.postMessage(this.buf.slice(0));
+        this.n = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor("nano-mic-tap", NanoMicTap);
+`;
+
+const nanoAudio = {
+  // 输出
+  ctx: null, gain: null, nodes: [], nextTime: 0, vol: 16, srcRate: 0,
+  // 输入
+  micCtx: null, micRate: 0, micRing: null, micCap: 0, micW: 0, micR: 0,
+  micStream: null, micSrc: null, micNode: null, micSink: null,
+  micToken: 0, micErr: 0, micWant: 0,
+  // 状态栏提示（麦克风不可用 / 音乐资源加载进度等）
+  msg: "",
+};
+
+// 0..255 音量 → 线性幅度（v=16 静音档、v=128 ≈ -6dB、v=255 满幅）
+function nanoAudioGainOf(v) {
+  v = Math.max(0, Math.min(255, v | 0));
+  return v / 255;
+}
+
+// 用户手势解锁（自动播放策略）：pointerdown / keydown 里调用，幂等
+function nanoAudioUnlock() {
+  for (const c of [nanoAudio.ctx, nanoAudio.micCtx]) {
+    if (c && c.state !== "running") { try { c.resume().catch(() => {}); } catch (e) {} }
+  }
+}
+
+function nanoAudioOutResume() {
+  const c = nanoAudio.ctx;
+  if (c && c.state === "suspended") { try { c.resume().catch(() => {}); } catch (e) {} }
+}
+
+// ---- 输出：由 C 侧 hal_audio_out_wasm.c 的 EM_JS 调用 ----
+function nanoAudioOutInit(rate, volume) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) { nanoAudio.msg = "浏览器不支持 Web Audio"; return false; }
+  if (!nanoAudio.ctx) {
+    try { nanoAudio.ctx = new AC({ latencyHint: "interactive" }); } catch (e) { return false; }
+    nanoAudio.gain = nanoAudio.ctx.createGain();
+    nanoAudio.gain.connect(nanoAudio.ctx.destination);
+  }
+  // init 语义对齐 ESP32/ALSA：重新配置输出（丢弃已排队的块）
+  nanoAudioOutStop();
+  nanoAudio.srcRate = rate | 0;
+  nanoAudio.vol = volume | 0;
+  nanoAudio.gain.gain.value = nanoAudioGainOf(volume);
+  nanoAudioOutResume();
+  return true;
+}
+
+function nanoAudioOutFree() {
+  const ctx = nanoAudio.ctx;
+  if (!ctx || !nanoAudio.gain) return false;
+  // 上下文被自动播放策略挂起时 currentTime 不推进：不报空槽，避免队列无限堆积
+  if (ctx.state !== "running") {
+    nanoAudioOutResume();
+    if (!nanoAudio.msg) nanoAudio.msg = "音频被浏览器挂起（点一下画面）";
+    return false;
+  }
+  if (nanoAudio.msg === "音频被浏览器挂起（点一下画面）") nanoAudio.msg = "";
+  return (nanoAudio.nextTime - ctx.currentTime) < NANO_AO_LOOKAHEAD;
+}
+
+function nanoAudioOutPush(ptr, samples, rate) {
+  const ctx = nanoAudio.ctx;
+  if (!ctx || !nanoAudio.gain || samples <= 0) return false;
+  const sr = (rate > 0) ? rate : (nanoAudio.srcRate || ctx.sampleRate);
+  let buf;
+  try { buf = ctx.createBuffer(1, samples, sr); } catch (e) { return false; }
+  const dst = buf.getChannelData(0);
+  // HEAP16 每次现取：ALLOW_MEMORY_GROWTH 会让旧的类型化视图失效
+  const heap = Module.HEAP16, base = ptr >> 1, k = 1 / 32768;
+  for (let i = 0; i < samples; i++) dst[i] = heap[base + i] * k;
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(nanoAudio.gain);
+  const now = ctx.currentTime;
+  let t = nanoAudio.nextTime;
+  if (!(t > now + 0.02)) t = now + 0.05; // 首块 / 停顿后重基，避免积压的过去时间戳
+  try { src.start(t); } catch (e) { return false; }
+  nanoAudio.nextTime = t + samples / sr;
+  nanoAudio.nodes.push(src);
+  src.onended = () => {
+    const i = nanoAudio.nodes.indexOf(src);
+    if (i >= 0) nanoAudio.nodes.splice(i, 1);
+  };
+  return true;
+}
+
+function nanoAudioOutStop() {
+  for (const src of nanoAudio.nodes) {
+    try { src.onended = null; src.stop(); } catch (e) {}
+  }
+  nanoAudio.nodes.length = 0;
+  nanoAudio.nextTime = 0;
+}
+
+function nanoAudioOutSetVolume(volume) {
+  nanoAudio.vol = volume | 0;
+  if (nanoAudio.ctx && nanoAudio.gain) {
+    try { nanoAudio.gain.gain.setTargetAtTime(nanoAudioGainOf(volume), nanoAudio.ctx.currentTime, 0.015); } catch (e) {
+      nanoAudio.gain.gain.value = nanoAudioGainOf(volume);
+    }
+  }
+}
+
+// ---- 输入：由 C 侧 hal_audio_in_wasm.c 的 EM_JS 调用 ----
+function nanoMicStart(rate) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    nanoAudio.msg = "无麦克风 API（需 https 或 localhost）";
+    return false;
+  }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) { nanoAudio.msg = "浏览器不支持 Web Audio"; return false; }
+  nanoMicStop();
+  const want = rate | 0;
+  nanoAudio.micWant = want;
+  // 采集上下文按请求速率建立：浏览器把设备流重采样到此速率，与 C 侧假设一致
+  //（频谱仪的频率轴、OFDM 的 48kHz 时序都依赖实际速率等于请求值）
+  try { nanoAudio.micCtx = new AC({ sampleRate: want, latencyHint: "interactive" }); }
+  catch (e) {
+    try { nanoAudio.micCtx = new AC({ latencyHint: "interactive" }); } catch (e2) {
+      nanoAudio.msg = "麦克风上下文创建失败";
+      return false;
+    }
+  }
+  const ctx = nanoAudio.micCtx;
+  nanoAudio.micRate = ctx.sampleRate;
+  let cap = 1;
+  while (cap < nanoAudio.micRate * 4) cap <<= 1; // 4 秒环，2 的幂
+  nanoAudio.micCap = cap;
+  nanoAudio.micRing = new Int16Array(cap);
+  nanoAudio.micW = 0; nanoAudio.micR = 0; nanoAudio.micErr = 0;
+  const token = ++nanoAudio.micToken;
+  nanoAudioOutResume();
+  if (ctx.state !== "running") { try { ctx.resume().catch(() => {}); } catch (e) {} }
+  // 授权是异步的：这里乐观返回，采样在授权后陆续到达（C 侧 mic_read 期间返回 0）
+  nanoAudioMicAttach(ctx, token).catch((e) => {
+    if (token !== nanoAudio.micToken) return;
+    nanoAudio.micErr = 1;
+    nanoAudio.msg = "麦克风不可用：" + ((e && (e.name || e.message)) || e);
+    updateStatus();
+  });
+  return true;
+}
+
+async function nanoAudioMicAttach(ctx, token) {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+  });
+  if (token !== nanoAudio.micToken) { stream.getTracks().forEach((t) => t.stop()); return; }
+  nanoAudio.micStream = stream;
+  const src = ctx.createMediaStreamSource(stream);
+  nanoAudio.micSrc = src;
+  const sink = ctx.createGain();
+  sink.gain.value = 0; // 静音监听：只为让音频图被渲染（不产生回授）
+  sink.connect(ctx.destination);
+  nanoAudio.micSink = sink;
+  let node = null;
+  if (ctx.audioWorklet) {
+    try {
+      const url = URL.createObjectURL(new Blob([NANO_MIC_WORKLET], { type: "application/javascript" }));
+      await ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      node = new AudioWorkletNode(ctx, "nano-mic-tap");
+      node.port.onmessage = (ev) => nanoMicPush(ev.data);
+    } catch (e) { node = null; }
+  }
+  if (!node) {
+    // 退化路径：ScriptProcessor（主线程回调，2048 采样 ≈46ms；主线程卡顿可能丢块）
+    node = ctx.createScriptProcessor(2048, 1, 1);
+    node.onaudioprocess = (ev) => nanoMicPush(ev.inputBuffer.getChannelData(0));
+  }
+  src.connect(node);
+  node.connect(sink);
+  nanoAudio.micNode = node;
+  if (ctx.state !== "running") { try { await ctx.resume(); } catch (e) {} }
+  if (nanoAudio.micRate !== nanoAudio.micWant) {
+    // 极少见：浏览器拒绝指定采样率 → 频谱轴/OFDM 时序会整体偏移，明确提示
+    nanoAudio.msg = `麦克风速率 ${nanoAudio.micRate}Hz（请求 ${nanoAudio.micWant}Hz）`;
+  } else if (nanoAudio.msg.startsWith("麦克风")) {
+    nanoAudio.msg = "";
+  }
+  updateStatus();
+}
+
+function nanoMicStop() {
+  nanoAudio.micToken++;
+  const node = nanoAudio.micNode;
+  try { if (node && node.port) node.port.onmessage = null; } catch (e) {}
+  try { if (node) node.onaudioprocess = null; } catch (e) {}
+  try { if (node) node.disconnect(); } catch (e) {}
+  try { if (nanoAudio.micSrc) nanoAudio.micSrc.disconnect(); } catch (e) {}
+  try { if (nanoAudio.micSink) nanoAudio.micSink.disconnect(); } catch (e) {}
+  try { if (nanoAudio.micStream) nanoAudio.micStream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+  try { if (nanoAudio.micCtx) nanoAudio.micCtx.close(); } catch (e) {}
+  nanoAudio.micNode = nanoAudio.micSrc = nanoAudio.micSink = nanoAudio.micStream = nanoAudio.micCtx = null;
+  nanoAudio.micRing = null;
+  nanoAudio.micCap = 0; nanoAudio.micW = 0; nanoAudio.micR = 0;
+}
+
+// 采集块入环（float32 → int16，溢出丢最旧）
+function nanoMicPush(f32) {
+  const cap = nanoAudio.micCap, ring = nanoAudio.micRing;
+  if (!ring || !f32 || !f32.length) return;
+  const n = f32.length;
+  let w = nanoAudio.micW;
+  if (w + n - nanoAudio.micR > cap) nanoAudio.micR = w + n - cap; // 溢出：丢最旧
+  for (let i = 0; i < n; i++) {
+    let v = f32[i] * 32768;
+    if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
+    ring[(w + i) & (cap - 1)] = v | 0;
+  }
+  nanoAudio.micW = w + n;
+}
+
+// C 侧取数：不足一帧返回 0 且不消费（调用方跳过本帧，不丢样）
+function nanoMicRead(ptr, samples) {
+  const cap = nanoAudio.micCap;
+  if (nanoAudio.micErr) return -1;
+  if (!cap || samples <= 0) return 0;
+  if (nanoAudio.micW - nanoAudio.micR < samples) return 0;
+  const ring = nanoAudio.micRing;
+  const heap = Module.HEAP16, base = ptr >> 1;
+  let r = nanoAudio.micR;
+  for (let i = 0; i < samples; i++) { heap[base + i] = ring[r & (cap - 1)]; r++; }
+  nanoAudio.micR = r;
+  return samples;
 }
 
 // ---------------- Emscripten Module 配置（先于 nano_gui.js 加载） ----------------
@@ -315,7 +582,7 @@ function updateStatus() {
 // 相册/LLM 模型）后台继续拉取（进度条/状态栏显示进度），保证秒开。
 // 挂载与带进度的下载实现在 loader.js（node 可测）；本地存储在 store.js。
 // 资源面板所需的挂载上下文（供模型按需预载/上传即时生效复用）
-const mountCtx = { FS: null, filesBaseUrl: "files/", resRoot: "/home/bd4sur/linglong", store: null };
+const mountCtx = { FS: null, manifestUrl: "manifest.json", filesBaseUrl: "files/", resRoot: "/home/bd4sur/linglong", store: null };
 let pendingModels = []; // p3 模型（待用户触发预载）
 const RES_ROOT = "/home/bd4sur/linglong";
 const wasmBar = document.getElementById("wasm-bar");
@@ -445,6 +712,7 @@ function sendTouch(action, clientX, clientY, ts) {
 }
 canvas.addEventListener("pointerdown", (e) => {
   e.preventDefault();
+  nanoAudioUnlock(); // 自动播放策略：首次用户手势内恢复 AudioContext（输出/麦输入）
   if (activePointerId !== null) return;
   endWheelSession(eventEpochMs(e), true); // 真手指/鼠标按下优先：先结束滚轮合成手势，避免两路电平打架
   activePointerId = e.pointerId;
@@ -647,7 +915,7 @@ function reportKey(e, isDown) {
   //（e.repeat）不再重复驱动 tick（电平已置位，心跳会补上持续判定）
   if (!e.repeat) Module._wasm_gui_input_tick(eventEpochMs(e));
 }
-document.addEventListener("keydown", (e) => reportKey(e, 1));
+document.addEventListener("keydown", (e) => { nanoAudioUnlock(); reportKey(e, 1); });
 document.addEventListener("keyup",   (e) => reportKey(e, 0));
 
 // ---------------- 硬 ESC 按钮（触屏/鼠标用户的“A 键”） ----------------
@@ -1531,6 +1799,36 @@ resBtn.addEventListener("click", () => {
 document.getElementById("res-close").addEventListener("click", () => resPanel.classList.remove("open"));
 resPanel.addEventListener("click", (e) => { if (e.target === resPanel) resPanel.classList.remove("open"); });
 window.addEventListener("resize", () => { if (fmTree && resPanel.classList.contains("open")) fmRenderTree(); });
+
+// ---------------- 音频资源（music/）按需挂载 ----------------
+// 音乐体积大（当前约 89MB），不随启动挂载（manifest 里列为 p4）。进入音乐盒
+// （STATE_MUSICBOX_MENU = 64）时后台拉取并写入 MEMFS，同时落本机存储
+// （IndexedDB）——下次进入直接读本机，不再耗流量。
+// 注意：音乐盒的文件列表在进入那一刻由 C 侧（list_files）重建，所以挂载完成
+// 后需要退出再进一次（状态栏会给出提示）；这是不做 C 侧改动的最小代价。
+const STATE_MUSICBOX_MENU = 64;
+let musicMountState = 0; // 0=未开始 1=进行中 2=已结束
+async function nanoEnsureMusic() {
+  if (musicMountState !== 0 || !mountCtx.FS || typeof nanoMountTier !== "function") return;
+  musicMountState = 1;
+  try {
+    const n = await nanoMountTier(mountCtx, 4, (dc, dn, cur, total) => {
+      if (dn > 0) nanoAudio.msg = `音乐资源 ${dc}/${dn}（${(cur / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)}MB）`;
+    }, true);
+    musicMountState = 2;
+    nanoAudio.msg = (n > 0) ? "音乐已就绪：按 A 返回后再按 5 进入" : "";
+  } catch (e) {
+    musicMountState = 2;
+    nanoAudio.msg = "音乐资源挂载失败：" + ((e && e.message) || e);
+  }
+  updateStatus();
+}
+setInterval(() => {
+  if (!runtimeReady || !Module._wasm_gui_get_state) return;
+  let st = -9999;
+  try { st = Module._wasm_gui_get_state(); } catch (e) { return; }
+  if (st === STATE_MUSICBOX_MENU) nanoEnsureMusic();
+}, 500);
 </script>
 <!-- 本地存储层（IndexedDB；先于 loader.js） -->
 <script src="store.js"></script>

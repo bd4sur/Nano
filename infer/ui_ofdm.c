@@ -94,6 +94,34 @@ static void ui_ofdm_mic_task(void *arg) {
     platform_task_delete_self();
 }
 
+#if defined(NANO_WASM_GUI)
+// ============================================================================
+// 【WASM 专属】单线程平台的麦克风采集（不改动其它平台的任何既有实现）
+// ----------------------------------------------------------------------------
+// 浏览器 WASM 没有 pthread，platform_task_create 恒失败 → 上面那条采集任务建不出来。
+// 而 hal_audio_in_wasm 的 mic_read 是**非阻塞**的（数据不足一帧返回 0 且不消费），因此
+// 可以把「读一块 → 入 SPSC 环」直接放进渲染循环，效果与采集任务等价。
+// 注意：其它平台的 mic_read 是阻塞式（ESP32 I2S 等 100ms / ALSA、tinyalsa 等数据至
+// 超时），在渲染循环里轮询会卡住 UI——所以这段只在 NANO_WASM_GUI 下编译。
+// 入环逻辑与 ui_ofdm_mic_task 体内同构，**故意不抽公共函数**：不为浏览器目标去改动
+// 既有（多平台共用的）实现；本文件对其它平台的预处理结果与改动前逐字节相同。
+// ============================================================================
+static int32_t s_mic_poll = 0; // 1=采集由渲染循环自行完成（无采集任务）
+
+static void ui_ofdm_mic_poll(void) {
+    if (!s_mic_task_buf || !s_rx_ring) return;
+    int32_t n = mic_read(s_mic_task_buf, OFDM_RX_CHUNK);
+    if (n <= 0) return; // 0 = 未攒够一帧（未消费，下次再来）；<0 = 硬错误
+    uint32_t w = s_ring_w, r = s_ring_r;
+    if (OFDM_RX_RING_CAP - (w - r) < (uint32_t)n) {
+        s_ring_ov += (uint32_t)n; // 环满（UI 停滞 >1.3s）：弃新块保旧数据，计数告警
+        return;
+    }
+    for (int32_t i = 0; i < n; i++) s_rx_ring[(w + i) & (OFDM_RX_RING_CAP - 1)] = s_mic_task_buf[i];
+    s_ring_w = w + (uint32_t)n; // 单线程：生产/消费同在渲染循环，无需内存屏障
+}
+#endif // NANO_WASM_GUI
+
 // ---------------- RX 串口诊断（排障用，printf → UART0，串口监视器 115200） ----------------
 #define OFDM_DBG_HIST_LEN (65536)
 static float *s_dbg_hist = NULL;       // 最近接收采样历史环形缓冲（PSRAM）
@@ -580,6 +608,15 @@ void ui_ofdm_rx_on_enter(Key_Event *key_event, Global_State *global_state) {
             s_mic_ok = 0;
             printf("ofdm-rx: mic task create FAILED\n");
         }
+#if defined(NANO_WASM_GUI)
+        // 【WASM 专属】上面的任务创建必然失败（单线程无 pthread）：撤销 s_mic_ok=0，
+        // 改为在渲染循环内轮询采集（见 ui_ofdm_mic_poll 与 ui_ofdm_rx_event）。
+        if (!s_mic_task) {
+            s_mic_ok = 1;
+            s_mic_poll = 1;
+            printf("ofdm-rx: (WASM) no RTOS task, polling mic in render loop\n");
+        }
+#endif
         printf("ofdm-rx: mic_init(48000) ok, rx ready\n");
         // 启动日志（同时验证屏幕日志显示路径）
         ui_ofdm_rx_on_log("接收已启动（48kHz），等待信号…", NULL);
@@ -621,6 +658,10 @@ int32_t ui_ofdm_rx_event(Key_Event *key_event, Global_State *global_state) {
         }
     }
 
+#if defined(NANO_WASM_GUI)
+    // 【WASM 专属】先补采一块进环，再走下面完全未改动的消费/解调逻辑
+    if (s_mic_poll && s_mic_ok) ui_ofdm_mic_poll();
+#endif
     // 从采集环取一块（≤960）→ int16 转 float → 流式喂入解调。
     // 采集由专用任务实时完成（见 ui_ofdm_mic_task），此处仅消费环中已有数据，不阻塞；
     // 环中暂无数据时直接跳过，事件循环以全速空转（vTaskDelay(0) 让出），UI 保持响应。

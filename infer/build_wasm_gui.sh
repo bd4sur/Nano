@@ -42,11 +42,13 @@ OUT_DIR=webgui
 # 业务资源：不打进产物（不用 --preload-file），改为运行时从外部 HTTP「挂载」——
 #   本脚本把 linglong 资源软链接进 webgui/files/ 并生成 manifest.json（文件清单+大小）；
 #   页面 JS 启动时经 createPreloadedFile 逐文件拉入 MEMFS（路径与 PLATFORM_ROOT_DIR 一致）。
-#   分级加载：priority 1（图标/壁纸/mob.scm 等启动必需，约 700KB）先拉，立即可进系统；
-#             priority 2（ebook/dict/image，约 19MB）后台拉，状态栏显示进度。
+#   分级加载：priority 1（图标/壁纸/mob.scm 等启动必需）先拉，立即可进系统；
+#             priority 2（ebook/dict/image 等）后台拉，状态栏显示进度；
+#             priority 3（LLM 模型）页面「预载」按钮按需拉；
+#             priority 4（music 音频）进入音乐盒时按需拉（见 webgui/index.html 的 nanoEnsureMusic）。
 #   浏览器平台约束：主线程同步 XHR 已被禁用，「打开文件时才下载」的纯按需挂载做不到
 #   （createLazyFile 依赖 sync XHR），清单式挂载+分级加载是务实等价物。
-#   不打包 music（89MB）/llm（769MB）：音乐盒显示空列表、LLM 显示未打包提示，属预期降级。
+#   不打包 llm 中的 qwen3-0b6（599MB，单线程 WASM 不可用）；music 走 p4 按需层（93MB）。
 LINGLONG=/home/bd4sur/linglong
 mkdir -p "$OUT_DIR"
 ln -sfn "$LINGLONG" "$OUT_DIR/files"
@@ -87,7 +89,11 @@ P1_DIRS = {"icon", "app"}
 #   app/lib/badapple/ —— Bad Apple 帧数据（1.4MB 定长记录文本）
 P2_PREFIXES = ("app/lib/llm/", "app/lib/badapple/")
 P1_FILES = {"mob.scm", "jstest.js"}
-SKIP_DIRS = {"music", "data"}   # music 体积过大；data 是 App 运行时数据（不入产物）
+SKIP_DIRS = {"data"}   # data 是 App 运行时数据（不入产物）
+# music/ 不跳过，而是归为 p4「音频按需挂载」层：不进启动路径、不自动拉取，
+# 进入音乐盒时由页面调 nanoMountTier(4) 拉入 MEMFS 并落本机存储（见 webgui/index.html）。
+# 这样 wasm+js 里仍不含任何业务文件内容（隐私要求不变），首次进音乐盒一次性下载。
+P4_DIRS = {"music"}
 # LLM 模型：标准引擎（infer.c）的 Nano-168M/56M-Q80 作为 p3（最后台优先级，鹦鹉笼可用）；
 # qwen3-0b6（599MB，单线程 WASM 不可用）不挂载。菜单按白名单+存在性过滤（ui_llm.c）。
 P3_FILES = {"llm/nano-168m-q80.bin", "llm/nano-56m-q80.bin"}
@@ -104,6 +110,8 @@ for dirpath, dirnames, filenames in os.walk(root):
             pri = 2 if rel.startswith(P2_PREFIXES) else 1
         elif rel in P3_FILES:
             pri = 3
+        elif top in P4_DIRS:
+            pri = 4
         elif top == "llm":
             continue
         else:
@@ -114,7 +122,8 @@ with open(out, "w") as fp:
     json.dump({"files": files}, fp, ensure_ascii=False)
 n1 = sum(1 for f in files if f["priority"] == 1)
 n3 = sum(1 for f in files if f["priority"] == 3)
-print(f"manifest: {len(files)} files (p1={n1}, p2={len(files)-n1-n3}, p3={n3})")
+n4 = sum(1 for f in files if f["priority"] == 4)
+print(f"manifest: {len(files)} files (p1={n1}, p2={len(files)-n1-n3-n4}, p3={n3}, p4={n4})")
 EOF
 
 ANIMAC_DIR=vendor/Animac

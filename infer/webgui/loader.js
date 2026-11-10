@@ -58,6 +58,9 @@ function nanoInferPriority(path) {
   if (top === "icon") return 1;
   if (!path.includes("/") && (path.startsWith("wp") || path === "mob.scm" || path === "jstest.js")) return 1;
   if (top === "llm") return 3;
+  // music/ 是音频资源（单曲数 MB~数十 MB）：列为 p4「按需挂载」层，不随启动拉取，
+  // 进入音乐盒时由 nanoMountTier(4) 拉入并落本机存储（见 index.html 的 nanoEnsureMusic）。
+  if (top === "music") return 4;
   // data/ 是「灵机应用程序」自己的存档/模型（便签、2048 存档、Flappy 的 Q 表……），
   // 都是 KB 级小文件；提到 p1 让 App 启动时就能读到自己的存档，否则首帧读不到、
   // 训练一轮就把旧模型覆盖掉（2026-11 Flappy Bird 条目）。
@@ -230,7 +233,91 @@ async function nanoMountModel(opts, path, onProgress) {
   return true;
 }
 
+// 按优先级挂载一层资源（目前用于 p4：音频资源 music/）。
+//   · 清单 = manifest ∪ 本机存储清单（同名以 store 为准，与 nanoMountResources 同规则）；
+//   · 只取 priority === tier 的条目，已在 MEMFS 中的跳过（本次会话内重复进入不重下）；
+//   · persist=true 时，HTTP 拉到的内容顺手写入本机存储，下次直接读 IndexedDB。
+// 返回本次实际写入 MEMFS 的文件数；onProgress(完成数, 总数, 已传字节, 总字节)。
+async function nanoMountTier(opts, tier, onProgress, persist) {
+  const { FS, manifestUrl, filesBaseUrl, resRoot } = opts;
+  const manifest = await (await fetchImpl(manifestUrl)).json();
+
+  const byPath = new Map();
+  for (const f of (manifest.files || [])) byPath.set(f.path, { ...f, source: "http" });
+  const tombstones = new Set();
+  if (opts.store) {
+    let storeFiles = [];
+    try { storeFiles = await opts.store.list(); } catch (e) { console.warn("[mount-tier] store list failed:", e); }
+    for (const sf of storeFiles) {
+      if (sf.deleted) { tombstones.add(sf.path); continue; }
+      const ex = byPath.get(sf.path);
+      if (sf.dir) {
+        byPath.set(sf.path, { path: sf.path, size: 0, dir: true, priority: nanoInferPriority(sf.path), source: "store" });
+      }
+      else if (ex) { ex.source = "store"; ex.size = sf.size; }
+      else byPath.set(sf.path, { path: sf.path, size: sf.size, priority: nanoInferPriority(sf.path), source: "store" });
+    }
+  }
+  for (const p of tombstones) byPath.delete(p);
+
+  // 只在 MEMFS 中不存在的才需要挂（store 来源也要读入 MEMFS 才能被 C 侧 fopen）
+  const tierAll = [...byPath.values()].filter((f) => f.priority === tier);
+  const dirsOnly = tierAll.filter((f) => f.dir);
+  const todo = tierAll.filter((f) => !f.dir).filter((f) => {
+    try { FS.stat(resRoot + "/" + f.path); return false; } catch (e) { return true; }
+  });
+  if (!todo.length) return 0;
+
+  const dirs = new Set();
+  for (const f of todo) {
+    const parts = f.path.split("/");
+    for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
+  }
+  for (const f of dirsOnly) dirs.add(f.path);
+  for (const d of [...dirs].sort()) { try { FS.createPath(resRoot, d); } catch (e) {} }
+
+  const totalBytes = todo.reduce((s, f) => s + (f.size || 0), 0);
+  let done = 0, doneBytes = 0, idx = 0;
+  const inflight = new Map();
+  const report = () => {
+    let cur = doneBytes;
+    for (const v of inflight.values()) cur += v;
+    if (onProgress) onProgress(done, todo.length, cur, totalBytes);
+  };
+  const worker = async () => {
+    while (idx < todo.length) {
+      const f = todo[idx++];
+      try {
+        let buf = null;
+        if (f.source === "store" && opts.store) {
+          const rec = await opts.store.get(f.path);
+          if (rec && rec.blob) buf = new Uint8Array(await rec.blob.arrayBuffer());
+        }
+        if (!buf) {
+          buf = await nanoFetchWithProgress(filesBaseUrl + encodeURI(f.path), (recv) => {
+            inflight.set(f.path, recv); report();
+          });
+        }
+        FS.writeFile(resRoot + "/" + f.path, buf);
+        if (persist && opts.store && f.source !== "store") {
+          try { await opts.store.put(f.path, new Blob([buf])); } catch (e) { console.warn("[mount-tier] persist failed:", f.path, e); }
+        }
+        done++;
+        doneBytes += (f.size || buf.length);
+      } catch (e) {
+        console.warn("[mount-tier] failed:", f.path, e);
+      }
+      inflight.delete(f.path);
+      report();
+    }
+  };
+  const workers = [];
+  for (let i = 0; i < Math.min(8, todo.length); i++) workers.push(worker());
+  await Promise.all(workers);
+  return done;
+}
+
 // node 可测性导出（浏览器 <script> 顶层为全局函数）
 if (typeof module !== "undefined" && typeof module.exports !== "undefined") {
-  module.exports = { nanoMountResources, nanoMountModel, nanoFetchWithProgress, nanoSetFetchImpl, nanoInferPriority };
+  module.exports = { nanoMountResources, nanoMountModel, nanoMountTier, nanoFetchWithProgress, nanoSetFetchImpl, nanoInferPriority };
 }
