@@ -192,6 +192,9 @@ static const wchar_t *S_RIGHT_LABEL[2] = {
 static const wchar_t *S_PROJECTION_NAME[2] = {L"鱼眼", L"透视"};
 static const wchar_t *S_OFF_ON_NAME[2] = {L"关", L"开"};
 static const wchar_t *S_HORIZONTAL_NAME[3] = {L"关", L"方位角", L"坐标圈"};
+// 大气散射现值名（按下标与 Linglong_Config.sky_model 对应）。「简化模型」「一次散射」
+// 两档已从选项里屏蔽（见 ui_app.c 的 ui_app_linglong_next_sky_model），循环不会落到它们，
+// 这里保留名称只为“手改配置时也能显示出当前值”。
 static const wchar_t *S_SKY_MODEL_NAME[6] = {L"关", L"简化模型", L"一次散射", L"二次散射", L"体积云", L"海洋天空"};
 static const wchar_t *S_LANDSCAPE_NAME[4] = {L"关", L"草原", L"卫星照片", L"实时海洋"};
 
@@ -291,6 +294,13 @@ void ui_linglong_ctrl_reset(void) {
     s_drag_active = 0;
     s_drag_last_x = 0;
     s_drag_last_y = 0;
+}
+
+void ui_linglong_ctrl_show_controls(void) {
+    if (!s_controls_visible) {
+        s_controls_visible = 1;
+        s_dirty = 1;
+    }
 }
 
 void ui_linglong_ctrl_settings_reset(void) {

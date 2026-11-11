@@ -1547,6 +1547,19 @@ void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state) {
     s_linglong_touch_owned = 1; // 主天空界面：触屏归显式控件，抑制宫格软键
 }
 
+// 大气散射档位循环：屏蔽「简化模型(1)」「一次散射(2)」——两者分别被二次散射(3)与
+// 海洋天空(5)完全覆盖（观感更差且没有独占能力），保留渲染实现但不再出现在选项里。
+// 顺序：关(0) → 二次散射(3) → 体积云(4) → 海洋天空(5) → 关。
+// 当前值若落在被屏蔽档位（手改配置/旧存档），下一次点击落到二次散射。
+static int32_t ui_app_linglong_next_sky_model(int32_t cur) {
+    static const int32_t kOrder[] = { 0, 3, 4, 5 };
+    const int32_t n = (int32_t)(sizeof(kOrder) / sizeof(kOrder[0]));
+    for (int32_t i = 0; i < n; i++) {
+        if (kOrder[i] == cur) return kOrder[(i + 1) % n];
+    }
+    return 3;
+}
+
 // 云参数现值名称与控制（设置界面第 1 行前三格；原主控制面板左列）
 static const wchar_t *ui_app_linglong_cloud_layer_name(Linglong_Config *cfg) {
     int32_t n = 0;
@@ -2349,9 +2362,9 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                         (global_state->linglong_cfg->enable_horizontal_coord + 1) % 3;
                     break;
                 case UI_LL_CTRL_SKY_MODEL:
-                    // 大气散射：0..5 循环
+                    // 大气散射：关/二次散射/体积云/海洋天空 循环（简化模型、一次散射已屏蔽）
                     global_state->linglong_cfg->sky_model =
-                        (global_state->linglong_cfg->sky_model + 1) % 6;
+                        ui_app_linglong_next_sky_model(global_state->linglong_cfg->sky_model);
                     break;
                 case UI_LL_CTRL_LANDSCAPE:
                     // 地景：0..3 循环
@@ -2620,8 +2633,8 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         }
         else {
             // global_state->is_ctrl_enabled = 0;
-            global_state->linglong_cfg->sky_model++;
-            global_state->linglong_cfg->sky_model = global_state->linglong_cfg->sky_model % 6;
+            global_state->linglong_cfg->sky_model =
+                ui_app_linglong_next_sky_model(global_state->linglong_cfg->sky_model);
             linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
@@ -2684,8 +2697,11 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             ui_linglong_ctrl_settings_reset();
         }
         else {
+            // 退出设置界面 → 回到控制面板（时间/视角/设置按钮同显），而不是空天空：
+            // 设置界面自身没有顶部按钮栏，返回后落在“能继续操作”的地方才顺手。
             global_state->is_ctrl_enabled = 0;
             linglong_state = LL_STATE_SKY;
+            ui_linglong_ctrl_show_controls();
         }
     }
     // 按*键时光机向前（过去）（反复按运行/暂停）；漫游模式下方向键用于移动

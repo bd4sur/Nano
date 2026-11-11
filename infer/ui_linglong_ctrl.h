@@ -114,6 +114,10 @@ typedef struct {
 void    ui_linglong_ctrl_init(void);
 void    ui_linglong_ctrl_reset(void);
 
+// 直接显示控制面板（不动按住高亮）。设置界面的“返回”回到的是控制面板而不是空天空，
+// 由调用方在退出设置界面时调用。
+void    ui_linglong_ctrl_show_controls(void);
+
 // 触屏事件处理（由玲珑仪事件处理器在主天空界面调用）：
 //   touch_edge：TOUCH_EDGE_DOWN / TOUCH_EDGE_UP 位掩码（同帧可叠加）；
 //   x,y：当前触点（松开沿为最后有效触点）；down_x,down_y：本次触摸序列按下点。

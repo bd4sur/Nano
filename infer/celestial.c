@@ -2790,10 +2790,10 @@ void linglong_init(Linglong_Config *cfg) {
     // 在只有高积云时观感刚好，但浓积云（云底 1.0km 的积云塔）的覆盖率映射在「半云」
     // 档几乎不出云团、只成一层薄纱——它的门限标定是给「多云~满云」这段用的。
     cfg->cloud_coverage_level = 3;
-    // 云层种类默认仅高积云（3.0~6.2km）：四层叠满时逐像素 ray-march 成本过高
-    // （WASM 单线程下约 1fps）。浓积云（云底 1.0km，塔顶 4.1km）在“云类”按钮里可选，
-    // 观感最接近常见的晴天积云，但密度求值比高积云重（每样本 3 次 3D 噪声 + 1 次 curl）。
-    cfg->cloud_layer_mask = UI_CLOUD_LAYER_AC;
+    // 云层种类默认浓积云（0.8~4.1km，云底 1.0km 的积云塔）：四层叠满时逐像素 ray-march
+    // 成本过高（WASM 单线程下约 1fps），单开一层时选观感最像“常见晴天积云”的那层。
+    // 浓积云每样本 3 次带 mip 的 3D 噪声 + 1 次 curl，比高积云重约 20%（见 doc/AGENTS.md）。
+    cfg->cloud_layer_mask = UI_CLOUD_LAYER_CU;
     cfg->cloud_precision_level = 1;   // 云精度档位（0-高 1-中 2-低；中 = 半分辨率 + 0.25km 步距）
 
     // 海洋参数（sky_model==5 或 landscape_index==3 时生效；与 celestial_ocean.c 的模块默认一致）
