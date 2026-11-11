@@ -75,7 +75,7 @@ typedef struct Linglong_Config {
     // 体积云参数（仅 sky_model==4 时有效；对应 ui_cloud.c 中已有的云量/云层/精度控制）。
     // 云亮度不在此列：它每帧由太阳高度自动调制（ui_cloud_brightness_for_sun_alt）。
     int32_t cloud_coverage_level;    // 云量档位 0-5（晴空→疏云→半云→多云→阴天→满云）
-    int32_t cloud_layer_mask;        // 云层种类掩码；bit0-低层 bit1-中层 bit2-高层（7=全部，0=无云）
+    int32_t cloud_layer_mask;        // 云层种类掩码；bit0-浓积云 bit1-高积云 bit2-层积云 bit3-卷层云（15=全部，0=无云）
     int32_t cloud_precision_level;   // 云精度档位 0-2（高/中/低：内部渲染降采样倍数 + ray-march 步距）
 
     // 海洋/观察高度参数（观察高度对 sky_model==4/5 或 landscape_index==3 均有效；
@@ -174,7 +174,7 @@ void render_sky(Nano_GFX *gfx,
     int32_t enable_tracking_sun,     // 视线偏航角是否跟踪太阳
     // 体积云参数（仅 sky_model==4 时有效）
     int32_t cloud_coverage_level,    // 云量档位 0-5
-    int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
+    int32_t cloud_layer_mask,        // 云层种类掩码（bit0-浓积云 / bit1-高积云 / bit2-层积云 / bit3-卷层云）
     int32_t cloud_precision_level,   // 云精度档位 0-2（高/中/低）
     // 海洋/观察高度/地形参数（仅 sky_model==5 或 landscape_index==3 时有效）
     int32_t ocean_swell_hs_level,    // 涌浪波高档位 0-5

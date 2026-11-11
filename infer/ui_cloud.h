@@ -50,11 +50,17 @@ extern "C" {
 // 仅低层云 + 半分辨率 + 0.25km 步距在 WASM 单线程下≈12fps（原全层全分辨率≈0.9fps）。
 // ===============================================================================
 
-// 云层种类掩码（与独立应用“1 键”循环的档位一致）
-#define UI_CLOUD_LAYER_LOW  (1)
-#define UI_CLOUD_LAYER_MID  (2)
-#define UI_CLOUD_LAYER_HIGH (4)
-#define UI_CLOUD_LAYER_ALL  (7)
+// 云层种类掩码（四层，与参考实现 linglong.html 的按位编号一致：
+// bit0 浓积云 / bit1 高积云 / bit2 层积云 / bit3 卷层云）
+//   CU 浓积云 云底 ~1.0 km、塔顶 ~4.1 km（平底花椰菜塔，移植自 linglong.html）
+//   AC 高积云 3.0–6.2 km（原“低层”）
+//   SC 层积云 6.2–9.4 km（原“中层”）
+//   CS 卷层云 9.4–11.0 km（原“高层”）
+#define UI_CLOUD_LAYER_CU   (1)
+#define UI_CLOUD_LAYER_AC   (2)
+#define UI_CLOUD_LAYER_SC   (4)
+#define UI_CLOUD_LAYER_CS   (8)
+#define UI_CLOUD_LAYER_ALL  (15)
 
 // 渲染遍：把“天空/大气”和“体积云”拆成两遍，云层才能在任意时机合成到帧缓冲上
 // （照搬 linglong.html 的解耦云层：sky_only + render_decoupled_volumetric_clouds）。

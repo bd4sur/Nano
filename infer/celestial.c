@@ -2687,12 +2687,15 @@ static inline void sky_inscatter_lut_lookup(
 // 云类 / 云精度 档位表（玲珑仪触屏控制面板与控制逻辑共用，见 celestial.h）
 // ===============================================================================
 
-// 云类：云层掩码循环（默认仅低层；中/高层叠满时逐像素 ray-march 成本成倍上升）
+// 云类：云层掩码循环（四层；多开一层，逐像素 ray-march 的成本就上一档）
+// 名称按云属给出（与参考实现一致）：浓积云 0.8~4.1km、高积云 3~6.2、层积云 6.2~9.4、卷层云 9.4~11
 static const Linglong_Cloud_Option S_CLOUD_LAYER_OPTIONS[] = {
-    { UI_CLOUD_LAYER_LOW,                            L"低层" },
-    { UI_CLOUD_LAYER_LOW | UI_CLOUD_LAYER_MID,       L"低中" },
-    { UI_CLOUD_LAYER_ALL,                            L"全部" },
-    { 0,                                             L"无云" },
+    { UI_CLOUD_LAYER_AC,                                       L"高积云" },
+    { UI_CLOUD_LAYER_CU,                                       L"浓积云" },
+    { UI_CLOUD_LAYER_CU | UI_CLOUD_LAYER_AC,                   L"积云+高积" },
+    { UI_CLOUD_LAYER_AC | UI_CLOUD_LAYER_SC,                   L"高+层积" },
+    { UI_CLOUD_LAYER_ALL,                                      L"全部" },
+    { 0,                                                       L"无云" },
 };
 #define S_CLOUD_LAYER_OPTION_NUM ((int32_t)(sizeof(S_CLOUD_LAYER_OPTIONS) / sizeof(S_CLOUD_LAYER_OPTIONS[0])))
 
@@ -2783,11 +2786,14 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->enable_imu = 1;              // 是否启用IMU（使视角随机器姿态旋转）
 
     // 体积云参数（sky_model==4 时生效；档位/亮度与 ui_cloud.c 独立应用的默认一致）
-    cfg->cloud_coverage_level = 2;    // 云量档位（半云）
-    // 云层种类默认仅低层：高/中/低三层叠满时逐像素 ray-march 成本过高（WASM 单线程下约 1fps），
-    // 低层（云区 3.0~6.2km，高积云/层积云观感）占云量主体且开销可控，故默认只渲染它。
-    // 需要全层观感时可把掩码改成 UI_CLOUD_LAYER_ALL（低|中|高）。
-    cfg->cloud_layer_mask = UI_CLOUD_LAYER_LOW;
+    // 云量档位（多云）：与参考实现 linglong.html 的默认档一致（4/6）。此前的「半云」
+    // 在只有高积云时观感刚好，但浓积云（云底 1.0km 的积云塔）的覆盖率映射在「半云」
+    // 档几乎不出云团、只成一层薄纱——它的门限标定是给「多云~满云」这段用的。
+    cfg->cloud_coverage_level = 3;
+    // 云层种类默认仅高积云（3.0~6.2km）：四层叠满时逐像素 ray-march 成本过高
+    // （WASM 单线程下约 1fps）。浓积云（云底 1.0km，塔顶 4.1km）在“云类”按钮里可选，
+    // 观感最接近常见的晴天积云，但密度求值比高积云重（每样本 3 次 3D 噪声 + 1 次 curl）。
+    cfg->cloud_layer_mask = UI_CLOUD_LAYER_AC;
     cfg->cloud_precision_level = 1;   // 云精度档位（0-高 1-中 2-低；中 = 半分辨率 + 0.25km 步距）
 
     // 海洋参数（sky_model==5 或 landscape_index==3 时生效；与 celestial_ocean.c 的模块默认一致）
@@ -2874,7 +2880,7 @@ void render_sky(Nano_GFX *gfx,
     int32_t enable_tracking_sun,     // 视线偏航角是否跟踪太阳
     // 体积云参数（仅 sky_model==4 时有效）
     int32_t cloud_coverage_level,    // 云量档位 0-5
-    int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
+    int32_t cloud_layer_mask,        // 云层种类掩码（bit0-浓积云 / bit1-高积云 / bit2-层积云 / bit3-卷层云）
     int32_t cloud_precision_level,   // 云精度档位 0-2（高/中/低）
     // 海洋/观察者/地形参数（仅 sky_model==5 或 landscape_index==3 时有效；档位表见 celestial_ocean.h）
     int32_t ocean_swell_hs_level,    // 涌浪波高档位 0-5
