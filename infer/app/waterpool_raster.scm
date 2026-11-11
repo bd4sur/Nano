@@ -56,7 +56,8 @@
 (define GRAVITY_Y -4.0)           ; WT_GRAVITY
 
 (define WATER_DETAIL 44)          ; WT_WATER_DETAIL（水面细分）
-(define WATER_P1 45)
+(define WATER_P1 (+ WATER_DETAIL 1))   ; 每行顶点数。**必须由 detail 推导**：
+                                       ;   原来硬写 45，改细分时三角形索引会静默错位
 (define SPH_RING 20)              ; WT_SPH_RING
 (define SPH_SEG 36)               ; WT_SPH_SEG
 (define CUBE_FACES 5)
@@ -83,13 +84,11 @@
 (define TICK_MS 8)
 
 ;; 底部控件栏（几何同 ui_water.c 的 wt_button_rect）
+;;   矩形的唯一实现是下面的 wt_button_rect —— 这里不再另算一份 BTN_W/BTN_H/BTN_Y：
+;;   两份公式并存时改一处忘一处，栏和按钮会错位。
 (define BAR_H 34)
-(define BAR_Y (- SH BAR_H))
 (define BTN_N 4)
 (define BTN_GAP 4)
-(define BTN_W (Math.floor (/ (- SW (* BTN_GAP (+ BTN_N 1))) BTN_N)))
-(define BTN_H (- BAR_H BTN_GAP))
-(define BTN_Y (+ BAR_Y (/ BTN_GAP 2)))
 
 (define BTN_BACK 0)
 (define BTN_PAUSE 1)
@@ -377,8 +376,6 @@
       (m4mul matMVP matP matMV)
 
       ;; 由 modelview 反解世界系相机位置：eye = -(axisX·off, axisY·off, axisZ·off)
-      (define axX (+ (* (get_item matMV 0) (get_item matMV 0))
-                     (+ (* (get_item matMV 4) (get_item matMV 4)) (* (get_item matMV 8) (get_item matMV 8)))))
       (set! eye_x (- 0.0 (+ (+ (* (get_item matMV 3) (get_item matMV 0))
                                (* (get_item matMV 7) (get_item matMV 4)))
                             (* (get_item matMV 11) (get_item matMV 8)))))
@@ -388,7 +385,6 @@
       (set! eye_z (- 0.0 (+ (+ (* (get_item matMV 3) (get_item matMV 2))
                                (* (get_item matMV 7) (get_item matMV 6)))
                             (* (get_item matMV 11) (get_item matMV 10)))))
-      (if (== axX 0.0) #f #f)
 
       ;; 四角射线 = unProject(角, 1) - eye
       (m4inv matMVP matInv)
@@ -785,6 +781,36 @@
         })
     }))
 
+;; HUD = 控件栏 + 标题/提示 + 右上「退出」
+;;   (EX.draw_button) 不只是画一个按钮：它把矩形登记给宿主做**触摸边沿**命中判定。
+;;   之前只装了 (EX.check) 却没画按钮，右上角 36×16 就是个看不见、但点上去会弹
+;;   退出确认框的隐形热区（doc/AGENTS.md「已知边界 4」）。顶部这一带本来就空着
+;;   （标题 ≤ 40px、提示 ≤ 146px），画出来既消掉隐形热区，也给触屏一个统一退出入口。
+(define wt_draw_hud
+  (lambda ()
+    {
+      (wt_draw_ui)
+      (Gfx.set_font 1)
+      (Gfx.draw_text "水池" 4 2 208 232 255)
+      (Gfx.draw_text "拖动旋转视角·拖动圆球" 56 2 190 205 225)
+      (EX.draw_button)
+    }))
+
+;; 后端分配失败（内存不足）的降级画面（对应 ui_water.c 的 s_wt.ready==0 分支）。
+;;   只画文字与「退出」：**绝不**调用任何 Raster 过程 —— 失败时 s_wt 已被 rs_free 清空，
+;;   WW/HH 为 0、帧缓冲为空，光栅化只会算出无意义的屏幕坐标。也不画底部控件栏：
+;;   那 4 个按钮都会打到后端内核（暂停/重力/光源）或波场/焦散。
+(define wt_draw_fail
+  (lambda ()
+    {
+      (Gfx.clear)
+      (Gfx.set_font 1)
+      (Gfx.draw_text "水池" 4 2 208 232 255)
+      (Gfx.draw_text "内存不足" 6 100 255 80 80)
+      (Gfx.draw_text "无法分配渲染缓冲" 6 118 190 205 225)
+      (EX.draw_button)
+    }))
+
 
 ;; ============================================================================
 ;; 交互（wt_hit_test_sphere / wt_start_drag / wt_during_drag）
@@ -903,10 +929,18 @@
       (set! p_cull_none (mkparams CULL_NONE))
 
       ;; 后端缓冲（帧/深度/波场/焦散）+ 三份网格上传
-      (if (== (Raster.init) 0) (set! ready 0) (set! ready 1))
-      (build_water)
-      (build_cube)
-      (build_sphere)
+      ;;   (Raster.init) 返回 0 = 分配失败（rs_alloc 已自行 rs_free 并清空 s_wt）：
+      ;;   此时**不上传网格、不进渲染路径**，tick 走 wt_draw_fail 的降级画面
+      ;;   （对应 ui_water.c 的 s_wt.ready==0 分支）。网格上传本身不需要帧缓冲，
+      ;;   但失败后端的 WW/HH 是 0，任何 draw/sim 只会算出无意义坐标。
+      (if (== (Raster.init) 0)
+          (set! ready 0)
+          {
+            (set! ready 1)
+            (build_water)
+            (build_cube)
+            (build_sphere)
+          })
 
       ;; 原版默认场景
       (set! angleX -25.0)
@@ -923,12 +957,12 @@
       (set! view_dirty 0)
     }))
 
-(define tick
+;; 一拍的正文（后端可用时）。抽成独立 lambda，是为了让 tick 能用
+;; 「后端不可用 → 降级画面」做一层守卫，而不用把整段重排缩进；
+;; 解释器会把块内 define 提升到本 lambda 体首部，语义不变。
+(define tick_body
   (lambda ()
     {
-      ;; ① 退出出口（硬 A/ESC；控件「返回」在 ④ 结算）
-      (EX.check)
-
       ;; ② 触屏：按下沿定去向，移动沿执行，松手沿结算控件
       (define pressed (if (Touch.is_pressed) 1 0))
       (define tx (Touch.x))
@@ -992,26 +1026,58 @@
               }
               #f))
 
-      ;; ⑤ 控件栏 + 标题 + 推屏
-      (wt_draw_ui)
-      (Gfx.set_font 1)
-      (Gfx.draw_text "水池" 4 2 208 232 255)
-      (Gfx.draw_text "拖动旋转视角·拖动圆球" 56 2 190 205 225)
+      ;; ⑤ 控件栏 + 标题 + 右上「退出」 + 推屏
+      (wt_draw_hud)
       (Gfx.refresh)
     }))
 
+(define tick
+  (lambda ()
+    {
+      ;; ① 退出出口（硬 A/ESC / 右上「退出」；控件「返回」在 tick_body ④ 结算）
+      (EX.check)
+      (if (== ready 0)
+          {
+            (set! last_t (System.timestamp))
+            (wt_draw_fail)
+            (Gfx.refresh)
+          }
+          (tick_body))
+    }))
+
+;; 强制整帧重绘：登记给 (EX.install_with)，在「退出确认框→留下」与「后台恢复」之后调用。
+;;   ① 重置 last_t（A3）：挂起/对话框存续期间 last_t 不前进，恢复后墙钟差会顶到
+;;      1000ms 的钳位，一次 wt_update(1.0) 会让圆球瞬移、波场按一秒位移排水；
+;;   ② 重画场景（A2）：暂停态不再逐帧重绘场景，不补这一下，对话框/应用列表的像素
+;;      会一直留在帧缓冲里，直到用户旋一次视角；后端不可用时则画降级画面。
+(define force_redraw
+  (lambda ()
+    {
+      (set! last_t (System.timestamp))
+      (if (== ready 1)
+          {
+            (wt_compose_camera)
+            (wt_scene_render)
+            (set! view_dirty 0)
+          }
+          (wt_draw_fail))
+    }))
+
 ;; ---- 启动 ------------------------------------------------------------------
-(EX.install)
+;; (EX.install_with) 而不是 (EX.install)：暂停态不逐帧重绘，所以「留下」/后台恢复后
+;;   必须有人把对话框/应用列表的像素擦掉，并把 last_t 重置（见 force_redraw）。
+(EX.install_with force_redraw)
 (EX.on_exit (lambda () (Raster.dispose)))
 (wt_alloc)
-;; 首帧：dt=0（只建焦散与画面、不推进物理）
-(wt_update 0.0)
-(wt_compose_camera)
-(wt_scene_render)
-(wt_draw_ui)
-(Gfx.set_font 1)
-(Gfx.draw_text "水池" 4 2 208 232 255)
-(Gfx.draw_text "拖动旋转视角·拖动圆球" 56 2 190 205 225)
+(if (== ready 1)
+    {
+      ;; 首帧：dt=0（只建焦散与画面、不推进物理）
+      (wt_update 0.0)
+      (wt_compose_camera)
+      (wt_scene_render)
+      (wt_draw_hud)
+    }
+    (wt_draw_fail))
 (Gfx.refresh)
 (set! last_t (System.timestamp))
 (set! tick_timer (System.set_interval TICK_MS tick))
