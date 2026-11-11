@@ -183,6 +183,9 @@ static int32_t ui_app_state_is_menu(int32_t state) {
         case STATE_EBOOK:
         case STATE_OFDM_MENU:
         case STATE_MUSICBOX_MENU:
+        case STATE_MUSICBOX_PLAYING: // 音乐盒播放页：显式触屏控件（播放/暂停/上下曲/音量/进度条/退出）
+                                    // 直接消费触屏流，十六宫格软按键整体退场
+                                    // （见 ui_musicbox.c 的 Musicbox_Ui / musicbox_handle_touch）
         case STATE_GOLDMINER: // 黄金矿工同样直接消费触屏流（返回虚拟按钮/点击放钩），抑制宫格软按键
         case STATE_TETRIS:   // 俄罗斯方块：虚拟按键/退出确认模态框直接消费触屏流，抑制宫格软按键
         case STATE_WATER:    // 水池：屏幕底部自绘控件栏+拖动旋转/拖球直接消费触屏流，抑制宫格软按键
