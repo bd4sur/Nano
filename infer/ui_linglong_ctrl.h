@@ -80,6 +80,22 @@ void    ui_linglong_ctrl_settings_reset(void);
 #define UI_LL_CTRL_HORIZONTAL   (21)  // 地平坐标（关/方位角/坐标圈）
 #define UI_LL_CTRL_SKY_MODEL    (22)  // 大气散射（0..5 循环）
 #define UI_LL_CTRL_LANDSCAPE    (23)  // 地景（0..3 循环）
+#define UI_LL_CTRL_ROAM         (24)  // 漫游模式开关（顶部第三枚按钮）
+// 漫游移动 pad（开启漫游后替换底部时间按钮行；长按连续移动）
+#define UI_LL_CTRL_MOVE_FWD     (25)
+#define UI_LL_CTRL_MOVE_BACK    (26)
+#define UI_LL_CTRL_MOVE_LEFT    (27)
+#define UI_LL_CTRL_MOVE_RIGHT   (28)
+#define UI_LL_CTRL_MOVE_UP      (29)
+#define UI_LL_CTRL_MOVE_DOWN    (30)
+
+// 漫游按住方向位掩码（ui_linglong_ctrl_roam_held 的返回值）
+#define UI_LL_ROAM_FWD          (1 << 0)
+#define UI_LL_ROAM_BACK         (1 << 1)
+#define UI_LL_ROAM_LEFT         (1 << 2)
+#define UI_LL_ROAM_RIGHT        (1 << 3)
+#define UI_LL_ROAM_UP           (1 << 4)
+#define UI_LL_ROAM_DOWN         (1 << 5)
 
 // 绘制/命中所需的控件状态（由调用方从玲珑仪当前配置回填；按钮上直接显示现值）
 typedef struct {
@@ -90,6 +106,8 @@ typedef struct {
     int32_t horizontal_coord;       // 地平坐标 0-关 1-方位角 2-坐标圈
     int32_t sky_model;              // 大气散射 0..5
     int32_t landscape_index;        // 地景 0..3
+    int32_t roam_enable;            // 漫游模式 0-关 1-开（顶部“漫游”按钮高亮 + 底部换成移动 pad）
+    int32_t roam_speed_level;       // 漫游速度档位 0-2（10/100/1000 m/s，显示在 pad 上）
 } UiLinglongCtrlState;
 
 // 初始化/复位：隐藏控制面板（时间按钮 + 视角九宫格 + 设置按钮）并清除按住高亮
@@ -112,6 +130,10 @@ int32_t ui_linglong_ctrl_poll_drag(int32_t touch_edge, int32_t is_touching,
                                    int32_t x, int32_t y,
                                    int32_t down_x, int32_t down_y,
                                    int32_t *out_dx, int32_t *out_dy);
+
+// 漫游移动 pad：返回当前按住的方向位掩码（UI_LL_ROAM_*）；未按住/未开启漫游返回 0。
+// 调用方每帧调用一次，按 dt 积分位移（长按连续移动，与触屏边沿无关）。
+int32_t ui_linglong_ctrl_roam_held(int32_t is_touching, int32_t x, int32_t y);
 
 // 控件显示状态自上次查询后是否变化（面板显隐或按住高亮变化）：变化过返回1并清除标记。
 // 调用方据此决定是否需要重绘（避免点击空白天空也强制重绘整幅星图）。

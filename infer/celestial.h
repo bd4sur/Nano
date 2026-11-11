@@ -81,9 +81,22 @@ typedef struct Linglong_Config {
     // 海洋/观察高度参数（观察高度对 sky_model==4/5 或 landscape_index==3 均有效；
     // 档位表见 celestial_ocean.h）。体积云用它决定相机海拔（天空+云层 ray-march 同一来源）。
     // 其余海况（风/泡沫/浑浊度/霾/能见度）按需求固定为模块默认值，不开放给用户。
-    int32_t ocean_height_level;      // 观察高度档位 0-7（5m/50m/200m/1000m/4000m/8000m/12000m/20000m；默认 0=5m）
+    int32_t ocean_height_level;      // 观察高度快捷档位 0-7（5m/50m/200m/1000m/4000m/8000m/12000m/20000m）
     int32_t ocean_swell_hs_level;    // 涌浪波高档位 0-5（无/0.5/1.0/1.8/2.5/3.5 m；默认 3=1.8m）
     int32_t ocean_swell_len_level;   // 涌浪波长档位 0-6（30/60/90/120/160/220/300 m；默认 3=120m）
+
+    // 观察者（相机）世界位置：x 东 / y 上 / z 北，单位 m。
+    // 漫游模式下由 ui_app 每帧积分；y 是真实高度（上面那个档位只是快捷跳转值），
+    // 海洋模块内部会做“不钻地”钳制与水平回绕。
+    float   obs_x, obs_y, obs_z;
+    int32_t roam_enable;             // 漫游模式开关（控制面板“漫游”按钮）
+    int32_t roam_speed_level;        // 漫游速度档位 0-2（10 / 100 / 1000 m/s）
+
+    // 随机岛屿地形（landscape_index==3 时生效；参考 linglong.html 的 === [Islands] ===）
+    int32_t terrain_enable;          // 0=纯深水（与移植初版一致）；1=随机岛屿
+    int32_t terrain_quality;         // 0=省电 1=标准 2=精细
+    int32_t terrain_res;             // 高程图分辨率 512（默认，50m 纹素）/ 1024（25m 纹素）
+    uint32_t terrain_seed;           // 地形种子（0 → 内置默认）
 
     // 以下与天空渲染无关（非render_sky参数）
     int32_t enable_imu;              // 是否启用IMU（使视角随机器姿态旋转）
@@ -110,6 +123,15 @@ typedef struct {
 // 返回档位表首地址，*count 写入项数（不会为 0）
 const Linglong_Cloud_Option *linglong_cloud_layer_options(int32_t *count);
 const Linglong_Cloud_Option *linglong_cloud_precision_options(int32_t *count);
+
+// 鱼眼/透视投影（屏幕坐标 ← 地平天球方向）；celestial_ocean.c 复用（岛屿屏幕包围盒）
+void fisheye_project(
+    float azimuth_deg, float altitude_deg, float radius,
+    float center_x, float center_y,
+    float view_alt, float view_azi, float view_roll, float f,
+    int32_t projection,
+    float *scr_x, float *scr_y
+);
 
 // 鱼眼/透视投影互为逆运算（屏幕坐标 ↔ 地平天球笛卡尔坐标）；celestial_ocean.c 复用
 void fisheye_unproject(
@@ -154,10 +176,14 @@ void render_sky(Nano_GFX *gfx,
     int32_t cloud_coverage_level,    // 云量档位 0-5
     int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
     int32_t cloud_precision_level,   // 云精度档位 0-2（高/中/低）
-    // 海洋/观察高度参数（观察高度对 sky_model==4/5 或 landscape_index==3 均有效）
-    int32_t ocean_height_level,      // 观察高度档位 0-7（体积云也用它决定相机海拔）
+    // 海洋/观察高度/地形参数（仅 sky_model==5 或 landscape_index==3 时有效）
     int32_t ocean_swell_hs_level,    // 涌浪波高档位 0-5
-    int32_t ocean_swell_len_level    // 涌浪波长档位 0-6
+    int32_t ocean_swell_len_level,   // 涌浪波长档位 0-6
+    float obs_x, float obs_y, float obs_z,   // 观察者世界位置（m；x 东 y 上 z 北）
+    int32_t terrain_enable,          // 岛屿地形开关
+    int32_t terrain_quality,         // 地形精度档位 0-2
+    int32_t terrain_res,             // 高程图分辨率 512/1024
+    uint32_t terrain_seed            // 地形种子
 );
 
 #ifdef __cplusplus

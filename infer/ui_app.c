@@ -1708,13 +1708,23 @@ static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLin
             { 13, cfg->ocean_swell_len_level, linglong_ocean_swell_len_options },
         };
         static const wchar_t *labels[3] = { L"观察高度", L"涌浪波高", L"涌浪波长" };
+        static wchar_t s_alt_text[24];
         for (int32_t i = 0; i < 3; i++) {
             opt = m[i].get(&n);
             if (opt == NULL || n <= 0) continue;
             int32_t lv = m[i].level;
             if (lv < 0 || lv >= n) lv = 0;
             cells[m[i].cell].label = labels[i];
-            cells[m[i].cell].value = opt[lv].name;
+            if (m[i].cell == 11) {
+                // 观察高度显示真实海拔（漫游时是连续量），档位只作为快捷跳转
+                const double alt = (double)cfg->obs_y;
+                if (alt < 1000.0) swprintf(s_alt_text, 24, L"%.0fm", alt);
+                else swprintf(s_alt_text, 24, L"%.1fkm", alt / 1000.0);
+                cells[m[i].cell].value = s_alt_text;
+            }
+            else {
+                cells[m[i].cell].value = opt[lv].name;
+            }
             if ((m[i].cell == 11) ? height_active : ocean_active) {
                 cells[m[i].cell].value_r = 0; cells[m[i].cell].value_g = 200; cells[m[i].cell].value_b = 255;
             }
@@ -1724,7 +1734,69 @@ static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLin
         }
     }
 
-    // 第 3 行首格与第 4 行全部为无功能备用按钮（不再重复“跟踪太阳”）。
+    // 第 3 行首格：岛屿地形开关（landscape_index==3 时生效）
+    {
+        static wchar_t s_terr_prog[24];
+        const int32_t terr_active = (cfg->landscape_index == 3);
+        const uint8_t tr = terr_active ? 0 : 168;
+        const uint8_t tg = terr_active ? 200 : 176;
+        const uint8_t tb = terr_active ? 255 : 190;
+
+        cells[10].label = L"岛屿地形";
+        cells[10].value = (cfg->terrain_enable) ? L"开" : L"关";
+        if (cfg->terrain_enable) { cells[10].value_r = 0; cells[10].value_g = 255; cells[10].value_b = 0; }
+        else { cells[10].value_r = 222; cells[10].value_g = 0; cells[10].value_b = 0; }
+        if (!terr_active) { cells[10].value_r = tr; cells[10].value_g = tg; cells[10].value_b = tb; }
+
+        cells[14].label = L"地形精度";
+        {
+            static const wchar_t *names[3] = { L"省电", L"标准", L"精细" };
+            int32_t lv = cfg->terrain_quality;
+            if (lv < 0 || lv > 2) lv = 1;
+            cells[14].value = names[lv];
+        }
+        cells[14].value_r = tr; cells[14].value_g = tg; cells[14].value_b = tb;
+
+        cells[15].label = L"换一座岛";
+        {
+            // 生成中显示进度，就绪后显示当前种子的低 4 位（便于复现同一组岛）
+            int32_t prog = linglong_ocean_terrain_progress();
+            if (prog < 100) {
+                swprintf(s_terr_prog, 24, L"%d%%", prog);
+            }
+            else {
+                swprintf(s_terr_prog, 24, L"#%04u", (unsigned)(cfg->terrain_seed % 10000u));
+            }
+            cells[15].value = s_terr_prog;
+        }
+        cells[15].value_r = tr; cells[15].value_g = tg; cells[15].value_b = tb;
+
+        cells[16].label = L"地形网格";
+        cells[16].value = (cfg->terrain_res >= 1024) ? L"1024" : L"512";
+        cells[16].value_r = tr; cells[16].value_g = tg; cells[16].value_b = tb;
+
+        cells[17].label = L"漫游速度";
+        {
+            static const wchar_t *spd[3] = { L"10m/s", L"100m/s", L"1km/s" };
+            int32_t lv = cfg->roam_speed_level;
+            if (lv < 0 || lv > 2) lv = 1;
+            cells[17].value = spd[lv];
+        }
+        cells[17].value_r = 0; cells[17].value_g = 200; cells[17].value_b = 255;
+
+        cells[18].label = L"观察位置";
+        {
+            static wchar_t s_pos[32];
+            swprintf(s_pos, 32, L"%+.1f/%+.1fkm", (double)cfg->obs_x / 1000.0, (double)cfg->obs_z / 1000.0);
+            cells[18].value = s_pos;
+        }
+        cells[18].value_r = 200; cells[18].value_g = 220; cells[18].value_b = 240;
+
+        cells[19].label = L"漫游";
+        cells[19].value = (cfg->roam_enable) ? L"开" : L"关";
+        if (cfg->roam_enable) { cells[19].value_r = 0; cells[19].value_g = 255; cells[19].value_b = 0; }
+        else { cells[19].value_r = 222; cells[19].value_g = 0; cells[19].value_b = 0; }
+    }
 }
 
 void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state) {
@@ -1738,6 +1810,84 @@ void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_sta
 
 
 
+
+// ===============================================================================
+// 漫游（观察者水平/垂直移动）
+// ===============================================================================
+// 方向来源有两路，最终合成一个位掩码后按 dt 积分（与帧率无关）：
+//   · 触屏移动 pad（控制面板底部，长按连续移动）——每帧直接问当前按住的方向；
+//   · 物理键/键盘（上/下/左/右、W/A/S/D、Q/E）——按键事件是边沿触发（松手沿 -1、
+//     长按重复 -2、按住 0），这里把“最近一次事件”当作按住状态，180 ms 无事件即释放，
+//     因而对任意重复频率都稳定，不会因长按重复而超速。
+static int32_t  s_roam_key_mask = 0;
+static uint64_t s_roam_key_ts[6] = { 0, 0, 0, 0, 0, 0 };
+static uint64_t s_roam_last_ms = 0;
+
+static void ui_app_linglong_roam_key_hold(int32_t bit) {
+    s_roam_key_mask |= bit;
+    int32_t idx = 0;
+    while ((1 << idx) != bit && idx < 6) idx++;
+    if (idx < 6) s_roam_key_ts[idx] = get_timestamp_in_ms();
+}
+
+static int32_t ui_app_linglong_roam_key_mask(void) {
+    const uint64_t now = get_timestamp_in_ms();
+    int32_t mask = 0;
+    for (int32_t i = 0; i < 6; i++) {
+        if (s_roam_key_mask & (1 << i)) {
+            if (now - s_roam_key_ts[i] > 180) s_roam_key_mask &= ~(1 << i);
+            else mask |= (1 << i);
+        }
+    }
+    return mask;
+}
+
+// 每帧推进观察者位置（在 render_sky 之前调用）
+static void ui_app_linglong_roam_step(Key_Event *key_event, Global_State *global_state) {
+    Linglong_Config *c = global_state->linglong_cfg;
+    const uint64_t now = get_timestamp_in_ms();
+    double dt = (s_roam_last_ms == 0) ? 0.0 : (double)(now - s_roam_last_ms) / 1000.0;
+    s_roam_last_ms = now;
+    if (dt < 0.0) dt = 0.0;
+    if (dt > 0.1) dt = 0.1;
+
+    // 触屏 pad（只有漫游开启且面板可见才有值）
+    int32_t mask = ui_linglong_ctrl_roam_held(
+        key_event->is_touching, key_event->touch_x, key_event->touch_y);
+    // 物理键（同样只在漫游开启时生效；否则方向键仍是时光机快退/快进）
+    if (c->roam_enable) mask |= ui_app_linglong_roam_key_mask();
+    if (mask == 0 || dt <= 0.0) return;
+
+    static const float S_SPEED[3] = { 10.0f, 100.0f, 1000.0f };
+    int32_t lv = c->roam_speed_level;
+    if (lv < 0 || lv > 2) lv = 1;
+    const double speed = (double)S_SPEED[lv];
+
+    // 前进方向 = 视线方向的水平投影（罗盘方位：北 = +z，东 = +x）
+    const double azi = (double)c->view_azi * M_PI / 180.0;
+    const double fx = sin(azi), fz = cos(azi);
+    const double rx = cos(azi), rz = -sin(azi);
+    double mx = 0.0, mz = 0.0;
+    if (mask & UI_LL_ROAM_FWD)   { mx += fx; mz += fz; }
+    if (mask & UI_LL_ROAM_BACK)  { mx -= fx; mz -= fz; }
+    if (mask & UI_LL_ROAM_RIGHT) { mx += rx; mz += rz; }
+    if (mask & UI_LL_ROAM_LEFT)  { mx -= rx; mz -= rz; }
+    const double ml = sqrt(mx * mx + mz * mz);
+    if (ml > 1e-6) { mx /= ml; mz /= ml; }
+
+    c->obs_x += (float)(mx * speed * dt);
+    c->obs_z += (float)(mz * speed * dt);
+    if (mask & UI_LL_ROAM_UP)   c->obs_y += (float)(speed * dt);
+    if (mask & UI_LL_ROAM_DOWN) c->obs_y -= (float)(speed * dt);
+    if (c->obs_y < 1.5f) c->obs_y = 1.5f;
+    c->obs_y = (float)MIN(c->obs_y, 20000.0f);
+    // 不钻地：地形就绪时抬到地面以上（与 celestial_ocean 内部的钳制一致，
+    // 这里先夹一次是为了让“观察高度”显示与渲染同帧一致）
+    if (c->terrain_enable && linglong_ocean_terrain_ready()) {
+        double g = linglong_ocean_terrain_height((double)c->obs_x, (double)c->obs_z);
+        if ((double)c->obs_y < g + 1.5) c->obs_y = (float)(g + 1.5);
+    }
+}
 
 // 玲珑仪主天空界面渲染。
 // 每帧总是完整重绘（没有“暂停就只画一次”的跳过逻辑）：实时海洋的波场、体积云的
@@ -1796,6 +1946,8 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->view_roll = global_state->roll;
     }
 
+    ui_app_linglong_roam_step(key_event, global_state);
+
     gfx_soft_clear(global_state->llgfx);
 
     render_sky(global_state->llgfx,
@@ -1821,10 +1973,21 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->cloud_coverage_level,
         llcfg->cloud_layer_mask,
         llcfg->cloud_precision_level,
-        llcfg->ocean_height_level,
         llcfg->ocean_swell_hs_level,
-        llcfg->ocean_swell_len_level
+        llcfg->ocean_swell_len_level,
+        llcfg->obs_x, llcfg->obs_y, llcfg->obs_z,
+        llcfg->terrain_enable, llcfg->terrain_quality, llcfg->terrain_res, llcfg->terrain_seed
     );
+
+    // 观察者位置回读：海洋模块内部做了水平周期回绕与“不钻地”钳制，
+    // 把归一化后的值写回配置（否则漫游跨过世界边界时界面数值会越滚越大）。
+    {
+        double ox = 0.0, oy = 0.0, oz = 0.0;
+        linglong_ocean_get_observer(&ox, &oy, &oz);
+        llcfg->obs_x = (float)ox;
+        llcfg->obs_y = (float)oy;
+        llcfg->obs_z = (float)oz;
+    }
 
 #if defined(NANO_POD_POCKETTERM35)
     // PocketTerm35 的 HDMI 屏经 32bpp framebuffer 输出 8bit/通道时无需 565 抖动
@@ -1988,6 +2151,8 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
         ctrl_state.horizontal_coord = global_state->linglong_cfg->enable_horizontal_coord;
         ctrl_state.sky_model = global_state->linglong_cfg->sky_model;
         ctrl_state.landscape_index = global_state->linglong_cfg->landscape_index;
+        ctrl_state.roam_enable = global_state->linglong_cfg->roam_enable;
+        ctrl_state.roam_speed_level = global_state->linglong_cfg->roam_speed_level;
         ui_linglong_ctrl_draw(global_state->llgfx, &ctrl_state);
     }
 
@@ -2193,6 +2358,23 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                     global_state->linglong_cfg->landscape_index =
                         (global_state->linglong_cfg->landscape_index + 1) % 4;
                     break;
+                case UI_LL_CTRL_ROAM:
+                    // 漫游模式开关（顶部第三枚按钮）：开启后底部行换成 6 键移动 pad
+                    global_state->linglong_cfg->roam_enable =
+                        (global_state->linglong_cfg->roam_enable != 0) ? 0 : 1;
+                    if (global_state->linglong_cfg->roam_enable) {
+                        s_roam_last_ms = 0;   // 避免用上一段漫游的 dt
+                    }
+                    break;
+                case UI_LL_CTRL_MOVE_FWD:
+                case UI_LL_CTRL_MOVE_BACK:
+                case UI_LL_CTRL_MOVE_LEFT:
+                case UI_LL_CTRL_MOVE_RIGHT:
+                case UI_LL_CTRL_MOVE_UP:
+                case UI_LL_CTRL_MOVE_DOWN:
+                    // 移动 pad 是“按住连续移动”（ui_linglong_ctrl_roam_held 每帧轮询），
+                    // 松手沿的点击不产生额外动作
+                    break;
 
                 default:
                     // 视角九宫格：合成对应的 NANO_KEY_1~9 短按事件，
@@ -2241,8 +2423,12 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             Linglong_Config *oc = global_state->linglong_cfg;
             int32_t n = 0;
             if (cell == 11) {
-                linglong_ocean_height_options(&n);
-                oc->ocean_height_level = (oc->ocean_height_level + 1) % (n > 0 ? n : 1);
+                // 观察高度：档位表是“快捷跳转”（真实高度在漫游中是连续量）
+                const Linglong_Ocean_Option *ho = linglong_ocean_height_options(&n);
+                if (n > 0) {
+                    oc->ocean_height_level = (oc->ocean_height_level + 1) % n;
+                    if (ho != NULL) oc->obs_y = ho[oc->ocean_height_level].value;
+                }
             }
             else if (cell == 12) {
                 linglong_ocean_swell_hs_options(&n);
@@ -2254,6 +2440,44 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             }
             linglong_state = LL_STATE_SETTING_CALLBACK;   // 重绘设置界面（现值已变）
         }
+        else if (cell == 10) {
+            // 岛屿地形开关（landscape_index==3 时生效）
+            Linglong_Config *oc = global_state->linglong_cfg;
+            oc->terrain_enable = (oc->terrain_enable != 0) ? 0 : 1;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
+        }
+        else if (cell == 14) {
+            // 地形精度：省电 → 标准 → 精细 → 省电
+            Linglong_Config *oc = global_state->linglong_cfg;
+            oc->terrain_quality = (oc->terrain_quality + 1) % 3;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
+        }
+        else if (cell == 15) {
+            // 换一座岛：种子 +1 并立即作废重建（渐进生成，界面不冻结）
+            Linglong_Config *oc = global_state->linglong_cfg;
+            oc->terrain_seed = (oc->terrain_seed == 0) ? 1u : oc->terrain_seed + 1u;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
+        }
+        else if (cell == 16) {
+            // 高程图分辨率：512（50m 纹素）↔ 1024（25m 纹素）
+            Linglong_Config *oc = global_state->linglong_cfg;
+            oc->terrain_res = (oc->terrain_res >= 1024) ? 512 : 1024;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
+        }
+        else if (cell == 17) {
+            // 漫游速度：10 / 100 / 1000 m/s
+            Linglong_Config *oc = global_state->linglong_cfg;
+            oc->roam_speed_level = (oc->roam_speed_level + 1) % 3;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
+        }
+        else if (cell == 19) {
+            Linglong_Config *oc = global_state->linglong_cfg;
+            oc->roam_enable = (oc->roam_enable != 0) ? 0 : 1;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
+        }
+        else if (cell == 18) {
+            // 观察位置：只读显示
+        }
         else if (cell >= 0) {
             int32_t synth_key = ui_app_linglong_setting_cell_key(cell);
             if (synth_key != NANO_KEY_IDLE) {
@@ -2262,6 +2486,21 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                 key_event->key_edge = -1;
                 key_event->is_soft_key = 1;
             }
+        }
+    }
+
+    // 漫游：方向键 / W A S D / Q E 按住连续移动（漫游开启时方向键不再兼作时光机）
+    if (global_state->linglong_cfg->roam_enable &&
+        (linglong_state == LL_STATE_SKY || linglong_state == LL_STATE_SETTING ||
+         linglong_state == LL_STATE_SETTING_CALLBACK)) {
+        switch (key_event->key_code) {
+            case NANO_KEY_up:    case NANO_KEY_W: case NANO_KEY_w: ui_app_linglong_roam_key_hold(UI_LL_ROAM_FWD);   break;
+            case NANO_KEY_down:  case NANO_KEY_S: case NANO_KEY_s: ui_app_linglong_roam_key_hold(UI_LL_ROAM_BACK);  break;
+            case NANO_KEY_left:  case NANO_KEY_A: case NANO_KEY_a: ui_app_linglong_roam_key_hold(UI_LL_ROAM_LEFT);  break;
+            case NANO_KEY_right: case NANO_KEY_D: case NANO_KEY_d: ui_app_linglong_roam_key_hold(UI_LL_ROAM_RIGHT); break;
+            case NANO_KEY_E:     case NANO_KEY_e: case NANO_KEY_pgup: ui_app_linglong_roam_key_hold(UI_LL_ROAM_UP);   break;
+            case NANO_KEY_Q:     case NANO_KEY_q: case NANO_KEY_pgdn: ui_app_linglong_roam_key_hold(UI_LL_ROAM_DOWN); break;
+            default: break;
         }
     }
 
@@ -2449,8 +2688,9 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             linglong_state = LL_STATE_SKY;
         }
     }
-    // 按*键时光机向前（过去）（反复按运行/暂停）
-    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_left) {
+    // 按*键时光机向前（过去）（反复按运行/暂停）；漫游模式下方向键用于移动
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_left &&
+             global_state->linglong_cfg->roam_enable == 0) {
         ui_app_linglong_set_timemachine_speed(key_event, global_state, -120);
     }
     // 按0键回到实时（反复按运行/暂停），或者Ctrl时切换跟踪太阳
@@ -2465,8 +2705,9 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
             linglong_state = LL_STATE_SETTING_CALLBACK;
         }
     }
-    // 按#键时光机向后（未来）（反复按运行/暂停）
-    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_right) {
+    // 按#键时光机向后（未来）（反复按运行/暂停）；漫游模式下方向键用于移动
+    else if (key_event->key_edge < 0 && key_event->key_code == NANO_KEY_right &&
+             global_state->linglong_cfg->roam_enable == 0) {
         ui_app_linglong_set_timemachine_speed(key_event, global_state, 120);
     }
 

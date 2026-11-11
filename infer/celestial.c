@@ -2791,9 +2791,22 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->cloud_precision_level = 1;   // 云精度档位（0-高 1-中 2-低；中 = 半分辨率 + 0.25km 步距）
 
     // 海洋参数（sky_model==5 或 landscape_index==3 时生效；与 celestial_ocean.c 的模块默认一致）
-    cfg->ocean_height_level = 0;      // 观察高度：5m（档位 5/50/200/1000/20000m）
+    cfg->ocean_height_level = 0;      // 观察高度快捷档位：5m（真实高度见 obs_y）
     cfg->ocean_swell_hs_level = 3;    // 涌浪波高：1.8m（档位 无/0.5/1.0/1.8/2.5/3.5m）
     cfg->ocean_swell_len_level = 3;   // 涌浪波长：120m（档位 30/60/90/120/160/220/300m）
+
+    // 观察者（相机）世界位置与漫游：开局站在世界原点、离海面 5m，正对主角岛。
+    cfg->obs_x = 0.0f;
+    cfg->obs_y = 5.0f;
+    cfg->obs_z = 0.0f;
+    cfg->roam_enable = 0;             // 漫游模式默认关闭（控制面板“漫游”开启）
+    cfg->roam_speed_level = 1;        // 速度档：10 / 100（默认）/ 1000 m/s
+
+    // 随机岛屿地形（landscape_index==3 时生效）：默认开启，512² 高程图（50m 纹素）
+    cfg->terrain_enable = 1;
+    cfg->terrain_quality = 1;
+    cfg->terrain_res = 512;
+    cfg->terrain_seed = 20260324u;
 
     cfg->lut_alt_step = 0.5f;         // Inscatter LUT 高度角步长（度）
     cfg->lut_azi_step = 0.5f;         // Inscatter LUT 方位角步长（度）
@@ -2863,10 +2876,14 @@ void render_sky(Nano_GFX *gfx,
     int32_t cloud_coverage_level,    // 云量档位 0-5
     int32_t cloud_layer_mask,        // 云层种类掩码（bit0/1/2）
     int32_t cloud_precision_level,   // 云精度档位 0-2（高/中/低）
-    // 海洋参数（仅 sky_model==5 或 landscape_index==3 时有效；档位表见 celestial_ocean.h）
-    int32_t ocean_height_level,      // 观察高度档位 0-4
+    // 海洋/观察者/地形参数（仅 sky_model==5 或 landscape_index==3 时有效；档位表见 celestial_ocean.h）
     int32_t ocean_swell_hs_level,    // 涌浪波高档位 0-5
-    int32_t ocean_swell_len_level    // 涌浪波长档位 0-6
+    int32_t ocean_swell_len_level,   // 涌浪波长档位 0-6
+    float obs_x, float obs_y, float obs_z,   // 观察者世界位置（m；x 东 y 上 z 北）
+    int32_t terrain_enable,          // 岛屿地形开关（0=纯深水）
+    int32_t terrain_quality,         // 地形精度档位 0-2
+    int32_t terrain_res,             // 高程图分辨率 512/1024
+    uint32_t terrain_seed            // 地形种子
 ) {
 
     uint32_t fb_width = gfx->width;
@@ -2920,7 +2937,19 @@ void render_sky(Nano_GFX *gfx,
     // （推进海面动画时间 + 按需重建三张大气 LUT + 烘焙波场；两者共用同一份数据）。
     // set_levels 内部做参数比对，档位未变时是空操作（不会每帧重烘）。
     if (sky_model == 5 || landscape_index == 3) {
-        linglong_ocean_set_levels(ocean_height_level, ocean_swell_hs_level, ocean_swell_len_level);
+        // 观察者位置先落到模块（内部做世界周期回绕 + 不钻地钳制 + 高度下限），
+        // 再按档位设海况、按配置设地形，最后 prepare（推进动画 / 重建 LUT / 渐进生成地形）。
+        linglong_ocean_set_observer((double)obs_x, (double)obs_y, (double)obs_z);
+        linglong_ocean_set_levels(ocean_swell_hs_level, ocean_swell_len_level);
+        {
+            Linglong_Terrain_Config tc;
+            linglong_ocean_terrain_default(&tc);
+            tc.enable  = (terrain_enable != 0) ? 1 : 0;
+            tc.quality = terrain_quality;
+            tc.res     = terrain_res;
+            tc.seed    = terrain_seed;
+            linglong_ocean_terrain_configure(&tc);
+        }
         linglong_ocean_prepare((float)sun_alt, (float)sun_azi, f, sky_radius, projection);
     }
 
@@ -3018,18 +3047,11 @@ void render_sky(Nano_GFX *gfx,
         }
         cp.enable_sun_lens = 0; // 天象仪绘制太阳
 
-        // 观察高度：与「海洋天空 / 实时海洋」共用同一档位表（celestial_ocean.c 的
-        // S_OCEAN_HEIGHT_OPTIONS：5 m / 50 / 200 / 1000 / 4000 / 8000 / 12000 / 20000）。
-        // 相机海拔同时进入天空积分与云层 ray-march：天空的视角高度、云的透视/相对高度
-        // 都由它决定（对应 linglong.html 的 cloud_sky_sync_camera + WO_CAM_Y）。
-        {
-            int32_t hn = 0;
-            const Linglong_Ocean_Option *ho = linglong_ocean_height_options(&hn);
-            if (ho != NULL && ocean_height_level >= 0 && ocean_height_level < hn) {
-                cloud_cam_alt_km = ho[ocean_height_level].value / 1000.0f;
-            }
-            cp.cam_alt_km = cloud_cam_alt_km;
-        }
+        // 观察高度：直接取观察者的真实海拔（漫游时是连续量，档位表只是界面上的
+        // 快捷跳转值）。相机海拔同时进入天空积分与云层 ray-march：天空的视角高度、
+        // 云的透视/相对高度都由它决定（对应 linglong.html 的 cloud_sky_sync_camera）。
+        cloud_cam_alt_km = MAX(0.0f, obs_y) / 1000.0f;
+        cp.cam_alt_km = cloud_cam_alt_km;
         cp.pass = UI_CLOUD_PASS_SKY;
 
         ui_cloud_render_core(gfx, &cp);

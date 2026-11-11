@@ -21,7 +21,8 @@
 // ===============================================================================
 
 // ---- 顶部按钮栏 -----------------------------------------------------------
-#define LL_TOP_COUNT      (2)
+// 控制 / 漫游 / 退出：漫游开启后底部行换成 6 键移动 pad（长按连续移动）
+#define LL_TOP_COUNT      (3)
 #define LL_TOP_BTN_W      (52)
 #define LL_TOP_BTN_H      (22)
 #define LL_TOP_GAP        (4)
@@ -41,6 +42,11 @@
 #define LL_TIME_Y         (SCREEN_HEIGHT - LL_TIME_BOTTOM - 4 - LL_TIME_BTN_H)
 #define LL_TIME_BG_Y      (LL_TIME_Y - 4)
 #define LL_TIME_BG_H      (LL_TIME_BTN_H + 8)
+
+// ---- 漫游移动 pad（开启漫游后替换底部时间按钮行）---------------------------
+#define LL_ROAM_COUNT     (6)
+#define LL_ROAM_BTN_W     ((SCREEN_WIDTH - 2 * LL_TIME_MARGIN - (LL_ROAM_COUNT - 1) * LL_TIME_GAP) / LL_ROAM_COUNT)
+#define LL_ROAM_TOTAL_W   (LL_ROAM_COUNT * LL_ROAM_BTN_W + (LL_ROAM_COUNT - 1) * LL_TIME_GAP)
 
 // ---- 视角九宫格（画面中央，半透明）----------------------------------------
 #define LL_VIEW_COLS      (3)
@@ -128,11 +134,28 @@ static int32_t s_setting_pressed = -1;
 
 // 顶部按钮从左到右的动作
 static const int32_t S_TOP_ACTION[LL_TOP_COUNT] = {
-    UI_LL_CTRL_CONTROLS, UI_LL_CTRL_EXIT,
+    UI_LL_CTRL_CONTROLS, UI_LL_CTRL_ROAM, UI_LL_CTRL_EXIT,
 };
 static const wchar_t *S_TOP_LABEL[LL_TOP_COUNT] = {
-    L"控制", L"退出",
+    L"控制", L"漫游", L"退出",
 };
+
+// 漫游移动 pad：动作、标签与方向位
+static const int32_t S_ROAM_ACTION[LL_ROAM_COUNT] = {
+    UI_LL_CTRL_MOVE_FWD, UI_LL_CTRL_MOVE_BACK, UI_LL_CTRL_MOVE_LEFT,
+    UI_LL_CTRL_MOVE_RIGHT, UI_LL_CTRL_MOVE_UP, UI_LL_CTRL_MOVE_DOWN,
+};
+static const wchar_t *S_ROAM_LABEL[LL_ROAM_COUNT] = {
+    L"前进", L"后退", L"左移", L"右移", L"上升", L"下降",
+};
+static const int32_t S_ROAM_BIT[LL_ROAM_COUNT] = {
+    UI_LL_ROAM_FWD, UI_LL_ROAM_BACK, UI_LL_ROAM_LEFT,
+    UI_LL_ROAM_RIGHT, UI_LL_ROAM_UP, UI_LL_ROAM_DOWN,
+};
+
+// 漫游状态（绘制/命中/按住轮询共用）：由 ui_linglong_ctrl_draw 的 state 刷新
+static int32_t s_roam_enable = 0;
+static int32_t s_roam_speed_level = 1;
 
 // 时间按钮从左到右的动作
 static const int32_t S_TIME_ACTION[LL_TIME_COUNT] = {
@@ -194,8 +217,21 @@ static int32_t ll_hit_test(int32_t x, int32_t y) {
         return UI_LL_CTRL_SETTINGS;
     }
 
+    // 漫游移动 pad（仅“控制”面板可见、且漫游开启时；位置与时间按钮行相同）
+    if (s_controls_visible && s_roam_enable &&
+        ll_in_rect(x, y, LL_TIME_MARGIN, LL_TIME_Y, LL_ROAM_TOTAL_W, LL_TIME_BTN_H)) {
+        for (int32_t i = 0; i < LL_ROAM_COUNT; i++) {
+            int32_t bx = LL_TIME_MARGIN + i * (LL_ROAM_BTN_W + LL_TIME_GAP);
+            if (ll_in_rect(x, y, bx, LL_TIME_Y, LL_ROAM_BTN_W, LL_TIME_BTN_H)) {
+                return S_ROAM_ACTION[i];
+            }
+        }
+        return UI_LL_CTRL_NONE;
+    }
+
     // 时间控制按钮（仅“控制”面板可见时）
-    if (s_controls_visible && ll_in_rect(x, y, LL_TIME_MARGIN, LL_TIME_Y, LL_TIME_TOTAL_W, LL_TIME_BTN_H)) {
+    if (s_controls_visible && !s_roam_enable &&
+        ll_in_rect(x, y, LL_TIME_MARGIN, LL_TIME_Y, LL_TIME_TOTAL_W, LL_TIME_BTN_H)) {
         for (int32_t i = 0; i < LL_TIME_COUNT; i++) {
             int32_t bx = LL_TIME_MARGIN + i * (LL_TIME_BTN_W + LL_TIME_GAP);
             if (ll_in_rect(x, y, bx, LL_TIME_Y, LL_TIME_BTN_W, LL_TIME_BTN_H)) {
@@ -421,11 +457,29 @@ static void ll_draw_button(Nano_GFX *gfx, int32_t x, int32_t y, int32_t w, int32
 static void ll_draw_top(Nano_GFX *gfx) {
     for (int32_t i = 0; i < LL_TOP_COUNT; i++) {
         int32_t x = LL_TOP_X0 + i * (LL_TOP_BTN_W + LL_TOP_GAP);
-        int32_t active = (S_TOP_ACTION[i] == UI_LL_CTRL_CONTROLS && s_controls_visible);
+        int32_t active = (S_TOP_ACTION[i] == UI_LL_CTRL_CONTROLS && s_controls_visible)
+                      || (S_TOP_ACTION[i] == UI_LL_CTRL_ROAM && s_roam_enable);
         int32_t pressed = (s_pressed == S_TOP_ACTION[i]);
         ll_draw_button(gfx, x, LL_TOP_Y, LL_TOP_BTN_W, LL_TOP_BTN_H,
             S_TOP_LABEL[i], active, pressed, LL_ALPHA_TOP);
     }
+}
+
+static void ll_draw_roam(Nano_GFX *gfx, int32_t speed_level) {
+    if (!s_controls_visible || !s_roam_enable) return;
+
+    gfx_draw_rounded_rectangle(gfx, 4, LL_TIME_BG_Y, SCREEN_WIDTH - 8, LL_TIME_BG_H,
+        8, 8, 8, 8, 0, 0, 0, 70);
+
+    for (int32_t i = 0; i < LL_ROAM_COUNT; i++) {
+        int32_t x = LL_TIME_MARGIN + i * (LL_ROAM_BTN_W + LL_TIME_GAP);
+        int32_t pressed = (s_pressed == S_ROAM_ACTION[i]);
+        // 上升/下降用不同底色区分（水平四键为主，垂直两键为辅）
+        int32_t active = (i >= 4) ? 1 : 0;
+        ll_draw_button(gfx, x, LL_TIME_Y, LL_ROAM_BTN_W, LL_TIME_BTN_H,
+            S_ROAM_LABEL[i], active, pressed, LL_ALPHA_TIME);
+    }
+    (void)speed_level;
 }
 
 static void ll_draw_time(Nano_GFX *gfx, int32_t running_state, int32_t speed) {
@@ -604,9 +658,24 @@ void ui_linglong_ctrl_draw_settings(Nano_GFX *gfx, const UiLinglongSettingCell *
     }
 }
 
+int32_t ui_linglong_ctrl_roam_held(int32_t is_touching, int32_t x, int32_t y) {
+    if (!s_controls_visible || !s_roam_enable || !is_touching) return 0;
+    int32_t mask = 0;
+    for (int32_t i = 0; i < LL_ROAM_COUNT; i++) {
+        int32_t bx = LL_TIME_MARGIN + i * (LL_ROAM_BTN_W + LL_TIME_GAP);
+        if (ll_in_rect(x, y, bx, LL_TIME_Y, LL_ROAM_BTN_W, LL_TIME_BTN_H)) {
+            mask |= S_ROAM_BIT[i];
+        }
+    }
+    return mask;
+}
+
 void ui_linglong_ctrl_draw(Nano_GFX *gfx, const UiLinglongCtrlState *st) {
+    s_roam_enable = st->roam_enable;
+    s_roam_speed_level = st->roam_speed_level;
     ll_draw_top(gfx);
-    ll_draw_time(gfx, st->running_state, st->speed);
+    if (s_roam_enable) ll_draw_roam(gfx, st->roam_speed_level);
+    else ll_draw_time(gfx, st->running_state, st->speed);
     ll_draw_view(gfx);
     ll_draw_control_options(gfx, st);
     ll_draw_settings_button(gfx);
