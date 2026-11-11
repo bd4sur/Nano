@@ -3285,7 +3285,7 @@ void render_sky(Nano_GFX *gfx,
 
         if (enable_star_name == 1 || enable_star_name == 3) {
             if (sx > 0.0f && sx < (float)fb_width && sy > 0.0f && sy < (float)fb_height) {
-                gfx_draw_textline(gfx, (wchar_t*)STAR_NAME[i], sx+3, sy+3, 250, 250, 250, 1);
+                gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, (wchar_t*)STAR_NAME[i], (int32_t)(sx+3), (int32_t)(sy+3), 250, 250, 250, 1);
             }
         }
     }
@@ -3317,7 +3317,7 @@ void render_sky(Nano_GFX *gfx,
 
             if (enable_star_name == 2 || enable_star_name == 3) {
                 if (planet_proj_x > 0.0f && planet_proj_x < (float)fb_width && planet_proj_y > 0.0f && planet_proj_y < (float)fb_height) {
-                    gfx_draw_textline(gfx, (wchar_t*)PLANET_NAME[i], planet_proj_x+3, planet_proj_y+3, PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i], 1);
+                    gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, (wchar_t*)PLANET_NAME[i], (int32_t)(planet_proj_x+3), (int32_t)(planet_proj_y+3), PLANET_COLOR_R[i], PLANET_COLOR_G[i], PLANET_COLOR_B[i], 1);
                 }
             }
         }
@@ -3440,22 +3440,22 @@ void render_sky(Nano_GFX *gfx,
         float label_x = 0.0f;
         float label_y = 0.0f;
         fisheye_project(0, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        gfx_draw_textline_centered(gfx, L"北", label_x, label_y, 255, 0, 0, 1);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)L"北", (int32_t)label_x, (int32_t)label_y, 255, 0, 0, 1);
         fisheye_project(90, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        gfx_draw_textline_centered(gfx, L"东", label_x, label_y, 255, 0, 0, 1);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)L"东", (int32_t)label_x, (int32_t)label_y, 255, 0, 0, 1);
         fisheye_project(180, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        gfx_draw_textline_centered(gfx, L"南", label_x, label_y, 255, 0, 0, 1);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)L"南", (int32_t)label_x, (int32_t)label_y, 255, 0, 0, 1);
         fisheye_project(270, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        gfx_draw_textline_centered(gfx, L"西", label_x, label_y, 255, 0, 0, 1);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)L"西", (int32_t)label_x, (int32_t)label_y, 255, 0, 0, 1);
 
         fisheye_project(45, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        gfx_draw_textline_centered(gfx, L"45", label_x, label_y, 255, 0, 0, 1);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)L"45", (int32_t)label_x, (int32_t)label_y, 255, 0, 0, 1);
         fisheye_project(135, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        gfx_draw_textline_centered(gfx, L"135", label_x, label_y, 255, 0, 0, 1);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)L"135", (int32_t)label_x, (int32_t)label_y, 255, 0, 0, 1);
         fisheye_project(225, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        gfx_draw_textline_centered(gfx, L"225", label_x, label_y, 255, 0, 0, 1);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)L"225", (int32_t)label_x, (int32_t)label_y, 255, 0, 0, 1);
         fisheye_project(315, 6, sky_radius, center_x, center_y, view_alt, view_azi, view_roll, f, projection, &label_x, &label_y);
-        gfx_draw_textline_centered(gfx, L"315", label_x, label_y, 255, 0, 0, 1);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)L"315", (int32_t)label_x, (int32_t)label_y, 255, 0, 0, 1);
 
     }
 
@@ -3469,6 +3469,6 @@ void render_sky(Nano_GFX *gfx,
 
         wchar_t euler_angle[59];
         swprintf(euler_angle, 59, L"Pitch:%d  Yaw:%d  Roll:%d  F:%.1f", (int32_t)roundf(view_alt), (int32_t)roundf(view_azi), (int32_t)roundf(view_roll), f);
-        gfx_draw_textline_centered(gfx, euler_angle, fb_width/2, fb_height-26, 255, 255, 255, 1);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, euler_angle, fb_width/2, fb_height-26, 255, 255, 255, 1);
     }
 }

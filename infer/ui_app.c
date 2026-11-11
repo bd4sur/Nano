@@ -2017,7 +2017,7 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
     // 显示FPS
     wchar_t fps_str[16];
     swprintf(fps_str, 16, L"FPS=%.1f", fps_display_value);
-    gfx_draw_textline(global_state->llgfx, fps_str, 1, 0, 0, 255, 0, 1);
+    gfx_font_draw_text(global_state->llgfx, GFX_FONT_ALPHA_12, fps_str, 1, 0, 0, 255, 0, 1);
 }
 
 void ui_app_linglong_draw_lite(
@@ -2146,7 +2146,8 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
     if (linglong_state == LL_STATE_SETTING || linglong_state == LL_STATE_SETTING_CALLBACK) {
         ui_app_linglong_setting_draw(key_event, global_state);
     }
-    gfx_draw_textline(global_state->llgfx, L"玲珑天象仪 V" NANO_VERSION, 1, global_state->llgfx->height - 13, 255, 255, 255, 200);
+    gfx_font_draw_text(global_state->llgfx, GFX_FONT_ALPHA_12, (wchar_t *)L"玲珑天象仪 V" NANO_VERSION,
+        1, global_state->llgfx->height - gfx_font_line_height(GFX_FONT_ALPHA_12), 255, 255, 255, 200);
 
     wchar_t timestr[30];
     swprintf(timestr, 30, L"%ls %04d-%02d-%02d %02d:%02d:%02d",
@@ -2154,7 +2155,10 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
             (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed > 0)) ? L">>" :
             (((linglong_timemachine_running_state == 1) && (linglong_timemachine_speed < 0)) ? L"<<" : L" >")),
         global_state->linglong_cfg->year, global_state->linglong_cfg->month, global_state->linglong_cfg->day, global_state->linglong_cfg->hour, global_state->linglong_cfg->minute, global_state->linglong_cfg->second);
-    gfx_draw_textline(global_state->llgfx, timestr, global_state->llgfx->width - 134, global_state->llgfx->height - 13, 255, 255, 255, 1);
+    int32_t timestr_x = global_state->llgfx->width - gfx_font_measure_text(GFX_FONT_ALPHA_12, timestr) - 1;
+    if (timestr_x < 0) timestr_x = 0;
+    gfx_font_draw_text(global_state->llgfx, GFX_FONT_ALPHA_12, timestr,
+        timestr_x, global_state->llgfx->height - gfx_font_line_height(GFX_FONT_ALPHA_12), 255, 255, 255, 1);
 
     // 主天空界面：叠加显式触屏控件（顶部按钮栏 + 可选的时间/视角面板）。
     // 设置界面（LL_STATE_SETTING*）不绘制，继续沿用原有十六宫格软键布局。
