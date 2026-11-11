@@ -161,6 +161,15 @@ int32_t am_native_Gfx_draw_sprite(am_runtime_t *rt, am_process_t *proc);
 //    几何与 C 版 ui_icon_draw_rotated 一致（黄金矿工的钩爪随绳角转动）。
 int32_t am_native_Gfx_draw_sprite_rotated(am_runtime_t *rt, am_process_t *proc);
 
+// (Gfx.rounded_rect x y w h r_tl r_tr r_br r_bl r g b mode) : #undefined
+// —— 圆角矩形（= C 版 gfx_draw_rounded_rectangle）。mode>=4 时按 alpha 混合
+//   （水池 App 的控件栏底板用 mode=110 的半透明黑）。
+int32_t am_native_Gfx_rounded_rect(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.draw_text_centered font text cx cy r g b mode) : #undefined
+// —— 以 (cx,cy) 为行框中心绘制一行文本（= C 版 gfx_font_draw_text_centered）。
+int32_t am_native_Gfx_draw_text_centered(am_runtime_t *rt, am_process_t *proc);
+
 // (Gfx.refresh) : #undefined —— 推帧上屏（脏区局部刷新）
 int32_t am_native_Gfx_refresh(am_runtime_t *rt, am_process_t *proc);
 

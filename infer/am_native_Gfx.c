@@ -434,6 +434,58 @@ int32_t am_native_Gfx_fill_circle(am_runtime_t *rt, am_process_t *proc) {
 }
 
 
+
+// (Gfx.rounded_rect x y w h r_tl r_tr r_br r_bl red green blue mode) : #undefined
+// —— 圆角矩形（= C 版 gfx_draw_rounded_rectangle）。水池 App 的底部控件栏与 C 版
+//    ui_water.c 逐像素一致所必需：四个圆角半径 + mode（mode>=4 时按 alpha 混合）。
+int32_t am_native_Gfx_rounded_rect(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    if (g == NULL) return -1;
+    int32_t mode, b, gc, r, rbl, rbr, rtr, rtl, h, w, y, x;
+    if (!native_pop_int(proc, &mode)) return -1;
+    if (!native_pop_int(proc, &b))    return -1;
+    if (!native_pop_int(proc, &gc))   return -1;
+    if (!native_pop_int(proc, &r))    return -1;
+    if (!native_pop_int(proc, &rbl))  return -1;
+    if (!native_pop_int(proc, &rbr))  return -1;
+    if (!native_pop_int(proc, &rtr))  return -1;
+    if (!native_pop_int(proc, &rtl))  return -1;
+    if (!native_pop_int(proc, &h))    return -1;
+    if (!native_pop_int(proc, &w))    return -1;
+    if (!native_pop_int(proc, &y))    return -1;
+    if (!native_pop_int(proc, &x))    return -1;
+    gfx_draw_rounded_rectangle(g, x, y, w, h, rtl, rtr, rbr, rbl,
+                               (uint8_t)(r < 0 ? 0 : (r > 255 ? 255 : r)),
+                               (uint8_t)(gc < 0 ? 0 : (gc > 255 ? 255 : gc)),
+                               (uint8_t)(b < 0 ? 0 : (b > 255 ? 255 : b)),
+                               (uint8_t)(mode < 0 ? 0 : (mode > 255 ? 255 : mode)));
+    return native_statement_done(proc);
+}
+
+// (Gfx.draw_text_centered font text cx cy red green blue mode) : #undefined
+// —— 以 (cx,cy) 为行框中心绘制一行文本（= C 版 gfx_font_draw_text_centered）。
+int32_t am_native_Gfx_draw_text_centered(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    if (g == NULL) return -1;
+    int32_t mode, b, gc, r, cy, cx, font_id;
+    am_wstring_t *ws;
+    if (!native_pop_int(proc, &mode)) return -1;
+    if (!native_pop_int(proc, &b))    return -1;
+    if (!native_pop_int(proc, &gc))   return -1;
+    if (!native_pop_int(proc, &r))    return -1;
+    if (!native_pop_int(proc, &cy))   return -1;
+    if (!native_pop_int(proc, &cx))   return -1;
+    if (!native_pop_wstring(proc, &ws)) return -1;
+    if (!native_pop_int(proc, &font_id)) return -1;
+    wchar_t *text = wstring_to_buffer(proc, ws);
+    if (text != NULL) {
+        gfx_font_draw_text_centered(g, (uint32_t)font_id, text, cx, cy,
+                                    (uint8_t)r, (uint8_t)gc, (uint8_t)b, (uint8_t)mode);
+        am_free(proc->heap_alloc, text);
+    }
+    return native_statement_done(proc);
+}
+
 int32_t am_native_Gfx_draw_text(am_runtime_t *rt, am_process_t *proc) {
     Nano_GFX *g = native_gfx(rt);
     if (g == NULL) return -1;
@@ -787,6 +839,8 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"draw_circle", am_native_Gfx_draw_circle },
     { L"fill_circle", am_native_Gfx_fill_circle },
     { L"draw_text",   am_native_Gfx_draw_text },
+    { L"rounded_rect", am_native_Gfx_rounded_rect },
+    { L"draw_text_centered", am_native_Gfx_draw_text_centered },
     { L"set_font",    am_native_Gfx_set_font },
     { L"font_info",   am_native_Gfx_font_info },
     { L"glyph_metrics", am_native_Gfx_glyph_metrics },

@@ -27,6 +27,7 @@
 #include "am_native_Ui.h"
 #include "am_native_App.h"
 #include "am_native_Chat.h"   // 鹦鹉笼端侧 LLM 推理引擎（(native Chat)）
+#include "am_native_Water.h"  // 水池渲染内核（(native Water)，见 app/waterpool_native.scm）
 
 // ===============================================================================
 // 运行时参数
@@ -82,11 +83,12 @@
 #define MB_ERR_BUF_LEN (128)
 
 // App 数量上限与名称长度上限
-#define SCHEME_APP_MAX     (48)   // app/*.scm 上限（当前 40 个；余量留 8 个）
-// 2026-11 由 32 上调为 48：沙盒颗粒物理/2048/弹幕陨石等 App 陆续加入后，
-// app/ 下的 .scm 已达 33 个 —— 32 的上限会把按名排序**最后**的 App 悄悄丢掉
-// （当时是 xray.scm，列表里凭空少一项），且没有任何提示。改动 App 数量时务必
-// 核对这里与 browser/regress 的 App 清单。
+#define SCHEME_APP_MAX     (56)   // app/*.scm 上限（当前 47 个；余量留 9 个）
+// 2026-11 由 32 上调为 48，再上调为 56：沙盒颗粒物理/2048/弹幕陨石/坏苹果/水泡…
+// App 陆续加入后，app/ 下的 .scm 从 33 涨到 47，48 的上限只剩 1 个余量 ——
+// 上限一旦越界，按名排序**最后**的 App 会被悄悄丢掉（当时是 xray.scm，列表里
+// 凭空少一项），且没有任何提示。改动 App 数量时务必核对这里与 browser/regress 的
+// App 清单（regress.js 现在直接从 manifest 推出清单，不必手工同步）。
 #define SCHEME_APP_NAME_MAX (48)
 
 // ===============================================================================
@@ -521,6 +523,8 @@ int32_t ui_scheme_app_init(Key_Event *key_event, Global_State *global_state) {
 
     // 绘图目标绑定（Gfx 本地库读写 global_state->gfx）——冷启动与恢复都需要
     am_native_gfx_bind(global_state->gfx);
+    // Water 本地库直写同一块帧缓冲（App 自己 (Water.dispose) 负责释放内部缓冲）
+    am_native_water_bind(global_state->gfx);
 
     // ① 同一个 App 已有实例（后台冻结中）→ 直接恢复，不重建解释器
     inst = app_instance_find(s_apps[s_selected].source_rel);
@@ -612,6 +616,9 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     am_native_ui_abort(); // 清掉上一个 App 可能遗留的请求
     am_native_app_reset(s_app->title);
     am_native_Key_reset();
+    // Water：水池渲染内核（波场/焦散/光栅化/z-buffer/相机/圆球/控件状态）。
+    // 状态在 C 侧自持、不占解释器堆；App 退出时经 (EX.on_exit) → (Water.dispose) 释放。
+    am_runtime_register_native_lib(s_app->rt, &am_native_Water_lib);
 
     // 清屏后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）
     gfx_soft_clear(global_state->gfx);
