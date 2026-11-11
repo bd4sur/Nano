@@ -27,7 +27,6 @@
 #include "am_native_Ui.h"
 #include "am_native_App.h"
 #include "am_native_Chat.h"   // 鹦鹉笼端侧 LLM 推理引擎（(native Chat)）
-#include "am_native_Water.h"  // 水池渲染内核（(native Water)，见 app/waterpool_native.scm）
 #include "am_native_Raster.h" // 水池软光栅后端（(native Raster)，见 app/waterpool_raster.scm）
 
 // ===============================================================================
@@ -524,8 +523,7 @@ int32_t ui_scheme_app_init(Key_Event *key_event, Global_State *global_state) {
 
     // 绘图目标绑定（Gfx 本地库读写 global_state->gfx）——冷启动与恢复都需要
     am_native_gfx_bind(global_state->gfx);
-    // Water 本地库直写同一块帧缓冲（App 自己 (Water.dispose) 负责释放内部缓冲）
-    am_native_water_bind(global_state->gfx);
+    // Raster 本地库直写同一块帧缓冲（App 自己 (Raster.dispose) 负责释放内部缓冲）
     am_native_raster_bind(global_state->gfx);
 
     // ① 同一个 App 已有实例（后台冻结中）→ 直接恢复，不重建解释器
@@ -618,9 +616,6 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     am_native_ui_abort(); // 清掉上一个 App 可能遗留的请求
     am_native_app_reset(s_app->title);
     am_native_Key_reset();
-    // Water：水池渲染内核（波场/焦散/光栅化/z-buffer/相机/圆球/控件状态）。
-    // 状态在 C 侧自持、不占解释器堆；App 退出时经 (EX.on_exit) → (Water.dispose) 释放。
-    am_runtime_register_native_lib(s_app->rt, &am_native_Water_lib);
     // Raster：水池的 3D 软光栅**后端**（薄 C / 重 Scheme 版，见 app/waterpool_raster.scm）。
     // 只持帧缓冲/z-buffer/波场/焦散纹理/已上传网格；相机、几何、物理、交互、HUD 在 Scheme。
     am_runtime_register_native_lib(s_app->rt, &am_native_Raster_lib);

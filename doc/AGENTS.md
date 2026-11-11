@@ -8743,13 +8743,14 @@ rAF 上限约束稳定 60fps，即单帧 ≤16.7ms。参照值：C 版水池在 
 同一天早些时候的 `(native Water)` 版（见上一条）把**整台渲染器**连同相机、物理、输入状态机、
 HUD 都封进了 C，Scheme 只剩 3 行骨架。本次按要求再做一个**粒度更细**的实现：
 **只把逐像素/逐格点/逐三角形的内层循环放进 C**，几何、相机、绘制顺序、剔除策略、光照、
-物理、交互、HUD 全部回到 Scheme。三个水池实现并存，互不影响：
+物理、交互、HUD 全部回到 Scheme。当时三个水池实现并存（"整机封装"那版的
+`app/waterpool_native.scm` + `am_native_Water.c` 随后按要求移除，见文末条目）：
 
 | 文件 | 分工 | 实测 |
 |---|---|---|
-| `app/waterpool.scm`（未改） | ui_water.c 的逐函数直译，全在解释器 | ~12 s/帧（保真基准） |
-| `app/waterpool_native.scm` + `am_native_Water.c`（未改） | 整机封装（C 持渲染器+相机+物理+输入+HUD） | 60 fps |
-| **`app/waterpool_raster.scm`（1004 行）+ `am_native_Raster.c`（1077 行）** | **薄后端（逐像素/逐格点内核）+ 重前端（Scheme）** | **60 fps** |
+| `app/waterpool.scm` | ui_water.c 的逐函数直译，全在解释器 | ~12 s/帧（保真基准） |
+| `app/waterpool_native.scm` + `am_native_Water.c`（**已移除**） | 整机封装（C 持渲染器+相机+物理+输入+HUD） | 60 fps |
+| **`app/waterpool_raster.scm` + `am_native_Raster.c`** | **薄后端（逐像素/逐格点内核）+ 重前端（Scheme）** | **60 fps** |
 
 ## 1. 边界怎么定的（A/B/C 三变体把内层拆开量）
 
@@ -8857,7 +8858,7 @@ chromium / headless-shell / firefox **各 20/20 PASS**，无 pageerror：
 （8.6 ms）几乎相同 —— 即把相机/几何/物理/交互/HUD 搬回解释器只多花约 **0.2 ms/帧**。
 
 **（e）不回退**：C 版水池 `regress_water.js` 16/16；`regress.js` 子集
-（tetris/gol/ripple/waterpool_native/waterpool_raster）全部 `launch=80/end=80` 且刷新持续推进。
+（tetris/gol/ripple/waterpool_raster）全部 `launch=80/end=80` 且刷新持续推进。
 
 ## 5. 已知边界
 
@@ -8914,8 +8915,8 @@ angleX/angleY 全程不变（-25 / -200.5）—— 相机没动
   2.3 万+ px 的整屏重投影）；把球拖回原位后再做后续断言；
 - **暂停态**拖圆球：变化 735 px、远处区域 **0/6120 像素变化**（波场/焦散冻结，所以"相机
   没转"可以逐字节判定；只有圆球环境光遮蔽的 `1/pow(|p−c|/r,4)` 全场衰减项会带来少量变化）；
-- 结果：chromium / headless-shell / firefox **各 21/21 PASS**；Water 版同一套 21/21；
-  C 版 `regress_water.js` 16/16。
+- 结果：chromium / headless-shell / firefox **各 21/21 PASS**（当时 `(native Water)` 版同一套
+  也是 21/21，该版随后已移除）；C 版 `regress_water.js` 16/16。
 
 **像素对拍复测**（修复后，固定 dt=0.033）：首帧 3/76800；默认视角第 1~5 拍 180→491/76800
 （`maxΔ` 50~107，球把水掀起来后波场/焦散对 1 ULP 扰动的放大，属混沌系统的正常发散）；
@@ -8934,3 +8935,32 @@ angleX/angleY 全程不变（-25 / -200.5）—— 相机没动
   不变（相机没动）；
 - **渲染零变化**：同一参数下启动帧 `refresh=1 nonzero=34715 crc=5fa54783`，修前修后
   逐字节相同（`m4inv` 只喂四角射线，不参与光栅化）。
+
+## 补充（同日）：移除 `app/waterpool_native.scm` 与 (native Water)
+
+按用户要求，把"整机封装"版整套撤掉（保留 `app/waterpool.scm` 逐函数直译版与
+`app/waterpool_raster.scm` 薄后端版）：
+
+**删除**：`infer/app/waterpool_native.scm`（97 行）、`infer/am_native_Water.c`（1483 行）、
+`infer/am_native_Water.h`（86 行）。
+
+**接线**：
+
+- `ui_scheme_app.c`：去掉 `#include "am_native_Water.h"`、`am_native_water_bind(...)`、
+  `am_runtime_register_native_lib(..., &am_native_Water_lib)`；
+- `build_wasm_gui.sh`：源清单去掉 `am_native_Water.c`（留着会"编译一个没人用的库"）；
+- 工作区工具（`infer/tools/e2e/`，不入库）：`harness.c` 的去 include/bind/register、
+  `run_host_regress.sh` 的 SRCS、`regress_waterpool_native.js` 的默认 `E2E_APP` 改为
+  `waterpool_raster`；
+- 业务资源目录里 `app/waterpool_native.scm` 的旧副本也删掉 —— `build_wasm_gui.sh` 只
+  `cp` 不删除，留着它会让列表里出现一个**没有后端库**的 App（启动即链接失败
+  "本地库 Water 未注册"），清单下标也会多一项。
+
+**保留的对照说明**：`am_native_Raster.c/.h` 与 `app/waterpool_raster.scm` 头部原本用
+"(native Water)" 作"整机封装 vs 薄后端"的对照，现已改写为"该做法曾存在、已移除"，
+不再指向不存在的文件（历史条目按日志保留原样）。
+
+**验证**：`build_wasm_gui.sh` 全量重建通过；清单 47 个 App（`waterpool_native` 消失、
+`waterpool_raster` 在第 46 项）；`regress_waterpool_native.js`（默认 App 已改为
+`waterpool_raster`）chromium **21/21 PASS**、无 pageerror；C 版水池 `regress_water.js`
+16/16（参照实现与另一个本地库都不受影响）。
