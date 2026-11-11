@@ -23,8 +23,8 @@
 ;;   · 3 张手工关卡（房间 + 走廊 + 门 + 柱子，砖/钢/石/大理石/木五种材质）；
 ;;     全部格子连通性/实体可达性在离线脚本里做过 BFS 校验；
 ;;   · **随机刷怪**：关卡开局在空地上随机布 7~13 只（位置/类型都随机，重甲兵第 2 关起
-;;     出现）；游戏过程中每 9~15 秒在"离玩家 >6.5 格且不在视野里"的空地补刷一只
-;;     （同时存活上限 5）；**某一刻本关活敌归零即封盘**，之后不再刷怪，玩家可以安心
+;;     出现）；游戏过程中每 12~20 秒在"离玩家 >6.5 格且不在视野里"的空地补刷一只
+;;     （同时存活上限 4）；**某一刻本关活敌归零即封盘**，之后不再刷怪，玩家可以安心
 ;;     搜刮道具、找出口。敌人阵亡 40% 概率掉落（弹药/医疗包/护甲）；
 ;;   · 3 种敌人：僵尸兵（近战）、火球兵（远程火球）、重甲兵（高血近战）；
 ;;     各有待机→追击→攻击蓄力→硬直→死亡状态机、视线检测（LOS）、贴墙滑动碰撞；
@@ -32,12 +32,18 @@
 ;;     命中判定是 hitscan（沿射线做 DDA 求墙距，只有比墙更近的敌人才算命中）；
 ;;   · 拾取：医疗包 +25、弹药 +20 弹/+4 霰弹、护甲 +25；受击有 0.24s 无敌帧防围殴瞬秒；
 ;;   · 踩上绿色发光柱＝出口 → 过关；死亡/过关/通关三套结算画面，点击或按键继续。
-;;   · **AI 自动游玩**（左上「AI 手动 / AI 自动」按钮或键盘 G）：**不开天眼**——敌人只有
-;;     落进视野锥（半角 36°）+ 视线不被墙截断时才会被发现（与渲染层 sprite 裁剪同源），
-;;     侧后方靠走路时 ±50° 的**环视扫视**和"挨打后朝来向转头"来发现；看见过就记住最后
-;;     位置 9 秒去追。AI 会**把每关的敌人清空、再把场上道具一件件捡干净**（还有敌人/
-;;     道具没处理完时寻路绕开出口格，不会顺路提前过关），最后才去出口；能自己把三关
-;;     打完并自动续关。AI 的输出走与人类输入**同一条通路**，物理/命中判定完全一致。
+;;   · **AI 自动游玩**（左上「AI 手动 / AI 自动」按钮或键盘 G），带**两档感知模式**
+;;     （左上「感知·天眼 / 感知·扫视」按钮或键盘 V，**默认天眼**）：
+;;     · 天眼（ey=0，默认）：直接知道所有活敌的位置（寻路直接锁最近的一只，gk=1），
+;;       开火仍要求视线不被墙挡；赶路时不扫视。即加入"视野约束"之前的旧行为。
+;;     · 扫视（ey=1）：**不开天眼**——敌人必须落进视野锥（半角 36°）且视线不被墙
+;;       截断才会被发现（与渲染层 sprite 裁剪同源）；侧后方靠走路时 ±50° 的**环视
+;;       扫视**和"挨打后朝来向转头"来发现，看不见就只能去没探索过的地方搜索；
+;;       看见过就记住最后位置 9 秒去追。
+;;
+;;     两档都会**把每关的敌人清空、再把场上道具一件件捡干净**（还有敌人/道具没处理完时
+;;     寻路绕开出口格，不会顺路提前过关），最后才去出口；能自己把三关打完并自动续关。
+;;     AI 的输出走与人类输入**同一条通路**，物理/命中判定完全一致。
 ;;
 ;; 触屏适配（本平台只有**单点**触控：页面 Pointer Events 只跟踪一个 activePointerId，
 ;; Touch 本地库也只给电平 + 一个坐标，因此不能「左手走 + 右手转 + 同时开火」）：
@@ -47,7 +53,8 @@
 ;;     打开后若 30° 锥内有看得见的敌人，视角会被**限速**拉向它（95°/s，不抢手动转向）
 ;;     并在对准时自动扣扳机 —— 这是单指也能走位+输出、且不会从背后被白打的关键；
 ;;   · 物理键盘同样可用（WASD 走、←→ 转、空格开火、E 开门、1/2/3 换枪、T 自动开火、
-;;     G 切换 AI）；AI 运行中在屏幕别处按下手指立刻交还手动（与俄罗斯方块同约定）。
+;;     G 切换 AI、V 切换感知）；AI 运行中在屏幕别处按下手指立刻交还手动（与俄罗斯方块
+;;     同约定；左上三枚模式开关除外，点它们只切模式）。
 ;;
 ;; 解释器约束（manual.md，逐条遵守）：算术恒二参数（多操作数会污染操作数栈）；
 ;; 无一元取负、无 let/list/map/apply；cond 每子句只能一个表达式（本文件一律用 if）；
@@ -270,6 +277,7 @@
 (define dbg_na 0.0)               ; 最近活敌方位角差
 (define dbg_ns 0)                 ; 本帧精灵数
 (define dbg_items 0)              ; 场上剩余（未拾取）道具数
+(define dbg_doors 0)              ; 已完全打开的门数
 
 ;; ============================================================================
 ;; 数学 / 小工具
@@ -1326,8 +1334,9 @@
 (define FIREx 286) (define FIREy (- VH 32)) (define FIREr 24)
 (define USEx 240) (define USEy (- VH 26)) (define USEr 17)
 (define SWX 240) (define SWY (- VH 70)) (define SWr 15)
-(define AFx 6) (define AFy 26) (define AFw 60) (define AFh 16)     ; 自动开火
-(define AIBx 70) (define AIBy 26) (define AIBw 56) (define AIBh 16) ; AI 手动/自动
+(define AFx 6) (define AFy 26) (define AFw 56) (define AFh 16)     ; 自动开火
+(define AIBx 64) (define AIBy 26) (define AIBw 48) (define AIBh 16) ; AI 手动/自动
+(define EYBx 114) (define EYBy 26) (define EYBw 68) (define EYBh 16) ; AI 感知：天眼/扫视
 
 (define draw_crosshair
   (lambda ()
@@ -1365,6 +1374,17 @@
       (Gfx.fill_rect AIBx AIBy AIBw AIBh 46 46 50)
       (Gfx.draw_rect AIBx AIBy AIBw AIBh 12 12 16)
       (Gfx.draw_text "AI 手动" (+ AIBx 3) (+ AIBy 2) 150 152 158)
+    })
+    ;; 感知模式：天眼（默认，绿）/ 扫视（蓝）
+    (if (== ai_eye 0) {
+      (Gfx.fill_rect EYBx EYBy EYBw EYBh 40 110 74)
+      (Gfx.draw_rect EYBx EYBy EYBw EYBh 96 190 140)
+      (Gfx.draw_text "感知·天眼" (+ EYBx 3) (+ EYBy 2) 235 244 236)
+    }
+    {
+      (Gfx.fill_rect EYBx EYBy EYBw EYBh 52 80 130)
+      (Gfx.draw_rect EYBx EYBy EYBw EYBh 110 160 220)
+      (Gfx.draw_text "感知·扫视" (+ EYBx 3) (+ EYBy 2) 235 244 250)
     })
     (draw_btn FIREx FIREy FIREr "开火" 168 54 48)
     (draw_btn USEx USEy USEr "开门" 62 86 130)
@@ -1439,13 +1459,13 @@
     (draw_text_c "RAYCASTING 第一人称射击" (/ W 2.0) 118 178 168 158)
     (draw_text_c "3 关 · 3 种怪物 · 3 把枪 · 单指可玩" (/ W 2.0) 136 150 150 160)
     (Gfx.fill_rect 0 160 W 80 12 10 14)       ; 操作提示面板
-    (draw_text_c "触屏：左半屏拖动=移动 · 右半屏拖动=转向" (/ W 2.0) 164 196 196 206)
-    (draw_text_c "轻点右半屏 / 右下角按钮=开火 · T 自动开火" (/ W 2.0) 180 196 196 206)
-    (draw_text_c "键盘：WASD 走 · ←→ 转 · 空格开火 · E 开门" (/ W 2.0) 196 158 160 172)
-    (draw_text_c "G = AI 自动游玩（自己寻路/交战/开门/拾取）" (/ W 2.0) 212 176 200 176)
-    (Gfx.fill_rect (- (/ W 2.0) 72) 214 144 20 150 52 40)
-    (Gfx.fill_rect (- (/ W 2.0) 72) 214 144 2 226 128 80)
-    (draw_text_c "点  击  开  始" (/ W 2.0) 217 250 240 232)))
+    (draw_text_c "触屏：左半屏拖动=移动 · 右半屏拖动=转向" (/ W 2.0) 162 196 196 206)
+    (draw_text_c "轻点右半屏 / 右下角按钮=开火 · T 自动开火" (/ W 2.0) 176 196 196 206)
+    (draw_text_c "键盘：WASD 走 · ←→ 转 · 空格开火 · E 开门" (/ W 2.0) 190 158 160 172)
+    (draw_text_c "G = AI 自动 · V = 天眼/扫视" (/ W 2.0) 204 176 200 176)
+    (Gfx.fill_rect (- (/ W 2.0) 72) 220 144 18 150 52 40)
+    (Gfx.fill_rect (- (/ W 2.0) 72) 220 144 2 226 128 80)
+    (draw_text_c "点  击  开  始" (/ W 2.0) 223 250 240 232)))
 
 (define draw_overlay
   (lambda ()
@@ -1502,6 +1522,13 @@
   (lambda (x y rx ry rw rh)
     (if (>= x rx) (if (< x (+ rx rw)) (if (>= y ry) (if (< y (+ ry rh)) 1 0) 0) 0) 0)))
 
+;; 是否点在左上角三枚"模式开关"上（这些点按只切模式，不触发"交还手动"）
+(define hit_mode_sw
+  (lambda (x y)
+    (if (== (hit_rect x y AFx AFy AFw AFh) 1) 1
+        (if (== (hit_rect x y AIBx AIBy AIBw AIBh) 1) 1
+            (if (== (hit_rect x y EYBx EYBy EYBw EYBh) 1) 1 0)))))
+
 (define hit_circle
   (lambda (x y cx cy r)
     (define dx (- x cx)) (define dy (- y cy))
@@ -1510,9 +1537,9 @@
 (define touch_begin
   (lambda (x y)
     (set! tap_now 1)
-    ;; AI 自动运行中：除「AI 开关」外任意位置按下 → 立刻交还手动（这一下照常生效）
+    ;; AI 自动运行中：除左上三枚模式开关外，任意位置按下 → 立刻交还手动（这一下照常生效）
     (if (== ai_on 1)
-        (if (== (hit_rect x y AIBx AIBy AIBw AIBh) 0) (ai_set 0)))
+        (if (== (hit_mode_sw x y) 0) (ai_set 0)))
     (set! t_down 1)
     (set! t_move 0.0)
     (set! t_start now_ms)
@@ -1523,6 +1550,7 @@
     (if (and (== t_mode 0) (== (hit_circle x y SWX SWY (+ SWr 6)) 1)) { (set! btn 3) (set! t_mode 3) })
     (if (and (== t_mode 0) (== (hit_rect x y AFx AFy AFw AFh) 1)) { (set! btn 4) (set! t_mode 3) })
     (if (and (== t_mode 0) (== (hit_rect x y AIBx AIBy AIBw AIBh) 1)) { (set! btn 5) (set! t_mode 3) })
+    (if (and (== t_mode 0) (== (hit_rect x y EYBx EYBy EYBw EYBh) 1)) { (set! btn 6) (set! t_mode 3) })
     (if (and (== t_mode 0) (< x 150)) {
       (set! t_mode 1)
       (set! t_ox x) (set! t_oy y)
@@ -1538,6 +1566,7 @@
     (if (== btn 3) (set! want_swap 1))
     (if (== btn 4) (set! auto_fire (if (== auto_fire 1) 0 1)))
     (if (== btn 5) (ai_set (if (== ai_on 1) 0 1)))
+    (if (== btn 6) (ai_set_eye (if (== ai_eye 0) 1 0)))
     (if (== btn 1) (set! want_fire 1))))
 
 (define touch_move
@@ -1583,6 +1612,7 @@
             (if (== d 51) (set! want_swap 103))               ; 3 链枪
             (if (== d 116) (set! auto_fire (if (== auto_fire 1) 0 1)))  ; t 自动开火
             (if (== d 103) (ai_set (if (== ai_on 1) 0 1)))              ; g AI 自动
+            (if (== d 118) (ai_set_eye (if (== ai_eye 0) 1 0)))         ; v 切换 AI 感知模式
           })
     })
     (set! kb_fwd (if (or (Key.is_down 119) (Key.is_down 1)) 1 0))
@@ -1999,6 +2029,7 @@
         (display " k=") (display kills) (display "/") (display level_enemies)
         (display " al=") (display en_alive) (display " rs=") (display rs_n)
         (display " il=") (display dbg_items)
+        (display " dr=") (display dbg_doors)
         (display " w=") (display wsel) (display " b=") (display bullets) (display " s=") (display shells)
         (display " sh=") (display shots_n)
         (display " st=") (display st_state)
@@ -2006,6 +2037,7 @@
         (display " na=") (display (Math.floor dbg_na))
         (display " ns=") (display dbg_ns)
         (display " ai=") (display ai_on)
+        (display " ey=") (display ai_eye)
         (display " gk=") (display ai_gk)
         (display " fps=") (display fps_v)
         (newline)
@@ -2017,6 +2049,12 @@
     (define i 0) (define ed 0.0) (define ea 0.0)
     (set! dbg_nd 999.0)
     (set! dbg_na 0.0)
+    (set! dbg_doors 0)
+    (set! i 0)
+    (while (< i (length doors)) {
+      (if (>= (get_item doorf (get_item doors i)) 0.999) (set! dbg_doors (+ dbg_doors 1)))
+      (set! i (+ i 1))
+    })
     (set! dbg_items 0)
     (set! i 0)
     (while (< i it_n) {
@@ -2075,6 +2113,8 @@
 ;; ============================================================================
 
 (define ai_on 0)                  ; 0 手动 1 AI 自动
+(define ai_eye 0)                 ; AI 感知模式：0 天眼（默认，直接知道敌人位置）
+                                  ;               1 只凭视野（必须在视野锥内发现，需环视搜索）
 (define ai_walk (quote ()))       ; 可通行查表（0/1，随关卡预计算；门与出口算可通行）
 (define ai_skip (quote ()))       ; 候选跳过表（选目标时避免重复试同一个候选）
 (define ai_dist (quote ()))       ; BFS：以目标格为源的距离场（梯度用）
@@ -2094,7 +2134,8 @@
 
 (define ai_gx 0) (define ai_gy 0) ; 当前目标格（BFS 源格）
 (define ai_tx 0.0) (define ai_ty 0.0) ; 当前目标的精确位置（同格内微调用）
-(define ai_gk 0)                  ; 目标类型：1 敌人 2 医疗包 3 出口 4 其他道具 5 探索 6 记忆追击
+(define ai_gk 0)                  ; 目标类型：1 敌人(天眼直接锁定) 2 医疗包 3 出口
+                                  ;           4 其他道具 5 探索 6 追记忆位置
 (define ai_replan 0.0)            ; 距下次重规划的秒数
 (define ai_stuck 0.0)             ; 「想走走不动」累计秒数
 (define ai_px_prev 0.0)           ; 上次记录的位置（判进度）
@@ -2236,7 +2277,7 @@
 (define ai_vision
   (lambda ()
     (define i 0) (define n 0) (define d 0.0) (define a 0.0) (define ad 0.0)
-    (define ex 0.0) (define ey 0.0) (define seen 0)
+    (define ex 0.0) (define ey 0.0) (define seen 0) (define los 0)
     (set! n 0)
     (set! i 0)
     (while (< i en_n) {
@@ -2248,24 +2289,40 @@
       (set! ey (get_item en_y i))
       (if (> (get_item en_hp i) 0) {
         (set! d (dist2d ex ey px py))
-        ;; 必须落在视野锥内（严格按视野，没有"贴脸也能看见"的特例）。
-        ;; 侧后方的敌人靠"环视"与"受伤后转头"发现。
         (set! seen 0)
-        (if (< d 1.2)
-            (set! seen 0)             ; 站在自己身上时方位角无意义，交给受伤反应
-            {
-              (set! a (/ (* (Math.atan2 (- ey py) (- ex px)) 180.0) (Math.PI)))
-              (set! ad (Math.abs (ang_diff a pang)))
-              (if (< ad AI_HFOV) (if (< d AI_SIGHT) (set! seen 1)))
-            })
-        (if (== seen 1)
-            (if (== (ai_sees ex ey) 1) {
-              (set_item! ai_vis i 1)
-              (set_item! ai_mem i AI_MEM_S)
-              (set_item! ai_mx i ex)
-              (set_item! ai_my i ey)
-              (set! n (+ n 1))
-            }))
+        (if (== ai_eye 0) {
+          ;; —— 天眼模式（默认，与加入"视野约束"之前一致）——
+          ;; 直接知道所有活敌的位置（用于寻路/追击），但**开火仍要求视线不被墙挡**
+          ;; （否则会对着墙空放）；不要求落在视野锥内。
+          (if (< d AI_SIGHT) {
+            (set_item! ai_mem i AI_MEM_S)
+            (set_item! ai_mx i ex)
+            (set_item! ai_my i ey)
+            (if (== (ai_sees ex ey) 1) (set! seen 1))
+          })
+        }
+        {
+          ;; —— 视野模式：必须落在视野锥内（没有"贴脸也算看见"的特例），
+          ;; 侧后方靠"环视"与"受伤后转头"发现 ——
+          (if (< d 1.2)
+              (set! seen 0)           ; 站在自己身上时方位角无意义，交给受伤反应
+              {
+                (set! a (/ (* (Math.atan2 (- ey py) (- ex px)) 180.0) (Math.PI)))
+                (set! ad (Math.abs (ang_diff a pang)))
+                (if (< ad AI_HFOV) (if (< d AI_SIGHT) (set! seen 1)))
+              })
+          (if (== seen 1)
+              (if (== (ai_sees ex ey) 1) {
+                (set_item! ai_mem i AI_MEM_S)
+                (set_item! ai_mx i ex)
+                (set_item! ai_my i ey)
+              }
+              { (set! seen 0) }))
+        })
+        (if (== seen 1) {
+          (set_item! ai_vis i 1)
+          (set! n (+ n 1))
+        })
       })
       (set! i (+ i 1))
     })
@@ -2341,6 +2398,46 @@
 ;; ============================================================================
 ;; 目标选择
 ;; ============================================================================
+
+;; 天眼模式的目标：直接在**全部活敌**里挑最近的可达目标（这就是"知道敌人在哪"）。
+;; 只用于 ai_eye == 0；视野模式走 ai_goal_memory（只能追最后已知位置）。
+(define ai_goal_enemy_all
+  (lambda (avoid)
+    (define pass 0) (define i 0) (define bi -1) (define bd 999.0) (define d 0.0)
+    (define pc 0) (define gx 0) (define gy 0) (define ok 0)
+    (set! pc (+ (* (Math.floor py) MW) (Math.floor px)))
+    (set! pass 0)
+    (while (and (< pass 4) (== ok 0)) {
+      (set! bi -1)
+      (set! bd 999.0)
+      (set! i 0)
+      (while (< i en_n) {
+        (if (and (> (get_item en_hp i) 0) (== (get_item ai_skip i) 0)) {
+          (set! d (dist2d (get_item en_x i) (get_item en_y i) px py))
+          (if (< d bd) {
+            (set! bd d)
+            (set! bi i)
+          })
+        })
+        (set! i (+ i 1))
+      })
+      (if (>= bi 0) {
+        (set_item! ai_skip bi 1)
+        (set! gx (Math.floor (get_item en_x bi)))
+        (set! gy (Math.floor (get_item en_y bi)))
+        (ai_bfs_cached gx gy avoid)
+        (if (>= (get_item ai_dist pc) 0) {
+          (set! ok 1)
+          (set! ai_gk 1)
+          (set! ai_gx gx)
+          (set! ai_gy gy)
+          (set! ai_tx (get_item en_x bi))
+          (set! ai_ty (get_item en_y bi))
+        })
+      })
+      (set! pass (+ pass 1))
+    })
+    ok))
 
 ;; 记忆追击：朝「记得的敌人最后已知位置」走（离得近的先看）。
 ;; 到位后若仍看不见，ai_tick 会清掉这条记忆（避免围着空气转）。
@@ -2526,8 +2623,11 @@
     })
     ;; 低血且附近有医疗包 → 先补给
     (if (and (< hp 45) (< dm 999.0)) (if (== ai_gk 0) (ai_goal_item 1 avoid)))
-    ;; ① 记得的敌人（追击最后已知位置）
-    (if (== ai_gk 0) (ai_goal_memory avoid))
+    ;; ① 敌人：
+    ;;    天眼模式 → 直接锁最近的活敌（gk=1，知道它在哪）；
+    ;;    视野模式 → 只能追"记得的最后已知位置"（gk=6），到位看不见就忘掉。
+    (if (== ai_gk 0)
+        (if (== ai_eye 0) (ai_goal_enemy_all avoid) (ai_goal_memory avoid)))
     ;; ② 还有敌人没清完 → 探索最近的未探索格（环视搜索）
     (if (and (== ai_gk 0) (== need 1)) (ai_goal_explore avoid))
     ;; ③ 道具（先把场上道具捡干净）
@@ -2610,8 +2710,10 @@
           (set! ai_fwd 0.0)
         }
         {
-          ;; 环视：视线 = 前进方向 + 摆幅（sin），摆幅大时靠 strafe 把移动方向拉回来
-          (set! dir (+ want (* AI_WEAVE (Math.sin ai_scan_ph))))
+          ;; 环视：视线 = 前进方向 + 摆幅（sin），摆幅大时靠 strafe 把移动方向拉回来。
+          ;; 天眼模式不需要搜索，视线直接对准前进方向（不扫视）。
+          (set! dir (+ want (* (* AI_WEAVE (if (== ai_eye 1) 1.0 0.0))
+                               (Math.sin ai_scan_ph))))
           (ai_face dir (* 260.0 dt))
           ;; 移动方向固定在 want 上：delta = want - pang（弧度）→ fwd=cos、strafe=sin
           (set! delta (* (- want pang) (/ (Math.PI) 180.0)))
@@ -2697,6 +2799,20 @@
     })
     (if (== ai_ndoor 1) (set! want_use 1))
     (if (== ai_fire 1) (set! want_fire 1))))
+
+;; 切换 AI 感知模式（0 天眼 / 1 只凭视野）
+(define ai_set_eye
+  (lambda (v)
+    (set! ai_eye v)
+    (set! ai_replan 0.0)
+    (set! ai_ex -1)
+    (set! ai_mi -1)
+    (set! ai_cc_x -999)
+    (set! ai_ti -1)
+    (if (== v 0)
+        (msg_show "AI 感知：天眼（直接知道敌人位置，默认）" 2000)
+        (msg_show "AI 感知：只凭视野（要环视搜索，看不见就找不到）" 2400))
+    (display "[doom] ai_eye=") (display ai_eye) (newline)))
 
 ;; 开关 AI（按钮 / 键盘 G 共用）；切换时重置内部状态
 (define ai_set
