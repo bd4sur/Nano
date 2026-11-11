@@ -2387,6 +2387,19 @@ void ui_cloud_flush(Nano_GFX *gfx) {
     }
 }
 
+// 预乘合成单通道：dst·T + premul（T=a/255，premul 已含 (1−T)，不要再乘）。
+//
+// 【必须钳到 255】premul 与 T 是两张平面**各自独立**双线性放大的：放大后同一像素的
+// premul 与 T 不再严格满足 premul ≤ 1−T（原图里成立，插值后不成立），再加上整数
+// 四舍五入，dst·T + premul 可以略微超过 1.0（实测 255.7）。直接 (uint8_t) 截断会把
+// 256 回绕成 0：天空接近饱和白、云边缘又很亮时（太阳附近最典型），R 通道偶发回绕成
+// 0 而 G/B 仍为 255 → 太阳附近随机跳动的青色/蓝色（或全通道回绕的黑色）单像素噪点。
+// 因此这里先钳到 255 再转换（数学上 dst·T+premul ∈ [0,1]，钳位即还原其定义域）。
+static inline uint8_t cloud_composite_ch(uint32_t dst, uint32_t a, uint32_t premul) {
+    uint32_t v = (dst * a + premul * 255u + 127u) / 255u;
+    return (uint8_t)((v > 255u) ? 255u : v);
+}
+
 // 将最近一帧 PASS_CLOUDS 的结果按标准 alpha 合成叠加到当前帧缓冲：
 //   dst = dst·T + premul_rgb
 // T 为云透射率（0=完全不透明云，255=无云），premul_rgb 为云色×(1−T)。
@@ -2406,10 +2419,10 @@ void ui_cloud_flush_over(Nano_GFX *gfx) {
                 uint8_t *d = fb + ((size_t)y * W + x) * 3;
                 const uint8_t *s = s_fb + i * 3;
                 if (a == 0) { d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; continue; }
-                // 预乘合成：dst = dst·T + premul（s 已含 (1−T)，不要再乘）
-                d[0] = (uint8_t)(((uint32_t)d[0] * a + (uint32_t)s[0] * 255u + 127u) / 255u);
-                d[1] = (uint8_t)(((uint32_t)d[1] * a + (uint32_t)s[1] * 255u + 127u) / 255u);
-                d[2] = (uint8_t)(((uint32_t)d[2] * a + (uint32_t)s[2] * 255u + 127u) / 255u);
+                // 预乘合成：dst = dst·T + premul（s 已含 (1−T)，不要再乘；结果钳到 255，见上）
+                d[0] = cloud_composite_ch(d[0], a, s[0]);
+                d[1] = cloud_composite_ch(d[1], a, s[1]);
+                d[2] = cloud_composite_ch(d[2], a, s[2]);
             }
         }
         return;
@@ -2424,11 +2437,11 @@ void ui_cloud_flush_over(Nano_GFX *gfx) {
             if (a == 0) { gfx_set_pixel(gfx, (uint32_t)x, (uint32_t)y, s[0], s[1], s[2]); continue; }
             uint8_t dr = 0, dg = 0, db = 0;
             gfx_get_pixel(gfx, (uint32_t)x, (uint32_t)y, &dr, &dg, &db);
-            // 预乘合成：dst = dst·T + premul
+            // 预乘合成：dst = dst·T + premul（结果钳到 255，见上）
             gfx_set_pixel(gfx, (uint32_t)x, (uint32_t)y,
-                (uint8_t)(((uint32_t)dr * a + (uint32_t)s[0] * 255u + 127u) / 255u),
-                (uint8_t)(((uint32_t)dg * a + (uint32_t)s[1] * 255u + 127u) / 255u),
-                (uint8_t)(((uint32_t)db * a + (uint32_t)s[2] * 255u + 127u) / 255u));
+                cloud_composite_ch(dr, a, s[0]),
+                cloud_composite_ch(dg, a, s[1]),
+                cloud_composite_ch(db, a, s[2]));
         }
     }
 }
