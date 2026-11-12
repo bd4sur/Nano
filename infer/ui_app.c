@@ -931,24 +931,23 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
         sevenseg_shadow = 1;
     }
 
-    // 底部两行排版（按屏幕高度自适应）：最底一行是农历（ui_font），其上一行是电量信息
-    // （GFX_FONT_ALPHA_12），最底一行行框下边界距屏幕底边 SPLASH_FOOTER_BOTTOM_MARGIN，
+    // 启动画面文本统一使用 12px alpha 平滑字体（GFX_FONT_ALPHA_12），与全局 ui_font（16px）
+    // 解耦，避免影响其他界面。
+    // 底部两行排版（按屏幕高度自适应）：最底一行是农历，其上一行是电量信息，
+    // 最底一行行框下边界距屏幕底边 SPLASH_FOOTER_BOTTOM_MARGIN，
     // 两行之间留 SPLASH_FOOTER_LINE_GAP 行间距。
     // 居中绘制时行框下边界 = 行框中心 + (行高 - 行高/2)（见 gfx_font_draw_text_centered）。
-    const int32_t nongli_line_h = gfx_font_line_height(global_state->ui_font);
+    const int32_t nongli_line_h = gfx_font_line_height(GFX_FONT_ALPHA_12);
     const int32_t nongli_center_y = global_state->gfx->height - SPLASH_FOOTER_BOTTOM_MARGIN
                                   - (nongli_line_h - nongli_line_h / 2);
 
     const wchar_t *weekdays[] = {L"日", L"一", L"二", L"三", L"四", L"五", L"六"};
-    uint32_t datetime_font = global_state->ui_font;
+    // 日期时间行固定使用 12px alpha 平滑字体（窄屏也可完整显示）
+    const uint32_t datetime_font = GFX_FONT_ALPHA_12;
     if (global_state->splash_clock_style == SPLASH_CLOCK_SMALL) {
-        // 小样式：日期与 hh:mm:ss 合成一个字符串，整体居中；16px 字体在窄屏上放不下时
-        // （如 320 宽约需 360px）自动降一号字体，保证仍居中且不被截断
+        // 小样式：日期与 hh:mm:ss 合成一个字符串，整体居中
         swprintf(datetime_wcs_buffer, 33, L"%04d年%02d月%02d日 星期%ls %02d:%02d:%02d",
                  year, month, day, weekdays[timeinfo->tm_wday], hour, minute, second);
-        if (gfx_font_measure_text(datetime_font, datetime_wcs_buffer) > (int32_t)global_state->gfx->width - 4) {
-            datetime_font = GFX_FONT_ALPHA_12;
-        }
     }
     else {
         // 大样式：顶部只显示日期，时间由画面中央的七段码时钟表现
@@ -959,13 +958,13 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
     // 前景
     gfx_font_draw_text_centered(global_state->gfx, datetime_font, datetime_wcs_buffer, global_state->gfx->width / 2, 16, time_red, time_green, time_blue, 1);
 
-    // 农历日期（最底一行）
+    // 农历日期（最底一行，12px alpha 平滑字体）
     LunarDate *nongli = lunar_calculate(year, month, day, hour, minute, second, timezone);
     _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
     // 背景（阴影）
-    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2 + 1, nongli_center_y + 1, 0x66, 0x66, 0x66, 1);
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, nongli_wcs_buffer, global_state->gfx->width / 2 + 1, nongli_center_y + 1, 0x66, 0x66, 0x66, 1);
     // 前景
-    gfx_font_draw_text_centered(global_state->gfx, global_state->ui_font, nongli_wcs_buffer, global_state->gfx->width / 2, nongli_center_y, nongli_red, nongli_green, nongli_blue, 1);
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, nongli_wcs_buffer, global_state->gfx->width / 2, nongli_center_y, nongli_red, nongli_green, nongli_blue, 1);
 
     // 七段码时钟（仅“大”样式：绘制在画面中央）
     if (global_state->splash_clock_style == SPLASH_CLOCK_BIG) {
