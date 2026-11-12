@@ -78,6 +78,21 @@ int32_t am_native_Gfx_draw_circle(am_runtime_t *rt, am_process_t *proc);
 // —— 实心圆
 int32_t am_native_Gfx_fill_circle(am_runtime_t *rt, am_process_t *proc);
 
+// (Gfx.fill_circle_aa cx:Number cy:Number r:Number rr:Number gg:Number bb:Number mode:Number)
+//   : #undefined —— **边缘抗锯齿**的实心圆。与 C 参考实现（ui_musicbox.c 的
+//   musicbox_fill_circle）同一算法：以 r 为四角半径画 2r×2r 圆角矩形，角部 8×8 子采样
+//   覆盖率混合（graphics.c 的 gfx_draw_rounded_rectangle）。Gfx.fill_circle 是逐点
+//   x²+y² 判定、边缘硬锯齿，故圆形按钮/状态指示灯/进度条拇指一律用它。
+//   mode 同其它绘图过程：1=置色，>=4=定值 alpha（例如拇指光晕用 40）。
+int32_t am_native_Gfx_fill_circle_aa(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.draw_triangle x1 y1 x2 y2 x3 y3 aa r g b mode) : #undefined
+// —— 实心三角形（= C 版 gfx_draw_triangle，扫描线填充，顶点顺序任意）。
+//   用途：播放/上一首/下一首这类矢量图标（C 版音乐盒即用法）。
+//   顶点坐标先钳到 ≥0（底层对负坐标不安全：无符号比较会整块丢弃），底边越界由底层裁剪。
+//   aa 参数保留但底层当前未使用（同 C 版）。
+int32_t am_native_Gfx_draw_triangle(am_runtime_t *rt, am_process_t *proc);
+
 // (Gfx.draw_text str:String x:Number y:Number r:Number g:Number b:Number) : #undefined
 // —— 绘制一行文本（12px 平滑字模；(x,y) 为行框左上角）
 int32_t am_native_Gfx_draw_text(am_runtime_t *rt, am_process_t *proc);

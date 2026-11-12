@@ -390,33 +390,71 @@
 ;; 绘制：公共部件
 ;; ============================================================================
 
-(define draw_triangle_right
-  (lambda (cx cy w hh r g b)
-    (define i 0)
-    (define x 0)
-    (define h 0)
-    (define x0 (- cx (Math.floor (/ w 2))))
-    (while (< i w)
-      {
-        (set! x (+ x0 i))
-        (set! h (Math.floor (/ (* hh (- w i)) w)))
-        (Gfx.draw_line x (- cy h) x (+ cy h) r g b)
-        (set! i (+ i 1))
-      })))
+;; ---- 矢量图标（不依赖字库里的 ▶/⏸ 等码点）------------------------------
+;; 几何与 C 版 ui_musicbox.c 的 musicbox_draw_play_icon / _skip_icon / _vol_icon
+;; **逐项等价**：三角形走 (Gfx.draw_triangle)（= C 版 gfx_draw_triangle），
+;; 条形/圆角块走 (Gfx.rounded_rect)（= C 版 gfx_draw_rounded_rectangle）。
+;; 早先的"逐列 draw_line 拼三角形"是妥协写法，已删除。
 
-(define draw_triangle_left
-  (lambda (cx cy w hh r g b)
-    (define i 0)
-    (define x 0)
-    (define h 0)
-    (define x1 (+ cx (Math.floor (/ w 2))))
-    (while (< i w)
-      {
-        (set! x (- x1 i))
-        (set! h (Math.floor (/ (* hh (- w i)) w)))
-        (Gfx.draw_line x (- cy h) x (+ cy h) r g b)
-        (set! i (+ i 1))
-      })))
+;; 播放 / 暂停图标：播放态两根圆角竖条，暂停态向右的三角形
+(define draw_play_icon
+  (lambda (cx cy rad is_playing cr cg cb)
+    (define bh 0)
+    (define bw 0)
+    (define gap 0)
+    (define hh 0)
+    (define ww 0)
+    (if is_playing
+        {
+          (set! bh rad)
+          (set! bw (Math.floor (/ rad 4)))
+          (if (< bw 3) (set! bw 3) #f)
+          (set! gap (Math.floor (/ rad 3)))
+          (Gfx.rounded_rect (- (- cx (Math.floor (/ gap 2))) bw) (- cy (Math.floor (/ bh 2)))
+                            bw bh 2 2 2 2 cr cg cb 1)
+          (Gfx.rounded_rect (+ cx (Math.floor (/ gap 2))) (- cy (Math.floor (/ bh 2)))
+                            bw bh 2 2 2 2 cr cg cb 1)
+        }
+        {
+          (set! hh (Math.floor (/ (* rad 4) 5)))
+          (set! ww (Math.floor (/ (* rad 3) 4)))
+          (Gfx.draw_triangle (- cx (Math.floor (/ ww 3))) (- cy (Math.floor (/ hh 2)))
+                             (- cx (Math.floor (/ ww 3))) (+ cy (Math.floor (/ hh 2)))
+                             (+ cx (Math.floor (/ (* ww 2) 3))) cy
+                             0 cr cg cb 1)
+        })))
+
+;; 上一首 / 下一首图标：一根圆角竖条 + 指向该方向（dir<0 左 / dir>0 右）的三角形
+(define draw_skip_icon
+  (lambda (cx cy rad dir cr cg cb)
+    (define hh 0)
+    (define bar_w 0)
+    (define bar_x 0)
+    (set! hh (Math.floor (/ (* rad 4) 5)))
+    (if (< hh 6) (set! hh 6) #f)
+    (set! bar_w (if (>= rad 20) 3 2))
+    (set! bar_x (if (< dir 0)
+                    (- cx (Math.floor (/ (* rad 9) 16)))
+                    (+ cx (Math.floor (/ (* rad 7) 16)))))
+    (Gfx.rounded_rect bar_x (- cy (Math.floor (/ hh 2))) bar_w hh 1 1 1 1 cr cg cb 1)
+    (if (< dir 0)
+        (Gfx.draw_triangle (+ cx (Math.floor (/ (* rad 7) 16))) (- cy (Math.floor (/ hh 2)))
+                           (+ cx (Math.floor (/ (* rad 7) 16))) (+ cy (Math.floor (/ hh 2)))
+                           (- cx (Math.floor (/ (* rad 5) 16))) cy
+                           0 cr cg cb 1)
+        (Gfx.draw_triangle (- cx (Math.floor (/ (* rad 7) 16))) (- cy (Math.floor (/ hh 2)))
+                           (- cx (Math.floor (/ (* rad 7) 16))) (+ cy (Math.floor (/ hh 2)))
+                           (+ cx (Math.floor (/ (* rad 5) 16))) cy
+                           0 cr cg cb 1))))
+
+;; 音量减 / 加图标：12×2 的圆角横条（加号再加一条竖条）
+(define draw_vol_icon
+  (lambda (cx cy is_plus cr cg cb)
+    (Gfx.rounded_rect (- cx 6) (- cy 1) 12 2 1 1 1 1 cr cg cb 1)
+    ;; 注意：灵机里只有 #f 为假，0 是真值 —— is_plus 必须是布尔（传 0 会画出加号）
+    (if is_plus
+        (Gfx.rounded_rect (- cx 1) (- cy 6) 2 12 1 1 1 1 cr cg cb 1)
+        #f)))
 
 ;; 顶栏（列表页：左侧标题；播放页：左侧「列表」返回 + 居中标题）
 (define draw_topbar
@@ -425,13 +463,16 @@
     (Gfx.fill_rect 0 TOP_H SW 1 EDGE_R EDGE_G EDGE_B)
     (if (== page PAGE_LIST)
         {
-          (Gfx.fill_rect 12 7 3 12 ACC_R ACC_G ACC_B)
+          (Gfx.rounded_rect 12 7 3 12 1 1 1 1 ACC_R ACC_G ACC_B 1)
           (Gfx.draw_text "音乐盒" 20 6 TXT_R TXT_G TXT_B)
           (draw_right (String.concat (String.atom_to_string nfiles) " 首")
                       (- SW 48) 7 DIM_R DIM_G DIM_B)
         }
         {
-          (Gfx.rounded_rect BACK_X BACK_Y BACK_W BACK_H 6 6 6 6 SUR_R SUR_G SUR_B 1)
+          (Gfx.rounded_rect BACK_X BACK_Y BACK_W BACK_H 9 9 9 9
+                            (press_bg_r ARM_BACK SUR_R)
+                            (press_bg_g ARM_BACK SUR_G)
+                            (press_bg_b ARM_BACK SUR_B) 1)
           (Gfx.draw_text "返回" (+ BACK_X 13) (+ BACK_Y 3) TXT_R TXT_G TXT_B)
           (Gfx.draw_text_centered 1 "音乐盒" (/ SW 2) 13 TXT_R TXT_G TXT_B 1)
         })
@@ -478,14 +519,15 @@
               (draw_fit nm 34 (+ y 7) (- SW 64) TXT_R TXT_G TXT_B)
               ;; 正在播放的曲目：右侧强调色圆点
               (if (and (== n cur) (not fail))
-                  (Gfx.fill_circle (- SW 14) (+ y 12) 3 ACC_R ACC_G ACC_B)
+                  (Gfx.fill_circle_aa (- SW 14) (+ y 12) 3 ACC_R ACC_G ACC_B 1)
                   #f)
               (set! i (+ i 1))
             })
           ;; 滚动指示（内容多于可见行时）
           (if (> nfiles LIST_ROWS)
               {
-                (Gfx.fill_rect (- SW 3) LIST_Y 3 (- (- SH LIST_Y) 4) TRK_R TRK_G TRK_B)
+                (Gfx.rounded_rect (- SW 3) LIST_Y 3 (- (- SH LIST_Y) 4) 1 1 1 1
+                                  TRK_R TRK_G TRK_B 1)
                 (Gfx.fill_rect (- SW 3)
                                (+ LIST_Y (Math.floor (/ (* (- (- SH LIST_Y) 4) offset) nfiles)))
                                3
@@ -535,19 +577,34 @@
     (define st "")
     (define str "")
     (define nm "")
-    (Gfx.rounded_rect CARD_X CARD_Y CARD_W CARD_H 10 10 10 10 CARD_R CARD_G CARD_B 1)
-    (Gfx.draw_rect CARD_X CARD_Y CARD_W CARD_H EDGE_R EDGE_G EDGE_B)
+    (define tx 0)
+    (define dot_r 0)
+    (define dot_g 0)
+    (define dot_b 0)
+    ;; 边框 + 内缩 1px 的卡片底（两层圆角矩形，同 C 版 musicbox_draw_card）
+    (Gfx.rounded_rect CARD_X CARD_Y CARD_W CARD_H 10 10 10 10
+                      EDGE_R EDGE_G EDGE_B 1)
+    (Gfx.rounded_rect (+ CARD_X 1) (+ CARD_Y 1) (- CARD_W 2) (- CARD_H 2) 9 9 9 9
+                      CARD_R CARD_G CARD_B 1)
     ;; 序号 cur / 总数
     (set! str (String.atom_to_string (+ cur 1)))
     (Gfx.draw_text str (+ CARD_X 12) (+ CARD_Y 7) ACC_R ACC_G ACC_B)
     (Gfx.draw_text (String.concat " / " (String.atom_to_string nfiles))
                    (+ (+ CARD_X 12) (text_w str)) (+ CARD_Y 7) DIM_R DIM_G DIM_B)
-    ;; 状态（右对齐）
+    ;; 状态（右对齐）+ 左侧状态指示灯（抗锯齿小圆，颜色随状态：
+    ;; 播放中=强调色 / 已暂停=弱化色 / 无法播放=警示色，同 C 版 musicbox_draw_status）
     (if fail
         (set! st "无法播放")
         (if playing (set! st "播放中") (set! st "已暂停")))
-    (draw_right st (- (+ CARD_X CARD_W) 12) (+ CARD_Y 7)
-               (if fail DAN_R DIM_R) (if fail DAN_G DIM_G) (if fail DAN_B DIM_B))
+    (if fail
+        { (set! dot_r DAN_R) (set! dot_g DAN_G) (set! dot_b DAN_B) }
+        (if playing
+            { (set! dot_r ACC_R) (set! dot_g ACC_G) (set! dot_b ACC_B) }
+            { (set! dot_r DIM_R) (set! dot_g DIM_G) (set! dot_b DIM_B) }))
+    (set! tx (- (- (+ CARD_X CARD_W) 12) (text_w st)))
+    (Gfx.draw_text st tx (+ CARD_Y 7)
+                   (if fail DAN_R DIM_R) (if fail DAN_G DIM_G) (if fail DAN_B DIM_B))
+    (Gfx.fill_circle_aa (- tx 10) (+ (+ CARD_Y 7) 6) 3 dot_r dot_g dot_b 1)
     ;; 文件名（居中 + 超宽截断）
     (if fail
         (set! nm "文件格式不支持或已损坏")
@@ -574,49 +631,76 @@
     (Gfx.rounded_rect PROG_X PROG_Y PROG_W PROG_H 8 8 8 8 SUR_R SUR_G SUR_B 1)
     (Gfx.draw_text (fmt_time el) (+ PROG_X 8) (+ PROG_Y 4) TXT_R TXT_G TXT_B)
     (draw_right (fmt_time dur) (- (+ PROG_X PROG_W) 8) (+ PROG_Y 4) DIM_R DIM_G DIM_B)
-    ;; 轨道 + 已播放部分 + 拇指
-    (Gfx.fill_rect TRK_X TRK_Y TRK_W TRK_H TRK_R TRK_G TRK_B)
+    ;; 轨道 + 已播放部分 + 拇指（全部圆角/抗锯齿，同 C 版 musicbox_draw_progress）
+    (Gfx.rounded_rect TRK_X TRK_Y TRK_W TRK_H 3 3 3 3 TRK_R TRK_G TRK_B 1)
     (set! fw (Math.floor (* TRK_W ratio)))
-    (if (> fw 0) (Gfx.fill_rect TRK_X TRK_Y fw TRK_H ACC_R ACC_G ACC_B) #f)
+    (if (> fw 0)
+        (Gfx.rounded_rect TRK_X TRK_Y fw TRK_H 3 3 3 3 ACC_R ACC_G ACC_B 1)
+        #f)
     (set! tx (+ TRK_X fw))
-    (Gfx.fill_circle tx (+ TRK_Y (Math.floor (/ TRK_H 2))) 6 ACC_R ACC_G ACC_B)
-    (Gfx.fill_circle tx (+ TRK_Y (Math.floor (/ TRK_H 2))) 4 250 250 252)))
+    ;; 拇指：强调色光晕（alpha 40）+ 强调色环 + 白色内芯
+    (Gfx.fill_circle_aa tx (+ TRK_Y (Math.floor (/ TRK_H 2))) 9 ACC_R ACC_G ACC_B 40)
+    (Gfx.fill_circle_aa tx (+ TRK_Y (Math.floor (/ TRK_H 2))) 6 ACC_R ACC_G ACC_B 1)
+    (Gfx.fill_circle_aa tx (+ TRK_Y (Math.floor (/ TRK_H 2))) 4 250 250 252 1)))
+
+;; 按住（active）配色的取色器：arm 与控件 id 相同即为"正被按住"，
+;; 于是按下沿的下一拍就换色、松手沿（或拖出取消）的下一拍复原——
+;; 与 C 版 musicbox 的 s_ui_pressed 高亮同一套语义。
+(define press_bg_r (lambda (id normal) (if (== arm id) SURP_R normal)))
+(define press_bg_g (lambda (id normal) (if (== arm id) SURP_G normal)))
+(define press_bg_b (lambda (id normal) (if (== arm id) SURP_B normal)))
 
 (define draw_transport
   (lambda ()
-    ;; 上一首 / 下一首（圆底 + 矢量图标）
-    (Gfx.fill_circle PREV_CX SKIP_CY SKIP_R SUR_R SUR_G SUR_B)
-    (draw_triangle_left (+ PREV_CX 1) SKIP_CY 11 7 TXT_R TXT_G TXT_B)
-    (Gfx.fill_rect (- PREV_CX 8) (- SKIP_CY 7) 2 14 TXT_R TXT_G TXT_B)
-    (Gfx.fill_circle NEXT_CX SKIP_CY SKIP_R SUR_R SUR_G SUR_B)
-    (draw_triangle_right (+ NEXT_CX 1) SKIP_CY 11 7 TXT_R TXT_G TXT_B)
-    (Gfx.fill_rect (+ NEXT_CX 6) (- SKIP_CY 7) 2 14 TXT_R TXT_G TXT_B)
-    ;; 播放 / 暂停（主按钮）
-    (Gfx.fill_circle PLAY_CX PLAY_CY PLAY_R
-                     (if fail SUR_R ACC_R)
-                     (if fail SUR_G ACC_G)
-                     (if fail SUR_B ACC_B))
-    (if playing
-        {
-          (Gfx.fill_rect (- PLAY_CX 8) (- PLAY_CY 9) 6 18 255 255 255)
-          (Gfx.fill_rect (+ PLAY_CX 2) (- PLAY_CY 9) 6 18 255 255 255)
-        }
-        (draw_triangle_right (+ PLAY_CX 2) PLAY_CY 16 9 255 255 255))))
+    ;; 上一首 / 下一首（抗锯齿圆底 + 矢量图标；按住底色换 surface_press）
+    (Gfx.fill_circle_aa PREV_CX SKIP_CY SKIP_R
+                        (press_bg_r ARM_PREV SUR_R)
+                        (press_bg_g ARM_PREV SUR_G)
+                        (press_bg_b ARM_PREV SUR_B)
+                        1)
+    (draw_skip_icon PREV_CX SKIP_CY SKIP_R -1 TXT_R TXT_G TXT_B)
+    (Gfx.fill_circle_aa NEXT_CX SKIP_CY SKIP_R
+                        (press_bg_r ARM_NEXT SUR_R)
+                        (press_bg_g ARM_NEXT SUR_G)
+                        (press_bg_b ARM_NEXT SUR_B)
+                        1)
+    (draw_skip_icon NEXT_CX SKIP_CY SKIP_R 1 TXT_R TXT_G TXT_B)
+    ;; 播放 / 暂停（主按钮：投影 + 抗锯齿圆 + 图标；按住换 accent_press）
+    (Gfx.fill_circle_aa PLAY_CX (+ PLAY_CY 2) (+ PLAY_R 2) 0 0 0 70)
+    (Gfx.fill_circle_aa PLAY_CX PLAY_CY PLAY_R
+                        (if fail SUR_R (if (== arm ARM_PLAY) ACCP_R ACC_R))
+                        (if fail SUR_G (if (== arm ARM_PLAY) ACCP_G ACC_G))
+                        (if fail SUR_B (if (== arm ARM_PLAY) ACCP_B ACC_B))
+                        1)
+    (draw_play_icon PLAY_CX PLAY_CY PLAY_R playing
+                    (if fail DIM_R 255) (if fail DIM_G 255) (if fail DIM_B 255))))
 
 (define draw_volume
   (lambda ()
     (define fw 0)
     (define pct 0)
-    ;; 减 / 加按钮
-    (Gfx.rounded_rect VOL_DN_X VOL_Y VOL_BTN_W VOL_BTN_H 6 6 6 6 SUR_R SUR_G SUR_B 1)
-    (Gfx.rounded_rect VOL_UP_X VOL_Y VOL_BTN_W VOL_BTN_H 6 6 6 6 SUR_R SUR_G SUR_B 1)
-    (Gfx.fill_rect (+ VOL_DN_X 10) (+ VOL_Y 11) 14 2 TXT_R TXT_G TXT_B)
-    (Gfx.fill_rect (+ VOL_UP_X 10) (+ VOL_Y 11) 14 2 TXT_R TXT_G TXT_B)
-    (Gfx.fill_rect (+ VOL_UP_X 16) (+ VOL_Y 5) 2 14 TXT_R TXT_G TXT_B)
-    ;; 音量条 + 百分比
-    (Gfx.fill_rect VOL_METER_X VOL_METER_Y VOL_METER_W 4 TRK_R TRK_G TRK_B)
+    ;; 减 / 加按钮（圆角矩形，半径同 C 版 MUSICBOX 的 vol_btn_r=10）；
+    ;; 按住换 surface_press，到 0 / 满量程时图标转弱化色（同 C 版的 can_dn / can_up）
+    (Gfx.rounded_rect VOL_DN_X VOL_Y VOL_BTN_W VOL_BTN_H 10 10 10 10
+                      (press_bg_r ARM_VOL_DN SUR_R)
+                      (press_bg_g ARM_VOL_DN SUR_G)
+                      (press_bg_b ARM_VOL_DN SUR_B) 1)
+    (Gfx.rounded_rect VOL_UP_X VOL_Y VOL_BTN_W VOL_BTN_H 10 10 10 10
+                      (press_bg_r ARM_VOL_UP SUR_R)
+                      (press_bg_g ARM_VOL_UP SUR_G)
+                      (press_bg_b ARM_VOL_UP SUR_B) 1)
+    (draw_vol_icon (+ VOL_DN_X (Math.floor (/ VOL_BTN_W 2))) (+ VOL_Y (Math.floor (/ VOL_BTN_H 2)))
+                   #f (if (<= vol 0) DIM_R TXT_R) (if (<= vol 0) DIM_G TXT_G) (if (<= vol 0) DIM_B TXT_B))
+    (draw_vol_icon (+ VOL_UP_X (Math.floor (/ VOL_BTN_W 2))) (+ VOL_Y (Math.floor (/ VOL_BTN_H 2)))
+                   #t (if (>= vol VOL_MAX) DIM_R TXT_R)
+                      (if (>= vol VOL_MAX) DIM_G TXT_G)
+                      (if (>= vol VOL_MAX) DIM_B TXT_B))
+    ;; 音量条（圆角轨道）+ 百分比
+    (Gfx.rounded_rect VOL_METER_X VOL_METER_Y VOL_METER_W 4 2 2 2 2 TRK_R TRK_G TRK_B 1)
     (set! fw (Math.floor (/ (* VOL_METER_W vol) VOL_MAX)))
-    (if (> fw 0) (Gfx.fill_rect VOL_METER_X VOL_METER_Y fw 4 ACC_R ACC_G ACC_B) #f)
+    (if (> fw 0)
+        (Gfx.rounded_rect VOL_METER_X VOL_METER_Y fw 4 2 2 2 2 ACC_R ACC_G ACC_B 1)
+        #f)
     (set! pct (Math.floor (/ (* vol 100) VOL_MAX)))
     (Gfx.draw_text_centered 1 (String.concat (String.atom_to_string pct) "%")
                             (/ SW 2) (+ VOL_Y 4) DIM_R DIM_G DIM_B 1)))
@@ -686,7 +770,9 @@
                 (set! vol_next (+ now_ms VOL_HOLD_MS))
               }
               #f)
-        })))
+        })
+    ;; 按住态是"看得见的状态"：按下沿之后立刻重绘一次（不等 100ms 的进度节拍）
+    (set! dirty #t)))
 
 ;; 松手：只有"按下与松开落在同一控件"才结算（拖出取消）
 (define on_up
@@ -726,7 +812,9 @@
         (if (in_circle x y NEXT_CX SKIP_CY (+ SKIP_R 6)) (switch_track 1) #f)
         #f)
     (set! arm ARM_NONE)
-    (set! moved #f)))
+    (set! moved #f)
+    ;; 松手/拖出取消：无论是否触发了动作，都要把按住配色擦回常态
+    (set! dirty #t)))
 
 ;; 每拍：拖动手势（列表滚动 / 进度条预览 / 音量连发）
 (define handle_touch

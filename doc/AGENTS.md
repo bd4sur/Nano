@@ -9432,3 +9432,80 @@ angleX/angleY 全程不变（-25 / -200.5）—— 相机没动
    立刻读（曾误报"下一首没切"）。
 5. **MP3 的 seek/进度必须以音频区（跳过 ID3v2）为基准**，否则标签越大跳得越离谱（见上）。
 6. **`(mod x n)` 恒浮点、`/` 恒浮点**：索引处用 `Math.floor` 归一，避免浮点索引一路传下去。
+
+## 2026-11-12 补丁：Gfx 本地库补齐圆角/抗锯齿绘图原语，音乐盒 GUI 与 C 参考实现对齐
+
+**问题**：Scheme 版音乐盒的界面有一批"降级实现"——上方的强调色竖条与轨道/音量条用普通
+矩形、圆形按钮与状态灯用无抗锯齿的 `Gfx.fill_circle`、卡片状态指示（播放中/已暂停的
+彩色圆点）干脆缺失、播放/上一首/下一首图标靠逐列 `draw_line` 拼三角形。
+
+**根因（Gfx 本地库的原语缺口）**：
+
+| C 参考实现用的原语 | 灵机 Gfx 库 | 结论 |
+|---|---|---|
+| `gfx_draw_rounded_rectangle`（角部 8×8 子采样覆盖率混合） | `Gfx.rounded_rect`（12 参数） | 已封装 ✅ |
+| `gfx_draw_triangle`（扫描线实心三角形） | 无 | **缺** → 补 |
+| C 版"抗锯齿圆"= 以 r 为圆角的 2r×2r 圆角矩形（`musicbox_fill_circle`） | 只有逐点 x²+y² 判定的 `Gfx.fill_circle` | **缺** → 补 |
+
+**`infer/am_native_Gfx.h/.c` 新增两个过程**（均为语句型，压 `#undefined` + step）：
+
+- `(Gfx.fill_circle_aa cx cy r rr gg bb mode)`：内部就是
+  `gfx_draw_rounded_rectangle(cx-r, cy-r, 2r, 2r, r,r,r,r, …)`，与 C 版
+  `musicbox_fill_circle` **逐像素同一算法**（`gfx_rounded_corner_coverage`，8×8=64
+  子采样）；`mode` 语义同其它绘图过程（1=置色，>=4=定值 alpha，拇指光晕用 40）。
+- `(Gfx.draw_triangle x1 y1 x2 y2 x3 y3 aa r g b mode)`：包装 `gfx_draw_triangle`。
+  **顶点先钳到 ≥0**——底层用无符号坐标比较（`sy0 >= gfx->height` 即丢弃整块），
+  负坐标会被当成"屏幕下方"而整块丢失，这一点在头文件里写明了。
+
+`infer/tools/check_scm_arity.py` 的 ARITY 表随之补上新过程（`fill_circle_aa` 7、
+`draw_triangle` 11），并把此前漏收的 `rounded_rect` 12 / `draw_text_centered` 8 /
+`glyph_metrics` 2 / `draw_glyph` 12 / `set_clip` 4 / `reset_clip` 0 一并登记
+（全部 47 个 `app/*.scm` 复查零问题）。
+
+**`infer/app/musicbox.scm` 按 C 参考实现逐项改写**（几何/颜色/半径均与
+`ui_musicbox.c` 对应函数一致）：
+
+- 卡片：外层 `card_edge` 圆角矩形 + 内缩 1px `card` 圆角矩形（原先用 `draw_rect` 描边）；
+  **补上状态指示灯**——状态文字左侧 r=3 的抗锯齿小圆，播放中=强调色 / 已暂停=弱化色 /
+  无法播放=警示色（对应 `musicbox_draw_status`）。
+- 播放控制：上一首/播放/下一首改为抗锯齿圆底；播放键补 2px 深色投影（mode 70）；
+  图标改成 C 版几何——暂停=两根圆角竖条（`bw=r/4`、`gap=r/3`、圆角 2），播放=
+  `Gfx.draw_triangle`（`w=3r/4`、`h=4r/5`、顶点在 `cx+2w/3`），上一首/下一首=
+  圆角竖条（`bar_w=(r>=20)?3:2`，`bar_x=∓r·9/16 / +r·7/16`）+ 三角形。
+- 进度面板：轨道与已播部分改圆角（r=轨道半高=3，即两端半圆）；拇指恢复 C 版的
+  三层结构（光晕 r+3 mode 40 + 强调色环 r=6 + 白色内芯 r=4），全部抗锯齿。
+- 音量排：按钮圆角半径 6→10（C 版 `vol_btn_r`），−/+ 图标改圆角短条（12×2 / 2×12，
+  圆角 1），音量条改圆角轨道（r=2）。
+- 顶栏强调色竖条、列表滚动条改圆角矩形（r=1；滚动条为 Scheme 版新增件，取同一视觉）。
+- **踩坑（灵机语义）**：`(if plus …)` 里 `plus` 若传 0 —— 灵机里**只有 `#f` 为假**，
+  0 是真值，于是"音量减"按钮也画出了加号的竖条。改为传布尔 `#t/#f`（函数形参改名
+  `is_plus` 并注释说明）。
+
+**验证**：
+
+- `bash build_wasm_gui.sh` 构建通过（仅既有旧代码告警），WASM 产物 5.4MB。
+- 浏览器 e2e（`tools/e2e/browser/regress_musicbox.js`，真 wasm + 真 Web Audio）**29/29 PASS**：
+  按需挂载 → 选曲 → 音频时间轴推进 → 触屏暂停/恢复 → 拖动 seek → 切曲/音量 → 返回列表
+  继续播放 → 后台冻结/恢复 → 退出清空音频图，无 pageerror；截图核对圆角/抗锯齿/状态灯
+  与 C 版观感一致（4× 放大逐像素检查按钮圆边缘与图标条）。
+- 桌面无头回归台 39 个 App 全绿（`musicbox` 含内）；C 版音乐盒/频谱仪/寻呼机的
+  `regress_audio.js` **30/30 PASS**（Gfx 库只新增过程，C 侧绘图路径未变）。
+
+### 补丁：按钮的按住（active）配色
+
+C 版音乐盒的每个控件都有"按住变色"反馈（`s_ui_pressed` + `surface_press`/`accent_press`，
+按下沿锁存、松手沿或拖出取消即复原）。Scheme 侧本来就**做得到**——`arm` 变量在按下沿
+记下命中的控件 id、松手沿清空，缺的只是"把 arm 用进配色"。补齐：
+
+- 取色器 `press_bg_r/g/b(id, normal)`：`arm == id` 时返回 `SURP_*`（surface_press），否则常态。
+- 播放/暂停主按钮按住 → `ACCP_*`（accent_press）；上一首/下一首/音量±/左上「返回」
+  按住 → `SURP_*`；到 0 / 满量程时音量图标转弱化色（对应 C 版 `can_dn`/`can_up`）。
+- 按下沿与松手沿都**立即**置 `dirty`（`on_down`/`on_up` 末尾各一行）：按住态是"看得见的
+  状态"，不能等 100ms 的进度节拍；拖出按钮再松手（动作取消）时也能把高亮擦回去。
+- 右上角「退出」按钮的按住态仍由共享库 `app/lib/exit.scm` 绘制（各 App 统一观感，不单独改）。
+
+**验证**：桌面回归台按住播放键/音量+ 后逐像素比对——播放键 `56,189,248 → 14,140,200`
+（accent→accent_press）、音量+ `38,47,61 → 62,78,100`（surface→surface_press）、松手复原；
+长按音量+ 到 128 / 长按音量− 到 0 后对应图标转弱化色 `140,152,168`。浏览器 e2e 把上述两条
+配色判据也加了进去（新增 `fbPixel` 直接读 `_wasm_gui_get_fb_rgba`，WASM-GUI 是 RGB888
+无量化误差），`regress_musicbox.js` 现为 **32/32 PASS**；宿主回归台 39 个 App 全绿。

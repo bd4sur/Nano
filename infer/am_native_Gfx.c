@@ -89,6 +89,13 @@ static bool native_pop_color(am_process_t *proc, uint8_t *out) {
     return true;
 }
 
+// 把已取到的通道值钳到 0~255（int 版：新过程的通道参数用 native_pop_int 收，
+// 以便与同族过程（rounded_rect 等）的参数顺序写法保持一致）
+static void native_clamp_color(int32_t *v) {
+    if (*v < 0) *v = 0;
+    else if (*v > 255) *v = 255;
+}
+
 // 语句型收尾：压 1 个 #undefined 再推进 PC（契约 N2；与 Table.set 等语句型
 // native 同范式）。编译器在语句位置会把这个值弹出，因此栈平衡始终成立。
 static int32_t native_statement_done(am_process_t *proc) {
@@ -434,6 +441,73 @@ int32_t am_native_Gfx_fill_circle(am_runtime_t *rt, am_process_t *proc) {
 }
 
 
+
+// (Gfx.fill_circle_aa cx cy r red green blue mode) : #undefined
+// —— **边缘抗锯齿**的实心圆。实现与 C 参考实现（ui_musicbox.c 的 musicbox_fill_circle）
+//    完全同一算法：以 r 为四角半径画一个 2r×2r 的圆角矩形，角部由 graphics.c 的
+//    gfx_rounded_corner_coverage 做 8×8 子采样覆盖率混合（gfx_draw_rounded_rectangle）。
+//    为什么不用 gfx_draw_circle_fill（= Gfx.fill_circle）：它是逐点 x²+y² ≤ r² 判定，
+//    边缘是硬锯齿；圆形按钮、状态指示灯、进度条拇指这类"小圆"锯齿尤其明显，故一律用它。
+//    mode 语义同其它绘图过程（1=置色，>=4=定值 alpha 混合；拇指光晕用 40）。
+int32_t am_native_Gfx_fill_circle_aa(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    if (g == NULL) return -1;
+    int32_t mode, b, gc, r, radius, cy, cx;
+    if (!native_pop_int(proc, &mode))   return -1;
+    if (!native_pop_int(proc, &b))      return -1;
+    if (!native_pop_int(proc, &gc))     return -1;
+    if (!native_pop_int(proc, &r))      return -1;
+    if (!native_pop_int(proc, &radius)) return -1;
+    if (!native_pop_int(proc, &cy))     return -1;
+    if (!native_pop_int(proc, &cx))     return -1;
+    native_clamp_color(&r);
+    native_clamp_color(&gc);
+    native_clamp_color(&b);
+    if (radius > 0) {
+        gfx_draw_rounded_rectangle(g, cx - radius, cy - radius, radius * 2, radius * 2,
+                                   radius, radius, radius, radius,
+                                   (uint8_t)r, (uint8_t)gc, (uint8_t)b,
+                                   (uint8_t)(mode < 0 ? 0 : (mode > 255 ? 255 : mode)));
+    }
+    return native_statement_done(proc);
+}
+
+// (Gfx.draw_triangle x1 y1 x2 y2 x3 y3 anti_aliasing red green blue mode) : #undefined
+// —— 实心三角形（= C 版 gfx_draw_triangle；扫描线填充，三个顶点顺序任意）。
+//    用途：播放/上一首/下一首这类矢量图标（C 版音乐盒即用法），不必用 draw_line 逐列拼。
+//    坐标按 int32 收下再转 uint32：底层 gfx_draw_triangle 对负坐标不安全（无符号比较会
+//    直接判为"在屏幕下方"而丢弃整个三角形），故这里**先把顶点钳到 ≥0** 再交给它；
+//    底边越界由底层自行裁剪。anti_aliasing 参数保留但底层当前未使用（同 C 版）。
+int32_t am_native_Gfx_draw_triangle(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    int32_t mode, b, gc, r, aa, y3, x3, y2, x2, y1, x1;
+    if (g == NULL) return -1;
+    if (!native_pop_int(proc, &mode)) return -1;
+    if (!native_pop_int(proc, &b))    return -1;
+    if (!native_pop_int(proc, &gc))   return -1;
+    if (!native_pop_int(proc, &r))    return -1;
+    if (!native_pop_int(proc, &aa))   return -1;
+    if (!native_pop_int(proc, &y3))   return -1;
+    if (!native_pop_int(proc, &x3))   return -1;
+    if (!native_pop_int(proc, &y2))   return -1;
+    if (!native_pop_int(proc, &x2))   return -1;
+    if (!native_pop_int(proc, &y1))   return -1;
+    if (!native_pop_int(proc, &x1))   return -1;
+    native_clamp_color(&r);
+    native_clamp_color(&gc);
+    native_clamp_color(&b);
+    if (x1 < 0) x1 = 0;
+    if (y1 < 0) y1 = 0;
+    if (x2 < 0) x2 = 0;
+    if (y2 < 0) y2 = 0;
+    if (x3 < 0) x3 = 0;
+    if (y3 < 0) y3 = 0;
+    gfx_draw_triangle(g, (uint32_t)x1, (uint32_t)y1, (uint32_t)x2, (uint32_t)y2,
+                      (uint32_t)x3, (uint32_t)y3, aa,
+                      (uint8_t)r, (uint8_t)gc, (uint8_t)b,
+                      (uint8_t)(mode < 0 ? 0 : (mode > 255 ? 255 : mode)));
+    return native_statement_done(proc);
+}
 
 // (Gfx.rounded_rect x y w h r_tl r_tr r_br r_bl red green blue mode) : #undefined
 // —— 圆角矩形（= C 版 gfx_draw_rounded_rectangle）。水池 App 的底部控件栏与 C 版
@@ -838,6 +912,8 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"draw_rect",   am_native_Gfx_draw_rect },
     { L"draw_circle", am_native_Gfx_draw_circle },
     { L"fill_circle", am_native_Gfx_fill_circle },
+    { L"fill_circle_aa", am_native_Gfx_fill_circle_aa },
+    { L"draw_triangle", am_native_Gfx_draw_triangle },
     { L"draw_text",   am_native_Gfx_draw_text },
     { L"rounded_rect", am_native_Gfx_rounded_rect },
     { L"draw_text_centered", am_native_Gfx_draw_text_centered },
