@@ -116,6 +116,7 @@ ARITY = {
     'Time.utc_days': 0, 'Time.utc_sod': 0,
     'Fs.exists': 1, 'Fs.size': 1, 'Fs.read': 1, 'Fs.write': 2, 'Fs.append': 2,
     'Fs.list': 1, 'Fs.mkdir': 1, 'Fs.remove': 1, 'Fs.rename': 2, 'Fs.is_dir': 1,
+    'Fs.read_range': 3,
     # Ui：message 只收正文，带标题的是 message_titled（两者容易写错，见 am_native_Ui.h）
     'Ui.input': 1, 'Ui.input_with': 2, 'Ui.message': 1, 'Ui.message_titled': 2,
     'Ui.confirm': 2,
