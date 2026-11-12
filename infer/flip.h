@@ -49,6 +49,13 @@ void flip_cleanup(void);
  *   funnel_pressure_resistance - Artificial pressure resistance in the neck (0.0 ~ 0.3)
  *   is_throttle - 节流程度：0为不节流；1为最小节流；100为最大节流（彻底堵住瓶颈）
  */
+/*
+ * 配色风格（纯渲染，可在运行中随时切换）：
+ *   0 = 黄（暖沙，默认）  1 = 蓝  2 = 绿  3 = 青  4 = 原彩色（蓝粒子 + 彩虹密度网格）
+ * 只影响粒子/网格颜色，不触碰任何物理量。
+ */
+void flip_set_color_style(int32_t style);
+
 void render_flip(Nano_GFX *gfx,
                  int32_t center_x, int32_t center_y, int32_t width, int32_t height,
                  float pool_width, float pool_height, int32_t resolution,

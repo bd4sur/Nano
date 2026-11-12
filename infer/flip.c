@@ -38,6 +38,7 @@ typedef struct {
     int max_particles;
     float *particle_pos;
     float *particle_color;
+    float *particle_age;   // 每颗粒子的颜色年龄（0=新沙/稀疏高光，1=沉降色）
     float *particle_vel;
     float *particle_density;
     float particle_rest_density;
@@ -774,42 +775,99 @@ static void solve_incompressibility2(FlipFluid *f, int num_iters, float dt, floa
 }
 */
 
+// ---- 配色风格（纯渲染）-----------------------------------------------------
+// 5 种风格只改颜色，不碰任何物理量：
+//   0 黄（暖沙，默认） 1 蓝 2 绿 3 青 4 原彩色（蓝粒子 + 彩虹密度网格）
+// 粒子的颜色用「年龄」插值：bright（年龄 0，新沙/稀疏飞溅）→ deep（年龄 1，沉降色）。
+// 稀疏格（相对密度 < 0.7）把年龄归零，于是流束/飞溅自带明暗层次。
+// 原彩色风格等价于旧实现：bright=(0.8,0.8,1) → deep=(0,0,1)，年龄步进 0.01，
+// 即旧版「r,g 每帧 -0.01、b 恒 1、稀疏重置为浅蓝」的逐字等价。
+typedef struct {
+    float bright[3];      // 年龄 0
+    float deep[3];        // 年龄 1
+    float grid_empty[3];  // 网格：空腔
+    float grid_mid[3];    // 网格：静止密度
+    float grid_pale[3];   // 网格：压缩区
+    float age_rate;       // 每帧年龄增量
+} Flip_Color_Style;
+
+static const Flip_Color_Style g_color_styles[5] = {
+    /* 0 黄（沙）  */ { {1.00f, 0.95f, 0.80f}, {0.86f, 0.42f, 0.10f},
+                        {0.14f, 0.07f, 0.02f}, {0.92f, 0.56f, 0.12f}, {1.00f, 0.96f, 0.82f}, 0.006f },
+    /* 1 蓝        */ { {0.80f, 0.88f, 1.00f}, {0.08f, 0.22f, 0.95f},
+                        {0.02f, 0.05f, 0.14f}, {0.10f, 0.38f, 0.95f}, {0.75f, 0.88f, 1.00f}, 0.008f },
+    /* 2 绿        */ { {0.85f, 1.00f, 0.88f}, {0.06f, 0.55f, 0.22f},
+                        {0.02f, 0.10f, 0.04f}, {0.10f, 0.66f, 0.30f}, {0.80f, 1.00f, 0.86f}, 0.008f },
+    /* 3 青        */ { {0.85f, 1.00f, 1.00f}, {0.05f, 0.55f, 0.72f},
+                        {0.02f, 0.09f, 0.12f}, {0.08f, 0.68f, 0.82f}, {0.78f, 1.00f, 1.00f}, 0.008f },
+    /* 4 彩（原版）*/ { {0.80f, 0.80f, 1.00f}, {0.00f, 0.00f, 1.00f},
+                        {0.00f, 0.00f, 0.00f}, {0.00f, 0.00f, 0.00f}, {0.00f, 0.00f, 0.00f}, 0.010f },
+};
+
+static int32_t g_color_style = 0;
+
+void flip_set_color_style(int32_t style) {
+    g_color_style = (style >= 0 && style < 5) ? style : 0;
+}
+
 static void update_particle_colors(FlipFluid *f) {
+    const Flip_Color_Style *cs = &g_color_styles[g_color_style];
     float h1 = f->f_inv_spacing;
     for (int i = 0; i < f->num_particles; i++) {
-        float s = 0.01f;
-        f->particle_color[3 * i]     = clampf(f->particle_color[3 * i]     - s, 0.0f, 1.0f);
-        f->particle_color[3 * i + 1] = clampf(f->particle_color[3 * i + 1] - s, 0.0f, 1.0f);
-        f->particle_color[3 * i + 2] = clampf(f->particle_color[3 * i + 2] + s, 0.0f, 1.0f);
         float x = f->particle_pos[2 * i];
         float y = f->particle_pos[2 * i + 1];
         int xi = clampi((int)floorf(x * h1), 1, f->f_num_x - 1);
         int yi = clampi((int)floorf(y * h1), 1, f->f_num_y - 1);
         int cell_nr = xi * f->f_num_y + yi;
+        int sparse = 0;
         if (f->particle_rest_density > 0.0f) {
             float rel_density = f->particle_density[cell_nr] / f->particle_rest_density;
-            if (rel_density < 0.7f) {
-                f->particle_color[3 * i]     = 0.8f;
-                f->particle_color[3 * i + 1] = 0.8f;
-                f->particle_color[3 * i + 2] = 1.0f;
-            }
+            sparse = (rel_density < 0.7f);
         }
+        float age;
+        if (sparse) {
+            age = 0.0f;                         // 稀疏/飞溅：高光色
+        } else {
+            age = f->particle_age[i] + cs->age_rate;
+            if (age > 1.0f) age = 1.0f;
+        }
+        f->particle_age[i] = age;
+        f->particle_color[3 * i]     = cs->bright[0] + (cs->deep[0] - cs->bright[0]) * age;
+        f->particle_color[3 * i + 1] = cs->bright[1] + (cs->deep[1] - cs->bright[1]) * age;
+        f->particle_color[3 * i + 2] = cs->bright[2] + (cs->deep[2] - cs->bright[2]) * age;
     }
 }
 
-static void set_sci_color(FlipFluid *f, int cell_nr, float val, float min_val, float max_val) {
+// 网格密度着色（纯渲染）：0..2 的密度映射到风格色带（空 → 静止密度 → 压缩）。
+// 原彩色风格保留旧版的彩虹 sci 色（蓝→青→绿→黄→红）。
+static void set_density_color(FlipFluid *f, int cell_nr, float val, float min_val, float max_val) {
     val = clampf(val, min_val, max_val - 0.0001f);
     float d = max_val - min_val;
-    val = (d == 0.0f) ? 0.5f : (val - min_val) / d;
-    float m = 0.25f;
-    int num = (int)floorf(val / m);
-    float s = (val - num * m) / m;
-    float r = 0.0f, g = 0.0f, b = 0.0f;
-    switch (num) {
-        case 0: r = 0.0f; g = s; b = 1.0f; break;
-        case 1: r = 0.0f; g = 1.0f; b = 1.0f - s; break;
-        case 2: r = s; g = 1.0f; b = 0.0f; break;
-        case 3: r = 1.0f; g = 1.0f - s; b = 0.0f; break;
+    float t = (d == 0.0f) ? 0.5f : (val - min_val) / d;
+    float r, g, b;
+    if (g_color_style == 4) {
+        float m = 0.25f;
+        int num = (int)floorf(t / m);
+        float s = (t - num * m) / m;
+        switch (num) {
+            case 0: r = 0.0f; g = s;      b = 1.0f; break;
+            case 1: r = 0.0f; g = 1.0f;   b = 1.0f - s; break;
+            case 2: r = s;    g = 1.0f;   b = 0.0f; break;
+            default: r = 1.0f; g = 1.0f - s; b = 0.0f; break;
+        }
+    } else {
+        const Flip_Color_Style *cs = &g_color_styles[g_color_style];
+        if (t < 0.5f) {
+            float u = t * 2.0f;
+            r = cs->grid_empty[0] + (cs->grid_mid[0] - cs->grid_empty[0]) * u;
+            g = cs->grid_empty[1] + (cs->grid_mid[1] - cs->grid_empty[1]) * u;
+            b = cs->grid_empty[2] + (cs->grid_mid[2] - cs->grid_empty[2]) * u;
+        } else {
+            float u = (t - 0.5f) * 2.0f;
+            r = cs->grid_mid[0] + (cs->grid_pale[0] - cs->grid_mid[0]) * u;
+            g = cs->grid_mid[1] + (cs->grid_pale[1] - cs->grid_mid[1]) * u;
+            b = cs->grid_mid[2] + (cs->grid_pale[2] - cs->grid_mid[2]) * u;
+        }
     }
     f->cell_color[3 * cell_nr]     = r;
     f->cell_color[3 * cell_nr + 1] = g;
@@ -829,7 +887,7 @@ static void update_cell_colors(FlipFluid *f) {
         else if (f->cell_type[i] == FLUID_CELL) {
             float d = f->particle_density[i];
             if (f->particle_rest_density > 0.0f) d /= f->particle_rest_density;
-            set_sci_color(f, i, d, 0.0f, 2.0f);
+            set_density_color(f, i, d, 0.0f, 2.0f);
         }
     }
 }
@@ -987,7 +1045,10 @@ void flip_init(float pool_width, float pool_height, int32_t resolution, uint64_t
     f->max_particles = max_particles;
     f->particle_pos = (float *)platform_calloc(2 * max_particles, sizeof(float));
     f->particle_color = (float *)platform_calloc(3 * max_particles, sizeof(float));
-    for (int i = 0; i < max_particles; i++) f->particle_color[3 * i + 2] = 1.0f;
+    // 颜色年龄初值 1（沉降色）；稀疏区在 update_particle_colors 里归零变高光。
+    // 实际 RGB 每帧由年龄 + 当前配色风格算出（见下面的 g_color_styles）。
+    f->particle_age = (float *)platform_calloc(max_particles, sizeof(float));
+    for (int i = 0; i < max_particles; i++) f->particle_age[i] = 1.0f;
     f->particle_vel = (float *)platform_calloc(2 * max_particles, sizeof(float));
     f->particle_rest_density = 0.0f;
 
@@ -1043,7 +1104,7 @@ void flip_cleanup(void) {
     free(f->u); free(f->v); free(f->du); free(f->dv);
     free(f->prev_u); free(f->prev_v); free(f->p); free(f->s);
     free(f->cell_type); free(f->cell_color); free(f->particle_density);
-    free(f->particle_pos); free(f->particle_color); free(f->particle_vel);
+    free(f->particle_pos); free(f->particle_color); free(f->particle_age); free(f->particle_vel);
     free(f->num_cell_particles); free(f->first_cell_particle); free(f->cell_particle_ids);
     free(f->sep_dx); free(f->sep_dy);
     memset(f, 0, sizeof(FlipFluid));
