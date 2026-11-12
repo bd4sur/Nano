@@ -1223,17 +1223,20 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
 //     退场）。所有交互都改为屏幕自绘控件；实体键盘（is_soft_key==0）保留一份兜底：
 //     ESC 退出、←/→ 画风、1 节流、C 节流度、D 复位。
 //   · 布局（320x240 设计基准，按画布宽高等比缩放）：
-//       顶栏 30px   状态灯 + 标题「电子沙漏」+ 状态胶囊 + 数码计时 + 「退出」
+//       顶栏 30px   状态灯 + 标题「电子沙漏」+ 状态胶囊 + 模式胶囊 + 数码计时 + 「退出」
 //       中央舞台    4:3 流体视口（与屏幕同宽高比 ⇒ 物理初始化参数 k 不变）+ 深色边框
-//       左仪表      进度竖槽 + 百分比 + 余粒数
-//       右仪表      节流度竖槽（可拖动/点按）+ 百分比 + 当前自适应节流值
+//       左仪表      进度竖槽 + 百分比 + 余粒数（自由模式：粒子数 + 矩形槽）
+//       右仪表      节流度竖槽（可拖动/点按）+ 百分比 + 当前值（自由模式：模式信息）
 //       底部控制条  复位 / 画风（粒子·网格·叠加）/ 节流开关 / 配色 / 流量读数
+//   · 自由流体模式：顶栏「自由/沙漏」胶囊切换（键盘 2 兜底）。自由模式用同一 FLIP
+//     求解器，只把固体边界换成矩形外壁（flip_init 的 hourglass_enabled=0）、粒子初始
+//     沉降在槽底，并**关闭全部节流机制**；没有流完判定/报警，计时退化为秒表。
 //   · 色彩风格：底部「配色」胶囊打开模态选择器，5 档——黄（暖沙，默认）/ 蓝 / 绿 /
 //     青 / 彩（原彩色：蓝粒子 + 彩虹密度网格）。风格同时驱动流体颜色（flip.c 的
 //     flip_set_color_style，纯渲染）与 UI 强调色（仪表/胶囊/按钮/完成态描边）。
-//   · 物理与计时逻辑一行未改：dt、重力源与换算、节流自适应公式、翻转判定、报警
-//     状态机、粒子流量统计全部沿用；render_flip 只是把流体画进舞台视口（center/width/
-//     height 参数），视口与屏幕同宽高比，因此网格分辨率、沙漏几何、粒子数都不变。
+//   · 沙漏模式的物理与计时逻辑一行未改：dt、重力源与换算、节流自适应公式、翻转判定、
+//     报警状态机、粒子流量统计全部沿用；render_flip 只是把流体画进舞台视口（center/
+//     width/height 参数），视口与屏幕同宽高比，因此网格分辨率、沙漏几何、粒子数不变。
 // ===============================================================================
 
 // ---- 触屏控件标识 ----------------------------------------------------------
@@ -1244,12 +1247,17 @@ void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
 #define FLIP_UI_THROTTLE   (3)
 #define FLIP_UI_SLIDER     (4)
 #define FLIP_UI_PALETTE    (5)
+#define FLIP_UI_MODE       (6)
 
 // ---- 色彩风格（与 flip.c 的 flip_set_color_style 一一对应）------------------
 #define FLIP_COLOR_STYLES  (5)   // 0黄 1蓝 2绿 3青 4彩（原彩色）
 static int32_t s_ui_flip_color_style = 0;
 static int32_t s_ui_flip_picker_open = 0;
 static int32_t s_ui_flip_picker_pressed = FLIP_UI_NONE;
+
+// 自由流体模式：0=沙漏（沙漏实体 + 节流），1=自由流体（矩形舞台、无沙漏壁、无节流）。
+// 切换时重新初始化流体（两种模式的固体边界不同），计时器重新开始。
+static int32_t s_ui_flip_free_mode = 0;
 
 // ---- 画风（与 s_ui_flip_setting_count 同一套取值）--------------------------
 #define FLIP_VIEW_PARTICLE (0)   // 只看粒子
@@ -1393,6 +1401,7 @@ typedef struct {
     int32_t header_h;
     int32_t title_x, title_y;
     int32_t chip_x, chip_y, chip_w, chip_h;
+    int32_t mode_x, mode_y, mode_w, mode_h, mode_r;
     int32_t timer_y, timer_right;
     int32_t seg_len, seg_thick, seg_gap;
     int32_t exit_x, exit_y, exit_w, exit_h, exit_r;
@@ -1444,6 +1453,11 @@ static void flip_ui_layout(Nano_GFX *gfx, Flip_Ui *u) {
     u->chip_x = FX(78);      // 标题「电子沙漏」= 4 个 16px 全角字（8..72）
     u->chip_y = FY(6);
     u->chip_w = FX(54);
+    u->mode_w = FX(33);
+    u->mode_h = FY(17);
+    u->mode_x = u->chip_x + u->chip_w + FX(2);
+    u->mode_y = u->chip_y;
+    u->mode_r = u->mode_h / 2;
     u->timer_y = FY(4);
     u->seg_len = FR(8);
     if (u->seg_len < 4) u->seg_len = 4;
@@ -1602,7 +1616,7 @@ static void flip_ui_button(Nano_GFX *g, const Flip_Ui_Palette *p,
 static void flip_ui_draw_header(Key_Event *key_event, Global_State *global_state,
                                 const Flip_Ui *u, const Flip_Ui_Palette *p,
                                 uint64_t elapsed_ms, int32_t running,
-                                int32_t pressed_exit) {
+                                int32_t pressed) {
     Nano_GFX *g = global_state->gfx;
 
     // 标题
@@ -1626,6 +1640,17 @@ static void flip_ui_draw_header(Key_Event *key_event, Global_State *global_state
                               u->chip_x + u->chip_w / 2 + u->chip_h / 4, chip_cy, p->on_accent, 1);
     }
 
+    // 模式切换胶囊：沙漏 ⇄ 自由流体（文字是“将要切换到的模式”）
+    int32_t mode_pressed = (pressed == FLIP_UI_MODE);
+    flip_ui_round(g, u->mode_x, u->mode_y, u->mode_w, u->mode_h, u->mode_r,
+                  mode_pressed ? p->surface_press : p->surface, 1);
+    flip_ui_round(g, u->mode_x, u->mode_y, u->mode_w, u->mode_h, u->mode_r,
+                  mode_pressed ? p->accent : p->surface_edge, 1);
+    flip_ui_round(g, u->mode_x + 1, u->mode_y + 1, u->mode_w - 2, u->mode_h - 2,
+                  u->mode_r - 1, mode_pressed ? p->surface_press : p->surface, 1);
+    flip_ui_text_centered(g, GFX_FONT_ALPHA_12, s_ui_flip_free_mode ? L"沙漏" : L"自由",
+                          u->mode_x + u->mode_w / 2, u->mode_y + u->mode_h / 2, p->accent, 1);
+
     // 数码计时：MM:SS + 百分秒（右对齐到退出按钮左侧）
     int32_t total_sec = (int32_t)(elapsed_ms / 1000u);
     int32_t mm = total_sec / 60;
@@ -1640,7 +1665,7 @@ static void flip_ui_draw_header(Key_Event *key_event, Global_State *global_state
     ui_measure_7seg_string(tstr, (float)u->seg_len, (float)u->seg_thick, (float)u->seg_gap, &tw, &th);
     int32_t cw = gfx_font_measure_text(GFX_FONT_ALPHA_12, cstr);
     int32_t tx = u->timer_right - (tw + 2 * u->seg_gap + cw);
-    if (tx < u->chip_x + u->chip_w + 4) tx = u->chip_x + u->chip_w + 4;
+    if (tx < u->mode_x + u->mode_w + 2) tx = u->mode_x + u->mode_w + 2;
     const uint8_t *tcol = running ? p->timer : p->accent;
     ui_draw_7seg_string(key_event, global_state, tx, u->timer_y, tstr,
                         tcol[0], tcol[1], tcol[2],
@@ -1650,7 +1675,7 @@ static void flip_ui_draw_header(Key_Event *key_event, Global_State *global_state
     flip_ui_text(g, GFX_FONT_ALPHA_12, cstr, tx + tw + 2 * u->seg_gap, cy_top, p->dim, 1);
 
     // 退出按钮
-    int32_t exit_state = (pressed_exit == FLIP_UI_EXIT) ? 1 : 0;
+    int32_t exit_state = (pressed == FLIP_UI_EXIT) ? 1 : 0;
     flip_ui_round(g, u->exit_x, u->exit_y, u->exit_w, u->exit_h, u->exit_r,
                   (exit_state == 1) ? p->surface_press : p->surface, 1);
     flip_ui_round(g, u->exit_x, u->exit_y, u->exit_w, u->exit_h, u->exit_r,
@@ -1700,7 +1725,8 @@ static void flip_ui_radial_glow(Nano_GFX *g, int32_t cx, int32_t cy, int32_t r,
 }
 
 static void flip_ui_draw_stage_frame(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palette *p,
-                                     int32_t finished, int32_t sand_at_bottom) {
+                                     int32_t finished, int32_t sand_at_bottom,
+                                     int32_t free_mode) {
     // 外框：1px 深边（完成态染强调色）+ 1px 倒角高光 + 壳体
     flip_ui_round(g, u->card_x - 1, u->card_y - 1, u->card_w + 2, u->card_h + 2,
                   u->card_r + 1, finished ? p->accent_dim : p->card_edge, 1);
@@ -1736,11 +1762,13 @@ static void flip_ui_draw_stage_frame(Nano_GFX *g, const Flip_Ui *u, const Flip_U
         gfx_draw_rectangle(g, u->fluid_x, y0, (uint32_t)u->fluid_w, (uint32_t)(y1 - y0), r, gg, b, 1);
     }
 
-    // 瓶颈暖光：只透在空腔里（沙漏实体绘制后会盖掉外围）
+    // 瓶颈暖光：只透在空腔里（沙漏实体绘制后会盖掉外围）；自由模式没有瓶颈
     int32_t gcx = u->fluid_x + u->fluid_w / 2;
     int32_t gcy = u->fluid_y + u->fluid_h / 2;
     int32_t rg = (u->fluid_w < u->fluid_h ? u->fluid_w : u->fluid_h) / 5;
-    flip_ui_radial_glow(g, gcx, gcy, rg, p->accent, 26);
+    if (!free_mode) {
+        flip_ui_radial_glow(g, gcx, gcy, rg, p->accent, 26);
+    }
 
     // 沙池底光：跟随重力落在沙粒堆积的一侧（画在粒子之前 ⇒ 沙粒像浸在一团暖光里）
     int32_t pool_y = u->fluid_y + (sand_at_bottom ? (u->fluid_h * 74 / 100)
@@ -1829,14 +1857,37 @@ static void flip_ui_draw_walls(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Pale
                        k_stage_plate_lo[0], k_stage_plate_lo[1], k_stage_plate_lo[2], 1);
 }
 
-// 前玻璃：斜向反光 + 上下内阴影，把粒子与沙漏实体统一到同一块玻璃后面。
-// 注：gfx_draw_triangle 的 mode>=4 在扫描线路径里按“加色”处理，故这里用低加色值
-// 叠 3 层形成柔和的斜向高光；矩形则走逐像素 alpha，用于压暗的内阴影。
-static void flip_ui_draw_glass(Nano_GFX *g, const Flip_Ui *u) {
+// 自由流体：矩形槽的四壁（1px 暗边 + 顶部亮边/底部阴影，遮住粒子溢出的边缘）。
+static void flip_ui_draw_tank_edges(Nano_GFX *g, const Flip_Ui *u) {
     int32_t fx = u->fluid_x;
     int32_t fy = u->fluid_y;
     int32_t fw = u->fluid_w;
     int32_t fh = u->fluid_h;
+    int32_t fxe = fx + fw;
+    int32_t fye = fy + fh;
+    // 左右/底部槽壁
+    gfx_draw_rectangle(g, fx, fy + 1, 1, (uint32_t)(fh - 2),
+                       k_stage_plate_lo[0], k_stage_plate_lo[1], k_stage_plate_lo[2], 1);
+    gfx_draw_rectangle(g, fxe - 1, fy + 1, 1, (uint32_t)(fh - 2),
+                       k_stage_plate_lo[0], k_stage_plate_lo[1], k_stage_plate_lo[2], 1);
+    gfx_draw_rectangle(g, fx, fye - 1, (uint32_t)fw, 1,
+                       k_stage_plate_lo[0], k_stage_plate_lo[1], k_stage_plate_lo[2], 1);
+    // 顶部：亮边 + 阴影；底部：阴影 + 暗边
+    gfx_draw_rectangle(g, fx, fy, (uint32_t)fw, 1,
+                       k_stage_plate_hi[0], k_stage_plate_hi[1], k_stage_plate_hi[2], 1);
+    gfx_draw_rectangle(g, fx, fy + 1, (uint32_t)fw, 1, 0, 0, 0, 90);
+    gfx_draw_rectangle(g, fx, fye - 2, (uint32_t)fw, 1, 0, 0, 0, 90);
+}
+
+// 前玻璃：斜向反光 + 上下内阴影，把粒子与沙漏实体统一到同一块玻璃后面。
+// 注：gfx_draw_triangle 的 mode>=4 在扫描线路径里按“加色”处理，故这里用低加色值
+// 叠 3 层形成柔和的斜向高光；矩形则走逐像素 alpha，用于压暗的内阴影。
+static void flip_ui_draw_glass(Nano_GFX *g, const Flip_Ui *u, int32_t free_mode) {
+    int32_t fx = u->fluid_x;
+    int32_t fy = u->fluid_y;
+    int32_t fw = u->fluid_w;
+    int32_t fh = u->fluid_h;
+    int32_t fxe = fx + fw;
     int32_t fye = fy + fh;
 
     // 斜向反光：三层由宽到窄、由暗到亮（低加色，避免压过粒子）
@@ -1858,6 +1909,15 @@ static void flip_ui_draw_glass(Nano_GFX *g, const Flip_Ui *u) {
         uint8_t a = (uint8_t)(28 - (i - 1) * 7);
         gfx_draw_rectangle(g, fx, fy + i, (uint32_t)fw, 1, 0, 0, 0, a);
         gfx_draw_rectangle(g, fx, fye - 1 - i, (uint32_t)fw, 1, 0, 0, 0, a);
+    }
+
+    // 自由模式的矩形槽：左右内壁也补一道内阴影，强调“玻璃缸”四壁
+    if (free_mode) {
+        for (int32_t i = 1; i <= 3; i++) {
+            uint8_t a = (uint8_t)(22 - (i - 1) * 6);
+            gfx_draw_rectangle(g, fx + i, fy + 4, 1, (uint32_t)(fh - 8), 0, 0, 0, a);
+            gfx_draw_rectangle(g, fxe - 1 - i, fy + 4, 1, (uint32_t)(fh - 8), 0, 0, 0, a);
+        }
     }
 }
 
@@ -1952,6 +2012,28 @@ static void flip_ui_draw_throttle_rail(Nano_GFX *g, const Flip_Ui *u, const Flip
                           enabled ? p->accent : p->dim, 1);
 }
 
+// 自由流体模式的仪表：左=粒子总数/矩形槽，右=模式/自由/无节流。
+static void flip_ui_draw_free_rails(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palette *p,
+                                    int32_t total_count) {
+    // 没有竖槽/滑杆，三行文字在仪表列里垂直居中，和两侧留白平衡
+    int32_t cy = u->rail_y + u->rail_h / 2;
+    int32_t y_label = cy - 28;
+    int32_t y_value = cy;
+    int32_t y_caption = cy + 24;
+
+    // 左：粒子数
+    flip_ui_text_centered(g, GFX_FONT_ALPHA_12, L"粒子", u->lrail_cx, y_label, p->dim, 1);
+    wchar_t cnt[16];
+    swprintf(cnt, sizeof(cnt) / sizeof(cnt[0]), L"%d", total_count);
+    flip_ui_text_centered(g, GFX_FONT_ALPHA_16, cnt, u->lrail_cx, y_value, p->text, 1);
+    flip_ui_text_centered(g, GFX_FONT_ALPHA_12, L"矩形槽", u->lrail_cx, y_caption, p->dim, 1);
+
+    // 右：模式
+    flip_ui_text_centered(g, GFX_FONT_ALPHA_12, L"模式", u->rrail_cx, y_label, p->dim, 1);
+    flip_ui_text_centered(g, GFX_FONT_ALPHA_16, L"自由", u->rrail_cx, y_value, p->accent, 1);
+    flip_ui_text_centered(g, GFX_FONT_ALPHA_12, L"无节流", u->rrail_cx, y_caption, p->dim, 1);
+}
+
 // ---- 「配色」胶囊（底部控制条；打开模态色板）--------------------------------
 static void flip_ui_draw_palette_pill(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palette *p,
                                       int32_t pressed) {
@@ -1975,7 +2057,7 @@ static void flip_ui_draw_palette_pill(Nano_GFX *g, const Flip_Ui *u, const Flip_
 // ---- 底部控制条 ------------------------------------------------------------
 static void flip_ui_draw_dock(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palette *p,
                               int32_t pressed, int32_t pressed_view,
-                              float flow_per_sec) {
+                              float flow_per_sec, int32_t free_mode) {
     // 复位
     flip_ui_button(g, p, u->reset_x, u->btn_y, u->reset_w, u->btn_h, u->btn_r, L"复位",
                    (pressed == FLIP_UI_RESET) ? 1 : 0);
@@ -2004,27 +2086,36 @@ static void flip_ui_draw_dock(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palet
                               selected ? p->on_accent : p->dim, 1);
     }
 
-    // 节流开关
-    wchar_t thr_label[16];
-    if (s_ui_flip_is_throttle) wcsncpy(thr_label, L"节流 开", 16);
-    else wcsncpy(thr_label, L"节流 关", 16);
-    thr_label[15] = L'\0';
-    int32_t thr_state;
-    if (s_ui_flip_is_throttle) {
-        thr_state = 2;
-        if (pressed == FLIP_UI_THROTTLE) {
-            // 选中态按下：用稍暗的强调色反馈
-            flip_ui_round(g, u->thr_x, u->btn_y, u->thr_w, u->btn_h, u->btn_r, p->accent_dim, 1);
-            flip_ui_text_centered(g, GFX_FONT_ALPHA_12, thr_label,
-                                  u->thr_x + u->thr_w / 2, u->btn_y + u->btn_h / 2, p->on_accent, 1);
-            thr_state = -1;
-        }
+    // 节流开关（自由流体模式下节流机制整体关闭：画成不可用指示，不响应点按）
+    if (free_mode) {
+        flip_ui_round(g, u->thr_x, u->btn_y, u->thr_w, u->btn_h, u->btn_r, p->surface_edge, 1);
+        flip_ui_round(g, u->thr_x + 1, u->btn_y + 1, u->thr_w - 2, u->btn_h - 2,
+                      u->btn_r - 1, p->surface, 1);
+        flip_ui_text_centered(g, GFX_FONT_ALPHA_12, L"节流 -",
+                              u->thr_x + u->thr_w / 2, u->btn_y + u->btn_h / 2, p->dim, 1);
     }
     else {
-        thr_state = (pressed == FLIP_UI_THROTTLE) ? 1 : 3;
-    }
-    if (thr_state >= 0) {
-        flip_ui_button(g, p, u->thr_x, u->btn_y, u->thr_w, u->btn_h, u->btn_r, thr_label, thr_state);
+        wchar_t thr_label[16];
+        if (s_ui_flip_is_throttle) wcsncpy(thr_label, L"节流 开", 16);
+        else wcsncpy(thr_label, L"节流 关", 16);
+        thr_label[15] = L'\0';
+        int32_t thr_state;
+        if (s_ui_flip_is_throttle) {
+            thr_state = 2;
+            if (pressed == FLIP_UI_THROTTLE) {
+                // 选中态按下：用稍暗的强调色反馈
+                flip_ui_round(g, u->thr_x, u->btn_y, u->thr_w, u->btn_h, u->btn_r, p->accent_dim, 1);
+                flip_ui_text_centered(g, GFX_FONT_ALPHA_12, thr_label,
+                                      u->thr_x + u->thr_w / 2, u->btn_y + u->btn_h / 2, p->on_accent, 1);
+                thr_state = -1;
+            }
+        }
+        else {
+            thr_state = (pressed == FLIP_UI_THROTTLE) ? 1 : 3;
+        }
+        if (thr_state >= 0) {
+            flip_ui_button(g, p, u->thr_x, u->btn_y, u->thr_w, u->btn_h, u->btn_r, thr_label, thr_state);
+        }
     }
 
     // 配色
@@ -2107,7 +2198,9 @@ void ui_app_flip_init(Key_Event *key_event, Global_State *global_state) {
     s_ui_flip_picker_open = 0;
     s_ui_flip_picker_pressed = FLIP_UI_NONE;
     float k = (float)(global_state->gfx->width) / (float)(global_state->gfx->height);
-    flip_init(k, 1.0f, FLIP_RESOLUTION, global_state->timestamp, 1);
+    // 沙漏模式：带沙漏固体边界；自由模式：只有矩形外壁
+    flip_init(k, 1.0f, FLIP_RESOLUTION, global_state->timestamp,
+              s_ui_flip_free_mode ? 0 : 1);
 }
 
 void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) {
@@ -2122,6 +2215,8 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
         return;
     }
     s_flip_last_frame_ts = global_state->timestamp;
+
+    int32_t free_mode = s_ui_flip_free_mode;
 
     Flip_Ui u;
     Flip_Ui_Palette pal;
@@ -2159,15 +2254,17 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     int32_t lower_count = 0;
 
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
-    float dt = (s_ui_flip_is_throttle) ? (0.8f / 60.0f) : (1.6f / 60.0f);
+    float dt = free_mode ? (1.6f / 60.0f)
+                         : ((s_ui_flip_is_throttle) ? (0.8f / 60.0f) : (1.6f / 60.0f));
 #else
-    float dt = (s_ui_flip_is_throttle) ? (0.6f / 60.0f) : (1.6f / 60.0f);
+    float dt = free_mode ? (1.6f / 60.0f)
+                         : ((s_ui_flip_is_throttle) ? (0.6f / 60.0f) : (1.6f / 60.0f));
 #endif
 
     // ---- 背景 + 舞台外框（用上一帧的运行态决定描边色，避免多算一次流体）----
     flip_ui_bg(global_state->gfx, &pal);
     flip_ui_draw_stage_frame(global_state->gfx, &u, &pal, !s_ui_fanqie_is_running,
-                             gravity_y <= 0);
+                             gravity_y <= 0, free_mode);
 
     // ---- 流体：只画进舞台视口（视口与屏幕同宽高比 ⇒ 物理参数 k / 网格不变）----
     flip_set_color_style(s_ui_flip_color_style);   // 纯渲染配色（不影响物理）
@@ -2181,17 +2278,26 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
         1.0f,            /* over_relaxation */
         1, 1,            /* compensate_drift, separate_particles */
         s_ui_flip_show_particles, s_ui_flip_show_grid,
-        (s_ui_flip_is_throttle) ? s_ui_flip_throttle : 0,
+        (free_mode || !s_ui_flip_is_throttle) ? 0 : s_ui_flip_throttle,
         &upper_count, &lower_count
     );
 
-    // 沙漏实体盖在粒子之上（旧版同款顺序：粒子在壁面下方不会溢出可见空腔）
-    flip_ui_draw_walls(global_state->gfx, &u, &pal);
-    // 前玻璃：斜向反光 + 上下内阴影，让粒子与实体看起来在同一块玻璃后面
-    flip_ui_draw_glass(global_state->gfx, &u);
+    // 沙漏实体 / 矩形槽四壁盖在粒子之上（自由模式没有沙漏壁与节流）
+    if (free_mode) {
+        flip_ui_draw_tank_edges(global_state->gfx, &u);
+    }
+    else {
+        flip_ui_draw_walls(global_state->gfx, &u, &pal);
+    }
+    // 前玻璃：斜向反光 + 内阴影，让粒子与实体看起来在同一块玻璃后面
+    flip_ui_draw_glass(global_state->gfx, &u, free_mode);
 
-    // ---- 沙漏重置判定（逻辑与旧版一致）----
-    if ((lower_count < 1 && gravity_y < 0) || (upper_count < 1 && gravity_y > 0)) {
+    // ---- 沙漏重置判定（逻辑与旧版一致）；自由流体模式没有“流完”，计时器只做秒表 ----
+    if (free_mode) {
+        s_ui_fanqie_stop_timestamp = 0;
+        s_ui_fanqie_is_running = 1;
+    }
+    else if ((lower_count < 1 && gravity_y < 0) || (upper_count < 1 && gravity_y > 0)) {
         s_ui_fanqie_start_timestamp = global_state->timestamp;
         s_ui_fanqie_stop_timestamp = 0;
         s_ui_fanqie_is_running = 1;
@@ -2241,11 +2347,17 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     int32_t remaining_count = (gravity_y <= 0) ? upper_count : lower_count;
 
     // 根据沙漏进度调整节流度，避免来自上方的压力过小时，出现几乎不往下流的问题
-    s_ui_flip_throttle = (int32_t)roundf((1.0f - (float)s_ui_flip_init_throttle) * hourglass_progress * hourglass_progress
-                                         + (float)s_ui_flip_init_throttle);
+    // （自由模式关闭全部节流机制）
+    if (free_mode) {
+        s_ui_flip_throttle = 0;
+    }
+    else {
+        s_ui_flip_throttle = (int32_t)roundf((1.0f - (float)s_ui_flip_init_throttle) * hourglass_progress * hourglass_progress
+                                             + (float)s_ui_flip_init_throttle);
+    }
 
     // ---- 到时提醒（非阻塞状态机：跨帧推进震动节奏，不阻塞渲染任务）----
-    if (!s_ui_fanqie_is_running && s_ui_flip_is_throttle && s_ui_fanqie_alarm_count < 6) {
+    if (!free_mode && !s_ui_fanqie_is_running && s_ui_flip_is_throttle && s_ui_fanqie_alarm_count < 6) {
         // 门槛：仅真实计时（运行时长≥3s）结束后才报警，杜绝“进入即误判流完”的伪报警
         if (s_ui_fanqie_stop_timestamp >= s_ui_fanqie_start_timestamp &&
             s_ui_fanqie_stop_timestamp - s_ui_fanqie_start_timestamp >= 3000) {
@@ -2275,13 +2387,18 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     // ---- chrome：顶栏 / 左右仪表 / 底部控制条 ----
     flip_ui_draw_header(key_event, global_state, &u, &pal, elapsed_ms,
                         s_ui_fanqie_is_running, s_ui_flip_ui_pressed);
-    // 进度槽的起点/方向跟随重力（gravity_y < 0 = 重力朝屏幕下方 = 正放）
-    flip_ui_draw_progress_rail(global_state->gfx, &u, &pal, hourglass_progress, remaining_count,
-                               gravity_y <= 0);
-    flip_ui_draw_throttle_rail(global_state->gfx, &u, &pal, s_ui_flip_init_throttle,
-                               s_ui_flip_throttle, s_ui_flip_is_throttle, s_ui_flip_ui_pressed);
+    if (free_mode) {
+        flip_ui_draw_free_rails(global_state->gfx, &u, &pal, total_count);
+    }
+    else {
+        // 进度槽的起点/方向跟随重力（gravity_y < 0 = 重力朝屏幕下方 = 正放）
+        flip_ui_draw_progress_rail(global_state->gfx, &u, &pal, hourglass_progress, remaining_count,
+                                   gravity_y <= 0);
+        flip_ui_draw_throttle_rail(global_state->gfx, &u, &pal, s_ui_flip_init_throttle,
+                                   s_ui_flip_throttle, s_ui_flip_is_throttle, s_ui_flip_ui_pressed);
+    }
     flip_ui_draw_dock(global_state->gfx, &u, &pal, s_ui_flip_ui_pressed,
-                      s_ui_flip_ui_pressed_view, fabsf(particle_flow_per_sec));
+                      s_ui_flip_ui_pressed_view, fabsf(particle_flow_per_sec), free_mode);
 
     // 配色选择弹层（模态）：画在全部 chrome 之上
     if (s_ui_flip_picker_open) {
@@ -2299,14 +2416,22 @@ static int32_t flip_ui_hit(const Flip_Ui *u, int32_t x, int32_t y) {
         y >= u->exit_y && y < u->exit_y + u->exit_h) {
         return FLIP_UI_EXIT;
     }
+    // 顶栏模式切换胶囊（沙漏 ⇄ 自由流体）
+    if (x >= u->mode_x && x < u->mode_x + u->mode_w &&
+        y >= u->mode_y && y < u->mode_y + u->mode_h) {
+        return FLIP_UI_MODE;
+    }
     if (y >= u->btn_y && y < u->btn_y + u->btn_h) {
         if (x >= u->reset_x && x < u->reset_x + u->reset_w) return FLIP_UI_RESET;
         if (x >= u->view_x && x < u->view_x + u->view_w) return FLIP_UI_VIEW;
-        if (x >= u->thr_x && x < u->thr_x + u->thr_w) return FLIP_UI_THROTTLE;
+        // 自由流体模式关闭节流机制：节流开关不响应
+        if (!s_ui_flip_free_mode && x >= u->thr_x && x < u->thr_x + u->thr_w) return FLIP_UI_THROTTLE;
         if (x >= u->pal_x && x < u->pal_x + u->pal_w) return FLIP_UI_PALETTE;
     }
     // 右仪表：轨道上下各放宽一个推钮半径，便于点按/拖动；标签与读数区不响应
-    if (x >= u->rrail_x && x < u->rrail_x + u->rrail_w &&
+    // （自由模式右栏是模式信息，没有节流滑杆）
+    if (!s_ui_flip_free_mode &&
+        x >= u->rrail_x && x < u->rrail_x + u->rrail_w &&
         y >= u->gauge_y - u->knob_r && y <= u->gauge_y + u->gauge_h + u->knob_r) {
         return FLIP_UI_SLIDER;
     }
@@ -2431,6 +2556,10 @@ void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state)
                     s_ui_flip_picker_open = 1;
                     s_ui_flip_picker_pressed = FLIP_UI_NONE;
                 }
+                else if (hit == FLIP_UI_MODE) {
+                    s_ui_flip_free_mode = s_ui_flip_free_mode ? 0 : 1;
+                    ui_app_flip_init(key_event, global_state);   // 固体边界变了，重初始化流体
+                }
             }
         }
         s_ui_flip_ui_pressed = FLIP_UI_NONE;
@@ -2453,7 +2582,11 @@ void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state)
         flip_ui_apply_view((s_ui_flip_setting_count + 2) % 3);
     }
     else if (edge && key_event->key_code == NANO_KEY_1) {
-        s_ui_flip_is_throttle = s_ui_flip_is_throttle ? 0 : 1;
+        if (!s_ui_flip_free_mode) s_ui_flip_is_throttle = s_ui_flip_is_throttle ? 0 : 1;
+    }
+    else if (edge && key_event->key_code == NANO_KEY_2) {
+        s_ui_flip_free_mode = s_ui_flip_free_mode ? 0 : 1;
+        ui_app_flip_init(key_event, global_state);
     }
     else if (edge && key_event->key_code == NANO_KEY_ctrl) {
         s_ui_flip_init_throttle += 10;

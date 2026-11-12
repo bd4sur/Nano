@@ -1071,7 +1071,11 @@ void flip_init(float pool_width, float pool_height, int32_t resolution, uint64_t
     for (int i = 0; i < num_x; i++) {
         for (int j = 0; j < num_y; j++) {
             f->particle_pos[p++] = h + r + dx * i + (j % 2 == 0 ? 0.0f : r);
-            f->particle_pos[p++] = f->f_num_y * h - (h + r + dy * j);
+            // 沙漏模式：粒子放在沙漏上腔（世界 y 高处，屏幕上方），靠重力往下漏；
+            // 自由流体模式：直接沉降在矩形槽底部（世界 y 低处），一进入就是静止液面。
+            float py0 = f->f_num_y * h - (h + r + dy * j);
+            if (!hourglass_enabled) py0 = h + r + dy * j;
+            f->particle_pos[p++] = py0;
         }
     }
 
