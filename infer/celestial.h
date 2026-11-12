@@ -93,7 +93,7 @@ typedef struct Linglong_Config {
     int32_t roam_speed_level;        // 漫游速度档位 0-2（10 / 100 / 1000 m/s）
 
     // 随机岛屿地形（landscape_index==3 时生效；参考 linglong.html 的 === [Islands] ===）
-    int32_t terrain_enable;          // 0=纯深水（与移植初版一致）；1=随机岛屿
+    int32_t terrain_enable;          // 0=纯深水（与移植初版一致，默认）；1=随机岛屿
     int32_t terrain_quality;         // 0=省电 1=标准 2=精细
     int32_t terrain_res;             // 高程图分辨率 512（默认，50m 纹素）/ 1024（25m 纹素）
     uint32_t terrain_seed;           // 地形种子（0 → 内置默认）

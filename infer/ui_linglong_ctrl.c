@@ -165,7 +165,7 @@ static const wchar_t *S_TIME_LABEL[LL_TIME_COUNT] = {
     L"<<", L"实时", L"运行/暂停", L">>",
 };
 
-// 视角九宫格：与十六宫格软键 1~9 一一对应
+// 视角九宫格：与十六宫格软键 1~9 一一对应（正中“归中”不参与按住重复）
 static const wchar_t *S_VIEW_LABEL[LL_VIEW_ROWS][LL_VIEW_COLS] = {
     {L"左转", L"低头", L"右转"},
     {L"左倾", L"归中", L"右倾"},
@@ -280,6 +280,24 @@ static int32_t ll_hit_test(int32_t x, int32_t y) {
         return UI_LL_CTRL_NONE;
     }
 
+    return UI_LL_CTRL_NONE;
+}
+
+// 视角方向按钮的按住查询（与 ll_hit_test 共用同一套几何，但只认可重复的 8 枚按钮）。
+// 供调用方每帧轮询，实现“按住反复触发”。
+int32_t ui_linglong_ctrl_view_held(int32_t is_touching, int32_t x, int32_t y) {
+    if (!s_controls_visible || !is_touching) return UI_LL_CTRL_NONE;
+    for (int32_t r = 0; r < LL_VIEW_ROWS; r++) {
+        for (int32_t c = 0; c < LL_VIEW_COLS; c++) {
+            int32_t action = UI_LL_CTRL_VIEW_1 + r * LL_VIEW_COLS + c;
+            if (action == UI_LL_CTRL_VIEW_CENTER) continue; // 归中：单击生效，不重复
+            int32_t bx = LL_VIEW_X0 + c * (LL_VIEW_BTN_W + LL_VIEW_GAP);
+            int32_t by = LL_VIEW_Y0 + r * (LL_VIEW_BTN_H + LL_VIEW_GAP);
+            if (ll_in_rect(x, y, bx, by, LL_VIEW_BTN_W, LL_VIEW_BTN_H)) {
+                return action;
+            }
+        }
+    }
     return UI_LL_CTRL_NONE;
 }
 

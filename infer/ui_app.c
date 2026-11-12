@@ -3343,6 +3343,39 @@ static void ui_app_linglong_control_runpause(Global_State *global_state) {
     }
 }
 
+// ===============================================================================
+// 视角按钮的“按住反复触发”
+// ===============================================================================
+// 视角九宫格的 8 枚方向/缩放按钮（正中“归中”除外）支持按住反复触发，交互与漫游移动 pad
+// 一致：按住不放即连续转动/缩放视角。触发节奏取键盘自动重复的两段式——
+//   · 短按（< 初始延时）：只由松手沿的单次点击完成（与改动前完全一致，拖动离手不触发）；
+//   · 长按：超过初始延时后按固定间隔重复同一步进（5° / 0.1f，约 70°/s），松手即停。
+// 状态按“当前按住的按钮”跟踪：按下点移到别的按钮、面板隐藏或松手都会重新计时/停掉，
+// 因而换按钮不会有上一枚按钮的重复惯性（状态无需显式复位：每帧轮询电平自行收敛）。
+#define LL_VIEW_REPEAT_DELAY_MS     (320)
+#define LL_VIEW_REPEAT_INTERVAL_MS  (70)
+
+static int32_t  s_view_repeat_action = UI_LL_CTRL_NONE;
+static uint64_t s_view_repeat_next_ms = 0;
+
+// 每帧调用一次；返回本帧应重复触发的视角动作（UI_LL_CTRL_VIEW_n），否则 NONE
+static int32_t ui_app_linglong_view_repeat(int32_t is_touching, int32_t x, int32_t y) {
+    int32_t held = ui_linglong_ctrl_view_held(is_touching, x, y);
+    if (held == UI_LL_CTRL_NONE) {
+        s_view_repeat_action = UI_LL_CTRL_NONE; // 松手/移出按钮/面板隐藏：停掉重复
+        return UI_LL_CTRL_NONE;
+    }
+    const uint64_t now = get_timestamp_in_ms();
+    if (held != s_view_repeat_action) {
+        s_view_repeat_action = held;                          // 新的按住：先等初始延时
+        s_view_repeat_next_ms = now + LL_VIEW_REPEAT_DELAY_MS;
+        return UI_LL_CTRL_NONE;
+    }
+    if (now < s_view_repeat_next_ms) return UI_LL_CTRL_NONE;
+    s_view_repeat_next_ms = now + LL_VIEW_REPEAT_INTERVAL_MS;
+    return held;
+}
+
 void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_state) {
     // 获取机器姿态（欧拉角）
 #ifdef IMU_ENABLED
@@ -3389,6 +3422,10 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         int32_t action = ui_linglong_ctrl_handle_touch(
             key_event->touch_edge, key_event->touch_x, key_event->touch_y,
             key_event->touch_down_x, key_event->touch_down_y);
+
+        // 视角方向按钮的按住重复：逐帧轮询触点（与漫游 pad 同一范式，与触屏边沿无关）
+        int32_t repeat_action = ui_app_linglong_view_repeat(
+            key_event->is_touching, key_event->touch_x, key_event->touch_y);
 
         // 控件显隐/按住高亮变化无需特殊处理：玲珑仪每帧都完整重绘（暂停也不例外），
         // 控件状态每帧都会被重画在新画面上；这里只把脏标记消费掉，避免它一直挂着。
@@ -3476,7 +3513,9 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
 
                 default:
                     // 视角九宫格：合成对应的 NANO_KEY_1~9 短按事件，
-                    // 复用下方既有硬键处理逻辑（功能与十六宫格软键 1~9 一一对应）
+                    // 复用下方既有硬键处理逻辑（功能与十六宫格软键 1~9 一一对应）。
+                    // 8 枚方向/缩放按钮另有“按住反复触发”（见 ui_app_linglong_view_repeat），
+                    // 短按仍走这里的一次触发。
                     if (action >= UI_LL_CTRL_VIEW_1 && action <= UI_LL_CTRL_VIEW_9) {
                         global_state->is_ctrl_enabled = 0;
                         synth_key = NANO_KEY_1 + (action - UI_LL_CTRL_VIEW_1);
@@ -3494,6 +3533,16 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                 key_event->key_code = NANO_KEY_IDLE;
                 key_event->key_edge = 0;
             }
+        }
+        else if (repeat_action != UI_LL_CTRL_NONE && key_event->key_edge == 0) {
+            // 按住反复触发：合成同键码的长按重复事件（key_edge=-2，与实体键长按同一语义），
+            // 复用下方既有 NANO_KEY_1..9 处理链，保证“点按”与“按住”两条路径行为一致。
+            // 只在“无沿事件”的帧注入（key_edge==0：空闲或实体键按住中）——此时不会丢掉
+            // 任何上升/下降沿，而实体键按住（如漫游中按着 W）也不会阻断视角重复。
+            global_state->is_ctrl_enabled = 0;
+            key_event->key_code = (uint8_t)(NANO_KEY_1 + (repeat_action - UI_LL_CTRL_VIEW_1));
+            key_event->key_edge = -2;
+            key_event->is_soft_key = 1;
         }
     }
 

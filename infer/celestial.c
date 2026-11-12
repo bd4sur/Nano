@@ -2808,8 +2808,9 @@ void linglong_init(Linglong_Config *cfg) {
     cfg->roam_enable = 0;             // 漫游模式默认关闭（控制面板“漫游”开启）
     cfg->roam_speed_level = 1;        // 速度档：10 / 100（默认）/ 1000 m/s
 
-    // 随机岛屿地形（landscape_index==3 时生效）：默认开启，512² 高程图（50m 纹素）
-    cfg->terrain_enable = 1;
+    // 随机岛屿地形（landscape_index==3 时生效）：默认关闭（纯深水海面，即移植初版观感）
+    // 512² 高程图（50m 纹素）；需要岛屿时在设置界面「岛屿地形」打开
+    cfg->terrain_enable = 0;
     cfg->terrain_quality = 1;
     cfg->terrain_res = 512;
     cfg->terrain_seed = 20260324u;
