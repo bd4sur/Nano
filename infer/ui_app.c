@@ -1749,14 +1749,16 @@ static void flip_ui_draw_walls(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Pale
 
 // ---- 左右仪表 --------------------------------------------------------------
 static void flip_ui_draw_progress_rail(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palette *p,
-                                       float progress, int32_t remaining) {
+                                       float progress, int32_t remaining, int32_t grow_up) {
     flip_ui_text_centered(g, GFX_FONT_ALPHA_12, L"进度", u->lrail_cx, u->label_cy, p->dim, 1);
 
     // 竖槽
     flip_ui_round(g, u->lgauge_x, u->gauge_y, u->gauge_w, u->gauge_h, u->gauge_w / 2, p->track, 1);
     int32_t fill_h = (int32_t)lroundf(progress * (float)u->gauge_h);
     if (fill_h > 0) {
-        int32_t y = u->gauge_y + u->gauge_h - fill_h;
+        // 起点与增长方向跟随重力：重力朝屏幕下方（沙漏正放）→ 从底部长起；
+        // 重力朝屏幕上方（倒置）→ 从顶部长下来。与沙粒实际的落向一致。
+        int32_t y = grow_up ? (u->gauge_y + u->gauge_h - fill_h) : u->gauge_y;
         flip_ui_round(g, u->lgauge_x, y, u->gauge_w, fill_h, u->gauge_w / 2, p->accent, 1);
     }
     // 槽内刻度（4 格，1px，很淡）
@@ -2156,7 +2158,9 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
     // ---- chrome：顶栏 / 左右仪表 / 底部控制条 ----
     flip_ui_draw_header(key_event, global_state, &u, &pal, elapsed_ms,
                         s_ui_fanqie_is_running, s_ui_flip_ui_pressed);
-    flip_ui_draw_progress_rail(global_state->gfx, &u, &pal, hourglass_progress, remaining_count);
+    // 进度槽的起点/方向跟随重力（gravity_y < 0 = 重力朝屏幕下方 = 正放）
+    flip_ui_draw_progress_rail(global_state->gfx, &u, &pal, hourglass_progress, remaining_count,
+                               gravity_y <= 0);
     flip_ui_draw_throttle_rail(global_state->gfx, &u, &pal, s_ui_flip_init_throttle,
                                s_ui_flip_throttle, s_ui_flip_is_throttle, s_ui_flip_ui_pressed);
     flip_ui_draw_dock(global_state->gfx, &u, &pal, s_ui_flip_ui_pressed,
