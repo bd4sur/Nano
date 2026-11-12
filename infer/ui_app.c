@@ -1666,13 +1666,63 @@ static void flip_ui_draw_header(Key_Event *key_event, Global_State *global_state
                        0, 0, 0, p->separator_alpha);
 }
 
-// ---- 舞台（外框 + 流体背景 + 沙漏实体）--------------------------------------
+// ---- 舞台（拟物化：金属边框 + 上下压板 + 玻璃腔体 + 跟随重力的沙池底光）-------
+// 舞台在深浅两套主题下都保持深色（自发光玻璃窗）；金属/玻璃色是固定值，只有外框
+// 完成态描边、瓶颈光、沙池底光跟随色彩风格。
+static const uint8_t k_stage_bevel[3]    = {78, 94, 120};   // 边框倒角高光
+static const uint8_t k_stage_case[3]     = {34, 43, 58};    // 壳体
+static const uint8_t k_stage_plate_hi[3] = {70, 86, 112};   // 压板亮面
+static const uint8_t k_stage_plate_lo[3] = {16, 21, 30};    // 压板暗面
+
+// 平滑径向光晕（逐像素 alpha + 平方衰减）：比一圈圈同心圆更细腻，也不会有环带。
+// 只在粒子绘制之前铺底（瓶颈光 / 沙池底光），面积约 1 万像素，代价可控。
+static void flip_ui_radial_glow(Nano_GFX *g, int32_t cx, int32_t cy, int32_t r,
+                                const uint8_t c[3], int32_t alpha_max) {
+    if (r <= 1 || alpha_max <= 0) return;
+    int32_t x0 = cx - r, x1 = cx + r;
+    int32_t y0 = cy - r, y1 = cy + r;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= (int32_t)g->width) x1 = (int32_t)g->width - 1;
+    if (y1 >= (int32_t)g->height) y1 = (int32_t)g->height - 1;
+    int32_t r2 = r * r;
+    for (int32_t y = y0; y <= y1; y++) {
+        int32_t dy = y - cy;
+        for (int32_t x = x0; x <= x1; x++) {
+            int32_t dx = x - cx;
+            int32_t d2 = dx * dx + dy * dy;
+            if (d2 >= r2) continue;
+            float t = 1.0f - sqrtf((float)d2) / (float)r;
+            int32_t a = (int32_t)(alpha_max * t * t);
+            if (a > 0) gfx_blend_pixel(g, (uint32_t)x, (uint32_t)y, c[0], c[1], c[2], (uint8_t)a);
+        }
+    }
+}
+
 static void flip_ui_draw_stage_frame(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palette *p,
-                                     int32_t finished) {
-    // 外框：1px 亮边 + 深色面板（面板与沙漏实体同色，圆角接缝因此不可见）
+                                     int32_t finished, int32_t sand_at_bottom) {
+    // 外框：1px 深边（完成态染强调色）+ 1px 倒角高光 + 壳体
     flip_ui_round(g, u->card_x - 1, u->card_y - 1, u->card_w + 2, u->card_h + 2,
                   u->card_r + 1, finished ? p->accent_dim : p->card_edge, 1);
-    flip_ui_round(g, u->card_x, u->card_y, u->card_w, u->card_h, u->card_r, p->panel, 1);
+    flip_ui_round(g, u->card_x, u->card_y, u->card_w, u->card_h, u->card_r, k_stage_bevel, 1);
+    flip_ui_round(g, u->card_x + 1, u->card_y + 1, u->card_w - 2, u->card_h - 2,
+                  u->card_r - 1, k_stage_case, 1);
+
+    // 上下压板：让沙漏看起来被夹在两条金属板之间（都落在 4px 边框内，不遮流体）
+    int32_t plate_x = u->card_x + u->card_r / 2 + 1;
+    int32_t plate_w = u->card_w - 2 * (u->card_r / 2 + 1);
+    flip_ui_round(g, plate_x, u->card_y + 1, plate_w, 2, 1, k_stage_plate_hi, 1);
+    gfx_draw_rectangle(g, plate_x, u->card_y + 3, (uint32_t)plate_w, 1,
+                       k_stage_plate_lo[0], k_stage_plate_lo[1], k_stage_plate_lo[2], 1);
+    gfx_draw_rectangle(g, plate_x, u->card_y + u->card_h - 3, (uint32_t)plate_w, 1,
+                       k_stage_plate_hi[0], k_stage_plate_hi[1], k_stage_plate_hi[2], 1);
+    flip_ui_round(g, plate_x, u->card_y + u->card_h - 2, plate_w, 2, 1, k_stage_plate_lo, 1);
+
+    // 侧边框 1px 倒角：左亮右暗（光从左上来），两端留出圆角区
+    gfx_draw_rectangle(g, u->card_x + 2, u->card_y + u->card_r + 2, 1,
+                       (uint32_t)(u->card_h - 2 * (u->card_r + 2)), 52, 64, 84, 1);
+    gfx_draw_rectangle(g, u->card_x + u->card_w - 3, u->card_y + u->card_r + 2, 1,
+                       (uint32_t)(u->card_h - 2 * (u->card_r + 2)), 12, 16, 24, 1);
 
     // 流体视口底色：上暗下更暗的竖向渐变（4 段）
     int32_t fh = u->fluid_h;
@@ -1686,20 +1736,27 @@ static void flip_ui_draw_stage_frame(Nano_GFX *g, const Flip_Ui *u, const Flip_U
         gfx_draw_rectangle(g, u->fluid_x, y0, (uint32_t)u->fluid_w, (uint32_t)(y1 - y0), r, gg, b, 1);
     }
 
-    // 瓶颈处一团很淡的暖光（只透在空腔里，沙漏实体绘制后会盖掉外围）
+    // 瓶颈暖光：只透在空腔里（沙漏实体绘制后会盖掉外围）
     int32_t gcx = u->fluid_x + u->fluid_w / 2;
     int32_t gcy = u->fluid_y + u->fluid_h / 2;
     int32_t rg = (u->fluid_w < u->fluid_h ? u->fluid_w : u->fluid_h) / 5;
-    if (rg >= 6) {
-        for (int32_t k = 0; k < 5; k++) {
-            int32_t r = rg - rg * k / 6;
-            uint8_t a = (uint8_t)(5 + k * 2);
-            gfx_draw_circle_fill(g, gcx, gcy, r, p->accent[0], p->accent[1], p->accent[2], a);
-        }
-    }
+    flip_ui_radial_glow(g, gcx, gcy, rg, p->accent, 26);
+
+    // 沙池底光：跟随重力落在沙粒堆积的一侧（画在粒子之前 ⇒ 沙粒像浸在一团暖光里）
+    int32_t pool_y = u->fluid_y + (sand_at_bottom ? (u->fluid_h * 74 / 100)
+                                                   : (u->fluid_h * 26 / 100));
+    int32_t pr = (u->fluid_w < u->fluid_h ? u->fluid_w : u->fluid_h) / 4;
+    flip_ui_radial_glow(g, gcx, pool_y, pr, p->accent, 18);
 }
 
+// 沙漏实体：竖向 6 段环境光渐变（上亮下暗），内沿为 1.8px 玻璃辉光 + 1px 亮边（加色）。
 static void flip_ui_draw_walls(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palette *p) {
+    static const uint8_t k_wall_hi[3]  = {32, 41, 56};
+    static const uint8_t k_wall_lo[3]  = {19, 25, 37};
+    static const uint8_t k_rim[3]      = {104, 132, 170};
+    static const uint8_t k_rim_glow[3] = {34, 46, 66};
+    const int32_t BANDS = 6;
+
     int32_t fx = u->fluid_x;
     int32_t fy = u->fluid_y;
     int32_t fw = u->fluid_w;
@@ -1718,33 +1775,90 @@ static void flip_ui_draw_walls(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Pale
     int32_t iy1 = (int32_t)lroundf(yn1);
     int32_t ix2 = (int32_t)lroundf(xr);
 
-    // 左右沙漏实体（各由两个三角形拼成四边形）
-    gfx_draw_triangle(g, fx, fy, ix, iy0, ix, iy1, 1, p->panel[0], p->panel[1], p->panel[2], 1);
-    gfx_draw_triangle(g, fx, fy, ix, iy1, fx, fye, 1, p->panel[0], p->panel[1], p->panel[2], 1);
-    gfx_draw_triangle(g, fxe, fy, ix2, iy0, ix2, iy1, 1, p->panel[0], p->panel[1], p->panel[2], 1);
-    gfx_draw_triangle(g, fxe, fy, ix2, iy1, fxe, fye, 1, p->panel[0], p->panel[1], p->panel[2], 1);
+    // 沙漏实体的内缘 x 随 y 变化：上半段沿斜边、颈部竖直、下半段沿斜边。
+    // 用 6 条水平带拼出竖向渐变（每带一个梯形 = 两个三角形），避免上下两色的接缝。
+    #define FLIP_WALL_EDGE(y, is_right) \
+        ((y) <= yn0 ? ((is_right) ? (float)fxe + ((float)(y) - (float)fy) / (yn0 - (float)fy) * (xr - (float)fxe) \
+                                  : (float)fx  + ((float)(y) - (float)fy) / (yn0 - (float)fy) * (xl - (float)fx)) \
+        : ((y) <= yn1 ? ((is_right) ? xr : xl) \
+                      : ((is_right) ? xr + ((float)(y) - yn1) / ((float)fye - yn1) * ((float)fxe - xr) \
+                                    : xl + ((float)(y) - yn1) / ((float)fye - yn1) * ((float)fx - xl))))
+    for (int32_t b = 0; b < BANDS; b++) {
+        int32_t y0 = fy + fh * b / BANDS;
+        int32_t y1 = fy + fh * (b + 1) / BANDS;
+        float t = ((float)b + 0.5f) / (float)BANDS;
+        uint8_t cr = (uint8_t)lroundf((float)k_wall_hi[0] + ((float)k_wall_lo[0] - (float)k_wall_hi[0]) * t);
+        uint8_t cg = (uint8_t)lroundf((float)k_wall_hi[1] + ((float)k_wall_lo[1] - (float)k_wall_hi[1]) * t);
+        uint8_t cb = (uint8_t)lroundf((float)k_wall_hi[2] + ((float)k_wall_lo[2] - (float)k_wall_hi[2]) * t);
+        int32_t lx0 = (int32_t)lroundf(FLIP_WALL_EDGE(y0, 0));
+        int32_t lx1 = (int32_t)lroundf(FLIP_WALL_EDGE(y1, 0));
+        int32_t rx0 = (int32_t)lroundf(FLIP_WALL_EDGE(y0, 1));
+        int32_t rx1 = (int32_t)lroundf(FLIP_WALL_EDGE(y1, 1));
+        gfx_draw_triangle(g, fx, y0, lx0, y0, lx1, y1, 1, cr, cg, cb, 1);
+        gfx_draw_triangle(g, fx, y0, lx1, y1, fx, y1, 1, cr, cg, cb, 1);
+        gfx_draw_triangle(g, fxe, y0, rx0, y0, rx1, y1, 1, cr, cg, cb, 1);
+        gfx_draw_triangle(g, fxe, y0, rx1, y1, fxe, y1, 1, cr, cg, cb, 1);
+    }
+    #undef FLIP_WALL_EDGE
 
-    // 内沿高光：沙漏壁的斜边 + 颈口竖边
-    gfx_draw_line_anti_aliasing(g, (float)fx, (float)fy, xl, yn0, 1.0f,
-                               p->wall_edge[0], p->wall_edge[1], p->wall_edge[2], 1);
-    gfx_draw_line_anti_aliasing(g, xl, yn0, xl, yn1, 1.0f,
-                               p->wall_edge[0], p->wall_edge[1], p->wall_edge[2], 1);
-    gfx_draw_line_anti_aliasing(g, xl, yn1, (float)fx, (float)fye, 1.0f,
-                               p->wall_edge[0], p->wall_edge[1], p->wall_edge[2], 1);
-    gfx_draw_line_anti_aliasing(g, (float)fxe, (float)fy, xr, yn0, 1.0f,
-                               p->wall_edge[0], p->wall_edge[1], p->wall_edge[2], 1);
-    gfx_draw_line_anti_aliasing(g, xr, yn0, xr, yn1, 1.0f,
-                               p->wall_edge[0], p->wall_edge[1], p->wall_edge[2], 1);
-    gfx_draw_line_anti_aliasing(g, xr, yn1, (float)fxe, (float)fye, 1.0f,
-                               p->wall_edge[0], p->wall_edge[1], p->wall_edge[2], 1);
+    // 玻璃内沿：1.8px 低亮度辉光 + 1px 亮边（AA 线为加色语义，天然像自发光玻璃）
+    #define FLIP_RIM(x1, y1, x2, y2) do { \
+        gfx_draw_line_anti_aliasing(g, (x1), (y1), (x2), (y2), 1.8f, \
+            k_rim_glow[0], k_rim_glow[1], k_rim_glow[2], 1); \
+        gfx_draw_line_anti_aliasing(g, (x1), (y1), (x2), (y2), 1.0f, \
+            k_rim[0], k_rim[1], k_rim[2], 1); \
+    } while (0)
+    FLIP_RIM((float)fx, (float)fy, xl, yn0);
+    FLIP_RIM(xl, yn0, xl, yn1);
+    FLIP_RIM(xl, yn1, (float)fx, (float)fye);
+    FLIP_RIM((float)fxe, (float)fy, xr, yn0);
+    FLIP_RIM(xr, yn0, xr, yn1);
+    FLIP_RIM(xr, yn1, (float)fxe, (float)fye);
+    #undef FLIP_RIM
 
-    // 瓶口一线微光（提示这里是通道）
+    // 颈口一线微光（提示这里是通道）
     gfx_draw_rectangle(g, ix, iy1, (uint32_t)(ix2 - ix), 1,
                        p->accent_dim[0], p->accent_dim[1], p->accent_dim[2], 110);
 
-    // 上下容器边界（1px，遮住粒子方块越界溢出的 1 像素）
-    gfx_draw_rectangle(g, fx, fy, (uint32_t)fw, 1, p->panel[0], p->panel[1], p->panel[2], 1);
-    gfx_draw_rectangle(g, fx, fye - 1, (uint32_t)fw, 1, p->panel[0], p->panel[1], p->panel[2], 1);
+    // 压板内侧：顶部亮边 + 阴影（遮住粒子越界溢出的 1 像素）；底部阴影 + 暗边
+    gfx_draw_rectangle(g, fx, fy, (uint32_t)fw, 1,
+                       k_stage_plate_hi[0], k_stage_plate_hi[1], k_stage_plate_hi[2], 1);
+    gfx_draw_rectangle(g, fx, fy + 1, (uint32_t)fw, 1, 0, 0, 0, 90);
+    gfx_draw_rectangle(g, fx, fye - 2, (uint32_t)fw, 1, 0, 0, 0, 90);
+    gfx_draw_rectangle(g, fx, fye - 1, (uint32_t)fw, 1,
+                       k_stage_plate_lo[0], k_stage_plate_lo[1], k_stage_plate_lo[2], 1);
+}
+
+// 前玻璃：斜向反光 + 上下内阴影，把粒子与沙漏实体统一到同一块玻璃后面。
+// 注：gfx_draw_triangle 的 mode>=4 在扫描线路径里按“加色”处理，故这里用低加色值
+// 叠 3 层形成柔和的斜向高光；矩形则走逐像素 alpha，用于压暗的内阴影。
+static void flip_ui_draw_glass(Nano_GFX *g, const Flip_Ui *u) {
+    int32_t fx = u->fluid_x;
+    int32_t fy = u->fluid_y;
+    int32_t fw = u->fluid_w;
+    int32_t fh = u->fluid_h;
+    int32_t fye = fy + fh;
+
+    // 斜向反光：三层由宽到窄、由暗到亮（低加色，避免压过粒子）
+    gfx_draw_triangle(g, fx + fw * 4 / 100, fy, fx + fw * 40 / 100, fy,
+                      fx + fw * 60 / 100, fye, 1, 2, 3, 4, 3);
+    gfx_draw_triangle(g, fx + fw * 4 / 100, fy, fx + fw * 60 / 100, fye,
+                      fx + fw * 26 / 100, fye, 1, 2, 3, 4, 3);
+    gfx_draw_triangle(g, fx + fw * 19 / 100, fy, fx + fw * 30 / 100, fy,
+                      fx + fw * 51 / 100, fye, 1, 3, 3, 5, 3);
+    gfx_draw_triangle(g, fx + fw * 19 / 100, fy, fx + fw * 51 / 100, fye,
+                      fx + fw * 40 / 100, fye, 1, 3, 3, 5, 3);
+    gfx_draw_triangle(g, fx + fw * 24 / 100, fy, fx + fw * 27 / 100, fy,
+                      fx + fw * 48 / 100, fye, 1, 3, 4, 6, 3);
+    gfx_draw_triangle(g, fx + fw * 24 / 100, fy, fx + fw * 48 / 100, fye,
+                      fx + fw * 45 / 100, fye, 1, 3, 4, 6, 3);
+
+    // 上下内阴影（逐像素 alpha）：玻璃凹陷的深度
+    for (int32_t i = 1; i <= 4; i++) {
+        uint8_t a = (uint8_t)(28 - (i - 1) * 7);
+        gfx_draw_rectangle(g, fx, fy + i, (uint32_t)fw, 1, 0, 0, 0, a);
+        gfx_draw_rectangle(g, fx, fye - 1 - i, (uint32_t)fw, 1, 0, 0, 0, a);
+    }
 }
 
 // ---- 左右仪表 --------------------------------------------------------------
@@ -2052,7 +2166,8 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
 
     // ---- 背景 + 舞台外框（用上一帧的运行态决定描边色，避免多算一次流体）----
     flip_ui_bg(global_state->gfx, &pal);
-    flip_ui_draw_stage_frame(global_state->gfx, &u, &pal, !s_ui_fanqie_is_running);
+    flip_ui_draw_stage_frame(global_state->gfx, &u, &pal, !s_ui_fanqie_is_running,
+                             gravity_y <= 0);
 
     // ---- 流体：只画进舞台视口（视口与屏幕同宽高比 ⇒ 物理参数 k / 网格不变）----
     flip_set_color_style(s_ui_flip_color_style);   // 纯渲染配色（不影响物理）
@@ -2072,6 +2187,8 @@ void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state) 
 
     // 沙漏实体盖在粒子之上（旧版同款顺序：粒子在壁面下方不会溢出可见空腔）
     flip_ui_draw_walls(global_state->gfx, &u, &pal);
+    // 前玻璃：斜向反光 + 上下内阴影，让粒子与实体看起来在同一块玻璃后面
+    flip_ui_draw_glass(global_state->gfx, &u);
 
     // ---- 沙漏重置判定（逻辑与旧版一致）----
     if ((lower_count < 1 && gravity_y < 0) || (upper_count < 1 && gravity_y > 0)) {
