@@ -9313,3 +9313,122 @@ angleX/angleY 全程不变（-25 / -200.5）—— 相机没动
 - 再点恢复后重新入队、`nextTime` 继续推进；
 - 暂停态拖动进度条到 2:54/4:24：`nodes=0`、`nextTime=0`，恢复后从新位置继续；
 - 重建 `webgui/nano_gui.wasm`（5,555,438 字节）并由 9002 端口正常服务。
+
+------------------------------------
+
+# 2026-11-12（灵机应用程序：音乐盒 App + `(native Music)` 播放引擎）
+
+把 C 版音乐盒（`infer/ui_musicbox.c`）的功能用**灵机（Scheme）App** 重做一遍，只针对
+**WASM-GUI 目标**（`infer/build_wasm_gui.sh` → `infer/webgui/`，**不是** `infer/web/`
+那条 LLM-only 的 wasi-sdk 路线）。约束：**不改动任何既有实现**，能力缺口以**新增本地库**
+补齐；对既有文件的改动只有"新增一行"级别的接线。
+
+## 交付物
+
+| 文件 | 性质 | 说明 |
+|---|---|---|
+| `infer/am_native_Music.h` | **新增** | `(native Music)` 设计说明与接口声明（16 个过程） |
+| `infer/am_native_Music.c` | **新增** | 播放引擎：文件枚举 + WAV/MP3 解码 + 随机定位 + 扬声器喂入 |
+| `infer/app/musicbox.scm` | **新增** | 音乐盒 App（913 行）：列表页 + 播放页 + 触屏/键盘交互 |
+| `infer/ui_scheme_app.c` | +4 行 | 注册 `am_native_Music_lib`（`#include` + 一行 `am_runtime_register_native_lib`） |
+| `infer/build_wasm_gui.sh` / `Makefile` / `mp135.mk` / `luckfox.mk` | 各 +1 行 | 源文件清单补 `am_native_Music.c`（缺则在链接阶段报未定义符号） |
+| `infer/webgui/index.html` | +6 行 | 新增 `nanoRequestMusicTier()`（供 C 侧按需请求 p4 音频层）+ 状态栏文案改为通用 |
+
+未改动：`ui_musicbox.c` / `ui_musicbox_mp3.c` / `hal_audio_out_wasm.c` / `hal_fs*` /
+`ui_scheme_app.c` 的其余逻辑。ESP32 的 PlatformIO `build_src_filter` 用 `+<*>` 收编
+所有 `am_native_*.c`，故新库自动进入 ESP32 构建（`minimp3_set_scratch` 的实现单元
+`ui_musicbox_mp3.c` 本来就在其中）。
+
+## `(native Music)` 设计（为什么是"引擎下沉、界面在 Scheme"）
+
+- **PCM 绝不跨 FFI 边界**：一块 4096 采样的 int16 若以列表进解释器堆，每秒十块就是
+  四万个堆对象——内存与 GC 都撑不住。解码、混单声道、乒乓双缓冲、背压喂入全部在 C 侧
+  （范式与 `ui_musicbox.c` 的播放器段落同构，但**独立实现**、不改既有模块），Scheme 只拿到
+  进度/时长/状态这类标量。
+- **不装定时器、不自动切曲、不画像素**：喂数据由 App 每拍调 `(Music.pump)`
+  （与 `(native Touch)/(native Key)` 的"App 自己的轮询点"哲学一致）；EOF 由 `pump` 返回 1
+  报告，下一首是谁由 App 决定；界面 100% 在 Scheme 侧。
+- **接口（全部值型，单值栈纪律 N1/N6）**：
+  `list / open / close / pump / play / pause / toggle / is_playing / seek / progress /
+  elapsed_ms / duration_ms / info / format / volume / set_volume`。
+  `pump` 返回 `0` 正常 / `1` EOF / `2` 未播放 / `-1` 错误。
+- **静音走带（无音频设备降级）**：`audio_out_init` 失败时（打桩平台、node 回归台、
+  无 Web Audio 的浏览器）引擎照常解码、按**解释器时钟**（`am_runtime_now_ms`，与
+  `(System.timestamp)` 同一时基）推进进度、丢弃 PCM。于是进度条/时长/切曲/EOF 这些逻辑
+  在没有声卡的环境里也能被完整验证——桌面回归台正是这么跑的（并因此可复现）。
+- **时钟来源刻意用解释器时钟**而非平台墙钟：回归台可注入虚拟时钟；ESP32/桌面/浏览器
+  三处都由各自宿主的 vtable 提供，本库因此不依赖 `hal_os`。
+- **ID3v2 处理（优于 C 版）**：`mp3_skip_id3` 解析 `ID3` + synchsafe 长度并直接 seek 到
+  第一个音频帧。两个收益：① 264KB 级别的封面标签不再被计入 `mp3_consumed`（否则进度条
+  一开始就跳到 tag/文件大小 的位置）；② C 版"64×16KB 扫描上限导致 >1MB 标签打不开"的
+  限制随之消失。**seek 的比例按"音频区"（跳过标签后的字节区间）换算**——否则小比例会
+  落进标签内，解码器要一路扫过剩余标签才找到帧头，进度条凭空跳一大截（本次实测复现：
+  8‰ 的 seek 落进 264KB 标签，恢复后进度直接变成 25‰）。
+- **音量域 0~128**（同 C 版的 `MUSICBOX_VOLUME_MAX`：音乐动态范围大，255 的增益易削顶）：
+  首次打开取**主音量**（clamp 到 128）作初值，之后由 App 经 `set_volume` 调节、不回写主音量。
+- **共享资源注意（已写进头文件）**：`hal_fs` 的随机访问 API 是全局单句柄，本库从 `open`
+  到 `close` 一直持有；minimp3 的外部 scratch 也是进程级单例，每次 `open` 重新注入。
+
+## `app/musicbox.scm`（界面与交互）
+
+- **列表页**：`music/` 下 `.wav/.mp3`（库侧按名字升序枚举）；序号 + 文件名（超宽省略号
+  截断）、选中行底色、正在播放曲目右侧强调色圆点、内容多于可见行时的右侧滚动条；
+  竖向拖动手势逐行滚动（位移 >20px 判为拖动，松手不选曲）。
+- **播放页**：左上「返回」（回列表**不停止播放**，与 C 版"返回即停"不同——列表里用圆点
+  标出正在播放的曲目）；信息卡片（序号 x/N、状态 播放中/已暂停/无法播放、文件名、
+  `MP3 · 44.1 kHz · 320 kbps · 立体声` 格式行）；进度面板（已播/总时长、轨道、强调色
+  填充、抗锯齿拇指）；圆形 上一首 / 播放·暂停 / 下一首（矢量图标，不依赖字库 ▶/⏸ 码点）；
+  底部音量排（− / 百分比+音量条 / +，按住 350ms 后 120ms 连发）。
+- **触屏范式**：DOWN 锁存/高亮、UP 结算且按下点与松开点须命中同一控件（拖出取消）；
+  进度条拖动期间只更新**预览**，松手沿才 `(Music.seek)`（随机定位）。
+- **节拍与重绘**：33ms 一拍（≈30Hz 输入采样，避免慢拍丢点按）；画面**不必**每拍重绘——
+  交互（dirty）立即重绘、播放中每 3 拍（≈100ms）刷一次进度。列表页静态时完全不重绘
+  （状态栏 FPS 因此显示很低，属预期：只在有变化时画）。
+- **诊断行**（端到端判据）：`[musicbox] page=… cur=…/N playing=… fail=… prog=‰ el=… dur=… vol=…`
+  ≈1s 一条；`open/switch/toggle/seek/resume/bye` 各一行。
+- **退出**：`(import EX "app/lib/exit.scm")`——硬 A/ESC 与右上角「退出」走全局确认框；
+  `(EX.on_exit)` 里 `(Music.close)` 停音频并清定时器。
+- **切后台 / 恢复**：`(App.resumed)` 时 `reopen_after_resume` 主动"关掉+就地重建"音频会话，
+  并按上次进度 seek 回去、保留原播放/暂停状态。原因：冻结期间宿主不再泵本 App，但音频设备
+  仍被占着，而别的 App（比如 C 版音乐盒）可能已经 `audio_out_close/init` 过一轮——不重建
+  就会以对方的采样率播。该函数在 `(EX.check)` **之前**消费 `(App.resumed)`（EX 只把它当
+  "要不要重绘"的提示，我们置 dirty 顶上）。
+- **资源按需挂载（WASM）**：`music/` 约 90MB，属 manifest 的 p4 层。`(Music.list)` 在目录
+  为空时经 `EM_JS` 调页面 `nanoRequestMusicTier()`（未提供时安全空操作）；App 每 500ms 重试
+  列目录，期间显示"正在加载音乐资源…首次进入需下载，请稍候"。页面侧复用既有
+  `nanoEnsureMusic` 的 `musicMountState` 单次保护，不会重复下载。
+
+## 验证
+
+- **桌面无头回归台**（`tools/e2e/host`，新增 `hal_audio_stub.c` 让引擎进入静音走带）：
+  真 `graphics.c` + 真解释器 + 虚拟时钟，用 `HAL_TOUCH_AT`/`HAL_KEY_AT` 脚本化操作，
+  逐项核对诊断行与 PPM 截图：选曲播放（MP3 44.1k/320kbps、WAV 精确时长）、暂停/恢复、
+  进度条拖动 seek（50% → prog=500‰、el 恰为总时长一半）、上/下一首、EOF 自动下一首、
+  坏文件（`open=#f` → 错误页 → 下一首自动跳过）、音量加减（含按住连发 64→96）、
+  列表拖动滚动、键盘上下/回车/←→/4/6、返回列表后继续播放。
+- **浏览器端到端**（新增 `tools/e2e/browser/regress_musicbox.js`，Playwright + 真 wasm +
+  真 Web Audio）：**29/29 PASS**——p4 音频层按需挂载（7 个文件进 MEMFS）→ App 轮询看到曲目
+  → 键盘选曲 → `AudioContext` running 且 `nextTime` 2s 内前进 2.04s → 触屏暂停（`nodes=0`、
+  暂停期间进度不动）→ 恢复 → 进度条拖动定位（26→730‰）→ 下一首/音量 ±→ 返回列表继续播放
+  → 「后台」冻结实例（无 bye、回列表）→ 再次选中即 resume（诊断行 + 音频会话重建 + 位置
+  保留）→ 退出确认 → 回应用列表且音频图清空，无 pageerror。
+- **回归**：宿主回归台 39 个 App 全部 `frames=N/N err=none`（含新增 `musicbox`）；
+  C 版音乐盒/频谱仪/寻呼机的 `regress_audio.js` **30/30 PASS**（`index.html` 改动未破坏
+  既有音频链路）；`am_native_Music.c` 在 `NANO_TTY/WEB/CLI/POD_RPI5/POD_LITE_RPI5/
+  POCKETTERM35` 六套平台宏下 `gcc -fsyntax-only -Wall -Wextra` 零告警；WASM 构建
+  （`build_wasm_gui.sh`）仅既有旧代码告警。
+
+## 踩到的坑（值得记）
+
+1. **多元算术静默算错**（`(+ a b c)` 只发射一条指令，首参残留操作数栈）——本 App 第一版
+   `(- SH LIST_Y 2)` 让 `LIST_ROWS` 变成 1，表现是"列表只显示一行、点按全部落空"。
+   `infer/tools/check_scm_arity.py` 能直接抓出来（9 处），写完必须跑一遍。
+2. **布尔/数值标志混用**：`(set! playing (Music.is_playing))` 存的是 `#t/#f`，再用
+   `(== playing 1)` 判断恒假（暂停图标永远不切换）。统一为布尔 + `(if flag …)`。
+3. **`page.evaluate` 里不能用 `window.nanoAudio`**：`index.html` 的 `nanoAudio` 是脚本级
+   `const`（词法绑定，不是 window 属性），必须用裸标识符 + `typeof` 守卫，否则读到 undefined
+   （表现为"音频断言全红而实际有声"）。
+4. **诊断行 1s 一条 → 断言会抖**：基于诊断行的 e2e 断言必须"轮询到条件成立"，不能 tap 完
+   立刻读（曾误报"下一首没切"）。
+5. **MP3 的 seek/进度必须以音频区（跳过 ID3v2）为基准**，否则标签越大跳得越离谱（见上）。
+6. **`(mod x n)` 恒浮点、`/` 恒浮点**：索引处用 `Math.floor` 归一，避免浮点索引一路传下去。

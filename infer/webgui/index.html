@@ -1816,7 +1816,7 @@ async function nanoEnsureMusic() {
       if (dn > 0) nanoAudio.msg = `音乐资源 ${dc}/${dn}（${(cur / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)}MB）`;
     }, true);
     musicMountState = 2;
-    nanoAudio.msg = (n > 0) ? "音乐已就绪：按 A 返回后再按 5 进入" : "";
+    nanoAudio.msg = (n > 0) ? "音乐资源已就绪" : "";
   } catch (e) {
     musicMountState = 2;
     nanoAudio.msg = "音乐资源挂载失败：" + ((e && e.message) || e);
@@ -1829,6 +1829,12 @@ setInterval(() => {
   try { st = Module._wasm_gui_get_state(); } catch (e) { return; }
   if (st === STATE_MUSICBOX_MENU) nanoEnsureMusic();
 }, 500);
+
+// 灵机版音乐盒（app/musicbox.scm）走的是 STATE_SCHEME_APP_RUN(80)，页面无从得知
+// "当前跑的是哪个 App"。因此改由 C 侧决定何时需要音频资源：(native Music) 的
+// (Music.list) 发现 music/ 为空时经 EM_JS 调本函数（见 infer/am_native_Music.c）。
+// 复用 nanoEnsureMusic 的 musicMountState 单次保护：C 侧每几百毫秒重试也不会重复下载。
+function nanoRequestMusicTier() { nanoEnsureMusic(); }
 </script>
 <!-- 本地存储层（IndexedDB；先于 loader.js） -->
 <script src="store.js"></script>

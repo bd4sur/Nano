@@ -28,6 +28,7 @@
 #include "am_native_App.h"
 #include "am_native_Chat.h"   // 鹦鹉笼端侧 LLM 推理引擎（(native Chat)）
 #include "am_native_Raster.h" // 水池软光栅后端（(native Raster)，见 app/waterpool_raster.scm）
+#include "am_native_Music.h"  // 音乐播放引擎（(native Music)，见 app/musicbox.scm）
 
 // ===============================================================================
 // 运行时参数
@@ -619,6 +620,9 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     // Raster：水池的 3D 软光栅**后端**（薄 C / 重 Scheme 版，见 app/waterpool_raster.scm）。
     // 只持帧缓冲/z-buffer/波场/焦散纹理/已上传网格；相机、几何、物理、交互、HUD 在 Scheme。
     am_runtime_register_native_lib(s_app->rt, &am_native_Raster_lib);
+    // Music：音乐播放引擎（文件枚举 + WAV/MP3 解码 + 随机定位 + 扬声器喂入，见 am_native_Music.h）。
+    // 解码与 PCM 全在 C 侧，Scheme 只拿进度/时长/状态；无音频设备时自动转"静音走带"。
+    am_runtime_register_native_lib(s_app->rt, &am_native_Music_lib);
 
     // 清屏后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）
     gfx_soft_clear(global_state->gfx);
