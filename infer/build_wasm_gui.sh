@@ -129,7 +129,29 @@ EOF
 ANIMAC_DIR=vendor/Animac
 ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
 
-"$EMCC" -O3 -ffast-math -DNANO_WASM_GUI \
+# ---------------------------------------------------------------------------
+# 代码生成选项（性能专项 A1）
+#   -O3 -ffast-math        既有（-ffast-math 含 -fno-math-errno / -freciprocal-math 等）
+#   -mnontrapping-fptoint  float→int 用 i32.trunc_sat（单条指令）代替 trapping 转换 +
+#                          越界分支：本工程逐像素内核有大量 (int)floorf（噪声三线性采样、
+#                          上采样、调色映射），默认模式下 LLVM 要为每次转换生成饱和检查。
+#   -mbulk-memory          memcpy/memset → memory.copy / memory.fill（帧缓冲整行拷贝、
+#                          清屏、上采样都靠它）。需 2020+ 浏览器。
+#   -msimd128              开 SIMD128 自动向量化。**实测默认关**：玲珑仪的三条热点路径
+#                          （大气积分、云 ray-march、海面 march/着色）都是分支密集 + 逐像素
+#                          标量，LLVM 无法自动向量化；A/B 实测开/关差异在噪声内
+#                          （m0+海洋 38.44 vs 38.67 fps、体积云 10.19 vs 10.13 fps），
+#                          而产物大 100KB 且要求 2021+ 浏览器。手写 SIMD 内核时再打开。
+#   -flto                  全程序优化（跨翻译单元内联，如 ui_cloud ↔ celestial ↔ graphics）
+# 可用环境变量覆盖做基准：WASM_SIMD=1 WASM_LTO=0 ./build_wasm_gui.sh
+# ---------------------------------------------------------------------------
+WASM_SIMD=${WASM_SIMD:-0}
+WASM_LTO=${WASM_LTO:-1}
+WASM_OPT="-O3 -ffast-math -mnontrapping-fptoint -mbulk-memory"
+if [ "$WASM_SIMD" = "1" ]; then WASM_OPT="$WASM_OPT -msimd128"; fi
+if [ "$WASM_LTO" = "1" ]; then WASM_OPT="$WASM_OPT -flto"; fi
+
+"$EMCC" $WASM_OPT -DNANO_WASM_GUI \
     -I. -I$ANIMAC_DIR \
     $ANIMAC_SRCS \
     main_wasm_gui.c \

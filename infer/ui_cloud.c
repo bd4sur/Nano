@@ -51,7 +51,7 @@ static inline Cv3 v3cross(Cv3 a, Cv3 b) {
 }
 static inline float v3len(Cv3 a) { return sqrtf(v3dot(a, a)); }
 static inline Cv3 v3norm(Cv3 a) { float l = v3len(a); return (l > 1e-12f) ? v3div(a, l) : v3(0, 1, 0); }
-static inline Cv3 v3exp(Cv3 a) { return v3(expf(a.x), expf(a.y), expf(a.z)); }
+static inline Cv3 v3exp(Cv3 a);              // 快速 exp3（定义见下方 A5 段）
 static inline Cv3 v3clamp(Cv3 a, float lo, float hi) {
     return v3(fminf(hi, fmaxf(lo, a.x)), fminf(hi, fmaxf(lo, a.y)), fminf(hi, fmaxf(lo, a.z)));
 }
@@ -82,6 +82,107 @@ static inline float remapf(float value, float oMin, float oMax, float nMin, floa
 static inline float smoothstepf(float e0, float e1, float x) {
     float t = saturatef((x - e0) / (e1 - e0));
     return t * t * (3.0f - 2.0f * t);
+}
+
+// ---------------------------------------------------------------------------
+// 快速超越函数（性能专项 A5）
+//
+// 本内核每像素要调上百次 expf（大气积分每样本 5 次）与 3 次 powf（sRGB 伽马）。
+// 库函数 expf 走 fdlibm 的通用路径（含范围归约与异常分支），在 WASM/ARM 上是
+// 逐像素路径里最大的单类开销。这里换成「拆阶码 + 6 次多项式」：
+//   · 整数部分由位拼接精确给出（无查表、无缓存行开销）；
+//   · 多项式只在 |f| ≤ 0.5 上作用，相对误差 < 1e-7（远小于 8bit 量化步长）；
+//   · 越界先钳，避免 (int) 转换溢出与阶码回绕（celestial_ocean.c 的
+//     wo_fast_exp2 曾因 n+127<0 时按无符号回绕产生 -1e300，这里同样处理）。
+// 所有调用点的实参都是非正数（光学厚度取负），下溢一律返回 0。
+// ---------------------------------------------------------------------------
+static inline float cloud_fast_exp2(float x) {
+    if (x < -160.0f) return 0.0f;          // 2^-160 对 8bit 输出恒为 0
+    if (x > 160.0f) return 1e30f;          // 上游有 fmaxf 保护，不返回 inf 以免 inf-inf 产 NaN
+    float t = floorf(x + 0.5f);            // 最近整数（多项式区间取 [-0.5, 0.5]）
+    float f = x - t;
+    float p = 0.00015465314751714857f;
+    p = p * f + 0.0013395282274223199f;
+    p = p * f + 0.0096180399388676365f;
+    p = p * f + 0.05550340675121699f;
+    p = p * f + 0.24022651101359899f;
+    p = p * f + 0.69314720006502339f;
+    p = p * f + 0.99999999997183853f;      // 2^f
+    int n = (int)t;
+    if (n < -126) return 0.0f;             // 低于 float 正规数下界：等价 0
+    if (n > 127) return 1e30f;
+    union { float f; uint32_t u; } v;
+    v.u = (uint32_t)(n + 127) << 23;
+    return p * v.f;
+}
+static inline float cloud_fast_exp(float x) {
+    return cloud_fast_exp2(x * 1.4426950408889634f);
+}
+
+// 三通道 exp（原 v3exp）：三通道各自一次快速 exp，与库版逐通道等价
+static inline Cv3 v3exp(Cv3 a) {
+    return v3(cloud_fast_exp(a.x), cloud_fast_exp(a.y), cloud_fast_exp(a.z));
+}
+
+// ---------------------------------------------------------------------------
+// sRGB 伽马查表（性能专项 A5）
+// cloud_tonemap 每像素调 3 次 powf(x, 1/2.2)（天空遍 + 云遍共 2 次 → 每屏幕像素
+// 6 次 powf）。powf 是 fdlibm 里最贵的函数之一；改为 8192 项表 + 线性插值：
+//   表值 = x^(1/2.2)，区间宽 1/8192，插值误差 < 2e-5（< 0.005/255），
+//   远小于 8bit 量化步长，与 powf 的观感无可辨差异。表只建一次（32KB）。
+// ---------------------------------------------------------------------------
+#define CLOUD_GAMMA_LUT_N (8192)
+static float s_gammaLut[CLOUD_GAMMA_LUT_N + 1];
+static int s_gammaLutReady = 0;
+
+static void cloud_gamma_lut_ensure(void) {
+    if (s_gammaLutReady) return;
+    for (int i = 0; i <= CLOUD_GAMMA_LUT_N; i++) {
+        s_gammaLut[i] = powf((float)i / (float)CLOUD_GAMMA_LUT_N, 1.0f / 2.2f);
+    }
+    s_gammaLutReady = 1;
+}
+
+static inline float cloud_gamma(float x) {
+    if (!(x > 0.0f)) return 0.0f;
+    float f = x * (float)CLOUD_GAMMA_LUT_N;
+    int i = (int)f;
+    if (i >= CLOUD_GAMMA_LUT_N) return 1.0f;
+    float t = f - (float)i;
+    return s_gammaLut[i] + (s_gammaLut[i + 1] - s_gammaLut[i]) * t;
+}
+
+// ---------------------------------------------------------------------------
+// 鱼眼屏幕射线用 sin/cos 查表（性能专项 A5）
+// cloud_core_render 的鱼眼分支原本逐像素调 atan2f + 2×cosf + 2×sinf（每次 5 个
+// 超越函数，天空遍与云遍各一遍）。ph 的 cos/sin 可直接由 (fx, fy)/r 得出（恒等式，
+// 零误差）；th = (r/fishRmax)*fishFovRad 的 cos/sin 则查表——th∈[0, π] 上 2048 项
+// 线性插值误差 ~3e-7，远小于 1/255。
+// ---------------------------------------------------------------------------
+#define CLOUD_SINCOS_N (2048)
+#define CLOUD_SINCOS_MAX (3.2f)          // ≥ 170° 鱼眼半视场角上限
+static float s_sinTab[CLOUD_SINCOS_N + 2];
+static float s_cosTab[CLOUD_SINCOS_N + 2];
+static int s_sinTabReady = 0;
+
+static void cloud_sincos_tab_ensure(void) {
+    if (s_sinTabReady) return;
+    for (int i = 0; i <= CLOUD_SINCOS_N + 1; i++) {
+        float a = (float)i * (CLOUD_SINCOS_MAX / (float)CLOUD_SINCOS_N);
+        s_sinTab[i] = sinf(a);
+        s_cosTab[i] = cosf(a);
+    }
+    s_sinTabReady = 1;
+}
+
+static inline void cloud_sincos(float a, float *sn, float *cs) {
+    float f = a * ((float)CLOUD_SINCOS_N / CLOUD_SINCOS_MAX);
+    if (!(f >= 0.0f)) f = 0.0f;
+    int i = (int)f;
+    if (i > CLOUD_SINCOS_N) i = CLOUD_SINCOS_N;
+    float t = f - (float)i;
+    *sn = s_sinTab[i] + (s_sinTab[i + 1] - s_sinTab[i]) * t;
+    *cs = s_cosTab[i] + (s_cosTab[i + 1] - s_cosTab[i]) * t;
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +478,9 @@ static inline Cv3 sampleWrap2D3(const float *tex, int dim, Cv2 uv) {
 static void cloud_mip3d_build_all(void);   // 前置声明
 
 static void cloud_generate_noise_textures(void) {
+    // 快速查表（sRGB 伽马 / 鱼眼 sin-cos）先建（幂等，只真正执行一次）
+    cloud_gamma_lut_ensure();
+    cloud_sincos_tab_ensure();
     if (s_basicNoise) return;
     s_basicNoise  = (float *)malloc(sizeof(float) * BASIC_DIM * BASIC_DIM * BASIC_DIM);
     s_detailNoise = (float *)malloc(sizeof(float) * DETAIL_DIM * DETAIL_DIM * DETAIL_DIM);
@@ -644,8 +748,8 @@ static inline float cloudAltitude(Cv3 worldPos, const CloudScene *s) {
 
 static CloudMedium sampleMediumRGB(Cv3 worldPos, const CloudScene *s) {
     const float viewHeight = cloudAltitude(worldPos, s);
-    const float densityMie = expf(s->mieDensityExpScale * viewHeight);
-    const float densityRay = expf(s->rayleighDensityExpScale * viewHeight);
+    const float densityMie = cloud_fast_exp(s->mieDensityExpScale * viewHeight);
+    const float densityRay = cloud_fast_exp(s->rayleighDensityExpScale * viewHeight);
     const float densityOzo = saturatef(viewHeight < s->absorptionDensity0LayerWidth ?
         s->absorptionDensity0LinearTerm * viewHeight + s->absorptionDensity0ConstantTerm :
         s->absorptionDensity1LinearTerm * viewHeight + s->absorptionDensity1ConstantTerm);
@@ -1537,6 +1641,10 @@ static CloudShadow volumetricShadow(Cv3 posKm, Cv3 sunDirection, float appTime, 
     float extinctionAcc1 = 0.0f;
     float prevT = 0.0f;
     for (float shadowT = invShadowStepCount; shadowT <= 1.00001f; shadowT += invShadowStepCount) {
+        // 饱和早退（性能专项 A3）：两条累积都饱和后 T0/T1 逐位为 0（乘法累积），
+        // 继续 march 纯属白算（云芯内部常见）。acc1 = acc0×msExt < acc0，
+        // 故以 acc1 为判据：acc1×1000 > 13.8 ⇒ T1 = exp(-13.8) < 1e-6（远低于 1/255）。
+        if (extinctionAcc1 * 1000.0f > 13.8f) break;
         float curT = shadowT * shadowT;
         float deltaT = curT - prevT;
         float extinctionFactor = deltaT * kTotalLen;
@@ -1547,6 +1655,10 @@ static CloudShadow volumetricShadow(Cv3 posKm, Cv3 sunDirection, float appTime, 
         float sampleHeightKm = v3len(samplePosKm);
         float sampleDt = sampleHeightKm - s->cloudAreaStartHeight;
         float normalizeHeight = sampleDt / s->cloudAreaThickness;
+        // 层带外直接跳过（性能专项 A3）：云壳 0~1 归一高度以外的密度恒为 0
+        // （三层的高度包络 remap 已饱和到 0，浓积云在云底以下亦为 0），
+        // 而 cloudMap 对 n>1 仍会走 cloudMap2 的 3D 采样，白付代价。
+        if (normalizeHeight < 0.0f || normalizeHeight > 1.0f) continue;
         Cv3 samplePosMeter = v3mul(samplePosKm, 1000.0f);
         float actualH01;
         // 阴影只需要“沿光线的光学厚度”：浓积云在这里走低配密度（不做 3D 采样）。
@@ -1557,8 +1669,8 @@ static CloudShadow volumetricShadow(Cv3 posKm, Cv3 sunDirection, float appTime, 
         extinctionAcc1 += (density * msExtinctionFactor) * extinctionFactor;
     }
 
-    pm.transmittanceToLight[0] = expf(-extinctionAcc0 * 1000.0f);
-    pm.transmittanceToLight[1] = expf(-extinctionAcc1 * 1000.0f);
+    pm.transmittanceToLight[0] = cloud_fast_exp(-extinctionAcc0 * 1000.0f);
+    pm.transmittanceToLight[1] = cloud_fast_exp(-extinctionAcc1 * 1000.0f);
     return pm;
 }
 
@@ -1705,10 +1817,25 @@ static CloudPixel cloudPixelCompute(Cv3 worldPos, Cv3 worldDir, float appTime, f
 
         if (stepCloudDensity > 0.0f) {
             float opticalDepth = stepCloudDensity * stepT * 1000.0f;
-            float stepTransmittance = fmaxf(expf(-opticalDepth), expf(-opticalDepth * 0.25f) * 0.7f);
+            float stepTransmittance = fmaxf(cloud_fast_exp(-opticalDepth),
+                                            cloud_fast_exp(-opticalDepth * 0.25f) * 0.7f);
 
-            CloudShadow shadow = volumetricShadow(samplePos, sunDirection, appTime, s,
-                                                  s->cloudMultiScatterExtinction);
+            // 样本点-太阳几何（提前于阴影 march 求值，见下）：低于样本点几何地平后
+            // 直射光平滑衰减到 0（linglong 根因修复回移；夜间仅余中性环境补光）
+            float sunZenithCosAtSample = v3dot(sunDirection, samplePos) / sampleHeight;
+            float directFade = cloudDirectFade(sunZenithCosAtSample, sampleHeight);
+
+            // 直射阴影只在 directFade > 0 时才有意义（性能专项 A3）：
+            // sunlightTerm 逐通道含因子 directFade，其值为 0 时整个直射项（含两阶
+            // 多重散射的直射部分）恒为 0，而它唯一的作用就是乘 shadow.transmittanceToLight[]。
+            // 故 directFade==0 时跳过这 12 步 march，结果逐位不变；夜间/天文暮光整屏生效。
+            CloudShadow shadow;
+            shadow.transmittanceToLight[0] = 0.0f;
+            shadow.transmittanceToLight[1] = 0.0f;
+            if (directFade > 0.0f) {
+                shadow = volumetricShadow(samplePos, sunDirection, appTime, s,
+                                          s->cloudMultiScatterExtinction);
+            }
             CloudShadow shadowAmbient;
             // 环境（竖直）阴影：再跑一遭 12 步 ray-march。关掉后环境光退化为均匀天空光
             // （云底暗部略变平）；仅低层云时竖直阴影射线大多落在空云层（cloudMap 早退），
@@ -1727,10 +1854,6 @@ static CloudPixel cloudPixelCompute(Cv3 worldPos, Cv3 worldDir, float appTime, f
             float verticalProbability = powf(remapf(actualH01, 0.07f, 0.22f, 0.1f, 1.0f), 0.8f);
             float powderEffect = powderEffectNew(depthProbability, verticalProbability, VoL);
 
-            // 样本点-太阳几何：低于样本点几何地平后直射光平滑衰减到 0
-            //（linglong 根因修复回移；夜间仅余中性环境补光）
-            float sunZenithCosAtSample = v3dot(sunDirection, samplePos) / sampleHeight;
-            float directFade = cloudDirectFade(sunZenithCosAtSample, sampleHeight);
             // 云直射光用解耦后的天空光（暮光段与天空散射一致，避免“曲线红 × 透射率红”双重叠红）
             Cv3 sunlightTerm = v3mul3(atmosphereTransmittance,
                 v3mul(v3mul(s->skySunColor, s->skySunIntensity),
@@ -2159,7 +2282,7 @@ static Cv3 cloud_tonemap(Cv3 hdr) {
     // 饱和度提升（亮度保持，仅拉伸色度）
     float lum = 0.2126f * t.x + 0.7152f * t.y + 0.0722f * t.z;
     t = v3clamp(v3add(v3(lum, lum, lum), v3mul(v3sub(t, v3(lum, lum, lum)), CLOUD_SATURATION_BOOST)), 0.0f, 1.0f);
-    t = v3(powf(t.x, 1.0f/2.2f), powf(t.y, 1.0f/2.2f), powf(t.z, 1.0f/2.2f)); // sRGB 伽马
+    t = v3(cloud_gamma(t.x), cloud_gamma(t.y), cloud_gamma(t.z)); // sRGB 伽马（查表）
     return v3clamp(t, 0.0f, 1.0f);
 }
 
@@ -2187,6 +2310,72 @@ static void cloud_write_pixel_premul(int32_t x, Cv3 cloudHDR, float transmittanc
     rgb_line[x * 3 + 2] = (uint8_t)(clampf(d.z * cov, 0.0f, 1.0f) * 255.0f + 0.5f);
     a_line[x] = (uint8_t)(T * 255.0f + 0.5f);
 }
+
+// ===========================================================================
+// 天空遍「地平线以下」方位角环缓存（性能专项 A10）
+//
+// PASS_SKY 已把射线仰角钳到 +0.0005（见 cloud_core_render 内注释），因此**整个
+// 地平线以下的天空积分结果只取决于水平方向**（与射线原仰角无关）。按方位角分桶
+// 后同一桶只算一次：半屏像素从「每个跑一道 31 步大气积分」变成「1 次 atan2f +
+// 3 字节查表」。分桶步长 2π/2048 ≈ 0.18°，远小于一个像素
+// 的角尺寸（160x120 鱼眼 150° 下≈0.9°/px）。
+//
+// 注：共享缓存与 OpenMP 多行并行写不安全（Linux 开发构建带 -fopenmp），故在
+// _OPENMP 下整段编译成透传（逐像素照旧）；WASM / luckfox 均为单线程，走缓存。
+// ===========================================================================
+#define CLOUD_SKYRING_BINS (2048)
+#if defined(_OPENMP)
+#define CLOUD_SKYRING_ENABLE (0)
+#else
+#define CLOUD_SKYRING_ENABLE (1)
+#endif
+#if CLOUD_SKYRING_ENABLE
+static uint8_t  s_skyring_rgb[CLOUD_SKYRING_BINS * 3];
+static uint16_t s_skyring_epoch[CLOUD_SKYRING_BINS];
+static uint16_t s_skyring_cur = 0;
+
+static void cloud_skyring_begin(void) {
+    s_skyring_cur++;
+    if (s_skyring_cur == 0) {          // 回绕：清空后从 1 开始（epoch 0 即“未填”）
+        memset(s_skyring_epoch, 0, sizeof(s_skyring_epoch));
+        s_skyring_cur = 1;
+    }
+}
+
+static inline int cloud_skyring_bin(Cv3 dir) {
+    float a = atan2f(dir.z, dir.x) + kPI;                  // [0, 2π)
+    int b = (int)(a * ((float)CLOUD_SKYRING_BINS / (2.0f * kPI)));
+    if (b < 0) b = 0;
+    else if (b >= CLOUD_SKYRING_BINS) b = CLOUD_SKYRING_BINS - 1;
+    return b;
+}
+
+// 命中返回 1 并写入该像素行缓冲；未命中返回 0（调用方去算完整积分）
+static int cloud_skyring_lookup(Cv3 dir, uint8_t *rgb_line, int x) {
+    int b = cloud_skyring_bin(dir);
+    if (s_skyring_epoch[b] != s_skyring_cur) return 0;
+    const uint8_t *s = &s_skyring_rgb[b * 3];
+    rgb_line[x * 3 + 0] = s[0];
+    rgb_line[x * 3 + 1] = s[1];
+    rgb_line[x * 3 + 2] = s[2];
+    return 1;
+}
+
+static void cloud_skyring_store(Cv3 dir, Cv3 hdr) {
+    int b = cloud_skyring_bin(dir);
+    Cv3 t = cloud_tonemap(hdr);
+    s_skyring_rgb[b * 3 + 0] = (uint8_t)(t.x * 255.0f + 0.5f);
+    s_skyring_rgb[b * 3 + 1] = (uint8_t)(t.y * 255.0f + 0.5f);
+    s_skyring_rgb[b * 3 + 2] = (uint8_t)(t.z * 255.0f + 0.5f);
+    s_skyring_epoch[b] = s_skyring_cur;
+}
+#else
+static void cloud_skyring_begin(void) {}
+static int cloud_skyring_lookup(Cv3 dir, uint8_t *rgb_line, int x) {
+    (void)dir; (void)rgb_line; (void)x; return 0;
+}
+static void cloud_skyring_store(Cv3 dir, Cv3 hdr) { (void)dir; (void)hdr; }
+#endif
 
 int32_t ui_cloud_init(Key_Event *key_event, Global_State *global_state) {
     (void)key_event;
@@ -2543,6 +2732,8 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     // 半分辨率逐像素 ray-march 渲染
     // PASS_SKY：只积分大气；PASS_CLOUDS：只 ray-march 云（输出预乘色 + 透射率）；
     // PASS_BOTH：两者一次算完（历史行为）。
+    // 天空遍的地平线以下按方位角分桶重用（性能专项 A10）：见循环内注释。
+    if (pass == UI_CLOUD_PASS_SKY) cloud_skyring_begin();
     #pragma omp parallel for schedule(static) if (H >= 8)
     for (int y = 0; y < H; y++) {
         uint8_t rowbuf[CLOUD_MAX_W * 3];
@@ -2554,14 +2745,23 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
             // 屏幕射线：透视（pinhole）或等距鱼眼投影
             Cv3 rayDir;
             if (p->proj == CLOUD_PROJ_FISHEYE) {
+                // 性能专项 A5：原实现逐像素 atan2f + 2×cosf + 2×sinf（天空遍/云遍各
+                // 一遍，共 5 个超越函数/像素）。
+                //   · ph 的 cos/sin 由恒等式直接给出：cos(atan2(fy,fx)) = fx/r、
+                //     sin(...) = fy/r（零误差）；
+                //   · th = (r/fishRmax)*fishFovRad 的 cos/sin 查 2048 项表 + 线性插值。
                 float fx = uu * (float)W / (float)H;     // NDC 带 aspect
                 float fy = vv;
                 float r = sqrtf(fx * fx + fy * fy);
                 float rn = r / fishRmax;                  // 对角=1
                 float th = rn * fishFovRad;               // 等距角
-                float ph = atan2f(fy, fx);
-                rayDir = v3add(v3mul(forward, cosf(th)),
-                               v3mul(v3add(v3mul(right, cosf(ph)), v3mul(camUp, sinf(ph))), sinf(th)));
+                float cph, sph;
+                if (r > 1e-12f) { cph = fx / r; sph = fy / r; }
+                else            { cph = 1.0f;   sph = 0.0f; }
+                float cth, sth;
+                cloud_sincos(th, &sth, &cth);
+                rayDir = v3add(v3mul(forward, cth),
+                               v3mul(v3add(v3mul(right, cph), v3mul(camUp, sph)), sth));
             } else {
                 rayDir = v3add(v3add(forward, v3mul(right, uu * tanH)), v3mul(camUp, vv * tanV));
             }
@@ -2574,13 +2774,21 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
                 // 地平线下一行（地面回弹项，低空时暗红）混进地平线像素，形成一条绕地平线的
                 // 暗带。钳到 +ε 后该行取“地平线天空”，与其它散射模型一致；真正的地平线以下
                 // 区域仍由地景（海洋/黑色）覆盖。
+                //
+                // 性能专项 A10：钳位后**整个地平线以下的天空积分结果只取决于水平方向**
+                // （与射线仰角无关），故按方位角分桶缓存，同一桶只算一次。半屏像素因此
+                // 从“每个都跑 31 步大气积分”变成“查表 + 一个 atan2f”。分桶步长
+                // 2π/2048 ≈ 0.18°，远小于一个像素的角尺寸；桶内首个像素的完整积分值
+                // 就是该桶后续像素原本会算出的值（差异仅来自水平方向的桶内量化）。
                 Cv3 skyDir = rayDir;
                 if (skyDir.y < 0.0005f) {
                     skyDir.y = 0.0005f;
                     skyDir = v3norm(skyDir);
+                    if (cloud_skyring_lookup(rayDir, rowbuf, x)) continue;
                 }
                 SingleScatteringResult sky = integrateScatteredLuminance(camPos, skyDir, s_scene.sunDirection,
                     &s_scene, 1, 1, 0, 1, 9e6f, 14, 0);
+                if (rayDir.y < 0.0005f) cloud_skyring_store(rayDir, sky.scatteredLight);
                 cloud_write_pixel(x, sky.scatteredLight, rowbuf);
                 continue;
             }

@@ -567,6 +567,29 @@ static void wo_sky_view_uv_params(void) {
     s_uv_zha = WO_PI - s_uv_beta;
 }
 
+// 快速 acos（性能专项 A5）：sqrt(1-x)·P(x)（P 为 [0,1] 上的 7 次 minimax 多项式，
+// x<0 用 acos(x)=π−acos(−x) 折叠）。实测全区间最大绝对误差 2.2e-8 rad，已在 float
+// 精度以内。wo_sky_view_uv 每次调用一次 acos（海面每像素 3 次、海洋天空每像素 1 次），
+// 库 acos 是 double 的 fdlibm 路径（含范围归约与多分支），是这两条路径的固定大头。
+static inline double wo_acos_poly(double x) {
+    double s = sqrt(1.0 - x);
+    double p = -0.0012624911;
+    p = p * x + 0.0066700901;
+    p = p * x - 0.0170881256;
+    p = p * x + 0.0308918810;
+    p = p * x - 0.0501743046;
+    p = p * x + 0.0889789874;
+    p = p * x - 0.2145988016;
+    p = p * x + 1.5707963050;
+    return s * p;
+}
+static inline double wo_fast_acos(double x) {
+    if (x >= 1.0) return 0.0;
+    if (x <= -1.0) return WO_PI;
+    if (x < 0.0) return WO_PI - wo_acos_poly(-x);
+    return wo_acos_poly(x);
+}
+
 static void wo_sky_view_uv(double dx, double dy, double dz, double *u, double *v) {
     const double cos_beta = s_uv_cos_beta;
     const double beta = s_uv_beta;
@@ -574,14 +597,14 @@ static void wo_sky_view_uv(double dx, double dy, double dz, double *u, double *v
     double vzc = wo_clamp(dy, -1.0, 1.0);
     double uv_y;
     if (vzc >= -cos_beta) {
-        double coord = acos(vzc) / zha;
+        double coord = wo_fast_acos(vzc) / zha;
         coord = 1.0 - coord;
         coord = sqrt(wo_max(coord, 0.0));
         coord = 1.0 - coord;
         uv_y = coord * 0.5;
     }
     else {
-        double coord = (acos(vzc) - zha) / beta;
+        double coord = (wo_fast_acos(vzc) - zha) / beta;
         coord = sqrt(wo_max(coord, 0.0));
         uv_y = coord * 0.5 + 0.5;
     }
@@ -961,12 +984,19 @@ static float *wo_bake_tile(const Wo_Tile *tile, const double *list, int32_t nw) 
     return data;
 }
 
+// 说明（性能专项 A4）：波场/泡沫纹理的边长 N 恒为 2 的幂（256），且采样坐标可能为负，
+// 故用「与掩码」代替两次整数取模：二补码下 (i & (N-1)) 就是数学意义下的 mod N。
+// 原写法每次采样 4 次 sdiv（WASM 的 i32.rem_s / ARM 的 sdiv 都是硬件除法，约 20 个周期），
+// 而每个海面像素要查 40+ 次。
+#define WO_WRAP(i, mask)  ((int32_t)(i) & (mask))
+
 static void wo_tile_sample(const float *data, int32_t N, double L, double x, double z, double *out) {
+    const int32_t mask = N - 1;
     double u = (x / L) * N - 0.5, v = (z / L) * N - 0.5;
     int32_t i0 = (int32_t)floor(u), j0 = (int32_t)floor(v);
     double fu = u - i0, fv = v - j0;
-    int32_t i0c = ((i0 % N) + N) % N, i1c = (((i0 + 1) % N) + N) % N;
-    int32_t j0c = ((j0 % N) + N) % N, j1c = (((j0 + 1) % N) + N) % N;
+    int32_t i0c = WO_WRAP(i0, mask), i1c = WO_WRAP(i0 + 1, mask);
+    int32_t j0c = WO_WRAP(j0, mask), j1c = WO_WRAP(j0 + 1, mask);
     int32_t i00 = (j0c * N + i0c) * 4, i10 = (j0c * N + i1c) * 4;
     int32_t i01 = (j1c * N + i0c) * 4, i11 = (j1c * N + i1c) * 4;
     double w00 = (1 - fu) * (1 - fv), w10 = fu * (1 - fv);
@@ -979,11 +1009,12 @@ static void wo_tile_sample(const float *data, int32_t N, double L, double x, dou
 
 // 波面高程采样（仅 h 通道；march 内层使用）
 static double wo_tile_sample_h(const float *data, int32_t N, double L, double x, double z) {
+    const int32_t mask = N - 1;
     double u = (x / L) * N - 0.5, v = (z / L) * N - 0.5;
     int32_t i0 = (int32_t)floor(u), j0 = (int32_t)floor(v);
     double fu = u - i0, fv = v - j0;
-    int32_t i0c = ((i0 % N) + N) % N, i1c = (((i0 + 1) % N) + N) % N;
-    int32_t j0c = ((j0 % N) + N) % N, j1c = (((j0 + 1) % N) + N) % N;
+    int32_t i0c = WO_WRAP(i0, mask), i1c = WO_WRAP(i0 + 1, mask);
+    int32_t j0c = WO_WRAP(j0, mask), j1c = WO_WRAP(j0 + 1, mask);
     int32_t i00 = (j0c * N + i0c) * 4, i10 = (j0c * N + i1c) * 4;
     int32_t i01 = (j1c * N + i0c) * 4, i11 = (j1c * N + i1c) * 4;
     double w00 = (1 - fu) * (1 - fv), w10 = fu * (1 - fv);
@@ -994,11 +1025,12 @@ static double wo_tile_sample_h(const float *data, int32_t N, double L, double x,
 
 // 泡沫纹理采样（RGBA8 可平铺纹理；返回 0..255 通道值）
 static void wo_tex_sample_u8(const uint8_t *data, int32_t N, double L, double x, double z, double *out) {
+    const int32_t mask = N - 1;                  // 见 WO_WRAP 注释（N 恒为 2 的幂）
     double u = (x / L) * N - 0.5, v = (z / L) * N - 0.5;
     int32_t i0 = (int32_t)floor(u), j0 = (int32_t)floor(v);
     double fu = u - i0, fv = v - j0;
-    int32_t i0c = ((i0 % N) + N) % N, i1c = (((i0 + 1) % N) + N) % N;
-    int32_t j0c = ((j0 % N) + N) % N, j1c = (((j0 + 1) % N) + N) % N;
+    int32_t i0c = WO_WRAP(i0, mask), i1c = WO_WRAP(i0 + 1, mask);
+    int32_t j0c = WO_WRAP(j0, mask), j1c = WO_WRAP(j0 + 1, mask);
     int32_t i00 = (j0c * N + i0c) * 4, i10 = (j0c * N + i1c) * 4;
     int32_t i01 = (j1c * N + i0c) * 4, i11 = (j1c * N + i1c) * 4;
     double w00 = (1 - fu) * (1 - fv), w10 = fu * (1 - fv);
@@ -2692,8 +2724,15 @@ void linglong_ocean_draw_landscape(
     // 因此结果逐位不变。尺寸不符或未就绪时自动退回逐像素反投影。
     const int32_t use_dir_map = fisheye_dir_map_ready(fb_width, fb_height);
 
+    // 性能专项 A7：RGB888 帧缓冲下直接按行指针写，省掉逐像素 gfx_set_pixel 的
+    // dirty_expand（4 次比较 + 4 次写）与色彩模式分支；整趟结束后统一 mark_dirty_full。
+    // 其它色彩模式（RGB565 等）仍走 gfx_set_pixel，行为不变。
+    const int fast888 = (gfx->color_mode == GFX_COLOR_MODE_RGB888 && gfx->frame_buffer_rgb888 != NULL);
+    const size_t stride888 = (size_t)fb_width * 3;
+
     #pragma omp parallel for schedule(static)
     for (int32_t y = 0; y < fb_height; y++) {
+        uint8_t *dst = fast888 ? (gfx->frame_buffer_rgb888 + (size_t)y * stride888) : NULL;
         for (int32_t x = 0; x < fb_width; x++) {
             float ray_x = 0.0f, ray_y = 0.0f, ray_z = 0.0f;
             if (use_dir_map) {
@@ -2717,9 +2756,17 @@ void linglong_ocean_draw_landscape(
             uint8_t r = (uint8_t)wo_min(255.0, out[0] * 255.0);
             uint8_t g = (uint8_t)wo_min(255.0, out[1] * 255.0);
             uint8_t b = (uint8_t)wo_min(255.0, out[2] * 255.0);
-            gfx_set_pixel(gfx, (uint32_t)x, (uint32_t)y, r, g, b);
+            if (fast888) {
+                dst[(size_t)x * 3 + 0] = r;
+                dst[(size_t)x * 3 + 1] = g;
+                dst[(size_t)x * 3 + 2] = b;
+            }
+            else {
+                gfx_set_pixel(gfx, (uint32_t)x, (uint32_t)y, r, g, b);
+            }
         }
     }
+    if (fast888) gfx_mark_dirty_full(gfx);
 
     // 地形：在海洋之后绘制（海洋铺底，陆地覆盖其上的像素）。地形可出现在地平线
     // 以上（山脊遮挡日月星），也可出现在海面之前（岛优先于海——参考实现同顺序）。
