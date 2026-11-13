@@ -182,7 +182,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
 // 设置菜单
 // ===============================================================================
 
-void ui_app_setting_value_input_draw(Key_Event *key_event, Global_State *global_state, int32_t value_type, wchar_t *value_text, int32_t cursor_pos);
+// 设置界面已重构为独立模块 ui_settings.c / ui_settings.h（菜单 + 日期/时间/经纬度编辑器）。
 
 
 

@@ -89,6 +89,7 @@ $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) $(ANIMAC_HEADERS) $(ANIMAC_DIR)/am_n
                         ui_goldminer.c \
                         ui_grid16kbd.c \
                         ui_linglong_ctrl.c \
+                        ui_settings.c \
                         ui_icon.c \
                         ui_llm.c \
                         ui_musicbox_mp3.c \

@@ -208,6 +208,7 @@ if [ "$WASM_LTO" = "1" ]; then WASM_OPT="$WASM_OPT -flto"; fi
     ui_goldminer.c \
     ui_grid16kbd.c \
     ui_linglong_ctrl.c \
+    ui_settings.c \
     ui_icon.c \
     ui_llm.c \
     ui_musicbox_mp3.c \

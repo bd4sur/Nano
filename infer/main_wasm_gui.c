@@ -76,6 +76,7 @@ static int32_t wasm_evtq_pop(Key_Event *ev) {
 
 // 触屏 HAL 的事件队列接口（hal_touch_wasm.c）
 extern int32_t wasm_touch_pop(int32_t *action, int32_t *x, int32_t *y, double *ts);
+extern int64_t wasm_time_offset_ms(void); // hal_os_wasm.c：设置时间后的时间轴偏移
 extern void    wasm_touch_set_level(int32_t action, int32_t x, int32_t y);
 extern void    wasm_touch_set_sticky(int32_t on);       // 亚帧点按保底开关
 extern void    wasm_touch_frame_boundary(void);         // 帧边界：清点按锁存
@@ -127,7 +128,9 @@ void wasm_gui_input_tick(double ts) {
     double ev_ts;
     while (wasm_touch_pop(&action, &x, &y, &ev_ts)) {
         wasm_touch_set_level(action, x, y);
-        global_state->timestamp = (uint64_t)ev_ts; // 采样时刻=事件真实时刻
+        // 采样时刻=事件真实时刻（先换算到应用时间轴：设置时间后宿主 epoch 与应用
+        // epoch 存在偏移，不换算会让事件帧把 global_state->timestamp 拉回宿主时间）
+        global_state->timestamp = (uint64_t)((int64_t)ev_ts + wasm_time_offset_ms());
         get_input_event(&ev_prod, global_state);
         wasm_dispatch_input_events(&ev_prod);
         replayed = 1;
@@ -137,7 +140,11 @@ void wasm_gui_input_tick(double ts) {
     // 键盘事件回调在置位电平后立即调本函数——其边沿即以事件真实时刻计时）；
     // 无事件时本 tick 承担长按到期等持续状态判定。
     if (!replayed) {
-        global_state->timestamp = (ts > 0.0) ? (uint64_t)ts : get_timestamp_in_ms();
+        // 键盘/硬键事件同样把宿主 epoch 换算到应用时间轴（见上方触屏回放）；
+        // ts<=0 的心跳直接取应用时间。
+        global_state->timestamp = (ts > 0.0)
+            ? (uint64_t)((int64_t)ts + wasm_time_offset_ms())
+            : get_timestamp_in_ms();
         get_input_event(&ev_prod, global_state);
         wasm_dispatch_input_events(&ev_prod);
     }
