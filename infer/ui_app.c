@@ -196,6 +196,9 @@ static int32_t ui_app_state_is_menu(int32_t state) {
         case STATE_README:         // 本机自述：文本框拖动滚动+返回热点直接消费触屏流
         case STATE_LLM_AFTER_INFER: // LLM 结果：文本框拖动滚动+返回热点直接消费触屏流
         case STATE_ANIMAC_EXIT_CONFIRM: // 控制台退出确认模态框：触屏按钮直接消费触屏流（否则点按产生的宫格软按键会泄漏到下一状态误触发）
+        case STATE_SHUTDOWN:        // 安全关机：手机式滑动关机滑块直接消费触屏流（抓推钮拖动/松手结算）。
+                                    // 十六宫格软键整体退场：触屏不再能派生 enter 格直接关机；
+                                    // 实体键盘的长按 D 关机 / A 取消照常保留（见 STATE_SHUTDOWN 分支）
         case STATE_SCHEME_APP_RUN:  // 灵机 App 运行态：触屏归 App（(native Touch) 直读），
                                     // **宫格软按键整体退场——包括右上角 esc 格**。
                                     // 这是 2026-10 的接口改造：A 键退出不再是宿主的统一交互，
@@ -5074,6 +5077,249 @@ int32_t ui_exit_confirm_hit_msg_ex(Global_State *global_state, int32_t with_body
 }
 
 
+// ===============================================================================
+// 安全关机：手机式「滑动关机」滑块
+//
+// 交互：抓住轨道左端的圆形推钮向右拖动，滑到右端（进度 ≥ UI_SHUTDOWN_COMPLETE_PCT）
+// 后松手才真正调用 graceful_shutdown()；未滑到位松手则回弹到起点。触屏只认推钮
+// （含少量触摸余量），点按轨道其余位置不会误触发。本状态已加入
+// ui_app_state_is_menu 抑制表，十六宫格软键整体退场；实体键盘保留原有快捷方式：
+// 长按 D 关机、A 取消。
+//
+// 本状态直接消费触屏流（DOWN 锁存推钮、拖动逐帧跟随、UP 沿结算），符合 ui_app.c
+// 输入处理原则：会引发状态切换的动作只在松手沿触发。
+//
+// 绘制几何（严丝合缝）：轨道为胶囊（圆角半径 = 高度/2）；已滑过部分是与轨道同高、
+// 同一圆角半径的胶囊，右端半圆即推钮（半径 = 轨道高度/2），左端与轨道左端完全重合；
+// 进度 0 时填充宽 = 轨道高 = 推钮直径（正圆），100% 时恰为轨道全宽。整条滑轨只有
+// 两种几何形状（轨道胶囊 / 推钮胶囊）且共用同一半径，不存在接缝或半径不一致。
+// 全部图形都走抗锯齿原语：圆角矩形（8×8 超采样）与抗锯齿线段（箭头）。
+// ===============================================================================
+
+#define UI_SHUTDOWN_TRACK_MAX_W   (260) // 轨道最大宽度（大屏居中，不铺满全屏）
+#define UI_SHUTDOWN_TRACK_MAX_H   (48)  // 轨道最大高度（胶囊高度）
+#define UI_SHUTDOWN_TRACK_MIN_H   (20)  // 轨道最小高度（128x64 小屏仍可拖动）
+#define UI_SHUTDOWN_COMPLETE_PCT  (90)  // 松手判定阈值：滑过 90% 即视为滑到底
+#define UI_SHUTDOWN_GRAB_SLOP     (12)  // 推钮命中额外余量（px），便于手指抓取
+
+typedef struct Shutdown_Ui {
+    int32_t track_x, track_y, track_w, track_h; // 轨道矩形（胶囊）
+    int32_t knob_r;        // 推钮半径（恒 = track_h / 2，与轨道端部同一半径）
+    int32_t knob_x0, knob_x1; // 推钮圆心可移动范围（左端 / 右端）
+} Shutdown_Ui;
+
+typedef struct Shutdown_Palette {
+    uint8_t track[3];     // 轨道底色
+    uint8_t accent[3];    // 已滑过部分 / 推钮（同一胶囊）
+    uint8_t hot[3];       // 滑到位（可松手）时的强调色
+    uint8_t label[3];     // 轨道内提示文字（未滑过处）
+    uint8_t on_accent[3]; // 压于强调色之上的文字 / 箭头
+} Shutdown_Palette;
+
+static int32_t s_shutdown_progress = 0;      // 滑块进度 0..100
+static int32_t s_shutdown_dragging = 0;      // 是否正抓着推钮拖动
+static int32_t s_shutdown_grab_dx = 0;       // 抓取点与推钮圆心的水平偏差（跟手不跳变）
+static int32_t s_shutdown_drawn_progress = -1; // 上次绘制的进度（仅在变化时重绘）
+static int32_t s_shutdown_busy = 0;          // 正在关机 / 失败提示中，忽略输入
+
+static void ui_shutdown_layout(Global_State *global_state, Shutdown_Ui *u) {
+    const int32_t w = (int32_t)global_state->gfx->width;
+    const int32_t h = (int32_t)global_state->gfx->height;
+    const int32_t header_h = ui_std_header_height(global_state->ui_font);
+    const int32_t footer_h = gfx_font_line_height(global_state->ui_font) + 1;
+
+    // 轨道宽度：左右各留 10% 边距，大屏封顶；极窄屏退化为贴边
+    int32_t track_w = w - 2 * (w / 10);
+    if (track_w > UI_SHUTDOWN_TRACK_MAX_W) track_w = UI_SHUTDOWN_TRACK_MAX_W;
+    if (track_w < 64) track_w = w - 8;
+    if (track_w < 16) track_w = w;
+
+    // 轨道高度：可用高度（页眉与页脚之间）的 1/4，钳制到 [MIN, MAX]
+    int32_t avail_h = h - header_h - footer_h;
+    if (avail_h < 16) avail_h = 16;
+    int32_t track_h = avail_h / 4;
+    if (track_h > UI_SHUTDOWN_TRACK_MAX_H) track_h = UI_SHUTDOWN_TRACK_MAX_H;
+    if (track_h < UI_SHUTDOWN_TRACK_MIN_H) track_h = UI_SHUTDOWN_TRACK_MIN_H;
+    if (track_h > avail_h - 4) track_h = avail_h - 4;
+    if (track_h < 12) track_h = 12;
+
+    u->track_w = track_w;
+    u->track_h = track_h;
+    u->track_x = (w - track_w) / 2;
+    u->track_y = header_h + (avail_h - track_h) / 2;
+    if (u->track_y < header_h) u->track_y = header_h;
+
+    // 推钮 = 轨道端部半圆：半径恒为轨道高度的一半，圆心在轨道内缘（不内缩），
+    // 因此推钮轮廓与胶囊端部完全重合，进度 0/100% 时严丝合缝地贴住轨道两端
+    u->knob_r = track_h / 2;
+    if (u->knob_r < 6) u->knob_r = 6;
+    u->knob_x0 = u->track_x + u->knob_r;
+    u->knob_x1 = u->track_x + track_w - u->knob_r;
+    if (u->knob_x1 < u->knob_x0) u->knob_x1 = u->knob_x0;
+}
+
+static int32_t ui_shutdown_knob_cx(const Shutdown_Ui *u, int32_t progress) {
+    int32_t span = u->knob_x1 - u->knob_x0;
+    if (progress < 0) progress = 0;
+    if (progress > 100) progress = 100;
+    return u->knob_x0 + span * progress / 100;
+}
+
+static int32_t ui_shutdown_progress_from_x(const Shutdown_Ui *u, int32_t x) {
+    int32_t span = u->knob_x1 - u->knob_x0;
+    if (span <= 0) return 0;
+    int32_t p = ((x - u->knob_x0) * 100 + span / 2) / span;
+    if (p < 0) p = 0;
+    if (p > 100) p = 100;
+    return p;
+}
+
+static void ui_shutdown_palette(Global_State *global_state, Shutdown_Palette *p) {
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        p->track[0] = 230; p->track[1] = 232; p->track[2] = 237;
+        p->accent[0] = 214; p->accent[1] = 52; p->accent[2] = 56;
+        p->hot[0] = 238; p->hot[1] = 78; p->hot[2] = 58;
+        p->label[0] = 126; p->label[1] = 131; p->label[2] = 139;
+        p->on_accent[0] = 255; p->on_accent[1] = 255; p->on_accent[2] = 255;
+    }
+    else {
+        p->track[0] = 56; p->track[1] = 58; p->track[2] = 64;
+        p->accent[0] = 212; p->accent[1] = 56; p->accent[2] = 60;
+        p->hot[0] = 240; p->hot[1] = 88; p->hot[2] = 60;
+        p->label[0] = 176; p->label[1] = 180; p->label[2] = 188;
+        p->on_accent[0] = 255; p->on_accent[1] = 255; p->on_accent[2] = 255;
+    }
+}
+
+// 绘制滑块（轨道 + 已滑过部分 + 提示文字 + 推钮）：整块轨道区域每次全量重绘，
+// 旧推钮痕迹被轨道底色覆盖；脏区自动收敛为轨道包围盒，拖动时只推这一块。
+//
+// 层序：轨道 → 暗色文字 → 填充胶囊（含推钮）→ 填充区内亮色文字（裁到推钮左缘）→ 箭头。
+// 文字“被推钮推走”的揭示边界正是推钮左缘，与填充胶囊的端部完全对齐。
+static void ui_shutdown_draw_slider(Global_State *global_state, const Shutdown_Ui *u, int32_t progress) {
+    Nano_GFX *gfx = global_state->gfx;
+    Shutdown_Palette p;
+    ui_shutdown_palette(global_state, &p);
+
+    const int32_t x = u->track_x;
+    const int32_t y = u->track_y;
+    const int32_t w = u->track_w;
+    const int32_t h = u->track_h;
+    const int32_t r = h / 2;                 // 轨道 / 填充 / 推钮共用同一圆角半径
+    const int32_t cy = y + r;
+    const int32_t knob_cx = ui_shutdown_knob_cx(u, progress);
+    const int32_t fill_w = knob_cx - x + r;  // 右端半圆（圆心 knob_cx）即推钮，故 +r
+    const int32_t armed = (progress >= UI_SHUTDOWN_COMPLETE_PCT);
+    const uint8_t *ac = armed ? p.hot : p.accent;
+    const uint32_t label_font = (h >= 36) ? GFX_FONT_ALPHA_16 : GFX_FONT_ALPHA_12;
+    const int32_t text_cx = x + w / 2;
+
+    // 1. 轨道胶囊（抗锯齿圆角矩形；圆角半径 = 高度/2）
+    gfx_draw_rounded_rectangle(gfx, x, y, w, h, r, r, r, r,
+        p.track[0], p.track[1], p.track[2], 1);
+
+    // 2. 轨道内提示文字（未滑过配色）；滑过部分稍后会被填充完整盖住
+    gfx_font_draw_text_centered(gfx, label_font, L"滑动关机", text_cx, cy,
+        p.label[0], p.label[1], p.label[2], 1);
+
+    // 3. 填充胶囊 = 已滑过部分 + 推钮（同一个图形，无接缝）：
+    //    fill_w 恒 ≥ 2r——进度 0 时恰为直径 h 的正圆（推钮停在左端），100% 时恰等于轨道全宽
+    if (fill_w > 0) {
+        gfx_draw_rounded_rectangle(gfx, x, y, fill_w, h, r, r, r, r,
+            ac[0], ac[1], ac[2], 1);
+    }
+
+    // 4. 填充区内的亮色文字：裁剪到推钮左缘，形成“文字被推走”的揭示效果
+    {
+        int32_t clip_w = (knob_cx - r) - x;
+        if (clip_w > 0) {
+            gfx_set_clip(gfx, x, y, clip_w, h);
+            gfx_font_draw_text_centered(gfx, label_font, L"滑动关机", text_cx, cy,
+                p.on_accent[0], p.on_accent[1], p.on_accent[2], 1);
+            gfx_reset_clip(gfx);
+        }
+    }
+
+    // 5. 推钮内的右向箭头：抗锯齿线段（叠加混合，白线在红色胶囊上自然过渡）
+    {
+        int32_t s = r / 2;                   // 箭头半高
+        if (s < 4) s = 4;
+        const float ax = (float)knob_cx + (float)s * 0.15f; // 视觉居中略偏右一点点
+        const float ay = (float)cy;
+        const float lw = (r >= 18) ? 3.0f : 2.0f;
+        gfx_draw_line_anti_aliasing(gfx, ax - (float)s * 0.5f, ay - (float)s,
+            ax + (float)s * 0.5f, ay, lw,
+            p.on_accent[0], p.on_accent[1], p.on_accent[2], 1);
+        gfx_draw_line_anti_aliasing(gfx, ax + (float)s * 0.5f, ay,
+            ax - (float)s * 0.5f, ay + (float)s, lw,
+            p.on_accent[0], p.on_accent[1], p.on_accent[2], 1);
+    }
+}
+
+// 页眉高度（整页与提示页共用；页眉右侧「返回」热点也以此判定）
+static int32_t ui_shutdown_header_h(Global_State *global_state) {
+    return ui_std_header_height(global_state->ui_font);
+}
+
+// 整页重绘（清屏 + 页眉 / 页脚 + 滑块）。页眉右侧固定「返回」热点：触屏设备
+// （无硬键盘）在关机页的取消入口，避免进入后无法退出（十六宫格软键已整体抑制）。
+static void ui_shutdown_draw_page(Key_Event *key_event, Global_State *global_state) {
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        gfx_fill_white(global_state->gfx);
+    }
+    else {
+        gfx_soft_clear(global_state->gfx);
+    }
+    ui_draw_header_full(key_event, global_state, L"安全关机", 1,
+        ui_shutdown_header_h(global_state), NULL, L"返回 ");
+#if NANO_HAS_HW_KEYBOARD
+    ui_draw_footer(key_event, global_state, L"长按D键关机  短按A键取消", 1);
+#else
+    ui_draw_footer(key_event, global_state, L"滑到最右端即可关机", 1);
+#endif
+    Shutdown_Ui u;
+    ui_shutdown_layout(global_state, &u);
+    ui_shutdown_draw_slider(global_state, &u, s_shutdown_progress);
+    s_shutdown_drawn_progress = s_shutdown_progress;
+}
+
+// 关机过程 / 失败提示（全屏居中一行）
+static void ui_shutdown_draw_status(Key_Event *key_event, Global_State *global_state,
+                                    const wchar_t *text, int32_t is_error) {
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        gfx_fill_white(global_state->gfx);
+    }
+    else {
+        gfx_soft_clear(global_state->gfx);
+    }
+    ui_draw_header(key_event, global_state, L"安全关机", 1);
+    uint8_t tr = 240, tg = 240, tb = 240;
+    if (is_error) { tr = 220; tg = 64; tb = 64; }
+    else if (global_state->ui_color_style == UI_COLOR_LIGHT) { tr = 34; tg = 34; tb = 34; }
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_16, (wchar_t *)text,
+        (int32_t)global_state->gfx->width / 2, (int32_t)global_state->gfx->height / 2, tr, tg, tb, 1);
+    gfx_refresh(global_state->gfx);
+}
+
+// 真正执行关机（滑块滑到位松手 / 长按 D 两条入口共用）
+static void ui_shutdown_do_shutdown(Key_Event *key_event, Global_State *global_state) {
+    s_shutdown_busy = 1;
+    s_shutdown_dragging = 0;
+
+    ui_shutdown_draw_status(key_event, global_state, L"正在安全关机...", 0);
+
+    // 成功时本函数不返回（ESP32 已断电）；Linux 的 poweroff 成功返回 0 也不回到
+    // 失败分支，保持“正在安全关机...”画面并忽略输入，与原实现语义一致。
+    if (graceful_shutdown() < 0) {
+        // 关机失败：提示后返回主菜单
+        ui_shutdown_draw_status(key_event, global_state, L"安全关机失败", 1);
+        sleep_in_ms(1000);
+        s_shutdown_busy = 0;
+        global_state->STATE = STATE_MAIN_MENU;
+    }
+}
+
+
 int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
     // 将时间戳转为本地日期时间
@@ -6034,41 +6280,92 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
     /////////////////////////////////////////////
 
     case STATE_SHUTDOWN:
-
-        // 首次获得焦点：初始化
+    {
+        // 首次获得焦点：复位滑块并整页重绘
         if (global_state->PREV_STATE != global_state->STATE) {
-            ui_draw_header(key_event, global_state, L"安全关机", 1);
-            ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
-            ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, L"确定关机？\n\n·长按D键: 关机\n·短按A键: 返回", 0, 0);
-            ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
+            s_shutdown_progress = 0;
+            s_shutdown_dragging = 0;
+            s_shutdown_grab_dx = 0;
+            s_shutdown_drawn_progress = -1;
+            s_shutdown_busy = 0;
+            ui_shutdown_draw_page(key_event, global_state);
+            gfx_refresh(global_state->gfx);
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        // 长按D键确认关机
-        if (key_event->key_edge == -2 && key_event->key_code == NANO_KEY_enter) {
-            ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, L" \n \n    正在安全关机...", 0, 0);
-            ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
+        // 关机进行中 / 失败提示中：忽略一切输入
+        if (s_shutdown_busy) {
+            break;
+        }
 
-            if (graceful_shutdown() >= 0) {
-                // exit(0);
+        // ---- 实体键盘（十六宫格软键已整体抑制，此处仅实体键；仍显式过滤软按键）----
+        if (key_event->is_soft_key == 0) {
+            // 长按 D 键：直接确认关机（保留原有硬键盘快捷方式）
+            if (key_event->key_edge == -2 && key_event->key_code == NANO_KEY_enter) {
+                ui_shutdown_do_shutdown(key_event, global_state);
+                break;
             }
-            // 关机失败，返回主菜单
-            else {
-                ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, L"安全关机失败", 0, 0);
-                ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
-
-                sleep_in_ms(1000);
-
+            // 短按/长按 A 键：取消关机，返回主菜单
+            if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
                 global_state->STATE = STATE_MAIN_MENU;
+                break;
             }
         }
 
-        // 长短按A键取消关机，返回主菜单
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
+        // ---- 触屏：抓住推钮左右拖动 ----
+        Shutdown_Ui u;
+        ui_shutdown_layout(global_state, &u);
+
+        // 页眉右侧「返回」热点（松手沿 + 按下点坐标，同文本控件约定）：触屏设备的取消入口
+        if ((key_event->touch_edge & TOUCH_EDGE_UP)
+            && key_event->touch_down_y >= 0
+            && key_event->touch_down_y < ui_shutdown_header_h(global_state)
+            && key_event->touch_down_x >= UI_BACK_HOTSPOT_X0((int32_t)global_state->gfx->width)) {
             global_state->STATE = STATE_MAIN_MENU;
+            break;
+        }
+
+        // 按下沿：只锁存状态，不引发任何状态切换（命中判定只认推钮及其附近余量，
+        // 点按轨道其它位置不会误触发；余量随轨道高度放大，小屏也易于抓取）
+        if (key_event->touch_edge & TOUCH_EDGE_DOWN) {
+            int32_t knob_cx = ui_shutdown_knob_cx(&u, s_shutdown_progress);
+            int32_t cy = u.track_y + u.track_h / 2;
+            int32_t hit_r = u.knob_r + UI_SHUTDOWN_GRAB_SLOP;
+            int32_t dx = key_event->touch_down_x - knob_cx;
+            int32_t dy = key_event->touch_down_y - cy;
+            if (dx * dx + dy * dy <= hit_r * hit_r) {
+                s_shutdown_dragging = 1;
+                // 抓取点与钮心的偏差：拖动时保持相对位置，推钮不在手指下跳动
+                s_shutdown_grab_dx = knob_cx - key_event->touch_down_x;
+            }
+        }
+
+        // 拖动中：推钮跟随手指（逐帧读触点快照），越界由进度钳制消化
+        if (s_shutdown_dragging && key_event->is_touching) {
+            s_shutdown_progress = ui_shutdown_progress_from_x(&u, key_event->touch_x + s_shutdown_grab_dx);
+        }
+
+        // 松手沿：滑到位则关机，否则回弹到起点
+        if (key_event->touch_edge & TOUCH_EDGE_UP) {
+            if (s_shutdown_dragging) {
+                s_shutdown_dragging = 0;
+                if (s_shutdown_progress >= UI_SHUTDOWN_COMPLETE_PCT) {
+                    ui_shutdown_do_shutdown(key_event, global_state);
+                    break;
+                }
+                s_shutdown_progress = 0;
+            }
+        }
+
+        // 仅在进度变化时重绘滑块（脏区推帧：拖动时只推轨道包围盒）
+        if (s_shutdown_progress != s_shutdown_drawn_progress) {
+            ui_shutdown_draw_slider(global_state, &u, s_shutdown_progress);
+            s_shutdown_drawn_progress = s_shutdown_progress;
+            gfx_refresh(global_state->gfx);
         }
 
         break;
+    }
 
 
     /////////////////////////////////////////////
