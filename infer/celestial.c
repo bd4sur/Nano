@@ -2726,7 +2726,8 @@ void linglong_init(Linglong_Config *cfg) {
 #endif
     cfg->enable_equatorial_coord = 0; // 是否启用赤道坐标圈
     cfg->enable_horizontal_coord = 1; // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
-    cfg->enable_star_burst = 1;       // 是否启用星芒效果
+    cfg->enable_star_burst = 0;       // 星芒效果（太阳十字星芒）：默认关（与镜头光晕二选一，避免两道叠加）
+    cfg->enable_lens_flare = 1;       // 是否启用太阳镜头光晕（离轴色散光斑；默认开）
     cfg->enable_star_name = 0;        // 是否显示恒星名称（0-不显示；1-除行星；2-仅行星；3-全部）
     cfg->enable_planet = 1;           // 是否显示大行星
     cfg->enable_ecliptic_circle = 0;  // 是否显示黄道
@@ -2824,6 +2825,7 @@ void render_sky(Nano_GFX *gfx,
     int32_t enable_equatorial_coord, // 是否启用赤道坐标圈
     int32_t enable_horizontal_coord, // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst,       // 是否启用星芒效果
+    int32_t enable_lens_flare,       // 是否启用太阳镜头光晕（离轴色散光斑；默认开）
     int32_t enable_star_name,        // 是否显示恒星名称（0-不显示；1-除行星；2-仅行星；3-全部）
     int32_t enable_planet,           // 是否显示大行星
     int32_t enable_ecliptic_circle,  // 是否显示黄道
@@ -3002,7 +3004,10 @@ void render_sky(Nano_GFX *gfx,
             cp.render_scale = S_CLOUD_PRECISION_PARAMS[lv].render_scale;
             cp.step_nominal_km = S_CLOUD_PRECISION_PARAMS[lv].step_nominal_km;
         }
-        cp.enable_sun_lens = 0; // 天象仪绘制太阳
+        // 太阳方向的云透射率（光晕可见度）：置 1 让云内核每帧在天空遍算好可见度，
+        // 供 render_sky 末尾统一叠加镜头光晕（天象仪自己绘制太阳盘/星芒，故 PASS_BOTH 的
+        // 云内核自叠光晕走不到这里）。关光晕时置 0，省一次沿太阳方向的 ray-march。
+        cp.enable_sun_lens = (enable_lens_flare != 0) ? 1 : 0;
 
         // 观察高度：直接取观察者的真实海拔（漫游时是连续量，档位表只是界面上的
         // 快捷跳转值）。相机海拔同时进入天空积分与云层 ray-march：天空的视角高度、
@@ -3362,6 +3367,39 @@ void render_sky(Nano_GFX *gfx,
         cp.pass = UI_CLOUD_PASS_CLOUDS;
         ui_cloud_render_core(gfx, &cp);
         ui_cloud_flush_over(gfx);
+    }
+
+    // ============================================================================
+    // 太阳镜头光晕（参照 linglong.html 的 cloud_sky_lens_hdr）
+    // ============================================================================
+    // 镜头光晕是光在镜筒内多次反射的产物，属于屏幕空间叠加光：故在天空/云/地景全部
+    // 画完之后，把 6 个「离轴色散光斑」以加法叠到帧缓冲上。只保留光斑（参考实现中
+    // 太阳周围的散射光晕默认关闭、星芒已移出 lens；太阳盘与星芒仍由天象仪自己绘制）。
+    //
+    // 三个前提与参考实现一致：
+    //   · 太阳在地平线以上（地平线下无直射光，恒不显示，不受开关控制）；
+    //   · 太阳在视野前方 —— 鱼眼投影会把背后目标折回画内，必须显式判角
+    //     （cos(视线,太阳) > 0.02，即夹角 ≲ 89°）；
+    //   · 太阳方向未被云遮死：体积云（模型 4）用云内核算好的透射率，其余模型无云 → 1。
+    if (enable_lens_flare && sun_alt >= 0.0f) {
+        const float va_rad = to_rad_float(view_alt);
+        const float sa_rad = to_rad_float(sun_alt);
+        const float dazi_rad = to_rad_float(sun_azi - view_azi);
+        const float cos_sep = sinf(va_rad) * sinf(sa_rad)
+                            + cosf(va_rad) * cosf(sa_rad) * cosf(dazi_rad);
+        if (cos_sep > 0.02f) {
+            float lens_vis = 1.0f;
+            if (sky_model == 4) {
+                // 沿太阳方向的云透射率（天空遍已算好）；被云完全遮住时不画光晕
+                lens_vis = ui_cloud_sun_visibility();
+            }
+            if (lens_vis > 0.0f) {
+                // 太阳的屏幕 NDC（±1）：与镜头光晕的屏幕空间参数同一坐标系
+                const float sun_ndc_x = (sun_proj_x - center_x) / (fb_width * 0.5f);
+                const float sun_ndc_y = (center_y - sun_proj_y) / (fb_height * 0.5f);
+                ui_cloud_lens_flare_draw(gfx, sun_ndc_x, sun_ndc_y, lens_vis);
+            }
+        }
     }
 
 

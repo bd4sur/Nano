@@ -2355,6 +2355,198 @@ static void cloud_write_pixel_premul(int32_t x, Cv3 cloudHDR, float transmittanc
 }
 
 // ===========================================================================
+// 太阳镜头光晕（屏幕空间叠加光；天象仪在任意散射模型上叠加的那一道）
+//
+// 参照 linglong.html 的 cloud_sky_lens_hdr：
+//   · CLOUD_SKY_SUN_GLOW = 0 —— 太阳周围的扇射光晕（orb 序列 + 衍射环 + 径向 glare）
+//     在参考实现里默认关闭（逻辑保留），此处同样不绘制；
+//   · 太阳核心盘由天象仪自己的 render_sun 绘制，此处不重复；
+//   · 星芒由天象仪的 star_burst_filter 绘制，此处不重复（参考实现也已把它移出 lens）。
+//   → 只保留「离轴色散光斑」（6 个 ghosts）：镜头光晕最具辨识度的部分。
+//
+// 显示域叠加（与参考实现的解耦 GLSL 路径一致：rgbPremul += pow(acesFilm(lens), 1/2.2)）：
+//   光斑 HDR 先过 ACES + sRGB 压到 0..1，再以「加法」写帧缓冲 —— 镜头光晕是光在镜筒
+//   内多次反射的产物，属于屏幕空间叠加光，不应被云/地景遮挡，故在天象仪画完
+//   天空/云/地景之后调用。
+//
+// 参数：sun_ndc_x/sun_ndc_y 为太阳的屏幕 NDC（±1，x 右正、y 上正），
+//       sun_vis 为沿太阳方向的可见度（体积云透射率；无云时为 1）。
+// 成本：只遍历每个光斑的包围盒（半径 ≈0.03~0.07 NDC，320x240 下各 ~20x16 像素），
+//       6 个光斑合计约 2k 像素，可忽略。
+// ===========================================================================
+#define CLOUD_LENS_FLARE_GAIN (0.35f)   // 与 linglong.html 的 CLOUD_SKY_LENS_FLARE_GAIN 一致
+#define CLOUD_LENS_EXPOSURE   (6.0f)    // 与 linglong.html 的 sunVis × 6.0 曝光增益一致
+
+typedef struct { float dist, chroma, size_mul, weight; } CloudLensGhost;
+static const CloudLensGhost CLOUD_LENS_GHOSTS[6] = {
+    { -2.00f, 0.05f, 0.05f, 0.8f },
+    { -0.90f, 0.02f, 0.03f, 0.4f },
+    { -0.35f, 0.02f, 0.04f, 1.5f },
+    { -0.25f, 0.01f, 0.15f, 0.9f },
+    {  0.30f, 0.02f, 0.20f, 1.2f },
+    {  1.20f, 0.03f, 0.10f, 0.8f },
+};
+
+// 单个色散光斑在某像素处的线性 HDR 值（lens.glsl flare() 的逐通道偏移版）
+static inline Cv3 cloud_lens_flare_at(Cv2 v, Cv2 sun, float dist, float chroma,
+                                      float size, float gain) {
+    float inv = 1.0f / (size * 2.0f);
+    float d0x = v.x - sun.x * (dist - chroma), d0y = v.y - sun.y * (dist - chroma);
+    float d1x = v.x - sun.x * dist,           d1y = v.y - sun.y * dist;
+    float d2x = v.x - sun.x * (dist + chroma), d2y = v.y - sun.y * (dist + chroma);
+    float l0 = sqrtf(d0x * d0x + d0y * d0y);
+    float l1 = sqrtf(d1x * d1x + d1y * d1y);
+    float l2 = sqrtf(d2x * d2x + d2y * d2y);
+    float r = fmaxf(0.0f, 0.01f - powf(l0, 2.4f) * inv) * 0.85f;
+    float g = fmaxf(0.0f, 0.01f - powf(l1, 2.4f) * inv) * 1.00f;
+    float b = fmaxf(0.0f, 0.01f - powf(l2, 2.4f) * inv) * 1.50f;
+    return v3(r * gain, g * gain, b * gain);
+}
+
+void ui_cloud_lens_flare_draw(Nano_GFX *gfx, float sun_ndc_x, float sun_ndc_y, float sun_vis) {
+    if (gfx == NULL) return;
+    if (!(sun_vis > 0.004f)) return;
+    // 色调映射的 gamma 查表可能尚未初始化（例如当前天空模型不是体积云、云内核本帧没跑）：
+    // 本函数可能独立于云渲染被调用，故在此保底初始化（幂等，开销可忽略）。
+    cloud_gamma_lut_ensure();
+    const int32_t W = (int32_t)gfx->width, H = (int32_t)gfx->height;
+    if (W < 4 || H < 4) return;
+
+    // 太阳须在画面附近（参考实现：屏幕外 60 px 以内仍可能把光打进镜头）
+    const float um = 1.0f + 120.0f / (float)W;
+    const float vm = 1.0f + 120.0f / (float)H;
+    if (sun_ndc_x < -um || sun_ndc_x > um || sun_ndc_y < -vm || sun_ndc_y > vm) return;
+
+    const float size = 0.5f * 2.0f * 0.9f;   // fovFactor=2 的下限（与 flower/参考实现一致）
+    const float k = sun_vis * CLOUD_LENS_EXPOSURE;
+    const float hw = (float)W * 0.5f, hh = (float)H * 0.5f;
+    const Cv2 sunp = cv2(sun_ndc_x, sun_ndc_y);
+
+    // ---- 第一步：算每个光斑的包围盒（像素）与增益 ----
+    // 参考实现把 6 个光斑的 HDR 相加后只做一次色调映射；本函数也必须“先求和再压”，
+    // 否则光斑重叠处（太阳靠近画面中心时 6 个光斑会在中心聚成一堆）会比参考亮 2~3 倍
+    // 且洗成纯白。为避全屏遍历，按包围盒是否相交把光斑分组：组内求和后压一次，
+    // 组间包围盒不相交（一个像素不可能同时落在两个不相交光斑内），结果与“全屏求和
+    // 后压一次”逐像素等价。
+    int32_t gxi[6];                              // 紧凑下标 k → 光斑表下标（包围盒被裁空的会跳过，两者不再相同）
+    int32_t gx0[6], gx1[6], gy0[6], gy1[6];
+    int32_t gn = 0;
+    for (int32_t gi = 0; gi < 6; gi++) {
+        const CloudLensGhost *gh = &CLOUD_LENS_GHOSTS[gi];
+        const float gsize = size * gh->size_mul;
+        const float gain = CLOUD_LENS_FLARE_GAIN * gh->weight * k;
+        if (gsize <= 1e-6f || gain <= 0.0f) continue;
+
+        // 衰减半径：0.01 - l^2.4/(2s) > 0  =>  l < (0.02·s)^(1/2.4)
+        const float lmax = powf(0.02f * gsize, 1.0f / 2.4f);
+        // 三个通道中心（色散偏移）的并集包围盒
+        float u0 = 1e9f, u1 = -1e9f, v0 = 1e9f, v1 = -1e9f;
+        for (int32_t c = -1; c <= 1; c++) {
+            float d = gh->dist + (float)c * gh->chroma;
+            float cx = sun_ndc_x * d, cy = sun_ndc_y * d;
+            if (cx - lmax < u0) u0 = cx - lmax;
+            if (cx + lmax > u1) u1 = cx + lmax;
+            if (cy - lmax < v0) v0 = cy - lmax;
+            if (cy + lmax > v1) v1 = cy + lmax;
+        }
+        int32_t x0 = (int32_t)floorf((u0 + 1.0f) * hw);
+        int32_t x1 = (int32_t)ceilf((u1 + 1.0f) * hw);
+        int32_t y0 = (int32_t)floorf((1.0f - v1) * hh);
+        int32_t y1 = (int32_t)ceilf((1.0f - v0) * hh);
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > W) x1 = W;
+        if (y1 > H) y1 = H;
+        if (x0 >= x1 || y0 >= y1) continue;
+        gxi[gn] = gi;
+        gx0[gn] = x0; gx1[gn] = x1; gy0[gn] = y0; gy1[gn] = y1;
+        gn++;
+    }
+    if (gn == 0) return;
+
+    // ---- 第二步：按包围盒相交合并成组（gn ≤ 6，暴力合并 + 并查集即可） ----
+    int32_t grp[6];
+    int32_t gbx0[6], gbx1[6], gby0[6], gby1[6];   // 每个“组代表”的并集包围盒
+    for (int32_t i = 0; i < gn; i++) {
+        grp[i] = i;
+        gbx0[i] = gx0[i]; gbx1[i] = gx1[i]; gby0[i] = gy0[i]; gby1[i] = gy1[i];
+    }
+    for (int32_t i = 0; i < gn; i++) {
+        for (int32_t j = i + 1; j < gn; j++) {
+            const int32_t a = grp[i], b = grp[j];
+            if (a == b) continue;
+            if (gbx0[a] < gbx1[b] && gbx0[b] < gbx1[a] && gby0[a] < gby1[b] && gby0[b] < gby1[a]) {
+                for (int32_t t = 0; t < gn; t++) if (grp[t] == b) grp[t] = a;
+                if (gbx0[b] < gbx0[a]) gbx0[a] = gbx0[b];
+                if (gbx1[b] > gbx1[a]) gbx1[a] = gbx1[b];
+                if (gby0[b] < gby0[a]) gby0[a] = gby0[b];
+                if (gby1[b] > gby1[a]) gby1[a] = gby1[b];
+            }
+        }
+    }
+
+    // ---- 第三步：逐组遍历组包围盒，组内求和后压一次，再叠加到帧缓冲 ----
+    int32_t done[6] = { 0, 0, 0, 0, 0, 0 };
+    for (int32_t lead = 0; lead < gn; lead++) {
+        if (done[lead]) continue;
+        const int32_t gid = grp[lead];
+        int32_t ux0 = W, ux1 = 0, uy0 = H, uy1 = 0;
+        int32_t members[6], mn = 0;
+        for (int32_t t = 0; t < gn; t++) {
+            if (grp[t] != gid) continue;
+            members[mn++] = t;
+            done[t] = 1;
+            if (gx0[t] < ux0) ux0 = gx0[t];
+            if (gx1[t] > ux1) ux1 = gx1[t];
+            if (gy0[t] < uy0) uy0 = gy0[t];
+            if (gy1[t] > uy1) uy1 = gy1[t];
+        }
+        for (int32_t y = uy0; y < uy1; y++) {
+            const float vv = 1.0f - ((float)y + 0.5f) / hh;
+            for (int32_t x = ux0; x < ux1; x++) {
+                // 只在该像素落在至少一个成员光斑的包围盒内时才求值
+                int32_t any = 0;
+                for (int32_t t = 0; t < mn; t++) {
+                    const int32_t m = members[t];
+                    if (x >= gx0[m] && x < gx1[m] && y >= gy0[m] && y < gy1[m]) { any = 1; break; }
+                }
+                if (!any) continue;
+
+                const float uu = ((float)x + 0.5f) / hw - 1.0f;
+                Cv3 hdr = v3(0, 0, 0);
+                for (int32_t t = 0; t < mn; t++) {
+                    const int32_t m = members[t];
+                    if (x < gx0[m] || x >= gx1[m] || y < gy0[m] || y >= gy1[m]) continue;
+                    int32_t k2 = m;   // m 为紧凑下标，经 gxi[] 映射回光斑表下标
+                    const CloudLensGhost *gh = &CLOUD_LENS_GHOSTS[gxi[k2]];
+                    const float gsize = size * gh->size_mul;
+                    const float gain = CLOUD_LENS_FLARE_GAIN * gh->weight * k;
+                    hdr = v3add(hdr, cloud_lens_flare_at(cv2(uu, vv), sunp, gh->dist, gh->chroma,
+                                                         gsize, gain));
+                }
+                if (hdr.x <= 0.0f && hdr.y <= 0.0f && hdr.z <= 0.0f) continue;
+                // 与参考实现的解耦 GLSL 路径一致：先压一次 ACES+sRGB，再叠加到显示域
+                Cv3 t3 = cloud_tonemap(hdr);
+                int32_t r8 = (int32_t)(t3.x * 255.0f + 0.5f);
+                int32_t g8 = (int32_t)(t3.y * 255.0f + 0.5f);
+                int32_t b8 = (int32_t)(t3.z * 255.0f + 0.5f);
+                if (r8 <= 0 && g8 <= 0 && b8 <= 0) continue;
+                gfx_add_pixel(gfx, (uint32_t)x, (uint32_t)y,
+                              (uint8_t)(r8 > 255 ? 255 : r8),
+                              (uint8_t)(g8 > 255 ? 255 : g8),
+                              (uint8_t)(b8 > 255 ? 255 : b8));
+            }
+        }
+    }
+}
+
+// 沿太阳方向的云透射率（0..1）：体积云天空每一帧算好；无云/未渲染时为 0。
+// 供天象仪把镜头光晕按「太阳是否被云遮住」调暗。
+float ui_cloud_sun_visibility(void) {
+    return s_ui.sun_visible ? s_ui.sun_vis : 0.0f;
+}
+
+// ===========================================================================
 // 天空遍「地平线以下」方位角环缓存（性能专项 A10）
 //
 // PASS_SKY 已把射线仰角钳到 +0.0005（见 cloud_core_render 内注释），因此**整个
@@ -2744,11 +2936,13 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
         : (2.0f * tanV / (float)H);
 
     // 太阳镜头光晕（每帧一次）：太阳在相机前方时投影到屏幕 NDC，并求其被云遮挡的透射率
-    s_ui.sun_visible = 0;
+    // （解耦渲染时只在天空遍算：结果跨遍存于 s_ui，供天象仪在云遍之后统一叠光晕；
+    //   PASS_CLOUDS 不重复一次沿太阳方向的 ray-march，也不清掉天空遍算好的值）
+    if (p->pass != UI_CLOUD_PASS_CLOUDS) s_ui.sun_visible = 0;
     // 太阳低于地平线时无条件关闭光晕（linglong.html 同步）：地平线下无直射光，
     // 避免太阳盘/光晕绘制在地平线以下的“黑色地面”上
     float sunElevDeg = asinf(saturatef(s_scene.sunDirection.y)) * 180.0f / kPI;
-    if (p->enable_sun_lens && sunElevDeg >= 0.0f) {
+    if (p->enable_sun_lens && p->pass != UI_CLOUD_PASS_CLOUDS && sunElevDeg >= 0.0f) {
         Cv3 sc = v3(v3dot(s_scene.sunDirection, right),
                     v3dot(s_scene.sunDirection, camUp),
                     v3dot(s_scene.sunDirection, forward));

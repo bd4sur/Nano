@@ -66,6 +66,7 @@ typedef struct Linglong_Config {
     int32_t enable_equatorial_coord; // 是否启用赤道坐标圈
     int32_t enable_horizontal_coord; // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst;       // 是否启用星芒效果
+    int32_t enable_lens_flare;       // 是否启用太阳镜头光晕（离轴色散光斑；默认开）
     int32_t enable_star_name;        // 是否显示恒星名称（0-不显示；1-除行星；2-仅行星；3-全部）
     int32_t enable_planet;           // 是否显示大行星
     int32_t enable_ecliptic_circle;  // 是否显示黄道
@@ -167,6 +168,7 @@ void render_sky(Nano_GFX *gfx,
     int32_t enable_equatorial_coord, // 是否启用赤道坐标圈
     int32_t enable_horizontal_coord, // 是否启用地平坐标圈（0-不启用；1-仅方位角文字；2-方位角+坐标圈）
     int32_t enable_star_burst,       // 是否启用星芒效果
+    int32_t enable_lens_flare,       // 是否启用太阳镜头光晕（离轴色散光斑；默认开）
     int32_t enable_star_name,        // 是否显示恒星名称（0-不显示；1-除行星；2-仅行星；3-全部）
     int32_t enable_planet,           // 是否显示大行星
     int32_t enable_ecliptic_circle,  // 是否显示黄道

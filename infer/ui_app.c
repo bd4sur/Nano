@@ -2748,7 +2748,27 @@ static void ui_app_linglong_setting_fill_cells(Global_State *global_state, UiLin
     cells[4].label = L"返回";
     cells[4].is_special = 1;
 
-    // 第 2 行：前两格空出（原大气散射/地景已移到控制面板），后三格保留
+    // 第 2 行：第 1 格镜头光晕、第 2 格星芒（大气类视觉开关；两者默认“光晕开、星芒关”）
+    cells[5].label = L"镜头光晕";
+    if (cfg->enable_lens_flare == 0) {
+        cells[5].value = L"关";
+        cells[5].value_r = 222; cells[5].value_g = 0; cells[5].value_b = 0;
+    }
+    else {
+        cells[5].value = L"开";
+        cells[5].value_r = 0; cells[5].value_g = 255; cells[5].value_b = 0;
+    }
+
+    cells[6].label = L"星芒";
+    if (cfg->enable_star_burst == 0) {
+        cells[6].value = L"关";
+        cells[6].value_r = 222; cells[6].value_g = 0; cells[6].value_b = 0;
+    }
+    else {
+        cells[6].value = L"开";
+        cells[6].value_r = 0; cells[6].value_g = 255; cells[6].value_b = 0;
+    }
+
     cells[7].label = L"天体名称";
     switch (cfg->enable_star_name) {
         case 0:
@@ -3062,6 +3082,7 @@ void ui_app_linglong_draw_full(Key_Event *key_event, Global_State *global_state)
         llcfg->enable_equatorial_coord,
         llcfg->enable_horizontal_coord,
         llcfg->enable_star_burst,
+        llcfg->enable_lens_flare,
         llcfg->enable_star_name,
         llcfg->enable_planet,
         llcfg->enable_ecliptic_circle,
@@ -3567,6 +3588,18 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                 ui_app_linglong_cloud_next_precision(global_state);
             }
             linglong_state = LL_STATE_SETTING_CALLBACK;   // 重绘设置界面（现值已变）
+        }
+        else if (cell == 5) {
+            // 镜头光晕开关（太阳离轴色散光斑；默认开）
+            Linglong_Config *oc = global_state->linglong_cfg;
+            oc->enable_lens_flare = (oc->enable_lens_flare != 0) ? 0 : 1;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
+        }
+        else if (cell == 6) {
+            // 星芒开关（太阳十字星芒；默认关）
+            Linglong_Config *oc = global_state->linglong_cfg;
+            oc->enable_star_burst = (oc->enable_star_burst != 0) ? 0 : 1;
+            linglong_state = LL_STATE_SETTING_CALLBACK;
         }
         else if (cell >= 11 && cell <= 13) {
             // 海洋参数：直接循环档位（硬键没有空位可映射，与云参数按钮同为触屏专用）

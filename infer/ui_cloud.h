@@ -92,7 +92,9 @@ typedef struct UiCloud_Render_Params {
     int   layer_mask;       // 云层种类掩码（UI_CLOUD_LAYER_* 组合）
     float brightness;       // 云亮度 0.5~2.0（天象仪传入 ui_cloud_brightness_for_sun_alt() 的
                             // 自动调制值；独立应用仍可用 2/8 键手动调节）
-    int   enable_sun_lens;  // 是否绘制云内核自带的太阳镜头光晕（天象仪集成时关闭，因为它自己画太阳）
+    int   enable_sun_lens;  // 是否求太阳方向的云透射率并绘制云内核自带的太阳镜头光晕
+                            // （天象仪：置 1 只为了拿可见度，光晕由 render_sky 末尾统一叠加；
+                            //   独立体积云 App：置 1 则 PASS_BOTH 内叠 HDR 光晕）
     // ---- 性能档位覆盖（0 = 用 ui_cloud 内部默认值，见 CLOUD_OPT_* 宏） ----
     int   render_scale;     // 内部渲染降采样倍数（1=全分辨率，2=半分辨率…）
     float step_nominal_km;  // 云区裁剪后的目标采样步距（km）
@@ -132,6 +134,21 @@ void ui_cloud_flush_over(Nano_GFX *gfx);
 // 当前启用云层里最低的云底（km，地面以上）；无云（掩码 0）或尚未初始化时返回 -1。
 // 用于决定“云比地景近还是远”：观察高度 >= 该值时云在脚下，必须先画地景再合成云。
 float ui_cloud_lowest_layer_base_km(void);
+
+// ===============================================================================
+// 太阳镜头光晕（屏幕空间叠加光；参照 linglong.html 的 cloud_sky_lens_hdr）
+//
+// 天象仪在天空/云/地景全部画完之后调用本函数，把 6 个「离轴色散光斑」以加法叠到
+// 当前帧缓冲（不遮挡、不调色）：镜头光晕是光在镜筒内多次反射的产物，属于屏幕空间
+// 叠加光。太阳核心盘/星芒仍由天象仪自己绘制（参考实现的 lens 也已移出星芒）；
+// 参考实现中默认关闭的太阳周围散射光晕（CLOUD_SKY_SUN_GLOW=0）同样不绘制。
+//   sun_ndc_x/sun_ndc_y：太阳的屏幕 NDC（±1，x 右正、y 上正），由 fisheye_project 得出；
+//   sun_vis：沿太阳方向的可见度（体积云透射率；无云/其它散射模型传 1.0）。
+// 成本：只遍历各光斑包围盒（合计约 2k 像素，320x240）。
+// ===============================================================================
+void  ui_cloud_lens_flare_draw(Nano_GFX *gfx, float sun_ndc_x, float sun_ndc_y, float sun_vis);
+// 沿太阳方向的云透射率（0..1）：体积云天空（模型 4）每帧算好；无云或未渲染时为 0。
+float ui_cloud_sun_visibility(void);
 
 int32_t ui_cloud_init(Key_Event *key_event, Global_State *global_state);
 int32_t ui_cloud_event_handler(Key_Event *key_event, Global_State *global_state);
