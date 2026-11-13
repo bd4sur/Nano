@@ -30,6 +30,7 @@
 #include "ui_cloud.h"
 #include "hal_key.h"
 #include "platform.h"
+#include "celestial_night.h"
 
 // ---------------------------------------------------------------------------
 // 向量与标量工具
@@ -666,6 +667,34 @@ typedef struct {
 } CloudScene;
 
 static CloudScene s_scene;
+
+// ===========================================================================
+// 夜天光（散射模型 4）：天空积分只含「散射太阳光」，太阳落到地平线以下后直射项
+// 被地球阴影归零、多重散射 LUT 也只剩暮光余晖，于是整片天空与云都变纯黑。真实夜空
+// 另有气辉 + 积分星光 + 黄道光（见 celestial_night.h 的物理成分与方向分布）。
+//
+// 标定量：本模块 HDR 的白天晴天顶 ≈ 0.6，物理夜天光约为其 3e-8（≈ 1.8e-8）；直接叠加
+// 在 ACES 下仍是 8bit 全黑，故同样按「暗适应后等效亮度」标定：1.8e-8 × 6.7e5（≈ +19.4 EV）
+// ≈ 1.2e-2。该值经 ACES + sRGB 后落在 15~25/255 的微光区间，与模型 5 的夜空亮度
+// （天顶 10~20/255）同量级。
+// ===========================================================================
+#define CLOUD_NIGHT_RAD (1.2e-2f)
+
+// 夜天光的仰角表（见 celestial_night.h 的「性能」一节）：太阳相关部分每帧算一次，
+// 逐像素只做线性插值 + 一个方位余弦。
+static Linglong_Night_Sky s_night;
+
+// 夜天光辐亮度（云世界坐标：x 东、y 上、z 南；太阳方向为 s_scene.sunDirection）
+static Cv3 cloud_night_sky(Cv3 dir) {
+    double w[3];
+    linglong_night_sky_eval(&s_night, (double)dir.x, (double)dir.y, (double)dir.z, w);
+    float k = CLOUD_NIGHT_RAD;
+    return v3((float)w[0] * k, (float)w[1] * k, (float)w[2] * k);
+}
+
+// 夜天光可见度（0 = 白天/晨昏，1 = 天文夜）。由 cloud_update_sky_light 逐帧随太阳更新，
+// 供逐像素路径做早退（白天不付任何代价）。
+static float s_night_vis = 0.0f;
 
 static void cloud_default_scene(CloudScene *s) {
     s->bottomRadius = kEarthBottomRadius;
@@ -1934,6 +1963,15 @@ static CloudPixel cloudPixelCompute(Cv3 worldPos, Cv3 worldDir, float appTime, f
 
     out.color = scatteredLight;
     out.transmittance = transmittance;
+    // 夜间环境散射（见 cloud_night_sky）：云挡住了后方的气辉/星光层，自身又散射上/下行的
+    // 夜天光。白云反照率 ≈ 0.8，故云在夜间的亮度应与夜空同量级（真实无月夜的云几乎看不出
+    // 轮廓）；不补这一项，云的直射/多重散射在太阳落下后归零，云会变成比夜空更黑的剪影带
+    // （天空是微光、云层是纯黑的“暗带”）。s_night_vis 在白天为 0，此分支逐位不生效。
+    if (s_night_vis > 0.0f) {
+        Cv3 night = cloud_night_sky(worldDir);
+        float cov = 1.0f - transmittance;   // 累积覆盖率（color 为预乘色，同量纲）
+        out.color = v3add(out.color, v3mul(night, 0.8f * cov));
+    }
     if (v3anynan(out.color) || v3anyinf(out.color)) { out.color = v3(0, 0, 0); out.transmittance = 1.0f; }
     return out;
 }
@@ -2168,6 +2206,11 @@ static void cloud_update_sky_light(void) {
                              sl.y * (1.0f - 0.06f * kTwl),
                              sl.z * (1.0f + 0.45f * kTwl));
     s_scene.skySunIntensity = s_scene.sunIntensity;
+    // 夜天光：仰角表每帧随太阳更新（白天 vis=0，整表为 0，逐像素早退）
+    linglong_night_sky_init(&s_night, (double)s_scene.sunDirection.x,
+                            (double)s_scene.sunDirection.y,
+                            (double)s_scene.sunDirection.z);
+    s_night_vis = (float)linglong_night_visibility((double)s_scene.sunDirection.y);
 }
 
 static void cloud_sun_auto_tick(void) {
@@ -2682,7 +2725,10 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
             &s_scene, 0, 1, 0, 1, 9e6f, 14, 0);
         // 地面上涌光：仅用天顶亮度×反照率 会骗低云底亮度（云底可视环境光≈地面漫反射+大气回光）。
         // 抬高尺度：上行辐照≈天顶亮度×(1+反照率) 的半球等效，再随云遮蔽淡出。
-        s_groundUpwelling = v3mul(v3mul3(zen.scatteredLight,
+        // 夜间加夜天光天顶项：云的环境补光（ambientLit）由上涌光驱动，不补的话夜间云会
+        // 变成纯黑剪影（只剩天空底）。
+        Cv3 upL = v3add(zen.scatteredLight, cloud_night_sky(upDir));
+        s_groundUpwelling = v3mul(v3mul3(upL,
             v3add(v3(1.0f, 1.0f, 1.0f), s_scene.groundAlbedo)), 4.0f);
     }
 
@@ -2788,8 +2834,10 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
                 }
                 SingleScatteringResult sky = integrateScatteredLuminance(camPos, skyDir, s_scene.sunDirection,
                     &s_scene, 1, 1, 0, 1, 9e6f, 14, 0);
-                if (rayDir.y < 0.0005f) cloud_skyring_store(rayDir, sky.scatteredLight);
-                cloud_write_pixel(x, sky.scatteredLight, rowbuf);
+                // 叠夜天光（太阳落下后的气辉 + 星光 + 黄道光，见 cloud_night_sky）
+                Cv3 skyL = v3add(sky.scatteredLight, cloud_night_sky(skyDir));
+                if (rayDir.y < 0.0005f) cloud_skyring_store(rayDir, skyL);
+                cloud_write_pixel(x, skyL, rowbuf);
                 continue;
             }
 
@@ -2815,7 +2863,9 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
             SingleScatteringResult sky = integrateScatteredLuminance(camPos, rayDir, s_scene.sunDirection,
                 &s_scene, 1, 1, 0, 1, 9e6f, 14, 0);
             // 亮度已由介质光学参数（albedo/辐照/多重散射/环境）在着色阶段体现，不再后乘
-            Cv3 final = v3add(v3mul(sky.scatteredLight, cloud.transmittance), cloud.color);
+            // 夜天光同样参与云的透射（云后面的微光夜空）
+            Cv3 final = v3add(v3mul(v3add(sky.scatteredLight, cloud_night_sky(rayDir)), cloud.transmittance),
+                              cloud.color);
 
             // 太阳镜头光晕（太阳/星芒/光斑，HDR 叠加，色调映射前）
             if (s_ui.sun_visible) {

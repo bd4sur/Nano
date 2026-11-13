@@ -24,6 +24,7 @@
 #include "graphics.h"
 #include "celestial.h"
 #include "celestial_ocean.h"
+#include "celestial_night.h"
 
 // ---- 设置界面档位表（单一真源：档位序号 → 显示名 + 物理量）----
 // 观察高度档位：海洋天空/实时海洋与体积云（sky_model==4）共用同一张表。
@@ -95,6 +96,14 @@ static const double WO_OZO_A[3] = { 0.650e-3, 1.881e-3, 0.085e-3 };
 #define WO_SKY_W         (256)
 #define WO_SKY_H         (144)
 
+// 夜天光水体环境光提升：夜间「水体上涌 = 水反照率(约 2%) × 夜天光(≈0.0075)」≈ 1.5e-4，
+// 任何色调映射下都是 8bit 全黑（真实月夜海面肉眼也近乎全黑，只剩掠射角的天空反射）。
+// 「夜海不至漆黑一片」需要把水体/泡沫的环境光按暗视觉等效亮度抬升：
+//   kAmb = 1 + WO_NIGHT_AMB_GAIN * night
+// 只作用于环境光（hemi / 天光散射）项，不碰直射太阳与天空反射，所以日间/晨昏零影响，
+// 夜间浪形仍由坡度与菲涅尔调制（不是一块均匀灰板）。
+#define WO_NIGHT_AMB_GAIN (30.0)
+
 // ---- 海况常量 ----
 #define WO_SWELL_SPREAD  (48.0)        // cos^2s 方向分布指数
 #define WO_HMAX          (2.2)         // 波场最大高程估计（射线步进起点）
@@ -106,6 +115,14 @@ static const double WO_OZO_A[3] = { 0.650e-3, 1.881e-3, 0.085e-3 };
 static const double WO_SSS_COL[3] = { 0.035, 0.120, 0.085 };
 #define WO_SSS_K         (2.6)
 static const double WO_SHALLOW_COL[3] = { 0.055, 0.190, 0.150 };
+
+// 夜天光标定量（见 celestial_night.h）：天空视图 LUT 只含「散射太阳光」，太阳落到
+// 地平线以下就逐像素归零（物理正确，但画面全黑）。真实夜空另有气辉 + 星光 + 黄道光：
+// 天顶 ≈ 21.8 mag/arcsec² ≈ 1.5e-4 cd/m²，约为本模型白天晴天顶（≈0.15，模型单位）
+// 的 3e-8。直接按真值叠加在任何色调映射下都是 8bit 全黑，故这里按「暗适应后等效
+// 亮度」标定：0.15（白天晴天顶）× 3e-8（物理比）× 1.6e6（≈ +20.6 EV 的暗适应增益）
+// ≈ 7e-3。该值经 AgX 后落在 8~14/255 的微光区间（天顶偏暗、地平略亮）。
+#define WO_NIGHT_RAD    (7.0e-3)
 #define WO_FOAM_J_THRESH (0.36 + 0.12 * 1.0)   // 雅可比白帽阈值
 #define WO_FOAM_J_GAIN   (2.5)
 
@@ -155,6 +172,7 @@ typedef struct {
     double  sky_up[3];              // 天顶辐亮度 wo_sky_atmo(0,1,0)
     double  hemi[3];                // 半球平均辐亮度（天顶 + 4 个斜方向）
     double  sun_e[3];               // 太阳辐照（透射率 LUT × WO_SUN_SCALE）
+    double  night_vis;              // 夜天光可见度 0..1（太阳高度角单值，prepare 每帧算一次）
 
     int32_t waves_ready;
     float  *wave_data[2];           // 每级联 N*N*4：h, sx, sz, jtrace
@@ -170,6 +188,9 @@ static Wo_State s_state;
 
 static Linglong_Ocean_Config s_cfg;
 static int32_t s_cfg_init = 0;
+
+// 夜天光的仰角表（见 celestial_night.h）：太阳相关部分每帧算一次，逐像素只做插值。
+static Linglong_Night_Sky s_night;
 
 // 派生量（由 wo_update_derived_params 重算）
 static double s_water_col[3];
@@ -630,6 +651,15 @@ static void wo_sky_atmo(double dx, double dy, double dz, double *out) {
     out[0] *= WO_SUN_SCALE;
     out[1] *= WO_SUN_SCALE;
     out[2] *= WO_SUN_SCALE;
+
+    // 夜天光（无月：气辉 + 积分星光 + 黄道光，见 celestial_night.h）。在这里叠加的好处是
+    // **一处生效、全局一致**：海洋天空像素、海面天空反射、水体/泡沫的环境光（sky_up/hemi）、
+    // 大气透视的地平色都从同一份辐亮度取值，夜间不会出现「天空有微光但海面仍全黑」。
+    double nw[3];
+    linglong_night_sky_eval(&s_night, dx, dy, dz, nw);
+    out[0] += nw[0] * WO_NIGHT_RAD;
+    out[1] += nw[1] * WO_NIGHT_RAD;
+    out[2] += nw[2] * WO_NIGHT_RAD;
 }
 
 // ===============================================================================
@@ -1719,11 +1749,13 @@ static void wo_isl_shade(double dx, double dy, double dz, double t_hit, double *
     const double ldx = s_state.sun_dir[0], ldy = s_state.sun_dir[1], ldz = s_state.sun_dir[2];
     const double ndl = wo_max(nx * ldx + ny * ldy + nz * ldz, 0.0);
     // 天空环境光先向亮度去饱和再压低，否则蓝天的高蓝光会把草地染成青灰
+    // 夜间环境光与海面同倍提升（WO_NIGHT_AMB_GAIN），否则夜里的岛屿会变成比海面更黑的剪影。
+    const double kAmb = 1.0 + WO_NIGHT_AMB_GAIN * s_state.night_vis;
     const double amb0 = hemi0 + sky_n0 * 0.35, amb1 = hemi1 + sky_n1 * 0.35, amb2 = hemi2 + sky_n2 * 0.35;
     const double amb_l = 0.2126 * amb0 + 0.7152 * amb1 + 0.0722 * amb2;
-    const double e0 = wo_mix(amb0, amb_l, 0.40) * 0.90;
-    const double e1 = wo_mix(amb1, amb_l, 0.40) * 0.90;
-    const double e2 = wo_mix(amb2, amb_l, 0.40) * 0.90;
+    const double e0 = wo_mix(amb0, amb_l, 0.40) * 0.90 * kAmb;
+    const double e1 = wo_mix(amb1, amb_l, 0.40) * 0.90 * kAmb;
+    const double e2 = wo_mix(amb2, amb_l, 0.40) * 0.90 * kAmb;
     double col0 = a0 * (sun_e0 * ndl * 0.318 * 0.5 + e0);
     double col1 = a1 * (sun_e1 * ndl * 0.318 * 0.5 + e1);
     double col2 = a2 * (sun_e2 * ndl * 0.318 * 0.5 + e2);
@@ -2282,6 +2314,7 @@ void linglong_ocean_free(void) {
     }
     if (s_state.foam_tex != NULL) { free(s_state.foam_tex); s_state.foam_tex = NULL; }
     memset(&s_state, 0, sizeof(s_state));
+    memset(&s_night, 0, sizeof(s_night));
     wo_isl_free_data();
     if (s_layer.color != NULL) { free(s_layer.color); s_layer.color = NULL; s_layer.cap_color = 0; }
     if (s_layer.hit != NULL) { free(s_layer.hit); s_layer.hit = NULL; s_layer.cap_hit = 0; }
@@ -2321,6 +2354,10 @@ void linglong_ocean_prepare(float sun_alt, float sun_azi, float view_f, float sk
     s_state.sun_dir[0] = cos(e) * sin(a);
     s_state.sun_dir[1] = sin(e);
     s_state.sun_dir[2] = cos(e) * cos(a);
+
+    // 夜天光：仰角表（只依赖太阳方向）+ 水体环境光提升用的可见度，每帧算一次
+    linglong_night_sky_init(&s_night, s_state.sun_dir[0], s_state.sun_dir[1], s_state.sun_dir[2]);
+    s_state.night_vis = linglong_night_visibility(s_state.sun_dir[1]);
 
     double d_alt = s_state.have_sun ? fabs((double)sun_alt - s_state.sun_alt) : 1e9;
 
@@ -2506,6 +2543,9 @@ static void wo_ocean_pixel(double dx, double dy, double dz, double t_hit, double
     const double slx = sx, slz = sz;
     const double inl = 1.0 / sqrt(slx * slx + 1.0 + slz * slz);
     const double nrmX = -slx * inl, nrmY = inl, nrmZ = -slz * inl;
+    // 夜间环境光提升系数（见 WO_NIGHT_AMB_GAIN 注释）：太阳落下后才生效，白天恒为 1
+    const double night = s_state.night_vis;
+    const double kAmb = 1.0 + WO_NIGHT_AMB_GAIN * night;
 
     // ---- 太阳辐照与天空环境（均由 LUT 得出；每帧常量已由 prepare 算好）----
     const double sunE0 = s_state.sun_e[0];
@@ -2515,9 +2555,9 @@ static void wo_ocean_pixel(double dx, double dy, double dz, double t_hit, double
     const double hemi0 = s_state.hemi[0], hemi1 = s_state.hemi[1], hemi2 = s_state.hemi[2];
 
     double sky_tmp[3];
-    wo_sky_atmo(nrmX, nrmY, nrmZ, sky_tmp);
-    const double skyN0 = sky_tmp[0], skyN1 = sky_tmp[1], skyN2 = sky_tmp[2];
-
+    // skyN（沿波面法向的天光）只服务泡沫项（白帽气泡/受光）——默认配置泡沫为 0、
+    // 无岛屿浅滩，这一路的求值是死算。改为在泡沫段开头按需求值（见下文），
+    // 逐像素省一次天空 LUT 查询（夜间还省一次夜天光取值），白天输出逐位不变。
     const double Ldx = s_state.sun_dir[0], Ldy = s_state.sun_dir[1], Ldz = s_state.sun_dir[2];
 
     // ---- 太阳耀光：各向异性高斯坡度分布 ----
@@ -2572,12 +2612,9 @@ static void wo_ocean_pixel(double dx, double dy, double dz, double t_hit, double
     const double Fr = wo_fresnel_water(wo_max((nFx * Vx + nFy * Vy + nFz * Vz) * nFl, 0.0));
 
     // ---- 水体：上涌散射 + 背光波峰透射辉光 ----
-    const double amb0 = skyUp0 * 1.3 + skyN0 * 0.5;
-    const double amb1 = skyUp1 * 1.3 + skyN1 * 0.5;
-    const double amb2 = skyUp2 * 1.3 + skyN2 * 0.5;
-    double body0 = s_water_col[0] * (hemi0 * 1.6 + sunE0 * wo_max(Ldy, 0.0) * 0.8);
-    double body1 = s_water_col[1] * (hemi1 * 1.6 + sunE1 * wo_max(Ldy, 0.0) * 0.8);
-    double body2 = s_water_col[2] * (hemi2 * 1.6 + sunE2 * wo_max(Ldy, 0.0) * 0.8);
+    double body0 = s_water_col[0] * (hemi0 * 1.6 * kAmb + sunE0 * wo_max(Ldy, 0.0) * 0.8);
+    double body1 = s_water_col[1] * (hemi1 * 1.6 * kAmb + sunE1 * wo_max(Ldy, 0.0) * 0.8);
+    double body2 = s_water_col[2] * (hemi2 * 1.6 * kAmb + sunE2 * wo_max(Ldy, 0.0) * 0.8);
     {
         const double crest = wo_clamp((hit_h - 0.05) / 0.9, 0.0, 1.0);
         const double toSun = wo_max(Ldx * Vx + Ldy * Vy + Ldz * Vz, 0.0);
@@ -2606,12 +2643,24 @@ static void wo_ocean_pixel(double dx, double dy, double dz, double t_hit, double
     const double shal = wo_fast_exp(-depth * 0.115) * near_isl;
     if (shal > 0.004) {
         const double sdY = wo_max(Ldy, 0.0);
-        const double k0 = hemi0 * 1.6 + sunE0 * sdY * 0.8;
-        const double k1 = hemi1 * 1.6 + sunE1 * sdY * 0.8;
-        const double k2 = hemi2 * 1.6 + sunE2 * sdY * 0.8;
+        const double k0 = hemi0 * 1.6 * kAmb + sunE0 * sdY * 0.8;
+        const double k1 = hemi1 * 1.6 * kAmb + sunE1 * sdY * 0.8;
+        const double k2 = hemi2 * 1.6 * kAmb + sunE2 * sdY * 0.8;
         body0 = wo_mix(body0, WO_SHALLOW_COL[0] * k0, shal * 0.9);
         body1 = wo_mix(body1, WO_SHALLOW_COL[1] * k1, shal * 0.9);
         body2 = wo_mix(body2, WO_SHALLOW_COL[2] * k2, shal * 0.9);
+    }
+
+    // ---- 夜间水体去饱和 ----
+    // 深海吸收比约 1:5:6（红光被水吸收），白天被太阳耀光与天空反射淹掉；夜间只剩环境光，
+    // 整片海面会被染成高饱和青——而人眼在暗视觉下靠视杆细胞（无辨色能力），真实夜海
+    // 观感接近中性灰蓝。故按 night 权重把水体色向自身的亮度靠拢（保持亮度不变）。
+    if (night > 0.0) {
+        const double bl = 0.2126 * body0 + 0.7152 * body1 + 0.0722 * body2;
+        const double kd = 0.6 * night;
+        body0 = wo_mix(body0, bl, kd);
+        body1 = wo_mix(body1, bl, kd);
+        body2 = wo_mix(body2, bl, kd);
     }
 
     // ---- 泡沫 ----
@@ -2624,6 +2673,17 @@ static void wo_ocean_pixel(double dx, double dy, double dz, double t_hit, double
     double foam[4] = { 0.0, 0.0, 0.0, 0.0 };
     double foamMask = 0.0, covC = 0.0, foamLit0 = 0.0, foamLit1 = 0.0, foamLit2 = 0.0;
     double foam_bub = 0.5;
+
+    // 沿波面法向的天光：只在上两条早退分支（白帽 / 拍岸白带）里用到
+    double skyN0 = 0.0, skyN1 = 0.0, skyN2 = 0.0;
+    double amb0 = 0.0, amb1 = 0.0, amb2 = 0.0;
+    if ((cover > 1e-6) || (depth < 3.4 && near_isl > 0.0)) {
+        wo_sky_atmo(nrmX, nrmY, nrmZ, sky_tmp);
+        skyN0 = sky_tmp[0]; skyN1 = sky_tmp[1]; skyN2 = sky_tmp[2];
+        amb0 = skyUp0 * 1.3 * kAmb + skyN0 * 0.5 * kAmb;
+        amb1 = skyUp1 * 1.3 * kAmb + skyN1 * 0.5 * kAmb;
+        amb2 = skyUp2 * 1.3 * kAmb + skyN2 * 0.5 * kAmb;
+    }
     if (cover > 1e-6) {
         // 风向条纹：老泡沫破碎成风纹，新白帽保持致密
         const double wsU = px * s_wind_vx + pz * s_wind_vz;
