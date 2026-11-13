@@ -24,7 +24,7 @@ ANIMAC_HEADERS := $(wildcard $(ANIMAC_DIR)/*.h)
 ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
                     am_native_Touch.c am_native_Imu.c \
                     am_native_Key.c am_native_Fs.c am_native_Ui.c am_native_App.c nano_key_events.c \
-                    am_native_Raster.c am_native_Music.c \
+                    am_native_Chat.c am_native_Raster.c am_native_Music.c \
                     ui_scheme_app.c luckfox_am_native_String.c
 ANIMAC_HOST_HEADERS := $(wildcard $(ANIMAC_HOST_SRCS:.c=.h))
 
