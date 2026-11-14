@@ -54,6 +54,13 @@
 (define SW 320)              ; 画布宽（boot 时按 Gfx.width 覆盖）
 (define SH 240)              ; 画布高（boot 时按 Gfx.height 覆盖）
 
+;; 文字下移补偿：本地库现在把 (Gfx.draw_text) 的 y 当「墨迹顶」（见 am_native_Gfx.c 的
+;; native_text_top_gap，绘制端已扣掉字模的行顶空隙），而本 App 的标题/提示/按钮文字
+;; 是按旧口径（y = 行顶）调的；不补回去，文字会比顶栏/按钮的中线高出一截。
+;; 12px 抗锯齿（本 App 界面与按钮统一用它）补 2px，16px 抗锯齿（空态页大标题）补 1px。
+(define TXT_GAP 2)
+(define TXT_GAP_L 1)
+
 ;; ---- 状态 ------------------------------------------------------------------
 
 (define names (cdr '(0)))    ; 过滤后的图片文件名表（升序，来自 Fs.list）
@@ -358,7 +365,7 @@
     (Gfx.draw_rect x y w h 92 104 130)
     (Gfx.draw_text label
                    (+ x (Math.floor (/ (- w (text_w label)) 2)))
-                   (+ y 1)
+                   (+ (+ y 1) TXT_GAP)
                    226 232 242)
     #t))
 
@@ -370,17 +377,17 @@
     (define dt_x 0)
     (define name_max 210)
     (Gfx.fill_rect 0 0 SW TOP_H 30 36 46)
-    (Gfx.draw_text "时光集" 6 2 150 210 255)
+    (Gfx.draw_text "时光集" 6 (+ 2 TXT_GAP) 150 210 255)
     (paint_hb)
     (if (== cur_ok 1)
         { (set! dt (dims_text))
           (set! dt_l (text_w dt))
           (set! dt_x (- (- (- SW 40) dt_l) 6))
-          (Gfx.draw_text dt dt_x 2 118 136 158)
+          (Gfx.draw_text dt dt_x (+ 2 TXT_GAP) 118 136 158)
           (set! name_max (- (- dt_x 58) 8)) }
         #f)
     (if (> name_max 30)
-        (Gfx.draw_text (clip_text cur_name name_max) 58 2 176 192 212)
+        (Gfx.draw_text (clip_text cur_name name_max) 58 (+ 2 TXT_GAP) 176 192 212)
         #f)
     #t))
 
@@ -395,7 +402,7 @@
         (draw_btn 70 (- SH 18) 72 BTN_H "自动 关" 1))
     (draw_btn 150 (- SH 18) 56 BTN_H "下一张" 2)
     (set! bt (idx_text))
-    (Gfx.draw_text bt (- (- 274 (text_w bt)) 6) 222 150 165 185)
+    (Gfx.draw_text bt (- (- 274 (text_w bt)) 6) (+ 222 TXT_GAP) 150 165 185)
     (if (== auto_on 1) (draw_progress_bar) #f)
     #t))
 
@@ -424,11 +431,11 @@
   (lambda ()
     (define t1 "无法显示此图片")
     (define t2 "")
-    (Gfx.draw_text t1 (center_x t1) 98 255 140 120)
+    (Gfx.draw_text t1 (center_x t1) (+ 98 TXT_GAP) 255 140 120)
     (set! t2 (clip_text cur_name 280))
-    (Gfx.draw_text t2 (center_x t2) 118 190 190 190)
+    (Gfx.draw_text t2 (center_x t2) (+ 118 TXT_GAP) 190 190 190)
     (set! t2 "用「上一张 / 下一张」跳过")
-    (Gfx.draw_text t2 (center_x t2) 148 150 160 175)
+    (Gfx.draw_text t2 (center_x t2) (+ 148 TXT_GAP) 150 160 175)
     #t))
 
 ;; 整屏重绘（照片 + 工具条）；沉浸模式下顺带撤掉宿主的退出按钮热区
@@ -458,17 +465,17 @@
     (Gfx.set_font 1)
     (Gfx.fill_rect 0 0 SW SH 14 17 22)
     (Gfx.fill_rect 0 0 SW TOP_H 30 36 46)
-    (Gfx.draw_text "时光集" 6 2 150 210 255)
+    (Gfx.draw_text "时光集" 6 (+ 2 TXT_GAP) 150 210 255)
     (EX.draw_button)
     (Gfx.set_font 2)
-    (Gfx.draw_text "时光集" (center_x "时光集") 62 235 240 245)
+    (Gfx.draw_text "时光集" (center_x "时光集") (+ 62 TXT_GAP_L) 235 240 245)
     (Gfx.set_font 1)
     (if (== dir_ok 1)
         (set! l1 "图片目录为空")
         (set! l1 "读不到 image/ 目录（资源可能仍在载入）"))
-    (Gfx.draw_text l1 (center_x l1) 110 220 226 236)
-    (Gfx.draw_text l2 (center_x l2) 132 170 182 200)
-    (Gfx.draw_text l3 (center_x l3) 158 130 144 164)
+    (Gfx.draw_text l1 (center_x l1) (+ 110 TXT_GAP) 220 226 236)
+    (Gfx.draw_text l2 (center_x l2) (+ 132 TXT_GAP) 170 182 200)
+    (Gfx.draw_text l3 (center_x l3) (+ 158 TXT_GAP) 130 144 164)
     (Gfx.refresh)
     #t))
 

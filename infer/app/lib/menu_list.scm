@@ -45,19 +45,26 @@
 ;; ---- 字模度量（调用方按当前字模喂进来）----------------------------------
 ;;   half/full —— 半角/全角步进（按像素裁剪文字用）
 ;;   ink_h     —— 字形墨高（12px 字模 = 12，16px 字模 = 16；行内垂直居中用）
-;;   pad       —— 绘制时墨顶相对文字框顶的内缩（点阵字模 0，抗锯齿字模 1）
+;;   pad       —— 文字框顶相对行内居中位置的内缩（点阵字模 0，抗锯齿字模 1）
+;;   top_gap   —— 字模的「行顶 → 墨迹」空隙（点阵 0 / 12px 抗锯齿 2 / 16px 抗锯齿 1）。
+;;               (Gfx.draw_text) 现在把 y 当**墨迹顶**绘制（见 am_native_Gfx.c 的
+;;               native_text_top_gap）：本组件算出的 ty 是**行框顶**，必须把这段空隙
+;;               加回来，墨迹才会落在行框的垂直中线上（否则整列文字比中线高 top_gap 像素）。
+;;               调用方从自己的字模表里取（markdown 按 font_id，dict 固定 2）。
 
 (define w_half 7)
 (define w_full 12)
 (define ink_h 12)
 (define ink_pad 1)
+(define ink_gap 0)
 
 (define metrics
-  (lambda (half full h pad)
+  (lambda (half full h pad gap)
     (set! w_half half)
     (set! w_full full)
     (set! ink_h (if (undefined? h) 12 h))
     (set! ink_pad (if (undefined? pad) 0 pad))
+    (set! ink_gap (if (undefined? gap) 0 gap))
     #t))
 
 (define char_w (lambda (cp) (if (>= cp 11904) w_full w_half)))   ;; 0x2E80 起算全角
@@ -320,8 +327,9 @@
     (define ind (get_item it 4))
     (define lamp (get_item it 5))
     (define tx (+ vx (+ 6 (* ind 10))))
-    ;; 行内**垂直居中**：墨高居中后再减掉字模的顶部内缩（点阵 0 / 抗锯齿 1）
-    (define ty (+ y (- (Math.floor (/ (- row_h ink_h) 2)) ink_pad)))
+    ;; 行内**垂直居中**：墨高居中（再减掉字模的框顶内缩 pad），最后加回字模的
+    ;; 「行顶→墨迹」空隙 gap —— 绘制端以墨迹顶为 y（见 am_native_Gfx.c），不加回就偏高。
+    (define ty (+ (+ y (- (Math.floor (/ (- row_h ink_h) 2)) ink_pad)) ink_gap))
     (define ly (+ y (Math.floor (/ (- row_h 5) 2))))
     (if (== i sel)
         { (Gfx.fill_rect vx y vw row_h HL_R HL_G HL_B)

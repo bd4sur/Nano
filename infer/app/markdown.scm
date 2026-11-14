@@ -656,11 +656,12 @@
 (define menu_row_h (lambda () (Math.floor (* line_h MENU_ROW_K))))
 (define menu_ink_h (lambda () (if (== font_id 2) 16 12)))
 (define menu_ink_pad (lambda () text_pad))
+(define menu_ink_gap (lambda () text_gap))
 
 (define menu_metrics
   (lambda (info)
     ;; info = (Gfx.font_info id) → (半角 全角 行高 基线)
-    (ML.metrics (get_item info 0) (get_item info 1) (menu_ink_h) (menu_ink_pad))
+    (ML.metrics (get_item info 0) (get_item info 1) (menu_ink_h) (menu_ink_pad) (menu_ink_gap))
     #t))
 (define TOC_BTN_W 40)
 (define TOC_BTN_H 14)
@@ -840,7 +841,12 @@
 (define font_id 1)       ;; 当前字模
 (define line_h 15)       ;; 当前行高（由字模决定）
 (define font_base 12)    ;; 基线（行顶到基线）
-(define text_pad 1)      ;; 行顶到字模顶的偏移
+(define text_pad 1)      ;; 文字框顶相对行框顶的偏移（点阵 0 / 抗锯齿 1）
+;; 字模的「行顶 → 墨迹」空隙（点阵 0 / 12px 抗锯齿 2 / 16px 抗锯齿 1）。
+;; 本地库现在把 (Gfx.draw_text) 的 y 当**墨迹顶**（见 am_native_Gfx.c 的 native_text_top_gap），
+;; 所以：① 行内装饰（链接/三级标题的下划线）要按墨迹的位置**上移**这段空隙，
+;;       ② 菜单组件（目录/设置）的行框顶要**加回**这段空隙（否则整列文字偏高）。
+(define text_gap 2)
 (define pill_h 13)       ;; 行内代码药丸底高
 
 (define SET_TOP 30)
@@ -874,6 +880,7 @@
         { (set! font_id id)
           (Gfx.set_font id)
           (set! text_pad (if (== id 0) 0 1))
+          (set! text_gap (if (== id 0) 0 (if (== id 1) 2 1)))
           (set! font_base (get_item info 3))
           (set! line_h (get_item info 2))
           (set! pill_h (- line_h 2))
@@ -1045,13 +1052,14 @@
     (if (and (> (String.length txt) 0) (== st MDL.ST_CODE))
         (Gfx.fill_rect (- x 1) (+ y text_pad) (+ w 2) pill_h 46 42 34)
         #f)
-    ;; 链接下划线：基线在 y+13，下划线再往下 3px（y+16），与字形留出呼吸感
+    ;; 链接下划线：墨迹底在 y+text_pad+12，下划线再往下 3px，与字形留出呼吸感。
+    ;; 绘制端把 y 当墨迹顶（文字上移了 text_gap），下划线必须跟着上移同样的量。
     (if (and (> (String.length txt) 0) (== st MDL.ST_LINK))
-        (Gfx.fill_rect x (+ y (+ text_pad (+ font_base 3))) w 1 96 160 235)
+        (Gfx.fill_rect x (- (+ y (+ text_pad (+ font_base 3))) text_gap) w 1 96 160 235)
         #f)
     ;; 三级标题：文字下划线（比字形亮一档的暗色，避免和链接下划线混淆；同样下移 3px）
     (if (and (> (String.length txt) 0) (== st MDL.ST_H3))
-        (Gfx.fill_rect x (+ y (+ text_pad (+ font_base 2))) w 1 96 128 168)
+        (Gfx.fill_rect x (- (+ y (+ text_pad (+ font_base 2))) text_gap) w 1 96 128 168)
         #f)
     ;; 图片段（ST_IMAGE / ST_IMAGE_MISSING）的 alt 与公式段的源串都不走通用文字绘制
     (if (and (> (String.length txt) 0)

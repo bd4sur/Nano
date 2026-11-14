@@ -86,6 +86,11 @@
 (define DET_BTN_H 15)            ; 页脚按钮高（= 12px 字模行高）
 (define BACK_W 36)               ; 详情页右上角「返回」按钮（与宿主退出按钮同尺寸）
 (define BACK_H 16)
+;; 页眉文字的垂直补偿：本地库现在把 (Gfx.draw_text) 的 y 当「墨迹顶」绘制
+;; （见 am_native_Gfx.c 的 native_text_top_gap，12px 抗锯齿字模的行顶空隙是 2px），
+;; 而本 App 的页眉是按旧口径（y = 行顶，墨迹再落 2px）调的；不补回去，标题（以及
+;; 同一行的状态文字）会帖到 17px 页眉的上沿。
+(define HDR_TXT_DY 2)
 (define REP_DELAY 380)           ; 按住翻词条：首次后的等待（ms）
 (define REP_PERIOD 130)          ; 按住翻词条：随后的连发周期（ms）
 
@@ -516,7 +521,7 @@
 (define draw_header
   (lambda (title)
     (Gfx.fill_rect 0 0 SW HDR_H C_HDR_R C_HDR_G C_HDR_B)
-    (Gfx.draw_text title 4 1 C_TXT_R C_TXT_G C_TXT_B)
+    (Gfx.draw_text title 4 (+ 1 HDR_TXT_DY) C_TXT_R C_TXT_G C_TXT_B)
     #t))
 
 ;; 一个键帽：外圈 1px 描边 + 内凹圆角矩形（圆角半径 2px；"分立圆角矩形"的要求）
@@ -571,7 +576,7 @@
     ;; 键盘底板把它们盖掉（menu_list 的约定：「边界上的半行由调用方随后覆盖绘制」）。
     (ML.draw)
     (draw_header "电子词典")
-    (Gfx.draw_text status 60 1 C_DIM_R C_DIM_G C_DIM_B)
+    (Gfx.draw_text status 60 (+ 1 HDR_TXT_DY) C_DIM_R C_DIM_G C_DIM_B)
     ;; 查询行（前缀 + 光标）
     (Gfx.fill_rect 0 QRY_Y SW ROW_H 22 26 34)
     (Gfx.draw_text qline 6 (+ QRY_Y 1) C_QRY_R C_QRY_G C_QRY_B)
@@ -850,11 +855,11 @@
     (set! SW (Gfx.width))
     (set! SH (Gfx.height))
     (Gfx.set_font FONT)                      ; 12px 抗锯齿字模（整个 App 统一）
-    ;; 菜单控件的字模度量（半角步进 / 全角步进 / 墨高 12 / 抗锯齿字模顶部内缩 1）
+    ;; 菜单控件的字模度量（半角步进 / 全角步进 / 墨高 12 / 字模框顶内缩 1 / 行顶空隙 2）
     (set! fi (Gfx.font_info FONT))
     (if (null? fi)
-        (ML.metrics HALF_W FULL_W 12 1)
-        (ML.metrics (get_item fi 0) (get_item fi 1) 12 1))
+        (ML.metrics HALF_W FULL_W 12 1 2)
+        (ML.metrics (get_item fi 0) (get_item fi 1) 12 1 2))
     (ML.geom 0 LIST_Y SW LIST_H)
     (build_keys)
     (if (< (DI.open) 0)

@@ -52,6 +52,11 @@
 (define BTN_H 20)
 (define BTN_Y0 92)
 (define BTN_DY 24)
+;; 按钮内文字的垂直补偿：draw_ctext 的 cy 是「视觉中心」（内部按 (- cy 7) 定行顶），
+;; 而本地库现在把 (Gfx.draw_text) 的 y 当「墨迹顶」绘制（见 am_native_Gfx.c 的
+;; native_text_top_gap，12px 抗锯齿字模的行顶空隙 2px）；不补回去，四枚按钮的文字
+;; 会比按钮中线高 2px。
+(define BTN_TXT_GAP 2)
 
 ;; 配色
 (define C_BOARD_R 24) (define C_BOARD_G 30) (define C_BOARD_B 42)
@@ -115,7 +120,7 @@
         (Gfx.fill_rect BTN_X by0 BTN_W BTN_H C_BTN_ON_R C_BTN_ON_G C_BTN_ON_B)
         (Gfx.fill_rect BTN_X by0 BTN_W BTN_H C_BTN_R C_BTN_G C_BTN_B))
     (Gfx.draw_rect BTN_X by0 BTN_W BTN_H 96 102 122)
-    (draw_ctext label (+ BTN_X (Math.floor (/ BTN_W 2))) (+ by0 10) 232 236 244)))
+    (draw_ctext label (+ BTN_X (Math.floor (/ BTN_W 2))) (+ (+ by0 10) BTN_TXT_GAP) 232 236 244)))
 
 ;; 热图着色：按**棋形等级**分档（分数 = 四方向棋形分之和）
 ;;   五连红 / 活四橙红 / 冲四橙 / 活三黄 / 活二青 / 其余极暗（只留"活跃区域"的痕迹）
