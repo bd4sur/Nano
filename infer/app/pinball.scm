@@ -99,10 +99,11 @@
 (define UP_R (+ (* 180.0 RAD) (* 40.0 RAD)))
 (define ZONE_L 106)                   ;; 触屏分区边界：x<106 左挡板，106..214 双拍，>214 右挡板
 (define ZONE_R 214)
-(define FLIP_GRACE 0.12)            ;; 连拍宽限（秒）：松手后挡板继续抬起这么久再落（单指连拍）
+(define FLIP_GRACE 0.06)            ;; 连拍宽限（秒）：只够极快连拍衔接；
+                                    ;; 再长就有明显粘手感（回位延迟 = 宽限 + 12ms）
 
-(define FLIP_UP_SPD 30.0)           ;; rad/s（约 40ms 挥满）
-(define FLIP_DN_SPD 13.0)
+(define FLIP_UP_SPD 38.0)           ;; rad/s：58° 约 27ms 挥满（≈1.7 帧）
+(define FLIP_DN_SPD 26.0)           ;; rad/s：回位 18° 约 12ms，松手即落
 
 ;; 弹射柱 / 立靶
 (define NBUMP 3)
@@ -1013,9 +1014,12 @@
     (Gfx.draw_text s x y r g b)
     0))
 
+;; 12px 抗锯齿字模（Gfx.set_font 1，步进 7px）。原先的 12px 二值点阵（font 0，
+;; 步进 6px）在深色霓虹底上笔画发硬，故全台面统一用平滑字模；步进 6→7px 后
+;; 面板 8 位数刚好 56px（x=4..60），提示语一律 ≤8 字符。
 (define txtb
   (lambda (s x y r g b)
-    (Gfx.set_font 0)
+    (Gfx.set_font 1)
     (Gfx.draw_text s x y r g b)
     0))
 
@@ -1070,7 +1074,7 @@
     (txt16 "SPACE" 33 yy 150 240 255)
     (txt16 "CADET" 34 (+ yy 20) 120 40 160)
     (txt16 "CADET" 33 (+ yy 19) 255 120 210)
-    (txt "3D  PINBALL" 4 (+ yy 42) 110 160 210)
+    (txt "PINBALL" 4 (+ yy 42) 110 160 210)
     0))
 
 (define draw_field
@@ -1132,10 +1136,9 @@
     ;; 落靶区底板
     (Gfx.fill_rect 80 98 30 48 14 10 34)
     (Gfx.draw_rect 80 98 30 48 40 60 110)
-    ;; 台面文字与箭头装饰
-    (Gfx.set_font 0)
-    (Gfx.draw_text "MISSION" 252 96 90 120 170)
-    (Gfx.draw_text "JACKPOT" 232 132 120 90 60)
+    ;; 台面文字与箭头装饰（12px 抗锯齿字模）
+    (Gfx.set_font 1)
+    (Gfx.draw_text "JACKPOT" 200 144 120 90 60)
     (Gfx.draw_text "BONUS" 86 150 90 120 170)
     (Gfx.draw_text "RANK" 160 60 90 120 170)
     (Gfx.set_font 1)
@@ -1383,7 +1386,7 @@
     (define yy 0)
     (set! i 0)
     (while (< i 5)
-      { (set! yy (+ 122 (* i 13)))
+      { (set! yy (+ 118 (* i 12)))
         (if (<= i rankidx)
             { (Gfx.fill_circle_aa 8 (+ yy 4) 3 120 250 160 1)
               (txtb (get_item RANK_NAME i) 15 yy 180 255 200) }
@@ -1391,10 +1394,10 @@
               (txtb (get_item RANK_NAME i) 15 yy 90 100 120) })
         (set! i (+ i 1)) })
     ;; 操作提示（三分区 + 键盘）
-    (txtb "Z/<  =L" 4 186 100 150 200)
-    (txtb "MID =LR" 4 198 150 220 255)
-    (txtb "X/>  =R" 4 210 100 150 200)
-    (txtb "SPC=SHOOT" 4 224 150 130 90)
+    (txtb "Z/< =L" 4 184 100 150 200)
+    (txtb "MID=LR" 4 196 150 220 255)
+    (txtb "X/> =R" 4 208 100 150 200)
+    (txtb "SPACE:GO" 4 220 150 130 90)
     0))
 
 ;; 底部三分区指示条：一根手指按在哪一段就抬哪一枚（中间 = 两枚一起）
@@ -1445,8 +1448,8 @@
           (Gfx.fill_rect 88 88 186 1 70 100 160)
           (txtc "GAME OVER" 180 94 255 110 130)
           (txtc "FINAL SCORE" 180 112 130 170 220)
-          (Gfx.set_font 0)
-          (Gfx.draw_text (fmt_g score) (Math.floor (- 180 (/ (* (String.length (fmt_g score)) 6) 2))) 126 255 230 90)
+          (Gfx.set_font 1)
+          (Gfx.draw_text (fmt_g score) (Math.floor (- 180 (/ (* (String.length (fmt_g score)) 7) 2))) 126 255 230 90)
           (txtc (String.concat "RANK: " (get_item RANK_NAME rankidx)) 180 142 120 250 160)
           (txtc "TAP TO PLAY AGAIN" 180 160 150 220 255) })
     0))
