@@ -14,6 +14,11 @@
 
 static int32_t s_has_acc = 0;
 static float   s_ax = 0.0f, s_ay = 0.0f, s_az = 0.0f;
+// 未滤波的加速度原始值（m/s²，设备坐标系）：只供 imu_read_accel 使用（计步器 App
+// 需要「含重力的加速度模值随步伐起伏」，平滑后的向量会把这种高频起伏抹掉；姿态角仍用
+// 上面的低通向量，行为与本次改动前逐位一致）。
+static int32_t s_has_acc_raw = 0;
+static float   s_raw_ax = 0.0f, s_raw_ay = 0.0f, s_raw_az = 0.0f;
 static float   s_yaw_deg = 0.0f;
 static int32_t s_orient_deg = 0;
 static int32_t s_has_yaw = 0;
@@ -25,6 +30,10 @@ EMSCRIPTEN_KEEPALIVE
 void wasm_gui_on_orientation(int32_t flags, float ax, float ay, float az,
                              float yaw_deg, int32_t orient_deg) {
     if (flags & 0x01) {
+        s_raw_ax = ax;
+        s_raw_ay = ay;
+        s_raw_az = az;
+        s_has_acc_raw = 1;
         if (!s_has_acc) {
             s_ax = ax;
             s_ay = ay;
@@ -50,9 +59,11 @@ int imu_init() {
 
 int imu_reset() {
     s_ax = s_ay = s_az = 0.0f;
+    s_raw_ax = s_raw_ay = s_raw_az = 0.0f;
     s_yaw_deg = 0.0f;
     s_orient_deg = 0;
     s_has_acc = 0;
+    s_has_acc_raw = 0;
     s_has_yaw = 0;
     return 0;
 }
@@ -100,6 +111,18 @@ int imu_read_angle(float *pitch, float *roll, float *yaw) {
     // 方向角 θ 的顺时针修正（yaw = θ - alpha），真机验证方位随机身同向转动。
     *yaw = fmodf((float)th - yaw_d + 720.0f, 360.0f);
 
+    return 0;
+}
+
+// 三轴加速度（g）：浏览器上报的 accelerationIncludingGravity 单位为 m/s²，此处换算为 g，
+// 与 M5Core2 HAL 的 `ImuData.accel`（g）同量纲（C 版计步器的阈值 0.015 就是 g）。
+// 无姿态数据（未开启「姿态」按钮/无传感器）时返回 -1，App 软失败降级。
+int imu_read_accel(float *ax, float *ay, float *az) {
+    if (ax == NULL || ay == NULL || az == NULL) return -1;
+    if (!s_has_acc_raw) return -1;
+    *ax = s_raw_ax / 9.8f;
+    *ay = s_raw_ay / 9.8f;
+    *az = s_raw_az / 9.8f;
     return 0;
 }
 

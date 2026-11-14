@@ -121,6 +121,48 @@ int32_t am_native_Imu_gravity_y(am_runtime_t *rt, am_process_t *proc) {
     return imu_push_float(proc, gy);
 }
 
+// ---- 加速度通道 -------------------------------------------------------------
+
+// 读一次三轴加速度（单位 g）。返回 true 表示本平台 HAL 提供了有效值。
+static bool imu_accel_sample(float *ax, float *ay, float *az) {
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    if (imu_read_accel(&x, &y, &z) != 0) return false;
+    if (!isfinite(x) || !isfinite(y) || !isfinite(z)) return false;
+    if (ax) *ax = x;
+    if (ay) *ay = y;
+    if (az) *az = z;
+    return true;
+}
+
+// 加速度分量：无通道时压 #null（软失败）
+static int32_t imu_push_accel(am_process_t *proc, int axis) {
+    float a[3] = {0.0f, 0.0f, 0.0f};
+    bool ok = imu_accel_sample(&a[0], &a[1], &a[2]);
+    return imu_push(proc, ok ? am_make_value_of_float((am_float_t)a[axis]) : AM_VALUE_NULL);
+}
+
+int32_t am_native_Imu_accel_x(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    return imu_push_accel(proc, 0);
+}
+
+int32_t am_native_Imu_accel_y(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    return imu_push_accel(proc, 1);
+}
+
+int32_t am_native_Imu_accel_z(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    return imu_push_accel(proc, 2);
+}
+
+int32_t am_native_Imu_accel_mag(am_runtime_t *rt, am_process_t *proc) {
+    float ax = 0.0f, ay = 0.0f, az = 0.0f;
+    (void)rt;
+    if (!imu_accel_sample(&ax, &ay, &az)) return imu_push(proc, AM_VALUE_NULL);
+    return imu_push_float(proc, sqrtf(ax * ax + ay * ay + az * az));
+}
+
 // ===============================================================================
 // 库注册表
 // ===============================================================================
@@ -132,6 +174,10 @@ static const am_native_func_entry_t am_native_Imu_funcs[] = {
     { L"yaw",          am_native_Imu_yaw },
     { L"gravity_x",    am_native_Imu_gravity_x },
     { L"gravity_y",    am_native_Imu_gravity_y },
+    { L"accel_x",      am_native_Imu_accel_x },
+    { L"accel_y",      am_native_Imu_accel_y },
+    { L"accel_z",      am_native_Imu_accel_z },
+    { L"accel_mag",    am_native_Imu_accel_mag },
 };
 
 const am_native_lib_entry_t am_native_Imu_lib = {

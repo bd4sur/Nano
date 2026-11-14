@@ -850,6 +850,17 @@ int imu_read_angle(float *pitch, float *roll, float *yaw) {
     return ret;
 }
 
+// 三轴加速度：本 HAL 只实现欧拉角（串口协议帧的取数流程与角度共用），返回不支持。
+// 注：若将来要让 NanoPod(树莓派) 上的计步器 App 用真实加速度，可在此复用
+// __imu_read_angle 的 _uart_receive_batch/IMU_UART_Process/IMU_UART_GetAll 流程取
+// imu_data.accel（协议单位 g），但要避免与 imu_read_angle 交替调用时互相排空串口帧。
+int imu_read_accel(float *ax, float *ay, float *az) {
+    (void)ax;
+    (void)ay;
+    (void)az;
+    return -1;
+}
+
 int imu_read_quaternion(float *q0, float *q1, float *q2, float *q3) {
     imu_measurement_t imu_data;
 

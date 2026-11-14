@@ -10184,3 +10184,127 @@ cd webgui && python3 ../tools/https_static_server.py 9002 .
 
 浏览器 e2e 自包含（不依赖资源目录里有图：脚本用 canvas 生成 PNG 后直接写 MEMFS），
 跑法：`node tools/e2e/browser/regress_album.js <URL> chromium <outdir>`。
+
+------------------------------------
+
+# 2026-11-14（二）（灵机应用程序：计步器，`app/pedometer.scm`）
+
+把 C 版「计步器」（`infer/ui_pedometer.c`，`STATE_PEDOMETER`）用**灵机（Scheme）App**
+重做一遍，只针对 **WASM-GUI 目标**（`infer/build_wasm_gui.sh` → `infer/webgui/`，
+**不是** `infer/web/` 的 LLM-only 路线）。
+
+## 交付物
+
+| 文件 | 性质 | 说明 |
+|---|---|---|
+| `infer/app/pedometer.scm` | **新增**（约 780 行） | 计步器 App：100Hz 采样网格 + DC-blocker/EMA 滤波 + 自适应阈值候选点 + 256 点 FFT 频谱平坦度交叉验证 + 波形/峰值标记/触屏清零/键盘清零 |
+| `infer/hal_imu.h` | 加 1 个接口 | `imu_read_accel(ax,ay,az)`：三轴含重力加速度（**g**，设备系），返回负值=本平台无此通道 |
+| `infer/hal_imu_wasm.c` | 实现 | 保留**未滤波**的 `accelerationIncludingGravity` 最近一帧（m/s²→g）；姿态角仍走原低通向量，行为逐位不变 |
+| `infer/hal_imu_web_linux.c` / `android/.../hal_imu_android.c` | 实现 | 同上（两者本就缓存了原始加速度向量） |
+| `infer/hal_imu_m5esp.cpp` | 实现 | M5Unified `ImuData.accel`（g）直传 + 静态缓存（`M5.Imu.update()` 是「取走新数据」，同轮二次调用可能 false） |
+| `infer/hal_imu_linux.c` / `hal_imu_imu10_linux.c` / `hal_imu_imu6_linux.c` | 桩 | 返回 -1（串口 IMU 只解算欧拉角；注释写明将来要接 `IMU_UART_GetAll` 的 accel 时的注意点） |
+| `infer/am_native_Imu.c/.h` | 加 4 个库过程 | `(Imu.accel_x/accel_y/accel_z/accel_mag)`：Number\|#null（无通道时 #null，软失败） |
+| `infer/ui_scheme_app.c` | 改 1 行注释 | `SCHEME_APP_MAX` 的「当前 49 个」→「当前 50 个；余量留 6 个」 |
+| `infer/tools/e2e/browser/regress_pedometer.js` | 新增（本机工具，不入 Git） | 浏览器 e2e：22 项断言（三引擎全过） |
+| `infer/tools/e2e/host/harness.c` | 改（本机工具） | 加 `imu_read_accel` 桩：`HAL_ACC_AT="帧:ax:ay:az"`（毫 g）或 `HAL_ACC_WALK="幅值mg:周期帧"`（正弦步行波形） |
+
+`app/*.scm` 落进资源目录即自动进入「灵机应用程序」列表（无需改固件），`build_wasm_gui.sh`
+把 `app/pedometer.scm` 收进 manifest 的 p1（启动即挂载）。
+
+## 为什么需要加速度通道（本次唯一的 C 侧「能力补齐」）
+
+C 版计步器调 `imu_read_angle(&ax,&ay,&az)` 并当成三轴加速度用——这在 **M5Core2 的 HAL
+里恰好成立**：`hal_imu_m5esp.cpp` 把 `ImuData.accel.x/y/z`（g）写进 pitch/roll/yaw
+（见该文件注释）。而 WASM/Linux/web/Android 的 `imu_read_angle` 是**真正的欧拉角（度）**，
+从角度还原不出「步伐引起的模值起伏」，照抄 C 版在浏览器里只会数“设备被转了多少次”。
+
+浏览器侧本来就有 `DeviceMotionEvent.accelerationIncludingGravity`（m/s²），只是此前
+只用于解算角度。故新增 `imu_read_accel`：能提供加速度的 HAL 实现之，其余返回 -1；
+Imu 本地库把它暴露为 `(Imu.accel_*)`。App 用 `(Imu.accel_mag)`，与 C 版
+`sqrtf(ax²+ay²+az²)` 同义（g，静止 ≈1.0，行走时围绕 1.0 起伏）。
+
+## 算法对应（常量与流水线逐条对齐 C 版）
+
+1. **100Hz 内部网格**：宿主定时器每 50ms（≈20Hz）一拍，拍内用「逻辑时钟追赶」把当前
+   加速度零阶保持补进每个 10ms 槽——C 版是每 10ms 直接读一次 IMU。于是 FFT 的点数/分辨率
+   与 C 版完全一致（256 点、0.39Hz/bin、窗长 2.56s），而外部只需 20Hz 的定时器。
+2. **滤波**：`|a|` → DC-blocker 高通（R=0.95）→ EMA 低通（α=0.15）→ 环形缓冲 512 点。
+3. **时域候选**：自适应阈值 = 最近 2s（200 点）均值 + 0.3×标准差（下限 0.015g），最小间隔 250ms。
+4. **频域校验**：每 1s 对最近 256 点去直流 + Hann 窗做 FFT，取 1..10 号 bin 的
+   SFM=几何均值/算术均值 与主频；SFM<0.3 且速率与主频在相对容差 0.3（下限 0.3Hz）内一致
+   才把本窗口候选点计入总步数，否则整窗丢弃。
+5. **界面**：总步数（16px 大字）、步频/主频/SFM、状态词（行走/未确认/静止/无数据）、
+   最近 160 点波形（每点 2px）、橙色峰值标记、阈值线与零线；重绘节流 66ms（同 C 版）。
+
+## 与 C 版的差异（全部写进源码头部）
+
+1. **加速度通道**（见上）。
+2. **时钟**：32 位宿主（wasm32）的 `System.timestamp` 是纪元毫秒 **mod 2^27**，会回绕。
+   App 只取相邻两拍差值（负数 +2^27 校正、钳到 [1,250]ms）累加出**自己的逻辑时钟**，
+   所有窗口/节流判定都用它；C 版直接比较宿主时间戳。挂起/后台恢复后一拍最多补 250ms，
+   不会一次补出成千上万个样本。
+3. **候选点改为「上穿阈值的上升沿」**（加迟滞：信号回落到阈值以下才重新武装）。
+   C 版只看 `sig > 阈值`，而阈值只有 0.3×标准差，一个振荡周期里有相当长时间都在阈值
+   之上——慢步频时同一周期会反复触发候选点（实测 0.78Hz 注入下 `cad` 被抬到 2.34Hz），
+   随后窗口速率与主频 0.78Hz 对不上、整窗被丢弃：10s 只计 1 步（本版 8 步）。
+4. **交叉验证的速率改用 `cad_hz`**（最近若干步间隔的均值；间隔不足 2 个时退回 C 版的
+   「本窗口候选数/1s」）。C 版的整秒计数在 60~120 步/分时每窗只有 1 个候选 → 估计值
+   1.0Hz 与主频 1.9Hz 差 0.9，超容差 → **一半窗口被误判为抖动丢弃**：宿主回归台实测
+   1.78Hz 走 10s 只计 10 步（应为 18 步）。改后 10s 约 18 步（12.4s 实测 22 步）。
+5. **交互**：Scheme App 没有宿主页眉/页脚，故自绘页眉（标题 + 右上角「退出」走
+   `app/lib/exit.scm` 的全局确认框）、底部「清零」按钮（按下武装、同一按钮内松手才生效，
+   拖出取消）；键盘 `D`/`Enter` 也可清零（与 C 版 D 键同义）。
+6. **诊断行**：每 2s 打一行 `[pedometer] steps=… pending=… cad=… dom=… sfm=… conf=…
+   data=… samples=…`，供两套回归做数值断言（不做 OCR）。
+
+## 验证
+
+### 宿主回归台（真解释器 + 真 graphics.c + 虚拟时钟 16ms/帧）
+
+```bash
+HAL_ACC_WALK=250:35 /tmp/nano_host_regress/run_new app/pedometer.scm 900   # 幅值 250mg、周期 35 帧
+```
+- 1.78Hz（周期 560ms）：12.4s 计 **22 步**（≈1.79/s），`cad=1.79 dom=1.95 sfm=0.01 conf=1`；
+- 1.14Hz（`200:55`）：14 步 / 12.4s ≈1.13/s，`cad=1.14 dom=1.17`；
+- 2.70Hz（`300:23`）：32 步 / 12.4s ≈2.58/s，`cad=2.70 dom=2.73`（上限受 250ms 最小间隔约束）；
+- 静止（`HAL_ACC_AT="0:0:0:1000"`）：steps=0、`sfm=1`；
+- 无 IMU（`HAL_IMU_AVAIL=0`）：`data=0 samples=0 steps=0`，界面显示「无加速度数据」。
+- 全量 App 回归（`FRAMES=60 ./run_host_regress.sh`）全部 `err=none`（新增 App 未列进脚本
+  默认清单时也已单独跑过，见上）。
+
+### 浏览器端到端（Playwright + 真 wasm）
+
+`node tools/e2e/browser/regress_pedometer.js <URL> <engine> <outdir>`：
+Chromium / chrome-headless-shell / Firefox **各 22/22 PASS**。覆盖：
+无传感器时 `data=0`/`steps=0`/波形区无假直线；经 `wasm_gui_on_orientation`（页面
+DeviceMotion 回调的同一入口）注入 `|a|=9.8(1+0.25sin(2π·1.8t))` 7s → **12 步**、
+`cad=1.81 dom=1.95 sfm=0.04 conf=1`、波形区青色像素、绿色「行走」、橙色峰值标记；
+键盘 `d` 清零；再来一段步行后点触屏「清零」按钮 → 0；Esc → 全局确认框 → Enter 回应用列表；
+`[pedometer] bye`；无 pageerror。
+全量存活回归（`regress.js`，chromium 50 个 App）：`pedometer` 起止都在 `RUN(80)`、
+`refreshΔ=43`，无异常；其余 App 的 `refreshΔ=0` 名单与本次改动前一致。
+
+静态检查：`python3 tools/check_scm_arity.py app/pedometer.scm` **0 处问题**；`node --check` 通过。
+
+## 运行
+
+```bash
+cd infer && bash build_wasm_gui.sh
+cd webgui && python3 ../tools/https_static_server.py 9002 .
+# 浏览器打开 https://<主机>:9002/ → 任意键 → 主菜单「小游戏」→「灵机应用程序」→「pedometer」
+#   手机上还要点页面右下角「姿态」并授权（DeviceMotion 需 HTTPS/localhost）；
+#   桌面浏览器无传感器时会显示「无加速度数据」。
+```
+
+## 踩坑记录
+
+1. **`Gfx.draw_line` 是 7 个参数**（x1 y1 x2 y2 r g b），没有 mode；8 个参数会把 mode
+   当第 8 个残留在操作数栈（`check_scm_arity.py` 直接报出来）。
+2. **无样本时别画波形**：`sample_total==0` 时环形缓冲全是 0，照画会得到一条假的
+   青色零值直线（浏览器 e2e 的「无数据」像素断言就是被它绊倒的）。
+3. **32 位宿主的浮点尾数只有约 19 位**：`Math.to_fixed`/`atom_to_string` 输出会丢掉
+   尾部 0（`1.9` 而非 `1.90`、`0` 而非 `0.00`），界面需要补零显示（App 内 `fmt2`）。
+4. **`System.timestamp` 的 27 位回绕**：不要拿它做加法窗口（`next = now + 1000` 会越过
+   2^27），一律用差值累加出的逻辑时钟。
+5. **`M5.Imu.update()` 是取走式**：同一轮里先 `imu_read_angle` 再 `imu_read_accel`，
+   第二次可能拿不到新帧；M5 HAL 里用静态缓存兜住。

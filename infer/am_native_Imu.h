@@ -65,6 +65,23 @@ int32_t am_native_Imu_gravity_x(am_runtime_t *rt, am_process_t *proc);
 // (Imu.gravity_y) : Number —— 屏幕坐标系（y 向下）重力 y 分量，m/s²；无姿态数据时 +9.8
 int32_t am_native_Imu_gravity_y(am_runtime_t *rt, am_process_t *proc);
 
+// ---- 加速度通道（2026-11 新增，计步器 App 需要）---------------------------------
+//
+// (Imu.accel_x) / (Imu.accel_y) / (Imu.accel_z) : Number | #null
+//     三轴**含重力**加速度（单位 g，1g≈9.8 m/s²，设备本体坐标系）。
+//     与上面三个角度的关系：角度是从这同一矢量算出来的“方向”，这里给的是“长度与分量”；
+//     步伐引起的是矢量**模值**的起伏（约 0.1~0.5g），单靠角度无法还原。
+//     本平台 HAL 无加速度通道（hal_imu.h 的 imu_read_accel 返回负值，如串口 IMU 与
+//     无 IMU 的 Linux 桩）时返回 #null —— 与 Math 库 NaN→#null 同一软失败惯例。
+//
+// (Imu.accel_mag) : Number | #null
+//     |a| = sqrt(ax²+ay²+az²)（g）。静止时 ≈1.0；行走时围绕 1.0 起伏。
+//     计步器直接用它作为时域波形源（对应 C 版 ui_pedometer.c 的 sqrtf(ax²+ay²+az²)）。
+int32_t am_native_Imu_accel_x(am_runtime_t *rt, am_process_t *proc);
+int32_t am_native_Imu_accel_y(am_runtime_t *rt, am_process_t *proc);
+int32_t am_native_Imu_accel_z(am_runtime_t *rt, am_process_t *proc);
+int32_t am_native_Imu_accel_mag(am_runtime_t *rt, am_process_t *proc);
+
 #ifdef __cplusplus
 }
 #endif

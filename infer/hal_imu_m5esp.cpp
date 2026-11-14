@@ -90,6 +90,28 @@ int imu_read_quaternion(float *q0, float *q1, float *q2, float *q3){
     return 0;
 }
 
+// 三轴加速度（g）：M5Unified 的 ImuData.accel 单位就是 g，直接透传。
+// 用静态缓存：M5.Imu.update() 是「取走新数据」，若同一轮里先读了角度再读加速度，
+// 第二次 update 可能返回 false——此时返回上一次的有效值（计步器按固定节奏采样）。
+static float s_acc_x = 0.0f, s_acc_y = 0.0f, s_acc_z = 0.0f;
+static int   s_acc_valid = 0;
+
+int imu_read_accel(float *ax, float *ay, float *az){
+    if (ax == NULL || ay == NULL || az == NULL) return -1;
+    if (M5.Imu.update()) {
+        auto ImuData = M5.Imu.getImuData();
+        s_acc_x = ImuData.accel.x;
+        s_acc_y = ImuData.accel.y;
+        s_acc_z = ImuData.accel.z;
+        s_acc_valid = 1;
+    }
+    if (!s_acc_valid) return -1;
+    *ax = s_acc_x;
+    *ay = s_acc_y;
+    *az = s_acc_z;
+    return 0;
+}
+
 int imu_close(){
     return 0;
 }

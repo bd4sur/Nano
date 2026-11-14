@@ -29,6 +29,8 @@
 static pthread_mutex_t s_att_lock = PTHREAD_MUTEX_INITIALIZER;
 static int32_t s_has_acc = 0;          // 1-收到过加速度数据（此前 imu_read_angle 返回失败，对齐无 IMU 语义）
 static float   s_ax = 0.0f, s_ay = 0.0f, s_az = 0.0f; // 低通滤波后的重力向量（设备坐标系，m/s²）
+static float   s_raw_ax = 0.0f, s_raw_ay = 0.0f, s_raw_az = 0.0f; // 未滤波的最近一帧（m/s²，供 imu_read_accel）
+static int32_t s_has_acc_raw = 0;
 static float   s_yaw_deg = 0.0f;       // 浏览器罗盘航向 alpha（度）
 static int32_t s_orient_deg = 0;       // 屏幕方向角 θ（0/90/180/270）
 static int32_t s_has_yaw = 0;          // 1-浏览器提供了有效航向
@@ -42,6 +44,10 @@ static int32_t s_has_yaw = 0;          // 1-浏览器提供了有效航向
 void web_remote_on_orientation(const float *acc, float yaw_deg, int32_t orient_deg, uint8_t flags) {
     pthread_mutex_lock(&s_att_lock);
     if ((flags & 0x01) && acc != NULL) {
+        s_raw_ax = acc[0];
+        s_raw_ay = acc[1];
+        s_raw_az = acc[2];
+        s_has_acc_raw = 1;
         if (!s_has_acc) { // 首次直接采用，避免从 0 缓慢爬升
             s_ax = acc[0];
             s_ay = acc[1];
@@ -69,9 +75,11 @@ int imu_init() {
 int imu_reset() {
     pthread_mutex_lock(&s_att_lock);
     s_ax = s_ay = s_az = 0.0f;
+    s_raw_ax = s_raw_ay = s_raw_az = 0.0f;
     s_yaw_deg = 0.0f;
     s_orient_deg = 0;
     s_has_acc = 0;
+    s_has_acc_raw = 0;
     s_has_yaw = 0;
     pthread_mutex_unlock(&s_att_lock);
     return 0;
@@ -118,6 +126,23 @@ int imu_read_angle(float *pitch, float *roll, float *yaw) {
     // yaw：屏幕上方指向的罗盘航向（浏览器 alpha + 屏幕方向角修正，无罗盘数据时保持旧值/0）
     *yaw = fmodf(yaw_d + (float)th + 360.0f, 360.0f);
 
+    return 0;
+}
+
+// 三轴加速度（g）：网页上报向量单位为 m/s²，换算为 g（与 M5 HAL 的 accel 同量纲）。
+// 取**未滤波**的最近一帧（计步器要的就是步伐引起的高频起伏）。
+int imu_read_accel(float *ax, float *ay, float *az) {
+    if (ax == NULL || ay == NULL || az == NULL) return -1;
+    pthread_mutex_lock(&s_att_lock);
+    if (!s_has_acc_raw) {
+        pthread_mutex_unlock(&s_att_lock);
+        return -1;
+    }
+    float rx = s_raw_ax, ry = s_raw_ay, rz = s_raw_az;
+    pthread_mutex_unlock(&s_att_lock);
+    *ax = rx / 9.8f;
+    *ay = ry / 9.8f;
+    *az = rz / 9.8f;
     return 0;
 }
 

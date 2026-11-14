@@ -236,6 +236,22 @@ int imu_read_angle(float *pitch, float *roll, float *yaw) {
     }
 }
 
+// 三轴加速度：本 HAL 只实现欧拉角（协议帧只有角度），返回不支持（调用方软失败降级）
+int imu_read_accel(float *ax, float *ay, float *az) {
+    (void)ax;
+    (void)ay;
+    (void)az;
+    return -1;
+}
+
+int imu_read_quaternion(float *q0, float *q1, float *q2, float *q3) {
+    (void)q0;
+    (void)q1;
+    (void)q2;
+    (void)q3;
+    return -1;
+}
+
 
 
 int ___main() {

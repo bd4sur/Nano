@@ -23,6 +23,14 @@ int imu_read_angle(float *pitch, float *roll, float *yaw) {
     return -1;
 }
 
+// 三轴加速度：本平台 HAL 不提供（只实现了欧拉角），调用方软失败降级
+int imu_read_accel(float *ax, float *ay, float *az) {
+    (void)ax;
+    (void)ay;
+    (void)az;
+    return -1;
+}
+
 int imu_read_quaternion(float *q0, float *q1, float *q2, float *q3) {
     (void)q0;
     (void)q1;
