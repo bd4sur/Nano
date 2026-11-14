@@ -85,16 +85,22 @@
 (define DRAIN_Y 236)
 
 ;; 挡板
-(define FLIP_LEN 46.0)
+(define FLIP_LEN 47.0)
 (define FLIP_RAD 3.5)
 (define PIV_LX 126.0)
 (define PIV_LY 202.0)
 (define PIV_RX 236.0)
 (define PIV_RY 202.0)
-(define REST_L (* 20.0 RAD))        ;; 左挡板静止角（向下 20°）
+(define REST_L (* 18.0 RAD))        ;; 左挡板静止角（向下 18°）：两挡板尖端中缝 20.6px
+                                    ;; （胶囊表面间 13.6px）——球直径 10px，只有几乎正中
+                                    ;; 的球才漏得下去（D 项：减少中缝直落）
 (define UP_L (* -40.0 RAD))         ;; 左挡板抬起角（向上 40°）
 (define REST_R (- (* 180.0 RAD) REST_L))
 (define UP_R (+ (* 180.0 RAD) (* 40.0 RAD)))
+(define ZONE_L 106)                   ;; 触屏分区边界：x<106 左挡板，106..214 双拍，>214 右挡板
+(define ZONE_R 214)
+(define FLIP_GRACE 0.12)            ;; 连拍宽限（秒）：松手后挡板继续抬起这么久再落（单指连拍）
+
 (define FLIP_UP_SPD 30.0)           ;; rad/s（约 40ms 挥满）
 (define FLIP_DN_SPD 13.0)
 
@@ -155,6 +161,10 @@
 (define fr_ang REST_R)
 (define fr_omega 0.0)
 (define fr_on 0)
+(define last_fl -1)
+(define last_fr -1)
+(define l_latch 0.0)         ;; 连拍宽限计时：>0 表示"刚松手不久"，若另一侧此刻按下则继续保持抬起
+(define r_latch 0.0)
 
 (define last_ts 0)
 (define frame_no 0)
@@ -565,7 +575,8 @@
     (set! save_used 0)
     (set! score_dirty 1)
     (display "[pinball] drain ball=") (display balls)
-    (display " score=") (display score) (newline)
+    (display " score=") (display score)
+    (display " bx=") (display (Math.floor bx)) (newline)
     (if (<= balls 0)
         { (set! bst 4)
           (set! game_over 1)
@@ -918,33 +929,44 @@
   (lambda (dt)
     (define touched (Touch.is_pressed))
     (define tx (Touch.x))
-    (define key_l #f)
-    (define key_r #f)
-    (define key_space #f)
-    (define want 0)
+    (define t_l #f)
+    (define t_r #f)
+    (define kl #f)
+    (define kr #f)
+    (define kspace #f)
 
     (if (or (Key.is_down 90) (Key.is_down 122) (Key.is_down 65) (Key.is_down 97)
             (Key.is_down 3))
-        (set! key_l #t))
+        (set! kl #t))
     (if (or (Key.is_down 88) (Key.is_down 120) (Key.is_down 47) (Key.is_down 4))
-        (set! key_r #t))
+        (set! kr #t))
     (if (or (Key.is_down 32) (Key.is_down 13))
-        (set! key_space #t))
+        (set! kspace #t))
 
-    ;; 挡板：触屏左右半屏 + 键盘，**任何状态都响应**（等发球时也能拍）
-    (set! want 0)
-    (if touched (if (< tx 160) (set! want 1) (set! want 2)))
-    (if key_l (set! want 1))
-    (if key_r (set! want 2))
-    (if (== want 1) (set! fl_on 1))
-    (if (== want 2) (set! fr_on 1))
-    (if (and (== want 0) (not touched)) { (set! fl_on 0) (set! fr_on 0) })
-    (if (and (== want 1) (not key_l) (not touched)) (set! fl_on 0))
-    (if (and (== want 2) (not key_r) (not touched)) (set! fr_on 0))
+    ;; 触屏三分区：左 1/3 = 左挡板，中间 1/3 = 两枚同时，右 1/3 = 右挡板。
+    ;; 本平台只有单触点（不能两指同按），中间的"双拍区"是一根手指也能同时抬两枚的入口。
+    (if touched
+        (if (< tx ZONE_L)
+            (set! t_l #t)
+            (if (> tx ZONE_R)
+                (set! t_r #t)
+                { (set! t_l #t) (set! t_r #t) })))
+    (if kl (set! t_l #t))
+    (if kr (set! t_r #t))
+
+    ;; 连拍宽限：松手后挡板**继续抬起 FLIP_GRACE 秒**再落。单指快速"左—右"两下时，
+    ;; 左手还抬着右手就接上了——效果等于同时抬两枚（真实弹球里双板同抬也就几十毫秒）。
+    ;; 代价：普通单拍的回位晚 ~0.12s（回位 13rad/s，观感是"落得稍缓"，不影响接球）。
+    (if t_l (set! l_latch FLIP_GRACE) (set! l_latch (- l_latch dt)))
+    (if t_r (set! r_latch FLIP_GRACE) (set! r_latch (- r_latch dt)))
+    (if (< l_latch 0.0) (set! l_latch 0.0))
+    (if (< r_latch 0.0) (set! r_latch 0.0))
+    (if (or t_l (> l_latch 0.0)) (set! fl_on 1) (set! fl_on 0))
+    (if (or t_r (> r_latch 0.0)) (set! fr_on 1) (set! fr_on 0))
 
     ;; 发射：球停在发射道里时，任意触点/空格蓄力，松手弹出；闲置 8s 自动满力发射
     (if (== bst 0)
-        { (if (or touched key_space)
+        { (if (or touched kspace)
               { (set! charging 1)
                 (set! charge (+ charge (* 1.5 dt)))
                 (if (> charge 1.0) (set! charge 1.0)) }
@@ -955,8 +977,14 @@
                 (launch_ball 0.9) }) }
         (set! idle_t 0.0))
 
+    ;; 挡板电平变化时打一行（端到端回归据此断言"三分区/连拍"的语义）
+    (if (or (not (== fl_on last_fl)) (not (== fr_on last_fr)))
+        { (set! last_fl fl_on)
+          (set! last_fr fr_on)
+          (display "[pinball] flip ") (display fl_on) (display fr_on) (newline) })
+
     (if (== game_over 1)
-        (if (or touched key_space key_l key_r)
+        (if (or touched kspace kl kr)
             { (display "[pinball] restart")(newline) (reset_game) }))
     0))
 
@@ -1362,11 +1390,24 @@
             { (Gfx.fill_circle_aa 8 (+ yy 4) 3 46 46 60 1)
               (txtb (get_item RANK_NAME i) 15 yy 90 100 120) })
         (set! i (+ i 1)) })
-    ;; 操作提示
-    (txt "Z/<L" 4 190 90 110 150)
-    (txt "X/>R" 4 202 90 110 150)
-    (txt "HOLD" 4 216 140 120 90)
-    (txt "=LAUNCH" 4 228 140 120 90)
+    ;; 操作提示（三分区 + 键盘）
+    (txtb "Z/<  =L" 4 186 100 150 200)
+    (txtb "MID =LR" 4 198 150 220 255)
+    (txtb "X/>  =R" 4 210 100 150 200)
+    (txtb "SPC=SHOOT" 4 224 150 130 90)
+    0))
+
+;; 底部三分区指示条：一根手指按在哪一段就抬哪一枚（中间 = 两枚一起）
+(define draw_zones
+  (lambda ()
+    (define mid 26)
+    (if (and (== fl_on 1) (== fr_on 1)) (set! mid 62))
+    (Gfx.fill_rect 0 235 ZONE_L 5 40 12 18)
+    (Gfx.fill_rect ZONE_L 235 (- ZONE_R ZONE_L) 5 46 mid 12)
+    (Gfx.fill_rect ZONE_R 235 (- 320 ZONE_R) 5 40 12 18)
+    (Gfx.fill_rect 0 235 ZONE_L 1 110 40 50)
+    (Gfx.fill_rect ZONE_L 235 (- ZONE_R ZONE_L) 1 (+ 110 mid) (+ 60 mid) (+ 30 mid))
+    (Gfx.fill_rect ZONE_R 235 (- 320 ZONE_R) 1 110 40 50)
     0))
 
 (define draw_msg
@@ -1431,6 +1472,7 @@
     (draw_hud)
     (draw_msg)
     (draw_over)
+    (draw_zones)
     (EX.draw_button)      ;; 右上角「退出」按钮（宿主在触屏边沿判定命中）
     0))
 
