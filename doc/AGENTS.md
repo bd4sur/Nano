@@ -10066,3 +10066,121 @@ WASM-GUI 重新构建（5,680,928 B），9002 端口在线。
 的布局注释同步更新。验证：设置面板截图两格分别为「镜头光晕 开 / 星芒 关」；正午对准太阳
 时 `star_burst=1/0` 两帧仅在太阳十字臂处有差异，默认值下不再绘制。WASM-GUI 重新构建
 （5,681,046 B），9002 端口在线。
+
+# 2026-11-14（灵机应用程序：时光集 / 相册，`app/album.scm`）
+
+把 C 版「时光集」（`infer/ui_app.c` 的 `STATE_ALBUM`）用**灵机（Scheme）App** 重做一遍，
+只针对 **WASM-GUI 目标**（`infer/build_wasm_gui.sh` → `infer/webgui/`，**不是** `infer/web/`
+那条 LLM-only 的 wasi-sdk 路线）。约束与既有 App 一致：**不改动任何既有实现**，能力缺口用
+已有本地库（`Gfx`/`Fs`/`Key`/`Touch`/`System`/`App`）补齐；对既有文件只有"注释级"改动。
+
+## 交付物
+
+| 文件 | 性质 | 说明 |
+|---|---|---|
+| `infer/app/album.scm` | **新增**（约 680 行） | 时光集 App：等比缩放浏览 + 触屏/键盘 + 自动放映 + 空目录/坏图兜底 |
+| `infer/ui_scheme_app.c` | 改 1 行注释 | `SCHEME_APP_MAX` 的「当前 46 个」→「当前 49 个；余量留 7 个」 |
+| `infer/tools/e2e/browser/regress_album.js` | 新增（本机工具，不入 Git） | 浏览器 e2e：34 项断言（三引擎全过） |
+| `infer/tools/e2e/host/run_host_regress.sh` | 改 1 处（本机工具） | App 清单加入 `album` |
+
+`app/*.scm` 落进资源目录即自动进入「灵机应用程序」列表（无需改固件），`build_wasm_gui.sh`
+把 `app/album.scm` 收进 manifest 的 p1（启动必需），`ui_scheme_app.c` 的 `SCHEME_APP_MAX`
+（56）仍有余量。
+
+## 与 C 版的功能对应
+
+- **目录**：`image/`（相对业务资源根；`(native Fs)`/`(native Gfx)` 的同一套路径规则）。
+- **枚举与排序**：`(Fs.list "image")` 已按名字升序（`hal_fs` 的 `list_files` 排序，与 C 版
+  `sort_strings` 同序）；按扩展名过滤（`.png/.jpg/.jpeg/.bmp/.gif/.tga`）并跳过点文件。
+- **键位**（`(native Key)` 的物理逻辑键值，浏览器里可打印字符 = ASCII）：
+  `1`=自动放映开关；`2/4/5/7/8/←/0`=上一张；`3/6/Shift/9/Ctrl/→/Enter`=下一张——与 C 版
+  `STATE_ALBUM` 的分组逐键一致。
+- **自动放映**：6000ms 一张（`AUTO_MS`），底栏最下面 2px 进度条，颜色 `0,170,255`（同 C 版）。
+- **退出**：`(import EX "app/lib/exit.scm")`——硬 A/ESC 与右上角「退出」走宿主全局确认框；
+  收尾函数里 `(System.clear_timeout ts)`。
+
+## 相对 C 版的改进（写进源码头部，便于回看）
+
+1. **等比缩放、居中留黑边**：C 版 `gfx_decode_image_buffer(..., SCREEN_WIDTH, SCREEN_HEIGHT)`
+   把图 `stbir_resize` **拉伸到满屏**（宽高比失真）；本版按 `min(SW/w, PH/h)` 缩放后居中，
+   竖拍/超宽图是黑边而不是被压扁。
+2. **触屏**：左右滑动切图（阈值 36px 且横向占优）；轻点画面左/右 1/4 切图、中间切换
+   **沉浸模式**（隐藏上下工具条，照片满屏；再点恢复）；底栏三枚按钮（上一张 / 自动 / 下一张）
+   按下高亮、**在同一按钮上松手才生效**（拖出取消），与音乐盒/词典 App 同一范式。
+3. **不睡 3 秒列目录**：C 版进相册先画文件清单再 `sleep_in_ms(3000)`（调试期产物）；
+   本版直接显示第一张，文件名 / 序号 / 原始分辨率常驻顶栏。
+4. **空目录 / 坏图不是死路**：
+   - 目录为空时自动重扫（前 30 秒每 0.5s——WASM 的 `image/` 属 manifest 的 **p2 后台挂载层**，
+     App 可能先于资源就绪启动；之后降到 2s）。空目录页明确写「读不到目录 / 目录为空」两种情况。
+   - 非空目录在前 30 秒每 5s **静默比对目录条目数**，只有数量变化才重建列表（后台挂载陆续
+     到位时列表自增；`R` 键随时手动重扫）。
+   - 单张图文件头都读不出来 → 画占位页，上/下一张仍可跳过。
+5. **像素不进解释器堆**：解码/缩放/缓存全在宿主侧（`Gfx.draw_image` 的 LRU，键 = 路径 +
+   目标尺寸）；Scheme 只拿 `Gfx.image_size` 的两个整数做排版（只读文件头，不解码像素）。
+
+## 实现要点
+
+- 版式：顶栏 18px（标题 / 心跳点 / 文件名 / `WxH` / 退出按钮）、照片区
+  `320×200`（沉浸时 `320×240`）、底栏 22px（三按钮 + `i/N` + 进度条）。
+- 触屏状态机：**电平 + 落点**（不消费 `Touch.take_press/release`，与 `(EX.check)` 的按钮
+  判定互不干扰）；按下武装按钮 / 记落点 → 拖出按钮即取消 → 松手按「按钮动作 > 横滑 > 轻点」
+  的顺序结算。`hit_btn` 在沉浸模式下恒 `-1`（否则隐藏的底栏会变成一排**隐形按钮**）；
+  轻点只在照片区内响应（顶栏的退出按钮不会被误判成"切图"）。
+- **沉浸模式不跑 `(EX.check)`**：`EX.check` 自带一份电平式按钮判定（宿主没登记热区时它是
+  兜底），沉浸时按它自己的矩形会把右上角点按判成退出。改为自己消费
+  `(App.back_requested)`：沉浸时硬 A/ESC 只"唤出工具条"，工具条恢复后 ESC 才走全局退出确认；
+  同时 `(App.set_exit_button 0 0 0 0)` 撤掉宿主热区，`(App.resumed)` 时置脏补重绘。
+- **「存活心跳」**（标题右侧 4px 呼吸点，约 1s 亮/暗交替）：纯静态画面下 App 不会刷新帧缓冲，
+  而宿主回归台与浏览器回归都以「刷新次数」判断 App 是否还活着（`regress.js` 的 refreshΔ）。
+  心跳点既表示 App 在跑，也提供稳定的周期刷新源；沉浸模式不画、也不产生刷新。
+- 自动放映只重画底部 2px 进度条（脏区 320×2），不整屏重绘；切图/交互才整屏重绘。
+
+## 解释器踩坑记录（写这个 App 时实际踩到的）
+
+1. **`null?` 对空表与 `#null` 都为真**：`(Fs.list "image")` 在**空目录**返回的是空表（合法
+   值），用 `null?` 判「枚举失败」会把空目录误判成"读不到目录"。改用 `(list? raw)` 区分
+   （空表是列表、`#null` 不是）。
+2. **扩展名窗口不能固定取 5 个字符**：`.png/.jpg/.bmp/.gif/.tga` 是 4 字符、`.jpeg` 是 5 字符。
+   一律 `slice(L-5, L)` 会得到 `"e.png"`，结果是"目录有图但一张都不显示"（实测）。改为分别
+   取后 4 / 后 5 字符比对。
+3. 算术/比较恒二元、`/` 与 `mod` 恒返回浮点（下标一律 `Math.floor`）；无 `let/list/map`；
+   `cond` 每子句单个表达式；`'()` 是模块级静态槽（空表一律 `(cdr '(0))` 现造）。
+4. 内部 `define` 只在 lambda 体（可提升）里用，`{...}` 块内不 define；循环里跨函数复用的
+   模块级临时量要注意被被调函数踩掉（本 App 的循环辅助函数都用自己 lambda 体内的局部量）。
+
+## 验证
+
+- **桌面无头回归台**（`tools/e2e/host`，真 `graphics.c` + 真解释器 + 虚拟时钟）：
+  `APP=album` 各种脚本化操作逐一核对 PPM 截图与 stdout 诊断行——启动/空目录页、
+  `HAL_KEY_AT` 的 ←/→/`1`（自动放映开启后底栏进度条出现、6s 后切图）、
+  `HAL_TOUCH_AT` 的横滑切图 / 底栏三按钮 / 轻点进沉浸（照片满屏、黑边位置正确）/
+  沉浸下点原按钮位置只唤出工具条、`HAL_APP_AT` 的「返回→确认/留下」两段式退出
+  （`app_confirmed=1` + `[album] bye`）。另用真实照片（`wp.png` 4:3、`wp-chiikawa.png`）
+  与 1920×1080（16:9）核对等比缩放落点：4:3 → 266×200 居中（左右黑边）、16:9 → 320×180
+  居中（上下黑边）。全部 App 回归台 `err=none`。
+- **浏览器端到端**（`tools/e2e/browser/regress_album.js`，Playwright + 真 wasm）：
+  Chromium / chrome-headless-shell / Firefox **各 34/34 PASS**。覆盖：空目录页（manifest 不含
+  `image/`，等价于 p2 未挂载）→ 运行期用浏览器 canvas 现场生成 4 张 PNG 写进 MEMFS
+  （宽/竖/方 + 一个坏文件）→ 0.5s 内自动重扫发现；等比缩放（宽图上下黑边、竖图左右黑边、
+  方图在沉浸模式满高的精确像素断言）；键盘 →/←/`1`；自动放映 6s×2 连续切图 + 进度条青色；
+  触屏左/右滑、底栏「上一张」、轻点进/出沉浸、沉浸下底部无隐形按钮；Esc→确认→回列表；
+  无 pageerror。
+- **存活回归**（`regress.js`，chromium 全量 49 个 App）：`album` 启动/结束都在
+  `STATE_SCHEME_APP_RUN(80)`、refreshΔ=8（心跳），无异常。全量列表里
+  calculator/cnn/gomoku/hwr/hwr2/llm/mathjax/musicbox/nanochat/qrcode/svm/waterpool 的
+  refreshΔ=0 是本次改动前就存在的（纯静态/首帧早于探针），与本 App 无关。
+- 静态检查：`python3 tools/check_scm_arity.py app/album.scm` **0 处问题**；
+  `node --check` 通过（e2e 脚本）。
+
+## 运行
+
+```bash
+cd infer && bash build_wasm_gui.sh
+cd webgui && python3 ../tools/https_static_server.py 9002 .
+# 浏览器打开 https://<主机>:9002/ → 任意键 → 主菜单「小游戏」→「灵机应用程序」→「album」
+#   把图片放进 <资源根>/image/（WASM 上是 MEMFS 的 /home/bd4sur/linglong/image，
+#   也可经页面「资源」面板上传/挂载），App 会自动发现；R 键手动重扫。
+```
+
+浏览器 e2e 自包含（不依赖资源目录里有图：脚本用 canvas 生成 PNG 后直接写 MEMFS），
+跑法：`node tools/e2e/browser/regress_album.js <URL> chromium <outdir>`。
