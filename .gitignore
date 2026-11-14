@@ -41,3 +41,6 @@ android/
 
 # 灵机回归测试/性能归因脚本（仅工作区，不纳入版本管理）
 infer/tools/e2e/
+
+# 灵机 App 内存池需求探针（仅工作区，不纳入版本管理；结论见 doc/灵机App内存池需求实测.md）
+infer/tools/memprobe/

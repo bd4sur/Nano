@@ -11001,3 +11001,54 @@ C 代码与 static。宿主在冷启动时对同类状态库逐个显式复位�
 `regress_2048.js` 24/24、`regress_exit.js`（E2E_APP=2048 E2E_EPOCH=0）35/35、
 `regress_exit.js`（E2E_APP=gol）38/38、`check_scm_arity.py` 0 问题、`gcc -fsyntax-only`
 （NANO_WASM_GUI）通过。
+
+# 2026-11-14（灵机 App 内存池需求全量实测 → `doc/灵机App内存池需求实测.md`）
+
+为 ESP32 等极低资源目标摸清 `infer/app/` 下全部 52 个 Scheme App 的解释器内存池需求。新增一套
+**无头内存探针**（`infer/tools/memprobe/`，由 `tools/e2e/host/harness.c` 派生：真图形层 + 全部本地库 +
+虚拟时钟 + 脚本化输入，只把推屏打桩），在不改动任何业务代码与本地库的前提下按阶段采样
+`am_runtime_get_memory_stats()`，并用池大小二分给出各项下限。报告：`doc/灵机App内存池需求实测.md`。
+
+## 方法与指标
+
+- **装载期最小池**（分阶段）：`MEM_STOP_AFTER=parse|link|compile|load` + 池大小二分（64 KB 粒度）。
+  默认池 50:50 分给 VM/堆，所以 `最小池/2 ≈ 该阶段的 VM 峰值`；必须分阶段二分而不能直接读 `vm_used`
+  ——阶段内瞬时峰值远高于阶段结束水位（链接期最典型：结束 0.84 MB / 过程峰值 1.6 MB）。
+- **最小运行池**：装载 + 跑 900 帧（14.4 s 虚拟时间）不 OOM。
+- **水位**：逐帧采样 VM/堆（紧池与 96 MB 宽松池各一遍），给出装载常驻、运行峰值、GC 锯齿、存活集。
+- **最小堆**：装载后用 `am_allocator_pool_adjust_boundary` 把 heap 侧压到 10%/20%/… 再二分（解释器 heap
+  比例下限 10%，故更小的值测不到，记作 `≤ 10% 池`）。
+- **行为一致性校验**（`verify.py`）：同 App 在 96 MB 池与最小池各跑 240 帧比较末帧帧缓冲 CRC，
+  抓"能跑但静默降级"。
+- **32 位参照**：把同一探针编成 wasm32（`am_value_t=4 B`、`am_float_t=float`，与 ESP32 同构）重测全部 App。
+- **输入规模场景**（`scenarios.py`）：`(native Fs)` 的根是**编译期常量** `PLATFORM_ROOT_DIR`（桌面为
+  `/home/bd4sur/linglong`），故通过临时替换 `doc/`、`data/`、`music/`、`image/` 控制输入规模（跑完还原）。
+
+## 关键结论（详见报告）
+
+1. **装载期决定池大小，不是运行期堆**：52/52 个 App 的"最小运行池"与"装载期最小池"逐一相等。
+   原因：池创建时边界固定 50:50、装载期边界不动；装载后宿主释放 IL/AST 又让 VM 回落到 0.2~3.5 MB。
+2. **池需求 ≈ 源码体积 150~500 倍**（中位 259 倍，`mathjax` 最高 2205 倍——因为连带 5 个 tex_* 模块）。
+   最小 `mandelbrot` 2.4 MB（wasm32 2.0 MB），最大 `markdown` 64.8 MB（wasm32 44.4 MB）。
+3. **运行期堆存活集中位仅 230 KB**（30 KB~5.0 MB），但帧内 churn 峰值可达存活集 10~40 倍，且**随池容量放大**
+   （`mandelbrot` 紧池 0.9 MB / 48 MB 堆 36 MB）。定尺寸要用紧池数字。
+4. **32 位只需 x86-64 的 0.73 倍**（大 App 0.66~0.70，小 App 0.85~0.88，固定开销占比决定）。
+5. **ESP32 现状**：`ui_scheme_app.c` 的 2 MB 池只能跑 2 个最小 App（`mandelbrot`/`uinput`，32 位口径）。
+   3 MB→12 个、4 MB→20 个、8 MB→42 个、16 MB→50 个、24 MB→51 个。
+6. **装载期把边界让给 VM（初始 heap 20%）可让 51 个 App 的最小池下降 31~38%**（`gol` 3136→1984 KB），
+   但 churn 型 App（`waterpool`/`xray`/`tsp`/`sdfprog`/`llm`/`hwr*`）必须留足堆：`waterpool` 在 3 MB 堆上
+   900 帧跑不完（>4 min），7 MB 堆上 8 s（**GC 抖动可慢 30 倍**）。
+7. **长跑（3600 帧）无泄漏**：48 个 App 的 GC 谷底不动；真实增长仅 3 个（`turtle` +33 KB/千帧、`badapple`
+   +116、`callcc` +39），`xray` 是故意的分配压力演示（大堆上会 OOM）。VM 区会在前 0.5~20 s 爬到稳态
+   （操作数栈高水位），之后恒定。
+8. **"能跑"≠"跑对"**：`hwr`（6848→8544 KB）、`hwr2`（9216→17046 KB，32 位 12174）、`maze3d`（7104→7816 KB）
+   在最小池下会**静默降级**（权重表/候选表分配失败，界面不报错）。其余 45 个 App 在最小池与 48 倍大池上的
+   末帧逐字节相同；`flip`/`pathtracer`/`forkqueue`/`xray` 因画面本身显示 Diag/`System.memstat` 读数不可比。
+
+## 工具（`infer/tools/memprobe/`，本工作区新增）
+
+`memprobe.c`（探针：分阶段采样 + `FRAMECRC` 末帧指纹 + `MEM_STOP_AFTER`/`MEM_INIT_RATIO`/`MEM_HEAP_KB` 三个
+二分接口）、`build.sh`、`sweep.py`（全量）、`longrun.py`（长跑 + 谷底回归）、`scenarios.py`（输入规模）、
+`verify.py`（行为一致性）、`wasm/`（32 位参照：`build_wasm.sh` + `run.js` + `memprobe_wasm.sh` + `sweep_wasm.py`）、
+`report.py`（由 JSON 生成报告）、`bench/`（空程序/最小 Gfx 基线：空程序 256 KB 池即可装载）。
+产物在 `/tmp/nano_memprobe/`（`out/`、`out20/`、`wasmout/`、`long/`、`verify.json`、`scen/`）。
