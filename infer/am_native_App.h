@@ -125,6 +125,16 @@ int32_t am_native_App_resumed(am_runtime_t *rt, am_process_t *proc);
 //   无触屏硬件时 app/lib/exit.scm 会登记 (0,0,0,0) 表示"没有按钮"。
 int32_t am_native_App_set_exit_button(am_runtime_t *rt, am_process_t *proc);
 
+// (App.set_timeslice ticks) : #undefined —— 调整**本 App 解释器每帧时间片**的指令条数上限。
+//   背景：宿主每帧只驱动解释器一个时间片（ui_scheme_app.c 的 MB_TIMESLICE_TICKS，默认
+//   312500 条 VM 指令）。时间片不够时，一件"必须一口气做完"的工作（例如生命游戏铺满
+//   网格逐格演进一代）会被抢占拆到下一帧——帧率不变但推进速度**直接减半**（60→30 代/秒）。
+//   计算密集型 App 用它换更大的单帧预算（代价是本帧的解释器耗时增加，帧率仍由渲染决定）。
+//   夹在 [31250, 1250000]（默认值的 1/10 ~ 4 倍；4 倍约 13 ms，超过就会明显掉帧）。
+//   每个 App 实例有独立解释器运行时，因此本设置只影响调用它的 App。
+//   示例：(App.set_timeslice 550000)  ; 一代约 410k 指令，留约 30% 余量
+int32_t am_native_App_set_timeslice(am_runtime_t *rt, am_process_t *proc);
+
 // (App.name) : String —— 当前 App 名（源码文件名去 .scm）
 int32_t am_native_App_name(am_runtime_t *rt, am_process_t *proc);
 

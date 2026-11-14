@@ -208,6 +208,21 @@ int32_t am_native_App_is_active(am_runtime_t *rt, am_process_t *proc) {
     return app_push_bool(proc, (s_active && !s_exit_wanted && !s_exit_confirmed) ? 1 : 0);
 }
 
+// 时间片上下限（见 am_native_App.h 的说明）
+#define APP_TIMESLICE_MIN (31250u)
+#define APP_TIMESLICE_MAX (1250000u)
+
+int32_t am_native_App_set_timeslice(am_runtime_t *rt, am_process_t *proc) {
+    int32_t ticks = app_pop_pixel(proc, 0);   // 非数字/缺失 → 0（忽略，保持默认）
+    if (ticks > 0) {
+        uint32_t t = (uint32_t)ticks;
+        if (t < APP_TIMESLICE_MIN) t = APP_TIMESLICE_MIN;
+        if (t > APP_TIMESLICE_MAX) t = APP_TIMESLICE_MAX;
+        am_runtime_set_default_timeslice(rt, t);
+    }
+    return app_push(proc, AM_VALUE_UNDEFINED);
+}
+
 int32_t am_native_App_name(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
     return app_push_wstring(proc, s_name);
@@ -355,6 +370,7 @@ static const am_native_func_entry_t am_native_App_funcs[] = {
     { L"is_active",       am_native_App_is_active },
     { L"resumed",         am_native_App_resumed },
     { L"set_exit_button", am_native_App_set_exit_button },
+    { L"set_timeslice",   am_native_App_set_timeslice },
     { L"name",            am_native_App_name },
     { L"platform",        am_native_App_platform },
 };
