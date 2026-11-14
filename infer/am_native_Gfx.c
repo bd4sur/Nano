@@ -33,8 +33,8 @@ static Nano_GFX *s_gfx = NULL;
 // 一个灵机 App 实例（每个 App 一个 am_runtime_t/内存池，但共用这一份 C 代码）。
 // 于是它属于「绘制设置」而非「绘制目标」：宿主必须在冷启动一个 App 时调用
 // am_native_gfx_reset() 复位，否则上一个 App 留下的字模会被下一个 App 继承
-// （典型症状：先跑 app/gol.scm 的 12px 点阵 HUD，再跑 app/2048.scm，2048 的文字
-// 全变点阵）。App 侧的正确纪律仍然是「在每个绘制段之前 set_font」，见 app/pinball.scm。
+// （典型症状：先跑一个把字模切到 16px 的 App，再跑 app/2048.scm，2048 的文字
+// 全变大字）。App 侧的正确纪律仍然是「在每个绘制段之前 set_font」，见 app/pinball.scm。
 static uint32_t s_font_id = GFX_DEFAULT_FONT_ID;
 
 void am_native_gfx_bind(Nano_GFX *gfx) {
@@ -54,6 +54,41 @@ static Nano_GFX *native_gfx(am_runtime_t *rt) {
         am_runtime_error(rt, L"[Gfx] 未绑定绘图目标（宿主未调用 am_native_gfx_bind）\n");
     }
     return s_gfx;
+}
+
+
+// ===============================================================================
+// 文字基线补偿：把 (Gfx.draw_text) 的 y 语义统一成「墨迹顶」
+// ===============================================================================
+// 三种字模的「行顶 → 墨迹上缘」并不一致（实测，以 CJK 字形为准）：
+//   font 0  12px 点阵   : 墨迹 y_top+0 … y_top+10（行高 13 / 基线 12，字模本身就贴行顶）
+//   font 1  12px 抗锯齿 : 墨迹 y_top+2 … y_top+12（行高 15 / 基线 12，CJK 基线上高 10）
+//   font 2  16px 抗锯齿 : 墨迹 y_top+1 … y_top+15（行高 18 / 基线 14，CJK 基线上高 13）
+// 而灵机 App 的版面坐标是**面向 12px 点阵形成的约定**：y 就是一行文字墨迹的顶边
+// （页眉 16px 里写 y=2、16px 按钮里写 y=+2、20px 输入框里写 y=+4…）。抗锯齿字模按同一个
+// y 绘制时，12px 低 2px、16px 低 1px：页眉、按钮、输入框、框图方框里的字整体贴着框底，
+// 与「y = 视觉顶」的约定不符（同一份布局换字模就会上下跳 1~2px）。
+// 于是 draw_text 在交给图形层之前先减掉这段「行顶空气」：空隙 = 基线 − CJK 基线上高
+// （yOffset），直接从字模度量取，字模换版本/换字号都不会失配；点阵字模没有 alpha 字形表，
+// 墨迹本来就贴 y_top，空隙为 0（保持历史行为）。
+// 注：(Gfx.draw_text_centered) 的参数是**行框中心**、由图形层按行高居中，抗锯齿字模的
+// 墨迹本就落在 cy 上，不需要这层补偿（故只在 draw_text 上做）。
+static int32_t s_text_top_gap[3] = { -1, -1, -1 };   // 每种字模的空隙只算一次
+
+static int32_t native_text_top_gap(uint32_t font_id) {
+    if (font_id > 2u) return 0;
+    if (s_text_top_gap[font_id] < 0) {
+        int32_t gap = 0;
+        float adv = 0.0f, asc = 0.0f, desc = 0.0f, gw = 0.0f, lsb = 0.0f;
+        if (gfx_font_native_size(font_id) > 0.0f &&
+            gfx_font_glyph_metrics(font_id, (uint32_t)0x4E2D /* 中 */,
+                                   &adv, &asc, &desc, &gw, &lsb) != 0) {
+            gap = gfx_font_baseline(font_id) - (int32_t)(asc + 0.5f);
+            if (gap < 0) gap = 0;
+        }
+        s_text_top_gap[font_id] = gap;
+    }
+    return s_text_top_gap[font_id];
 }
 
 
@@ -575,6 +610,9 @@ int32_t am_native_Gfx_draw_text_centered(am_runtime_t *rt, am_process_t *proc) {
     return native_statement_done(proc);
 }
 
+// (Gfx.draw_text text x:Number y:Number red:Number green:Number blue:Number) : #undefined
+// —— 在 (x, y) 处画一行文本；y 是**墨迹顶**（行内文字的视觉顶边，三种字模一致，
+//    见上方 native_text_top_gap 的说明），不是字模行框顶。超宽部分按图形层规则截断。
 int32_t am_native_Gfx_draw_text(am_runtime_t *rt, am_process_t *proc) {
     Nano_GFX *g = native_gfx(rt);
     if (g == NULL) return -1;
@@ -590,7 +628,8 @@ int32_t am_native_Gfx_draw_text(am_runtime_t *rt, am_process_t *proc) {
 
     wchar_t *text = wstring_to_buffer(proc, ws);
     if (text != NULL) {
-        gfx_font_draw_text(g, s_font_id, text, x, y, r, gc, b, 1);
+        gfx_font_draw_text(g, s_font_id, text, x,
+                           y - native_text_top_gap(s_font_id), r, gc, b, 1);
         am_free(proc->heap_alloc, text);
     }
     return native_statement_done(proc);
@@ -802,6 +841,8 @@ int32_t am_native_Gfx_get_font(am_runtime_t *rt, am_process_t *proc) {
 // (Gfx.font_info id:Number) : List | #null
 // —— 该字模的 (半角步进 全角步进 行高 基线)；id 非法返回 #null。
 //    排版端拿它算折行宽度与行高（见 md_layout 的 set_font_metrics）。
+//    注意：这里的「基线」是**字模自身**的度量（行顶→基线），与 (Gfx.draw_text) 的 y 参数
+//    不是同一个参照：后者是墨迹顶（= 基线 − CJK 基线上高，见 native_text_top_gap）。
 int32_t am_native_Gfx_font_info(am_runtime_t *rt, am_process_t *proc) {
     int32_t id = 0;
     am_list_t *lst;

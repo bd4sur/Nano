@@ -191,7 +191,10 @@
 (define status
   (lambda (alive_n) {
     (Gfx.fill_rect 0 0 SW HUD_H 39 39 39)
-    (Gfx.set_font 0)
+    ;; 12px 抗锯齿字模（font 1）。原先用 12px 二值点阵（font 0）是为了跟 C 版参考实现
+    ;; 的 gfx_draw_textline 逐像素对齐；现在 (native Gfx) 会把抗锯齿字模的行顶空隙
+    ;; 减掉（y = 墨迹顶），两种字模的墨迹落在同一行，HUD_H=12 的条带不用改。
+    (Gfx.set_font 1)
     (Gfx.draw_text (String.concat "康威生命游戏 | 迭代:"
                      (String.concat (String.atom_to_string gen)
                        (String.concat " | 存活:"
