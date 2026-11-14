@@ -3,32 +3,65 @@
 ;;
 ;; 运行环境：灵机（Animac）解释器 + Nano Gfx 本地库
 ;; 参考实现：ui_particlelife.c（particle.html 移植）：6 种颜色的粒子在环面世界中
-;; 按随机种间吸引/排斥参数自组织。差异：100 粒子（10x10；C 版 324，解释器帧预算
-;; 约束）、System.set_interval 每帧一步（8ms 定时器，见文件末）——C 版是每帧全速，
-;; 解释器则由宿主 GUI 按时间片驱动，定时器回调即演进一步。
+;; 按随机种间吸引/排斥参数自组织。
 ;;
-;; 【性能结构】2026-11 重写 interact：从「全对 O(N²) + 逐对环面回绕」改为
-;; C 版同构的「均匀网格 + 半程邻域壳 + 对称化（一次距离、双向加力）」：
-;;   · 候选对从全对 10000（无序 4950）降到 ~2100（只查同格 + 7 个前向邻格）；
-;;   · 每对只算一次距离，两方向的力同时施加（力矩阵非对称性照样保留）；
-;;   · 回绕不再是「逐对 4 个 if」：格子按环面精确等分，跨格接缝的整格平移
-;;     在邻格循环外一次算好（见 interact 第 2 段），内层只剩两次加法；
-;;   · 网格用 head/next 下标链表表示，每步只覆写元素、不分配对象。
-;; 力的系数按 C 版取：近距 param-a、中/远距 param-b，两方向分别用 [ki][kj]/[kj][ki]
-;; （矩阵非对称，必须转置取），因此每次启动的团簇图案都不同。
-;; 实测（WASM-GUI）：81 粒子时每步 VM 指令 57.8 万 → 18~24 万（-60%），帧率 10fps →
-;; 60fps（每帧一步）；加到 100 粒子后每步约 24 万，仍是一步一帧（浏览器实测 60/s）。
+;; 【性能结构】本文件是**纯 Scheme**实现，性能全部靠"少让 VM 干活"：
 ;;
-;; 实现要点：
+;; 一、2026-11 早先一轮：算法从「全对 O(N²)」改为 C 版同构的
+;;     「均匀网格 + 半程邻域壳 + 对称化（一次距离、双向加力）」：
+;;       · 候选对从全对 4950（无序）降到 ~2200（只查同格 + 7 个前向邻格）；
+;;       · 每对只算一次距离，两方向的力同时施加（力矩阵非对称性照样保留）；
+;;       · 格子按环面精确等分 → 跨格接缝的整格平移在邻格循环外一次算好，
+;;         内层不需要逐对做 4 个回绕判断；
+;;       · 网格用 head/next 下标链表表示，每步只覆写元素、不分配对象（零 GC）。
+;;
+;; 二、本轮（性能专项）：**热循环里的模块级变量全部本地槽位化**。这是最大的一笔。
+;;     本解释器把顶层 define 在闭包体内当作"自由变量快照"：每次读取走通用变量解析
+;;     （`load` 的 varid 路径：沿闭包链 deref + 绑定表查找），wasm32 实测约 77ns，
+;;     是一条普通 VM 指令（~8ns）的 9 倍。原 interact/move 每次迭代要读
+;;     xs/ys/ks/vxs/vys/param-*/GRID_*/RMAX2/RTH1/... 几十次，实测每步 **3.37 万次
+;;     通用解析**（33,648 × 77ns ≈ 2.6ms，占该步 5.1ms 的一半）。把用到的常量与表在函数开头一次性搬进
+;;     本地槽位（`(define lx xs)` 之类）后，每步只剩 **180 次**，同一粒子/同一轨迹下
+;;     每步耗时降到 **1/2.5**（指令条数几乎不变，变的是每条指令的代价）。
+;;     同一手法见 doc/AGENTS.md「2026-11-14 生命游戏性能专项」的通用结论。
+;;
+;; 三、配套的三项小改动（合计再省约 10% 指令）：
+;;     1) 邻格表预计算（NBC2/NBSX/NBSY）：每格 × 8 个壳的「邻格下标 + 整格周期
+;;        位移」在初始化时算好，热循环里只剩 3 次 get_item（原来每格每壳要现场做
+;;        环绕加减与两串 if，约 78 条指令 → 约 16 条）；
+;;     2) 力核分段改成"远距优先"（远距段覆盖 75% 的对，先测 rth2 再测 rth1，
+;;        平均每对少一次比较）；
+;;     3) 单帧预算按粒子数申请（App.set_timeslice）：宿主每帧只给解释器一个时间片
+;;        （默认 312500 条指令）。一步 ~「22·N² + 500·N」条指令，超了就会被抢占拆到
+;;        下一帧（帧率不变、步频减半）。按 N 申请预算后可以把粒子数从 100 提到 169
+;;        （13×13），仍是每帧一步（60 步/秒）。
+;;
+;; 实测（WASM-GUI；headless chromium，真 wasm32，同机同构建脚本，5s 窗口 ×3 取中位）：
+;;   版本                粒子  每步 VM 指令  每帧 CPU*  步/秒  CPU 占用*
+;;   旧（本文件上一版）  100    23.4 万      6.3 ms     60    37.7%
+;;   本轮（同粒子数）    100    22.3 万      3.0 ms     60    17.7%
+;;   本轮（默认档）      169    55   万      5.2 ms     60    30.9%
+;;   * 每帧 CPU = CDP TaskDuration / 帧长；其中约 1.2ms 是绘制与上屏的固定成本
+;;     （与粒子数几乎无关），其余才是物理步。
+;; 即：同粒子数下 CPU 降到 1/2.1；默认档用 0.82 倍的 CPU 换 1.69 倍的粒子数。
+;; 参照物 C 版（ui_particlelife.c，324 粒子、每帧一步）实测 6.3% CPU。纯 Scheme 在
+;; 本解释器里每条指令 ~8ns，324 粒子约需 250 万条指令/步（≈19ms/帧），**在 60 步/秒
+;; 的帧预算内做不到**——这是解释器与机器码之间 ~15 倍的固有差距，不是写法问题
+;; （本轮已把"写法"这一侧的可省项基本清零，见下）。故默认取 169 粒子：仍能稳定
+;; 每帧一步的最大档。
+;;
+;; 实现要点（都是踩过的坑）：
 ;;   - 粒子状态为 5 个平行一维列表（xs/ys/ks/vxs/vys；get_item/set_item! O(1)）；
 ;;   - 参数矩阵 param-a/param-b 为 36 元素列表（idx = kind_i*NK + kind_j）；
-;;   - '() 字面量是模块级静态槽，仅可安全 push 一次（各表独立字面量；vys 由
-;;     (cdr (cons 0 vs2)) 复制 vs2 而得——cons 为全表复制，故为独立对象）；
+;;   - '() 字面量是模块级静态槽，仅可安全 push 一次（各表独立字面量）；
 ;;   - 语句位置的分支一律写成形如 { (set! x ...) ... } 的净零块（vendored 编译器
 ;;     不回收语句位置的残留值，两分支若一留值一不留会破坏操作数栈）；
 ;;   - 算术一律二元嵌套（本解释器编译器对多元乘法只发射一次 mul）；
 ;;   - while 循环体内不调用 lambda（vendor 版 ARN 在 while 内 call lambda 有作用域
-;;     缺陷，见 doc/AGENTS.md 2026-10-18 sky.scm 条目），故 interact 全部内联。
+;;     缺陷，见 doc/AGENTS.md 2026-10-18 sky.scm 条目），故物理全部内联；
+;;   - 本地槽位化只在 lambda 体开头做一次（interact 53 个、move 16 个、draw 14 个）：
+;;     槽位寻址是编译期帧描述符 + O(1) 下标，实测 53 个本地槽位没有性能拐点
+;;     （对比：`tools/e2e/host/bench/c_var_*.scm` 的 4~64 个绑定扫描）。
 ;;
 ;; 玩法：进入即随机生成相互作用参数与初始分布并开始演化；A(ESC) 返回列表；
 ;; HUD 右侧「重置」按钮 = 重新抽参数 + 重新撒布（同 C 版按 D 重置），「退出」= 硬 A。
@@ -39,6 +72,7 @@
 (native String)
 (native System)
 (native Touch)
+(native App)
 (import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 物理常数（与 ui_particlelife.c 一致；世界半宽 1.0，x∈[-1,1] 环面）-----
@@ -73,9 +107,14 @@
 
 ;; ---- 粒子状态（5 个平行一维列表）与相互作用参数矩阵 -----------------------
 
-(define N (* 10 10))               ; 粒子数（10x10 撒布；每步约 24 万 VM 指令，
-                                  ; 仍在宿主每帧时间片 312500 之内，故 60 步/秒）
-(define SCATTER_N 10)
+;; 粒子撒布网格边长：N = SCATTER_N²。按平台分两档（解释器速度差一个数量级）：
+;;   · wasm-gui（浏览器）：13 → 169 粒子。这是"每步仍能在一个时间片内跑完
+;;     （60 步/秒）"的最大档：一步约 55 万条指令 / 本机 4 ms（见下方 App.set_timeslice）；
+;;   · 其余平台（m5esp / tty / linux / web）：10 → 100 粒子，与上一版一致
+;;     （ESP32 上的解释器比 wasm 慢约一个数量级，169 会把单帧拖到几十毫秒）。
+;; 想更密/更省就改这里：时间片预算随 N 自动缩放（见 App.set_timeslice 那几行）。
+(define SCATTER_N (if (String.equals (App.platform) "wasm-gui") 13 10))
+(define N (* SCATTER_N SCATTER_N))
 (define xs '())
 (define ys '())
 (define ks '())
@@ -114,31 +153,118 @@
 (define shell-x '(0 1 -1 0 1 -1 0 1))
 (define shell-y '(0 0 1 1 1 2 2 2))
 
+;; 邻格表（初始化时算一次，interact 每步只查表）：下标 = 格号*8 + 壳号
+;;   NBC2 = 邻格格号；NBSX/NBSY = 该邻格相对本格的整周期位移（±周期 或 0）
+(define NBC2 '())
+(define NBSX '())
+(define NBSY '())
+
+;; ---- 单帧预算 --------------------------------------------------------------
+;; 宿主每帧只驱动解释器一个时间片（默认 312500 条 VM 指令，见 ui_scheme_app.c 的
+;; MB_TIMESLICE_TICKS）。本 App 一步实测约「19·N² + 300·N」条指令
+;; （N=100 → 22.3 万，N=169 → 55.2 万）：超过预算就被抢占拆到下一帧——帧率不变但
+;; **步频直接减半**。故按「22·N² + 500·N」申请（约 25% 余量；宿主把值夹在默认值的
+;; 1/10 ~ 4 倍之间）。
+;; 注意算术必须二元嵌套：本解释器编译器对多元乘法只发射一次 mul（(* 25 N N) 会算成 25*N）。
+;; 下限锁在宿主默认值（312500）：小 N 时不主动缩小别人的预算（没必要冒"个别步被拆帧"的风险）；
+;; 上限由宿主自己夹（默认值的 4 倍 = 1250000）。
+(define TIMESLICE (if (< (* (* 22 N) N) 262500) 312500 (+ (* (* 22 N) N) (* 500 N))))
+(App.set_timeslice TIMESLICE)
+
 ;; ---- 调色板（与 C 版一致：#f80 #ff0 #4f0 #0cf #04f #f08）-------------------
 
 (define pal-r '(255 255 68 0 0 255))
 (define pal-g '(136 255 255 204 68 0))
 (define pal-b '(0 0 0 255 255 136))
 
-;; 网格初始化（仅启动时一次；列表内容之后每步被覆写，长度不变）
+;; 网格与邻格表初始化（仅启动时一次；列表内容之后每步被覆写，长度不变）
 (define grid-init
   (lambda () {
     (define i 0)
+    (define gy 0)
+    (define gx 0)
+    (define k 0)
+    (define wx 0)
+    (define wy 0)
+    (define shx 0.0)
+    (define shy 0.0)
     (while (< i GRID_N) { (push ghead -1) (set! i (+ i 1)) })
     (set! i 0)
     (while (< i N) { (push gnext -1) (set! i (+ i 1)) })
+    ;; 邻格表：每格 × 8 个半程壳，预先算好「邻格格号 + 整周期位移」。
+    ;; 这样热循环里不必再做「环绕加减 + 两串 if」（原来每格每壳约 78 条指令）。
+    (set! gy 0)
+    (while (< gy GRID_Y) {
+      (set! gx 0)
+      (while (< gx GRID_X) {
+        (set! k 0)
+        (while (< k 8) {
+          (set! wx (+ gx (get_item shell-x k)))
+          (set! shx 0.0)
+          (if (>= wx GRID_X)
+              { (set! wx (- wx GRID_X)) (set! shx WORLD_W) }
+              { (if (< wx 0.0) { (set! wx (+ wx GRID_X)) (set! shx (- 0.0 WORLD_W)) }) })
+          (set! wy (+ gy (get_item shell-y k)))
+          (set! shy 0.0)
+          (if (>= wy GRID_Y)
+              { (set! wy (- wy GRID_Y)) (set! shy WORLD_HH2) }
+              { (if (< wy 0.0) { (set! wy (+ wy GRID_Y)) (set! shy (- 0.0 WORLD_HH2)) }) })
+          (push NBC2 (+ (* wy GRID_X) wx))
+          (push NBSX shx)
+          (push NBSY shy)
+          (set! k (+ k 1))
+        })
+        (set! gx (+ gx 1))
+      })
+      (set! gy (+ gy 1))
+    })
   }))
 
 ;; 相互作用：网格 + 半程邻域壳 + 对称化（一次距离计算，双向施加力）
+;;
+;; 全部模块级量在开头搬进本地槽位（`load_slot` 一条指令），热循环里不再碰模块变量
+;; （每次 `load` 是通用的闭包链解析，实测 ~77ns ≈ 9 条指令）——这是本文件最大的一笔
+;; 性能收入，见文件头"性能结构"第二节。
 (define interact
   (lambda () {
+    ;; ---- 本地槽位化（33 个本地 define，见文件头关于槽位上限的说明）----
+    (define nn N)
+    (define nk NK)
+    (define hw WORLD_HW)
+    (define hh WORLD_HH)
+    (define wh2 WORLD_HH2)
+    (define ww WORLD_W)
+    (define gxn GRID_X)
+    (define gyn GRID_Y)
+    (define gnn GRID_N)
+    (define gh ghead)
+    (define gn gnext)
+    (define lx xs)
+    (define ly ys)
+    (define lk ks)
+    (define lvx vxs)
+    (define lvy vys)
+    (define pa param-a)
+    (define pb param-b)
+    (define tcx NBC2)
+    (define tsx NBSX)
+    (define tsy NBSY)
+    (define rmax2 RMAX2)
+    (define rth1 RTH1)
+    (define rth2 RTH2)
+    (define rmax RMAX)
+    (define irth1 INV_RTH1)
+    (define iw1 INV_RTH2_M_RTH1)
+    (define iw2 INV_RMAX_M_RTH2)
+    (define icw INV_CW)
+    (define ich INV_CH)
+    ;; ---- 循环变量与临时量 ----
     (define gy 0)
     (define gx 0)
     (define k 0)
     (define c 0)
     (define c2 0)
-    (define wx 0)
-    (define wy 0)
+    (define nidx 0)
     (define shx 0.0)
     (define shy 0.0)
     (define i 0)
@@ -159,57 +285,49 @@
 
     ;; ---- 1) 重建网格：清链头 → 逐粒子头插 ----
     (set! i 0)
-    (while (< i GRID_N) { (set_item! ghead i -1) (set! i (+ i 1)) })
+    (while (< i gnn) { (set_item! gh i -1) (set! i (+ i 1)) })
     (set! i 0)
-    (while (< i N) {
-      (set! gx (Math.floor (* (+ (get_item xs i) WORLD_HW) INV_CW)))
+    (while (< i nn) {
+      (set! gx (Math.floor (* (+ (get_item lx i) hw) icw)))
       (if (< gx 0.0) { (set! gx 0.0) })
-      (if (>= gx GRID_X) { (set! gx (- GRID_X 1.0)) })
-      (set! gy (Math.floor (* (+ (get_item ys i) WORLD_HH) INV_CH)))
+      (if (>= gx gxn) { (set! gx (- gxn 1.0)) })
+      (set! gy (Math.floor (* (+ (get_item ly i) hh) ich)))
       (if (< gy 0.0) { (set! gy 0.0) })
-      (if (>= gy GRID_Y) { (set! gy (- GRID_Y 1.0)) })
-      (set! c (+ (* gy GRID_X) gx))
-      (set_item! gnext i (get_item ghead c))
-      (set_item! ghead c i)
+      (if (>= gy gyn) { (set! gy (- gyn 1.0)) })
+      (set! c (+ (* gy gxn) gx))
+      (set_item! gn i (get_item gh c))
+      (set_item! gh c i)
       (set! i (+ i 1))
     })
 
     ;; ---- 2) 逐格 × 半程邻域壳 ----
     (set! gy 0)
-    (while (< gy GRID_Y) {
+    (while (< gy gyn) {
       (set! gx 0)
-      (while (< gx GRID_X) {
-        (set! c (+ (* gy GRID_X) gx))
+      (while (< gx gxn) {
+        (set! c (+ (* gy gxn) gx))
         (set! k 0)
         (while (< k 8) {
-          ;; 邻格坐标（按格数环绕；格数 ≥3 故一次加减足够）+ 该邻格的周期位移：
-          ;; 跨接缝时整格平移一个周期（±WORLD_W / ±WORLD_HH2）。这样内层
-          ;; 循环里就**不需要逐对做环面回绕判断**（省掉 4 个 if，约 30 指令/对）。
-          (set! wx (+ gx (get_item shell-x k)))
-          (set! shx 0.0)
-          (if (>= wx GRID_X)
-              { (set! wx (- wx GRID_X)) (set! shx WORLD_W) }
-              { (if (< wx 0.0) { (set! wx (+ wx GRID_X)) (set! shx (- 0.0 WORLD_W)) }) })
-          (set! wy (+ gy (get_item shell-y k)))
-          (set! shy 0.0)
-          (if (>= wy GRID_Y)
-              { (set! wy (- wy GRID_Y)) (set! shy WORLD_HH2) }
-              { (if (< wy 0.0) { (set! wy (+ wy GRID_Y)) (set! shy (- 0.0 WORLD_HH2)) }) })
-          (set! c2 (+ (* wy GRID_X) wx))
-          (set! i (get_item ghead c))
+          ;; 邻格格号与整周期位移：查表（见 grid-init），热循环里只剩 3 次 get_item。
+          ;; 跨接缝时整格平移一个周期，因此内层**不需要逐对做环面回绕判断**。
+          (set! nidx (+ (* c 8) k))
+          (set! c2 (get_item tcx nidx))
+          (set! shx (get_item tsx nidx))
+          (set! shy (get_item tsy nidx))
+          (set! i (get_item gh c))
           (while (>= i 0) {
-            (set! xi (get_item xs i))
-            (set! yi (get_item ys i))
-            (set! ki (get_item ks i))
-            (set! kbi (* ki NK))
+            (set! xi (get_item lx i))
+            (set! yi (get_item ly i))
+            (set! ki (get_item lk i))
+            (set! kbi (* ki nk))
             ;; 同格：从 i 的后继开始遍历（无序对，只算一次）；邻格：从头遍历
-            (set! j (if (== k 0) (get_item gnext i) (get_item ghead c2)))
+            (set! j (if (== k 0) (get_item gn i) (get_item gh c2)))
             (while (>= j 0) {
               ;; 最近镜像位移 = 直接差 + 该邻格的周期位移（不再逐对判断回绕）
-              (set! ddx (+ (- (get_item xs j) xi) shx))
-              (set! ddy (+ (- (get_item ys j) yi) shy))
+              (set! ddx (+ (- (get_item lx j) xi) shx))
+              (set! ddy (+ (- (get_item ly j) yi) shy))
               (set! dd (+ (* ddx ddx) (* ddy ddy)))
-              (if (<= dd RMAX2) {
+              (if (<= dd rmax2) {
                 (set! d (Math.sqrt dd))
                 ;; dd==0 只可能出现在两粒子完全重合时（同格自配对已被排除），
                 ;; 此时 gk/d 会除零报错——直接跳过这一对（对力无贡献）。
@@ -217,32 +335,33 @@
                   ;; 与 C 版 pl_interact_pair 同构：形状因子 gk(d) 与种类无关（一对只算一次），
                   ;; 乘子分两段取矩阵——近距用 param-a，中/远距用 param-b（后者可正可负，
                   ;; 才是「吸引/排斥混合」与每次运行不同图案的来源）。
-                  ;; 力 = 系数 × gk × d⃗/d，其中 gk 已含 1/d：
-                  ;;   近：gk = (1/d − 1/RTH1)；中：gk = (1 − RTH1/d)/(RTH2−RTH1)；
-                  ;;   远：gk = (RMAX/d − 1)/(RMAX−RTH2)
-                  (set! kj (get_item ks j))
-                  (set! kbj (* kj NK))
-                  (if (< d RTH1)
-                      { (set! gk (/ (* (- RTH1 d) INV_RTH1) d))
-                        (set! s (* (get_item param-a (+ kbi kj)) gk))
-                        (set! s2 (* (get_item param-a (+ kbj ki)) gk)) }
-                      { (if (< d RTH2)
-                            { (set! gk (/ (* (- d RTH1) INV_RTH2_M_RTH1) d))
-                              (set! s (* (get_item param-b (+ kbi kj)) gk))
-                              (set! s2 (* (get_item param-b (+ kbj ki)) gk)) }
-                            { (set! gk (/ (* (- RMAX d) INV_RMAX_M_RTH2) d))
-                              (set! s (* (get_item param-b (+ kbi kj)) gk))
-                              (set! s2 (* (get_item param-b (+ kbj ki)) gk)) }) })
-                  (set_item! vxs i (+ (get_item vxs i) (* s ddx)))
-                  (set_item! vys i (+ (get_item vys i) (* s ddy)))
+                  ;; 力 = 系数 × gk × d⃗，其中 gk 已含 1/d：
+                  ;;   近：gk = (RTH1−d)/(RTH1·d)；中：gk = (d−RTH1)/((RTH2−RTH1)·d)；
+                  ;;   远：gk = (RMAX−d)/((RMAX−RTH2)·d)
+                  ;; 分段顺序「先测远距」：远距段覆盖约 3/4 的对，平均每对少一次比较。
+                  (set! kj (get_item lk j))
+                  (set! kbj (* kj nk))
+                  (if (< d rth2)
+                      { (if (< d rth1)
+                            { (set! gk (/ (* (- rth1 d) irth1) d))
+                              (set! s (* (get_item pa (+ kbi kj)) gk))
+                              (set! s2 (* (get_item pa (+ kbj ki)) gk)) }
+                            { (set! gk (/ (* (- d rth1) iw1) d))
+                              (set! s (* (get_item pb (+ kbi kj)) gk))
+                              (set! s2 (* (get_item pb (+ kbj ki)) gk)) }) }
+                      { (set! gk (/ (* (- rmax d) iw2) d))
+                        (set! s (* (get_item pb (+ kbi kj)) gk))
+                        (set! s2 (* (get_item pb (+ kbj ki)) gk)) })
+                  (set_item! lvx i (+ (get_item lvx i) (* s ddx)))
+                  (set_item! lvy i (+ (get_item lvy i) (* s ddy)))
                   ;; j 受 i 的力（参数矩阵非对称：另取转置下标；方向取反）
-                  (set_item! vxs j (- (get_item vxs j) (* s2 ddx)))
-                  (set_item! vys j (- (get_item vys j) (* s2 ddy)))
+                  (set_item! lvx j (- (get_item lvx j) (* s2 ddx)))
+                  (set_item! lvy j (- (get_item lvy j) (* s2 ddy)))
                 })
               })
-              (set! j (get_item gnext j))
+              (set! j (get_item gn j))
             })
-            (set! i (get_item gnext i))
+            (set! i (get_item gn i))
           })
           (set! k (+ k 1))
         })
@@ -252,45 +371,71 @@
     })
   }))
 
+;; 运动：震颤 + 阻尼 + 积分 + 环面回绕（同样整体本地槽位化）
 (define move
   (lambda () {
+    (define nn N)
+    (define lx xs)
+    (define ly ys)
+    (define lvx vxs)
+    (define lvy vys)
+    (define hw WORLD_HW)
+    (define hh WORLD_HH)
+    (define ww WORLD_W)
+    (define wh2 WORLD_HH2)
+    (define hwn WORLD_HW_NEG)
+    (define hwn2 WORLD_HW_NEG2)
+    (define jit JITTER)
+    (define damp DAMPING)
     (define i 0)
     (define x 0.0)
     (define y 0.0)
-    (while (< i N) {
-      (set_item! vxs i (+ (get_item vxs i) (* JITTER (- (Math.random) 0.5))))
-      (set_item! vys i (+ (get_item vys i) (* JITTER (- (Math.random) 0.5))))
-      (set! x (+ (get_item xs i) (get_item vxs i)))
-      (set! y (+ (get_item ys i) (get_item vys i)))
-      (set_item! vxs i (* (get_item vxs i) DAMPING))
-      (set_item! vys i (* (get_item vys i) DAMPING))
-      (if (> x WORLD_HW) { (set! x (- x WORLD_W)) })
-      (if (< x WORLD_HW_NEG) { (set! x (+ x WORLD_W)) })
-      (if (> y WORLD_HH) { (set! y (- y WORLD_HH2)) })
-      (if (< y WORLD_HW_NEG2) { (set! y (+ y WORLD_HH2)) })
-      (set_item! xs i x)
-      (set_item! ys i y)
+    (while (< i nn) {
+      (set_item! lvx i (+ (get_item lvx i) (* jit (- (Math.random) 0.5))))
+      (set_item! lvy i (+ (get_item lvy i) (* jit (- (Math.random) 0.5))))
+      (set! x (+ (get_item lx i) (get_item lvx i)))
+      (set! y (+ (get_item ly i) (get_item lvy i)))
+      (set_item! lvx i (* (get_item lvx i) damp))
+      (set_item! lvy i (* (get_item lvy i) damp))
+      (if (> x hw) { (set! x (- x ww)) })
+      (if (< x hwn) { (set! x (+ x ww)) })
+      (if (> y hh) { (set! y (- y wh2)) })
+      (if (< y hwn2) { (set! y (+ y wh2)) })
+      (set_item! lx i x)
+      (set_item! ly i y)
       (set! i (+ i 1))
     })
   }))
 
+;; 绘制（同样本地槽位化：调色板与几何常量在 169 粒子的循环里各读 169 次）
 (define draw
   (lambda () {
+    (define nn N)
+    (define lx xs)
+    (define ly ys)
+    (define lk ks)
+    (define pr pal-r)
+    (define pg pal-g)
+    (define pb pal-b)
+    (define sw SW)
+    (define cx CX)
+    (define cy CY)
+    (define sc SCALE)
+    (define hud HUD_H)
     (define i 0)
-    (define px 0)
-    (define py 0)
     (define k 0)
     (Gfx.clear)
     ;; 先画粒子、后画 HUD 条与按钮：HUD 是不透明覆盖层，这样贴到顶部的粒子
     ;; 不会压在「重置/退出」按钮的描边上（按钮占 y=2..18，越过了 HUD 条 0..15）。
-    (while (< i N) {
-      (set! px (Math.floor (+ CX (* (get_item xs i) SCALE))))
-      (set! py (Math.floor (+ CY (* (get_item ys i) SCALE))))
-      (set! k (get_item ks i))
-      (Gfx.fill_rect px py 2 2 (get_item pal-r k) (get_item pal-g k) (get_item pal-b k))
+    (while (< i nn) {
+      (set! k (get_item lk i))
+      (Gfx.fill_rect
+        (Math.floor (+ cx (* (get_item lx i) sc)))
+        (Math.floor (+ cy (* (get_item ly i) sc)))
+        2 2 (get_item pr k) (get_item pg k) (get_item pb k))
       (set! i (+ i 1))
     })
-    (Gfx.fill_rect 0 0 SW HUD_H 24 24 28)
+    (Gfx.fill_rect 0 0 sw hud 24 24 28)
     (Gfx.draw_text "粒子生命" 6 2 255 255 255)
     (draw_reset_button)
     (EX.draw_button)
@@ -425,8 +570,8 @@
 (step)
 ;; 节奏：每帧一步（≈60fps）。周期取「半帧」而非整帧——宿主只在 GUI 帧边界触发
 ;; 定时器（浏览器 rAF ≈16.7ms），16ms 周期会被向上量化成「有时隔两帧」，实测
-;; 60fps 下只有 50 步/秒；8ms 则每帧必到期，实测稳定 60 步/秒。每步约 24 万 VM
-;; 指令（10x10 粒子）< 宿主每帧时间片（ui_scheme_app.c 的 312500），一步占一帧。
+;; 60fps 下只有 50 步/秒；8ms 则每帧必到期，实测稳定 60 步/秒。一步的指令数由
+;; 文件头的 App.set_timeslice 预算保证能在一个时间片内跑完（否则步频减半）。
 (set! _timer (System.set_interval 8 step))
 
 ;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
