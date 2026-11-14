@@ -10568,3 +10568,28 @@ err=none`；`check_scm_arity.py` 0 处问题；`am_native_App.c` 在
 4. 多元算术只发射一次 op：一律写二元嵌套（本轮踩坑实证）。
 5. 复现脚本：`tools/e2e/perf/particlelife/run_equiv.sh`（内核 A/B + 等价性）、
    `tools/e2e/browser/regress_particlelife.js`（真 GUI 步频/CPU/像素）。
+
+### 三轮：App 数量上限 56 → 128
+
+`infer/ui_scheme_app.c` 的 `SCHEME_APP_MAX` 由 56 上调为 **128**（`SCHEME_APP_NAME_MAX`
+仍为 48）。动因：前两次上调（32→48→56）都是被实际数量顶到只剩个位数余量（`app/` 现有
+50 个 `.scm`，56 只剩 6 个空位；期间另一会话临时在 `app/` 放了 6 个草稿 `.scm` 就顶满
+了），而**越界不报错**——收集循环装满即停，超出的项按目录枚举顺序被静默丢弃（历史上
+`xray.scm` 就这样消失过一次）。这次一次给足（128 ≈ 当前 App 数的 2.5 倍）。
+
+**代价（一次性缓冲，进入「灵机应用程序」时 calloc，ESP32 落 PSRAM）：**
+`s_apps` 128×384 B + `s_item_text` 128×48×4 B + 指针表 ≈ **74 KB**（56 时约 32 KB）。
+
+**验证（真 wasm GUI + headless chromium）：**
+- 常改后正常态：`[scheme-app] 扫描到 50 个 Scheme App`（列表、启动、退出如常）；
+- **越过旧上限**：临时向 `infer/app/` 加 20 个 `zz_qa_*.scm`（共 70 个）→
+  `扫描到 70 个`，且能滚到并**启动**列表第 61 项 `zz_qa_11`（state 80，日志确认加载的就是
+  该文件）——旧上限 56 下这些项会被丢弃；
+- **验证新上限**：再加到 140 个 `.scm` → `扫描到 128 个`（恰好卡在新上限、无崩溃、
+  列表仍可滚动与启动）；
+- 清理回 50 个后重建：`扫描到 50 个`；`regress.js`（2048/gol/xray 三点抽样，覆盖列表
+  首/中/尾）全部 `launch=80 end=80`；宿主回归台 `gol/xray/2048` 均 `err=none`；
+  `ui_scheme_app.c` 在 `NANO_WASM_GUI/NANO_TTY/NANO_WEB/NANO_POD_RPI5/NANO_ESP32_S3`
+  宏下 `gcc -fsyntax-only` 通过。
+
+注：`SCHEME_APP_INST_MAX`（同时存活实例数 = 3，ESP32 为 1）是另一个上限，未改动。
