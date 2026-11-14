@@ -10593,3 +10593,116 @@ err=none`；`check_scm_arity.py` 0 处问题；`am_native_App.c` 在
   宏下 `gcc -fsyntax-only` 通过。
 
 注：`SCHEME_APP_INST_MAX`（同时存活实例数 = 3，ESP32 为 1）是另一个上限，未改动。
+
+# 2026-11-14（灵机应用程序：三维弹球 / Space Cadet，`app/pinball.scm`）
+
+复刻 Windows XP 自带的「三维弹球 – 太空军校生」（3D Pinball for Windows – Space Cadet，
+Cinematronics / Maxis 1995）。只针对 **WASM-GUI 目标**（`infer/build_wasm_gui.sh` →
+`infer/webgui/`）；不新增任何 C 代码、不改任何既有实现，只用现成的本地库
+（`Gfx`/`Math`/`String`/`System`/`Touch`/`Key`/`App` + `app/lib/exit.scm`）。
+
+## 交付物
+
+| 文件 | 性质 | 说明 |
+|---|---|---|
+| `infer/app/pinball.scm` | **新增**（约 1580 行） | 台面几何 + 物理 + 规则 + 绘制 + 输入 + 主循环，单文件 |
+| `infer/tools/e2e/browser/regress_pinball.js` | 新增（本机工具，不入 Git） | 浏览器 e2e：22 项断言（三引擎全过） |
+| `infer/tools/e2e/host/run_host_regress.sh` | 改 1 处（本机工具） | App 清单加入 `pinball` |
+
+`app/pinball.scm` 落进资源目录即自动进入「灵机应用程序」列表（无需改固件），
+`build_wasm_gui.sh` 把它收进 manifest 的 p1（启动必需）；`SCHEME_APP_MAX`（128）仍有余量。
+
+## 原版构成 → 本作
+
+原版是预渲染 3D 台面；这里是**同一张台面的二维等价物**（320×240，左 68px 是"背板"面板，
+右侧是台面 + 发射道）。保留的要素与对应实现：
+
+- **三个弹射柱**（原版 RANK 区）：圆心 (146,92)/(216,92)/(181,128)，半径 13，
+  反弹 + 沿法向 190px/s 踢出（带 ±70 的切向随机，避免球在柱间形成永不脱出的循环）；
+- **两枚弹弓**（slingshot）：三角形，斜面是踢击面（kick 320），竖边/底边是墙；
+- **左下三连落靶**：横板 (84..106, y=106/120/134)，压下去即"倒下"（碰撞体失活），
+  全清 → `BANK CLEARED` + 倍数 +1（上限 ×5）+ 1.4s 后复位；
+- **右侧三立靶**：小圆 (268,104)/(266,122)/(268,140)，三个全亮 → `MISSION TARGETS` +5000；
+- **左上旋转器**：触发区 (100,80) r=14，每次通过 250×倍数，旋转条按 spin 相位转；
+- **顶部三条滚道灯**：(136,52)/(181,45)/(226,52)，边沿触发点亮，三条齐亮 →
+  10000 + 奖励球（每局一次）；
+- **右上踢球洞**：(248,120) r=9，进球捕获 0.55s 后向斜上踢出，15000 + 连击加成；
+- **右侧发射道**：蓄力发射 + 顶部导流斜板把球折回台面右上角 + 单向门（球向下时才生效，
+  防止从台面掉回发射道）；闲置 8s 自动满力发射（触屏设备不会卡在待发状态）；
+- **军衔晋升**：Cadet → Ensign → Lt → Captain → Admiral（阈值 40k/100k/200k/350k/600k），
+  晋升时中央弹字 + 背板阶梯灯逐级点亮（与原版一致）；
+- **三球一局 + ball save**（发球后 7s 内掉球不扣球，每球一次）+ game over 结算面板
+  （总分 / 军衔 / TAP TO PLAY AGAIN）。
+
+## 物理（自研，模型参照 SpaceCadetPinball 反编译源码后简化）
+
+球是半径 5 的圆，重力 900 px/s²，速度上限 800 px/s，每帧固定 6 个子步
+（dt 钳到 40ms → 子步 ≤ 6.7ms，球每子步位移 < 5px，不穿透）：
+
+1. **线段碰撞**：球心到线段最近点做穿透推出 + 法向反弹（每段自带恢复系数与"踢击"冲量，
+   弹弓靠 kick、落靶靠 typ 分发）；单向门按球的速度方向逐子步开关。
+2. **圆碰撞**：弹射柱 / 立靶，反弹 + 法向踢出 + 切向随机（原版 `TBall::EdgeCollision` 的
+   等质量弹性投影在这里退化成"沿法向反射"，因为墙质量视为无穷）。
+3. **挡板**：绕枢轴的胶囊，碰撞时把**接触点表面速度** `v = ω × r` 计入相对速度
+   （`ω` 取自本帧角度变化，挥满约 40ms），于是"挥拍"自然把球打飞——与
+   `TFlipperEdge::EdgeCollision` 的 `basic_collision` 同一物理直觉。
+4. **防卡死**：球速 < 30 且持续 1.2s → 随机轻推（台面上的水平面/夹角会停球）。
+
+## 交互
+
+- 触屏：**左半屏 = 左挡板、右半屏 = 右挡板**（任何状态都响应）；球在发射道里时
+  任意触点/空格**蓄力**，松手弹出（蓄力条画在发射道旁）；
+- 键盘：`Z/A/←` 左挡板，`X///→` 右挡板，`空格/回车` 蓄力发射；
+- 右上角「退出」= `app/lib/exit.scm` 的全局退出确认框（触屏按钮 + 硬 A/ESC 同一路径）。
+
+## 验证
+
+- **宿主回归台**（真解释器 + 真 `graphics.c` + 虚拟时钟）：`APP=pinball FRAMES=200` →
+  `refresh=199 err=none`；脚本化触屏（蓄力发射/左右挡板/掉球/ball save/奖励球/清靶/晋升/
+  game over/重开）逐项核对控制台诊断行。
+- **浏览器端到端**（`tools/e2e/browser/regress_pinball.js`，Playwright + 真 wasm）：
+  Chromium / chrome-headless-shell / Firefox **各 22/22 PASS**。覆盖：启动行、背板标题/
+  分数/军衔灯、弹射柱/挡板/星域像素、球停在发射道、蓄力发射（控制台 `launch charge=` +
+  发射道里的球消失）、帧间差异像素、帧率 > 20fps、计分行、触屏左/右挡板、键盘 Z/X
+  挡板、ESC → 确认框 → 回列表、无 pageerror。
+- **退出接口回归**（`regress_exit.js`，`E2E_APP=pinball E2E_BTN="300,10"`）：**38/38 PASS**
+  （触屏退出按钮弹框、框存续期 App 冻结、留下、切后台/恢复同一实例、LRU 驱逐）。
+- **存活回归**（`regress.js`，`E2E_APPS=pinball,gol,tetris`）：`launch=80 end=80`，
+  pinball `refreshΔ=232`（4s ≈ 58fps）。
+- **性能归因**（`tools/e2e/perf/run_profile.sh app/pinball.scm 120`）：**13.6k VM 指令/帧**
+  （占默认时间片 312500 的 4%）、本地库调用 1034 次/帧、闭包创建 98 次/帧；浏览器实测
+  **57~59fps**，单帧无卡顿。物理与绘制都不需要 `(App.set_timeslice)`。
+- 静态检查：`python3 tools/check_scm_arity.py app/pinball.scm` **0 处问题**；
+  `node --check` 通过（两个 e2e 脚本）。
+
+## 踩坑记录（值得记的）
+
+1. **挡板碰撞一度完全失效**：`phys_step` 把球的位置/速度放在**局部槽位**里跑子步循环
+   （性能考虑），最后才回写模块变量；而 `flip_hit` 读写的是模块变量 `bx/by/bvx/bvy`。
+   于是挡板永远拿**本帧起点**的球位置做判定，球直接从挡板中间穿过去（现象：球总能穿过
+   挡板掉进下水道，挥拍毫无作用）。修法：调 `flip_hit` 前先把局部值回写、调用后取回。
+2. **`Math.random` 造的坏数据会间歇性锁死启动**：`build_stars` 生成星空时把 y 写成了
+   `4*(4+232*rand)`（本意是 `4+232*rand`），y 上限 944，其中 y<24 的一小段会让
+   `sqrt(R²-dy²)` 取到负数 → 桌面/`wasm` 的 `Math.sqrt` 返回 `#null` → 随后的
+   `(* half …)` 直接抛「指令执行异常」，App 启动即死；概率约 25%，**宿主回归台完全测不出来**
+   （`harness.c` 用 `--wrap=time` 冻结了 `Math.random` 的种子，永远是同一串随机数）。
+   现象是"浏览器里三成概率点进去黑屏停在 state 80、连 `[pinball] start` 都不打"。
+   修法：y 取 [28,232]（保证 dy² < R²）并给 sqrt 参数加下限钳位。
+   教训：**凡是用 `Math.random` 生成坐标的启动代码，都要给几何运算兜住定义域**，
+   并且要按"多次随机种子"在真 wasm 上跑，而不是只跑冻结时钟的宿主台。
+3. **解释器没有 `Math.min/max`**、算术恒二元、`define` 只能出现在 lambda 体顶层
+   （`{...}` 块内不 define）——热循环里要用"lambda 顶部一次 define + 循环内 set!"的写法。
+4. `(or touched key_space)` 里如果把标志初始化成 `0`，由于**只有 `#f` 才是假**，
+   `0` 恒真——表现为"什么都没按却在蓄力"。标志一律用 `#f/#t`。
+5. `String.atom_to_string` 对浮点用 `%g`：`(Math.floor 1234567)` 仍是浮点，
+   打印成 `1.23457e+06`。整数串要自己按 `mod 10` 拼（本 App 的 `fmt_int`）。
+
+## 运行
+
+```bash
+cd infer && bash build_wasm_gui.sh
+cd webgui && python3 ../tools/https_static_server.py 9002 .
+# 浏览器打开 https://<主机>:9002/ → 任意键 → 主菜单「小游戏」→「灵机应用程序」→「pinball」
+#   触屏：左半屏/右半屏 = 左右挡板；球在发射道里时按住任意位置蓄力，松手发射
+#   键盘：Z/A/← 左挡板，X///→ 右挡板，空格/回车 蓄力发射，ESC 退出
+```
