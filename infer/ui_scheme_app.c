@@ -51,6 +51,14 @@
 //          后编译期工作区又涨了一截：wasm32 实测 40MB 池仍 link_fail、44MB 可链接，
 //          故期望值上调到 48MB（WASM/桌面的线性内存充裕，实测 384MB 从不增长；
 //          ESP32 仍是 2MB——本 App 本来也装不下，见下）
+//   · 80MB（仅 64 位宿主）：上面 48MB 那条的括号里已写明「64 位宿主 48MB 不够、64MB 够」——
+//          wasm32 是 4 字节指针，64 位宿主（PocketTerm35 / RPi5 aarch64、桌面 x86_64）
+//          的 AST 节点约两倍大。实测（PocketTerm35）markdown 的 15 模块闭包在链接期的
+//          VM 峰值 ≈31.5MB（链接器先**逐模块全部解析**再逐个 merge，约为链接后驻留
+//          9.2MB 的 3.4 倍）：56MB / 60MB 池仍 link_fail，64MB 刚好过；48MB 池（VM 区
+//          24MB）在解析第 14 个模块 md_stream.scm 时就「VM segregated 分配失败」，
+//          宿主只报「模块链接失败」。故 64 位宿主取 80MB（VM 区 40MB，留 8MB 余量）；
+//          3 个实例槽位全占也仅 240MB，8GB 的 RPi5 无压力。
 // 编译期的 VM 工作区占用远大于运行期堆占用（后者极小）。
 // 内存受限宿主：pool_size 按「最大连续块 - 余量」自适应下调（见下），
 // 小 App 仍可正常运行；装不下的大 App 会显示「内存不足」错误画面。
@@ -59,7 +67,11 @@
 // 故 ESP32 的期望值与 Animac 控制台（ui_animac.h，ESP32 验证值）对齐为 2MB，
 #if NANO_IS_M5ESP
     #define MB_POOL_SIZE   (2ULL * 1024 * 1024)
+#elif defined(__SIZEOF_POINTER__) && (__SIZEOF_POINTER__ == 8)
+    // 64 位宿主（PocketTerm35 / 树莓派 aarch64、桌面 x86_64）：见上面「80MB」条
+    #define MB_POOL_SIZE   (80ULL * 1024 * 1024)
 #else
+    // 32 位宿主（wasm32 浏览器 / webgui、Luckfox Pico 等 32 位 Linux）：见上面「48MB」条
     #define MB_POOL_SIZE   (48ULL * 1024 * 1024)
 #endif
 #define MB_POOL_MIN    (512ULL * 1024)
