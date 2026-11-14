@@ -11052,3 +11052,67 @@ C 代码与 static。宿主在冷启动时对同类状态库逐个显式复位�
 `verify.py`（行为一致性）、`wasm/`（32 位参照：`build_wasm.sh` + `run.js` + `memprobe_wasm.sh` + `sweep_wasm.py`）、
 `report.py`（由 JSON 生成报告）、`bench/`（空程序/最小 Gfx 基线：空程序 256 KB 池即可装载）。
 产物在 `/tmp/nano_memprobe/`（`out/`、`out20/`、`wasmout/`、`long/`、`verify.json`、`scen/`）。
+
+# 2026-11-15（水池：修「32 位目标从水下往上看水面一片纯白」—— 全反射零向量 → NaN → 夹断语义）
+
+用户报：同一份水池代码，**WASM 等 32 位目标**上从水池底部往上看水面是**大片纯白**，64 位目标正常，
+怀疑是数值范围截断。定位结论：不是截断，是**全反射时把「零向量射线」送进了求交函数，产生 NaN**；
+NaN 落到逐像素夹断时，**wasm 的 `f32.min/f32.max` 把它夹成 1（纯白），x86 的 `minss/maxss` 夹成 0（黑）**。
+
+## 复现（真 WASM + 真浏览器）
+
+`app/waterpool_raster.scm` 里把视角拖到水面**以下**（`angleX > 0`，即相机进水里往上看）：320×240 下
+`angleX≈40°` 时整帧出现 **7048 px = (255,255,255)**（占水面 73%），换 64 位宿主（`tools/e2e/host`
+的 Scheme 宿主回归台，同脚本同帧号）**0 px**。`x86-64` 上把解释器换成 `am_float_t = float` 的
+32 位数值口径同样 0 px ⇒ 与解释器精度无关，纯 C 渲染内核问题（`ui_water.c` 与 `am_native_Raster.c`
+的水面片元着色器是同一份代码，两边都有）。
+
+## 根因链
+
+1. `wt_water_frag` 的 pass 1（水面下视角）用 `eta = IOR_WATER/IOR_AIR ≈ 1.333` 做折射；
+   入射角超过临界角（≈48.6°）时按 GLSL `refract()` 的约定，`wt_refract()` 返回 **(0,0,0)**。
+   ⇒ 从水下看水面，**临界角以外的大片区域**都是全反射，`refr` 恒为零向量。
+2. 原实现紧接着无条件调用 `wt_surface_ray_color(world, refr, 1,1,1, …)`：
+   零向量进 `wt_intersect_cube()`，当分母（`rd.x/y/z`）与分子（`mn.x-o.x` …）同时为 0 时得到
+   `0/0 = NaN`；`hit = origin + ray*t` 也是 `0*inf = NaN`。
+3. 折射项权重 `t = (1-fresnel) * length(refr)` 此时为 **0**，于是 `rr + (er-rr)*t` 是 `0 * NaN`
+   —— **仍是 NaN**（原版 GLSL 同样如此，只是它在 WebGL 里没被观察到）。
+4. NaN 一路送到 `wt_fill` 的 `if (rr < 0) … else if (rr > 1) …` 夹断。该夹断在 `-ffast-math`
+   下被折成 min/max 指令，而 min/max 对 NaN 的语义**按目标不同**：
+   - wasm32：`f32.min/f32.max` 返回**非 NaN 操作数** ⇒ NaN 被夹成 **1** ⇒ RGB565 全 31 ⇒ 纯白；
+   - x86-64：`minss/maxss` 返回第二操作数 ⇒ NaN 被夹成 **0** ⇒ 黑（看起来"正常"）。
+   最小复现（`gcc`/`emcc` 均 `-O3 -ffast-math`，`float z=0; v=z/z;` 后接同一夹断）：
+   `x86 clamped=0 q5=0` / `wasm clamped=1 q5=31`。
+
+## 修法（三处，`ui_water.c` 与 `am_native_Raster.c` 同步）
+
+1. **全反射不参与折射项**：`wt_refract(..., &refr_ok)`，`refr_ok == 0` 时直接把 `er/eg/eb` 取成
+   反射项（权重本就是 0，取什么都不影响结果），`t` 用 0 而不是 `v3l(refr)`。既避免 NaN，也避免
+   为一次注定被丢弃的着色做整条求交/着色链。
+2. **`wt_surface_ray_color()` 加退化射线守卫**：`if (!(v3d(ray,ray) > 0))` → 返回黑（纵深防御，
+   任何将来传入零向量/NaN 射线的调用点都不会再造出 NaN）。
+3. **`wt_fill()` 落盘前 `wt_nan0()`**：用位判据（`(b & 0x7F800000) == 0x7F800000 &&
+   (b & 0x007FFFFF) != 0`）把 NaN 显式归零，再走原来的夹断。位操作不受 `-ffast-math` 影响，
+   是这里唯一可移植的判据 —— 从此「NaN 到底变白还是变黑」不再由编译器/目标决定。
+
+## 验证
+
+- **修复前/后**（真 WASM+chromium，`angleX` 拖到水下 40~85°）：
+  纯白像素 7048 / 6300 / 7190 → **0 / 0 / 0**；帧率、控件、拖拽断言不变。
+- **64 位零回归**：`tools/e2e/host` 宿主回归台跑 `waterpool_raster.scm` 200 帧（含水下视角脚本），
+  修复前后 **`crc=bd48aab9`、`PRESENTED` 199 个帧 CRC 逐个相同**；`tools/e2e/host/water_ref.c`
+  （C 参照台）导出的 PPM **逐字节相同** —— 说明 64 位上那些像素本来就是黑（NaN→0），修完不变。
+  逐像素开销：600 帧 5.29 s → 5.34 s（+0.9%，噪声量级）。
+- **回归**：`regress_waterpool_native.js`（Scheme Raster 版）**21/21 PASS**；
+  `regress_water.js`（C 版 `ui_water.c`）**16/16 PASS**；两侧均无 pageerror。
+- 最小复现留在 `/tmp/clamptest.c`（两条命令即可复验 min/max 的 NaN 语义差异）。
+
+## 教训（写进本仓的规矩）
+
+- **`-ffast-math` 下 NaN 不可"靠夹断兜住"**：`if (x < 0) x = 0; else if (x > 1) x = 1;` 在
+  wasm/x86 上对 NaN 给出相反结果。逐像素内核里若要兜 NaN，必须用**位判据**。
+- **GLSL 的零向量约定要显式建模**：`refract()` 全反射返回 `vec3(0)`、`mix(…, length(refracted))`
+  权重同时为 0 —— 移植到 C 时，那个"权重为 0"必须真的短路，否则 `0*NaN` 会把整项污染成 NaN。
+- 这类问题**只在特定视角+特定波场相位**才可见（水面下 + 全反射区），64 位宿主还会把它藏成黑色，
+  所以单看"64 位画面正常"不能作为"没问题"的证据；用 `tools/e2e/host` 的固定帧脚本 + 真 WASM
+  两侧对拍才能稳定复现。

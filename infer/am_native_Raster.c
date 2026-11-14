@@ -402,6 +402,10 @@ static void wt_get_wall_color(V3 point, float *or, float *og, float *ob) {
 static void wt_surface_ray_color(V3 origin, V3 ray, float waterR, float waterG, float waterB,
                                  float *or, float *og, float *ob) {
     V3 mn = v3f(-1, -WT_POOL_HEIGHT, -1), mx = v3f(1, 2, 1);
+    // 退化射线（零向量）直接返回黑：见 wt_water_frag 里「全反射」的注释。
+    //   零向量进 wt_intersect_cube 会算 0/0 = NaN（分母与分子同时为 0 时），
+    //   而 NaN 在 -ffast-math 下的传播/夹断结果各目标不一致。
+    if (!(v3d(ray, ray) > 0.0f)) { *or = 0.0f; *og = 0.0f; *ob = 0.0f; return; }
     float q = wt_intersect_sphere(origin, ray, s_wt.center, s_wt.radius);
     float cr, cg, cb;
     if (q < 1.0e6f) {
@@ -444,6 +448,18 @@ static void wt_ndc_to_screen(const M4 *MVP, V3 world, float u, float v, WT_Vtx *
     out->sy = (1.0f - (cy * iw * 0.5f + 0.5f)) * (float)s_wt.HH;
 }
 
+// NaN 归零：片元着色器的输出落盘前先过这一道。
+//   为什么必须显式处理：下面那两句 clamp 在 -ffast-math 下会被折成 min/max 指令，
+//   而 min/max 对 NaN 的语义是**目标相关的**（wasm 的 f32.min/f32.max 返回非 NaN
+//   操作数 ⇒ NaN 被夹成 1 ⇒ 纯白；x86 的 minss/maxss 返回第二操作数 ⇒ NaN 被夹成
+//   0 ⇒ 黑）。位操作不受 fast-math 影响，所以这里是唯一可移植的判据。
+static float wt_nan0(float v) {
+    uint32_t b;
+    memcpy(&b, &v, 4);
+    if ((b & 0x7F800000u) == 0x7F800000u && (b & 0x007FFFFFu) != 0u) return 0.0f;  // NaN
+    return v;
+}
+
 static void wt_fill(const WT_Vtx *v0, const WT_Vtx *v1, const WT_Vtx *v2, int use_depth, WT_Frag frag) {
     const float acc = 0.5f;   // 像素中心
     if (v0->w <= 0 || v1->w <= 0 || v2->w <= 0) return;
@@ -481,6 +497,7 @@ static void wt_fill(const WT_Vtx *v0, const WT_Vtx *v1, const WT_Vtx *v2, int us
             float V = (b0 * iwv[0] * v0->v + b1 * iwv[1] * v1->v + b2 * iwv[2] * v2->v) / denom;
             float rr, gg, bb;
             frag(b0, b1, b2, v0, v1, v2, world, U, V, &rr, &gg, &bb);
+            rr = wt_nan0(rr); gg = wt_nan0(gg); bb = wt_nan0(bb);
             if (rr < 0) rr = 0; else if (rr > 1) rr = 1;
             if (gg < 0) gg = 0; else if (gg > 1) gg = 1;
             if (bb < 0) bb = 0; else if (bb > 1) bb = 1;
@@ -547,13 +564,32 @@ static void wt_water_frag(int pass, float b0, float b1, float b2, const WT_Vtx *
     } else {
         normal = v3n(normal);
         V3 refl = wt_reflect(incomingRay, normal);
-        V3 refr = wt_refract(incomingRay, normal, WT_IOR_WATER / WT_IOR_AIR, NULL);
+        // ⚠ 全反射必须走 `refr_ok` 分支，不能拿零向量继续求交：
+        //   水面下看水面时 eta = IOR_WATER/IOR_AIR > 1，入射角超过临界角后
+        //   wt_refract 按 GLSL refract() 的约定返回零向量，原版里 mix 的权重
+        //   length(refracted) 同时为 0，所以「折射项不参与」。这里若照旧调用
+        //   wt_surface_ray_color(world, vec3(0))，求交会出现 0/0 = NaN，而
+        //   `(er - rr) * t` 在 t == 0 时是 `0 * NaN == NaN` —— NaN 一路送到
+        //   wt_fill 的 clamp，而 clamp 对 NaN 的语义由编译器/目标决定：
+        //     · wasm：-ffast-math 把 clamp 折成 f32.min/f32.max，二者对 NaN 返回
+        //       **非 NaN 操作数** ⇒ NaN 被夹成 1 ⇒ 整片纯白；
+        //     · x86-64：折成 minss/maxss，返回第二操作数 ⇒ NaN 被夹成 0 ⇒ 黑。
+        //   于是同一份代码在 32 位宿主上「从水池底部往上看水面一片纯白」，在
+        //   64 位宿主上却看不出问题。修法：全反射时折射项 = 反射项（权重为 0）。
+        int refr_ok = 0;
+        V3 refr = wt_refract(incomingRay, normal, WT_IOR_WATER / WT_IOR_AIR, &refr_ok);
         float fresnel = 0.5f + 0.5f * powf(1.0f - v3d(normal, v3n(incomingRay)), 3.0f);
         float rr, rg, rb, er, eg, eb;
         wt_surface_ray_color(world, refl, WT_COLOR_UNDERWATER_R, WT_COLOR_UNDERWATER_G, WT_COLOR_UNDERWATER_B, &rr, &rg, &rb);
-        wt_surface_ray_color(world, refr, 1, 1, 1, &er, &eg, &eb);
-        er *= WT_COLOR_SKY2_R; eg *= WT_COLOR_SKY2_G; eb *= WT_COLOR_SKY2_B;
-        float t = (1.0f - fresnel) * v3l(refr);
+        float lrefr = 0.0f;
+        if (refr_ok) {
+            wt_surface_ray_color(world, refr, 1, 1, 1, &er, &eg, &eb);
+            er *= WT_COLOR_SKY2_R; eg *= WT_COLOR_SKY2_G; eb *= WT_COLOR_SKY2_B;
+            lrefr = v3l(refr);
+        } else {
+            er = rr; eg = rg; eb = rb;      // 权重为 0：取什么值都不影响结果
+        }
+        float t = (1.0f - fresnel) * lrefr;
         *or = rr + (er - rr) * t;
         *og = rg + (eg - rg) * t;
         *ob = rb + (eb - rb) * t;
