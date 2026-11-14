@@ -69,6 +69,11 @@
 (define LIST_Y 34)     ;; 列表首行 y
 (define ROW_H 18)      ;; 行高
 (define LIST_ROWS 10)  ;; 一屏几行（34 + 10*18 = 214）
+;; 列表行文字的垂直补偿：本地库现在把 (Gfx.draw_text) 的 y 当「墨迹顶」绘制
+;; （见 am_native_Gfx.c 的 native_text_top_gap，12px 抗锯齿字模的行顶空隙 2px），
+;; 而本组件的行文字是按旧口径（行顶 = 行框顶 + 1，墨迹再落 2px）摆的；不补回这 2px，
+;; 整列文件名都会比行框中线高出一截。
+(define ROW_TXT_DY 2)
 (define BOT_H 16)      ;; 页脚
 
 (define BTN_CANCEL_W 36)
@@ -226,7 +231,7 @@
           (Gfx.fill_rect 2 (+ y 1) 3 (- ROW_H 2) 120 180 250) }
         #f)
     (if (not (p_at_root)) { (set! cr 138) (set! cg 190) (set! cb 255) } #f)
-    (Gfx.draw_text (if (p_at_root) "..   （已在资源根）" "..   上级目录") 10 (+ y 1) cr cg cb)
+    (Gfx.draw_text (if (p_at_root) "..   （已在资源根）" "..   上级目录") 10 (+ (+ y 1) ROW_TXT_DY) cr cg cb)
     #t))
 
 (define p_draw_row
@@ -246,7 +251,7 @@
         { (set! txt (String.concat nm "/"))
           (set! cr 138) (set! cg 190) (set! cb 255) }
         (set! txt nm))
-    (Gfx.draw_text (FSX.clip_text txt 292) 10 (+ y 1) cr cg cb)
+    (Gfx.draw_text (FSX.clip_text txt 292) 10 (+ (+ y 1) ROW_TXT_DY) cr cg cb)
     #t))
 
 (define p_draw

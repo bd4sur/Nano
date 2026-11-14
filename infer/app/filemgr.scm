@@ -67,6 +67,11 @@
 (define LIST_Y 34)      ;; 列表首行 y
 (define ROW_H 18)       ;; 行高
 (define LIST_ROWS 8)    ;; 一屏 8 行（34 + 8*18 = 178）
+;; 列表行文字的垂直补偿：本地库现在把 (Gfx.draw_text) 的 y 当「墨迹顶」绘制
+;; （见 am_native_Gfx.c 的 native_text_top_gap，12px 抗锯齿字模的行顶空隙 2px），
+;; 而本 App 的行文字是按旧口径（行顶 = 行框顶 + 1，墨迹再落 2px）摆的；不补回这 2px，
+;; 整列文件名（含右侧的文件大小）都会比行框中线高出一截。
+(define ROW_TXT_DY 2)
 (define INFO_Y 182)     ;; 选中项信息 / 操作反馈，一行 12px
 (define BAR1_Y 198)     ;; 第一排按钮
 (define BAR2_Y 218)     ;; 第二排按钮
@@ -524,7 +529,7 @@
           (Gfx.fill_rect 2 (+ y 1) 3 (- ROW_H 2) 120 180 250) }
         #f)
     (if (not (at_root)) { (set! cr 138) (set! cg 190) (set! cb 255) } #f)
-    (Gfx.draw_text (if (at_root) "..   （已在资源根）" "..   上级目录") 10 (+ y 1) cr cg cb)
+    (Gfx.draw_text (if (at_root) "..   （已在资源根）" "..   上级目录") 10 (+ (+ y 1) ROW_TXT_DY) cr cg cb)
     #t))
 
 (define draw_row
@@ -544,11 +549,11 @@
         { (set! txt (String.concat nm "/"))
           (set! cr 138) (set! cg 190) (set! cb 255) }
         (set! txt nm))
-    (Gfx.draw_text (FSX.clip_text txt 232) 10 (+ y 1) cr cg cb)
+    (Gfx.draw_text (FSX.clip_text txt 232) 10 (+ (+ y 1) ROW_TXT_DY) cr cg cb)
     (if (== isd 0)
         { (set! sz (get_item row 2))
           (if (> sz 0)
-              (Gfx.draw_text (FSX.human_size sz) (- SW 62) (+ y 1) 104 116 138)
+              (Gfx.draw_text (FSX.human_size sz) (- SW 62) (+ (+ y 1) ROW_TXT_DY) 104 116 138)
               #f) }
         #f)
     #t))
