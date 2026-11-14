@@ -301,6 +301,12 @@
 (define render
   (lambda ()
     {
+      ;; 字模是**绘制点级设置**，不是启动期一次性设置：s_font_id 是宿主进程级 static，
+      ;; 与 App 实例的生命周期不一致（先跑 app/gol.scm 这类用 (Gfx.set_font 0) 的 App，
+      ;; 它会把 12px 点阵留给后来者）。这里每帧显式钉住 12px 抗锯齿 —— 本 App 的
+      ;; 所有硬编码坐标（面板 210/28、提示条 y=SH-15、数字步进 DW=7）都是按它的
+      ;; 步进 7px / 行高 15 / 基线 12 排的，换了字模不仅变相，还会排版错位。
+      (Gfx.set_font 1)
       (Gfx.fill_rect 0 0 SW SH C_PAGE_R C_PAGE_G C_PAGE_B)
       ;; 顶栏（右上角 40x18 留给统一的「退出」按钮）
       (Gfx.fill_rect 0 0 SW HDR_H C_HDR_R C_HDR_G C_HDR_B)

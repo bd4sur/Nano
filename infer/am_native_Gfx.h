@@ -32,6 +32,13 @@ extern const am_native_lib_entry_t am_native_Gfx_lib;
 // 必须保证 gfx 指向有效的、已完成 gfx_init 的 Nano_GFX。
 void am_native_gfx_bind(Nano_GFX *gfx);
 
+// 复位「绘制设置」（字模 → 默认 12px 抗锯齿，裁剪 → 整屏）。
+// 宿主每次**冷启动**一个灵机 App（新建解释器运行时）时调用；与 am_native_gfx_bind
+// 分工明确：bind 管「画到哪」（宿主全局），reset 管「怎么画」（每个 App 一份）。
+// 不调用的话上一 App 的 (Gfx.set_font 0) / (Gfx.set_clip ...) 会被下一个 App 继承
+// （见 ui_scheme_app.c 的冷启动复位块与 doc/AGENTS.md 的 2026-11-14 字体串扰条目）。
+void am_native_gfx_reset(void);
+
 // (Gfx.width) : Number —— 画布宽度（像素）
 int32_t am_native_Gfx_width(am_runtime_t *rt, am_process_t *proc);
 
@@ -102,6 +109,10 @@ int32_t am_native_Gfx_draw_text(am_runtime_t *rt, am_process_t *proc);
 //   字模决定**行高与字符步进**，切换后调用方应按 (Gfx.font_info id) 重新排版。
 //   非法 id 返回 #f（软失败）。
 int32_t am_native_Gfx_set_font(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.get_font) : Number —— 当前 Gfx.draw_text 使用的字模 id（0/1/2）。只读。
+//   用于 App 自检与回归台断言「跨 App 不串扰」。
+int32_t am_native_Gfx_get_font(am_runtime_t *rt, am_process_t *proc);
 
 // (Gfx.font_info id:Number) : List | #null —— 该字模的 (半角步进 全角步进 行高 基线)；
 //   id 非法返回 #null。排版端用它算折行宽度与行高。

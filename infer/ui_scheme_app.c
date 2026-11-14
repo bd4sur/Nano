@@ -621,6 +621,13 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     am_native_ui_abort(); // 清掉上一个 App 可能遗留的请求
     am_native_app_reset(s_app->title);
     am_native_Key_reset();
+    // Gfx 的「绘制设置」：字模/裁剪是 am_native_Gfx.c 与 Nano_GFX 上的宿主单例状态，
+    // 不随实例销毁而复位。不复位则上一个 App 的 (Gfx.set_font 0) 会被本 App 继承
+    // （先跑 gol 再跑 2048 → 2048 的文字变成 12px 点阵，见 am_native_Gfx_reset 的注释）。
+    // 只在**冷启动**复位：resume 路径（app_instance_foreground）不复位，否则会打断
+    // "实例内设过字模就不再重设"的 App。
+    am_native_gfx_reset();
+    printf("[scheme-app] Gfx 绘制设置已复位（字模→默认 12px 抗锯齿）\n");
     // Raster：水池的 3D 软光栅**后端**（薄 C / 重 Scheme 版，见 app/waterpool_raster.scm）。
     // 只持帧缓冲/z-buffer/波场/焦散纹理/已上传网格；相机、几何、物理、交互、HUD 在 Scheme。
     am_runtime_register_native_lib(s_app->rt, &am_native_Raster_lib);
@@ -1214,6 +1221,8 @@ void ui_scheme_app_on_exit(void) {
     s_modal_confirm_with_bg = 0;
 
     app_instance_destroy(inst);
+    // 实例已销毁：把绘制设置交还默认值，避免退出后的菜单/列表继承 App 的字模/裁剪
+    am_native_gfx_reset();
     am_native_gfx_bind(NULL);
 }
 

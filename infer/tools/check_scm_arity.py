@@ -82,7 +82,7 @@ ARITY = {
     'push': 2, 'pop': 1, 'display': 1, 'newline': 0, 'not': 1,
     # Gfx 本地库
     'Gfx.width': 0, 'Gfx.height': 0, 'Gfx.clear': 0, 'Gfx.fill_white': 0,
-    'Gfx.refresh': 0, 'Gfx.set_font': 1, 'Gfx.font_info': 1,
+    'Gfx.refresh': 0, 'Gfx.set_font': 1, 'Gfx.get_font': 0, 'Gfx.font_info': 1,
     'Gfx.draw_text': 6, 'Gfx.fill_rect': 7, 'Gfx.draw_rect': 7,
     # 注：set_pixel / draw_point 收的是 (x y r g b) 共 5 个（见 am_native_Gfx.h），
     # 旧表误写成 6，导致 sky*.scm / mandelbrot.scm 出现假阳性。

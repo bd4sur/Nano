@@ -10934,3 +10934,70 @@ font0 `(6 12 13 12)`、font1 `(7 12 15 12)`、font2 `(9 16 18 14)`）：
 6. **框架既有小缺陷（非本 App 引入，未改）**：点右上角「退出」后，宿主把弹框切进"模态"
    是在**下一拍**；在这个 ~17ms 窗口内按 ESC，会被当成"返回请求"而不是框内按键，框就
    一直开着（点「确认/留下」仍可恢复）。故 `regress_tsp.js` 在弹框出现后等 400ms 再按键。
+
+------------------------------------
+
+# 2026-11-14（灵机 App：Gfx 字模跨 App 串扰 —— 宿主复位 + 绘制点纪律 + 回归台）
+
+**现象（用户报的）：** 先跑 `app/gol.scm`（HUD 用 12px 二值点阵），再跑 `app/2048.scm`，
+2048 的全部文字变成 12px 点阵；反过来 2048 → gol 无异常。
+
+## 机理（定位结论，先量后改）
+
+`am_native_Gfx.c` 的字模是**宿主进程级 static**（`s_font_id`，初值 1 = 12px 抗锯齿），
+不是 `Nano_GFX` 的字段。而灵机 App 的隔离粒度是 **VM 进程**（每实例一个 `am_runtime_t`
++ 内存池，`ui_scheme_app.c` 最多 3 个实例），native 库则是宿主单例——所有 App 共用同一份
+C 代码与 static。宿主在冷启动时对同类状态库逐个显式复位（`ui_abort` / `app_reset` /
+`Key_reset`），**Gfx 没有复位入口**，于是：
+
+- gol 每帧 `(Gfx.set_font 0)` 写入 static 且从不还原（它是"写入方/污染方"）；
+- 2048 全文没有 `set_font`（当时共有 38 个 App 这样依赖默认值），纯读 → 继承 0。
+
+`(Gfx.set_font id)` 因此是一次**全局副作用**，"绘制设置"被误当成了"绘制目标"。
+
+## 修改（阶段 ①）
+
+1. **宿主复位**（治本的一半）：`am_native_Gfx.c/h` 新增 `am_native_gfx_reset()`
+   —— 字模回默认 1、裁剪回整屏（`clip` 同在 `Nano_GFX` 里、同样跨实例残留）。
+   调用点两处：`ui_scheme_app.c` 冷启动复位块（与另外三个 `*_reset` 并排，并打
+   `[scheme-app] Gfx 绘制设置已复位…` 日志）、`ui_scheme_app_on_exit`（销毁实例后）。
+   **刻意不在 `app_instance_foreground`（resume）复位**：那会打断"实例内设过字模就不再
+   重设"的 App；resume 的隔离要靠阶段 ③ 的 per-runtime 状态。
+2. **绘制点纪律**（App 侧自保）：`app/2048.scm` 的 `render` 开头显式 `(Gfx.set_font 1)`
+   —— 它的面板坐标/数字步进 `DW=7`/行高 15/基线 12 全是按 12px 抗锯齿排的。
+   范式是 `app/pinball.scm` 的 `txt/txtb/txt16` 包装器：**字模是绘制点级设置，不是
+   启动期一次性设置**（与 gol 条目的踩坑 1 同一条结论，本轮把它落成规约）。
+3. **可观测性**：新增只读 `(Gfx.get_font) : Number`（供 App 自检与回归台断言）；
+   `tools/check_scm_arity.py` 登记 `Gfx.get_font: 0`。
+
+## 回归台（新）
+
+`tools/e2e/browser/regress_font_isolation.js`（Chromium 34/34）：
+
+- 判据两条：**色阶数**（二值点阵 = 2 色；抗锯齿按覆盖率混色 → ≥11）与**逐像素哈希**
+  （只取静态文案矩形：2048 的标题/副标题/「分数」「存档」/底部提示条，避开随存档变化的
+  数字列与浮层覆盖区 56..264×76..172；gol 取 HUD 公共前缀 x<117，避开会变的计数）；
+- 覆盖：① 直接进 2048 的基线；② gol → 退出 → 2048（报告场景，要求 5 个矩形 bit-identical）；
+  ③ 反向 2048 → gol（HUD 仍 2 色阶、与首跑一致）；④ **gol 只切后台**（`SCHEME_APP_INST_MAX=3`，
+  suspend 不销毁实例）→ 2048 冷启动仍干净 —— 证明复位发生在"冷启动"而不是"上一个 App 退出"；
+  ⑤ 宿主侧断言：每次冷启动必须有 Gfx 复位日志、且确实是冷启动（不靠像素，避免被 App 侧
+  `set_font` 掩盖）。
+- **反向验证（阴性对照）**：把上面 1、2 两处改动临时注释掉重编，同一脚本立刻 11 条 FAIL
+  （2048 标题区色阶 12 → **2**，5 个矩形哈希全变；suspend 段落同样 FAIL），随后恢复通过
+  —— 证明判据有牙齿，不是恒真。
+
+## 已知缺口（阶段 ③，未做）
+
+多实例并存时 `s_font_id` 仍是全局一份：A 设 0 → 切到 B → 切回 A，A 的后续绘制用的是 B 的
+字模（resume 不复位，正是为了避免 A 自身突变；两者只能靠 per-runtime 状态两全）。建议把
+字模（及 clip）搬进按 `am_runtime_t*` 索引的槽表（`am_native_gfx_attach/forget`，在
+`app_instance_cold_start` / `app_instance_destroy` 成对调用），并给 `regress_font_isolation.js`
+补"gol 设 0 → suspend → 2048 → resume gol"段（该段只有 per-runtime 才能过）。同类的宿主单例
+状态还有 `Raster` 的 `s_wt/s_mesh[]`、`Music` 解码器——建议在 `ui_scheme_app.c` 收口成一个
+`app_instance_bind_host_state()`，并在文档里维护"宿主单例状态 & 复位点"矩阵。
+
+## 其余回归
+
+`regress_2048.js` 24/24、`regress_exit.js`（E2E_APP=2048 E2E_EPOCH=0）35/35、
+`regress_exit.js`（E2E_APP=gol）38/38、`check_scm_arity.py` 0 问题、`gcc -fsyntax-only`
+（NANO_WASM_GUI）通过。

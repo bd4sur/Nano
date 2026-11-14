@@ -25,12 +25,27 @@
 // 绘图目标（宿主经 am_native_gfx_bind 注入）
 static Nano_GFX *s_gfx = NULL;
 
-// 当前字模（0=12px 点阵 / 1=12px 抗锯齿 / 2=16px 抗锯齿），由 (Gfx.set_font id) 切换。
-// 默认沿用历史行为：12px 抗锯齿。
-static uint32_t s_font_id = 1;
+// 默认字模：12px 抗锯齿（沿用历史行为；(Gfx.set_font id) 可切到 0=12px 点阵 / 2=16px 抗锯齿）
+#define GFX_DEFAULT_FONT_ID (1u)
+
+// 当前字模，由 (Gfx.set_font id) 切换。
+// 注意：这是**宿主进程级** static，不是 Nano_GFX 的字段，因此它的生命周期长于
+// 一个灵机 App 实例（每个 App 一个 am_runtime_t/内存池，但共用这一份 C 代码）。
+// 于是它属于「绘制设置」而非「绘制目标」：宿主必须在冷启动一个 App 时调用
+// am_native_gfx_reset() 复位，否则上一个 App 留下的字模会被下一个 App 继承
+// （典型症状：先跑 app/gol.scm 的 12px 点阵 HUD，再跑 app/2048.scm，2048 的文字
+// 全变点阵）。App 侧的正确纪律仍然是「在每个绘制段之前 set_font」，见 app/pinball.scm。
+static uint32_t s_font_id = GFX_DEFAULT_FONT_ID;
 
 void am_native_gfx_bind(Nano_GFX *gfx) {
     s_gfx = gfx;
+}
+
+void am_native_gfx_reset(void) {
+    s_font_id = GFX_DEFAULT_FONT_ID;
+    // 裁剪矩形存在 Nano_GFX 里（graphics.h），同样是「每个 App 一份」的绘制设置，
+    // 也会跨实例残留：上一个 App 忘了 reset_clip，下一个 App 的绘制就被裁掉。
+    if (s_gfx != NULL) gfx_reset_clip(s_gfx);
 }
 
 // 取当前绘图目标；未绑定时向虚拟机报错并返回 NULL。
@@ -776,6 +791,14 @@ int32_t am_native_Gfx_set_font(am_runtime_t *rt, am_process_t *proc) {
     return 0;
 }
 
+// (Gfx.get_font) : Number
+// —— 当前 Gfx.draw_text 使用的字模 id（0/1/2）。只读，供 App 自检与回归台断言
+//    "跨 App 不串扰"（见 tools/e2e/browser/regress_font_isolation.js）。
+int32_t am_native_Gfx_get_font(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    return native_push_number(proc, (am_float_t)s_font_id);
+}
+
 // (Gfx.font_info id:Number) : List | #null
 // —— 该字模的 (半角步进 全角步进 行高 基线)；id 非法返回 #null。
 //    排版端拿它算折行宽度与行高（见 md_layout 的 set_font_metrics）。
@@ -918,6 +941,7 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"rounded_rect", am_native_Gfx_rounded_rect },
     { L"draw_text_centered", am_native_Gfx_draw_text_centered },
     { L"set_font",    am_native_Gfx_set_font },
+    { L"get_font",    am_native_Gfx_get_font },
     { L"font_info",   am_native_Gfx_font_info },
     { L"glyph_metrics", am_native_Gfx_glyph_metrics },
     { L"draw_glyph",  am_native_Gfx_draw_glyph },
