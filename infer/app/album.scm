@@ -382,7 +382,9 @@
     (if (== cur_ok 1)
         { (set! dt (dims_text))
           (set! dt_l (text_w dt))
-          (set! dt_x (- (- (- SW 40) dt_l) 6))
+          ;; 右端留 6px 给「退出」按钮：按钮矩形是 [SW-(EX.btn_w+4), SW-4]（别写死 40，
+          ;; 按钮加宽过——见 doc/AGENTS.md 2026-11-15（五））
+          (set! dt_x (- (- (- SW (+ EX.btn_w 4)) dt_l) 6))
           (Gfx.draw_text dt dt_x (+ 2 TXT_GAP) 118 136 158)
           (set! name_max (- (- dt_x 58) 8)) }
         #f)

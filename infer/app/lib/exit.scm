@@ -47,7 +47,11 @@
 ;; 触屏退出入口（触屏不再派生“返回”软按键，所以每个 App 都要给一个可见入口）：
 ;;   —— 点按按钮 = 与硬 A/ESC 完全相同的流程（全局确认框 → 收尾 → 退出）。
 ;;      落在按钮内的那一次按下/松开沿会被 (EX.check) **吞掉**（不让 App 也响应这一下），
-;;      所以 App 的输入代码一行都不用改。布局上只需保证右上角 40x18 不被占用。
+;;      所以 App 的输入代码一行都不用改。布局上只需保证右上角 54x18 不被占用。
+;;
+;; 按钮本身由通用控件库 app/lib/button.scm 绘制（圆角底 + 1px 描边 + 居中 12px 标签 +
+;; 按下高亮）。本模块只负责几何、样式参数、宿主热区登记与点按 → 退出流程，不再自己
+;; 拼 (Gfx.fill_rect) / (Gfx.draw_rect) / (Gfx.draw_text)（2026-11 统一到控件库）。
 ;;
 ;; 后台运行（P4）：
 ;;   退出确认框是**三按钮**的「确认 / 后台 / 留下」——中间那枚「后台」把实例冻结保留
@@ -96,6 +100,8 @@
 (native Gfx)
 (native Touch)
 
+(import BTN "app/lib/button.scm")   ; 通用按钮控件（圆角底/描边/居中标签/按下高亮）
+
 ;; 排在导入方的名字请勿带点号——`EX.xxx` 是“导入方”的引用形式，模块内 define
 ;; 带点号会被当成模块别名成员访问而链接失败。
 
@@ -108,16 +114,11 @@
 ;; 用户确认退出后、销毁前的收尾函数；#f 表示不需要
 (define cleanup_fn #f)
 
-;; 按钮状态：上一拍的触屏电平 / 本次按下是否落在按钮内 / 本拍的按钮左上角
-(define prev_down 0)
-(define armed 0)
-(define bxv 0)
-
 ;; ---- 「退出」按钮的几何 ---------------------------------------------------
 ;; 默认位置：屏幕**右上角**（btn_x < 0 表示按屏宽自动算）。少数布局把整屏都用满的
 ;; App（例如计算器：顶部整块是表达式/历史显示区）可用 (EX.draw_button_at x y)
 ;; 换到别的角落——例如左上角（右对齐的表达式很少顶到左边）。
-(define btn_w 36)
+(define btn_w 46)
 (define btn_h 16)
 (define btn_x -1)
 (define btn_y 2)
@@ -128,25 +129,33 @@
     (if (== sw 0) (set! sw (Gfx.width)) #f)
     (if (< btn_x 0) (- sw (+ btn_w 4)) btn_x)))
 
-;; 点击是否落在按钮矩形内（帧缓冲像素坐标）
-(define hit
-  (lambda (px py)
-    (set! bxv (bx))
-    (if (and (>= px bxv) (< px (+ bxv btn_w)))
-        (if (and (>= py btn_y) (< py (+ btn_y btn_h))) 1 0)
-        0)))
+;; 按钮控件（app/lib/button.scm 的描述表）：样式在文件末尾一次性配好，
+;; 矩形每拍按 (bx) / btn_y / btn_w / btn_h 同步（见 sync_rect）。
+(define btn (BTN.new))
 
-;; 统一的「退出」按钮（深底 + 细描边 + 12px 字，与各 App 的 HUD 同色系）
+;; 把按钮矩形同步为**当前**几何（(EX.draw_button_at) 会改 btn_x/btn_y）。
+;; 为什么 (EX.check) 也要调：少数 App（fallingsand / forkqueue / waterpool）只轮询
+;; (EX.check) 而**从不画这枚按钮**（它们有自己的返回入口）——若命中判定依赖
+;; “上一帧画按钮时写进去的矩形”，那些 App 的按钮矩形会停在模块加载时的初值上，
+;; 把屏幕左上角误当成退出按钮（实测：fallingsand 点左上材质按钮就弹退出确认框）。
+;; 用 (BTN.set_pos)/(BTN.set_size) 就地改矩形，不产生每次分配。
+(define sync_rect
+  (lambda ()
+    {
+      (BTN.set_pos btn (bx) btn_y)
+      (BTN.set_size btn btn_w btn_h)
+    }))
+
+;; 统一的「退出」按钮（深底 + 细描边 + 12px 字，与各 App 的 HUD 同色系）。
+;; 按住期间画激活底色（BTN.armed），松手即走退出流程。
 (define draw_button
   (lambda ()
     (if (Touch.is_available)
         {
-          (set! bxv (bx))
-          (Gfx.fill_rect bxv btn_y btn_w btn_h 60 62 74)
-          (Gfx.draw_rect bxv btn_y btn_w btn_h 120 124 140)
-          (Gfx.draw_text "退出" (+ bxv 6) (+ btn_y 2) 225 228 235)
+          (sync_rect)
+          (BTN.draw_state btn (BTN.armed btn))
           ;; 把热区登记给宿主：点按由宿主在**触摸边沿**上判定，慢节奏 App 也不会漏
-          (App.set_exit_button bxv btn_y btn_w btn_h)
+          (App.set_exit_button (BTN.x_of btn) (BTN.y_of btn) btn_w btn_h)
         }
         (App.set_exit_button 0 0 0 0))))
 
@@ -165,8 +174,7 @@
   (lambda ()
     {
       ;; App.exit 会阻塞解释器。先结束本次按钮手势，避免返回后旧释放分支再次进入这里。
-      (set! armed 0)
-      (set! prev_down 0)
+      (BTN.reset btn)
       (Touch.take_release)
       (if (App.exit)
           {
@@ -187,25 +195,11 @@
       ;; 刚从后台/挂起恢复：画面在挂起期间归别人，补一次重绘（有登记才做）
       (if (App.resumed) (if redraw_fn (redraw_fn) #f) #f)
       (if (App.back_requested) (do_exit) #f)
-      (if (Touch.is_pressed)
-          {
-            (if (== prev_down 0)
-                (if (== (hit (Touch.x) (Touch.y)) 1)
-                    { (set! armed 1) (Touch.take_press) }
-                    (set! armed 0))
-                #f)
-            (set! prev_down 1)
-          }
-          {
-            (if (and (== prev_down 1) (== armed 1))
-                {
-                  (Touch.take_release)
-                  (set! armed 0)
-                  (do_exit)
-                }
-                #f)
-            (set! prev_down 0)
-          })
+      ;; 按钮命中/点按交给控件：(BTN.track) 内部做电平→边沿判定，按下落在按钮内即
+      ;; 武装并吞掉按下沿，在按钮内松手返回 #t 并吞掉松开沿（与旧实现逐条一致）。
+      ;; 先 sync_rect：不画按钮的 App（fallingsand/forkqueue/waterpool）也要用当前几何。
+      (sync_rect)
+      (if (BTN.track btn) (do_exit) #f)
     }))
 
 ;; 安装：记录屏幕宽度（画按钮的几何基准）。**不**再安装定时器（轮询点是 (EX.check)）。
@@ -223,3 +217,20 @@
 (define on_exit
   (lambda (cleanup)
     (set! cleanup_fn cleanup)))
+
+;; ---- 按钮样式（通用控件的参数，全部有默认值；这里只覆盖与默认不同的部分）----
+;; 深底 60/62/74 + 细描边 120/124/140 + 12px 抗锯齿字 225/228/235，与各 App 的 HUD 同色系；
+;; 激活（按住）底色用各 App 通用强调色 116/172/226；圆角 4px。
+;; 宽度 46：12px 字模下「退出」两字步进 24px，加上两侧各 4px 内边距与 1px 描边共需 34px，
+;; 46 给到 ~11px 的左右余量（原 36 太窄：可用宽度 28px 只剩 2px 余量，观感拥挤；
+;; 而裁剪逻辑又为…预留半角位，直接画成了「退…」——见 doc/AGENTS.md 2026-11-15（五））。
+;; 字体固定 1（12px 抗锯齿），不再跟随 App 的 (Gfx.set_font)——统一按钮的字号。
+(BTN.set_label btn "退出")
+(BTN.set_font btn 1)
+(BTN.set_text_color btn 225 228 235)
+(BTN.set_bg btn 60 62 74)
+(BTN.set_active_bg btn 116 172 226)
+(BTN.set_radius btn 4)
+(BTN.set_border btn 120 124 140)
+(BTN.set_pos btn 0 btn_y)
+(BTN.set_size btn btn_w btn_h)

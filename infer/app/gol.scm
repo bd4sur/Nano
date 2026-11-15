@@ -263,7 +263,9 @@
     (status count)
       ;; C 版没有「退出」按钮（它用硬 A/ESC）；触屏 App 必须自备入口，且顶栏要留给
       ;; 与 C 版一致的文字，故放右下角（热区同由 (App.set_exit_button) 登记）。
-      (EX.draw_button_at (- SW 40) (- (Gfx.height) 18))
+      ;; 右边留 4px 与右上角默认位置同一规矩；宽度取 EX.btn_w（别写死——
+      ;; 按钮加宽过，写死会把按钮推出屏幕右缘）。
+      (EX.draw_button_at (- SW (+ EX.btn_w 4)) (- (Gfx.height) 18))
       (Gfx.refresh)
   }))
 

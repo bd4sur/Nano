@@ -515,7 +515,9 @@
 (define RB_W 36)
 (define RB_H 16)
 (define RB_Y 2)
-(define rb_x (- SW 80))           ; 退出按钮在 SW-40，这里留 4px 间距
+;; 「退出」按钮矩形是 [SW-(EX.btn_w+4), SW-4]（宽度见 app/lib/exit.scm 的 btn_w）；
+;; 本按钮紧贴它左边，留 4px 间距——按钮加宽过，写死 SW-80 会压到退出按钮上。
+(define rb_x (- (- SW (+ EX.btn_w 4)) (+ RB_W 4)))
 (define prev_down 0)
 (define reset_req 0)
 

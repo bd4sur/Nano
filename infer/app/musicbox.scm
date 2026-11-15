@@ -465,8 +465,9 @@
         {
           (Gfx.rounded_rect 12 7 3 12 1 1 1 1 ACC_R ACC_G ACC_B 1)
           (Gfx.draw_text "音乐盒" 20 6 TXT_R TXT_G TXT_B)
+          ;; 右对齐到「退出」按钮左侧 6px（按钮矩形 [SW-(EX.btn_w+4), SW-4]，别写死 48）
           (draw_right (String.concat (String.atom_to_string nfiles) " 首")
-                      (- SW 48) 7 DIM_R DIM_G DIM_B)
+                      (- SW (+ EX.btn_w 10)) 7 DIM_R DIM_G DIM_B)
         }
         {
           (Gfx.rounded_rect BACK_X BACK_Y BACK_W BACK_H 9 9 9 9

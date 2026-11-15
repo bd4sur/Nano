@@ -11530,3 +11530,188 @@ node tools/e2e/browser/regress_waterpool.js https://127.0.0.1:9005/index.html ch
   给用户档位比替他选一个折中更实际。
 - **低分辨率下要主动"抗走样"，而不是照抄高分辨率的细节**：任何细于 1 个内部像素的
   图案（瓷砖缝、1px 描边、细网格）都会变成随机噪点，观感比"没有该细节"差得多。
+
+# 2026-11-15（四）灵机 App 控件库：通用按钮控件 `app/lib/button.scm`（退出按钮改用它绘制）
+
+需求：把 App 里手写的控件收敛成可复用的 Scheme 层 UI 控件库——先做**通用按钮**（圆角底板 +
+居中标签，参数全带默认值：长宽、标签字体/内容/颜色、常态底色、激活底色、圆角半径等），
+再把 `app/lib/exit.scm` 的右上角「退出」按钮改为用该控件绘制。只针对 **Nano-WASM-GUI**
+（`infer/build_wasm_gui.sh`，不是 `infer/web/` 的 LLM-only 路线）。
+
+## 1. 新库 `app/lib/button.scm`（控件 = 描述表）
+
+一枚按钮 = 一个 **10 元列表**（描述表），参数各有默认值，可随时改；同一屏可并存任意多枚
+（每枚自己记着"按下是否落在自己身上"）。字段：标签 / 字体 / 标签色 / 常态底 / 激活底 /
+圆角四角 / 矩形 / 描边 / 交互状态 / 混合模式。
+
+```
+(import BTN "app/lib/button.scm")
+(define b (BTN.make "确定" 20 100 80 24))      ; 标签 + 矩形，其余全默认
+(BTN.draw b)                                    ; 常态绘制
+(if (BTN.track b) (on_click) #f)                ; 每拍一次：完成一次点按 → #t
+```
+
+| 参数 | 默认 | 设置 | 说明 |
+|---|---|---|---|
+| 标签内容 | `"按钮"` | `set_label` | 超宽按按钮宽用 `(Gfx.font_info)` 步进算宽、以 `…` 截断（自带字模度量缓存，调用方不必给表） |
+| 标签字体 | `1` | `set_font` | 0/1/2 同 `(Gfx.set_font)`；由 `(Gfx.draw_text_centered)` 显式取用 |
+| 标签颜色 | `240 246 255` | `set_text_color` | |
+| 常态底色 | `34 46 62` | `set_bg` | 取自 `app/waterpool.scm` 控件栏 |
+| 激活底色 | `116 172 226` | `set_active_bg` | 同上（按下色） |
+| 圆角半径 | `6 6 6 6` | `set_radius` / `set_radius4` | 四角可分别给；半径过大由图形层按 CSS 规则收敛 |
+| 矩形 | `0 0 60 24` | `set_rect` / `set_size` / `set_pos` | 「标签字体、标签内容」以外的几何全在这里 |
+| 描边 | `#f`（无） | `set_border` / `no_border` | 1px，画法同 `app/dict.scm` 键帽（外圈描边色 + 内缩 1px 底色） |
+| 混合模式 | `1`（置色） | `set_mode` | `>=4` = 定值 alpha（waterpool 控件栏的 110/200/240 就靠它） |
+
+绘制/状态：`(BTN.draw b)`、`(BTN.draw_state b st)`（`st` 为 `#t` 或 `1` 用激活底色）、
+`(BTN.armed b)`（按下高亮：`(BTN.draw_state b (BTN.armed b))`）。
+
+交互 `(BTN.track b)`（**每拍一次**，电平→边沿）：按下落在按钮内 → 记 armed 并**吞掉按下沿**；
+在按钮内松手 → 返回 `#t` 并吞掉松开沿；**按住后滑出按钮 → 立即取消**（armed 清零，按钮立刻
+不再高亮）；按下落在按钮外 → 一概不管（边沿与坐标原样留给 App）。`(BTN.reset b)` 清状态。
+吞边沿的意义：给 App 加一枚按钮**不需要动它任何输入代码**。
+
+解释器约束（manual.md）全部照办：算术恒二参数、无 `let`/`list`/`map`、`cond` 单表达式、
+空表用 `(cdr '(0))` 现造（`'()` 字面量是静态对象，`set_item!` 不安全）、`define` 只在
+lambda 体顶层、布尔一律 `#t`/`#f`（**0 在本解释器里是真值**——`(BTN.draw_state b 0)` 要按
+"关"处理，故内部有 `is_on` 把 `#f`/`0` 都当假）。
+
+## 2. `app/lib/exit.scm`：退出按钮改用控件
+
+- 删掉手写的 `(Gfx.fill_rect)` + `(Gfx.draw_rect)` + `(Gfx.draw_text)` 与
+  `prev_down`/`armed`/`bxv` 三个模块变量，改为一枚 `(BTN.new)` 描述表 + 末尾一次性配样式：
+  36x16、圆角 4、12px 抗锯齿字、深底 60/62/74、描边 120/124/140、标签 225/228/235、
+  激活底 116/172/226（按住期间有视觉反馈了——旧实现是死的）。
+- 标签由左对齐改**居中**（`(Gfx.draw_text_centered)`）："退出"两字 24px 宽，居中落在
+  x+6..x+30，与旧的左对齐 x+6 一致，观感不变。
+- `(EX.check)` 里的命中/点按交给 `(BTN.track btn)`；`(EX.draw_button)` 用
+  `(BTN.draw_state btn (BTN.armed btn))` 并照旧把矩形登记给宿主（`(App.set_exit_button)`）。
+- **字体固定 1**（不再跟随 App 的 `(Gfx.set_font)`）——统一按钮字号。
+
+### 关键坑 1：命中几何必须每拍同步，不能依赖"上次绘制时写进去的"
+
+控件把矩形存在描述表里（旧实现是 `hit` 里现算 `(bx)`）。第一版只在 `(EX.draw_button)` 里
+`(BTN.set_rect ...)`，于是**从不画这枚按钮的 App**（`fallingsand`/`forkqueue`/`waterpool`
+——它们有自己的返回入口，只轮询 `(EX.check)`）矩形停在模块加载时的初值 `(0,2,36,16)`，
+把**屏幕左上角**当成退出按钮：实测 `fallingsand` 点左上角的材质按钮就弹全局退出确认框、
+整个 App 冻结（`regress_fallingsand` 从 29/29 掉到 19/29，且症状是"点一下就不动了"，
+很容易误判成 App 自身问题）。修法：新增 `(EX.sync_rect)`，用 `(BTN.set_pos)`/`(BTN.set_size)`
+（就地改、不产生每次分配）在 `(EX.check)` 与 `(EX.draw_button)` 里都同步一次。
+
+### 关键坑 2：宿主热区按**按下点**结算，"滑出再松手"仍会退出
+
+`ui_scheme_app.c` 的退出热区判定是 `touch_edge & TOUCH_EDGE_UP` 时用
+`key_event->touch_down_x/y`（**按下点**）命中 `(App.set_exit_button)` 登记的矩形。所以
+"按下在按钮内、滑出去再松手"依然走退出确认框——这是 exit.scm 既有的"点按 = 按下落在
+按钮内"语义，不是控件的滑动取消失效（控件的 armed 只负责**视觉高亮**与无宿主服务时的
+本地兜底判定）。写回归断言时必须按这条写，否则会误判成失败。
+
+### 关键坑 3：每个 App 的编译期 VM 峰值 +约 0.6MB
+
+`exit.scm` 被 ~45 个 App 导入，导入后连带编译 `button.scm`（~15.6KB 源码）。按
+`doc/灵机App内存池需求实测.md` 的"池需求 ≈ 源码体积 150~500 倍"规律，每个 App 的装载期
+VM 峰值涨了 0.5~0.75MB。命中案例：宿主回归台默认 16MB 池下 `ephemeris` 直接 `link_fail`
+（17.4MB 才过）。浏览器侧 `ui_scheme_app.c` 是 48MB 池，毫无压力；宿主台按既有惯例给
+`ephemeris` 单独 32MB 池（`run_host_regress.sh`，注释里写明原因）。若将来要跑 2MB 池的
+ESP32，这条要重新过一遍内存探针。
+
+## 3. 验证
+
+- **控件层**（新 `tools/e2e/native/test_button.py` + `button_probe.scm`，宿主回归台真图形层，
+  **34/34 PASS**）：默认参数（60x24 / 字体 1 / 标签「按钮」/ 圆角 6 / 无描边 / 模式 1 / armed `#f`）、
+  像素（常态底、激活底、1px 描边环、圆角四角被背景占据、右上角半径 0 时是直角、16px 字模、
+  四角不同半径、alpha 110 混色）、命中（矩形右/下开区间、角点）、点按三态（点按完成 1 次 /
+  滑出取消 0 次且 armed 立即清零 / 按下在按钮外一概不管）。
+- **WASM 集成**（新 `tools/e2e/browser/regress_button.js`，已挂进 `run_browser_regress.sh`
+  的 `E2E_BUTTON` 段）：右上角默认位置（`ripple`）与 `(EX.draw_button_at)` 换到右下角
+  （`gol`，(280,222)）各 **15/15 PASS × chromium / chrome-headless-shell / firefox** ——
+  底色/描边/居中标签（cx≈298、cy≈10 或 230、墨迹不溢出 36x16）、四角圆角、按住切激活底色、
+  滑出立刻恢复常态、点按 → 全局确认框、无 pageerror/无 4xx。
+- **回归**：`regress_exit` 38/38 × 三引擎（gol；`E2E_APP=ripple` 默认位置亦 38/38）、
+  `regress_dict` 37/37、`regress_markdown` 55/55、`regress_launch` 30/30、
+  `regress_fallingsand` 29/29、`regress_danmaku` 35/35、`regress_waterpool` 11/11；
+  宿主回归台全部 App `err=none`（含修池后的 `ephemeris`）；native `test_filemgr` 49/49、
+  `test_app_exit` 36/36、`test_fallingsand` 11/11、`test_g2048` 56/56；
+  `check_scm_arity.py` / `check_multi_operand.py` 对两个文件均 0 问题。
+- 运行：`cd infer && bash build_wasm_gui.sh` → 静态托管 `webgui/` → 主菜单 → 小游戏 →
+  灵机应用程序 → 任一 App（右上角那枚圆角「退出」就是新控件画的）。
+
+### 测试脚本踩的坑（与产品代码无关，但会假失败）
+
+- **Firefox 上把指针移出视口会丢 `pointerup`**：实测 `pointermove` 到客户端 `y=-86` 之后就
+  再没有 `pointerup`，宿主的 UP 沿热区永远不结算 → "滑出后松手不弹确认框"假失败。回归里
+  改成"移出按钮但留在画布内"，三引擎一致。
+- 宿主热区的 UP 沿**带去抖（晚几帧）**：断言前要轮询等（`waitFor`），固定 sleep 在
+  Firefox 上会抢跑。
+
+## 4. 已知取舍 / 遗留
+
+- 只有按钮一种控件；`app/lib/menu_list.scm` 的菜单面板、`app/lib/filepicker.scm` 的列表、
+  `app/dict.scm` 的键帽**本轮未迁移**（键帽与页脚键的参数组合已被控件覆盖，迁移是纯搬砖）。
+- 不做：图标/图片按钮、长按连发、按钮组互斥焦点、滚动容器内裁剪（图形层裁剪要调用方
+  `(Gfx.set_clip)`，控件不接管）、键盘焦点。
+- `(BTN.track)` 是电平采样：亚帧点按（同一拍内按下+松开）靠触屏 HAL 的锁存兜底
+  （`hal_touch_wasm.c` 的 `s_latch_pending`），与旧实现能力相同。
+
+# 2026-11-15（五）退出按钮加宽（36 → 46）+ 修「放得下也画省略号」
+
+用户报：统一「退出」按钮太窄，连「退出」两字都装不下（截图核对：实际画成了 **「退…」**）。
+两个原因叠加，都要修。
+
+## 1. 根因一：标签裁剪**无条件为省略号预留半角位**
+
+`app/lib/button.scm` 的裁剪照搬了 `app/lib/menu_list.scm` 的写法：逐字累加步进，一旦
+`w + 本字步进 > maxw − 半角步进` 就截断（即总是留出 `…` 的位置）。12px 字模下「退出」
+步进 24px，36px 宽按钮的可用宽度 `36−8 = 28px`，`28 − 7 = 21 < 24` → 第二个字被切掉，
+末尾补 `…`。**其实 24 ≤ 28，整串本来就放得下。**
+
+修法：先算整串总步进（新 `text_w`），**放得下就原样返回**，放不下才走"预留半角位再截断"
+（新 `clip_ellipsis`）。这条对所有按钮生效：能装下就绝不出现省略号。
+
+## 2. 根因二：按钮本身确实偏窄
+
+36px 里可用 28px，两字 24px 只剩 2px 余量，贴着圆角边——即使不省略也难看。
+把 `app/lib/exit.scm` 的 `btn_w` 从 **36 → 46**（高仍 16、圆角 4）：可用宽度 38px，
+「退出」24px 两侧各留约 7px，观感与右上角其它 HUD 文字一致。自动位置随之从
+`SW−40` 变 `SW−50`（`(bx)` 已按 `btn_w` 推算，无需改）。
+
+## 3. 连带要跟着改的"紧邻元素"（加宽后会和按钮打架）
+
+| 位置 | 原 | 现 | 原因 |
+|---|---|---|---|
+| `app/gol.scm` 右下角退出按钮 | `(EX.draw_button_at (- SW 40) …)` | `(- SW (+ EX.btn_w 4))` | 写死 40 会把加宽后的按钮推出屏幕右缘 6px；改成引用 `EX.btn_w` |
+| `app/particlelife.scm` HUD「重置」 | `rb_x = (- SW 80)`（240..276） | `(- (- SW (+ EX.btn_w 4)) (+ RB_W 4))`（230..266） | 原注释"退出按钮在 SW-40"；加宽后两者重叠 6px |
+| `app/album.scm` 顶栏尺寸文字 | 右端 `SW−46` | `SW−(EX.btn_w+4)−6` 起算 | 文字右端会压到按钮左缘 |
+| `app/musicbox.scm` 顶栏「N 首」 | 右对齐到 `SW−48` | `SW−(EX.btn_w+10)` | 同上 |
+
+（`app/calculator.scm` 把按钮放左上角 `(2,2)`，宽度变化只影响覆盖区，视觉无碍；其回归里
+"排除按钮矩形"的常量 36 已同步为 46。）
+
+## 4. 验证
+
+- **控件层**（`tools/e2e/native/test_button.py`，现 **35/35**）：新增一条硬判据——
+  同一标签「退出」画在 46px（恰好放得下）与 120px（宽裕）两枚按钮里，**居中墨迹图样必须
+  完全一致**（`ink7 == ink8`，136 vs 136，diff 0）。有省略号时两者必然不同。
+- **WASM 集成**（`tools/e2e/browser/regress_button.js`，现 **16/16 × 三引擎 × 两个位置**）：
+  新增"标签完整（无省略号，墨迹宽 ≤ 24px）"判据（实测 inkW=23、bbox 281..303、居中
+  cx=292/cy=10）；矩形参数更新为右上角 `270,2,46,16`、gol 右下角 `270,222,46,16`。
+  截图逐像素核对：标签是完整的「退出」两字（不再是「退…」）。
+- **回归**：`regress_exit` 38/38、`regress_launch` 30/30、`regress_dict` 37/37、
+  `regress_markdown` 55/55、`regress_fallingsand` 29/29、`regress_danmaku` 35/35、
+  `regress_2048` 24/24、`regress_calculator` 30/30（排除矩形同步后）、
+  `regress_particlelife` 12/12、`regress_album` 34/34、`regress_musicbox` 32/32；
+  宿主回归台 album/musicbox/particlelife 全 `err=none`。顶栏局部截图核对：
+  particlelife「重置 | 退出」4px 间距、musicbox「7 首 | 退出」6px 间距、
+  album「400x200 | 退出」不重叠。
+- 其它回归脚本里"点 (298,10) / (300,10)"这类取点仍在加宽后的按钮内
+  （270..315 × 2..17），无需改动；只有 `regress_calculator` 的按钮排除矩形与
+  `regress_particlelife` 的重置按钮中心点（258 → 248）需要同步。
+
+## 5. 教训
+
+- **裁剪/省略号逻辑要先判"放得下"**：`w + cw > maxw − 预留` 这种写法在"刚好放得下"的
+  区间上是错的（差 1 个半角位就误截）。凡是要显示省略号的控件，都该走
+  "整串能装下 → 原样；装不下 → 截断 + …" 两段判断。
+- **控件的默认几何是被别处依赖的契约**：加宽一枚全局按钮，要顺着"贴着它排的元素"
+  逐个核对（本项目里是 gol 的显式坐标、particlelife 的自绘 HUD 按钮、album/musicbox 的
+  右对齐 HUD 文字、calculator 回归的排除矩形）。能引用 `EX.btn_w` 的地方就不要写死数字。
