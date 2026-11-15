@@ -11116,3 +11116,124 @@ NaN 落到逐像素夹断时，**wasm 的 `f32.min/f32.max` 把它夹成 1（纯
 - 这类问题**只在特定视角+特定波场相位**才可见（水面下 + 全反射区），64 位宿主还会把它藏成黑色，
   所以单看"64 位画面正常"不能作为"没问题"的证据；用 `tools/e2e/host` 的固定帧脚本 + 真 WASM
   两侧对拍才能稳定复现。
+
+------------------------------------
+
+# 2026-11-15（灵机 App 间拉起：`(App.launch[_with])` + `(App.launch_arg)`，filemgr → markdown 试点）
+
+需求：让**灵机 App 之间能互相拉起**——文件管理器里点开 `.md/.txt` 时，用 Markdown 阅读器
+打开它，并把**待打开文件的绝对路径**作为 1 个字符串启动参数传过去。只针对 Nano-WASM-GUI
+（`infer/build_wasm_gui.sh`，不是 `infer/web/` 那条 LLM-only 路线）。
+
+## 1. 机制：三段式（与 `(App.exit)`/`(App.hide)` 逐字同构）
+
+```
+App 进程内                        宿主（ui_scheme_app.c，帧末）              目标实例
+──────────                        ──────────────────────────                ────────
+(App.launch_with "markdown" p)
+  → 校验（名字/长度/在途）→ 置位
+  → 压 #t，跑完这一拍
+                                   ui_scheme_app_perform_launch()
+                                    ① 名字 → s_apps[] 下标（"x" / "x.scm" / "app/x.scm"）
+                                    ② **先**定目标槽位（此刻调用者仍是前台 → LRU 只挑后台实例，
+                                       绝不会“拉起别人把自己驱逐掉”）
+                                    ③ 调用者让出前台（多槽=挂起冻结，同 (App.hide)；
+                                       单槽 ESP32=销毁，等同“拉起即替换”）
+                                    ④ 目标上前台（已有同源实例→恢复；否则冷启动）
+                                    ⑤ am_native_app_set_launch_arg(参数) ← 必须在 reset 之后
+                                    ⑥ is_full_refresh=1，本帧结束
+                                                                            下一拍 boot/on_tick
+                                                                            (App.launch_arg) 取走
+```
+
+- 为什么仍是“请求 + 帧末执行”：不能在 native 函数里销毁/切换运行时（栈上还压着该进程的
+  上下文）——这是 P1 就立下的规矩，拉起沿用。
+- **调用者去哪**：多实例平台挂起保留（列表里带「● 运行中」，选中即恢复原状态）；单实例平台
+  （ESP32，`SCHEME_APP_INST_MAX==1`）没有后台槽位，**先销毁调用者再建目标**，否则
+  `app_instance_alloc` 会因“唯一槽位是前台、不可驱逐”而失败（第一版就踩了这个坑）。
+- **目标已在后台**：走“恢复”，实例状态全保留；新参数照常交付 —— 这就是“同一个阅读器实例
+  被再次拉起、换一篇文档”的自然实现（e2e 专门验证）。
+- 不引入导航栈：目标退出后仍回**应用列表**（调用者以角标留在列表里）。
+
+## 2. 本地库 API（`infer/am_native_App.c/.h`，无新库、无新 .c 文件）
+
+```
+(App.launch 名字)               : Boolean  —— 拉起另一个 App（无参数）
+(App.launch_with 名字 参数字符串) : Boolean  —— 同上，并传递 1 个字符串
+(App.launch_arg)                : String | #null —— 本实例收到的启动参数，**取走即清零**
+```
+
+- 名字 = app/ 下源码文件名去 `.scm`（= 列表显示名），也接受 `"x.scm"` / `"app/x.scm"`；
+  比较对象是扫描时按 `SCHEME_APP_NAME_MAX-9` 截断后的显示名（超长文件名用截断后的名字）。
+- 参数上限 **256 码点**（宿主绝对路径上限 `FS_PATH_MAX=256` 字节），超限 **拒绝而非截断**
+  ——拿半截路径去打开文件只会失败得更难查。
+- 软失败（返回 `#f`）：名字空/超长、参数超长、已有未处理的拉起请求、目标不存在、目标是
+  自己。名字存在性由宿主注册的钩子 `am_native_app_bind_lookup()` 判定（`ui_scheme_app.c`
+  用 `s_apps[]` 实现；回归台注册一个只认几个名字的桩）。
+- 帧末优先级：**退出 > 拉起 > 切后台**（`ui_app.c` 的 `STATE_SCHEME_APP_RUN` 收尾处）。
+- `(App.launch_arg)` 一次性（同 `(App.back_requested)`），无参数返回 `#null`；交付点在
+  `am_native_app_reset()` **之后**（reset 会清 inbox —— 这是本机制最容易写错的一步）。
+
+## 3. 需求 2：filemgr → markdown 试点
+
+- `infer/am_native_Fs.c/.h` 新增 **`(Fs.abspath path)`**：资源根相对路径 → 宿主绝对路径
+  （已是 `/` 开头则原样；尾部 `/.` 与多余 `/` 归一化，故 `(Fs.abspath ".")` == 资源根）；
+  非法/超长 → `#null`。App 间传路径用它，三平台语义一致。
+- `infer/app/filemgr.scm`：新增**映射表** `openers`（`("md,markdown" "markdown")`、
+  `("txt" "markdown")`，复用 `FSX.ext_match` 的大小写不敏感匹配）+ `opener_for` + `op_open`；
+  「进入」作用于文件时查表：有映射 → `(App.launch_with 应用 (Fs.abspath 路径))`（并打
+  `FMOPEN <文件> -> <应用>` 诊断行），无映射 → 仍弹原来的详情框。加一个“查看器”只需加一行。
+- `infer/app/markdown.scm`：`launch_open`（取参数 → 收起面板/选择器 → 清公式缓存 →
+  复用既有 `open_path` 打开 → 打 `MDLAUNCH <路径>` 诊断行），两处消费：
+  `boot`（冷启动拉起：跳过“单篇自动打开/文档列表”）与 `on_tick` 开头（后台实例被再次拉起）。
+
+## 4. 踩到的坑（都会静默出错，值得记下来）
+
+1. **`0` 在本解释器里是「真」**（只有 `#f` 为假，见 `am_vm` 的 `condition != AM_VALUE_FALSE`）：
+   第一版 `launch_open` 返回 `0/1`，于是 `(if (launch_open) …)` **永远走真分支**，
+   `on_tick` 里后面的 `(EX.check)` 再也不执行 —— 症状极具误导性：App 正常绘制、帧率正常，
+   但点「退出」按钮只会在 1500ms 后被宿主“返回请求无人接管”兜底杀掉，`(App.launch_arg)`
+   之外的一切 App 交互都失灵。**布尔返回一律写 `#t/#f`。**
+2. **参数必须先弹完再校验**：`(App.launch_with …)` 里“参数超长就提前 return”会把未弹的
+   名字留在操作数栈上，破坏单值栈纪律并污染后续表达式。改为“两个参数都弹完 → 再逐条校验”。
+3. **宿主日志（`[scheme-app] 拉起 …`）在帧末才出现**：e2e 若在触发拉起后立刻断言日志会
+   拿到上一轮的旧行；必须等 `MDLAUNCH`（目标的 boot 已跑）之后再断言。
+4. 回归台/测试脚本的两个既有坑：`markdown` 的模块闭包（md_* + tex_* + picker + fsx）在
+   **64 位宿主**上编译期 VM 峰值已超过 32MB —— `run_host_regress.sh`、`tools/e2e/markdown/
+   test_app.py`、`tools/e2e/native/test_filemgr.py` 的池子统一调到 **80MB**（与
+   `ui_scheme_app.c` 的 64 位期望值对齐；WASM 32 位 48MB 仍然够）；`test_app.py` 原来
+   “二进制存在就跳过构建”，会拿陈旧产物跑出新过程“未找到native函数”，改为每次重建。
+
+## 5. 验证
+
+- **库层契约**（新 `tools/e2e/native/test_app_launch.py` + `launch_probe.scm`，**19/19 PASS**）：
+  参数 inbox 一次性（首次取到、二次 `#null`）、空名字/未知名字/超长参数 → `#f`、合法 → `#t`、
+  在途请求互斥、宿主取走即清零（harness 的 `RESULT` 新增 `app_launch=`/`app_arg=`），
+  以及 `Fs.abspath` 四种形态。
+- **浏览器端到端**（新 `tools/e2e/browser/regress_launch.js`，真 WASM + 真宿主状态机，
+  **Chromium / chrome-headless-shell / Firefox 各 30/30 PASS**）：
+  filemgr 进 `data/ltest` → `.png` 不拉起（仍弹详情框）→ `a.md` 冷启动拉起 markdown 并
+  `MDLAUNCH …/a.md` + `MDSTAT title=a`（正文有墨迹）→ 退出框选「后台」（`切后台：markdown`）
+  → 回列表 → 恢复 filemgr（`恢复后台实例`，目录仍是 `data/ltest`）→ 打开 `b.txt`
+  → **恢复同一个 markdown 实例**并把新参数交给它（`MDSTAT title=b`，画面确实变了）
+  → markdown 确认退出 → 再恢复 filemgr（仍活着）。截图核对：阅读页标题/正文正确、
+  filemgr 回到原目录且选中行不变。
+- **回归**：宿主台全 App `err=none`（markdown 池 80MB）、`test_app_exit` 36/36、
+  `test_filemgr` 49/49、`test_key_fs` 65/65、`test_ui_prompt` 11/11、`test_qrcode` 29/29、
+  `test_touch_imu` 36/36、`markdown/test_app.py` 106/106；浏览器 `regress_filemgr` 51/51、
+  `regress_markdown` 55/55、`regress_exit` 38/38（顺带修正其默认「退出」按钮坐标：gol 把
+  按钮放在**右下角** `(298,230)`，原默认 `(300,10)` 早已点不中）、`regress_det` 全 App 帧
+  CRC 与 HEAD 构建**逐字节相同**（唯一不同的 raster3d 经同一构建重复跑证实为既有噪声）、
+  `regress.js` 存活回归的 ABNORMAL 集合与 HEAD 一致（calculator/cnn/gomoku/… 这些
+  “有脏才画”的 App 本来就在 4s 窗口里 refresh=0）。
+- 运行：`cd infer && bash build_wasm_gui.sh` → 静态托管 `webgui/` → 主菜单「小游戏」→
+  「灵机应用程序」→ `filemgr` → 进 `doc/` 选中任意 `.md`/`.txt` → 「进入」即拉起阅读器。
+
+## 6. 已知取舍 / 遗留
+
+- 调用者冻结在后台要占一个解释器池（WASM 每实例 48MB，拉起后 2 池 ≈ 96MB；浏览器堆
+  384MB 充裕）；若将来要省内存，把 `ui_scheme_app.c` 的“多实例路径”改成销毁即可，一行。
+- 不提供“返回上一 App”（无导航栈）；也不提供返回值/回调、多参数、Intent 序列化。
+- 拉起机制只服务「灵机 App → 灵机 App」；C 版 App（STATE_* 系列）仍是硬编码的状态切换。
+- 触屏电平是共享的（与恢复路径一致，不做复位）；若拉起动作本身发生在“长按未松手”状态下，
+  目标 App 的第一拍可能看到 `is_pressed=1`（本次试点点击落在列表区，未观察到问题）。

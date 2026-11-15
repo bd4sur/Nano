@@ -34,6 +34,9 @@
 ;;
 ;; 文档来源（都走 Fs 真文件链路）：
 ;;   · 业务资源根下的 doc/*.md 与根目录下的 *.md（桌面上即 /home/bd4sur/linglong/）；
+;;   · **被别的 App 拉起**（App.launch_with，例如 app/filemgr.scm 选中 .md/.txt）：
+;;     启动参数 = 待打开文件的宿主绝对路径，boot / 每拍开头由 (App.launch_arg)
+;;     取走（一次即清零），直接跳过列表进阅读页——见下方 launch_open；
 ;;   · 内置示例（md_demo.scm 是**唯一真源**）：构建期由 `make md-demo`
 ;;     （或 build_wasm_gui.sh 自动调用）导出成 doc/Markdown 示例.md；
 ;;     若该文件不存在（例如直接拷 App 到设备上、只读文件系统），App 首次启动会自己
@@ -1416,20 +1419,56 @@
         #f)
     #t))
 
+;; ---- 启动参数（App → App 拉起） ------------------------------------------
+;;
+;; 拉起方（例如 app/filemgr.scm 选中 .md/.txt 后点「进入」）用 (App.launch_with
+;; "markdown" 路径) 把控制权交给本 App，并约定参数 = **待打开文件的宿主绝对路径**
+;; （(native Fs)/Gfx 的路径规则：'/' 开头 = 宿主绝对路径，原样使用）。
+;;
+;; (App.launch_arg) 是**取走即清零**的（同 (App.back_requested)）：每一条参数只
+;; 消费一次，没参数时返回 #null。两处消费点：
+;;   · boot 里——被冷启动拉起：直接进阅读页，跳过「单篇自动打开/文档列表」分支；
+;;   · on_tick 开头——后台实例被**再次拉起**（换一篇文档）：重新走同一条打开链路。
+;; 为什么用绝对路径而不是资源根相对路径：参数要跨 App 传递，接收方的「当前目录」
+;; 概念与发起方无关；绝对路径在桌面 / WASM MEMFS / 掌机 SD 上语义一致，且图片
+;; 相对路径的基准（见 set_doc_dir）能从绝对路径直接推出来。
+(define launch_open
+  (lambda ()
+    (define a (App.launch_arg))
+    ;; 注意返回值必须是 **#t/#f**：本解释器里只有 #f 为假，0 是**真值**
+    ;; （见 manual 附录 C 与 am_vm 的 `condition != AM_VALUE_FALSE`），
+    ;; 写 "返回 1/0" 会让 (if (launch_open) ...) 永远走真分支。
+    (if (null? a)
+        #f
+        (if (== (String.length a) 0)
+            #f
+            { ;; 面板/选择器一律收起：新文档要立刻接管画面与输入
+              (set! settings_open 0)
+              (set! toc_open 0)
+              (FP.reset)
+              ;; 换文档：旧公式缓存的 op 流不再需要（同 open_doc，且必须在打开之前清）
+              (math_cache_clear)
+              (open_path a (strip_ext (FSX.leaf a)))
+              (display "MDLAUNCH ") (display a) (newline)
+              #t }))))
+
 (define on_tick
   (lambda ()
-    (if (FP.active)
-        (tick_picker)          ;; 选择器活动期间：输入/绘制全归它，EX 不抢返回请求
-        (if (== settings_open 1)
-            (tick_settings)    ;; 设置面板同理（返回请求 = 关闭面板）
-        (if (== toc_open 1)
-            (tick_toc)         ;; 目录面板（返回请求 = 关闭面板）
-            { (EX.check)
-              (handle_keys)
-              (handle_touch)
-              (bg_work)
-              (sync_scroll)
-              (draw_all) })))))
+    (if (launch_open)
+        { (draw_all) }        ;; 被再次拉起：已经换了文档，本拍直接画新画面
+                              ;;（只有“换文档”这一拍跳过 EX.check；挂起的返回请求会在下一拍照常被消费）
+        (if (FP.active)
+            (tick_picker)          ;; 选择器活动期间：输入/绘制全归它，EX 不抢返回请求
+            (if (== settings_open 1)
+                (tick_settings)    ;; 设置面板同理（返回请求 = 关闭面板）
+                (if (== toc_open 1)
+                    (tick_toc)     ;; 目录面板（返回请求 = 关闭面板）
+                    { (EX.check)
+                      (handle_keys)
+                      (handle_touch)
+                      (bg_work)
+                      (sync_scroll)
+                      (draw_all) }))))))
 
 ;; ---- 启动 ----------------------------------------------------------------
 
@@ -1442,10 +1481,13 @@
       (load_font)           ;; 恢复上次选择的字模（字体影响排版度量，必须在打开文档之前）
       (seed_demo_file)      ;; 首次启动：把内置示例写成 doc/ 下的真 .md 文件
       (scan_docs)
-      ;; 只有一个候选时直接进阅读页，不为一次点按多绕一圈
-      (if (<= (length docs) 1)
-          (open_doc 0)
-          (set! mode 1))
+      ;; 拉起方指定了要打开的文件（启动参数）→ 直接进阅读页；
+      ;; 否则：只有一个候选时直接进阅读页，不为一次点按多绕一圈；多篇先进列表
+      (if (launch_open)
+          #f
+          (if (<= (length docs) 1)
+              (open_doc 0)
+              (set! mode 1)))
       (draw_all)
       (set! ts (System.set_interval 60 on_tick)) }))
 

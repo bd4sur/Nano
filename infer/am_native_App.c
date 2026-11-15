@@ -61,6 +61,17 @@ static int32_t s_hide_pending = 0; // 1=有切后台请求（宿主取走执行�
 static int32_t s_btn_x = 0, s_btn_y = 0, s_btn_w = 0, s_btn_h = 0;
 static wchar_t s_name[APP_NAME_MAX];
 
+// ---- 拉起请求（App → App）-------------------------------------------------
+// 三段式的第一段就在这几个静态量里：native 函数只置位，宿主在帧末取走（见头文件）。
+static int32_t s_launch_pending = 0;                      // 1=有未处理的拉起请求
+static wchar_t s_launch_name[APP_NAME_MAX];               // 目标 App 名（列表显示名）
+static wchar_t s_launch_arg_out[AM_NATIVE_APP_LAUNCH_ARG_MAX]; // 随请求携带的启动参数
+// 启动参数 inbox：宿主在 reset 之后写入，App 侧 (App.launch_arg) 取走即清零
+static int32_t s_launch_arg_valid = 0;
+static wchar_t s_launch_arg_inbox[AM_NATIVE_APP_LAUNCH_ARG_MAX];
+// 名字存在性查询钩子（宿主提供；未注册时一律按"受理"处理）
+static int32_t (*s_launch_lookup)(const wchar_t *name) = NULL;
+
 // ===============================================================================
 // 内部辅助
 // ===============================================================================
@@ -86,32 +97,37 @@ static int32_t app_push_wstring(am_process_t *proc, const wchar_t *str) {
 
 // 从操作数栈弹出一个字符串对象并拷贝到 dst（含 NUL；超出 cap-1 截断）。
 // 非字符串参数一律按空串处理（软失败，manual §1.1.1）。
-static void app_pop_wstring_copy(am_process_t *proc, wchar_t *dst, size_t cap) {
+// 返回**原始长度**（码点，未截断）——调用方可据此拒绝"放不下"的参数，
+// 而不是拿半截字符串去干活（拉起路径必须这样，见 am_native_App_launch_common）。
+static size_t app_pop_wstring_copy(am_process_t *proc, wchar_t *dst, size_t cap) {
     am_value_t *content = NULL;
     am_wstring_t *ws = NULL;
     am_value_t v = am_process_pop_operand(proc);
 
     dst[0] = L'\0';
-    if (v == (am_value_t)UINTPTR_MAX) return;
-    if (!am_value_is_handle(v)) return;
+    if (v == (am_value_t)UINTPTR_MAX) return 0;
+    if (!am_value_is_handle(v)) return 0;
 
     am_handle_t hd = am_value_to_handle(v);
     am_value_t obj_val = am_heap_get(proc->vm_alloc, proc->heap_alloc, proc->heap, hd);
-    if (!am_value_is_ptr(obj_val)) return;
+    if (!am_value_is_ptr(obj_val)) return 0;
 
     am_object_t *obj = am_value_to_ptr(obj_val);
-    if (obj->type != AM_OBJECT_TYPE_WSTRING) return;
+    if (obj->type != AM_OBJECT_TYPE_WSTRING) return 0;
 
     ws = (am_wstring_t *)obj;
     content = ws->content;
-    if (content == NULL) return;
+    if (content == NULL) return 0;
 
     size_t n = ws->length;
-    if (n > cap - 1) n = cap - 1;
-    for (size_t i = 0; i < n; i++) {
+    size_t copy = n;
+    if (cap == 0) return n;
+    if (copy > cap - 1) copy = cap - 1;
+    for (size_t i = 0; i < copy; i++) {
         dst[i] = (wchar_t)am_value_to_wchar(content[i]);
     }
-    dst[n] = L'\0';
+    dst[copy] = L'\0';
+    return n;
 }
 
 // ===============================================================================
@@ -233,6 +249,60 @@ int32_t am_native_App_platform(am_runtime_t *rt, am_process_t *proc) {
     return app_push_wstring(proc, APP_PLATFORM_NAME);
 }
 
+// ---------------------------------------------------------------------------
+// 拉起（三段式的第一段：只校验 + 置位）
+// ---------------------------------------------------------------------------
+
+// (App.launch name) / (App.launch_with name arg) 的公共实现。
+// 参数从右往左弹：with_arg 时先 arg 再 name。
+static int32_t app_launch_common(am_process_t *proc, int32_t with_arg) {
+    wchar_t name[APP_NAME_MAX];
+    wchar_t arg[AM_NATIVE_APP_LAUNCH_ARG_MAX];
+    size_t nlen = 0;
+    size_t alen = 0;
+
+    // **先把所有参数弹完再校验**：提前 return 会把未弹的操作数留在栈上，
+    // 破坏“单值堆纪律”（N1）并污染后续表达式（这类 bug 极难查）。
+    arg[0] = L'\0';
+    if (with_arg) {
+        alen = app_pop_wstring_copy(proc, arg, AM_NATIVE_APP_LAUNCH_ARG_MAX);
+    }
+    nlen = app_pop_wstring_copy(proc, name, APP_NAME_MAX);
+
+    // 放不下就拒绝：拿半截路径去打开文件只会失败得更难查（不静默截断）
+    if (with_arg && alen >= AM_NATIVE_APP_LAUNCH_ARG_MAX) return app_push_bool(proc, 0);
+    if (nlen == 0 || nlen >= APP_NAME_MAX) return app_push_bool(proc, 0);
+    // 同一时刻只允许一条在途请求：多发的会静默覆盖上一条（难以排查），故直接拒绝
+    if (s_launch_pending) return app_push_bool(proc, 0);
+    // 名字存在性：宿主注册了钩子时预先校验（找不到就当场软失败，App 可感知）
+    if (s_launch_lookup != NULL && !s_launch_lookup(name)) return app_push_bool(proc, 0);
+
+    wcsncpy(s_launch_name, name, APP_NAME_MAX - 1);
+    s_launch_name[APP_NAME_MAX - 1] = L'\0';
+    wcsncpy(s_launch_arg_out, arg, AM_NATIVE_APP_LAUNCH_ARG_MAX - 1);
+    s_launch_arg_out[AM_NATIVE_APP_LAUNCH_ARG_MAX - 1] = L'\0';
+    s_launch_pending = 1;
+    return app_push_bool(proc, 1);
+}
+
+int32_t am_native_App_launch(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    return app_launch_common(proc, 0);
+}
+
+int32_t am_native_App_launch_with(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    return app_launch_common(proc, 1);
+}
+
+int32_t am_native_App_launch_arg(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    // 一次性：取走即清零（语义同 (App.back_requested)，宿主兜底/重复拉起都不会重复交付）
+    if (!s_launch_arg_valid) return app_push(proc, AM_VALUE_NULL);
+    s_launch_arg_valid = 0;
+    return app_push_wstring(proc, s_launch_arg_inbox);
+}
+
 // ===============================================================================
 // 宿主服务接口
 // ===============================================================================
@@ -248,6 +318,13 @@ void am_native_app_reset(const wchar_t *name) {
     s_back_pending = 0;
     s_back_ms = 0;
     s_modal_closed = 0;
+    // 拉起请求与启动参数都属于"上一个上下文"：换了实例就一律作废
+    // （宿主在 reset **之后**才写入本次的启动参数，见 am_native_app_set_launch_arg）
+    s_launch_pending = 0;
+    s_launch_name[0] = L'\0';
+    s_launch_arg_out[0] = L'\0';
+    s_launch_arg_valid = 0;
+    s_launch_arg_inbox[0] = L'\0';
 
     s_name[0] = L'\0';
     if (name != NULL) {
@@ -265,6 +342,11 @@ void am_native_app_abort(void) {
     s_back_pending = 0;
     s_back_ms = 0;
     s_modal_closed = 0;
+    s_launch_pending = 0;
+    s_launch_name[0] = L'\0';
+    s_launch_arg_out[0] = L'\0';
+    s_launch_arg_valid = 0;
+    s_launch_arg_inbox[0] = L'\0';
 }
 
 void am_native_app_set_back_request(am_runtime_t *rt) {
@@ -356,6 +438,35 @@ int32_t am_native_app_hide_requested(void) {
     return v;
 }
 
+int32_t am_native_app_launch_take(wchar_t *name, size_t ncap, wchar_t *arg, size_t acap) {
+    if (!s_launch_pending) return 0;
+    s_launch_pending = 0;   // 取走即清零（宿主据此只切换一次）
+    if (name != NULL && ncap > 0) {
+        wcsncpy(name, s_launch_name, ncap - 1);
+        name[ncap - 1] = L'\0';
+    }
+    if (arg != NULL && acap > 0) {
+        wcsncpy(arg, s_launch_arg_out, acap - 1);
+        arg[acap - 1] = L'\0';
+    }
+    s_launch_name[0] = L'\0';
+    s_launch_arg_out[0] = L'\0';
+    return 1;
+}
+
+void am_native_app_set_launch_arg(const wchar_t *arg) {
+    s_launch_arg_valid = 0;
+    s_launch_arg_inbox[0] = L'\0';
+    if (arg == NULL || arg[0] == L'\0') return;   // 空串 = 无参数（从不交付）
+    wcsncpy(s_launch_arg_inbox, arg, AM_NATIVE_APP_LAUNCH_ARG_MAX - 1);
+    s_launch_arg_inbox[AM_NATIVE_APP_LAUNCH_ARG_MAX - 1] = L'\0';
+    s_launch_arg_valid = 1;
+}
+
+void am_native_app_bind_lookup(int32_t (*fn)(const wchar_t *name)) {
+    s_launch_lookup = fn;
+}
+
 // ===============================================================================
 // 库注册表
 // ===============================================================================
@@ -373,6 +484,9 @@ static const am_native_func_entry_t am_native_App_funcs[] = {
     { L"set_timeslice",   am_native_App_set_timeslice },
     { L"name",            am_native_App_name },
     { L"platform",        am_native_App_platform },
+    { L"launch",          am_native_App_launch },
+    { L"launch_with",     am_native_App_launch_with },
+    { L"launch_arg",      am_native_App_launch_arg },
 };
 
 const am_native_lib_entry_t am_native_App_lib = {

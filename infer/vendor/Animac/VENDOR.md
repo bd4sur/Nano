@@ -85,16 +85,21 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
   Scheme 侧 `Key.is_available/is_down/take_press/take_release/dropped`）；HAL 在注入 GUI 电平槽的
   同时另投一份边沿事件，GUI 读取路径零改动
 - `infer/am_native_Fs.c/.h` —— 文本文件读写（`exists/is_dir/size/list/mkdir/read/write/append`
-  以及 `remove`/`rename`），相对业务资源根、UTF-8、128KB 读入上限；WASM 目标另有
-  `hal_fs_persist_wasm.c` 把写入/删除/改名同步进浏览器 IndexedDB（文件管理器 app/filemgr.scm
-  依赖 `remove`/`rename`；递归删除目录树由 Scheme 侧组合原语完成）
+  以及 `remove`/`rename`/`abspath`），相对业务资源根、UTF-8、128KB 读入上限；`abspath`
+  把资源根相对路径换成**宿主绝对路径**（App 间传递路径用，见下面 App 库的 `launch_with`）；
+  WASM 目标另有 `hal_fs_persist_wasm.c` 把写入/删除/改名同步进浏览器 IndexedDB（文件管理器
+  app/filemgr.scm 依赖 `remove`/`rename`；递归删除目录树由 Scheme 侧组合原语完成）
 - `infer/am_native_Ui.c/.h` —— 宿主模态文本输入/输出（`input`/`input_with`/`message`/
   `message_titled`/`confirm`）：按上游契约 N7 把**进程**置 BLOCKED，宿主用现成的文本控件当
   模态框（`confirm` 借图形层的两按钮确认框），提交后压值 + step + 置 READY + 重新入队
   （机制与 `System.read` 队列等待同源）
 - `infer/am_native_App.c/.h` —— 应用外壳/生命周期（`exit`/`exit_with`/`exit_now`/`hide`/
   `back_requested`/`modal_closed`/`is_active`/`name`/`platform`）：退出确认框走 Ui 的
-  「退出型确认框」（N7 阻塞），确认后置退出意愿，由宿主 `ui_scheme_app.c` 在帧末销毁实例
+  「退出型确认框」（N7 阻塞），确认后置退出意愿，由宿主 `ui_scheme_app.c` 在帧末销毁实例。
+  **App 间拉起**：`launch`/`launch_with`（向宿主排一条“拉起另一个 App + 1 个字符串启动参数”
+  的请求，帧末执行；调用者被挂起保留，单实例平台退化为销毁）与 `launch_arg`（目标 App
+  取走启动参数，一次性）；名字存在性校验通过宿主注册的钩子
+  `am_native_app_bind_lookup()` 完成（`ui_scheme_app.c` 用 `s_apps[]` 实现）
 
 它们必须遵守上游本地库契约（上游 `doc/todo/stack_bal.md` §11 N1–N10）：
 

@@ -660,6 +660,28 @@ int32_t am_native_Fs_remove(am_runtime_t *rt, am_process_t *proc) {
     return fs_push_bool(proc, ok);
 }
 
+int32_t am_native_Fs_abspath(am_runtime_t *rt, am_process_t *proc) {
+    am_wstring_t *ws = NULL;
+    char path[FS_PATH_MAX];
+    size_t n = 0;
+    (void)rt;
+
+    if (!fs_pop_wstring(proc, &ws)) return -1;
+    if (!am_native_fs_resolve(ws, path)) return fs_push_null(proc);
+
+    // 归一化尾部：fs_resolve 把 "." 解析成 "<根>/."，把 "a/b/" 原样保留。
+    // 先去掉多余尾 '/'（根 "/" 自身保留），再去掉尾 "/."。
+    n = strlen(path);
+    while (n > 1 && path[n - 1] == '/') path[--n] = '\0';
+    if (n >= 2 && path[n - 1] == '.' && path[n - 2] == '/') {
+        path[n - 2] = '\0';
+        n -= 2;
+    }
+    if (n == 0) return fs_push_null(proc);
+
+    return fs_push_string(proc, path, n);
+}
+
 int32_t am_native_Fs_rename(am_runtime_t *rt, am_process_t *proc) {
     am_wstring_t *ws_new = NULL;
     am_wstring_t *ws_old = NULL;
@@ -724,6 +746,7 @@ static const am_native_func_entry_t am_native_Fs_funcs[] = {
     { L"append", am_native_Fs_append },
     { L"remove", am_native_Fs_remove },
     { L"rename", am_native_Fs_rename },
+    { L"abspath", am_native_Fs_abspath },
 };
 
 const am_native_lib_entry_t am_native_Fs_lib = {

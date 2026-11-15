@@ -76,6 +76,11 @@ extern "C" {
 //      (App.back_requested)                  ; 用户按了硬 A/ESC（取走即清零）
 //      (App.modal_closed)                    ; 最近一次宿主模态框已关闭（取走即清零）
 //
+//  拉起另一个 App（App → App，见下）：
+//      (App.launch "markdown")               ; 请求宿主拉起 app/markdown.scm
+//      (App.launch_with "markdown" 路径)     ; 同时传 1 个字符串作为启动参数
+//      (App.launch_arg)                      ; 本实例收到的启动参数（取走即清零）
+//
 //  本地库契约：全部值型过程——每条 return 0 路径恰好压 1 值 + step 1 次（N1/N6）；
 //  仅 (App.exit)/(App.exit_with) 走 N7 阻塞路径（压 0 不 step）。
 ////////////////////////////////////////////////////////////////////////////
@@ -142,6 +147,55 @@ int32_t am_native_App_name(am_runtime_t *rt, am_process_t *proc);
 int32_t am_native_App_platform(am_runtime_t *rt, am_process_t *proc);
 
 // ---------------------------------------------------------------------------
+// 拉起另一个灵机 App（App → App）
+//
+//  为什么需要：App 之间此前完全隔离——文件管理器只能「显示详情」，打不开
+//  阅读器/播放器；每个 App 都得自己抄一份别人的功能（或者干脆不做）。本组接口
+//  把「把控制权交给另一个 App」变成一条与 (App.exit)/(App.hide) 同构的**请求**。
+//
+//  三段式（与 exit/hide 逐字同构，原因也一样）：
+//    ① (App.launch*) 在**进程内**只做「校验 + 置请求位」，压 #t 后继续跑完这一拍
+//       （不能在 native 函数里销毁/切换运行时：栈上还压着当前进程的上下文）；
+//    ② 宿主在**本帧泵完之后**（ui_scheme_app_perform_launch）执行切换：
+//       定槽 → 调用者让出前台 → 目标上前台 → 交付启动参数；
+//    ③ 目标 App 在**启动（boot）或下一拍**里 (App.launch_arg) 取走参数。
+//
+//  调用者去往何处：
+//    · 多实例平台（WASM/桌面，实例槽 3）——调用者被**挂起冻结**（与 (App.hide)
+//      同一条通道）：解释器与内存池原地保留，列表里带「● 运行中」角标，选中即恢复
+//      原状态。目标 App 退出后仍回应用列表（本机制不引入导航栈）。
+//    · 单实例平台（ESP32，实例槽 1）——没有后台能力，调用者被**销毁**
+//      （等价于「拉起即替换」，与该平台 (App.hide) 的退化语义一致）。
+//
+//  目标已在后台（曾切后台/曾被拉起）：走「恢复」路径，实例内的状态全部保留；
+//  新的一次拉起只把新的启动参数交给它（(App.launch_arg) 会再取到一条）——
+//  这就是「同一个阅读器被再次拉起、打开另一篇文档」的自然实现。
+//
+//  失败一律软失败（返回 #f）：名字为空/超长、参数超长、已有未处理的拉起请求、
+//  目标 App 不存在（宿主注册了存在性钩子时）、目标是调用者自己。宿主侧另会
+//  打印一行 [scheme-app] 拉起失败：… 便于事后排查；调用者不受影响（继续活着）。
+//
+//  名字的写法：app/ 下源码文件名去 .scm（= 应用列表里显示的名字），也接受
+//  "xxx.scm" 与 "app/xxx.scm"。注意列表显示名在宿主侧按 SCHEME_APP_NAME_MAX 截断
+//  （当前 39 个字符），超长文件名请用截断后的名字。
+// ---------------------------------------------------------------------------
+
+// 启动参数的长度上限（码点）。取 256：宿主绝对路径的上限是 FS_PATH_MAX=256 **字节**
+// （UTF-8），再长的参数在 Fs/Gfx 侧也会被拒，故更长的参数一律拒绝而不是静默截断。
+#define AM_NATIVE_APP_LAUNCH_ARG_MAX (256)
+
+// (App.launch name:String) : Boolean —— 请求宿主拉起另一个 App（不带参数）。
+//   #t = 请求已排队（将在本帧末执行）；#f = 未受理（见上方失败清单）
+int32_t am_native_App_launch(am_runtime_t *rt, am_process_t *proc);
+
+// (App.launch_with name:String arg:String) : Boolean —— 同上，并传递 1 个字符串
+int32_t am_native_App_launch_with(am_runtime_t *rt, am_process_t *proc);
+
+// (App.launch_arg) : String | #null —— 本实例收到的启动参数；**取走即清零**
+//   （语义同 (App.back_requested)；没有参数时返回 #null，空串从不会被交付）
+int32_t am_native_App_launch_arg(am_runtime_t *rt, am_process_t *proc);
+
+// ---------------------------------------------------------------------------
 // 宿主服务接口（供 ui_scheme_app.c 使用；Scheme 侧不可见）
 // ---------------------------------------------------------------------------
 
@@ -204,6 +258,23 @@ void am_native_app_mark_exit_confirmed(am_runtime_t *rt);
 
 // 宿主模态框关闭时调用（置 (App.modal_closed) 标志）
 void am_native_app_notify_modal_closed(void);
+
+// ---------------------------------------------------------------------------
+// 拉起：宿主侧服务（Scheme 不可见）
+// ---------------------------------------------------------------------------
+
+// 取走未处理的拉起请求（**取走即清零**）。
+// 返回 1 = 取到请求（name/arg 已拷入调用方缓冲，无参数时 arg 为空串）；0 = 没有请求。
+// name 容量建议 >= 64 码点，arg 容量建议 >= AM_NATIVE_APP_LAUNCH_ARG_MAX。
+int32_t am_native_app_launch_take(wchar_t *name, size_t ncap, wchar_t *arg, size_t acap);
+
+// 交付启动参数给**刚上前台的实例**：宿主必须在 am_native_app_reset() 之后调用
+// （reset 会清空 inbox；冷启动/恢复两条路径都以 reset 收尾）。arg 为 NULL/空串 = 无参数。
+void am_native_app_set_launch_arg(const wchar_t *arg);
+
+// 注册「App 名字是否存在」的查询钩子（宿主 ui_scheme_app.c 提供）；传 NULL 注销。
+// 未注册时 (App.launch) 无法预先校验名字，一律按"受理"处理（由宿主在帧末打日志）。
+void am_native_app_bind_lookup(int32_t (*fn)(const wchar_t *name));
 
 #ifdef __cplusplus
 }

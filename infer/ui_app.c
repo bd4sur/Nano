@@ -5082,12 +5082,18 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 泵一个时间片（解释器内部抢占分帧）；推屏时机由 App 源码控制
         ui_scheme_app_render_frame(key_event, global_state);
 
-        // 退出 / 切后台判定，放在本帧泵完**之后**——这样 (App.exit) 返回 #t 之后，
+        // 退出 / 切后台 / 拉起判定，放在本帧泵完**之后**——这样 (App.exit) 返回 #t 之后，
         // App 还有整整一个时间片把当前这一拍里的收尾代码（落盘/清理）跑完，然后本帧末
-        // 才销毁（退出）或冻结（切后台）。
+        // 才销毁（退出）、冻结（切后台）或切换（拉起另一个 App）。
+        // 优先级：退出 > 拉起 > 切后台（一个 App 同时发多条请求时行为确定）。
         if (ui_scheme_app_should_exit(global_state)) {
             ui_scheme_app_on_exit();
             global_state->STATE = STATE_SCHEME_APP_LIST;
+        }
+        else if (ui_scheme_app_perform_launch(global_state)) {
+            // (App.launch)/(App.launch_with)：宿主机已完成切换（目标已上前台，
+            // 调用者已冻结保留或销毁），状态机仍是 STATE_SCHEME_APP_RUN，
+            // 下一帧由新 App 自己绘制（PREV_STATE 未变，不会再跑 init）。
         }
         else if (ui_scheme_app_should_hide(global_state)) {
             // (App.hide) / 退出确认框的「后台」：实例与内存池保留，回列表（带 ● 角标）

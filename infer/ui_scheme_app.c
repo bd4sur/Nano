@@ -192,6 +192,11 @@ static void app_instance_destroy(UI_Scheme_App_State *inst);
 static void app_instance_foreground(UI_Scheme_App_State *inst);
 static void app_instance_suspend(UI_Scheme_App_State *inst);
 
+// 名字 → s_apps[] 下标（拉起用；接受 "markdown"/"markdown.scm"/"app/markdown.scm"）
+static int32_t app_desc_find_name(const wchar_t *name);
+// 宿主服务钩子：给 (native App) 做 (App.launch) 的名字存在性校验
+static int32_t app_host_lookup_app(const wchar_t *name);
+
 // 模态文本输入/输出（本地库 Ui）宿主侧：状态与服务的定义在文件后半部分，
 // 此处前置声明供 render_frame / on_exit 引用。
 static int32_t s_modal_active = 0;   // 模态框是否在显示
@@ -542,6 +547,8 @@ int32_t ui_scheme_app_init(Key_Event *key_event, Global_State *global_state) {
     am_native_gfx_bind(global_state->gfx);
     // Raster 本地库直写同一块帧缓冲（App 自己 (Raster.dispose) 负责释放内部缓冲）
     am_native_raster_bind(global_state->gfx);
+    // (App.launch*) 的名字存在性校验钩子（App 库是进程级单例状态，只需注册一次）
+    am_native_app_bind_lookup(app_host_lookup_app);
 
     // ① 同一个 App 已有实例（后台冻结中）→ 直接恢复，不重建解释器
     inst = app_instance_find(s_apps[s_selected].source_rel);
@@ -1272,4 +1279,150 @@ void ui_scheme_app_resume_current(void) {
 // 是否有活着的后台实例（列表角标用）
 int32_t ui_scheme_app_has_live_instance(const char *source_rel) {
     return app_instance_find(source_rel) != NULL;
+}
+
+// ===============================================================================
+// 拉起另一个 App（App → App）
+//
+// 机制说明见 am_native_App.h 与 ui_scheme_app.h。本段只负责“帧末那一下子”：
+// 定槽 → 让出前台 → 目标上前台 → 交付启动参数。
+// ===============================================================================
+
+// 名字 → s_apps[] 下标。接受三种写法：“markdown” / “markdown.scm” / “app/markdown.scm”。
+// 比较对象是列表**显示名**（扫描时已去 .scm 并按 SCHEME_APP_NAME_MAX-9 截断），
+// 所以超长文件名需用截断后的名字——这是刻意的：可拉起集合与列表里能点到的集合一致。
+static int32_t app_desc_find_name(const wchar_t *name) {
+    wchar_t base[SCHEME_APP_NAME_MAX * 2];
+    size_t n = 0;
+    size_t start = 0;
+    size_t m = 0;
+    int32_t i;
+
+    if (name == NULL || s_apps == NULL || s_app_count <= 0) return -1;
+    n = wcslen(name);
+    if (n == 0 || n >= sizeof(base) / sizeof(base[0])) return -1;
+
+    // 取 basename（容忍 "app/xxx.scm" 写法）
+    for (size_t k = 0; k < n; k++) {
+        if (name[k] == L'/') start = k + 1;
+    }
+    for (size_t k = start; k < n; k++) base[m++] = name[k];
+    base[m] = L'\0';
+
+    // 去 ".scm" 后缀（不区分大小写，与 scanning 时的过滤一致）
+    if (m >= 4
+        && base[m - 4] == L'.'
+        && ascii_lower((char)(base[m - 3] & 0xFF)) == 's'
+        && ascii_lower((char)(base[m - 2] & 0xFF)) == 'c'
+        && ascii_lower((char)(base[m - 1] & 0xFF)) == 'm') {
+        m -= 4;
+        base[m] = L'\0';
+    }
+    if (m == 0) return -1;
+
+    for (i = 0; i < s_app_count; i++) {
+        if (wcscmp(s_apps[i].title, base) == 0) return i;
+    }
+    return -1;
+}
+
+static int32_t app_host_lookup_app(const wchar_t *name) {
+    return (app_desc_find_name(name) >= 0) ? 1 : 0;
+}
+
+int32_t ui_scheme_app_perform_launch(Global_State *global_state) {
+    wchar_t name[SCHEME_APP_NAME_MAX * 2];
+    wchar_t arg[AM_NATIVE_APP_LAUNCH_ARG_MAX];
+    wchar_t caller_title[SCHEME_APP_NAME_MAX];
+    UI_Scheme_App_State *caller = s_app;
+    UI_Scheme_App_State *target = NULL;
+    int32_t idx;
+    int32_t cold = 0;
+
+    // 取请求（取走即清零）。无请求是常态，直接返回。
+    if (!am_native_app_launch_take(name, sizeof(name) / sizeof(name[0]),
+                                  arg, sizeof(arg) / sizeof(arg[0]))) {
+        return 0;
+    }
+    if (caller == NULL) {
+        printf("[scheme-app] 拉起失败：没有前台实例\n");
+        return 0;
+    }
+    wcsncpy(caller_title, caller->title, SCHEME_APP_NAME_MAX - 1);
+    caller_title[SCHEME_APP_NAME_MAX - 1] = L'\0';
+
+    // ① 名字解析
+    idx = app_desc_find_name(name);
+    if (idx < 0) {
+        printf("[scheme-app] 拉起失败：找不到 App \"%ls\"（app/ 下没有对应的 .scm）\n", name);
+        return 0;
+    }
+    if (strcmp(s_apps[idx].source_rel, caller->source_rel) == 0) {
+        printf("[scheme-app] 拉起失败：目标是当前 App 自己（%ls）\n", name);
+        return 0;
+    }
+
+#if SCHEME_APP_INST_MAX <= 1
+    // 单实例平台：没有后台槽位。先销毁调用者再建目标（“拉起即替换”），
+    // 否则 app_instance_alloc 会因“唯一槽位是前台、不可驱逐”而失败。
+    // 这里绕过了 ui_scheme_app_on_exit，所以把它的两项释放动作补上（模态请求 +
+    // (native Chat) 的推理引擎——引擎是 C 侧全局单例，不随解释器池回收）。
+    printf("[scheme-app] 本平台无后台能力（实例槽位 %d）：拉起即替换调用者\n",
+           (int32_t)SCHEME_APP_INST_MAX);
+    am_native_ui_abort();
+    am_native_chat_release();
+    app_instance_destroy(caller);
+    s_app = NULL;
+    s_selected = idx;
+    target = app_instance_alloc(idx);
+    if (target == NULL) {
+        printf("[scheme-app] 拉起失败：实例槽位不可用\n");
+        return 0;
+    }
+    cold = 1;
+#else
+    // 多实例平台：**先定目标槽位再让出前台**。此刻调用者仍是前台，
+    // app_instance_alloc 的 LRU 驱逐只看后台实例，因此绝不可能驱逐调用者自己。
+    target = app_instance_find(s_apps[idx].source_rel);
+    if (target == NULL) {
+        s_selected = idx;
+        target = app_instance_alloc(idx);   // 可能驱逐最久未用的后台实例
+        if (target == NULL) {
+            printf("[scheme-app] 拉起失败：实例槽位不足且无可驱逐的后台实例\n");
+            return 0;
+        }
+        cold = 1;
+    }
+    s_selected = idx;
+
+    // 让出前台：调用者冻结保留（与 (App.hide) 同一条通道）
+    app_instance_suspend(caller);
+    s_app = NULL;
+#endif
+
+    // ③ 目标上前台（冷启动 / 恢复后台实例）
+    s_app = target;
+    if (cold) {
+        // 冷启动需要绑定绘图目标（同 ui_scheme_app_init 的冷启动路径）
+        am_native_gfx_bind(global_state->gfx);
+        am_native_raster_bind(global_state->gfx);
+        app_instance_cold_start(global_state);
+    }
+    else {
+        app_instance_foreground(target);
+    }
+
+    // ④ 交付启动参数（必须在 cold_start / foreground 里的 am_native_app_reset 之后，
+    //    否则会被 reset 清掉——这是本机制最容易写错的一步）
+    am_native_app_set_launch_arg(arg);
+
+    // 恢复路径下画面归新 App，下一帧由它的 (App.resumed) 重绘：先请求一次整屏刷新
+    global_state->is_full_refresh = 1;
+
+    printf("[scheme-app] 拉起 %ls → %ls（%s%s%ls）\n",
+           caller_title, target->title,
+           cold ? "冷启动" : "恢复后台实例",
+           (arg[0] != L'\0') ? "，参数 " : "",
+           (arg[0] != L'\0') ? arg : L"");
+    return 1;
 }

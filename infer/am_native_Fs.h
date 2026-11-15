@@ -56,6 +56,12 @@ extern "C" {
 //                                                拒绍删除业务资源根本身
 //    (Fs.rename old new)   : Boolean          —— 重命名 / 移动（文件或目录，同一资源根内）；
 //                                                目标已存在时**拒绍**（不静默覆盖）
+//    (Fs.abspath path)     : String | #null   —— 相对资源根的路径 → **宿主绝对路径**
+//                                                （已是 '/' 开头则原样返回；尾部 "/." 与多余
+//                                                '/' 归一化，故 (Fs.abspath ".") == 资源根）。
+//                                                用途：把路径交给**别的 App**（App.launch 的
+//                                                启动参数约定为绝对路径，见 am_native_App.h）；
+//                                                非法/超长路径 → #null。
 //
 //  读入上限：AM_NATIVE_FS_READ_MAX（128 KB）。超限返回 #null 而不是截断——
 //  截断会让 App 在不知情的情况下损坏数据；App 可先用 (Fs.size path) 判断。
@@ -128,6 +134,10 @@ int32_t am_native_Fs_remove(am_runtime_t *rt, am_process_t *proc);
 
 // (Fs.rename old:String new:String) : Boolean —— 重命名/移动（目标已存在则 #f）
 int32_t am_native_Fs_rename(am_runtime_t *rt, am_process_t *proc);
+
+// (Fs.abspath path:String) : String | #null —— 资源根相对路径 → 宿主绝对路径
+//   （已在根外的绝对路径原样返回；尾部 "/." 与多余 '/' 归一化；非法/超长 → #null）
+int32_t am_native_Fs_abspath(am_runtime_t *rt, am_process_t *proc);
 
 #ifdef __cplusplus
 }

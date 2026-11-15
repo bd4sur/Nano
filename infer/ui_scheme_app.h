@@ -71,6 +71,24 @@ void ui_scheme_app_resume_current(void);
 // 某个 App 是否还有活着的实例（列表「● 运行中」角标用）
 int32_t ui_scheme_app_has_live_instance(const char *source_rel);
 
+// ---------------- 拉起另一个 App（App → App） -------------
+//
+// 帧末执行 (App.launch)/(App.launch_with) 排下的请求（三段式的第二段，见
+// am_native_App.h “拉起另一个灵机 App”）：
+//   ① 名字 → s_apps[] 下标（接受 "markdown" / "markdown.scm" / "app/markdown.scm"）；
+//   ② 定目标实例槽位——**必须在调用者仍是前台的时刻完成**（app_instance_alloc 只会
+//      驱逐后台实例，否则会出现“拉起别人把自己驱逐掉”）；
+//   ③ 调用者让出前台（多实例平台 = 冻结保留，与 (App.hide) 同一条通道；单实例平台
+//      = 销毁，等同“拉起即替换”）；
+//   ④ 目标上前台（已有后台实例 → 恢复；否则冷启动）；
+//   ⑤ 交付启动参数（必须在 am_native_app_reset 之后，否则会被清掉）。
+//
+// 返回值：1 = 已切换到目标 App（本帧到此为止，ui_app.c 直接 break）；
+//         0 = 无请求或拉起失败（调用者继续前台，已打日志）。
+//
+// 优先级：由 ui_app.c 保证「退出 > 拉起 > 切后台」。
+int32_t ui_scheme_app_perform_launch(Global_State *global_state);
+
 // 是否应该销毁本 App 实例（1-是）。由 ui_app.c 的状态机在**泵完本帧之后**调用：
 //   · (App.exit_now) / (App.hide) → 立即退出；
 //   · (App.exit) 已获用户确认 → 先给 App **收尾窗口**（AM_NATIVE_APP_EXIT_GRACE_MS，

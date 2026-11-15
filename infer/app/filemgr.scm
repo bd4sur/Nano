@@ -5,7 +5,9 @@
 ;;   · 列表查看：当前目录下的**文件与目录**——**目录永远排在文件前面，同类内按名字升序**
 ;;     （排序在 Scheme 层做，不依赖各平台 readdir 顺序）；目录以「名字/」+ 蓝色区分；
 ;;   · 列表顶部固定一条 **".."（返回上级目录）** 条目（根目录下变灰，点了只提示）；
-;;   · 进入目录 / 返回上级；文件选中后「进入」= 显示详情（路径 / 大小 / 类型）；
+;;   · 进入目录 / 返回上级；文件选中后「进入」= **用对应类型的 App 打开**
+;;     （映射表见下方 openers；txt / md / markdown → Markdown 阅读器 App）；
+;;     没有映射的类型仍弹出详情框（路径 / 大小 / 类型）；
 ;;   · 新建文件：默认 **.txt**，默认文件名为**时间戳**（如 20261020-020000.txt）；
 ;;   · 新建目录：默认名同样是时间戳；
 ;;   · 重命名 / 移动：改名时可带 "/" 指定其它目录（同一资源根内移动）；
@@ -31,7 +33,8 @@
 ;;      移动已经可用：它在同一文件系统内就是 (Fs.rename ...)，见 op_rename。
 ;;
 ;; 交互：
-;;   · 点按列表行 = 选中；再点已选中的行 = 进入/详情/返回上级（小屏没有双击，靠"再点一次"）；
+;;   · 点按列表行 = 选中；再点已选中的行 = 进入目录 / 打开文件 / 返回上级（小屏没有双击，
+;;     靠“再点一次”）；
 ;;   · 底栏两排按钮：进入 / 新建文件 / 新建目录 / 重命名 / 删除（第一排），
 ;;     上级 / 复制(预留) / 移动(预留) / 刷新（第二排）；
 ;;   · 实体键盘：↑↓ 选择，Enter 进入，退格(8) 上级；
@@ -306,13 +309,64 @@
     (Ui.message_titled name
                        (String.concat body (String.concat "类型：" kind)))))
 
+;; ---- 打开即拉起：文件类型 → 灵机 App 映射表 ----------------------------
+;;
+;; "打开文件"在这里不是本 App 自己实现的事，而是**把控制权交给能看懂它的 App**：
+;;   · 表项 = (mk2 扩展名列表 应用名)；扩展名列表不含点、逗号分隔、大小写不敏感
+;;     （直接用 FSX.ext_match 的既有语义）；应用名 = app/ 下源码文件名去 .scm
+;;     （即「灵机应用程序」列表里的显示名）；
+;;   · 拉起时传一个字符串参数 = **待打开文件的宿主绝对路径**（用 (Fs.abspath) 从
+;;     资源根相对路径换算；约定见 am_native_App.h 的 (App.launch_with ...)）；
+;;   · 宿主把本 App **冻结保留**（列表里带「● 运行中」角标），目标 App 退出后回列表；
+;;   · 新增一个"查看器"只需在这张表里加一行（并保证那个 .scm 在 app/ 下）。
+;; 表项顺序即匹配优先级；没有命中的类型照旧弹详情框（行为与以前一致）。
+(define openers (cdr '(0)))
+
+(define build_openers
+  (lambda ()
+    (set! openers (new_list))
+    (push openers (mk2 "md,markdown" "markdown"))
+    (push openers (mk2 "txt" "markdown"))
+    #t))
+
+;; 文件名 → 应用名（#f = 没有可拉起的 App，调用方退化为显示详情）
+(define opener_for
+  (lambda (name)
+    (define n (length openers))
+    (define i 0)
+    (define r #f)
+    (while (< i n)
+      { (if r
+            #f
+            (if (== (FSX.ext_match name (get_item (get_item openers i) 0)) 1)
+                (set! r (get_item (get_item openers i) 1))
+                #f))
+        (set! i (+ i 1)) })
+    r))
+
+;; 打开一个文件：有映射 → 拉起对应 App（传绝对路径）；无映射 → 显示详情
+(define op_open
+  (lambda (name)
+    (define app (opener_for name))
+    (define ap #f)
+    (if app
+        { (set! ap (Fs.abspath (FSX.join cur name)))
+          (if (null? ap)
+              (say_warn "路径过长，无法作为启动参数传递")
+              (if (App.launch_with app ap)
+                  { (display "FMOPEN ") (display name) (display " -> ") (display app) (newline)
+                    (say (String.concat "打开 " (String.concat name
+                           (String.concat " → " app)))) }
+                  (say_warn (String.concat "拉起失败：" app)))) }
+        (show_info name))))
+
 (define op_enter
   (lambda ()
     (define row (sel_row))
     (if row
         (if (== (get_item row 1) 1)
             (goto (FSX.join cur (get_item row 0)))
-            (show_info (get_item row 0)))
+            (op_open (get_item row 0)))
         (op_up))))     ;; 选中 ".." 行（或空列表）= 返回上级
 
 (define op_new_file
@@ -713,6 +767,7 @@
     { (set! SW (Gfx.width))
       (set! SH (Gfx.height))
       (build_ops)
+      (build_openers)
       (load_dir)
       (draw_all)
       (set! ts (System.set_interval 60 tick)) }))
