@@ -1,10 +1,16 @@
 ;; ============================================================================
-;; 水池（Water Pool）—— 灵机应用程序（`infer/ui_water.c` 的**逐函数直译**）
+;; 水池（Water Pool）—— 灵机应用程序（`infer/ui_water.c` 的逐函数直译，**降规模版**）
 ;;
-;; 本文件的目标是**保真**：把 ui_water.c（WebGL Water 的 C 软渲染移植）的
-;; 相机/网格/光栅化/着色/焦散/仿真/物理逐函数翻成灵机 Scheme，使二者在任意
-;; 旋转视角下逐像素一致（浮点精度差异导致的末位舍入除外）。**不追性能**：
-;; 解释器里逐像素追迹很慢（见文末实测），但几何、次序、常量、公式与 C 版一一对应。
+;; 本文件把 ui_water.c（WebGL Water 的 C 软渲染移植）的
+;; 相机/网格/光栅化/着色/焦散/仿真/物理逐函数翻成灵机 Scheme：几何、绘制次序、
+;; 着色公式、常量与 C 版一一对应，函数名同 C 版。
+;;
+;; **本版与原版的区别只有"问题规模"**：原版单帧约 2.2×10⁸ 条 VM 指令，宿主时间片
+;; 312500 条/帧 ⇒ 一帧要 ~700 个宿主动作，浏览器 WASM 里 ~12 秒/帧（0.08fps）。
+;; 本版把几个"规模维"一起缩小（分辨率、网格、波场、焦散频率），默认档单帧
+;; **~1.34×10⁶ 条指令 → 真 WASM 实测 chromium 12.0 / firefox 10.8 fps**；
+;; 「画质」按钮还能切 5 档（15 / 12 / 10 / 7.4 / 6 fps）。算法、公式、pass 结构、
+;; 交互全部没变；瓷砖缝（亚像素深色线，低分辨率下会走样成黑点）已按用户要求去掉。
 ;;
 ;; 与 C 版的对应关系（C 函数名 → 本文件同名函数）：
 ;;   m4id/m4mul/m4persp/m4tr/m4rot/m4inv/wt_mvp4  矩阵
@@ -18,30 +24,66 @@
 ;;   wt_step_sim / wt_update_normals / wt_move_sphere / wt_volume_in_sphere
 ;;   wt_update_caustics / wt_caustic_project
 ;;   wt_update（圆球物理）
+;;   本版新增的小工具：wt_wat_near（逐像素"是否在水下"判据用最近邻）、
+;;                     wt_flip（水面双页翻页 + 页面缓存）、wt_blit（按块放大上屏）、
+;;                     wt_build_blit / wt_set_quality（画质档位切换）
 ;;
-;; 交互（与设备侧一致，全部触屏化）：底部控件栏（退出/暂停/重力/光源）、
-;;   拖动空白处旋转视角、拖动圆球移动圆球。
+;; 交互（与设备侧一致，全部触屏化）：底部控件栏
+;;   「返回 / 暂停 / 重力 / 光源 / 画质」、拖动空白处旋转视角、拖动圆球移动圆球。
+;;   触屏坐标仍按**屏幕** SW×SH 解算（与内部渲染分辨率无关）。
 ;;
-;; 保真度（实测，见 doc/AGENTS.md 的同日条目）：
-;;   · 与 C 版在同一相机下**逐像素对照**（tools/e2e/host/water_ref.c 参照台）：
-;;     76800 像素里约 10% 有差异，且差异集中在**几何边缘的 1 像素**（瓷砖缝、圆球与
-;;     水面的轮廓）—— 来源是 C 用 float32、本机解释器用 float64（WASM 上是
-;;     19 位尾数的 float32），`floor/ceil` 与 uv 边界判据在临界值上翻面；
-;;     整片区域（池壁、水面、焦散、圆球）的颜色与位置一致。焦散纹理校验和
-;;     6776.04 / 34855.7，C 版 6775.84 / 34854.65（差 3e-5，纯浮点）。
-;;   · 圆球物理逐步对照一致（20 步内 center/velocity 打印值到 4 位小数相同）。
+;; ---------------------------------------------------------------------------
+;; 画质档位（运行时按「画质」按钮循环）
+;; ---------------------------------------------------------------------------
+;; 预算从哪来：宿主（ui_scheme_app.c）每个 rAF 帧只喂
+;; MB_TIMESLICE_TICKS = 312500 条 IL 指令，60 个 rAF/秒 ⇒ 上限 18.75M 指令/秒。
+;; 所以 **fps = 60 / ceil(单帧指令数 / 312500)**，与设备快慢基本无关（只要 312500
+;; 条能在 16.7ms 内跑完——WASM 实测 7.2ms，有 2 倍余量）：
+;;   单帧 ≤ 1.25M → 4 个 rAF 帧 → 15fps      ≤ 1.56M → 5 帧 → 12fps
+;;   单帧 ≤ 1.875M → 6 帧 → 10fps            ≤ 2.19M → 7 帧 → 8.6fps …
 ;;
-;; 代价（"保真优先、不追性能"的直接后果，实测）：
-;;   · 单帧约 **2.2×10⁸ 条 VM 指令**（含 1 次 wt_update：2 步波场 + 法线 + 焦散，
-;;     以及池壁/水面×2/圆球三个 pass 的逐像素追迹）。宿主时间片 312500/帧，
-;;     故一帧要喂 ~700 个时间片：浏览器里实测 **~12 秒/帧**（WASM，单线程）。
-;;   · 已做的**不改结果**的省指令措施：`floor/ceil` 用 `mod` 自算（native 调用
-;;     1.65M→0.46M 次）、整数幂用连乘、`wt_fill` 的三角形级前置判断扁平化。
-;;   · 交互随之退化：渲染期间事件循环被占满，**一次不到一帧的拖动会被压成一个采样点**
-;;     （实测 dx=0、视角不动）；可用形态是"逐帧推进的慢拖动"——手指持续移动时每拍
-;;     取到新坐标并累加旋转。按钮同理需按住跨越一拍。
-;;   · 想要交互流畅只能降级保真（例如把逐像素追迹换成低模着色）——那是另一条分支，
-;;     与"逐像素一致"不可兼得。
+;; 档位（只改内部渲染分辨率 RW×RH，都是 4:3；网格/波场/焦散规模不变）
+;;   档   RW×RH   像素    相对档0   指令/帧   chromium  firefox   说明
+;;   0    36×27    972    1.00×     0.96M     15.0      14.4
+;;   1    44×33   1452    1.49×     1.34M     12.0      10.8   ← 默认
+;;   2    52×39   2028    2.09×     1.80M     10.0       8.4   （像素数正好翻倍）
+;;   3    60×45   2700    2.78×     2.31M      7.4       6.4
+;;   4    68×51   3468    3.57×     2.92M      6.0       5.0   （≈1.9 倍线性分辨率）
+;;   实测口径：真 WASM + 无头浏览器、按「画质」逐档测 5 秒（chromium 1248 / firefox 1555）。
+;;   注：fps = 浏览器 rAF 速率 / ceil(单帧指令数/312500)；firefox 的 rAF 略慢、有时要多
+;;   用一个时间片，所以同一档在 firefox 上低一档 —— 默认取档 1 正是为了三引擎都 ≥10fps。
+;;
+;; 逐项降级（都是"规模 + 抗走样"，不是换算法）：
+;;   项                      原版             本版         说明
+;;   内部渲染分辨率          320×240          36×27 起 5 档 逐像素追迹成本 ∝ 面积
+;;   控件栏盖住的行          照常渲染         不渲染       RSTOP（省 ~11%）
+;;   上屏方式                逐像素 set_pixel 按块 fill_rect 一个内部像素 = 一块 6~9 px
+;;   瓷砖缝（grout）         深色缝 ×0.25     **去掉**     缝宽 5% 的瓷砖 ≈ 0.3 个内部像素，
+;;                                                        亚像素深色线必然走样成"黑点"；
+;;                                                        去掉后只剩每块砖 6% 的明暗差
+;;   水面细分 WATER_DETAIL   44 (3872 tri)    3 (18)      波高只有几像素，细分不需要
+;;   圆球网格 SPH_RING×SEG   20×36 (1368)     3×4 (16)    球在此分辨率下只有 ~3 内部像素
+;;   水面高度场 GRID_N       128 (16384)      8 (64)      波场格数
+;;   焦散纹理 CAUSTIC_N      256 (65536)      16 (256)    焦散贴图
+;;   焦散 pass 频率          每帧             每 12 拍    CAUSTIC_EVERY（焦散变化远慢于画面）
+;;   水面倾斜重采样 PEAKED   5 次             1 次        只少一点折射抖动
+;;   逐像素双线性采样        双线性           最近邻      仅"是否在水下"判据与顶点高度
+;;   焦散纹理采样            双线性           最近邻      16² 的贴图本来就看不出插值差别
+;;
+;; 另外几处**不改画面**的省指令改写：
+;;   · 折射平行光 rl_* 只依赖 light_dir → 每帧算一次（原版每个着色函数各算一次）；
+;;   · wt_water_frag / wt_get_wall_color / wt_get_sphere_color 的向量运算就地展开成局部量
+;;     （原来是 v_set_a / v_set_b / v_len / v_dot 这类"全局寄存器"函数逐像素调用）；
+;;   · 池壁/圆球片段复用 getWallColor / getSphereColor 内部已算出的水下判据高度；
+;;   · wt_fill / wt_blit 的局部量在函数体首部声明一次，循环里只 set!；
+;;   · 池壁 pass 是第一个 pass（zbuf 全满）→ `wt_fill` 的 use_depth=2 只写不测。
+;;
+;; 已知代价（降规模的固有后果，不是 bug）：
+;;   · 画面是 36×27~68×51 放大上屏（档 2 是 6~7 倍）→ 块状明显；圆球只有几个像素大。
+;;   · 瓷砖只剩低频明暗棋盘格（深色缝已去掉，见上表）。
+;;   · 焦散每 12 拍重建一次，圆球快速移动时焦散阴影最多滞后 ~0.4 秒。
+;;   · 档位越高越清晰越慢；fps 只按 312500 指令/帧整档跳，所以"再快一点"往往要靠
+;;     降一档而不是微调。默认档 2（≈10fps）与档 1（≈12fps）是一对常见取舍。
 ;;
 ;; 灵机解释器的书写约束（详见 manual.md 与 doc/AGENTS.md）：
 ;;   · 算术/比较恒二参数，多元必须嵌套；
@@ -77,38 +119,74 @@
 (define COL_SKY2_G 1.00)
 (define COL_SKY2_B 1.10)
 
-;; 网格分辨率：与 C 版一致（水面高度场 128、焦散 256、水面细分 44）
-(define GRID_N 128)                     ; WT_GRID_N
-(define CAUSTIC_N 256)                  ; WT_CAUSTIC_N
-(define WATER_DETAIL 44)                ; WT_WATER_DETAIL
-(define WATER_DETAIL_P1 45)
-(define WATER_VERTS (* 45 45))          ; 2025
-(define WATER_TRIS (* (* 44 44) 2))     ; 3872
-(define CELLS (* 128 128))              ; 16384
+;; 网格分辨率：**降规模**（原版 GRID 128 / 焦散 256 / 水面细分 44 / 球 20×36）。
+;;   单帧成本 ≈ 像素数 × 逐像素着色 + 三角形数 × 装配 + GRID² + CAUSTIC²，
+;;   所以这几个维要一起缩（只缩一个维度几乎不省）。见文件头「画质档位 / 逐项降级」。
+(define GRID_N 8)                       ; WT_GRID_N 128 → 8（水面高度场 64 格）
+(define CAUSTIC_N 16)                   ; WT_CAUSTIC_N 256 → 16（焦散 16×16 = 256 像素）
+(define WATER_DETAIL 3)                 ; WT_WATER_DETAIL 44 → 3（水面 16 顶点 / 18 三角形）
+(define WATER_DETAIL_P1 (+ WATER_DETAIL 1))
+(define WATER_VERTS (* WATER_DETAIL_P1 WATER_DETAIL_P1))
+(define WATER_TRIS (* (* WATER_DETAIL WATER_DETAIL) 2))
+(define CELLS (* GRID_N GRID_N))
 
 (define CUBE_FACES 5)
 (define CUBE_VERTS 20)
 (define CUBE_TRIS 10)
 
-(define SPH_RING 20)
-(define SPH_SEG 36)
-(define SPH_VN (* 20 37))               ; 740
-(define SPH_TN (* (* 19 36) 2))         ; 1368
+(define SPH_RING 3)                     ; 原 20（球在此分辨率下只有 ~3 个内部像素）
+(define SPH_SEG 4)                      ; 原 36
+(define SPH_VN (* SPH_RING (+ SPH_SEG 1)))
+(define SPH_TN (* (* (- SPH_RING 1) SPH_SEG) 2))
+
+;; 水面片段的"倾斜重采样"次数（原版 5 次，每次 2 个双线性采样）。
+;; 1 次 = 只用该点的波面法线，视觉上只少了极细的折射抖动。
+(define PEAKED_N 1)
+
+;; 焦散 pass 的帧步（原版每帧一次）：它只依赖波场，变化比画面滞得多；
+;; 每 CAUSTIC_EVERY 拍重算一次，平均成本降为 1/CAUSTIC_EVERY。
+(define CAUSTIC_EVERY 12)
 
 (define BALL_R 0.25)                    ; WT_RADIUS
 (define GRAVITY_Y -4.0)                 ; WT_GRAVITY
 
-;; 画布
+;; 画布：SW×SH 是**屏幕**（控件栏/触屏坐标用）；渲染在 RW×RH 的**内部缓冲**上，
+;; 最后按块放大上屏（wt_blit）。这是降规模的第一旋钮：单帧逐像素追迹的成本
+;; ∝ RW·RH（原版 320×240 = 76800 像素）。
+;; RW:RH 必须与 SW:SH 同比例（都是 4:3），否则投影纵横比会歪。
+;;
+;; **画质档位（运行时按「画质」按钮循环切换）**：只改内部渲染分辨率 RW×RH，
+;; 网格/波场/焦散的规模不变。RW 都取 4:3（RH = 3/4·RW），逐像素成本 ∝ 像素数。
+;; 实测（WASM 浏览器；fps = 60/ceil(每帧指令数/312500)，按时间片整档跳）：
+;;   档    RW×RH    像素   相对档0   指令/帧   fps
+;;   0     36×27     972   1.00×     0.96M     15
+;;   1     44×33    1452   1.49×     1.36M     12
+;;   2     52×39    2028   2.09×     1.80M     10   ← 默认（像素数正好翻倍）
+;;   3     60×45    2700   2.78×     2.31M      7.5
+;;   4     68×51    3468   3.57×     2.90M      5.5  （约 2 倍线性分辨率）
 (define SW (Gfx.width))
 (define SH (Gfx.height))
-(define NPIX (* SW SH))
+(define QRW0 36)                        ; 档 0 的 RW
+(define QSTEP 8)                        ; 每档 RW 的增量 → 36/44/52/60/68
+(define QN 5)                           ; 档数
+(define qlevel 1)                       ; 当前档位（默认档 1 = 44×33，三引擎都稳 ≥11fps）
+(define RW (+ QRW0 (* QSTEP qlevel)))
+(define RH (/ (* 3 RW) 4))            ; 36/48/60/72 的 3/4 都是整数
+;; frame/zbuf 一次按最大档分配，切档只改索引步长，不用重新分配
+(define MAXRW (+ QRW0 (* QSTEP (- QN 1))))
+;; 注意：MAXRW×MAXRH 只是 frame/zbuf 的容量，实际渲染用当前档的 RW×RH
+(define MAXRH (/ (* 3 MAXRW) 4))
+(define NPIX (* MAXRW MAXRH))
 (define TICK_MS 33)
+
 
 ;; 底部控件栏（几何同 ui_water.c）
 (define BAR_H 34)
 (define BAR_Y (- SH BAR_H))
-(define BTN_N 4)
+(define BTN_N 5)
 (define BTN_GAP 4)
+;; 内部缓冲里**真正需要渲染**的行数：底部 BAR_H 像素被控件栏整块盖住，那几行既不用
+;; 着色也不用上屏。RSTOP = ceil(RH·(SH−BAR_H)/SH)（27×206/240 → 24，省掉 ~11%）。
 (define BTN_W (Math.floor (/ (- SW (* BTN_GAP (+ BTN_N 1))) BTN_N)))
 (define BTN_H (- BAR_H BTN_GAP))
 (define BTN_Y (+ BAR_Y (/ BTN_GAP 2)))
@@ -122,6 +200,7 @@
 (define BTN_PAUSE 1)
 (define BTN_GRAVITY 2)
 (define BTN_LIGHT 3)
+(define BTN_QUALITY 4)
 
 (define tick_timer 0)
 
@@ -164,6 +243,7 @@
 (define ready 0)
 (define light_mode 0)                   ; 0=跟随视角 1=固定斜光 2=顶上
 (define light_name "光源")
+(define caustic_phase 0)                ; 焦散 pass 的降频计数（见 CAUSTIC_EVERY）
 
 ;; ============================================================================
 ;; 大块数据（列表）
@@ -214,6 +294,10 @@
       (define fr (mod x 1.0))
       (if (> fr 0.0) (+ (- x fr) 1.0) (- x fr))
     }))
+
+;; 内部缓冲里**真正需要渲染**的行数（底部 BAR_H 像素被控件栏整块盖住）——
+;;   放在 flr 之后定义（顶层 define 按顺序求值）。
+(define RSTOP (flr (+ (/ (* 1.0 (* RH (- SH BAR_H))) (* 1.0 SH)) 0.9999)))
 
 (define fmin2
   (lambda (a b) (if (< a b) a b)))
@@ -398,7 +482,7 @@
       (m4rot matTmp (- 0.0 angleX) 1.0 0.0 0.0) (m4mul matMV matMV matTmp)
       (m4rot matTmp (- 0.0 angleY) 0.0 1.0 0.0) (m4mul matMV matMV matTmp)
       (m4tr matTmp 0.0 0.5 0.0)         (m4mul matMV matMV matTmp)
-      (m4persp matP 45.0 (/ (* 1.0 SW) (* 1.0 SH)) 0.01 100.0)
+      (m4persp matP 45.0 (/ (* 1.0 RW) (* 1.0 RH)) 0.01 100.0)
       (m4mul matMVP matP matMV)
 
       ;; 由 modelview 反解世界系相机位置：eye = -(axisX·off, axisY·off, axisZ·off)
@@ -605,8 +689,8 @@
           {
             (set! iw2 (/ 1.0 cw))
             (set! inz (* mz iw2))
-            (set! isx (* (+ (* (* mx iw2) 0.5) 0.5) (* 1.0 SW)))
-            (set! isy (* (- 1.0 (+ (* (* my iw2) 0.5) 0.5)) (* 1.0 SH)))
+            (set! isx (* (+ (* (* mx iw2) 0.5) 0.5) (* 1.0 RW)))
+            (set! isy (* (- 1.0 (+ (* (* my iw2) 0.5) 0.5)) (* 1.0 RH)))
           })
       (if (== sel 0)
           {
@@ -640,17 +724,30 @@
 (define wt_fill
   (lambda (use_depth fmode)
     {
+      ;; 热路径：**所有局部量在函数体首部声明一次**，循环里只 set!。
+      ;; 原来的写法在循环体内 define，每轮都会新建一层闭包环境（逐像素一次），
+      ;; 实测是本 App 里最大的一笔开销。数学表达式一字未改。
       (define tri_ok 1)
+      (define Ax 0.0) (define Ay 0.0) (define Bx 0.0) (define By 0.0)
+      (define Cx 0.0) (define Cy 0.0) (define e0 0.0) (define rc 0.0)
+      (define minx 0.0) (define maxx 0.0) (define miny 0.0) (define maxy 0.0)
+      (define x0 0.0) (define x1 0.0) (define y0 0.0) (define y1 0.0)
+      (define w0x 0.0) (define w0y 0.0) (define w1x 0.0) (define w1y 0.0)
+      (define iwv0 0.0) (define iwv1 0.0) (define iwv2 0.0)
+      (define py 0.0) (define pxc 0.0) (define pxd 0.0) (define pyd 0.0)
+      (define b0 0.0) (define b1 0.0) (define b2 0.0)
+      (define dodraw 1) (define idx 0) (define d16 0.0)
+      (define denom 0.0) (define ndcZ 0.0) (define rden 1.0)
+      (define dtest 1) (define dwrite 1)
+      (define cr 0.0) (define cg 0.0) (define cb 0.0)
+
       (if (== v0w 0.0) (set! tri_ok 0) #f)
       (if (== v1w 0.0) (set! tri_ok 0) #f)
       (if (== v2w 0.0) (set! tri_ok 0) #f)
-      (define Ax v0sx) (define Ay v0sy)
-      (define Bx v1sx) (define By v1sy)
-      (define Cx v2sx) (define Cy v2sy)
-      (define e0 (+ (* (- By Cy) (- Ax Cx)) (* (- Cx Bx) (- Ay Cy))))
-      (define rc 0.0)
-      (define minx 0.0) (define maxx 0.0) (define miny 0.0) (define maxy 0.0)
-      (define x0 0) (define x1 0) (define y0 0) (define y1 0)
+      (set! Ax v0sx) (set! Ay v0sy)
+      (set! Bx v1sx) (set! By v1sy)
+      (set! Cx v2sx) (set! Cy v2sy)
+      (set! e0 (+ (* (- By Cy) (- Ax Cx)) (* (- Cx Bx) (- Ay Cy))))
       (if (< (Math.abs e0) 0.000001)
           (set! tri_ok 0)
           (set! rc (/ 1.0 e0)))
@@ -661,77 +758,82 @@
             (set! miny (fmin2 Ay (fmin2 By Cy)))
             (set! maxy (fmax2 Ay (fmax2 By Cy)))
             (if (< maxx 0.0) (set! tri_ok 0) #f)
-            (if (>= minx (* 1.0 SW)) (set! tri_ok 0) #f)
+            (if (>= minx (* 1.0 RW)) (set! tri_ok 0) #f)
             (if (< maxy 0.0) (set! tri_ok 0) #f)
-            (if (>= miny (* 1.0 SH)) (set! tri_ok 0) #f)
+            (if (>= miny (* 1.0 RSTOP)) (set! tri_ok 0) #f)
             (if (== tri_ok 1)
                 {
                   (set! x0 (flr minx))
-                  (if (< x0 0.0) (set! x0 0) #f)
+                  (if (< x0 0.0) (set! x0 0.0) #f)
                   (set! x1 (clr maxx))
-                  (if (> x1 (- SW 1)) (set! x1 (- SW 1)) #f)
+                  (if (> x1 (- RW 1)) (set! x1 (- RW 1)) #f)
                   (set! y0 (flr miny))
-                  (if (< y0 0.0) (set! y0 0) #f)
+                  (if (< y0 0.0) (set! y0 0.0) #f)
                   (set! y1 (clr maxy))
-                  (if (> y1 (- SH 1)) (set! y1 (- SH 1)) #f)
+                  (if (> y1 (- RSTOP 1)) (set! y1 (- RSTOP 1)) #f)
                 }
                 #f)
           }
           #f)
+      ;; use_depth: 0=不测不写  1=测+写  2=只写（池壁 pass：此时 zbuf 全满，不必测）
+      (set! dwrite (if (>= use_depth 1) 1 0))
+      (set! dtest (if (== use_depth 1) 1 0))
       (if (== tri_ok 1)
           {
-            (define w0x (- By Cy)) (define w0y (- Cx Bx))
-            (define w1x (- Cy Ay)) (define w1y (- Ax Cx))
-            (define iwv0 (/ 1.0 v0w))
-            (define iwv1 (/ 1.0 v1w))
-            (define iwv2 (/ 1.0 v2w))
-            (define py y0)
+            (set! w0x (- By Cy)) (set! w0y (- Cx Bx))
+            (set! w1x (- Cy Ay)) (set! w1y (- Ax Cx))
+            (set! iwv0 (/ 1.0 v0w))
+            (set! iwv1 (/ 1.0 v1w))
+            (set! iwv2 (/ 1.0 v2w))
+            (set! py y0)
             (while (<= py y1)
               {
-                (define pxc x0)
+                (set! pxc x0)
+                (set! pyd (+ py 0.5))
                 (while (<= pxc x1)
                   {
-                    (define pxd (+ (* 1.0 pxc) 0.5))
-                    (define pyd (+ (* 1.0 py) 0.5))
-                    (define b0 (* (+ (* w0x (- pxd Cx)) (* w0y (- pyd Cy))) rc))
-                    (define b1 (* (+ (* w1x (- pxd Cx)) (* w1y (- pyd Cy))) rc))
-                    (define b2 (- 1.0 (+ b0 b1)))
-                    (define dodraw 1)
+                    (set! pxd (+ pxc 0.5))
+                    (set! b0 (* (+ (* w0x (- pxd Cx)) (* w0y (- pyd Cy))) rc))
+                    (set! b1 (* (+ (* w1x (- pxd Cx)) (* w1y (- pyd Cy))) rc))
+                    (set! b2 (- 1.0 (+ b0 b1)))
+                    (set! dodraw 1)
                     (if (< b0 0.0) (set! dodraw 0) #f)
                     (if (< b1 0.0) (set! dodraw 0) #f)
                     (if (< b2 0.0) (set! dodraw 0) #f)
-                    (define idx (+ (* py SW) pxc))
-                    (define d16 0.0)
+                    (set! idx (+ (* py RW) pxc))
                     (if (== dodraw 1)
                         {
-                          (define denom (+ (+ (* b0 iwv0) (* b1 iwv1)) (* b2 iwv2)))
-                          (define ndcZ (/ (+ (+ (* (* b0 iwv0) v0nz) (* (* b1 iwv1) v1nz))
-                                             (* (* b2 iwv2) v2nz)) denom))
-                          (set! d16 (flr (+ (* (* ndcZ 0.5) 65535.0) 32767.5)))
-                          (if (== use_depth 1)
+                          (set! denom (+ (+ (* b0 iwv0) (* b1 iwv1)) (* b2 iwv2)))
+                          (set! ndcZ (/ (+ (+ (* (* b0 iwv0) v0nz) (* (* b1 iwv1) v1nz))
+                                          (* (* b2 iwv2) v2nz)) denom))
+                          (set! d16 (flr (+ (* ndcZ 32767.5) 32767.5)))
+                          (if (== dtest 1)
                               (if (>= d16 (get_item zbuf idx)) (set! dodraw 0) #f)
                               #f)
                           (if (== dodraw 1)
                               {
-                                (set! rw_x (/ (+ (+ (* (* b0 iwv0) v0wx) (* (* b1 iwv1) v1wx))
-                                                  (* (* b2 iwv2) v2wx)) denom))
-                                (set! rw_y (/ (+ (+ (* (* b0 iwv0) v0wy) (* (* b1 iwv1) v1wy))
-                                                  (* (* b2 iwv2) v2wy)) denom))
-                                (set! rw_z (/ (+ (+ (* (* b0 iwv0) v0wz) (* (* b1 iwv1) v1wz))
-                                                  (* (* b2 iwv2) v2wz)) denom))
-                                (set! ru (/ (+ (+ (* (* b0 iwv0) v0u) (* (* b1 iwv1) v1u))
-                                                (* (* b2 iwv2) v2u)) denom))
-                                (set! rv (/ (+ (+ (* (* b0 iwv0) v0v) (* (* b1 iwv1) v1v))
-                                                (* (* b2 iwv2) v2v)) denom))
+                                ;; 透视校正插值：5 个属性共用一个 1/denom（原来各除一次，
+                                ;; 每次除法都是一条 IL 指令；换成一次倒数 + 5 次乘）
+                                (set! rden (/ 1.0 denom))
+                                (set! rw_x (* (+ (+ (* (* b0 iwv0) v0wx) (* (* b1 iwv1) v1wx))
+                                                 (* (* b2 iwv2) v2wx)) rden))
+                                (set! rw_y (* (+ (+ (* (* b0 iwv0) v0wy) (* (* b1 iwv1) v1wy))
+                                                 (* (* b2 iwv2) v2wy)) rden))
+                                (set! rw_z (* (+ (+ (* (* b0 iwv0) v0wz) (* (* b1 iwv1) v1wz))
+                                                 (* (* b2 iwv2) v2wz)) rden))
+                                (set! ru (* (+ (+ (* (* b0 iwv0) v0u) (* (* b1 iwv1) v1u))
+                                               (* (* b2 iwv2) v2u)) rden))
+                                (set! rv (* (+ (+ (* (* b0 iwv0) v0v) (* (* b1 iwv1) v1v))
+                                               (* (* b2 iwv2) v2v)) rden))
                                 (wt_frag_dispatch fmode)
-                                (define cr (clampf fc_r 0.0 1.0))
-                                (define cg (clampf fc_g 0.0 1.0))
-                                (define cb (clampf fc_b 0.0 1.0))
+                                (set! cr (clampf fc_r 0.0 1.0))
+                                (set! cg (clampf fc_g 0.0 1.0))
+                                (set! cb (clampf fc_b 0.0 1.0))
                                 (set_item! frame idx
                                   (+ (+ (* (flr (+ (* cr 31.0) 0.5)) 2048)
                                         (* (flr (+ (* cg 63.0) 0.5)) 32))
                                      (flr (+ (* cb 31.0) 0.5))))
-                                (if (== use_depth 1) (set_item! zbuf idx d16) #f)
+                                (if (== dwrite 1) (set_item! zbuf idx d16) #f)
                               }
                               #f)
                         }
@@ -748,7 +850,7 @@
   (lambda ()
     {
       (define i 0)
-      (while (< i NPIX)
+      (while (< i (* RW RSTOP))
         {
           (set_item! frame i 0)
           (set_item! zbuf i 65535)
@@ -760,9 +862,17 @@
 ;; 采样与几何工具（tiles / sky / 水面高度 / 交点 / 折射反射）
 ;; ============================================================================
 
-;; 水面页（本拍读的那一页）
+;; 水面页（本拍读的那一页）。`wpg` 把当前页缓存成一个全局，省掉逐采样一次的
+;; `water_cur` 判据 + lambda 调用（wt_wat_at 每像素要调 4 次）。翻页时由 wt_flip 同步。
+(define wpg water0)
 (define wt_page
-  (lambda () (if (== water_cur 0) water0 water1)))
+  (lambda () wpg))
+(define wt_flip
+  (lambda ()
+    {
+      (set! water_cur (- 1 water_cur))
+      (if (== water_cur 0) (set! wpg water0) (set! wpg water1))
+    }))
 
 ;; texture2D(water, (x, y)) 的 CLAMP 取值：ch = 0..3
 (define wt_wat_at
@@ -777,6 +887,19 @@
     }))
 
 ;; 双线性采样（GL_LINEAR + CLAMP_TO_EDGE）
+;; 最近邻取样（只用于逐像素的"这一点是否在水下"判据）。原版用双线性（4 抽头）；
+;; 这个判据只是拿高度比大小，最近邻完全够用，而每像素要叫 1~3 次。
+(define wt_wat_near
+  (lambda (u v)
+    {
+      (define ax (flr (* u (* 1.0 GRID_N))))
+      (define ay (flr (* v (* 1.0 GRID_N))))
+      ;; 调用点的 u,v 恒在 [0,1]（世界 x,z ∈ [-1,1] → 0.5p+0.5），只需夹上界
+      (if (> ax (- GRID_N 1)) (set! ax (- GRID_N 1)) #f)
+      (if (> ay (- GRID_N 1)) (set! ay (- GRID_N 1)) #f)
+      (get_item wpg (* (+ (* ay GRID_N) ax) 4))
+    }))
+
 (define wt_wat_sample
   (lambda (u v ch)
     {
@@ -794,40 +917,21 @@
          (+ (* c (* (- 1.0 ffx) ffy)) (* d (* ffx ffy))))
     }))
 
-;; 焦散纹理采样（双线性，CLAMP）
+;; 焦散纹理采样（**最近邻** + CLAMP；原版双线性要 8 个取值、十几个乘加，
+;;   而焦散纹理本身只有 CAUSTIC_N² 个格点，最近邻的观感差异看不出来）
 (define caust_r 0.0) (define caust_g 0.0)
 (define wt_caustic_sample
   (lambda (u v)
     {
       (define uu (clampf u 0.0 1.0))
       (define vv (clampf v 0.0 1.0))
-      (define fx (- (* uu (* 1.0 CAUSTIC_N)) 0.5))
-      (define fy (- (* vv (* 1.0 CAUSTIC_N)) 0.5))
-      (define x0 (flr fx))
-      (define y0 (flr fy))
-      (define x1 (+ x0 1))
-      (define y1 (+ y0 1))
-      (define xa x0) (define ya y0) (define xb x1) (define yb y1)
+      (define xa (flr (* uu (* 1.0 CAUSTIC_N))))
+      (define ya (flr (* vv (* 1.0 CAUSTIC_N))))
       (if (< xa 0) (set! xa 0) (if (> xa (- CAUSTIC_N 1)) (set! xa (- CAUSTIC_N 1)) #f))
-      (if (> xb (- CAUSTIC_N 1)) (set! xb (- CAUSTIC_N 1)) #f)
-      (if (< xb 0) (set! xb 0) #f)
       (if (< ya 0) (set! ya 0) (if (> ya (- CAUSTIC_N 1)) (set! ya (- CAUSTIC_N 1)) #f))
-      (if (> yb (- CAUSTIC_N 1)) (set! yb (- CAUSTIC_N 1)) #f)
-      (if (< yb 0) (set! yb 0) #f)
-      (define ffx (- fx x0))
-      (define ffy (- fy y0))
-      (define w0 (* (- 1.0 ffx) (- 1.0 ffy)))
-      (define w1 (* ffx (- 1.0 ffy)))
-      (define w2 (* (- 1.0 ffx) ffy))
-      (define w3 (* ffx ffy))
-      (define i00 (+ (* ya CAUSTIC_N) xa))
-      (define i01 (+ (* ya CAUSTIC_N) xb))
-      (define i10 (+ (* yb CAUSTIC_N) xa))
-      (define i11 (+ (* yb CAUSTIC_N) xb))
-      (set! caust_r (+ (+ (* (get_item caustR i00) w0) (* (get_item caustR i01) w1))
-                       (+ (* (get_item caustR i10) w2) (* (get_item caustR i11) w3))))
-      (set! caust_g (+ (+ (* (get_item caustG i00) w0) (* (get_item caustG i01) w1))
-                       (+ (* (get_item caustG i10) w2) (* (get_item caustG i11) w3))))
+      (define ci (+ (* ya CAUSTIC_N) xa))
+      (set! caust_r (get_item caustR ci))
+      (set! caust_g (get_item caustG ci))
     }))
 
 ;; 焦散 uv：0.75*(p - p.y*refr/refr.y)*0.5 + 0.5 → cu/cv
@@ -856,8 +960,13 @@
     }))
 
 ;; 程序化瓷砖（texture2D(tiles, uv)，REPEAT）→ ti_r/ti_g/ti_b
-;;   C: fu=floor(u/T), xu=u/T-fu, cu=(int)fmod(fu,2), shade=1-0.06*((cu^cv)&1),
-;;      grout = (xu<0.05 || xv<0.05) ? 0.25 : 1
+;;   C 版：fu=floor(u/T), xu=u/T-fu, cu=(int)fmod(fu,2), shade=1-0.06*((cu^cv)&1),
+;;          grout = (xu<0.05 || xv<0.05) ? 0.25 : 1
+;;
+;;   **本版去掉了 grout（瓷砖缝）**：缝宽只有 1 个瓷砖的 5%，在原版 320×240 上约 3 px，
+;;   但在 36×27（放大 8~9 倍上屏）下只有 0.3 个内部像素 —— 亚像素的深色线一定会走样成
+;;   "散落的黑点"，整片池壁看起来像脏点。去掉后只剩每块砖 6% 的明暗差（shade），
+;;   低分辨率下是干净的低频棋盘格。顺带省掉 xu/xv 两次除法 + 两次比较（逐像素）。
 (define ti_r 0.0) (define ti_g 0.0) (define ti_b 0.0)
 (define cpar 0.0)
 (define wt_tiles_sample
@@ -866,21 +975,12 @@
       (define TT (/ 1.0 5.0))
       (define fu (flr (/ tu TT)))
       (define fv (flr (/ tv TT)))
-      (define xu (- (/ tu TT) fu))
-      (define xv (- (/ tv TT) fv))
-      ;; cu = (int)fmod(fu,2)（C 的 (int) 向零截断），parity = |fmod(cu,2)|
-      (define mcu (mod fu 2.0))
-      (define mcv (mod fv 2.0))
-      (define cu2 (flr mcu))
-      (define cv2 (flr mcv))
-      (set! cpar (Math.abs (mod (+ cu2 cv2) 2.0)))
+      ;; parity = |fmod(floor(fu) + floor(fv), 2)|（等价原版的 (cu^cv)&1：整数的奇偶）
+      (set! cpar (Math.abs (mod (+ fu fv) 2.0)))
       (define shade (- 1.0 (* 0.06 cpar)))
-      (define grout 1.0)
-      (if (< xu 0.05) (set! grout 0.25) #f)
-      (if (< xv 0.05) (set! grout 0.25) #f)
-      (set! ti_r (* (+ 0.42 (* 0.20 shade)) grout))
-      (set! ti_g (* (+ 0.50 (* 0.20 shade)) grout))
-      (set! ti_b (* (+ 0.56 (* 0.20 shade)) grout))
+      (set! ti_r (+ 0.42 (* 0.20 shade)))
+      (set! ti_g (+ 0.50 (* 0.20 shade)))
+      (set! ti_b (+ 0.56 (* 0.20 shade)))
     }))
 
 ;; 光线与盒（intersectCube）→ tnear=tnx, tfar=tfx
@@ -958,9 +1058,11 @@
 ;; 着色（getSphereColor / getWallColor / getSurfaceRayColor）
 ;; ============================================================================
 
-;; 折射后的平行光（-lightDir 以 (0,1,0) 为法线折射）——C 里在多个着色函数里重复计算
+;; 折射后的平行光（-lightDir 以 (0,1,0) 为法线折射）。
+;;   C 版在多个着色函数里各算一次；这里它只依赖 light_dir，**每帧算一次**即可
+;;   （光源只在「光源」按钮与初始化时变，两处都会重算）。
 (define rl_x 0.0) (define rl_y 0.0) (define rl_z 0.0)
-(define wt_refracted_light
+(define wt_prep_light
   (lambda ()
     {
       (wt_refract (- 0.0 light_dir_x) (- 0.0 light_dir_y) (- 0.0 light_dir_z) 0.0 1.0 0.0
@@ -970,6 +1072,7 @@
 
 ;; getSphereColor(point) → sc_r/sc_g/sc_b
 (define sc_r 0.0) (define sc_g 0.0) (define sc_b 0.0)
+(define sc_hh 0.0)
 (define wt_get_sphere_color
   (lambda (px py pz)
     {
@@ -982,15 +1085,15 @@
       (define snx (/ (- px ball_cx) rad))
       (define sny (/ (- py ball_cy) rad))
       (define snz (/ (- pz ball_cz) rad))
-      (wt_refracted_light)
       ;; diffuse = max(0, dot(-refractedLight, sphereNormal)) * 0.5
-      (v_set_a (- 0.0 rl_x) (- 0.0 rl_y) (- 0.0 rl_z))
-      (v_set_b snx sny snz)
-      (v_dot)
-      (define diff (fmax2 0.0 rdot))
+      ;;   注：原来是 (v_set_a …)/(v_set_b …)/(v_dot) 三个全局寄存器函数调用；
+      ;;   全局量取值/赋值比局部量贵 3~6 倍，逐像素调用非常亏，这里就地展开。
+      (define diff (fmax2 0.0 (+ (+ (* (- 0.0 rl_x) snx) (* (- 0.0 rl_y) sny))
+                                  (* (- 0.0 rl_z) snz))))
       (set! diff (* diff 0.5))
       ;; 水下：乘焦散
-      (define hh (wt_wat_sample (+ (* px 0.5) 0.5) (+ (* pz 0.5) 0.5) 0))
+      (define hh (wt_wat_near (+ (* px 0.5) 0.5) (+ (* pz 0.5) 0.5)))
+      (set! sc_hh hh)
       (if (< py hh)
           {
             (wt_caustic_uv px py pz rl_x rl_y rl_z)
@@ -1004,6 +1107,7 @@
 
 ;; getWallColor(point) → wc_r/wc_g/wc_b
 (define wc_r 0.0) (define wc_g 0.0) (define wc_b 0.0)
+(define wc_hh 0.0)                      ;; getWallColor 内部算出的水面高度（水下判据）
 (define wt_get_wall_color
   (lambda (px py pz)
     {
@@ -1025,20 +1129,18 @@
               }))
       (define wallR ti_r) (define wallG ti_g) (define wallB ti_b)
       ;; scale /= |point| ; scale *= 1 - 0.9/pow(|point-center|/radius, 4)
-      (v_set_a px py pz)
-      (v_len)
-      (set! scale (/ scale rlen))
-      (v_set_a (- px ball_cx) (- py ball_cy) (- pz ball_cz))
-      (v_len)
-      (set! scale (* scale (- 1.0 (/ 0.9 (letsq (letsq (/ rlen ball_radius)))))))
-      ;; 折射光（取反）
-      (wt_refracted_light)
+      ;;   全部就地展开（原本是 v_set_a/v_len/v_dot 三个全局寄存器函数调用 +
+      ;;   letsq 套 letsq；这是逐像素热路径里最贵的一段）。
+      (set! scale (/ scale (Math.sqrt (+ (+ (* px px) (* py py)) (* pz pz)))))
+      (define wbx (- px ball_cx)) (define wby (- py ball_cy)) (define wbz (- pz ball_cz))
+      (define wbl (Math.sqrt (+ (+ (* wbx wbx) (* wby wby)) (* wbz wbz))))
+      (define wbr (/ wbl ball_radius))
+      (set! scale (* scale (- 1.0 (/ 0.9 (* (* wbr wbr) (* wbr wbr))))))
+      ;; 折射光（取反；rl_* 每帧算一次，见 wt_prep_light）
       (define rlx (- 0.0 rl_x)) (define rly (- 0.0 rl_y)) (define rlz (- 0.0 rl_z))
-      (v_set_a rlx rly rlz)
-      (v_set_b nX nY nZ)
-      (v_dot)
-      (define diff (fmax2 0.0 rdot))
-      (define hh (wt_wat_sample (+ (* px 0.5) 0.5) (+ (* pz 0.5) 0.5) 0))
+      (define diff (fmax2 0.0 (+ (+ (* rlx nX) (* rly nY)) (* rlz nZ))))
+      (define hh (wt_wat_near (+ (* px 0.5) 0.5) (+ (* pz 0.5) 0.5)))
+      (set! wc_hh hh)          ;; 片段里要用的同一个水下判据（省一次取样）
       (if (< py hh)
           {
             (wt_caustic_uv px py pz rlx rly rlz)
@@ -1116,8 +1218,8 @@
   (lambda ()
     {
       (wt_get_wall_color rw_x rw_y rw_z)
-      (define hh (wt_wat_sample (+ (* rw_x 0.5) 0.5) (+ (* rw_z 0.5) 0.5) 0))
-      (if (< rw_y hh)
+      ;; 同一个判据（同一个点、同样的取样），直接复用 getWallColor 里的结果
+      (if (< rw_y wc_hh)
           {
             (set! fc_r (* wc_r (* COL_UNDERWATER_R 1.2)))
             (set! fc_g (* wc_g (* COL_UNDERWATER_G 1.2)))
@@ -1127,47 +1229,75 @@
     }))
 
 ;; 水面片段（pass 0 = 水面以上 / 1 = 水面以下）
+;;
+;; 热路径改写说明：原来逐像素走 wt_reflect / wt_refract / v_set_a / v_set_b /
+;; v_dot / v_norm / v_len（全局寄存器 ax/ay/az/rx/ry/rz/rfx/rfy/rfz/rdot/rlen）。
+;; 全局量取值与赋值比局部量贵 3~6 倍，逐像素调这些函数是本 App 第二大开销。
+;; 这里把同一批公式就地展开成局部量 —— **算式、运算次序、常量完全不变**，
+;; 因此着色结果与改写前逐位相同。
 (define wt_water_frag
   (lambda (pass)
     {
       (define coordU ru)
       (define coordV rv)
-      (define infoB 0.0) (define infoA 0.0) (define hgt 0.0)
+      (define infoB 0.0) (define infoA 0.0)
       (define i5 0)
-      ;; “peaked”：5 次沿切线方向偏移重采样
-      (while (< i5 5)
+      (define nx1 0.0) (define ny1 0.0) (define nz1 0.0)
+      ;; incoming = normalize(world - eye)
+      (define irx 0.0) (define iry 0.0) (define irz 0.0) (define ilen 0.0)
+      ;; reflect / refract 就地展开用的中间量
+      (define ddot 0.0) (define kk 0.0) (define sc2 0.0) (define eta 0.0)
+      (define rrx 0.0) (define rry 0.0) (define rrz 0.0)
+      (define rex 0.0) (define rey 0.0) (define rez 0.0)
+      (define fresnel 0.0)
+      (define ar 0.0) (define ag 0.0) (define ab 0.0)
+      (define e2r 0.0) (define e2g 0.0) (define e2b 0.0)
+      (define tt 0.0) (define elen 0.0) (define tir 1)
+      (define nX 0.0) (define nY 0.0) (define nZ 0.0)
+
+      ;; “peaked”：沿切线方向偏移重采样 PEAKED_N 次（原版 5 次）
+      (while (< i5 PEAKED_N)
         {
-          (set! hgt (wt_wat_sample coordU coordV 0))
           (set! infoB (wt_wat_sample coordU coordV 2))
           (set! infoA (wt_wat_sample coordU coordV 3))
           (set! coordU (+ coordU (* infoB 0.005)))
           (set! coordV (+ coordV (* infoA 0.005)))
           (set! i5 (+ i5 1))
         })
-      (define nx1 infoB)
-      (define ny1 (Math.sqrt (fmax2 0.0 (- 1.0 (+ (* infoB infoB) (* infoA infoA))))))
-      (define nz1 infoA)
+      (set! nx1 infoB)
+      (set! ny1 (Math.sqrt (fmax2 0.0 (- 1.0 (+ (* infoB infoB) (* infoA infoA))))))
+      (set! nz1 infoA)
       ;; incomingRay = normalize(world - eye)
-      (v_set_a (- rw_x eye_x) (- rw_y eye_y) (- rw_z eye_z))
-      (v_norm)
-      (define irx rx) (define iry ry) (define irz rz)
+      (set! irx (- rw_x eye_x)) (set! iry (- rw_y eye_y)) (set! irz (- rw_z eye_z))
+      (set! ilen (Math.sqrt (+ (+ (* irx irx) (* iry iry)) (* irz irz))))
+      (set! irx (/ irx ilen)) (set! iry (/ iry ilen)) (set! irz (/ irz ilen))
       (if (== pass 0)
           {
-            ;; refl = reflect(incoming, normal)
-            (wt_reflect irx iry irz nx1 ny1 nz1)
-            (define rr2 rfx) (define rg2 rfy) (define rb2 rfz)
+            (set! nX nx1) (set! nY ny1) (set! nZ nz1)
+            ;; ddot = dot(normal, incoming)
+            (set! ddot (+ (+ (* nx1 irx) (* ny1 iry)) (* nz1 irz)))
+            ;; refl = incoming - 2*normal*ddot
+            (set! rrx (- irx (* (* nx1 2.0) ddot)))
+            (set! rry (- iry (* (* ny1 2.0) ddot)))
+            (set! rrz (- irz (* (* nz1 2.0) ddot)))
             ;; refr = refract(incoming, normal, air/water)
-            (wt_refract irx iry irz nx1 ny1 nz1 (/ IOR_AIR IOR_WATER))
-            (define erx rfx) (define ery rfy) (define erz rfz)
+            (set! eta (/ IOR_AIR IOR_WATER))
+            (set! kk (- 1.0 (* (* eta eta) (- 1.0 (* ddot ddot)))))
+            (if (< kk 0.0)
+                { (set! rex 0.0) (set! rey 0.0) (set! rez 0.0) }
+                {
+                  (set! sc2 (+ (* eta ddot) (Math.sqrt kk)))
+                  (set! rex (- (* irx eta) (* nx1 sc2)))
+                  (set! rey (- (* iry eta) (* ny1 sc2)))
+                  (set! rez (- (* irz eta) (* nz1 sc2)))
+                })
             ;; fresnel = 0.25 + 0.75*pow(1 - dot(normal, -incoming), 3)
-            (v_set_a nx1 ny1 nz1)
-            (v_set_b (- 0.0 irx) (- 0.0 iry) (- 0.0 irz))
-            (v_dot)
-            (define fresnel (+ 0.25 (* 0.75 (letcube3 (- 1.0 rdot)))))
-            (wt_surface_ray_color rw_x rw_y rw_z rr2 rg2 rb2
+            (set! fresnel (+ 0.25 (* 0.75 (* (- 1.0 (- 0.0 ddot))
+                                            (* (- 1.0 (- 0.0 ddot)) (- 1.0 (- 0.0 ddot)))))))
+            (wt_surface_ray_color rw_x rw_y rw_z rrx rry rrz
                                   COL_ABOVEWATER_R COL_ABOVEWATER_G COL_ABOVEWATER_B)
-            (define ar sr_r) (define ag sr_g) (define ab sr_b)
-            (wt_surface_ray_color rw_x rw_y rw_z erx ery erz
+            (set! ar sr_r) (set! ag sr_g) (set! ab sr_b)
+            (wt_surface_ray_color rw_x rw_y rw_z rex rey rez
                                   COL_ABOVEWATER_R COL_ABOVEWATER_G COL_ABOVEWATER_B)
             (set! fc_r (+ sr_r (* (- ar sr_r) fresnel)))
             (set! fc_g (+ sr_g (* (- ag sr_g) fresnel)))
@@ -1175,29 +1305,49 @@
           }
           {
             ;; 水下：法线取反、eta 取 water/air
-            (define nx2 (- 0.0 nx1)) (define ny2 (- 0.0 ny1)) (define nz2 (- 0.0 nz1))
-            (wt_reflect irx iry irz nx2 ny2 nz2)
-            (define w_rr2 rfx) (define w_rg2 rfy) (define w_rb2 rfz)
-            (wt_refract irx iry irz nx2 ny2 nz2 (/ IOR_WATER IOR_AIR))
-            (define w_erx rfx) (define w_ery rfy) (define w_erz rfz)
-            (v_set_a nx2 ny2 nz2)
-            (v_set_b (- 0.0 irx) (- 0.0 iry) (- 0.0 irz))
-            (v_dot)
-            (define w_fres (+ 0.5 (* 0.5 (letcube3 (- 1.0 rdot)))))
-            (wt_surface_ray_color rw_x rw_y rw_z w_rr2 w_rg2 w_rb2
+            (set! nX (- 0.0 nx1)) (set! nY (- 0.0 ny1)) (set! nZ (- 0.0 nz1))
+            (set! ddot (+ (+ (* nX irx) (* nY iry)) (* nZ irz)))
+            (set! rrx (- irx (* (* nX 2.0) ddot)))
+            (set! rry (- iry (* (* nY 2.0) ddot)))
+            (set! rrz (- irz (* (* nZ 2.0) ddot)))
+            (set! eta (/ IOR_WATER IOR_AIR))
+            (set! kk (- 1.0 (* (* eta eta) (- 1.0 (* ddot ddot)))))
+            (set! tir 1)
+            (if (< kk 0.0)
+                { (set! tir 0) (set! rex 0.0) (set! rey 0.0) (set! rez 0.0) }
+                {
+                  (set! sc2 (+ (* eta ddot) (Math.sqrt kk)))
+                  (set! rex (- (* irx eta) (* nX sc2)))
+                  (set! rey (- (* iry eta) (* nY sc2)))
+                  (set! rez (- (* irz eta) (* nZ sc2)))
+                })
+            (set! fresnel (+ 0.5 (* 0.5 (* (- 1.0 (- 0.0 ddot))
+                                          (* (- 1.0 (- 0.0 ddot)) (- 1.0 (- 0.0 ddot)))))))
+            (wt_surface_ray_color rw_x rw_y rw_z rrx rry rrz
                                   COL_UNDERWATER_R COL_UNDERWATER_G COL_UNDERWATER_B)
-            (define w_ar sr_r) (define w_ag sr_g) (define w_ab sr_b)
-            (wt_surface_ray_color rw_x rw_y rw_z w_erx w_ery w_erz 1.0 1.0 1.0)
-            (define e2r (* sr_r COL_SKY2_R))
-            (define e2g (* sr_g COL_SKY2_G))
-            (define e2b (* sr_b COL_SKY2_B))
-            ;; t = (1-w_fres)*length(refr)
-            (v_set_a w_erx w_ery w_erz)
-            (v_len)
-            (define tt (* (- 1.0 w_fres) rlen))
-            (set! fc_r (+ w_ar (* (- e2r w_ar) tt)))
-            (set! fc_g (+ w_ag (* (- e2g w_ag) tt)))
-            (set! fc_b (+ w_ab (* (- e2b w_ab) tt)))
+            (set! ar sr_r) (set! ag sr_g) (set! ab sr_b)
+            ;; 全反射（kk<0，从水下看水面超过临界角）：GLSL 的 refract() 返回零向量，
+            ;; 折射项权重 t 也是 0 —— 但 0×NaN = NaN，NaN 落到逐像素夹断时 wasm 会夹成
+            ;; 1（纯白）、x86 夹成 0（黑）。按 doc/AGENTS.md 2026-11-15 条目（C 版
+            ;; ui_water.c / am_native_Raster.c 的同一处缺陷）短路掉整条折射追迹：
+            ;; 权重本来就是 0，取反射项即可，结果与"算完再乘 0"在数学上相同。
+            (if (== tir 0)
+                {
+                  (set! e2r ar) (set! e2g ag) (set! e2b ab)
+                  (set! tt 0.0)
+                }
+                {
+                  (wt_surface_ray_color rw_x rw_y rw_z rex rey rez 1.0 1.0 1.0)
+                  (set! e2r (* sr_r COL_SKY2_R))
+                  (set! e2g (* sr_g COL_SKY2_G))
+                  (set! e2b (* sr_b COL_SKY2_B))
+                  ;; t = (1-w_fres)*length(refr)
+                  (set! elen (Math.sqrt (+ (+ (* rex rex) (* rey rey)) (* rez rez))))
+                  (set! tt (* (- 1.0 fresnel) elen))
+                })
+            (set! fc_r (+ ar (* (- e2r ar) tt)))
+            (set! fc_g (+ ag (* (- e2g ag) tt)))
+            (set! fc_b (+ ab (* (- e2b ab) tt)))
           })
     }))
 
@@ -1206,8 +1356,7 @@
   (lambda ()
     {
       (wt_get_sphere_color rw_x rw_y rw_z)
-      (define hh (wt_wat_sample (+ (* rw_x 0.5) 0.5) (+ (* rw_z 0.5) 0.5) 0))
-      (if (< rw_y hh)
+      (if (< rw_y sc_hh)
           {
             (set! fc_r (* sc_r (* COL_UNDERWATER_R 1.2)))
             (set! fc_g (* sc_g (* COL_UNDERWATER_G 1.2)))
@@ -1259,7 +1408,7 @@
               (if (<= v2w 0.0) #f
                 {
                   (define area (wt_screen_area))
-                  (if (>= area 0.0) #f (wt_fill 1 1))
+                  (if (>= area 0.0) #f (wt_fill 2 1))
                 })))
           (set! t (+ t 1))
         })
@@ -1275,7 +1424,8 @@
       (set! gw_z (get_item wm (+ base 1)))     ;; 注意：Mesh.plane 的第二个分量是 y，渲染时放到 z
       (set! gw_u (get_item wm (+ base 3)))
       (set! gw_v (get_item wm (+ base 4)))
-      (set! gw_y (wt_wat_sample gw_u gw_v 0))
+      ;; 顶点高度用最近邻（网格只有 DETAIL+1 × DETAIL+1 个顶点，逐顶点省一次双线性）
+      (set! gw_y (wt_wat_near gw_u gw_v))
     }))
 
 (define wt_render_water
@@ -1378,7 +1528,7 @@
       (define z0 0)
       (while (< z0 (* CAUSTIC_N CAUSTIC_N))
         { (set_item! caustR z0 0.0) (set_item! caustG z0 0.0) (set! z0 (+ z0 1)) })
-      (wt_refracted_light)
+      (wt_prep_light)
       (define rlx rl_x) (define rly rl_y) (define rlz rl_z)
       (define t 0)
       (while (< t WATER_TRIS)
@@ -1578,7 +1728,7 @@
             })
           (set! y (+ y 1))
         })
-      (set! water_cur (- 1 water_cur))
+      (wt_flip)
     }))
 
 ;; normalShader：normal = normalize(cross(dy,dx)).xz → (info.b, info.a)
@@ -1652,7 +1802,7 @@
                 (set_item! dst (+ i4 3) (get_item src (+ i4 3)))
                 (set! i (+ i 1))
               })
-            (set! water_cur (- 1 water_cur))
+            (wt_flip)
           })
     }))
 
@@ -1702,7 +1852,12 @@
       (wt_step_sim)
       (wt_step_sim)
       (wt_update_normals)
-      (if (== PASS_CAUSTICS 1) (wt_update_caustics) #f)
+      ;; 焦散 pass 降频：每 CAUSTIC_EVERY 拍重建一次（caustic_phase 计数）
+      (set! caustic_phase (+ caustic_phase 1))
+      (if (>= caustic_phase CAUSTIC_EVERY) (set! caustic_phase 0) #f)
+      (if (== PASS_CAUSTICS 1)
+          (if (== caustic_phase 0) (wt_update_caustics) #f)
+          #f)
     }))
 
 ;; ============================================================================
@@ -1718,19 +1873,34 @@
       (if (== PASS_SPHERE 1) (wt_render_sphere) #f)
     }))
 
-;; 帧缓冲 RGB565 → 屏幕（等价 C 的 gfx_blit_rgb565 + gfx_refresh）
+;; 帧缓冲 RGB565 → 屏幕（内部 RW×RH 放大到 SW×SH：一个内部像素 = 一块 fill_rect）
+;;   放大块的边界 blkx/blky 在启动时算一次（原来逐像素算，含 4 次除法 + flr）。
+(define blkx (cons 0 (quote ())))
+(define blky (cons 0 (quote ())))
 (define wt_blit
   (lambda ()
     {
-      (define i 0)
-      (while (< i NPIX)
+      (define iy 0)
+      (while (< iy RSTOP)
         {
-          (define v (get_item frame i))
-          (set! i (+ i 1))
-          (Gfx.set_pixel (mod i SW) (flr (/ (* 1.0 i) (* 1.0 SW)))
-                         (* 255.0 (/ (flr (/ v 2048.0)) 31.0))
-                         (* 255.0 (/ (flr (/ (mod v 2048.0) 32.0)) 63.0))
-                         (* 255.0 (/ (mod v 32.0) 31.0)))
+          (define sy0 (get_item blky iy))
+          (define sy1 (get_item blky (+ iy 1)))
+          (define bh (- sy1 sy0))
+          (define ix 0)
+          (while (< ix RW)
+            {
+              (define bv (get_item frame (+ (* iy RW) ix)))
+              (define r5 (flr (/ bv 2048.0)))
+              (define g5 (flr (/ (- bv (* r5 2048.0)) 32.0)))
+              (define sx0 (get_item blkx ix))
+              (define sx1 (get_item blkx (+ ix 1)))
+              (Gfx.fill_rect sx0 sy0 (- sx1 sx0) bh
+                             (* 255.0 (/ r5 31.0))
+                             (* 255.0 (/ g5 63.0))
+                             (* 255.0 (/ (- (- bv (* r5 2048.0)) (* g5 32.0)) 31.0)))
+              (set! ix (+ ix 1))
+            })
+          (set! iy (+ iy 1))
         })
     }))
 
@@ -1786,6 +1956,7 @@
       (set! light_dir_y (Math.sin (* (/ (- 0.0 angleX) 180.0) (Math.PI))))
       (set! light_dir_z (* (Math.sin (* (/ (- 90.0 angleY) 180.0) (Math.PI)))
                            (Math.cos (* (/ (- 0.0 angleX) 180.0) (Math.PI)))))
+      (wt_prep_light)
     }))
 
 (define wt_button_action
@@ -1794,6 +1965,7 @@
       (if (== idx BTN_PAUSE) (set! wt_paused (- 1 wt_paused)) #f)
       (if (== idx BTN_GRAVITY) (set! use_sphere_physics (- 1 use_sphere_physics)) #f)
       (if (== idx BTN_LIGHT) (wt_light_follow_view) #f)
+      (if (== idx BTN_QUALITY) (wt_set_quality (mod (+ qlevel 1) QN)) #f)
     }))
 
 ;; 绘制控件栏（先于推屏，直接叠在渲染结果之上）——与 C 的 wt_draw_ui 逐句一致
@@ -1821,6 +1993,15 @@
               }
               #f)
           (if (== i BTN_LIGHT) (set! label "光源") #f)
+          (if (== i BTN_QUALITY)
+              {
+                (if (== qlevel 0) (set! label "画质1") #f)
+                (if (== qlevel 1) (set! label "画质2") #f)
+                (if (== qlevel 2) (set! label "画质3") #f)
+                (if (== qlevel 3) (set! label "画质4") #f)
+                (if (== qlevel 4) (set! label "画质5") #f)
+              }
+              #f)
           (define pressed (if (== pressed_btn i) 1 0))
           (define cr 34) (define cg 46) (define cb 62)
           (if (== active 1) { (set! cr 28) (set! cg 104) (set! cb 92) } #f)
@@ -1945,6 +2126,33 @@
 ;; 初始化与每一拍
 ;; ============================================================================
 
+;; 上屏放大块边界表（RW+1 / RH+1 个）——切档时要重建
+(define wt_build_blit
+  (lambda ()
+    {
+      (set! blkx (cons 0 (quote ())))  (pop blkx)
+      (set! blky (cons 0 (quote ())))  (pop blky)
+      (define bxi 0)
+      (while (<= bxi RW)
+        { (push blkx (flr (/ (* 1.0 (* bxi SW)) (* 1.0 RW)))) (set! bxi (+ bxi 1)) })
+      (set! bxi 0)
+      (while (<= bxi RH)
+        { (push blky (flr (/ (* 1.0 (* bxi SH)) (* 1.0 RH)))) (set! bxi (+ bxi 1)) })
+    }))
+
+;; 切换画质档位：只改内部渲染分辨率（网格/波场/焦散规模不变），立即重画。
+;;   frame/zbuf 按最大档一次性分配过，这里不用重新分配，只是索引步长 RW 变了。
+(define wt_set_quality
+  (lambda (lvl)
+    {
+      (set! qlevel lvl)
+      (set! RW (+ QRW0 (* QSTEP qlevel)))
+      (set! RH (flr (/ (* 3 RW) 4)))
+      (set! RSTOP (flr (+ (/ (* 1.0 (* RH (- SH BAR_H))) (* 1.0 SH)) 0.9999)))
+      (wt_build_blit)
+      (set! view_dirty 1)
+    }))
+
 (define mklist
   (lambda (n v)
     {
@@ -1972,6 +2180,8 @@
       (set! stri (cons 0 (quote ())))  (pop stri)
       (set! matMV (m4make)) (set! matP (m4make)) (set! matMVP (m4make))
       (set! matTmp (m4make)) (set! matInv (m4make))
+      ;; 上屏放大的块边界表（RW+1 / RH+1 个）
+      (wt_build_blit)
       (wt_build_meshes)
 
       ;; 原版默认状态
@@ -1992,6 +2202,8 @@
       (set! pressed_btn -1)
       (set! view_dirty 0)
       (set! water_cur 0)
+      (set! wpg water0)
+      (wt_prep_light)
       (set! ready 1)
     }))
 
