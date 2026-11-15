@@ -18,11 +18,15 @@
 ;;   \bigcup \bigcap，带限函数名 \lim \max \min \sup \inf \det \gcd，正体函数名
 ;;   \sin \cos \tan \log \ln \exp …；\left( \right) 及 \big… 系列（含 \left.）
 ;;   重音 \vec \hat \tilde \bar \overline \underline \dot \ddot \acute
-;;   字体 \mathrm \mathbf \mathit \mathcal \mathbb \boldsymbol
+;;   字体 \mathrm \mathbf \mathit \mathcal \mathbb \mathfrak \mathscr \boldsymbol \pmb
+;;   逻辑/证明论 \vdash \models \vDash \not\vdash \not\models \not\in \lnot \neg \forall \exists
+;;   \nexists \aleph，音乐记号 \sharp \natural（哥德尔编码/解码），\lceil \rceil
+;;   公式编号 \tag{}（贴在本行末尾，带括号），\begin{align} 的 & 列对齐
 ;;   正文 \text \mbox、空白 \, \; \: \! \quad \qquad
-;;   矩阵/方程组/对齐 \begin{matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|cases|aligned}
+;;   矩阵/方程组/对齐 \begin{matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|cases|aligned|gathered}
 ;;   希腊字母（大小写）、常用关系/运算/集合/箭头/杂项符号（缺字用矢量或字形变形补齐）
-;;   不支持的：自定义宏/宏包、\over 一类中缀形式、多行公式编号 \tag、颜色、图片
+;;   Markdown 来源的容错：\\ 被写成 \\\\ 时按一个行分隔处理
+;;   不支持的：自定义宏/宏包、\over 一类中缀形式、颜色、图片
 ;;
 ;; 交互：
 ;;   ◀ ▶ 切换内置示例公式；「编辑」弹出输入框（触屏软键盘含 \ { } ^ _）；
@@ -107,6 +111,11 @@
   "\\text{欧拉公式：}e^{i\\theta}=\\cos\\theta+i\\sin\\theta"
   "m_1\\ddot{x}_1=-k(x_1-x_2),\\quad m_2\\ddot{x}_2=k(x_1-x_2)"
   "\\mathbb{R}^n\\to\\mathbb{R}^m,\\quad \\mathbf{v}=\\frac{d\\mathbf{r}}{dt}"
+  ;; 逻辑/证明论（数理逻辑文章里的典型写法：推导符、满足关系、否定、哥德尔编码）
+  "T\\vdash\\sigma\\ \\Leftrightarrow\\ \\mathrm{bew}_T(\\lceil\\sigma\\rceil)"
+  "\\mathfrak{N}\\models\\tau,\\quad \\mathfrak{N}\\not\\models\\neg\\sigma,\\quad \\mathfrak{M}\\not\\vDash\\sigma"
+  "\\mathrm{bew}(n,\\sharp\\sigma)\\in\\mathbb{N}^2,\\quad \\natural n=\\sigma,\\quad \\aleph_0"
+  "\\begin{aligned}x&=y+z\\\\u&=v-w\\end{aligned}\\tag{4}"
 ))
 
 ;; ---------------------------------------------------------------------------

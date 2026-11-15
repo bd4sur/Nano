@@ -17,6 +17,11 @@
 ;;
 ;; 所有坐标单位为像素，原点在式子左端、基线 y=0（y 向下为正）。
 ;; 灵机约束：算术恒二参数、无 let/max/min/abs、块内不 define、cond 单表达式。
+;;
+;; 两个「行级」特性（不是盒子，而是改行内布局）：
+;;   · 否定 \not：先排被否定符号，再在其包围盒上叠一道斜杠（盒子尺寸不变，原子类跟随底符）；
+;;   · 公式编号 \tag{}：不占行内位置，整行排完后贴到行末（空 0.9em + 「(编号)」），
+;;     盒子宽度随之右延——整式居中/等比缩放的宿主（App 与 Markdown）会带着编号一起缩放。
 ;; ============================================================================
 
 (native Gfx)
@@ -87,7 +92,7 @@
                  8869 8741 8712 8713 8715 8834 8835 8838 8839 8594 8592 8596
                  8658 8656 8660 8614 8593 8595 8597 8599 8600 8756 8755 8866
                  8867 8784 8781 8826 8827 8828 8829 8842 8843 8739 8740 8904
-                 8871 8598 8601 8618 8652 8663 8776 8784))
+                 8871 8872 8598 8601 8618 8652 8663 8776 8784 58))
 (define OPENOPS '(40 91 123 10216 8970 8968))
 (define CLOSEOPS '(41 93 125 10217 8971 8969 33 63))
 (define PUNCTOPS '(44 59))
@@ -149,10 +154,12 @@
     ((equal? tag "o") 1)
     ((equal? tag "f") 7)
     ((equal? tag "s") (cls_of (get_item node 1)))
+    ((equal? tag "n") (cls_of (get_item node 1)))
     ((equal? tag "r") 0)
     ((equal? tag "d") 7)
     ((equal? tag "a") (cls_of (get_item node 2)))
     ((equal? tag "k") -1)
+    ((equal? tag "T") -1)
     ((equal? tag "m") 0)
     ((equal? tag "F")
       {
@@ -272,23 +279,41 @@
   (define cls 0)
   (define sp 0.0)
   (define bx #f)
+  ;; \tag{...}：标签不参与行内排版，等整行排完再贴到行末（见循环之后的处理）
+  (define tagtxt #f)
+  (define tb #f)
   (while (< i n)
     {
       (set! node (get_item nodes i))
-      (set! cls (cls_of node))
-      (if (and (== cls 2)
-               (or (== prev -1) (== prev 1) (== prev 2) (== prev 3) (== prev 4) (== prev 6)))
-          (set! cls 0)
-          #f)
-      (set! sp (if (or (== prev -1) (== cls -1)) 0.0 (space_of prev cls st)))
-      (set! pen (+ pen sp))
-      (set! bx (lay node st pen y))
-      (set! pen (+ pen (get_item bx 0)))
-      (set! h (B.mx h (get_item bx 1)))
-      (set! d (B.mx d (get_item bx 2)))
-      (if (== cls -1) #f (set! prev cls))
+      (if (equal? (get_item node 0) "T")
+          (set! tagtxt (get_item node 1))
+          {
+            (set! cls (cls_of node))
+            (if (and (== cls 2)
+                     (or (== prev -1) (== prev 1) (== prev 2) (== prev 3) (== prev 4) (== prev 6)))
+                (set! cls 0)
+                #f)
+            (set! sp (if (or (== prev -1) (== cls -1)) 0.0 (space_of prev cls st)))
+            (set! pen (+ pen sp))
+            (set! bx (lay node st pen y))
+            (set! pen (+ pen (get_item bx 0)))
+            (set! h (B.mx h (get_item bx 1)))
+            (set! d (B.mx d (get_item bx 2)))
+            (if (== cls -1) #f (set! prev cls))
+          })
       (set! i (+ i 1))
     })
+  ;; 公式编号：空 0.9em 后接「(n)」，盒子宽度随之向右延长（Markdown 阅读器与公式
+  ;; App 都是整式居中/等比缩放，因此编号会跟着公式走而不是钉在屏幕右缘）。
+  (if tagtxt
+      {
+        (set! pen (+ pen (* 0.9 (em_of st))))
+        (set! tb (lay_text (String.concat "(" (String.concat tagtxt ")")) st pen y))
+        (set! pen (+ pen (get_item tb 0)))
+        (set! h (B.mx h (get_item tb 1)))
+        (set! d (B.mx d (get_item tb 2)))
+      }
+      #f)
   `(,(- pen x) ,h ,d)))
 
 ;; ---------------------------------------------------------------------------
@@ -982,6 +1007,30 @@
     (else `(,bw ,bh ,bd)))))
 
 ;; ---------------------------------------------------------------------------
+;; 否定（\not）：先排被否定的符号，再在其包围盒上从**左下到右上**叠一道斜杠
+;; （TeX 的 \not 也是这么画的；字模里没有现成的 ∉ ∤ ∦ 一族，用叠笔比造字更可靠）。
+;; ---------------------------------------------------------------------------
+
+(define  lay_not (lambda (node st x y)
+  (define inner (get_item node 1))
+  (define em (em_of st))
+  (define bx #f)
+  (define w 0.0)
+  (define h 0.0)
+  (define d 0.0)
+  (define lw 0.0)
+  (define hh 0.0)
+  (set! bx (lay inner st x y))
+  (set! w (get_item bx 0))
+  (set! h (B.mx (get_item bx 1) (* 0.42 em)))
+  (set! d (get_item bx 2))
+  (set! lw (B.mn (B.mx 0.8 (* 0.05 em)) 1.0))
+  (set! hh (B.mx h (* 0.5 em)))
+  (B.l (- x (* 0.02 em)) (+ y (+ d (* 0.02 em)))
+       (+ (+ x w) (* 0.02 em)) (- y (+ hh (* 0.02 em))) lw)
+  `(,w ,h ,d)))
+
+;; ---------------------------------------------------------------------------
 ;; 字体切换
 ;; ---------------------------------------------------------------------------
 
@@ -997,6 +1046,13 @@
     ((equal? name "rm") (set! cur_it 1))
     ((equal? name "it") (set! cur_it 2))
     ((equal? name "cal") (set! cur_it 2))
+    ((equal? name "scr") (set! cur_it 2))
+    ;; 黑体（Fraktur）：字模里没有 blackletter，用粗斜体代替
+    ((equal? name "frak")
+      {
+        (set! cur_bold 1)
+        (set! cur_it 2)
+      })
     ((equal? name "bfit")
       {
         (set! cur_bold 1)
@@ -1206,6 +1262,8 @@
     ((equal? tag "r") (lay_sqrt node st x y))
     ((equal? tag "s") (lay_scripts node st x y))
     ((equal? tag "o") (lay_bigop_body node st x y))
+    ((equal? tag "n") (lay_not node st x y))
+    ((equal? tag "T") `(0.0 0.0 0.0))       ;; 孤立的 \tag：已由 lay_row 消费，不占位
     ((equal? tag "d") (lay_delim node st x y))
     ((equal? tag "a") (lay_accent node st x y))
     ((equal? tag "t") (lay_text (get_item node 1) st x y))

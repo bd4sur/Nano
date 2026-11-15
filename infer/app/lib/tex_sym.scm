@@ -2,8 +2,8 @@
 ;; tex_sym.scm —— 字模里没有的数学符号（矢量绘制 / 字形变形合成）
 ;;
 ;; 12px 内嵌字模覆盖了 ∫ ∮ ∑ ∏ √ ∈ ∪ ∩ ⊥ ∠ ∝ ≈ ≤ ≥ → ← ↑ ↓ ∴ ∵ ∞ ′ ″ …
-;; 但缺 ∂ ∇ ∅ ∀ ∃ ⊂ ⊃ ⊆ ⊇ ⇒ ⇐ ⇔ ↔ ↦ ∼ ≃ ≪ ≫ ⋯ ∘ ⊕ ⊗ ∓ ℏ ℓ ℝ ⟨⟩ ∥ ¬ △ 等
-;; 常用数学/物理符号。本模块用两种手段补齐：
+;; 但缺 ∂ ∇ ∅ ∀ ∃ ⊂ ⊃ ⊆ ⊇ ⇒ ⇐ ⇔ ↔ ↦ ∼ ≃ ≪ ≫ ⋯ ∘ ⊕ ⊗ ∓ ℏ ℓ ℝ ⟨⟩ ∥ ¬ △
+;; 以及数理逻辑常用的 ⊢ ⊣ ⊨ ♯ ♮ ℵ 等。本模块用两种手段补齐：
 ;;   · **字形变形合成**：翻转（∀ = 倒 A、∇ = 倒 Δ）、镜像（∃ = 反 E、∋ = 反 ∈）、
 ;;     重复（∬ = 两个 ∫）、叠加（∅ = 0 + 斜线、≃ = = 上方加波浪、⊕ = ○ + +）；
 ;;   · **矢量绘制**：⊂ ⊇ ⟨⟩ ⇒ ⇔ ↦ ∼ ≪ ≫ ⋯ ⋮ ⋱ ∘ ¬ △ 等直接用线段/曲线画，
@@ -11,7 +11,13 @@
 ;;
 ;; 对外只暴露一个过程：(draw cp x y em fid bold) → (宽 上高 下深) 或 #f
 ;; 返回 #f 表示"不是本模块负责的符号"，由排版层继续走字形路径。
-;; 未识别的缺字最终由 fallback 画一个 '?'（缺字可见，便于自查源码）。
+;; 缺字最终什么也不画（布局层会把盒子当 0 宽——便于自查源码，不会画出假字形）。
+;;
+;; 新增符号的**形状参考**：infer/web/jslib/mathjax/ 里的 MathJax OT 字库（woff-v2/
+;; MathJax_Main-Regular.woff 中就有 ♯ ♮ ℵ ⊢ ⊨ ⊤）。把 woff 解成 ttf（fontTools 可直接读
+;; woff）后用 PIL/FreeType 栅格化成 ASCII 图，照字形轮廓写矢量笔画——比凭空画准得多。
+;; 本机字模（glyph_12.h/glyph_16.h）里没有这些码点，位图路径只会得到 '?' 空白；
+;; 而矢量天然能随字号缩放（上下标 7.2px 到显示式 16px）。
 ;; ============================================================================
 
 (native Gfx)
@@ -23,7 +29,10 @@
 (define PI (Math.PI))
 
 (define  nat (lambda (fid) (if (== fid 2) 16 12)))
-(define  lw_of (lambda (em) (B.mx 0.9 (* 0.055 em))))
+;; 线宽：图形层的抗锯齿直线在 wd > 1 时切到「粗线」路径（加法混合，分段接头会冒亮点，
+;; 实测表现为笔画缩短/断裂）。因此线宽**封顶 1.0**；1px 线偏虚的观感由 tex_draw 的
+;; 「双遍叠色」补足（见 tex_draw.scm 的 draw_seg）。封顶之后公式在高倍缩放下不再糊成块。
+(define  lw_of (lambda (em) (B.mn (B.mx 0.9 (* 0.055 em)) 1.0)))
 
 ;; 字形度量（像素），返回 (adv asc desc gw)
 (define mm1 #f)
@@ -258,6 +267,77 @@
   `(,w ,(- (* 0.72 em) (* 0.03 em)) ,(B.mx (get_item m 2) 0.0))))
 
 ;; ---------------------------------------------------------------------------
+;; 逻辑/证明论符号（字模里没有，按 MathJax 的 MathJax_Main-Regular 字形形状用矢量重画）
+;;   ⊢ = 竖线 + 右侧横线（横线在高度的 ~55% 处）；⊨ = 竖线 + 两条平行横线；
+;;   ♯ / ♮ = 两条竖线 + 两条粗横条（♯ 的竖线不伸出横条之外，♮ 的伸出）；
+;;   ℵ = 两条近竖笔画 + 一条右上斜笔 + 左下脚横（aleph 的骨架）。
+;; 为什么不用位图：字模里没有这些码点，而位图缺字只能退回 '?'；矢量还能随字号
+;; （上下标 7.2px、\tag 等）自由缩放。
+;; ---------------------------------------------------------------------------
+
+;; ⊢ / ⊣：竖线 + 横线（横线从竖线出发向右或向左）
+(define  sym_tack (lambda (x y em left)
+  (define h (* 0.62 em))
+  (define w (* 0.6 em))
+  (define lw (lw_of em))
+  (define bx (+ x (* 0.07 em)))
+  (define cy (- y (* 0.34 em)))
+  (B.l bx (- y h) bx (+ y (* 0.02 em)) lw)
+  (if left
+      (B.l (- (+ x w) (* 0.07 em)) cy bx cy lw)
+      (B.l bx cy (+ x w) cy lw))
+  `(,w ,h ,(* 0.02 em))))
+
+;; ⊨：竖线 + 两条平行横线（models / vDash）
+(define  sym_models (lambda (x y em)
+  (define h (* 0.66 em))
+  (define w (* 0.62 em))
+  (define lw (lw_of em))
+  (define bx (+ x (* 0.07 em)))
+  (B.l bx (- y h) bx (+ y (* 0.02 em)) lw)
+  (B.l bx (- y (* 0.42 em)) (+ x w) (- y (* 0.42 em)) lw)
+  (B.l bx (- y (* 0.24 em)) (+ x w) (- y (* 0.24 em)) lw)
+  `(,w ,h ,(* 0.02 em))))
+
+;; ♯：两条竖笔画 + 两条粗横条（横条用规则块画，1px 线太细看不出「粗横条」）
+(define  sym_sharp (lambda (x y em)
+  (define w (* 0.46 em))
+  (define h (* 0.68 em))
+  (define lw (lw_of em))
+  (define th (B.mx 1.0 (* 0.075 em)))
+  (B.l (+ x (* 0.14 em)) (- y h) (+ x (* 0.11 em)) y lw)
+  (B.l (+ x (* 0.33 em)) (- y (* 0.9 h)) (+ x (* 0.30 em)) y lw)
+  (B.r x (- y (* 0.48 em)) w th)
+  (B.r x (- y (* 0.24 em)) w th)
+  `(,w ,h 0.0)))
+
+;; ♮：与 ♯ 同构，但两条竖笔画伸出横条之外（上下错开）
+(define  sym_natural (lambda (x y em)
+  (define w (* 0.46 em))
+  (define h (* 0.68 em))
+  (define lw (lw_of em))
+  (define th (B.mx 1.0 (* 0.075 em)))
+  (B.l (+ x (* 0.14 em)) (- y h) (+ x (* 0.11 em)) (+ y (* 0.06 em)) lw)
+  (B.l (+ x (* 0.33 em)) (- y (* 0.78 h)) (+ x (* 0.30 em)) (+ y (* 0.12 em)) lw)
+  (B.r x (- y (* 0.42 em)) w th)
+  (B.r x (- y (* 0.18 em)) w th)
+  `(,w ,h ,(* 0.1 em))))
+
+;; ℵ：aleph 骨架（两条近竖笔画 + 中斜笔 + 左下脚横）
+(define  sym_aleph (lambda (x y em)
+  (define w (* 0.56 em))
+  (define h (* 0.66 em))
+  (define lw (lw_of em))
+  ;; 左笔画（微斜）+ 左下脚横
+  (B.l (+ x (* 0.30 em)) (- y h) (+ x (* 0.12 em)) (- y (* 0.04 em)) lw)
+  (B.l (+ x (* 0.02 em)) (- y (* 0.04 em)) (+ x (* 0.20 em)) (- y (* 0.04 em)) lw)
+  ;; 右笔画（近竖直）
+  (B.l (+ x (* 0.52 em)) (- y h) (+ x (* 0.44 em)) (- y (* 0.04 em)) lw)
+  ;; 中斜笔（左上 → 右中）
+  (B.l (+ x (* 0.26 em)) (- y (* 0.92 h)) (+ x (* 0.46 em)) (- y (* 0.28 em)) lw)
+  `(,w ,h ,(* 0.06 em))))
+
+;; ---------------------------------------------------------------------------
 ;; 其他
 ;; ---------------------------------------------------------------------------
 
@@ -390,7 +470,8 @@
     ((== cp 8711) (sym_nabla x y em fid bold))                  ;; ∇
     ((== cp 8706) (sym_partial x y em fid bold))                ;; ∂
     ((== cp 8704) (emit_glyph 65 x y em fid 1.0 -1.0 0.0 bold)) ;; ∀ = 倒 A
-    ((== cp 8705) (emit_glyph 69 x y em fid -1.0 1.0 0.0 bold)) ;; ∃ = 反 E
+    ((== cp 8705) (emit_glyph 69 x y em fid -1.0 1.0 0.0 bold)) ;; ∃ = 反 E（8705 = \exists 旧映射）
+    ((== cp 8707) (emit_glyph 69 x y em fid -1.0 1.0 0.0 bold)) ;; ∃ = 反 E（8707 = U+2203 真码点）
     ((== cp 8715) (emit_glyph 8712 x y em fid -1.0 1.0 0.0 bold)) ;; ∋ = 反 ∈
     ((== cp 8467) (sym_ell x y em fid bold))                    ;; ℓ
     ((== cp 8463) (sym_hbar x y em fid bold))                   ;; ℏ
@@ -438,6 +519,13 @@
     ((== cp 8598) (sym_darrow x y em -1 -1))                    ;; ↖
     ((== cp 8601) (sym_darrow x y em -1 1))                     ;; ↙
     ((== cp 8723) (sym_mpm x y em fid bold))                    ;; ∓
+    ((== cp 8866) (sym_tack x y em 0))                          ;; ⊢
+    ((== cp 8867) (sym_tack x y em 1))                          ;; ⊣
+    ((== cp 8871) (sym_models x y em))                          ;; ⊧
+    ((== cp 8872) (sym_models x y em))                          ;; ⊨
+    ((== cp 9839) (sym_sharp x y em))                           ;; ♯
+    ((== cp 9838) (sym_natural x y em))                         ;; ♮
+    ((== cp 8501) (sym_aleph x y em))                           ;; ℵ
     ((== cp 172) (sym_neg x y em))                              ;; ¬
     ((== cp 8741) (sym_parallel x y em))                        ;; ∥
     ((== cp 8726) (sym_backslash x y em))                       ;; ∖

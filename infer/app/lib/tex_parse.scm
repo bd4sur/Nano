@@ -11,10 +11,13 @@
 ;;   ("s" base sub sup)    上下标；sub/sup = 节点或 #f
 ;;   ("o" kind val lim)    大运算符：kind=0 符号（val=码点）/ 1 名字（val=字符串）；
 ;;                         lim: 0 自动、1 强制上下限（\limits）、2 强制同侧
+;;   ("n" node)            否定（\not 之后的关系符）：排版时叠一道斜杠
+;;   ("T" text)            公式编号（\tag{...}）：排版时贴在本行末尾（带括号）
 ;;   ("d" open close body) \left...\right；open/close = 码点或 #f（\left. 不可见）
 ;;   ("a" name body)       重音/上划线：overline underline bar vec hat tilde dot ddot
 ;;   ("t" str)             正文（\text{...}：空格保留、正体）
-;;   ("F" name nodes)      字体切换：rm（正体）bf（粗）it（斜）bb（粗黑）cal（斜）
+;;   ("F" name nodes)      字体切换：rm（正体）bf（粗）it（斜）bb（粗黑）cal/scr（斜）
+;;                         frak（粗斜，代替 blackletter）bfit（粗斜）
 ;;   ("k" em)              显式空白（单位 em，可为负）
 ;;   ("m" kind rows)       矩阵/方程组：kind 0 matrix、1 pmatrix、2 bmatrix、3 Bmatrix、
 ;;                         4 vmatrix、5 Vmatrix、6 cases、7 aligned
@@ -22,6 +25,12 @@
 ;;
 ;; 与 TeX 的差异（有意简化，见 app/mathjax.scm 头注释）：\over 一类中缀形式不支持；
 ;; 自定义宏/环境不支持；\left..\right 只支持一层（可嵌套）。
+;;
+;; 两个「Markdown 来源」的容错（本引擎的输入是 md_parse 原样转过来的源码）：
+;;   · 矩阵/对齐环境里的行分隔符常被写成 `\\\\`（Markdown 把 `\\` 转义成四个反斜杠），
+;;     词法上等于两个 `\\` 记号 —— 按**一个**处理（否则每两行之间会插一个空行）；
+;;   · 末尾多出来的一行（`\\` 之后紧跟 `\end`）若全是空单元格就丢掉（否则矩阵下方
+;;     多出一份行距）。
 ;;
 ;; 灵机约束：算术恒二参数、无 let/list/append、块内不 define、cond 每子句单表达式、
 ;; 源码字面量列表是静态共享对象（本文件不修改任何节点，节点一律 quasiquote 新建）。
@@ -175,13 +184,23 @@
     ("nearrow" 8599) ("searrow" 8600) ("swarrow" 8601) ("nwarrow" 8598)
     ("hookrightarrow" 8594) ("rightleftharpoons" 8596) ("rightsquigarrow" 8594)
     ;; 杂类
-    ("forall" 8704) ("exists" 8705) ("nexists" 8708) ("emptyset" 8709)
+    ("forall" 8704) ("exists" 8707) ("nexists" 8708) ("emptyset" 8709)
+    ;; 注：∃ 的真码点是 U+2203 = 8707（8705 是 ∁ COMPLEMENT）。早期表里误把
+    ;; \exists 映到 8705，tex_sym 那边两个码点都按 ∃ 画，因此旧行为不变；
+    ;; 但**源码里直接写 ∃（文档里确实有）**时来的是 8707，必须也要能画。
     ("varnothing" 8709) ("infty" 8734) ("partial" 8706) ("nabla" 8711)
     ("ell" 8467) ("hbar" 8463) ("hslash" 8463) ("Re" 8476) ("Im" 8465)
     ("aleph" 8501) ("wp" 8472) ("angle" 8736) ("triangle" 9651)
     ("square" 9633) ("blacksquare" 9632) ("therefore" 8756) ("because" 8755)
     ("dots" 8230) ("ldots" 8230) ("cdots" 8943) ("vdots" 8942) ("ddots" 8945)
     ("prime" 8242) ("backslash" 92) ("neg" 172) ("lnot" 172)
+    ;; 逻辑/证明论符号（⊢ ⊨ 一族字模里没有，由 tex_sym 矢量绘制）
+    ("vdash" 8866) ("dashv" 8867) ("models" 8872) ("vDash" 8872)
+    ("top" 8868) ("bot" 8869)
+    ;; 音乐记号（数理逻辑借用：\sharp 是哥德尔编码函数，\natural 是它的逆）
+    ("sharp" 9839) ("natural" 9838)
+    ;; MathJax 的 HTML 安全别名
+    ("lt" 60) ("gt" 62)
     ("imath" 105) ("jmath" 106) ("surd" 8730) ("checkmark" 10003)
     ("S" 167) ("P" 182) ("copyright" 169) ("pounds" 163) ("euro" 8364)
     ;; 定界符（字符形式）
@@ -423,6 +442,31 @@
   (if (undefined? v) (set! v 0.0) #f)
   (if (equal? unit "em") `(,v 1) `(,v 0))))
 
+;; 吞掉连续的 `\\` 记号和它们之间的空白：Markdown 源码里 `\\\\` 是两个记号，等价于一个。
+;; （只用于矩阵/对齐环境：其它位置的行分隔符由 parse_row 的 stop 表拦住，无需处理。）
+(define  skip_row_breaks (lambda ()
+  (define go #t)
+  (while (and go (not (at_end)))
+    {
+      (cond
+        ((equal? (tk) "\\\\") (adv))
+        ((is_space_tok (tk)) (adv))
+        (else (set! go #f)))
+    })))
+
+;; 一行（若干单元格）里是否有内容（末尾的空行要丢掉）
+(define  row_has_content (lambda (cells)
+  (define i 0)
+  (define n (length cells))
+  (define r #f)
+  (define go #t)
+  (while (and go (< i n))
+    {
+      (if (> (length (get_item cells i)) 0) { (set! r #t) (set! go #f) } #f)
+      (set! i (+ i 1))
+    })
+  r))
+
 (define  parse_matrix (lambda ()
   (define env (read_env_name))
   (define go #t)
@@ -442,6 +486,8 @@
         ((equal? (tk) "\\\\")
           {
             (adv)
+            ;; `\\\\`（Markdown 转义）→ 两个记号，按一个行分隔处理
+            (skip_row_breaks)
             ;; 可选的行距参数 \\[4pt] / \\[0.5em]：记在该行上（该行与下一行之间）
             (set! mgap (cons 0.0 (cons 0 '())))
             (if (equal? (tk) "[")
@@ -453,8 +499,13 @@
           })
         (else
           {
-            (push mrows mcells)
-            (push mgaps (cons 0.0 (cons 0 '())))
+            ;; 末尾的空行（`\\` 之后紧跟 \end{...}）不占行距；有内容的行照旧
+            (if (row_has_content mcells)
+                {
+                  (push mrows mcells)
+                  (push mgaps (cons 0.0 (cons 0 '())))
+                }
+                #f)
             (set! go #f)
           })
       )
@@ -520,10 +571,25 @@
     ((or (equal? cn "mathsf") (equal? cn "mathtt") (equal? cn "mathnormal"))
       `("F" "rm" ,(cons (parse_primary) '())))
     ((equal? cn "mathcal") `("F" "cal" ,(cons (parse_primary) '())))
+    ;; 黑体字母（Fraktur，数理逻辑里表示结构/模型）：字模里没有 blackletter，
+    ;; 用「粗斜体」代替——与 \mathbb（双线体）在屏幕上仍能一眼区分。
+    ((equal? cn "mathfrak") `("F" "frak" ,(cons (parse_primary) '())))
+    ;; 花体（Script）：用斜体代替（与 \mathcal 同档）
+    ((equal? cn "mathscr") `("F" "scr" ,(cons (parse_primary) '())))
     ((equal? cn "mathbb") `("F" "bb" ,(cons (parse_primary) '())))
     ((or (equal? cn "boldsymbol") (equal? cn "bm") (equal? cn "mathbfit"))
       `("F" "bfit" ,(cons (parse_primary) '())))
+    ;; \pmb（poor man's bold）：粗斜体
+    ((equal? cn "pmb") `("F" "bfit" ,(cons (parse_primary) '())))
     ((equal? cn "operatorname") `("o" 1 ,(read_text_group) 2))
+    ;; ---- 公式编号 ----
+    ;; \tag{1} / \tag*{1}：标签文字交给排版层贴在本行末尾（带圆括号，同 amsmath）
+    ((or (equal? cn "tag") (equal? cn "tag*"))
+      {
+        (skip_space_toks)
+        (if (equal? (tk) "*") (adv) #f)
+        `("T" ,(read_text_group))
+      })
     ;; ---- 正文 ----
     ((or (equal? cn "text") (equal? cn "mbox") (equal? cn "textrm")
          (equal? cn "textnormal") (equal? cn "textup") (equal? cn "hbox"))
@@ -550,9 +616,18 @@
     ((or (equal? cn ";") (equal? cn "thickspace")) `("k" 0.28))
     ((equal? cn "!") `("k" -0.17))
     ((equal? cn "negthinspace") `("k" -0.17))
+    ;; ---- 否定 ----
+    ;; \not 叠在**下一个**关系符上（\not\in / \not= / \not\vdash …）。
+    ;; 早期把它归入「忽略项」，于是 \not\vdash 被排成肯定式（语义反了）——那是错的。
+    ((equal? cn "not")
+      {
+        (skip_space_toks)
+        (set! a1 (parse_atom))
+        (if a1 `("n" ,a1) #f)
+      })
     ;; ---- 忽略项 ----
     ((or (equal? cn "displaystyle") (equal? cn "textstyle") (equal? cn "scriptstyle")
-         (equal? cn "scriptscriptstyle") (equal? cn "not") (equal? cn "hline")
+         (equal? cn "scriptscriptstyle") (equal? cn "hline")
          (equal? cn "limits") (equal? cn "nolimits") (equal? cn "!"))
       #f)
     ;; ---- 大运算符 ----

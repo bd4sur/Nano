@@ -11715,3 +11715,98 @@ ESP32，这条要重新过一遍内存探针。
 - **控件的默认几何是被别处依赖的契约**：加宽一枚全局按钮，要顺着"贴着它排的元素"
   逐个核对（本项目里是 gol 的显式坐标、particlelife 的自绘 HUD 按钮、album/musicbox 的
   右对齐 HUD 文字、calculator 回归的排除矩形）。能引用 `EX.btn_w` 的地方就不要写死数字。
+
+------------------------------------
+
+# 2026-11-16（数学排版引擎：按《计算与证明》一文补齐 TeX 特性）
+
+需求：`infer/app/mathjax.scm` + `infer/app/lib/tex_*.scm` 只支持 LaTeX 的一个子集；
+参照 `/home/bd4sur/bd4sur.github.io/markdown/blog/Cyber-计算与证明.md`（5294 行、
+35 个块级公式 + 541 处行内公式）把**文档里出现的全部 TeX 特性**补齐。
+（行内 `$...$` 的解析按用户要求**不做**——那是 Markdown 解析端的事，本次只补 TeX 能力。）
+
+## 1. 特性清单（文档里出现、原来不支持的）
+
+用脚本把 576 段公式抽出来，统计控制词与字符，再逐个对照 `tex_parse.scm` 的符号表与
+`tex_sym.scm` 的矢量表，得到 11 处缺口：
+
+| 特性 | 原状 | 现在 |
+|---|---|---|
+| `\not`（×28，`\not\in` `\not=` `\not\approx` `\not\vdash` `\not\models`） | 归入"忽略项"→ 否定式被排成**肯定式**（语义反了） | 新节点 `("n" 底符)`：先排底符再在其包围盒上叠一道左下→右上斜杠；原子类跟随底符 |
+| `\tag{1}`（×7，含 `\end{align} \tag{3}`） | 未知控制词 → 排出字面 "tag1" | 新节点 `("T" 文本)`：**不占行内位置**，整行排完后贴到行末（0.9em + `(1)`），盒子右延 |
+| `\vdash`（⊢，×64，全文最关键的符号） | 符号表有码点但**字模没有**、tex_sym 也没画 → 空白 | `sym_tack`：竖笔画 + 右侧横线（横线在 55% 高处） |
+| `\models`（⊨，×5） | 同上 → 空白 | `sym_models`：竖笔画 + 两条平行横线（`\vDash`/`\models` 都映到 8872） |
+| `\sharp`（♯，×21） | 未知 → 字面 "sharp" | `sym_sharp`：两条竖笔画 + 两条粗横条（横条用规则块，1px 线画不出"粗"） |
+| `\natural`（♮，×6） | 未知 → 字面 "natural" | `sym_natural`：同构，但竖笔画上下伸出横条 |
+| `\aleph`（ℵ，×1） | 符号表有 8501 但无字形 → 空白 | `sym_aleph`：两条近竖笔画 + 中斜笔 + 左下脚横 |
+| `\mathfrak{...}`（×20，`\mathfrak{N}` 标准模型） | 未知 → 字面 "mathfrak" | 新字体名 `frak`：**粗斜体**（字模没有 blackletter，与 `\mathbb` 双线体仍能区分） |
+| `\mathscr{...}`（×3） | 未知 → 字面 "mathscr" | 新字体名 `scr`：斜体（与 `\mathcal` 同档） |
+| `\pmb{...}`（×1） | 未知 → 字面 "pmb" | 映射到既有 `bfit`（粗斜体） |
+| `\lt`（×1） | 未知 → 字面 "lt" | 映射到 `<`（60）；顺带补 `\gt` |
+
+另外两个**来源是 Markdown** 的容错（文档是网页源码，`\\` 被转义成 `\\\\`）：
+
+- 矩阵/对齐环境里的行分隔符 `\\\\`（= 两个 `\\` 记号）按**一个**处理。否则每两行
+  之间插一个空行——align/cases 全部错位。实现：`parse_matrix` 读到一个 `\\` 后
+  `skip_row_breaks` 吞掉紧跟的同类记号与空白。
+- `\\` 之后紧跟 `\end{...}` 时多出来的那一行（全空单元格）丢弃，不再多占一份行距。
+
+顺带修掉两个**旧 bug**：
+
+- `\exists` 映射成 8705（那是 ∁ COMPLEMENT），∃ 的真码点是 **8707**。`tex_sym` 早先
+  只按 8705 画，于是**源码里直接写 ∃**（文档里就有）落不到任何字形 → 空白。现在
+  两个码点都画 ∃，`syms` 里 `\exists` 改为 8707。
+- `tex_sym` 的 `lw_of` 在 em 大时返回 >1 的线宽（zoom 3× 时 2.6）。图形层的抗锯齿
+  直线在 `wd > 1` 会切到"粗线"路径（加法混合，实测表现为**笔画缩短/断裂**，
+  放大后 ⊢ 只剩一个小短竖）。现在 `lw_of` **封顶 1.0**——数学公式最高 3× 缩放也不会退化。
+
+## 2. 符号形状怎么定的（复用 `infer/web/jslib/mathjax/` 的字库）
+
+`infer/web/jslib/mathjax/output/chtml/fonts/woff-v2/` 里有 MathJax 的 OT 字库
+（`MathJax_Main-Regular.woff` 就含 ♯ ♮ ℵ ⊢ ⊨ ⊤）。流程：`fontTools.TTFont(woff)` 直接读
+woff → `save(ttf)` → PIL/FreeType 按 18px/44px 栅格化成 ASCII 图 → **照字形轮廓写矢量笔画**。
+比凭空画准得多（⊢/⊨ 的横杠高度、♯/♮ 竖笔画的伸出量、ℵ 的斜笔角度都是这么量出来的）。
+
+没有走"把 MathJax 字库转成内嵌位图字体"这条路：那要在 `graphics.c` 里加一个新 font id
+（`gfx_font_alpha_accessor`/`line_height`/`baseline`/`native_size` 四处 switch）并连带
+改十几处构建清单，而本次实际缺的只有 5 个符号——矢量够用且天然可缩放。
+（若将来要真正的 blackletter/花体字形，这条路是现成的：woff → PIL 栅格化 → 4bpp 字模表。）
+
+## 3. 改动文件
+
+| 文件 | 改动 |
+|---|---|
+| `app/lib/tex_parse.scm` | `\not` / `\tag` / `\mathfrak` / `\mathscr` / `\pmb` / `\lt` `\gt`；符号表补 `\sharp \natural \dashv \models \vDash \top \bot` 与 ∃ 码点修正；`skip_row_breaks` + 末尾空行丢弃 |
+| `app/lib/tex_layout.scm` | `lay_not`（叠斜杠）、`lay_row` 的 `\tag` 行末贴附、`frak`/`scr` 字体、`cls_of` 补 `n`/`T`、`:` 归入关系符（`:=` 的间距）、`RELOPS` 补 ⊢⊣⊨ |
+| `app/lib/tex_sym.scm` | `sym_tack`/`sym_models`/`sym_sharp`/`sym_natural`/`sym_aleph`；∃ 双码点；`lw_of` 封顶 1.0 |
+| `app/mathjax.scm` | 内置示例 20 → **24 条**（新增：⊢/⌈⌉、𝔑⊨τ 与否定、♯/♮/ℵ、aligned+`\tag`） |
+| `app/markdown.scm` | 仅注释：说明 `\\\\` 行分隔符的容错来自引擎侧 |
+
+## 4. 验证
+
+- **静态**：`tools/e2e/tex/check_quasi.py` 全绿（新写的矢量符号里曾有 4 处
+  `` `(,w ,h (* 0.02 em)) `` 漏逗号——正是 AGENTS 记过两次的那个坑，盒子深度变成列表后
+  在 `get_item` 处炸成"指令执行异常"）。
+- **宿主单测** `tools/e2e/tex/run_tests.sh`：**56 → 76/76 PASS**。新增 20 条：
+  `\not` 否定节点的结构与盒子、`\tag` 节点与"盒子更宽"、⊢/⊨/♯/♮/ℵ **有笔画**（op 数判据，
+  因为缺字时 `B.g` 仍会发射一个空字形——"op 数 > 0"抓不到空白，必须按矢量条数断言）、
+  `\mathfrak`/`\mathscr`/`\pmb`/`\lt`/`\gt`、`\\\\` 只有 2 行、末尾空行被丢弃。
+  另外把旧的"`\not` 被忽略后仍保留 subset"改写成"否定节点"。
+- **文档全量语料**（`tools/e2e/tex/probe_corpus.scm`，576 段公式）：
+  未知控制词 **0** 个、盒子全非负；再用 `probe_corpus_glyphs.scm` 统计"字模里没有的码点"，
+  19 个全部由 `tex_sym` 画出（`blank = 0`）。
+- **视觉**（宿主回归台 + `DUMP_PPM` → PNG 逐屏看）：把 35 个块级公式写成一篇
+  `doc/公式测试.md`，用 `APP_ARG` 拉起 markdown App 翻页核对——cases/align 行距正确、
+  `\tag` 的 (1)…(7) 贴在本行右端、`\vdash ⊨ ♯ ♮ ℵ ∃ ⌈⌉ ∉ ⊭` 全部有字形、
+  `\mathfrak{N}`/`\mathbb{N}`/`\mathscr{L}` 三种字体互相可分。
+- **回归**：宿主回归台 42 个 App 全 `err=none`（mathjax 1/24 首屏正常）；
+  markdown 侧 `test_parse` 135/135、`test_layout` 113/113、`test_stream` 18/18、
+  `test_view` 24/24（1MB 素材）、`test_layout_ab` 6/6、`test_menu_list` 24/24。
+
+## 5. 遗留
+
+- `\mathfrak` 是**粗斜体**不是真 blackletter（`\mathscr` 同理，是斜体）。要真正的字形，
+  见 §2 末尾的内嵌位图字体路线。
+- `\sqrt[3]` 之外的可选参数（如 `\frac` 的 `\textstyle` 变体）未扩展；`\over` 一类中缀
+  形式、颜色、图片仍不支持。
+- 行内 `$...$` 仍由 Markdown 端原样显示（用户明确本次不做）。
