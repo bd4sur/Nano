@@ -15,12 +15,15 @@
 ;;                                               内边距行，使被强制切开的段落/代码块画成一整块。
 ;;
 ;;   行 = (高度 背景 段列表)
-;;        高度：该行占用的像素高（正文 15；间隔行可以是 3~12 的小值）
+;;        高度：该行占用的像素高（正文 15；间隔行可以是 3~12 的小值；
+;;              含行内公式的行可能更高——见下方「行内公式的纵向预算」）
 ;;        背景：BG_NONE / BG_CODE（代码块底） / BG_RULE（横线）
 ;;   段 = (文本 样式 x 宽 url)
 ;;        x  —— 相对正文左边缘的像素偏移（**排版期就定死**，绘制端不做再排版）
 ;;        宽 —— 该段的像素宽（绘制端画下划线、行内代码底色时直接用）
 ;;        url —— 该段所属链接的目标（非链接为空串；点按命中后弹窗用）
+;;        行内公式段（ST_IMATH）例外：4 格不是 url，而是排版时用的 **em**（绘制端
+;;        按 (源串 em) 取同一份缓存 op 流，因此绘制不需要重排也不会张冠李戴）。
 ;;
 ;; 为什么排版结果是「行 + 段」而不是「块 + 位置」：
 ;;   · 绘制端只做一件事——按 y 累加往下画，**不知道任何 Markdown 语义**；
@@ -33,6 +36,7 @@
 ;;   4 标题1       5 标题2       6 标题3       7 代码块正文   8 列表项目符号
 ;;   9 表格竖线    10 引用块竖线   11 二级标题装饰竖线
 ;;   12 块级图片   13 图片占位框   14 行内图片占位文本   15 水平线段   16 块级数学公式
+;;   17 行内数学公式
 ;;
 ;; 字宽：本机 12px alpha 字模是等宽的——半角步进 7px、全角（>= U+2E80）12px
 ;;   （实测：i/M/W/a 均为 7，中文/全角标点为 12；见 infer/glyph_12.h 头注释）。
@@ -69,6 +73,8 @@
 (define ST_HR 15)         ;; 水平线段（宽度由段宽决定；表格上/下框线与表头下框线用它，
                           ;; 这样框线只画到表格实际宽度，而不是整幅正文宽）
 (define ST_MATH 16)       ;; 块级数学公式（段的 0 格存 LaTeX 源串，绘制端按它取缓存的 op 流）
+(define ST_IMATH 17)      ;; 行内数学公式（段的 0 格存 LaTeX 源串、4 格存 em；绘制端按
+                          ;; (源串 em) 取缓存的 op 流，基线跟同一行的文字基线对齐）
 
 (define BG_NONE 0)
 (define BG_CODE 1)
@@ -91,6 +97,28 @@
     (set! LINE_H line_h)
     #t))
 
+;; ---- 行内公式的纵向预算 ---------------------------------------------------
+;; 行内公式不能像块级公式那样独占一行（段落会被切成碎片），也不能硬塞进 15px 的文字行
+;; （分式/根号会小到看不清）。折中：以**文字基线**为对齐基准，允许公式比文字盒多占一点
+;; 上下空间，多出来的部分用「一个空行（上）+ 行高（下）」真实让位，因此永不重叠：
+;;     行内公式所在行的结构 = [上让位空行] + [文字行（高 = LINE_H + 下让位）]
+;; 文字仍画在该行 y + text_pad（与普通文字行完全一致，绘制端不需要额外偏移）。
+;; App 用 (MDL.set_imath_metrics 上行空间 下行空间 行顶到文字基线) 注入这三个数
+;; （随字模变化：12px 点阵 14/10/12、12px 抗锯齿 19/8/13、16px 抗锯齿 21/10/15）。
+(define IMATH_ASC 19)    ;; 文字基线以上可用高（px，含 6px 上溢余量）
+(define IMATH_DSC 8)     ;; 文字基线以下可用深（px，含 6px 下溢余量）
+(define LINE_ASC 13)     ;; 行顶 → 文字基线（px）
+
+(define set_imath_metrics
+  (lambda (asc dsc line_asc)
+    (set! IMATH_ASC asc)
+    (set! IMATH_DSC dsc)
+    (set! LINE_ASC line_asc)
+    #t))
+
+;; 行内公式的总高上限（喂给 (math_measure 源串 最大宽 最大高) 的第三个参数）
+(define imath_maxh (lambda () (+ IMATH_ASC IMATH_DSC)))
+
 (define LIST_IND 14)     ;; 列表每级缩进（与项目符号的悬挂缩进一致）
 (define QUOTE_IND 10)    ;; 引用块正文右移量
 (define QUOTE_BAR_W 2)   ;; 引用块左侧竖线宽度
@@ -111,6 +139,8 @@
 (define mk3 (lambda (a b c) (cons a (cons b (cons c (cdr '(0)))))))
 (define mk4 (lambda (a b c d) (cons a (cons b (cons c (cons d (cdr '(0))))))))
 (define mk5 (lambda (a b c d e) (cons a (cons b (cons c (cons d (cons e (cdr '(0)))))))))
+(define mk7 (lambda (a b c d e f g)
+  (cons a (cons b (cons c (cons d (cons e (cons f (cons g (cdr '(0)))))))))))
 
 ;; ---- 宽度计算 ------------------------------------------------------------
 
@@ -153,6 +183,32 @@
 (define atoms (new_list))
 (define atom_avail 300)   ;; 单原子最大宽度（超过就逐字符拆，保证一定能折行）
 (define atom_url "")      ;; 当前所处的链接目标（非空表示原子属于链接）
+(define atom_width 308)   ;; 本块的正文可用宽（行内公式按它算缩放上限）
+
+;; 小工具：二数取大（本文件不用内建 max）
+(define imax (lambda (a b) (if (> a b) a b)))
+
+;; 行内公式的上/下让位（px）：公式盒高出文字盒的部分，用空行/行高真实让出来
+(define imath_top
+  (lambda (h)
+    (define d (- h LINE_ASC))
+    (if (< d 1.0) 0 (Math.ceil d))))
+(define imath_bot
+  (lambda (d)
+    (define e (- d (- LINE_H LINE_ASC)))
+    (if (< e 1.0) 0 (Math.ceil e))))
+
+;; 行内公式 → 原子（形状见下方 atomize 的注释）。
+;; 度量失败（没装引擎 / 解析不出）时退化为字面 `$源码$` 文本，不吞内容。
+(define imath_atom
+  (lambda (src)
+    (define dims #f)
+    (if math_measure (set! dims (math_measure src atom_width (imath_maxh))) #f)
+    (if dims
+        (push atoms (mk7 src ST_IMATH (get_item dims 0) atom_url
+                         (get_item dims 1) (get_item dims 2) (get_item dims 3)))
+        (atomize_text (String.concat "$" (String.concat src "$")) ST_CODE))
+    #t))
 
 (define atoms_last_is_space
   (lambda ()
@@ -210,6 +266,10 @@
 ;;   (bold <节点列表>)      —— 元素 1 是**节点列表**（整表一个元素，不是摊平的节点）
 ;;   (link <节点列表> "url") —— 元素 1 是节点列表，元素 2 是目标地址
 ;;   (code "s")            —— 元素 1 是字符串
+;;   (imath "src")         —— 行内公式，原子形状见下
+;;
+;; 公式原子 = (源串 ST_IMATH 宽 url 上高 下深 em)：比文本原子多三个字段，
+;; 供折行时算「本行要让多少位」（上/下让位）与绘制端按 (源串 em) 取缓存的 op 流。
 (define atomize
   (lambda (inls base)
     (define n (length inls))
@@ -239,7 +299,9 @@
                                  (String.concat "[图片] "
                                                 (get_item (get_item inls i) 2))
                                  ST_IMAGE_TEXT)
-                                #f))))))
+                                (if (== tag 'imath)
+                                    (imath_atom (get_item nd 1))
+                                    #f)))))))
         (set! i (+ i 1)) })
     #t))
 
@@ -257,10 +319,12 @@
 ;; 因此纯逻辑单测不传也能跑。
 (define measure_image (lambda (path) #f))
 
-;; 数学公式度量回调：(源串, 最大宽) → (宽 上高 下深) | #f
-;;   由 App 注入（内部调 tex_parse / tex_layout 排版并缓存绘制 op 流，超宽时按比例
+;; 数学公式度量回调：(源串, 最大宽, 最大高) → (宽 上高 下深 em) | #f
+;;   由 App 注入（内部调 tex_parse / tex_layout 排版并缓存绘制 op 流，超宽/超高时按比例
 ;;   缩小 em 重排 —— 不是位图缩放）。不注入时（纯逻辑单测）公式退化为
-;;   "原样显示 $$ 源码" 的文本行，测试照样能跑、不依赖 tex 模块。
+;;   "原样显示 $ 源码 $" 的文本行，测试照样能跑、不依赖 tex 模块。
+;;   最大高 = 0 表示不限高（块级公式）；行内公式传 (imath_maxh)。
+;;   返回的第 4 项 em 会存进公式段里，绘制端按 (源串 em) 取同一份缓存 op 流。
 (define math_measure #f)
 (define set_math_measure (lambda (fn) (set! math_measure fn) #t))
 (define MATH_PAD 3)       ;; 公式行内上下内边距（px）
@@ -290,17 +354,15 @@
     (while (< i n)
       { (set! nd (get_item inls i))
         (set! tag (get_item nd 0))
-        (if (== tag 'text)
-            (set! out (String.concat out (get_item nd 1)))
-            (if (== tag 'code)
-                (set! out (String.concat out (get_item nd 1)))
-                (if (== tag 'bold)
-                    (set! out (String.concat out (inlines_text (get_item nd 1))))
-                    (if (== tag 'link)
-                        (set! out (String.concat out (inlines_text (get_item nd 1))))
-                        (if (== tag 'image)
-                            (set! out (String.concat out (get_item nd 2)))
-                            #f)))))
+        (cond
+          ((== tag 'text) (set! out (String.concat out (get_item nd 1))))
+          ((== tag 'code) (set! out (String.concat out (get_item nd 1))))
+          ((== tag 'bold) (set! out (String.concat out (inlines_text (get_item nd 1)))))
+          ((== tag 'link) (set! out (String.concat out (inlines_text (get_item nd 1)))))
+          ((== tag 'image) (set! out (String.concat out (get_item nd 2))))
+          ;; 行内公式：目录/纯文本化时取 LaTeX 源串（不丢内容）
+          ((== tag 'imath) (set! out (String.concat out (get_item nd 1))))
+          (else #f))
         (set! i (+ i 1)) })
     out))
 
@@ -332,12 +394,14 @@
     (push_gap h)
     #t))
 
-;; 把一段文本放进当前行的段表：与上一段样式/链接相同且首尾相接时合并（减少绘制调用）
+;; 把一段文本放进当前行的段表：与上一段样式/链接相同且首尾相接时合并（减少绘制调用）。
+;; 公式段（ST_IMATH / ST_MATH）**不参与合并**：它们的“文本”是 LaTeX 源串，
+;; 拼起来既无意义、也会把两个公式的 em / op 流搞混。
 (define place_atom
   (lambda (segs txt st x aw url)
     (define ns (length segs))
     (define last #f)
-    (if (> ns 0)
+    (if (and (> ns 0) (not (== st ST_IMATH)) (not (== st ST_MATH)))
         { (set! last (get_item segs (- ns 1)))
           (if (== (get_item last 1) st)
               (if (String.equals (get_item last 4) url)
@@ -349,6 +413,20 @@
               (push segs (mk5 txt st x aw url))) }
         (push segs (mk5 txt st x aw url)))
     (+ x aw)))
+
+;; 行内公式段 = (源串 ST_IMATH x 宽 em)：4 格放 em（不是 url——绘制端按它取缓存）。
+(define imath_seg
+  (lambda (at x)
+    (mk5 (get_item at 0) ST_IMATH x (get_item at 2) (get_item at 6))))
+
+;; 把一个原子放进当前行（文本原子走 place_atom 合并，公式原子单独成段）；返回新 pen x
+(define place_one
+  (lambda (segs at x)
+    (if (> (length at) 4)
+        { (push segs (imath_seg at x))
+          (+ x (get_item at 2)) }
+        (place_atom segs (get_item at 0) (get_item at 1) x (get_item at 2)
+                    (get_item at 3)))))
 
 ;; 中文避头点（禁则）：这些字符不能出现在行首，宁可让它「悬挂」超出正文宽一点点
 ;; （多出 <=12px，落在右留白里）。否则会出现整行只有一个「。」的孤字行。
@@ -372,8 +450,9 @@
         #f)))
 
 ;; 贪心折行：按原子顺序填行，放不下就换行（行首空格丢弃；续行缩进 cont_ind）
-;; 返回「段列表的列表」——每个元素是一行（一行里的段已按 x 排好），**不落地成显示行**。
-;; 这样表格单元格可以借用同一套折行逻辑，再按列坐标平移；普通块用 emit_wrapped 落地。
+;; 返回「行记录」列表，每项 = (段表 上让位 下让位)——行里已按 x 排好，**不落地成显示行**。
+;; 上/下让位是行内公式撑出来的纵向需求（普通文字行恒为 0）；表格单元格借用同一套折行
+;; 逻辑再按列坐标平移，普通块用 emit_wrapped/pack_atoms 落地。
 (define pack_segs
   (lambda (width first_ind cont_ind)
     (define na (length atoms))
@@ -382,33 +461,43 @@
     (define segs (new_list))
     (define out (new_list))
     (define at #f)
-    (define txt "")
-    (define st 0)
-    (define aw 0)
-    (define url "")
     (define is_sp #f)
+    (define ltop 0)
+    (define lbot 0)
     (while (< k na)
       { (set! at (get_item atoms k))
-        (set! txt (get_item at 0))
-        (set! st (get_item at 1))
-        (set! aw (get_item at 2))
-        (set! url (get_item at 3))
-        (set! is_sp (String.equals txt " "))
+        (set! is_sp (String.equals (get_item at 0) " "))
         (if (== (length segs) 0)
             (if is_sp #f
-                (set! x (place_atom segs txt st x aw url)))
-            (if (> (+ x aw) width)
-                (if (atom_hangs txt)
-                    (set! x (place_atom segs txt st x aw url))   ;; 避头点：悬挂不换行
-                    { (push out segs)
+                (set! x (place_one segs at x)))
+            (if (> (+ x (get_item at 2)) width)
+                (if (atom_hangs (get_item at 0))
+                    (set! x (place_one segs at x))   ;; 避头点：悬挂不换行
+                    { (push out (mk3 segs ltop lbot))
                       (set! segs (new_list))
+                      (set! ltop 0)
+                      (set! lbot 0)
                       (set! x cont_ind)
                       (if is_sp #f
-                          (set! x (place_atom segs txt st x aw url))) })
-                (set! x (place_atom segs txt st x aw url))))
+                          (set! x (place_one segs at x))) })
+                (set! x (place_one segs at x))))
+        ;; 纵向需求必须在**放好之后**累加：公式可能刚引起一次换行，那个需求属于新行
+        (if (> (length at) 4)
+            { (set! ltop (imax ltop (imath_top (get_item at 4))))
+              (set! lbot (imax lbot (imath_bot (get_item at 5)))) }
+            #f)
         (set! k (+ k 1)) })
-    (if (> (length segs) 0) (push out segs) #f)
+    (if (> (length segs) 0) (push out (mk3 segs ltop lbot)) #f)
     out))
+
+;; 一条折行结果落地成显示行：先「上让位」空行（grid 非空时只画表格竖线），
+;; 再一行高 = LINE_H + 下让位的文字行。普通文字行（上下让位都是 0）与旧行为逐字节一致。
+(define emit_flow_line
+  (lambda (rec bg grid)
+    (define top (get_item rec 1))
+    (define bot (get_item rec 2))
+    (if (> top 0) (emit_line top bg grid) #f)
+    (emit_line (+ LINE_H bot) bg (get_item rec 0))))
 
 ;; 折行的显示行版本：把 pack_segs 的每一行按背景落地
 (define pack_atoms
@@ -417,7 +506,7 @@
     (define n (length blocks))
     (define i 0)
     (while (< i n)
-      { (emit_line LINE_H bg (get_item blocks i))
+      { (emit_flow_line (get_item blocks i) bg (new_list))
         (set! i (+ i 1)) })
     #t))
 
@@ -427,6 +516,7 @@
     (set! atoms (new_list))
     (set! atom_url "")
     (set! atom_avail (- width cont_ind))
+    (set! atom_width width)
     (atomize inls base)
     (pack_atoms width first_ind cont_ind bg)))
 
@@ -717,6 +807,7 @@
     (define w 0)
     (define nd #f)
     (define tag 'text)
+    (define dims #f)
     (while (< i n)
       { (set! nd (get_item inls i))
         (set! tag (get_item nd 0))
@@ -728,7 +819,13 @@
                     (set! w (+ w (inl_width (get_item nd 1))))
                     (if (== tag 'link)
                         (set! w (+ w (inl_width (get_item nd 1))))
-                        #f))))
+                        (if (== tag 'imath)
+                            { (set! dims (if math_measure
+                                             (math_measure (get_item nd 1)
+                                                           TABLE_MAXW (imath_maxh))
+                                             #f))
+                              (if dims (set! w (+ w (get_item dims 0))) #f) }
+                            #f)))))
         (set! i (+ i 1)) })
     w))
 
@@ -860,12 +957,13 @@
         (set! i (+ i 1)) })
     out))
 
-;; 单元格内容 → 若干子行（每子行是一组段，x 从 0 起）
+;; 单元格内容 → 若干子行（每子行是 (段表 上让位 下让位)，x 从 0 起）
 (define cell_blocks
   (lambda (inls w base)
     (set! atoms (new_list))
     (set! atom_url "")
     (set! atom_avail w)
+    (set! atom_width w)
     (atomize inls base)
     (pack_segs w 0 0)))
 
@@ -930,6 +1028,10 @@
     (define k 0)
     (define segs (new_list))
     (define bl #f)
+    (define rec #f)
+    (define gsegs (new_list))
+    (define rtop 0)
+    (define rbot 0)
     (define w 0)
     (define shift 0)
     (set! i 0)
@@ -945,22 +1047,33 @@
     (set! k 0)
     (while (< k maxl)
       { (set! segs (new_list))
+        (set! rtop 0)
+        (set! rbot 0)
         (set! i 0)
         (while (< i ncol)
           { (set! bl (get_item blocks i))
             (if (< k (length bl))
-                { (set! w (blk_width (get_item bl k)))
+                { (set! rec (get_item bl k))
+                  (set! w (blk_width (get_item rec 0)))
                   (set! shift (align_shift (align_at aligns i)
                                            (- (- (get_item widths i)
                                                  (* 2 TABLE_PAD))
                                               w)))
-                  (relocate_segs (get_item bl k)
+                  (relocate_segs (get_item rec 0)
                                  (+ (+ (get_item xs i) TABLE_PAD) shift))
-                  (append_segs segs (get_item bl k)) }
+                  (append_segs segs (get_item rec 0))
+                  (set! rtop (imax rtop (get_item rec 1)))
+                  (set! rbot (imax rbot (get_item rec 2))) }
                 #f)
             (set! i (+ i 1)) })
         (if (== TABLE_GRID 1) (append_grid segs xs ncol) #f)
-        (emit_line LINE_H bg segs)
+        ;; 本行有行内公式撑高时：先插一条**只画竖线**的空行（上让位），再画行本身
+        (if (> rtop 0)
+            { (set! gsegs (new_list))
+              (if (== TABLE_GRID 1) (append_grid gsegs xs ncol) #f)
+              (emit_line rtop bg gsegs) }
+            #f)
+        (emit_line (+ LINE_H rbot) bg segs)
         (set! k (+ k 1)) })
     #t))
 
@@ -1074,7 +1187,7 @@
     (define x 0)
     (emit_gap 7)
     (if math_measure
-        (set! dims (math_measure src width))
+        (set! dims (math_measure src width 0))   ;; maxh = 0：块级公式不限高
         #f)
     (if (list? dims)
         { (set! w (get_item dims 0))

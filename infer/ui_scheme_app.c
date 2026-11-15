@@ -71,8 +71,14 @@
     // 64 位宿主（PocketTerm35 / 树莓派 aarch64、桌面 x86_64）：见上面「80MB」条
     #define MB_POOL_SIZE   (80ULL * 1024 * 1024)
 #else
-    // 32 位宿主（wasm32 浏览器 / webgui、Luckfox Pico 等 32 位 Linux）：见上面「48MB」条
-    #define MB_POOL_SIZE   (48ULL * 1024 * 1024)
+    // 32 位宿主（wasm32 浏览器 / webgui、Luckfox Pico 等 32 位 Linux）：见上面「48MB」条。
+    // 2026-11 调整 48 → 56MB：markdown 加入「行内公式」后（md_parse/md_layout/markdown
+    // 各涨 ~1-2KB，md_demo 的示例文档 +7KB 公式语料），wasm32 下 48MB 池**首次**能链接、
+    // 但**第二次**冷启动就「源码构建/加载失败」（VM 区的链接期峰值顶到池边，浏览器里
+    // 实测：同一页面先开一次、退出再开一次即复现；mathjax 等小 App 不受影响）。
+    // 56MB（VM 区 28MB）留出余量，浏览器里连开两次正常；内存受限宿主仍走下面的
+    // 「最大连续块 - 余量」自适应下调，装不下的大 App 照旧报「内存不足」。
+    #define MB_POOL_SIZE   (56ULL * 1024 * 1024)
 #endif
 #define MB_POOL_MIN    (512ULL * 1024)
 #define MB_POOL_MARGIN (64ULL * 1024)

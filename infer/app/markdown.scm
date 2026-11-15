@@ -21,13 +21,16 @@
 ;;
 ;; 支持的子集：# 1~3 级标题、**加粗**、`行内代码`、无序列表（**可嵌套**）、[链接](url)、
 ;;   围栏代码块、分隔线、**表格**（GFM：列对齐、单元格内行内样式、自动列宽、单元格内
-;;   折行）、**引用块**（可嵌套、内部可放任意块）、**块级数学公式**（$$...$$，见下）、
-;;   段落（含 CJK 软换行）。有序列表留有扩展位。
+;;   折行）、**引用块**（可嵌套、内部可放任意块）、**块级数学公式**（$$...$$）、
+;;   **行内数学公式**（$...$，见下）、段落（含 CJK 软换行）。有序列表留有扩展位。
 ;;
-;; 块级数学公式：$$ 单行 $$ 或 $$ + 若干行 + $$。排版/绘制复用数学公式 App 的引擎
-;;   （app/lib/tex_*.scm）：解析端只产出 (math 源串)，排版端按注入的度量回调定行高与
-;;   居中位置（超宽则按比例缩小字号**重排**到与屏幕等宽），绘制端画缓存的 op 流。
-;;   **行内公式 $...$ 不处理**，按普通文本原样显示。
+;; 数学公式（块级与行内共用一套引擎，见 app/lib/tex_*.scm）：
+;;   · 块级：$$ 单行 $$ 或 $$ + 若干行 + $$；解析端只产出 (math 源串)，排版端按注入的
+;;     度量回调定行高与居中位置（超宽则按比例缩小字号**重排**到与屏幕等宽）；
+;;   · 行内：$...$ / 段落中间的 $$...$$，解析端产出 (imath 源串)；排版端以同一行文字的
+;;     **基线**为对齐基准，公式比文字高时用「上方空行 + 抬高本行行高」真实让位
+;;     （见 md_layout 的 IMATH_ASC/DSC），超高/超宽同样按比例缩小字号重排；
+;;   · 绘制端都画缓存的 op 流（行内段带 em，按 (源串 em) 命中同一份缓存），不重排。
 ;;   引擎侧的 Markdown 来源容错（在 tex_parse 里）：行分隔符写成 `\\\\`（转义后两个记号）
 ;;   按一个处理、末尾空行丢弃——所以从网页源码里拷下来的 align/cases 能直接排对。
 ;;
@@ -152,8 +155,11 @@
     ;; 行内图片的降级占位文本（一期不支持行内插图）
     (if (== st MDL.ST_IMAGE_TEXT)
         { (set! cr 130) (set! cg 146) (set! cb 172) (set! style_weight 1) } #f)
-    ;; 块级数学公式：与 mathjax 同档的亮色（4bpp 字模在小字号上抗锯齿偏细，亮色观感更好）
+    ;; 块级/行内数学公式：与 mathjax 同档的亮色（4bpp 字模在小字号上抗锯齿偏细，
+    ;; 亮色观感更好）
     (if (== st MDL.ST_MATH)
+        { (set! cr 234) (set! cg 238) (set! cb 248) (set! style_weight 1) } #f)
+    (if (== st MDL.ST_IMATH)
         { (set! cr 234) (set! cg 238) (set! cb 248) (set! style_weight 1) } #f)
     #t))
 
@@ -207,6 +213,7 @@
 (define new_list (lambda () (cdr '(0))))
 (define mk2 (lambda (a b) (cons a (cons b (cdr '(0))))))
 (define mk3 (lambda (a b c) (cons a (cons b (cons c (cdr '(0)))))))
+(define mk4 (lambda (a b c d) (cons a (cons b (cons c (cons d (cdr '(0))))))))
 (define mk7 (lambda (a b c d e f g)
   (cons a (cons b (cons c (cons d (cons e (cons f (cons g (cdr '(0)))))))))))
 
@@ -361,32 +368,42 @@
     (define r (Gfx.image_size (image_path p)))
     (if (null? r) #f r)))
 
-;; ---- 块级数学公式（复用 app/lib/tex_*：LaTeX → 语法树 → 盒子 → op 流）------
+;; ---- 数学公式（复用 app/lib/tex_*：LaTeX → 语法树 → 盒子 → op 流）----------
 ;;
 ;; 与数学公式 App（app/mathjax.scm）同一套引擎，只换输入源：
-;;   · 解析：md_parse 把 $$...$$ 解析成 (math 源串) 块（本文件不碰 Markdown 语法）；
-;;   · 度量：md_layout 的 lay_math 调下面的 (doc_math_measure) 拿 (宽 上高 下深)，
-;;     据此定行高并水平居中；**超宽就等比缩小 em 重排**（不是位图缩放，字形仍落在
-;;     字模的清晰尺度上），保证长公式与正文等宽；
+;;   · 解析：md_parse 把 `$$...$$` 解析成块级 (math 源串)、把 `$...$` 解析成行内
+;;     (imath 源串)（本文件不碰 Markdown 语法）；
+;;   · 度量：md_layout 调下面的 (doc_math_measure 源串 最大宽 最大高) 拿
+;;     (宽 上高 下深 em)：块级公式按正文宽居中、**超宽就等比缩小 em 重排**（不是位图
+;;     缩放，字形仍落在字模的清晰尺度上）；行内公式额外受行高约束（maxh，见
+;;     md_layout 的 IMATH_ASC/DSC），保证它落在一行文字里不撑破段落；
 ;;   · 绘制：取缓存的 op 流直接画，**不重排**——滚动/翻页时每帧只做"换缓冲 + 一遍
 ;;     顺序绘制"，否则每帧重排公式会明显掉帧。
 ;;
-;; 缓存：最近 MATH_CACHE_MAX 条公式的 (源串 em 宽 上高 下深 op流 操作数)。
-;; tex_base 的操作缓冲是模块级单例，绘制前用 (B.set_ops 缓存流 操作数) 换回去；
-;; 缓存的流此后只读（排版器每次 layout 都先 reset，不会原地改旧流）。
-(define MATH_CACHE_MAX 12)
+;; 缓存键 = (源串 em)：同一段 LaTeX 在不同宽度/行高约束下会有不同的 em（块级按页宽、
+;; 行内按行高），键里带 em 才不会张冠李戴；绘制端拿到段里的 em 直接命中同一份 op 流。
+;; 行内公式一条屏幕可能同时出现十几条，缓存上限因此调到 48（每条 ~1-2KB op）。
+;;
+;; 缓存条目 = (源串 em 宽 上高 下深 op流 操作数)。tex_base 的操作缓冲是模块级单例，
+;; 绘制前用 (B.set_ops 缓存流 操作数) 换回去；缓存的流此后只读（排版器每次 layout
+;; 都先 reset，不会原地改旧流）。
+(define MATH_CACHE_MAX 48)
 (define MATH_MIN_EM 0.20)     ;; 超长公式的最小缩放（再小已不可读，超出部分靠裁剪）
 (define math_cache (cdr '(0)))  ;; (源串 em 宽 上高 下深 op流 操作数)，最近加入的在前
 
+;; 按 (源串 em) 找缓存条目；em < 0 表示"只要源串匹配的那一条"（诊断/兼容用）
 (define math_cache_find
-  (lambda (src)
+  (lambda (src em)
     (define n (length math_cache))
     (define i 0)
     (define e #f)
     (define r #f)
     (while (and (< i n) (not r))
       { (set! e (get_item math_cache i))
-        (if (String.equals (get_item e 0) src) (set! r e) #f)
+        (if (String.equals (get_item e 0) src)
+            (if (< em 0) (set! r e)
+                (if (< (B.absf (- (get_item e 1) em)) 0.0005) (set! r e) #f))
+            #f)
         (set! i (+ i 1)) })
     r))
 
@@ -404,63 +421,126 @@
     (set! math_cache (cons e out))
     #t))
 
-;; 排一条公式：TeX 排版 → 超宽则缩字号重排 → 连同 op 流一起缓存
-(define math_build
-  (lambda (src maxw)
-    (define ast (P.parse src))
+;; 以指定 em 排一条公式并缓存
+(define math_build_em
+  (lambda (src em)
     (define box #f)
+    (define w 0.0)
+    (define h 0.0)
+    (define d 0.0)
+    (define e #f)
+    (L.set_emul em)
+    (set! box (L.layout (P.parse src) 0))
+    (set! w (get_item box 0))
+    (set! h (get_item box 1))
+    (set! d (get_item box 2))
+    (set! e (mk7 src em w h d B.ops (B.count)))
+    (math_cache_put e)
+    e))
+
+;; 排一条公式并满足约束：先按 em=1 排，再按 maxw/maxh 等比缩小 em **重排**。
+;;   · maxw 是宽度上限（块级 = 正文宽；行内 = 本块正文宽）；
+;;   · maxh > 0 是高度上限（行内 = 一行文字能容的上下空间；块级传 0 = 不限）。
+;; 度量取整会让缩放不严格线性，因此最多补 3 轮迭代（常规一~两轮就到位）。
+(define math_build
+  (lambda (src maxw maxh)
+    (define e #f)
     (define w 0.0)
     (define h 0.0)
     (define d 0.0)
     (define em 1.0)
     (define k 0.0)
     (define round 0)
-    (define e #f)
-    (L.set_emul em)
-    (set! box (L.layout ast 0))
-    (set! w (get_item box 0))
-    (set! h (get_item box 1))
-    (set! d (get_item box 2))
-    ;; 超宽 → 按比例缩小 em 后**重排**。度量取整会让宽度的缩放不严格线性，
-    ;; 因此按"还剩多少宽"再补几轮（最多 3 轮，常规一~两轮就到位）。
-    (while (and (> w maxw) (< round 3))
-      { (set! k (/ maxw w))
+    (set! e (math_build_em src em))
+    (set! w (get_item e 2))
+    (set! h (get_item e 3))
+    (set! d (get_item e 4))
+    (while (and (or (> w maxw) (and (> maxh 0.0) (> (+ h d) maxh))) (< round 3))
+      { (set! k 1.0)
+        (if (> w maxw) (set! k (B.mn k (/ maxw w))) #f)
+        (if (and (> maxh 0.0) (> (+ h d) maxh))
+            (set! k (B.mn k (/ maxh (+ h d))))
+            #f)
         (set! em (* em k))
         (if (< em MATH_MIN_EM) (set! em MATH_MIN_EM) #f)
-        (L.set_emul em)
-        (set! box (L.layout ast 0))
-        (set! w (get_item box 0))
-        (set! h (get_item box 1))
-        (set! d (get_item box 2))
+        (set! e (math_build_em src em))
+        (set! w (get_item e 2))
+        (set! h (get_item e 3))
+        (set! d (get_item e 4))
         (set! round (+ round 1)) })
     ;; 诊断行（端到端测试据此断言"公式真的排了、长公式被缩放"）。
-    ;; 刻意**不打印公式源码**：LaTeX 里的 \r \n \t 在 (display) 时会被解释成控制字符
-    ;; （实测 \right 会输出一个 CR，把日志行切碎、带歪端到端断言），只打长度。
+    ;; 刻意**不打印公式源码**：LaTeX 里的 \r \n \t 在 (display) 时会被解释成控制
+    ;; 字符（实测 \right 会输出一个 CR，把日志行切碎、带歪端到端断言），只打长度。
     (display "MDMATH em=") (display em)
     (display " w=") (display w)
+    (display " h=") (display h)
     (display " maxw=") (display maxw)
     (display " len=") (display (String.length src)) (newline)
-    (set! e (mk7 src em w h d B.ops (B.count)))
-    (math_cache_put e)
     e))
 
-;; 取（或现排）一条公式的缓存条目
+;; 缓存里找一条**已满足约束**的条目（源串相同、宽不超、高不超）；没有返回 #f
+(define math_find_fit
+  (lambda (src maxw maxh)
+    (define n (length math_cache))
+    (define i 0)
+    (define e #f)
+    (define r #f)
+    (define ok #f)
+    (while (and (< i n) (not r))
+      { (set! e (get_item math_cache i))
+        (if (String.equals (get_item e 0) src)
+            { (set! ok (<= (get_item e 2) maxw))
+              (if (and ok (> maxh 0.0))
+                  (if (> (+ (get_item e 3) (get_item e 4)) maxh) (set! ok #f) #f)
+                  #f)
+              (if ok (set! r e) #f) }
+            #f)
+        (set! i (+ i 1)) })
+    r))
+
+;; 取（或现排）一条满足约束的公式缓存条目
 (define math_entry
-  (lambda (src maxw)
-    (define e (math_cache_find src))
-    (if e e (math_build src maxw))))
+  (lambda (src maxw maxh)
+    (define e (math_find_fit src maxw maxh))
+    (if e e (math_build src maxw maxh))))
 
-;; 注入给 md_layout 的度量回调：(源串 最大宽) → (宽 上高 下深) | #f
+;; 注入给 md_layout 的度量回调：(源串 最大宽 最大高) → (宽 上高 下深 em) | #f
 (define doc_math_measure
-  (lambda (src maxw)
-    (define e (math_entry src maxw))
-    (if e (mk3 (get_item e 2) (get_item e 3) (get_item e 4)) #f)))
+  (lambda (src maxw maxh)
+    (define hh (if (undefined? maxh) 0 maxh))
+    (define e (math_entry src maxw hh))
+    (if e (mk4 (get_item e 2) (get_item e 3) (get_item e 4) (get_item e 1)) #f)))
 
-;; 画一条公式（绘制端已把 cr/cg/cb 按 ST_MATH 设好）。
+;; 画一条行内公式（绘制端已把 cr/cg/cb 按 ST_IMATH 设好）。
+;; 基线跟**同一行的文字基线**对齐（y 是行顶）；裁剪矩形就是公式盒本身。
+;; 段里带的 em 就是排版时用的那个 em，因此这里是纯缓存命中（缓存被挤掉才重排）。
+(define draw_imath
+  (lambda (src x y em)
+    (define e (math_cache_find src em))
+    (define w 0)
+    (define h 0)
+    (define d 0)
+    (define base 0)
+    (if e #f (set! e (math_build_em src em)))
+    (if e
+        { (set! w (Math.ceil (get_item e 2)))
+          (set! h (get_item e 3))
+          (set! d (get_item e 4))
+          (set! base (+ y (+ text_pad font_base)))
+          ;; 盒子顶边 = 基线 - 上高（y 向下为正）；裁剪矩形略放宽 2px 容抗锯齿笔画
+          (Gfx.set_clip (- x 2) (- (- base h) 2) (+ w 4) (+ (+ h d) 4))
+          (D.set_view (- x 2) (- (- base h) 2) (+ w 4) (+ (+ h d) 4))
+          (B.set_ops (get_item e 5) (get_item e 6))
+          (D.draw x base cr cg cb)
+          (Gfx.reset_clip) }
+        #f)
+    #t))
+
+;; 画一条块级公式。
 ;; 裁剪矩形 = 公式行（左右各留 2px 给抗锯齿线段），与 mathjax 的视口裁剪同一机制。
 (define draw_math
   (lambda (src x y h)
-    (define e (math_entry src CW))
+    (define e (math_entry src CW 0))
     (define bw 0)
     (define bh 0)
     (if e
@@ -542,6 +622,7 @@
 ;; 打开完成后的公共收尾（正常/兜底两条路共用）
 (define open_finish
   (lambda (ok msg)
+    (set! img_seen -1)
     (set! toc_items (cdr '(0)))
     (set! toc_open 0)
     (set! toc_scanned 0)
@@ -869,6 +950,7 @@
 ;;       ② 菜单组件（目录/设置）的行框顶要**加回**这段空隙（否则整列文字偏高）。
 (define text_gap 2)
 (define pill_h 13)       ;; 行内代码药丸底高
+(define IMATH_PAD 6)     ;; 行内公式允许比文字盒上下各多占的像素（分式/根号靠它不变形）
 
 (define SET_TOP 30)
 (define settings_open 0)
@@ -906,6 +988,11 @@
           (set! line_h (get_item info 2))
           (set! pill_h (- line_h 2))
           (MDL.set_font_metrics (get_item info 0) (get_item info 1) (get_item info 2))
+          ;; 行内公式的纵向预算：文字基线以上/以下各留 6px 余量（分式/根号能落在
+          ;; 一行文字里而不被压成看不清），多出来的位由 md_layout 用空行/行高让开
+          (MDL.set_imath_metrics (+ (+ font_base text_pad) IMATH_PAD)
+                                 (+ (- line_h (+ font_base text_pad)) IMATH_PAD)
+                                 (+ font_base text_pad))
           ;; 列表/目录/设置的行高跟着字模走（16px 字模下 15px 行距会挤）
           (set! ROW_H (+ line_h 5))
           (menu_metrics info)             ;; 把新字模的步进/墨高/内缩同步给菜单组件
@@ -1066,9 +1153,13 @@
     (if (== st MDL.ST_H2BAR)
         (Gfx.fill_rect x y w h cr cg cb)
         #f)
-    ;; 块级数学公式：按缓存的 op 流直接画（不重排），x/行高由 md_layout 定好
+    ;; 数学公式：按缓存的 op 流直接画（不重排）
+    ;;   块级：x/行高由 md_layout 定好；行内：4 格是 em，基线对齐本行文字基线
     (if (== st MDL.ST_MATH)
         (draw_math txt x y h)
+        #f)
+    (if (== st MDL.ST_IMATH)
+        (draw_imath txt x y (get_item sg 4))
         #f)
     (if (and (> (String.length txt) 0) (== st MDL.ST_CODE))
         (Gfx.fill_rect (- x 1) (+ y text_pad) (+ w 2) pill_h 46 42 34)
@@ -1086,7 +1177,8 @@
     (if (and (> (String.length txt) 0)
              (not (== st MDL.ST_IMAGE))
              (not (== st MDL.ST_IMAGE_MISSING))
-             (not (== st MDL.ST_MATH)))
+             (not (== st MDL.ST_MATH))
+             (not (== st MDL.ST_IMATH)))
         {
           (set! k 0)
           (while (< k style_weight)
@@ -1416,12 +1508,17 @@
             (set! go 0)) })
     segs))
 
+;; 后台/滚动时新排出来的段里画了几张图（诊断行 MDIMG，e2e 据它断言「资源根回退」
+;; 真的把插图取到了；MDSTAT 只在打开时打一次，那时插图段往往还没排到）
+(define img_seen -1)
+
 (define bg_work
   (lambda ()
     (define a #f)
     (define seg 0)
     (define dy 0)
     (define dir 1)
+    (define ni 0)
     (if (== MDV_ok 1)
         { (index_work IDX_BYTES)
           (set! a (MDV.anchor))
@@ -1433,6 +1530,11 @@
               (set! dir -1))
           (if (== (MDV.prefetch dir) 0)
               (MDV.prefetch (- 0 dir))
+              #f)
+          (set! ni (MDV.images))
+          (if (not (== ni img_seen))
+              { (set! img_seen ni)
+                (display "MDIMG images=") (display ni) (newline) }
               #f) }
         #f)
     #t))

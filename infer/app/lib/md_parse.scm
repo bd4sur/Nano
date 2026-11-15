@@ -20,7 +20,7 @@
 ;;                                    每个单元格是**行内节点列表**（单元格里可再写加粗/代码/链接）
 ;;        (math "源串")              块级数学公式（$$...$$ / $$ + 若干行 + $$）；
 ;;                                    只收 LaTeX 源串，排版与绘制在 md_layout / App 端。
-;;                                    行内 $...$ **不** 解析（保持字面文本）。
+;;                                    行内 $...$ 另见行内节点 (imath 源串)（见下）。
 ;;
 ;;     行内节点（inlines 的元素）：
 ;;        (text "字符串")             纯文本
@@ -28,6 +28,9 @@
 ;;        (code "字符串")             `行内代码`
 ;;        (link inlines "url")        [文本](url)
 ;;        (image "path" "alt")        ![alt](path)  —— 图片；独占一段时提为块 (image path alt)
+;;        (imath "源串")              行内数学公式 $...$ / $$...$$：只收 LaTeX 源串，
+;;                                    排版与绘制在 md_layout / App 端（与块级公式同一套引擎）。
+;;                                    `\$` 是字面美元号；`$$` 包裹的也当行内公式（样式同）。
 ;;
 ;; 设计要点（为「完整 Markdown」预留的三个扩展点）
 ;; ---------------------------------------------------------------------------
@@ -325,8 +328,51 @@
             #f)
         #f)))
 
+;; $...$ / $$...$$ 行内公式
+;;
+;; 规则（有意简单，与 MathJax+Markdown 的常见约定一致）：
+;;   · `$$...$$` 与 `$...$` 都收，源串**去首尾空白**；空串不算公式（保持字面 `$`）；
+;;   · 找不到闭合记号就返回 #f（该 `$` 落入文本缓冲，不会吞掉后面的内容）；
+;;   · `\$` 是字面美元号（转义规则排在 `$` 之后注册也能命中：匹配函数按字符查表，
+;;     `\` 自己触发 m_escape，所以 `$` 只在非转义位置被看到）；
+;;   · 单 `$` 的闭记号取**下一个** `$`（不区分后面是否还接一个），
+;;     因此 `$a$$b$` 这种写法不保证解析成两个公式——需要紧邻时写 `$a$ $b$`。
+(define find_dollar_close
+  (lambda (s from dbl)
+    (define i from)
+    (define n (String.length s))
+    (define r -1)
+    (while (and (< i n) (== r -1))
+      { (if (== (String.charCodeAt i s) CP_DOLLAR)
+            (if (== dbl 1)
+                (if (char_is s (+ i 1) CP_DOLLAR) (set! r i) #f)
+                (set! r i))
+            #f)
+        (set! i (+ i 1)) })
+    r))
+
+(define m_imath
+  (lambda (s i)
+    (define dbl 0)
+    (define from 0)
+    (define skip 0)
+    (define j -1)
+    (define src "")
+    (if (char_is s i CP_DOLLAR)
+        { (set! dbl (if (char_is s (+ i 1) CP_DOLLAR) 1 0))
+          (set! skip (if (== dbl 1) 2 1))
+          (set! from (+ i skip))
+          (set! j (find_dollar_close s from dbl))
+          (if (< j 0) #f
+              { (set! src (trim (String.slice s from j)))
+                (if (== (String.length src) 0)
+                    #f
+                    (mk2 (mk2 'imath src) (+ j skip))) }) }
+        #f)))
+
 ;; 注册行内规则（顺序即优先级）
 (inline_rule_add CP_TICK m_code)
+(inline_rule_add CP_DOLLAR m_imath)
 (inline_rule_add CP_STAR m_bold_star)
 (inline_rule_add CP_UNDER m_bold_under)
 (inline_rule_add CP_BANG m_image)
