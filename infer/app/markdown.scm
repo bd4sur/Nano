@@ -177,6 +177,18 @@
 (define cur_path "")          ;; 当前文档路径（"" = 内置示例；换字模后据此重新排版）
 (define ts 0)                 ;; 定时器编号
 
+;; ---- 节拍（本 App 的每拍周期）----------------------------------------------
+;; 阅读页自己每拍重绘整屏，60ms（≈16fps）足够；但**文件选择器**（app/lib/
+;; filepicker.scm）的拖动是像素级跟手的，跟手的上限就是节拍频率——60ms 的拍子再准
+;; 也只能 16fps 地跳。组件本身不装定时器（上游每轮事件循环对同一进程只触发一个
+;; 定时器回调，同进程两个 interval 会互相错开、两拍都掉到 ~64ms，实测），所以由
+;; 调用方在它活动期间把节拍提上去：start_picker 提到 16ms，拿到结果后恢复 60ms。
+(define TICK_MS 60)
+(define set_tick
+  (lambda (ms)
+    { (System.clear_interval ts)                    ;; 安全：回调体在 fire_expired_timers
+      (set! ts (System.set_interval ms on_tick)) })) ;; 返回之后才执行，不会 UAF
+
 ;; ---- 输入状态 ------------------------------------------------------------
 
 (define prev_down 0)          ;; 上一拍触屏电平
@@ -613,7 +625,9 @@
 (define start_picker
   (lambda ()
     { (display "MDOPEN picker") (newline)
-      (FP.start "打开 Markdown 文件" "md,markdown") }))
+      (FP.start "打开 Markdown 文件" "md,markdown")
+      ;; 选择器活动期间提速到 60Hz（拖动跟手，见 TICK_MS 处注释）
+      (set_tick (FP.tick_ms)) }))
 
 ;; 选择器每拍：0 进行中 / 1 已选中 / 2 已取消
 (define tick_picker
@@ -624,11 +638,13 @@
     (if (== r 1)
         { (set! picked (FP.result))
           (FP.reset)
+          (set_tick TICK_MS)          ;; 选择器结束：回到常规节拍
           (display "MDOPEN picked ") (display picked) (newline)
           (open_path picked (FSX.strip_ext (FSX.leaf picked))) }
         #f)
     (if (== r 2)
         { (FP.reset)
+          (set_tick TICK_MS)
           (draw_all) }
         #f)
     #t))
@@ -1489,7 +1505,7 @@
               (open_doc 0)
               (set! mode 1)))
       (draw_all)
-      (set! ts (System.set_interval 60 on_tick)) }))
+      (set! ts (System.set_interval TICK_MS on_tick)) }))
 
 (EX.install_with draw_all)
 (boot)

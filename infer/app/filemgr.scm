@@ -35,9 +35,9 @@
 ;; 交互：
 ;;   · 点按列表行 = 选中；再点已选中的行 = 进入目录 / 打开文件 / 返回上级（小屏没有双击，
 ;;     靠“再点一次”）；
-;;   · 底栏两排按钮：进入 / 新建文件 / 新建目录 / 重命名 / 删除（第一排），
-;;     上级 / 复制(预留) / 移动(预留) / 刷新（第二排）；
-;;   · 实体键盘：↑↓ 选择，Enter 进入，退格(8) 上级；
+;;   · **拖动列表 = 像素级跟手滚动**（手指移多少内容移多少，不是整行跳），**松手带惯性**
+;;     （速度快的划动继续滑一段再停），按住不动即刹车（打断惯性）；位移 < 8px 才算点按；
+;;   · 实体键盘 ↑↓ 选择（选中行自动滚进视口），Enter 进入，退格(8) 上级；
 ;;   · 硬 A/ESC 与右上角「退出」按钮 —— 由 app/lib/exit.scm 统一接管。
 ;;
 ;; 命名/文案：新建与重命名走宿主的模态输入框（(Ui.input_with)），因此中文文件名
@@ -56,6 +56,7 @@
 (native Math)
 (native System)
 (native Time)
+(native Diag)
 (native Ui)
 (native App)
 (import EX "app/lib/exit.scm")
@@ -83,13 +84,38 @@
 (define BTN_GAP 4)
 (define BOT_H 8)        ;; 底边留白（EX 的退出按钮在**顶部**，这里不冲突）
 
+;; ---- 滚动手感参数（列表的触屏拖动） --------------------------------------
+
+(define VIEW_H (* LIST_ROWS ROW_H))  ;; 列表视口高（8 行 = 144px）
+;; 节拍 16ms = 60Hz。拖动跟手的**上限就是节拍频率**：App 每拍只能采一次触屏电平，
+;; 原来 60ms（16fps）的拍子再准也只能一格一格跳；改成 60Hz 后与屏幕刷新同频。
+;; 空闲帧不再重绘（见 dirty 标记），所以 60Hz 空转只是几次 native 取值，代价可忽。
+(define TICK_MS 16)
+(define FLING_FRICTION 0.88)  ;; 惯性每拍衰减系数（16ms/拍）
+(define FLING_VMAX 45)        ;; 惯性初速上限（px/拍，≈2800px/s）
+(define FLING_VMIN 0.6)       ;; 惯性速度低于它就停（px/拍）
+;; 松手是否"甩"：看这次手势的**平均速度**（px/16ms）。取平均而不是"最后两拍瞬时速度"：
+;; 后者与时基强耦合（60Hz 与掉帧后的拍长不同，同一个手势算出的速度差几倍），
+;; 而且"停住再抬手"必须不甩——平均速度天然把这段停顿算进去。
+(define FLING_MIN_V 5)        ;; 平均速度 ≥ 5px/16ms（≈310px/s）才算"甩" 
+(define TAP_SLOP 8)           ;; 位移 < 8px 视为点按而不是拖动
+(define FLASH_TICKS 90)       ;; 反馈文案显示时长（≈1.4s @60Hz）
+
 ;; ---- 状态 ----------------------------------------------------------------
 
 (define cur ".")             ;; 当前目录（相对业务资源根；"." = 根）
 (define rows (cdr '(0)))     ;; 条目表：(mk3 名字 是否目录 字节数)，已按名字升序
                              ;; （尺寸也在载入时缓存：绘制不再逐帧 stat）
 (define sel 0)               ;; 选中下标（0..n-1）
-(define first 0)             ;; 列表窗口首项
+;; 列表滚动：**像素级**偏移（0 = 首行贴住视口顶）。
+;; 以前是“窗口首项 first（整行号）”：拖动只能整行跳、每 18px 顿一下，观感是一格一格地顿；
+;; 改成像素偏移后手指移多少内容就移多少（1:1 跟手），半行、1/4 行都能停在视口上，
+;; 配合 60Hz 节拍 + 松手惯性，连续且顺滑。
+(define scroll 0)
+(define fling 0)             ;; 松手后的惯性速度（px/拍；正 = 内容继续向上走）
+(define sum_dy 0)            ;; 本次手势的累计纵向位移（px，判"甩"用）
+(define press_ms 0)          ;; 按下时刻（(Diag.ms)，真实毫秒；手势计时用，与拍长无关）
+(define dirty 1)             ;; 需要重绘（tick 里按需 draw：空闲帧零绘制）
 (define err 0)               ;; 目录读不出来（Fs.list → #null）
 (define flash_text "")       ;; 操作反馈（几拍后自动消失）
 (define flash_ttl 0)
@@ -98,9 +124,11 @@
 ;; 触屏
 (define prev_down 0)
 (define drag_last 0)
-(define drag_total 0)
+(define drag_max 0)          ;; 本次手势离按下点的最大位移（px，判断点按/拖动）
 (define press_x 0)
 (define press_y 0)
+(define press_in_list 0)     ;; 按下点落在列表视口里（只有它会滚动）
+(define press_stop 0)        ;; 按下时在刹车（打断惯性）→ 这一下松手不算点按
 
 (define ts 0)                ;; 定时器编号
 (define stopped 0)
@@ -131,12 +159,12 @@
         #f)))
 
 ;; 反馈文案（下一拍起显示 FLASH_TICKS 拍）
-(define FLASH_TICKS 25)
 (define say
   (lambda (msg)
     { (set! flash_r 190) (set! flash_g 200) (set! flash_b 150)
       (set! flash_text msg)
       (set! flash_ttl FLASH_TICKS)
+      (set! dirty 1)
       (display "FM ") (display msg) (newline) }))
 
 (define say_warn
@@ -144,7 +172,58 @@
     { (set! flash_r 240) (set! flash_g 150) (set! flash_b 120)
       (set! flash_text msg)
       (set! flash_ttl FLASH_TICKS)
+      (set! dirty 1)
       (display "FMW ") (display msg) (newline) }))
+
+;; ---- 滚动：限幅 / 选中项进视口 / 惯性积分 --------------------------------
+
+;; 可滚动的最大偏移（内容高 − 视口高；内容不足一屏时为 0）
+(define max_scroll
+  (lambda ()
+    (define m (- (* (n_disp) ROW_H) VIEW_H))
+    (if (< m 0) 0 m)))
+
+(define clamp_scroll
+  (lambda ()
+    { (if (< scroll 0) (set! scroll 0) #f)
+      (if (> scroll (max_scroll)) (set! scroll (max_scroll)) #f)
+      #t }))
+
+;; 把选中行滚进视口（键盘上下、点按、新建/改名定位后用）
+(define ensure_sel_visible
+  (lambda ()
+    (define top 0)
+    (define bot 0)
+    (set! top (* sel ROW_H))
+    (set! bot (+ top ROW_H))
+    (if (< top scroll) (set! scroll top) #f)
+    (if (> bot (+ scroll VIEW_H)) (set! scroll (- bot VIEW_H)) #f)
+    (clamp_scroll)
+    #t))
+
+;; 惯性初速限幅
+(define clamp_fling
+  (lambda (v)
+    (if (> v FLING_VMAX) FLING_VMAX
+        (if (< v (- 0 FLING_VMAX)) (- 0 FLING_VMAX) v))))
+
+;; 每拍推进一歩惯性：位移按速度、速度按摩擦衰减，碰到边界就停
+;;（不做回弹：小屏文件列表上“硬边界”比橡皮筋更好控）
+(define step_fling
+  (lambda ()
+    (if (not (== fling 0))
+        { (set! scroll (- scroll fling))
+          (set! dirty 1)
+          (if (or (< scroll 0) (> scroll (max_scroll)))
+              { (clamp_scroll) (set! fling 0) }
+              (set! fling (* fling FLING_FRICTION)))
+          (if (< (Math.abs fling) FLING_VMIN)
+              { (set! fling 0)
+                (display "FMFLING end=")
+                (display (Math.floor scroll)) (newline) }
+              #f) }
+        #f)
+    #t))
 
 ;; ---- 时间戳（默认文件名）------------------------------------------------
 ;; 为什么用 Time.utc_days/utc_sod 而不是 System.timestamp：32 位宿主（wasm32）上
@@ -196,14 +275,11 @@
 
 (define clamp_sel
   (lambda ()
-    (if (>= sel (n_disp)) (set! sel (- (n_disp) 1)) #f)
-    (if (< sel 0) (set! sel 0) #f)
-    (if (< sel first) (set! first sel) #f)
-    (if (>= sel (+ first LIST_ROWS))
-        (set! first (- (+ sel 1) LIST_ROWS))
-        #f)
-    (if (< first 0) (set! first 0) #f)
-    #t))
+    { (if (>= sel (n_disp)) (set! sel (- (n_disp) 1)) #f)
+      (if (< sel 0) (set! sel 0) #f)
+      (ensure_sel_visible)
+      (set! dirty 1)
+      #t }))
 
 (define load_dir
   (lambda ()
@@ -251,7 +327,7 @@
   (lambda (d)
     { (set! cur d)
       (set! sel 1)     ;; 选中第一条真实条目（0 是 ".."；别让"顺手回车"退回上级）
-      (set! first 0)
+      (set! scroll 0)  ;; 换目录：回到列表顶
       (load_dir) }))
 
 ;; 载入后把选中项定位到某个名字（新建/改名后用）
@@ -612,17 +688,18 @@
         #f)
     #t))
 
-;; 右侧细滚动条（只在条目多于一屏时画）：位置 = first 在可滚动范围里的比例
+;; 右侧细滚动条（只在条目多于一屏时画）：滑块位置与大小都由**像素偏移**
+;; scroll / max_scroll 推出（与列表的像素滚动同一口径，停在半行时滑块也是连续位置）
 (define draw_scrollbar
-  (lambda (n)
-    (define vh (* LIST_ROWS ROW_H))
+  (lambda ()
+    (define ms (max_scroll))
     (define bar 0)
     (define by 0)
-    (if (> n LIST_ROWS)
-        { (set! bar (Math.floor (/ (* vh LIST_ROWS) n)))
+    (if (> ms 0)
+        { (set! bar (Math.floor (/ (* VIEW_H VIEW_H) (+ ms VIEW_H))))
           (if (< bar 14) (set! bar 14) #f)
-          (set! by (+ LIST_Y (Math.floor (/ (* first (- vh bar)) (- n LIST_ROWS)))))
-          (Gfx.fill_rect (- SW 4) LIST_Y 3 vh 32 38 50)
+          (set! by (+ LIST_Y (Math.floor (/ (* scroll (- VIEW_H bar)) ms))))
+          (Gfx.fill_rect (- SW 4) LIST_Y 3 VIEW_H 32 38 50)
           (Gfx.fill_rect (- SW 4) by 3 bar 96 116 148) }
         #f)
     #t))
@@ -645,12 +722,36 @@
                            10 INFO_Y 120 140 165)))
     #t))
 
-(define draw_all
+;; 列表区：像素滚动 + 视口裁剪。
+;; 裁剪为何必要：停在半行时首/尾两行只露半截，高亮条与字形的墨迹会溢出到页眉、
+;; 信息行上；(Gfx.set_clip) 对 fill_rect / 字形绘制都生效（见 graphics.h 的裁剪矩形），
+;; 所以这里先夹后画、画完立即 reset_clip（否则底栏按钮与滚动条也会被裁掉）。
+(define draw_list
   (lambda ()
     (define n (n_disp))
     (define i 0)
     (define last 0)
     (define y 0)
+    (Gfx.set_clip 0 LIST_Y SW VIEW_H)
+    (Gfx.fill_rect 0 LIST_Y SW VIEW_H 14 17 22)
+    ;; 从“视口顶那一行”开始画，多画两行（上下各一行半截，其余交给裁剪）
+    (set! i (Math.floor (/ scroll ROW_H)))
+    (set! last (+ i (+ LIST_ROWS 2)))
+    (if (> last n) (set! last n) #f)
+    (while (< i last)
+      { (set! y (- (+ LIST_Y (* i ROW_H)) scroll))
+        (if (== i 0) (draw_parent_row y) (draw_row (- i 1) y))
+        (set! i (+ i 1)) })
+    ;; 空目录/读不出来时，在 ".." 行下面给一句提示
+    (if (== (n_rows) 0)
+        (Gfx.draw_text (if (== err 1) "（目录无法读取）" "（空目录 · 用「新建文件/新建目录」开始）")
+                       10 (+ (- (+ LIST_Y ROW_H) scroll) 2) 110 118 134)
+        #f)
+    (Gfx.reset_clip)
+    #t))
+
+(define draw_all
+  (lambda ()
     (Gfx.fill_rect 0 0 SW SH 14 17 22)
     (Gfx.fill_rect 0 0 SW HEAD_H 30 38 52)
     (Gfx.draw_text "文件管理" 6 3 236 242 250)
@@ -658,20 +759,8 @@
     (Gfx.draw_text (FSX.clip_text (dir_label) 236) 6 (+ PATH_Y 1) 150 172 200)
     (Gfx.draw_text (String.concat (String.atom_to_string (n_rows)) " 项")
                    (- SW 54) (+ PATH_Y 1) 120 136 158)
-    ;; 列表
-    (set! last (+ first LIST_ROWS))
-    (if (> last n) (set! last n) #f)
-    { (set! i first)
-      (while (< i last)
-        { (set! y (+ LIST_Y (* (- i first) ROW_H)))
-          (if (== i 0) (draw_parent_row y) (draw_row (- i 1) y))
-          (set! i (+ i 1)) }) }
-    ;; 空目录/读不出来时，在 ".." 行下面给一句提示
-    (if (== (n_rows) 0)
-        (Gfx.draw_text (if (== err 1) "（目录无法读取）" "（空目录 · 用「新建文件/新建目录」开始）")
-                       10 (+ (+ LIST_Y ROW_H) 2) 110 118 134)
-        #f)
-    (draw_scrollbar n)
+    (draw_list)
+    (draw_scrollbar)
     (draw_info)
     (draw_ops)
     (EX.draw_button)
@@ -691,9 +780,10 @@
         (if (== (get_item (get_item ops op_idx) 2) 1)
             ((get_item (get_item ops op_idx) 1))
             (say "该操作尚未实现（预留位）"))
-        (if (and (>= py LIST_Y) (< py (+ LIST_Y (* LIST_ROWS ROW_H))))
-            { (set! idx (+ first (Math.floor (/ (- py LIST_Y) ROW_H))))
-              (if (< idx (n_disp))
+        (if (and (>= py LIST_Y) (< py (+ LIST_Y VIEW_H)))
+            ;; 行号由**像素偏移**反算：视口顶对应内容的第 scroll 个像素
+            { (set! idx (Math.floor (/ (+ (- py LIST_Y) scroll) ROW_H)))
+              (if (and (>= idx 0) (< idx (n_disp)))
                   { (set! old sel)
                     (set! sel idx)
                     (clamp_sel)
@@ -703,34 +793,85 @@
             #f))
     #t))
 
+;; 触屏：拖动 = **像素级跟手**滚动（指移多少内容移多少）+ 松手惯性。
+;; 判据与手感细节：
+;;   · 是否“拖动”看离按下点的**最大位移**（含横向），而不是纵向位移的累加：
+;;     来回揉手不会把一次长拖动误判成点按；
+;;   · 按下即断惯性（刹车）：这一下的松手不算点按（否则“想停住”会变成“打开了文件”）；
+;;   · 速度用指数滑动平均（α=0.5）估，松手时若真的拖动过就交给 fling；
+;;     手指停住不动时 dy=0，均值自然衰减，不会“停了很久一松手又飞出去”；
+;;   · 只有**按下点落在列表视口内**才滚动（从底栏按钮上开始的拖动不误触列表）。
 (define handle_touch
   (lambda ()
     (define dy 0)
+    (define dx 0)
+    (define ady 0)
+    (define dur 0)
+    (define vavg 0)
     (if (Touch.is_pressed)
         { (if (== prev_down 0)
               { (set! prev_down 1)
-                (set! drag_total 0)
+                (set! press_stop (if (== fling 0) 0 1))
+                (set! fling 0)
+                (set! sum_dy 0)
+                (set! press_ms (Diag.ms))
+                (set! drag_max 0)
                 (set! drag_last (Touch.y))
                 (set! press_x (Touch.x))
-                (set! press_y (Touch.y)) }
+                (set! press_y (Touch.y))
+                (set! press_in_list
+                      (if (and (>= press_y LIST_Y) (< press_y (+ LIST_Y VIEW_H))) 1 0)) }
               #f)
           (set! dy (- (Touch.y) drag_last))
           (set! drag_last (Touch.y))
-          (set! drag_total (+ drag_total dy))
-          ;; 在列表区拖动 = 滚动
-          (if (and (>= press_y LIST_Y) (< press_y (+ LIST_Y (* LIST_ROWS ROW_H))))
-              { (set! first (- first dy))
-                (if (< first 0) (set! first 0) #f)
-                (if (> (+ first LIST_ROWS) (n_disp))
-                    (set! first (- (n_disp) LIST_ROWS))
-                    #f)
-                (if (< first 0) (set! first 0) #f) }
+          (set! dx (- (Touch.x) press_x))
+          (if (> (Math.abs dx) drag_max) (set! drag_max (Math.abs dx)) #f)
+          (set! ady (Math.abs (- (Touch.y) press_y)))
+          (if (> ady drag_max) (set! drag_max ady) #f)
+          (if (and (== press_in_list 1) (not (== dy 0)))
+              { (set! sum_dy (+ sum_dy dy))
+                (set! scroll (- scroll dy))
+                (set! dirty 1)
+                (clamp_scroll) }
               #f) }
         { (if (== prev_down 1)
               { (set! prev_down 0)
-                (if (< (Math.abs drag_total) 8)
-                    (handle_tap press_x press_y)
-                    #f) }
+                ;; 松手这一拍先把“最后一次没被采到的位移”补上：App 每拍只能采一次触屏
+                ;; 电平（60Hz），一次快速划动的末段 10~20px 很容易落在两次采样之间；
+                ;; 不在松手时补，手指移了 30px 内容却只走 20px——观感就是“没跟上”。
+                (if (== press_in_list 1)
+                    { (set! dy (- (Touch.y) drag_last))
+                      (set! dx (- (Touch.x) press_x))
+                      (if (> (Math.abs dx) drag_max) (set! drag_max (Math.abs dx)) #f)
+                      (set! ady (Math.abs (- (Touch.y) press_y)))
+                      (if (> ady drag_max) (set! drag_max ady) #f)
+                      (if (not (== dy 0))
+                          { (set! sum_dy (+ sum_dy dy))
+                            (set! scroll (- scroll dy))
+                            (set! dirty 1)
+                            (clamp_scroll) }
+                          #f) }
+                    #f)
+                ;; 刹车（按下时打断了惯性）只压制"点按"，不压制"真拖动后的甩"
+                (if (< drag_max TAP_SLOP)
+                    (if (== press_stop 0) (handle_tap press_x press_y) #f)
+                    (if (== press_in_list 1)
+                            { ;; 手势平均速度 → 惯性初速（与拍长无关；停住再抬手自然不甩）
+                              (set! dur (- (Diag.ms) press_ms))
+                              (if (< dur 1) (set! dur 1) #f)
+                              (set! vavg (/ (* sum_dy 16.0) dur))
+                              (display "FMDRAG px=")
+                              (display (Math.floor scroll))
+                              (display " v=")
+                              (display (Math.floor (* vavg 10)))
+                              (newline)
+                              (if (> (Math.abs vavg) FLING_MIN_V)
+                                  { (set! fling (clamp_fling vavg))
+                                    (set! dirty 1)
+                                    (display "FMFLING start=")
+                                    (display (Math.floor scroll)) (newline) }
+                                  #f) }
+                            #f)) }
               #f) })
     #t))
 
@@ -749,16 +890,21 @@
 
 ;; ---- 主循环 --------------------------------------------------------------
 
+;; 节拍 60Hz；**只在脏的时候重绘**（空闲帧只做几次 native 取值，几乎不花 CPU）。
+;; 脏的来源：目录重载 / 选中变化 / 滚动与惯性 / 反馈文案的出现与消失 /
+;; 宿主模态框关闭或实例恢复（画面归自己，必须补一帧）。
 (define tick
   (lambda ()
     { (EX.check)
+      (if (App.modal_closed) (set! dirty 1) #f)
       (if (> flash_ttl 0)
           { (set! flash_ttl (- flash_ttl 1))
-            (if (== flash_ttl 0) (set! flash_text "") #f) }
+            (if (== flash_ttl 0) { (set! flash_text "") (set! dirty 1) } #f) }
           #f)
       (handle_keys)
       (handle_touch)
-      (draw_all) }))
+      (step_fling)
+      (if (== dirty 1) { (set! dirty 0) (draw_all) } #f) }))
 
 ;; ---- 启动 ----------------------------------------------------------------
 
@@ -770,7 +916,8 @@
       (build_openers)
       (load_dir)
       (draw_all)
-      (set! ts (System.set_interval 60 tick)) }))
+      (set! dirty 0)
+      (set! ts (System.set_interval TICK_MS tick)) }))
 
 (EX.install_with draw_all)
 (boot)
