@@ -631,13 +631,22 @@
     v
   }))
 
+;; 指数哥伦布码的读取。**前导 0 的个数必须封顶**：合法码值只有 run+1 ≤ 65 与
+;; 电平 ≤ 255 两种（n ≤ 7），但一旦码流失步（读到别的位、或读过帧尾），前导 0 可能
+;; 连成一长串 —— 旧版这里只判 `(== (rbit) 0)`，n 涨到 18 以上时 `(get_item P2 n)`
+;; 就越界返回 #undefined，紧接着 `(+ v rest)` 报「指令执行异常」，**整个虚拟机进程
+;; 停机 → 界面冻在最后一帧**（本 App 曾经就这样卡死；见 restart_encode 处注释）。
+;; 封顶到 P2 的合法下标上限：码流失步时得到的是错值（回环校验会照实报 mismatch），
+;; 而不是让演示程序直接死掉——这与手册「软性失败」的一贯口径一致。
+(define GAMMA_NMAX 17)
+
 (define rgamma
   (lambda () {
     (define n 0)
     (define v 1)
     (define i 0)
     (define rest 0)
-    (while (== (rbit) 0) (set! n (+ n 1)))
+    (while (and (== (rbit) 0) (< n GAMMA_NMAX)) (set! n (+ n 1)))
     (set! v (get_item P2 n))
     (set! i 0)
     (while (< i n) {
@@ -2502,9 +2511,14 @@
                ,(if (== (get_item fr_type f) 0) "I 帧" "P 帧"))) 6 186)
     (tn (cat `("比特 " ,(inum (get_item fr_bits f))
                "   PSNR " ,(psnr_str (get_item fr_sse f)) " dB")) 6 197)
-    (if (== rt_mismatch 0)
-        (tg "回环校验：解码器 == 编码器 ✓" 6 208)
-        (tcy (cat `("回环不一致 " ,(inum rt_mismatch) " 处")) 6 208))
+    ;; 回环校验三态：未解码完 → 不声称「一致」（改 Q/λ 重编时 rt_mismatch 已清零，
+    ;; 若只看 mismatch 会误报 ✓，而面板里的重建画面其实还是上一轮码流的；
+    ;; 用 rt_checked 的累计量判定「本轮解码是否已经把全部帧走过一遍」。
+    (if (< rt_checked (* NFR NPIX))
+        (td "回环校验：等待本轮解码…" 6 208)
+        (if (== rt_mismatch 0)
+            (tg "回环校验：解码器 == 编码器 ✓" 6 208)
+            (tcy (cat `("回环不一致 " ,(inum rt_mismatch) " 处")) 6 208)))
     (td (cat `("累计 " ,(knum (total_bits)) " bit")) 176 186)
     (td (cat `("原始 8bpp " ,(knum (* NPIX (* 8 NFR))) " bit")) 176 197)
     (ty (cat `("压缩比 " ,(fnum (/ (* NPIX (* 8 NFR)) (maxf 1 (total_bits))) 1)
@@ -2565,7 +2579,23 @@
 (define restart_encode
   (lambda () {
     (define i 0)
-    (set! phase PH_ENC)
+    ;; 清空位缓冲：任何时刻都可能重编（面板⑤的 λ±/Q±、面板①的「重编」、键盘 r 都
+    ;; 直接调本函数），**包括一拍编码正走到某一帧中间**的时候。此时 bits_buf 里还留着
+    ;; 被打断那一帧已写出的位（帧头 + 前 enc_b 个块），而 flush_bits 是「把整个
+    ;; bits_buf 打包成 bs[f]」——残位不清掉，新一轮第 0 帧的码流就会以这些残位开头，
+    ;; 解码器从第 0 帧起整条失步（rgamma 一路读越界，取 P2 越界得 #undefined →
+    ;; add 报「指令执行异常」→ 虚拟机进程停机 → 整个 App 卡死）。
+    ;; 必须与下面 bs 的重置同步，二者是同一件事（码流从头开始）。
+    (while (> (length bits_buf) 0) (pop bits_buf))
+    (set! frame_bitpos 0)
+    ;; 数据未就位时**退回载入态**而不是直接开编：本函数也会被「载入画面上的改参数」
+    ;; 调到（面板①②的底部按钮在载入态不画，但键盘 λ±/Q± 与 r 照旧可用）。此时源帧
+    ;; 读不到，`load_frame_into` 留下的是全零缓冲——直接进 PH_ENC 就会把 20 帧**黑图**
+    ;; 从头编一遍（实测 108628 bit、回环 mismatch=0，看上去一切正常），而且 phase 一旦
+    ;; 离开 PH_LOAD 就再也不会去读数据（`try_load` 不再被调）⇒ 画面永远是黑片，只有
+    ;; 用户再手动改一次参数才能恢复。退回 PH_LOAD 后轮询继续，数据到达时 `try_load`
+    ;; 会再调本函数——于是参数生效的那一刻，仍是「从第 0 帧、带真数据、彻底重编」。
+    (set! phase (if (== data_ok 1) PH_ENC PH_LOAD))
     (set! enc_f 0)
     (set! enc_b 0)
     (set! dec_f 0)
