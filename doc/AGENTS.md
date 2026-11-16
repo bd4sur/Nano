@@ -12405,3 +12405,124 @@ MPEG-1/H.261 风格的迷你编解码器 + 六面板可视化 + 完整交互闭�
   `mismatch=0` 且画面持续刷新。
 - 参数路径对照 10/10（λ± / Q± / 重编 × 中途按下 vs 完成后按下）：码流逐位相同、都不卡死。
 - 载入期改参数：延迟 9s 挂载 frames.txt → 修前黑片 108628 bit，修后 143579 bit。
+
+------------------------------------
+
+# 2026-11-16
+
+把 C 版日历 + 黄历（`infer/ui_calendar.c`、`infer/ui_almanac.c`）转写为**灵机应用程序**
+（Scheme App），面向 **WASM-GUI 目标**（`-DNANO_WASM_GUI` / `infer/build_wasm_gui.sh`）。
+GUI 与交互逐像素、逐行为对齐：日历首屏与黄历模态框在同一 wasm 构建里与 C 版**帧缓冲逐字节相同**。
+
+## 1. 新增文件
+
+| 文件 | 作用 |
+|---|---|
+| `infer/app/calendar.scm` | 灵机 App：日历页 + 黄历模态框（绘制/输入/退出） |
+| `infer/app/lib/almanac.scm` | 黄历计算核心（cnlunar 的灵机移植，纯逻辑、无图形依赖） |
+| `infer/app/lib/almanac_data.scm` | 数据表（由生成器从 `almanac.h` 导出，勿手改） |
+| `infer/tools/gen_almanac_tables.c` | 数据表生成器 + C 参考结果输出器（`emit` / `ref`） |
+| `infer/tools/gen_almanac_data.sh` | 重新生成数据表（改 `almanac.h` 后跑一次） |
+| `infer/tools/almanac_dump.scm` | Scheme 侧差分回归输出器 |
+| `infer/tools/almanac_difftest.py` | C ↔ Scheme 全量差分回归（并行分块，可选 wasm32 引擎） |
+
+回归工具（**不入 Git**，见 `.gitignore` 的 `infer/tools/e2e/`）：`tools/e2e/host/ref_almanac.c`、
+`ref_calendar.c`（C 参考渲染器）、`alm_case.scm`/`cal_case.scm`、`alm_pixel_cmp.py`、
+`cal_pixel_cmp.py`；`tools/e2e/browser/regress_calendar.js`（真 WASM + 真浏览器端到端）。
+
+## 2. 黄历数据表：从 C 头文件生成，而不是手抄
+
+`app/lib/almanac_data.scm` 由 `gen_almanac_tables.c` **直接 include `almanac.h`** 后逐表导出：
+`ll000..ll191`（宜忌词条数组）、`ANGEL`/`DEMON`（71+100 条神煞行：名字/匹配算子/base/参数/
+表下标/数量/吉凶清单）、建除十二神宜忌、日干宜忌、宜忌等第表、pi 对表，以及历法基础表
+（节气名、六十甲子、廿八宿、彭祖、胎神、子午流注、方位表…）。因此数据与 C 实现**永远一致**。
+
+为适配 32 位灵机（整数载荷 27 位、浮点尾数约 19 位），三处大整数编码在**生成时解码**：
+
+- `cnl_SOLAR[200]`（每年 24 节气 × 2 bit，共 48 位）→ 4800 个小整数；
+- `cnl_LUNAR_MONTH[199]`（12 个月大小位 + 闰月号 4 bit + 闰月大小位）→
+  `(12 个月大小 闰月号 闰月大小)` 的 14 元组；
+- `cnl_TWOHOUR_LUCKY[60]`（16 位吉凶位图）→ 60×12 个 0/1。
+
+## 3. 计算核心的移植要点（逐函数对照 `almanac.h`）
+
+- **整数运算全走 `idiv`/`imod`**（纯整数二进制长除法）：32 位宿主的 `/`、`mod` 返回浮点，
+  尾数只有约 19 位。实测教训：`5 * 146097 = 730485` 在 wasm32 上经 `Math.floor` 会舍成
+  730484，日期整整差一天（本 App 的「今天」高亮先落到 10 日而非 9 日才被发现）。同理
+  `app/calendar.scm` 的民用历反算也改用 `AL.idiv`；`first_weekday` 返回整数（否则 `day`
+  是浮点，传进 `AL.calc` 后经 `daynum` 的 `era*146097` 再次丢精度，模态框会显示前一天）。
+- C 里 `options` 恒为 `CNLUNAR_DEFAULT`（`ui_almanac_open` 的唯一调用），故固化：
+  立春年柱偏移 x=0、`isYeargodDuty=1`、`men = month_earth_num`。
+- 列表语义照抄 C：`ladd`=缺席才追加、`ldedup`=保序集去重、`lsort`=按 `THINGS_SORT` 的
+  稳定插入排序；宜忌**顺序参与**差分比对（C 的插入顺序即输出顺序）。
+- 逐条复现的易错点：
+  - `cnl_today_solar_terms` 的 `this_year_solar_terms` 是**今年**的节气表；「下一节气」在
+    冬至后可能换年查表，但四绝/四离/土王用事仍用今年表（初版把换年后的表写回，导致
+    四离/土王用事判错）；
+  - 神煞匹配里的 `d` 是**日柱**（`day8char`）而非四柱连写；八字展示才是四柱连写；
+  - 闰月：C 在同一轮循环里把「闰月天数」也减掉（正/负两个分支都是），漏掉会让农历月+1；
+  - 农历年表只有 1901–2099（`idx>=199` 越界）：C 返回错误码，本模块返回 `#f` → 模态框
+    进入「该日期超出黄历计算范围」错误态（2100 年春节后即触发）；
+  - C 规则表里的个别词条与常见写法不同，必须按字节照抄：`求福`/`祈嗣`（不是祈福/求嗣）、
+    四废 r14 表的 `筑提`（不是筑堤防）——差分回归就是靠这些才对齐的。
+- 本地库引用：`String`/`Math` 一律在 lambda 体内以 `库.过程` 调用形式使用；把 native
+  过程当值绑定（`(define slen String.length)`）在**被 import 的模块**里会解析失败。
+
+## 4. GUI 与交互
+
+- 版式与 C 逐项对齐：字体 `GFX_FONT_ALPHA_16`（日历）/`GFX_FONT_ALPHA_12`（黄历），
+  页眉 `line_height*3/2`、页脚 `line_height+1`、日期网格 `(bottom-top)/6`、今天色块
+  `25×(row_h-2)`、黄历四张卡（高 45/41/38/68，卡间距 3、圆角容器 x=13 宽 294）。
+- 文本度量用 `(Gfx.glyph_metrics)` 逐码点累加（= C 的 `gfx_font_measure_text`），
+  `Gfx.draw_text` 的 y 是「墨迹顶」，统一按 `baseline - round(asc('中'))` 换成 C 的「行框顶」；
+  超宽裁剪复刻 `al_fit_w`（尾部截断补「…」）。
+- 输入：`(native Touch)` 取按下沿 + 坐标做日期命中；页脚四段热区映射到 C 版 16 宫格底行
+  的四个软键（上月/今天/下月/黄历）——灵机 App 运行态宿主已抑制宫格映射，不这样映射
+  触屏-only 设备就没法换月。按键按 C 的 `key_edge` 语义重建：短按**在松手时**生效，
+  按住满 360ms 后按拍连发（-2）；模态框打开 300ms 后的按键、关闭后 150ms 内的残留键
+  按 C 的规则吞掉。
+- 退出：为与 C 日历**逐像素一致**不绘制右上角「退出」按钮；退出仍走硬 A/ESC
+  （`app/lib/exit.scm` 的全局确认框）与 EX 在右上角登记的点按热区。
+- 时间：C 用 libc `localtime`；灵机 `(native Time)` 只给 UTC（日数+日内秒），故按 **UTC+8**
+  换算本地民用时（与 `app/ephemeris.scm` 一致）。
+
+## 5. 验证（全部通过）
+
+1. **全量差分回归（桌面 64 位解释器）**：1901-01-01…2100-12-31 共 73 049 天 × 4 个时辰
+   （0/6/12/18）= **292 196 行**，逐字段（八字/星期/星座/廿八宿/建除/值神/子午流注/宜/忌/
+   九宫飞星/胎神/彭祖/时辰吉凶/吉凶方位/农历日/下一节气/吉神名/凶煞名/等第）与 C 参考
+   **0 不一致**（含 2100 年越界错误态）。
+2. **wasm32 差分子集**：1903 闰五月、2000-02、2026-03、2099-12、2100-12、1970-01 六段 ×
+   4 时辰 × 3 分钟（0/30/59）共 504 行 = 0 不一致；另桌面 2 400 行带分钟变体 = 0 不一致。
+3. **像素级对照**：
+   - 日历页 16 个用例（初始页/闰年 2 月/上下月跨年/上下年/0 键/1900 与 2100 边界/长序列）
+     与 C 参考渲染器（`ui_calendar.c` + `ui.h` 页眉页脚实现）**逐字节相同**；
+   - 黄历模态框 53 个用例（跨 1901–2100 采样、各时辰/分钟、闰月、超长宜/忌截断、
+     诸事不宜/大吉/凶徽标、2100 越界错误态）与 `ui_almanac.c` **逐字节相同**。
+4. **浏览器端到端**（真 WASM-GUI，chromium + firefox，冻结时钟/Asia/Shanghai）：20/20 PASS——
+   进入 C 版日历取参考帧、C 版黄历打开/关闭；进入灵机 App 版后：首屏与 C 版**逐字节一致**、
+   黄历模态框与 C 版**逐字节一致**；左右/上下/0 键、页脚四热区、点日期开黄历、任意点按关闭、
+   长按方向键连发、Esc→全局退出确认框→Enter 回列表，全程无 pageerror。
+
+## 6. 运行与回归
+
+```bash
+cd infer && bash build_wasm_gui.sh          # 产物 webgui/（manifest 自动含 app/calendar.scm）
+cd webgui && python3 ../tools/https_static_server.py 9002 .
+# 浏览器打开 https://127.0.0.1:9002/ → 主菜单「小游戏」→「灵机应用程序」→ calendar
+
+# 修改了 almanac.h 之后：重生成数据表
+bash tools/gen_almanac_data.sh
+
+# 黄历数据差分（默认全量；--engine wasm 走 wasm32 探针；--minutes 覆盖土王用事边界）
+python3 tools/almanac_difftest.py --jobs 12
+python3 tools/almanac_difftest.py --start -24210 --count 7 --hours 0,6,12,23 --minutes 0,30,59 --engine wasm
+
+# 像素级对照与浏览器端到端（tools/e2e 不入 Git）
+python3 tools/e2e/host/cal_pixel_cmp.py
+python3 tools/e2e/host/alm_pixel_cmp.py
+node tools/e2e/browser/regress_calendar.js https://127.0.0.1:9002/index.html chromium /tmp/reg_cal
+```
+
+已知取舍：本地民用时固定 UTC+8（灵机 Time 库无时区信息）；App 不画退出按钮；
+A/ESC 走 App 外壳的退出确认框而不是 C 版的「返回小游戏菜单」（灵机 App 没有那个状态）。
