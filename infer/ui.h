@@ -188,7 +188,9 @@ typedef struct Key_Event {
 #define TOUCH_EDGE_UP   (2) // 松开沿
 
 // 触屏 UP 沿去抖：松开认定要求连续 N 次轮询（生产端 1-2ms 轮询，N=3 ≈ 3-6ms）均无按压，
-// 容忍共享 I2C 总线上偶发单次读抖动造成的假松开（见 ui_app.c get_input_event）
+// 容忍共享 I2C 总线上偶发单次读抖动造成的假松开（见 ui_app.c get_input_event）。
+// WASM 例外：电平来自浏览器 Pointer Events（无边沿抖动），get_input_event 在
+// NANO_WASM_GUI 下跳过本去抖，以免 50ms 心跳把 UP 沿推迟到松手后 50~100ms。
 #define NANO_TOUCH_UP_DEBOUNCE (3)
 
 typedef struct Widget_Textarea_State {

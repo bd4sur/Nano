@@ -84,6 +84,18 @@ extern void    wasm_touch_frame_boundary(void);         // 帧边界：清点按
 // 忙提示刚上屏标记（dispatch 置位，frame 消费）：见 wasm_dispatch_input_events 注释
 static int32_t s_busy_just_drawn = 0;
 
+// 结果队列中是否已有待消费的长按重复事件（-2）。
+// 背景：按住期间的生产者心跳已提速到 2ms（页面 index.html 的 scheduleInputHeartbeat），
+// 而 -2 重复流在 key_repeat 点亮后是“每次 get_input_event 都产生一条”。若照单全收，
+// ~500/s 的 -2 会迅速填满 8 深结果队列，把可靠的触屏 DOWN/UP 边沿挤掉；而消费者
+// 本来就每帧至多取一个按键事件，重复流只需保留一条“最新待取”即可。
+static int32_t wasm_evtq_has_repeat(void) {
+    for (uint32_t i = s_evt_head; i != s_evt_tail; i++) {
+        if (s_evt_buf[i % NANO_EVT_QUEUE_CAP].key_edge == -2) return 1;
+    }
+    return 0;
+}
+
 // 一次采样结果的投递（对齐 main.c 生产者的投递语义）
 static void wasm_dispatch_input_events(Key_Event *ev_prod) {
     // 触屏 DOWN/UP 边沿：可靠投递。必须先于按键事件投递（同一次松手会同时产生
@@ -94,8 +106,11 @@ static void wasm_dispatch_input_events(Key_Event *ev_prod) {
         touch_ev.key_edge = 0;
         wasm_evtq_push(&touch_ev, 1);
     }
-    // 按键事件：短按下降沿(-1)可靠投递；长按/重复动作(-2)可丢弃投递
-    if (ev_prod->key_code != NANO_KEY_IDLE && ev_prod->key_edge < 0) {
+    // 按键事件：短按下降沿(-1)可靠投递；长按/重复动作(-2)可丢弃投递。
+    // 高频心跳下 -2 的合并见 wasm_evtq_has_repeat 注释：已有待消费的 -2 时本拍直接
+    // 丢弃（含忙提示重绘），既保持“每帧取最新重复”的语义，又避免挤占可靠边沿事件。
+    if (ev_prod->key_code != NANO_KEY_IDLE && ev_prod->key_edge < 0
+        && !(ev_prod->key_edge == -2 && wasm_evtq_has_repeat())) {
         // 玲珑仪：生产端即时忙提示（对齐 linglong_m5core2.ino 与 main.c 拆分
         // 环路：按键事件入队前先把「正在计算」画进帧缓冲并 gfx_refresh 推帧——
         // hal_display_wasm 更新 RGBA side buffer 并 epoch++，页面渲染循环下一 rAF

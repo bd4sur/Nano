@@ -327,6 +327,15 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 对会把一次拖动切成“点按（光标跳变）+重激活（拖动位移阈值重新累计）”循环，
     // 表现为触屏拖动失灵而点按定位正常（2026-08 定位）。抖动窗口内按按住对待
     //（key_event 为静态变量，未按压时 touch_read 不写坐标，自然保持上轮最后有效值）。
+#if defined(NANO_WASM_GUI)
+    // WASM 特例：触屏电平来自页面 Pointer Events 的 pointerdown/up，浏览器保证一次
+    // 指针序列的按下/松开边沿唯一，不存在 Core2 共享 I2C 总线上的单次读抖动，因此
+    // 不需要 N 次轮询去抖。若沿用去抖，WASM 的生产者只在事件到达 + 50ms 心跳时采样，
+    // pointerup 后要等两次心跳（50~100ms）才产生 UP 沿；这期间 rAF 消费者仍按“按住”
+    // 逐帧跑拖动速度 EMA（零位移 ×0.6/帧），把甩动初速度衰减到约 5%，菜单/文本控件
+    // 的松手惯性因此消失（2026-11 定位）。松开沿立即生效（保留静态变量以便结构一致）。
+    s_input_touch_up_pending = 0;
+#else
     if (!key_event->is_touching && s_input_touch_prev) {
         if (s_input_touch_up_pending + 1 < NANO_TOUCH_UP_DEBOUNCE) {
             s_input_touch_up_pending++;
@@ -336,6 +345,7 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     else {
         s_input_touch_up_pending = 0;
     }
+#endif
 
     // 触屏电平共享快照：ESP32 上 Core0 渲染任务每帧取用本快照覆盖到其 key_event，
     // 高频电平样本不进入事件队列（见 linglong_m5core2.ino）

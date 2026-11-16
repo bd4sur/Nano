@@ -12776,3 +12776,55 @@ k 帧只画一列"的 k 逐列在 1~8 之间跳，EMA 于是每列变化 ±15%�
 回归判据（已加进 `tools/e2e/browser/regress_spectrogram.js`）：取左侧轴条（x 0..25、
 y 36..191）的"亮行段中心"序列，间隔 1.2s 取样两次，要求段数与各段中心位移都 ≤ 2px。
 用旧实现跑该断言会红（4px）。浏览器端到端 33 → **34 条**。
+
+# 2026-11-16（五轮）WASM 菜单/文本控件松手无惯性：UP 去抖被 50ms 心跳放大
+
+## 现象
+
+同一套 C 菜单/文本框代码，在 Core2、Luckfox、树莓派、nano_tty 上松手有跟手的惯性甩滑；
+WASM-GUI 里拖动跟手，但**松手后没有惯性**（普通速度的滑动连一帧都不滑，快甩也只有几像素）。
+
+## 根因
+
+不是 fling 逻辑缺失，而是 **UP 沿到达太晚 + 逐帧速度 EMA 被零位移衰减**：
+
+1. `get_input_event`（`ui_app.c`）的松开去抖要求连续 `NANO_TOUCH_UP_DEBOUNCE=3` 次采样无按压
+   （原本是给 Core2 共享 I2C 总线上的单次读抖动用的）。
+2. WASM 的输入生产者不是 1~2ms 轮询，而是「事件到达 + 页面 50ms 心跳」（`webgui/index.html`）。
+   `pointerup` 只贡献第 1 次无按压采样，后续两次要等 50ms 心跳 → UP 沿实际晚到 **50~100ms**。
+3. 这 50~100ms 内 rAF 消费者仍按 `is_touching=1` 跑拖动分支；手指已离开、坐标不变，
+   速度 EMA 每帧执行 `vel = vel*0.6 + 0`。60Hz 下 6 帧后只剩 `0.6^6 ≈ 4.7%`，
+   普通甩动到 UP 沿时已低于 50px/s 启动阈值 → `fling_velocity` 根本不赋值。
+4. 其他目标生产者是 1~2ms（或生产者/消费者同一循环、渲染阻塞时不会产生空拖动帧），
+   去抖 3~6ms 内完成，EMA 最多被零位移采到 1 次，速度得以保留。
+
+Scheme 的 filemgr/filepicker 用「手势平均速度」而不是逐帧 EMA，所以同一次晚到 UP 只让
+平均速度略降，仍能甩——这也是「有些 App 看起来有惯性、C 菜单没有」的原因。
+
+## 修复（仅 WASM，其他平台预处理结果不变）
+
+1. **`ui_app.c`：WASM 跳过触屏 UP 去抖**
+   `#if defined(NANO_WASM_GUI)` 分支直接把 `s_input_touch_up_pending` 清零，松开沿在
+   `pointerup` 的同一 `wasm_gui_input_tick` 内立即产生。浏览器 Pointer Events 保证一次
+   指针序列的按下/松开边沿唯一，没有 Core2 的 I2C 单次读抖动，去抖在此平台无意义。
+   `#else` 分支保持原样，Core2/Luckfox/树莓派/nano_tty/Android/Nano-Web 行为不变。
+
+2. **`webgui/index.html`：生产者心跳按需调速**
+   原来的固定 `setInterval(..., 50)` 改为自调度 `setTimeout`：指针/滚轮手势按住期间 2ms
+   （浏览器嵌套定时器可能钳到 ~4ms），空闲 50ms。按住期间的长按/重复判定更接近物理时间；
+   松开沿已由第 1 条立即生效，不再依赖心跳补采样。
+
+3. **`main_wasm_gui.c`：合并 -2 重复事件，防止高频心跳挤爆结果队列**
+   2ms 心跳下 `key_repeat` 点亮后会以 ~500/s 产生 -2，而消费者每帧至多取一个键事件，
+   8 深队列会被 -2 填满并挤掉可靠的触屏 DOWN/UP 边沿。`wasm_evtq_has_repeat()` 在队列中
+   已有待消费 -2 时直接丢弃本拍重复（含玲珑仪忙提示重绘），保持「每帧取最新重复」语义。
+
+## 验证（真 WASM + Playwright 无头 Chromium）
+
+- 「自述」长文本控件快速上滑，松手 200ms 后统计 200~800ms 内的重绘帧数：
+  修复前 **0**；修复后 **13~15**（与「松手后手工补 3 次 producer tick」的旧对照一致）。
+- 点按主菜单条目到状态切换：修复前 `mouse.up` 后约 **86~100ms**；修复后约 **13~26ms**（下一帧）。
+- 鼠标滚轮合成的滑动仍**不甩**（`WHEEL_IDLE_END_MS=140 > 100ms` 的既有设计），未被本次修改破坏。
+- 触摸事件（CDP `Input.dispatchTouchEvent`）与鼠标事件结果一致。
+- 非 WASM 安全：`ui_app.c` 的改动完全位于 `#if defined(NANO_WASM_GUI)`；用 `NANO_TTY`
+  做 `cc -fsyntax-only ui_app.c` 通过，预处理后的原生代码与修改前逐行一致。

@@ -864,10 +864,18 @@ canvas.addEventListener("wheel", onWheel, { passive: false });
 window.addEventListener("blur", () => endWheelSession(nowEpochMs(), true));
 
 // 生产者心跳：无事件时维持持续状态判定（长按到期、持续电平）；渲染阻塞时延后但
-// 事件时刻由 e.timeStamp 保证，回放后判定仍物理正确（对齐 ino 的 1-2ms 生产者语义）
-setInterval(() => {
-  if (runtimeReady && Module._wasm_gui_input_tick) Module._wasm_gui_input_tick(0);
-}, 50);
+// 事件时刻由 e.timeStamp 保证，回放后判定仍物理正确（对齐 ino 的 1-2ms 生产者语义）。
+// 按需调速：指针/滚轮手势按住期间 2ms（浏览器对嵌套定时器可能钳到 ~4ms，仍远快于
+// 50ms），空闲 50ms。按住期间的高频心跳让 C 侧的按住时长/重复判定更接近物理时间；
+// 松开沿已由 get_input_event 的 WASM 分支立即生效，不依赖心跳补采样。
+function scheduleInputHeartbeat() {
+  const busy = (activePointerId !== null) || (wheelSession !== null);
+  setTimeout(() => {
+    if (runtimeReady && Module._wasm_gui_input_tick) Module._wasm_gui_input_tick(0);
+    scheduleInputHeartbeat();
+  }, busy ? 2 : 50);
+}
+scheduleInputHeartbeat();
 
 // ---------------- 物理键盘（桌面便利通路；映射对齐 hal_key_ncurses_linux.c） ----------------
 // NANO_KEY_* 逻辑键值（hal_key.h）：up=1 down=2 left=3 right=4 ctrl=5 shift=7
