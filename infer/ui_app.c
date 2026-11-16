@@ -175,8 +175,8 @@ static int32_t s_animac_touch_owner = 0;
 //  STATE_EBOOK_READING、本机自述 STATE_README、LLM 结果 STATE_LLM_AFTER_INFER 均经
 //  文本控件手势机/自有拖动直接消费触屏流，抑制后拖动不再产生宫格软按键——否则长按
 //  拖动的 -2 重复事件流会占满队列、触屏 DOWN/UP 可靠投递超时丢失，表现为拖动卡顿、
-//  按键提示灯在拖动时被宫格 -1 事件点亮。OFDM 接收/环回等以宫格软按键为主要触屏
-//  交互的状态不在此列。）
+//  按键提示灯在拖动时被宫格 -1 事件点亮。OFDM 发射/接收/环回状态页均已改为自绘状态页
+//  （ui_ofdm.c），触屏直接消费，故一并抑制宫格软按键——退出/停止改由页眉“返回”热点承担。）
 static int32_t ui_app_state_is_menu(int32_t state) {
     switch (state) {
         case STATE_MODEL_MENU:
@@ -186,6 +186,12 @@ static int32_t ui_app_state_is_menu(int32_t state) {
         case STATE_SETTING_MENU:  // 系统设置：分组卡片列表直接消费触屏流（拖动滚动/点按行/
                                   // 开关/分段控件/步进器）；十六宫格软按键整体退场。
                                   // 实体键盘的数字键/方向键/Enter/Esc 照常可用。
+        case STATE_OFDM_RX:       // 寻呼机接收页：状态卡+滚动文本区直接消费触屏流
+                                  // （文本拖动滚动/页眉“返回”热点），宫格软键退场
+        case STATE_OFDM_TXING:    // 寻呼机发射页：页眉“返回”热点=停止发射，宫格软键退场
+        case STATE_OFDM_LOOPING:  // 寻呼机环路自测页：结果文本拖动滚动/页眉“返回”热点，宫格软键退场
+        case STATE_OFDM_MSG:      // 寻呼机消息收发页：接收/发射按钮、记录拖动滚动、页眉“返回”
+                                  // 全部为自绘触屏控件，宫格软键整体退场
         case STATE_SETTING_INPUT: // 日期/时间/经纬度编辑器：三列步进器直接消费触屏流
         case STATE_MUSICBOX_MENU:
         case STATE_MUSICBOX_PLAYING: // 音乐盒播放页：显式触屏控件（播放/暂停/上下曲/音量/进度条/退出）
@@ -229,6 +235,7 @@ static int32_t ui_app_state_hosts_input_widget(int32_t state) {
         case STATE_ANIMAC_CONSOLE:  // ui_app.c
         case STATE_OFDM_TX:         // ui_ofdm.c
         case STATE_OFDM_LOOP:       // ui_ofdm.c
+        case STATE_OFDM_MSG_INPUT:  // ui_ofdm.c（消息收发的发报输入）
             return 1;
         default:
             return 0;
@@ -4059,6 +4066,9 @@ static int32_t lock_screen_exit_peripheral_states(Key_Event *key_event, Global_S
         case STATE_OFDM_RX:          // 停采集任务+关麦 → 寻呼机模式菜单
             global_state->STATE = ui_ofdm_rx_event(&fake, global_state);
             return 1;
+        case STATE_OFDM_MSG:         // 停接收/停发射 → 寻呼机模式菜单
+            global_state->STATE = ui_ofdm_msg_event(&fake, global_state);
+            return 1;
         case STATE_SPECTROGRAM:      // 关麦+释放工作区 → 主菜单
             ui_spectrogram_deinit(key_event, global_state);
             global_state->STATE = STATE_MAIN_MENU;
@@ -5235,15 +5245,13 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
     case STATE_OFDM_MENU:
 
-        // 首次获得焦点：初始化
+        // 首次获得焦点：初始化码表并绘制三张功能卡（发送/接收/环路自测）
         if (global_state->PREV_STATE != global_state->STATE) {
-            // 统一为“页眉页脚先入帧缓冲、菜单绘制最后统一刷屏”，避免两阶段断续感
-            ui_draw_header(key_event, global_state, (wchar_t *)global_state->w_menu_main->title, 1);
-            ui_widget_menu_refresh(key_event, global_state, global_state->w_menu_main);
+            ui_ofdm_menu_init(key_event, global_state);
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, ui_ofdm_menu_item_action, STATE_MAIN_MENU, STATE_OFDM_MENU);
+        global_state->STATE = ui_ofdm_menu_event(key_event, global_state);
 
         // 退出寻呼机模块（回主菜单）：释放 modem 码表（PSRAM）
         if (global_state->STATE == STATE_MAIN_MENU) {
@@ -5334,6 +5342,40 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         global_state->STATE = ui_ofdm_looping_event(key_event, global_state);
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 寻呼机：消息收发（一屏完成收发：记录区 + 接收/发射按钮 + 状态栏 + 发射进度条）
+    /////////////////////////////////////////////
+
+    case STATE_OFDM_MSG:
+
+        // 首次获得焦点：绘制页面；若刚从发报输入页带回报文则立即开始连发 3 遍
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_ofdm_msg_on_enter(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_ofdm_msg_event(key_event, global_state);
+
+        break;
+
+
+    /////////////////////////////////////////////
+    // 寻呼机：消息收发的发报输入（复用全局单例输入控件，D 提交 → 回消息页发射）
+    /////////////////////////////////////////////
+
+    case STATE_OFDM_MSG_INPUT:
+
+        // 首次获得焦点：初始化
+        if (global_state->PREV_STATE != global_state->STATE) {
+            ui_ofdm_msg_input_on_enter(key_event, global_state);
+        }
+        global_state->PREV_STATE = global_state->STATE;
+
+        global_state->STATE = ui_ofdm_msg_input_event(key_event, global_state);
 
         break;
 

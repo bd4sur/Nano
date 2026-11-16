@@ -58,6 +58,8 @@ extern "C" {
 // 编号 73~76 已退役：原“小鹦鹉笼”独立的模型菜单/输入/推理/结果状态已并入鹦鹉笼统一状态
 // （STATE_MODEL_MENU / STATE_LLM_INPUT / STATE_LLM_ON_INFER / STATE_LLM_AFTER_INFER），
 // 仅推理引擎不同（nano_min，见 ui_llm.c 引擎适配层）；保留编号空缺避免冲突
+#define STATE_OFDM_MSG          (81)  // 寻呼机：消息收发（对话式记录 + 接收/发射按钮，收发在本页内完成）
+#define STATE_OFDM_MSG_INPUT    (82)  // 寻呼机：消息收发的发报文本输入（输入控件宿主）
 #define STATE_LOCK_SCREEN       (77)  // 电源键锁屏（灭屏低功耗；处理见 main_event_handler 入口全局拦截）
 #define STATE_ANIMAC_EXIT_CONFIRM (78)  // 电子核桃控制台退出确认模态框（页眉“返回”拦截，见 ui_app.c）
 #define STATE_SHUTDOWN          (99)
