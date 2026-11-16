@@ -151,7 +151,8 @@ WASM_OPT="-O3 -ffast-math -mnontrapping-fptoint -mbulk-memory"
 if [ "$WASM_SIMD" = "1" ]; then WASM_OPT="$WASM_OPT -msimd128"; fi
 if [ "$WASM_LTO" = "1" ]; then WASM_OPT="$WASM_OPT -flto"; fi
 
-"$EMCC" $WASM_OPT -DNANO_WASM_GUI \
+# -DAM_NATIVE_MAX_LIBS=32：宿主本地库数量上限（默认 16 已用满，第 17 个是 am_native_Audio.c）
+"$EMCC" $WASM_OPT -DNANO_WASM_GUI -DAM_NATIVE_MAX_LIBS=32 \
     -I. -I$ANIMAC_DIR \
     $ANIMAC_SRCS \
     main_wasm_gui.c \
@@ -188,6 +189,7 @@ if [ "$WASM_LTO" = "1" ]; then WASM_OPT="$WASM_OPT -flto"; fi
     am_native_Chat.c \
     am_native_Raster.c \
     am_native_Music.c \
+    am_native_Audio.c \
     infer.c \
     nano_fft.c \
     nano_min.c \

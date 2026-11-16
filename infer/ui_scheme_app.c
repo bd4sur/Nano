@@ -29,6 +29,7 @@
 #include "am_native_Chat.h"   // 鹦鹉笼端侧 LLM 推理引擎（(native Chat)）
 #include "am_native_Raster.h" // 水池软光栅后端（(native Raster)，见 app/waterpool_raster.scm）
 #include "am_native_Music.h"  // 音乐播放引擎（(native Music)，见 app/musicbox.scm）
+#include "am_native_Audio.h"  // 音频采集 + 频谱分析（(native Audio)，见 app/spectrogram.scm）
 
 // ===============================================================================
 // 运行时参数
@@ -659,6 +660,10 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     // Music：音乐播放引擎（文件枚举 + WAV/MP3 解码 + 随机定位 + 扬声器喂入，见 am_native_Music.h）。
     // 解码与 PCM 全在 C 侧，Scheme 只拿进度/时长/状态；无音频设备时自动转"静音走带"。
     am_runtime_register_native_lib(s_app->rt, &am_native_Music_lib);
+    // Audio：音频**输入**（开麦 + 加窗 + FFT + 对数幅度映射，见 am_native_Audio.h）。
+    // 引擎是虚拟机全局单例；FFT 整条流水线在 C 侧（Scheme 里 1024 点 FFT 会掉到个位数 fps），
+    // Scheme 只拿每频点 0~255 强度与 RMS，声谱图/示波器类 App 据此绘图。
+    am_runtime_register_native_lib(s_app->rt, &am_native_Audio_lib);
 
     // 清屏后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）
     gfx_soft_clear(global_state->gfx);

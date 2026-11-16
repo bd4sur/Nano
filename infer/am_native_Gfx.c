@@ -644,6 +644,15 @@ int32_t am_native_Gfx_refresh(am_runtime_t *rt, am_process_t *proc) {
     return native_statement_done(proc);
 }
 
+int32_t am_native_Gfx_scroll_up(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    int32_t rows = 0;
+    if (g == NULL) return -1;
+    if (!native_pop_int(proc, &rows)) return -1;
+    gfx_scroll_up(g, rows);   // 内部自行处理越界（rows<=0 或 >= 画布高度时空操作）
+    return native_statement_done(proc);
+}
+
 
 // ===============================================================================
 // 库注册表
@@ -995,6 +1004,7 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"draw_sprite", am_native_Gfx_draw_sprite },
     { L"draw_sprite_rotated", am_native_Gfx_draw_sprite_rotated },
     { L"refresh",     am_native_Gfx_refresh },
+    { L"scroll_up",   am_native_Gfx_scroll_up },
 };
 
 const am_native_lib_entry_t am_native_Gfx_lib = {

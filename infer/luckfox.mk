@@ -35,7 +35,7 @@ ANIMAC_HOST_HEADERS := $(wildcard $(ANIMAC_HOST_SRCS:.c=.h))
 # uClibc 的宽格式输出遇非 ASCII 会退化为 "Invalid wide format string."。
 # 强制包含现有兼容层，覆盖 ui_scheme_app 之外的 Animac 核心及全部宿主翻译单元。
 # _GNU_SOURCE 须先于强制包含生效，否则 features.h 会提前封口，丢失 CPU_ZERO/CPU_SET。
-CCFLAGS = -D_GNU_SOURCE -I$(EXTRA_ROOT)/include --sysroot=$(SYSROOT) -O3 -ffast-math -Wall -DFB_DEVICE='"/dev/fb0"' -DFB_SWAP_RB=1 -DFB_UPSCALE=2 -DTOUCH_SCALE=2 -DTOUCH_PHYS_WIDTH=720 -DTOUCH_PHYS_HEIGHT=720 -I$(ANIMAC_INC) -I$(ANIMAC_DIR) -include nano_wfmt.h
+CCFLAGS = -D_GNU_SOURCE -DAM_NATIVE_MAX_LIBS=32 -I$(EXTRA_ROOT)/include --sysroot=$(SYSROOT) -O3 -ffast-math -Wall -DFB_DEVICE='"/dev/fb0"' -DFB_SWAP_RB=1 -DFB_UPSCALE=2 -DTOUCH_SCALE=2 -DTOUCH_PHYS_WIDTH=720 -DTOUCH_PHYS_HEIGHT=720 -I$(ANIMAC_INC) -I$(ANIMAC_DIR) -include nano_wfmt.h
 LDFLAGS = -L$(EXTRA_ROOT)/lib --sysroot=$(SYSROOT) -lm
 
 BIN_DIR := bin

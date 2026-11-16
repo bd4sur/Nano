@@ -18,10 +18,12 @@ ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c, $(wildcard $(ANIMAC_DIR)/*.
 ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
                     am_native_Touch.c am_native_Imu.c \
                     am_native_Key.c am_native_Fs.c am_native_Ui.c am_native_App.c nano_key_events.c \
-                    am_native_Chat.c am_native_Raster.c am_native_Music.c \
+                    am_native_Chat.c am_native_Raster.c am_native_Music.c am_native_Audio.c \
                     ui_scheme_app.c
 
-CCFLAGS = -I$(SYSROOT)/usr/include --sysroot=$(SYSROOT) -O3 -ffast-math -Wall -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
+# -DAM_NATIVE_MAX_LIBS=32：宿主本地库数量上限（默认 16 已用满，第 17 个是 am_native_Audio.c；
+# 上游该宏有 #ifndef 保护，属构建期可覆盖项，故不改 vendor 源码）——见 am_native_Audio.c 断言
+CCFLAGS = -I$(SYSROOT)/usr/include --sysroot=$(SYSROOT) -O3 -ffast-math -Wall -DAM_NATIVE_MAX_LIBS=32 -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
 LDFLAGS = -L$(SYSROOT)/usr/lib --sysroot=$(SYSROOT) -lm
 
 BIN_DIR := bin

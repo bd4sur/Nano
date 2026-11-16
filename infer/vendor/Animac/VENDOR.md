@@ -89,6 +89,11 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
   把资源根相对路径换成**宿主绝对路径**（App 间传递路径用，见下面 App 库的 `launch_with`）；
   WASM 目标另有 `hal_fs_persist_wasm.c` 把写入/删除/改名同步进浏览器 IndexedDB（文件管理器
   app/filemgr.scm 依赖 `remove`/`rename`；递归删除目录树由 Scheme 侧组合原语完成）
+- `infer/am_native_Audio.c/.h` —— 音频**输入**与频谱分析（`is_available/open/close/info/read/
+  bin/sample/rms/level/set_level`）：麦克风经 `hal_audio_in.h`（WASM = getUserMedia + Web Audio，
+  其它平台 = ALSA/ESP-IDF I2S），Hann 加窗 + `nano_fft.c` 的基 2 FFT + 对数幅度映射全在 C 侧
+  （1024 点 FFT 在解释器里要 ~3×10⁵ VM 指令/列、每 23ms 一列，Scheme 侧跟不上），跨 FFI 只传
+  标量；供 `app/spectrogram.scm`（声谱图）使用。**本库是第 17 个本地库**，见下面「本地库数量上限」
 - `infer/am_native_Ui.c/.h` —— 宿主模态文本输入/输出（`input`/`input_with`/`message`/
   `message_titled`/`confirm`）：按上游契约 N7 把**进程**置 BLOCKED，宿主用现成的文本控件当
   模态框（`confirm` 借图形层的两按钮确认框），提交后压值 + step + 置 READY + 重新入队
@@ -111,6 +116,29 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
 | N5 | 每次 `am_process_pop_operand` 必须检查 `UINTPTR_MAX` 哨兵 |
 | N6 | 同步成功路径**恰好**调用 1 次 `am_process_step`（压值辅助函数内含） |
 | N7 | 阻塞型函数阻塞时压 0 不 step；唤醒值由运行时补压 |
+
+## 本地库数量上限（AM_NATIVE_MAX_LIBS）
+
+上游 `animac_core.h` 的 `AM_NATIVE_MAX_LIBS` **默认为 16**，本项目注册的本地库已达 17 个
+（System/Math/String/Table/Gfx/Time/Diag/Touch/Imu/Key/Fs/Ui/App/Chat/Raster/Music/Audio）。
+超出上限时 `am_runtime_register_native_lib` 会**静默失败**（返回 -1、无日志），表现为运行时
+`callnative: 未找到native函数 Audio.open` —— 极难定位。
+
+处理方式：该宏在上游是 `#ifndef` 保护（"宿主可覆盖"的构建选项），因此**不改本目录的源码**，
+各构建入口统一加 `-DAM_NATIVE_MAX_LIBS=32`：
+
+| 构建入口 | 位置 |
+|---|---|
+| `infer/Makefile` | `ANIMAC_DEFS`（pod_lite/pod/pod_pt35/tty/web） |
+| `infer/mp135.mk`、`infer/luckfox.mk` | `CCFLAGS` |
+| `infer/build_wasm_gui.sh` | `emcc` 命令行 |
+| `infer/platformio.ini`（ESP32） | `build_flags` |
+| `android/app/src/main/cpp/CMakeLists.txt` | `target_compile_options` |
+| `infer/tools/e2e/{host,perf,browser}` 回归台 | 各自的 `gcc` 命令行 |
+
+取 **32**（而不是刚好 17）：给后续新增本地库留余量，免得每加一个库都要动 8 个构建入口。
+`infer/am_native_Audio.c` 顶部有编译期断言（`#error`）：忘记加该宏的构建会**编译失败**，
+而不是在运行时静默失效。
 
 ## 构建接入
 

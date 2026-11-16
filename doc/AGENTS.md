@@ -12526,3 +12526,155 @@ node tools/e2e/browser/regress_calendar.js https://127.0.0.1:9002/index.html chr
 
 已知取舍：本地民用时固定 UTC+8（灵机 Time 库无时区信息）；App 不画退出按钮；
 A/ESC 走 App 外壳的退出确认框而不是 C 版的「返回小游戏菜单」（灵机 App 没有那个状态）。
+
+------------------------------------
+
+# 2026-11-17（灵机 App：声谱图 + 音频输入本地库 `(native Audio)`）
+
+把 C 版频谱仪（`infer/ui_spectrogram.c`）改写为**灵机应用程序**（`app/spectrogram.scm`），
+**编译目标 WASM-GUI**（`infer/build_wasm_gui.sh`，不是 `infer/web/` 的 LLM-only 路线）。
+前置工作：灵机侧此前**没有任何音频输入通路**（Music 库只出不进），因此先新增宿主本地库
+`(native Audio)`（采集 + 加窗 + FFT + 对数映射），再由 Scheme 画瀑布图。
+交互按需求**全部改为自绘触屏控件**（复用 `app/lib/button.scm` 与 `app/lib/exit.scm`），
+不依赖十六宫格软按键。
+
+## 1. 新增文件
+
+| 文件 | 作用 |
+|---|---|
+| `infer/am_native_Audio.c/.h` | 本地库 `Audio`：麦克风开/关、逐列取数、频点强度、原始采样、RMS、基准/动态范围（10 个过程） |
+| `infer/app/spectrogram.scm` | 声谱图 App：瀑布图 + 频率轴/时间轴 + 6 枚触屏按钮 + 无麦克风卡片 |
+| `infer/tools/e2e/host/hal_audio_in_stub.c` | 回归台麦克风桩：按**虚拟时钟**出样（tone/silence/nodata/error 四模式） |
+| `infer/tools/e2e/native/audio_probe.scm` | 本地库语义探针（一行 `PROBE k=v …` 记录） |
+| `infer/tools/e2e/native/test_audio.py` | 67 项断言：库语义 4 模式 + App 端到端（像素判据 + 触屏控件） |
+| `infer/tools/e2e/browser/regress_spectrogram.js` | 25 项断言：真 WASM + 真 Web Audio 麦克风（Chromium 假设备 + 脚本生成的 1kHz WAV） |
+
+接线改动：`am_native_Gfx.c/.h`（新增 `(Gfx.scroll_up rows)`）、`ui_scheme_app.c`（注册库）、
+`infer/Makefile` / `mp135.mk` / `luckfox.mk` / `build_wasm_gui.sh` / `platformio.ini` /
+`android/.../CMakeLists.txt`（源清单 + 见 §2 的宏）。
+
+## 2. 踩到的硬坑：本地库数量上限静默失败（**必读**）
+
+上游 `animac_core.h` 的 `AM_NATIVE_MAX_LIBS` **默认为 16**，而本项目此前已注册满 16 个
+（System/Math/String/Table/Gfx/Time/Diag/Touch/Imu/Key/Fs/Ui/App/Chat/Raster/Music）。
+新增第 17 个库时 `am_runtime_register_native_lib()` **静默返回 -1（无任何日志）**，
+症状是运行期 `[Runtime] callnative: 未找到native函数 Audio.close` —— 看上去像库名/函数名
+拼错，实际是注册表溢出。
+
+处置（**不改 vendor 源码**：该宏在上游是 `#ifndef` 保护，属"宿主可覆盖"的构建选项）：
+
+- 各构建入口统一加 `-DAM_NATIVE_MAX_LIBS=32`（留余量，免得每加一个库都要动 8 个入口；
+  `infer/Makefile` 的 `ANIMAC_DEFS`、`mp135.mk`、
+  `luckfox.mk`、`build_wasm_gui.sh` 的 emcc 命令行、`platformio.ini` 的 `build_flags`、
+  android `target_compile_options`、`tools/e2e/{host,perf}` 的 gcc 命令行）；
+- `am_native_Audio.c` 顶部加**编译期断言**（`#if AM_NATIVE_MAX_LIBS < 17 #error`），
+  忘记加宏的构建直接编译失败，不再运行时静默失效；
+- `infer/vendor/Animac/VENDOR.md` 增补「本地库数量上限」一节（含上表）。
+
+## 3. `(native Audio)` 的 API 与设计
+
+| 过程 | 返回 | 说明 |
+|---|---|---|
+| `(Audio.is_available)` | Boolean | 探测一次后缓存（未探测则开一次再关） |
+| `(Audio.open rate)` | Boolean | 开麦并准备分析缓冲（约 18.5KB，PSRAM/主堆）；重复调用先关 |
+| `(Audio.close)` | Boolean | 关麦 + 释放缓冲（幂等） |
+| `(Audio.info)` | List | `(采样率 FFT点数 可绘制频点数)`；未打开也给默认值 |
+| `(Audio.read)` | Number | **一帧一取**：1=本列就绪 0=数据不足 −1=硬错误 |
+| `(Audio.bin i)` | Number | 最新一列第 i 个频点的强度 0~255（越界 0） |
+| `(Audio.sample k)` | Number | 最新一帧第 k 个原始采样（int16；越界 0） |
+| `(Audio.rms)` | Number | 时域电平 0~255（−60dBFS…0dBFS 线性） |
+| `(Audio.level)` / `(Audio.set_level b r)` | List | 基准电平 / 动态范围（库只做宽松钳位 0~1000 / 1~4096） |
+
+**为什么 FFT 在 C 侧**（与 `(native Music)` 把解码放 C 侧同一理由）：1024 点基 2 FFT 是
+5120 个蝶形，在解释器里约 3×10⁵ VM 指令/列，而 @44.1kHz 每 23ms 就要出一列（>10⁷ 指令/秒），
+比 wasm32 上的解释器能力高一个数量级——声谱图会掉到个位数 fps。因此时域→频域整条流水线
+留在 C（复用 `nano_fft.c`，与 C 版**同一份**旋转因子/加窗/映射代码），跨 FFI 只传标量；
+整块 PCM/频谱列表从不进解释器堆（1024 采样的列表 = 每帧上千个堆对象）。
+
+**为什么 `(Audio.read)` 一次只取一帧**（曾实现为"多取只留最新"，已改）：声谱图要把每一帧都
+画成一列，丢帧等于丢信息（短促声音会被整段跳过）。浏览器 AudioWorklet 每 2048 采样投递一次，
+于是 App 每拍循环最多 `COL_MAX=4` 次即可把 43 列/秒全部画出；时间轴因此是**精确音频时间**
+（一列 = fft/rate ≈ 23.2ms，1 秒 = 43.1 列 = 86px），不再是实测 EMA。
+
+## 4. App：版面、交互与两个"易错点"
+
+- 版面（320×240）：顶栏 22px（标题 + 状态点/状态文字 + 右上「退出」）／频率轴 14px
+  （0、2k…12k，刻度像素 = 频点 × `bin_hz` 反算，与 C 同一算式）／绘图区 x≥26、y 36..191
+  （294 频点 × 2px 行、78 列历史 ≈1.8s）／左侧时间轴 26px（0s / −1s）／底部按钮行 20px
+  （6 枚 49×20）／状态条 24px（基准/范围读数 + 波形包络缩略图 + 电平表）。
+- 触屏控件：`基准-`/`基准+`/`范围-`/`范围+`（**按住连发**：360ms 后每 110ms 一步）、
+  `暂停`/`继续`、`热力`/`冰蓝`/`灰度`（按钮标签即当前配色，切换时清屏重画）、右上「退出」、
+  无麦克风卡片里的「重试」。状态条读数在调节后 900ms 内高亮（C 版是限时叠加，这里常显+高亮）。
+- **易错点 1：`clear_plot` 顺手清 `overlay_kind`** —— `draw_all` 先 `clear_plot` 再
+  `draw_overlay`，第一版在 `clear_plot` 里把 `overlay_kind` 归零，于是"无麦克风卡片/等数据提示"
+  永远画不出来（画面纯黑）。现改为 `clear_plot` 只清像素，`overlay_kind` 由调用方决定。
+- **易错点 2：漏调 `(EX.draw_button)` → 按钮"看不见但点得动"** —— 重构顶栏时把
+  `(EX.draw_button)` 从 `draw_top` 里丢了，于是右上角空白一片，可点那块区域**仍然退出**：
+  `(EX.check)` 里除了宿主热区登记还留了"逐拍采样触屏电平"的本地兜底，命中判定照常工作。
+  这条很容易误判成"按钮被别的元素盖住"。现在宿主台与浏览器回归各加了两条硬断言
+  （按钮底色 60/62/74 + 标签墨迹 > 30px），漏画会直接失败。
+- **易错点 3：暂停时"按住高亮"卡住** —— 暂停后不再有新列触发重绘，而最后一次上屏是在
+  "按住在内"的那一拍，松手后按钮一直是按下色。修法：`handle_buttons` 里比较本拍与上一拍的
+  按住序号（`prev_armed`），一变就置 `dirty`。
+- 其余行为：暂停时**仍消费音频**（`(Audio.read)` 照调、只是不画），恢复后立刻回到实时
+  （否则会补播缓冲区里 4 秒的旧画面）；无麦克风/等数据两态画面静止，故加"呼吸状态点"
+  （每 400ms 重绘一次）与**每 6s 自动重试开麦**，用户既看到"还活着"、静止场景也有推帧。
+- 时间/颜色：三套配色（热力＝C 版同段映射 / 冰蓝 / 灰度）在启动时各建 256×3 列表，
+  切换只换指针；波形缩略图每列取 3 个采样求 min/max 画包络（单点抽样对高频是欠采样，
+  会画成一串无意义的点阵）。
+
+## 5. 验证
+
+- **本地库语义**（`python3 tools/e2e/native/test_audio.py`，**65/65 PASS**）：
+  - 1kHz / 0.4 幅值正弦：`info=(44100 1024 511)`、峰值频点下标 22（=1000/43.066 取整）、
+    峰值强度 224/255、其余频点均值 2、RMS=190（−15dBFS 逐位相符）、采样 ±7999；
+    `set_level` 钳位 `(99999, 0.5) → (1000, 1)`、还原 `(240 300)`；
+  - silence / nodata / error 三模式：全 0 / cols=0 / `open=#f`+`is_available=#f`，均无报错。
+- **App 端到端（宿主回归台，**67/67 PASS**）**：起振列数、峰值列 x=48±2（1kHz）、热力暖色像素、
+  右上角「退出」按钮已绘制（底色 60,62,74 + 标签墨迹）、
+  波形缩略图、基准 240→224（点两次）、范围 300→316、配色切冰蓝（冷色 900、暖色 0）、
+  暂停后 refresh 由 138 降到 21（冻结）且 cols 仍增长、按住 640ms 连发到 208、
+  无麦克风卡片（RGB565 量化后逐色相符）+ 重试按钮、等数据提示文字、Esc/右上角按钮 →
+  确认 → 收尾（`[spectrogram] bye`，即 `Audio.close` 被调用）。
+- **浏览器端到端**（`node tools/e2e/browser/regress_spectrogram.js <URL> chromium <out>`，
+  **25/25 PASS**）：真链路 = 假麦克风（`--use-file-for-fake-audio-capture=<脚本生成的 1kHz WAV>`）
+  → Web Audio → `hal_audio_in_wasm.c` → `(native Audio)` → 瀑布图。断言：峰值列 x=46±4、
+  热力/冰蓝色相、RMS=208、`rows=43`（列/秒实测）、暂停后帧 epoch 停止增长、恢复后重新滚动、
+  点按退出 → 回应用列表、无 pageerror、`nanoAudio.micErr=0`。
+  **坑**：Chromium 的 `--use-fake-device-for-media-stream` 只提供**静音流**（实测 `micW` 正常
+  增长但采样全 0、`rms=0`）；要有信号必须再给 `--use-file-for-fake-audio-capture=<wav>`
+  （脚本现场生成 1kHz/0.4 幅值/5s 的 WAV，循环播放）。
+- **回归**：宿主回归台 43 个 App 全 `err=none`（含 `spectrogram` refresh=82）；
+  `regress_det.js` 中 `spectrogram` = `launch=80/end=80/refreshΔ>0`；`make tty`（临时解包
+  `libasound2-dev` 头 + 链系统 `libasound.so.2`）与 `make web` 均编译链接通过。
+
+## 6. 顺带修的天花板外问题
+
+`tools/e2e/browser/regress_det.js` 与 `regress.js` 的导航用 `K.digit(7)` 进"小游戏"，
+而主菜单改造后第 7 格是**频谱仪（C 版）**（`K.digit(7)` = 逻辑 `NANO_KEY_7` → 第 7 格）。
+于是全量确定性回归的每个 App 实际都在启动 C 版频谱仪（`launchState=53`），整张表早已失真。
+改为 `K.digit(6)`（小游戏 = 第 6 格）后恢复正常（`E2E_APPS=gol,spectrogram,flip,xray` 实测
+`launch=80/end=80`）。
+
+## 7. 运行与已知取舍
+
+```bash
+cd infer && bash build_wasm_gui.sh                 # 产物 webgui/（manifest 自动含 app/spectrogram.scm）
+cd webgui && python3 ../tools/https_static_server.py 9002 .
+# 浏览器打开 https://<主机>:9002/ → 主菜单「小游戏」→「灵机应用程序」→ spectrogram
+#   手机/桌面浏览器需 HTTPS（或 localhost）并授权麦克风；http:// 局域网地址下浏览器不给麦克风，
+#   App 会停在"正在等待麦克风数据…"或"麦克风不可用"卡片（点「重试」可重开）
+
+python3 tools/e2e/native/test_audio.py                       # 67/67（宿主回归台）
+node tools/e2e/browser/regress_spectrogram.js <URL> chromium <out>   # 25/25（真麦克风链路）
+```
+
+已知取舍：
+- 频率轴按**请求**采样率标定；个别浏览器拒绝 `new AudioContext({sampleRate:44100})` 时会退让
+  为设备默认速率（C 侧无从得知），频率轴会整体偏移（与 C 版同样的限制，见 `hal_audio_in_wasm.c`）；
+- 历史深度 78 列 ≈1.8s（C 版 113 列 ≈2.6s）：底部多了按钮行与状态条，换来的是纯触屏可用；
+- 库是**进程级单例**（与 Music 引擎同形态）：同一时刻只有一个 App 能用麦克风，
+  App 退出前必须 `(Audio.close)`（已放在 `EX.on_exit` 里）；
+- 桌面/掌机目标（ALSA/ESP-IDF）行为等价但未在本机实测：本机无声卡开发环境，
+  仅验证了 `make tty` / `make web` 编译链接通过；`mic_read` 在阻塞型 HAL 上按 100ms 超时语义工作，
+  App 每拍最多 4 次读取会退化为"一拍一列"（不影响正确性，只是列率跟随 HAL）。

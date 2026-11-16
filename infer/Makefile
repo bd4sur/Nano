@@ -11,7 +11,7 @@ ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c, $(wildcard $(ANIMAC_DIR)/*.
 ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
                     am_native_Touch.c am_native_Imu.c \
                     am_native_Key.c am_native_Fs.c am_native_Ui.c am_native_App.c nano_key_events.c \
-                    am_native_Chat.c am_native_Raster.c am_native_Music.c \
+                    am_native_Chat.c am_native_Raster.c am_native_Music.c am_native_Audio.c \
                     ui_scheme_app.c
 
 # ui_app.c 直接引用的业务模块（GUI 目标共用；同样缺一个就链接失败）
@@ -21,11 +21,16 @@ GUI_MODULE_SRCS := ui_almanac.c ui_calendar.c ui_dict.c ui_ebook.c ui_goldminer.
 
 # 音频HAL（hal_audio_out_alsa_linux.c / hal_audio_in_alsa_linux.c）依赖 ALSA（libasound2-dev）
 # 任务抽象（hal_os_linux.c）依赖 pthread
+# AM_NATIVE_MAX_LIBS：上游解释器的宿主本地库数量上限（vendor/Animac 里默认 16，本项目已用满；
+# 第 17 个是 am_native_Audio.c）。上游该宏有 #ifndef 保护，属"宿主可覆盖"的构建选项，
+# 因此**不改 vendor 源码**，只在编译命令行覆盖。见 am_native_Audio.c 的编译期断言与 VENDOR.md。
+ANIMAC_DEFS = -DAM_NATIVE_MAX_LIBS=32
+
 ifeq ($(IS_RASPBERRY_PI),yes)
-    CCFLAGS = -O3 -march=native -ffast-math -Wall -pthread -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
+    CCFLAGS = -O3 -march=native -ffast-math -Wall -pthread $(ANIMAC_DEFS) -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
     LDFLAGS = -lm -pthread
 else
-    CCFLAGS = -O3 -march=native -ffast-math -Wall -fopenmp -pthread -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
+    CCFLAGS = -O3 -march=native -ffast-math -Wall -fopenmp -pthread $(ANIMAC_DEFS) -I$(ANIMAC_INC) -I$(ANIMAC_DIR)
     LDFLAGS = -lm -fopenmp -pthread
 endif
 

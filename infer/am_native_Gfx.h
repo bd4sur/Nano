@@ -199,6 +199,15 @@ int32_t am_native_Gfx_draw_text_centered(am_runtime_t *rt, am_process_t *proc);
 // (Gfx.refresh) : #undefined —— 推帧上屏（脏区局部刷新）
 int32_t am_native_Gfx_refresh(am_runtime_t *rt, am_process_t *proc);
 
+// (Gfx.scroll_up rows:Number) : #undefined
+// —— 把整个帧缓冲向上滚动 rows 行（= C 版 gfx_scroll_up；滚动后整屏标脏），
+//    底部 rows 行的内容保留、由调用方覆写。这是「瀑布图」类显示的基本设施：
+//    声谱图（app/spectrogram.scm）每来一列就上滚 ROW_H 行、只在底部画新列，
+//    历史画面自然保留。若反过来「每帧整屏重画历史」，Scheme 侧就得把上百行 ×
+//    数百列的强度值留在解释器堆里，代价高一个量级（每列 294 个堆对象）。
+//    rows ≤ 0 或 ≥ 画布高度时为空操作（与 C 版一致）。
+int32_t am_native_Gfx_scroll_up(am_runtime_t *rt, am_process_t *proc);
+
 
 #ifdef __cplusplus
 }
