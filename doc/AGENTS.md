@@ -12085,3 +12085,71 @@ MPEG-1/H.261 风格的迷你编解码器 + 六面板可视化 + 完整交互闭�
   接收→返回→环回自测→重置→消息收发（接收/停止/发射三遍）；另用临时注入（3 份相同净荷）
   验证去重后记录只有一条，验证后已还原代码。
 - 未做：真实空口收发（需两台设备与声学信道）。
+
+------------------------------------
+
+# 2026-11-16（六）文件管理器打开图片 → 拉起「时光集」（filemgr → album）
+
+需求：文件管理器（`infer/app/filemgr.scm`）里「进入」受支持的图片文件时，拉起
+「时光集」（`infer/app/album.scm`）查看，启动参数 = 该文件的**宿主绝对路径**。
+只针对 Nano-WASM-GUI（`infer/build_wasm_gui.sh` → `infer/webgui/`）。
+
+## 1. 改动
+
+- **`app/filemgr.scm`**：`build_openers` 的映射表新增一行
+  `(mk2 "png,jpg,jpeg,bmp,gif,tga" "album")`（放在最前，表项顺序即匹配优先级）。
+  扩展名表与 `album.scm` 的 `ext_ok` 白名单**逐项一致**（stb_image 能解码的常见格式；
+  两处要同步改）。`op_open` 的既有链路不变：查表命中 → `(App.launch_with 应用
+  (Fs.abspath 路径))` + `FMOPEN <文件> -> <应用>` 诊断行；未命中 → 原详情框。
+- **`app/album.scm`**：新增 `(native App)` 与拉起支持。
+  - 状态新增 `cur_dir`（当前浏览目录，默认 `IMG_DIR`＝`image`）与 `want`（拉起参数
+    指定的文件名，`reload` 用它定位当前图片，用后清空）。`reload`/`open_current`/
+    `rescan_diff`/`draw_empty` 里所有 `IMG_DIR` 改用 `cur_dir`，`cur_path` 由
+    `join_dir(cur_dir, name)` 拼出。
+  - `launch_open`（消费点两处：`boot` 冷启动、`tick` 开头后台实例被再次拉起）：
+    取 `(App.launch_arg)` → `dir_of` 取所在目录、`name_of` 取文件名 → 切目录 →
+    `reload` 选中该文件并 `open_current` 读文件头 → 重画。**参数所指定的文件若不在
+    枚举结果里**（目录读不出 / 扩展名不在白名单）也照样挂进列表，交给
+    `open_current` 试读：读不出就画既有坏图占位页，仍可用上/下一张跳过。
+  - 拉起时把 `chrome` 复位为 1、`auto_on` 复位为 0：否则会停在上一张图的沉浸模式/
+    自动放映上，看上去像「没打开」。
+  - 本地新增四个路径小工具（`last_slash`/`dir_of`/`name_of`/`join_dir`）：拉起参数是
+    **宿主绝对路径**，`app/lib/fsx.scm` 的 `parent`/`join` 按「相对资源根」口径写
+    （`parent("/a.png")` 会返回 `"."`），不能直接复用；album 本来也没 import fsx。
+  - 设计口径：**「打开一张图」与「相册浏览」是同一套代码**——浏览目录换成图片所在
+    目录后，上/下一张、滑动、自动放映照常作用于同目录其它图片（不需要「单图模式」）。
+  - `draw_empty` 的第二行改为显示 `当前目录：<cur_dir>`（拉起时是绝对路径），
+    不再写死 `image/`。
+
+## 2. 验证（WASM-GUI 真浏览器，三引擎）
+
+新增 `infer/tools/e2e/browser/regress_album_launch.js`（本机工具，不入 Git），
+真 WASM + 真宿主状态机 + 真 PNG（从服务器 `files/wp.png`、`files/wp-chiikawa.png`
+拷进 MEMFS 的 `data/ltest`）：
+
+- **shell / chromium / firefox 各 32/32 PASS**：filemgr 进 `data/ltest` →
+  选 `p1.png` → `FMOPEN p1.png -> album` → 宿主
+  `拉起 filemgr → album（冷启动，参数 …/data/ltest/p1.png）` →
+  album `[album] launch …/p1.png dir=…/data/ltest idx=1`、
+  `[album] boot … dir=…/data/ltest`、`[album] open …/p1.png 320x240` →
+  照片区 5.2 万像素有内容、顶栏在 → 键盘「下一张」换 `p2.png`（整帧 hash 变化）→
+  `broken.png` 走 `[album] unreadable` 占位页不崩、再下一张跳回 `p1.png` →
+  album 切后台保活 → 恢复 filemgr（原目录保住）→ 打开 `p2.png` → **恢复同一个
+  album 实例**并交付新参数（无新解释器池）→ 画面切到 p2 → `note.txt` 仍拉起
+  markdown（映射表未被图片条目打乱）、`MDLAUNCH` 参数正确 → 无 pageerror。
+  截图核对：`01-album-p1`（时光集 顶栏 `320x240 | 退出`、底栏 `2/3`、照片黑边不拉伸）、
+  `03-album-relaunch-p2`（`3/3`、换图成功）。
+- **回归**：`regress_album.js`（时光集自身，shell/chromium/firefox 各 **34/34**）、
+  `regress_filemgr.js`（**51/51**）、`regress_launch.js`（**30/30**）。
+  - `regress_launch.js` 原以 `.png` 作「无映射类型（弹详情框）」用例，本需求后
+    `.png` 已有映射 → 换成 `.bin`（无映射语义不变）。
+  - `regress_album.js` 的「空目录提示页」探针原取 `(160,120)`，正好落在第 1 行
+    提示文字的墨迹上（提示文案一改就误报）→ 改取 `(160,190)`（三行文字之下）。
+  - `python3 tools/check_scm_arity.py app/album.scm` 0 处问题
+    （`filemgr.scm` 的 3 处是 `op_copy/op_move` 既有文案的旧问题，与本次无关）。
+
+## 3. 未做 / 注意
+
+- 未改动画/视频等其它类型；新增查看器仍只需在 `build_openers` 加一行。
+- album 无「单图模式」：拉起后上/下一张会离开参数指定的那张（同目录相册语义），
+  这是有意为之；若将来要「只显示这一张」，给 `launch_open` 加个标志即可。

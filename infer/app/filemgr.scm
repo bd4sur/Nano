@@ -6,7 +6,8 @@
 ;;     （排序在 Scheme 层做，不依赖各平台 readdir 顺序）；目录以「名字/」+ 蓝色区分；
 ;;   · 列表顶部固定一条 **".."（返回上级目录）** 条目（根目录下变灰，点了只提示）；
 ;;   · 进入目录 / 返回上级；文件选中后「进入」= **用对应类型的 App 打开**
-;;     （映射表见下方 openers；txt / md / markdown → Markdown 阅读器 App）；
+;;     （映射表见下方 openers；txt / md / markdown → Markdown 阅读器 App，
+;;      png / jpg / jpeg / bmp / gif / tga → 时光集（图片查看器）App）；
 ;;     没有映射的类型仍弹出详情框（路径 / 大小 / 类型）；
 ;;   · 新建文件：默认 **.txt**，默认文件名为**时间戳**（如 20261020-020000.txt）；
 ;;   · 新建目录：默认名同样是时间戳；
@@ -401,6 +402,9 @@
 (define build_openers
   (lambda ()
     (set! openers (new_list))
+    ;; 图片 → 时光集（app/album.scm）：扩展名表与 album 的 ext_ok 保持一致
+    ;; （stb_image 能解码的常见格式；改一处要同步改另一处）
+    (push openers (mk2 "png,jpg,jpeg,bmp,gif,tga" "album"))
     (push openers (mk2 "md,markdown" "markdown"))
     (push openers (mk2 "txt" "markdown"))
     #t))

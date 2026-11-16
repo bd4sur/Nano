@@ -7,6 +7,7 @@
 ;;
 ;; 与 C 版的对应关系：
 ;;   · 目录         image/（相对业务资源根；(native Fs)/(native Gfx) 的同一套路径规则）
+;;                  —— 被别的 App 拉起时改成「参数所指定图片所在的那个目录」，见 launch_open
 ;;   · 排序         枚举顺序（hal_fs 的 list_files 按名字升序；C 版 sort_strings 同序）
 ;;   · 键位         1=自动放映开关；2/4/5/7/8/←/0=上一张；3/6/Shift/9/Ctrl/→/Enter=下一张
 ;;                  （C 版的 NANO_KEY_* 逻辑键值，浏览器物理键盘经 (native Key) 忠实送达）
@@ -36,6 +37,7 @@
 
 (native Gfx)
 (native Fs)
+(native App)
 (native Key)
 (native Touch)
 (native String)
@@ -63,6 +65,8 @@
 
 ;; ---- 状态 ------------------------------------------------------------------
 
+(define cur_dir IMG_DIR)     ; 当前浏览的目录（默认 image/；被拉起时 = 参数图片所在目录）
+(define want "")             ; 拉起参数指定的文件名（reload 按它定位当前图片，用后清空）
 (define names (cdr '(0)))    ; 过滤后的图片文件名表（升序，来自 Fs.list）
 (define n 0)                 ; 图片数
 (define dir_n -2)            ; 上次枚举的目录条目数（-2 = 尚未枚举；用于静默重扫比对）
@@ -101,6 +105,42 @@
 
 (define min2 (lambda (a b) (if (< a b) a b)))
 (define max2 (lambda (a b) (if (> a b) a b)))
+
+;; ---- 路径小工具（拉起参数是**宿主绝对路径**，不能用 fsx 的相对根口径）------
+
+;; 最后一个 '/' 的下标；没有则 -1
+(define last_slash
+  (lambda (s)
+    (define L (String.length s))
+    (define i (- L 1))
+    (define cut -1)
+    (while (>= i 0)
+      { (if (and (< cut 0) (== (String.charCodeAt i s) 47)) (set! cut i) #f)
+        (set! i (- i 1)) })
+    cut))
+
+;; 所在目录："a/b/c.png" → "a/b"；"/c.png" → "/"（根）；"c.png" → "."（资源根）
+(define dir_of
+  (lambda (s)
+    (define cut (last_slash s))
+    (if (< cut 0)
+        "."
+        (if (== cut 0) "/" (String.slice s 0 cut)))))
+
+;; 末段名字："a/b/c.png" → "c.png"
+(define name_of
+  (lambda (s)
+    (define cut (last_slash s))
+    (String.slice s (+ cut 1) (String.length s))))
+
+;; 目录 + 文件名 → 路径（"/" 结尾不再补 '/'）
+(define join_dir
+  (lambda (d nm)
+    (if (String.equals d "/")
+        (String.concat "/" nm)
+        (if (or (String.equals d ".") (== (String.length d) 0))
+            nm
+            (String.concat d (String.concat "/" nm))))))
 
 ;; 字符步进（12px 抗锯齿字模：半角 7px、全角 12px；与 app/lib/menu_list.scm 同口径）
 (define char_w (lambda (cp) (if (>= cp 11904) 12 7)))   ; 11904 = 0x2E80
@@ -198,16 +238,19 @@
 
 ;; ---- 目录枚举 --------------------------------------------------------------
 
-;; 重新枚举 image/：重建 names/n，并尽量把「当前文件」保持在原处。
+;; 重新枚举**当前目录**（默认 image/；被拉起时是参数图片所在目录）：重建 names/n，
+;; 并尽量把「当前文件」保持在原处。
+;;   · 有拉起的定位请求（want）→ 优先选中它（不在列表里也挂进去，交给 open_current 试读）；
 ;;   · 首次调用（cur_name 为空）→ 选中第 0 张；
 ;;   · 后台挂载陆续到位（文件数变化）→ 当前文件仍在则原地下标不变，否则回第 0 张。
 (define reload
   (lambda ()
-    (define raw (Fs.list IMG_DIR))
+    (define raw (Fs.list cur_dir))
     (define cnt 0)
     (define k 0)
     (define nm "")
     (define old cur_name)
+    (define launched (if (> (String.length want) 0) 1 0))
     (define found -1)
     (set! names (new_list))
     (set! n 0)
@@ -225,20 +268,35 @@
                   #f)
               (set! k (+ k 1)) }) }
         { (set! dir_ok 0) (set! dir_n -1) })
-    ;; 定位原来的当前文件（按文件名；列表已升序，找到即用）
+    ;; 定位当前图片
     (set! found -1)
-    (if (and (> n 0) (not (== (String.length old) 0)))
+    (if (== launched 1)
         { (set! k 0)
           (while (< k n)
-            { (if (and (< found 0) (String.equals (get_item names k) old))
+            { (if (and (< found 0) (String.equals (get_item names k) want))
                   (set! found k)
                   #f)
-              (set! k (+ k 1)) }) }
-        #f)
+              (set! k (+ k 1)) })
+          ;; 目录枚举不出来 / 扩展名不在白名单 → 也把参数指定的文件挂进列表：
+          ;; 由 open_current 去读文件头（读不出来就画坏图占位，仍可上/下一张）
+          (if (< found 0)
+              { (push names want)
+                (set! n (+ n 1))
+                (set! found (- n 1)) }
+              #f)
+          (set! want "") }
+        (if (and (> n 0) (not (== (String.length old) 0)))
+            { (set! k 0)
+              (while (< k n)
+                { (if (and (< found 0) (String.equals (get_item names k) old))
+                      (set! found k)
+                      #f)
+                  (set! k (+ k 1)) }) }
+            #f))
     (if (>= found 0) (set! idx found) (set! idx 0))
-    ;; 当前文件变了 / 从未打开 / 上次是坏图 → 重新读文件头
+    ;; 当前文件变了 / 从未打开 / 上次是坏图 / 刚被拉起换目录 → 重新读文件头
     (if (> n 0)
-        (if (or (< found 0) (not (== cur_ok 1)))
+        (if (or (== launched 1) (< found 0) (not (== cur_ok 1)))
             (open_current)
             (set! dirty 1))
         { (set! cur_ok 0)
@@ -253,7 +311,7 @@
     (define nm "")
     (set! nm (get_item names idx))
     (set! cur_name nm)
-    (set! cur_path (String.concat (String.concat IMG_DIR "/") nm))
+    (set! cur_path (join_dir cur_dir nm))
     (set! dims (Gfx.image_size cur_path))
     (if (null? dims)
         { (set! cur_ok 0)
@@ -462,7 +520,7 @@
 (define draw_empty
   (lambda ()
     (define l1 "")
-    (define l2 "把 .png / .jpg 等图片放入 image/ 目录")
+    (define l2 "")
     (define l3 "正在自动检测…（会自动重试，按 R 立即重扫）")
     (Gfx.set_font 1)
     (Gfx.fill_rect 0 0 SW SH 14 17 22)
@@ -474,7 +532,9 @@
     (Gfx.set_font 1)
     (if (== dir_ok 1)
         (set! l1 "图片目录为空")
-        (set! l1 "读不到 image/ 目录（资源可能仍在载入）"))
+        (set! l1 "读不到图片目录（资源可能仍在载入）"))
+    ;; 目录名随拉起参数变（默认 image/，被拉起时是图片所在目录）
+    (set! l2 (clip_text (String.concat "当前目录：" cur_dir) 300))
     (Gfx.draw_text l1 (center_x l1) (+ 110 TXT_GAP) 220 226 236)
     (Gfx.draw_text l2 (center_x l2) (+ 132 TXT_GAP) 170 182 200)
     (Gfx.draw_text l3 (center_x l3) (+ 158 TXT_GAP) 130 144 164)
@@ -599,12 +659,48 @@
     (set! t_down p)
     #t))
 
+;; ---- 启动参数（App → App 拉起） ------------------------------------------
+;;
+;; 拉起方（app/filemgr.scm 里选中 .png/.jpg/... 后点「进入」）用
+;; (App.launch_with "album" 路径) 把控制权交给本 App，并约定参数 = **待打开图片的
+;; 宿主绝对路径**（'/' 开头 = 宿主绝对路径，原样交给 (native Fs)/(native Gfx)，
+;; 两者路径规则一致——见 am_native_Fs.h 的 Fs.abspath）。
+;;
+;; 与「浏览 image/ 目录」怎么共存：本 App 的列表就是**一个目录里的图片**，所以
+;; 拉起时把浏览目录（cur_dir）换成该文件所在目录，并选中那个文件——于是「打开一张图」
+;; 与「相册浏览」是同一套代码：左右滑动/上下一张照样能看同目录的其它图。
+;;
+;; (App.launch_arg) **取走即清零**（同 (App.back_requested)）：每拍只消费一条。
+;; 两个消费点：boot（冷启动被拉起）与 tick 开头（后台实例被再次拉起，换一张图）。
+(define launch_open
+  (lambda ()
+    (define a (App.launch_arg))
+    ;; 返回值必须是 #t/#f：本解释器里只有 #f 为假，0 也是真值（见 am_native_App.h 的坑位记录）
+    (if (null? a)
+        #f
+        (if (== (String.length a) 0)
+            #f
+            { (set! cur_dir (dir_of a))
+              (set! want (name_of a))
+              ;; 换图 = 换上下文：沉浸模式/自动放映一律回到默认观感，
+              ;; 否则拉起后会停在上一张图的沉浸态/自动放映上，看上去像“没打开”
+              (set! chrome 1)
+              (set! auto_on 0)
+              (set! last_pw -1)
+              (set! dirty 1)
+              (reload)
+              (if (> n 0) (draw_all) (draw_empty))
+              (display "[album] launch ") (display a)
+              (display " dir=") (display cur_dir)
+              (display " idx=") (display idx) (newline)
+              #t }))))
+
 ;; ---- 主循环 ----------------------------------------------------------------
 
 ;; 前 30 秒（WASM 后台资源挂载期）每 5 秒静默重扫一次；只在目录条目数变化时重建列表
 (define rescan_diff
   (lambda ()
-    (define raw (Fs.list IMG_DIR))
+    (define raw (Fs.list cur_dir))
     (define c 0)
     (set! c (if (list? raw) (length raw) -1))
     (if (not (== c dir_n))
@@ -614,7 +710,9 @@
 
 (define tick
   (lambda ()
-    { (if (== chrome 1)
+    { ;; 后台实例被再次拉起（换一张图）：先把参数消费掉并画新画面
+      (launch_open)
+      (if (== chrome 1)
           (EX.check)
           ;; 沉浸模式：不跑 EX.check（否则它按自己的矩形把右上角点按判成退出）；
           ;; 硬 A/ESC 在这里只当「唤出工具条」，退出按钮热区已撤掉。
@@ -680,12 +778,17 @@
       (set! boot_ms (System.timestamp))
       (EX.install_with draw_all)
       (EX.on_exit cleanup)
-      (reload)
-      (if (> n 0)
-          (draw_all)
-          (draw_empty))
+      ;; 拉起方指定了要打开的图片（启动参数）→ 直接看那张（同目录仍是相册）；
+      ;; 否则按原样浏览 image/ 目录。
+      (if (launch_open)
+          #f
+          { (reload)
+            (if (> n 0)
+                (draw_all)
+                (draw_empty)) })
       (set! ts (System.set_interval TICK_MS tick))
       (display "[album] boot n=") (display n)
-      (display " dir_ok=") (display dir_ok) (newline) }))
+      (display " dir_ok=") (display dir_ok)
+      (display " dir=") (display cur_dir) (newline) }))
 
 (boot)
