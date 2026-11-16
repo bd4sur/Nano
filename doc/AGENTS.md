@@ -12757,3 +12757,22 @@ hard_argmax=22 soft_argmax=22   hard_max=224 soft_max=224   maxdiff=0 meandiff=0
   一次点按回硬 FFT）
 - 宿主回归台 `spectrogram` refrresh=82 `err=none`；`regress_det` 仍 `launch=80/end=80`（无麦克风时的
   呼吸心跳恢复工作，refreshΔ=15）
+
+### 9. 修复：软 FFT 模式下左侧时间轴刻度一直在跳
+
+现象（用户实测）：切到软 FFT 后左侧「-1s / -2s / -3s」刻度每列上下跳几像素。
+
+根因：时间轴标定用的是**逐列 EMA**（`row_ms = 0.85·row_ms + 0.15·frames·hop_ms`，见 §8）。
+硬 FFT 下 `frames` 恒为 1、`row_ms` 恒等于 `hop_ms`，所以看不出问题；软 FFT 下"一次读掉
+k 帧只画一列"的 k 逐列在 1~8 之间跳，EMA 于是每列变化 ±15%，`px_per_sec = ROW_H·1000/row_ms`
+随之抖动 → 刻度 y 坐标每列跳 4~9px（A/B 实测：间隔 700ms 取样，旧实现最大位移 **4px**
+并呈 96↔100 的往复振荡；肉眼即"一直在跳"）。
+
+修复：改成**累计平均**——`row_ms = Σ(frames·hop_ms) / 列数`，每新增一列只变化 1/N，
+并加 `(reset_axis)`（启动 / 切 FFT / 恢复后台时清零重新收敛）。k 的长期均值本来就该是
+标定值，所以这样既稳定又正确；代价是负载突变时标定收敛慢（软模式下 FFT 成本与内容无关，
+实际不会突变）。A/B 实测：同一取样序列最大位移 **0~1px**。
+
+回归判据（已加进 `tools/e2e/browser/regress_spectrogram.js`）：取左侧轴条（x 0..25、
+y 36..191）的"亮行段中心"序列，间隔 1.2s 取样两次，要求段数与各段中心位移都 ≤ 2px。
+用旧实现跑该断言会红（4px）。浏览器端到端 33 → **34 条**。

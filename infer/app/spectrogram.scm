@@ -163,11 +163,17 @@
 
 ;; 时间轴标定：
 ;;   hop_ms = 一帧音频的时长（= 1000·fft/rate ≈ 23.2ms），硬 FFT 下一列恒等于一帧；
-;;   row_ms = **一列实际代表的音频时长**的滑动平均。软 FFT 跟不上音频时会一次读掉
-;;            k 帧只画一列，于是 row_ms ≈ k·hop_ms —— 时间轴据此压缩，标尺仍然诚实
-;;            （每像素对应的音频时间不变，只是"1 秒"占的像素变少）。
+;;   row_ms = **一列实际代表的音频时长**。软 FFT 跟不上音频时会一次读掉 k 帧只画一列，
+;;            于是 row_ms ≈ k·hop_ms —— 时间轴据此压缩，标尺仍然诚实（每像素对应的
+;;            音频时间不变，只是"1 秒"占的像素变少）。
+;;   注意用**累计平均**（axis_ms / axis_rows）而不是逐列 EMA：软模式下 k 逐列在 1~8
+;;   之间跳，逐列 EMA 会让 row_ms 每列抖动 ±15%，于是 "-1s/-2s" 刻度每列都上下跳几像素
+;;   （实测用户直接看得出"时间轴一直在跳"）。累计平均只按 1/N 变化 → 刻度稳定收敛，
+;;   且 k 的长期均值本来就该是标定值。
 (define hop_ms 23.2)
 (define row_ms 23.2)
+(define axis_ms 0.0)                 ; 累计"这一标定周期代表了多少音频毫秒"
+(define axis_rows 0)                 ; 累计"画了多少列"
 (define diag_cols 0)                 ; 上一条诊断行时的列数（算实测列率）
 (define diag_ms 0)
 
@@ -361,6 +367,7 @@
     (set! mic_ok (Audio.open SAMPLE_RATE))
     (set! mic_open_ms now_ms)
     (set! retry_ms now_ms)
+    (reset_axis)
     (BTN.reset b_retry)
     (refresh_state)
     (set! overlay_kind (if mic_ok 1 2))
@@ -380,6 +387,7 @@
     (set! mic_err #f)
     (set! mic_cols 0)
     (set! mic_open_ms now_ms)
+    (reset_axis)
     (refresh_state)
     (set! overlay_kind (if mic_ok 1 2))
     (set! want_clear #t)
@@ -443,7 +451,7 @@
               {
                 (set! soft_fft #t)
                 (BTN.set_label b_fft "软FFT")
-                (set! row_ms hop_ms)
+                (reset_axis)
                 (set! want_clear #t)
                 (set! dirty #t)
               })
@@ -789,6 +797,14 @@
 
 ;; 一列就绪后的共用收尾：更新电平/计数、擦掉提示、标定时间轴、画列
 ;;   frames = 这一列"吃掉"了几帧音频（硬 FFT 恒 1；软 FFT 落后时可能多帧）
+;; 重新开始标定时间轴（启动/切 FFT/恢复时调用）：先回到"一列=一帧"，再靠累计平均收敛
+(define reset_axis
+  (lambda ()
+    (set! axis_ms 0.0)
+    (set! axis_rows 0)
+    (set! row_ms hop_ms)
+    #t))
+
 (define commit_column
   (lambda (frames)
     (define d 0.0)
@@ -804,9 +820,13 @@
     (if paused
         #f
         {
-          ;; 时间轴滑动平均：一列代表的音频时长（软 FFT 丢帧时变长 → 标尺自动压缩）
+          ;; 时间轴：累计平均（一列代表的音频时长；软 FFT 丢帧时变长 → 标尺自动压缩）
           (set! d (* frames hop_ms))
-          (set! row_ms (+ (* row_ms 0.85) (* d 0.15)))
+          (set! axis_ms (+ axis_ms d))
+          (set! axis_rows (+ axis_rows 1))
+          (if (>= axis_rows 3)
+              (set! row_ms (/ axis_ms axis_rows))
+              (set! row_ms d))
           (draw_column)
         })))
 
