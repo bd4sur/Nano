@@ -687,8 +687,7 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
 //
 // 交互：
 //   - 左侧：触屏控件。上下拖动按像素跟手滚动，松手带惯性；短点按执行对应应用。
-//           滚动区左缘的竖条是滚动进度条（提示本面板可滚动）；滚动区底色与右侧
-//           固定区不同，进一步提示“左边可拖、右边固定”。
+//           滚动区左缘居中的竖条是滚动进度条（低饱和灰，提示本面板可滚动）。
 //   - 右侧：静态按钮，仅响应短点按（返回/设置/自述/关机）。
 //   - 键盘：实体键盘的数字键/方向键/Enter/Esc 映射与旧十六宫格一致
 //           （见 ui_app_main_menu_event_handler 末段）。触屏不再派生宫格软按键
@@ -706,11 +705,12 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
 #define UI_APP_MENU_FLING_VMAX     (4000.0f)
 #define UI_APP_MENU_FLING_VMIN     (50.0f)
 
-// 滚动进度条：贴在滚动区左缘。ui_draw_scroll_bar 把轨道画在传入矩形的右缘
-// （x+width-2 与 x+width-1 两列），故传一个贴左边缘的 4px 宽矩形，轨道即落在
-// 屏幕最左侧的 2px 列（暗色 x=2,3；亮色因整体左移 1px 落在 x=1,2）。
-#define UI_APP_MENU_SB_X     (0)
-#define UI_APP_MENU_SB_W     (4)
+// 滚动进度条：贴在滚动区左缘的 2px 宽竖条，总高 = 屏高/4 且垂直居中（不抢眼，只作「可滚动」
+// 的提示）。配色为低饱和灰（亮/暗各一套），不跟随菜单/文本框的蓝系滚动条。
+// 水平位置保持旧观感：暗色占 x=2,3，亮色因避开黑色屏框而整体左移 1px 占 x=1,2。
+#define UI_APP_MENU_SB_X          (0)
+#define UI_APP_MENU_SB_W          (2)
+#define UI_APP_MENU_SB_TRACK_DIV  (4) // 滚动条总高 = 屏高 / 该值
 
 // 左侧滚动区条目（行优先：3 列 x N 行）。图标 36x36，经 ui_icon_draw_centered 绘制
 // （首次读取解码后常驻 PSRAM 缓存）。
@@ -787,14 +787,14 @@ typedef struct Ui_App_Menu_Palette {
 
 static void ui_app_main_menu_palette(Global_State *global_state, Ui_App_Menu_Palette *p) {
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-        // 亮色：固定区纯白，滚动区淡蓝灰 —— 一眼可辨“左可拖 / 右固定”
+        // 亮色：固定区纯白；滚动区提亮为很淡的蓝灰（比纯白略沉一点，不形成深色块）
         p->fixed_bg_r = 0xff; p->fixed_bg_g = 0xff; p->fixed_bg_b = 0xff;
-        p->scroll_bg_r = 0xe4; p->scroll_bg_g = 0xeb; p->scroll_bg_b = 0xf7;
+        p->scroll_bg_r = 0xf1; p->scroll_bg_g = 0xf5; p->scroll_bg_b = 0xfb;
         p->text_r = 0x66; p->text_g = 0x66; p->text_b = 0x66;
     }
     else {
-        // 暗色：固定区深灰（沿用旧宫格配色），滚动区深蓝灰
-        p->fixed_bg_r = 30; p->fixed_bg_g = 30; p->fixed_bg_b = 32;
+        // 暗色：右固定区与左滚动区同底色（深蓝灰），两区视觉统一，由滚动条提示可拖
+        p->fixed_bg_r = 16; p->fixed_bg_g = 22; p->fixed_bg_b = 36;
         p->scroll_bg_r = 16; p->scroll_bg_g = 22; p->scroll_bg_b = 36;
         p->text_r = 0xcc; p->text_g = 0xcc; p->text_b = 0xcc;
     }
@@ -859,11 +859,55 @@ static void ui_app_main_menu_draw_cell(
         cell_cx, cell_cy - 8 + 18 + 8, text_r, text_g, text_b, 1);
 }
 
+// 滚动进度条：贴滚动区左缘的 2px 低饱和灰竖条。总高 = 屏高/4、垂直居中；
+// 轨道高固定，滑块高 = 轨道高 * 可视高 / 内容高，位置按滚动像素线性映射；
+// 内容不足一屏时滑块占满轨道（此时也不会有滚动，仅作为“此处可滚”的弱提示）。
+static void ui_app_main_menu_draw_scroll_bar(Global_State *global_state, const Ui_App_Menu_Geometry *g) {
+    int32_t track_h = g->scroll_h / UI_APP_MENU_SB_TRACK_DIV;
+    if (track_h < 8) track_h = 8; // 小屏兼容：太短就看不出比例了
+    int32_t track_y = g->scroll_y0 + (g->scroll_h - track_h) / 2; // 垂直居中
+    // 水平位置：保持旧观感（亮色避开黑色屏框，整体左移 1px）
+    int32_t x = UI_APP_MENU_SB_X + ((global_state->ui_color_style == UI_COLOR_LIGHT) ? 1 : 2);
+
+    uint8_t track_r = 0, track_g = 0, track_b = 0;
+    uint8_t thumb_r = 0, thumb_g = 0, thumb_b = 0;
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        track_r = 0xd9; track_g = 0xdd; track_b = 0xe3; // 浅灰（微带蓝，跟面板底色同系）
+        thumb_r = 0x99; thumb_g = 0x9e; thumb_b = 0xa7; // 中灰
+    }
+    else {
+        track_r = 0x2c; track_g = 0x31; track_b = 0x39; // 深灰
+        thumb_r = 0x5d; thumb_g = 0x64; thumb_b = 0x6e; // 中灰
+    }
+
+    // 轨道
+    for (int32_t i = 0; i < UI_APP_MENU_SB_W; i++) {
+        gfx_draw_line(global_state->gfx, x + i, track_y, x + i, track_y + track_h - 1,
+            track_r, track_g, track_b, 1);
+    }
+
+    // 滑块
+    int32_t content_px = (g->content_h < 1) ? 1 : g->content_h;
+    int32_t view_px = (g->scroll_h < 1) ? 1 : g->scroll_h;
+    int32_t thumb_h = (content_px <= view_px)
+        ? track_h
+        : ((view_px * track_h + content_px / 2) / content_px);
+    if (thumb_h < 4) thumb_h = 4;
+    if (thumb_h > track_h) thumb_h = track_h;
+    int32_t thumb_y = track_y + ((s_app_menu_scroll.scroll_px * track_h + content_px / 2) / content_px);
+    if (thumb_y + thumb_h > track_y + track_h) thumb_y = track_y + track_h - thumb_h;
+    if (thumb_y < track_y) thumb_y = track_y;
+    for (int32_t i = 0; i < UI_APP_MENU_SB_W; i++) {
+        gfx_draw_line(global_state->gfx, x + i, thumb_y, x + i, thumb_y + thumb_h - 1,
+            thumb_r, thumb_g, thumb_b, 1);
+    }
+}
+
 // 绘制左侧滚动区（底色 + 可见格子 + 左缘滚动进度条）。
 // 底色每次重绘都重铺（与旧宫格格间缝隙一致：亮色白 / 暗色黑），既兜住格子之间 1px 的缝，
 // 又保证拖动/惯性期间只重绘本区时不残留上一帧的格子痕迹。
 static void ui_app_main_menu_draw_scroll_area(
-    Key_Event *key_event, Global_State *global_state,
+    Global_State *global_state,
     const Ui_App_Menu_Geometry *g, const Ui_App_Menu_Palette *p
 ) {
     int32_t scroll_px = s_app_menu_scroll.scroll_px;
@@ -904,11 +948,8 @@ static void ui_app_main_menu_draw_scroll_area(
 
     gfx_reset_clip(global_state->gfx);
 
-    // 滚动进度条（贴在滚动区左缘，提示左侧面板可上下拖动）：
-    // 复用菜单/文本控件的滚动条实现（像素单位：滚动位置/内容高度/可视高度）
-    ui_draw_scroll_bar(key_event, global_state,
-        scroll_px, g->content_h, g->scroll_h,
-        UI_APP_MENU_SB_X, g->scroll_y0, UI_APP_MENU_SB_W, g->scroll_h);
+    // 滚动进度条（贴在滚动区左缘，提示左侧面板可上下拖动）
+    ui_app_main_menu_draw_scroll_bar(global_state, g);
 }
 
 // 主菜单绘制：is_full_redraw=1 整屏重绘（清屏 + 滚动区 + 固定区）；
@@ -916,6 +957,7 @@ static void ui_app_main_menu_draw_scroll_area(
 void ui_app_main_menu_draw(Key_Event *key_event, Global_State *global_state, int32_t is_full_redraw) {
     Ui_App_Menu_Geometry g;
     Ui_App_Menu_Palette p;
+    (void)key_event; // 本控件只消费触屏电平/边沿，绘制不依赖输入事件（保留参数与其它控件同名同形）
     ui_app_main_menu_geometry(global_state->gfx, &g);
     ui_app_main_menu_palette(global_state, &p);
 
@@ -930,7 +972,7 @@ void ui_app_main_menu_draw(Key_Event *key_event, Global_State *global_state, int
     }
 
     // 左侧滚动区
-    ui_app_main_menu_draw_scroll_area(key_event, global_state, &g, &p);
+    ui_app_main_menu_draw_scroll_area(global_state, &g, &p);
 
     // 右侧固定区（静态 4 格，仅整屏重绘时绘制）
     if (is_full_redraw) {
