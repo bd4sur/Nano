@@ -3,8 +3,9 @@
 ;;
 ;; 与 C 版音乐盒（infer/ui_musicbox.c）功能对齐的 Scheme 重写：
 ;;   · 文件列表页：music/ 目录下的 WAV/MP3，点按/上下键选曲，滚动手势翻页；
-;;   · 播放页：信息卡片（曲目序号/文件名/格式参数/播放状态）、可拖动的进度条、
-;;     上一首 / 播放·暂停 / 下一首、音量 −/+（按住连发）、左上「列表」返回；
+;;   · 播放页：信息卡片（曲目序号/文件名/格式参数/播放状态）、内嵌可拖动进度条、
+;;     上一首 / 播放·暂停 / 下一首、音量 −/+（按住连发）、左上「返回」；
+;;     版面与 C 版 `ui_musicbox.c` 逐像素对齐（见下「与 C 版的差异」）；
 ;;   · 列表循环、读完自动下一首、打不开的曲目自动跳过（全部失败时显示错误）；
 ;;   · 退出时关闭音频输出（EX 的全局确认框 → 收尾 → 销毁）。
 ;;
@@ -13,6 +14,13 @@
 ;;   详见 infer/am_native_Music.h 的设计说明。PCM 永不跨 FFI 边界。
 ;;
 ;; 与 C 版的差异（有意为之）：
+;;   · **播放页的版面与 C 版逐像素一致**（`ui_musicbox.c` 的 musicbox_ui_layout /
+;;     musicbox_draw_*）：背景竖向渐变（8px 条带）、卡片 (12,36,296,104) r=14、内嵌
+;;     进度面板 (22,98,276,36)、16px 文件名、"MP3  ·  44.1 kHz  ·  320 kbps  ·  立体声"
+;;     这样的双空格分隔、播放键圆心 (160,168) r=24、上一首/下一首 ±72 r=17、
+;;     底部「音量 + 百分比 + 音量条 + −/+」一排。**唯一的不同是顶栏**：本 App 必须
+;;     保留左上「返回」与右上「退出」两个按钮，故 C 版顶栏的标题组（强调色竖条 +
+;;     12px 标题）整体右移到「返回」胶囊右侧，其余几何/字号不变。
 ;;   · 返回文件列表**不停止播放**（继续放，列表里用强调色圆点标出正在播放的曲目）；
 ;;     要停就进播放页按暂停，或直接退出 App（会关闭音频）。
 ;;   · 列表页支持拖动手势滚动（C 版靠菜单控件）。
@@ -58,42 +66,64 @@
 (define PAGE_LIST 0)
 (define PAGE_PLAY 1)
 
-(define TOP_H 26)                                        ; 顶栏高度
+(define TOP_H 26)                                        ; 列表页顶栏高度
 (define LIST_Y 30)                                       ; 列表首行 y
 (define ROW_H 26)                                        ; 行高
 (define LIST_ROWS (Math.floor (/ (- (- SH LIST_Y) 2) ROW_H)))  ; 可见行数（320x240 → 8）
 
-(define CARD_X 8)
-(define CARD_Y 28)
-(define CARD_W (- SW 16))
-(define CARD_H 76)
+;; ---- 播放页布局：与 C 版 ui_musicbox.c 的 musicbox_ui_layout 逐项一致 ----------
+;; C 版只由画布宽高推导（含小屏兜底），这里照抄同一套推导；320x240 下即
+;;   卡片 (12,36,296,104) r=14；内嵌进度面板 (22,98,276,36) r=10；时间行 y=100；
+;;   轨道 (34,120,252,5) 圆角 2、拇指半径 6；
+;;   播放键圆心 (160,168) r=24，上一首/下一首圆心 (88/232,168) r=17；
+;;   音量排 y=204 高 30 圆角 10（− 在 x=14、+ 在 x=272），音量条 (58,224,204,4)。
+(define CARD_X 12)
+(define CARD_W (- SW 24))
+(if (< CARD_W 96) { (set! CARD_X 4) (set! CARD_W (- SW 8)) } #f)
+(define CARD_Y 36)
+(define CARD_H 104)
+(if (> (+ CARD_Y CARD_H) (- SH 100)) (set! CARD_H (- (- SH 100) CARD_Y)) #f)
+(if (< CARD_H 70) (set! CARD_H 70) #f)
+(define CARD_RAD 14)
+(define COUNTER_X (+ CARD_X 14))
+(define COUNTER_Y (+ CARD_Y 8))
+(define FILENAME_CY (+ CARD_Y 35))
+(define FORMAT_CY (+ CARD_Y 53))
 
-(define PROG_X 12)
-(define PROG_Y (+ (+ CARD_Y CARD_H) 6))  ; 110
-(define PROG_W (- SW 24))
-(define PROG_H 40)
-(define TRK_X 22)
-(define TRK_W (- SW 44))
-(define TRK_Y (+ PROG_Y 26))            ; 136
-(define TRK_H 6)
+(define PROG_X (+ CARD_X 10))
+(define PROG_W (- CARD_W 20))
+(define PROG_H 36)
+(define PROG_Y (- (- (+ CARD_Y CARD_H) PROG_H) 6))
+(define PROG_RAD 10)
+(define TIME_Y (+ PROG_Y 2))
+
+(define TRK_X (+ PROG_X 12))
+(define TRK_W (- PROG_W 24))
+(if (< TRK_W 20) (set! TRK_W 20) #f)
+(define TRK_Y (+ PROG_Y 22))
+(define TRK_H 5)
+(define THUMB_R 6)
 
 (define PLAY_R 24)
 (define PLAY_CX (Math.floor (/ SW 2)))
-(define PLAY_CY 186)
+(define PLAY_CY (+ (+ CARD_Y CARD_H) 28))
 (define SKIP_R 17)
-(define SKIP_CX_D 58)
-(define PREV_CX (- PLAY_CX SKIP_CX_D))
-(define NEXT_CX (+ PLAY_CX SKIP_CX_D))
-(define SKIP_CY PLAY_CY)
+(define SKIP_DX 72)
+(define PREV_CX (- PLAY_CX SKIP_DX))
+(define NEXT_CX (+ PLAY_CX SKIP_DX))
 
-(define VOL_Y (- SH 26))                 ; 214
 (define VOL_BTN_W 34)
-(define VOL_BTN_H 24)
-(define VOL_DN_X 12)
-(define VOL_UP_X (- (- SW 12) VOL_BTN_W))
+(define VOL_BTN_H 30)
+(define VOL_BTN_RAD 10)
+(define VOL_Y (- SH 36))
+(define VOL_DN_X 14)
+(define VOL_UP_X (- (- SW 14) VOL_BTN_W))
+(define VOL_TEXT_Y (- VOL_Y 2))
 (define VOL_METER_X (+ (+ VOL_DN_X VOL_BTN_W) 10))
 (define VOL_METER_W (- (- VOL_UP_X 10) VOL_METER_X))
-(define VOL_METER_Y (+ VOL_Y 17))
+(if (< VOL_METER_W 40) (set! VOL_METER_W 40) #f)
+(define VOL_METER_Y (+ VOL_Y 20))
+(define VOL_METER_H 4)
 (define VOL_STEP 8)
 (define VOL_MAX 128)
 (define VOL_HOLD_MS 350)                 ; 按住首次延迟
@@ -104,10 +134,18 @@
 (define BACK_W 50)
 (define BACK_H 18)
 
-;; 配色（深色主题，与 C 版音乐盒同一套观感）
-(define BG_R 14)  (define BG_G 18)  (define BG_B 26)
-(define CARD_R 27) (define CARD_G 33) (define CARD_B 44)
-(define EDGE_R 48) (define EDGE_G 58) (define EDGE_B 74)
+;; 播放页顶栏的标题组：几何取 C 版顶栏（强调色竖条 3x12 @ y=13、标题 12px @ y=10），
+;; 但整体右移到「返回」胶囊右侧——C 版顶栏没有返回按钮，本 App 必须保留它。
+(define TITLE_BAR_X (+ (+ BACK_X BACK_W) 8))
+(define TITLE_X (+ TITLE_BAR_X 8))
+
+;; 配色：逐项取自 C 版 ui_musicbox.c 的 Musicbox_Palette（深色主题）
+(define BG_R 14)  (define BG_G 18)  (define BG_B 26)   ; 列表页平底色
+;; 播放页背景竖向渐变（C 版 bg_top → bg_bot，按 8px 条带填充）
+(define BG_TOP_R 13) (define BG_TOP_G 16) (define BG_TOP_B 22)
+(define BG_BOT_R 24) (define BG_BOT_G 30) (define BG_BOT_B 40)
+(define CARD_FILL_R 27) (define CARD_FILL_G 33) (define CARD_FILL_B 44)
+(define EDGE_R 44) (define EDGE_G 53) (define EDGE_B 68)
 (define SUR_R 38)  (define SUR_G 47)  (define SUR_B 61)
 (define SURP_R 62) (define SURP_G 78) (define SURP_B 100)
 (define ACC_R 56)  (define ACC_G 189) (define ACC_B 248)
@@ -118,9 +156,11 @@
 (define DAN_R 248) (define DAN_G 113) (define DAN_B 113)
 (define HL_R 40)   (define HL_G 50)   (define HL_B 68)
 
-;; 字体度量（12px 抗锯齿字模：半角 7px / 全角 12px）
+;; 字体度量（12px 抗锯齿字模：半角 7px / 全角 12px；16px 抗锯齿：9px / 16px）
 (define W_HALF 7)
 (define W_FULL 12)
+(define W16_HALF 9)
+(define W16_FULL 16)
 
 ;; ============================================================================
 ;; 状态
@@ -211,6 +251,46 @@
         s
         (if (== cut 0) "" (String.concat (String.slice s 0 cut) "…")))))
 
+;; 16px 抗锯齿字模的步进（半角 9px / 全角 16px，同 gfx_font_char_advance）
+(define char_w16
+  (lambda (cp) (if (>= cp 11904) W16_FULL W16_HALF)))
+
+(define text_w16
+  (lambda (s)
+    (define n (String.length s))
+    (define i 0)
+    (define w 0)
+    (while (< i n)
+      {
+        (set! w (+ w (char_w16 (String.charCodeAt i s))))
+        (set! i (+ i 1))
+      })
+    w))
+
+;; 超宽文本按 16px 字模截断为"前缀…"：判据与 C 版
+;; musicbox_draw_text_ellipsis_centered 逐字一致——总宽不超限就整串不动，
+;; 否则逐字累加，`w + adv + ell_w > max_w` 即停（ell_w = '…' 在 16px 字模的步进 = 9）。
+(define clip_text16
+  (lambda (s maxw)
+    (define n (String.length s))
+    (define i 0)
+    (define w 0)
+    (define cw 0)
+    (define stop 0)
+    (define cut -1)
+    (if (<= (text_w16 s) maxw)
+        s
+        {
+          (while (and (< i n) (== stop 0))
+            {
+              (set! cw (char_w16 (String.charCodeAt i s)))
+              (if (> (+ (+ w cw) W16_HALF) maxw)
+                  { (set! cut i) (set! stop 1) }
+                  { (set! w (+ w cw)) (set! i (+ i 1)) })
+            })
+          (String.concat (String.slice s 0 cut) "…")
+        })))
+
 ;; 左对齐绘制（自动按 maxw 截断）
 (define draw_fit
   (lambda (s x y maxw r g b)
@@ -220,6 +300,20 @@
 (define draw_right
   (lambda (s right y r g b)
     (Gfx.draw_text s (- right (text_w s)) y r g b)))
+
+;; C 版 gfx_font_draw_text 的 y 是**行框顶**，而 (Gfx.draw_text) 的 y 是**墨迹顶**
+;; （宿主已把两种字模的行顶空隙补偿掉：12px 抗锯齿为 2px、16px 为 1px，见
+;; am_native_Gfx.c 的 native_text_top_gap）。播放页要与 C 版逐像素对齐，凡按 C 版
+;; y_top 排的位置一律 +2，故这两个辅助过程只给播放页用。
+(define TEXT_TOP_GAP 2)
+
+(define draw_text_c
+  (lambda (s x y r g b)
+    (Gfx.draw_text s x (+ y TEXT_TOP_GAP) r g b)))
+
+(define draw_right_c
+  (lambda (s right y r g b)
+    (Gfx.draw_text s (- right (text_w s)) (+ y TEXT_TOP_GAP) r g b)))
 
 ;; 毫秒 → "m:ss"
 (define fmt_time
@@ -231,10 +325,13 @@
     (String.concat (String.concat (String.atom_to_string mm) ":")
                    (if (< ss 10) (String.concat "0" s0) s0))))
 
-;; 采样率 → "44.1 kHz"（/ 恒浮点，%g 打印自然去掉多余的 .0）
+;; 采样率 → "44.1 kHz"（0.1kHz 四舍五入，同 C 版 musicbox_fmt_rate）
 (define fmt_rate
   (lambda (hz)
-    (String.concat (String.atom_to_string (/ hz 1000)) " kHz")))
+    (define k10 (Math.floor (/ (+ hz 50) 100)))
+    (define ip (Math.floor (/ k10 10)))
+    (String.concat (String.concat (String.atom_to_string ip) ".")
+                   (String.concat (String.atom_to_string (- k10 (* ip 10))) " kHz"))))
 
 (define in_rect
   (lambda (x y rx ry rw rh)
@@ -456,13 +553,17 @@
         (Gfx.rounded_rect (- cx 1) (- cy 6) 2 12 1 1 1 1 cr cg cb 1)
         #f)))
 
-;; 顶栏（列表页：左侧标题；播放页：左侧「列表」返回 + 居中标题）
+;; 顶栏
+;;   列表页：平底色条 + 分隔线 + 左侧标题（本 App 自己的列表页，与 C 版无关）；
+;;   播放页：**不画底色/分隔线**（C 版顶栏直接叠在渐变背景上），只画「返回」胶囊
+;;   （灵机 App 必须保留的顶部按钮）与 C 版标题组（强调色竖条 + 12px 标题），标题组
+;;   整体右移到「返回」右侧；右上角「退出」仍由 EX 统一绘制。
 (define draw_topbar
   (lambda ()
-    (Gfx.fill_rect 0 0 SW TOP_H BG_R BG_G BG_B)
-    (Gfx.fill_rect 0 TOP_H SW 1 EDGE_R EDGE_G EDGE_B)
     (if (== page PAGE_LIST)
         {
+          (Gfx.fill_rect 0 0 SW TOP_H BG_R BG_G BG_B)
+          (Gfx.fill_rect 0 TOP_H SW 1 EDGE_R EDGE_G EDGE_B)
           (Gfx.rounded_rect 12 7 3 12 1 1 1 1 ACC_R ACC_G ACC_B 1)
           (Gfx.draw_text "音乐盒" 20 6 TXT_R TXT_G TXT_B)
           ;; 右对齐到「退出」按钮左侧 6px（按钮矩形 [SW-(EX.btn_w+4), SW-4]，别写死 48）
@@ -475,7 +576,8 @@
                             (press_bg_g ARM_BACK SUR_G)
                             (press_bg_b ARM_BACK SUR_B) 1)
           (Gfx.draw_text "返回" (+ BACK_X 13) (+ BACK_Y 3) TXT_R TXT_G TXT_B)
-          (Gfx.draw_text_centered 1 "音乐盒" (/ SW 2) 13 TXT_R TXT_G TXT_B 1)
+          (Gfx.rounded_rect TITLE_BAR_X 13 3 12 1 1 1 1 ACC_R ACC_G ACC_B 1)
+          (draw_text_c "音乐盒" TITLE_X 10 TXT_R TXT_G TXT_B)
         })
     (EX.draw_button)))    ; 右上角「退出」（点按由宿主在触摸边沿判定）
 
@@ -542,7 +644,11 @@
 ;; 绘制：播放页
 ;; ============================================================================
 
-;; 第二行信息："MP3 · 44.1 kHz · 320 kbps · 立体声"
+;; 第二行信息：文件格式参数（与 C 版 musicbox_format_info 逐字一致：
+;;   WAV → "WAV  ·  44.1 kHz  ·  16 bit  ·  立体声"
+;;   MP3 → "MP3  ·  44.1 kHz  ·  320 kbps  ·  立体声"（码率未知时省掉该段）
+;;   打不开 → "文件格式不支持或已损坏"
+;; 注意 "·" 两侧各两个空格——那是 C 版 swprintf 里写死的分隔符。
 (define format_line
   (lambda ()
     (define inf #null)
@@ -553,70 +659,76 @@
     (define br 0)
     (define s "")
     (set! inf (Music.info))
-    (set! fmt (Music.format))
     (if (list? inf)
         {
+          (set! fmt (Music.format))
           (set! rate (get_item inf 0))
           (set! ch (get_item inf 1))
           (set! bits (get_item inf 2))
           (set! br (get_item inf 3))
-          (set! s (String.concat (String.atom_to_string fmt) " · "))
-          (set! s (String.concat s (String.concat (fmt_rate rate) " · ")))
-          (if (== bits 16)
-              (set! s (String.concat s "16 bit · "))
-              #f)
-          (if (> br 0)
-              (set! s (String.concat s (String.concat (String.atom_to_string br) " kbps · ")))
-              #f)
-          (set! s (String.concat s (if (== ch 1) "单声道" "立体声")))
+          (set! s (String.concat (String.atom_to_string fmt) "  ·  "))
+          (set! s (String.concat s (fmt_rate rate)))
+          (if (String.equals fmt "WAV")
+              (set! s (String.concat s (String.concat "  ·  "
+                            (String.concat (String.atom_to_string bits) " bit"))))
+              (if (> br 0)
+                  (set! s (String.concat s (String.concat "  ·  "
+                                (String.concat (String.atom_to_string br) " kbps"))))
+                  #f))
+          (set! s (String.concat s (String.concat "  ·  "
+                        (if (== ch 1) "单声道" "立体声"))))
           s
         }
-        "—")))
+        "文件格式不支持或已损坏")))
 
+;; 信息卡片：外层 card_edge 边框 + 内缩 1px 卡片底、序号/总数、状态灯+状态、
+;; 16px 文件名（超宽截断）、12px 格式行。几何/配色/字号全部同 C 版 musicbox_draw_card。
 (define draw_card
   (lambda ()
     (define st "")
-    (define str "")
     (define nm "")
+    (define idx_txt "")
+    (define right 0)
     (define tx 0)
     (define dot_r 0)
     (define dot_g 0)
     (define dot_b 0)
-    ;; 边框 + 内缩 1px 的卡片底（两层圆角矩形，同 C 版 musicbox_draw_card）
-    (Gfx.rounded_rect CARD_X CARD_Y CARD_W CARD_H 10 10 10 10
+    (Gfx.rounded_rect CARD_X CARD_Y CARD_W CARD_H CARD_RAD CARD_RAD CARD_RAD CARD_RAD
                       EDGE_R EDGE_G EDGE_B 1)
-    (Gfx.rounded_rect (+ CARD_X 1) (+ CARD_Y 1) (- CARD_W 2) (- CARD_H 2) 9 9 9 9
-                      CARD_R CARD_G CARD_B 1)
-    ;; 序号 cur / 总数
-    (set! str (String.atom_to_string (+ cur 1)))
-    (Gfx.draw_text str (+ CARD_X 12) (+ CARD_Y 7) ACC_R ACC_G ACC_B)
-    (Gfx.draw_text (String.concat " / " (String.atom_to_string nfiles))
-                   (+ (+ CARD_X 12) (text_w str)) (+ CARD_Y 7) DIM_R DIM_G DIM_B)
-    ;; 状态（右对齐）+ 左侧状态指示灯（抗锯齿小圆，颜色随状态：
-    ;; 播放中=强调色 / 已暂停=弱化色 / 无法播放=警示色，同 C 版 musicbox_draw_status）
+    (Gfx.rounded_rect (+ CARD_X 1) (+ CARD_Y 1) (- CARD_W 2) (- CARD_H 2)
+                      (- CARD_RAD 1) (- CARD_RAD 1) (- CARD_RAD 1) (- CARD_RAD 1)
+                      CARD_FILL_R CARD_FILL_G CARD_FILL_B 1)
+    ;; 序号（强调色）/ 总数（弱化色）
+    (set! idx_txt (if (< cur nfiles) (String.atom_to_string (+ cur 1)) "-"))
+    (draw_text_c idx_txt COUNTER_X COUNTER_Y ACC_R ACC_G ACC_B)
+    (draw_text_c (String.concat " / " (String.atom_to_string nfiles))
+                (+ COUNTER_X (text_w idx_txt)) COUNTER_Y DIM_R DIM_G DIM_B)
+    ;; 状态（右对齐）+ 左侧状态指示灯：错误=警示色 / 播放中=强调色点 / 已暂停=弱化色点；
+    ;; 文字颜色除错误态外一律弱化色（同 C 版 musicbox_draw_status）
     (if fail
-        (set! st "无法播放")
+        (set! st "错误")
         (if playing (set! st "播放中") (set! st "已暂停")))
     (if fail
         { (set! dot_r DAN_R) (set! dot_g DAN_G) (set! dot_b DAN_B) }
         (if playing
             { (set! dot_r ACC_R) (set! dot_g ACC_G) (set! dot_b ACC_B) }
             { (set! dot_r DIM_R) (set! dot_g DIM_G) (set! dot_b DIM_B) }))
-    (set! tx (- (- (+ CARD_X CARD_W) 12) (text_w st)))
-    (Gfx.draw_text st tx (+ CARD_Y 7)
-                   (if fail DAN_R DIM_R) (if fail DAN_G DIM_G) (if fail DAN_B DIM_B))
-    (Gfx.fill_circle_aa (- tx 10) (+ (+ CARD_Y 7) 6) 3 dot_r dot_g dot_b 1)
-    ;; 文件名（居中 + 超宽截断）
+    (set! right (- (+ CARD_X CARD_W) 14))
+    (set! tx (- right (text_w st)))
+    (draw_text_c st tx COUNTER_Y
+                (if fail DAN_R DIM_R) (if fail DAN_G DIM_G) (if fail DAN_B DIM_B))
+    (Gfx.fill_circle_aa (- tx 10) (+ COUNTER_Y 7) 3 dot_r dot_g dot_b 1)
+    ;; 文件名（16px 抗锯齿字模，超宽截断为"前缀…"后居中）
     (if fail
-        (set! nm "文件格式不支持或已损坏")
-        (if (< cur nfiles) (set! nm (get_item files cur)) (set! nm "—")))
-    (Gfx.draw_text_centered 1 (clip_text nm (- CARD_W 24)) (+ CARD_X (Math.floor (/ CARD_W 2)))
-                            (+ CARD_Y 34) TXT_R TXT_G TXT_B 1)
-    ;; 格式参数
-    (Gfx.draw_text_centered 1 (clip_text (format_line) (- CARD_W 24))
-                            (+ CARD_X (Math.floor (/ CARD_W 2))) (+ CARD_Y 56)
-                            DIM_R DIM_G DIM_B 1)))
+        (set! nm "无法播放该文件")
+        (set! nm (if (< cur nfiles) (get_item files cur) "")))
+    (Gfx.draw_text_centered 2 (clip_text16 nm (- CARD_W 28)) (/ SW 2) FILENAME_CY
+                            TXT_R TXT_G TXT_B 1)
+    ;; 格式参数（12px，居中；C 版不截断）
+    (Gfx.draw_text_centered 1 (format_line) (/ SW 2) FORMAT_CY DIM_R DIM_G DIM_B 1)))
 
+;; 内嵌进度面板（在卡片内，不透明底整块重绘）：已播/总时长、圆角轨道、强调色填充、
+;; 三层拇指（光晕 alpha 40 / 强调色环 / 白色内芯）。几何同 C 版 musicbox_draw_progress。
 (define draw_progress
   (lambda ()
     (define ratio 0.0)
@@ -624,25 +736,34 @@
     (define el 0)
     (define fw 0)
     (define tx 0)
+    (define rh 2)
+    (define tcy 0)
+    ;; 先用卡片色清底，再画圆角面板：圆角抗锯齿像素每次都以卡片底色为背景重新混合，
+    ;; 避免高频局部重绘使面板四角逐次叠加变深/变糊（C 版同一做法）。
+    (Gfx.fill_rect PROG_X PROG_Y PROG_W PROG_H CARD_FILL_R CARD_FILL_G CARD_FILL_B)
+    (Gfx.rounded_rect PROG_X PROG_Y PROG_W PROG_H PROG_RAD PROG_RAD PROG_RAD PROG_RAD
+                      SUR_R SUR_G SUR_B 1)
     (set! ratio (if (>= seek_prev 0.0) seek_prev (Music.progress)))
     (set! ratio (clamp ratio 0.0 1.0))
     (set! dur (Music.duration_ms))
-    (set! el (if (>= seek_prev 0.0) (* dur ratio) (Music.elapsed_ms)))
+    (set! el (if (>= seek_prev 0.0) (Math.floor (* dur ratio)) (Music.elapsed_ms)))
     (if (> el dur) (set! el dur) #f)
-    (Gfx.rounded_rect PROG_X PROG_Y PROG_W PROG_H 8 8 8 8 SUR_R SUR_G SUR_B 1)
-    (Gfx.draw_text (fmt_time el) (+ PROG_X 8) (+ PROG_Y 4) TXT_R TXT_G TXT_B)
-    (draw_right (fmt_time dur) (- (+ PROG_X PROG_W) 8) (+ PROG_Y 4) DIM_R DIM_G DIM_B)
-    ;; 轨道 + 已播放部分 + 拇指（全部圆角/抗锯齿，同 C 版 musicbox_draw_progress）
-    (Gfx.rounded_rect TRK_X TRK_Y TRK_W TRK_H 3 3 3 3 TRK_R TRK_G TRK_B 1)
-    (set! fw (Math.floor (* TRK_W ratio)))
+    (draw_text_c (fmt_time el) (+ PROG_X 8) TIME_Y TXT_R TXT_G TXT_B)
+    (draw_right_c (fmt_time dur) (- (+ PROG_X PROG_W) 8) TIME_Y DIM_R DIM_G DIM_B)
+    ;; 轨道 + 已播放部分（圆角半径 = 轨道半高 = 2）
+    (set! rh (Math.floor (/ TRK_H 2)))
+    (if (< rh 1) (set! rh 1) #f)
+    (Gfx.rounded_rect TRK_X TRK_Y TRK_W TRK_H rh rh rh rh TRK_R TRK_G TRK_B 1)
+    (set! fw (Math.floor (+ (* TRK_W ratio) 0.5)))
+    (if (> fw TRK_W) (set! fw TRK_W) #f)
     (if (> fw 0)
-        (Gfx.rounded_rect TRK_X TRK_Y fw TRK_H 3 3 3 3 ACC_R ACC_G ACC_B 1)
+        (Gfx.rounded_rect TRK_X TRK_Y fw TRK_H rh rh rh rh ACC_R ACC_G ACC_B 1)
         #f)
     (set! tx (+ TRK_X fw))
-    ;; 拇指：强调色光晕（alpha 40）+ 强调色环 + 白色内芯
-    (Gfx.fill_circle_aa tx (+ TRK_Y (Math.floor (/ TRK_H 2))) 9 ACC_R ACC_G ACC_B 40)
-    (Gfx.fill_circle_aa tx (+ TRK_Y (Math.floor (/ TRK_H 2))) 6 ACC_R ACC_G ACC_B 1)
-    (Gfx.fill_circle_aa tx (+ TRK_Y (Math.floor (/ TRK_H 2))) 4 250 250 252 1)))
+    (set! tcy (+ TRK_Y (Math.floor (/ TRK_H 2))))
+    (Gfx.fill_circle_aa tx tcy (+ THUMB_R 3) ACC_R ACC_G ACC_B 40)
+    (Gfx.fill_circle_aa tx tcy THUMB_R ACC_R ACC_G ACC_B 1)
+    (Gfx.fill_circle_aa tx tcy (- THUMB_R 2) 250 250 252 1)))
 
 ;; 按住（active）配色的取色器：arm 与控件 id 相同即为"正被按住"，
 ;; 于是按下沿的下一拍就换色、松手沿（或拖出取消）的下一拍复原——
@@ -651,64 +772,108 @@
 (define press_bg_g (lambda (id normal) (if (== arm id) SURP_G normal)))
 (define press_bg_b (lambda (id normal) (if (== arm id) SURP_B normal)))
 
+;; 播放控制：上一首/下一首（surface 圆底）+ 播放·暂停主按钮
+;; （可播放态 = 投影 + 强调色圆 + 白色图标；错误态 = surface 圆 + 弱化色三角）。
+;; 圆心/半径同 C 版 musicbox_draw_transport：主键 (SW/2, card_y+card_h+28) r=24、
+;; 上/下一首 ±72 r=17。
 (define draw_transport
   (lambda ()
-    ;; 上一首 / 下一首（抗锯齿圆底 + 矢量图标；按住底色换 surface_press）
-    (Gfx.fill_circle_aa PREV_CX SKIP_CY SKIP_R
+    (define play_ok (not fail))
+    (define icon_playing #f)
+    (set! icon_playing (and play_ok playing))
+    (Gfx.fill_circle_aa PREV_CX PLAY_CY SKIP_R
                         (press_bg_r ARM_PREV SUR_R)
                         (press_bg_g ARM_PREV SUR_G)
                         (press_bg_b ARM_PREV SUR_B)
                         1)
-    (draw_skip_icon PREV_CX SKIP_CY SKIP_R -1 TXT_R TXT_G TXT_B)
-    (Gfx.fill_circle_aa NEXT_CX SKIP_CY SKIP_R
+    (draw_skip_icon PREV_CX PLAY_CY SKIP_R -1 TXT_R TXT_G TXT_B)
+    (Gfx.fill_circle_aa NEXT_CX PLAY_CY SKIP_R
                         (press_bg_r ARM_NEXT SUR_R)
                         (press_bg_g ARM_NEXT SUR_G)
                         (press_bg_b ARM_NEXT SUR_B)
                         1)
-    (draw_skip_icon NEXT_CX SKIP_CY SKIP_R 1 TXT_R TXT_G TXT_B)
-    ;; 播放 / 暂停（主按钮：投影 + 抗锯齿圆 + 图标；按住换 accent_press）
-    (Gfx.fill_circle_aa PLAY_CX (+ PLAY_CY 2) (+ PLAY_R 2) 0 0 0 70)
-    (Gfx.fill_circle_aa PLAY_CX PLAY_CY PLAY_R
-                        (if fail SUR_R (if (== arm ARM_PLAY) ACCP_R ACC_R))
-                        (if fail SUR_G (if (== arm ARM_PLAY) ACCP_G ACC_G))
-                        (if fail SUR_B (if (== arm ARM_PLAY) ACCP_B ACC_B))
-                        1)
-    (draw_play_icon PLAY_CX PLAY_CY PLAY_R playing
-                    (if fail DIM_R 255) (if fail DIM_G 255) (if fail DIM_B 255))))
+    (draw_skip_icon NEXT_CX PLAY_CY SKIP_R 1 TXT_R TXT_G TXT_B)
+    (if play_ok
+        {
+          (Gfx.fill_circle_aa PLAY_CX (+ PLAY_CY 2) (+ PLAY_R 2) 0 0 0 70)
+          (Gfx.fill_circle_aa PLAY_CX PLAY_CY PLAY_R
+                              (if (== arm ARM_PLAY) ACCP_R ACC_R)
+                              (if (== arm ARM_PLAY) ACCP_G ACC_G)
+                              (if (== arm ARM_PLAY) ACCP_B ACC_B)
+                              1)
+          (draw_play_icon PLAY_CX PLAY_CY PLAY_R icon_playing 255 255 255)
+        }
+        {
+          (Gfx.fill_circle_aa PLAY_CX PLAY_CY PLAY_R SUR_R SUR_G SUR_B 1)
+          (draw_play_icon PLAY_CX PLAY_CY PLAY_R #f DIM_R DIM_G DIM_B)
+        })))
 
+;; 底部音量排：左侧「音量」名称 + 右对齐百分比 + 圆角音量条 + 减/加按钮，
+;; 几何/配色同 C 版 musicbox_draw_volume（按钮 34x30 圆角 10、音量条高 4 圆角 2）。
 (define draw_volume
   (lambda ()
     (define fw 0)
     (define pct 0)
-    ;; 减 / 加按钮（圆角矩形，半径同 C 版 MUSICBOX 的 vol_btn_r=10）；
-    ;; 按住换 surface_press，到 0 / 满量程时图标转弱化色（同 C 版的 can_dn / can_up）
-    (Gfx.rounded_rect VOL_DN_X VOL_Y VOL_BTN_W VOL_BTN_H 10 10 10 10
+    (define rh 2)
+    (draw_text_c "音量" VOL_METER_X VOL_TEXT_Y DIM_R DIM_G DIM_B)
+    (set! pct (Math.floor (/ (* vol 100) VOL_MAX)))
+    (draw_right_c (String.concat (String.atom_to_string pct) "%")
+                 (+ VOL_METER_X VOL_METER_W) VOL_TEXT_Y TXT_R TXT_G TXT_B)
+    (set! rh (Math.floor (/ VOL_METER_H 2)))
+    (if (< rh 1) (set! rh 1) #f)
+    (Gfx.rounded_rect VOL_METER_X VOL_METER_Y VOL_METER_W VOL_METER_H rh rh rh rh
+                      TRK_R TRK_G TRK_B 1)
+    (set! fw (Math.floor (/ (* VOL_METER_W vol) VOL_MAX)))
+    (if (> fw 0)
+        (Gfx.rounded_rect VOL_METER_X VOL_METER_Y fw VOL_METER_H rh rh rh rh
+                          ACC_R ACC_G ACC_B 1)
+        #f)
+    ;; 减 / 加按钮（按住换 surface_press；到 0 / 满量程时图标转弱化色）
+    (Gfx.rounded_rect VOL_DN_X VOL_Y VOL_BTN_W VOL_BTN_H
+                      VOL_BTN_RAD VOL_BTN_RAD VOL_BTN_RAD VOL_BTN_RAD
                       (press_bg_r ARM_VOL_DN SUR_R)
                       (press_bg_g ARM_VOL_DN SUR_G)
                       (press_bg_b ARM_VOL_DN SUR_B) 1)
-    (Gfx.rounded_rect VOL_UP_X VOL_Y VOL_BTN_W VOL_BTN_H 10 10 10 10
+    (Gfx.rounded_rect VOL_UP_X VOL_Y VOL_BTN_W VOL_BTN_H
+                      VOL_BTN_RAD VOL_BTN_RAD VOL_BTN_RAD VOL_BTN_RAD
                       (press_bg_r ARM_VOL_UP SUR_R)
                       (press_bg_g ARM_VOL_UP SUR_G)
                       (press_bg_b ARM_VOL_UP SUR_B) 1)
-    (draw_vol_icon (+ VOL_DN_X (Math.floor (/ VOL_BTN_W 2))) (+ VOL_Y (Math.floor (/ VOL_BTN_H 2)))
-                   #f (if (<= vol 0) DIM_R TXT_R) (if (<= vol 0) DIM_G TXT_G) (if (<= vol 0) DIM_B TXT_B))
-    (draw_vol_icon (+ VOL_UP_X (Math.floor (/ VOL_BTN_W 2))) (+ VOL_Y (Math.floor (/ VOL_BTN_H 2)))
-                   #t (if (>= vol VOL_MAX) DIM_R TXT_R)
-                      (if (>= vol VOL_MAX) DIM_G TXT_G)
-                      (if (>= vol VOL_MAX) DIM_B TXT_B))
-    ;; 音量条（圆角轨道）+ 百分比
-    (Gfx.rounded_rect VOL_METER_X VOL_METER_Y VOL_METER_W 4 2 2 2 2 TRK_R TRK_G TRK_B 1)
-    (set! fw (Math.floor (/ (* VOL_METER_W vol) VOL_MAX)))
-    (if (> fw 0)
-        (Gfx.rounded_rect VOL_METER_X VOL_METER_Y fw 4 2 2 2 2 ACC_R ACC_G ACC_B 1)
-        #f)
-    (set! pct (Math.floor (/ (* vol 100) VOL_MAX)))
-    (Gfx.draw_text_centered 1 (String.concat (String.atom_to_string pct) "%")
-                            (/ SW 2) (+ VOL_Y 4) DIM_R DIM_G DIM_B 1)))
+    (draw_vol_icon (+ VOL_DN_X (Math.floor (/ VOL_BTN_W 2)))
+                   (+ VOL_Y (Math.floor (/ VOL_BTN_H 2))) #f
+                   (if (<= vol 0) DIM_R TXT_R) (if (<= vol 0) DIM_G TXT_G)
+                   (if (<= vol 0) DIM_B TXT_B))
+    (draw_vol_icon (+ VOL_UP_X (Math.floor (/ VOL_BTN_W 2)))
+                   (+ VOL_Y (Math.floor (/ VOL_BTN_H 2))) #t
+                   (if (>= vol VOL_MAX) DIM_R TXT_R) (if (>= vol VOL_MAX) DIM_G TXT_G)
+                   (if (>= vol VOL_MAX) DIM_B TXT_B))))
+
+;; 背景竖向渐变：按 8px 条带填充，条带按全局 y 对齐，颜色取条带中线 y+4 处做整数插值
+;; ——与 C 版 musicbox_fill_bg / musicbox_bg_color 同一算式（无浮点舍入差异）。
+(define draw_bg_gradient
+  (lambda ()
+    (define by 0)
+    (define t 0)
+    (define h 0)
+    (define rr 0)
+    (define gg 0)
+    (define bb 0)
+    (while (< by SH)
+      {
+        (set! t (Math.floor (/ (* (+ by 4) 255) (- SH 1))))
+        (if (< t 0) (set! t 0) #f)
+        (if (> t 255) (set! t 255) #f)
+        (set! h (min2 8 (- SH by)))
+        (set! rr (+ BG_TOP_R (Math.floor (/ (* (- BG_BOT_R BG_TOP_R) t) 255))))
+        (set! gg (+ BG_TOP_G (Math.floor (/ (* (- BG_BOT_G BG_TOP_G) t) 255))))
+        (set! bb (+ BG_TOP_B (Math.floor (/ (* (- BG_BOT_B BG_TOP_B) t) 255))))
+        (Gfx.fill_rect 0 by SW h rr gg bb)
+        (set! by (+ by 8))
+      })))
 
 (define draw_play
   (lambda ()
-    (Gfx.fill_rect 0 0 SW SH BG_R BG_G BG_B)
+    (draw_bg_gradient)
     (draw_topbar)
     (draw_card)
     (draw_progress)
@@ -747,16 +912,16 @@
           (if (in_rect x y BACK_X BACK_Y BACK_W BACK_H)
               (set! arm ARM_BACK)
               #f)
-          (if (in_rect x y (- PROG_X 4) (- PROG_Y 4) (+ PROG_W 8) (+ PROG_H 8))
+          (if (in_rect x y (- PROG_X 6) (- PROG_Y 4) (+ PROG_W 12) (+ PROG_H 8))
               {
                 (set! arm ARM_SEEK)
                 (set! seek_prev (ratio_from_x x))
                 (set! dirty #t)
               }
               #f)
-          (if (in_circle x y PREV_CX SKIP_CY (+ SKIP_R 6)) (set! arm ARM_PREV) #f)
+          (if (in_circle x y PREV_CX PLAY_CY (+ SKIP_R 6)) (set! arm ARM_PREV) #f)
           (if (in_circle x y PLAY_CX PLAY_CY (+ PLAY_R 5)) (set! arm ARM_PLAY) #f)
-          (if (in_circle x y NEXT_CX SKIP_CY (+ SKIP_R 6)) (set! arm ARM_NEXT) #f)
+          (if (in_circle x y NEXT_CX PLAY_CY (+ SKIP_R 6)) (set! arm ARM_NEXT) #f)
           (if (in_rect x y (- VOL_DN_X 2) (- VOL_Y 2) (+ VOL_BTN_W 4) (+ VOL_BTN_H 4))
               {
                 (set! arm ARM_VOL_DN)
@@ -790,7 +955,7 @@
         #f)
     (if (== arm ARM_SEEK)
         {
-          (if (in_rect x y (- PROG_X 4) (- PROG_Y 4) (+ PROG_W 8) (+ PROG_H 8))
+          (if (in_rect x y (- PROG_X 6) (- PROG_Y 4) (+ PROG_W 12) (+ PROG_H 8))
               {
                 (if (Music.seek (ratio_from_x x))
                     #f
@@ -807,10 +972,10 @@
         (if (in_circle x y PLAY_CX PLAY_CY (+ PLAY_R 5)) (toggle_play) #f)
         #f)
     (if (== arm ARM_PREV)
-        (if (in_circle x y PREV_CX SKIP_CY (+ SKIP_R 6)) (switch_track -1) #f)
+        (if (in_circle x y PREV_CX PLAY_CY (+ SKIP_R 6)) (switch_track -1) #f)
         #f)
     (if (== arm ARM_NEXT)
-        (if (in_circle x y NEXT_CX SKIP_CY (+ SKIP_R 6)) (switch_track 1) #f)
+        (if (in_circle x y NEXT_CX PLAY_CY (+ SKIP_R 6)) (switch_track 1) #f)
         #f)
     (set! arm ARM_NONE)
     (set! moved #f)
