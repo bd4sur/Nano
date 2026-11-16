@@ -6,10 +6,18 @@
 ;; 的强度，再按调色板取色、以 2px 高的新行画在画面底部；整屏向上滚动，于是历史
 ;; 声谱自然保留（瀑布图）。频率轴（顶部，kHz）与时间轴（左侧，秒）每帧重绘。
 ;;
-;; 分工（关键）：**采集与 FFT 全在 C 侧**，(native Audio) 提供开麦 / 读一列 /
-;;   按频点取强度 / 原始采样 / 电平表，详见 infer/am_native_Audio.h 的设计说明。
-;;   1024 点 FFT 若放在 Scheme 里是 ~3×10⁵ VM 指令/帧、每 23ms 一列，解释器根本
-;;   跟不上（会掉到个位数 fps）；跨 FFI 边界只传标量，PCM 与频谱列表从不进堆。
+;; 分工（关键）：**采集在 C 侧**，(native Audio) 提供开麦 / 读一列 / 原始采样 / 电平表，
+;;   详见 infer/am_native_Audio.h。FFT 有**两种可选实现**（底部「硬FFT/软FFT」按钮切换，
+;;   默认硬 FFT）：
+;;     · 硬 FFT = (Audio.read) 在 C 侧做「加窗 + 基2 FFT + 对数映射」，一次调用拿到
+;;       一整列（294 个频点）的 0~255 强度。1024 点 FFT 在 C 里只要几十微秒。
+;;     · 软 FFT = (Audio.capture) 只交付 1024 个原始采样，加窗/FFT/映射全在 Scheme 里
+;;       做（app/lib/fft.scm）。1024 点 = 5120 个蝶形，每次蝶形 4 读 4 写列表 —— 实测
+;;       比硬 FFT 慢两三个数量级，列率从 ~43 列/秒掉到十几列/秒。这是本选项存在的
+;;       意义：把"该不该用 native 库"的代价摆在明面上（软模式的时间轴会按实际消耗的
+;;       音频帧数自动压缩，标尺仍然诚实）。
+;;   两种模式的算法逐项对齐（同一 Hann 窗、同一蝶形顺序、同一 log10(mag+1)·80 映射），
+;;   同一帧上逐频点的强度**完全一致**（tools/e2e/native/fft_probe.scm 实测 diff=0）。
 ;;
 ;; 交互（**全部触屏控件**，不再依赖 16 宫格软按键）：
 ;;   底部一排 6 枚按钮（通用控件 app/lib/button.scm）：
@@ -46,6 +54,7 @@
 
 (import BTN "app/lib/button.scm")   ; 通用按钮控件（圆角底/描边/居中标签/按住高亮/点按）
 (import EX "app/lib/exit.scm")      ; 硬 A/ESC 与右上角「退出」按钮 → 全局退出确认框
+(import FFT "app/lib/fft.scm")      ; 纯 Scheme 基2 FFT + Hann 窗 + 对数映射（软 FFT 用）
 
 ;; ============================================================================
 ;; 常量：版面（320x240 基准，按实际画布宽高推导）
@@ -87,15 +96,20 @@
 ;; 绘制成本封顶（每列约 294 次 fill_rect）。
 (define COL_MAX 4)
 
+;; 软 FFT 模式：每拍最多"读掉"多少帧（只分析最新那一帧）。
+;; 软 FFT 一列要几毫秒到几十毫秒，跟不上 43 列/秒的音频；把积压的帧读掉再画，
+;; 延迟才不会随时间增长（代价是丢帧——时间轴按实际消耗的帧数标定，所以仍然诚实）。
+(define SOFT_DRAIN_MAX 8)
+
 ;; 按住连发（基准/范围的四个按钮）
 (define HOLD_DELAY_MS 360)
 (define HOLD_REPEAT_MS 110)
 (define ADJUST_FLASH_MS 900)      ; 调节后读数高亮的时长
 
-;; 底部按钮行：6 枚等宽按钮
-(define BTN_W 49)
-(define BTN_GAP 3)
-(define BTN_X0 4)
+;; 底部按钮行：7 枚等宽按钮（基准-/基准+/范围-/范围+/暂停/配色/FFT）
+(define BTN_W 43)
+(define BTN_GAP 2)
+(define BTN_X0 3)
 
 ;; 状态条内的部件
 (define WAVE_X 118)               ; 波形缩略图（38 列 × 2px = 76px）
@@ -142,12 +156,18 @@
 (define bin_hz 43.066)               ; 每个频点的频率宽度（Hz）
 
 (define rms 0)                       ; 最新一帧的时域电平 0~255
-;; 时间轴标定：一列 = 一帧音频（fft_size 个采样）→ 每列代表的音频时长 = fft/rate。
-;; 这是**精确值**（不是实测 EMA）：每列就是那 23.2ms 的音频，故 1 秒 = 43.1 列 = 86px。
-;; 与 C 版按"实测帧间隔"标定的差异：C 版一行一帧、帧率=实测；这里列率若跟不上音频
-;; （极慢宿主），画面只是滚动得比实时慢，而"每列 23ms"的关系始终成立。
-(define sec_per_row 0.02322)
-(define px_per_sec 86.0)
+
+;; FFT 实现方式：#f = 硬 FFT（C 侧 (Audio.read)，默认）/ #t = 软 FFT（Scheme 侧 fft.scm）
+(define soft_fft #f)
+(define fftctx (cdr '(0)))           ; 软 FFT 的上下文（首次启用时才建，约 6.5k 个数）
+
+;; 时间轴标定：
+;;   hop_ms = 一帧音频的时长（= 1000·fft/rate ≈ 23.2ms），硬 FFT 下一列恒等于一帧；
+;;   row_ms = **一列实际代表的音频时长**的滑动平均。软 FFT 跟不上音频时会一次读掉
+;;            k 帧只画一列，于是 row_ms ≈ k·hop_ms —— 时间轴据此压缩，标尺仍然诚实
+;;            （每像素对应的音频时间不变，只是"1 秒"占的像素变少）。
+(define hop_ms 23.2)
+(define row_ms 23.2)
 (define diag_cols 0)                 ; 上一条诊断行时的列数（算实测列率）
 (define diag_ms 0)
 
@@ -164,11 +184,16 @@
 (define hold_next 0)
 (define prev_armed -1)               ; 上一拍的按住序号（高亮变化时立刻重画）
 
-(define adjust_ms -100000)           ; 最近一次调节电平/范围的时刻（读数高亮）
+;; 时间戳哨兵一律用 0（不能用负数）：wasm32 上 (System.timestamp) 返回
+;; 「纪元毫秒 mod 2^27」≈1.2e8，而 **有符号整数载荷只有 26 位（±6.7e7）**——
+;; 做 (- now_ms -100000) 这种减法，结果 1.2e8 装不进有符号载荷，会静默溢出成
+;; 未规定值（实测：读数高亮在浏览器里恒亮、呼吸心跳失效，64 位宿主上却一切正常）。
+;; 规矩：只对**两个活时间戳**做差（差值小），哨兵用 0 + 显式判 0。
+(define adjust_ms 0)                 ; 最近一次调节电平/范围的时刻（读数高亮）
 ;; 「无麦克风 / 等数据」两态的画面是静止的，但用户需要"还活着"的反馈：顶部状态点做
 ;; 呼吸闪烁（每 BLINK_MS 重画一次），并顺带让完全静止的场景也有推帧活动。
 (define BLINK_MS 400)
-(define blink_ms -100000)
+(define blink_ms 0)
 (define RETRY_MS 6000)               ; 无麦克风时每 6s 自动重试一次开麦
 (define retry_ms 0)
 
@@ -372,6 +397,7 @@
 (define b_rng_up  (BTN.make "范围+" (+ BTN_X0 (* 3 (+ BTN_W BTN_GAP))) BAR_Y BTN_W BTN_H))
 (define b_pause   (BTN.make "暂停"  (+ BTN_X0 (* 4 (+ BTN_W BTN_GAP))) BAR_Y BTN_W BTN_H))
 (define b_pal     (BTN.make "热力"  (+ BTN_X0 (* 5 (+ BTN_W BTN_GAP))) BAR_Y BTN_W BTN_H))
+(define b_fft     (BTN.make "硬FFT" (+ BTN_X0 (* 6 (+ BTN_W BTN_GAP))) BAR_Y BTN_W BTN_H))
 (define b_retry   (BTN.make "重试"  128 132 64 20))
 
 ;; 统一按钮外观（深色底 + 1px 描边 + 12px 抗锯齿字 + 强调色按下底）
@@ -392,11 +418,40 @@
       (style_btn b_base_dn) (style_btn b_base_up)
       (style_btn b_rng_dn)  (style_btn b_rng_up)
       (style_btn b_pause)   (style_btn b_pal)
+      (style_btn b_fft)
       (style_btn b_retry)
       (BTN.set_active_bg b_retry 116 172 226)
     }))
 
-;; 一枚按钮"生效"时的动作（idx：0 基准- 1 基准+ 2 范围- 3 范围+ 4 暂停 5 配色 6 重试）
+;; 切换 FFT 实现方式（硬=C 侧 / 软=Scheme 侧）。两种模式的算法逐项对齐，
+;; 差别只在"算得快不快"：软模式列率会明显下降（时间轴自动压缩）。
+;; 切换时清屏重画——两种实现的浮点末位有差，混在同一张瀑布里没有意义。
+(define toggle_fft
+  (lambda ()
+    (if soft_fft
+        { (set! soft_fft #f)
+          (BTN.set_label b_fft "硬FFT")
+          (set! row_ms hop_ms)
+          (set! want_clear #t)
+          (set! dirty #t) }
+        {
+          (if (null? fftctx) (set! fftctx (FFT.make fft_size)) #f)
+          (if (null? fftctx)
+              {
+                (display "[spectrogram] soft fft unavailable") (newline)
+              }
+              {
+                (set! soft_fft #t)
+                (BTN.set_label b_fft "软FFT")
+                (set! row_ms hop_ms)
+                (set! want_clear #t)
+                (set! dirty #t)
+              })
+        })
+    (display "[spectrogram] fft=") (display (if soft_fft "soft" "hard")) (newline)))
+
+;; 一枚按钮"生效"时的动作
+;;（idx：0 基准- 1 基准+ 2 范围- 3 范围+ 4 暂停 5 配色 6 FFT 7 重试）
 (define act
   (lambda (idx)
     (if (== idx 0) (apply_level (- base LEVEL_BASE_STEP) range) #f)
@@ -418,7 +473,8 @@
           (display "[spectrogram] palette=") (display pal_mode) (newline)
         }
         #f)
-    (if (== idx 6) (open_mic) #f)))
+    (if (== idx 6) (toggle_fft) #f)
+    (if (== idx 7) (open_mic) #f)))
 
 ;; 哪一枚按钮正被按住（-1 = 没有）。只取电平，不改边沿。
 (define armed_idx
@@ -430,7 +486,8 @@
     (if (BTN.armed b_rng_up)  (set! idx 3) #f)
     (if (BTN.armed b_pause)   (set! idx 4) #f)
     (if (BTN.armed b_pal)     (set! idx 5) #f)
-    (if (not mic_ok) (if (BTN.armed b_retry) (set! idx 6) #f) #f)
+    (if (BTN.armed b_fft)     (set! idx 6) #f)
+    (if (not mic_ok) (if (BTN.armed b_retry) (set! idx 7) #f) #f)
     idx))
 
 ;; 每拍一次：先让控件消费触屏边沿（点按在控件内部结算），再按"按住"驱动连发。
@@ -443,6 +500,7 @@
     (BTN.track b_rng_up)
     (BTN.track b_pause)
     (BTN.track b_pal)
+    (BTN.track b_fft)
     (if (not mic_ok) (BTN.track b_retry) #f)
     (set! idx (armed_idx))
     ;; 按住/松手会改变按钮高亮：暂停态下没有新列可画，必须由这里触发一次重画，
@@ -477,6 +535,7 @@
     (if (or (== k 54) (== k 1)) (apply_level base (+ range LEVEL_RANGE_STEP)) #f)  ; '6'/↑
     (if (or (== k 32) (== k 13)) (act 4) #f)                          ; 空格/回车 = 暂停
     (if (or (== k 99) (== k 67)) (act 5) #f)                          ; 'c'/'C' = 换配色
+    (if (or (== k 102) (== k 70)) (act 6) #f)                         ; 'f'/'F' = 硬/软 FFT
     (if (or (== k 114) (== k 82)) (open_mic) #f)))                    ; 'r'/'R' = 重开麦
 
 (define handle_keys
@@ -541,7 +600,7 @@
     (define y 0)
     (define ppx 0.0)
     (Gfx.fill_rect 0 PLOT_Y0 AXIS_W PLOT_H 0 0 0)
-    (set! ppx px_per_sec)
+    (set! ppx (/ (* ROW_H 1000.0) row_ms))
     (Gfx.draw_text "0s" 2 (- PLOT_BOTTOM 13) AX_R AX_G AX_B)
     (while (<= k 3)
       {
@@ -599,7 +658,7 @@
     (Gfx.fill_rect 0 STAT_Y SW (- SH STAT_Y) BG_R BG_G BG_B)
     (Gfx.fill_rect 0 STAT_Y SW 1 EDGE_R EDGE_G EDGE_B)
     ;; 电平/范围读数：刚调节过的 900ms 内用强调色（C 版是限时叠加显示，这里常显 + 高亮）
-    (set! flash (and (>= now_ms adjust_ms) (< (- now_ms adjust_ms) ADJUST_FLASH_MS)))
+    (set! flash (and (> adjust_ms 0) (< (- now_ms adjust_ms) ADJUST_FLASH_MS)))
     (if flash { (set! fr ACC_R) (set! fg ACC_G) (set! fb ACC_B) }
               { (set! fr DIM_R) (set! fg DIM_G) (set! fb DIM_B) })
     (Gfx.draw_text lv_text 6 (+ STAT_Y 5) fr fg fb)
@@ -632,6 +691,7 @@
       (BTN.draw_state b_rng_up (BTN.armed b_rng_up))
       (BTN.draw_state b_pause (BTN.armed b_pause))
       (BTN.draw_state b_pal (BTN.armed b_pal))
+      (BTN.draw_state b_fft (BTN.armed b_fft))
       (draw_status)
     }))
 
@@ -677,7 +737,9 @@
     (Gfx.scroll_up ROW_H)          ; 历史整体上移一行（滚动会整屏标脏）
     (while (< x nbins)
       {
-        (set! v (Audio.bin x))
+        ;; 硬 FFT：(Audio.read) 已经把这一列算好，按频点取标量；
+        ;; 软 FFT：由 (FFT.transform) 刚算完的 re/im 现场做对数映射
+        (set! v (if soft_fft (FFT.bin fftctx x base range) (Audio.bin x)))
         (Gfx.fill_rect (+ PLOT_X0 x) (- PLOT_BOTTOM ROW_H) 1 ROW_H
                        (get_item cur_r v) (get_item cur_g v) (get_item cur_b v))
         (set! x (+ x 1))
@@ -713,7 +775,43 @@
 ;; 每拍：采集 → 绘制
 ;; ============================================================================
 
-(define update_column
+;; 麦克风硬错误的统一处理（采集失败 → 卡片态 + 全屏重绘）
+(define mic_error
+  (lambda ()
+    {
+      (set! mic_ok #f)
+      (set! mic_err #t)
+      (refresh_state)
+      (set! overlay_kind 2)
+      (set! want_clear #t)
+      (display "[spectrogram] mic error") (newline)
+    }))
+
+;; 一列就绪后的共用收尾：更新电平/计数、擦掉提示、标定时间轴、画列
+;;   frames = 这一列"吃掉"了几帧音频（硬 FFT 恒 1；软 FFT 落后时可能多帧）
+(define commit_column
+  (lambda (frames)
+    (define d 0.0)
+    (set! rms (Audio.rms))
+    (set! mic_cols (+ mic_cols 1))
+    ;; 从"等数据/无麦克风"提示画面切回瀑布：先把提示擦掉（这两态没有历史可保留）
+    (if (not (== overlay_kind 0))
+        { (clear_plot) (set! overlay_kind 0) (refresh_state) (set! dirty #t) }
+        #f)
+    (if (== mic_cols 1)
+        { (refresh_state) (set! dirty #t) }
+        #f)
+    (if paused
+        #f
+        {
+          ;; 时间轴滑动平均：一列代表的音频时长（软 FFT 丢帧时变长 → 标尺自动压缩）
+          (set! d (* frames hop_ms))
+          (set! row_ms (+ (* row_ms 0.85) (* d 0.15)))
+          (draw_column)
+        })))
+
+;; 硬 FFT：一帧一列（C 侧已经把 294 个频点算好），每拍最多 COL_MAX 列
+(define update_column_hard
   (lambda ()
     (define rc 0)
     (define drawn 0)
@@ -721,33 +819,59 @@
     (while (and (not stop) (< drawn COL_MAX))
       {
         (set! rc (Audio.read))
-        (if (== rc -1)
-            {
-              (set! mic_ok #f)
-              (set! mic_err #t)
-              (refresh_state)
-              (set! overlay_kind 2)
-              (set! want_clear #t)
-              (set! stop #t)
-              (display "[spectrogram] mic error") (newline)
-            }
-            #f)
+        (if (== rc -1) { (mic_error) (set! stop #t) } #f)
         (if (== rc 1)
             {
-              (set! rms (Audio.rms))
-              (set! mic_cols (+ mic_cols 1))
-              ;; 从"等数据/无麦克风"提示画面切回瀑布：先把提示擦掉（这两态没有历史可保留）
-              (if (not (== overlay_kind 0))
-                  { (clear_plot) (set! overlay_kind 0) (refresh_state) (set! dirty #t) }
-                  #f)
-              (if (== mic_cols 1)
-                  { (refresh_state) (set! dirty #t) }
-                  #f)
-              (if paused #f (draw_column))
+              (commit_column 1)
               (set! drawn (+ drawn 1))
             }
             (set! stop #t))
       })))
+
+;; 软 FFT：先把积压的帧读掉（只留最新一帧），再在 Scheme 里做 加窗+FFT+映射，
+;; 每拍只画一列（一列要 5120 个蝶形，画多列会拖垮节拍）。
+(define update_column_soft
+  (lambda ()
+    (define rc 0)
+    (define drained 0)
+    (define stop #f)
+    ;; 软 FFT 的上下文首次启用时才建（约 6.5k 个数；建不出来就退回硬 FFT）
+    (if (null? fftctx)
+        {
+          (set! fftctx (FFT.make fft_size))
+          (if (null? fftctx)
+              {
+                (set! soft_fft #f)
+                (BTN.set_label b_fft "硬FFT")
+                (display "[spectrogram] soft fft unavailable") (newline)
+              }
+              #f)
+        }
+        #f)
+    (while (and (not stop) (< drained SOFT_DRAIN_MAX))
+      {
+        (set! rc (Audio.capture))
+        (if (== rc -1) { (mic_error) (set! stop #t) } #f)
+        (if (== rc 1)
+            (set! drained (+ drained 1))
+            (set! stop #t))
+      })
+    (if (> drained 0)
+        {
+          ;; 暂停时不必做变换（画面冻结，只需照常消费音频，恢复后才不补播旧帧）
+          (if paused
+              #f
+              {
+                (FFT.capture fftctx)
+                (FFT.transform fftctx)
+              })
+          (commit_column drained)
+        }
+        #f)))
+
+(define update_column
+  (lambda ()
+    (if soft_fft (update_column_soft) (update_column_hard))))
 
 (define diag
   (lambda ()
@@ -761,7 +885,8 @@
           (display " range=") (display range)
           (display " pal=") (display pal_mode)
           (display " paused=") (display paused)
-          (display " hist=") (display (Math.floor (/ (* ROWS sec_per_row) 100)))
+          (display " fft=") (display (if soft_fft "soft" "hard"))
+          (display " hist=") (display (Math.floor (/ (* ROWS row_ms) 1000)))
           (display " rows=")
           (if (> (- now_ms diag_ms) 0)
               (display (Math.floor (/ (* 1000.0 (- mic_cols diag_cols)) (- now_ms diag_ms))))
@@ -786,7 +911,7 @@
       ;; 静止两态（无麦克风 / 等数据）：呼吸指示心跳 + 定期自动重试开麦
       (if (or (not mic_ok) (== mic_cols 0))
           {
-            (if (>= (- now_ms blink_ms) BLINK_MS)
+            (if (or (== blink_ms 0) (>= (- now_ms blink_ms) BLINK_MS))
                 { (set! blink_ms now_ms) (set! dirty #t) }
                 #f)
             (if (and (not mic_ok) (>= (- now_ms retry_ms) RETRY_MS))
@@ -826,12 +951,13 @@
       (set! max_bins (get_item audio_info 2))
       (set! bin_hz (/ (get_item audio_info 0) fft_size))
       (set! nbins (Math.floor (min2 MAX_BINS max_bins)))
-      (set! sec_per_row (/ fft_size (get_item audio_info 0)))
-      (set! px_per_sec (/ ROW_H sec_per_row))
+      (set! hop_ms (/ (* 1000.0 fft_size) (get_item audio_info 0)))
+      (set! row_ms hop_ms)
     }
     #f)
 (refresh_state)
 (set! diag_ms now_ms)
+(set! blink_ms now_ms)
 (set! diag_cols 0)
 (draw_all)
 (set! timer_id (System.set_interval TICK_MS tick))

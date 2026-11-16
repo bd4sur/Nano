@@ -90,10 +90,12 @@ cp /path/to/Animac/include/{am_host,am_repl}.h /path/to/Animac/include/am_native
   WASM 目标另有 `hal_fs_persist_wasm.c` 把写入/删除/改名同步进浏览器 IndexedDB（文件管理器
   app/filemgr.scm 依赖 `remove`/`rename`；递归删除目录树由 Scheme 侧组合原语完成）
 - `infer/am_native_Audio.c/.h` —— 音频**输入**与频谱分析（`is_available/open/close/info/read/
-  bin/sample/rms/level/set_level`）：麦克风经 `hal_audio_in.h`（WASM = getUserMedia + Web Audio，
+  capture/bin/sample/rms/level/set_level`）：麦克风经 `hal_audio_in.h`（WASM = getUserMedia + Web Audio，
   其它平台 = ALSA/ESP-IDF I2S），Hann 加窗 + `nano_fft.c` 的基 2 FFT + 对数幅度映射全在 C 侧
   （1024 点 FFT 在解释器里要 ~3×10⁵ VM 指令/列、每 23ms 一列，Scheme 侧跟不上），跨 FFI 只传
-  标量；供 `app/spectrogram.scm`（声谱图）使用。**本库是第 17 个本地库**，见下面「本地库数量上限」
+  标量；供 `app/spectrogram.scm`（声谱图）使用。`read` 顺带做 C 侧 FFT（"硬 FFT"），`capture`
+  只交付原始采样（供 `app/lib/fft.scm` 的"软 FFT"在 Scheme 里变换）。**本库是第 17 个本地库**，
+  见下面「本地库数量上限」
 - `infer/am_native_Ui.c/.h` —— 宿主模态文本输入/输出（`input`/`input_with`/`message`/
   `message_titled`/`confirm`）：按上游契约 N7 把**进程**置 BLOCKED，宿主用现成的文本控件当
   模态框（`confirm` 借图形层的两按钮确认框），提交后压值 + step + 置 READY + 重新入队

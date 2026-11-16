@@ -44,9 +44,14 @@ extern "C" {
 //    (Audio.open rate)        : Boolean        —— 打开麦克风并准备分析缓冲；重复调用先关
 //    (Audio.close)            : Boolean        —— 关麦、释放分析缓冲（幂等）
 //    (Audio.info)             : List           —— (采样率 FFT点数 可绘制频点数)；未打开也返回
-//    (Audio.read)             : Number         —— 采集一列：1=有新数据 0=数据不足 −1=硬错误
-//    (Audio.bin i)            : Number         —— 最新一列第 i 个频点的强度 0~255（越界取 0）
+//    (Audio.read)             : Number         —— 采集一列 + **硬 FFT**：1/0/−1（见下）
+//    (Audio.capture)          : Number         —— 只采集一帧原始采样（不做 FFT）：1/0/−1
+//                                                （供"软 FFT"：App 在 Scheme 里自己变换）
+//    (Audio.bin i)            : Number         —— 最新一列第 i 个频点的强度 0~255（越界取 0；
+//                                                只由 `read` 更新，`capture` 不动它）
 //    (Audio.sample k)         : Number         —— 最新一帧第 k 个原始采样（int16 值；越界取 0）
+//                                                （`read` 之后再取即为"做过 FFT 的那一帧"，
+//                                                 `capture` 之后再取即为"刚采到的那一帧"）
 //    (Audio.rms)              : Number         —— 最新一帧的时域电平 0~255（−60dBFS…0dBFS）
 //    (Audio.level)            : List           —— 当前的 (基准 动态范围)
 //    (Audio.set_level b r)    : List           —— 设置基准/动态范围，返回生效后的 (基准 动态范围)
@@ -54,9 +59,11 @@ extern "C" {
 //  软失败约定（manual §1.1.1）：没有麦克风、未 (Audio.open)、数据还没到位时一律
 //  不报错——is_available 为 #f、read 为 0、bin/sample/rms 为 0，App 据此降级。
 //
-//  (Audio.read) 的取数语义：**一次调用只取一帧**（1024 采样 ≈23ms），返回 1 表示
-//  本列数据已就绪；不足一帧时返回 0 且不消费任何采样（WASM HAL 非阻塞，ALSA 则
-//  阻塞至就绪或 100ms 超时）。
+//  (Audio.read) / (Audio.capture) 的取数语义：**一次调用只取一帧**（1024 采样 ≈23ms），
+//  返回 1 表示数据已就绪；不足一帧时返回 0 且不消费任何采样（WASM HAL 非阻塞，ALSA 则
+//  阻塞至就绪或 100ms 超时）。两者的唯一差别是 `read` 会接着做**加窗 + FFT + 对数映射**
+//  （"硬 FFT"，结果经 `bin` 取用），而 `capture` 只把原始采样放进缓冲（供 `sample` 取用，
+//  以及 App 侧的"软 FFT"）。时域电平（`rms`）两者都会更新——电平表与波形图不受模式影响。
 //  为什么不在库内"多取只留最新"：声谱图要把**每一帧**都画成一列（丢帧等于丢信息，
 //  短促的声音会被整段跳过）。要跟上音频，App 每拍循环调用若干次即可（每拍上限
 //  见 app/spectrogram.scm 的 COL_MAX）——浏览器里 AudioWorklet 每 2048 采样投递一次，
@@ -89,8 +96,11 @@ int32_t am_native_Audio_close(am_runtime_t *rt, am_process_t *proc);
 // (Audio.info) : List —— (采样率 FFT点数 可绘制频点数)
 int32_t am_native_Audio_info(am_runtime_t *rt, am_process_t *proc);
 
-// (Audio.read) : Number —— 1 / 0 / -1
+// (Audio.read) : Number —— 1 / 0 / -1（采集 + 硬 FFT）
 int32_t am_native_Audio_read(am_runtime_t *rt, am_process_t *proc);
+
+// (Audio.capture) : Number —— 1 / 0 / -1（只采集，不做 FFT；供 Scheme 侧"软 FFT"）
+int32_t am_native_Audio_capture(am_runtime_t *rt, am_process_t *proc);
 
 // (Audio.bin index:Number) : Number
 int32_t am_native_Audio_bin(am_runtime_t *rt, am_process_t *proc);

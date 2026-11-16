@@ -197,18 +197,14 @@ static void audio_free(void) {
     for (int32_t i = 0; i < AUDIO_MAX_BINS; i++) s_bins[i] = 0;
 }
 
-// 对 s_mic 里的一帧做「时域电平 + 加窗 + FFT + 对数幅度映射」
-static void audio_analyze(void) {
+// 时域电平（RMS）→ 0~255（−60dBFS…0dBFS 线性映射；满量程附近即饱和）。
+// 与时域帧一起算：即使 App 用"软 FFT"（自己在 Scheme 里做变换），电平表也照旧可用。
+static void audio_update_rms(void) {
     float acc = 0.0f;
-
     for (int32_t i = 0; i < AUDIO_FFT_SIZE; i++) {
         float s = (float)s_mic[i];
         acc += s * s;
-        s_re[i] = s * s_window[i];
-        s_im[i] = 0.0f;
     }
-
-    // 时域电平 → 0~255（−60dBFS…0dBFS 线性映射；满量程附近即饱和）
     {
         float rms = sqrtf(acc / (float)AUDIO_FFT_SIZE);
         float db = 20.0f * log10f((rms + 1.0f) / 32768.0f);
@@ -216,6 +212,14 @@ static void audio_analyze(void) {
         if (lv < 0.0f) lv = 0.0f;
         if (lv > 255.0f) lv = 255.0f;
         s_rms = (uint8_t)lv;
+    }
+}
+
+// 对 s_mic 里的一帧做「加窗 + FFT + 对数幅度映射」（(Audio.read) 的后半段）
+static void audio_analyze(void) {
+    for (int32_t i = 0; i < AUDIO_FFT_SIZE; i++) {
+        s_re[i] = (float)s_mic[i] * s_window[i];
+        s_im[i] = 0.0f;
     }
 
     nano_fft_execute(s_re, s_im, s_tw_re, s_tw_im, AUDIO_FFT_SIZE);
@@ -312,25 +316,40 @@ int32_t am_native_Audio_info(am_runtime_t *rt, am_process_t *proc) {
     return audio_push_number_list(proc, vals, 3);
 }
 
-int32_t am_native_Audio_read(am_runtime_t *rt, am_process_t *proc) {
+// 取一帧原始采样到 s_mic（并更新时域电平）。返回 1=取到一帧 / 0=数据不足 / -1=硬错误。
+// 不做任何频域处理——"软 FFT"模式下 App 自己在 Scheme 里做变换，这里只负责交付采样。
+static int32_t audio_capture_frame(void) {
     int32_t n;
-    (void)rt;
-
-    if (!s_open || s_mic == NULL) return audio_push_number(proc, 0.0);
+    if (!s_open || s_mic == NULL) return 0;
 
     // 每次只要一帧（不足一帧时 WASM HAL 立即返回 0、ALSA 阻塞至就绪或超时）。
-    // "追上音频"由 App 侧的每拍多次调用解决（见头文件的取数语义说明）：
-    // 这里**不**做"多取只留最新"的丢弃——声谱图要把每一帧都画成一列。
+    // "追上音频"由 App 侧的每拍多次调用解决（见头文件的取数语义说明）。
     n = mic_read(s_mic, AUDIO_FFT_SIZE);
     if (n < 0) {
         // 硬错误（权限被拒 / 采集中断）：置为未打开，让 App 走"无麦克风"画面
         s_open = 0;
-        return audio_push_number(proc, -1.0);
+        return -1;
     }
-    if (n < AUDIO_FFT_SIZE) return audio_push_number(proc, 0.0);
+    if (n < AUDIO_FFT_SIZE) return 0;
 
-    audio_analyze();
+    audio_update_rms();
     s_have = 1;
+    return 1;
+}
+
+int32_t am_native_Audio_capture(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    return audio_push_number(proc, (double)audio_capture_frame());
+}
+
+int32_t am_native_Audio_read(am_runtime_t *rt, am_process_t *proc) {
+    int32_t rc;
+    (void)rt;
+
+    rc = audio_capture_frame();
+    if (rc != 1) return audio_push_number(proc, (double)rc);
+
+    audio_analyze();   // 加窗 + FFT + 对数映射（"硬 FFT"）
     return audio_push_number(proc, 1.0);
 }
 
@@ -397,6 +416,7 @@ static const am_native_func_entry_t am_native_Audio_funcs[] = {
     { L"close",        am_native_Audio_close },
     { L"info",         am_native_Audio_info },
     { L"read",         am_native_Audio_read },
+    { L"capture",      am_native_Audio_capture },
     { L"bin",          am_native_Audio_bin },
     { L"sample",       am_native_Audio_sample },
     { L"rms",          am_native_Audio_rms },
