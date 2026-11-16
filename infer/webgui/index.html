@@ -705,9 +705,16 @@ function sendTouchFb(action, x, y, ts) {
 }
 function sendTouch(action, clientX, clientY, ts) {
   if (!runtimeReady || !Module._wasm_gui_on_touch) return;
+  // 注意：getBoundingClientRect() 给的是**边框盒**，而 #screen 有 1px 边框，
+  // 直接按 rect 宽高换算会让坐标整体偏右/偏下最多 1px（并且把边框算进画布尺寸）。
+  // 这里改用 clientWidth/clientHeight（内容盒），并把左/上边框扣掉。
   const rect = canvas.getBoundingClientRect();
-  const x = Math.round((clientX - rect.left) * canvas.width  / rect.width);
-  const y = Math.round((clientY - rect.top)  * canvas.height / rect.height);
+  const cw = canvas.clientWidth  || rect.width;
+  const ch = canvas.clientHeight || rect.height;
+  const bl = (rect.width  - cw) / 2;   // 左（右）边框宽度
+  const bt = (rect.height - ch) / 2;   // 上（下）边框宽度
+  const x = Math.round((clientX - rect.left - bl) * canvas.width  / cw);
+  const y = Math.round((clientY - rect.top  - bt) * canvas.height / ch);
   sendTouchFb(action, x, y, ts);
 }
 canvas.addEventListener("pointerdown", (e) => {

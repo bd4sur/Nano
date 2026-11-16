@@ -82,6 +82,7 @@
 (native Touch)
 (native Key)
 (native App)
+(native Diag)          ;; (Diag.ms) 单调毫秒：节拍/耗时测量用它（System.timestamp 做区间测量不可靠）
 
 (import BA "app/lib/badapple/meta.scm")
 (import EX "app/lib/exit.scm")
@@ -108,7 +109,7 @@
 (define NF BA.n_frames)
 
 ;; ---- 可调参数 ----
-(define NFR 20)                 ;; 编码帧数（32 帧 = 3.2 秒）
+(define NFR 12)                 ;; 编码帧数（12 帧 = 1.2 秒：含 2 个 I 帧 + 10 个 P 帧）
 (define START_F 600)            ;; 起始帧号（片源内偏移）
 (define GOP 10)                 ;; 关键帧周期
 (define LAMBDA 30.0)            ;; 拉格朗日乘子 λ（0..255 像素域的 SSE）
@@ -117,9 +118,22 @@
 (define QMAX 48)
 (define SR 4)                   ;; 运动搜索半径 ±4
 (define SCENE_TH 1200)          ;; 场景切换阈值（相邻源帧差异像素数 > 该值 → 强制 I 帧）
-(define ENC_CHUNK 12)            ;; 每拍编码块数
-(define DEC_CHUNK 24)           ;; 每拍解码块数
-(define TICK_MS 30)             ;; 界面节拍
+;; 每拍编码块数。一拍 = 「ENC_CHUNK 块编码 + 一次整屏绘制」，取 4 是为了让**每一个中间
+;; 状态都真的上屏**：光标每拍前进半个块行，视觉上是连续扫描而不是跳帧。
+;; 代价是总时长（宁可慢，也不要丢中间状态）。
+(define ENC_CHUNK 4)            ;; 每拍编码块数
+(define DEC_CHUNK 16)           ;; 每拍解码块数
+;; 界面节拍（毫秒）。取 1：一拍就是「宿主一帧里能干多少就干多少」，单拍内的编码块数由
+;; ENC_CHUNK 控制。
+;;
+;; 为什么**必须用 set_timeout 自链、不能用 set_interval**（本 App 实测踩到的坑）：
+;;   本 App 一拍要跑几十万条 VM 指令（远超一个宿主帧的时间片），必然跨帧被抢占。上游运行时
+;;   对「回调重入」有防护，但它靠「函数栈上每隔一个元素出现 ASYNC_RET」判定 —— 回调里嵌套
+;;   普通 Scheme 调用时该交替关系不成立，防护会漏判；于是周期性定时器会在上一个回调尚未
+;;   返回时再次触发，**同一个 tick 被并发执行两份**（实测：enc_frame_start 进了两次，第二个
+;;   帧头被写进码流中间 → 解码器在第 1 帧第 3 块就失步，回环 mismatch 从 0 变成上万）。
+;;   一次性定时器不可能重入：它触发时即从定时器链表摘除，只在回调**末尾**重新挂上。
+(define TICK_MS 1)
 
 ;; ---- 候选编码方式号（与码流语法一一对应）----
 (define C_SKIP 5)               ;; 跳过：MV=0 拷贝参考块，不编码残差
@@ -194,6 +208,10 @@
 
 (define clampf (lambda (v lo hi) (if (< v lo) lo (if (> v hi) hi v))))
 (define clampi (lambda (v lo hi) (if (< v lo) lo (if (> v hi) hi (Math.round v)))))
+;; 坐标 → 格子下标必须**向下取整**：用 clampi（四舍五入）会把命中区从
+;; 「[i·格, (i+1)·格)」缩成「[(i-0.5)·格, (i+0.5)·格)」，点在格子左半边会命中右邻格
+;; ——实测「点按位置与触发位置不一致、整体偏右」即此（标签页/按钮/块/时间轴同病）。
+(define celli (lambda (v lo hi) (if (< v lo) lo (if (> v hi) hi (Math.floor v)))))
 (define maxf (lambda (a b) (if (> a b) a b)))
 (define minf (lambda (a b) (if (< a b) a b)))
 (define absf (lambda (a) (if (< a 0) (- 0 a) a)))
@@ -1522,7 +1540,7 @@
                       (if (>= enc_f NFR)
                           {
                             (set! phase PH_DEC)
-                            (set! enc_ms (- (System.timestamp) t_start))
+                            (set! enc_ms (- (Diag.ms) t_start))
                             (display "[vcodec] encoded bits=") (display (total_bits))
                             (display " enc_ms=") (display enc_ms) (newline)
                             (set! dec_f 0)
@@ -2557,7 +2575,7 @@
     (set! need_analyze 1)
     (set! dirty 1)
     (set! enc_paused 0)
-    (set! t_start (System.timestamp))
+    (set! t_start (Diag.ms))
     (set! enc_ms 0)
     (set! i 0)
     (while (< i NFR) {
@@ -2600,8 +2618,8 @@
     (if (hit px py vx vy (* W sc) (* H sc))
         {
           (set! auto_sel 0)
-          (set! sel_b (+ (* (clampi (/ (- py vy) (* BS sc)) 0 7) BW)
-                         (clampi (/ (- px vx) (* BS sc)) 0 7)))
+          (set! sel_b (+ (* (celli (/ (- py vy) (* BS sc)) 0 7) BW)
+                         (celli (/ (- px vx) (* BS sc)) 0 7)))
           (set! need_analyze 1)
           (set! dirty 1)
         }
@@ -2683,24 +2701,24 @@
     (define ai 0)
     (cond
       ((< py TAB_H)
-       { (set! panel (clampi (/ px 53) 0 5)) (set! dirty 1) (set! need_analyze 1) })
+       { (set! panel (celli (/ px 53) 0 5)) (set! dirty 1) (set! need_analyze 1) })
       ((and (>= py BY) (< px 266))
        {
-         (set! ai (clampi (/ (- px 4) 62) 0 3))
+         (set! ai (celli (/ (- px 4) 62) 0 3))
          (do_action panel ai)
        })
       ((== panel 0) (pick_block_at px py 4 19 3))
       ((== panel 1)
        (if (hit px py 244 19 W H)
            {
-             (set! sel_b (+ (* (clampi (/ (- py 19) BS) 0 7) BW)
-                            (clampi (/ (- px 244) BS) 0 7)))
+             (set! sel_b (+ (* (celli (/ (- py 19) BS) 0 7) BW)
+                            (celli (/ (- px 244) BS) 0 7)))
              (set! need_analyze 1) (set! dirty 1)
            }
            (if (hit px py 4 30 (* 8 7) (* 8 7))
                {
-                 (set! sel_b (+ (* (clampi (/ (- py 30) 7) 0 7) BW)
-                                (clampi (/ (- px 4) 7) 0 7)))
+                 (set! sel_b (+ (* (celli (/ (- py 30) 7) 0 7) BW)
+                                (celli (/ (- px 4) 7) 0 7)))
                  (set! need_analyze 1) (set! dirty 1)
                }
                #f)))
@@ -2709,8 +2727,8 @@
            (pick_block_at px py 4 30 2)
            (if (hit px py 136 30 W H)
                {
-                 (set! sel_b (+ (* (clampi (/ (- py 30) BS) 0 7) BW)
-                                (clampi (/ (- px 136) BS) 0 7)))
+                 (set! sel_b (+ (* (celli (/ (- py 30) BS) 0 7) BW)
+                                (celli (/ (- px 136) BS) 0 7)))
                  (set! need_analyze 1) (set! dirty 1)
                }
                #f)))
@@ -2719,7 +2737,7 @@
            (pick_block_at px py 6 30 2)
            (if (hit px py 4 174 (* NFR 9) 16)
                {
-                 (set! play_idx (clampi (/ (- px 6) 9) 0 (- NFR 1)))
+                 (set! play_idx (celli (/ (- px 6) 9) 0 (- NFR 1)))
                  (set! playing 0)
                  (set! play_t0 (- (System.timestamp) (* play_idx 100)))
                  (set! dirty 1)
@@ -2823,13 +2841,11 @@
             #f)
         #f)
     (if (== dbg 1) (if (== dirty 1) { (display "[vcodec] draw-begin ph=") (display phase) (newline) } #f) #f)
-    (if (== dirty 1)
-        {
-          (if (== phase PH_ENC)
-              (if (== (Math.round (mod _tc 3)) 0) (draw_all) #f)
-              (draw_all))
-        }
-        #f)
+    ;; 每拍都重绘（不抽样）：dirty 只表示「状态变了」，变了就画 —— 任何一个中间状态都在
+    ;; 下一拍上屏，而不是把一部分中间状态直接丢掉。
+    (if (== dirty 1) (draw_all) #f)
+    ;; 自链：本拍（含绘制）彻底做完后再挂下一拍 —— 因此不可能与自身重入。
+    (set! _timer (System.set_timeout TICK_MS tick))
   }))
 
 
@@ -2838,8 +2854,9 @@
   (lambda () {
     (App.set_timeslice 1200000)
     (EX.install_with draw_all)
-    (set! t_start (System.timestamp))
-    (set! _timer (System.set_interval TICK_MS tick))
+    (set! t_start (Diag.ms))
+    ;; 不在这里先挂定时器再直接调 tick：tick 末尾自己会挂下一个，两个来源会让定时器数量
+    ;; 翻倍增长。与 app/badapple.scm 一致 —— 只调一次 tick，链由 tick 自己维持。
     (tick)
     #t
   }))

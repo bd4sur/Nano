@@ -694,7 +694,22 @@ static void app_drain_error_fifo(void) {
         size_t len = wcslen(s_app->err_buf);
         if (c == L'\n') {
             // 换行即重置：只保留最近一行错误
-            if (s_app->err_buf[0] != L'\0') printf("[scheme-app][error] %ls\n", s_app->err_buf);
+            if (s_app->err_buf[0] != L'\0') {
+                printf("[scheme-app][error] %ls\n", s_app->err_buf);
+                // 运行期错误的现场：出错 PC 附近的 IL 窗口（排查「指令执行异常」最有效）
+                am_process_t *p = am_runtime_get_process(s_app->rt, s_app->pid);
+                if (p && p->ilcode) {
+                    unsigned pc = (unsigned)p->PC;
+                    unsigned lo = pc > 8 ? pc - 8 : 0;
+                    unsigned hi = pc + 8 < p->ilcode_length ? pc + 8 : (unsigned)p->ilcode_length;
+                    printf("[scheme-app][error] PC=%u opstack=%zu fstack=%zu\n", pc,
+                           (size_t)(p->opstack_top - p->opstack),
+                           (size_t)(p->fstack_top - p->fstack));
+                    for (unsigned i = lo; i < hi; i++)
+                        printf("   %s%u op=%u operand=%zu\n", i == pc ? ">>" : "  ",
+                               i, (unsigned)p->ilcode[i].opcode, (size_t)p->ilcode[i].operand);
+                }
+            }
             s_app->err_buf[0] = L'\0';
             continue;
         }
