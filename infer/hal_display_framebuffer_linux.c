@@ -196,6 +196,54 @@ void display_hal_refresh(
         int32_t frame_off_x = ((int32_t)fb_width  - (int32_t)fb_width_in  * FB_UPSCALE) / 2;
         int32_t frame_off_y = ((int32_t)fb_height - (int32_t)fb_height_in * FB_UPSCALE) / 2;
         if (frame_off_x >= 0 && frame_off_y >= 0) {
+#if defined(NANO_POD_LUCKFOX) && (FB_UPSCALE == 2)
+            // ------------------------------------------------------------------
+            // Luckfox-Pico-86-Panel 专用快路径。
+            // 仅本机型编译（luckfox.mk 定义 NANO_POD_LUCKFOX），其余平台的放大
+            // 路径与下方通用实现逐字不变。
+            //
+            // 通用实现按**物理**像素逐点调用 write_pixel()，每个物理像素都要
+            // 重走 fb_bpp/px_fmt 分支链与通道换算；720x720 满屏一帧即 518k 次
+            // 调用。本机型的分辨率与像素格式在运行期固定，因此这里：
+            //   1) 每个逻辑源像素只打包一次；
+            //   2) 按物理行写成连续的双字，内层无任何分支；
+            //   3) 一条物理行写满后再写同源的下一条，源行留在 L1 里。
+            // 注意脏区原点：本函数只刷新 [x0,y0,view_width,view_height) 这块
+            // 脏区，目标起始必须同样加上 x0（垂直方向由 (y0+y) 承担），否则
+            // 所有非零 x0 的局部刷新会被整体左移 FB_UPSCALE 倍。
+            // 打包结果与 write_pixel() 在本机型 px_fmt（R@16/G@8/B@0，各 8 位）
+            // 下的输出逐位一致：alpha=0xFF、R<<16、G<<8、B。条件不满足时
+            // （例如驱动报告的格式与预期不符）自动回落到下方通用路径。
+            // ------------------------------------------------------------------
+            if (fb_bpp == 32 && (fb_line_length & 3) == 0 &&
+                px_fmt.r_offset == 16 && px_fmt.r_len == 8 &&
+                px_fmt.g_offset == 8  && px_fmt.g_len == 8 &&
+                px_fmt.b_offset == 0  && px_fmt.b_len == 8) {
+                for (uint32_t y = 0; y < view_height; y++) {
+                    const uint8_t *src = frame_buffer_rgb888
+                                       + ((y0 + y) * fb_width_in + x0) * 3;
+                    uint8_t *dst_row = fb_mmap
+                                     + (frame_off_y + (int32_t)(y0 + y) * FB_UPSCALE) * fb_line_length
+                                     + (int32_t)(frame_off_x + (int32_t)x0 * FB_UPSCALE) * 4;
+                    for (int32_t sy = 0; sy < FB_UPSCALE; sy++) {
+                        const uint8_t *s = src;
+                        uint32_t *dst = (uint32_t *)(dst_row + (int32_t)sy * fb_line_length);
+                        for (uint32_t x = 0; x < view_width; x++) {
+                            uint32_t pix = 0xFF000000U |
+                                           ((uint32_t)s[0] << 16) |
+                                           ((uint32_t)s[1] << 8)  |
+                                           ((uint32_t)s[2]);
+                            dst[0] = pix;
+                            dst[1] = pix;
+                            dst += FB_UPSCALE;
+                            s += 3;
+                        }
+                    }
+                }
+                sync_and_throttle();
+                return;
+            }
+#endif
             for (uint32_t y = 0; y < view_height; y++) {
                 uint32_t src_y = y0 + y;
                 int32_t dst_y = frame_off_y + (int32_t)src_y * FB_UPSCALE;
