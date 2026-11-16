@@ -136,10 +136,6 @@ typedef struct Global_State {
     Linglong_Config *linglong_cfg;
     Nano_GFX *llgfx; // 玲珑仪专用gfx
 
-    // BadApple相关
-    uint32_t ba_frame_count;
-    uint64_t ba_begin_timestamp;
-
 } Global_State;
 
 // 触屏滑动手势方向（通用）：事件层不做手势识别，由消费者用 UI_Swipe_Tracker

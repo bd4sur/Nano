@@ -300,8 +300,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -359,8 +357,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // Nano-Pod: Waveshare PocketTerm35（树莓派5 + 3.5寸DPI屏640x480 + USB全键盘 + 触屏）
@@ -394,8 +390,6 @@ uint8_t platform_get_master_volume(void);
     #define TTS_ENABLED
     #define ASR_SERVER_LOG_PATH "/home/bd4sur/ai/_model/FunASR/log.txt"
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 
 
@@ -445,8 +439,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -495,8 +487,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -554,8 +544,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -619,8 +607,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -669,8 +655,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     #define MATMUL_PTHREAD
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -719,8 +703,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -769,8 +751,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -819,8 +799,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -869,8 +847,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    // #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -919,8 +895,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    // #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -955,8 +929,6 @@ uint8_t platform_get_master_volume(void);
     // #define ASR_ENABLED
     // #define TTS_ENABLED
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -994,8 +966,6 @@ uint8_t platform_get_master_volume(void);
     // #define ASR_ENABLED
     // #define TTS_ENABLED
 
-    // BadApple（不启用：badapple.h 内嵌数据显著增大 wasm 体积）
-    // #define BADAPPLE_ENABLED
 
 
 // ===============================================================================
@@ -1044,8 +1014,6 @@ uint8_t platform_get_master_volume(void);
     // 是否使用pthread实现的matmul？（用于OpenWrt等对OpenMP不友好的场景）
     // #define MATMUL_PTHREAD
 
-    // BadApple
-    // #define BADAPPLE_ENABLED
 
 // ===============================================================================
 // 玲珑：M5Stack Core2 / CoreS3（ESP32 掌机；显示/触屏/音频/IMU/电源均经
@@ -1067,8 +1035,6 @@ uint8_t platform_get_master_volume(void);
     // UPS（电量/充电状态经 M5.Power，见 hal_power_m5esp.cpp）
     #define UPS_ENABLED
 
-    // BadApple
-    #define BADAPPLE_ENABLED
 
 #else
 

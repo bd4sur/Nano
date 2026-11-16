@@ -18,7 +18,7 @@
 //     帧回调体对齐 main.c 拆分环路消费者的语义。
 //
 //   单线程说明：生产/消费均在浏览器主线程（JS 事件循环）内交错执行，无并发；
-//   SPSC 队列保留结构语义，无需内存屏障。ino 拆分环路的「玲珑仪/时光集忙提示」
+//   SPSC 队列保留结构语义，无需内存屏障。ino 拆分环路的「玲珑仪忙提示」
 //   （生产端即时 gfx_draw_busy）在 WASM 下省略——渲染阻塞时 JS 回调同样延后，
 //   忙提示无法早于长帧上屏，无意义。
 
@@ -96,13 +96,13 @@ static void wasm_dispatch_input_events(Key_Event *ev_prod) {
     }
     // 按键事件：短按下降沿(-1)可靠投递；长按/重复动作(-2)可丢弃投递
     if (ev_prod->key_code != NANO_KEY_IDLE && ev_prod->key_edge < 0) {
-        // 玲珑仪/时光集：生产端即时忙提示（对齐 linglong_m5core2.ino 与 main.c 拆分
+        // 玲珑仪：生产端即时忙提示（对齐 linglong_m5core2.ino 与 main.c 拆分
         // 环路：按键事件入队前先把「正在计算」画进帧缓冲并 gfx_refresh 推帧——
         // hal_display_wasm 更新 RGBA side buffer 并 epoch++，页面渲染循环下一 rAF
         // 即上屏，用户在长帧渲染开始前立即看到反馈；业务下一帧渲染先清屏重绘，
         // 提示自然消失，不残留。gfx_draw_busy 是图形层既有设施（graphics.c），
         // 此处仅调用，不改动任何平台无关业务模块。）
-        if (global_state->STATE == STATE_LINGLONG || global_state->STATE == STATE_ALBUM) {
+        if (global_state->STATE == STATE_LINGLONG) {
             gfx_draw_busy(global_state->gfx);
             gfx_refresh(global_state->gfx);
             // 标记「忙提示刚上屏」：消费者帧回调本帧跳过（不消费不渲染），

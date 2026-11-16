@@ -243,9 +243,9 @@ static uint16_t* gfx_rgb565_ptr_single(Nano_GFX *gfx, uint32_t x, uint32_t y, ui
 // 自上次 gfx_refresh 推帧以来被修改像素的包围盒，见 graphics.h 字段注释。
 // 图形层所有写路径（像素函数/快路径/memcpy 类整帧操作）内部自动维护；
 // 绕过图形层直写帧缓冲的模块（ui_ripple 行指针直写）须自行 gfx_mark_dirty*。
-// 注意：Core1 忙提示（.ino loop 中 STATE_LINGLONG/STATE_ALBUM 的 gfx_draw_busy +
+// 注意：Core1 忙提示（.ino loop 中 STATE_LINGLONG 的 gfx_draw_busy +
 // gfx_refresh）也会读写脏区字段，与 Core0 的累积非原子——但该场景下 Core0 下一帧
-// 必为全屏重绘（玲珑仪整帧转换/相册整图绘制均置全屏脏），竞争后果有界，可接受。
+// 必为全屏重绘（玲珑仪整帧转换置全屏脏），竞争后果有界，可接受。
 
 // 将 [x0,x1) x [y0,y1) 并入脏区（自动裁剪到屏幕；空区间忽略）
 static inline void gfx_dirty_expand(Nano_GFX *gfx, int32_t x0, int32_t y0, int32_t x1, int32_t y1) {

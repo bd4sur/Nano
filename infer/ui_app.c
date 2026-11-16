@@ -42,10 +42,6 @@
     #include "tts.h"
 #endif
 
-#ifdef BADAPPLE_ENABLED
-    #include "badapple.h"
-#endif
-
 #include "flip.h"
 
 #include "ui_genetic.h"
@@ -70,15 +66,11 @@
 
 #include "ui_goldminer.h"
 
-#include "ui_particlelife.h"
-
 #include "ui_ripple.h"
 
 #include "ui_scheme_app.h"
 
 #include "ui_water.h"
-
-#include "ui_tetris.h"
 
 #include "ui_ebook.h"
 
@@ -95,12 +87,6 @@
 // 全局变量（TODO 临时，后续要全部移到全局状态上下文中）
 
 static uint64_t last_splash_timestamp = 0;
-
-static int32_t s_album_count = 1;
-static int32_t s_album_index = 0;
-static char **s_album_path_list = NULL;
-static int32_t s_album_is_autoplay = 0;
-static uint64_t s_album_refresh_timestamp = 0;
 
 // 指向图像缓冲区的指针
 static uint8_t *s_image_file_buffer = NULL;
@@ -201,7 +187,6 @@ static int32_t ui_app_state_is_menu(int32_t state) {
                                     // 直接消费触屏流，十六宫格软按键整体退场
                                     // （见 ui_musicbox.c 的 Musicbox_Ui / musicbox_handle_touch）
         case STATE_GOLDMINER: // 黄金矿工同样直接消费触屏流（返回虚拟按钮/点击放钩），抑制宫格软按键
-        case STATE_TETRIS:   // 俄罗斯方块：虚拟按键/退出确认模态框直接消费触屏流，抑制宫格软按键
         case STATE_FLIP:     // 番茄表（电子沙漏）：顶栏/仪表/控制条全部为自绘触屏控件，
                              // 十六宫格软按键（旧版「节流/退出/画风/复位」角落格）已整体退场
                              // （见 ui_app_flip_event_handler 的触屏命中判定）
@@ -545,8 +530,6 @@ void ui_init(Key_Event *key_event, Global_State *global_state) {
     global_state->yaw = 0.0f;
     global_state->imu_temperature = 0.0f;
     global_state->is_full_refresh = 1;
-    global_state->ba_frame_count = 0;
-    global_state->ba_begin_timestamp = 0;
 
     global_state->ui_font = GFX_FONT_ALPHA_16;
 }
@@ -621,12 +604,8 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
     static const wchar_t *game_menu_items[] = {
         L"灵机应用程序",
         L"黄金矿工",
-        L"Bad Apple!",
-        L"康威生命游戏",
         L"遗传算法求解旅行商问题",
         L"遗传算法拟合图像",
-        L"俄罗斯方块",
-        L"粒子生命",
         L"水波",
         L"水池",
         L"日历",
@@ -634,10 +613,18 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
         // L"曼德博集" / L"生命游戏Scheme"：已并入“灵机应用程序”（业务资源目录 app/
         // 下的 Scheme App 动态列表，见 ui_scheme_app.c）
         // L"小鹦鹉笼",  // 原入口：小鹦鹉笼已并入“鹦鹉笼”的统一模型菜单（[轻] 前缀条目），注释保留备查
+        // 原“俄罗斯方块”入口已移除：C 版（STATE_TETRIS）退场，俄罗斯方块仅保留
+        // Scheme 实现（app/tetris.scm，经“灵机应用程序”入口启动）
+        // 原“康威生命游戏”入口已移除：C 版（STATE_GAMEOFLIFE）退场，生命游戏仅保留
+        // Scheme 实现（app/gol.scm，经“灵机应用程序”入口启动）
+        // 原“粒子生命”入口已移除：C 版（STATE_PARTICLELIFE）退场，粒子生命仅保留
+        // Scheme 实现（app/particlelife.scm，经“灵机应用程序”入口启动）
+        // 原“Bad Apple!”入口已移除：C 版（STATE_BADAPPLE）退场，Bad Apple 仅保留
+        // Scheme 实现（app/badapple.scm，经“灵机应用程序”入口启动）
     };
     global_state->w_menu_main->title = L"小游戏";
     global_state->w_menu_main->items = game_menu_items;
-    global_state->w_menu_main->item_num = 11;
+    global_state->w_menu_main->item_num = 7;
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
 }
 
@@ -645,16 +632,12 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
     switch (ms->current_item_index) {
         case 0: return STATE_SCHEME_APP_LIST;  // 灵机应用程序（Scheme App 动态列表）
         case 1: return STATE_GOLDMINER;
-        case 2: return STATE_BADAPPLE;
-        case 3: return STATE_GAMEOFLIFE;
-        case 4: return STATE_GENETIC_TSP;
-        case 5: return STATE_GENETIC;
-        case 6: return STATE_TETRIS;
-        case 7: return STATE_PARTICLELIFE;
-        case 8: return STATE_RIPPLE;
-        case 9: return STATE_WATER;
-        case 10: return STATE_CALENDAR;
-        // case 11: 原“体积云”入口已移除（保留 STATE_CLOUD 状态处理，当前无菜单入口）
+        case 2: return STATE_GENETIC_TSP;
+        case 3: return STATE_GENETIC;
+        case 4: return STATE_RIPPLE;
+        case 5: return STATE_WATER;
+        case 6: return STATE_CALENDAR;
+        // case 7: 原“体积云”入口已移除（保留 STATE_CLOUD 状态处理，当前无菜单入口）
         // 原“曼德博集”/“生命游戏Scheme”入口已并入“灵机应用程序”（case 0）
         // case 12: 原“小鹦鹉笼”入口已移除（并入鹦鹉笼模型菜单，条目带 [轻] 前缀）
         default: return STATE_MAIN_MENU;
@@ -677,11 +660,10 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
 // 布局（几何基准沿用十六宫格：单格宽度 = 屏宽/4，与旧宫格单格同宽）：
 //   +---------------------------+---------+
 //   | 番茄表 | 鹦鹉笼 | 玲珑仪  |  返回   |  <- 左侧滚动区：3 列 x 一屏 4 行
-//   | 电子书 | 音乐盒 | 时光集  |  设置   |     单格 = 屏宽/4 x 屏高/4（80x60 @320x240）
-//   | 小游戏 | 频谱仪 | 寻呼机  |  自述   |     一屏恰好 12 格，与旧宫格单格完全同尺寸
-//   | 计步器 | 词典   | 控制台  |  关机   |  <- 右侧固定区：1 列 x 4 行（静态）
+//   | 电子书 | 音乐盒 | 小游戏  |  设置   |     单格 = 屏宽/4 x 屏高/4（80x60 @320x240）
+//   | 频谱仪 | 寻呼机 | 计步器  |  自述   |     一屏恰好 12 格，与旧宫格单格完全同尺寸
+//   | 词典   | 控制台 | 灵机应用 |  关机   |  <- 右侧固定区：1 列 x 4 行（静态）
 //   +---------------------------+---------+     单格 = 屏宽/4 x 屏高/4
-//   | 灵机应用 |      |         |         |  <- 第 5 行，需上拖才可见
 // 单格内的图标/文字排版与旧十六宫格逐像素一致：图标（36x36）中心位于格子中心
 // 偏上 8px，文字（12px alpha，中心对齐）再往下 26px。
 //
@@ -725,14 +707,12 @@ static const Ui_App_Menu_Item s_app_menu_items[] = {
     { L"玲珑仪",   PLATFORM_ROOT_DIR "/icon/linglong.png" },
     { L"电子书",   PLATFORM_ROOT_DIR "/icon/ebook.png" },
     { L"音乐盒",   PLATFORM_ROOT_DIR "/icon/music.png" },
-    { L"时光集",   PLATFORM_ROOT_DIR "/icon/album.png" },
     { L"小游戏",   PLATFORM_ROOT_DIR "/icon/game.png" },
     { L"频谱仪",   PLATFORM_ROOT_DIR "/icon/spectrogram.png" },
     { L"寻呼机",   PLATFORM_ROOT_DIR "/icon/ptt.png" },
     { L"计步器",   PLATFORM_ROOT_DIR "/icon/pedometer.png" },
     { L"词典",     PLATFORM_ROOT_DIR "/icon/dict.png" },
     { L"控制台",   PLATFORM_ROOT_DIR "/icon/animac.png" },
-    // 第 13 项：用于演示并验证滚动功能（一屏 12 格 = 4 行，本项位于第 5 行）
     { L"灵机应用", PLATFORM_ROOT_DIR "/icon/default.png" },
 };
 
@@ -999,12 +979,11 @@ static int32_t ui_app_main_menu_activate_item(Key_Event *key_event, Global_State
         case 2:  return STATE_LINGLONG;                                                // 玲珑仪
         case 3:  ui_ebook_menu_init(key_event, global_state); return STATE_EBOOK;      // 电子书
         case 4:  ui_musicbox_menu_init(key_event, global_state); return STATE_MUSICBOX_MENU; // 音乐盒
-        case 5:  return STATE_ALBUM;                                                   // 时光集
-        case 6:  init_game_menu(key_event, global_state); return STATE_GAME_MENU;      // 小游戏
-        case 7:  return STATE_SPECTROGRAM;                                             // 频谱仪
-        case 8:  ui_ofdm_menu_init(key_event, global_state); return STATE_OFDM_MENU;   // 寻呼机
-        case 9:  return STATE_PEDOMETER;                                               // 计步器
-        case 10:                                                                       // 词典
+        case 5:  init_game_menu(key_event, global_state); return STATE_GAME_MENU;      // 小游戏
+        case 6:  return STATE_SPECTROGRAM;                                             // 频谱仪
+        case 7:  ui_ofdm_menu_init(key_event, global_state); return STATE_OFDM_MENU;   // 寻呼机
+        case 8:  return STATE_PEDOMETER;                                               // 计步器
+        case 9:                                                                        // 词典
             // 索引就绪（缺失/失效则带进度构建）后进入查询状态；失败则停留在主菜单
             // （错误画面已显示，停留片刻后重绘本菜单）
             if (ui_dict_enter(key_event, global_state) == 0) {
@@ -1013,8 +992,8 @@ static int32_t ui_app_main_menu_activate_item(Key_Event *key_event, Global_State
             sleep_in_ms(1500);
             ui_app_main_menu_draw(key_event, global_state, 1);
             return STATE_MAIN_MENU;
-        case 11: return STATE_ANIMAC_INIT;                                             // 控制台
-        case 12: return STATE_SCHEME_APP_LIST;                                         // 灵机应用
+        case 10: return STATE_ANIMAC_INIT;                                             // 控制台
+        case 11: return STATE_SCHEME_APP_LIST;                                         // 灵机应用
         default: return STATE_MAIN_MENU;
     }
 }
@@ -1187,9 +1166,9 @@ void ui_app_main_menu_event_handler(Key_Event *key_event, Global_State *global_s
             case NANO_KEY_7: item_index = 6; break;
             case NANO_KEY_8: item_index = 7; break;
             case NANO_KEY_9: item_index = 8; break;
-            case NANO_KEY_left:  item_index = 9;  break; // 计步器
-            case NANO_KEY_0:     item_index = 10; break; // 词典
-            case NANO_KEY_right: item_index = 11; break; // 控制台
+            case NANO_KEY_left:  item_index = 9;  break; // 词典
+            case NANO_KEY_0:     item_index = 10; break; // 控制台
+            case NANO_KEY_right: item_index = 11; break; // 灵机应用
             case NANO_KEY_esc:   global_state->STATE = STATE_SPLASH_SCREEN; return;
             case NANO_KEY_shift: global_state->STATE = STATE_SETTING_MENU;  return;
             case NANO_KEY_ctrl:  global_state->STATE = STATE_README;        return;
@@ -1440,156 +1419,6 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 #endif
 
     gfx_refresh(global_state->gfx);
-}
-
-
-// ===============================================================================
-// Bad Apple
-// ===============================================================================
-
-void ui_app_badapple_render_frame(Key_Event *key_event, Global_State *global_state) {
-#ifdef BADAPPLE_ENABLED
-    wchar_t ba_str[20];
-    uint32_t center_x = global_state->gfx->width / 2;
-    uint32_t center_y = global_state->gfx->height / 2;
-    if (global_state->timestamp - global_state->ba_begin_timestamp >= 100 * global_state->ba_frame_count) {
-        gfx_soft_clear(global_state->gfx);
-        for (uint32_t row = 0; row < 64; row++) {
-            uint32_t page_0 = bad_apple_10fps_64x64[global_state->ba_frame_count * 128 + row * 2];
-            uint32_t page_1 = bad_apple_10fps_64x64[global_state->ba_frame_count * 128 + row * 2 + 1];
-            for (uint32_t col = 0; col < 32; col++) {
-                gfx_draw_point(global_state->gfx, col + (center_x - 32), row + (center_y - 32), 255, 255, 255, (page_0 >> (32 - 1 - col)) & 0x1);
-            }
-            for (uint32_t col = 32; col < 64; col++) {
-                gfx_draw_point(global_state->gfx, col + (center_x - 32), row + (center_y - 32), 255, 255, 255, (page_1 >> (32 - 1 - (col-32))) & 0x1);
-            }
-        }
-
-        swprintf(ba_str, 20, L"%04d / 2193", global_state->ba_frame_count);
-        gfx_draw_textline_centered(global_state->gfx, ba_str, global_state->gfx->width/2, global_state->gfx->height - 8, 255, 255, 255, 1);
-
-        gfx_refresh(global_state->gfx);
-        global_state->ba_frame_count++;
-
-        if (global_state->ba_frame_count > 2193) {
-            global_state->ba_frame_count = 0;
-            global_state->ba_begin_timestamp = global_state->timestamp;
-        }
-    }
-#endif
-}
-
-
-
-// ===============================================================================
-// Game of Life
-// ===============================================================================
-
-static uint8_t *s_ui_app_gol_field_0 = NULL;
-static uint8_t *s_ui_app_gol_field_1 = NULL;
-static uint8_t s_ui_app_gol_field_page = 0;
-static uint64_t s_ui_app_gol_refresh_timestamp = 0;
-static uint32_t s_ui_app_gol_step_count = 0;
-static int32_t s_gol_width = 0;
-static int32_t s_gol_height = 0;
-
-// 每个格子对应的像素块边长（2px×2px 一个格子，计算量降为 1/4）
-#define UI_APP_GOL_CELL_PX (2)
-
-static inline uint8_t ui_app_gol_get_cell(uint8_t *field, int32_t w, int32_t h, int32_t x, int32_t y) {
-    int32_t byte_index = (y * w + x) / 8;
-    int32_t bit_rem = (y * w + x) % 8;
-    return ((field[byte_index] & ((uint8_t)0x80u >> bit_rem)) != 0);
-}
-
-static inline void ui_app_gol_set_cell(uint8_t *field, int32_t w, int32_t h, int32_t x, int32_t y, uint8_t value) {
-    int32_t byte_index = (y * w + x) / 8;
-    int32_t bit_rem = (y * w + x) % 8;
-    uint8_t oldv = field[byte_index];
-    field[byte_index] = (oldv & ~((uint8_t)(0x80u >> bit_rem))) | ((uint8_t)(!!value << (7 - bit_rem)));
-}
-
-void ui_app_gol_init(Key_Event *key_event, Global_State *global_state, int32_t gol_width, int32_t gol_height) {
-    s_gol_width = gol_width;
-    s_gol_height = gol_height;
-
-    s_ui_app_gol_step_count = 0;
-    s_ui_app_gol_field_page = 0;
-    s_ui_app_gol_refresh_timestamp = global_state->timestamp;
-    uint64_t ts = global_state->timestamp;
-
-    // 重新进入/刷新时先释放旧场，避免覆盖式分配造成泄漏（初次为NULL，free(NULL)安全）
-    if (s_ui_app_gol_field_0) free(s_ui_app_gol_field_0);
-    if (s_ui_app_gol_field_1) free(s_ui_app_gol_field_1);
-    s_ui_app_gol_field_0 = (uint8_t*)platform_calloc(gol_width * gol_height / 8, sizeof(uint8_t));
-    s_ui_app_gol_field_1 = (uint8_t*)platform_calloc(gol_width * gol_height / 8, sizeof(uint8_t));
-
-    for (uint32_t x = 0; x < gol_width; x++) {
-        for (uint32_t y = 0; y < gol_height; y++) {
-            uint8_t s = random_u32(&ts) % 2;
-            ui_app_gol_set_cell(s_ui_app_gol_field_0, gol_width, gol_height, x, y, s);
-            ui_app_gol_set_cell(s_ui_app_gol_field_1, gol_width, gol_height, x, y, s);
-        }
-    }
-}
-
-void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state) {
-    // 节流：不大于50fps
-    // if (global_state->timestamp - s_ui_app_gol_refresh_timestamp < 20) {
-    //     return;
-    // }
-    // s_ui_app_gol_refresh_timestamp = global_state->timestamp;
-    gfx_soft_clear(global_state->gfx);
-
-    uint32_t total_count = 0;
-
-    uint8_t *field     = (s_ui_app_gol_field_page) ? s_ui_app_gol_field_0 : s_ui_app_gol_field_1;
-    uint8_t *field_new = (s_ui_app_gol_field_page) ? s_ui_app_gol_field_1 : s_ui_app_gol_field_0;
-    for (uint32_t x = 0; x < s_gol_width; x++) {
-        for (uint32_t y = 0; y < s_gol_height; y++) {
-            // 获取某个格子的8邻域
-            uint32_t count = 0;
-            uint32_t x_a = (x == 0) ? (s_gol_width-1) : (x-1);
-            uint32_t x_b = (x == (s_gol_width-1)) ? 0 : (x+1);
-            uint32_t y_a = (y == 0) ? (s_gol_height-1) : (y-1);
-            uint32_t y_b = (y == (s_gol_height-1)) ? 0 : (y+1);
-            uint8_t n1 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_a, y_a); count += (n1 != 0);
-            uint8_t n2 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height,  x , y_a); count += (n2 != 0);
-            uint8_t n3 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_b, y_a); count += (n3 != 0);
-            uint8_t n4 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_a,  y ); count += (n4 != 0);
-            uint8_t n5 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height,  x ,  y ); // self
-            uint8_t n6 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_b,  y ); count += (n6 != 0);
-            uint8_t n7 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_a, y_b); count += (n7 != 0);
-            uint8_t n8 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height,  x , y_b); count += (n8 != 0);
-            uint8_t n9 = ui_app_gol_get_cell(field, s_gol_width, s_gol_height, x_b, y_b); count += (n9 != 0);
-
-            uint8_t new_state = 0;
-            if (n5 == 0) {
-                new_state = (count == 3) ? 1 : 0;
-            }
-            else {
-                new_state = (count == 2 || count == 3) ? 1 : 0;
-            }
-
-            ui_app_gol_set_cell(field_new, s_gol_width, s_gol_height, x, y, new_state);
-
-            if (new_state) {
-                // 每格绘制为 2×2 像素块
-                gfx_draw_rectangle(global_state->gfx, (uint32_t)(x * UI_APP_GOL_CELL_PX), (uint32_t)(y * UI_APP_GOL_CELL_PX),
-                    UI_APP_GOL_CELL_PX, UI_APP_GOL_CELL_PX, 0, 255, 255, 1);
-                total_count++;
-            }
-        }
-    }
-
-    wchar_t text[100];
-    swprintf(text, 100, L"康威生命游戏 | 迭代:%u | 存活:%u | 密度:%.2f%%", s_ui_app_gol_step_count, total_count, (float)total_count / (float)(s_gol_width * s_gol_height) * 100);
-    gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, 12, 39, 39, 39, 3);
-    gfx_draw_textline(global_state->gfx, text, 0, 0, 255, 255, 255, 1);
-
-    gfx_refresh(global_state->gfx);
-    s_ui_app_gol_field_page = 1 - s_ui_app_gol_field_page;
-    s_ui_app_gol_step_count++;
 }
 
 
@@ -4505,11 +4334,11 @@ static void ui_app_animac_cleanup(Key_Event *key_event, Global_State *global_sta
 }
 
 // 退出确认模态框几何（居中圆角对话框 + 两个圆角按钮）——通用组件，
-// 供控制台退出、俄罗斯方块退出、以及灵机 App 的 (Ui.confirm)/(App.exit) 共用
+// 供控制台退出、以及灵机 App 的 (Ui.confirm)/(App.exit) 共用
 #define UI_ANIMAC_EXIT_DIALOG_W   (200)
 #define UI_ANIMAC_EXIT_DIALOG_H   (96)
 #define UI_ANIMAC_EXIT_DIALOG_H_MSG (110)  // 带正文时加高一行（12px 字模）
-#define UI_ANIMAC_EXIT_BTN_W      (84)   // 两按钮（控制台/俄罗斯方块等 C 场景）
+#define UI_ANIMAC_EXIT_BTN_W      (84)   // 两按钮（控制台等 C 场景）
 #define UI_ANIMAC_EXIT_BTN_W3     (54)   // 三按钮（灵机 App：确认/后台/留下）
 #define UI_ANIMAC_EXIT_BTN_H      (30)
 #define UI_ANIMAC_EXIT_BTN_GAP    (12)
@@ -5292,34 +5121,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         break;
 
     /////////////////////////////////////////////
-    // Bad Apple! 动画
-    /////////////////////////////////////////////
-
-    case STATE_BADAPPLE:
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            global_state->ba_begin_timestamp = global_state->timestamp;
-            global_state->ba_frame_count = 0;
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-#ifdef BADAPPLE_ENABLED
-        ui_app_badapple_render_frame(key_event, global_state);
-#else
-        ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, L"未启用 Bad Apple ～", 0, 0);
-        ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
-#endif
-
-        // 按A键返回主菜单
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
-            global_state->STATE = STATE_MAIN_MENU;
-        }
-
-        break;
-
-
-    /////////////////////////////////////////////
     // FLIP流体模拟
     /////////////////////////////////////////////
 
@@ -5355,32 +5156,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 逻辑更新 + 渲染一帧
         ui_goldminer_render_frame(key_event, global_state);
-
-        break;
-    }
-
-
-    /////////////////////////////////////////////
-    // 粒子生命
-    /////////////////////////////////////////////
-
-    case STATE_PARTICLELIFE: {
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_particlelife_init(key_event, global_state);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        // 按键处理（A返回 / D或2重置）；返回则释放粒子数组并跳过一帧渲染
-        ui_particlelife_event_handler(key_event, global_state);
-        if (global_state->STATE != STATE_PARTICLELIFE) {
-            ui_particlelife_on_exit();
-            break;
-        }
-
-        // 逻辑更新 + 渲染一帧
-        ui_particlelife_render_frame(key_event, global_state);
 
         break;
     }
@@ -5501,29 +5276,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 模拟 + 渲染一帧（拖动交互在 render_frame 内完成）
         ui_water_render_frame(key_event, global_state);
-
-        break;
-    }
-
-
-    /////////////////////////////////////////////
-    // 俄罗斯方块
-    /////////////////////////////////////////////
-
-    case STATE_TETRIS: {
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_tetris_init(key_event, global_state);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        // 按键处理（A返回 / 移动旋转落底）；返回菜单则跳过一帧渲染
-        ui_tetris_event_handler(key_event, global_state);
-        if (global_state->STATE != STATE_TETRIS) break;
-
-        // 重力更新 + 渲染一帧
-        ui_tetris_render_frame(key_event, global_state);
 
         break;
     }
@@ -5787,34 +5539,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
 
     /////////////////////////////////////////////
-    // 元胞自动机：Conway的生命游戏
-    /////////////////////////////////////////////
-
-    case STATE_GAMEOFLIFE:
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_app_gol_init(key_event, global_state,
-                (int32_t)global_state->gfx->width / UI_APP_GOL_CELL_PX, (int32_t)global_state->gfx->height / UI_APP_GOL_CELL_PX);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        ui_app_gol_render_frame(key_event, global_state);
-
-        // 按A键返回主菜单
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
-            global_state->STATE = STATE_MAIN_MENU;
-        }
-        // 按D键刷新
-        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
-            ui_app_gol_init(key_event, global_state,
-                (int32_t)global_state->gfx->width / UI_APP_GOL_CELL_PX, (int32_t)global_state->gfx->height / UI_APP_GOL_CELL_PX);
-        }
-
-        break;
-
-
-    /////////////////////////////////////////////
     // 演化算法
     /////////////////////////////////////////////
 
@@ -6024,190 +5748,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         ui_settings_editor_event(key_event, global_state);
-
-        break;
-
-
-    /////////////////////////////////////////////
-    // 时光集：相册
-    /////////////////////////////////////////////
-
-    case STATE_ALBUM:
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-
-            s_album_index = 0; // 进入相册时重置浏览索引，防止越出本次文件数范围
-
-            gfx_soft_clear(global_state->gfx);
-            gfx_draw_textline_centered(global_state->gfx, L"枚举图片文件", 160, 10, 0x66, 0xcc, 0xff, 1);
-
-            const char *path = PLATFORM_ROOT_DIR "/image";
-
-            // 获取数量
-            int32_t count = list_files(path, NULL);
-            if (count < 0) {
-                printf("打开目录失败\n");
-                break;
-            }
-            if (count == 0) {
-                printf("目录为空\n");
-                break;
-            }
-
-            // 分配指针数组
-            s_album_path_list = (char **)platform_malloc(count * sizeof(char *));
-            if (!s_album_path_list) {
-                printf("内存不足\n");
-                break;
-            }
-
-            // 获取文件名
-            int32_t actual = list_files(path, s_album_path_list);
-            if (actual < 0) {
-                printf("读取失败\n");
-                free(s_album_path_list);
-                break;
-            }
-            s_album_count = actual;
-
-            // 对文件名列表进行升序排序
-            sort_strings(s_album_path_list, actual, 0);
-
-            // 拼接成完整路径
-            for (int32_t i = 0; i < actual; i++) {
-                const char *filename = s_album_path_list[i];
-                if (filename == NULL) continue;
-
-                size_t path_len = strlen(path);
-                size_t name_len = strlen(filename);
-                int need_sep = (path_len == 0 || path[path_len - 1] == '/') ? 0 : 1;
-
-                char *full_path = (char *)platform_malloc(path_len + need_sep + name_len + 1);
-                if (full_path == NULL) {
-                    printf("拼接路径内存不足\n");
-                    continue;
-                }
-
-                snprintf(full_path, path_len + need_sep + name_len + 1,
-                         "%s%s%s", path, need_sep ? "/" : "", filename);
-
-                free(s_album_path_list[i]);
-                s_album_path_list[i] = full_path;
-            }
-
-            // 显示文件列表
-            printf("目录 %s 中有 %d 个文件:\n", path, (int)actual);
-            for (int32_t i = 0; i < actual; i++) {
-                wchar_t namew[128];
-                _mbstowcs(namew, s_album_path_list[i], 128);
-                gfx_draw_textline_centered(global_state->gfx, namew, 160, 10 + (i+1) * 17, 0xff, 0xff, 0xff, 1);
-                printf("  [%d] %s\n", (int)i, s_album_path_list[i]);
-            }
-
-
-            gfx_refresh(global_state->gfx);
-            sleep_in_ms(3000);
-
-
-
-
-
-
-
-
-
-            gfx_draw_busy(global_state->gfx);
-            gfx_refresh(global_state->gfx);
-            ui_draw_image(key_event, global_state, s_album_path_list[s_album_index % s_album_count], 1);
-            gfx_refresh(global_state->gfx);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        // 长短按1键：自动放映
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_1) {
-            s_album_is_autoplay++;
-            s_album_is_autoplay = s_album_is_autoplay % 2;
-            s_album_refresh_timestamp = global_state->timestamp;
-
-            ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
-            // if (s_album_is_autoplay) {
-            //     gfx_draw_textline(global_state->gfx, L"★", 0, 0, 0x00, 0xff, 0x00, 1);
-            // }
-            gfx_refresh(global_state->gfx);
-        }
-        // 长短按2/4/5/7/8/*/0键，切换上一张图片
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && (
-            (key_event->key_code == NANO_KEY_2) ||
-            (key_event->key_code == NANO_KEY_4) || (key_event->key_code == NANO_KEY_5) ||
-            (key_event->key_code == NANO_KEY_7) || (key_event->key_code == NANO_KEY_8) ||
-            (key_event->key_code == NANO_KEY_left) || (key_event->key_code == NANO_KEY_0)
-        )) {
-            ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
-            gfx_refresh(global_state->gfx);
-            s_album_index--;
-            if (s_album_index < 0) s_album_index = s_album_count - 1;
-            s_album_index = s_album_index % s_album_count;
-        }
-        // 长短按A键返回主菜单
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
-            global_state->STATE = STATE_MAIN_MENU;
-            // 释放内存
-            for (int32_t i = 0; i < s_album_count; i++) {
-                printf("Freeing %s\n", s_album_path_list[i]);
-                free(s_album_path_list[i]);     // 释放每个文件名
-            }
-            free(s_album_path_list);            // 释放指针数组
-            s_album_path_list = NULL;
-            // 释放图像文件缓冲区与RGB888像素缓冲区（225KB+），避免常驻PSRAM造成堆碎片
-            if (s_image_file_buffer != NULL) {
-                free(s_image_file_buffer);
-                s_image_file_buffer = NULL;
-            }
-            if (s_image_rgb888_buffer != NULL) {
-                free(s_image_rgb888_buffer);
-                s_image_rgb888_buffer = NULL;
-            }
-            s_image_file_size = 0;
-            s_image_decode_ready = 0;
-            s_image_filename_buffer[0] = '\0'; // 使下次进入相册时重新读文件解码
-            printf("Free done.\n");
-        }
-        // 长短按3/6/B/9/C/#/D键，切换下一张图片
-        else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && (
-            (key_event->key_code == NANO_KEY_3) ||
-            (key_event->key_code == NANO_KEY_6) || (key_event->key_code == NANO_KEY_shift) ||
-            (key_event->key_code == NANO_KEY_9) || (key_event->key_code == NANO_KEY_ctrl) ||
-            (key_event->key_code == NANO_KEY_right) || (key_event->key_code == NANO_KEY_enter)
-        )) {
-            ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
-            gfx_refresh(global_state->gfx);
-            s_album_index++;
-            s_album_index = s_album_index % s_album_count;
-        }
-
-        // 自动放映
-        if (s_album_is_autoplay) {
-            // 每6000ms切换
-            if (global_state->timestamp - s_album_refresh_timestamp >= 6000) {
-                ui_draw_image(key_event, global_state, s_album_path_list[s_album_index], 1);
-                // gfx_draw_textline(global_state->gfx, L"★", 0, 0, 0x00, 0xff, 0x00, 1);
-                gfx_refresh(global_state->gfx);
-                s_album_index++;
-                s_album_index = s_album_index % s_album_count;
-                s_album_refresh_timestamp = global_state->timestamp;
-            }
-            else {
-                // int32_t aa = (float)(global_state->timestamp - s_album_refresh_timestamp) / 6000.0f * 360;
-                // gfx_draw_circle_fill(global_state->gfx, 6, 6, 6, 0xff, 0xff, 0xff, 1);
-                // gfx_draw_sector(global_state->gfx, 6, 6, 6, 0, aa, 0x66, 0xcc, 0xff, 1);
-
-                int32_t w = (float)(global_state->timestamp - s_album_refresh_timestamp) / 6000.0f * global_state->gfx->width;
-                // gfx_draw_rectangle(global_state->gfx, 0, 239, global_state->gfx->width, 1, 0x00, 0x00, 0x00, 1);
-                gfx_draw_rectangle(global_state->gfx, 0, 239, w, 1, 0x00, 0xaa, 0xff, 1);
-                gfx_refresh(global_state->gfx);
-            }
-        }
 
         break;
 

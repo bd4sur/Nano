@@ -95,13 +95,11 @@ $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) $(ANIMAC_HEADERS) $(ANIMAC_DIR)/am_n
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
                         ui_ofdm.c \
-                        ui_particlelife.c \
                         ui_pedometer.c \
                         ui_pinyin_ime.c \
                         ui_ripple.c \
                         ui_softkbd.c \
                         ui_spectrogram.c \
-                        ui_tetris.c \
                         ui_water.c \
                         | $(BIN_DIR)
 	$(CC) -DNANO_POD_MP135 -DNANO_POD_LUCKFOX -DNANO_UI_SPLIT_EVENT_LOOP $(CCFLAGS) $(filter-out $(ANIMAC_DIR)/am_native_String.c,$(filter %.c,$^)) -o $@ $(LDFLAGS) -ltinyalsa -ldl -lpthread

@@ -22,12 +22,15 @@ extern "C" {
 #define STATE_GENETIC           (23)
 #define STATE_GENETIC_TSP       (24)
 #define STATE_README            (25)
-#define STATE_BADAPPLE          (26)
-#define STATE_GAMEOFLIFE        (27)
+// 编号 26 已退役：原 C 版 Bad Apple（STATE_BADAPPLE）已移除，Bad Apple 仅保留
+// Scheme 实现（app/badapple.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
+// 编号 27 已退役：原 C 版康威生命游戏（STATE_GAMEOFLIFE）已移除，生命游戏仅保留
+// Scheme 实现（app/gol.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
 #define STATE_LINGLONG          (28)
 #define STATE_FLASHMEMO         (29)
 #define STATE_TORCH             (30)
-#define STATE_ALBUM             (32)
+// 编号 32 已退役：原 C 版时光集（STATE_ALBUM）已移除，图片浏览仅保留 Scheme 实现
+// （app/album.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
 #define STATE_ASR_SETTING       (33)
 #define STATE_SETTING_INPUT     (35)
 #define STATE_FLIP              (36)
@@ -38,7 +41,8 @@ extern "C" {
 #define STATE_SPECTROGRAM       (53)
 #define STATE_GAME_MENU         (54)
 #define STATE_GOLDMINER         (55)
-#define STATE_TETRIS            (56)
+// 编号 56 已退役：原 C 版俄罗斯方块（STATE_TETRIS）已移除，俄罗斯方块仅保留
+// Scheme 实现（app/tetris.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
 #define STATE_EBOOK_READING     (57)
 #define STATE_OFDM_MENU         (58)
 #define STATE_OFDM_TX           (59)
@@ -48,7 +52,8 @@ extern "C" {
 #define STATE_OFDM_LOOPING      (63)
 #define STATE_MUSICBOX_MENU     (64)
 #define STATE_MUSICBOX_PLAYING  (65)
-#define STATE_PARTICLELIFE      (66)
+// 编号 66 已退役：原 C 版粒子生命（STATE_PARTICLELIFE）已移除，粒子生命仅保留
+// Scheme 实现（app/particlelife.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
 #define STATE_RIPPLE            (67)
 #define STATE_DICT_QUERY        (68)
 #define STATE_DICT_DETAIL       (69)
@@ -118,7 +123,7 @@ void ui_app_main_menu_scroll_reset(void);
 
 void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state);
 
-// 退出确认模态框（“是否退出？” 确认/留下；控制台与俄罗斯方块等场景共用）
+// 退出确认模态框（“是否退出？” 确认/留下；控制台与灵机 App 等场景共用）
 //   基础版：固定标题（同历史行为，兼容既有调用点）
 //   _msg 版：自定义标题 + 可选正文（正文非空时对话框自动加高一行）——
 //   供 (native Ui) 的 (Ui.confirm 标题 正文) 与 (native App) 的退出确认共用，
@@ -139,21 +144,6 @@ void    ui_exit_confirm_draw_msg_ex(Key_Event *key_event, Global_State *global_s
                                     const wchar_t *title, const wchar_t *body, int32_t with_bg);
 int32_t ui_exit_confirm_hit_msg_ex(Global_State *global_state, int32_t with_body, int32_t with_bg,
                                    int32_t x, int32_t y);   // 1=确认 2=留下 3=后台 0=未命中
-
-
-// ===============================================================================
-// Bad Apple
-// ===============================================================================
-
-void ui_app_badapple_render_frame(Key_Event *key_event, Global_State *global_state);
-
-
-// ===============================================================================
-// Game of Life
-// ===============================================================================
-
-void ui_app_gol_init(Key_Event *key_event, Global_State *global_state, int32_t gol_width, int32_t gol_height);
-void ui_app_gol_render_frame(Key_Event *key_event, Global_State *global_state);
 
 
 // ===============================================================================

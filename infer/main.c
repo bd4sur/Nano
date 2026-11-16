@@ -96,9 +96,9 @@ static void nano_input_producer_task(void *arg) {
         // 按键事件：短按下降沿(-1)可靠投递；长按/重复动作(-2)可丢弃投递
         if (ev_prod.key_code != NANO_KEY_IDLE && ev_prod.key_edge < 0) {
             int32_t reliable = (ev_prod.key_edge == -1);
-            // 玲珑仪/时光集：生产端即时忙提示（忠实移植 .ino；与消费端并发访问 gfx
+            // 玲珑仪：生产端即时忙提示（忠实移植 .ino；与消费端并发访问 gfx
             // 为 cosmetic 级风险，最坏画面撕裂、下帧自愈——ESP32 端同样如此）
-            if (global_state->STATE == STATE_LINGLONG || global_state->STATE == STATE_ALBUM) {
+            if (global_state->STATE == STATE_LINGLONG) {
                 gfx_draw_busy(global_state->gfx);
                 gfx_refresh(global_state->gfx);
             }
@@ -164,9 +164,9 @@ int main() {
         key_event->touch_y = global_state->touch_y;
         key_event->is_touching = global_state->is_touching;
 
-        // 仅玲珑仪/时光集显示忙提示（消费端侧，同 .ino）
+        // 仅玲珑仪显示忙提示（消费端侧，同 .ino）
         if (key_event->key_code != NANO_KEY_IDLE &&
-            (global_state->STATE == STATE_LINGLONG || global_state->STATE == STATE_ALBUM)) {
+            global_state->STATE == STATE_LINGLONG) {
             gfx_draw_busy(global_state->gfx);
             gfx_refresh(global_state->gfx);
         }
