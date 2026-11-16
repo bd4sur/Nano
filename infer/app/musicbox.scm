@@ -28,8 +28,9 @@
 ;;   · 返回文件列表**不停止播放**（继续放，列表里用强调色圆点标出正在播放的曲目）；
 ;;     要停就进播放页按暂停，或直接退出 App（会关闭音频）。
 ;;   · 列表页支持拖动手势滚动（C 版靠菜单控件）。
-;;   · 资源按需加载：WASM 下 music/ 属于 manifest 的 p4 层，首次进入时由
-;;     (Music.list) 触发页面挂载，本 App 显示"正在加载音乐资源…"并每 500ms 重试。
+;;   · 资源后台加载：WASM 下 music/ 和别的资源一样由页面在启动后**后台**拉进 MEMFS
+;;     （manifest 的 p2 层，无按需层）。首次进入时可能还没拉完，本 App 显示"正在加载
+;;     音乐资源…"并每 500ms 重试 (Music.list)。
 ;;
 ;; 节拍与重绘策略：
 ;;   33ms 一拍（≈30Hz）保证触屏点按采样足够密；画面**不必**每拍重绘——
@@ -383,7 +384,7 @@
     out))
 
 ;; 刷新文件列表（首次/资源就绪后调用）；空目录时置"加载中"并请求页面挂载。
-;; music/ 走 (Music.list)（WASM 下它负责触发 p4 音频层挂载）；被拉起的任意目录用
+;; music/ 走 (Music.list)（与 C 版音乐盒同一个枚举口径）；被拉起的任意目录用
 ;; (Fs.list) 自己筛。
 (define refresh_list
   (lambda ()
@@ -514,7 +515,7 @@
           (set! sel idx)
           (set! offset (max2 0 (- (+ idx 1) LIST_ROWS)))
           (set! loading #f)
-          ;; 目标不一定在 music/：关掉“等 p4 音频层挂载”的列表轮询（没意义且会白读目录）
+          ;; 目标不一定在 music/：关掉“等 music/ 就绪”的列表轮询（没意义且会白读目录）
           (set! load_polls POLL_MAX)
           (open_track idx)
           (display "[musicbox] launch ") (display a)
@@ -1237,7 +1238,7 @@
       (handle_touch)
       (handle_keys)
       (feed_audio)
-      ;; 资源未就绪：按 500ms 节奏重试列目录（首次会触发页面挂载 p4 音频层）
+      ;; 资源未就绪：按 500ms 节奏重试列目录（WASM 下 music/ 由页面后台挂载，可能还没拉完）
       (if (and (== page PAGE_LIST) (== nfiles 0) (< load_polls POLL_MAX))
           (if (>= (- ntick last_poll) POLL_EVERY)
               {

@@ -135,11 +135,6 @@
     font-size: 12px; padding: 2px 6px;
   }
   .res-item button:disabled { color: #c2c7cf; cursor: default; }
-  .res-btn2 {
-    background: #2f7fd1; color: #ffffff; border: none; border-radius: 6px;
-    font-size: 12px; padding: 6px 12px; cursor: pointer;
-  }
-  .res-btn2:disabled { background: #dfe3e9; color: #9aa1ab; }
   #res-quota { color: #8b919b; font-size: 12px; }
   #res-close { float: right; background: none; border: none; color: #8b919b; font-size: 18px; cursor: pointer; }
 
@@ -248,15 +243,12 @@
   <div id="hint">触屏/鼠标点按操作 · 滚轮=上下滑动 · 键盘：方向键/回车=确认/Esc=返回/数字=十六键 · 「ESC」按钮=硬 Esc</div>
 </div>
 
-<!-- 资源管理面板（浏览器本地存储 IndexedDB：目录树文件管理器 + 按需预载模型，不依赖后端） -->
+<!-- 资源管理面板（浏览器本地存储 IndexedDB：目录树文件管理器，不依赖后端） -->
 <div id="res-panel">
   <div id="res-card">
     <button id="res-close" title="关闭">×</button>
     <h2>资源管理</h2>
     <div id="res-quota">存储：…</div>
-
-    <h3>语言模型（按需预载；预载后存于本机存储，之后离线可用）</h3>
-    <div id="model-section"></div>
 
     <h3>文件（点目录前的箭头展开/折叠 · 点名字选中 · 拖动行到目录=移动/复制）</h3>
     <div id="fm-toolbar">
@@ -578,12 +570,12 @@ function nanoMicRead(ptr, samples) {
 // ---------------- Emscripten Module 配置（先于 nano_gui.js 加载） ----------------
 // 资源外置挂载（不打进 .data）：runtime 就绪后按 manifest.json 清单从本服务器
 // 拉取业务资源写入 MEMFS（路径与 PLATFORM_ROOT_DIR=/home/bd4sur/linglong 一致）；
-// 优先级 1（图标/壁纸等启动必需）就绪后才 callMain 启动；优先级 2/3（电子书/词典/
-// 相册/LLM 模型）后台继续拉取（进度条/状态栏显示进度），保证秒开。
+// 优先级 1（图标/壁纸/app 源码等启动必需）就绪后才 callMain 启动；其余一切
+// （电子书/词典/music/、llm/ 模型……）在后台继续拉取（进度条/状态栏显示进度），
+// 保证秒开。**没有按需/惰性层**：音乐和 LLM 模型不搞特殊处理，跟别的资源一样拉一次。
 // 挂载与带进度的下载实现在 loader.js（node 可测）；本地存储在 store.js。
-// 资源面板所需的挂载上下文（供模型按需预载/上传即时生效复用）
+// 资源面板所需的挂载上下文（供上传/删除即时生效复用）
 const mountCtx = { FS: null, manifestUrl: "manifest.json", filesBaseUrl: "files/", resRoot: "/home/bd4sur/linglong", store: null };
-let pendingModels = []; // p3 模型（待用户触发预载）
 const RES_ROOT = "/home/bd4sur/linglong";
 const wasmBar = document.getElementById("wasm-bar");
 const wasmText = document.getElementById("wasm-text");
@@ -670,10 +662,6 @@ async function mountResourcesAndRun() {
       },
       onBgProgress: (text) => {
         statusEl.innerHTML = '<span class="ok">● 运行中</span> · ' + text;
-      },
-      onModelsPending: (models) => {
-        pendingModels = models;
-        updateModelSection();
       },
       onManifest: (files) => { gManifestFiles = files; },
     });
@@ -1049,7 +1037,7 @@ async function toggleAttitude() {
 attBtn.addEventListener("click", toggleAttitude);
 setInterval(() => { if (attEnabled) updateAttBtn(); }, 1000);
 
-// ---------------- 资源管理面板：目录树文件管理器 + 模型按需预载 ----------------
+// ---------------- 资源管理面板：目录树文件管理器 ----------------
 // 数据来源 = 服务器默认源（manifest.json + files/）∪ 浏览器本地存储（IndexedDB）。
 // 文件操作（新建目录/上传/删除/改名/移动/复制/下载）同时写存储层与当前会话的 MEMFS，
 // 因此「立即生效」且「刷新页面仍在」；删除服务器默认资源落墓碑（见 store.js），
@@ -1063,7 +1051,6 @@ if (navigator.storage && navigator.storage.persist) {
 const resBtn   = document.getElementById("res-btn");
 const resPanel = document.getElementById("res-panel");
 const resQuota = document.getElementById("res-quota");
-const modelSection = document.getElementById("model-section");
 const uploadInput  = document.getElementById("upload-input");
 
 const fmTreeEl     = document.getElementById("fm-tree");
@@ -1231,53 +1218,6 @@ async function fmLoadDefaults() {
     }
   }
   return fmDefaults;
-}
-
-// MEMFS 中是否已存在（模型预载状态用）
-function memfsHas(relPath) {
-  if (!mountCtx.FS) return false;
-  try { return !!mountCtx.FS.stat(mountCtx.resRoot + "/" + relPath); } catch (e) { return false; }
-}
-
-// ---------------- 模型按需预载 ----------------
-
-function updateModelSection() {
-  if (!modelSection) return;
-  if (!pendingModels.length) {
-    modelSection.innerHTML = '<div style="color:#8b919b">无可预载模型（或已全部就绪）</div>';
-    return;
-  }
-  modelSection.innerHTML = "";
-  for (const m of pendingModels) {
-    const ready = memfsHas(m.path);
-    const row = document.createElement("div");
-    row.className = "res-item";
-    const btnHtml = ready
-      ? '<span style="color:#2f8f45">已就绪</span>'
-      : `<button class="res-btn2" data-path="${fmEsc(m.path)}">预载（${fmtSize(m.size)}）</button>`;
-    row.innerHTML = `<span class="p">${fmEsc(m.path)}</span><span class="sz">${fmtSize(m.size)}</span>` + btnHtml;
-    modelSection.appendChild(row);
-    if (!ready) {
-      row.querySelector("button").onclick = async (ev) => {
-        const btn = ev.target;
-        btn.disabled = true;
-        btn.textContent = "预载中 0%";
-        try {
-          await nanoMountModel(mountCtx, m.path, (recv, total) => {
-            btn.textContent = total > 0
-              ? `预载中 ${(recv / total * 100).toFixed(0)}%`
-              : `预载中 ${fmtSize(recv)}`;
-          });
-          btn.textContent = "已就绪";
-          updateModelSection();
-          fmReload();
-        } catch (e) {
-          btn.disabled = false;
-          btn.textContent = "失败重试";
-        }
-      };
-    }
-  }
 }
 
 // ---------------- 目录树渲染（传统缩进树） ----------------
@@ -1809,47 +1749,11 @@ document.getElementById("fm-refresh").addEventListener("click", () => {
 resBtn.addEventListener("click", () => {
   resPanel.classList.add("open");
   refreshResPanel();
-  updateModelSection();
 });
 document.getElementById("res-close").addEventListener("click", () => resPanel.classList.remove("open"));
 resPanel.addEventListener("click", (e) => { if (e.target === resPanel) resPanel.classList.remove("open"); });
 window.addEventListener("resize", () => { if (fmTree && resPanel.classList.contains("open")) fmRenderTree(); });
 
-// ---------------- 音频资源（music/）按需挂载 ----------------
-// 音乐体积大（当前约 89MB），不随启动挂载（manifest 里列为 p4）。进入音乐盒
-// （STATE_MUSICBOX_MENU = 64）时后台拉取并写入 MEMFS，同时落本机存储
-// （IndexedDB）——下次进入直接读本机，不再耗流量。
-// 注意：音乐盒的文件列表在进入那一刻由 C 侧（list_files）重建，所以挂载完成
-// 后需要退出再进一次（状态栏会给出提示）；这是不做 C 侧改动的最小代价。
-const STATE_MUSICBOX_MENU = 64;
-let musicMountState = 0; // 0=未开始 1=进行中 2=已结束
-async function nanoEnsureMusic() {
-  if (musicMountState !== 0 || !mountCtx.FS || typeof nanoMountTier !== "function") return;
-  musicMountState = 1;
-  try {
-    const n = await nanoMountTier(mountCtx, 4, (dc, dn, cur, total) => {
-      if (dn > 0) nanoAudio.msg = `音乐资源 ${dc}/${dn}（${(cur / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)}MB）`;
-    }, true);
-    musicMountState = 2;
-    nanoAudio.msg = (n > 0) ? "音乐资源已就绪" : "";
-  } catch (e) {
-    musicMountState = 2;
-    nanoAudio.msg = "音乐资源挂载失败：" + ((e && e.message) || e);
-  }
-  updateStatus();
-}
-setInterval(() => {
-  if (!runtimeReady || !Module._wasm_gui_get_state) return;
-  let st = -9999;
-  try { st = Module._wasm_gui_get_state(); } catch (e) { return; }
-  if (st === STATE_MUSICBOX_MENU) nanoEnsureMusic();
-}, 500);
-
-// 灵机版音乐盒（app/musicbox.scm）走的是 STATE_SCHEME_APP_RUN(80)，页面无从得知
-// "当前跑的是哪个 App"。因此改由 C 侧决定何时需要音频资源：(native Music) 的
-// (Music.list) 发现 music/ 为空时经 EM_JS 调本函数（见 infer/am_native_Music.c）。
-// 复用 nanoEnsureMusic 的 musicMountState 单次保护：C 侧每几百毫秒重试也不会重复下载。
-function nanoRequestMusicTier() { nanoEnsureMusic(); }
 </script>
 <!-- 本地存储层（IndexedDB；先于 loader.js） -->
 <script src="store.js"></script>

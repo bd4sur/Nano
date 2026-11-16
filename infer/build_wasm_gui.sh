@@ -42,13 +42,11 @@ OUT_DIR=webgui
 # 业务资源：不打进产物（不用 --preload-file），改为运行时从外部 HTTP「挂载」——
 #   本脚本把 linglong 资源软链接进 webgui/files/ 并生成 manifest.json（文件清单+大小）；
 #   页面 JS 启动时经 createPreloadedFile 逐文件拉入 MEMFS（路径与 PLATFORM_ROOT_DIR 一致）。
-#   分级加载：priority 1（图标/壁纸/mob.scm 等启动必需）先拉，立即可进系统；
-#             priority 2（ebook/dict/image 等）后台拉，状态栏显示进度；
-#             priority 3（LLM 模型）页面「预载」按钮按需拉；
-#             priority 4（music 音频）进入音乐盒时按需拉（见 webgui/index.html 的 nanoEnsureMusic）。
-#   浏览器平台约束：主线程同步 XHR 已被禁用，「打开文件时才下载」的纯按需挂载做不到
-#   （createLazyFile 依赖 sync XHR），清单式挂载+分级加载是务实等价物。
-#   不打包 llm 中的 qwen3-0b6（599MB，单线程 WASM 不可用）；music 走 p4 按需层（93MB）。
+#   分级加载只有两级：priority 1（图标/壁纸/app 源码/mob.scm 等启动必需）先拉，
+#   立即可进系统；priority 2 = 其余一切（ebook/dict/image/music 音频/LLM 模型……）
+#   后台拉，状态栏显示进度。**没有按需/惰性层**：音乐与 LLM 模型不搞特殊处理，
+#   跟别的资源一样随页面加载拉一次（宁可重下，也不在逻辑上分叉）。
+#   唯一的例外是 llm/qwen3-0b6-q80.bin（627MB，单线程 WASM 根本跑不动）——它不进清单。
 LINGLONG=/home/bd4sur/linglong
 mkdir -p "$OUT_DIR"
 ln -sfn "$LINGLONG" "$OUT_DIR/files"
@@ -90,13 +88,10 @@ P1_DIRS = {"icon", "app"}
 P2_PREFIXES = ("app/lib/llm/", "app/lib/badapple/")
 P1_FILES = {"mob.scm", "jstest.js"}
 SKIP_DIRS = {"data"}   # data 是 App 运行时数据（不入产物）
-# music/ 不跳过，而是归为 p4「音频按需挂载」层：不进启动路径、不自动拉取，
-# 进入音乐盒时由页面调 nanoMountTier(4) 拉入 MEMFS 并落本机存储（见 webgui/index.html）。
-# 这样 wasm+js 里仍不含任何业务文件内容（隐私要求不变），首次进音乐盒一次性下载。
-P4_DIRS = {"music"}
-# LLM 模型：标准引擎（infer.c）的 Nano-168M/56M-Q80 作为 p3（最后台优先级，鹦鹉笼可用）；
-# qwen3-0b6（599MB，单线程 WASM 不可用）不挂载。菜单按白名单+存在性过滤（ui_llm.c）。
-P3_FILES = {"llm/nano-168m-q80.bin", "llm/nano-56m-q80.bin"}
+# llm/ 下这个 627MB 的 qwen3-0b6 不进清单：单线程 WASM 跑不动它（ui_llm.c 的菜单按
+# 白名单+文件存在性过滤，本来也不会列它），挂上去只会让每次页面加载白下 600MB。
+# 其余资源（含 llm/nano-*.bin 模型与 music/ 音频）一律「p2 后台挂载」，无按需层。
+SKIP_FILES = {"llm/qwen3-0b6-q80.bin"}
 files = []
 for dirpath, dirnames, filenames in os.walk(root):
     rel_dir = os.path.relpath(dirpath, root)
@@ -106,14 +101,10 @@ for dirpath, dirnames, filenames in os.walk(root):
         continue
     for fn in filenames:
         rel = fn if rel_dir == "." else os.path.join(rel_dir, fn)
+        if rel in SKIP_FILES:
+            continue
         if top in P1_DIRS or (rel_dir == "." and (fn in P1_FILES or fn.startswith("wp"))):
             pri = 2 if rel.startswith(P2_PREFIXES) else 1
-        elif rel in P3_FILES:
-            pri = 3
-        elif top in P4_DIRS:
-            pri = 4
-        elif top == "llm":
-            continue
         else:
             pri = 2
         files.append({"path": rel, "size": os.path.getsize(os.path.join(dirpath, fn)), "priority": pri})
@@ -121,9 +112,9 @@ files.sort(key=lambda f: (f["priority"], f["path"]))
 with open(out, "w") as fp:
     json.dump({"files": files}, fp, ensure_ascii=False)
 n1 = sum(1 for f in files if f["priority"] == 1)
-n3 = sum(1 for f in files if f["priority"] == 3)
-n4 = sum(1 for f in files if f["priority"] == 4)
-print(f"manifest: {len(files)} files (p1={n1}, p2={len(files)-n1-n3-n4}, p3={n3}, p4={n4})")
+b1 = sum(f["size"] for f in files if f["priority"] == 1)
+bt = sum(f["size"] for f in files)
+print(f"manifest: {len(files)} files (p1={n1}/{b1/1048576:.1f}MB，其余 {len(files)-n1}/{(bt-b1)/1048576:.1f}MB 后台挂载)")
 EOF
 
 ANIMAC_DIR=vendor/Animac

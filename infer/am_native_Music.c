@@ -13,8 +13,7 @@
 //
 //  本文件只做「资源路径解析 → 打开 → 解码 → 喂 HAL → 报告标量状态」，
 //  文件系统与扬声器全部经 HAL（hal_fs / hal_audio_out），因此桌面 / WASM /
-//  掌机三处行为一致，无平台分支（唯一的平台差异是 WASM 的 p4 资源挂载请求，
-//  由 __EMSCRIPTEN__ 下的 EM_JS 完成，其余平台为空操作）。
+//  掌机三处行为一致，无平台分支。
 ////////////////////////////////////////////////////////////////////////////
 
 #include <math.h>
@@ -46,20 +45,6 @@ extern void     minimp3_set_scratch(void *scratch);
 extern uint32_t minimp3_scratch_size(void);
 
 // ---------------------------------------------------------------------------
-// WASM-GUI：请求页面把 manifest 的 p4 层（music/ 音频，~90MB）挂载进 MEMFS。
-// 页面未提供该函数时（node 回归台 / 其它平台）为空操作，引擎按"空目录"降级。
-// ---------------------------------------------------------------------------
-#if defined(__EMSCRIPTEN__)
-#include <emscripten.h>
-EM_JS(void, music_request_tier_js, (void), {
-    if (typeof nanoRequestMusicTier === "function") {
-        try { nanoRequestMusicTier(); } catch (e) { /* 忽略 */ }
-    }
-});
-#else
-#define music_request_tier_js() ((void)0)
-#endif
-
 // ===========================================================================
 // 参数与状态
 // ===========================================================================
@@ -748,11 +733,6 @@ int32_t am_native_Music_list(am_runtime_t *rt, am_process_t *proc) {
     (void)rt;
 
     names = music_list_names(&n);
-    if (n == 0) {
-        // 空目录：WASM 上顺手请求页面把 p4 音频层挂进 MEMFS（其它平台空操作）。
-        // App 侧应据此提示"正在加载音乐资源"并按几百毫秒节奏重试 (Music.list)。
-        music_request_tier_js();
-    }
 
     lst = am_list_create(proc->heap_alloc, n > 0 ? (size_t)n : 1, AM_LIST_TYPE_DEFAULT, AM_HANDLE_NULL);
     if (lst == NULL) {

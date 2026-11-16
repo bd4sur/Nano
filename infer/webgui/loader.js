@@ -3,13 +3,15 @@
 // 职责：
 //   1. 自带进度地下载 nano_gui.wasm（Module.instantiateWasm 覆盖在 index.html 中调用
 //      nanoFetchWithProgress；emscripten 默认的流式实例化不暴露进度，故接管）；
-//   2. 运行时资源挂载：manifest.json → FS.createPath 建目录 → 分级（p1 启动必需 /
-//      p2 业务资源）经自带进度 fetch 拉取并 FS.writeFile 进 MEMFS；
+//   2. 运行时资源挂载：manifest.json → FS.createPath 建目录 → 按 priority 分两批
+//      经自带进度 fetch 拉取并 FS.writeFile 进 MEMFS：
+//        priority 1 = 启动必需（icon/、app/*.scm、data/ 存档…），**阻塞**启动；
+//        priority 2 = 其它一切（电子书/词典/music/、llm/ 模型…），p1 就绪后**后台**拉。
 //      p1 完成后调用 onP1Ready（index.html 据此 callMain 启动系统），p2 后台继续。
-//      p3（LLM 模型，数百 MB）【不自动挂载】——回调 onModelsPending 交由页面提供
-//      「按需预载」入口（nanoMountModel），用户触发后才拉取。
+//      **没有第三/第四层**：音乐与 LLM 模型不搞按需挂载/预载按钮，和别的资源一样
+//      随页面加载拉一次（宁可重下，不做特殊逻辑；见 doc/AGENTS.md 2026-11-17 条目）。
 //   3. 浏览器本地存储（store.js，IndexedDB）优先于 HTTP 默认源：
-//      每个文件先查 store（用户上传/曾预载的），命中则用之；否则回退 HTTP。
+//      每个文件先查 store（用户上传的），命中则用之；否则回退 HTTP。
 //      store 中 manifest 之外的文件（用户全新上传）按目录推断优先级并入挂载表。
 //
 // 浏览器与 node 双兼容（node 用于端到端回归：fetch/FS 等经参数注入）：
@@ -18,7 +20,7 @@
 //     opts = { FS, fetchImpl, manifestUrl, filesBaseUrl, resRoot,
 //              onStage(text),                                  —— 阶段文案
 //              onP1Progress(done,total,fileDone,fileTotal),    —— 阶段1进度（阻塞启动路径）
-//              onBgProgress(text) }                            —— 阶段2/3后台进度
+//              onBgProgress(text) }                            —— 阶段2后台进度
 "use strict";
 
 // 带字节进度地下载 URL 为 Uint8Array（onProgress(receivedBytes, totalBytes)；total 可为 0=未知）
@@ -57,10 +59,6 @@ function nanoInferPriority(path) {
   const top = path.split("/")[0];
   if (top === "icon") return 1;
   if (!path.includes("/") && (path.startsWith("wp") || path === "mob.scm" || path === "jstest.js")) return 1;
-  if (top === "llm") return 3;
-  // music/ 是音频资源（单曲数 MB~数十 MB）：列为 p4「按需挂载」层，不随启动拉取，
-  // 进入音乐盒时由 nanoMountTier(4) 拉入并落本机存储（见 index.html 的 nanoEnsureMusic）。
-  if (top === "music") return 4;
   // data/ 是「灵机应用程序」自己的存档/模型（便签、2048 存档、Flappy 的 Q 表……），
   // 都是 KB 级小文件；提到 p1 让 App 启动时就能读到自己的存档，否则首帧读不到、
   // 训练一轮就把旧模型覆盖掉（2026-11 Flappy Bird 条目）。
@@ -122,9 +120,9 @@ async function nanoMountResources(opts) {
   const all = [...byPath.values()];
   const files = all.filter(f => !f.dir);
   const dirsExplicit = all.filter(f => f.dir);
-  const p1 = files.filter(f => f.priority === 1);
+  // 只有两批：1=启动必需（阻塞），2=其它一切（后台）。没有按需层。
+  const p1 = files.filter(f => f.priority !== 2);
   const p2 = files.filter(f => f.priority === 2);
-  const p3 = files.filter(f => f.priority === 3); // LLM 模型：不自动挂载，页面按需预载
   if (opts.onManifest) opts.onManifest(all); // 合并清单（含 source/dir 标记），资源面板展示用
 
   // 建目录树（createPath 递归逐层创建；显式目录条目也要建，空目录才留得住）
@@ -192,132 +190,17 @@ async function nanoMountResources(opts) {
   // 阶段 1 就绪 → 通知启动 wasm main
   if (opts.onP1Ready) await opts.onP1Ready();
 
-  // 阶段 2：后台（电子书/词典/相册/音乐等）
+  // 阶段 2：后台（电子书/词典/相册/music/、llm/ 模型等一切非启动必需资源）
   const rest = p2;
   const restBytes = rest.reduce((s, f) => s + f.size, 0);
   await runPool(rest, restBytes, 0, (dc, dn, cur, total) => {
     onBgProgress(`后台挂载资源 ${dc}/${dn}（${(cur / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)}MB）`);
   });
   onStage("");
-
-  // 阶段 3：LLM 模型不自动挂载——交由页面提供「按需预载」入口
-  //（模型就绪前鹦鹉笼菜单显示「无可用模型」属预期；菜单按文件存在性动态过滤）
-  if (opts.onModelsPending) {
-    opts.onModelsPending(p3.map(f => ({ path: f.path, size: f.size, source: f.source })));
-  }
-  console.log("[mount] resources mounted:", p1.length + p2.length, "; models pending:", p3.length);
-}
-
-// 按需挂载单个模型（页面「预载模型」按钮调用）：store 优先；HTTP 拉取成功后写入 store
-//（下次启动/离线可直接从浏览器存储读，不再耗流量）。onProgress(recv,total) 汇报进度。
-async function nanoMountModel(opts, path, onProgress) {
-  const { FS, resRoot } = opts;
-  // store 命中则直接用
-  if (opts.store) {
-    try {
-      const rec = await opts.store.get(path);
-      if (rec && rec.blob) {
-        const buf = new Uint8Array(await rec.blob.arrayBuffer());
-        FS.writeFile(resRoot + "/" + path, buf);
-        if (onProgress) onProgress(buf.length, buf.length);
-        return true;
-      }
-    } catch (e) { /* 回退 HTTP */ }
-  }
-  // HTTP 拉取（带进度），成功后尝试写入 store 持久化（失败不影响本次使用）
-  const buf = await nanoFetchWithProgress(opts.filesBaseUrl + encodeURI(path), onProgress);
-  FS.writeFile(resRoot + "/" + path, buf);
-  if (opts.store) {
-    try { await opts.store.put(path, new Blob([buf])); } catch (e) { console.warn("[mount] persist model failed:", e); }
-  }
-  return true;
-}
-
-// 按优先级挂载一层资源（目前用于 p4：音频资源 music/）。
-//   · 清单 = manifest ∪ 本机存储清单（同名以 store 为准，与 nanoMountResources 同规则）；
-//   · 只取 priority === tier 的条目，已在 MEMFS 中的跳过（本次会话内重复进入不重下）；
-//   · persist=true 时，HTTP 拉到的内容顺手写入本机存储，下次直接读 IndexedDB。
-// 返回本次实际写入 MEMFS 的文件数；onProgress(完成数, 总数, 已传字节, 总字节)。
-async function nanoMountTier(opts, tier, onProgress, persist) {
-  const { FS, manifestUrl, filesBaseUrl, resRoot } = opts;
-  const manifest = await (await fetchImpl(manifestUrl)).json();
-
-  const byPath = new Map();
-  for (const f of (manifest.files || [])) byPath.set(f.path, { ...f, source: "http" });
-  const tombstones = new Set();
-  if (opts.store) {
-    let storeFiles = [];
-    try { storeFiles = await opts.store.list(); } catch (e) { console.warn("[mount-tier] store list failed:", e); }
-    for (const sf of storeFiles) {
-      if (sf.deleted) { tombstones.add(sf.path); continue; }
-      const ex = byPath.get(sf.path);
-      if (sf.dir) {
-        byPath.set(sf.path, { path: sf.path, size: 0, dir: true, priority: nanoInferPriority(sf.path), source: "store" });
-      }
-      else if (ex) { ex.source = "store"; ex.size = sf.size; }
-      else byPath.set(sf.path, { path: sf.path, size: sf.size, priority: nanoInferPriority(sf.path), source: "store" });
-    }
-  }
-  for (const p of tombstones) byPath.delete(p);
-
-  // 只在 MEMFS 中不存在的才需要挂（store 来源也要读入 MEMFS 才能被 C 侧 fopen）
-  const tierAll = [...byPath.values()].filter((f) => f.priority === tier);
-  const dirsOnly = tierAll.filter((f) => f.dir);
-  const todo = tierAll.filter((f) => !f.dir).filter((f) => {
-    try { FS.stat(resRoot + "/" + f.path); return false; } catch (e) { return true; }
-  });
-  if (!todo.length) return 0;
-
-  const dirs = new Set();
-  for (const f of todo) {
-    const parts = f.path.split("/");
-    for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
-  }
-  for (const f of dirsOnly) dirs.add(f.path);
-  for (const d of [...dirs].sort()) { try { FS.createPath(resRoot, d); } catch (e) {} }
-
-  const totalBytes = todo.reduce((s, f) => s + (f.size || 0), 0);
-  let done = 0, doneBytes = 0, idx = 0;
-  const inflight = new Map();
-  const report = () => {
-    let cur = doneBytes;
-    for (const v of inflight.values()) cur += v;
-    if (onProgress) onProgress(done, todo.length, cur, totalBytes);
-  };
-  const worker = async () => {
-    while (idx < todo.length) {
-      const f = todo[idx++];
-      try {
-        let buf = null;
-        if (f.source === "store" && opts.store) {
-          const rec = await opts.store.get(f.path);
-          if (rec && rec.blob) buf = new Uint8Array(await rec.blob.arrayBuffer());
-        }
-        if (!buf) {
-          buf = await nanoFetchWithProgress(filesBaseUrl + encodeURI(f.path), (recv) => {
-            inflight.set(f.path, recv); report();
-          });
-        }
-        FS.writeFile(resRoot + "/" + f.path, buf);
-        if (persist && opts.store && f.source !== "store") {
-          try { await opts.store.put(f.path, new Blob([buf])); } catch (e) { console.warn("[mount-tier] persist failed:", f.path, e); }
-        }
-        done++;
-        doneBytes += (f.size || buf.length);
-      } catch (e) {
-        console.warn("[mount-tier] failed:", f.path, e);
-      }
-      inflight.delete(f.path);
-      report();
-    }
-  };
-  const workers = [];
-  for (let i = 0; i < Math.min(8, todo.length); i++) workers.push(worker());
-  await Promise.all(workers);
-  return done;
+  console.log("[mount] resources mounted:", p1.length + p2.length);
 }
 
 // node 可测性导出（浏览器 <script> 顶层为全局函数）
 if (typeof module !== "undefined" && typeof module.exports !== "undefined") {
-  module.exports = { nanoMountResources, nanoMountModel, nanoMountTier, nanoFetchWithProgress, nanoSetFetchImpl, nanoInferPriority };
+  module.exports = { nanoMountResources, nanoFetchWithProgress, nanoSetFetchImpl, nanoInferPriority };
 }

@@ -13196,3 +13196,80 @@ Scheme 的 filemgr/filepicker 用「手势平均速度」而不是逐帧 EMA，�
   若「后台」冻结而不是退出，再从列表进入恢复的是**同一个实例**（列表仍是当初那个目录），
   这与「恢复后台实例」的既有语义一致。
 - filemgr 的返回后重扫（`EX.on_resume`）本来就有，这里只依赖它，未新增接口。
+
+# 2026-11-17（WASM 资源加载去特化：取消 LLM 的「预载」与 music 的 p4 按需层）
+
+需求：**彻底取消对 LLM 与音乐的特殊处理**——宁可每次从远端重下，也不要在加载逻辑上分叉。
+
+## 1. 改前是什么样的（为什么复杂）
+
+manifest 有四级优先级，页面侧有三套互不相干的分支：
+
+| 层 | 内容 | 触发方式 |
+|---|---|---|
+| p1 | icon / 壁纸 / `app/**.scm` / `data/` | 阻塞启动 |
+| p2 | ebook / dict / badapple | 启动后台拉 |
+| p3 | `llm/nano-*.bin`（221MB） | **不自动拉**：`nanoMountResources` 只回调 `onModelsPending`，页面渲染「预载（166MB）」按钮，用户点 `nanoMountModel()` 才拉，还写进 IndexedDB |
+| p4 | `music/`（89MB） | **不自动拉**：C 版音乐盒靠页面每 500ms 轮询 `_wasm_gui_get_state()==64`；灵机版 App 走状态 80 页面无从得知，于是在 `am_native_Music.c` 里塞了个 `EM_JS` 钩子，`(Music.list)` 发现空目录就回调 `nanoRequestMusicTier()` |
+
+两套"按需"逻辑、一个 C 侧 EM_JS 钩子、一个页面侧状态轮询、一个只为模型存在的资源面板分节，
+外加 `nanoMountTier` / `nanoMountModel` 两份与 `nanoMountResources` 几乎重复的挂载代码
+（各自都要重算 store 合并/墓碑/推断优先级）。
+
+## 2. 改后（只有两级、零特化）
+
+| 文件 | 改动 |
+|---|---|
+| `infer/webgui/loader.js` | 删 `nanoMountTier` / `nanoMountModel` / `onModelsPending`；`nanoInferPriority` 去掉 `llm→3`、`music→4`；只有 p1（阻塞）/ p2（后台）两批 |
+| `infer/webgui/index.html` | 删「语言模型（按需预载）」整块 UI + `pendingModels` / `updateModelSection` / `memfsHas`；删 `nanoEnsureMusic` / `musicMountState` / 500ms 状态轮询 / `nanoRequestMusicTier` |
+| `infer/am_native_Music.c` | 删 `music_request_tier_js` 的 `EM_JS` 与 `(Music.list)` 里的空目录回调（Music 库从此**无任何平台分支**） |
+| `infer/build_wasm_gui.sh` | manifest 只产出 p1/p2；`llm/**`、`music/**` 一律 p2；只保留一条排除：`llm/qwen3-0b6-q80.bin`（627MB，单线程 WASM 根本跑不动，`ui_llm.c` 的白名单也不会列它） |
+| `infer/am_native_Music.h`、`app/musicbox.scm` | 注释同步（不再是 p4/按需，而是"随启动后台挂载，可能还没拉完，App 按 500ms 重试"） |
+
+实测 manifest（当前磁盘资源）：**176 个文件 / 287.3MB**，其中 p1 = 148 个 / 4.5MB（阻塞），
+其余 28 个 / 282.7MB 后台拉。本地 HTTPS 服务下 p1 就绪 → 全量挂载完成约 **1s**。
+
+## 3. 代价（写在这里，免得下次有人以为是 bug）
+
+- **每次页面加载都要下 287MB**（其中 166MB 是 `nano-168m` 模型）。局域网 1s 量级，
+  公网/移动网络就是分钟量级——这是本次"用带宽换简单"的直接代价。
+- MEMFS 常驻 287MB。**纠正一个容易说错的点**：MEMFS 的文件内容在 **JS 堆**（Emscripten
+  按 `new Uint8Array(contents)` 存放），不在 wasm 线性内存里——实测挂完 327MB 后
+  `HEAPU8.length` 仍是 `INITIAL_MEMORY` 的 384MB。所以代价是标签页 RSS +287MB（手机端
+  仍可能被系统杀掉），不是 wasm 堆 OOM。
+- 浏览器回归变贵：每个用例页面加载都要走这 287MB（本机全绿，但 55 个 App 的存活回归
+  一轮就是 ~15GB localhost 流量）。
+- 首屏体验不变：p1 仍是 4.5MB 阻塞 + 其余后台；状态栏照旧显示后台挂载进度。
+
+## 4. 行为变化
+
+- 鹦鹉笼/纳米对话：模型**开机后台就绪**，不再需要（也不可能）在资源面板点「预载」；
+  挂载未完成时 `(Chat.models)` 仍只列"文件确实存在"的模型（`ui_llm.c` 的白名单+存在性
+  过滤未变），所以菜单短暂为空属预期。
+- 音乐盒（C 版与灵机版）：`music/` 开机后台就绪；C 版不再有"挂载完成后要退出再进一次"
+  的旧毛病。灵机版 `app/musicbox.scm` 的空列表重试逻辑保持不变（首次进得早时仍可能先
+  看到空列表，随后自动刷出）。
+- `infer/app/filemgr.scm` 打开音频 → 拉起音乐盒的链路（上一提交）不受影响。
+
+## 5. 验证
+
+- **本地库/C 侧**：`am_native_Music.c` 去掉 `EM_JS` 后，桌面宿主回归台
+  `tools/e2e/host/run_host_regress.sh` **全部 App `err=none`**（唯一异常是既有的
+  `sky3 ()`，改动前同样如此）；`bash build_wasm_gui.sh` 编译通过（wasm32 5.5MB）。
+- **页面加载**（chromium，真 HTTPS 服务）：`[mount] resources mounted: 176`；
+  `music/`、`llm/` 两个目录在 MEMFS 里各有文件；`HEAPU8.length` 保持 384MB；
+  无 pageerror。
+- **浏览器端**：
+  - `regress_musicbox.js` **32/32**（音乐随启动挂载，`cur=0/3` 起播、播放/暂停、seek、
+    切曲、音量、后台恢复、退出）；
+  - `regress_musicbox_launch.js` **31/31**（filemgr → 音频 → 拉起音乐盒，本轮新增的链路）；
+  - `regress_nanochat.js`：**58/58 PASS**（真 Nano-56M 权重解析 + 生成 `gen/tps` +
+    「停止」中断 + 可视化开关 + 卸载/落盘）。**注意该脚本有既有的抓帧竞态**：它靠
+    "轮询屏幕直到抓到生成中那帧"来断言停止按钮/输入框/对话墨迹，模型输出短时会抓不到，
+    同一构建连跑三次得到 54/58、54/58、58/58——失败项全是那 4 条抓帧判据，功能判据
+    （载入/begin/gen/done/unload/saved）三次都过。顺带修了它失效的导航（旧的
+    `digit(7)×2` 已落到 C 版频谱仪 `state=53`，改为「任意键 → 右方向键 → 按序号下移」）。
+  - `regress_webgui_files.js` **43/43**（资源面板去掉模型分节后，目录树/上传/移动/墓碑
+    全链路照旧）；`regress_launch.js` **36/36**、`regress_filemgr.js` **51/51**。
+- 测试脚本注释同步：`regress_musicbox.js` / `regress_audio.js` 里 "p4 按需挂载" 的说法
+  改成 "p2 后台挂载"（这些脚本按 `.gitignore` 不入库）。
