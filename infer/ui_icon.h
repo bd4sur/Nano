@@ -15,6 +15,13 @@ extern "C" {
 // 注意：缓存永不失效，SD卡上更换图标文件后需复位重建。
 int32_t ui_icon_draw_centered(Nano_GFX *gfx, const char *path, int32_t cx, int32_t cy);
 
+// 带裁剪矩形的居中绘制：图标只画在 (clip_x, clip_y, clip_width, clip_height) 与屏幕的
+// 交集内，源像素索引按偏移正确回算。用于滚动面板等“图标可能被视口裁掉一部分”的场景
+// （ui_icon_draw_centered 要求图标完整落在屏幕内——越界时负坐标会回绕，故不可直接用于滚动）。
+// 返回值同 ui_icon_draw_centered。
+int32_t ui_icon_draw_centered_clip(Nano_GFX *gfx, const char *path, int32_t cx, int32_t cy,
+    int32_t clip_x, int32_t clip_y, int32_t clip_width, int32_t clip_height);
+
 // 查询图标实际宽高（像素）：与绘制共用同一缓存，首次查询即触发读取/解码。
 // 返回值：0=成功（宽高写入 out_width/out_height，均可传NULL）；-1=读取/解码失败或缓存已满。
 int32_t ui_icon_get_size(const char *path, int32_t *out_width, int32_t *out_height);

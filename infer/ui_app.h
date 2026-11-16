@@ -102,11 +102,15 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state);
 int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms);
 
 // ===============================================================================
-// 主菜单
+// 主菜单：应用列表（左侧 3 列可滚动区 + 右侧 1 列固定区，均为触屏控件）
 // ===============================================================================
 
-void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state);
-void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_state);
+// 整屏重绘（is_full_redraw=1；0=仅重绘左侧滚动区），内含 gfx_refresh 推屏
+void ui_app_main_menu_draw(Key_Event *key_event, Global_State *global_state, int32_t is_full_redraw);
+// 触屏拖动滚动 + 点按执行 + 实体键盘映射（十六宫格软按键逻辑已废弃）
+void ui_app_main_menu_event_handler(Key_Event *key_event, Global_State *global_state);
+// 复位滚动位置与触摸跟踪（进入主菜单时调用）
+void ui_app_main_menu_scroll_reset(void);
 
 // ===============================================================================
 // 开机欢迎画面

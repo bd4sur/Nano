@@ -183,6 +183,9 @@ static int32_t ui_app_state_is_menu(int32_t state) {
         case STATE_GAME_MENU:
         case STATE_EBOOK:
         case STATE_OFDM_MENU:
+        case STATE_MAIN_MENU:     // 主菜单：左侧为可拖动滚动的应用列表 + 右侧静态固定列，
+                                  // 全部为自绘触屏控件，十六宫格软按键整体退场
+                                  // （见 ui_app_main_menu_event_handler）
         case STATE_SETTING_MENU:  // 系统设置：分组卡片列表直接消费触屏流（拖动滚动/点按行/
                                   // 开关/分段控件/步进器）；十六宫格软按键整体退场。
                                   // 实体键盘的数字键/方向键/Enter/Esc 照常可用。
@@ -669,185 +672,505 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
 
 
 // ===============================================================================
-// 主菜单
+// 主菜单：应用列表（左侧可滚动区 + 右侧固定区）
+//
+// 布局（几何基准沿用十六宫格：单格宽度 = 屏宽/4，与旧宫格单格同宽）：
+//   +---------------------------+---------+
+//   | 番茄表 | 鹦鹉笼 | 玲珑仪  |  返回   |  <- 左侧滚动区：3 列 x 一屏 4 行
+//   | 电子书 | 音乐盒 | 时光集  |  设置   |     单格 = 屏宽/4 x 屏高/4（80x60 @320x240）
+//   | 小游戏 | 频谱仪 | 寻呼机  |  自述   |     一屏恰好 12 格，与旧宫格单格完全同尺寸
+//   | 计步器 | 词典   | 控制台  |  关机   |  <- 右侧固定区：1 列 x 4 行（静态）
+//   +---------------------------+---------+     单格 = 屏宽/4 x 屏高/4
+//   | 灵机应用 |      |         |         |  <- 第 5 行，需上拖才可见
+// 单格内的图标/文字排版与旧十六宫格逐像素一致：图标（36x36）中心位于格子中心
+// 偏上 8px，文字（12px alpha，中心对齐）再往下 26px。
+//
+// 交互：
+//   - 左侧：触屏控件。上下拖动按像素跟手滚动，松手带惯性；短点按执行对应应用。
+//           滚动区左缘的竖条是滚动进度条（提示本面板可滚动）；滚动区底色与右侧
+//           固定区不同，进一步提示“左边可拖、右边固定”。
+//   - 右侧：静态按钮，仅响应短点按（返回/设置/自述/关机）。
+//   - 键盘：实体键盘的数字键/方向键/Enter/Esc 映射与旧十六宫格一致
+//           （见 ui_app_main_menu_event_handler 末段）。触屏不再派生宫格软按键
+//           （STATE_MAIN_MENU 已加入 ui_app_state_is_menu 抑制表）。
 // ===============================================================================
 
+#define UI_APP_MENU_SCROLL_COLS  (3) // 左侧滚动区列数（＝旧宫格的左 3 列）
+#define UI_APP_MENU_VISIBLE_ROWS (4) // 左侧滚动区一屏可见行数（3 列 x 4 行 = 12 格恰好一屏）
+#define UI_APP_MENU_FIXED_NUM    (4) // 右侧固定区按钮数（返回/设置/自述/关机）
 
-static void ui_app_main_menu_grid16_refresh_button(
-    Key_Event *key_event, Global_State *global_state,
-    int32_t col, int32_t row, wchar_t *text,
-    const char *icon_path,
-    uint8_t cell_bg_R, uint8_t cell_bg_G, uint8_t cell_bg_B, uint8_t cell_bg_mode,
-    uint8_t cell_text_R, uint8_t cell_text_G, uint8_t cell_text_B, uint8_t cell_text_mode
-) {
-    int32_t bx = (col == 0) ? 1 : 0;
-    int32_t by = (row == 0) ? 1 : 0;
-    // 网格布局：上下留白与顶/底栏高度一致（当前 UI 字体行高 + 1）
-    const int32_t bar_height = 0; // gfx_font_line_height(global_state->ui_font) + 1;
-    UI_Grid_Layout grid = ui_grid_layout_make(global_state->gfx->width, global_state->gfx->height, bar_height, bar_height, 0, 0, 4, 4);
-    int32_t cell_cx = ui_grid_cell_center_x(&grid,col);
-    int32_t cell_cy = ui_grid_cell_center_y(&grid,row);
-    gfx_draw_rectangle(global_state->gfx, ui_grid_cell_x0(&grid,col)+bx, ui_grid_cell_y0(&grid,row)+by, ui_grid_cell_width(&grid)-1-bx, ui_grid_cell_height(&grid)-1-by, cell_bg_R, cell_bg_G, cell_bg_B, cell_bg_mode);
-    // 图标（36x36，带PSRAM缓存）：中心点位于格子中心偏上8px
-    ui_icon_draw_centered(global_state->gfx, icon_path, cell_cx, cell_cy - 8);
-    // 文字：中心点位于图标下沿下方8px。后绘制文字，使其覆盖在图标上面
-    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, text, cell_cx, cell_cy - 8 + 18 + 8, cell_text_R, cell_text_G, cell_text_B, cell_text_mode);
+// 触屏：拖动判定阈值（累计纵向位移超过该值即认定为本序列是拖动而非点按）
+#define UI_APP_MENU_DRAG_THRESHOLD (12)
+// 触屏：惯性滚动减速度（px/s^2，与菜单控件一致）与启动/限速阈值
+#define UI_APP_MENU_FLING_DECEL    (2000.0f)
+#define UI_APP_MENU_FLING_VMAX     (4000.0f)
+#define UI_APP_MENU_FLING_VMIN     (50.0f)
+
+// 滚动进度条：贴在滚动区左缘。ui_draw_scroll_bar 把轨道画在传入矩形的右缘
+// （x+width-2 与 x+width-1 两列），故传一个贴左边缘的 4px 宽矩形，轨道即落在
+// 屏幕最左侧的 2px 列（暗色 x=2,3；亮色因整体左移 1px 落在 x=1,2）。
+#define UI_APP_MENU_SB_X     (0)
+#define UI_APP_MENU_SB_W     (4)
+
+// 左侧滚动区条目（行优先：3 列 x N 行）。图标 36x36，经 ui_icon_draw_centered 绘制
+// （首次读取解码后常驻 PSRAM 缓存）。
+typedef struct Ui_App_Menu_Item {
+    const wchar_t *title;
+    const char *icon_path;
+} Ui_App_Menu_Item;
+
+static const Ui_App_Menu_Item s_app_menu_items[] = {
+    { L"番茄表",   PLATFORM_ROOT_DIR "/icon/fanqie.png" },
+    { L"鹦鹉笼",   PLATFORM_ROOT_DIR "/icon/nano.png" },
+    { L"玲珑仪",   PLATFORM_ROOT_DIR "/icon/linglong.png" },
+    { L"电子书",   PLATFORM_ROOT_DIR "/icon/ebook.png" },
+    { L"音乐盒",   PLATFORM_ROOT_DIR "/icon/music.png" },
+    { L"时光集",   PLATFORM_ROOT_DIR "/icon/album.png" },
+    { L"小游戏",   PLATFORM_ROOT_DIR "/icon/game.png" },
+    { L"频谱仪",   PLATFORM_ROOT_DIR "/icon/spectrogram.png" },
+    { L"寻呼机",   PLATFORM_ROOT_DIR "/icon/ptt.png" },
+    { L"计步器",   PLATFORM_ROOT_DIR "/icon/pedometer.png" },
+    { L"词典",     PLATFORM_ROOT_DIR "/icon/dict.png" },
+    { L"控制台",   PLATFORM_ROOT_DIR "/icon/animac.png" },
+    // 第 13 项：用于演示并验证滚动功能（一屏 12 格 = 4 行，本项位于第 5 行）
+    { L"灵机应用", PLATFORM_ROOT_DIR "/icon/default.png" },
+};
+
+// 右侧固定区条目（自上而下，各占屏高/4）
+static const Ui_App_Menu_Item s_app_menu_fixed_items[UI_APP_MENU_FIXED_NUM] = {
+    { L"返回", PLATFORM_ROOT_DIR "/icon/home.png" },
+    { L"设置", PLATFORM_ROOT_DIR "/icon/settings.png" },
+    { L"自述", PLATFORM_ROOT_DIR "/icon/readme.png" },
+    { L"关机", PLATFORM_ROOT_DIR "/icon/poweroff.png" },
+};
+
+typedef struct Ui_App_Menu_Geometry {
+    int32_t cell_w;        // 单格宽度（屏宽/4，与旧宫格单格同宽）
+    int32_t scroll_cell_h; // 滚动区单格高度（屏高/4，与旧宫格单格同高）
+    int32_t fixed_cell_h;  // 固定区单格高度（屏高/4，与旧宫格第 4 列一致）
+    int32_t scroll_x0, scroll_y0, scroll_w, scroll_h; // 滚动区视口
+    int32_t fixed_x0, fixed_y0, fixed_w, fixed_h;     // 固定区
+    int32_t content_h;     // 滚动内容总高度
+    int32_t max_scroll_px; // 最大滚动位置（0 = 内容不足一屏，不可滚）
+    int32_t item_num;      // 滚动区条目数
+} Ui_App_Menu_Geometry;
+
+static void ui_app_main_menu_geometry(Nano_GFX *gfx, Ui_App_Menu_Geometry *g) {
+    g->item_num = (int32_t)(sizeof(s_app_menu_items) / sizeof(s_app_menu_items[0]));
+    g->cell_w        = (int32_t)gfx->width / (UI_APP_MENU_SCROLL_COLS + 1); // 屏宽/4
+    g->scroll_cell_h = (int32_t)gfx->height / UI_APP_MENU_VISIBLE_ROWS;     // 屏高/4
+    g->fixed_cell_h  = (int32_t)gfx->height / UI_APP_MENU_FIXED_NUM;        // 屏高/4
+
+    g->scroll_x0 = 0;
+    g->scroll_y0 = 0;
+    g->scroll_w  = g->cell_w * UI_APP_MENU_SCROLL_COLS;
+    g->scroll_h  = (int32_t)gfx->height;
+
+    g->fixed_x0 = g->scroll_w;
+    g->fixed_y0 = 0;
+    g->fixed_w  = (int32_t)gfx->width - g->scroll_w;
+    g->fixed_h  = (int32_t)gfx->height;
+
+    int32_t content_rows = (g->item_num + UI_APP_MENU_SCROLL_COLS - 1) / UI_APP_MENU_SCROLL_COLS;
+    g->content_h = content_rows * g->scroll_cell_h;
+    g->max_scroll_px = g->content_h - g->scroll_h;
+    if (g->max_scroll_px < 0) {
+        g->max_scroll_px = 0;
+    }
 }
 
-void ui_widget_grid16_draw(Key_Event *key_event, Global_State *global_state) {
-    wchar_t cell_text[4][4][2][10] = {
-        { {L"[1]", L"番茄表",}, {L"[2]", L"鹦鹉笼",}, {L"[3]", L"玲珑仪",}, {L"[A]", L"返回",}, },
-        { {L"[4]", L"电子书",}, {L"[5]", L"音乐盒",}, {L"[6]", L"时光集",}, {L"[B]", L"设置",}, },
-        { {L"[7]", L"小游戏",}, {L"[8]", L"频谱仪",}, {L"[9]", L"寻呼机",}, {L"[C]", L"自述",}, },
-        // { {L"[*]", L"计步器",}, {L"[0]", L"手电筒",}, {L"[#]", L"控制台",}, {L"[D]", L"关机",}, }, // 原入口（手电筒已征用为电子词典）
-        { {L"[*]", L"计步器",}, {L"[0]", L"词典",}, {L"[#]", L"控制台",}, {L"[D]", L"关机",}, },
-    };
+typedef struct Ui_App_Menu_Palette {
+    uint8_t fixed_bg_r, fixed_bg_g, fixed_bg_b;   // 固定区按钮底色
+    uint8_t scroll_bg_r, scroll_bg_g, scroll_bg_b; // 滚动区按钮底色（与固定区不同色）
+    uint8_t text_r, text_g, text_b;               // 按钮文字色（两侧一致）
+} Ui_App_Menu_Palette;
 
-    // 清屏
+static void ui_app_main_menu_palette(Global_State *global_state, Ui_App_Menu_Palette *p) {
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-        gfx_fill_white(global_state->gfx);
-    }
-    else if (global_state->ui_color_style == UI_COLOR_DARK) {
-        gfx_soft_clear(global_state->gfx);
-    }
-
-    uint8_t cell_bg_R = 0, cell_bg_G = 0, cell_bg_B = 0;
-    uint8_t cell_text_R = 0, cell_text_G = 0, cell_text_B = 0;
-    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-        cell_bg_R = 0xff;
-        cell_bg_G = 0xff;
-        cell_bg_B = 0xff;
-        cell_text_R = 0x66;
-        cell_text_G = 0x66;
-        cell_text_B = 0x66;
-    }
-    else if (global_state->ui_color_style == UI_COLOR_DARK) {
-        cell_bg_R = 30;
-        cell_bg_G = 30;
-        cell_bg_B = 32;
-        cell_text_R = 0xcc;
-        cell_text_G = 0xcc;
-        cell_text_B = 0xcc;
-    }
-
-    // 所有格子的图标路径（暂定全部为 animac.png，后续逐格替换）。尺寸均为36x36。
-    // 图标经 ui_icon_draw_centered 绘制：首次读取解码后常驻缓存于PSRAM，之后直接从缓存绘制
-    const char *cell_icon_path[4][4] = {
-        {PLATFORM_ROOT_DIR "/icon/fanqie.png", PLATFORM_ROOT_DIR "/icon/nano.png",
-         PLATFORM_ROOT_DIR "/icon/linglong.png", PLATFORM_ROOT_DIR "/icon/home.png"},
-        {PLATFORM_ROOT_DIR "/icon/ebook.png", PLATFORM_ROOT_DIR "/icon/music.png",
-         PLATFORM_ROOT_DIR "/icon/album.png", PLATFORM_ROOT_DIR "/icon/settings.png"},
-        {PLATFORM_ROOT_DIR "/icon/game.png", PLATFORM_ROOT_DIR "/icon/spectrogram.png",
-         PLATFORM_ROOT_DIR "/icon/ptt.png", PLATFORM_ROOT_DIR "/icon/readme.png"},
-        {PLATFORM_ROOT_DIR "/icon/pedometer.png", PLATFORM_ROOT_DIR "/icon/dict.png",
-         PLATFORM_ROOT_DIR "/icon/animac.png", PLATFORM_ROOT_DIR "/icon/poweroff.png"},
-    };
-
-    for (int32_t row = 0; row < 4; row++) {
-        for (int32_t col = 0; col < 4; col++) {
-            ui_app_main_menu_grid16_refresh_button(key_event, global_state,
-                col, row, cell_text[row][col][1],
-                cell_icon_path[row][col],
-                cell_bg_R, cell_bg_G, cell_bg_B, 1,
-                cell_text_R, cell_text_G, cell_text_B, 1);
-
-        }
-    }
-
-    // ui_draw_header(key_event, global_state, L"Nano-Pod", 1);
-    // ui_draw_footer(key_event, global_state, L"(c) 2025-2026 BD4SUR", 1);
-}
-
-void ui_widget_grid16_event_handler(Key_Event *key_event, Global_State *global_state) {
-    // 番茄表
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_1) {
-        global_state->STATE = STATE_FLIP;
-    }
-    // 鹦鹉笼
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_2) {
-        init_model_menu(key_event, global_state);
-        global_state->STATE = STATE_MODEL_MENU;
-    }
-    // 玲珑仪
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_3) {
-        global_state->STATE = STATE_LINGLONG;
-    }
-    // 电子书
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_4) {
-        ui_ebook_menu_init(key_event, global_state);
-        global_state->STATE = STATE_EBOOK;
-    }
-    // 音乐盒
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_5) {
-        ui_musicbox_menu_init(key_event, global_state);
-        global_state->STATE = STATE_MUSICBOX_MENU;
-    }
-    // 时光集
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_6) {
-        global_state->STATE = STATE_ALBUM;
-    }
-    // 小游戏
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_7) {
-        init_game_menu(key_event, global_state);
-        global_state->STATE = STATE_GAME_MENU;
-    }
-    // 频谱仪
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_8) {
-        global_state->STATE = STATE_SPECTROGRAM;
-    }
-    // 寻呼机（OFDM 声波数传）
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_9) {
-        // TODO
-        ui_ofdm_menu_init(key_event, global_state);
-        global_state->STATE = STATE_OFDM_MENU;
-    }
-    // 电子词典（原“手电筒”入口及其颜色风格切换功能已取消，注释保留备查；
-    // 颜色风格切换请使用“系统设置”中的正式按钮）
-    // else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_0) {
-    //     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-    //         global_state->ui_color_style = UI_COLOR_DARK;
-    //     }
-    //     else {
-    //         global_state->ui_color_style = UI_COLOR_LIGHT;
-    //     }
-    // }
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_0) {
-        // 索引就绪（缺失/失效则带进度构建）后进入查询状态；失败则停留在主菜单（错误画面已显示）
-        if (ui_dict_enter(key_event, global_state) == 0) {
-            global_state->STATE = STATE_DICT_QUERY;
-        }
-        else {
-            sleep_in_ms(1500); // 错误画面停留片刻
-            ui_widget_grid16_draw(key_event, global_state);
-            gfx_refresh(global_state->gfx);
-        }
-    }
-    // 返回
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
-        global_state->STATE = STATE_SPLASH_SCREEN;
-    }
-    // 设置
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_shift) {
-        global_state->STATE = STATE_SETTING_MENU;
-    }
-    // 自述
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_ctrl) {
-        global_state->STATE = STATE_README;
-    }
-    // 关机
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_enter) {
-        global_state->STATE = STATE_SHUTDOWN;
-    }
-    // 计步器
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
-        global_state->STATE = STATE_PEDOMETER;
-    }
-    // 控制台
-    else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_right) {
-        global_state->STATE = STATE_ANIMAC_INIT;
+        // 亮色：固定区纯白，滚动区淡蓝灰 —— 一眼可辨“左可拖 / 右固定”
+        p->fixed_bg_r = 0xff; p->fixed_bg_g = 0xff; p->fixed_bg_b = 0xff;
+        p->scroll_bg_r = 0xe4; p->scroll_bg_g = 0xeb; p->scroll_bg_b = 0xf7;
+        p->text_r = 0x66; p->text_g = 0x66; p->text_b = 0x66;
     }
     else {
-        return;
+        // 暗色：固定区深灰（沿用旧宫格配色），滚动区深蓝灰
+        p->fixed_bg_r = 30; p->fixed_bg_g = 30; p->fixed_bg_b = 32;
+        p->scroll_bg_r = 16; p->scroll_bg_g = 22; p->scroll_bg_b = 36;
+        p->text_r = 0xcc; p->text_g = 0xcc; p->text_b = 0xcc;
+    }
+}
+
+// 滚动/惯性状态（本控件为全局唯一实例，静态持有）
+typedef struct Ui_App_Menu_Scroll {
+    int32_t scroll_px;   // 逻辑滚动位置（0..max_scroll_px）
+    // 触摸序列跟踪
+    int32_t touch_active;
+    int32_t touch_is_dragging;
+    int32_t touch_start_x;
+    int32_t touch_start_y;
+    int32_t touch_anchor_scroll_px; // 按下时的滚动位置（拖动锚点）
+    // 拖动速度采样（松手惯性初速度估算）
+    int32_t  touch_track_scroll;
+    uint64_t touch_track_ts;
+    float    touch_track_vel;
+    // 松手惯性滚动
+    float    fling_velocity;
+    float    fling_scroll_px;
+    uint64_t fling_last_timestamp;
+} Ui_App_Menu_Scroll;
+
+static Ui_App_Menu_Scroll s_app_menu_scroll;
+
+// 进入主菜单时复位滚动位置与触摸跟踪（列表从头显示）
+void ui_app_main_menu_scroll_reset(void) {
+    memset(&s_app_menu_scroll, 0, sizeof(s_app_menu_scroll));
+}
+
+// 绘制单格（底色矩形 + 图标 + 文字）。几何与排版与旧十六宫格一致：
+//   - 首列左缘、首行上缘各内缩 1px（旧宫格的 bx/by 规则，避免与屏幕边框粘连）；
+//   - 图标中心 = 格心偏上 8px；文字中心 = 图标中心再往下 26px（后画，覆盖在图标上）。
+// icon_clip 为图标的裁剪矩形 {x, y, w, h}（滚动区传视口，防止半格图标画出界）。
+static void ui_app_main_menu_draw_cell(
+    Global_State *global_state,
+    int32_t x0, int32_t y0, int32_t w, int32_t h,
+    int32_t is_first_col, int32_t is_first_row,
+    const wchar_t *text, const char *icon_path,
+    uint8_t bg_r, uint8_t bg_g, uint8_t bg_b,
+    uint8_t text_r, uint8_t text_g, uint8_t text_b,
+    const int32_t *icon_clip
+) {
+    int32_t bx = (is_first_col) ? 1 : 0;
+    int32_t by = (is_first_row) ? 1 : 0;
+    gfx_draw_rectangle(global_state->gfx, x0 + bx, y0 + by, w - 1 - bx, h - 1 - by, bg_r, bg_g, bg_b, 1);
+
+    int32_t cell_cx = x0 + w / 2;
+    int32_t cell_cy = y0 + h / 2;
+
+    // 图标（36x36，带 PSRAM 缓存）
+    if (icon_clip != NULL) {
+        ui_icon_draw_centered_clip(global_state->gfx, icon_path, cell_cx, cell_cy - 8,
+            icon_clip[0], icon_clip[1], icon_clip[2], icon_clip[3]);
+    }
+    else {
+        ui_icon_draw_centered(global_state->gfx, icon_path, cell_cx, cell_cy - 8);
+    }
+    // 文字（12px alpha，中心对齐）
+    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, (wchar_t *)text,
+        cell_cx, cell_cy - 8 + 18 + 8, text_r, text_g, text_b, 1);
+}
+
+// 绘制左侧滚动区（底色 + 可见格子 + 左缘滚动进度条）。
+// 底色每次重绘都重铺（与旧宫格格间缝隙一致：亮色白 / 暗色黑），既兜住格子之间 1px 的缝，
+// 又保证拖动/惯性期间只重绘本区时不残留上一帧的格子痕迹。
+static void ui_app_main_menu_draw_scroll_area(
+    Key_Event *key_event, Global_State *global_state,
+    const Ui_App_Menu_Geometry *g, const Ui_App_Menu_Palette *p
+) {
+    int32_t scroll_px = s_app_menu_scroll.scroll_px;
+    int32_t icon_clip[4] = { g->scroll_x0, g->scroll_y0, g->scroll_w, g->scroll_h };
+
+    gfx_set_clip(global_state->gfx, g->scroll_x0, g->scroll_y0, g->scroll_w, g->scroll_h);
+
+    // 底色（同 gfx_fill_white / gfx_soft_clear 的屏色）
+    uint8_t bg_r = 0, bg_g = 0, bg_b = 0;
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        bg_r = 0xff; bg_g = 0xff; bg_b = 0xff;
+    }
+    gfx_draw_rectangle(global_state->gfx, g->scroll_x0, g->scroll_y0, g->scroll_w, g->scroll_h,
+        bg_r, bg_g, bg_b, 1);
+
+    // 首个可能可见的行：其格顶 = scroll_y0 + row*cell_h - scroll_px（可为负，被裁剪）
+    int32_t first_row = scroll_px / g->scroll_cell_h;
+    // 多画一行：亚行滚动时上下各有一个部分可见的格子
+    for (int32_t row = first_row; row <= first_row + UI_APP_MENU_VISIBLE_ROWS; row++) {
+        int32_t y0 = g->scroll_y0 + row * g->scroll_cell_h - scroll_px;
+        if (y0 >= g->scroll_y0 + g->scroll_h) {
+            break;
+        }
+        for (int32_t col = 0; col < UI_APP_MENU_SCROLL_COLS; col++) {
+            int32_t index = row * UI_APP_MENU_SCROLL_COLS + col;
+            if (index >= g->item_num) {
+                break;
+            }
+            ui_app_main_menu_draw_cell(global_state,
+                g->scroll_x0 + col * g->cell_w, y0, g->cell_w, g->scroll_cell_h,
+                (col == 0), (row == 0),
+                s_app_menu_items[index].title, s_app_menu_items[index].icon_path,
+                p->scroll_bg_r, p->scroll_bg_g, p->scroll_bg_b,
+                p->text_r, p->text_g, p->text_b,
+                icon_clip);
+        }
+    }
+
+    gfx_reset_clip(global_state->gfx);
+
+    // 滚动进度条（贴在滚动区左缘，提示左侧面板可上下拖动）：
+    // 复用菜单/文本控件的滚动条实现（像素单位：滚动位置/内容高度/可视高度）
+    ui_draw_scroll_bar(key_event, global_state,
+        scroll_px, g->content_h, g->scroll_h,
+        UI_APP_MENU_SB_X, g->scroll_y0, UI_APP_MENU_SB_W, g->scroll_h);
+}
+
+// 主菜单绘制：is_full_redraw=1 整屏重绘（清屏 + 滚动区 + 固定区）；
+// 0 仅重绘左侧滚动区（拖动/惯性期间逐帧调用，右侧固定区保持不动）。内含推屏。
+void ui_app_main_menu_draw(Key_Event *key_event, Global_State *global_state, int32_t is_full_redraw) {
+    Ui_App_Menu_Geometry g;
+    Ui_App_Menu_Palette p;
+    ui_app_main_menu_geometry(global_state->gfx, &g);
+    ui_app_main_menu_palette(global_state, &p);
+
+    if (is_full_redraw) {
+        // 清屏
+        if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+            gfx_fill_white(global_state->gfx);
+        }
+        else {
+            gfx_soft_clear(global_state->gfx);
+        }
+    }
+
+    // 左侧滚动区
+    ui_app_main_menu_draw_scroll_area(key_event, global_state, &g, &p);
+
+    // 右侧固定区（静态 4 格，仅整屏重绘时绘制）
+    if (is_full_redraw) {
+        for (int32_t i = 0; i < UI_APP_MENU_FIXED_NUM; i++) {
+            ui_app_main_menu_draw_cell(global_state,
+                g.fixed_x0, g.fixed_y0 + i * g.fixed_cell_h, g.fixed_w, g.fixed_cell_h,
+                0, (i == 0),
+                s_app_menu_fixed_items[i].title, s_app_menu_fixed_items[i].icon_path,
+                p.fixed_bg_r, p.fixed_bg_g, p.fixed_bg_b,
+                p.text_r, p.text_g, p.text_b,
+                NULL);
+        }
+    }
+
+    gfx_refresh(global_state->gfx);
+}
+
+// 执行滚动区第 index 个条目对应的应用。返回切换后的状态（= STATE_MAIN_MENU 表示
+// 不切换，如词典索引构建失败后停留）。
+static int32_t ui_app_main_menu_activate_item(Key_Event *key_event, Global_State *global_state, int32_t index) {
+    switch (index) {
+        case 0:  return STATE_FLIP;                                                    // 番茄表
+        case 1:  init_model_menu(key_event, global_state); return STATE_MODEL_MENU;    // 鹦鹉笼
+        case 2:  return STATE_LINGLONG;                                                // 玲珑仪
+        case 3:  ui_ebook_menu_init(key_event, global_state); return STATE_EBOOK;      // 电子书
+        case 4:  ui_musicbox_menu_init(key_event, global_state); return STATE_MUSICBOX_MENU; // 音乐盒
+        case 5:  return STATE_ALBUM;                                                   // 时光集
+        case 6:  init_game_menu(key_event, global_state); return STATE_GAME_MENU;      // 小游戏
+        case 7:  return STATE_SPECTROGRAM;                                             // 频谱仪
+        case 8:  ui_ofdm_menu_init(key_event, global_state); return STATE_OFDM_MENU;   // 寻呼机
+        case 9:  return STATE_PEDOMETER;                                               // 计步器
+        case 10:                                                                       // 词典
+            // 索引就绪（缺失/失效则带进度构建）后进入查询状态；失败则停留在主菜单
+            // （错误画面已显示，停留片刻后重绘本菜单）
+            if (ui_dict_enter(key_event, global_state) == 0) {
+                return STATE_DICT_QUERY;
+            }
+            sleep_in_ms(1500);
+            ui_app_main_menu_draw(key_event, global_state, 1);
+            return STATE_MAIN_MENU;
+        case 11: return STATE_ANIMAC_INIT;                                             // 控制台
+        case 12: return STATE_SCHEME_APP_LIST;                                         // 灵机应用
+        default: return STATE_MAIN_MENU;
+    }
+}
+
+// 执行右侧固定区第 index 个按钮（返回/设置/自述/关机）
+static int32_t ui_app_main_menu_fixed_action(int32_t index) {
+    switch (index) {
+        case 0:  return STATE_SPLASH_SCREEN; // 返回
+        case 1:  return STATE_SETTING_MENU;  // 设置
+        case 2:  return STATE_README;        // 自述
+        case 3:  return STATE_SHUTDOWN;      // 关机
+        default: return STATE_MAIN_MENU;
+    }
+}
+
+void ui_app_main_menu_event_handler(Key_Event *key_event, Global_State *global_state) {
+    Ui_App_Menu_Geometry g;
+    ui_app_main_menu_geometry(global_state->gfx, &g);
+
+    // ========================================================================
+    // 松手惯性滚动（fling）：动画激活期间本 handler 每帧推进一次；
+    // 任意新触摸或按键边沿立即终止动画（随后的触摸/按键逻辑以当前滚动位置接管）
+    // ========================================================================
+    if (s_app_menu_scroll.fling_velocity != 0.0f) {
+        if (key_event->is_touching || key_event->touch_edge != 0 || key_event->key_edge != 0) {
+            s_app_menu_scroll.fling_velocity = 0.0f;
+        }
+        else {
+            uint64_t now = get_timestamp_in_ms();
+            float dt_s = (float)(now - s_app_menu_scroll.fling_last_timestamp) / 1000.0f;
+            s_app_menu_scroll.fling_last_timestamp = now;
+            if (dt_s > 0.05f) dt_s = 0.05f; // 帧间隔异常（阻塞/掉帧）时限幅，避免跳动
+            if (dt_s > 0.0f) {
+                float scroll = s_app_menu_scroll.fling_scroll_px + s_app_menu_scroll.fling_velocity * dt_s;
+                // 线性减速度，速度归零即停
+                float decel = UI_APP_MENU_FLING_DECEL * dt_s;
+                if (s_app_menu_scroll.fling_velocity > 0.0f) {
+                    s_app_menu_scroll.fling_velocity -= decel;
+                    if (s_app_menu_scroll.fling_velocity < 0.0f) s_app_menu_scroll.fling_velocity = 0.0f;
+                }
+                else {
+                    s_app_menu_scroll.fling_velocity += decel;
+                    if (s_app_menu_scroll.fling_velocity > 0.0f) s_app_menu_scroll.fling_velocity = 0.0f;
+                }
+                if (scroll <= 0.0f) {
+                    scroll = 0.0f;
+                    s_app_menu_scroll.fling_velocity = 0.0f;
+                }
+                if (scroll >= (float)g.max_scroll_px) {
+                    scroll = (float)g.max_scroll_px;
+                    s_app_menu_scroll.fling_velocity = 0.0f;
+                }
+                s_app_menu_scroll.fling_scroll_px = scroll;
+                int32_t new_scroll_px = (int32_t)scroll;
+                if (new_scroll_px != s_app_menu_scroll.scroll_px) {
+                    s_app_menu_scroll.scroll_px = new_scroll_px;
+                    ui_app_main_menu_draw(key_event, global_state, 0);
+                }
+            }
+        }
+    }
+
+    // ========================================================================
+    // 触屏交互（序列开始/结束认 touch_edge 边沿事件，拖动轨迹逐帧读触点快照）：
+    //   - 上下拖动：滚动区按像素跟手滚动，松手按速度启动惯性；
+    //   - 短点按：执行被点按钮（左滚动区=应用，右固定区=返回/设置/自述/关机）。
+    // 动作一律在松手沿触发，故状态切换后下一状态看到的触屏电平为 0，
+    // 不会把本次触摸误当作新的点击（见本文件「输入事件处理」的按键/触屏处理原则第 4 条）。
+    // ========================================================================
+    // 触摸序列开始：DOWN 边沿（按下点坐标取 touch_down_*）或电平兜底
+    if (((key_event->touch_edge & TOUCH_EDGE_DOWN) || key_event->is_touching) && !s_app_menu_scroll.touch_active) {
+        s_app_menu_scroll.touch_active = 1;
+        s_app_menu_scroll.touch_is_dragging = 0;
+        if (key_event->touch_edge & TOUCH_EDGE_DOWN) {
+            s_app_menu_scroll.touch_start_x = key_event->touch_down_x;
+            s_app_menu_scroll.touch_start_y = key_event->touch_down_y;
+        }
+        else {
+            s_app_menu_scroll.touch_start_x = key_event->touch_x;
+            s_app_menu_scroll.touch_start_y = key_event->touch_y;
+        }
+        s_app_menu_scroll.touch_anchor_scroll_px = s_app_menu_scroll.scroll_px;
+        s_app_menu_scroll.touch_track_scroll = s_app_menu_scroll.scroll_px;
+        s_app_menu_scroll.touch_track_ts = get_timestamp_in_ms();
+        s_app_menu_scroll.touch_track_vel = 0.0f;
+    }
+    else if (key_event->is_touching && s_app_menu_scroll.touch_active) {
+        int32_t dy = key_event->touch_y - s_app_menu_scroll.touch_start_y; // >0：手指下滑
+        if (!s_app_menu_scroll.touch_is_dragging
+            && (dy > UI_APP_MENU_DRAG_THRESHOLD || dy < -UI_APP_MENU_DRAG_THRESHOLD)) {
+            s_app_menu_scroll.touch_is_dragging = 1;
+        }
+        if (s_app_menu_scroll.touch_is_dragging) {
+            // 手指下滑 → 内容下移 → 滚动位置前移；相对锚点按像素计算，1:1 跟手无累计误差
+            int32_t new_scroll_px = s_app_menu_scroll.touch_anchor_scroll_px - dy;
+            if (new_scroll_px < 0) new_scroll_px = 0;
+            if (new_scroll_px > g.max_scroll_px) new_scroll_px = g.max_scroll_px;
+            if (new_scroll_px != s_app_menu_scroll.scroll_px) {
+                s_app_menu_scroll.scroll_px = new_scroll_px;
+                // 仅重绘左侧滚动区：右侧固定区保持不动
+                ui_app_main_menu_draw(key_event, global_state, 0);
+            }
+            // 拖动速度采样：指数平滑（0.6/0.4），供松手惯性初速度估算
+            uint64_t now = get_timestamp_in_ms();
+            uint32_t dt_ms = (uint32_t)(now - s_app_menu_scroll.touch_track_ts);
+            if (dt_ms > 0) {
+                float v_inst = (float)(new_scroll_px - s_app_menu_scroll.touch_track_scroll) * 1000.0f / (float)dt_ms;
+                s_app_menu_scroll.touch_track_vel = s_app_menu_scroll.touch_track_vel * 0.6f + v_inst * 0.4f;
+                s_app_menu_scroll.touch_track_scroll = new_scroll_px;
+                s_app_menu_scroll.touch_track_ts = now;
+            }
+        }
+    }
+    // 触摸序列结束：UP 边沿（同帧 DOWN+UP 的亚帧点按亦走到这里）或电平兜底
+    if (((key_event->touch_edge & TOUCH_EDGE_UP) || !key_event->is_touching) && s_app_menu_scroll.touch_active) {
+        s_app_menu_scroll.touch_active = 0;
+        if (s_app_menu_scroll.touch_is_dragging) {
+            // 构成拖动：松手按速度启动惯性（手指停顿过久则速度作废）
+            uint64_t now = get_timestamp_in_ms();
+            float v0 = (now - s_app_menu_scroll.touch_track_ts <= 100) ? s_app_menu_scroll.touch_track_vel : 0.0f;
+            if (v0 > UI_APP_MENU_FLING_VMAX) v0 = UI_APP_MENU_FLING_VMAX;
+            if (v0 < -UI_APP_MENU_FLING_VMAX) v0 = -UI_APP_MENU_FLING_VMAX;
+            if (v0 > UI_APP_MENU_FLING_VMIN || v0 < -UI_APP_MENU_FLING_VMIN) {
+                s_app_menu_scroll.fling_velocity = v0;
+                s_app_menu_scroll.fling_scroll_px = (float)s_app_menu_scroll.scroll_px;
+                s_app_menu_scroll.fling_last_timestamp = now;
+            }
+        }
+        else {
+            // 点按命中判定：右侧固定区优先（列区不重叠）
+            int32_t tx = s_app_menu_scroll.touch_start_x;
+            int32_t ty = s_app_menu_scroll.touch_start_y;
+            int32_t new_state = STATE_MAIN_MENU;
+            if (tx >= g.fixed_x0 && tx < g.fixed_x0 + g.fixed_w && ty >= g.fixed_y0 && ty < g.fixed_y0 + g.fixed_h) {
+                int32_t index = (ty - g.fixed_y0) / g.fixed_cell_h;
+                if (index >= 0 && index < UI_APP_MENU_FIXED_NUM) {
+                    new_state = ui_app_main_menu_fixed_action(index);
+                }
+            }
+            else if (tx >= g.scroll_x0 && tx < g.scroll_x0 + g.scroll_w
+                     && ty >= g.scroll_y0 && ty < g.scroll_y0 + g.scroll_h) {
+                // 行号需补偿滚动偏移（滚动位置非整行时，顶/底各有一个部分可见的格子）
+                int32_t col = (tx - g.scroll_x0) / g.cell_w;
+                int32_t row = (ty - g.scroll_y0 + s_app_menu_scroll.scroll_px) / g.scroll_cell_h;
+                int32_t index = row * UI_APP_MENU_SCROLL_COLS + col;
+                if (col >= 0 && col < UI_APP_MENU_SCROLL_COLS && index >= 0 && index < g.item_num) {
+                    new_state = ui_app_main_menu_activate_item(key_event, global_state, index);
+                }
+            }
+            if (new_state != global_state->STATE) {
+                global_state->STATE = new_state;
+            }
+        }
+    }
+
+    // ========================================================================
+    // 实体键盘（触屏不再派生宫格软按键，见 ui_app_state_is_menu）：
+    // 数字键 1-9 / * / 0 / # 与旧十六宫格一一对应；Esc/Shift/Ctrl/Enter 为
+    // 返回/设置/自述/关机；上/下键为滚动区整行滚动。
+    // ========================================================================
+    if (key_event->key_edge == -1 || key_event->key_edge == -2) {
+        int32_t item_index = -1;
+        switch (key_event->key_code) {
+            case NANO_KEY_1: item_index = 0; break;
+            case NANO_KEY_2: item_index = 1; break;
+            case NANO_KEY_3: item_index = 2; break;
+            case NANO_KEY_4: item_index = 3; break;
+            case NANO_KEY_5: item_index = 4; break;
+            case NANO_KEY_6: item_index = 5; break;
+            case NANO_KEY_7: item_index = 6; break;
+            case NANO_KEY_8: item_index = 7; break;
+            case NANO_KEY_9: item_index = 8; break;
+            case NANO_KEY_left:  item_index = 9;  break; // 计步器
+            case NANO_KEY_0:     item_index = 10; break; // 词典
+            case NANO_KEY_right: item_index = 11; break; // 控制台
+            case NANO_KEY_esc:   global_state->STATE = STATE_SPLASH_SCREEN; return;
+            case NANO_KEY_shift: global_state->STATE = STATE_SETTING_MENU;  return;
+            case NANO_KEY_ctrl:  global_state->STATE = STATE_README;        return;
+            case NANO_KEY_enter: global_state->STATE = STATE_SHUTDOWN;      return;
+            case NANO_KEY_up:
+            case NANO_KEY_down: {
+                int32_t step = g.scroll_cell_h;
+                int32_t new_scroll_px = s_app_menu_scroll.scroll_px
+                    + ((key_event->key_code == NANO_KEY_up) ? -step : step);
+                if (new_scroll_px < 0) new_scroll_px = 0;
+                if (new_scroll_px > g.max_scroll_px) new_scroll_px = g.max_scroll_px;
+                if (new_scroll_px != s_app_menu_scroll.scroll_px) {
+                    s_app_menu_scroll.scroll_px = new_scroll_px;
+                    s_app_menu_scroll.fling_velocity = 0.0f;
+                    ui_app_main_menu_draw(key_event, global_state, 0);
+                }
+                return;
+            }
+            default: return;
+        }
+        if (item_index >= 0 && item_index < g.item_num) {
+            global_state->STATE = ui_app_main_menu_activate_item(key_event, global_state, item_index);
+        }
     }
 }
 
@@ -4617,14 +4940,14 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
     case STATE_MAIN_MENU:
 
-        // 首次获得焦点：初始化
+        // 首次获得焦点：复位滚动位置并整屏重绘（左滚动区 + 右固定区，内含推屏）
         if (global_state->PREV_STATE != global_state->STATE) {
-            ui_widget_grid16_draw(key_event, global_state);
-            gfx_refresh(global_state->gfx);
+            ui_app_main_menu_scroll_reset();
+            ui_app_main_menu_draw(key_event, global_state, 1);
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        ui_widget_grid16_event_handler(key_event, global_state);
+        ui_app_main_menu_event_handler(key_event, global_state);
 
         break;
 

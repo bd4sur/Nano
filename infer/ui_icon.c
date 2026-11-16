@@ -6,7 +6,8 @@
 #include "platform.h"
 
 // 图标像素缓存（常驻 PSRAM，首次请求时建立，永不释放）
-// 容量须覆盖全部调用方的不同路径总数：主菜单16宫格16个 + 黄金矿工精灵9个，留余量取32
+// 容量须覆盖全部调用方的不同路径总数：主菜单 17 个（左滚动区 13 + 右固定列 4）
+// + 黄金矿工精灵 10 个，留余量取 32
 #define UI_ICON_CACHE_MAX_ENTRIES (32)
 #define UI_ICON_PATH_MAX_LEN      (64)
 
@@ -122,6 +123,49 @@ int32_t ui_icon_draw_rotated(Nano_GFX *gfx, const char *path, int32_t pivot_x, i
             if (sx < 0 || sx >= w || sy < 0 || sy >= h) continue;
             uint32_t src_idx = ((uint32_t)sy * (uint32_t)w + (uint32_t)sx) * 4;
             if (entry->rgba[src_idx + 3] == 0) continue;
+            gfx_blend_pixel(gfx, (uint32_t)x, (uint32_t)y,
+                entry->rgba[src_idx], entry->rgba[src_idx + 1], entry->rgba[src_idx + 2], entry->rgba[src_idx + 3]);
+        }
+    }
+    return 0;
+}
+
+int32_t ui_icon_draw_centered_clip(Nano_GFX *gfx, const char *path, int32_t cx, int32_t cy,
+    int32_t clip_x, int32_t clip_y, int32_t clip_width, int32_t clip_height) {
+    if (gfx == NULL || path == NULL) {
+        return -1;
+    }
+
+    UI_Icon_Cache_Entry *entry = ui_icon_cache_load(path);
+    if (entry == NULL) {
+        return -1; // 缓存满且未命中：放弃绘制
+    }
+    if (entry->rgba == NULL) {
+        return -1; // 缓存的失败结果：不绘制
+    }
+
+    // 图标左上角与目标矩形右/下边界
+    int32_t x0 = cx - entry->width / 2;
+    int32_t y0 = cy - entry->height / 2;
+    int32_t x_begin = x0, y_begin = y0;
+    int32_t x_end = x0 + entry->width;
+    int32_t y_end = y0 + entry->height;
+
+    // 与屏幕及调用方裁剪矩形求交（负坐标必须先夹到 0，否则 uint32 下会回绕写到界外）
+    if (x_begin < 0) x_begin = 0;
+    if (y_begin < 0) y_begin = 0;
+    if (x_begin < clip_x) x_begin = clip_x;
+    if (y_begin < clip_y) y_begin = clip_y;
+    if (x_end > (int32_t)gfx->width)  x_end = (int32_t)gfx->width;
+    if (y_end > (int32_t)gfx->height) y_end = (int32_t)gfx->height;
+    if (x_end > clip_x + clip_width)  x_end = clip_x + clip_width;
+    if (y_end > clip_y + clip_height) y_end = clip_y + clip_height;
+
+    // 用缓存像素混合绘制（alpha 混合；源索引用相对图标左上角的偏移回算）
+    for (int32_t y = y_begin; y < y_end; y++) {
+        uint32_t src_row = (uint32_t)(y - y0) * (uint32_t)entry->width;
+        for (int32_t x = x_begin; x < x_end; x++) {
+            uint32_t src_idx = (src_row + (uint32_t)(x - x0)) * 4;
             gfx_blend_pixel(gfx, (uint32_t)x, (uint32_t)y,
                 entry->rgba[src_idx], entry->rgba[src_idx + 1], entry->rgba[src_idx + 2], entry->rgba[src_idx + 3]);
         }
