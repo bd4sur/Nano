@@ -11153,7 +11153,9 @@ App 进程内                        宿主（ui_scheme_app.c，帧末）       
   `app_instance_alloc` 会因“唯一槽位是前台、不可驱逐”而失败（第一版就踩了这个坑）。
 - **目标已在后台**：走“恢复”，实例状态全保留；新参数照常交付 —— 这就是“同一个阅读器实例
   被再次拉起、换一篇文档”的自然实现（e2e 专门验证）。
-- 不引入导航栈：目标退出后仍回**应用列表**（调用者以角标留在列表里）。
+- ~~不引入导航栈：目标退出后仍回**应用列表**~~ —— **已被 2026-11-17 的“返回链”取代**：
+  多槽平台下目标退出会回到**拉起它的 App**（实例级 back_rel，见本文件末节）；
+  单槽平台（ESP32）仍是“回应用列表”。
 
 ## 2. 本地库 API（`infer/am_native_App.c/.h`，无新库、无新 .c 文件）
 
@@ -11233,7 +11235,8 @@ App 进程内                        宿主（ui_scheme_app.c，帧末）       
 
 - 调用者冻结在后台要占一个解释器池（WASM 每实例 48MB，拉起后 2 池 ≈ 96MB；浏览器堆
   384MB 充裕）；若将来要省内存，把 `ui_scheme_app.c` 的“多实例路径”改成销毁即可，一行。
-- 不提供“返回上一 App”（无导航栈）；也不提供返回值/回调、多参数、Intent 序列化。
+- ~~不提供“返回上一 App”（无导航栈）~~ —— 2026-11-17 已提供（返回链，最多 2 级）；
+  仍不提供返回值/回调、多参数、Intent 序列化。
 - 拉起机制只服务「灵机 App → 灵机 App」；C 版 App（STATE_* 系列）仍是硬编码的状态切换。
 - 触屏电平是共享的（与恢复路径一致，不做复位）；若拉起动作本身发生在“长按未松手”状态下，
   目标 App 的第一拍可能看到 `is_pressed=1`（本次试点点击落在列表区，未观察到问题）。
@@ -12828,3 +12831,151 @@ Scheme 的 filemgr/filepicker 用「手势平均速度」而不是逐帧 EMA，�
 - 触摸事件（CDP `Input.dispatchTouchEvent`）与鼠标事件结果一致。
 - 非 WASM 安全：`ui_app.c` 的改动完全位于 `#if defined(NANO_WASM_GUI)`；用 `NANO_TTY`
   做 `cc -fsyntax-only ui_app.c` 通过，预处理后的原生代码与修改前逐行一致。
+
+------------------------------------
+
+# 2026-11-17（灵机 App 返回链：被拉起的 App「退出」回上一 App，而不是应用列表）
+
+需求：`app/filemgr.scm` 里点开 `.md/.txt`（拉起 `markdown.scm`）或图片（拉起 `album.scm`）后，
+子 App 点右上角「退出」→「确认」，**期望回到 filemgr**，而旧行为是回应用列表（调用者虽然
+还冻结在后台，却只能从列表里再点一次找回）。多级拉起（A→B→C）同理应逐级回退。
+
+## 1. 机制：实例级返回链（**不新增栈结构、不新增分配**）
+
+- `UI_Scheme_App_State` 新增 `char back_rel[192]`：**本实例是被谁拉起的**（用源码相对路径做
+  身份键，与 `app_instance_find()` 同一套）。空串 = 顶层（从应用列表进入），退出回列表。
+- 建立（唯一入口）：`ui_scheme_app_perform_launch()` 的第 ⑤ 段——**必须在**
+  `app_instance_foreground()` / `app_instance_cold_start()` **之后**写入，因为两者内部的
+  `am_native_app_reset()` 会清掉“退出后回到谁”的确认框提示。
+- 消费（唯一出口）：新函数 `ui_scheme_app_perform_exit()`（`ui_app.c` 的 `STATE_SCHEME_APP_RUN`
+  帧末分支只调它）：
+  ```
+  读 back_rel → 先解析父实例指针 → app_teardown_foreground()（销毁当前实例）
+    → 父还活着：s_app=父 + app_instance_foreground(父)（= 列表里选中「● 运行中」同一条恢复路径）
+                 + is_full_refresh=1，返回 1（状态机仍留在 80）
+    → 父不在（被 LRU 驱逐/已销毁）：打日志 + 置列表触摸守卫，返回 0（调用方切 STATE_SCHEME_APP_LIST）
+  ```
+- 清空：`ui_scheme_app_init()` 的“恢复后台实例”分支 → **从列表进入 = 顶层**，抹掉旧链。
+  规则一句话：*返回链只由「拉起」建立，进列表即复位*。
+- **两条不变量**：① 每次回退都先销毁当前实例再前台化父节点 ⇒ 链**必然终止**（即使 A→B→A
+  绕圈：A 退出后其槽位被 memset，B 的 back_rel 指向死实例 → 降级回列表）；② 父实例不存在时
+  只降级为回列表，不需要任何回滚逻辑。
+- 单槽平台（ESP32，`SCHEME_APP_INST_MAX==1`）**不建链**：拉起时调用者已被销毁，没有“上一 App”
+  可回，行为与旧版逐字一致。
+- 实例数 3（前台 1 + 后台 2）⇒ 返回链最多 2 级；再深会驱逐最老的后台实例，链在那一环断掉
+  （日志：`返回链已断（… 已不在实例表，可能被驱逐）`）。
+
+## 2. 交互文案：确认框标题跟着变
+
+`(App.exit)` 的标题不再是恒定的「是否退出？」：
+
+- 有返回链：**「退出并返回 filemgr？」**（宿主经 `am_native_app_set_back_hint()` 告知名义上的
+  上一 App，`app_apply_back_hint()` 在三处调用：拉起重设 / 返回父实例 / 列表恢复置空）。
+- 顶层：仍是「是否退出？」。
+- `(App.exit_with 标题)` 仍优先（App 自定义标题覆盖）。
+- **文案长度踩过坑**：确认框宽 200px、标题用 16px 字模且超宽会被截成 `…`。第一版写
+  「退出并返回「filemgr」？」（带全角括号）→ 实测把末尾的「？」截掉了；去掉「」后正好放下。
+  改文案时务必截图核对 `exit_confirm` 那一帧。
+
+## 3. 必须同批修的伴生问题（否则功能有 bug）
+
+1. **在途手指误触**（P0）：返回发生在用户**手指还按着**的时候（点「确认」那一下），被恢复的
+   App 第一拍会看到 `is_pressed=1` 而自己的“上一拍电平”是 0 → 凭空一个按下沿 → 松手变成一次
+   点击（实测：确认退出后 filemgr 立刻打开了列表里被点位置的文件）。与应用列表的
+   `s_list_touch_guard` 是同一类问题的两个面（那边守 `Key_Event`，这边守 `(native Touch)`）。
+   修法：`am_native_Touch` 新增**宿主专用**接口
+   ```c
+   void am_native_Touch_drop_inflight(void);   // 直到手指抬起为止，一律按"没按"上报
+   ```
+   在 `app_instance_foreground()` 与 `app_instance_cold_start()` 末尾各调一次 —— 一次覆盖
+   「列表恢复 / 拉起 / 返回」三条路径，顺带修掉旧文档里记录的“拉起时若长按未松手，目标第一拍
+   可能看到 is_pressed=1”。
+   - **兜底用时钟而不是采样计数**：一个 App 一拍里可能采样 5~10 次（is_pressed/take_press/
+     take_release/x/y），按次数计的 180 次在 60Hz 下只挡住约 0.6 秒（实测把 1.4 秒的按住提前
+     放开）。改为 `am_current_timestamp_in_ms()` + 3000ms（与 `(native Time)` 同一时钟源，
+     回归台的 `--wrap` 也一并生效）。
+2. **退出漏斗统一**：`ui_scheme_app_event_handler()` 里“加载失败时按 A → 直接
+   `STATE = STATE_SCHEME_APP_LIST`”改为置 `s_host_exit_request`，由 `ui_scheme_app_should_exit()`
+   在帧末消费（放在 `rt` 判空**之前**，加载失败的实例本来就可能没有运行时）。于是“被拉起但
+   装不下”的 App 按 A 也回调用者，而不是被扔回列表；所有退出重新收敛到一处。
+   （`ui_app.c` 里 `if (STATE != RUN) { on_exit(); break; }` 因此变成不可达的防御分支，注释已标明。）
+3. **顺带修**：`render_frame` 的 `static int32_t error_drawn` 从不清零（第二次“加载失败”不重画
+   错误画面）→ 改成每实例字段 `error_drawn`（`app_instance_alloc` 的 `memset` 自动复位）。
+
+## 4. 代码结构：`on_exit` 拆成两半
+
+- `app_teardown_foreground()`：ui_abort / app_abort / **Chat 引擎释放** / 模态与请求位清理 /
+  销毁实例 / `am_native_gfx_reset` + 解绑 Gfx。两条出口共用（Chat 是 C 侧单例，必须释放）。
+- `ui_scheme_app_on_exit()` = teardown + 列表触摸守卫（“直接回列表”的旧入口，保留）；
+- `ui_scheme_app_perform_exit()` = teardown + 返回链（新出口，回列表那一支自己置列表守卫）。
+- 单槽平台的“拉起即替换”也改走 `app_teardown_foreground()`（原来是手抄 ui_abort +
+  chat_release + destroy，漏了模态状态与 Gfx 解绑）。
+
+## 5. 验证
+
+- **浏览器端到端（新 `tools/e2e/browser/regress_back.js`，真 WASM + 真状态机）20/20**：
+  为了拿到**三级**链，往 MEMFS 的 `app/` 里写一个测试专用 App `zzback.scm`（boot 即
+  `(App.launch "filemgr")`，装 EX 以便退出），链路
+  `列表 → zzback → filemgr → markdown`（正好占满 3 个实例槽）逐级回退，每级断言
+  `state==80` + `[scheme-app] 退出 X → 返回 Y（实例保留，状态不变）` + 父实例的目录状态仍在，
+  最后 zzback（顶层）退出回 `state==79`；并用帧缓冲像素核对 zzback 恢复后确实重绘。
+- **`regress_launch.js` 33/33**（[8] 由“退出→列表”改为“退出→filemgr”：同一实例、目录不变、
+  没有新建解释器池、**没有误触**（FMOPEN 计数不变）；[9] 新增“顶层 filemgr 退出仍回列表”）。
+- **`regress_album_launch.js` 36/36**（新增 [7] markdown 退出 → 回 filemgr）。
+- **`regress_exit.js` 38/38**（顶层 App 的退出/后台/恢复/槽位驱逐全不受影响）、
+  **`regress_markdown.js` 55/55**、**`regress_filemgr.js` 51/51**。
+- **原生库台**：`test_app_exit.py` 36/36、`test_app_launch.py` 19/19、
+  `test_touch_imu.py` **42/42**（新增 [3b] `drop_inflight` 用例：按住期间丢弃 → `is_pressed`
+  恒 #f、按下沿只有丢弃前与抬手后各 1 次、**松开沿正好 1 次**（在途那段抬手被吞）、解除后新触点
+  正常；harness 新增 `HAL_APP_AT` 动作 4）。
+- 构建：`bash build_wasm_gui.sh` 通过（wasm32，5.5MB）。
+
+## 6. 踩到的坑 / 顺手修的测试基建
+
+1. **主菜单改造后一批浏览器回归的导航失效**：旧写法 `K.digit(7)`×2 + Enter 对应 4×4 主菜单；
+   现在是“启动屏任意键 → 3×4 应用格（小游戏 = 逻辑键 6）→ 第 1 项”。失效时测试会落在
+   声谱图上（`state=53`），报错信息完全不指向真正原因。已同步修正 `regress_launch.js` /
+   `regress_album_launch.js` / `regress_exit.js` / `regress_markdown.js` / `regress_filemgr.js`。
+2. **原生回归台自 2026-11-15 加 `(native Audio)` 后全部构建失败**（`harness.c` 注册了
+   `am_native_Audio_lib`，但 8 个测试的源清单没跟上）：补 `am_native_Audio.c` + `nano_fft.c`
+   + `hal_audio_in_stub.c` + `-DAM_NATIVE_MAX_LIBS=32`（与 `host/run_host_regress.sh`、
+   `test_audio.py` 对齐）。
+
+## 7. 已知取舍 / 遗留
+
+- 返回链最多 2 级（实例槽 3）。要更深只能调 `SCHEME_APP_INST_MAX`（4 槽 = WASM 224MB /
+  桌面 64 位 320MB），本期不动；链断有日志、有降级。
+- “同一 App 在链上出现两次”（A→B→A）受“一 App 一实例”模型限制：第二次进 A 复用同一实例，
+  A 的父被改写为 B，B 退出后回列表而不是最初的 A。要真修需要同 App 多实例，与
+  `app_instance_find()` 的唯一性设计冲突，明确不做。
+- 不提供返回值/回调；返回时只置 `(App.resumed)`（App 据此重绘）。filemgr 返回后**不会自动
+  重扫目录**（子 App 可能刚改过文件）——留作后续：给 `app/lib/exit.scm` 加 `(EX.on_resume fn)`，
+  filemgr 传 `load_dir` 重扫。
+- 拉起 → 目标冷启动失败 → 按 A 现在回调用者（而不是列表），错误画面的提示文字仍是
+  「按 A 返回」（没写“返回哪个 App”）。
+
+## 8. P2 追加（同一提交）：按钮文案「返回」+ 返回后重扫数据
+
+1. **`(App.back_to)` : String | #null**（`am_native_App.c`，只读、**不**取走，与
+   `(App.launch_arg)` 的一次性语义相反）：读的就是宿主登记的那份“退出后回到谁”。
+   - 时序调整（关键）：宿主的 `back_rel` 由“拉起时在目标上前台**之后**写”改为
+     **在上前台之前**写；`app_apply_back_hint()` 移进 `app_instance_foreground()` 与
+     `app_instance_cold_start()` 的 `am_native_app_reset()` 之后各一次。于是
+     **冷启动的 `boot` 里就能读到正确的 `(App.back_to)`**（`(EX.install)` 要用它定文案）。
+   - 列表恢复路径改为“**先**清 `back_rel` 再 `foreground`”，提示因此被正确置空。
+2. **`app/lib/exit.scm`**：
+   - 右上角按钮文案随返回链变：被拉起时画**「返回」**，顶层画**「退出」**
+     （`apply_label`，只在**安装时**与**每次恢复时**各算一次——`(App.back_to)` 每次都分配
+     字符串，每拍取值等于每拍制造垃圾）。诊断行 `EXBTN label=…` 供端到端断言。
+   - 新接口 **(EX.on_resume fn)**：恢复时先跑 `fn`（刷数据 + 重绘），**代替**原来“只补一次
+     重绘”。不登记的 App 行为不变。
+3. **`app/filemgr.scm`**：登记 `(EX.on_resume on_resume)` —— 返回/恢复时**重扫当前目录**
+   （子 App 可能刚保存/改名/删了文件），诊断行 `FMRESUME <dir>`。用 `load_dir` 而不是
+   `op_refresh`：返回是常态，不该每次都闪一条“已刷新”。
+4. 验证追加：`regress_back.js` **24/24**（+4：拉起方/被拉起方按钮文案、返回后 `FMRESUME`、
+   回到顶层后文案复归「退出」）、`regress_launch.js` **36/36**（+3）、
+   `regress_album_launch.js` **37/37**（+1）、原生 `test_app_launch.py` **23/23**
+   （+4：`HAL_APP_BACK` 驱动的 `(App.back_to)` 只读/顶层 #null 用例）。
+   `regress.js` 全 55 App 仍全部启动、`state=80`、无 pageerror。
+5. 仍然遗留：markdown/album 不重扫文档列表（阅读器自己按需重读）；锁屏恢复也会触发
+   `(EX.on_resume)`（对 filemgr 是多余但无害的一次重扫）。

@@ -5232,7 +5232,9 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         }
         global_state->PREV_STATE = global_state->STATE;
 
-        // 按键处理（A返回列表）；返回则销毁解释器并跳过一帧渲染
+        // 按键处理（硬 A/ESC 只置“返回请求”，不再在这里退出）；
+        // 这个提前返回口现在理论上不可达（ui_scheme_app_event_handler 不再改 STATE），
+        // 保留作防御：将来若事件层又要直接切状态，仍然会经过同一套实例收尾。
         ui_scheme_app_event_handler(key_event, global_state);
         if (global_state->STATE != STATE_SCHEME_APP_RUN) {
             ui_scheme_app_on_exit();
@@ -5247,8 +5249,12 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 才销毁（退出）、冻结（切后台）或切换（拉起另一个 App）。
         // 优先级：退出 > 拉起 > 切后台（一个 App 同时发多条请求时行为确定）。
         if (ui_scheme_app_should_exit(global_state)) {
-            ui_scheme_app_on_exit();
-            global_state->STATE = STATE_SCHEME_APP_LIST;
+            // 所有退出的唯一出口：有活着的“返回链”（本 App 是被另一个 App 拉起的）就
+            // 回上一 App 并**留在运行态**（与 perform_launch 同一手法：PREV_STATE 未变，
+            // 下一帧不会再跑 init）；否则销毁实例回应用列表。
+            if (!ui_scheme_app_perform_exit(global_state)) {
+                global_state->STATE = STATE_SCHEME_APP_LIST;
+            }
         }
         else if (ui_scheme_app_perform_launch(global_state)) {
             // (App.launch)/(App.launch_with)：宿主机已完成切换（目标已上前台，

@@ -71,6 +71,8 @@ static int32_t s_launch_arg_valid = 0;
 static wchar_t s_launch_arg_inbox[AM_NATIVE_APP_LAUNCH_ARG_MAX];
 // 名字存在性查询钩子（宿主提供；未注册时一律按"受理"处理）
 static int32_t (*s_launch_lookup)(const wchar_t *name) = NULL;
+// “退出后会回到哪个 App”（宿主登记；空串 = 顶层，退出回应用列表）——只用于确认框标题
+static wchar_t s_back_hint[APP_NAME_MAX];
 
 // ===============================================================================
 // 内部辅助
@@ -136,8 +138,22 @@ static size_t app_pop_wstring_copy(am_process_t *proc, wchar_t *dst, size_t cap)
 
 int32_t am_native_App_exit(am_runtime_t *rt, am_process_t *proc) {
     // 无参数：直接以默认标题发起"退出型确认框"
+    wchar_t title[AM_NATIVE_UI_TITLE_MAX];
+
     am_native_app_clear_back_request();
-    return am_native_ui_confirm_begin(rt, proc, L"是否退出？", NULL, 1);
+    // 有返回链时把结果提前告诉用户：“确认”不是回桌面，而是回上一个 App
+    // （否则用户会以为"点退出却没有应用列表"）。标题超长时退化为默认文案。
+    // 文案长度受限：确认框宽 200px、标题用 16px 字模且超宽会被截成“…”，
+    // 故不用全角括号（「」各占 16px，实测会把末尾的“？”截掉——2026-11 截图核对）。
+    if (s_back_hint[0] != L'\0') {
+        if (swprintf(title, AM_NATIVE_UI_TITLE_MAX, L"退出并返回 %ls？", s_back_hint) < 0) {
+            wcscpy(title, L"是否退出？");
+        }
+    }
+    else {
+        wcscpy(title, L"是否退出？");
+    }
+    return am_native_ui_confirm_begin(rt, proc, title, NULL, 1);
 }
 
 int32_t am_native_App_exit_with(am_runtime_t *rt, am_process_t *proc) {
@@ -303,6 +319,13 @@ int32_t am_native_App_launch_arg(am_runtime_t *rt, am_process_t *proc) {
     return app_push_wstring(proc, s_launch_arg_inbox);
 }
 
+int32_t am_native_App_back_to(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    // 只读、**不**取走：App 可能每拍/每次重绘都要看（与 launch_arg 的一次性语义不同）
+    if (s_back_hint[0] == L'\0') return app_push(proc, AM_VALUE_NULL);
+    return app_push_wstring(proc, s_back_hint);
+}
+
 // ===============================================================================
 // 宿主服务接口
 // ===============================================================================
@@ -325,6 +348,8 @@ void am_native_app_reset(const wchar_t *name) {
     s_launch_arg_out[0] = L'\0';
     s_launch_arg_valid = 0;
     s_launch_arg_inbox[0] = L'\0';
+    // 返回链提示属于"上一个上下文"：前台切换时先清空，宿主要在 reset 之后重新告知
+    s_back_hint[0] = L'\0';
 
     s_name[0] = L'\0';
     if (name != NULL) {
@@ -347,6 +372,7 @@ void am_native_app_abort(void) {
     s_launch_arg_out[0] = L'\0';
     s_launch_arg_valid = 0;
     s_launch_arg_inbox[0] = L'\0';
+    s_back_hint[0] = L'\0';   // 实例销毁：返回链提示跟着前台上下文一起作废
 }
 
 void am_native_app_set_back_request(am_runtime_t *rt) {
@@ -467,6 +493,13 @@ void am_native_app_bind_lookup(int32_t (*fn)(const wchar_t *name)) {
     s_launch_lookup = fn;
 }
 
+void am_native_app_set_back_hint(const wchar_t *title) {
+    s_back_hint[0] = L'\0';
+    if (title == NULL || title[0] == L'\0') return;
+    wcsncpy(s_back_hint, title, APP_NAME_MAX - 1);
+    s_back_hint[APP_NAME_MAX - 1] = L'\0';
+}
+
 // ===============================================================================
 // 库注册表
 // ===============================================================================
@@ -487,6 +520,7 @@ static const am_native_func_entry_t am_native_App_funcs[] = {
     { L"launch",          am_native_App_launch },
     { L"launch_with",     am_native_App_launch_with },
     { L"launch_arg",      am_native_App_launch_arg },
+    { L"back_to",         am_native_App_back_to },
 };
 
 const am_native_lib_entry_t am_native_App_lib = {

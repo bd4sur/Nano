@@ -73,6 +73,7 @@ extern "C" {
 //      (if (App.exit) (App.exit_now))        ; 弹全局确认框；确认则退出
 //      (App.exit_with "结束本局？")           ; 自定义确认框标题
 //      (App.exit_now)                        ; 不问，直接退（App 自己已确认过）
+//      (App.back_to)                         ; 退出后回到哪个 App（#null = 顶层）
 //      (App.back_requested)                  ; 用户按了硬 A/ESC（取走即清零）
 //      (App.modal_closed)                    ; 最近一次宿主模态框已关闭（取走即清零）
 //
@@ -163,9 +164,10 @@ int32_t am_native_App_platform(am_runtime_t *rt, am_process_t *proc);
 //  调用者去往何处：
 //    · 多实例平台（WASM/桌面，实例槽 3）——调用者被**挂起冻结**（与 (App.hide)
 //      同一条通道）：解释器与内存池原地保留，列表里带「● 运行中」角标，选中即恢复
-//      原状态。目标 App 退出后仍回应用列表（本机制不引入导航栈）。
+//      原状态。**目标 App 退出后回到调用者**（实例级返回链，见下“返回链”）。
 //    · 单实例平台（ESP32，实例槽 1）——没有后台能力，调用者被**销毁**
-//      （等价于「拉起即替换」，与该平台 (App.hide) 的退化语义一致）。
+//      （等价于「拉起即替换」，与该平台 (App.hide) 的退化语义一致）；没有“上一 App”
+//      可回，目标退出后仍回应用列表。
 //
 //  目标已在后台（曾切后台/曾被拉起）：走「恢复」路径，实例内的状态全部保留；
 //  新的一次拉起只把新的启动参数交给它（(App.launch_arg) 会再取到一条）——
@@ -178,6 +180,25 @@ int32_t am_native_App_platform(am_runtime_t *rt, am_process_t *proc);
 //  名字的写法：app/ 下源码文件名去 .scm（= 应用列表里显示的名字），也接受
 //  "xxx.scm" 与 "app/xxx.scm"。注意列表显示名在宿主侧按 SCHEME_APP_NAME_MAX 截断
 //  （当前 39 个字符），超长文件名请用截断后的名字。
+//
+//  返回链（本机制的第四段，2026-11 新增：App → App → …）
+//    每个**实例**记住“我是被谁拉起的”（宿主侧 UI_Scheme_App_State.back_rel，按源码
+//    路径标识），于是：
+//      · 被拉起方点「退出」→ 确认 → 宿主销毁它，并把**调用者**恢复为前台
+//        （与列表里选中「● 运行中」是同一条恢复路径，调用者的状态/滚动位置全部保留）；
+//      · 调用者自己再退出 → 继续向它的调用者回，形成任意级的回退链；
+//      · 链上某个实例已被 LRU 驱逐（实例槽 3：最多 2 级返回）、或本来就是从应用列表
+//        进入的（顶层）→ 退出回应用列表。
+//    两条不变量：每个“回退”都先销毁当前实例再前台化父节点 —— 因此链**必然终止**
+//    （即使 A→B→A 绕圈）；父实例不存在时只降级为回列表，不需要任何回滚逻辑。
+//    「后台」按钮语义不变：冻结本 App → 回应用列表（≈ home；「退出」才是 back）。
+//    ESP32 单槽平台不建返回链（调用者已被销毁），行为与旧版一致。
+//    文案：宿主通过 am_native_app_set_back_hint() 告知名义上的上一 App，于是
+//      · (App.exit) 的确认框标题变成「退出并返回 文件管理器？」；
+//      · (App.back_to) 读同一个值 —— App 可把退出入口直接画成「返回」
+//        （app/lib/exit.scm 的右上角按钮已经这么做）。
+//    时序保证：拉起**冷启动**时，boot（含 (EX.install)）里 (App.back_to) 已可用；
+//    从后台恢复 / 返回上一 App 时它会变，App 在 (App.resumed) 那拍重读即可。
 // ---------------------------------------------------------------------------
 
 // 启动参数的长度上限（码点）。取 256：宿主绝对路径的上限是 FS_PATH_MAX=256 **字节**
@@ -194,6 +215,15 @@ int32_t am_native_App_launch_with(am_runtime_t *rt, am_process_t *proc);
 // (App.launch_arg) : String | #null —— 本实例收到的启动参数；**取走即清零**
 //   （语义同 (App.back_requested)；没有参数时返回 #null，空串从不会被交付）
 int32_t am_native_App_launch_arg(am_runtime_t *rt, am_process_t *proc);
+
+// (App.back_to) : String | #null —— “退出后回到哪个 App”（显示名）；顶层实例返回 #null。
+//   **只读、不取走**（与 launch_arg 不同：整个生命周期内都可用）。
+//   用途：App 把自己的退出入口写成“返回”（而不是“退出”）——例如
+//   app/lib/exit.scm 的右上角按钮：被拉起时画「返回」，顶层时画「退出」。
+//   与 (App.exit) 的确认框标题同源（都是宿主经 am_native_app_set_back_hint 告知的）。
+//   注意：拉起**冷启动**时它在 boot 里已经可用（宿主在目标上前台之前就写好了），
+//   从后台恢复/返回上一 App 时会变（宿主会重新告知）——恢复后请重读。
+int32_t am_native_App_back_to(am_runtime_t *rt, am_process_t *proc);
 
 // ---------------------------------------------------------------------------
 // 宿主服务接口（供 ui_scheme_app.c 使用；Scheme 侧不可见）
@@ -275,6 +305,14 @@ void am_native_app_set_launch_arg(const wchar_t *arg);
 // 注册「App 名字是否存在」的查询钩子（宿主 ui_scheme_app.c 提供）；传 NULL 注销。
 // 未注册时 (App.launch) 无法预先校验名字，一律按"受理"处理（由宿主在帧末打日志）。
 void am_native_app_bind_lookup(int32_t (*fn)(const wchar_t *name));
+
+// 登记“退出后会回到哪个 App”（显示名；NULL/空串 = 顶层，退出回应用列表）。
+//   · **必须**在前台切换的 am_native_app_reset() **之后**调用（reset 会清空它）；
+//   · 两个用途：(App.exit) 的确认框标题变成「退出并返回 X？」（告诉用户“确认后不是
+//     回桌面，而是回上一个 App”，否则用户会以为退不出去）；(App.back_to) 读同一个值，
+//     App 可据此把退出按钮画成「返回」。
+//   · (App.exit_with 标题) 仍然优先（App 自定义标题覆盖本提示）。
+void am_native_app_set_back_hint(const wchar_t *title);
 
 #ifdef __cplusplus
 }

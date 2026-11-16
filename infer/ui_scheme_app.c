@@ -145,6 +145,12 @@ static int32_t s_list_empty = 0;                // app 目录下没有 .scm（�
 static int32_t s_list_touch_guard = 0;
 static uint64_t s_list_touch_guard_until_ms = 0;  // 抑制窗口（超时兜底解除，防止永久吞触摸）
 
+// 宿主自己发起的“退出当前实例”请求（非 App 侧发起）。目前只有一个来源：
+//   **加载失败时按硬 A/ESC**（没有 Scheme 代码可接管返回请求，旧实现直接改 STATE）。
+// 走本请求位而不是直接改 STATE，是为了让所有退出都汇到帧末的同一个漏斗
+// （ui_scheme_app_perform_exit）——“退出 > 拉起 > 切后台”的排序也只有一处。
+static int32_t s_host_exit_request = 0;
+
 // 菜单条目文本（供 w_menu_main->items 借用）与指针表
 static wchar_t (*s_item_text)[SCHEME_APP_NAME_MAX] = NULL;
 static const wchar_t **s_item_ptrs = NULL;
@@ -161,6 +167,9 @@ static const wchar_t **s_item_ptrs = NULL;
 //     （前台永不驱逐）；ESP32 内部 RAM 紧张，取 1（= 没有后台能力，hide 退化为退出）。
 //   · 实例的身份用**源码相对路径**（source_rel）标识，不用 s_apps[] 指针——列表每次
 //     进入都会重扫描并复用同一块 s_apps 缓冲，指针会失效。
+//   · 返回链（back_rel）：见 UI_Scheme_App_State 的字段说明。多槽平台才有意义
+//     （单槽平台拉起时调用者已被销毁，没有“上一 App”可回）。
+//     实例数 3 → 返回链最多 2 级（列表 → A → B → C 就占满了；再深会驱逐 A，链在 A 处断）。
 // ===============================================================================
 
 #if NANO_IS_M5ESP
@@ -188,6 +197,15 @@ typedef struct {
     int32_t foreground;               // 1=前台（唯一）；0=后台（冻结）
     int32_t suspended;                // 1=被宿主挂起（切后台或锁屏），(App.is_active)=#f
     uint64_t last_active_ms;          // 前台/活跃时刻（LRU 驱逐依据）
+    int32_t error_drawn;              // 加载失败画面已画过（每实例一份，冷启动清零）
+    // ---- 返回链（App → App 的“回上一 App”，2026-11）----
+    // “我是被谁拉起的”：本实例退出（销毁）后要回到的 App，同样用**源码相对路径**
+    // 做身份键。空串 = 顶层（从应用列表进入），退出回应用列表。
+    // 为什么存在**实例**里而不是另立一个栈：链的每个节点天然就是一个实例，回退 = 销毁
+    // 当前实例 + 前台化 back_rel 指向的实例 —— 不需要深度上限、不需要驱逐时的双向簿记；
+    // 父实例若已被 LRU 驱逐，app_instance_find 自然返回 NULL，降级为回列表即可。
+    // 也正因为每次回退都先销毁当前实例，链**必然终止**（即使 A→B→A 绕圈）。
+    char    back_rel[192];
 } UI_Scheme_App_State;
 
 static UI_Scheme_App_State s_inst[SCHEME_APP_INST_MAX];
@@ -198,6 +216,7 @@ static UI_Scheme_App_State *app_instance_alloc(int32_t desc_idx);
 static void app_instance_destroy(UI_Scheme_App_State *inst);
 static void app_instance_foreground(UI_Scheme_App_State *inst);
 static void app_instance_suspend(UI_Scheme_App_State *inst);
+static void app_apply_back_hint(UI_Scheme_App_State *inst);
 
 // 名字 → s_apps[] 下标（拉起用；接受 "markdown"/"markdown.scm"/"app/markdown.scm"）
 static int32_t app_desc_find_name(const wchar_t *name);
@@ -561,6 +580,12 @@ int32_t ui_scheme_app_init(Key_Event *key_event, Global_State *global_state) {
     inst = app_instance_find(s_apps[s_selected].source_rel);
     if (inst != NULL) {
         s_app = inst;
+        // **从应用列表进来 = 顶层**：抹掉旧的返回链，退出时回列表（而不是跳回上一个 App）。
+        // 规则只有一句：返回链只由「拉起」建立，进列表即复位。（“后台”按钮 = 回列表，
+        // 再从列表点进来当然就是一层新的顶层。）
+        // 先清 back_rel 再 foreground：foreground 会在 am_native_app_reset 之后据此
+        // 重新置“退出后回到谁”的提示（这里就是置空）。
+        inst->back_rel[0] = '\0';
         app_instance_foreground(inst);
         printf("[scheme-app] 恢复后台实例：%ls（内存池 %u 字节仍在）\n",
                inst->title, (uint32_t)inst->pool_size_bytes);
@@ -646,6 +671,10 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     am_runtime_register_native_lib(s_app->rt, &am_native_Chat_lib);
     am_native_ui_abort(); // 清掉上一个 App 可能遗留的请求
     am_native_app_reset(s_app->title);
+    // 返回链提示（“退出后回到谁”）必须在 reset **之后**重新告知，而且要在
+    // app_load_source() 之前——被拉起冷启动时，App 的 boot（(EX.install)）就要用
+    // (App.back_to) 决定把自己的退出按钮画成「返回」还是「退出」。
+    app_apply_back_hint(s_app);
     am_native_Key_reset();
     // Gfx 的「绘制设置」：字模/裁剪是 am_native_Gfx.c 与 Nano_GFX 上的宿主单例状态，
     // 不随实例销毁而复位。不复位则上一个 App 的 (Gfx.set_font 0) 会被本 App 继承
@@ -677,11 +706,15 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
         s_app->alive = 1;
     }
     // 冷启动的实例同样是前台（eviction 只驱逐后台实例）
+    s_app->error_drawn = 0;   // 本实例的错误画面还没画过（旧实现是函数内 static，第二次加载失败不重画）
     for (int32_t i = 0; i < SCHEME_APP_INST_MAX; i++) s_inst[i].foreground = 0;
     s_app->foreground = 1;
     s_app->suspended = 0;
     s_app->last_active_ms = get_timestamp_in_ms();
     am_native_app_set_active(1);
+    // 冷启动同样是在“手指还按着”的时候发生的（点列表项 / 点 filemgr 里的文件行）→
+    // 丢弃这段在途手势，否则新 App 的 boot/第一拍会凭空多出一个按下沿（一次误点）。
+    am_native_Touch_drop_inflight();
     return 0;
 }
 
@@ -766,9 +799,8 @@ int32_t ui_scheme_app_render_frame(Key_Event *key_event, Global_State *global_st
 
 
     if (s_app->load_failed) {
-        // 失败画面：黑底，标题 + 原因 + 提示（只画一次，等 A 退出）
-        static int32_t error_drawn = 0;
-        if (!error_drawn) {
+        // 失败画面：黑底，标题 + 原因 + 提示（每实例只画一次，等 A 退出）
+        if (!s_app->error_drawn) {
             gfx_soft_clear(gfx);
             gfx_font_draw_text(gfx, GFX_FONT_ALPHA_16,
                                s_app->title,
@@ -783,7 +815,7 @@ int32_t ui_scheme_app_render_frame(Key_Event *key_event, Global_State *global_st
             gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, hint, 8, 120, 180, 180, 180, 1);
             gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"按 A 返回", 8, 200, 180, 180, 180, 1);
             gfx_refresh(gfx);
-            error_drawn = 1;
+            s_app->error_drawn = 1;
         }
         return 0;
     }
@@ -1091,7 +1123,10 @@ int32_t ui_scheme_app_event_handler(Key_Event *key_event, Global_State *global_s
     }
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
         if (s_app->load_failed || s_app->rt == NULL) {
-            global_state->STATE = STATE_SCHEME_APP_LIST;
+            // 加载失败/无运行时：没有 Scheme 代码可以接管返回请求 → 宿主自己退出本实例。
+            // 不再直接改 STATE_SCHEME_APP_LIST：走与 (App.exit) 同一个帧末漏斗，
+            // 这样“被拉起但装不下”的 App 按 A 也回到**拉起它的 App**（而不是被扔回列表）。
+            s_host_exit_request = 1;
             return 0;
         }
         // 已在退出流程中（收尾窗口内）：A/ESC 不再有意义，忽略
@@ -1118,7 +1153,16 @@ int32_t ui_scheme_app_should_exit(Global_State *global_state) {
     int32_t ms;
     (void)global_state;
 
-    if (s_app == NULL || s_app->rt == NULL) return 0;
+    if (s_app == NULL) return 0;
+
+    // 宿主自己发起的退出（目前只有“加载失败时按 A”）：取走即清零，立即走退出流程。
+    // 放在 rt 判空之前——加载失败的实例本来就可能没有运行时。
+    if (s_host_exit_request) {
+        s_host_exit_request = 0;
+        return 1;
+    }
+
+    if (s_app->rt == NULL) return 0;
 
     // 模态框存续期间：App 正在和用户交互（不是卡在收尾），续期收尾窗口、不销毁
     if (s_modal_active) {
@@ -1220,7 +1264,29 @@ static void app_instance_destroy(UI_Scheme_App_State *inst) {
     inst->pid = (am_pid_t)-1;
 }
 
+// 按实例的 back_rel 刷新“退出后回到谁”的提示（必须在 am_native_app_reset 之后调）。
+// 这一个值同时供两个用途：(App.exit) 的确认框标题「退出并返回 X？」与 (App.back_to)。
+// 链空或父实例已不在实例表 → 置空（= 顶层，退出回应用列表）。
+// 调用点只有两处——实例上前台的两种方式：app_instance_foreground() 与
+// app_instance_cold_start()，且都在自己的 am_native_app_reset() 之后立即调用。
+static void app_apply_back_hint(UI_Scheme_App_State *inst) {
+    UI_Scheme_App_State *back;
+    if (inst == NULL || inst->back_rel[0] == '\0') {
+        am_native_app_set_back_hint(NULL);
+        return;
+    }
+    back = app_instance_find(inst->back_rel);
+    am_native_app_set_back_hint(back != NULL ? back->title : NULL);
+}
+
 // 把实例提为前台：恢复本地库的"当前 App"上下文、解除挂起、通知 App 自己被恢复了
+//
+// 注意：本函数**不动 back_rel**（返回链由调用的地方决定）：
+//   · 从应用列表恢复 → 视为顶层，调用方**先**清空 back_rel 再调本函数（见 ui_scheme_app_init）；
+//   · 拉起另一个 App → 调用方（perform_launch）在**本函数之前**写好 back_rel；
+//   · 回上一 App   → 父实例的 back_rel 不动（它可能自己也是被拉起的，见 perform_exit）。
+// 本函数在 am_native_app_reset 之后自己调 app_apply_back_hint()，把“退出后回到谁”
+// 重新告知本地库——App 在 (App.resumed) 那一拍重读 (App.back_to) 就能刷新按钮文案。
 static void app_instance_foreground(UI_Scheme_App_State *inst) {
     for (int32_t i = 0; i < SCHEME_APP_INST_MAX; i++) s_inst[i].foreground = 0;
     inst->foreground = 1;
@@ -1231,6 +1297,14 @@ static void app_instance_foreground(UI_Scheme_App_State *inst) {
     am_native_app_reset(inst->title);      // 本地库的"当前 App"上下文
     am_native_app_set_active(1);
     am_native_app_notify_resumed();         // (App.resumed) → #t 一次（App 据此重绘）
+    // 提示要在 reset 之后（reset 会清空），且在恢复/返回后可能**变**（进顶层变 NULL、
+    // 返回上一 App 变成它自己的父）：App 在 (App.resumed) 那拍重读 (App.back_to)。
+    app_apply_back_hint(inst);
+    // 切换发生在这个 App **看不到的那段时间**里（用户可能正按着手指：点列表项、
+    // 点退出确认框的「确认」、点另一个 App 里的文件行）。那段手势不属于本 App，
+    // 必须整段丢掉，否则恢复后的第一拍会凭空多出一个按下沿（→ 一次误点）。
+    // 见 am_native_Touch.h 的 am_native_Touch_drop_inflight。
+    am_native_Touch_drop_inflight();
 }
 
 // 挂起实例（后台或锁屏）：不再泵它，(App.is_active) 变 #f；运行时与内存池原地保留
@@ -1242,8 +1316,12 @@ static void app_instance_suspend(UI_Scheme_App_State *inst) {
     am_native_ui_abort();   // 挂起期间的模态请求作废（进程随后不再被泵）
 }
 
-// 退出当前前台实例（销毁）；供 ui_app.c 在 (App.exit) 后调用
-void ui_scheme_app_on_exit(void) {
+// 销毁前台实例的公共收尾（杀进程 → 销毁运行时/内存池 → 解绑 Gfx → 清模态与请求位）。
+// 两条出口共用：
+//   · 回应用列表（ui_scheme_app_on_exit）—— 额外置列表触摸守卫；
+//   · 回上一 App（ui_scheme_app_perform_exit）—— 不需要列表守卫（App 侧由
+//     am_native_Touch_drop_inflight 负责在途手势）。
+static void app_teardown_foreground(void) {
     UI_Scheme_App_State *inst = s_app;
 
     // 丢弃可能挂起的模态输入/退出请求（进程随后会被销毁，不能留悬空 PID）
@@ -1252,10 +1330,6 @@ void ui_scheme_app_on_exit(void) {
     // 释放 (native Chat) 的推理引擎（模型权重 + KV-Cache 可达数百 MB，不随解释器池回收；
     // Scheme 进程已销毁，留着只会挤占内存。恢复后台实例时 App 会按 (Chat.loaded) 重新载入）
     am_native_chat_release();
-    // 退出可能发生在手指动作过程中：列表紧接着收到的"余波"（旧序列的电平与迟到的
-    // UP 边沿）必须吞掉，直到用户真正开始新的一次按下或窗口到期（见 s_list_touch_guard）
-    s_list_touch_guard = 1;
-    s_list_touch_guard_until_ms = get_timestamp_in_ms() + 600;
     s_modal_active = 0;
     s_modal_ignore_longpress_repeat = 0;
     s_modal_open_key = 0;
@@ -1265,11 +1339,70 @@ void ui_scheme_app_on_exit(void) {
     s_modal_kind = AM_NATIVE_UI_KIND_NONE;
     s_modal_confirm_with_body = 0;
     s_modal_confirm_with_bg = 0;
+    s_host_exit_request = 0;
 
     app_instance_destroy(inst);
     // 实例已销毁：把绘制设置交还默认值，避免退出后的菜单/列表继承 App 的字模/裁剪
     am_native_gfx_reset();
     am_native_gfx_bind(NULL);
+}
+
+// 退出当前前台实例（销毁）；供 ui_app.c 在 (App.exit) 后调用
+void ui_scheme_app_on_exit(void) {
+    app_teardown_foreground();
+
+    // 退出可能发生在手指动作过程中：列表紧接着收到的"余波"（旧序列的电平与迟到的
+    // UP 边沿）必须吞掉，直到用户真正开始新的一次按下或窗口到期（见 s_list_touch_guard）
+    s_list_touch_guard = 1;
+    s_list_touch_guard_until_ms = get_timestamp_in_ms() + 600;
+}
+
+// 结束当前前台实例：有活着的返回链 → 回到上一 App（状态机仍是 STATE_SCHEME_APP_RUN），
+// 返回 1；否则销毁并回应用列表，返回 0（调用方把 STATE 切到 STATE_SCHEME_APP_LIST）。
+//
+// 顺序很关键：**先**把 back_rel 读出来、**先**解析父实例指针，再销毁当前实例
+// （app_instance_destroy 会 memset 本槽）。
+int32_t ui_scheme_app_perform_exit(Global_State *global_state) {
+    UI_Scheme_App_State *inst = s_app;
+    UI_Scheme_App_State *caller = NULL;
+    wchar_t inst_title[SCHEME_APP_NAME_MAX];
+    char back[192];
+    size_t back_len = 0;
+
+    back[0] = '\0';
+    inst_title[0] = L'\0';
+    if (inst != NULL) {
+        // 定长拷贝（不依赖 strncpy 的 NUL 补齐行为，静态分析器也看得懂）
+        back_len = strlen(inst->back_rel);
+        if (back_len >= sizeof(back)) back_len = sizeof(back) - 1;
+        memcpy(back, inst->back_rel, back_len);
+        back[back_len] = '\0';
+        wcsncpy(inst_title, inst->title, SCHEME_APP_NAME_MAX - 1);
+        inst_title[SCHEME_APP_NAME_MAX - 1] = L'\0';
+        if (back[0] != '\0') caller = app_instance_find(back);
+        if (caller == inst) caller = NULL;   // 防御：链指向自己（不应发生）
+    }
+
+    app_teardown_foreground();
+
+    if (caller == NULL) {
+        if (back[0] != '\0') {
+            printf("[scheme-app] 返回链已断（%s 已不在实例表，可能被驱逐），回应用列表\n", back);
+        }
+        // 回列表：与 ui_scheme_app_on_exit 同一份在途触摸余波抑制
+        s_list_touch_guard = 1;
+        s_list_touch_guard_until_ms = get_timestamp_in_ms() + 600;
+        return 0;
+    }
+
+    // 回上一 App：与“在应用列表里选中 ● 运行中”完全同一条恢复路径（实例/状态全保留）
+    s_app = caller;
+    am_native_gfx_bind(global_state->gfx);
+    am_native_raster_bind(global_state->gfx);
+    app_instance_foreground(caller);
+    global_state->is_full_refresh = 1;
+    printf("[scheme-app] 退出 %ls → 返回 %ls（实例保留，状态不变）\n", inst_title, caller->title);
+    return 1;
 }
 
 // 切后台：保留实例与内存池，只把前台让出去（回应用列表）
@@ -1361,6 +1494,7 @@ int32_t ui_scheme_app_perform_launch(Global_State *global_state) {
     wchar_t name[SCHEME_APP_NAME_MAX * 2];
     wchar_t arg[AM_NATIVE_APP_LAUNCH_ARG_MAX];
     wchar_t caller_title[SCHEME_APP_NAME_MAX];
+    char    caller_rel[192];          // 调用者的身份键（返回链用；单槽平台会先被销毁，故提前拷）
     UI_Scheme_App_State *caller = s_app;
     UI_Scheme_App_State *target = NULL;
     int32_t idx;
@@ -1377,6 +1511,12 @@ int32_t ui_scheme_app_perform_launch(Global_State *global_state) {
     }
     wcsncpy(caller_title, caller->title, SCHEME_APP_NAME_MAX - 1);
     caller_title[SCHEME_APP_NAME_MAX - 1] = L'\0';
+    {
+        size_t rl = strlen(caller->source_rel);
+        if (rl >= sizeof(caller_rel)) rl = sizeof(caller_rel) - 1;
+        memcpy(caller_rel, caller->source_rel, rl);
+        caller_rel[rl] = '\0';
+    }
 
     // ① 名字解析
     idx = app_desc_find_name(name);
@@ -1396,9 +1536,9 @@ int32_t ui_scheme_app_perform_launch(Global_State *global_state) {
     // (native Chat) 的推理引擎——引擎是 C 侧全局单例，不随解释器池回收）。
     printf("[scheme-app] 本平台无后台能力（实例槽位 %d）：拉起即替换调用者\n",
            (int32_t)SCHEME_APP_INST_MAX);
-    am_native_ui_abort();
-    am_native_chat_release();
-    app_instance_destroy(caller);
+    // 走统一的实例收尾（ui_abort / app_abort / Chat 引擎释放 / 销毁 / 解绑 Gfx）。
+    // 注意：没有后台实例可回，所以本平台**不建返回链**（见下面 ⑤）。
+    app_teardown_foreground();
     s_app = NULL;
     s_selected = idx;
     target = app_instance_alloc(idx);
@@ -1425,6 +1565,21 @@ int32_t ui_scheme_app_perform_launch(Global_State *global_state) {
     // 让出前台：调用者冻结保留（与 (App.hide) 同一条通道）
     app_instance_suspend(caller);
     s_app = NULL;
+#endif
+
+#if SCHEME_APP_INST_MAX > 1
+    // ⑤ 建立返回链：目标退出时回到调用者（多槽平台才有意义——调用者此刻是被
+    //    app_instance_suspend 冻结在后台的活实例，恢复它就是“回上一 App”）。
+    //    **必须在 ③ 之前**：cold_start / foreground 里的 am_native_app_reset 会清掉
+    //    “退出后回到谁”的提示，故它们都在 reset 之后自己调 app_apply_back_hint()；
+    //    这样冷启动的 boot（(EX.install) 读 (App.back_to)）看到的就是新链。
+    //    单槽平台（ESP32）不建链：调用者已被销毁，目标退出仍回应用列表（旧行为）。
+    {
+        size_t rl = strlen(caller_rel);
+        if (rl >= sizeof(target->back_rel)) rl = sizeof(target->back_rel) - 1;
+        memcpy(target->back_rel, caller_rel, rl);
+        target->back_rel[rl] = '\0';
+    }
 #endif
 
     // ③ 目标上前台（冷启动 / 恢复后台实例）

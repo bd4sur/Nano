@@ -394,7 +394,8 @@
 ;;     （即「灵机应用程序」列表里的显示名）；
 ;;   · 拉起时传一个字符串参数 = **待打开文件的宿主绝对路径**（用 (Fs.abspath) 从
 ;;     资源根相对路径换算；约定见 am_native_App.h 的 (App.launch_with ...)）；
-;;   · 宿主把本 App **冻结保留**（列表里带「● 运行中」角标），目标 App 退出后回列表；
+;;   · 宿主把本 App **冻结保留**（列表里带「● 运行中」角标），目标 App 退出后**回到本 App**
+;;     （实例级返回链，见 am_native_App.h 的“返回链”；本 App 的目录与选中行原样保留）；
 ;;   · 新增一个"查看器"只需在这张表里加一行（并保证那个 .scm 在 app/ 下）。
 ;; 表项顺序即匹配优先级；没有命中的类型照旧弹详情框（行为与以前一致）。
 (define openers (cdr '(0)))
@@ -910,6 +911,18 @@
       (step_fling)
       (if (== dirty 1) { (set! dirty 0) (draw_all) } #f) }))
 
+;; ---- 恢复钩子（从别的 App 返回 / 从后台恢复）----------------------------
+
+;; 从别的 App 返回 / 从后台恢复：**重新扫一遍目录**。
+;; 为什么不用 op_refresh：返回是常态（读文档、看图之后都会回），不该每次都闪一条
+;; “已刷新”；而且这里必须自己把 dirty 置上（EX 的恢复钩子**代替**了重绘回调）。
+;; 别的 App 可能刚保存/改名/删除了文件，不重扫就会显示过期的列表。
+(define on_resume
+  (lambda ()
+    { (load_dir)
+      (set! dirty 1)
+      (display "FMRESUME ") (display cur) (newline) }))
+
 ;; ---- 启动 ----------------------------------------------------------------
 
 (define boot
@@ -924,4 +937,5 @@
       (set! ts (System.set_interval TICK_MS tick)) }))
 
 (EX.install_with draw_all)
+(EX.on_resume on_resume)   ;; 返回/恢复时重扫当前目录（见 on_resume 的说明）
 (boot)

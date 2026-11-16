@@ -32,6 +32,12 @@ extern "C" {
 //     (App.exit) 发起、宿主用 ui_exit_confirm_* 绘制，**不做帧缓冲快照**：
 //     关闭后由 App 自己在同一拍里重绘（事件驱动型 App 用 (App.modal_closed) 得知）。
 //
+// 返回链（2026-11）：被拉起的 App 退出后回**拉起它的 App**，而不是应用列表。
+//   · 每个实例记住自己是被谁拉起的（UI_Scheme_App_State.back_rel，按源码路径标识）；
+//   · 所有退出都汇到 ui_scheme_app_perform_exit：有活着的父实例就恢复它（留在
+//     STATE_SCHEME_APP_RUN），否则回列表（STATE_SCHEME_APP_LIST，由 ui_app.c 切）；
+//   · 「后台」仍回应用列表（≈ home；「退出」才是 back），从列表进入的 App 视为顶层。
+//
 // 模态文本输入/输出：App 调 (Ui.input ...) 时 Scheme 进程被挂起，本模块借用宿主的
 // 文本控件（鹦鹉笼同款：全键盘拼音 + 16 键九宫格）当模态框，用户提交后唤醒进程
 // （见 ui_scheme_app.c 的“模态文本输入/输出”段落与 am_native_Ui.h）。
@@ -97,6 +103,15 @@ int32_t ui_scheme_app_perform_launch(Global_State *global_state);
 //     模态框存续期间自动续期（App 正在问用户话，不是卡死）；
 //   · 硬 A/ESC 的“返回请求”700ms 内无人消费 → 兜底退出（App 未迁移／已停机报错）。
 int32_t ui_scheme_app_should_exit(Global_State *global_state);
+
+// 结束当前前台实例（**所有**退出路径的唯一出口，“退出 > 拉起 > 切后台”里的第一位）：
+//   1 = 有活着的返回链 → 已恢复到上一 App（状态机仍是 STATE_SCHEME_APP_RUN，
+//       下一帧由被恢复的 App 自己绘制，ui_app.c 什么都不要做）；
+//   0 = 实例已销毁 → 调用方把 STATE 切到 STATE_SCHEME_APP_LIST。
+// 会内部完成实例收尾（模态框/退出请求/Chat 引擎/解释器池/Gfx 解绑），调用方**不要**
+// 再调 ui_scheme_app_on_exit（那是“直接回列表”的旧入口，保留给“加载失败时按 A”以外的
+// 特殊路径；正常退出都走本函数）。
+int32_t ui_scheme_app_perform_exit(Global_State *global_state);
 
 // 模态文本输入/输出（本地库 (native Ui)）是否正在显示。
 // 事件层（ui_app.c get_input_event）据此抑制触屏 4x4 宫格映射：模态框显示期间

@@ -15,6 +15,7 @@
 
 #include "am_native_Touch.h"
 #include "hal_touch.h"
+#include "am_host.h"   // am_current_timestamp_in_ms（丢弃在途手势的兜底窗口）
 
 // 触屏可用性：-1 尚未探测，0 不可用，1 可用（touch_read 返回值缓存）
 static int32_t s_available = -1;
@@ -29,6 +30,15 @@ static int32_t s_prev_pressed = 0;    // 上一次采样的电平
 static int32_t s_press_latched = 0;   // 待取走的"按下"沿
 static int32_t s_release_latched = 0; // 待取走的"松开"沿
 
+// 在途手势丢弃（宿主专用，见 am_native_Touch.h 的 am_native_Touch_drop_inflight）：
+//   置位后直到采样到"未按下"为止，一律按"没按"上报（电平式与沿式 App 都安全）。
+//   兜底用**时钟**（am_current_timestamp_in_ms，与 (native Time) 同一来源）而不是采样次数：
+//   一个 App 一拍里可能采样 5~10 次（is_pressed/take_press/take_release/x/y 各一次），
+//   计数型兜底会被很快烧完——实测按次数计 180 时，60Hz 下只挡住约 0.6 秒。
+#define TOUCH_DROP_MAX_MS (3000)      // 兜底：HAL 卡住时报"按下"也能自动解开
+static int32_t s_drop_inflight = 0;   // 1=正在丢弃在途手势
+static uint64_t s_drop_until_ms = 0;  // 丢弃窗口的下限（毫秒，同一时钟源）
+
 // ---------------------------------------------------------------------------
 // 采样：一次 HAL 电平读取 + 坐标缓存 + 边沿锁存
 // 返回 1（可用且按下）/ 0（可用但未按下）/-1（触屏不可用）
@@ -42,11 +52,30 @@ static int32_t touch_sample(int32_t *out_x, int32_t *out_y) {
         s_prev_pressed = 0;
         s_press_latched = 0;
         s_release_latched = 0;
+        s_drop_inflight = 0;   // 无触屏：丢弃态也无意义（否则触屏恢复后会白丢一段输入）
+        s_drop_until_ms = 0;
         if (out_x) *out_x = s_last_x;
         if (out_y) *out_y = s_last_y;
         return -1;
     }
     s_available = 1;
+
+    // 丢弃在途手势：见 am_native_Touch_drop_inflight 的说明。
+    // 只在“手指已抬（原始采样为未按下）”或兜底时限到期时解除；期间不更新坐标
+    // （那个触点是上一个 App/宿主确认框的，不是本 App 的），也不派生任何沿。
+    if (s_drop_inflight) {
+        if (!is_pressed || am_current_timestamp_in_ms() >= s_drop_until_ms) {
+            s_drop_inflight = 0;
+            s_drop_until_ms = 0;
+            s_prev_pressed = 0;   // 以"未按下"为新基线，不补发历史沿
+        }
+        else {
+            s_prev_pressed = 0;
+            if (out_x) *out_x = s_last_x;
+            if (out_y) *out_y = s_last_y;
+            return 0;
+        }
+    }
 
     if (is_pressed) {
         s_last_x = x;
@@ -132,6 +161,19 @@ int32_t am_native_Touch_take_release(am_runtime_t *rt, am_process_t *proc) {
     had = s_release_latched;
     s_release_latched = 0;
     return touch_push_bool(proc, had != 0);
+}
+
+// ===============================================================================
+// 宿主服务接口
+// ===============================================================================
+
+// 丢弃一段在途手势（宿主在切换 App / 恢复实例时调用；见头文件的说明）
+void am_native_Touch_drop_inflight(void) {
+    s_drop_inflight = 1;
+    s_drop_until_ms = am_current_timestamp_in_ms() + TOUCH_DROP_MAX_MS;
+    s_prev_pressed = 0;
+    s_press_latched = 0;    // 上一个上下文残留的沿一律作废
+    s_release_latched = 0;
 }
 
 // ===============================================================================
