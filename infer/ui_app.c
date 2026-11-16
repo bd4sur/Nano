@@ -705,12 +705,12 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
 #define UI_APP_MENU_FLING_VMAX     (4000.0f)
 #define UI_APP_MENU_FLING_VMIN     (50.0f)
 
-// 滚动进度条：贴在滚动区左缘的 2px 宽竖条，总高 = 屏高/4 且垂直居中（不抢眼，只作「可滚动」
+// 滚动进度条：贴在滚动区左缘的 2px 宽竖条，总高 = 屏高/8 且垂直居中（不抢眼，只作「可滚动」
 // 的提示）。配色为低饱和灰（亮/暗各一套），不跟随菜单/文本框的蓝系滚动条。
 // 水平位置保持旧观感：暗色占 x=2,3，亮色因避开黑色屏框而整体左移 1px 占 x=1,2。
 #define UI_APP_MENU_SB_X          (0)
 #define UI_APP_MENU_SB_W          (2)
-#define UI_APP_MENU_SB_TRACK_DIV  (4) // 滚动条总高 = 屏高 / 该值
+#define UI_APP_MENU_SB_TRACK_DIV  (8) // 滚动条总高 = 屏高 / 该值
 
 // 左侧滚动区条目（行优先：3 列 x N 行）。图标 36x36，经 ui_icon_draw_centered 绘制
 // （首次读取解码后常驻 PSRAM 缓存）。
@@ -793,8 +793,8 @@ static void ui_app_main_menu_palette(Global_State *global_state, Ui_App_Menu_Pal
         p->text_r = 0x66; p->text_g = 0x66; p->text_b = 0x66;
     }
     else {
-        // 暗色：右固定区与左滚动区同底色（深蓝灰），两区视觉统一，由滚动条提示可拖
-        p->fixed_bg_r = 16; p->fixed_bg_g = 22; p->fixed_bg_b = 36;
+        // 暗色：右固定区比左滚动区亮一档（仍为同系蓝灰），既保留“右侧固定”的暗示，也不与左区割裂
+        p->fixed_bg_r = 34; p->fixed_bg_g = 42; p->fixed_bg_b = 58;
         p->scroll_bg_r = 16; p->scroll_bg_g = 22; p->scroll_bg_b = 36;
         p->text_r = 0xcc; p->text_g = 0xcc; p->text_b = 0xcc;
     }
@@ -859,7 +859,7 @@ static void ui_app_main_menu_draw_cell(
         cell_cx, cell_cy - 8 + 18 + 8, text_r, text_g, text_b, 1);
 }
 
-// 滚动进度条：贴滚动区左缘的 2px 低饱和灰竖条。总高 = 屏高/4、垂直居中；
+// 滚动进度条：贴滚动区左缘的 2px 低饱和灰竖条。总高 = 屏高/8、垂直居中；
 // 轨道高固定，滑块高 = 轨道高 * 可视高 / 内容高，位置按滚动像素线性映射；
 // 内容不足一屏时滑块占满轨道（此时也不会有滚动，仅作为“此处可滚”的弱提示）。
 static void ui_app_main_menu_draw_scroll_bar(Global_State *global_state, const Ui_App_Menu_Geometry *g) {
@@ -876,8 +876,8 @@ static void ui_app_main_menu_draw_scroll_bar(Global_State *global_state, const U
         thumb_r = 0x99; thumb_g = 0x9e; thumb_b = 0xa7; // 中灰
     }
     else {
-        track_r = 0x2c; track_g = 0x31; track_b = 0x39; // 深灰
-        thumb_r = 0x5d; thumb_g = 0x64; thumb_b = 0x6e; // 中灰
+        track_r = 0x40; track_g = 0x46; track_b = 0x52; // 深灰（在深色面板上提亮一档，可辨识但不抢眼）
+        thumb_r = 0x92; thumb_g = 0x99; thumb_b = 0xa4; // 浅中灰
     }
 
     // 轨道
