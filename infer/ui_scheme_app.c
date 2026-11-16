@@ -694,6 +694,7 @@ static void app_drain_error_fifo(void) {
         size_t len = wcslen(s_app->err_buf);
         if (c == L'\n') {
             // 换行即重置：只保留最近一行错误
+            if (s_app->err_buf[0] != L'\0') printf("[scheme-app][error] %ls\n", s_app->err_buf);
             s_app->err_buf[0] = L'\0';
             continue;
         }
