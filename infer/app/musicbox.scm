@@ -7,6 +7,10 @@
 ;;     上一首 / 播放·暂停 / 下一首、音量 −/+（按住连发）、左上「返回」；
 ;;     版面与 C 版 `ui_musicbox.c` 逐像素对齐（见下「与 C 版的差异」）；
 ;;   · 列表循环、读完自动下一首、打不开的曲目自动跳过（全部失败时显示错误）；
+;;   · **可被拉起**：文件管理器里点开 .wav/.mp3 时以
+;;     (App.launch_with "musicbox" 绝对路径) 把控制权交给本 App，启动参数 = 待播文件的
+;;     宿主绝对路径 → 列表换成该文件所在目录、选中它并**立即开播**（见下方「启动参数」）；
+;;     从应用列表进入（没有启动参数）时行为与以前完全一致；
 ;;   · 退出时关闭音频输出（EX 的全局确认框 → 收尾 → 销毁）。
 ;;
 ;; 分工（关键）：**解码与音频输出全在 C 侧**，本文件只管界面与交互。
@@ -43,12 +47,14 @@
 (native Touch)
 (native Key)
 (native Music)
+(native Fs)
 (native System)
 (native String)
 (native Math)
 (native App)
 
 (import EX "app/lib/exit.scm")     ; 硬 A/ESC 与右上角「退出」按钮 → 全局退出确认框
+(import FSX "app/lib/fsx.scm")     ; 路径拆分（leaf/parent/join）与扩展名过滤（被拉起时用）
 
 ;; ============================================================================
 ;; 常量：布局（320x240 基准，按实际画布宽高推导）
@@ -167,7 +173,8 @@
 ;; ============================================================================
 
 (define page PAGE_LIST)        ; 当前页面
-(define files (cdr '(0)))      ; music/ 目录下的文件名列表
+(define list_dir "music")      ; 列表目录：默认 music/；被拉起时 = 待播文件所在目录
+(define files (cdr '(0)))      ; 列表目录下的音频**文件名**（不含路径）
 (define nfiles 0)
 (define sel 0)                 ; 列表高亮下标
 (define offset 0)              ; 列表滚动首行下标
@@ -183,6 +190,7 @@
 (define last_draw 0)
 (define dirty #t)               ; 需要重绘
 (define timer_id 0)
+(define tick_launched #f)       ; 本拍是否刚被拉起（决定要不要走 reopen_after_resume）
 
 ;; 触屏状态（与各 App 同一范式：按下记 arm，松手结算，拖出取消）
 (define ARM_NONE 0)
@@ -350,11 +358,39 @@
 ;; 播放引擎封装
 ;; ============================================================================
 
-;; 刷新文件列表（首次/资源就绪后调用）；空目录时置"加载中"并请求页面挂载
+;; 枚举一个目录里的音频文件名（.wav/.mp3，名字升序 —— (Fs.list) 本身已升序）
+;; 为什么不用 (Music.list)：它固定只认 music/；被拉起时的目标文件可能在任意目录。
+;; **必须在 (Music.open) 之前调用**：hal_fs 的随机访问是全局单句柄，播放期间再列目录
+;; 会把句柄换掉（症状：播放卡住/进度乱跳，见 am_native_Music.h）。
+(define scan_dir_audio
+  (lambda (dir)
+    (define raw (Fs.list dir))
+    (define out (FSX.new_list))
+    (define n 0)
+    (define i 0)
+    (define nm "")
+    (if (list? raw)
+        {
+          (set! n (length raw))
+          (while (< i n)
+            {
+              (set! nm (get_item raw i))
+              (if (== (FSX.ext_match nm "wav,mp3") 1) (push out nm) #f)
+              (set! i (+ i 1))
+            })
+        }
+        #f)
+    out))
+
+;; 刷新文件列表（首次/资源就绪后调用）；空目录时置"加载中"并请求页面挂载。
+;; music/ 走 (Music.list)（WASM 下它负责触发 p4 音频层挂载）；被拉起的任意目录用
+;; (Fs.list) 自己筛。
 (define refresh_list
   (lambda ()
     (define l #null)
-    (set! l (Music.list))
+    (if (String.equals list_dir "music")
+        (set! l (Music.list))
+        (set! l (scan_dir_audio list_dir)))
     (if (list? l)
         {
           (set! files l)
@@ -365,10 +401,15 @@
         }
         #f)))
 
-;; 曲目完整路径（Music 的路径规则与 Fs 一致：相对业务资源根）
+;; 曲目完整路径：默认 "music/<名字>"；被拉起时 = "<文件所在目录>/<名字>"
+;; （目录可能是宿主绝对路径，直接拼好交给 (native Music) 的路径规则）。
+;; (FSX.join) 会把 "."/空串当作"资源根"处理，故根目录下的文件写成绝对路径 "//x"——
+;; 单独把 "/" 排除掉，免得出现双斜杠。
 (define track_path
   (lambda (idx)
-    (String.concat "music/" (get_item files idx))))
+    (if (String.equals list_dir "/")
+        (String.concat "/" (get_item files idx))
+        (FSX.join list_dir (get_item files idx)))))
 
 ;; 打开第 idx 首并从当前位置开始播放；成功返回 #t
 (define open_track
@@ -419,6 +460,68 @@
           (display "[musicbox] switch cur=") (display cur)
           (display " ok=") (display ok) (newline)
         })))
+
+;; ---- 启动参数（App → App 拉起） ------------------------------------------
+;;
+;; 拉起方（app/filemgr.scm 里选中 .wav/.mp3 后点「进入」）用
+;; (App.launch_with "musicbox" 路径) 把控制权交给本 App，并约定参数 = **待播放音频
+;; 文件的宿主绝对路径**（'/' 开头；路径规则与 (native Fs)/(native Music) 一致）。
+;;
+;; 收到参数后：
+;;   ① 列表目录换成该文件所在目录，并重新枚举其中的 .wav/.mp3 —— 于是「上一首/下一首」
+;;      与「返回」后的列表页都落在同一个目录里（与 app/album.scm 拉起后换浏览目录同构）；
+;;   ② 选中该文件并**立即开播**（直接进播放页，不停在列表页）。
+;; 目录读不出来、或目标文件不在枚举结果里时退化为「单文件列表」（nfiles=1、cur=0，
+;; 上一首/下一首就只重开这一首），仍然能放。
+;;
+;; (App.launch_arg) **取走即清零**（同 (App.back_requested)）：每拍只消费一条。
+;; 两个消费点：boot（冷启动被拉起）与 tick 开头（后台实例被再次拉起，换一个文件）。
+(define launch_open
+  (lambda ()
+    (define a (App.launch_arg))
+    (define dir "")
+    (define nm "")
+    (define lst (FSX.new_list))
+    (define n 0)
+    (define i 0)
+    (define idx -1)
+    ;; 返回值必须是 #t/#f：本解释器里只有 #f 为假（见 am_native_App.h 的坑位记录）
+    (if (or (null? a) (== (String.length a) 0))
+        #f
+        {
+          (set! nm (FSX.leaf a))
+          (set! dir (FSX.parent a))
+          ;; (FSX.parent) 对“根下的文件”会因越界保护给出 "."（它面向资源根相对路径）；
+          ;; 绝对路径的父目录就是 "/"，改回来，否则会去枚举资源根。
+          (if (and (String.equals dir ".") (String.equals (String.slice a 0 1) "/"))
+              (set! dir "/")
+              #f)
+          (set! lst (scan_dir_audio dir))
+          (set! n (length lst))
+          ;; 在枚举结果里定位目标文件（大小写敏感：它就是目录项原名）
+          (set! i 0)
+          (while (< i n)
+            { (if (String.equals (get_item lst i) nm) (set! idx i) #f)
+              (set! i (+ i 1)) })
+          (if (< idx 0)
+              { (set! lst (FSX.new_list))
+                (push lst nm)
+                (set! idx 0) }
+              #f)
+          (set! list_dir dir)
+          (set! files lst)
+          (set! nfiles (length files))
+          (set! sel idx)
+          (set! offset (max2 0 (- (+ idx 1) LIST_ROWS)))
+          (set! loading #f)
+          ;; 目标不一定在 music/：关掉“等 p4 音频层挂载”的列表轮询（没意义且会白读目录）
+          (set! load_polls POLL_MAX)
+          (open_track idx)
+          (display "[musicbox] launch ") (display a)
+          (display " dir=") (display dir)
+          (display " idx=") (display idx)
+          (display "/") (display nfiles) (newline)
+          #t })))
 
 ;; 播放/暂停切换
 (define toggle_play
@@ -1103,6 +1206,7 @@
           (display "[musicbox] page=") (display page)
           (display " cur=") (display cur)
           (display "/") (display nfiles)
+          (display " dir=") (display list_dir)
           (display " playing=") (display playing)
           (display " fail=") (display fail)
           (display " prog=") (display (Math.floor (* 1000 (clamp (Music.progress) 0.0 1.0))))
@@ -1120,7 +1224,13 @@
 (define tick
   (lambda ()
     {
-      (if (App.resumed) (reopen_after_resume) #f)   ; 恢复：重建音频会话（须早于 EX.check）
+      ;; 后台实例被再次拉起（换一个文件）：先消费启动参数并开播。
+      ;; 新曲目已由 (Music.open) 重建过音频会话，故这一拍**不要**再走
+      ;; reopen_after_resume（它会把旧曲目按旧位置抢回来）。
+      (set! tick_launched (launch_open))
+      (if (App.resumed)
+          (if tick_launched #f (reopen_after_resume))
+          #f)                                         ; 恢复：重建音频会话（须早于 EX.check）
       (EX.check)              ; 硬 A/ESC 与右上角「退出」按钮（可能阻塞，返回后继续）
       (set! ntick (+ ntick 1))
       (set! now_ms (System.timestamp))
@@ -1159,7 +1269,9 @@
 (Music.close)                       ; 清掉上一次（可能被后台冻结的实例）留下的状态
 (set! vol (Math.floor (Music.volume)))
 (set! now_ms (System.timestamp))
-(refresh_list)
+;; 冷启动就可能带着启动参数（filemgr 点开音频）：有参数就直接播目标文件并进播放页，
+;; 没有参数才是“列 music/”的旧启动路径。
+(if (launch_open) #f (refresh_list))
 (draw)
 (set! timer_id (System.set_interval TICK_MS tick))
 (EX.install_with draw)

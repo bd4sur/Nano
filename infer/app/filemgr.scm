@@ -7,7 +7,8 @@
 ;;   · 列表顶部固定一条 **".."（返回上级目录）** 条目（根目录下变灰，点了只提示）；
 ;;   · 进入目录 / 返回上级；文件选中后「进入」= **用对应类型的 App 打开**
 ;;     （映射表见下方 openers；txt / md / markdown → Markdown 阅读器 App，
-;;      png / jpg / jpeg / bmp / gif / tga → 时光集（图片查看器）App）；
+;;      png / jpg / jpeg / bmp / gif / tga → 时光集（图片查看器）App，
+;;      wav / mp3 → 音乐盒 App，传绝对路径直接开播）；
 ;;     没有映射的类型仍弹出详情框（路径 / 大小 / 类型）；
 ;;   · 新建文件：默认 **.txt**，默认文件名为**时间戳**（如 20261020-020000.txt）；
 ;;   · 新建目录：默认名同样是时间戳；
@@ -408,6 +409,10 @@
     (push openers (mk2 "png,jpg,jpeg,bmp,gif,tga" "album"))
     (push openers (mk2 "md,markdown" "markdown"))
     (push openers (mk2 "txt" "markdown"))
+    ;; 音频 → 音乐盒（app/musicbox.scm）：只列 (native Music) **实际能解码**的两种格式
+    ;; （WAV / MP3，见 am_native_Music.h）；musicbox 收到绝对路径就直接打开播放该文件，
+    ;; 并把列表换成它所在目录（上一首/下一首仍在同一目录里）。
+    (push openers (mk2 "wav,mp3" "musicbox"))
     #t))
 
 ;; 文件名 → 应用名（#f = 没有可拉起的 App，调用方退化为显示详情）

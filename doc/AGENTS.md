@@ -13109,3 +13109,90 @@ Scheme 的 filemgr/filepicker 用「手势平均速度」而不是逐帧 EMA，�
 顺带修正（测试脚本，不入库）：`regress_musicbox.js` 的导航 `digit(7)→Enter` 已失效
 （主菜单加入「小游戏」后数字键重排，`NANO_KEY_7` 现在是频谱仪），改为「右方向键 →
 灵机应用程序列表」——修正后才跑出上面的 32/32。
+
+# 2026-11-17（灵机 App：文件管理器点开音频 → 拉起音乐盒播放，参数 = 绝对路径）
+
+需求：`app/filemgr.scm` 里打开**受支持的音频文件**时，拉起 `app/musicbox.scm` 播放它；
+启动参数约定为**待打开文件的宿主绝对路径**。目标只有 WASM-GUI（`infer/build_wasm_gui.sh`
+→ `infer/webgui/`）。宿主库与 C 侧**零改动**（`(App.launch_with ...)` / `(Music.open 绝对路径)`
+本来就支持），改动落在两个 `.scm` + 一个浏览器回归脚本。
+
+## 1. 改动
+
+| 文件 | 改动 |
+|---|---|
+| `infer/app/filemgr.scm` | `openers` 表加一行 `(mk2 "wav,mp3" "musicbox")`（表尾，先匹配先赢；扩展名大小写不敏感走 `FSX.ext_match`）。文件头注释同步补一行映射说明 |
+| `infer/app/musicbox.scm` | 新增「启动参数」段：`launch_open` + `scan_dir_audio`；列表目录由常量 `"music/"` 变成模块变量 `list_dir`；`track_path` / `refresh_list` / boot / tick 相应改造；诊断行加 `dir=` |
+| `infer/tools/e2e/browser/regress_musicbox_launch.js`（新，31 条断言） | 真 WASM + 真宿主状态机：filemgr → a.wav → musicbox 播放 → 返回列表 → 坏 mp3 错误页 → 退出回 filemgr → .mp3 再拉起 |
+
+## 2. 为什么只映射 wav/mp3
+
+`(native Music)` 的解码支持就两种：`.wav`（自写 RIFF 解析）与**其余一律按 MP3 解**
+（`am_native_Music.c` 的 `ext_is(".wav")` 分支）。所以「实际支持」= `wav`、`mp3`；
+`.flac/.ogg/.m4a` 走 MP3 路径必然解码失败，映射上去只会得到错误页，故不列。
+
+## 3. musicbox 侧：被拉起后的三条设计决定
+
+1. **列表换成"待播文件所在目录"**，而不是只塞一条。做法与 `app/album.scm` 拉起后换浏览
+   目录同构：`(Fs.list 目录)` → 用 `FSX.ext_match` 筛 `.wav/.mp3` → 定位目标文件名 → 选中
+   并开播。好处是「上一首/下一首」和「返回」后的列表页都还在同一个目录里（filemgr 传什么
+   目录就播什么目录），不会莫名其妙跳到 `music/`。目录读不出来 / 目标不在枚举结果里时
+   **退化为单文件列表**（`nfiles=1`、`cur=0`），照样能放（这时上/下一首只是重开同一首）。
+2. **必须用 `(Fs.list)` 而不是 `(Music.list)`**：后者写死只认 `music/`（它的另一半职责是
+   WASM 下触发 p4 音频层挂载）。同时**枚举必须在 `(Music.open)` 之前完成**——`hal_fs` 的
+   随机访问是**全局单句柄**，播放期间再列目录会把它换掉（`am_native_Music.h` 已记录该症状）。
+   也因此在被拉起的路径上把 `load_polls` 置成 `POLL_MAX`：目标不在 `music/` 时"等 p4 挂载"
+   的 500ms 轮询毫无意义，还会白读目录。
+3. **冷启动与"后台实例被再次拉起"两个消费点**（与 album 同构）：
+   - boot 末尾 `(if (launch_open) #f (refresh_list))` —— 有参数就直接进播放页，没有才是
+     "列 music/" 的旧路径。boot 里能读到参数，是因为宿主把 `am_native_app_set_launch_arg`
+     放在 `cold_start` **返回之后**、而 boot 是在**下一拍**才被泵起来的（与 album 的既有
+     结论一致）。
+   - tick 开头 `(set! tick_launched (launch_open))`，然后 `(App.resumed)` 分支里
+     `(if tick_launched #f (reopen_after_resume))` —— 换曲本身就重建了音频会话，此时若再走
+     `reopen_after_resume` 会把**旧曲目按旧位置抢回来**（它按 `cur` + 上次 ratio 重开）。
+     顺带把 `(App.resumed)` 消费掉：本拍已由 `open_track` 置 `dirty`，不会漏重绘。
+4. 细节：`FSX.parent` 是给"资源根相对路径"写的，对根下文件会因越界保护返回 `"."`；
+   绝对路径要改回 `"/"`（`track_path` 里再单独处理 `list_dir == "/"`，免得拼出 `//x`）。
+
+## 4. 验证（WASM 真链路）
+
+`node tools/e2e/browser/regress_musicbox_launch.js <URL> chromium|firefox <outdir>`
+
+- **31/31 PASS（chromium）+ 31/31 PASS（firefox）**。测试在 MEMFS 里现造三件东西：
+  `a.wav`（20s / 22050Hz / 单声道 / 16bit / 440Hz 正弦，真能解码出声）、`zzfake.mp3`
+  （扩展名对、内容坏）、`c.bin`（无映射）。断言链：
+  - `c.bin` 不拉起（仍弹详情框）；
+  - `FMOPEN a.wav -> musicbox` → `[scheme-app] 拉起 filemgr → musicbox（冷启动，参数 <abs>）`
+    → `[musicbox] launch <abs> dir=<dir> idx=0/2`（**参数确实是绝对路径**、列表来自该目录）；
+  - 直接进播放页：`page=1 playing=#t cur=0/2 dir=<dir>`、诊断行 `prog` 推进、
+    帧缓冲里 16px 文件名墨迹与卡片底色 `27,33,44` 在位；
+  - 播放页「返回」→ 列表页（`page=0`，仍是同目录 2 首，截图可见 `2 首` + `a.wav`/`zzfake.mp3`）；
+  - 点第 2 首（坏 mp3）→ 错误页（`fail=#t playing=#f cur=1/2`）；
+  - 右上「返回」→ 确认 → `[scheme-app] 退出 musicbox → 返回 filemgr`、`[musicbox] bye`、
+    filemgr 目录/选中行原样、`FMRESUME data/mtest`、无在途手指误触；
+  - `.mp3` 扩展名同样映射（第二次冷启动 `idx=1/2`，坏文件直接落错误页）；
+  - 全程无 pageerror。
+- **回归**：`regress_musicbox.js` 32/32（从应用列表进入的旧路径：p4 挂载、播放/暂停、
+  seek、切曲、音量、后台恢复、退出，均未受影响）；`regress_launch.js` 36/36、
+  `regress_filemgr.js` 51/51、`regress_back.js` 24/24（filemgr 的另外两条拉起链）；
+  桌面宿主回归台 `APP=musicbox` → `frames=120/120 refresh=1 err=none`；
+  `tools/check_scm_arity.py app/musicbox.scm` → 0 处问题（`app/filemgr.scm` 的 3 处
+  `Ui.message` / `String.concat` 告警是**改动前就有**的，已用 `git show HEAD:` 的版本核对）。
+
+## 5. 测试上的坑（写回归时踩到）
+
+**音频素材别用太短的**：第一版用 5s 的 WAV，断言间隙里正好 EOF → 引擎报结束 →
+`switch_track(1)` 列表循环回第 1 首 → `open_track` 把 `page` 又设回播放页。现象是
+「点了播放页的『返回』却还在播放页 / 点了列表第 2 行没反应」，看起来像触屏失灵，实际是
+曲目自己绕回来了。素材改成 20s 后两个断言立刻变绿。
+
+## 6. 已知取舍
+
+- 被拉起时**不触发** p4 音频层挂载（`(Music.list)` 才会）。所以 WASM 下若从没进过音乐盒，
+  filemgr 里的 `music/` 目录本身可能是空的（这是既有分层加载策略，与本次改动无关）；
+  用户先上传/先在音乐盒里放一次，之后从 filemgr 点开就是本路径。
+- 从应用列表进入 musicbox 的旧路径行为完全不变（`list_dir` 仍是 `music`）；被拉起过的实例
+  若「后台」冻结而不是退出，再从列表进入恢复的是**同一个实例**（列表仍是当初那个目录），
+  这与「恢复后台实例」的既有语义一致。
+- filemgr 的返回后重扫（`EX.on_resume`）本来就有，这里只依赖它，未新增接口。
