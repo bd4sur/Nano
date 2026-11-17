@@ -24,10 +24,11 @@
     padding: 12px;
     box-sizing: border-box;
   }
-  /* 主显示区：PC 上最宽 480px（移动端仍占满可视宽度） */
+  /* 主显示区：最宽 320px（= 帧缓冲原宽，1:1 像素映射）；窄于 320px 的屏幕占满可视宽度
+     纵向预留 = 按钮行（可能折成两行）+ 状态行 + 提示行 + 边距（拆成三行后从 76px 增到 132px） */
   #screen {
-    width: min(calc(100vw - 24px), calc((100vh - 76px) * 4 / 3), 480px);
-    max-width: 480px;
+    width: min(calc(100vw - 24px), calc((100vh - 132px) * 4 / 3), 320px);
+    max-width: 320px;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     background: #ffffff;
@@ -39,10 +40,20 @@
     -webkit-user-select: none;
     cursor: default;
   }
-  #status { font-size: 13px; letter-spacing: .5px; opacity: .9; }
+  /* 页面底部三段：按钮一行 / 状态一行 / 提示一行（各占独立行，窄屏也不挤在一起） */
+  #status {
+    font-size: 13px; letter-spacing: .5px; opacity: .9;
+    text-align: center; line-height: 18px; min-height: 18px;
+    max-width: 92vw;
+  }
   #status .ok  { color: #2f8f45; }
   #status .bad { color: #c0392b; }
-  #bar { display: flex; gap: 10px; align-items: center; }
+  #bar { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; }
+  /* 窄屏（≤400px）：四个按钮收紧内边距/字号，尽量排成一行 —— 否则最后一个会孤零零折行 */
+  @media (max-width: 400px) {
+    #bar { gap: 6px; }
+    #bar button { padding-left: 9px; padding-right: 9px; font-size: 12.5px; }
+  }
   #att-btn {
     background: #ffffff; color: #4a4f57; border: 1px solid #d6dae1;
     border-radius: 6px; font-size: 13px; padding: 6px 14px; cursor: pointer;
@@ -52,6 +63,12 @@
   #att-btn.on  { background: #e6f0fb; border-color: #7cb0e2; color: #12518c; }
   #att-btn:active { transform: scale(.96); }
   #hint { font-size: 12px; opacity: .6; max-width: 90vw; text-align: center; color: #6b7280; }
+  /* 矮屏（手机横屏）：底部三段占的纵向比例太大 —— 收紧间距并隐去键盘提示行，
+     否则三行会把画面顶出可视区 */
+  @media (max-height: 520px) {
+    #wrap { gap: 6px; padding: 6px; }
+    #hint { display: none; }
+  }
   /* 加载进度面板（WASM 下载 + 资源挂载） */
   #load-panel {
     width: min(calc(100vw - 48px), 480px);
@@ -166,24 +183,47 @@
     overflow: auto;
     background: #ffffff;
     border: 1px solid #e2e7ee; border-radius: 8px;
-    padding: 4px 0; font-size: 13px;
+    padding: 4px; font-size: 13px;
+    /* 行内上下 padding 抽成变量：箭头热区要吃掉这 5px 才能覆盖整行高 */
+    --fm-row-pad-y: 5px;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
   }
   .fm-row {
     display: flex; align-items: center; gap: 6px;
-    padding: 5px 8px 5px 0; cursor: pointer;
+    padding: var(--fm-row-pad-y) 8px var(--fm-row-pad-y) 0; cursor: pointer;
     white-space: nowrap; user-select: none; -webkit-user-select: none;
+    touch-action: manipulation;
   }
   .fm-row:hover { background: #f4f7fb; }
   .fm-row.selected { background: #e6f0fb; }
   .fm-row.drop-target { background: #e7f5ea; box-shadow: inset 0 0 0 1px #4aa96c; }
+  /* 展开箭头：视觉上仍是 14px 宽的 9px 小三角（外观/位置零变化），但可点热区经
+     ::after 外扩成 29px 宽 × **整行高**（手机上行高 34px → 29×34，约原热区的 7 倍）。
+     · caret 自身 align-self:stretch + 居中排版 → 字形仍垂直居中，行高不变；
+     · 旋转只作用于内层 .fm-arrow，避免把热区一起转出去压到图标/文件名上；
+     · 热区严格止于本行外边（top/bottom 吃掉行内 padding，不越到邻行）；
+     · 左侧 -10px 靠 #fm-tree 的 4px 内边距 + 行内 6px 缩进撑着，不会被
+       overflow 剪掉（否则热区只剩右半边）；右侧到图标前的 6px 间隙为止。
+     slot（无子项的占位箭头）是 visibility:hidden，伪元素同样不可点。 */
   .fm-caret {
-    flex: none; width: 14px; text-align: center; color: #8b919b;
-    font-size: 9px; line-height: 1; transition: transform .12s ease-out;
+    flex: none; align-self: stretch; position: relative;
+    width: 14px; display: flex; align-items: center; justify-content: center;
+    color: #8b919b; font-size: 9px; line-height: 1;
   }
-  .fm-caret.open { transform: rotate(90deg); }
+  .fm-caret::after {
+    content: ""; position: absolute;
+    top: calc(-1 * var(--fm-row-pad-y)); bottom: calc(-1 * var(--fm-row-pad-y));
+    left: -10px; right: -5px;
+  }
+  .fm-arrow { display: block; font-style: normal; transition: transform .12s ease-out; }
+  .fm-caret.open .fm-arrow { transform: rotate(90deg); }
   .fm-caret.slot { visibility: hidden; }
+  /* 触屏设备：行高抬到 34px（箭头热区随之变高），字号/图标尺寸不变 */
+  @media (pointer: coarse) {
+    #fm-tree { --fm-row-pad-y: 0px; }
+    .fm-row { min-height: 34px; }
+  }
   .fm-ico { flex: none; width: 16px; height: 16px; display: inline-flex; align-items: center; }
   .fm-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #3f444b; }
   .fm-name.dir { color: #23272e; font-weight: 600; }
@@ -245,12 +285,13 @@
     </div>
   </div>
   <div id="bar">
-    <div id="status">加载中…</div>
     <button id="esc-btn" type="button" title="等同于实体键盘 Esc / 设备 A 键">ESC</button>
     <button id="att-btn" type="button">姿态：关</button>
     <button id="dl-btn" type="button" title="从服务器下载其余业务资源（电子书/词典/音乐/模型…），体积见按钮文字">资源：未下载</button>
     <button id="res-btn" type="button">资源</button>
   </div>
+  <!-- 状态：独立一行（fps / 资源下载进度 / 音频提示），不再与按钮挤同一行 -->
+  <div id="status">加载中…</div>
   <div id="hint">触屏/鼠标点按操作 · 滚轮=上下滑动 · 键盘：方向键/回车=确认/Esc=返回/数字=十六键 · 「ESC」按钮=硬 Esc</div>
 </div>
 
@@ -1334,7 +1375,11 @@ function fmRenderTree() {
     const open = hasKids && fmExpanded.has(node.path);
     const caret = document.createElement("span");
     caret.className = "fm-caret" + (hasKids ? "" : " slot") + (open ? " open" : "");
-    caret.textContent = "\u25B6"; // ▶
+    // 三角放在内层：外层 .fm-caret 是热区（不旋转），内层 .fm-arrow 才做 90° 旋转
+    const arrow = document.createElement("i");
+    arrow.className = "fm-arrow";
+    arrow.textContent = "\u25B6"; // ▶
+    caret.appendChild(arrow);
     row.appendChild(caret);
 
     const ico = document.createElement("span");
