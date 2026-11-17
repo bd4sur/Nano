@@ -25,6 +25,7 @@
 
 #include "am_native_Chat.h"
 #include "am_host.h"
+#include "am_native_Fs.h"   // am_native_fs_resolve：与 (native Fs) 完全一致的路径规则
 
 #include "platform.h"
 
@@ -32,29 +33,32 @@
 #include "tokenizer.h"
 
 // ===============================================================================
-// 模型候选表（白名单 + 文件存在性）
-//  与 ui_llm.c 的 preset_model_configs 保持同一组采样参数，但**只列端侧可用的
-//  Nano 系列**：Qwen 大模型在浏览器 WASM 里跑不动（单线程 + 单精度浮点），列出来
-//  只会让用户点了白等。参数逐项对齐 preset 表（repetition_penalty / temperature /
-//  top_p / max_seq_len），改那里就要同步这里。
+// 模型加载配置（由 App 以**值**的形式传入）
+//
+//   C 版鹦鹉笼把「模型名 / 模型文件 / LoRA 文件 / 采样参数 / 上下文长度」硬编码在
+//   ui_llm.c 的 preset_model_configs 里，模型菜单只是这张表的视图。灵机 App 反过来：
+//   **配置是 App 的数据**（app/nanochat.scm 的 model_defs），本地库只提供「按参数
+//   载入」这一个动作。好处：加模型 / 调采样参数是纯 Scheme 改动，C 侧零改动；
+//   也符合本库「只封装引擎，界面与业务数据都在 Scheme」的分层。
+//
+//   路径规则与 (native Fs) 完全一致（am_native_fs_resolve）：相对业务资源根
+//   PLATFORM_ROOT_DIR（桌面/WASM = /home/bd4sur/linglong，掌机 = SD 卡根）。
 // ===============================================================================
 
+#define CHAT_PATH_MAX (256)          // am_native_fs_resolve 要求的输出缓冲 ≥ 256 字节
+
+// (Chat.load) 的配置列表字段数（顺序见 chat_load_cfg_t）
+#define CHAT_CFG_FIELDS (7)
+
 typedef struct {
-    const wchar_t *name;        // 显示名
-    const char    *file;        // 绝对路径（MODEL_ROOT_DIR 之下）
-    const char    *rel;         // 相对业务资源根的路径（给 Scheme 显示）
+    char     model_path[CHAT_PATH_MAX];  // 模型文件（已解析为宿主路径）
+    char     lora_path[CHAT_PATH_MAX];   // LoRA 文件；空串 = 不挂 LoRA
+    uint32_t max_seq_len;                // 上下文长度（KV-Cache 与生成长度上限）
     float    repetition_penalty;
     float    temperature;
     float    top_p;
     uint32_t top_k;
-    uint32_t max_seq_len;
-} chat_model_t;
-
-static const chat_model_t s_models[] = {
-    { L"Nano-168M", MODEL_ROOT_DIR "/nano-168m-q80.bin", "llm/nano-168m-q80.bin", 1.05f, 1.0f, 0.5f, 0, 512 },
-    { L"Nano-56M",  MODEL_ROOT_DIR "/nano-56m-q80.bin",  "llm/nano-56m-q80.bin",  1.05f, 1.0f, 0.5f, 0, 512 },
-};
-#define CHAT_MODEL_NUM ((int32_t)(sizeof(s_models) / sizeof(s_models[0])))
+} chat_load_cfg_t;
 
 // ===============================================================================
 // 模块状态（虚拟机全局单例，与 C 版鹦鹉笼的引擎单例语义一致）
@@ -62,10 +66,6 @@ static const chat_model_t s_models[] = {
 
 static Nano_Context *s_ctx = NULL;        // 引擎上下文（模型 + 分词器 + 采样器）
 static Nano_Session *s_session = NULL;    // 当前生成会话
-static int32_t       s_model_sel = -1;    // 已载入的 s_models 下标（-1=未载入）
-
-static int32_t s_menu_map[AM_NATIVE_CHAT_MODEL_MAX]; // (Chat.models) 下标 → s_models 下标
-static int32_t s_menu_num = 0;                       // 可用模型数
 
 // 观测钩子给出的"现在算到哪了"
 static int32_t s_obs_layer = -1;
@@ -119,6 +119,66 @@ static bool chat_pop_int(am_process_t *proc, int32_t *out) {
     if (f < -2147483648.0) f = -2147483648.0;
     *out = (int32_t)f;
     return true;
+}
+
+// 弹出一个**列表**对象（不复制，仅返回对象指针）
+static bool chat_pop_list(am_process_t *proc, am_list_t **out) {
+    am_value_t v = am_process_pop_operand(proc);
+    if (v == (am_value_t)UINTPTR_MAX) return false;
+    if (!am_value_is_handle(v)) return false;
+
+    am_handle_t hd = am_value_to_handle(v);
+    am_value_t obj_val = am_heap_get(proc->vm_alloc, proc->heap_alloc, proc->heap, hd);
+    if (!am_value_is_ptr(obj_val)) return false;
+
+    am_object_t *obj = am_value_to_ptr(obj_val);
+    if (obj->type != AM_OBJECT_TYPE_LIST) return false;
+
+    *out = (am_list_t *)obj;
+    return true;
+}
+
+// 列表第 i 项当数值取（任意数值表示；越界/非数值 → false）
+static bool chat_list_number(am_process_t *proc, am_list_t *lst, size_t i, am_float_t *out) {
+    am_value_t v = am_list_get(proc->heap_alloc, lst, i);
+    if (am_value_is_float(v)) { *out = am_value_to_float(v); return true; }
+    if (am_value_is_int(v))   { *out = (am_float_t)am_value_to_int(v); return true; }
+    if (am_value_is_uint(v))  { *out = (am_float_t)am_value_to_uint(v); return true; }
+    return false;
+}
+
+// 列表第 i 项当字符串对象取（越界/非字符串 → false）
+static bool chat_list_wstring(am_process_t *proc, am_list_t *lst, size_t i, am_wstring_t **out) {
+    am_value_t v = am_list_get(proc->heap_alloc, lst, i);
+    if (!am_value_is_handle(v)) return false;
+
+    am_value_t obj_val = am_heap_get(proc->vm_alloc, proc->heap_alloc, proc->heap, am_value_to_handle(v));
+    if (!am_value_is_ptr(obj_val)) return false;
+
+    am_object_t *obj = am_value_to_ptr(obj_val);
+    if (obj->type != AM_OBJECT_TYPE_WSTRING) return false;
+
+    *out = (am_wstring_t *)obj;
+    return true;
+}
+
+// 宽字符串对象 → UTF-8（路径用；buf 至少 CHAT_PATH_MAX 字节）
+static void chat_wstring_path(am_wstring_t *ws, char *buf, size_t cap) {
+    wchar_t wbuf[CHAT_PATH_MAX];
+    size_t n = ws->length;
+    if (n > CHAT_PATH_MAX - 1) n = CHAT_PATH_MAX - 1;
+    for (size_t i = 0; i < n; i++) wbuf[i] = (wchar_t)am_value_to_wchar(ws->content[i]);
+    wbuf[n] = L'\0';
+    am_wcstombs(buf, wbuf, (uint32_t)cap);
+}
+
+// 浮点 → 无符号整数（负值/NaN 归 0；超上界钳到上界）
+//   注意上界用 double 字面量比较：4294967295.0f 会被舍入成 2^32，float→uint32 转换
+//   在 f == 2^32 时是未定义行为。
+static uint32_t chat_float_to_uint(am_float_t f) {
+    if (!(f > 0.0f)) return 0;
+    if (f > 4294967295.0) return 4294967295u;
+    return (uint32_t)f;
 }
 
 // 弹出一个 Scheme 字符串并转成 UTF-8（buf 至少 cap 字节；失败时置空串）
@@ -209,6 +269,60 @@ static am_handle_t chat_list_box(am_process_t *proc, am_list_t *lst) {
         return AM_HANDLE_NULL;
     }
     return lhd;
+}
+
+// 解析 (Chat.load) 的配置列表：
+//   (模型文件 LoRA文件 上下文 复读惩罚 温度 top_p top_k)
+// 失败（类型/长度不符、路径非法）返回 false，调用方按软失败处理。
+static bool chat_parse_cfg(am_process_t *proc, chat_load_cfg_t *cfg) {
+    am_list_t *lst = NULL;
+    am_wstring_t *ws = NULL;
+    am_float_t f = 0.0f;
+    char raw[CHAT_PATH_MAX];
+
+    memset(cfg, 0, sizeof(*cfg));
+    if (!chat_pop_list(proc, &lst)) return false;
+    if (lst->length < CHAT_CFG_FIELDS) return false;
+
+    // [0] 模型文件（相对业务资源根，或 '/' 开头的宿主绝对路径）
+    if (!chat_list_wstring(proc, lst, 0, &ws)) return false;
+    if (!am_native_fs_resolve(ws, cfg->model_path)) return false;
+
+    // [1] LoRA 文件（空串 = 不挂 LoRA）
+    if (!chat_list_wstring(proc, lst, 1, &ws)) return false;
+    chat_wstring_path(ws, raw, sizeof(raw));
+    if (raw[0] != '\0') {
+        if (!am_native_fs_resolve(ws, cfg->lora_path)) return false;
+    }
+
+    // [2] 上下文长度（词元数）
+    if (!chat_list_number(proc, lst, 2, &f)) return false;
+    cfg->max_seq_len = chat_float_to_uint(f);
+
+    // [3] 复读惩罚
+    if (!chat_list_number(proc, lst, 3, &f)) return false;
+    cfg->repetition_penalty = (float)f;
+
+    // [4] 温度
+    if (!chat_list_number(proc, lst, 4, &f)) return false;
+    cfg->temperature = (float)f;
+
+    // [5] top-p
+    if (!chat_list_number(proc, lst, 5, &f)) return false;
+    cfg->top_p = (float)f;
+
+    // [6] top-k（0 = 不做 top-k 截断，由 top-p 核采样决定）
+    if (!chat_list_number(proc, lst, 6, &f)) return false;
+    cfg->top_k = chat_float_to_uint(f);
+
+    // 采样参数兜底：NaN / 非法值会让 softmax 输出全 NaN（生成一串垃圾词元），
+    // 因此在这里收敛到「不做特殊处理」的默认值（与 build_sampler 的语义一致）。
+    //   温度 0 是**合法**值（贪心采样），只拦负值与非有限值。
+    if (!isfinite(cfg->repetition_penalty) || cfg->repetition_penalty <= 0.0f) cfg->repetition_penalty = 1.0f;
+    if (!isfinite(cfg->temperature) || cfg->temperature < 0.0f) cfg->temperature = 1.0f;
+    if (!isfinite(cfg->top_p) || cfg->top_p <= 0.0f || cfg->top_p > 1.0f) cfg->top_p = 1.0f;
+
+    return true;
 }
 
 static bool chat_file_exists(const char *path) {
@@ -372,7 +486,6 @@ void am_native_chat_release(void) {
         llm_context_free(s_ctx);
         s_ctx = NULL;
     }
-    s_model_sel = -1;
     s_top_num = 0;
     s_pick = -1;
     s_obs_layer = -1;
@@ -384,96 +497,56 @@ void am_native_chat_release(void) {
     s_t_last_ms = 0;
 }
 
-int32_t am_native_Chat_models(am_runtime_t *rt, am_process_t *proc) {
-    (void)rt;
-
-    s_menu_num = 0;
-    am_list_t *lst = chat_list_new(proc, CHAT_MODEL_NUM);
-    if (!lst) return chat_push_null(proc);
-
-    for (int32_t i = 0; i < CHAT_MODEL_NUM; i++) {
-        // 白名单 + 文件存在性：浏览器目标模型未预载时不列出（Scheme 据此提示）
-        if (!chat_file_exists(s_models[i].file)) continue;
-
-        am_list_t *item = chat_list_new(proc, 2);
-        if (!item) {
-            am_list_destroy(proc->heap_alloc, lst);
-            return chat_push_null(proc);
-        }
-        am_handle_t nhd = am_process_make_wstring_handle(proc, s_models[i].name, wcslen(s_models[i].name));
-        if (nhd == AM_HANDLE_NULL) {
-            am_list_destroy(proc->heap_alloc, item);
-            am_list_destroy(proc->heap_alloc, lst);
-            return chat_push_null(proc);
-        }
-        item = chat_list_add(proc, item, am_make_value_of_handle(nhd));
-        if (!item) {
-            am_list_destroy(proc->heap_alloc, lst);
-            return chat_push_null(proc);
-        }
-        am_handle_t phd = chat_make_string(proc, s_models[i].rel, strlen(s_models[i].rel));
-        if (phd == AM_HANDLE_NULL) {
-            am_list_destroy(proc->heap_alloc, item);
-            am_list_destroy(proc->heap_alloc, lst);
-            return chat_push_null(proc);
-        }
-        item = chat_list_add(proc, item, am_make_value_of_handle(phd));
-        if (!item) {
-            am_list_destroy(proc->heap_alloc, lst);
-            return chat_push_null(proc);
-        }
-        am_handle_t ihd = chat_list_box(proc, item);
-        if (ihd == AM_HANDLE_NULL) {
-            am_list_destroy(proc->heap_alloc, lst);
-            return chat_push_null(proc);
-        }
-        s_menu_map[s_menu_num++] = i;
-        lst = chat_list_add(proc, lst, am_make_value_of_handle(ihd));
-        if (!lst) return chat_push_null(proc);
-    }
-
-    am_handle_t lhd = chat_list_box(proc, lst);
-    if (lhd == AM_HANDLE_NULL) return chat_push_null(proc);
-    return chat_push(proc, am_make_value_of_handle(lhd));
-}
-
+// 按 App 给出的配置载入模型（阻塞：解析权重 + 反量化 + 分配 KV-Cache）。
+//   配置来源与字段顺序见本文件顶部 chat_load_cfg_t 的说明。
+//   返回 0 成功 / -1 配置非法或文件缺失 / -2 引擎初始化失败。
 int32_t am_native_Chat_load(am_runtime_t *rt, am_process_t *proc) {
-    int32_t idx = -1;
+    chat_load_cfg_t cfg;
     (void)rt;
 
-    if (!chat_pop_int(proc, &idx)) return chat_push_int(proc, -1);
-    if (idx < 0 || idx >= s_menu_num) {
-        // 菜单未建立（未先调 (Chat.models)）：按 s_models 直取，便于调试
-        if (idx < 0 || idx >= CHAT_MODEL_NUM) return chat_push_int(proc, -1);
-        if (!chat_file_exists(s_models[idx].file)) return chat_push_int(proc, -1);
-        s_menu_map[idx] = idx;
-        s_menu_num = (s_menu_num > idx + 1) ? s_menu_num : idx + 1;
+    if (!chat_parse_cfg(proc, &cfg)) {
+        printf("[chat] load: 配置列表非法（应为 (模型文件 LoRA文件 上下文 复读惩罚 温度 top_p top_k)）\n");
+        return chat_push_int(proc, -1);
     }
-
-    const chat_model_t *m = &s_models[s_menu_map[idx]];
-    if (!chat_file_exists(m->file)) return chat_push_int(proc, -1);
+    if (cfg.max_seq_len == 0) {
+        printf("[chat] load: 上下文长度必须 > 0\n");
+        return chat_push_int(proc, -1);
+    }
+    // 文件缺失绝不进 load_llm / load_lora：二者的失败路径是 exit(EXIT_FAILURE)，
+    // 会中止整个进程（WASM 里就是整个运行时）。必须在此拦下。
+    if (!chat_file_exists(cfg.model_path)) {
+        printf("[chat] load: 模型文件缺失 %s\n", cfg.model_path);
+        return chat_push_int(proc, -1);
+    }
+    if (cfg.lora_path[0] != '\0' && !chat_file_exists(cfg.lora_path)) {
+        printf("[chat] load: LoRA 文件缺失 %s\n", cfg.lora_path);
+        return chat_push_int(proc, -1);
+    }
 
     am_native_chat_release();
 
     // 种子取宿主墙钟（与 C 版鹦鹉笼 Math.random 同一哲学：每次载入不同生成流）
     uint64_t seed = chat_now_ms() * 2654435761ull + 12345ull;
-    s_ctx = llm_context_init((char *)m->file, NULL, m->max_seq_len,
-                             m->repetition_penalty, m->temperature, m->top_p,
-                             m->top_k, seed);
+    s_ctx = llm_context_init(cfg.model_path,
+                             (cfg.lora_path[0] != '\0') ? cfg.lora_path : NULL,
+                             cfg.max_seq_len,
+                             cfg.repetition_penalty, cfg.temperature, cfg.top_p,
+                             cfg.top_k, seed);
     if (s_ctx == NULL) return chat_push_int(proc, -2);
 
     // 挂观测钩子（infer.c 的前向过程按相位回调；NULL 会导致解引用，必须挂上）
     s_ctx->observation = chat_observation;
     s_ctx->observation_env = NULL;
 
-    s_model_sel = s_menu_map[idx];
     s_obs_layer = -1;
     s_obs_phase = 0;
     s_top_num = 0;
     s_pick = -1;
     s_last_state = 0;
-    printf("[chat] 模型已载入：%ls（层 %u / 词表 %u / 最大序列 %u）\n",
-           m->name, s_ctx->llm->config.n_layer, s_ctx->llm->config.vocab_size, m->max_seq_len);
+    printf("[chat] 模型已载入：%s（架构 %u / 层 %u / 词表 %u / 上下文 %u / 复读 %.2f / 温度 %.2f / top-p %.2f / top-k %u / LoRA %s）\n",
+           cfg.model_path, s_ctx->llm->arch, s_ctx->llm->config.n_layer, s_ctx->llm->config.vocab_size,
+           cfg.max_seq_len, cfg.repetition_penalty, cfg.temperature, cfg.top_p, cfg.top_k,
+           (cfg.lora_path[0] != '\0') ? cfg.lora_path : "(无)");
     return chat_push_int(proc, 0);
 }
 
@@ -866,7 +939,6 @@ int32_t am_native_Chat_top_probs(am_runtime_t *rt, am_process_t *proc) {
 // ===============================================================================
 
 static const am_native_func_entry_t am_native_Chat_funcs[] = {
-    { L"models",       am_native_Chat_models },
     { L"load",         am_native_Chat_load },
     { L"unload",       am_native_Chat_unload },
     { L"loaded",       am_native_Chat_loaded },

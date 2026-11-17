@@ -46,7 +46,8 @@ OUT_DIR=webgui
 #   立即可进系统；priority 2 = 其余一切（ebook/dict/image/music 音频/LLM 模型……）
 #   后台拉，状态栏显示进度。**没有按需/惰性层**：音乐与 LLM 模型不搞特殊处理，
 #   跟别的资源一样随页面加载拉一次（宁可重下，也不在逻辑上分叉）。
-#   唯一的例外是 llm/qwen3-0b6-q80.bin（627MB，单线程 WASM 根本跑不动）——它不进清单。
+#   唯一的例外是 llm/ 下的 Qwen 大模型（qwen3-0b6 627MB / qwen35-0b8 853MB，
+#   单线程 WASM 跑不动）——它们不进清单。
 LINGLONG=/home/bd4sur/linglong
 mkdir -p "$OUT_DIR"
 ln -sfn "$LINGLONG" "$OUT_DIR/files"
@@ -88,10 +89,11 @@ P1_DIRS = {"icon", "app"}
 P2_PREFIXES = ("app/lib/llm/", "app/lib/badapple/")
 P1_FILES = {"mob.scm", "jstest.js"}
 SKIP_DIRS = {"data"}   # data 是 App 运行时数据（不入产物）
-# llm/ 下这个 627MB 的 qwen3-0b6 不进清单：单线程 WASM 跑不动它（ui_llm.c 的菜单按
-# 白名单+文件存在性过滤，本来也不会列它），挂上去只会让每次页面加载白下 600MB。
-# 其余资源（含 llm/nano-*.bin 模型与 music/ 音频）一律「p2 后台挂载」，无按需层。
-SKIP_FILES = {"llm/qwen3-0b6-q80.bin"}
+# llm/ 下的两个 Qwen 大模型不进清单（627MB / 853MB）：单线程 WASM 根本跑不动它们
+# （内存不够 + 速度不可用）。app/nanochat.scm 的模型表按**文件存在性**过滤，
+# 未挂载的模型只是不出现在菜单里——功能入口（配置行）仍在，把文件放进 MEMFS
+# （页面「资源」面板上传）即可用。挂进清单只会让每次页面加载白下 1.4GB。
+SKIP_FILES = {"llm/qwen3-0b6-q80.bin", "llm/qwen35-0b8.q80.bin"}
 files = []
 for dirpath, dirnames, filenames in os.walk(root):
     rel_dir = os.path.relpath(dirpath, root)

@@ -57,22 +57,18 @@ extern "C" {
 //
 //  Scheme 侧用法：
 //      (native Chat)
-//      (define models (Chat.models))            ; ((名称 文件) ...)
-//      (Chat.load 0)                            ; 按 (Chat.models) 的下标载入（阻塞，约 0.2~2s）
+//      (Chat.load (quote ("llm/nano-56m-q80.bin" "" 512 1.05 1.0 0.5 0)))  ; 载入（阻塞）
 //      (Chat.begin "你好")                      ; 返回提示词元数
 //      (while #t { ... (Chat.step) ... })        ; App 自己按拍驱动
 //
 //  错误码（(Chat.load)）：
 //      0  成功
-//     -1  模型文件不存在（未被挂载 / 未拷贝）
+//     -1  配置列表非法 / 模型或 LoRA 文件不存在（未被挂载 / 未拷贝）
 //     -2  引擎初始化失败（内存不足）
 ////////////////////////////////////////////////////////////////////////////
 
 // 由本文件定义
 extern const am_native_lib_entry_t am_native_Chat_lib;
-
-// 模型候选表上限（与 ui_llm.c 的 preset 表同一取舍：白名单 + 文件存在性过滤）
-#define AM_NATIVE_CHAT_MODEL_MAX (8)
 
 // top-K 候选词元缓存深度（可视化柱状图；也是 (Chat.top_*) 列表长度上限）
 #define AM_NATIVE_CHAT_TOP_K (6)
@@ -81,14 +77,22 @@ extern const am_native_lib_entry_t am_native_Chat_lib;
 // 模型与引擎
 // ---------------------------------------------------------------------------
 
-// (Chat.models) : List —— 可用的本地模型，每项为 (显示名 相对文件名) 两元素列表；
-//   仅列出白名单内且**文件确实存在**的条目（浏览器目标需先在「资源」面板预载
-//   llm/*.bin，否则为空表）。空表时 Scheme 侧应给出「未挂载模型」提示。
-int32_t am_native_Chat_models(am_runtime_t *rt, am_process_t *proc);
-
-// (Chat.load index:Number) : Number —— 按 (Chat.models) 的**列表下标**载入模型
-//   （阻塞调用：解析模型头 + 反量化 + 分配 KV-Cache，WASM 上约 0.2~2s）。
-//   返回 0 成功 / -1 文件不存在 / -2 初始化失败。重复调用会先卸载旧模型。
+// (Chat.load cfg:List) : Number —— 按 App 给出的配置载入模型（**阻塞**：解析模型头 +
+//   反量化 + 分配 KV-Cache；56MB 约 1~2s，600MB 量级要数十秒）。重复调用先卸载旧模型。
+//
+//   cfg 是 7 元素列表，顺序固定：
+//     (模型文件 LoRA文件 上下文 复读惩罚 温度 top_p top_k)
+//       · 模型文件 / LoRA文件：与 (native Fs) **同一套路径规则**（相对业务资源根
+//         PLATFORM_ROOT_DIR，或以 '/' 开头的宿主绝对路径）；LoRA 传空串 "" = 不挂；
+//       · 上下文：词元数。KV-Cache 按上下文线性增长（Qwen3-0.6B 约 224KB/词元），
+//         不要照抄模型的 block_size，按可用内存与需要的生成长度取（如 2048）；
+//       · top_k = 0 表示不做 top-k 截断（只由 top-p 核采样决定）。
+//
+//   **模型预设表不在本库里**：它是 App 的数据（app/nanochat.scm 的 model_defs），
+//   逐项对齐 C 版 ui_llm.c 的 preset_model_configs。本库只按参数载入，于是加模型 /
+//   调采样参数是纯 Scheme 改动。
+//
+//   返回 0 成功 / -1 配置非法或文件缺失 / -2 初始化失败。
 int32_t am_native_Chat_load(am_runtime_t *rt, am_process_t *proc);
 
 // (Chat.unload) : Boolean —— 卸载当前模型（幂等；有会话时先释放会话）。恒 #t
@@ -99,7 +103,7 @@ int32_t am_native_Chat_loaded(am_runtime_t *rt, am_process_t *proc);
 
 // (Chat.config) : List | #null —— 当前模型超参数
 //   (arch block_size vocab_size n_layer n_embd n_head n_kv_head n_hidden head_dim seq_len)
-//   arch：0=Nano 2=Qwen2 3=Qwen3（与 infer.h 的 LLM_ARCH_* 一致）
+//   arch：0=Nano 2=Qwen2 3=Qwen3 4=Qwen3.5（与 infer.h 的 LLM_ARCH_* 一致）
 int32_t am_native_Chat_config(am_runtime_t *rt, am_process_t *proc);
 
 // (Chat.set_seed seed:Number) : Boolean —— 重设采样随机种子（#f=未载入模型）

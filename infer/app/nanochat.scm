@@ -24,8 +24,11 @@
 ;; 更慢），实测 Nano-56M 约 3 词元/秒；关掉可视化则全速（约 25 词元/秒）。
 ;;
 ;; 交互一览：
-;;   模型选择页：点一行载入模型（载入期间显示进度提示；浏览器目标需先在页面
-;;               「资源」面板预载 llm/nano-*.bin，否则列表为空并给出提示）
+;;   模型选择页：本 App 自带一张**模型预设表**（model_defs，逐项对齐 C 版 ui_llm.c 的
+;;               preset_model_configs：Nano-168M / Nano-56M / Nano-56M-Neko（LoRA）/
+;;               Nano-168M-Q4KS / Nano-56M-Q4KS / Qwen3-0.6B / Qwen3.5-0.8B），
+;;               点一行即载入（载入期间显示进度提示）；模型文件缺失的行不列出
+;;               （浏览器目标需先在页面「资源」面板预载 llm/*.bin）
 ;;   对话页    ：点底部输入框 → 宿主文本控件（软键盘/拼音）输入 → Enter 提交；
 ;;               生成中点「停止」中断；「可视化」开关切换推理可视化；对话区上下拖拽回看；
 ;;               页眉的模型名可点（回模型页并卸载引擎）；右上「退出」
@@ -97,6 +100,10 @@
 (define STOP_H 16)
 (define STOP_X 276)             ; = SW - PAD - STOP_W + 4
 
+;; 模型选择页的行几何（预设表 7 行：25px/行，正好排得下 7 行 + 两行底部提示）
+(define MROW_Y 30)
+(define MROW_H 25)
+
 ;; ---------------------------------------------------------------- 运行参数
 
 (define ST_MODEL 0)             ; 模型选择页
@@ -117,7 +124,45 @@
 (define dirty #t)               ; 需要重绘
 
 ;; 模型
-(define models (cdr '(0)))      ; ((名称 文件) ...)
+;; 预设表（**本 App 的数据，不是本地库的白名单**）：逐项对齐 C 版鹦鹉笼 ui_llm.c 的
+;; preset_model_configs——显示名 / 模型文件 / LoRA 文件 / 上下文长度 / 采样参数。
+;; 一行 = (显示名 模型文件 LoRA文件 上下文 复读惩罚 温度 top_p top_k)
+;;   · 文件路径与 (native Fs) **同一套规则**：相对业务资源根（桌面/WASM 上是
+;;     /home/bd4sur/linglong/llm/*.bin，掌机上是 SD 卡 /llm/*.bin）；
+;;   · 空串 = 不挂 LoRA（只有 Nano-56M-Neko 用 LoRA 微调）；
+;;   · 模型文件不存在的行**不列出**（与 C 版菜单「白名单 + 存在性过滤」同一取舍）。
+;;     浏览器目标未预载某个模型时它自然不出现，功能入口（配置）仍在，补上文件即可用。
+;;   · 上下文长度 = KV-Cache 容量与生成长度上限。Nano 取模型的 block_size（512）；
+;;     Qwen 模型的 block_size 是 40960，但 KV-Cache 按上下文线性增长
+;;     （Qwen3-0.6B：28 层 × 1024 维 × 2(K,V) × 4B ≈ 224KB/词元，32768 上下文要 7GB），
+;;     故与 C 版命令行（main_cli.c）取同一实用值 2048。
+;; 加模型 / 调采样参数只需改这张表（C 侧零改动）。
+(define model_defs
+  (quote (
+    ("Nano-168M"      "llm/nano-168m-q80.bin"     ""                            512  1.05 1.0  0.5   0)
+    ("Nano-56M"       "llm/nano-56m-q80.bin"      ""                            512  1.05 1.0  0.5   0)
+    ("Nano-56M-Neko"  "llm/nano-56m-base-q80.bin" "llm/nano-56m-lora-neko.bin"  512  1.05 1.0  0.5   0)
+    ("Nano-168M-Q4KS" "llm/nano-168m-q4ks.bin"    ""                            512  1.05 1.0  0.5   0)
+    ("Nano-56M-Q4KS"  "llm/nano-56m-q4ks.bin"     ""                            512  1.05 1.0  0.5   0)
+    ("Qwen3-0.6B"     "llm/qwen3-0b6-q80.bin"     ""                            2048 1.0  0.6  0.95  20)
+    ("Qwen3.5-0.8B"   "llm/qwen35-0b8.q80.bin"    ""                            2048 1.0  0.6  0.95  20)
+  )))
+
+;; 可用模型：模型文件确实存在的行（与上表同格式）
+(define scan_models
+  (lambda ()
+    (define out (cdr '(0)))
+    (define d (cdr '(0)))
+    (define i 0)
+    (while (< i (length model_defs)) {
+      (set! d (get_item model_defs i))
+      (if (Fs.exists (get_item d 1)) (push out d) #f)
+      (set! i (+ i 1))
+    })
+    out))
+
+(define models (cdr '(0)))      ; 可用模型（scan_models 的结果，启动时填充）
+(define rescan_ms 0)            ; 上次重扫模型表的时间戳（模型页空表时的兜底轮询）
 (define sel 0)                  ; 选中的模型下标
 (define model_name "-")         ; 已载入模型的显示名
 (define model_str "")           ; 页眉上的模型摘要
@@ -770,11 +815,13 @@
     (set! dirty #f)))
 
 ;; 模型选择页
+;;   列出 model_defs 中**模型文件确实存在**的行（名称 + 相对路径）；行高 MROW_H。
+;;   采样参数不占版面（太密），改在载入日志里打印，排查时看 [chat] 行即可。
 (define draw_models
   (lambda ()
     (define n (length models))
     (define i 0)
-    (define y 30)
+    (define y MROW_Y)
     (define m (cdr '(0)))
     (Gfx.fill_rect 0 0 SW SH 14 16 22)
     (Gfx.set_font FONT_S)
@@ -783,15 +830,15 @@
     (if (== loading 1)
         {
           (Gfx.draw_text "正在载入模型…（解析权重 + 分配 KV-Cache）" PAD 60 240 210 130)
-          (Gfx.draw_text "浏览器目标首次载入 56MB 模型约需 1~3 秒" PAD 80 160 170 190)
+          (Gfx.draw_text "Nano 模型约 1~3 秒；Qwen 模型需数十秒" PAD 80 160 170 190)
           (Gfx.draw_text "请稍候，界面会短时冻结" PAD 96 160 170 190)
         }
         (if (== n 0)
             {
               (Gfx.draw_text "未找到本地模型" PAD 40 250 170 130)
               (Gfx.draw_text "浏览器目标：请在页面「资源」面板" PAD 64 150 200 235)
-              (Gfx.draw_text "预载 llm/nano-56m-q80.bin" PAD 80 150 200 235)
-              (Gfx.draw_text "或 llm/nano-168m-q80.bin" PAD 96 150 200 235)
+              (Gfx.draw_text "预载 llm/ 目录下的模型文件" PAD 80 150 200 235)
+              (Gfx.draw_text "（nano-56m-q80.bin 等）" PAD 96 130 150 172)
               (Gfx.draw_text "掌机：把模型放进 llm/ 目录" PAD 120 150 200 235)
             }
             {
@@ -799,23 +846,23 @@
                 (set! m (get_item models i))
                 (if (== i sel)
                     {
-                      (Gfx.fill_rect PAD y (- SW (* PAD 2)) 26 34 84 140)
-                      (Gfx.draw_rect PAD y (- SW (* PAD 2)) 26 110 180 250)
+                      (Gfx.fill_rect PAD y (- SW (* PAD 2)) MROW_H 34 84 140)
+                      (Gfx.draw_rect PAD y (- SW (* PAD 2)) MROW_H 110 180 250)
                     }
                     {
-                      (Gfx.fill_rect PAD y (- SW (* PAD 2)) 26 34 38 50)
-                      (Gfx.draw_rect PAD y (- SW (* PAD 2)) 26 80 86 104)
+                      (Gfx.fill_rect PAD y (- SW (* PAD 2)) MROW_H 34 38 50)
+                      (Gfx.draw_rect PAD y (- SW (* PAD 2)) MROW_H 80 86 104)
                     })
-                (Gfx.draw_text (get_item m 0) (+ PAD 8) (+ y 2) 232 238 248)
-                (Gfx.draw_text (get_item m 1) (+ PAD 8) (+ y 13) 130 150 172)
-                (set! y (+ y 30))
+                (Gfx.draw_text (get_item m 0) (+ PAD 8) (+ y 1) 232 238 248)
+                (Gfx.draw_text (get_item m 1) (+ PAD 8) (+ y 12) 130 150 172)
+                (set! y (+ y MROW_H))
                 (set! i (+ i 1))
               })
-              (Gfx.draw_text "点一行载入模型（载入后进入对话）" PAD (+ y 6) 140 150 168)
-              (Gfx.draw_text "推理：C 语言端侧引擎 · 界面：灵机 Scheme" PAD (+ y 22) 110 130 150)
+              (Gfx.draw_text "点一行载入模型（载入后进入对话）" PAD (+ y 3) 140 150 168)
+              ;; 第二行：默认是来源说明；有提示（如「已卸载模型」）时让位给提示
               (if (String.equals gen_msg "")
-                  #f
-                  (Gfx.draw_text gen_msg PAD (+ y 40) 250 170 120))
+                  (Gfx.draw_text "推理：C 语言端侧引擎 · 界面：灵机 Scheme" PAD (+ y 17) 110 130 150)
+                  (Gfx.draw_text gen_msg PAD (+ y 17) 250 170 120))
             }))
     (EX.draw_button)
     (Gfx.refresh)
@@ -837,14 +884,16 @@
       (set! scroll 0)
     }))
 
-;; 载入模型（阻塞）：先画提示帧，再调 (Chat.load)
+;; 载入模型（阻塞）：先画提示帧，再调 (Chat.load 配置)
+;;   配置行的后 7 项就是要交给本地库的全部参数（(cdr 行)），见 model_defs 的说明；
+;;   模型文件/LoRA 缺失时本地库返回 -1 并**不进加载器**（load_llm 失败会退出进程）。
 (define load_model
   (lambda (idx)
     (define r 0)
     (define cfg #f)
     (set! loading 1)
     (draw_models)
-    (set! r (Chat.load idx))
+    (set! r (Chat.load (cdr (get_item models idx))))
     (set! loading 0)
     (if (== r 0)
         {
@@ -1063,7 +1112,7 @@
     (define i 0)
     (define hit -1)
     (while (< i n) {
-      (if (== (in_rect tap_x tap_y PAD (+ 30 (* i 30)) (- SW (* PAD 2)) 26) 1)
+      (if (== (in_rect tap_x tap_y PAD (+ MROW_Y (* i MROW_H)) (- SW (* PAD 2)) MROW_H) 1)
           (set! hit i)
           #f)
       (set! i (+ i 1))
@@ -1118,7 +1167,7 @@
          ;; 正在生成就先按"中断"收尾（否则会话视图与引擎一起被释放，界面停在半截）
          (if (== gen 1) (finish_round 1) #f)
          (Chat.unload)
-         (set! models (Chat.models))
+         (set! models (scan_models))
          (if (null? models) (set! models (cdr '(0))) #f)
          (set! stage ST_MODEL)
          (set! gen_msg "已卸载模型")
@@ -1216,7 +1265,22 @@
           (scroll_drag)
           (gen_tick)
         }
-        #f)
+        ;; 模型页且表为空：浏览器目标的模型是**后台挂载**的（llm/ 下 474MB），
+        ;; 用户可能先进了 App、模型才下载完。每 1 秒重扫一次，挂载完成即列出。
+        (if (== (length models) 0)
+            (if (> (- (System.timestamp) rescan_ms) 1000)
+                {
+                  (set! rescan_ms (System.timestamp))
+                  (set! models (scan_models))
+                  (if (> (length models) 0)
+                      {
+                        (logln (String.concat "rescan models=" (i2s (length models))))
+                        (set! dirty #t)
+                      }
+                      #f)
+                }
+                #f)
+            #f))
     ;; 后台恢复：引擎是虚拟机全局单例，实例销毁时会释放模型，恢复后按需重载
     (if (App.resumed)
         (if (== stage ST_CHAT)
@@ -1243,14 +1307,16 @@
 
 (define boot
   (lambda ()
+    (define mi 0)
     (set! SW (Gfx.width))
     (set! SH (Gfx.height))
-    (set! models (Chat.models))
-    (if (null? models) (set! models (cdr '(0))) #f)
+    (set! models (scan_models))
     (logln (String.concat "boot models=" (i2s (length models))))
-    (if (> (length models) 0)
-        (logln (String.concat "model0=" (get_item (get_item models 0) 1)))
-        #f)
+    (while (< mi (length models)) {
+      (logln (String.concat "model list=" (String.concat (get_item (get_item models mi) 0)
+              (String.concat " " (get_item (get_item models mi) 1)))))
+      (set! mi (+ mi 1))
+    })
     (rearm_tick)
     (draw_frame)
     #t))

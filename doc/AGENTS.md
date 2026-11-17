@@ -13502,3 +13502,113 @@ node ../tools/e2e/browser/regress_calendar.js https://127.0.0.1:9002/index.html 
   入口改成 `tap(40,210)` 后跑通，Scheme 代码本身未改。
 - `regress_exit.js` **38/38**（主菜单→小游戏→App 列表的既有导航不受影响）。
 - 原生各目标 Makefile 解析检查（`pod / pod_lite / pod_pt35 / tty / web / luckfox / mp135`）全部通过。
+
+------------------------------------
+
+# 2026-11-18（二）鹦鹉笼（灵机版）：模型预设表移到 App，补全 7 种模型配置
+
+目标：`infer/app/nanochat.scm` 原先只支持 Nano-168M / Nano-56M 两种模型，而 C 版鹦鹉笼
+（`infer/ui_llm.c` 的 `preset_model_configs`）已有多组配置。本次补齐 **Nano-56M-Neko
+（LoRA）/ Nano-168M-Q4KS / Nano-56M-Q4KS / Qwen3-0.6B / 以及 infer.c 已支持的
+Qwen3.5-0.8B**，并把「用哪些模型、用什么采样参数」从 C 侧搬到 App 侧。
+
+## 1. 分层调整：模型表归 App，本地库只负责「按参数载入」
+
+原实现把白名单硬编码在 `am_native_Chat.c`（`s_models[]`），App 只能拿
+`(Chat.models)` 列条目、`(Chat.load i)` 按下标载入——加模型必须改 C。现改为：
+
+| 旧接口 | 新接口 | 说明 |
+|---|---|---|
+| `(Chat.models)` | **删除**（改用 App 的 `model_defs` + `(Fs.exists …)` 过滤） | 本地库不再持有白名单 |
+| `(Chat.load i)` | `(Chat.load cfgList)` | `cfgList = (模型文件 LoRA文件 上下文 复读惩罚 温度 top_p top_k)` |
+
+- 路径规则与 `(native Fs)` **完全一致**：`am_native_fs_resolve`（相对业务资源根
+  `PLATFORM_ROOT_DIR`，或 `/` 开头的宿主绝对路径，拒绝 `..`）。因此桌面/WASM 上
+  `"llm/nano-56m-q80.bin"` → `/home/bd4sur/linglong/llm/nano-56m-q80.bin`，掌机上是
+  SD 卡 `/llm/…`。顺带修掉了旧实现用 `MODEL_ROOT_DIR`（NANO_TTY 下指向
+  `/home/bd4sur/ai/_model/Nano`，那里没有这些模型）与 Scheme 资源根不一致的问题。
+- 模型文件 / LoRA 文件缺失时返回 `-1` 并**绝不进** `load_llm`/`load_lora`（二者失败路径
+  是 `exit(EXIT_FAILURE)`，在 WASM 上等于杀掉整个运行时）。配置列表长度/类型不符、
+  上下文为 0 同样是 `-1`；全部软失败，不抛运行时错误。
+- `am_native_Chat.h` 同步改文档与错误码；`AM_NATIVE_CHAT_MODEL_MAX` 宏删除（不再有映射表）。
+
+## 2. `app/nanochat.scm`：模型预设表 `model_defs`
+
+逐项对齐 C 版 `preset_model_configs`（名字/文件/LoRA/上下文/采样参数）：
+
+| 显示名 | 模型文件 | LoRA | 上下文 | 复读/温度/top-p/top-k |
+|---|---|---|---|---|
+| Nano-168M | `llm/nano-168m-q80.bin` | — | 512 | 1.05 / 1.0 / 0.5 / 0 |
+| Nano-56M | `llm/nano-56m-q80.bin` | — | 512 | 同上 |
+| Nano-56M-Neko | `llm/nano-56m-base-q80.bin` | `llm/nano-56m-lora-neko.bin` | 512 | 同上 |
+| Nano-168M-Q4KS | `llm/nano-168m-q4ks.bin` | — | 512 | 同上 |
+| Nano-56M-Q4KS | `llm/nano-56m-q4ks.bin` | — | 512 | 同上 |
+| Qwen3-0.6B | `llm/qwen3-0b6-q80.bin` | — | 2048 | 1.0 / 0.6 / 0.95 / 20 |
+| Qwen3.5-0.8B | `llm/qwen35-0b8.q80.bin` | — | 2048 | 1.0 / 0.6 / 0.95 / 20 |
+
+- **过滤**：`scan_models` 用 `(Fs.exists 模型文件)` 只列出**文件确实存在**的行（与旧
+  「白名单 + 存在性」同一取舍）。WASM 目标未挂载 Qwen 时它们不出现在菜单，但配置行仍在
+  ——「功能入口保留」，把文件放进 MEMFS（页面「资源」面板上传）即可用。
+- **上下文长度不是照抄 C 版的 32768**：KV-Cache 按上下文线性增长
+  （Qwen3-0.6B = 28 层 × 1024 维 × 2(K,V) × 4B ≈ 224KB/词元，32768 要 7GB，本机只有
+  13GB 内存），故与 C 版命令行 `main_cli.c`（Qwen3 用 2048）取同一实用值 2048。
+  Nano 用模型自己的 `block_size` = 512。
+- **版面**：预设表 7 行，模型页行高 30 → 25（`MROW_Y/MROW_H` 常量，绘制与命中判定共用），
+  正好排下 7 行 + 两行提示；「已卸载模型」等提示文案与来源说明共用同一行（互斥显示）。
+- **空表兜底重扫**：浏览器目标的模型是**后台挂载**的（`llm/` 下约 474MB），用户可能先进了
+  App、模型后下载完。模型页空表时每 1 秒重扫一次（`rescan_ms` + `(System.timestamp)` 节流，
+  命中后打印 `[nanochat] rescan models=N` 并重绘），不必退出重进。
+- 载入仍为阻塞调用，先画提示帧再 `(Chat.load (cdr 行))`；日志
+  `[nanochat] boot models=N` + 每行 `[nanochat] model list=名称 路径`。
+
+## 3. `build_wasm_gui.sh`：两个 Qwen 大模型都不进清单
+
+原脚本只跳过 `llm/qwen3-0b6-q80.bin`（627MB）。新增 Qwen3.5 后若照旧打包，每次页面加载
+会白下 853MB。`SKIP_FILES` 现为 `{qwen3-0b6-q80.bin, qwen35-0b8.q80.bin}`：单线程 WASM
+跑不动它们（内存 + 速度），App 侧按文件存在性过滤后不列出，功能入口仍在。
+重建后 manifest 为 180 文件（p1 148/4.6MB，p2 32/474.6MB），`llm/` 下只有 6 个 Nano 模型
+（含 `nano-56m-base-q80.bin` + `nano-56m-lora-neko.bin`，Neko 在浏览器里可用）。
+
+## 4. 验证
+
+**桌面无头宿主**（`tools/e2e/host/run_chat_probe.sh`，真 `infer.c` + 真图形层 + 脚本化触屏）：
+7 个模型逐个「点行 → 载入 → 输入 → 生成」全部通过：
+
+- Nano-168M → `你好！有什么我可以帮助你的吗？`（16 词元，state=-10）
+- Nano-56M → `你好，我是Brainstorming，请问你需要我的帮助吗？`（24 词元）
+- Nano-56M-Neko → LoRA 分支正常（`[chat] … LoRA …/nano-56m-lora-neko.bin`），连续生成无异常；
+  载入→卸载→再载入同一 Neko 也正常
+- Nano-168M-Q4KS / Nano-56M-Q4KS → 正常（Q4K 反量化路径）
+- Qwen3-0.6B → 思考文本正常：`<think…>好的，用户发来了一条消息："你好"…`（limit=2048）
+- Qwen3.5-0.8B → 思考文本 + 换行排版正常（`limit=2048`）
+- 失败路径单测：模型缺失 / LoRA 缺失 / 配置非列表 / 上下文 0 全部返回 -1 且进程存活
+- 模型页截图核对：7 行 + 两行提示完整可见，无溢出
+
+**nano_tty 真目标**（本机无 `libasound2-dev`：`apt-get download` 解包到 `/tmp/alsadev` 提供
+头文件与 `libasound.so`，`make tty CCFLAGS=…-I/tmp/alsadev/usr/include LDFLAGS=…-L…` 构建通过；
+用 pty 驱动脚本喂键（注意 ncurses 的 `timeout(0)` 下方向键必须发 **SS3** 序列 `\eOC`/`\eOB`，
+发 `\e[C` 只会得到裸 ESC+`[`+`C`）+ SGR 鼠标点击）：
+
+- 启动 → 主菜单 →「灵机应用」→ nanochat：`[nanochat] boot models=7` + 7 条 `model list=`
+- 点第 1 行：`[chat] 模型已载入：…nano-168m-q80.bin（架构 0 / 层 24 / 词表 16384 / 上下文 512 …）`
+- 点第 7 行（Qwen3.5）：`架构 4 / 层 24 / 词表 248320 / 上下文 2048`，空输入取预置问题 →
+  `begin prompt_tokens=22` → 首个解码步 → 真实约 14 词元/秒持续生成（真时钟）
+
+**WASM 目标**：`bash build_wasm_gui.sh` 通过（5.4MB，仅既有 warning）。
+真 WASM + 无头 Chromium（`tools/e2e/browser/regress_nanochat.js`，用 **9123** 端口起静态
+服务，未启停 9002）：**58/58 PASS × 4 次**——Nano-56M、Nano-168M、Nano-56M-Neko（LoRA）、
+Nano-56M-Q4KS 各跑一遍全流程（挂载 → 载入 → 拼音输入 → 流式生成 → 可视化 → 停止 →
+卸载 → 退出落盘）。该脚本的模型行几何已随 `MROW_H=25` 由 `30 + i*30 + 13` 改为
+`30 + i*25 + 12`。
+
+## 5. 已知取舍
+
+- **Qwen 在浏览器里不可用**（内存/速度），故不进 WASM 资源清单；菜单里看不到它们，配置行
+  保留在 `model_defs` 中。桌面/nano_tty 上可用。
+- C 版 `ui_llm.c` 的 preset 表里还有 Qwen3-1.7B / 4B 等更大模型，本机没有对应文件，未列入
+  `model_defs`（要加只需在表里添一行）。
+- **思考模式没有开关**：`(Chat.begin)` 恒以 `is_thinking_enabled=1` 建会话（与 C 版
+  `ui_llm_init_config` 的默认值一致），Qwen3/Qwen3.5 的思考内容（含 `<|think|>` 类标记文本）原样流式上屏。
+- 引擎既有缺陷（本次未改）：`llm_context_free` 不释放 `ctx->lora`（`free_lora` 内部还有
+  `free(&(lora->config))` 的错误 free，不能直接调用），因此**每次载入 Neko 约泄漏 2MB**
+  （LoRA 权重缓冲 + LLM 结构体），重复载入数十次才会明显；普通（无 LoRA）模型不受影响。
