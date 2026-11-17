@@ -81,8 +81,6 @@ $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) $(ANIMAC_HEADERS) $(ANIMAC_DIR)/am_n
                         vsop87c_milli.c \
                         ui.c \
                         ui_app.c \
-                        ui_almanac.c \
-                        ui_calendar.c \
                         ui_cloud.c \
                         ui_dict.c \
                         ui_ebook.c \

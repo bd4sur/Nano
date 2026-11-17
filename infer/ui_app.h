@@ -59,7 +59,9 @@ extern "C" {
 #define STATE_RIPPLE            (67)
 #define STATE_DICT_QUERY        (68)
 #define STATE_DICT_DETAIL       (69)
-#define STATE_CALENDAR          (70)
+// 编号 70 已退役：原 C 版日历（STATE_CALENDAR）已移除，日历仅保留 Scheme 实现
+// （app/calendar.scm，经“灵机应用程序”入口启动；黄历逻辑/数据 almanac.h 保留备查）。
+// 保留编号空缺避免冲突。
 #define STATE_WATER             (71)
 #define STATE_CLOUD             (72)
 // 编号 73~76 已退役：原“小鹦鹉笼”独立的模型菜单/输入/推理/结果状态已并入鹦鹉笼统一状态

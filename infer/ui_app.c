@@ -76,8 +76,6 @@
 
 #include "ui_dict.h"
 
-#include "ui_calendar.h"
-
 #define WALLPAPER_PATH (PLATFORM_ROOT_DIR "/wp.png")
 
 // 全局变量（TODO 临时，后续要全部移到全局状态上下文中）
@@ -287,7 +285,7 @@ static uint8_t ui_app_map_touch_to_grid16_key(int32_t x, int32_t y) {
 //   2. 需要直接消费触屏的功能状态（虚拟按钮/点按/拖动等）：点按边沿认
 //      key_event->touch_edge（TOUCH_EDGE_DOWN/UP，生产端高频检测+队列可靠投递，
 //      亚帧点按不湮灭），按下点坐标取 touch_down_x/y（范式：ui_goldminer.c、
-//      ui_calendar.c、ui.c 菜单控件）；拖动轨迹逐帧读 key_event->touch_x/touch_y
+//      ui.c 菜单控件）；拖动轨迹逐帧读 key_event->touch_x/touch_y
 //      快照。一律不得跨层直读 hal_touch，也不再需要模块自持 prev 电平做沿检测。
 //   3. 直接消费触屏流的状态，必须加入 ui_app_state_is_menu 抑制表，使本层不再
 //      为该触摸生成宫格软按键，从根上杜绝队列通道的滞后事件泄漏到下一状态。
@@ -614,7 +612,8 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
         L"遗传算法拟合图像",
         L"水波",
         L"水池",
-        L"日历",
+        // 原“日历”入口已移除：C 版（STATE_CALENDAR / ui_calendar.c）退场，日历仅保留
+        // Scheme 实现（app/calendar.scm，经“灵机应用程序”入口启动）
         // L"体积云",  // 原入口：已移除（体积云渲染保留在天象仪“大气散射”档位中，见 celestial.c）
         // L"曼德博集" / L"生命游戏Scheme"：已并入“灵机应用程序”（业务资源目录 app/
         // 下的 Scheme App 动态列表，见 ui_scheme_app.c）
@@ -630,7 +629,7 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
     };
     global_state->w_menu_main->title = L"小游戏";
     global_state->w_menu_main->items = game_menu_items;
-    global_state->w_menu_main->item_num = 7;
+    global_state->w_menu_main->item_num = 6;
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
 }
 
@@ -642,7 +641,7 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
         case 3: return STATE_GENETIC;
         case 4: return STATE_RIPPLE;
         case 5: return STATE_WATER;
-        case 6: return STATE_CALENDAR;
+        // case 6: 原“日历”入口已移除（C 版退场，日历仅保留 Scheme 实现 app/calendar.scm）
         // case 7: 原“体积云”入口已移除（保留 STATE_CLOUD 状态处理，当前无菜单入口）
         // 原“曼德博集”/“生命游戏Scheme”入口已并入“灵机应用程序”（case 0）
         // case 12: 原“小鹦鹉笼”入口已移除（并入鹦鹉笼模型菜单，条目带 [轻] 前缀）
@@ -4925,24 +4924,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         global_state->PREV_STATE = global_state->STATE;
 
         global_state->STATE = ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main, game_menu_item_action, STATE_MAIN_MENU, STATE_GAME_MENU);
-
-        break;
-
-
-    /////////////////////////////////////////////
-    // 日历
-    /////////////////////////////////////////////
-
-    case STATE_CALENDAR:
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_calendar_init(key_event, global_state);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        ui_calendar_render_frame(key_event, global_state);
-        ui_calendar_event_handler(key_event, global_state);
 
         break;
 

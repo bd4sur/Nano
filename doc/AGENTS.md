@@ -13464,3 +13464,41 @@ node ../tools/e2e/browser/regress_calendar.js https://127.0.0.1:9002/index.html 
 - 注意：workspace-only（`.gitignore` 忽略）的 `regress_audio.js` 第 [3] 节仍在测 C 版
   `STATE_SPECTROGRAM`、`regress_pedometer.js` 的导航注释也停留在旧主菜单，属测试脚本
   陈旧，未在本次改动范围内。
+
+------------------------------------
+
+# 2026-11-18（C 版「日历」退场：小游戏入口与 C 实现一并移除）
+
+目标：C 版日历（含其黄历模态框）退场，日历/黄历只保留灵机（Scheme）版
+`app/calendar.scm`（从「灵机应用程序」列表启动）。WASM-GUI 是唯一目标平台。
+
+## 1. 删除
+
+| 文件/位置 | 说明 |
+|---|---|
+| `infer/ui_calendar.c` / `.h` | C 版日历页（周一起始的月历网格、上下月/年切换、触屏日期命中、打开黄历模态框），整文件删除 |
+| `infer/ui_almanac.c` / `.h` | C 版黄历模态框（四卡片排版/配色 + `CNLUNAR_IMPLEMENTATION` 编译单元），整文件删除 |
+| 小游戏菜单 `L"日历"` | `init_game_menu` 条目 7 → 6，`game_menu_item_action` 的 `case 6` 删除（其后条目索引不变） |
+| `STATE_CALENDAR(70)` | 按既有惯例改为「编号已退役」注释，不重新分配 |
+| 构建源清单 | `Makefile`（`GUI_MODULE_SRCS` + pod/pt35/tty/web 四处）、`build_wasm_gui.sh`、`luckfox.mk`、`mp135.mk`、`android/app/src/main/cpp/CMakeLists.txt` 同步移除；`platformio.ini` 通配收集，删除文件即生效 |
+
+**保留**：
+- `infer/almanac.h`（cnlunar 单头库：黄历**逻辑 + 数据**，217KB）与 `infer/nongli.c/.h`
+  （启动屏农历行）原样保留，未做任何修改；`tools/almanac_difftest.py` 的 C 黄金标准
+  （`tools/gen_almanac_tables.c` 直接 include `almanac.h`）因此继续可用。
+- 可复用公共代码（`graphics.c` 的 `gfx_*`、`utils.c`、`nano_fft` 等）与全部图标资源。
+- `app/calendar.scm`、`app/lib/almanac.scm`、`app/lib/almanac_data.scm` **零改动**。
+
+## 2. 验证
+
+- `cd infer && bash build_wasm_gui.sh`：通过（wasm32，5.4MB，仅既有 warning）。
+- 真 WASM + 无头 Chromium（临时探针，连已在跑的 9002 服务，未启停）：小游戏菜单截图确认
+  只剩 6 项（灵机应用程序/黄金矿工/TSP/遗传算法拟合图像/水波/水池）；5 次下键到末项
+  「水池」→ `state=71`（日历 70 已不可达）；右方向键 → App 列表 → `app/calendar.scm`
+  启动 `state=80`、页面有内容并正常退出。9/9 PASS。
+- **Scheme 日历回归** `tools/e2e/browser/regress_calendar.js`（真 WASM + 冻结时钟）：
+  **36/36 PASS**。注意该 workspace-only 脚本的入口导航仍是旧 4×4 宫格坐标
+  `tap(200,210)`（主菜单早在「小游戏」改造时变成 3 列 × 4 行），本次仅在 /tmp 副本里把
+  入口改成 `tap(40,210)` 后跑通，Scheme 代码本身未改。
+- `regress_exit.js` **38/38**（主菜单→小游戏→App 列表的既有导航不受影响）。
+- 原生各目标 Makefile 解析检查（`pod / pod_lite / pod_pt35 / tty / web / luckfox / mp135`）全部通过。

@@ -261,7 +261,7 @@ typedef struct Widget_Input_State {
     // 页脚 [16键] 热点呼出/收起（ui_widget_input_toggle_grid16，与触屏软键盘互斥）。
     // 键盘可见时：触屏点按键盘按钮=九键软按键（替代旧的全屏4x4宫格隐式映射），
     // 不解释滚动/光标；键盘隐藏时（默认）：点按=光标定位、滑动=像素滚动。
-    uint64_t softkey_swallow_until; // 热点动作后吞掉宫格残留软按键的截止时间戳（ms；范式同 ui_calendar）
+    uint64_t softkey_swallow_until; // 热点动作后吞掉宫格残留软按键的截止时间戳（ms）
     int32_t drawn_cursor_pos;       // 上次绘制时的光标位置：光标跟随滚动仅在光标变化时触发，
                                     // 避免触屏手动滚动后被光标跟随拉回（初始 -2 强制首次跟随）
     // 终端模式（电子核桃控制台，见 AGENTS.md）：输入框高度随内容排版行数动态调整——
