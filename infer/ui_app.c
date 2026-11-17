@@ -77,7 +77,7 @@
 
 #include "ui_dict.h"
 
-#define WALLPAPER_PATH (PLATFORM_ROOT_DIR "/wp.png")
+#define WALLPAPER_PATH (PLATFORM_ROOT_DIR "/wallpaper/wp.png")
 
 // 全局变量（TODO 临时，后续要全部移到全局状态上下文中）
 
@@ -5458,7 +5458,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
     case STATE_RIPPLE: {
 
-        // 首次获得焦点：初始化（从SD卡读取/wp.png并解码为纹理）
+        // 首次获得焦点：初始化（从SD卡读取 /wallpaper/wp.png 并解码为纹理）
         if (global_state->PREV_STATE != global_state->STATE) {
             ui_ripple_init(key_event, global_state);
         }

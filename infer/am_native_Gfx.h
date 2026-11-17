@@ -169,7 +169,7 @@ int32_t am_native_Gfx_draw_image(am_runtime_t *rt, am_process_t *proc);
 //    像素不进解释器堆；strength 为单位坡度的像素位移量（量纲：像素 / 高度单位）。
 //    失败（列表长度不足 / 参数非法 / 读文件或解码失败）返回 #f。
 //    Scheme 侧示例（绘制 320x240 底图，波场 80x60）：
-//        (Gfx.draw_image_refract "wp.png" 0 0 320 240 80 60 amp 0.02)
+//        (Gfx.draw_image_refract "wallpaper/wp.png" 0 0 320 240 80 60 amp 0.02)
 int32_t am_native_Gfx_draw_image_refract(am_runtime_t *rt, am_process_t *proc);
 
 // (Gfx.sprite_info path:String) : List | #null

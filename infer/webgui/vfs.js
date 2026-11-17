@@ -62,6 +62,17 @@ function nanoCompareNames(a, b) {
 
 // entries: [{ path, dir?, size?, mtime?, source? }]（已剔除墓碑）
 // 返回 { root, index }；root.path === ""，index: path → node
+// 把来源元数据从条目搬到树节点（origin/priority/cached/mounted/pendingP2 是面板徽标用的，
+// 漏搬的表现是"所有文件都显示成同一个来源"）
+function nanoCopyMeta(node, e) {
+  node.origin = e.origin || "server";
+  node.priority = e.priority || 0;
+  node.cached = !!e.cached;
+  node.mounted = !!e.mounted;
+  if (e.pendingP2) node.pendingP2 = e.pendingP2;
+  return node;
+}
+
 function nanoBuildTree(entries) {
   const root = {
     name: "资源根", path: "", dir: true, size: 0, source: "", mtime: 0,
@@ -95,6 +106,7 @@ function nanoBuildTree(entries) {
       d.implied = false;
       d.mtime = e.mtime || 0;
       d.source = e.source || "";
+      nanoCopyMeta(d, e);
     }
   }
   for (const e of list) {
@@ -112,6 +124,7 @@ function nanoBuildTree(entries) {
     node.size = e.size || 0;
     node.mtime = e.mtime || 0;
     node.source = e.source || "";
+    nanoCopyMeta(node, e);
   }
 
   // 排序：目录在前、文件在后；各自按名称升序（递归）
@@ -160,10 +173,10 @@ function nanoDefaultsEntries(defaults) {
   if (defaults instanceof Map) {
     return [...defaults.entries()].map(function (kv) {
       const meta = kv[1];
-      return { path: kv[0], size: meta && meta.size ? meta.size : 0 };
+      return { path: kv[0], size: meta && meta.size ? meta.size : 0, priority: meta && meta.priority ? meta.priority : 1 };
     });
   }
-  return [...defaults].map(function (p) { return { path: p, size: 0 }; });
+  return [...defaults].map(function (p) { return { path: p, size: 0, priority: 1 }; });
 }
 function nanoDefaultsHas(defaults, path) {
   if (!defaults) return false;
@@ -173,29 +186,114 @@ function nanoDefaultsHas(defaults, path) {
 
 // 合并视图：服务器默认源（manifest）∪ 本地存储（store），剔除墓碑
 // deps = { store, defaults() }
-async function nanoVfsList(deps) {
+// 扫描合并视图（服务器默认源 ∪ 本地存储，剔除墓碑），并给出**每个条目的来源元数据**
+// 与**可见性过滤结果**。返回：
+//   all     —— 全部条目（含未下载的 p2；文件操作/删除/移动用这份，避免漏处理）
+//   visible —— 面板要显示的条目（未下载的服务器 p2 文件被剔除，目录保留）
+//   hidden  —— 被剔除的服务器 p2 文件路径（未下载）
+// 条目字段：{ path, dir, size, mtime, origin, priority, cached, mounted }
+//   origin   "server"（manifest 提供）| "user"（本机上传/新建，服务器上没有）
+//   priority 1=p1（每次加载全量刷新）| 2=p2（点按钮才下载）| 0=本机独有
+//   cached   本机 IndexedDB 里有副本
+//   mounted  本机 MEMFS（当前会话）里有副本
+async function nanoVfsScan(deps) {
   const defaults = deps.defaults ? deps.defaults() : null;
-  const map = new Map();
+  const storeList = await (async () => {
+    try { return await deps.store.list(); } catch (e) { return []; }
+  })();
+  const storeMap = new Map();
+  const tombstones = new Set();   // 用户在面板里删掉的服务器默认资源（持久隐藏）
+  for (const e of storeList) {
+    const p = nanoPathNorm(e.path);
+    if (!p) continue;
+    storeMap.set(p, e);
+    if (e.deleted) tombstones.add(p);
+  }
+
+  const all = new Map();
+  const hidden = [];
+  const dirSet = new Set();
+  const addParents = function (p) {
+    const parts = p.split("/");
+    for (let i = 1; i < parts.length; i++) dirSet.add(parts.slice(0, i).join("/"));
+  };
+
+  // ---- 服务器默认源 ----
   for (const e of nanoDefaultsEntries(defaults)) {
     const path = nanoPathNorm(e.path);
-    if (path) map.set(path, { path, dir: false, size: e.size, source: "http", mtime: 0 });
-  }
-  let storeList = [];
-  try { storeList = await deps.store.list(); } catch (e) { storeList = []; }
-  const tombstones = new Set();
-  for (const e of storeList) {
-    if (e.deleted) { tombstones.add(nanoPathNorm(e.path)); continue; }
-    const path = nanoPathNorm(e.path);
     if (!path) continue;
-    if (e.dir) {
-      map.set(path, { path, dir: true, size: 0, source: "store", mtime: e.mtime || 0 });
-    } else {
-      map.set(path, { path, dir: false, size: e.size || 0, source: "store", mtime: e.mtime || 0 });
+    const priority = (e.priority === 2) ? 2 : 1;
+    addParents(path);
+    if (tombstones.has(path)) continue;   // 已删除：不显示，也不算"未下载"
+    const st = storeMap.get(path);
+    const cached = !!(st && !st.dir && !st.deleted);
+    let mounted = priority === 1;
+    if (priority === 2 && !mounted && deps.memfs && deps.memfs.exists) {
+      mounted = !!(await deps.memfs.exists(path));
+    }
+    const entry = {
+      path, dir: false, size: e.size, mtime: st ? (st.mtime || 0) : 0,
+      source: cached ? "store" : "http",
+      origin: "server", priority, cached, mounted,
+    };
+    all.set(path, entry);
+    // p2 且两边都没有 → 未下载：不进面板（目录仍保留，见下方 dirSet）
+    if (priority === 2 && !cached && !mounted) hidden.push(path);
+  }
+
+  // ---- 本地存储（覆盖 / 本机独有 / 显式目录）----
+  for (const [path, e] of storeMap) {
+    if (e.deleted) continue;
+    if (e.dir) { dirSet.add(path); }
+    else addParents(path);
+    const prev = all.get(path);
+    if (prev) {
+      // 服务器也有的路径：库里存在即视为"已缓存"（p1 不可能有库副本，loader 会清）
+      prev.cached = true;
+      prev.mtime = e.mtime || prev.mtime;
+      if (!e.dir && e.size) prev.size = e.size;
+      continue;
+    }
+    all.set(path, {
+      path, dir: !!e.dir, size: e.size || 0, mtime: e.mtime || 0,
+      source: "store",
+      origin: e.dir ? "server" : "user", priority: 0,
+      cached: !e.dir, mounted: !e.dir,
+    });
+  }
+
+  // ---- 目录（含"只剩目录、文件被隐藏"的那些：用户仍可往里上传）----
+  for (const d of dirSet) {
+    if (all.has(d)) continue;
+    all.set(d, {
+      path: d, dir: true, size: 0, mtime: storeMap.has(d) ? (storeMap.get(d).mtime || 0) : 0,
+      source: storeMap.has(d) ? "store" : "http",
+      origin: storeMap.has(d) ? "user" : "server", priority: 0, cached: false, mounted: false,
+    });
+  }
+
+  // 每个目录下"未下载的 p2 文件"个数（面板上标出来，提示用户还有东西没拉）
+  const pending = new Map();
+  for (const h of hidden) {
+    const parts = h.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const d = parts.slice(0, i).join("/");
+      pending.set(d, (pending.get(d) || 0) + 1);
     }
   }
-  // 墓碑最后删：即使同路径有服务器默认源也一并隐藏
-  for (const p of tombstones) map.delete(p);
-  return [...map.values()];
+  for (const [d, n] of pending) {
+    const e = all.get(d);
+    if (e && e.dir) e.pendingP2 = n;
+  }
+
+  const hiddenSet = new Set(hidden);
+  const visible = [...all.values()].filter(function (e) { return !hiddenSet.has(e.path); });
+  return { all: [...all.values()], visible, hidden };
+}
+
+// 面板视图：服务器 p2 里**没下载的**不出现（目录保留）
+async function nanoVfsList(deps) {
+  return (await nanoVfsScan(deps)).visible;
 }
 
 // 墓碑清单（用于“已隐藏，可恢复”）
@@ -260,7 +358,7 @@ async function nanoVfsTransfer(deps, fromPath, toPath, mode) {
   if (nanoPathWithin(toPath, fromPath)) throw new Error("不能把目录放进它自己的子目录");
   if (!nanoNameValid(nanoPathBase(toPath))) throw new Error("目标名称不合法");
 
-  const entries = await nanoVfsList(deps);
+  const entries = (await nanoVfsScan(deps)).all;
   const affected = entries
     .filter(function (e) { return nanoPathWithin(e.path, fromPath); })
     .sort(function (a, b) { return nanoPathDepth(a.path) - nanoPathDepth(b.path); });
@@ -309,7 +407,7 @@ async function nanoVfsTransfer(deps, fromPath, toPath, mode) {
 async function nanoVfsDelete(deps, path) {
   path = nanoPathNorm(path);
   if (!path) throw new Error("资源根不可删除");
-  const entries = await nanoVfsList(deps);
+  const entries = (await nanoVfsScan(deps)).all;
   const affected = entries.filter(function (e) { return nanoPathWithin(e.path, path); });
   const defaults = deps.defaults ? deps.defaults() : null;
   for (const e of affected) {
@@ -339,7 +437,7 @@ if (typeof module !== "undefined" && typeof module.exports !== "undefined") {
     nanoPathNorm, nanoPathJoin, nanoPathParent, nanoPathBase, nanoPathDepth, nanoPathWithin,
     nanoNameValid, nanoCompareNames,
     nanoBuildTree, nanoCountDescendants, nanoFlattenTree,
-    nanoVfsList, nanoVfsListDeleted, nanoVfsReadBytes, nanoVfsWriteFile, nanoVfsMkdir,
+    nanoVfsList, nanoVfsScan, nanoVfsListDeleted, nanoVfsReadBytes, nanoVfsWriteFile, nanoVfsMkdir,
     nanoVfsTransfer, nanoVfsDelete, nanoVfsRestore,
   };
 }

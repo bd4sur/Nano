@@ -45,7 +45,7 @@
 #define WR_MAP_SIZE (2 * WR_PAGE)                   // 振幅场总大小（元素数）
 #define WR_SIM_DROP_RADIUS ((int32_t)(WR_DROP_RADIUS * 0.6f))  // 半分辨率波源半径 3
 
-#define WR_IMAGE_PATH (PLATFORM_ROOT_DIR "/wp.png")
+#define WR_IMAGE_PATH (PLATFORM_ROOT_DIR "/wallpaper/wp.png")
 
 // ===============================================================================
 // 定点实现（int16 振幅场 + 内部 RAM + 移位运算 + 行指针直写帧缓冲）
@@ -259,7 +259,7 @@ int32_t ui_ripple_init(Key_Event *key_event, Global_State *global_state) {
     s_wr.old_index = WR_SIM_W;                      // 旧页基址（跳过上填充行）
     s_wr.new_index = WR_SIM_W * (WR_SIM_H + 3);     // 新页基址（另一页 + 上填充行）
 
-    // ---- 从 SD 卡读取 /wp.png 并解码缩放为 320x240 纹理（PSRAM） ----
+    // ---- 从 SD 卡读取 /wallpaper/wp.png 并解码缩放为 320x240 纹理（PSRAM） ----
     uint8_t *file_buffer = NULL;
     size_t   file_size = 0;
     uint8_t *rgb888 = NULL;
@@ -338,7 +338,7 @@ int32_t ui_ripple_render_frame(Key_Event *key_event, Global_State *global_state)
         if (!s_wr.error_drawn) {
             gfx_soft_clear(gfx);
             gfx_font_draw_text(gfx, GFX_FONT_ALPHA_16, L"水波", 6, 2, 255, 255, 255, 1);
-            gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"读取 /wp.png 失败", 6, 100, 255, 80, 80, 1);
+            gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"读取 wallpaper/wp.png 失败", 6, 100, 255, 80, 80, 1);
             gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"请将图片放入SD卡根目录", 6, 120, 180, 180, 180, 1);
             gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"A返回", 6, 220, 180, 180, 180, 1);
             gfx_refresh(gfx);

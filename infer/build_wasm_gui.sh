@@ -40,66 +40,63 @@ LINGLONG=/home/bd4sur/linglong
 OUT_DIR=webgui
 
 # 业务资源：不打进产物（不用 --preload-file），改为运行时从外部 HTTP「挂载」——
-#   本脚本把 linglong 资源软链接进 webgui/files/ 并生成 manifest.json（文件清单+大小）；
-#   页面 JS 启动时经 createPreloadedFile 逐文件拉入 MEMFS（路径与 PLATFORM_ROOT_DIR 一致）。
-#   分级加载只有两级：priority 1（图标/壁纸/app 源码/mob.scm 等启动必需）先拉，
-#   立即可进系统；priority 2 = 其余一切（ebook/dict/image/music 音频/LLM 模型……）
-#   **不自动拉**——页面状态栏有个「下载资源 <体积>」按钮，用户点了才下载（进度显示在
-#   按钮与状态栏）。没有第三/第四层，也没有按 App 的钩子（见 doc/AGENTS.md 条目）。
-#   唯一的例外是 llm/ 下的 Qwen 大模型（qwen3-0b6 627MB / qwen35-0b8 853MB，
-#   单线程 WASM 跑不动）——它们不进清单。
-LINGLONG=/home/bd4sur/linglong
+#   本脚本把 linglong 资源软链接进 webgui/files/ 并生成 manifest.json（文件清单+大小+优先级）；
+#   页面 JS 启动时逐文件拉入 MEMFS（路径与 PLATFORM_ROOT_DIR 一致）。
+#   资源分两类（见 doc/AGENTS.md 2026-11-18（五））：
+#     p1 = app/ icon/ wallpaper/（含其下**任意深度**的全部内容，不做例外）：**服务器是
+#          唯一来源**——每次页面加载全量重拉、无条件覆盖 MEMFS，并把 IndexedDB 里属于
+#          这三处的条目（含墓碑）清空。
+#     p2 = 其余一切（ebook/dict/music/llm 模型……**一个不落**，不按文件大小/模型种类
+#          挑肥拣瘦）：**不自动拉**——页面状态栏有个「下载资源 <体积>」按钮，用户点了才拉，
+#          写入 MEMFS + IndexedDB；两边已有同名文件则静默跳过（不重下、不覆盖）。
+#
+# 【写入边界】$LINGLONG 里**只有 app/ 是构建产出的**（下面整树镜像）；其余子目录
+#   （icon/ wallpaper/ ebook/ dict/ music/ llm/ doc/ data/ …）一律由人工维护，
+#   本脚本不去建、不去改、不去删。清单是从磁盘读来的（只读），不改动文件。
 mkdir -p "$OUT_DIR"
 ln -sfn "$LINGLONG" "$OUT_DIR/files"
 
-# 同步灵机 App 源码（infer/app/*.scm）到业务资源目录
+# 同步灵机 App 资源目录（infer/app/ → $LINGLONG/app/）
+#
+# app/ 是**一个整体**：里面既有 .scm 源码（含 app/lib/ 的库），也有运行时要读的数据
+# （hwr/hwr2 的训练权重 txt、llm 的 base64 分块、badapple 帧数据…）。所以这里做一次
+# 整树镜像，而不是按子目录分别 rsync/cp。
+#
+# 【为什么】以前是“scm 走两次 rsync --delete（只认 *.scm），数据走三段 cp（只加不删）”，
+# 实测已经出过一次事：app/lib/hwr2/ 的 14 个权重文件漏登记（没有任何一行拷它），
+# 从干净资源目录构建出来的 hwr2 App 在浏览器里读不到权重；它现在能跑，只是因为
+# 那些文件早先被手工拷过一次，而 rsync 的 --delete 对 exclude 掉的文件是“保护”不是删除
+#（默认的 --delete 不删被 exclude 的目的端文件），于是残骸永远留着。
+# 整树镜像同时把另一个坑堵上：数据/目录增删不用再到脚本里登记一行（漏登记就静默缺文件）。
+#
+# --delete：源里删了什么，资源目录就跟着删（宿主 App 列表是扫描资源目录得来的，
+# 残留副本会让“已删除”的 App 继续出现在主菜单；数据残骸同理）。副作用是**手工放进
+# $LINGLONG/app/ 的东西也会被清掉**——那本来就是这个目录的约定（它是构建产物）。
 mkdir -p "$LINGLONG/app"
-mkdir -p "$LINGLONG/app/lib"
-# 用 rsync --delete 同步而不是 cp：仓库里**删掉**一个 App（或把 App 降格为库移到 app/lib/）
-# 时，资源目录里的旧副本必须跟着消失——宿主的 App 列表是扫描资源目录得到的，残留副本
-# 会让"已删除"的 App 继续出现在主菜单里（2026-11 把 gol/grayscott/lenia/particlelife
-# 并入 emergence.scm 时就踩过：cp 只加不删）。
-rsync -a --delete --include='*/' --include='*.scm' --exclude='*' app/ "$LINGLONG/app/" \
-    || cp -f app/*.scm "$LINGLONG/app/" 2>/dev/null || true
-rsync -a --delete --include='*/' --include='*.scm' --exclude='*' app/lib/ "$LINGLONG/app/lib/" \
-    || cp -f app/lib/*.scm "$LINGLONG/app/lib/" 2>/dev/null || true
-# 大块数据（不入 .scm 源码：灵机按源码字符数预分配 token 数组，见 app/hwr.scm 注释）
-mkdir -p "$LINGLONG/app/lib/hwr"
-cp -f app/lib/hwr/* "$LINGLONG/app/lib/hwr/" 2>/dev/null || true
-# LLM 模型数据（app/lib/llm/{sort6,psycho}/mNN.b64 + meta.scm）：base64 分块，
-# 供纯 Scheme 的 LLM 测试台（app/llm.scm + app/lib/llm_pure.scm）流式读入解码。
-# 真源由 tools/gen_llm_model_b64.py 生成并随仓库提供。
-mkdir -p "$LINGLONG/app/lib/llm/sort6" "$LINGLONG/app/lib/llm/psycho"
-cp -f app/lib/llm/sort6/* "$LINGLONG/app/lib/llm/sort6/" 2>/dev/null || true
-cp -f app/lib/llm/psycho/* "$LINGLONG/app/lib/llm/psycho/" 2>/dev/null || true
-# Bad Apple 帧数据（app/lib/badapple/frames.txt + meta.scm）：定长记录文本，一帧一条，
-# 由 app/badapple.scm 逐帧 (Fs.read_range) 读取；(native Fs) 只读文本，故数据必须落在这里。
-# 真源是 tools/gen_badapple_data.py（从 badapple.h 的 C 数组生成）——真源改过就自动重生，
-# 避免「改了 badapple.h 却忘了 make badapple-data」的隐患。
-if [ "badapple.h" -nt "app/lib/badapple/frames.txt" ]; then
-    echo "badapple.h 比 frames.txt 新，重新生成帧数据…"
-    python3 tools/gen_badapple_data.py
-fi
-mkdir -p "$LINGLONG/app/lib/badapple"
-cp -f app/lib/badapple/* "$LINGLONG/app/lib/badapple/" 2>/dev/null || true
-# 把内置示例文档导出成真正的 .md（真源是 app/lib/md_demo.scm；阅读器首次运行也会落盘，
-# 但构建期先摊出来，用户才能直接在资源目录里看到/编辑它）
-python3 tools/gen_md_demo.py "$LINGLONG" || true
+# 同步是**纯粹的目录镜像**：不做任何生成/转换。app/ 里的每一样东西（含 app/lib/badapple
+# 的帧数据、app/lib/llm 的 base64 分块、hwr* 的权重）都是仓库里的普通文件，构建不参与
+# 生产它们（2026-11-18 起取消了 badapple.h → frames.txt 那一步）。
+rsync -a --delete \
+    --exclude='.DS_Store' --exclude='__pycache__/' --exclude='*.pyc' \
+    app/ "$LINGLONG/app/" \
+    || { echo "未装 rsync，退化为整树拷贝（不会清理已删除文件）"; cp -rf app/. "$LINGLONG/app/"; }
+
+# 内置示例文档不再由构建期写进资源目录：`$LINGLONG` 里**只有 app/ 是构建产出的**，
+# 其余子目录（doc/ icon/ wallpaper/ ebook/ dict/ music/ llm/ …）一律由人工维护，
+# 构建脚本不得去建、去改、去删（见 doc/AGENTS.md 2026-11-18（五））。
+# 阅读器首次运行时仍会自己把示例 md 落盘到 doc/（浏览器侧只进 MEMFS + IndexedDB）。
 python3 - "$LINGLONG" "$OUT_DIR/manifest.json" <<'EOF'
 import json, os, sys
 root, out = sys.argv[1], sys.argv[2]
-P1_DIRS = {"icon", "app"}
-# app/ 下的大块数据不算「启动必需」：降为 p2 后台挂载（App 侧缺文件会自动等重试）
-#   app/lib/llm/      —— 纯 Scheme LLM 测试台的 base64 模型分块
-#   app/lib/badapple/ —— Bad Apple 帧数据（1.4MB 定长记录文本）
-P2_PREFIXES = ("app/lib/llm/", "app/lib/badapple/")
-P1_FILES = {"mob.scm", "jstest.js"}
+# p1 = 这三个目录**递归下去的一切**，不做任何例外（app/lib/badapple、app/lib/llm 同样
+#      算 p1：它们在 infer/app/ 里，就跟着 app/ 一起整体同步、一起每次全量刷新）。
+#      它们也是**服务器唯一来源**（页面每次加载全量重拉、无条件覆盖 MEMFS，并清空
+#      IndexedDB 里属于这三处的条目）。页面靠 p1_dirs 判定“哪些路径归服务器管”。
+P1_DIRS = {"app", "icon", "wallpaper"}
 SKIP_DIRS = {"data"}   # data 是 App 运行时数据（不入产物）
-# llm/ 下的两个 Qwen 大模型不进清单（627MB / 853MB）：单线程 WASM 根本跑不动它们
-# （内存不够 + 速度不可用）。app/nanochat.scm 的模型表按**文件存在性**过滤，
-# 未挂载的模型只是不出现在菜单里——功能入口（配置行）仍在，把文件放进 MEMFS
-# （页面「资源」面板上传）即可用。挂进清单只会让每次页面加载白下 1.4GB。
-SKIP_FILES = {"llm/qwen3-0b6-q80.bin", "llm/qwen35-0b8.q80.bin"}
+# 清单是 llm/ 下的**全量**：构建不对任何具体文件做取舍（大模型也一样——它们只是 p2，
+# 用户不点「下载资源」就不会花那份流量）。是否"跑得动"属于运行时/App 的判断
+# （如 app/nanochat.scm 的模型表按文件存在性过滤），不是构建该替用户决定的事。
 files = []
 for dirpath, dirnames, filenames in os.walk(root):
     rel_dir = os.path.relpath(dirpath, root)
@@ -109,16 +106,11 @@ for dirpath, dirnames, filenames in os.walk(root):
         continue
     for fn in filenames:
         rel = fn if rel_dir == "." else os.path.join(rel_dir, fn)
-        if rel in SKIP_FILES:
-            continue
-        if top in P1_DIRS or (rel_dir == "." and (fn in P1_FILES or fn.startswith("wp"))):
-            pri = 2 if rel.startswith(P2_PREFIXES) else 1
-        else:
-            pri = 2
+        pri = 1 if top in P1_DIRS else 2
         files.append({"path": rel, "size": os.path.getsize(os.path.join(dirpath, fn)), "priority": pri})
 files.sort(key=lambda f: (f["priority"], f["path"]))
 with open(out, "w") as fp:
-    json.dump({"files": files}, fp, ensure_ascii=False)
+    json.dump({"p1_dirs": sorted(P1_DIRS), "files": files}, fp, ensure_ascii=False)
 n1 = sum(1 for f in files if f["priority"] == 1)
 b1 = sum(f["size"] for f in files if f["priority"] == 1)
 bt = sum(f["size"] for f in files)

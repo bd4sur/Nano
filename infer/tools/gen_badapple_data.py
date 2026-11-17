@@ -25,9 +25,14 @@
 #   定长记录的用处：偏移 = 帧号 × rec_bytes，(Fs.read_range) 一次只读一帧（≤672 字节），
 #   不需要在 Scheme 里加载/索引整份数据，也不必解析行分隔符。
 #
-# 用法：
+# 【现状（2026-11-18）】本脚本**已不在任何构建流程里**：`build_wasm_gui.sh` 只把
+#   infer/app/ 整树镜像到资源目录，不再从 badapple.h 生成任何东西；`make badapple-data`
+#   也已删除。infer/app/lib/badapple/{frames.txt,meta.scm} 现在是**入库的普通数据文件**
+#   （与 app/ 里其他文件一视同仁，同属 p1）。只有在你确实想从 badapple.h 重新导出一份
+#   时，才手工跑本脚本——它不是构建步骤。
+#
+# 用法（手工，一次性）：
 #   python3 gen_badapple_data.py                 # 生成到 infer/app/lib/badapple/
-#   python3 gen_badapple_data.py --deploy DIR    # 另外复制到业务资源目录（如 ~/linglong）
 #
 # 产物：
 #   infer/app/lib/badapple/frames.txt    —— 定长记录文本（2193 帧）

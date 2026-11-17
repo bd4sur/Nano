@@ -13956,3 +13956,234 @@ steps  已推进的步数（诊断用：切页时打一行，e2e 据此断言状
    严格 1:1。**定位数值问题先拿真值，别靠截图估。**
 3. 主菜单的数字键现在是**条目表下标**，`Digit5` 进的是「寻呼机」而不是「小游戏」；
    e2e 里改用**按坐标点图标**（`fb(x,y)` → 页面坐标）+ 逐步入场状态断言，比按键导航稳。
+
+------------------------------------
+
+# 2026-11-18（五）资源目录边界 + 壁纸搬家 + p1/p2 加载规则定稿
+
+四条产品规则（用户定），本次一并落地：
+
+1. **`/home/bd4sur/linglong` 的写入边界**：只有 `app/` 是构建产出的（与仓库 `infer/app/`
+   完全同步，**仓库里受版本管理的 `infer/app/` 是灵机 App 的唯一信息源**）；其余子目录
+   （`icon/ wallpaper/ ebook/ dict/ music/ llm/ doc/ data/`…）一律人工维护，构建脚本
+   不得建、改、删。
+2. **壁纸路径** `wp.png` → **`wallpaper/wp.png`**。
+3. **p1 = `app/` `icon/` `wallpaper/`**：**服务器是唯一来源**——每次页面加载全量重拉、
+   无条件覆盖 MEMFS，并清空 IndexedDB 里属于 p1 的条目（用户覆盖 / 墓碑 / 服务器上
+   已删的残骸）。
+4. **p2 = 其余一切**：只有点「下载资源」按钮才拉；**MEMFS 已有 → 静默跳过；IndexedDB
+   已有 → 只灌 MEMFS（不联网、不重写）；都没有 → 拉下来同时写 MEMFS + IndexedDB**。
+
+## 1. 构建脚本（`infer/build_wasm_gui.sh`）
+
+- 删掉 `python3 tools/gen_md_demo.py "$LINGLONG"`：它往 `<根>/doc/` 写文件，越界了。
+  示例 md 以后只由 Markdown 阅读器首次运行时自己落盘（浏览器侧只进 MEMFS + IndexedDB）。
+  `make md-demo` 仍保留为**人工**目标。
+- `P1_DIRS = {app, icon, wallpaper}`，去掉 `P1_FILES`（`mob.scm`/`jstest.js` 那条早已失效）
+  与根级 `wp*` 特判；清单里新增 `p1_dirs` 字段供页面判定归属。
+- `app/lib/hwr*` 等数据文件不再是 p1 里的意外：`app/` 整树镜像一次搞定（见上一条
+  AGENTS 条目），数据文件的增删不再需要登记。
+- 顺手去掉重复的 `LINGLONG=` 赋值，并在脚本头部写明"只有 app/ 可写"的边界。
+- **验证**：构建后 `ls linglong/` 除 `app/` 外所有子目录的 mtime 不变，`doc/` 不再被创建。
+
+## 2. 壁纸搬家（C + Scheme + Android）
+
+| 位置 | 改动 |
+|---|---|
+| `ui_app.c` | `WALLPAPER_PATH = PLATFORM_ROOT_DIR "/wallpaper/wp.png"` |
+| `ui_ripple.c` | `WR_IMAGE_PATH` 同上（含错误文案「读取 wallpaper/wp.png 失败」） |
+| `app/ripple.scm` | `(define IMG "wallpaper/wp.png")` |
+| `android/…/MainActivity.java` | 内置资源解压的**就绪标记**跟着改（`<根>/wallpaper/wp.png`），否则每次启动重解压一遍 |
+| `tools/e2e/*`（工作区脚本） | `regress_album_launch.js` / `check_ripple_symmetry.sh` / `memprobe` 里的取值路径同步 |
+
+## 3. 页面加载（`webgui/loader.js` 重写，`webgui/index.html` 配合）
+
+- `nanoCollect()` 现在返回 `{p1Files, p2Files, localFiles, stalePaths, dirs, dirsExplicit}`：
+  - p1 归属 = 清单 `priority==1`；`p1_dirs`（旧清单没有则由 p1 路径反推）用来识别
+    "顶层在 p1 目录下、但清单里没有"的**残骸**。
+  - 第三类 **localFiles**：IndexedDB 有、清单没有 = 用户上传/App 落盘的本机文件，
+    随启动直接灌进 MEMFS（不走网络）——否则用户传完一刷新就"不见了"。
+- `nanoPurgeP1()`：加载一开始就把 IndexedDB 里的 p1 条目（覆盖 + 墓碑 + 残骸）全删。
+  **p1 不写入 IndexedDB**：写了也只是下一次加载要清掉的垃圾，而且正是它当年造成
+  "改了 .scm 刷新不生效、必须清站点数据"（2026-10 踩过）。
+- `nanoMountList(mode)`：`p1` 强制从服务器拉并覆盖 MEMFS；`local` 从库读；`p2` 三级回退
+  （MEMFS → IndexedDB → 网络），只有"真从网络来"的那次才写库，写库失败（配额/隐私模式）
+  静默降级为"本次会话可用"。
+- 页面按钮文案区分"下载"与"装载"：p2 全在 IndexedDB 时显示
+  「装载资源 X MB（本机已缓存）」，部分缓存时加「（本机已有 N 个）」。
+
+## 4. 验证
+
+新增 `tools/e2e/browser/regress_resources.js`（真 wasm + 真 IndexedDB）**27/27 PASS**：
+清单带 `p1_dirs`、壁纸新路径进 MEMFS；本机覆盖/墓碑/残骸在刷新后被清且 MEMFS 是服务器
+版本；本机独有文件随启动挂载；p2 不随启动挂载；按下按钮首次走网络并同时写 MEMFS +
+IndexedDB；再按一次静默跳过（fetch 计数 0）；刷新后按按钮命中缓存（fetch 计数 0）；
+p2 墓碑不再出现在待下载清单。
+配套：`test_webgui_vfs.js` 49/49、`regress_webgui_files.js` 43/43、`regress_wheel.js` 28/28。
+
+## 5. 行为变化（要记住的副作用）
+
+1. **`app/` `icon/` `wallpaper/` 里做任何本机改动（上传/新建/改名/删除）刷新后都会还原** —
+   这正是规则 3。网页文件管理器目前不拦，删了 p1 文件当次会话有效、刷新即回。
+   （要彻底避免误操作，后续可让 `vfs.js` 对 p1 路径拒绝写并提示"由服务器统一管理"。）
+2. **`doc/` 不再由构建创建**：它只由 Markdown 阅读器首次运行时落盘，所以全新环境里
+   文件管理器的"移动到 doc/"选项要等阅读器跑过一次才出现（e2e 已改用 `music/`）。
+3. p2 现在会占 IndexedDB（474MB 量级）。配额不足时静默降级为"本次会话可用"，
+   下次仍要重下 —— 控制台会打一行警告。
+
+------------------------------------
+
+# 2026-11-18（六）资源面板：每行标出来源 + 未下载的 p2 不再列出
+
+两条需求（用户定）：
+1. 资源浏览器要**明确标出每个文件的来源**：服务器提供还是用户自己上传、p1 还是 p2、
+   是否缓存在 IndexedDB …
+2. **没下载的 p2 文件不要出现在资源浏览器里**（目录仍要出现，方便往里上传文件）。
+
+## 1. 数据层（`webgui/vfs.js`）
+
+`nanoVfsScan(deps)` 取代原来的"只合并"逻辑，返回 `{ all, visible, hidden }`，条目新增五个
+字段（`nanoBuildTree` 会把它们搬到树节点上——漏搬的表现是"所有文件都显示成同一个来源"，
+第一版就踩了）：
+
+| 字段 | 含义 |
+|---|---|
+| `origin` | `server`（manifest 提供）/ `user`（用户上传或新建，服务器上没有） |
+| `priority` | `1`=p1（每次加载全量刷新）/ `2`=p2（点按钮才下载）/ `0`=本机独有 |
+| `cached` | 本机 IndexedDB 里有副本 |
+| `mounted` | 本机 MEMFS（当前会话）里有副本 |
+| `pendingP2` | （目录）其下未下载的服务器 p2 文件个数 |
+
+可见性：**`priority===2 && !cached && !mounted` 的文件进 `hidden` 不进 `visible`**；目录
+另由 `dirSet` 统一补出来（包括"只剩目录、文件全被隐藏"的 `llm/ dict/ music/`），所以
+用户依然能展开它们往里上传。墓碑（`deleted`）路径既不显示也不计入"未下载"。
+
+`nanoVfsList()` 保留为 `scan.visible` 的薄包装（面板与 node 测试用）；**文件操作**
+（`nanoVfsTransfer` / `nanoVfsDelete`）改用 `scan.all`，否则对目录做移动/删除会漏掉
+未下载的 p2（它们虽然不显示，仍是清单里的成员）。
+
+## 2. 呈现层（`webgui/index.html`）
+
+- 行内一个紧凑徽标（颜色即语义，带 `title` 悬浮说明）：
+  `p1`（蓝）/ `p2·已缓存`（绿）/ `p2·仅内存`（橙）/ `本机`（紫）/ 目录 `p2 未下载 N`（橙）。
+- 面板顶部新增**汇总行**：`目录 14 · p1 145 · p2 已缓存 1 · 本机 1 · p2 未下载 30`，
+  并在有未下载项时补一行说明（"未下载的服务器 p2 不列在下面，点状态栏「下载资源」后即出现"）。
+- 选中详情把来源讲全：`p2 · 服务器提供 · 已缓存在本机 IndexedDB` 等；选中 p1 文件时
+  额外提示"p1 由服务器统一管理，本机改动（上传/改名/删除）下次加载会还原"。
+- `fmLoadDefaults()` 现在把 `priority` 一起存下来（原来只有 size，分不出 p1/p2）；
+  `fmMemfs` 新增 `exists()`（判断 p2 是否"只在本次会话的 MEMFS 里"）。
+
+## 3. 验证
+
+`tools/e2e/browser/regress_resources.js` 扩到 **40/40 PASS**，新增面板用例：汇总行含
+p1/p2 已缓存/未下载/本机；`ebook/` 这类只含未下载 p2 的目录仍在且徽标为 `p2 未下载 N`；
+`app/album.scm` 徽标 `p1`；已缓存的 `app/lib/badapple/frames.txt` 徽标 `p2·已缓存`；
+`app/lib/llm/psycho/` 下的文件**不出现在树里**、目录徽标 `p2 未下载 15`；上传的
+`ebook/zz_upload.md` 徽标 `本机`；三种详情的措辞。
+配套：`test_webgui_vfs.js` 49/49、`regress_webgui_files.js` 43/43、`regress_wheel.js` 28/28。
+
+## 4. 踩坑
+
+1. `nanoBuildTree` 是"白名单式拷贝字段"的（只搬 name/path/dir/size/source/mtime），
+   新字段不加进它就会静默丢失 —— 面板第一版所有文件都显示成 `p2·仅内存`。
+2. 汇总里"p2 仅内存"不能按 `!cached` 判：未下载的也没 cached，会把同一批文件既算成
+   "仅内存"又算成"未下载"（第一版两个数字都是 31）。必须 `!cached && mounted` 才算仅内存。
+3. 测试里展开目录要先确认 `.fm-caret:not(.slot)` 存在（无子项的目录没有箭头），
+   否则点击会落到行选中上，后续断言全 `null`。
+
+------------------------------------
+
+# 2026-11-18（七）app/ 递归全部 p1；取消 badapple.h → frames.txt 的构建步骤
+
+用户的明确要求（覆盖上一版的 p2 例外）：
+
+1. **`infer/app/` 递归下去的每一样东西都是 p1**——`app/lib/badapple/`、`app/lib/llm/` 一并
+   算 p1，**不做任何区别对待**；整个 `infer/app/` 作为一个整体无脑同步到
+   `/home/bd4sur/linglong/app/`。
+2. **不要再有"从 badapple.h 构建"的过程**。
+
+## 1. 改动
+
+- `infer/build_wasm_gui.sh`
+  - 删掉 `P2_PREFIXES`（`app/lib/llm/`、`app/lib/badapple/` 那条 p2 例外），优先级判定
+    缩成一行：`pri = 1 if top in P1_DIRS else 2`。
+  - 删掉 `badapple.h -nt frames.txt → python3 tools/gen_badapple_data.py` 那一段。同步
+    现在是**纯粹的目录镜像**，不生成、不转换任何东西。
+- `infer/Makefile`：删除 `badapple-data` 目标（它本身就是"从 badapple.h 构建"的入口）。
+- `infer/tools/gen_badapple_data.py`：保留文件（未删代码），但头部注明**已不在任何构建
+  流程里**、`app/lib/badapple/{frames.txt,meta.scm}` 现在是入库的普通数据文件，只有
+  手工想重导时才跑它。
+- 分级结果：**p1 = 164 个 / 7.25MB**（app 136 + icon 26 + wallpaper 2）；
+  **p2 = 12 个 / 471.7MB**（dict 2、ebook 1、llm 6、music 3）。
+
+## 2. 代价（明确记下，免得以后又"优化"回去）
+
+- 每次页面加载都要**阻塞下载 7.25MB** p1（原来 4.6MB）——`app/lib/badapple/frames.txt`
+  1.4MB + `app/lib/llm/*.b64` 1.3MB 现在都在启动路径上。这是规则 1 的必然结果。
+- 反过来说：Bad Apple 与纯 Scheme LLM 测试台现在**开箱即用**，不再需要点「下载资源」
+  （以前 frames.txt / b64 分块是 p2，没点按钮时那两个 App 会缺数据）。
+- `infer/badapple.h`（3.4MB）现在没有任何构建目标引用它（C 版 Bad Apple 早已退役），
+  属于"只为手工重导数据而留"的历史文件；要不要删另议。
+
+## 3. 验证
+
+`regress_resources.js` 相应改成 **43/43 PASS**，新增/改写的判据：
+- `app/` 下所有文件 `priority === 1`；
+- `app/lib/badapple/frames.txt` 与 `app/lib/llm/psycho/*.b64` 在树里且徽标为 `p1`
+  （不再是"p2 未下载"）；
+- p2 用例改用清单里最小的一项（`ebook/Markdown 示例.md`，20KB），避免按钮测试真去下
+  470MB；
+- `dict/` 仍是"只含未下载 p2 的目录"样本：目录在、徽标 `p2 未下载 2`、文件不列出。
+配套：`test_webgui_vfs.js` 49/49、`regress_webgui_files.js` 43/43、`regress_wheel.js` 28/28。
+
+## 4. 踩坑
+
+1. 端口撞车：`python3 -m http.server 9016` 起不来（地址被别的服务占用），回归脚本静默
+   连到了别人的站点，表现为"页面里没有 wasm-text、runtimeReady 永远为 false"。**起服务后
+   先 `curl | grep` 确认拿到的是自己的页面**。
+2. e2e 里"展开目录"必须幂等：`fmReload()` 之后 `fmExpanded` 是保留的，再点一次 caret
+   反而把它折叠回去（表现为紧接着的 `rowTag()` 拿到 `null`）。判据取
+   `.fm-caret.open` 而不是"有没有 caret"。
+
+------------------------------------
+
+# 2026-11-18（八）构建不再过滤任何文件（Qwen 大模型也进清单）
+
+用户要求：**不要自作聪明地在 WASM 目标下过滤 Qwen 模型**。
+
+上一版 `build_wasm_gui.sh` 的清单生成里有一条 `SKIP_FILES = {"llm/qwen3-0b6-q80.bin",
+"llm/qwen35-0b8.q80.bin"}`，理由是"单线程 WASM 跑不动 627MB/853MB 的模型"。这是构建
+替用户做的取舍，已删除：
+
+- 清单现在是 `llm/` 目录的**全量枚举**，不看文件大小、不看模型种类；
+- "跑得动跑不动"属于运行时/App 的判断（`app/nanochat.scm` 的模型表本来就按**文件
+  存在性**过滤：没挂载的模型不出现，挂载了就可用），不是构建该替用户决定的事。
+
+结果：`p2 = 14 个 / 1884.0MB`（新增 `llm/qwen3-0b6-q80.bin` 598.5MB、
+`llm/qwen35-0b8.q80.bin` 813.9MB），按钮文案变成「下载资源 1884MB」。
+这些仍属 p2：不点按钮就不会下载，不会拖慢启动；点按钮时才会按顺序拉（写 IndexedDB
+若超配额，loader 会静默降级为"本次会话可用"并打一行警告）。
+
+验证：`regress_resources.js` 43/43、`regress_webgui_files.js` 43/43、`regress_wheel.js`
+28/28、`test_webgui_vfs.js` 49/49；页面实测 `pendingP2` 14 项 / 1884MB，其中两项分别是
+qwen3-0b6 与 qwen35-0b8，面板 `llm/` 行徽标 `p2 未下载 8`。
+
+------------------------------------
+
+# 2026-11-18（九）资源管理：点目录行任意位置即展开/收起
+
+需求：**点目录整体就切换展开/收起**，不用去戳前面那个小三角（手机上也更好点）。
+
+- `webgui/index.html` 的树点击处理合并成一个：
+  `点目录行（名字/图标/右侧子项数都算）= 选中该项 + 切换展开状态`，`点文件行 = 只选中`。
+  选中与展开**一次改完再重绘**，避免"先选中渲染一遍、再展开渲染一遍"的闪烁。
+- 只有"有子项的目录"才切展开（空目录切了看不出变化，省得往 `fmExpanded` 里塞垃圾）。
+- 删掉 `dblclick` 处理（单点已经切换，双击会来回抵消）与随之变成死代码的 `fmToggle()`。
+- 面板标题改为「点目录行=展开/收起 · 点文件=选中 · 拖动行到目录=移动/复制」。
+- 拖动仍然不受影响：拖放结束后的那次 click 由 `fmSuppressClick` 吞掉（原有机制）。
+
+验证（真浏览器 + 真触摸 `page.tap`）：点 icon 名字 → 7 行变 33 行且 `fmSelected=icon`；
+点右侧「26 项」→ 收回 7 行；点图标 → 再展开；点 app 名字 → app 展开且 icon 的展开状态保留。
+`regress_webgui_files.js` 相应把原来的"点行只选中、不折叠"改成"选中 + 收起"，
+并补了「点图标」「点右侧子项数」两条，**47/47 PASS**；`regress_resources.js` 43/43、
+`regress_wheel.js` 28/28、`test_webgui_vfs.js` 49/49 全绿。

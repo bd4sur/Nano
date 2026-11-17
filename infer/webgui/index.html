@@ -228,10 +228,23 @@
   .fm-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #3f444b; }
   .fm-name.dir { color: #23272e; font-weight: 600; }
   .fm-meta { flex: none; color: #98a0ab; font-size: 11px; }
+  /* 来源徽标（一行一个，颜色即语义）：
+       p1 = 蓝（服务器启动资源，每次加载全量刷新）
+       p2c = 绿（服务器 p2，已缓存到本机 IndexedDB）
+       p2m = 橙（服务器 p2，仅在本次会话内存里 / 目录下有未下载项）
+       user = 紫（用户自己上传/新建的）
+     窄屏下名字优先占位（.fm-name 可省略号），徽标不换行、不参与压缩。 */
   .fm-tag {
-    flex: none; font-size: 10px; color: #2f7d3d; background: #e7f5ea;
-    border-radius: 4px; padding: 1px 5px;
+    flex: none; font-size: 10px; line-height: 14px; border-radius: 4px; padding: 0 5px;
+    white-space: nowrap; border: 1px solid transparent;
   }
+  .fm-tag.p1   { color: #1f5f9e; background: #e8f1fb; border-color: #cfe0f3; }
+  .fm-tag.p2c  { color: #2f7d3d; background: #e7f5ea; border-color: #cfe9d6; }
+  .fm-tag.p2m  { color: #9a5b12; background: #fdf1e0; border-color: #f2ddbd; }
+  .fm-tag.user { color: #6b3fa0; background: #f1eafb; border-color: #ded0f3; }
+  #fm-summary { margin: 0 0 6px; font-size: 11px; color: #8b919b; line-height: 16px; }
+  #fm-summary b { font-weight: 600; color: #5b6270; }
+  #fm-detail .fm-note { margin-top: 4px; color: #9a5b12; font-size: 11px; }
   .fm-empty { padding: 10px 12px; color: #8b919b; font-size: 12px; }
   #fm-detail { margin-top: 8px; font-size: 12px; color: #5b6270; word-break: break-all; }
   #fm-detail .fm-path { color: #23272e; font-weight: 600; }
@@ -302,7 +315,9 @@
     <h2>资源管理</h2>
     <div id="res-quota">存储：…</div>
 
-    <h3>文件（点目录前的箭头展开/折叠 · 点名字选中 · 拖动行到目录=移动/复制）</h3>
+    <h3>文件（点目录行=展开/收起 · 点文件=选中 · 拖动行到目录=移动/复制）</h3>
+    <!-- 来源汇总 + 隐藏项提示：p1/p2/已缓存/未下载/本机 各多少个 -->
+    <div id="fm-summary"></div>
     <div id="fm-toolbar">
       <button class="fm-btn primary" id="fm-mkdir" type="button">新建目录</button>
       <button class="fm-btn" id="fm-upload" type="button">上传文件</button>
@@ -720,8 +735,14 @@ async function mountResourcesAndRun() {
       },
       onManifest: (files) => { gManifestFiles = files; },
     });
-    // p2（电子书/词典/音乐/模型…）**不自动下载**：只记住清单，等用户点「下载资源」
+    // p2（电子书/词典/音乐/模型…）**不自动下载**：只记住清单，等用户点「下载资源」。
+    // 顺手统计有多少个已在 IndexedDB 里（按钮文案据此提示“点了只是装载，不用重下”）。
     pendingP2 = pending || [];
+    p2CachedCount = 0;
+    try {
+      const cached = new Set((await nanoStoreList()).map((e) => e.path));
+      p2CachedCount = pendingP2.filter((f) => cached.has(f.path)).length;
+    } catch (e) { /* 存储不可用：当作全未缓存 */ }
     updateDlBtn();
     updateStatus();
   } catch (e) {
@@ -737,6 +758,7 @@ async function mountResourcesAndRun() {
 // 单飞：下载中重复点击无效；已完成/无待下载时按钮置灰。
 // 回归脚本可以直接 await nanoEnsureP2()（与点按钮同一条路）。
 let pendingP2 = [];       // 待下载清单（manifest 里 priority 2 的那些）
+let p2CachedCount = 0;    // 其中已在 IndexedDB 里的个数（按钮文案用）
 let p2State = 0;          // 0=未开始 1=下载中 2=已完成
 let p2Promise = null;
 const mb = (b) => (b / 1048576).toFixed(b >= 10485760 ? 0 : 1) + "MB";
@@ -753,7 +775,10 @@ function updateDlBtn() {
     dlBtn.textContent = "资源：已就绪";
   } else {
     dlBtn.disabled = false;
-    dlBtn.textContent = "下载资源 " + mb(p2Bytes());
+    // 全部已在 IndexedDB：点了只是灌进 MEMFS，不联网
+    dlBtn.textContent = (p2CachedCount >= pendingP2.length)
+      ? "装载资源 " + mb(p2Bytes()) + "（本机已缓存）"
+      : "下载资源 " + mb(p2Bytes()) + (p2CachedCount ? "（本机已有 " + p2CachedCount + " 个）" : "");
   }
 }
 
@@ -1259,6 +1284,7 @@ const resQuota = document.getElementById("res-quota");
 const uploadInput  = document.getElementById("upload-input");
 
 const fmTreeEl     = document.getElementById("fm-tree");
+const fmSummaryEl  = document.getElementById("fm-summary");   // 来源汇总行
 const fmDetail     = document.getElementById("fm-detail");
 const fmActions    = document.getElementById("fm-actions");
 const fmProgress   = document.getElementById("fm-progress");
@@ -1273,7 +1299,7 @@ const fmModalOk    = document.getElementById("fm-modal-ok");
 const fmModalCancel = document.getElementById("fm-modal-cancel");
 
 let gManifestFiles = [];       // loader 合并清单（含 source / dir 标记），onManifest 回调填入
-let fmDefaults = null;         // Map<path, {size}>：服务器默认资源（manifest.json 原始清单）
+let fmDefaults = null;         // Map<path, {size, priority}>：服务器默认资源（manifest.json 原始清单）
 let fmTree = null;             // 根节点（path === ""）
 let fmIndex = new Map();       // path → 节点
 let fmExpanded = new Set();    // 已展开的目录（默认空 = 全部折叠）
@@ -1337,6 +1363,10 @@ function fmMemCopyTree(absFrom, absTo) {
 }
 
 const fmMemfs = {
+  exists(rel) {
+    if (!mountCtx.FS) return false;
+    try { return !!mountCtx.FS.stat(memfsRel(rel)); } catch (e) { return false; }
+  },
   read(rel) {
     if (!mountCtx.FS) return null;
     try { return mountCtx.FS.readFile(memfsRel(rel)); } catch (e) { return null; }
@@ -1416,10 +1446,10 @@ async function fmLoadDefaults() {
   try {
     const resp = await fetch("manifest.json");
     const m = await resp.json();
-    for (const f of (m.files || [])) if (!f.dir) fmDefaults.set(f.path, { size: f.size || 0 });
+    for (const f of (m.files || [])) if (!f.dir) fmDefaults.set(f.path, { size: f.size || 0, priority: f.priority === 2 ? 2 : 1 });
   } catch (e) {
     for (const f of gManifestFiles) {
-      if (f.source === "http" && !f.dir) fmDefaults.set(f.path, { size: f.size || 0 });
+      if (f.source === "http" && !f.dir) fmDefaults.set(f.path, { size: f.size || 0, priority: f.priority === 2 ? 2 : 1 });
     }
   }
   return fmDefaults;
@@ -1437,6 +1467,52 @@ const FM_ICO_FILE =
 
 // 可见行（展开 → 前序行表；排序已由 nanoBuildTree 做好）
 function fmVisibleRows() { return nanoFlattenTree(fmTree, fmExpanded); }
+
+// 汇总行：各类资源各多少个（未下载的 p2 也要说出来，否则用户不知道"还有东西没拉"）
+function fmRenderSummary(scan) {
+  if (!fmSummaryEl) return;
+  let p1 = 0, p2c = 0, p2m = 0, user = 0, dirs = 0;
+  for (const e of scan.all) {
+    if (e.dir) { dirs++; continue; }
+    if (e.origin === "user" || e.priority === 0) user++;
+    else if (e.priority === 1) p1++;
+    else if (e.cached) p2c++;
+    else if (e.mounted) p2m++;   // 只在本次会话内存里（未下载的那些单独由 hidden 统计）
+  }
+  const hidden = scan.hidden.length;
+  const bits = [`目录 <b>${dirs}</b>`, `p1 <b>${p1}</b>`, `p2 已缓存 <b>${p2c}</b>`, `本机 <b>${user}</b>`];
+  if (p2m) bits.push(`p2 仅内存 <b>${p2m}</b>`);
+  if (hidden) bits.push(`p2 未下载 <b>${hidden}</b>`);
+  fmSummaryEl.innerHTML = bits.join(" · ")
+    + (hidden ? `<div class="fm-note" style="color:#9a5b12">未下载的服务器 p2 文件不列在下面；`
+      + `点状态栏「下载资源」下载后即出现（目录已保留，可直接往里上传文件）。</div>` : "");
+}
+
+// 行内来源徽标：一眼看清"谁提供的 / 属哪一级 / 缓存在哪"
+//   p1        —— 服务器提供，每次页面加载全量重拉（本机改动刷新即还原）
+//   p2·已缓存  —— 服务器提供，已下载并缓存在本机 IndexedDB
+//   p2·仅内存  —— 服务器提供，只在本次会话的 MEMFS 里（写库失败/配额不足）
+//   p2·未下载  —— 目录下还有没下载的服务器 p2 文件（文件行本身不会出现这种）
+//   本机       —— 用户自己上传/新建的，服务器上没有
+function fmBadgeOf(node) {
+  if (node.dir) {
+    if (node.pendingP2 > 0) {
+      return { text: "p2 未下载 " + node.pendingP2, cls: "p2m",
+               title: "本目录下还有 " + node.pendingP2 + " 个服务器 p2 文件未下载（点状态栏「下载资源」后才会出现在列表里）" };
+    }
+    return null;
+  }
+  if (node.origin === "user" || node.priority === 0) {
+    return { text: "本机", cls: "user", title: "本机文件（你上传/新建的，服务器上没有；常驻）" };
+  }
+  if (node.priority === 1) {
+    return { text: "p1", cls: "p1", title: "服务器提供的启动资源：每次页面加载全量重拉并覆盖本机（本机改动刷新即还原）" };
+  }
+  if (node.cached) {
+    return { text: "p2·已缓存", cls: "p2c", title: "服务器提供的 p2 资源：已下载并缓存在本机 IndexedDB（下次点按钮直接装载，不联网）" };
+  }
+  return { text: "p2·仅内存", cls: "p2m", title: "服务器提供的 p2 资源：仅在本次会话的 MEMFS 里（本机未缓存）" };
+}
 
 function fmRenderTree() {
   if (!fmTree) return;
@@ -1483,10 +1559,12 @@ function fmRenderTree() {
     meta.textContent = node.dir ? node.children.length + " 项" : fmtSize(node.size || 0);
     row.appendChild(meta);
 
-    if (!node.dir && node.source === "store") {
+    const badge = fmBadgeOf(node);
+    if (badge) {
       const tag = document.createElement("span");
-      tag.className = "fm-tag";
-      tag.textContent = "本机";
+      tag.className = "fm-tag " + badge.cls;
+      tag.textContent = badge.text;
+      tag.title = badge.title;
       row.appendChild(tag);
     }
     fmTreeEl.appendChild(row);
@@ -1522,11 +1600,25 @@ function fmRenderDetail() {
   if (n.dir) {
     bits.push(`${n.children.length} 个直接子项`);
     bits.push(`共 ${nanoCountDescendants(n)} 项`);
+    if (n.pendingP2 > 0) bits.push(`另有 ${n.pendingP2} 个服务器 p2 文件未下载`);
+    if (n.origin === "user") bits.push("本机新建的目录");
   } else {
     bits.push(fmtSize(n.size || 0));
-    bits.push(n.source === "store" ? "本机存储" : "服务器默认");
+    if (n.origin === "user" || n.priority === 0) {
+      bits.push("本机文件（你上传的，服务器上没有）");
+    } else if (n.priority === 1) {
+      bits.push("p1 · 服务器提供 · 每次加载全量刷新");
+    } else if (n.cached) {
+      bits.push("p2 · 服务器提供 · 已缓存在本机 IndexedDB");
+    } else {
+      bits.push("p2 · 服务器提供 · 仅本次会话（未缓存）");
+    }
   }
   fmDetail.innerHTML = bits.join('<span class="fm-dot">·</span>');
+  if (!n.dir && n.priority === 1) {
+    fmDetail.innerHTML += '<div class="fm-note">p1 由服务器统一管理：在 app/ icon/ wallpaper/ 里的'
+      + '本机改动（上传/改名/删除）会在下次加载时还原。</div>';
+  }
 
   const acts = [];
   if (n.dir) acts.push(["upload", "上传到此目录"]);
@@ -1551,33 +1643,22 @@ function fmSelect(path) {
   fmRenderTree();
 }
 
-// 只切换展开状态，不改变选中（点箭头 / 双击目录行）
-function fmToggle(path) {
-  const n = fmIndex.get(path);
-  if (!n || !n.dir) return;
-  if (fmExpanded.has(path)) fmExpanded.delete(path);
-  else fmExpanded.add(path);
-  fmRenderTree();
-}
-
+// 点一行：目录 = 选中 + 展开/收起（点哪都行——整行、名字、箭头、图标都是同一个动作，
+// 手机上不用去戳那个小三角）；文件 = 只选中。
+// 选中和展开一次改完再重绘，避免"先选中渲染一遍、再展开渲染一遍"的白屏闪烁。
 fmTreeEl.addEventListener("click", (e) => {
   if (fmSuppressClick) { fmSuppressClick = false; return; }
   const row = e.target.closest ? e.target.closest(".fm-row") : null;
   if (!row || !fmTreeEl.contains(row)) return;
   const path = row.getAttribute("data-path");
   const node = fmIndex.get(path);
-  if (e.target.closest(".fm-caret") && node && node.dir && node.children.length) {
-    fmToggle(path);
-    return;
+  fmSelected = path;
+  // 只有"有子项的目录"才值得切展开状态（空目录切了也看不出变化，省得脏 fmExpanded）
+  if (node && node.dir && node.children.length) {
+    if (fmExpanded.has(path)) fmExpanded.delete(path);
+    else fmExpanded.add(path);
   }
-  fmSelect(path);
-});
-
-fmTreeEl.addEventListener("dblclick", (e) => {
-  const row = e.target.closest ? e.target.closest(".fm-row") : null;
-  if (!row) return;
-  const node = fmIndex.get(row.getAttribute("data-path"));
-  if (node && node.dir && node.children.length) { e.preventDefault(); fmToggle(node.path); }
+  fmRenderTree();
 });
 
 // ---------------- 刷新 ----------------
@@ -1585,8 +1666,8 @@ fmTreeEl.addEventListener("dblclick", (e) => {
 async function fmReload() {
   await fmLoadDefaults();
   try {
-    const entries = await nanoVfsList(fmDeps);
-    const tree = nanoBuildTree(entries);
+    const scan = await nanoVfsScan(fmDeps);
+    const tree = nanoBuildTree(scan.visible);
     fmTree = tree.root;
     fmIndex = tree.index;
     for (const p of [...fmExpanded]) {
@@ -1594,6 +1675,7 @@ async function fmReload() {
       if (!n || !n.dir) fmExpanded.delete(p);
     }
     if (!fmIndex.has(fmSelected)) fmSelected = "";
+    fmRenderSummary(scan);
     fmRenderTree();
     await fmRenderHidden();
   } catch (e) {

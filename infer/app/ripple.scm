@@ -38,9 +38,9 @@
 ;;      退出走灵机 App 的统一出口（app/lib/exit.scm：右上角「退出」按钮 + 硬 A/ESC
 ;;      弹宿主全局确认框），而不是 C 版直接切 STATE_GAME_MENU。
 ;;
-;; 底图路径：**wp.png**（相对业务资源根）。C 版是 PLATFORM_ROOT_DIR "/wp.png"，
-;; 两者指向同一个文件（桌面/WASM 上是 /home/bd4sur/linglong/wp.png，掌机上是 SD 卡根），
-;; 路径规则见 am_native_Fs.h。读不到就画错误画面（文案与坐标同 C 版），
+;; 底图路径：**wallpaper/wp.png**（相对业务资源根）。C 版是 PLATFORM_ROOT_DIR "/wallpaper/wp.png"，
+;; 两者指向同一个文件（桌面/WASM 上是 /home/bd4sur/linglong/wallpaper/wp.png，掌机上是 SD 卡根
+;; 下的 wallpaper/wp.png），路径规则见 am_native_Fs.h。读不到就画错误画面（文案与坐标同 C 版），
 ;; 并切到一个 200ms 的慢拍——只为让硬 A/ESC 仍能弹退出确认框。
 ;;
 ;; 书写约定（本解释器的坑，详见 app/turtle.scm 头部）：算术一律二元嵌套；
@@ -58,7 +58,7 @@
 
 ;; ---- 底图与画布 -------------------------------------------------------------
 
-(define IMG "wp.png")             ; 底图（与 ui_ripple.c 的 WR_IMAGE_PATH 同一文件）
+(define IMG "wallpaper/wp.png")   ; 底图（与 ui_ripple.c 的 WR_IMAGE_PATH 同一文件）
 (define SW (Gfx.width))           ; 画布宽（320）
 (define SH (Gfx.height))          ; 画布高（240）
 
