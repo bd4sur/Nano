@@ -83,6 +83,9 @@
 (define dirs (lambda (R) (get_item R R_DIRS)))
 (define lunar (lambda (R) (get_item R R_LUNAR)))
 (define next_solar (lambda (R) (get_item R R_NEXTSOLAR)))
+;; 神煞名表（GUI 展示用：吉神宜趋 / 凶煞宜忌）
+(define goodgods (lambda (R) (get_item R R_GOODGODS)))
+(define badgods (lambda (R) (get_item R R_BADGODS)))
 
 ;; ctx 字段下标（一次算好的公共中间量，供神煞匹配等函数共享）
 (define C_YEAR 0)
