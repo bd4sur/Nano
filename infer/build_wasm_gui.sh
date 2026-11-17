@@ -44,8 +44,8 @@ OUT_DIR=webgui
 #   页面 JS 启动时经 createPreloadedFile 逐文件拉入 MEMFS（路径与 PLATFORM_ROOT_DIR 一致）。
 #   分级加载只有两级：priority 1（图标/壁纸/app 源码/mob.scm 等启动必需）先拉，
 #   立即可进系统；priority 2 = 其余一切（ebook/dict/image/music 音频/LLM 模型……）
-#   后台拉，状态栏显示进度。**没有按需/惰性层**：音乐与 LLM 模型不搞特殊处理，
-#   跟别的资源一样随页面加载拉一次（宁可重下，也不在逻辑上分叉）。
+#   **不自动拉**——页面状态栏有个「下载资源 <体积>」按钮，用户点了才下载（进度显示在
+#   按钮与状态栏）。没有第三/第四层，也没有按 App 的钩子（见 doc/AGENTS.md 条目）。
 #   唯一的例外是 llm/ 下的 Qwen 大模型（qwen3-0b6 627MB / qwen35-0b8 853MB，
 #   单线程 WASM 跑不动）——它们不进清单。
 LINGLONG=/home/bd4sur/linglong

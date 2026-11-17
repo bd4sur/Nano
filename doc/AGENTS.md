@@ -13694,3 +13694,80 @@ Nano-56M-Q4KS 各跑一遍全流程（挂载 → 载入 → 拼音输入 → 流
   0.7/0.8 对无思考），实际无差异。
 - 界面开关只对**思考模型**显示（`think_cap`），非思考模型上该区域是空白状态条；
   没有"强制打开思考"的模型（如 Qwen3-4B-Inst）按 C 版语义恒按思考模板建会话。
+
+# 2026-11-17（二）WASM 资源：p2 改成「点按钮才下载」（顺带修 Markdown 首次播种 OOM）
+
+需求：WASM 页面的 p2（电子书/词典/music/、llm 模型……）不要随页面加载自动下载，改成
+**给一个按钮，点了才从服务器拉**。
+
+## 1. 页面侧
+
+- `webgui/loader.js` 拆成三段（原来 `nanoMountResources` 一个函数包办 p1+p2）：
+  - `nanoCollect(opts)`：拉 manifest + 合并本机存储（同名覆盖、墓碑、目录条目）；
+  - `nanoMountResources(opts)`：只挂 **p1**（阻塞启动路径）→ `onP1Ready`，**返回 p2 清单**；
+  - `nanoMountPending(opts, pending, onProgress)`：p2 的实际下载（8 并发、字节级进度、
+    **已在 MEMFS 的跳过** → 重复点击幂等）。
+- `webgui/index.html`：状态栏新增 `#dl-btn`（蓝色 `下载资源 <体积>`）：
+  - 未下载 = 可点，下载中 = 置灰 + 显示百分比，完成/无待下载 = 置灰「资源：已就绪」；
+  - 状态栏同步显示 `资源下载 12/32（96MB/475MB）`；下载完若资源面板开着会自动刷新；
+  - 导出 `nanoEnsureP2()`（单飞、幂等）供按钮与回归脚本共用——脚本里 `await
+    page.evaluate(() => nanoEnsureP2())` 就等价于"点一下按钮"。
+  - 删掉了「按 App 触发」的一切痕迹（本页不再读 `_wasm_gui_get_state()` 猜音乐盒）。
+- **本机存储里的文件一律算 p1**（`nanoCollect` 里 `priority: 1`）：它们是用户自己上传的
+  东西（文档/图片/音乐、便签、App 存档），读的是 IndexedDB 不是网络；若按目录给 p2，
+  就会出现"上次上传到 doc/ 的文件重启后不见了，得先点一下下载服务器资源"——这条是被
+  `regress_webgui_files.js` 的「刷新后：移动后的文件还在」用例抓出来的。
+  manifest 里已有的文件即使在 store 中被覆盖，仍沿用 manifest 的优先级。
+- 体积（当前磁盘资源）：manifest 176 个文件 / 287MB → 加了 Qwen 系模型后 **32 个 p2 文件
+  / 474.7MB**（p1 仍 148 个 / 4.5MB）。本机 HTTPS 下点一次按钮约 1~2s 拉完。
+
+## 2. 顺带修的既有缺陷：`MD.join_lines` 二次方复制 → 阅读器首次播种 OOM
+
+p2 不再预挂之后，`doc/Markdown 示例.md`（p2）就不在 MEMFS 里，`app/markdown.scm` 的
+`seed_demo_file` 于是要自己生成示例文档；它用 `MD.join_lines` 拼整篇文本，而那个实现是
+**逐行累加 `String.concat`**（二次方复制：18KB / 700 行累计要拷十几 MB），在 App 那
+29MB 的半区里直接 OOM：
+
+```
+[scheme-app][error] [Runtime] 内存耗尽(OOM): PID=0 PC=29934;
+                    VM=3114544/29360128 B, heap=1185252/29360128 B
+[scheme-app][error] PC=29934 opstack=1 fstack=6
+MDFONT id=1 line_h=15        ← 卡在 load_font 之后的 seed_demo_file
+```
+
+现象是"从 filemgr 拉起 markdown 后白屏、之后任何输入都没反应"（进程已停）。修法：
+`app/lib/md_parse.scm` 的 `join_lines` 改成**两两合并**（先把每行与其后的换行压进片段表，
+再每轮合并相邻两段，总拷贝量 O(总长 × log 行数)）。等价性用"逐字节比对"验证：让阅读器
+在 MEMFS 里重新播种 → `doc/Markdown 示例.md` 与 `tools/gen_md_demo.py` 的产物
+**13626 字符完全一致**。
+
+## 3. 验证
+
+- **新脚本 `tools/e2e/browser/regress_p2_button.js`（19/19，chromium）**：
+  p1 就绪后 `music/`、`llm/`、`dict/ecdict.idx` 都不在 MEMFS（`p2State=0`，没有偷偷下载）
+  → 按钮可用且标出体积（`下载资源 475MB`）→ 点击后 `p2State=1`、按钮置灰 → 完成后
+  `p2State=2`、按钮「资源：已就绪」、MEMFS 总量 ≈ 479MB、`music/`(3) `llm/`(6)
+  `dict/ecdict.idx`(2.4MB) 全部到位 → 再次触发不重复下载 → 之后应用列表照常可用。
+- **受影响的既有回归**（都需要先点按钮，脚本里已加 `nanoEnsureP2()`）：
+  `regress_musicbox.js` **32/32**、`regress_nanochat.js` **61/61**（真 Nano-56M 权重）、
+  `regress_llm.js` **38/38**（纯 Scheme 推理台，读 `app/lib/llm/*.b64`）、
+  `regress_badapple.js` **16/16**、`regress_markdown_big.js` **23/23**、
+  `regress_webgui_files.js` **43/43**。
+- **与 p2 无关的链路**：`regress_launch.js` 36/36、`regress_filemgr.js` 51/51、
+  `regress_markdown.js` 55/55、`regress_musicbox_launch.js` 31/31（MEMFS 自造 wav）。
+- **桌面宿主回归台**：全部 App `err=none`（`markdown` refresh=27 与改前一致；
+  两个 `()` 是既有噪声：`2048` 已改名 `g2048`、`sky3` 一直跑不出帧）。
+- 顺带修了三个回归脚本**失效的导航**（都是主菜单改造前的老写法，会落到 `state=61/53`）：
+  `regress_llm.js`、`regress_badapple.js`、`regress_markdown_big.js` 改成
+  「启动屏任意键 → 右方向键 → 按序号下移」；`regress_audio.js` 未跑（C 版音乐盒的
+  数字键入口同样失效，属既有问题）。
+
+## 4. 取舍
+
+- 475MB 全部靠一次点击触发，移动网络上就是几百 MB 流量——按钮上直接写了体积，没有再加
+  确认框（保持"一个按钮"的简单性）。
+- **不做持久化**：p2 不写 IndexedDB（上一轮已去掉 tier 持久化），所以**每次刷新页面都要
+  重新点一次按钮**。要改回缓存只需在 `nanoMountPending` 里加一次 `opts.store.put`，但
+  那又回到"两套语义"，按需求不做。
+- 未点按钮时，依赖 p2 的 App（音乐盒/词典/电子书/鹦鹉笼）表现为空列表或"正在加载…"，
+  这是预期：按钮就在状态栏上标着体积。

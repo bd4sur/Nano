@@ -207,17 +207,42 @@
     (push out (chomp_cr (String.slice text start n)))
     out))
 
-;; 行列表 → 整段文本（供单测与「文档预览/复制」用）
+;; 行列表 → 整段文本（供单测、「文档预览/复制」与「首次启动写内置示例」用）
+;;
+;; **必须避免"逐行累加 String.concat"**：那是二次方复制——内置示例 ~18KB / 700 行，
+;; 累计要拷十几 MB，直接撞爆 App 的堆（29MB 的一半）。2026-11-17 实测：WASM 页面的
+;; p2 资源改成「点按钮才下载」后，`doc/Markdown 示例.md` 不再随启动落盘，阅读器首次
+;; 启动就要自己生成示例，于是这条二次方路径被真正踩到 —— boot 里 OOM
+;; （`[Runtime] 内存耗尽(OOM)`，PC 落在 seed_demo_file 的 join_lines 里）。
+;; 改为**两两合并**：先把每行与其后的换行压进片段表（都是常量大小的拼接），再每轮把
+;; 相邻两段合并成一段；总拷贝量 O(总长 × log 行数)，与行数成线性而不再是平方。
 (define join_lines
   (lambda (lines)
     (define n (length lines))
+    (define parts (new_list))
+    (define cur (new_list))
+    (define nxt (new_list))
     (define i 0)
-    (define out "")
-    (while (< i n)
-      { (if (> i 0) (set! out (String.concat out "\n")) #f)
-        (set! out (String.concat out (get_item lines i)))
-        (set! i (+ i 1)) })
-    out))
+    (define m 0)
+    (define j 0)
+    (if (== n 0)
+        ""
+        { (while (< i n)
+            { (push parts (get_item lines i))
+              (if (< (+ i 1) n) (push parts "\n") #f)
+              (set! i (+ i 1)) })
+          (set! cur parts)
+          (while (> (length cur) 1)
+            { (set! nxt (new_list))
+              (set! m (length cur))
+              (set! j 0)
+              (while (< j m)
+                { (if (< (+ j 1) m)
+                      (push nxt (String.concat (get_item cur j) (get_item cur (+ j 1))))
+                      (push nxt (get_item cur j)))
+                  (set! j (+ j 2)) })
+              (set! cur nxt) })
+          (get_item cur 0) })))
 
 ;; ============================================================================
 ;; 一、行内解析（扩展点②：行内规则表）

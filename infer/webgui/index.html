@@ -90,6 +90,16 @@
     box-shadow: 0 1px 2px rgba(30,40,60,.06);
   }
   #res-btn:active { transform: scale(.96); }
+  /* 「下载资源」按钮：p2（电子书/词典/音乐/模型…）**只有点了它才下**；下载中显示百分比，
+     完成后置灰。见 loader.js 的 nanoMountResources / nanoMountPending。 */
+  #dl-btn {
+    background: #2f7fd1; color: #ffffff; border: 1px solid #2f7fd1;
+    border-radius: 6px; font-size: 13px; padding: 6px 14px; cursor: pointer;
+    user-select: none; -webkit-user-select: none; touch-action: manipulation;
+    box-shadow: 0 1px 2px rgba(30,40,60,.06); white-space: nowrap;
+  }
+  #dl-btn:active { transform: scale(.96); }
+  #dl-btn[disabled] { background: #eef1f5; color: #9aa1ab; border-color: #d6dae1; cursor: default; }
   /* 硬 ESC 按钮：给触屏/鼠标用户一个等价于实体键盘 Esc 的出口。
      实体 A/ESC 已不由宿主直接退出，而是置“返回请求”交给 App（J2ME 挂断键语义），
      所以触屏设备上必须有一个能送出“硬 Esc”的入口。 */
@@ -238,6 +248,7 @@
     <div id="status">加载中…</div>
     <button id="esc-btn" type="button" title="等同于实体键盘 Esc / 设备 A 键">ESC</button>
     <button id="att-btn" type="button">姿态：关</button>
+    <button id="dl-btn" type="button" title="从服务器下载其余业务资源（电子书/词典/音乐/模型…），体积见按钮文字">资源：未下载</button>
     <button id="res-btn" type="button">资源</button>
   </div>
   <div id="hint">触屏/鼠标点按操作 · 滚轮=上下滑动 · 键盘：方向键/回车=确认/Esc=返回/数字=十六键 · 「ESC」按钮=硬 Esc</div>
@@ -290,14 +301,17 @@ const canvas   = document.getElementById("screen");
 const ctx      = canvas.getContext("2d", { alpha: false });
 const statusEl = document.getElementById("status");
 const attBtn   = document.getElementById("att-btn");
+const dlBtn    = document.getElementById("dl-btn");
 
 let runtimeReady = false;
 let wasmFps = 0;
 setInterval(() => { wasmFps = Module._nano_frame_count || 0; Module._nano_frame_count = 0; updateStatus(); }, 1000);
 
+let p2Msg = "";   // p2（可选资源）下载进度/错误提示（updateStatus 里显示）
 function updateStatus() {
   if (!runtimeReady) return;
   statusEl.innerHTML = '<span class="ok">● 运行中</span> · ' + wasmFps + " fps · 320×240"
+    + (p2Msg ? " · " + p2Msg : "")
     + (nanoAudio.msg ? " · " + nanoAudio.msg : "");
 }
 
@@ -634,7 +648,7 @@ var Module = {
 // 从服务器拉取清单并挂载业务资源 → 启动 wasm main（进度经 loader.js 回调渲染）
 async function mountResourcesAndRun() {
   try {
-    await nanoMountResources({
+    const pending = await nanoMountResources({
       FS: Module.FS,
       manifestUrl: "manifest.json",
       filesBaseUrl: "files/",
@@ -665,12 +679,77 @@ async function mountResourcesAndRun() {
       },
       onManifest: (files) => { gManifestFiles = files; },
     });
+    // p2（电子书/词典/音乐/模型…）**不自动下载**：只记住清单，等用户点「下载资源」
+    pendingP2 = pending || [];
+    updateDlBtn();
     updateStatus();
   } catch (e) {
     resText.textContent = "资源挂载失败：" + e;
     statusEl.innerHTML = '<span class="bad">● 资源挂载失败</span>';
   }
 }
+
+// ---------------- 「下载资源」按钮（p2：可选的大块业务资源） ----------------
+// 需求（2026-11-17）：p1（启动必需，4.5MB）之后**不要**自动拉其余 283MB——页面给一个
+// 按钮，用户点了才从服务器下载。实现上没有第三/第四层，也没有按 App 的钩子：
+// nanoMountResources 只把 p2 清单交回来，这里按下按钮才调 nanoMountPending。
+// 单飞：下载中重复点击无效；已完成/无待下载时按钮置灰。
+// 回归脚本可以直接 await nanoEnsureP2()（与点按钮同一条路）。
+let pendingP2 = [];       // 待下载清单（manifest 里 priority 2 的那些）
+let p2State = 0;          // 0=未开始 1=下载中 2=已完成
+let p2Promise = null;
+const mb = (b) => (b / 1048576).toFixed(b >= 10485760 ? 0 : 1) + "MB";
+
+function p2Bytes() { return pendingP2.reduce((s, f) => s + (f.size || 0), 0); }
+
+function updateDlBtn() {
+  if (!dlBtn) return;
+  if (p2State === 1) {
+    dlBtn.disabled = true;
+    dlBtn.textContent = "资源：下载中…";
+  } else if (p2State === 2 || !pendingP2.length) {
+    dlBtn.disabled = true;
+    dlBtn.textContent = "资源：已就绪";
+  } else {
+    dlBtn.disabled = false;
+    dlBtn.textContent = "下载资源 " + mb(p2Bytes());
+  }
+}
+
+async function nanoEnsureP2() {
+  if (p2State === 1) return p2Promise;
+  if (!mountCtx.FS) return null;                 // 还没启动（p1 未就绪）
+  if (!pendingP2.length) { p2State = 2; updateDlBtn(); return null; }
+  p2State = 1;
+  updateDlBtn();
+  p2Promise = (async () => {
+    try {
+      p2Msg = "资源下载中…";
+      updateStatus();
+      await nanoMountPending(mountCtx, pendingP2, (dc, dn, cur, total) => {
+        p2Msg = `资源下载 ${dc}/${dn}（${mb(cur)}/${mb(total)}）`;
+        updateStatus();
+        setBar(resBar, total > 0 ? cur / total : 0, false);
+        resText.textContent = "资源（可选）：" + p2Msg;
+        dlBtn.textContent = total > 0 ? `资源：${(cur / total * 100).toFixed(0)}%` : "资源：下载中…";
+      });
+      p2State = 2;
+      p2Msg = "";
+      updateDlBtn();
+      updateStatus();
+      if (resPanel.classList.contains("open")) { refreshResPanel(); }
+    } catch (e) {
+      // 失败回到可重试态（部分已落 MEMFS 的文件会在下次点击时自动跳过）
+      p2State = 0;
+      p2Msg = "资源下载失败（可再点一次）";
+      updateDlBtn();
+      updateStatus();
+    }
+  })();
+  return p2Promise;
+}
+
+if (dlBtn) dlBtn.addEventListener("click", () => { nanoEnsureP2(); });
 
 // ---------------- 触屏/鼠标输入（Pointer Events 统一两类设备） ----------------
 // 事件携带真实时刻（performance.timeOrigin + e.timeStamp，Epoch 毫秒）注入 C 事件队列，
