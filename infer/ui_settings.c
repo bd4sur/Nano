@@ -1066,6 +1066,22 @@ void ui_settings_menu_event(Key_Event *ke, Global_State *gs) {
         return;
     }
 
+    // 滚轮/触控板：直接按像素滚动卡片列表（说明见 ui.c ui_wheel_scroll_clamp）。
+    // 手指拖动进行中不抢输入；拖动/点按状态机完全不受影响。
+    if (ke->wheel_dy != 0) {
+        int32_t wdy = ke->wheel_dy;
+        ke->wheel_dy = 0;
+        if (!s_menu_touch_active) {
+            SettingsMenuLayout L;
+            settings_menu_layout(gs, &L);
+            int32_t next = ui_wheel_scroll_clamp(s_menu_scroll, wdy, L.max_scroll);
+            if (next != s_menu_scroll) {
+                s_menu_scroll = next;
+                ui_settings_menu_draw(gs);
+            }
+        }
+    }
+
     // 触屏：松开沿
     if (ke->touch_edge & TOUCH_EDGE_UP) {
         int32_t changed_state = 0;

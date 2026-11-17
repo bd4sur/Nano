@@ -560,11 +560,36 @@ static void ui_ebook_next_page(Key_Event *key_event, Global_State *global_state)
     ui_ebook_reading_render(key_event, global_state);
 }
 
+// 把一个**全局像素滚动位置**落到视口：必要时滑动重载窗口，再轻量滚动渲染。
+// 触屏拖动、滚轮、惯性三者共用：它们只差“新位置怎么算”，落位逻辑必须完全一致
+// （含“视口越出缓冲窗口才按需重载”的窗口不变量，否则阅读器会读到窗口外的行）。
+static void ebook_apply_scroll_px(Key_Event *key_event, Global_State *global_state, int32_t new_px,
+    int32_t line_height, Widget_Textarea_State *ta
+) {
+    int32_t top_line = new_px / line_height;
+    int32_t new_sub = new_px % line_height;
+    if (top_line != s_buf_start_line + ta->current_line || new_sub != ta->scroll_sub_offset) {
+        // 视口越出缓冲窗口：按需重载（向前预留约一页上文；向后窗口起点即视口首行）
+        if (top_line < s_buf_start_line) {
+            int32_t new_start = top_line - s_view_lines;
+            if (new_start < 0) new_start = 0;
+            ebook_load_window(key_event, global_state, new_start);
+        }
+        else if (top_line + s_view_lines > s_buf_start_line + ta->line_num) {
+            ebook_load_window(key_event, global_state, top_line);
+        }
+        ta->current_line = top_line - s_buf_start_line;
+        ta->scroll_sub_offset = new_sub;
+        ui_ebook_reading_render_scroll(key_event, global_state); // 轻量滚动渲染（不重排版/不重绘页眉页脚）
+    }
+}
+
 int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *global_state) {
     // 惯性滚动动画（窗内惯性：钳制在当前滑动窗口内推进，动画全程零 SD 访问）：
-    // 本处理器每帧被调，惯性逐帧推进；任意新触摸/按键立即终止惯性，事件照常下落处理
+    // 本处理器每帧被调，惯性逐帧推进；任意新触摸/按键/滚轮立即终止惯性，事件照常下落处理
     if (s_eb_fling_vel != 0.0f) {
-        if (key_event->is_touching || key_event->touch_edge != 0 || key_event->key_edge != 0) {
+        if (key_event->is_touching || key_event->touch_edge != 0 || key_event->key_edge != 0
+            || key_event->wheel_dy != 0) {
             s_eb_fling_vel = 0.0f;
         }
         else {
@@ -675,6 +700,23 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
     {
         int32_t line_height = gfx_font_line_height(global_state->ui_font);
         Widget_Textarea_State *ta = global_state->w_textarea_main;
+        // 滚轮/触控板：直接按像素滚动（说明见 ui.c ui_wheel_scroll_clamp）。
+        // 走与拖动完全相同的落位通道（ebook_apply_scroll_px），因此跨页/窗口重载
+        // 行为一致；区别只在于“新位置”不由触点位移算，而由滚轮增量算。
+        if (key_event->wheel_dy != 0) {
+            int32_t wdy = key_event->wheel_dy;
+            key_event->wheel_dy = 0;
+            if (!s_eb_drag_active) {
+                int32_t max_px = s_total_lines * line_height - ta->height;
+                if (max_px < 0) max_px = 0;
+                int32_t cur_px = (s_buf_start_line + ta->current_line) * line_height
+                               + ta->scroll_sub_offset;
+                int32_t new_px = ui_wheel_scroll_clamp(cur_px, wdy, max_px);
+                if (new_px != cur_px) {
+                    ebook_apply_scroll_px(key_event, global_state, new_px, line_height, ta);
+                }
+            }
+        }
         if (key_event->touch_edge & TOUCH_EDGE_DOWN) {
             int32_t tx = key_event->touch_down_x;
             int32_t ty = key_event->touch_down_y;
@@ -755,18 +797,7 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
                 int32_t new_sub = new_px % line_height;
                 if (top_line != s_buf_start_line + ta->current_line
                     || new_sub != ta->scroll_sub_offset) {
-                    // 视口越出缓冲窗口：按需重载（向前预留约一页上文；向后窗口起点即视口首行）
-                    if (top_line < s_buf_start_line) {
-                        int32_t new_start = top_line - s_view_lines;
-                        if (new_start < 0) new_start = 0;
-                        ebook_load_window(key_event, global_state, new_start);
-                    }
-                    else if (top_line + s_view_lines > s_buf_start_line + ta->line_num) {
-                        ebook_load_window(key_event, global_state, top_line);
-                    }
-                    ta->current_line = top_line - s_buf_start_line;
-                    ta->scroll_sub_offset = new_sub;
-                    ui_ebook_reading_render_scroll(key_event, global_state); // 轻量滚动渲染（不重排版/不重绘页眉页脚）
+                    ebook_apply_scroll_px(key_event, global_state, new_px, line_height, ta);
                 }
             }
             return 0;

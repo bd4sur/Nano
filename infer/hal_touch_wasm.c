@@ -144,6 +144,24 @@ int32_t touch_init() {
     return 0;
 }
 
+// ---- 滚轮/触控板（页面 wheel 事件）-----------------------------------------
+// 页面把一格滚轮折算成帧缓冲像素后调 wasm_gui_on_wheel 累加；输入层（get_input_event）
+// 每拍取走并清零，最终落到 key_event->wheel_dy 由各滚动控件按像素应用。
+// 注意：滚轮不进触屏事件队列——队列是给一次性边沿（DOWN/UP）用的，而滚轮是逐帧
+// 消费的连续量；若也排队，快速滚轮会填满容量 16 的队列并把真正的边沿挤掉。
+static int32_t s_wheel_dy = 0;
+
+EMSCRIPTEN_KEEPALIVE
+void wasm_gui_on_wheel(int32_t dy) {
+    s_wheel_dy += dy;
+}
+
+int32_t hal_touch_wheel_take(void) {
+    int32_t v = s_wheel_dy;
+    s_wheel_dy = 0;
+    return v;
+}
+
 int32_t touch_read(int32_t *x, int32_t *y, int32_t *is_pressed) {
     if (s_pressed) {
         if (x) *x = s_x;

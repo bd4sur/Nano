@@ -24,11 +24,11 @@
     padding: 12px;
     box-sizing: border-box;
   }
-  /* 主显示区：最宽 320px（= 帧缓冲原宽，1:1 像素映射）；窄于 320px 的屏幕占满可视宽度
+  /* 主显示区：PC 上最宽 480px（移动端仍占满可视宽度）
      纵向预留 = 按钮行（可能折成两行）+ 状态行 + 提示行 + 边距（拆成三行后从 76px 增到 132px） */
   #screen {
-    width: min(calc(100vw - 24px), calc((100vh - 132px) * 4 / 3), 320px);
-    max-width: 320px;
+    width: min(calc(100vw - 24px), calc((100vh - 132px) * 4 / 3), 480px);
+    max-width: 480px;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     background: #ffffff;
@@ -851,30 +851,34 @@ canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 document.addEventListener("gesturestart", (e) => e.preventDefault());
 document.addEventListener("dblclick", (e) => e.preventDefault());
 
-// ---------------- 鼠标滚轮 → 触屏滑动（合成拖动手势） ----------------
-// 宿主 UI 的滚动只有「手指 1:1 拖动」这一条通路（菜单/阅读器/列表按触点位移跟手滚动，
-// 松手可甩动，见 ui.c 的 touch_is_dragging 逻辑），没有滚轮语义。这里纯前端把滚轮
-// 增量合成为一个连续的拖动序列，WASM 后端无需任何改动：
-//   首次滚动 → 在画布中心按下（DOWN）→ 按累计位移移动（MOVE）→ 停止滚动一段时间后
-//   抬起（UP），等价于一次真手指滑动。
-// 细节约束（都是为了让后端把它认成「拖动」而不是「点按」）：
-//   1) 位移用帧缓冲像素累计，一格滚轮 ≈ 一条菜单项高度，手感随 delta 线性；
-//   2) 不足「拖动判定阈值」的位移先攒着不起手 —— 后端以 item_height/2、line_height/2
-//      判拖动，未越阈值的序列在松手时会被当成点按（会误触/误启动中心处的条目）；
-//   3) 手指走不出画布：位移到边界即截断，余量立刻起新的一段手势接着滑（总量不丢）；
-//   4) 抬起刻意晚于最后一次移动 >100ms：后端据此丢弃甩动初速度（滚轮是离散输入，
-//      惯性会让一格滚出很远）；单段手势也限时，避免长时间按住触发长按连发。
-const WHEEL_NOTCH_PX     = 100; // 一格滚轮在像素模式（deltaMode=0）下的典型 deltaY
-const WHEEL_NOTCH_FB     = 28;  // 一格滚轮折算成多少帧缓冲像素的滑动（≈ 一条菜单项）
-const WHEEL_IDLE_END_MS  = 140; // 停止滚动多久后抬起（须 > 100ms，见上）
-const WHEEL_SEG_MAX_MS   = 260; // 单段手势最长存活（< 后端长按阈值 ~360ms）
-const WHEEL_MIN_DRAG_PX  = Math.max(12, Math.round(canvas.height / 10)); // 起手门槛（见 2）
+// ---------------- 鼠标滚轮 → 滚动（两条通路） ----------------
+// 背景：宿主 UI 的滚动只有「手指 1:1 拖动」一条语义（菜单/阅读器/列表按触点位移跟手
+// 滚动，松手可甩动，见 ui.c 的 touch_is_dragging 逻辑）。2026-11 之前这里只有一条
+// 实现：把滚轮**合成为一根手指**（中心按下 → 按累计位移移动 → 停手后抬起）。
+// 那条路有两个结构性缺陷，实测表现为"滚长列表只能滚一小段 + 一抖一抖"：
+//   a) 合成手指走不出画布：单段手势可用行程 = 画布高度（240px，中心起手只剩 119px），
+//      长文档/长列表必须不断"松手再按下"；
+//   b) 松手与下一次按下落在**同一帧**时，后端看到的是 touch_edge = UP|DOWN：它先按
+//      DOWN 开一段序列、紧接着按 UP 收尾，且"未构成拖动" → 判成一次**点按**
+//      （菜单直接执行中心处的条目！），同时那一帧的移动整帧丢失。
+// 现在按状态分流：
+//   ① GUI 状态（菜单/阅读器/设置/主菜单…）→ **原生滚轮通道**：wasm_gui_on_wheel(dy)
+//      累加到 key_event->wheel_dy，各滚动控件把 dy 按像素直接叠加到滚动位置。
+//      无锚点、不占触摸状态机、不受画布高度限制；到顶到底由控件按真实 max_scroll
+//      硬钳，因此**没有"越界量要先磨回来"的死区**，反向立刻生效。
+//      JS 侧再做一层指数平滑：一格滚轮拆成几帧的小步，鼠标滚轮不再是"一格一跳"。
+//   ② 灵机 App 运行态 → 仍是**合成手指**（App 用 (native Touch) 自己解释手势，
+//      宿主没法替它定义滚动）。此路保留但修掉缺陷 b：收手与下一次按下强制跨帧，
+//      并去掉"每 260ms 强制松手重按"（每次重按都是白丢一帧 + 可能误点）。
+const WHEEL_NOTCH_PX      = 100;  // 一格滚轮在像素模式（deltaMode=0）下的典型 deltaY
+const WHEEL_NOTCH_FB      = 28;   // 一格滚轮折算成多少帧缓冲像素（≈ 两条菜单项）
+const WHEEL_SMOOTH_GAIN   = 0.45; // 平滑跟随系数：每帧吃掉剩余量的一部分（0.45 ≈ 90ms 走完）
+const WHEEL_IDLE_END_MS   = 140;  // 合成手势：停止滚动多久后抬起（须 > 100ms，见下方 endWheelSession）
+const WHEEL_MIN_DRAG_PX   = Math.max(12, Math.round(canvas.height / 10)); // 后端起手门槛（见下）
+const WASM_STATE_SCHEME_APP_RUN = 80; // ui_scheme_app.h STATE_SCHEME_APP_RUN
 
-let wheelSession = null; // 进行中的合成手势：{ startX, startY, acc, startTs }
-let wheelAccum   = 0;    // 尚未越过起手门槛的累计位移（跨滚轮事件保留）
-let wheelEndTimer = 0;
-
-// 浏览器滚轮三档 deltaMode（0=像素 1=行 2=页）→ 统一折算成帧缓冲像素
+// 浏览器滚轮三档 deltaMode（0=像素 1=行 2=页）→ 统一折算成帧缓冲像素。
+// 正 = 内容上滚（看后面的内容），与 key_event->wheel_dy 的符号约定一致。
 function wheelDeltaToFb(e) {
   let dy = e.deltaY;
   if (e.deltaMode === 1) dy *= WHEEL_NOTCH_PX / 3;      // 3 行 ≈ 一格
@@ -882,13 +886,58 @@ function wheelDeltaToFb(e) {
   return dy * (WHEEL_NOTCH_FB / WHEEL_NOTCH_PX);
 }
 
+function nanoGuiState() {
+  return (Module && Module._wasm_gui_get_state) ? Module._wasm_gui_get_state() : 0;
+}
+
+// ---------------------------------------------------------------------------
+// ① 原生滚轮通道（GUI 状态）：帧间平滑
+// ---------------------------------------------------------------------------
+let wheelRemain = 0; // 尚未投递给 C 侧的滚轮位移（帧缓冲像素，浮点，保留小数避免累积误差）
+let wheelRaf = 0;
+
+function wheelPump() {
+  wheelRaf = 0;
+  if (!wheelRemain) return;
+  if (!runtimeReady || typeof Module._wasm_gui_on_wheel !== "function") { wheelRemain = 0; return; }
+  // 指数平滑：剩余越多走得越快；剩余 < 1.5px 时一次送完（保证总位移精确落地、不会"永远差一点"）
+  const step = (Math.abs(wheelRemain) < 1.5) ? wheelRemain : wheelRemain * WHEEL_SMOOTH_GAIN;
+  let px = Math.round(step);
+  if (px === 0) px = step > 0 ? 1 : -1;
+  if (Math.abs(px) >= Math.abs(wheelRemain)) { px = Math.round(wheelRemain); wheelRemain = 0; }
+  else { wheelRemain -= px; }
+  if (px !== 0) {
+    Module._wasm_gui_on_wheel(px);
+    // 立刻驱动一次输入采样：滚轮增量靠输入层的 tick 取走（get_input_event），
+    // 不主动 tick 的话要等下一次心跳（空闲 50ms），手感会明显发黏。
+    Module._wasm_gui_input_tick(nowEpochMs());
+  }
+  if (Math.abs(wheelRemain) >= 0.5) wheelRaf = requestAnimationFrame(wheelPump);
+  else wheelRemain = 0;
+}
+
+// ---------------------------------------------------------------------------
+// ② 合成手指拖动（仅灵机 App 运行态）
+// ---------------------------------------------------------------------------
+// 细节约束（都是为了让后端把它认成「拖动」而不是「点按」）：
+//   1) 位移用帧缓冲像素累计，一格滚轮 ≈ 两条菜单项，手感随 delta 线性；
+//   2) 不足「拖动判定阈值」的位移先攒着不起手 —— 后端以 item_height/2、line_height/2
+//      判拖动，未越阈值的序列在松手时会被当成点按（会误触/误启动中心处的条目）；
+//   3) 手指走不出画布：位移到边界即截断，余量留到**下一帧**再起新的一段接着滑；
+//      （同一帧 UP+DOWN 会被后端判成点按，见文件头缺陷 b，所以必须跨帧）
+//   4) 抬起刻意晚于最后一次移动 >100ms：后端据此丢弃甩动初速度（滚轮是离散输入，
+//      惯性会让一格滚出很远）。
+let wheelSession = null;  // 进行中的合成手势：{ startX, startY, acc }
+let wheelAccum   = 0;     // 尚未越过起手门槛 / 等待下一次起手的累计位移
+let wheelEndTimer = 0;
+let wheelDownPending = false; // 1-已收手、等下一帧再按下（跨帧约束）
+
 // 起一段手势：中心按下（中心在多数界面属滚动区主体，阅读器/列表都能接管）
 function beginWheelSession(ts) {
   wheelSession = {
     startX: Math.round(canvas.width / 2),
     startY: Math.round(canvas.height / 2),
     acc: 0,
-    startTs: ts,
   };
   sendTouchFb(1, wheelSession.startX, wheelSession.startY, ts);
 }
@@ -933,43 +982,79 @@ function scheduleWheelEnd() {
   }, WHEEL_IDLE_END_MS);
 }
 
-function onWheel(e) {
-  e.preventDefault(); // 画布上的滚轮不再滚动页面
-  if (e.ctrlKey) return; // Ctrl+滚轮：浏览器缩放组合，忽略（不误判为滑动）
-  if (!runtimeReady || !Module._wasm_gui_on_touch) return;
-  if (activePointerId !== null) return; // 指针按下期间以真实拖动为准
+// 撞到画布边界后收手：余量留到下一帧再起新的一段（跨帧，避免同帧 UP+DOWN 被当成点按）
+function scheduleWheelRestart() {
+  if (wheelDownPending) return;
+  wheelDownPending = true;
+  requestAnimationFrame(() => {
+    wheelDownPending = false;
+    if (!runtimeReady || !wheelAccum) return;
+    const ts = nowEpochMs();
+    while (Math.abs(wheelAccum) >= WHEEL_MIN_DRAG_PX) {
+      const d = wheelAccum;
+      wheelAccum = 0;
+      beginWheelSession(ts);
+      const rest = wheelSessionMove(d, ts);
+      if (Math.abs(rest) >= WHEEL_MIN_DRAG_PX) {
+        // 余量还够一段：本段收手，余量排到下一帧（同帧多次 UP+DOWN 仍是点按）
+        endWheelSession(ts, false);
+        wheelAccum = rest;
+        scheduleWheelRestart();
+        return;
+      }
+      wheelAccum = rest;
+      break;
+    }
+    scheduleWheelEnd();
+  });
+}
 
-  const ts = eventEpochMs(e);
-  let delta = wheelDeltaToFb(e);
-  if (!delta) return;
-
-  // 手势存活过久：先收手（避免按住超过后端长按阈值导致连发），再按常规流程重新起手
-  if (wheelSession && ts - wheelSession.startTs > WHEEL_SEG_MAX_MS) {
-    endWheelSession(ts, true);
-  }
-
+// 灵机 App 运行态：把滚轮喂进合成手势机
+function wheelSwipe(delta, ts) {
   if (!wheelSession) {
     wheelAccum += delta;
-    if (Math.abs(wheelAccum) < WHEEL_MIN_DRAG_PX) { scheduleWheelEnd(); return; } // 攒着，先不起手
+    if (wheelDownPending) return;                                        // 等下一帧起手
+    if (Math.abs(wheelAccum) < WHEEL_MIN_DRAG_PX) { scheduleWheelEnd(); return; } // 攒着
     delta = wheelAccum;
     wheelAccum = 0;
     beginWheelSession(ts);
   }
-
-  let rest = wheelSessionMove(delta, ts);
-  // 撞到画布边界：余量足够构成新的一段手势就接着滑，否则留着等后续滚轮事件
-  while (Math.abs(rest) >= WHEEL_MIN_DRAG_PX) {
-    endWheelSession(ts, false);
-    beginWheelSession(ts);
-    rest = wheelSessionMove(rest, ts);
+  const rest = wheelSessionMove(delta, ts);
+  if (Math.abs(rest) >= WHEEL_MIN_DRAG_PX) {
+    endWheelSession(ts, false); // 已构成拖动，收手不会判成点按
+    wheelAccum = rest;
+    scheduleWheelRestart();
+    return;
   }
   wheelAccum = rest;
   scheduleWheelEnd();
 }
 
+function onWheel(e) {
+  e.preventDefault(); // 画布上的滚轮不再滚动页面
+  if (e.ctrlKey) return;  // Ctrl+滚轮：浏览器缩放组合，忽略（不误判为滑动）
+  if (!runtimeReady) return;
+  if (activePointerId !== null) return; // 指针按下期间以真实拖动为准
+
+  const delta = wheelDeltaToFb(e);
+  if (!delta) return;
+
+  if (nanoGuiState() === WASM_STATE_SCHEME_APP_RUN) {
+    wheelSwipe(delta, eventEpochMs(e)); // ② App 自己解释触屏流
+    return;
+  }
+  // ① 其余全部 GUI 状态：原生滚轮通道 + 帧间平滑
+  wheelRemain += delta;
+  if (!wheelRaf) wheelRaf = requestAnimationFrame(wheelPump);
+}
+
 canvas.addEventListener("wheel", onWheel, { passive: false });
-// 页面切走/失焦时收手，避免后端电平一直停在「按住」
-window.addEventListener("blur", () => endWheelSession(nowEpochMs(), true));
+// 页面切走/失焦时收手：合成手势要抬起（否则后端电平一直停在「按住」），平滑队列清空
+window.addEventListener("blur", () => {
+  endWheelSession(nowEpochMs(), true);
+  wheelRemain = 0;
+  if (wheelRaf) { cancelAnimationFrame(wheelRaf); wheelRaf = 0; }
+});
 
 // 生产者心跳：无事件时维持持续状态判定（长按到期、持续电平）；渲染阻塞时延后但
 // 事件时刻由 e.timeStamp 保证，回放后判定仍物理正确（对齐 ino 的 1-2ms 生产者语义）。

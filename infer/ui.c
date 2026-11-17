@@ -753,15 +753,25 @@ static int32_t ui_widget_textarea_scroll_px(Widget_Textarea_State *ts, int32_t l
     return line * line_height + ts->scroll_sub_offset;
 }
 
+// 滚轮/触控板增量 → 像素滚动位置（钳制规则见 ui.h 声明）
+int32_t ui_wheel_scroll_clamp(int32_t cur_px, int32_t wheel_dy, int32_t max_px) {
+    if (max_px < 0) max_px = 0;
+    int32_t next = cur_px + wheel_dy;
+    if (next < 0) next = 0;
+    if (next > max_px) next = max_px;
+    return next;
+}
+
 // 文本框触屏手势机（像素级连续滚动；认 touch_edge 边沿事件，电平兜底；与菜单控件同范式）
 int32_t ui_widget_textarea_touch_handler(Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts) {
     int32_t line_height = gfx_font_line_height(gs->ui_font);
     int32_t max_scroll_px = ts->line_num * line_height - ts->height;
     if (max_scroll_px < 0) max_scroll_px = 0;
 
-    // 松手惯性滚动（fling）：动画激活期间每帧推进一次；任意新触摸或按键边沿立即终止
+    // 松手惯性滚动（fling）：动画激活期间每帧推进一次；任意新触摸、按键边沿或
+    // 滚轮输入立即终止（滚轮是主动定位，不能让惯性继续跑）
     if (ts->fling_velocity != 0.0f) {
-        if (ke->is_touching || ke->touch_edge != 0 || ke->key_edge != 0) {
+        if (ke->is_touching || ke->touch_edge != 0 || ke->key_edge != 0 || ke->wheel_dy != 0) {
             ts->fling_velocity = 0.0f;
         }
         else {
@@ -791,6 +801,26 @@ int32_t ui_widget_textarea_touch_handler(Key_Event *ke, Global_State *gs, Widget
                     ts->scroll_sub_offset = new_sub;
                     return 1;
                 }
+            }
+        }
+    }
+
+    // 滚轮/触控板：直接按像素滚动（正=内容上滚/看后面），到顶/到底硬钳。
+    // 与触屏拖动是两条独立通路（无锚点、不占触摸状态机）：合成拖动只能走一屏
+    // 高度（手指走不出画布），滚长文档会不断"松手重按"，而重按若与松开落在同一帧
+    // 会被后端当成一次**点按**（菜单直接执行中心条目）——滚轮走本条通路后彻底避开。
+    // 拖动进行中不抢输入（以手指为准）。消费后清零，避免同帧多个控件重复应用。
+    if (ke->wheel_dy != 0) {
+        int32_t wdy = ke->wheel_dy;
+        ke->wheel_dy = 0;
+        if (!ts->touch_active) {
+            int32_t cur = ui_widget_textarea_scroll_px(ts, line_height);
+            int32_t next = ui_wheel_scroll_clamp(cur, wdy, max_scroll_px);
+            if (next != cur) {
+                ts->current_line = next / line_height;
+                ts->scroll_sub_offset = next % line_height;
+                ts->fling_velocity = 0.0f;
+                return 1; // 调用方重绘
             }
         }
     }
@@ -2096,7 +2126,7 @@ int32_t ui_widget_menu_event_handler(
     // 任意新触摸或按键边沿立即终止动画（随后的触摸/按键逻辑以当前 scroll_px 接管）
     // ========================================================================
     if (ms->fling_velocity != 0.0f) {
-        if (ke->is_touching || ke->touch_edge != 0 || ke->key_edge != 0) {
+        if (ke->is_touching || ke->touch_edge != 0 || ke->key_edge != 0 || ke->wheel_dy != 0) {
             ms->fling_velocity = 0.0f;
         }
         else {
@@ -2149,6 +2179,28 @@ int32_t ui_widget_menu_event_handler(
                     // 与触屏拖动一致：不做高亮钳制，允许高亮条目滚出可视区
                     ui_widget_menu_draw(ke, gs, ms);
                 }
+            }
+        }
+    }
+
+    // 滚轮/触控板：直接按像素滚动（说明见 ui_widget_textarea_touch_handler 同款注释）。
+    // 放在回弹动画之前：滚轮一落下就把回弹位移清零，回弹块当帧自然跳过。
+    if (ke->wheel_dy != 0) {
+        int32_t wdy = ke->wheel_dy;
+        ke->wheel_dy = 0;
+        if (!ms->touch_active) {
+            int32_t max_scroll_px = (int32_t)ms->item_num * item_height - ((int32_t)ms->height - 1);
+            if (max_scroll_px < 0) max_scroll_px = 0;
+            int32_t cur = (int32_t)ms->first_item_intex * item_height + ms->scroll_sub_offset;
+            int32_t next = ui_wheel_scroll_clamp(cur, wdy, max_scroll_px);
+            if (next != cur) {
+                ms->first_item_intex = next / item_height;
+                ms->scroll_sub_offset = next % item_height;
+                ms->fling_velocity = 0.0f;
+                ms->bounce_offset_px = 0.0f;
+                ms->bounce_velocity = 0.0f;
+                // 与触屏拖动一致：不做高亮钳制，允许高亮条目滚出可视区
+                ui_widget_menu_draw(ke, gs, ms);
             }
         }
     }

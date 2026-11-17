@@ -11,6 +11,7 @@
 
 #include "graphics.h"
 #include "hal_key.h"
+#include "hal_touch.h" // hal_touch_wheel_take：滚轮增量取走（仅 NANO_WASM_GUI 编译分支调用）
 #include "ui.h"
 #include "ui_icon.h"
 #include "ui_softkbd.h"
@@ -346,6 +347,12 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     global_state->touch_x = key_event->touch_x;
     global_state->touch_y = key_event->touch_y;
     global_state->is_touching = key_event->is_touching;
+#if defined(NANO_WASM_GUI)
+    // 滚轮/触控板增量：与触屏电平同理走“高频生产、按帧消费”——本处只累加，
+    // 由帧回调（main_wasm_gui.c）取走并清零后填入 key_event->wheel_dy。
+    // 不进事件队列：滚轮是逐帧消费的连续量，队列留给一次性边沿。
+    global_state->wheel_dy += hal_touch_wheel_take();
+#endif
 
     // 触屏边沿检测（生产端，与按键边沿同一哲学：消费者零负担，见 AGENTS.md 第八节）：
     // DOWN/UP 边沿填入 touch_edge，经事件队列可靠投递（见 .ino loop 与 core0_render_task）；
@@ -1308,7 +1315,8 @@ void ui_app_main_menu_event_handler(Key_Event *key_event, Global_State *global_s
     // 任意新触摸或按键边沿立即终止动画（随后的触摸/按键逻辑以当前滚动位置接管）
     // ========================================================================
     if (s_app_menu_scroll.fling_velocity != 0.0f) {
-        if (key_event->is_touching || key_event->touch_edge != 0 || key_event->key_edge != 0) {
+        if (key_event->is_touching || key_event->touch_edge != 0 || key_event->key_edge != 0
+            || key_event->wheel_dy != 0) {
             s_app_menu_scroll.fling_velocity = 0.0f;
         }
         else {
@@ -1342,6 +1350,22 @@ void ui_app_main_menu_event_handler(Key_Event *key_event, Global_State *global_s
                     s_app_menu_scroll.scroll_px = new_scroll_px;
                     ui_app_main_menu_draw(key_event, global_state, 0);
                 }
+            }
+        }
+    }
+
+    // 滚轮/触控板：直接按像素滚动左侧滚动区（说明见 ui.c ui_wheel_scroll_clamp）。
+    // 无锚点、不占触摸状态机，因此一帧可走任意像素，不受画布高度限制。
+    if (key_event->wheel_dy != 0) {
+        int32_t wdy = key_event->wheel_dy;
+        key_event->wheel_dy = 0;
+        if (!s_app_menu_scroll.touch_active) {
+            int32_t next = ui_wheel_scroll_clamp(s_app_menu_scroll.scroll_px, wdy, g.max_scroll_px);
+            if (next != s_app_menu_scroll.scroll_px) {
+                s_app_menu_scroll.scroll_px = next;
+                s_app_menu_scroll.fling_velocity = 0.0f;
+                // 仅重绘左侧滚动区：右侧固定区保持不动
+                ui_app_main_menu_draw(key_event, global_state, 0);
             }
         }
     }

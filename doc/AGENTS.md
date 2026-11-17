@@ -13883,3 +13883,76 @@ steps  已推进的步数（诊断用：切页时打一行，e2e 据此断言状
 7. **字模是跨 App 共享的静态量**：页签栏与各页 HUD 都在绘制前显式 `(Gfx.set_font 1)`。
 8. `App.set_timeslice` 是**每个运行时**的属性，所以外壳在**切页时**按该页的 budget 申请；
    四页需求差一个数量级，用统一的固定值会让生命游戏被拆帧（60→30 代/秒）。
+
+------------------------------------
+
+# 2026-11-18（四）WASM GUI 滚轮重做：原生滚轮通道 + 帧间平滑（修"一抖一抖滚不下去"）
+
+## 1. 现象与定位
+
+手机/桌面浏览器里鼠标滚轮滚长列表（灵机 App 列表、电子书、系统设置）只能滚一小段、
+一抖一抖，偶尔还会**直接启动中心处的条目**。
+
+当时只有一条实现（`webgui/index.html` 的 `onWheel`）：把滚轮**合成为一根手指**——
+画布中心 DOWN → 按累计位移 MOVE → 停手 140ms 后 UP。两个结构性缺陷：
+
+1. **合成手指走不出画布**：单段手势可用行程 = 画布高度（240px，中心起手只剩 119px），
+   长文档/长列表必须不断"松手再按下"。一格滚轮 28px → 每 4 格就撞边界一次。
+2. **松手与下一次按下落在同一帧** → 后端 `Key_Event.touch_edge = UP|DOWN(=3)`：
+   `ui_widget_menu_event_handler` 先按 DOWN 开序列、紧接着被同一个 `if` 里的 UP 收尾，
+   且 `touch_is_dragging==0` → 判成**一次点按**，直接执行菜单中心条目；同时那一帧的
+   移动整帧丢失（`else if (is_touching && touch_active)` 分支根本没跑）。
+   边界重启与 `WHEEL_SEG_MAX_MS`(260ms) 强制收手都会触发这一对 UP+DOWN。
+   实测（Chromium，主菜单 10 格）：只滚了约 1/4 的距离，且状态随时可能跳到 App 运行态。
+
+## 2. 改法：按状态分两条通路
+
+**① 原生滚轮通道（所有 GUI 滚动控件）**——滚轮不再是"手势"，而是一个逐帧消费的增量：
+
+| 环节 | 文件 | 内容 |
+|---|---|---|
+| 页面 | `webgui/index.html` | `Module._wasm_gui_on_wheel(px)` + 立即 `_wasm_gui_input_tick(now)` |
+| 触屏 HAL | `hal_touch_wasm.c` | `s_wheel_dy` 累加 / `hal_touch_wheel_take()` 取走清零 |
+| 输入层 | `ui_app.c get_input_event` | `global_state->wheel_dy += hal_touch_wheel_take()`（`#if NANO_WASM_GUI`） |
+| 帧回调 | `main_wasm_gui.c` | `key_event->wheel_dy = gs->wheel_dy; gs->wheel_dy = 0` |
+| 控件 | `ui.c`（菜单 / 文本框）、`ui_app.c`（主菜单列表）、`ui_settings.c`、`ui_ebook.c` | `ui_wheel_scroll_clamp(cur + wheel_dy, 0, max)` 直接落位 + 重绘 |
+
+要点：
+- 与触屏拖动**完全解耦**：无锚点、不占触摸状态机、不受画布高度限制，一帧想走多少走多少。
+- 钳制用**控件自己的 max_scroll**（不是"手指走了多远"），所以到顶/到底后反向**立刻**生效，
+  没有"先把越界量磨回来"的死区。滚轮不做橡皮筋（离散输入回弹像"还在动"）。
+- 滚轮一落下就清掉 fling/bounce 动画（主动定位优先）。
+- `ui_ebook.c` 顺手把拖动分支的"落位"（窗口滑动重载 + 轻量滚动渲染）抽成
+  `ebook_apply_scroll_px()`，拖动/滚轮共用，避免两份窗口不变量各写一遍。
+
+**② 合成手指（仅 `STATE_SCHEME_APP_RUN`）**——App 用 `(native Touch)` 自己解释手势，
+宿主没法替它定义滚动。此路保留，修掉缺陷 2：收手与下一次按下**强制跨帧**
+（`scheduleWheelRestart()` 走 `requestAnimationFrame`），并去掉 260ms 强制收手。
+
+**帧间平滑（JS）**：一格滚轮 100 deltaY → 28 帧缓冲像素，但不再一次投递，而是按
+`remain * 0.45` 逐帧递送（末尾 <1.5px 一次送完保证精确）。实测一格被拆成
+13+7+4+2+1+1 共 6 帧、合计正好 28px；触控板连续小 delta 则是每帧一次、近似 1:1。
+
+## 3. 验证
+
+- 新增 `tools/e2e/browser/regress_wheel.js`（真 wasm + Chromium）**28/28 PASS**：
+  主菜单 / 灵机 App 列表 / 电子书阅读器（含跨窗口重载的长距离滚动）/ 自述页（文本框）/
+  系统设置 —— 每条都验"画面变化 + 状态不跳变 + N 格来回帧内容逐字节相等 + 到底后反向
+  一格立即生效"；另有"单格滚轮被拆到 ≥3 帧"的平滑性判据与"触摸拖动未被破坏"回归。
+- `regress_webgui_files.js` 43/43 PASS；`regress_key_fs`/`regress_markdown`/`regress_dict`
+  与**改动前基线逐项一致**（用 `git stash` + 重新构建对比确认）：它们的失败是上一条
+  2026-11-17 主菜单改表驱动留下的导航口径问题（见 2026-11-18（三）踩坑 3），与本改动无关。
+
+## 4. 踩坑
+
+1. **Emscripten 3.1.6 的 KEEPALIVE 导出是"一次性惰性包装"**：`var _f = Module["_f"] =
+   function(){ return (_f = Module["_f"] = Module["asm"]["ta"]).apply(null, arguments); }`
+   ——第一次调用就把 `Module._f` 换成裸 asm 函数。所以测试里想在页面侧包一层
+   `Module._wasm_gui_on_wheel` 来计数，只能抓到**第一次**调用，后续全部绕过（排查时
+   一度误以为"滚轮只投递了 13px"）。要观测就插在调用侧（`__steps.push(px)`）。
+2. **别用"视觉行数"倒推滚动量**：电子书的 `s_total_lines` 是**排版后视觉行**（1200 行），
+   而测试文本每逻辑行软折成 2 行，按 16px/逻辑行换算会得出"只滚了 50%"的错误结论。
+   加临时调试导出（`wasm_gui_dbg_ebook_px`）一看：注入 160/320/480 → 位置 160/320/480，
+   严格 1:1。**定位数值问题先拿真值，别靠截图估。**
+3. 主菜单的数字键现在是**条目表下标**，`Digit5` 进的是「寻呼机」而不是「小游戏」；
+   e2e 里改用**按坐标点图标**（`fb(x,y)` → 页面坐标）+ 逐步入场状态断言，比按键导航稳。

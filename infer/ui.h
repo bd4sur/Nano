@@ -64,6 +64,10 @@ typedef struct Global_State {
     volatile int32_t touch_x;       // 触点坐标（is_touching==1 时有效）
     volatile int32_t touch_y;
     volatile int32_t is_touching;   // 触屏电平：1-触摸中，0-未触摸
+    // 滚轮/触控板增量累加器（帧缓冲像素）：输入层每产生一个滚轮事件就累加，
+    // 消费侧（main_wasm_gui.c 的帧回调）每帧取走并清零，转填 key_event->wheel_dy。
+    // 与触屏电平同理走"高频生产、按帧消费"，不进事件队列（那是给一次性边沿用的）。
+    volatile int32_t wheel_dy;
     int32_t year;
     int32_t month;
     int32_t day;
@@ -181,6 +185,13 @@ typedef struct Key_Event {
     uint8_t  touch_edge;    // 触屏边沿位掩码（TOUCH_EDGE_DOWN/TOUCH_EDGE_UP，同帧可叠加），无边沿为 0
     int32_t  touch_down_x;  // 本次触摸序列按下点坐标（触摸期间及 UP 事件时有效）
     int32_t  touch_down_y;
+    // 滚轮/触控板垂直增量（帧缓冲像素，本帧累计值；正 = 内容上滚，看后面的内容）。
+    // 只有带回滚轮输入的平台（当前为 WASM GUI，经页面 wheel 事件注入）会填充，
+    // 其余平台恒 0，各控件无需为平台特判。
+    // 与触屏拖动是两条独立通路：拖动有锚点、受"手指走不出画布"限制；滚轮直接
+    // 叠加到滚动位置（无锚点、不占触摸状态机），因此一帧走多少像素由滚轮决定，
+    // 不受 240px 画布高度约束，也不会因连续滚动而重复"松手再按下"。
+    int32_t  wheel_dy;
 } Key_Event;
 
 // 触屏边沿位掩码（Key_Event.touch_edge）
@@ -366,6 +377,12 @@ int32_t ui_widget_textarea_touch_handler(Key_Event *ke, Global_State *gs, Widget
 // 未命中（坐标在文本区外或文本为空）返回 -1。调用前须保证排版（break_pos）为最新。
 int32_t ui_widget_textarea_char_index_at(Key_Event *ke, Global_State *gs, Widget_Textarea_State *ts,
     int32_t px, int32_t py);
+
+// 滚轮/触控板增量作用到像素滚动位置：返回钳在 [0, max_px] 的新位置。
+// wheel_dy > 0 = 内容上滚（看后面的内容）。到顶/到底硬钳而**不做**橡皮筋回弹：
+// 滚轮是离散输入，回弹会让"已经到底了"看起来像还在动，且反向时得先把越界量
+// 磨回来（死区），手感比拖动的橡皮筋差。滚动量按帧累加在 key_event->wheel_dy。
+int32_t ui_wheel_scroll_clamp(int32_t cur_px, int32_t wheel_dy, int32_t max_px);
 
 // “返回”软按钮热区左界（页眉最右侧 1/4，与菜单控件约定一致）
 #define UI_BACK_HOTSPOT_X0(gfx_width) ((gfx_width) * 3 / 4)

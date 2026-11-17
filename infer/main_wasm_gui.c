@@ -234,6 +234,10 @@ static void wasm_gui_frame(void) {
     key_event->touch_x = global_state->touch_x;
     key_event->touch_y = global_state->touch_y;
     key_event->is_touching = global_state->is_touching;
+    // 滚轮增量同理：取生产端累加值并清零（每帧恰好消费一次，与触屏电平同节奏）。
+    // 各滚动控件按像素直接应用（见 ui_wheel_scroll_clamp），不走触摸状态机。
+    key_event->wheel_dy = global_state->wheel_dy;
+    global_state->wheel_dy = 0;
 
     // 事件处理器
     main_event_handler(key_event, global_state);
