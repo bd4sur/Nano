@@ -35,19 +35,51 @@ extern "C" {
 // 返回链（2026-11）：被拉起的 App 退出后回**拉起它的 App**，而不是应用列表。
 //   · 每个实例记住自己是被谁拉起的（UI_Scheme_App_State.back_rel，按源码路径标识）；
 //   · 所有退出都汇到 ui_scheme_app_perform_exit：有活着的父实例就恢复它（留在
-//     STATE_SCHEME_APP_RUN），否则回列表（STATE_SCHEME_APP_LIST，由 ui_app.c 切）；
-//   · 「后台」仍回应用列表（≈ home；「退出」才是 back），从列表进入的 App 视为顶层。
+//     STATE_SCHEME_APP_RUN），否则回**主菜单**（STATE_MAIN_MENU，由 ui_app.c 切：
+//     2026-11 起灵机 App 的图标就摆在主菜单里，退出即回主菜单）；
+//   · 「后台」也回主菜单（「退出」才是 back），实例冻结保留、主菜单图标带运行角标。
 //
 // 模态文本输入/输出：App 调 (Ui.input ...) 时 Scheme 进程被挂起，本模块借用宿主的
 // 文本控件（鹦鹉笼同款：全键盘拼音 + 16 键九宫格）当模态框，用户提交后唤醒进程
 // （见 ui_scheme_app.c 的“模态文本输入/输出”段落与 am_native_Ui.h）。
 //
 // 新增 App：把 xxx.scm 放入业务资源目录 app/ 即可，固件无需改动。
+//
+// 元数据（2026-11）：App 源码头几行可带注释形式的元数据，扫描时读取，用于主菜单图标：
+//   ;@id=album
+//   ;@title=时光集
+//   ;@version=2026-11-17
+//   规则：id = 文件名去 .scm（须匹配 [_a-zA-Z]+[_a-zA-Z0-9]*）；title = 不含空格的短名；
+//   version = 日期。缺 metadata 的旧 App 仍可运行，title 回退为 id。
 // ===============================================================================
 
 // 状态编号（原 STATE_MANDELBROT/STATE_SCHEME_GOL 已合并为此二态）
 #define STATE_SCHEME_APP_LIST (79)
 #define STATE_SCHEME_APP_RUN  (80)
+
+// app/ 目录下 Scheme App 的数量上限（扫描缓冲容量）。主菜单按此预留条目表容量，
+// 改动时与本文件的目录接口一起核对。
+#define UI_SCHEME_APP_MAX (128)
+
+// ---------------- 主菜单表驱动用的目录视图 ----------------
+// 主菜单把 app/ 下的每个 Scheme App 也当作一个图标（标题取源码元数据 ;@title=）。
+// 用法：进入主菜单时 ui_scheme_app_catalog_refresh() 重新扫描（支持热插拔），
+// 然后按下标逐项查询标题/图标 id/后台运行状态；点按某图标时
+// ui_scheme_app_catalog_enter(i) 记录选中项并返回 STATE_SCHEME_APP_RUN。
+//   注意：返回的标题指针指向扫描缓冲，下一次 refresh 后失效——调用方须在
+//   重建自己的条目表时同步重新取用。
+int32_t        ui_scheme_app_catalog_refresh(void);              // 重新扫描，返回 App 数
+int32_t        ui_scheme_app_catalog_count(void);
+const wchar_t *ui_scheme_app_catalog_title(int32_t index);        // 显示名（元数据 ;@title=）
+const char    *ui_scheme_app_catalog_id(int32_t index);           // id（文件名去 .scm）
+int32_t        ui_scheme_app_catalog_running(int32_t index);      // 1 = 有存活实例（前台/后台）
+int32_t        ui_scheme_app_catalog_enter(int32_t index);        // 选中并转入运行态（返回 STATE_SCHEME_APP_RUN）
+
+// 退出/切后台瞬间的在途触摸序列余波抑制（见 ui_scheme_app.c 的 s_list_touch_guard）。
+// 返回 1 = 本帧应丢弃触摸（函数已就地把 key_event 的触摸字段清零，按键字段保留），
+// 调用方按剥离后的事件继续处理即可；返回 0 = 无抑制。
+// 主菜单与列表菜单共用（App 退出后落回的是主菜单）。
+int32_t ui_scheme_app_touch_aftermath_filter(Key_Event *key_event);
 
 // ---------------- 列表菜单 ----------------
 int32_t ui_scheme_app_list_init(Key_Event *key_event, Global_State *global_state);
@@ -107,7 +139,8 @@ int32_t ui_scheme_app_should_exit(Global_State *global_state);
 // 结束当前前台实例（**所有**退出路径的唯一出口，“退出 > 拉起 > 切后台”里的第一位）：
 //   1 = 有活着的返回链 → 已恢复到上一 App（状态机仍是 STATE_SCHEME_APP_RUN，
 //       下一帧由被恢复的 App 自己绘制，ui_app.c 什么都不要做）；
-//   0 = 实例已销毁 → 调用方把 STATE 切到 STATE_SCHEME_APP_LIST。
+//   0 = 实例已销毁 → 调用方把 STATE 切到 STATE_MAIN_MENU（主菜单里就摆着该 App 的
+//       图标，退出即回主菜单；列表菜单入口仍在“小游戏”里，但退出统一回主菜单）。
 // 会内部完成实例收尾（模态框/退出请求/Chat 引擎/解释器池/Gfx 解绑），调用方**不要**
 // 再调 ui_scheme_app_on_exit（那是“直接回列表”的旧入口，保留给“加载失败时按 A”以外的
 // 特殊路径；正常退出都走本函数）。

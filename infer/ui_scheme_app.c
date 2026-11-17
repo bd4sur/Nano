@@ -103,7 +103,7 @@
 #define MB_ERR_BUF_LEN (128)
 
 // App 数量上限与名称长度上限
-#define SCHEME_APP_MAX     (128)  // app/*.scm 上限（当前 50 个；余量留 78 个）
+#define SCHEME_APP_MAX     (UI_SCHEME_APP_MAX)  // app/*.scm 上限（当前 55 个；余量留 73 个）
 // 2026-11 历次上调：32 → 48 → 56 → 128。前两次都是被实际数量顶到只剩个位数的余量：
 // app/ 下的 .scm 从 33 涨到 47 时 48 只剩 1 个余量、涨到 50 时 56 只剩 6 个（期间
 // 另一会话在 app/ 里临时放 6 个草稿 .scm 就顶满了）。**上限越界不会报错**：收集循环
@@ -115,12 +115,20 @@
 // manifest 推出清单，不必手工同步）。
 #define SCHEME_APP_NAME_MAX (48)
 
+// App id（文件名去 .scm）与源码头部元数据探测窗口
+//   id 用于**启动身份**与 (App.launch "id") 的名字匹配，与显示名（元数据 ;@title=）
+//   分开存放：显示名是给菜单看的（可以是中文），id 是给代码看的（ASCII）。
+#define SCHEME_APP_ID_MAX           (48)
+#define SCHEME_APP_META_PROBE_BYTES (512) // 元数据按约定在源码头几行，只读这么多
+#define SCHEME_APP_META_TITLE_MAX   (128) // 元数据 title 的 UTF-8 缓冲
+
 // ===============================================================================
 // App 描述与扫描结果
 // ===============================================================================
 
 typedef struct {
-    wchar_t title[SCHEME_APP_NAME_MAX];  // 菜单显示名（文件名去 .scm）
+    wchar_t title[SCHEME_APP_NAME_MAX];  // 菜单显示名（源码头部元数据 ;@title=，缺省回退为 id）
+    char    id[SCHEME_APP_ID_MAX];       // App id（文件名去 .scm，ASCII）——启动身份 / (App.launch) 名字
     char    source_rel[192];             // 源码路径（相对解释器工作根，UTF-8）
 } Scheme_App_Desc;
 
@@ -286,6 +294,65 @@ static char ascii_lower(char c) {
     return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
 }
 
+// ---------------- 源码头部元数据读取（;@id= / ;@title= / ;@version=） ----------------
+// 约定见 ui_scheme_app.h 文件头：元数据是注释形式，写在源码头几行。只读文件头
+// SCHEME_APP_META_PROBE_BYTES 字节（不整文件读取：app/ 下的 .scm 从几十 KB 到
+// 几百 KB 不等），逐行识别 ";@key=value"。
+// 输出：out_title 为 UTF-8 的 title（未提供则置空串，由调用方回退为 id）。
+static void scheme_app_meta_trim_value(const char *begin, const char *end, char *out, size_t cap) {
+    // 去掉首尾空白（含 \r：Windows 换行的源码）
+    while (begin < end && (*begin == ' ' || *begin == '\t' || *begin == '\r')) begin++;
+    while (end > begin && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r')) end--;
+    size_t n = (size_t)(end - begin);
+    if (n >= cap) n = cap - 1;
+    memcpy(out, begin, n);
+    out[n] = '\0';
+}
+
+// 若 line..eol 这一行是 ";@key=value"，则把 value 拷进 out 并返回 1；否则返回 0
+static int32_t scheme_app_meta_match(const char *line, const char *eol, const char *key,
+                                     char *out, size_t cap) {
+    size_t klen = strlen(key);
+    if ((size_t)(eol - line) < 3 + klen + 1) return 0;   // 至少 ";@key=x"
+    if (line[0] != ';' || line[1] != '@') return 0;
+    if (memcmp(line + 2, key, klen) != 0) return 0;
+    if (line[2 + klen] != '=') return 0;
+    scheme_app_meta_trim_value(line + 2 + klen + 1, eol, out, cap);
+    return 1;
+}
+
+// 读取 path 指向的 App 源码头部的标题元数据（UTF-8）。失败/无元数据 → out_title 为空串。
+static void scheme_app_read_meta_title(const char *path, char *out_title, size_t title_cap) {
+    out_title[0] = '\0';
+    if (platform_file_open(path) != 0) {
+        return;
+    }
+    uint32_t fsize = platform_file_size();
+    char buf[SCHEME_APP_META_PROBE_BYTES + 1];
+    size_t want = (size_t)fsize;
+    if (want > SCHEME_APP_META_PROBE_BYTES) want = SCHEME_APP_META_PROBE_BYTES;
+    int32_t got = 0;
+    if (want > 0) {
+        got = platform_file_read((uint8_t *)buf, want);
+    }
+    platform_file_close();
+    if (got <= 0) {
+        return;
+    }
+    buf[got] = '\0';
+
+    const char *p = buf;
+    while (*p != '\0') {
+        const char *eol = p;
+        while (*eol != '\0' && *eol != '\n') eol++;
+        if (scheme_app_meta_match(p, eol, "title", out_title, title_cap)) {
+            return;
+        }
+        if (*eol == '\0') break;
+        p = eol + 1;
+    }
+}
+
 // 一次性分配扫描/菜单缓冲（本功能全生命周期持有；ESP32 上落在 PSRAM）。
 // 返回 0 成功；失败（防御，实际不可达）返回 -1
 static int32_t scheme_app_buffers_init(void) {
@@ -338,15 +405,30 @@ static void scheme_app_scan(void) {
         }
 
         Scheme_App_Desc *d = &s_apps[s_app_count];
-        // 显示名：去掉 .scm 后缀（截断到容量；给「● 运行中」角标留 8 个字符）
-        size_t tl = len - 4;
-        if (tl > SCHEME_APP_NAME_MAX - 9) tl = SCHEME_APP_NAME_MAX - 9;
-        wchar_t tmp[SCHEME_APP_NAME_MAX];
-        am_mbstowcs(tmp, name, (uint32_t)tl);
-        tmp[tl] = L'\0';
-        wcscpy(d->title, tmp);
+        // id：文件名去 .scm（ASCII，启动身份与 (App.launch) 名字）
+        size_t idl = len - 4;
+        if (idl > SCHEME_APP_ID_MAX - 1) idl = SCHEME_APP_ID_MAX - 1;
+        memcpy(d->id, name, idl);
+        d->id[idl] = '\0';
         // 相对路径：app/xxx.scm
         snprintf(d->source_rel, sizeof(d->source_rel), "app/%s", name);
+
+        // 显示名：取源码头部元数据 ;@title=（见 ui_scheme_app.h 文件头的约定）。
+        // 无元数据的旧 App / 第三方 App 回退为 id，不影响可运行性。
+        // 截断到容量并给「● 运行中」角标留 8 个字符（s_item_text 拼角标用）。
+        char title_utf8[SCHEME_APP_META_TITLE_MAX];
+        char meta_path[320];
+        snprintf(meta_path, sizeof(meta_path), "%s/%s", PLATFORM_ROOT_DIR, d->source_rel);
+        scheme_app_read_meta_title(meta_path, title_utf8, sizeof(title_utf8));
+        if (title_utf8[0] == '\0') {
+            memcpy(title_utf8, d->id, idl + 1);
+        }
+        wchar_t tmp[SCHEME_APP_NAME_MAX];
+        size_t tl = strlen(title_utf8);
+        if (tl > SCHEME_APP_NAME_MAX - 9) tl = SCHEME_APP_NAME_MAX - 9;  // UTF-8 字节数作上限，保证 wchar 数不超
+        am_mbstowcs(tmp, title_utf8, (uint32_t)tl);
+        tmp[SCHEME_APP_NAME_MAX - 9] = L'\0';
+        wcscpy(d->title, tmp);
 
         // 菜单项：有存活实例（前台或后台冻结）的 App 带「● 运行中」角标
         wcscpy(s_item_text[s_app_count], d->title);
@@ -361,10 +443,12 @@ static void scheme_app_scan(void) {
     }
     free(names);
 
-    // 按显示名排序（冒泡；同步交换描述与菜单指针，保证两者下标一致）
+    // 按 id 排序（ASCII）。菜单顺序因此稳定且与文件名一致：显示名是中文（元数据 title），
+    // 按 wcscmp 排会得到无意义的码点序，且改一个标题就会重排整个菜单。
+    // 冒泡；同步交换描述与菜单指针，保证两者下标一致。
     for (int32_t i = 0; i + 1 < s_app_count; i++) {
         for (int32_t j = 0; j + 1 < s_app_count - i; j++) {
-            if (wcscmp(s_item_ptrs[j], s_item_ptrs[j + 1]) > 0) {
+            if (strcmp(s_apps[j].id, s_apps[j + 1].id) > 0) {
                 Scheme_App_Desc td = s_apps[j];
                 s_apps[j] = s_apps[j + 1];
                 s_apps[j + 1] = td;
@@ -436,23 +520,28 @@ int32_t ui_scheme_app_list_item_action(Key_Event *key_event, Global_State *globa
     return STATE_SCHEME_APP_RUN;
 }
 
+// 退出/切后台瞬间的在途触摸序列余波抑制（主菜单与列表菜单共用）：
+// 返回 1 表示本帧触摸字段已被剥离（按键字段保留），调用方直接按剥离后的事件处理。
+int32_t ui_scheme_app_touch_aftermath_filter(Key_Event *key_event) {
+    if (!s_list_touch_guard) {
+        return 0;
+    }
+    // 解除条件：① 出现**新的一次按下**（旧序列已彻底结束、用户开始新动作）；
+    //           ② 抑制窗口到期（兜底，窗口内用户未再触摸）
+    if ((key_event->touch_edge & TOUCH_EDGE_DOWN) != 0 || get_timestamp_in_ms() > s_list_touch_guard_until_ms) {
+        s_list_touch_guard = 0;
+        return 0;
+    }
+    key_event->is_touching = 0;
+    key_event->touch_edge = 0;
+    return 1;
+}
+
 int32_t ui_scheme_app_list_event_handler(Key_Event *key_event, Global_State *global_state) {
     // 退出 App 后的在途触摸序列余波：剥掉触摸字段后再交给菜单（见 s_list_touch_guard 注释）
-    if (s_list_touch_guard) {
-        // 解除条件：① 出现**新的一次按下**（说明旧序列已彻底结束、用户开始新动作）；
-        //           ② 抑制窗口到期（兜底，窗口内用户未再触摸）
-        if ((key_event->touch_edge & TOUCH_EDGE_DOWN) != 0 || get_timestamp_in_ms() > s_list_touch_guard_until_ms) {
-            s_list_touch_guard = 0;
-        }
-        else {
-            Key_Event ke = *key_event;
-            ke.is_touching = 0;
-            ke.touch_edge = 0;
-            // 菜单控件统一处理（上下键/触屏/惯性滚动；A 返回 STATE_GAME_MENU 由 back_state 给出）
-            return ui_widget_menu_event_handler(&ke, global_state, global_state->w_menu_main,
-                                                ui_scheme_app_list_item_action,
-                                                STATE_GAME_MENU, STATE_SCHEME_APP_LIST);
-        }
+    Key_Event ke = *key_event;
+    if (ui_scheme_app_touch_aftermath_filter(&ke)) {
+        key_event = &ke;
     }
     // 菜单控件统一处理（上下键/触屏/惯性滚动；A 返回 STATE_GAME_MENU 由 back_state 给出）
     return ui_widget_menu_event_handler(key_event, global_state, global_state->w_menu_main,
@@ -1358,7 +1447,7 @@ void ui_scheme_app_on_exit(void) {
 }
 
 // 结束当前前台实例：有活着的返回链 → 回到上一 App（状态机仍是 STATE_SCHEME_APP_RUN），
-// 返回 1；否则销毁并回应用列表，返回 0（调用方把 STATE 切到 STATE_SCHEME_APP_LIST）。
+// 返回 1；否则销毁并回**主菜单**，返回 0（调用方把 STATE 切到 STATE_MAIN_MENU）。
 //
 // 顺序很关键：**先**把 back_rel 读出来、**先**解析父实例指针，再销毁当前实例
 // （app_instance_destroy 会 memset 本槽）。
@@ -1405,7 +1494,7 @@ int32_t ui_scheme_app_perform_exit(Global_State *global_state) {
     return 1;
 }
 
-// 切后台：保留实例与内存池，只把前台让出去（回应用列表）
+// 切后台：保留实例与内存池，只把前台让出去（回主菜单，该 App 图标带运行角标）
 void ui_scheme_app_suspend_to_list(void) {
     if (s_app == NULL) return;
     printf("[scheme-app] 切后台：%ls（内存池 %u 字节保留）\n",
@@ -1439,6 +1528,52 @@ void ui_scheme_app_resume_current(void) {
 // 是否有活着的后台实例（列表角标用）
 int32_t ui_scheme_app_has_live_instance(const char *source_rel) {
     return app_instance_find(source_rel) != NULL;
+}
+
+// ===============================================================================
+// 主菜单表驱动：目录视图（扫描 → 逐项查询 → 启动）
+//
+// 主菜单把 app/ 下的每个 Scheme App 也当作一个图标，标题取自源码元数据 ;@title=。
+// 与列表菜单共用同一份扫描结果（s_apps）：进入主菜单时 refresh 一次，
+// 随后逐项取标题/id/后台运行状态。**标题指针在下一次 refresh 后失效**——
+// 调用方（ui_app.c 的条目表）因此必须在 refresh 之后立即重建。
+// ===============================================================================
+int32_t ui_scheme_app_catalog_refresh(void) {
+    if (scheme_app_buffers_init() != 0) {
+        s_app_count = 0;
+        return 0;
+    }
+    scheme_app_scan();
+    return s_app_count;
+}
+
+int32_t ui_scheme_app_catalog_count(void) {
+    return s_app_count;
+}
+
+const wchar_t *ui_scheme_app_catalog_title(int32_t index) {
+    if (index < 0 || index >= s_app_count) return L"";
+    return s_apps[index].title;
+}
+
+const char *ui_scheme_app_catalog_id(int32_t index) {
+    if (index < 0 || index >= s_app_count) return "";
+    return s_apps[index].id;
+}
+
+int32_t ui_scheme_app_catalog_running(int32_t index) {
+    if (index < 0 || index >= s_app_count) return 0;
+    return ui_scheme_app_has_live_instance(s_apps[index].source_rel);
+}
+
+int32_t ui_scheme_app_catalog_enter(int32_t index) {
+    if (index < 0 || index >= s_app_count) {
+        return STATE_MAIN_MENU;  // 越界（目录刚变）：留在主菜单
+    }
+    // 与列表菜单选中同一条路径：记下选中项，状态机转到运行态后由 ui_scheme_app_init
+    // 决定恢复后台实例还是冷启动
+    s_selected = index;
+    return STATE_SCHEME_APP_RUN;
 }
 
 // ===============================================================================
@@ -1480,7 +1615,12 @@ static int32_t app_desc_find_name(const wchar_t *name) {
     }
     if (m == 0) return -1;
 
+    // 名字先按 id（文件名，ASCII）匹配——(App.launch "markdown") 一直用的是文件名，
+    // 而显示名现在是元数据 title（可为中文）；再按显示名匹配，方便用中文名拉起。
+    char base_mb[SCHEME_APP_ID_MAX * 4];
+    am_wcstombs(base_mb, base, (uint32_t)sizeof(base_mb));
     for (i = 0; i < s_app_count; i++) {
+        if (strcmp(s_apps[i].id, base_mb) == 0) return i;
         if (wcscmp(s_apps[i].title, base) == 0) return i;
     }
     return -1;

@@ -6,9 +6,13 @@
 #include "platform.h"
 
 // 图标像素缓存（常驻 PSRAM，首次请求时建立，永不释放）
-// 容量须覆盖全部调用方的不同路径总数：主菜单 17 个（左滚动区 13 + 右固定列 4）
-// + 黄金矿工精灵 10 个，留余量取 32
-#define UI_ICON_CACHE_MAX_ENTRIES (32)
+// 容量需覆盖全部调用方的**不同路径**总数：主菜单内置 9 + 右固定列 4 + 灵机 App 专属图标
+// （icon/<id>.png，未提供则共用默认图标 icon/default.png，只占 1 个槽）+ 黄金矿工精灵 10。
+// 2026-11 由 32 上调为 48：主菜单改为表驱动后灵机 App 也能带自己的 icon/<id>.png，
+// 32 个槽位（现用 26）对 55 个 App 的后续加图偏紧，而缓存满了是**静默不画**。
+// 代价按需发生：每个**用到的**路径才会占一个槽（约 36×36×4 ≈ 5KB），
+// 当前实际占用 ~26 槽 ≈ 130KB。
+#define UI_ICON_CACHE_MAX_ENTRIES (48)
 #define UI_ICON_PATH_MAX_LEN      (64)
 
 typedef struct {
