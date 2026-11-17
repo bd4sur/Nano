@@ -28,7 +28,8 @@ extern "C" {
 //    单步调用的状态机**，与 ui_llm.c 把 generate_sync 的 while 打开成状态机的做法
 //    同构：
 //
-//        (Chat.begin prompt)  → 建会话（组装 prompt 模板 + 分词），返回提示词元数
+//        (Chat.begin prompt)  → 建会话（组装 prompt 模板 + 分词 + 思考模式处理），
+//                              返回提示词元数
 //        (Chat.step)          → 推进一步（预填充：读一个提示词元；解码：生成一个词元）
 //        (Chat.end)           → 释放会话
 //
@@ -80,8 +81,11 @@ extern const am_native_lib_entry_t am_native_Chat_lib;
 // (Chat.load cfg:List) : Number —— 按 App 给出的配置载入模型（**阻塞**：解析模型头 +
 //   反量化 + 分配 KV-Cache；56MB 约 1~2s，600MB 量级要数十秒）。重复调用先卸载旧模型。
 //
-//   cfg 是 7 元素列表，顺序固定：
-//     (模型文件 LoRA文件 上下文 复读惩罚 温度 top_p top_k)
+//   cfg 是 7~8 元素列表，顺序固定：
+//     (模型文件 LoRA文件 上下文 复读惩罚 温度 top_p top_k [思考模式])
+//       · 第 8 项（可选）= 该模型是否有思考模式（Qwen3/Qwen3.5 这类可开/关思考的模型
+//         为 1；普通模型或省略为 0）。它是**模型属性**，与 (Chat.set_thinking) 的
+//         用户开关配合决定 (Chat.begin) 的行为，详见 set_thinking 的说明。
 //       · 模型文件 / LoRA文件：与 (native Fs) **同一套路径规则**（相对业务资源根
 //         PLATFORM_ROOT_DIR，或以 '/' 开头的宿主绝对路径）；LoRA 传空串 "" = 不挂；
 //       · 上下文：词元数。KV-Cache 按上下文线性增长（Qwen3-0.6B 约 224KB/词元），
@@ -108,6 +112,22 @@ int32_t am_native_Chat_config(am_runtime_t *rt, am_process_t *proc);
 
 // (Chat.set_seed seed:Number) : Boolean —— 重设采样随机种子（#f=未载入模型）
 int32_t am_native_Chat_set_seed(am_runtime_t *rt, am_process_t *proc);
+
+// (Chat.set_thinking flag:Number) : Boolean —— 开关思考模式（#f=未载入模型）
+//   语义与 C 版 ui_llm.c 的 global_state->is_thinking_enabled 一致，**下一次
+//   (Chat.begin) 生效**（切换逻辑在 C 侧，逐条对齐 ui_llm.c 的 STATE_LLM_ON_INFER 初始化）：
+//     · 模型有思考模式且开关为 0：用户文本末尾追加 " /no_think"、采样参数切到
+//       无思考一套（温度 0.7 / top-p 0.8）、会话模板插入**空思考块**（enable_thinking=0）
+//       → 模型直接作答，不吐思考内容；
+//     · 模型有思考模式且开关为 1：采样参数切到思考一套（温度 0.6 / top-p 0.95）；
+//     · 模型没有思考模式（含 Nano）：开关被忽略，模板恒按 enable_thinking=1 建会话
+//       （避免次元编码器输出多余的空思考占位词元）。
+//   载入模型时开关复位为 1（与 C 版 is_thinking_enabled 初值一致）。
+int32_t am_native_Chat_set_thinking(am_runtime_t *rt, am_process_t *proc);
+
+// (Chat.thinking) : Number —— 思考模式状态：-1=当前模型没有思考模式（或未载入），
+//   0=关闭，1=开启
+int32_t am_native_Chat_thinking(am_runtime_t *rt, am_process_t *proc);
 
 // ---------------------------------------------------------------------------
 // 分词器

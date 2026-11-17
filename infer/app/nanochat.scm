@@ -30,8 +30,10 @@
 ;;               点一行即载入（载入期间显示进度提示）；模型文件缺失的行不列出
 ;;               （浏览器目标需先在页面「资源」面板预载 llm/*.bin）
 ;;   对话页    ：点底部输入框 → 宿主文本控件（软键盘/拼音）输入 → Enter 提交；
-;;               生成中点「停止」中断；「可视化」开关切换推理可视化；对话区上下拖拽回看；
-;;               页眉的模型名可点（回模型页并卸载引擎）；右上「退出」
+;;               生成中点「停止」中断；「可视化」开关切换推理可视化；
+;;               状态条右端「思考」开关切换思考模式（仅 Qwen3/Qwen3.5 这类有思考模式的
+;;               模型才显示，下一轮生效；切换逻辑在本地库，见 (Chat.set_thinking)）；
+;;               对话区上下拖拽回看；页眉的模型名可点（回模型页并卸载引擎）；右上「退出」
 ;;
 ;; 解释器约束（manual.md，逐条遵守）：算术/比较恒二参数、无一元取负；无 let/map/
 ;; apply；define 只写在模块顶层或 lambda 体顶层（块内不 define）；'() 是模块级静态槽
@@ -104,6 +106,15 @@
 (define MROW_Y 30)
 (define MROW_H 25)
 
+;; 状态条右端的「思考」开关（仅对**有思考模式**的模型绘制；见 THK_* 的用法）
+;;   为什么放状态条：页眉已经被「标题 / 模型名 / 可视化 / 退出」占满，而这枚开关
+;;   与输入框同属"这一轮怎么答"的控制，放在输入框正下方的状态条右端最顺手。
+;;   状态条正文从 x=4 起算，最长的一行（含上下文 x/y）约到 268px，不会压到按钮。
+(define THK_X 274)
+(define THK_Y 227)
+(define THK_W 42)
+(define THK_H 13)
+
 ;; ---------------------------------------------------------------- 运行参数
 
 (define ST_MODEL 0)             ; 模型选择页
@@ -126,7 +137,10 @@
 ;; 模型
 ;; 预设表（**本 App 的数据，不是本地库的白名单**）：逐项对齐 C 版鹦鹉笼 ui_llm.c 的
 ;; preset_model_configs——显示名 / 模型文件 / LoRA 文件 / 上下文长度 / 采样参数。
-;; 一行 = (显示名 模型文件 LoRA文件 上下文 复读惩罚 温度 top_p top_k)
+;; 一行 = (显示名 模型文件 LoRA文件 上下文 复读惩罚 温度 top_p top_k 思考)
+;;   · 最后一列「思考」= 该模型是否有思考模式（Qwen3/Qwen3.5 这类可开/关思考的模型为 1，
+;;     其余 0）。它随 (cdr 行) 作为配置第 8 项交给本地库（模型属性），用户在界面上再用
+;;     状态条右端那枚「思考」开关决定本轮开/关（(Chat.set_thinking)）。
 ;;   · 文件路径与 (native Fs) **同一套规则**：相对业务资源根（桌面/WASM 上是
 ;;     /home/bd4sur/linglong/llm/*.bin，掌机上是 SD 卡 /llm/*.bin）；
 ;;   · 空串 = 不挂 LoRA（只有 Nano-56M-Neko 用 LoRA 微调）；
@@ -139,13 +153,13 @@
 ;; 加模型 / 调采样参数只需改这张表（C 侧零改动）。
 (define model_defs
   (quote (
-    ("Nano-168M"      "llm/nano-168m-q80.bin"     ""                            512  1.05 1.0  0.5   0)
-    ("Nano-56M"       "llm/nano-56m-q80.bin"      ""                            512  1.05 1.0  0.5   0)
-    ("Nano-56M-Neko"  "llm/nano-56m-base-q80.bin" "llm/nano-56m-lora-neko.bin"  512  1.05 1.0  0.5   0)
-    ("Nano-168M-Q4KS" "llm/nano-168m-q4ks.bin"    ""                            512  1.05 1.0  0.5   0)
-    ("Nano-56M-Q4KS"  "llm/nano-56m-q4ks.bin"     ""                            512  1.05 1.0  0.5   0)
-    ("Qwen3-0.6B"     "llm/qwen3-0b6-q80.bin"     ""                            2048 1.0  0.6  0.95  20)
-    ("Qwen3.5-0.8B"   "llm/qwen35-0b8.q80.bin"    ""                            2048 1.0  0.6  0.95  20)
+    ("Nano-168M"      "llm/nano-168m-q80.bin"     ""                            512  1.05 1.0  0.5   0   0)
+    ("Nano-56M"       "llm/nano-56m-q80.bin"      ""                            512  1.05 1.0  0.5   0   0)
+    ("Nano-56M-Neko"  "llm/nano-56m-base-q80.bin" "llm/nano-56m-lora-neko.bin"  512  1.05 1.0  0.5   0   0)
+    ("Nano-168M-Q4KS" "llm/nano-168m-q4ks.bin"    ""                            512  1.05 1.0  0.5   0   0)
+    ("Nano-56M-Q4KS"  "llm/nano-56m-q4ks.bin"     ""                            512  1.05 1.0  0.5   0   0)
+    ("Qwen3-0.6B"     "llm/qwen3-0b6-q80.bin"     ""                            2048 1.0  0.6  0.95  20  1)
+    ("Qwen3.5-0.8B"   "llm/qwen35-0b8.q80.bin"    ""                            2048 1.0  0.6  0.95  20  1)
   )))
 
 ;; 可用模型：模型文件确实存在的行（与上表同格式）
@@ -170,6 +184,12 @@
 (define vocab_size 0)
 (define ctx_max 0)              ; 模型 max_seq_len（(Chat.config) 第 10 项）
 (define loading 0)              ; 1=正在载入（阻塞调用前置位，用于先画出提示）
+;; 思考模式（Qwen3/Qwen3.5 这类可开/关思考的模型）：
+;;   think_cap = 当前模型是否有思考模式（model_defs 最后一列，载入时取）
+;;   think_on  = 用户开关（1 开 / 0 关），默认开（与 C 版 is_thinking_enabled 初值一致）
+;; 切换只改本地库的会话参数（(Chat.set_thinking)），**下一轮 (Chat.begin) 才生效**。
+(define think_cap 0)
+(define think_on 1)
 
 ;; 对话（两条平行表：角色 1=用户 2=助手；文本）
 (define c_role (cdr '(0)))
@@ -440,6 +460,26 @@
                }))
           (else
            (Gfx.draw_text gen_msg PAD (+ STATUS_Y 1) 132 140 156)))))
+
+;; 状态条右端的「思考」开关（仅对有思考模式的模型绘制）
+;;   开关只改本地库的会话参数，**下一轮才生效**；生成中点击不响应（见 chat_tap）。
+;;   样式与页眉「可视化」开关同一套视觉语言（开=蓝底蓝框、关=深灰底灰框），
+;;   用不透明底色画，保证状态条正文再长也不会与按钮叠字。
+(define draw_think_toggle
+  (lambda ()
+    (if (== think_cap 1)
+        (if (== think_on 1)
+            {
+              (Gfx.fill_rect THK_X THK_Y THK_W THK_H 36 92 150)
+              (Gfx.draw_rect THK_X THK_Y THK_W THK_H 110 170 240)
+              (Gfx.draw_text "思考" (+ THK_X 9) (+ THK_Y 1) 235 242 250)
+            }
+            {
+              (Gfx.fill_rect THK_X THK_Y THK_W THK_H 44 46 58)
+              (Gfx.draw_rect THK_X THK_Y THK_W THK_H 96 100 116)
+              (Gfx.draw_text "思考" (+ THK_X 9) (+ THK_Y 1) 150 156 172)
+            })
+        #f)))
 
 ;; 预填充进度条（输入框上方 3px）
 (define draw_pbar
@@ -808,6 +848,7 @@
     (draw_pbar)
     (draw_input)
     (draw_status)
+    (draw_think_toggle)
     ;; 页眉控件最后画：右栏底板会盖住页眉右侧，顺序反了开关就"消失"
     (draw_toggle)
     (EX.draw_button)
@@ -905,11 +946,19 @@
           (set! ctx_max (get_item cfg 9))
           ;; 生成长度 = 上下文长度 − 输入词元数（在 gen_step_once 里按 pos 判）
           (set! ctx_limit (if (> ctx_max 0) ctx_max 512))
+          ;; 思考模式：能力来自模型表最后一列；本地库载入时已把开关复位为 1，
+          ;; 这里再把用户当前的选择同步过去（例如上一轮关掉了思考）。
+          (set! think_cap (get_item (get_item models idx) 8))
+          (Chat.set_thinking think_on)
           (set! stage ST_CHAT)
           (set! gen_msg "已载入，点下面的输入框开始对话")
           (logln (String.concat "model=" (String.concat model_name
                   (String.concat " layers=" (String.concat (i2s n_layer)
-                  (String.concat " vocab=" (i2s vocab_size)))))))
+                  (String.concat " vocab=" (String.concat (i2s vocab_size)
+                  (String.concat " think=" (i2s think_cap)))))))))
+          ;; 引擎侧的思考开关状态（-1=该模型没有思考模式，0/1=关/开）
+          (logln (String.concat "thinking=" (String.concat (i2s (Chat.thinking))
+                  (String.concat " on=" (i2s think_on)))))
           (set! dirty #t)
           #t
         }
@@ -1152,6 +1201,17 @@
          (set! ln_dirty 1)
          (logln (String.concat "viz=" (i2s viz)))
        })
+      ;; 状态条右端「思考」开关（仅思考模型；生成中不响应——开关只影响**下一轮**，
+      ;; 且生成中状态条被进度/TPS 占用，提示语也无处显示）
+      ((if (and (== think_cap 1) (== gen 0))
+           (== (in_rect tap_x tap_y THK_X THK_Y THK_W THK_H) 1)
+           #f)
+       {
+         (set! think_on (if (== think_on 1) 0 1))
+         (Chat.set_thinking think_on)
+         (logln (String.concat "think=" (i2s think_on)))
+         (set! gen_msg (if (== think_on 1) "思考模式已开启 · 下一轮生效" "思考模式已关闭 · 下一轮生效"))
+       })
       ;; 输入框右侧「停止」
       ((if (== gen 1) (== (in_rect tap_x tap_y STOP_X (+ INPUT_Y 2) STOP_W STOP_H) 1) #f)
        {
@@ -1169,6 +1229,7 @@
          (Chat.unload)
          (set! models (scan_models))
          (if (null? models) (set! models (cdr '(0))) #f)
+         (set! think_cap 0)
          (set! stage ST_MODEL)
          (set! gen_msg "已卸载模型")
          (logln "unload")

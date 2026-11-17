@@ -47,8 +47,17 @@
 
 #define CHAT_PATH_MAX (256)          // am_native_fs_resolve 要求的输出缓冲 ≥ 256 字节
 
-// (Chat.load) 的配置列表字段数（顺序见 chat_load_cfg_t）
+// (Chat.load) 的配置列表**必需的**字段数（其后还可带一个可选的「思考模式」标记，
+// 见 chat_load_cfg_t.is_thinking_model）
 #define CHAT_CFG_FIELDS (7)
+
+// Qwen3/Qwen3.5 思考模式的**两套采样参数**：逐项对齐 ui_llm.c 的
+// qwen3_infer_args_thinking / qwen3_infer_args_no_thinking。C 版在每次建会话时按
+// 开关就地改写 ctx->sampler（采样参数是 ctx 级而非会话级，这是既有取舍），本库同构。
+#define CHAT_QWEN_THINK_TEMPERATURE    (0.6f)
+#define CHAT_QWEN_THINK_TOP_P          (0.95f)
+#define CHAT_QWEN_NO_THINK_TEMPERATURE (0.7f)
+#define CHAT_QWEN_NO_THINK_TOP_P       (0.8f)
 
 typedef struct {
     char     model_path[CHAT_PATH_MAX];  // 模型文件（已解析为宿主路径）
@@ -58,6 +67,7 @@ typedef struct {
     float    temperature;
     float    top_p;
     uint32_t top_k;
+    int32_t  is_thinking_model;          // 该模型是否有思考模式（配置第 8 项，可选）
 } chat_load_cfg_t;
 
 // ===============================================================================
@@ -66,6 +76,13 @@ typedef struct {
 
 static Nano_Context *s_ctx = NULL;        // 引擎上下文（模型 + 分词器 + 采样器）
 static Nano_Session *s_session = NULL;    // 当前生成会话
+
+// 思考模式（Qwen3/Qwen3.5 等可切换思考的模型；Nano 架构忽略）
+//   s_think_model  ：本模型是否有思考模式（载入时由配置第 8 项给出）
+//   s_think_enabled：用户开关（(Chat.set_thinking)，载入时复位为 1，与 C 版
+//                    ui_llm_init_config 的 is_thinking_enabled 初值一致）
+static int32_t s_think_model = 0;
+static int32_t s_think_enabled = 1;
 
 // 观测钩子给出的"现在算到哪了"
 static int32_t s_obs_layer = -1;
@@ -315,6 +332,14 @@ static bool chat_parse_cfg(am_process_t *proc, chat_load_cfg_t *cfg) {
     if (!chat_list_number(proc, lst, 6, &f)) return false;
     cfg->top_k = chat_float_to_uint(f);
 
+    // [7]（可选）该模型是否有思考模式；缺省 0 = 普通模型
+    cfg->is_thinking_model = 0;
+    if (lst->length > CHAT_CFG_FIELDS) {
+        if (chat_list_number(proc, lst, 7, &f)) {
+            cfg->is_thinking_model = (f != 0.0f) ? 1 : 0;
+        }
+    }
+
     // 采样参数兜底：NaN / 非法值会让 softmax 输出全 NaN（生成一串垃圾词元），
     // 因此在这里收敛到「不做特殊处理」的默认值（与 build_sampler 的语义一致）。
     //   温度 0 是**合法**值（贪心采样），只拦负值与非有限值。
@@ -486,6 +511,8 @@ void am_native_chat_release(void) {
         llm_context_free(s_ctx);
         s_ctx = NULL;
     }
+    s_think_model = 0;
+    s_think_enabled = 1;
     s_top_num = 0;
     s_pick = -1;
     s_obs_layer = -1;
@@ -538,15 +565,17 @@ int32_t am_native_Chat_load(am_runtime_t *rt, am_process_t *proc) {
     s_ctx->observation = chat_observation;
     s_ctx->observation_env = NULL;
 
+    s_think_model = cfg.is_thinking_model;
+    s_think_enabled = 1;   // 与 C 版全局默认一致（载入后由 App 再同步用户选择）
     s_obs_layer = -1;
     s_obs_phase = 0;
     s_top_num = 0;
     s_pick = -1;
     s_last_state = 0;
-    printf("[chat] 模型已载入：%s（架构 %u / 层 %u / 词表 %u / 上下文 %u / 复读 %.2f / 温度 %.2f / top-p %.2f / top-k %u / LoRA %s）\n",
+    printf("[chat] 模型已载入：%s（架构 %u / 层 %u / 词表 %u / 上下文 %u / 复读 %.2f / 温度 %.2f / top-p %.2f / top-k %u / 思考 %d / LoRA %s）\n",
            cfg.model_path, s_ctx->llm->arch, s_ctx->llm->config.n_layer, s_ctx->llm->config.vocab_size,
            cfg.max_seq_len, cfg.repetition_penalty, cfg.temperature, cfg.top_p, cfg.top_k,
-           (cfg.lora_path[0] != '\0') ? cfg.lora_path : "(无)");
+           cfg.is_thinking_model, (cfg.lora_path[0] != '\0') ? cfg.lora_path : "(无)");
     return chat_push_int(proc, 0);
 }
 
@@ -588,6 +617,29 @@ int32_t am_native_Chat_config(am_runtime_t *rt, am_process_t *proc) {
     am_handle_t lhd = chat_list_box(proc, lst);
     if (lhd == AM_HANDLE_NULL) return chat_push_null(proc);
     return chat_push(proc, am_make_value_of_handle(lhd));
+}
+
+// (Chat.set_thinking flag:Number) : Boolean —— 开关思考模式（仅对有思考模式的模型有意义）
+//   与 C 版 ui_llm.c 的 is_thinking_enabled 同义：真正生效在**下一次 (Chat.begin)**——
+//   关闭时追加 " /no_think"、切到无思考采样参数、并让会话模板插入空思考块。
+//   未载入模型返回 #f；对无思考模式的模型（含 Nano）设置成功但不起作用（#t）。
+int32_t am_native_Chat_set_thinking(am_runtime_t *rt, am_process_t *proc) {
+    am_float_t flag = 0.0f;
+    (void)rt;
+
+    if (!chat_pop_number(proc, &flag)) return chat_push_bool(proc, false);
+    if (s_ctx == NULL) return chat_push_bool(proc, false);
+
+    s_think_enabled = (flag != 0.0f) ? 1 : 0;
+    return chat_push_bool(proc, true);
+}
+
+// (Chat.thinking) : Number —— 思考模式的当前状态（供界面/测试查询）
+//   -1 = 当前模型没有思考模式（或未载入）；0 = 关闭；1 = 开启
+int32_t am_native_Chat_thinking(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+    if (s_ctx == NULL || s_think_model == 0) return chat_push_int(proc, -1);
+    return chat_push_int(proc, (int64_t)s_think_enabled);
 }
 
 int32_t am_native_Chat_set_seed(am_runtime_t *rt, am_process_t *proc) {
@@ -681,9 +733,10 @@ int32_t am_native_Chat_begin(am_runtime_t *rt, am_process_t *proc) {
         s_session = NULL;
     }
 
-    // prompt 组装：与 ui_llm.c 的 STATE_LLM_ON_INFER 初始化逐条对齐——
-    //   Nano：<|instruct_mark|>用户输入<|response_mark|>
-    //   Qwen：原文直传，聊天模板由 llm_session_init 内部套（apply_qwen*_chat_template）
+    // prompt 组装 + 思考模式处理：与 ui_llm.c 的 STATE_LLM_ON_INFER 初始化逐条对齐——
+    //   Nano：<|instruct_mark|>用户输入<|response_mark|>（无思考模式概念）
+    //   Qwen：原文直传，聊天模板由 llm_session_init 内部套（apply_qwen*_chat_template）；
+    //         思考模型再按开关追加 " /no_think" 并切换采样参数（见下）
     wchar_t wuser[4096];
     am_mbstowcs(wuser, user, (uint32_t)sizeof(wuser) / sizeof(wuser[0]));
 
@@ -691,19 +744,55 @@ int32_t am_native_Chat_begin(am_runtime_t *rt, am_process_t *proc) {
     wchar_t *prompt = (wchar_t *)calloc((size_t)max_seq + 64, sizeof(wchar_t));
     if (!prompt) return chat_push_int(proc, -1);
 
+    // 传给 llm_session_init 的 enable_thinking（决定模板里是否插入空思考块）
+    int32_t think = 1;
+    // 诊断用：本次是否真的加了 " /no_think" 标记
+    int32_t no_think_tag = 0;
+
     if (s_ctx->llm->arch == LLM_ARCH_NANO) {
         wcscpy(prompt, L"<|instruct_mark|>");
         wcsncat(prompt, wuser, (size_t)max_seq - 32);
         wcscat(prompt, L"<|response_mark|>");
     }
     else {
-        wcsncpy(prompt, wuser, (size_t)max_seq - 1);
-        prompt[max_seq - 1] = L'\0';
+        if (s_think_model != 0) {
+            if (s_think_enabled != 0) {
+                // 思考开：用思考模式的采样参数（与 ui_llm.c 一致，就地改写 ctx 的采样器）
+                s_ctx->sampler->temperature = CHAT_QWEN_THINK_TEMPERATURE;
+                s_ctx->sampler->top_p = CHAT_QWEN_THINK_TOP_P;
+                wcsncpy(prompt, wuser, (size_t)max_seq - 1);
+                prompt[max_seq - 1] = L'\0';
+                think = 1;
+            }
+            else {
+                // 思考关：①用户文本末尾追加 " /no_think"（Qwen 的软开关）；
+                //           ②切到无思考采样参数；③enable_thinking=0 让模板插入
+                //           空思考块，模型因此直接作答而不吐思考内容。
+                wcsncpy(prompt, wuser, (size_t)max_seq - 16);
+                prompt[max_seq - 16] = L'\0';
+                wcscat(prompt, L" /no_think");
+                s_ctx->sampler->temperature = CHAT_QWEN_NO_THINK_TEMPERATURE;
+                s_ctx->sampler->top_p = CHAT_QWEN_NO_THINK_TOP_P;
+                think = 0;
+                no_think_tag = 1;
+            }
+        }
+        else {
+            // 非思考模型（如 Qwen3-4B-Inst）：无论如何都不加 /no_think 标记；统一把
+            // 思考标记打开，避免次元编码器输出多余的空思考占位词元（同 ui_llm.c）。
+            wcsncpy(prompt, wuser, (size_t)max_seq - 1);
+            prompt[max_seq - 1] = L'\0';
+            think = 1;
+        }
     }
 
-    s_session = llm_session_init(s_ctx, prompt, max_seq, 1);
+    s_session = llm_session_init(s_ctx, prompt, max_seq, think);
     free(prompt);
     if (s_session == NULL) return chat_push_int(proc, -1);
+
+    printf("[chat] begin think=%d no_think_tag=%d thinking_model=%d (temp=%.2f top-p=%.2f)\n",
+           think, no_think_tag, s_think_model,
+           s_ctx->sampler->temperature, s_ctx->sampler->top_p);
 
     // 兜底：提示词元数必须落在会话缓冲容量内（infer.c 的 output_ids 为 max_seq_len+1，
     // 超长提示词会越界写）。本库已按字符数截断过用户文本，这里只做最后一道防线。
@@ -942,6 +1031,8 @@ static const am_native_func_entry_t am_native_Chat_funcs[] = {
     { L"load",         am_native_Chat_load },
     { L"unload",       am_native_Chat_unload },
     { L"loaded",       am_native_Chat_loaded },
+    { L"set_thinking", am_native_Chat_set_thinking },
+    { L"thinking",     am_native_Chat_thinking },
     { L"config",       am_native_Chat_config },
     { L"set_seed",     am_native_Chat_set_seed },
     { L"encode",       am_native_Chat_encode },
