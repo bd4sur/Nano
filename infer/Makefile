@@ -45,7 +45,7 @@ $(BIN_DIR):
 pod_lite: $(BIN_DIR)/nano_pod_lite
 $(BIN_DIR)/nano_pod_lite: $(ANIMAC_SRCS) \
                         $(ANIMAC_HOST_SRCS) \
-                        main.c asr.c tts.c hal_power_rpi5.c hal_net_stub.c hal_audio_in_alsa_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c hal_display_ssd130x_linux.c hal_imu_linux.c hal_touch_evdev_linux.c hal_key_matrix16_linux.c vsop87c_milli.c celestial.c celestial_ocean.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c ui_spectrogram.c ui_pedometer.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c ui_llm.c nano_min.c utils.c tokenizer.c tensor.c infer.c $(GUI_MODULE_SRCS) hal_audio_out_alsa_linux.c | $(BIN_DIR)
+                        main.c asr.c tts.c hal_power_rpi5.c hal_net_stub.c hal_audio_in_alsa_linux.c hal_ram_linux.c hal_fs_linux.c hal_os_linux.c hal_misc_linux.c hal_display_ssd130x_linux.c hal_imu_linux.c hal_touch_evdev_linux.c hal_key_matrix16_linux.c vsop87c_milli.c celestial.c celestial_ocean.c ephemeris.c nongli.c flip.c nano_fft.c graphics.c gfx_font_12.c gfx_font_16.c ui_softkbd.c pinyin_ime.c ui_pinyin_ime.c ui.c ui_app.c ui_cloud.c ui_llm.c nano_min.c utils.c tokenizer.c tensor.c infer.c $(GUI_MODULE_SRCS) hal_audio_out_alsa_linux.c | $(BIN_DIR)
 	$(CC) -DNANO_POD_LITE_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
 
 
@@ -101,11 +101,9 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
                         ui_ofdm.c \
-                        ui_pedometer.c \
                         ui_pinyin_ime.c \
                         ui_ripple.c \
                         ui_softkbd.c \
-                        ui_spectrogram.c \
                         ui_water.c \
                         | $(BIN_DIR)
 	$(CC) -DNANO_POD_RPI5 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
@@ -168,11 +166,9 @@ $(BIN_DIR)/nano_pod_pt35: $(ANIMAC_SRCS) \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
                         ui_ofdm.c \
-                        ui_pedometer.c \
                         ui_pinyin_ime.c \
                         ui_ripple.c \
                         ui_softkbd.c \
-                        ui_spectrogram.c \
                         ui_water.c \
                         | $(BIN_DIR)
 	$(CC) -DNANO_POD_POCKETTERM35 -DNANO_UI_SPLIT_EVENT_LOOP -DFB_UPSCALE=2 -DTOUCH_SCALE=2 -fopenmp $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lasound
@@ -227,11 +223,9 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
                         ui_ofdm.c \
-                        ui_pedometer.c \
                         ui_pinyin_ime.c \
                         ui_ripple.c \
                         ui_softkbd.c \
-                        ui_spectrogram.c \
                         ui_water.c \
                         | $(BIN_DIR)
 	$(CC) -DNANO_TTY $(CCFLAGS) $^ -o $@ $(LDFLAGS) -lncursesw -lasound
@@ -307,11 +301,9 @@ $(BIN_DIR)/nano_web: $(BIN_DIR)/web_client_html.h $(ANIMAC_SRCS) \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
                         ui_ofdm.c \
-                        ui_pedometer.c \
                         ui_pinyin_ime.c \
                         ui_ripple.c \
                         ui_softkbd.c \
-                        ui_spectrogram.c \
                         ui_water.c \
                         | $(BIN_DIR)
 	$(CC) -DNANO_WEB -DNANO_WEB_TLS -I$(BIN_DIR) $(CCFLAGS) $(filter %.c,$^) -o $@ $(LDFLAGS) -lssl -lcrypto

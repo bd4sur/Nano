@@ -83,11 +83,9 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
                         ui_ofdm.c \
-                        ui_pedometer.c \
                         ui_pinyin_ime.c \
                         ui_ripple.c \
                         ui_softkbd.c \
-                        ui_spectrogram.c \
                         ui_water.c \
                         | $(BIN_DIR)
 	$(CC) -DNANO_POD_MP135 $(CCFLAGS) $^ -o $@ $(LDFLAGS) -ltinyalsa -ldl
@@ -137,11 +135,9 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         ui_musicbox_mp3.c \
                         ui_musicbox.c \
                         ui_ofdm.c \
-                        ui_pedometer.c \
                         ui_pinyin_ime.c \
                         ui_ripple.c \
                         ui_softkbd.c \
-                        ui_spectrogram.c \
                         ui_water.c \
                         utils.c \
                         tokenizer.c \

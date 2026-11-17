@@ -13418,3 +13418,49 @@ cp app/lib/almanac.scm /home/bd4sur/linglong/app/lib/     # （build_wasm_gui.sh
 cd webgui && python3 ../tools/https_static_server.py 9002 .
 node ../tools/e2e/browser/regress_calendar.js https://127.0.0.1:9002/index.html chromium /tmp/reg_cal
 ```
+
+------------------------------------
+
+# 2026-11-18（C 版「计步器」「频谱仪」退场：主菜单入口与 C 实现一并移除）
+
+目标：让 C 版这两个功能退场，只保留灵机（Scheme）版 —— `app/pedometer.scm` /
+`app/spectrogram.scm`（均从「灵机应用」列表启动）。WASM-GUI 是唯一目标平台。
+
+## 1. 删除
+
+| 文件 | 说明 |
+|---|---|
+| `infer/ui_pedometer.c` / `.h` | C 版计步器（100Hz 采样 / DC-blocker / EMA / 自适应阈值 / 256 点 FFT 频谱平坦度交叉验证 + 波形界面），整文件删除 |
+| `infer/ui_spectrogram.c` / `.h` | C 版 STFT 声谱图（开麦 / 加窗 / 1024 点 FFT / 热力调色板 / 帧缓冲上滚 + 时间频率轴），整文件删除 |
+| `s_app_menu_items` 两项 | 「频谱仪」「计步器」入口移除（图标资源 `icon/spectrogram.png`、`icon/pedometer.png` 保留，仍在 manifest 与 `linglong/icon/` 中） |
+| `STATE_PEDOMETER(37)` / `STATE_SPECTROGRAM(53)` | 按既有惯例改为「编号已退役」注释，不重新分配，避免与历史日志/脚本冲突 |
+| 构建源清单 | `build_wasm_gui.sh`、`Makefile`（pod_lite 单行目标 + pod/pt35/tty/web 四处）、`luckfox.mk`、`mp135.mk`、`android/app/src/main/cpp/CMakeLists.txt` 同步移除；`platformio.ini` 是通配收集，删除文件即生效 |
+| `linglong_m5core2.ino` | 按键提示音的「声谱图状态下禁用」条件随状态常量一并移除（OFDM/音乐盒条件保留） |
+
+**保留的可复用代码**：`nano_fft.c`（`(native Audio)` 仍用）、`hal_audio_in*`（OFDM/`Audio` 库）、
+`hal_imu*`、`gfx_scroll_up` / `gfx_fill_rect_rgb565`（graphics 公共绘图）、全部调色板/常量都
+只属于被删文件、无外部引用；Scheme 两个 App 与 `(native Audio)` 库零改动（仅注释里的
+`ui_spectrogram.c` / `ui_pedometer.c` 路径加了「已移除」字样）。
+
+## 2. 主菜单的连带调整
+
+- 左侧滚动区 12 格 → 10 格（3 列 × 4 行，末行只有「灵机应用」）；`content_h == scroll_h`，
+  当前不可滚，滚动/惯性逻辑原样保留（便于以后继续加条目）。
+- 内容末行的两个空位现在铺同色底格（`ui_app_main_menu_draw_cell` 支持 `text == NULL`），
+  否则暗色主题下会露出一块纯黑空洞（实测截图已确认）。
+- 键盘映射随索引压缩：数字键 1–9 → 前 9 项，**右方向键 → 第 10 项「灵机应用」**（既有
+  回归脚本与文档一直用右方向键进 App 列表，保持可用）；原先 `左方向键→词典`、`0→控制台`
+  的冗余映射删除（这两项现在由数字键 8、9 直接命中）。
+
+## 3. 验证
+
+- `cd infer && bash build_wasm_gui.sh`：通过（wasm32，5.5MB；仅既有 warning）。
+- 真 WASM + 无头 Chromium（临时探针，非入库脚本，连的是已在跑的 9002 服务，未启停）：
+  主菜单 `state=-2` 且截图确认 10 格无「频谱仪/计步器」；`digit(7)` 现在进寻呼机
+  (`state=58`，不再是 53)；右方向键进 App 列表 (`79`)；`app/spectrogram.scm` 与
+  `app/pedometer.scm` 均能启动 (`state=80`) 并正常退出回列表；无 pageerror。10/10。
+- 既有浏览器回归：`regress_launch.js` **36/36**、`regress_exit.js` **38/38**（导航仍是
+  `digit(6) → 小游戏 → Enter` 进 App 列表，未受影响）。
+- 注意：workspace-only（`.gitignore` 忽略）的 `regress_audio.js` 第 [3] 节仍在测 C 版
+  `STATE_SPECTROGRAM`、`regress_pedometer.js` 的导航注释也停留在旧主菜单，属测试脚本
+  陈旧，未在本次改动范围内。

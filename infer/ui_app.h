@@ -34,11 +34,13 @@ extern "C" {
 #define STATE_ASR_SETTING       (33)
 #define STATE_SETTING_INPUT     (35)
 #define STATE_FLIP              (36)
-#define STATE_PEDOMETER         (37)
+// 编号 37 已退役：原 C 版计步器（STATE_PEDOMETER）已移除，计步器仅保留
+// Scheme 实现（app/pedometer.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
 #define STATE_ANIMAC_INIT       (50)
 #define STATE_ANIMAC_CONSOLE    (51)
 #define STATE_ANIMAC_RUNNING    (52)
-#define STATE_SPECTROGRAM       (53)
+// 编号 53 已退役：原 C 版音频频谱仪（STATE_SPECTROGRAM）已移除，声谱图仅保留
+// Scheme 实现（app/spectrogram.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
 #define STATE_GAME_MENU         (54)
 #define STATE_GOLDMINER         (55)
 // 编号 56 已退役：原 C 版俄罗斯方块（STATE_TETRIS）已移除，俄罗斯方块仅保留

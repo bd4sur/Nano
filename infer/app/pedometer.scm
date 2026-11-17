@@ -1,11 +1,11 @@
 ;; ============================================================================
 ;; 计步器（Pedometer）—— 灵机应用程序
 ;;
-;; 参考实现：infer/ui_pedometer.c（C 版，STATE_PEDOMETER）。本 App 是同一算法/同一
-;; 界面的 Scheme 重做，只针对 **WASM-GUI 目标**（infer/build_wasm_gui.sh →
+;; 参考实现：原 C 版计步器（infer/ui_pedometer.c / STATE_PEDOMETER，已于 2026-11 移除；
+;; 本 App 即其唯一实现）。本 App 是同一算法/同一界面的 Scheme 重做，只针对 **WASM-GUI 目标**（infer/build_wasm_gui.sh →
 ;; infer/webgui/，不是 infer/web/ 的 LLM-only 路线），并补齐触屏交互。
 ;;
-;; 算法（逐条对应 C 版，常量也照抄）：
+;; 算法（逐条对应原 C 版，常量也照抄）：
 ;;   1. 100Hz 内部采样网格：三轴加速度模值 |a| → DC-blocker 高通去重力（R=0.95）→
 ;;      EMA 低通平滑（α=0.15）。网格用「逻辑时钟追赶」实现：宿主定时器每拍可能跨过
 ;;      几个 10ms 槽，就把当前加速度值零阶保持补进每个槽（C 版是每 10ms 直接读一次 IMU；
@@ -66,7 +66,7 @@
 (native Touch)      ; 触屏「清零」按钮
 (import EX "app/lib/exit.scm")   ; 硬 A/ESC 与右上角按钮 → 全局退出确认
 
-;; ---- 常量（与 C 版 ui_pedometer.c 的同名常量一一对应）---------------------
+;; ---- 常量（与原 C 版 ui_pedometer.c 的同名常量一一对应）-------------------
 
 (define FS              100)     ; 内部采样率 Hz（逻辑网格）
 (define SAMPLE_MS       10)      ; 网格步长 ms

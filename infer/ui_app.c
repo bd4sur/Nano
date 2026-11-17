@@ -60,10 +60,6 @@
 
 #include "ui_animac.h"
 
-#include "ui_spectrogram.h"
-
-#include "ui_pedometer.h"
-
 #include "ui_goldminer.h"
 
 #include "ui_ripple.h"
@@ -665,17 +661,20 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
 
 
 // ===============================================================================
-// 主菜单：应用列表（左侧可滚动区 + 右侧固定区）
+// 主菜单：应用列表（左侧滚动区 + 右侧固定区）
 //
 // 布局（几何基准沿用十六宫格：单格宽度 = 屏宽/4，与旧宫格单格同宽）：
 //   +---------------------------+---------+
 //   | 番茄表 | 鹦鹉笼 | 玲珑仪  |  返回   |  <- 左侧滚动区：3 列 x 一屏 4 行
 //   | 电子书 | 音乐盒 | 小游戏  |  设置   |     单格 = 屏宽/4 x 屏高/4（80x60 @320x240）
-//   | 频谱仪 | 寻呼机 | 计步器  |  自述   |     一屏恰好 12 格，与旧宫格单格完全同尺寸
-//   | 词典   | 控制台 | 灵机应用 |  关机   |  <- 右侧固定区：1 列 x 4 行（静态）
+//   | 寻呼机 | 词典   | 控制台  |  自述   |     内容不足一屏时不可滚动
+//   | 灵机应用 |       |        |  关机   |  <- 右侧固定区：1 列 x 4 行（静态）
 //   +---------------------------+---------+     单格 = 屏宽/4 x 屏高/4
 // 单格内的图标/文字排版与旧十六宫格逐像素一致：图标（36x36）中心位于格子中心
 // 偏上 8px，文字（12px alpha，中心对齐）再往下 26px。
+//
+// 2026-11 已移除 C 版「频谱仪」「计步器」入口（功能仅保留 Scheme 实现，经「灵机应用」
+// 列表启动），左侧滚动区现为 10 格（4 行，末行 1 格）；滚动逻辑保留，便于继续加条目。
 //
 // 交互：
 //   - 左侧：触屏控件。上下拖动按像素跟手滚动，松手带惯性；短点按执行对应应用。
@@ -718,9 +717,7 @@ static const Ui_App_Menu_Item s_app_menu_items[] = {
     { L"电子书",   PLATFORM_ROOT_DIR "/icon/ebook.png" },
     { L"音乐盒",   PLATFORM_ROOT_DIR "/icon/music.png" },
     { L"小游戏",   PLATFORM_ROOT_DIR "/icon/game.png" },
-    { L"频谱仪",   PLATFORM_ROOT_DIR "/icon/spectrogram.png" },
     { L"寻呼机",   PLATFORM_ROOT_DIR "/icon/ptt.png" },
-    { L"计步器",   PLATFORM_ROOT_DIR "/icon/pedometer.png" },
     { L"词典",     PLATFORM_ROOT_DIR "/icon/dict.png" },
     { L"控制台",   PLATFORM_ROOT_DIR "/icon/animac.png" },
     { L"灵机应用", PLATFORM_ROOT_DIR "/icon/default.png" },
@@ -741,6 +738,7 @@ typedef struct Ui_App_Menu_Geometry {
     int32_t scroll_x0, scroll_y0, scroll_w, scroll_h; // 滚动区视口
     int32_t fixed_x0, fixed_y0, fixed_w, fixed_h;     // 固定区
     int32_t content_h;     // 滚动内容总高度
+    int32_t content_rows;  // 滚动内容总行数（含末行空位所在的整行）
     int32_t max_scroll_px; // 最大滚动位置（0 = 内容不足一屏，不可滚）
     int32_t item_num;      // 滚动区条目数
 } Ui_App_Menu_Geometry;
@@ -762,6 +760,7 @@ static void ui_app_main_menu_geometry(Nano_GFX *gfx, Ui_App_Menu_Geometry *g) {
     g->fixed_h  = (int32_t)gfx->height;
 
     int32_t content_rows = (g->item_num + UI_APP_MENU_SCROLL_COLS - 1) / UI_APP_MENU_SCROLL_COLS;
+    g->content_rows = content_rows;
     g->content_h = content_rows * g->scroll_cell_h;
     g->max_scroll_px = g->content_h - g->scroll_h;
     if (g->max_scroll_px < 0) {
@@ -832,6 +831,11 @@ static void ui_app_main_menu_draw_cell(
     int32_t bx = (is_first_col) ? 1 : 0;
     int32_t by = (is_first_row) ? 1 : 0;
     gfx_draw_rectangle(global_state->gfx, x0 + bx, y0 + by, w - 1 - bx, h - 1 - by, bg_r, bg_g, bg_b, 1);
+
+    // text == NULL：只铺底色（用于内容末行的空位，保持格子网格连续）
+    if (text == NULL) {
+        return;
+    }
 
     int32_t cell_cx = x0 + w / 2;
     int32_t cell_cy = y0 + h / 2;
@@ -924,7 +928,17 @@ static void ui_app_main_menu_draw_scroll_area(
         for (int32_t col = 0; col < UI_APP_MENU_SCROLL_COLS; col++) {
             int32_t index = row * UI_APP_MENU_SCROLL_COLS + col;
             if (index >= g->item_num) {
-                break;
+                // 内容末行的空位：只铺同色底格（不画图标/文字），避免右侧露出黑色空洞
+                if (row < g->content_rows) {
+                    ui_app_main_menu_draw_cell(global_state,
+                        g->scroll_x0 + col * g->cell_w, y0, g->cell_w, g->scroll_cell_h,
+                        (col == 0), (row == 0),
+                        NULL, NULL,
+                        p->scroll_bg_r, p->scroll_bg_g, p->scroll_bg_b,
+                        p->text_r, p->text_g, p->text_b,
+                        icon_clip);
+                }
+                continue;
             }
             ui_app_main_menu_draw_cell(global_state,
                 g->scroll_x0 + col * g->cell_w, y0, g->cell_w, g->scroll_cell_h,
@@ -990,10 +1004,8 @@ static int32_t ui_app_main_menu_activate_item(Key_Event *key_event, Global_State
         case 3:  ui_ebook_menu_init(key_event, global_state); return STATE_EBOOK;      // 电子书
         case 4:  ui_musicbox_menu_init(key_event, global_state); return STATE_MUSICBOX_MENU; // 音乐盒
         case 5:  init_game_menu(key_event, global_state); return STATE_GAME_MENU;      // 小游戏
-        case 6:  return STATE_SPECTROGRAM;                                             // 频谱仪
-        case 7:  ui_ofdm_menu_init(key_event, global_state); return STATE_OFDM_MENU;   // 寻呼机
-        case 8:  return STATE_PEDOMETER;                                               // 计步器
-        case 9:                                                                        // 词典
+        case 6:  ui_ofdm_menu_init(key_event, global_state); return STATE_OFDM_MENU;   // 寻呼机
+        case 7:                                                                        // 词典
             // 索引就绪（缺失/失效则带进度构建）后进入查询状态；失败则停留在主菜单
             // （错误画面已显示，停留片刻后重绘本菜单）
             if (ui_dict_enter(key_event, global_state) == 0) {
@@ -1002,8 +1014,8 @@ static int32_t ui_app_main_menu_activate_item(Key_Event *key_event, Global_State
             sleep_in_ms(1500);
             ui_app_main_menu_draw(key_event, global_state, 1);
             return STATE_MAIN_MENU;
-        case 10: return STATE_ANIMAC_INIT;                                             // 控制台
-        case 11: return STATE_SCHEME_APP_LIST;                                         // 灵机应用
+        case 8:  return STATE_ANIMAC_INIT;                                             // 控制台
+        case 9:  return STATE_SCHEME_APP_LIST;                                         // 灵机应用
         default: return STATE_MAIN_MENU;
     }
 }
@@ -1161,8 +1173,8 @@ void ui_app_main_menu_event_handler(Key_Event *key_event, Global_State *global_s
 
     // ========================================================================
     // 实体键盘（触屏不再派生宫格软按键，见 ui_app_state_is_menu）：
-    // 数字键 1-9 / * / 0 / # 与旧十六宫格一一对应；Esc/Shift/Ctrl/Enter 为
-    // 返回/设置/自述/关机；上/下键为滚动区整行滚动。
+    // 数字键 1-9 对应滚动区前 9 项，右方向键对应最后一项（灵机应用）；
+    // Esc/Shift/Ctrl/Enter 为返回/设置/自述/关机；上/下键为滚动区整行滚动。
     // ========================================================================
     if (key_event->key_edge == -1 || key_event->key_edge == -2) {
         int32_t item_index = -1;
@@ -1176,9 +1188,7 @@ void ui_app_main_menu_event_handler(Key_Event *key_event, Global_State *global_s
             case NANO_KEY_7: item_index = 6; break;
             case NANO_KEY_8: item_index = 7; break;
             case NANO_KEY_9: item_index = 8; break;
-            case NANO_KEY_left:  item_index = 9;  break; // 词典
-            case NANO_KEY_0:     item_index = 10; break; // 控制台
-            case NANO_KEY_right: item_index = 11; break; // 灵机应用
+            case NANO_KEY_right: item_index = 9; break; // 灵机应用
             case NANO_KEY_esc:   global_state->STATE = STATE_SPLASH_SCREEN; return;
             case NANO_KEY_shift: global_state->STATE = STATE_SETTING_MENU;  return;
             case NANO_KEY_ctrl:  global_state->STATE = STATE_README;        return;
@@ -4273,10 +4283,6 @@ static int32_t lock_screen_exit_peripheral_states(Key_Event *key_event, Global_S
         case STATE_OFDM_MSG:         // 停接收/停发射 → 寻呼机模式菜单
             global_state->STATE = ui_ofdm_msg_event(&fake, global_state);
             return 1;
-        case STATE_SPECTROGRAM:      // 关麦+释放工作区 → 主菜单
-            ui_spectrogram_deinit(key_event, global_state);
-            global_state->STATE = STATE_MAIN_MENU;
-            return 1;
         default:
             return 0;
     }
@@ -5315,58 +5321,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 渲染一帧
         ui_cloud_render_frame(key_event, global_state);
-
-        break;
-    }
-
-
-    /////////////////////////////////////////////
-    // 计步器（时域峰值计数 + 频域周期性校验）
-    /////////////////////////////////////////////
-
-    case STATE_PEDOMETER: {
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_pedometer_init(key_event, global_state);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        // 按A键返回主菜单
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
-            ui_pedometer_deinit(key_event, global_state);
-            global_state->STATE = STATE_MAIN_MENU;
-            break;
-        }
-
-        // 采样/分析/渲染一帧
-        ui_pedometer_render_frame(key_event, global_state);
-
-        break;
-    }
-
-
-    /////////////////////////////////////////////
-    // 音频频谱仪：STFT声谱图（从下往上滚动）
-    /////////////////////////////////////////////
-
-    case STATE_SPECTROGRAM: {
-
-        // 首次获得焦点：初始化（构建STFT工作区并接管麦克风）
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_spectrogram_init(key_event, global_state);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        // 按A键返回主菜单（关闭麦克风并恢复扬声器）
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
-            ui_spectrogram_deinit(key_event, global_state);
-            global_state->STATE = STATE_MAIN_MENU;
-            break;
-        }
-
-        // 采集一帧音频并渲染一帧声谱图
-        ui_spectrogram_render_frame(key_event, global_state);
 
         break;
     }

@@ -76,7 +76,7 @@ int32_t am_native_Imu_gravity_y(am_runtime_t *rt, am_process_t *proc);
 //
 // (Imu.accel_mag) : Number | #null
 //     |a| = sqrt(ax²+ay²+az²)（g）。静止时 ≈1.0；行走时围绕 1.0 起伏。
-//     计步器直接用它作为时域波形源（对应 C 版 ui_pedometer.c 的 sqrtf(ax²+ay²+az²)）。
+//     计步器直接用它作为时域波形源（对应已移除的 C 版计步器 ui_pedometer.c 的 sqrtf(ax²+ay²+az²)）。
 int32_t am_native_Imu_accel_x(am_runtime_t *rt, am_process_t *proc);
 int32_t am_native_Imu_accel_y(am_runtime_t *rt, am_process_t *proc);
 int32_t am_native_Imu_accel_z(am_runtime_t *rt, am_process_t *proc);

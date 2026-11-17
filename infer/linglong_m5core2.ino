@@ -127,13 +127,11 @@ void core0_render_task(void *pvParameters) {
 
         if (key_event_0.key_code != NANO_KEY_IDLE) {
             if (key_event_0.key_edge == -1) { // 反馈仅认短按下降沿：-2 长按重复事件流（1kHz）不做反馈
-                // 按键提示-蜂鸣（Core0 队列侧，6000Hz）：OFDM 寻呼机发射/接收、音乐盒播放、声谱图状态下禁用按键音
-                //（避免抢占麦克风 I2S、污染发射信号、抢占扬声器通道干扰音乐；
-                //  声谱图：tone 经 Speaker 争用 I2S 会导致麦克风采集链路中断、声谱图消失）
+                // 按键提示-蜂鸣（Core0 队列侧，6000Hz）：OFDM 寻呼机发射/接收、音乐盒播放状态下禁用按键音
+                //（避免抢占麦克风 I2S、污染发射信号、抢占扬声器通道干扰音乐）
                 if ((global_state->key_feedback_mode & 2) &&
                     global_state->STATE != STATE_OFDM_TXING && global_state->STATE != STATE_OFDM_RX &&
                     global_state->STATE != STATE_MUSICBOX_PLAYING &&
-                    global_state->STATE != STATE_SPECTROGRAM &&
                     !LOCK_SCREEN_ACTIVE(global_state)) {
                     misc_tone(6000, 10);
                 }
@@ -448,11 +446,10 @@ void loop() {
     // 锁屏期间抑制按键反馈（键盘事件本就不投递，此处为兜底）
     if (key_event_1.key_code != NANO_KEY_IDLE && key_event_1.key_edge == -1 &&
         !LOCK_SCREEN_ACTIVE(global_state)) {
-        // 蜂鸣（4000Hz）：OFDM 寻呼机发射/接收、音乐盒播放、声谱图状态下禁用按键音
+        // 蜂鸣（4000Hz）：OFDM 寻呼机发射/接收、音乐盒播放状态下禁用按键音
         if ((global_state->key_feedback_mode & 2) &&
             global_state->STATE != STATE_OFDM_TXING && global_state->STATE != STATE_OFDM_RX &&
             global_state->STATE != STATE_MUSICBOX_PLAYING &&
-            global_state->STATE != STATE_SPECTROGRAM &&
             !LOCK_SCREEN_ACTIVE(global_state)) {
             misc_tone(4000, 10);
         }
