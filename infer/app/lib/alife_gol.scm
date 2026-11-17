@@ -1,8 +1,12 @@
-;@id=gol
-;@title=康威生命游戏
-;@version=2026-11-17
 ;; ============================================================================
-;; 康威生命游戏（Conway's Game of Life）—— Nano「小游戏」Scheme App
+;; 康威生命游戏（Conway's Game of Life）—— 人工生命合集 emergence.scm 的「生命游戏」页
+;;
+;; 本文件原本是独立 App（app/gol.scm）。2026-11 并入 app/emergence.scm 后**降格为库**：
+;;   · 不再自己装定时器、不再刷屏、不再管退出按钮——节拍与推屏由宿主 App 负责；
+;;   · 对外只有四个入口：init（一次性初始化）/ tick（演进一代）/ draw（整屏重绘，
+;;     不演进）/ budget（本页需要的单帧时间片）。
+;; 状态（world-a/world-b/cur/gen）就是模块级变量：宿主切到别的页时只是不再调 tick，
+;; 状态原地保留，切回来接着演化（「切换尽量保持状态不变」）。
 ;;
 ;; 运行环境：灵机（Animac）解释器 + Nano Gfx 本地库
 ;; 参考实现：ui_app.c 的 STATE_GAMEOFLIFE（C 版）：双缓冲原地写、环绕边界、
@@ -28,14 +32,15 @@
 ;;     一次加法即得下标。与 lenia.scm 的 padding 卷积同一手法；
 ;;   · **单层循环体、零闭包调用**：整个演进内联在 step 里，每格只有 8 次 get_item
 ;;     + 7 次加法 + 1 次 set_item!，没有一次过程调用；
-;;   · **常量搬进本地槽位**：cols/rows/pw/d41… 一律在 step 开头 define 成本地槽位，
+;;   · **常量搬进本地槽位**：cols/rows/pw/d41… 一律在 evolve 开头 define 成本地槽位，
 ;;     热循环只读槽位，不走 deref；
 ;;   · **规则化简**：alive = (n==3) ? 1 : (n==2 ? 自身 : 0)——邻居数恰为 2 时
 ;;     “是否存活”就等于“自身是否存活”，于是省掉无条件读取自身与一次比较；
 ;;     存活计数直接 count += alive（alive ∈ {0,1}）；
-;;   · **网格避开 HUD**：细胞从 HUD（12px）下方开始铺，不在状态条底下白算格子。
+;;   · **网格避开 HUD**：细胞从 HUD（12px）下方开始铺，不在状态条底下白算格子，
+;;     也不铺到宿主底部页签栏（18px）底下。
 ;;
-;; 于是可以负担细网格与快节拍：CELL=3 → 106×76 = 8056 格（ESP32 取 6 px），每帧一代
+;; 于是可以负担细网格与快节拍：CELL=3 → 106×70 = 7420 格（ESP32 取 6 px），每帧一代
 ;; （浏览器 rAF 下 60 代/秒；一代 ~700k 指令 ≈ 4.7 ms）。网格规模只由 CELL 一个数
 ;; 决定（改大 → 格少而大、更快；改小 → 格多而细、更慢），时间片申请随之缩放。
 ;;
@@ -44,15 +49,13 @@
 ;; 实测两者 HUD 的白像素逐列剖面在公共前缀上完全相同（tools/e2e/browser/grab_fb.js
 ;; 抓两份 320x240 帧缓冲比对）。
 ;;
-;; 定时器设 1 ms 而不是「每帧毫秒数」：上游运行时每轮事件循环对同一进程只触发一次
-;; 定时器回调，1 ms 的间隔等价于“本轮有空就跑一代”，节奏天然跟随宿主帧率
-;; （这与 C 版“每帧一代”的语义一致，且不受 System.timestamp 在 wasm32 上被压成
-;; 27 位 uint 的影响——那个时间戳的差值不能用来做节流判断）。
+;; 节拍由宿主定：宿主每收到一次定时器回调（≈每个宿主帧一次）就调一次本模块的 tick，
+;; 即“每帧一代”，与 C 版语义一致。
 ;;
-;; 单帧预算：宿主每帧只驱动解释器一个时间片（默认 312500 条指令）。4560 格需要
-;; ~400k → 超过默认值就会被抢占拆到下一帧（帧率不变，但推进速度直接减半）。
-;; 故用 (App.set_timeslice ...) 按格数申请（90 指令/格 + 30% 余量；宿主夹在默认值
-;; 的 1/10 ~ 4 倍之间）。
+;; 单帧预算：宿主每帧只驱动解释器一个时间片（默认 312500 条指令）。本页一代需要
+;; ~700k → 超过默认值就会被抢占拆到下一帧（帧率不变，但推进速度直接减半）。
+;; 故由**宿主**在切到本页时按 budget 申请 (App.set_timeslice ...)（87 指令/格 +
+;; 35% 余量；宿主把值夹在默认值的 1/10 ~ 4 倍之间）。
 ;;
 ;; 其它实现要点（沿用上一版已验证的结论）：
 ;;   · 世界为一维列表（解释器列表是数组存储，get_item/set_item! O(1)）；
@@ -60,8 +63,7 @@
 ;;     仅可安全 push 一次），此后每代 set_item! 原地写目标页并翻页；
 ;;   · 栈纪律：解释器行“单值栈纪律”——任何表达式求值后恰好在操作数栈留 1 个值。
 ;;     Gfx 绘图函数与 push/set_item! 为语句型（弹参后压 1 个 #undefined，由编译器
-;;     在语句位置弹出），仍直接写在语句位置即可；System.set_interval 产值（计时器
-;;     编号），以 set! 消费；
+;;     在语句位置弹出），仍直接写在语句位置即可；
 ;;   · 算术一律二元嵌套（本解释器编译器对多元乘法只发射一次 mul）。
 ;;
 ;; 规则（B3/S23）：活细胞邻居数为 2 或 3 时存活；死细胞恰有 3 个邻居时新生。
@@ -72,9 +74,7 @@
 (native Gfx)
 (native Math)
 (native String)
-(native System)
-(native App)
-(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
+(native App)     ; 只为 (App.platform) 做分辨率降级
 
 ;; ---- 网格参数 --------------------------------------------------------------
 ;; HUD_H = 12：与 C 版参考实现（ui_app.c 的 STATE_GAMEOFLIFE）的状态条同高；网格从
@@ -86,14 +86,16 @@
 ;;   · ESP32（m5esp）：6 px → 53×38 = 2014 格 —— 解释器比桌面慢约一个数量级，
 ;;     细格会把单帧拖到几十毫秒、界面明显卡顿。
 ;; 上一版是「40×30 = 1200 格 / 10 代每秒」；本轮是 8056 格 / 60 代每秒。
-;; 「退出」按钮改到右下角（C 版没有这个按钮；顶栏文字要与 C 版逐字一致，右上角
-;; 40x18 的位置会压住"密度"字段的尾巴）。
+;; 「退出」按钮归宿主（并入 emergence.scm 后它画在底部页签栏的右端，见那里）。
 
+;; TAB_H：宿主 emergence.scm 底部页签栏的高度。本库把网格铺到它上面为止（不在页签
+;; 底下白算格子）；页签栏由宿主演完本页之后覆盖绘制，两者的高度必须一致（18）。
+(define TAB_H 18)
 (define CELL (if (String.equals (App.platform) "m5esp") 6 3))
 (define HUD_H 12)                ; 顶部状态条高度（同 C 版）
 (define SW (Gfx.width))
 (define COLS (Math.floor (/ (Gfx.width) CELL)))
-(define ROWS (Math.floor (/ (- (Gfx.height) HUD_H) CELL)))
+(define ROWS (Math.floor (/ (- (- (Gfx.height) HUD_H) TAB_H) CELL)))
 (define CELLS (* COLS ROWS))
 (define PW (+ COLS 2))           ; padding 宽度（左右各 1 列镜像）
 (define PH (+ ROWS 2))           ; padding 高度（上下各 1 行镜像）
@@ -101,12 +103,13 @@
 
 ;; ---- 单帧预算：一代必须在一个时间片内跑完 ---------------------------------
 ;; 宿主每帧只驱动解释器一个时间片（默认 312500 条 VM 指令，见 ui_scheme_app.c 的
-;; MB_TIMESLICE_TICKS）。本 App 一代约「格数 × 87」条指令：桌面档 8056 格要 ~700k、
-;; 上一版 1200 格只要 108k —— 超过默认值就会被抢占拆到下一帧，帧率不变但推进速度
-;; 直接减半（60→30 代/秒）。故按格数申请：87 指令/格 + 35% 余量（随 CELL 自动缩放）；
-;; 宿主夹在默认值的 1/10 ~ 4 倍之间，桌面档实际用到约 4.7 ms/帧。
+;; MB_TIMESLICE_TICKS）。本页一代约「格数 × 87」条指令：桌面档 7420 格要 ~650k、
+;; 早先 1200 格的版本只要 108k —— 超过默认值就会被抢占拆到下一帧，帧率不变但推进
+;; 速度直接减半（60→30 代/秒）。故按格数算 budget（87 指令/格 + 35% 余量，随 CELL
+;; 自动缩放），由宿主在切到本页时申请；宿主夹在默认值的 1/10 ~ 4 倍之间。
 
-(App.set_timeslice (* CELLS 117))
+;; 本页需要的单帧时间片（宿主的 (App.set_timeslice budget) 取这个值）
+(define budget (* CELLS 117))
 
 ;; ---- 世界状态：双缓冲两页 + 当前页码（0=A 1=B）与代数 ---------------------
 
@@ -114,6 +117,7 @@
 (define world-b '())
 (define cur 0)
 (define gen 0)
+(define alive-n 0)               ; 上一代的存活数（draw 复用它，不重算）
 
 ;; ---- 环形边界：把逻辑区的首末行/列镜像到 padding 环带 ----------------------
 ;; 顺序：先补左右两列（逐逻辑行），再整体补上下两行（逐列，含四角）——后者读的
@@ -208,11 +212,11 @@
   }))
 
 ;; ---- 演进一代：读当前页 → 规则计算 → set_item! 原地写目标页 → 翻页 --------
-;;（由定时器每轮事件循环调用一次；末尾推屏——宿主不主动推屏，避免代间半成品闪烁）
+;; 只算不画。绘制（paint）由宿主在 tick 之后调用，或切页回来时单独调用——
+;; 这样"重绘"与"演进"解耦，切页不会偷跑一代。
 
-(define step
+(define evolve
   (lambda () {
-    (EX.check)
     (define src (if (== cur 0) world-a world-b))
     (define dst (if (== cur 0) world-b world-a))
     ;; 热循环用到的常量一律搬进本地槽位（模块级变量是自由变量快照，读取要走 deref）
@@ -220,8 +224,6 @@
     (define rows ROWS)
     (define pw PW)
     (define ph PH)
-    (define cellpx CELL)
-    (define hudpx HUD_H)
     (define d43 (+ PW 1))
     (define d42 PW)
     (define d41 (- PW 1))
@@ -232,13 +234,10 @@
     (define n 0)
     (define alive 0)
     (define count 0)
-    (define py 0)
-    (Gfx.clear)
     (while (< y (+ rows 1)) {
       (set! rowstart (* y pw))
       (set! idx (+ rowstart 1))
       (set! rowend (+ rowstart (+ cols 1)))
-      (set! py (+ hudpx (* (- y 1) cellpx)))
       (while (< idx rowend) {
         ;; 8 邻域和（padding 布局 → 下标全是 idx±常量）
         (set! n (+ (get_item src (- idx d43))
@@ -253,9 +252,6 @@
         (set! alive (if (== n 3) 1 (if (== n 2) (get_item src idx) 0)))
         (set_item! dst idx alive)
         (set! count (+ count alive))
-        (if (== alive 1)
-            (Gfx.fill_rect (* (- idx rowstart) cellpx) py cellpx cellpx 0 255 255)
-            #f)
         (set! idx (+ idx 1))
       })
       (set! y (+ y 1))
@@ -263,21 +259,68 @@
     (mirror dst)
     (set! cur (if (== cur 0) 1 0))
     (set! gen (+ gen 1))
-    (status count)
-      ;; C 版没有「退出」按钮（它用硬 A/ESC）；触屏 App 必须自备入口，且顶栏要留给
-      ;; 与 C 版一致的文字，故放右下角（热区同由 (App.set_exit_button) 登记）。
-      ;; 右边留 4px 与右上角默认位置同一规矩；宽度取 EX.btn_w（别写死——
-      ;; 按钮加宽过，写死会把按钮推出屏幕右缘）。
-      (EX.draw_button_at (- SW (+ EX.btn_w 4)) (- (Gfx.height) 18))
-      (Gfx.refresh)
+    (set! alive-n count)
   }))
 
-;; ---- 启动：撒种 → 演进并绘制第一代 → 每轮事件循环演进一代 ------------------
+;; ---- 绘制一代（不演进）：清屏 → 逐活格铺方块 → 顶栏 ----------------------
+;; 上屏与演进分家：切页回来、退出确认框关闭后补帧都只走这一条路，不改变演化状态。
 
-(seed)
-(step)
-(set! _timer (System.set_interval 1 step))
+(define paint
+  (lambda () {
+    (define src (if (== cur 0) world-a world-b))
+    (define cols COLS)
+    (define rows ROWS)
+    (define pw PW)
+    (define cellpx CELL)
+    (define hudpx HUD_H)
+    (define y 1)
+    (define rowstart 0)
+    (define rowend 0)
+    (define idx 0)
+    (define py 0)
+    (Gfx.clear)
+    (while (< y (+ rows 1)) {
+      (set! rowstart (* y pw))
+      (set! idx (+ rowstart 1))
+      (set! rowend (+ rowstart (+ cols 1)))
+      (set! py (+ hudpx (* (- y 1) cellpx)))
+      (while (< idx rowend) {
+        (if (== (get_item src idx) 1)
+            (Gfx.fill_rect (* (- idx rowstart) cellpx) py cellpx cellpx 0 255 255)
+            #f)
+        (set! idx (+ idx 1))
+      })
+      (set! y (+ y 1))
+    })
+    (status alive-n)
+  }))
 
-;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
-;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行
-(EX.install)
+;; ---- 对外入口（宿主 App 只调这两个 + init/budget）------------------------
+
+;; 一拍：演进一代 + 补画整屏
+(define tick
+  (lambda () {
+    (evolve)
+    (paint)
+  }))
+
+;; 只重绘（切页回来 / 模态框关闭后的补帧）
+(define draw
+  (lambda () {
+    (paint)
+  }))
+
+;; 已推进的代数（诊断用：宿主切页时打一行，e2e 据此断言"切页不重置状态"）
+(define steps
+  (lambda () gen))
+
+;; 一次性初始化：撒种 + 画首帧（宿主启动时调一次，之后状态一直留在本模块里）
+(define init
+  (lambda () {
+    (seed)
+    (paint)
+  }))
+
+;; ---- 启动：本模块作为库被 import 时**不做任何事**（不装定时器、不刷屏）------
+;;   旧版独立 App 在这一行的位置是：(seed) (step) (set! _timer ...) (EX.install)。
+;;   现在这些职责全归宿主 app/emergence.scm。

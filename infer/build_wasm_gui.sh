@@ -55,8 +55,14 @@ ln -sfn "$LINGLONG" "$OUT_DIR/files"
 # 同步灵机 App 源码（infer/app/*.scm）到业务资源目录
 mkdir -p "$LINGLONG/app"
 mkdir -p "$LINGLONG/app/lib"
-cp -f app/*.scm "$LINGLONG/app/" 2>/dev/null || true
-cp -f app/lib/*.scm "$LINGLONG/app/lib/" 2>/dev/null || true
+# 用 rsync --delete 同步而不是 cp：仓库里**删掉**一个 App（或把 App 降格为库移到 app/lib/）
+# 时，资源目录里的旧副本必须跟着消失——宿主的 App 列表是扫描资源目录得到的，残留副本
+# 会让"已删除"的 App 继续出现在主菜单里（2026-11 把 gol/grayscott/lenia/particlelife
+# 并入 emergence.scm 时就踩过：cp 只加不删）。
+rsync -a --delete --include='*/' --include='*.scm' --exclude='*' app/ "$LINGLONG/app/" \
+    || cp -f app/*.scm "$LINGLONG/app/" 2>/dev/null || true
+rsync -a --delete --include='*/' --include='*.scm' --exclude='*' app/lib/ "$LINGLONG/app/lib/" \
+    || cp -f app/lib/*.scm "$LINGLONG/app/lib/" 2>/dev/null || true
 # 大块数据（不入 .scm 源码：灵机按源码字符数预分配 token 数组，见 app/hwr.scm 注释）
 mkdir -p "$LINGLONG/app/lib/hwr"
 cp -f app/lib/hwr/* "$LINGLONG/app/lib/hwr/" 2>/dev/null || true

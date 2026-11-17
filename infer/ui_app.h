@@ -25,7 +25,8 @@ extern "C" {
 // 编号 26 已退役：原 C 版 Bad Apple（STATE_BADAPPLE）已移除，Bad Apple 仅保留
 // Scheme 实现（app/badapple.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
 // 编号 27 已退役：原 C 版康威生命游戏（STATE_GAMEOFLIFE）已移除，生命游戏仅保留
-// Scheme 实现（app/gol.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
+// Scheme 实现（app/lib/alife_gol.scm，2026-11 起由 app/emergence.scm 的「生命游戏」
+// 页承载）。保留编号空缺避免冲突。
 #define STATE_LINGLONG          (28)
 #define STATE_FLASHMEMO         (29)
 #define STATE_TORCH             (30)
@@ -55,7 +56,8 @@ extern "C" {
 #define STATE_MUSICBOX_MENU     (64)
 #define STATE_MUSICBOX_PLAYING  (65)
 // 编号 66 已退役：原 C 版粒子生命（STATE_PARTICLELIFE）已移除，粒子生命仅保留
-// Scheme 实现（app/particlelife.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
+// Scheme 实现（app/lib/alife_particle.scm，2026-11 起由 app/emergence.scm 的
+// 「粒子生命」页承载）。保留编号空缺避免冲突。
 #define STATE_RIPPLE            (67)
 #define STATE_DICT_QUERY        (68)
 #define STATE_DICT_DETAIL       (69)

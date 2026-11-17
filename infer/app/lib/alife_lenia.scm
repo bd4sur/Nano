@@ -1,10 +1,12 @@
-;@id=lenia
-;@title=lenia
-;@version=2026-11-17
 ;; ============================================================================
-;; Lenia（连续态元胞自动机 · 人工生命）—— 灵机应用程序
+;; Lenia（连续态元胞自动机 · 人工生命）—— 人工生命合集 emergence.scm 的「Lenia」页
 ;;
-;; 运行环境：灵机（Animac）解释器 + Nano Gfx 本地库 + Diag 本地库
+;; 本文件原本是独立 App（app/lenia.scm）。2026-11 并入 app/emergence.scm 后
+;; **降格为库**：不装定时器、不推屏、不管退出按钮；对外只有
+;;   init（一次性初始化）/ tick（推进一步）/ draw（整屏重绘）/ budget（时间片）。
+;; 状态（Acur/Anxt/step_no/preset）留在模块里，切页不重置。
+;;
+;; 运行环境：灵机（Animac）解释器 + Nano Gfx 本地库
 ;;
 ;; Lenia 是 Bert Chan 提出的"连续态"元胞自动机：状态 A(x) ∈ [0,1] 连续取值，
 ;; 每一代做一次环形核卷积（"细胞感知邻域"），再过一条增长函数得到变化量：
@@ -15,19 +17,18 @@
 ;; 会分裂、会自愈的"生物"。与 gol 的离散格子不同，这里的状态和邻域都是连续的。
 ;;
 ;; 实现要点：
-;;   · 网格 20×15，每格 16×16 像素（320×240 铺满）；状态用 **padding 缓冲**
-;;     24+2R × 18+2R 存放，每步把四周环带从对侧内部拷回（环形边界），
+;;   · 网格 20×12，每格 16×16 像素（320×192，铺满页签栏以上的内容区）；状态用
+;;     **padding 缓冲** 24+2R × 12+2R 存放，每步把四周环带从对侧内部拷回（环形边界），
 ;;     这样内层卷积循环里不需要任何 mod/下标表；
-;;   · 环形核 R=3（7×7 = 49 taps），权重一次性预建并归一化；μg/σg/dt 逐预设切换；
+;;   · 环形核 R=3（7×7 = 49 taps），权重一次性预建并归一化；μg/σg/Δt 逐预设切换；
 ;;   · 上屏不铺方块，而是每格画一个半径随 A 变化的实心圆——相邻圆重叠后融成有机
 ;;     团块，比 16px 方块更接近细胞群落的观感；
 ;;   · 增长函数 G(u) 预计算成 256 项查表（u∈[0,1]），热路径里没有 exp；
 ;;   · 双缓冲轮换，无逐帧分配。
 ;;
-;; 成本实测（host x86-64）：单步 ~4.5 ms（300 格 × 49 taps；每个 tap 两次列表读：
-;; 权重表 + 邻格值 —— 解释器里一次列表访问约 0.09 µs，是全部成本的来源），
-;; 整帧（2 步 + 300 个 fill_circle 上屏）~12 ms；定时器 50 ms → 约 24% CPU。
-;; 浏览器 wasm32 上解释器慢约 6 倍，实际 10~15 fps。
+;; 节拍：原独立 App 是 50ms 一拍、每拍 2 步（240..300 格，实测 wasm 10~15fps）。
+;; 并入合集后每拍 1 步，节拍由宿主按"每 3 个宿主帧一拍"（≈20 拍/秒）给——
+;; 推进速度与原 App 的实测值同量级，单帧占用则减半。
 ;;
 ;; 书写约定（本解释器的坑，详见 app/turtle.scm 头部）：算术一律二元嵌套
 ;;（三操作数的 (+ a b c) 会被错误编译并静默算错）；cond 子句只能带一个表达式；
@@ -37,31 +38,32 @@
 (native Gfx)
 (native Math)
 (native String)
-(native System)
-(native Diag)
-(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 网格与布局 ------------------------------------------------------------
 
 (define W (Gfx.width))            ; 320
 (define H (Gfx.height))           ; 240
-(define GW 20)                    ; 网格列数
-(define GH 15)                    ; 网格行数
+;; TAB_H：宿主 emergence.scm 底部页签栏高度（18）。内容区 = HUD_TOP..H-TAB_H = 192px，
+;; 故 12 行 × 16px = 192px 正好铺满；页签栏底下不再算格子（两边的高度必须一致）。
+(define TAB_H 18)
+(define GW 20)                    ; 网格列数（20×16 = 320px）
+(define GH 12)                    ; 网格行数（12×16 = 192px = 内容区高度）
 (define PX 16)                    ; 每格边长（像素）
-(define OX (/ (- W (* GW PX)) 2)) ; 居中偏移
-(define OY (+ 30 (/ (- (- (- H 20) 30) (* GH PX)) 2)))
-(define CELLS (* GW GH))
 (define HUD_TOP 30)
-(define HUD_BOT 20)
+(define CONTENT_H (- (- H TAB_H) HUD_TOP))
+(define OX (/ (- W (* GW PX)) 2))                      ; 居中偏移（横向）
+(define OY (+ HUD_TOP (/ (- CONTENT_H (* GH PX)) 2)))  ; 居中偏移（纵向）
+(define CELLS (* GW GH))
 
 (define R 3)                      ; 卷积核半径（7×7）
 (define PW (+ GW (* 2 R)))
 (define PH (+ GH (* 2 R)))
 (define PC (* PW PH))
 (define KT 49)                    ; (2R+1)² 个 tap
-(define TICK_MS 50)
-(define STEPS_PER_TICK 2)
-(define PRESET_TICKS 500)         ; 每组参数持续的 tick 数
+;; 本页需要的单帧时间片（宿主的 (App.set_timeslice budget) 取这个值）。一步约
+;; 240 格 × 49 taps，取宿主默认值 312500：一步会在相邻几帧里跑完（与原独立 App 一致）。
+(define budget 312500)
+(define PRESET_TICKS 300)         ; 每组参数持续的拍数（@20 拍/秒 ≈ 15 s 一组）
 
 ;; ---- 预设（μg, σg, dt）-----------------------------------------------------
 ;; 环形核固定 μk=0.5R、σk=0.15R（经典取法）；只切换增长函数的宜居带与时间步。
@@ -242,7 +244,6 @@
 
 (define ds "")
 (define step_no 0)
-(define frame_ms 0)
 
 (define cat3 (lambda (a b c) (String.concat a (String.concat b c))))
 (define cat4 (lambda (a b c d) (String.concat a (cat3 b c d))))
@@ -251,48 +252,88 @@
 
 (define draw_hud
   (lambda ()
+    (Gfx.set_font 1)                       ; 12px 抗锯齿字（字模是跨 App 共享的静态量）
     (Gfx.fill_rect 0 0 W HUD_TOP 0 0 0)
-    (Gfx.fill_rect 0 (- H HUD_BOT) W HUD_BOT 0 0 0)
     (Gfx.draw_text (cat3 "Lenia · " pname "") 8 4 225 235 245)
     (set! ds (cat4 "μg=" (num (sh4 muG)) " σg=" (num (sh4 sgG))))
     (Gfx.draw_text ds 8 18 130 165 195)
     (set! ds (cat3 "步" (num step_no) ""))
-    (Gfx.draw_text ds 190 18 130 165 195)
-    (set! ds (cat3 (num frame_ms) "ms" ""))
-    (Gfx.draw_text ds 260 18 130 165 195)
-    (Gfx.draw_text "环形核卷积 K*A → 增长函数 G(u) → A += dt·G" 8 (- H 15) 110 140 170)))
+    (Gfx.draw_text ds 210 18 130 165 195)))
 
-;; ---- 主流程 ----------------------------------------------------------------
+;; ---- 对外入口（宿主 App 只调这几个 + init/budget）--------------------------
 
-(define tick_fn
-  (lambda ()
-    (EX.check)
-    (define t 0) (define st 0)
-    (set! t (Diag.ms))
-    (Gfx.fill_rect 0 HUD_TOP W (- (- H HUD_BOT) HUD_TOP) 0 0 0)
-    (set! st 0)
-    (while (< st STEPS_PER_TICK) { (step) (set! st (+ st 1)) })
+;; 整屏重绘（不推进仿真）：内容区铺黑 → 逐格画圆 → 顶栏
+(define paint
+  (lambda () {
+    (Gfx.fill_rect 0 HUD_TOP W (- H HUD_TOP) 0 0 0)
     (render)
-    (set! step_no (+ step_no 1))
-    (set! frame_ms (- (Diag.ms) t))
     (draw_hud)
-      (EX.draw_button)
-      (Gfx.refresh)
+  }))
+
+;; 一拍：推进一步，每 PRESET_TICKS 拍换一组 (μg, σg, Δt) 并重新播种，然后重绘
+(define tick
+  (lambda () {
+    (step)
+    (set! step_no (+ step_no 1))
     (if (>= step_no (* PRESET_TICKS (+ preset 1)))
         { (apply_preset (mod (+ preset 1) pcount))
           (build_G)
           (reseed) })
-    (if (> step_no 1000000) { (set! step_no 0) })))
+    (if (> step_no 1000000) { (set! step_no 0) })
+    (paint)
+    (if (< (count_live) 3)
+        (set! dead_ticks (+ dead_ticks 1))
+        (set! dead_ticks 0))
+    (if (> dead_ticks 6)
+        { (set! dead_ticks 0)
+          (display "[lenia] reseed extinct") (newline)
+          (reseed)
+          (paint) })
+  }))
 
-;; ---- 启动 ------------------------------------------------------------------
+;; 只重绘（切页回来 / 模态框关闭后的补帧）
+(define draw
+  (lambda () {
+    (paint)
+  }))
 
-(init_state)
-(build_kernel)
-(apply_preset 0)
-(build_G)
-(reseed)
-(set! _timer (System.set_interval TICK_MS tick_fn))
+;; ---- 灭绝自愈（合集特有的处理）--------------------------------------------
+;; 随机撒种的"稀汤"有时会让整片在几十步内熄灭（μg 附近的宜居带很窄：初值一偏，
+;; G(u) 就长期为负）。作为独立 App 时它靠"每组参数只跑 PRESET_TICKS 拍就重播"掩盖
+;; 了这一现象；合集里用户可能长时间停在 Lenia 页盯着全黑的画面，故加一条看门狗：
+;; 连续 dead_ticks 拍几乎没有活格（A > 0.12）就重新播种。
 
-;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
-;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行（并调 render 擦掉对话框残影）
-(EX.install_with render)
+(define dead_ticks 0)
+
+;; 内容区里"看得见"的格数（与 render 的可见阈值一致）
+(define count_live
+  (lambda ()
+    (define x 0) (define y 0) (define n 0) (define base 0)
+    (set! y 0)
+    (while (< y GH) {
+      (set! x 0)
+      (while (< x GW) {
+        (set! base (+ (* (+ y R) PW) (+ x R)))
+        (if (> (get_item Acur base) 0.12) (set! n (+ n 1)) #f)
+        (set! x (+ x 1)) })
+      (set! y (+ y 1)) })
+    n))
+
+;; 已推进的步数（诊断用，见 alife_gol.scm 的同名条目）
+(define steps
+  (lambda () step_no))
+
+;; 一次性初始化（宿主启动时调一次，之后状态一直留在本模块里）
+(define init
+  (lambda () {
+    (init_state)
+    (build_kernel)
+    (apply_preset 0)
+    (build_G)
+    (reseed)
+    (paint)
+  }))
+
+;; ---- 启动：本模块作为库被 import 时**不做任何事**（不装定时器、不刷屏）------
+;;   旧版独立 App 在这一行的位置是：(init_state) (build_kernel) (apply_preset 0)
+;;   (build_G) (reseed) (set! _timer (System.set_interval ...)) (EX.install_with render)。

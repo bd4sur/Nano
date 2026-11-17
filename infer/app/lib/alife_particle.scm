@@ -1,8 +1,10 @@
-;@id=particlelife
-;@title=粒子生命
-;@version=2026-11-17
 ;; ============================================================================
-;; 粒子生命（Particle Life）—— Nano「小游戏」Scheme App
+;; 粒子生命（Particle Life）—— 人工生命合集 emergence.scm 的「粒子生命」页
+;;
+;; 本文件原本是独立 App（app/particlelife.scm）。2026-11 并入 app/emergence.scm 后
+;; **降格为库**：不装定时器、不推屏、不管退出按钮；对外只有
+;;   init（一次性初始化）/ tick（推进一步）/ draw（整屏重绘）/ budget（时间片）。
+;; 状态（xs/ys/ks/vxs/vys/param-*/网格链表）留在模块里，切页不重置。
 ;;
 ;; 运行环境：灵机（Animac）解释器 + Nano Gfx 本地库
 ;; 参考实现：ui_particlelife.c（particle.html 移植）：6 种颜色的粒子在环面世界中
@@ -34,10 +36,10 @@
 ;;        环绕加减与两串 if，约 78 条指令 → 约 16 条）；
 ;;     2) 力核分段改成"远距优先"（远距段覆盖 75% 的对，先测 rth2 再测 rth1，
 ;;        平均每对少一次比较）；
-;;     3) 单帧预算按粒子数申请（App.set_timeslice）：宿主每帧只给解释器一个时间片
-;;        （默认 312500 条指令）。一步 ~「22·N² + 500·N」条指令，超了就会被抢占拆到
-;;        下一帧（帧率不变、步频减半）。按 N 申请预算后可以把粒子数从 100 提到 169
-;;        （13×13），仍是每帧一步（60 步/秒）。
+;;     3) 单帧预算按粒子数算（budget）：宿主每帧只给解释器一个时间片（默认 312500 条
+;;        指令）。一步 ~「22·N² + 500·N」条指令，超了就会被抢占拆到下一帧（帧率不变、
+;;        步频减半）。按 N 算出的 budget 由宿主在切到本页时申请，于是粒子数可以从 100
+;;        提到 169（13×13），仍是每帧一步（60 步/秒）。
 ;;
 ;; 实测（WASM-GUI；headless chromium，真 wasm32，同机同构建脚本，5s 窗口 ×3 取中位）：
 ;;   版本                粒子  每步 VM 指令  每帧 CPU*  步/秒  CPU 占用*
@@ -73,10 +75,8 @@
 (native Gfx)
 (native Math)
 (native String)
-(native System)
 (native Touch)
-(native App)
-(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
+(native App)     ; 只为 (App.platform) 做粒子数降级
 
 ;; ---- 物理常数（与 ui_particlelife.c 一致；世界半宽 1.0，x∈[-1,1] 环面）-----
 ;; 视口几何先行定义（WORLD_HH 依赖 HUD_H/SW/SH）。
@@ -98,24 +98,28 @@
 (define WORLD_HW 1.0)             ; 世界半宽
 (define WORLD_W 2.0)              ; 回绕周期（宽）
 (define HUD_H 16)                 ; 顶部信息栏高度（像素）
+;; TAB_H：宿主 emergence.scm 底部页签栏高度（18）。世界只铺到它上面为止
+;; （页签栏由宿主演完本页后覆盖绘制，两边的高度必须一致）。
+(define TAB_H 18)
 (define SW (Gfx.width))
 (define SH (Gfx.height))
-(define WORLD_HH (/ (- SH HUD_H) SW))   ; 世界半高（填满 HUD 以下视口）
+(define VIEW_H (- (- SH HUD_H) TAB_H))  ; 视口高度（HUD 以下、页签栏以上）
+(define WORLD_HH (/ VIEW_H SW))         ; 世界半高（填满该视口）
 (define WORLD_HH2 (* 2.0 WORLD_HH))
 (define WORLD_HW_NEG (- 0.0 WORLD_HW))
 (define WORLD_HW_NEG2 (- 0.0 WORLD_HH))
 (define SCALE (/ SW 2.0))         ; 像素/世界单位
 (define CX (/ SW 2.0))            ; 世界原点屏幕坐标
-(define CY (+ HUD_H (/ (- SH HUD_H) 2.0)))
+(define CY (+ HUD_H (/ VIEW_H 2.0)))
 
 ;; ---- 粒子状态（5 个平行一维列表）与相互作用参数矩阵 -----------------------
 
 ;; 粒子撒布网格边长：N = SCATTER_N²。按平台分两档（解释器速度差一个数量级）：
 ;;   · wasm-gui（浏览器）：13 → 169 粒子。这是"每步仍能在一个时间片内跑完
-;;     （60 步/秒）"的最大档：一步约 55 万条指令 / 本机 4 ms（见下方 App.set_timeslice）；
+;;     （60 步/秒）"的最大档：一步约 55 万条指令 / 本机 4 ms（见下方的 budget）；
 ;;   · 其余平台（m5esp / tty / linux / web）：10 → 100 粒子，与上一版一致
 ;;     （ESP32 上的解释器比 wasm 慢约一个数量级，169 会把单帧拖到几十毫秒）。
-;; 想更密/更省就改这里：时间片预算随 N 自动缩放（见 App.set_timeslice 那几行）。
+;; 想更密/更省就改这里：时间片预算随 N 自动缩放（见下面 budget 那几行）。
 (define SCATTER_N (if (String.equals (App.platform) "wasm-gui") 13 10))
 (define N (* SCATTER_N SCATTER_N))
 (define xs '())
@@ -164,15 +168,14 @@
 
 ;; ---- 单帧预算 --------------------------------------------------------------
 ;; 宿主每帧只驱动解释器一个时间片（默认 312500 条 VM 指令，见 ui_scheme_app.c 的
-;; MB_TIMESLICE_TICKS）。本 App 一步实测约「19·N² + 300·N」条指令
+;; MB_TIMESLICE_TICKS）。本页一步实测约「19·N² + 300·N」条指令
 ;; （N=100 → 22.3 万，N=169 → 55.2 万）：超过预算就被抢占拆到下一帧——帧率不变但
-;; **步频直接减半**。故按「22·N² + 500·N」申请（约 25% 余量；宿主把值夹在默认值的
-;; 1/10 ~ 4 倍之间）。
+;; **步频直接减半**。故按「22·N² + 500·N」给宿主（约 25% 余量；宿主切到本页时用它
+;; 调 (App.set_timeslice budget)，并把值夹在默认值的 1/10 ~ 4 倍之间）。
 ;; 注意算术必须二元嵌套：本解释器编译器对多元乘法只发射一次 mul（(* 25 N N) 会算成 25*N）。
 ;; 下限锁在宿主默认值（312500）：小 N 时不主动缩小别人的预算（没必要冒"个别步被拆帧"的风险）；
 ;; 上限由宿主自己夹（默认值的 4 倍 = 1250000）。
-(define TIMESLICE (if (< (* (* 22 N) N) 262500) 312500 (+ (* (* 22 N) N) (* 500 N))))
-(App.set_timeslice TIMESLICE)
+(define budget (if (< (* (* 22 N) N) 262500) 312500 (+ (* (* 22 N) N) (* 500 N))))
 
 ;; ---- 调色板（与 C 版一致：#f80 #ff0 #4f0 #0cf #04f #f08）-------------------
 
@@ -441,8 +444,6 @@
     (Gfx.fill_rect 0 0 sw hud 24 24 28)
     (Gfx.draw_text "粒子生命" 6 2 255 255 255)
     (draw_reset_button)
-    (EX.draw_button)
-    (Gfx.refresh)
   }))
 
 ;; ---- 启动：参数与撒布 → 首帧绘制 → 每帧一步演进 -------------------------
@@ -512,15 +513,15 @@
     })
   }))
 
-;; ---- 「重置」按钮（HUD 右侧，紧挨「退出」）---------------------------------
-;; 命中判定用「电平 + 按下沿」：本 App 每帧一拍（≈16ms），一次点按跨好几拍，
+;; ---- 「重置」按钮（HUD 右侧）---------------------------------------------
+;; 命中判定用「电平 + 按下沿」：本页每帧一拍（≈16ms），一次点按跨好几拍，
 ;; 电平采样不会漏；命中后把该按下沿取走，避免同一手势被判两次。
 (define RB_W 36)
 (define RB_H 16)
 (define RB_Y 2)
-;; 「退出」按钮矩形是 [SW-(EX.btn_w+4), SW-4]（宽度见 app/lib/exit.scm 的 btn_w）；
-;; 本按钮紧贴它左边，留 4px 间距——按钮加宽过，写死 SW-80 会压到退出按钮上。
-(define rb_x (- (- SW (+ EX.btn_w 4)) (+ RB_W 4)))
+;; 并入合集后「退出」按钮搬到了底部页签栏，HUD 右侧这块就空出来了，本按钮占那里
+;; （右边留 4px，与其他 App 的右上角按钮同一规矩）。
+(define rb_x (- SW (+ RB_W 4)))
 (define prev_down 0)
 (define reset_req 0)
 
@@ -558,9 +559,11 @@
         #f)
   }))
 
-(define step
+;; ---- 对外入口（宿主 App 只调这几个 + init/budget）--------------------------
+
+;; 一拍：读「重置」按钮 → 重新撒布 或 推进一次物理 → 重绘
+(define tick
   (lambda () {
-    (EX.check)                       ; 返回请求 / 右上角「退出」按钮
     (read_touch)                     ; 「重置」按钮（命中即置 reset_req）
     (if (== reset_req 1)
         { (set! reset_req 0) (world-reset) }
@@ -568,17 +571,21 @@
     (draw)
   }))
 
-(state-alloc)
-(world-reset)
-(grid-init)
-(draw)
-(step)
-;; 节奏：每帧一步（≈60fps）。周期取「半帧」而非整帧——宿主只在 GUI 帧边界触发
-;; 定时器（浏览器 rAF ≈16.7ms），16ms 周期会被向上量化成「有时隔两帧」，实测
-;; 60fps 下只有 50 步/秒；8ms 则每帧必到期，实测稳定 60 步/秒。一步的指令数由
-;; 文件头的 App.set_timeslice 预算保证能在一个时间片内跑完（否则步频减半）。
-(set! _timer (System.set_interval 8 step))
+;; 已推进的步数（诊断用，见 alife_gol.scm 的同名条目）
+(define steps
+  (lambda () gen))
 
-;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
-;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行（并调 draw 擦掉对话框残影）
-(EX.install_with draw)
+;; 一次性初始化（宿主启动时调一次，之后状态一直留在本模块里）
+(define init
+  (lambda () {
+    (state-alloc)
+    (world-reset)
+    (grid-init)
+    (draw)
+  }))
+
+;; ---- 启动：本模块作为库被 import 时**不做任何事**（不装定时器、不刷屏）------
+;;   旧版独立 App 在这一行的位置是：(state-alloc) (world-reset) (grid-init) (draw)
+;;   (step) (set! _timer (System.set_interval 8 step)) (EX.install_with draw)。
+;;   节拍由宿主给：宿主每收到一次定时器回调（≈每个宿主帧一次）调一次 tick，
+;;   即 60 步/秒，与原 App 的实测步频一致。

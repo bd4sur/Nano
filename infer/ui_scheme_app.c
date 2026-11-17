@@ -103,7 +103,7 @@
 #define MB_ERR_BUF_LEN (128)
 
 // App 数量上限与名称长度上限
-#define SCHEME_APP_MAX     (UI_SCHEME_APP_MAX)  // app/*.scm 上限（当前 55 个；余量留 73 个）
+#define SCHEME_APP_MAX     (UI_SCHEME_APP_MAX)  // app/*.scm 上限（当前 52 个；余量留 76 个）
 // 2026-11 历次上调：32 → 48 → 56 → 128。前两次都是被实际数量顶到只剩个位数的余量：
 // app/ 下的 .scm 从 33 涨到 47 时 48 只剩 1 个余量、涨到 50 时 56 只剩 6 个（期间
 // 另一会话在 app/ 里临时放 6 个草稿 .scm 就顶满了）。**上限越界不会报错**：收集循环

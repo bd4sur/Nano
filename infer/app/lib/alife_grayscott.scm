@@ -1,8 +1,10 @@
-;@id=grayscott
-;@title=grayscott
-;@version=2026-11-17
 ;; ============================================================================
-;; 反应-扩散（Gray-Scott）：人工生命 —— 灵机应用程序
+;; 反应-扩散（Gray-Scott）—— 人工生命合集 emergence.scm 的「反应扩散」页
+;;
+;; 本文件原本是独立 App（app/grayscott.scm）。2026-11 并入 app/emergence.scm 后
+;; **降格为库**：不装定时器、不推屏、不管退出按钮；对外只有
+;;   init（一次性初始化）/ tick（推进一个仿真步）/ draw（整屏重绘）/ budget（时间片）。
+;; 状态（Acur/Bcur/step_no/preset）留在模块里，切页不重置。
 ;;
 ;; 运行环境：灵机（Animac）解释器 + Nano Gfx 本地库 + Diag 本地库
 ;;
@@ -10,22 +12,23 @@
 ;;     ∂A/∂t = Da·∇²A − A·B² + f·(1−A)
 ;;     ∂B/∂t = Db·∇²B + A·B² − (k+f)·B
 ;;   A 是"养料"、B 是"催化剂"；A·B² 是自催化反应项，f 是补给率、k 是消亡率。
-;;   同一套方程在 (f,k) 平面上能长出完全不同的花纹。本 App 用 5 组实测存活的
-;;   参数轮播，每组跑 600 tick（约 24 s）后换参数并重新播种：
+;;   同一套方程在 (f,k) 平面上能长出完全不同的花纹。本页用 5 组实测存活的
+;;   参数轮播，每组跑 PRESET_TICKS 拍后换参数并重新播种：
 ;;     (0.0545, 0.062) 珊瑚 · (0.058, 0.065) 蠕虫 · (0.039, 0.058) 空洞
 ;;     (0.062, 0.0609) 滑翔子 · (0.026, 0.051) 波纹
 ;;   （(f,k) 必须落在"自催化能点燃"的区域：B 的初值太小会被扩散稀释到熄灭阈值
 ;;     k+f 以下，所以播种用 8×8 的大种点而不是小点，否则低 f 的参数直接死掉。）
 ;;
 ;; 数值细节：
-;;   · 网格 64×48（每格 5×5 像素铺满 320×240），环形边界（用 mod 取邻格下标）；
+;;   · 网格 53×32（每格 6×6 像素 = 318×192，铺满页签栏以上的内容区），环形边界
+;;     （用 mod 取邻格下标）；
 ;;   · ∇² 用 9 点模板：0.2×(上+下+左+右) + 0.05×(四角) − 1.0×自身；
 ;;   · 显式欧拉一步 dt=1.0，Da=1.0 / Db=0.5（经典参数），结果裁到 [0,1]；
 ;;   · 双缓冲：A1/A2、B1/B2 四张扁平表轮换，每步只 set_item! 覆写，无逐帧分配。
 ;;
-;; 成本实测（host x86-64）：单步（3072 格 × 18 次邻格读取）约 11 ms，整帧（含 3072 个
-;; fill_rect 上屏）约 13 ms；定时器 40 ms/帧 → 约 33% CPU。浏览器 wasm32 上解释器慢
-;; 约 6 倍，实际帧率约 8~12 fps（图案仍在持续演化，只是推进得慢）。
+;; 规模与节拍：原独立 App 是 64×48 / 40ms 一拍（实测 wasm 8~12fps）。并入合集后
+;; 网格收到 53×32（格数 −45%，因为内容区从 240px 高降到 192px），节拍由宿主按
+;; “每 6 个宿主帧一步”给（≈10 步/秒，与原 App 的实际推进速度同量级）。
 ;;
 ;; 书写约定（本解释器的坑，详见 app/turtle.scm 头部）：算术一律二元嵌套；
 ;; cond 子句只能带一个表达式且子句多了会编译失败，故全部用平铺 if；
@@ -35,27 +38,28 @@
 (native Gfx)
 (native Math)
 (native String)
-(native System)
-(native Diag)
-(import EX "app/lib/exit.scm")   ; 硬 A/ESC → 全局退出确认
 
 ;; ---- 网格与参数 ------------------------------------------------------------
 
 (define W (Gfx.width))            ; 320
 (define H (Gfx.height))           ; 240
-(define GW 64)                    ; 网格列数
-(define GH 48)                    ; 网格行数
-(define PX 5)                     ; 每格边长（像素）
+;; TAB_H：宿主 emergence.scm 底部页签栏高度（18）。内容区 = HUD_TOP..H-TAB_H = 192px，
+;; 故 32 行 × 6px = 192px 正好铺满，页签栏底下不再算格子（两者的高度必须一致）。
+(define TAB_H 18)
+(define GW 53)                    ; 网格列数（53×6 = 318px，右侧留 2px）
+(define GH 32)                    ; 网格行数（32×6 = 192px = 内容区高度）
+(define PX 6)                     ; 每格边长（像素）
 (define CELLS (* GW GH))
-(define TICK_MS 40)
 (define HUD_TOP 30)
-(define HUD_BOT 20)
-(define PRESET_TICKS 600)         ; 每组参数持续的 tick 数（约 24 s，够长出花纹）
+(define PRESET_TICKS 600)         ; 每组参数持续的 tick 数（@10 步/秒 ≈ 60 s 一组）
 
 (define Da 1.0)
 (define Db 0.5)
 (define DT 1.0)
-(define STEPS_PER_TICK 1)      ; 每个 tick 推进的仿真步数（图案生长速度）
+;; 本页需要的单帧时间片（宿主的 (App.set_timeslice budget) 取这个值）。本页一步较重
+;; （1696 格 × 18 次邻格读取），取宿主默认值 312500：一步会被拆到相邻几帧里跑完，
+;; 与它作为独立 App 时的行为一致（原版也没申请更大的时间片）。
+(define budget 312500)
 
 ;; ---- 参数组（(f,k) 平面上的人工生命地貌）-----------------------------------
 
@@ -204,7 +208,6 @@
 
 (define ds "")
 (define step_no 0)
-(define frame_ms 0)
 
 (define cat3 (lambda (a b c) (String.concat a (String.concat b c))))
 (define cat4 (lambda (a b c d) (String.concat a (cat3 b c d))))
@@ -212,45 +215,80 @@
 
 (define draw_hud
   (lambda ()
+    (Gfx.set_font 1)                       ; 12px 抗锯齿字（字模是跨 App 共享的静态量）
     (Gfx.fill_rect 0 0 W HUD_TOP 0 0 0)
-    (Gfx.fill_rect 0 (- H HUD_BOT) W HUD_BOT 0 0 0)
     (Gfx.draw_text (cat3 "Gray-Scott · " pname "") 8 4 225 235 245)
     ;; f/k 只显示 4 位小数（atom_to_string 会打出 0.0389999 这种长串，挤占后面的列）
     (set! ds (cat4 "f=" (num (/ (Math.floor (* f 10000.0)) 10000.0)) " k=" (num (/ (Math.floor (* k 10000.0)) 10000.0))))
     (Gfx.draw_text ds 8 18 130 165 195)
     (set! ds (cat3 "步" (num step_no) ""))
-    (Gfx.draw_text ds 160 18 130 165 195)
-    (set! ds (cat3 (num frame_ms) "ms" ""))
-    (Gfx.draw_text ds 250 18 130 165 195)
-    (Gfx.draw_text "A=养料 B=催化剂：A·B² 自催化 · 5 组 (f,k) 轮播" 8 (- H 15) 110 140 170)))
+    (Gfx.draw_text ds 210 18 130 165 195)))
 
-;; ---- 主流程 ----------------------------------------------------------------
+;; ---- 对外入口（宿主 App 只调这几个 + init/budget）--------------------------
 
-(define tick_fn
-  (lambda ()
-    (EX.check)
-    (define t 0) (define st 0)
-    (set! t (Diag.ms))
-    (set! st 0)
-    (while (< st STEPS_PER_TICK) { (sim_step) (set! st (+ st 1)) })
+;; 整屏重绘（不推进仿真）：清屏 → 反应-扩散场 → 顶栏
+(define paint
+  (lambda () {
+    (Gfx.clear)
     (render)
-    (set! step_no (+ step_no 1))
-    (set! frame_ms (- (Diag.ms) t))
     (draw_hud)
-      (EX.draw_button)
-      (Gfx.refresh)
+  }))
+
+;; 一拍：推进一个仿真步，每 PRESET_TICKS 拍换一组 (f,k) 并重新播种，然后重绘
+(define tick
+  (lambda () {
+    (sim_step)
+    (set! step_no (+ step_no 1))
     (if (>= step_no (* PRESET_TICKS (+ preset 1)))
         { (apply_preset (mod (+ preset 1) pcount))
           (reseed) })
-    (if (> step_no 100000) { (set! step_no 0) })))
+    (if (> step_no 100000) { (set! step_no 0) })
+    (paint)
+    (if (< (count_live) 8)
+        (set! dead_ticks (+ dead_ticks 1))
+        (set! dead_ticks 0))
+    (if (> dead_ticks 6)
+        { (set! dead_ticks 0)
+          (display "[grayscott] reseed extinct") (newline)
+          (reseed)
+          (paint) })
+  }))
 
-;; ---- 启动 ------------------------------------------------------------------
+;; 只重绘（切页回来 / 模态框关闭后的补帧）
+(define draw
+  (lambda () {
+    (paint)
+  }))
 
-(init_buffers)
-(apply_preset 0)
-(reseed)
-(set! _timer (System.set_interval TICK_MS tick_fn))
+;; ---- 灭绝自愈（合集特有的处理）--------------------------------------------
+;; 5 组 (f,k) 都是实测存活过的组合，但播种是随机的：偶尔会点不燃（B 被扩散稀释到
+;; 熄灭阈值 k+f 以下就再也不长了）。作为独立 App 时它靠"每组只跑 PRESET_TICKS 拍"
+;; 掩盖；合集里加一条看门狗：连续 dead_ticks 拍几乎没有催化剂（B > 0.05）就重新播种。
 
-;; ---- 退出：硬 A/ESC → 宿主全局退出确认框（见 app/lib/exit.scm）----
-;;  确认 → 宿主本帧末销毁本 App；留下 → 继续运行（并调 render 擦掉对话框残影）
-(EX.install_with render)
+(define dead_ticks 0)
+
+;; 有催化剂的格数（与 render 的观感阈值一致）
+(define count_live
+  (lambda ()
+    (define i 0) (define n 0)
+    (while (< i CELLS) {
+      (if (> (get_item Bcur i) 0.05) (set! n (+ n 1)) #f)
+      (set! i (+ i 1)) })
+    n))
+
+;; 已推进的步数（诊断用，见 alife_gol.scm 的同名条目）
+(define steps
+  (lambda () step_no))
+
+;; 一次性初始化（宿主启动时调一次，之后状态一直留在本模块里）
+(define init
+  (lambda () {
+    (init_buffers)
+    (apply_preset 0)
+    (reseed)
+    (paint)
+  }))
+
+;; ---- 启动：本模块作为库被 import 时**不做任何事**（不装定时器、不刷屏）------
+;;   旧版独立 App 在这一行的位置是：(init_buffers) (apply_preset 0) (reseed)
+;;   (set! _timer (System.set_interval ...)) (EX.install_with render)。

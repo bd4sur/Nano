@@ -621,9 +621,10 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
         // 原“俄罗斯方块”入口已移除：C 版（STATE_TETRIS）退场，俄罗斯方块仅保留
         // Scheme 实现（app/tetris.scm，经“灵机应用程序”入口启动）
         // 原“康威生命游戏”入口已移除：C 版（STATE_GAMEOFLIFE）退场，生命游戏仅保留
-        // Scheme 实现（app/gol.scm，经“灵机应用程序”入口启动）
+        // Scheme 实现（app/lib/alife_gol.scm —— 2026-11 起是 app/emergence.scm 的
+        // 「生命游戏」页，不再是独立 App）
         // 原“粒子生命”入口已移除：C 版（STATE_PARTICLELIFE）退场，粒子生命仅保留
-        // Scheme 实现（app/particlelife.scm，经“灵机应用程序”入口启动）
+        // Scheme 实现（app/lib/alife_particle.scm —— 同上，已并入 app/emergence.scm）
         // 原“Bad Apple!”入口已移除：C 版（STATE_BADAPPLE）退场，Bad Apple 仅保留
         // Scheme 实现（app/badapple.scm，经“灵机应用程序”入口启动）
     };
