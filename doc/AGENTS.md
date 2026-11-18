@@ -14265,3 +14265,28 @@ compile 内部：`am_compiler_opstack_depth_analysis` **447ms（占 73%）**—�
 4. 仓库里的 `regress_markdown.js` / `regress_det.js` 的**菜单导航已过期**（它们还按
    "主菜单第 6 格 = 小游戏"按 `digit(6)`，而现在可见内置项被屏蔽成 7 个 → 小游戏是
    第 5 格），与本轮改动无关，跑之前得先修。
+
+------------------------------------
+
+# 2026-11-18
+
+文件管理器（`app/filemgr.scm`）大文件尺寸显示错误：几百 MB 的 LLM 权重显示成几十 MB。
+
+## 根因
+
+VM 的数字是带 5 位类型标签的立即数：int 载荷只有 `机器字长 - 5` 位（32 位宿主含符号位共 27 位），可精确表示的最大正数是 `UINTPTR_MAX >> 6`，即 32 位宿主上的 67108863（约 64MB）。`am_native_Fs_size` 原先无条件用 `am_make_value_of_int((am_int_t)size)` 打包，几百 MB 的大小在左移 5 位时丢掉高位：167772160 字节变成 33554432（32MB），73400320 字节变成负数——正是「几百兆显示成几十兆」的来源。
+
+另外 `FSX.human_size` 用 `atom_to_string(Math.to_fixed(x, 1))` 输出尺寸：wasm32 的 `am_float_t` 是单精度且尾数还要让出 5 位标签，1.9 实际存为 1.89999…，`%g` 会原样打印；且 `%g` 会把 2.0 退化成 `"2"`，丢小数位。
+
+## 修复
+
+- `infer/am_native_Fs.c`：新增 `fs_push_size()`——能装进 VM 立即数 int 时仍返回 int（小文件字节数保持精确、类型不变）；超过 `UINTPTR_MAX >> 6` 时改压 float。64 位宿主不受影响（uint32 文件大小永远装得下）。
+- `infer/app/lib/fsx.scm`：新增 `fixed1()`，按 `Math.round(x*10)` 后拼「整数 + '.' + 一位小数」两段整数，KB/MB 恒保留 1 位小数（2.0 不会退化成 2），对浮点误差免疫；`human_size` 改用它。
+- `infer/app/filemgr.scm`：元数据 version 更新为 2026-11-18，并在尺寸缓存处注明大文件可能返回 float 的原因。
+- `infer/am_native_Fs.h`：补充 `(Fs.size)` 的大文件返回约定。
+
+## 验证
+
+- **真 wasm32 探针**（自建 `emcc` 宿主，注册 Fs native + 真 hal_fs）：`nano-168m-q80.bin` → `166.1 MB`、`qwen3-0b6-q80.bin` → `598.5 MB`、`nano-56m-q80.bin` → `55.1 MB`；修复前同尺寸分别会得到 32MB 级或负数。
+- **无头 Chromium 端到端**：在 MEMFS 造 2097151 字节与 73400320 字节两个文件，文件管理器列表与详情框分别显示 `2.0 MB`、`70.0 MB`（无 `1.99999`），截图核对通过。
+- 既有 `regress_filemgr.js` 主流程（目录导航/新建/重命名/删除/刷新）39 项 PASS；仅退出后状态与文件选择器段落因该脚本的菜单导航已过期（见上一节「踩坑 4」）而失败，与本次改动无关。

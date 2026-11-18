@@ -35,6 +35,9 @@ extern "C" {
 //    (Fs.exists path)      : Boolean          —— 文件或目录是否存在
 //    (Fs.is_dir path)      : Boolean          —— 是否目录
 //    (Fs.size path)        : Number | #null   —— 文件字节数（不存在/是目录 → #null）
+//                                                 能装进 VM 立即数整数时返回 int（32 位宿主
+//                                                 上限约 64MB）；更大的文件返回 float，
+//                                                 以免按 27 位回绕成几十 MB
 //    (Fs.list dir)         : List | #null     —— 目录条目名（不含路径，按名字升序）；
 //                                                目录打不开 → #null
 //    (Fs.mkdir path)       : Boolean          —— 创建目录（已存在视为成功）

@@ -1,6 +1,6 @@
 ;@id=filemgr
 ;@title=文件管理
-;@version=2026-11-17
+;@version=2026-11-18
 ;; ============================================================================
 ;; filemgr.scm —— 文件管理器（灵机应用程序 · 完全权限版）
 ;;
@@ -310,6 +310,10 @@
               (if (== isd 1)
                   (push keep (mk3 s 1 0))
                   { (set! sz (Fs.size (FSX.join cur s)))
+                    ;; sz 在 32 位宿主上可能是 float：VM 的 int 立即数只有约 64MB
+                    ;; 的正数范围，超过时本地库改压 float（见 am_native_Fs.c 的
+                    ;; fs_push_size），否则几百 MB 的模型文件会回绕成几十 MB。
+                    ;; 这里只缓存数值，比较与格式化（FSX.human_size）都按数值语义走。
                     (push keep (mk3 s 0 (if (null? sz) 0 sz))) })
               (set! i (+ i 1)) })
           (set! rows (FSX.sort_entries keep)) })

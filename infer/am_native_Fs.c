@@ -293,6 +293,19 @@ static int32_t fs_push_null(am_process_t *proc) {
     return fs_push(proc, AM_VALUE_NULL);
 }
 
+// 把文件大小压栈。VM 的数字是带 5 位类型标签的立即数：int 载荷只有
+// (机器字长 - 5) 位（含符号位），能精确表示的最大值是 UINTPTR_MAX >> 6。
+// 32 位宿主（WASM-GUI / ESP32）上那是 67108863（约 64MB）——几百 MB 的 LLM
+// 权重若仍按 int 打包，打包时左移 5 位会丢掉高位（167MB 会显示成 32MB，即
+// 文件管理器「几百兆显示成几十兆」的根因）。超出范围时改用 float：wasm32 的
+// float 是单精度且尾数还会被类型标签截掉 5 位，但「人读尺寸」保留 1 位小数
+// 只需要几位有效数字，足够；而精确字节数在这种尺寸上本就不是 int 能表达的。
+static int32_t fs_push_size(am_process_t *proc, uint32_t size) {
+    if ((uint64_t)size <= (uint64_t)(UINTPTR_MAX >> 6))
+        return fs_push(proc, am_make_value_of_int((am_int_t)size));
+    return fs_push(proc, am_make_value_of_float((am_float_t)size));
+}
+
 // 由 UTF-8 缓冲区构造 Scheme 字符串把柄（失败返回 AM_HANDLE_NULL）。
 static am_handle_t fs_make_string_handle(am_process_t *proc, const char *utf8, size_t len) {
     // 最坏情况：每个字节一个码点
@@ -351,7 +364,7 @@ int32_t am_native_Fs_size(am_runtime_t *rt, am_process_t *proc) {
     if (platform_file_open(path) != 0) return fs_push_null(proc);
     uint32_t size = platform_file_size();
     platform_file_close();
-    return fs_push(proc, am_make_value_of_int((am_int_t)size));
+    return fs_push_size(proc, size);
 }
 
 int32_t am_native_Fs_list(am_runtime_t *rt, am_process_t *proc) {

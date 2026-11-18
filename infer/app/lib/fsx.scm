@@ -231,10 +231,34 @@
 
 ;; ---- 尺寸格式化 ----------------------------------------------------------
 
+;; 一位小数格式化（列表右列 / 详情框用）。
+;; 为什么不用 atom_to_string(to_fixed x 1)：VM 的浮点载荷位宽有限（wasm32 上
+;; am_float_t 是单精度，且打包时尾数还要让出 5 位类型标签），1.9 实际存为
+;; 1.89999…，%g 会把它原样打印成 "1.89999"；而且 to_fixed 返回数字、%g 会把
+;; 2.0 退化成 "2"（丢掉小数位）。这里 ×10 四舍五入后，用「整数部分 + '.' +
+;; 一位小数」两段整数拼装：对浮点误差免疫，且保证恒有 1 位小数。
+(define fixed1
+  (lambda (x)
+    (define t 0)
+    (define w 0)
+    (define f 0)
+    (define sign "")
+    (set! t (Math.round (* x 10.0)))
+    (if (< t 0) { (set! sign "-") (set! t (- 0 t)) } #f)
+    (set! w (Math.floor (/ t 10.0)))
+    (set! f (- t (* w 10.0)))
+    (String.concat sign
+      (String.concat (String.atom_to_string w)
+        (String.concat "." (String.atom_to_string f))))))
+
+;; 字节数 → 人读尺寸（B / KB / MB，KB 与 MB 恒保留 1 位小数）。
+;; b 可能是 int，也可能是 float：32 位宿主上 (Fs.size) 对超过 VM 立即数整数
+;; 范围的大文件（如几百 MB 的 LLM 权重）返回 float，见 am_native_Fs.c 的
+;; fs_push_size；这里不区分类型，比较与除法都按数值语义工作。
 (define human_size
   (lambda (b)
     (if (< b 1024)
         (String.concat (String.atom_to_string b) " B")
         (if (< b (* 1024 1024))
-            (String.concat (String.atom_to_string (Math.to_fixed (/ b 1024.0) 1)) " KB")
-            (String.concat (String.atom_to_string (Math.to_fixed (/ b (* 1024 1024)) 1)) " MB")))))
+            (String.concat (fixed1 (/ b 1024.0)) " KB")
+            (String.concat (fixed1 (/ b (* 1024 1024))) " MB")))))
