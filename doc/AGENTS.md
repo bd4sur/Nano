@@ -14187,3 +14187,81 @@ qwen3-0b6 与 qwen35-0b8，面板 `llm/` 行徽标 `p2 未下载 8`。
 `regress_webgui_files.js` 相应把原来的"点行只选中、不折叠"改成"选中 + 收起"，
 并补了「点图标」「点右侧子项数」两条，**47/47 PASS**；`regress_resources.js` 43/43、
 `regress_wheel.js` 28/28、`test_webgui_vfs.js` 49/49 全绿。
+
+------------------------------------
+
+# 2026-11-18（十）灵机 App 冷启动：IL 缓存（`__pycache__` 式）+ 通用「正在启动」画面
+
+需求：① 把编译产物落盘复用，**不改 vendor**（要改 vendor 就不做）；② 黑屏期给出
+通用反馈（"正在启动 xxx…"），做成宿主侧机制，所有灵机 App 都受益。
+
+## 先把时间花在哪测清楚（WASM，无头 Chromium，`infer/webgui` 产物，本地 HTTP）
+
+| 阶段 | 耗时 | 说明 |
+|---|---|---|
+| Enter → 黑屏帧上屏 | 24 ms | 建池（56MB 分配实测 0 ms）+ 读源码 |
+| **黑屏持续**（主线程被整段阻塞） | **989 ms**（首次）/ 695 ms（二次） | 编译 + boot + 首段排版 |
+| 其中 读源码 → boot 结束（`MDSEED`） | **836 ms** | 几乎全是 `am_parse`/`am_link`/`am_compile` |
+| 其中 首段 4KB 解析排版 + 目录推进 | 157 ms | App 自己的活（示例文档含 ~25 条公式） |
+
+wasm32 探针（同 vendor、同 `app_load_source` 流程）把 836ms 拆开：
+markdown `parse 22 / link 150 / compile 621 / load 18`；`node --cpu-prof` 归因
+compile 内部：`am_compiler_opstack_depth_analysis` **447ms（占 73%）**——它对
+**每个 λ 入口**都 `memset` 一遍整个 `best_depth[icount]` 再 DFS，即 O(#λ × #IL)
+（markdown `icount=33663, entries=612` → 2060 万次；mathjax `14938×213=318 万`
+→ 69ms，与乘积线性相关）。结论：**慢在编译，不在文档解析**；黑屏就是这段同步编译。
+
+## 一、IL 缓存（`ui_scheme_app.c`，vendor 零改动）
+
+只调用 vendor 已导出的 `am_module_dump` / `am_module_load`（序列化 ilcode + AST
+静态数据段 + 变量/符号表 + 闭包帧描述符表），恢复出的 `am_module_t` 与编译产物等价，
+装载仍走 `am_runtime_load_module` 同一条路。
+
+- 文件：`<资源根>/data/ilcache/<app id>.ilc`，一 App 一份、就地覆盖。`data/` 本来
+  就不在资源清单里（`build_wasm_gui.sh` 的 `SKIP_DIRS`），服务器不会覆盖它；WASM 侧
+  写完后经 `am_native_fs_on_write` 弱钩子落进 IndexedDB（与 App 存档同一条通路），
+  **刷新页面仍在**。
+- 失效判据：magic / format / **ABI**（`MB_ILCACHE_ABI` ⊕ 几个结构体 sizeof ⊕ 三个
+  哨兵 opcode）＋**来源清单**（每个参与编译的 .scm 的 相对路径/字节数/内容哈希）＋
+  payload 校验和。清单是**链接器实际读过哪些文件**当场记下来的（把 `am_link` 的读源
+  回调换成 `ilc_read_source`），不是自己扫 `(import …)`——所以不会漏模块；源码改一
+  字节就失配（比 Python 的 mtime+size 更严）。
+- 只缓存"编译确实贵"的 App：编译耗时 ≥ 250ms 且 payload ∈ [128KB, 6MB] 才写盘。
+  52 个 App 全量实测只有 markdown 过线（其余 7~120ms），正好是唯一值得缓存的。
+- 降级：目录建不出 / 写失败 / 校验不过 / 内存不足 / `am_module_load` 返回 NULL，
+  一律"当作未命中"重编，功能不受影响。ESP32（2MB 池、SD 慢）编译期直接关掉。
+
+实测（真 WASM + 无头 Chromium）：首次 808ms 编译 + 24ms 序列化落盘（933KB）；
+再次进入 **装载 22~24ms**（省掉 800ms）；刷新页面后第一次进入同样命中。
+
+## 二、通用「正在启动」画面
+
+`app_draw_start_screen(gfx, title, first_time)`：在**编译前**画一帧（底色 + App 标题
++ "正在启动…（首次启动需准备，请稍候）" + 忙条）并推屏。WASM 的 `gfx_refresh` 是同步
+`putImageData`，这一帧会一直停在屏幕上顶住整段编译，用户看到的不再是纯黑。
+缓存命中时不画它（省掉一次全屏推屏，且它本来也只会闪一下）。
+
+## 验证
+
+- **逐像素一致**：编译路径与缓存路径打开同一篇文档，整帧 FNV 哈希相同
+  （`723853444`，页眉/正文底色、亮像素数 8435 全部相等），滚动后画面照常变化。
+- **全量冒烟**：52 个 App 逐个冷启动 → 全部 `state=80`、画面非空、**无 pageerror**；
+  每个 App 都打印 `ILCACHE miss …（…）` + `compile …ms（够快，不缓存 / 已写缓存）`。
+- **持久化**：`launchPersistentContext` 起真 profile → 进 markdown（miss，写缓存）
+  → `page.goto` 重新加载整页 → 再进 markdown → `ILCACHE hit markdown：装载 24ms`，
+  MEMFS 里缓存文件仍在（loader 把它当"本机文件"挂回来）。
+- `gcc -c` / `emcc -fsyntax-only`（wasm32 与 64 位两条路径）零新增警告。
+
+## 踩坑
+
+1. **链接器拼的是 `root//app/lib/x.scm`**（root 自带尾斜杠，再补一个 `/`）：剥掉
+   root 前缀后仍留着前导 `/`，于是验证阶段把它当"宿主绝对路径"直接 `fopen("/app/…")`
+   → 每次都被判"来源已变"，缓存永远命不中。`ilc_note()` 里统一再吃掉前导斜杠。
+2. **入口文件的哈希要在 `file_buffer` 被 `free()` 之前算**——第一版放在宽字符转换
+   （那里会 free）之后，算的是已释放内存，导致清单第 0 条永远不符。
+3. 同一份源码两次编译出的 payload 尺寸会差几个百分点（933KB / 991KB，dump 里有与
+   句柄序号相关的表），对缓存无影响：payload 自带长度与偏移，校验和只保证"这一份"
+   完整。
+4. 仓库里的 `regress_markdown.js` / `regress_det.js` 的**菜单导航已过期**（它们还按
+   "主菜单第 6 格 = 小游戏"按 `digit(6)`，而现在可见内置项被屏蔽成 7 个 → 小游戏是
+   第 5 格），与本轮改动无关，跑之前得先修。

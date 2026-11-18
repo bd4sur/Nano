@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 
@@ -550,10 +551,430 @@ int32_t ui_scheme_app_list_event_handler(Key_Event *key_event, Global_State *glo
 }
 
 // ===============================================================================
+// IL 缓存（编译产物落盘；等价于 Python 的 __pycache__）
+//
+// 为什么要有：冷启动的时间几乎全花在「把源码现场编译成 IL」上。WASM 实测 markdown
+// （16 个模块 / 432KB / 10.5k 行）：parse 22ms + link 150ms + compile 620ms +
+// load 18ms ≈ 810ms，而 App 自己解析首屏文档只要 ~150ms。编译结果本来就是**与本次
+// 运行无关**的产物，只是解释器不落盘，于是每次进 App 都重算一遍（黑屏就发生在这段）。
+//
+// 做法（**不改 vendor**）：只调用它已导出的 am_module_dump / am_module_load
+// （序列化 ilcode + AST 静态数据段 + 变量/符号表 + 闭包帧描述符表）。恢复出来的
+// am_module_t 与编译产物完全等价，装载仍走 am_runtime_load_module 同一条路。
+//   命中实测：load 6ms + 装载 23ms ≈ 29ms（对照 810ms），模块 924KB。
+//
+// 文件：<资源根>/data/ilcache/<app id>.ilc —— 一 App 一份，就地覆盖，无需淘汰。
+//   · data/ 不在资源清单里（build_wasm_gui.sh 的 SKIP_DIRS），服务器永远不会覆盖它；
+//   · WASM 目标写完后经 am_native_fs_on_write 弱钩子落进 IndexedDB（与 App 存档
+//     同一条通路），刷新页面仍在；没有该钩子的平台是一行空操作。
+//
+// 失效判据（任一不符即当作未命中，编译成功后重写）：
+//   · magic / format / ABI —— ABI 由 MB_ILCACHE_ABI 与几个结构体 sizeof 混成：
+//     同步 vendor 或增删本地库注册后把 MB_ILCACHE_ABI +1；
+//   · **来源清单**：每个参与编译的 .scm 的（相对路径, 字节数, 内容哈希）。清单由
+//     链接器**实际读过**的文件当场记下（替换 am_link 的读源回调），不是自己扫 import
+//     ——所以不会漏模块；源码改一个字节就失配（比 Python 的 mtime+size 更严）；
+//   · payload 校验和 —— 防止「写一半掉电 / SD 卡拔出」留下的半截文件被当成有效 IL。
+//
+// 只缓存「编译确实贵」的 App：编译耗时 ≥ MB_ILCACHE_MIN_COMPILE_MS 且产物在
+// [MIN,MAX] 字节之间才写盘。52 个 App 各塞一份小缓存没收益，而且 WASM 每次页面
+// 加载都要把这些「本机文件」从 IndexedDB 灌回 MEMFS——不能为了 30ms 的 App 付这份钱。
+//
+// 降级：缓存侧任何失败（目录建不出、写失败、校验不过、内存不足、load 返回 NULL）
+// 都只是「当作未命中」，App 照原路径编译，功能与行为不受影响。
+// ===============================================================================
+
+#if NANO_IS_M5ESP
+    // ESP32：2MB 池下能跑的都是小 App（编译十几毫秒），而 SD 读一遍来源清单
+    // 可能比编译本身还慢 → 关掉（零成本、零风险）。
+    #define MB_ILCACHE_ENABLE 0
+#elif defined(NANO_ILCACHE_OFF)
+    #define MB_ILCACHE_ENABLE 0
+#else
+    #define MB_ILCACHE_ENABLE 1
+#endif
+
+#define MB_ILCACHE_DIR            "data/ilcache"
+#define MB_ILCACHE_MAGIC          "AMILCH01"   // 8 字节
+#define MB_ILCACHE_FORMAT         1u
+#define MB_ILCACHE_ABI            1u   // 手工维护：同步 vendor / 改本地库注册表后 +1
+#define MB_ILCACHE_HDR            32u  // 头长度（之后紧接来源清单，再之后是 payload）
+#define MB_ILCACHE_MAX_MODULES    96u
+#define MB_ILCACHE_MAX_PATH       200u
+#define MB_ILCACHE_MIN_COMPILE_MS 250u
+#define MB_ILCACHE_MIN_PAYLOAD    (128u * 1024u)
+#define MB_ILCACHE_MAX_PAYLOAD    (6u * 1024u * 1024u)
+
+#if MB_ILCACHE_ENABLE
+
+// 一条来源记录：相对资源根（不带前导斜杠；验证时用 root + path 复现绝对路径）
+typedef struct {
+    char     path[MB_ILCACHE_MAX_PATH];
+    uint32_t size;
+    uint64_t hash;      // FNV-1a 64（文件原始字节，不做 UTF-8 解码）
+} ilc_src_t;
+
+// 链接回调的记账本
+typedef struct {
+    ilc_src_t item[MB_ILCACHE_MAX_MODULES];
+    uint32_t  count;
+    int32_t   overflow;     // 模块数超上限 → 放弃缓存（宁可不缓存，不可漏模块）
+} ilc_ctx_t;
+
+#define ILC_FNV_SEED 1469598103934665603ULL
+
+static uint64_t ilc_fnv1a64(const void *data, size_t n) {
+    const uint8_t *p = (const uint8_t *)data;
+    uint64_t h = ILC_FNV_SEED;
+    for (size_t i = 0; i < n; i++) {
+        h ^= (uint64_t)p[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+// 头/清单一律按小端手工编解码：宿主从 wasm32 到 aarch64/x86_64 字节序都一样，
+// 但结构体对齐/填充不同，所以不用 memcpy 结构体的写法。
+static void ilc_put_u16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+}
+static void ilc_put_u32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+    p[2] = (uint8_t)((v >> 16) & 0xFFu);
+    p[3] = (uint8_t)((v >> 24) & 0xFFu);
+}
+static void ilc_put_u64(uint8_t *p, uint64_t v) {
+    ilc_put_u32(p, (uint32_t)(v & 0xFFFFFFFFu));
+    ilc_put_u32(p + 4, (uint32_t)((v >> 32) & 0xFFFFFFFFu));
+}
+static uint16_t ilc_get_u16(const uint8_t *p) {
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+static uint32_t ilc_get_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+static uint64_t ilc_get_u64(const uint8_t *p) {
+    return (uint64_t)ilc_get_u32(p) | ((uint64_t)ilc_get_u32(p + 4) << 32);
+}
+
+// ABI 校验字：手工号 + 结构体尺寸 + 几个「哨兵 opcode」的当前值。
+// vendor 改了指令/帧描述符布局、或增删重排了 opcode，即使忘了 bump 手工号，
+// 这里多半也会因为 sizeof / opcode 编号变了而整体失效（多一层保险）。
+static uint32_t ilc_abi(void) {
+    uint32_t h = MB_ILCACHE_ABI * 2654435761u;
+    h ^= (uint32_t)sizeof(am_instruction_t) * 131u;
+    h ^= (uint32_t)sizeof(am_value_t) * 17u;
+    h ^= (uint32_t)sizeof(am_frame_slot_t) * 7u;
+    h ^= (uint32_t)sizeof(am_module_t) * 3u;
+    h ^= (uint32_t)AM_VM_OP_halt;
+    h ^= (uint32_t)AM_VM_OP_wind << 8;
+    h ^= (uint32_t)AM_VM_OP_dynamicwind_done << 16;
+    return h;
+}
+
+// 资源根（UTF-8，带尾斜杠）：把链接器给的绝对路径折回「相对资源根」
+static const char *ilc_root_mb(void) {
+    static char s_root_mb[256];
+    if (s_root_mb[0] == '\0') {
+        am_wcstombs(s_root_mb, s_app_root, (uint32_t)sizeof(s_root_mb) - 1);
+    }
+    return s_root_mb;
+}
+
+static void ilc_abs_path(const char *rel, char *out, size_t cap) {
+    if (rel[0] == '/') {
+        snprintf(out, cap, "%s", rel);
+    }
+    else {
+        snprintf(out, cap, "%s%s", ilc_root_mb(), rel);
+    }
+}
+
+// App id（文件名去 .scm，只留 [0-9A-Za-z_-]）：既是缓存文件名，也是日志里的名字。
+// 极端情况下两个文件名只有非 [0-9A-Za-z_-] 字符不同（a-b.scm / a_b.scm）会撞同一个
+// 缓存槽——后果只是两者互相覆盖、每次都重编，不影响正确性。
+static void ilc_app_id(const char *source_rel, char *out, size_t cap) {
+    const char *base = strrchr(source_rel, '/');
+    base = (base != NULL) ? base + 1 : source_rel;
+    size_t n = strlen(base);
+    if (n > 4 && strcmp(base + n - 4, ".scm") == 0) n -= 4;
+    if (n >= cap) n = cap - 1;
+    for (size_t i = 0; i < n; i++) {
+        char c = base[i];
+        int32_t ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+                  || (c >= 'A' && c <= 'Z') || c == '_' || c == '-';
+        out[i] = ok ? c : '_';
+    }
+    out[n] = '\0';
+}
+
+static void ilc_cache_path(const char *app_id, char *out, size_t cap) {
+    snprintf(out, cap, "%s/%s/%s.ilc", PLATFORM_ROOT_DIR, MB_ILCACHE_DIR, app_id);
+}
+
+// 往记账本里加一条（按相对路径去重：同一模块被多处 import 只记一次）
+static void ilc_note(ilc_ctx_t *ctx, const char *abs_mb, uint32_t size, uint64_t hash) {
+    if (ctx == NULL) return;
+    const char *root = ilc_root_mb();
+    size_t rl = strlen(root);
+    const char *rel = abs_mb;
+    if (rl > 0 && strncmp(abs_mb, root, rl) == 0) rel = abs_mb + rl;
+    // 链接器把 root 与 import 串直接相接，而 root 自带尾斜杠 → 会出现 "root//app/…"，
+    // 剥前缀后留下一个前导 '/'。清单里统一用「相对资源根、无前导斜杠」的形式，
+    // 验证阶段才能用 root + rel 复现同一个绝对路径。
+    while (*rel == '/' || *rel == '\\') rel++;
+    if (rel[0] == '\0' || strlen(rel) >= MB_ILCACHE_MAX_PATH) {
+        ctx->overflow = 1;
+        return;
+    }
+    for (uint32_t i = 0; i < ctx->count; i++) {
+        if (strcmp(ctx->item[i].path, rel) == 0) return;
+    }
+    if (ctx->count >= MB_ILCACHE_MAX_MODULES) {
+        ctx->overflow = 1;
+        return;
+    }
+    ilc_src_t *it = &ctx->item[ctx->count++];
+    strcpy(it->path, rel);
+    it->size = size;
+    it->hash = hash;
+}
+
+// am_link 的读源回调：读完**顺手记账**（这是「缓存来源清单」的唯一数据来源）。
+// 语义与 vendor 的 am_host_read_source_from_file 一致：返回 am_malloc 的宽字符源码。
+static wchar_t *ilc_read_source(am_allocator_t *alloc, const wchar_t *abs_path, void *user_data) {
+    if (!alloc || !abs_path) return NULL;
+    char mb[384];
+    mb[0] = '\0';
+    am_wcstombs(mb, abs_path, (uint32_t)sizeof(mb) - 1);
+    if (mb[0] == '\0') return NULL;
+
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+    if (platform_read_file_to_buffer(mb, &bytes, &size) != 0 || bytes == NULL || size == 0) {
+        if (bytes) free(bytes);
+        return NULL;
+    }
+    ilc_note((ilc_ctx_t *)user_data, mb, (uint32_t)size, ilc_fnv1a64(bytes, size));
+
+    // UTF-8 → 宽字符（同 am_read_file_to_wchar 的语义：非法字节退化为 '?' 并截断）
+    wchar_t *code = (wchar_t *)am_malloc(alloc, (size + 1) * sizeof(wchar_t));
+    if (code == NULL) {
+        free(bytes);
+        return NULL;
+    }
+    am_mbstowcs(code, (const char *)bytes, (uint32_t)size);
+    code[size] = L'\0';
+    free(bytes);
+    return code;
+}
+
+// 校验来源清单：每个模块都按（路径, 字节数, 内容哈希）复核一遍。
+// 命中成本 = 读一遍闭包源码（markdown 432KB ≈ 2ms），远小于重新编译。
+static int32_t ilc_verify_manifest(const uint8_t *buf, size_t size, uint32_t count, size_t *off_io) {
+    size_t off = *off_io;
+    for (uint32_t i = 0; i < count; i++) {
+        if (off + 14u > size) return 0;
+        uint32_t sz = ilc_get_u32(buf + off);
+        uint64_t hash = ilc_get_u64(buf + off + 4);
+        uint16_t plen = ilc_get_u16(buf + off + 12);
+        off += 14u;
+        if (plen == 0 || plen >= MB_ILCACHE_MAX_PATH || off + plen > size) return 0;
+        char rel[MB_ILCACHE_MAX_PATH];
+        memcpy(rel, buf + off, plen);
+        rel[plen] = '\0';
+        off += plen;
+
+        char abs[384];
+        ilc_abs_path(rel, abs, sizeof(abs));
+        uint8_t *fb = NULL;
+        size_t fs = 0;
+        if (platform_read_file_to_buffer(abs, &fb, &fs) != 0 || fb == NULL) {
+            if (fb) free(fb);
+            return 0;                      // 模块被删/被改名 → 未命中
+        }
+        uint64_t disk_hash = ilc_fnv1a64(fb, fs);
+        int32_t ok = ((uint32_t)fs == sz) && (disk_hash == hash);
+        if (!ok) {                         // 模块改过（或被删/改短）→ 未命中
+            printf("[scheme-app] ILCACHE stale：来源不符 %s（cache %u/%08x disk %u/%08x）\n",
+                   rel, (uint32_t)sz, (uint32_t)hash, (uint32_t)fs, (uint32_t)disk_hash);
+            free(fb);
+            return 0;
+        }
+        free(fb);
+    }
+    *off_io = off;
+    return 1;
+}
+
+// 命中则返回可直接 am_runtime_load_module 的模块（调用方负责释放），否则 NULL。
+static am_module_t *ilc_try_load(const char *app_id) {
+    char path[320];
+    ilc_cache_path(app_id, path, sizeof(path));
+
+    uint8_t *buf = NULL;
+    size_t size = 0;
+    if (platform_read_file_to_buffer(path, &buf, &size) != 0 || buf == NULL) {
+        printf("[scheme-app] ILCACHE miss %s（无缓存文件 %s）\n", app_id, path);
+        return NULL;
+    }
+    if (size < MB_ILCACHE_HDR || memcmp(buf, MB_ILCACHE_MAGIC, 8) != 0) {
+        printf("[scheme-app] ILCACHE stale %s（头不符 size=%u）\n", app_id, (uint32_t)size);
+        free(buf);
+        return NULL;
+    }
+    if (ilc_get_u32(buf + 8) != MB_ILCACHE_FORMAT || ilc_get_u32(buf + 12) != ilc_abi()) {
+        free(buf);
+        printf("[scheme-app] ILCACHE stale %s（format/ABI 不符）\n", app_id);
+        return NULL;
+    }
+    uint32_t count = ilc_get_u32(buf + 16);
+    uint32_t payload = ilc_get_u32(buf + 20);
+    uint32_t sum = ilc_get_u32(buf + 24);
+    if (count == 0 || count > MB_ILCACHE_MAX_MODULES || payload == 0
+        || (size_t)MB_ILCACHE_HDR + payload > size) {
+        printf("[scheme-app] ILCACHE stale %s（头字段不合理 n=%u payload=%u size=%u）\n",
+               app_id, count, payload, (uint32_t)size);
+        free(buf);
+        return NULL;
+    }
+    size_t off = MB_ILCACHE_HDR;
+    int32_t ok = ilc_verify_manifest(buf, size, count, &off);
+    if (!ok) {
+        free(buf);
+        return NULL;                       // 具体哪一条不符已由 ilc_verify_manifest 打印
+    }
+    if (off + payload != size) {
+        printf("[scheme-app] ILCACHE stale %s（长度不符 off=%u payload=%u size=%u）\n",
+               app_id, (uint32_t)off, (uint32_t)payload, (uint32_t)size);
+        free(buf);
+        return NULL;
+    }
+    if ((uint32_t)ilc_fnv1a64(buf + off, payload) != sum) {
+        free(buf);
+        printf("[scheme-app] ILCACHE stale %s（校验和错）\n", app_id);
+        return NULL;
+    }
+    am_module_t *mod = am_module_load(s_app->vm_alloc, s_app->vm_alloc, buf, off);
+    free(buf);
+    if (mod == NULL) {
+        printf("[scheme-app] ILCACHE stale %s（am_module_load 失败）\n", app_id);
+    }
+    return mod;
+}
+
+// WASM 目标的落盘钩子（弱符号：其他平台链接为空，一行空操作）
+extern void am_native_fs_on_write(const char *path, const uint8_t *data, size_t size) __attribute__((weak));
+
+// 编译产物写盘（best effort）。compile_ms 只在日志里有意义——是否写盘由调用方判定。
+static void ilc_store(const char *app_id, ilc_ctx_t *ctx, am_module_t *mod) {
+    if (ctx == NULL || ctx->overflow || ctx->count == 0) return;
+
+    size_t payload = am_module_dump(s_app->vm_alloc, s_app->vm_alloc, mod, NULL, 0);
+    if (payload == SIZE_MAX) {
+        printf("[scheme-app] ILCACHE skip %s（序列化尺寸计算失败）\n", app_id);
+        return;
+    }
+    if (payload < MB_ILCACHE_MIN_PAYLOAD || payload > MB_ILCACHE_MAX_PAYLOAD) {
+        printf("[scheme-app] ILCACHE skip %s（payload %uKB 不在 [%u,%u]KB）\n", app_id,
+               (uint32_t)(payload / 1024u), (uint32_t)(MB_ILCACHE_MIN_PAYLOAD / 1024u),
+               (uint32_t)(MB_ILCACHE_MAX_PAYLOAD / 1024u));
+        return;
+    }
+
+    size_t manifest = 0;
+    for (uint32_t i = 0; i < ctx->count; i++) manifest += 14u + strlen(ctx->item[i].path);
+    size_t total = MB_ILCACHE_HDR + manifest + payload;
+    uint8_t *buf = (uint8_t *)malloc(total);
+    if (buf == NULL) return;
+
+    memcpy(buf, MB_ILCACHE_MAGIC, 8);
+    ilc_put_u32(buf + 8, MB_ILCACHE_FORMAT);
+    ilc_put_u32(buf + 12, ilc_abi());
+    ilc_put_u32(buf + 16, ctx->count);
+    ilc_put_u32(buf + 20, (uint32_t)payload);
+    ilc_put_u32(buf + 24, 0);            // 校验和：payload 序列化完再填
+    ilc_put_u32(buf + 28, 0);
+
+    size_t off = MB_ILCACHE_HDR;
+    for (uint32_t i = 0; i < ctx->count; i++) {
+        const ilc_src_t *it = &ctx->item[i];
+        uint16_t plen = (uint16_t)strlen(it->path);
+        ilc_put_u32(buf + off, it->size);
+        ilc_put_u64(buf + off + 4, it->hash);
+        ilc_put_u16(buf + off + 12, plen);
+        memcpy(buf + off + 14, it->path, plen);
+        off += 14u + plen;
+    }
+
+    // am_module_dump 的偏移都相对 payload 起点，所以直接把 payload 写在清单之后
+    size_t written = am_module_dump(s_app->vm_alloc, s_app->vm_alloc, mod, buf, off);
+    if (written != payload) {
+        printf("[scheme-app] ILCACHE skip %s（序列化长度不符）\n", app_id);
+        free(buf);
+        return;
+    }
+    ilc_put_u32(buf + 24, (uint32_t)ilc_fnv1a64(buf + off, payload));
+
+    char dir[320];
+    snprintf(dir, sizeof(dir), "%s/data", PLATFORM_ROOT_DIR);
+    platform_mkdir(dir);                              // 已存在即成功；失败交给下面的写盘判定
+    snprintf(dir, sizeof(dir), "%s/%s", PLATFORM_ROOT_DIR, MB_ILCACHE_DIR);
+    platform_mkdir(dir);
+
+    char path[320];
+    ilc_cache_path(app_id, path, sizeof(path));
+    if (platform_write_buffer_to_file(path, buf, total) != 0) {
+        printf("[scheme-app] ILCACHE write fail %s\n", path);
+        free(buf);
+        return;
+    }
+    if (am_native_fs_on_write) am_native_fs_on_write(path, buf, total);   // WASM：进 IndexedDB
+    printf("[scheme-app] ILCACHE store %s: modules=%u payload=%uKB total=%uKB\n",
+           app_id, ctx->count, (uint32_t)(payload / 1024u), (uint32_t)(total / 1024u));
+    free(buf);
+}
+
+#endif  // MB_ILCACHE_ENABLE
+
+// ===============================================================================
+// 通用「正在启动」画面（所有灵机 App 共用；宿主侧机制，App 一行不用写）
+//
+// 为什么需要：编译/链接是**一次不可中断的同步调用**，WASM 单线程下这期间浏览器
+// 完全无法重绘。旧做法是清成纯黑再进编译，用户盯着黑屏 ~1s，没有任何反馈。
+// 现在改成先画这一帧（标题 + 状态 + 忙条）并推屏，再进编译——用户立刻知道
+// 「正在启动哪个 App、机器在忙」，而不是怀疑死机。
+// 缓存命中时它只闪一下（甚至来不及看到），因此不额外增加观感负担。
+// ===============================================================================
+static void app_draw_start_screen(Nano_GFX *gfx, const wchar_t *title, int32_t first_time) {
+    if (gfx == NULL) return;
+    int32_t w = (int32_t)gfx->width;
+    int32_t h = (int32_t)gfx->height;
+    int32_t cx = w / 2;
+
+    gfx_draw_rectangle(gfx, 0, 0, (uint32_t)w, (uint32_t)h, 14, 17, 22, 1);   // 与阅读页同底色
+    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, (wchar_t *)title,
+                               cx, h / 2 - 22, 236, 242, 250, 1);
+    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12,
+                               first_time ? L"正在启动…（首次启动需准备，请稍候）" : L"正在启动…",
+                               cx, h / 2 + 2, 150, 168, 190, 1);
+    // 忙条：底槽 + 亮段（静态；单线程下无法做动画，但它明确表示「在干活」）
+    int32_t bar_w = (w * 2) / 5;
+    if (bar_w < 60) bar_w = 60;
+    gfx_draw_rectangle(gfx, (uint32_t)(cx - bar_w / 2), (uint32_t)(h / 2 + 24),
+                       (uint32_t)bar_w, 3, 40, 48, 62, 1);
+    gfx_draw_rectangle(gfx, (uint32_t)(cx - bar_w / 2), (uint32_t)(h / 2 + 24),
+                       (uint32_t)(bar_w / 3), 3, 96, 160, 235, 1);
+    gfx_refresh(gfx);
+}
+
+// ===============================================================================
 // 运行宿主：读取源码 → 解析 → 链接 → 编译 → 加载进程
 // ===============================================================================
 
-static void app_load_source(void) {
+static void app_load_source(Nano_GFX *gfx) {
     // ---- 从业务资源目录读取 Scheme App 源码（UTF-8）----
     wchar_t rel_w[64];
     am_mbstowcs(rel_w, s_app->source_rel, (uint32_t)strlen(s_app->source_rel));
@@ -581,6 +1002,41 @@ static void app_load_source(void) {
     }
     printf("[scheme-app] %ls：%s（%u 字节）\n", s_app->title, path_mb, (uint32_t)file_size);
 
+#if MB_ILCACHE_ENABLE
+    // 入口文件的哈希必须**现在**算：file_buffer 转成宽字符后就被释放了。
+    uint64_t entry_hash = ilc_fnv1a64(file_buffer, file_size);
+#else
+    uint64_t entry_hash = 0;
+#endif
+
+    char app_id[MB_ILCACHE_MAX_PATH];
+#if MB_ILCACHE_ENABLE
+    ilc_app_id(s_app->source_rel, app_id, sizeof(app_id));
+
+    // ---- ① IL 缓存命中：跳过 parse/link/compile，直接装载序列化产物 ----
+    {
+        uint64_t t_hit0 = get_timestamp_in_ms();
+        am_module_t *cached = ilc_try_load(app_id);
+        if (cached != NULL) {
+            s_app->pid = am_runtime_load_module(s_app->rt, cached);
+            if (cached->ilcode) am_free(s_app->vm_alloc, cached->ilcode);
+            if (cached->ast) am_ast_destroy(cached->ast);
+            am_free(s_app->vm_alloc, cached);
+            free(file_buffer);
+            if (s_app->pid != (am_pid_t)-1) {
+                printf("[scheme-app] ILCACHE hit %s：装载 %ums（省去编译）\n",
+                       app_id, (uint32_t)(get_timestamp_in_ms() - t_hit0));
+                return;
+            }
+            // 装载失败（内存不足等）→ 落到编译路径重试一次
+            printf("[scheme-app] ILCACHE hit %s 但装载失败，回退编译\n", app_id);
+            s_app->pid = (am_pid_t)-1;
+        }
+    }
+#endif
+    (void)app_id;
+    (void)entry_hash;
+
     // ---- UTF-8 → 宽字符。am_parse 只接受单个顶级表达式，与编辑器模式/
     //      am_repl 同惯例，外套 ((lambda () ...)) 包装。----
     const wchar_t *prefix = L"((lambda () \n";
@@ -602,6 +1058,23 @@ static void app_load_source(void) {
     wchar_t mod_name_w[32];
     wcscpy(mod_name_w, rel_w);
 
+#if MB_ILCACHE_ENABLE
+    // 未命中：先把「正在启动」画上屏，再做这段会阻塞主线程的编译
+    //（首次启动没有缓存，这一帧要顶住几百毫秒到一秒）
+    app_draw_start_screen(gfx, s_app->title, 1);
+    uint64_t t_compile0 = get_timestamp_in_ms();
+    ilc_ctx_t ilc;
+    memset(&ilc, 0, sizeof(ilc));
+    // 入口文件本身不经过链接器的读源回调，单独记账（清单里永远第 0 条）
+    {
+        char abs_entry[384];
+        ilc_abs_path(s_app->source_rel, abs_entry, sizeof(abs_entry));
+        ilc_note(&ilc, abs_entry, (uint32_t)file_size, entry_hash);
+    }
+#else
+    (void)gfx;
+#endif
+
     am_ast_t *ast = am_parse(s_app->vm_alloc, code_w, mod_name_w, 0);
     if (!ast) {
         wcscpy(s_app->err_load, L"Scheme 语法解析失败");
@@ -609,7 +1082,11 @@ static void app_load_source(void) {
         return;
     }
 
+#if MB_ILCACHE_ENABLE
+    am_ast_t *linked = am_link(ast, s_app_root, ilc_read_source, &ilc);
+#else
     am_ast_t *linked = am_link(ast, s_app_root, am_host_read_source_from_file, NULL);
+#endif
     if (!linked) {
         am_ast_destroy(ast);
         wcscpy(s_app->err_load, L"模块链接失败");
@@ -638,6 +1115,21 @@ static void app_load_source(void) {
         s_app->load_failed = 1;
         return;
     }
+
+#if MB_ILCACHE_ENABLE
+    // ---- ④ 写缓存（必须在释放 mod 之前：序列化要读它的 ilcode / AST / 帧表）----
+    // 只在「这次编译确实贵」时落盘：快 App 不缓存，免得把 IndexedDB 塞满。
+    {
+        uint64_t compile_ms = get_timestamp_in_ms() - t_compile0;
+        if (compile_ms >= MB_ILCACHE_MIN_COMPILE_MS) {
+            ilc_store(app_id, &ilc, mod);
+            printf("[scheme-app] ILCACHE compile %s：%ums（已写缓存）\n", app_id, (uint32_t)compile_ms);
+        }
+        else {
+            printf("[scheme-app] ILCACHE compile %s：%ums（够快，不缓存）\n", app_id, (uint32_t)compile_ms);
+        }
+    }
+#endif
 
     // 模块静态数据已复制进进程，释放之（同 ui_animac 编辑器模式）
     if (mod->ilcode) am_free(s_app->vm_alloc, mod->ilcode);
@@ -736,6 +1228,8 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     am_set_runtime_host_context(s_app->rt, s_app);
 
     // 注册本地库：System/Math/String/Table 为灵机标配；Gfx 与 Time 为本项目新增
+    // 【注意】增删或重排下面这批注册（以及 IL 缓存里 native 绑定对它们的依赖）后，
+    //   必须把文件头的 MB_ILCACHE_ABI +1，否则旧缓存里的 native 绑定会串位。
     //（Time 用于 32 位宿主上取得不被截断/不失精度的绝对时间，见 am_native_Time.h）
     am_runtime_register_native_lib(s_app->rt, &am_native_System_lib);
     am_runtime_register_native_lib(s_app->rt, &am_native_Math_lib);
@@ -783,11 +1277,13 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     // Scheme 只拿每频点 0~255 强度与 RMS，声谱图/示波器类 App 据此绘图。
     am_runtime_register_native_lib(s_app->rt, &am_native_Audio_lib);
 
-    // 清屏后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）
+    // 清屏后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）。
+    // 未命中 IL 缓存时 app_load_source() 会在编译前把「正在启动 <App>…」画上屏
+    // （见 app_draw_start_screen）——否则用户看到的是编译期间的一整段纯黑。
     gfx_soft_clear(global_state->gfx);
     gfx_refresh(global_state->gfx);
 
-    app_load_source();
+    app_load_source(global_state->gfx);
     if (s_app->load_failed) {
         printf("[scheme-app] %ls 源码构建/加载失败\n", s_app->title);
     }
