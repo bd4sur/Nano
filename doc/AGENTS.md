@@ -14290,3 +14290,59 @@ VM 的数字是带 5 位类型标签的立即数：int 载荷只有 `机器字�
 - **真 wasm32 探针**（自建 `emcc` 宿主，注册 Fs native + 真 hal_fs）：`nano-168m-q80.bin` → `166.1 MB`、`qwen3-0b6-q80.bin` → `598.5 MB`、`nano-56m-q80.bin` → `55.1 MB`；修复前同尺寸分别会得到 32MB 级或负数。
 - **无头 Chromium 端到端**：在 MEMFS 造 2097151 字节与 73400320 字节两个文件，文件管理器列表与详情框分别显示 `2.0 MB`、`70.0 MB`（无 `1.99999`），截图核对通过。
 - 既有 `regress_filemgr.js` 主流程（目录导航/新建/重命名/删除/刷新）39 项 PASS；仅退出后状态与文件选择器段落因该脚本的菜单导航已过期（见上一节「踩坑 4」）而失败，与本次改动无关。
+
+------------------------------------
+
+# 2026-11-18（Markdown 阅读器：去掉内置示例，改为「续读上次文档」）
+
+需求：阅读器不再自带演示文档，启动只认用户自己打开过的文件；顺带清掉构建期的示例导出机制。
+
+## 改动
+
+- **删除演示内容与其展示机制**（`infer/app/markdown.scm`）：
+  - 删 `app/lib/md_demo.scm`（内置示例真源）与 `tools/gen_md_demo.py`（导出工具）；
+  - 阅读器删掉 `(import MDE …)`、`seed_demo_file`（首启落盘示例）、`open_builtin`（内存文档兜底）、
+    启动期的 `doc/` + 根目录 `*.md` **扫描/文档列表**（`scan_docs` / `draw_list` / `tap_list` /
+    `mode` / `docs` / `sel` / `ROW_H` / `LIST_*`）。`app/lib/md_view.scm` 的 `open_mem`（为内存
+    文档而设）随之一并退场；`md_parse.scm` 的 `join_lines` 保留（单测仍用），只更新了过时注释。
+- **「上次打开的文档」= `data/md-last.txt`**（用户数据目录，与其它 App 的 `data/xxx.txt` 同约定）：
+  - 每次**成功**打开后覆盖写一次（失败/超上限不写，避免误触抹掉好记录）；路径原样存取——文件
+    选择器给的是资源根相对路径，被别的 App 拉起时是宿主绝对路径，`(Fs.exists)` 两种都认；
+  - 冷启动（无启动参数）读回并校验：存在 → 直接续读（`MDLAST resume <路径>`）；记录缺失/文件
+    已不在 → 空状态提示（`MDLAST none <路径>` + `MDEMPTY`），提示"点底栏「打开」选一篇"，并允许
+    **点按正文或按 Enter** 直接弹文件选择器（空状态下整屏只有这一件事可做）；
+  - 被拉起（`App.launch_arg` 有值）→ 直接打开该文档并同样写回记录（`MDLAUNCH` 诊断行不变）。
+- **构建脚本**：`Makefile` 删 `md-demo` 目标与 `LINGLONG` 变量；`build_wasm_gui.sh` 删示例相关注释；
+  `ui_scheme_app.c` 里解释内存池的注释去掉 `md_demo` 字样。资源目录（`linglong/`）里那份导出的
+  `Markdown 示例.md` 一并删除。
+- 元数据：`;@version=2026-11-18`（`;@id=markdown` / `;@title=MD阅读器` 不变）。
+
+## 验证（WASM 目标为主）
+
+- **宿主端 `tools/e2e/markdown/test_app.py`：114/114 PASS**（改为按需求重写启动相关用例）：冷启动
+  无记录 → 空状态 + 点按弹选择器；写 `data/md-last.txt` → 续读；选择器选 `doc/t1.md` → 打开 → 记录
+  落盘 → 重启续读；记录失效 → 空状态且**不覆盖**旧记录；外部改文件按新内容渲染；目录/设置/公式
+  等原有用例全部保留通过。顺带修了该脚本构建 harness 的源清单缺口（缺 `am_native_Audio.c` 与
+  `-DAM_NATIVE_MAX_LIBS=32`）。
+- **真 WASM + 无头浏览器（Chromium / chrome-headless-shell / Firefox）**：`regress_markdown.js`
+  各 **56/56 PASS**（新增「续读 / 无示例落盘 / 退出→改写记录→重进换文档 / 记录失效→空状态→点按弹
+  选择器」）；`regress_markdown_math.js` 22/22；`regress_markdown_big.js` 24/24（1MB 开屏 973ms、
+  seg=4、heap 8.9MB、目录 126 → 2221 条、重开仍续读同篇）。
+- **拉起链路**：`regress_launch.js` 37/37（filemgr → markdown 冷启动带参 → `MDLAUNCH` + `title=a`；
+  切后台后恢复同一实例换 `b.txt`）、`regress_back.js` 24/24（三级返回链）、`regress_album_launch.js`
+  37/37（`.txt` 仍拉起 markdown）、`regress_fmscroll.js` 43/43（空状态 → 「打开」→ 选择器全流程）、
+  `regress_font_isolation.js` 40/40（markdown 改为读 `doc/probe.md`）。
+- **纯逻辑回归**：`test_parse.scm` 144/144、`test_layout.scm` 130/130、`run_big_tests.sh` 的
+  `test_stream` 18/18 / `test_layout_ab` 6/6 / `test_view` 24/24 / `test_menu_list` 24/24；
+  `tools/check_scm_arity.py` 对 `markdown/md_view/md_parse` 均 0 处问题。
+
+## 踩坑
+
+1. **退出落点变了**：灵机 App 退出/切后台现在都回**主菜单**（`-2`），不是应用列表；主菜单的
+   数字键 1..9 直接对应条目表前 9 格（小游戏 = 第 5 格），Enter 是右侧固定区的「关机」。多个
+   浏览器回归脚本还按旧的「数字键 6 = 小游戏 / 退出回列表 79」写，均已按现状修正（上一节
+   「踩坑 4」记录的过期导航问题一并修掉）。
+2. **日志里的 App 名是 `;@title=` 显示名**（`MD阅读器` / `文件管理` / `时光集`），不是 id；按
+   id 匹配 `[scheme-app] 拉起/退出/切后台` 诊断行的断言会误判。
+3. 换字模会重开当前文档（`open_path`），因此 `apply_font` 在**没有文档**且**还没有提示文案**时
+   （boot 阶段 `load_font` 就跑在这里）必须什么都不做，否则会多打一次 `MDSTAT/MDEMPTY`。

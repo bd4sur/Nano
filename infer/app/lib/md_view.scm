@@ -70,7 +70,6 @@
 ;; 锚点
 (define vw_seg 0)
 (define vw_dy 0)
-(define vw_mem #f)              ;; 非 #f = 内存文档（内置示例；不走 Fs）
 
 ;; ---- 打开 / 重置 --------------------------------------------------------
 
@@ -101,60 +100,11 @@
     (set! vw_c_h (new_list))
     (set! vw_seg 0)
     (set! vw_dy 0)
-    (set! vw_mem #f)
     (if (MDST.open path #undefined seg_target #undefined #undefined)
         { (scan 1)        ;; 切出第一段
           (ensure 0) }    ;; 布局首屏（首段）
         #f)))
 
-;; 内存文档（内置示例；只读文件系统下写不出 .md 时的兜底）：把行表当成**单段**文档，
-;; 之后滚动/目录/命中测试全部走同一条路径，App 无需双份绘制逻辑。
-(define open_mem
-  (lambda (lines width measure)
-    (define chars 0)
-    (define bytes 0)
-    (define k 0)
-    (set! vw_path "")
-    (set! vw_width width)
-    (set! vw_measure (if (undefined? measure) (lambda (p) #f) measure))
-    (set! vw_segs (new_list))
-    (set! vw_h (new_list))
-    (set! vw_nlines (new_list))
-    (set! vw_nblocks (new_list))
-    (set! vw_toc (new_list))
-    (set! vw_toc_scanned 0)
-    (set! vw_toc_gen 0)
-    (set! vw_scan_done 1)
-    (set! vw_bytes_done 0)
-    (set! vw_chars_done 0)
-    (set! vw_cal 1.30)
-    (set! vw_sum_h 0)
-    (set! vw_sum_chars 0)
-    (set! vw_sum_bytes 0)
-    (set! vw_images 0)
-    (set! vw_evicted 0)
-    (set! vw_c_seg (new_list))
-    (set! vw_c_lines (new_list))
-    (set! vw_c_h (new_list))
-    (set! vw_seg 0)
-    (set! vw_dy 0)
-    (set! vw_mem #f)
-    (set! k 0)
-    (while (< k (length lines))
-      { (set! chars (+ chars (+ (String.length (get_item lines k)) 1)))
-        (set! k (+ k 1)) })
-    (set! bytes chars)
-    (set! vw_mem lines)
-    (push vw_segs (cons 0 (cons bytes (cons (length lines)
-      (cons chars (cons 0 (cons 0 (cons 96 (cons 0 (cons 0 (cdr '(0))))))))))))
-    (push vw_h 0)
-    (push vw_nlines 0)
-    (push vw_nblocks 0)
-    (push vw_toc (new_list))
-    (set! vw_bytes_done bytes)
-    (set! vw_chars_done chars)
-    (ensure 0)
-    #t))
 
 (define path (lambda () vw_path))
 (define width (lambda () vw_width))
@@ -391,10 +341,9 @@
     (if (or (< i 0) (>= i (length vw_segs))) #f
         (if (> (get_item vw_h i) 0) #t
             { (set! rec (get_item vw_segs i))
-              (set! lines (if vw_mem vw_mem
-                              (MDST.at (get_item rec 0) (get_item rec 2)
-                                       (get_item rec 4) (get_item rec 5)
-                                       (get_item rec 6) (get_item rec 7) (get_item rec 8))))
+              (set! lines (MDST.at (get_item rec 0) (get_item rec 2)
+                                   (get_item rec 4) (get_item rec 5)
+                                   (get_item rec 6) (get_item rec 7) (get_item rec 8)))
               (if lines
                   { (set! bs (MD.parse_lines lines))
                     ;; 续接：ca=1 丢弃本段尾间隙；olen>0 / clen>0 时首/末块是"接上"的代码块

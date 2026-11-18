@@ -43,7 +43,7 @@
 //   · 12MB：ephemeris.scm（星历 · 农历单页：月球 10×60 项级数 + VSOP87 + 星历
 //          函数集 + app/lib/ephem.scm + 农历年表推算）。合并前是两个 App
 //          （ephemeris.scm 8MB、nongli.scm 12MB），合并后实测 12MB 即可
-//   · 24MB：markdown.scm（连着 md_parse / md_layout / md_demo / exit 四个模块一起编译，
+//   · 24MB：markdown.scm（连着 md_parse / md_layout / exit 三个模块一起编译，
 //          编译期工作区就要 ~13MB；实测 12MB 时连 8KB 的 Markdown 文件都装不下，
 //          24MB 能容纳约 32KB 文档——App 侧据此设了 DOC_MAX 上限并给出友好提示）
 //   · 32MB：markdown.scm 继续长大（又并进 filepicker / fsx 两个模块，且加了目录功能），
@@ -75,7 +75,7 @@
 #else
     // 32 位宿主（wasm32 浏览器 / webgui、Luckfox Pico 等 32 位 Linux）：见上面「48MB」条。
     // 2026-11 调整 48 → 56MB：markdown 加入「行内公式」后（md_parse/md_layout/markdown
-    // 各涨 ~1-2KB，md_demo 的示例文档 +7KB 公式语料），wasm32 下 48MB 池**首次**能链接、
+    // 各涨 ~1-2KB），wasm32 下 48MB 池**首次**能链接、
     // 但**第二次**冷启动就「源码构建/加载失败」（VM 区的链接期峰值顶到池边，浏览器里
     // 实测：同一页面先开一次、退出再开一次即复现；mathjax 等小 App 不受影响）。
     // 56MB（VM 区 28MB）留出余量，浏览器里连开两次正常；内存受限宿主仍走下面的

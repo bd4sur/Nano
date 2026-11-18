@@ -81,10 +81,9 @@ rsync -a --delete \
     app/ "$LINGLONG/app/" \
     || { echo "未装 rsync，退化为整树拷贝（不会清理已删除文件）"; cp -rf app/. "$LINGLONG/app/"; }
 
-# 内置示例文档不再由构建期写进资源目录：`$LINGLONG` 里**只有 app/ 是构建产出的**，
-# 其余子目录（doc/ icon/ wallpaper/ ebook/ dict/ music/ llm/ …）一律由人工维护，
+# 资源目录的边界：`$LINGLONG` 里**只有 app/ 是构建产出的**，其余子目录
+# （icon/ wallpaper/ ebook/ dict/ music/ llm/ doc/ data/ …）一律由人工维护，
 # 构建脚本不得去建、去改、去删（见 doc/AGENTS.md 2026-11-18（五））。
-# 阅读器首次运行时仍会自己把示例 md 落盘到 doc/（浏览器侧只进 MEMFS + IndexedDB）。
 python3 - "$LINGLONG" "$OUT_DIR/manifest.json" <<'EOF'
 import json, os, sys
 root, out = sys.argv[1], sys.argv[2]

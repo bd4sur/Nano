@@ -1,13 +1,12 @@
 ;@id=markdown
 ;@title=MD阅读器
-;@version=2026-11-17
+;@version=2026-11-18
 ;; ============================================================================
 ;; Markdown 阅读器 —— 灵机应用程序（解析 / 排版 / 渲染全部用 Scheme 实现）
 ;;
 ;; 结构（四个模块，各管一段，可分别单测）：
 ;;   app/lib/md_parse.scm   文本 → 块树（块级规则表 + 行内规则表，扩展点见其文件头）
 ;;   app/lib/md_layout.scm  块树 → 显示行（行 = 高度/背景/段列表；段自带绝对 x 与宽度）
-;;   app/lib/md_demo.scm    内置示例文档（行数组，覆盖当前支持的整个子集）
 ;;   app/lib/md_stream.scm  分段流式读取（大文件底座：字节流 → 段；见其文件头）
 ;;   app/lib/md_view.scm    分段视图（段缓存 / 锚点滚动 / 预取 / 高度估算 / 目录）
 ;;   本文件                 绘制 + 交互（滚动/翻页/点链接/退出）
@@ -40,22 +39,21 @@
 ;; 标题的视觉区分（字模只有一套 12px，靠装饰而非字号）：H1 粗体 + 2px 通栏横线；
 ;; H2 粗体 + 左侧 3px 装饰竖线（#66ccff）；H3 粗体 + 文字下划线。
 ;;
-;; 文档来源（都走 Fs 真文件链路）：
-;;   · 业务资源根下的 doc/*.md 与根目录下的 *.md（桌面上即 /home/bd4sur/linglong/）；
+;; 文档来源（都走 Fs 真文件链路）——**没有内置示例**，能读的文档一律来自文件系统：
+;;   · 启动时默认打开**上次打开的文档**：路径记在 data/md-last.txt（用户数据目录），
+;;     每次成功打开一篇就覆盖写一次；启动时读回并用 (Fs.exists) 校验，存在就直接续读；
+;;   · 读不到记录 / 文件已不在 → 显示空状态提示（没有文档可看），由用户自己挑一篇；
+;;   · 挑文档的唯一入口是**底栏「打开」按钮**（触屏）→ 可复用的文件选择器
+;;     （app/lib/filepicker.scm），在**整个资源根**里挑任意 .md/.markdown；
 ;;   · **被别的 App 拉起**（App.launch_with，例如 app/filemgr.scm 选中 .md/.txt）：
 ;;     启动参数 = 待打开文件的宿主绝对路径，boot / 每拍开头由 (App.launch_arg)
-;;     取走（一次即清零），直接跳过列表进阅读页——见下方 launch_open；
-;;   · 内置示例（md_demo.scm 是**唯一真源**）：构建期由 `make md-demo`
-;;     （或 build_wasm_gui.sh 自动调用）导出成 doc/Markdown 示例.md；
-;;     若该文件不存在（例如直接拷 App 到设备上、只读文件系统），App 首次启动会自己
-;;     落盘一份再按文件打开——所以"打开文件系统里的 Markdown"这条链路开箱即被走过一遍。
-;;     文件已存在时**不覆盖**（可以当便签直接编辑它）；写失败则退回内存里的内置示例。
-;;   多于一个文档时先显示列表（↑↓ 选择、Enter/点按打开，列表过长自动滚动），
-;;   否则直接打开。
+;;     取走（一次即清零），直接打开该文档（成功后同样写回 data/md-last.txt）——
+;;     见下方 launch_open。记录的是**原样路径**（相对资源根或宿主绝对路径皆可），
+;;     读回时只做一次 (Fs.exists) 判断，不做路径换算。
 ;;
 ;; 交互：
-;;   · **底栏右侧「打开」按钮**（触屏）= 弹出可复用的文件选择器（app/lib/filepicker.scm），
-;;     在**整个资源根**里挑任意 .md/.markdown 打开——不再受"doc/ 与根目录"扫描范围的限制；
+;;   · **底栏右侧「打开」按钮**（触屏）= 弹出文件选择器；没有打开文档时，点按正文
+;;     或按 Enter 也直接弹出选择器（空状态下整屏只有这一件事可做）；
 ;;   · 触屏拖动 = 滚动（手指移动多少滚多少）；轻点链接 = 弹窗显示目标地址；
 ;;   · 实体键盘 ↑↓ 滚动一行，←/→ 翻一页；
 ;;   · 右上角「退出」按钮 / 硬 A(ESC) —— 由 app/lib/exit.scm 统一接管。
@@ -79,7 +77,6 @@
 (import FSX "app/lib/fsx.scm")
 (import MD "app/lib/md_parse.scm")
 (import MDL "app/lib/md_layout.scm")
-(import MDE "app/lib/md_demo.scm")
 (import MDV "app/lib/md_view.scm")
 (import ML "app/lib/menu_list.scm")
 ;; 数学公式排版引擎（与 app/mathjax.scm 共用同一套：LaTeX → 语法树 → 盒子 → op 流）
@@ -96,9 +93,6 @@
 (define BOT_H 16)     ;; 页脚高度
 (define PAD_X 6)      ;; 正文左右留白
 (define CW 308)       ;; 正文宽 = SW - 2*PAD_X（启动时按实际屏宽重算）
-(define ROW_H 20)     ;; 文档列表行高（随字模调整）
-(define LIST_Y 26)    ;; 文档列表首行 y
-(define LIST_ROWS 9)  ;; 文档列表一次显示几项（更多时随选中项滚动）
 
 ;; 单篇文档的字节上限：1MB。
 ;; 为什么能放开到 1MB：本阅读器已改为**分段流式**——文档按 4KB 源码切成段，只有
@@ -112,9 +106,10 @@
 (define SEG_TARGET 4096)      ;; 目标段大小（字节）；切点落在围栏外的空行处
 (define CACHE_LINES 4000)     ;; 段缓存显示行上限（≈4MB 堆，见 md_view.scm）
 
-;; 内置示例首次启动时落盘到这里的文件名（标题即去掉扩展名的文件名）
-(define SEED_TITLE "Markdown 示例")
-(define DEMO_PATH "doc/Markdown 示例.md")
+;; 「上次打开的文档」记录文件（用户数据目录；相对业务资源根，与其它 App 的
+;; data/xxx.txt 同一约定：桌面/WASM 在 /home/bd4sur/linglong/data/ 下，掌机在 SD 卡根）。
+;; 内容就是一行路径（不写换行），可能是资源根相对路径，也可能是拉起方给的宿主绝对路径。
+(define LAST_PATH "data/md-last.txt")
 
 ;; ---- 配色 ----------------------------------------------------------------
 
@@ -168,8 +163,6 @@
 
 ;; ---- 状态 ----------------------------------------------------------------
 
-(define docs (cdr '(0)))      ;; 文档表：每项 (路径 标题)；路径为空串 = 内置示例
-(define sel 0)                ;; 文档列表选中项
 (define MDV_ok 0)              ;; 1 = 流式文档（md_view），0 = 提示文案（notice）
 (define notice_lines (cdr '(0)))  ;; 提示文案的显示行（整篇排版，内容极小）
 (define notice_h 0)           ;; 提示文案总高
@@ -183,9 +176,8 @@
 (define exitbtn_mute 0)
 (define content_h 0)          ;; 全文档总高（像素；未索引部分为估算，仅用于滚动条/百分比）
 (define scroll 0)             ;; 纵向滚动偏移（像素，**由锚点派生**的只读快照）
-(define mode 1)               ;; 0 = 阅读，1 = 文档列表
-(define cur_title "")         ;; 当前文档标题
-(define cur_path "")          ;; 当前文档路径（"" = 内置示例；换字模后据此重新排版）
+(define cur_title "")         ;; 当前文档标题（没有文档时为 App 名）
+(define cur_path "")          ;; 当前文档路径（"" = 没有打开文档；换字模后据此重新排版）
 (define ts 0)                 ;; 定时器编号
 
 ;; ---- 节拍（本 App 的每拍周期）----------------------------------------------
@@ -214,18 +206,9 @@
 ;; ---- 小工具 --------------------------------------------------------------
 
 (define new_list (lambda () (cdr '(0))))
-(define mk2 (lambda (a b) (cons a (cons b (cdr '(0))))))
-(define mk3 (lambda (a b c) (cons a (cons b (cons c (cdr '(0)))))))
 (define mk4 (lambda (a b c d) (cons a (cons b (cons c (cons d (cdr '(0))))))))
 (define mk7 (lambda (a b c d e f g)
   (cons a (cons b (cons c (cons d (cons e (cons f (cons g (cdr '(0)))))))))))
-
-(define ends_with
-  (lambda (s suf)
-    (define ls (String.length s))
-    (define lf (String.length suf))
-    (if (< ls lf) #f
-        (String.equals (String.slice s (- ls lf) ls) suf))))
 
 ;; ---- 几何：可视高度 / 最大滚动 / 收口 ------------------------------------
 
@@ -263,62 +246,44 @@
     (sync_scroll)
     #t))
 
-;; ---- 文档来源 ------------------------------------------------------------
+;; ---- 上次打开的文档（data/md-last.txt）----------------------------------
+;;
+;; 记录「上次成功打开的文档路径」，供下次从主菜单冷启动时直接续读。要点：
+;;   · 只记**成功的打开**（读失败/超上限不覆盖旧记录，免得一次误触把记忆抹掉）；
+;;   · 路径**原样存取**：可能来自文件选择器（资源根相对路径 "doc/a.md"），也可能
+;;     来自别的 App 的启动参数（宿主绝对路径 "/home/bd4sur/linglong/doc/a.md"）；
+;;     (Fs.exists) 两种写法都认，所以不需要换算/拼接；
+;;   · 写失败（只读文件系统）只影响「下次能不能续读」，不影响本次阅读；
+;;   · 读回时去掉首尾空白——用户可能用编辑器打开/改过这个文件。
 
-;; 去掉 .md / .markdown 后缀作为标题
-(define strip_ext
+(define is_space
+  (lambda (c) (or (== c 32) (== c 9) (== c 10) (== c 13))))
+
+(define trim_ws
   (lambda (s)
-    (if (ends_with s ".markdown") (String.slice s 0 (- (String.length s) 9))
-        (if (ends_with s ".md") (String.slice s 0 (- (String.length s) 3)) s))))
+    (define n (String.length s))
+    (define b 0)
+    (define e n)
+    (define stop 0)
+    (while (and (< b e) (== stop 0))
+      { (if (is_space (String.charCodeAt b s)) (set! b (+ b 1)) (set! stop 1)) })
+    (set! stop 0)
+    (while (and (> e b) (== stop 0))
+      { (if (is_space (String.charCodeAt (- e 1) s)) (set! e (- e 1)) (set! stop 1)) })
+    (String.slice s b e)))
 
-;; 首次启动时把**内置示例**写成真正的 .md 文件（boot 调用），之后一律按文件打开。
-;; 为什么这样设计：
-;;   · 示例内容只有一处真源（md_demo.scm，在 git 里），不额外维护一份 .md 副本；
-;;   · "阅读器打开文件系统中的 Markdown" 这条链路从第一次启动就被真正走过一遍
-;;     （Fs.write → Fs.list → Fs.read → 解析 → 排版 → 渲染），而不是只走内存里的字面量；
-;;   · 文件已存在时**不覆盖**——用户可以直接编辑它（便签式用法），升级 App 也不会被冲掉。
-(define seed_demo_file
+;; 读回上次的路径；没有记录/读失败 → 空串
+(define last_path_load
   (lambda ()
-    (define ok #f)
-    (if (Fs.exists DEMO_PATH)
-        #f
-        { (set! ok (Fs.write DEMO_PATH (String.concat (MD.join_lines MDE.lines) "\n")))
-          (display "MDSEED ") (display DEMO_PATH)
-          (display (if ok " written" " failed")) (newline) })
-    #t))
+    (define s (Fs.read LAST_PATH))
+    (if (null? s) "" (trim_ws s))))
 
-;; 扫描一个目录下的 .md/.markdown（dir 为 "" 表示资源根；宿主保证按名字升序）
-(define scan_dir
-  (lambda (dir)
-    (define nm (Fs.list dir))
-    (define n 0)
-    (define i 0)
-    (define s 0)
-    (define pfx "")
-    (if (null? nm)
-        #f
-        { (set! n (length nm))
-          (if (> (String.length dir) 0)
-              (set! pfx (String.concat dir "/"))
-              #f)
-          (set! i 0)
-          (while (< i n)
-            { (set! s (get_item nm i))
-              (if (or (ends_with s ".md") (ends_with s ".markdown"))
-                  (push docs (mk2 (String.concat pfx s) (strip_ext s)))
-                  #f)
-              (set! i (+ i 1)) }) })
-    #t))
-
-;; 收集可打开的文档：doc/ 目录优先，其次资源根（"把 .md 丢到根目录也能打开"）。
-;; 一个都没有时（只读文件系统、写示例失败）才退回到内存里的内置示例。
-(define scan_docs
-  (lambda ()
-    (set! docs (new_list))
-    (scan_dir "doc")
-    (scan_dir ".")
-    (if (== (length docs) 0)
-        (push docs (mk2 "" SEED_TITLE))
+;; 覆盖写上次的路径（空串不写：没打开过任何文档时不该制造一条空记录）
+(define last_path_save
+  (lambda (p)
+    (if (> (String.length p) 0)
+        { (Fs.write LAST_PATH p)
+          (display "MDLAST save ") (display p) (newline) }
         #f)
     #t))
 
@@ -593,7 +558,7 @@
 
 ;; ---- 打开文档：读文本 → 解析 → 排版 --------------------------------------
 
-;; 按**路径**打开（列表选中与文件选择器共用同一条链路）。
+;; 按**路径**打开（冷启动续读、文件选择器、被别的 App 拉起，三条路共用这一条链路）。
 ;;
 ;; 两种显示模式：
 ;;   stream（正常）：一切交给 md_view —— 打开时只切出并布局**第一段**（首屏 ~60-80ms），
@@ -605,13 +570,16 @@
     (define fsize 0)
     (define ok #f)
     (define msg #f)
+    ;; 换文档：旧公式缓存的 op 流不再需要。必须在 MDV.open 之前清——
+    ;; 打开时会立刻排版首段（公式在那一刻就会排好并进缓存）。
+    (math_cache_clear)
     (set! cur_title title)
     (set! cur_path path)
     (set_doc_dir path)
     (set! fsize (Fs.size path))
     (if (null? fsize)
         (set! msg (notice_blocks "读取失败：文件不存在或不可读。"
-                                 "请把文档放到资源目录的 doc/ 下。"))
+                                 "点底栏「打开」重新选一篇文档。"))
         (if (> fsize DOC_MAX)
             (set! msg (notice_blocks
                         (String.concat "文档过大（"
@@ -622,6 +590,30 @@
     (open_finish ok msg)
     #t))
 
+;; 空状态：没有任何可续读的文档时的提示页（由用户自己挑一篇）。
+;; 复用 open_finish 的 notice 路径（整篇排版），所以点按/键盘的落点与错误提示一致：
+;; 底栏「打开」、点按正文、Enter 三条路都通向文件选择器。
+(define open_prompt
+  (lambda ()
+    (set! cur_title "Markdown 阅读器")
+    (set! cur_path "")
+    (set_doc_dir "")
+    (open_finish #f (notice_blocks "还没有打开文档。"
+                                   "点底栏「打开」选一篇 .md / .markdown；也可点按本页或按 Enter。"))
+    (display "MDEMPTY") (newline)
+    #t))
+
+;; 冷启动（无启动参数）：续读上次的文档；记录缺失/文件已不在 → 空状态提示。
+(define boot_open
+  (lambda ()
+    (define p (last_path_load))
+    (if (and (> (String.length p) 0) (Fs.exists p))
+        { (display "MDLAST resume ") (display p) (newline)
+          (open_path p (FSX.strip_ext (FSX.leaf p))) }
+        { (display "MDLAST none ") (display p) (newline)
+          (open_prompt) })
+    #t))
+
 ;; 打开完成后的公共收尾（正常/兜底两条路共用）
 (define open_finish
   (lambda (ok msg)
@@ -630,13 +622,14 @@
     (set! toc_open 0)
     (set! toc_scanned 0)
     (set! scroll 0)
-    (set! mode 0)
     (if ok
         { (set! MDV_ok 1)
           (set! notice_lines (cdr '(0)))
           (set! notice_h 0)
           (index_work IDX_BYTES)         ;; 开屏后立刻推进一点索引（目录/估算随之更新）
-          (set! toc_gen_seen -1) }
+          (set! toc_gen_seen -1)
+          ;; 成功打开才记住路径：失败（缺文件/超上限）不应抹掉上次的好记录
+          (last_path_save cur_path) }
         { (set! MDV_ok 0)
           (set! notice_lines (MDL.layout msg CW doc_image_size))
           (set! notice_h (MDL.total_height notice_lines)) })
@@ -662,31 +655,8 @@
     (newline)
     #t))
 
-;; 内置示例（内存行表；只读文件系统写不出 .md 时的兜底）：同样走 md_view 的单段模式
-(define open_builtin
-  (lambda ()
-    { (set_doc_dir "")
-      (set! cur_path "")
-      (open_finish (MDV.open_mem MDE.lines CW doc_image_size) #f)
-      (display "MDSTAT builtin title=") (display cur_title) (newline)
-      #t }))
-
-(define open_doc
-  (lambda (idx)
-    (define d (get_item docs idx))
-    (define path (get_item d 0))
-    (set! sel idx)
-    ;; 换文档：旧公式缓存的 op 流不再需要。必须在 MDV.open 之前清——
-    ;; 打开时会立刻排版首段（公式在那一刻就会排好并进缓存）。
-    (math_cache_clear)
-    (if (== (String.length path) 0)
-        { (set! cur_title (get_item d 1))
-          (open_builtin) }
-        (open_path path (get_item d 1)))))
-
 ;; ---- 文件选择器（可复用组件 app/lib/filepicker.scm）---------------------
-;; 为什么要有：列表只扫 doc/ 与资源根，用户把 .md 放在别的目录就打不开。选择器
-;; 在整棵资源树里浏览，选中即按上面的同一条链路打开。
+;; 用户挑文档的唯一入口：在整棵资源树里浏览，选中即按上面的同一条链路打开。
 ;; 活动期间**不调 (EX.check)**——返回请求归选择器消费（= 取消选择）。
 
 (define OPEN_BTN_W 44)
@@ -996,27 +966,28 @@
           (MDL.set_imath_metrics (+ (+ font_base text_pad) IMATH_PAD)
                                  (+ (- line_h (+ font_base text_pad)) IMATH_PAD)
                                  (+ font_base text_pad))
-          ;; 列表/目录/设置的行高跟着字模走（16px 字模下 15px 行距会挤）
-          (set! ROW_H (+ line_h 5))
+          ;; 目录/设置菜单的行高跟着字模走（16px 字模下 15px 行距会挤）
           (menu_metrics info)             ;; 把新字模的步进/墨高/内缩同步给菜单组件
           (Fs.write FONT_PATH (String.atom_to_string id))
           (display "MDFONT id=") (display id)
           (display " line_h=") (display line_h) (newline)
           ;; 换字模后所有段的折行/行高都变了：清空段缓存重来，但**保留阅读位置**——
           ;; 锚点按"段号 + 段内 dy 比例"换算（新行高/旧行高），重开文档后落回原处。
-          (if (== mode 0)
+          ;; 没有打开文档时：有错误提示就重排提示文案（行高也变了），否则什么都不做
+          ;;（boot 阶段的 load_font 就跑在这里，那时还没决定打开哪篇文档）。
+          (if (== MDV_ok 1)
               { (set! keep_a (MDV.anchor))
                 (set! keep_ratio (/ line_h old_h))
-                (if (> (String.length cur_path) 0)
-                    (open_path cur_path cur_title)
-                    (open_builtin))
+                (open_path cur_path cur_title)
                 (if (== MDV_ok 1)
                     { (MDV.set_anchor (get_item keep_a 0)
                                       (Math.floor (* (get_item keep_a 1) keep_ratio)))
                       (MDV.ensure (get_item keep_a 0))
                       (sync_scroll) }
                     #f) }
-              #f) }
+              (if (> (String.length cur_path) 0)
+                  (open_path cur_path cur_title)
+                  (if (> (length notice_lines) 0) (open_prompt) #f))) }
         #f)
     #t))
 
@@ -1298,14 +1269,14 @@
 (define draw_footer
   (lambda ()
     (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
-    (if (== mode 0)
+    (if (== MDV_ok 1)
         (Gfx.draw_text "拖动/↑↓ 滚动" PAD_X (- SH 14) 130 140 155)
-        (Gfx.draw_text "↑↓ 选择 · Enter 打开" PAD_X (- SH 14) 130 140 155))
-    (if (and (== mode 0) (== MDV_ok 1) (> (MDV.toc_count) 0))
+        (Gfx.draw_text "点按/Enter 选文档" PAD_X (- SH 14) 130 140 155))
+    (if (and (== MDV_ok 1) (> (MDV.toc_count) 0))
         (draw_toc_btn)      ;; 底栏右侧偏左：目录（仅阅读页且有标题时）
         #f)
-    (draw_set_btn)    ;; 设置（两种模式都有：字体是 App 级设置）
-    (draw_open_btn)   ;; 底栏右侧：打开选择器（触屏唯一入口）
+    (draw_set_btn)    ;; 设置（App 级：字体）
+    (draw_open_btn)   ;; 底栏右侧：打开选择器（挑文档的入口）
     #t))
 
 (define draw_scrollbar
@@ -1327,38 +1298,6 @@
         #f)
     #t))
 
-;; ---- 绘制：文档列表 ------------------------------------------------------
-
-;; 文档多于一屏时随选中项滚动：窗口首项 = max(0, sel - LIST_ROWS + 1)
-(define list_first
-  (lambda ()
-    (if (>= sel LIST_ROWS) (- (+ sel 1) LIST_ROWS) 0)))
-
-(define draw_list
-  (lambda ()
-    (define n (length docs))
-    (define first (list_first))
-    (define last 0)
-    (define i 0)
-    (define y 0)
-    (define d #f)
-    (set! last (+ first LIST_ROWS))
-    (if (> last n) (set! last n) #f)
-    (set! i first)
-    (while (< i last)
-      { (set! y (+ LIST_Y (* (- i first) ROW_H)))
-        (set! d (get_item docs i))
-        (if (== i sel)
-            { (Gfx.fill_rect 2 (- y 3) (- SW 4) (- ROW_H 2) 40 50 68)
-              (Gfx.fill_rect 2 (- y 3) 3 (- ROW_H 2) 120 180 250) }
-            #f)
-        (Gfx.draw_text (MDL.clip_text (get_item d 1) 240) (+ PAD_X 8) y 226 232 244)
-        (if (== (String.length (get_item d 0)) 0)
-            (Gfx.draw_text "内置" (- SW 40) y 150 168 190)
-            (Gfx.draw_text ".md" (- SW 34) y 120 140 165))
-        (set! i (+ i 1)) })
-    #t))
-
 ;; ---- 绘制总入口 ----------------------------------------------------------
 
 (define draw_all
@@ -1372,15 +1311,9 @@
 (define draw_page
   (lambda ()
     (Gfx.fill_rect 0 0 SW SH 14 17 22)
-    (if (== mode 0)
-        { (draw_content)
-          (draw_scrollbar)
-          (draw_header) }
-        { (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
-          (Gfx.draw_text "Markdown 文档" PAD_X 3 236 242 250)
-          (Gfx.draw_text (String.concat (String.atom_to_string (length docs)) " 篇")
-                         250 3 150 168 190)
-          (draw_list) })
+    (draw_content)          ;; 正文（没打开文档时就是提示文案）
+    (draw_scrollbar)
+    (draw_header)
     (draw_footer)
     (EX.draw_button)
     ;; 面板刚关闭的几帧：把宿主热区清零，避免同一次点按被"面板返回键 + 宿主退出键"重复解释
@@ -1413,19 +1346,10 @@
                     (Ui.message_titled "链接目标" hit_url) }
                   #f) }))))
 
-;; 列表轻点：按 y 反算条目下标
-(define tap_list
-  (lambda (py)
-    (define idx 0)
-    (if (>= py LIST_Y)
-        { (set! idx (+ (list_first) (Math.floor (/ (- py LIST_Y) ROW_H))))
-          (if (< idx (length docs))
-              (open_doc idx)
-              #f) }
-        #f)))
-
 ;; ---- 交互：触屏（拖动滚动 / 轻点）---------------------------------------
 
+;; 没有打开文档（空状态/错误提示）时，正文区轻点 = 直接弹文件选择器：
+;; 此时整屏只有“挑一篇文档”这一件事可做，不必非去点底栏那个小按钮。
 (define handle_touch
   (lambda ()
     (if (Touch.is_pressed)
@@ -1439,7 +1363,7 @@
           (set! dyy (- (Touch.y) drag_last))
           (set! drag_last (Touch.y))
           (set! drag_total (+ drag_total dyy))
-          (if (== mode 0)
+          (if (== MDV_ok 1)
               { (scroll_by_px (- 0 dyy))
                 (sync_scroll) }
               #f) }
@@ -1450,30 +1374,29 @@
                         { (settings_open_panel) }
                         (if (== (hit_open_btn press_x press_y) 1)
                         (start_picker)
-                        (if (and (== mode 0)
-                                 (== (hit_toc_btn press_x press_y) 1)
+                        (if (and (== (hit_toc_btn press_x press_y) 1)
                                  (== MDV_ok 1)
                                  (> (MDV.toc_count) 0))
                             (toc_open_panel)
-                            (if (== mode 0)
+                            (if (== MDV_ok 1)
                                 (tap_reader press_x press_y)
-                                (tap_list press_y)))))
+                                (start_picker)))))
                     #f) }
               #f) })
     #t))
 
 ;; ---- 交互：键盘 ----------------------------------------------------------
 
+;; 阅读页：↑↓ 滚一行、←→ 翻页；没有文档时 Enter 弹选择器（鼠标/触屏之外的键盘路径）。
+;; Esc 不在这里处理（由 app/lib/exit.scm 的 (EX.check) 接管）。
 (define apply_key
   (lambda (k)
-    (if (== mode 1)
-        { (if (== k 1) { (set! sel (- sel 1)) (if (< sel 0) (set! sel 0) #f) } #f)
-          (if (== k 2) { (set! sel (+ sel 1)) (if (>= sel (length docs)) (set! sel (- (length docs) 1)) #f) } #f)
-          (if (== k 13) (open_doc sel) #f) }
+    (if (== MDV_ok 1)
         { (if (== k 1) { (scroll_by_px (- 0 15)) (sync_scroll) } #f)
           (if (== k 2) { (scroll_by_px 15) (sync_scroll) } #f)
           (if (== k 3) { (scroll_by_px (- 0 (view_h))) (sync_scroll) } #f)
-          (if (== k 4) { (scroll_by_px (view_h)) (sync_scroll) } #f) })
+          (if (== k 4) { (scroll_by_px (view_h)) (sync_scroll) } #f) }
+        (if (== k 13) (start_picker) #f))
     #t))
 
 (define handle_keys
@@ -1550,7 +1473,7 @@
 ;;
 ;; (App.launch_arg) 是**取走即清零**的（同 (App.back_requested)）：每一条参数只
 ;; 消费一次，没参数时返回 #null。两处消费点：
-;;   · boot 里——被冷启动拉起：直接进阅读页，跳过「单篇自动打开/文档列表」分支；
+;;   · boot 里——被冷启动拉起：直接打开参数指定的文档（不读 data/md-last.txt）；
 ;;   · on_tick 开头——后台实例被**再次拉起**（换一篇文档）：重新走同一条打开链路。
 ;; 为什么用绝对路径而不是资源根相对路径：参数要跨 App 传递，接收方的「当前目录」
 ;; 概念与发起方无关；绝对路径在桌面 / WASM MEMFS / 掌机 SD 上语义一致，且图片
@@ -1569,9 +1492,8 @@
               (set! settings_open 0)
               (set! toc_open 0)
               (FP.reset)
-              ;; 换文档：旧公式缓存的 op 流不再需要（同 open_doc，且必须在打开之前清）
-              (math_cache_clear)
-              (open_path a (strip_ext (FSX.leaf a)))
+              ;; 公式缓存与上一次的文档路径都归 open_path 管（它会清缓存、成功后落盘）
+              (open_path a (FSX.strip_ext (FSX.leaf a)))
               (display "MDLAUNCH ") (display a) (newline)
               #t }))))
 
@@ -1602,15 +1524,13 @@
       (set! CW (- SW (* 2 PAD_X)))
       (MDL.set_math_measure doc_math_measure)  ;; 打开公式排版能力（必须在排版之前）
       (load_font)           ;; 恢复上次选择的字模（字体影响排版度量，必须在打开文档之前）
-      (seed_demo_file)      ;; 首次启动：把内置示例写成 doc/ 下的真 .md 文件
-      (scan_docs)
-      ;; 拉起方指定了要打开的文件（启动参数）→ 直接进阅读页；
-      ;; 否则：只有一个候选时直接进阅读页，不为一次点按多绕一圈；多篇先进列表
+      ;; 启动分两条路（没有内置示例，也没有文档列表）：
+      ;;   · 被拉起（启动参数 = 待读文件）→ 直接打开它；
+      ;;   · 从主菜单冷启动 → 续读 data/md-last.txt 里的上次文档；
+      ;;     记录缺失或文件已不在 → 空状态提示（用户自己点「打开」挑一篇）。
       (if (launch_open)
           #f
-          (if (<= (length docs) 1)
-              (open_doc 0)
-              (set! mode 1)))
+          (boot_open))
       (draw_all)
       (set! ts (System.set_interval TICK_MS on_tick)) }))
 
