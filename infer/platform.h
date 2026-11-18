@@ -145,7 +145,7 @@ extern "C" {
 // 全局字符串常量
 // ===============================================================================
 
-#define NANO_VERSION "2610"
+#define NANO_VERSION "2611"
 
 #define LOG_FILE_PATH PLATFORM_ROOT_DIR "/chat.jsonl"
 
