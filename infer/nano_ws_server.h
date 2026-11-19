@@ -26,8 +26,11 @@ extern "C" {
 //   C→S  [0x10][action u8][x i16][y i16]  触屏事件：action 0=松开 1=按下 2=移动
 //   C→S  [0x20][flags u8][ax f32][ay f32][az f32][yaw f32][orient i16]  姿态事件：
 //        flags bit0=加速度有效 bit1=航向有效；ax/ay/az 为浏览器设备坐标系重力向量（m/s²，
-//        DeviceMotionEvent.accelerationIncludingGravity）；yaw 为浏览器罗盘航向 alpha（度）；
-//        orient 为屏幕方向角 screen.orientation.angle（0/90/180/270）。角度解算在 IMU HAL。
+//        DeviceMotionEvent.accelerationIncludingGravity）；yaw 为**屏幕正面法向（+z_d）的
+//        罗盘航向**（度，北=0 顺时针，客户端按 W3C 旋转矩阵算好，见
+//        web_remote_client.html 的 screenNormalHeading）；orient 为屏幕方向角
+//        screen.orientation.angle（0/90/180/270）。重力→坡度的解算在 IMU HAL，
+//        yaw 只归一化（HAL 不再叠加 α/θ）。
 // ===============================================================================
 
 // 启动服务器（监听 0.0.0.0:port；fb_width/fb_height 为帧缓冲像素尺寸）。

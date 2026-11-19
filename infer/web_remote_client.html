@@ -181,8 +181,9 @@ document.addEventListener("dblclick", (e) => e.preventDefault());
 
 // ---------------- 设备姿态上报（重力向量 + 罗盘航向 + 屏幕方向角） ----------------
 // 浏览器事件：devicemotion.accelerationIncludingGravity（设备坐标系重力向量，精确稳定）
-//   与 deviceorientationabsolute/deviceorientation.alpha（罗盘航向）。角度解算（屏幕方向角
-//   修正、坡度/仰角换算）在服务端 IMU HAL（hal_imu_web_linux.c），客户端只上报原始量。
+//   与 deviceorientationabsolute/deviceorientation 的 alpha/beta/gamma。重力→坡度/仰角的
+//   解算在服务端 IMU HAL（hal_imu_web_linux.c）；**航向在客户端算好再上报**——上报的是
+//   「屏幕正面法向（+z_d）的罗盘航向」，与安卓/WASM 形态同一口径（hal_imu_web_linux.c 直取）。
 // iOS 13+ 需在用户手势内显式申请权限（且页面须为 HTTPS 或 localhost）；桌面浏览器无传感器，
 // 事件不会触发（按钮提示无数据，GUI 保持无姿态默认行为，同 nano_tty）。
 const attBtn = document.getElementById("att-btn");
@@ -197,6 +198,40 @@ let lastAttSendTs = 0;
 // 与前者差一个固定偏移）——两个事件交替触发会把 lastYawDeg 在两套值之间来回覆写，
 // 玲珑仪方位角随之在两个固定值之间跳变。见到 absolute 后即忽略 relative 事件。
 let absAlphaSeen = false;
+
+// 屏幕正面法向（+z_d，自屏幕指向观察者）的罗盘航向（0~360，北=0，顺时针）。
+// 由 W3C《DeviceOrientation Event》的设备朝向旋转矩阵算得：
+//   R = Rz(alpha)·Rx(beta)·Ry(gamma)（设备系 → 地球系，X=东 Y=北 Z=天）；
+//   +z_d 的像 = R 的第 3 列；航向 = atan2(东分量, 北分量)。
+// 与安卓版 / WASM 版逐式一致（真机校准 2026-10-15）；玲珑仪据此算
+// view_azi = yaw + 180 = 背面法向航向 = 取景方向。
+// 不要把 alpha 直接当航向：alpha 是绕设备 z 轴的地球系旋转角，竖直持机
+//（beta≈90°, gamma≈0）时正确航向 = 180° - alpha —— 直接用 alpha 会整体偏 180°。
+// 法向垂直（天顶/天底，alpha 退化）时返回 null，调用方保持上一次航向。
+function screenNormalHeading(alpha, beta, gamma) {
+  const A = alpha * Math.PI / 180, B = beta * Math.PI / 180, G = gamma * Math.PI / 180;
+  const cA = Math.cos(A), sA = Math.sin(A);
+  const cB = Math.cos(B), sB = Math.sin(B);
+  const cG = Math.cos(G), sG = Math.sin(G);
+  const zEast  = cA * sG + cG * sA * sB;   // R[2]：+z_d 的东分量
+  const zNorth = sA * sG - cA * cG * sB;   // R[5]：+z_d 的北分量
+  if (Math.abs(zEast) < 1e-6 && Math.abs(zNorth) < 1e-6) return null;
+  let deg = Math.atan2(zEast, zNorth) * 180 / Math.PI;
+  if (deg < 0) deg += 360;
+  return deg;
+}
+// 事件是否带齐算航向所需的三轴角（缺任一/非有限则退化为 alpha 直算）
+function hasEuler(e) {
+  return Number.isFinite(e.alpha) && Number.isFinite(e.beta) && Number.isFinite(e.gamma);
+}
+// 用一帧欧拉角更新航向并上报（天顶/天底退化时保持上一次航向）
+function applyEuler(alpha, beta, gamma) {
+  const h = screenNormalHeading(alpha, beta, gamma);
+  if (h !== null) lastYawDeg = h;
+  lastYawOk = true;
+  attHasData = true;
+  sendOrientation();
+}
 
 function currentOrientDeg() {
   if (screen.orientation && typeof screen.orientation.angle === "number") {
@@ -233,30 +268,26 @@ function onDeviceMotion(e) {
   sendOrientation();
 }
 
-// 绝对航向（deviceorientationabsolute：alpha 为罗盘真值，北=0 顺时针）
+// 绝对航向（deviceorientationabsolute：alpha 为罗盘真值）
 function onDeviceOrientationAbs(e) {
-  if (typeof e.alpha !== "number" || e.alpha === null) return;
+  if (!hasEuler(e)) return;
   absAlphaSeen = true;
-  lastYawDeg = e.alpha;
-  lastYawOk = true;
-  attHasData = true;
-  sendOrientation();
+  applyEuler(e.alpha, e.beta, e.gamma);
 }
 
 // 普通事件（deviceorientation）：已有 absolute 源则忽略（防两套 alpha 交替）；
-// 否则 iOS 用 e.webkitCompassHeading（绝对罗盘航向，北=0 顺时针；alpha 在 iOS 为相对值），
-// 其余平台用 e.alpha（多数 Android 设备即为罗盘值）。
+// 否则同样按 alpha/beta/gamma 算 +z_d 航向（iOS 的 alpha 是相对值，航向因此只相对，
+// 但方向正确）。个别实现缺 beta/gamma 时退化为「竖直持机」假设：
+// 180° - alpha；webkitCompassHeading 是「设备指向（取景方向 = -z_d）」的绝对航向，
+// 故 +180° 得 +z_d 的航向。
 function onDeviceOrientation(e) {
   if (absAlphaSeen) return;
-  if (typeof e.webkitCompassHeading === "number") {
-    lastYawDeg = e.webkitCompassHeading;
-  }
-  else if (typeof e.alpha === "number" && e.alpha !== null) {
-    lastYawDeg = e.alpha;
-  }
-  else {
-    return;
-  }
+  if (hasEuler(e)) { applyEuler(e.alpha, e.beta, e.gamma); return; }
+  let deg;
+  if (typeof e.webkitCompassHeading === "number") deg = e.webkitCompassHeading + 180;
+  else if (typeof e.alpha === "number" && e.alpha !== null) deg = 180 - e.alpha;
+  else return;
+  lastYawDeg = ((deg % 360) + 360) % 360;
   lastYawOk = true;
   attHasData = true;
   sendOrientation();
@@ -301,8 +332,8 @@ async function toggleAttitude() {
   attEnabled = true;
   attHasData = false;
   absAlphaSeen = false;
-  // deviceorientationabsolute 的 alpha 为绝对罗盘航向（北=0），优先；
-  // 普通 deviceorientation 作退化路径（内部按 absolute 是否已见过去重）
+  // deviceorientationabsolute（绝对 alpha）优先；普通 deviceorientation 作退化路径
+  //（内部按 absolute 是否已见过去重）
   if ("ondeviceorientationabsolute" in window) {
     window.addEventListener("deviceorientationabsolute", onDeviceOrientationAbs);
   }

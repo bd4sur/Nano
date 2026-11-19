@@ -14431,3 +14431,70 @@ Nano-WASM-GUI（`build_wasm_gui.sh` → `webgui/`，真 wasm32 + 无头 Chromium
   「玲珑天象仪 V2611」）。
 - **构建**：`build_wasm_gui.sh` 重新构建（`nano_gui.wasm` 5,612,480 B），产物内已确认
   含 UTF-32 编码的 `2611`。9002 端口静态服务未启停（同一进程继续提供新产物）。
+
+------------------------------------
+
+# 2026-11-19（二）（WASM-GUI 玲珑天象仪方位角偏 180°：yaw 改由页面按 W3C 旋转矩阵算「屏幕正面法向航向」）
+
+**现象**：WASM-GUI 里玲珑天象仪开「姿态」后，画面中心方位整体偏 180°；机身转向方向是对的
+（不镜像），其他编译目标（Android 真机 / 串口 IMU）正常。
+
+**根因**（不是传感器、也不是浏览器差异）：
+`hal_imu_wasm.c` 一直拿 `DeviceOrientationEvent.alpha` 自己换算 yaw（10-14 那次改成
+`yaw = θ - alpha`）。但 W3C 规范里 alpha 只是设备朝向旋转矩阵
+`R = Rz(α)·Rx(β)·Ry(γ)`（设备系 → 地球系，X=东 Y=北 Z=天）中**绕地球 z 轴的旋转角**，
+不是「手机朝哪边」。玲珑仪要的是 **屏幕正面法向（+z_d）的罗盘航向**（`ui_app.c`：
+`view_azi = yaw + 180` = 背面法向航向 = 取景方向，见 2026-10-15 安卓那三轮）。
+
+- +z_d 的像 = R 的第 3 列：`zEast = cA·sG + cG·sA·sB`、`zNorth = sA·sG - cA·cG·sB`，
+  航向 = `atan2(zEast, zNorth)`（与安卓 `MainActivity.onSensorChanged` 的
+  `atan2(R[2], R[5])` 逐式一致）。
+- 竖直持机（β≈90°、γ≈0）时该式退化为 **航向 = 180° - alpha**：旧实现 `θ - alpha`
+  恰好差 180°（且转动方向正确）——与真机反馈完全吻合；再往前那版 `alpha + θ` 则是镜像
+  （10-14 反馈的「方位反向」）。即两次反馈是同一个错误的两个截面。
+- 另外：法向与屏幕内容旋转无关，**θ 不该进 yaw**（θ 只用于 roll 的屏幕系修正；
+  安卓侧同样只在 roll 用 orientDeg）。
+
+**改动**：
+- `infer/webgui/index.html`：新增 `screenNormalHeading(alpha, beta, gamma)`（按 R 第 3 列算
+  +z_d 航向，天顶/天底退化时返回 null → 保持上次航向，避免跳变），`applyEuler()` 统一下发；
+  `deviceorientationabsolute` 与 `deviceorientation` 两条通路都改走它（absAlphaSeen 去重逻辑
+  不变）。退化路径（个别实现只给 alpha / 只给 webkitCompassHeading、没有 beta/gamma）按
+  「竖直持机」假设取 `180° - 航向`。
+- `infer/hal_imu_wasm.c`：`imu_read_angle` 的 yaw 改为**直接归一化页面注入值**
+  （`fmodf(yaw_d + 360, 360)`），不再自行叠加 α/θ——与 `hal_imu_android.c`
+  （`*yaw = s_yaw_deg`）同构：航向由采集侧算好，HAL 只做语义落地。pitch（az 取反）、
+  roll（R(θ) 修正）一行未动。
+- `infer/tools/e2e/browser/regress_touch_imu.js`（工作区文件）：注入姿态改为物理自洽的
+  α=240°, β=90°, γ=0° → 期望 yaw=300°；HAL 兜底通路改传「页面算好的 yaw」；顺带修了两处
+  早已过时的断言（主菜单数字键 = 可见条目序号，小游戏已从 7 变 5；灵机 App 退出落点是
+  主菜单而非应用列表）。
+
+**验证**：
+- 纯 JS 数值表（node）：竖机屏朝南 α=0/β=90/γ=0 → 180°、转向西 α=90 → 90°、
+  α=240 → 300°、平放朝天（β=0,γ=0）→ 退化 null、γ=30 → 150°，且 β 90→0 全程无跳变。
+- `bash build_wasm_gui.sh` 重建通过（`nano_gui.wasm` 5,612,474 B / `nano_gui.js` 104,879 B，仅既有警告）。
+- 浏览器端到端（真 WASM + Chromium，`node tools/e2e/browser/regress_touch_imu.js
+  https://127.0.0.1:9002/index.html chromium /tmp/reg_imu`）：**12/12 PASS**，其中
+  `yaw=300：罗盘黄点方位正确` 由帧缓冲像素质心判据实测（注入 α=240/β=90 → 页面算出 300°
+  → HAL 原样透传 → `(Imu.yaw)`），姿态开关、倾斜重力、退出流程均无 pageerror。
+- 玲珑仪侧只需 `view_azi = yaw + 180`：α=240 时旧链路算出 view_azi=300（错，反向 180°），
+  新链路 = 120，与「竖机屏法向 300° → 取景方向 120°」一致。
+
+**同一 bug 的另一条通路（一并修好）**：Nano-Web 远程桌面的浏览器客户端
+（`web_remote_client.html`）原本上报原始 alpha，`hal_imu_web_linux.c` 按 `yaw = alpha + θ`
+换算——按同一套推导它是**镜像**（10-14 那次「方位反向」的真身），方位角还会随 alpha 线性漂移。
+改动：
+- `web_remote_client.html`：加同一份 `screenNormalHeading`/`hasEuler`/`applyEuler`，
+  `deviceorientationabsolute` 与 `deviceorientation` 两条通路都改走它（退化路径同 WASM：
+  `180° - 航向`、`webkitCompassHeading + 180°`）；协议里 0x20 消息的 yaw 字段语义随之变成
+  「+z_d 航向」（`nano_ws_server.h` 的协议注释、`nano_ws_server.c` 的收包注释同步）。
+- `hal_imu_web_linux.c`：yaw 改为只归一化上报值（`fmodf(yaw_d + 360, 360)`），不再叠加 α/θ；
+  roll（R(θ)）/pitch 一行未动 —— 于是**θ 只作用于 roll**，与安卓/WASM 形态一致。
+- `bin/web_client_html.h` 由 `make web` 从 html 重新生成（嵌入兜底与磁盘页同步）。
+
+验证：`make web` 通过（`bin/nano_web` 6.6MB，仅既有警告）；内嵌页与磁盘页都含新逻辑
+（`curl http://127.0.0.1:9013/` 命中 `screenNormalHeading`）；另写宿主级单测（把
+`hal_imu_web_linux.c` 直接链进 gcc 测试桩）覆盖：无数据返回失败、`yaw=300/θ=90` 原样透传
+（证明 θ 不再进 yaw）、`yaw=12.5/θ=180` 透传、负值归一化 359.5、无航向位保持旧值、
+`设备 +y / θ=90 → roll=-90`（证明 θ 仍作用于 roll）——**6/6 PASS**。

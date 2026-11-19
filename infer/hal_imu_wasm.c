@@ -1,11 +1,15 @@
 // hal_imu_wasm.c —— Nano-WASM-GUI 姿态（IMU）HAL（Emscripten）
 //
 // 姿态来源：页面 JS 的 DeviceMotionEvent.accelerationIncludingGravity（重力向量）
-// 与 DeviceOrientationEvent[absolute].alpha（罗盘航向）+ screen.orientation.angle，
+// 与 DeviceOrientationEvent[absolute] 的 alpha/beta/gamma（罗盘航向）+ screen.orientation.angle，
 // 经 ccall 调用本文件导出的 wasm_gui_on_orientation 注入。
 // 解算公式与 hal_imu_web_linux.c 同源（屏幕方向角旋转修正 R(θ)、atan2 坡度），
-// 但 az（z 轴）与 alpha（旋转方向）按本形态实测浏览器约定做符号适配
-//（2026-10-14 真机反馈：俯仰反向、方位反向；FLIP 只用 roll 不受影响）。
+// 但 az（z 轴）按本形态实测浏览器约定做符号适配（2026-10-14 真机反馈：俯仰反向；
+// FLIP 只用 roll 不受影响）。
+//
+// yaw 由页面算好再注入（屏幕正面法向 +z_d 的罗盘航向，见 webgui/index.html 的
+// screenNormalHeading）：alpha 是绕 z 轴的地球系旋转角，竖直持机时正确航向
+// = 180° - alpha，直接用 alpha 会整体偏 180°（2026-11-19 真机反馈）。
 
 #include "platform.h"
 #include "hal_imu.h"
@@ -104,12 +108,14 @@ int imu_read_angle(float *pitch, float *roll, float *yaw) {
         *pitch = 0.0f;
     }
 
-    // yaw：屏幕上方指向的罗盘航向（0~360，北=0，顺时针）。
-    // 适配（同日真机反馈：方位角反向）：W3C 规范中 alpha 是绕 z 轴的【逆时针】旋转角，
-    // 与罗盘航向（顺时针，北=0）方向相反；验证环境（hal_imu_web_linux.c）的浏览器把
-    // absolute alpha 直接实现为罗盘航向，而本环境按规范为逆时针——取镜像并保留屏幕
-    // 方向角 θ 的顺时针修正（yaw = θ - alpha），真机验证方位随机身同向转动。
-    *yaw = fmodf((float)th - yaw_d + 720.0f, 360.0f);
+    // yaw：屏幕正面法向（+z_d）的罗盘航向（0~360，北=0，顺时针）。
+    // yaw_deg 已由页面按 W3C 旋转矩阵 Rz(α)Rx(β)Ry(γ) 的第 3 列算好（与 Android 版
+    // MainActivity.onSensorChanged 的 atan2(R[2], R[5]) 逐式一致），此处只归一化、
+    // 不再叠加屏幕方向角 θ——法向与屏幕内容旋转无关（θ 只用于 roll 修正）。
+    // 玲珑仪语义：view_azi = yaw + 180 = 背面法向航向 = 取景方向（见 ui_app.c）。
+    // 历史：曾在此把 alpha 当航向（alpha + θ）、后又改为 θ - alpha，两者都与正确值
+    // 差一个随姿态变化的角度/固定 180°（2026-10-14 / 2026-11-19 两次真机反馈）。
+    *yaw = fmodf(yaw_d + 360.0f, 360.0f);
 
     return 0;
 }

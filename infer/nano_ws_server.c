@@ -448,7 +448,7 @@ static void ws_on_client_message(const uint8_t *msg, size_t len) {
         int32_t y = (int32_t)(int16_t)((uint16_t)msg[4] | ((uint16_t)msg[5] << 8));
         web_remote_on_touch(action, x, y);
     }
-    else if (len >= 20 && msg[0] == 0x20) { // 姿态事件（f32/i16 小端）
+    else if (len >= 20 && msg[0] == 0x20) { // 姿态事件（f32/i16 小端；yaw = 页面算好的 +z_d 航向）
         uint8_t flags = msg[1];
         float acc[3];
         float yaw_deg;

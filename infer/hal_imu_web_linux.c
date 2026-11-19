@@ -10,7 +10,12 @@
 //             番茄表（FLIP）按 gravity_x=-9.8·sin(roll°)、gravity_y=-9.8·cos(roll°) 换算重力。
 //   pitch —— 屏幕法向（视线）仰角：屏幕竖直朝前为 0，平放朝天为 +90，朝下为 -90（度）。
 //             玲珑仪以 view_alt=pitch 作视线仰角（enable_imu 时）。
-//   yaw   —— 屏幕上方指向的罗盘航向（0~360，北=0；浏览器 alpha 经屏幕方向角修正）。
+//   yaw   —— 屏幕正面法向（+z_d）的罗盘航向（0~360，北=0，顺时针）；玲珑仪以
+//             view_azi=yaw+180 得「背面法向航向＝取景方向」（与安卓/WASM 形态同一口径）。
+//             由客户端按 W3C 旋转矩阵算好后上报（见 web_remote_client.html 的
+//             screenNormalHeading），本文件只归一化、不再自行换算——浏览器上报的
+//             alpha 是旋转矩阵里绕地球 z 轴的角，不是「朝向」（竖直持机时航向
+//             =180°-alpha，直接当航向用会整体偏 180°，与屏幕方向角 θ 也无关）。
 //
 // 屏幕方向角 θ（screen.orientation.angle，横屏时 ±90°）修正为标准旋转 R(θ)：
 //   ax_s = ax·cosθ - ay·sinθ； ay_s = ax·sinθ + ay·cosθ
@@ -123,8 +128,9 @@ int imu_read_angle(float *pitch, float *roll, float *yaw) {
         *pitch = 0.0f;
     }
 
-    // yaw：屏幕上方指向的罗盘航向（浏览器 alpha + 屏幕方向角修正，无罗盘数据时保持旧值/0）
-    *yaw = fmodf(yaw_d + (float)th + 360.0f, 360.0f);
+    // yaw：屏幕正面法向（+z_d）的罗盘航向，客户端已算好（W3C 旋转矩阵第 3 列），
+    // 此处只归一化；不再叠加屏幕方向角 θ（法向与屏幕内容旋转无关，θ 只用于 roll 修正）。
+    *yaw = fmodf(yaw_d + 360.0f, 360.0f);
 
     return 0;
 }

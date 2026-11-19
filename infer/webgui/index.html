@@ -352,7 +352,9 @@
 //   - WASM 内运行完整 GUI（业务代码与 nano_tty/nano_web 同源），本页只做「显示器+输入设备」；
 //   - 显示：rAF 节奏读 wasm 线性内存中的 RGBA 帧缓冲（epoch 计数判新帧，静态零拷贝）；
 //   - 触屏：Pointer Events → ccall wasm_gui_on_touch；键盘：keydown 映射 → wasm_gui_on_key；
-//   - 姿态：DeviceMotion/DeviceOrientation → wasm_gui_on_orientation（localhost/HTTPS 可用）。
+//   - 姿态：DeviceMotion/DeviceOrientation → wasm_gui_on_orientation（localhost/HTTPS 可用）；
+//     航向由本页按 W3C 旋转矩阵算成「屏幕正面法向的罗盘航向」再注入（见下方
+//     screenNormalHeading：不能把 alpha 直接当航向，旧实现因此整体偏 180°）。
 const canvas   = document.getElementById("screen");
 const ctx      = canvas.getContext("2d", { alpha: false });
 const statusEl = document.getElementById("status");
@@ -1181,6 +1183,32 @@ let lastAcc = null;
 let lastYawDeg = 0, lastYawOk = false, absAlphaSeen = false;
 let lastAttSendTs = 0;
 
+// 屏幕正面法向（+z_d，自屏幕指向观察者）的罗盘航向（0~360，北=0，顺时针）。
+// 由 W3C《DeviceOrientation Event》的设备朝向旋转矩阵算得：
+//   R = Rz(alpha)·Rx(beta)·Ry(gamma)（设备系 → 地球系，X=东 Y=北 Z=天）；
+//   +z_d 的像 = R 的第 3 列；航向 = atan2(东分量, 北分量)。
+// 与 Android 版逐式一致（MainActivity.onSensorChanged：atan2(R[2], R[5])，真机校准
+// 2026-10-15）；玲珑仪据此算 view_azi = yaw + 180 = 背面法向航向 = 取景方向。
+// 为什么不能直接把 alpha 当航向：alpha 是绕设备 z 轴的地球系旋转角，竖直持机
+//（beta≈90°, gamma≈0）时正确航向 = 180° - alpha —— 直接用 alpha 会整体偏 180°。
+// 法向垂直（天顶/天底，alpha 退化）时返回 null，调用方保持上一次航向。
+function screenNormalHeading(alpha, beta, gamma) {
+  const A = alpha * Math.PI / 180, B = beta * Math.PI / 180, G = gamma * Math.PI / 180;
+  const cA = Math.cos(A), sA = Math.sin(A);
+  const cB = Math.cos(B), sB = Math.sin(B);
+  const cG = Math.cos(G), sG = Math.sin(G);
+  const zEast  = cA * sG + cG * sA * sB;   // R[2]：+z_d 的东分量
+  const zNorth = sA * sG - cA * cG * sB;   // R[5]：+z_d 的北分量
+  if (Math.abs(zEast) < 1e-6 && Math.abs(zNorth) < 1e-6) return null;
+  let deg = Math.atan2(zEast, zNorth) * 180 / Math.PI;
+  if (deg < 0) deg += 360;
+  return deg;
+}
+// 姿态事件是否带齐算航向所需的三轴角（缺任一/非有限则退化为 alpha 直算）
+function hasEuler(e) {
+  return Number.isFinite(e.alpha) && Number.isFinite(e.beta) && Number.isFinite(e.gamma);
+}
+
 function currentOrientDeg() {
   if (screen.orientation && typeof screen.orientation.angle === "number") return screen.orientation.angle;
   return (typeof window.orientation === "number") ? window.orientation : 0;
@@ -1204,20 +1232,31 @@ function onDeviceMotion(e) {
   attHasData = true;
   sendOrientation();
 }
-// 绝对航向优先；见到 absolute 后忽略 relative（防两套 alpha 交替致方位角跳变）
-function onDeviceOrientationAbs(e) {
-  if (typeof e.alpha !== "number" || e.alpha === null) return;
-  absAlphaSeen = true;
-  lastYawDeg = e.alpha;
+// 用一帧欧拉角更新航向并下发（天顶/天底退化时保持上一次航向）
+function applyEuler(alpha, beta, gamma) {
+  const h = screenNormalHeading(alpha, beta, gamma);
+  if (h !== null) lastYawDeg = h;
   lastYawOk = true;
   attHasData = true;
   sendOrientation();
 }
+// 绝对航向优先；见到 absolute 后忽略 relative（防两套 alpha 交替致方位角跳变）
+function onDeviceOrientationAbs(e) {
+  if (!hasEuler(e)) return;
+  absAlphaSeen = true;
+  applyEuler(e.alpha, e.beta, e.gamma);
+}
 function onDeviceOrientation(e) {
   if (absAlphaSeen) return;
-  if (typeof e.webkitCompassHeading === "number")      lastYawDeg = e.webkitCompassHeading;
-  else if (typeof e.alpha === "number" && e.alpha !== null) lastYawDeg = e.alpha;
+  if (hasEuler(e)) { applyEuler(e.alpha, e.beta, e.gamma); return; }
+  // 退化路径（个别实现只给 alpha / 罗盘航向，没有 beta、gamma）：按竖直持机
+  //（beta=90°, gamma=0°）假设取 180° - 航向；webkitCompassHeading 是
+  // 「设备指向（取景方向 = -z_d）」的绝对航向，故 +180° 得 +z_d 的航向。
+  let deg;
+  if (typeof e.webkitCompassHeading === "number") deg = e.webkitCompassHeading + 180;
+  else if (typeof e.alpha === "number" && e.alpha !== null) deg = 180 - e.alpha;
   else return;
+  lastYawDeg = ((deg % 360) + 360) % 360;
   lastYawOk = true;
   attHasData = true;
   sendOrientation();
