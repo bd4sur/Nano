@@ -894,9 +894,17 @@ document.addEventListener("dblclick", (e) => e.preventDefault());
 //      无锚点、不占触摸状态机、不受画布高度限制；到顶到底由控件按真实 max_scroll
 //      硬钳，因此**没有"越界量要先磨回来"的死区**，反向立刻生效。
 //      JS 侧再做一层指数平滑：一格滚轮拆成几帧的小步，鼠标滚轮不再是"一格一跳"。
-//   ② 灵机 App 运行态 → 仍是**合成手指**（App 用 (native Touch) 自己解释手势，
+//   ② 灵机 App 运行态 → 默认仍是**合成手指**（App 用 (native Touch) 自己解释手势，
 //      宿主没法替它定义滚动）。此路保留但修掉缺陷 b：收手与下一次按下强制跨帧，
 //      并去掉"每 260ms 强制松手重按"（每次重按都是白丢一帧 + 可能误点）。
+//   ③ 已**认领**原生通道的灵机 App（(native Touch) 的 wheel_enable，如 markdown
+//      阅读器）→ 走原生通道，但**不由页面平滑**：增量原样 (wasm_gui_on_wheel) 交过去，
+//      由 App 在它自己的拍子里缓动（它的拍子可能是 16/60/1000ms，替它定平滑节奏
+//      只会两层缓动叠在一起）。合成手指对长文档有三个结构性缺陷：走不出画布（每 4 格
+//      重按一次）；重按的 DOWN 落在上一段 UP 的同一次采样间隔里，App 看不到松开沿、
+//      只看到触点从画布顶"瞬移"回中心（一段凭空的反向位移）；起手点（中心 → 首格）
+//      的位移与 DOWN 同一拍，被整段丢掉。走原生通道后，增量经 key_event->wheel_dy →
+//      am_native_Touch_set_wheel → (Touch.wheel)。
 const WHEEL_NOTCH_PX      = 100;  // 一格滚轮在像素模式（deltaMode=0）下的典型 deltaY
 const WHEEL_NOTCH_FB      = 28;   // 一格滚轮折算成多少帧缓冲像素（≈ 两条菜单项）
 const WHEEL_SMOOTH_GAIN   = 0.45; // 平滑跟随系数：每帧吃掉剩余量的一部分（0.45 ≈ 90ms 走完）
@@ -1057,6 +1065,28 @@ function wheelSwipe(delta, ts) {
   scheduleWheelEnd();
 }
 
+// 灵机 App 是否已声明自己消费滚轮（(native Touch) 的 wheel_enable，见
+// hal_touch_wasm.c 的 wasm_gui_wheel_native）：是则走原生通道，否则仍把滚轮
+// 合成为手指（App 用 (native Touch) 解释手势，见上面 ② 的说明）。
+function wheelNativeClaimed() {
+  return (typeof Module._wasm_gui_wheel_native === "function")
+         && Module._wasm_gui_wheel_native() !== 0;
+}
+
+// 已认领原生通道的灵机 App：**原样交付**（不做帧间平滑，保留小数避免累积误差）。
+// 平滑由 App 自己在它的拍子里做——App 的节拍可能是 16/60/1000ms，页面替它定平滑
+// 节奏只会两层缓动叠在一起（手感发黏），或把平滑全堆到 App 那一拍里（一抖）。
+let wheelAppRemain = 0;
+function wheelToApp(delta) {
+  wheelAppRemain += delta;
+  const px = Math.round(wheelAppRemain);
+  if (!px) return;
+  wheelAppRemain -= px;
+  Module._wasm_gui_on_wheel(px);
+  // 立即驱动一次输入采样（增量靠输入层 tick 取走，不主动 tick 要等心跳，手感发黏）
+  Module._wasm_gui_input_tick(nowEpochMs());
+}
+
 function onWheel(e) {
   e.preventDefault(); // 画布上的滚轮不再滚动页面
   if (e.ctrlKey) return;  // Ctrl+滚轮：浏览器缩放组合，忽略（不误判为滑动）
@@ -1067,7 +1097,11 @@ function onWheel(e) {
   if (!delta) return;
 
   if (nanoGuiState() === WASM_STATE_SCHEME_APP_RUN) {
-    wheelSwipe(delta, eventEpochMs(e)); // ② App 自己解释触屏流
+    if (wheelNativeClaimed()) {      // ③ App 自己消费滚轮（如 Markdown 阅读器）
+      wheelToApp(delta);
+      return;
+    }
+    wheelSwipe(delta, eventEpochMs(e)); // ② App 自己解释触屏流（未认领滚轮通道时）
     return;
   }
   // ① 其余全部 GUI 状态：原生滚轮通道 + 帧间平滑

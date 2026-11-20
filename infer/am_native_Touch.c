@@ -39,6 +39,9 @@ static int32_t s_release_latched = 0; // 待取走的"松开"沿
 static int32_t s_drop_inflight = 0;   // 1=正在丢弃在途手势
 static uint64_t s_drop_until_ms = 0;  // 丢弃窗口的下限（毫秒，同一时钟源）
 
+// 滚轮原生通道的暂存（宿主每帧经 am_native_Touch_set_wheel 交来）
+static int32_t s_wheel_pending = 0;
+
 // ---------------------------------------------------------------------------
 // 采样：一次 HAL 电平读取 + 坐标缓存 + 边沿锁存
 // 返回 1（可用且按下）/ 0（可用但未按下）/-1（触屏不可用）
@@ -163,6 +166,55 @@ int32_t am_native_Touch_take_release(am_runtime_t *rt, am_process_t *proc) {
     return touch_push_bool(proc, had != 0);
 }
 
+// ---------------------------------------------------------------------------
+// 滚轮（原生通道，见 am_native_Touch.h 的说明）
+//
+// 与触屏的三个函数不同，滚轮**不在**本库采样：宿主的输入层（ui_app.c 的
+// get_input_event）本来就是唯一消费 hal_touch_wheel_take 的地方，本库再去取就会
+// 与它抢（50ms/2ms 心跳随时可能先把增量取走）。所以由宿主每帧把
+// key_event->wheel_dy 转交进来（am_native_Touch_set_wheel），本库只做暂存。
+// ---------------------------------------------------------------------------
+
+int32_t am_native_Touch_wheel_available(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+#if defined(NANO_WASM_GUI)
+    return touch_push_bool(proc, true);
+#else
+    // 其余平台没有滚轮输入源（掌机/桌面/串口键盘），App 应退回触屏拖动
+    return touch_push_bool(proc, false);
+#endif
+}
+
+int32_t am_native_Touch_wheel_enable(am_runtime_t *rt, am_process_t *proc) {
+    (void)rt;
+#if defined(NANO_WASM_GUI)
+    hal_touch_wheel_claim(1);
+    return touch_push_bool(proc, true);
+#else
+    return touch_push_bool(proc, false);
+#endif
+}
+
+int32_t am_native_Touch_wheel(am_runtime_t *rt, am_process_t *proc) {
+    int32_t v = s_wheel_pending;
+    (void)rt;
+    s_wheel_pending = 0;
+    return touch_push_int(proc, v);
+}
+
+// 宿主服务：转交本帧的滚轮增量（正 = 内容上滚）
+void am_native_Touch_set_wheel(int32_t dy) {
+    s_wheel_pending += dy;
+}
+
+// 宿主服务：新实例冷启动时清干净（积压增量 + 上一个 App 的认领）
+void am_native_Touch_reset_wheel(void) {
+    s_wheel_pending = 0;
+#if defined(NANO_WASM_GUI)
+    hal_touch_wheel_claim(0);
+#endif
+}
+
 // ===============================================================================
 // 宿主服务接口
 // ===============================================================================
@@ -187,6 +239,9 @@ static const am_native_func_entry_t am_native_Touch_funcs[] = {
     { L"y",             am_native_Touch_y },
     { L"take_press",    am_native_Touch_take_press },
     { L"take_release",  am_native_Touch_take_release },
+    { L"wheel_available", am_native_Touch_wheel_available },
+    { L"wheel_enable",    am_native_Touch_wheel_enable },
+    { L"wheel",           am_native_Touch_wheel },
 };
 
 const am_native_lib_entry_t am_native_Touch_lib = {

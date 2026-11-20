@@ -30,6 +30,15 @@
 ;;   合成，所以留在 boot 里画的那一帧用户根本看不到（掌机/桌面的 SPI/直接上屏看得见）。
 ;;   跨一拍让出 = 栈退空 = 提示真的上屏。代价只有一拍（TICK_MS = 60ms）。
 ;;
+;; 鼠标滚轮/触控板（只 WASM GUI 有）：走**原生滚轮通道**而不是合成手指——
+;;   合成手指在长文档上有三个结构性缺陷（走不出画布 / 重按被合进上一段手势 → 凭空
+;;   一段反向位移 / 首格位移被整段丢掉），实测 5 格只前进 56px（应 140px）。
+;;   boot 里 (Touch.wheel_enable) 认领后，页面把滚轮的像素增量**原样**交过来
+;;   （(Touch.wheel)，正 = 内容上滚），本文件每拍取走、按 WHEEL_GAIN 缓动落位
+;;   （handle_wheel），并在有滚动期间把节拍提到 16ms（整屏重绘的 60ms 拍会把
+;;   缓动压成 16fps 的跳动）。实测一格恰好 28px、正反严格 1:1，且不再有反向位移。
+;;   掌机/桌面返回 wheel_available = #f，WHEEL_OK 恒 0，以下逻辑全部走空。
+;;
 ;; 支持的子集：# 1~3 级标题、**加粗**、`行内代码`、无序列表（**可嵌套**）、[链接](url)、
 ;;   围栏代码块、分隔线、**表格**（GFM：列对齐、单元格内行内样式、自动列宽、单元格内
 ;;   折行）、**引用块**（可嵌套、内部可放任意块）、**块级数学公式**（$$...$$）、
@@ -214,10 +223,16 @@
 ;; 定时器回调，同进程两个 interval 会互相错开、两拍都掉到 ~64ms，实测），所以由
 ;; 调用方在它活动期间把节拍提上去：start_picker 提到 16ms，拿到结果后恢复 60ms。
 (define TICK_MS 60)
+(define tick_ms TICK_MS)    ;; 当前节拍周期（set_tick 的幂等判据，见下）
 (define set_tick
   (lambda (ms)
-    { (System.clear_interval ts)                    ;; 安全：回调体在 fire_expired_timers
-      (set! ts (System.set_interval ms on_tick)) })) ;; 返回之后才执行，不会 UAF
+    ;; 幂等：值没变就什么都不做。滚轮每拍都要“确认节拍”（见 handle_wheel），
+    ;; 不判等会每拍 clear+set 一次定时器（无谓的堆分配，且节拍相位被反复重置）。
+    (if (== ms tick_ms)
+        #f
+        { (System.clear_interval ts)                 ;; 安全：回调体在 fire_expired_timers
+          (set! ts (System.set_interval ms on_tick)) ;; 返回之后才执行，不会 UAF
+          (set! tick_ms ms) })))
 
 ;; ---- 输入状态 ------------------------------------------------------------
 
@@ -229,6 +244,30 @@
 (define key 0)
 (define hit_url "")
 (define dyy 0)
+
+;; ---- 滚轮（原生通道，WASM GUI 专有）--------------------------------------
+;; 背景：宿主的 GUI 滚动控件直接吃 key_event->wheel_dy（按像素落位），而灵机 App
+;; 只能看触屏电平。页面过去对 App 运行态把滚轮**合成为一根手指**，对长文档有三个
+;; 结构性缺陷（详见 am_native_Touch.h 的 (Touch.wheel_enable)）：合成手指走不出画布
+;; （每 4 格重按一次）、重按被合进上一段手势（触点从画布顶“瞬移”回中心 = 一段凭空
+;; 的反向位移）、起手点（中心 → 首格）的位移与 DOWN 同一拍而被整段丢掉。实测在
+;; 320x240 / 60ms 拍下：滚 5 格只前进 56px（应 140px），继续滚还会倒回去。
+;;
+;; 现在：boot 里认领原生通道（wheel_enable），页面不再合成手指，而是把像素增量
+;; **原样**交过来（一格 100 deltaY = 28 像素；页面不做平滑，平滑由下面 handle_wheel
+;; 在本 App 自己的拍子里做）。
+;; 节拍：本 App 常规是 60ms（整屏重绘 ~16fps）。一格滚轮要被缓动成 5~6 小步才顺，
+;; 若按 60ms 取样，这 5 步会被压成 2~3 拍（还是跳）。所以**有滚轮活动期间把节拍提到
+;; 16ms**（同文件选择器的做法），安静 WHEEL_IDLE_TICKS 拍后再回 60ms。
+;; 掌机/桌面没有滚轮源（wheel_available=#f），WHEEL_OK 恒 0，下面全部走空，
+;; 行为与改造前完全一致。
+(define WHEEL_OK 0)            ;; 1 = 本平台有原生滚轮通道且已认领
+(define WHEEL_TICK_MS 16)      ;; 滚轮活动期间的节拍（跟手的上限就是它）
+(define WHEEL_IDLE_TICKS 9)    ;; 连续多少拍没滚轮增量就回常规节拍（9×16ms ≈ 144ms）
+(define WHEEL_GAIN 0.45)       ;; 一拍吃掉剩余量的比例（≈ GUI 滚轮通道的手感：一格 ~90ms 走完）
+(define wheel_total 0)         ;; 本拍取到的滚轮增量（帧缓冲像素，正 = 内容上滚）
+(define wheel_rest 0)          ;; 还没落位的剩余量（缓动用；整数值，必然归零）
+(define wheel_idle 0)          ;; 连续多少拍没收到滚轮增量
 
 ;; ---- 小工具 --------------------------------------------------------------
 
@@ -1468,6 +1507,51 @@
               #f) })
     #t))
 
+;; ---- 交互：滚轮（原生通道）-------------------------------------------
+;; 平滑在这里做（页面只把像素增量原样交过来）——本 App 的拍子会在 16/60ms 之间切，
+;; 页面替它定平滑节奏只会两层缓动叠在一起。一拍走「剩余量的 WHEEL_GAIN」，
+;; 剩余 ≤2px 时一次走完（**保证必然归零**：否则永远差最后一点点，节拍就回不到 60ms）。
+;; 注意与滚动位置的关系：轮滚一格 = 28px ≈ 两行，一格 ~90ms 缓动到位（与宿主 GUI
+;; 的滚动控件同手感）。方向：wheel_dy > 0 = 内容上滚 = scroll_by_px 的正方向。
+(define wheel_step_px
+  (lambda ()
+    (define r wheel_rest)
+    (define a (Math.abs r))
+    (define s 0)
+    (if (<= a 2)
+        (set! s r)
+        { (set! s (Math.round (* r WHEEL_GAIN)))
+          (if (== s 0) (set! s (if (> r 0) 1 -1)) #f) })
+    (set! wheel_rest (- r s))
+    s))
+
+(define handle_wheel
+  (lambda ()
+    (define px 0)
+    ;; 面板/选择器是**本拍**由 handle_touch 刚打开的（on_tick 分支选择发生在它之前）：
+    ;; 此时节拍归面板管（选择器要 16ms 跟手），这里既不落位也不改节拍；剩余量
+    ;; 丢掉，免得退出面板时凭空多滚一段。
+    ;; （不改节拍是关键：否则本拍会把 start_picker 刚设的 16ms 改回 60ms——
+    ;;  下一拍起走的就是面板分支，再没人纠正，选择器整段只能跑 16fps。）
+    (if (or (FP.active) (== settings_open 1) (== toc_open 1))
+        { (set! wheel_rest 0)
+          (set! wheel_idle WHEEL_IDLE_TICKS) }
+        { (if (not (== wheel_total 0))
+              { (set! wheel_rest (+ wheel_rest wheel_total))
+                (set! wheel_idle 0) }
+              (set! wheel_idle (+ wheel_idle 1)))
+          (if (not (== wheel_rest 0))
+              { (set! px (wheel_step_px))
+                (if (not (== px 0))
+                    (scroll_by_px px)   ;; 它内部已调 sync_scroll
+                    #f) }
+              #f)
+          ;; 节拍：还有缓动剩余、或刚收到增量（平滑流还没吃完）→ 16ms；否则回常规
+          (if (or (not (== wheel_rest 0)) (< wheel_idle WHEEL_IDLE_TICKS))
+              (set_tick WHEEL_TICK_MS)
+              (set_tick TICK_MS)) })
+    #t))
+
 ;; ---- 交互：键盘 ----------------------------------------------------------
 
 ;; 阅读页：↑↓ 滚一行、←→ 翻页；没有文档时 Enter 弹选择器（鼠标/触屏之外的键盘路径）。
@@ -1583,6 +1667,13 @@
 
 (define on_tick
   (lambda ()
+    ;; 滚轮（见文件头的滚轮说明）：每拍先把本拍到达的增量取走，并幂等重新声明认领
+    ;; （宿主在新实例冷启动时会清掉认领，重复声明无副作用）。**只在这里取走**：
+    ;; 面板/选择器/启动拍期间增量被直接丢弃，不会攒到回阅读页时一下子跳一大段。
+    (if (== WHEEL_OK 1)
+        { (Touch.wheel_enable)
+          (set! wheel_total (Touch.wheel)) }
+        (set! wheel_total 0))
     ;; 启动第二拍：画完启动提示的那一帧已经上屏（栈退空 → 浏览器合成），现在才真正
     ;; 读盘 + 排版首段。做完 boot_stage = 1，下一拍开始就是常规阅读循环。
     ;; 这一拍**不**处理键/触屏（提示页上没有可点的东西），也不装新定时器：
@@ -1601,6 +1692,7 @@
                         { (EX.check)
                           (handle_keys)
                           (handle_touch)
+                          (handle_wheel)
                           (bg_work)
                           (sync_scroll)
                           (draw_all) })))))))
@@ -1617,6 +1709,15 @@
     { (set! SW (Gfx.width))
       (set! SH (Gfx.height))
       (set! CW (- SW (* 2 PAD_X)))
+      ;; 滚轮原生通道（见文件头「滚轮」）：WASM GUI 有，掌机/桌面/串口键盘没有
+      ;; （返回 #f → WHEEL_OK 保持 0，滚轮/拖动全部走原路）。
+      ;; 必须在装定时器之前认领：页面收到第一个 wheel 事件时就要知道该走哪条通路。
+      (if (Touch.wheel_available)
+          (if (Touch.wheel_enable) (set! WHEEL_OK 1) #f)
+          #f)
+      ;; 诊断行（e2e 据此断言“滚轮通道认领成功/未启用”，与 MDBOOT 同类）：
+      ;; 掌机/桌面恒为 0，浏览器里应为 1。
+      (display "MDWHEEL ok=") (display WHEEL_OK) (newline)
       (MDL.set_math_measure doc_math_measure)  ;; 打开公式排版能力（必须在排版之前）
       (draw_splash)                           ;; ① 启动提示：5 个 Gfx 调用，<1ms
       (display "MDBOOT splash t=") (display (System.timestamp)) (newline)

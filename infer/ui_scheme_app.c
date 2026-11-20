@@ -597,7 +597,8 @@ int32_t ui_scheme_app_list_event_handler(Key_Event *key_event, Global_State *glo
 #define MB_ILCACHE_DIR            "data/ilcache"
 #define MB_ILCACHE_MAGIC          "AMILCH01"   // 8 字节
 #define MB_ILCACHE_FORMAT         1u
-#define MB_ILCACHE_ABI            1u   // 手工维护：同步 vendor / 改本地库注册表后 +1
+#define MB_ILCACHE_ABI            2u   // 手工维护：同步 vendor / 改本地库注册表后 +1
+                                       // 2 = (native Touch) 新增 wheel_available/wheel_enable/wheel
 #define MB_ILCACHE_HDR            32u  // 头长度（之后紧接来源清单，再之后是 payload）
 #define MB_ILCACHE_MAX_MODULES    96u
 #define MB_ILCACHE_MAX_PATH       200u
@@ -1270,6 +1271,10 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     // (App.back_to) 决定把自己的退出按钮画成「返回」还是「退出」。
     app_apply_back_hint(s_app);
     am_native_Key_reset();
+    // 滚轮原生通道：清掉上一个实例的积压增量与认领标志（由新 App 自己决定要不要
+    // (Touch.wheel_enable)）。必须在这里而不是 app_load_source 之后：模块体（含 boot）
+    // 就在 app_load_source 里跑，那时 App 已经认领过了。
+    am_native_Touch_reset_wheel();
     // Gfx 的「绘制设置」：字模/裁剪是 am_native_Gfx.c 与 Nano_GFX 上的宿主单例状态，
     // 不随实例销毁而复位。不复位则上一个 App 的 (Gfx.set_font 0) 会被本 App 继承
     // （先跑 gol 再跑 2048 → 2048 的文字变成 12px 点阵，见 am_native_Gfx_reset 的注释）。
@@ -1389,9 +1394,18 @@ static void app_drain_output_fifo(void) {
 }
 
 int32_t ui_scheme_app_render_frame(Key_Event *key_event, Global_State *global_state) {
-    (void)key_event;
     Nano_GFX *gfx = global_state->gfx;
     if (s_app == NULL) return 0;
+
+    // 滚轮增量转交 App（见 am_native_Touch.h 的 (Touch.wheel) 说明）：
+    // key_event->wheel_dy 是本帧的累加值（main_wasm_gui.c 每帧取走 global_state 的
+    // 积压并清零）；GUI 状态由各滚动控件自己消费，App 运行态则只有 Scheme 知道该怎么
+    // 滚（阅读器按像素、地图按格…），所以原样转存等 App 来取。取走后清零，避免同一帧
+    // 的增量被随后的模态控件再消费一次。
+    if (key_event != NULL && key_event->wheel_dy != 0) {
+        am_native_Touch_set_wheel(key_event->wheel_dy);
+        key_event->wheel_dy = 0;
+    }
 
 
     if (s_app->load_failed) {
@@ -1537,6 +1551,12 @@ static void scheme_modal_open(Key_Event *key_event, Global_State *global_state) 
     s_modal_active = 1;
     s_modal_open_key = 0;
     s_modal_open_key_deadline_ms = 0;
+    // 模态框期间输入归宿主控件（文本区/输入框自己会拖动滚动），而 Scheme 进程是
+    // BLOCKED，不会来取 (Touch.wheel)。所以把滚轮原生通道**交还宿主**（清认领 +
+    // 清积压），否则：模态框里的长文本无法用滚轮滚（页面还在往 App 那边送），
+    // 关闭后 App 又会一口气吃掉整段积压（凭空跳一大段）。App 恢复后下一拍会
+    // 重新 (Touch.wheel_enable)（幂等），通道自然回到它手里。
+    am_native_Touch_reset_wheel();
     {
         // 剔除打开本次模态框的那次按键的松开沿（见变量注释）
         uint8_t code = 0;

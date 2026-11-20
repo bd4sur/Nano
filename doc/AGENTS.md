@@ -14638,3 +14638,97 @@ WASM 单线程：整个冷启动跑在**一个 JS 任务**里，`putImageData` �
   `regress.js`（42 App 存活回归）只修到"能进列表、能启动 App"（主菜单 `digit(5)` +
   退出后从主菜单重新进列表），仍会因"退出落点改为主菜单"与"静态 App 的 refreshΔ=0"
   两条过期判据报 ABNORMAL，未改其判据（需要单独一轮重写）。
+
+------------------------------------
+
+# 2026-11-20（Markdown 阅读器：WASM 鼠标滚轮「滚不动 / 一抖一抖 / 会倒回去」——给灵机 App 一条原生滚轮通道）
+
+需求：`infer/app/markdown.scm` 在 WASM 目标（`build_wasm_gui.sh` → `webgui/`）下，浏览器里
+鼠标滚轮滚动不畅；尽量在 Scheme 层解决。参考 2026-11-18（四）那次「GUI 状态滚轮重做」。
+
+## 一、先量：旧路的三个结构性缺陷（不是"手感"问题）
+
+`webgui/index.html` 的滚轮分两条通路：GUI 状态走**原生通道**（`wasm_gui_on_wheel` →
+`key_event->wheel_dy`，各控件按像素落位 + 帧间平滑）；**灵机 App 运行态**只能把滚轮
+**合成为一根手指**（App 用 `(native Touch)` 自己解释手势）。实测（320×240，markdown，
+无头 Chromium，每格 `deltaY=100` → 28 帧缓冲像素，`MDV.top_y` 为真值）：
+
+| 操作 | 应到 | 实到 |
+|---|---|---|
+| 1 格 | 28 | **0**（什么都没发生） |
+| 2 格 | 56 | **0** |
+| 再 3 格 | 140 | 56 |
+| 再 10 格 | 420 | 147 |
+| 再快刷 20 格 | 980 | **98（倒退了 49px）** |
+
+三个原因（都是合成手指这种"伪装成拖动"的通路无法避免的）：
+
+1. **起手位移被整段丢掉**：一格的第一段 = DOWN(画布中心) + 同一 JS 任务里的 MOVE。
+   App 的拍子是 60ms，`handle_touch` 看到 press 沿时触点**已经**移到末端，那一格的
+   位移被当成"起手锚点"吃掉 → 单格完全不动。
+2. **走不出画布**：中心起手只剩 119px 行程，一格 28px → 每 4 格就要"松手重按"。
+3. **重按 = 凭空的反向位移**：重按的 DOWN 与上一段的 UP 落在同一个 60ms 采样间隔里，
+   App 看不到松开沿，只看到触点从画布顶（y≈1）**瞬移**回中心（y=120）→ 一个 +119 的
+   位移被当成手指下移，`scroll_by_px` 反向 → 就是"滚着滚着倒回去"。
+
+结论：这不是调参能修的——**信息在 App 采样之前就已经丢了**。纯 Scheme 无法区分
+"真的手指快速下拖"和"合成手势重按瞬移"。
+
+## 二、改法：App 认领一条与 GUI 相同的原生滚轮通道（语义在 Scheme，管道在宿主）
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| HAL | `hal_touch_wasm.c` / `hal_touch.h` | `wasm_gui_wheel_native()`（页面查询）+ `hal_touch_wheel_claim(on)`；交还通道时清掉积压增量 |
+| 页面 | `webgui/index.html` | 运行态且**已认领** → 走原生通道（不再合成手指）；未认领 → 老路不变。认领后页面只做 px 换算（`deltaY*0.28`，保留小数），**不做平滑**——App 的拍子可能是 16/60/1000ms，页面替它定平滑节奏只会两层缓动叠加或把平滑全堆进 App 那一拍 |
+| 本地库 | `am_native_Touch.c/.h` | `(Touch.wheel_available)` / `(Touch.wheel_enable)`（认领，幂等）/ `(Touch.wheel)`（取走帧累加像素，正=内容上滚）。**不在本库采样**：`hal_touch_wheel_take` 的唯一消费者是输入层（心跳 2/50ms 随时会取走），本库只接宿主每帧转交的 `key_event->wheel_dy` |
+| 宿主 | `ui_scheme_app.c` | ① `render_frame` 把 `key_event->wheel_dy` 转交 `am_native_Touch_set_wheel` 并清零；② 新实例冷启动时 `am_native_Touch_reset_wheel()`（清积压 + 清上个 App 的认领）；③ `scheme_modal_open` 把通道**交还宿主**；④ `MB_ILCACHE_ABI` 1 → 2 |
+| App | `app/markdown.scm` | boot 里 `(Touch.wheel_enable)`；每拍取走增量、按 `WHEEL_GAIN=0.45` 缓动落位；有滚动活动时把节拍提到 16ms（同文件选择器），安静 9 拍后回 60ms |
+
+关键不变量（都写成注释落在代码里）：
+- **只在一个地方取增量**（`on_tick` 头上）：面板/选择器/启动拍期间直接丢弃，不会攒到
+  回阅读页时跳一大段；
+- **缓动必然归零**（剩余 ≤2px 一次走完）：否则节拍永远回不到 60ms；
+- **认领每拍重申**（幂等）：宿主冷启动会清标志，别的 App 冷启动后再回到本 App 也能自愈；
+- 其余平台 `wheel_available` 恒 `#f` → `WHEEL_OK=0`，所有滚轮逻辑一行不跑（行为不变）。
+
+## 三、实测（改后，同一探针）
+
+- 一格 = **28px**、两格 56、五格 140、十五格 420、反 5 格 −140、快刷 20 格 +560：
+  **正反严格 1:1**，无吞格、无反向。
+- 缓动曲线（一格）：`13,7,4,2,2` 共 5 拍 ≈ 77ms（与宿主 GUI 滚轮同手感）；期间节拍
+  **16~17ms**（`fb_epoch` 实测），安静 9 拍后回 60ms（15.7 fps）。
+- 已知代价：App 是**轮询制**，页面无法唤醒它 → 单格的第一拍最多晚 60ms，且第一拍
+  就是 24px 的整步（之后 4/2/1 收尾）。连续滚动时整段都是 16ms 拍，看不出台阶。
+
+## 四、验证
+
+- `tools/e2e/browser/regress_markdown.js` **62/62**（新增 6 条：`MDWHEEL ok=1`、
+  长文档重新打开、**一格真的滚了**、滚轮不改变状态（不会被当成点按）、
+  **+5/−5 格后整帧哈希回到起点**（= 严格 1:1 且无残余）、往返后仍在阅读页）。
+- 其余全绿：`regress_wheel.js` 28/28、`regress_markdown_math.js` 22/22、
+  `regress_markdown_big.js` 24/24（1MB 开屏/堆不变）、`regress_fmscroll.js` 43/43、
+  `regress_launch.js` 37/37、`regress_back.js` 24/24、`regress_font_isolation.js` 40/40、
+  `regress_album_launch.js` 37/37。
+- 宿主端 `tools/e2e/markdown/test_app.py` **114/114**（非 WASM 平台 `MDWHEEL ok=0`，
+  其余诊断行条数/顺序不变）。
+- 认领标志生命周期（无头 Chromium 实测）：markdown 运行中 `claim=1` → 退出到主菜单
+  `claim=1`（非 80 状态无影响）→ 进 notepad（另一个灵机 App）`claim=0`（冷启动已清）。
+- 可移植性：`gcc -fsyntax-only`（非 WASM 配置）对 `am_native_Touch.c` / `ui_scheme_app.c`
+  干净；wasm 目标整链构建通过（只有既有警告）。
+- 元数据：`;@version=2026-11-20`（`;@id=markdown` / `;@title=MD阅读器` 不变）。
+
+## 五、踩坑
+
+1. **`set_tick` 改成幂等之后，`handle_wheel` 在同一拍把 16ms 改回了 60ms**：用户点「打开」
+   的那一拍走的是**阅读分支**（分支在 `handle_touch` 之前就选定了），`start_picker` 设了
+   16ms，紧接着的 `handle_wheel` 认为"没有滚轮活动"→ 设回 60ms，下一拍起走选择器分支，
+   再没人纠正 → **选择器整段掉到 16fps**（`regress_fmscroll.js` 3 项失败：60Hz 提速、
+   惯性前进、惯性停止）。修法：`handle_wheel` 在面板/选择器活动时**不管节拍**（只丢剩余量）。
+2. **认领标志必须是"每个实例冷启动清一次"**，不能放在 `am_native_Touch_drop_inflight()`
+   里（那也在 resume 时调）：否则回到后台实例后 App 自以为有通道、宿主却改回合成手指。
+   清早了也不行——`app_load_source()` 里就跑模块体（boot 已认领），所以只能放在它之前。
+3. **模态框（`Ui.message`/`Ui.input`）期间必须交还通道**：那时 Scheme 进程是 BLOCKED，
+   不会来取 `(Touch.wheel)`；不交还就会「消息框里的长文本滚不动」+「关掉后一口气吃掉
+   整段积压，跳一大段」。
+4. 排查这类问题**只能拿真值**：`MDV.top_y` 靠临时诊断行打印（`MDPOS`），别拿截图/帧哈希
+   估"滚了多少"——第一次就是靠它一眼看出"一格 0px、快刷倒退 49px"。

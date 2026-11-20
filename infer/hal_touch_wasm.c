@@ -151,15 +151,33 @@ int32_t touch_init() {
 // 消费的连续量；若也排队，快速滚轮会填满容量 16 的队列并把真正的边沿挤掉。
 static int32_t s_wheel_dy = 0;
 
+// 原生滚轮通道的「认领」标志（见 hal_touch.h 的说明）
+//   0 = 没人认领：灵机 App 运行态下页面仍把滚轮**合成为手指**（旧通路）；
+//   1 = 某个灵机 App 声明自己消费滚轮：页面改走本文件的原生通道，增量经
+//       key_event->wheel_dy → am_native_Touch_set_wheel 交给 Scheme。
+static int32_t s_wheel_native = 0;
+
 EMSCRIPTEN_KEEPALIVE
 void wasm_gui_on_wheel(int32_t dy) {
     s_wheel_dy += dy;
+}
+
+// 页面侧查询：该不该把滚轮交给原生通道（灵机 App 认领了才交）。EMSCRIPTEN_KEEPALIVE
+// 保证它出现在 Module._wasm_gui_wheel_native（不必再改 EXPORTED_FUNCTIONS 清单）。
+EMSCRIPTEN_KEEPALIVE
+int32_t wasm_gui_wheel_native(void) {
+    return s_wheel_native;
 }
 
 int32_t hal_touch_wheel_take(void) {
     int32_t v = s_wheel_dy;
     s_wheel_dy = 0;
     return v;
+}
+
+void hal_touch_wheel_claim(int32_t on) {
+    s_wheel_native = (on != 0) ? 1 : 0;
+    if (!s_wheel_native) s_wheel_dy = 0;  // 交还通道：积压的增量不留到下一次认领
 }
 
 int32_t touch_read(int32_t *x, int32_t *y, int32_t *is_pressed) {

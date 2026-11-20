@@ -30,6 +30,18 @@ int32_t touch_read(int32_t *x, int32_t *y, int32_t *is_pressed);
 // 重按与松开若落在同一帧还会被后端当成一次点按（菜单直接执行中心条）。
 int32_t hal_touch_wheel_take(void);
 
+// 置/清【滚轮原生通道的认领标志】（on=1 认领，on=0 交还并丢掉积压增量）。
+// 宿主 GUI 的滚动控件直接用 wheel_dy，灵机 App 却只能经 (native Touch) 拿到
+// 触屏「电平」，没有滚轮通道 → 页面过去只能把滚轮**合成为一根手指**。那条路对
+// 长文档有结构性缺陷（合成手指走不出画布、每几格就要松手重按；重按与松手落在同一
+// 采样间隔里会被当成一次点按；重按起手点跳回画布中心又会让 App 看到一段凭空
+// 出现的反向位移）。于是给 App 一条与 GUI 相同的原生通道：
+//   · App 调 (Touch.wheel_enable) → hal_touch_wheel_claim(1)，页面随即不再合成手指；
+//   · 滚轮增量照 GUI 那条路走（wasm_gui_on_wheel → key_event->wheel_dy），
+//     但由宿主转交 am_native_Touch_set_wheel，Scheme 用 (Touch.wheel) 取走。
+// 只有 WASM GUI 定义本函数；其余平台不定义（调用点由 NANO_WASM_GUI 包住）。
+void hal_touch_wheel_claim(int32_t on);
+
 #ifdef __cplusplus
 }
 #endif
