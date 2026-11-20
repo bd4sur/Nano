@@ -14498,3 +14498,83 @@ Nano-WASM-GUI（`build_wasm_gui.sh` → `webgui/`，真 wasm32 + 无头 Chromium
 `hal_imu_web_linux.c` 直接链进 gcc 测试桩）覆盖：无数据返回失败、`yaw=300/θ=90` 原样透传
 （证明 θ 不再进 yaw）、`yaw=12.5/θ=180` 透传、负值归一化 359.5、无航向位保持旧值、
 `设备 +y / θ=90 → roll=-90`（证明 θ 仍作用于 roll）——**6/6 PASS**。
+
+------------------------------------
+
+# 2026-11-20（Markdown 阅读器：启动首帧先出「启动提示」，不再黑屏等排版）
+
+需求：`infer/app/markdown.scm` 点开后有一段「什么都看不到」的等待，要求**启动时第一时间
+就在屏幕上给出提示**以安抚用户，先只读分析（启动链路逐阶段 + 每阶段屏幕状态 + 方案），
+确认方案后再实现。
+
+## 现状（改之前，逐阶段实测）
+
+宿主把 App 拉起来的过程分三段，**只有第三段（`boot`）属于本文件**：
+
+1. 宿主 `ui_scheme_app.c`：点图标 → `gfx_soft_clear` + `gfx_refresh` → **纯黑**；
+   IL 缓存未命中时才画 `app_draw_start_screen`（「正在启动…（首次启动需准备，请稍候）」），
+   **命中时（第二次以后进入、或从别的 App 拉起）没有任何启动画面**。
+2. 解释器执行模块体：15 个 `import`（≈9.8k 行）+ 约 200 个顶层 `define` +
+   `(EX.install_with draw_all)` + `(boot)`——期间没有任何一帧。
+3. `boot`：`load_font`（读 `data/md-font.txt`，**并且每次都写一遍**）→ `launch_open` /
+   `boot_open`（读 `data/md-last.txt`）→ `open_path`（`Fs.size`）→ `MDV.open`
+   （`scan 1` 切 8KB + `ensure 0` 解析 4KB + 排版 ≈60~136ms，启动期最大一块）→
+   `open_finish`（索引 12KB、**写 `md-last.txt`**、打 `MDSTAT`）→ 才 `draw_all` + 推屏 →
+   `set_interval`。
+
+于是「点开 → 第一帧」之间一次 `Gfx.refresh` 都没有；真 WASM 回归里 1MB 文档
+「开屏 973ms」就是这个量级。
+
+关键约束（决定了方案形状）：`(Gfx.refresh)` 在 WASM 上是同步 `putImageData`
+（`hal_display_wasm.c`），但**浏览器要等 JS 栈退空才合成**——在 `boot` 里画一帧接着干重活，
+用户看不到（掌机/桌面的 SPI/直接上屏能看到）。所以必须**跨一个定时器边界让出**。
+
+## 改动（只改 `infer/app/markdown.scm`）
+
+- **启动两拍**：`boot` 只做「设几何 → `MDL.set_math_measure` → `draw_splash` → 装常规拍
+  → return」；读字模记录、续读/拉起、`MDV.open`、`draw_screen` 全部搬到新函数
+  `boot_work`，由**同一条 `TICK_MS` 定时器**的第一下触发（`on_tick` 头上判
+  `boot_stage == 0`）。定时器周期/相位与改造前**逐字一致**，`set_tick` 的用法不变。
+- **`draw_splash`**：5 个 `Gfx` 调用（底色 + 16px 标题 + 12px 说明 + 静态忙条 + `refresh`），
+  配色/版式照抄宿主 `app_draw_start_screen`（14/17/22 底、236/242/250 标题、150/168/190
+  说明、40/48/62 槽 + 96/160/235 亮段），所以「宿主启动画面 → App 启动提示 → 阅读页」
+  三段过渡不闪。字模 id 显式给出（2/1），不依赖 `Gfx.set_font` 的当前值。
+- **具名提示**：`open_path` 在 `MDV.open` **之前**把 `splash_msg` 改写成
+  「正在排版 `xxx.md`…」再画一帧——但**只对 >32KB 的文档**（`SPLASH_MIN_BYTES`）：小文档
+  排版本身几十 ms，多推一帧全屏（掌机 SPI 一屏 ≈30ms）是净亏损。
+- **`draw_screen` 分发器**：`(EX.install_with draw_screen)` 而不是 `draw_all`——「退出框选
+  留下」「后台恢复」「从别的 App 返回」都会调重绘，那时可能还没进阅读页。
+- **顺手三处**（都在启动关键路径上）：
+  ① `apply_font` 只在「文件里的值 ≠ 本次要用的 id」时写 `data/md-font.txt`（原来每次冷启动
+     都在首帧前写一遍 SD 卡）；
+  ② `load_font` 兜底：记录被改坏（`parseNumber` 返回 `#null`）时原来 `apply_font` 一次都
+     不调 → `Gfx.set_font`/`MDL.set_font_metrics` 用宿主默认度量，行高/折行/表格列宽全错
+     且静默；现在兜底 `(apply_font 1)`；
+  ③ 新增诊断行 `MDBOOT splash t=` / `MDBOOT ready t=`（`System.timestamp`，整数毫秒），
+     用于量「提示上屏 → 内容上屏」的间隔。
+
+## 踩坑（差点踩进去）
+
+**不要为了「快一点」给启动单独装一个 16ms 定时器、做完再换回 60ms**。宿主的周期定时器按
+`expire = 触发时刻 + interval` 重排（见 `app/verlet.scm` 文件头），这样常规拍的相位会整体
+漂移 ~3 帧；端到端用例里按帧注入的轻点（按下/松开序列）就落在两次采样之间——
+`test_app.py` 的 `T6b/T6c`（点右上返回键关闭目录面板）直接失败 2 项，根因是
+`handle_touch` 只采到「按下 (240,230) → 按住 (300,10) → 松开」，`drag_total` 变成 -220，
+被判成拖动而不是轻点。改成「boot 就装常规拍、只在回调头上加阶段判断」后相位与改造前
+完全一致，114/114 全绿。
+
+## 验证
+
+- 宿主端 `tools/e2e/markdown/test_app.py`：**114/114 PASS**（含续读/空状态/选择器/目录/
+  设置/公式/落盘全套；`MDSTAT`/`MDLAUNCH`/`MDLAST`/`MDEMPTY` 的条数与顺序不变，
+  `MDSTAT` 里的 `heap=` 只因多了 splash 字符串而 +13KB）。
+- 真 WASM + 无头 Chromium：`regress_markdown.js` **56/56**、`regress_markdown_math.js`
+  **22/22**、`regress_markdown_big.js` **24/24**（1MB 开屏 **1083ms**，比改造前 973ms 多
+  约一拍 + 帧边界量化，阈值 1500ms；堆 **8.90MB** 不变；翻页 0.4ms/屏；WASM 内存零增长）、
+  `regress_launch.js` **37/37**、`regress_back.js` **24/24**、`regress_font_isolation.js`
+  **40/40**、`regress_fmscroll.js` **43/43**、`regress_album_launch.js` **37/37**。
+- 逐帧核对首帧（`DUMP_PPM_ALL`）：第 1 帧 = 启动提示（98% 像素是 14/17/22 底 + 忙条 +
+  标题墨迹，无页眉/页脚色）、第 2 帧 = 具名提示（>32KB 文档时）、第 3 帧起 = 阅读页；
+  40 帧后的整帧 CRC 与改造前**逐字节相同**。
+- 元数据：`;@version=2026-11-20`。
+

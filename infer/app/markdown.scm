@@ -1,6 +1,6 @@
 ;@id=markdown
 ;@title=MD阅读器
-;@version=2026-11-18
+;@version=2026-11-20
 ;; ============================================================================
 ;; Markdown 阅读器 —— 灵机应用程序（解析 / 排版 / 渲染全部用 Scheme 实现）
 ;;
@@ -20,6 +20,15 @@
 ;;      未覆盖全文时显示 "≈"。
 ;;   实测（WASM，池 32MB / heap 16MB）：1MB 文档开屏 ~90ms、堆 ~5.8MB、翻页 0.4ms/屏；
 ;;   而改造前整篇物化在 128KB 就接近 16MB 上限、1MB 需要 >60MB 与 ~15s。
+;;
+;; 启动两拍（先安抚，再干活）：见 boot / boot_work / draw_splash。
+;;   ① boot 只设几何、画一屏「启动提示」就 return（并装好常规拍）；
+;;   ② 读字模记录、续读上次文档、切首段、**解析 + 排版首段（~60-136ms）** 全放到
+;;      第一个常规拍（boot_work）里，做完再交回常规循环（同一条定时器，相位不变）。
+;;   为什么要分拍而不是「在 boot 里画一帧就接着干」：宿主导入 App 时先把屏幕 soft_clear
+;;   成纯黑，而 WASM 的 (Gfx.refresh) 只是同步 putImageData —— 浏览器要等 JS 栈退空才
+;;   合成，所以留在 boot 里画的那一帧用户根本看不到（掌机/桌面的 SPI/直接上屏看得见）。
+;;   跨一拍让出 = 栈退空 = 提示真的上屏。代价只有一拍（TICK_MS = 60ms）。
 ;;
 ;; 支持的子集：# 1~3 级标题、**加粗**、`行内代码`、无序列表（**可嵌套**）、[链接](url)、
 ;;   围栏代码块、分隔线、**表格**（GFM：列对齐、单元格内行内样式、自动列宽、单元格内
@@ -179,6 +188,24 @@
 (define cur_title "")         ;; 当前文档标题（没有文档时为 App 名）
 (define cur_path "")          ;; 当前文档路径（"" = 没有打开文档；换字模后据此重新排版）
 (define ts 0)                 ;; 定时器编号
+
+;; ---- 启动首帧（先安抚，再干活）----------------------------------------------
+;; boot 只画提示并立刻 return，重活交给**第一个常规拍**（boot_work）——完整理由见文件头
+;; 「启动两拍」。这里只留两个状态量：
+;;   · boot_stage：0 = 还没有内容（只能画启动提示）；1 = 阅读页 / 空状态提示可用。
+;;     on_tick 的头一拍、EX 的重绘回调 draw_screen、open_path 的具名提示都看这一位。
+;;   · splash_msg：启动提示的第二行。boot 里是通用的「正在启动…」，open_path 拿到具体
+;;     文档后改写成「正在排版 xxx.md…」。
+;; 注意：**不额外装一个“短启动拍”**。曾经试过 boot 装 16ms、boot_work 做完再换回 60ms，
+;; 结果常规拍的相位整体漂移了几帧（宿主的周期定时器按“触发时刻 + interval”重排，见
+;; app/verlet.scm 文件头），端到端用例里按帧注入的轻点就落在了两次采样之间。
+;; 现在 boot 装的仍是 TICK_MS 的常规拍（与改造前逐字一致），只在回调头上多一个阶段
+;; 判断：相位、节奏、set_tick 的用法全部不变。
+(define boot_stage 0)
+(define splash_msg "正在启动…")
+;; 「正在排版 xxx.md…」这一帧只在文档够大时才画（见 open_path）：小于这个值，排版本身
+;; 只几十 ms，多推一帧全屏是净亏损（掌机 SPI 推一屏约 30ms）。
+(define SPLASH_MIN_BYTES 32768)
 
 ;; ---- 节拍（本 App 的每拍周期）----------------------------------------------
 ;; 阅读页自己每拍重绘整屏，60ms（≈16fps）足够；但**文件选择器**（app/lib/
@@ -585,7 +612,16 @@
                         (String.concat "文档过大（"
                                        (String.concat (String.atom_to_string fsize) " 字节）："))
                         "本阅读器上限 1MB。"))
-            { (set! ok (MDV.open path CW doc_image_size SEG_TARGET CACHE_LINES))
+            { ;; 首帧安抚：告诉用户正在排的是哪一篇。只有**大文档**才画：
+              ;;   · 掌机上这一帧落在 MDV.open（首段解析 + 排版）之前，正好把等待时间显示满；
+              ;;   · 小文档排版本身只几十 ms，多推一帧全屏反而白花一次 SPI（320×240 ≈ 30ms）；
+              ;;   · WASM 上这帧看不见（栈不退空不合成），但只有 5 个 Gfx 调用，可忽略。
+              (if (and (== boot_stage 0) (> fsize SPLASH_MIN_BYTES))
+                  { (set! splash_msg (String.concat "正在排版 "
+                                                    (String.concat (FSX.leaf path) "…")))
+                    (draw_splash) }
+                  #f)
+              (set! ok (MDV.open path CW doc_image_size SEG_TARGET CACHE_LINES))
               (if ok #f (set! msg (notice_blocks "读取失败。" "文件可能已被删除或不可读。"))) }))
     (open_finish ok msg)
     #t))
@@ -914,6 +950,7 @@
 
 (define FONT_PATH "data/md-font.txt")
 (define font_id 1)       ;; 当前字模
+(define font_saved -1)   ;; 已经落到 data/md-font.txt 里的 id（-1 = 还不知道）；见 apply_font
 (define line_h 15)       ;; 当前行高（由字模决定）
 (define font_base 12)    ;; 基线（行顶到基线）
 (define text_pad 1)      ;; 文字框顶相对行框顶的偏移（点阵 0 / 抗锯齿 1）
@@ -968,7 +1005,14 @@
                                  (+ font_base text_pad))
           ;; 目录/设置菜单的行高跟着字模走（16px 字模下 15px 行距会挤）
           (menu_metrics info)             ;; 把新字模的步进/墨高/内缩同步给菜单组件
-          (Fs.write FONT_PATH (String.atom_to_string id))
+          ;; 只在「文件里的值与本次要用的不同」时才写盘：
+          ;;   · 启动时 load_font 已经把读到的值记进 font_saved，这里就变成空操作——
+          ;;     否则每次冷启动都要在首帧前白白做一次写盘（掌机是 SD 卡写）；
+          ;;   · 用户在设置面板里换字模时 id 一定变了，照旧落盘。
+          (if (== id font_saved)
+              #f
+              { (Fs.write FONT_PATH (String.atom_to_string id))
+                (set! font_saved id) })
           (display "MDFONT id=") (display id)
           (display " line_h=") (display line_h) (newline)
           ;; 换字模后所有段的折行/行高都变了：清空段缓存重来，但**保留阅读位置**——
@@ -991,15 +1035,25 @@
         #f)
     #t))
 
-;; 启动时读回上次的选择
+;; 启动时读回上次的选择。注意两个坑：
+;;   ① 记录被改坏（内容不是 0/1/2，或只写了半截）时 (String.parseNumber) 返回 #null。
+;;      此时必须兜底 (apply_font 1)：否则 (Gfx.set_font) 与 (MDL.set_font_metrics) 一次都
+;;      不调，整套排版会用宿主默认度量（行高/折行/表格列宽全错），而且没有报错——静默错排。
+;;   ② 读到合法值就先记进 font_saved，让 apply_font 跳过重复写盘（见上）。
 (define load_font
   (lambda ()
     (define s (Fs.read FONT_PATH))
-    (define v 1)
+    (define v #f)
+    (define applied 0)
     (if (null? s) #f
         { (set! v (String.parseNumber s))
-          (if (null? v) #f (apply_font (Math.floor v))) })
-    (if (null? s) (apply_font 1) #f)
+          (if (null? v)
+              #f
+              { (set! v (Math.floor v))
+                (set! font_saved v)
+                (apply_font v)
+                (set! applied 1) }) })
+    (if (== applied 0) (apply_font 1) #f)
     #t))
 
 ;; 设置面板：同样交给通用菜单组件（三个字体单选项 = 三行"带琴键指示灯"的菜单条目）
@@ -1324,6 +1378,35 @@
     (Gfx.refresh)
     #t))
 
+;; ---- 绘制：启动提示（第一帧，不依赖任何已打开的文档）------------------------
+;;
+;; 只做一件事：用 5 个 Gfx 调用把「机器在忙、在看哪一篇」画出来并推屏。
+;; 版式/配色照抄宿主 ui_scheme_app.c 的 app_draw_start_screen（同一块底 14/17/22、
+;; 同一个忙条色 96/160/235），这样「宿主启动画面 → 本 App 启动提示 → 阅读页」三段
+;; 过渡不闪。字模 id 显式给出（2 = 16px 标题、1 = 12px 说明），不依赖当前
+;; (Gfx.set_font) 的值——启动时它还没被 apply_font 设过。
+(define draw_splash
+  (lambda ()
+    (define cx 0)
+    (define cy 0)
+    (set! cx (Math.floor (/ SW 2)))
+    (set! cy (Math.floor (/ SH 2)))
+    (Gfx.fill_rect 0 0 SW SH 14 17 22)
+    (Gfx.draw_text_centered 2 "MD阅读器" cx (- cy 22) 236 242 250 1)
+    (Gfx.draw_text_centered 1 splash_msg cx (+ cy 2) 150 168 190 1)
+    (Gfx.fill_rect (- cx 64) (+ cy 24) 128 3 40 48 62)    ;; 忙条槽
+    (Gfx.fill_rect (- cx 64) (+ cy 24) 42 3 96 160 235)  ;; 忙条亮段（静态）
+    (Gfx.refresh)
+    #t))
+
+;; EX 的重绘回调必须是这个分发器，而不是 draw_all：
+;;   退出确认框选「留下」、从后台/挂起恢复、从别的 App 返回——都会调一次重绘，
+;;   而那时可能还没进入阅读页（boot_stage = 0），draw_all 会画出一张“空阅读页”。
+(define draw_screen
+  (lambda ()
+    { (if (== boot_stage 1) (draw_all) (draw_splash))
+      #t }))
+
 ;; ---- 交互：链接命中测试 --------------------------------------------------
 ;; 返回命中的链接目标（空串表示没点中）。行/段都是排版期定死的绝对坐标，
 ;; 因此命中测试就是"滚动偏移 + 行高累加"的算术。
@@ -1473,7 +1556,8 @@
 ;;
 ;; (App.launch_arg) 是**取走即清零**的（同 (App.back_requested)）：每一条参数只
 ;; 消费一次，没参数时返回 #null。两处消费点：
-;;   · boot 里——被冷启动拉起：直接打开参数指定的文档（不读 data/md-last.txt）；
+;;   · boot_work 里（启动第二拍）——被冷启动拉起：直接打开参数指定的文档（不读
+;;     data/md-last.txt）；
 ;;   · on_tick 开头——后台实例被**再次拉起**（换一篇文档）：重新走同一条打开链路。
 ;; 为什么用绝对路径而不是资源根相对路径：参数要跨 App 传递，接收方的「当前目录」
 ;; 概念与发起方无关；绝对路径在桌面 / WASM MEMFS / 掌机 SD 上语义一致，且图片
@@ -1499,31 +1583,55 @@
 
 (define on_tick
   (lambda ()
-    (if (launch_open)
-        { (draw_all) }        ;; 被再次拉起：已经换了文档，本拍直接画新画面
-                              ;;（只有“换文档”这一拍跳过 EX.check；挂起的返回请求会在下一拍照常被消费）
-        (if (FP.active)
-            (tick_picker)          ;; 选择器活动期间：输入/绘制全归它，EX 不抢返回请求
-            (if (== settings_open 1)
-                (tick_settings)    ;; 设置面板同理（返回请求 = 关闭面板）
-                (if (== toc_open 1)
-                    (tick_toc)     ;; 目录面板（返回请求 = 关闭面板）
-                    { (EX.check)
-                      (handle_keys)
-                      (handle_touch)
-                      (bg_work)
-                      (sync_scroll)
-                      (draw_all) }))))))
+    ;; 启动第二拍：画完启动提示的那一帧已经上屏（栈退空 → 浏览器合成），现在才真正
+    ;; 读盘 + 排版首段。做完 boot_stage = 1，下一拍开始就是常规阅读循环。
+    ;; 这一拍**不**处理键/触屏（提示页上没有可点的东西），也不装新定时器：
+    ;; 用的就是 boot 装的这条 TICK_MS 定时器，相位不变。
+    (if (== boot_stage 0)
+        (boot_work)
+        (if (launch_open)
+            { (draw_all) }        ;; 被再次拉起：已经换了文档，本拍直接画新画面
+                                  ;;（只有“换文档”这一拍跳过 EX.check；挂起的返回请求会在下一拍照常被消费）
+            (if (FP.active)
+                (tick_picker)          ;; 选择器活动期间：输入/绘制全归它，EX 不抢返回请求
+                (if (== settings_open 1)
+                    (tick_settings)    ;; 设置面板同理（返回请求 = 关闭面板）
+                    (if (== toc_open 1)
+                        (tick_toc)     ;; 目录面板（返回请求 = 关闭面板）
+                        { (EX.check)
+                          (handle_keys)
+                          (handle_touch)
+                          (bg_work)
+                          (sync_scroll)
+                          (draw_all) })))))))
 
 ;; ---- 启动 ----------------------------------------------------------------
-
+;;
+;; 两拍：本函数只把几何算好、画一屏启动提示、装好常规拍就 return；一切会阻塞的工作
+;; （读字模记录 / 读上次文档记录 / 切首段 / **解析 + 排版首段**）都在 boot_work 里，
+;; 即这条定时器的第一下。理由见文件头「启动两拍」：WASM 的 (Gfx.refresh) 只写
+;; canvas 的 backing store，浏览器要等 JS 栈退空才合成——只有 return 出去，这一帧才真的
+;; 上屏。代价一拍（TICK_MS = 60ms），换来「点开就有反馈」。
 (define boot
   (lambda ()
     { (set! SW (Gfx.width))
       (set! SH (Gfx.height))
       (set! CW (- SW (* 2 PAD_X)))
       (MDL.set_math_measure doc_math_measure)  ;; 打开公式排版能力（必须在排版之前）
-      (load_font)           ;; 恢复上次选择的字模（字体影响排版度量，必须在打开文档之前）
+      (draw_splash)                           ;; ① 启动提示：5 个 Gfx 调用，<1ms
+      (display "MDBOOT splash t=") (display (System.timestamp)) (newline)
+      ;; ② 装常规拍就 return（回调包一层 lambda 注册：wasm32 上“自由变量很多的
+      ;;    模块级闭包”直接当定时器回调会一次都不被调用，见 app/doom.scm）。
+      ;;    这一拍的第一下就是 boot_work（重活），之后是常规阅读循环。
+      (set! ts (System.set_interval TICK_MS (lambda () (on_tick)))) }))
+
+;; 启动第二拍（重活）。注意这里仍然走**完全同一条**打开链路：
+;; (launch_open) 消费启动参数（拉起方给的文档），否则 (boot_open) 续读上次的文档；
+;; 两条路都落到 open_path → open_finish，所以 MDSTAT/MDLAUNCH/MDLAST/MDEMPTY
+;; 这些诊断行的内容与顺序与改造前完全一致（只多了 MDBOOT 两行）。
+(define boot_work
+  (lambda ()
+    { (load_font)           ;; 恢复上次选择的字模（字体影响排版度量，必须在打开文档之前）
       ;; 启动分两条路（没有内置示例，也没有文档列表）：
       ;;   · 被拉起（启动参数 = 待读文件）→ 直接打开它；
       ;;   · 从主菜单冷启动 → 续读 data/md-last.txt 里的上次文档；
@@ -1531,8 +1639,9 @@
       (if (launch_open)
           #f
           (boot_open))
-      (draw_all)
-      (set! ts (System.set_interval TICK_MS on_tick)) }))
+      (set! boot_stage 1)      ;; 内容就绪：on_tick / draw_screen / 具名提示从此都走阅读页
+      (draw_screen)           ;; 首帧真正的阅读页（或空状态/错误提示页）
+      (display "MDBOOT ready t=") (display (System.timestamp)) (newline) }))
 
-(EX.install_with draw_all)
+(EX.install_with draw_screen)
 (boot)
