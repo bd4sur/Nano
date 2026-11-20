@@ -14578,3 +14578,63 @@ Nano-WASM-GUI（`build_wasm_gui.sh` → `webgui/`，真 wasm32 + 无头 Chromium
   40 帧后的整帧 CRC 与改造前**逐字节相同**。
 - 元数据：`;@version=2026-11-20`。
 
+------------------------------------
+
+# 2026-11-20（宿主：热启动（IL 缓存命中）也画「正在启动」，不再黑屏）
+
+需求：上一节（Markdown 阅读器启动首帧）分析发现，宿主只在 IL 缓存**未命中**时画启动画面，
+热启动（第二次以后进入、或被别的 App 拉起）那一路是纯黑——把这一层也补上。
+
+## 现状（改之前）
+
+- `app_instance_cold_start()`：`gfx_soft_clear` + `gfx_refresh` → 推一帧纯黑；
+- `app_load_source()`：读源码 → IL 命中就直接装 IL + 执行模块体 → return；只有
+  `#if MB_ILCACHE_ENABLE` 的**未命中**分支在编译前调 `app_draw_start_screen(gfx, title, 1)`。
+- 于是热启动从「点开」到「App 自己第一帧」之间屏幕上是黑帧（掌机上是可见的黑闪），
+  而这段并不短：读源码 + 从 IndexedDB/MEMFS 装 IL + 执行模块顶层（本项目 App 常有两三百个
+  `define`）+ App 的 `boot`（很多 App 在这里同步读盘、建索引、载权重）。
+
+## 改动（`infer/ui_scheme_app.c`）
+
+1. `app_load_source()` 的**第一行**无条件 `app_draw_start_screen(gfx, s_app->title, 0)`
+   —— 命中/未命中都画；未命中时编译前照旧重画一次（文案换「首次启动需准备…」，
+   同一轮事件里浏览器只合成最后一帧，不会闪）。
+2. `app_instance_cold_start()` 里删掉 `gfx_soft_clear` 之后的那次 `gfx_refresh`：
+   紧接着的那一帧就是启动画面（整屏脏区），原来那一下等于白推一帧纯黑
+   （掌机 SPI 推一屏 ≈30ms，还多闪一下黑）。清缓冲本身保留（绘制前状态确定）。
+3. 同步三处注释（`app_draw_start_screen` 头注释 + 两处调用点），把"缓存命中只闪一下"
+   的旧说法改成现在的事实。
+
+## 收益在哪（重要，避免误解）
+
+WASM 单线程：整个冷启动跑在**一个 JS 任务**里，`putImageData` 要等栈退空才合成，所以
+"黑帧"往往根本没被看见——用户看到的是**上一个界面**冻在那里，然后跳到 App 的首帧。
+本次改动的可观测差异出现在「App 自己不在 boot 里刷新的那些」（`forkqueue` 是典型）：
+热启动时屏幕上先是宿主启动画面，而不是黑/上一界面。掌机/tty 上 `gfx_refresh` 是同步推屏，
+收益更直接（黑闪没了，第一眼就是"正在启动哪个 App"）。`MB_ILCACHE_ENABLE` 在 ESP32 上是 0，
+所以那边只是"启动画面提前到读源码之前"，没有新增推屏。
+
+## 验证
+
+- **真 WASM + 无头 Chromium（重新 `bash build_wasm_gui.sh`）**：
+  · 逐帧探针（`page.clock.pauseAt` + `runFor(17)`，同一会话把同一个 App 启动两次）：
+    第 1 次（未命中）与第 2 次（**命中**）一致——点开后的下一帧就是启动画面
+    （`nz=76800`、主色 `#0e1116` = 14/17/22、30 种颜色），一直挂到 App 自己第一拍
+    （`forkqueue` 约 150ms 后由它的画面接管）。改之前命中路径这一帧是 `nz=0`（纯黑）。
+  · **残留检查**：启动画面独有的两个标记——忙条亮段（42×3 @ x=96,y=144，色 (98,161,238)）
+    与标题精确色 (238,242,255)——46 个 App 逐个冷启动、1.5s 后统计：**忙条残留 0/126、
+    标题精确色 0**。即没有任何 App 因为"底图从纯黑变成启动画面"而在边角留下残留
+    （`vcodec`/`cnn`/`hwr` 等在标题带的亮像素是它们自己的画面内容）。
+  · 既有回归全绿：`regress_markdown.js` 56/56、`regress_markdown_math.js` 22/22、
+    `regress_markdown_big.js` 24/24（1MB 开屏与堆占用不变，翻页 0.4ms/屏）、
+    `regress_launch.js` 37/37、`regress_back.js` 24/24、`regress_font_isolation.js` 40/40、
+    `regress_fmscroll.js` 43/43、`regress_album_launch.js` 37/37。
+  · 宿主侧编译：`gcc -fsyntax-only`（NANO_TTY 配置）无新增告警；wasm 目标整体构建通过。
+    （本机 `make tty` 整链失败于缺 `libasound2-dev` 头文件，属既有环境限制，与本次无关。）
+- **顺手修了 `tools/e2e/browser/` 里三个已过期的脚本**（它们仍按旧主菜单格位
+  「小游戏 = 第 6/7 格」导航，2026-11 那轮菜单改版后实际落到了寻呼机 / 频谱仪）：
+  `regress_button.js` → **16/16**、`regress_ephemeris.js` → **36/36**（其中"退出回列表 79"
+  的断言按新语义改成"退出回主菜单 -2"，与"顶层 App 退出回主菜单"一致）；
+  `regress.js`（42 App 存活回归）只修到"能进列表、能启动 App"（主菜单 `digit(5)` +
+  退出后从主菜单重新进列表），仍会因"退出落点改为主菜单"与"静态 App 的 refreshΔ=0"
+  两条过期判据报 ABNORMAL，未改其判据（需要单独一轮重写）。

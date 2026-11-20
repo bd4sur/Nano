@@ -942,11 +942,16 @@ static void ilc_store(const char *app_id, ilc_ctx_t *ctx, am_module_t *mod) {
 // ===============================================================================
 // 通用「正在启动」画面（所有灵机 App 共用；宿主侧机制，App 一行不用写）
 //
-// 为什么需要：编译/链接是**一次不可中断的同步调用**，WASM 单线程下这期间浏览器
-// 完全无法重绘。旧做法是清成纯黑再进编译，用户盯着黑屏 ~1s，没有任何反馈。
-// 现在改成先画这一帧（标题 + 状态 + 忙条）并推屏，再进编译——用户立刻知道
-// 「正在启动哪个 App、机器在忙」，而不是怀疑死机。
-// 缓存命中时它只闪一下（甚至来不及看到），因此不额外增加观感负担。
+// 为什么需要：App 冷启动前段全是**不可中断的同步调用**（读源码 / 装 IL 缓存 /
+// parse-link-compile / 执行模块体 + App 的 boot），WASM 单线程下这期间浏览器完全
+// 无法重绘。旧做法是清成纯黑就进编译，用户盯着黑屏 ~1s，没有任何反馈。
+// 现在在 app_load_source() 的**第一行**就画这一帧（标题 + 状态 + 忙条）并推屏——
+// 用户立刻知道「正在启动哪个 App、机器在忙」，而不是怀疑死机。
+// **缓存命中也会画**（2026-11-20）：命中虽然省掉了编译，但读源码 + 从
+// IndexedDB/MEMFS 装 IL + 执行模块体（很多 App 在顶层/boot 里同步读盘、建索引、
+// 载权重）同样是几十到几百 ms；旧实现只在“未命中、编译之前”画，于是**热启动反而
+// 是纯黑**。未命中时编译前会重画一次，把文案换成“首次启动需准备”（同一轮事件里
+// 浏览器只合成最后一帧，不会闪）。
 // ===============================================================================
 static void app_draw_start_screen(Nano_GFX *gfx, const wchar_t *title, int32_t first_time) {
     if (gfx == NULL) return;
@@ -975,6 +980,12 @@ static void app_draw_start_screen(Nano_GFX *gfx, const wchar_t *title, int32_t f
 // ===============================================================================
 
 static void app_load_source(Nano_GFX *gfx) {
+    // ---- 先画「正在启动 <App>」一帧，再干任何会阻塞的活 ----
+    // 这一步**不区分缓存命中/未命中**：命中同样要读源码、装 IL、执行模块体（顶层 +
+    // App 的 boot，很多 App 在这里同步读盘/建索引/载模型），而调用方刚刚 soft_clear
+    // 过——不画这一帧，用户看到的就是一整段纯黑。详见 app_draw_start_screen 的注释。
+    app_draw_start_screen(gfx, s_app->title, 0);
+
     // ---- 从业务资源目录读取 Scheme App 源码（UTF-8）----
     wchar_t rel_w[64];
     am_mbstowcs(rel_w, s_app->source_rel, (uint32_t)strlen(s_app->source_rel));
@@ -1059,8 +1070,8 @@ static void app_load_source(Nano_GFX *gfx) {
     wcscpy(mod_name_w, rel_w);
 
 #if MB_ILCACHE_ENABLE
-    // 未命中：先把「正在启动」画上屏，再做这段会阻塞主线程的编译
-    //（首次启动没有缓存，这一帧要顶住几百毫秒到一秒）
+    // 未命中：把「正在启动」的文案换成“首次启动需准备”再推一次（编译要几百 ms 到 1s；
+    // 通用版本已在 app_load_source 开头画过），然后才进这段会阻塞主线程的编译。
     app_draw_start_screen(gfx, s_app->title, 1);
     uint64_t t_compile0 = get_timestamp_in_ms();
     ilc_ctx_t ilc;
@@ -1277,11 +1288,11 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     // Scheme 只拿每频点 0~255 强度与 RMS，声谱图/示波器类 App 据此绘图。
     am_runtime_register_native_lib(s_app->rt, &am_native_Audio_lib);
 
-    // 清屏后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）。
-    // 未命中 IL 缓存时 app_load_source() 会在编译前把「正在启动 <App>…」画上屏
-    // （见 app_draw_start_screen）——否则用户看到的是编译期间的一整段纯黑。
+    // 清缓冲后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）。
+    // **这里不推黑屏**：app_load_source() 的第一件事就是画「正在启动 <App>…」并推屏
+    // （见 app_draw_start_screen），那次 refresh 会把整屏推出去。原来这里多推一次纯黑，
+    // 掌机上等于白花一次 SPI 推屏、还多闪一下黑。
     gfx_soft_clear(global_state->gfx);
-    gfx_refresh(global_state->gfx);
 
     app_load_source(global_state->gfx);
     if (s_app->load_failed) {
