@@ -34,6 +34,12 @@
 ;;   （跟手的上限就是节拍频率）。实测拖动 15fps→52~57fps（900KB 文档因字型栅格化
 ;;   占满一拍，只到 ~40fps）；滚轮一格 28px 缓动 5 拍 ≈77ms。见 pace_tick。
 ;;
+;; 甩滑惯性（触屏松手后继续滑，见 fling_start / handle_fling）：
+;;   速度取**近几拍的 EMA**（不是整段手势平均）→ 慢慢停下再松手不会甩出去；按下即
+;;   刹车；惯性期间节拍保持 16ms；撞到上/下边界立即停（不回弹）。参数对齐宿主列表
+;;   （app/lib/filepicker.scm 的 P_FLING_*）：阈值 320px/s、每 16ms 保留 0.88、
+;;   初速上限 2.8px/ms、衰减到 0.05px/ms 停。一次快甩多滑 ~60~150px。
+;;
 ;; 鼠标滚轮/触控板（只 WASM GUI 有）：走**原生滚轮通道**而不是合成手指——
 ;;   合成手指在长文档上有三个结构性缺陷（走不出画布 / 重按被合进上一段手势 → 凭空
 ;;   一段反向位移 / 首格位移被整段丢掉），实测 5 格只前进 56px（应 140px）。
@@ -286,6 +292,26 @@
 (define DRAG_IDLE_TICKS 15)    ;; 按住不动多少拍后放手（15×16ms ≈ 240ms，盖住拖顿一下）
 (define drag_moved 0)          ;; 本拍触屏拖动有没有真的产生位移（handle_touch 置位）
 (define drag_idle 0)           ;; 连续多少拍没有拖动位移
+
+;; ---- 甩滑惯性（松手后继续滑）----------------------------------------------
+;; 手感参数对齐宿主列表（app/lib/filepicker.scm 的 P_FLING_*、app/filemgr.scm）：
+;;   · 速度用**近几拍的指数滑动平均**估，不是整段手势的平均速度——缓慢停下来的拖动
+;;     不该再甩出去；松手前 120ms 内没动过就干脆不甩；
+;;   · 按下即刹车（打断惯性），且这一下松手不算点按（drag_total 已保证）；
+;;   · 惯性期间节拍保持 16ms（见 pace_tick），撞到上/下边界立即停（不做回弹）。
+;; 速度单位是 **px/ms**（与节拍无关）：每拍推进量 = v × 实测 dt，浏览器掉帧不会让
+;; 惯性变慢或变远（这就是 verlet 那条"别把物理绑在拍子上"的同一条教训）。
+(define FLING_MIN_V 0.20)      ;; 松手速度低于它不甩（px/ms ≈ 320px/s ≈ filepicker 的 5px/16ms）
+(define FLING_VMAX 2.8)        ;; 初速上限（px/ms ≈ 45px/16ms，同 filepicker 的 VMAX）
+(define FLING_VMIN 0.05)       ;; 衰减到它以下就停（px/ms ≈ 0.8px/16ms）
+(define FLING_DECAY 0.88)      ;; 每 16ms 的速度保留系数（同 filepicker 的 FRICTION）
+(define FLING_STALE_MS 120)    ;; 松手前这么久没动过 → 不甩
+(define FLING_EMA 0.4)         ;; 速度 EMA 的新样本权重（≈ 4 拍记忆，~64ms）
+(define fling_v 0)             ;; 当前惯性速度（px/ms，正 = 内容上滚）
+(define fling_acc 0)           ;; 未落位的亚像素（让慢速长距离推进不丢余量）
+(define fling_t 0)             ;; 上一拍推进的时刻（System.timestamp）
+(define drag_v 0)              ;; 拖动速度 EMA（px/ms，正 = 内容上滚）
+(define drag_vt 0)             ;; 上一次**真实位移**的时刻（速度 EMA 的 dt 基准 + 甩滑新鲜度）
 
 ;; ---- 小工具 --------------------------------------------------------------
 
@@ -1492,6 +1518,8 @@
 ;; 此时整屏只有“挑一篇文档”这一件事可做，不必非去点底栏那个小按钮。
 (define handle_touch
   (lambda ()
+    (define vnow 0)
+    (define vdt 16)
     (set! drag_moved 0)
     (if (Touch.is_pressed)
         { (if (== prev_down 0)
@@ -1500,6 +1528,10 @@
                 (set! drag_last (Touch.y))
                 (set! press_x (Touch.x))
                 (set! press_y (Touch.y))
+                ;; 按下即刹车：打断正在跑的惯性（手指接管，立刻跟手）
+                (fling_stop)
+                (set! drag_v 0)
+                (set! drag_vt (System.timestamp))
                 ;; 按下沿就把节拍提到 16ms（见 pace_tick）：否则第一段位移仍按 60ms
                 ;; 采样，一次拖动的**开头**会先跳一大步（实测快拖首拍 66ms/22px），
                 ;; 中段才变顺——手感上"起步发滞"。
@@ -1509,6 +1541,17 @@
           (set! drag_last (Touch.y))
           (set! drag_total (+ drag_total dyy))
           (if (not (== dyy 0)) (set! drag_moved 1) #f)
+          ;; 速度 EMA（px/ms，正 = 内容上滚）：**只在真有位移的拍**更新，dt 也取
+          ;; 「距上一次位移」——因为 WASM 触屏松手后会做亚帧点按锁存（hal_touch_wasm.c
+          ;; 的 WASM_TOUCH_LATCH_FRAMES：松手后仍有几拍报"按下"、坐标不动），
+          ;; 若把这几拍的 dy=0 也喂进 EMA，刚甩出去的速度会被自己磨掉一半。
+          (if (not (== dyy 0))
+              { (set! vnow (System.timestamp))
+                (set! vdt (ms_dt drag_vt vnow))
+                (set! drag_v (+ (* drag_v (- 1 FLING_EMA))
+                                (* FLING_EMA (/ (- 0 dyy) vdt))))
+                (set! drag_vt vnow) }
+              #f)
           (if (== MDV_ok 1)
               { (scroll_by_px (- 0 dyy))
                 (sync_scroll) }
@@ -1527,7 +1570,8 @@
                             (if (== MDV_ok 1)
                                 (tap_reader press_x press_y)
                                 (start_picker)))))
-                    #f) }
+                    ;; 真拖动过：够快就起甩（慢停下来的不算，见 fling_start）
+                    (fling_start)) }
               #f) })
     #t))
 
@@ -1559,7 +1603,8 @@
         { (set! wheel_rest 0)
           (set! wheel_idle WHEEL_IDLE_TICKS) }
         { (if (not (== wheel_total 0))
-              { (set! wheel_rest (+ wheel_rest wheel_total))
+              { (fling_stop)   ;; 滚轮是主动定位：先刹车，再按像素缓动
+                (set! wheel_rest (+ wheel_rest wheel_total))
                 (set! wheel_idle 0) }
               (set! wheel_idle (+ wheel_idle 1)))
           (if (not (== wheel_rest 0))
@@ -1570,9 +1615,87 @@
               #f) })
     #t))
 
+;; ---- 甩滑惯性：实现 ------------------------------------------------------
+(define cur_scroll
+  (lambda () (if (== MDV_ok 1) (MDV.top_y) scroll)))
+
+;; 两次取时刻之间的毫秒差：钳到 [4,120]（0/负值=同一毫秒或 27 位时间戳回绕 → 按一拍算）
+(define ms_dt
+  (lambda (t0 t1)
+    (define d (- t1 t0))
+    (if (< d 0) 16 (if (< d 4) 4 (if (> d 120) 120 d)))))
+
+;; t1 是否在 t0 之后 limit 毫秒内（回绕当作"刚刚"，不会误判成"很久没动"而丢掉甩滑）
+(define ms_recent
+  (lambda (t0 t1 limit)
+    (define d (- t1 t0))
+    (if (< d 0) #t (if (> d limit) #f #t))))
+
+;; 停掉惯性（并给 e2e 一行可断言的收尾诊断）
+(define fling_stop
+  (lambda ()
+    (if (not (== fling_v 0))
+        { (set! fling_v 0)
+          (set! fling_acc 0)
+          (display "MDFLING end=") (display (Math.floor (cur_scroll))) (newline) }
+        #f)
+    #t))
+
+;; 松手时若够快就起甩（drag_v 是松手前的速度 EMA，正 = 内容上滚）
+(define fling_start
+  (lambda ()
+    (define v drag_v)
+    (if (and (>= (Math.abs drag_total) 8)
+             (>= (Math.abs v) FLING_MIN_V)
+             (ms_recent drag_vt (System.timestamp) FLING_STALE_MS))
+        { (if (> v FLING_VMAX) (set! v FLING_VMAX) #f)
+          (if (< v (- 0 FLING_VMAX)) (set! v (- 0 FLING_VMAX)) #f)
+          (set! fling_v v)
+          (set! fling_acc 0)
+          (set! fling_t (System.timestamp))
+          (display "MDFLING start=") (display (Math.floor (cur_scroll))) (newline) }
+        #f)
+    #t))
+
+;; 每拍推进惯性：撞边界 / 速度衰减到阈值以下就停。放在 handle_touch 之后调——新按下
+;; 会先把 fling_v 清零（刹车），所以这里不会和拖动抢滚动位置。
+;; dt 用**实测墙钟差**（不是"每拍固定 16ms"）：掉帧/长帧不会让惯性变慢变远。
+;; 但 dt 太离谱（负数=27 位时间戳回绕、>150ms=App 刚从后台恢复或某拍卡死）时不补步，
+;; 直接停——否则一恢复就会瞬移好几屏。
+(define handle_fling
+  (lambda ()
+    (define now 0)
+    (define raw 0)
+    (define dt 16)
+    (define px 0)
+    (define before 0)
+    (if (not (== fling_v 0))
+        { (set! now (System.timestamp))
+          (set! raw (- now fling_t))
+          (if (or (< raw 0) (> raw 150))
+              (fling_stop)
+              { (set! dt (ms_dt fling_t now))
+                (set! fling_t now)
+                (set! fling_acc (+ fling_acc (* fling_v dt)))
+                (set! px (Math.round fling_acc))
+                (set! fling_acc (- fling_acc px))
+                (if (not (== px 0))
+                    { (set! before (cur_scroll))
+                      (scroll_by_px px)
+                      (sync_scroll)
+                      ;; 位置没动 = 撞到顶部/底部：立即停（不做橡皮筋回弹）
+                      (if (== (cur_scroll) before) (fling_stop) #f) }
+                    #f)
+                (if (not (== fling_v 0))
+                    { (set! fling_v (* fling_v (Math.pow FLING_DECAY (/ dt 16.0))))
+                      (if (< (Math.abs fling_v) FLING_VMIN) (fling_stop) #f) }
+                    #f) }) }
+        #f)
+    #t))
+
 ;; ---- 节拍：跟手/缓动时提速（**唯一**的 set_tick 决策点）----------------------
-;; 必须在 handle_touch / handle_wheel 之后调——它们会更新 drag_moved / wheel_rest /
-;; wheel_idle。放在两处各自 set_tick 会互相改回去（选择器那次就是这样掉到 16fps 的）。
+;; 必须在 handle_touch / handle_wheel 之后调——它们会更新 drag_moved / fling_v /
+;; wheel_rest / wheel_idle。放在两处各自 set_tick 会互相改回去（选择器那次就是这样掉到 16fps 的）。
 (define pace_tick
   (lambda ()
     ;; 面板/选择器自己管节拍（选择器要 16ms 跟手）：本拍刚被 handle_touch 打开时
@@ -1584,6 +1707,7 @@
               (set! drag_idle 0)
               (set! drag_idle (+ drag_idle 1)))
           (if (or (and (== prev_down 1) (< drag_idle DRAG_IDLE_TICKS))
+                  (not (== fling_v 0))
                   (not (== wheel_rest 0))
                   (< wheel_idle WHEEL_IDLE_TICKS))
               (set_tick FAST_TICK_MS)
@@ -1731,6 +1855,7 @@
                           (handle_keys)
                           (handle_touch)
                           (handle_wheel)
+                          (handle_fling)
                           (pace_tick)
                           (bg_work)
                           (sync_scroll)
