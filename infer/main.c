@@ -41,6 +41,32 @@ typedef struct {
     volatile uint32_t tail; // 生产序号（单调，仅生产者写）
 } Nano_Event_Queue;
 
+// ===============================================================================
+// 触摸期间的消费者帧节拍（仅 PocketTerm35，见下方 while 循环内的用法）
+//
+// 背景（2026-11 定位：树莓派 PocketTerm35 主菜单「触屏拖动几乎没有惯性甩滑」）：
+// 本消费端循环没有渲染节拍——不重绘时纯忙等（实测约 75k 次/秒，13µs 一轮），
+// 只有发生重绘时才会被推屏耗时自然限速到 ~7~12ms 一轮。于是「一次循环」
+// 在空闲时并不是一次「一帧」。
+//
+// 而各控件的松手惯性初速度由 ui_app.c / ui.c 的**逐帧**速度 EMA 估算：
+//     vel = vel * 0.6 + v_inst * 0.4   （v_inst = 本帧滚动位移 / 本帧耗时）
+// 触摸板两次坐标上报之间（实测 ~10ms）、或手指按住不动时，忙等会在两次上报
+// 之间插入成百上千个零位移采样，把 EMA 按 0.6^n 拉到 0；松手时
+// `touch_track_vel` 只剩 0.0（实测），低于 50px/s 的启动阈值，惯性根本不启动。
+// 串行单循环的目标（M5Core2/Luckfox/nano_tty 等）每轮循环都要重绘，天然被
+// 推屏耗时限速到接近帧率，所以同一套 EMA 在这些机器上手感正常。
+//
+// 处理：**仅在触摸期间**、且「触屏快照没有新样本、也没有新按键/边沿」时，
+// 等到本帧预算用完再推进下一帧——即让「一次循环 = 一次触屏采样或一帧」。
+// 触屏有新样本时立即进帧（拖动跟手不延迟，且每次采样都是新位移，EMA 不再被
+// 零位移稀释）；手指按住不动时按帧率补帧（动画/时钟照常推进，速度按设计衰减）。
+// 未触摸时行为与修改前完全一致（其余业务状态的节奏、timer 计数不受影响）。
+// ===============================================================================
+#if defined(NANO_POD_POCKETTERM35)
+    #define NANO_TOUCH_FRAME_MS (16) // 触摸期间的帧预算上限（≈60fps，与面板刷新同量级）
+#endif
+
 static Nano_Event_Queue s_evt_queue;
 
 // 入队。reliable=1：满时 1ms 后重试一次（对齐 .ino 的 1ms 超时+告警语义，一次性
@@ -163,6 +189,38 @@ int main() {
         key_event->touch_x = global_state->touch_x;
         key_event->touch_y = global_state->touch_y;
         key_event->is_touching = global_state->is_touching;
+
+#if defined(NANO_POD_POCKETTERM35)
+        // 触摸期间的帧节拍（原理见文件头 NANO_TOUCH_FRAME_MS 处的注释）：
+        // 快照无新样本、也没有需要即时处理的新输入 → 睡到本帧预算用完再进帧。
+        {
+            static uint64_t s_touch_frame_ts = 0;      // 上一次进帧时刻（本循环唯一写者）
+            static int32_t  s_touch_frame_x = 0;       // 上一次进帧时的触屏快照
+            static int32_t  s_touch_frame_y = 0;
+            static int32_t  s_touch_frame_touching = 0;
+
+            int32_t touch_sample_changed =
+                (key_event->is_touching != s_touch_frame_touching)
+                || (key_event->is_touching
+                    && (key_event->touch_x != s_touch_frame_x
+                        || key_event->touch_y != s_touch_frame_y));
+            int32_t fresh_input = (frame_touch_edge != 0) || (key_event->key_code != NANO_KEY_IDLE);
+
+            if (key_event->is_touching && !touch_sample_changed && !fresh_input) {
+                uint64_t now_ms = get_timestamp_in_ms();
+                uint64_t elapsed_ms = now_ms - s_touch_frame_ts;
+                if (elapsed_ms < NANO_TOUCH_FRAME_MS) {
+                    platform_task_delay_ms((uint32_t)(NANO_TOUCH_FRAME_MS - elapsed_ms));
+                    continue; // 睡醒后重新排空队列、取最新快照，再决定是否进帧
+                }
+            }
+
+            s_touch_frame_ts = get_timestamp_in_ms();
+            s_touch_frame_x = key_event->touch_x;
+            s_touch_frame_y = key_event->touch_y;
+            s_touch_frame_touching = key_event->is_touching;
+        }
+#endif
 
         // 仅玲珑仪显示忙提示（消费端侧，同 .ino）
         if (key_event->key_code != NANO_KEY_IDLE &&
