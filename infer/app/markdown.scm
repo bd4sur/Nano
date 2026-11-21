@@ -30,6 +30,10 @@
 ;;   合成，所以留在 boot 里画的那一帧用户根本看不到（掌机/桌面的 SPI/直接上屏看得见）。
 ;;   跨一拍让出 = 栈退空 = 提示真的上屏。代价只有一拍（TICK_MS = 60ms）。
 ;;
+;; 节拍两档（60ms / 16ms）：静止阅读 60ms 省电；**手指拖动、滚轮缓动期间**提到 16ms
+;;   （跟手的上限就是节拍频率）。实测拖动 15fps→52~57fps（900KB 文档因字型栅格化
+;;   占满一拍，只到 ~40fps）；滚轮一格 28px 缓动 5 拍 ≈77ms。见 pace_tick。
+;;
 ;; 鼠标滚轮/触控板（只 WASM GUI 有）：走**原生滚轮通道**而不是合成手指——
 ;;   合成手指在长文档上有三个结构性缺陷（走不出画布 / 重按被合进上一段手势 → 凭空
 ;;   一段反向位移 / 首格位移被整段丢掉），实测 5 格只前进 56px（应 140px）。
@@ -217,11 +221,16 @@
 (define SPLASH_MIN_BYTES 32768)
 
 ;; ---- 节拍（本 App 的每拍周期）----------------------------------------------
-;; 阅读页自己每拍重绘整屏，60ms（≈16fps）足够；但**文件选择器**（app/lib/
-;; filepicker.scm）的拖动是像素级跟手的，跟手的上限就是节拍频率——60ms 的拍子再准
-;; 也只能 16fps 地跳。组件本身不装定时器（上游每轮事件循环对同一进程只触发一个
-;; 定时器回调，同进程两个 interval 会互相错开、两拍都掉到 ~64ms，实测），所以由
-;; 调用方在它活动期间把节拍提上去：start_picker 提到 16ms，拿到结果后恢复 60ms。
+;; 阅读页每拍重绘整屏：**常规 60ms（≈16fps）够省电，但跟手场景不够用**——
+;; 拖动与滚轮缓动的跟手上限就是节拍频率，60ms 的拍子再准也只能 16fps 地跳
+;; （实测拖动每拍 6.5~19.4px 的大步）。所以两档：
+;;   · 60ms（TICK_MS）——静止阅读/后台索引；
+;;   · 16ms（FAST_TICK_MS，≈60Hz）——手指按住有位移、滚轮缓动未完成、
+;;     以及文件选择器活动期间（它自己要求 16ms）。
+;; 节拍的提升是**统一决策**的（见 pace_tick）：早期把 set_tick 散布在多处，两处
+;; 各自 set_tick 会互相改回去（2026-11-20 那次选择器就因此掉到 16fps）。
+;; 另外组件本身不装定时器（上游每轮事件循环对同一进程只触发一个定时器回调，
+;; 同进程两个 interval 会互相错开、两拍都掉到 ~64ms，实测）。
 (define TICK_MS 60)
 (define tick_ms TICK_MS)    ;; 当前节拍周期（set_tick 的幂等判据，见下）
 (define set_tick
@@ -256,18 +265,27 @@
 ;; 现在：boot 里认领原生通道（wheel_enable），页面不再合成手指，而是把像素增量
 ;; **原样**交过来（一格 100 deltaY = 28 像素；页面不做平滑，平滑由下面 handle_wheel
 ;; 在本 App 自己的拍子里做）。
-;; 节拍：本 App 常规是 60ms（整屏重绘 ~16fps）。一格滚轮要被缓动成 5~6 小步才顺，
-;; 若按 60ms 取样，这 5 步会被压成 2~3 拍（还是跳）。所以**有滚轮活动期间把节拍提到
-;; 16ms**（同文件选择器的做法），安静 WHEEL_IDLE_TICKS 拍后再回 60ms。
+;; 节拍：见下方「跟手节拍」——有滚轮活动期间同样提到 FAST_TICK_MS。
 ;; 掌机/桌面没有滚轮源（wheel_available=#f），WHEEL_OK 恒 0，下面全部走空，
 ;; 行为与改造前完全一致。
 (define WHEEL_OK 0)            ;; 1 = 本平台有原生滚轮通道且已认领
-(define WHEEL_TICK_MS 16)      ;; 滚轮活动期间的节拍（跟手的上限就是它）
 (define WHEEL_IDLE_TICKS 9)    ;; 连续多少拍没滚轮增量就回常规节拍（9×16ms ≈ 144ms）
 (define WHEEL_GAIN 0.45)       ;; 一拍吃掉剩余量的比例（≈ GUI 滚轮通道的手感：一格 ~90ms 走完）
 (define wheel_total 0)         ;; 本拍取到的滚轮增量（帧缓冲像素，正 = 内容上滚）
 (define wheel_rest 0)          ;; 还没落位的剩余量（缓动用；整数值，必然归零）
 (define wheel_idle 0)          ;; 连续多少拍没收到滚轮增量
+
+;; ---- 跟手节拍（触屏拖动 / 滚轮缓动共用）------------------------------------
+;; 常规拍 60ms 是为了「整屏重绘」省电（~16fps）；但**拖动跟手的上限就是拍子**：
+;; 60ms 拍只能 16fps，手指移动被量化成 6~20px 的大步（实测：慢拖每拍 6.5px、
+;; 快拖 19.4px，拍间隔 66.6ms）——这就是“拖动不够丝滑”的全部原因。
+;; 所以：手指按住且有位移、或滚轮缓动没走完时，把节拍提到 FAST_TICK_MS（≈60Hz）；
+;; 安静 DRAG_IDLE_TICKS 拍后回常规。与文件选择器的做法一致（它自己也提到 16ms），
+;; 但**统一由 pace_tick 一个地方决定**——两个地方各自 set_tick 会互相改回去。
+(define FAST_TICK_MS 16)       ;; 跟手期间的节拍（≈60Hz）
+(define DRAG_IDLE_TICKS 15)    ;; 按住不动多少拍后放手（15×16ms ≈ 240ms，盖住拖顿一下）
+(define drag_moved 0)          ;; 本拍触屏拖动有没有真的产生位移（handle_touch 置位）
+(define drag_idle 0)           ;; 连续多少拍没有拖动位移
 
 ;; ---- 小工具 --------------------------------------------------------------
 
@@ -1474,17 +1492,23 @@
 ;; 此时整屏只有“挑一篇文档”这一件事可做，不必非去点底栏那个小按钮。
 (define handle_touch
   (lambda ()
+    (set! drag_moved 0)
     (if (Touch.is_pressed)
         { (if (== prev_down 0)
               { (set! prev_down 1)
                 (set! drag_total 0)
                 (set! drag_last (Touch.y))
                 (set! press_x (Touch.x))
-                (set! press_y (Touch.y)) }
+                (set! press_y (Touch.y))
+                ;; 按下沿就把节拍提到 16ms（见 pace_tick）：否则第一段位移仍按 60ms
+                ;; 采样，一次拖动的**开头**会先跳一大步（实测快拖首拍 66ms/22px），
+                ;; 中段才变顺——手感上"起步发滞"。
+                (set! drag_idle 0) }
               #f)
           (set! dyy (- (Touch.y) drag_last))
           (set! drag_last (Touch.y))
           (set! drag_total (+ drag_total dyy))
+          (if (not (== dyy 0)) (set! drag_moved 1) #f)
           (if (== MDV_ok 1)
               { (scroll_by_px (- 0 dyy))
                 (sync_scroll) }
@@ -1529,10 +1553,8 @@
   (lambda ()
     (define px 0)
     ;; 面板/选择器是**本拍**由 handle_touch 刚打开的（on_tick 分支选择发生在它之前）：
-    ;; 此时节拍归面板管（选择器要 16ms 跟手），这里既不落位也不改节拍；剩余量
-    ;; 丢掉，免得退出面板时凭空多滚一段。
-    ;; （不改节拍是关键：否则本拍会把 start_picker 刚设的 16ms 改回 60ms——
-    ;;  下一拍起走的就是面板分支，再没人纠正，选择器整段只能跑 16fps。）
+    ;; 此时输入归面板，滚轮既不落位也不动节拍（节拍见 pace_tick，判据同源）；
+    ;; 剩余量丢掉，免得退出面板时凭空多滚一段。
     (if (or (FP.active) (== settings_open 1) (== toc_open 1))
         { (set! wheel_rest 0)
           (set! wheel_idle WHEEL_IDLE_TICKS) }
@@ -1545,10 +1567,26 @@
                 (if (not (== px 0))
                     (scroll_by_px px)   ;; 它内部已调 sync_scroll
                     #f) }
-              #f)
-          ;; 节拍：还有缓动剩余、或刚收到增量（平滑流还没吃完）→ 16ms；否则回常规
-          (if (or (not (== wheel_rest 0)) (< wheel_idle WHEEL_IDLE_TICKS))
-              (set_tick WHEEL_TICK_MS)
+              #f) })
+    #t))
+
+;; ---- 节拍：跟手/缓动时提速（**唯一**的 set_tick 决策点）----------------------
+;; 必须在 handle_touch / handle_wheel 之后调——它们会更新 drag_moved / wheel_rest /
+;; wheel_idle。放在两处各自 set_tick 会互相改回去（选择器那次就是这样掉到 16fps 的）。
+(define pace_tick
+  (lambda ()
+    ;; 面板/选择器自己管节拍（选择器要 16ms 跟手）：本拍刚被 handle_touch 打开时
+    ;; 绝不能动，否则会把 start_picker 刚设的 16ms 改回 60ms——下一拍就走面板分支，
+    ;; 再没人纠正，选择器整段只能跑 16fps。
+    (if (or (FP.active) (== settings_open 1) (== toc_open 1))
+        #f
+        { (if (== drag_moved 1)
+              (set! drag_idle 0)
+              (set! drag_idle (+ drag_idle 1)))
+          (if (or (and (== prev_down 1) (< drag_idle DRAG_IDLE_TICKS))
+                  (not (== wheel_rest 0))
+                  (< wheel_idle WHEEL_IDLE_TICKS))
+              (set_tick FAST_TICK_MS)
               (set_tick TICK_MS)) })
     #t))
 
@@ -1693,6 +1731,7 @@
                           (handle_keys)
                           (handle_touch)
                           (handle_wheel)
+                          (pace_tick)
                           (bg_work)
                           (sync_scroll)
                           (draw_all) })))))))
