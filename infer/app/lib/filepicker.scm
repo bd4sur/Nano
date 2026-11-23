@@ -28,6 +28,16 @@
 ;;   · 右上角自己画了一枚「取消」按钮，位置与各 App 的「退出」按钮相同——用户在
 ;;     网页/掌机上点那个位置时宿主也会记一条返回请求，两条路都通向"取消"。
 ;;
+;; **鼠标滚轮（仅 WASM GUI）**：本组件的列表也接受滚轮——与 App 自己的列表同一套
+;; （原生通道 + 每拍缓动落位，见布局段下方「滚轮」）。增量有两个来源，相加不重计：
+;;   ① 调用方**已认领**原生通道（(Touch.wheel_enable)）并在自己拍里取走了增量（如
+;;      app/markdown.scm）→ 把它转交进来：(FP.set_wheel dy)。
+;;   ② 调用方认领了但没取 / 取了没转交 → 增量还在宿主暂存里，组件每拍自己
+;;      (Touch.wheel) 取。
+;;   组件**不自己认领**通道：(Touch.wheel_enable) 没有对应的"交还"接口，认领会在组件
+;;   退出后继续生效，反将害得没认领的调用方在自己的界面上滚不动。因此未认领的原生
+;;   通道平台上，滚轮仍走页面"合成为手指"的老路（能滚，但不如原生通道顺）。
+;;
 ;; **节拍要求（拖动要跟手就看这一条）**：组件的滚动是**像素级跟手**的，但 App 每拍
 ;; 只能采一次触屏电平，所以跟手的上限就是调用方的节拍频率。组件不自己装定时器
 ;; ——上游运行时**每轮事件循环对同一进程只触发一个定时器回调**（回调期间其余到期
@@ -113,6 +123,23 @@
 (define P_TAP_SLOP 8)           ;; 位移 < 8px 视为点按而不是拖动
 ;; 活动期间建议调用方使用的节拍（ms）。见文件头的"节拍要求"。
 (define FP_TICK_MS 16)
+
+;; ---- 滚轮（原生通道，仅 WASM GUI：浏览器里的鼠标滚轮） --------------------
+;; 与 app/filemgr.scm、app/markdown.scm 同一套：页面在 App 认领原生通道后不再把滚轮
+;; 合成为手指（那条路在 16ms 拍下有“滚不动 / 一抖 / 凭空反向位移”三个结构性缺陷，
+;; 详见 am_native_Touch.h 的 (Touch.wheel_enable)），而是把像素增量原样交过来，
+;; 由组件在自己的拍里缓动落位（一格 ≈ 90ms 走完，与宿主 GUI 的滚轮控件同手感）。
+;;
+;; 增量从哪来（两个来源相加，不会重复计数）：
+;;   ① **调用方转交**： (FP.set_wheel dy) —— 调用方已经认领了通道并在它自己的拍里把
+;;      (Touch.wheel) 取走了（如 app/markdown.scm），就把它转交进来；
+;;   ② **自己取**： (Touch.wheel) —— 调用方认领了但没取（或者取了没转交），增量还在
+;;      宿主的暂存里，本组件自己取。
+;; 本组件**不自己去认领**通道（(Touch.wheel_enable) 没有对应的“交还”接口）：认领在
+;; 组件退出后仍然生效，会害得未认领的调用方在它自己的界面上滚不动。
+(define P_WHEEL_GAIN 0.45)     ;; 一拍吃掉剩余量的比例（≈ 90ms 走完一格）
+(define p_wheel_in 0)          ;; 调用方转交的增量（(FP.set_wheel) 累加）
+(define p_wheel_rest 0)        ;; 还没落位的剩余量（缓动用；整数值，必然归零）
 
 ;; ---- 状态 ----------------------------------------------------------------
 
@@ -298,6 +325,44 @@
               { (set! p_fling 0)
                 (display "FPFLING end=")
                 (display (Math.floor p_scroll)) (newline) }
+              #f) }
+        #f)
+    #t))
+
+;; ---- 滚轮落位（原生通道，见上面的「滚轮」段） ---------------------------
+
+;; 本拍要走多少像素：一拍吃掉剩余量的 P_WHEEL_GAIN；剩余 ≤2px 时一次走完，
+;; 保证必然归零（否则永远差最后一点，停在半行上且每拍重绘）。与 filemgr 同口径。
+(define p_wheel_step_px
+  (lambda ()
+    (define r p_wheel_rest)
+    (define a (Math.abs r))
+    (define s 0)
+    (if (<= a 2)
+        (set! s r)
+        { (set! s (Math.round (* r P_WHEEL_GAIN)))
+          (if (== s 0) (set! s (if (> r 0) 1 -1)) #f) })
+    (set! p_wheel_rest (- r s))
+    s))
+
+;; 每拍：取增量（转交来的 + 通道里剩的）→ 并入剩余量并刹车 → 向前走一步。
+;; 方向：wheel_dy > 0 = 内容上滚 = p_scroll 增大（与宿主 GUI 一致）。
+(define p_wheel
+  (lambda ()
+    (define dy 0)
+    (define px 0)
+    (set! dy (+ p_wheel_in (Touch.wheel)))
+    (set! p_wheel_in 0)
+    (if (not (== dy 0))
+        { (set! p_fling 0)   ;; 滚轮是主动定位：先刹车，不接着甩
+          (set! p_wheel_rest (+ p_wheel_rest dy))
+          (display "FPWHEEL dy=") (display dy) (newline) }
+        #f)
+    (if (not (== p_wheel_rest 0))
+        { (set! px (p_wheel_step_px))
+          (if (not (== px 0))
+              { (set! p_scroll (+ p_scroll px))
+                (p_clamp_scroll) }
               #f) }
         #f)
     #t))
@@ -520,6 +585,15 @@
 ;; 活动期间建议调用方使用的节拍（ms）；见文件头的"节拍要求"。
 (define tick_ms (lambda () FP_TICK_MS))
 
+;; 调用方转交滚轮增量（帧缓冲像素，正 = 内容上滚）。适用情形：调用方**已经认领**
+;; 了原生通道（(Touch.wheel_enable)）并在自己的拍里把 (Touch.wheel) 取走了——那就
+;; 把它转交给本组件，否则增量就被调用方丢掉了（如 app/markdown.scm 的选择器分支）。
+;; 调用方没取的话增量还在宿主暂存里，本组件自己会取（两者相加不会重复计数）。
+(define set_wheel
+  (lambda (dy)
+    (set! p_wheel_in (+ p_wheel_in dy))
+    #t))
+
 (define start_at
   (lambda (title exts dir)
     { (set! SW (Gfx.width))
@@ -536,6 +610,10 @@
       (set! p_sum_dy 0)
       (set! p_drag_max 0)
       (set! p_press_stop 0)
+      ;; 滚轮：进入时清掉上一轮/调用方转交的残留（不能把上一个上下文里的增量
+      ;; 攒到这一次，否则一打开就自己滑一段）
+      (set! p_wheel_in 0)
+      (set! p_wheel_rest 0)
       (set! p_active 1)
       (p_load) }))
 
@@ -557,7 +635,10 @@
 (define reset
   (lambda ()
     { (set! p_active 0)
-      (set! p_next 0) }))
+      (set! p_next 0)
+      ;; 滚轮：剩余量丢掉，不要带到下一次（或带回调用方的界面）
+      (set! p_wheel_in 0)
+      (set! p_wheel_rest 0) }))
 
 ;; 每拍调用一次：自绘 + 自处理输入；返回 0 进行中 / 1 已选中 / 2 已取消
 (define step
@@ -567,6 +648,7 @@
         { (if (== p_next 0) (if (App.back_requested) (set! p_next 2) #f) #f)
           (if (== p_next 0) (p_keys) #f)
           (if (== p_next 0) (p_touch) #f)
+          (if (== p_next 0) (p_wheel) #f)
           (if (== p_next 0) (p_step_fling) #f)
           (if (== p_next 0) (p_draw) #f)
           (if (== p_next 2)

@@ -120,6 +120,25 @@
 (define TAP_SLOP 8)           ;; 位移 < 8px 视为点按而不是拖动
 (define FLASH_TICKS 90)       ;; 反馈文案显示时长（≈1.4s @60Hz）
 
+;; ---- 滚轮（原生通道，仅 WASM GUI：浏览器里的鼠标滚轮） --------------------
+;; 为什么不用页面的“滚轮 → 合成手指”那条默认路（灵机 App 未认领通道时走它）：
+;; 合成手势在本 App 的 16ms 拍子下有**三个结构性缺陷**，长列表上表现为“滚不动 /
+;; 一抖一抖 / 偶尔跳一下”（详见 am_native_Touch.h 的 (Touch.wheel_enable) 与
+;; webgui/index.html 的 ①②③ 说明）：
+;;   ① 合成手指走不出画布（一格 28px，中心起手只剩 119px 行程 → 每 4 格要“松手重按”）；
+;;   ② 重按的 DOWN 落在上一段 UP 的同一次采样间隔里（本 App 一拍采一次电平）——看不到
+;;      松开沿，只看到触点从画布顶“瞬移”回中心，派生出一段**凭空的反向位移**；
+;;   ③ 起手点（中心 → 首格）的位移与 DOWN 同一拍，被整段丢掉。
+;; 现在与 app/markdown.scm 同一做法：boot 里 (Touch.wheel_enable) **认领原生通道**，
+;; 页面于是不再合成手指，而是把像素增量**原样**交过来（一格 100 deltaY = 28 像素，
+;; 页面不做平滑），本 App 在自己的 16ms 拍里缓动落位（一格 ≈ 90ms 走完，与宿主 GUI
+;; 的滚轮控件同一手感）。滚轮到顶到底直接硬钳（不橡皮筋、无“越界量要先磨回来”的死区）。
+;; 掌机/桌面/串口键盘没有滚轮源（wheel_available = #f），WHEEL_OK 恒 0，以下全走空。
+(define WHEEL_OK 0)           ;; 1 = 本平台有原生滚轮通道且已认领
+(define WHEEL_GAIN 0.45)      ;; 一拍吃掉剩余量的比例（≈ 90ms 走完一格）
+(define wheel_total 0)        ;; 本拍取到的滚轮增量（帧缓冲像素，正 = 内容上滚）
+(define wheel_rest 0)         ;; 还没落位的剩余量（缓动用；整数值，必然归零）
+
 ;; ---- 状态 ----------------------------------------------------------------
 
 (define cur ".")             ;; 当前目录（相对业务资源根；"." = 根）
@@ -259,6 +278,43 @@
               { (set! fling 0)
                 (display "FMFLING end=")
                 (display (Math.floor scroll)) (newline) }
+              #f) }
+        #f)
+    #t))
+
+;; ---- 滚轮落位（原生通道，见上面的「滚轮」段） ---------------------------
+
+;; 本拍要走多少像素：一拍吃掉剩余量的 WHEEL_GAIN；剩余 ≤2px 时**一次走完**
+;; （保证必然归零：否则永远差最后一点点，列表就停在半行上再也对不齐，
+;;  而每拍都在重绘 —— 白白烧 CPU）。与 app/markdown.scm 的 wheel_step_px 同一口径。
+(define wheel_step_px
+  (lambda ()
+    (define r wheel_rest)
+    (define a (Math.abs r))
+    (define s 0)
+    (if (<= a 2)
+        (set! s r)
+        { (set! s (Math.round (* r WHEEL_GAIN)))
+          (if (== s 0) (set! s (if (> r 0) 1 -1)) #f) })
+    (set! wheel_rest (- r s))
+    s))
+
+;; 每拍：先把本拍到达的增量并进剩余量（并**刹车**——滚轮是主动定位，不该接着甩），
+;; 再向前走一步。方向：wheel_dy > 0 = 内容上滚 = scroll 增大（与宿主 GUI 一致）。
+(define handle_wheel
+  (lambda ()
+    (define px 0)
+    (if (not (== wheel_total 0))
+        { (set! fling 0)
+          (set! wheel_rest (+ wheel_rest wheel_total))
+          (display "FMWHEEL dy=") (display wheel_total) (newline) }
+        #f)
+    (if (not (== wheel_rest 0))
+        { (set! px (wheel_step_px))
+          (if (not (== px 0))
+              { (set! scroll (+ scroll px))
+                (set! dirty 1)
+                (clamp_scroll) }
               #f) }
         #f)
     #t))
@@ -953,6 +1009,13 @@
           #f)
       (handle_keys)
       (handle_touch)
+      ;; 滚轮（见「滚轮」段）：每拍先幂等重新声明认领（宿主在新实例冷启动 / 恢复时
+      ;; 会清掉认领，重复声明无副作用），再把本拍到达的增量交给 handle_wheel 缓动落位
+      (if (== WHEEL_OK 1)
+          { (Touch.wheel_enable)
+            (set! wheel_total (Touch.wheel)) }
+          (set! wheel_total 0))
+      (handle_wheel)
       (step_fling)
       (if (== dirty 1) { (set! dirty 0) (draw_all) } #f) }))
 
@@ -976,6 +1039,13 @@
     { (set! SW (Gfx.width))
       (set! SH (Gfx.height))
       (relayout)     ;; 行高 = 字体行高 × 1.6（见布局段）
+      ;; 滚轮原生通道（见「滚轮」段）：WASM GUI 有，掌机/桌面/串口键盘没有
+      ;; （返回 #f → WHEEL_OK 保持 0，滚轮全走页面合成的老路，行为不变）。
+      ;; 必须在装定时器之前认领：页面收到第一个 wheel 事件时就要知道该走哪条通路。
+      (if (Touch.wheel_available)
+          (if (Touch.wheel_enable) (set! WHEEL_OK 1) #f)
+          #f)
+      (display "FMWHEEL ok=") (display WHEEL_OK) (newline)
       (build_ops)
       (build_openers)
       (load_dir)
