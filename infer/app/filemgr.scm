@@ -1,6 +1,6 @@
 ;@id=filemgr
 ;@title=文件管理
-;@version=2026-11-18
+;@version=2026-11-23
 ;; ============================================================================
 ;; filemgr.scm —— 文件管理器（灵机应用程序 · 完全权限版）
 ;;
@@ -74,14 +74,28 @@
 (define HEAD_H 18)      ;; 页眉（标题 + 右上角退出按钮）
 (define PATH_Y 20)      ;; 当前路径行（12px）
 (define LIST_Y 34)      ;; 列表首行 y
-(define ROW_H 18)       ;; 行高
-(define LIST_ROWS 8)    ;; 一屏 8 行（34 + 8*18 = 178）
-;; 列表行文字的垂直补偿：本地库现在把 (Gfx.draw_text) 的 y 当「墨迹顶」绘制
-;; （见 am_native_Gfx.c 的 native_text_top_gap，12px 抗锯齿字模的行顶空隙 2px），
-;; 而本 App 的行文字是按旧口径（行顶 = 行框顶 + 1，墨迹再落 2px）摆的；不补回这 2px，
-;; 整列文件名（含右侧的文件大小）都会比行框中线高出一截。
-(define ROW_TXT_DY 2)
 (define INFO_Y 182)     ;; 选中项信息 / 操作反馈，一行 12px
+
+;; 列表行高 = **字体行高 × 1.6**（触屏点按舒适：18px 行高时一行只剩 3px 行距，手指
+;; 容易压到相邻行；1.6 倍是触屏点按的舒适下限，与 app/markdown.scm 菜单项的
+;; MENU_ROW_K 同一比例）。12px 抗锯齿字模（宿主默认）的行高是 15 → 行高 24。
+;; 三个量都按**当前字模**现算（见下面的 relayout）：本 App 不切换字模，但字模是宿主
+;; 进程级静态量（am_native_Gfx.c 的 s_font_id），从别的 App（例如把字模切到 16px 的
+;; Markdown 阅读器）返回时会被继承，那时行高必须跟着字体走，否则「字体高度的 1.6 倍」
+;; 就名不副实，16px 字还会被 24px 行框挤成贴顶。
+(define ROW_K 1.6)      ;; 行高 / 字体行高（见 relayout 里为何用 round 而不是 floor）
+(define LINE_H 15)      ;; 字体行高（(Gfx.font_info) 第 3 项；12px 抗锯齿 = 15）
+(define ROW_H 24)       ;; 列表行高 = LINE_H × ROW_K
+(define LIST_ROWS 6)    ;; 一屏行数（按可用高度现算；24px 行高下 6 行，34 + 6*24 = 178）
+;; 「页眉下 / 信息行上」的列表可用高度：relayout 按它算一屏几行，换字模后也不会压到
+;; 信息行与底栏按钮（(= 182 - 3) - 34 = 145）。
+(define LIST_AREA_H (- (- INFO_Y 3) LIST_Y))
+;; 行文字的墨迹顶 = 行框顶 + (行高 − 字体行高)/2 + 墨迹上缘空隙。
+;; 空隙的来历：本地库把 (Gfx.draw_text) 的 y 当「墨迹顶」绘制（见 am_native_Gfx.c 的
+;; native_text_top_gap：12px 抗锯齿字模的行顶→墨迹上缘 2px），而这一行要摆的是**行框**
+;; 在行高里居中，故先按行高差居中（floor((24−15)/2) = 4），再加回这段空隙（= 6）。
+(define TEXT_GAP 2)
+(define ROW_TXT_DY (+ (Math.floor (/ (- ROW_H LINE_H) 2)) TEXT_GAP))
 (define BAR1_Y 198)     ;; 第一排按钮
 (define BAR2_Y 218)     ;; 第二排按钮
 (define BTN_H 16)
@@ -91,7 +105,7 @@
 
 ;; ---- 滚动手感参数（列表的触屏拖动） --------------------------------------
 
-(define VIEW_H (* LIST_ROWS ROW_H))  ;; 列表视口高（8 行 = 144px）
+(define VIEW_H (* LIST_ROWS ROW_H))  ;; 列表视口高（24px 行高下 6 行 = 144px；relayout 现算）
 ;; 节拍 16ms = 60Hz。拖动跟手的**上限就是节拍频率**：App 每拍只能采一次触屏电平，
 ;; 原来 60ms（16fps）的拍子再准也只能一格一格跳；改成 60Hz 后与屏幕刷新同频。
 ;; 空闲帧不再重绘（见 dirty 标记），所以 60Hz 空转只是几次 native 取值，代价可忽。
@@ -139,6 +153,25 @@
 (define stopped 0)
 
 ;; ---- 小工具 --------------------------------------------------------------
+
+;; 按**当前字模**重算列表的行高、一屏行数与视口高（见布局段的说明）。
+;; 调用点：boot（冷启动）、on_resume（从别的 App 返回——它可能把字模换成了 16px）。
+(define relayout
+  (lambda ()
+    (define fi (Gfx.font_info (Gfx.get_font)))
+    (set! LINE_H (if (list? fi) (get_item fi 2) 15))
+    ;; 用 round 而不是 floor：32 位宿主（wasm32/MCU）上浮点是**截断低 5 位尾数**的
+    ;; 表示（am_make_value_of_float），1.6 实际是 1.5999999…，15 × 1.6 = 23.99999…，
+    ;; floor 会得到 23（行高少 1px）。round 得 24。
+    (set! ROW_H (Math.round (* LINE_H ROW_K)))
+    (set! ROW_TXT_DY (+ (Math.floor (/ (- ROW_H LINE_H) 2)) TEXT_GAP))
+    (set! LIST_ROWS (Math.floor (/ LIST_AREA_H ROW_H)))
+    (if (< LIST_ROWS 1) (set! LIST_ROWS 1) #f)
+    (set! VIEW_H (* LIST_ROWS ROW_H))
+    (display "FMLAYOUT line_h=") (display LINE_H)
+    (display " row_h=") (display ROW_H)
+    (display " rows=") (display LIST_ROWS) (newline)
+    #t))
 
 (define new_list (lambda () (cdr '(0))))
 (define mk2 (lambda (a b) (cons a (cons b (cdr '(0))))))
@@ -676,7 +709,7 @@
           (Gfx.fill_rect 2 (+ y 1) 3 (- ROW_H 2) 120 180 250) }
         #f)
     (if (not (at_root)) { (set! cr 138) (set! cg 190) (set! cb 255) } #f)
-    (Gfx.draw_text (if (at_root) "..   （已在资源根）" "..   上级目录") 10 (+ (+ y 1) ROW_TXT_DY) cr cg cb)
+    (Gfx.draw_text (if (at_root) "..   （已在资源根）" "..   上级目录") 10 (+ y ROW_TXT_DY) cr cg cb)
     #t))
 
 (define draw_row
@@ -696,11 +729,11 @@
         { (set! txt (String.concat nm "/"))
           (set! cr 138) (set! cg 190) (set! cb 255) }
         (set! txt nm))
-    (Gfx.draw_text (FSX.clip_text txt 232) 10 (+ (+ y 1) ROW_TXT_DY) cr cg cb)
+    (Gfx.draw_text (FSX.clip_text txt 232) 10 (+ y ROW_TXT_DY) cr cg cb)
     (if (== isd 0)
         { (set! sz (get_item row 2))
           (if (> sz 0)
-              (Gfx.draw_text (FSX.human_size sz) (- SW 62) (+ (+ y 1) ROW_TXT_DY) 104 116 138)
+              (Gfx.draw_text (FSX.human_size sz) (- SW 62) (+ y ROW_TXT_DY) 104 116 138)
               #f) }
         #f)
     #t))
@@ -762,7 +795,7 @@
     ;; 空目录/读不出来时，在 ".." 行下面给一句提示
     (if (== (n_rows) 0)
         (Gfx.draw_text (if (== err 1) "（目录无法读取）" "（空目录 · 用「新建文件/新建目录」开始）")
-                       10 (+ (- (+ LIST_Y ROW_H) scroll) 2) 110 118 134)
+                       10 (+ (- (+ LIST_Y ROW_H) scroll) ROW_TXT_DY) 110 118 134)
         #f)
     (Gfx.reset_clip)
     #t))
@@ -931,7 +964,8 @@
 ;; 别的 App 可能刚保存/改名/删除了文件，不重扫就会显示过期的列表。
 (define on_resume
   (lambda ()
-    { (load_dir)
+    { (relayout)     ;; 别的 App 可能把字模换掉了：先按当前字模重算行高再重排
+      (load_dir)
       (set! dirty 1)
       (display "FMRESUME ") (display cur) (newline) }))
 
@@ -941,6 +975,7 @@
   (lambda ()
     { (set! SW (Gfx.width))
       (set! SH (Gfx.height))
+      (relayout)     ;; 行高 = 字体行高 × 1.6（见布局段）
       (build_ops)
       (build_openers)
       (load_dir)

@@ -15025,3 +15025,15 @@ DHCP 主机名）。以后部署前先确认 IP，别默认旧地址可用。
   背光 `100/100`（说明已跑到 `display_hal_init` 之后）。
 - `mp135_deploy.sh` 纸面检查：`bash -n` 通过；heredoc 抽出后 `sh -n` 通过；
   `rc.local` 的 `sed` 在原文件上跑两遍仍只匹配一处（幂等）。
+
+------------------------------------
+
+# 2026-11-23
+
+灵机 App《文件管理》（`infer/app/filemgr.scm`）及其可复用控件「文件选择器」（`infer/app/lib/filepicker.scm`）：列表行高改为**字体行高的 1.6 倍**（触屏点按舒适），并在元数据里更新 `;@version=2026-11-23`。
+
+- **比例与来源**：与 `app/markdown.scm` 菜单项的 `MENU_ROW_K 1.6` 同一比例。12px 抗锯齿字模（宿主默认 font 1）行高 15 → **行高 24**（原 18 = 1.5 倍，一行只剩 3px 行距，手指容易压到相邻行）。
+- **按当前字模现算，不写死**：新增 `relayout` / `p_relayout`，用 `(Gfx.font_info (Gfx.get_font))` 取行高再乘 1.6，并据此算出**一屏行数**与视口高——filemgr 一屏 6 行（34 + 6×24 = 178，与原先 8×18 同高，信息行/两排按钮/底栏不动），选择器一屏 7 行（34 + 7×24 = 202，页脚仍在 224）。调用点：filemgr 的 `boot` + `on_resume`（`Gfx.set_font` 是宿主进程级静态量，从把字模切到 16px 的阅读器返回时行高要跟着走，16px 下 = 29px/行、6 行）；选择器在 `start_at` 里算一次（组件**不切换调用方的字模**，只按调用方的当前字模排版）。
+- **文字垂直居中**：`ROW_TXT_DY` 由「行高差居中 + 墨迹上缘空隙」推出 `floor((ROW_H−LINE_H)/2)+2`（24px 下 = 6，原先是写死的 2 配合 `+y+1`）；行文字、右侧文件大小、空目录提示统一改用它。
+- **踩坑（32 位宿主浮点）**：`Math.floor (* 15 1.6)` 在 wasm32/MCU 上得 **23**——`am_float_t` 是 float 且 `am_make_value_of_float` **截断低 5 位尾数**，1.6 实为 1.5999999…，乘积 23.99999…。改用 `Math.round` 得 24（注释已写在两处 relayout 里）。另一处同源教训：`(- a b c)` 这类三参数算术「结果是未规定的」（manual §6.2.4），选择器的可用高度曾因此算成 1 行，改为层层嵌套的二参数减法。
+- **验证（WASM-GUI 目标，`infer/build_wasm_gui.sh` + 无头浏览器 shell/firefox）**：新增临时回归脚本（主菜单改为 3 列滚动宫格后，`tools/e2e/browser/` 里的旧导航全部失效，本次一并把 `regress_filemgr.js` / `regress_fmscroll.js` 的导航改成「滚到目标格 + 点按」，并把 ROW_H 18→24、LIST_ROWS 8→6 的几何常量、边界拖拽距离同步）。结果：行高/一屏行数诊断行（`FMLAYOUT`/`FPLAYOUT line_h=15 row_h=24 rows=6|7`）符合预期；帧缓冲断言点按带 = 行框（y=34+i·24+1..+22）、行的上下边缘同属一行、文字上下留白差 ≤2px；`regress_filemgr.js` 50/50、`regress_fmscroll.js` 42/42（shell 与 firefox），拖动仍 1:1 像素跟手、惯性/刹车/边界钳制不变；16px 字模下（`data/md-font.txt=2`）选择器自动变 29px/行 6 行且不压页脚。firefox 上 `regress_filemgr.js` 的「取消后画面回到阅读页（帧哈希相等）」一项失败，已用 `git stash` 回退到原始行高复测复现——**与本次改动无关的既有问题**。

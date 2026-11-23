@@ -78,21 +78,33 @@
 (define HEAD_H 18)     ;; 页眉（标题 + 取消按钮）
 (define PATH_Y 20)     ;; 当前目录行（12px）
 (define LIST_Y 34)     ;; 列表首行 y
-(define ROW_H 18)      ;; 行高
-(define LIST_ROWS 10)  ;; 一屏几行（34 + 10*18 = 214）
-;; 列表行文字的垂直补偿：本地库现在把 (Gfx.draw_text) 的 y 当「墨迹顶」绘制
-;; （见 am_native_Gfx.c 的 native_text_top_gap，12px 抗锯齿字模的行顶空隙 2px），
-;; 而本组件的行文字是按旧口径（行顶 = 行框顶 + 1，墨迹再落 2px）摆的；不补回这 2px，
-;; 整列文件名都会比行框中线高出一截。
-(define ROW_TXT_DY 2)
 (define BOT_H 16)      ;; 页脚
+
+;; 列表行高 = **字体行高 × 1.6**（触屏点按舒适；与 app/filemgr.scm 的列表、
+;; app/markdown.scm 的菜单项 MENU_ROW_K 同一比例）。12px 抗锯齿字模行高 15 → 行高 24。
+;; 组件**不切换调用方的字模**（那会污染调用方后续绘制：调用方重绘时按自己的字模
+;; 排版，而 (Gfx.set_font) 是宿主进程级静态量），只按**进入时的当前字模**排版：
+;; 行高与一屏行数由 p_relayout 现算（调用方把字模切到 16px 时行高自动变 29）。
+(define ROW_K 1.6)     ;; 行高 / 字体行高（见 p_relayout 里为何用 round 而不是 floor）
+(define LINE_H 15)     ;; 字体行高（(Gfx.font_info) 第 3 项）
+(define ROW_H 24)      ;; 列表行高 = LINE_H × ROW_K
+(define LIST_ROWS 7)   ;; 一屏几行（24px 行高下 7 行 = 168px，34 + 168 = 202）
+(define TEXT_GAP 2)    ;; 行顶→墨迹上缘的空隙（12px 抗锯齿字模，见下面 ROW_TXT_DY）
+;; 行文字的墨迹顶 = 行框顶 + (行高 − 字体行高)/2 + 墨迹上缘空隙（= 4 + 2 = 6）。
+;; 空隙的来历见 am_native_Gfx.c 的 native_text_top_gap：(Gfx.draw_text) 的 y 是墨迹顶，
+;; 而这一行要摆的是**行框**在行高里居中。
+(define ROW_TXT_DY (+ (Math.floor (/ (- ROW_H LINE_H) 2)) TEXT_GAP))
+;; 「页眉下 / 页脚上」的列表可用高度（与页脚留 10px；p_relayout 按它算一屏几行）
+;; 注意算术运算符恒为**二参数**（manual §6.2.4），多写一个参数不会做链式减法，
+;; 结果未规定——所以这里层层嵌套。
+(define P_LIST_AREA_H (- (- (- SH BOT_H) 10) LIST_Y))
 
 (define BTN_CANCEL_W 36)
 (define BTN_UP_W 44)
 
 ;; ---- 滚动手感参数（与 app/filemgr.scm 的列表完全同一套） ------------------
 
-(define P_VIEW_H (* LIST_ROWS ROW_H))  ;; 列表视口高（10 行 = 180px）
+(define P_VIEW_H (* LIST_ROWS ROW_H))  ;; 列表视口高（可用高度内最多的整行数 × 行高；24px 行高下 7 行 = 168px）
 (define P_FLING_FRICTION 0.88)  ;; 惯性每拍衰减系数（16ms/拍）
 (define P_FLING_VMAX 45)        ;; 惯性初速上限（px/拍）
 (define P_FLING_VMIN 0.6)       ;; 惯性速度低于它就停（px/拍）
@@ -131,6 +143,26 @@
 (define p_press_stop 0)     ;; 按下时在刹车（打断惯性）→ 这一下松手不算点按
 
 ;; ---- 小工具 --------------------------------------------------------------
+
+;; 按**当前字模**重算行高、一屏行数与视口高（见布局段说明）。在 start_at 里调一次：
+;; 组件在调用方的屏幕上画，字模是调用方的（可能是 16px，见 app/markdown.scm 的
+;; apply_font），所以不能像 App 那样在模块载入时算死。
+(define p_relayout
+  (lambda ()
+    (define fi (Gfx.font_info (Gfx.get_font)))
+    (set! LINE_H (if (list? fi) (get_item fi 2) 15))
+    ;; 用 round 而不是 floor：32 位宿主（wasm32/MCU）上浮点是**截断低 5 位尾数**的
+    ;; 表示（am_make_value_of_float），1.6 实际是 1.5999999…，15 × 1.6 = 23.99999…，
+    ;; floor 会得到 23（行高少 1px）。round 得 24。
+    (set! ROW_H (Math.round (* LINE_H ROW_K)))
+    (set! ROW_TXT_DY (+ (Math.floor (/ (- ROW_H LINE_H) 2)) TEXT_GAP))
+    (set! LIST_ROWS (Math.floor (/ P_LIST_AREA_H ROW_H)))
+    (if (< LIST_ROWS 1) (set! LIST_ROWS 1) #f)
+    (set! P_VIEW_H (* LIST_ROWS ROW_H))
+    (display "FPLAYOUT line_h=") (display LINE_H)
+    (display " row_h=") (display ROW_H)
+    (display " rows=") (display LIST_ROWS) (newline)
+    #t))
 
 (define new_list (lambda () (cdr '(0))))
 (define mk2 (lambda (a b) (cons a (cons b (cdr '(0))))))
@@ -292,7 +324,7 @@
           (Gfx.fill_rect 2 (+ y 1) 3 (- ROW_H 2) 120 180 250) }
         #f)
     (if (not (p_at_root)) { (set! cr 138) (set! cg 190) (set! cb 255) } #f)
-    (Gfx.draw_text (if (p_at_root) "..   （已在资源根）" "..   上级目录") 10 (+ (+ y 1) ROW_TXT_DY) cr cg cb)
+    (Gfx.draw_text (if (p_at_root) "..   （已在资源根）" "..   上级目录") 10 (+ y ROW_TXT_DY) cr cg cb)
     #t))
 
 (define p_draw_row
@@ -312,7 +344,7 @@
         { (set! txt (String.concat nm "/"))
           (set! cr 138) (set! cg 190) (set! cb 255) }
         (set! txt nm))
-    (Gfx.draw_text (FSX.clip_text txt 292) 10 (+ (+ y 1) ROW_TXT_DY) cr cg cb)
+    (Gfx.draw_text (FSX.clip_text txt 292) 10 (+ y ROW_TXT_DY) cr cg cb)
     #t))
 
 ;; 列表区：像素滚动 + 视口裁剪。
@@ -337,7 +369,7 @@
     ;; 空目录 / 无匹配文件：在 ".." 行下面给一句提示
     (if (== (rows_count) 0)
         (Gfx.draw_text (if (== p_err 1) "（目录无法读取）" "（空 / 无匹配文件）")
-                       10 (+ (- (+ LIST_Y ROW_H) p_scroll) 2) 110 118 134)
+                       10 (+ (- (+ LIST_Y ROW_H) p_scroll) ROW_TXT_DY) 110 118 134)
         #f)
     (Gfx.reset_clip)
     #t))
@@ -492,6 +524,7 @@
   (lambda (title exts dir)
     { (set! SW (Gfx.width))
       (set! SH (Gfx.height))
+      (p_relayout)     ;; 行高 = 当前字模行高 × 1.6（见布局段）
       (set! p_title title)
       (set! p_exts exts)
       (set! p_dir dir)
