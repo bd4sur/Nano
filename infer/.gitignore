@@ -8,3 +8,6 @@
 !/model/**
 sdkconfig.*
 tools/fonts/
+
+# MP135 交叉编译产物（mp135_deploy.sh）
+.build-mp135/

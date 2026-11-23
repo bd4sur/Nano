@@ -14952,3 +14952,76 @@ App 每拍诊断行，`sc` = `MDV.top_y` 真值）：
   `regress_album_launch.js` 37/37、宿主 `test_app.py` **114/114**（虚拟时钟下拖动
   用例的断言不受影响）。
 - `tools/check_scm_arity.py` 0 处问题；元数据保持 `;@version=2026-11-20`。
+
+# 2026-11-23（CoreMP135：交叉编译打通 + rootfs 1GB→58.9G + 开机自启改由 init 脚本管理）
+
+## 一、交叉编译
+
+现象：`make -f mp135.mk pod` 直接失败——`/home/bd4sur/mp135/CoreMP135_buildroot/output/host`
+里只有 host 侧小工具与空壳目录（`bin/` 有 binutils 没有 `gcc`，`arm-buildroot-linux-gnueabihf/sysroot`
+是空的，buildroot 树从未真正 build 过），`mp135.mk` 的 `CC`/`SYSROOT` 全指空。
+
+做法（新增 `infer/mp135_deploy.sh`，唯一入口，`build`/`deploy`/不带参数=两者）：
+- 工具链改用 `mp135/` 下的 Linaro GCC 7.5（`arm-linux-gnueabihf`，glibc 2.25，目标机 2.36 向前兼容；
+  二进制 `GLIBC_` 需求上限实测 2.17）。
+- tinyalsa 不再依赖目标机 `-ltinyalsa`：用 `toolchains/tinyalsa/src` 直接编成静态库链进二进制
+  （板上虽有 `libtinyalsa.so.2`，但目标机没有 `/usr/include`，靠源码自带头文件更稳）。
+- 源文件清单仍从 `mp135.mk -n pod` 抓，避免脚本与 mk 两份清单漂移；改为按文件并行编译
+  （`-j$(nproc)`，增量按 mtime 跳过）+ 一次链接，`CROSS_COMPILE strip --strip-unneeded`。
+- 机器相关参数显式给足：`-mcpu=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -mthumb`
+  （工具链默认只有 vfpv3-d16）。
+
+**链接失败的真缺口**：`ui_app.c` 的 `main_event_handler` 引用 `display_sleep/display_wakeup`，
+但 `hal_display_ili9342c_linux.c`（MP135 用的那份）没实现——`hal_display_ili9341_linux.c`
+有、`ssd130x`/`ncurses`/`framebuffer`/`wasm` 各 HAL 都有，只有 9342c 漏了。按同命令集补齐
+（`0x28` DISPOFF + `0x10` SLPIN；唤醒 `0x11` SLPOUT → 120ms → `0x29` DISPON），并让
+`display_set_brightness` 记下最近亮度、熄屏前存一份，唤醒时经 AXP2101 sysfs 恢复
+（否则睡眠期间面板有余辉）。`mp135.mk` 的 pod 目标此前应从未链接通过过。
+
+## 二、rootfs 空间：1GB → 58.9GB
+
+现象：板子 `/dev/root` 974.7M 已用 958.7M，`df` 报 Available 0；`tune2fs` 说还有 4096 空闲块（16MB），
+但 `dd` 1MB 立即 0+0、连 `mkdir` 都 ENOSPC——即"账面上有、实际一个块也分不出来"。
+待部署资源 `app 7.3M + dict 11M + ebook/icon/wallpaper + music 49M + llm 1.8G ≈ 1.87G`，
+而 SD 卡实际 63GB，`p5(rootfs)` 之后 **~62GB 完全未分配**（镜像只按 1GB 写的 GPT）。
+
+做法（关键：**BusyBox 的 `fdisk` 只能改 MBR**，交互里连 `d`+`n 5` 都按 DOS 语义解释，
+所以不能用它动这张 GPT）：
+- 先把 `dd` 出来的原始 GPT（`/dev/mmcblk0` 前 1MiB）+ p5 超级块存档到
+  `mp135/backup-192.168.10.39/`（注意：`ssh ... > file` 走 pty 会把 prompt/警告混进二进制，
+  改成"板上 `dd` 到 `/tmp`（tmpfs）再 `scp`"才干净）。
+- 用 `mkgpt.py` **手写新 GPT**：p5 起点 7482 保持不动、终点 2104633 → 123596766；
+  分区 GUID/名字/属性与 p1–p4 逐字节保留；重算 entries CRC 与 header CRC；另建尾部备份表
+  （entries @ LAST-32、header @ LAST）并把保护性 MBR 覆盖整盘（`0xEE`, size=123596799）。
+- 落盘前先自校验（CRC + p5 边界断言），落盘后**回读 33 个扇区逐文件比对 MD5**；
+  再用本机 util-linux 把三段写到 63GB 稀疏镜像上，`fdisk -l` / `sfdisk -d` 独立验证通过。
+- 重启（内核重读分区表）后 `resize2fs /dev/mmcblk0p5` 在线扩容：
+  `old_desc_blocks = 1, new_desc_blocks = 4` → 15448660 个 4K 块，`/` 变成 58G / 可用 53G。
+
+**排障教训**：重启后 12 分钟 ping/ARP 全无响应，差点当成"GPT 把板子写废了"。实际是
+**DHCP 每次重启都换一个 IP，且板子 MAC 是随机生成的**（`ae:0b:…` → `8e:6d:…`），
+所以既不能按 IP 也不能按 MAC 定位；只能全段扫描后按 `hostname` 认机器（DNS 不解析
+DHCP 主机名）。以后部署前先确认 IP，别默认旧地址可用。
+
+## 三、部署与开机自启
+
+- `mp135_deploy.sh deploy` 一次做完：备份旧二进制 → 推 `nano_pod` → `app/` 镜像（`--delete`）
+  → `data dict ebook icon llm music wallpaper` 逐个 rsync → 装 init 脚本 → 注释 `rc.local`
+  旧手工启动行（原文件备份 `/root/rc.local.bak`）→ `S99nanopod restart` + 状态自检。
+- 自启从"`/etc/rc.local` 里一行 `/root/nano_pod &`"换成 **`/etc/init.d/S99nanopod`**：
+  `start|stop|restart|status`、pidfile `/var/run/nano_pod.pid`、日志 `/var/log/nano_pod.log`、
+  已在跑则不重复拉起（旧写法重启会留双实例抢 GPIO，表现为刷屏
+  `Write failed : chip7, line4 …(未 Export)`）。脚本内容以 heredoc **内联在**
+  `mp135_deploy.sh` 里（`DAEMON=__DAEMON__` 由 `$RBIN` 替换），不再单独跟踪一个文件；
+  `/etc/rc.local` 只保留厂商的 USB role / printk 设置。
+
+## 四、验证
+
+- 构建：71 个源文件，产物 ARM32 EABI5、5.3MB、`NEEDED` 只有 `libc/libm/libpthread/libdl`。
+- 部署：`app/` + `llm/` 共 153 个文件逐文件 MD5 与本机完全一致；资源目录 34 个文件一致
+  （板上多出 `data/ilcache/dict.ilc`，是首启自建的词典缓存）。
+- 自启（真机重启实测）：`up 0 min` 时 `/etc/init.d/S99nanopod status` → `nano_pod running: 237`、
+  `cwd=/root`、`/root/nano_pod` MD5 = 新构建、`/var/log/nano_pod.log` 为空、
+  背光 `100/100`（说明已跑到 `display_hal_init` 之后）。
+- `mp135_deploy.sh` 纸面检查：`bash -n` 通过；heredoc 抽出后 `sh -n` 通过；
+  `rc.local` 的 `sed` 在原文件上跑两遍仍只匹配一处（幂等）。

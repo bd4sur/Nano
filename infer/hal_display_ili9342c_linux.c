@@ -1371,7 +1371,9 @@ static void display_bl_probe(void) {
 }
 
 // value: 0~255（0 关闭背光，255 最亮），映射到 sysfs 的 0~max_brightness
+static uint8_t s_last_brightness = 255; // 最近一次设定的亮度，供熄屏/唤醒恢复
 void display_set_brightness(uint8_t value) {
+    s_last_brightness = value;
     display_bl_probe();
     if (!s_bl_brightness_path[0] || s_bl_max_brightness <= 0) return;
 
@@ -1380,4 +1382,23 @@ void display_set_brightness(uint8_t value) {
     if (!f) return;
     fprintf(f, "%d", v);
     fclose(f);
+}
+
+// === 屏幕熄屏/唤醒（ui_app 空闲熄屏用） ===
+// ILI9342C 与 ILI9341 同命令集：0x28 显示关、0x10 睡眠入；唤醒为 0x11 睡眠出，
+// 等待 120ms 振荡器稳定后再 0x29 显示开。背光另经 AXP2101 sysfs 同步关闭/恢复，
+// 否则休眠期间面板仍有余辉。
+static uint8_t s_sleep_brightness = 255; // 熄屏前的亮度，唤醒时恢复
+void display_sleep(void) {
+    s_sleep_brightness = s_last_brightness ? s_last_brightness : 255;
+    ILI9341_Write_Command(0x28); // DISPOFF
+    ILI9341_Write_Command(0x10); // SLPIN
+    display_set_brightness(0);
+}
+
+void display_wakeup(void) {
+    ILI9341_Write_Command(0x11); // SLPOUT
+    usleep(120 * 1000);          // 睡眠退出后需 120ms 才能接受下一条命令
+    ILI9341_Write_Command(0x29); // DISPON
+    display_set_brightness(s_sleep_brightness);
 }
