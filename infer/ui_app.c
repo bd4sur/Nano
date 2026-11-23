@@ -855,15 +855,15 @@ static int32_t ui_app_menu_act_poweroff(Key_Event *ke, Global_State *gs, const U
 // 决定（见下方），这样点击行为与表项都还在，恢复时删一行屏蔽记录即可。
 // -------------------------------------------------------------------------------
 static const Ui_App_Menu_Builtin_Item s_app_menu_builtin_items[] = {
-    { L"番茄表", PLATFORM_ROOT_DIR "/icon/fanqie.png",   ui_app_menu_act_flip     },
+    { L"沙漏番茄钟", PLATFORM_ROOT_DIR "/icon/fanqie.png",   ui_app_menu_act_flip     },
     { L"鹦鹉笼", PLATFORM_ROOT_DIR "/icon/nano.png",      ui_app_menu_act_model    },  // 已屏蔽（见下）
-    { L"玲珑仪", PLATFORM_ROOT_DIR "/icon/linglong.png",  ui_app_menu_act_linglong },
+    { L"玲珑天象仪", PLATFORM_ROOT_DIR "/icon/linglong.png",  ui_app_menu_act_linglong },
     { L"电子书", PLATFORM_ROOT_DIR "/icon/ebook.png",     ui_app_menu_act_ebook    },
     { L"音乐盒", PLATFORM_ROOT_DIR "/icon/music.png",     ui_app_menu_act_musicbox },  // 已屏蔽（见下）
     { L"小游戏", PLATFORM_ROOT_DIR "/icon/game.png",      ui_app_menu_act_game     },  // 已屏蔽（见下）
-    { L"寻呼机", PLATFORM_ROOT_DIR "/icon/ptt.png",       ui_app_menu_act_ofdm     },
+    { L"声波短消息", PLATFORM_ROOT_DIR "/icon/ptt.png",       ui_app_menu_act_ofdm     },
     { L"词典",   PLATFORM_ROOT_DIR "/icon/dict.png",      ui_app_menu_act_dict     },  // 已屏蔽（见下）
-    { L"控制台", PLATFORM_ROOT_DIR "/icon/animac.png",    ui_app_menu_act_animac   },
+    { L"灵机控制台", PLATFORM_ROOT_DIR "/icon/animac.png",    ui_app_menu_act_animac   },
 };
 #define UI_APP_MENU_BUILTIN_NUM ((int32_t)(sizeof(s_app_menu_builtin_items) / sizeof(s_app_menu_builtin_items[0])))
 
@@ -1559,9 +1559,12 @@ static void ui_draw_copyright_notice(Key_Event *key_event, Global_State *global_
 }
 
 
-// 启动画面底部两行（自下而上：农历 / 电量信息）的排版常量
-#define SPLASH_FOOTER_LINE_GAP      (6)  // 两行之间的行间距（px）
+// 启动画面底部三行（自下而上：日期时间 / 农历 / 电量信息）的排版常量
+#define SPLASH_FOOTER_LINE_GAP      (6)  // 相邻两行之间的行间距（px）
 #define SPLASH_FOOTER_BOTTOM_MARGIN (11) // 最底一行行框下边界距屏幕底边的留白（px，沿用旧电量行的留白）
+// 是否在启动画面显示农历文本（1 = 显示，0 = 隐藏）。隐藏时农历不占行，
+// 电量信息行紧贴在日期时间行上方。
+#define SPLASH_SHOW_NONGLI          (1)
 
 void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state) {
 
@@ -1618,13 +1621,22 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
 
     // 启动画面文本统一使用 12px alpha 平滑字体（GFX_FONT_ALPHA_12），与全局 ui_font（16px）
     // 解耦，避免影响其他界面。
-    // 底部两行排版（按屏幕高度自适应）：最底一行是农历，其上一行是电量信息，
-    // 最底一行行框下边界距屏幕底边 SPLASH_FOOTER_BOTTOM_MARGIN，
-    // 两行之间留 SPLASH_FOOTER_LINE_GAP 行间距。
+    // 底部三行排版（按屏幕高度自适应）：最底一行是日期时间，其上一行是农历，
+    // 再上一行（仅 UPS_ENABLED）是电量信息；最底一行行框下边界距屏幕底边
+    // SPLASH_FOOTER_BOTTOM_MARGIN，相邻两行之间留 SPLASH_FOOTER_LINE_GAP 行间距。
+    // 农历隐藏（SPLASH_SHOW_NONGLI=0）时不占行，电量行直接接在日期时间行上方。
     // 居中绘制时行框下边界 = 行框中心 + (行高 - 行高/2)（见 gfx_font_draw_text_centered）。
     const int32_t nongli_line_h = gfx_font_line_height(GFX_FONT_ALPHA_12);
-    const int32_t nongli_center_y = global_state->gfx->height - SPLASH_FOOTER_BOTTOM_MARGIN
-                                  - (nongli_line_h - nongli_line_h / 2);
+    const int32_t datetime_line_h = gfx_font_line_height(GFX_FONT_ALPHA_12);
+    // 最底一行：日期时间（原农历所在位置）
+    const int32_t datetime_center_y = global_state->gfx->height - SPLASH_FOOTER_BOTTOM_MARGIN
+                                    - (datetime_line_h - datetime_line_h / 2);
+    // 农历行：日期时间行的上一行，行框上边界与日期时间行下边界隔 SPLASH_FOOTER_LINE_GAP；
+    // 农历隐藏时不占行（电量行的“农历行上一行”基准退化为日期时间行本身）。
+    const int32_t nongli_center_y = SPLASH_SHOW_NONGLI
+        ? (datetime_center_y - datetime_line_h / 2 - SPLASH_FOOTER_LINE_GAP
+           - (nongli_line_h - nongli_line_h / 2))
+        : datetime_center_y;
 
     const wchar_t *weekdays[] = {L"日", L"一", L"二", L"三", L"四", L"五", L"六"};
     // 日期时间行固定使用 12px alpha 平滑字体（窄屏也可完整显示）
@@ -1635,21 +1647,23 @@ void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state
                  year, month, day, weekdays[timeinfo->tm_wday], hour, minute, second);
     }
     else {
-        // 大样式：顶部只显示日期，时间由画面中央的七段码时钟表现
+        // 大样式：底部只显示日期，时间由画面中央的七段码时钟表现
         swprintf(datetime_wcs_buffer, 33, L"%04d年%02d月%02d日 星期%ls", year, month, day, weekdays[timeinfo->tm_wday]);
     }
     // 背景（阴影）
-    gfx_font_draw_text_centered(global_state->gfx, datetime_font, datetime_wcs_buffer, global_state->gfx->width / 2 + 1, 16 + 1, 0x66, 0x66, 0x66, 1);
+    gfx_font_draw_text_centered(global_state->gfx, datetime_font, datetime_wcs_buffer, global_state->gfx->width / 2 + 1, datetime_center_y + 1, 0x66, 0x66, 0x66, 1);
     // 前景
-    gfx_font_draw_text_centered(global_state->gfx, datetime_font, datetime_wcs_buffer, global_state->gfx->width / 2, 16, time_red, time_green, time_blue, 1);
+    gfx_font_draw_text_centered(global_state->gfx, datetime_font, datetime_wcs_buffer, global_state->gfx->width / 2, datetime_center_y, time_red, time_green, time_blue, 1);
 
-    // 农历日期（最底一行，12px alpha 平滑字体）
-    LunarDate *nongli = lunar_calculate(year, month, day, hour, minute, second, timezone);
-    _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
-    // 背景（阴影）
-    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, nongli_wcs_buffer, global_state->gfx->width / 2 + 1, nongli_center_y + 1, 0x66, 0x66, 0x66, 1);
-    // 前景
-    gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, nongli_wcs_buffer, global_state->gfx->width / 2, nongli_center_y, nongli_red, nongli_green, nongli_blue, 1);
+    // 农历日期（日期时间行的上一行，12px alpha 平滑字体；可用 SPLASH_SHOW_NONGLI 隐藏）
+    if (SPLASH_SHOW_NONGLI) {
+        LunarDate *nongli = lunar_calculate(year, month, day, hour, minute, second, timezone);
+        _mbstowcs(nongli_wcs_buffer, nongli->full_display, 33);
+        // 背景（阴影）
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, nongli_wcs_buffer, global_state->gfx->width / 2 + 1, nongli_center_y + 1, 0x66, 0x66, 0x66, 1);
+        // 前景
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, nongli_wcs_buffer, global_state->gfx->width / 2, nongli_center_y, nongli_red, nongli_green, nongli_blue, 1);
+    }
 
     // 七段码时钟（仅“大”样式：绘制在画面中央）
     if (global_state->splash_clock_style == SPLASH_CLOCK_BIG) {
