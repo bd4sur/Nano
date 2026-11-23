@@ -15071,3 +15071,20 @@ DHCP 主机名）。以后部署前先确认 IP，别默认旧地址可用。
 - 顺带修了同一类问题：灵机 App 右上角「退出/返回」的宿主热区（`am_native_app_hit_exit_button`）过去只看按下点 → 按住后拖出去再松手也会弹确认框，现在要求**松手点也在热区内**（与 App 侧 `(BTN.track)` 的高亮语义对齐）。
 
 验证（WASM-GUI，shell/firefox 各 16/16）：按住「确认」变按下色 → 拖出对话框恢复默认底色 → 拖回又亮 → 在按钮内松手触发；拖出后松手不触发且框留下（三枚按钮均为常态色）；从「确认」滑到「留下」松手不触发（两枚都不亮——手势起于「确认」）；框外按下再拖进按钮不亮也不触发；完整点按「留下」正常关闭；「退出」按钮按住拖出再松手不弹框、正常点按仍弹框。回归：按下变色专项 22/22（暗）、9/9（亮色主题）、`regress_filemgr` 50/50、`regress_fmscroll` 42/42、`regress_back` 24/24、`regress_launch` 37/37、`regress_album_launch` 37/37。
+
+# 2026-11-24
+
+主菜单（`infer/ui_app.c` 表驱动宫格）按需求收敛入口：
+
+- **屏蔽「鹦鹉笼」**：把 `ui_app_menu_act_model` 加入 `s_app_menu_hidden_actions[]`。C 版实现（`ui_llm.c` / `STATE_MODEL_MENU`）与点击行为全部保留，只是不再摆格子。
+- **图标移交「电子鹦鹉」**：灵机 App `app/nanochat.scm`（`;@id=nanochat` / `;@title=电子鹦鹉`）在 `s_scheme_app_icon_override[]` 中登记 `nanochat → icon/nano.png`，与音乐盒沿用 `icon/music.png` 同一机制——不复制图片文件，图标缓存也少一个槽。
+- **屏蔽「小游戏」**：`ui_app_menu_act_game` 同样加入屏蔽表。二级菜单里的 C 版游戏入口退场；游戏类改为在主菜单直接点同名灵机 App（`app/goldminer.scm` / `app/ripple.scm` / `app/waterpool.scm` 等），与「灵机 App 直达」的既有布局一致。
+- 屏蔽机制不变：`STATE_MODEL_MENU` / `STATE_GAME_MENU` 与 `game_menu_item_action()` 等代码都在，删掉屏蔽表对应一行即可恢复。
+
+## 验证（WASM-GUI 目标）
+
+- `cd infer && bash build_wasm_gui.sh` 构建通过（仅既有旧代码告警），产物 `webgui/nano_gui.wasm` 5.4MB。
+- 无头 Chromium（playwright）端到端：主菜单诊断 `[main-menu] 条目表：内置 5 项（屏蔽 4 项）+ 灵机 App 51 项 = 56 项`（原内置 9 项，本次新增屏蔽 2 项）；截图中主菜单只剩「番茄表/玲珑仪/电子书/寻呼机/控制台」五个内置格。
+- 数字键 1-9 逐项点按（每次重载页面）落点 `[36,28,-3,58,51,80,80,80,80]`，不再出现 `STATE_MODEL_MENU(4)` / `STATE_GAME_MENU(54)`。
+- 滚到主菜单末尾点按「电子鹦鹉」格子：进入 App（state=80）、日志 `[nanochat] boot models=…`；截图确认该格图标就是 `icon/nano.png`（鹦鹉头像），且无页面异常。9/9 断言通过。
+- 说明：本次未下载 p2 大模型资源，故 `boot models=0` 属预期（资源面板「下载资源」后才列出模型），不影响入口/图标验证。

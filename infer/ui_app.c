@@ -684,7 +684,8 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
 // 一律由表给出，绘制与点按分发都只认表，不再有「画一份、点一份」的重复分支：
 //   · 内置应用 → 静态表 s_app_menu_builtin_items[]（C 侧，表里加一行即新增入口；
 //     个别入口可用 s_app_menu_hidden_actions[] **屏蔽**——只不上菜单，实现与点击行为
-//     都保留，当前屏蔽了与灵机 App 同名的 C 版「音乐盒」「词典」）；
+//     都保留，当前屏蔽了与灵机 App 同名的 C 版「音乐盒」「词典」，以及已由灵机 App
+//     「电子鹦鹉」取代的 C 版「鹦鹉笼」与二级菜单「小游戏」）；
 //   · 灵机 App → 进入菜单时扫描 app/ 目录，逐个读出源码头部元数据 ;@title= 当标题
 //     （见 ui_scheme_app.h），图标默认 icon/default.png（若 icon/<id>.png 存在则用它），
 //     点击行为 = 启动该 App。新增 App = 往 app/ 丢一个带元数据的 .scm，固件无需改动。
@@ -855,11 +856,11 @@ static int32_t ui_app_menu_act_poweroff(Key_Event *ke, Global_State *gs, const U
 // -------------------------------------------------------------------------------
 static const Ui_App_Menu_Builtin_Item s_app_menu_builtin_items[] = {
     { L"番茄表", PLATFORM_ROOT_DIR "/icon/fanqie.png",   ui_app_menu_act_flip     },
-    { L"鹦鹉笼", PLATFORM_ROOT_DIR "/icon/nano.png",      ui_app_menu_act_model    },
+    { L"鹦鹉笼", PLATFORM_ROOT_DIR "/icon/nano.png",      ui_app_menu_act_model    },  // 已屏蔽（见下）
     { L"玲珑仪", PLATFORM_ROOT_DIR "/icon/linglong.png",  ui_app_menu_act_linglong },
     { L"电子书", PLATFORM_ROOT_DIR "/icon/ebook.png",     ui_app_menu_act_ebook    },
     { L"音乐盒", PLATFORM_ROOT_DIR "/icon/music.png",     ui_app_menu_act_musicbox },  // 已屏蔽（见下）
-    { L"小游戏", PLATFORM_ROOT_DIR "/icon/game.png",      ui_app_menu_act_game     },
+    { L"小游戏", PLATFORM_ROOT_DIR "/icon/game.png",      ui_app_menu_act_game     },  // 已屏蔽（见下）
     { L"寻呼机", PLATFORM_ROOT_DIR "/icon/ptt.png",       ui_app_menu_act_ofdm     },
     { L"词典",   PLATFORM_ROOT_DIR "/icon/dict.png",      ui_app_menu_act_dict     },  // 已屏蔽（见下）
     { L"控制台", PLATFORM_ROOT_DIR "/icon/animac.png",    ui_app_menu_act_animac   },
@@ -869,13 +870,21 @@ static const Ui_App_Menu_Builtin_Item s_app_menu_builtin_items[] = {
 // 主菜单里**屏蔽**的内置入口（2026-11）：只不摆进格子，功能实现一律保留。
 //   · 「音乐盒」—— 灵机 App 版（app/musicbox.scm，图标沿用 icon/music.png）已经在同一张
 //     表里，两个同名格子并存会分不清；
-//   · 「词典」  —— 同理，app/dict.scm 是灵机 App 版。
-// 屏蔽的只是**菜单入口**：点击行为（ui_app_menu_act_musicbox / ui_app_menu_act_dict）、
-// 状态机（STATE_MUSICBOX_MENU / STATE_DICT_QUERY）与 C 侧实现（ui_musicbox.c /
-// ui_dict.c）全在，随时可恢复——删掉对应那一行即可。
+//   · 「词典」  —— 同理，app/dict.scm 是灵机 App 版；
+//   · 「鹦鹉笼」—— 灵机 App 版「电子鹦鹉」（app/nanochat.scm）已在同一张表里，
+//     且沿用同一图标 icon/nano.png（见下方 s_scheme_app_icon_override），两个同名
+//     格子并存会分不清；
+//   · 「小游戏」—— 二级菜单里的 C 版游戏入口（黄金矿工/遗传算法/水波/水池）退场，
+//     游戏类 App 统一由主菜单的灵机 App 入口直达。
+// 屏蔽的只是**菜单入口**：点击行为（ui_app_menu_act_musicbox / ui_app_menu_act_dict /
+// ui_app_menu_act_model / ui_app_menu_act_game）、状态机（STATE_MUSICBOX_MENU /
+// STATE_DICT_QUERY / STATE_MODEL_MENU / STATE_GAME_MENU）与 C 侧实现全在，随时可恢复——
+// 删掉对应那一行即可。
 static const Ui_App_Menu_Action s_app_menu_hidden_actions[] = {
     ui_app_menu_act_musicbox,
     ui_app_menu_act_dict,
+    ui_app_menu_act_model,
+    ui_app_menu_act_game,
 };
 
 static int32_t ui_app_main_menu_builtin_hidden(Ui_App_Menu_Action action) {
@@ -989,6 +998,8 @@ static const struct {
 } s_scheme_app_icon_override[] = {
     // 灵机版音乐盒（app/musicbox.scm）沿用 C 版音乐盒的图标
     { "musicbox", PLATFORM_ROOT_DIR "/icon/music.png" },
+    // 灵机版「电子鹦鹉」（app/nanochat.scm）沿用原 C 版鹦鹉笼的图标
+    { "nanochat", PLATFORM_ROOT_DIR "/icon/nano.png" },
 };
 
 // 图标选择：① 覆盖表 → ② icon/<id>.png（存在则用）→ ③ 留空（绘制时取默认图标）。
