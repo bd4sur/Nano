@@ -1583,6 +1583,7 @@ static void scheme_modal_open(Key_Event *key_event, Global_State *global_state) 
         // 任何模态框开起来都说明 App 还活着在干活：清除可能挂起的“返回请求”，
         // 免得框关掉之后被宿主兜底当成未接管的请求而误杀
         am_native_app_clear_back_request();
+        ui_exit_confirm_arm_clear();   // 新弹的框不继承上一次的按下色
         ui_exit_confirm_draw_msg_ex(key_event, global_state, s_modal_title, am_native_ui_body(),
                                     s_modal_confirm_with_bg);
         return;
@@ -1654,10 +1655,33 @@ static void scheme_modal_event(Key_Event *key_event, Global_State *global_state)
             int32_t hit = ui_exit_confirm_hit_msg_ex(global_state, s_modal_confirm_with_body,
                                                     s_modal_confirm_with_bg,
                                                     key_event->touch_down_x, key_event->touch_down_y);
-            if (hit == 1)      scheme_modal_finish(global_state, 1, key_event);   // 确认
-            else if (hit == 2) scheme_modal_finish(global_state, 0, key_event);   // 留下
-            else if (hit == 3) scheme_modal_finish(global_state, 2, key_event);   // 后台
+            int32_t rel = ui_exit_confirm_hit_msg_ex(global_state, s_modal_confirm_with_body,
+                                                    s_modal_confirm_with_bg,
+                                                    key_event->touch_x, key_event->touch_y);
+            // 一次点按必须**按下→松开全在同一枚按钮内**（按住后拖出去再松手 = 放弃，
+            // 框留着）；与 app/lib/button.scm 的 (BTN.track) 同一语义。
+            if (hit != 0 && hit == rel) {
+                if (hit == 1)      scheme_modal_finish(global_state, 1, key_event);   // 确认
+                else if (hit == 2) scheme_modal_finish(global_state, 0, key_event);   // 留下
+                else if (hit == 3) scheme_modal_finish(global_state, 2, key_event);   // 后台
+            }
+            // 未构成一次完整点按：框留着，只把按下色恢复常态（否则会停在“按住”的样子）
+            else if (ui_exit_confirm_arm(global_state, s_modal_confirm_with_body,
+                                         s_modal_confirm_with_bg, 0, 0, 0, 0, 0)) {
+                ui_exit_confirm_draw_msg_ex(key_event, global_state, s_modal_title, am_native_ui_body(),
+                                            s_modal_confirm_with_bg);
+            }
             return;
+        }
+        // 按下反馈（与 C 侧的控制台退出框同一套，见 ui_app.h 的 ui_exit_confirm_arm）：
+        // 按住期间把那枚按钮画成「按下色」+ 标签下沉；判据是“现在松手会不会触发”
+        // （按下点与**当前点**都在同一枚按钮内）——拖出按钮立即恢复常态，拖回来又亮。
+        if (ui_exit_confirm_arm(global_state, s_modal_confirm_with_body, s_modal_confirm_with_bg,
+                                key_event->is_touching,
+                                key_event->touch_down_x, key_event->touch_down_y,
+                                key_event->touch_x, key_event->touch_y)) {
+            ui_exit_confirm_draw_msg_ex(key_event, global_state, s_modal_title, am_native_ui_body(),
+                                        s_modal_confirm_with_bg);   // 叠加式重绘（幂等）
         }
         if (key_event->key_edge == -1 || key_event->key_edge == -2) {
             scheme_modal_finish(global_state, (key_event->key_code == NANO_KEY_enter) ? 1 : 0, key_event);
@@ -1731,8 +1755,11 @@ int32_t ui_scheme_app_event_handler(Key_Event *key_event, Global_State *global_s
     // 触屏「退出」按钮：由 App 侧登记的**热区**判定（事件级触摸边沿，与 App 的轮询
     // 节拍无关——慢节奏 App 如星历 1000ms/拍也能可靠点中）。命中 = 与硬 A/ESC 同一条
     // 通道：置"返回请求"，由 App 自己的 (EX.check) 弹全局确认框。
+    // 与其它按钮同一语义：**按下点与松手点都在按钮内**才算点中（按住后拖出去再松手
+    // = 放弃，不弹框）；高亮侧由 app/lib/button.scm 的 (BTN.track) 同步反映。
     if ((key_event->touch_edge & TOUCH_EDGE_UP)
         && am_native_app_hit_exit_button(key_event->touch_down_x, key_event->touch_down_y)
+        && am_native_app_hit_exit_button(key_event->touch_x, key_event->touch_y)
         && !am_native_app_exit_confirmed() && !am_native_app_exit_wanted(s_app->rt)) {
         am_native_app_set_back_request(s_app->rt);
         return 0;

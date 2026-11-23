@@ -4652,6 +4652,11 @@ static void ui_app_animac_cleanup(Key_Event *key_event, Global_State *global_sta
 #define UI_ANIMAC_EXIT_BTN_GAP    (12)
 #define UI_ANIMAC_EXIT_BTN_GAP3   (8)
 
+// 模态框按钮的「按下」状态（见 ui_app.h 的 ui_exit_confirm_arm 说明）：
+//   1 确认 / 2 留下 / 3 后台 / 0 无。它是**宿主单例**（同一时刻只会有一个确认框），
+//   故放在模块静态里；新弹框时由 ui_exit_confirm_arm_clear() 清零。
+static int32_t s_exit_confirm_armed = 0;
+
 // 几何计算（内部共用；with_body 决定对话框高度，with_bg 决定按钮行是两枚还是三枚）
 static void ui_exit_confirm_geom(Global_State *global_state, int32_t with_body, int32_t with_bg,
     int32_t *out_dx, int32_t *out_dy, int32_t *out_h, int32_t *out_btn_y,
@@ -4728,6 +4733,10 @@ void ui_exit_confirm_draw_msg_ex(Key_Event *key_event, Global_State *global_stat
     uint8_t dlg_R = 24,     dlg_G = 24,     dlg_B = 28;       // 对话框底色
     uint8_t btn_R = 46,     btn_G = 46,     btn_B = 50;       // “留下”按钮底色
     uint8_t ok_R = 16,      ok_G = 72,      ok_B = 176;       // “确认”按钮底色（强调色，同 Ctrl 高亮色系）
+    // 按下色（见 ui_app.h 的 ui_exit_confirm_arm）：两枚按钮各自“提亮一档”——
+    // 深色主题上把底色向强调色靠、浅色主题上把中性钮压暗一档（提亮在浅底上看不出来）。
+    uint8_t ok_p_R = 52,   ok_p_G = 122,  ok_p_B = 228;
+    uint8_t btn_p_R = 86,  btn_p_G = 90,  btn_p_B = 100;
     uint8_t text_R = 240,   text_G = 240,   text_B = 240;     // 文字
     uint8_t stay_text_R = 240, stay_text_G = 240, stay_text_B = 240;
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
@@ -4735,9 +4744,13 @@ void ui_exit_confirm_draw_msg_ex(Key_Event *key_event, Global_State *global_stat
         dlg_R = 250; dlg_G = 250; dlg_B = 252;
         btn_R = 224; btn_G = 230; btn_B = 234;
         ok_R = 17; ok_G = 85; ok_B = 238;
+        ok_p_R = 88; ok_p_G = 142; ok_p_B = 252;
+        btn_p_R = 190; btn_p_G = 198; btn_p_B = 210;
         text_R = 17; text_G = 17; text_B = 17;
         stay_text_R = 17; stay_text_G = 17; stay_text_B = 17;
     }
+    // 按下的是哪一枚（0 = 没有；1 确认 / 2 留下 / 3 后台）
+    int32_t armed = s_exit_confirm_armed;
 
     // 描边 + 底色两层圆角矩形（外圈 2px 描边效果）
     gfx_draw_rounded_rectangle(gfx, dx - 2, dy - 2, UI_ANIMAC_EXIT_DIALOG_W + 4, h + 4,
@@ -4770,23 +4783,31 @@ void ui_exit_confirm_draw_msg_ex(Key_Event *key_event, Global_State *global_stat
 
     // 按钮：确认（强调色） / [后台] / 留下（中性色）
     // 三按钮行比两按钮行窄，故字号降一档（12px）以免"后台"挤不下
+    // 按下态（armed）：底色换「按下色」+ 标签**下沉 1px**，手指按住就能看出选中了哪一枚
+    // （结算仍在松手沿，见 ui_app.h 的 ui_exit_confirm_arm）。
     {
         uint32_t fnt = with_bg ? GFX_FONT_ALPHA_12 : GFX_FONT_ALPHA_16;
         int32_t ty = btn_y + UI_ANIMAC_EXIT_BTN_H / 2 - (with_bg ? 1 : 0);
+        int32_t ok_down = (armed == 1) ? 1 : 0;
+        int32_t bg_down = (armed == 3) ? 1 : 0;
+        int32_t stay_down = (armed == 2) ? 1 : 0;
         gfx_draw_rounded_rectangle(gfx, confirm_x, btn_y, btn_w, UI_ANIMAC_EXIT_BTN_H,
-            6, 6, 6, 6, ok_R, ok_G, ok_B, 1);
+            6, 6, 6, 6,
+            ok_down ? ok_p_R : ok_R, ok_down ? ok_p_G : ok_G, ok_down ? ok_p_B : ok_B, 1);
         gfx_font_draw_text_centered(gfx, fnt, L"确认",
-            confirm_x + btn_w / 2, ty, 240, 240, 240, 1);
+            confirm_x + btn_w / 2, ty + ok_down, 240, 240, 240, 1);
         if (with_bg) {
             gfx_draw_rounded_rectangle(gfx, bg_x, btn_y, btn_w, UI_ANIMAC_EXIT_BTN_H,
-                6, 6, 6, 6, btn_R, btn_G, btn_B, 1);
+                6, 6, 6, 6,
+                bg_down ? btn_p_R : btn_R, bg_down ? btn_p_G : btn_G, bg_down ? btn_p_B : btn_B, 1);
             gfx_font_draw_text_centered(gfx, fnt, L"后台",
-                bg_x + btn_w / 2, ty, stay_text_R, stay_text_G, stay_text_B, 1);
+                bg_x + btn_w / 2, ty + bg_down, stay_text_R, stay_text_G, stay_text_B, 1);
         }
         gfx_draw_rounded_rectangle(gfx, stay_x, btn_y, btn_w, UI_ANIMAC_EXIT_BTN_H,
-            6, 6, 6, 6, btn_R, btn_G, btn_B, 1);
+            6, 6, 6, 6,
+            stay_down ? btn_p_R : btn_R, stay_down ? btn_p_G : btn_G, stay_down ? btn_p_B : btn_B, 1);
         gfx_font_draw_text_centered(gfx, fnt, L"留下",
-            stay_x + btn_w / 2, ty, stay_text_R, stay_text_G, stay_text_B, 1);
+            stay_x + btn_w / 2, ty + stay_down, stay_text_R, stay_text_G, stay_text_B, 1);
     }
 
     gfx_refresh(gfx);
@@ -4816,6 +4837,28 @@ int32_t ui_exit_confirm_hit_msg_ex(Global_State *global_state, int32_t with_body
         if (x >= stay_x && x < stay_x + btn_w) return 2;
     }
     return 0;
+}
+
+void ui_exit_confirm_arm_clear(void) {
+    s_exit_confirm_armed = 0;
+}
+
+int32_t ui_exit_confirm_arm(Global_State *global_state, int32_t with_body, int32_t with_bg,
+                            int32_t touching,
+                            int32_t down_x, int32_t down_y, int32_t cur_x, int32_t cur_y) {
+    // 高亮 = “现在松手会不会触发”：按下点与**当前点**都在同一枚按钮内才算。
+    // 于是拖出按钮立即变常态（也不再算按下），拖回来又亮；从外面拖进来的不算。
+    int32_t armed = 0;
+    if (touching) {
+        int32_t hit_down = ui_exit_confirm_hit_msg_ex(global_state, with_body, with_bg, down_x, down_y);
+        if (hit_down != 0
+            && hit_down == ui_exit_confirm_hit_msg_ex(global_state, with_body, with_bg, cur_x, cur_y)) {
+            armed = hit_down;
+        }
+    }
+    if (armed == s_exit_confirm_armed) return 0;
+    s_exit_confirm_armed = armed;
+    return 1;
 }
 
 
@@ -6214,6 +6257,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 首次获得焦点：叠加绘制模态框（控制台画面保留在其下）
         if (global_state->PREV_STATE != global_state->STATE) {
+            ui_exit_confirm_arm_clear();   // 新弹的框不继承上一次的按下色
             ui_exit_confirm_draw(key_event, global_state);
         }
         global_state->PREV_STATE = global_state->STATE;
@@ -6221,18 +6265,36 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
         // 模态期间不泵编辑器事件循环（ui_animac_idle_pump 暂停）：
         // 避免异步输出触发整帧重绘覆盖模态框；运行时定时器随之暂停，对话框存续期间可接受
 
-        // 触屏按钮（松手沿 + 按下点命中，全局范式）
+        // 按下反馈（见 ui_app.h 的 ui_exit_confirm_arm）：按住期间把那枚按钮画成
+        // 「按下色」+ 标签下沉。判据是“现在松手会不会触发”（按下点与**当前点**都在
+        // 同一枚按钮内）——拖出按钮立即恢复常态，拖回来又亮，从外面拖进来的不亮。
+        if (!(key_event->touch_edge & TOUCH_EDGE_UP)
+            && ui_exit_confirm_arm(global_state, 0, 0, key_event->is_touching,
+                                   key_event->touch_down_x, key_event->touch_down_y,
+                                   key_event->touch_x, key_event->touch_y)) {
+            ui_exit_confirm_draw(key_event, global_state);   // 叠加式重绘（幂等）
+        }
+
+        // 触屏按钮（松手沿）：一次点按必须**按下→松开全在同一枚按钮内**
+        // （按住后拖出去再松手 = 放弃，框保持打开；与 app/lib/button.scm 同一语义）。
         if (key_event->touch_edge & TOUCH_EDGE_UP) {
             int32_t hit = ui_exit_confirm_hit(global_state, key_event->touch_down_x, key_event->touch_down_y);
-            if (hit == 1) {
-                // 确认退出：完整善后（解释器内存/字体/终端布局关联/日志区几何）后回主菜单
-                ui_app_animac_cleanup(key_event, global_state);
-                global_state->STATE = STATE_MAIN_MENU;
+            int32_t rel = ui_exit_confirm_hit(global_state, key_event->touch_x, key_event->touch_y);
+            if (hit != 0 && hit == rel) {
+                if (hit == 1) {
+                    // 确认退出：完整善后（解释器内存/字体/终端布局关联/日志区几何）后回主菜单
+                    ui_app_animac_cleanup(key_event, global_state);
+                    global_state->STATE = STATE_MAIN_MENU;
+                }
+                else {
+                    // 留下：恢复控制台画面（整帧重绘，终端模式同帧合成日志区）并返回
+                    ui_draw_input_buffer(key_event, global_state, global_state->w_input_main);
+                    global_state->STATE = STATE_ANIMAC_CONSOLE;
+                }
             }
-            else if (hit == 2) {
-                // 留下：恢复控制台画面（整帧重绘，终端模式同帧合成日志区）并返回
-                ui_draw_input_buffer(key_event, global_state, global_state->w_input_main);
-                global_state->STATE = STATE_ANIMAC_CONSOLE;
+            // 未构成一次完整点按：框留着，只把按下色恢复常态（否则会停在“按住”的样子）
+            else if (ui_exit_confirm_arm(global_state, 0, 0, 0, 0, 0, 0, 0)) {
+                ui_exit_confirm_draw(key_event, global_state);
             }
         }
         // A键（退格/返回）等价于“留下”

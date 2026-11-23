@@ -155,6 +155,27 @@ void    ui_exit_confirm_draw_msg_ex(Key_Event *key_event, Global_State *global_s
 int32_t ui_exit_confirm_hit_msg_ex(Global_State *global_state, int32_t with_body, int32_t with_bg,
                                    int32_t x, int32_t y);   // 1=确认 2=留下 3=后台 0=未命中
 
+// ---- 模态框按钮的「按下」反馈（2026-11）-------------------------------------
+// 模态框是**叠加式**的：只在弹出时画一次，触屏结算发生在**松手沿**，所以过去
+// 按下去完全没反馈——手指按住的那一刻看不出“到底选中了哪一枚”。
+// 现在由调用方在事件循环里每帧报一次当前触点，绘制端据此把对应按钮画成「按下色」
+// （底色调亮一档 + 标签下沉 1px）。
+//
+// **手势语义与宿主其它按钮一致（app/lib/button.scm 的 (BTN.track) 同款）**：
+//   · 按下 → 按住 → 松开，**三下都在同一枚按钮内**才算一次触发；
+//   · 按住后把手指拖出按钮 → 立即恢复常态、不再算按下；拖回来又亮；
+//   · 按下点不在按钮内（从外面拖进来）→ 不亮，也不会触发。
+// 所以高亮的判据就是“现在松手会不会触发”，两者严格同一口径：
+//   按下点命中 X 且**当前点**也命中 X。
+//
+//   touching = 当前是否按着；down_* = 本次手势按下点；cur_* = 当前触点
+//   返回 1 = 按下目标变了（调用方应重绘一次模态框；叠加式重绘是幂等的）
+int32_t ui_exit_confirm_arm(Global_State *global_state, int32_t with_body, int32_t with_bg,
+                            int32_t touching,
+                            int32_t down_x, int32_t down_y, int32_t cur_x, int32_t cur_y);
+// 清掉按下态（新弹一个模态框时调；否则上一个框的按下色会“带”到新框上）
+void    ui_exit_confirm_arm_clear(void);
+
 
 // ===============================================================================
 // FLIP流体模拟
