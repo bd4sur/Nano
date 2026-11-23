@@ -1,5 +1,5 @@
 ;@id=mathjax
-;@title=mathjax
+;@title=MathJax
 ;@version=2026-11-17
 ;; ============================================================================
 ;; mathjax.scm —— 灵机「LaTeX 公式排版」（类 MathJax 的数学公式渲染器）
