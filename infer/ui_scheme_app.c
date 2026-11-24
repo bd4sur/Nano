@@ -31,6 +31,7 @@
 #include "am_native_Raster.h" // 水池软光栅后端（(native Raster)，见 app/waterpool_raster.scm）
 #include "am_native_Music.h"  // 音乐播放引擎（(native Music)，见 app/musicbox.scm）
 #include "am_native_Audio.h"  // 音频采集 + 频谱分析（(native Audio)，见 app/spectrogram.scm）
+#include "am_native_Rec.h"    // 录音机：采集 + Aqua MP3 320kbps CBR 编码 + 落盘（(native Rec)，见 app/recorder.scm）
 
 // ===============================================================================
 // 运行时参数
@@ -1292,6 +1293,10 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     // 引擎是虚拟机全局单例；FFT 整条流水线在 C 侧（Scheme 里 1024 点 FFT 会掉到个位数 fps），
     // Scheme 只拿每频点 0~255 强度与 RMS，声谱图/示波器类 App 据此绘图。
     am_runtime_register_native_lib(s_app->rt, &am_native_Audio_lib);
+    // Rec：**录音机**（采集 + MP3 编码 + 流式落盘，见 am_native_Rec.h）。
+    // 编码器是 vendor/aqua_mp3/ 里的 Aqua MP3（320kbps CBR / 44100Hz / 单声道）；
+    // 采集、编码、写盘全在 C 侧，Scheme 只驱动节拍并拿计时/电平/统计标量。
+    am_runtime_register_native_lib(s_app->rt, &am_native_Rec_lib);
 
     // 清缓冲后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）。
     // **这里不推黑屏**：app_load_source() 的第一件事就是画「正在启动 <App>…」并推屏

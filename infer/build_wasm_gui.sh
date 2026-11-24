@@ -180,6 +180,13 @@ if [ "$WASM_LTO" = "1" ]; then WASM_OPT="$WASM_OPT -flto"; fi
     am_native_Raster.c \
     am_native_Music.c \
     am_native_Audio.c \
+    am_native_Rec.c \
+    vendor/aqua_mp3/aqua_encoder.c \
+    vendor/aqua_mp3/aqua_huff.c \
+    vendor/aqua_mp3/aqua_mdct.c \
+    vendor/aqua_mp3/aqua_qloop.c \
+    vendor/aqua_mp3/aqua_subband.c \
+    vendor/aqua_mp3/aqua_bits.c \
     infer.c \
     nano_fft.c \
     nano_min.c \

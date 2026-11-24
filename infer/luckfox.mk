@@ -16,6 +16,11 @@ STRIP   = $(TOOLCHAIN_DIR)/bin/$(CROSS_COMPILE)strip
 ANIMAC_DIR  := vendor/Animac
 ANIMAC_INC  := $(ANIMAC_DIR)
 ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c $(ANIMAC_DIR)/am_native_String.c, $(wildcard $(ANIMAC_DIR)/*.c))
+# 录音机（(native Rec)）的 MP3 压缩内核：Aqua MP3 编码器（vendor/aqua_mp3，
+# 从 /home/bd4sur/Aqua 的 aqua-c/src 原样拷贝的**编码端**文件，算法零改动）。
+AQUA_SRCS := vendor/aqua_mp3/aqua_encoder.c vendor/aqua_mp3/aqua_huff.c \
+             vendor/aqua_mp3/aqua_mdct.c vendor/aqua_mp3/aqua_qloop.c \
+             vendor/aqua_mp3/aqua_subband.c vendor/aqua_mp3/aqua_bits.c
 # String 原文件仅由根目录 ABI 适配翻译单元包含；作为依赖跟踪，但不直接编译。
 ANIMAC_HEADERS := $(wildcard $(ANIMAC_DIR)/*.h)
 
@@ -25,6 +30,7 @@ ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
                     am_native_Touch.c am_native_Imu.c \
                     am_native_Key.c am_native_Fs.c am_native_Ui.c am_native_App.c nano_key_events.c \
                     am_native_Chat.c am_native_Raster.c am_native_Music.c am_native_Audio.c \
+                    am_native_Rec.c $(AQUA_SRCS) \
                     ui_scheme_app.c luckfox_am_native_String.c
 ANIMAC_HOST_HEADERS := $(wildcard $(ANIMAC_HOST_SRCS:.c=.h))
 

@@ -6,12 +6,19 @@ ANIMAC_INC  := $(ANIMAC_DIR)
 ANIMAC_SRCS := $(wildcard $(ANIMAC_DIR)/*.c)
 ANIMAC_SRCS := $(filter-out $(ANIMAC_DIR)/exclude.c, $(wildcard $(ANIMAC_DIR)/*.c))
 
+# 录音机（(native Rec)）的 MP3 压缩内核：Aqua MP3 编码器（vendor/aqua_mp3，
+# 从 /home/bd4sur/Aqua 的 aqua-c/src 原样拷贝的**编码端**文件，算法零改动）。
+AQUA_SRCS := vendor/aqua_mp3/aqua_encoder.c vendor/aqua_mp3/aqua_huff.c \
+             vendor/aqua_mp3/aqua_mdct.c vendor/aqua_mp3/aqua_qloop.c \
+             vendor/aqua_mp3/aqua_subband.c vendor/aqua_mp3/aqua_bits.c
+
 # 灵机宿主侧源码：本地库（Gfx/Time/Diag/Touch/Imu，位于 infer/ 而**不在** vendor/Animac 里）
 # + 灵机应用程序运行时。任何链接 ui_app.c 的目标都需要它们，缺一个就在链接阶段报未定义符号。
 ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
                     am_native_Touch.c am_native_Imu.c \
                     am_native_Key.c am_native_Fs.c am_native_Ui.c am_native_App.c nano_key_events.c \
                     am_native_Chat.c am_native_Raster.c am_native_Music.c am_native_Audio.c \
+                    am_native_Rec.c $(AQUA_SRCS) \
                     ui_scheme_app.c
 
 # ui_app.c 直接引用的业务模块（GUI 目标共用；同样缺一个就链接失败）
