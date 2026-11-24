@@ -19,9 +19,6 @@ static uint8_t S_UI_COLOR_HEADER_TEXT[3]   = {255, 255, 255};
 static uint8_t S_UI_COLOR_FOOTER_BG[3]     = {224, 230, 234};
 static uint8_t S_UI_COLOR_FOOTER_TEXT[3]   = {90 , 98 , 106};
 
-static uint8_t S_UI_COLOR_IME_HELP_BG[3]   = {222, 222, 222};
-static uint8_t S_UI_COLOR_IME_HELP_TEXT[3] = {0  , 0  , 0  };
-
 // 输入法候选列表（候选字/候选符号）颜色，随全局颜色风格切换（由 ui_ime_candidate_color_apply 应用）
 static uint8_t S_UI_COLOR_IME_CANDIDATE_BG[3]     = {232, 235, 243}; // 候选列表底色
 static uint8_t S_UI_COLOR_IME_CANDIDATE_TEXT[3]   = {0  , 0  , 0  }; // 候选字/候选符号文字
@@ -1034,6 +1031,7 @@ void ui_widget_input_init(
     input_state->title_text = title_text;
     // 触屏交互（见 AGENTS.md 第九节）
     input_state->softkey_swallow_until = 0;
+    input_state->footer_btn_armed = 0;
     input_state->drawn_cursor_pos = -2; // 强制首次绘制时光标跟随
     // 终端模式（电子核桃控制台）：默认关闭，由宿主在进入时显式开启并关联日志区
     input_state->dyn_height = 0;
@@ -1082,7 +1080,7 @@ void ui_widget_input_dyn_layout(Key_Event *key_event, Global_State *global_state
 }
 
 // 切换触屏软键盘显隐，并重新布局为键盘让出/恢复空间（文本输入控件固有功能：
-// 供 Ctrl+0 组合键与页脚 [键盘] 热点调用）。与16键虚拟键盘互斥：呼出软键盘前收起16键键盘。
+// 供 Ctrl+0 组合键与页脚「全键盘」按钮调用）。与16键虚拟键盘互斥：呼出软键盘前收起16键键盘。
 void ui_widget_input_toggle_softkbd(Key_Event *key_event, Global_State *global_state) {
     if (ui_softkbd_is_visible()) {
         ui_softkbd_hide();
@@ -1107,7 +1105,7 @@ void ui_widget_input_toggle_softkbd(Key_Event *key_event, Global_State *global_s
 }
 
 // 切换16键虚拟键盘显隐，并重新布局为键盘让出/恢复空间（文本输入控件固有功能：
-// 供页脚 [16键] 热点调用）。与触屏软键盘互斥：呼出16键键盘前收起软键盘。
+// 供页脚「九键」按钮调用）。与触屏软键盘互斥：呼出16键键盘前收起软键盘。
 void ui_widget_input_toggle_grid16(Key_Event *key_event, Global_State *global_state) {
     if (ui_grid16kbd_is_visible()) {
         ui_grid16kbd_hide();
@@ -1131,44 +1129,10 @@ void ui_widget_input_toggle_grid16(Key_Event *key_event, Global_State *global_st
     ui_widget_input_refresh(key_event, global_state, global_state->w_input_main);
 }
 
-// 绘制文本输入操作说明
-static void ui_draw_input_help(Key_Event *key_event, Global_State *global_state) {
-    uint32_t font_id = global_state->ui_font;
-    int32_t line_height = gfx_font_line_height(font_id);
-    int32_t cx = global_state->gfx->width / 2;
-    int32_t cy = 5 + 6;
-    // 触屏软键盘与16键虚拟键盘显示时，帮助页为其让出空间
-    gfx_draw_rectangle(global_state->gfx, 3, 3, global_state->gfx->width - 6, global_state->gfx->height - ui_softkbd_height() - ui_grid16kbd_height() - 6, S_UI_COLOR_IME_HELP_BG[0], S_UI_COLOR_IME_HELP_BG[1], S_UI_COLOR_IME_HELP_BG[2], 3);
-    gfx_font_draw_text_centered(global_state->gfx, font_id, L"文本输入操作说明", cx, cy, 0, 0, 222, 1);
-    cy += line_height;
-    gfx_font_draw_text_centered(global_state->gfx, font_id, L"A-退格/返回  B-切换汉英数",   cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
-    cy += line_height;
-    gfx_font_draw_text_centered(global_state->gfx, font_id, L"C-第二功能  D-输入/提交",    cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
-    cy += line_height;
-    gfx_font_draw_text_centered(global_state->gfx, font_id, L"Ctrl+1选择符号 左右键移动光标",  cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
-    cy += line_height;
-    gfx_font_draw_text_centered(global_state->gfx, font_id, L"按住D语音输入 Ctrl+D 换行",    cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
-    cy += line_height;
-    gfx_font_draw_text_centered(global_state->gfx, font_id, L"Ctrl+2 切换思考模式",          cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
-    cy += line_height;
-    gfx_font_draw_text_centered(global_state->gfx, font_id, L"Ctrl+A 放弃输入并返回",        cx, cy, S_UI_COLOR_IME_HELP_TEXT[0], S_UI_COLOR_IME_HELP_TEXT[1], S_UI_COLOR_IME_HELP_TEXT[2], 1);
-
-    // 触屏软键盘与16键虚拟键盘：帮助页为其让出空间，同帧重绘
-    //（Ctrl 状态可能刚被消费型组合键复位，键盘文案/高亮需同步刷新）
-    if (ui_softkbd_height() > 0) {
-        ui_softkbd_draw(global_state->gfx, (uint8_t)global_state->is_ctrl_enabled);
-    }
-    if (ui_grid16kbd_height() > 0) {
-        ui_grid16kbd_draw(global_state->gfx, (uint8_t)global_state->is_ctrl_enabled);
-    }
-
-    gfx_refresh(global_state->gfx);
-}
-
-
 // 离开文本输入控件时的清理（控件两个退出分支 return prev/next_focus_state 处调用）：
 // 收起软键盘与16键虚拟键盘并恢复布局（两者均为控件固有功能，随控件退出而关闭）
 static void ui_widget_input_on_leave(Global_State *global_state, Widget_Input_State *input_state) {
+    input_state->footer_btn_armed = 0;
     if (ui_softkbd_is_visible() || ui_grid16kbd_is_visible()) {
         ui_softkbd_hide();
         ui_grid16kbd_hide();
@@ -1197,6 +1161,7 @@ void ui_widget_input_back_cleanup(Global_State *global_state, Widget_Input_State
     input_state->alphabet_current_key = 255;
     input_state->alphabet_index = 0;
     input_state->ime_mode_flag = IME_MODE_HANZI; // 汉英数输入模式回初始
+    input_state->footer_btn_armed = 0;           // 页脚触屏按钮按下态
     ui_pinyin_ime_reset();                       // 全键盘拼音组字
     if (global_state->is_ctrl_enabled == 1) {
         global_state->is_ctrl_enabled = 0;       // 全局 Ctrl 状态
@@ -1357,7 +1322,169 @@ int32_t ui_swipe_tracker_displacement(const UI_Swipe_Tracker *tracker, int8_t di
 }
 
 // 软键盘手势的跟踪器已随像素级滚动改造退役（见 AGENTS.md 第九节）：
-// 原“上滑呼出/下滑收起软键盘”手势由页脚热点虚拟按钮替代
+// 原“上滑呼出/下滑收起软键盘”手势由页脚触屏按钮替代
+
+// ===============================================================================
+// 页脚触屏按钮（全键盘 / 九键）
+//
+// 底栏左右两枚真实按钮控件：无边框，只用底色区分常态 / 已激活（对应键盘可见）/
+// 按下（手指按住且现在松手会触发）。手势语义与应用退出确认模态框的按钮一致：
+//   · 按下 → 按住 → 松开，三处都在同一枚按钮矩形内才算一次点按；
+//   · 按住后把手指拖出矩形 → 立即弹起（恢复常态）且不再触发，拖回又亮；
+//   · 按下点不在矩形内（从外面拖进来）→ 不亮，也不会触发。
+// 页脚带被候选条/字母指示器占用时按钮整体停用（不绘制、不响应）。
+// ===============================================================================
+#define UI_INPUT_FOOTER_BTN_FONT  (GFX_FONT_ALPHA_12)
+#define UI_INPUT_FOOTER_BTN_PAD_X (6)
+#define UI_INPUT_FOOTER_BTN_MIN_W (40)
+
+static int32_t ui_input_footer_btn_visible(Widget_Input_State *input_state) {
+    if (ui_softkbd_height() > 0 && ui_pinyin_ime_is_composing()) return 0;
+    if (input_state->state == 1 || input_state->state == 2 || input_state->state == 3) return 0;
+    if (input_state->ime_mode_flag == IME_MODE_ALPHABET && input_state->alphabet_is_counting_down == 1) return 0;
+    return 1;
+}
+
+// 几何：左右按钮各按 12px 抗锯齿标签实测宽度 + 左右内边距，最小宽度兜底；
+// 高度取页脚带高减 1px（页脚带高 = 当前 UI 字体行高 + 1，与 ui_draw_footer 一致）。
+static void ui_input_footer_btn_geom(Global_State *global_state,
+    int32_t *out_lx, int32_t *out_lw, int32_t *out_rx, int32_t *out_rw,
+    int32_t *out_y, int32_t *out_h) {
+    int32_t footer_height = gfx_font_line_height(global_state->ui_font) + 1;
+    int32_t footer_bottom = (int32_t)global_state->gfx->height - (int32_t)ui_softkbd_height() - (int32_t)ui_grid16kbd_height();
+    int32_t lw = gfx_font_measure_text(UI_INPUT_FOOTER_BTN_FONT, L"全键盘") + 2 * UI_INPUT_FOOTER_BTN_PAD_X;
+    int32_t rw = gfx_font_measure_text(UI_INPUT_FOOTER_BTN_FONT, L"九键") + 2 * UI_INPUT_FOOTER_BTN_PAD_X;
+    if (lw < UI_INPUT_FOOTER_BTN_MIN_W) lw = UI_INPUT_FOOTER_BTN_MIN_W;
+    if (rw < UI_INPUT_FOOTER_BTN_MIN_W) rw = UI_INPUT_FOOTER_BTN_MIN_W;
+
+    *out_lx = 2;
+    *out_lw = lw;
+    *out_rx = (int32_t)global_state->gfx->width - 2 - rw;
+    *out_rw = rw;
+    *out_y = footer_bottom - footer_height;
+    *out_h = footer_height - 1;
+    if (*out_h < 1) *out_h = 1;
+}
+
+// 命中：1=全键盘 2=九键 0=未命中（按钮不可用时恒 0）
+static int32_t ui_input_footer_btn_hit(Global_State *global_state, Widget_Input_State *input_state,
+    int32_t x, int32_t y) {
+    if (!ui_input_footer_btn_visible(input_state)) return 0;
+    int32_t lx, lw, rx, rw, by, bh;
+    ui_input_footer_btn_geom(global_state, &lx, &lw, &rx, &rw, &by, &bh);
+    if (y < by || y >= by + bh) return 0;
+    if (x >= lx && x < lx + lw) return 1;
+    if (x >= rx && x < rx + rw) return 2;
+    return 0;
+}
+
+// 单枚按钮：底色即状态——常态/已激活（键盘可见）/按下（armed）；按下时标签下沉 1px
+static void ui_input_footer_btn_draw_one(Global_State *global_state,
+    int32_t x, int32_t w, int32_t y, int32_t h, const wchar_t *label, int32_t is_on, int32_t is_pressed) {
+    uint8_t bg_R, bg_G, bg_B, fg_R, fg_G, fg_B;
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        if (is_on) {
+            bg_R = 17; bg_G = 85; bg_B = 238;      // 已激活：强调蓝
+            fg_R = 255; fg_G = 255; fg_B = 255;
+            if (is_pressed) { bg_R = 88; bg_G = 142; bg_B = 252; }
+        }
+        else {
+            bg_R = 206; bg_G = 214; bg_B = 220;    // 常态：比页脚底色略深的无边框底板
+            fg_R = 60; fg_G = 68; fg_B = 76;
+            if (is_pressed) { bg_R = 190; bg_G = 198; bg_B = 210; }
+        }
+    }
+    else {
+        if (is_on) {
+            bg_R = 16; bg_G = 72; bg_B = 176;
+            fg_R = 255; fg_G = 255; fg_B = 255;
+            if (is_pressed) { bg_R = 52; bg_G = 122; bg_B = 228; }
+        }
+        else {
+            bg_R = 38; bg_G = 40; bg_B = 44;
+            fg_R = 220; fg_G = 225; fg_B = 232;
+            if (is_pressed) { bg_R = 86; bg_G = 90; bg_B = 100; }
+        }
+    }
+    gfx_draw_rectangle(global_state->gfx, x, y, w, h, bg_R, bg_G, bg_B, 1);
+    gfx_font_draw_text_centered(global_state->gfx, UI_INPUT_FOOTER_BTN_FONT, (wchar_t *)label,
+        x + w / 2, y + h / 2 + (is_pressed ? 1 : 0), fg_R, fg_G, fg_B, 1);
+}
+
+static void ui_draw_input_footer_buttons(Global_State *global_state, Widget_Input_State *input_state) {
+    if (!ui_input_footer_btn_visible(input_state)) return;
+    int32_t lx, lw, rx, rw, by, bh;
+    ui_input_footer_btn_geom(global_state, &lx, &lw, &rx, &rw, &by, &bh);
+    int32_t armed = input_state->footer_btn_armed;
+    ui_input_footer_btn_draw_one(global_state, lx, lw, by, bh, L"全键盘",
+        ui_softkbd_is_visible() ? 1 : 0, (armed == 1) ? 1 : 0);
+    ui_input_footer_btn_draw_one(global_state, rx, rw, by, bh, L"九键",
+        ui_grid16kbd_is_visible() ? 1 : 0, (armed == 2) ? 1 : 0);
+}
+
+// 每帧跟踪按下态：高亮判据 = “现在松手会不会触发”（按下点与当前点命中同一枚按钮）
+static int32_t ui_input_footer_btn_track(Global_State *global_state, Widget_Input_State *input_state, Key_Event *key_event) {
+    if (!ui_input_footer_btn_visible(input_state)) {
+        int32_t changed = (input_state->footer_btn_armed != 0);
+        input_state->footer_btn_armed = 0;
+        return changed;
+    }
+    int32_t hit_down = ui_input_footer_btn_hit(global_state, input_state,
+        key_event->touch_down_x, key_event->touch_down_y);
+    int32_t hit_now = 0;
+    if (key_event->is_touching || (key_event->touch_edge & TOUCH_EDGE_UP)) {
+        hit_now = ui_input_footer_btn_hit(global_state, input_state, key_event->touch_x, key_event->touch_y);
+    }
+    int32_t armed = (hit_down != 0 && hit_now == hit_down) ? hit_down : 0;
+    if (armed == input_state->footer_btn_armed) return 0;
+    input_state->footer_btn_armed = armed;
+    return 1;
+}
+
+// ===============================================================================
+// 页眉左上角输入法状态标签（[汉]/[En]/[数]）：可点按循环切换输入模式。
+// 触屏语义与页眉/页脚按钮一致：按下点与松开点都落在标签内才触发一次。
+// ===============================================================================
+static wchar_t *ui_input_ime_tag_label(Widget_Input_State *input_state) {
+    if (input_state->ime_mode_flag == IME_MODE_HANZI)    return L"[汉]";
+    if (input_state->ime_mode_flag == IME_MODE_ALPHABET) return L"[En]";
+    if (input_state->ime_mode_flag == IME_MODE_NUMBER)   return L"[数]";
+    return NULL;
+}
+
+static void ui_input_ime_tag_geom(Global_State *global_state, Widget_Input_State *input_state,
+    int32_t *out_x, int32_t *out_w, int32_t *out_y, int32_t *out_h) {
+    wchar_t *tag = ui_input_ime_tag_label(input_state);
+    *out_x = 1;
+    *out_w = (tag != NULL) ? gfx_font_measure_text(global_state->ui_font, tag) : 0;
+    *out_y = 0;
+    *out_h = ui_std_header_height(global_state->ui_font);
+}
+
+static int32_t ui_input_ime_tag_hit(Global_State *global_state, Widget_Input_State *input_state,
+    int32_t x, int32_t y) {
+    int32_t tx, tw, ty, th;
+    ui_input_ime_tag_geom(global_state, input_state, &tx, &tw, &ty, &th);
+    if (tw <= 0) return 0;
+    return (x >= tx && x < tx + tw && y >= ty && y < ty + th) ? 1 : 0;
+}
+
+// 循环切换汉 → 英 → 数 → 汉；放弃进行中的组字/候选，回到初始状态（键盘显隐保持不变）
+static void ui_widget_input_cycle_ime_mode(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state) {
+    input_state->ime_mode_flag = (input_state->ime_mode_flag + 1) % 3;
+    input_state->state = 0;
+    input_state->pinyin_keys = 0;
+    input_state->candidate_num = 0;
+    input_state->candidate_page_num = 0;
+    input_state->current_page = 0;
+    memset(input_state->candidates, 0, sizeof(input_state->candidates));
+    memset(input_state->candidate_pages, 0, sizeof(input_state->candidate_pages));
+    input_state->alphabet_is_counting_down = 0;
+    input_state->alphabet_current_key = 255;
+    input_state->alphabet_index = 0;
+    ui_pinyin_ime_reset();
+    ui_draw_input_buffer(key_event, global_state, input_state);
+}
 
 int32_t ui_widget_input_event_handler(
     Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state,
@@ -1366,9 +1493,10 @@ int32_t ui_widget_input_event_handler(
 
     // 触屏交互（像素级连续滚动改造，见 AGENTS.md 第九节）：
     //  - 页眉“返回”软按钮（页眉带右 1/4，认松手沿+按下点坐标）：放弃输入并返回上一状态；
-    //  - 热点虚拟按钮（页脚带左/右 1/4，认松手沿+按下点坐标）：
-    //    [键盘] 呼出/收起软键盘（等价 Ctrl+0）；[16键] 呼出/收起16键虚拟键盘。
-    //    热点动作后 150ms 内吞掉同一次触摸经宫格映射产生的残留软按键（该范式原见已移除的 C 版日历）。
+    //  - 页眉左上角输入法状态标签（[汉]/[En]/[数]）：点按循环切换输入模式；
+    //  - 页脚「全键盘」「九键」触屏按钮（认松手沿+按下点坐标，按下/按住/松开全程在同一
+    //    按钮内才触发）：全键盘呼出/收起软键盘（等价 Ctrl+0），九键呼出/收起16键虚拟键盘。
+    //    按钮动作后 150ms 内吞掉同一次触摸经宫格映射产生的残留软按键（该范式原见已移除的 C 版日历）。
     //  - 16键虚拟键盘可见（ui_grid16kbd）：触屏点按键盘按钮=九键软按键（键码由事件层
     //    ui_grid16kbd_poll 产生，见 ui_app.c get_input_event）；
     //  - 滑动=像素滚动、点按=光标定位（委托 textarea 手势机）：任意键盘显隐状态下均可用——
@@ -1386,28 +1514,39 @@ int32_t ui_widget_input_event_handler(
             ui_widget_input_back_cleanup(global_state, input_state);
             return prev_focus_state;
         }
-        // 热点虚拟按钮（页脚带 = 底部 ui_draw_footer 区域，随软键盘/16键键盘显隐上移；
-        // 页脚带被占用时热点停用防误触：全键盘拼音组词、16键输入法组字/选字/选符 state 1/2/3，
-        // 或英文字母指示器显示期间（倒计时进行中））
-        if ((key_event->touch_edge & TOUCH_EDGE_UP)
-            && !(ui_softkbd_is_visible() && ui_pinyin_ime_is_composing())
-            && input_state->state != 1 && input_state->state != 2 && input_state->state != 3
-            && !(input_state->ime_mode_flag == IME_MODE_ALPHABET && input_state->alphabet_is_counting_down == 1)) {
-            int32_t footer_height = gfx_font_line_height(global_state->ui_font) + 1;
-            int32_t footer_top = (int32_t)global_state->gfx->height - (int32_t)ui_softkbd_height() - (int32_t)ui_grid16kbd_height() - footer_height;
-            int32_t tx = key_event->touch_down_x;
-            int32_t ty = key_event->touch_down_y;
-            if (ty >= footer_top && ty < footer_top + footer_height) {
-                if (tx < (int32_t)global_state->gfx->width / 4) {          // [键盘]
+        // 页眉左上角输入法状态标签：点按循环切换汉/En/数（拖出标签不触发，同其它按钮）
+        if (key_event->touch_edge & TOUCH_EDGE_UP) {
+            int32_t hit_down = ui_input_ime_tag_hit(global_state, input_state,
+                key_event->touch_down_x, key_event->touch_down_y);
+            int32_t hit_up = ui_input_ime_tag_hit(global_state, input_state,
+                key_event->touch_x, key_event->touch_y);
+            if (hit_down != 0 && hit_down == hit_up) {
+                ui_widget_input_cycle_ime_mode(key_event, global_state, input_state);
+                return current_focus_state;
+            }
+        }
+        // 页脚触屏按钮：按下态每帧跟踪，变化时只重绘两枚按钮（整帧重绘仍由 ui_draw_input_buffer 负责）
+        if (ui_input_footer_btn_track(global_state, input_state, key_event)
+            && ui_input_footer_btn_visible(input_state)) {
+            ui_draw_input_footer_buttons(global_state, input_state);
+            gfx_refresh(global_state->gfx);
+        }
+        // 页脚触屏按钮结算：按下点与松开点命中同一枚按钮才触发（拖出即弹起、不触发）
+        if (key_event->touch_edge & TOUCH_EDGE_UP) {
+            int32_t hit_down = ui_input_footer_btn_hit(global_state, input_state,
+                key_event->touch_down_x, key_event->touch_down_y);
+            int32_t hit_up = ui_input_footer_btn_hit(global_state, input_state,
+                key_event->touch_x, key_event->touch_y);
+            if (hit_down != 0 && hit_down == hit_up) {
+                input_state->footer_btn_armed = 0;
+                if (hit_down == 1) {
                     ui_widget_input_toggle_softkbd(key_event, global_state);
-                    input_state->softkey_swallow_until = get_timestamp_in_ms() + 150;
-                    return current_focus_state;
                 }
-                else if (tx >= (int32_t)global_state->gfx->width * 3 / 4) { // [16键]
+                else {
                     ui_widget_input_toggle_grid16(key_event, global_state);
-                    input_state->softkey_swallow_until = get_timestamp_in_ms() + 150;
-                    return current_focus_state;
                 }
+                input_state->softkey_swallow_until = get_timestamp_in_ms() + 150;
+                return current_focus_state;
             }
         }
         // 宫格软按键门控（兜底；宿主状态的全屏宫格映射已在事件层抑制）：
@@ -1596,14 +1735,7 @@ int32_t ui_widget_input_event_handler(
 
         // 短按1-9：输入拼音/字母/数字，根据输入模式标志，转向不同的状态
         else if (key_event->key_edge == -1 && (key_event->key_code >= NANO_KEY_1 && key_event->key_code <= NANO_KEY_9)) {
-            // Ctrl+2：切换思考模式/非思考模式
-            if (global_state->is_ctrl_enabled == 1 && key_event->key_code == NANO_KEY_2) {
-                global_state->is_ctrl_enabled = 0;
-                global_state->is_thinking_enabled = 1 - global_state->is_thinking_enabled;
-                ui_draw_input_buffer(key_event, global_state, input_state);
-            }
-
-            else if (input_state->ime_mode_flag == IME_MODE_HANZI) {
+            if (input_state->ime_mode_flag == IME_MODE_HANZI) {
                 if (key_event->key_code >= NANO_KEY_2 && key_event->key_code <= NANO_KEY_9) { // 仅响应按键2-9；1无动作
                     input_state->state = 1;
                     ui_widget_input_event_handler(
@@ -1635,7 +1767,7 @@ int32_t ui_widget_input_event_handler(
                 }
 
                 // 在页脚（底栏）带内循环显示当前选中的字母（每个字母的占位宽度按当前字体逐字符实际宽度计算）：
-                // 显示前先清空页脚带（含页脚文本与 [键盘]/[16键] 热点标签，底色与页脚一致）；
+                // 显示前先清空页脚带（含页脚文本与「全键盘」/「九键」按钮，底色与页脚一致）；
                 // 倒计时结束提交字母后 ui_draw_input_buffer 整体重绘，恢复页脚全部内容
                 wchar_t letter[2];
                 uint32_t font_id = global_state->ui_font;
@@ -1687,7 +1819,7 @@ int32_t ui_widget_input_event_handler(
             }
         }
 
-        // 长+短按B键：依次切换汉-英-数输入模式 / 或Ctrl显示帮助
+        // 长+短按B键：依次切换汉-英-数输入模式
         else if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_shift) {
             // 如果非Ctrl状态，则依次切换汉-英-数输入模式
             if (global_state->is_ctrl_enabled == 0) {
@@ -1700,12 +1832,16 @@ int32_t ui_widget_input_event_handler(
                 }
                 input_state->state = 0;
             }
-            // 如果Ctrl，则显示帮助文本
+            // Ctrl 状态下无帮助页可显示（使用说明模态框已移除）：作为消费型组合键复位 Ctrl，
+            // 并执行与正常 B 键相同的输入模式切换
             else {
-                // 重置Ctrl状态
                 global_state->is_ctrl_enabled = 0;
-                ui_draw_input_help(key_event, global_state);
-                input_state->state = 9;
+                if (key_event->is_softkbd == 0) {
+                    input_state->ime_mode_flag = (input_state->ime_mode_flag + 1) % 3;
+                    ui_pinyin_ime_reset(); // 切换输入模式时，放弃进行中的拼音组字
+                }
+                input_state->state = 0;
+                ui_draw_input_buffer(key_event, global_state, input_state);
             }
         }
 
@@ -1943,15 +2079,6 @@ int32_t ui_widget_input_event_handler(
             input_state->pinyin_keys = 0;
             input_state->state = 0;
             ui_draw_input_buffer(key_event, global_state, input_state);
-        }
-    }
-
-    // 特殊状态：显示使用说明
-    else if (state == 9) {
-        // 按任意键返回状态0
-        if ((key_event->key_edge < 0) && key_event->key_code != NANO_KEY_IDLE) {
-            ui_draw_input_buffer(key_event, global_state, input_state);
-            input_state->state = 0;
         }
     }
 
@@ -2487,7 +2614,7 @@ void ui_draw_input_buffer(Key_Event *key_event, Global_State *global_state, Widg
         ui_draw_input_symbol(key_event, global_state, input_state);
     }
     else {
-        ui_draw_footer(key_event, global_state, L"Ctrl+Shift 使用说明", 1);
+        ui_draw_footer(key_event, global_state, L"", 1); // 底栏仅保留左右两枚触屏按钮，不再显示提示语
     }
 
     // 顶部：标题居中；右侧“返回”标签作为页眉固有部分经 ui_draw_header_full 随页眉同时机绘制
@@ -2498,35 +2625,15 @@ void ui_draw_input_buffer(Key_Event *key_event, Global_State *global_state, Widg
     int32_t line_height = gfx_font_line_height(font_id);
     int32_t header_text_y = (ui_std_header_height(global_state->ui_font) - line_height) / 2; // 状态图标在页眉内垂直居中
 
-    // 页脚热点虚拟按钮（见 AGENTS.md 第九节）：左 [键盘] 呼出/收起软键盘，右 [16键] 呼出/收起16键虚拟键盘；
-    // 命中判定见 ui_widget_input_event_handler 触屏分支（页脚带左/右 1/4）。
-    // 页脚带被候选条占用时（全键盘拼音组词 / 16键输入法 state 1/2/3）不绘制热点标签
-    if (!(ui_softkbd_height() > 0 && ui_pinyin_ime_is_composing())
-        && input_state->state != 1 && input_state->state != 2 && input_state->state != 3)
-    {
-        const int32_t footer_height = line_height + 1;
-        const int32_t footer_bottom = (int32_t)global_state->gfx->height - (int32_t)ui_softkbd_height() - (int32_t)ui_grid16kbd_height();
-        const int32_t footer_text_y = footer_bottom - footer_height + footer_height / 2 - line_height / 2;
-        uint8_t btn_R = 102, btn_G = 204, btn_B = 255; // 暗色：滚动条前景同色系
-        if (global_state->ui_color_style == UI_COLOR_LIGHT) { btn_R = 17; btn_G = 85; btn_B = 238; }
-        gfx_font_draw_text(global_state->gfx, font_id, L"[键盘]", 2, footer_text_y, btn_R, btn_G, btn_B, 1);
-        wchar_t *grid16_label = L"[16键]";
-        int32_t grid16_w = gfx_font_measure_text(font_id, grid16_label);
-        if (ui_grid16kbd_is_visible()) {
-            gfx_font_draw_text(global_state->gfx, font_id, grid16_label, (int32_t)global_state->gfx->width - 2 - grid16_w, footer_text_y, 255, 255, 0, 1);
-        }
-        else {
-            gfx_font_draw_text(global_state->gfx, font_id, grid16_label, (int32_t)global_state->gfx->width - 2 - grid16_w, footer_text_y, btn_R, btn_G, btn_B, 1);
-        }
-    }
+    // 页脚触屏按钮（见上方 ui_input_footer_btn_*）：左「全键盘」呼出/收起软键盘，
+    // 右「九键」呼出/收起16键虚拟键盘；无边框，底色标记激活/按下状态。
+    // 页脚带被候选条占用时（全键盘拼音组词 / 16键输入法 state 1/2/3）不绘制按钮
+    ui_draw_input_footer_buttons(global_state, input_state);
 
     // 左上角状态图标：自页眉左缘起从左往右按各字符串的实际渲染宽度紧凑排列（均垂直居中）
     int32_t left_x = 1;
-    // 显示输入状态
-    wchar_t *ime_tag = NULL;
-    if (input_state->ime_mode_flag == IME_MODE_HANZI)         ime_tag = L"[汉]";
-    else if (input_state->ime_mode_flag == IME_MODE_ALPHABET) ime_tag = L"[En]";
-    else if (input_state->ime_mode_flag == IME_MODE_NUMBER)   ime_tag = L"[数]";
+    // 显示输入状态（点按循环切换，命中判定见 ui_input_ime_tag_hit）
+    wchar_t *ime_tag = ui_input_ime_tag_label(input_state);
     if (ime_tag) {
         gfx_font_draw_text(global_state->gfx, font_id, ime_tag, left_x, header_text_y, 255, 255, 0, 1);
         left_x += gfx_font_measure_text(font_id, ime_tag) + 1;
@@ -2535,10 +2642,6 @@ void ui_draw_input_buffer(Key_Event *key_event, Global_State *global_state, Widg
     if (global_state->is_ctrl_enabled == 1) {
         gfx_font_draw_text(global_state->gfx, font_id, L"◆", left_x, header_text_y, 255, 255, 255, 1);
         left_x += gfx_font_measure_text(font_id, L"◆") + 1;
-    }
-    // 显示思考模式启用状态
-    if (global_state->is_thinking_enabled == 1) {
-        gfx_font_draw_text(global_state->gfx, font_id, L"Ψ", left_x, header_text_y, 0, 255, 255, 1);
     }
 
 

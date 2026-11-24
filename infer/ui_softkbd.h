@@ -45,7 +45,7 @@ int32_t ui_softkbd_height();
 // 触屏轮询（每次主循环由 get_input_event 调用一次；触屏样本由事件层统一采样传入）：
 // 返回当前键码（NANO_KEY_*），无键返回 NANO_KEY_IDLE。修饰键行为：
 //   - SFT：切换大写粘滞态，同时产生一次 NANO_KEY_shift 传递给UI框架（两者耦合）；
-//     框架对软键盘来源的Shift不切换输入模式（软键盘模式下用 Ctrl+空格 切换），仅在Ctrl激活时显示帮助；
+//     框架对软键盘来源的Shift不切换输入模式（软键盘模式下用 Ctrl+空格 切换）；
 //   - SYM：点按切换符号层粘滞态，不产生键码；
 //   - CTRL/ALT：点按产生 NANO_KEY_ctrl / NANO_KEY_alt，复用UI框架原生Ctrl机制。
 // 按住重复触发：除 Ctrl/SFT/Alt/SYM/Esc 外，其余键在按住期间持续上报锁存键码

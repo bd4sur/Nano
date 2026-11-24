@@ -97,7 +97,7 @@ typedef struct Global_State {
     float llm_top_p;
     uint32_t llm_top_k;
     uint32_t llm_max_seq_len;
-    int32_t is_thinking_enabled; // 是否开启思考模式：1-是，0-否
+    int32_t is_thinking_enabled; // 推理强度档位（1=开/0=关）；文本输入控件的切换入口已移除，当前恒为 1
     wchar_t *llm_output_of_last_session;
     float tps_of_last_session;
     int32_t token_num_of_last_session;
@@ -268,11 +268,13 @@ typedef struct Widget_Input_State {
     // 杂项
     wchar_t *title_text;  // 顶部标题
     // 触屏交互（见 AGENTS.md 第九节）：
+    // 页眉左上角输入法状态标签 [汉]/[En]/[数]：点按循环切换输入模式（拖出标签不触发）。
     // 十六键虚拟键盘（ui_grid16kbd 模块，显隐为模块全局状态 ui_grid16kbd_is_visible）：
-    // 页脚 [16键] 热点呼出/收起（ui_widget_input_toggle_grid16，与触屏软键盘互斥）。
+    // 页脚「九键」按钮呼出/收起（ui_widget_input_toggle_grid16，与触屏软键盘互斥）。
     // 键盘可见时：触屏点按键盘按钮=九键软按键（替代旧的全屏4x4宫格隐式映射），
     // 不解释滚动/光标；键盘隐藏时（默认）：点按=光标定位、滑动=像素滚动。
     uint64_t softkey_swallow_until; // 热点动作后吞掉宫格残留软按键的截止时间戳（ms）
+    int32_t footer_btn_armed;       // 页脚触屏按钮按下态：0=无，1=全键盘，2=九键（按住时当前松手会触发哪一枚）
     int32_t drawn_cursor_pos;       // 上次绘制时的光标位置：光标跟随滚动仅在光标变化时触发，
                                     // 避免触屏手动滚动后被光标跟随拉回（初始 -2 强制首次跟随）
     // 终端模式（电子核桃控制台，见 AGENTS.md）：输入框高度随内容排版行数动态调整——
@@ -398,10 +400,10 @@ void ui_widget_input_refresh(Key_Event *key_event, Global_State *global_state, W
 // 输入框下沿锚定页脚上沿、高度=clamp(内容行数,1,上限)*行高；日志区上沿钉页眉下沿、下沿接输入框上沿。
 // 调用前须保证输入框已完成排版（line_num 有效，见 typeset_line_breaks）。
 void ui_widget_input_dyn_layout(Key_Event *key_event, Global_State *global_state, Widget_Input_State *input_state);
-// 切换触屏软键盘显隐（文本输入控件固有功能，供 Ctrl+0 组合键与页脚 [键盘] 热点调用）：
+// 切换触屏软键盘显隐（文本输入控件固有功能，供 Ctrl+0 组合键与页脚「全键盘」按钮调用）：
 // 联动全键盘拼音组字重置，并重新布局文本区为键盘让出/恢复空间。
 void ui_widget_input_toggle_softkbd(Key_Event *key_event, Global_State *global_state);
-// 切换16键虚拟键盘显隐（文本输入控件固有功能，供页脚 [16键] 热点调用）：
+// 切换16键虚拟键盘显隐（文本输入控件固有功能，供页脚「九键」按钮调用）：
 // 与触屏软键盘互斥，联动全键盘拼音组字重置，并重新布局文本区为键盘让出/恢复空间。
 void ui_widget_input_toggle_grid16(Key_Event *key_event, Global_State *global_state);
 // 在文本框的光标位置之后插入/删除一个字符（触屏软键盘及其拼音输入法也会调用）

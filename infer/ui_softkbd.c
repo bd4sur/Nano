@@ -329,7 +329,7 @@ void ui_softkbd_draw(Nano_GFX *gfx, uint8_t is_ctrl_active) {
             // 右侧与下侧各留1px给边界色
             gfx_draw_rectangle(gfx, x0, y0, x1 - x0 - 1, key_h - 1, bg_R, bg_G, bg_B, 1);
 
-            gfx_font_draw_text_centered(gfx, GFX_FONT_BITMAP_12, k->label,
+            gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, k->label,
                 (x0 + x1) / 2, y0 + key_h / 2, UI_SOFTKBD_COLOR_LABEL, 1);
         }
     }

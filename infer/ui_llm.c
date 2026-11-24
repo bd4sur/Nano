@@ -358,9 +358,9 @@ static void llm_nm_session_free(Global_State *gs) {
 //   API 信息（BD4SUR 2026-10；API 为内网自建服务，基址不入源码/文档，避免随仓库泄露内网拓扑）：
 //     - 服务：内网自建 OpenAI 兼容 API（SSE 流式）；基址经环境变量 NANO_RM_API_BASE
 //       或编译期宏 LLM_RM_API_BASE_BUILD 提供（见下方 llm_rm_api_base）
-//     - 模型：GLM-5.3-Flash-EXL3；思考强度：思考模式开（默认）= max（reasoning_effort），
-//       思考模式关（输入态 Ctrl+2 切换）= none（经实测校准，该 API 支持
-//       none/minimal/low/medium/high/xhigh/max 七档）
+//     - 模型：GLM-5.3-Flash-EXL3；思考强度固定为 max（reasoning_effort）。
+//       输入控件的思考模式切换已移除，is_thinking_enabled 恒为 1（保留字段供推理层
+//       统一取值；该 API 本身支持 none/minimal/low/medium/high/xhigh/max 七档）
 //     - WASM（NANO_WASM_GUI）例外：浏览器同源策略下跨源 fetch 被阻（API 不支持
 //       CORS 预检），故经测试服务的同源反向代理 /v1 访问（见 tools/https_static_server.py）
 // ===============================================================================
@@ -385,8 +385,8 @@ static const char *llm_rm_api_base(void) {
 #endif
 }
 #define LLM_RM_MODEL_ID        "GLM-5.3-Flash-EXL3"
-#define LLM_RM_REASONING_EFFORT_MAX  "max"   // 思考模式开（预设规格：思考强度 max）
-#define LLM_RM_REASONING_EFFORT_NONE "none" // 思考模式关（Ctrl+2 切换）
+#define LLM_RM_REASONING_EFFORT_MAX  "max"   // 思考强度：max（输入控件不再提供切换，恒用此档）
+#define LLM_RM_REASONING_EFFORT_NONE "none" // 保留供推理层取值（当前恒不选用）
 #define LLM_RM_MENU_NAME       L"远端模型（云端API）"  // 模型菜单条目名
 #define LLM_RM_MODEL_NAME      L"远端模型"             // 输入/推理/结果页标题名
 #define LLM_RM_MAX_SEQ_LEN     (8192)                  // 结果页统计显示用上限（远端无本地KV限制）
@@ -723,9 +723,8 @@ static int32_t llm_rm_session_begin(Key_Event *ke, Global_State *gs) {
         esc[w] = 0;
     }
 
-    // 请求体：OpenAI 兼容对话补全（流式）。思考强度：思考模式开（默认）= max（远端模型
-    // 预设规格），思考模式关（输入态 Ctrl+2 可切换，页眉 Ψ 标记）= none（实测该 API
-    // 支持 none/minimal/low/medium/high/xhigh/max，none 时不产生 reasoning_content）
+    // 请求体：OpenAI 兼容对话补全（流式）。思考强度：输入控件的思考模式切换已移除，
+    // is_thinking_enabled 恒为 1，故恒用 max（远端模型预设规格）
     size_t body_cap = strlen(esc) + 320;
     char *body = (char *)platform_calloc(body_cap, 1);
     if (!body) { free(esc); free(user_utf8); return -1; }

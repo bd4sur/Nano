@@ -56,8 +56,8 @@ static const wchar_t *S_GRID16KBD_LABEL_NORMAL[4][4][2] = {
     {{L"←", NULL},     {L"0", NULL}, {L"→", NULL},    {L"确认", NULL}},
 };
 static const wchar_t *S_GRID16KBD_LABEL_CTRL[4][4][2] = {
-    {{L"符号", NULL},      {L"思考模式", NULL}, {L"3", L"DEF"}, {L"退出", NULL}},
-    {{L"4", L"GHI"},      {L"5", L"JKL"}, {L"6", L"MNO"}, {L"帮助", NULL}},
+    {{L"符号", NULL},      {L"2", L"ABC"},     {L"3", L"DEF"}, {L"退出", NULL}},
+    {{L"4", L"GHI"},      {L"5", L"JKL"},     {L"6", L"MNO"}, {L"输入法", NULL}},
     {{L"7", L"PQRS"},     {L"8", L"TUV"}, {L"9", L"WXYZ"}, {L"[Ctrl]", NULL}},
     {{L"↑", NULL},        {L"键盘", NULL},  {L"↓", NULL},  {L"换行", NULL}},
 };
