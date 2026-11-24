@@ -190,11 +190,19 @@
 
 ;; ---- 高度：精确（已布局）/ 估算（按码点数）-------------------------------
 
+;; 未布局段的高度估算 = max(码点数 × 校准系数, **源码行数 × 行高**)。
+;; 后者是「单个换行 = 段内换行」规则（2026-11-24）之后的下限：每个源码行至少占一行显示行，
+;; 于是"一行一行写"的文档（诗歌/清单/中文硬折行）不再被低估成半屏——否则滚动条与百分比
+;; 会明显偏小。行高取排版模块当前的 LINE_H（换字模后自动跟随）。
 (define est_h
   (lambda (i)
     (define rec (get_item vw_segs i))
     (define e 0)
-    (set! e (Math.floor (* (get_item rec 3) vw_cal)))
+    (define bychars 0)
+    (define bylines 0)
+    (set! bychars (Math.floor (* (get_item rec 3) vw_cal)))
+    (set! bylines (* (get_item rec 2) MDL.LINE_H))
+    (set! e (max2 bychars bylines))
     (if (< e 15) 15 e)))
 
 (define height

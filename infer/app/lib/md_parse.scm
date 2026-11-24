@@ -31,6 +31,17 @@
 ;;        (imath "源串")              行内数学公式 $...$ / $$...$$：只收 LaTeX 源串，
 ;;                                    排版与绘制在 md_layout / App 端（与块级公式同一套引擎）。
 ;;                                    `\$` 是字面美元号；`$$` 包裹的也当行内公式（样式同）。
+;;        (br)                        **段内换行**：源码里的单个换行符。不分段、不留段落间距，
+;;                                    排版端在行高不变的前提下强制换行（见下方「段落规则」）。
+;;
+;; 段落规则（2026-11-24 新增，与 CommonMark 的"软换行"不同）
+;; ---------------------------------------------------------------------------
+;; 块内（段落 / 列表项正文 / 引用块内的段落）的**单个换行符 = 段内换行**：
+;;   · 只有**空行**才分段（分段才有段间距）；
+;;   · 段落内的行与行之间以 "\n" 拼接（(line_join)），由 (parse_inlines) 变成 (br) 节点；
+;;   · 好处：手写的一行一行（诗歌、地址、代码清单、中文硬折行）能原样保持换行；
+;;     代价：源码里按 80 列硬折行的英文段落会每行都断一次——这是本规则的既定语义。
+;; 早期这里是"软换行"（CJK 直接相接、半角之间补空格，折行全交给排版端），已废弃。
 ;;
 ;; 设计要点（为「完整 Markdown」预留的三个扩展点）
 ;; ---------------------------------------------------------------------------
@@ -169,15 +180,14 @@
         (set! i (+ i 1)) })
     r))
 
-;; 两个字符串相拼接：两侧都是全角（CJK）时直接相连，否则补一个空格（软换行语义）
-(define soft_join
+;; 段落内的行拼接：**单个换行 → 段内换行**——用换行符（反斜杠 n 两个字符）连接两行，
+;; 由 parse_inlines 变成 (br) 节点。见文件头「段落规则」：早期这里是"软换行"
+;; （CJK 相接、半角补空格，折行全交给排版端），已废弃。
+(define line_join
   (lambda (a b)
-    (define la (String.length a))
-    (if (== la 0) b
+    (if (== (String.length a) 0) b
         (if (== (String.length b) 0) a
-            (if (>= (String.charCodeAt (- la 1) a) CJK_BASE)
-                (String.concat a b)
-                (String.concat a (String.concat " " b)))))))
+            (String.concat a (String.concat "\n" b))))))
 
 ;; 去掉行首最多 k 个空格（围栏代码块的内容缩进对齐）
 (define strip_lead
@@ -416,15 +426,23 @@
     (while (< i n)
       { (set! mt (inline_matcher_of (String.charCodeAt i s)))
         (set! m (if mt (mt s i) #f))
-        (if m
+        (if (== (String.charCodeAt i s) CP_NL)
+            ;; 源码换行 → 段内换行节点（段落/列表项里的行拼接见 (line_join)）
             { (if (> (String.length buf) 0)
                   { (push out (mk2 'text buf))
                     (set! buf "") }
                   #f)
-              (push out (get_item m 0))
-              (set! i (get_item m 1)) }
-            { (set! buf (String.concat buf (String.charAt s i)))
-              (set! i (+ i 1)) }) })
+              (push out (mk1 'br))
+              (set! i (+ i 1)) }
+            (if m
+                { (if (> (String.length buf) 0)
+                      { (push out (mk2 'text buf))
+                        (set! buf "") }
+                      #f)
+                  (push out (get_item m 0))
+                  (set! i (get_item m 1)) }
+                { (set! buf (String.concat buf (String.charAt s i)))
+                  (set! i (+ i 1)) })) })
     (if (> (String.length buf) 0) (push out (mk2 'text buf)) #f)
     out))
 
@@ -625,7 +643,7 @@
 
 ;; ---- 各类块的处理函数（输入 lines/下标，输出 (块 下一行下标)）-------------
 
-;; 段落：连续的非空、非其它块起始行；行间以「软换行」拼接（CJK 之间不加空格）
+;; 段落：连续的非空、非其它块起始行；**行间以 "\n" 拼成段内换行**（见文件头「段落规则」）
 (define h_para
   (lambda (lines idx)
     (define n (length lines))
@@ -637,7 +655,7 @@
     (while (and (< i n) (== stop 0))
       { (set! k (classify lines i))
         (if (== k 'para)
-            { (set! txt (soft_join txt (trim (get_item lines i))))
+            { (set! txt (line_join txt (trim (get_item lines i))))
               (set! i (+ i 1)) }
             (set! stop 1)) })
     (set! inl (parse_inlines txt))
@@ -766,7 +784,8 @@
                   (set! has 1)
                   (set! i (+ i 1)) }
                 (if (== k 'para)
-                    { (set! cur_text (soft_join cur_text (trim line)))
+                    { ;; 列表项正文里的单个换行同样是段内换行（与段落一致）
+                      (set! cur_text (line_join cur_text (trim line)))
                       (set! i (+ i 1)) }
                     (set! stop 1)))) })
     (if (== has 1)

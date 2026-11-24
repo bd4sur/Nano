@@ -37,6 +37,7 @@
 ;;   9 表格竖线    10 引用块竖线   11 二级标题装饰竖线
 ;;   12 块级图片   13 图片占位框   14 行内图片占位文本   15 水平线段   16 块级数学公式
 ;;   17 行内数学公式
+;;   18 段内换行（仅排版期的原子标记，不会落到段表里）
 ;;
 ;; 字宽：本机 12px alpha 字模是等宽的——半角步进 7px、全角（>= U+2E80）12px
 ;;   （实测：i/M/W/a 均为 7，中文/全角标点为 12；见 infer/glyph_12.h 头注释）。
@@ -75,6 +76,8 @@
 (define ST_MATH 16)       ;; 块级数学公式（段的 0 格存 LaTeX 源串，绘制端按它取缓存的 op 流）
 (define ST_IMATH 17)      ;; 行内数学公式（段的 0 格存 LaTeX 源串、4 格存 em；绘制端按
                           ;; (源串 em) 取缓存的 op 流，基线跟同一行的文字基线对齐）
+(define ST_BR 18)         ;; **段内换行**的原子标记（不是段！pack_segs 见到它就收尾当前行，
+                          ;; 因此永远不会出现在显示行的段表里，绘制端不需要认识它）
 
 (define BG_NONE 0)
 (define BG_CODE 1)
@@ -267,6 +270,7 @@
 ;;   (link <节点列表> "url") —— 元素 1 是节点列表，元素 2 是目标地址
 ;;   (code "s")            —— 元素 1 是字符串
 ;;   (imath "src")         —— 行内公式，原子形状见下
+;;   (br)                  —— 段内换行（源码单个换行符）→ 断行原子 ("" ST_BR 0 url)
 ;;
 ;; 公式原子 = (源串 ST_IMATH 宽 url 上高 下深 em)：比文本原子多三个字段，
 ;; 供折行时算「本行要让多少位」（上/下让位）与绘制端按 (源串 em) 取缓存的 op 流。
@@ -301,7 +305,11 @@
                                  ST_IMAGE_TEXT)
                                 (if (== tag 'imath)
                                     (imath_atom (get_item nd 1))
-                                    #f)))))))
+                                    ;; 段内换行：只放一个"断行标记"原子，
+                                    ;; pack_segs 见到它就收尾当前行
+                                    (if (== tag 'br)
+                                        (push atoms (mk4 "" ST_BR 0 atom_url))
+                                        #f))))))))
         (set! i (+ i 1)) })
     #t))
 
@@ -362,6 +370,8 @@
           ((== tag 'image) (set! out (String.concat out (get_item nd 2))))
           ;; 行内公式：目录/纯文本化时取 LaTeX 源串（不丢内容）
           ((== tag 'imath) (set! out (String.concat out (get_item nd 1))))
+          ;; 段内换行：纯文本化时什么也不加（目录条目本来就是单行）
+          ((== tag 'br) #f)
           (else #f))
         (set! i (+ i 1)) })
     out))
@@ -466,26 +476,36 @@
     (define lbot 0)
     (while (< k na)
       { (set! at (get_item atoms k))
-        (set! is_sp (String.equals (get_item at 0) " "))
-        (if (== (length segs) 0)
-            (if is_sp #f
-                (set! x (place_one segs at x)))
-            (if (> (+ x (get_item at 2)) width)
-                (if (atom_hangs (get_item at 0))
-                    (set! x (place_one segs at x))   ;; 避头点：悬挂不换行
-                    { (push out (mk3 segs ltop lbot))
-                      (set! segs (new_list))
-                      (set! ltop 0)
-                      (set! lbot 0)
-                      (set! x cont_ind)
-                      (if is_sp #f
-                          (set! x (place_one segs at x))) })
-                (set! x (place_one segs at x))))
-        ;; 纵向需求必须在**放好之后**累加：公式可能刚引起一次换行，那个需求属于新行
-        (if (> (length at) 4)
-            { (set! ltop (imax ltop (imath_top (get_item at 4))))
-              (set! lbot (imax lbot (imath_bot (get_item at 5)))) }
-            #f)
+        ;; 段内换行（(br) 原子）：当前行到此为止，下一段从续行缩进起。
+        ;; 当前行是空的（刚好落在折行边界上）就不再多吐一个空行——否则会凭空多出一行。
+        (if (== (get_item at 1) ST_BR)
+            (if (> (length segs) 0)
+                { (push out (mk3 segs ltop lbot))
+                  (set! segs (new_list))
+                  (set! ltop 0)
+                  (set! lbot 0)
+                  (set! x cont_ind) }
+                #f)
+            { (set! is_sp (String.equals (get_item at 0) " "))
+              (if (== (length segs) 0)
+                  (if is_sp #f
+                      (set! x (place_one segs at x)))
+                  (if (> (+ x (get_item at 2)) width)
+                      (if (atom_hangs (get_item at 0))
+                          (set! x (place_one segs at x))   ;; 避头点：悬挂不换行
+                          { (push out (mk3 segs ltop lbot))
+                            (set! segs (new_list))
+                            (set! ltop 0)
+                            (set! lbot 0)
+                            (set! x cont_ind)
+                            (if is_sp #f
+                                (set! x (place_one segs at x))) })
+                      (set! x (place_one segs at x))))
+              ;; 纵向需求必须在**放好之后**累加：公式可能刚引起一次换行，那个需求属于新行
+              (if (> (length at) 4)
+                  { (set! ltop (imax ltop (imath_top (get_item at 4))))
+                    (set! lbot (imax lbot (imath_bot (get_item at 5)))) }
+                  #f) })
         (set! k (+ k 1)) })
     (if (> (length segs) 0) (push out (mk3 segs ltop lbot)) #f)
     out))
