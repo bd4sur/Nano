@@ -2375,12 +2375,13 @@ static void flip_ui_draw_walls(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Pale
     }
     #undef FLIP_WALL_EDGE
 
-    // 玻璃内沿：1.8px 低亮度辉光 + 1px 亮边（AA 线为加色语义，天然像自发光玻璃）
+    // 玻璃内沿：1.8px 低亮度辉光 + 1px 亮边（AA 线取**加色**模式 3：底色 + 覆盖率×颜色，
+    // 天然像自发光玻璃；mode 语义见 graphics.h，2026-11-24 起 AA 线才真的认 mode）
     #define FLIP_RIM(x1, y1, x2, y2) do { \
         gfx_draw_line_anti_aliasing(g, (x1), (y1), (x2), (y2), 1.8f, \
-            k_rim_glow[0], k_rim_glow[1], k_rim_glow[2], 1); \
+            k_rim_glow[0], k_rim_glow[1], k_rim_glow[2], 3); \
         gfx_draw_line_anti_aliasing(g, (x1), (y1), (x2), (y2), 1.0f, \
-            k_rim[0], k_rim[1], k_rim[2], 1); \
+            k_rim[0], k_rim[1], k_rim[2], 3); \
     } while (0)
     FLIP_RIM((float)fx, (float)fy, xl, yn0);
     FLIP_RIM(xl, yn0, xl, yn1);
@@ -5050,7 +5051,7 @@ static void ui_shutdown_draw_slider(Global_State *global_state, const Shutdown_U
         }
     }
 
-    // 5. 推钮内的右向箭头：抗锯齿线段（叠加混合，白线在红色胶囊上自然过渡）
+    // 5. 推钮内的右向箭头：抗锯齿线段（加色模式 3：白线在红色胶囊上自然过渡）
     {
         int32_t s = r / 2;                   // 箭头半高
         if (s < 4) s = 4;
@@ -5059,10 +5060,10 @@ static void ui_shutdown_draw_slider(Global_State *global_state, const Shutdown_U
         const float lw = (r >= 18) ? 3.0f : 2.0f;
         gfx_draw_line_anti_aliasing(gfx, ax - (float)s * 0.5f, ay - (float)s,
             ax + (float)s * 0.5f, ay, lw,
-            p.on_accent[0], p.on_accent[1], p.on_accent[2], 1);
+            p.on_accent[0], p.on_accent[1], p.on_accent[2], 3);
         gfx_draw_line_anti_aliasing(gfx, ax + (float)s * 0.5f, ay,
             ax - (float)s * 0.5f, ay + (float)s, lw,
-            p.on_accent[0], p.on_accent[1], p.on_accent[2], 1);
+            p.on_accent[0], p.on_accent[1], p.on_accent[2], 3);
     }
 }
 

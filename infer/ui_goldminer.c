@@ -444,7 +444,8 @@ int32_t ui_goldminer_render_frame(Key_Event *key_event, Global_State *global_sta
     // 钩绳（吴小林抗锯齿算法）+ 钩爪
     // 钩子以绳端锚点 (hook_x, hook_y)（上缘横向中点）为枢轴，随绳角旋转，
     // 使贴图竖直轴线始终与绳子平行
-    gfx_draw_line_anti_aliasing(gfx, (float)GM_PIVOT_X, (float)GM_PIVOT_Y, s_gm.hook_x, s_gm.hook_y, 1.0f, 230, 230, 230, 1);
+    // mode 3 = 加色（底色 + 覆盖率×颜色）：深底上像发亮的绳，保持 2026-11 之前的观感
+    gfx_draw_line_anti_aliasing(gfx, (float)GM_PIVOT_X, (float)GM_PIVOT_Y, s_gm.hook_x, s_gm.hook_y, 1.0f, 230, 230, 230, 3);
     gm_draw_sprite_rotated(gfx, GM_SPRITE_HOOK, (int32_t)s_gm.hook_x, (int32_t)s_gm.hook_y, s_gm.hook_angle);
 
     gfx_refresh(gfx);

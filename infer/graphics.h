@@ -112,6 +112,10 @@ void gfx_reverse_pixel(Nano_GFX *gfx, uint32_t x, uint32_t y);
 
 void gfx_draw_point(Nano_GFX *gfx, uint32_t x, uint32_t y, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
+// 抗锯齿直线（吴小林 + 粗线段两档；坐标与线宽均取浮点）。mode 语义同 gfx_draw_point：
+//   0-置黑 1-置色（按覆盖率不透明混合前景色）2-异或 3-加色（底色 + 覆盖率×颜色）>=4-Alpha混合。
+//   注意：**浅底上用 mode 3 会把墨迹加成白色**（加法饱和），深底上 mode 3 才是"自发光"观感。
+//   （2026-11-24 之前本函数无视 mode，一律加色——浅色主题下公式矢量符号因此变白。）
 void gfx_draw_line_anti_aliasing(Nano_GFX *gfx, float x1, float y1, float x2, float y2, float line_width, uint8_t r, uint8_t g, uint8_t b, uint8_t mode);
 void gfx_draw_rectangle(Nano_GFX *gfx, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 // 抗锯齿圆角矩形（填充语义，同 gfx_draw_rectangle；GUI 元素用）

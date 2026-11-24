@@ -429,16 +429,11 @@ int32_t am_native_Gfx_draw_rect(am_runtime_t *rt, am_process_t *proc) {
 }
 
 
-// (Gfx.draw_line_aa x1:Number y1:Number x2:Number y2:Number width:Number r g b) : #undefined
-// —— 抗锯齿直线（吴小林算法，= C 版 gfx_draw_line_anti_aliasing；黄金矿工的钩绳用它）。
-//    端点与线宽都按**浮点**取，不做取整：抗锯齿的意义就在于亚像素端点。
-//    注意底层是**加法混合**（gfx_add_pixel：底色 + 覆盖率×颜色），因此同一颜色在深色底上
-//    比在浅色底上更暗，与 (Gfx.draw_line ...) 的置色语义不同（后者是整数端点 + 置色）。
-int32_t am_native_Gfx_draw_line_aa(am_runtime_t *rt, am_process_t *proc) {
-    Nano_GFX *g = native_gfx(rt);
+// 抗锯齿直线的公共实现：mode 直接透传给 gfx_draw_line_anti_aliasing
+// （语义同 gfx_draw_point：1-置色/按覆盖率混合前景色，3-加色）。
+static int32_t gfx_draw_line_aa_impl(am_process_t *proc, Nano_GFX *g, uint8_t mode) {
     am_float_t w = 1.0f, y2 = 0.0f, x2 = 0.0f, y1 = 0.0f, x1 = 0.0f;
     uint8_t b, gc, r;
-    if (g == NULL) return -1;
     if (!native_pop_color(proc, &b))  return -1;
     if (!native_pop_color(proc, &gc)) return -1;
     if (!native_pop_color(proc, &r))  return -1;
@@ -450,9 +445,34 @@ int32_t am_native_Gfx_draw_line_aa(am_runtime_t *rt, am_process_t *proc) {
     if (isnan(w) || isnan(y2) || isnan(x2) || isnan(y1) || isnan(x1)) return -1;
     if (w > 0.0f) {
         gfx_draw_line_anti_aliasing(g, (float)x1, (float)y1, (float)x2, (float)y2,
-                                    (float)w, r, gc, b, 1);
+                                    (float)w, r, gc, b, mode);
     }
     return native_statement_done(proc);
+}
+
+// (Gfx.draw_line_aa x1:Number y1:Number x2:Number y2:Number width:Number r g b) : #undefined
+// —— 抗锯齿直线（吴小林算法，= C 版 gfx_draw_line_anti_aliasing；黄金矿工的钩绳用它）。
+//    端点与线宽都按**浮点**取，不做取整：抗锯齿的意义就在于亚像素端点。
+//    混合方式固定为**加色**（mode 3：底色 + 覆盖率×颜色）——保持 2026-11 之前的行为，
+//    深色底上像"自发光笔画"。**浅色底上不要用它**：加法会把深色墨迹加成纯白
+//    （明亮主题的公式矢量符号就是这么整条消失的），改用 (Gfx.draw_line_aa_mode ... 1)。
+int32_t am_native_Gfx_draw_line_aa(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    if (g == NULL) return -1;
+    return gfx_draw_line_aa_impl(proc, g, 3);
+}
+
+// (Gfx.draw_line_aa_mode x1 y1 x2 y2 width r g b mode:Number) : #undefined
+// —— 同上，但**显式给混合方式**（语义同 gfx_draw_point / graphics.h 的说明）：
+//    1 = 按覆盖率不透明混合前景色（浅底墨迹的标准画法，明亮主题的公式用它），
+//    3 = 加色（深底"发光"笔画），>=4 = 定值 alpha 混合。0/2 极少用。
+int32_t am_native_Gfx_draw_line_aa_mode(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    int32_t mode = 1;
+    if (g == NULL) return -1;
+    if (!native_pop_int(proc, &mode)) return -1;
+    if (mode < 0 || mode > 255) mode = 1;
+    return gfx_draw_line_aa_impl(proc, g, (uint8_t)mode);
 }
 
 int32_t am_native_Gfx_draw_circle(am_runtime_t *rt, am_process_t *proc) {
@@ -981,6 +1001,7 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"draw_point",  am_native_Gfx_draw_point },
     { L"draw_line",   am_native_Gfx_draw_line },
     { L"draw_line_aa", am_native_Gfx_draw_line_aa },
+    { L"draw_line_aa_mode", am_native_Gfx_draw_line_aa_mode },
     { L"fill_rect",   am_native_Gfx_fill_rect },
     { L"draw_rect",   am_native_Gfx_draw_rect },
     { L"draw_circle", am_native_Gfx_draw_circle },

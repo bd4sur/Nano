@@ -893,6 +893,39 @@ void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_
 }
 
 
+// 抗锯齿线段的单像素写入：cov 是该像素的覆盖率（0..1，吴小林/粗线算法的权重）。
+// mode 语义同 gfx_draw_point（0-置黑 1-置色 2-异或 3-加色 >=4-Alpha混合）：
+//   · mode 3：按覆盖率**加色**（底色 + 覆盖率×颜色）——深底上的"自发光"笔画观感，
+//     历史默认；本分支与旧实现逐位一致（直接把浮点权重交给 gfx_add_pixel 截断）。
+//   · mode 1 / >=4：按覆盖率**不透明混合**前景色（>=4 时覆盖率再乘 mode alpha）——
+//     **浅底上的墨迹必须走这条**。
+//   · mode 0：按覆盖率混向黑；mode 2：覆盖率过半反转。
+// 历史坑（2026-11-24）：本文件早期无视 mode 一律加色，明亮（浅底）主题下深色墨迹被
+// "加"成纯白——公式里的矢量符号（⊢ ↔ ⟨⟩ 等走 AA 直线）整条消失在白底上。
+static inline void gfx_aa_line_pixel(Nano_GFX *gfx, int32_t x, int32_t y, float cov,
+                                     uint8_t r, uint8_t g, uint8_t b, uint8_t mode) {
+    if (cov <= 0.0f) return;
+    if (cov > 1.0f) cov = 1.0f;
+    if (mode == 3) {
+        gfx_add_pixel(gfx, (uint32_t)x, (uint32_t)y, r * cov, g * cov, b * cov);
+        return;
+    }
+    uint8_t a8 = (uint8_t)(cov * 255.0f + 0.5f);
+    if (a8 == 0) return;
+    if (mode == 0) {
+        gfx_blend_pixel(gfx, (uint32_t)x, (uint32_t)y, 0, 0, 0, a8);
+    }
+    else if (mode == 2) {
+        if (a8 >= 128) gfx_reverse_pixel(gfx, (uint32_t)x, (uint32_t)y);
+    }
+    else if (mode >= 4) {
+        gfx_blend_pixel(gfx, (uint32_t)x, (uint32_t)y, r, g, b, (uint8_t)((a8 * mode + 127) / 255));
+    }
+    else { // mode == 1：按覆盖率混合前景色（与 alpha 字模/圆角矩形的既有语义一致）
+        gfx_blend_pixel(gfx, (uint32_t)x, (uint32_t)y, r, g, b, a8);
+    }
+}
+
 static inline float _fpart(float x) { return x - floorf(x); }
 static inline float _rfpart(float x) { return 1.0f - _fpart(x); }
 
@@ -932,17 +965,17 @@ static void gfx_draw_line_xiaolin_wu(Nano_GFX *gfx,
     if (xpxl1 >= 0 && xpxl1 < x_limit) {
         if (steep) {
             if (ypxl1 >= 0 && ypxl1 < y_limit) {
-                gfx_add_pixel(gfx, ypxl1,   xpxl1, r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+                gfx_aa_line_pixel(gfx, ypxl1, xpxl1, _rfpart(yend) * xgap, r, g, b, mode);
             }
             if (ypxl1 + 1 >= 0 && ypxl1 + 1 < y_limit) {
-                gfx_add_pixel(gfx, ypxl1+1, xpxl1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+                gfx_aa_line_pixel(gfx, ypxl1+1, xpxl1, _fpart(yend)  * xgap, r, g, b, mode);
             }
         } else {
             if (ypxl1 >= 0 && ypxl1 < y_limit) {
-                gfx_add_pixel(gfx, xpxl1, ypxl1,   r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+                gfx_aa_line_pixel(gfx, xpxl1, ypxl1, _rfpart(yend) * xgap, r, g, b, mode);
             }
             if (ypxl1 + 1 >= 0 && ypxl1 + 1 < y_limit) {
-                gfx_add_pixel(gfx, xpxl1, ypxl1+1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+                gfx_aa_line_pixel(gfx, xpxl1, ypxl1+1, _fpart(yend)  * xgap, r, g, b, mode);
             }
         }
     }
@@ -957,17 +990,17 @@ static void gfx_draw_line_xiaolin_wu(Nano_GFX *gfx,
     if (xpxl2 >= 0 && xpxl2 < x_limit) {
         if (steep) {
             if (ypxl2 >= 0 && ypxl2 < y_limit) {
-                gfx_add_pixel(gfx, ypxl2,   xpxl2, r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+                gfx_aa_line_pixel(gfx, ypxl2, xpxl2, _rfpart(yend) * xgap, r, g, b, mode);
             }
             if (ypxl2 + 1 >= 0 && ypxl2 + 1 < y_limit) {
-                gfx_add_pixel(gfx, ypxl2+1, xpxl2, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+                gfx_aa_line_pixel(gfx, ypxl2+1, xpxl2, _fpart(yend)  * xgap, r, g, b, mode);
             }
         } else {
             if (ypxl2 >= 0 && ypxl2 < y_limit) {
-                gfx_add_pixel(gfx, xpxl2, ypxl2,   r * _rfpart(yend) * xgap, g * _rfpart(yend) * xgap, b * _rfpart(yend) * xgap);
+                gfx_aa_line_pixel(gfx, xpxl2, ypxl2, _rfpart(yend) * xgap, r, g, b, mode);
             }
             if (ypxl2 + 1 >= 0 && ypxl2 + 1 < y_limit) {
-                gfx_add_pixel(gfx, xpxl2, ypxl2+1, r * _fpart(yend)  * xgap, g * _fpart(yend)  * xgap, b * _fpart(yend)  * xgap);
+                gfx_aa_line_pixel(gfx, xpxl2, ypxl2+1, _fpart(yend)  * xgap, r, g, b, mode);
             }
         }
     }
@@ -982,10 +1015,10 @@ static void gfx_draw_line_xiaolin_wu(Nano_GFX *gfx,
         for (int x = x_start; x <= x_end; x++) {
             int y_base = (int)floorf(intery);
             if (y_base >= 0 && y_base < y_limit) {
-                gfx_add_pixel(gfx, y_base,   x, r * _rfpart(intery), g * _rfpart(intery), b * _rfpart(intery));
+                gfx_aa_line_pixel(gfx, y_base, x, _rfpart(intery), r, g, b, mode);
             }
             if (y_base + 1 >= 0 && y_base + 1 < y_limit) {
-                gfx_add_pixel(gfx, y_base+1, x, r * _fpart(intery),  g * _fpart(intery),  b * _fpart(intery));
+                gfx_aa_line_pixel(gfx, y_base+1, x, _fpart(intery), r, g, b, mode);
             }
             intery += gradient;
         }
@@ -993,10 +1026,10 @@ static void gfx_draw_line_xiaolin_wu(Nano_GFX *gfx,
         for (int x = x_start; x <= x_end; x++) {
             int y_base = (int)floorf(intery);
             if (y_base >= 0 && y_base < y_limit) {
-                gfx_add_pixel(gfx, x, y_base,   r * _rfpart(intery), g * _rfpart(intery), b * _rfpart(intery));
+                gfx_aa_line_pixel(gfx, x, y_base, _rfpart(intery), r, g, b, mode);
             }
             if (y_base + 1 >= 0 && y_base + 1 < y_limit) {
-                gfx_add_pixel(gfx, x, y_base+1, r * _fpart(intery),  g * _fpart(intery),  b * _fpart(intery));
+                gfx_aa_line_pixel(gfx, x, y_base+1, _fpart(intery), r, g, b, mode);
             }
             intery += gradient;
         }
@@ -1040,7 +1073,7 @@ void gfx_draw_line_anti_aliasing(Nano_GFX *gfx,
             for (int32_t x = xMin; x <= xMax; x++) {
                 float dist_sq = (float)((x - x1) * (x - x1) + (y - y1) * (y - y1));
                 if (dist_sq <= r_sq) {
-                    gfx_add_pixel(gfx, x, y, cr, cg, cb);
+                    gfx_aa_line_pixel(gfx, x, y, 1.0f, cr, cg, cb, mode);
                 }
             }
         }
@@ -1097,7 +1130,7 @@ void gfx_draw_line_anti_aliasing(Nano_GFX *gfx,
                 alpha = (half_w - dist) / edge_fade;
                 alpha = MAX(0.0f, MIN(1.0f, alpha));
             }
-            gfx_add_pixel(gfx, x, y, cr * alpha, cg * alpha, cb * alpha);
+            gfx_aa_line_pixel(gfx, x, y, alpha, cr, cg, cb, mode);
         }
     }
 }

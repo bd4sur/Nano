@@ -64,10 +64,13 @@ int32_t am_native_Gfx_draw_point(am_runtime_t *rt, am_process_t *proc);
 int32_t am_native_Gfx_draw_line(am_runtime_t *rt, am_process_t *proc);
 
 // (Gfx.draw_line_aa x1:Number y1:Number x2:Number y2:Number width:Number r:Number g:Number b:Number) : #undefined
+//   加色混合（深底"发光"笔画；**浅底请用下面的 draw_line_aa_mode ... 1**）
+// (Gfx.draw_line_aa_mode x1 y1 x2 y2 width r g b mode:Number) : #undefined
+//   显式混合方式：1 = 按覆盖率不透明混合（浅底墨迹），3 = 加色，>=4 = 定值 alpha
 // —— 抗锯齿直线（吴小林算法，= C 版 gfx_draw_line_anti_aliasing）。端点/线宽按浮点取，
-//    不做取整（抗锯齿的意义就在亚像素端点）。底层为**加法混合**（底色 + 覆盖率×颜色），
-//    与上面置色语义的 draw_line 不同。
+//    不做取整（抗锯齿的意义就在亚像素端点）。两个入口的差别只在混合方式，见上两行。
 int32_t am_native_Gfx_draw_line_aa(am_runtime_t *rt, am_process_t *proc);
+int32_t am_native_Gfx_draw_line_aa_mode(am_runtime_t *rt, am_process_t *proc);
 
 // (Gfx.fill_rect x:Number y:Number w:Number h:Number r:Number g:Number b:Number) : #undefined
 // —— 实心矩形

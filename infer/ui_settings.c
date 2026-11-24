@@ -151,8 +151,9 @@ static void settings_bg(Nano_GFX *gfx, const UiSettingsPalette *p) {
     }
 }
 
-// 2px 粗线段：gfx_draw_line_anti_aliasing 内部使用加色混合（不认 mode），
-// 在亮色主题的浅底上会把青色加成近白色，故此处用两条普通线段实现厚度。
+// 2px 粗线段：这里刻意用两条**普通**线段（置色）而不是 gfx_draw_line_anti_aliasing——
+// 后者在 mode 3（加色）下会把青色在浅底上加成近白色（GUI 设置页本身支持亮/暗两套底），
+// 而 2px 抗锯齿粗线的接缝还会冒亮点；两条普通线段厚度一致、颜色精确。
 static void settings_thick_line(Nano_GFX *gfx, int32_t x1, int32_t y1, int32_t x2, int32_t y2,
                                 const uint8_t c[3]) {
     gfx_draw_line(gfx, (uint32_t)x1, (uint32_t)y1, (uint32_t)x2, (uint32_t)y2, c[0], c[1], c[2], 1);

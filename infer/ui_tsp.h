@@ -369,13 +369,13 @@ void ui_app_tsp_refresh(Key_Event *key_event, Global_State *global_state) {
         int to = best_gene[i];
         gfx_draw_line_anti_aliasing(global_state->gfx,
             city_fx[from], city_fy[from], city_fx[to], city_fy[to],
-            1.0f, 0, 0, 255, 1);
+            1.0f, 0, 0, 255, 3);   // mode 3 = 加色（深底"发光"笔画，保持既有观感）
     }
     int last = best_gene[TSP_CITY_NUM - 1];
     int first = best_gene[0];
     gfx_draw_line_anti_aliasing(global_state->gfx,
         city_fx[last], city_fy[last], city_fx[first], city_fy[first],
-        1.0f, 0, 0, 255, 1);
+        1.0f, 0, 0, 255, 3);   // mode 3 = 加色
 
     // 绘制距离变化曲线
     int valid_count = (s_tsp_history_count < TSP_HISTORY_SIZE) ? s_tsp_history_count : TSP_HISTORY_SIZE;
@@ -410,7 +410,7 @@ void ui_app_tsp_refresh(Key_Event *key_event, Global_State *global_state) {
                 if (py0 >= TSP_CURVE_BOTTOM) py0 = TSP_CURVE_BOTTOM - 1;
                 if (py1 < TSP_CURVE_TOP) py1 = TSP_CURVE_TOP;
                 if (py1 >= TSP_CURVE_BOTTOM) py1 = TSP_CURVE_BOTTOM - 1;
-                gfx_draw_line_anti_aliasing(global_state->gfx, px0, py0, px1, py1, 1.0f, 0, 255, 0, 1);
+                gfx_draw_line_anti_aliasing(global_state->gfx, px0, py0, px1, py1, 1.0f, 0, 255, 0, 3);  // mode 3 = 加色
             }
         }
 

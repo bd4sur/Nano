@@ -16,7 +16,8 @@
 ;;                 "琴键开关指示灯"：设置面板的字体单选、目录的分段标记都用它
 ;;   · 选中r/g/b —— 该行被高亮时的文字颜色（不给就用常态色）
 ;;
-;; 高亮样式：**只有一行底色**（40,50,68），**不画左侧竖直亮条**——左侧亮条会和
+;; 高亮样式：**只有一行底色**（深色主题 40,50,68，可由 (set_colors) 按主题覆盖），
+;; **不画左侧竖直亮条**——左侧亮条会和
 ;; 指示灯、缩进挤在一起（用户明确要求去掉）。需要更强的指示时靠"指示灯 + 选中色"。
 ;;
 ;; 视口与裁剪：调用方给出 (x y w h)；滚动位置非整行时，视口顶/底会各露出一个**半行**。
@@ -110,13 +111,42 @@
 (define t_total 0)
 (define t_px 0)
 (define t_py 0)
-;; 配色
+;; 配色（下列初值 = 本组件 2026-11 之前的硬编码色，也就是「深色」主题；
+;; 不调 (set_colors) 的调用方（dict/filemgr/recorder…）因此逐像素不变）
 (define HL_R 40) (define HL_G 50) (define HL_B 68)      ;; 高亮行底色
 (define BAR_R 40) (define BAR_G 47) (define BAR_B 62)    ;; 滚动条槽
 (define TH_R 130) (define TH_G 150) (define TH_B 184)    ;; 滚动条滑块
 (define BAR_W 3)                                        ;; 滚动条宽（贴视口右缘）
 (define LAMP_ON_R 102) (define LAMP_ON_G 204) (define LAMP_ON_B 255)  ;; 指示灯亮
 (define LAMP_OFF_R 110) (define LAMP_OFF_G 118) (define LAMP_OFF_B 140)
+;; 「返回」按钮（右上角）：与 app/lib/exit.scm 的「退出」按钮同色系
+(define BACK_BG_R 60) (define BACK_BG_G 62) (define BACK_BG_B 74)
+(define BACK_BR_R 120) (define BACK_BR_G 124) (define BACK_BR_B 140)
+(define BACK_TX_R 225) (define BACK_TX_G 228) (define BACK_TX_B 235)
+
+;; 由主题驱动的配色覆盖（参数一律是调色板给的 (r g b) 三元列表，见 app/lib/theme.scm）。
+;; 调用方在**切换主题时**调一次即可；不调就用上面的默认色（深色）。
+(define set_colors
+  (lambda (hl bar thumb lamp_on lamp_off back_bg back_border back_text)
+    (set! HL_R (get_item hl 0)) (set! HL_G (get_item hl 1)) (set! HL_B (get_item hl 2))
+    (set! BAR_R (get_item bar 0)) (set! BAR_G (get_item bar 1)) (set! BAR_B (get_item bar 2))
+    (set! TH_R (get_item thumb 0)) (set! TH_G (get_item thumb 1)) (set! TH_B (get_item thumb 2))
+    (set! LAMP_ON_R (get_item lamp_on 0))
+    (set! LAMP_ON_G (get_item lamp_on 1))
+    (set! LAMP_ON_B (get_item lamp_on 2))
+    (set! LAMP_OFF_R (get_item lamp_off 0))
+    (set! LAMP_OFF_G (get_item lamp_off 1))
+    (set! LAMP_OFF_B (get_item lamp_off 2))
+    (set! BACK_BG_R (get_item back_bg 0))
+    (set! BACK_BG_G (get_item back_bg 1))
+    (set! BACK_BG_B (get_item back_bg 2))
+    (set! BACK_BR_R (get_item back_border 0))
+    (set! BACK_BR_G (get_item back_border 1))
+    (set! BACK_BR_B (get_item back_border 2))
+    (set! BACK_TX_R (get_item back_text 0))
+    (set! BACK_TX_G (get_item back_text 1))
+    (set! BACK_TX_B (get_item back_text 2))
+    #t))
 
 ;; ---- 条目构造 -----------------------------------------------------------
 
@@ -320,9 +350,9 @@
 
 (define draw_back
   (lambda ()
-    (Gfx.fill_rect back_x back_y back_w back_h 60 62 74)
-    (Gfx.draw_rect back_x back_y back_w back_h 120 124 140)
-    (Gfx.draw_text back_label (+ back_x 6) (+ back_y 2) 225 228 235)
+    (Gfx.fill_rect back_x back_y back_w back_h BACK_BG_R BACK_BG_G BACK_BG_B)
+    (Gfx.draw_rect back_x back_y back_w back_h BACK_BR_R BACK_BR_G BACK_BR_B)
+    (Gfx.draw_text back_label (+ back_x 6) (+ back_y 2) BACK_TX_R BACK_TX_G BACK_TX_B)
     #t))
 
 ;; ---- 绘制 ---------------------------------------------------------------

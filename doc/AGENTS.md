@@ -15348,3 +15348,143 @@ chromium 与 chrome-headless-shell 各 **41/41 PASS**。**反向验证**（把 `
    控制台 state 51）；已按新宫格（滚行+点格）修好 `regress_dict.js` 的导航，但 dict 还需要
    `dict/ecdict.csv`（8MB，p2 资源，未在本次会话下载）才能建索引，故它的完整回归仍跑不了
    ——与本改动无关，属资源未就绪。
+
+# 2026-11-24（三）Markdown 阅读器：明亮主题 + 通用调色板（`app/lib/theme.scm`）
+
+需求：`infer/app/markdown.scm` 原本只有一套暗色配色，要求增加**明亮（亮色）风格**、可在
+设置里切换，并且**最好做成通用调色板**，以便后期继续加配色。编译目标只关心 Nano-WASM-GUI。
+
+## 1. 调色板（新文件 `infer/app/lib/theme.scm`，约 250 行）
+
+一套主题 = `(id 名称 (键 r g b)...)`，键是**符号**（符号 `eq?` 恒等，查表不必比字符串）：
+
+```
+(define dark_colors  '((page_bg 14 17 22) (header_bg 30 38 52) ...))   ; 52 个键
+(define light_colors '((page_bg 250 249 245) ...))
+(define themes (cons (cons 0 (cons "深色" ...)) (cons (cons 1 (cons "明亮" ...)) ...)))
+```
+
+接口：`(TH.count)` / `(TH.name id)` / `(TH.select id)` / `(TH.current)` / `(TH.get 键)` /
+`(TH.has 键)`。`(TH.get)` 返回新造的 `(r g b)` 三元列表；**未配的键返回品红 (255,0,255)**
+（故意刺眼——新加的键在哪个主题里漏配了，屏幕上一眼就能看见，而不是悄悄画成黑色）。
+
+**为什么用色方要"一次性取色"而不是每帧 `(TH.get)`**：调色板查表是线性的（52 条），
+`draw_seg` 每段要 1~6 个颜色、一屏上百段、每拍整屏重绘——每帧就是几万次线性扫描，
+在低端设备上是纯浪费。因此 `markdown.scm` 在**切换主题时**把 52 个颜色取进
+`P_XXX` 模块变量（`load_palette`），绘制路径只读变量，零查表开销。
+
+**加一套新配色 = 在 theme.scm 的主题表里追加一段**（照抄一份条目改色值，id 取连续小整数）：
+用色方一行都不用改，设置面板按 `(TH.count)`/`(TH.name)` 自动多列出一行。
+
+## 2. 改动清单
+
+| 文件 | 改动 |
+|---|---|
+| `infer/app/lib/theme.scm`（新） | 深色（= 改造前逐字保留的原色值）+ 明亮两套主题，52 个键 |
+| `infer/app/markdown.scm` | 全部色值改为调色板：`P_XXX` 变量 + `(fr)/(drct)/(tx)/(txc)/(tx_w)` 四个用色包装（填矩形/描边/文字/居中文字/伪粗体）+ `(ml_item)` 菜单条目包装；新增 `load_palette` / `apply_theme` / `apply_shared_colors` / `load_theme`（记忆在 `data/md-theme.txt`）；设置面板加「配色」行；启动 `boot` 里在**画启动提示之前**应用主题 |
+| `infer/app/lib/menu_list.scm` | 新增 `(ML.set_colors 高亮 滚动条槽 滑块 灯亮 灯灭 返回底 返回描边 返回文字)`；默认值仍是原硬编码色，不调它的 App（dict/recorder…）逐像素不变 |
+| `infer/app/lib/exit.scm` | 新增 `(EX.set_style 底 描边 文字 按下)`，让右上角「退出/返回」按钮跟着主题走；默认值不变 |
+
+设置面板行表 = **前 3 行字模 + 之后每个主题一行**，行文本自带小节名（`字体 抗锯齿 12px` /
+`配色 明亮`），指示灯实心 = 当前项。这样加设置项或加配色只是往列表里追加行，不必再造
+"分组标题"这类不可选的行；顶部标签由「字体」改为「外观」，底部说明行改报「字体 X · 配色 Y」
+（列表视口同时收窄到说明行之上，未来行数变多时靠组件自身的滚动解决，不会压到说明文字）。
+**字模行的几何与改造前完全一致**（列表起于 y=48、行高 24），所以既有回归里按坐标点按
+第 2/3 行换字模的用例原封不动通过。
+
+换主题**只改颜色、不重排版**（排版与颜色无关），所以是零成本即时生效：面板内点一下就
+整屏换色，下一拍重绘即可。
+
+## 3. 验证
+
+- **宿主无头回归台**（`APP=markdown`，真图形层）：`err=none`，`MDTHEME id=0 name=深色`；
+  把 `data/md-theme.txt` 改成 `1` 再跑 → `MDTHEME id=1 name=明亮`，帧缓冲截图人工核对
+  （标题/正文/代码块/表格/公式/页眉页脚/按钮/退出键全部换色）。
+- **WASM-GUI 浏览器端到端**（真 wasm32 + 无头 Chromium，`regress_markdown.js`）：
+  **95/95 PASS**。其中 72 项是改造前就有的（深色主题下的页眉/页脚/药丸底/链接下划线/
+  项目符号/代码块底/表格底与框线/目录面板/字体切换/滚轮/拖动节拍/甩滑——全部仍绿，
+  说明"色值逐字保留 + 用色包装"没有改变任何深色像素）；新增 **23 项**主题判据：
+  `MDTHEME` 诊断行、深色页眉 (30,38,52) 与明亮页眉 (229,226,219)、页面底 (14,17,22)↔
+  (250,249,245)、药丸底 (243,235,216)、链接下划线 (70,140,210)、底栏按钮 (232,230,225)、
+  面板底与选中行 (246,245,241)/(208,220,238)、`data/md-theme.txt` 落盘 `1`、
+  **退出重进后仍是明亮**、再切回深色并落盘 `0`。
+- 截图（`/tmp/md_theme2/theme-light.png`、`theme-settings-light.png`，明亮 TOC 面板另行
+  目检）确认：纸张白底 + 深墨正文、暖褐行内代码、蓝系强调色、浅灰表线、浅蓝选中行。
+
+## 4. 踩坑（都是实测）
+
+1. **`String.parseNumber` 失败返回 `#undefined`，不是 `#null`**。沿用 `load_font` 的
+   `(null? v)` 判失败时，`(null? #undefined)` 为假 → 把 `#undefined` 交给 `(Math.floor)`
+   → 运行时错误、**App 启动即死**（实测：`data/md-theme.txt` 末尾多一个换行就复现）。
+   两处加载器（主题、字模）都改成 `(number? v)` 判成功，并先用 `trim_ws` 去掉编辑器留下
+   的换行；改完 `1\n`/`0\r\n`/`zz` 三种记录都能落到正确主题而不崩。
+2. **`menu_list.scm` 加 `set_colors` 让 dict 在宿主回归台的 16MB 池里 link_fail**
+   （`VM segregated 分配失败: 请求 131120 字节，已用 8229760/8388608`）。这不是产品问题
+   （产品池：32 位宿主 56MB、64 位 80MB，浏览器实测 dict 照常启动、池 58720256 字节），
+   而是 `run_host_regress.sh` 的 dict 一直吃默认 16MB、本来就贴着池边。已按该脚本的既有做法
+   给 dict 单独 32MB（附注释），dict 恢复 `frames=40/40 err=none`。
+3. **`regress_markdown.js` 的导航是旧的**（"主菜单 → 小游戏 → 灵机应用程序列表"；小游戏
+   入口已屏蔽，跑起来停在控制台 state 51）。已改为与 `regress_filemgr.js` 相同的
+   "解析 `[main-menu] 条目表` 日志 → 滚行 → 点格" 导航，退出后回主菜单再重进。
+   （dict 的浏览器回归仍跑不了：它需要 `dict/ecdict.csv`（p2 资源，本会话未下载），
+   与本改动无关，现象是 App 正确显示「未找到词典文件」。）
+4. **明亮主题的"层次"不能靠加粗**：字模只有一套 12px alpha，「伪粗体」= 同一行右移 1px
+   重复描。亮底上用深色墨描两次反而糊，所以明亮主题的标题层级靠 h1/h2/h3 的**深浅跨度**
+   （近黑 → 44,52,66 → 92,100,116）+ 段前留白 + 分隔线表达；表格列线/引用竖线/分隔线一律
+   降到浅灰系（198/186/176），否则在纸白底上抢字。
+
+## 明亮主题的数学公式：矢量符号被"加色"加成纯白（缺陷修复，改在图形层）
+
+**现象**：切到明亮主题后，公式里**部分符号**仍是白色——实为"白底上的白字 = 看不见"：
+`$$\mathsf{Q}\vdash\sigma\leftrightarrow\psi(\lceil\sigma\rceil)$$` 里的 ⊢ ↔ ⌈ ⌉ 只剩
+白痕（用户截图：Cyber-计算与证明.md 的引理 9.3.1）。字母 σ ψ 正常。
+
+**定位**（先量后改）：出问题的符号全是**字模里没有、由 tex_sym 矢量绘制**的那些
+（⊢ ↔ ⟨⟩ ⊆ ↦ ∀∃…），它们的笔画走 `(Gfx.draw_line_aa …)` →
+C 版 `gfx_draw_line_anti_aliasing`。该函数**无视自己的 `mode` 参数**，吴小林路径与
+粗线路径一律 `gfx_add_pixel`（**加法混合**：底色 + 覆盖率×颜色）。深底上这像"自发光
+笔画"，到了浅底（250,249,245）上，加上深墨（30,34,44）直接饱和成 255,255,255 ——
+纯白。`graphics.h` 早就写明 mode 语义是「0-置黑 1-置色 2-异或 3-加色 >=4-Alpha混合」，
+native 绑定的 `am_native_Gfx_draw_line_aa` 也一直传 `mode = 1`（置色），但 C 实现没照办。
+
+**修复（三层，全部向后兼容）**：
+
+1. `graphics.c`：新增 `gfx_aa_line_pixel(gfx,x,y,cov,r,g,b,mode)`，按 mode 选混合方式
+   （1/>=4 按覆盖率不透明混合、3 加色、0 混黑、2 反转），吴小林路径的 12 处、
+   粗线路径、退化点路径都改走它。**mode 3 分支与旧实现逐位一致**（仍把浮点权重交给
+   `gfx_add_pixel` 截断），因此现有深色底行为不变。`graphics.h` 补 mode 说明。
+2. `am_native_Gfx.c`：`(Gfx.draw_line_aa …)` 固定传 **mode 3**（= 保持 2026-11 之前观感，
+   黄金矿工/弹球/tsp 等既有 App 逐像素不变）；新增
+   `(Gfx.draw_line_aa_mode x1 y1 x2 y2 w r g b mode)` 供浅底显式选 1。
+   C 侧既有调用点（ui_app.c 的 FLIP 玻璃内沿与推钮箭头、ui_tsp.h 两处、ui_goldminer.c
+   钩绳）一并把 `1` 改成 `3`，把"加色"从**隐含副作用**变成**显式参数**；
+   `ui_settings.c` 的注释同步改正（它本来就绕开了 AA 线）。
+3. `app/lib/tex_draw.scm`：新增 `(D.set_blend mode)`（默认 3）+ 线段改走
+   `draw_line_aa_mode`；`app/markdown.scm` 的 `apply_theme` 里按**页面底色的
+   BT.601 亮度**自动选（深底 3 加色 / 浅底 1 不透明）——用亮度而不是主题 id，
+   **以后加新配色不用再告诉任何人该用哪种混合**。mathjax（深色）不调 set_blend，
+   行为不变。
+
+**验证**：
+
+- 浏览器端到端（真 wasm32）：`regress_markdown.js` **95/95**、
+  `regress_markdown_math.js` **26/26**，Chromium / chrome-headless-shell / Firefox
+  三引擎各两遍全绿。math 测试新增第 5 节「明亮主题：矢量符号随墨色」——用**真实踩坑
+  公式**（vdash / leftrightarrow / lceil）断言明亮主题下正文区
+  `pure-white(≥252,252,252) == 0` 且深墨像素 > 20。
+- **反向验证**（判据真的咬得住）：临时把 `D.set_blend` 固定回 3 重新构建 → 同一用例
+  立即 FAIL（`white=172`，深墨从 317 掉到 199），恢复后 PASS。
+- 宿主无头回归台：确定性 AA 使用者 **goldminer / pinball 逐帧 CRC 与改动前完全相同**
+  （证明 mode 3 分支位精确）；全部 App 跑一遍结果与改动前一致（`2048`/`uinput` 是
+  脚本里的过期条目、`sky3` 16MB 池不够，均与本次无关）。
+- 多平台语法检查：`ui_app.c` 在 NANO_TTY / NANO_POD_RPI5 / NANO_WEB 下、`celestial.c` /
+  `ui_settings.c` / `ui_goldminer.c` / `graphics.c` / `am_native_Gfx.c` 全部通过；
+  WASM-GUI 构建通过。
+- 人工目检（`/tmp/shotmath/{dark,light,light2}.png`）：同一段真实文档在明亮主题下
+  `Q ⊢ σ ↔ ψ(⌈σ⌉)`、`∀x∃y(x<y)`、`A ⊆ B`、`x ↦ x²`、`⟨a,b⟩`、`¬p∨q` 全是墨色；
+  深色主题与改造前一致。
+
+**顺带修的两处测试脆弱点**：`regress_markdown.js` / `regress_markdown_math.js` 里
+"关闭设置面板"原来按 Esc——面板刚关的那一拍宿主也会收到一条返回请求，偶发再弹一次
+全局退出确认框（chromium 上实测 flaky，截图里对话框盖住了整屏）。改为**点面板自己的
+「返回」键**（与目录面板用例同一做法）后三引擎稳定。

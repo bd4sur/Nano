@@ -1,6 +1,6 @@
 ;@id=markdown
 ;@title=MD阅读器
-;@version=2026-11-23
+;@version=2026-11-24
 ;; ============================================================================
 ;; Markdown 阅读器 —— 灵机应用程序（解析 / 排版 / 渲染全部用 Scheme 实现）
 ;;
@@ -10,6 +10,12 @@
 ;;   app/lib/md_stream.scm  分段流式读取（大文件底座：字节流 → 段；见其文件头）
 ;;   app/lib/md_view.scm    分段视图（段缓存 / 锚点滚动 / 预取 / 高度估算 / 目录）
 ;;   本文件                 绘制 + 交互（滚动/翻页/点链接/退出）
+;;
+;; 配色（深色 / 明亮，设置面板里切换，选择记在 data/md-theme.txt）：
+;;   **所有颜色都来自通用调色板 app/lib/theme.scm**——一套主题 = 一张「键 → (r g b)」表；
+;;   本文件在切换主题时一次性把颜色取进 P_xxx 变量（见下方「配色」一节），
+;;   绘制路径零查表开销。**加一套新配色 = 在 theme.scm 里追加一段**，本文件不用改；
+;;   设置面板按 (TH.count)/(TH.name) 自动列出全部主题。
 ;;
 ;; 大文件（≤1MB）怎么读：**不再整篇解析+整篇排版**，而是
 ;;   ① 打开：只切出并排版**第一段**（4KB 源码，首屏 ~90ms），其余段在后台按拍建索引；
@@ -107,6 +113,7 @@
 (import MDL "app/lib/md_layout.scm")
 (import MDV "app/lib/md_view.scm")
 (import ML "app/lib/menu_list.scm")
+(import TH "app/lib/theme.scm")   ;; 通用调色板（深色/明亮…；加新配色只改这个模块）
 ;; 数学公式排版引擎（与 app/mathjax.scm 共用同一套：LaTeX → 语法树 → 盒子 → op 流）
 (import P "app/lib/tex_parse.scm")
 (import L "app/lib/tex_layout.scm")
@@ -139,54 +146,302 @@
 ;; 内容就是一行路径（不写换行），可能是资源根相对路径，也可能是拉起方给的宿主绝对路径。
 (define LAST_PATH "data/md-last.txt")
 
-;; ---- 配色 ----------------------------------------------------------------
+;; ---- 配色（通用调色板 app/lib/theme.scm）----------------------------------
+;;
+;; 全部颜色都来自主题表，本文件**不写死任何色值**：切换主题时一次性把要用的颜色
+;; 取进下面这些 P_xxx 模块变量（每个是 (r g b) 三元列表），绘制路径只读变量——
+;; 调色板的查表是线性的，放进每帧的绘制循环会拖慢低端设备。
+;;
+;; 加一套新配色 = 在 app/lib/theme.scm 的主题表里追加一段（**本文件不用改一行**，
+;; 设置面板按 (TH.count)/(TH.name) 自动多列出那一行）；本文件只按自己的键名取色，
+;; 键集合与 theme.scm 的注释一致。
+;;
+;; 注意：**深色主题的色值同时是端到端测试的像素判据契约**
+;; （infer/tools/e2e/browser/regress_markdown.js 的 probe 里那一串 RGB），
+;; 改那些色值必须同步改那处判据。
+(define THEME_PATH "data/md-theme.txt")  ;; 上次选择的主题（用户数据目录，同 md-font.txt）
+(define theme_id 0)        ;; 当前主题 id（0 = 深色，1 = 明亮；共 (TH.count) 套）
+(define theme_saved -1)    ;; 已落到 THEME_PATH 的 id（-1 = 还不知道）；见 apply_theme
+
+;; 页面/栏
+(define P_PAGE_BG (cdr '(0)))
+(define P_HEADER_BG (cdr '(0)))
+(define P_HEADER_TEXT (cdr '(0)))
+(define P_HEADER_DIM (cdr '(0)))
+(define P_FOOTER_BG (cdr '(0)))
+(define P_FOOTER_TEXT (cdr '(0)))
+;; 正文样式（按 MDL.ST_* 取；见 set_style_color）
+(define P_BODY (cdr '(0)))
+(define P_BOLD (cdr '(0)))
+(define P_CODE (cdr '(0)))
+(define P_LINK (cdr '(0)))
+(define P_H1 (cdr '(0)))
+(define P_H2 (cdr '(0)))
+(define P_H3 (cdr '(0)))
+(define P_CODEBLOCK (cdr '(0)))
+(define P_BULLET (cdr '(0)))
+(define P_TABLE_SEP (cdr '(0)))
+(define P_QUOTE_BAR (cdr '(0)))
+(define P_HR (cdr '(0)))
+(define P_H2BAR (cdr '(0)))
+(define P_IMAGE_TEXT (cdr '(0)))
+(define P_MATH (cdr '(0)))
+(define P_IMATH (cdr '(0)))
+;; 块背景与行内装饰
+(define P_BG_CODE (cdr '(0)))
+(define P_BG_TABLE (cdr '(0)))
+(define P_BG_RULE (cdr '(0)))
+(define P_PILL_BG (cdr '(0)))
+(define P_LINK_UL (cdr '(0)))
+(define P_H3_UL (cdr '(0)))
+(define P_IMG_DASH (cdr '(0)))
+;; 滚动条（阅读页）
+(define P_SB_TRACK (cdr '(0)))
+(define P_SB_THUMB (cdr '(0)))
+;; 底栏按钮（打开/目录/设置）
+(define P_BTN_BG (cdr '(0)))
+(define P_BTN_BORDER (cdr '(0)))
+(define P_BTN_TEXT (cdr '(0)))
+;; 右上角按钮（宿主「退出/返回」与面板「返回」共用）
+(define P_EXIT_BG (cdr '(0)))
+(define P_EXIT_BORDER (cdr '(0)))
+(define P_EXIT_TEXT (cdr '(0)))
+(define P_EXIT_ACTIVE (cdr '(0)))
+;; 面板（目录/设置）
+(define P_PANEL_BG (cdr '(0)))
+(define P_TOC_L1 (cdr '(0)))
+(define P_TOC_L2 (cdr '(0)))
+(define P_TOC_L3 (cdr '(0)))
+(define P_TOC_S1 (cdr '(0)))
+(define P_TOC_S2 (cdr '(0)))
+(define P_TOC_S3 (cdr '(0)))
+;; 通用菜单组件（app/lib/menu_list.scm）
+(define P_MENU_HL (cdr '(0)))
+(define P_MENU_BAR (cdr '(0)))
+(define P_MENU_THUMB (cdr '(0)))
+(define P_LAMP_ON (cdr '(0)))
+(define P_LAMP_OFF (cdr '(0)))
+;; 启动提示
+(define P_BUSY_SLOT (cdr '(0)))
+(define P_BUSY_BAR (cdr '(0)))
+
+;; 把当前主题的颜色全部取出来。只在**切换主题时**调用（不是每帧）。
+(define load_palette
+  (lambda ()
+    (set! P_PAGE_BG (TH.get 'page_bg))
+    (set! P_HEADER_BG (TH.get 'header_bg))
+    (set! P_HEADER_TEXT (TH.get 'header_text))
+    (set! P_HEADER_DIM (TH.get 'header_dim))
+    (set! P_FOOTER_BG (TH.get 'footer_bg))
+    (set! P_FOOTER_TEXT (TH.get 'footer_text))
+    (set! P_BODY (TH.get 'body))
+    (set! P_BOLD (TH.get 'bold))
+    (set! P_CODE (TH.get 'code))
+    (set! P_LINK (TH.get 'link))
+    (set! P_H1 (TH.get 'h1))
+    (set! P_H2 (TH.get 'h2))
+    (set! P_H3 (TH.get 'h3))
+    (set! P_CODEBLOCK (TH.get 'codeblock))
+    (set! P_BULLET (TH.get 'bullet))
+    (set! P_TABLE_SEP (TH.get 'table_sep))
+    (set! P_QUOTE_BAR (TH.get 'quote_bar))
+    (set! P_HR (TH.get 'hr))
+    (set! P_H2BAR (TH.get 'h2bar))
+    (set! P_IMAGE_TEXT (TH.get 'image_text))
+    (set! P_MATH (TH.get 'math))
+    (set! P_IMATH (TH.get 'imath))
+    (set! P_BG_CODE (TH.get 'bg_code))
+    (set! P_BG_TABLE (TH.get 'bg_table))
+    (set! P_BG_RULE (TH.get 'bg_rule))
+    (set! P_PILL_BG (TH.get 'pill_bg))
+    (set! P_LINK_UL (TH.get 'link_ul))
+    (set! P_H3_UL (TH.get 'h3_ul))
+    (set! P_IMG_DASH (TH.get 'img_dash))
+    (set! P_SB_TRACK (TH.get 'sb_track))
+    (set! P_SB_THUMB (TH.get 'sb_thumb))
+    (set! P_BTN_BG (TH.get 'btn_bg))
+    (set! P_BTN_BORDER (TH.get 'btn_border))
+    (set! P_BTN_TEXT (TH.get 'btn_text))
+    (set! P_EXIT_BG (TH.get 'exit_bg))
+    (set! P_EXIT_BORDER (TH.get 'exit_border))
+    (set! P_EXIT_TEXT (TH.get 'exit_text))
+    (set! P_EXIT_ACTIVE (TH.get 'exit_active))
+    (set! P_PANEL_BG (TH.get 'panel_bg))
+    (set! P_TOC_L1 (TH.get 'toc_l1))
+    (set! P_TOC_L2 (TH.get 'toc_l2))
+    (set! P_TOC_L3 (TH.get 'toc_l3))
+    (set! P_TOC_S1 (TH.get 'toc_s1))
+    (set! P_TOC_S2 (TH.get 'toc_s2))
+    (set! P_TOC_S3 (TH.get 'toc_s3))
+    (set! P_MENU_HL (TH.get 'menu_hl))
+    (set! P_MENU_BAR (TH.get 'menu_bar))
+    (set! P_MENU_THUMB (TH.get 'menu_thumb))
+    (set! P_LAMP_ON (TH.get 'lamp_on))
+    (set! P_LAMP_OFF (TH.get 'lamp_off))
+    (set! P_BUSY_SLOT (TH.get 'busy_slot))
+    (set! P_BUSY_BAR (TH.get 'busy_bar))
+    #t))
+
+;; ---- 用色小工具 ----------------------------------------------------------
+;; 调色板给的是 (r g b) 三元列表，而 Gfx 的接口收三个分量；下面四个包装把
+;; "取分量"收在一处，绘制代码里只剩颜色名，读起来就是配色表。
+(define fr
+  (lambda (x y w h c)
+    (Gfx.fill_rect x y w h (get_item c 0) (get_item c 1) (get_item c 2))))
+
+(define drct
+  (lambda (x y w h c)
+    (Gfx.draw_rect x y w h (get_item c 0) (get_item c 1) (get_item c 2))))
+
+(define tx
+  (lambda (s x y c)
+    (Gfx.draw_text s x y (get_item c 0) (get_item c 1) (get_item c 2))))
+
+;; 居中文字（启动提示用；居中标志固定为 1，与改造前一致）
+(define txc
+  (lambda (font_id_ s x y c)
+    (Gfx.draw_text_centered font_id_ s x y
+                            (get_item c 0) (get_item c 1) (get_item c 2) 1)))
+
+;; 伪粗体：字模只有一套 12px alpha，粗体 = 同一行向右 1px 重复描（n = 描几次）
+(define tx_w
+  (lambda (s x y c n)
+    (define k 0)
+    (while (< k n)
+      { (tx s (+ x k) y c)
+        (set! k (+ k 1)) })
+    #t))
+
+;; 菜单条目（ml = app/lib/menu_list.scm 的 item：文本 r g b 缩进 指示灯 选中 r g b）
+(define ml_item
+  (lambda (text c indent lamp csel)
+    (ML.item text (get_item c 0) (get_item c 1) (get_item c 2) indent lamp
+             (get_item csel 0) (get_item csel 1) (get_item csel 2))))
+
+;; ---- 主题：切换 / 记忆 ---------------------------------------------------
+
+;; 把主题同步给**共用的**控件（菜单组件的选中底色/滚动条/指示灯/返回键、宿主的退出键）
+;; 以及数学公式排版引擎的线段混合方式。这些控件默认就是深色主题的色值，所以不切主题时
+;; 它们逐像素不变。
+(define apply_shared_colors
+  (lambda ()
+    (ML.set_colors P_MENU_HL P_MENU_BAR P_MENU_THUMB P_LAMP_ON P_LAMP_OFF
+                   P_EXIT_BG P_EXIT_BORDER P_EXIT_TEXT)
+    (EX.set_style P_EXIT_BG P_EXIT_BORDER P_EXIT_TEXT P_EXIT_ACTIVE)
+    ;; 公式里的矢量符号（根号/括号/⊢ ↔ ⟨⟩…）是**抗锯齿直线**画的，混合方式必须跟着
+    ;; 底色走：加色（3）在深底上像"发光笔画"，但在浅底上会把深色墨迹加成**纯白**
+    ;; （明亮主题下整条符号消失）。这里直接按页面底色的亮度自动选，新加主题不用管。
+    (D.set_blend (line_blend_for P_PAGE_BG))
+    #t))
+
+;; 线条混合方式（(Gfx.draw_line_aa_mode) 的 mode）：深底 3 = 加色，浅底 1 = 按覆盖率
+;; 不透明混合。判据是页面底色的 ITU-R BT.601 亮度（299R+587G+114B，阈值 128/255）。
+;; 用"底色亮度"而不是主题 id：**加一套新配色不必再告诉这里该用哪种混合**。
+(define line_blend_for
+  (lambda (c)
+    (define y (+ (* 299 (get_item c 0))
+                 (+ (* 587 (get_item c 1)) (* 114 (get_item c 2)))))
+    (if (> y 128000) 1 3)))
+
+;; 应用主题 id（越界/非法 → 不生效）。三件事：取色 → 同步共用控件 → 记住选择。
+;; 只改颜色，**不重排版**（排版与颜色无关），所以换主题是零成本的即时操作。
+(define apply_theme
+  (lambda (id)
+    (if (TH.select id)
+        { (load_palette)
+          (apply_shared_colors)
+          (set! theme_id (TH.current))
+          ;; 只在「磁盘上的值与本次要用的不同」时才写盘（与 apply_font 同一套路）：
+          ;; 冷启动时 load_theme 已把读到的值记进 theme_saved，这次就变成空操作。
+          (if (== theme_id theme_saved)
+              #f
+              { (Fs.write THEME_PATH (String.atom_to_string theme_id))
+                (set! theme_saved theme_id) })
+          (display "MDTHEME id=") (display theme_id)
+          (display " name=") (display (TH.name theme_id)) (newline) }
+        #f)
+    #t))
+
+;; 启动时读回上次的选择。记录缺失/被改坏（不是合法主题 id）→ 用默认主题 0。
+;;
+;; 判“解析失败”用 (number? v)，**不是 (null? v)**：String.parseNumber 失败时返回的是
+;; #undefined（manual §6.2.6），而 (null? #undefined) 为假——用 null? 会把 #undefined
+;; 当成合法值交给 (Math.floor)，直接抛运行时错误（实测：data/md-theme.txt 末尾多一个
+;; 换行就整个 App 启动即死）。load_font 里同样的坑已一并改掉。
+(define load_theme
+  (lambda ()
+    (define s (Fs.read THEME_PATH))
+    (define v #f)
+    (define id 0)
+    (if (null? s) #f
+        { (set! v (String.parseNumber (trim_ws s)))   ;; 容忍用户编辑器留下的换行
+          (if (number? v)
+              { (set! v (Math.floor v))
+                ;; 先确认是合法 id 再记进 theme_saved：否则 apply_theme 会以为
+                ;; "磁盘上就是这个值"而跳过写盘，下次启动还得重来一遍。
+                (if (TH.select v)
+                    { (set! theme_saved v)
+                      (set! id v) }
+                    #f) }
+              #f) })
+    (apply_theme id)
+    #t))
+
+;; ---- 正文样式 → 颜色 -----------------------------------------------------
 
 ;; 正文段（按样式查色；style_weight = 描几次实现"伪粗体"——字模只有一套 12px，
 ;; 没有粗体字形，因此粗体靠同一行 1px 偏移重复描一次/两次得到视觉加粗）
 (define cr 205) (define cg 214) (define cb 228) (define style_weight 1)
 
+;; 把调色板颜色装进 cr/cg/cb（绘制端与 tex_draw 都读这三个）
+(define use
+  (lambda (c)
+    (set! cr (get_item c 0))
+    (set! cg (get_item c 1))
+    (set! cb (get_item c 2))
+    #t))
+
 (define set_style_color
   (lambda (st)
     (if (== st MDL.ST_BODY)
-        { (set! cr 205) (set! cg 214) (set! cb 228) (set! style_weight 1) } #f)
+        { (use P_BODY) (set! style_weight 1) } #f)
     (if (== st MDL.ST_BOLD)
-        { (set! cr 250) (set! cg 252) (set! cb 255) (set! style_weight 2) } #f)
+        { (use P_BOLD) (set! style_weight 2) } #f)
     (if (== st MDL.ST_CODE)
-        { (set! cr 255) (set! cg 200) (set! cb 124) (set! style_weight 1) } #f)
+        { (use P_CODE) (set! style_weight 1) } #f)
     (if (== st MDL.ST_LINK)
-        { (set! cr 112) (set! cg 182) (set! cb 255) (set! style_weight 1) } #f)
+        { (use P_LINK) (set! style_weight 1) } #f)
     ;; 注意：字模只有一套 12px alpha，「伪粗体」= 同一行 1px 偏移重复描。
     ;; 描 3 次对汉字会糊成一团（笔画粘连），故最多描 2 次；标题层级差异靠
-    ;; 颜色亮度 + 段前留白 + 分隔线（H1 2px 通栏线、H2 1px 线、H3 无线且更暗）表达。
+    ;; 颜色深浅（各主题按自己的对比度调 h1/h2/h3）+ 段前留白 + 分隔线表达。
     (if (== st MDL.ST_H1)
-        { (set! cr 255) (set! cg 255) (set! cb 255) (set! style_weight 2) } #f)
+        { (use P_H1) (set! style_weight 2) } #f)
     (if (== st MDL.ST_H2)
-        { (set! cr 228) (set! cg 238) (set! cb 252) (set! style_weight 2) } #f)
+        { (use P_H2) (set! style_weight 2) } #f)
     (if (== st MDL.ST_H3)
-        { (set! cr 176) (set! cg 197) (set! cb 228) (set! style_weight 1) } #f)
+        { (use P_H3) (set! style_weight 1) } #f)
     (if (== st MDL.ST_CODEBLOCK)
-        { (set! cr 172) (set! cg 214) (set! cb 180) (set! style_weight 1) } #f)
+        { (use P_CODEBLOCK) (set! style_weight 1) } #f)
     (if (== st MDL.ST_BULLET)
-        { (set! cr 130) (set! cg 170) (set! cb 225) (set! style_weight 1) } #f)
+        { (use P_BULLET) (set! style_weight 1) } #f)
     (if (== st MDL.ST_TABLE_SEP)
-        { (set! cr 58) (set! cg 70) (set! cb 92) (set! style_weight 1) } #f)
+        { (use P_TABLE_SEP) (set! style_weight 1) } #f)
     (if (== st MDL.ST_QUOTE_BAR)
-        { (set! cr 86) (set! cg 98) (set! cb 120) (set! style_weight 1) } #f)
+        { (use P_QUOTE_BAR) (set! style_weight 1) } #f)
     ;; 表格的上下框线 / 表头下框线（只在表格宽度内画）
     (if (== st MDL.ST_HR)
-        { (set! cr 78) (set! cg 98) (set! cb 132) (set! style_weight 1) } #f)
-    ;; 二级标题左侧装饰竖线的颜色：#66ccff
+        { (use P_HR) (set! style_weight 1) } #f)
+    ;; 二级标题左侧装饰竖线（深色主题 #66ccff）
     (if (== st MDL.ST_H2BAR)
-        { (set! cr 102) (set! cg 204) (set! cb 255) (set! style_weight 1) } #f)
+        { (use P_H2BAR) (set! style_weight 1) } #f)
     ;; 行内图片的降级占位文本（一期不支持行内插图）
     (if (== st MDL.ST_IMAGE_TEXT)
-        { (set! cr 130) (set! cg 146) (set! cb 172) (set! style_weight 1) } #f)
-    ;; 块级/行内数学公式：与 mathjax 同档的亮色（4bpp 字模在小字号上抗锯齿偏细，
-    ;; 亮色观感更好）
+        { (use P_IMAGE_TEXT) (set! style_weight 1) } #f)
+    ;; 块级/行内数学公式：与 mathjax 同档的前景色
     (if (== st MDL.ST_MATH)
-        { (set! cr 234) (set! cg 238) (set! cb 248) (set! style_weight 1) } #f)
+        { (use P_MATH) (set! style_weight 1) } #f)
     (if (== st MDL.ST_IMATH)
-        { (set! cr 234) (set! cg 238) (set! cb 248) (set! style_weight 1) } #f)
+        { (use P_IMATH) (set! style_weight 1) } #f)
     #t))
 
 ;; ---- 状态 ----------------------------------------------------------------
@@ -634,13 +889,13 @@
 
 ;; 虚线框兜底（方案 D）：沿矩形边画 3px 亮 / 3px 暗的短线段 + alt 文本
 (define draw_dashed_rect
-  (lambda (x y w h r g bl)
+  (lambda (x y w h c)
     (define k 0)
     (define on 1)
     (while (< k w)
       { (if (== on 1)
-            { (Gfx.fill_rect (+ x k) y 3 1 r g bl)
-              (Gfx.fill_rect (+ x k) (- (+ y h) 1) 3 1 r g bl) }
+            { (fr (+ x k) y 3 1 c)
+              (fr (+ x k) (- (+ y h) 1) 3 1 c) }
             #f)
         (set! on (if (== on 1) 0 1))
         (set! k (+ k 3)) })
@@ -648,8 +903,8 @@
     (set! on 1)
     (while (< k h)
       { (if (== on 1)
-            { (Gfx.fill_rect x (+ y k) 1 3 r g bl)
-              (Gfx.fill_rect (- (+ x w) 1) (+ y k) 1 3 r g bl) }
+            { (fr x (+ y k) 1 3 c)
+              (fr (- (+ x w) 1) (+ y k) 1 3 c) }
             #f)
         (set! on (if (== on 1) 0 1))
         (set! k (+ k 3)) })
@@ -657,13 +912,13 @@
 
 (define draw_image_missing
   (lambda (x y w h alt)
-    (draw_dashed_rect x y w h 92 104 128)
-    (Gfx.draw_text (MDL.clip_text (if (> (String.length alt) 0)
-                                       (String.concat "[图片] " alt)
-                                       "[图片缺失]")
-                                   (- w 8))
-                   (+ x 4) (+ y (Math.floor (/ (- h 14) 2)))
-                   150 162 186)
+    (draw_dashed_rect x y w h P_IMG_DASH)
+    (tx (MDL.clip_text (if (> (String.length alt) 0)
+                            (String.concat "[图片] " alt)
+                            "[图片缺失]")
+                       (- w 8))
+        (+ x 4) (+ y (Math.floor (/ (- h 14) 2)))
+        P_IMAGE_TEXT)
     #t))
 
 ;; ---- 打开文档：读文本 → 解析 → 排版 --------------------------------------
@@ -792,9 +1047,9 @@
 
 (define draw_open_btn
   (lambda ()
-    (Gfx.fill_rect (open_btn_x) (open_btn_y) OPEN_BTN_W OPEN_BTN_H 52 58 76)
-    (Gfx.draw_rect (open_btn_x) (open_btn_y) OPEN_BTN_W OPEN_BTN_H 110 118 140)
-    (Gfx.draw_text "打开" (+ (open_btn_x) 7) (+ (open_btn_y) 1) 225 228 235)
+    (fr (open_btn_x) (open_btn_y) OPEN_BTN_W OPEN_BTN_H P_BTN_BG)
+    (drct (open_btn_x) (open_btn_y) OPEN_BTN_W OPEN_BTN_H P_BTN_BORDER)
+    (tx "打开" (+ (open_btn_x) 7) (+ (open_btn_y) 1) P_BTN_TEXT)
     #t))
 
 (define start_picker
@@ -871,9 +1126,9 @@
 
 (define draw_toc_btn
   (lambda ()
-    (Gfx.fill_rect (toc_btn_x) (toc_btn_y) TOC_BTN_W TOC_BTN_H 52 58 76)
-    (Gfx.draw_rect (toc_btn_x) (toc_btn_y) TOC_BTN_W TOC_BTN_H 110 118 140)
-    (Gfx.draw_text "目录" (+ (toc_btn_x) 7) (+ (toc_btn_y) 1) 225 228 235)
+    (fr (toc_btn_x) (toc_btn_y) TOC_BTN_W TOC_BTN_H P_BTN_BG)
+    (drct (toc_btn_x) (toc_btn_y) TOC_BTN_W TOC_BTN_H P_BTN_BORDER)
+    (tx "目录" (+ (toc_btn_x) 7) (+ (toc_btn_y) 1) P_BTN_TEXT)
     #t))
 
 (define toc_refresh
@@ -882,7 +1137,8 @@
     #t))
 
 ;; 目录条目 → 通用菜单条目（样式全在这里配：层级颜色 / 缩进 / 高亮态颜色）
-;;   一级最亮、二三级渐暗；缩进按层级；被高亮时统一用更亮一档的同色系。
+;;   一级最亮、二三级渐暗；缩进按层级；被高亮时用同色系的更深（深色主题）/更深（明亮）一档。
+;;   颜色全部来自调色板（toc_l1..3 常态、toc_s1..3 选中态）。
 (define toc_menu_items
   (lambda ()
     (define n (length toc_items))
@@ -896,10 +1152,10 @@
         (set! lvl (get_item it 0))
         (set! txt (get_item it 4))
         (if (== lvl 1)
-            (push out (ML.item txt 238 244 252 (- lvl 1) 0 255 255 255))
+            (push out (ml_item txt P_TOC_L1 (- lvl 1) 0 P_TOC_S1))
             (if (== lvl 2)
-                (push out (ML.item txt 206 218 236 (- lvl 1) 0 236 244 254))
-                (push out (ML.item txt 168 182 204 (- lvl 1) 0 210 224 244))))
+                (push out (ml_item txt P_TOC_L2 (- lvl 1) 0 P_TOC_S2))
+                (push out (ml_item txt P_TOC_L3 (- lvl 1) 0 P_TOC_S3))))
         (set! i (+ i 1)) })
     out))
 
@@ -960,24 +1216,24 @@
 (define draw_toc_panel
   (lambda ()
     (define n (length toc_items))
-    (Gfx.fill_rect 0 0 SW SH 16 19 26)
+    (fr 0 0 SW SH P_PANEL_BG)
     (ML.draw)
     (if (== n 0)
-        (Gfx.draw_text (if (MDV.toc_done) "（本文没有 1~3 级标题）" "（正在扫描全文标题…）")
-                       PAD_X TOC_TOP 150 162 186)
+        (tx (if (MDV.toc_done) "（本文没有 1~3 级标题）" "（正在扫描全文标题…）")
+            PAD_X TOC_TOP P_HEADER_DIM)
         #f)
     ;; 页眉：标题 + 条目数/扫描进度（左对齐排在标题后，右侧留给返回键）
-    (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
-    (Gfx.draw_text "目录" PAD_X 3 236 242 250)
+    (fr 0 0 SW TOP_H P_HEADER_BG)
+    (tx "目录" PAD_X 3 P_HEADER_TEXT)
     (if (not (MDV.toc_done))
-        (Gfx.draw_text (String.concat (String.atom_to_string n)
-                                      (String.concat " 条 · "
-                                        (String.concat (String.atom_to_string (MDV.index_progress)) "%")))
-                       38 3 150 168 190)
-        (Gfx.draw_text (String.concat (String.atom_to_string n) " 条") 38 3 150 168 190))
+        (tx (String.concat (String.atom_to_string n)
+                           (String.concat " 条 · "
+                             (String.concat (String.atom_to_string (MDV.index_progress)) "%")))
+            38 3 P_HEADER_DIM)
+        (tx (String.concat (String.atom_to_string n) " 条") 38 3 P_HEADER_DIM))
     (ML.draw_back)
-    (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
-    (Gfx.draw_text "拖动/↑↓ 选择 · 点按跳转 · 右上返回" PAD_X (- SH 14) 130 140 155)
+    (fr 0 (- SH BOT_H) SW BOT_H P_FOOTER_BG)
+    (tx "拖动/↑↓ 选择 · 点按跳转 · 右上返回" PAD_X (- SH 14) P_FOOTER_TEXT)
     (Gfx.refresh)
     #t))
 
@@ -1118,61 +1374,88 @@
         #f)
     #t))
 
-;; 启动时读回上次的选择。注意两个坑：
-;;   ① 记录被改坏（内容不是 0/1/2，或只写了半截）时 (String.parseNumber) 返回 #null。
-;;      此时必须兜底 (apply_font 1)：否则 (Gfx.set_font) 与 (MDL.set_font_metrics) 一次都
-;;      不调，整套排版会用宿主默认度量（行高/折行/表格列宽全错），而且没有报错——静默错排。
-;;   ② 读到合法值就先记进 font_saved，让 apply_font 跳过重复写盘（见上）。
+;; 启动时读回上次的选择。注意三个坑：
+;;   ① 记录缺失（Fs.read 返回 #null）→ 兜底 (apply_font 1)。
+;;   ② 记录被改坏（内容不是 0/1/2、只写了半截、末尾多了换行）时 (String.parseNumber)
+;;      返回 **#undefined**（manual §6.2.6）。用 (number? v) 判失败，不能用 (null? v)：
+;;      后者对 #undefined 为假，会让 (Math.floor #undefined) 直接抛运行时错误。
+;;      同样必须兜底：否则 (Gfx.set_font) 与 (MDL.set_font_metrics) 一次都不调，整套
+;;      排版用宿主默认度量（行高/折行/表格列宽全错）而**没有报错**——静默错排。
+;;   ③ 读到合法值就先记进 font_saved，让 apply_font 跳过重复写盘（见上）。
 (define load_font
   (lambda ()
     (define s (Fs.read FONT_PATH))
     (define v #f)
     (define applied 0)
     (if (null? s) #f
-        { (set! v (String.parseNumber s))
-          (if (null? v)
-              #f
+        { (set! v (String.parseNumber (trim_ws s)))   ;; 容忍用户编辑器留下的换行
+          (if (number? v)
               { (set! v (Math.floor v))
                 (set! font_saved v)
                 (apply_font v)
-                (set! applied 1) }) })
+                (set! applied 1) }
+              #f) })
     (if (== applied 0) (apply_font 1) #f)
     #t))
 
-;; 设置面板：同样交给通用菜单组件（三个字体单选项 = 三行"带琴键指示灯"的菜单条目）
-;;   视口 = 「字体」小节标签下方到页脚之间；指示灯：当前字模实心、其余空心。
+;; 设置面板：同样交给通用菜单组件（一列"带琴键指示灯"的单选行）。
+;;   行表 = **前 3 行是字模，其后每个主题一行**（行文本自带小节名，比如
+;;   "字体 抗锯齿 12px" / "配色 明亮"）——这样加设置项或加配色只是往列表里追加行，
+;;   不必为"分组标题"再发明一种不可选的行。指示灯：当前项实心、其余空心。
+(define FONT_ROWS 3)      ;; 行表里字模占前几行（其余是主题；两者下标由此推算）
+
+(define settings_rows (lambda () (+ FONT_ROWS (TH.count))))
+
 (define settings_menu_items
   (lambda ()
     (define i 0)
+    (define nt 0)
     (define out (new_list))
-    (while (< i 3)
-      { ;; 指示灯 2 = 实心（当前字模）/ 1 = 空心；文字色随主题，高亮态更亮
-        (if (== i font_id)
-            (push out (ML.item (font_name i) 236 242 250 0 2 255 255 255))
-            (push out (ML.item (font_name i) 226 232 244 0 1 250 252 255)))
+    (while (< i FONT_ROWS)
+      { (push out (ml_item (String.concat "字体 " (font_name i))
+                           P_TOC_L1 0 (if (== i font_id) 2 1) P_TOC_S1))
+        (set! i (+ i 1)) })
+    (set! i 0)
+    (set! nt (TH.count))
+    (while (< i nt)
+      { (push out (ml_item (String.concat "配色 " (TH.name i))
+                           P_TOC_L1 0 (if (== i theme_id) 2 1) P_TOC_S1))
         (set! i (+ i 1)) })
     out))
 
+;; 激活行表里的第 i 行：前 FONT_ROWS 行是字模，其余是主题。
+;; 返回 #t/#f（#f 仅用于越界；本解释器里 0 是真值，所以不能用 0/1 当结果）。
+(define settings_activate
+  (lambda (i)
+    (if (and (>= i 0) (< i FONT_ROWS))
+        (apply_font i)
+        (if (and (>= i FONT_ROWS) (< i (settings_rows)))
+            (apply_theme (- i FONT_ROWS))
+            #f))
+    #t))
+
+;; 「当前：…」说明行的 y（列表视口止于此处，免得滚动时行压到说明上）
+(define SET_INFO_Y (lambda () (- (- SH BOT_H) 16)))
 (define settings_view_y (lambda () (+ SET_TOP 18)))
-(define settings_view_h (lambda () (- (- SH BOT_H) (+ SET_TOP 18))))
+(define settings_view_h (lambda () (- (SET_INFO_Y) (settings_view_y))))
 
 (define draw_settings
   (lambda ()
-    (Gfx.fill_rect 0 0 SW SH 16 19 26)
+    (fr 0 0 SW SH P_PANEL_BG)
     ;; 列表（组件绘制：高亮行只有底色，无左侧竖条；指示灯在左）
     (ML.set_items (settings_menu_items))
     (ML.draw)
-    ;; 「字体」小节标签 + 底部说明（页眉页脚最后画，盖住边界半行）
-    (Gfx.draw_text "字体" PAD_X SET_TOP 150 168 190)
-    (Gfx.draw_text (String.concat "当前：" (String.concat (font_name font_id)
-                                                          (String.concat "  行高 "
-                                                                         (String.atom_to_string line_h))))
-                   PAD_X (- (- SH BOT_H) 16) 150 168 190)
-    (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
-    (Gfx.draw_text "设置" PAD_X 3 236 242 250)
+    ;; 小节标签 + 底部说明（页眉页脚最后画，盖住边界半行）
+    (tx "外观" PAD_X SET_TOP P_HEADER_DIM)
+    (tx (String.concat "字体 " (String.concat
+                                 (font_name font_id)
+                                 (String.concat " · 配色 " (TH.name theme_id))))
+        PAD_X (SET_INFO_Y) P_HEADER_DIM)
+    (fr 0 0 SW TOP_H P_HEADER_BG)
+    (tx "设置" PAD_X 3 P_HEADER_TEXT)
     (ML.draw_back)
-    (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
-    (Gfx.draw_text "↑↓ 选择 · 点按切换 · 右上返回" PAD_X (- SH 14) 130 140 155)
+    (fr 0 (- SH BOT_H) SW BOT_H P_FOOTER_BG)
+    (tx "↑↓ 选择 · 点按切换 · 右上返回" PAD_X (- SH 14) P_FOOTER_TEXT)
     (Gfx.refresh)
     #t))
 
@@ -1193,7 +1476,7 @@
     (if (== k 2) (ML.move 1) #f)
     (if (== k 3) (ML.page (- 0 1)) #f)
     (if (== k 4) (ML.page 1) #f)
-    (if (== k 13) (apply_font (ML.sel_of)) #f)
+    (if (== k 13) (settings_activate (ML.sel_of)) #f)
     (if (== k 27) { (set! settings_open 0) (set! exitbtn_mute 4) } #f)
     #t))
 
@@ -1205,11 +1488,12 @@
       (while (not (== key 0))
         { (apply_key_settings key)
           (set! key (Key.take_press)) })
-      ;; 触屏：拖动 = 滑动滚动（条目只有三条，实际不会滚，但手感一致）；
-      ;; 轻点条目 = 选中并立即应用；轻点页眉 = 关闭
+      ;; 触屏：拖动 = 滑动滚动（条目不多，但手感一致）；
+      ;; 轻点条目 = 选中并立即应用（字模 → 重排版；配色 → 只换色，本拍就重绘）；
+      ;; 轻点页眉右上角 = 关闭
       (set! hit (ML.step_touch))
       (if (>= hit 0)
-          (apply_font (ML.sel_of))
+          (settings_activate (ML.sel_of))
           (if (== hit -2)
               (if (== (ML.hit_back (ML.tap_x) (ML.tap_y)) 1)
                   { (set! settings_open 0) (set! exitbtn_mute 4) }
@@ -1219,18 +1503,16 @@
 
 (define draw_set_btn
   (lambda ()
-    (Gfx.fill_rect (set_btn_x) (set_btn_y) SET_BTN_W 14 52 58 76)
-    (Gfx.draw_rect (set_btn_x) (set_btn_y) SET_BTN_W 14 110 118 140)
-    (Gfx.draw_text "设置" (+ (set_btn_x) 7) (+ (set_btn_y) 1) 225 228 235)
+    (fr (set_btn_x) (set_btn_y) SET_BTN_W 14 P_BTN_BG)
+    (drct (set_btn_x) (set_btn_y) SET_BTN_W 14 P_BTN_BORDER)
+    (tx "设置" (+ (set_btn_x) 7) (+ (set_btn_y) 1) P_BTN_TEXT)
     #t))
 
 ;; ---- 绘制：单个段 --------------------------------------------------------
 
 ;; 段 = (文本 样式 x 宽 url)；行内代码画药丸底、链接画下划线、项目符号画方块。
-;; 注意：行内代码底 (46,42,34)、链接下划线 (96,160,235)、项目符号 (130,170,225)、
-;; 代码块底 (26,32,29)、分隔线 (78,98,132)、表格竖线 (58,70,92) 这几个色值是与
-;; 端到端测试的像素判据共享的
-;; 契约（tools/e2e/markdown/test_app.py、tools/e2e/browser/regress_markdown.js），
+;; 颜色全部来自调色板（主题可切）；**深色主题的那几个色值**同时是端到端测试的
+;; 像素判据契约（tools/e2e/markdown/test_app.py、tools/e2e/browser/regress_markdown.js），
 ;; 改色请同步改那两处。
 (define draw_seg
   (lambda (sg y h)
@@ -1273,16 +1555,16 @@
         (draw_imath txt x y (get_item sg 4))
         #f)
     (if (and (> (String.length txt) 0) (== st MDL.ST_CODE))
-        (Gfx.fill_rect (- x 1) (+ y text_pad) (+ w 2) pill_h 46 42 34)
+        (fr (- x 1) (+ y text_pad) (+ w 2) pill_h P_PILL_BG)
         #f)
     ;; 链接下划线：墨迹底在 y+text_pad+12，下划线再往下 3px，与字形留出呼吸感。
     ;; 绘制端把 y 当墨迹顶（文字上移了 text_gap），下划线必须跟着上移同样的量。
     (if (and (> (String.length txt) 0) (== st MDL.ST_LINK))
-        (Gfx.fill_rect x (- (+ y (+ text_pad (+ font_base 3))) text_gap) w 1 96 160 235)
+        (fr x (- (+ y (+ text_pad (+ font_base 3))) text_gap) w 1 P_LINK_UL)
         #f)
-    ;; 三级标题：文字下划线（比字形亮一档的暗色，避免和链接下划线混淆；同样下移 3px）
+    ;; 三级标题：文字下划线（比字形淡一档，避免和链接下划线混淆；同样下移 3px）
     (if (and (> (String.length txt) 0) (== st MDL.ST_H3))
-        (Gfx.fill_rect x (- (+ y (+ text_pad (+ font_base 2))) text_gap) w 1 96 128 168)
+        (fr x (- (+ y (+ text_pad (+ font_base 2))) text_gap) w 1 P_H3_UL)
         #f)
     ;; 图片段（ST_IMAGE / ST_IMAGE_MISSING）的 alt 与公式段的源串都不走通用文字绘制
     (if (and (> (String.length txt) 0)
@@ -1307,13 +1589,13 @@
     (define segs (get_item ln 2))
     (define i 0)
     (if (== bg MDL.BG_CODE)
-        (Gfx.fill_rect (- PAD_X 4) y (+ CW 8) h 26 32 29)
+        (fr (- PAD_X 4) y (+ CW 8) h P_BG_CODE)
         #f)
     (if (== bg MDL.BG_TABLE)
-        (Gfx.fill_rect (- PAD_X 4) y (+ CW 8) h 24 30 38)
+        (fr (- PAD_X 4) y (+ CW 8) h P_BG_TABLE)
         #f)
     (if (== bg MDL.BG_RULE)
-        (Gfx.fill_rect PAD_X y CW h 78 98 132)
+        (fr PAD_X y CW h P_BG_RULE)
         #f)
     (while (< i (length segs))
       { (draw_seg (get_item segs i) y h)
@@ -1389,9 +1671,9 @@
     (define pct 0)
     (define mx (max_scroll))
     (define txt "100%")
-    (Gfx.fill_rect 0 0 SW TOP_H 30 38 52)
+    (fr 0 0 SW TOP_H P_HEADER_BG)
     ;; 标题按可用宽度裁剪（右侧留给百分比与右上角的「退出」按钮，见 tools/e2e 的像素判据）
-    (Gfx.draw_text (MDL.clip_text cur_title 232) PAD_X 3 236 242 250)
+    (tx (MDL.clip_text cur_title 232) PAD_X 3 P_HEADER_TEXT)
     (if (> mx 0)
         { (set! pct (Math.floor (/ (* (MDV.top_y) 100) (MDV.total_height))))
           (if (> pct 100) (set! pct 100) #f)
@@ -1399,20 +1681,20 @@
           (set! txt (if (MDV.scan_done)
                         (String.concat (String.atom_to_string pct) "%")
                         (String.concat "≈" (String.concat (String.atom_to_string pct) "%"))))
-          (Gfx.draw_text txt 250 3 150 168 190) }
-        (Gfx.draw_text "100%" 250 3 150 168 190))
+          (tx txt 250 3 P_HEADER_DIM) }
+        (tx "100%" 250 3 P_HEADER_DIM))
     #t))
 
 (define draw_footer
   (lambda ()
-    (Gfx.fill_rect 0 (- SH BOT_H) SW BOT_H 24 28 38)
+    (fr 0 (- SH BOT_H) SW BOT_H P_FOOTER_BG)
     (if (== MDV_ok 1)
-        (Gfx.draw_text "拖动/↑↓ 滚动" PAD_X (- SH 14) 130 140 155)
-        (Gfx.draw_text "点按/Enter 选文档" PAD_X (- SH 14) 130 140 155))
+        (tx "拖动/↑↓ 滚动" PAD_X (- SH 14) P_FOOTER_TEXT)
+        (tx "点按/Enter 选文档" PAD_X (- SH 14) P_FOOTER_TEXT))
     (if (and (== MDV_ok 1) (> (MDV.toc_count) 0))
         (draw_toc_btn)      ;; 底栏右侧偏左：目录（仅阅读页且有标题时）
         #f)
-    (draw_set_btn)    ;; 设置（App 级：字体）
+    (draw_set_btn)    ;; 设置（App 级：字体 + 配色）
     (draw_open_btn)   ;; 底栏右侧：打开选择器（挑文档的入口）
     #t))
 
@@ -1430,8 +1712,8 @@
           (set! bar (Math.floor (/ (* vh vh) th)))
           (if (< bar 10) (set! bar 10) #f)
           (set! by (+ TOP_H (Math.floor (/ (* (MDV.top_y) (- vh bar)) mx))))
-          (Gfx.fill_rect (- SW 3) TOP_H 3 vh 34 40 52)
-          (Gfx.fill_rect (- SW 3) by 3 bar 96 116 148) }
+          (fr (- SW 3) TOP_H 3 vh P_SB_TRACK)
+          (fr (- SW 3) by 3 bar P_SB_THUMB) }
         #f)
     #t))
 
@@ -1447,7 +1729,7 @@
 
 (define draw_page
   (lambda ()
-    (Gfx.fill_rect 0 0 SW SH 14 17 22)
+    (fr 0 0 SW SH P_PAGE_BG)
     (draw_content)          ;; 正文（没打开文档时就是提示文案）
     (draw_scrollbar)
     (draw_header)
@@ -1464,9 +1746,10 @@
 ;; ---- 绘制：启动提示（第一帧，不依赖任何已打开的文档）------------------------
 ;;
 ;; 只做一件事：用 5 个 Gfx 调用把「机器在忙、在看哪一篇」画出来并推屏。
-;; 版式/配色照抄宿主 ui_scheme_app.c 的 app_draw_start_screen（同一块底 14/17/22、
-;; 同一个忙条色 96/160/235），这样「宿主启动画面 → 本 App 启动提示 → 阅读页」三段
-;; 过渡不闪。字模 id 显式给出（2 = 16px 标题、1 = 12px 说明），不依赖当前
+;; 配色取自**当前主题**（深色主题下与宿主 ui_scheme_app.c 的 app_draw_start_screen
+;; 逐色一致：同一块底 14/17/22、同一个忙条色 96/160/235；明亮主题下换纸白底——
+;; 此时宿主那张启动图仍是深色，过渡会闪一下，但比"阅读页是亮的却在深色提示上等"
+;; 更自然）。字模 id 显式给出（2 = 16px 标题、1 = 12px 说明），不依赖当前
 ;; (Gfx.set_font) 的值——启动时它还没被 apply_font 设过。
 (define draw_splash
   (lambda ()
@@ -1474,11 +1757,11 @@
     (define cy 0)
     (set! cx (Math.floor (/ SW 2)))
     (set! cy (Math.floor (/ SH 2)))
-    (Gfx.fill_rect 0 0 SW SH 14 17 22)
-    (Gfx.draw_text_centered 2 "MD阅读器" cx (- cy 22) 236 242 250 1)
-    (Gfx.draw_text_centered 1 splash_msg cx (+ cy 2) 150 168 190 1)
-    (Gfx.fill_rect (- cx 64) (+ cy 24) 128 3 40 48 62)    ;; 忙条槽
-    (Gfx.fill_rect (- cx 64) (+ cy 24) 42 3 96 160 235)  ;; 忙条亮段（静态）
+    (fr 0 0 SW SH P_PAGE_BG)
+    (txc 2 "MD阅读器" cx (- cy 22) P_HEADER_TEXT)
+    (txc 1 splash_msg cx (+ cy 2) P_HEADER_DIM)
+    (fr (- cx 64) (+ cy 24) 128 3 P_BUSY_SLOT)    ;; 忙条槽
+    (fr (- cx 64) (+ cy 24) 42 3 P_BUSY_BAR)     ;; 忙条亮段（静态）
     (Gfx.refresh)
     #t))
 
@@ -1866,9 +2149,9 @@
 
 ;; ---- 启动 ----------------------------------------------------------------
 ;;
-;; 两拍：本函数只把几何算好、画一屏启动提示、装好常规拍就 return；一切会阻塞的工作
-;; （读字模记录 / 读上次文档记录 / 切首段 / **解析 + 排版首段**）都在 boot_work 里，
-;; 即这条定时器的第一下。理由见文件头「启动两拍」：WASM 的 (Gfx.refresh) 只写
+;; 两拍：本函数只把几何算好 + 读几字节的主题记录（配色必须赶在第一帧之前）、画一屏
+;; 启动提示、装好常规拍就 return；一切会阻塞的工作（读字模记录 / 读上次文档记录 /
+;; 切首段 / **解析 + 排版首段**）都在 boot_work 里，即这条定时器的第一下。理由见文件头「启动两拍」：WASM 的 (Gfx.refresh) 只写
 ;; canvas 的 backing store，浏览器要等 JS 栈退空才合成——只有 return 出去，这一帧才真的
 ;; 上屏。代价一拍（TICK_MS = 60ms），换来「点开就有反馈」。
 (define boot
@@ -1885,6 +2168,10 @@
       ;; 诊断行（e2e 据此断言“滚轮通道认领成功/未启用”，与 MDBOOT 同类）：
       ;; 掌机/桌面恒为 0，浏览器里应为 1。
       (display "MDWHEEL ok=") (display WHEEL_OK) (newline)
+      ;; 主题（配色）也要在**第一帧之前**就位：启动提示页用的是同一套调色板
+      ;; （否则选了亮色主题的机器会先闪一下深色启动页）。读一个几字节的记录文件，
+      ;; 代价远小于一次推屏，不影响 boot 的“尽快上屏”初衷。
+      (load_theme)
       (MDL.set_math_measure doc_math_measure)  ;; 打开公式排版能力（必须在排版之前）
       (draw_splash)                           ;; ① 启动提示：5 个 Gfx 调用，<1ms
       (display "MDBOOT splash t=") (display (System.timestamp)) (newline)

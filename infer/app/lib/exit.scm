@@ -25,6 +25,9 @@
 ;;                                     落盘、停外设、发“再见”帧都放这里。
 ;;       (EX.on_resume 恢复函数)     —— 从后台/挂起恢复（含从别的 App 返回）时调用一次，
 ;;                                     **代替**重绘函数（自己负责刷新数据 + 重绘）。
+;;       (EX.set_style 底 描边 文字 按下) —— 按主题换按钮配色（四个参数都是调色板给的
+;;                                     (r g b) 三元列表，见 app/lib/theme.scm）；不调就是
+;;                                     下面的深色默认值，其它 App 逐像素不变。
 ;;
 ;; **轮询点是 App 自己的每拍**：装好之后再在每帧的绘制/逻辑路径里调一次
 ;;       (EX.check)
@@ -261,6 +264,17 @@
 (define on_exit
   (lambda (cleanup)
     (set! cleanup_fn cleanup)))
+
+;; 按主题换按钮配色（参数是 (r g b) 三元列表）。只有需要跟随主题的 App
+;; （目前是 Markdown 阅读器）调它；不调就是本文件末尾那套深色默认值。
+(define set_style
+  (lambda (bg border text active)
+    {
+      (BTN.set_bg btn (get_item bg 0) (get_item bg 1) (get_item bg 2))
+      (BTN.set_border btn (get_item border 0) (get_item border 1) (get_item border 2))
+      (BTN.set_text_color btn (get_item text 0) (get_item text 1) (get_item text 2))
+      (BTN.set_active_bg btn (get_item active 0) (get_item active 1) (get_item active 2))
+    }))
 
 ;; 登记“从后台/挂起恢复”时要跑的函数（刷数据 + 重绘）；不登记则只补一次重绘。
 ;; 例：文件管理器 (EX.on_resume rescan) —— 别的 App 可能刚改/删过文件。
