@@ -135,7 +135,17 @@
     (cons start (cons bytes (cons slines (cons chars
       (cons cb (cons ca (cons fch (cons olen (cons clen (cdr '(0)))))))))))))
 
+;; 设置纯文本模式（App / md_view 在打开文档前调用）
+(define set_plain (lambda (m) (set! sr_plain (if (== m 1) 1 0)) #t))
+(define plain_mode (lambda () sr_plain))
+
 ;; ---- 流状态（模块级单例）-------------------------------------------------
+
+;; 纯文本模式（0 = Markdown 富文本 / 1 = 纯文本，见 md_parse 的 set_plain）：
+;;   · 不认围栏/公式块（纯文本里 ``` 只是普通字符，不能把后面几十行吞进"代码块"）；
+;;   · 切段**不要求落在空行**——按目标字节数在行边界切开即可（纯文本的空行是内容，
+;;     不能因为切段就丢掉；切在行边界上，接缝对排版是无缝的）。
+(define sr_plain 0)
 
 (define sr_path "")
 (define sr_size 0)
@@ -282,6 +292,8 @@
       { (set! line (get_item sr_lines i))
         ;; 围栏状态推进（与 md_parse 的 h_fence 判定完全一致）；
         ;; 数学公式块只在**围栏外**识别，且与围栏互斥（公式内不可能开代码围栏）。
+        ;; 纯文本模式：整段都不认围栏/公式（``` 与 $$ 只是普通行）。
+        (if (== sr_plain 1) #f
         (if fence
             { (if (MD.fence_close line fence) (set! fence #f) #f) }
             { (if (== imath 1)
@@ -292,14 +304,19 @@
                         (if (and (MD.math_open line)
                                  (not (MD.math_single_line line)))
                             (set! imath 1)
-                            #f)) }) })
+                            #f)) }))))
         (set! chars (+ chars (String.length line)))
         (set! bytes (+ bytes (+ (utf8_len line) 1)))
-        (if (and (>= bytes sr_seg_target) (== fence #f) (== imath 0) (MD.is_blank line))
-            { (set! plan_cut (+ i 1)) (set! stop 1) }
-            (if (>= bytes sr_seg_hard)
+        (if (== sr_plain 1)
+            ;; 纯文本：到字节预算就在**行边界**切开，不看空行
+            (if (>= bytes sr_seg_target)
                 { (set! plan_cut (+ i 1)) (set! stop 1) }
-                (set! i (+ i 1))))
+                (set! i (+ i 1)))
+            (if (and (>= bytes sr_seg_target) (== fence #f) (== imath 0) (MD.is_blank line))
+                { (set! plan_cut (+ i 1)) (set! stop 1) }
+                (if (>= bytes sr_seg_hard)
+                    { (set! plan_cut (+ i 1)) (set! stop 1) }
+                    (set! i (+ i 1)))))
         #f })
     (if (== plan_cut 0)
         (if sr_eof
@@ -332,7 +349,11 @@
     (set! start sr_line_off)
     (set! n (length real))
     (set! lastline (if (> n 0) (get_item real (- n 1)) ""))
-    ;; 前置：上一段被迫在围栏内切断 → 段首插合成开启行
+    ;; 前置：上一段被迫在围栏内切断 → 段首插合成开启行（纯文本模式永不发生）
+    (if (== sr_plain 1)
+        { (set! cb 0) (set! olen 0) (set! ca 0) (set! clen 0)
+          (set! sr_next_cb 0) (set! sr_next_fch 0) (set! sr_next_olen 0) }
+        #f)
     (if (> sr_next_olen 0)
         { (set! cb 1)
           (set! olen sr_next_olen)
@@ -343,6 +364,8 @@
       { (push out (get_item real i))
         (set! i (+ i 1)) })
     ;; 后置：本段切点仍在围栏内 → 插合成闭合行；否则若末尾非空行 → 段落续接
+    ;; （纯文本模式上面已把续接标记清零，这里不再改：纯文本块的接缝天然无缝）
+    (if (== sr_plain 1) #f
     (if plan_fence
         { (set! ca 1)
           (set! clen (get_item plan_fence 1))
@@ -354,7 +377,7 @@
               { (set! ca 0) (set! sr_next_cb 0) }
               { (set! ca 1) (set! sr_next_cb 1) })
           (set! sr_next_fch 96)
-          (set! sr_next_olen 0) })
+          (set! sr_next_olen 0) }))
     ;; 记账：消费掉这 plan_cut 行
     (set! sr_lines (drop_k sr_lines plan_cut))
     (set! sr_line_off (+ sr_line_off (fold_bytes real)))

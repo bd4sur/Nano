@@ -614,6 +614,93 @@
     (emit_wrapped (get_item b 1) width 0 0 BG_NONE ST_BODY)
     (emit_gap 7)))
 
+;; ---- 纯文本 --------------------------------------------------------------
+;; 块形状：(plain 行数组) —— 行数组是**源码原样**（md_parse 的 h_plain 直接搬过来）。
+;; 排版规则：
+;;   · **一个源码行 → 至少一个显示行**，超宽按正文宽折行（续行不缩进）；
+;;   · 空行（只含空格/制表符）也占一个显示行（高度 = LINE_H）——纯文本里空行是内容；
+;;   · 没有块间隙：段内行与行紧邻；段与段的接缝由视图层的 skip_tail 负责（本块**不发**
+;;     尾部间隙，因此接缝天然无缝，见 layout_full 的"段尾续接"说明）；
+;;   · 制表符按 4 个半角空格展开（与围栏代码块一致）。
+
+;; 行里有没有制表符（没有就原样返回，避免长行做无谓的重拼）
+(define has_tab
+  (lambda (s)
+    (define n (String.length s))
+    (define i 0)
+    (define r #f)
+    (while (< i n)
+      { (if (== (String.charCodeAt i s) CP_TAB) (set! r #t) #f)
+        (set! i (+ i 1)) })
+    r))
+
+;; 制表符 → 4 个半角空格（分块拼接：只在遇到制表符时 flush 一次，长行也是 O(n)）
+(define expand_tabs
+  (lambda (s)
+    (define n (String.length s))
+    (define i 0)
+    (define out "")
+    (define seg "")
+    (define cp 0)
+    (if (not (has_tab s))
+        s
+        { (while (< i n)
+            { (set! cp (String.charCodeAt i s))
+              (if (== cp CP_TAB)
+                  { (set! out (String.concat out (String.concat seg "    ")))
+                    (set! seg "") }
+                  (set! seg (String.concat seg (String.charAt s i))))
+              (set! i (+ i 1)) })
+          (String.concat out seg) })))
+
+;; 行是否"视觉空行"（只含空格/制表符）：纯文本里空行是内容，要占一个显示行
+(define plain_blank
+  (lambda (s)
+    (define n (String.length s))
+    (define i 0)
+    (define r #t)
+    (define cp 0)
+    (while (< i n)
+      { (set! cp (String.charCodeAt i s))
+        (if (or (== cp CP_SP) (== cp CP_TAB)) #f (set! r #f))
+        (set! i (+ i 1)) })
+    r))
+
+;; 前导空格数（制表符已展开成空格，因此按空格数算缩进）
+(define lead_spaces
+  (lambda (s)
+    (define n (String.length s))
+    (define i 0)
+    (define go 1)
+    (while (and (< i n) (== go 1))
+      { (if (== (String.charCodeAt i s) CP_SP) (set! i (+ i 1)) (set! go 0)) })
+    i))
+
+;; 纯文本：逐行原样落地（一个源码行 → 至少一个显示行，不产生块间隙）
+;;
+;; **前导空格必须保真**：pack_segs 会把"行首空格原子"丢掉（那是为折行后的行首空格设计
+;; 的），所以这里先把前导空白换算成 first_ind/cont_ind 缩进，只把剩下的正文交给
+;; emit_wrapped —— 读代码/日志时缩进就是内容（踩过：缩进全被吃掉）。
+(define lay_plain
+  (lambda (b width)
+    (define lns (get_item b 1))
+    (define n (length lns))
+    (define i 0)
+    (define s "")
+    (define lead 0)
+    (define ind 0)
+    (while (< i n)
+      { (set! s (expand_tabs (get_item lns i)))
+        (if (plain_blank s)
+            (emit_line LINE_H BG_NONE (new_list))       ;; 空行也占一行
+            { (set! lead (lead_spaces s))
+              (set! ind (* lead W_HALF))
+              (if (> ind (- width W_FULL)) (set! ind (imax 0 (- width W_FULL))) #f)
+              (emit_wrapped (mk1 (mk2 'text (String.slice s lead (String.length s))))
+                            width ind ind BG_NONE ST_BODY) })
+        (set! i (+ i 1)) })
+    #t))
+
 ;; ---- 无序列表（支持嵌套）：每层缩进 LIST_IND，项目符号悬挂 ------------------
 ;; item = (item inlines children)：先排本项的文本（项目符号 14px 悬挂），再递归排 children。
 ;; 层级只影响缩进与折行右边界；绘制端依旧只认"段"。
@@ -1228,6 +1315,7 @@
 
 (layout_add 'heading lay_heading)
 (layout_add 'para lay_para)
+(layout_add 'plain lay_plain)
 (layout_add 'list lay_list)
 (layout_add 'code lay_code)
 (layout_add 'rule lay_rule)

@@ -21,6 +21,17 @@
 ;;        (math "源串")              块级数学公式（$$...$$ / $$ + 若干行 + $$）；
 ;;                                    只收 LaTeX 源串，排版与绘制在 md_layout / App 端。
 ;;                                    行内 $...$ 另见行内节点 (imath 源串)（见下）。
+;;        (plain 行数组)              **纯文本模式**：整段源码原样（行数组不做任何解析，
+;;                                    含空行）。只有 (set_plain 1) 时才会产出，见下。
+;;
+;; 两种模式（`(set_plain m)` 切换，默认 0 = Markdown 富文本）
+;; ---------------------------------------------------------------------------
+;;   · m = 0（富文本）：本文件按下面的块级/行内规则表解析 Markdown；
+;;   · m = 1（纯文本）：**整个行数组就是一个 (plain 行数组) 块**——#、*、`、$、| 这些
+;;     都不当语法，排版端逐行原样画（空行也占一行）。用于读代码/日志/任意文本，
+;;     此时行内语法、表格、公式、图片、标题一律不生效（目录因此也是空的）。
+;; 模式是**模块级状态**（与 md_layout 的 atoms / md_view 的段缓存同风格）：
+;; App 切换模式后重新 (parse) 一遍即可（见 app/markdown.scm 的 apply_mode）。
 ;;
 ;;     行内节点（inlines 的元素）：
 ;;        (text "字符串")             纯文本
@@ -1067,10 +1078,19 @@
         (set! i (+ i 1)) })
     blocks))
 
+;; ---- 解析模式（0 = Markdown 富文本 / 1 = 纯文本原样）----------------------
+(define pl_mode 0)
+(define set_plain (lambda (m) (set! pl_mode (if (== m 1) 1 0)) #t))
+(define plain_mode (lambda () pl_mode))
+
 ;; 对外：行列表 → 块列表（解析 + 引用展开）
+;; 纯文本模式下**一行都不解析**：整段行数组直接变成一个 (plain 行数组) 块
+;; （块形状 (plain 行数组)，见文件头的块表；行数组是源码原样，空行也保留）。
 (define parse_lines
   (lambda (lines)
-    (fixup_quotes (parse_lines_once lines))))
+    (if (== pl_mode 1)
+        (mk1 (mk2 'plain lines))
+        (fixup_quotes (parse_lines_once lines)))))
 
 ;; 整段文本 → 块列表
 (define parse

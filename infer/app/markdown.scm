@@ -65,6 +65,14 @@
 ;;   一行（诗歌、地址、清单、按列硬折的中文）会原样保持换行；按 80 列硬折的英文段落
 ;;   也会每行断一次，这是本规则的既定语义。
 ;;
+;; 两种阅读模式（2026-11-24，设置里可切，选择记在 data/md-mode.txt）：
+;;   · **富文本**：按 Markdown 解析排版（标题/列表/表格/公式/图片…全生效）；
+;;   · **纯文本**：一行一行原样显示——不解析任何 Markdown 语法，空行也占一行，
+;;     超宽折行、制表符按 4 空格展开（见 md_layout 的 lay_plain）。用于读代码/日志/配置。
+;;   三种选择：0 自动（`.md`/`.markdown` → 富文本，其它一律纯文本）、1 强制富文本、
+;;   2 强制纯文本。**每次打开文档都重算一次**，所以换了后缀不同的文件会自动换模式；
+;;   设置里的选择对**任何后缀**都生效（强制项）。
+;;
 ;; 数学公式（块级与行内共用一套引擎，见 app/lib/tex_*.scm）：
 ;;   · 块级：$$ 单行 $$ 或 $$ + 若干行 + $$；解析端只产出 (math 源串)，排版端按注入的
 ;;     度量回调定行高与居中位置（超宽则按比例缩小字号**重排**到与屏幕等宽）；
@@ -393,6 +401,99 @@
                     #f) }
               #f) })
     (apply_theme id)
+    #t))
+
+;; ---- 显示模式（富文本 / 纯文本）------------------------------------------
+;; 见文件头「两种阅读模式」：
+;;   mode_pref = 0 自动（按后缀：.md/.markdown → 富文本，其它 → 纯文本）
+;;               1 强制富文本   2 强制纯文本     （落盘 data/md-mode.txt）
+;;   rich_mode = 当前文档的**有效**模式（1 富文本 / 0 纯文本）——每次 open_path 重算。
+(define MODE_PATH "data/md-mode.txt")
+(define MODE_AUTO 0)
+(define MODE_RICH 1)
+(define MODE_PLAIN 2)
+(define MODE_ROWS 3)        ;; 设置面板里"显示"占几行（自动/富文本/纯文本）
+(define mode_pref MODE_AUTO)
+(define mode_saved -1)      ;; 已落盘的 mode_pref（-1 = 还不知道）；避免重复写盘
+(define rich_mode 1)
+
+;; 有效模式：自动时看后缀（md/markdown，大小写不敏感、无后缀 → 纯文本），否则看强制项
+(define mode_for_path
+  (lambda (p)
+    (if (== mode_pref MODE_AUTO)
+        (if (== (FSX.ext_match (FSX.leaf p) "md,markdown") 1) 1 0)
+        (if (== mode_pref MODE_RICH) 1 0))))
+
+;; 把有效模式装进三个下层模块（md_view 会转给 md_parse / md_stream），并打诊断行
+(define apply_rich_mode
+  (lambda (r)
+    (set! rich_mode r)
+    (MDV.set_plain (if (== r 1) 0 1))
+    (display "MDMODE rich=") (display rich_mode)
+    (display " pref=") (display mode_pref) (newline)
+    #t))
+
+(define mode_name
+  (lambda (i)
+    (if (== i MODE_AUTO) "自动（按后缀）"
+        (if (== i MODE_RICH) "富文本" "纯文本"))))
+
+;; 落盘（只在变化时写；冷启动读到合法值时 mode_saved 已就位 → 空操作）
+(define save_mode
+  (lambda ()
+    (if (== mode_pref mode_saved)
+        #f
+        { (Fs.write MODE_PATH (String.atom_to_string mode_pref))
+          (set! mode_saved mode_pref) })
+    #t))
+
+;; 启动时读回上次的选择；缺失/被改坏（非 0..2）→ 自动
+(define load_mode
+  (lambda ()
+    (define s (Fs.read MODE_PATH))
+    (define v #f)
+    (if (null? s) #f
+        { (set! v (String.parseNumber (trim_ws s)))
+          (if (number? v)
+              { (set! v (Math.floor v))
+                (if (and (>= v 0) (<= v 2))
+                    { (set! mode_pref v)
+                      (set! mode_saved v) }
+                    #f) }
+              #f) })
+    #t))
+
+;; 设置面板里选中某个显示模式：立即对**当前文档**生效（重新解析排版、保留阅读位置），
+;; 并落盘供下次启动沿用。三种选择对任何文件后缀都成立（"自动"才看后缀）。
+(define set_mode_pref
+  (lambda (p)
+    (if (and (>= p 0) (<= p 2))
+        { (set! mode_pref p)
+          (save_mode)
+          (if (== MDV_ok 1)
+              (reopen_keep 1)
+              (if (> (String.length cur_path) 0)
+                  (open_path cur_path cur_title)
+                  (open_prompt))) }
+        #f)
+    #t))
+
+;; 重新打开当前文档并尽量留在原处（换字模 / 换显示模式后）：
+;; 锚点是 (段号, 段内 dy)，ratio 用来把 dy 按行高变化换算（换模式时行高不变 → 1）。
+(define reopen_keep
+  (lambda (ratio)
+    (define a #f)
+    (define seg 0)
+    (define dy 0)
+    (set! a (MDV.anchor))
+    (set! seg (get_item a 0))
+    (set! dy (Math.floor (* (get_item a 1) ratio)))
+    (open_path cur_path cur_title)
+    (if (== MDV_ok 1)
+        { (MDV.set_anchor seg dy)
+          (MDV.ensure seg)
+          (sync_scroll) }
+        #f)
     #t))
 
 ;; ---- 正文样式 → 颜色 -----------------------------------------------------
@@ -949,6 +1050,8 @@
     (set! cur_title title)
     (set! cur_path path)
     (set_doc_dir path)
+    ;; 显示模式：按后缀/强制项算一次再打开（必须在 MDV.open 之前——它决定解析方式）
+    (apply_rich_mode (mode_for_path path))
     (set! fsize (Fs.size path))
     (if (null? fsize)
         (set! msg (notice_blocks "读取失败：文件不存在或不可读。"
@@ -1034,6 +1137,8 @@
     (display (get_item (System.memstat) 3))
     (display " cache=")
     (display (if (== MDV_ok 1) (MDV.cache_lines) 0))
+    (display " mode=")
+    (display (if (== rich_mode 1) "rich" "plain"))
     (newline)
     #t))
 
@@ -1414,7 +1519,17 @@
 ;;   不必为"分组标题"再发明一种不可选的行。指示灯：当前项实心、其余空心。
 (define FONT_ROWS 3)      ;; 行表里字模占前几行（其余是主题；两者下标由此推算）
 
-(define settings_rows (lambda () (+ FONT_ROWS (TH.count))))
+(define settings_rows (lambda () (+ (+ FONT_ROWS (TH.count)) MODE_ROWS)))
+
+;; 设置面板的行高：比目录的 (menu_row_h) 矮 2px —— 8 行（3 字模 + 2 配色 + 3 显示）
+;; 要在一屏内摆完（视口 176px / 8 行 = 22px）；16px 字模下会自动超出一屏，交给组件滚动。
+;; 注意：本解释器没有 max/min 内建（只有 Math.mx/Math.mn 之类），这里手写取大
+(define settings_row_h
+  (lambda ()
+    (define h (- (menu_row_h) 2))
+    (if (< h 16) 16 h)))
+(define settings_view_y (lambda () (+ SET_TOP 18)))
+(define settings_view_h (lambda () (- (- SH BOT_H) (settings_view_y))))
 
 (define settings_menu_items
   (lambda ()
@@ -1431,23 +1546,28 @@
       { (push out (ml_item (String.concat "配色 " (TH.name i))
                            P_TOC_L1 0 (if (== i theme_id) 2 1) P_TOC_S1))
         (set! i (+ i 1)) })
+    ;; 显示模式：自动（按后缀）/ 富文本 / 纯文本
+    (set! i 0)
+    (while (< i MODE_ROWS)
+      { (push out (ml_item (String.concat "显示 " (mode_name i))
+                           P_TOC_L1 0 (if (== i mode_pref) 2 1) P_TOC_S1))
+        (set! i (+ i 1)) })
     out))
 
-;; 激活行表里的第 i 行：前 FONT_ROWS 行是字模，其余是主题。
+;; 激活行表里的第 i 行：前 FONT_ROWS 行是字模，其后每个配色一行，最后 MODE_ROWS 行是
+;; 显示模式（自动 / 富文本 / 纯文本）。
 ;; 返回 #t/#f（#f 仅用于越界；本解释器里 0 是真值，所以不能用 0/1 当结果）。
 (define settings_activate
   (lambda (i)
+    (define nt (TH.count))
     (if (and (>= i 0) (< i FONT_ROWS))
         (apply_font i)
-        (if (and (>= i FONT_ROWS) (< i (settings_rows)))
+        (if (and (>= i FONT_ROWS) (< i (+ FONT_ROWS nt)))
             (apply_theme (- i FONT_ROWS))
-            #f))
+            (if (and (>= i (+ FONT_ROWS nt)) (< i (settings_rows)))
+                (set_mode_pref (- i (+ FONT_ROWS nt)))
+                #f)))
     #t))
-
-;; 「当前：…」说明行的 y（列表视口止于此处，免得滚动时行压到说明上）
-(define SET_INFO_Y (lambda () (- (- SH BOT_H) 16)))
-(define settings_view_y (lambda () (+ SET_TOP 18)))
-(define settings_view_h (lambda () (- (SET_INFO_Y) (settings_view_y))))
 
 (define draw_settings
   (lambda ()
@@ -1455,23 +1575,22 @@
     ;; 列表（组件绘制：高亮行只有底色，无左侧竖条；指示灯在左）
     (ML.set_items (settings_menu_items))
     (ML.draw)
-    ;; 小节标签 + 底部说明（页眉页脚最后画，盖住边界半行）
+    ;; 小节标签（页眉页脚最后画，盖住边界半行）
     (tx "外观" PAD_X SET_TOP P_HEADER_DIM)
-    (tx (String.concat "字体 " (String.concat
-                                 (font_name font_id)
-                                 (String.concat " · 配色 " (TH.name theme_id))))
-        PAD_X (SET_INFO_Y) P_HEADER_DIM)
     (fr 0 0 SW TOP_H P_HEADER_BG)
     (tx "设置" PAD_X 3 P_HEADER_TEXT)
     (ML.draw_back)
     (fr 0 (- SH BOT_H) SW BOT_H P_FOOTER_BG)
-    (tx "↑↓ 选择 · 点按切换 · 右上返回" PAD_X (- SH 14) P_FOOTER_TEXT)
+    ;; 页脚右侧顺带报出当前**有效**的显示模式（自动时可能与"显示"行的选择不同：
+    ;; 例如自动 + 打开的是 .txt → 这里显示"纯文本"）
+    (tx (String.concat "↑↓ 选择 · 点按切换 · " (if (== rich_mode 1) "富文本" "纯文本"))
+        PAD_X (- SH 14) P_FOOTER_TEXT)
     (Gfx.refresh)
     #t))
 
 (define settings_open_panel
   (lambda ()
-    (ML.reset (settings_menu_items) (menu_row_h))
+    (ML.reset (settings_menu_items) (settings_row_h))
     (ML.geom 0 (settings_view_y) SW (settings_view_h))
     (ML.back_top_right SW)
     (App.set_exit_button 0 0 0 0)   ;; 同上：右上角归设置面板自己的返回键
@@ -2182,6 +2301,8 @@
       ;; （否则选了亮色主题的机器会先闪一下深色启动页）。读一个几字节的记录文件，
       ;; 代价远小于一次推屏，不影响 boot 的“尽快上屏”初衷。
       (load_theme)
+      ;; 显示模式（富文本/纯文本）也在这里读回：boot_work 里打开文档时要按它解析
+      (load_mode)
       (MDL.set_math_measure doc_math_measure)  ;; 打开公式排版能力（必须在排版之前）
       (draw_splash)                           ;; ① 启动提示：5 个 Gfx 调用，<1ms
       (display "MDBOOT splash t=") (display (System.timestamp)) (newline)

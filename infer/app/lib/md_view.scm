@@ -37,11 +37,27 @@
 (import MDL "app/lib/md_layout.scm")
 (import MDST "app/lib/md_stream.scm")
 
+;; 设置纯文本模式（转发给下层两个模块；App 在 open 之前调用）
+(define set_plain
+  (lambda (m)
+    (define v (if (== m 1) 1 0))
+    (set! vw_plain v)
+    (MDST.set_plain v)
+    (MD.set_plain v)
+    #t))
+(define plain_mode (lambda () vw_plain))
+
 (define new_list (lambda () (cdr '(0))))
 (define min2 (lambda (a b) (if (< a b) a b)))
 (define max2 (lambda (a b) (if (> a b) a b)))
 
 ;; ---- 状态 ---------------------------------------------------------------
+
+;; 纯文本模式（0 = Markdown 富文本 / 1 = 纯文本）：只是**转发**给
+;;   md_parse（不解析，整段行数组变成一个 (plain …) 块）、
+;;   md_stream（不认围栏/公式，切段不看空行）与目录扫描（纯文本没有标题）。
+;;   模式是模块级状态：App 切换后重新 (open) 一遍（见 app/markdown.scm 的 apply_mode）。
+(define vw_plain 0)
 
 (define vw_path "")
 (define vw_width 308)
@@ -125,8 +141,10 @@
 ;;
 ;; 每段都从"无围栏"开始是**正确**的：正常切点必然在围栏外的空行处；若某段是被强制
 ;; 切断在围栏内，它的首行就是合成围栏开启行（见 md_stream.scm），状态同样自洽。
+;; 纯文本模式：源码里的 "# xxx" 不是标题，目录必须是空的（否则目录面板会列出假条目）
 (define headings_of
   (lambda (lines)
+    (if (== vw_plain 1) (cdr '(0)) #f)
     (define n (length lines))
     (define i 0)
     (define ln "")
