@@ -15488,3 +15488,64 @@ native 绑定的 `am_native_Gfx_draw_line_aa` 也一直传 `mode = 1`（置色�
 "关闭设置面板"原来按 Esc——面板刚关的那一拍宿主也会收到一条返回请求，偶发再弹一次
 全局退出确认框（chromium 上实测 flaky，截图里对话框盖住了整屏）。改为**点面板自己的
 「返回」键**（与目录面板用例同一做法）后三引擎稳定。
+
+# 2026-11-24（四）Markdown 阅读器「打开」不筛类型；文件管理器把文本/代码/日志类关联到它
+
+两条需求：
+① MD 阅读器的底栏「打开」**不做文件类型筛选**——任何文件都能被当作文本解释打开；
+② 文件管理器把 txt / md / js / scm / log / json / py / c / h / cpp / hpp 等**纯文本、代码、
+日志类**文件都关联到 Markdown 阅读器打开。
+
+## ① 选择器不筛选（`infer/app/markdown.scm`）
+
+`(FP.start "打开 Markdown 文件" "md,markdown")` → `(FP.start "打开文件" "")`：
+文件选择器（`app/lib/filepicker.scm`）的扩展名过滤本来就支持 `""` / `"*"` = 全部
+（`FSX.ext_match` 的既有语义），所以只改这一处传参；顺带把文件头「文档来源」、空状态
+与读失败的提示文案从"选一篇 .md/.markdown"改成"选一个文件（任意类型，按文本打开）"。
+
+- 安全性：读不出来 / 超 1MB 仍走既有的提示文案（`Fs.size` → `DOC_MAX`），**不会**因为
+  点了二进制文件就崩。实测（真 wasm32）：把一张 PNG 当文档打开 → `MDSTAT blocks=1
+  lines=1 height=242` 照常上屏（乱码字），无 `pageerror`。1MB 以上的文件照旧提示过大。
+- 目录照旧可点进去（选择器里目录永远排在文件前面）。
+
+## ② 文件管理器的类型关联（`infer/app/filemgr.scm`）
+
+`openers` 表里原本只有 `md,markdown` 与 `txt` 两行指向 markdown；现在并成一张
+**文本类扩展名长表 `OPENER_TEXT`**（约 180 个，分三组便于维护）：
+
+- 文档/笔记：md markdown txt text log rst org tex adoc
+- 配置/数据/日志：json jsonl csv tsv yml yaml toml ini cfg conf env properties xml svg diff patch
+- 源码/脚本：js mjs cjs ts jsx tsx json5 vue svelte scm ss rkt sld lisp el clj py pyw rb php
+  pl lua sh bash zsh fish bat cmd ps1 sql asm c h cc cpp cxx hh hpp hxx ino cs java kt kts go
+  rs swift m mm dart v sv svh vhd vhdl html htm xhtml css scss sass less styl mk cmake gradle m4 awk
+
+加一类文本 = 往这个字符串里加一个扩展名（不含点、逗号分隔、大小写不敏感）。**没有扩展名的
+文件**（Makefile / README / .gitignore）匹配不上 `FSX.ext_match` 的语义，仍走详情框；
+要支持得再加"按文件名匹配"的规则。图片（时光集）/音频（音乐盒）两行保持在前，优先级不变。
+
+## 踩坑：`(String.concat …)` 是**二元**过程，多传参数会把字符串拼坏
+
+第一次写 `OPENER_TEXT` 时用了 6 参数的 `String.concat` 嵌套。manual §8.2 写明它是二元过程，
+多传的参数只是**残留在操作数栈上**（结果未规定）——实测内层只拼了最后两个参数，外层又把
+残留在栈上的串当第二个参数，最终结果长度 16 而正确值是 392，`"log"` 根本不在结果里：
+**`.log` 文件因此打不开（弹的是详情框）**。改成严格两两嵌套后 `FMOPENERS text_len=392`。
+
+顺带：写了个基于括号平衡的静态扫描（含字符串/注释识别）复查全仓库的 `String.concat`
+调用点，除本次这处外还有 **1 处**同类既有缺陷——`filemgr.scm` 的「移动（预留）」对话框
+文案（3 参数），一并改成两两嵌套；`vcodec.scm:2401` 的疑似项经人工核对是
+`(String.concat s (cat `(…)))`（两个参数，扫描器被 `,` 前缀带歪），无需改动。
+
+## 验证
+
+- 浏览器端到端（真 wasm32）：
+  - `regress_markdown.js` **102/102**（新增第 7b 节：选择器把 `.log`/`.bin` 与 `.md` 一起
+    列出、`FP dir=doc … ext=` 为空串（不筛选的实证）、点选 PNG 当文本打开后仍出页且无
+    `pageerror`），Chromium / chrome-headless-shell / Firefox 三引擎全过；
+  - `regress_filemgr.js` **63/63**（新增第 7b 节：`FMOPENERS text_len ≥ 350`、`.py` 与
+    `.log` 都能拉起阅读器（`FMOPEN … -> markdown` + 阅读器侧 `MDLAUNCH`）、退出阅读器
+    后**返回链**回到同一个文件管理器实例；另把原来"选择器只列 .md"的两条断言改成
+    "不再按扩展名筛选"），三引擎全过；
+  - `regress_markdown_math.js` 26/26 未受波及。
+- 人工目检：文件管理器里点 `app/album.scm` → 阅读器以文本打开（页眉标题 `album`、页眉
+  按钮为「返回」），深色/明亮主题都正常。
+- 宿主无头回归台：`filemgr` / `markdown` 均 `err=none`。

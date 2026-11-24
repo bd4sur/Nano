@@ -9,7 +9,8 @@
 ;;     （排序在 Scheme 层做，不依赖各平台 readdir 顺序）；目录以「名字/」+ 蓝色区分；
 ;;   · 列表顶部固定一条 **".."（返回上级目录）** 条目（根目录下变灰，点了只提示）；
 ;;   · 进入目录 / 返回上级；文件选中后「进入」= **用对应类型的 App 打开**
-;;     （映射表见下方 openers；txt / md / markdown → Markdown 阅读器 App，
+;;     （映射表见下方 openers；**纯文本/代码/日志/配置类一律 → Markdown 阅读器 App**
+;;      （txt md markdown log json py c h cpp scm js … 见 OPENER_TEXT），
 ;;      png / jpg / jpeg / bmp / gif / tga → 时光集（图片查看器）App，
 ;;      wav / mp3 → 音乐盒 App，传绝对路径直接开播）；
 ;;     没有映射的类型仍弹出详情框（路径 / 大小 / 类型）；
@@ -497,18 +498,47 @@
 ;; 表项顺序即匹配优先级；没有命中的类型照旧弹详情框（行为与以前一致）。
 (define openers (cdr '(0)))
 
+;; 「纯文本类」扩展名表（不含点、逗号分隔、**一律写小写**，匹配本身大小写不敏感）：
+;; 全部交给 Markdown 阅读器。
+;; 分三组便于维护——
+;;   ① 文档/笔记：md markdown txt text log rst org tex adoc；
+;;   ② 配置/数据/日志：json jsonl csv tsv yml yaml toml ini cfg conf env properties
+;;      xml svg diff patch；
+;;   ③ 源码/脚本：js mjs cjs ts jsx tsx json5 vue svelte scm ss rkt sld lisp el clj
+;;      py pyw rb php pl lua sh bash zsh fish bat cmd ps1 sql asm c h cc cpp cxx
+;;      hh hpp hxx ino cs java kt kts go rs swift m mm dart v sv svh vhd vhdl
+;;      html htm xhtml css scss sass less styl mk cmake gradle m4 awk
+;; 说明：**没有扩展名的文件**（Makefile / README / .gitignore 之类）匹配不上这张表——
+;; 它们仍走详情框（要支持得再加"按文件名匹配"的规则，见 (FSX.ext_match) 的语义）。
+;; ⚠ (String.concat …) 是**二元**过程（manual §8.2）：多传的参数只是残留在操作数栈上，
+;; 结果未规定——实测写成多参数时会把前半截吞掉（"log" 就不在结果里了，.log 打不开）。
+;; 因此下面严格两两嵌套。
+(define OPENER_TEXT
+  (String.concat "md,markdown,txt,text,log,rst,org,tex,adoc,"
+    (String.concat "json,jsonl,csv,tsv,yml,yaml,toml,ini,cfg,conf,env,properties,xml,svg,diff,patch,"
+      (String.concat "js,mjs,cjs,ts,jsx,tsx,json5,vue,svelte,scm,ss,rkt,sld,lisp,el,clj,"
+        (String.concat "py,pyw,rb,php,pl,lua,sh,bash,zsh,fish,bat,cmd,ps1,sql,"
+          (String.concat "asm,c,h,cc,cpp,cxx,hh,hpp,hxx,ino,cs,java,kt,kts,go,rs,swift,m,mm,dart,"
+            (String.concat "v,sv,svh,vhd,vhdl,html,htm,xhtml,css,scss,sass,less,styl,mk,cmake,gradle,m4,awk"
+                           "")))))))
+
 (define build_openers
   (lambda ()
     (set! openers (new_list))
     ;; 图片 → 时光集（app/album.scm）：扩展名表与 album 的 ext_ok 保持一致
     ;; （stb_image 能解码的常见格式；改一处要同步改另一处）
     (push openers (mk2 "png,jpg,jpeg,bmp,gif,tga" "album"))
-    (push openers (mk2 "md,markdown" "markdown"))
-    (push openers (mk2 "txt" "markdown"))
+    ;; 纯文本 / 代码 / 日志 / 配置 → Markdown 阅读器：它不做类型筛选，**任何文件都按
+    ;; 文本读入、按 Markdown 排版**（md 语法只是锦上添花），所以这张表可以很长——
+    ;; 加一类文本就是往字符串里加一个扩展名（不含点、逗号分隔、大小写不敏感）。
+    (push openers (mk2 OPENER_TEXT "markdown"))
     ;; 音频 → 音乐盒（app/musicbox.scm）：只列 (native Music) **实际能解码**的两种格式
     ;; （WAV / MP3，见 am_native_Music.h）；musicbox 收到绝对路径就直接打开播放该文件，
     ;; 并把列表换成它所在目录（上一首/下一首仍在同一目录里）。
     (push openers (mk2 "wav,mp3" "musicbox"))
+    ;; 诊断行（e2e 据此断言"文本类扩展名表没被写坏"：二元 String.concat 写错时长度会明显偏小）
+    (display "FMOPENERS n=") (display (length openers))
+    (display " text_len=") (display (String.length OPENER_TEXT)) (newline)
     #t))
 
 ;; 文件名 → 应用名（#f = 没有可拉起的 App，调用方退化为显示详情）
@@ -665,9 +695,10 @@
 (define op_move
   (lambda ()
     (Ui.message "移动（预留）"
+                ;; 二元的 (String.concat …) 只能两两拼（多传参数的结果未规定，实测会吞掉前半截）
                 (String.concat "跨目录移动可用「重命名」完成：\n"
-                  "在重命名框里输入 目标目录/新名字。\n"
-                  "同名移动/覆盖策略待定，故单列此按钮占位。"))))
+                  (String.concat "在重命名框里输入 目标目录/新名字。\n"
+                                 "同名移动/覆盖策略待定，故单列此按钮占位。")))))
 
 ;; ---- 操作表（唯一按钮清单：绘制 / 命中 / 键盘都按表驱动）---------------
 ;; 每项 = (mk3 名称 处理函数 是否可用)；前 5 项画在第一排，其余画在第二排。

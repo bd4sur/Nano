@@ -78,8 +78,11 @@
 ;;     每次成功打开一篇就覆盖写一次；启动时读回并用 (Fs.exists) 校验，存在就直接续读；
 ;;   · 读不到记录 / 文件已不在 → 显示空状态提示（没有文档可看），由用户自己挑一篇；
 ;;   · 挑文档的唯一入口是**底栏「打开」按钮**（触屏）→ 可复用的文件选择器
-;;     （app/lib/filepicker.scm），在**整个资源根**里挑任意 .md/.markdown；
-;;   · **被别的 App 拉起**（App.launch_with，例如 app/filemgr.scm 选中 .md/.txt）：
+;;     （app/lib/filepicker.scm），在**整个资源根**里挑**任意文件**——**不做扩展名
+;;     筛选**：任何文件都按文本读入、按 Markdown 解析排版（.txt/.log/源码/配置都能直接
+;;     看，二进制文件会显示成乱码字，但不会崩：读不出来/超 1MB 走提示文案）。
+;;     选目录仍可点进去（选择器里目录永远排在文件前面）；
+;;   · **被别的 App 拉起**（App.launch_with，例如 app/filemgr.scm 选中文本/代码文件）：
 ;;     启动参数 = 待打开文件的宿主绝对路径，boot / 每拍开头由 (App.launch_arg)
 ;;     取走（一次即清零），直接打开该文档（成功后同样写回 data/md-last.txt）——
 ;;     见下方 launch_open。记录的是**原样路径**（相对资源根或宿主绝对路径皆可），
@@ -944,7 +947,7 @@
     (set! fsize (Fs.size path))
     (if (null? fsize)
         (set! msg (notice_blocks "读取失败：文件不存在或不可读。"
-                                 "点底栏「打开」重新选一篇文档。"))
+                                 "点底栏「打开」重新选一个文件。"))
         (if (> fsize DOC_MAX)
             (set! msg (notice_blocks
                         (String.concat "文档过大（"
@@ -973,7 +976,7 @@
     (set! cur_path "")
     (set_doc_dir "")
     (open_finish #f (notice_blocks "还没有打开文档。"
-                                   "点底栏「打开」选一篇 .md / .markdown；也可点按本页或按 Enter。"))
+                                   "点底栏「打开」选一个文件（任意类型，按文本打开）；也可点按本页或按 Enter。"))
     (display "MDEMPTY") (newline)
     #t))
 
@@ -1055,7 +1058,9 @@
 (define start_picker
   (lambda ()
     { (display "MDOPEN picker") (newline)
-      (FP.start "打开 Markdown 文件" "md,markdown")
+      ;; 扩展名过滤传 ""（全部）：本阅读器能把**任何**文件当文本打开（见文件头
+      ;; 「文档来源」），所以选择器里也应当一个不落地列出来。
+      (FP.start "打开文件" "")
       ;; 选择器活动期间提速到 60Hz（拖动跟手，见 TICK_MS 处注释）
       (set_tick (FP.tick_ms)) }))
 
