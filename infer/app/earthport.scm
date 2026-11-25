@@ -12,10 +12,11 @@
 ;; 画面构成（320x240）：
 ;;   · 地表：NASA Blue Marble（无云）1° 网格 —— 数据在 app/lib/earth_tex.scm（生成物）
 ;;   · 夜灯：NASA Black Marble 1° 网格 —— 同一份贴图的第四通道（含水面标记）
-;;   · 大气：视线穿过大气壳的散射近似（球内加色雾 + 球外辉光窗），随太阳高低变化
+;;   · 大气：**视线方向的空气柱密度**（Kasten 型空气量）+ 大气自身照明 → 色调映射加色。
+;;     天顶方向只有淡淡一层蓝，掠射方向空气量陡增 ⇒ 视圆盘亮区内部是宝石蓝的散射光，
+;;     最外圈过曝成青白，圆盘边缘"化开"（大气厚度按视觉需求夸大，HS=0.033R）。
 ;;   · 反光：海面（贴图蓝通道占优处）按半角向量做镜面高光，光斑位置即真实太阳反光点
-;;   · 舷窗刻度环：半径 100px 细弧 + 每 5°/30° 刻度（朝太阳一侧更亮）
-;;   · 星空：几十颗暗星（只在辉光窗之外，重绘地球不会擦掉）
+;;   · 星空：几十颗暗星（只画在辉光窗之外，重绘地球擦不到）
 ;;   · HUD：UTC 时刻 / 日期 / 太阳赤纬 / 空间站高度与速度
 ;;
 ;; 天文（怎么算出晨昏线）：
@@ -33,7 +34,7 @@
 ;;
 ;; 渲染节奏（为什么不是每帧整屏重算）：一次整球绘制约 3 万像素、约 600 万条 VM 指令
 ;;   （wasm 上实测 ≈0.35s 纯解释执行）。而太阳在屏幕上每分钟只移动 0.4 像素，所以：
-;;     · 场景（球体/大气/刻度环）每 SCENE_S=30 秒重算一次，且**分条渐进**绘制
+;;     · 场景（球体/大气）每 SCENE_S=30 秒重算一次，且**分条渐进**绘制
 ;;       （每拍画 STRIP 行推一次屏），一次重绘跨 ~20 拍完成，看不出"刷"的感觉；
 ;;     · 只有 UTC 时钟每秒钟重画一行字（fill_rect + draw_text，脏区极小）。
 ;;   稳态 CPU 占用几个百分点。
@@ -63,8 +64,7 @@
 
 (define W (Gfx.width))              ; 320
 (define H (Gfx.height))             ; 240
-(define CXI 160)                    ; 球心（整数像素）
-(define CX 160.0)
+(define CX 160.0)                   ; 球心（屏幕上略高于正中，给底部 HUD 让位）
 (define CY 118.0)
 (define RAD 90.0)                   ; 球半径（像素）
 (define RINV (/ 1.0 RAD))           ; 1/R
@@ -73,15 +73,27 @@
 (define DEG 57.29577951308232)      ; 180/π
 (define PI 3.141592653589793)
 
-;; 辉光窗：|1 - q| < 0.256（q = (d/R)²）⇒ 渲染半径 101.5px
-(define XMAX 1.128)
+;; 渲染窗口：大气壳 = 半径 1 + HS（归一化）的外圈，外圈按 exp(-(b-1)/HS) 衰减到 3.5HS
+(define HS 0.033)                   ; 大气标高（归一化半径；**视觉上把大气厚度夸大**：
+                                    ; 真实 100km/6371km ≈ 0.016，这里取 0.02–0.03 的量级，
+                                    ; 配合下方的边缘羽化让视圆盘边缘"化开"）
+(define HS2 (* 2.0 HS))
+(define AIR0 (/ 1.0 (Math.sqrt HS2)))   ; 外圈衰减幅度（与 b=1 处的内圈空气量连续）
+(define XMAX 1.15)                  ; 渲染半径 = 1.15R（外圈空气量在此已衰减到 ~1e-3）
 (define XMAXR (* RAD XMAX))
 (define XMAX2 (* XMAXR XMAXR))
-(define HALO_XR 0.128)              ; 圆外辉光截止（= |1-q|/2 的上限）
-(define HALO_INV (/ 1.0 HALO_XR))
-(define RINGRAD 100.0)              ; 刻度环半径
+(define ATM_R 0.021)                ; 大气内散射通道增益（色调映射前；R:G:B ≈ 1:3.6:12）
+(define ATM_G 0.076)
+(define ATM_B 0.260)
+(define ATM_FLOOR 0.55)             ; 空气量立方的扣除（天顶方向散射几乎抵消，只留淡淡一层蓝）
+(define ATM_AMB 0.015)              ; 夜侧空气辉光的照明下限
+;; 大气自身的照明比地表"高"：地平线下 ~7° 以内的高层大气仍被太阳照到，于是晨昏线
+;; 两侧会出现一道大气辉光亮边（真实轨道照片里的日出/日落带）。
+(define ATM_LIFT 0.10)              ; 被照到的最低太阳天顶角余弦
+(define ATM_LIFT_K 4.5)             ; 斜率（抬升后的照明在此饱和）
+(define EDGE_FADE 0.071)            ; 地表边缘羽化（最外 ~7px 淡出，交给大气接管）
 
-;; 渲染行范围与每拍行数（球 + 辉光 = y 15..221）
+;; 渲染行范围与每拍行数（球 + 外圈 = y 15..222）
 (define ROW_Y0 15)
 (define ROW_Y1 222)
 (define STRIP 10)
@@ -94,24 +106,13 @@
 (define TXB ET.TXB)
 (define TXN ET.TXN)                 ; 夜间灯光（水面码点再 +0x100）
 
-;; 大气常量（与 tools/gen_earth_tex.py 的预览公式逐条一致）
-(define RING_K 96.0)                ; 大气"硬"亮环衰减尺度
-(define HAZE_K 22.0)                ; 大气"软"雾衰减尺度
-(define BLOOM_K 6.0)                ; 圆外宽辉光
-(define RING_A 0.66)
-(define HAZE_A 0.34)
-(define BLOOM_A 0.30)
-(define RIM_BASE 0.13)              ; 大气环底亮度
-(define RIM_LIT 0.72)               ; 大气环随太阳天顶角的增益
-(define RIM_SUN 0.62)               ; 大气环随 SUNUP² 的增益（前向散射：太阳在镜头背后时整圈亮）
-
 ;; 昼夜常量
 (define DAY_AMB 0.05)               ; 昼夜过渡底光
-(define DAY_SOFT 0.06)              ; 过渡带软化宽度
-(define GLINT_CORE 205.0)           ; 海面反光光斑强度
-(define GLINT_CORE_K 220.0)         ; 光斑角半径
-(define GLINT_WIDE 26.0)            ; 海面宽反光强度
-(define GLINT_WIDE_K 30.0)
+(define DAY_SOFT 0.10)              ; 过渡带软化宽度
+(define GLINT_CORE 150.0)           ; 太阳反光亮斑强度（直径较大）
+(define GLINT_CORE_K 110.0)          ; 光斑角半径（≈7px 半径）
+(define GLINT_WIDE 58.0)            ; 海面宽反光强度（光斑外的大光晕）
+(define GLINT_WIDE_K 20.0)
 (define TWILIGHT_K 3.0)             ; 暮光带宽度（dot ∈ [-0.33, 0]）
 ;; 夜面地表残余反照率 = 0.020 × (0.65, 0.85, 1.10)（蓝调，避免夜面发土黄）
 (define NIGHT_K_R 0.0130)
@@ -139,7 +140,6 @@
 (define HY 0.0)
 (define HZ 1.0)
 (define SUNUP 0.0)                  ; max(0, SU)
-(define SUNUP2 0.0)                 ; SUNUP²（大气环的"太阳在天顶侧"增益）
 (define DEC_DEG 0.0)                ; 太阳赤纬（度，HUD）
 (define alt_km 382.4)               ; 空间站高度（km，HUD）
 (define spd_kms 7.68)               ; 轨道速度（km/s，HUD）
@@ -235,7 +235,6 @@
     (set! HY (/ SN hl))
     (set! HZ (/ (+ SU 1.0) hl))
     (set! SUNUP (if (> SU 0.0) SU 0.0))
-    (set! SUNUP2 (* SUNUP SUNUP))
     ;; 空间站高度：75 天周期的缓慢起伏（±2.8km，接近真实的阻尼/抬轨幅度）；
     ;; 速度由活力公式给出 v = sqrt(μ / (Re + h))。两者都只是为了 HUD 有"活气"。
     (set! alt (+ 382.0 (* 2.8 (Math.sin (* (mod cur_days 75.0) 0.08377580409572781)))))
@@ -286,16 +285,13 @@
     (define twi 0.0)
     (define lk 0.0)
     (define lit 0.0)
-    (define xr 0.0)
-    (define zz 0.0)
-    (define ring 0.0)
-    (define haze 0.0)
-    (define bloom 0.0)
-    (define hh 0.0)
-    (define aa 0.0)
-    (define a2 0.0)
-    (define a3 0.0)
-    (define xo 0.0)
+    (define air 0.0)
+    (define s3 0.0)
+    (define ar 0.0)
+    (define ag 0.0)
+    (define ab 0.0)
+    (define cov 0.0)
+    (define bo 0.0)
     (define xext 0.0)
     (if (> yend ROW_Y1) (set! yend ROW_Y1) #f)
     (while (< y yend) {
@@ -324,14 +320,13 @@
                     (if (> dot 0.0)
                         { ; ---------------- 昼半球 ----------------
                           (set! k (* (+ DAY_AMB (* (- 1.0 DAY_AMB) (/ dot (+ dot DAY_SOFT))))
-                                     (+ 0.58 (* 0.42 w))))
+                                     (+ 0.44 (* 0.56 w))))
                           (set! cr (- (String.charCodeAt idx TXR) 256.0))
                           (set! cg (- (String.charCodeAt idx TXG) 256.0))
                           (set! cb (- (String.charCodeAt idx TXB) 256.0))
                           (set! r (* cr k))
                           (set! g (* cg k))
                           (set! b (* cb k))
-                          (set! lit dot)
                           ;; 海面（蓝通道占优）才反光
                           (if (> (- cb cr) 6.0)
                               {
@@ -356,53 +351,58 @@
                           (set! nv (if (> nc 511.0) (- nc 512.0) (- nc 256.0)))
                           (set! twi (if (< dot -0.34) 0.0 (+ 1.0 (* dot TWILIGHT_K))))
                           (set! lk (* nv (- 1.0 (* 0.85 twi))))
-                          (set! r (+ (+ (* cr NIGHT_K_R) (* lk 1.28)) (* twi 9.0)))
-                          (set! g (+ (+ (* cg NIGHT_K_G) (* lk 0.98)) (* twi 15.0)))
-                          (set! b (+ (+ (* cb NIGHT_K_B) (* lk 0.62)) (* twi 34.0)))
-                          (set! lit 0.0)
+                          (set! r (+ (+ (* cr NIGHT_K_R) (* lk 1.28)) (* twi 16.0)))
+                          (set! g (+ (+ (* cg NIGHT_K_G) (* lk 0.98)) (* twi 28.0)))
+                          (set! b (+ (+ (* cb NIGHT_K_B) (* lk 0.62)) (* twi 52.0)))
                         })
-                    ;; 大气（视线在球内：加色雾）
-                    (set! xr (* (- 1.0 q) 0.5))
-                    (set! zz (* xr RING_K))
-                    (set! ring (/ 1.0 (+ 1.0 (* zz zz))))
-                    (set! zz (* xr HAZE_K))
-                    (set! haze (/ 1.0 (+ 1.0 (* zz zz))))
-                    (set! aa (+ RIM_BASE (+ (* RIM_LIT lit) (* RIM_SUN SUNUP2))))
-                    (if (> aa 1.0) (set! aa 1.0) #f)
-                    (set! a2 (* aa aa))
-                    (set! a3 (* a2 aa))
-                    (set! hh (+ (* RING_A ring) (* HAZE_A haze)))
+                    ;; 地表边缘羽化：掠射处贴图被压缩成互相矛盾的明暗 texel（锯齿环），
+                    ;; 而且大气厚度被夸大后边缘本就该"化开"，所以表面要在最外 ~7px 平滑淡出、
+                    ;; 让大气层接管（smoothstep，避免线性斜坡留下环带）。
+                    (set! cov (* (- 1.0 q) (* RAD EDGE_FADE)))
+                    (if (> cov 1.0) (set! cov 1.0) #f)
+                    (set! cov (* cov (* cov (- 3.0 (* 2.0 cov)))))
+                    (set! r (* r cov))
+                    (set! g (* g cov))
+                    (set! b (* b cov))
+                    ;; 大气内散射（视线在球内：透过大气壳看到地表）
+                    ;;   air = 视线方向上的**空气柱密度**（Kasten 型空气量近似
+                    ;;   1/sqrt(1-b²+2H)）：天顶 ≈1，掠射（b→1）≈5；
+                    ;;   立方后掠射/天顶的比值 ≈125 —— 这正是"宝石蓝只在天顶附近淡淡一层、
+                    ;;   越靠边缘越浓、最后在边缘处过曝成青白"的物理来源。
+                    (set! air (/ 1.0 (Math.sqrt (- (+ 1.0 HS2) q))))
+                    (set! s3 (- (* air (* air air)) ATM_FLOOR))
+                    (if (< s3 0.0) (set! s3 0.0) #f)
+                    (set! lit (* (+ dot ATM_LIFT) ATM_LIFT_K))
+                    (if (< lit 0.0) (set! lit 0.0) #f)
+                    (if (> lit 1.0) (set! lit 1.0) #f)
+                    (set! s3 (* s3 (+ ATM_AMB (* (- 1.0 ATM_AMB) lit))))
+                    ;; 色调映射 c = 255a/(a+1)：小 a 时线性（蓝），大 a 时各通道一起饱和（青白），
+                    ;; 于是边缘自然出现"亮到发白"的散射核，而不是塑料般的均匀提亮。
+                    (set! ar (* s3 ATM_R))
+                    (set! ag (* s3 ATM_G))
+                    (set! ab (* s3 ATM_B))
                     (Gfx.set_pixel x y
-                                   (+ r (* hh (+ 8.0 (* 200.0 a3))))
-                                   (+ g (* hh (+ 18.0 (* 238.0 a2))))
-                                   (+ b (* hh (+ 44.0 (* 212.0 a2)))))
+                                   (+ r (/ (* 255.0 ar) (+ ar 1.0)))
+                                   (+ g (/ (* 255.0 ag) (+ ag 1.0)))
+                                   (+ b (/ (* 255.0 ab) (+ ab 1.0))))
                   }
-                  { ; ==================== 圆外辉光 ====================
-                    (set! xr (* (- q 1.0) 0.5))
-                    (if (< xr HALO_XR)
-                        {
-                          (set! u (* dxf RINV))
-                          (set! lit (+ (* u SE) (* sny SN)))
-                          (if (< lit 0.0) (set! lit 0.0) #f)
-                          (set! zz (* xr RING_K))
-                          (set! ring (/ 1.0 (+ 1.0 (* zz zz))))
-                          (set! zz (* xr HAZE_K))
-                          (set! haze (/ 1.0 (+ 1.0 (* zz zz))))
-                          (set! zz (* xr BLOOM_K))
-                          (set! bloom (/ 1.0 (+ 1.0 (* zz zz))))
-                          (set! xo (- 1.0 (* xr HALO_INV)))
-                          (set! hh (+ (+ (* RING_A ring) (* (* HAZE_A 0.75) haze))
-                                      (* BLOOM_A (* bloom (* xo xo)))))
-                          (set! aa (+ RIM_BASE (+ (* RIM_LIT lit) (* RIM_SUN SUNUP2))))
-                          (if (> aa 1.0) (set! aa 1.0) #f)
-                          (set! a2 (* aa aa))
-                          (set! a3 (* a2 aa))
-                          (Gfx.set_pixel x y
-                                         (+ BG_R (* hh (+ 8.0 (* 200.0 a3))))
-                                         (+ BG_G (* hh (+ 18.0 (* 238.0 a2))))
-                                         (+ BG_B (* hh (+ 44.0 (* 212.0 a2)))))
-                        }
-                        #f)
+                  { ; ==================== 球外：只有大气（柔和边缘） ====================
+                    (set! bo (- (Math.sqrt q) 1.0))
+                    (set! air (* AIR0 (Math.exp (- 0.0 (/ bo HS)))))
+                    (set! s3 (- (* air (* air air)) ATM_FLOOR))
+                    (if (< s3 0.0) (set! s3 0.0) #f)
+                    (set! u (* dxf RINV))
+                    (set! lit (* (+ (+ (* u SE) (* sny SN)) ATM_LIFT) ATM_LIFT_K))
+                    (if (< lit 0.0) (set! lit 0.0) #f)
+                    (if (> lit 1.0) (set! lit 1.0) #f)
+                    (set! s3 (* s3 (+ ATM_AMB (* (- 1.0 ATM_AMB) lit))))
+                    (set! ar (* s3 ATM_R))
+                    (set! ag (* s3 ATM_G))
+                    (set! ab (* s3 ATM_B))
+                    (Gfx.set_pixel x y
+                                   (+ BG_R (/ (* 255.0 ar) (+ ar 1.0)))
+                                   (+ BG_G (/ (* 255.0 ag) (+ ag 1.0)))
+                                   (+ BG_B (/ (* 255.0 ab) (+ ab 1.0))))
                   })
               (set! x (+ x 1))
             })
@@ -413,54 +413,6 @@
     (set! rnd_y yend)
     (if (>= rnd_y ROW_Y1) (set! rnd_active 0) #f)
     (Gfx.refresh)))
-
-;; ---- 舷窗刻度环（画在辉光之上；每次场景重绘后画一遍） ---------------------
-
-(define draw_ring
-  (lambda ()
-    (define i 0)
-    (define ang 0.0)
-    (define ang2 0.0)
-    (define ca 0.0)
-    (define sa 0.0)
-    (define c2 0.0)
-    (define s2 0.0)
-    (define x1 0.0)
-    (define y1 0.0)
-    (define rr 0.0)
-    (define br 0.0)
-    (define bg 0.0)
-    (define bb 0.0)
-    (define lit 0.0)
-    (define l2 0.0)
-    (define step (/ (* 2.0 PI) 72.0))
-    (while (< i 72) {
-      (set! ang (* i step))
-      (set! ang2 (+ ang step))
-      (set! ca (Math.cos ang))
-      (set! sa (Math.sin ang))
-      (set! c2 (Math.cos ang2))
-      (set! s2 (Math.sin ang2))
-      ;; 朝太阳的一侧更亮：环上法向与太阳在屏幕平面上的投影的余弦
-      (set! lit (+ (* ca SE) (* (- 0.0 sa) SN)))
-      (if (< lit 0.0) (set! lit 0.0) #f)
-      (set! l2 (* lit lit))
-      (set! br (+ 24.0 (* 140.0 l2)))
-      (set! bg (+ 40.0 (* 116.0 l2)))
-      (set! bb (+ 74.0 (* 92.0 l2)))
-      (set! x1 (+ CX (* RINGRAD ca)))
-      (set! y1 (- CY (* RINGRAD sa)))
-      ;; 弧段（每 5° 一段，首尾相接成一圈；alpha 100 ≈ 暗蓝细环）
-      (Gfx.draw_line_aa_mode x1 y1
-                             (+ CX (* RINGRAD c2)) (- CY (* RINGRAD s2))
-                             1.0 br bg bb 95)
-      ;; 刻度：每 5° 一短划，每 30° 一长划
-      (set! rr 104.0)
-      (if (== (mod i 6) 0.0) (set! rr 107.0) #f)
-      (Gfx.draw_line_aa_mode x1 y1 (+ CX (* rr ca)) (- CY (* rr sa))
-                             1.0 (+ br 30.0) (+ bg 30.0) (+ bb 30.0) 105)
-      (set! i (+ i 1))
-    })))
 
 ;; ---- HUD -------------------------------------------------------------------
 
@@ -658,7 +610,6 @@
           (rnd_step)
           (if (== rnd_active 0)
               {
-                (draw_ring)
                 (draw_hud_static)
                 ;; 一帧场景画完（e2e 判据：整球分条绘制确实完成，而非只画了上半球；
                 ;; heap 用于长跑泄漏观测——逐像素内核零分配，此值应长期恒定）

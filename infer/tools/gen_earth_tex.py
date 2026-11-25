@@ -235,27 +235,24 @@ CX, CY = 160.0, 118.0
 BG_R, BG_G, BG_B = 1.0, 2.0, 6.0
 
 # 大气（与 app/earthport.scm 逐条一致；改这里必须同步改那边）
-RING_K = 96.0         # 大气"硬"亮环的衰减尺度（1/xr，越大越细）
-HAZE_K = 22.0         # 大气"软"雾的衰减尺度
-BLOOM_K = 6.0         # 圆外的宽辉光
-RING_A = 0.66
-RIM_BASE = 0.13       # 大气环的底亮度（夜侧/背光侧）
-RIM_LIT = 0.72        # 大气环随太阳天顶角
-RIM_SUN = 0.62        # 大气环随 max(0,sUp)²（前向散射：太阳在镜头背后时整圈亮）
-HAZE_A = 0.34
-BLOOM_A = 0.30
-HALO_XR = 0.13        # 圆外辉光的最远距离（归一化半径），窗口函数在此归零
-WIN_K = 0.13          # = HALO_XR
+HS = 0.033            # 大气标高（归一化半径）
+AIR0 = 1.0 / math.sqrt(2.0 * HS)
+ATM_R, ATM_G, ATM_B = 0.021, 0.076, 0.260   # 散射通道增益（色调映射前）
+ATM_AMB = 0.015       # 夜侧空气辉光的照明下限
+ATM_FLOOR = 0.55      # 空气量立方的扣除量（天顶方向的散射几乎抵消，只留淡淡的蓝）
+ATM_LIFT = 0.10       # 大气被照到的最低太阳天顶角余弦（≈地平线下 7°）
+ATM_LIFT_K = 4.5      # 抬升后的照明斜率（dot≈+0.10 时饱和）
+EDGE_FADE = 0.071     # 地表边缘羽化（≈ 最外 7px 淡出）
 
 # 白天
 DAY_AMB = 0.05
-DAY_SOFT = 0.06
-GLINT_CORE = 205.0    # 太阳反光光斑强度
-GLINT_CORE_K = 220.0  # 光斑角半径（1/K 量级为角偏差的平方）
-GLINT_WIDE = 26.0     # 海面宽反光强度
-GLINT_WIDE_K = 30.0
+DAY_SOFT = 0.10
+GLINT_CORE = 150.0    # 太阳反光光斑强度
+GLINT_CORE_K = 110.0  # 光斑角半径
+GLINT_WIDE = 58.0     # 海面宽反光强度
+GLINT_WIDE_K = 20.0
 TWILIGHT_K = 3.0
-NIGHT_BASE = 0.020
+NIGHT_K_R, NIGHT_K_G, NIGHT_K_B = 0.0130, 0.0170, 0.0220
 LIGHT_R, LIGHT_G, LIGHT_B = 1.28, 0.98, 0.62
 
 # 贴图生成参数
@@ -274,13 +271,31 @@ def sun_dir(dec_deg, hour_deg):
 
 
 def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water):
-    """单个像素的最终颜色（None = 不写，保留背景）。公式与 Scheme 侧一一对应。"""
+    """单个像素的最终颜色（None = 不写，保留背景）。公式与 app/earthport.scm 一一对应。"""
     q = (dx * dx + dy * dy) / (R_GL * R_GL)
-    xr = abs(1.0 - q) * 0.5
     u = dx / R_GL
     sn_ = -dy / R_GL
-    ring = 1.0 / (1.0 + (xr * RING_K) * (xr * RING_K))
-    haze = 1.0 / (1.0 + (xr * HAZE_K) * (xr * HAZE_K))
+
+    def atmos(air, dot):
+        # 大气自身的照明：比地表"高"——地平线下 ~10° 以内的高层大气仍被照到，
+        # 于是晨昏线两侧会有一道亮边（日出/日落时的大气辉光）
+        t = (dot + ATM_LIFT) * ATM_LIFT_K
+        if t <= 0.0:
+            illum = 0.0
+        elif t >= 1.0:
+            illum = 1.0
+        else:
+            illum = t
+        s3 = air * air * air - ATM_FLOOR
+        if s3 < 0.0:
+            s3 = 0.0
+        s3 = s3 * (ATM_AMB + (1.0 - ATM_AMB) * illum)
+        out = []
+        for k in (ATM_R, ATM_G, ATM_B):
+            a = s3 * k
+            out.append(255.0 * a / (a + 1.0))
+        return out
+
     if q <= 1.0:
         w = math.sqrt(max(0.0, 1.0 - q))
         dot = u * se + sn_ * sn + w * su
@@ -289,9 +304,8 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water):
         r0 = day_rgb[row, col, 0]
         g0 = day_rgb[row, col, 1]
         b0 = day_rgb[row, col, 2]
-        lit = max(0.0, dot)
         if dot > 0.0:
-            k = (DAY_AMB + (1.0 - DAY_AMB) * (dot / (dot + DAY_SOFT))) * (0.58 + 0.42 * w)
+            k = (DAY_AMB + (1.0 - DAY_AMB) * (dot / (dot + DAY_SOFT))) * (0.44 + 0.56 * w)
             r, g, b = r0 * k, g0 * k, b0 * k
             nh = u * hx + sn_ * hy + w * hz
             if nh > 0.0 and water[row, col]:
@@ -299,36 +313,30 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water):
                 t1 = 1.0 + dev * GLINT_CORE_K
                 t2 = 1.0 + dev * GLINT_WIDE_K
                 gl = GLINT_CORE / (t1 * t1) + GLINT_WIDE / (t2 * t2)
-                r += gl * 1.00
+                r += gl
                 g += gl * 0.98
                 b += gl * 0.94
         else:
             nv = night_v[row, col]
-            twi = min(1.0, max(0.0, 1.0 + dot * TWILIGHT_K))
-            dk = 1.0 - 0.85 * twi
-            r = r0 * NIGHT_BASE * 0.65 + nv * LIGHT_R * dk + twi * 9.0
-            g = g0 * NIGHT_BASE * 0.85 + nv * LIGHT_G * dk + twi * 15.0
-            b = b0 * NIGHT_BASE * 1.10 + nv * LIGHT_B * dk + twi * 34.0
-        aa = min(1.0, RIM_BASE + RIM_LIT * lit + RIM_SUN * max(0.0, su) ** 2)
-        a2 = aa * aa
-        a3 = a2 * aa
-        hh = RING_A * ring + HAZE_A * haze
-        r += hh * (8.0 + 200.0 * a3)
-        g += hh * (18.0 + 238.0 * a2)
-        b += hh * (44.0 + 212.0 * a2)
-        return (r, g, b)
-    if xr < HALO_XR:
-        wn = 1.0 - xr / WIN_K
-        win = wn * wn
-        bloom = 1.0 / (1.0 + (xr * BLOOM_K) * (xr * BLOOM_K)) * win
-        lit = max(0.0, u * se + sn_ * sn)
-        aa = min(1.0, RIM_BASE + RIM_LIT * lit + RIM_SUN * max(0.0, su) ** 2)
-        a2 = aa * aa
-        a3 = a2 * aa
-        hh = RING_A * ring + HAZE_A * haze * 0.75 + BLOOM_A * bloom
-        return (BG_R + hh * (8.0 + 200.0 * a3),
-                BG_G + hh * (18.0 + 238.0 * a2),
-                BG_B + hh * (44.0 + 212.0 * a2))
+            twi = min(1.0, max(0.0, 1.0 + dot * TWILIGHT_K)) if dot > -0.34 else 0.0
+            lk = nv * (1.0 - 0.85 * twi)
+            r = r0 * NIGHT_K_R + lk * 1.28 + twi * 16.0
+            g = g0 * NIGHT_K_G + lk * 0.98 + twi * 28.0
+            b = b0 * NIGHT_K_B + lk * 0.62 + twi * 52.0
+        # 地表边缘羽化：掠射处贴图被压缩 → 逐像素取到的是互相矛盾的明暗texel（锯齿环），
+        # 因此表面要在最外 ~7px 平滑淡出，让大气层接管（也就是"大气厚度夸大"的观感）
+        t = min(1.0, (1.0 - q) * R_GL * EDGE_FADE)
+        cov = t * t * (3.0 - 2.0 * t)
+        r, g, b = r * cov, g * cov, b * cov
+        air = 1.0 / math.sqrt(1.0 - q + 2.0 * HS)
+        ar, ag, ab = atmos(air, dot)
+        return (r + ar, g + ag, b + ab)
+
+    bo = math.sqrt(q) - 1.0
+    if bo < 0.10:
+        air = AIR0 * math.exp(-bo / HS)
+        ar, ag, ab = atmos(air, u * se + sn_ * sn)
+        return (BG_R + ar, BG_G + ag, BG_B + ab)
     return None
 
 
