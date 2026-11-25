@@ -16,6 +16,10 @@
 ;;   · 大气：**视线方向的空气柱密度**（Kasten 型空气量）+ 大气自身照明 → 色调映射加色。
 ;;     天顶方向只有淡淡一层蓝，掠射方向空气量陡增 ⇒ 视圆盘亮区内部是宝石蓝的散射光，
 ;;     最外圈过曝成青白，圆盘边缘"化开"（大气厚度按视觉需求夸大，HS=0.033R）。
+;;   · 极光：南北**地磁极**周围的极光椭圆（绿色 557.7nm / 红色 630.0nm），用三层同心
+;;     发射壳（86/201/277km）近似幕帘的**垂直结构** —— 侧视时是下绿上红、有厚度、
+;;     能高出地平线的幕墙，俯视时是略微展开的椭圆环。只在暗侧可见（极昼看不到）。
+;;     详见下方「极光」常量块。
 ;;   · 反光：海面（贴图蓝通道占优处）按半角向量做镜面高光，光斑位置即真实太阳反光点
 ;;   · 星空：几十颗暗星（只画在辉光窗之外，重绘地球擦不到）
 ;;   · HUD：左上角**北京日期 + 时刻**（YYYY-MM-DD 换行 hh:mm:ss，左对齐）；
@@ -180,6 +184,61 @@
                                     ;   （整片亮区都被抬一点、颜色被压灰 → 朦胧感）
 (define MIE_PHASE 1.0)              ; 相函数（每帧由 SU 更新）
 
+;; 极光（南北**地磁极**处的极光椭圆；三层球壳 = 垂直结构）
+;;
+;; 物理依据与近似：
+;;   · 位置：极光椭圆绕**地磁轴**而不是地理轴（地磁北极 IGRF 偶极轴 2025 历元在
+;;     80.7°N / 72.7°W，与地理轴差 ~9.3°）。南北椭圆关于地磁轴共轭对称，所以
+;;     用同一个 |cos(与地磁轴的夹角)| 就能同时覆盖两极：椭圆峰值在磁纬 67.5°
+;;     （地磁余纬 22.5°，静稳-中等活动量级）。
+;;   · **垂直结构**：极光是沿磁力线悬挂的"幕帘"，从 ~90km 一直延伸到 ~300km，
+;;     不是贴在地面上的零厚度光影。这里用**三层同心发射壳**近似这条垂直剖面：
+;;       L1  1.0165R（105km）  绿 557.7nm  O(¹S) 最亮、最窄，下缘锐（赤道侧收窄）
+;;       L2  1.0305R（194km）  绿青（绿线的上段 + 少量蓝紫）  过渡层
+;;       L3  1.0425R（271km）  红 630.0nm  O(¹D) 弥散、最宽、上缘柔
+;;     视线（正交投影下方向恒为视轴）分别与三层球壳求交，命中点的地磁纬决定是否
+;;     落在椭圆上。三层在屏幕上的径向错位 ≈1.3px：**侧视（近地平线）时是一堵有
+;;     厚度、下绿上红、上缘化开的幕墙**；俯视时是略微展开的椭圆环。
+;;     三层都受渲染窗（1.045R）限制 —— 真实红层可到 400km，这里截到 271km。
+;;   · 可见性：极光只在**暗**天空可见 —— 用发射层处的太阳天顶角余弦门控（dot>0 时
+;;     完全没有），所以极昼一侧不会出现极光（与真实一致：夏季极盖区看不到）。
+;;   · 沿椭圆的疏密与折叠：磁赤道面两根基向量在视点系的投影给出磁经度的前两阶
+;;     谐波，既用来让椭圆中心线起伏（折叠/弧带），也用来做亮暗结（亚暴鼓包）。
+(define MAG_LAT 80.7)               ; 地磁北极纬度（度）
+(define MAG_LON -72.7)              ; 地磁北极经度（度，东经为正）
+(define AUR_R1 1.0135)              ; 层 1（86km，绿，下缘锐）
+(define AUR_R2 1.0315)              ; 层 2（201km，绿青）
+(define AUR_R3 1.0435)              ; 层 3（277km，红，弥散上缘；受渲染窗 1.045R 限制）
+(define AUR_R1Q (* AUR_R1 AUR_R1))
+(define AUR_R2Q (* AUR_R2 AUR_R2))
+(define AUR_R3Q (* AUR_R3 AUR_R3))
+(define AUR_I1 (/ 1.0 AUR_R1))
+(define AUR_I2 (/ 1.0 AUR_R2))
+(define AUR_I3 (/ 1.0 AUR_R3))
+(define AUR_C1 (Math.cos (* 22.6 (/ PI 180.0))))   ; 各层椭圆中心（磁纬 67.4/67.9/68.6°）
+(define AUR_C2 (Math.cos (* 22.1 (/ PI 180.0))))
+(define AUR_C3 (Math.cos (* 21.4 (/ PI 180.0))))
+(define AUR_W1 0.029)               ; 各层带宽（cos 空间；≈±4.4°/±6.1°/±11° 磁纬）
+(define AUR_W2 0.040)
+(define AUR_W3 0.075)               ; 红层最宽（越往高处幕帘越发散）
+(define AUR_V1 (/ 1.0 AUR_W1))      ; 预算倒数（逐像素不做除法）
+(define AUR_V2 (/ 1.0 AUR_W2))
+(define AUR_V3 (/ 1.0 AUR_W3))
+(define AUR_ASY 1.25)               ; 层 1 不对称度：赤道侧更陡（幕帘下缘硬边朝赤道）
+(define AUR_WAVS 0.011)             ; 折叠波幅（cos 空间；三层同时位移）
+(define AUR_D0 0.02)                ; 白天门控：dot > -0.02 开始变暗
+(define AUR_DK 8.0)                 ; 门控斜率（dot < -0.145 时全黑）
+(define AUR_NB 0.55)                ; 磁午夜侧的亮度下限（极盖内仍随太阳高度变亮）
+(define AUR_G1 92.0)                ; 层 1 峰值亮度（0..255 加色）
+(define AUR_G2 46.0)                ; 层 2
+(define AUR_G3 50.0)                ; 层 3（红）峰值亮度（弥散，所以给得比绿层高）
+;; 预筛窗口：外层 ±2.4 带宽（再留折叠波/内层偏移的余量）——用 |cos|² 判，
+;; 南北共轭对称所以一个窗口覆盖两极，且省掉 abs 与除法
+(define AUR_PLO (- AUR_C3 (* 2.4 AUR_W3)))
+(define AUR_PHI (+ AUR_C3 (* 2.4 AUR_W3)))
+(define AUR_PL (* AUR_PLO AUR_PLO))
+(define AUR_PH (* AUR_PHI AUR_PHI))
+
 ;; 配色
 (define BG_R 1.0)                   ; 背景（近黑深蓝）
 (define BG_G 2.0)
@@ -248,6 +307,10 @@
 (define DEC_DEG 0.0)                ; 太阳赤纬（度，HUD）
 (define SDR 0.0)                    ; 太阳赤纬（弧度）
 (define SLON 0.0)                   ; 次太阳点经度 λs = α - GMST（度，不做环绕）
+;; 地磁极 + 磁赤道面两根基向量，都投影在视点局部系（东/北/天）里，每帧算一次
+(define ME 0.0) (define MN 0.0) (define MU 1.0)      ; 地磁北极方向
+(define PE 0.0) (define PN 0.0) (define PU 0.0)      ; 磁赤道基向量 1（磁经度 0°）
+(define QE 0.0) (define QN 0.0) (define QU 0.0)      ; 磁赤道基向量 2（磁经度 90°）
 
 ;; ---- 运行状态 --------------------------------------------------------------
 
@@ -528,6 +591,35 @@
     (set! hg1 (/ (- 1.0 (* MIE_G MIE_G)) (Math.pow (- 1.0 MIE_G) 1.5)))
     (set! MIE_PHASE (+ MIE_ISO (* (- 1.0 MIE_ISO) (/ hg hg1))))))
 
+;; 地磁极方向与磁赤道面基向量 → 视点局部系（东/北/天）。与 sun_local 同一套旋转：
+;;   Δ = λm - λ0；p = (cosφm·sinΔ, -sinφ0·cosφm·cosΔ + cosφ0·sinφm,
+;;                     cosφ0·cosφm·cosΔ + sinφ0·sinφm)
+;; 磁赤道基向量取"极点所在经线的东西向 e"与 e×p（沿经线向北）：
+;;   E' = cosΔ, N' = -sinφ0·sinΔ, U' = cosφ0·sinΔ                     （东西向）
+;;   E' = -sinφm·sinΔ, N' = sinφ0·sinφm·cosΔ + cosφ0·cosφm,
+;;   U' = -cosφ0·sinφm·cosΔ + sinφ0·cosφm                             （沿经线）
+(define aurora_update
+  (lambda ()
+    (define dlt 0.0)
+    (define cl 0.0)
+    (define sl 0.0)
+    (define cx 0.0)
+    (define sy 0.0)
+    (set! dlt (* (- MAG_LON view_lon) (/ PI 180.0)))
+    (set! cl (Math.cos (* MAG_LAT (/ PI 180.0))))
+    (set! sl (Math.sin (* MAG_LAT (/ PI 180.0))))
+    (set! cx (* cl (Math.cos dlt)))
+    (set! sy (Math.sin dlt))
+    (set! ME (* cl sy))
+    (set! MN (+ (* (- 0.0 vlat_s) cx) (* vlat_c sl)))
+    (set! MU (+ (* vlat_c cx) (* vlat_s sl)))
+    (set! PE (Math.cos dlt))
+    (set! PN (* (- 0.0 vlat_s) sy))
+    (set! PU (* vlat_c sy))
+    (set! QE (* (- 0.0 sl) sy))
+    (set! QN (+ (* (* vlat_s sl) (Math.cos dlt)) (* vlat_c cl)))
+    (set! QU (+ (* (* (- 0.0 vlat_c) sl) (Math.cos dlt)) (* vlat_s cl)))))
+
 ;; ---- 视点（相机）操作 ----------------------------------------------------
 
 ;; 滚转/经度环绕到 [0,360)，纬度不环绕（直接截到 ±90°）
@@ -551,7 +643,8 @@
     (set! RS (* RINV (Math.sin a)))
     (set! RSn (- 0.0 RS))
     (set! lonbase (+ view_lon 60.0))
-    (sun_local)))
+    (sun_local)
+    (aurora_update)))
 
 ;; 平移视点（度）：dlat 向北为正，dlon 向东为正。经度方向按 1/cos(φ0) 补偿
 ;; （拖动时屏幕位移与经度的关系就是 cos(φ0) 倍；高纬下限 0.25 防“打滑”）。
@@ -701,6 +794,31 @@
     (define rr 0.0)
     (define gg 0.0)
     (define bb 0.0)
+    (define au 0.0)
+    (define at 0.0)
+    (define av 0.0)
+    (define aw 0.0)
+    (define bu 0.0)
+    (define g1 0.0)
+    (define rd 0.0)
+    (define bl 0.0)
+    (define dk 0.0)
+    (define md 0.0)
+    (define dn 0.0)
+    (define nb 0.0)
+    (define aa 0.0)
+    (define ab2 0.0)
+    (define us 0.0)
+    (define us3 0.0)
+    (define go 0)
+    (define hxy 0.0)
+    (define av1 0.0)
+    (define av2 0.0)
+    (define av3 0.0)
+    (define at3 0.0)
+    (define g2 0.0)
+    (define g3 0.0)
+    (define wv 0.0)
     (while (< y yend) {
       (set! dyf (- (+ y hf) CY))
       (set! dy2 (* dyf dyf))
@@ -881,10 +999,7 @@
                     (set! ab (+ (+ (* (* sl ATM_B) warm) (* sa ATM_B)) mie))
                     (set! rr (+ r (/ (* 255.0 ar) (+ ar 1.0))))
                     (set! gg (+ g (/ (* 255.0 ag) (+ ag 1.0))))
-                    (set! bb (+ b (/ (* 255.0 ab) (+ ab 1.0))))
-                    (if (== st 1.0)
-                        (Gfx.set_pixel x y rr gg bb)
-                        (Gfx.fill_rect x y st bh rr gg bb))}
+                    (set! bb (+ b (/ (* 255.0 ab) (+ ab 1.0))))}
                   { ; ==================== 球外：只有大气（柔和边缘） ====================
                     ;; 球外只有大气：柱密度从 b=1 处的值起，按三次缓出平滑归零
                     ;;   用 exp(-u/H)³ 曾让辉光每 1px 掉一半（1/e 尺度只剩 3px），
@@ -914,10 +1029,102 @@
                     (set! ab (+ (+ (* (* sl ATM_B) warm) (* sa ATM_B)) mie))
                     (set! rr (+ BG_R (/ (* 255.0 ar) (+ ar 1.0))))
                     (set! gg (+ BG_G (/ (* 255.0 ag) (+ ag 1.0))))
-                    (set! bb (+ BG_B (/ (* 255.0 ab) (+ ab 1.0))))
+                    (set! bb (+ BG_B (/ (* 255.0 ab) (+ ab 1.0))))})
+              ;; ==================== 极光（体发射；三层球壳 = 垂直结构）====================
+              ;; 视线（正交投影 ⇒ 方向恒为视轴）与三层发射壳求交：命中点地磁纬决定是否
+              ;; 落在椭圆上。外层（红）最宽，先算它做窗口预筛 —— 绝大多数像素在这里就退出。
+              (set! go 0)
+              (if (< q AUR_R3Q)
+                  {
+                    (set! hxy (+ (* xe ME) (* xn MN)))       ; 三层共用的切平面投影
+                    (set! us3 (Math.sqrt (- AUR_R3Q q)))
+                    (set! at3 (* (+ hxy (* us3 MU)) AUR_I3))
+                    ;; 预筛用 |cos|²（南北共轭对称 ⇒ 一个窗口覆盖两极），省 abs 与除法
+                    (set! av3 (* at3 at3))
+                    (if (and (> av3 AUR_PL) (< av3 AUR_PH)) (set! go 1) #f)
+                  }
+                  #f)
+              (if (== go 1)
+                  {
+                    ;; ---- 沿椭圆的折叠与亮暗结（磁经度前两阶谐波；纯乘加）----
+                    (set! aa (* (+ (* xe PE) (+ (* xn PN) (* us3 PU))) AUR_I3))
+                    (set! ab2 (* (+ (* xe QE) (+ (* xn QN) (* us3 QU))) AUR_I3))
+                    (set! wv (* AUR_WAVS (+ (* 0.55 aa) (+ (* 0.35 ab2)
+                                            (* 0.40 (- (* aa aa) (* ab2 ab2)))))))
+                    (set! md (+ 1.0 (+ (* 0.45 ab2) (+ (* 0.25 aa)
+                                          (* 0.35 (- (* ab2 ab2) (* aa aa)))))))
+                    (if (< md 0.35) (set! md 0.35) #f)
+                    (if (> md 1.7) (set! md 1.7) #f)
+                    ;; ---- 夜侧门控 + 磁午夜增亮（用外层壳算**太阳**天顶角；三层差别 <2px）----
+                    (set! dn (* (+ (* xe SE) (+ (* xn SN) (* us3 SU))) AUR_I3))
+                    (set! dk (* (+ (- 0.0 dn) AUR_D0) AUR_DK))
+                    (if (< dk 0.0) (set! dk 0.0) #f)
+                    (if (> dk 1.0) (set! dk 1.0) #f)
+                    (set! nb (- 0.0 dn))
+                    (if (< nb 0.0) (set! nb 0.0) #f)
+                    (if (> nb 1.0) (set! nb 1.0) #f)
+                    (set! dk (* dk (* md (+ AUR_NB (* (- 1.0 AUR_NB) nb)))))
+                    ;; ---- 层 1（86km，绿，下缘锐）----
+                    ;; 注意：南北两个椭圆关于地磁轴共轭 ⇒ 每层都要先取 |cos| 再算带宽坐标
+                    ;; （只对北侧取绝对值的话，南半球的极光会整块消失）。
+                    (set! g1 0.0)
+                    (if (< q AUR_R1Q)
+                        {
+                          (set! us (Math.sqrt (- AUR_R1Q q)))
+                          (set! av1 (* (+ hxy (* us MU)) AUR_I1))
+                          (if (< av1 0.0) (set! av1 (- 0.0 av1)) #f)
+                          (set! av1 (* (- (+ av1 wv) AUR_C1) AUR_V1))
+                          (if (< av1 0.0) (set! av1 (* av1 AUR_ASY)) #f)
+                          (set! g1 (- 1.0 (* av1 av1)))
+                          (if (< g1 0.0) (set! g1 0.0) #f)
+                          (set! g1 (* g1 g1))
+                        }
+                        #f)
+                    ;; ---- 层 2 / 层 3 只在整质量时算 ----
+                    ;;   粗预览的像素块是 4×4，而三层的屏幕间距只有 ~1px：预览里根本分不出来，
+                    ;;   却要多付两次 sqrt + 二十来条指令（拖动时的预览是时间敏感路径）。
+                    (set! g2 0.0)
+                    (set! g3 0.0)
                     (if (== st 1.0)
-                        (Gfx.set_pixel x y rr gg bb)
-                        (Gfx.fill_rect x y st bh rr gg bb))})
+                        {
+                          ;; 层 2（201km，绿青，过渡）
+                          (if (< q AUR_R2Q)
+                              {
+                                (set! us (Math.sqrt (- AUR_R2Q q)))
+                                (set! av2 (* (+ hxy (* us MU)) AUR_I2))
+                                (if (< av2 0.0) (set! av2 (- 0.0 av2)) #f)
+                                (set! av2 (* (- (+ av2 wv) AUR_C2) AUR_V2))
+                                (set! g2 (- 1.0 (* av2 av2)))
+                                (if (< g2 0.0) (set! g2 0.0) #f)
+                                (set! g2 (* g2 g2))
+                              }
+                              #f)
+                          (if (< at3 0.0) (set! at3 (- 0.0 at3)) #f)   ; 南北共轭
+                          ;; 层 3（277km，红，弥散上缘）
+                          (set! av3 (* (- (+ at3 wv) AUR_C3) AUR_V3))
+                          (set! g3 (- 1.0 (* av3 av3)))
+                          (if (< g3 0.0) (set! g3 0.0) #f)
+                          (set! g3 (* g3 g3))
+                        }
+                        #f)
+                    ;; ---- 加色合成：下绿（G 主导）→ 上红（R 主导）----
+                    (set! g1 (* g1 dk))
+                    (set! g2 (* g2 dk))
+                    (set! g3 (* g3 dk))
+                    (set! rr (+ rr (* g1 (* AUR_G1 0.34))))
+                    (set! rr (+ rr (* g2 (* AUR_G2 0.32))))
+                    (set! rr (+ rr (* g3 AUR_G3)))
+                    (set! gg (+ gg (* g1 AUR_G1)))
+                    (set! gg (+ gg (* g2 (* AUR_G2 0.92))))
+                    (set! gg (+ gg (* g3 (* AUR_G3 0.28))))
+                    (set! bb (+ bb (* g1 (* AUR_G1 0.50))))
+                    (set! bb (+ bb (* g2 (* AUR_G2 0.66))))
+                    (set! bb (+ bb (* g3 (* AUR_G3 0.34))))
+                  }
+                  #f)
+              (if (== st 1.0)
+                  (Gfx.set_pixel x y rr gg bb)
+                  (Gfx.fill_rect x y st bh rr gg bb))
               (set! x (+ x st))
             })
           }
