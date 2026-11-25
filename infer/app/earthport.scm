@@ -18,10 +18,11 @@
 ;;     最外圈过曝成青白，圆盘边缘"化开"（大气厚度按视觉需求夸大，HS=0.033R）。
 ;;   · 反光：海面（贴图蓝通道占优处）按半角向量做镜面高光，光斑位置即真实太阳反光点
 ;;   · 星空：几十颗暗星（只画在辉光窗之外，重绘地球擦不到）
-;;   · HUD：UTC 时刻 / 日期 / 太阳赤纬 / 时间偏置徽标（暂停或 ±h:mm，琥珀色）
-;;     + 上排控制条右侧的**视角读数**（纬度 N/S、经度 E/W、滚转角 R±）
-;;   · 上排控制条：[-15°] [+15°] [复位]（视角）
-;;   · 下排控制条：[-2分] [+2分] [实时] [暂停/运行] [有云/无云] + 右下「退出」
+;;   · HUD：左上角**北京日期 + 时刻**（YYYY-MM-DD 换行 hh:mm:ss，左对齐）；
+;;     底部信息行：左侧**视角读数**（纬度 N/S、经度 E/W、滚转角 R±），右端时间徽标
+;;     （暂停或 ±h:mm，琥珀色；时间机器的键位仍在，只是不再占按钮）
+;;   · 底部控制条（4 枚）：[-15°] [+15°] [复位] [有云/无云]
+;;   · 右上角：「退出」（app/lib/exit.scm 画在 (270,3)）
 ;;
 ;; 相机（视点在任意点、任意滚转角）：
 ;;   观察者在 (φ0, λ0) 正上方沿径向俯视球心（正交投影，视圆盘半径固定 = R 像素）。
@@ -47,28 +48,30 @@
 ;;   （wasm 上实测 ≈0.35s 纯解释执行）。而太阳在屏幕上每分钟只移动 0.4 像素，所以：
 ;;     · 场景（球体/大气）每 SCENE_S=30 秒重算一次，且**分条渐进**绘制
 ;;       （每拍画 STRIP 行推一次屏），一次重绘跨 ~20 拍完成，看不出"刷"的感觉；
-;;     · 只有 UTC 时钟每秒钟重画一行字（fill_rect + draw_text，脏区极小）。
+;;     · 只有左上角时钟每秒钟重画两行字（fill_rect + draw_text，脏区极小）。
 ;;   稳态 CPU 占用几个百分点。
 ;;   拖动时不能等 0.35s/帧：视点一动就先出**粗预览**（每 ST_PREV=4 像素采一个样、
 ;;   4×4 像素块一次 fill_rect 填同色，像素量 1/16 ⇒ 整帧约 33ms ≈ 30 帧/秒，够跟手）；
 ;;   松手后再走上面那条整质量的分条渐进路径（cam_settle 倒计时到 0 才开始）。
 ;;
-;; 时间机器（底部控制条）：
-;;   运行态的显示时刻 = 实时 UTC + off_s。[-2分]/[+2分] 每次把偏置挪 ±120 秒；
-;;   [暂停] 冻结时刻（sim_d/sim_s 不再跟随实时），再按「运行」时把"冻结期间积累的时间差"
-;;   折进 off_s —— 于是画面从你冻结的那一刻继续，而不是突然跳回今天；
-;;   [实时] 偏置清零并解除暂停，回到真实时间。
+;; 时间机器（**按钮已去掉，只留键盘**：←/→ = ∓2 分钟、↑ = 实时、↓ = 暂停/运行）：
+;;   运行态的显示时刻 = 实时 UTC + off_s；暂停冻结时刻（sim_d/sim_s 不再跟随实时），
+;;   再按「运行」时把"冻结期间积累的时间差"折进 off_s —— 于是画面从你冻结的那一刻继续。
+;;   状态显示在底部信息行右端的琥珀色徽标里（暂停 / ±h:mm）。
 ;;   任何时刻变化都置 scene_dirty，让下一拍立刻重算场景（晨昏线跟着跳）。
+;;
+;; 时区：左上角是**北京时间**（UTC+8，与设备本地时区无关），日期由共享星历的
+;;   (Ephem.civil) 按北京日算出，跨日自动进位。
 ;;
 ;; 输入：
 ;;   · 触屏空白处**拖动** → 移动视点（Google Earth 手感：手指往哪拖，地面就往哪走；
 ;;     水平方向按 1/cos(φ0) 补偿，高纬处经线收敛不打滑；竖直方向拖到 ±90° 处截住）；
 ;;     **点按**（位移 < 3px）= 显示/隐藏 HUD 文字。按下落在按钮上则不拖动。
-;;   · 上排 [-15°]/[+15°] 滚转画面（点按 ±15°，按住每 120ms 连发一档，**在键上横向滑动
+;;   · 底部 [-15°]/[+15°] 滚转画面（点按 ±15°，按住每 120ms 连发一档，**在键上横向滑动
 ;;     = 拨轮连续滚转**，所以旋转角是任意的）、[复位] 回 0°N 120°E 正北朝上。
 ;;   · 键盘 a/d 经度、w/s 纬度、`,`/`.` 滚转、r 复位（各 5°/15° 一档），
 ;;     ←/→ = ∓2 分钟，↑ = 实时，↓ = 暂停/运行，c = 云层，空格/回车 = HUD 开关；
-;;     硬 A/ESC 与右下「退出」按钮 → 全局退出确认框（app/lib/exit.scm）。
+;;     硬 A/ESC 与**右上角「退出」**按钮 → 全局退出确认框（app/lib/exit.scm）。
 ;;
 ;; 解释器约束（manual.md + doc/AGENTS.md，逐条遵守）：算术恒二参数；无 let/list/map；
 ;;   lambda 体内 define 只放在开头；语句位置的 if 两分支都要有值（补 #f）；
@@ -84,7 +87,7 @@
 (native Key)
 (native App)
 
-(import EX "app/lib/exit.scm")      ; 硬 A/ESC + 右下角「退出」按钮 → 全局退出确认框
+(import EX "app/lib/exit.scm")      ; 硬 A/ESC + 右上角「退出」按钮 → 全局退出确认框
 (import Ephem "app/lib/ephem.scm")  ; 太阳赤纬/赤经、GMST、民用历
 (import ET "app/lib/earth_tex.scm") ; 地表四通道贴图（生成物，见 tools/gen_earth_tex.py）
 
@@ -251,12 +254,15 @@
 (define rnd_y ROW_Y0)               ; 下一待绘制行
 (define rnd_mode 0)                 ; 0 = 空闲，1 = 整质量分条绘制中
 (define hud_dim 0)                  ; 1 = HUD 已隐藏
-(define clk_sec -1)                 ; 上次绘制的 UTC 秒（-1 = 待重画）
+(define clk_sec -1)                 ; 上次绘制时钟的 sim_s（-1 = 待重画）
 (define scen_sod 0.0)               ; 上次场景开始的 UTC 秒
 (define dt_s 0.0)                   ; 场景计时临时量
-(define civ_y 2026)                 ; 民用历（HUD）
-(define civ_m 1)
-(define civ_d 1)
+(define bj_y 2026)                  ; 北京日期的年/月/日（HUD，由 bj_sync 算）
+(define bj_m 1)
+(define bj_dd 1)
+(define bj_d 0)                     ; 北京日（1970 起的天数）
+(define bj_s 0.0)                   ; 北京当日秒数
+(define ui_dirty 0)                 ; 1 = 时间机器/云层状态变了，待补画 HUD
 ;; 时间机器：[−2分] [+2分] [实时] [暂停/运行]
 ;;   运行态的显示时刻 = 实时 UTC + off_s（所以"暂停一段时间再恢复"会自然积累成偏置，
 ;;   画面里的晨昏线也就一直停留在你离开时的那一刻 —— 直到按『实时』）。
@@ -267,7 +273,7 @@
 (define scene_dirty 0)              ; 1 = 立刻重算场景（改时刻后置位）
 (define tprev 0)                    ; 触屏上一拍是否按住
 (define bi -1)                      ; 命中的按钮下标
-(define clouds_on 1)                ; 1 = 显示云（第 5 个按钮可切）
+(define clouds_on 1)                ; 1 = 显示云（底部第 4 枚按钮 / 键位 c）
 (define keyv 0)                     ; Key.take_press 临时量
 (define _timer 0)                   ; 定时器编号（消费 set_interval 的返回值）
 
@@ -343,7 +349,8 @@
           (set! off_s (+ off_s d))
           (time_sync)
         })
-    (set! scene_dirty 1)))
+    (set! scene_dirty 1)
+    (set! ui_dirty 1)))
 
 ;; 从暂停恢复：把"冻结期间积累的时间差"折进偏置，于是从冻结那一刻继续走
 (define time_resume
@@ -352,7 +359,8 @@
                    (- sim_s (Time.utc_sod))))
     (set! paused 0)
     (time_sync)
-    (set! scene_dirty 1)))
+    (set! scene_dirty 1)
+    (set! ui_dirty 1)))
 
 ;; 回到实时：偏置清零 + 解除暂停
 (define time_live
@@ -360,7 +368,24 @@
     (set! off_s 0)
     (set! paused 0)
     (time_sync)
-    (set! scene_dirty 1)))
+    (set! scene_dirty 1)
+    (set! ui_dirty 1)))
+
+;; 暂停/运行切换（键位 ↓；按钮已去掉）
+(define time_toggle_pause
+  (lambda ()
+    (if (== paused 1)
+        (time_resume)
+        (set! paused 1))
+    (set! ui_dirty 1)))
+
+;; 云层开关（底部第 4 枚按钮 / 键位 c）：画面内容变了，立刻重算一帧场景
+(define clouds_toggle
+  (lambda ()
+    (set! clouds_on (if (== clouds_on 1) 0 1))
+    (set! scene_dirty 1)
+    (set! ui_dirty 1)
+    (display "[earthport] clouds=") (display clouds_on) (newline)))
 
 ;; 诊断行（e2e 断言时刻确实被改过；每次按钮动作打一行）
 (define time_log
@@ -371,44 +396,36 @@
     (display " paused=") (display paused)
     (newline)))
 
-;; ---- 控制条（两行；右下角「退出」由 app/lib/exit.scm 画在 (266,220)）--------
+;; ---- 底部控制条（4 枚按钮；右上角「退出」由 app/lib/exit.scm 画在 (270,3)）----
 ;;
-;; 下排 = 时间机器 + 云层（索引 0..4，沿用原布局）；上排 = 视角键（索引 5..7）。
-;; 按下落在任一按钮上就不拖动；滚转键按住 400ms 后每 120ms 连发一档。
+;; 索引：0 = [-15°]、1 = [+15°]、2 = [复位]、3 = [有云/无云]。
+;; 按下落在任一按钮上就不拖动；滚转键（0/1）按住 400ms 后每 120ms 连发一档，
+;; 在其上**横向滑动 = 拨轮**（连续滚转，任意角度）。时间机器的 -2/+2/实时/暂停
+;; 按钮已去掉，只留键位（←/→/↑/↓），状态显示在底部信息行右端的徽标里。
 
 (define BTN_Y 219)
 (define BTN_H 18)
-(define BTN_W 50)
-(define BTN_GAP 3)
-(define BTN_N 5)
-(define CAM_Y 201)                  ; 上排（视角）控制条：201..217
-(define CAM_H 16)
-(define CAM_N 3)
+(define BTN_W 75)                   ; 4×75 + 3×4 = 312（两侧各留 4px）
+(define BTN_GAP 4)
+(define BTN_N 4)
+(define INFO_Y 203)                 ; 底部信息行（视角读数 + 时间徽标）：203..216
 
 (define btn_x (lambda (i) (+ 4 (* i (+ BTN_W BTN_GAP)))))
 
 (define btn_label
   (lambda (i)
-    (if (== i 0) "-2分"
-        (if (== i 1) "+2分"
-            (if (== i 2) "实时"
-                (if (== i 3) (if (== paused 1) "运行" "暂停")
-                    (if (== i 4) (if (== clouds_on 1) "有云" "无云")
-                        (if (== i 5) "-15°"
-                            (if (== i 6) "+15°" "复位")))))))))
+    (if (== i 0) "-15°"
+        (if (== i 1) "+15°"
+            (if (== i 2) "复位"
+                (if (== clouds_on 1) "有云" "无云"))))))
 
-;; 高亮：暂停键在冻结时高亮；『实时』在"正在实时"时高亮；快进快退不高亮；
-;; 『复位』在视点已回到默认（0°N 120°E 正北朝上）时高亮
+;; 高亮：『复位』在视点已回到默认（0°N 120°E 正北朝上）时高亮；
+;; 『有云/无云』高亮 = 当前有云；滚转键不高亮
 (define btn_active
   (lambda (i)
-    (if (== i 2) (if (and (== paused 0) (== off_s 0)) 1 0)
-        (if (== i 3) paused
-            (if (== i 4) clouds_on
-                (if (== i 7)
-                    (if (and (and (== view_lat 0.0) (== view_lon 120.0))
-                             (== view_roll 0.0))
-                        1 0)
-                    0))))))
+    (if (== i 2)
+        (if (and (and (== view_lat 0.0) (== view_lon 120.0)) (== view_roll 0.0)) 1 0)
+        (if (== i 3) clouds_on 0))))
 
 ;; 一枚按钮（高亮版 / 常态）
 (define draw_btn
@@ -432,14 +449,9 @@
     (while (< i BTN_N) {
       (draw_btn (btn_x i) BTN_Y BTN_W BTN_H (btn_label i) (btn_active i))
       (set! i (+ i 1))
-    })
-    (set! i 0)
-    (while (< i CAM_N) {
-      (draw_btn (btn_x i) CAM_Y BTN_W CAM_H (btn_label (+ i 5)) (btn_active (+ i 5)))
-      (set! i (+ i 1))
     })))
 
-;; 触点落在哪个按钮上（两行一起判；不在按钮里返回 -1）
+;; 触点落在哪个按钮上（不在控制条里返回 -1）
 (define btn_hit
   (lambda (px py)
     (define r -1)
@@ -454,55 +466,18 @@
           })
         }
         #f)
-    (if (and (>= py CAM_Y) (< py (+ CAM_Y CAM_H)))
-        {
-          (set! i 0)
-          (while (< i CAM_N) {
-            (if (and (>= px (btn_x i)) (< px (+ (btn_x i) BTN_W)))
-                (set! r (+ i 5))
-                #f)
-            (set! i (+ i 1))
-          })
-        }
-        #f)
     r))
 
 (define btn_do
   (lambda (i)
-    (if (== i 0) (time_step -120) #f)
-    (if (== i 1) (time_step 120) #f)
-    (if (== i 2) (time_live) #f)
-    (if (== i 3)
-        (if (== paused 1)
-            (time_resume)
-            (set! paused 1))
-        #f)
-    ;; 云层开关：画面内容变了，立刻重算一帧场景
-    (if (== i 4)
-        {
-          (set! clouds_on (if (== clouds_on 1) 0 1))
-          (set! scene_dirty 1)
-          (display "[earthport] clouds=") (display clouds_on) (newline)
-        }
-        #f)
-    ;; 视角键（上排）：滚转 / 复位
-    (if (== i 5) (cam_roll (- 0.0 CAM_ROLL)) #f)
-    (if (== i 6) (cam_roll CAM_ROLL) #f)
-    (if (== i 7) (cam_reset) #f)
-    (if (< i 5)
-        { ; 时间机器 / 云层：擦重 HUD 与时钟
-          (set! clk_sec -1)
-          (draw_btns)
-          (draw_clock)
-          (draw_hud_static)
-          (Gfx.refresh)
-          (time_log)
-        }
-        { ; 视角键：重画高亮与读数（画面本身由下一拍的粗预览补上）
-          (draw_btns)
-          (draw_view)
-          (Gfx.refresh)
-        })))
+    (if (== i 0) (cam_roll (- 0.0 CAM_ROLL)) #f)
+    (if (== i 1) (cam_roll CAM_ROLL) #f)
+    (if (== i 2) (cam_reset) #f)
+    (if (== i 3) (clouds_toggle) #f)
+    ;; 高亮/读数可能变了：补画控制条与信息行（画面本身由下一拍处理）
+    (draw_btns)
+    (draw_info)
+    (Gfx.refresh)))
 
 ;; ---- 星历：太阳方向 --------------------------------------------------------
 
@@ -512,10 +487,6 @@
     (Ephem.set_time sim_d sim_s)
     (Ephem.set_gmst)
     (Ephem.sun_equatorial)
-    (Ephem.civil sim_d)
-    (set! civ_y (Ephem.get_civ_y))
-    (set! civ_m (Ephem.get_civ_m))
-    (set! civ_d (Ephem.get_civ_d))
     (set! DEC_DEG Ephem.s_dec)
     (set! SDR (* Ephem.s_dec (/ PI 180.0)))
     ;; 次太阳点经度 λs = α - GMST。**不做环绕**：后面只用 sin/cos(λs - λ0)，
@@ -630,9 +601,12 @@
     (set! cam_settle 1)             ; 下一拍立刻开始整质量重绘
     (display "[earthport] view reset") (newline)))
 
-;; 视角诊断行（e2e / 与 Python 参考渲染器对比用；每次整质量重绘开始时打一行）
+;; 视角诊断行（e2e / 与 Python 参考渲染器对比用；每次整质量重绘开始时打一行）。
+;; bj= 是左上角时钟用的**同一份**北京日期/时刻（同一函数拼出来的字符串），
+;; 供 e2e 断言"北京时间 = UTC+8 且格式为 YYYY-MM-DD / hh:mm:ss"。
 (define view_log
   (lambda (tag)
+    (bj_sync)
     (display "[earthport] ") (display tag)
     (display " lat=") (display (num_fix view_lat 2))
     (display " lon=") (display (num_fix view_lon 2))
@@ -641,6 +615,7 @@
     (display (Math.to_fixed SE 4)) (display ",")
     (display (Math.to_fixed SN 4)) (display ",")
     (display (Math.to_fixed SU 4)) (display ")")
+    (display " bj=") (display (bj_date_str)) (display "T") (display (bj_time_str))
     (newline)))
 
 ;; ---- 场景绘制 ---------------------------------------------------------------
@@ -966,16 +941,13 @@
     (rnd_draw ROW_Y0 ROW_Y1 ST_PREV)
     (Gfx.refresh)))
 
-;; 一帧整质量场景画完后的收尾（HUD 补画 + 诊断行）
+;; 一帧整质量场景画完后的收尾（诊断行；渲染窗只到第 198 行，HUD 不会被它擦到）
 (define rnd_finish
   (lambda ()
-    (draw_hud_static)
     (display "[earthport] scene done heap=")
     (display (get_item (System.memstat) 3)) (newline)))
 
 ;; ---- HUD -------------------------------------------------------------------
-
-(define MONTHS '("JAN" "FEB" "MAR" "APR" "MAY" "JUN" "JUL" "AUG" "SEP" "OCT" "NOV" "DEC"))
 
 ;; 定长小数：把 v 写成 nd（1 或 2）位小数。**不用 (Math.to_fixed)**——32 位宿主上
 ;; 它的取整会留下 7.67999 这样的尾巴（wasm 实测）；这里用整数运算自己拼。
@@ -1022,40 +994,60 @@
     (Gfx.fill_rect x y (+ 6 (* nch 7)) 14 BG_R BG_G BG_B)
     (Gfx.draw_text s x y HUD_R HUD_G HUD_B)))
 
-;; 右对齐版本（xr = 右边界）
-(define hud_text_r
-  (lambda (s xr y nch)
-    (hud_text s (- xr (text_w s)) y nch)))
+;; 北京时间 = UTC + 8h：先按小时偏置拆出"北京日/当日秒"，民用历仍走共享星历
+;; 的 (Ephem.civil)（跨日、跨月、跨年都由它处理）
+(define bj_sync
+  (lambda ()
+    (set! bj_d sim_d)
+    (set! bj_s (+ sim_s 28800.0))
+    (while (>= bj_s 86400.0) {
+      (set! bj_s (- bj_s 86400.0))
+      (set! bj_d (+ bj_d 1))
+    })
+    (Ephem.civil bj_d)
+    (set! bj_y (Ephem.get_civ_y))
+    (set! bj_m (Ephem.get_civ_m))
+    (set! bj_dd (Ephem.get_civ_d))))
 
-(define draw_clock
+;; "YYYY-MM-DD"
+(define bj_date_str
+  (lambda ()
+    (String.concat (String.atom_to_string bj_y)
+      (String.concat "-" (String.concat (pad2 bj_m)
+        (String.concat "-" (pad2 bj_dd)))))))
+
+;; "hh:mm:ss"
+(define bj_time_str
   (lambda ()
     (define sec0 0.0)
     (define min0 0.0)
     (define hr0 0.0)
-    (define str "")
+    (set! sec0 (mod bj_s 60.0))
+    (set! min0 (mod (/ (- bj_s sec0) 60.0) 60.0))
+    (set! hr0 (/ (- (- bj_s sec0) (* min0 60.0)) 3600.0))
+    (String.concat (pad2 hr0) (String.concat ":" (String.concat (pad2 min0)
+      (String.concat ":" (pad2 sec0)))))))
+
+;; 左上角时钟：两行左对齐（日期 / 时刻），每秒重画一次
+(define draw_clock
+  (lambda ()
     (if (== hud_dim 1)
         #f
         {
-          (set! sec0 (mod sim_s 60.0))
-          (set! min0 (mod (/ (- sim_s sec0) 60.0) 60.0))
-          (set! hr0 (/ (- (- sim_s sec0) (* min0 60.0)) 3600.0))
-          (set! str (String.concat "UTC " (String.concat (pad2 hr0)
-                          (String.concat ":" (String.concat (pad2 min0)
-                          (String.concat ":" (pad2 sec0)))))))
-          (hud_text str 6 3 13)
+          (bj_sync)
+          (hud_text (bj_date_str) 6 3 10)      ; YYYY-MM-DD（10 字符）
+          (hud_text (bj_time_str) 6 18 8)      ; hh:mm:ss（8 字符）
         })))
 
-;; 时间状态徽标（右上第二行）：暂停 → "暂停"；有偏置 → ±h:mm；实时且运行 → 空
-(define draw_badge
+;; 时间状态徽标（底部信息行右端，琥珀色）：暂停 → "暂停"；有偏置 → ±h:mm；实时 → 空
+(define badge_str
   (lambda ()
     (define s "")
     (define mins 0.0)
     (define oh 0.0)
     (define om 0.0)
     (define av 0.0)
-    (Gfx.fill_rect (- W 60) 17 60 15 BG_R BG_G BG_B)
-    (set! av off_s)
-    (if (< av 0.0) (set! av (- 0.0 av)) #f)
+    (set! av (Math.abs off_s))
     (if (== paused 1)
         (set! s "暂停")
         (if (> av 0.0)
@@ -1068,21 +1060,21 @@
                        (String.concat ":" (pad2 om)))))
             }
             #f))
-    (if (> (String.length s) 0)
-        (Gfx.draw_text s (- (- W 9) (text_w s)) 18 226 186 110)
-        #f)))
+    s))
 
-;; 视角读数（上排控制条右侧）：纬度 N/S + 经度 E/W + 滚转角 R±
-(define VIEW_XR 316)                ; 右对齐边界（CJK 字形墨迹会越过 advance，留 4px 余量）
-(define draw_view
+;; 底部信息行（控制条正上方）：左侧视角读数（纬度/经度/滚转角，左对齐），
+;; 右端时间徽标。整行先擦后画，两者互不遮挡。
+(define draw_info
   (lambda ()
     (define ala 0.0)
     (define alo 0.0)
     (define rv 0.0)
     (define s "")
+    (define b "")
     (if (== hud_dim 1)
         #f
         {
+          (Gfx.fill_rect 4 INFO_Y (- W 8) 14 BG_R BG_G BG_B)
           (set! ala (Math.abs view_lat))
           (set! alo view_lon)
           (if (> alo 180.0) (set! alo (- 360.0 alo)) #f)   ; 240°E → 120°W
@@ -1096,37 +1088,19 @@
           (set! s (String.concat s (if (>= rv 0.0) "+" "-")))
           (set! s (String.concat s (String.atom_to_string (Math.floor (Math.abs rv)))))
           (set! s (String.concat s "°"))
-          (Gfx.fill_rect 164 CAM_Y 156 15 BG_R BG_G BG_B)
-          (Gfx.draw_text s (- VIEW_XR (text_w s)) (+ CAM_Y 2) HUD_R HUD_G HUD_B)
+          (Gfx.draw_text s 6 (+ INFO_Y 1) HUD_R HUD_G HUD_B)
+          (set! b (badge_str))
+          (if (> (String.length b) 0)
+              (Gfx.draw_text b (- (- W 9) (text_w b)) (+ INFO_Y 1) 226 186 110)
+              #f)
         })))
 
-(define draw_hud_static
-  (lambda ()
-    (define dstr "")
-    (define sdec "")
-    (if (== hud_dim 1)
-        #f
-        {
-          (set! dstr (String.concat (String.atom_to_string civ_d)
-                        (String.concat " " (String.concat (get_item MONTHS (- civ_m 1))
-                        (String.concat " " (String.atom_to_string civ_y))))))
-          (set! sdec (String.concat "DEC " (String.concat
-                        (if (>= DEC_DEG 0.0) "+" "-")
-                        (String.concat (num_fix (Math.abs DEC_DEG) 1) "°"))))
-          (hud_text dstr 6 18 12)
-          (hud_text_r sdec (- W 6) 3 11)
-          (draw_badge)
-          (draw_view)
-        })))
-
-;; 只擦 HUD 文字所在的小矩形（不碰球/辉光/控制条）
+;; 只擦 HUD 文字所在的小矩形（不碰球/辉光/控制条/退出按钮）
 (define clear_hud
   (lambda ()
     (Gfx.fill_rect 4 1 112 16 BG_R BG_G BG_B)
     (Gfx.fill_rect 4 16 96 16 BG_R BG_G BG_B)
-    (Gfx.fill_rect (- W 100) 1 96 16 BG_R BG_G BG_B)
-    (Gfx.fill_rect (- W 60) 16 60 16 BG_R BG_G BG_B)
-    (Gfx.fill_rect 164 CAM_Y 156 15 BG_R BG_G BG_B)))
+    (Gfx.fill_rect 4 INFO_Y (- W 8) 14 BG_R BG_G BG_B)))
 
 ;; ---- 输入 ------------------------------------------------------------------
 
@@ -1139,12 +1113,12 @@
         {
           (draw_stars)
           (draw_clock)
-          (draw_hud_static)
+          (draw_info)
         })
     (Gfx.refresh)))
 
 ;; 触屏：
-;;   · 按下落在**普通按钮**上 → 按下沿就执行（时间机器/云层/复位）
+;;   · 按下落在**普通按钮**上 → 按下沿就执行（[复位] / [有云/无云]）
 ;;   · 按下落在**滚转键**上 → 不动：松手算点按（±15°），按住 400ms 后每 120ms 连发一档；
 ;;     **横向滑动**（>3px）= 拨轮：连续滚转（一像素 DIAL_K 度）⇒ 任意旋转角
 ;;   · 按下落在空白处 → 位移超 3px 就当拖动（每拍取增量、累计后一次性应用），
@@ -1174,7 +1148,7 @@
                       (set! bi (btn_hit tx ty))
                       (set! in_btn 0)
                       (if (>= bi 0)
-                          (if (and (>= bi 5) (< bi 7))
+                          (if (and (>= bi 0) (< bi 2))
                               { ; 滚转键：先不动作 —— 松手才算点按，滑动则转成拨轮
                                 (set! in_btn 2)
                                 (set! dial0 view_roll)
@@ -1266,7 +1240,7 @@
         #f)))
 
 ;; 键盘：←/→ 步进 2 分钟，↑ 实时，↓ 暂停/运行，空格/回车 HUD 开关，c 云层；
-;;   a/d 经度、w/s 纬度、`,`/`.` 滚转、r 复位视点
+;;   a/d 经度、w/s 纬度、`,`/`.` 滚转、r 复位视点（按钮没有的项都在这里）
 (define read_key
   (lambda ()
     (if (Key.is_available)
@@ -1274,11 +1248,13 @@
           (set! keyv (Key.take_press))
           (while (> keyv 0)
             {
-              (if (== keyv 3) (btn_do 0) #f)
-              (if (== keyv 4) (btn_do 1) #f)
-              (if (== keyv 1) (btn_do 2) #f)
-              (if (== keyv 2) (btn_do 3) #f)
-              (if (or (== keyv 99) (== keyv 67)) (btn_do 4) #f)
+              ;; 时间机器（按钮已去掉，只剩键位）
+              (if (== keyv 3) (time_step -120) #f)
+              (if (== keyv 4) (time_step 120) #f)
+              (if (== keyv 1) (time_live) #f)
+              (if (== keyv 2) (time_toggle_pause) #f)
+              ;; 云层 / 视角
+              (if (or (== keyv 99) (== keyv 67)) (clouds_toggle) #f)
               (if (or (== keyv 97) (== keyv 65)) (cam_nudge 0.0 (- 0.0 CAM_KEY)) #f)
               (if (or (== keyv 100) (== keyv 68)) (cam_nudge 0.0 CAM_KEY) #f)
               (if (or (== keyv 119) (== keyv 87)) (cam_nudge CAM_KEY 0.0) #f)
@@ -1309,11 +1285,11 @@
   (lambda ()
     (draw_bg)
     (draw_stars)
-    (EX.draw_button_at 266 220)
+    (EX.draw_button_at 270 3)
     (draw_btns)
     ;; 先补 HUD（球体由随后的分条绘制补），退出确认框关掉后立刻恢复原样
     (draw_clock)
-    (draw_hud_static)
+    (draw_info)
     (set! clk_sec -1)
     (set! rnd_y ROW_Y0)
     (set! rnd_mode 1)
@@ -1321,7 +1297,7 @@
 
 (define on_tick
   (lambda ()
-    (EX.check)                          ; 硬 A/ESC / 右下角「退出」
+    (EX.check)                          ; 硬 A/ESC / 右上角「退出」
     (read_touch)
     (read_key)
     (if (== paused 0) (time_sync) #f)    ; 运行态：模拟时刻 = 实时 + 偏置
@@ -1332,12 +1308,22 @@
           (set! clk_sec sim_s)
           (draw_clock)
         })
+    ;; ---- 时间机器/云层状态变了（键盘触发）：补画控制条高亮与信息行 ----
+    (if (== ui_dirty 1)
+        {
+          (set! ui_dirty 0)
+          (set! clk_sec -1)
+          (draw_btns)
+          (draw_info)
+          (time_log)
+        }
+        #f)
     ;; ---- 视角变了：先出粗预览（拖动时每拍一张），跟手不卡 ----
     (if (== cam_dirty 1)
         {
           (set! cam_dirty 0)
           (rnd_preview)
-          (draw_view)
+          (draw_info)
         }
         #f)
     ;; ---- 相机稳定倒计时：拖动/按键停手 CAM_SETTLE 拍后回到整质量分条重绘 ----
@@ -1377,11 +1363,11 @@
 (time_live)                 ; 初始：显示实时
 (draw_bg)
 (draw_stars)
-(EX.draw_button_at 266 220)
+(EX.draw_button_at 270 3)   ; 右上角「退出」
 (draw_btns)
 (rnd_start)                 ; 第一帧场景（分条渐进，由定时器逐拍推进）
 (draw_clock)
-(draw_hud_static)
+(draw_info)
 (Gfx.refresh)
 (set! _timer (System.set_interval TICK_MS on_tick))
 (display "[earthport] sun=(")
