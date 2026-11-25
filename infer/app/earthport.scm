@@ -133,6 +133,17 @@
 (define GLINT_WIDE_K 20.0)
 ;; 大气：低太阳时的红化斜率（入射阳光穿过更长气柱 → 蓝先被散射掉）
 (define SUN_RED 0.30)
+;; 米氏散射（气溶胶/尘埃/水汽）：与瑞利互补的另一半 —— **近全谱白**（所以能把蓝调
+;;   压成灰白、给亮区铺一层朦胧的薄雾，去掉"塑料感/空气过于澄澈"）、**强前向散射**
+;;   （Henyey-Greenstein g=0.65，太阳在镜头背后时最亮）、柱密度随空气量²增长（比瑞利的
+;;   ³ 缓，所以白雾铺满整个亮区而不只是描边）。
+;;   相函数是**帧常量**：平行入射 + 平行投影 ⇒ 盘面处处同一个散射角 cosΘ = sUp。
+(define MIE_G 0.65)                 ; 各向异性因子
+(define MIE_ISO 0.60)               ; 各向同性底（多次散射的粗近似）
+(define MIE_A 0.035)                ; 柱密度项（随空气量²增长，主要压在边缘）
+(define MIE_FLAT 0.014)             ; **平坦项**：气溶胶垂直光学厚度带来的均匀白纱
+                                    ;   （整片亮区都被抬一点、颜色被压灰 → 朦胧感）
+(define MIE_PHASE 1.0)              ; 相函数（每帧由 SU 更新）
 
 ;; 配色
 (define BG_R 1.0)                   ; 背景（近黑深蓝）
@@ -372,6 +383,8 @@
     (define hr 0.0)
     (define cd 0.0)
     (define hl 0.0)
+    (define hg 0.0)
+    (define hg1 0.0)
     (Ephem.set_time sim_d sim_s)
     (Ephem.set_gmst)
     (Ephem.sun_equatorial)
@@ -395,6 +408,12 @@
     (set! HY (/ SN hl))
     (set! HZ (/ (+ SU 1.0) hl))
     (set! SUNUP (if (> SU 0.0) SU 0.0))
+    ;; 米氏相函数：HG(g) 归一化到"太阳在镜头正后方(=1)"，再与各向同性底混合
+    (set! hg (/ (- 1.0 (* MIE_G MIE_G))
+                (Math.pow (- (+ 1.0 (* MIE_G MIE_G))
+                             (* (* 2.0 MIE_G) SU)) 1.5)))
+    (set! hg1 (/ (- 1.0 (* MIE_G MIE_G)) (Math.pow (- 1.0 MIE_G) 1.5)))
+    (set! MIE_PHASE (+ MIE_ISO (* (- 1.0 MIE_ISO) (/ hg hg1))))
   ))
 
 ;; ---- 场景绘制（分条渐进） --------------------------------------------------
@@ -441,10 +460,12 @@
     (define lk 0.0)
     (define sunv 0.0)
     (define dl 0.0)
+    (define datm 0.0)
     (define sfac 0.0)
     (define dusk 0.0)
     (define airs 0.0)
     (define warm 0.0)
+    (define mie 0.0)
     (define lit 0.0)
     (define air 0.0)
     (define s3 0.0)
@@ -550,7 +571,13 @@
                     ;;  一转就是 6°（球面与视线相切）——用含 w 的地表法向做照明，亮环内侧
                     ;;  必然出现 1px 的亮度断层；dl 跨边缘连续且平滑。
                     (set! dl (+ (* u SE) (* sny SN)))
-                    (set! lit (* (+ dl ATM_LIFT) ATM_LIFT_K))
+                    ;; 照明/入射气柱用的天顶角余弦：取 "地表法向" 与 "切点法向" 的较大者
+                    ;;   datm = dl + max(0, w·sUp)（= max(dot, dl)）
+                    ;;   · 盘面内部（w 大）：= dot —— 散射层就在地表附近，太阳高度取地表值
+                    ;;   · 视圆盘边缘（w→0）：= dl —— 与球外连续，且不会因球面相切而 1px 跳变
+                    (set! datm dl)
+                    (if (> SU 0.0) (set! datm (+ dl (* w SU))) #f)
+                    (set! lit (* (+ datm ATM_LIFT) ATM_LIFT_K))
                     (if (< lit 0.0) (set! lit 0.0) #f)
                     (if (> lit 1.0) (set! lit 1.0) #f)
                     ;; 拆成两股：**被阳光照到的那股**（沿视线看到的日照大气）与**环境那股**
@@ -559,14 +586,18 @@
                     ;;   airs = 太阳方向空气量（1/sqrt(cos²+2H)：天顶 1、晨昏 ~4.2）
                     ;;   warm = 蓝的保留率（1/(1+0.3(airs-1))：天顶 1 → 晨昏 ~0.51）
                     ;;   透射率取 warm³ ⇒ 晨昏线附近既偏暖又明显变暗，不会与正午亮环同亮。
-                    (set! sunv (if (< dl 0.0) 0.0 dl))
+                    (set! sunv (if (< datm 0.0) 0.0 datm))
                     (set! airs (/ 1.0 (Math.sqrt (+ (* sunv sunv) HS2))))
                     (set! warm (/ 1.0 (+ 1.0 (* SUN_RED (- airs 1.0)))))
                     (set! sl (* (* (* s3 (- 1.0 ATM_AMB)) lit) (* warm (* warm warm))))
                     (set! sa (* s3 ATM_AMB))
-                    (set! ar (+ (* (* sl ATM_R) (- 2.0 warm)) (* sa ATM_R)))
-                    (set! ag (+ (* (* sl ATM_G) (+ 0.4 (* 0.6 warm))) (* sa ATM_G)))
-                    (set! ab (+ (* (* sl ATM_B) warm) (* sa ATM_B)))
+                    ;; 米氏白雾：与瑞利同源衰减（入射光谱），但**三通道等权** ⇒
+                    ;;   叠在蓝调之上会把亮区压向灰白、并抬起暗部（朦胧感）。
+                    (set! mie (* (* (+ MIE_FLAT (* MIE_A (* air air))) (* lit MIE_PHASE))
+                                warm))
+                    (set! ar (+ (+ (* (* sl ATM_R) (- 2.0 warm)) (* sa ATM_R)) mie))
+                    (set! ag (+ (+ (* (* sl ATM_G) (+ 0.4 (* 0.6 warm))) (* sa ATM_G)) mie))
+                    (set! ab (+ (+ (* (* sl ATM_B) warm) (* sa ATM_B)) mie))
                     (Gfx.set_pixel x y
                                    (+ r (/ (* 255.0 ar) (+ ar 1.0)))
                                    (+ g (/ (* 255.0 ag) (+ ag 1.0)))
@@ -586,14 +617,17 @@
                     (set! lit (* (+ dl ATM_LIFT) ATM_LIFT_K))
                     (if (< lit 0.0) (set! lit 0.0) #f)
                     (if (> lit 1.0) (set! lit 1.0) #f)
-                    (set! sunv (if (< dl 0.0) 0.0 dl))
+                    (set! sunv (if (< datm 0.0) 0.0 datm))
                     (set! airs (/ 1.0 (Math.sqrt (+ (* sunv sunv) HS2))))
                     (set! warm (/ 1.0 (+ 1.0 (* SUN_RED (- airs 1.0)))))
                     (set! sl (* (* (* s3 (- 1.0 ATM_AMB)) lit) (* warm (* warm warm))))
                     (set! sa (* s3 ATM_AMB))
-                    (set! ar (+ (* (* sl ATM_R) (- 2.0 warm)) (* sa ATM_R)))
-                    (set! ag (+ (* (* sl ATM_G) (+ 0.4 (* 0.6 warm))) (* sa ATM_G)))
-                    (set! ab (+ (* (* sl ATM_B) warm) (* sa ATM_B)))
+                    (set! air (* AIR0 xo))          ; 与球内在 b=1 处衔接的等效空气量
+                    (set! mie (* (* (+ MIE_FLAT (* MIE_A (* air air))) (* lit MIE_PHASE))
+                                warm))
+                    (set! ar (+ (+ (* (* sl ATM_R) (- 2.0 warm)) (* sa ATM_R)) mie))
+                    (set! ag (+ (+ (* (* sl ATM_G) (+ 0.4 (* 0.6 warm))) (* sa ATM_G)) mie))
+                    (set! ab (+ (+ (* (* sl ATM_B) warm) (* sa ATM_B)) mie))
                     (Gfx.set_pixel x y
                                    (+ BG_R (/ (* 255.0 ar) (+ ar 1.0)))
                                    (+ BG_G (/ (* 255.0 ag) (+ ag 1.0)))

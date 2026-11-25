@@ -250,12 +250,16 @@ EDGE_FADE = 0.071     # 地表边缘羽化（≈ 最外 7px 淡出）
 SUN_FLOOR = 0.014     # 无直射时的地表残余反照率
 SUN_SOFT = 0.10       # 直射份额软化宽度
 DUSK_HI, DUSK_SPAN = 0.12, 0.33   # 城市灯点亮区间
-SUN_RED = 0.30        # 低太阳红化斜率（高层大气散射的红化比地面夕阳弱）
+SUN_RED = 0.30        # 低太阳红化斜率
+# 米氏散射（气溶胶）：近全谱白 + 前向散射 + 柱密度 ∝ 空气量²
+MIE_G = 0.65          # HG 各向异性
+MIE_ISO = 0.60        # 各向同性底
+MIE_A = 0.035         # 柱密度项（随空气量²）
+MIE_FLAT = 0.014      # 平坦项（气溶胶垂直光学厚度带来的均匀白纱）
 GLINT_CORE = 150.0    # 太阳反光光斑强度
 GLINT_CORE_K = 110.0  # 光斑角半径
 GLINT_WIDE = 58.0     # 海面宽反光强度
 GLINT_WIDE_K = 20.0
-TWILIGHT_K = 3.0
 
 LIGHT_R, LIGHT_G, LIGHT_B = 1.28, 0.98, 0.62
 
@@ -274,7 +278,7 @@ def sun_dir(dec_deg, hour_deg):
     return (math.cos(d) * math.sin(-h), math.sin(d), math.cos(d) * math.cos(h))
 
 
-def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, glow=0.0):
+def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp=1.0):
     """单个像素的最终颜色（None = 不写，保留背景）。公式与 app/earthport.scm 一一对应。
 
     **昼夜不分枝**：地表亮度只由太阳天顶角余弦 dot 驱动（sunv = max(0,dot) 连续降到 0），
@@ -303,8 +307,10 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, glow=0.
         sl = s3 * (1.0 - ATM_AMB) * lit * warm * warm * warm
         sa = s3 * ATM_AMB
         out = []
+        # 米氏白雾（三通道等权）：压向灰白、抬起暗部
+        mie = (MIE_FLAT + MIE_A * air * air) * lit * mp * warm
         for k, g in ((ATM_R, 2.0 - warm), (ATM_G, 0.4 + 0.6 * warm), (ATM_B, warm)):
-            a = sl * k * g + sa * k
+            a = sl * k * g + sa * k + mie
             out.append(255.0 * a / (a + 1.0))
         return out
 
@@ -339,8 +345,10 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, glow=0.
         t = min(1.0, (1.0 - q) * R_GL * EDGE_FADE)
         cov = t * t * (3.0 - 2.0 * t)
         r, g, b = r * cov, g * cov, b * cov
-        dl = u * se + sn_ * sn          # 切点法向的太阳投影（不含 w 项，跨边缘连续）
-        ar, ag, ab = atmos(1.0 / math.sqrt(1.0 - q + 2.0 * HS), dl)
+        # 照明/入射气柱用的天顶角余弦：max(dot, dl) = dl + max(0, w·sUp)
+        dl = u * se + sn_ * sn
+        datm = max(dot, dl)
+        ar, ag, ab = atmos(1.0 / math.sqrt(1.0 - q + 2.0 * HS), datm)
         return (r + ar, g + ag, b + ab)
 
     bo = math.sqrt(q) - 1.0
@@ -356,12 +364,21 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, glow=0.
         warm = 1.0 / (1.0 + SUN_RED * (airs - 1.0))
         sl = s3 * (1.0 - ATM_AMB) * lit * warm * warm * warm
         sa = s3 * ATM_AMB
+        air_o = AIR0 * xo
+        mie = (MIE_FLAT + MIE_A * air_o * air_o) * lit * mp * warm
         out = []
         for k, g in ((ATM_R, 2.0 - warm), (ATM_G, 0.4 + 0.6 * warm), (ATM_B, warm)):
-            a = sl * k * g + sa * k
+            a = sl * k * g + sa * k + mie
             out.append(255.0 * a / (a + 1.0))
         return (BG_R + out[0], BG_G + out[1], BG_B + out[2])
     return None
+
+
+def mie_phase(su):
+    """米氏相函数（HG，g=MIE_G）：平行入射+平行投影 ⇒ 盘面处处 cosΘ = sUp。"""
+    hg = (1.0 - MIE_G ** 2) / (1.0 + MIE_G ** 2 - 2.0 * MIE_G * su) ** 1.5
+    hg1 = (1.0 - MIE_G ** 2) / (1.0 - MIE_G) ** 1.5
+    return MIE_ISO + (1.0 - MIE_ISO) * hg / hg1
 
 
 def preview(day_rgb, night_v, water, se, sn, su, path):
