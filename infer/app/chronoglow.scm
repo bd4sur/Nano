@@ -21,16 +21,17 @@
 ;; 画法（全部现有原语）：
 ;;   · 每颗粒子一条**加色抗锯齿短线**（w=1），起点沿速度反推 2.6×、轴向钳到 ±4.5px
 ;;     → 运动模糊；不钳的话同向拖尾会叠成硬边三角斑。
-;;   · 每 4 颗补一组**高斯辉光**：3 层同心 alpha 圆（半径 R/0.66R/0.36R，
-;;     alpha 34/46/78），靠 alpha 合成叠出 exp(−r²/2σ²) 的径向衰减 —— 视觉上柔和地衰减到无
-;;     （单层平顶圆盘的边缘是硬的，一眼就是珠子）。曾用 4 层（更平滑），但每帧多花 ~1 ms
-;;     把周期顶过 33 ms 的定时器，权衡后取 3 层。
+;;   · **每颗粒子都补一组高斯辉光**：2 层同心 alpha 圆（半径 R/0.58R，alpha 26/50），
+;;     靠 alpha 合成叠出 exp(−r²/2σ²) 的径向衰减 —— 视觉上柔和地衰减到无。
+;;     **为什么每颗都画**：点表是按"绕质心极角"排序的，若只给 `j mod k == 0` 的点画辉光，
+;;     被选中的点在实际空间里是**散乱**的（有的地方堆两三个、有的地方空一片）→ 光晕毛毛糙糙。
+;;     现在 R≈5~6.6px 而点间距只有 2.7px（重叠率 ~0.45），叠加后沿笔画是连续的一条软光带。
 ;;     **mode 0~3 是旧语义**（0 置黑 / 1 置色 / 2 XOR / 3 加色），alpha 必须 ≥ 4。
 ;;   · 背景 110 颗粒子在流场里自由漂 + 秒进度光带 + 极暗竖直渐变底。
 ;;
-;; 代价（WASM 目标实测）：约 640 条光丝 × 5.9 µs + 约 160 组辉光（每组 3 圆 ≈ 9 µs）
-;;   + 80 条背景丝 + 逐粒子物理 ≈ **14.8 ms/拍**，28 fps（定时器 33 ms）。
-;;   两枚按钮 ≈ 0（实测开关按钮前后差 < 0.05 ms）。
+;; 代价（WASM 目标实测）：约 640 条光丝 × 5.9 µs + 640 组辉光（每组 2 圆 ≈ 6 µs）
+;;   + 80 条背景丝 + 逐粒子物理 ≈ **17.2 ms/拍**（定时器 33 ms，页面侧还有 ~24 ms 固定开销，
+;;   实际约 25 fps）。两枚按钮 ≈ 0（实测开关前后差 < 0.05 ms）。
 ;;
 ;; 交互：点按屏幕换配色（6 套）；右上角「退出」（app/lib/exit.scm 统一出口）。
 ;; 诊断行（每 30 拍）：[cg] pts=<活跃点数> ms=<本拍时长> pal=<配色号>
@@ -325,8 +326,8 @@
 ;; 触点排斥：按住屏幕时把附近粒子推开，松手后弹簧自然把它们收回字形
 (define REPT 0)                    ; 剩余排斥拍数（>0 生效；点按也会给 8 拍脉冲）
 (define GUARD 12)                  ; 启动保护：前 12 拍忽略触屏（吃掉从菜单点进来的余波）
-(define REPR 46.0)                 ; 排斥半径（px）
-(define REPR2 2116.0)              ; = REPR²
+(define REPR 58.0)                 ; 排斥半径（px）
+(define REPR2 3364.0)              ; = REPR²
 (define RTX 0.0)                   ; 当前触点
 (define RTY 0.0)
 (define PRESSED #f)
@@ -535,9 +536,8 @@
 ;; 单组 ≈ 4 次 fill_circle_aa ≈ 12 µs（R≈8），所以每 4 颗粒子才画一组。
 (define halo
   (lambda (x y rad br)
-    (Gfx.fill_circle_aa x y rad HR HG HB (* 34.0 br))
-    (Gfx.fill_circle_aa x y (* 0.66 rad) HR HG HB (* 46.0 br))
-    (Gfx.fill_circle_aa x y (* 0.36 rad) HR HG HB (* 78.0 br))))
+    (Gfx.fill_circle_aa x y rad HR HG HB (* 26.0 br))
+    (Gfx.fill_circle_aa x y (* 0.58 rad) HR HG HB (* 50.0 br))))
 
 (define step_particle
   (lambda (p tx ty hue t glow rep)
@@ -580,7 +580,7 @@
           (set! d2 (+ (* ddx ddx) (* ddy ddy)))
           (if (< d2 REPR2)
               { (set! rf (- 1.0 (/ d2 REPR2)))
-                (set! rf (* rf 8.0))
+                (set! rf (* rf 20.0))
                 (set! vx (+ vx (* rf (/ ddx REPR))))
                 (set! vy (+ vy (* rf (/ ddy REPR)))) }
               #f) })
@@ -603,7 +603,7 @@
                       1.0 (* HR br) (* HG br) (* HB br))
     ;; 高斯辉光（每 3 颗一枚，半径随亮度略增）
     (if glow
-        (halo x y (+ 6.5 (* 2.2 br)) br)
+        (halo x y (+ 4.9 (* 1.6 br)) br)
         #f)))
 
 ;; ---- 一帧：读时间 → 逐槽把粒子拉向字形 -----------------------------------
@@ -651,7 +651,7 @@
               (set! q (* 2 (+ base j)))       ; 点表里该点的下标
               (set! tx (+ x0 (get_item TBP q)))
               (set! ty (+ (+ Y0 (get_item TBP (+ q 1))) dy))
-              (step_particle p tx ty hue t (== (mod j 4) 0) rp)
+              (step_particle p tx ty hue t #t rp)
               (set! ACTIVE (+ ACTIVE 1))
             }
             #f)
