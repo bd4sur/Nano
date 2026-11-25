@@ -117,6 +117,23 @@ void gfx_draw_line(Nano_GFX *gfx, uint32_t x1, uint32_t y1, uint32_t x2, uint32_
 //   注意：**浅底上用 mode 3 会把墨迹加成白色**（加法饱和），深底上 mode 3 才是"自发光"观感。
 //   （2026-11-24 之前本函数无视 mode，一律加色——浅色主题下公式矢量符号因此变白。）
 void gfx_draw_line_anti_aliasing(Nano_GFX *gfx, float x1, float y1, float x2, float y2, float line_width, uint8_t r, uint8_t g, uint8_t b, uint8_t mode);
+// 抗锯齿**实心圆**（圆心/半径为浮点，圆心是像素中心坐标 +0.5 的连续坐标）：
+// 边缘按「像素中心到圆心的距离」解析算覆盖率 cov = clamp(r + 0.5 − d, 0, 1)（1px 过渡），
+// 所以半径 0.5~2px 的小粒子本身就是软边圆点（不是 2r×2r 的方块），慢速运动的亚像素
+// 位移也不会被量化。与 gfx_draw_rounded_rectangle（整数圆心/半径、角部 8×8 超采样）比：
+// 更便宜、边缘更平滑，但**没有**"圆角矩形"能力（只画圆）。
+// mode 语义同 gfx_draw_point / gfx_draw_line_anti_aliasing
+// （0-置黑 1-置色 2-异或 3-加色 >=4-Alpha 混合；深底"发光粒子"用 3）。
+void gfx_fill_dot_anti_aliasing(Nano_GFX *gfx, float cx, float cy, float radius,
+                                uint8_t r, uint8_t g, uint8_t b, uint8_t mode);
+// 柔和光斑：强度剖面 (1 − (d/R)²)² —— 中心平顶、边缘平滑衰减到 0，
+// 只用乘加（无 sqrt、无超采样），一次调用即可取代"两层同心 alpha 圆逼近高斯"的辉光。
+// gain 为整体强度倍率（通常 < 1），颜色通道按 0..255 收（可先按亮度预乘）。
+// mode：3 = 加色（稀疏发光体）；其他值 = 按 gain×剖面 的 alpha 混合（**密集粒子场必须用它**，
+// 加色在互相重叠时会把内部叠成纯白）。典型用法：核心用 gfx_fill_dot_anti_aliasing，
+// 外面套一发本函数当辉光。
+void gfx_fill_glow_anti_aliasing(Nano_GFX *gfx, float cx, float cy, float radius,
+                                 uint8_t r, uint8_t g, uint8_t b, float gain, uint8_t mode);
 void gfx_draw_rectangle(Nano_GFX *gfx, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t mode);
 // 抗锯齿圆角矩形（填充语义，同 gfx_draw_rectangle；GUI 元素用）
 // 画质优先：四个角部按 8×8 超采样统计覆盖率逐像素混合（内部直行带走行填充快路径）；

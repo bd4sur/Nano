@@ -96,6 +96,28 @@ int32_t am_native_Gfx_fill_circle(am_runtime_t *rt, am_process_t *proc);
 //   mode 同其它绘图过程：1=置色，>=4=定值 alpha（例如拇指光晕用 40）。
 int32_t am_native_Gfx_fill_circle_aa(am_runtime_t *rt, am_process_t *proc);
 
+// (Gfx.fill_dot_aa cx:Number cy:Number r:Number rr:Number gg:Number bb:Number) : #undefined
+// —— **抗锯齿实心圆**，加色混合。与 (Gfx.fill_circle_aa) 的区别有三条：
+//    ① 圆心/半径按**浮点**收（底层 = gfx_fill_dot_anti_aliasing），亚像素位移不被量化；
+//    ② 边缘是 1px 解析覆盖率（cov = clamp(r+0.5−d,0,1)），半径 0.5~2px 时就是软边小点，
+//       不是"以 r 为四角半径的 2r×2r 方块"；
+//    ③ 便宜：覆盖 π(r+1)² 像素、无角部 8×8 超采样 —— 粒子/指示灯这类高频图元用它。
+// (Gfx.fill_dot_aa_mode cx cy r rr gg bb mode:Number) : #undefined
+//   显式混合方式：1 = 按覆盖率不透明混合（浅底墨迹）3 = 加色（深底发光）>=4 = 定值 alpha。
+int32_t am_native_Gfx_fill_dot_aa(am_runtime_t *rt, am_process_t *proc);
+int32_t am_native_Gfx_fill_dot_aa_mode(am_runtime_t *rt, am_process_t *proc);
+
+// (Gfx.fill_glow_aa cx cy r rr gg bb gain:Number) : #undefined
+// —— 柔和光斑：强度按 (1−(d/R)²)² 衰减（中心平顶、边缘平滑到 0），只用乘加。
+//    一次调用即可取代"两层同心 alpha 圆（R / 0.58R，alpha 26/50）逼近高斯"的辉光，
+//    而且没有超采样台阶。gain 是强度倍率（典型 0.1~0.5，可再乘粒子亮度）。
+//    **alpha 混合**：重叠再多次也只收敛到前景色 —— 密集粒子场（几百颗光晕重叠）用它。
+// (Gfx.fill_glow_aa_add cx cy r rr gg bb gain) : #undefined
+//    同上但走**加色**：只适合稀疏发光体（暗底上的几颗星），重叠多会过曝成白。
+//    典型搭配：(Gfx.fill_dot_aa x y 1.2 r g b) + (Gfx.fill_glow_aa x y 6.5 r g b 0.3)。
+int32_t am_native_Gfx_fill_glow_aa(am_runtime_t *rt, am_process_t *proc);
+int32_t am_native_Gfx_fill_glow_aa_add(am_runtime_t *rt, am_process_t *proc);
+
 // (Gfx.draw_triangle x1 y1 x2 y2 x3 y3 aa r g b mode) : #undefined
 // —— 实心三角形（= C 版 gfx_draw_triangle，扫描线填充，顶点顺序任意）。
 //   用途：播放/上一首/下一首这类矢量图标（C 版音乐盒即用法）。

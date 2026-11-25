@@ -542,6 +542,89 @@ int32_t am_native_Gfx_fill_circle_aa(am_runtime_t *rt, am_process_t *proc) {
     return native_statement_done(proc);
 }
 
+// ===============================================================================
+// 粒子/发光体图元：抗锯齿圆点与柔和光斑（C 实现见 graphics.c 的同名函数）
+// ===============================================================================
+// 三者都是**语句型**（压 1 个 #undefined）；圆心/半径/强度按**浮点**收 ——
+// 与上面 (Gfx.fill_circle_aa) 的整数圆心/半径不同，粒子的亚像素位移不会被量化
+// （慢速运动的尘埃/粒子用整数圆心会"停两帧蹦一格"）。
+
+// (Gfx.fill_dot_aa cx:Number cy:Number r:Number rr:Number gg:Number bb:Number) : #undefined
+// —— 抗锯齿实心圆，**加色**混合（深底"自发光粒子"；浅底请用下面的 _mode ... 1）。
+//    半径 0.5~2px 时本身就是软边圆点，不是 2r×2r 的方块。
+int32_t am_native_Gfx_fill_dot_aa(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    if (g == NULL) return -1;
+    am_float_t cy = 0.0f, cx = 0.0f, radius = 0.0f;
+    uint8_t b, gc, r;
+    if (!native_pop_color(proc, &b))       return -1;
+    if (!native_pop_color(proc, &gc))      return -1;
+    if (!native_pop_color(proc, &r))       return -1;
+    if (!native_pop_number(proc, &radius)) return -1;
+    if (!native_pop_number(proc, &cy))     return -1;
+    if (!native_pop_number(proc, &cx))     return -1;
+    if (isnan(radius) || isnan(cy) || isnan(cx)) return -1;
+    gfx_fill_dot_anti_aliasing(g, (float)cx, (float)cy, (float)radius, r, gc, b, 3);
+    return native_statement_done(proc);
+}
+
+// (Gfx.fill_dot_aa_mode cx cy r rr gg bb mode:Number) : #undefined
+// —— 同上，显式给混合方式：1 = 按覆盖率不透明混合（浅底墨迹）3 = 加色 >=4 = 定值 alpha。
+int32_t am_native_Gfx_fill_dot_aa_mode(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    if (g == NULL) return -1;
+    int32_t mode = 3;
+    am_float_t cy = 0.0f, cx = 0.0f, radius = 0.0f;
+    uint8_t b, gc, r;
+    if (!native_pop_int(proc, &mode))      return -1;
+    if (!native_pop_color(proc, &b))       return -1;
+    if (!native_pop_color(proc, &gc))      return -1;
+    if (!native_pop_color(proc, &r))       return -1;
+    if (!native_pop_number(proc, &radius)) return -1;
+    if (!native_pop_number(proc, &cy))     return -1;
+    if (!native_pop_number(proc, &cx))     return -1;
+    if (isnan(radius) || isnan(cy) || isnan(cx)) return -1;
+    if (mode < 0 || mode > 255) mode = 3;
+    gfx_fill_dot_anti_aliasing(g, (float)cx, (float)cy, (float)radius, r, gc, b, (uint8_t)mode);
+    return native_statement_done(proc);
+}
+
+// 柔和光斑的公共实现（mode 见 graphics.h 的 gfx_fill_glow_anti_aliasing）：
+//   mode >= 4 → alpha 混合（a = gain×剖面），密集粒子场用它（重叠收敛到前景色）；
+//   mode == 3 → 加色，稀疏发光体（暗底上的几颗星）用它。
+static int32_t fill_glow_impl(am_process_t *proc, Nano_GFX *g, uint8_t mode) {
+    am_float_t gain = 0.0f, cy = 0.0f, cx = 0.0f, radius = 0.0f;
+    uint8_t b, gc, r;
+    if (!native_pop_number(proc, &gain))   return -1;
+    if (!native_pop_color(proc, &b))       return -1;
+    if (!native_pop_color(proc, &gc))      return -1;
+    if (!native_pop_color(proc, &r))       return -1;
+    if (!native_pop_number(proc, &radius)) return -1;
+    if (!native_pop_number(proc, &cy))     return -1;
+    if (!native_pop_number(proc, &cx))     return -1;
+    if (isnan(gain) || isnan(radius) || isnan(cy) || isnan(cx)) return -1;
+    gfx_fill_glow_anti_aliasing(g, (float)cx, (float)cy, (float)radius, r, gc, b, (float)gain, mode);
+    return native_statement_done(proc);
+}
+
+// (Gfx.fill_glow_aa cx:Number cy:Number r:Number rr:Number gg:Number bb:Number gain:Number)
+//   : #undefined —— 柔和光斑（(1−(d/R)²)² 剖面，中心平顶、边缘平滑到 0），**alpha 混合**。
+//   一次调用即取代"两层同心 alpha 圆逼近高斯"的辉光；gain 为强度倍率（典型 0.1~0.5）。
+//   **密集粒子场用这一档**：加色版本在几百颗互相重叠时会把内部叠成纯白。
+int32_t am_native_Gfx_fill_glow_aa(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    if (g == NULL) return -1;
+    return fill_glow_impl(proc, g, 4);
+}
+
+// (Gfx.fill_glow_aa_add cx cy r rr gg bb gain:Number) : #undefined
+//   —— 同上但走**加色**混合：只适合稀疏的发光体（暗底上几颗星），重叠多的地方会过曝。
+int32_t am_native_Gfx_fill_glow_aa_add(am_runtime_t *rt, am_process_t *proc) {
+    Nano_GFX *g = native_gfx(rt);
+    if (g == NULL) return -1;
+    return fill_glow_impl(proc, g, 3);
+}
+
 // (Gfx.draw_triangle x1 y1 x2 y2 x3 y3 anti_aliasing red green blue mode) : #undefined
 // —— 实心三角形（= C 版 gfx_draw_triangle；扫描线填充，三个顶点顺序任意）。
 //    用途：播放/上一首/下一首这类矢量图标（C 版音乐盒即用法），不必用 draw_line 逐列拼。
@@ -1007,6 +1090,10 @@ static const am_native_func_entry_t am_native_Gfx_funcs[] = {
     { L"draw_circle", am_native_Gfx_draw_circle },
     { L"fill_circle", am_native_Gfx_fill_circle },
     { L"fill_circle_aa", am_native_Gfx_fill_circle_aa },
+    { L"fill_dot_aa", am_native_Gfx_fill_dot_aa },
+    { L"fill_dot_aa_mode", am_native_Gfx_fill_dot_aa_mode },
+    { L"fill_glow_aa", am_native_Gfx_fill_glow_aa },
+    { L"fill_glow_aa_add", am_native_Gfx_fill_glow_aa_add },
     { L"draw_triangle", am_native_Gfx_draw_triangle },
     { L"draw_text",   am_native_Gfx_draw_text },
     { L"rounded_rect", am_native_Gfx_rounded_rect },

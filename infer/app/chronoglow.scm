@@ -18,23 +18,60 @@
 ;; 换秒时目标点整体换了一套，弹簧就把粒子甩过去：旧字形散开、飞向新字形、
 ;; 重新聚合（不需要任何淡入淡出特判）。点序按"绕质心极角"排过，相邻粒子去相邻位置。
 ;;
-;; 画法（全部现有原语）：
-;;   · 每颗粒子一条**加色抗锯齿短线**（w=1），起点沿速度反推 2.6×、轴向钳到 ±4.5px
-;;     → 运动模糊；不钳的话同向拖尾会叠成硬边三角斑。
-;;   · **每颗粒子都补一组高斯辉光**：2 层同心 alpha 圆（半径 R/0.58R，alpha 26/50），
-;;     靠 alpha 合成叠出 exp(−r²/2σ²) 的径向衰减 —— 视觉上柔和地衰减到无。
-;;     **为什么每颗都画**：点表是按"绕质心极角"排序的，若只给 `j mod k == 0` 的点画辉光，
-;;     被选中的点在实际空间里是**散乱**的（有的地方堆两三个、有的地方空一片）→ 光晕毛毛糙糙。
-;;     现在 R≈5~6.6px 而点间距只有 2.7px（重叠率 ~0.45），叠加后沿笔画是连续的一条软光带。
-;;     **mode 0~3 是旧语义**（0 置黑 / 1 置色 / 2 XOR / 3 加色），alpha 必须 ≥ 4。
-;;   · 背景 110 颗粒子在流场里自由漂 + 秒进度光带 + 极暗竖直渐变底。
+;; **字形粒子不再"严格锁在轮廓里"**：两件事把"锁定感"打散——
+;;   ① 闪烁（blingbling）：每颗粒子的亮度是「两个不整除的正弦叠出拍频」再叠一层
+;;      **伪随机火花**（每 1/9 秒重抽一次签，约 4.5% 的粒子整体拉亮 3 倍；加色
+;;      混合下高通道饱和成白光）——笔画上星星点点地闪，不再是整齐的行波。
+;;   ② 游离尘埃（NFD=160）：数字周围有尘埃在流场里漂，**随机被吸进数字**（阻尼
+;;      弹簧扑向某个字形点，越近越亮）→ 在字形上**凝聚**十几~四十拍 → **逃逸**（沿
+;;      离开字形中心的方向甩出，速度与亮度一起衰减）→ 回到漂游。概念上是在说
+;;      "数字是由尘埃**暂时**凝聚而成的"：字形边缘始终在吸气与蒸发。
+;;      尘埃只记（槽, 点序号），靶子**每拍**按当前字形重算（不遍历点表、不建
+;;      "当前点集"列表）：数字每秒换一次，存下来的坐标会落到新字形的空处变成死点。
 ;;
-;; 代价（WASM 目标实测）：约 640 条光丝 × 5.9 µs + 640 组辉光（每组 2 圆 ≈ 6 µs）
-;;   + 80 条背景丝 + 逐粒子物理 ≈ **17.2 ms/拍**（定时器 33 ms，页面侧还有 ~24 ms 固定开销，
-;;   实际约 25 fps）。两枚按钮 ≈ 0（实测开关前后差 < 0.05 ms）。
+;; 画法（两个粒子专用图元，2026-11-25 新增到 Gfx 本地库）：
+;;   · **圆点常驻 + 高速才拉光丝**：粒子本体用 `(Gfx.fill_dot_aa x y 1.35 …)` —— 圆心
+;;     取**浮点**、边缘按"像素中心到圆心的距离"解析算 1px 覆盖率，所以微抖/静止的粒子
+;;     是软边圆点（亚像素位移不被量化），而不是一根短线段。只有 |v| > 1.2 px/拍
+;;     （字形切换 / BOOST 冲刺 / 触屏排斥）时才再叠一条 `(Gfx.draw_line_aa)`：起点沿
+;;     速度反推 2.6×、轴向钳到 ±4.5px（不钳会同向叠成硬边三角斑，实测踩到）。
+;;     老写法是"永远一条两端各加 ±1.5 恒定偏移的线"，于是每颗粒子看起来都像一根
+;;     固定的 45° 短棒——这正是"粒子是棒状短线段"的根因，2026-11-25 改掉。
+;;   · **辉光一发搞定**：`(Gfx.fill_glow_aa x y R …)`，强度剖面 (1−(d/R)²)²（中心平顶、
+;;     边缘平滑到 0），逐像素 2 乘 2 加、无开方、无超采样。取代原来的"2 层同心 alpha 圆
+;;     （R/0.58R，alpha 26/50）"——后者只是两档台阶，放大看是有硬边的圆盘。
+;;     **为什么每颗都画辉光**：点表按"绕质心极角"排序，若只给 `j mod k == 0` 的点画，
+;;     被选中的点在实际空间里是**散乱**的（有的地方堆两三个、有的地方空一片）→ 光晕毛糙。
+;;     R≈6~7px 而点间距只有 2.7px（重叠率 ~0.45），叠加后沿笔画是连续的一条软光带。
+;;   · 背景 80 颗粒子在流场里自由漂（很暗）+ 极暗竖直渐变底。
+;;   · 160 颗游离尘埃：漂游/吸入/凝聚/逃逸 四态循环（见上），圆点 + 快飞时才有光丝，
+;;     亮起来（br > 0.72）时补一枚柔和光斑；刚凝聚的那颗再点一个亮核。
 ;;
-;; 交互：点按屏幕换配色（6 套）；右上角「退出」（app/lib/exit.scm 统一出口）。
-;; 诊断行（每 30 拍）：[cg] pts=<活跃点数> ms=<本拍时长> pal=<配色号>
+;; 代价（WASM 目标实测，[cg] 行的 ms 字段）：约 640 颗（圆点 + 光斑）+ 80 条背景丝
+;;   + 160 颗游离尘埃 ≈ **20~21 ms/拍**（定时器 33 ms，页面侧还有 ~20 ms 固定开销，
+;;   实际 24~25 fps）。换用 fill_dot_aa + fill_glow_aa 之后比"线 + 两层 alpha 圆"那一版
+;;   （22 ms）反而更快，同时去掉了棒状观感；两枚按钮 ≈ 0。
+;;
+;; 交互：底部一排四枚按钮 ——
+;;   ① 样式    实心 / 描边（两套字形点表）
+;;   ② 配色    1..6（6 套色相）
+;;   ③ 粒子形状 圆点（fill_dot_aa r=1.55，直径 ~3~4px）/ 细点（r=0.62，直径 1~2px）
+;;             / 短棒（旧画法：恒定对角偏置的 AA 线）
+;;   ④ 闪烁    波纹（默认：**每秒一发、从左向右快速扫过的脉冲波包**）
+;;             → 随机（每颗独立乱闪，与空间位置无关）→ 常亮（不闪）→ 波纹
+;;     **闪烁只作用在粒子本体亮度上**：亮度分两份 —— `bs`（基础亮度：波纹档的波值 /
+;;     常亮档的定值，**光晕只用它，所以光晕不闪**）与 `br = bs × 闪烁系数`（圆点/光丝
+;;     用它）。否则看到的是"一团团光晕在呼吸"，粒子本身反而看不清。
+;;   点按画面其它地方 = 排斥扰动（把粒子推开）；右上角「退出」（app/lib/exit.scm）。
+;; 诊断行（每 30 拍）：[cg] pts=<活跃点数> ms=<本拍时长> pal=<配色号> style=<字形风格>
+;;   rep=<排斥剩余拍数> fd=<吸入中>/<凝聚中>/<逃逸中>（尘埃分布，漂游 = 160 − 三者）
+;;   rnd=<0 圆点 / 1 细点 / 2 短棒> twk=<0 随机 / 1 波纹 / 2 常亮>
+;; 验收口径（探针 tools/e2e/browser，见 doc/AGENTS.md）：
+;;   · 波纹：把数字行按 20px 分 16 bin，逐帧看哪个 bin 最亮 —— 亮带应每秒从左扫到右
+;;     （实测一帧一个位置：bin 6~9 → bin 8 → bin 11~12 → bin 12~14），扫完（0.7s 后）
+;;     整行回到底亮度，等下一个整秒重来。脉冲在带内 2~3 倍于两侧（bin 168/162 vs 82/62）。
+;;   · 随机：亮心像素数（min 通道 >150）的帧间变异 ≈ 30%（常亮只有 4%），
+;;     而"光晕带"像素（40..90）变异仍 ≈ 4% ⇒ 闪的是粒子本身、光晕不动。
 ;;
 ;; 解释器约束（manual.md + doc/AGENTS.md）：算术**恒二元**；无 list/let/map；
 ;; 局部量在 lambda 体首部一次声明、循环里 set!；只有 #f 是假（0 也是真）；
@@ -285,6 +322,11 @@
 (define TZ_SEC 28800)              ; UTC+8
 (define TICK_MS 33)
 (define NDUST 80)                 ; 背景自由粒子数
+(define NFD 160)                  ; 游离尘埃数（漂游 → 被吸进数字 → 凝聚 → 逃逸）
+(define FSD 0)                    ; 尘埃状态 0：漂游（流场里自由飘）
+(define FSI 1)                    ;            1：吸入（扑向某个字形点）
+(define FSS 2)                    ;            2：凝聚（贴在字形点上驻留）
+(define FSO 3)                    ;            3：逃逸（甩出去 + 淡出）
 (define MAXPT 0)                   ; 单字最多点数（= 每个槽的粒子容量，启动时算）
 (define Y0 88.0)                   ; 数字上边缘的屏幕 y
 ;; 冒号：字形自带的墨迹偏下（Arial 的冒号点靠近基线），这里整体上提 COLDY 让它在
@@ -305,12 +347,24 @@
 ;; ---- 粒子状态 ------------------------------------------------------------
 (define GX '())                    ; 位置 / 速度（6*MAXPT）
 (define GY '())
+(define GPH '())                   ; 每颗字形粒子自己的随机相位（0..2π）：闪烁"随机"档用它错开
+                                  ; 翻转时刻（不能借用尘埃的 FPH：那只有 NFD 个元素，p 会越界）
 (define GVX '())
 (define GVY '())
 (define DX '())                    ; 背景粒子
 (define DY '())
 (define DVX '())
 (define DVY '())
+(define FX '())                    ; 游离尘埃：位置 / 速度
+(define FY '())
+(define FVX '())
+(define FVY '())
+(define FS '())                    ; 状态（FSD/FSI/FSS/FSO）
+(define FT '())                    ; 状态计时（拍）
+(define FSL '())                   ; 靶子所在槽（0..7）与字形点序号（靶子每拍按当前字形重算）
+(define FJ '())
+(define FHU '())                   ; 色相**偏移**（相对 HUES[PAL]）：漂游 0.36、凝聚后随槽
+(define FPH '())                   ; 流场相位（每颗不同，避免整齐划一）
 
 (define DIG '(0 0 0 0 0 0))        ; 当前 6 个数字
 (define PAL 0)
@@ -320,9 +374,32 @@
 (define FRAMES 0)
 (define ACC 0.0)
 (define ACTIVE 0)                  ; 本拍活跃目标点数（诊断用）
+(define FNI 0)                     ; 本拍尘埃分布：吸入中 / 凝聚中 / 逃逸中
+(define FNC 0)
+(define FNE 0)
 (define MINNOW -1)                 ; 当前分钟序号（-1 = 还没初始化）
+;; ---- 波纹档的"脉冲波包"：**每秒从左向右快速扫过一条亮带**（不是连续正弦波）--------
+;; 由整秒触发（和数字换秒同时发生）：新的一秒 PHASE 归零，之后按 dt 推进；
+;; PHASE < PKT 时脉冲中心 PX 从屏幕左侧外（-70）扫到右侧外（390），扫完就安静下来。
+(define SSNOW -1)                  ; 上一个整秒（-1 = 还没初始化）—— 用来对齐"每秒一发"
+(define PHASE 9.0)                 ; 本秒脉冲的进度（秒）；>= PKT 表示本秒已经扫完
+(define PKT 0.70)                  ; 扫过全屏所需秒数（"快速"）
+(define PKS 70.0)                  ; 包络半径（px）：包宽 ~140px（约两颗半数字）
+(define PKI 0.0142857)             ; = 1/PKS
+(define PKW 0.13)                  ; 包内振荡的空间频率（rad/px，包内约 2.5 个周期）
+(define PX 999.0)                  ; 脉冲中心当前 x（999 = 屏外/无脉冲）
 ;; 字形风格：0 = 描边（轮廓密、内部稀）1 = 实心（面密度均匀）—— 底部按钮切换
 (define STYLE 1)
+;; 粒子形状（底部第三枚按钮，三档）：
+;;   0 = 圆点（fill_dot_aa r=1.55，慢速/微抖时是软边圆点，直径 ~3~4px）
+;;   1 = 细点（fill_dot_aa r=0.62 ⇒ 覆盖率只延伸到 r+0.5 ≈ 1.1px，直径 1~2px 的点）
+;;   2 = 短棒（2026-11-25 之前的原画法：永远一条两端各加恒定偏移的 AA 线）
+(define RENDER 0)
+;; 闪烁模式（底部第四枚按钮，三档）：
+;;   0 = 随机 —— 每颗粒子独立乱闪（不看空间位置）；
+;;   1 = 波纹 ——（默认）亮度相位随粒子序号走，于是有一条从秒位（右）向左传播的光晕波；
+;;   2 = 常亮 —— 恒定亮度，完全不闪。
+(define TWK 1)
 ;; 触点排斥：按住屏幕时把附近粒子推开，松手后弹簧自然把它们收回字形
 (define REPT 0)                    ; 剩余排斥拍数（>0 生效；点按也会给 8 拍脉冲）
 (define GUARD 12)                  ; 启动保护：前 12 拍忽略触屏（吃掉从菜单点进来的余波）
@@ -331,10 +408,14 @@
 (define RTX 0.0)                   ; 当前触点
 (define RTY 0.0)
 (define PRESSED #f)
-(define BHOLD 0)                   ; 本次按下落在哪颗按钮：0 无 / 1 样式 / 2 配色（也用于高亮）
-;; 底部两个按钮（左上角 + 尺寸）；样式按钮在左、配色按钮在右
-(define B1X 8.0) (define B1Y 212.0) (define B1W 104.0) (define B1H 20.0)
-(define B2X 118.0) (define B2Y 212.0) (define B2W 76.0) (define B2H 20.0)
+(define BHOLD 0)                   ; 本次按下落在哪颗按钮：0 无 / 1 样式 / 2 配色 / 3 粒子形状 / 4 闪烁（高亮用）
+;; 底部四枚按钮（左上角 + 尺寸，一排四个，左右各留 8px）：
+;;   ① 样式 实心/描边  ② 配色 1..6  ③ 粒子 圆点/短棒  ④ 闪烁 波纹/随机/常亮
+;; 宽度按最长的标签留（5 个汉字的 12px 字模 = 60px + 两侧内边距）：76 / 58 / 76 / 76。
+(define B1X 8.0)   (define B1Y 212.0) (define B1W 76.0) (define B1H 20.0)
+(define B2X 90.0)  (define B2Y 212.0) (define B2W 58.0) (define B2H 20.0)
+(define B3X 154.0) (define B3Y 212.0) (define B3W 76.0) (define B3H 20.0)
+(define B4X 236.0) (define B4Y 212.0) (define B4W 76.0) (define B4H 20.0)
 ;; 重组力度（打乱后短暂加速归位：弹簧变硬、阻尼变强、旋涡减弱）
 (define BOOST 0)                   ; >0 = 正处于"重组冲刺"的剩余拍数
 (define SPK 0.20)                  ; 弹簧系数（正常值）
@@ -401,6 +482,7 @@
     (set! GY (cons 0.0 '())) (pop GY)
     (set! GVX (cons 0.0 '())) (pop GVX)
     (set! GVY (cons 0.0 '())) (pop GVY)
+    (set! GPH (cons 0.0 '())) (pop GPH)
     (define i 0)
     (define n (* 8 MAXPT))          ; 8 个槽（6 数字 + 2 冒号）× 单字容量
     (while (< i n) {
@@ -408,6 +490,7 @@
       (push GY (* (Math.random) 240.0))
       (push GVX 0.0)
       (push GVY 0.0)
+      (push GPH (* (Math.random) 6.2832))
       (set! i (+ i 1))
     })
     (set! DX (cons 0.0 '())) (pop DX)
@@ -420,6 +503,32 @@
       (push DY (* (Math.random) 240.0))
       (push DVX 0.0)
       (push DVY 0.0)
+      (set! i (+ i 1))
+    })
+    ;; 游离尘埃：位置随机（y 偏在字形块附近），计时器错开（否则 160 颗会成群同时被吸）
+    (set! FX (cons 0.0 '())) (pop FX)
+    (set! FY (cons 0.0 '())) (pop FY)
+    (set! FVX (cons 0.0 '())) (pop FVX)
+    (set! FVY (cons 0.0 '())) (pop FVY)
+    (set! FS (cons 0 '())) (pop FS)
+    (set! FT (cons 0 '())) (pop FT)
+    (set! FSL (cons 0 '())) (pop FSL)
+    (set! FJ (cons 0 '())) (pop FJ)
+    (set! FHU (cons 0.0 '())) (pop FHU)
+    (set! FPH (cons 0.0 '())) (pop FPH)
+    (set! i 0)
+    (while (< i NFD) {
+      (push FX (* (Math.random) 320.0))
+      ;; 初始 y 偏在字形块附近（20..200）：远角上的尘埃要飘很久才会被吸进去
+      (push FY (+ 20.0 (* (Math.random) 180.0)))
+      (push FVX 0.0)
+      (push FVY 0.0)
+      (push FS FSD)
+      (push FT (Math.floor (* (Math.random) 150.0)))
+      (push FSL 0)
+      (push FJ 0)
+      (push FHU 0.36)
+      (push FPH (* (Math.random) 6.2832))
       (set! i (+ i 1))
     })))
 
@@ -469,6 +578,8 @@
   (lambda ()
     (define b1on #f)
     (define b2on #f)
+    (define b3on #f)
+    (define b4on #f)
     (set! b1on (and PRESSED (== BHOLD 1)))
     (if (== STYLE 1) (button B1X B1Y B1W B1H "样式·实心" b1on)
                      (button B1X B1Y B1W B1H "样式·描边" b1on))
@@ -478,7 +589,17 @@
           ((== PAL 2) (button B2X B2Y B2W B2H "配色·3" b2on))
           ((== PAL 3) (button B2X B2Y B2W B2H "配色·4" b2on))
           ((== PAL 4) (button B2X B2Y B2W B2H "配色·5" b2on))
-          (else       (button B2X B2Y B2W B2H "配色·6" b2on)))))
+          (else       (button B2X B2Y B2W B2H "配色·6" b2on)))
+    ;; ③ 粒子形状：圆点 / 短棒
+    (set! b3on (and PRESSED (== BHOLD 3)))
+    (cond ((== RENDER 0) (button B3X B3Y B3W B3H "粒子·圆点" b3on))
+          ((== RENDER 1) (button B3X B3Y B3W B3H "粒子·细点" b3on))
+          (else          (button B3X B3Y B3W B3H "粒子·短棒" b3on)))
+    ;; ④ 闪烁：波纹（默认）/ 随机 / 常亮
+    (set! b4on (and PRESSED (== BHOLD 4)))
+    (cond ((== TWK 0) (button B4X B4Y B4W B4H "闪烁·随机" b4on))
+          ((== TWK 2) (button B4X B4Y B4W B4H "闪烁·常亮" b4on))
+          (else       (button B4X B4Y B4W B4H "闪烁·波纹" b4on)))))
 
 (define in_rect
   (lambda (px py bx by bw bh)
@@ -510,6 +631,243 @@
       (set! i (+ i 1))
     })))
 
+;; ---- 游离尘埃：数字周围漂游 → 被吸进数字 → 短暂凝聚 → 逃逸 -----------------
+;; 概念：「数字不是刻在屏幕上的，而是**由尘埃暂时凝聚而成的**」。
+;; 每颗尘埃四个状态（FS 数组）：
+;;   0 漂游 —— 在流场里自由飘（较暗、带闪烁），倒计时到点就去**挑一个字形点**；
+;;   1 吸入 —— 阻尼弹簧扑向那个点（越近越亮 → 视觉上"被吸进去"）；
+;;   2 凝聚 —— 贴在字形点上驻留十几拍~半秒（最亮，就是字形的一部分）；
+;;   3 逃逸 —— 沿"离开字形中心"的方向甩出去，速度与亮度一起衰减，回到漂游。
+;;
+;; **靶子每拍按当前字形重算**，而不是挑靶那一刻算完就存下来：
+;;   数字每秒换一次，存下来的屏幕坐标第二拍就可能落在新字形的空处（例如 0 的内孔），
+;;   表现是一颗亮"死点"干干地停在那里。所以尘埃只记（槽 FSL, 点序号 FJ），
+;;   每拍用它们去当前点表里查一次坐标；字形换瘦了（点序号越界）就重抽一个靶子、
+;;   退回"吸入"态，从当前位置飞过去（看起来就是尘埃沿字形滑动）。
+;;   凝聚态也用快弹簧跟（k=0.30）而不是直接贴死：字形变形时它滑过去，不会瞬移。
+;;
+;; 依赖 draw_clock 本拍已经设好的 TBB/TBC/TBP（当前风格的点表句柄）与 SLOTX。
+(define draw_float_dust
+  (lambda (t)
+    (define i 0)
+    (define x 0.0)
+    (define y 0.0)
+    (define vx 0.0)
+    (define vy 0.0)
+    (define st 0)
+    (define tm 0)
+    (define tx 0.0)
+    (define ty 0.0)
+    (define ddx 0.0)
+    (define ddy 0.0)
+    (define d2 0.0)
+    (define br 0.0)
+    (define sat 0.0)
+    (define inb 0.9)
+    (define si2 0)
+    (define dv 0)
+    (define g 0)
+    (define cnt2 0)
+    (define base2 0)
+    (define j 0)
+    (define q2 0)
+    (define sx 0.0)
+    (define sy 0.0)
+    (define k 0.0)
+    (define hv 0.0)
+    (define bs 0.0)
+    (define pk 0.0)
+    (define env 0.0)
+    (set! FNI 0)
+    (set! FNC 0)
+    (set! FNE 0)
+    (set! i 0)
+    (while (< i NFD) {
+      (set! x (get_item FX i))
+      (set! y (get_item FY i))
+      (set! vx (get_item FVX i))
+      (set! vy (get_item FVY i))
+      (set! st (get_item FS i))
+      (set! tm (get_item FT i))
+      (set! tx 0.0)
+      (set! ty 0.0)
+      ;; 非漂游的尘埃：靶子每拍按**当前字形**重算（见上方说明）
+      (if (> st FSD)
+          { (set! si2 (get_item FSL i))
+            (set! dv (get_item SLOTD si2))
+            (set! g (if (< dv 0) 10 (get_item DIG dv)))
+            (set! cnt2 (get_item TBC g))
+            (set! j (get_item FJ i))
+            (if (>= j cnt2)
+                { ;; 字形换瘦了：这个点序号已经越界 → 重抽一个靶子并退回"吸入"
+                  (set! si2 (Math.floor (* (Math.random) 8.0)))
+                  (if (> si2 7) (set! si2 7) #f)
+                  (set! dv (get_item SLOTD si2))
+                  (set! g (if (< dv 0) 10 (get_item DIG dv)))
+                  (set! cnt2 (get_item TBC g))
+                  (set! j (Math.floor (* (Math.random) cnt2)))
+                  (if (>= j cnt2) (set! j (- cnt2 1)) #f)
+                  (set_item! FSL i si2)
+                  (set_item! FJ i j)
+                  (set_item! FHU i (* si2 0.028))
+                  (set! st FSI)
+                  (set! tm 60) }
+                #f)
+            (set! base2 (get_item TBB g))
+            (set! q2 (* 2 (+ base2 j)))
+            (set! tx (+ (get_item SLOTX si2) (get_item TBP q2)))
+            (set! ty (+ (+ Y0 (get_item TBP (+ q2 1)))
+                        (if (< dv 0) (- 0.0 COLDY) 0.0))) }
+          #f)
+      (cond
+        ((== st FSD)
+         { ;; 漂游：两层正弦流场（比背景尘埃快、但比字形粒子慢得多，否则成了"雨丝"）。
+           ;; **不加引力**：尘埃靠"被吸进→逃逸"的循环自然聚在字形周围，
+           ;; 加向心引力反而会把整团全糊在字形上（实测：字形变胖、发脏）。
+           (set! vx (+ (* vx 0.91)
+                       (* 0.07 (Math.sin (+ (- (* y 0.019) (* t 0.62)) (get_item FPH i))))))
+           (set! vy (+ (* vy 0.91)
+                       (* 0.07 (Math.cos (+ (+ (* x 0.016) (* t 0.51)) (get_item FPH i))))))
+           (set! x (+ x vx))
+           (set! y (+ y vy))
+           (if (< x 0.0) (set! x (+ x 320.0)) (if (> x 320.0) (set! x (- x 320.0)) #f))
+           (if (< y 0.0) (set! y (+ y 240.0)) (if (> y 240.0) (set! y (- y 240.0)) #f))
+           (set! tm (- tm 1))
+           (if (<= tm 0)
+               { ;; 到点了：随机抽一个字形点当靶子（下一拍照此算屏幕坐标）
+                 (set! si2 (Math.floor (* (Math.random) 8.0)))
+                 (if (> si2 7) (set! si2 7) #f)
+                 (set! dv (get_item SLOTD si2))
+                 (set! g (if (< dv 0) 10 (get_item DIG dv)))
+                 (set! cnt2 (get_item TBC g))
+                 (set! j (Math.floor (* (Math.random) cnt2)))
+                 (if (>= j cnt2) (set! j (- cnt2 1)) #f)
+                 (set_item! FSL i si2)
+                 (set_item! FJ i j)
+                 (set_item! FHU i (* si2 0.028))     ; 凝聚后跟随所在槽的色相
+                 (set! st FSI)
+                 (set! tm 60) }
+               #f) })
+        ((== st FSI)
+         { ;; 吸入：阻尼弹簧（先加速、后减速贴上去，不过冲不振铃）。
+           ;; k=0.04 + 阻尼 0.86 ⇒ 稳态速度 ≈ 0.29×距离，约 12 拍（0.5s）贴到字形上：
+           ;; 足够看清"被吸过去"，又不能太慢（否则还没落到字形上数字就变了）
+           (set! vx (+ (* vx 0.86) (* 0.04 (- tx x))))
+           (set! vy (+ (* vy 0.86) (* 0.04 (- ty y))))
+           (set! x (+ x vx))
+           (set! y (+ y vy))
+           (set! ddx (- x tx))
+           (set! ddy (- y ty))
+           (set! d2 (+ (* ddx ddx) (* ddy ddy)))
+           (set! tm (- tm 1))
+           ;; 越近越亮：从 0.55 升到 1.1（"被吸进去"的可读性就靠这个）
+           (set! inb (- 1.1 (/ (Math.sqrt d2) 90.0)))
+           (if (< inb 0.55) (set! inb 0.55) (if (> inb 1.1) (set! inb 1.1) #f))
+           (if (or (< d2 2.0) (<= tm 0))
+               { (set! x tx)
+                 (set! y ty)
+                 (set! vx 0.0)
+                 (set! vy 0.0)
+                 (set! st FSS)
+                 ;; 驻留 0.4~1.5s
+                 (set! tm (+ 12 (Math.floor (* (Math.random) 33.0)))) }
+               #f) })
+        ((== st FSS)
+         { ;; 凝聚：用快弹簧跟住字形点（字形变形时滑过去，不瞬移），驻留到点就逃逸
+           (set! vx (* 0.30 (- tx x)))
+           (set! vy (* 0.30 (- ty y)))
+           (set! x (+ x vx))
+           (set! y (+ y vy))
+           (set! tm (- tm 1))
+           (if (<= tm 0)
+               { ;; 逃逸：方向以离开字形块中心（160,111）为主，掺一点随机；初速 1.45
+                 (set! ddx (- (+ x (* 6.0 (- (Math.random) 0.5))) 160.0))
+                 (set! ddy (- (+ y (* 6.0 (- (Math.random) 0.5))) 111.0))
+                 (set! d2 (+ (* ddx ddx) (* ddy ddy)))
+                 (if (< d2 4.0) (set! d2 4.0) #f)
+                 (set! br (/ 1.45 (Math.sqrt d2)))
+                 (set! vx (* ddx br))
+                 (set! vy (* ddy br))
+                 (set! x (+ x (* vx 1.5)))
+                 (set! y (+ y (* vy 1.5)))
+                 (set! st FSO)
+                 (set! tm (+ 26 (Math.floor (* (Math.random) 26.0)))) }
+               #f) })
+        (else
+         { ;; 逃逸：速度指数衰减，亮度随剩余寿命淡出，然后回到流场里继续飘
+           (set! vx (* vx 0.94))
+           (set! vy (* vy 0.94))
+           (set! x (+ x vx))
+           (set! y (+ y vy))
+           (set! tm (- tm 1))
+           (if (<= tm 0)
+               { (set! st FSD)
+                 (set! tm (+ 24 (Math.floor (* (Math.random) 150.0))))
+                 (set_item! FHU i 0.36) }
+               #f) }))
+      (set_item! FX i x)
+      (set_item! FY i y)
+      (set_item! FVX i vx)
+      (set_item! FVY i vy)
+      ;; 状态与计时**必须回写**：不回写的话倒计时永不走完（踩过：全 160 颗永远漂游）
+      (set_item! FS i st)
+      (set_item! FT i tm)
+      ;; 亮度分两份（同字形粒子）：bs = 状态亮度（漂游最暗 → 吸入越近越亮 → 凝聚最亮 →
+      ;; 逃逸按剩余寿命淡出），**光晕只用 bs**；br = bs × 闪烁系数，只有尘埃本体用它。
+      (cond ((== st FSD) (set! bs 0.38))
+            ((== st FSI) (set! bs inb))
+            ((== st FSS) (set! bs 1.20))
+            (else (set! bs (* 0.030 tm))))
+      (if (> bs 1.0) (set! bs 1.0) #f)
+      (set! br bs)
+      ;; 闪烁模式（与字形粒子同一枚按钮）：0 随机乱闪 / 1 各自慢闪（默认）/ 2 不闪
+      (cond ((== TWK 0)
+             { ;; 随机：与字形粒子同一套 Weyl 取值（每颗自己的 FPH 错开翻转时刻）
+               (set! k (Math.floor (+ (* t 8.0) (* 0.1592 (get_item FPH i)))))
+               (set! hv (mod (+ (* k 0.6180339887) (* 0.1592 (get_item FPH i))) 1.0))
+               ;; 与字形粒子同一套：平方压低均值、保留高光（波光粼粼）
+               (set! br (* bs (+ 0.06 (* 0.94 (* hv hv))))) })
+            ((== TWK 2) #f)
+            (else
+             { ;; 波纹：脉冲扫过时尘埃跟着亮（脉冲穿整屏，不只穿数字）
+               (set! pk (* (- x PX) PKI))
+               (set! env (- 1.0 (* pk pk)))
+               (if (> env 0.0)
+                   (set! br (* bs (+ 1.0 (* 1.10 (* env env)))))
+                   #f) }))
+      ;; 漂游的尘埃更"白"（低饱和）——读作尘埃而不是又一束光丝；凝聚后跟随字形色相
+      (set! sat (if (== st FSD) 0.30 (if (== st FSO) 0.30 0.45)))
+      (hsv (+ (get_item HUES PAL) (get_item FHU i)) sat 1.0)
+      ;; 画法（与字形粒子同一枚"粒子形状"按钮，三档）：
+      ;;   圆点 r=1.0 / 细点 r=0.45 —— (Gfx.fill_dot_aa) 常驻，只有真的在飞
+      ;;      （吸入/逃逸那几拍，|v|>1.2 px/拍）才额外拉一条光丝；
+      ;;   短棒 —— 老画法：一条线 + 两端各 ±0.8 恒定对角偏移（静止时也有一根斜短棒）。
+      (if (== RENDER 2)
+          { (set! sx (* vx 2.4))
+            (set! sy (* vy 2.4))
+            (if (> sx 3.0) (set! sx 3.0) (if (< sx -3.0) (set! sx -3.0) #f))
+            (if (> sy 3.0) (set! sy 3.0) (if (< sy -3.0) (set! sy -3.0) #f))
+            (Gfx.draw_line_aa (- (- x sx) 0.8) (- (- y sy) 0.8) (+ x 0.8) (+ y 0.8)
+                              1.0 (* HR br) (* HG br) (* HB br)) }
+          { (if (> (+ (* vx vx) (* vy vy)) 1.44)
+                { (set! sx (* vx 2.4))
+                  (set! sy (* vy 2.4))
+                  (if (> sx 3.0) (set! sx 3.0) (if (< sx -3.0) (set! sx -3.0) #f))
+                  (if (> sy 3.0) (set! sy 3.0) (if (< sy -3.0) (set! sy -3.0) #f))
+                  (Gfx.draw_line_aa (- x sx) (- y sy) x y 1.0 (* HR br) (* HG br) (* HB br)) }
+                #f)
+            (if (== RENDER 0)
+                (Gfx.fill_dot_aa x y 1.0 (* HR br) (* HG br) (* HB br))
+                (Gfx.fill_dot_aa x y 0.45 (* HR br) (* HG br) (* HB br))) })
+      ;; 亮起来的尘埃（吸入/凝聚）补一枚柔和光斑；暗漂的不补（省一半绘制开销）。
+      ;; 同样用 bs（不随闪烁变）—— 闪烁只在尘埃本体上。
+      (if (> bs 0.72) (Gfx.fill_glow_aa x y 4.2 HR HG HB (* 0.30 bs)) #f)
+      (if (== st FSI) (set! FNI (+ FNI 1)) #f)
+      (if (== st FSS) (set! FNC (+ FNC 1)) #f)
+      (if (== st FSO) (set! FNE (+ FNE 1)) #f)
+      (set! i (+ i 1))
+    })))
+
 ;; ---- 单颗粒子：弹簧 + 旋涡 + 加色光丝 ------------------------------------
 ;; (p: 粒子下标, tx/ty: 目标, hue: 基色, t: 秒, glow: 本次是否画高斯辉光)
 ;; 旋涡用 32 项正弦/余弦表（启动时建好）：每颗粒子每拍只查两次表，
@@ -528,16 +886,15 @@
       (set! i (+ i 1))
     })))
 
-;; ---- 高斯辉光：4 层同心 alpha 圆逼近 exp(−r²/2σ²) 的径向衰减 --------------
-;; 只有 alpha 圆能做"半透明叠加"（mode ≥ 4 才是 alpha 混合；2 是异或）。
-;; 把半径按固定比例收进、每层 alpha 递增，合成的累计不透明度就近似高斯：
-;;   层半径 R / 0.70R / 0.45R / 0.22R（σ ≈ R/2.2），
-;;   累计不透明度 ≈ 9 / 33 / 70 / 139（0..255），最外圈只剩 ~3.5% → 视觉上"衰减到无"。
-;; 单组 ≈ 4 次 fill_circle_aa ≈ 12 µs（R≈8），所以每 4 颗粒子才画一组。
+;; ---- 辉光：一次 (Gfx.fill_glow_aa) 取代"两层同心 alpha 圆" -------------------
+;; 老做法是两个定值 alpha 圆（R / 0.58R，alpha 26/50）叠起来——它只是"两档台阶"
+;; 而不是连续衰减：中心 27.8%、到 0.58R 骤降到 10.2%、到 R 一刀切为 0，放大看是一个
+;; 有硬边的圆盘；而且每组 2 次圆角矩形（角部 8×8 超采样）≈ 6 µs。
+;; 现在换成 graphics.c 的 gfx_fill_glow_anti_aliasing：强度剖面 (1−(d/R)²)²，
+;; 中心平顶、边缘一阶导为 0，逐像素只有 2 乘 2 加、无开方无超采样 ⇒ 更平滑且更便宜。
 (define halo
   (lambda (x y rad br)
-    (Gfx.fill_circle_aa x y rad HR HG HB (* 26.0 br))
-    (Gfx.fill_circle_aa x y (* 0.58 rad) HR HG HB (* 50.0 br))))
+    (Gfx.fill_glow_aa x y rad HR HG HB (* 0.26 br))))
 
 (define step_particle
   (lambda (p tx ty hue t glow rep)
@@ -555,6 +912,11 @@
     (define d2 0.0)
     (define rf 0.0)
     (define bo 0)
+    (define k 0.0)
+    (define hv 0.0)
+    (define bs 0.80)
+    (define pk 0.0)
+    (define env 0.0)
     (set! x (get_item GX p))
     (set! y (get_item GY p))
     ;; 两种运动模式：
@@ -590,20 +952,90 @@
         { (set_item! GVX p 0.0) (set_item! GVY p 0.0) }
         { (set_item! GVX p vx) (set_item! GVY p vy) })
     (set_item! GX p x) (set_item! GY p y)
-    ;; 光丝：从"沿速度反推 2.4 倍"处画到当前位置（运动模糊）
-    (set! br (+ 0.80 (* 0.20 (Math.sin (+ (* t 3.1) (* p 0.37))))))
+    ;; 亮度分两份（这一条是"闪烁体现在粒子上、而不是光晕上"的关键）：
+    ;;   bs —— **基础亮度**：波纹档的波值 / 常亮档的定值。**光晕（fill_glow_aa）只用它**，
+    ;;         所以光晕不闪、不脉冲（否则整屏看的是"一团团光晕在呼吸"，粒子本身反而看不清）。
+    ;;   br —— **粒子本体亮度** = bs × 闪烁系数：圆点/光丝用它，闪烁只发生在这里。
+    ;; 闪烁（底部第四枚按钮，TWK 三档）
+    ;;   0 随机 —— **每颗粒子独立乱闪**（波光粼粼）：靠"每颗不同的翻转时刻 + Weyl 序列取值"，
+    ;;             与粒子序号（= 空间位置）无关：
+    ;;               k  = floor(8t + 0.1592·GPH)          ; GPH 是每颗自己的随机相位（0..2π）
+    ;;               hv = frac(k·φ + 0.1592·GPH)          ; φ=0.6180339887（黄金分割共轭）
+    ;;             hv 在 [0,1) 上均匀（Weyl 序列），同一颗相邻两次翻转的值固定相差 0.618。
+    ;;             **动态范围要拉大**（波光粼粼 = 大部分粒子半暗、少数粒子猛然亮成白点）：
+    ;;               本体亮度 = 0.04 + 1.75·hv²（0.04~1.79，平方压低均值到 ~0.62 但保留高光）；
+    ;;               hv>0.88（约 10%）再 ×3.2 ⇒ 白得发亮。光晕恒为 0.80 ⇒ 只有"点"在闪。
+    ;;             **老写法是 sin(12.9898k + 78.233p)**：它是 p 的线性函数，k 每加 1
+    ;;             整条图案就左移 0.17 个粒子 ⇒ 看起来仍是一条横向传播的波，与"波纹"档
+    ;;             几乎一样（用户实测反馈"随机闪烁还是空间传播"，即此因）。
+    ;;   1 波纹 —— **每秒一发、从左向右快速扫过的"脉冲波包"**（不是连续正弦）：
+    ;;             包络 = (1 − ((x−PX)/PKS)²)²（紧支撑、边缘平滑），包内再叠一条
+    ;;             cos(PKW·(x−PX)) 的振荡 ⇒ 一条宽约 140px 的亮带，内部 2~3 道波纹。
+    ;;             bs = 0.26 + 1.15·env·(0.62 + 0.38·cos(...))，峰值 ≈ 1.41。
+    ;;             PX 由 tick 按整秒推进：0.7 s 从 x=-70 扫到 x=390 ⇒ 约 660 px/s
+    ;;             （24fps 下每拍 ~27px，包宽 ~140px，不至于跳帧）。
+    ;;             扫完到下一整秒之间是**暗淡的底亮度 0.26**。
+    ;;             **底亮度必须压得这么暗**：字形区里十几颗粒子的辉光重叠时 alpha 早就
+    ;;             叠加到饱和（1−(1−a)^15 ≈ 93%），调制 gain 根本看不出变化 —— 实测底 0.64
+    ;;             时脉冲只让 bin 亮度 +12~19%；压到 0.26 后脉冲带能到 2~3 倍。
+    ;;             **为什么必须用屏幕 x（tx）而不是粒子序号 p**：p = 槽号×MAXPT + 点序号，
+    ;;             而点序号是"绕字心极角"排序的 —— 按 p 走相位，图案会变成每颗数字内部
+    ;;             ~7 条**绕字心旋转的亮暗弧**，根本看不到横向传播（用户实测反馈）。
+    ;;             白闪仍按**每颗自己的随机相位**抽（hv>0.985，×2.6），与位置无关，
+    ;;             免得那几颗闪点自己排出条纹抢掉脉冲的定向感。
+    ;;   2 常亮 —— 本体与光晕都是 0.80，完全不闪（对照用）。
+    (cond ((== TWK 0)
+           { (set! bs 0.80)
+             (set! k (Math.floor (+ (* t 8.0) (* 0.1592 (get_item GPH p)))))
+             (set! hv (mod (+ (* k 0.6180339887) (* 0.1592 (get_item GPH p))) 1.0))
+             (set! br (+ 0.04 (* 1.75 (* hv hv))))      ; hv² 压低均值、保留高光 → 波光粼粼
+             (if (> hv 0.88) (set! br (* br 3.2)) #f) })
+          ((== TWK 2)
+           { (set! bs 0.80) (set! br 0.80) })
+          (else
+           { ;; 波纹：脉冲波包 —— 包络 (1−q²)²，包内叠 cos 振荡
+             (set! pk (* (- tx PX) PKI))
+             (set! env (- 1.0 (* pk pk)))
+             (if (> env 0.0)
+                 { (set! env (* env env))
+                   (set! bs (+ 0.26 (* 1.15 (* env (+ 0.62 (* 0.38 (Math.cos (* PKW (- tx PX))))))))) }
+                 (set! bs 0.26))
+             (set! br bs)
+             ;; 白闪：每颗自己的随机相位（不给空间图案，免得抢掉脉冲的定向感）
+             (set! k (Math.floor (+ (* t 6.0) (* 0.1592 (get_item GPH p)))))
+             (set! hv (mod (+ (* k 0.6180339887) (* 0.1592 (get_item GPH p))) 1.0))
+             (if (> hv 0.985) (set! br (* br 2.6)) #f) }))
     (hsv (+ hue (* 0.05 (Math.sin (+ (* p 0.21) (* t 0.9))))) 0.42 1.0)
-    ;; 拖尾长度按轴钳到 ±4.5px：粒子从旧字形飞向新字形时速度很大，
-    ;; 不钳的话同向的一串拖尾会叠成一块硬边三角形色斑（实测踩到）。
-    (set! sx (* vx 2.6))
-    (set! sy (* vy 2.6))
-    (if (> sx 4.5) (set! sx 4.5) (if (< sx -4.5) (set! sx -4.5) #f))
-    (if (> sy 4.5) (set! sy 4.5) (if (< sy -4.5) (set! sy -4.5) #f))
-    (Gfx.draw_line_aa (- (- x sx) 1.5) (- (- y sy) 1.5) (+ x 1.5) (+ y 1.5)
-                      1.0 (* HR br) (* HG br) (* HB br))
-    ;; 高斯辉光（每 3 颗一枚，半径随亮度略增）
+    ;; 粒子本体三档画法（底部第三枚按钮，RENDER）：
+    ;;   0 **圆点**（默认，r=1.55）/ 1 **细点**（r=0.62）：圆点常驻 + 高速时才拉光丝 ——
+    ;;       · 光丝（draw_line_aa）只在 |v| > 1.2 px/拍（字形切换、BOOST 冲刺、触屏排斥）时画，
+    ;;         长度按速度反推 2.6×、轴向钳到 ±4.5px（不钳会同向叠成硬边三角斑，实测踩到）；
+    ;;       · 其余时间画 (Gfx.fill_dot_aa)：浮点圆心 + 1px 解析覆盖率，静止/微抖的粒子是
+    ;;         软边圆点，而不是一根固定的 45° 短棒。
+    ;;         细点 r=0.62 ⇒ 覆盖率只延伸到 r+0.5 = 1.12px：中心像素满覆盖、四邻 ~0.1，
+    ;;         视觉直径 1~2px（"尘埃点"）；圆点 r=1.55 ⇒ 直径 ~3~4px（"光珠"）。
+    ;;   2 **短棒**（2026-11-25 之前的原画法）：永远一条 AA 线，两端各加 ±1.5 的恒定对角
+    ;;      偏移 —— 好处是恒定对角偏移保证了"零长也能画出来"，代价是静止时也是棒状。
+    (if (== RENDER 2)
+        { (set! sx (* vx 2.6))
+          (set! sy (* vy 2.6))
+          (if (> sx 4.5) (set! sx 4.5) (if (< sx -4.5) (set! sx -4.5) #f))
+          (if (> sy 4.5) (set! sy 4.5) (if (< sy -4.5) (set! sy -4.5) #f))
+          (Gfx.draw_line_aa (- (- x sx) 1.5) (- (- y sy) 1.5) (+ x 1.5) (+ y 1.5)
+                            1.0 (* HR br) (* HG br) (* HB br)) }
+        { (if (> (+ (* vx vx) (* vy vy)) 1.44)
+              { (set! sx (* vx 2.6))
+                (set! sy (* vy 2.6))
+                (if (> sx 4.5) (set! sx 4.5) (if (< sx -4.5) (set! sx -4.5) #f))
+                (if (> sy 4.5) (set! sy 4.5) (if (< sy -4.5) (set! sy -4.5) #f))
+                (Gfx.draw_line_aa (- x sx) (- y sy) x y 1.0 (* HR br) (* HG br) (* HB br)) }
+              #f)
+          (if (== RENDER 0)
+              (Gfx.fill_dot_aa x y 1.55 (* HR br) (* HG br) (* HB br))
+              (Gfx.fill_dot_aa x y 0.62 (* HR br) (* HG br) (* HB br))) })
+    ;; 柔和辉光：**用基础亮度 bs**（不随闪烁变 —— 闪烁在粒子上，不在光晕上）
     (if glow
-        (halo x y (+ 4.9 (* 1.6 br)) br)
+        (halo x y (+ 5.4 (* 1.8 bs)) bs)
         #f)))
 
 ;; ---- 一帧：读时间 → 逐槽把粒子拉向字形 -----------------------------------
@@ -677,7 +1109,15 @@
       (set! p (+ p 1))
     })
     ;; 进入"重组冲刺"：接下来 18 拍用直接指数趋近把粒子收成字形
-    (set! BOOST 18)))
+    (set! BOOST 18)
+    ;; 尘埃也全部回到漂游（字形正在重生，尘埃重新去凝聚）
+    (set! p 0)
+    (while (< p NFD) {
+      (set_item! FS p FSD)
+      (set_item! FT p (Math.floor (* (Math.random) 120.0)))
+      (set_item! FHU p 0.36)
+      (set! p (+ p 1))
+    })))
 
 ;; ---- 每拍 ----------------------------------------------------------------
 (define tick
@@ -685,6 +1125,7 @@
     (define now 0)
     (define w0 0)
     (define mm 0)
+    (define ss 0)
     (set! w0 (Diag.ms))
     (set! now (- w0 LASTMS))
     (set! LASTMS w0)
@@ -704,6 +1145,12 @@
                { (set! BHOLD 1) (set! STYLE (Math.floor (mod (+ STYLE 1) 2))) })
               ((in_rect RTX RTY B2X B2Y B2W B2H)
                { (set! BHOLD 2) (set! PAL (Math.floor (mod (+ PAL 1) 6))) })
+              ((in_rect RTX RTY B3X B3Y B3W B3H)
+               { (set! BHOLD 3) (set! RENDER (Math.floor (mod (+ RENDER 1) 3))) })
+              ((in_rect RTX RTY B4X B4Y B4W B4H)
+               { (set! BHOLD 4)
+                 ;; 循环顺序：波纹（现状）→ 随机 → 常亮 → 波纹 …（第一下就切到"随机"便于对比）
+                 (set! TWK (if (== TWK 1) 0 (if (== TWK 0) 2 1))) })
               (else { (set! BHOLD 0) (set! REPT 8) }))
         #f)
     (if (Touch.take_release) (set! BHOLD 0) #f)
@@ -719,9 +1166,18 @@
              (scramble)
              (display "[cg] scramble min=") (display mm) (newline) })
           (else #f))
+    ;; ---- 波纹档的脉冲：整秒对齐（数字换秒的同一拍重新发一个），其余按 dt 推进 ----
+    (set! ss (Math.floor (mod (+ (Time.utc_sod) TZ_SEC) 60)))
+    (if (not (== ss SSNOW))
+        { (set! SSNOW ss) (set! PHASE 0.0) }            ; 新的一秒：脉冲从左边重新出发
+        (set! PHASE (+ PHASE (/ now 1000.0))))          ; 否则照常推进
+    (if (< PHASE PKT)
+        (set! PX (+ -70.0 (* (/ PHASE PKT) 460.0)))     ; 0.7s 从 -70 扫到 390
+        (set! PX 999.0))                               ; 本秒已扫完 → 屏外（无脉冲）
     (draw_bg T)
     (draw_dust T)
     (draw_clock T)
+    (draw_float_dust T)
     (draw_buttons)
     (EX.draw_button)
     (Gfx.refresh)
@@ -733,6 +1189,9 @@
           (display " ms=") (display (/ ACC 30.0))
           (display " pal=") (display PAL)
           (display " style=") (display STYLE) (display " rep=") (display REPT)
+          (display " fd=") (display FNI) (display "/") (display FNC)
+          (display "/") (display FNE)
+          (display " rnd=") (display RENDER) (display " twk=") (display TWK)
           (newline)
           (set! FRAMES 0)
           (set! ACC 0.0)

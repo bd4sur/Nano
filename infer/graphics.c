@@ -1135,6 +1135,131 @@ void gfx_draw_line_anti_aliasing(Nano_GFX *gfx,
     }
 }
 
+// ============================================================================
+// 抗锯齿「圆点」与「柔和光斑」（粒子/发光体的高频小图元）
+//
+// 为什么需要它们：`gfx_draw_rounded_rectangle`（= (Gfx.fill_circle_aa) 的后端）只收
+// **整数**圆心与半径，所以小到 1~3px 的粒子只能画成 2r×2r 的方块，慢速运动还会被
+// 量化成整像素跳动（亚像素位移全丢）；而"核心 + 多层同心 alpha 圆"的辉光每组要
+// 3~4 次圆角矩形调用。这两个图元把圆心/半径/强度全部按**浮点**收，并按像素解析覆盖率：
+//   · dot  —— 实心圆，边缘 1px 线性抗锯齿（SDF 覆盖率），一次调用；
+//   · glow —— 径向衰减光斑（(1−(d/R)²)² 剖面，中心平顶、边缘平滑到 0），一次调用
+//              取代"多层同心 alpha 圆"，无 sqrt、无超采样。
+// 成本：dot 覆盖 π(r+1)² 像素（r=1.5 时 ~20 像素）；glow 覆盖 πR² 像素（R=6.5 时
+// ~133 像素，逐像素 2 乘 2 加）——都比"圆角矩形 8×8 角部超采样"便宜且更平滑。
+// ============================================================================
+
+// 叠加像素（浮点分量版）：四舍五入后累加。
+// 与 gfx_add_pixel 的差别只在"弱光尾巴"：后者收 uint8_t，cov 很小时会被截断成 0，
+// 光斑边缘会出现在某一圈突然断掉的台阶。
+static inline void gfx_add_pixel_f(Nano_GFX *gfx, int32_t x, int32_t y, float fr, float fg, float fb) {
+    if (x < 0 || y < 0 || x >= (int32_t)gfx->width || y >= (int32_t)gfx->height) return;
+    if (fr > 255.0f) fr = 255.0f;
+    if (fg > 255.0f) fg = 255.0f;
+    if (fb > 255.0f) fb = 255.0f;
+    uint8_t r = (uint8_t)(fr + 0.5f);
+    uint8_t g = (uint8_t)(fg + 0.5f);
+    uint8_t b = (uint8_t)(fb + 0.5f);
+    if (r == 0 && g == 0 && b == 0) return;
+    gfx_add_pixel(gfx, (uint32_t)x, (uint32_t)y, r, g, b);
+}
+
+// 抗锯齿实心圆：圆心/半径按浮点取（圆心取**像素中心**为 +0.5 的连续坐标），
+// 边缘按「像素中心到圆心的距离」解析计算覆盖率（1px 宽的线性过渡）：
+//   cov = clamp(radius + 0.5 − d, 0, 1)
+// 于是半径 0.5~2px 的粒子天然就是"软边小圆点"，而半径大时边缘也不会出现阶梯。
+// mode 语义同 gfx_draw_point / gfx_draw_line_anti_aliasing：
+//   0-置黑 1-置色（按覆盖率不透明混合）2-异或 3-加色（深底自发光）>=4-Alpha 混合。
+void gfx_fill_dot_anti_aliasing(Nano_GFX *gfx, float cx, float cy, float radius,
+                                uint8_t r, uint8_t g, uint8_t b, uint8_t mode) {
+    if (gfx == NULL || !(radius > 0.0f) || radius > 4096.0f) return;   // 上界防御：NaN/inf 不进循环
+    const float edge = radius + 0.5f;          // 覆盖率 > 0 的最大距离
+    const float edge2 = edge * edge;
+    int32_t x0 = (int32_t)floorf(cx - edge);
+    int32_t x1 = (int32_t)ceilf(cx + edge);
+    int32_t y0 = (int32_t)floorf(cy - edge);
+    int32_t y1 = (int32_t)ceilf(cy + edge);
+    if (x1 < 0 || y1 < 0 || x0 >= (int32_t)gfx->width || y0 >= (int32_t)gfx->height) return;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int32_t)gfx->width - 1)  x1 = (int32_t)gfx->width - 1;
+    if (y1 > (int32_t)gfx->height - 1) y1 = (int32_t)gfx->height - 1;
+    for (int32_t y = y0; y <= y1; y++) {
+        float dy = (float)y + 0.5f - cy;
+        float dy2 = dy * dy;
+        if (dy2 > edge2) continue;
+        // 该行与圆相交的 x 范围解析求出：省掉两侧必然无覆盖的像素
+        float half = sqrtf(edge2 - dy2);
+        int32_t xs = (int32_t)floorf(cx - half);
+        int32_t xe = (int32_t)ceilf(cx + half);
+        if (xs < x0) xs = x0;
+        if (xe > x1) xe = x1;
+        for (int32_t x = xs; x <= xe; x++) {
+            float dx = (float)x + 0.5f - cx;
+            float d = sqrtf(dx * dx + dy2);
+            float cov = edge - d;
+            if (cov <= 0.0f) continue;
+            if (cov > 1.0f) cov = 1.0f;
+            if (mode == 3) {
+                gfx_add_pixel_f(gfx, x, y, (float)r * cov, (float)g * cov, (float)b * cov);
+            }
+            else {
+                gfx_aa_line_pixel(gfx, x, y, cov, r, g, b, mode);
+            }
+        }
+    }
+}
+
+// 柔和光斑：强度按 (1 − (d/R)²)² 衰减 —— 中心平顶、边缘一阶导为 0（视觉上平滑
+// "衰减到无"），且只用乘加（不开方、不超采样）。gain 是整体强度倍率（通常 <1），
+// 颜色通道仍按 0..255 收。
+// mode 语义同其余图元，但**只有两种有意义的取值**：
+//   · mode 3（加色）：像素 += 颜色 × gain × 剖面 —— 稀疏的发光体（暗底上几颗星）；
+//   · 其他（>=4 定值 alpha 语义）：像素按 a = gain × 剖面 做 alpha 混合 —— **密集粒子
+//     场要用这一档**：加色在 640 颗粒子互相重叠时会把字形内部叠成纯白（实测踩到），
+//     alpha 混合的上限是"前景色本身"，重叠多次就是收敛到该色（与旧的两层 alpha 圆一致）。
+// 用途：一次调用取代"两层同心 alpha 圆逼近高斯"的辉光（原做法每组 2 次圆角矩形）。
+void gfx_fill_glow_anti_aliasing(Nano_GFX *gfx, float cx, float cy, float radius,
+                                 uint8_t r, uint8_t g, uint8_t b, float gain, uint8_t mode) {
+    if (gfx == NULL || !(radius > 0.0f) || radius > 4096.0f || !(gain > 0.0f)) return;
+    const float inv_r2 = 1.0f / (radius * radius);
+    int32_t x0 = (int32_t)floorf(cx - radius);
+    int32_t x1 = (int32_t)ceilf(cx + radius);
+    int32_t y0 = (int32_t)floorf(cy - radius);
+    int32_t y1 = (int32_t)ceilf(cy + radius);
+    if (x1 < 0 || y1 < 0 || x0 >= (int32_t)gfx->width || y0 >= (int32_t)gfx->height) return;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int32_t)gfx->width - 1)  x1 = (int32_t)gfx->width - 1;
+    if (y1 > (int32_t)gfx->height - 1) y1 = (int32_t)gfx->height - 1;
+    for (int32_t y = y0; y <= y1; y++) {
+        float dy = (float)y + 0.5f - cy;
+        float dy2 = dy * dy;
+        if (dy2 >= radius * radius) continue;
+        float half = sqrtf(radius * radius - dy2);
+        int32_t xs = (int32_t)floorf(cx - half);
+        int32_t xe = (int32_t)ceilf(cx + half);
+        if (xs < x0) xs = x0;
+        if (xe > x1) xe = x1;
+        for (int32_t x = xs; x <= xe; x++) {
+            float dx = (float)x + 0.5f - cx;
+            float t = 1.0f - (dx * dx + dy2) * inv_r2;
+            if (t <= 0.0f) continue;
+            float k = t * t * gain;
+            if (k <= 0.0f) continue;
+            if (mode == 3) {
+                gfx_add_pixel_f(gfx, x, y, (float)r * k, (float)g * k, (float)b * k);
+            }
+            else {
+                float a8 = k * 255.0f;
+                if (a8 > 255.0f) a8 = 255.0f;
+                uint8_t ai = (uint8_t)(a8 + 0.5f);
+                if (ai != 0) gfx_blend_pixel(gfx, (uint32_t)x, (uint32_t)y, r, g, b, ai);
+            }
+        }
+    }
+}
+
 
 
 
