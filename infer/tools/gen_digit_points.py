@@ -151,15 +151,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--font", default=None)
     ap.add_argument("--em", type=float, default=66.0, help="字号（em，px）；App 内数据区用 66")
-    ap.add_argument("--step", type=float, default=2.9,
+    ap.add_argument("--step", type=float, default=2.7,
                     help="面密度采样步长（px）：在字形墨迹内部按等比网格取点，"
                          "再按 --jitter 抖动，使粒子在笔画面积内**均匀分布**")
     ap.add_argument("--jitter", type=float, default=0.35,
                     help="抖动幅度（×step）：打散网格感，0 = 严格网格")
     ap.add_argument("--edge-step", type=float, default=0.0,
-                    help="可选的轮廓加密步长（0 = 关闭，仅靠面密度点）")
-    ap.add_argument("--outline-step", type=float, default=0.0, help="（旧参数，已并入 --step/--edge-step）")
-    ap.add_argument("--fill-step", type=float, default=0.0, help="（旧参数，已并入 --step）")
+                    help="实心风格里额外沿轮廓加密的步长（0 = 关闭，默认）")
+    ap.add_argument("--outline-step", type=float, default=2.4, help="描边风格：沿轮廓等距采样步长（px）")
+    ap.add_argument("--fill-step", type=float, default=5.6, help="描边风格：内部稀疏网格步长（px）")
     ap.add_argument("--out", default=None,
                     help="写成独立片段文件（不给则内联进 --splice 指定的 App）")
     ap.add_argument("--splice", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -195,66 +195,85 @@ def main():
         top = max(top, g.width * 0 + _glyph_y_max(gs, cmap[ord(ch)]))
     top_px_h = top * scale
 
-    pts_flat = []
-    base = []
-    cnt = []
-    preview_sets = []
-    for ch in CHARS:
-        gname = cmap[ord(ch)]
-        pen = FlattenPen(gs, tol=0.12)
-        gs[gname].draw(pen)
-        # 转成像素坐标：x 以笔位原点为 0，y 以数字上边缘为 0（屏幕 y 向下）
-        contours = []
-        for c in pen.contours:
-            pc = [((x) * scale, (top_px_h - y * scale)) for (x, y) in c]
-            if len(pc) >= 2:
-                contours.append(pc)
-        # ---- 面密度采样：墨迹内部按网格取点（奇偶判定），可按 --jitter 抖动 ----
-        # 为什么不用"沿轮廓等距 + 稀疏内部"：轮廓点的面密度 ≈ (1/step_len)/(笔画宽)，
-        # 比内部网格高一个量级 ⇒ 粒子全糊在笔画边缘、中间空 —— 视觉上不像"实心发光笔画"。
-        xs = [p[0] for c in contours for p in c]
-        ys = [p[1] for c in contours for p in c]
-        outline = []
-        fill = []
-        if xs:
-            x0, x1 = min(xs), max(xs)
-            y0, y1 = min(ys), max(ys)
-            rnd = random.Random(1234)          # 固定种子 ⇒ 生成结果可复现
-            gy = y0 + args.step * 0.5
-            while gy < y1:
-                gx = x0 + args.step * 0.5
-                while gx < x1:
-                    jx = (rnd.random() - 0.5) * args.jitter * args.step
-                    jy = (rnd.random() - 0.5) * args.jitter * args.step
-                    px, py = gx + jx, gy + jy
-                    if point_in_contours((px, py), contours):
-                        fill.append((px, py))
-                    gx += args.step
-                gy += args.step
-            # 可选的轮廓加密（默认关；需要更锐的边时开）
-            if args.edge_step > 0:
-                for c in contours:
-                    outline.extend(resample_polyline(c, args.edge_step, closed=True))
+    def sample(style):
+        """返回 (flat, base, cnt, sets)：
+        style='solid'   —— 面密度均匀（笔画内等比网格 + 抖动）
+        style='outline' —— 轮廓密（沿周长等距）+ 内部稀疏网格（旧风格，"描边"观感）
+        """
+        flat, bases, cnts, sets = [], [], [], []
+        for ch in CHARS:
+            gname = cmap[ord(ch)]
+            pen = FlattenPen(gs, tol=0.12)
+            gs[gname].draw(pen)
+            contours = []
+            for c in pen.contours:
+                pc = [((x) * scale, (top_px_h - y * scale)) for (x, y) in c]
+                if len(pc) >= 2:
+                    contours.append(pc)
+            xs = [q[0] for c in contours for q in c]
+            ys = [q[1] for c in contours for q in c]
+            pts = []
+            if xs:
+                x0, x1 = min(xs), max(xs)
+                y0, y1 = min(ys), max(ys)
+                if style == "outline":
+                    for c in contours:
+                        pts.extend(resample_polyline(c, args.outline_step, closed=True))
+                    step = args.fill_step
+                else:
+                    step = args.step
+                rnd = random.Random(1234)
+                gy = y0 + step * 0.5
+                while gy < y1:
+                    gx = x0 + step * 0.5
+                    while gx < x1:
+                        jx = (rnd.random() - 0.5) * args.jitter * step
+                        jy = (rnd.random() - 0.5) * args.jitter * step
+                        px, py = gx + jx, gy + jy
+                        if point_in_contours((px, py), contours):
+                            pts.append((px, py))
+                        gx += step
+                    gy += step
+            # 按绕质心极角排序：字形切换时相邻粒子去相邻位置
+            cx = sum(q[0] for q in pts) / max(len(pts), 1)
+            cy = sum(q[1] for q in pts) / max(len(pts), 1)
+            pts.sort(key=lambda q: (math.atan2(q[1] - cy, q[0] - cx), _dist(q, (cx, cy))))
+            bases.append(len(flat) // 2)
+            cnts.append(len(pts))
+            for (px, py) in pts:
+                flat.append(round(px * 2) / 2)
+                flat.append(round(py * 2) / 2)
+            sets.append(pts)
+        return flat, bases, cnts, sets
 
-        allpts = outline + fill
-        # 按绕质心的极角排序：字形切换时相邻粒子去相邻位置，过渡更顺
-        cx = sum(p[0] for p in allpts) / max(len(allpts), 1)
-        cy = sum(p[1] for p in allpts) / max(len(allpts), 1)
-        allpts.sort(key=lambda p: (math.atan2(p[1] - cy, p[0] - cx), _dist(p, (cx, cy))))
-        base.append(len(pts_flat) // 2)
-        cnt.append(len(allpts))
-        withopen = None
-        for (x, y) in allpts:
-            pts_flat.append(round(x * 2) / 2)      # 0.5px 精度，源码更短
-            pts_flat.append(round(y * 2) / 2)
-        preview_sets.append(allpts)
-        print(f"  '{ch}': outline={len(outline):4d} fill={len(fill):3d} total={len(allpts):4d} adv={adv[ch]:.1f}px")
+    solid_flat, solid_base, solid_cnt, solid_sets = sample("solid")
+    out_flat, out_base, out_cnt, out_sets = sample("outline")
+    for ch, a_, b_, c_, d_ in zip(CHARS, solid_cnt, out_cnt, solid_base, out_base):
+        print(f"  '{ch}': 实心={a_:4d} 点  描边={b_:4d} 点")
+
+    def emit(prefix, flat, bases, cnts):
+        out = []
+        out.append(f"(define {prefix}_BASE '(" + " ".join(str(v) for v in bases) + "))")
+        out.append(f"(define {prefix}_CNT '(" + " ".join(str(v) for v in cnts) + "))")
+        out.append(f"(define {prefix}_PTS '(")
+        line = "  "
+        for i in range(0, len(flat), 2):
+            tok = f"{_num(flat[i])} {_num(flat[i + 1])} "
+            if len(line) + len(tok) > 96:
+                out.append(line.rstrip())
+                line = "  "
+            line += tok
+        if line.strip():
+            out.append(line.rstrip())
+        out.append("))")
+        return "\n".join(out) + "\n"
 
     lines = []
     lines.append(";; 由 infer/tools/gen_digit_points.py 自动生成，请勿手工编辑。")
     _extra = f"　轮廓加密={args.edge_step}px" if args.edge_step > 0 else ""
-    lines.append(f";; 字体：{os.path.basename(font_path)}　em={args.em}px　"
-                 f"面密度采样步长={args.step}px　抖动={args.jitter}×step" + _extra)
+    lines.append(f";; 字体：{os.path.basename(font_path)}　em={args.em}px")
+    lines.append(f";; 实心：面密度步长={args.step}px 抖动={args.jitter}×step" + _extra)
+    lines.append(f";; 描边：轮廓步长={args.outline_step}px + 内部网格={args.fill_step}px（稀疏内部）")
     lines.append(";; 数据用途见 app/chronoglow.scm 文件头；改字体/字号直接重跑本脚本即可（自动替换该区段）。")
     lines.append("")
     lines.append(f"(define GD_EM {_num(args.em)})")
@@ -262,22 +281,12 @@ def main():
     lines.append(f"(define GD_CADV {_num(adv[':'])})")
     lines.append(f"(define GD_H {_num(top_px_h)})")
     lines.append("")
-    lines.append("(define GD_BASE '(" + " ".join(str(v) for v in base) + "))")
-    lines.append("(define GD_CNT '(" + " ".join(str(v) for v in cnt) + "))")
+    lines.append(";; ---- 实心风格（面密度均匀：粒子铺满笔画内部）----")
+    lines.append(emit("GD", solid_flat, solid_base, solid_cnt).rstrip("\n"))
     lines.append("")
-    lines.append("(define GD_PTS '(")
-    line = "  "
-    for i in range(0, len(pts_flat), 2):
-        tok = f"{_num(pts_flat[i])} {_num(pts_flat[i + 1])} "
-        if len(line) + len(tok) > 96:
-            lines.append(line.rstrip())
-            line = "  "
-        line += tok
-    if line.strip():
-        lines.append(line.rstrip())
-    lines.append("))")
+    lines.append(";; ---- 描边风格（轮廓密 + 内部稀疏：粒子勾出笔画边缘）----")
+    lines.append(emit("GO", out_flat, out_base, out_cnt).rstrip("\n"))
     block = "\n".join(lines) + "\n"
-
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w") as fp:
@@ -292,8 +301,11 @@ def main():
             sys.exit(f"{tgt} 里找不到 BEGIN/END GDATA 区段标记")
         head = src[:b0] + ";; ==== BEGIN GDATA ====\n"
         tail = ";; ==== END GDATA ====" + src[b1 + len(";; ==== END GDATA ===="):]
-        open(tgt, "w").write(head + block + tail)
+        with open(tgt, "w") as fp:
+            fp.write(head + block + tail)
         print(f"已内联进 {tgt}（替换 BEGIN/END GDATA 之间的内容）")
+    pts_flat = solid_flat
+    cnt = solid_cnt
 
     total = len(pts_flat) // 2
     print(f"共 {total} 个点（{len(block) / 1024:.1f} KB 文本），"
