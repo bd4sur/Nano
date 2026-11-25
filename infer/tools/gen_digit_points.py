@@ -2,8 +2,8 @@
 """把 TrueType 数字字形采样成"粒子目标点"表，输出灵机（Animac）Scheme 模块。
 
 用途：`infer/app/chronoglow.scm`（光粒时钟）的字形。粒子要"聚成 Arial 数字"，
-就需要字形轮廓上的等距采样点 —— 运行时没有字体栅格化器（Gfx 也没有像素回读），
-所以在**离线**把轮廓 flatten + 等距重采样，粘成 Scheme 字面量。
+就需要字形墨迹范围内的采样点 —— 运行时没有字体栅格化器（Gfx 也没有像素回读），
+所以在**离线**把轮廓 flatten、按面密度均匀取点，粘成 Scheme 字面量。
 
 输出：默认**直接内联**进 `infer/app/chronoglow.scm` 的 `BEGIN GDATA` / `END GDATA`
 标记之间（App 是自包含的，仓库里没有额外的数据文件）；加 `--out 路径` 则改为写独立片段。
@@ -16,9 +16,10 @@
   GD_BASE      每个字符在 GD_PTS 里的起始下标（10 个数字 + ':'）
   GD_CNT       每个字符的点数
 
-采样策略（每个字符两套点，合在一张表里）：
-  · **轮廓**：按 OUTLINE_STEP 等距重采样（默认 2.2px）—— 笔画的两条边
-  · **内部**：按 FILL_STEP 网格（默认 3.8px）做点在多边形内判定 —— 让笔画"实心"
+采样策略：**按面密度均匀取点**（`--step`，默认 2.9px 网格 + `--jitter 0.35` 抖动）。
+  早期版本是"沿轮廓 2.2px 等距 + 内部 5.6px 稀疏网格"，结果轮廓点的面密度比内部高一个量级，
+  粒子全挤在笔画边缘、中间发空 —— 观感是"描边"而不是"实心发光笔画"。
+  需要更锐的边缘时可用 `--edge-step`（默认 0）额外沿轮廓加密。
 点的顺序按"绕质心的极角"排序：字形切换时相邻粒子飞向相邻位置，过渡更顺。
 
 用法：
@@ -27,6 +28,7 @@
   python3 infer/tools/gen_digit_points.py --preview /tmp/digits.png   # 同时出采样点预览图
 """
 import argparse
+import random
 import math
 import os
 import sys
@@ -148,9 +150,16 @@ def point_in_contours(pt, contours):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--font", default=None)
-    ap.add_argument("--em", type=float, default=60.0, help="字号（em，px）")
-    ap.add_argument("--outline-step", type=float, default=2.2)
-    ap.add_argument("--fill-step", type=float, default=3.8)
+    ap.add_argument("--em", type=float, default=66.0, help="字号（em，px）；App 内数据区用 66")
+    ap.add_argument("--step", type=float, default=2.9,
+                    help="面密度采样步长（px）：在字形墨迹内部按等比网格取点，"
+                         "再按 --jitter 抖动，使粒子在笔画面积内**均匀分布**")
+    ap.add_argument("--jitter", type=float, default=0.35,
+                    help="抖动幅度（×step）：打散网格感，0 = 严格网格")
+    ap.add_argument("--edge-step", type=float, default=0.0,
+                    help="可选的轮廓加密步长（0 = 关闭，仅靠面密度点）")
+    ap.add_argument("--outline-step", type=float, default=0.0, help="（旧参数，已并入 --step/--edge-step）")
+    ap.add_argument("--fill-step", type=float, default=0.0, help="（旧参数，已并入 --step）")
     ap.add_argument("--out", default=None,
                     help="写成独立片段文件（不给则内联进 --splice 指定的 App）")
     ap.add_argument("--splice", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -200,24 +209,33 @@ def main():
             pc = [((x) * scale, (top_px_h - y * scale)) for (x, y) in c]
             if len(pc) >= 2:
                 contours.append(pc)
-        outline = []
-        for c in contours:
-            outline.extend(resample_polyline(c, args.outline_step, closed=True))
-        # 内部填充点：网格扫描 + 奇偶判定
-        fill = []
+        # ---- 面密度采样：墨迹内部按网格取点（奇偶判定），可按 --jitter 抖动 ----
+        # 为什么不用"沿轮廓等距 + 稀疏内部"：轮廓点的面密度 ≈ (1/step_len)/(笔画宽)，
+        # 比内部网格高一个量级 ⇒ 粒子全糊在笔画边缘、中间空 —— 视觉上不像"实心发光笔画"。
         xs = [p[0] for c in contours for p in c]
         ys = [p[1] for c in contours for p in c]
+        outline = []
+        fill = []
         if xs:
             x0, x1 = min(xs), max(xs)
             y0, y1 = min(ys), max(ys)
-            gy = y0 + args.fill_step * 0.5
+            rnd = random.Random(1234)          # 固定种子 ⇒ 生成结果可复现
+            gy = y0 + args.step * 0.5
             while gy < y1:
-                gx = x0 + args.fill_step * 0.5
+                gx = x0 + args.step * 0.5
                 while gx < x1:
-                    if point_in_contours((gx, gy), contours):
-                        fill.append((gx, gy))
-                    gx += args.fill_step
-                gy += args.fill_step
+                    jx = (rnd.random() - 0.5) * args.jitter * args.step
+                    jy = (rnd.random() - 0.5) * args.jitter * args.step
+                    px, py = gx + jx, gy + jy
+                    if point_in_contours((px, py), contours):
+                        fill.append((px, py))
+                    gx += args.step
+                gy += args.step
+            # 可选的轮廓加密（默认关；需要更锐的边时开）
+            if args.edge_step > 0:
+                for c in contours:
+                    outline.extend(resample_polyline(c, args.edge_step, closed=True))
+
         allpts = outline + fill
         # 按绕质心的极角排序：字形切换时相邻粒子去相邻位置，过渡更顺
         cx = sum(p[0] for p in allpts) / max(len(allpts), 1)
@@ -234,8 +252,9 @@ def main():
 
     lines = []
     lines.append(";; 由 infer/tools/gen_digit_points.py 自动生成，请勿手工编辑。")
+    _extra = f"　轮廓加密={args.edge_step}px" if args.edge_step > 0 else ""
     lines.append(f";; 字体：{os.path.basename(font_path)}　em={args.em}px　"
-                 f"轮廓间距={args.outline_step}px　内部网格={args.fill_step}px")
+                 f"面密度采样步长={args.step}px　抖动={args.jitter}×step" + _extra)
     lines.append(";; 数据用途见 app/chronoglow.scm 文件头；改字体/字号直接重跑本脚本即可（自动替换该区段）。")
     lines.append("")
     lines.append(f"(define GD_EM {_num(args.em)})")
