@@ -2013,7 +2013,7 @@
   (lambda (x y sc r g b) {
     (define i 0)
     (while (<= i 8) {
-      (rc (+ x (* i BS sc)) y 1 (* H sc) r g b)
+      (rc (+ x (* (* i BS) sc)) y 1 (* H sc) r g b)
       (rc x (+ y (* i (* BS sc))) (* W sc) 1 r g b)
       (set! i (+ i 1))
     })

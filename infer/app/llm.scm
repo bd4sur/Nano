@@ -1663,7 +1663,7 @@
 (define s2_finish
   (lambda (stopped)
     (define el (- (System.timestamp) gen_t0))
-    (if (> el 0) (set! s2_tps (/ (* 1.0 gen_n 1000.0) el)) (set! s2_tps 0.0))
+    (if (> el 0) (set! s2_tps (/ (* 1.0 (* gen_n 1000.0)) el)) (set! s2_tps 0.0))
     (set! s2_stopped stopped)
     (set! s2_stage 2)
     (log (String.concat "[gen] text=" gen_line))

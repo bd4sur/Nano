@@ -5,7 +5,7 @@
  * 内容来源：include/animac.h 伞形头文件登记的解释器核心头文件，
  *           按依赖顺序拓扑排序合并；局部 #include 已剔除。
  *           不含 am_host.h / am_native_*.h / am_highlight.h / am_repl.h 等宿主相关头文件。
- * 生成时间：2026-11-08 21:42:55 +0800
+ * 生成时间：2026-11-25 11:55:18 +0800
  * ============================================================================ */
 
 #ifndef __ANIMAC_CORE_H__
@@ -2528,6 +2528,17 @@ extern const wchar_t* AM_GLOBAL_BUILTIN_VAR[];
 // 全局内置变量到 VM opcode 的映射表。
 // 下标与 AM_GLOBAL_BUILTIN_VAR 一一对应；-1 表示该 builtin 没有对应 opcode。
 extern const int32_t AM_BUILTIN_OPCODE_MAP[AM_GLOBAL_BUILTIN_VAR_NUM];
+
+// 全局内置变量的元数（引数个数）表。
+// 下标与 AM_GLOBAL_BUILTIN_VAR 一一对应；-1 表示不限元数（可变元数，当前没有这样的条目）。
+// 依据 doc/manual.md §6：除 and/or（特殊形式，不属本表）外，内建过程一律固定元数。
+// 编译器用本表做编译期元数检查（工单 #35），勿在别处另建一份清单。
+extern const int32_t AM_BUILTIN_ARITY_MAP[AM_GLOBAL_BUILTIN_VAR_NUM];
+
+// 按名字查找全局内置变量的下标（与 AM_GLOBAL_BUILTIN_VAR 一一对应）。
+// 返回值：找到时为下标；不是内置变量时返回 SIZE_MAX（负面含义）。
+// 说明：仅比对拼写，调用方须自行保证传入的名字来自词法器/词汇表（即未被 ARN 换名的内置名）。
+size_t am_ast_find_builtin_var_index(const wchar_t *name);
 
 
 // 顶级词法节点、顶级作用域和顶级闭包的parent字段，用于判断上溯结束

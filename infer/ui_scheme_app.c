@@ -1110,11 +1110,11 @@ static void app_load_source(Nano_GFX *gfx) {
     am_module_t *mod = am_compile(linked, 0, 0);
     if (!mod) {
         am_ast_destroy(linked);
-        // 32 位宿主的 VM 工作区只有池的一半左右；大 App（含共享星历模块）在
-        // 内存受限宿主上会因 VM 区不足而编译失败，这里给出可诊断的提示。
-        swprintf(s_app->err_load, MB_ERR_BUF_LEN,
-                 L"Scheme 编译失败（解释器池 %u KB，可能内存不足）",
-                 (uint32_t)(s_app->pool_size_bytes / 1024));
+        // 两种成因都走这里：①编译期拒绝（2026-11 起内建过程参数个数不符是编译期错误，
+        // 精确原因由编译器打印到 stderr，形如“[Compiler] 编译错误: 内建过程 + 只接受
+        // 2 个参数，实际传入 3 个”）；②32 位宿主的 VM 工作区只有池的一半左右，大 App
+        // （含共享星历模块）会因 VM 区不足而编译失败。屏幕文案无法区分两者，故都点名。
+        wcscpy(s_app->err_load, L"Scheme 编译失败（参数个数不符或内存不足）");
         s_app->load_failed = 1;
         return;
     }
