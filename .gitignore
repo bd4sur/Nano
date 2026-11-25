@@ -44,3 +44,6 @@ infer/tools/e2e/
 
 # 灵机 App 内存池需求探针（仅工作区，不纳入版本管理；结论见 doc/灵机App内存池需求实测.md）
 infer/tools/memprobe/
+
+# 地球贴图生成脚本的源图缓存（NASA Blue Marble/Black Marble，生成物已入库）
+infer/tools/earth_src/
