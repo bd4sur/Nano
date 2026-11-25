@@ -106,18 +106,19 @@
 (define TXB ET.TXB)
 (define TXN ET.TXN)                 ; 夜间灯光（水面码点再 +0x100）
 
-;; 昼夜常量
-(define DAY_AMB 0.05)               ; 昼夜过渡底光
-(define DAY_SOFT 0.10)              ; 过渡带软化宽度
-(define GLINT_CORE 150.0)           ; 太阳反光亮斑强度（直径较大）
-(define GLINT_CORE_K 110.0)          ; 光斑角半径（≈7px 半径）
-(define GLINT_WIDE 58.0)            ; 海面宽反光强度（光斑外的大光晕）
+;; 昼夜（**单一连续式**：地表亮度/色相只由太阳天顶角余弦 dot 驱动，不按昼/夜分支——
+;;   否则两侧各用一套系数，必然在 dot=0 处留下一条亮度与色相的断层线）
+(define SUN_FLOOR 0.014)            ; 无直射时的地表残余反照率（星光/大气辉光）
+(define SUN_SOFT 0.10)              ; 直射份额的软化宽度（dot=0 处恰为 0，连续）
+(define DUSK_HI 0.12)               ; 城市灯开始点亮的天顶角余弦
+(define DUSK_SPAN 0.33)             ; 完全点亮的跨度（dot: 0.12 → -0.21）
+;; 海面太阳反光（半角向量；nh≤0 处自然为 0，连续）
+(define GLINT_CORE 150.0)           ; 亮斑强度（直径较大）
+(define GLINT_CORE_K 110.0)         ; 光斑角半径（≈7px 半径）
+(define GLINT_WIDE 58.0)            ; 光斑外的大光晕强度
 (define GLINT_WIDE_K 20.0)
-(define TWILIGHT_K 3.0)             ; 暮光带宽度（dot ∈ [-0.33, 0]）
-;; 夜面地表残余反照率 = 0.020 × (0.65, 0.85, 1.10)（蓝调，避免夜面发土黄）
-(define NIGHT_K_R 0.0130)
-(define NIGHT_K_G 0.0170)
-(define NIGHT_K_B 0.0220)
+;; 大气：低太阳时的红化斜率（入射阳光穿过更长气柱 → 蓝先被散射掉）
+(define SUN_RED 0.30)
 
 ;; 配色
 (define BG_R 1.0)                   ; 背景（近黑深蓝）
@@ -282,11 +283,17 @@
     (define gl 0.0)
     (define nc 0.0)
     (define nv 0.0)
-    (define twi 0.0)
     (define lk 0.0)
+    (define sunv 0.0)
+    (define sfac 0.0)
+    (define dusk 0.0)
+    (define airs 0.0)
+    (define warm 0.0)
     (define lit 0.0)
     (define air 0.0)
     (define s3 0.0)
+    (define sl 0.0)
+    (define sa 0.0)
     (define ar 0.0)
     (define ag 0.0)
     (define ab 0.0)
@@ -317,44 +324,52 @@
                     (set! dot (+ (* u SE) (+ (* sny SN) (* w SU))))
                     (set! col (+ (* (Math.atan2 u w) DEG) 180.0))
                     (set! idx (+ rowoff col))
-                    (if (> dot 0.0)
-                        { ; ---------------- 昼半球 ----------------
-                          (set! k (* (+ DAY_AMB (* (- 1.0 DAY_AMB) (/ dot (+ dot DAY_SOFT))))
-                                     (+ 0.44 (* 0.56 w))))
-                          (set! cr (- (String.charCodeAt idx TXR) 256.0))
-                          (set! cg (- (String.charCodeAt idx TXG) 256.0))
-                          (set! cb (- (String.charCodeAt idx TXB) 256.0))
-                          (set! r (* cr k))
-                          (set! g (* cg k))
-                          (set! b (* cb k))
-                          ;; 海面（蓝通道占优）才反光
-                          (if (> (- cb cr) 6.0)
+                    (set! cr (- (String.charCodeAt idx TXR) 256.0))
+                    (set! cg (- (String.charCodeAt idx TXG) 256.0))
+                    (set! cb (- (String.charCodeAt idx TXB) 256.0))
+                    ;; ---- 地表：太阳漫射（余弦定律）+ 城市灯（随暮色渐亮），**一式到底** ----
+                    ;;   sunv = max(0,dot) 只是"直射"的余弦；dot<0 时它连续地变为 0，
+                    ;;   残余反照率 SUN_FLOOR 在两侧取同一个值 ⇒ 晨昏线上亮度连续。
+                    ;;   色相也连续：没有任何"昼/夜两套系数"。
+                    (set! sunv (if (> dot 0.0) dot 0.0))
+                    (set! sfac (+ SUN_FLOOR
+                                  (* (- 1.0 SUN_FLOOR) (/ sunv (+ sunv SUN_SOFT)))))
+                    (set! k (* sfac (+ 0.44 (* 0.56 w))))      ; 视线角暗化（limb darkening）
+                    (set! r (* cr k))
+                    (set! g (* cg k))
+                    (set! b (* cb k))
+                    ;; 城市灯：dot 从 DUSK_HI 降到 DUSK_HI-DUSK_SPAN 之间连续点亮
+                    (set! dusk (/ (- DUSK_HI dot) DUSK_SPAN))
+                    (if (< dusk 0.0) (set! dusk 0.0) #f)
+                    (if (> dusk 1.0) (set! dusk 1.0) #f)
+                    (if (> dusk 0.0)
+                        {
+                          (set! nc (String.charCodeAt idx TXN))
+                          (set! nv (if (> nc 511.0) (- nc 512.0) (- nc 256.0)))
+                          (set! lk (* nv dusk))
+                          (set! r (+ r (* lk 1.28)))
+                          (set! g (+ g (* lk 0.98)))
+                          (set! b (+ b (* lk 0.62)))
+                        }
+                        #f)
+                    ;; 海面太阳反光：半角向量 nh，nh≤0 处光斑自然为 0（连续）
+                    (if (> (- cb cr) 6.0)
+                        {
+                          (set! nh (+ (* u HX) (+ (* sny HY) (* w HZ))))
+                          (if (> nh 0.0)
                               {
-                                (set! nh (+ (* u HX) (+ (* sny HY) (* w HZ))))
-                                (if (> nh 0.0)
-                                    {
-                                      (set! dev (- 1.0 nh))
-                                      (set! t1 (+ 1.0 (* dev GLINT_CORE_K)))
-                                      (set! t2 (+ 1.0 (* dev GLINT_WIDE_K)))
-                                      (set! gl (+ (/ GLINT_CORE (* t1 t1))
-                                                  (/ GLINT_WIDE (* t2 t2))))
-                                      (set! r (+ r gl))
-                                      (set! g (+ g (* gl 0.98)))
-                                      (set! b (+ b (* gl 0.94)))
-                                    }
-                                    #f)
+                                (set! dev (- 1.0 nh))
+                                (set! t1 (+ 1.0 (* dev GLINT_CORE_K)))
+                                (set! t2 (+ 1.0 (* dev GLINT_WIDE_K)))
+                                (set! gl (+ (/ GLINT_CORE (* t1 t1))
+                                            (/ GLINT_WIDE (* t2 t2))))
+                                (set! r (+ r gl))
+                                (set! g (+ g (* gl 0.98)))
+                                (set! b (+ b (* gl 0.94)))
                               }
                               #f)
                         }
-                        { ; ---------------- 夜半球 ----------------
-                          (set! nc (String.charCodeAt idx TXN))
-                          (set! nv (if (> nc 511.0) (- nc 512.0) (- nc 256.0)))
-                          (set! twi (if (< dot -0.34) 0.0 (+ 1.0 (* dot TWILIGHT_K))))
-                          (set! lk (* nv (- 1.0 (* 0.85 twi))))
-                          (set! r (+ (+ (* cr NIGHT_K_R) (* lk 1.28)) (* twi 16.0)))
-                          (set! g (+ (+ (* cg NIGHT_K_G) (* lk 0.98)) (* twi 28.0)))
-                          (set! b (+ (+ (* cb NIGHT_K_B) (* lk 0.62)) (* twi 52.0)))
-                        })
+                        #f)
                     ;; 地表边缘羽化：掠射处贴图被压缩成互相矛盾的明暗 texel（锯齿环），
                     ;; 而且大气厚度被夸大后边缘本就该"化开"，所以表面要在最外 ~7px 平滑淡出、
                     ;; 让大气层接管（smoothstep，避免线性斜坡留下环带）。
@@ -372,15 +387,22 @@
                     (set! air (/ 1.0 (Math.sqrt (- (+ 1.0 HS2) q))))
                     (set! s3 (- (* air (* air air)) ATM_FLOOR))
                     (if (< s3 0.0) (set! s3 0.0) #f)
-                    (set! lit (* (+ dot ATM_LIFT) ATM_LIFT_K))
+                    (set! lit (* (+ sunv ATM_LIFT) ATM_LIFT_K))
                     (if (< lit 0.0) (set! lit 0.0) #f)
                     (if (> lit 1.0) (set! lit 1.0) #f)
-                    (set! s3 (* s3 (+ ATM_AMB (* (- 1.0 ATM_AMB) lit))))
-                    ;; 色调映射 c = 255a/(a+1)：小 a 时线性（蓝），大 a 时各通道一起饱和（青白），
-                    ;; 于是边缘自然出现"亮到发白"的散射核，而不是塑料般的均匀提亮。
-                    (set! ar (* s3 ATM_R))
-                    (set! ag (* s3 ATM_G))
-                    (set! ab (* s3 ATM_B))
+                    ;; 拆成两股：**被阳光照到的那股**（沿视线看到的日照大气）与**环境那股**
+                    ;; （气辉/多次散射）。只有前者按"入射阳光穿过的气柱长度"红化，后者保持蓝
+                    ;; —— 否则夜半球的边缘会被红化成灰，而真实轨道照片里它仍是蓝的。
+                    (set! sl (* (* s3 (- 1.0 ATM_AMB)) lit))
+                    (set! sa (* s3 ATM_AMB))
+                    ;; 低太阳红化：airs = 太阳方向空气量（1/sqrt(cos²+2H)，天顶 1、晨昏 ~4），
+                    ;;   warm = 蓝的保留率（天顶 1 → 晨昏 ~0.55），红/绿按互补增益抬升。
+                    ;;   全部只由 sunv/dot 连续驱动 ⇒ 色相沿晨昏线连续过渡（没有分情况特例）。
+                    (set! airs (/ 1.0 (Math.sqrt (+ (* sunv sunv) HS2))))
+                    (set! warm (/ 1.0 (+ 1.0 (* SUN_RED (- airs 1.0)))))
+                    (set! ar (+ (* (* sl ATM_R) (- 2.0 warm)) (* sa ATM_R)))
+                    (set! ag (+ (* (* sl ATM_G) (+ 0.4 (* 0.6 warm))) (* sa ATM_G)))
+                    (set! ab (+ (* (* sl ATM_B) warm) (* sa ATM_B)))
                     (Gfx.set_pixel x y
                                    (+ r (/ (* 255.0 ar) (+ ar 1.0)))
                                    (+ g (/ (* 255.0 ag) (+ ag 1.0)))
@@ -392,13 +414,17 @@
                     (set! s3 (- (* air (* air air)) ATM_FLOOR))
                     (if (< s3 0.0) (set! s3 0.0) #f)
                     (set! u (* dxf RINV))
-                    (set! lit (* (+ (+ (* u SE) (* sny SN)) ATM_LIFT) ATM_LIFT_K))
-                    (if (< lit 0.0) (set! lit 0.0) #f)
+                    (set! sunv (+ (* u SE) (* sny SN)))
+                    (if (< sunv 0.0) (set! sunv 0.0) #f)
+                    (set! lit (* (+ sunv ATM_LIFT) ATM_LIFT_K))
                     (if (> lit 1.0) (set! lit 1.0) #f)
-                    (set! s3 (* s3 (+ ATM_AMB (* (- 1.0 ATM_AMB) lit))))
-                    (set! ar (* s3 ATM_R))
-                    (set! ag (* s3 ATM_G))
-                    (set! ab (* s3 ATM_B))
+                    (set! sl (* (* s3 (- 1.0 ATM_AMB)) lit))
+                    (set! sa (* s3 ATM_AMB))
+                    (set! airs (/ 1.0 (Math.sqrt (+ (* sunv sunv) HS2))))
+                    (set! warm (/ 1.0 (+ 1.0 (* SUN_RED (- airs 1.0)))))
+                    (set! ar (+ (* (* sl ATM_R) (- 2.0 warm)) (* sa ATM_R)))
+                    (set! ag (+ (* (* sl ATM_G) (+ 0.4 (* 0.6 warm))) (* sa ATM_G)))
+                    (set! ab (+ (* (* sl ATM_B) warm) (* sa ATM_B)))
                     (Gfx.set_pixel x y
                                    (+ BG_R (/ (* 255.0 ar) (+ ar 1.0)))
                                    (+ BG_G (/ (* 255.0 ag) (+ ag 1.0)))

@@ -245,14 +245,16 @@ ATM_LIFT_K = 4.5      # 抬升后的照明斜率（dot≈+0.10 时饱和）
 EDGE_FADE = 0.071     # 地表边缘羽化（≈ 最外 7px 淡出）
 
 # 白天
-DAY_AMB = 0.05
-DAY_SOFT = 0.10
+SUN_FLOOR = 0.014     # 无直射时的地表残余反照率
+SUN_SOFT = 0.10       # 直射份额软化宽度
+DUSK_HI, DUSK_SPAN = 0.12, 0.33   # 城市灯点亮区间
+SUN_RED = 0.30        # 低太阳红化斜率（高层大气散射的红化比地面夕阳弱）
 GLINT_CORE = 150.0    # 太阳反光光斑强度
 GLINT_CORE_K = 110.0  # 光斑角半径
 GLINT_WIDE = 58.0     # 海面宽反光强度
 GLINT_WIDE_K = 20.0
 TWILIGHT_K = 3.0
-NIGHT_K_R, NIGHT_K_G, NIGHT_K_B = 0.0130, 0.0170, 0.0220
+
 LIGHT_R, LIGHT_G, LIGHT_B = 1.28, 0.98, 0.62
 
 # 贴图生成参数
@@ -270,29 +272,31 @@ def sun_dir(dec_deg, hour_deg):
     return (math.cos(d) * math.sin(-h), math.sin(d), math.cos(d) * math.cos(h))
 
 
-def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water):
-    """单个像素的最终颜色（None = 不写，保留背景）。公式与 app/earthport.scm 一一对应。"""
+def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, glow=0.0):
+    """单个像素的最终颜色（None = 不写，保留背景）。公式与 app/earthport.scm 一一对应。
+
+    **昼夜不分枝**：地表亮度只由太阳天顶角余弦 dot 驱动（sunv = max(0,dot) 连续降到 0），
+    城市灯随 dusk 连续点亮，大气照明与红化也只由 dot 连续驱动 —— 这样晨昏线上不会出现
+    亮度/色相断层。
+    """
     q = (dx * dx + dy * dy) / (R_GL * R_GL)
     u = dx / R_GL
     sn_ = -dy / R_GL
 
-    def atmos(air, dot):
-        # 大气自身的照明：比地表"高"——地平线下 ~10° 以内的高层大气仍被照到，
-        # 于是晨昏线两侧会有一道亮边（日出/日落时的大气辉光）
-        t = (dot + ATM_LIFT) * ATM_LIFT_K
-        if t <= 0.0:
-            illum = 0.0
-        elif t >= 1.0:
-            illum = 1.0
-        else:
-            illum = t
+    def atmos(air, sunv):
         s3 = air * air * air - ATM_FLOOR
         if s3 < 0.0:
             s3 = 0.0
-        s3 = s3 * (ATM_AMB + (1.0 - ATM_AMB) * illum)
+        lit = (sunv + ATM_LIFT) * ATM_LIFT_K
+        lit = 0.0 if lit < 0.0 else (1.0 if lit > 1.0 else lit)
+        # 拆成两股：被阳光直射的那股按空气量红化；环境那股（气辉/多次散射）保持蓝
+        sl = s3 * (1.0 - ATM_AMB) * lit
+        sa = s3 * ATM_AMB
+        airs = 1.0 / math.sqrt(sunv * sunv + 2.0 * HS)
+        warm = 1.0 / (1.0 + SUN_RED * (airs - 1.0))
         out = []
-        for k in (ATM_R, ATM_G, ATM_B):
-            a = s3 * k
+        for k, g in ((ATM_R, 2.0 - warm), (ATM_G, 0.4 + 0.6 * warm), (ATM_B, warm)):
+            a = sl * k * g + sa * k
             out.append(255.0 * a / (a + 1.0))
         return out
 
@@ -304,38 +308,36 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water):
         r0 = day_rgb[row, col, 0]
         g0 = day_rgb[row, col, 1]
         b0 = day_rgb[row, col, 2]
-        if dot > 0.0:
-            k = (DAY_AMB + (1.0 - DAY_AMB) * (dot / (dot + DAY_SOFT))) * (0.44 + 0.56 * w)
-            r, g, b = r0 * k, g0 * k, b0 * k
-            nh = u * hx + sn_ * hy + w * hz
-            if nh > 0.0 and water[row, col]:
-                dev = 1.0 - nh
-                t1 = 1.0 + dev * GLINT_CORE_K
-                t2 = 1.0 + dev * GLINT_WIDE_K
-                gl = GLINT_CORE / (t1 * t1) + GLINT_WIDE / (t2 * t2)
-                r += gl
-                g += gl * 0.98
-                b += gl * 0.94
-        else:
-            nv = night_v[row, col]
-            twi = min(1.0, max(0.0, 1.0 + dot * TWILIGHT_K)) if dot > -0.34 else 0.0
-            lk = nv * (1.0 - 0.85 * twi)
-            r = r0 * NIGHT_K_R + lk * 1.28 + twi * 16.0
-            g = g0 * NIGHT_K_G + lk * 0.98 + twi * 28.0
-            b = b0 * NIGHT_K_B + lk * 0.62 + twi * 52.0
-        # 地表边缘羽化：掠射处贴图被压缩 → 逐像素取到的是互相矛盾的明暗texel（锯齿环），
-        # 因此表面要在最外 ~7px 平滑淡出，让大气层接管（也就是"大气厚度夸大"的观感）
+        sunv = dot if dot > 0.0 else 0.0
+        sfac = SUN_FLOOR + (1.0 - SUN_FLOOR) * (sunv / (sunv + SUN_SOFT))
+        k = sfac * (0.44 + 0.56 * w)
+        r, g, b = r0 * k, g0 * k, b0 * k
+        dusk = min(1.0, max(0.0, (DUSK_HI - dot) / DUSK_SPAN))
+        if dusk > 0.0:
+            lk = night_v[row, col] * dusk
+            r += lk * 1.28
+            g += lk * 0.98
+            b += lk * 0.62
+        nh = u * hx + sn_ * hy + w * hz
+        if nh > 0.0 and water[row, col]:
+            dev = 1.0 - nh
+            t1 = 1.0 + dev * GLINT_CORE_K
+            t2 = 1.0 + dev * GLINT_WIDE_K
+            gl = GLINT_CORE / (t1 * t1) + GLINT_WIDE / (t2 * t2)
+            r += gl
+            g += gl * 0.98
+            b += gl * 0.94
         t = min(1.0, (1.0 - q) * R_GL * EDGE_FADE)
         cov = t * t * (3.0 - 2.0 * t)
         r, g, b = r * cov, g * cov, b * cov
-        air = 1.0 / math.sqrt(1.0 - q + 2.0 * HS)
-        ar, ag, ab = atmos(air, dot)
+        ar, ag, ab = atmos(1.0 / math.sqrt(1.0 - q + 2.0 * HS), sunv)
         return (r + ar, g + ag, b + ab)
 
     bo = math.sqrt(q) - 1.0
     if bo < 0.10:
         air = AIR0 * math.exp(-bo / HS)
-        ar, ag, ab = atmos(air, u * se + sn_ * sn)
+        sunv = max(0.0, u * se + sn_ * sn)
+        ar, ag, ab = atmos(air, sunv)
         return (BG_R + ar, BG_G + ag, BG_B + ab)
     return None
 
@@ -361,6 +363,43 @@ def preview(day_rgb, night_v, water, se, sn, su, path):
     return path
 
 
+def check_continuity(day_rgb, night_v, water, se, sn, su, label=""):
+    """着色模型的连续性自检：沿屏幕竖直线扫描，算相邻像素的最大通道跳变。
+
+    **用纯色贴图 + 关掉夜灯**，这样量到的全是着色模型自身的跳变；否则贴图里的
+    海岸线/雪线/城市灯会把结果淹没（实测真实贴图能到 300+，纯色 14）。
+    球缘（q>0.85）单独统计 —— 那里大气柱密度的梯度本来就陡（边缘亮环是设计）。
+    """
+    hx, hy, hz = se, sn, su + 1.0
+    hn = math.sqrt(hx * hx + hy * hy + hz * hz)
+    hx, hy, hz = hx / hn, hy / hn, hz / hn
+    flat = np.full((TH, TW, 3), 140.0)
+    nz = np.zeros((TH, TW))
+    nw = np.ones((TH, TW), dtype=bool)
+    worst_in, where_in = 0.0, ""
+    worst_limb, where_limb = 0.0, ""
+    for x in range(96, 240, 4):
+        prev = None
+        for y in range(20, 220):
+            px = shade_pixel(x - CX, y - CY, se, sn, su, hx, hy, hz, flat, nz, nw)
+            if px is None:
+                prev = None
+                continue
+            px = tuple(min(255.0, v) for v in px)
+            if prev is not None:
+                d = max(abs(px[i] - prev[i]) for i in range(3))
+                q = ((x - CX) ** 2 + (y - CY) ** 2) / (R_GL * R_GL)
+                if q < 0.85:
+                    if d > worst_in:
+                        worst_in, where_in = d, "x=%d,y=%d" % (x, y)
+                elif d > worst_limb:
+                    worst_limb, where_limb = d, "x=%d,y=%d" % (x, y)
+            prev = px
+    print("连续性自检%s：盘面内部(q<0.85) 最大相邻跳变 %.1f (%s)；球缘 %.1f (%s)"
+          % (label, worst_in, where_in, worst_limb, where_limb))
+    return worst_in
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=os.path.join(HERE, "earth_src"))
@@ -370,11 +409,23 @@ def main():
     ap.add_argument("--no-fetch", action="store_true")
     ap.add_argument("--no-preview", action="store_true")
     ap.add_argument("--vec", default="", help="额外按给定太阳向量出一张预览图：se,sn,su")
+    ap.add_argument("--check", action="store_true", help="只跑着色模型的连续性自检")
     args = ap.parse_args()
 
     dr, dg, db, ncode, water, day_rgb, night_v = build_channels(args.src, not args.no_fetch)
     size = write_scheme(args.out_scm, dr, dg, db, ncode, args.date)
     print("写出 %s（%.0f KB，%d x %d x 4 通道）" % (args.out_scm, size / 1024.0, TW, TH))
+
+    if args.check:
+        night_v2 = np.rint(night_v).astype(np.int32)
+        worst = 0.0
+        for name, dec, hour in [("正午", 0.0, 0.0), ("晨昏", -14.7, 55.0),
+                                ("全夜", -14.7, 170.0), ("黎明", -23.0, -80.0)]:
+            se, sn, su = sun_dir(dec, hour)
+            worst = max(worst, check_continuity(day_rgb, night_v2, water, se, sn, su, "(%s)" % name))
+        print("结论：%s（判据：盘面内部相邻像素跳变 < 20 视为连续，晨昏线上不得出现断层）"
+              % ("通过" if worst < 20 else "不通过"))
+        return
 
     if not args.no_preview:
         os.makedirs(args.out, exist_ok=True)
