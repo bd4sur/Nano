@@ -16,8 +16,9 @@ gen_earth_tex.py —— 生成《地球舷窗》（app/earthport.scm）的地表
 第 179 行），于是「正交投影下屏幕 y 线性映射到 sin(lat)」→ 行号 = (1+sinlat)*90，
 一次乘加即可，不必查 asin。
 
-列 0 的中心在 (120°E - 179.5°)，即贴图以「东经 120°、纬度 0°」为画面中心（视点正
-下方就是 120°E / 0°N），与 App 的「定点俯视」一致。
+列 0 的中心在 (120°E - 179.5°)（= 120°E + (0 − 179.5)）。这只是数据的原点，
+**与观察位置无关**：App 现在可以在任意一点的天空、任意滚转角俯视（见其文件头
+「相机」一节），取址公式随视点一起旋转。
 
 四个通道各存成一串字符串，每个字符的码点是 0x100 + v（v = 0..255）：
   码点 0x100..0x1FF 是 Latin-1 补充区，UTF-8 两字节，且不含引号/反斜杠/换行/空字符，
@@ -233,11 +234,15 @@ HEADER = ''';; =================================================================
 ;;   · 夜间通道的水面像素额外 +0x100（码点 >= 0x200），供太阳反光只落在水上；
 ;;   · 361 列 × 181 行：列 = 经度（1°/列，第 360 列是第 0 列的环绕复制，
 ;;     列 0 的中心在 120°E-179.5°），行 = sin(纬度)（第 180 行复制第 179 行）。
+;;     **贴图本身与视点无关**：视点可以在任意一点、任意滚转角，取址公式见下。
 ;;   · 云量通道 TXW 由 tools/cloud_field.py **程序化生成**（不是卫星数据）：
 ;;     纬向环流带（ITCZ/副热带高压/中纬度风暴路径/极区）+ 海陆差异 + 域扭曲分形噪声
 ;;     + 中纬度气旋涡旋，具体模型见该脚本文件头；
-;;   取址：row = (1 + sin(lat)) * 90；col = atan2(u, w) 的度数 + 180；
-;;         idx = row * 361 + col —— 见 app/earthport.scm。
+;;   取址（相机可任意，见 app/earthport.scm 文件头的「相机」一节）：
+;;     sinLat = sinφ0·xU + cosφ0·xN,   Δλ = atan2(xE, cosφ0·xU - sinφ0·xN)
+;;     row = 四舍五入((1 - sinLat) * 90),  col = floor(Δλ° + λ0 + 60)
+;;     idx = row * 361 + col      （第 r 行的中心在行号 r+0.5 ⇒ 四舍五入到最近 texel）
+;;   φ0=0、λ0=120°E、滚转 0 时退化为定点俯视：row = (1 + dy/90)*90、col = atan2(u,w)°+180。
 ;; 生成脚本：infer/tools/gen_earth_tex.py（含参考渲染器，可出多时刻预览图）。
 ;; 用法：python3 infer/tools/gen_earth_tex.py
 ;; ============================================================================
@@ -261,7 +266,7 @@ def write_scheme(path, dr, dg, db, night_code, cloud, cirrus, date):
 # ---------------------------------------------------------------- 参考渲染（美术校对）
 
 R_GL = 90.0
-CX, CY = 160.0, 118.0
+CX, CY = 160.0, 104.0
 BG_R, BG_G, BG_B = 1.0, 2.0, 6.0
 
 # 大气（与 app/earthport.scm 逐条一致；改这里必须同步改那边）
@@ -317,16 +322,51 @@ def sun_dir(dec_deg, hour_deg):
     return (math.cos(d) * math.sin(-h), math.sin(d), math.cos(d) * math.cos(h))
 
 
-def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp=1.0, cw=None, cc=None):
+def sun_dir_at(dec_deg, slon_deg, lat0, lon0):
+    """任意视点 (lat0, lon0) 的局部系（东, 北, 天）太阳单位向量。
+
+    slon_deg = 次太阳点经度 λs（= α - GMST），lat0/lon0 为观察者所在点。
+    与 app/earthport.scm 的 sun_local 逐式对应：
+        Δ = λs - λ0；sE = cosδ·sinΔ
+        sN = -sinφ0·cosδ·cosΔ + cosφ0·sinδ
+        sU =  cosφ0·cosδ·cosΔ + sinφ0·sinδ
+    （lat0 = 0、lon0 = 120°E 时与 sun_dir(dec, hour=120-λs) 完全一致。）
+    """
+    d = math.radians(dec_deg)
+    dl = math.radians(slon_deg - lon0)
+    l0 = math.radians(lat0)
+    cdl = math.cos(d) * math.cos(dl)
+    return (math.cos(d) * math.sin(dl),
+            -math.sin(l0) * cdl + math.cos(l0) * math.sin(d),
+            math.cos(l0) * cdl + math.sin(l0) * math.sin(d))
+
+
+CAM_DEFAULT = (0.0, 120.0, 0.0)      # (lat0, lon0, roll)：观察者所在点 + 画面滚转角
+
+
+def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp=1.0, cw=None, cc=None,
+                cam=CAM_DEFAULT):
     """单个像素的最终颜色（None = 不写，保留背景）。公式与 app/earthport.scm 一一对应。
 
     **昼夜不分枝**：地表亮度只由太阳天顶角余弦 dot 驱动（sunv = max(0,dot) 连续降到 0），
     城市灯随 dusk 连续点亮，大气照明与红化也只由 dot 连续驱动 —— 这样晨昏线上不会出现
     亮度/色相断层。
+
+    cam = (lat0, lon0, roll)：观察者所在点与画面滚转角（度）。屏幕切平面分量先旋到
+    视点局部系（东/北），再补天顶分量 w = sqrt(1-q)：
+        xE =  p·cosρ + qs·sinρ,   xN = -p·sinρ + qs·cosρ
+        sinLat = sinφ0·w + cosφ0·xN,   Δλ = atan2(xE, cosφ0·w - sinφ0·xN)
+    着色（dot、切点投影 dl、半角向量）全部在局部系里算，所以只需 (se,sn,su) 随视点变。
     """
-    q = (dx * dx + dy * dy) / (R_GL * R_GL)
-    u = dx / R_GL
-    sn_ = -dy / R_GL
+    lat0, lon0, roll = cam
+    p = dx / R_GL
+    qs = -dy / R_GL
+    q = p * p + qs * qs
+    rho = math.radians(roll)
+    xe = p * math.cos(rho) + qs * math.sin(rho)
+    xn = -p * math.sin(rho) + qs * math.cos(rho)
+    cl0 = math.cos(math.radians(lat0))
+    sl0 = math.sin(math.radians(lat0))
 
     def atmos(air, dl):
         """大气散射：air = 视线方向空气量；dl = **切点法向**的太阳投影（跨视圆盘边缘连续）。
@@ -356,9 +396,13 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp=1.0,
 
     if q <= 1.0:
         w = math.sqrt(max(0.0, 1.0 - q))
-        dot = u * se + sn_ * sn + w * su
-        row = min(TH - 1, max(0, int((1.0 + dy / R_GL) * 90.0)))
-        col = min(TW - 1, max(0, int(math.degrees(math.atan2(u, w)) + 180.0)))
+        # 球面点的纬度与经度偏移（行号 ∝ sinLat；列中心经度 = 列 + 60）
+        sinlat = sl0 * w + cl0 * xn
+        dlon = math.atan2(xe, cl0 * w - sl0 * xn)
+        row = min(TH - 1, max(0, int((1.0 - sinlat) * 90.0 + 0.5)))
+        col = int((math.degrees(dlon) + lon0 + 60.0) % 360.0)
+        col = min(TW - 1, max(0, col))
+        dot = xe * se + xn * sn + w * su
         r0 = day_rgb[row, col, 0]
         g0 = day_rgb[row, col, 1]
         b0 = day_rgb[row, col, 2]
@@ -372,7 +416,7 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp=1.0,
             r += lk * 1.28
             g += lk * 0.98
             b += lk * 0.62
-        nh = u * hx + sn_ * hy + w * hz
+        nh = xe * hx + xn * hy + w * hz
         if nh > 0.0 and water[row, col]:
             dev = 1.0 - nh
             t1 = 1.0 + dev * GLINT_CORE_K
@@ -403,7 +447,7 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp=1.0,
         cov = t * t * (3.0 - 2.0 * t)
         r, g, b = r * cov, g * cov, b * cov
         # 照明/入射气柱用的天顶角余弦：max(dot, dl) = dl + max(0, w·sUp)
-        dl = u * se + sn_ * sn
+        dl = xe * se + xn * sn
         datm = max(dot, dl)
         ar, ag, ab = atmos(1.0 / math.sqrt(1.0 - q + 2.0 * HS), datm)
         return (r + ar, g + ag, b + ab)
@@ -413,7 +457,7 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp=1.0,
         # 球外只有大气：柱密度从 b=1 处的值起，按三次缓出平滑归零（末段斜率为 0）
         xo = 1.0 - bo / HALO_U
         s3 = S3L * xo * xo * xo
-        dl = u * se + sn_ * sn
+        dl = xe * se + xn * sn
         lit = (dl + ATM_LIFT) * ATM_LIFT_K
         lit = 0.0 if lit < 0.0 else (1.0 if lit > 1.0 else lit)
         sunv = dl if dl > 0.0 else 0.0
@@ -438,9 +482,14 @@ def mie_phase(su):
     return MIE_ISO + (1.0 - MIE_ISO) * hg / hg1
 
 
-def preview(day_rgb, night_v, water, se, sn, su, path, cw=None, cc=None):
+def preview(day_rgb, night_v, water, se, sn, su, path, cw=None, cc=None, cam=CAM_DEFAULT,
+            with_ui=False):
+    """按 app/earthport.scm 的公式复刻一遍（数值逐条对齐），输出 320x240 PNG。
+
+    cam = (lat0, lon0, roll)。with_ui=False 时只画地球（不画控制条与 HUD），
+    便于与 App 帧缓冲做逐像素比较（比较时应只在圆盘内取均值）。
+    """
     mp = mie_phase(su)
-    """按 app/earthport.scm 的公式复刻一遍（数值逐条对齐），输出 320x240 PNG。"""
     W, H = 320, 240
     img = np.zeros((H, W, 3), dtype=np.float64)
     img[:, :, 0] = BG_R
@@ -451,7 +500,7 @@ def preview(day_rgb, night_v, water, se, sn, su, path, cw=None, cc=None):
     hx, hy, hz = hx * hn, hy * hn, hz * hn
     for y in range(H):
         for x in range(W):
-            px = shade_pixel(x - CX, y - CY, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp, cw, cc)
+            px = shade_pixel(x - CX, y - CY, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp, cw, cc, cam)
             if px is not None:
                 img[y, x, 0] = min(255.0, px[0])
                 img[y, x, 1] = min(255.0, px[1])
@@ -475,9 +524,9 @@ def check_continuity(day_rgb, night_v, water, se, sn, su, label=""):
     nw = np.ones((TH, TW), dtype=bool)
     worst_in, where_in = 0.0, ""
     worst_limb, where_limb = 0.0, ""
-    for x in range(96, 240, 4):
+    for x in range(100, 220, 4):
         prev = None
-        for y in range(20, 220):
+        for y in range(10, 198):
             px = shade_pixel(x - CX, y - CY, se, sn, su, hx, hy, hz, flat, nz, nw)
             if px is None:
                 prev = None
@@ -506,12 +555,27 @@ def main():
     ap.add_argument("--no-fetch", action="store_true")
     ap.add_argument("--no-preview", action="store_true")
     ap.add_argument("--vec", default="", help="额外按给定太阳向量出一张预览图：se,sn,su")
+    ap.add_argument("--cam", default="",
+                    help="视角：lat,lon,roll（度）。给出时只出一张该视角的预览图（需 --vec）")
     ap.add_argument("--check", action="store_true", help="只跑着色模型的连续性自检")
     args = ap.parse_args()
 
     dr, dg, db, ncode, water, day_rgb, night_v = build_channels(args.src, not args.no_fetch)
     cloud = cloud_channel(water, args.date)
     cirrus = cloud_channel(water, args.date, kind="cirrus")
+    if args.cam:
+        os.makedirs(args.out, exist_ok=True)
+        lat0, lon0, roll = [float(x) for x in args.cam.split(",")]
+        if not args.vec:
+            sys.exit("--cam 需配合 --vec se,sn,su（太阳在**该视点局部系**的分量）")
+        se, sn, su = [float(x) for x in args.vec.split(",")]
+        night_v2 = np.rint(night_v).astype(np.int32)
+        p = preview(day_rgb, night_v2, water, se, sn, su,
+                    os.path.join(args.out, "preview_cam.png"), cloud, cirrus,
+                    cam=(lat0, lon0, roll))
+        print("预览（指定视角）", p)
+        return
+
     size = write_scheme(args.out_scm, dr, dg, db, ncode, cloud, cirrus, args.date)
     print("写出 %s（%.0f KB，%d x %d x 4 通道）" % (args.out_scm, size / 1024.0, TW, TH))
 
