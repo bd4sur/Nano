@@ -119,6 +119,8 @@
 (define TXG ET.TXG)
 (define TXB ET.TXB)
 (define TXN ET.TXN)                 ; 夜间灯光（水面码点再 +0x100）
+(define TXW ET.TXW)                 ; 低云云量（程序化生成，见 tools/cloud_field.py）
+(define TXC ET.TXC)                 ; 高空卷云（薄、丝缕状，叠加在低云之上）
 
 ;; 昼夜（**单一连续式**：地表亮度/色相只由太阳天顶角余弦 dot 驱动，不按昼/夜分支——
 ;;   否则两侧各用一套系数，必然在 dot=0 处留下一条亮度与色相的断层线）
@@ -126,6 +128,16 @@
 (define SUN_SOFT 0.10)              ; 直射份额的软化宽度（dot=0 处恰为 0，连续）
 (define DUSK_HI 0.12)               ; 城市灯开始点亮的天顶角余弦
 (define DUSK_SPAN 0.33)             ; 完全点亮的跨度（dot: 0.12 → -0.21）
+;; 云：一次查表 + alpha 合成。云量 0..255 → alpha 0..CLOUD_MAX
+;;   云的几何厚度远小于 1°/像素，所以不做三维体渲染；用"平面云层 + 太阳漫射照明"近似，
+;;   掠射处只做更弱的视线暗化（云比地表高、多次散射更强）。
+(define CLOUD_MAX 0.92)             ; 云量 255 时的最大遮蔽
+(define CLOUD_K 0.0036078)          ; = CLOUD_MAX / 255
+(define CIRRUS_K 0.0021569)         ; 卷云通道 0..255 → 不透明度 0..0.55
+(define CIRRUS_ALB 246.0)          ; 卷云反照率（薄而亮、略偏冷）
+(define CLOUD_LIFT 0.035)           ; 云顶比地面高 ⇒ 晨昏线附近晚一点变暗（可见的细节）
+(define CLOUD_BASE 188.0)          ; 极薄云的反照率（灰白）
+(define CLOUD_DENSE 62.0)          ; 厚度带来的增量：厚云顶 → 纯白（188+62·a）
 ;; 海面太阳反光（半角向量；nh≤0 处自然为 0，连续）
 (define GLINT_CORE 150.0)           ; 亮斑强度（直径较大）
 (define GLINT_CORE_K 110.0)         ; 光斑角半径（≈7px 半径）
@@ -191,6 +203,7 @@
 (define tpx 0)                      ; 触点（块内不能 define）
 (define tpy 0)
 (define bi -1)                      ; 命中的按钮下标
+(define clouds_on 1)                ; 1 = 显示云（第 5 个按钮可切）
 (define keyv 0)                     ; Key.take_press 临时量
 (define _timer 0)                   ; 定时器编号（消费 set_interval 的返回值）
 
@@ -298,8 +311,9 @@
 
 (define BTN_Y 219)
 (define BTN_H 18)
-(define BTN_W 62)
+(define BTN_W 50)
 (define BTN_GAP 3)
+(define BTN_N 5)
 
 (define btn_x (lambda (i) (+ 4 (* i (+ BTN_W BTN_GAP)))))
 
@@ -308,13 +322,15 @@
     (if (== i 0) "-2分"
         (if (== i 1) "+2分"
             (if (== i 2) "实时"
-                (if (== paused 1) "运行" "暂停"))))))
+                (if (== i 3) (if (== paused 1) "运行" "暂停")
+                    (if (== clouds_on 1) "有云" "无云")))))))
 
 ;; 高亮：暂停键在冻结时高亮；『实时』在"正在实时"时高亮；快进快退不高亮
 (define btn_active
   (lambda (i)
     (if (== i 2) (if (and (== paused 0) (== off_s 0)) 1 0)
-        (if (== i 3) paused 0))))
+        (if (== i 3) paused
+            (if (== i 4) clouds_on 0)))))
 
 (define draw_btns
   (lambda ()
@@ -322,7 +338,7 @@
     (define x 0)
     (define lab "")
     (define lx 0.0)
-    (while (< i 4) {
+    (while (< i BTN_N) {
       (set! x (btn_x i))
       (set! lab (btn_label i))
       (set! lx (+ x (* (- BTN_W (text_w lab)) 0.5)))
@@ -347,7 +363,7 @@
     (define i 0)
     (if (and (>= py BTN_Y) (< py (+ BTN_Y BTN_H)))
         {
-          (while (< i 4) {
+          (while (< i BTN_N) {
             (if (and (>= px (btn_x i)) (< px (+ (btn_x i) BTN_W)))
                 (set! r i)
                 #f)
@@ -366,6 +382,14 @@
         (if (== paused 1)
             (time_resume)
             (set! paused 1))
+        #f)
+    ;; 云层开关：画面内容变了，立刻重算一帧场景
+    (if (== i 4)
+        {
+          (set! clouds_on (if (== clouds_on 1) 0 1))
+          (set! scene_dirty 1)
+          (display "[earthport] clouds=") (display clouds_on) (newline)
+        }
         #f)
     (set! clk_sec -1)
     (draw_btns)
@@ -466,6 +490,10 @@
     (define airs 0.0)
     (define warm 0.0)
     (define mie 0.0)
+    (define ca 0.0)
+    (define sh 0.0)
+    (define csun 0.0)
+    (define cl 0.0)
     (define lit 0.0)
     (define air 0.0)
     (define s3 0.0)
@@ -546,6 +574,42 @@
                                 (set! b (+ b (* gl 0.94)))
                               }
                               #f)
+                        }
+                        #f)
+                    ;; ---- 云层合成（在边缘羽化之前，于是云也随地表一起在视圆盘边缘淡出）----
+                    ;;   两层：低云（团块，随厚度由灰白到纯白）+ 高空卷云（薄、丝缕、略偏冷）
+                    (set! ca 0.0)
+                    (if (== clouds_on 1)
+                        (set! ca (* (- (String.charCodeAt idx TXW) 256.0) CLOUD_K))
+                        #f)
+                    (if (> ca 0.0)
+                        {
+                          ;; 云体亮度随"云量/厚度"变化：薄云/边缘发灰、厚云顶纯白
+                          ;; —— 只有单一 alpha 通道时，这一项是唯一的"体积感"来源。
+                          ;; 云顶高度带来的"晚变暗"：照明里把太阳高度抬 CLOUD_LIFT（≈2°）
+                          (set! csun (+ sunv CLOUD_LIFT))
+                          (set! cl (* (* (+ SUN_FLOOR (* (- 1.0 SUN_FLOOR)
+                                                 (/ csun (+ csun SUN_SOFT))))
+                                         (+ 0.62 (* 0.38 w)))
+                                      (+ CLOUD_BASE (* CLOUD_DENSE ca))))
+                          (set! r (+ (* r (- 1.0 ca)) (* cl ca)))
+                          (set! g (+ (* g (- 1.0 ca)) (* cl ca)))
+                          (set! b (+ (* b (- 1.0 ca)) (* (* cl 1.03) ca)))
+                        }
+                        #f)
+                    (set! ca 0.0)
+                    (if (== clouds_on 1)
+                        (set! ca (* (- (String.charCodeAt idx TXC) 256.0) CIRRUS_K))
+                        #f)
+                    (if (> ca 0.0)
+                        {
+                          (set! cl (* (* (+ SUN_FLOOR (* (- 1.0 SUN_FLOOR)
+                                                 (/ csun (+ csun SUN_SOFT))))
+                                         (+ 0.70 (* 0.30 w)))
+                                      CIRRUS_ALB))
+                          (set! r (+ (* r (- 1.0 ca)) (* cl ca)))
+                          (set! g (+ (* g (- 1.0 ca)) (* cl ca)))
+                          (set! b (+ (* b (- 1.0 ca)) (* (* cl 1.05) ca)))
                         }
                         #f)
                     ;; 地表边缘羽化：掠射处贴图被压缩成互相矛盾的明暗 texel（锯齿环），
@@ -818,6 +882,7 @@
               (if (== keyv 4) (btn_do 1) #f)
               (if (== keyv 1) (btn_do 2) #f)
               (if (== keyv 2) (btn_do 3) #f)
+              (if (or (== keyv 99) (== keyv 67)) (btn_do 4) #f)
               (if (or (== keyv 32) (== keyv 13)) (toggle_hud) #f)
               (set! keyv (Key.take_press))
             })

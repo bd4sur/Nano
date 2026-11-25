@@ -55,6 +55,8 @@ import subprocess
 import sys
 
 import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from PIL import Image
 
 # ---- 网格与取址常量（必须与 app/earthport.scm 的 TW/TH/WRAP 一致）-----------
@@ -150,6 +152,29 @@ def resample(img, W, H):
 
 # ---------------------------------------------------------------- 通道
 
+def cloud_channel(water, date, seed=20261125, kind="low"):
+    """程序化云量场（1°/格，0..255）。模型见 tools/cloud_field.py 的文件头：
+
+    · 纬向气候带（ITCZ / 副热带高压 / 中纬度风暴路径 / 极区层云）
+    · 海陆差异（副热带洋面的海洋层积云、沙漠晴空）
+    · 域扭曲分形噪声 + 中纬度气旋涡旋 → 螺旋/丝缕状的真实云系形态
+    · ITCZ 位置跟随生成日期的太阳赤纬（南半球夏季时南移）
+    """
+    import cloud_field as CF
+    # 由日期粗算太阳赤纬（±0.3° 足够，只用来摆放 ITCZ）
+    try:
+        y, m, d = [int(x) for x in date.split("-")]
+        doy = sum([0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30][:m - 1]) + d
+        dec = -23.44 * math.cos(2.0 * math.pi * (doy + 10.0) / 365.24)
+    except Exception:
+        dec = -20.0
+    cov = CF.cloud_field(water, dec, seed=seed)
+    cov = CF._blur(cov, 1.6)
+    img = Image.fromarray((np.clip(cov, 0.0, 1.0) * 255.0).astype(np.uint8))
+    v = resample(img, img.width, img.height)[:, :, 0]
+    return np.clip(np.rint(v), 0, 255).astype(np.int32)
+
+
 def build_channels(src_dir, allow_fetch=True):
     day = Image.open(fetch(src_dir, "day", SRC["day"], allow_fetch)).convert("RGB")
     night = Image.open(fetch(src_dir, "night", SRC["night"], allow_fetch)).convert("RGB")
@@ -203,10 +228,14 @@ HEADER = ''';; =================================================================
 ;;
 ;; 由 infer/tools/gen_earth_tex.py 从 NASA Blue Marble / Black Marble（公有领域，
 ;; 经 three.js 示例贴图分发）重采样而来：
-;;   · 白天 RGB 三通道 + 夜间灯光一通道，各一串字符，字符码点 = 0x100 + 分量值；
+;;   · 白天 RGB 三通道 + 夜间灯光 + **低云云量 TXW** + **高空卷云 TXC**，各一串字符，
+;;     字符码点 = 0x100 + 分量值；
 ;;   · 夜间通道的水面像素额外 +0x100（码点 >= 0x200），供太阳反光只落在水上；
 ;;   · 361 列 × 181 行：列 = 经度（1°/列，第 360 列是第 0 列的环绕复制，
 ;;     列 0 的中心在 120°E-179.5°），行 = sin(纬度)（第 180 行复制第 179 行）。
+;;   · 云量通道 TXW 由 tools/cloud_field.py **程序化生成**（不是卫星数据）：
+;;     纬向环流带（ITCZ/副热带高压/中纬度风暴路径/极区）+ 海陆差异 + 域扭曲分形噪声
+;;     + 中纬度气旋涡旋，具体模型见该脚本文件头；
 ;;   取址：row = (1 + sin(lat)) * 90；col = atan2(u, w) 的度数 + 180；
 ;;         idx = row * 361 + col —— 见 app/earthport.scm。
 ;; 生成脚本：infer/tools/gen_earth_tex.py（含参考渲染器，可出多时刻预览图）。
@@ -218,9 +247,10 @@ HEADER = ''';; =================================================================
 '''
 
 
-def write_scheme(path, dr, dg, db, night_code, date):
+def write_scheme(path, dr, dg, db, night_code, cloud, cirrus, date):
     body = [HEADER.format(date=date, tw=TW, th=TH)]
-    for name, arr in (("TXR", dr), ("TXG", dg), ("TXB", db), ("TXN", night_code)):
+    for name, arr in (("TXR", dr), ("TXG", dg), ("TXB", db), ("TXN", night_code),
+                      ("TXW", cloud), ("TXC", cirrus)):
         body.append('(define %s "%s")\n' % (name, enc(arr)))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -256,6 +286,13 @@ MIE_G = 0.65          # HG 各向异性
 MIE_ISO = 0.60        # 各向同性底
 MIE_A = 0.035         # 柱密度项（随空气量²）
 MIE_FLAT = 0.014      # 平坦项（气溶胶垂直光学厚度带来的均匀白纱）
+CLOUD_MAX = 0.92      # 云量 255 时的最大遮蔽
+CLOUD_K = CLOUD_MAX / 255.0
+CIRRUS_K = 0.55 / 255.0   # 卷云通道 0..255 → 不透明度 0..0.55
+CIRRUS_ALB = 246.0        # 卷云反照率（薄而亮，略偏冷）
+CLOUD_LIFT = 0.035    # 云顶比地面高 ⇒ 晨昏线附近晚一点变暗
+CLOUD_BASE = 188.0    # 极薄云的反照率（灰白）
+CLOUD_DENSE = 62.0    # 厚度带来的增量（厚云顶 → 纯白）
 GLINT_CORE = 150.0    # 太阳反光光斑强度
 GLINT_CORE_K = 110.0  # 光斑角半径
 GLINT_WIDE = 58.0     # 海面宽反光强度
@@ -264,6 +301,8 @@ GLINT_WIDE_K = 20.0
 LIGHT_R, LIGHT_G, LIGHT_B = 1.28, 0.98, 0.62
 
 # 贴图生成参数
+CLOUD_STRETCH_OFF = 0.30   # 云量对比度拉伸：偏移
+CLOUD_STRETCH_GAIN = 0.44  # 云量对比度拉伸：增益
 NIGHT_FLOOR = 52.0     # 夜间灯光的底噪扣除
 NIGHT_CONTRAST = 0.82  # 夜间灯光的对比度
 DAY_SEA_GAMMA = 0.66   # 白天贴图：海水提亮 gamma
@@ -278,7 +317,7 @@ def sun_dir(dec_deg, hour_deg):
     return (math.cos(d) * math.sin(-h), math.sin(d), math.cos(d) * math.cos(h))
 
 
-def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp=1.0):
+def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp=1.0, cw=None, cc=None):
     """单个像素的最终颜色（None = 不写，保留背景）。公式与 app/earthport.scm 一一对应。
 
     **昼夜不分枝**：地表亮度只由太阳天顶角余弦 dot 驱动（sunv = max(0,dot) 连续降到 0），
@@ -342,6 +381,24 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp=1.0)
             r += gl
             g += gl * 0.98
             b += gl * 0.94
+        if cw is not None:
+            ca = cw[row, col] * CLOUD_K
+            if ca > 0.0:
+                csun = sunv + CLOUD_LIFT
+                cl = (SUN_FLOOR + (1.0 - SUN_FLOOR) * csun / (csun + SUN_SOFT)) \
+                     * (0.62 + 0.38 * w) * (CLOUD_BASE + CLOUD_DENSE * ca)
+                r = r * (1.0 - ca) + cl * ca
+                g = g * (1.0 - ca) + cl * ca
+                b = b * (1.0 - ca) + cl * 1.03 * ca
+        if cc is not None:
+            ca = cc[row, col] * CIRRUS_K
+            if ca > 0.0:
+                csun = sunv + CLOUD_LIFT
+                cl = (SUN_FLOOR + (1.0 - SUN_FLOOR) * csun / (csun + SUN_SOFT)) \
+                     * (0.70 + 0.30 * w) * CIRRUS_ALB
+                r = r * (1.0 - ca) + cl * ca
+                g = g * (1.0 - ca) + cl * ca
+                b = b * (1.0 - ca) + cl * 1.05 * ca
         t = min(1.0, (1.0 - q) * R_GL * EDGE_FADE)
         cov = t * t * (3.0 - 2.0 * t)
         r, g, b = r * cov, g * cov, b * cov
@@ -381,7 +438,8 @@ def mie_phase(su):
     return MIE_ISO + (1.0 - MIE_ISO) * hg / hg1
 
 
-def preview(day_rgb, night_v, water, se, sn, su, path):
+def preview(day_rgb, night_v, water, se, sn, su, path, cw=None, cc=None):
+    mp = mie_phase(su)
     """按 app/earthport.scm 的公式复刻一遍（数值逐条对齐），输出 320x240 PNG。"""
     W, H = 320, 240
     img = np.zeros((H, W, 3), dtype=np.float64)
@@ -393,7 +451,7 @@ def preview(day_rgb, night_v, water, se, sn, su, path):
     hx, hy, hz = hx * hn, hy * hn, hz * hn
     for y in range(H):
         for x in range(W):
-            px = shade_pixel(x - CX, y - CY, se, sn, su, hx, hy, hz, day_rgb, night_v, water)
+            px = shade_pixel(x - CX, y - CY, se, sn, su, hx, hy, hz, day_rgb, night_v, water, mp, cw, cc)
             if px is not None:
                 img[y, x, 0] = min(255.0, px[0])
                 img[y, x, 1] = min(255.0, px[1])
@@ -452,7 +510,9 @@ def main():
     args = ap.parse_args()
 
     dr, dg, db, ncode, water, day_rgb, night_v = build_channels(args.src, not args.no_fetch)
-    size = write_scheme(args.out_scm, dr, dg, db, ncode, args.date)
+    cloud = cloud_channel(water, args.date)
+    cirrus = cloud_channel(water, args.date, kind="cirrus")
+    size = write_scheme(args.out_scm, dr, dg, db, ncode, cloud, cirrus, args.date)
     print("写出 %s（%.0f KB，%d x %d x 4 通道）" % (args.out_scm, size / 1024.0, TW, TH))
 
     if args.check:
@@ -479,12 +539,12 @@ def main():
         for name, dec, hour in cases:
             se, sn, su = sun_dir(dec, hour)
             p = preview(day_rgb, night_v2, water, se, sn, su,
-                        os.path.join(args.out, "preview_%s.png" % name))
+                        os.path.join(args.out, "preview_%s.png" % name), cloud, cirrus)
             print("预览", p)
         if args.vec:
             se, sn, su = [float(x) for x in args.vec.split(",")]
             p = preview(day_rgb, night_v2, water, se, sn, su,
-                        os.path.join(args.out, "preview_vec.png"))
+                        os.path.join(args.out, "preview_vec.png"), cloud, cirrus)
             print("预览（指定太阳向量）", p)
 
 
