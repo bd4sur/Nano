@@ -419,6 +419,15 @@
 ;;   · 幅度小（RMS ≈0.6px，峰峰 1.7px）而速度快，且**没有低频成分** ——
 ;;     不会出现"粒子绕着平衡位置慢慢蠕动/绕圈"（那是旧版旋涡力与欠阻尼弹簧的病）；
 ;;   · 物理位置始终收敛到字形点 ⇒ 笔画不会因为抖动而结团、露缝，只是"珠子在原地颤"。
+;; 粒子形状三档的绘制参数（每帧在 draw_clock 里按 RENDER 设一次，粒子循环里只读全局，
+;; 不在 640 次内层循环里做条件判断）：
+;;   DRAD 圆点半径 / DBRT 圆点亮度倍数 / HGA+HGB·bs 辉光半径
+;; 「细点」档：点面积只有圆点的 ~1/3.3，所以**提亮**（×1.6）补回观感，同时把辉光收小
+;; （半径 ×0.72）—— 细点本来就该是"小而亮、光晕紧"的尘埃点。
+(define DRAD 1.55)
+(define DBRT 1.0)
+(define HGA 5.4)
+(define HGB 1.8)
 (define AJ 1.20)                   ; 振动幅度（px，正弦峰值；峰峰 2.4px ≈ 0.9 个点距）
 (define WJX 29.0)                  ; x 方向基准角频率（rad/s）≈ 4.6 Hz（8.0 → 6.4 → 4.6）
 (define WJY 35.2)                  ; y 方向基准角频率（rad/s）≈ 5.6 Hz（9.6 → 7.7 → 5.6）
@@ -787,12 +796,10 @@
           (if (> sy 4.5) (set! sy 4.5) (if (< sy -4.5) (set! sy -4.5) #f))
           (Gfx.draw_line_aa (- (- x sx) 1.5) (- (- y sy) 1.5) (+ x 1.5) (+ y 1.5)
                             1.0 (* HR br) (* HG br) (* HB br)) }
-        { (if (== RENDER 0)
-              (Gfx.fill_dot_aa x y 1.55 (* HR br) (* HG br) (* HB br))
-              (Gfx.fill_dot_aa x y 0.62 (* HR br) (* HG br) (* HB br))) })
+        { (Gfx.fill_dot_aa x y DRAD (* HR (* br DBRT)) (* HG (* br DBRT)) (* HB (* br DBRT))) })
     ;; 柔和辉光：**用基础亮度 bs**（不随闪烁变 —— 闪烁在粒子上，不在光晕上）
     (if glow
-        (halo x y (+ 5.4 (* 1.8 bs)) bs)
+        (halo x y (+ HGA (* HGB bs)) bs)
         #f)))
 
 ;; ---- 一帧：读时间 → 逐槽把粒子拉向字形 -----------------------------------
@@ -817,6 +824,13 @@
     (define rp 0)
     (set! ACTIVE 0)
     (set! rp (if (> REPT 0) 1 0))        ; 排斥开关只读一次全局
+    ;; 粒子形状 → 绘制参数（每帧一次；细点档提亮 + 收小辉光）
+    (cond ((== RENDER 1)
+           { (set! DRAD 0.62) (set! DBRT 1.60) (set! HGA 3.9) (set! HGB 1.30) })
+          ((== RENDER 2)
+           { (set! DRAD 1.55) (set! DBRT 1.0) (set! HGA 5.4) (set! HGB 1.8) })
+          (else
+           { (set! DRAD 1.55) (set! DBRT 1.0) (set! HGA 5.4) (set! HGB 1.8) }))
     ;; 每帧按风格切换"表句柄"（三个模块变量，避免逐点判断）
     (if (== STYLE 1)
         { (set! TBB GD_BASE) (set! TBC GD_CNT) (set! TBP GD_PTS) }
