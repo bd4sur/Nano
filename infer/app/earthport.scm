@@ -17,7 +17,8 @@
 ;;     最外圈过曝成青白，圆盘边缘"化开"（大气厚度按视觉需求夸大，HS=0.033R）。
 ;;   · 反光：海面（贴图蓝通道占优处）按半角向量做镜面高光，光斑位置即真实太阳反光点
 ;;   · 星空：几十颗暗星（只画在辉光窗之外，重绘地球擦不到）
-;;   · HUD：UTC 时刻 / 日期 / 太阳赤纬 / 空间站高度与速度
+;;   · HUD：UTC 时刻 / 日期 / 太阳赤纬 / 时间偏置徽标（暂停或 ±h:mm，琥珀色）
+;;   · 底部控制条：[-2分] [+2分] [实时] [暂停/运行] + 右下「退出」
 ;;
 ;; 天文（怎么算出晨昏线）：
 ;;   视点固定在地固坐标系的 (0°, 120°E)，屏幕上方为正北、右方为正东；正交投影下
@@ -39,7 +40,15 @@
 ;;     · 只有 UTC 时钟每秒钟重画一行字（fill_rect + draw_text，脏区极小）。
 ;;   稳态 CPU 占用几个百分点。
 ;;
-;; 输入：触屏点按 / 空格 / 回车 → 显示或隐藏 HUD；硬 A/ESC 与右下角「退出」按钮 →
+;; 时间机器（底部控制条）：
+;;   运行态的显示时刻 = 实时 UTC + off_s。[-2分]/[+2分] 每次把偏置挪 ±120 秒；
+;;   [暂停] 冻结时刻（sim_d/sim_s 不再跟随实时），再按「运行」时把"冻结期间积累的时间差"
+;;   折进 off_s —— 于是画面从你冻结的那一刻继续，而不是突然跳回今天；
+;;   [实时] 偏置清零并解除暂停，回到真实时间。
+;;   任何时刻变化都置 scene_dirty，让下一拍立刻重算场景（晨昏线跟着跳）。
+;;
+;; 输入：底部四个按钮（触屏）；其它区域点按 / 空格 / 回车 → 显示或隐藏 HUD 文字；
+;;   键盘 ←/→ = ∓2 分钟，↑ = 实时，↓ = 暂停/运行；硬 A/ESC 与右下「退出」按钮 →
 ;;   全局退出确认框（app/lib/exit.scm）。
 ;;
 ;; 解释器约束（manual.md + doc/AGENTS.md，逐条遵守）：算术恒二参数；无 let/list/map；
@@ -73,29 +82,34 @@
 (define DEG 57.29577951308232)      ; 180/π
 (define PI 3.141592653589793)
 
-;; 渲染窗口：大气壳 = 半径 1 + HS（归一化）的外圈，外圈按 exp(-(b-1)/HS) 衰减到 3.5HS
+;; 渲染窗口：球体 + 球外 HALO_U（≈4px）的一层薄辉光
+(define HALO_U 0.045)               ; 球外辉光的径向厚度（归一化半径；≈4px）。
+                                    ; 真实大气 ~100km/6371km ≈ 1.6%（1.4px），
+                                    ; 这里留 3 倍余量让它可见而不显得"裹了层厚壳"
 (define HS 0.033)                   ; 大气标高（归一化半径；**视觉上把大气厚度夸大**：
                                     ; 真实 100km/6371km ≈ 0.016，这里取 0.02–0.03 的量级，
                                     ; 配合下方的边缘羽化让视圆盘边缘"化开"）
 (define HS2 (* 2.0 HS))
-(define AIR0 (/ 1.0 (Math.sqrt HS2)))   ; 外圈衰减幅度（与 b=1 处的内圈空气量连续）
-(define XMAX 1.15)                  ; 渲染半径 = 1.15R（外圈空气量在此已衰减到 ~1e-3）
+(define AIR0 (/ 1.0 (Math.sqrt HS2)))   ; b=1 处的空气量（内外圈在此严格连续）
+(define S3L (- (* AIR0 (* AIR0 AIR0)) 0.55))  ; b=1 处的 s3（= 内圈的 air³-FLOOR），
+                                              ; 球外用它做三次缓出的起点
+(define XMAX (+ 1.0 HALO_U))        ; 渲染半径 = 1.045R（球外辉光在 HALO_U 处平滑归零）
 (define XMAXR (* RAD XMAX))
 (define XMAX2 (* XMAXR XMAXR))
 (define ATM_R 0.021)                ; 大气内散射通道增益（色调映射前；R:G:B ≈ 1:3.6:12）
 (define ATM_G 0.076)
 (define ATM_B 0.260)
 (define ATM_FLOOR 0.55)             ; 空气量立方的扣除（天顶方向散射几乎抵消，只留淡淡一层蓝）
-(define ATM_AMB 0.015)              ; 夜侧空气辉光的照明下限
+(define ATM_AMB 0.007)              ; 夜侧气辉/多次散射的下限（夜缘只留一道暗蓝弧）
 ;; 大气自身的照明比地表"高"：地平线下 ~7° 以内的高层大气仍被太阳照到，于是晨昏线
 ;; 两侧会出现一道大气辉光亮边（真实轨道照片里的日出/日落带）。
 (define ATM_LIFT 0.10)              ; 被照到的最低太阳天顶角余弦
 (define ATM_LIFT_K 4.5)             ; 斜率（抬升后的照明在此饱和）
 (define EDGE_FADE 0.071)            ; 地表边缘羽化（最外 ~7px 淡出，交给大气接管）
 
-;; 渲染行范围与每拍行数（球 + 外圈 = y 15..222）
-(define ROW_Y0 15)
-(define ROW_Y1 222)
+;; 渲染行范围与每拍行数（球 + 外圈，底部让出控制条）
+(define ROW_Y0 23)
+(define ROW_Y1 213)
 (define STRIP 10)
 
 ;; 贴图取址（列数/行数取自生成模块，单一事实来源）
@@ -142,8 +156,6 @@
 (define HZ 1.0)
 (define SUNUP 0.0)                  ; max(0, SU)
 (define DEC_DEG 0.0)                ; 太阳赤纬（度，HUD）
-(define alt_km 382.4)               ; 空间站高度（km，HUD）
-(define spd_kms 7.68)               ; 轨道速度（km/s，HUD）
 
 ;; ---- 运行状态 --------------------------------------------------------------
 
@@ -152,13 +164,22 @@
 (define hud_dim 0)                  ; 1 = HUD 已隐藏
 (define clk_sec -1)                 ; 上次绘制的 UTC 秒（-1 = 待重画）
 (define scen_sod 0.0)               ; 上次场景开始的 UTC 秒
-(define cur_days 0)                 ; UTC 日数
-(define cur_sod 0)                  ; UTC 当日秒
 (define dt_s 0.0)                   ; 场景计时临时量
 (define civ_y 2026)                 ; 民用历（HUD）
 (define civ_m 1)
 (define civ_d 1)
+;; 时间机器：[−2分] [+2分] [实时] [暂停/运行]
+;;   运行态的显示时刻 = 实时 UTC + off_s（所以"暂停一段时间再恢复"会自然积累成偏置，
+;;   画面里的晨昏线也就一直停留在你离开时的那一刻 —— 直到按『实时』）。
+(define off_s 0)                    ; 相对实时的偏置（秒）
+(define paused 0)                   ; 1 = 时间冻结
+(define sim_d 0)                    ; 模拟 UTC 日数
+(define sim_s 0)                    ; 模拟 UTC 当日秒
+(define scene_dirty 0)              ; 1 = 立刻重算场景（改时刻后置位）
 (define tprev 0)                    ; 触屏上一拍是否按住
+(define tpx 0)                      ; 触点（块内不能 define）
+(define tpy 0)
+(define bi -1)                      ; 命中的按钮下标
 (define keyv 0)                     ; Key.take_press 临时量
 (define _timer 0)                   ; 定时器编号（消费 set_interval 的返回值）
 
@@ -201,6 +222,147 @@
       (set! i (+ i 1))
     })))
 
+;; ---- 时间机器 --------------------------------------------------------------
+
+;; 把 sim_s 归一化到 [0, 86400)，并进位/借位到 sim_d
+(define time_norm
+  (lambda ()
+    (while (>= sim_s 86400) {
+      (set! sim_s (- sim_s 86400))
+      (set! sim_d (+ sim_d 1))
+    })
+    (while (< sim_s 0) {
+      (set! sim_s (+ sim_s 86400))
+      (set! sim_d (- sim_d 1))
+    })))
+
+;; 运行态：模拟时刻 ← 实时 + 偏置（暂停时不调用，时刻冻结）
+(define time_sync
+  (lambda ()
+    (set! sim_d (Time.utc_days))
+    (set! sim_s (+ (Time.utc_sod) off_s))
+    (time_norm)))
+
+;; 步进 d 秒（±120）：暂停时直接挪冻结的时刻，运行态挪偏置
+(define time_step
+  (lambda (d)
+    (if (== paused 1)
+        {
+          (set! sim_s (+ sim_s d))
+          (time_norm)
+        }
+        {
+          (set! off_s (+ off_s d))
+          (time_sync)
+        })
+    (set! scene_dirty 1)))
+
+;; 从暂停恢复：把"冻结期间积累的时间差"折进偏置，于是从冻结那一刻继续走
+(define time_resume
+  (lambda ()
+    (set! off_s (+ (* (- sim_d (Time.utc_days)) 86400)
+                   (- sim_s (Time.utc_sod))))
+    (set! paused 0)
+    (time_sync)
+    (set! scene_dirty 1)))
+
+;; 回到实时：偏置清零 + 解除暂停
+(define time_live
+  (lambda ()
+    (set! off_s 0)
+    (set! paused 0)
+    (time_sync)
+    (set! scene_dirty 1)))
+
+;; 诊断行（e2e 断言时刻确实被改过；每次按钮动作打一行）
+(define time_log
+  (lambda ()
+    (display "[earthport] time day=") (display sim_d)
+    (display " sod=") (display sim_s)
+    (display " off=") (display off_s)
+    (display " paused=") (display paused)
+    (newline)))
+
+;; ---- 底部控制条（4 个按钮；右下角「退出」由 app/lib/exit.scm 画）-----------
+
+(define BTN_Y 219)
+(define BTN_H 18)
+(define BTN_W 62)
+(define BTN_GAP 3)
+
+(define btn_x (lambda (i) (+ 4 (* i (+ BTN_W BTN_GAP)))))
+
+(define btn_label
+  (lambda (i)
+    (if (== i 0) "-2分"
+        (if (== i 1) "+2分"
+            (if (== i 2) "实时"
+                (if (== paused 1) "运行" "暂停"))))))
+
+;; 高亮：暂停键在冻结时高亮；『实时』在"正在实时"时高亮；快进快退不高亮
+(define btn_active
+  (lambda (i)
+    (if (== i 2) (if (and (== paused 0) (== off_s 0)) 1 0)
+        (if (== i 3) paused 0))))
+
+(define draw_btns
+  (lambda ()
+    (define i 0)
+    (define x 0)
+    (define lab "")
+    (define lx 0.0)
+    (while (< i 4) {
+      (set! x (btn_x i))
+      (set! lab (btn_label i))
+      (set! lx (+ x (* (- BTN_W (text_w lab)) 0.5)))
+      (if (== (btn_active i) 1)
+          {
+            (Gfx.rounded_rect x BTN_Y BTN_W BTN_H 4 4 4 4 108 168 232 1)
+            (Gfx.rounded_rect (+ x 1) (+ BTN_Y 1) (- BTN_W 2) (- BTN_H 2) 3 3 3 3 96 152 216 1)
+            (Gfx.draw_text lab lx (+ BTN_Y 3) 8 16 28)
+          }
+          {
+            (Gfx.rounded_rect x BTN_Y BTN_W BTN_H 4 4 4 4 52 74 104 1)
+            (Gfx.rounded_rect (+ x 1) (+ BTN_Y 1) (- BTN_W 2) (- BTN_H 2) 3 3 3 3 24 30 46 1)
+            (Gfx.draw_text lab lx (+ BTN_Y 3) 186 208 232)
+          })
+      (set! i (+ i 1))
+    })))
+
+;; 触点落在哪个按钮上（不在控制条里返回 -1）
+(define btn_hit
+  (lambda (px py)
+    (define r -1)
+    (define i 0)
+    (if (and (>= py BTN_Y) (< py (+ BTN_Y BTN_H)))
+        {
+          (while (< i 4) {
+            (if (and (>= px (btn_x i)) (< px (+ (btn_x i) BTN_W)))
+                (set! r i)
+                #f)
+            (set! i (+ i 1))
+          })
+        }
+        #f)
+    r))
+
+(define btn_do
+  (lambda (i)
+    (if (== i 0) (time_step -120) #f)
+    (if (== i 1) (time_step 120) #f)
+    (if (== i 2) (time_live) #f)
+    (if (== i 3)
+        (if (== paused 1)
+            (time_resume)
+            (set! paused 1))
+        #f)
+    (set! clk_sec -1)
+    (draw_btns)
+    (draw_clock)
+    (draw_hud_static)
+    (Gfx.refresh)
+    (time_log)))
+
 ;; ---- 星历：太阳方向 --------------------------------------------------------
 
 (define sun_update
@@ -210,13 +372,10 @@
     (define hr 0.0)
     (define cd 0.0)
     (define hl 0.0)
-    (define alt 0.0)
-    (set! cur_days (Time.utc_days))
-    (set! cur_sod (Time.utc_sod))
-    (Ephem.set_time cur_days cur_sod)
+    (Ephem.set_time sim_d sim_s)
     (Ephem.set_gmst)
     (Ephem.sun_equatorial)
-    (Ephem.civil cur_days)
+    (Ephem.civil sim_d)
     (set! civ_y (Ephem.get_civ_y))
     (set! civ_m (Ephem.get_civ_m))
     (set! civ_d (Ephem.get_civ_d))
@@ -236,17 +395,13 @@
     (set! HY (/ SN hl))
     (set! HZ (/ (+ SU 1.0) hl))
     (set! SUNUP (if (> SU 0.0) SU 0.0))
-    ;; 空间站高度：75 天周期的缓慢起伏（±2.8km，接近真实的阻尼/抬轨幅度）；
-    ;; 速度由活力公式给出 v = sqrt(μ / (Re + h))。两者都只是为了 HUD 有"活气"。
-    (set! alt (+ 382.0 (* 2.8 (Math.sin (* (mod cur_days 75.0) 0.08377580409572781)))))
-    (set! alt_km alt)
-    (set! spd_kms (Math.sqrt (/ 398600.4418 (+ 6378.137 alt))))
   ))
 
 ;; ---- 场景绘制（分条渐进） --------------------------------------------------
 
 (define rnd_start
   (lambda ()
+    (display "[earthport] scene start") (newline)
     (sun_update)
     (set! rnd_y ROW_Y0)
     (set! rnd_active 1)))
@@ -285,6 +440,7 @@
     (define nv 0.0)
     (define lk 0.0)
     (define sunv 0.0)
+    (define dl 0.0)
     (define sfac 0.0)
     (define dusk 0.0)
     (define airs 0.0)
@@ -299,6 +455,7 @@
     (define ab 0.0)
     (define cov 0.0)
     (define bo 0.0)
+    (define xo 0.0)
     (define xext 0.0)
     (if (> yend ROW_Y1) (set! yend ROW_Y1) #f)
     (while (< y yend) {
@@ -387,19 +544,26 @@
                     (set! air (/ 1.0 (Math.sqrt (- (+ 1.0 HS2) q))))
                     (set! s3 (- (* air (* air air)) ATM_FLOOR))
                     (if (< s3 0.0) (set! s3 0.0) #f)
-                    (set! lit (* (+ sunv ATM_LIFT) ATM_LIFT_K))
+                    ;; 大气照明用**切点法向的太阳投影** dl = u·sEast + sinLat·sNorth
+                    ;;（**不含 w 项**）。理由：决定这段大气亮不亮的是"视线掠射路径上
+                    ;;  最近点的法向"，而球面在天顶方向每像素只转 0.6°、在视圆盘边缘却
+                    ;;  一转就是 6°（球面与视线相切）——用含 w 的地表法向做照明，亮环内侧
+                    ;;  必然出现 1px 的亮度断层；dl 跨边缘连续且平滑。
+                    (set! dl (+ (* u SE) (* sny SN)))
+                    (set! lit (* (+ dl ATM_LIFT) ATM_LIFT_K))
                     (if (< lit 0.0) (set! lit 0.0) #f)
                     (if (> lit 1.0) (set! lit 1.0) #f)
                     ;; 拆成两股：**被阳光照到的那股**（沿视线看到的日照大气）与**环境那股**
-                    ;; （气辉/多次散射）。只有前者按"入射阳光穿过的气柱长度"红化，后者保持蓝
-                    ;; —— 否则夜半球的边缘会被红化成灰，而真实轨道照片里它仍是蓝的。
-                    (set! sl (* (* s3 (- 1.0 ATM_AMB)) lit))
-                    (set! sa (* s3 ATM_AMB))
-                    ;; 低太阳红化：airs = 太阳方向空气量（1/sqrt(cos²+2H)，天顶 1、晨昏 ~4），
-                    ;;   warm = 蓝的保留率（天顶 1 → 晨昏 ~0.55），红/绿按互补增益抬升。
-                    ;;   全部只由 sunv/dot 连续驱动 ⇒ 色相沿晨昏线连续过渡（没有分情况特例）。
+                    ;; （气辉/多次散射）。只有前者按"入射阳光穿过的气柱长度"红化并衰减，
+                    ;; 后者保持蓝 —— 否则夜半球的边缘会被红化成灰，而真实轨道照片里它仍是蓝的。
+                    ;;   airs = 太阳方向空气量（1/sqrt(cos²+2H)：天顶 1、晨昏 ~4.2）
+                    ;;   warm = 蓝的保留率（1/(1+0.3(airs-1))：天顶 1 → 晨昏 ~0.51）
+                    ;;   透射率取 warm³ ⇒ 晨昏线附近既偏暖又明显变暗，不会与正午亮环同亮。
+                    (set! sunv (if (< dl 0.0) 0.0 dl))
                     (set! airs (/ 1.0 (Math.sqrt (+ (* sunv sunv) HS2))))
                     (set! warm (/ 1.0 (+ 1.0 (* SUN_RED (- airs 1.0)))))
+                    (set! sl (* (* (* s3 (- 1.0 ATM_AMB)) lit) (* warm (* warm warm))))
+                    (set! sa (* s3 ATM_AMB))
                     (set! ar (+ (* (* sl ATM_R) (- 2.0 warm)) (* sa ATM_R)))
                     (set! ag (+ (* (* sl ATM_G) (+ 0.4 (* 0.6 warm))) (* sa ATM_G)))
                     (set! ab (+ (* (* sl ATM_B) warm) (* sa ATM_B)))
@@ -409,19 +573,24 @@
                                    (+ b (/ (* 255.0 ab) (+ ab 1.0))))
                   }
                   { ; ==================== 球外：只有大气（柔和边缘） ====================
+                    ;; 球外只有大气：柱密度从 b=1 处的值起，按三次缓出平滑归零
+                    ;;   用 exp(-u/H)³ 曾让辉光每 1px 掉一半（1/e 尺度只剩 3px），
+                    ;;   肉眼就是"一圈硬边的亮环"；三次窗在整个 HALO_U（≈12px）上
+                    ;;   连续衰减且末端斜率为 0 ⇒ 边缘化开、与球内在 b=1 严格连续。
                     (set! bo (- (Math.sqrt q) 1.0))
-                    (set! air (* AIR0 (Math.exp (- 0.0 (/ bo HS)))))
-                    (set! s3 (- (* air (* air air)) ATM_FLOOR))
-                    (if (< s3 0.0) (set! s3 0.0) #f)
+                    (set! xo (- 1.0 (/ bo HALO_U)))
+                    (if (< xo 0.0) (set! xo 0.0) #f)
+                    (set! s3 (* S3L (* xo (* xo xo))))
                     (set! u (* dxf RINV))
-                    (set! sunv (+ (* u SE) (* sny SN)))
-                    (if (< sunv 0.0) (set! sunv 0.0) #f)
-                    (set! lit (* (+ sunv ATM_LIFT) ATM_LIFT_K))
+                    (set! dl (+ (* u SE) (* sny SN)))   ; 缘上法向的太阳投影（可为负）
+                    (set! lit (* (+ dl ATM_LIFT) ATM_LIFT_K))
+                    (if (< lit 0.0) (set! lit 0.0) #f)
                     (if (> lit 1.0) (set! lit 1.0) #f)
-                    (set! sl (* (* s3 (- 1.0 ATM_AMB)) lit))
-                    (set! sa (* s3 ATM_AMB))
+                    (set! sunv (if (< dl 0.0) 0.0 dl))
                     (set! airs (/ 1.0 (Math.sqrt (+ (* sunv sunv) HS2))))
                     (set! warm (/ 1.0 (+ 1.0 (* SUN_RED (- airs 1.0)))))
+                    (set! sl (* (* (* s3 (- 1.0 ATM_AMB)) lit) (* warm (* warm warm))))
+                    (set! sa (* s3 ATM_AMB))
                     (set! ar (+ (* (* sl ATM_R) (- 2.0 warm)) (* sa ATM_R)))
                     (set! ag (+ (* (* sl ATM_G) (+ 0.4 (* 0.6 warm))) (* sa ATM_G)))
                     (set! ab (+ (* (* sl ATM_B) warm) (* sa ATM_B)))
@@ -465,6 +634,18 @@
       (String.concat (String.atom_to_string iv)
         (String.concat "." (String.concat pad (String.atom_to_string fr)))))))
 
+;; 单行文本宽度（12px 字模：半角 7px、全角 12px）—— 自算比调 draw_text_centered 可靠
+(define text_w
+  (lambda (s)
+    (define i 0)
+    (define n (String.length s))
+    (define w 0)
+    (while (< i n) {
+      (if (> (String.charCodeAt i s) 255.0) (set! w (+ w 12)) (set! w (+ w 7)))
+      (set! i (+ i 1))
+    })
+    w))
+
 (define pad2
   (lambda (v)
     (if (< v 10.0)
@@ -480,7 +661,7 @@
 ;; 右对齐版本（xr = 右边界）
 (define hud_text_r
   (lambda (s xr y nch)
-    (hud_text s (- xr (* nch 7)) y nch)))
+    (hud_text s (- xr (text_w s)) y nch)))
 
 (define draw_clock
   (lambda ()
@@ -491,21 +672,46 @@
     (if (== hud_dim 1)
         #f
         {
-          (set! sec0 (mod cur_sod 60.0))
-          (set! min0 (mod (/ (- cur_sod sec0) 60.0) 60.0))
-          (set! hr0 (/ (- (- cur_sod sec0) (* min0 60.0)) 3600.0))
+          (set! sec0 (mod sim_s 60.0))
+          (set! min0 (mod (/ (- sim_s sec0) 60.0) 60.0))
+          (set! hr0 (/ (- (- sim_s sec0) (* min0 60.0)) 3600.0))
           (set! str (String.concat "UTC " (String.concat (pad2 hr0)
                           (String.concat ":" (String.concat (pad2 min0)
                           (String.concat ":" (pad2 sec0)))))))
           (hud_text str 6 3 13)
         })))
 
+;; 时间状态徽标（右上第二行）：暂停 → "暂停"；有偏置 → ±h:mm；实时且运行 → 空
+(define draw_badge
+  (lambda ()
+    (define s "")
+    (define mins 0.0)
+    (define oh 0.0)
+    (define om 0.0)
+    (define av 0.0)
+    (Gfx.fill_rect (- W 60) 17 60 15 BG_R BG_G BG_B)
+    (set! av off_s)
+    (if (< av 0.0) (set! av (- 0.0 av)) #f)
+    (if (== paused 1)
+        (set! s "暂停")
+        (if (> av 0.0)
+            {
+              (set! mins (Math.floor (/ av 60.0)))
+              (set! oh (Math.floor (/ mins 60.0)))
+              (set! om (- mins (* oh 60.0)))
+              (set! s (String.concat (if (< off_s 0.0) "-" "+")
+                       (String.concat (String.atom_to_string oh)
+                       (String.concat ":" (pad2 om)))))
+            }
+            #f))
+    (if (> (String.length s) 0)
+        (Gfx.draw_text s (- (- W 9) (text_w s)) 18 226 186 110)
+        #f)))
+
 (define draw_hud_static
   (lambda ()
     (define dstr "")
     (define sdec "")
-    (define astr "")
-    (define sstr "")
     (if (== hud_dim 1)
         #f
         {
@@ -515,12 +721,9 @@
           (set! sdec (String.concat "DEC " (String.concat
                         (if (>= DEC_DEG 0.0) "+" "-")
                         (String.concat (num_fix (Math.abs DEC_DEG) 1) "°"))))
-          (set! astr (String.concat "CSS " (String.concat (num_fix alt_km 1) " KM")))
-          (set! sstr (String.concat (num_fix spd_kms 2) " KM/S"))
           (hud_text dstr 6 18 12)
           (hud_text_r sdec (- W 6) 3 11)
-          (hud_text astr 6 222 11)
-          (hud_text_r sstr (- W 58) 222 9)
+          (draw_badge)
         })))
 
 ;; 只擦 HUD 文字所在的小矩形（不碰球/辉光/刻度环）
@@ -529,8 +732,7 @@
     (Gfx.fill_rect 4 1 112 16 BG_R BG_G BG_B)
     (Gfx.fill_rect 4 16 96 16 BG_R BG_G BG_B)
     (Gfx.fill_rect (- W 100) 1 96 16 BG_R BG_G BG_B)
-    (Gfx.fill_rect 4 221 96 17 BG_R BG_G BG_B)
-    (Gfx.fill_rect (- W 130) 221 74 17 BG_R BG_G BG_B)))
+    (Gfx.fill_rect (- W 60) 16 60 16 BG_R BG_G BG_B)))
 
 ;; ---- 输入 ------------------------------------------------------------------
 
@@ -556,7 +758,12 @@
                 (if (== tprev 0)
                     {
                       (Touch.take_press)
-                      (toggle_hud)
+                      (set! tpx (Touch.x))
+                      (set! tpy (Touch.y))
+                      (set! bi (btn_hit tpx tpy))
+                      (if (>= bi 0)
+                          (btn_do bi)           ; 控制条：交给按钮（不切换 HUD）
+                          (toggle_hud))         ; 其它区域：显示/隐藏 HUD 文字
                     }
                     #f)
                 (set! tprev 1)
@@ -565,6 +772,7 @@
         }
         #f)))
 
+;; 键盘：← → 步进 2 分钟，↑ 回到实时，↓ 暂停/运行，空格/回车 切换 HUD
 (define read_key
   (lambda ()
     (if (Key.is_available)
@@ -572,6 +780,10 @@
           (set! keyv (Key.take_press))
           (while (> keyv 0)
             {
+              (if (== keyv 3) (btn_do 0) #f)
+              (if (== keyv 4) (btn_do 1) #f)
+              (if (== keyv 1) (btn_do 2) #f)
+              (if (== keyv 2) (btn_do 3) #f)
               (if (or (== keyv 32) (== keyv 13)) (toggle_hud) #f)
               (set! keyv (Key.take_press))
             })
@@ -595,11 +807,12 @@
   (lambda ()
     (draw_bg)
     (draw_stars)
-    (EX.draw_button_at 270 219)
+    (EX.draw_button_at 266 220)
+    (draw_btns)
     ;; 先补 HUD（球体由随后的分条绘制补），退出确认框关掉后立刻恢复原样
     (draw_clock)
     (draw_hud_static)
-    (set! clk_sec cur_sod)
+    (set! clk_sec -1)
     (set! rnd_y ROW_Y0)
     (set! rnd_active 1)
     (Gfx.refresh)))
@@ -609,22 +822,23 @@
     (EX.check)                          ; 硬 A/ESC / 右下角「退出」
     (read_touch)
     (read_key)
-    (set! cur_sod (Time.utc_sod))
-    ;; 时钟：每秒一次
-    (if (== cur_sod clk_sec)
+    (if (== paused 0) (time_sync) #f)    ; 运行态：模拟时刻 = 实时 + 偏置
+    ;; 时钟：每秒一次（暂停时 sim_s 不动，自然不重画）
+    (if (== sim_s clk_sec)
         #f
         {
-          (set! clk_sec cur_sod)
+          (set! clk_sec sim_s)
           (draw_clock)
         })
-    ;; 场景调度：空闲且距上次场景开始超过 SCENE_S 秒 → 重算
+    ;; 场景调度：空闲且（距上次场景超过 SCENE_S 模拟秒 或 时刻被改过）→ 重算
     (if (== rnd_active 0)
         {
-          (set! dt_s (- cur_sod scen_sod))
+          (set! dt_s (- sim_s scen_sod))
           (if (< dt_s 0.0) (set! dt_s (+ dt_s 86400.0)) #f)
-          (if (>= dt_s SCENE_S)
+          (if (or (>= dt_s SCENE_S) (== scene_dirty 1))
               {
-                (set! scen_sod cur_sod)
+                (set! scen_sod sim_s)
+                (set! scene_dirty 0)
                 (rnd_start)
               }
               #f)
@@ -652,13 +866,14 @@
 (Gfx.set_font 1)            ; 12px 抗锯齿字模（HUD）
 (mkc_stars)
 (EX.install_with redraw_all)
+(time_live)                 ; 初始：显示实时
 (draw_bg)
 (draw_stars)
-(EX.draw_button_at 270 219)
-(sun_update)
-(set! scen_sod cur_sod)
-(set! rnd_y ROW_Y0)
-(set! rnd_active 1)
+(EX.draw_button_at 266 220)
+(draw_btns)
+(rnd_start)                 ; 第一帧场景（分条渐进，由定时器逐拍推进）
+(set! scene_dirty 0)        ; time_live 置过的"待重算"已由上面这一帧满足
+(set! scen_sod sim_s)
 (draw_clock)
 (draw_hud_static)
 (Gfx.refresh)

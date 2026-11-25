@@ -236,9 +236,11 @@ BG_R, BG_G, BG_B = 1.0, 2.0, 6.0
 
 # 大气（与 app/earthport.scm 逐条一致；改这里必须同步改那边）
 HS = 0.033            # 大气标高（归一化半径）
+HALO_U = 0.045        # 球外辉光径向厚度（归一化半径，≈4px；真实大气约 1.6% → 1.4px，留 3 倍余量）
 AIR0 = 1.0 / math.sqrt(2.0 * HS)
+S3L = AIR0 ** 3 - 0.55          # b=1 处的散射量（内外圈在此严格连续）
 ATM_R, ATM_G, ATM_B = 0.021, 0.076, 0.260   # 散射通道增益（色调映射前）
-ATM_AMB = 0.015       # 夜侧空气辉光的照明下限
+ATM_AMB = 0.007       # 夜侧气辉/多次散射下限（夜缘只留一道暗蓝弧）
 ATM_FLOOR = 0.55      # 空气量立方的扣除量（天顶方向的散射几乎抵消，只留淡淡的蓝）
 ATM_LIFT = 0.10       # 大气被照到的最低太阳天顶角余弦（≈地平线下 7°）
 ATM_LIFT_K = 4.5      # 抬升后的照明斜率（dot≈+0.10 时饱和）
@@ -283,22 +285,29 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, glow=0.
     u = dx / R_GL
     sn_ = -dy / R_GL
 
-    def atmos(air, sunv):
+    def atmos(air, dl):
+        """大气散射：air = 视线方向空气量；dl = **切点法向**的太阳投影（跨视圆盘边缘连续）。
+
+        返回三段色调映射后的加色值。拆成两股：
+          · 日照那股（按入射阳光的气柱长度红化 + warm³ 衰减）
+          · 环境那股（气辉/多次散射，保持蓝、不红化）
+        """
         s3 = air * air * air - ATM_FLOOR
         if s3 < 0.0:
             s3 = 0.0
-        lit = (sunv + ATM_LIFT) * ATM_LIFT_K
+        lit = (dl + ATM_LIFT) * ATM_LIFT_K
         lit = 0.0 if lit < 0.0 else (1.0 if lit > 1.0 else lit)
-        # 拆成两股：被阳光直射的那股按空气量红化；环境那股（气辉/多次散射）保持蓝
-        sl = s3 * (1.0 - ATM_AMB) * lit
-        sa = s3 * ATM_AMB
+        sunv = dl if dl > 0.0 else 0.0
         airs = 1.0 / math.sqrt(sunv * sunv + 2.0 * HS)
         warm = 1.0 / (1.0 + SUN_RED * (airs - 1.0))
+        sl = s3 * (1.0 - ATM_AMB) * lit * warm * warm * warm
+        sa = s3 * ATM_AMB
         out = []
         for k, g in ((ATM_R, 2.0 - warm), (ATM_G, 0.4 + 0.6 * warm), (ATM_B, warm)):
             a = sl * k * g + sa * k
             out.append(255.0 * a / (a + 1.0))
         return out
+
 
     if q <= 1.0:
         w = math.sqrt(max(0.0, 1.0 - q))
@@ -330,15 +339,28 @@ def shade_pixel(dx, dy, se, sn, su, hx, hy, hz, day_rgb, night_v, water, glow=0.
         t = min(1.0, (1.0 - q) * R_GL * EDGE_FADE)
         cov = t * t * (3.0 - 2.0 * t)
         r, g, b = r * cov, g * cov, b * cov
-        ar, ag, ab = atmos(1.0 / math.sqrt(1.0 - q + 2.0 * HS), sunv)
+        dl = u * se + sn_ * sn          # 切点法向的太阳投影（不含 w 项，跨边缘连续）
+        ar, ag, ab = atmos(1.0 / math.sqrt(1.0 - q + 2.0 * HS), dl)
         return (r + ar, g + ag, b + ab)
 
     bo = math.sqrt(q) - 1.0
-    if bo < 0.10:
-        air = AIR0 * math.exp(-bo / HS)
-        sunv = max(0.0, u * se + sn_ * sn)
-        ar, ag, ab = atmos(air, sunv)
-        return (BG_R + ar, BG_G + ag, BG_B + ab)
+    if bo < HALO_U:
+        # 球外只有大气：柱密度从 b=1 处的值起，按三次缓出平滑归零（末段斜率为 0）
+        xo = 1.0 - bo / HALO_U
+        s3 = S3L * xo * xo * xo
+        dl = u * se + sn_ * sn
+        lit = (dl + ATM_LIFT) * ATM_LIFT_K
+        lit = 0.0 if lit < 0.0 else (1.0 if lit > 1.0 else lit)
+        sunv = dl if dl > 0.0 else 0.0
+        airs = 1.0 / math.sqrt(sunv * sunv + 2.0 * HS)
+        warm = 1.0 / (1.0 + SUN_RED * (airs - 1.0))
+        sl = s3 * (1.0 - ATM_AMB) * lit * warm * warm * warm
+        sa = s3 * ATM_AMB
+        out = []
+        for k, g in ((ATM_R, 2.0 - warm), (ATM_G, 0.4 + 0.6 * warm), (ATM_B, warm)):
+            a = sl * k * g + sa * k
+            out.append(255.0 * a / (a + 1.0))
+        return (BG_R + out[0], BG_G + out[1], BG_B + out[2])
     return None
 
 
