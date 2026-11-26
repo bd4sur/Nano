@@ -473,9 +473,16 @@
 (define sy_hei 0.0)
 (define sy_rot 0.0)
 (define sy_ink 1.0)
+(define sy_rc 0.0)
 (define sy_colw 0.0)
 (define sy_jit 0.0)
-(define sy_prev_r 0.0)
+(define sy_prev_cx -100.0)
+(define sy_prev_cy -100.0)
+(define sy_prev_s 0.0)
+(define sy_hw 0.0)
+(define sy_hw2 0.0)
+(define sy_dxmin 0.0)
+(define sy_cygap 0.0)
 (define sy_minx 0.0)
 (define sy_maxx 63.0)
 (define sy_miny 0.0)
@@ -485,10 +492,17 @@
 (define sy_build
   (lambda () {
     (sy_paper)
-    ;; 数字个数 1~4（训练集是 1~6；示例要"像验证码"，个数随机）
-    (set! sy_cnt (+ 1 (sy_rndi 0 3)))
+    ;; 数字个数 1~4（训练集是 1~6）：加权抽样，多数样本有 2~3 个数字，
+    ;; 1 个/4 个各占少数 —— 既随机，又不会连点几次都是孤零零一个数字。
+    (set! sy_rc (sy_rnd))
+    (if (< sy_rc 0.15) (set! sy_cnt 1) #f)
+    (if (and (>= sy_rc 0.15) (< sy_rc 0.45)) (set! sy_cnt 2) #f)
+    (if (and (>= sy_rc 0.45) (< sy_rc 0.80)) (set! sy_cnt 3) #f)
+    (if (>= sy_rc 0.80) (set! sy_cnt 4) #f)
     (set! sy_colw (/ 64.0 (+ sy_cnt 1)))
-    (set! sy_prev_r (- 0.0 8.0))      ; 上一个数字的右边界（保证互不重叠）
+    (set! sy_prev_cx -100.0)          ; 上一个数字的位置/大小（用来限制重叠量）
+    (set! sy_prev_cy -100.0)
+    (set! sy_prev_s 0.0)
     (set! sy_j 0)
     (while (< sy_j sy_cnt) {
       (set! sy_lab (sy_rndi 0 9))
@@ -512,13 +526,24 @@
       (set! sy_miny (+ (* 0.5 sy_s) 1.0))
       (set! sy_maxy (- IMG (+ (* 0.5 sy_s) 1.0)))
       (if (< sy_cx sy_minx) (set! sy_cx sy_minx) #f)
-      (if (< (- sy_cx (* 0.46 sy_s)) (+ sy_prev_r 1.0))
-          (set! sy_cx (+ (+ sy_prev_r 1.0) (* 0.46 sy_s)))
-          #f)
       (if (> sy_cx sy_maxx) (set! sy_cx sy_maxx) #f)
       (set! sy_cy (+ sy_miny (* (sy_rnd) (- sy_maxy sy_miny))))
+      ;; 允许**轻微**重叠（训练集本身也允许数字叠在一起），但不许糊成一团：
+      ;;   横向最多叠掉较窄那个的 25%；只有纵向完全不交（上下错开）时才放开横向。
+      (set! sy_hw (* 0.46 sy_s))
+      (set! sy_hw2 (* 0.46 sy_prev_s))
+      (set! sy_dxmin (- (+ sy_hw sy_hw2) (* 0.5 (minf sy_hw sy_hw2))))
+      (set! sy_cygap (Math.abs (- sy_cy sy_prev_cy)))
+      (if (< sy_cygap (+ (* 0.5 sy_s) (* 0.5 sy_prev_s)))
+          (if (< (- sy_cx sy_prev_cx) sy_dxmin)
+              (set! sy_cx (+ sy_prev_cx sy_dxmin))
+              #f)
+          #f)
+      (if (> sy_cx sy_maxx) (set! sy_cx sy_maxx) #f)
       (sy_digit sy_lab sy_rad)
-      (set! sy_prev_r (+ sy_cx (* 0.46 sy_s)))
+      (set! sy_prev_cx sy_cx)
+      (set! sy_prev_cy sy_cy)
+      (set! sy_prev_s sy_s)
       (set! sy_j (+ sy_j 1))
     })
     (set! gt_n 0)
