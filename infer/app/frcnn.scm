@@ -4,14 +4,13 @@
 ;; ============================================================================
 ;; frcnn.scm —— Faster R-CNN 两阶段目标检测的**可视化教学演示**（Nano「灵机应用程序」）
 ;;
-;; 交互（三段）：
+;; 交互（两段）：
 ;;   ① 绘制：启动就是一张空白 64x64 画板（放大 3 倍显示），手指直接写 1~6 个数字
-;;      （允许重叠）。写完点「开始识别」。
-;;   ② 流水线：把两阶段检测拆成 11 步，自动跑一遍（进度条可见），跑完停在「最终检测」。
-;;      之后可以用 « < » « > » 单步回看（中间结果全部保留、不重算），点左图的框或右栏
-;;      的列表项都能在左下角看到它的类别/置信度/坐标。
-;;   ③ 卷积：单独一页讲 CNN 每层怎么算出来的——3×3 窗口在输入上滑动、9 个数加权求和、
-;;      8/24 个通道的数据如何汇合到下一层的一格。窗口会自己慢慢滑，也能点格子跳过去。
+;;      （允许重叠）；也可以点「示例」现场合成一张（随机数字/个数/位置/大小）。
+;;      写完点「开始识别」。
+;;   ② 流水线：把两阶段检测拆成 11 步，自动跑一遍，跑完停在「最终检测」。之后可以用
+;;      < / > 单步回看（中间结果全部保留、不重算），点左图的框或右栏的列表项都能在
+;;      左下角看到它的类别/置信度/坐标。
 ;;
 ;; 网络（权重由 tools/train_frcnn_digits.py 离线训练导出，见 app/lib/frcnn_weights.scm）：
 ;;   【第一阶段】conv1(3x3s2, 8ch) → conv2(3x3s2, 24ch) → conv3(3x3 逐通道 + 1x1, 24ch)
@@ -206,25 +205,20 @@
 ;;   · 标签由 (Gfx.draw_text_centered) 画在按钮**正中**（水平、垂直都居中）；
 ;;   · 命中判定用 (BTN.hit)（纯几何），边沿仍由本 App 自己的 _p 判定（画板笔划也要用）。
 
-(define NB 15)
+(define NB 11)
 (define BL 0)            ; 按钮池（NB 枚 BTN 描述表）
 (define B_ON 0)          ; 每枚按钮的激活标记
 
-(define S_H0 0)          ; 头部：清空 / 重画 / 层1
-(define S_H1 1)          ; 头部：示例 / 层2
-(define S_H2 2)          ; 头部：卷积 / 检测
-(define S_PREV 3)        ; 结果页 <
-(define S_NEXT 4)        ; 结果页 >
-(define S_AUTO 5)        ; 结果页 自动/暂停
-(define S_CHL 6)         ; 右栏 通道 <
-(define S_CHR 7)         ; 右栏 通道 >
-(define S_FINE 8)        ; 画板页 细
-(define S_COAR 9)        ; 画板页 粗
-(define S_SAMP 10)       ; 画板页 换个示例
-(define S_RUN 11)        ; 画板页 开始识别
-(define S_CVL 12)        ; 卷积页 通道 <
-(define S_CVR 13)        ; 卷积页 通道 >
-(define S_CVA 14)        ; 卷积页 停窗/滑窗
+(define S_H0 0)          ; 头部：清空 / 重画
+(define S_H1 1)          ; 头部：示例
+(define S_PREV 2)        ; 结果页 <
+(define S_NEXT 3)        ; 结果页 >
+(define S_AUTO 4)        ; 结果页 自动/暂停
+(define S_CHL 5)         ; 右栏 通道 <
+(define S_CHR 6)         ; 右栏 通道 >
+(define S_FINE 7)        ; 画板页 细
+(define S_COAR 8)        ; 画板页 粗
+(define S_RUN 9)         ; 画板页 开始识别
 
 (define bslot (lambda (i) (get_item BL i)))
 (define bhit (lambda (i px py) (BTN.hit (bslot i) px py)))
@@ -268,9 +262,8 @@
       (set! b_i (+ b_i 1))
     })
     ;; ---- 矩形：一次设好，各模式共用（头部三枚在三种模式下位置相同）----
-    (bset S_H0 96 2 46 16)
-    (bset S_H1 146 2 46 16)
-    (bset S_H2 196 2 46 16)
+    (bset S_H0 96 2 56 16)
+    (bset S_H1 156 2 56 16)
     ;; 结果页第二行（步骤条）
     (bset S_PREV 4 19 20 15)
     (bset S_NEXT 26 19 20 15)
@@ -279,14 +272,9 @@
     (bset S_CHL 136 50 18 14)
     (bset S_CHR 222 50 18 14)
     ;; 画板页右栏
-    (bset S_SAMP 200 28 112 22)
-    (bset S_FINE 200 56 52 22)
-    (bset S_COAR 260 56 52 22)
-    (bset S_RUN 200 104 112 30)
-    ;; 卷积页第二行
-    (bset S_CVL 78 19 18 15)
-    (bset S_CVR 164 19 18 15)
-    (bset S_CVA 186 19 46 15)
+    (bset S_FINE 200 28 52 24)
+    (bset S_COAR 260 28 52 24)
+    (bset S_RUN 200 84 112 32)
     #t
   }))
 
@@ -297,31 +285,19 @@
         {
           (bput S_H0 "清空" 0)
           (bput S_H1 "示例" 0)
-          (bput S_H2 "卷积" 0)
           (bput S_FINE "细" 0)
           (bput S_COAR "粗" 0)
-          (bput S_SAMP "换个示例" 0)
           (bput S_RUN "开始识别" (if (and (== drawn 1) (== busy 0)) 1 0))
         }
-        (if (== mode 1)
-            {
-              (bput S_H0 "重画" 0)
-              (bput S_H1 "示例" 0)
-              (bput S_H2 "卷积" 0)
-              (bput S_PREV "<" 0)
-              (bput S_NEXT ">" 0)
-              (bput S_AUTO (if (== autorun 1) "暂停" "自动") (if (== autorun 1) 1 0))
-              (bput S_CHL "<" 0)
-              (bput S_CHR ">" 0)
-            }
-            {
-              (bput S_H0 "层1" (if (== cv_layer 0) 1 0))
-              (bput S_H1 "层2" (if (== cv_layer 1) 1 0))
-              (bput S_H2 "检测" 0)
-              (bput S_CVL "<" 0)
-              (bput S_CVR ">" 0)
-              (bput S_CVA (if (== cv_anim 1) "停窗" "滑窗") (if (== cv_anim 1) 1 0))
-            }))
+        {
+          (bput S_H0 "重画" 0)
+          (bput S_H1 "示例" 0)
+          (bput S_PREV "<" 0)
+          (bput S_NEXT ">" 0)
+          (bput S_AUTO (if (== autorun 1) "暂停" "自动") (if (== autorun 1) 1 0))
+          (bput S_CHL "<" 0)
+          (bput S_CHR ">" 0)
+        })
   }))
 
 ;; 命中测试必须返回布尔：本解释器里 **0 也是真值**，用 0/1 当真假会让每个按钮
@@ -351,7 +327,7 @@
 
 ;; ---- 状态 ---------------------------------------------------------------
 
-(define mode 0)          ; 0 = 绘制（空白画板）/ 1 = 流水线结果 / 2 = 卷积细节
+(define mode 0)          ; 0 = 绘制（空白画板）/ 1 = 流水线结果
 (define stage 0)         ; 已完成的最后一步（0..10）
 (define todo 0)
 (define busy 0)
@@ -375,13 +351,6 @@
 (define pen_last_y 0.0)
 (define brush_r 1.8)
 
-(define cv_layer 0)
-(define cv_cell 0)
-(define cv_ch 0)
-(define cv_anim 1)
-(define cv_t 0)
-(define CV_MS 130)
-
 (define _p 0)
 (define _pp 0)           ; 上一拍的电平：自己算「按下沿」，不依赖 Touch.take_press
 (define _t 0)
@@ -403,16 +372,13 @@
     ;; 标题收窄到 88px 以内，右边三枚按钮从 96 起 —— 不再被盖住
     (if (== mode 0)
         (Gfx.draw_text "两阶段检测" 4 3 CT_R CT_G CT_B)
-        (if (== mode 1)
-            (Gfx.draw_text "Faster R-CNN" 4 3 CT_R CT_G CT_B)
-            (Gfx.draw_text "CNN 逐层计算" 4 3 CT_R CT_G CT_B)))
+        (Gfx.draw_text "Faster R-CNN" 4 3 CT_R CT_G CT_B))
     (bdraw S_H0)
     (bdraw S_H1)
-    (bdraw S_H2)
     (Gfx.fill_rect 0 17 SW 1 CL_R CL_G CL_B)
   }))
 
-;; ---- 步骤条（结果页/卷积页共用第二行） ---------------------------------
+;; ---- 步骤条（结果页第二行） -------------------------------------------
 
 (define busy_names '("计算中" "计算中." "计算中.." "计算中..."))
 (define bd_i 0)
@@ -546,7 +512,7 @@
         #f)
   }))
 
-;; 某个缓冲区里「最有内容」的通道（用于卷积页默认选中，避免一片白）
+;; 某个缓冲区里「最有内容」的通道（特征图默认显示这个通道，否则常常整张全白）
 (define bc_i 0)
 (define bc_b 0)
 (define bc_m 0.0)
@@ -610,14 +576,16 @@
     (Gfx.fill_white)
     (draw_header)
     (draw_canvas)
-    (bdraw S_SAMP)
     (bdraw S_FINE)
     (bdraw S_COAR)
-    (Gfx.draw_text_centered 1 (cat "笔粗 " (fmt1 brush_r)) 256 86 CD_R CD_G CD_B 1)
+    (Gfx.draw_text_centered 1 (cat "笔粗 " (fmt1 brush_r)) 256 60 CD_R CD_G CD_B 1)
     (bdraw S_RUN)
-    (Gfx.draw_text_centered 1 "写 1~6 个数字" 256 148 CT_R CT_G CT_B 1)
-    (Gfx.draw_text_centered 1 "每个约 2~3 格高" 256 162 CT_R CT_G CT_B 1)
-    (Gfx.draw_text_centered 1 "（格=8 像素）" 256 176 CD_R CD_G CD_B 1)
+    (Gfx.draw_text_centered 1 "写 1~6 个数字" 256 128 CT_R CT_G CT_B 1)
+    (Gfx.draw_text_centered 1 "每个约 2~3 格高" 256 142 CT_R CT_G CT_B 1)
+    (Gfx.draw_text_centered 1 "（格=8 像素）" 256 156 CD_R CD_G CD_B 1)
+    (Gfx.fill_rect 200 170 112 1 CL_R CL_G CL_B)
+    (Gfx.draw_text "1) 骨干 找候选框" 202 176 CD_R CD_G CD_B)
+    (Gfx.draw_text "2) RoI 分类微调" 202 190 CD_R CD_G CD_B)
     ;; 底部提示（水平居中）
     (Gfx.fill_rect 0 222 SW 1 CL_R CL_G CL_B)
     (Gfx.draw_text_centered 1
@@ -708,11 +676,10 @@
     (rhint "归一化后送进网络：" 70)
     (Gfx.draw_text "x' = (x - 0.80) / 0.21" RX 82 CT_R CT_G CT_B)
     (rhint "这张图来自手写板" 102)
-    (rhint "（或「示例」的内嵌样本）" 116)
-    (rhint "按 > 走一步，" 140)
-    (rhint "「自动」会一路跑完 11 步" 154)
-    (rhint "点左图的框看细节" 176)
-    (rhint "「卷积」页讲逐层计算" 190)
+    (rhint "（或点「示例」现场合成）" 116)
+    (rhint "按 > 走一步，" 144)
+    (rhint "「自动」会一路跑完 11 步" 158)
+    (rhint "点左图的框看细节" 184)
   }))
 
 ;; 第 1~4 步：特征图（带通道选择）
@@ -1038,191 +1005,6 @@
     (Gfx.refresh)
   }))
 
-;; ---- 卷积页 -------------------------------------------------------------
-
-(define cv_title (lambda (s x y) (Gfx.draw_text s x y 55 62 88)))
-
-(define cv_src 0)         ; 层2 的"源"面板显示 conv1 的哪个通道（与 conv2 的序号解耦）
-(define cvu_n 8)          ; 当前层的通道数（通道按钮循环用）
-(define cvu_n2 32)        ; 目标特征图的边长（格数）
-(define cvu_s2 4)         ; 目标特征图每格的像素
-
-(define cw_px 0)
-(define cw_py 0)
-(define cw_s 2)
-(define draw_cv_window
-  (lambda () {
-    (define n (if (== cv_layer 0) 32 16))
-    (define gx (mod cv_cell n))
-    (define gy (Math.floor (/ cv_cell n)))
-    (set! cw_s (if (== cv_layer 0) 2 4))
-    (set! cw_px (+ 4 (* (- (* gx 2) 1) cw_s)))
-    (set! cw_py (+ 52 (* (- (* gy 2) 1) cw_s)))
-    (if (< cw_px 4) (set! cw_px 4) #f)
-    (if (< cw_py 52) (set! cw_py 52) #f)
-    (Gfx.draw_rect cw_px cw_py (+ 1 (* 3 cw_s)) (+ 1 (* 3 cw_s)) 222 70 45)
-  }))
-
-(define d1_i 0)
-(define d1_j 0)
-(define d1_sum 0.0)
-(define d1_p 0.0)
-(define d1_pm 0.0001)
-(define d1_gx 0)
-(define d1_gy 0)
-(define d1_xp 0)
-(define d1_wp 0)
-(define draw_cv_detail1
-  (lambda () {
-    (set! d1_gx (mod cv_cell 32))
-    (set! d1_gy (Math.floor (/ cv_cell 32)))
-    (set! d1_pm 0.0001)
-    (set! d1_j 0)
-    (while (< d1_j 3) {
-      (set! d1_i 0)
-      (while (< d1_i 3) {
-        (set! d1_p (* (get_item FR.xpad (+ (* (+ (* d1_gy 2) d1_j) 66) (+ (* d1_gx 2) d1_i)))
-                      (get_item FR.W1 (+ (* cv_ch 9) (+ (* d1_j 3) d1_i)))))
-        (set! d1_pm (maxf d1_pm (Math.abs d1_p)))
-        (set! d1_i (+ d1_i 1))
-      })
-      (set! d1_j (+ d1_j 1))
-    })
-    (set! d1_sum (get_item FR.B1 cv_ch))
-    (set! d1_j 0)
-    (while (< d1_j 3) {
-      (set! d1_i 0)
-      (while (< d1_i 3) {
-        (set! d1_xp (get_item FR.xpad (+ (* (+ (* d1_gy 2) d1_j) 66) (+ (* d1_gx 2) d1_i))))
-        (set! d1_wp (get_item FR.W1 (+ (* cv_ch 9) (+ (* d1_j 3) d1_i))))
-        (set! d1_p (* d1_xp d1_wp))
-        (set! d1_sum (+ d1_sum d1_p))
-        (draw_norm (+ 6 (* d1_i 8)) (+ 194 (* d1_j 8)) 7 d1_xp)
-        (draw_wt (+ 40 (* d1_i 8)) (+ 194 (* d1_j 8)) 7 (/ d1_wp 2.5))
-        (draw_wt (+ 74 (* d1_i 8)) (+ 194 (* d1_j 8)) 7 (/ d1_p d1_pm))
-        (set! d1_i (+ d1_i 1))
-      })
-      (set! d1_j (+ d1_j 1))
-    })
-    (Gfx.draw_text_centered 1 "入" 18 226 120 126 140 1)
-    (Gfx.draw_text_centered 1 "核" 52 226 120 126 140 1)
-    (Gfx.draw_text_centered 1 "积" 86 226 120 126 140 1)
-    (Gfx.draw_text (cat "核" (i2s cv_ch)) 4 184 CT_R CT_G CT_B)
-    (Gfx.draw_text "3x3 窗口在输入上滑动" 104 184 CD_R CD_G CD_B)
-    (Gfx.draw_text "步长2 每落一次得右图一格" 104 198 CD_R CD_G CD_B)
-    (Gfx.draw_text (cat "和 = " (fmt2 d1_sum)) 104 214 CT_R CT_G CT_B)
-    (Gfx.draw_text (cat "ReLU -> " (fmt2 (maxf d1_sum 0.0))) 104 228 195 70 35)
-    (Gfx.draw_text (cat "格" (gstr d1_gy d1_gx)) 250 184 CA_R CA_G CA_B)
-    (Gfx.draw_text "9 个乘积求和" 238 228 CD_R CD_G CD_B)
-  }))
-
-(define d2_c 0)
-(define d2_ky 0)
-(define d2_kx 0)
-(define d2_s 0.0)
-(define d2_v 0.0)
-(define d2_m 0.0001)
-(define d2_tot 0.0)
-(define d2_gx 0)
-(define d2_gy 0)
-(define d2_bar 0)
-(define d2_x 0)
-(define d2_contrib
-  (lambda (ch) {
-    (set! d2_s 0.0)
-    (set! d2_ky 0)
-    (while (< d2_ky 3) {
-      (set! d2_kx 0)
-      (while (< d2_kx 3) {
-        (set! d2_v (get_item FR.p1 (+ (* ch 1156)
-                       (+ (* (+ (* d2_gy 2) d2_ky) 34) (+ (* d2_gx 2) d2_kx)))))
-        (set! d2_s (+ d2_s (* d2_v (get_item FR.W2 (+ (* cv_ch 72)
-                        (+ (* ch 9) (+ (* d2_ky 3) d2_kx)))))))
-        (set! d2_kx (+ d2_kx 1))
-      })
-      (set! d2_ky (+ d2_ky 1))
-    })
-    d2_s
-  }))
-
-(define draw_cv_detail2
-  (lambda () {
-    (set! d2_gx (mod cv_cell 16))
-    (set! d2_gy (Math.floor (/ cv_cell 16)))
-    (set! d2_m 0.0001)
-    (set! d2_c 0)
-    (while (< d2_c 8) {
-      (set! d2_v (d2_contrib d2_c))
-      (set! d2_m (maxf d2_m (Math.abs d2_v)))
-      (set! d2_c (+ d2_c 1))
-    })
-    (set! d2_tot (get_item FR.B2 cv_ch))
-    (set! d2_c 0)
-    (while (< d2_c 8) {
-      (set! d2_v (d2_contrib d2_c))
-      (set! d2_tot (+ d2_tot d2_v))
-      (set! d2_x (+ 6 (* d2_c 12)))
-      (Gfx.draw_text_centered 1 (i2s d2_c) (+ d2_x 5) 226 110 118 135 1)
-      (Gfx.fill_rect d2_x 188 10 36 236 239 245)
-      (set! d2_bar (Math.round (* 17.0 (/ (Math.abs d2_v) d2_m))))
-      (if (>= d2_v 0.0)
-          (Gfx.fill_rect d2_x (- 206 d2_bar) 10 d2_bar 210 110 60)
-          (Gfx.fill_rect d2_x 206 10 d2_bar 60 110 210))
-      (set! d2_c (+ d2_c 1))
-    })
-    (Gfx.fill_rect 4 205 98 1 168 176 194)
-    (Gfx.draw_text (cat "核" (i2s cv_ch)) 4 184 CT_R CT_G CT_B)
-    (Gfx.draw_text (cat "和 = " (fmt2 d2_tot)) 108 186 CT_R CT_G CT_B)
-    (Gfx.draw_text (cat "ReLU -> " (fmt2 (maxf d2_tot 0.0))) 108 202 195 70 35)
-    (Gfx.draw_text "8 个通道各贡献一份" 108 218 CD_R CD_G CD_B)
-    (Gfx.draw_text (cat "格" (gstr d2_gy d2_gx)) 250 184 CA_R CA_G CA_B)
-  }))
-
-(define draw_cvbar
-  (lambda () {
-    (Gfx.fill_rect 0 18 SW 16 252 253 255)
-    (bdraw S_CVL)
-    (Gfx.draw_text_centered 1 (cat "通道" (cat (i2s cv_ch)
-                    (cat "/" (i2s (if (== cv_layer 0) 7 23))))) 129 26 CT_R CT_G CT_B 1)
-    (bdraw S_CVR)
-    (bdraw S_CVA)
-    (Gfx.draw_text_centered 1 (if (== cv_layer 0) "3x3 步长2" "8ch x 3x3") 264 26
-                            CD_R CD_G CD_B 1)
-    (Gfx.fill_rect 0 34 SW 1 CL_R CL_G CL_B)
-  }))
-
-(define render_conv
-  (lambda () {
-    (Gfx.fill_white)
-    (draw_header)
-    (draw_cvbar)
-    (if (== cv_layer 0)
-        {
-          (cv_title "源: 输入 64x64" 4 38)
-          (draw_image_at 4 52 2)
-          (Gfx.draw_rect 3 51 130 130 CL_R CL_G CL_B)
-          (draw_cv_window)
-          (cv_title (cat "目标: conv1 通道" (i2s cv_ch)) 150 38)
-          (draw_fmap FR.f1 32 cv_ch 150 52 4 cv_cell)
-        }
-        {
-          (cv_title (cat "源: conv1 通道" (i2s cv_src)) 4 38)
-          (draw_fmap FR.f1 32 cv_src 4 52 4 -1)
-          (draw_cv_window)
-          (cv_title (cat "目标: conv2 通道" (i2s cv_ch)) 150 38)
-          (draw_fmap FR.f2 16 cv_ch 150 52 8 cv_cell)
-        })
-    (Gfx.fill_rect 0 181 SW 1 CL_R CL_G CL_B)
-    (if (== stage 0)
-        {
-          (Gfx.draw_text "还没有跑过推理：先在画板写数字、点「开始识别」，" 4 186 CT_R CT_G CT_B)
-          (Gfx.draw_text "再来看这里的逐层计算细节。" 4 202 CD_R CD_G CD_B)
-        }
-        (if (== cv_layer 0) (draw_cv_detail1) (draw_cv_detail2)))
-    (EX.draw_button)
-    (Gfx.refresh)
-  }))
-
 ;; ---- 计算推进 -----------------------------------------------------------
 
 (define start_stage
@@ -1469,7 +1251,7 @@
     (start_stage 0)
   }))
 
-;; 换一张内嵌样本（自动跑）
+;; 现场合成一张示例图（在结果页点「示例」时顺带重跑整套）
 (define load_next_sample
   (lambda () {
     (FR.synth_random)
@@ -1538,45 +1320,16 @@
     ;; 本拍按钮的文案与激活态（切换模式后立刻生效；只写字段，不分配）
     (ui_sync)
 
-    ;; ---- 顶部按钮（三种模式复用同一组槽位：位置相同，只是文案与动作不同） ----
+    ;; ---- 顶部按钮（清空/重画、示例；两种模式复用同一对槽位）----
     (if (== _p 1)
         {
           (if (bhit S_H0 _tx _ty)
-              (if (== mode 2)
-                  {
-                    (set! cv_layer 0)
-                    (set! cv_ch (best_ch FR.f1 32 8))
-                    (set! cv_src cv_ch)
-                    (set! cv_cell 0)
-                    (set! cv_anim 1)
-                  }
-                  {
-                    (clear_board)
-                    (set! mode 0)
-                  })
+              {
+                (clear_board)
+                (set! mode 0)
+              }
               #f)
-          (if (bhit S_H1 _tx _ty)
-              (if (== mode 2)
-                  {
-                    (set! cv_layer 1)
-                    (set! cv_ch (best_ch FR.f2 16 24))
-                    (set! cv_src (best_ch FR.f1 32 8))
-                    (set! cv_cell 0)
-                    (set! cv_anim 1)
-                  }
-                  (load_next_sample))
-              #f)
-          (if (bhit S_H2 _tx _ty)
-              (if (== mode 2)
-                  (set! mode 1)
-                  {
-                    (set! mode 2)
-                    (set! cv_ch (if (== cv_layer 0) (best_ch FR.f1 32 8)
-                                   (best_ch FR.f2 16 24)))
-                    (set! cv_src (if (== cv_layer 0) cv_ch (best_ch FR.f1 32 8)))
-                    (set! cv_anim 1)
-                  })
-              #f)
+          (if (bhit S_H1 _tx _ty) (load_next_sample) #f)
         }
         #f)
 
@@ -1591,7 +1344,6 @@
                 (if (bhit S_COAR _tx _ty)
                     (set! brush_r (minf 3.6 (+ brush_r 0.3)))
                     #f)
-                (if (bhit S_SAMP _tx _ty) (load_next_sample) #f)
                 (if (bhit S_RUN _tx _ty)
                     (if (== drawn 1) (run_all) #f)
                     #f)
@@ -1650,36 +1402,6 @@
         }
         #f)
 
-    ;; ---- 卷积页 ----
-    (if (== mode 2)
-        {
-          (if (== _p 1)
-              {
-                (set! cvu_n (if (== cv_layer 0) 8 24))
-                (set! cvu_n2 (if (== cv_layer 0) 32 16))
-                (set! cvu_s2 (if (== cv_layer 0) 4 8))
-                (if (bhit S_CVL _tx _ty)
-                    (if (> cv_ch 0) (set! cv_ch (- cv_ch 1)) (set! cv_ch (- cvu_n 1)))
-                    #f)
-                (if (bhit S_CVR _tx _ty)
-                    (if (< cv_ch (- cvu_n 1)) (set! cv_ch (+ cv_ch 1)) (set! cv_ch 0))
-                    #f)
-                (if (bhit S_CVA _tx _ty)
-                    (set! cv_anim (if (== cv_anim 1) 0 1))
-                    #f)
-                ;; 点目标特征图的任一格 → 窗口跳过去
-                (if (in_rect _tx _ty 150 52 (* cvu_n2 cvu_s2) (* cvu_n2 cvu_s2))
-                    {
-                      (set! cv_cell (+ (* (Math.floor (/ (- _ty 52) cvu_s2)) cvu_n2)
-                                       (Math.floor (/ (- _tx 150) cvu_s2))))
-                      (set! cv_anim 0)
-                    }
-                    #f)
-              }
-              #f)
-        }
-        #f)
-
     ;; ---- 推进计算 ----
     (if (== busy 1)
         {
@@ -1708,28 +1430,17 @@
             #f)
         #f)
 
-    ;; ---- 卷积页：窗口自动滑动 ----
-    (if (and (== mode 2) (== cv_anim 1) (> (System.timestamp) cv_t))
-        {
-          (set! cv_t (+ (System.timestamp) CV_MS))
-          (set! cv_cell (+ cv_cell 1))
-          (if (>= cv_cell (* (if (== cv_layer 0) 32 16) (if (== cv_layer 0) 32 16)))
-              (set! cv_cell 0)
-              #f)
-        }
-        #f)
-
     ;; ---- 退出按钮/返回请求（放在输入处理之后，免得抢走本拍的按下沿）----
     (EX.check)
 
     ;; ---- 渲染 ----
-    (if (== mode 0) (render_draw) (if (== mode 1) (render_result) (render_conv)))
+    (if (== mode 0) (render_draw) (render_result))
   }))
 
 ;; 统一重绘（EX 退出确认框关掉后擦残影）
 (define render_any
   (lambda () {
-    (if (== mode 0) (render_draw) (if (== mode 1) (render_result) (render_conv)))
+    (if (== mode 0) (render_draw) (render_result))
   }))
 
 ;; ---- 启动：空白画板，等用户写 ----
