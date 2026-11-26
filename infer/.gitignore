@@ -11,3 +11,9 @@ tools/fonts/
 
 # MP135 交叉编译产物（mp135_deploy.sh）
 .build-mp135/
+
+# Faster R-CNN 检测 App 的离线训练产物（合成数据集 / MNIST 缓存 / 检查点，可由
+# tools/train_frcnn_digits.py 重新生成；仓库里只保留自动生成的量化权重
+# app/lib/frcnn_weights.scm。「示例」图是运行时程序化合成的，不占任何资源文件）
+tools/data/frcnn/
+tools/data/mnist/
