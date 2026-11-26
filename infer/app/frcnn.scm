@@ -374,7 +374,6 @@
 (define pen_last_x 0.0)
 (define pen_last_y 0.0)
 (define brush_r 1.8)
-(define samp_k 0)        ; 「示例」按序号程序化合成（同一序号永远同一张图）
 
 (define cv_layer 0)
 (define cv_cell 0)
@@ -1473,8 +1472,7 @@
 ;; 换一张内嵌样本（自动跑）
 (define load_next_sample
   (lambda () {
-    (FR.synth_sample samp_k)
-    (set! samp_k (Math.floor (mod (+ samp_k 1) 8)))
+    (FR.synth_random)
     (set! drawn 1)
     (if (== mode 0) #f (run_all))
   }))
@@ -1741,7 +1739,6 @@
 (FR.clear_image)
 (set! mode 0)
 (set! drawn 0)
-(set! samp_k 0)
 (render_draw)
 (set! _t (System.set_interval TICK_MS tick))
 

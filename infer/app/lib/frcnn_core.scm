@@ -360,7 +360,7 @@
     (set! sy_ci 0)
     (while (<= sy_ci sy_n) {
       (sy_dot (+ sy_x1 (/ (* sy_dx sy_ci) sy_n))
-              (+ sy_y1 (/ (* sy_dy sy_ci) sy_n)) rad 1.0)
+              (+ sy_y1 (/ (* sy_dy sy_ci) sy_n)) rad sy_ink)
       (set! sy_ci (+ sy_ci 1))
     })
   }))
@@ -472,35 +472,71 @@
 (define sy_rad 0.0)
 (define sy_hei 0.0)
 (define sy_rot 0.0)
+(define sy_ink 1.0)
+(define sy_colw 0.0)
+(define sy_jit 0.0)
+(define sy_prev_r 0.0)
+(define sy_minx 0.0)
+(define sy_maxx 63.0)
+(define sy_miny 0.0)
+(define sy_maxy 63.0)
 
-;; 合成第 k 张（k 决定随机种子：同一 k 永远同一张图；不同 k 布局/数字都不同）
-(define synth_sample
-  (lambda (k) {
-    (set! sy_st (mod (+ 12345 (* 7919.0 k)) 65537.0))
+;; 用当前随机序列铺一张图（种子由 synth_sample / synth_random 先设好）
+(define sy_build
+  (lambda () {
     (sy_paper)
-    ;; 1~3 个数字（训练集是 1~6，示例取少一点，看得清）
-    (set! sy_cnt (+ 1 (sy_rndi 0 2)))
+    ;; 数字个数 1~4（训练集是 1~6；示例要"像验证码"，个数随机）
+    (set! sy_cnt (+ 1 (sy_rndi 0 3)))
+    (set! sy_colw (/ 64.0 (+ sy_cnt 1)))
+    (set! sy_prev_r (- 0.0 8.0))      ; 上一个数字的右边界（保证互不重叠）
     (set! sy_j 0)
     (while (< sy_j sy_cnt) {
       (set! sy_lab (sy_rndi 0 9))
-      ;; 字号 15~25px：与训练集的 13~28px 对齐（3 个数字时小一号，免得挤成一团）
-      (if (== sy_cnt 3)
-          (set! sy_hei (sy_rndf 14.0 19.0))
-          (set! sy_hei (sy_rndf 16.0 25.0)))
+      ;; 字号：个数越多越小（保证 4 个也放得下、彼此不挤成一团）
+      (if (== sy_cnt 1) (set! sy_hei (sy_rndf 20.0 29.0)) #f)
+      (if (== sy_cnt 2) (set! sy_hei (sy_rndf 16.0 25.0)) #f)
+      (if (== sy_cnt 3) (set! sy_hei (sy_rndf 13.0 19.0)) #f)
+      (if (== sy_cnt 4) (set! sy_hei (sy_rndf 10.0 15.0)) #f)
       (set! sy_rad (maxf 0.9 (* sy_hei 0.058)))
-      (set! sy_rot (* (- (sy_rnd) 0.5) 0.175))   ; ±5°
+      (set! sy_rot (* (- (sy_rnd) 0.5) 0.21))          ; ±6°
       (set! sy_ca (Math.cos sy_rot))
       (set! sy_sa (Math.sin sy_rot))
-      (set! sy_s sy_hei)
-      ;; 横向按个数均分（1 个居中、2 个左右、3 个三列），再抖 ±2.5px
-      (set! sy_cx (+ (/ (* 64.0 (+ sy_j 1)) (+ sy_cnt 1)) (sy_rndf (- 0.0 2.5) 2.5)))
-      (set! sy_cy (sy_rndf 28.0 38.0))
-      (if (< sy_cx (* 0.5 sy_hei)) (set! sy_cx (* 0.5 sy_hei)) #f)
-      (if (> sy_cx (- IMG (* 0.5 sy_hei))) (set! sy_cx (- IMG (* 0.5 sy_hei))) #f)
+      (set! sy_s (+ sy_hei (sy_rndf 0.0 1.5)))          ; 每个数字大小也各不同
+      (set! sy_ink (sy_rndf 0.86 1.0))                  ; 墨色深浅
+      ;; 横向：按个数均分的列中心 + 抖动，再强制与上一个数字留 1px 空隙；
+      ;; 纵向完全随机。数字实际占据 cx ± 0.46*s、cy ± 0.5*s。
+      (set! sy_jit (* 0.25 sy_colw))
+      (set! sy_cx (+ (* sy_colw (+ sy_j 1)) (sy_rndf (- 0.0 sy_jit) sy_jit)))
+      (set! sy_minx (* 0.46 sy_s))
+      (set! sy_maxx (- IMG (* 0.46 sy_s)))
+      (set! sy_miny (+ (* 0.5 sy_s) 1.0))
+      (set! sy_maxy (- IMG (+ (* 0.5 sy_s) 1.0)))
+      (if (< sy_cx sy_minx) (set! sy_cx sy_minx) #f)
+      (if (< (- sy_cx (* 0.46 sy_s)) (+ sy_prev_r 1.0))
+          (set! sy_cx (+ (+ sy_prev_r 1.0) (* 0.46 sy_s)))
+          #f)
+      (if (> sy_cx sy_maxx) (set! sy_cx sy_maxx) #f)
+      (set! sy_cy (+ sy_miny (* (sy_rnd) (- sy_maxy sy_miny))))
       (sy_digit sy_lab sy_rad)
+      (set! sy_prev_r (+ sy_cx (* 0.46 sy_s)))
       (set! sy_j (+ sy_j 1))
     })
     (set! gt_n 0)
+  }))
+
+;; 第 k 张（确定性：同一 k 永远同一张图）——离线目检/回归用
+(define synth_sample
+  (lambda (k) {
+    (set! sy_st (mod (+ 12345 (* 7919.0 k)) 65537.0))
+    (sy_build)
+  }))
+
+;; **每次都不一样**：种子取自 (Math.random)，所以连点「示例」得到的是随机数字、
+;; 随机个数、随机位置与大小（像验证码），而不是固定几张轮播。
+(define synth_random
+  (lambda () {
+    (set! sy_st (+ 1.0 (Math.floor (* 65535.0 (Math.random)))))
+    (sy_build)
   }))
 
 ;; 从 ASCII 字符串装入图像（每个字符 = 一像素，码点 33+v，v∈[0,63] 表示 0..1）
