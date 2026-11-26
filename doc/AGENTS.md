@@ -16843,6 +16843,309 @@ sinLat/col/idx 单看都"合理"）。
 3. **加色发光改用 alpha 混合**（`draw_line_aa_mode ... 255·br`）后观感几乎不变，但**不要
    把它当成性能优化** —— 上面第 1 条已经说明当时的"慢"是计时假象。
 
+------------------------------------
+
+# 2026-11-26
+
+> 阅读顺序提示：本条目记录了同一天的四轮迭代。**最终形态是第四节（"彻底不要服务端反代"）
+> 与"端口 9002 的部署现状"两段**：WebGUI 作为无服务端静态页直连 API，配置里写完整 URL，
+> 能否连通取决于浏览器 + API 的 CORS。前几节里的"同源 `/v1` 反代""相对 URL""503 故障"
+> 等描述是当时的形态，保留作历史与排错参考，**不要照它们去部署**。
+
+灵机（Scheme）侧首次具备**网络访问能力**：新增本地库 `(native Net)`、应用库 `app/lib/net.scm`
+与端到端示例 App `app/remotechat.scm`（单轮提问 → 流式 SSE 解析 → 打字机式上屏）。
+目标平台以 **Nano-WASM-GUI**（`infer/build_wasm_gui.sh`，浏览器内 fetch）为主，Linux 目标
+（`hal_net_linux.c`，后台线程 + 明文 HTTP）同步可用；其余平台由 `hal_net_stub.c` 打桩、
+Scheme 侧按"网络不可用"降级。
+
+## 为什么需要它
+
+浏览器/掌机里没有 socket，`hal_net` 早就把"上网"按协作式调度模型抽象好了（非阻塞 +
+轮询），但此前**只有 C 业务**（`ui_llm.c` 的远端模型）在用，灵机 App 完全没有入口。本次把
+它包成 Scheme 可见的「发起 → 逐行取 → 查状态 → 关闭」四件套。
+
+## 接口（`infer/am_native_Net.h`）
+
+| 过程 | 返回 | 说明 |
+|---|---|---|
+| `(Net.post url headers body)` | 请求 id / `#null` | `headers` 为**两元素列表的列表**，如 `(quote (("Content-Type" "application/json")))` |
+| `(Net.get url headers)` | 请求 id / `#null` | 无请求体；`hal_net.h` 为此新增 `method` 字段（NULL = POST，既有调用方零改动） |
+| `(Net.line id)` | 一整个行 / `#undefined` | 每拍调用；行内不含 CR/LF |
+| `(Net.state id)` / `(Net.status id)` | 0..3 / HTTP 码 | 0 无此 id、1 进行中、2 完成、3 错误 |
+| `(Net.done id)` / `(Net.error id)` | Boolean | 谓词 |
+| `(Net.close id)` | `#undefined` | 幂等；中止 fetch（WASM 走 `AbortController`） |
+| `(Net.version)` | `"Net/1"` | 自检 |
+
+设计要点：
+
+- **一拍一步**（与 `(native Chat)` 同哲学）：所有过程立即返回，App 在 `System.set_interval`
+  回调里每拍取几行；绝不能在 `while` 里等（时间片耗尽会冻住界面，且单线程下 JS 的 fetch
+  回调根本没有机会执行）。
+- **按行交付而非字节流**：SSE 本就是行协议；更重要的是 UTF-8 —— 按任意字节块交出时，被块
+  边界切断的多字节序列会被 `am_mbstowcs` 截断成乱码，而换行符必然落在字符边界上。流结束时
+  的残余尾巴会先剔除不完整序列再交出。
+- **id 单调递增不复用**（4 个槽位），旧 id 不会误命中新请求；`(Net.line 已关闭的 id)` 返回
+  `#undefined`、`(Net.done 无效 id)` 返回 `#t`（避免 App 死等）。
+- 单行上限 8KB（超限强制拆段，不丢数据）、请求体上限 64KB、URL 512B、单头 key/value
+  64/384B、并发 4 个。
+
+## 应用库 `infer/app/lib/net.scm`
+
+`json_escape` / `json_str`（含 `\uXXXX` 与 UTF-16 代理对解码）/ `sse_payload` / `sse_delta` /
+`sse_reason` / `sse_is_end` / `error_text` / `chat_headers` / `chat_body` / `config`（读
+`data/*.txt` 的 `key=value`）/ `opt` / `find` / `trim`。
+
+**命名约定**：模块内的顶层定义一律用裸名（`find`/`chat_body`/…），调用方经
+`(import NET "app/lib/net.scm")` 用 `NET.xxx`。**不要**在模块里写 `(define NET.xxx …)`——
+带点号的标识符会被链接器当成"模块别名/本地库名 + 后缀"的外部引用（manual §7.3），而模块
+内部并无 `NET` 别名，直接 `link_fail`。
+
+**临时量纪律**：每个函数的循环临时量必须是**各自独占**的模块级变量（`hf_`/`hx_`/`tm_`/
+`je_`/`js_`/`cf_` 前缀）。早期版本让 `hex4` 与 `json_str` 共用 `nf_j`，`hex4` 把"字符串
+结束"标志踩掉，表现为"解码到第一个 `\uXXXX` 就截断"（实测 2 字符 vs 期望 3 字符）。
+
+## 示例 App `infer/app/remotechat.scm`（远程对话）
+
+单轮：启动即自动发一次（提示词可在 `data/remotechat.txt` 改；该文件不进资源清单，浏览器里
+不挂载 → 走同源默认值）；触屏点一下 → 借 `(Ui.input)` 输入新提示词；右上角「退出」/Esc 走
+`app/lib/exit.scm`，确认后先 `(Net.close)` 再销毁实例。正文流式上屏（每来一段 delta 就重绘），
+思考增量只报"思考中…N 字"，结束显示块数/耗时/TPS（耗时用**拍数 × 节拍**算，不用
+`System.timestamp`——32 位宿主 27 位有效位，毫秒时间戳每 134 秒回绕）。
+
+排版两个小坑（中文 App 通用）：折行宽度要**预留行首前缀**的像素（"答："=24px、
+续行缩进 4 个半角空格=28px），否则首行/续行比其他行宽，贴右边缘会被裁掉（实测首版把
+"处理"正好顶出屏幕）；行首禁则标点（。，、？！：；）」等）用"挂行末"处理，否则会出现
+孤零零一行的句号。
+
+## 四轮改造（同日）：彻底不要服务端反代 —— 网页直连 API
+
+**结论先说**：`app/remotechat.scm` 现在**直连**配置里的完整 URL，不再依赖
+`tools/https_static_server.py` 的 `/v1` 反代；页面可以放在任何纯静态托管上
+（实测 `python3 -m http.server` 起的静态站即可）。代价是**网络能不能通，取决于
+用户浏览器 + API 自己的 CORS 策略**——这正是无服务端准静态发布的固有约束。
+
+### 实测：浏览器直连的三种情形（headless Chromium，页面 `http://127.0.0.1:9405/`）
+
+| API 端 | 结果 |
+|---|---|
+| 回 `Access-Control-Allow-Origin: *` 且实现 `OPTIONS`（18510） | ✅ 全链路通（思考/工具/正文流式） |
+| **只**回 ACAO、`OPTIONS` 回 501（18511） | Key 留空 → ✅ 通（简单请求，不触发预检）；Key 非空 → ❌ 预检被拒 |
+| 什么都不回（本次部署的模型端点 `<API主机>:11050`，nginx `OPTIONS` 501） | ❌ `blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header`；App 显示 `失败：无法连接（API 未开 CORS？混合内容？）` |
+
+另外：**HTTPS 页面 → http API**（非 loopback）在 Chrome 里属"混合内容"，实测只告警仍放行
+（`Mixed Content: … should also be served over HTTPS`，整条 SSE 流照常收完），但 iOS Safari
+等策略更严的浏览器可能直接拦。最稳是**给 API 套 TLS**（配置第 1 行写 `https://…`，WASM 侧
+`fetch` 原样交给浏览器，TLS 由浏览器负责，C 侧零成本）。
+
+端口 9002 的部署现状：`tools/https_static_server.py`（TLS 静态托管，**不带 `NANO_API_PROXY`**）——
+即 https 页面 + App 直连 API；若手机浏览器因混合内容拦截，改给 API 加 TLS 即可，页面无需改动。
+
+### 客户端为此做的两件事
+
+1. **Key 留空 → 改用"简单请求"**（`NET.chat_headers`）：`Content-Type: text/plain;charset=UTF-8`
+   + `Accept`，不带 `Authorization` → **不触发 CORS 预检**，只要服务端回一个 ACAO 就能用。
+   （OpenAI 兼容端点都不看 Content-Type，实测 200 + SSE 正常。）
+2. Key 非空 → 标准写法（`application/json` + `Authorization`），要求服务端实现 `OPTIONS` 预检。
+3. 失败文案分档：`0` → "无法连接（API 未开 CORS？混合内容？）"；`502/503` → 反代/上游；
+   其余原样报 HTTP 码。配置缺失屏也同步改成讲"完整 URL + 需要 CORS"。
+
+### 让 API 允许浏览器直连（服务端一次性配置，非本项目代码）
+
+模型服务前面那层 nginx 加三行即可（`OPTIONS` 直接 204，其余透传并补 ACAO）：
+
+```nginx
+location /v1/ {
+    if ($request_method = OPTIONS) {
+        add_header Access-Control-Allow-Origin  * always;
+        add_header Access-Control-Allow-Headers "Content-Type, Authorization, Accept" always;
+        add_header Access-Control-Allow-Methods "POST, GET, OPTIONS" always;
+        add_header Content-Length 0;
+        return 204;
+    }
+    add_header Access-Control-Allow-Origin  * always;
+    add_header Access-Control-Allow-Headers "Content-Type, Authorization, Accept" always;
+    proxy_pass http://127.0.0.1:11050;
+    proxy_buffering off;        # SSE 必须关缓冲，否则流式变"憋到最后一起吐"
+}
+```
+
+不想改 nginx 的 `OPTIONS`：把 `data/llm.txt` 第 3 行（Key）留空 + 只加
+`add_header Access-Control-Allow-Origin * always;`，走简单请求即可。
+
+> `tools/https_static_server.py` 里的 `/v1` 反代**保留但与本 App 无关**（它服务于旧的 C 版
+> 鹦鹉笼"远端模型"，那条路是 C 代码直连、不经过浏览器）。
+
+## 跨域/HTTPS（浏览器侧的两条硬约束）
+
+- 页面与 API 不同源时需服务器给 CORS 头（实测：无 `Access-Control-Allow-Origin` 的跨源 fetch
+  直接被拒）。**推荐同源反向代理**：App 只写相对路径 `/v1/chat/completions`，
+  `tools/https_static_server.py` 把 `/v1/*` 转到 `NANO_API_PROXY`（本次顺带支持 `https://`
+  上游，用 `HTTPSConnection` + 默认证书校验）。同源还有一个好处：API 密钥留在服务端，
+  页面/wasm/资源目录里都不出现。
+- WASM 下 **HTTPS 免费**（TLS 在浏览器里做，C 侧零成本）；但页面若经 HTTPS 托管，对**非
+  loopback 的 http 目标**属混合内容（Chrome 本次只告警仍放行，随版本漂移，不可依赖）。
+  Linux 目标的 `hal_net_linux.c` 仍只支持明文 http。
+
+## 二轮改造：配置解耦 / 原生输入控件 / 流式输出（2026-11-26 晚）
+
+`app/remotechat.scm` 按需求重写，三条各自落到了实处：
+
+### 1) LLM 配置与代码彻底解耦（`data/llm.txt`，纯文本三行）
+
+```
+https://<API主机>:<端口>/v1/chat/completions   ← 第 1 行 URL（三轮起必须是完整地址）
+<模型 ID>                                      ← 第 2 行 模型 ID
+<API Key，可留空>                              ← 第 3 行 密钥（留空则不发 Authorization）
+```
+
+- App 里**没有任何默认 URL/模型/密钥**；`app/lib/net.scm` 的 `NET.llm_config` 解析这三行
+  （跳过 `#` 注释、去首尾空白、去末尾空行；URL 形态不认识 → `#null`）。
+- **每次发起请求都重读一次**：改完文件点一次按钮/再问一句就生效，不用重启 App、更不用重编。
+- 配置缺失/写错时 App 画一屏说明（三行格式 + 文件放哪），按钮变「重试配置」。
+- 浏览器侧要能读到它，`build_wasm_gui.sh` 的清单生成加了**白名单**：`data/` 整体仍不入
+  产物，只放行 `data/llm.txt` 且优先级 p1（启动即挂载，不等用户点「下载资源」）。
+  密钥随页面下发是有意的取舍；不想暴露就把第 3 行留空，用服务端 `NANO_API_KEY` 注入
+  （`tools/https_static_server.py` 新增：请求无 Authorization 时补 `Bearer <key>`）。
+- 相对 URL 只有浏览器能用（同源反代 + 天然规避 CORS/混合内容）；原生目标（`hal_net_linux`）
+  只认 `http://` 绝对地址——App 对这种情况给了明确文案，不再笼统说"请求发起失败"。
+
+### 2) 原生文本输入控件（`(Ui.input_with 标题 初值)`）
+
+底部按钮条新增「输入」按钮（`app/lib/button.scm` 绘制 + 命中；进行中变「停止」，点它中止并
+`(Net.close)`）。点它弹宿主的**模态输入控件**——全键盘拼音 / 16 键九宫格 / 触屏软键盘，
+与鹦鹉笼同一套（`ui_widget_input_*`）；取消返回 `#null`；输入期间定时器暂停（宿主语义）。
+初值 = 上次提交的提示词（`data/remotechat_last.txt`，每次弹框前重读），省得重新敲。
+
+### 3) 流式输出
+
+每拍 `(Net.line)` 最多消费 `MAX_LINES_PER_TICK`(16) 行 → `NET.sse_payload`/`NET.sse_delta`
+→ 累积正文 + 置脏 + 重绘，正文末尾画「▌」光标直到流结束；思考增量只报"思考中… N 字"；
+结束显示 `完成 N 块 / T ms / K TPS`（耗时按**拍数 × 节拍**算，理由见下）。
+
+## 三轮微调（同日）：完整 URL / 不缩进 / 思考与工具调用也流式
+
+1. **配置第 1 行改成"必须是完整 URL"**：`NET.url_ok` 只认 `http://` / `https://` 开头，
+   `/…` 相对路径一律判为配置错误（出说明屏）。理由：相对路径只有"浏览器 + 同源反代"
+   能用，写在配置文件里看不出来，换个目标平台就莫名其妙失败。浏览器里要写**与页面同源**的
+   完整地址（页面在 `https://<主机>:9002/` → 写 `https://<主机>:9002/v1/chat/completions`，
+   由同源反代转发）；这样既不触发 CORS 也不触发混合内容。当前部署即如此。
+2. **对话记录不再强行缩进**：续行与首行左对齐（只有首行带「你：」「答：」标签），折行宽度
+   统一让出 24px 给标签，避免首行贴右边缘被裁。
+3. **思考过程与工具调用也流式显示**：
+   - `NET.sse_reason`（`reasoning_content`）→ 灰色区（尾部对齐，看最新思路）；
+   - 新增 `NET.sse_tool`（`tool_calls[].function.name/arguments`）→ 琥珀色区，把流式片段
+     拼成 `→ 函数名 {参数…}`（首片带名字与箭头，后续片只有参数就直接追加，不重复箭头）；
+   - `content` → 亮色区（原样）。
+   版面分配：思考/工具区与答复区分屏——**答复还没有内容时思考占满正文区**，否则思考占一半
+   （工具最多 3 行），答复占其余；三块各自尾部对齐、末尾带「▌」光标；计数条显示
+   `答复字数 / 块数 · 思考字数`。
+   `wrap` 也顺势改成 **`String.slice` 切行**（每行一次切片）：思考动辄几千字符且每拍重排，
+   原来的逐字符 `String.concat` 是 O(n²)，会直接把帧率拖垮。
+
+### 验证（三轮）
+
+| 用例 | 结果 |
+|---|---|
+| 浏览器 + 真实 API（当时配置写同源 https URL） | `POST https://<设备IP>:9002/v1/chat/completions`（二/三轮时的形态；**四轮起改为直连 API，见上**）；思考灰区逐段流式（截图 `思考中… 146 字`），末帧 `32 字 / 3 块 · 思考 478`、正文完整、续行左对齐 |
+| 确定性 SSE（思考 2 段 + 工具调用 2 片 + 正文 3 段） | 三块同时上屏：`→ get_weather {"city":"北京"}` 拼接正确；`R=29/T=30/A=18` |
+| 长文（56 字答复 + 101 字思考） | 思考 3 行、答复 3 行，均尾部对齐且**续行不缩进** |
+| 配置写相对路径 `/v1/...` | 判为配置错误 → 出"必须是完整地址 + 与页面同源"的说明屏 |
+
+## 这轮踩到的三个真坑（都已修）
+
+1. **`pump` 先读后判上限 → 每拍静默丢一行**（`app/remotechat.scm`）：原写法
+   `while (...) { 处理; n+1; ln = (Net.line) }` 在 `n` 撞到上限时**已经把下一行读出来了**，
+   循环一退出这行就没人处理——表现为"回答中间凭空少一段"（丢的可能是正文 delta）。
+   实测：`MAX_LINES_PER_TICK=8` 时 3 段正文只到 2 段；改 64 就正常，从而定位到上限。
+   修法：**只在还有预算时才再取一行**（`(if (< n MAX) (set! ln (Net.line REQ)) #f)`），
+   并把上限提到 16。
+2. **`(native Ui)` 漏声明**：`Ui.input_with` 在 Scheme 里被当成未定义变量 →
+   `[Runtime] call: 变量 Ui.input_with 未定义`、进程被杀。之前没暴露是因为没人点过输入按钮
+   （测试里第一次用脚本模拟点按才炸出来）。
+3. **空串也画「你：」「答：」**：空闲时 `PLINES = [""]`，前缀与下方提示文字叠字。
+   改为空串整块跳过。
+
+调试经验（省下次的事）：
+
+- 探针的 `(display ...)` 输出走宿主的 output FIFO，**长字符串会被从头部截掉**（本次多次
+  误判为"内容丢失"）；判内容是否完整要看**帧缓冲**或短标记，别信长串 display。
+- 宿主回归台的虚拟时钟让"墙钟等待"变成上千万帧空转：测真网络要么给足帧数（本次用
+  3×10⁶ 帧 ≈ 2~4 s 墙钟），要么让 App 结束时 `System.exit`（回归台才会打印捕获的 STDOUT）。
+- 浏览器里**字母键不会进宿主的文本控件**（页面只把十六键/方向/回车/Esc 映射到 GUI 电平槽，
+  字母只走 `(native Key)` 旁路）——所以无头浏览器里没法"打字"，验证输入路径要用
+  `Ui.input_with` 的**预填**（本次即如此：把 `data/remotechat_last.txt` 写进 MEMFS）。
+
+## 验证（本轮）
+
+| 用例 | 结果 |
+|---|---|
+| 浏览器（`https://<设备IP>:9002/`）点「输入」→ 预填 `hello` → Enter | `POST /v1/chat/completions` → `完成 3 块 / 32 字`，正文 "Hello! How can I help you today?" 完整 |
+| 流式逐帧 | 一次请求内帧缓冲变化 3~7 次（思考→首段→逐段），末帧含全文 |
+| 宿主台 + 真实 API（连发 3 次） | 每次都是 `T=3`（3 段 delta）+ 全文，无中途丢失 |
+| 宿主台 + 确定性 SSE（31 段、含转义/emoji/制表/跨行） | 与期望串**逐字节相同**（82/82） |
+| 配置缺失 / 只写 1 行 | 出「配置缺失或格式不对」说明屏，按钮变「重试配置」（浏览器与宿主台一致） |
+| 反代未配置（503） | `失败：反代未配置 NANO_API_PROXY 503` |
+| `make web` | 通过（源清单与 `hal_net_linux` 链接） |
+
+## 常见故障（历史形态）：App 里提示「失败：反代未配置 NANO_API_PROXY 503」
+
+> 四轮起 App 不再走反代，本条只对"当时那套同源 `/v1` 部署"成立；现在遇到
+> `state=0` 应看上面"浏览器直连的三情形"（CORS / 混合内容）。
+
+`tools/https_static_server.py` 只有在**启动时**设了环境变量才启用 `/v1/*` 反代，否则
+`/v1/*` 一律返回 503（`API proxy not configured`）——页面本身照常加载，只有调用 API 的
+App 会失败（实测：一份跑了 9 小时的老服务进程没带该变量，浏览器端就表现为"远程对话
+提示 503"）。正确起法（**必须从 webgui 目录起**，`webgui/files` 是指向 linglong 的软链接）：
+
+```bash
+cd infer/webgui
+NANO_API_PROXY=http://<API主机>:<端口>/v1  python3 ../tools/https_static_server.py 9002 .
+```
+
+`/v1/*` 原样转发到 `NANO_API_PROXY` 的 `scheme://host:port`（上游 path 前缀即 `/v1`），
+上游可为 http 或 https。App 侧的失败文案据此分档：`0` → 连不上（反代没起）、
+`502/503` → 反代未配置或上游不可达、其余 → 原样报 HTTP 码。
+
+## 构建/注册改动
+
+- 新增源文件必须在**所有**编 `ui_scheme_app.c` 的目标里出现：`infer/Makefile`（`ANIMAC_HOST_SRCS`）、
+  `infer/mp135.mk`、`infer/build_wasm_gui.sh`；（`infer/tools/e2e/` 已被 .gitignore 忽略，
+  本机回归台的 harness/脚本也顺手加了，属本地改动。）
+- `ui_scheme_app.c` 注册 `am_native_Net_lib`，并把 `MB_ILCACHE_ABI` 2 → **3**（注册表变了必须
+  +1，否则旧 `data/ilcache/*.ilc` 里的 native 绑定会串位）。
+
+## 两个真正的坑（都是"内容莫名消失"）
+
+1. **先读数据，最后才判结束**（`am_native_Net.c` `net_pop_line`）：早期版本把"检查
+   `net_http_stream_state == DONE`"放在"读 `hal_net` 环形缓冲"**之前**，于是一旦流结束就
+   再也不去取已经收下的字节——实测 59 行 SSE 只交出 46 行，恰好丢掉收尾那几行，而模型的
+   `content` 往往就在那里（表现为"回答了但界面空白"）。
+2. **App 也要先把缓冲行读完再收尾**（`app/remotechat.scm` `pump`）：只有 `(Net.line)` 返回
+   `#undefined`（确认没有更多缓冲行）时才调 `check_done`。否则状态先变 DONE、`finish`
+   关连接，缓冲区里剩下的 delta 再没人取。
+
+## 验证
+
+- **WASM/headless Chromium（真浏览器 + 真 API）**：`NANO_API_PROXY=http://<API>/v1`
+  托管 `webgui/`，playwright 驱动主菜单启动 App → 自动发问 → 截图确认：正文正确渲染
+  （"我是 DeepSeek公司开发的 AI 助手，能回答问题、处理文本…"）、状态行
+  `完成 9 块 / 1536 ms / 5 TPS`；console 见 `[net] POST /v1/chat/completions` →
+  `[net] id=1 finished: state=2 http=200`。
+- **宿主台（native，真 HTTP）**：`tools/e2e/host` 探针跑同一份 App（900 万帧虚拟时钟，
+  ~2s 墙钟）→ `ANS=嗨`、`state=2 http=200`；错误路径（连不上）→ `state=3 http=0`，
+  App 显示"网络错误"并关闭。
+- 回归：`make web` 编译链接通过（验证 Makefile 源清单与 `hal_net_linux` 链接）；宿主回归台
+  `APP=mandelbrot` 呈现序列正常；`make tty` 仍受本机缺 `libasound2-dev` 限制（与本改动无关）。
+- 注意：宿主回归台的虚拟时钟让"墙钟等待"变成上千万帧空转，测真实网络必须给足帧数
+  （或让 App 在结束时 `System.exit`，回归台才会打印捕获的 STDOUT）。
+
+## 已知限制
+
+- 只做 `line` 级读取，不做 gzip/chunk 解码（`hal_net` 已处理分帧）；单行 > 8KB 会被拆段。
+- `hal_net_wasm.c` 的 JS 侧 chunk 队列**无上限**（消费慢时线性内存会涨）；重负载场景建议
+  后续加背压（未做，属既有实现的遗留点）。
+- Linux 目标仅明文 http；ESP32/Pod 系列仍打桩（无网络通路）。
+
 ## 三轮（同日）：速度上限随粘性联动到 0.30；烟粒 260 → 400
 
 需求：① 增加速度上限，直到算力或帧率不够；② 适当增加烟粒个数。

@@ -31,9 +31,12 @@ typedef struct {
 // JS 桥（EM_JS 编译进 glue；Module.HEAPU8 等经 Module 对象访问，
 // 与 hal_display_wasm.c 的既有用法一致）
 
-// 发起流式 POST：headers 为已序列化的 "Key: Value\nKey2: Value2" 文本
+// 发起流式请求（不限于 POST）：headers 为已序列化的 "Key: Value\nKey2: Value2" 文本，
+// meth 为方法名字节串（"GET"/"POST"/...；空则按 POST）
 EM_JS(void, wasm_net_post_js,
-      (int32_t js_id, const uint8_t *url, uint32_t url_len,
+      (int32_t js_id,
+       const uint8_t *meth, uint32_t meth_len,
+       const uint8_t *url, uint32_t url_len,
        const uint8_t *hdrs, uint32_t hdrs_len,
        const uint8_t *body, uint32_t body_len),
 {
@@ -42,6 +45,7 @@ EM_JS(void, wasm_net_post_js,
   }
   const net = Module["_nano_net"];
   const dec = new TextDecoder();
+  const methStr = meth_len > 0 ? dec.decode(Module.HEAPU8.subarray(meth, meth + meth_len)) : "POST";
   const urlStr = dec.decode(Module.HEAPU8.subarray(url, url + url_len));
   const hdrStr = dec.decode(Module.HEAPU8.subarray(hdrs, hdrs + hdrs_len));
   const bodyBytes = Module.HEAPU8.subarray(body, body + body_len).slice(); // 拷出，防线性内存增长失效
@@ -55,12 +59,11 @@ EM_JS(void, wasm_net_post_js,
   net.reqs[js_id] = rec;
   (async () => {
     try {
-      const resp = await fetch(urlStr, {
-        method: "POST",
-        headers: headers,
-        body: bodyBytes,
-        signal: ctl.signal,
-      });
+      // GET/HEAD 不带请求体（fetch 对它们带 body 会直接抛错）；其余方法按 body_len 决定
+      const noBody = (methStr === "GET" || methStr === "HEAD");
+      const init = { method: methStr, headers: headers, signal: ctl.signal };
+      if (body_len > 0 && !noBody) init.body = bodyBytes;
+      const resp = await fetch(urlStr, init);
       rec.status = resp.status;
       if (!resp.ok) {
         rec.state = 3; // ERROR
@@ -160,7 +163,9 @@ int32_t net_http_post_stream(const Net_Http_Request_Config *config, Net_Http_Req
 
     h->js_id = wasm_net_next_id_js();
 
+    const char *method = (config->method != NULL && config->method[0] != '\0') ? config->method : "POST";
     wasm_net_post_js(h->js_id,
+                     (const uint8_t *)method, (uint32_t)strlen(method),
                      (const uint8_t *)config->url, (uint32_t)strlen(config->url),
                      (const uint8_t *)hdrs, (uint32_t)off,
                      config->body, (uint32_t)config->body_len);

@@ -9,6 +9,8 @@
   预检且不返回 Access-Control-Allow-Origin）。本服务把同源路径 /v1/* 反向代理到
   上游 API（环境变量 NANO_API_PROXY 指定上游地址，不写入本仓库），流式转发
   （SSE 逐块透传），WASM 侧 hal_net 以同源相对路径 /v1 访问（见 ui_llm.c）。
+  上游可为 http://（内网模型服务）或 https://（公网 OpenAI 兼容端点）：
+  HTTPS 上游的证书校验由本服务负责，浏览器侧始终只看到同源 HTTPS。
 
 用法：
   python3 https_static_server.py [端口=9002] [目录=.]
@@ -35,6 +37,8 @@ key = os.environ.get("NANO_TLS_KEY", os.path.join(INFER_DIR, "bin", "web_key.pem
 # 上游经环境变量 NANO_API_PROXY 指定（如 http://<内网API主机>:<端口>），不设默认值
 # （源码不入库任何内网地址）；未设置时不启用反代（/v1/* 返回 503 提示）。
 API_PROXY_UPSTREAM = os.environ.get("NANO_API_PROXY", "").rstrip("/")
+# 可选：由服务端注入 API 密钥（App 配置第 3 行留空时用）。密钥就不必下发到前端。
+API_PROXY_KEY = os.environ.get("NANO_API_KEY", "")
 API_PROXY_PREFIX = "/v1/"
 
 # 反代时透传的请求头（其余请求头不属于业务语义，丢弃以免混淆上游）
@@ -75,7 +79,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         parts = urlsplit(self.path)
         upstream = urlsplit(API_PROXY_UPSTREAM)
         host = upstream.hostname or "127.0.0.1"
-        port_up = upstream.port or 80
+        is_tls = (upstream.scheme or "http").lower() == "https"
+        port_up = upstream.port or (443 if is_tls else 80)
         # 同源前缀与上游路径前缀一致（/v1/* 原样转发；上游 API base 即含 /v1）
         target_path = parts.path
         if parts.query:
@@ -85,12 +90,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         body = self.rfile.read(length) if length > 0 else None
 
         try:
-            conn = http.client.HTTPConnection(host, port_up, timeout=300)
+            if is_tls:
+                conn = http.client.HTTPSConnection(host, port_up, timeout=300,
+                                                   context=ssl.create_default_context())
+            else:
+                conn = http.client.HTTPConnection(host, port_up, timeout=300)
             conn.putrequest(method, target_path, skip_host=True, skip_accept_encoding=True)
             conn.putheader("Host", f"{host}:{port_up}")
+            has_auth = False
             for hk, hv in self.headers.items():
                 if hk.lower() in API_PROXY_PASS_HEADERS:
+                    if hk.lower() == "authorization":
+                        has_auth = True
                     conn.putheader(hk, hv)
+            if API_PROXY_KEY and not has_auth:
+                conn.putheader("Authorization", f"Bearer {API_PROXY_KEY}")
             if body is not None:
                 conn.putheader("Content-Length", str(len(body)))
             conn.endheaders()
@@ -136,6 +150,8 @@ ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 ctx.load_cert_chain(certfile=cert, keyfile=key)
 httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
 print(f"[https-static] serving {os.path.abspath(web_dir)} on https://0.0.0.0:{port}/ (cert={cert})")
+if API_PROXY_KEY:
+    print("[https-static] API key: injected server-side (NANO_API_KEY)")
 if API_PROXY_UPSTREAM:
     print(f"[https-static] API proxy: /v1/ -> {API_PROXY_UPSTREAM}")
 else:

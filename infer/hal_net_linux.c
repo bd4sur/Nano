@@ -58,6 +58,7 @@
 typedef struct Net_Request_Linux {
     // —— 配置拷贝（post 时由主线程写入，此后只读，工作线程读取）——
     char    url[NANO_NET_URL_MAX];
+    char    method[16];              // HTTP 方法（缺省 POST）
     char    host[NANO_NET_HOST_MAX]; // 不含端口
     char    path[NANO_NET_PATH_MAX]; // 以 / 开头
     int     port;
@@ -287,7 +288,7 @@ static void *net_worker(void *arg) {
         return NULL;
     }
     size_t off = 0;
-    off += (size_t)snprintf(req + off, req_cap - off, "POST %s HTTP/1.1\r\n", r->path);
+    off += (size_t)snprintf(req + off, req_cap - off, "%s %s HTTP/1.1\r\n", r->method, r->path);
     off += (size_t)snprintf(req + off, req_cap - off, "Host: %s:%d\r\n", r->host, r->port);
     off += (size_t)snprintf(req + off, req_cap - off, "Content-Length: %zu\r\n", r->body_len);
     off += (size_t)snprintf(req + off, req_cap - off, "Connection: close\r\n");
@@ -444,6 +445,8 @@ int32_t net_http_post_stream(const Net_Http_Request_Config *config, Net_Http_Req
         return -1;
     }
     snprintf(r->url, sizeof(r->url), "%s", config->url);
+    snprintf(r->method, sizeof(r->method), "%s",
+             (config->method != NULL && config->method[0] != '\0') ? config->method : "POST");
     if (config->body_len > 0 && config->body != NULL) {
         r->body = (uint8_t *)malloc(config->body_len);
         if (r->body == NULL) { free(r); return -1; }

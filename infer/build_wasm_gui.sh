@@ -93,6 +93,11 @@ root, out = sys.argv[1], sys.argv[2]
 #      IndexedDB 里属于这三处的条目）。页面靠 p1_dirs 判定“哪些路径归服务器管”。
 P1_DIRS = {"app", "icon", "wallpaper"}
 SKIP_DIRS = {"data"}   # data 是 App 运行时数据（不入产物）
+# 例外白名单：灵机 App 的**部署配置**（LLM 的 URL/模型/Key 三行）必须让浏览器读到，
+# 否则 App 里就得写死默认值（那正是 app/remotechat.scm 要摆脱的东西）。只放这一个
+# 文件，data/ 下其它东西（存档 / ilcache …）照旧不进产物。密钥随页面下发属**有意为之**
+# 的取舍：不想让它出现在前端就把第 3 行留空，改由反代注入（NANO_API_KEY）。
+CONFIG_WHITELIST = {"data/llm.txt"}
 # 清单是 llm/ 下的**全量**：构建不对任何具体文件做取舍（大模型也一样——它们只是 p2，
 # 用户不点「下载资源」就不会花那份流量）。是否"跑得动"属于运行时/App 的判断
 # （如 app/nanochat.scm 的模型表按文件存在性过滤），不是构建该替用户决定的事。
@@ -102,6 +107,12 @@ for dirpath, dirnames, filenames in os.walk(root):
     top = rel_dir.split(os.sep)[0]
     if top in SKIP_DIRS:
         dirnames[:] = []
+        # 白名单文件仍要收集（否则 data/ 整棵被跳过）
+        for fn in filenames:
+            rel = fn if rel_dir == "." else os.path.join(rel_dir, fn)
+            if rel in CONFIG_WHITELIST:
+                # p1：页面启动即挂载（App 一运行就要读它，不能等用户点「下载资源」）
+                files.append({"path": rel, "size": os.path.getsize(os.path.join(dirpath, fn)), "priority": 1})
         continue
     for fn in filenames:
         rel = fn if rel_dir == "." else os.path.join(rel_dir, fn)
@@ -181,6 +192,7 @@ if [ "$WASM_LTO" = "1" ]; then WASM_OPT="$WASM_OPT -flto"; fi
     am_native_Music.c \
     am_native_Audio.c \
     am_native_Rec.c \
+    am_native_Net.c \
     vendor/aqua_mp3/aqua_encoder.c \
     vendor/aqua_mp3/aqua_huff.c \
     vendor/aqua_mp3/aqua_mdct.c \

@@ -27,7 +27,10 @@ extern "C" {
 //   3. net_http_close() 随时终止并释放请求（中止未完成的传输；幂等）。
 //
 // 能力边界（保持接口最小内聚，协议编组不属于本层）：
-//   - 仅支持明文 HTTP/1.1（远端模型 API 为 http:// 内网服务）；
+//   - Linux 实现仅支持明文 HTTP/1.1（远端模型 API 为 http:// 内网服务）；
+//     WASM 实现的 URL 原样交给浏览器 fetch，因此 http:// 与 https:// 都可用
+//     （TLS/证书校验由浏览器负责，C 侧零成本）；
+//   - 方法名由 config->method 指定（NULL/空 = POST），大小写不敏感地原样透传；
 //   - 响应体按原始字节流透传（含 Content-Length / chunked / 连接关闭三种分帧），
 //     SSE 等应用层协议由调用方解析；
 //   - 单请求单连接，不做连接复用/重定向/代理。
@@ -54,14 +57,16 @@ typedef struct {
 
 // 请求配置（net_http_post_stream 调用后本结构即可释放；实现内部会深拷贝所需内容）
 typedef struct {
-    const char *url;      // 完整 URL，当前支持 http://host[:port]/path
+    const char *url;      // 完整 URL：http://host[:port]/path（WASM 实现下 https:// 亦可）
+    const char *method;   // HTTP 方法："GET"/"POST"/"PUT"/... ；NULL 或 "" = "POST"
+                          //   （新增字段，置 NULL 即保持历史行为，既有调用方无需改动）
     const uint8_t *body;  // 请求体（可为 NULL，此时 body_len 须为 0）
     size_t body_len;
     Net_Http_Header headers[NANO_NET_MAX_HEADERS]; // 附加请求头（Host/Content-Length 等由实现自动补）
     int32_t header_num;
 } Net_Http_Request_Config;
 
-// 发起流式 HTTP 请求（当前实现固定为 POST；非阻塞，立即返回）。
+// 发起流式 HTTP 请求（方法见 config->method，缺省 POST；非阻塞，立即返回）。
 // 成功返回 0 且 *out_req 为有效句柄；失败（参数非法/资源不足/平台不支持）返回 -1。
 int32_t net_http_post_stream(const Net_Http_Request_Config *config, Net_Http_Request **out_req);
 

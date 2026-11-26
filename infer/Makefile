@@ -18,7 +18,7 @@ ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
                     am_native_Touch.c am_native_Imu.c \
                     am_native_Key.c am_native_Fs.c am_native_Ui.c am_native_App.c nano_key_events.c \
                     am_native_Chat.c am_native_Raster.c am_native_Music.c am_native_Audio.c \
-                    am_native_Rec.c $(AQUA_SRCS) \
+                    am_native_Rec.c am_native_Net.c $(AQUA_SRCS) \
                     ui_scheme_app.c
 
 # ui_app.c 直接引用的业务模块（GUI 目标共用；同样缺一个就链接失败）
