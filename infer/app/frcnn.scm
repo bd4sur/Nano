@@ -327,7 +327,8 @@
 ;; ---- 状态 ---------------------------------------------------------------
 
 (define mode 0)          ; 0 = 绘制（空白画板）/ 1 = 流水线结果
-(define stage 0)         ; 已完成的最后一步（0..10）
+(define stage 0)         ; 当前显示的最后一步（0..10）
+(define max_stage 0)     ; 算到过的最远一步（阶段条按它决定"绿色/可点"）
 (define todo 0)
 (define busy 0)
 (define prog 0.0)
@@ -400,28 +401,54 @@
     (Gfx.fill_rect 0 34 SW 1 CL_R CL_G CL_B)
   }))
 
+;; 阶段 ↔ 步骤：phase_of[step] = 阶段号；phase_last[i] = 该阶段的**最后一步**
+;;（点阶段条就跳到这一步，看到的是这个阶段的产出）。
+;;   输入=0  骨干=1..3(conv1/2/3)  RPN=4..7  RoI池化=8  检测头=9..10
 (define phase_of '(0 1 1 1 2 2 2 2 3 4 4))
+(define phase_last '(0 3 7 8 10))
 (define phase_names '("输入" "骨干" "RPN" "RoI池化" "检测头"))
 
 (define ph_r 0)
 (define ph_g 0)
 (define ph_b 0)
+(define ph_st 2)          ; 0 = 当前阶段 / 1 = 已算完 / 2 = 还没算
+(define ph_tr 0)
+(define ph_tg 0)
+(define ph_tb 0)
 (define draw_phases
   (lambda () {
     (define cur (get_item phase_of stage))
     (Gfx.fill_rect 2 218 SW 1 CL_R CL_G CL_B)
     (set! _i 0)
     (while (< _i 5) {
-      (set! ph_r (if (== _i cur) 214 240))
-      (set! ph_g (if (== _i cur) 232 242))
-      (set! ph_b (if (== _i cur) 250 246))
+      ;; 三态：当前（蓝）/ 该阶段已经算完（绿）/ 还没算到（灰）
+      (set! ph_st 2)
+      (if (== _i cur) (set! ph_st 0) #f)
+      (if (and (> _i cur) (<= (get_item phase_last _i) max_stage)) (set! ph_st 1) #f)
+      (if (and (< _i cur) (== ph_st 2)) (set! ph_st 1) #f)
+      (set! ph_r 236) (set! ph_g 238) (set! ph_b 243)
+      (set! ph_tr 152) (set! ph_tg 158) (set! ph_tb 172)
+      (if (== ph_st 1)
+          {
+            (set! ph_r 210) (set! ph_g 238) (set! ph_b 214)
+            (set! ph_tr 22) (set! ph_tg 104) (set! ph_tb 56)
+          }
+          #f)
+      (if (== ph_st 0)
+          {
+            (set! ph_r 52) (set! ph_g 116) (set! ph_b 204)
+            (set! ph_tr 255) (set! ph_tg 255) (set! ph_tb 255)
+          }
+          #f)
       (Gfx.fill_rect (+ 3 (* _i 63)) 220 60 18 ph_r ph_g ph_b)
-      (if (== _i cur)
-          (Gfx.fill_rect (+ 3 (* _i 63)) 220 60 2 70 150 230)
+      (if (== ph_st 0)
+          (Gfx.fill_rect (+ 3 (* _i 63)) 220 60 2 30 80 170)
+          #f)
+      (if (== ph_st 1)
+          (Gfx.fill_rect (+ 3 (* _i 63)) 220 60 2 22 104 56)
           #f)
       (Gfx.draw_text_centered 1 (get_item phase_names _i) (+ 33 (* _i 63)) 229
-                              (if (== _i cur) CA_R 120) (if (== _i cur) CA_G 128)
-                              (if (== _i cur) CA_B 145) 1)
+                              ph_tr ph_tg ph_tb 1)
       (set! _i (+ _i 1))
     })
   }))
@@ -1579,6 +1606,7 @@
     (set! infer_ms 0)
     (set! mode 1)
     (set! stage 0)
+    (set! max_stage 0)
     (set! autorun 1)
     (FR.reset_results)
     (start_stage 0)
@@ -1598,6 +1626,7 @@
     (set! drawn 0)
     (set! busy 0)
     (set! stage 0)
+    (set! max_stage 0)
     (set! infer_ms 0)
   }))
 
@@ -1728,7 +1757,25 @@
                     #f)
               }
               #f)
+          ;; 阶段条：点一下跳到该阶段的最后一步（只跳"已经算完"的阶段）
           (if (and (== _p 1) (== busy 0))
+              {
+                (set! _i 0)
+                (while (< _i 5) {
+                  (if (in_rect _tx _ty (+ 3 (* _i 63)) 219 60 20)
+                      (if (<= (get_item phase_last _i) max_stage)
+                          {
+                            (set! autorun 0)
+                            (set! stage (get_item phase_last _i))
+                            (set! pick 0)
+                          }
+                          #f)
+                      #f)
+                  (set! _i (+ _i 1))
+                })
+              }
+              #f)
+          (if (and (== _p 1) (== busy 0) (< _ty 218))
               (if (== (hit_right _tx _ty) 0) (draw_img_hit _tx _ty) #f)
               #f)
         }
@@ -1741,6 +1788,7 @@
           (if (>= prog 1.0)
               {
                 (set! stage todo)
+                (if (> stage max_stage) (set! max_stage stage) #f)
                 (set! busy 0)
                 (set! prog 0.0)
                 (set! infer_ms (+ infer_ms (- (System.timestamp) stage_t0)))
