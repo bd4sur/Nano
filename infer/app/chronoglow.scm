@@ -1,6 +1,6 @@
 ;@id=chronoglow
 ;@title=光粒时钟
-;@version=2026-11-25
+;@version=2026-11-26
 ;; ============================================================================
 ;; 光粒时钟（chronoglow）—— 灵机 App：**大量自由流动的发光粒子聚集成 Arial 数字**
 ;;
@@ -53,26 +53,39 @@
 ;;   ≈ **20~22 ms/拍**（定时器 33 ms，页面侧还有 ~20 ms 固定开销，实际 24~25 fps）。
 ;;   星空比旧的四态尘埃便宜（位置就是状态，每颗只有几次算术 + 1 条线）。
 ;;
-;; 交互：底部一排四枚按钮 ——
-;;   ① 样式    实心 / 描边（两套字形点表）
-;;   ② 配色    1..6（6 套色相）
-;;   ③ 粒子形状 圆点（fill_dot_aa r=1.55，直径 ~3~4px）/ 细点（r=0.62，直径 1~2px）
-;;             / 短棒（旧画法：恒定对角偏置的 AA 线）
-;;   ④ 闪烁    波纹（默认：**每秒一发、从左向右快速扫过的脉冲波包**）
-;;             → 随机（每颗独立乱闪，与空间位置无关）→ 常亮（不闪）→ 波纹
-;;     **闪烁只作用在粒子本体亮度上**：亮度分两份 —— `bs`（基础亮度：波纹档的波值 /
-;;     常亮档的定值，**光晕只用它，所以光晕不闪**）与 `br = bs × 闪烁系数`（圆点/光丝
-;;     用它）。否则看到的是"一团团光晕在呼吸"，粒子本身反而看不清。
-;;   点按画面其它地方 = 排斥扰动（把粒子推开）；右上角「退出」（app/lib/exit.scm）。
+;; 交互：底部一排五枚按钮 ——
+;;   ① 实心 / 描边（两套字形点表）
+;;   ② 配色1..6（6 套色相）
+;;   ③ 圆点（fill_dot_aa r=1.55，直径 ~3~4px）/ 细点（r=0.62，直径 1~2px）
+;;      / 短棒（旧画法：恒定对角偏置的 AA 线）
+;;   ④ 波纹（默认：**每秒一发、从左向右快速扫过的脉冲波包**）
+;;      → 随机（每颗独立乱闪，与空间位置无关）→ 常亮（不闪）→ 波纹
+;;      **闪烁只作用在粒子本体亮度上**：亮度分两份 —— `bs`（基础亮度：波纹档的波值 /
+;;      常亮档的定值，**光晕只用它，所以光晕不闪**）与 `br = bs × 闪烁系数`（圆点/光丝
+;;      用它）。否则看到的是"一团团光晕在呼吸"，粒子本身反而看不清。
+;;   ⑤ 排斥 / 涟漪 —— **触屏扰动的两种行为**（2026-11-26 新增）：
+;;      排斥：按住把半径 REPR 内的粒子沿径向推开（原行为），松手靠弹簧收回；
+;;      涟漪：触点当**波源**，跑一套与 `app/ripple.scm` 同源的**二维波场**
+;;            （显式差分 + 双缓冲 + 每拍衰减），粒子按水面**梯度**位移 ⇒ 从指尖
+;;            扩出去的同心圆波、会互相干涉、也会衰减干净。**位移只加在绘制位置上**，
+;;            物理位置一直在字形点，所以扰动散尽后数字原样回来（集群形状不变）。
+;; 点按画面其它地方 = 按当前扰动模式处理；右上角「退出」（app/lib/exit.scm）。
 ;; 诊断行（每 30 拍）：[cg] pts=<活跃点数> ms=<本拍时长> pal=<配色号> style=<字形风格>
-;;   rep=<排斥剩余拍数>
+;;   rep=<排斥剩余拍数> tmd=<0 排斥 / 1 涟漪> wav=<全场最大水面振幅> wn=<本拍被位移的粒子数>
 ;;   rnd=<0 圆点 / 1 细点 / 2 短棒> twk=<0 随机 / 1 波纹 / 2 常亮>
+;; 另有换秒事件行：[cg] sec=<秒>（每秒一行，给 e2e 当"同秒取帧"的时间原点）
 ;; 验收口径（探针 tools/e2e/browser，见 doc/AGENTS.md）：
 ;;   · 波纹：把数字行按 20px 分 16 bin，逐帧看哪个 bin 最亮 —— 亮带应每秒从左扫到右
 ;;     （实测一帧一个位置：bin 6~9 → bin 8 → bin 11~12 → bin 12~14），扫完（0.7s 后）
 ;;     整行回到底亮度，等下一个整秒重来。脉冲在带内 2~3 倍于两侧（bin 168/162 vs 82/62）。
 ;;   · 随机：亮心像素数（min 通道 >150）的帧间变异 ≈ 30%（常亮只有 4%），
 ;;     而"光晕带"像素（40..90）变异仍 ≈ 4% ⇒ 闪的是粒子本身、光晕不动。
+;;   · 涟漪：同秒基线与取样帧求差（App 每秒打一行 `[cg] sec=` 当时间原点 —— 换字是
+;;     **动画**变过去的，靠帧差根本对不齐），按到触点的距离分 8px 一环统计"变化占比"，
+;;     再除以同秒不触摸的对照剖面（每环取 6 次试验的中位数，剔除上一发波场的残留）。
+;;     判据：**位移区外缘（比值 ≥1.5 的最外环）随时间外扩** —— 实测 200ms 约 60px、
+;;     420ms 约 92px（波场每拍跨一格 = 10px ⇒ ~240px/s）；排斥档的外缘始终 ≤80px
+;;     （= 排斥半径 58px 的量级）且不随时间变。
 ;;
 ;; 解释器约束（manual.md + doc/AGENTS.md）：算术**恒二元**；无 list/let/map；
 ;; 局部量在 lambda 体首部一次声明、循环里 set!；只有 #f 是假（0 也是真）；
@@ -393,7 +406,10 @@
 ;;   1 = 波纹 ——（默认）亮度相位随粒子序号走，于是有一条从秒位（右）向左传播的光晕波；
 ;;   2 = 常亮 —— 恒定亮度，完全不闪。
 (define TWK 1)
-;; 触点排斥：按住屏幕时把附近粒子推开，松手后弹簧自然把它们收回字形
+;; 触点扰动：两种行为（底部第五枚按钮切换 TMODE）
+;;   0 排斥 —— 按住屏幕时把半径 REPR 内的粒子沿径向推开，松手后弹簧把它们收回字形
+;;   1 涟漪 —— 从触点向外发一圈水波（见下方 RIP 常量的说明）
+(define TMODE 0)                   ; 0 = 排斥 / 1 = 涟漪（点按画面时的行为）
 (define REPT 0)                    ; 剩余排斥拍数（>0 生效；点按也会给 8 拍脉冲）
 (define GUARD 12)                  ; 启动保护：前 12 拍忽略触屏（吃掉从菜单点进来的余波）
 (define REPR 58.0)                 ; 排斥半径（px）
@@ -401,14 +417,59 @@
 (define RTX 0.0)                   ; 当前触点
 (define RTY 0.0)
 (define PRESSED #f)
-(define BHOLD 0)                   ; 本次按下落在哪颗按钮：0 无 / 1 样式 / 2 配色 / 3 粒子形状 / 4 闪烁（高亮用）
-;; 底部四枚按钮（左上角 + 尺寸，一排四个，左右各留 8px）：
-;;   ① 样式 实心/描边  ② 配色 1..6  ③ 粒子 圆点/短棒  ④ 闪烁 波纹/随机/常亮
-;; 宽度按最长的标签留（5 个汉字的 12px 字模 = 60px + 两侧内边距）：76 / 58 / 76 / 76。
-(define B1X 8.0)   (define B1Y 212.0) (define B1W 76.0) (define B1H 20.0)
-(define B2X 90.0)  (define B2Y 212.0) (define B2W 58.0) (define B2H 20.0)
-(define B3X 154.0) (define B3Y 212.0) (define B3W 76.0) (define B3H 20.0)
-(define B4X 236.0) (define B4Y 212.0) (define B4W 76.0) (define B4H 20.0)
+;; 本次按下落在哪颗按钮：0 无 / 1 样式 / 2 配色 / 3 粒子形状 / 4 闪烁 / 5 扰动（高亮用）
+(define BHOLD 0)
+;; ---- 涟漪：二维波场（算法照搬 app/ripple.scm / ui_ripple.c）------------------
+;; 为什么不再用"一个环 + 径向冲量"：那只能做一条孤立的环，波前面是硬边、没有干涉、
+;; 也不会自己衰减干净。这里改用 `app/ripple.scm` 那套**二维波动方程的显式差分**：
+;;
+;;     amp' = (上 + 下 + 左 + 右) × 0.5 − amp_上一时刻     ；然后 amp' −= amp'/16（衰减）
+;;
+;; 双缓冲（本拍读"当前页"、写"另一页"，写完翻页），与 ripple.scm 逐条对应。
+;; 触点激发 = 把触点所在格子及邻域**累加**一个震源振幅（同 `disturb` / `wr_disturb`）。
+;; 粒子侧取**水位场的梯度**（= 水面法向）做位移，正是 ripple.scm 折射底图的做法：
+;;
+;;     x' = x + WKR·(∂amp/∂x)      y' = y + WKR·(∂amp/∂y)
+;;
+;; 三个好处：① 圆形波纹天然对称于触点，还会互相干涉、被"岸边"反射；
+;; ② **位移只加在绘制位置上**，物理位置（GX/GY）始终在字形点上 ⇒ 波场衰减到零后
+;;    粒子**原样回到原位**，字形的集群结构不会被永久打乱（这正是需求要的）；
+;; ③ 波场平坦时整段停算（WACT=0）⇒ 手指没碰、波也散尽时，常态零开销。
+;;
+;; 格边 10px（32×24 格）：ripple.scm 是 4px/80×60 = 4800 格，实测每步 18.5ms，
+;; 这里放不下（本 App 常态已用掉 ~22ms / 33ms）。768 格约 3ms/步，且波前每拍跨
+;; 一格 ⇒ 10px/拍 ≈ 240px/s，与之前的手写环速度（200px/s）观感相当。
+(define WCELL 10)                  ; 格边长（px）：320/10 = 32、240/10 = 24
+(define WGW 32)                    ; 横向格数
+(define WGH 24)                    ; 纵向格数
+(define WPAGE (* WGW WGH))         ; 单页元素数（768）
+(define WATT 0.0625)               ; 每拍衰减 1/16（ripple.scm 是 1/32，本 App 拍频更慢，取快一倍）
+(define WSRC 520.0)                ; 震源振幅（触点落点 3×3 格累加）
+(define WCLAMP 1200.0)             ; 单格振幅上限：按住连发时振幅会一格格往上堆，夹住免得发散
+(define WMIN 12.0)                 ; 全场 |amp| 低于它就算"水面已静"（停算 + 粒子归位）
+(define WMIN2 20.0)                ; 单格 |amp| 低于它的直接清 0：让波场**收尾干脆**（不然
+                                  ; 3% 的尾巴要衰减 5s 才静，这期间每拍还在跑 768 格）
+(define WKR 0.045)                 ; 位移比例：px = WKR × 相邻格水位差（梯度）
+(define WLIM 24.0)                 ; 单轴位移上限（px）：按住不松时振幅会累积，不夹会把
+                                  ; 整团粒子甩出画面（第一版 WKR=0.06 就是这样：数字直接消失）
+(define WAMP '())                  ; 两页振幅场（2×WPAGE，首尾相接）
+(define WCUR 0)                    ; 当前"读"页基址（0 或 WPAGE）
+(define WACT 0)                    ; 1 = 波场活动（推进 + 粒子按梯度位移）；0 = 平静
+(define WGX 0.0)                   ; wave_grad 的输出（避免返回列表造成堆分配）
+(define WGY 0.0)
+(define WMAXA 0.0)                 ; 本拍全场最大 |amp|（诊断 + 静场判定）
+(define WN 0)                      ; 本拍发生位移的粒子数（诊断用）
+;; 底部五枚按钮（左上角 + 尺寸，一排五个，左右各留 8px、间距 4px）：
+;;   ① 实心/描边  ② 配色1..6  ③ 圆点/细点/短棒  ④ 波纹/随机/常亮  ⑤ 排斥/涟漪
+;; 标签一律压到 2~3 个字符（12px 字模 = 每汉字 12px）：
+;;   58 + 54 + 58 + 58 + 60 + 4×4 间距 + 2×8 边距 = 320px（正好铺满）。
+;; 原先是 4 枚按钮 + 带类目前缀的 5 字标签（“样式·实心”等，宽 76），加第五枚后总宽
+;; 76×3 + 58 + 间距 = 312 已顶到边，只能统一改成短标签。
+(define B1X 8.0)   (define B1Y 212.0) (define B1W 58.0) (define B1H 20.0)
+(define B2X 70.0)  (define B2Y 212.0) (define B2W 54.0) (define B2H 20.0)
+(define B3X 128.0) (define B3Y 212.0) (define B3W 58.0) (define B3H 20.0)
+(define B4X 190.0) (define B4Y 212.0) (define B4W 58.0) (define B4H 20.0)
+(define B5X 252.0) (define B5Y 212.0) (define B5W 60.0) (define B5H 20.0)
 ;; 重组冲刺（打乱后短暂改用直接指数趋近，十几拍把粒子干净地收成字形）
 (define BOOST 0)                   ; >0 = 正处于"重组冲刺"的剩余拍数
 (define SPK 0.26)                  ; 弹簧系数：把粒子拉回平衡位置（字形点）的刚度
@@ -526,6 +587,16 @@
     })
     ))
 
+;; ---- 波场初始化：两页振幅全零（水面平静）--------------------------------
+(define wave_init
+  (lambda ()
+    (define i 0)
+    (set! WAMP (cons 0.0 '())) (pop WAMP)
+    (while (< i (* 2 WPAGE)) { (push WAMP 0.0) (set! i (+ i 1)) })
+    (set! WCUR 0)
+    (set! WACT 0)
+    (set! WMAXA 0.0)))
+
 ;; ---- 时间 → 6 个数字 ------------------------------------------------------
 (define read_time
   (lambda ()
@@ -574,26 +645,31 @@
     (define b2on #f)
     (define b3on #f)
     (define b4on #f)
+    (define b5on #f)
     (set! b1on (and PRESSED (== BHOLD 1)))
-    (if (== STYLE 1) (button B1X B1Y B1W B1H "样式·实心" b1on)
-                     (button B1X B1Y B1W B1H "样式·描边" b1on))
+    (if (== STYLE 1) (button B1X B1Y B1W B1H "实心" b1on)
+                     (button B1X B1Y B1W B1H "描边" b1on))
     (set! b2on (and PRESSED (== BHOLD 2)))
-    (cond ((== PAL 0) (button B2X B2Y B2W B2H "配色·1" b2on))
-          ((== PAL 1) (button B2X B2Y B2W B2H "配色·2" b2on))
-          ((== PAL 2) (button B2X B2Y B2W B2H "配色·3" b2on))
-          ((== PAL 3) (button B2X B2Y B2W B2H "配色·4" b2on))
-          ((== PAL 4) (button B2X B2Y B2W B2H "配色·5" b2on))
-          (else       (button B2X B2Y B2W B2H "配色·6" b2on)))
-    ;; ③ 粒子形状：圆点 / 短棒
+    (cond ((== PAL 0) (button B2X B2Y B2W B2H "配色1" b2on))
+          ((== PAL 1) (button B2X B2Y B2W B2H "配色2" b2on))
+          ((== PAL 2) (button B2X B2Y B2W B2H "配色3" b2on))
+          ((== PAL 3) (button B2X B2Y B2W B2H "配色4" b2on))
+          ((== PAL 4) (button B2X B2Y B2W B2H "配色5" b2on))
+          (else       (button B2X B2Y B2W B2H "配色6" b2on)))
+    ;; ③ 粒子形状：圆点 / 细点 / 短棒
     (set! b3on (and PRESSED (== BHOLD 3)))
-    (cond ((== RENDER 0) (button B3X B3Y B3W B3H "粒子·圆点" b3on))
-          ((== RENDER 1) (button B3X B3Y B3W B3H "粒子·细点" b3on))
-          (else          (button B3X B3Y B3W B3H "粒子·短棒" b3on)))
+    (cond ((== RENDER 0) (button B3X B3Y B3W B3H "圆点" b3on))
+          ((== RENDER 1) (button B3X B3Y B3W B3H "细点" b3on))
+          (else          (button B3X B3Y B3W B3H "短棒" b3on)))
     ;; ④ 闪烁：波纹（默认）/ 随机 / 常亮
     (set! b4on (and PRESSED (== BHOLD 4)))
-    (cond ((== TWK 0) (button B4X B4Y B4W B4H "闪烁·随机" b4on))
-          ((== TWK 2) (button B4X B4Y B4W B4H "闪烁·常亮" b4on))
-          (else       (button B4X B4Y B4W B4H "闪烁·波纹" b4on)))))
+    (cond ((== TWK 0) (button B4X B4Y B4W B4H "随机" b4on))
+          ((== TWK 2) (button B4X B4Y B4W B4H "常亮" b4on))
+          (else       (button B4X B4Y B4W B4H "波纹" b4on)))
+    ;; ⑤ 触屏扰动：排斥 / 涟漪（标签即当前模式）
+    (set! b5on (and PRESSED (== BHOLD 5)))
+    (cond ((== TMODE 1) (button B5X B5Y B5W B5H "涟漪" b5on))
+          (else         (button B5X B5Y B5W B5H "排斥" b5on)))))
 
 (define in_rect
   (lambda (px py bx by bw bh)
@@ -663,6 +739,130 @@
   (lambda (x y rad br)
     (Gfx.fill_glow_aa x y rad HR HG HB (* 0.26 br))))
 
+;; ---- 波场：清零 / 激发 / 推进一拍 / 取梯度 --------------------------------
+
+;; 清空两页（切回排斥档时用：水面立刻平静，粒子马上回到字形点）
+(define wave_clear
+  (lambda ()
+    (define i 0)
+    (while (< i (* 2 WPAGE)) { (set_item! WAMP i 0.0) (set! i (+ i 1)) })
+    (set! WACT 0)
+    (set! WMAXA 0.0)))
+
+;; 触点激发：触点所在格子 ±1 格（3×3 = 30×30px）**累加**震源振幅
+;; （ripple.scm 的 disturb：按住时每拍都调用 ⇒ 振幅累积成持续外扩的连续波纹）
+(define wave_drop
+  (lambda (px py)
+    (define cx (Math.floor (/ px WCELL)))
+    (define cy (Math.floor (/ py WCELL)))
+    (define x0 (- cx 1))
+    (define x1 (+ cx 1))
+    (define y0 (- cy 1))
+    (define y1 (+ cy 1))
+    (define x 0)
+    (define y 0)
+    (define i 0)
+    (define i2 0.0)
+    (if (< x0 0) (set! x0 0) #f)
+    (if (> x1 (- WGW 1)) (set! x1 (- WGW 1)) #f)
+    (if (< y0 0) (set! y0 0) #f)
+    (if (> y1 (- WGH 1)) (set! y1 (- WGH 1)) #f)
+    (set! y y0)
+    (while (<= y y1) {
+      (set! x x0)
+      (while (<= x x1) {
+        (set! i (+ WCUR (+ (* y WGW) x)))
+        (set! i2 (+ (get_item WAMP i) WSRC))
+        (if (> i2 WCLAMP) (set! i2 WCLAMP) #f)
+        (set_item! WAMP i i2)
+        (set! x (+ x 1))
+      })
+      (set! y (+ y 1))
+    })
+    (set! WACT 1)))
+
+;; 推进一拍：逐格 amp' = (四邻之和)×0.5 − 上一拍的自己，再按 WATT 衰减；
+;; 写进另一页后翻页。同时记全场最大 |amp| —— 低于 WMIN 就判定水面已静（停算）。
+;; 边界格只累加**存在的**邻格（相当于四周一圈恒为 0，波会在"岸边"反射）。
+(define wave_step
+  (lambda ()
+    (define cur 0)
+    (define nxt 0)
+    (define cx 0)
+    (define cy 0)
+    (define i 0)
+    (define s0 0.0)
+    (define a 0.0)
+    (define na 0.0)
+    (define mx 0.0)
+    (define av 0.0)
+    (set! cur WCUR)
+    (set! nxt (if (== cur 0) WPAGE 0))
+    (set! cy 0)
+    (while (< cy WGH) {
+      (set! cx 0)
+      (while (< cx WGW) {
+        (set! i (+ (* cy WGW) cx))
+        (set! s0 0.0)
+        (if (> cx 0) (set! s0 (+ s0 (get_item WAMP (+ cur (- i 1))))) #f)
+        (if (< cx (- WGW 1)) (set! s0 (+ s0 (get_item WAMP (+ cur (+ i 1))))) #f)
+        (if (> cy 0) (set! s0 (+ s0 (get_item WAMP (+ cur (- i WGW))))) #f)
+        (if (< cy (- WGH 1)) (set! s0 (+ s0 (get_item WAMP (+ cur (+ i WGW))))) #f)
+        (set! a (- (* s0 0.5) (get_item WAMP (+ nxt i))))
+        (set! na (- a (* a WATT)))
+        (if (< (Math.abs na) WMIN2) (set! na 0.0) #f)
+        (set_item! WAMP (+ nxt i) na)
+        (set! av (Math.abs na))
+        (if (> av mx) (set! mx av) #f)
+        (set! cx (+ cx 1))
+      })
+      (set! cy (+ cy 1))
+    })
+    (set! WCUR nxt)
+    (set! WMAXA mx)
+    (if (< mx WMIN) (wave_clear) #f)))
+
+;; 某点水面梯度（双线性：先按格心插值，再取相邻格差 = ∂amp/∂x、∂amp/∂y）。
+;; 结果写进 WGX/WGY 两个全局 —— 返回列表会给每颗粒子每拍造一个堆对象。
+;; 格心在 (i+0.5)·WCELL，所以 fx = x/WCELL − 0.5、tx 为格内小数部分。
+(define wave_grad
+  (lambda (x y)
+    (define fx 0.0)
+    (define fy 0.0)
+    (define i0 0)
+    (define j0 0)
+    (define i1 0)
+    (define j1 0)
+    (define tx 0.0)
+    (define ty 0.0)
+    (define h00 0.0)
+    (define h10 0.0)
+    (define h01 0.0)
+    (define h11 0.0)
+    (set! fx (- (/ x WCELL) 0.5))
+    (set! fy (- (/ y WCELL) 0.5))
+    (set! i0 (Math.floor fx))
+    (set! j0 (Math.floor fy))
+    (set! tx (- fx i0))
+    (set! ty (- fy j0))
+    (set! i1 (+ i0 1))
+    (set! j1 (+ j0 1))
+    ;; 越界一律夹到边界格（波场外圈等价于"没有邻居"，与 wave_step 的边界处理一致）
+    (if (< i0 0) (set! i0 0) (if (> i0 (- WGW 1)) (set! i0 (- WGW 1)) #f))
+    (if (< i1 0) (set! i1 0) (if (> i1 (- WGW 1)) (set! i1 (- WGW 1)) #f))
+    (if (< j0 0) (set! j0 0) (if (> j0 (- WGH 1)) (set! j0 (- WGH 1)) #f))
+    (if (< j1 0) (set! j1 0) (if (> j1 (- WGH 1)) (set! j1 (- WGH 1)) #f))
+    (set! h00 (get_item WAMP (+ WCUR (+ (* j0 WGW) i0))))
+    (set! h10 (get_item WAMP (+ WCUR (+ (* j0 WGW) i1))))
+    (set! h01 (get_item WAMP (+ WCUR (+ (* j1 WGW) i0))))
+    (set! h11 (get_item WAMP (+ WCUR (+ (* j1 WGW) i1))))
+    ;; 双线性：先沿 y 在左右两列插值 → 左右之差就是 ∂amp/∂x（同法取 ∂amp/∂y）
+    (set! WGX (- (+ (* h10 (- 1.0 ty)) (* h11 ty))
+                 (+ (* h00 (- 1.0 ty)) (* h01 ty))))
+    (set! WGY (- (+ (* h01 (- 1.0 tx)) (* h11 tx))
+                 (+ (* h00 (- 1.0 tx)) (* h10 tx))))
+    ))
+
 (define step_particle
   (lambda (p tx ty hue t glow rep)
     (define x 0.0)
@@ -725,6 +925,20 @@
                                    (* 3.7 g))))))
     (set! y (+ y (* AJ (Math.sin (+ (* t (* WJY (+ 0.58 (* 0.50 (mod (* 2.6 g) 1.0)))))
                                    (* 1.3 g))))))
+    ;; 涟漪：按水面梯度位移**绘制位置**（与 ripple.scm 折射底图同一做法：src = dst − k·∇amp）。
+    ;; 只动绘制位置、不动 GX/GY ⇒ 波场衰减干净后粒子**原样回到字形点**，字形集群不变形。
+    ;; 波场平静时（WACT=0）这一整段跳过 —— 常态零开销；活动时才做一次双线性梯度（4 次
+    ;; get_item），幅度够大（WKR×相邻格水位差，可达 ±20px），不怕把数字撕开。
+    (if (== WACT 1)
+        { (wave_grad x y)
+          (set! sx (* WKR WGX))
+          (set! sy (* WKR WGY))
+          (if (> sx WLIM) (set! sx WLIM) (if (< sx (- 0.0 WLIM)) (set! sx (- 0.0 WLIM)) #f))
+          (if (> sy WLIM) (set! sy WLIM) (if (< sy (- 0.0 WLIM)) (set! sy (- 0.0 WLIM)) #f))
+          (set! x (+ x sx))
+          (set! y (+ y sy))
+          (set! WN (+ WN 1)) }
+        #f)
     ;; 亮度分两份（这一条是"闪烁体现在粒子上、而不是光晕上"的关键）：
     ;;   bs —— **基础亮度**：波纹档的波值 / 常亮档的定值。**光晕（fill_glow_aa）只用它**，
     ;;         所以光晕不闪、不脉冲（否则整屏看的是"一团团光晕在呼吸"，粒子本身反而看不清）。
@@ -823,7 +1037,9 @@
     (define hue 0.0)
     (define rp 0)
     (set! ACTIVE 0)
-    (set! rp (if (> REPT 0) 1 0))        ; 排斥开关只读一次全局
+    (set! WN 0)
+    ;; 排斥开关只读一次全局（热路径上全局取值很贵）；涟漪档的排斥一律关掉
+    (set! rp (if (and (> REPT 0) (== TMODE 0)) 1 0))
     ;; 粒子形状 → 绘制参数（每帧一次；细点档提亮 + 收小辉光）
     (cond ((== RENDER 1)
            { (set! DRAD 0.62) (set! DBRT 1.60) (set! HGA 3.9) (set! HGB 1.30) })
@@ -861,7 +1077,8 @@
         (set! j (+ j 1))
       })
       (set! si (+ si 1))
-    })))
+    })
+    ))
 
 ;; ---- 分钟切换：把整团粒子完全打乱，再让弹簧把它们重新聚成新数字 ----------
 ;; 每颗粒子的位置/速度都重新随机（全屏范围 + 一点从画面中心向外的初速），
@@ -914,11 +1131,25 @@
                { (set! BHOLD 4)
                  ;; 循环顺序：波纹（现状）→ 随机 → 常亮 → 波纹 …（第一下就切到"随机"便于对比）
                  (set! TWK (if (== TWK 1) 0 (if (== TWK 0) 2 1))) })
-              (else { (set! BHOLD 0) (set! REPT 8) }))
+              ((in_rect RTX RTY B5X B5Y B5W B5H)
+               { (set! BHOLD 5)
+                 ;; 排斥 ⇄ 涟漪（标签即当前模式）；切换时把另一档的残留清干净：
+                 ;; 切到涟漪就不再排斥，切回排斥就把在飞的水波收掉。
+                 (set! TMODE (if (== TMODE 1) 0 1))
+                 (if (== TMODE 1) (set! REPT 0) (wave_clear)) })
+              (else { (set! BHOLD 0)
+                      ;; 不在按钮上：按当前模式给一次扰动（排斥 8 拍脉冲 / 涟漪落一次震源）
+                      (if (== TMODE 0) (set! REPT 8) (wave_drop RTX RTY)) }))
         #f)
     (if (Touch.take_release) (set! BHOLD 0) #f)
-    ;; 按住（且不是按在按钮上）→ 持续排斥；松手后 REPT 递减到 0，弹簧自然把粒子收回
-    (if (and PRESSED (== BHOLD 0) (== REPT 0)) (set! REPT 8) #f)
+    ;; 按住（且不是按在按钮上）：排斥档持续排斥，松手后 REPT 递减到 0，弹簧自然收回粒子；
+    ;; 涟漪档**每拍**都往触点落一次震源（ripple.scm 的 disturb 同款）⇒ 振幅累积成
+    ;; 持续从指尖外扩的连续波纹，拖着手指数就是一路水花。
+    (if (and PRESSED (== BHOLD 0))
+        (if (== TMODE 0)
+            (if (== REPT 0) (set! REPT 8) #f)
+            (wave_drop RTX RTY))
+        #f)
     (if (> REPT 0) (set! REPT (- REPT 1)) #f)
     (read_time)
     ;; 分钟切换 → 全量打乱（首拍只记录分钟序号，不炸）
@@ -932,11 +1163,16 @@
     ;; ---- 波纹档的脉冲：整秒对齐（数字换秒的同一拍重新发一个），其余按 dt 推进 ----
     (set! ss (Math.floor (mod (+ (Time.utc_sod) TZ_SEC) 60)))
     (if (not (== ss SSNOW))
-        { (set! SSNOW ss) (set! PHASE 0.0) }            ; 新的一秒：脉冲从左边重新出发
+        { (set! SSNOW ss) (set! PHASE 0.0)              ; 新的一秒：脉冲从左边重新出发
+          ;; 换秒事件打一行：e2e 需要"与换字同步"的取帧原点（字是**动画**变过去的，
+          ;; 帧差里没有尖峰，靠帧差根本对不齐 —— 由 App 报时刻最省事也最准）。
+          (display "[cg] sec=") (display ss) (newline) }
         (set! PHASE (+ PHASE (/ now 1000.0))))          ; 否则照常推进
     (if (< PHASE PKT)
         (set! PX (+ -70.0 (* (/ PHASE PKT) 460.0)))     ; 0.7s 从 -70 扫到 390
         (set! PX 999.0))                               ; 本秒已扫完 → 屏外（无脉冲）
+    ;; 波场推进一拍（水面已静则整段停算）
+    (if (== WACT 1) (wave_step) #f)
     (draw_bg T)
     (draw_dust T)
     (draw_clock T)
@@ -951,6 +1187,8 @@
           (display " ms=") (display (/ ACC 30.0))
           (display " pal=") (display PAL)
           (display " style=") (display STYLE) (display " rep=") (display REPT)
+          (display " tmd=") (display TMODE)
+          (display " wav=") (display WMAXA) (display " wn=") (display WN)
           (display " rnd=") (display RENDER) (display " twk=") (display TWK)
           (newline)
           (set! FRAMES 0)
@@ -964,6 +1202,7 @@
 (EX.install)
 (build_layout)
 (build_particles)
+(wave_init)
 (set! LASTMS (Diag.ms))
 (read_time)
 (draw_bg 0.0)
