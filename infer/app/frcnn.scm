@@ -535,6 +535,35 @@
     bc_b
   }))
 
+;; 某通道激活最大的格子下标（第 1~4 步默认选中它，感受野才会落在墨迹上）
+(define bc_cell 0)
+(define bc_cm 0.0)
+(define bc_cv 0.0)
+(define bc_r 0)
+(define bc_cc 0)
+;; **跳过最外一圈**：那里输入是补的 0，跟纸面（归一化后约 -3.8）差一大截，
+;; 激活反而最大 —— 选到它就等于选了一段"补边"，感受野里全是假的。
+(define best_cell
+  (lambda (buf n ch) {
+    (set! bc_cell 0)
+    (set! bc_cm -1.0)
+    (set! bc_i 0)
+    (while (< bc_i (* n n)) {
+      (set! bc_r (Math.floor (/ bc_i n)))
+      (set! bc_cc (mod bc_i n))
+      (if (and (> bc_r 0) (< bc_r (- n 1)) (> bc_cc 0) (< bc_cc (- n 1)))
+          (if (> (get_item buf (+ (* ch (* n n)) bc_i)) bc_cm)
+              {
+                (set! bc_cm (get_item buf (+ (* ch (* n n)) bc_i)))
+                (set! bc_cell bc_i)
+              }
+              #f)
+          #f)
+      (set! bc_i (+ bc_i 1))
+    })
+    bc_cell
+  }))
+
 ;; RoI 的 argmax 类别（10 = 背景）
 (define ra_i 0)
 (define ra_b 0)
@@ -663,6 +692,298 @@
     })
   }))
 
+;; ---- 第 1~4 步：选中格的「感受野 + 卷积核」--------------------------------
+;;   点右栏特征图上的一格 → 左边输入图上框出它的**感受野**，右栏下方给出
+;;   「入 3x3 / 核 3x3 / 积 3x3 → 和 → ReLU」这 9 个乘积是怎么合成这一格的。
+;;   （第 4 步的 RPN 中间层是 1x1 卷积：24 个通道各出一个数再加权求和，用竖条表示。）
+;;
+;;   感受野换到输入像素坐标（与 frcnn_core 的取址一致）：
+;;     conv1 格(r,c) ← 输入 [2r-1, 2r+1] × [2c-1, 2c+1]   3x3
+;;     conv2 格(r,c) ← conv1 [2r, 2r+2] → 输入 4r-1 起 7x7
+;;     conv3/RPN 格(r,c) ← conv2 [r-1, r+1] → 输入 4r-5 起 15x15
+
+(define kc_step 1)
+(define kc_r 0)
+(define kc_c 0)
+(define kc_ky 0)
+(define kc_kx 0)
+(define kc_v 0.0)
+(define kc_w 0.0)
+(define kc_p 0.0)
+(define kc_pm 0.0001)
+(define kc_sum 0.0)
+(define kc_tot 0.0)
+(define kc_out 0.0)
+(define kc_raw 0.0)
+(define kc_xnp 0.0)
+(define kc_i 0)
+(define kc_ch 0)
+(define rf_x 0)
+(define rf_y 0)
+(define rf_w 3)
+(define kd_x 136)
+(define kd_y 176)
+(define kd_s 7)
+(define kd_gap 34)
+;; 全白像素对应的网络输入值（img=1 → xn=(1/255-0.80)/0.21）
+(define XNP (/ (- (/ 1.0 255.0) 0.80) 0.21))
+
+;; 选中格的行列（第 1 步是 32x32 网格，其余 16x16）
+(define kc_grid 16)
+
+;; 第 step 步、第 ch 个输入通道、核位置 (ky,kx) 的输入值
+(define kpat
+  (lambda (step ch ky kx) {
+    (set! kc_v 0.0)
+    (if (== step 1)
+        (set! kc_v (get_item FR.xpad (+ (* (+ (* kc_r 2) ky) 66) (+ (* kc_c 2) kx))))
+        #f)
+    (if (== step 2)
+        (set! kc_v (get_item FR.p1 (+ (* ch 1156)
+                      (+ (* (+ (* kc_r 2) ky) 34) (+ (* kc_c 2) kx)))))
+        #f)
+    (if (>= step 3)
+        (set! kc_v (get_item FR.p2 (+ (* ch 324)
+                      (+ (* (+ kc_r ky) 18) (+ kc_c kx)))))
+        #f)
+    kc_v
+  }))
+
+;; 第 step 步、第 ch 个输入通道、核位置 (ky,kx) 的权重
+(define kwt
+  (lambda (step ch ky kx) {
+    (set! kc_w 0.0)
+    (if (== step 1)
+        (set! kc_w (get_item FR.W1 (+ (* sel_ch 9) (+ (* ky 3) kx))))
+        #f)
+    (if (== step 2)
+        (set! kc_w (get_item FR.W2 (+ (* sel_ch 72) (+ (* ch 9) (+ (* ky 3) kx)))))
+        #f)
+    (if (>= step 3)
+        (set! kc_w (get_item FR.DW_W (+ (* sel_ch 9) (+ (* ky 3) kx))))
+        #f)
+    kc_w
+  }))
+
+;; 某个输入通道的 3x3 点积（不含 bias）。
+;; kc_sum = 净和（把"全白"这个常数偏移减掉，学生看到的才是墨迹的贡献）；
+;; kc_raw = 网络里真正的和（含偏移，供输出值用）。
+(define kdot
+  (lambda (step ch) {
+    (set! kc_sum 0.0)
+    (set! kc_raw 0.0)
+    (set! kc_ky 0)
+    (while (< kc_ky 3) {
+      (set! kc_kx 0)
+      (while (< kc_kx 3) {
+        (set! kc_v (kpat step ch kc_ky kc_kx))
+        (set! kc_w (kwt step ch kc_ky kc_kx))
+        (set! kc_raw (+ kc_raw (* kc_v kc_w)))
+        (set! kc_sum (+ kc_sum (* (- kc_v XNP) kc_w)))
+        (set! kc_kx (+ kc_kx 1))
+      })
+      (set! kc_ky (+ kc_ky 1))
+    })
+    kc_sum
+  }))
+
+;; 所有输入通道的点积之和（第 2 步：8 个；第 3 步逐通道卷积只看自己那条，不走这里）
+(define kc_rawall 0.0)
+(define kdotsum
+  (lambda (step) {
+    (set! kc_tot 0.0)
+    (set! kc_rawall 0.0)
+    (set! kc_i 0)
+    (while (< kc_i FR.NCH1)
+      {
+        (set! kc_tot (+ kc_tot (kdot step kc_i)))
+        (set! kc_rawall (+ kc_rawall kc_raw))
+        (set! kc_i (+ kc_i 1))
+      })
+    kc_tot
+  }))
+
+;; 第 1 步「入」格子显示**真实像素**（img: 0=墨 1=纸）：网络用的是归一化值，
+;; 但它只是像素的正仿射映射，图案一致，用灰度更像"看见感受野里的 9 个点"。
+(define km_y 0)
+(define km_x 0)
+(define km_v 1.0)
+(define kimg
+  (lambda (ky kx) {
+    (set! km_y (+ (- (* kc_r 2) 1) ky))
+    (set! km_x (+ (- (* kc_c 2) 1) kx))
+    (if (and (>= km_y 0) (< km_y 64) (>= km_x 0) (< km_x 64))
+        (set! km_v (get_item FR.img (+ (* km_y 64) km_x)))
+        (set! km_v 1.0))
+    km_v
+  }))
+
+;; 3x3 网格（mode: 0=入 灰度 1=核 红蓝 2=积 红蓝）
+(define draw_k3
+  (lambda (mode ox oy)
+      (define mv 0.0001)
+      (define m0 0.0001)
+    {
+    (set! kc_ky 0)
+    (while (< kc_ky 3) {
+      (set! kc_kx 0)
+      (while (< kc_kx 3) {
+        (set! kc_v (kpat kc_step kc_ch kc_ky kc_kx))
+        (set! kc_w (kwt kc_step kc_ch kc_ky kc_kx))
+        (set! kc_p (* kc_v kc_w))
+        (if (> (Math.abs kc_p) mv) (set! mv (Math.abs kc_p)) #f)
+        (if (> (kpat kc_step kc_ch kc_ky kc_kx) m0)
+            (set! m0 (kpat kc_step kc_ch kc_ky kc_kx))
+            #f)
+        (set! kc_kx (+ kc_kx 1))
+      })
+      (set! kc_ky (+ kc_ky 1))
+    })
+    (set! kc_ky 0)
+    (while (< kc_ky 3) {
+      (set! kc_kx 0)
+      (while (< kc_kx 3) {
+        (set! kc_v (kpat kc_step kc_ch kc_ky kc_kx))
+        (set! kc_w (kwt kc_step kc_ch kc_ky kc_kx))
+        (if (== mode 0)
+            (if (== kc_step 1)
+                (draw_ink (+ ox (* kc_kx kd_s)) (+ oy (* kc_ky kd_s)) kd_s (kimg kc_ky kc_kx))
+                (draw_act (+ ox (* kc_kx kd_s)) (+ oy (* kc_ky kd_s)) kd_s (/ kc_v m0)))
+            #f)
+        (if (== mode 1)
+            (draw_wt (+ ox (* kc_kx kd_s)) (+ oy (* kc_ky kd_s)) kd_s (* kc_w 1.2))
+            #f)
+        (if (== mode 2)
+            (draw_wt (+ ox (* kc_kx kd_s)) (+ oy (* kc_ky kd_s)) kd_s
+                     (/ (* kc_v kc_w) mv))
+            #f)
+        (set! kc_kx (+ kc_kx 1))
+      })
+      (set! kc_ky (+ kc_ky 1))
+    })
+    (Gfx.draw_rect (- ox 1) (- oy 1) (+ (* 3 kd_s) 2) (+ (* 3 kd_s) 2) 190 196 210)
+  }))
+
+;; 输入图上的感受野方框（第 1~4 步、选中格时画）
+(define draw_rf_box
+  (lambda (step) {
+    (set! kc_step step)
+    (set! kc_grid (if (== step 1) 32 16))
+    (set! kc_r (Math.floor (/ sel_cell kc_grid)))
+    (set! kc_c (mod sel_cell kc_grid))
+    (set! rf_w (if (== step 1) 3 (if (== step 2) 7 15)))
+    (set! rf_y (- (* kc_r (if (== step 1) 2 4))
+                  (if (== step 1) 1 (if (== step 2) 1 5))))
+    (set! rf_x (- (* kc_c (if (== step 1) 2 4))
+                  (if (== step 1) 1 (if (== step 2) 1 5))))
+    (if (< rf_x 0) (set! rf_x 0) #f)
+    (if (< rf_y 0) (set! rf_y 0) #f)
+    (if (> (+ rf_x rf_w) 64) (set! rf_x (- 64 rf_w)) #f)
+    (if (> (+ rf_y rf_w) 64) (set! rf_y (- 64 rf_w)) #f)
+    (Gfx.draw_rect (+ IMGX (* rf_x 2)) (+ IMGY (* rf_y 2)) (* rf_w 2) (* rf_w 2)
+                   226 84 40)
+    (Gfx.draw_rect (- (+ IMGX (* rf_x 2)) 1) (- (+ IMGY (* rf_y 2)) 1)
+                   (+ (* rf_w 2) 2) (+ (* rf_w 2) 2) 250 150 90)
+  }))
+
+;; 右栏底部：入/核/积 + 和/输出
+(define draw_kstrip
+  (lambda (step) {
+    (set! kc_step step)
+    (set! kc_grid (if (== step 1) 32 16))
+    (set! kc_r (Math.floor (/ sel_cell kc_grid)))
+    (set! kc_c (mod sel_cell kc_grid))
+    (set! kc_ch (if (== step 1) 0 sel_ch))
+    (if (>= kc_ch FR.NCH1) (set! kc_ch 0) #f)
+    (if (== step 4)
+        (draw_kstrip1x1 step)
+        {
+          (draw_k3 0 kd_x kd_y)
+          (draw_k3 1 (+ kd_x kd_gap) kd_y)
+          (draw_k3 2 (+ kd_x (* 2 kd_gap)) kd_y)
+          (Gfx.draw_text_centered 1 "入" (+ kd_x 10) 204 120 126 140 1)
+          (Gfx.draw_text_centered 1 "核" (+ (+ kd_x kd_gap) 10) 204 120 126 140 1)
+          (Gfx.draw_text_centered 1 "积" (+ (+ kd_x (* 2 kd_gap)) 10) 204 120 126 140 1)
+          (set! kc_sum (kdot step kc_ch))
+          (if (== step 1)
+              {
+                (set! kc_out (+ (get_item FR.B1 sel_ch) kc_raw))
+                (Gfx.draw_text (cat "净和 " (fmt2 kc_sum)) 240 172 CT_R CT_G CT_B)
+                (Gfx.draw_text (cat "输出 " (fmt2 (maxf kc_out 0.0))) 240 186 195 70 35)
+                (Gfx.draw_text "9 项相加" 240 200 CD_R CD_G CD_B)
+              }
+              (if (== step 2)
+                  {
+                    (set! kc_tot (kdotsum step))
+                    (set! kc_out (+ (get_item FR.B2 sel_ch) kc_rawall))
+                    (Gfx.draw_text (cat "净和 " (fmt2 kc_sum)) 240 172 CD_R CD_G CD_B)
+                    (Gfx.draw_text (cat "8ch " (fmt2 kc_tot)) 240 186 CT_R CT_G CT_B)
+                    (Gfx.draw_text (cat "输出 " (fmt2 (maxf kc_out 0.0))) 240 200 195 70 35)
+                  }
+                  {
+                    (set! kc_tot (pw_fuse sel_ch kc_r kc_c))
+                    (set! kc_out (+ (get_item FR.PW_B sel_ch) kc_tot))
+                    (Gfx.draw_text (cat "净和 " (fmt2 kc_sum)) 240 172 CD_R CD_G CD_B)
+                    (Gfx.draw_text (cat "1x1 " (fmt2 kc_tot)) 240 186 CT_R CT_G CT_B)
+                    (Gfx.draw_text (cat "输出 " (fmt2 (maxf kc_out 0.0))) 240 200 195 70 35)
+                  }))
+        })
+  }))
+
+;; conv3 的 1x1 融合部分：Σ_j PW_W[ch][j] * f3dw[j][cell]
+(define pw_i 0)
+(define pw_s 0.0)
+(define pw_fuse
+  (lambda (ch r c) {
+    (set! pw_s 0.0)
+    (set! pw_i 0)
+    (while (< pw_i FR.NCH)
+      {
+        (set! pw_s (+ pw_s (* (get_item FR.PW_W (+ (* ch FR.NCH) pw_i))
+                              (get_item FR.f3dw (+ (* pw_i 256) (+ (* r FR.GRID) c))))))
+        (set! pw_i (+ pw_i 1))
+      })
+    pw_s
+  }))
+
+;; 第 4 步（RPN 中间层）是 1x1 卷积：24 个通道各出一个数再加权求和
+(define dk_i 0)
+(define dk_v 0.0)
+(define dk_m 0.0001)
+(define dk_h 0)
+(define draw_kstrip1x1
+  (lambda (step) {
+    (set! dk_m 0.0001)
+    (set! dk_i 0)
+    (while (< dk_i FR.NCH)
+      {
+        (set! dk_v (* (get_item FR.WRH (+ (* sel_ch FR.NCH) dk_i))
+                      (get_item FR.f3 (+ (* dk_i 256) sel_cell))))
+        (if (> (Math.abs dk_v) dk_m) (set! dk_m (Math.abs dk_v)) #f)
+        (set! dk_i (+ dk_i 1))
+      })
+    (set! kc_tot 0.0)
+    (set! dk_i 0)
+    (while (< dk_i FR.NCH)
+      {
+        (set! dk_v (* (get_item FR.WRH (+ (* sel_ch FR.NCH) dk_i))
+                      (get_item FR.f3 (+ (* dk_i 256) sel_cell))))
+        (set! kc_tot (+ kc_tot dk_v))
+        (set! dk_h (Math.round (* 26.0 (/ (Math.abs dk_v) dk_m))))
+        (Gfx.fill_rect (+ kd_x (* dk_i 4)) 172 3 28 236 239 245)
+        (if (> dk_h 0)
+            (Gfx.fill_rect (+ kd_x (* dk_i 4)) (- (+ 172 28) dk_h) 3 dk_h
+                           (if (> dk_v 0.0) 210 60) (if (> dk_v 0.0) 110 110)
+                           (if (> dk_v 0.0) 60 210))
+            #f)
+        (set! dk_i (+ dk_i 1))
+      })
+    (Gfx.draw_text_centered 1 "24 通道 x 1x1" (+ kd_x 48) 206 120 126 140 1)
+    (set! kc_out (+ (get_item FR.BRH sel_ch) kc_tot))
+    (Gfx.draw_text (cat "和 " (fmt2 kc_tot)) 240 176 CT_R CT_G CT_B)
+    (Gfx.draw_text (cat "输出 " (fmt2 (maxf kc_out 0.0))) 240 190 195 70 35)
+  }))
+
 ;; ---- 结果页：右栏各步 ---------------------------------------------------
 
 (define rtitle (lambda (s y) (Gfx.draw_text s RX y 55 62 88)))
@@ -692,17 +1013,19 @@
     (set! sc_buf FR.f1)
     (set! sc_n 32)
     (set! sc_nch 8)
-    (set! sc_s 4)
+    (set! sc_s 3)                ; 96px：把下面的「感受野细节条」留出来
     (if (>= step 2)
         {
           (set! sc_n 16)
           (set! sc_nch 24)
-          (set! sc_s 8)
+          (set! sc_s 6)
         }
         #f)
     (if (== step 2) (set! sc_buf FR.f2) #f)
     (if (== step 3) (set! sc_buf FR.f3) #f)
     (if (== step 4) (set! sc_buf FR.rh) #f)
+    ;; 通道数随步变化：从第 2 步（24 通道）退回第 1 步（8 通道）时 sel_ch 可能越界
+    (if (>= sel_ch sc_nch) (set! sel_ch 0) #f)
     (if (== step 1)
         (rtitle "conv1 3x3/s2 -> 32x32x8" 38)
         (if (== step 2)
@@ -715,9 +1038,11 @@
                             (+ RX 52) 57 CT_R CT_G CT_B 1)
     (bdraw S_CHR)
     (draw_fmap sc_buf sc_n sel_ch RX 70 sc_s (if (== sel_on 1) sel_cell -1))
-    (if (== step 1)
-        (rhint "点格子: 输入上的 3x3 感受野" 204)
-        (rhint "点格子: 它由哪些数据算出" 204))
+    (if (== sel_on 1)
+        (draw_kstrip step)
+        (if (== step 1)
+            (rhint "点格子: 左边框出感受野，下面看核" 210)
+            (rhint "点格子: 左边框出它的感受野" 210)))
   }))
 
 ;; 第 5 步：RPN 分类（前景概率图 + 选中格的 9 个锚框分数）
@@ -995,6 +1320,9 @@
     (if (and (or (== stage 5) (== stage 6)) (== sel_on 1))
         (draw_anchors_cell (Math.floor (/ sel_cell 16)) (mod sel_cell 16))
         #f)
+    (if (and (>= stage 1) (<= stage 4) (== sel_on 1))
+        (draw_rf_box stage)
+        #f)
     (if (== stage 7) (draw_props) #f)
     (if (or (== stage 8) (== stage 9)) (draw_rois) #f)
     (if (== stage 10) (draw_fins) #f)
@@ -1044,6 +1372,12 @@
     (if (== stage 2) (set! sel_ch (best_ch FR.f2 16 24)) #f)
     (if (== stage 3) (set! sel_ch (best_ch FR.f3 16 24)) #f)
     (if (== stage 4) (set! sel_ch (best_ch FR.rh 16 24)) #f)
+    ;; 第 1~4 步：默认选中"激活最大的那一格"，右边的感受野/卷积核立刻就有东西看
+    (if (== stage 1) (set! sel_cell (best_cell FR.f1 32 sel_ch)) #f)
+    (if (== stage 2) (set! sel_cell (best_cell FR.f2 16 sel_ch)) #f)
+    (if (== stage 3) (set! sel_cell (best_cell FR.f3 16 sel_ch)) #f)
+    (if (== stage 4) (set! sel_cell (best_cell FR.rh 16 sel_ch)) #f)
+    (if (and (>= stage 1) (<= stage 4)) (set! sel_on 1) #f)
     (if (>= sel_ch fx_nch) (set! sel_ch 0) #f)
     (if (>= sel_cell fx_cells) (set! sel_cell 0) #f)
     (if (>= sel_roi (maxi 1 FR.roi_n)) (set! sel_roi 0) #f)
