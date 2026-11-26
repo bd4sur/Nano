@@ -261,9 +261,9 @@
       (BTN.set_radius (get_item BL b_i) 4)
       (set! b_i (+ b_i 1))
     })
-    ;; ---- 矩形：一次设好，各模式共用（头部三枚在三种模式下位置相同）----
-    (bset S_H0 96 2 56 16)
-    (bset S_H1 156 2 56 16)
+    ;; ---- 矩形：一次设好，各模式共用（头部两枚在两种模式下位置相同）----
+    (bset S_H0 144 2 50 16)
+    (bset S_H1 198 2 50 16)
     ;; 结果页第二行（步骤条）
     (bset S_PREV 4 19 20 15)
     (bset S_NEXT 26 19 20 15)
@@ -291,7 +291,6 @@
         }
         {
           (bput S_H0 "重画" 0)
-          (bput S_H1 "示例" 0)
           (bput S_PREV "<" 0)
           (bput S_NEXT ">" 0)
           (bput S_AUTO (if (== autorun 1) "暂停" "自动") (if (== autorun 1) 1 0))
@@ -349,7 +348,7 @@
 (define pen_down 0)
 (define pen_last_x 0.0)
 (define pen_last_y 0.0)
-(define brush_r 1.8)
+(define brush_r 3.6)
 
 (define _p 0)
 (define _pp 0)           ; 上一拍的电平：自己算「按下沿」，不依赖 Touch.take_press
@@ -369,12 +368,12 @@
 (define draw_header
   (lambda () {
     (Gfx.fill_rect 0 0 SW 18 248 249 252)
-    ;; 标题收窄到 88px 以内，右边三枚按钮从 96 起 —— 不再被盖住
-    (if (== mode 0)
-        (Gfx.draw_text "两阶段检测" 4 3 CT_R CT_G CT_B)
-        (Gfx.draw_text "Faster R-CNN" 4 3 CT_R CT_G CT_B))
+    ;; 标题固定为「两阶段目标检测算法演示」（11 字 = 132px → 4..136），
+    ;; 两枚按钮从 144 起，右上角「退出」在 270，互不重叠。
+    (Gfx.draw_text "两阶段目标检测算法演示" 4 3 CT_R CT_G CT_B)
     (bdraw S_H0)
-    (bdraw S_H1)
+    ;; 「示例」只在手写画板页出现（推理过程中不给换图入口）
+    (if (== mode 0) (bdraw S_H1) #f)
     (Gfx.fill_rect 0 17 SW 1 CL_R CL_G CL_B)
   }))
 
@@ -1585,12 +1584,11 @@
     (start_stage 0)
   }))
 
-;; 现场合成一张示例图（在结果页点「示例」时顺带重跑整套）
+;; 往画板里放一张随机合成的示例图（只在手写画板页用；写完用户自己点「开始识别」）
 (define load_next_sample
   (lambda () {
     (FR.synth_random)
     (set! drawn 1)
-    (if (== mode 0) #f (run_all))
   }))
 
 (define clear_board
@@ -1663,7 +1661,7 @@
                 (set! mode 0)
               }
               #f)
-          (if (bhit S_H1 _tx _ty) (load_next_sample) #f)
+          (if (and (== mode 0) (bhit S_H1 _tx _ty)) (load_next_sample) #f)
         }
         #f)
 
