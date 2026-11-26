@@ -19,15 +19,21 @@
 ;;     **这是"上下两端边缘不对"的根因修复** —— 以前边界格的 UX/UY 永远是 0，涡量场的
 ;;     中心差分取到它们，于是上下各出现一条假的高涡量色带（烟粒双线性采样在底边也会
 ;;     读到 0 速度）。
-;;   · 参数（底部按钮可调）：入口流速 U0、松弛时间 τ（= 0.5+3ν）、障碍物形状与大小。
-;;     Re = U·D·3/(τ−0.5)；默认 U0=0.18、τ=0.52、D=4 格 ⇒ **Re≈108**（卡门涡街的经典区间）。
+;;   · 参数（底部按钮可调）：入口流速 U0（0.08~**0.30**）、松弛时间 τ（0.515~0.575）、
+;;     障碍物形状与大小。Re = U·D·3/(τ−0.5)；默认 U0=0.18、τ=0.52、D=4 格 ⇒ **Re≈108**。
+;;     **速度上限随粘性联动**（`u0lim`）：BGK 在本格数下的失稳线是全格最大速度 umax≈0.5
+;;     （≈1.7 倍 U0），τ 越小涡街越猛、umax 越高，于是 U0 的可用上限跟着 τ 走；「速+」在
+;;     触到上限时会**自动补一点粘性**（τ 每档 0.005）再夹住，所以这一个按钮永远按得动。
+;;     实测边界（宿主台 3000 帧、判据 umax 是否炸到上百）：τ=0.515→U0≤0.24；0.52→0.26；
+;;     0.53/0.54→0.28；0.55→0.30；0.575→0.34（0.36 炸）。取偏保守的线性 + 0.30 封顶
+;;     （再快 Re 会掉到 50 附近、涡街反而变弱）。
 ;;
 ;; 网格与布局（**铺满整屏**）：32×24 格 × 10px = 320×240，一格像素对应一个格点；
 ;;   底部 26px 是**浮在流场之上**的半透明控件栏（流场仍在它后面继续算），
 ;;   左上角一条 HUD 显示当前 U0 / Re / 形状 / 半径。
 ;;
 ;; 可视化（两种显示模式，底部「烟丝/矢量」按钮切换）：
-;;   · **自由烟丝**（默认）：260 颗烟粒在速度场里双线性插值输运（每帧推进 NSUB 步），
+;;   · **自由烟丝**（默认）：400 颗烟粒在速度场里双线性插值输运（每帧推进 NSUB 步），
 ;;     每颗画一条**沿速度反推 6 帧**（≈10px）的短尾迹，亮度随速度（曼哈顿近似）——
 ;;     数量与形态与改版前完全一致。涡量底图关时是暗底 + 浅蓝白发光小尾迹；
 ;;     底图开时同一形状改画**墨色**（浅底上加色发光等于看不见）。
@@ -49,7 +55,8 @@
 ;;   · 右上角「退出」（app/lib/exit.scm）。
 ;;
 ;; 成本（WASM 目标，headless Chromium 实测，**整拍口径**）：烟丝模式（底图关）
-;;   **19.5 ms/拍、28 fps**；底图开时 +涡量场绘制与整屏推帧，约 25 ms/拍、同样 28 fps。
+;;   **20.2~20.5 ms/拍、28 fps**（400 颗烟粒；260 颗时 19.5 ms）；底图开时 +涡量场绘制
+;;   与整屏推帧，约 25 ms/拍、同样 28 fps。
 ;;   （定时器 33 ms；相位计时不可信，见下面诊断行的说明。）
 ;;   为什么每帧只跑 1 步：格子数从 26×18 涨到 32×24（铺满整屏）后 2 步就要 27 ms，
 ;;   加烟线与底图必超 33 ms 的定时器周期（超过就掉到 15 fps 档）。1 步/帧时把默认
@@ -101,6 +108,11 @@
 (define BTN_H 20)
 
 ;; ---- 物理参数（底部按钮可调）--------------------------------------------
+;; 参数范围（底部按钮在范围内步进；速度上限随粘性联动，见 u0lim）
+(define U0_MIN 0.08)
+(define U0_CEIL 0.30)              ; 硬上限（再高就超 BGK 的失稳线 umax≈0.5）
+(define TAU_MIN 0.515)
+(define TAU_MAX 0.575)
 (define U0 0.18)                   ; 入口流速（格子单位；Ma≈0.31，安全）
 (define TAU 0.52)                  ; 松弛时间 τ = 0.5 + 3ν
 (define OMEGA 1.923076923)         ; = 1/τ（upd_phys 重算）
@@ -132,7 +144,7 @@
 (define UY '())
 (define NEAR '())                  ; 贴壁格扁平表：每格 9 项 (格号 8 个邻居格号)
 
-(define NPD 260)                   ; 烟粒数（与改版前一致）
+(define NPD 400)                   ; 烟粒数（原版 260；整拍预算允许的前提下加密）
 (define PX '())
 (define PY '())
 
@@ -169,7 +181,7 @@
 (define VG '())
 (define VB '())
 
-;; ---- 控件栏的 8 枚按钮 ---------------------------------------------------
+;; ---- 控件栏的 9 枚按钮 ---------------------------------------------------
 (define BTNS '())
 
 ;; ---- 启动：建网格 --------------------------------------------------------
@@ -657,8 +669,9 @@
     })))
 
 ;; ---- 烟线：双线性采样速度场 → 推进 → 拖尾 -------------------------------
-;; 形态与改版前一致：**短加色发光小尾迹**（沿速度反推 6 帧 ≈10px、快=亮），
-;; 只有 260 颗。唯一的分支：涡量底图打开时改画**墨线**（浅底上加色发光等于看不见）。
+;; 形态与改版前一致：**短加色发光小尾迹**（沿速度反推 6 帧 ≈10px、快=亮）；
+;; 数量 260 → 400（整拍仍有约 12 ms 余量）。唯一的分支：涡量底图打开时改画**墨线**
+;; （浅底上加色发光等于看不见）。
 (define dye_step
   (lambda ()
     (define i 0)
@@ -915,6 +928,43 @@
     (Gfx.draw_text HUD_STR 7 3 232 238 246)))
 
 ;; ---- 参数与 HUD 文本 -----------------------------------------------------
+;; 小数格式化：**整数化**再拼字符串。32 位 VM 的值只有约 19 位尾数（≈6 位有效数字），
+;; 0.30 存进去其实是 0.2999990，直接 (Math.to_fixed 0.3 2) + %g 会打出 "0.299999"；
+;; 改成 round(v·10^n) 取整数、再手工补零拼 "0.30"，HUD 才干净。
+(define fmtv
+  (lambda (v np)
+    (define f 1)
+    (define iv 0)
+    (define i0 0)
+    (define fr 0)
+    (define s "")
+    (set! f (if (== np 1) 10 (if (== np 2) 100 1000)))
+    (set! iv (Math.round (* v f)))
+    (set! i0 (Math.floor (/ iv f)))
+    (set! fr (- iv (* i0 f)))
+    (set! s (String.atom_to_string fr))
+    (if (== np 2) (if (< fr 10) (set! s (String.concat "0" s)) #f) #f)
+    (if (== np 3)
+        {
+          (if (< fr 10) (set! s (String.concat "00" s)) #f)
+          (if (and (>= fr 10) (< fr 100)) (set! s (String.concat "0" s)) #f)
+        }
+        #f)
+    (String.concat (String.atom_to_string i0) (String.concat "." s))))
+
+;; 入口流速上限：**随粘性放宽**。这个格数（32×24，D=4 格）下 BGK 的失稳线是
+;; 全格最大速度 umax≈0.5（Ma≈0.87），而 umax 约为 1.6~1.8 倍 U0，于是 U0 的可用上限
+;; 取决于粘性对涡街的阻尼。实测（原生宿主台 3000 帧，判据 = umax 是否炸到上百）：
+;;   τ=0.515 → U0≤0.24 稳、0.26 炸；  τ=0.52 → 0.26 稳、0.28 炸；  τ=0.53 → 0.28 稳、0.30 炸
+;;   τ=0.54 → 0.28 稳、0.32 炸；     τ=0.55 → 0.30 稳、0.32 炸；  τ=0.575 → 0.34 稳、0.36 炸
+;; 取一条**偏保守**的线性规则（并在 0.30 封顶：再快 Re 会掉到 50 附近、涡街变弱）：
+;;   u0lim(τ) = 0.22 + 2.6·(τ−0.515)，上限 0.30
+(define u0lim
+  (lambda ()
+    (define v 0.0)
+    (set! v (+ 0.22 (* 2.6 (- TAU TAU_MIN))))
+    (if (> v U0_CEIL) U0_CEIL v)))
+
 (define reynolds
   (lambda ()
     (/ (* (* U0 (* 2.0 ORY)) 3.0) (- TAU 0.5))))
@@ -922,10 +972,10 @@
 (define upd_hud
   (lambda ()
     (set! HUD_STR
-      (String.concat "U" (String.concat (String.atom_to_string (Math.to_fixed U0 2))
-        (String.concat " Re" (String.concat (String.atom_to_string (Math.to_fixed (reynolds) 0))
+      (String.concat "U" (String.concat (fmtv U0 2)
+        (String.concat " Re" (String.concat (String.atom_to_string (Math.round (reynolds)))
           (String.concat " " (String.concat (get_item SHNAME SHAPE)
-            (String.concat " r" (String.atom_to_string (Math.to_fixed RAD 1))))))))))
+            (String.concat " r" (fmtv RAD 1)))))))))
     (set! HUDD 0)))
 
 ;; 流体参数改动：重算 ω/(1−ω) 与涡量尺度，并重新播种入口阵风
@@ -933,6 +983,9 @@
   (lambda ()
     (set! OMEGA (/ 1.0 TAU))
     (set! OM1 (- 1.0 OMEGA))
+    ;; 速度上限随粘性走：粘性降下来时把 U0 一起夹回去（否则会踩到失稳线）
+    (if (> U0 (u0lim)) (set! U0 (u0lim)) #f)
+    (if (< U0 U0_MIN) (set! U0 U0_MIN) #f)
     (set! VS (* 0.65 U0))
     (set! GS 0)
     (set! HUDD 1)))
@@ -941,10 +994,17 @@
 (define btn_action
   (lambda (i)
     (cond
-      ((== i 0) { (set! U0 (- U0 0.02)) (if (< U0 0.08) (set! U0 0.08) #f) (upd_phys) })
-      ((== i 1) { (set! U0 (+ U0 0.02)) (if (> U0 0.24) (set! U0 0.24) #f) (upd_phys) })
-      ((== i 2) { (set! TAU (- TAU 0.005)) (if (< TAU 0.515) (set! TAU 0.515) #f) (upd_phys) })
-      ((== i 3) { (set! TAU (+ TAU 0.005)) (if (> TAU 0.575) (set! TAU 0.575) #f) (upd_phys) })
+      ((== i 0) { (set! U0 (- U0 0.02)) (if (< U0 U0_MIN) (set! U0 U0_MIN) #f) (upd_phys) })
+      ;; 速+：先提流速；若超出"粘性允许的上限"，**自动补一点粘性**（τ 每档 0.005）再夹住。
+      ;; 这样这一个按钮永远按得动，而不会把解推到失稳线外（Re 会因此涨得慢一些，
+      ;; HUD 里看得见；机理见 u0lim 的注释）。
+      ((== i 1) { (set! U0 (+ U0 0.02))
+                  (if (> U0 U0_CEIL) (set! U0 U0_CEIL) #f)
+                  (while (and (> U0 (u0lim)) (< TAU (- TAU_MAX 0.0001))) (set! TAU (+ TAU 0.005)))
+                  (if (> TAU TAU_MAX) (set! TAU TAU_MAX) #f)
+                  (upd_phys) })
+      ((== i 2) { (set! TAU (- TAU 0.005)) (if (< TAU TAU_MIN) (set! TAU TAU_MIN) #f) (upd_phys) })
+      ((== i 3) { (set! TAU (+ TAU 0.005)) (if (> TAU TAU_MAX) (set! TAU TAU_MAX) #f) (upd_phys) })
       ((== i 4) { (set! RAD (- RAD 0.4)) (if (< RAD 1.2) (set! RAD 1.2) #f) (upd_shape) (rebuild_obs) })
       ((== i 5) { (set! RAD (+ RAD 0.4)) (if (> RAD 3.2) (set! RAD 3.2) #f) (upd_shape) (rebuild_obs) })
       ((== i 6) { (set! SHAPE (Math.floor (mod (+ SHAPE 1) 4)))
@@ -1096,12 +1156,12 @@
           (display " ms_frm=") (display (/ ACCF 30.0))
           (display " re=") (display (/ (* (* U0 (* 2.0 ORY)) 3.0) (- TAU 0.5)))
           (display " uy=") (display (Math.to_fixed (get_item UY (+ (* 12 W) 26)) 3))
-          (display " c=") (display (Math.to_fixed CXC 1))
-          (display ",") (display (Math.to_fixed CYC 1))
-          (display " u=") (display (Math.to_fixed U0 2))
-          (display " tau=") (display (Math.to_fixed TAU 3))
-          (display " rad=") (display (Math.to_fixed RAD 1))
-          (display " sh=") (display (Math.to_fixed SHAPE 0))
+          (display " c=") (display (fmtv CXC 1))
+          (display ",") (display (fmtv CYC 1))
+          (display " u=") (display (fmtv U0 2))
+          (display " tau=") (display (fmtv TAU 3))
+          (display " rad=") (display (fmtv RAD 1))
+          (display " sh=") (display (Math.round SHAPE))
           (display " vor=") (display SHOWVORT)
           (display " md=") (display MODE)
           (display " n=") (display STEPC)
