@@ -23,12 +23,10 @@
 
 #include <math.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
 // #include <omp.h>
 
 #include "ui_cloud.h"
-#include "hal_key.h"
 #include "platform.h"
 #include "celestial_night.h"
 
@@ -870,7 +868,7 @@ static inline float dualLobPhase(float g0, float g1, float w, float cosTheta) {
 static Cv3 *s_transLut = NULL;
 static Cv3 *s_msLut = NULL;
 
-// 确保 LUT 缓冲已分配（只有此函数分配；ui_cloud_init 与天象仪集成共用）。
+// 确保 LUT 缓冲已分配（库内唯一的分配点）。
 // 返回 0 成功，-1 分配失败（已回滚释放）。
 static int cloud_ensure_luts_buffers(void) {
     if (s_transLut && s_msLut) return 0;
@@ -1153,36 +1151,17 @@ static void cloud_compute_multiscatter_lut(CloudScene *s) {
 // 该响应的有效窗口实测约 [0.33,0.46]，故六档按实测等间隔标定在此窗口内
 // （见 CLOUD_COVERAGE_LEVELS），保证档间云量递进均匀、最高档不进入变暗区。
 // ===========================================================================
+// 内核跨帧状态：**只放渲染内核自己必须记住的量**（其余全部由调用方每帧经
+// UiCloud_Render_Params 传入，相机/投影/时间不在此保存）。本库没有任何 UI/交互状态、
+// 不依赖 ui_app.h，可被任意宿主直接调用。
 static struct {
-    float yaw;
-    float pitch;
-    float roll;            // 滚转（弧度，绕视线轴；天象仪集成时由 view_roll 提供）
-    int   sun_preset;
-    int   sun_auto;          // 1=太阳自动运动（东→天顶→西循环）；0=暂停/手动
-    float sun_alt;           // 自动运动当前高度角 [ -18°, +90° ]（-18° 以下为完整黑夜，观感恒定）
-    int   sun_dir;           // +1 上升 / -1 下降
-    int   coverage_level;    // 云量档位
-    float brightness;        // 云亮度
+    int   layer_mask;        // 云层掩码（cloudMap / cloud_layer_band 用；每帧由参数写入）
     int   sun_dirty;         // 太阳/大气参数变化 → 需重算 LUT
-    int   frame_index;
-    float app_time;
-    uint64_t last_ts;        // 上一帧时间戳（毫秒）；必须用 64 位存 epoch 毫秒，
-                             // 用 float 会丢失 ~0.1s 精度导致 dt=0、太阳/风冻结
-    int   first_frame;
-    // 云层显示掩码（按 1 键循环：所有 → 仅低层 → 仅中层 → 低+中 → 无云）
-    int   layer_mask;
-    int   layer_idx;
-    // 投影与视场角：透视/鱼眼两套投影各带独立 FOV 档位
-    int   proj;             // 0=透视  1=鱼眼
-    int   fov_idx[2];       // 各投影的档位索引
-    int   fov_deg[2];       // 各投影的档位值（度）
-    int   fov_cur;          // 当前投影的档位值
-    // 太阳镜头光晕（每帧由相机决定一次）
+    int   frame_index;       // 帧序号（逐像素抖动的去相关输入；只在非天空遍自增）
+    // 太阳镜头光晕：每帧天空遍算一次，跨遍/跨函数留给调用方查询
     int   sun_visible;
-    float sun_u;             // 太阳屏幕 NDC 坐标
-    float sun_v;
     float sun_vis;           // 太阳方向云透射率（= 太阳被云遮挡程度）
-} s_ui;
+} s_core;
 
 static float cloudMap0(Cv3 posMeter, float normalizeHeight, float appTime, const CloudScene *s) {
     const float kCoverage = 0.5f;   // 与 flower 一致（底层云固有覆盖）
@@ -1367,19 +1346,10 @@ static float cloudMap2(Cv3 posMeter, float normalizeHeight, float appTime, const
 #define CLOUD_N_AC1              CLOUD_NORM_HEIGHT(CLOUD_BAND_AC1_KM)
 #define CLOUD_N_SC1              CLOUD_NORM_HEIGHT(CLOUD_BAND_SC1_KM)
 
-// 投影算法（7 键循环）：0=透视投影（默认），1=等距鱼眼投影
+// 投影：0=透视投影，1=等距鱼眼投影。由调用方经 UiCloud_Render_Params.proj 指定；
+// 视场角由 .fov_deg 直接给出（库内不再有“档位表”——那是演示 App 的交互概念）。
 #define CLOUD_PROJ_PERSP    0
 #define CLOUD_PROJ_FISHEYE  1
-
-// 透视投影 FOV 档位（纵向半角°）
-static const float FOV_DEGREES[] = { 12.0f, 20.0f, 28.0f, 38.0f, 50.0f };
-#define FOV_DEGREES_NUM ((int)(sizeof(FOV_DEGREES) / sizeof(FOV_DEGREES[0])))
-#define FOV_DEFAULT_IDX (2)   // 28° = 与历史默认一致
-
-// 鱼眼投影 FOV 档位（最大视角半角°，对角线方向）
-static const float FISHEYE_FOV_DEGREES[] = { 60.0f, 80.0f, 100.0f, 130.0f, 165.0f };
-#define FISHEYE_FOV_DEGREES_NUM ((int)(sizeof(FISHEYE_FOV_DEGREES) / sizeof(FISHEYE_FOV_DEGREES[0])))
-#define FISHEYE_FOV_DEFAULT_IDX (2)   // 100°
 
 
 // ===========================================================================
@@ -1596,7 +1566,7 @@ static float cloudMapCu(Cv3 posMeter, float hKm, float appTime, const CloudScene
 static float cloudMap(Cv3 posMeter, float normalizeHeight, float appTime, const CloudScene *s,
     float *actualH01, int cuLite, float footprintKm)
 {
-    const int mask = s_ui.layer_mask;
+    const int mask = s_core.layer_mask;
     static float s_nCu1 = -1.0f;
     if (s_nCu1 < 0.0f) s_nCu1 = CLOUD_NORM_HEIGHT(cloud_cu_band_top_km());
     const float nCu1 = s_nCu1;
@@ -1640,7 +1610,7 @@ static float cloudMap(Cv3 posMeter, float normalizeHeight, float appTime, const 
 // 当前云层掩码覆盖的归一化高度区间 [h0, h1]（三层是连续的，故并集即 [最小起点, 最大终点]）。
 // 返回 0 表示当前无任何云层启用（可用作 early-out，省掉整条 ray-march）。
 static int cloud_layer_band(float *h0, float *h1) {
-    const int m = s_ui.layer_mask & (CLOUD_LAYER_CU | CLOUD_LAYER_AC | CLOUD_LAYER_SC | CLOUD_LAYER_CS);
+    const int m = s_core.layer_mask & (CLOUD_LAYER_CU | CLOUD_LAYER_AC | CLOUD_LAYER_SC | CLOUD_LAYER_CS);
     if (m == 0) return 0;
     float lo = 2.0f, hi = -1.0f;
     if (m & CLOUD_LAYER_CU) { lo = fminf(lo, CLOUD_N_CU_BOTTOM); hi = fmaxf(hi, CLOUD_NORM_HEIGHT(cloud_cu_band_top_km())); }
@@ -2098,7 +2068,7 @@ static Cv3 cloudAcesFilm(Cv3 x) {
 
 
 // ===========================================================================
-// 应用状态与渲染
+// 渲染尺寸与云量档位
 // ===========================================================================
 // 内部渲染分辨率 = 屏幕全分辨率（上限 CLOUD_MAX_* = 320x240）。
 // 历史：曾为屏幕的一半（tty 320x240 → 内部 160x120）双线性放大，半分辨率计算约
@@ -2106,27 +2076,8 @@ static Cv3 cloudAcesFilm(Cv3 x) {
 #define CLOUD_MAX_W (320)
 #define CLOUD_MAX_H (240)
 
-// 太阳位置预设：仰角（度）/方位角（度）/颜色/强度
-typedef struct {
-    int   elev_deg;
-    int   azim_deg;
-    Cv3   color;
-    float intensity;
-    const wchar_t *name;
-} SunPreset;
-
-static const SunPreset SUN_PRESETS[] = {
-    { 82,  -10, {1.00f, 1.00f, 1.00f}, 48.0f, L"正午" },  // 白天纯白（同 ui_cloud_sun_color）
-    { 45,   30, {1.00f, 1.00f, 1.00f}, 44.0f, L"午后" },
-    { 18,   70, {1.00f, 0.70f, 0.40f}, 40.0f, L"傍晚" },
-    {  5,   80, {1.00f, 0.45f, 0.20f}, 36.0f, L"日落" },
-    { -8,  100, {0.50f, 0.55f, 0.80f}, 10.0f, L"月夜" },
-    { -18, 90,  {0.20f, 0.26f, 0.45f},  3.0f, L"深夜" },
-};
-#define SUN_PRESET_NUM ((int)(sizeof(SUN_PRESETS) / sizeof(SUN_PRESETS[0])))
-
 // ===========================================================================
-// 云量档位（用户可调）：0=晴空 … 5=满天
+// 云量档位（玲珑天象仪的“云量”按钮与渲染共用）：0=晴空 … 5=满天
 // 注意 cloudMap0 层自带 0.5 覆盖率，故 0 档不是完全无云，而是低云稀薄、蓝天太阳为主
 // ===========================================================================
 // 档位按新增益后的实测响应标定（云占比 ≈ 25/45/65/85/97%），
@@ -2139,22 +2090,15 @@ static const wchar_t *CLOUD_COVERAGE_NAMES[] = {
     L"晴空", L"疏云", L"半云", L"多云", L"阴天", L"满云",
 };
 #define CLOUD_COVERAGE_LEVEL_NUM ((int)(sizeof(CLOUD_COVERAGE_LEVELS) / sizeof(CLOUD_COVERAGE_LEVELS[0])))
-// 默认档位（默认偏少，避免挡住蓝天与太阳）
-#define CLOUD_COVERAGE_DEFAULT_LEVEL (2)
+
 // 云亮度（观感）＝介质光学参数的物理联动，而非事后乘颜色：
 //   反照率 albedo          ↑：散射/吸收比上升，反射更亮、不改变遮挡范围
 //   直射辐照 sunScale      ↑：入射照度上升（辐射度线性叠加）
 //   多重散射出射/损耗      ↑/↓：暗部来自多次散射的回光增强
 //   环境反射 ambientScale  ↑：天空环境下行光对云的补光增强
-// 亮度 b∈[0.5,2.0]，内部归一化为 t∈[0,1]
-#define CLOUD_BRIGHTNESS_DEFAULT (0.5f)
+// 亮度 b∈[0.5,2.0]，内部归一化为 t∈[0,1]（见 cloud_apply_brightness）
 
-
-
-// 太阳自动运动：从高度角 -18°、方位角正东起步，每渲染帧高度角 +1°，
-// 到天顶 90° 后反向下降，到 -18° 方位角正西后折返，如此往返循环。
-// （帧驱动：不依赖墙钟，保证"每帧 1° 高度角"）
-// 由太阳高度角（度）推导太阳色温/辐照（供独立应用与天象仪集成共用）。
+// 由太阳高度角（度）推导太阳色温/辐照（供天象仪等调用方驱动体积云/大气光源）。
 // 任意高度角均有定义：正午类 → 低空橙 → 日落地平 → 暮光（民用/航海/天文）→ 完整黑夜。
 // -10° 处的取值与历史版本一致（避免已有观感变化）。
 void ui_cloud_sun_color(float elev_deg, float *or_, float *og, float *ob, float *ointen) {
@@ -2213,50 +2157,7 @@ static void cloud_update_sky_light(void) {
     s_night_vis = (float)linglong_night_visibility((double)s_scene.sunDirection.y);
 }
 
-static void cloud_sun_auto_tick(void) {
-    if (!s_ui.sun_auto) return;
-    float alt = s_ui.sun_alt + (float)s_ui.sun_dir;   // 每帧 ±1° 高度角
-    if (s_ui.sun_dir > 0) {
-        if (alt >= 90.0f) { alt = 90.0f; s_ui.sun_dir = -1; }
-    } else {
-        if (alt <= -18.0f) { alt = -18.0f; s_ui.sun_dir = 1; }
-    }
-    s_ui.sun_alt = alt;
-
-    float q = (alt + 18.0f) / 108.0f;                 // 行程进度 0..1（东→西）
-    float elevDeg = alt;
-    float azimDeg = 90.0f - 180.0f * q;               // 正东(+90°) → 正西(-90°)
-
-    float cr, cg, cb, ci;
-    ui_cloud_sun_color(elevDeg, &cr, &cg, &cb, &ci);
-    float e = elevDeg * kPI / 180.0f;
-    float a = azimDeg * kPI / 180.0f;
-    s_scene.sunDirection = v3norm(v3(cosf(e) * sinf(a), sinf(e), cosf(e) * cosf(a)));
-    s_scene.sunColor = v3(cr, cg, cb);
-    s_scene.sunIntensity = ci;
-    s_ui.sun_dirty = 1;
-    cloud_update_sky_light();
-}
-
-static void cloud_apply_sun_preset(int idx) {
-    const SunPreset *p = &SUN_PRESETS[idx];
-    float elev = (float)p->elev_deg * kPI / 180.0f;
-    float azim = (float)p->azim_deg * kPI / 180.0f;
-    s_scene.sunDirection = v3norm(v3(cosf(elev) * sinf(azim), sinf(elev), cosf(elev) * cosf(azim)));
-    s_scene.sunColor = p->color;
-    s_scene.sunIntensity = p->intensity;
-    s_ui.sun_dirty = 1;
-    cloud_update_sky_light();
-}
-
-static int cloud_apply_coverage_level(int level) {
-    if (level < 0) level = CLOUD_COVERAGE_LEVEL_NUM - 1;
-    if (level >= CLOUD_COVERAGE_LEVEL_NUM) level = 0;
-    s_ui.coverage_level = level;
-    s_scene.cloudCoverage = CLOUD_COVERAGE_LEVELS[level];
-    return level;
-}
-
+// ---- 云量档位查询（玲珑仪“云量”按钮与调用方共用；档位语义唯一真源在上面的表 ----
 int ui_cloud_coverage_level_num(void) {
     return CLOUD_COVERAGE_LEVEL_NUM;
 }
@@ -2285,7 +2186,6 @@ float ui_cloud_brightness_for_sun_alt(float elev_deg) {
 
 static void cloud_apply_brightness(float b) {
     b = clampf(b, 0.5f, 2.0f);
-    s_ui.brightness = b;
     // t∈[0,1]：亮度 b=0.5→t=0（最暗），b=2.0→t=1（最亮）
     float t = saturatef((b - 0.5f) / 1.5f);
 
@@ -2306,8 +2206,8 @@ static void cloud_apply_brightness(float b) {
 
 // 每帧一次：太阳或大气变化时重算 LUT（与相机无关，故按需缓存）
 static void cloud_ensure_luts(void) {
-    if (!s_ui.sun_dirty) return;
-    s_ui.sun_dirty = 0;
+    if (!s_core.sun_dirty) return;
+    s_core.sun_dirty = 0;
     // 注意：透射率 LUT 计算需要 s_msLut 已就绪？flower 中透射率 LUT 与多重散射 LUT 相互独立——
     // 透射率只依赖介质消光（与多重散射无关），多重散射 LUT 内部会采样透射率 LUT。
     // 因此先算透射率，再算多重散射 LUT。
@@ -2543,7 +2443,7 @@ void ui_cloud_lens_flare_draw(Nano_GFX *gfx, float sun_ndc_x, float sun_ndc_y, f
 // 沿太阳方向的云透射率（0..1）：体积云天空每一帧算好；无云/未渲染时为 0。
 // 供天象仪把镜头光晕按「太阳是否被云遮住」调暗。
 float ui_cloud_sun_visibility(void) {
-    return s_ui.sun_visible ? s_ui.sun_vis : 0.0f;
+    return s_core.sun_visible ? s_core.sun_vis : 0.0f;
 }
 
 // ===========================================================================
@@ -2612,129 +2512,12 @@ static int cloud_skyring_lookup(Cv3 dir, uint8_t *rgb_line, int x) {
 static void cloud_skyring_store(Cv3 dir, Cv3 hdr) { (void)dir; (void)hdr; }
 #endif
 
-int32_t ui_cloud_init(Key_Event *key_event, Global_State *global_state) {
-    (void)key_event;
-    // LUT 缓冲一次性申请（PSRAM，见 s_transLut/s_msLut 处注释）；失败则回主菜单
-    if (cloud_ensure_luts_buffers() != 0) {
-        global_state->STATE = STATE_MAIN_MENU;
-        return -1;
-    }
-    cloud_generate_noise_textures();
-    if (!s_ui.first_frame) {
-        cloud_default_scene(&s_scene);
-        s_ui.yaw = 0.0f;
-        s_ui.pitch = 25.0f * kPI / 180.0f;
-        s_ui.sun_preset = 0;
-        s_ui.sun_dirty = 1;
-        s_ui.app_time = 0.0f;
-        s_ui.last_ts = global_state->timestamp;
-        s_ui.frame_index = 0;
-        s_ui.first_frame = 0;
-        cloud_apply_coverage_level(CLOUD_COVERAGE_DEFAULT_LEVEL);
-        cloud_apply_brightness(CLOUD_BRIGHTNESS_DEFAULT);
-    }
-    s_ui.sun_alt = -18.0f;  // 自动运动起点：高度角 -18°、方位角正东
-    s_ui.sun_dir = 1;
-    s_ui.layer_mask = CLOUD_LAYER_CU | CLOUD_LAYER_AC | CLOUD_LAYER_SC | CLOUD_LAYER_CS; // 默认所有云
-    s_ui.layer_idx = 0;
-    // 投影：默认透视；两套档位各自独立
-    s_ui.proj = CLOUD_PROJ_PERSP;
-    s_ui.fov_idx[CLOUD_PROJ_PERSP] = FOV_DEFAULT_IDX;
-    s_ui.fov_idx[CLOUD_PROJ_FISHEYE] = FISHEYE_FOV_DEFAULT_IDX;
-    s_ui.fov_deg[CLOUD_PROJ_PERSP] = (int)FOV_DEGREES[FOV_DEFAULT_IDX];
-    s_ui.fov_deg[CLOUD_PROJ_FISHEYE] = (int)FISHEYE_FOV_DEGREES[FISHEYE_FOV_DEFAULT_IDX];
-    s_ui.fov_cur = s_ui.fov_deg[s_ui.proj];
-    s_ui.last_ts = global_state->timestamp;
-    cloud_apply_sun_preset(s_ui.sun_preset);
-    s_ui.sun_dirty = 1;
-    cloud_ensure_luts();
-    gfx_soft_clear(global_state->gfx);
-    gfx_refresh(global_state->gfx);
-    return 0;
-}
 
-int32_t ui_cloud_event_handler(Key_Event *key_event, Global_State *global_state) {
-    // 返回
-    if (((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc)) {
-        global_state->STATE = STATE_MAIN_MENU;
-        return 0;
-    }
-    // 视角
-    if (key_event->key_code == NANO_KEY_left || key_event->key_code == NANO_KEY_right ||
-        key_event->key_code == NANO_KEY_up || key_event->key_code == NANO_KEY_down) {
-        float speed = (key_event->key_edge == -2) ? 6.0f : 1.2f; // 长按重复加速
-        if (key_event->key_code == NANO_KEY_left)  s_ui.yaw   -= 0.06f * speed;
-        if (key_event->key_code == NANO_KEY_right) s_ui.yaw   += 0.06f * speed;
-        if (key_event->key_code == NANO_KEY_up)    s_ui.pitch += 0.04f * speed;
-        if (key_event->key_code == NANO_KEY_down)  s_ui.pitch -= 0.04f * speed;
-        s_ui.pitch = clampf(s_ui.pitch, -85.0f * kPI / 180.0f, 85.0f * kPI / 180.0f);
-    }
-    // 太阳自动运动 开始/暂停（回车切换）
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_enter) {
-        s_ui.sun_auto = !s_ui.sun_auto;
-    }
-    // 手动太阳预设切换（逻辑 NANO_KEY_9，tty 物理键 '3'）；切换即暂停自动运动
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_9) {
-        s_ui.sun_auto = 0;
-        s_ui.sun_preset = (s_ui.sun_preset + 1) % SUN_PRESET_NUM;
-        cloud_apply_sun_preset(s_ui.sun_preset);
-    }
-    // 投影算法循环（7 键）：透视 ↔ 等距鱼眼（各自保留 FOV 档位）
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_7) {
-        s_ui.proj = (s_ui.proj == CLOUD_PROJ_PERSP) ? CLOUD_PROJ_FISHEYE : CLOUD_PROJ_PERSP;
-        s_ui.fov_cur = s_ui.fov_deg[s_ui.proj];
-    }
-    // 视场角循环（3 键）：作用于当前投影的档位表
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_3) {
-        int n = (s_ui.proj == CLOUD_PROJ_PERSP) ? FOV_DEGREES_NUM : FISHEYE_FOV_DEGREES_NUM;
-        s_ui.fov_idx[s_ui.proj] = (s_ui.fov_idx[s_ui.proj] + 1) % n;
-        s_ui.fov_deg[s_ui.proj] = (s_ui.proj == CLOUD_PROJ_PERSP)
-            ? (int)FOV_DEGREES[s_ui.fov_idx[s_ui.proj]]
-            : (int)FISHEYE_FOV_DEGREES[s_ui.fov_idx[s_ui.proj]];
-        s_ui.fov_cur = s_ui.fov_deg[s_ui.proj];
-    }
-    // 云层种类循环（1 键）：所有 → 浓积云 → 高积云 → 层积云 → 卷层云 → 无云
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_1) {
-        s_ui.layer_idx = (s_ui.layer_idx + 1) % 6;
-        switch (s_ui.layer_idx) {
-            case 0: s_ui.layer_mask = CLOUD_LAYER_CU | CLOUD_LAYER_AC | CLOUD_LAYER_SC | CLOUD_LAYER_CS; break; // 所有
-            case 1: s_ui.layer_mask = CLOUD_LAYER_CU; break;   // 仅浓积云
-            case 2: s_ui.layer_mask = CLOUD_LAYER_AC; break;   // 仅高积云
-            case 3: s_ui.layer_mask = CLOUD_LAYER_SC; break;   // 仅层积云
-            case 4: s_ui.layer_mask = CLOUD_LAYER_CS; break;   // 仅卷层云
-            default: s_ui.layer_mask = 0; break;               // 无云
-        }
-    }
-    // 云量（档位）与云亮度（消光观感）
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2)) {
-        switch (key_event->key_code) {
-            case NANO_KEY_4: cloud_apply_coverage_level(s_ui.coverage_level - 1); break; // 云量减档
-            case NANO_KEY_6: cloud_apply_coverage_level(s_ui.coverage_level + 1); break; // 云量加档
-            case NANO_KEY_2: cloud_apply_brightness(s_ui.brightness + 0.15f); break;     // 云更亮
-            case NANO_KEY_8: cloud_apply_brightness(s_ui.brightness - 0.15f); break;     // 云更暗
-            case NANO_KEY_5: cloud_apply_coverage_level(CLOUD_COVERAGE_DEFAULT_LEVEL);   // 复位
-                             cloud_apply_brightness(CLOUD_BRIGHTNESS_DEFAULT);
-                             s_ui.sun_auto = 0;
-                             cloud_apply_sun_preset(s_ui.sun_preset);
-                             s_ui.layer_mask = CLOUD_LAYER_CU | CLOUD_LAYER_AC | CLOUD_LAYER_SC | CLOUD_LAYER_CS;
-                             s_ui.layer_idx = 0;
-                             s_ui.proj = CLOUD_PROJ_PERSP;
-                             s_ui.fov_idx[CLOUD_PROJ_PERSP] = FOV_DEFAULT_IDX;
-                             s_ui.fov_deg[CLOUD_PROJ_PERSP] = (int)FOV_DEGREES[FOV_DEFAULT_IDX];
-                             s_ui.fov_idx[CLOUD_PROJ_FISHEYE] = FISHEYE_FOV_DEFAULT_IDX;
-                             s_ui.fov_deg[CLOUD_PROJ_FISHEYE] = (int)FISHEYE_FOV_DEGREES[FISHEYE_FOV_DEFAULT_IDX];
-                             s_ui.fov_cur = s_ui.fov_deg[s_ui.proj];
-                             break;
-            default: break;
-        }
-    }
-    return 0;
-}
 
 // 内部渲染缓冲（可降采样，动态分配）+ 全屏输出缓冲
 // 另有一份“云透射率”平面（每像素 1 字节），仅 PASS_CLOUDS 需要：与预乘云色一起
 // 双线性放大，供 ui_cloud_flush_over 做 dst = dst·T + premul_rgb 的 alpha 合成。
-// 独立“体积云”演示 App 走 PASS_BOTH，不会申请这块内存。
+// PASS_SKY / PASS_BOTH 不申请这块内存。
 static uint8_t *s_scene_img = NULL;
 static size_t  s_scene_img_bytes = 0;
 static uint8_t *s_fb = NULL;      // 全屏（整机帧缓冲尺寸）
@@ -2771,36 +2554,6 @@ static void cloud_ensure_buffers(int iw, int ih, int fw, int fh, int need_alpha)
             s_fb_a = (uint8_t *)malloc(fa_need);
             s_fb_a_bytes = s_fb_a ? fa_need : 0;
         }
-    }
-}
-
-// 向 Wimg x Himg 的 RGB888 缓冲 stamp 一行文本（二值点阵字模，位图布局同 gfx_draw_char）
-static void cloud_stamp_text(Nano_GFX *gfx, uint8_t *img, int Wimg, int Himg,
-                             const wchar_t *str,
-                             int32_t x, int32_t y, uint8_t r, uint8_t g, uint8_t b) {
-    while (*str) {
-        uint8_t fw = 12, fh = 12;
-        const uint8_t *glyph = gfx_get_glyph(gfx, (uint32_t)*str, &fw, &fh);
-        if (!glyph) glyph = gfx_get_glyph(gfx, 12307, &fw, &fh);
-        if (!glyph) { str++; continue; }
-        int32_t row_bytes = (fh + 7) / 8;
-        for (int32_t c = 0; c < (int32_t)fw; c++) {
-            for (int32_t j = 0; j < row_bytes; j++) {
-                uint8_t byte = glyph[j * fw + c];
-                int32_t bits = (j == row_bytes - 1) ? (8 - ((8 * row_bytes) % fh)) : 8;
-                for (int32_t bb = 0; bb < bits; bb++) {
-                    if ((byte >> bb) & 1) {
-                        int32_t px = x + c, py = y + j * 8 + bb;
-                        if (px >= 0 && px < Wimg && py >= 0 && py < Himg) {
-                            int32_t i = (py * Wimg + px) * 3;
-                            img[i] = r; img[i + 1] = g; img[i + 2] = b;
-                        }
-                    }
-                }
-            }
-        }
-        x += fw;
-        str++;
     }
 }
 
@@ -2848,14 +2601,15 @@ static void cloud_upscale(int iw, int ih, int fw, int fh, int with_alpha) {
     }
 }
 
-static void cloud_setup_camera(float roll_rad, float cam_alt_km, Cv3 *camPos, Cv3 *forward, Cv3 *right, Cv3 *camUp) {
+static void cloud_setup_camera(float yaw_rad, float pitch_rad, float roll_rad, float cam_alt_km,
+                               Cv3 *camPos, Cv3 *forward, Cv3 *right, Cv3 *camUp) {
     // 观察高度（km，地面以上）：与 linglong.html 的 cloud_sky_sync_camera 同源。
-    // 未传（<=0）时保持历史默认 2 km（独立“体积云”演示 App 的取景高度）。
+    // 未传（<=0）时保持历史默认 2 km（与 linglong.html 的默认取景高度一致）。
     if (!(cam_alt_km > 0.0f)) cam_alt_km = 2.0f;
     if (cam_alt_km > 100.0f) cam_alt_km = 100.0f; // 大气顶 60 km，留余量
     *camPos = v3(0, s_scene.bottomRadius + cam_alt_km, 0);
-    *forward = v3norm(v3(cosf(s_ui.pitch) * sinf(s_ui.yaw), sinf(s_ui.pitch),
-                         cosf(s_ui.pitch) * cosf(s_ui.yaw)));
+    *forward = v3norm(v3(cosf(pitch_rad) * sinf(yaw_rad), sinf(pitch_rad),
+                         cosf(pitch_rad) * cosf(yaw_rad)));
     Cv3 worldUp = v3(0, 1, 0);
     Cv3 r = v3cross(*forward, worldUp);
     if (v3len(r) < 1e-4f) r = v3(1, 0, 0);
@@ -2876,7 +2630,7 @@ static void cloud_setup_camera(float roll_rad, float cam_alt_km, Cv3 *camPos, Cv
 
 // ---------------------------------------------------------------------------
 // 核心渲染（内部缓冲 → 半分辨率 ray-march → 双线性放大到 s_fb）
-// 所有场景/相机/云参数均来自外部 params（供独立应用与天象仪集成共用）。
+// 所有场景/相机/云参数均来自外部 params —— 本函数无任何隐藏输入/状态。
 // 不负责 HUD 叠加与显存输出，由调用方先 flush 再在其上叠加绘制。
 // ---------------------------------------------------------------------------
 static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
@@ -2908,7 +2662,13 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     cloud_ensure_luts();
 
     Cv3 camPos, forward, right, camUp;
-    cloud_setup_camera(p->roll_rad, p->cam_alt_km, &camPos, &forward, &right, &camUp);
+    // 俯仰上限与天象仪 fisheye 的“天顶数值稳定角”（89.99°）对齐：原 ±85° 会让
+    // 云/大气图像整体低 5°，天顶视角时画面底部 5° 露出云渲染器的地平线下地面项——
+    // 即“画面下方固定宽度的暗带”。89.9° 时 cross(forward,worldUp) 仍非退化（≠0），
+    // 屏幕基向量与 fisheye_unproject 一致；0.09° 残差 ≈ 0.1 像素。
+    float pitch_rad = clampf(p->pitch_rad, -89.9f * kPI / 180.0f, 89.9f * kPI / 180.0f);
+    cloud_setup_camera(p->yaw_rad, pitch_rad, p->roll_rad, p->cam_alt_km,
+                       &camPos, &forward, &right, &camUp);
 
     // 地面上涌光：天顶方向的天空亮度（除地面回弹的纯大气散射），加权漫反射等效
     {
@@ -2936,9 +2696,11 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
         : (2.0f * tanV / (float)H);
 
     // 太阳镜头光晕（每帧一次）：太阳在相机前方时投影到屏幕 NDC，并求其被云遮挡的透射率
-    // （解耦渲染时只在天空遍算：结果跨遍存于 s_ui，供天象仪在云遍之后统一叠光晕；
+    // （解耦渲染时只在天空遍算：结果留在内核状态，供天象仪在云遍之后统一叠光晕；
     //   PASS_CLOUDS 不重复一次沿太阳方向的 ray-march，也不清掉天空遍算好的值）
-    if (p->pass != UI_CLOUD_PASS_CLOUDS) s_ui.sun_visible = 0;
+    float sun_u = 0.0f;   // 太阳屏幕 NDC 坐标（仅本次调用内部使用）
+    float sun_v = 0.0f;
+    if (p->pass != UI_CLOUD_PASS_CLOUDS) s_core.sun_visible = 0;
     // 太阳低于地平线时无条件关闭光晕（linglong.html 同步）：地平线下无直射光，
     // 避免太阳盘/光晕绘制在地平线以下的“黑色地面”上
     float sunElevDeg = asinf(saturatef(s_scene.sunDirection.y)) * 180.0f / kPI;
@@ -2953,19 +2715,19 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
                 float rn = th / fishFovRad;
                 float r = rn * fishRmax;
                 float ph = atan2f(sc.y, sc.x);
-                s_ui.sun_u = r * cosf(ph) / (float)W * (float)H; // u NDC(带 aspect 还原)
-                s_ui.sun_v = r * sinf(ph);
+                sun_u = r * cosf(ph) / (float)W * (float)H; // u NDC(带 aspect 还原)
+                sun_v = r * sinf(ph);
             } else {
-                s_ui.sun_u = sc.x / (sc.z * tanH);
-                s_ui.sun_v = sc.y / (sc.z * tanV);
+                sun_u = sc.x / (sc.z * tanH);
+                sun_v = sc.y / (sc.z * tanV);
             }
             // 沿太阳方向的云透射率（等价 lens_visible.glsl 的 cloudColor.a）
             CloudPixel sunc = cloudPixelCompute(camPos, s_scene.sunDirection, p->app_time_sec, 0.5f, pixAng, &s_scene);
-            s_ui.sun_vis = sunc.transmittance;
-            s_ui.sun_visible = 1;
+            s_core.sun_vis = sunc.transmittance;
+            s_core.sun_visible = 1;
         }
         else {
-            s_ui.sun_vis = 0.0f;
+            s_core.sun_vis = 0.0f;
         }
     }
 
@@ -3041,14 +2803,14 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
             // full-avalanche 哈希：像素与帧号均为独立哈希输入，帧间/像素间抖动互不相关，
             // 只呈现无结构的沸腾噪声，不再有可辨识的滚动图案。
             float jitter = cloudHashFloat((uint32_t)x, (uint32_t)y,
-                                          (uint32_t)(s_ui.frame_index + 1013));
+                                          (uint32_t)(s_core.frame_index + 1013));
 
             // 云
             CloudPixel cloud = cloudPixelCompute(camPos, rayDir, p->app_time_sec, jitter, pixAng, &s_scene);
 
             if (pass == UI_CLOUD_PASS_CLOUDS) {
                 // 解耦云层：输出预乘覆盖率的显示空间云色 + 透射率 alpha
-                // （镜头光晕不在此处：天象仪自己画太阳/星芒；独立 App 走 PASS_BOTH）
+                // （镜头光晕不在此处：天象仪自己画太阳/星芒并叠 ui_cloud_lens_flare_draw）
                 cloud_write_pixel_premul(x, cloud.color, cloud.transmittance, rowbuf, rowa);
                 continue;
             }
@@ -3062,8 +2824,8 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
                               cloud.color);
 
             // 太阳镜头光晕（太阳/星芒/光斑，HDR 叠加，色调映射前）
-            if (s_ui.sun_visible) {
-                Cv3 lensAdd = cloud_lens_hdr(uu, vv, s_ui.sun_u, s_ui.sun_v, s_ui.sun_vis, &s_scene);
+            if (s_core.sun_visible) {
+                Cv3 lensAdd = cloud_lens_hdr(uu, vv, sun_u, sun_v, s_core.sun_vis, &s_scene);
                 final = v3add(final, lensAdd);
             }
 
@@ -3078,10 +2840,10 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
 }
 
 // 将外部参数应用到内部场景（光源/相机/云参数），并执行一次核心渲染。
-// 独立应用与天象仪集成共用此入口，保证两端的体积云/大气渲染行为一致。
+// 唯一的渲染入口：调用方给出相机/光源/云参数/渲染遍，库不保留相机与时间状态。
 void ui_cloud_render_core(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
-    // LUT 缓冲首次分配：独立云应用由 ui_cloud_init 分配；天象仪等直接调用方
-    // 也在此兜底分配，避免只渲染出黑屏（分配失败则本帧跳过，下帧重试）。
+    // LUT 缓冲首次分配（库的唯一初始化点）：分配失败则本帧跳过、下帧重试
+    // （调用方无需任何 init 调用）。
     if (cloud_ensure_luts_buffers() != 0) return;
     cloud_generate_noise_textures();
     static int s_scene_ready = 0;
@@ -3090,13 +2852,13 @@ void ui_cloud_render_core(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
         s_scene_ready = 1;
     }
 
-    // 光源由调用方给出（天象仪 → where_is_the_sun；独立应用 → 预设/自动运动）
+    // 光源由调用方给出（天象仪 → where_is_the_sun）
     float dl = sqrtf(p->sun_dx * p->sun_dx + p->sun_dy * p->sun_dy + p->sun_dz * p->sun_dz);
     Cv3 newSunDir = (dl < 1e-6f) ? v3(0, 1, 0)
                                  : v3(p->sun_dx / dl, p->sun_dy / dl, p->sun_dz / dl);
     Cv3 newSunCol = v3(p->sun_r, p->sun_g, p->sun_b);
     // 太阳方向/颜色/强度变化超过阈值才置脏重算 LUT（linglong.html 同步的按需缓存）：
-    // 独立应用每帧回填相同值时不再逐帧重建 LUT；天象仪太阳连续移动时仍逐帧更新
+    // 调用方每帧回填相同值时不再逐帧重建 LUT；太阳连续移动时仍逐帧更新
     if (fabsf(newSunDir.x - s_scene.sunDirection.x) +
         fabsf(newSunDir.y - s_scene.sunDirection.y) +
         fabsf(newSunDir.z - s_scene.sunDirection.z) > 1e-5f ||
@@ -3104,38 +2866,26 @@ void ui_cloud_render_core(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
         fabsf(newSunCol.y - s_scene.sunColor.y) +
         fabsf(newSunCol.z - s_scene.sunColor.z) > 1e-5f ||
         fabsf(p->sun_intensity - s_scene.sunIntensity) > 1e-5f) {
-        s_ui.sun_dirty = 1;
+        s_core.sun_dirty = 1;
     }
     s_scene.sunDirection = newSunDir;
     s_scene.sunColor = newSunCol;
     s_scene.sunIntensity = p->sun_intensity;
     cloud_update_sky_light();
 
-    // 云参数（云量/云层种类/亮度沿用独立应用已有的控制曲线）
+    // 云参数（云量/云层种类/亮度）
     s_scene.cloudCoverage = clampf(p->coverage, 0.0f, 1.0f);
-    s_ui.layer_mask = p->layer_mask;
+    s_core.layer_mask = p->layer_mask;
     cloud_apply_brightness(p->brightness);
 
-    // 性能档位覆盖（0 = 用 CLOUD_OPT_* 的内部默认值；玲珑仪“云精度”按钮走这条路）
+    // 性能档位覆盖（0 = 用 CLOUD_OPT_* 的内部默认值；玲珑仪“云精度”按钮走这条）
     if (p->render_scale > 0) s_scene.cloudRenderScale = p->render_scale;
     if (p->step_nominal_km > 0.0f) s_scene.cloudStepNominalKm = p->step_nominal_km;
 
-    // 相机与投影（天象仪视角 → 云渲染 yaw/pitch/roll；独立应用直接传入自身状态）
-    s_ui.yaw = p->yaw_rad;
-    // 俯仰上限必须与天象仪 fisheye 的“天顶数值稳定角”（89.99°）对齐：原 ±85° 会让
-    // 云/大气图像整体低 5°，天顶视角时画面底部 5° 露出云渲染器的地平线下地面项——
-    // 即“画面下方固定宽度的暗带”。89.9° 时 cross(forward,worldUp) 仍非退化（≠0），
-    // 屏幕基向量与 fisheye_unproject 一致；0.09° 残差 ≈ 0.1 像素。
-    s_ui.pitch = clampf(p->pitch_rad, -89.9f * kPI / 180.0f, 89.9f * kPI / 180.0f);
-    s_ui.roll = p->roll_rad;
-    s_ui.proj = (p->proj == CLOUD_PROJ_FISHEYE) ? CLOUD_PROJ_FISHEYE : CLOUD_PROJ_PERSP;
-    s_ui.fov_cur = p->fov_deg;
-    if (s_ui.fov_cur < 1) s_ui.fov_cur = 1;
-    if (s_ui.fov_cur > 170) s_ui.fov_cur = 170;
-    s_ui.app_time = p->app_time_sec;
-    // 解耦后一帧会调用两次（PASS_SKY + PASS_CLOUDS）：帧号只在“算云”的那一遍推进，
-    // 保证抖动/动画序列每帧只前进一步。
-    if (p->pass != UI_CLOUD_PASS_SKY) s_ui.frame_index++;
+    // 相机/投影/时间：不落状态，直接由本次参数驱动 cloud_core_render
+    // （解耦后一帧会调用两次 PASS_SKY + PASS_CLOUDS：帧号只在“算云”的那一遍推进，
+    //   保证抖动/动画序列每帧只前进一步）。
+    if (p->pass != UI_CLOUD_PASS_SKY) s_core.frame_index++;
 
     cloud_core_render(gfx, p);
 }
@@ -3249,69 +2999,3 @@ void ui_cloud_flush_over(Nano_GFX *gfx) {
     }
 }
 
-int32_t ui_cloud_render_frame(Key_Event *key_event, Global_State *global_state) {
-    Nano_GFX *gfx = global_state->gfx;
-    const int FW = (int)gfx->width, FH = (int)gfx->height;
-
-    // 时间推进（秒）+ 帧计数
-    // 注意：两帧时间戳差值须先用 64 位整数相减，再转 float；
-    // 直接 (float)timestamp 会丢失 epoch 毫秒的低位精度（约 0.1s），导致 dt=0。
-    float dt = (float)((int64_t)global_state->timestamp - (int64_t)s_ui.last_ts) / 1000.0f;
-    if (dt < 0.0f) dt = 0.0f;
-    if (dt > 0.06f) dt = 0.06f;
-    s_ui.last_ts = global_state->timestamp;
-    s_ui.app_time += dt;
-
-    // 太阳自动运动推进（每帧 +1° 高度角；使 LUT/光晕/场景随太阳方向一致更新）
-    cloud_sun_auto_tick();
-
-    // 组装渲染参数（从内部状态捕获场景/相机/云设置）
-    UiCloud_Render_Params p;
-    memset(&p, 0, sizeof(p));
-    p.yaw_rad = s_ui.yaw;
-    p.pitch_rad = s_ui.pitch;
-    p.roll_rad = s_ui.roll;
-    p.proj = s_ui.proj;
-    p.fov_deg = s_ui.fov_cur;
-    p.app_time_sec = s_ui.app_time;
-    p.sun_dx = s_scene.sunDirection.x;
-    p.sun_dy = s_scene.sunDirection.y;
-    p.sun_dz = s_scene.sunDirection.z;
-    p.sun_r = s_scene.sunColor.x;
-    p.sun_g = s_scene.sunColor.y;
-    p.sun_b = s_scene.sunColor.z;
-    p.sun_intensity = s_scene.sunIntensity;
-    p.coverage = s_scene.cloudCoverage;
-    p.layer_mask = s_ui.layer_mask;
-    p.brightness = s_ui.brightness;
-    p.enable_sun_lens = 1;
-
-    ui_cloud_render_core(gfx, &p);
-
-    // HUD（stamp 进整屏缓冲，缩放的文字不再模糊）
-    const SunPreset *p2 = &SUN_PRESETS[s_ui.sun_preset];
-    static const wchar_t *LAYER_NAMES[6] = { L"所有云", L"浓积云", L"高积云", L"层积云", L"卷层云", L"无云" };
-    float elevNow = asinf(saturatef(s_scene.sunDirection.y)) * 180.0f / (float)kPI;
-    wchar_t line[64];
-    if (s_ui.sun_auto) {
-        swprintf(line, 64, L"云量%d/%d 亮%.2f %ls 自动%+d",
-                 s_ui.coverage_level + 1, CLOUD_COVERAGE_LEVEL_NUM,
-                 s_ui.brightness, LAYER_NAMES[s_ui.layer_idx], (int)lrintf(elevNow));
-    } else {
-        swprintf(line, 64, L"云量%d/%d 亮%.2f %ls %ls%+d",
-                 s_ui.coverage_level + 1, CLOUD_COVERAGE_LEVEL_NUM,
-                 s_ui.brightness, LAYER_NAMES[s_ui.layer_idx], p2->name, (int)lrintf(elevNow));
-    }
-    cloud_stamp_text(gfx, s_fb, FW, FH, line, 2, 2, 235, 235, 240);
-    {
-        wchar_t h2[48];
-        swprintf(h2, 48, L"%ls%d 1云型 3视场 9太阳",
-                 (s_ui.proj == CLOUD_PROJ_FISHEYE) ? L"鱼眼" : L"透视", s_ui.fov_cur);
-        cloud_stamp_text(gfx, s_fb, FW, FH, h2, 2, 15, 175, 180, 195);
-    }
-
-    // 输出到显存（整屏，按 gfx->width stride）
-    ui_cloud_flush(gfx);
-    gfx_refresh(gfx);
-    return 0;
-}

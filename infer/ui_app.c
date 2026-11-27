@@ -46,7 +46,6 @@
 
 #include "ui_genetic.h"
 
-#include "ui_cloud.h"
 #include "ui_llm.h"
 #include "ui_linglong.h"   // 玲珑天象仪（原在本文件内的 STATE_LINGLONG 状态页）
 #include "ui_main_menu.h"  // 主菜单（原在本文件内的 STATE_MAIN_MENU 表驱动宫格）
@@ -453,7 +452,8 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
         // 退场，TSP 仅保留 Scheme 实现（app/tsp.scm，经“灵机应用程序”入口启动）
         // 原“日历”入口已移除：C 版（STATE_CALENDAR / ui_calendar.c）退场，日历仅保留
         // Scheme 实现（app/calendar.scm，经“灵机应用程序”入口启动）
-        // L"体积云",  // 原入口：已移除（体积云渲染保留在天象仪“大气散射”档位中，见 celestial.c）
+        // 原“体积云”入口已移除：C 版体积云演示 App 已删除，体积云现为（ui_cloud.c）
+        // 纯渲染库，只由玲珑天象仪 sky_model==4 调用（见 celestial.c）
         // L"曼德博集" / L"生命游戏Scheme"：已并入“灵机应用程序”（业务资源目录 app/
         // 下的 Scheme App 动态列表，见 ui_scheme_app.c）
         // L"小鹦鹉笼",  // 原入口：小鹦鹉笼已并入“鹦鹉笼”的统一模型菜单（[轻] 前缀条目），注释保留备查
@@ -482,7 +482,7 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
         // 原 case 1（STATE_GOLDMINER）已移除：C 版黄金矿工退场，仅保留 app/goldminer.scm
         // 原 case 2（STATE_GENETIC_TSP）已移除：C 版 TSP 退场，仅保留 app/tsp.scm
         // 原 case 6: 原“日历”入口已移除（C 版退场，日历仅保留 Scheme 实现 app/calendar.scm）
-        // case 7: 原“体积云”入口已移除（保留 STATE_CLOUD 状态处理，当前无菜单入口）
+        // 原 case 7: 原“体积云”入口已移除（STATE_CLOUD 已删除，体积云改为纯渲染库）
         // 原“曼德博集”/“生命游戏Scheme”入口已并入“灵机应用程序”（case 0）
         // case 12: 原“小鹦鹉笼”入口已移除（并入鹦鹉笼模型菜单，条目带 [轻] 前缀）
         default: return STATE_MAIN_MENU;
@@ -1682,29 +1682,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         // 模拟 + 渲染一帧（拖动交互在 render_frame 内完成）
         ui_water_render_frame(key_event, global_state);
-
-        break;
-    }
-
-
-    /////////////////////////////////////////////
-    // 体积云与天空仿真
-    /////////////////////////////////////////////
-
-    case STATE_CLOUD: {
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_cloud_init(key_event, global_state);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        // 按键处理（方向键视角 / 回车太阳 / 返回主菜单）；返回主菜单则跳过一帧渲染
-        ui_cloud_event_handler(key_event, global_state);
-        if (global_state->STATE != STATE_CLOUD) break;
-
-        // 渲染一帧
-        ui_cloud_render_frame(key_event, global_state);
 
         break;
     }

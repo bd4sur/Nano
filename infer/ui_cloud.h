@@ -6,43 +6,23 @@ extern "C" {
 #endif
 
 #include "ui.h"
-#include "ui_app.h"
 
 // ===============================================================================
-// 体积云与天空仿真（port of flower 引擎体积云/大气渲染核心）
+// 体积云与天空仿真 —— **纯渲染库**（port of flower 引擎体积云/大气渲染核心）
 //
 // 参照 flower（/mnt/d/Desktop/GitRepos/flower，Vulkan 引擎）的
 //   - cloud_noise_common.glsl / cloud_basic_noise.glsl / cloud_detailed_noise.glsl
 //   - cloud_render_common.glsl / cloud_render_raymarching.glsl
 //   - sky_render.glsl / common_shader.glsl / aces.glsl
-// 在 CPU（linux tty）上逐像素 ray-march 实现。算法核心与 flower 一致：
+// 在 CPU 上逐像素 ray-march 实现。算法核心与 flower 一致：
 //   Perlin-Worley + Worley FBM 三层高度分层云形、双叶相位 + 多重散射近似、
 //   HG/Rayleigh 相位大气单次散射 + 多重散射 LUT 的天空模型。
 //
-// 交互（逻辑键，见 hal_key.h；括注为 tty 物理键位）：
-//   左/右          旋转视角（偏航）
-//   上/下          俯仰视角
-//   7              投影算法循环：透视投影 ↔ 等距鱼眼投影（各自保留 FOV 档位）
-//   9              视场角 FOV 循环（当前投影的档位表：透视 12/20/28/38/50°；
-//                   鱼眼 60/80/100/130/165°）
-//   3（物理键）   手动太阳预设切换（正午→午后→傍晚→日落→月夜；切换即暂停自动）
-//   1              云层种类循环：所有云 → 仅低层 → 仅中层 → 低+中 → 无云 → 所有云
-//   回车(ENTER)    太阳自动运动 开/暂停（东 -10° → 天顶 → 西 -10°，每帧 +1° 高度角）
-//   9              手动太阳预设切换（正午→午后→傍晚→日落→月夜；切换即暂停自动）
-//   4 / 6          云量档位 ±（晴空→疏云→半云→多云→阴天→满云，共 6 档）
-//   2 / 8          云亮度 ±（0.5~2.0；联动云反照率/太阳辐照/多重散射/环境反射
-//                   等介质光学参数，物理地改变透射/反射综合观感）
-//   5              云量/亮度复位（并暂停自动、回到正午预设）
-//   * (ESC)        返回主菜单
-// ===============================================================================
-
-// ===============================================================================
-// 体积云/大气渲染核心（与独立 ui_cloud 应用共享同一 ray-march 内核）
-//
-// 供“玲珑天象仪”（celestial.c）作为新的天空模型调用：
-//   - 相机姿态（yaw/pitch/roll，弧度）、投影与视场角由调用方显式给出；
-//   - 光源方向/颜色/强度由调用方（天象仪的 where_is_the_sun 提供太阳角度）给出；
-//   - 云量 / 云层种类 / 云亮度沿用独立应用中已有的控制参数。
+// **本模块是纯库**：不含任何 UI / 交互 / App 状态，也不依赖 ui_app.h。
+//   入口：ui_cloud_render_core（相机姿态、投影/视场角、光源、云量/云层/亮度、
+//         渲染遍全部由参数给出；首调自动做 LUT/噪声纹理/场景默认值的惰性初始化）；
+//   输出：ui_cloud_flush（不透明）/ ui_cloud_flush_over（按云透射率 alpha 合成）。
+// 主要调用方：“玲珑天象仪”（celestial.c）的 sky_model==4（体积云）。
 // 平台无关（纯 C + 数学库 + graphics.h 绘制接口）。
 //
 // 性能：内部按屏幕 1/2 分辨率 ray-march（160x120 @320x240）后双线性放大，
@@ -64,7 +44,7 @@ extern "C" {
 
 // 渲染遍：把“天空/大气”和“体积云”拆成两遍，云层才能在任意时机合成到帧缓冲上
 // （照搬 linglong.html 的解耦云层：sky_only + render_decoupled_volumetric_clouds）。
-//   0 = BOTH   天空+云一起算（历史行为，独立“体积云”演示 App 用）
+//   0 = BOTH   天空+云一起算（历史行为；单遍调用方的兼容档）
 //   1 = SKY    只算大气天空（不透明，走 ui_cloud_flush）
 //   2 = CLOUDS 只算体积云，输出“预乘覆盖率的显示空间云色 + 云透射率 alpha”，
 //              由 ui_cloud_flush_over 叠加到当前帧缓冲（地景/天体之上或之下）
@@ -91,16 +71,16 @@ typedef struct UiCloud_Render_Params {
     float coverage;         // 云量（建议使用 ui_cloud_coverage_for_level 的标定档位值）
     int   layer_mask;       // 云层种类掩码（UI_CLOUD_LAYER_* 组合）
     float brightness;       // 云亮度 0.5~2.0（天象仪传入 ui_cloud_brightness_for_sun_alt() 的
-                            // 自动调制值；独立应用仍可用 2/8 键手动调节）
-    int   enable_sun_lens;  // 是否求太阳方向的云透射率并绘制云内核自带的太阳镜头光晕
-                            // （天象仪：置 1 只为了拿可见度，光晕由 render_sky 末尾统一叠加；
-                            //   独立体积云 App：置 1 则 PASS_BOTH 内叠 HDR 光晕）
+                            // 自动调制值，或调用方自己的手动档位）
+    int   enable_sun_lens;  // 是否求太阳方向的云透射率（供 ui_cloud_sun_visibility 查询），
+                            // 并在 PASS_BOTH 时把镜头光晕叠进云内核输出。
+                            // （天象仪：置 1 只为了拿可见度，光晕由 render_sky 末尾统一叠加）
     // ---- 性能档位覆盖（0 = 用 ui_cloud 内部默认值，见 CLOUD_OPT_* 宏） ----
     int   render_scale;     // 内部渲染降采样倍数（1=全分辨率，2=半分辨率…）
     float step_nominal_km;  // 云区裁剪后的目标采样步距（km）
 } UiCloud_Render_Params;
 
-// 云量档位数（与独立应用 4/6 键的档位表一致，默认 6 档）
+// 云量档位数（与玲珑仪“云量”按钮的档位表一致，6 档）
 int   ui_cloud_coverage_level_num(void);
 // 档位名称（“晴空/疏云/半云/多云/阴天/满云”；越界钳制到有效范围）
 const wchar_t *ui_cloud_coverage_level_name(int level);
@@ -149,10 +129,6 @@ float ui_cloud_lowest_layer_base_km(void);
 void  ui_cloud_lens_flare_draw(Nano_GFX *gfx, float sun_ndc_x, float sun_ndc_y, float sun_vis);
 // 沿太阳方向的云透射率（0..1）：体积云天空（模型 4）每帧算好；无云或未渲染时为 0。
 float ui_cloud_sun_visibility(void);
-
-int32_t ui_cloud_init(Key_Event *key_event, Global_State *global_state);
-int32_t ui_cloud_event_handler(Key_Event *key_event, Global_State *global_state);
-int32_t ui_cloud_render_frame(Key_Event *key_event, Global_State *global_state);
 
 #ifdef __cplusplus
 }

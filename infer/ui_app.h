@@ -67,7 +67,8 @@ extern "C" {
 // （app/calendar.scm，经“灵机应用程序”入口启动；黄历逻辑/数据 almanac.h 保留备查）。
 // 保留编号空缺避免冲突。
 #define STATE_WATER             (71)
-#define STATE_CLOUD             (72)
+// 编号 72 已退役：原 C 版“体积云”演示 App（STATE_CLOUD / ui_cloud.c 的三个 ui 入口）
+// 已删除，体积云改为**纯渲染库**，仅由玲珑天象仪（sky_model==4）调用。保留编号空缺避免冲突。
 // 编号 73~76 已退役：原“小鹦鹉笼”独立的模型菜单/输入/推理/结果状态已并入鹦鹉笼统一状态
 // （STATE_MODEL_MENU / STATE_LLM_INPUT / STATE_LLM_ON_INFER / STATE_LLM_AFTER_INFER），
 // 仅推理引擎不同（nano_min，见 ui_llm.c 引擎适配层）；保留编号空缺避免冲突
