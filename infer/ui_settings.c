@@ -21,6 +21,7 @@
 #include "hal_audio_out.h"
 
 #include "ui.h"
+#include "ui_button.h"
 #include "ui_app.h"
 #include "ui_color.h"
 #include "ui_settings.h"
@@ -475,6 +476,87 @@ static void settings_menu_row_value(Global_State *gs, int32_t id, wchar_t *out, 
     }
 }
 
+static Ui_RGB settings_rgb(const uint8_t c[3]) {
+    return (Ui_RGB){c[0], c[1], c[2]};
+}
+
+// 通用按钮命中（仅需矩形；圆角半径不参与命中）
+static int32_t settings_button_hit(int32_t x, int32_t y, int32_t w, int32_t h,
+                                   int32_t r, int32_t px, int32_t py) {
+    Ui_Button b;
+    ui_button_init(&b, 0, x, y, w, h);
+    b.style = UI_BTN_STYLE_ROUNDED;
+    b.radius = (int16_t)r;
+    return ui_button_hit(&b, px, py);
+}
+
+// 设置页通用按钮主题：常态/按下/选中/选中按下。NULL 表示沿用常态色。
+static void settings_button_theme(Ui_Button_Theme *t,
+                                  const uint8_t *bg, const uint8_t *bg_press,
+                                  const uint8_t *fg, const uint8_t *fg_press,
+                                  const uint8_t *bg_sel, const uint8_t *bg_sel_press,
+                                  const uint8_t *fg_sel, const uint8_t *fg_sel_press) {
+    memset(t, 0, sizeof(*t));
+    Ui_RGB nbg = settings_rgb(bg);
+    Ui_RGB pbg = settings_rgb(bg_press);
+    Ui_RGB nfg = settings_rgb(fg);
+    Ui_RGB pfg = settings_rgb(fg_press);
+    Ui_RGB sbg = (bg_sel != NULL) ? settings_rgb(bg_sel) : nbg;
+    Ui_RGB spbg = (bg_sel_press != NULL) ? settings_rgb(bg_sel_press) : pbg;
+    Ui_RGB sfg = (fg_sel != NULL) ? settings_rgb(fg_sel) : nfg;
+    Ui_RGB spfg = (fg_sel_press != NULL) ? settings_rgb(fg_sel_press) : pfg;
+
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = nbg;
+        t->fg[i] = nfg;
+        t->bg_alpha[i] = 1;
+        t->border_alpha[i] = 0;
+    }
+    t->bg[UI_BTN_VIS_PRESSED] = pbg;
+    t->fg[UI_BTN_VIS_PRESSED] = pfg;
+    t->bg[UI_BTN_VIS_SELECTED] = sbg;
+    t->fg[UI_BTN_VIS_SELECTED] = sfg;
+    t->bg[UI_BTN_VIS_SELECTED_PRESSED] = spbg;
+    t->fg[UI_BTN_VIS_SELECTED_PRESSED] = spfg;
+}
+
+static const uint8_t *settings_icon_fg(const UiSettingsPalette *p, Ui_Button_Visual vis) {
+    return (vis == UI_BTN_VIS_PRESSED || vis == UI_BTN_VIS_SELECTED_PRESSED)
+        ? p->on_accent : p->accent_ink;
+}
+
+static void settings_minus_content(Nano_GFX *g, const Ui_Button *b,
+                                   int32_t base_cx, int32_t base_cy,
+                                   Ui_Button_Visual vis, void *user) {
+    (void)base_cx; (void)base_cy;
+    const UiSettingsPalette *p = (const UiSettingsPalette *)user;
+    settings_minus(g, b->x + b->w / 2, ui_button_icon_cy(b, vis), settings_icon_fg(p, vis));
+}
+
+static void settings_plus_content(Nano_GFX *g, const Ui_Button *b,
+                                  int32_t base_cx, int32_t base_cy,
+                                  Ui_Button_Visual vis, void *user) {
+    (void)base_cx; (void)base_cy;
+    const UiSettingsPalette *p = (const UiSettingsPalette *)user;
+    settings_plus(g, b->x + b->w / 2, ui_button_icon_cy(b, vis), settings_icon_fg(p, vis));
+}
+
+static void settings_up_content(Nano_GFX *g, const Ui_Button *b,
+                                int32_t base_cx, int32_t base_cy,
+                                Ui_Button_Visual vis, void *user) {
+    (void)base_cx; (void)base_cy;
+    const UiSettingsPalette *p = (const UiSettingsPalette *)user;
+    settings_chevron_up(g, b->x + b->w / 2, ui_button_icon_cy(b, vis), settings_icon_fg(p, vis));
+}
+
+static void settings_down_content(Nano_GFX *g, const Ui_Button *b,
+                                  int32_t base_cx, int32_t base_cy,
+                                  Ui_Button_Visual vis, void *user) {
+    (void)base_cx; (void)base_cy;
+    const UiSettingsPalette *p = (const UiSettingsPalette *)user;
+    settings_chevron_down(g, b->x + b->w / 2, ui_button_icon_cy(b, vis), settings_icon_fg(p, vis));
+}
+
 static void settings_draw_header(Global_State *gs, const UiSettingsPalette *p,
                                  const wchar_t *title, const wchar_t *action,
                                  int32_t action_kind, int32_t center_title) {
@@ -497,8 +579,18 @@ static void settings_draw_header(Global_State *gs, const UiSettingsPalette *p,
     const uint8_t *fg = p->text;
     if (action_kind == 1) { bg = p->accent; fg = p->on_accent; }
     else if (action_kind == 2) { bg = p->off_soft; fg = p->off; }
-    settings_round_rect(gfx, bx, by, bw, bh, 12, bg, 1);
-    settings_text_centered(gfx, GFX_FONT_ALPHA_12, action, bx + bw / 2, by + bh / 2, fg, 1);
+
+    Ui_Button b;
+    ui_button_init(&b, 0, bx, by, bw, bh);
+    b.style = UI_BTN_STYLE_PILL;
+    b.radius = 12;
+    b.flags = UI_BTN_FLAG_DRAW_BG;
+    b.font_id = GFX_FONT_ALPHA_12;
+    ui_button_set_text(&b, action, NULL);
+
+    Ui_Button_Theme t;
+    settings_button_theme(&t, bg, bg, fg, fg, NULL, NULL, NULL, NULL);
+    ui_button_draw(gfx, &b, &t, UI_BTN_VIS_NORMAL);
 
     // 页眉分隔线
     gfx_draw_rectangle(gfx, 0, ST_HEADER_H - 1, (uint32_t)W, 1,
@@ -508,18 +600,24 @@ static void settings_draw_header(Global_State *gs, const UiSettingsPalette *p,
 static void settings_draw_chip(Nano_GFX *gfx, int32_t x, int32_t y, int32_t w, int32_t h,
                                const wchar_t *text, int32_t selected, int32_t pressed,
                                const UiSettingsPalette *p) {
-    const uint8_t *bg;
-    const uint8_t *fg;
-    if (selected) {
-        bg = pressed ? p->accent_ink : p->accent;
-        fg = p->on_accent;
-    }
-    else {
-        bg = pressed ? p->surface_press : p->surface;
-        fg = p->dim;
-    }
-    settings_round_rect(gfx, x, y, w, h, h / 2, bg, 1);
-    settings_text_centered(gfx, GFX_FONT_ALPHA_12, text, x + w / 2, y + h / 2, fg, 1);
+    Ui_Button b;
+    ui_button_init(&b, 0, x, y, w, h);
+    b.style = UI_BTN_STYLE_PILL;
+    b.radius = (int16_t)(h / 2);
+    b.flags = UI_BTN_FLAG_DRAW_BG;
+    b.font_id = GFX_FONT_ALPHA_12;
+    b.selected = selected ? 1 : 0;
+    ui_button_set_text(&b, text, NULL);
+
+    Ui_Button_Theme t;
+    settings_button_theme(&t,
+        p->surface, p->surface_press, p->dim, p->dim,
+        p->accent, p->accent_ink, p->on_accent, p->on_accent);
+
+    Ui_Button_Visual vis;
+    if (pressed) vis = selected ? UI_BTN_VIS_SELECTED_PRESSED : UI_BTN_VIS_PRESSED;
+    else         vis = selected ? UI_BTN_VIS_SELECTED : UI_BTN_VIS_NORMAL;
+    ui_button_draw(gfx, &b, &t, vis);
 }
 
 // ===============================================================================
@@ -544,7 +642,7 @@ static void settings_menu_hit_test(Global_State *gs, const SettingsMenuLayout *L
 
     int32_t W = (int32_t)gs->gfx->width;
     // 页眉返回
-    if (y < ST_HEADER_H && x >= W - 68 && x < W - 10) {
+    if (settings_button_hit(W - 68, 4, 58, 24, 12, x, y)) {
         out->kind = ST_HIT_BACK;
         return;
     }
@@ -561,15 +659,13 @@ static void settings_menu_hit_test(Global_State *gs, const SettingsMenuLayout *L
             int32_t minus_x, val_x, plus_x, btn_y;
             settings_stepper_geom(gs, &minus_x, &val_x, &plus_x, &btn_y, sy, sh);
             (void)val_x;
-            if (y >= btn_y && y < btn_y + ST_STEP_H) {
-                if (x >= minus_x && x < minus_x + ST_STEP_BTN_W) {
-                    out->kind = ST_HIT_MINUS;
-                    return;
-                }
-                if (x >= plus_x && x < plus_x + ST_STEP_BTN_W) {
-                    out->kind = ST_HIT_PLUS;
-                    return;
-                }
+            if (settings_button_hit(minus_x, btn_y, ST_STEP_BTN_W, ST_STEP_H, 8, x, y)) {
+                out->kind = ST_HIT_MINUS;
+                return;
+            }
+            if (settings_button_hit(plus_x, btn_y, ST_STEP_BTN_W, ST_STEP_H, 8, x, y)) {
+                out->kind = ST_HIT_PLUS;
+                return;
             }
             out->kind = ST_HIT_NONE;
             return;
@@ -579,13 +675,11 @@ static void settings_menu_hit_test(Global_State *gs, const SettingsMenuLayout *L
             int32_t n = settings_chip_count(id);
             settings_chip_geom(gs, id, cx, cw);
             int32_t chip_y = sy + (sh - 22) / 2;
-            if (y >= chip_y && y < chip_y + 22) {
-                for (int32_t c = 0; c < n; c++) {
-                    if (x >= cx[c] && x < cx[c] + cw[c]) {
-                        out->kind = ST_HIT_CHIP;
-                        out->chip = c;
-                        return;
-                    }
+            for (int32_t c = 0; c < n; c++) {
+                if (settings_button_hit(cx[c], chip_y, cw[c], 22, 11, x, y)) {
+                    out->kind = ST_HIT_CHIP;
+                    out->chip = c;
+                    return;
                 }
             }
             out->kind = ST_HIT_NONE;
@@ -749,15 +843,29 @@ static void settings_draw_stepper(Global_State *gs, const UiSettingsPalette *p,
     int32_t press_minus = (press != NULL && press->kind == ST_HIT_MINUS && press->row == id);
     int32_t press_plus = (press != NULL && press->kind == ST_HIT_PLUS && press->row == id);
 
-    const uint8_t *mbg = press_minus ? p->accent : p->surface;
-    const uint8_t *pfg = press_minus ? p->on_accent : p->accent_ink;
-    settings_round_rect(gfx, minus_x, btn_y, ST_STEP_BTN_W, ST_STEP_H, 8, mbg, 1);
-    settings_minus(gfx, minus_x + ST_STEP_BTN_W / 2, btn_y + ST_STEP_H / 2, pfg);
+    Ui_Button_Theme step_theme;
+    settings_button_theme(&step_theme,
+        p->surface, p->accent, p->accent_ink, p->on_accent,
+        NULL, NULL, NULL, NULL);
 
-    const uint8_t *pbg = press_plus ? p->accent : p->surface;
-    const uint8_t *pfg2 = press_plus ? p->on_accent : p->accent_ink;
-    settings_round_rect(gfx, plus_x, btn_y, ST_STEP_BTN_W, ST_STEP_H, 8, pbg, 1);
-    settings_plus(gfx, plus_x + ST_STEP_BTN_W / 2, btn_y + ST_STEP_H / 2, pfg2);
+    Ui_Button b;
+    ui_button_init(&b, 0, minus_x, btn_y, ST_STEP_BTN_W, ST_STEP_H);
+    b.style = UI_BTN_STYLE_ROUNDED;
+    b.radius = 8;
+    b.flags = UI_BTN_FLAG_DRAW_BG;
+    b.content_draw = settings_minus_content;
+    b.content_user = (void *)p;
+    b.press_icon_dy = 1;
+    ui_button_draw(gfx, &b, &step_theme, press_minus ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
+
+    ui_button_init(&b, 1, plus_x, btn_y, ST_STEP_BTN_W, ST_STEP_H);
+    b.style = UI_BTN_STYLE_ROUNDED;
+    b.radius = 8;
+    b.flags = UI_BTN_FLAG_DRAW_BG;
+    b.content_draw = settings_plus_content;
+    b.content_user = (void *)p;
+    b.press_icon_dy = 1;
+    ui_button_draw(gfx, &b, &step_theme, press_plus ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
 
     wchar_t value[32];
     settings_menu_row_value(gs, id, value, sizeof(value) / sizeof(value[0]));
@@ -1531,8 +1639,18 @@ void ui_settings_editor_draw(Global_State *gs) {
     // 页眉：取消 / 标题 / 保存
     settings_draw_header(gs, &p, settings_edit_title(s_edit_type), L"保存", 1, 1);
     // 左侧“取消”胶囊（覆盖在页眉左侧）
-    settings_round_rect(gfx, 10, 4, 58, 24, 12, p.off_soft, 1);
-    settings_text_centered(gfx, GFX_FONT_ALPHA_12, L"取消", 10 + 29, 4 + 12, p.off, 1);
+    {
+        Ui_Button b;
+        Ui_Button_Theme t;
+        ui_button_init(&b, 0, 10, 4, 58, 24);
+        b.style = UI_BTN_STYLE_PILL;
+        b.radius = 12;
+        b.flags = UI_BTN_FLAG_DRAW_BG;
+        b.font_id = GFX_FONT_ALPHA_12;
+        ui_button_set_text(&b, L"取消", NULL);
+        settings_button_theme(&t, p.off_soft, p.off_soft, p.off, p.off, NULL, NULL, NULL, NULL);
+        ui_button_draw(gfx, &b, &t, UI_BTN_VIS_NORMAL);
+    }
 
     // 预览卡片
     int32_t card_x = 12, card_w = W - 24;
@@ -1554,12 +1672,30 @@ void ui_settings_editor_draw(Global_State *gs) {
 
         int32_t pressed_up = (s_edit_press.kind == ED_HIT_UP && s_edit_press.col == c);
         int32_t pressed_down = (s_edit_press.kind == ED_HIT_DOWN && s_edit_press.col == c);
-        settings_round_rect(gfx, x, up_y, w, 24, 8,
-                            pressed_up ? p.accent : p.surface, 1);
-        settings_chevron_up(gfx, x + w / 2, up_y + 12, pressed_up ? p.on_accent : p.accent_ink);
-        settings_round_rect(gfx, x, down_y, w, 24, 8,
-                            pressed_down ? p.accent : p.surface, 1);
-        settings_chevron_down(gfx, x + w / 2, down_y + 12, pressed_down ? p.on_accent : p.accent_ink);
+
+        Ui_Button_Theme arrow_theme;
+        settings_button_theme(&arrow_theme,
+            p.surface, p.accent, p.accent_ink, p.on_accent,
+            NULL, NULL, NULL, NULL);
+
+        Ui_Button b;
+        ui_button_init(&b, 0, x, up_y, w, 24);
+        b.style = UI_BTN_STYLE_ROUNDED;
+        b.radius = 8;
+        b.flags = UI_BTN_FLAG_DRAW_BG;
+        b.content_draw = settings_up_content;
+        b.content_user = (void *)&p;
+        b.press_icon_dy = 1;
+        ui_button_draw(gfx, &b, &arrow_theme, pressed_up ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
+
+        ui_button_init(&b, 1, x, down_y, w, 24);
+        b.style = UI_BTN_STYLE_ROUNDED;
+        b.radius = 8;
+        b.flags = UI_BTN_FLAG_DRAW_BG;
+        b.content_draw = settings_down_content;
+        b.content_user = (void *)&p;
+        b.press_icon_dy = 1;
+        ui_button_draw(gfx, &b, &arrow_theme, pressed_down ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
 
         // 值框：聚焦列用强调色描边
         int32_t focused = (s_edit_focus == c);
@@ -1582,41 +1718,43 @@ void ui_settings_editor_draw(Global_State *gs) {
         int32_t selected = 0;
         settings_edit_quick_text(i, &t, &selected);
         int32_t pressed = (s_edit_press.kind == (ED_HIT_QUICK0 + i));
+
+        const uint8_t *bg = p.surface;
+        const uint8_t *bg_press = p.surface_press;
+        const uint8_t *fg = p.text;
+        const uint8_t *fg_press = p.text;
         if (s_edit_type == UI_SETTINGS_EDIT_DATE || s_edit_type == UI_SETTINGS_EDIT_TIME) {
             // 「此刻」=主操作（强调浅底），「撤销」=中性
             if (i == 0) {
-                settings_round_rect(gfx, qx, quick_y, qw, 24, 12,
-                                    pressed ? p.accent : p.accent_soft, 1);
-                settings_text_centered(gfx, GFX_FONT_ALPHA_12, t, qx + qw / 2, quick_y + 12,
-                                       pressed ? p.on_accent : p.accent_ink, 1);
+                bg = p.accent_soft; bg_press = p.accent;
+                fg = p.accent_ink; fg_press = p.on_accent;
             }
             else {
-                settings_round_rect(gfx, qx, quick_y, qw, 24, 12,
-                                    pressed ? p.surface_press : p.surface, 1);
-                settings_text_centered(gfx, GFX_FONT_ALPHA_12, t, qx + qw / 2, quick_y + 12,
-                                       p.dim, 1);
+                fg = p.dim; fg_press = p.dim;
             }
         }
         else {
             if (selected) {
-                settings_round_rect(gfx, qx, quick_y, qw, 24, 12,
-                                    pressed ? p.accent_ink : p.accent, 1);
-                settings_text_centered(gfx, GFX_FONT_ALPHA_12, t, qx + qw / 2, quick_y + 12,
-                                       p.on_accent, 1);
+                bg = p.accent; bg_press = p.accent_ink;
+                fg = p.on_accent; fg_press = p.on_accent;
             }
             else if (i == 2) {
-                settings_round_rect(gfx, qx, quick_y, qw, 24, 12,
-                                    pressed ? p.surface_press : p.surface, 1);
-                settings_text_centered(gfx, GFX_FONT_ALPHA_12, t, qx + qw / 2, quick_y + 12,
-                                       p.dim, 1);
-            }
-            else {
-                settings_round_rect(gfx, qx, quick_y, qw, 24, 12,
-                                    pressed ? p.surface_press : p.surface, 1);
-                settings_text_centered(gfx, GFX_FONT_ALPHA_12, t, qx + qw / 2, quick_y + 12,
-                                       p.text, 1);
+                fg = p.dim; fg_press = p.dim;
             }
         }
+
+        Ui_Button b;
+        ui_button_init(&b, 0, qx, quick_y, qw, 24);
+        b.style = UI_BTN_STYLE_PILL;
+        b.radius = 12;
+        b.flags = UI_BTN_FLAG_DRAW_BG;
+        b.font_id = GFX_FONT_ALPHA_12;
+        b.selected = selected ? 1 : 0;
+        ui_button_set_text(&b, t, NULL);
+
+        Ui_Button_Theme th;
+        settings_button_theme(&th, bg, bg_press, fg, fg_press, NULL, NULL, NULL, NULL);
+        ui_button_draw(gfx, &b, &th, pressed ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
     }
 
     // 底部提示
@@ -1640,22 +1778,36 @@ static void settings_edit_hit_test(Global_State *gs, int32_t x, int32_t y, Edito
     (void)preview_y; (void)label_y; (void)hint_y;
 
     int32_t W = (int32_t)gs->gfx->width;
-    if (y < 32) {
-        if (x >= 10 && x < 68) { out->kind = ED_HIT_CANCEL; return; }
-        if (x >= W - 68 && x < W - 10) { out->kind = ED_HIT_SAVE; return; }
+    if (settings_button_hit(10, 4, 58, 24, 12, x, y)) {
+        out->kind = ED_HIT_CANCEL;
+        return;
+    }
+    if (settings_button_hit(W - 68, 4, 58, 24, 12, x, y)) {
+        out->kind = ED_HIT_SAVE;
+        return;
     }
     for (int32_t c = 0; c < 3; c++) {
-        if (x >= col_x[c] && x < col_x[c] + col_w[c]) {
-            if (y >= up_y && y < up_y + 24) { out->kind = ED_HIT_UP; out->col = c; return; }
-            if (y >= down_y && y < down_y + 24) { out->kind = ED_HIT_DOWN; out->col = c; return; }
-            if (y >= val_y && y < val_y + 38) { out->kind = ED_HIT_VALUE; out->col = c; return; }
+        if (settings_button_hit(col_x[c], up_y, col_w[c], 24, 8, x, y)) {
+            out->kind = ED_HIT_UP;
+            out->col = c;
+            return;
+        }
+        if (settings_button_hit(col_x[c], down_y, col_w[c], 24, 8, x, y)) {
+            out->kind = ED_HIT_DOWN;
+            out->col = c;
+            return;
+        }
+        if (settings_button_hit(col_x[c], val_y, col_w[c], 38, 10, x, y)) {
+            out->kind = ED_HIT_VALUE;
+            out->col = c;
+            return;
         }
     }
     int32_t qn = settings_edit_quick_count();
     for (int32_t i = 0; i < qn; i++) {
         int32_t qx, qw;
         settings_edit_quick_geom(gs, i, &qx, &qw);
-        if (y >= quick_y && y < quick_y + 24 && x >= qx && x < qx + qw) {
+        if (settings_button_hit(qx, quick_y, qw, 24, 12, x, y)) {
             out->kind = ED_HIT_QUICK0 + i;
             out->idx = i;
             return;
