@@ -839,20 +839,17 @@
 ;; 当前位置标记：一层加色光斑 + 一个细准星圈 + 亮核（画在环之后）。
 ;; 注意它**不是**幂等的（光斑按 alpha 叠加）：每次都要先擦干净再画一次。
 ;;
-;; 卫星在地球背面（vis=0）时，只画一个**很暗的空心圈**当"被遮挡"的指示 ——
-;; 这是刻意加的界面提示（真实的卫星此刻看不见）：不画它的话，一个周期里有近一半
-;; 时间画面上既没有标记也没有任何说明，容易被当成功能坏了。颜色压得很暗：在夜侧
-;; 勉强可辨、在亮面上基本看不见，不会被误读成"看得见卫星"。
+;; 卫星在地球背面时（vis=0）**什么都不画** —— 真实遮挡就是看不见；位置本身仍然有
+;; 左下角的三行推算值（距地/速度/星下点）可读。（早期版本在这里画过一个很暗的空心圈
+;; 当"被遮挡"提示，但它等于把卫星画穿了地球，已去掉。）
 (define st_marker
   (lambda ()
-    (if (== st_on 1)
-        (if (== st_mv 1)
-            {
-              (Gfx.fill_glow_aa_add st_mx st_my 7.0 70 170 220 0.55)
-              (Gfx.draw_circle (Math.round st_mx) (Math.round st_my) 5 46 120 152)
-              (Gfx.fill_dot_aa st_mx st_my 2.0 210 246 255)
-            }
-            (Gfx.draw_circle (Math.round st_mx) (Math.round st_my) 4 42 70 86))
+    (if (and (== st_on 1) (== st_mv 1))
+        {
+          (Gfx.fill_glow_aa_add st_mx st_my 7.0 70 170 220 0.55)
+          (Gfx.draw_circle (Math.round st_mx) (Math.round st_my) 5 46 120 152)
+          (Gfx.fill_dot_aa st_mx st_my 2.0 210 246 255)
+        }
         #f)))
 
 ;; 只把矩形 [x0,x1)×[y0,y1) 里**落在渲染窗之外**的部分填回背景渐变（窗内不动，
