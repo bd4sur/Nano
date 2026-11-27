@@ -13,6 +13,7 @@
 #include "hal_key.h"
 #include "hal_touch.h" // hal_touch_wheel_take：滚轮增量取走（仅 NANO_WASM_GUI 编译分支调用）
 #include "ui.h"
+#include "ui_button.h"
 #include "ui_icon.h"
 #include "ui_softkbd.h"
 #include "ui_grid16kbd.h"
@@ -1859,6 +1860,99 @@ static void ui_exit_confirm_truncate(uint32_t font_id, wchar_t *line, size_t cap
     line[0] = L'\0';
 }
 
+// 退出确认框按钮 ID（与历史 ui_exit_confirm_hit* 的返回值保持一致）
+#define UI_EXIT_BTN_CONFIRM (1)
+#define UI_EXIT_BTN_STAY    (2)
+#define UI_EXIT_BTN_BG      (3)
+
+// 单枚按钮的主题：确认=强调色，后台/留下=中性色。
+// 这里只设置 NORMAL/PRESSED 两态；其余态填充为同色，避免误用未初始化颜色。
+static void ui_exit_confirm_button_theme(Ui_Button_Theme *t, Global_State *gs, int32_t is_confirm) {
+    memset(t, 0, sizeof(*t));
+    int32_t light = (gs->ui_color_style == UI_COLOR_LIGHT) ? 1 : 0;
+
+    Ui_RGB normal, pressed, text;
+    if (is_confirm) {
+        normal  = light ? (Ui_RGB){17, 85, 238} : (Ui_RGB){16, 72, 176};
+        pressed = light ? (Ui_RGB){88, 142, 252} : (Ui_RGB){52, 122, 228};
+        text    = (Ui_RGB){240, 240, 240};
+    }
+    else {
+        normal  = light ? (Ui_RGB){224, 230, 234} : (Ui_RGB){46, 46, 50};
+        pressed = light ? (Ui_RGB){190, 198, 210} : (Ui_RGB){86, 90, 100};
+        text    = light ? (Ui_RGB){17, 17, 17} : (Ui_RGB){240, 240, 240};
+    }
+
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = normal;
+        t->fg[i] = text;
+        t->border[i] = normal;
+        t->bg_alpha[i] = 1;
+        t->border_alpha[i] = 1;
+    }
+    t->bg[UI_BTN_VIS_PRESSED] = pressed;
+    t->fg[UI_BTN_VIS_PRESSED] = text;
+    t->shadow_alpha = 0;
+}
+
+// 构造退出确认框的 2/3 枚按钮（几何与历史实现严格一致）。
+// with_bg=1：确认 / 后台 / 留下；with_bg=0：确认 / 留下。
+static void ui_exit_confirm_build_buttons(Global_State *gs, int32_t with_body, int32_t with_bg,
+                                          Ui_Button out[3], Ui_Button_Group *group) {
+    int32_t dx = 0, dy = 0, h = 0, btn_y = 0, confirm_x = 0, bg_x = 0, stay_x = 0;
+    int32_t btn_w = 0, btn_gap = 0;
+    ui_exit_confirm_geom(gs, with_body, with_bg, &dx, &dy, &h, &btn_y, &btn_w, &btn_gap,
+                         &confirm_x, &bg_x, &stay_x);
+    (void)dx; (void)dy; (void)h; (void)btn_gap;
+
+    uint32_t font_id = with_bg ? GFX_FONT_ALPHA_12 : GFX_FONT_ALPHA_16;
+    int16_t label_dy = with_bg ? -1 : 0; // 三按钮行比两按钮行整体上移 1px（历史排版）
+
+    int32_t n = 0;
+    ui_button_init(&out[n], UI_EXIT_BTN_CONFIRM, confirm_x, btn_y, btn_w, UI_ANIMAC_EXIT_BTN_H);
+    out[n].style = UI_BTN_STYLE_ROUNDED;
+    out[n].radius = 6;
+    out[n].font_id = font_id;
+    out[n].label_dy = label_dy;
+    ui_button_set_text(&out[n], L"确认", NULL);
+    n++;
+
+    if (with_bg) {
+        ui_button_init(&out[n], UI_EXIT_BTN_BG, bg_x, btn_y, btn_w, UI_ANIMAC_EXIT_BTN_H);
+        out[n].style = UI_BTN_STYLE_ROUNDED;
+        out[n].radius = 6;
+        out[n].font_id = font_id;
+        out[n].label_dy = label_dy;
+        ui_button_set_text(&out[n], L"后台", NULL);
+        n++;
+    }
+
+    ui_button_init(&out[n], UI_EXIT_BTN_STAY, stay_x, btn_y, btn_w, UI_ANIMAC_EXIT_BTN_H);
+    out[n].style = UI_BTN_STYLE_ROUNDED;
+    out[n].radius = 6;
+    out[n].font_id = font_id;
+    out[n].label_dy = label_dy;
+    ui_button_set_text(&out[n], L"留下", NULL);
+    n++;
+
+    group->items = out;
+    group->count = n;
+    group->theme = NULL;
+    group->clip_x0 = 0;
+    group->clip_y0 = 0;
+    group->clip_x1 = 0;
+    group->clip_y1 = 0;
+}
+
+// 只取对话框本体几何（标题/正文/描边用；按钮几何由 ui_exit_confirm_build_buttons 负责）
+static void ui_exit_confirm_dialog_geom(Global_State *gs, int32_t with_body,
+                                        int32_t *out_dx, int32_t *out_dy, int32_t *out_h) {
+    int32_t btn_y = 0, btn_w = 0, btn_gap = 0;
+    int32_t confirm_x = 0, bg_x = 0, stay_x = 0;
+    ui_exit_confirm_geom(gs, with_body, 0, out_dx, out_dy, out_h,
+                         &btn_y, &btn_w, &btn_gap, &confirm_x, &bg_x, &stay_x);
+}
+
 // 绘制退出确认模态框（叠加在当前画面之上；全部元素圆角矩形）
 void ui_exit_confirm_draw(Key_Event *key_event, Global_State *global_state) {
     ui_exit_confirm_draw_msg(key_event, global_state, L"是否退出？", NULL);
@@ -1875,33 +1969,19 @@ void ui_exit_confirm_draw_msg_ex(Key_Event *key_event, Global_State *global_stat
                                  const wchar_t *title, const wchar_t *body, int32_t with_bg) {
     (void)key_event;
     Nano_GFX *gfx = global_state->gfx;
-    int32_t dx = 0, dy = 0, h = 0, btn_y = 0, confirm_x = 0, bg_x = 0, stay_x = 0;
-    int32_t btn_w = 0, btn_gap = 0;
+    int32_t dx = 0, dy = 0, h = 0;
     int32_t has_body = (body != NULL && body[0] != L'\0');
 
-    ui_exit_confirm_geom(global_state, has_body, with_bg, &dx, &dy, &h, &btn_y, &btn_w, &btn_gap,
-                         &confirm_x, &bg_x, &stay_x);
+    ui_exit_confirm_dialog_geom(global_state, has_body, &dx, &dy, &h);
 
     // 配色随全局色彩风格
     uint8_t border_R = 70,  border_G = 70,  border_B = 78;    // 对话框描边
     uint8_t dlg_R = 24,     dlg_G = 24,     dlg_B = 28;       // 对话框底色
-    uint8_t btn_R = 46,     btn_G = 46,     btn_B = 50;       // “留下”按钮底色
-    uint8_t ok_R = 16,      ok_G = 72,      ok_B = 176;       // “确认”按钮底色（强调色，同 Ctrl 高亮色系）
-    // 按下色（见 ui_app.h 的 ui_exit_confirm_arm）：两枚按钮各自“提亮一档”——
-    // 深色主题上把底色向强调色靠、浅色主题上把中性钮压暗一档（提亮在浅底上看不出来）。
-    uint8_t ok_p_R = 52,   ok_p_G = 122,  ok_p_B = 228;
-    uint8_t btn_p_R = 86,  btn_p_G = 90,  btn_p_B = 100;
     uint8_t text_R = 240,   text_G = 240,   text_B = 240;     // 文字
-    uint8_t stay_text_R = 240, stay_text_G = 240, stay_text_B = 240;
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
         border_R = 180; border_G = 180; border_B = 190;
         dlg_R = 250; dlg_G = 250; dlg_B = 252;
-        btn_R = 224; btn_G = 230; btn_B = 234;
-        ok_R = 17; ok_G = 85; ok_B = 238;
-        ok_p_R = 88; ok_p_G = 142; ok_p_B = 252;
-        btn_p_R = 190; btn_p_G = 198; btn_p_B = 210;
         text_R = 17; text_G = 17; text_B = 17;
-        stay_text_R = 17; stay_text_G = 17; stay_text_B = 17;
     }
     // 按下的是哪一枚（0 = 没有；1 确认 / 2 留下 / 3 后台）
     int32_t armed = s_exit_confirm_armed;
@@ -1935,33 +2015,19 @@ void ui_exit_confirm_draw_msg_ex(Key_Event *key_event, Global_State *global_stat
             (int32_t)gfx->width / 2, dy + 46, text_R, text_G, text_B, 1);
     }
 
-    // 按钮：确认（强调色） / [后台] / 留下（中性色）
-    // 三按钮行比两按钮行窄，故字号降一档（12px）以免"后台"挤不下
-    // 按下态（armed）：底色换「按下色」+ 标签**下沉 1px**，手指按住就能看出选中了哪一枚
-    // （结算仍在松手沿，见 ui_app.h 的 ui_exit_confirm_arm）。
+    // 按钮：确认（强调色） / [后台] / 留下（中性色）。
+    // 统一走通用按钮控件；按下态由 ui_button_label_cy() 自动给文字 +1px 下沉。
     {
-        uint32_t fnt = with_bg ? GFX_FONT_ALPHA_12 : GFX_FONT_ALPHA_16;
-        int32_t ty = btn_y + UI_ANIMAC_EXIT_BTN_H / 2 - (with_bg ? 1 : 0);
-        int32_t ok_down = (armed == 1) ? 1 : 0;
-        int32_t bg_down = (armed == 3) ? 1 : 0;
-        int32_t stay_down = (armed == 2) ? 1 : 0;
-        gfx_draw_rounded_rectangle(gfx, confirm_x, btn_y, btn_w, UI_ANIMAC_EXIT_BTN_H,
-            6, 6, 6, 6,
-            ok_down ? ok_p_R : ok_R, ok_down ? ok_p_G : ok_G, ok_down ? ok_p_B : ok_B, 1);
-        gfx_font_draw_text_centered(gfx, fnt, L"确认",
-            confirm_x + btn_w / 2, ty + ok_down, 240, 240, 240, 1);
-        if (with_bg) {
-            gfx_draw_rounded_rectangle(gfx, bg_x, btn_y, btn_w, UI_ANIMAC_EXIT_BTN_H,
-                6, 6, 6, 6,
-                bg_down ? btn_p_R : btn_R, bg_down ? btn_p_G : btn_G, bg_down ? btn_p_B : btn_B, 1);
-            gfx_font_draw_text_centered(gfx, fnt, L"后台",
-                bg_x + btn_w / 2, ty + bg_down, stay_text_R, stay_text_G, stay_text_B, 1);
+        Ui_Button buttons[3];
+        Ui_Button_Group group;
+        ui_exit_confirm_build_buttons(global_state, has_body, with_bg, buttons, &group);
+        for (int32_t i = 0; i < group.count; i++) {
+            Ui_Button_Theme theme;
+            ui_exit_confirm_button_theme(&theme, global_state, buttons[i].id == UI_EXIT_BTN_CONFIRM);
+            Ui_Button_Visual vis = (armed == buttons[i].id)
+                ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL;
+            ui_button_draw(gfx, &buttons[i], &theme, vis);
         }
-        gfx_draw_rounded_rectangle(gfx, stay_x, btn_y, btn_w, UI_ANIMAC_EXIT_BTN_H,
-            6, 6, 6, 6,
-            stay_down ? btn_p_R : btn_R, stay_down ? btn_p_G : btn_G, stay_down ? btn_p_B : btn_B, 1);
-        gfx_font_draw_text_centered(gfx, fnt, L"留下",
-            stay_x + btn_w / 2, ty + stay_down, stay_text_R, stay_text_G, stay_text_B, 1);
     }
 
     gfx_refresh(gfx);
@@ -1980,17 +2046,11 @@ int32_t ui_exit_confirm_hit_msg(Global_State *global_state, int32_t with_body, i
 // 三按钮变体命中判定：1=确认 2=留下 3=后台 0=未命中（with_body/with_bg 须与绘制时一致）
 int32_t ui_exit_confirm_hit_msg_ex(Global_State *global_state, int32_t with_body, int32_t with_bg,
                                    int32_t x, int32_t y) {
-    int32_t dx = 0, dy = 0, h = 0, btn_y = 0, confirm_x = 0, bg_x = 0, stay_x = 0;
-    int32_t btn_w = 0, btn_gap = 0;
-    ui_exit_confirm_geom(global_state, with_body, with_bg, &dx, &dy, &h, &btn_y, &btn_w, &btn_gap,
-                         &confirm_x, &bg_x, &stay_x);
-    (void)dx; (void)dy; (void)h; (void)btn_gap;
-    if (y >= btn_y && y < btn_y + UI_ANIMAC_EXIT_BTN_H) {
-        if (x >= confirm_x && x < confirm_x + btn_w) return 1;
-        if (with_bg && x >= bg_x && x < bg_x + btn_w) return 3;
-        if (x >= stay_x && x < stay_x + btn_w) return 2;
-    }
-    return 0;
+    Ui_Button buttons[3];
+    Ui_Button_Group group;
+    ui_exit_confirm_build_buttons(global_state, with_body, with_bg, buttons, &group);
+    int32_t id = ui_button_group_hit(&group, x, y);
+    return (id == UI_BTN_ID_NONE) ? 0 : id;
 }
 
 void ui_exit_confirm_arm_clear(void) {
@@ -2002,11 +2062,15 @@ int32_t ui_exit_confirm_arm(Global_State *global_state, int32_t with_body, int32
                             int32_t down_x, int32_t down_y, int32_t cur_x, int32_t cur_y) {
     // 高亮 = “现在松手会不会触发”：按下点与**当前点**都在同一枚按钮内才算。
     // 于是拖出按钮立即变常态（也不再算按下），拖回来又亮；从外面拖进来的不算。
+    Ui_Button buttons[3];
+    Ui_Button_Group group;
+    ui_exit_confirm_build_buttons(global_state, with_body, with_bg, buttons, &group);
+
     int32_t armed = 0;
     if (touching) {
-        int32_t hit_down = ui_exit_confirm_hit_msg_ex(global_state, with_body, with_bg, down_x, down_y);
-        if (hit_down != 0
-            && hit_down == ui_exit_confirm_hit_msg_ex(global_state, with_body, with_bg, cur_x, cur_y)) {
+        int32_t hit_down = ui_button_group_hit(&group, down_x, down_y);
+        if (hit_down != UI_BTN_ID_NONE &&
+            hit_down == ui_button_group_hit(&group, cur_x, cur_y)) {
             armed = hit_down;
         }
     }

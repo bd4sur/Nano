@@ -209,6 +209,7 @@ if [ "$WASM_LTO" = "1" ]; then WASM_OPT="$WASM_OPT -flto"; fi
     tokenizer.c \
     utils.c \
     vsop87c_milli.c \
+    ui_button.c \
     ui.c \
     ui_app.c \
     ui_cloud.c \

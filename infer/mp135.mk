@@ -73,6 +73,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         tokenizer.c \
                         utils.c \
                         vsop87c_milli.c \
+                        ui_button.c \
                         ui.c \
                         ui_app.c \
                         ui_cloud.c \
@@ -125,6 +126,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         gfx_font_12.c \
                         gfx_font_16.c \
                         pinyin_ime.c \
+                        ui_button.c \
                         ui.c \
                         ui_app.c \
                         ui_cloud.c \

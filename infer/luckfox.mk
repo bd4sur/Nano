@@ -85,6 +85,7 @@ $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) $(ANIMAC_HEADERS) $(ANIMAC_DIR)/am_n
                         tokenizer.c \
                         utils.c \
                         vsop87c_milli.c \
+                        ui_button.c \
                         ui.c \
                         ui_app.c \
                         ui_cloud.c \
