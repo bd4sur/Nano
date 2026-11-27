@@ -112,7 +112,7 @@ int imu_read_angle(float *pitch, float *roll, float *yaw) {
     // yaw_deg 已由页面按 W3C 旋转矩阵 Rz(α)Rx(β)Ry(γ) 的第 3 列算好（与 Android 版
     // MainActivity.onSensorChanged 的 atan2(R[2], R[5]) 逐式一致），此处只归一化、
     // 不再叠加屏幕方向角 θ——法向与屏幕内容旋转无关（θ 只用于 roll 修正）。
-    // 玲珑仪语义：view_azi = yaw + 180 = 背面法向航向 = 取景方向（见 ui_app.c）。
+    // 玲珑仪语义：view_azi = yaw + 180 = 背面法向航向 = 取景方向（见 ui_linglong.c）。
     // 历史：曾在此把 alpha 当航向（alpha + θ）、后又改为 θ - alpha，两者都与正确值
     // 差一个随姿态变化的角度/固定 180°（2026-10-14 / 2026-11-19 两次真机反馈）。
     *yaw = fmodf(yaw_d + 360.0f, 360.0f);

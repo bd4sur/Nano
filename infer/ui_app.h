@@ -176,22 +176,9 @@ void    ui_exit_confirm_arm_clear(void);
 
 
 // ===============================================================================
-// 玲珑天象仪
+// 玲珑天象仪：实现已整体剥离至 ui_linglong.h / ui_linglong.c
+// （全局资源初始化 ui_linglong_global_init + 状态页 init/render/event 三个入口）
 // ===============================================================================
-
-void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state);
-void ui_app_linglong_setting_draw(Key_Event *key_event, Global_State *global_state);
-void ui_app_linglong_draw_lite(
-    Key_Event *key_event, Global_State *global_state,
-    int32_t x, int32_t y,
-    int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second,
-    double longitude, double latitude, double timezone
-);
-void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_state);
-void ui_app_linglong_toggle_timemachine(Key_Event *key_event, Global_State *global_state);
-void ui_app_linglong_set_timemachine_speed(Key_Event *key_event, Global_State *global_state, int32_t speed);
-void ui_app_linglong_set_realtime(Key_Event *key_event, Global_State *global_state);
-void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_state);
 
 
 // ===============================================================================

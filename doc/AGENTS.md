@@ -18096,3 +18096,98 @@ Nano-Web/WASM、Android）上照常工作。随着各功能逐个改为直接消
 - 回归：`regress_flip.js` **39/39 PASS**（布局/仪表/模式切换/节流滑杆/配色弹层/
   旧宫格位置点按无动作/复位/退出/亮色主题/重力换向）；`probe_grid16_removal.js`
   **A 阶段 11/11 PASS**（含番茄表进出）。仅 WASM 目标验证，其它平台本轮未测。
+
+# 2026-11-28（把玲珑天象仪从 ui_app.c 剥离为独立模块 ui_linglong）
+
+`STATE_LINGLONG` 的状态页原本整段写在 `ui_app.c` 里（约 1300 行：星图渲染驱动、时光机、
+视角漫游、设置界面、触屏控件编排、实体键盘兜底），连同 `main_init` 里的配置对象与专用
+画布初始化。本次整体搬进 **`infer/ui_linglong.c` + `infer/ui_linglong.h`**（与既有的
+`ui_linglong_ctrl.c` 分工不变：ctrl 只负责叠加控件的绘制与命中，本模块负责状态页与语义）。
+**纯搬迁，无行为改动**（只多了一个把 main_init 那段抽出来的 `ui_linglong_global_init`）。
+
+## 分层
+
+| 文件 | 职责 |
+|---|---|
+| `celestial.c` / `celestial_ocean.c` | 星图、大气散射、海洋天空（`render_sky` / `linglong_ocean_*`） |
+| `ephemeris.c` | 日月位置、月相、日出日落（纯计算） |
+| `ui_linglong_ctrl.c` / `.h` | 叠加在主界面上的显式触屏控件：顶部按钮栏 / 时间按钮 / 视角九宫格 / 设置按钮 / 5x4 设置页（只绘制与命中） |
+| `ui_linglong.c` / `.h` | **本模块**：配置读写、渲染帧（专用画布 llgfx）、事件处理（触屏编排 + 键盘兜底）、时光机与漫游状态机、设置页按键合成、全局资源初始化 |
+| `ui_app.c` | 状态机：`STATE_LINGLONG` 分支只调 init/render_frame/event_handler，`main_init` 调 `ui_linglong_global_init` |
+
+## 搬迁细节
+
+- 公开函数 `ui_app_linglong_*` → `ui_linglong_*`（8 个，含 `setting_draw` / `draw_lite` /
+  `toggle_timemachine` / `set_timemachine_speed` / `set_realtime`）；内部静态符号保持原名。
+- 新增 `ui_linglong_global_init(Global_State*)`：`Linglong_Config` 分配 + `linglong_init`
+  默认值 + 专用画布（ESP32 独立 RGB888 缓冲，其它平台 `llgfx = gfx`），原样从 `main_init` 搬出。
+- `ui_app.c` 移除四个已无使用者的 include（`celestial.h` / `celestial_ocean.h` /
+  `ephemeris.h` / `ui_linglong_ctrl.h`），改 include `ui_linglong.h`；`ui_app.h` 删除玲珑的
+  8 个函数声明段（改为一行指路注释）。`nongli.h` 保留——启动画面的农历仍在 ui_app.c。
+- `hal_imu_wasm.c`、`ui_linglong_ctrl.c` 里 "见 ui_app.c 的 …" 的注释指向改为 ui_linglong.c。
+- 构建清单同步（`infer/Makefile` 的 `GUI_MODULE_SRCS` + 4 个显式目标列表、`mp135.mk` 2 处、
+  `luckfox.mk` 1 处、`build_wasm_gui.sh`、`android/.../CMakeLists.txt`），插在
+  `ui_linglong_ctrl.c` 之前保持字母序。
+
+## 验证（WASM-GUI 目标；其它平台本轮未测）
+
+- `bash infer/build_wasm_gui.sh` 通过；`ui_app.c` / `ui_linglong.c` 按 `-Wall -Wextra`
+  单独复核，只剩随搬迁带来的既有告警（`ui_linglong.c` 的未用变量 `is_setting_refresh`）。
+- 搬迁一致性：`git show HEAD:infer/ui_app.c` 的 1597~2897 行与 `ui_linglong.c` 正文，
+  去掉 `ui_app_linglong_*` → `ui_linglong_*` 改名后 **diff 为空**；`ui_app.c` 的 45 个
+  `case STATE_*` 一个不少（4877 → 3564 行）。
+- **新增 `probe_linglong_split.js`**（工作区工具，不入 Git）：按当前主菜单几何**点按**进入
+  玲珑仪（不依赖键盘逻辑键），12/12 PASS —— 主菜单点按进入 / 首帧星图上屏（明亮像素
+  53035）/ 「控制」面板显隐 / 硬键 1 转视角 / 硬键 C 进出设置页 / 设置页点「镜头光晕」生效 /
+  「退出」回主菜单 / 无 pageerror。
+- `regress_flip.js` 39/39、`probe_grid16_removal.js` A 阶段 11/11 复跑仍全 PASS。
+- **发现既有陈旧用例**：`regress_linglong_ui.js`、`regress_linglong_terrain.js`（2026-11-11）
+  仍用键盘逻辑键 3 进玲珑仪——2026-11-24 主菜单屏蔽「鹦鹉笼」后玲珑仪从第 3 项变第 2 项，
+  这两个脚本现在按到「电子书」（state=-3）因而全项失败；与本次搬迁无关（同 `regress_musicbox`
+  / `regress_exit` / `regress_back` 那批未跟上主菜单重构的脚本）。改用点按格子即可，见新探针。
+
+# 2026-11-28（测试夹具更新：e2e 探针跟进表驱动主菜单与几处过期断言）
+
+`infer/tools/e2e/` 不进 Git，但它决定"回归是否可信"。2026-11-24 主菜单改成
+「内置 5 项 + app/ 全部 .scm」的表驱动宫格后，**二级「小游戏」与「灵机应用程序列表」
+（STATE_SCHEME_APP_LIST=79）都从 UI 入口消失**，App 退出/切后台的落点也改成主菜单（-2）。
+老脚本一律靠"键盘逻辑键进小游戏 → Enter 进列表 → ↓×n → Enter"导航，于是全部卡在第一步，
+后续断言连带失败（被误认为功能坏了）。本条目把这些夹具统一改为**几何导航**。
+
+## 一、新增共享夹具 `menu_nav.js`
+
+与"条目表顺序"解耦的导航原语（只依赖 playwright 的 page 与本目录 keys.js）：
+
+| 函数 | 作用 |
+|---|---|
+| `manifestApps()` / `appMenuIndex(id)` / `builtinMenuIndex(name)` | 按 manifest 现算格子序号（内置 5 项在前，App 按文件名升序在后） |
+| `enterMenuCell(page, index, {wait, run, extraItems})` | 滚到目标行 + 点按格心；**先把列表顶回最上面**（主菜单滚动位置是持久的，第二次进入若直接下滚会点到别的格子） |
+| `enterApp / enterBuiltin / enterAppByListIndex` | 按 id / 内置名 / App 下标进入 |
+| `toMainMenu(page, {run})` | 从任意状态回主菜单（启动屏按任意键、其余 Esc） |
+| `run` 选项 | 注入 `(ms) => page.clock.runFor(ms)`，供用虚拟时钟的脚本（regress_det / regress_ephemeris）推进时间 |
+
+## 二、逐脚本改动与本地实测（chromium @ 9011）
+
+| 脚本 | 改了什么 | 结果 |
+|---|---|---|
+| `regress_linglong_ui.js` | 入口改为点按其格子（原逻辑键 3 已指向电子书） | 全项 PASS |
+| `regress_linglong_terrain.js` | 同上 | 全项 PASS |
+| `regress_musicbox.js` | 入 App 改点格子；"回列表/恢复实例"改为回主菜单 + 再点同一格 | 31/31 |
+| `regress_exit.js` | 同上；默认 App `gol` 在本工作区不存在 → 自动回退 `snake` 且 BTN 回落 `293,10` | 38/38 |
+| `regress_back.js` | 同上；另修 `FMOPEN` 前缀与 filemgr 的 `FMOPENERS n=…` 诊断行撞车（只数 `"FMOPEN "`） | 24/24 |
+| `regress_det.js` | 入口改点格子；**格子序号按 manifest 现算**（此前按脚本自带 APPS_ALL 下标，flip 被点成 dict）；缺失 App 跳过；`refresh==0` 改标 `STATIC` 而非 `ABNORMAL` | 36 行全正常（1 个 App 见下） |
+| `regress.js` | 同上（判据同样区分 STATIC） | snake/flip/earthport 正常，musicbox 标 STATIC（本就等输入） |
+| `regress_font_isolation.js` | `enterApp` 改点格子；去掉"回列表"概念 | 40/40 |
+| `regress_launch.js` | 同上；同样修 FMOPEN 前缀 | 37/37 |
+| `regress_spectrogram.js` | 同上；退出落点 79→-2（`ST_APP_LIST` 标注已退场） | 34/34 |
+| `regress_button.js` | 同上；另修一条**过期语义**断言：宿主现在要求"按下点与松手点都在按钮内"才算点中，拖出后松手=放弃（原脚本断言"按按下点结算、仍弹框"）；默认 App 缺失时回退 | 15/15 |
+| `regress_ephemeris.js` | 入口改点格子；"秒内重绘逐字节稳定"改为**先算距下一秒的余量再推进**（应用 1 Hz 重绘，越过整秒边界会让判据假失败） | 36/36 |
+| `regress_fmscroll.js` | 无需改（早已是几何导航） | 42/42 |
+
+## 三、已知残留（与本次夹具无关）
+
+- `regress_det.js` 的 `mandelbrot`：`exitState=80` —— 该 App 画完一帧后不再 tick，
+  虚拟时钟下 Esc 的"700ms 无接管则兜底退出"窗口没走完；属 App 与虚拟时钟配合的既有问题。
+- 本工作区没有 `gol / 2048 / grayscott / lenia / particlelife` 等 App（原作者工作区有），
+  依赖它们的脚本已能自动回退或跳过，不再直接抛错。
+- `infer/tools/e2e/` 整目录仍是工作区工具，不纳入 Git。

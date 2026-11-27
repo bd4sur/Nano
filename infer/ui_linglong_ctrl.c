@@ -38,7 +38,7 @@
 #define LL_TIME_MARGIN    (8)
 #define LL_TIME_BTN_W     ((SCREEN_WIDTH - 2 * LL_TIME_MARGIN - (LL_TIME_COUNT - 1) * LL_TIME_GAP) / LL_TIME_COUNT)
 #define LL_TIME_TOTAL_W   (LL_TIME_COUNT * LL_TIME_BTN_W + (LL_TIME_COUNT - 1) * LL_TIME_GAP)
-#define LL_TIME_BOTTOM    (14) // 最底部状态栏高度（与 ui_app_linglong_render_frame 的版本/时间行一致）
+#define LL_TIME_BOTTOM    (14) // 最底部状态栏高度（与 ui_linglong_render_frame 的版本/时间行一致）
 #define LL_TIME_Y         (SCREEN_HEIGHT - LL_TIME_BOTTOM - 4 - LL_TIME_BTN_H)
 #define LL_TIME_BG_Y      (LL_TIME_Y - 4)
 #define LL_TIME_BG_H      (LL_TIME_BTN_H + 8)
@@ -193,7 +193,7 @@ static const wchar_t *S_PROJECTION_NAME[2] = {L"鱼眼", L"透视"};
 static const wchar_t *S_OFF_ON_NAME[2] = {L"关", L"开"};
 static const wchar_t *S_HORIZONTAL_NAME[3] = {L"关", L"方位角", L"坐标圈"};
 // 大气散射现值名（按下标与 Linglong_Config.sky_model 对应）。「简化模型」「一次散射」
-// 两档已从选项里屏蔽（见 ui_app.c 的 ui_app_linglong_next_sky_model），循环不会落到它们，
+// 两档已从选项里屏蔽（见 ui_linglong.c 的 ui_linglong_next_sky_model），循环不会落到它们，
 // 这里保留名称只为“手改配置时也能显示出当前值”。
 static const wchar_t *S_SKY_MODEL_NAME[6] = {L"关", L"简化模型", L"一次散射", L"二次散射", L"体积云", L"海洋天空"};
 static const wchar_t *S_LANDSCAPE_NAME[4] = {L"关", L"草原", L"卫星照片", L"实时海洋"};
