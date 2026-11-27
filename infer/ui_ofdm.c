@@ -677,7 +677,7 @@ int32_t ui_ofdm_menu_event(Key_Event *key_event, Global_State *global_state) {
         }
     }
 
-    // 触屏软键盘派生的软按键不作为键码采纳（十六宫格软键在本状态已整体抑制；
+    // 16 键虚拟键盘的键码不作为键码采纳（本状态全交互走触屏控件；
     // 硬按键仅作兼容性兜底）
     if (ke->key_code != NANO_KEY_IDLE && ke->is_soft_key && !ke->is_softkbd) {
         return STATE_OFDM_MENU;
@@ -979,7 +979,7 @@ int32_t ui_ofdm_txing_event(Key_Event *key_event, Global_State *global_state) {
         ofdm_tx_stop();
         return STATE_OFDM_TX;
     }
-    // 触屏软键盘派生的软按键不作为键码采纳（宫格软键在本状态已整体抑制）
+    // 16 键虚拟键盘的键码不作为键码采纳（本状态全交互走触屏控件）
     if (key_event->key_code != NANO_KEY_IDLE && key_event->is_soft_key && !key_event->is_softkbd) {
         return STATE_OFDM_TXING;
     }
@@ -1446,7 +1446,7 @@ int32_t ui_ofdm_rx_event(Key_Event *key_event, Global_State *global_state) {
         ui_ofdm_rx_stop_session();
         return STATE_OFDM_MENU;
     }
-    // 触屏软键盘派生的软按键不作为键码采纳（宫格软键在本状态已整体抑制）
+    // 16 键虚拟键盘的键码不作为键码采纳（本状态全交互走触屏控件）
     if (key_event->key_code != NANO_KEY_IDLE && key_event->is_soft_key && !key_event->is_softkbd) {
         return STATE_OFDM_RX;
     }
@@ -1530,7 +1530,7 @@ int32_t ui_ofdm_rx_event(Key_Event *key_event, Global_State *global_state) {
 //         连发 3 遍，状态栏显示“第 n/3 遍 · 帧 a/b”，最底部进度条同步；
 //         发完转亮色。
 // 交互：全部走触屏控件（按钮/记录拖动滚动/页眉返回），硬按键仅作兼容性兜底
-//       （1=接收 2=发射 D=发射/停止 A=返回）；十六宫格软按键在本页整体退场。
+//       （1=接收 2=发射 D=发射/停止 A=返回）；触屏不派生任何键码。
 // ============================================================================
 
 #define OFDM_MSG_SLOTS      (6)      // 记录条数上限（超出丢最旧）
@@ -2197,7 +2197,7 @@ int32_t ui_ofdm_msg_event(Key_Event *key_event, Global_State *global_state) {
     Key_Event *ke = key_event;
     int32_t tx = 0, ty = 0;
     int32_t tapped = ofdm_tap_feed(&s_msg_tap, ke, &tx, &ty);
-    // 硬按键仅作兼容兜底；十六宫格软键整体退场（本状态已在事件层抑制）
+    // 硬按键仅作兼容兜底；触屏不派生任何键码，全部交互走本页自绘控件
     int32_t hard = !(ke->key_code != NANO_KEY_IDLE && ke->is_soft_key && !ke->is_softkbd);
 
     // A / 页眉“返回”：结束会话并回模式菜单
@@ -2607,7 +2607,7 @@ int32_t ui_ofdm_looping_event(Key_Event *key_event, Global_State *global_state) 
         ui_ofdm_looping_cleanup();
         return STATE_OFDM_LOOP;
     }
-    // 触屏软键盘派生的软按键不作为键码采纳（宫格软键在本状态已整体抑制）
+    // 16 键虚拟键盘的键码不作为键码采纳（本状态全交互走触屏控件）
     if (key_event->key_code != NANO_KEY_IDLE && key_event->is_soft_key && !key_event->is_softkbd) {
         return STATE_OFDM_LOOPING;
     }

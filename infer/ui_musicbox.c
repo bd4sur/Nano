@@ -599,8 +599,7 @@ static void musicbox_player_cleanup(void) {
 
 // ---------------- 播放界面：显式触屏控件 ----------------
 //
-// 本界面不再依赖十六宫格触屏软按键（STATE_MUSICBOX_PLAYING 已加入
-// ui_app_state_is_menu 抑制表，输入层不会为本状态的触摸生成任何软按键）。
+// 本界面不依赖任何触屏软按键（触屏不派生键码）。
 // 触屏由本模块直接消费：命中判定用按下点（touch_down_x/y），动作结算用松手沿
 // （TOUCH_EDGE_UP），松手点须仍落在同一控件内，否则视为拖出取消——与
 // ui_linglong_ctrl.c / ui_water.c 的显式触屏控件同范式。
@@ -1477,8 +1476,8 @@ static int32_t musicbox_handle_touch(Key_Event *key_event, Global_State *global_
     return STATE_MUSICBOX_PLAYING;
 }
 
-// 实体键盘兜底：保留原有快捷键；触屏派生的软按键（is_soft_key != 0）一律不响应，
-// 配合 ui_app_state_is_menu 抑制表实现“十六宫格软按键彻底退场”。
+// 实体键盘兜底：保留原有快捷键；触屏派生的虚拟按键（is_soft_key != 0）一律不响应，
+// 避免软键盘/16 键键盘的键码在播放页误触（触屏交互全部走本模块自绘控件）。
 static int32_t musicbox_handle_keys(Key_Event *key_event, Global_State *global_state) {
     if (key_event->is_soft_key != 0) return STATE_MUSICBOX_PLAYING;
     if (key_event->key_edge >= 0) return STATE_MUSICBOX_PLAYING;

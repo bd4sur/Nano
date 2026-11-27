@@ -17,7 +17,7 @@
  *                     拖动旋转视角；Raytracer 复刻（eye + 四角射线 + 逐像素射线）
  *  - 圆球物理（main.js）：重力、水中黏滞浮力、池底反弹（原 G/空格/L 按键改为屏幕控件）
  *
- * 交互（全部触屏化，不响应十六宫格软按键）：
+ * 交互（全部触屏化，不响应触屏派生的键码）：
  *  - 屏幕底部自绘控件栏：返回 / 暂停·继续 / 重力开关 / 定向光源；
  *  - 拖动空白处旋转视角（无需按键），拖动圆球移动圆球；
  *  - 实体键盘仅保留 ESC（返回）、ENTER（暂停）作为兜底。
@@ -78,7 +78,7 @@
 #define WT_RADIUS          (0.25f)
 #define WT_GRAVITY         (-4.0f)
 
-// ---- 触屏控件（屏幕底部自绘控件栏，取代十六宫格软按键） ----
+// ---- 触屏控件（屏幕底部自绘控件栏，取代原来的键码交互） ----
 #define WT_MODE_NONE       (-1)
 #define WT_MODE_ROTATE     (0)      // 拖动空白处：旋转视角
 #define WT_MODE_SPHERE     (1)      // 拖动圆球：移动圆球（main.js duringDrag 原语义）
@@ -1270,8 +1270,7 @@ int32_t ui_water_event_handler(Key_Event *key_event, Global_State *global_state)
     // ---- 触屏控件：认松手沿（生产端高频检测+队列可靠投递，亚帧点按不湮灭），
     //      命中判定用按下点坐标；松手点仍须落在同一控件内，否则视为拖出取消。
     //      状态切换（返回）同样在松手沿发生，本次触摸序列不会泄漏到下一状态。
-    //      本状态已列入 ui_app_state_is_menu 抑制表，输入层不再为该触摸生成
-    //      十六宫格软按键——“触屏软按键”在本状态已整体退场。
+    //      触屏不派生任何键码（全屏宫格软键已整体退场）。
     if (key_event->touch_edge & TOUCH_EDGE_UP) {
         int btn = wt_button_hit(key_event->touch_down_x, key_event->touch_down_y);
         s_wt.pressed_btn = -1;

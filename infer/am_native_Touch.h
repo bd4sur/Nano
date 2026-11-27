@@ -2,7 +2,7 @@
 //  Native Library : Touch —— 灵机（Animac）触屏本地库
 //
 //  为什么需要本库：
-//    GUI 层的触屏消费走 ui_app.c 的 get_input_event（电平 + 边沿 + 宫格软按键），
+//    GUI 层的触屏消费走 ui_app.c 的 get_input_event（电平 + 边沿），
 //    而"灵机应用程序"（Scheme App）需要【自己的一段触屏输入】——画笔、拖拽、
 //    虚拟摇杆等。此前 Scheme 侧只能看 Gfx（画布）与 Time/Diag（时钟/自观测），
 //    完全没有输入通道，交互式 App 无法编写。本库把 HAL 触屏（hal_touch.h）以

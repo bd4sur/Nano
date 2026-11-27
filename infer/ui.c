@@ -534,12 +534,12 @@ void ui_draw_footer(Key_Event *key_event, Global_State *global_state, wchar_t *t
     }
 }
 
-// 绘制软按键提示区页脚（类似早期手机屏幕底部的软按键提示）：
-// 页脚作为触屏十六宫格最底部一行4个按键（*、0、#、D）在当前功能状态下的功能提示。
-// 4个提示字符串的中心在横向上与底部4个格子的中点对齐（横向4等分，与 input_device 的
-// 4x4宫格映射一致），纵向与 ui_draw_footer 一致（页脚高度跟随当前字体行高，文本在页脚带内
+// 绘制页脚 4 等分提示区（类似早期手机屏幕底部的软按键提示）：
+// 4 个提示字符串依次对应当前状态下底部一行 4 个触屏热点（左→右）的功能，
+// 横向 4 等分居中对齐，纵向与 ui_draw_footer 一致（页脚高度跟随当前字体行高，文本在页脚带内
 // 垂直居中，行高差异由 gfx_font_draw_text_centered 的行框居中语义吸收）。
-// 传 NULL 或空字符串表示对应按键无功能（留空）。
+// 调用方（电子书阅读页 / 词典详情页）在各自事件处理里按同一 4 等分几何做命中判定。
+// 传 NULL 或空字符串表示对应位置无功能（留空）。
 void ui_draw_footer_softkeys(
     Key_Event *key_event, Global_State *global_state,
     wchar_t *text_key_left, wchar_t *text_key_0, wchar_t *text_key_right, wchar_t *text_key_enter
@@ -944,7 +944,7 @@ int32_t ui_widget_textarea_event_handler(
         return current_focus_state;
     }
 
-    // 仅响应硬按键事件（软按键——触屏宫格映射/软键盘派生——一律不响应；触屏滚动/返回见上方）
+    // 仅响应硬按键事件（软按键——触屏虚拟键盘派生——一律不响应；触屏滚动/返回见上方）
     if (ke->key_code != NANO_KEY_IDLE && ke->is_soft_key != 0) {
         return current_focus_state;
     }
@@ -1496,13 +1496,12 @@ int32_t ui_widget_input_event_handler(
     //  - 页眉左上角输入法状态标签（[汉]/[En]/[数]）：点按循环切换输入模式；
     //  - 页脚「全键盘」「九键」触屏按钮（认松手沿+按下点坐标，按下/按住/松开全程在同一
     //    按钮内才触发）：全键盘呼出/收起软键盘（等价 Ctrl+0），九键呼出/收起16键虚拟键盘。
-    //    按钮动作后 150ms 内吞掉同一次触摸经宫格映射产生的残留软按键（该范式原见已移除的 C 版日历）。
-    //  - 16键虚拟键盘可见（ui_grid16kbd）：触屏点按键盘按钮=九键软按键（键码由事件层
+    //    按钮动作后 150ms 内吞掉同一次触摸经 16 键键盘轮询产生的残留键码。
+    //  - 16键虚拟键盘可见（ui_grid16kbd）：触屏点按键盘按钮=16 键键盘键码（键码由事件层
     //    ui_grid16kbd_poll 产生，见 ui_app.c get_input_event）；
     //  - 滑动=像素滚动、点按=光标定位（委托 textarea 手势机）：任意键盘显隐状态下均可用——
     //    手势机仅当触摸序列起点在文本区内才激活，键盘区域落在文本区之外不受影响。
-    //    宿主状态的全屏宫格映射已在事件层抑制（ui_app_state_hosts_input_widget），
-    //    宫格软按键门控仅为兜底，软键盘键码（is_softkbd）与硬按键照常。
+    //    触屏本身不派生键码（全屏宫格软键已整体退场），下方软键门控仅为防御性兜底。
     {
         // 页眉“返回”软按钮：页眉带最右侧 1/4 热区（松手沿 + 按下点坐标，与文本显示控件
         // ui_widget_textarea_event_handler 同范式）：做完整善后清理（输入法状态/键盘/布局复位，
@@ -1549,8 +1548,8 @@ int32_t ui_widget_input_event_handler(
                 return current_focus_state;
             }
         }
-        // 宫格软按键门控（兜底；宿主状态的全屏宫格映射已在事件层抑制）：
-        // 16键键盘隐藏时全丢（防止点按定位光标时打入杂字）；
+        // 16 键虚拟键盘键码门控（防御性兜底）：
+        // 键盘隐藏时全丢（防止点按定位光标时打入杂字）；
         // 键盘可见时热点动作后的短暂窗口内也丢（吞残留）
         if (key_event->key_code != NANO_KEY_IDLE && key_event->is_soft_key && !key_event->is_softkbd) {
             if (!ui_grid16kbd_is_visible() || get_timestamp_in_ms() < input_state->softkey_swallow_until) {
@@ -2381,7 +2380,7 @@ int32_t ui_widget_menu_event_handler(
     //     item_height + scroll_sub_offset，1:1 跟手）；
     //   - 点击条目：选中并执行（同 Enter）；
     //   - 点击顶栏最右侧 1/4：退出菜单（同 Esc）。
-    // 菜单激活期间输入层不再生成宫格软按键（ui_app.c get_input_event 按状态抑制），
+    // 菜单激活期间触屏不派生任何键码（全屏宫格软键已整体退场），
     // 触屏流是唯一输入通道，松手帧触发动作不会遗留按键事件泄漏到下一状态。
     // ========================================================================
     // 触摸序列开始：DOWN 边沿（可靠事件，按下点坐标取 touch_down_*）或电平兜底
@@ -2498,8 +2497,8 @@ int32_t ui_widget_menu_event_handler(
         }
     }
 
-    // 软硬按键仲裁：宫格映射软按键不作为键码采纳（菜单状态下输入层已抑制其生成，
-    // 此处为防御性兜底——如状态切换瞬间跨核可见性延迟产生的零星软按键）；
+    // 软硬按键仲裁：16 键虚拟键盘键码不作为键码采纳（is_soft_key=1 且 is_softkbd=0）——
+    // 菜单只接受实体键盘与全键盘软键盘的导航键；
     // 触屏软键盘键码（is_softkbd==1，如词典候选菜单的软键盘方向键导航）与
     // 实体按键（is_soft_key==0）照常走下方按键逻辑。
     if (ke->key_code != NANO_KEY_IDLE && ke->is_soft_key && !ke->is_softkbd) {

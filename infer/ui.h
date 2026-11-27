@@ -176,8 +176,8 @@ typedef struct Key_Event {
     uint64_t key_timer;  // 按下状态的计时器
     uint8_t  key_mask;   // 长按超时后，键盘软复位标记。此时虽然物理上依然按键，只要软复位标记为1，则认为是无按键，无论是边沿还是按住都不触发。直到物理按键松开后，软复位标记清0。
     uint8_t  key_repeat; // 触发一次长按后，只要不松手，该标记置1，直到物理按键松开后置0。若该标记为1，则在按住时触发连续重复动作。
-    uint8_t  is_softkbd; // 键码语义是否与软键盘全键盘对齐：1-是（触屏软键盘或 Faces Keyboard3 硬件全键盘，键码为直接键码，不再经过九键输入法），0-否（触屏4x4网格键/实体16键）
-    uint8_t  is_soft_key; // 按键来源：1-触屏派生的软按键（4x4宫格映射或触屏软键盘），0-实体键盘（见 platform.h NANO_HAS_HW_KEYBOARD；Faces Keyboard3 硬件全键盘亦为0）。按下时锁存，下降沿事件沿用
+    uint8_t  is_softkbd; // 键码语义是否与软键盘全键盘对齐：1-是（触屏软键盘或 Faces Keyboard3 硬件全键盘，键码为直接键码，不再经过九键输入法），0-否（16键虚拟键盘/实体16键/玲珑仪自绘控件合成的键码）
+    uint8_t  is_soft_key; // 按键来源：1-触屏派生的虚拟按键（触屏软键盘或 16 键虚拟键盘的键码；玲珑仪自绘控件合成的键码亦置 1），0-实体键盘（见 platform.h NANO_HAS_HW_KEYBOARD；Faces Keyboard3 硬件全键盘亦为0）。按下时锁存，下降沿事件沿用
     // 触屏边沿事件（触屏事件队列改造，见 AGENTS.md 第八节）：
     // 边沿检测在生产端（Core1 get_input_event，1-2ms 轮询）完成，DOWN/UP 经 event_queue
     // 可靠投递，Core0 每帧排空合并为位掩码——亚帧短点按不再湮灭。
@@ -271,9 +271,9 @@ typedef struct Widget_Input_State {
     // 页眉左上角输入法状态标签 [汉]/[En]/[数]：点按循环切换输入模式（拖出标签不触发）。
     // 十六键虚拟键盘（ui_grid16kbd 模块，显隐为模块全局状态 ui_grid16kbd_is_visible）：
     // 页脚「九键」按钮呼出/收起（ui_widget_input_toggle_grid16，与触屏软键盘互斥）。
-    // 键盘可见时：触屏点按键盘按钮=九键软按键（替代旧的全屏4x4宫格隐式映射），
+    // 键盘可见时：触屏点按键盘按钮=16 键键盘的键码（键盘区域外的触屏不产生键码），
     // 不解释滚动/光标；键盘隐藏时（默认）：点按=光标定位、滑动=像素滚动。
-    uint64_t softkey_swallow_until; // 热点动作后吞掉宫格残留软按键的截止时间戳（ms）
+    uint64_t softkey_swallow_until; // 热点动作后吞掉同一次触摸经 16 键键盘轮询产生的残留键码的截止时间戳（ms）
     int32_t footer_btn_armed;       // 页脚触屏按钮按下态：0=无，1=全键盘，2=九键（按住时当前松手会触发哪一枚）
     int32_t drawn_cursor_pos;       // 上次绘制时的光标位置：光标跟随滚动仅在光标变化时触发，
                                     // 避免触屏手动滚动后被光标跟随拉回（初始 -2 强制首次跟随）
@@ -341,8 +341,9 @@ void ui_draw_header_full(Key_Event *key_event, Global_State *global_state, wchar
 void ui_draw_header_side_text(Key_Event *key_event, Global_State *global_state, int32_t header_height,
     wchar_t *left_text, wchar_t *right_text);
 void ui_draw_footer(Key_Event *key_event, Global_State *global_state, wchar_t *text, int32_t is_center);
-// 软按键提示区页脚：4个字符串依次为十六宫格最底部一行 *、0、#、D 四键的功能提示，
-// 横向与底部4个格子中点对齐，纵向与 ui_draw_footer 一致；NULL或空串表示该键无功能
+// 页脚 4 等分提示区：4 个字符串依次对应底部一行 4 个触屏热点（左→右）的功能提示，
+// 横向 4 等分居中对齐，纵向与 ui_draw_footer 一致；NULL 或空串表示该位无功能。
+// 调用方（电子书阅读页、词典详情页）在各自事件处理里按同一 4 等分几何做命中判定。
 void ui_draw_footer_softkeys(Key_Event *key_event, Global_State *global_state,
     wchar_t *text_key_left, wchar_t *text_key_0, wchar_t *text_key_right, wchar_t *text_key_enter);
 

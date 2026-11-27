@@ -98,8 +98,8 @@ static int32_t wasm_evtq_has_repeat(void) {
 
 // 一次采样结果的投递（对齐 main.c 生产者的投递语义）
 static void wasm_dispatch_input_events(Key_Event *ev_prod) {
-    // 触屏 DOWN/UP 边沿：可靠投递。必须先于按键事件投递（同一次松手会同时产生
-    // 触屏 UP 与宫格软按键下降沿；先投触屏可保证同帧内热点判定先于按键处理）。
+    // 触屏 DOWN/UP 边沿：可靠投递。必须先于按键事件投递（同一帧里可能既有触屏边沿
+    // 又有虚拟键盘键码；先投触屏可保证同帧内热点判定先于按键处理）。
     if (ev_prod->touch_edge != 0) {
         Key_Event touch_ev = *ev_prod;
         touch_ev.key_code = NANO_KEY_IDLE;

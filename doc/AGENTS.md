@@ -17977,3 +17977,82 @@ node tools/e2e/browser/probe_earthport_perf.js      https://127.0.0.1:9002/index
   修复后 **0 个**；把擦除逻辑临时改回旧判据则 **7 个**（如 (242,150) 处 (1,2,8)→(183,166,45)），
   证明这条判据确实抓得住这个 bug。全套回归：station 37/37、earthport 17/17、
   buttons 30/30、camera 25/25、aurora 20/20；宿主 gcc 台 600 帧无错。
+
+# 2026-11-28（全屏 4x4 宫格隐式软键整体退场：触屏不再派生硬按键事件）
+
+把「触屏按屏幕 4x4 宫格映射为 `NANO_KEY_*` 键码」这套兼容机制**整体删除**。它是项目
+只有硬按键时期的平滑过渡产物：让全部基于键码写成的业务逻辑在纯触屏设备（M5Core2/S3、
+Nano-Web/WASM、Android）上照常工作。随着各功能逐个改为直接消费触屏流，配套的
+`ui_app_state_is_menu()` / `ui_app_state_hosts_input_widget()` 抑制表不断膨胀，一次触摸
+经「触点快照」与「软按键队列」两条通道异步到达消费者，反复造成跨状态误触。触屏 UI 已
+成熟，本次把这条通道彻底关掉。
+
+## 边界（本次删什么、留什么）
+
+| 项 | 处置 |
+|---|---|
+| `GRID16_*` 宏、`ui_app_map_touch_to_grid16_key()` | **删** |
+| `ui_app_state_is_menu()`（22 状态抑制表）、`ui_app_state_hosts_input_widget()`（5 状态） | **删** |
+| `get_input_event` 里的映射调用块、软键盘路径「保留右上角宫格 Esc」穿透分支 | **删** |
+| `s_linglong_touch_owned`（只写不读后成死变量，含 4 处写点） | **删** |
+| 16 键虚拟键盘 `ui_grid16kbd`、触屏软键盘 `ui_softkbd`、T9 九键输入法 | **留**（显式输入法，非兼容层） |
+| `Key_Event.is_soft_key` / `is_softkbd` 与各模块「仅硬键」过滤 | **留**（现服务于虚拟键盘与玲珑仪自绘控件合成的键码） |
+| 按键提示音 / 提示灯（`.ino` 两处 `key_edge == -1` 反馈） | **不动**（不弥补，随触屏不再派生键码自然淘汰） |
+
+## 一、先补触屏入口（保证删除后没有死路）
+
+删除前，纯触屏设备上这些状态的**唯一输入就是宫格软键**；先把入口补齐，再拆机制：
+
+| 状态 | 新增的显式触屏入口 |
+|---|---|
+| `STATE_SPLASH_SCREEN` | 触屏松手沿（任意位置）→ 主菜单。原先靠"按下任何键" |
+| `STATE_LLM_ON_INFER`（`ui_llm.c` 两个 on_llm_*） | 页眉右侧「停止 」热点（松手沿 + 按下点），`ui_draw_header_full` 绘制标签 |
+| `STATE_RIPPLE` | 页眉右侧「返回」热点；标签叠一层半透明黑底（壁纸亮度不可控，纯白字读不出来）；加载失败页提示改为"点右上角返回" |
+| `STATE_GENETIC` / `STATE_GENETIC_TSP` | 页眉右侧返回 + 底部 24px 条带「重跑」，提示文字由 `ui_genetic.h` / `ui_tsp.h` 自绘；语义沿用原 A/D 键 |
+| `STATE_DICT_DETAIL` | 页眉右侧返回、页脚 4 格提示按钮化（上一个/下一个/返回，几何与 `ui_draw_footer_softkeys` 严格一致）、释义区拖动滚动（复用 `ui_widget_textarea_touch_handler`） |
+| `STATE_CLOUD` | **不补**——它不是独立功能，而是玲珑天象仪的体积云绘制组件；小游戏里的独立入口早已淘汰，状态保留为「无菜单入口的组件状态」 |
+
+## 二、行为变化（需要知道的两个）
+
+1. **软键盘可见时不再吞掉实体键盘按键**。原代码 `else if (key != NANO_KEY_esc) key = NANO_KEY_IDLE;`
+   是「软键盘可见 → 禁用宫格」的写法，但按码值无法区分来源，把实体键也一起吞了。
+   对带实体键盘的机型（NANO_TTY 类）在「软键盘常驻」场景（C 词典查询页等）里，原本
+   除 Esc 外**全部按键失效**；删除后恢复正常。
+2. **触屏点按不再触发按键提示灯/提示音**（ESP32 机型）。反馈代码只看 `key_edge == -1`，
+   宫格退场后触屏不再产生该事件；按计划不补。
+
+## 三、验证（WASM-GUI 目标；其他平台本轮未验证）
+
+- `bash infer/build_wasm_gui.sh` 通过；改动文件按 `-Wall -Wextra` 单独复核，无新增告警。
+- 新增探针 `infer/tools/e2e/browser/probe_grid16_removal.js`（真浏览器 + 真 Pointer Events，
+  工作区工具不入 Git）：
+  - **正式构建 A 阶段 11/11**：启动屏触屏进主菜单、番茄表进出、电子书列表/自述页页眉
+    返回热点、玲珑仪进出、无 pageerror。
+  - **临时放出「小游戏」「词典」入口的 throwaway 构建 B 阶段 25/25**：小游戏菜单点旧宫格
+    右下角（原 D 格）不再激活菜单项且画面逐字节不变；水波点旧 esc 位置 = 新返回热点回菜单；
+    遗传/TSP 底部条带重跑生效、页眉返回生效。随后**还原源码并重新构建**，最终产物来自
+    正式代码（A 阶段已复跑 11/11）。
+- 既有回归 `regress_flip.js` 39/39 PASS。`regress_musicbox` / `regress_exit` / `regress_back` /
+  `regress_dict` 的失败均停在**首步导航**（仍走 2026-11-24 之前的"主菜单→小游戏→应用列表"
+  旧路径，或依赖未下载的 p2 资源 `ecdict.csv`），与本改动无关——是脚本未跟上主菜单重构。
+- 未覆盖：`STATE_LLM_ON_INFER` 的「停止」、`STATE_ASR_RUNNING`（纯触屏目标根本未编译）、
+  `STATE_DICT_DETAIL` 的端到端点击（对应 C 版入口当前被屏蔽且依赖 p2 资源），只做编译与走查。
+
+## 四、注释/文档收敛（本条目同批完成）
+
+约 120 处「宫格」表述按性质分三类处理：
+
+- **断言机制仍存在**的（10+ 处引用已删除的 `ui_app_state_is_menu`、`ui_app_state_hosts_input_widget`）
+  → 改写为「触屏不派生键码」或对应模块的真实输入契约：`ui.c`、`ui.h`、
+  `ui_goldminer.c`、`ui_water.c/.h`、`ui_musicbox.c/.h`、`ui_ebook.c`、`ui_settings.h`、
+  `ui_scheme_app.c/.h`、`am_native_Key.h`、`am_native_App.h`、`am_native_Touch.h`、
+  `hal_key_{mp135,ncurses_linux,wasm,web_linux}.c`、`hal_key.h`、`platform.h`、
+  `nano_key_events.h`、`main.c`、`main_wasm_gui.c`、`linglong_m5core2.ino`、
+  `ui_grid16kbd.c/.h`、`ui_linglong_ctrl.c/.h`、`ui_ofdm.c`。
+- **描述版式几何**的（主菜单单格宽 = 屏宽/4、2×2 功能卡、3x3 视角九宫格、16 键九宫格输入法）
+  → 保留，改为「旧宫格/原十六宫格」的历史措辞或改成「十六键数字键」。
+- **Scheme App 源码注释**（`app/{calculator,sky3,spectrogram,svm,touchgravity}.scm`）里
+  「避开右上角 esc 格」这类布局理由 → 改为"该格已无任何系统语义，沿用旧布局"。
+- `ui_draw_footer_softkeys` 的语义随之改变：它不再是「十六宫格最底一行的键位提示」，
+  而是**页脚 4 等分触屏热点**的提示（调用方电子书阅读页、词典详情页按同一几何做命中判定）。
+- `doc/AGENTS.md` 的历史条目**不改写**（它们是当时的实现记录），只追加本条目。

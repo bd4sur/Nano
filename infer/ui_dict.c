@@ -766,7 +766,7 @@ int32_t ui_dict_query_event(Key_Event *key_event, Global_State *global_state,
         return query_state;
     }
 
-    // A键（软键盘或宫格 Esc）：前缀非空删末字符，空则退出词典
+    // A键（硬键盘/16键键盘/软键盘 Esc）：前缀非空删末字符，空则退出词典
     if (key_event->key_code == NANO_KEY_esc) {
         if (s_prefix_len > 0) {
             s_prefix[--s_prefix_len] = L'\0';

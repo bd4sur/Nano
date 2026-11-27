@@ -44,7 +44,7 @@ void wasm_gui_on_key(int32_t key_code, int32_t is_down) {
 }
 
 // 键盘事件入口（旁路，供 (native Key) 本地库）：页面 JS 对**每一个**按键都会
-// 调用本函数（包含 letters/符号——GUI 的 KEY_MAP 只映射宫格/方向键，这里的
+// 调用本函数（包含 letters/符号——GUI 的 KEY_MAP 只映射数字/方向/Enter/Esc 键，这里的
 // key_code 是忠实键码：可打印字符即其 ASCII 码）。只投递到 nano_key_events，
 // 不改动 s_key_down/s_key_unread，因此 GUI 的输入行为与接库前逐字节一致。
 EMSCRIPTEN_KEEPALIVE

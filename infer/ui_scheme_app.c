@@ -1480,7 +1480,7 @@ int32_t ui_scheme_app_render_frame(Key_Event *key_event, Global_State *global_st
 //
 //  生命周期：
 //    库发起请求（解释器在 render_frame 里跑出一帧）→ 本帧 scheme_modal_open() 打开控件；
-//    之后每帧 scheme_modal_event() 把事件喂给控件（此前 ui_app.c 的 4x4 宫格映射会被抑制）；
+//    之后每帧 scheme_modal_event() 把事件喂给控件；
 //    提交/取消 → am_native_ui_resolve() 唤醒进程 → App 自己的下一拍重绘接管画面。
 //
 //  机制细节（易错）：ui_widget_input_event_handler 用「上一/下一焦点状态」表达退出方向，
@@ -1498,8 +1498,8 @@ static int32_t s_modal_confirm_with_bg = 0;         // 确认框是否有第三�
 static wchar_t s_modal_title[AM_NATIVE_UI_TITLE_MAX];   // 页眉文案（控件长期持有指针）
 static wchar_t s_modal_result[AM_NATIVE_UI_BODY_MAX];   // 提交时的文本快照
 
-// 供 ui_app.c 的事件层查询：模态框显示期间抑制触屏 4x4 宫格映射
-//（否则拖动滚动/点按定位会不断产生软按键，且右上角宫格会变成 Esc）
+// 模态框是否正在显示（宿主文本控件接管触屏；WASM 宿主据此关闭亚帧点按锁存，
+// 见 main_wasm_gui.c 的 wasm_touch_set_sticky 注释）。
 int32_t ui_scheme_app_hosts_input_widget(void) {
     return s_modal_active;
 }

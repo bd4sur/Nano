@@ -504,7 +504,7 @@ int32_t ui_ebook_reading_render(Key_Event *key_event, Global_State *global_state
     ui_draw_header_full(key_event, global_state, s_book_title, 1,
         ui_std_header_height(global_state->ui_font), page_info, L"返回 ");
 
-    // 页脚 4 个触屏软按键（与底部十六宫格 4 格对齐）：上页/下页/跳页/书签（书签为占位符，暂不实现）
+    // 页脚 4 等分触屏热点（命中判定见下方事件处理）：上页/下页/跳页/书签（书签为占位符，暂不实现）
     ui_draw_footer_softkeys(key_event, global_state, L"上页", L"下页", L"跳页", L"书签");
 
     ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
@@ -804,8 +804,8 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
         }
     }
 
-    // 触屏（松手沿 + 按下点坐标；本状态在 ui_app_state_is_menu 抑制表内，无宫格软按键干扰）：
-    // 页眉最右侧“返回”软按钮；页脚 4 软按键：上页/下页（按住反复触发，见上）/跳页/书签（占位）
+    // 触屏（松手沿 + 按下点坐标；触屏不派生键码，无软按键干扰）：
+    // 页眉最右侧“返回”热点；页脚 4 等分热点：上页/下页（按住反复触发，见上）/跳页/书签（占位）
     if (key_event->touch_edge & TOUCH_EDGE_UP) {
         int32_t tx = key_event->touch_down_x;
         int32_t ty = key_event->touch_down_y;
@@ -867,7 +867,7 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
         return 0;
     }
 
-    // 过渡期：全部按键响应仅认硬按键（软按键——触屏宫格映射/软键盘派生——一律不响应）
+    // 过渡期：全部按键响应仅认硬按键（软按键——触屏虚拟键盘派生——一律不响应）
     if (key_event->is_soft_key != 0) {
         return 0;
     }

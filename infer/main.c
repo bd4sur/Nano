@@ -109,8 +109,8 @@ static void nano_input_producer_task(void *arg) {
         // 获取输入事件（按键 + 触屏）：触屏电平快照由本调用写入 global_state
         get_input_event(&ev_prod, global_state);
 
-        // 触屏 DOWN/UP 边沿事件：可靠投递。必须先于按键事件投递（同一次松手会同时
-        // 产生触屏 UP 与宫格软按键下降沿；先投触屏可保证同帧内热点判定先于按键处理）。
+        // 触屏 DOWN/UP 边沿事件：可靠投递。必须先于按键事件投递（同一帧里可能既有触屏
+        // 边沿又有虚拟键盘键码；先投触屏可保证同帧内热点判定先于按键处理）。
         // 本平台无电源键（NANO_HAS_PWR_KEY=0），锁屏抑制逻辑不参与。
         if (ev_prod.touch_edge != 0) {
             Key_Event touch_ev = ev_prod;

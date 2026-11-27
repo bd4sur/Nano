@@ -308,7 +308,7 @@ int32_t ui_goldminer_event_handler(Key_Event *key_event, Global_State *global_st
     // 触屏：认 touch_edge 边沿事件（生产端高频检测+队列可靠投递，亚帧点按不湮灭，
     // 见 AGENTS.md 第八节）。松手沿触发动作，命中判定用按下点坐标 touch_down_x/y——
     // 状态切换发生在手指抬起之后，本次触摸序列不会泄漏到下一状态。
-    // 本状态已列入 ui_app_state_is_menu 抑制表，输入层不再生成本次触摸的宫格软按键。
+    // 本状态直接消费触屏流，触屏不派生任何键码（全屏宫格软键已整体退场）。
     if (key_event->touch_edge & TOUCH_EDGE_UP) {
         int32_t tx = key_event->touch_down_x;
         int32_t ty = key_event->touch_down_y;

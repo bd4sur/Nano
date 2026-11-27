@@ -9,9 +9,8 @@
 // 故此处捕获 KEY_MOUSE 并转发给触屏HAL（touch_ncurses.c）缓存——这是 ncurses
 // 单输入流架构下不可避免的唯一耦合点。
 //
-// 触屏 → 4x4 宫格虚拟按键的兼容映射曾置于此处，因旁路干净的触屏路径造成
-// 架构混乱，已上移至输入事件层（ui_app.c ui_app_map_touch_to_grid16_key）；
-// 本HAL只负责实体按键（终端键盘）。
+// 触屏派生键码的映射曾置于此处，后上移至输入事件层、并随全屏宫格软键整体退场
+// 一并删除；本HAL只负责实体按键（终端键盘）。
 extern void touch_ncurses_on_mouse(int32_t mx, int32_t my, uint32_t bstate);
 
 int32_t input_device_init() {

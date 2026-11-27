@@ -240,7 +240,7 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
             key_is_soft = (grid16_key != NANO_KEY_IDLE); // 16键虚拟键盘键码来自触屏
         }
         else {
-            key = NANO_KEY_IDLE; // 键盘区域外：不产生软按键
+            key = NANO_KEY_IDLE; // 键盘区域外：不产生键码
         }
     }
 
@@ -534,7 +534,7 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
 //   - 右侧：静态按钮，仅响应短点按（返回/设置/自述/关机）。
 //   - 键盘：数字键 1-9 = 表格前 9 项；Esc/Shift/Ctrl/Enter = 返回/设置/自述/关机；
 //           上/下键整行滚动（见 ui_app_main_menu_event_handler 末段）。
-//           触屏不再派生宫格软按键（STATE_MAIN_MENU 已加入 ui_app_state_is_menu 抑制表）。
+//           触屏不派生任何键码（全屏宫格软键已整体退场，见 get_input_event）。
 // ===============================================================================
 
 #define UI_APP_MENU_SCROLL_COLS  (3) // 左侧滚动区列数（＝旧宫格的左 3 列）
@@ -1309,7 +1309,7 @@ void ui_app_main_menu_event_handler(Key_Event *key_event, Global_State *global_s
     }
 
     // ========================================================================
-    // 实体键盘（触屏不再派生宫格软按键，见 ui_app_state_is_menu）：
+    // 实体键盘（触屏不派生键码，见 get_input_event）：
     // 数字键 1-9 对应条目表前 9 项（即内置应用：番茄表……控制台）；
     // 灵机 App 图标在表格后段，用触屏滚动/点按（或“小游戏→灵机应用程序”列表）。
     // Esc/Shift/Ctrl/Enter 为返回/设置/自述/关机；上/下键为滚动区整行滚动。
@@ -2947,7 +2947,7 @@ void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state)
         s_ui_flip_ui_slider_active = 0;
     }
 
-    // ---- 实体键盘兜底（触屏派生的软按键一律不响应：is_soft_key == 0）----
+    // ---- 实体键盘兜底（触屏派生的虚拟键盘键码一律不响应：is_soft_key == 0）----
     if (key_event->is_soft_key != 0) {
         return;
     }
@@ -3640,7 +3640,8 @@ void ui_app_linglong_render_frame(Key_Event *key_event, Global_State *global_sta
         timestr_x, global_state->llgfx->height - gfx_font_line_height(GFX_FONT_ALPHA_12), 255, 255, 255, 1);
 
     // 主天空界面：叠加显式触屏控件（顶部按钮栏 + 可选的时间/视角面板）。
-    // 设置界面（LL_STATE_SETTING*）不绘制，继续沿用原有十六宫格软键布局。
+    // 设置界面（LL_STATE_SETTING*）由 5x4 显式触屏按钮承载（见 ui_linglong_ctrl_settings_*），
+    // 这里不绘制主界面控件。
     if (linglong_state == LL_STATE_SKY) {
         UiLinglongCtrlState ctrl_state;
         ctrl_state.running_state = linglong_timemachine_running_state;
@@ -3799,7 +3800,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         // 按下点落在顶部按钮上时不启动拖动。像素增量按实际画布尺寸归一化：
         // 横/纵向拖满整屏分别对应 180° 方位/俯仰变化，不写死屏幕宽高。
         // 方向为“抓取天空”：画面随手指同向移动——右拖天空右移（视角左转）、
-        // 下拖天空下移（视角抬头）；即与十六宫格数字键的“相机转向”方向相反。
+        // 下拖天空下移（视角抬头）；即与十六键数字键的“相机转向”方向相反。
         int32_t drag_dx = 0, drag_dy = 0;
         if (ui_linglong_ctrl_poll_drag(
                 key_event->touch_edge, key_event->is_touching,
@@ -3851,7 +3852,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                     return;
 
                 case UI_LL_CTRL_REWIND:
-                    // 沿用十六宫格“*”键行为：设置快退速度并切换启停（再点一次即暂停）
+                    // 沿用十六键“*”键行为：设置快退速度并切换启停（再点一次即暂停）
                     ui_app_linglong_set_timemachine_speed(key_event, global_state, -120);
                     linglong_paused_resume_state = 1;
                     break;
@@ -3862,7 +3863,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                     ui_app_linglong_control_runpause(global_state);
                     break;
                 case UI_LL_CTRL_FORWARD:
-                    // 沿用十六宫格“#”键行为：设置快进速度并切换启停（再点一次即暂停）
+                    // 沿用十六键“#”键行为：设置快进速度并切换启停（再点一次即暂停）
                     ui_app_linglong_set_timemachine_speed(key_event, global_state, 120);
                     linglong_paused_resume_state = 1;
                     break;
@@ -3912,7 +3913,7 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
 
                 default:
                     // 视角九宫格：合成对应的 NANO_KEY_1~9 短按事件，
-                    // 复用下方既有硬键处理逻辑（功能与十六宫格软键 1~9 一一对应）。
+                    // 复用下方既有硬键处理逻辑（功能与十六键数字键 1~9 一一对应）。
                     // 8 枚方向/缩放按钮另有“按住反复触发”（见 ui_app_linglong_view_repeat），
                     // 短按仍走这里的一次触发。
                     if (action >= UI_LL_CTRL_VIEW_1 && action <= UI_LL_CTRL_VIEW_9) {
@@ -4720,9 +4721,9 @@ int32_t ui_exit_confirm_arm(Global_State *global_state, int32_t with_body, int32
 //
 // 交互：抓住轨道左端的圆形推钮向右拖动，滑到右端（进度 ≥ UI_SHUTDOWN_COMPLETE_PCT）
 // 后松手才真正调用 graceful_shutdown()；未滑到位松手则回弹到起点。触屏只认推钮
-// （含少量触摸余量），点按轨道其余位置不会误触发。本状态已加入
-// ui_app_state_is_menu 抑制表，十六宫格软键整体退场；实体键盘保留原有快捷方式：
-// 长按 D 关机、A 取消。
+// （含少量触摸余量），点按轨道其余位置不会误触发。触屏上不派生任何键码
+//（全屏宫格软键已整体退场），触屏取消入口是页眉右侧「返回」热点；
+// 实体键盘保留原有快捷方式：长按 D 关机、A 取消。
 //
 // 本状态直接消费触屏流（DOWN 锁存推钮、拖动逐帧跟随、UP 沿结算），符合 ui_app.c
 // 输入处理原则：会引发状态切换的动作只在松手沿触发。
@@ -4900,7 +4901,7 @@ static int32_t ui_shutdown_header_h(Global_State *global_state) {
 }
 
 // 整页重绘（清屏 + 页眉 / 页脚 + 滑块）。页眉右侧固定「返回」热点：触屏设备
-// （无硬键盘）在关机页的取消入口，避免进入后无法退出（十六宫格软键已整体抑制）。
+// （无硬键盘）在关机页的取消入口，避免进入后无法退出（触屏不派生键码）。
 static void ui_shutdown_draw_page(Key_Event *key_event, Global_State *global_state) {
     if (global_state->ui_color_style == UI_COLOR_LIGHT) {
         gfx_fill_white(global_state->gfx);
@@ -5834,7 +5835,7 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             break;
         }
 
-        // ---- 实体键盘（十六宫格软键已整体抑制，此处仅实体键；仍显式过滤软按键）----
+        // ---- 实体键盘（触屏不派生键码，此处仅实体键；仍显式过滤软按键）----
         if (key_event->is_soft_key == 0) {
             // 长按 D 键：直接确认关机（保留原有硬键盘快捷方式）
             if (key_event->key_edge == -2 && key_event->key_code == NANO_KEY_enter) {

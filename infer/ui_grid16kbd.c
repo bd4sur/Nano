@@ -5,8 +5,8 @@
 // ===============================================================================
 // 16键虚拟键盘（硬件无关实现）
 //
-// 文本输入控件"16键"模式的显式虚拟键盘，替代旧的全屏 4x4 宫格隐式触屏映射
-// （仅替代文本输入控件场景；其余场景的全屏宫格兼容映射仍在 get_input_event）。
+// 文本输入控件"16键"模式的显式虚拟键盘：屏幕下半屏绘制 4x4 圆角按钮，
+// 点按产出 NANO_KEY_* 键码（键码的唯一触屏来源，触屏本身不派生任何按键事件）。
 // 机制与触屏软键盘（ui_softkbd.c）同范式：Core1 轮询产键、Core0 绘制、
 // 跨任务共享状态经 volatile 传递（单一写者）。
 // ===============================================================================
@@ -39,7 +39,7 @@ static void ui_grid16kbd_col_geometry(int32_t col, int32_t *out_x, int32_t *out_
 #define UI_GRID16KBD_COLOR_PRESSED   96, 96, 104   // 按住高亮底色
 #define UI_GRID16KBD_COLOR_LABEL     240, 240, 240 // 键名文字颜色
 
-// 键码表（4x4，与旧全屏宫格映射 ui_app_map_touch_to_grid16_key 一致）
+// 键码表（4x4，布局与实体十六键一致）
 static const uint8_t S_GRID16KBD_KEYCODE[UI_GRID16KBD_ROWS][UI_GRID16KBD_COLS] = {
     {NANO_KEY_1,    NANO_KEY_2, NANO_KEY_3,     NANO_KEY_esc},
     {NANO_KEY_4,    NANO_KEY_5, NANO_KEY_6,     NANO_KEY_shift},
@@ -165,7 +165,7 @@ uint8_t ui_grid16kbd_poll(int32_t x, int32_t y, int32_t is_pressed) {
     }
     s_claimed = 1;
 
-    // 按住中：持续上报锁存键码（交给框架原生的长按/连发机制，与旧宫格软按键一致）
+    // 按住中：持续上报锁存键码（交给框架原生的长按/连发机制）
     if (s_prev_pressed) {
         return s_held_code;
     }

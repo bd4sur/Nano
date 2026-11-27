@@ -12,8 +12,8 @@ extern "C" {
 //
 //  为什么需要它：
 //    hal_key.h 的 input_device_read_key() 是「电平 + 单槽位」契约——GUI 输入层
-//    （ui_app.c 的 get_input_event）每帧读一次，用于边沿判定、长按连发与 4x4
-//    宫格映射。它有两个性质使它不适合直接给「灵机应用程序」（Scheme App）用：
+//    （ui_app.c 的 get_input_event）每帧读一次，用于边沿判定与长按连发。
+//    它有两个性质使它不适合直接给「灵机应用程序」（Scheme App）用：
 //      1) 读即消费：wasm HAL 读到电平后会清掉「未读锁存」，ncurses HAL 更是直接
 //         从 stdin 取走字节——Scheme 侧再读一次就与 GUI 抢事件（谁先读谁拿到，
 //         两边的行为都变得不确定）；
