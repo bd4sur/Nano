@@ -122,48 +122,10 @@ int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State
 
 void ui_app_splash_render_frame(Key_Event *key_event, Global_State *global_state);
 
-// 退出确认模态框（“是否退出？” 确认/留下；控制台与灵机 App 等场景共用）
-//   基础版：固定标题（同历史行为，兼容既有调用点）
-//   _msg 版：自定义标题 + 可选正文（正文非空时对话框自动加高一行）——
-//   供 (native Ui) 的 (Ui.confirm 标题 正文) 与 (native App) 的退出确认共用，
-//   保证“全局确认框”与 App 自弹确认框视觉/命中完全一致。
-void    ui_exit_confirm_layout(Global_State *global_state, int32_t *out_dx, int32_t *out_dy,
-                               int32_t *out_btn_y, int32_t *out_confirm_x, int32_t *out_stay_x);
-void    ui_exit_confirm_draw(Key_Event *key_event, Global_State *global_state);
-void    ui_exit_confirm_draw_msg(Key_Event *key_event, Global_State *global_state,
-                                 const wchar_t *title, const wchar_t *body);
-int32_t ui_exit_confirm_hit(Global_State *global_state, int32_t x, int32_t y); // 1=确认 2=留下 0=未命中
-// 带正文版命中判定（with_body 必须与绘制时一致，否则按钮纵向位置不符）
-int32_t ui_exit_confirm_hit_msg(Global_State *global_state, int32_t with_body, int32_t x, int32_t y);
-
-// 三按钮变体（灵机 App 的退出确认框）：确认 / 后台 / 留下。
-//   with_bg=1 时按钮行变成三枚窄按钮（54px）：「确认」「后台」「留下」
-//   ——「后台」= 保留实例、冻结、回应用列表（见 am_native_App.h 的 (App.hide)）。
-void    ui_exit_confirm_draw_msg_ex(Key_Event *key_event, Global_State *global_state,
-                                    const wchar_t *title, const wchar_t *body, int32_t with_bg);
-int32_t ui_exit_confirm_hit_msg_ex(Global_State *global_state, int32_t with_body, int32_t with_bg,
-                                   int32_t x, int32_t y);   // 1=确认 2=留下 3=后台 0=未命中
-
-// ---- 模态框按钮的「按下」反馈（2026-11）-------------------------------------
-// 模态框是**叠加式**的：只在弹出时画一次，触屏结算发生在**松手沿**，所以过去
-// 按下去完全没反馈——手指按住的那一刻看不出“到底选中了哪一枚”。
-// 现在由调用方在事件循环里每帧报一次当前触点，绘制端据此把对应按钮画成「按下色」
-// （底色调亮一档 + 标签下沉 1px）。
-//
-// **手势语义与宿主其它按钮一致（app/lib/button.scm 的 (BTN.track) 同款）**：
-//   · 按下 → 按住 → 松开，**三下都在同一枚按钮内**才算一次触发；
-//   · 按住后把手指拖出按钮 → 立即恢复常态、不再算按下；拖回来又亮；
-//   · 按下点不在按钮内（从外面拖进来）→ 不亮，也不会触发。
-// 所以高亮的判据就是“现在松手会不会触发”，两者严格同一口径：
-//   按下点命中 X 且**当前点**也命中 X。
-//
-//   touching = 当前是否按着；down_* = 本次手势按下点；cur_* = 当前触点
-//   返回 1 = 按下目标变了（调用方应重绘一次模态框；叠加式重绘是幂等的）
-int32_t ui_exit_confirm_arm(Global_State *global_state, int32_t with_body, int32_t with_bg,
-                            int32_t touching,
-                            int32_t down_x, int32_t down_y, int32_t cur_x, int32_t cur_y);
-// 清掉按下态（新弹一个模态框时调；否则上一个框的按下色会“带”到新框上）
-void    ui_exit_confirm_arm_clear(void);
+// ===============================================================================
+// 确认模态框（退出确认、删除确认等）：已整体剥离至全局组件 ui.h / ui.c
+//（ui_confirm_modal_*；控制台与灵机 App 共用同一实现，调用点直接包含 ui.h）
+// ===============================================================================
 
 
 // ===============================================================================

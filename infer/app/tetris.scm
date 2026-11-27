@@ -18,7 +18,7 @@
 ;;   2) 「速降」留在顶部左侧：场地横向居中（320 宽时从 x=110 起），顶部四分之一
 ;;      落在场地左侧，不会遮住入场中的方块。
 ;;   3) 退出确认框不自绘：走宿主的全局组件（(App.exit) 内部即 (Ui.confirm) 的那套
-;;      ui_exit_confirm_* 绘制/命中），确认后 (App.exit_now) 真正退出。
+;;      ui_confirm_modal_* 绘制/命中），确认后 (App.exit_now) 真正退出。
 ;;      历史上 Scheme App 改不了宿主 STATE，只能冻结游戏等宿主 A 返回；2026-10 的
 ;;      (native App) 接口改造解决了这一点（infer/am_native_App.h）。
 ;;

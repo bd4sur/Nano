@@ -28,7 +28,8 @@ extern "C" {
 //     由 App 自己消费（推荐 (import EX "app/lib/exit.scm") + 每拍 (EX.check)，
 //     即 J2ME 那种“按挂断键 → 全局提示是否退出”）。700ms 内无人接管则按旧行为兜底退出。
 //   · 退出确认框就是 (native Ui) 的确认框（AM_NATIVE_UI_KIND_CONFIRM），由 App 侧
-//     (App.exit) 发起、宿主用 ui_exit_confirm_* 绘制，**不做帧缓冲快照**：
+//     (App.exit) 发起、宿主用全局确认模态框组件 ui_confirm_modal_* 绘制，
+//     **不做帧缓冲快照**：
 //     关闭后由 App 自己在同一拍里重绘（事件驱动型 App 用 (App.modal_closed) 得知）。
 //
 // 返回链（2026-11）：被拉起的 App 退出后回**拉起它的 App**，而不是应用列表。

@@ -60,7 +60,7 @@ extern const am_native_lib_entry_t am_native_Ui_lib;
 #define AM_NATIVE_UI_KIND_NONE    (0)
 #define AM_NATIVE_UI_KIND_INPUT   (1) // 文本输入框（ui_widget_input_*）
 #define AM_NATIVE_UI_KIND_MESSAGE (2) // 只读文本视图（ui_widget_textarea_*）
-#define AM_NATIVE_UI_KIND_CONFIRM (3) // 两按钮确认框（ui_exit_confirm_* 绘制/命中）
+#define AM_NATIVE_UI_KIND_CONFIRM (3) // 两按钮确认框（ui_confirm_modal_* 绘制/命中）
 
 // 文案缓冲区上限（码点数；超出截断）
 #define AM_NATIVE_UI_TITLE_MAX (128)
@@ -83,7 +83,7 @@ int32_t am_native_Ui_message(am_runtime_t *rt, am_process_t *proc);
 int32_t am_native_Ui_message_titled(am_runtime_t *rt, am_process_t *proc);
 
 // (Ui.confirm 标题:String 正文:String) : Boolean —— 阻塞式确认框（确认 #t / 留下 #f）
-//   画面由宿主用图形层现成的退出确认框组件（ui_exit_confirm_*）绘制；关闭后**不做
+//   画面由宿主用全局确认模态框组件（ui_confirm_modal_*，见 ui.h）绘制；关闭后**不做
 //   帧缓冲快照恢复**，由调用方自己重绘（多数 App 每拍整屏重绘，天然满足；事件驱动型
 //   App 可用 (App.modal_closed) 得知并补一次重绘）。
 int32_t am_native_Ui_confirm(am_runtime_t *rt, am_process_t *proc);

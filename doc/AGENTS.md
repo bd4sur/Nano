@@ -18240,3 +18240,54 @@ Nano-Web/WASM、Android）上照常工作。随着各功能逐个改为直接消
   复核无新增告警。
 - 顺带修了自建探针 `probe_linglong_split.js` 的一个时序缺陷：等运行时**就绪**（state ≠ -9999）
   而不是"能读到数字"，否则 CPU 忙时第一次点按会被丢掉（并行跑多个浏览器时曾误报）。
+
+# 2026-11-28（把确认模态框从 ui_app.c 剥离为全局可复用组件 ui_confirm_modal_*）
+
+## 背景
+
+「是否退出？」确认框（2 枚 84px 按钮「确认/留下」、3 枚 54px「确认/后台/留下」、可选正文
+加高一行、按下变色反馈）此前实现在 `ui_app.c`（`ui_exit_confirm_*`，约 285 行），却有两个
+互不相干的宿主在用——电子核桃控制台（`STATE_ANIMAC_EXIT_CONFIRM`）与灵机 App 侧
+（`ui_scheme_app.c` 的 `AM_NATIVE_UI_KIND_CONFIRM`，即 `(native Ui)` 的
+`(Ui.confirm 标题 正文)`、`(App.exit)` 及 App 目录下全部 Scheme App 的退出/删除确认）。
+调用方得自己算 `with_body`/`with_bg` 两个标志并保证与绘制一致，按下态还是 ui_app.c 里的
+文件级静态，属于"通用组件寄居在页面模块里"。
+
+## 改动
+
+- **实现整体搬进 `infer/ui.c`，接口进 `infer/ui.h`**（`ui_app.c` 2777 → 2493 行）：
+
+  | 旧（`ui_app.h`） | 新（`ui.h`） |
+  |---|---|
+  | `ui_exit_confirm_draw(_msg/_msg_ex)` | `ui_confirm_modal_draw(gs, &modal)` |
+  | `ui_exit_confirm_hit(_msg/_msg_ex)` | `ui_confirm_modal_hit(gs, &modal, x, y)` |
+  | `ui_exit_confirm_arm(gs, with_body, with_bg, …)` | `ui_confirm_modal_arm(gs, &modal, touching, down_*, cur_*)` |
+  | `ui_exit_confirm_arm_clear()` | `ui_confirm_modal_init(&modal, title, body, with_bg)`（重置按下态） |
+
+- **描述即状态**：新增 `Ui_Confirm_Modal { title, body, with_bg, armed }`，`title/body` 是
+  借用指针（与既有控件一致，调用方保证生命周期）。`with_body` 不再由调用方维护——由
+  `body` 是否为空在组件内部推导，几何/绘制/命中三处同一口径，杜绝"判命中时标志与绘制
+  时不一致"这一类错。
+- **按下态归实例**：`s_exit_confirm_armed`（ui_app.c 文件级静态）改为 `modal->armed`，
+  组件不再有隐藏全局；宿主只需持有自己的实例（控制台 `s_animac_exit_modal`，
+  App 侧 `s_modal_confirm`）。`ui_scheme_app.c` 里随之删掉
+  `s_modal_confirm_with_body / s_modal_confirm_with_bg` 两个影子状态与三处清零。
+- **删除死接口** `ui_exit_confirm_layout()`：全仓无调用者（几何本就只有组件内部用）。
+- 按钮 ID 统一为 `UI_CONFIRM_BTN_CONFIRM/STAY/BG/NONE`（数值与历史返回值 1/2/3/0 不变，
+  故行为零改动）；`ui_app.h` 只留一段指路注释，`ui_app.c` 去掉已无使用者的
+  `#include "ui_button.h"`。
+- 顺带把 `ui_scheme_app.h`、`am_native_Ui.h`、`app/lib/exit.scm`、`app/tetris.scm` 里指向
+  旧符号名的注释改为新名字。
+- 无新增/删除源文件，构建清单（`Makefile`/`mp135.mk`/`luckfox.mk`/`build_wasm_gui.sh`/
+  `android/.../CMakeLists.txt`）无需改动——`ui.c` 与 `ui_app.c` 本来都在里面。
+
+## 验证（WASM-GUI 目标；其它平台本轮未测）
+
+- `bash infer/build_wasm_gui.sh` 通过（产物 `webgui/nano_gui.{js,wasm}` 正常生成）。
+- `ui.c` / `ui_app.c` / `ui_scheme_app.c` 以 `emcc -Wall -Wextra` 复核：仅既有告警，无新增。
+- 浏览器端回归（**直接对已在 9002 运行的服务**取页，未启停该服务）：确认框两条宿主链路
+  全覆盖——
+  `regress_exit.js` **38/38**（App 退出框：强调色按钮像素、三按钮「后台」冻结/恢复、
+  点「留下」/「确认」、非回车键=留下、实例保留与 LRU）、
+  `regress_back.js` **24/24**（含文件管理退出确认与返回链）、
+  `regress_button.js` **15/15**（按下变色/拖出即放弃与确认框弹出）。

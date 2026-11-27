@@ -1493,8 +1493,7 @@ int32_t ui_scheme_app_render_frame(Key_Event *key_event, Global_State *global_st
 static int32_t s_modal_kind = AM_NATIVE_UI_KIND_NONE;
 static Widget_Input_State *s_modal_in = NULL;       // 借用 w_input_main
 static Widget_Textarea_State *s_modal_ta = NULL;    // 借用 w_textarea_main（只读消息）
-static int32_t s_modal_confirm_with_body = 0;       // 确认框是否带正文（几何/命中判定须与绘制一致）
-static int32_t s_modal_confirm_with_bg = 0;         // 确认框是否有第三枚「后台」按钮（退出型请求）
+static Ui_Confirm_Modal s_modal_confirm;            // 确认框实例（全局组件，见 ui.h；标题/正文借用下方缓冲）
 static wchar_t s_modal_title[AM_NATIVE_UI_TITLE_MAX];   // 页眉文案（控件长期持有指针）
 static wchar_t s_modal_result[AM_NATIVE_UI_BODY_MAX];   // 提交时的文本快照
 
@@ -1522,8 +1521,6 @@ static void scheme_modal_finish(Global_State *global_state, int32_t submit, Key_
         if (global_state->gfx != NULL) global_state->is_full_refresh = 1;
         s_modal_in = NULL;
         s_modal_ta = NULL;
-        s_modal_confirm_with_body = 0;
-        s_modal_confirm_with_bg = 0;
         s_modal_kind = AM_NATIVE_UI_KIND_NONE;
         return;
     }
@@ -1583,20 +1580,20 @@ static void scheme_modal_open(Key_Event *key_event, Global_State *global_state) 
     }
     am_native_Key_reset(); // 打开模态框时清一次：触发本次输入的那次按键残留在队列里也无害
 
-    // 确认框（(Ui.confirm ...) 与 (App.exit) 共用）：用图形层现成的退出确认框组件绘制，
+    // 确认框（(Ui.confirm ...) 与 (App.exit) 共用）：用全局确认模态框组件（ui.h）绘制，
     // 与 App 自己弹的框、控制台的退出确认框是同一视觉与命中——无需文本控件。
     if (s_modal_kind == AM_NATIVE_UI_KIND_CONFIRM) {
         s_modal_in = NULL;
         s_modal_ta = NULL;
-        s_modal_confirm_with_body = (am_native_ui_body()[0] != L'\0');
-        // 退出型确认框多一枚「后台」（确认 / 后台 / 留下）——多任务入口就在这里
-        s_modal_confirm_with_bg = am_native_ui_confirm_is_exit();
+        // 退出型确认框多一枚「后台」（确认 / 后台 / 留下）——多任务入口就在这里；
+        // 正文非空时框自动加高一行（与绘制/命中同一口径，由组件自己判定）。
+        // init 同时清掉按下态，新弹的框不继承上一次的按下色。
+        ui_confirm_modal_init(&s_modal_confirm, s_modal_title, am_native_ui_body(),
+                              am_native_ui_confirm_is_exit());
         // 任何模态框开起来都说明 App 还活着在干活：清除可能挂起的“返回请求”，
         // 免得框关掉之后被宿主兜底当成未接管的请求而误杀
         am_native_app_clear_back_request();
-        ui_exit_confirm_arm_clear();   // 新弹的框不继承上一次的按下色
-        ui_exit_confirm_draw_msg_ex(key_event, global_state, s_modal_title, am_native_ui_body(),
-                                    s_modal_confirm_with_bg);
+        ui_confirm_modal_draw(global_state, &s_modal_confirm);
         return;
     }
 
@@ -1663,36 +1660,30 @@ static void scheme_modal_event(Key_Event *key_event, Global_State *global_state)
          *     否则“长按 A 唤起确认框”会被自己的重复事件连坐关掉。
          */
         if (key_event->touch_edge & TOUCH_EDGE_UP) {
-            int32_t hit = ui_exit_confirm_hit_msg_ex(global_state, s_modal_confirm_with_body,
-                                                    s_modal_confirm_with_bg,
-                                                    key_event->touch_down_x, key_event->touch_down_y);
-            int32_t rel = ui_exit_confirm_hit_msg_ex(global_state, s_modal_confirm_with_body,
-                                                    s_modal_confirm_with_bg,
-                                                    key_event->touch_x, key_event->touch_y);
+            int32_t hit = ui_confirm_modal_hit(global_state, &s_modal_confirm,
+                                              key_event->touch_down_x, key_event->touch_down_y);
+            int32_t rel = ui_confirm_modal_hit(global_state, &s_modal_confirm,
+                                              key_event->touch_x, key_event->touch_y);
             // 一次点按必须**按下→松开全在同一枚按钮内**（按住后拖出去再松手 = 放弃，
             // 框留着）；与 app/lib/button.scm 的 (BTN.track) 同一语义。
-            if (hit != 0 && hit == rel) {
-                if (hit == 1)      scheme_modal_finish(global_state, 1, key_event);   // 确认
-                else if (hit == 2) scheme_modal_finish(global_state, 0, key_event);   // 留下
-                else if (hit == 3) scheme_modal_finish(global_state, 2, key_event);   // 后台
+            if (hit != UI_CONFIRM_BTN_NONE && hit == rel) {
+                if (hit == UI_CONFIRM_BTN_CONFIRM) scheme_modal_finish(global_state, 1, key_event); // 确认
+                else if (hit == UI_CONFIRM_BTN_STAY) scheme_modal_finish(global_state, 0, key_event); // 留下
+                else if (hit == UI_CONFIRM_BTN_BG) scheme_modal_finish(global_state, 2, key_event); // 后台
             }
             // 未构成一次完整点按：框留着，只把按下色恢复常态（否则会停在“按住”的样子）
-            else if (ui_exit_confirm_arm(global_state, s_modal_confirm_with_body,
-                                         s_modal_confirm_with_bg, 0, 0, 0, 0, 0)) {
-                ui_exit_confirm_draw_msg_ex(key_event, global_state, s_modal_title, am_native_ui_body(),
-                                            s_modal_confirm_with_bg);
+            else if (ui_confirm_modal_arm(global_state, &s_modal_confirm, 0, 0, 0, 0, 0)) {
+                ui_confirm_modal_draw(global_state, &s_modal_confirm);
             }
             return;
         }
-        // 按下反馈（与 C 侧的控制台退出框同一套，见 ui_app.h 的 ui_exit_confirm_arm）：
+        // 按下反馈（与 C 侧的控制台退出框同一套，见 ui.h 的 ui_confirm_modal_arm）：
         // 按住期间把那枚按钮画成「按下色」+ 标签下沉；判据是“现在松手会不会触发”
         // （按下点与**当前点**都在同一枚按钮内）——拖出按钮立即恢复常态，拖回来又亮。
-        if (ui_exit_confirm_arm(global_state, s_modal_confirm_with_body, s_modal_confirm_with_bg,
-                                key_event->is_touching,
-                                key_event->touch_down_x, key_event->touch_down_y,
-                                key_event->touch_x, key_event->touch_y)) {
-            ui_exit_confirm_draw_msg_ex(key_event, global_state, s_modal_title, am_native_ui_body(),
-                                        s_modal_confirm_with_bg);   // 叠加式重绘（幂等）
+        if (ui_confirm_modal_arm(global_state, &s_modal_confirm, key_event->is_touching,
+                                 key_event->touch_down_x, key_event->touch_down_y,
+                                 key_event->touch_x, key_event->touch_y)) {
+            ui_confirm_modal_draw(global_state, &s_modal_confirm);   // 叠加式重绘（幂等）
         }
         if (key_event->key_edge == -1 || key_event->key_edge == -2) {
             scheme_modal_finish(global_state, (key_event->key_code == NANO_KEY_enter) ? 1 : 0, key_event);
@@ -1991,8 +1982,6 @@ static void app_teardown_foreground(void) {
     s_modal_in = NULL;
     s_modal_ta = NULL;
     s_modal_kind = AM_NATIVE_UI_KIND_NONE;
-    s_modal_confirm_with_body = 0;
-    s_modal_confirm_with_bg = 0;
     s_host_exit_request = 0;
 
     app_instance_destroy(inst);
@@ -2077,8 +2066,6 @@ void ui_scheme_app_suspend_to_list(void) {
     s_modal_in = NULL;
     s_modal_ta = NULL;
     s_modal_kind = AM_NATIVE_UI_KIND_NONE;
-    s_modal_confirm_with_body = 0;
-    s_modal_confirm_with_bg = 0;
 }
 
 // 锁屏/唤醒用：挂起或恢复**当前前台**实例（不切状态机，由 ui_app.c 的锁屏路径调用）

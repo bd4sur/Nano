@@ -2991,12 +2991,257 @@ void ui_draw_input_symbol(Key_Event *key_event, Global_State *global_state, Widg
 }
 
 
+// ===============================================================================
+// 确认模态框（全局复用组件）：接口与语义见 ui.h
+//
+// 这里是**唯一**的确认框实现：居中圆角对话框 + 2/3 枚圆角按钮，全部元素都走
+// 通用绘制原语（gfx_draw_rounded_rectangle）与通用按钮控件（ui_button_*），
+// 几何只在本文件算一次，绘制与命中判定共用同一份几何函数，不会各自跑偏。
+// ===============================================================================
 
+#define UI_CONFIRM_DIALOG_W      (200)
+#define UI_CONFIRM_DIALOG_H      (96)
+#define UI_CONFIRM_DIALOG_H_MSG  (110)  // 带正文时加高一行（12px 字模）
+#define UI_CONFIRM_BTN_W         (84)   // 两按钮（控制台等 C 场景）
+#define UI_CONFIRM_BTN_W3        (54)   // 三按钮（灵机 App：确认/后台/留下）
+#define UI_CONFIRM_BTN_H         (30)
+#define UI_CONFIRM_BTN_GAP       (12)
+#define UI_CONFIRM_BTN_GAP3      (8)
 
+// 是否绘制正文（正文非空时对话框加高一行）——几何、绘制、命中三处必须同一口径
+static int32_t ui_confirm_modal_has_body(const Ui_Confirm_Modal *modal) {
+    return (modal->body != NULL && modal->body[0] != L'\0') ? 1 : 0;
+}
 
+// 几何计算（内部共用；with_body 决定对话框高度，with_bg 决定按钮行是两枚还是三枚）
+static void ui_confirm_modal_geom(Global_State *global_state, int32_t with_body, int32_t with_bg,
+    int32_t *out_dx, int32_t *out_dy, int32_t *out_h, int32_t *out_btn_y,
+    int32_t *out_btn_w, int32_t *out_btn_gap,
+    int32_t *out_confirm_x, int32_t *out_bg_x, int32_t *out_stay_x
+) {
+    int32_t h  = with_body ? UI_CONFIRM_DIALOG_H_MSG : UI_CONFIRM_DIALOG_H;
+    int32_t dx = ((int32_t)global_state->gfx->width - UI_CONFIRM_DIALOG_W) / 2;
+    int32_t dy = ((int32_t)global_state->gfx->height - h) / 2;
+    int32_t bw  = with_bg ? UI_CONFIRM_BTN_W3 : UI_CONFIRM_BTN_W;
+    int32_t gap = with_bg ? UI_CONFIRM_BTN_GAP3 : UI_CONFIRM_BTN_GAP;
+    int32_t n   = with_bg ? 3 : 2;
+    int32_t confirm_x = dx + (UI_CONFIRM_DIALOG_W - (bw * n + gap * (n - 1))) / 2;
 
+    *out_dx = dx;
+    *out_dy = dy;
+    *out_h = h;
+    *out_btn_y = dy + (with_body ? 66 : 54);
+    *out_btn_w = bw;
+    *out_btn_gap = gap;
+    *out_confirm_x = confirm_x;
+    *out_bg_x = confirm_x + (bw + gap);          // 仅 with_bg 有效
+    *out_stay_x = confirm_x + (bw + gap) * (n - 1);
+}
 
+// 按可用宽度截断一行文本（超出时以省略号结尾；从尾部逐字删，不改动前述码点）
+static void ui_confirm_modal_truncate(uint32_t font_id, wchar_t *line, size_t cap, int32_t max_w) {
+    size_t len = wcslen(line);
+    if (len == 0 || cap < 3) return;
+    if (gfx_font_measure_text(font_id, line) <= max_w) return;
+    if (len > cap - 2) len = cap - 2;   // 保证 line[len+1] 不越界
+    while (len > 0) {
+        line[len] = L'\u2026';
+        line[len + 1] = L'\0';
+        if (gfx_font_measure_text(font_id, line) <= max_w) return;
+        len--;
+    }
+    line[0] = L'\0';
+}
 
+// 单枚按钮的主题：确认=强调色，后台/留下=中性色。
+// 这里只设置 NORMAL/PRESSED 两态；其余态填充为同色，避免误用未初始化颜色。
+static void ui_confirm_modal_button_theme(Ui_Button_Theme *t, Global_State *gs, int32_t is_confirm) {
+    memset(t, 0, sizeof(*t));
+    int32_t light = (gs->ui_color_style == UI_COLOR_LIGHT) ? 1 : 0;
+
+    Ui_RGB normal, pressed, text;
+    if (is_confirm) {
+        normal  = light ? (Ui_RGB){17, 85, 238} : (Ui_RGB){16, 72, 176};
+        pressed = light ? (Ui_RGB){88, 142, 252} : (Ui_RGB){52, 122, 228};
+        text    = (Ui_RGB){240, 240, 240};
+    }
+    else {
+        normal  = light ? (Ui_RGB){224, 230, 234} : (Ui_RGB){46, 46, 50};
+        pressed = light ? (Ui_RGB){190, 198, 210} : (Ui_RGB){86, 90, 100};
+        text    = light ? (Ui_RGB){17, 17, 17} : (Ui_RGB){240, 240, 240};
+    }
+
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = normal;
+        t->fg[i] = text;
+        t->border[i] = normal;
+        t->bg_alpha[i] = 1;
+        t->border_alpha[i] = 1;
+    }
+    t->bg[UI_BTN_VIS_PRESSED] = pressed;
+    t->fg[UI_BTN_VIS_PRESSED] = text;
+    t->shadow_alpha = 0;
+}
+
+// 构造确认框的 2/3 枚按钮（几何与历史实现严格一致）。
+// with_bg=1：确认 / 后台 / 留下；with_bg=0：确认 / 留下。
+static void ui_confirm_modal_build_buttons(Global_State *gs, int32_t with_body, int32_t with_bg,
+                                          Ui_Button out[3], Ui_Button_Group *group) {
+    int32_t dx = 0, dy = 0, h = 0, btn_y = 0, confirm_x = 0, bg_x = 0, stay_x = 0;
+    int32_t btn_w = 0, btn_gap = 0;
+    ui_confirm_modal_geom(gs, with_body, with_bg, &dx, &dy, &h, &btn_y, &btn_w, &btn_gap,
+                          &confirm_x, &bg_x, &stay_x);
+    (void)dx; (void)dy; (void)h; (void)btn_gap;
+
+    uint32_t font_id = with_bg ? GFX_FONT_ALPHA_12 : GFX_FONT_ALPHA_16;
+    int16_t label_dy = with_bg ? -1 : 0; // 三按钮行比两按钮行整体上移 1px（历史排版）
+
+    int32_t n = 0;
+    ui_button_init(&out[n], UI_CONFIRM_BTN_CONFIRM, confirm_x, btn_y, btn_w, UI_CONFIRM_BTN_H);
+    out[n].style = UI_BTN_STYLE_ROUNDED;
+    out[n].radius = 6;
+    out[n].font_id = font_id;
+    out[n].label_dy = label_dy;
+    ui_button_set_text(&out[n], L"确认", NULL);
+    n++;
+
+    if (with_bg) {
+        ui_button_init(&out[n], UI_CONFIRM_BTN_BG, bg_x, btn_y, btn_w, UI_CONFIRM_BTN_H);
+        out[n].style = UI_BTN_STYLE_ROUNDED;
+        out[n].radius = 6;
+        out[n].font_id = font_id;
+        out[n].label_dy = label_dy;
+        ui_button_set_text(&out[n], L"后台", NULL);
+        n++;
+    }
+
+    ui_button_init(&out[n], UI_CONFIRM_BTN_STAY, stay_x, btn_y, btn_w, UI_CONFIRM_BTN_H);
+    out[n].style = UI_BTN_STYLE_ROUNDED;
+    out[n].radius = 6;
+    out[n].font_id = font_id;
+    out[n].label_dy = label_dy;
+    ui_button_set_text(&out[n], L"留下", NULL);
+    n++;
+
+    group->items = out;
+    group->count = n;
+    group->theme = NULL;
+    group->clip_x0 = 0;
+    group->clip_y0 = 0;
+    group->clip_x1 = 0;
+    group->clip_y1 = 0;
+}
+
+// 只取对话框本体几何（标题/正文/描边用；按钮几何由 ui_confirm_modal_build_buttons 负责）
+static void ui_confirm_modal_dialog_geom(Global_State *gs, int32_t with_body,
+                                        int32_t *out_dx, int32_t *out_dy, int32_t *out_h) {
+    int32_t btn_y = 0, btn_w = 0, btn_gap = 0;
+    int32_t confirm_x = 0, bg_x = 0, stay_x = 0;
+    ui_confirm_modal_geom(gs, with_body, 0, out_dx, out_dy, out_h,
+                          &btn_y, &btn_w, &btn_gap, &confirm_x, &bg_x, &stay_x);
+}
+
+// 绘制确认模态框（叠加在当前画面之上；全部元素圆角矩形）
+void ui_confirm_modal_draw(Global_State *global_state, const Ui_Confirm_Modal *modal) {
+    Nano_GFX *gfx = global_state->gfx;
+    int32_t dx = 0, dy = 0, h = 0;
+    int32_t has_body = ui_confirm_modal_has_body(modal);
+    const wchar_t *title = modal->title;
+
+    ui_confirm_modal_dialog_geom(global_state, has_body, &dx, &dy, &h);
+
+    // 配色随全局色彩风格
+    uint8_t border_R = 70,  border_G = 70,  border_B = 78;    // 对话框描边
+    uint8_t dlg_R = 24,     dlg_G = 24,     dlg_B = 28;       // 对话框底色
+    uint8_t text_R = 240,   text_G = 240,   text_B = 240;     // 文字
+    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
+        border_R = 180; border_G = 180; border_B = 190;
+        dlg_R = 250; dlg_G = 250; dlg_B = 252;
+        text_R = 17; text_G = 17; text_B = 17;
+    }
+    // 按下的是哪一枚（0 = 没有；1 确认 / 2 留下 / 3 后台）
+    int32_t armed = modal->armed;
+
+    // 描边 + 底色两层圆角矩形（外圈 2px 描边效果）
+    gfx_draw_rounded_rectangle(gfx, dx - 2, dy - 2, UI_CONFIRM_DIALOG_W + 4, h + 4,
+        8, 8, 8, 8, border_R, border_G, border_B, 1);
+    gfx_draw_rounded_rectangle(gfx, dx, dy, UI_CONFIRM_DIALOG_W, h,
+        6, 6, 6, 6, dlg_R, dlg_G, dlg_B, 1);
+
+    // 标题（调用方未给标题时退回历史文案）
+    {
+        wchar_t title_buf[40];
+        const wchar_t *t = (title != NULL && title[0] != L'\0') ? title : L"是否退出？";
+        wcsncpy(title_buf, t, sizeof(title_buf) / sizeof(title_buf[0]) - 1);
+        title_buf[sizeof(title_buf) / sizeof(title_buf[0]) - 1] = L'\0';
+        ui_confirm_modal_truncate(GFX_FONT_ALPHA_16, title_buf, sizeof(title_buf) / sizeof(title_buf[0]),
+                                  UI_CONFIRM_DIALOG_W - 16);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, title_buf,
+            (int32_t)gfx->width / 2, dy + 26, text_R, text_G, text_B, 1);
+    }
+
+    // 正文（可选；12px 字模，单行居中，超宽截断）
+    if (has_body) {
+        wchar_t body_buf[64];
+        wcsncpy(body_buf, modal->body, sizeof(body_buf) / sizeof(body_buf[0]) - 1);
+        body_buf[sizeof(body_buf) / sizeof(body_buf[0]) - 1] = L'\0';
+        ui_confirm_modal_truncate(GFX_FONT_ALPHA_12, body_buf, sizeof(body_buf) / sizeof(body_buf[0]),
+                                  UI_CONFIRM_DIALOG_W - 12);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, body_buf,
+            (int32_t)gfx->width / 2, dy + 46, text_R, text_G, text_B, 1);
+    }
+
+    // 按钮：确认（强调色） / [后台] / 留下（中性色）。
+    // 统一走通用按钮控件；按下态由 ui_button_label_cy() 自动给文字 +1px 下沉。
+    {
+        Ui_Button buttons[3];
+        Ui_Button_Group group;
+        ui_confirm_modal_build_buttons(global_state, has_body, modal->with_bg, buttons, &group);
+        for (int32_t i = 0; i < group.count; i++) {
+            Ui_Button_Theme theme;
+            ui_confirm_modal_button_theme(&theme, global_state, buttons[i].id == UI_CONFIRM_BTN_CONFIRM);
+            Ui_Button_Visual vis = (armed == buttons[i].id)
+                ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL;
+            ui_button_draw(gfx, &buttons[i], &theme, vis);
+        }
+    }
+
+    gfx_refresh(gfx);
+}
+
+// 命中判定：UI_CONFIRM_BTN_CONFIRM（1）/ STAY（2）/ BG（3），未命中为 NONE（0）
+int32_t ui_confirm_modal_hit(Global_State *global_state, const Ui_Confirm_Modal *modal,
+                             int32_t x, int32_t y) {
+    Ui_Button buttons[3];
+    Ui_Button_Group group;
+    ui_confirm_modal_build_buttons(global_state, ui_confirm_modal_has_body(modal), modal->with_bg,
+                                   buttons, &group);
+    int32_t id = ui_button_group_hit(&group, x, y);
+    return (id == UI_BTN_ID_NONE) ? UI_CONFIRM_BTN_NONE : id;
+}
+
+int32_t ui_confirm_modal_arm(Global_State *global_state, Ui_Confirm_Modal *modal,
+                             int32_t touching,
+                             int32_t down_x, int32_t down_y, int32_t cur_x, int32_t cur_y) {
+    // 高亮 = “现在松手会不会触发”：按下点与**当前点**都在同一枚按钮内才算。
+    // 于是拖出按钮立即变常态（也不再算按下），拖回来又亮；从外面拖进来的不算。
+    Ui_Button buttons[3];
+    Ui_Button_Group group;
+    ui_confirm_modal_build_buttons(global_state, ui_confirm_modal_has_body(modal), modal->with_bg,
+                                   buttons, &group);
+
+    int32_t armed = UI_CONFIRM_BTN_NONE;
+    if (touching) {
+        int32_t hit_down = ui_button_group_hit(&group, down_x, down_y);
+        if (hit_down != UI_BTN_ID_NONE &&
+            hit_down == ui_button_group_hit(&group, cur_x, cur_y)) {
+            armed = hit_down;
+        }
+    }
+    if (armed == modal->armed) return 0;
+    modal->armed = armed;
+    return 1;
+}
 
 
 // ===============================================================================

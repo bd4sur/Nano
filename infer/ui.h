@@ -436,6 +436,73 @@ void ui_draw_scroll_bar(Key_Event *key_event, Global_State *global_state, int32_
 
 
 // ===============================================================================
+// 确认模态框（全局复用组件，实现见 ui.c）
+//
+// 叠加式（overlay）确认框：在当前画面上叠加一层居中对话框，**不接管事件循环**、
+// 不做帧缓冲快照。事件语义（何时弹出、哪枚按钮算确认、确认后做什么）由调用方决定，
+// 本组件只负责几何、绘制、命中判定与按下反馈——所有确认框（电子核桃控制台退出、
+// 灵机 App 退出/删除确认、(native Ui) 的 (Ui.confirm 标题 正文) 等）因此共用同一份
+// 视觉与手感，不会各写一套。
+//
+// 三种形态由 Ui_Confirm_Modal 描述：
+//   · 两枚按钮「确认」「留下」（默认，84px 宽）；
+//   · 三枚按钮「确认」「后台」「留下」（with_bg=1，54px 宽）；
+//   · 可选正文（body 非空）——对话框自动加高一行（12px 字模，单行居中、超宽截断）。
+// ===============================================================================
+
+// 按钮 ID（ui_confirm_modal_hit / _arm 的返回值；UI_CONFIRM_BTN_NONE = 未命中）
+#define UI_CONFIRM_BTN_NONE    (0)
+#define UI_CONFIRM_BTN_CONFIRM (1) // 「确认」
+#define UI_CONFIRM_BTN_STAY    (2) // 「留下」
+#define UI_CONFIRM_BTN_BG      (3) // 「后台」（仅 with_bg=1 的三按钮形态）
+
+// 模态框描述（同时承载按下态）。title/body 为**借用指针**（不复制），调用方须保证
+// 其在框存续期间有效——通常是静态/全局缓冲。
+typedef struct Ui_Confirm_Modal {
+    const wchar_t *title; // 标题（NULL 或空串 → 默认“是否退出？”）
+    const wchar_t *body;  // 可选正文（NULL 或空串 → 无正文）
+    int32_t with_bg;      // 1=三枚按钮「确认」「后台」「留下」；0=两枚「确认」「留下」
+    int32_t armed;        // 按下态（UI_CONFIRM_BTN_*，由 _arm 维护；调用方勿手工设置）
+} Ui_Confirm_Modal;
+
+// 新弹一个框时调用：设置文案/形态并清掉按下态（否则上一个框的按下色会“带”到新框上）
+static inline void ui_confirm_modal_init(Ui_Confirm_Modal *modal,
+    const wchar_t *title, const wchar_t *body, int32_t with_bg) {
+    modal->title = title;
+    modal->body = body;
+    modal->with_bg = with_bg;
+    modal->armed = UI_CONFIRM_BTN_NONE;
+}
+
+// 叠加绘制（幂等：弹出时画一次、按下态变化时重画一次即可）
+void ui_confirm_modal_draw(Global_State *global_state, const Ui_Confirm_Modal *modal);
+
+// 命中判定：返回 UI_CONFIRM_BTN_*（NONE = 未命中）。
+// 按钮几何随 with_bg 与正文有无而变，故判定一律以同一个 modal 描述为准，
+// 保证与绘制严格一致。
+int32_t ui_confirm_modal_hit(Global_State *global_state, const Ui_Confirm_Modal *modal,
+                             int32_t x, int32_t y);
+
+// ---- 模态框按钮的「按下」反馈 --------------------------------------------------
+// 模态框是**叠加式**的：只在弹出时画一次，触屏结算发生在**松手沿**，所以若不额外
+// 处理，手指按住的那一刻看不出“到底选中了哪一枚”。调用方在事件循环里每帧报一次
+// 当前触点，绘制端据此把对应按钮画成「按下色」（底色调亮一档 + 标签下沉 1px）。
+//
+// **手势语义与宿主其它按钮一致（app/lib/button.scm 的 (BTN.track) 同款）**：
+//   · 按下 → 按住 → 松开，**三下都在同一枚按钮内**才算一次触发；
+//   · 按住后把手指拖出按钮 → 立即恢复常态、不再算按下；拖回来又亮；
+//   · 按下点不在按钮内（从外面拖进来）→ 不亮，也不会触发。
+// 所以高亮的判据就是“现在松手会不会触发”，两者严格同一口径：
+//   按下点命中 X 且**当前点**也命中 X。
+//
+//   touching = 当前是否按着；down_* = 本次手势按下点；cur_* = 当前触点
+//   返回 1 = 按下目标变了（调用方应重绘一次模态框；叠加式重绘是幂等的）
+int32_t ui_confirm_modal_arm(Global_State *global_state, Ui_Confirm_Modal *modal,
+                             int32_t touching,
+                             int32_t down_x, int32_t down_y, int32_t cur_x, int32_t cur_y);
+
+
+// ===============================================================================
 // 七段码
 // ===============================================================================
 
