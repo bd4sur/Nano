@@ -23,12 +23,16 @@
 ;;      · 变异概率：1.0 > 0.6 > 0.3 > 0.1（变异是唯一的取值探索手段）。
 ;;      · 种群：**6**（不是 64）——每代成本正比于 POP，而每代进度在 POP≈6 后饱和，
 ;;        所以小种群反而更快；交叉概率 0.5/0.9/0.3 差异在噪声内，保留 C 版的 0.5。
-;;      · 网格：保留 **16×16** 与 **32×32** 两档，右上角按钮（或 g/G 键）循环切换
-;;        （C 版固定 64×64 = 4096 基因）。浏览器 wasm32 实测（本版管线，POP=4）：
-;;          16×16   256 基因   ≈290 代/秒   收敛 ≈3 s   每格 8 px（默认，最快）
-;;          32×32  1024 基因   ≈175 代/秒   收敛 ≈41 s  每格 4 px（更清晰，慢 12×）
-;;        两档的最优算子完全相同（见下面的表），差别只在网格本身。像素边界由
-;;        (build-grid) 的边界表算出来，不要求 GRID 整除 128。
+;;      · 网格：**16×16 / 32×32 / 64×64** 三档，右上角按钮（或 g/G 键）循环切换
+;;        （C 版固定 64×64 = 4096 基因）。浏览器 wasm32 实测（本版管线）：
+;;          16×16   256 基因  POP=4  ≈290 代/秒   收敛 ≈3 s    每格 8 px（默认，最快）
+;;          32×32  1024 基因  POP=4  ≈175 代/秒   收敛 ≈41 s   每格 4 px
+;;          64×64  4096 基因  POP=6   ≈36 代/秒   err≈2e3 @2 min，≈6.7e2 @4 min  每格 2 px
+;;        64×64 就是 C 版的分辨率，但它天生慢一个量级：每代成本 ∝ 基因数，而"每代进度"
+;;        并不随基因数变快——同一套算子在 4096 基因上要跑几千代才收敛。64 档的搜索结论
+;;        与另两档略不同（见下面 ① 的表：POP=6、变异位点仍取 1；位点取 3~4 时前 60 s 更快
+;;        但 4 分钟后误差反而高 2 倍）。像素边界由 (build-grid) 的边界表算出来，
+;;        不要求 GRID 整除 128。
 ;; ② **全力计算、低频绘制**：一拍连续推进 BATCH 代（三通道各一代算一代），只每
 ;;    DRAW_EVERY 代画一帧（默认 24 代 → 16×16 档 ≈12 帧/秒、32×32 档 ≈7.5 帧/秒）。同时把本 App 的解释器
 ;;    时间片提到上限 (App.set_timeslice 1250000)，减少 JS↔wasm 的帧边界开销，
@@ -64,7 +68,7 @@
 (native Key)
 (native App)
 (import EX "app/lib/exit.scm")   ; 硬 A/ESC + 右上角按钮 → 宿主全局退出确认框
-(import BTN "app/lib/button.scm") ; 通用按钮控件（右上角「16×16 / 32×32」网格切换钮）
+(import BTN "app/lib/button.scm") ; 通用按钮控件（右上角「16×16 / 32×32 / 64×64」切换钮）
 
 ;; ---- 画布与布局 -------------------------------------------------------------
 
@@ -72,12 +76,12 @@
 (define SH (Gfx.height))                   ; 画布高（240）
 
 (define IMG_W 128)                         ; 合成图边长（与 C 版 64×2 相同）
-;; 两档基因网格（右上角按钮循环切换）：边长 16 / 32 → 基因数 256 / 1024。
+;; 三档基因网格（右上角按钮循环切换）：边长 16 / 32 / 64 → 基因数 256 / 1024 / 4096。
 ;; 每格在屏幕上的像素边界由 (build-grid) 算成边界表 bx/by（GRID+1 项），因此不要求整除 128。
-(define grids   '(16 32))
+(define grids   '(16 32 64))
 (define GRID 16)                           ; 当前网格边长（由 load-grid 设置）
 (define N 256)                             ; 当前单通道基因数（GRID²）
-(define grid-idx 0)                        ; 当前网格在 grids 里的下标（0=16、1=32）
+(define grid-idx 0)                        ; 当前网格在 grids 里的下标（0=16、1=32、2=64）
 (define bx (cdr (cons 0 '())))
 (define by (cdr (cons 0 '())))
 (define OX (Math.floor (/ (- SW IMG_W) 2)))   ; 图像左上角 x（居中）
@@ -94,15 +98,17 @@
 (define DRAW_EVERY 24)                     ; 每多少代画一帧（≈2~3 帧/秒）
 
 ;; ---- 算子参数（**逐网格**实测重选，见头部 ① 的两张表）---------------------------
-;; 下表下标与 grids 一一对应（16 / 32）。搜索结论：两档的最优算子完全相同
+;; 下表下标与 grids 一一对应（16 / 32 / 64）。搜索结论：
+;;   16/32 档：POP=4、tour5、pc=0.5、pm=1.0、位点 1（两档完全相同）
+;;   64 档  ：POP=6、其余同上（POP 4/5/6/8 × 位点 1/2/3/4 实测，见 doc/AGENTS.md）
 ;; （POP=4、锦标赛 5 元、交叉 0.5、每子代 1 个变异位点、变异取值全量程 255），
 ;; 差别只在网格本身（→ 代速率与收敛时间）。若以后某一档要单独调，改对应元素即可。
 
-(define cfg-pop   '(4 4))                    ; 种群规模（C 版 64）
-(define cfg-tour  '(5 5))                    ; 锦标赛选择规模（C 版是轮盘赌）
-(define cfg-pc    '(0.5 0.5))                ; 交叉概率（同 C 版 G_CROSSOVER_PROB）
-(define cfg-pm    '(1.0 1.0))                ; 变异概率（C 版 0.1）
-(define cfg-sites '(1 1))                    ; 每个子代的变异位点数（C 版固定 1）
+(define cfg-pop   '(4 4 6))                  ; 种群规模（C 版 64）；64 档实测 6 最快
+(define cfg-tour  '(5 5 5))                  ; 锦标赛选择规模（C 版是轮盘赌）
+(define cfg-pc    '(0.5 0.5 0.5))            ; 交叉概率（同 C 版 G_CROSSOVER_PROB）
+(define cfg-pm    '(1.0 1.0 1.0))            ; 变异概率（C 版 0.1）
+(define cfg-sites '(1 1 1))                  ; 每个子代的变异位点数（C 版固定 1）
 (define MUT_RANGE 255)                     ; 变异取值上界（C 版写 [0,1)，见头部 ①）
 
 (define POP 4)                             ; 当前种群规模（由 load-grid 按 cfg-pop 设置）
@@ -422,11 +428,11 @@
     (Gfx.draw_text (String.concat "演化算法 | 代数:" (String.atom_to_string gen)) 0 0 255 255 255)
     (Gfx.draw_text_centered 1 "点此重新演化" (Math.floor (/ SW 2)) (- SH 12) 255 255 255 1)
     (EX.draw_button)
-    (BTN.draw_state gbtn (BTN.armed gbtn))   ; 右上角「16×16 / 32×32」切换钮
+    (BTN.draw_state gbtn (BTN.armed gbtn))   ; 右上角「16×16 / 32×32 / 64×64」切换钮
     (Gfx.refresh)
   }))
 
-;; 按钮上的网格标签（"16×16" / "32×32"）
+;; 按钮上的网格标签（"16×16" / "32×32" / "64×64"）
 (define grid-label
   (lambda ()
     (String.concat (String.atom_to_string GRID) (String.concat "×" (String.atom_to_string GRID)))))
@@ -463,11 +469,11 @@
     (draw-frame)
   }))
 
-;; 循环切换 16 → 32 → 16
+;; 循环切换 16 → 32 → 64 → 16
 (define cycle-grid
   (lambda () {
     (define i (+ grid-idx 1))
-    (if (>= i 2) (set! i 0) #f)
+    (if (>= i 3) (set! i 0) #f)
     (load-grid i)
   }))
 
@@ -502,7 +508,7 @@
     (set! k (Key.take_press))
     (while (not (== k 0)) {
       (if (or (== k 13) (== k 100) (== k 68)) (restart) #f)
-      (if (or (== k 103) (== k 71)) (cycle-grid) #f)   ; g/G：切换网格 16/32
+      (if (or (== k 103) (== k 71)) (cycle-grid) #f)   ; g/G：切换网格 16/32/64
       (set! k (Key.take_press)) })
   }))
 
