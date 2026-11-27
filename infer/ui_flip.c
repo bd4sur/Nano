@@ -24,6 +24,7 @@
 
 #include "graphics.h"
 #include "hal_key.h"
+#include "ui_button.h"
 #include "hal_misc.h"     // set_vibration：沙漏流完后的振动报警
 #include "platform.h"
 #include "ui_color.h"
@@ -406,29 +407,100 @@ static void flip_ui_bg(Nano_GFX *g, const Flip_Ui_Palette *p) {
     }
 }
 
-// 按钮：state 0=常态 1=按下 2=选中 3=关闭态（弱化）
+static Ui_RGB flip_ui_rgb(const uint8_t c[3]) {
+    return (Ui_RGB){c[0], c[1], c[2]};
+}
+
+static Ui_RGB flip_ui_blend_rgb(const uint8_t base[3], const uint8_t over[3], uint8_t alpha) {
+    int32_t a = alpha;
+    return (Ui_RGB){
+        (uint8_t)(((int32_t)base[0] * (255 - a) + (int32_t)over[0] * a) / 255),
+        (uint8_t)(((int32_t)base[1] * (255 - a) + (int32_t)over[1] * a) / 255),
+        (uint8_t)(((int32_t)base[2] * (255 - a) + (int32_t)over[2] * a) / 255),
+    };
+}
+
+// 通用按钮主题：FLIP 的底色/描边/选中色。
+// kind: 0=普通（常态文字为主色），1=关闭态（常态文字弱化、按下恢复主色），2=分段控件。
+static void flip_ui_button_theme(Ui_Button_Theme *t, const Flip_Ui_Palette *p,
+                                 int32_t kind, int32_t with_border) {
+    memset(t, 0, sizeof(*t));
+
+    Ui_RGB surface = flip_ui_rgb(p->surface);
+    Ui_RGB press   = flip_ui_rgb(p->surface_press);
+    Ui_RGB edge    = flip_ui_rgb(p->surface_edge);
+    Ui_RGB accent  = flip_ui_rgb(p->accent);
+    Ui_RGB accentd = flip_ui_rgb(p->accent_dim);
+    Ui_RGB on      = flip_ui_rgb(p->on_accent);
+    Ui_RGB text    = flip_ui_rgb(p->text);
+    Ui_RGB dim     = flip_ui_rgb(p->dim);
+
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = surface;
+        t->fg[i] = text;
+        t->border[i] = edge;
+        t->bg_alpha[i] = 1;
+        t->border_alpha[i] = with_border ? 1 : 0;
+    }
+
+    t->bg[UI_BTN_VIS_PRESSED] = press;
+    t->bg[UI_BTN_VIS_SELECTED] = accent;
+    t->fg[UI_BTN_VIS_SELECTED] = on;
+    t->bg[UI_BTN_VIS_SELECTED_PRESSED] = accentd;
+    t->fg[UI_BTN_VIS_SELECTED_PRESSED] = on;
+    t->border_alpha[UI_BTN_VIS_SELECTED] = 0;
+    t->border_alpha[UI_BTN_VIS_SELECTED_PRESSED] = 0;
+
+    t->bg[UI_BTN_VIS_DISABLED] = surface;
+    t->fg[UI_BTN_VIS_DISABLED] = dim;
+
+    if (kind == 1) {
+        t->fg[UI_BTN_VIS_NORMAL] = dim;
+        t->fg[UI_BTN_VIS_PRESSED] = text;
+    }
+    else if (kind == 2) {
+        // 分段控件：常态不画底（露出容器底色），只在按下/选中时画格内底色
+        t->bg_alpha[UI_BTN_VIS_NORMAL] = 0;
+        t->bg_alpha[UI_BTN_VIS_PRESSED] = 1;
+        t->bg[UI_BTN_VIS_PRESSED] = press;
+        t->fg[UI_BTN_VIS_NORMAL] = dim;
+        t->fg[UI_BTN_VIS_PRESSED] = dim;
+        t->border_alpha[UI_BTN_VIS_NORMAL] = 0;
+        t->border_alpha[UI_BTN_VIS_PRESSED] = 0;
+    }
+}
+
+// 按钮：state 0=常态 1=按下 2=选中 3=关闭态（弱化） 4=选中按下
 static void flip_ui_button(Nano_GFX *g, const Flip_Ui_Palette *p,
                            int32_t x, int32_t y, int32_t w, int32_t h, int32_t r,
                            const wchar_t *label, int32_t state) {
     if (w <= 0 || h <= 0) return;
-    if (state == 2) {
-        flip_ui_round(g, x, y, w, h, r, p->accent, 1);
-        flip_ui_text_centered(g, GFX_FONT_ALPHA_12, label, x + w / 2, y + h / 2, p->on_accent, 1);
-        return;
-    }
-    if (state == 1) {
-        flip_ui_round(g, x, y, w, h, r, p->surface_press, 1);
-        flip_ui_round(g, x, y, w, h, r, p->accent, 90);
-    }
-    else {
-        flip_ui_round(g, x, y, w, h, r, p->surface, 1);
-    }
-    // 1px 描边（外圈描边色 + 内圈底色，圆角一致）
-    flip_ui_round(g, x, y, w, h, r, p->surface_edge, 1);
-    flip_ui_round(g, x + 1, y + 1, w - 2, h - 2, r - 1,
-                  (state == 1) ? p->surface_press : p->surface, 1);
-    flip_ui_text_centered(g, GFX_FONT_ALPHA_12, label, x + w / 2, y + h / 2,
-                          (state == 3) ? p->dim : p->text, 1);
+
+    Ui_Button b;
+    Ui_Button_Theme t;
+    ui_button_init(&b, 0, x, y, w, h);
+    b.style = UI_BTN_STYLE_ROUNDED;
+    b.radius = (int16_t)r;
+    b.flags = UI_BTN_FLAG_DRAW_BG | UI_BTN_FLAG_DRAW_BORDER;
+    b.font_id = GFX_FONT_ALPHA_12;
+    ui_button_set_text(&b, label, NULL);
+
+    flip_ui_button_theme(&t, p, (state == 3) ? 1 : 0, 1);
+
+    Ui_Button_Visual vis = UI_BTN_VIS_NORMAL;
+    if (state == 1) vis = UI_BTN_VIS_PRESSED;
+    else if (state == 2) vis = UI_BTN_VIS_SELECTED;
+    else if (state == 4) vis = UI_BTN_VIS_SELECTED_PRESSED;
+
+    ui_button_draw(g, &b, &t, vis);
+}
+
+// 通用矩形命中（FLIP 的按钮都是矩形；圆角只影响外观，不影响命中）
+static int32_t flip_ui_rect_hit(int32_t x, int32_t y, int32_t w, int32_t h,
+                                int32_t px, int32_t py) {
+    Ui_Button b;
+    ui_button_init(&b, 0, x, y, w, h);
+    return ui_button_hit(&b, px, py);
 }
 
 // ---- 顶栏 ------------------------------------------------------------------
@@ -460,15 +532,22 @@ static void flip_ui_draw_header(Key_Event *key_event, Global_State *global_state
     }
 
     // 模式切换胶囊：沙漏 ⇄ 自由流体（文字是“将要切换到的模式”）
-    int32_t mode_pressed = (pressed == FLIP_UI_MODE);
-    flip_ui_round(g, u->mode_x, u->mode_y, u->mode_w, u->mode_h, u->mode_r,
-                  mode_pressed ? p->surface_press : p->surface, 1);
-    flip_ui_round(g, u->mode_x, u->mode_y, u->mode_w, u->mode_h, u->mode_r,
-                  mode_pressed ? p->accent : p->surface_edge, 1);
-    flip_ui_round(g, u->mode_x + 1, u->mode_y + 1, u->mode_w - 2, u->mode_h - 2,
-                  u->mode_r - 1, mode_pressed ? p->surface_press : p->surface, 1);
-    flip_ui_text_centered(g, GFX_FONT_ALPHA_12, s_ui_flip_free_mode ? L"沙漏" : L"自由",
-                          u->mode_x + u->mode_w / 2, u->mode_y + u->mode_h / 2, p->accent, 1);
+    {
+        Ui_Button b;
+        Ui_Button_Theme t;
+        ui_button_init(&b, FLIP_UI_MODE, u->mode_x, u->mode_y, u->mode_w, u->mode_h);
+        b.style = UI_BTN_STYLE_PILL;
+        b.radius = (int16_t)u->mode_r;
+        b.flags = UI_BTN_FLAG_DRAW_BG | UI_BTN_FLAG_DRAW_BORDER;
+        b.font_id = GFX_FONT_ALPHA_12;
+        ui_button_set_text(&b, s_ui_flip_free_mode ? L"沙漏" : L"自由", NULL);
+        flip_ui_button_theme(&t, p, 0, 1);
+        t.fg[UI_BTN_VIS_NORMAL] = flip_ui_rgb(p->accent);
+        t.fg[UI_BTN_VIS_PRESSED] = flip_ui_rgb(p->accent);
+        t.border[UI_BTN_VIS_PRESSED] = flip_ui_rgb(p->accent);
+        ui_button_draw(g, &b, &t,
+                       (pressed == FLIP_UI_MODE) ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
+    }
 
     // 数码计时：MM:SS + 百分秒（右对齐到退出按钮左侧）
     int32_t total_sec = (int32_t)(elapsed_ms / 1000u);
@@ -494,16 +573,21 @@ static void flip_ui_draw_header(Key_Event *key_event, Global_State *global_state
     flip_ui_text(g, GFX_FONT_ALPHA_12, cstr, tx + tw + 2 * u->seg_gap, cy_top, p->dim, 1);
 
     // 退出按钮
-    int32_t exit_state = (pressed == FLIP_UI_EXIT) ? 1 : 0;
-    flip_ui_round(g, u->exit_x, u->exit_y, u->exit_w, u->exit_h, u->exit_r,
-                  (exit_state == 1) ? p->surface_press : p->surface, 1);
-    flip_ui_round(g, u->exit_x, u->exit_y, u->exit_w, u->exit_h, u->exit_r,
-                  (exit_state == 1) ? p->accent : p->surface_edge, 1);
-    flip_ui_round(g, u->exit_x + 1, u->exit_y + 1, u->exit_w - 2, u->exit_h - 2,
-                  u->exit_r - 1, (exit_state == 1) ? p->surface_press : p->surface, 1);
-    flip_ui_text_centered(g, GFX_FONT_ALPHA_12, L"退出",
-                          u->exit_x + u->exit_w / 2, u->exit_y + u->exit_h / 2,
-                          (exit_state == 1) ? p->accent : p->text, 1);
+    {
+        Ui_Button b;
+        Ui_Button_Theme t;
+        ui_button_init(&b, FLIP_UI_EXIT, u->exit_x, u->exit_y, u->exit_w, u->exit_h);
+        b.style = UI_BTN_STYLE_PILL;
+        b.radius = (int16_t)u->exit_r;
+        b.flags = UI_BTN_FLAG_DRAW_BG | UI_BTN_FLAG_DRAW_BORDER;
+        b.font_id = GFX_FONT_ALPHA_12;
+        ui_button_set_text(&b, L"退出", NULL);
+        flip_ui_button_theme(&t, p, 0, 1);
+        t.fg[UI_BTN_VIS_PRESSED] = flip_ui_rgb(p->accent);
+        t.border[UI_BTN_VIS_PRESSED] = flip_ui_rgb(p->accent);
+        ui_button_draw(g, &b, &t,
+                       (pressed == FLIP_UI_EXIT) ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
+    }
 
     // 顶栏分隔线
     gfx_draw_rectangle(g, 0, u->header_h - 1, (uint32_t)u->w, 1,
@@ -854,24 +938,34 @@ static void flip_ui_draw_free_rails(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui
     flip_ui_text_centered(g, GFX_FONT_ALPHA_12, L"无节流", u->rrail_cx, y_caption, p->dim, 1);
 }
 
+// 配色胶囊内容：强调色圆点 + 「配色」；文字跟随通用按下位移，圆点保持原位
+static void flip_ui_palette_content(Nano_GFX *g, const Ui_Button *b,
+                                    int32_t base_cx, int32_t base_cy,
+                                    Ui_Button_Visual vis, void *user) {
+    const Flip_Ui_Palette *p = (const Flip_Ui_Palette *)user;
+    int32_t group = 6 + 3 + 24;
+    int32_t gx = base_cx - group / 2;
+    int32_t ty = ui_button_label_cy(b, vis);
+    flip_ui_circle(g, gx + 3, base_cy, 3, p->accent, 1);
+    flip_ui_text(g, GFX_FONT_ALPHA_12, L"配色", gx + 9, ty - 7, p->text, 1);
+}
+
 // ---- 「配色」胶囊（底部控制条；打开模态色板）--------------------------------
 static void flip_ui_draw_palette_pill(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palette *p,
                                       int32_t pressed) {
-    int32_t x = u->pal_x, y = u->btn_y, w = u->pal_w, h = u->btn_h;
-    int32_t st = (pressed == FLIP_UI_PALETTE) ? 1 : 0;
-    // 与普通按钮同一描边风格：外圈描边色 + 内圈底色
-    flip_ui_round(g, x, y, w, h, u->btn_r, p->surface_edge, 1);
-    flip_ui_round(g, x + 1, y + 1, w - 2, h - 2, u->btn_r - 1,
-                  st ? p->surface_press : p->surface, 1);
-    if (st) {
-        flip_ui_round(g, x + 1, y + 1, w - 2, h - 2, u->btn_r - 1, p->accent, 70);
-    }
-    // 当前强调色圆点 + 「配色」
-    int32_t group = 6 + 3 + 24;
-    int32_t gx = x + (w - group) / 2;
-    int32_t cy = y + h / 2;
-    flip_ui_circle(g, gx + 3, cy, 3, p->accent, 1);
-    flip_ui_text(g, GFX_FONT_ALPHA_12, L"配色", gx + 9, cy - 7, p->text, 1);
+    Ui_Button b;
+    Ui_Button_Theme t;
+    ui_button_init(&b, FLIP_UI_PALETTE, u->pal_x, u->btn_y, u->pal_w, u->btn_h);
+    b.style = UI_BTN_STYLE_ROUNDED;
+    b.radius = (int16_t)u->btn_r;
+    b.flags = UI_BTN_FLAG_DRAW_BG | UI_BTN_FLAG_DRAW_BORDER;
+    b.font_id = GFX_FONT_ALPHA_12;
+    b.content_draw = flip_ui_palette_content;
+    b.content_user = (void *)p;
+
+    flip_ui_button_theme(&t, p, 0, 1);
+    ui_button_draw(g, &b, &t,
+                   (pressed == FLIP_UI_PALETTE) ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
 }
 
 // ---- 底部控制条 ------------------------------------------------------------
@@ -891,28 +985,31 @@ static void flip_ui_draw_dock(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palet
     flip_ui_round(g, gx, gy, gw, gh, u->btn_r, p->surface_edge, 1);
     flip_ui_round(g, gx + 1, gy + 1, gw - 2, gh - 2, u->btn_r - 1, p->surface, 1);
     static const wchar_t *view_labels[3] = { L"粒子", L"网格", L"叠加" };
+    Ui_Button_Theme seg_theme;
+    flip_ui_button_theme(&seg_theme, p, 2, 0);
     for (int32_t i = 0; i < 3; i++) {
         int32_t cx = gx + u->view_cell_w * i;
         int32_t cw = u->view_cell_w;
         if (i == 2) cw = gx + gw - cx;
         int32_t selected = (s_ui_flip_setting_count == i);
-        if (selected) {
-            flip_ui_round(g, cx + 2, gy + 2, cw - 4, gh - 4, u->btn_r - 2, p->accent, 1);
-        }
-        else if (pressed == FLIP_UI_VIEW && pressed_view == i) {
-            flip_ui_round(g, cx + 2, gy + 2, cw - 4, gh - 4, u->btn_r - 2, p->surface_press, 1);
-        }
-        flip_ui_text_centered(g, GFX_FONT_ALPHA_12, view_labels[i], cx + cw / 2, gy + gh / 2,
-                              selected ? p->on_accent : p->dim, 1);
+        int32_t is_pressed = (pressed == FLIP_UI_VIEW && pressed_view == i);
+
+        Ui_Button b;
+        ui_button_init(&b, i, cx + 2, gy + 2, cw - 4, gh - 4);
+        b.style = UI_BTN_STYLE_ROUNDED;
+        b.radius = (int16_t)(u->btn_r - 2);
+        b.flags = UI_BTN_FLAG_DRAW_BG;
+        b.font_id = GFX_FONT_ALPHA_12;
+        ui_button_set_text(&b, view_labels[i], NULL);
+
+        Ui_Button_Visual vis = selected ? UI_BTN_VIS_SELECTED
+                            : (is_pressed ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
+        ui_button_draw(g, &b, &seg_theme, vis);
     }
 
     // 节流开关（自由流体模式下节流机制整体关闭：画成不可用指示，不响应点按）
     if (free_mode) {
-        flip_ui_round(g, u->thr_x, u->btn_y, u->thr_w, u->btn_h, u->btn_r, p->surface_edge, 1);
-        flip_ui_round(g, u->thr_x + 1, u->btn_y + 1, u->thr_w - 2, u->btn_h - 2,
-                      u->btn_r - 1, p->surface, 1);
-        flip_ui_text_centered(g, GFX_FONT_ALPHA_12, L"节流 -",
-                              u->thr_x + u->thr_w / 2, u->btn_y + u->btn_h / 2, p->dim, 1);
+        flip_ui_button(g, p, u->thr_x, u->btn_y, u->thr_w, u->btn_h, u->btn_r, L"节流 -", 3);
     }
     else {
         wchar_t thr_label[16];
@@ -921,21 +1018,12 @@ static void flip_ui_draw_dock(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palet
         thr_label[15] = L'\0';
         int32_t thr_state;
         if (s_ui_flip_is_throttle) {
-            thr_state = 2;
-            if (pressed == FLIP_UI_THROTTLE) {
-                // 选中态按下：用稍暗的强调色反馈
-                flip_ui_round(g, u->thr_x, u->btn_y, u->thr_w, u->btn_h, u->btn_r, p->accent_dim, 1);
-                flip_ui_text_centered(g, GFX_FONT_ALPHA_12, thr_label,
-                                      u->thr_x + u->thr_w / 2, u->btn_y + u->btn_h / 2, p->on_accent, 1);
-                thr_state = -1;
-            }
+            thr_state = (pressed == FLIP_UI_THROTTLE) ? 4 : 2;
         }
         else {
             thr_state = (pressed == FLIP_UI_THROTTLE) ? 1 : 3;
         }
-        if (thr_state >= 0) {
-            flip_ui_button(g, p, u->thr_x, u->btn_y, u->thr_w, u->btn_h, u->btn_r, thr_label, thr_state);
-        }
+        flip_ui_button(g, p, u->thr_x, u->btn_y, u->thr_w, u->btn_h, u->btn_r, thr_label, thr_state);
     }
 
     // 配色
@@ -947,6 +1035,36 @@ static void flip_ui_draw_dock(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Palet
     flip_ui_text_centered(g, GFX_FONT_ALPHA_12, L"流量", u->stat_cx, u->stat_y1, p->dim, 1);
     flip_ui_text_centered(g, GFX_FONT_ALPHA_12, flow_str, u->stat_cx, u->stat_y2,
                           (flow_per_sec < 0.5f) ? p->dim : p->accent, 1);
+}
+
+// 单个色块按钮：底色=画风强调色，按下=叠一层文字色（70/255），文字=强调色上的对比色
+static void flip_ui_swatch_button(const Flip_Ui *u, int32_t i, int32_t is_light,
+                                  Ui_Button *b, Ui_Button_Theme *t) {
+    int32_t sx = u->sw_x + i * (u->sw_w + u->sw_gap);
+    const uint8_t *a = flip_style_accent(i, is_light);
+    uint8_t on[3];
+    flip_style_on_accent(a, on);
+
+    ui_button_init(b, i, sx, u->sw_y, u->sw_w, u->sw_h);
+    b->style = UI_BTN_STYLE_ROUNDED;
+    b->radius = (int16_t)u->sw_r;
+    b->flags = UI_BTN_FLAG_DRAW_BG;
+    b->font_id = GFX_FONT_ALPHA_12;
+    ui_button_set_text(b, flip_style_names[i], NULL);
+
+    Ui_RGB base = flip_ui_rgb(a);
+    Ui_RGB onto = flip_ui_rgb(on);
+    Ui_RGB press = flip_ui_blend_rgb(a, on, 70);
+    memset(t, 0, sizeof(*t));
+    for (int32_t k = 0; k < UI_BTN_VIS_COUNT; k++) {
+        t->bg[k] = base;
+        t->fg[k] = onto;
+        t->border[k] = onto;
+        t->bg_alpha[k] = 1;
+        t->border_alpha[k] = 0;
+    }
+    t->bg[UI_BTN_VIS_PRESSED] = press;
+    t->fg[UI_BTN_VIS_PRESSED] = onto;
 }
 
 // ---- 配色选择弹层（模态：半透明遮罩 + 居中卡片 + 5 个大色块）-----------------
@@ -963,21 +1081,17 @@ static void flip_ui_draw_picker(Nano_GFX *g, const Flip_Ui *u, const Flip_Ui_Pal
 
     for (int32_t i = 0; i < FLIP_COLOR_STYLES; i++) {
         int32_t sx = u->sw_x + i * (u->sw_w + u->sw_gap);
-        const uint8_t *a = flip_style_accent(i, is_light);
-        uint8_t on[3];
-        flip_style_on_accent(a, on);
-        // 选中：2px 描边环（先画大一圈的环，再画色块，留下 2px 边）
+        // 选中环保持原样：画在色块外侧的 2px 描边（装饰层，不属于按钮命中区）
         if (i == s_ui_flip_color_style) {
             flip_ui_round(g, sx - 2, u->sw_y - 2, u->sw_w + 4, u->sw_h + 4,
                           u->sw_r + 2, p->text, 1);
         }
-        flip_ui_round(g, sx, u->sw_y, u->sw_w, u->sw_h, u->sw_r, a, 1);
-        if (i == pressed_idx) {
-            // 按下：叠一层文字色（亮底变暗、暗底变亮）
-            flip_ui_round(g, sx, u->sw_y, u->sw_w, u->sw_h, u->sw_r, on, 70);
-        }
-        flip_ui_text_centered(g, GFX_FONT_ALPHA_12, flip_style_names[i],
-                              sx + u->sw_w / 2, u->sw_y + u->sw_h / 2, on, 1);
+
+        Ui_Button b;
+        Ui_Button_Theme t;
+        flip_ui_swatch_button(u, i, is_light, &b, &t);
+        ui_button_draw(g, &b, &t,
+                       (i == pressed_idx) ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
     }
 }
 
@@ -1232,21 +1346,20 @@ void ui_flip_render_frame(Key_Event *key_event, Global_State *global_state) {
 
 // ---- 触屏命中判定（画风分段控件返回整组，另用 view_index 区分格子）---------
 static int32_t flip_ui_hit(const Flip_Ui *u, int32_t x, int32_t y) {
-    if (x >= u->exit_x && x < u->exit_x + u->exit_w &&
-        y >= u->exit_y && y < u->exit_y + u->exit_h) {
+    if (flip_ui_rect_hit(u->exit_x, u->exit_y, u->exit_w, u->exit_h, x, y)) {
         return FLIP_UI_EXIT;
     }
     // 顶栏模式切换胶囊（沙漏 ⇄ 自由流体）
-    if (x >= u->mode_x && x < u->mode_x + u->mode_w &&
-        y >= u->mode_y && y < u->mode_y + u->mode_h) {
+    if (flip_ui_rect_hit(u->mode_x, u->mode_y, u->mode_w, u->mode_h, x, y)) {
         return FLIP_UI_MODE;
     }
     if (y >= u->btn_y && y < u->btn_y + u->btn_h) {
-        if (x >= u->reset_x && x < u->reset_x + u->reset_w) return FLIP_UI_RESET;
-        if (x >= u->view_x && x < u->view_x + u->view_w) return FLIP_UI_VIEW;
+        if (flip_ui_rect_hit(u->reset_x, u->btn_y, u->reset_w, u->btn_h, x, y)) return FLIP_UI_RESET;
+        if (flip_ui_rect_hit(u->view_x, u->btn_y, u->view_w, u->btn_h, x, y)) return FLIP_UI_VIEW;
         // 自由流体模式关闭节流机制：节流开关不响应
-        if (!s_ui_flip_free_mode && x >= u->thr_x && x < u->thr_x + u->thr_w) return FLIP_UI_THROTTLE;
-        if (x >= u->pal_x && x < u->pal_x + u->pal_w) return FLIP_UI_PALETTE;
+        if (!s_ui_flip_free_mode &&
+            flip_ui_rect_hit(u->thr_x, u->btn_y, u->thr_w, u->btn_h, x, y)) return FLIP_UI_THROTTLE;
+        if (flip_ui_rect_hit(u->pal_x, u->btn_y, u->pal_w, u->btn_h, x, y)) return FLIP_UI_PALETTE;
     }
     // 右仪表：轨道上下各放宽一个推钮半径，便于点按/拖动；标签与读数区不响应
     // （自由模式右栏是模式信息，没有节流滑杆）
@@ -1270,12 +1383,9 @@ static int32_t flip_ui_view_index(const Flip_Ui *u, int32_t x) {
 
 // 配色色块命中（返回 0..4，未命中 -1）；与弹层绘制共用同一份几何
 static int32_t flip_ui_swatch_hit(const Flip_Ui *u, int32_t x, int32_t y) {
-    if (y < u->sw_y || y >= u->sw_y + u->sw_h) {
-        return FLIP_UI_NONE;
-    }
     for (int32_t i = 0; i < FLIP_COLOR_STYLES; i++) {
         int32_t sx = u->sw_x + i * (u->sw_w + u->sw_gap);
-        if (x >= sx && x < sx + u->sw_w) return i;
+        if (flip_ui_rect_hit(sx, u->sw_y, u->sw_w, u->sw_h, x, y)) return i;
     }
     return FLIP_UI_NONE;
 }

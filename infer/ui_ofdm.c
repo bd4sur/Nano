@@ -25,6 +25,7 @@
 #include "hal_audio_out.h"
 #include "hal_audio_in.h"
 #include "hal_key.h"
+#include "ui_button.h"
 #include "ui_color.h"
 
 // 发射音量：跟随全局主音量（global_state->volume，系统设置中调节）。
@@ -503,6 +504,7 @@ static void ofdm_msg_store_free(void);
 
 static int32_t s_hub_sel = 0;
 static OFDM_Tap s_hub_tap;
+static Ui_Button_Tracker s_hub_btn_tracker;
 
 // 发射/环路自测输入编辑器的默认文本（火腿呼叫 + 测试文）
 static const wchar_t OFDM_DEFAULT_TX_TEXT[] =
@@ -572,6 +574,93 @@ static void ofdm_hub_card_rect(Global_State *gs, int32_t idx, int32_t *x, int32_
     *y = OFDM_HDR_H + 4 + (idx / 2) * (*h + gap);
 }
 
+typedef struct {
+    Global_State *gs;
+    const OFDM_Palette *p;
+    OFDM_RGB accent;
+    OFDM_RGB soft;
+    int32_t idx;
+} OFDM_Hub_Content;
+
+// 模式卡主题：选中只换底/文字色，不再用强调色边框或左侧竖线标记。
+static void ofdm_hub_button_theme(Ui_Button_Theme *t, const OFDM_Palette *p,
+                                  const OFDM_RGB *accent, const OFDM_RGB *soft) {
+    memset(t, 0, sizeof(*t));
+    Ui_RGB panel = {p->panel.r, p->panel.g, p->panel.b};
+    Ui_RGB edge  = {p->edge.r, p->edge.g, p->edge.b};
+    Ui_RGB track = {p->track.r, p->track.g, p->track.b};
+    Ui_RGB text  = {p->text.r, p->text.g, p->text.b};
+    Ui_RGB sel   = {soft->r, soft->g, soft->b};
+    Ui_RGB sel_fg= {accent->r, accent->g, accent->b};
+
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = panel;
+        t->fg[i] = text;
+        t->border[i] = edge;
+        t->bg_alpha[i] = 1;
+        t->border_alpha[i] = 1;
+    }
+    t->bg[UI_BTN_VIS_PRESSED] = track;
+    t->fg[UI_BTN_VIS_PRESSED] = text;
+    t->bg[UI_BTN_VIS_SELECTED] = sel;
+    t->fg[UI_BTN_VIS_SELECTED] = sel_fg;
+    t->bg[UI_BTN_VIS_SELECTED_PRESSED] = sel;
+    t->fg[UI_BTN_VIS_SELECTED_PRESSED] = sel_fg;
+}
+
+// 模式卡内容：徽标 / 标题 / 说明 / 右下序号。按下时文字下沉 1px。
+static void ofdm_hub_content(Nano_GFX *g, const Ui_Button *b,
+                             int32_t base_cx, int32_t base_cy,
+                             Ui_Button_Visual vis, void *user) {
+    (void)base_cx;
+    (void)base_cy;
+    const OFDM_Hub_Content *c = (const OFDM_Hub_Content *)user;
+    Global_State *gs = c->gs;
+    const OFDM_Palette *p = c->p;
+    int32_t i = c->idx;
+    int32_t x = b->x, y = b->y, w = b->w, h = b->h;
+    int32_t selected = (vis == UI_BTN_VIS_SELECTED || vis == UI_BTN_VIS_SELECTED_PRESSED);
+    int32_t press_dy = (vis == UI_BTN_VIS_PRESSED || vis == UI_BTN_VIS_SELECTED_PRESSED) ? 1 : 0;
+
+    // 徽标：功能缩写（TX/RX/LP/MS）
+    ofdm_round(gs, x + 10, y + 10, 30, 30, 9, c->soft);
+    ofdm_text_center(gs, OFDM_F_TITLE, ofdm_hub_code(i), x + 25, y + 25, c->accent);
+
+    // 标题 + 一行说明；选中只换文字色，不画边框/竖线
+    ofdm_text(gs, OFDM_F_TITLE, ofdm_hub_title(i), x + 48, y + 8 + press_dy,
+              selected ? c->accent : p->text);
+    ofdm_text(gs, OFDM_F_TITLE, ofdm_hub_desc(i), x + 48, y + 26 + press_dy, p->dim);
+
+    // 右下角快捷键序号（1~4）
+    wchar_t key[2] = {(wchar_t)(L'1' + i), L'\0'};
+    ofdm_round(gs, x + w - 24, y + h - 22, 16, 16, 8,
+               selected ? c->accent : p->track);
+    ofdm_text_center(gs, OFDM_F_TITLE, key, x + w - 16, y + h - 14 + press_dy,
+                     selected ? p->on_accent : p->dim);
+}
+
+static void ofdm_hub_build_buttons(Global_State *gs, Ui_Button out[OFDM_HUB_ITEMS],
+                                   Ui_Button_Group *group) {
+    for (int32_t i = 0; i < OFDM_HUB_ITEMS; i++) {
+        int32_t x, y, w, h;
+        ofdm_hub_card_rect(gs, i, &x, &y, &w, &h);
+        ui_button_init(&out[i], i, x, y, w, h);
+        out[i].style = UI_BTN_STYLE_CARD;
+        out[i].radius = 12;
+        out[i].flags = UI_BTN_FLAG_DRAW_BG | UI_BTN_FLAG_DRAW_BORDER;
+        out[i].font_id = OFDM_F_TITLE;
+        out[i].selected = (i == s_hub_sel) ? 1 : 0;
+        ui_button_set_text(&out[i], ofdm_hub_title(i), NULL);
+    }
+    group->items = out;
+    group->count = OFDM_HUB_ITEMS;
+    group->theme = NULL;
+    group->clip_x0 = 0;
+    group->clip_y0 = 0;
+    group->clip_x1 = 0;
+    group->clip_y1 = 0;
+}
+
 static void ofdm_hub_draw(Key_Event *ke, Global_State *gs) {
     (void)ke;
     OFDM_Palette p;
@@ -582,28 +671,28 @@ static void ofdm_hub_draw(Key_Event *ke, Global_State *gs) {
     ofdm_fill(gs, 0, 0, W, H, p.bg);
     ofdm_chrome_header(gs, &p, (wchar_t *)L"寻呼机");
 
+    Ui_Button buttons[OFDM_HUB_ITEMS];
+    Ui_Button_Group group;
+    ofdm_hub_build_buttons(gs, buttons, &group);
+
     for (int32_t i = 0; i < OFDM_HUB_ITEMS; i++) {
-        int32_t x, y, w, h;
-        ofdm_hub_card_rect(gs, i, &x, &y, &w, &h);
-        int32_t selected = (i == s_hub_sel);
         OFDM_RGB accent, soft;
         ofdm_hub_accent(gs, i, &accent, &soft);
 
-        ofdm_card(gs, x, y, w, h, 12, selected ? soft : p.panel, selected ? accent : p.edge);
-        if (selected) ofdm_round(gs, x + 5, y + 12, 3, h - 24, 2, accent);
+        Ui_Button_Theme theme;
+        ofdm_hub_button_theme(&theme, &p, &accent, &soft);
 
-        // 徽标：功能缩写（TX/RX/LP/MS）
-        ofdm_round(gs, x + 10, y + 10, 30, 30, 9, soft);
-        ofdm_text_center(gs, OFDM_F_TITLE, ofdm_hub_code(i), x + 25, y + 25, accent);
+        OFDM_Hub_Content content;
+        content.gs = gs;
+        content.p = &p;
+        content.accent = accent;
+        content.soft = soft;
+        content.idx = i;
+        buttons[i].content_draw = ofdm_hub_content;
+        buttons[i].content_user = &content;
 
-        // 标题 + 一行说明
-        ofdm_text(gs, OFDM_F_TITLE, ofdm_hub_title(i), x + 48, y + 8, selected ? accent : p.text);
-        ofdm_text(gs, OFDM_F_TITLE, ofdm_hub_desc(i), x + 48, y + 26, p.dim);
-
-        // 右下角快捷键序号（1~4），选中时反白
-        wchar_t key[2] = {(wchar_t)(L'1' + i), L'\0'};
-        ofdm_round(gs, x + w - 24, y + h - 22, 16, 16, 8, selected ? accent : p.track);
-        ofdm_text_center(gs, OFDM_F_TITLE, key, x + w - 16, y + h - 14, selected ? p.on_accent : p.dim);
+        ui_button_draw(gs->gfx, &buttons[i], &theme,
+                       ui_button_visual(&buttons[i], &s_hub_btn_tracker));
     }
 
     ofdm_chrome_footer(gs, &p, (wchar_t *)L"1–4 直选 · 点按进入", (wchar_t *)L"D 进入 · A 返回");
@@ -647,6 +736,9 @@ void ui_ofdm_menu_init(Key_Event *key_event, Global_State *global_state) {
     ofdm_msg_store_init();
     s_hub_sel = 0;
     memset(&s_hub_tap, 0, sizeof(s_hub_tap));
+    ui_button_tracker_reset(&s_hub_btn_tracker);
+    s_hub_btn_tracker.drag_threshold = 10;
+    s_hub_btn_tracker.follow_press = 1;
     ofdm_hub_draw(key_event, global_state);
 }
 
@@ -658,22 +750,25 @@ void ui_ofdm_menu_on_exit(void) {
 int32_t ui_ofdm_menu_event(Key_Event *key_event, Global_State *global_state) {
     Key_Event *ke = key_event;
 
-    // 触屏：点击卡片进入功能；点击页眉右 1/4（“返回”）回到主菜单
+    // 触屏：页眉右 1/4 “返回”仍用轻量 tap 判定；4 张卡片走通用按钮 tracker。
     {
         int32_t tx = 0, ty = 0;
-        if (ofdm_tap_feed(&s_hub_tap, ke, &tx, &ty)) {
-            if (ofdm_back_hit(global_state, tx, ty)) {
-                return STATE_MAIN_MENU; // 码表由 ui_app.c 在回主菜单时统一释放
-            }
-            for (int32_t i = 0; i < OFDM_HUB_ITEMS; i++) {
-                int32_t x, y, w, h;
-                ofdm_hub_card_rect(global_state, i, &x, &y, &w, &h);
-                if (tx >= x && tx < x + w && ty >= y && ty < y + h) {
-                    s_hub_sel = i;
-                    ofdm_hub_draw(ke, global_state); // 先给出选中反馈，再进入功能
-                    return ofdm_hub_activate(ke, global_state, i);
-                }
-            }
+        if (ofdm_tap_feed(&s_hub_tap, ke, &tx, &ty) && ofdm_back_hit(global_state, tx, ty)) {
+            return STATE_MAIN_MENU; // 码表由 ui_app.c 在回主菜单时统一释放
+        }
+
+        Ui_Button buttons[OFDM_HUB_ITEMS];
+        Ui_Button_Group group;
+        ofdm_hub_build_buttons(global_state, buttons, &group);
+        Ui_Button_Result r = ui_button_group_event(&group, &s_hub_btn_tracker,
+                                                   ke, global_state->timestamp);
+        if (r.clicked_id != UI_BTN_ID_NONE) {
+            s_hub_sel = r.clicked_id;
+            ofdm_hub_draw(ke, global_state); // 先给出选中反馈，再进入功能
+            return ofdm_hub_activate(ke, global_state, r.clicked_id);
+        }
+        if (r.visual_changed) {
+            ofdm_hub_draw(ke, global_state); // 按下/拖出反馈
         }
     }
 
@@ -1579,7 +1674,8 @@ static int32_t s_logline_num = 0;
 static int32_t s_log_dirty = 1;             // 需要重建折行缓存
 static int32_t s_msg_scroll = 0;            // 记录区滚动量（px，0=贴最新）
 static int32_t s_msg_auto = 1;              // 自动跟随最新
-static OFDM_Tap s_msg_tap;                  // 点按判定（按钮/页眉返回）
+static OFDM_Tap s_msg_tap;                  // 点按判定（页眉返回/记录区拖动）
+static Ui_Button_Tracker s_msg_btn_tracker;  // 收发按钮的通用按下态跟踪
 static int32_t s_msg_drag = 0;              // 记录区拖动中
 static int32_t s_msg_drag_y0 = 0;
 static int32_t s_msg_drag_scroll0 = 0;
@@ -1763,34 +1859,120 @@ static void ofdm_msg_buttons_rect(Global_State *gs, int32_t idx, int32_t *x, int
     *y = OFDM_MSG_BTN_Y;
 }
 
-static void ofdm_msg_buttons_draw(Global_State *gs, const OFDM_Palette *p) {
-    int32_t i;
-    for (i = 0; i < 2; i++) {
-        int32_t x, y, w, h;
-        ofdm_msg_buttons_rect(gs, i, &x, &y, &w, &h);
-        if (i == 0) {
-            // 接收 / 停止接收
-            if (s_msg_rx_on) {
-                ofdm_round(gs, x, y, w, h, h / 2, p->ok);
-                ofdm_text_center(gs, OFDM_F_BIG, (wchar_t *)L"停止接收", x + w / 2, y + h / 2, p->on_accent);
-            }
-            else {
-                ofdm_card(gs, x, y, w, h, h / 2, p->panel, p->edge);
-                ofdm_dot(gs, x + 18, y + h / 2, 3, p->ok, 0);
-                ofdm_text_center(gs, OFDM_F_BIG, (wchar_t *)L"接收", x + w / 2 + 6, y + h / 2, p->ok);
-            }
+typedef struct {
+    Global_State *gs;
+    const OFDM_Palette *p;
+    int32_t idx;
+} OFDM_Msg_Content;
+
+static void ofdm_msg_button_content(Nano_GFX *g, const Ui_Button *b,
+                                    int32_t base_cx, int32_t base_cy,
+                                    Ui_Button_Visual vis, void *user) {
+    (void)base_cx;
+    (void)base_cy;
+    const OFDM_Msg_Content *c = (const OFDM_Msg_Content *)user;
+    Global_State *gs = c->gs;
+    const OFDM_Palette *p = c->p;
+    int32_t idx = c->idx;
+    int32_t cy = ui_button_label_cy(b, vis);
+
+    if (idx == 0) {
+        if (s_msg_rx_on) {
+            ofdm_text_center(gs, OFDM_F_BIG, (wchar_t *)L"停止接收", b->x + b->w / 2, cy, p->on_accent);
         }
         else {
-            // 发射 / 发射中（进行中不可再点）
-            if (s_msg_tx_on) {
-                ofdm_card(gs, x, y, w, h, h / 2, p->track, p->edge);
-                ofdm_text_center(gs, OFDM_F_BIG, (wchar_t *)L"发射中…", x + w / 2, y + h / 2, p->dim);
-            }
-            else {
-                ofdm_round(gs, x, y, w, h, h / 2, p->accent);
-                ofdm_text_center(gs, OFDM_F_BIG, (wchar_t *)L"发射", x + w / 2, y + h / 2, p->on_accent);
-            }
+            ofdm_dot(gs, b->x + 18, cy, 3, p->ok, 0);
+            ofdm_text_center(gs, OFDM_F_BIG, (wchar_t *)L"接收", b->x + b->w / 2 + 6, cy, p->ok);
         }
+    }
+    else {
+        if (s_msg_tx_on) {
+            ofdm_text_center(gs, OFDM_F_BIG, (wchar_t *)L"发射中…", b->x + b->w / 2, cy, p->dim);
+        }
+        else {
+            ofdm_text_center(gs, OFDM_F_BIG, (wchar_t *)L"发射", b->x + b->w / 2, cy, p->on_accent);
+        }
+    }
+}
+
+// 收发按钮主题：按当前会话状态决定底色/文字/描边；发射中画暗但仍可点（再次点按=停止）。
+static void ofdm_msg_button_theme(Ui_Button_Theme *t, const OFDM_Palette *p, int32_t idx) {
+    memset(t, 0, sizeof(*t));
+    Ui_RGB panel = {p->panel.r, p->panel.g, p->panel.b};
+    Ui_RGB edge  = {p->edge.r, p->edge.g, p->edge.b};
+    Ui_RGB track = {p->track.r, p->track.g, p->track.b};
+    Ui_RGB text  = {p->text.r, p->text.g, p->text.b};
+    Ui_RGB dim   = {p->dim.r, p->dim.g, p->dim.b};
+    Ui_RGB accent= {p->accent.r, p->accent.g, p->accent.b};
+    Ui_RGB on    = {p->on_accent.r, p->on_accent.g, p->on_accent.b};
+    Ui_RGB ok    = {p->ok.r, p->ok.g, p->ok.b};
+
+    Ui_RGB bg = panel, fg = text;
+    uint8_t border_alpha = 1;
+
+    if (idx == 0) {
+        if (s_msg_rx_on) {
+            bg = ok; fg = on; border_alpha = 0;
+        }
+        else {
+            bg = panel; fg = ok; border_alpha = 1;
+        }
+    }
+    else {
+        if (s_msg_tx_on) {
+            bg = track; fg = dim; border_alpha = 1;
+        }
+        else {
+            bg = accent; fg = on; border_alpha = 0;
+        }
+    }
+
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = bg;
+        t->fg[i] = fg;
+        t->border[i] = edge;
+        t->bg_alpha[i] = 1;
+        t->border_alpha[i] = border_alpha;
+    }
+    // 按下：沿用当前底色，文字下沉由通用按钮负责
+    t->bg[UI_BTN_VIS_PRESSED] = bg;
+    t->fg[UI_BTN_VIS_PRESSED] = fg;
+}
+
+static void ofdm_msg_build_buttons(Global_State *gs, Ui_Button out[2], Ui_Button_Group *group) {
+    for (int32_t i = 0; i < 2; i++) {
+        int32_t x, y, w, h;
+        ofdm_msg_buttons_rect(gs, i, &x, &y, &w, &h);
+        ui_button_init(&out[i], i, x, y, w, h);
+        out[i].style = UI_BTN_STYLE_PILL;
+        out[i].radius = (int16_t)(h / 2);
+        out[i].flags = UI_BTN_FLAG_DRAW_BG | UI_BTN_FLAG_DRAW_BORDER;
+        out[i].font_id = OFDM_F_BIG;
+        out[i].content_draw = ofdm_msg_button_content;
+    }
+    group->items = out;
+    group->count = 2;
+    group->theme = NULL;
+    group->clip_x0 = 0;
+    group->clip_y0 = 0;
+    group->clip_x1 = 0;
+    group->clip_y1 = 0;
+}
+
+static void ofdm_msg_buttons_draw(Global_State *gs, const OFDM_Palette *p) {
+    Ui_Button buttons[2];
+    Ui_Button_Group group;
+    ofdm_msg_build_buttons(gs, buttons, &group);
+    for (int32_t i = 0; i < 2; i++) {
+        Ui_Button_Theme theme;
+        ofdm_msg_button_theme(&theme, p, i);
+        OFDM_Msg_Content content;
+        content.gs = gs;
+        content.p = p;
+        content.idx = i;
+        buttons[i].content_user = &content;
+        ui_button_draw(gs->gfx, &buttons[i], &theme,
+                       ui_button_visual(&buttons[i], &s_msg_btn_tracker));
     }
 }
 
@@ -2153,6 +2335,9 @@ void ui_ofdm_msg_on_enter(Key_Event *key_event, Global_State *global_state) {
     (void)key_event;
     s_msg_gs = global_state;
     memset(&s_msg_tap, 0, sizeof(s_msg_tap));
+    ui_button_tracker_reset(&s_msg_btn_tracker);
+    s_msg_btn_tracker.drag_threshold = 10;
+    s_msg_btn_tracker.follow_press = 1;
     s_msg_drag = 0;
 
     // 从发报输入页返回且带报文：记录一条“发出”并开始连发 3 遍
@@ -2212,17 +2397,20 @@ int32_t ui_ofdm_msg_event(Key_Event *key_event, Global_State *global_state) {
         return STATE_OFDM_MENU;
     }
 
-    // 点按两个按钮
-    if (tapped) {
-        for (int32_t i = 0; i < 2; i++) {
-            int32_t bx, by, bw, bh;
-            ofdm_msg_buttons_rect(global_state, i, &bx, &by, &bw, &bh);
-            if (tx >= bx && tx < bx + bw && ty >= by && ty < by + bh) {
-                int32_t next = ofdm_msg_button_action(ke, global_state, i);
-                if (next != STATE_OFDM_MSG) return next; // 进输入页：由输入控件自行绘制
-                s_log_dirty = 1;
-                break;
-            }
+    // 收发按钮：通用按钮 tracker（按下/拖出反馈 + 松手同按钮结算）
+    {
+        Ui_Button buttons[2];
+        Ui_Button_Group group;
+        ofdm_msg_build_buttons(global_state, buttons, &group);
+        Ui_Button_Result r = ui_button_group_event(&group, &s_msg_btn_tracker,
+                                                   ke, global_state->timestamp);
+        if (r.clicked_id != UI_BTN_ID_NONE) {
+            int32_t next = ofdm_msg_button_action(ke, global_state, r.clicked_id);
+            if (next != STATE_OFDM_MSG) return next; // 进输入页：由输入控件自行绘制
+            s_log_dirty = 1;
+        }
+        if (r.visual_changed) {
+            ofdm_msg_render(global_state); // 按下/拖出即时反馈
         }
     }
 

@@ -4,6 +4,7 @@
 #include "graphics.h"
 #include "hal_key.h"
 #include "ui.h"
+#include "ui_button.h"
 #include "ui_softkbd.h"
 #include "ui_grid16kbd.h"
 #include "ui_pinyin_ime.h"
@@ -1366,60 +1367,92 @@ static void ui_input_footer_btn_geom(Global_State *global_state,
     if (*out_h < 1) *out_h = 1;
 }
 
+// 页脚两枚按钮的通用主题：常态/按下/已激活/激活按下；无边框。
+static void ui_input_footer_btn_theme(Ui_Button_Theme *t, Global_State *global_state) {
+    memset(t, 0, sizeof(*t));
+    int32_t light = (global_state->ui_color_style == UI_COLOR_LIGHT) ? 1 : 0;
+
+    Ui_RGB normal  = light ? (Ui_RGB){206, 214, 220} : (Ui_RGB){38, 40, 44};
+    Ui_RGB pressed = light ? (Ui_RGB){190, 198, 210} : (Ui_RGB){86, 90, 100};
+    Ui_RGB text    = light ? (Ui_RGB){60, 68, 76}    : (Ui_RGB){220, 225, 232};
+    Ui_RGB sel     = light ? (Ui_RGB){17, 85, 238}   : (Ui_RGB){16, 72, 176};
+    Ui_RGB sel_pr  = light ? (Ui_RGB){88, 142, 252}  : (Ui_RGB){52, 122, 228};
+    Ui_RGB on_text = (Ui_RGB){255, 255, 255};
+
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = normal;
+        t->fg[i] = text;
+        t->border[i] = normal;
+        t->bg_alpha[i] = 1;
+        t->border_alpha[i] = 0; // 页脚按钮无边框
+    }
+    t->bg[UI_BTN_VIS_PRESSED] = pressed;
+    t->bg[UI_BTN_VIS_SELECTED] = sel;
+    t->fg[UI_BTN_VIS_SELECTED] = on_text;
+    t->bg[UI_BTN_VIS_SELECTED_PRESSED] = sel_pr;
+    t->fg[UI_BTN_VIS_SELECTED_PRESSED] = on_text;
+}
+
+// 构造左「全键盘」/右「九键」两枚通用按钮。
+static void ui_input_footer_btn_build(Global_State *global_state, Widget_Input_State *input_state,
+    Ui_Button out[2], Ui_Button_Group *group) {
+    int32_t lx, lw, rx, rw, by, bh;
+    ui_input_footer_btn_geom(global_state, &lx, &lw, &rx, &rw, &by, &bh);
+
+    ui_button_init(&out[0], 1, lx, by, lw, bh);
+    out[0].style = UI_BTN_STYLE_RECT;
+    out[0].flags = UI_BTN_FLAG_DRAW_BG;
+    out[0].font_id = UI_INPUT_FOOTER_BTN_FONT;
+    out[0].selected = ui_softkbd_is_visible() ? 1 : 0;
+    ui_button_set_text(&out[0], L"全键盘", NULL);
+
+    ui_button_init(&out[1], 2, rx, by, rw, bh);
+    out[1].style = UI_BTN_STYLE_RECT;
+    out[1].flags = UI_BTN_FLAG_DRAW_BG;
+    out[1].font_id = UI_INPUT_FOOTER_BTN_FONT;
+    out[1].selected = ui_grid16kbd_is_visible() ? 1 : 0;
+    ui_button_set_text(&out[1], L"九键", NULL);
+
+    group->items = out;
+    group->count = 2;
+    group->theme = NULL;
+    group->clip_x0 = 0;
+    group->clip_y0 = 0;
+    group->clip_x1 = 0;
+    group->clip_y1 = 0;
+}
+
 // 命中：1=全键盘 2=九键 0=未命中（按钮不可用时恒 0）
 static int32_t ui_input_footer_btn_hit(Global_State *global_state, Widget_Input_State *input_state,
     int32_t x, int32_t y) {
     if (!ui_input_footer_btn_visible(input_state)) return 0;
-    int32_t lx, lw, rx, rw, by, bh;
-    ui_input_footer_btn_geom(global_state, &lx, &lw, &rx, &rw, &by, &bh);
-    if (y < by || y >= by + bh) return 0;
-    if (x >= lx && x < lx + lw) return 1;
-    if (x >= rx && x < rx + rw) return 2;
-    return 0;
-}
-
-// 单枚按钮：底色即状态——常态/已激活（键盘可见）/按下（armed）；按下时标签下沉 1px
-static void ui_input_footer_btn_draw_one(Global_State *global_state,
-    int32_t x, int32_t w, int32_t y, int32_t h, const wchar_t *label, int32_t is_on, int32_t is_pressed) {
-    uint8_t bg_R, bg_G, bg_B, fg_R, fg_G, fg_B;
-    if (global_state->ui_color_style == UI_COLOR_LIGHT) {
-        if (is_on) {
-            bg_R = 17; bg_G = 85; bg_B = 238;      // 已激活：强调蓝
-            fg_R = 255; fg_G = 255; fg_B = 255;
-            if (is_pressed) { bg_R = 88; bg_G = 142; bg_B = 252; }
-        }
-        else {
-            bg_R = 206; bg_G = 214; bg_B = 220;    // 常态：比页脚底色略深的无边框底板
-            fg_R = 60; fg_G = 68; fg_B = 76;
-            if (is_pressed) { bg_R = 190; bg_G = 198; bg_B = 210; }
-        }
-    }
-    else {
-        if (is_on) {
-            bg_R = 16; bg_G = 72; bg_B = 176;
-            fg_R = 255; fg_G = 255; fg_B = 255;
-            if (is_pressed) { bg_R = 52; bg_G = 122; bg_B = 228; }
-        }
-        else {
-            bg_R = 38; bg_G = 40; bg_B = 44;
-            fg_R = 220; fg_G = 225; fg_B = 232;
-            if (is_pressed) { bg_R = 86; bg_G = 90; bg_B = 100; }
-        }
-    }
-    gfx_draw_rectangle(global_state->gfx, x, y, w, h, bg_R, bg_G, bg_B, 1);
-    gfx_font_draw_text_centered(global_state->gfx, UI_INPUT_FOOTER_BTN_FONT, (wchar_t *)label,
-        x + w / 2, y + h / 2 + (is_pressed ? 1 : 0), fg_R, fg_G, fg_B, 1);
+    Ui_Button buttons[2];
+    Ui_Button_Group group;
+    ui_input_footer_btn_build(global_state, input_state, buttons, &group);
+    int32_t id = ui_button_group_hit(&group, x, y);
+    return (id == UI_BTN_ID_NONE) ? 0 : id;
 }
 
 static void ui_draw_input_footer_buttons(Global_State *global_state, Widget_Input_State *input_state) {
     if (!ui_input_footer_btn_visible(input_state)) return;
-    int32_t lx, lw, rx, rw, by, bh;
-    ui_input_footer_btn_geom(global_state, &lx, &lw, &rx, &rw, &by, &bh);
+
+    Ui_Button buttons[2];
+    Ui_Button_Group group;
+    Ui_Button_Theme theme;
+    ui_input_footer_btn_build(global_state, input_state, buttons, &group);
+    ui_input_footer_btn_theme(&theme, global_state);
+
     int32_t armed = input_state->footer_btn_armed;
-    ui_input_footer_btn_draw_one(global_state, lx, lw, by, bh, L"全键盘",
-        ui_softkbd_is_visible() ? 1 : 0, (armed == 1) ? 1 : 0);
-    ui_input_footer_btn_draw_one(global_state, rx, rw, by, bh, L"九键",
-        ui_grid16kbd_is_visible() ? 1 : 0, (armed == 2) ? 1 : 0);
+    for (int32_t i = 0; i < group.count; i++) {
+        Ui_Button_Visual vis;
+        if (buttons[i].selected) {
+            vis = (armed == buttons[i].id) ? UI_BTN_VIS_SELECTED_PRESSED : UI_BTN_VIS_SELECTED;
+        }
+        else {
+            vis = (armed == buttons[i].id) ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL;
+        }
+        ui_button_draw(global_state->gfx, &buttons[i], &theme, vis);
+    }
 }
 
 // 每帧跟踪按下态：高亮判据 = “现在松手会不会触发”（按下点与当前点命中同一枚按钮）
@@ -1466,7 +1499,15 @@ static int32_t ui_input_ime_tag_hit(Global_State *global_state, Widget_Input_Sta
     int32_t tx, tw, ty, th;
     ui_input_ime_tag_geom(global_state, input_state, &tx, &tw, &ty, &th);
     if (tw <= 0) return 0;
-    return (x >= tx && x < tx + tw && y >= ty && y < ty + th) ? 1 : 0;
+
+    Ui_Button b;
+    ui_button_init(&b, 1, tx, ty, tw, th);
+    b.style = UI_BTN_STYLE_TEXT;
+    b.flags = 0;
+    b.font_id = global_state->ui_font;
+    b.press_text_dy = 0;
+    ui_button_set_text(&b, ui_input_ime_tag_label(input_state), NULL);
+    return ui_button_hit(&b, x, y);
 }
 
 // 循环切换汉 → 英 → 数 → 汉；放弃进行中的组字/候选，回到初始状态（键盘显隐保持不变）
@@ -2631,11 +2672,28 @@ void ui_draw_input_buffer(Key_Event *key_event, Global_State *global_state, Widg
 
     // 左上角状态图标：自页眉左缘起从左往右按各字符串的实际渲染宽度紧凑排列（均垂直居中）
     int32_t left_x = 1;
-    // 显示输入状态（点按循环切换，命中判定见 ui_input_ime_tag_hit）
+    // 显示输入状态（点按循环切换，命中判定见 ui_input_ime_tag_hit）；走通用 TEXT 按钮绘制
     wchar_t *ime_tag = ui_input_ime_tag_label(input_state);
     if (ime_tag) {
-        gfx_font_draw_text(global_state->gfx, font_id, ime_tag, left_x, header_text_y, 255, 255, 0, 1);
-        left_x += gfx_font_measure_text(font_id, ime_tag) + 1;
+        int32_t tag_w = gfx_font_measure_text(font_id, ime_tag);
+        Ui_Button tag_btn;
+        Ui_Button_Theme tag_theme;
+        ui_button_init(&tag_btn, 1, left_x, 0, tag_w, ui_std_header_height(global_state->ui_font));
+        tag_btn.style = UI_BTN_STYLE_TEXT;
+        tag_btn.flags = 0;
+        tag_btn.font_id = font_id;
+        tag_btn.press_text_dy = 0;
+        ui_button_set_text(&tag_btn, ime_tag, NULL);
+
+        memset(&tag_theme, 0, sizeof(tag_theme));
+        tag_theme.fg[UI_BTN_VIS_NORMAL] = (Ui_RGB){255, 255, 0};
+        tag_theme.fg[UI_BTN_VIS_PRESSED] = (Ui_RGB){255, 255, 0};
+        tag_theme.fg[UI_BTN_VIS_SELECTED] = (Ui_RGB){255, 255, 0};
+        tag_theme.fg[UI_BTN_VIS_SELECTED_PRESSED] = (Ui_RGB){255, 255, 0};
+        tag_theme.fg[UI_BTN_VIS_DISABLED] = (Ui_RGB){255, 255, 0};
+        ui_button_draw(global_state->gfx, &tag_btn, &tag_theme, UI_BTN_VIS_NORMAL);
+
+        left_x += tag_w + 1;
     }
     // 显示Ctrl激活状态
     if (global_state->is_ctrl_enabled == 1) {

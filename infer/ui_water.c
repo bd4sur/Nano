@@ -36,6 +36,7 @@
 #ifndef WATER_HOST_TEST
     #include "ui_water.h"
     #include "hal_key.h"
+    #include "ui_button.h"
 #endif
 
 // ===============================================================================
@@ -1078,7 +1079,11 @@ static int wt_button_hit(int x, int y) {
     for (int i = 0; i < WT_BTN_N; i++) {
         int bx, by, bw, bh;
         wt_button_rect(i, &bx, &by, &bw, &bh);
-        if (x >= bx && x < bx + bw && y >= by && y < by + bh) return i;
+        Ui_Button b;
+        ui_button_init(&b, i, bx, by, bw, bh);
+        b.style = UI_BTN_STYLE_ROUNDED;
+        b.radius = 7;
+        if (ui_button_hit(&b, x, y)) return i;
     }
     return -1;
 }
@@ -1106,6 +1111,22 @@ static void wt_draw_ui(Nano_GFX *gfx) {
     int W = s_wt.WW, H = s_wt.HH;
     // 栏底板：半透明深色，保证任何水面/池壁底色下按钮都可辨
     gfx_draw_rounded_rectangle(gfx, 0, H - WT_BTN_BAR_H, W, WT_BTN_BAR_H, 0, 0, 0, 0, 0, 0, 0, 110);
+
+    Ui_Button_Theme theme;
+    memset(&theme, 0, sizeof(theme));
+    for (int32_t k = 0; k < UI_BTN_VIS_COUNT; k++) {
+        theme.bg[k] = (Ui_RGB){34, 46, 62};
+        theme.fg[k] = (Ui_RGB){240, 246, 255};
+        theme.bg_alpha[k] = 200;
+        theme.border_alpha[k] = 0;
+    }
+    theme.bg[UI_BTN_VIS_PRESSED] = (Ui_RGB){116, 172, 226};
+    theme.bg_alpha[UI_BTN_VIS_PRESSED] = 240;
+    theme.bg[UI_BTN_VIS_SELECTED] = (Ui_RGB){28, 104, 92};
+    theme.bg_alpha[UI_BTN_VIS_SELECTED] = 200;
+    theme.bg[UI_BTN_VIS_SELECTED_PRESSED] = (Ui_RGB){116, 172, 226};
+    theme.bg_alpha[UI_BTN_VIS_SELECTED_PRESSED] = 240;
+
     for (int i = 0; i < WT_BTN_N; i++) {
         int bx, by, bw, bh;
         wt_button_rect(i, &bx, &by, &bw, &bh);
@@ -1120,12 +1141,20 @@ static void wt_draw_ui(Nano_GFX *gfx) {
             default: break;
         }
         int pressed = (s_wt.pressed_btn == i);
-        uint8_t r = 34, g = 46, b = 62;
-        if (active) { r = 28; g = 104; b = 92; }
-        if (pressed) { r = 116; g = 172; b = 226; }
-        gfx_draw_rounded_rectangle(gfx, bx, by, bw, bh, 7, 7, 7, 7, r, g, b, pressed ? 240 : 200);
-        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)label,
-            bx + bw / 2, by + bh / 2, 240, 246, 255, 1);
+
+        Ui_Button b;
+        ui_button_init(&b, i, bx, by, bw, bh);
+        b.style = UI_BTN_STYLE_ROUNDED;
+        b.radius = 7;
+        b.flags = UI_BTN_FLAG_DRAW_BG;
+        b.font_id = GFX_FONT_ALPHA_12;
+        b.selected = active ? 1 : 0;
+        ui_button_set_text(&b, label, NULL);
+
+        Ui_Button_Visual vis;
+        if (pressed) vis = active ? UI_BTN_VIS_SELECTED_PRESSED : UI_BTN_VIS_PRESSED;
+        else         vis = active ? UI_BTN_VIS_SELECTED : UI_BTN_VIS_NORMAL;
+        ui_button_draw(gfx, &b, &theme, vis);
     }
 }
 
