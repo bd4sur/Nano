@@ -143,7 +143,7 @@ ANIMAC_SRCS=$(ls $ANIMAC_DIR/*.c | grep -v '/exclude.c$')
 #                          标量，LLVM 无法自动向量化；A/B 实测开/关差异在噪声内
 #                          （m0+海洋 38.44 vs 38.67 fps、体积云 10.19 vs 10.13 fps），
 #                          而产物大 100KB 且要求 2021+ 浏览器。手写 SIMD 内核时再打开。
-#   -flto                  全程序优化（跨翻译单元内联，如 ui_cloud ↔ celestial ↔ graphics）
+#   -flto                  全程序优化（跨翻译单元内联，如 cloud ↔ celestial ↔ graphics）
 # 可用环境变量覆盖做基准：WASM_SIMD=1 WASM_LTO=0 ./build_wasm_gui.sh
 # ---------------------------------------------------------------------------
 WASM_SIMD=${WASM_SIMD:-0}
@@ -173,6 +173,7 @@ if [ "$WASM_LTO" = "1" ]; then WASM_OPT="$WASM_OPT -flto"; fi
     hal_misc_linux.c \
     celestial.c \
     celestial_ocean.c \
+    cloud.c \
     ephemeris.c \
     flip.c \
     gfx_font_12.c \
@@ -212,7 +213,6 @@ if [ "$WASM_LTO" = "1" ]; then WASM_OPT="$WASM_OPT -flto"; fi
     ui_button.c \
     ui.c \
     ui_app.c \
-    ui_cloud.c \
     ui_dict.c \
     ui_ebook.c \
     ui_flip.c \

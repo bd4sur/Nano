@@ -26,7 +26,7 @@
 #include <string.h>
 // #include <omp.h>
 
-#include "ui_cloud.h"
+#include "cloud.h"
 #include "platform.h"
 #include "celestial_night.h"
 
@@ -750,7 +750,7 @@ static void cloud_default_scene(CloudScene *s) {
     s->cloudBandTrim      = CLOUD_OPT_BAND_TRIM;
     s->cloudStepNominalKm = CLOUD_OPT_STEP_NOMINAL_KM;
 
-    // 太阳（正午；纯白，同 ui_cloud_sun_color 白天段）
+    // 太阳（正午；纯白，同 linglong_cloud_sun_color 白天段）
     s->sunDirection = v3norm(v3(0.15f, 0.96f, 0.0f));
     s->sunColor = v3(1.0f, 1.0f, 1.0f);
     s->sunIntensity = 48.0f;
@@ -1152,7 +1152,7 @@ static void cloud_compute_multiscatter_lut(CloudScene *s) {
 // （见 CLOUD_COVERAGE_LEVELS），保证档间云量递进均匀、最高档不进入变暗区。
 // ===========================================================================
 // 内核跨帧状态：**只放渲染内核自己必须记住的量**（其余全部由调用方每帧经
-// UiCloud_Render_Params 传入，相机/投影/时间不在此保存）。本库没有任何 UI/交互状态、
+// Linglong_Cloud_Render_Params 传入，相机/投影/时间不在此保存）。本库没有任何 UI/交互状态、
 // 不依赖 ui_app.h，可被任意宿主直接调用。
 static struct {
     int   layer_mask;        // 云层掩码（cloudMap / cloud_layer_band 用；每帧由参数写入）
@@ -1346,7 +1346,7 @@ static float cloudMap2(Cv3 posMeter, float normalizeHeight, float appTime, const
 #define CLOUD_N_AC1              CLOUD_NORM_HEIGHT(CLOUD_BAND_AC1_KM)
 #define CLOUD_N_SC1              CLOUD_NORM_HEIGHT(CLOUD_BAND_SC1_KM)
 
-// 投影：0=透视投影，1=等距鱼眼投影。由调用方经 UiCloud_Render_Params.proj 指定；
+// 投影：0=透视投影，1=等距鱼眼投影。由调用方经 Linglong_Cloud_Render_Params.proj 指定；
 // 视场角由 .fov_deg 直接给出（库内不再有“档位表”——那是演示 App 的交互概念）。
 #define CLOUD_PROJ_PERSP    0
 #define CLOUD_PROJ_FISHEYE  1
@@ -2101,7 +2101,7 @@ static const wchar_t *CLOUD_COVERAGE_NAMES[] = {
 // 由太阳高度角（度）推导太阳色温/辐照（供天象仪等调用方驱动体积云/大气光源）。
 // 任意高度角均有定义：正午类 → 低空橙 → 日落地平 → 暮光（民用/航海/天文）→ 完整黑夜。
 // -10° 处的取值与历史版本一致（避免已有观感变化）。
-void ui_cloud_sun_color(float elev_deg, float *or_, float *og, float *ob, float *ointen) {
+void linglong_cloud_sun_color(float elev_deg, float *or_, float *og, float *ob, float *ointen) {
     Cv3 col;
     float inten;
     if (elev_deg >= 15.0f) {
@@ -2158,17 +2158,17 @@ static void cloud_update_sky_light(void) {
 }
 
 // ---- 云量档位查询（玲珑仪“云量”按钮与调用方共用；档位语义唯一真源在上面的表 ----
-int ui_cloud_coverage_level_num(void) {
+int linglong_cloud_coverage_level_num(void) {
     return CLOUD_COVERAGE_LEVEL_NUM;
 }
 
-float ui_cloud_coverage_for_level(int level) {
+float linglong_cloud_coverage_for_level(int level) {
     if (level < 0) level = 0;
     if (level >= CLOUD_COVERAGE_LEVEL_NUM) level = CLOUD_COVERAGE_LEVEL_NUM - 1;
     return CLOUD_COVERAGE_LEVELS[level];
 }
 
-const wchar_t *ui_cloud_coverage_level_name(int level) {
+const wchar_t *linglong_cloud_coverage_level_name(int level) {
     if (level < 0) level = 0;
     if (level >= CLOUD_COVERAGE_LEVEL_NUM) level = CLOUD_COVERAGE_LEVEL_NUM - 1;
     return CLOUD_COVERAGE_NAMES[level];
@@ -2180,7 +2180,7 @@ const wchar_t *ui_cloud_coverage_level_name(int level) {
 //   h=+90° → 2.00   h=25° → 2.00   h=10° → 1.91   h=3° → 1.25
 //   h= 0°  → 0.85   h=-6° → 0.54   h=-18° → 0.50
 // 太阳越高云越白亮（上限 2.0），日落后转暗，天文暮光之后压到下限 0.5。
-float ui_cloud_brightness_for_sun_alt(float elev_deg) {
+float linglong_cloud_brightness_for_sun_alt(float elev_deg) {
     return 0.75f * tanhf(0.2f * elev_deg - 0.6f) + 1.25f;
 }
 
@@ -2303,7 +2303,7 @@ static inline Cv3 cloud_lens_flare_at(Cv2 v, Cv2 sun, float dist, float chroma,
     return v3(r * gain, g * gain, b * gain);
 }
 
-void ui_cloud_lens_flare_draw(Nano_GFX *gfx, float sun_ndc_x, float sun_ndc_y, float sun_vis) {
+void linglong_cloud_lens_flare_draw(Nano_GFX *gfx, float sun_ndc_x, float sun_ndc_y, float sun_vis) {
     if (gfx == NULL) return;
     if (!(sun_vis > 0.004f)) return;
     // 色调映射的 gamma 查表可能尚未初始化（例如当前天空模型不是体积云、云内核本帧没跑）：
@@ -2442,7 +2442,7 @@ void ui_cloud_lens_flare_draw(Nano_GFX *gfx, float sun_ndc_x, float sun_ndc_y, f
 
 // 沿太阳方向的云透射率（0..1）：体积云天空每一帧算好；无云/未渲染时为 0。
 // 供天象仪把镜头光晕按「太阳是否被云遮住」调暗。
-float ui_cloud_sun_visibility(void) {
+float linglong_cloud_sun_visibility(void) {
     return s_core.sun_visible ? s_core.sun_vis : 0.0f;
 }
 
@@ -2516,7 +2516,7 @@ static void cloud_skyring_store(Cv3 dir, Cv3 hdr) { (void)dir; (void)hdr; }
 
 // 内部渲染缓冲（可降采样，动态分配）+ 全屏输出缓冲
 // 另有一份“云透射率”平面（每像素 1 字节），仅 PASS_CLOUDS 需要：与预乘云色一起
-// 双线性放大，供 ui_cloud_flush_over 做 dst = dst·T + premul_rgb 的 alpha 合成。
+// 双线性放大，供 linglong_cloud_flush_over 做 dst = dst·T + premul_rgb 的 alpha 合成。
 // PASS_SKY / PASS_BOTH 不申请这块内存。
 static uint8_t *s_scene_img = NULL;
 static size_t  s_scene_img_bytes = 0;
@@ -2633,10 +2633,10 @@ static void cloud_setup_camera(float yaw_rad, float pitch_rad, float roll_rad, f
 // 所有场景/相机/云参数均来自外部 params —— 本函数无任何隐藏输入/状态。
 // 不负责 HUD 叠加与显存输出，由调用方先 flush 再在其上叠加绘制。
 // ---------------------------------------------------------------------------
-static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
+static void cloud_core_render(Nano_GFX *gfx, const Linglong_Cloud_Render_Params *p) {
     const int FW = (int)gfx->width, FH = (int)gfx->height;
     int pass = p->pass;
-    if (pass < UI_CLOUD_PASS_BOTH || pass > UI_CLOUD_PASS_CLOUDS) pass = UI_CLOUD_PASS_BOTH;
+    if (pass < LINGLONG_CLOUD_PASS_BOTH || pass > LINGLONG_CLOUD_PASS_CLOUDS) pass = LINGLONG_CLOUD_PASS_BOTH;
 
     // 内部渲染分辨率 = 屏幕 / cloudRenderScale（上限 CLOUD_MAX_*）。
     // 倍数 2（默认）→ 160x120：ray-march 的逐像素成本是线性量，像素数÷4 即约 4× 提速；
@@ -2649,12 +2649,12 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     if (W > CLOUD_MAX_W) W = CLOUD_MAX_W;
     if (H < 8) H = 8;
     if (H > CLOUD_MAX_H) H = CLOUD_MAX_H;
-    cloud_ensure_buffers(W, H, FW, FH, pass == UI_CLOUD_PASS_CLOUDS);
+    cloud_ensure_buffers(W, H, FW, FH, pass == LINGLONG_CLOUD_PASS_CLOUDS);
     s_out_fw = FW;
     s_out_fh = FH;
     // 缓冲不可用（内存不足）：跳过本帧（PASS_CLOUDS 时调用方只会得到“没有云”）
     if (s_scene_img == NULL || s_fb == NULL) return;
-    if (pass == UI_CLOUD_PASS_CLOUDS && (s_scene_a == NULL || s_fb_a == NULL)) return;
+    if (pass == LINGLONG_CLOUD_PASS_CLOUDS && (s_scene_a == NULL || s_fb_a == NULL)) return;
 
     // 防御：LUT 未就绪（PSRAM 申请失败）时跳过本帧渲染（调用方负责退出状态）
     if (!s_transLut || !s_msLut) return;
@@ -2700,11 +2700,11 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     //   PASS_CLOUDS 不重复一次沿太阳方向的 ray-march，也不清掉天空遍算好的值）
     float sun_u = 0.0f;   // 太阳屏幕 NDC 坐标（仅本次调用内部使用）
     float sun_v = 0.0f;
-    if (p->pass != UI_CLOUD_PASS_CLOUDS) s_core.sun_visible = 0;
+    if (p->pass != LINGLONG_CLOUD_PASS_CLOUDS) s_core.sun_visible = 0;
     // 太阳低于地平线时无条件关闭光晕（linglong.html 同步）：地平线下无直射光，
     // 避免太阳盘/光晕绘制在地平线以下的“黑色地面”上
     float sunElevDeg = asinf(saturatef(s_scene.sunDirection.y)) * 180.0f / kPI;
-    if (p->enable_sun_lens && p->pass != UI_CLOUD_PASS_CLOUDS && sunElevDeg >= 0.0f) {
+    if (p->enable_sun_lens && p->pass != LINGLONG_CLOUD_PASS_CLOUDS && sunElevDeg >= 0.0f) {
         Cv3 sc = v3(v3dot(s_scene.sunDirection, right),
                     v3dot(s_scene.sunDirection, camUp),
                     v3dot(s_scene.sunDirection, forward));
@@ -2735,7 +2735,7 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     // PASS_SKY：只积分大气；PASS_CLOUDS：只 ray-march 云（输出预乘色 + 透射率）；
     // PASS_BOTH：两者一次算完（历史行为）。
     // 天空遍的地平线以下按方位角分桶重用（性能专项 A10）：见循环内注释。
-    if (pass == UI_CLOUD_PASS_SKY) cloud_skyring_begin();
+    if (pass == LINGLONG_CLOUD_PASS_SKY) cloud_skyring_begin();
     #pragma omp parallel for schedule(static) if (H >= 8)
     for (int y = 0; y < H; y++) {
         uint8_t rowbuf[CLOUD_MAX_W * 3];
@@ -2769,7 +2769,7 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
             }
             rayDir = v3norm(rayDir);
 
-            if (pass == UI_CLOUD_PASS_SKY) {
+            if (pass == LINGLONG_CLOUD_PASS_SKY) {
                 // 只算天空（供解耦云层的底层；天体/地景随后叠加）。
                 // 视线仰角钳到地平线以上 ε（同 linglong.html 的 wo_sky_atmo：dy<0.0005 → 0.0005）：
                 // 内部 160x120 的“地平线行”在 ±0.43°，天顶/地平视角时上采样会按 50/50 把
@@ -2808,9 +2808,9 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
             // 云
             CloudPixel cloud = cloudPixelCompute(camPos, rayDir, p->app_time_sec, jitter, pixAng, &s_scene);
 
-            if (pass == UI_CLOUD_PASS_CLOUDS) {
+            if (pass == LINGLONG_CLOUD_PASS_CLOUDS) {
                 // 解耦云层：输出预乘覆盖率的显示空间云色 + 透射率 alpha
-                // （镜头光晕不在此处：天象仪自己画太阳/星芒并叠 ui_cloud_lens_flare_draw）
+                // （镜头光晕不在此处：天象仪自己画太阳/星芒并叠 linglong_cloud_lens_flare_draw）
                 cloud_write_pixel_premul(x, cloud.color, cloud.transmittance, rowbuf, rowa);
                 continue;
             }
@@ -2832,16 +2832,16 @@ static void cloud_core_render(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
             cloud_write_pixel(x, final, rowbuf);
         }
         memcpy(&s_scene_img[((size_t)y * W) * 3], rowbuf, W * 3);
-        if (pass == UI_CLOUD_PASS_CLOUDS) memcpy(&s_scene_a[(size_t)y * W], rowa, W);
+        if (pass == LINGLONG_CLOUD_PASS_CLOUDS) memcpy(&s_scene_a[(size_t)y * W], rowa, W);
     }
 
     // 放大到整屏
-    cloud_upscale(W, H, FW, FH, pass == UI_CLOUD_PASS_CLOUDS);
+    cloud_upscale(W, H, FW, FH, pass == LINGLONG_CLOUD_PASS_CLOUDS);
 }
 
 // 将外部参数应用到内部场景（光源/相机/云参数），并执行一次核心渲染。
 // 唯一的渲染入口：调用方给出相机/光源/云参数/渲染遍，库不保留相机与时间状态。
-void ui_cloud_render_core(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
+void linglong_cloud_render_core(Nano_GFX *gfx, const Linglong_Cloud_Render_Params *p) {
     // LUT 缓冲首次分配（库的唯一初始化点）：分配失败则本帧跳过、下帧重试
     // （调用方无需任何 init 调用）。
     if (cloud_ensure_luts_buffers() != 0) return;
@@ -2885,7 +2885,7 @@ void ui_cloud_render_core(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
     // 相机/投影/时间：不落状态，直接由本次参数驱动 cloud_core_render
     // （解耦后一帧会调用两次 PASS_SKY + PASS_CLOUDS：帧号只在“算云”的那一遍推进，
     //   保证抖动/动画序列每帧只前进一步）。
-    if (p->pass != UI_CLOUD_PASS_SKY) s_core.frame_index++;
+    if (p->pass != LINGLONG_CLOUD_PASS_SKY) s_core.frame_index++;
 
     cloud_core_render(gfx, p);
 }
@@ -2894,7 +2894,7 @@ void ui_cloud_render_core(Nano_GFX *gfx, const UiCloud_Render_Params *p) {
 // 浓积云底 = 0.8 km（云底本身约 1.0 km，起伏 ±50 m）、高积云底 = 3.0 km、
 // 层积云底 = 6.2 km、卷层云底 = 9.4 km（见 cloud_layer_band）。
 // 无云层或场景尚未初始化时返回 -1。
-float ui_cloud_lowest_layer_base_km(void) {
+float linglong_cloud_lowest_layer_base_km(void) {
     if (s_scene.bottomRadius < 1.0f) return -1.0f;
     float h0 = 0.0f, h1 = 1.0f;
     if (!cloud_layer_band(&h0, &h1)) return -1.0f;
@@ -2904,7 +2904,7 @@ float ui_cloud_lowest_layer_base_km(void) {
 // 将最近一帧的内部渲染结果输出到 gfx 显存（整屏，按 gfx->width stride）。
 // 天象仪集成：在调用 render_sky 的其余叠加绘制之前先 flush，把体积云/大气
 // 作为背景落入帧缓冲，再在其上绘制太阳/月亮/恒星/坐标圈/地景等天象仪要素。
-void ui_cloud_flush(Nano_GFX *gfx) {
+void linglong_cloud_flush(Nano_GFX *gfx) {
     const int FW = s_out_fw, FH = s_out_fh;
     if (s_fb == NULL || FW <= 0 || FH <= 0) return;
     if ((int)gfx->width != FW) { // 尺寸不匹配则按当前 gfx 最接近的尺寸（保守起见直接整屏逐像素）
@@ -2958,7 +2958,7 @@ static inline uint8_t cloud_composite_ch(uint32_t dst, uint32_t a, uint32_t prem
 // T 为云透射率（0=完全不透明云，255=无云），premul_rgb 为云色×(1−T)。
 // 照搬 linglong.html render_decoupled_volumetric_clouds 的显示空间合成：
 // 两层各自完成色调映射后只在 0..1 内混合，不会过曝；云隙处 T≈255 保留底层（地景/天空）。
-void ui_cloud_flush_over(Nano_GFX *gfx) {
+void linglong_cloud_flush_over(Nano_GFX *gfx) {
     const int FW = s_out_fw, FH = s_out_fh;
     if (s_fb == NULL || s_fb_a == NULL || FW <= 0 || FH <= 0) return;
     const int W = (int)gfx->width, H = (int)gfx->height;

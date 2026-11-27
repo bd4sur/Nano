@@ -58,6 +58,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         hal_misc_linux.c \
                         celestial.c \
                         celestial_ocean.c \
+                        cloud.c \
                         ephemeris.c \
                         flip.c \
                         gfx_font_12.c \
@@ -76,7 +77,6 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         ui_button.c \
                         ui.c \
                         ui_app.c \
-                        ui_cloud.c \
                         ui_dict.c \
                         ui_ebook.c \
                         ui_flip.c \
@@ -116,6 +116,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         vsop87c_milli.c \
                         celestial.c \
                         celestial_ocean.c \
+                        cloud.c \
                         ephemeris.c \
                         nongli.c \
                         flip.c \
@@ -129,7 +130,6 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         ui_button.c \
                         ui.c \
                         ui_app.c \
-                        ui_cloud.c \
                         ui_dict.c \
                         ui_ebook.c \
                         ui_flip.c \

@@ -452,7 +452,7 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
         // 退场，TSP 仅保留 Scheme 实现（app/tsp.scm，经“灵机应用程序”入口启动）
         // 原“日历”入口已移除：C 版（STATE_CALENDAR / ui_calendar.c）退场，日历仅保留
         // Scheme 实现（app/calendar.scm，经“灵机应用程序”入口启动）
-        // 原“体积云”入口已移除：C 版体积云演示 App 已删除，体积云现为（ui_cloud.c）
+        // 原“体积云”入口已移除：C 版体积云演示 App 已删除，体积云现为（cloud.c）
         // 纯渲染库，只由玲珑天象仪 sky_model==4 调用（见 celestial.c）
         // L"曼德博集" / L"生命游戏Scheme"：已并入“灵机应用程序”（业务资源目录 app/
         // 下的 Scheme App 动态列表，见 ui_scheme_app.c）

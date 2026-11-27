@@ -28,7 +28,7 @@
 #include "hal_display.h"   // display_hal_get_color_depth：低色深时的抖动
 #include "hal_key.h"
 #include "platform.h"
-#include "ui_cloud.h"   // ui_cloud_coverage_level_num/name：云量档位名（设置界面显示）
+#include "cloud.h"   // linglong_cloud_coverage_level_num/name：云量档位名（设置界面显示）
 #include "ui_color.h"
 #include "ui_linglong_ctrl.h"
 
@@ -100,7 +100,7 @@ static const wchar_t *ui_linglong_cloud_precision_name(Linglong_Config *cfg) {
 }
 
 static void ui_linglong_cloud_next_coverage(Global_State *global_state) {
-    int32_t n = ui_cloud_coverage_level_num();
+    int32_t n = linglong_cloud_coverage_level_num();
     if (n < 1) n = 1;
     global_state->linglong_cfg->cloud_coverage_level =
         (global_state->linglong_cfg->cloud_coverage_level + 1) % n;
@@ -160,7 +160,7 @@ static void ui_linglong_setting_fill_cells(Global_State *global_state, UiLinglon
     const uint8_t cloud_b = cloud_active ? 255 : 190;
 
     cells[0].label = L"云量";
-    cells[0].value = ui_cloud_coverage_level_name(cfg->cloud_coverage_level);
+    cells[0].value = linglong_cloud_coverage_level_name(cfg->cloud_coverage_level);
     cells[0].value_r = cloud_r; cells[0].value_g = cloud_g; cells[0].value_b = cloud_b;
 
     cells[1].label = L"云类";

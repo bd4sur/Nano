@@ -17,7 +17,7 @@
 #include "celestial.h"
 #include "celestial_ocean.h"
 #include "ephemeris.h"
-#include "ui_cloud.h"
+#include "cloud.h"
 
 #ifndef M_PI
     #define M_PI (3.14159265358979323846)
@@ -2640,17 +2640,17 @@ static inline void sky_inscatter_lut_lookup(
 // 云类：云层掩码循环（四层；多开一层，逐像素 ray-march 的成本就上一档）
 // 名称按云属给出（与参考实现一致）：浓积云 0.8~4.1km、高积云 3~6.2、层积云 6.2~9.4、卷层云 9.4~11
 static const Linglong_Cloud_Option S_CLOUD_LAYER_OPTIONS[] = {
-    { UI_CLOUD_LAYER_AC,                                       L"高积云" },
-    { UI_CLOUD_LAYER_CU,                                       L"浓积云" },
-    { UI_CLOUD_LAYER_CU | UI_CLOUD_LAYER_AC,                   L"积云+高积" },
-    { UI_CLOUD_LAYER_AC | UI_CLOUD_LAYER_SC,                   L"高+层积" },
-    { UI_CLOUD_LAYER_ALL,                                      L"全部" },
+    { LINGLONG_CLOUD_LAYER_AC,                                       L"高积云" },
+    { LINGLONG_CLOUD_LAYER_CU,                                       L"浓积云" },
+    { LINGLONG_CLOUD_LAYER_CU | LINGLONG_CLOUD_LAYER_AC,                   L"积云+高积" },
+    { LINGLONG_CLOUD_LAYER_AC | LINGLONG_CLOUD_LAYER_SC,                   L"高+层积" },
+    { LINGLONG_CLOUD_LAYER_ALL,                                      L"全部" },
     { 0,                                                       L"无云" },
 };
 #define S_CLOUD_LAYER_OPTION_NUM ((int32_t)(sizeof(S_CLOUD_LAYER_OPTIONS) / sizeof(S_CLOUD_LAYER_OPTIONS[0])))
 
 // 云精度：档位序号 → 内部渲染降采样倍数 + ray-march 目标采样步距（km）。
-// 中间档 = ui_cloud.c 的 CLOUD_OPT_* 默认（发布值），实测见 doc/AGENTS.md。
+// 中间档 = cloud.c 的 CLOUD_OPT_* 默认（发布值），实测见 doc/AGENTS.md。
 static const Linglong_Cloud_Option S_CLOUD_PRECISION_OPTIONS[] = {
     { 0, L"高" },   // 全分辨率 + flower 原步距 0.0625km（WASM 单线程仅低层 ≈3fps）
     { 1, L"中" },   // 半分辨率 + 0.25km（默认，≈12fps）
@@ -2736,7 +2736,7 @@ void linglong_init(Linglong_Config *cfg) {
 
     cfg->enable_imu = 1;              // 是否启用IMU（使视角随机器姿态旋转）
 
-    // 体积云参数（sky_model==4 时生效；档位/亮度与 ui_cloud.c 独立应用的默认一致）
+    // 体积云参数（sky_model==4 时生效；档位/亮度与 cloud.c 独立应用的默认一致）
     // 云量档位（多云）：与参考实现 linglong.html 的默认档一致（4/6）。此前的「半云」
     // 在只有高积云时观感刚好，但浓积云（云底 1.0km 的积云塔）的覆盖率映射在「半云」
     // 档几乎不出云团、只成一层薄纱——它的门限标定是给「多云~满云」这段用的。
@@ -2744,7 +2744,7 @@ void linglong_init(Linglong_Config *cfg) {
     // 云层种类默认浓积云（0.8~4.1km，云底 1.0km 的积云塔）：四层叠满时逐像素 ray-march
     // 成本过高（WASM 单线程下约 1fps），单开一层时选观感最像“常见晴天积云”的那层。
     // 浓积云每样本 3 次带 mip 的 3D 噪声 + 1 次 curl，比高积云重约 20%（见 doc/AGENTS.md）。
-    cfg->cloud_layer_mask = UI_CLOUD_LAYER_CU;
+    cfg->cloud_layer_mask = LINGLONG_CLOUD_LAYER_CU;
     cfg->cloud_precision_level = 1;   // 云精度档位（0-高 1-中 2-低；中 = 半分辨率 + 0.25km 步距）
 
     // 海洋参数（sky_model==5 或 landscape_index==3 时生效；与 celestial_ocean.c 的模块默认一致）
@@ -2931,16 +2931,16 @@ void render_sky(Nano_GFX *gfx,
     float atmo_g = 0;
     float atmo_b = 0;
 
-    // 体积云：天空与云拆成两遍渲染（见 ui_cloud.h 的 UI_CLOUD_PASS_* / linglong.html 的
+    // 体积云：天空与云拆成两遍渲染（见 cloud.h 的 LINGLONG_CLOUD_PASS_* / linglong.html 的
     // “sky_only + 解耦云层”）。本帧参数在天空遍填好，云遍复用；cloud_pass_valid 仅模型 4 置 1。
-    UiCloud_Render_Params cp;
+    Linglong_Cloud_Render_Params cp;
     memset(&cp, 0, sizeof(cp));
     int32_t cloud_pass_valid = 0;
     int32_t clouds_nearer_ground = 0;
     float cloud_cam_alt_km = 0.0f;
 
     if (sky_model == 4) {
-        // 体积云+大气渲染（ui_cloud.c 的 flower port）作为天空背景，光源/相机/坐标出自天象仪。
+        // 体积云+大气渲染（cloud.c 的 flower port）作为天空背景，光源/相机/坐标出自天象仪。
         // 太阳镜头光晕在云内核中关闭（天象仪自己绘制太阳与星芒），太阳/月亮/恒星/坐标圈/地景
         // 仍由 render_sky 后续步骤叠加绘制。云层本身在天空遍之后单独合成（见下文顺序说明）。
 
@@ -2987,16 +2987,16 @@ void render_sky(Nano_GFX *gfx,
         cp.sun_dz = -sun_y;
 
         float sr, sg, sb, si;
-        ui_cloud_sun_color((float)sun_alt, &sr, &sg, &sb, &si);
+        linglong_cloud_sun_color((float)sun_alt, &sr, &sg, &sb, &si);
         cp.sun_r = sr; cp.sun_g = sg; cp.sun_b = sb; cp.sun_intensity = si;
 
         // 云参数：云量与云层来自用户档位；云亮度不做手动档，而是每帧按太阳高度
         // 自动调制（与 linglong.html 同式）：太阳高时云白亮（上限 2.0），日落后转暗，
         // 天文暮光之后压到下限 0.5。亮度值本身经 cloud_apply_brightness 联动反照率/
         // 直射辐照/多重散射/环境补光，是介质光学参数而不是事后乘颜色。
-        cp.coverage = ui_cloud_coverage_for_level(cloud_coverage_level);
+        cp.coverage = linglong_cloud_coverage_for_level(cloud_coverage_level);
         cp.layer_mask = cloud_layer_mask;
-        cp.brightness = ui_cloud_brightness_for_sun_alt((float)sun_alt);
+        cp.brightness = linglong_cloud_brightness_for_sun_alt((float)sun_alt);
         // 云精度档位 → 内部渲染降采样倍数 + ray-march 步距（越界钳制到中间档）
         {
             int32_t lv = cloud_precision_level;
@@ -3014,17 +3014,17 @@ void render_sky(Nano_GFX *gfx,
         // 云的透视/相对高度都由它决定（对应 linglong.html 的 cloud_sky_sync_camera）。
         cloud_cam_alt_km = MAX(0.0f, obs_y) / 1000.0f;
         cp.cam_alt_km = cloud_cam_alt_km;
-        cp.pass = UI_CLOUD_PASS_SKY;
+        cp.pass = LINGLONG_CLOUD_PASS_SKY;
 
-        ui_cloud_render_core(gfx, &cp);
-        ui_cloud_flush(gfx);   // 不透明天空底
+        linglong_cloud_render_core(gfx, &cp);
+        linglong_cloud_flush(gfx);   // 不透明天空底
 
         // 云与地景的遮挡顺序（照搬 linglong.html render_all 的规则）：
         //   观察者 >= 当前最低云底（3.0/6.2/9.4 km）→ 云比脚下的地景近，必须“地景先、云后”；
         //   否则视野里所有云都在头顶 → “云先、地景后”，近处山/海自然遮住远处地平线上的云。
-        // 无云（掩码 0）时 ui_cloud_lowest_layer_base_km 返回 -1，云遍整体跳过。
+        // 无云（掩码 0）时 linglong_cloud_lowest_layer_base_km 返回 -1，云遍整体跳过。
         {
-            float base_km = ui_cloud_lowest_layer_base_km();
+            float base_km = linglong_cloud_lowest_layer_base_km();
             // 云量为 0（“晴空”档）时云遍没有可画的东西，直接跳过（省一次全屏 ray-march）
             cloud_pass_valid = (base_km >= 0.0f) && (cp.coverage > 0.001f);
             clouds_nearer_ground = cloud_pass_valid && (cloud_cam_alt_km >= base_km);
@@ -3311,12 +3311,12 @@ void render_sky(Nano_GFX *gfx,
     // 云层与地景的合成顺序（linglong.html render_all 的同款规则）：
     //   · 观察者在云下：云先合成（叠在天空/天体上），随后地景覆盖地平线以下 —— 近景遮远云；
     //   · 观察者在云上：地景先画，云最后合成（云海盖住脚下的地面/海面）。
-    // 云遍输出预乘云色 + 透射率，由 ui_cloud_flush_over 做标准 alpha 合成，
+    // 云遍输出预乘云色 + 透射率，由 linglong_cloud_flush_over 做标准 alpha 合成，
     // 云隙处保留底层（地景/天空），云层处正确遮挡太阳/月/星与地面。
     if (cloud_pass_valid && !clouds_nearer_ground) {
-        cp.pass = UI_CLOUD_PASS_CLOUDS;
-        ui_cloud_render_core(gfx, &cp);
-        ui_cloud_flush_over(gfx);
+        cp.pass = LINGLONG_CLOUD_PASS_CLOUDS;
+        linglong_cloud_render_core(gfx, &cp);
+        linglong_cloud_flush_over(gfx);
     }
 
     // 绘制地景（天空投影圆盘之外的部分）
@@ -3364,9 +3364,9 @@ void render_sky(Nano_GFX *gfx,
 
     // 观察者在云层上方：地景已经画完，云最后合成，才能看到“脚下的云海”
     if (cloud_pass_valid && clouds_nearer_ground) {
-        cp.pass = UI_CLOUD_PASS_CLOUDS;
-        ui_cloud_render_core(gfx, &cp);
-        ui_cloud_flush_over(gfx);
+        cp.pass = LINGLONG_CLOUD_PASS_CLOUDS;
+        linglong_cloud_render_core(gfx, &cp);
+        linglong_cloud_flush_over(gfx);
     }
 
     // ============================================================================
@@ -3391,13 +3391,13 @@ void render_sky(Nano_GFX *gfx,
             float lens_vis = 1.0f;
             if (sky_model == 4) {
                 // 沿太阳方向的云透射率（天空遍已算好）；被云完全遮住时不画光晕
-                lens_vis = ui_cloud_sun_visibility();
+                lens_vis = linglong_cloud_sun_visibility();
             }
             if (lens_vis > 0.0f) {
                 // 太阳的屏幕 NDC（±1）：与镜头光晕的屏幕空间参数同一坐标系
                 const float sun_ndc_x = (sun_proj_x - center_x) / (fb_width * 0.5f);
                 const float sun_ndc_y = (center_y - sun_proj_y) / (fb_height * 0.5f);
-                ui_cloud_lens_flare_draw(gfx, sun_ndc_x, sun_ndc_y, lens_vis);
+                linglong_cloud_lens_flare_draw(gfx, sun_ndc_x, sun_ndc_y, lens_vis);
             }
         }
     }

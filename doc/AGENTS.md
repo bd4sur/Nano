@@ -18460,3 +18460,51 @@ C 版只多一份维护成本（它甚至**已无 UI 入口**——「小游戏�
 2. **抗锯齿钩绳判据本身有偶发性**：同一构建连续两次跑，第一次 `partial=0` 失败、
    第二次 `partial=10` 通过——差异来自“两帧之间钩爪摆幅”恰好落在采样时刻。判失败先重跑，
    不要先怀疑渲染。
+
+# 2026-11-28（体积云库改名：ui_cloud → cloud；API 前缀 ui_cloud_* → linglong_cloud_*）
+
+## 背景
+
+`ui_cloud.c` 已收敛为纯渲染库（上一条），但名字仍带 `ui_` 前缀，容易被误读成“面向用户的
+UI 功能”；对外 API 的 `ui_cloud_*` 也与它作为库的身份不符。按命名统一：
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| 文件 | `infer/ui_cloud.{c,h}` | **`infer/cloud.{c,h}`** |
+| 头文件保护宏 | `__NANO_UI_CLOUD_H__` | `__NANO_CLOUD_H__` |
+| API 函数 | `ui_cloud_render_core / flush / flush_over / sun_color / brightness_for_sun_alt / coverage_level_num / coverage_level_name / coverage_for_level / lens_flare_draw / sun_visibility / lowest_layer_base_km` | **`linglong_cloud_*`**（同后缀，与 `celestial.h` 的 `linglong_*` 家族一致） |
+| 宏 | `UI_CLOUD_LAYER_*` / `UI_CLOUD_PASS_*` | `LINGLONG_CLOUD_LAYER_*` / `LINGLONG_CLOUD_PASS_*` |
+| 参数结构体 | `UiCloud_Render_Params` | `Linglong_Cloud_Render_Params` |
+
+**只有对外符号改前缀**：文件内静态函数/宏（`cloud_setup_camera`、`CLOUD_OPT_*`、
+`CLOUD_MAX_W/H`、`CLOUD_PROJ_*`、`CLOUD_COVERAGE_LEVELS` 等）本来就不带 `ui_`，保持不变。
+
+## 改动范围
+
+- `git mv infer/ui_cloud.c infer/cloud.c`、`ui_cloud.h → cloud.h`（git 识别为纯 rename，
+  内容改动只有名字与注释）。
+- 调用点：`celestial.c`（`linglong_cloud_*` 9 处 + 结构体）、`ui_linglong.c`
+  （档位名查询 2 处）、`celestial.h`/`celestial_night.h`/`celestial_ocean.c` 注释里的文件名。
+- 构建清单（`cloud.c` 从 `ui_*` 段挪到 `celestial_ocean.c` 之后的 c 段）：
+  `Makefile`（1 处单行列表 + 4 个目标列表）、`mp135.mk`（2 处）、`luckfox.mk`、
+  `build_wasm_gui.sh`、`android/app/src/main/cpp/CMakeLists.txt`（后者在 .gitignore 内）。
+- 工作区 e2e 工具同步改名：`tools/e2e/native/cloud_lib_probe.c`（含新的 API 名）、
+  `cloud_lib_regress.sh`、`bench_cloud_opt.sh`（它 sed 的就是 `cloud.c` 的 `CLOUD_OPT_*`）、
+  `probe_linglong_cloud*.js` 注释。
+
+## 验证
+
+- **像素级回归 15/15 逐位相同**：`tools/e2e/native/cloud_lib_regress.sh` 用改前基准
+  （同一份 `cloud_lib_baseline.txt`）比对，CRC 与档位/亮度/太阳色温/`sun_visibility`/
+  最低云底读数全部一致 —— 改名对渲染零影响。
+- `cc -Wall -Wextra -fsyntax-only`：`cloud.c` / `celestial.c` / `ui_linglong.c` / `ui_app.c`
+  均无新增告警/错误；`make -n` 全目标列出 `cloud.c`、不再出现 `ui_cloud`。
+- `bash build_wasm_gui.sh` 通过；`nano_gui.wasm` 5,759,293 B（改名使符号表小 11 B）。
+- 产物二进制扫不到 `ui_cloud` / `STATE_CLOUD`（UTF-8 与 UTF-32LE 均 0 命中）。
+
+## 踩坑
+
+- 用脚本批量改构建清单时，`[ \t]*cloud\.c` 这种正则会在 `ui_cloud.c` 的 `cloud.c`
+  处匹配（`[ \t]*` 可匹配空串），把行拆成 `    ui_` + 下一行拼接，emcc 报
+  `ui_: No such file or directory`。批量删行要用 `^\s*ui_cloud\.c\s*\\$` 这类行锚定模式，
+  改完必须 `make -n | grep cloud` 与 `grep -n 'ui_\s\+ui_'` 双向自检。
