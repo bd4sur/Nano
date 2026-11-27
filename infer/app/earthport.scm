@@ -64,7 +64,9 @@
 ;;   空间站图层另有一条轻路径：标记在屏幕上只走 0.09 px/s（92.3 分钟绕一圈 ~600 px），
 ;;   所以每 ST_UPD_TK 拍（≈10 s）只把**标记前后两个包围盒的并集**那一小片重画一遍
 ;;   （窗内跑着色内核、窗外填背景渐变），不必等 30 s 的整帧重算 —— 见 st_patch。
-;;   轨道环用**置色线**画（draw_line，幂等）：三条绘制路径反复重画也不会叠加变粗。
+;;   轨道环是 1px **抗锯齿**线（亮黄）：抗锯齿不是幂等的，所以它每帧只在"像素刚好是
+;;   背景状态"的位置画一次 —— 分条重绘期间不画，收尾时擦掉球外旧环再整条画一次
+;;   （见 st_ring / st_erase_ring 的注释）。
 ;;   拖动时不能等 0.35s/帧：视点一动就先出**粗预览**（每 ST_PREV=4 像素采一个样、
 ;;   4×4 像素块一次 fill_rect 填同色，像素量 1/16 ⇒ 整帧约 33ms ≈ 30 帧/秒，够跟手）；
 ;;   松手后再走上面那条整质量的分条渐进路径（cam_settle 倒计时到 0 才开始）。
@@ -261,13 +263,15 @@
 ;;   而不会飘得很远 —— 不要为了好看把它画大。
 ;; 刷新：标记的屏幕移速 ≈ 0.09 px/s（92.3 分钟绕一圈 ~600 px），所以整帧场景
 ;;   （30 s）之间只需重画**标记占用的一小片**（见 st_patch），左下角数值每秒刷一次。
+;; 线型：1px 抗锯齿（亮黄）。抗锯齿按覆盖率混合、**不幂等**，所以环在每条绘制路径上
+;;   都只画一次（详见 st_ring 上方的说明）。
 (define ST_N 180)                   ; 轨道环采样数（每段 ≈3.3px，首尾闭合）
 (define ST_UPD_TK 500)              ; 每多少拍刷新一次图层位置（≈10 s；标记只走
                                     ;   0.09 px/s，一步不到 1 px，看着是连续移动）
 (define ST_PAD 9)                   ; 标记包围盒半边长（光晕 r=7 + 抗锯齿）
-(define ORB_R 60)                    ; 轨道环颜色（画在环上：暗底与亮地球上都是同一条
-(define ORB_G 148)                   ;   青线；**加色**混合(3)会把穿过球面的那段叠成白光，
-(define ORB_B 184)                   ;   所以用置色线）
+(define ORB_R 255)                    ; 轨道环颜色：**亮黄**。按覆盖率不透明混合（mode 1）：
+(define ORB_G 232)                    ;   暗底上是一条鲜黄的细线，压在地球亮面上也不会
+(define ORB_B 60)                     ;   像加色混合那样过曝成白光
 (define DEGR (/ PI 180.0))          ; 度 → 弧度（着色内核只用 DEG）
 (define ST_CARD_X 6)                ; 左下角信息卡：左边界
 (define ST_CARD_Y 160)              ; 首行墨迹顶（三行：160 / 174 / 188）
@@ -387,6 +391,8 @@
 (define st_bx1 0) (define st_by1 0)
 (define st_nx0 0) (define st_ny0 0) ; 本次重算出来的新包围盒
 (define st_nx1 0) (define st_ny1 0)
+(define st_dd 0)                    ; 上一次完整画完图层时的时刻（判"时刻大跳"用）
+(define st_ds 0.0)
 (define PROJ_X 0.0)                 ; proj_pt 的输出（屏幕坐标 + 天顶分量）
 (define PROJ_Y 0.0)
 (define PROJ_U 0.0)
@@ -770,19 +776,49 @@
     (set! st_bx0 st_nx0) (set! st_bx1 st_nx1)
     (set! st_by0 st_ny0) (set! st_by1 st_ny1)))
 
+;; 一段轨道线，按行裁剪到 [ya, yb) 后**抗锯齿**绘制（1px、不透明混合）。
+;; 为什么不用 (Gfx.set_clip) 限制范围：裁剪矩形只对 draw_point / fill_rect / 圆角矩形 /
+;; draw_line 生效，而抗锯齿线走的是 blend_pixel（光斑走 add_pixel）——对它们无效。
+;; 所以局部重画改用这里的**参数化行裁剪**：解出 y(t) ∈ [ya,yb) 的那一段再画。
+(define st_line_clip
+  (lambda (x0 y0 x1 y1 ya yb)
+    (define dx 0.0)
+    (define dy 0.0)
+    (define ta 0.0)
+    (define tb 0.0)
+    (define t0 0.0)
+    (define t1 0.0)
+    (set! dx (- x1 x0))
+    (set! dy (- y1 y0))
+    (if (== dy 0.0)
+        (if (and (>= y0 (* 1.0 ya)) (< y0 (* 1.0 yb)))
+            (Gfx.draw_line_aa_mode x0 y0 x1 y1 1.0 ORB_R ORB_G ORB_B 1)
+            #f)
+        {
+          (set! ta (/ (- ya y0) dy))
+          (set! tb (/ (- yb y0) dy))
+          (set! t0 ta)
+          (set! t1 tb)
+          (if (> t0 t1) { (set! t0 tb) (set! t1 ta) } #f)
+          (if (< t0 0.0) (set! t0 0.0) #f)
+          (if (> t1 1.0) (set! t1 1.0) #f)
+          (if (>= t0 t1)
+              #f
+              (Gfx.draw_line_aa_mode (+ x0 (* t0 dx)) (+ y0 (* t0 dy))
+                                     (+ x0 (* t1 dx)) (+ y0 (* t1 dy))
+                                     1.0 ORB_R ORB_G ORB_B 1))
+        })))
+
 ;; 轨道环：只画两端都可见的弧段（被地球挡住的不画）。
 ;;
-;; 为什么用**非抗锯齿**的 (Gfx.draw_line) 而不是 (Gfx.draw_line_aa)：
-;;   1. 抗锯齿直线走 blend_pixel（按覆盖率叠加），同一条线重画两次就更实一分 ——
-;;      而本 App 的图层要在"分条重绘 / 粗预览 / 局部重画"三条路径上反复重画，
-;;      叠几次之后环就会从 1px 细线变成 2~3px 的硬线（实测过）。
-;;   2. (Gfx.set_clip) 的裁剪矩形对 set_pixel/add_pixel/blend_pixel 这三个底层写入
-;;      **不生效**（只有 draw_point / fill_rect / 圆角矩形 / draw_line 查它），
-;;      所以抗锯齿线也没法用裁剪区限制在"标记那一小片"里。
-;;   ⇒ 1px 置色线是**幂等**的：画多少次都一样，且受裁剪区约束。320x240 上这条
-;;     轨道线本来就是技术线条，硬边反而更利落（与大气/极光的柔和形成对比）。
+;; 抗锯齿线**不是幂等**的（按覆盖率混合，同一处画两遍就更实一分），所以本图层每帧
+;; 只在"像素刚好是背景状态"的位置画一次：
+;;   · 场景整帧：分条重绘期间不画，`rnd_finish` 里擦一遍球外旧环再整条画一次；
+;;   · 粗预览（拖动）：每帧先擦旧环 → 粗预览重画球内 → 整条画一次；
+;;   · 局部重画（标记）：只擦标记那一小片，环按行裁剪只补这一片。
+;; 1px 的环在 320x240 上是技术线条，抗锯齿让它在亮地球上不再是硬边台阶。
 (define st_ring
-  (lambda ()
+  (lambda (ya yb)
     (define k 0)
     (define k2 0)
     (if (== st_on 1)
@@ -792,9 +828,8 @@
             (set! k2 (+ k 1))
             (if (>= k2 ST_N) (set! k2 0) #f)
             (if (and (== (get_item st_lv k) 1) (== (get_item st_lv k2) 1))
-                (Gfx.draw_line (Math.round (get_item st_lx k)) (Math.round (get_item st_ly k))
-                               (Math.round (get_item st_lx k2)) (Math.round (get_item st_ly k2))
-                               ORB_R ORB_G ORB_B)
+                (st_line_clip (get_item st_lx k) (get_item st_ly k)
+                              (get_item st_lx k2) (get_item st_ly k2) ya yb)
                 #f)
             (set! k (+ k 1))
           })
@@ -806,8 +841,8 @@
 ;;
 ;; 卫星在地球背面（vis=0）时，只画一个**很暗的空心圈**当"被遮挡"的指示 ——
 ;; 这是刻意加的界面提示（真实的卫星此刻看不见）：不画它的话，一个周期里有近一半
-;; 时间画面上既没有标记也没有任何说明，容易被当成功能坏了。颜色压到 (34,64,80)：
-;; 在夜侧勉强可辨、在亮面上基本看不见，不会被误读成"看得见卫星"。
+;; 时间画面上既没有标记也没有任何说明，容易被当成功能坏了。颜色压得很暗：在夜侧
+;; 勉强可辨、在亮面上基本看不见，不会被误读成"看得见卫星"。
 (define st_marker
   (lambda ()
     (if (== st_on 1)
@@ -820,48 +855,91 @@
             (Gfx.draw_circle (Math.round st_mx) (Math.round st_my) 4 42 70 86))
         #f)))
 
-;; 把**上一次画出的**轨道环擦掉：沿旧路径用背景渐变色画一遍同样的折线。
-;; 只在球外（距球心 ≥ 渲染窗半径）的部分需要这样擦 —— 窗内的像素由着色内核重画
-;; 覆盖（分条重绘/粗预览都会重画窗内）。球外没有星点（星点半径 > 108px），所以
-;; "背景 = 那条渐变公式"是精确的。必须在 st_begin（它会覆盖缓存）之前调用。
+;; 只把矩形 [x0,x1)×[y0,y1) 里**落在渲染窗之外**的部分填回背景渐变（窗内不动，
+;; 留给着色内核重画）。球外除了背景没有别的内容：星点半径 > 108px，而轨道环
+;; 最多到 ~97px（含抗锯齿溢出），所以"背景 = 那条渐变公式"在这里是精确的。
+(define st_bg_out
+  (lambda (x0 y0 x1 y1)
+    (define y y0)
+    (define dy 0.0)
+    (define dy2 0.0)
+    (define xe 0.0)
+    (define xa 0.0)
+    (define xb 0.0)
+    (define la 0.0)
+    (define lb 0.0)
+    (while (< y y1) {
+      (set! dy (- (* 1.0 y) CY))
+      (set! dy2 (* dy dy))
+      (set! xa 0.0)
+      (set! xb 0.0)                       ; 窗宽 0 ⇒ 整行都在窗外
+      (if (< dy2 XMAX2)
+          {
+            (set! xe (Math.sqrt (- XMAX2 dy2)))
+            (set! xa (- CX xe))
+            (set! xb (+ CX xe))
+          }
+          #f)
+      ;; 左段 [x0, xa)
+      (set! la (* 1.0 x0))
+      (set! lb xa)
+      (if (> lb (* 1.0 x1)) (set! lb (* 1.0 x1)) #f)
+      (if (> lb la) (bg_fill la y (- (Math.floor lb) la) 1) #f)
+      ;; 右段 [xb, x1]
+      (set! la xb)
+      (if (< la (* 1.0 x0)) (set! la (* 1.0 x0)) #f)
+      (if (> (* 1.0 x1) la)
+          (bg_fill (Math.floor la) y (+ 1 (- x1 (Math.floor la))) 1)
+          #f)
+      (set! y (+ y 1))
+    })))
+
+;; 擦掉**上一次画出的**轨道环的球外部分（沿旧路径把那一带填回背景渐变）。
+;;
+;; 逐段擦：包围盒左右上下各留 1px（抗锯齿的溢出像素落在线的两侧），并且**只填渲染窗
+;; 之外**那一侧（窗内留给着色内核重画）。旧版只擦"两端都在窗外"的整段，跨地球边缘的
+;; 那几段球外部分永远擦不掉 —— 拖动视点后就在地球边缘留下一圈残影（本次修的就是它）。
+;; 必须在 st_begin（它会覆盖缓存）之前调用。
 (define st_erase_ring
   (lambda ()
     (define k 0)
     (define k2 0)
-    (define d0 0.0)
-    (define d1 0.0)
     (define x0 0.0)
     (define y0 0.0)
     (define x1 0.0)
     (define y1 0.0)
-    (define bi 0.0)
+    (define lx 0.0)
+    (define hx 0.0)
+    (define ly 0.0)
+    (define hy 0.0)
     (while (< k ST_N) {
       (set! k2 (+ k 1))
       (if (>= k2 ST_N) (set! k2 0) #f)
-      (set! x0 (get_item st_lx k))
-      (set! y0 (get_item st_ly k))
-      (set! x1 (get_item st_lx k2))
-      (set! y1 (get_item st_ly k2))
-      (set! d0 (+ (* (- x0 CX) (- x0 CX)) (* (- y0 CY) (- y0 CY))))
-      (set! d1 (+ (* (- x1 CX) (- x1 CX)) (* (- y1 CY) (- y1 CY))))
-      ;; 两端都在窗外才用背景色擦（碰窗的那几段留给场景重绘去盖）
-      (if (and (> d0 XMAX2) (> d1 XMAX2))
+      (if (and (== (get_item st_lv k) 1) (== (get_item st_lv k2) 1))
           {
-            (set! bi (Math.floor (/ (+ y0 y1) 12.0)))   ; 背景 6 行一条带 ⇒ 带号
-            (Gfx.draw_line (Math.round x0) (Math.round y0)
-                           (Math.round x1) (Math.round y1)
-                           (+ BG_R (* bi 0.02))
-                           (+ BG_G (* bi 0.035))
-                           (+ BG_B (* bi 0.09)))
+            (set! x0 (get_item st_lx k))
+            (set! y0 (get_item st_ly k))
+            (set! x1 (get_item st_lx k2))
+            (set! y1 (get_item st_ly k2))
+            (set! lx x0)
+            (set! hx x1)
+            (if (< x1 x0) { (set! lx x1) (set! hx x0) } #f)
+            (set! ly y0)
+            (set! hy y1)
+            (if (< y1 y0) { (set! ly y1) (set! hy y0) } #f)
+            (st_bg_out (Math.floor (- lx 1.0))
+                       (Math.floor (- ly 1.0))
+                       (+ (Math.floor (+ hx 1.0)) 1)
+                       (+ (Math.floor (+ hy 1.0)) 1))
           }
           #f)
       (set! k (+ k 1))
     })))
 
-;; 擦掉标记：用它自己的包围盒填背景渐变（窗内那部分随后的场景/预览重绘会盖掉）
+;; 擦掉标记的球外部分（球内那部分由场景重绘/粗预览覆盖）
 (define st_erase_marker
   (lambda ()
-    (bg_fill st_bx0 st_by0 (- st_bx1 st_bx0) (- st_by1 st_by0))))
+    (st_bg_out st_bx0 st_by0 st_bx1 st_by1)))
 
 ;; 信息卡的擦除矩形（三行，宽度比文字略宽）。**卡片整体落在轨道环内侧的空隙里**
 ;; （三行右边界 78/82/96；而环在那三行上分别落在 x≈81/93/113 之外），所以擦除
@@ -972,10 +1050,8 @@
     (if (> y1 H) (set! y1 H) #f)
     (if (< x0 0) (set! x0 0) #f)
     (if (> x1 W) (set! x1 W) #f)
-    (st_repaint y0 y1 x0 x1)
-    (Gfx.set_clip x0 y0 (- x1 x0) (- y1 y0))
-    (st_ring)                       ; 置色线是幂等的 + 受裁剪区约束 ⇒ 只补这一带
-    (Gfx.reset_clip)
+    (st_repaint y0 y1 x0 x1)        ; 这一带先精确擦回背景状态
+    (st_ring y0 y1)                 ; 环只补这一带（AA 线不受裁剪区约束 ⇒ 行裁剪）
     (st_marker)
     (if (rect_hit x0 y0 x1 y1 4 156 100 204) (st_card) #f)
     (if (rect_hit x0 y0 x1 y1 268 0 320 20)
@@ -1119,13 +1195,21 @@
 
 (define rnd_start
   (lambda ()
+    (define jump 0)
     (sun_ephem)
     (view_update)
-    (st_erase_ring)                 ; 旧环球外那段用背景色抹掉（窗内由分条重绘覆盖）——
-                                    ;   关图层时也要擦，否则残环会一直留在窗外
-    (st_erase_marker)
+    ;; 时刻大跳（时间机器的 ←/→/↑/↓、跨日）时，屏上的旧环已经不在新路径附近：
+    ;; 先用**旧缓存**把它擦掉，否则它会在球外一直留到收尾（甚至变成残影）。
+    ;; 正常 30 s 周期只漂 0.2 px，收尾时按新路径擦一遍（±1px 余量）就够。
+    (if (not (== st_dd sim_d)) (set! jump 1) #f)
+    (if (> (Math.abs (- sim_s st_ds)) 240.0) (set! jump 1) #f)
+    (if (== jump 1)
+        {
+          (st_erase_ring)
+          (st_erase_marker)
+        }
+        #f)
     (st_begin)                      ; 空间站图层缓存（与当前视点/时刻一致）
-    (st_mark_b)
     (set! scen_sod sim_s)
     (set! scene_dirty 0)
     (set! rnd_y ROW_Y0)
@@ -1546,9 +1630,8 @@
     (rnd_draw y0 yend 1.0)
     (set! rnd_y yend)
     (if (>= rnd_y ROW_Y1) (set! rnd_mode 0) #f)
-    ;; 环是幂等的置色线：每拍整体补一遍（分条重绘会把落在本行的环抹掉，补上即可）；
-    ;; 标记留到 rnd_finish 一次画完（它跨好几行，分条补画会叠成更亮的光斑）。
-    (st_ring)
+    ;; 分条重绘期间**不画**图层：抗锯齿线不是幂等的（重画会更实），所以环与标记都
+    ;; 留到 rnd_finish 一次画完（此时每一行都已经落在刚算出的背景/地表上）。
     (Gfx.refresh)))
 
 ;; 粗预览：本拍把整帧（粗采样）画完 —— 拖动时每拍一张，够跟手。
@@ -1560,7 +1643,7 @@
     (st_erase_marker)
     (st_begin)
     (rnd_draw ROW_Y0 ROW_Y1 ST_PREV)
-    (st_ring)
+    (st_ring 0 H)
     (st_marker)
     (st_mark_b)                     ; 下一帧要按**这一帧**的标记位置去擦（预览帧之间也在动）
     (Gfx.refresh)))
@@ -1568,8 +1651,15 @@
 ;; 一帧整质量场景画完后的收尾（诊断行；渲染窗只到第 198 行，HUD 不会被它擦到）
 (define rnd_finish
   (lambda ()
-    (st_ring)                       ; 分条路径只在每拍补环，收尾再补一次（含顶部两行）
-    (st_marker)                     ; 标记一次画完（分条绘制时不画它）
+    ;; 球内那半已被分条重绘覆盖；球外的旧环/旧标记在这里擦掉，然后把环与标记
+    ;; **各画一次**（抗锯齿线不能重复叠加）
+    (st_erase_ring)
+    (st_erase_marker)
+    (st_ring 0 H)
+    (st_marker)
+    (st_mark_b)
+    (set! st_dd sim_d)
+    (set! st_ds sim_s)
     (st_card)
     (display "[earthport] scene done heap=")
     (display (get_item (System.memstat) 3)) (newline)))
