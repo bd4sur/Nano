@@ -1000,6 +1000,8 @@ static const struct {
     { "musicbox", PLATFORM_ROOT_DIR "/icon/music.png" },
     // 灵机版「电子鹦鹉」（app/nanochat.scm）沿用原 C 版鹦鹉笼的图标
     { "nanochat", PLATFORM_ROOT_DIR "/icon/nano.png" },
+    // 灵机版「贪吃蛇」（app/snake.scm）沿用已退场的 C 版「小游戏」入口图标
+    { "snake", PLATFORM_ROOT_DIR "/icon/game.png" },
 };
 
 // 图标选择：① 覆盖表 → ② icon/<id>.png（存在则用）→ ③ 留空（绘制时取默认图标）。
