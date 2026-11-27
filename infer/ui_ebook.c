@@ -4,6 +4,7 @@
 
 #include "ui_ebook.h"
 #include "ui_color.h"
+#include "ui_button.h"
 #include "ui_softkbd.h"
 #include "hal_key.h"
 #include "platform.h"
@@ -433,6 +434,51 @@ static void ui_ebook_draw_progress_bar(Key_Event *key_event, Global_State *globa
 #define EBOOK_GOTO_PAD_CELL_H ((EBOOK_GOTO_PAD_Y1 - EBOOK_GOTO_PAD_Y0 - (EBOOK_GOTO_PAD_ROWS - 1) * EBOOK_GOTO_PAD_GAP) / EBOOK_GOTO_PAD_ROWS)
 #define EBOOK_GOTO_KEY_RADIUS (6)
 
+static const wchar_t *const S_EBOOK_GOTO_LABEL[EBOOK_GOTO_PAD_ROWS][EBOOK_GOTO_PAD_COLS] = {
+    {L"1", L"2", L"3", L"退格"},
+    {L"4", L"5", L"6", L"0"},
+    {L"7", L"8", L"9", L"确认"},
+};
+
+static void ui_ebook_goto_theme(Ui_Button_Theme *t) {
+    memset(t, 0, sizeof(*t));
+    Ui_RGB normal = {0x33, 0x33, 0x33};
+    Ui_RGB press = {0x55, 0x55, 0x55};
+    Ui_RGB text = {0xff, 0xff, 0xff};
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = normal;
+        t->fg[i] = text;
+        t->bg_alpha[i] = 1;
+        t->border_alpha[i] = 0;
+    }
+    t->bg[UI_BTN_VIS_PRESSED] = press;
+}
+
+static void ui_ebook_goto_build_buttons(Ui_Button out[EBOOK_GOTO_PAD_ROWS * EBOOK_GOTO_PAD_COLS]) {
+    for (int32_t row = 0; row < EBOOK_GOTO_PAD_ROWS; row++) {
+        for (int32_t col = 0; col < EBOOK_GOTO_PAD_COLS; col++) {
+            int32_t idx = row * EBOOK_GOTO_PAD_COLS + col;
+            int32_t x = EBOOK_GOTO_PAD_X0 + col * (EBOOK_GOTO_PAD_CELL_W + EBOOK_GOTO_PAD_GAP);
+            int32_t y = EBOOK_GOTO_PAD_Y0 + row * (EBOOK_GOTO_PAD_CELL_H + EBOOK_GOTO_PAD_GAP);
+            ui_button_init(&out[idx], idx, x, y, EBOOK_GOTO_PAD_CELL_W, EBOOK_GOTO_PAD_CELL_H);
+            out[idx].style = UI_BTN_STYLE_ROUNDED;
+            out[idx].radius = EBOOK_GOTO_KEY_RADIUS;
+            out[idx].flags = UI_BTN_FLAG_DRAW_BG;
+            out[idx].font_id = GFX_FONT_ALPHA_16;
+            ui_button_set_text(&out[idx], S_EBOOK_GOTO_LABEL[row][col], NULL);
+        }
+    }
+}
+
+static int32_t ui_ebook_goto_key_hit(int32_t x, int32_t y) {
+    Ui_Button buttons[EBOOK_GOTO_PAD_ROWS * EBOOK_GOTO_PAD_COLS];
+    ui_ebook_goto_build_buttons(buttons);
+    for (int32_t i = 0; i < EBOOK_GOTO_PAD_ROWS * EBOOK_GOTO_PAD_COLS; i++) {
+        if (ui_button_hit(&buttons[i], x, y)) return i;
+    }
+    return -1;
+}
+
 // 跳页确认（硬按键 D 与触屏“确认”按钮共用）
 static void ui_ebook_goto_confirm(Key_Event *key_event, Global_State *global_state) {
     s_goto_digits[s_goto_len] = '\0';
@@ -470,26 +516,94 @@ static void ui_ebook_goto_render_full(Key_Event *key_event, Global_State *global
     Nano_GFX *gfx = global_state->gfx;
     gfx_soft_clear(gfx); // 全屏黑底（不刷帧，末尾统一推屏）
 
-    // 触屏数字键盘（3行4列：1 2 3 退格 / 4 5 6 0 / 7 8 9 确认；圆角浅灰键 + 深色文字）
-    static const wchar_t *pad_label[EBOOK_GOTO_PAD_ROWS][EBOOK_GOTO_PAD_COLS] = {
-        {L"1", L"2", L"3", L"退格"},
-        {L"4", L"5", L"6", L"0"},
-        {L"7", L"8", L"9", L"确认"},
-    };
-    for (int32_t row = 0; row < EBOOK_GOTO_PAD_ROWS; row++) {
-        for (int32_t col = 0; col < EBOOK_GOTO_PAD_COLS; col++) {
-            int32_t x = EBOOK_GOTO_PAD_X0 + col * (EBOOK_GOTO_PAD_CELL_W + EBOOK_GOTO_PAD_GAP);
-            int32_t y = EBOOK_GOTO_PAD_Y0 + row * (EBOOK_GOTO_PAD_CELL_H + EBOOK_GOTO_PAD_GAP);
-            gfx_draw_rounded_rectangle(gfx, x, y, EBOOK_GOTO_PAD_CELL_W, EBOOK_GOTO_PAD_CELL_H,
-                EBOOK_GOTO_KEY_RADIUS, EBOOK_GOTO_KEY_RADIUS, EBOOK_GOTO_KEY_RADIUS, EBOOK_GOTO_KEY_RADIUS,
-                0x33, 0x33, 0x33, 1);
-            gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, (wchar_t *)pad_label[row][col],
-                x + EBOOK_GOTO_PAD_CELL_W / 2, y + EBOOK_GOTO_PAD_CELL_H / 2, 0xff, 0xff, 0xff, 1);
-        }
-    }
+    // 触屏数字键盘（3行4列：1 2 3 退格 / 4 5 6 0 / 7 8 9 确认）
+    Ui_Button buttons[EBOOK_GOTO_PAD_ROWS * EBOOK_GOTO_PAD_COLS];
+    Ui_Button_Group group;
+    Ui_Button_Theme theme;
+    ui_ebook_goto_build_buttons(buttons);
+    ui_ebook_goto_theme(&theme);
+    group.items = buttons;
+    group.count = EBOOK_GOTO_PAD_ROWS * EBOOK_GOTO_PAD_COLS;
+    group.theme = &theme;
+    group.clip_x0 = 0;
+    group.clip_y0 = 0;
+    group.clip_x1 = 0;
+    group.clip_y1 = 0;
+    ui_button_group_draw(gfx, &group, NULL);
 
     ui_ebook_goto_paint_input_line(global_state);
     gfx_refresh(gfx);
+}
+
+// ===============================================================================
+// 阅读页页脚按钮（4 等分：上页/下页/跳页/书签）
+// ===============================================================================
+
+static void ui_ebook_footer_theme(Ui_Button_Theme *t, Global_State *gs) {
+    memset(t, 0, sizeof(*t));
+    int32_t light = (gs->ui_color_style == UI_COLOR_LIGHT) ? 1 : 0;
+    Ui_RGB normal = light ? (Ui_RGB){236, 240, 244} : (Ui_RGB){38, 42, 48};
+    Ui_RGB press  = light ? (Ui_RGB){17, 85, 238}   : (Ui_RGB){16, 72, 176};
+    Ui_RGB text   = light ? (Ui_RGB){60, 68, 76}    : (Ui_RGB){210, 216, 224};
+    Ui_RGB on     = (Ui_RGB){255, 255, 255};
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = normal;
+        t->fg[i] = text;
+        t->bg_alpha[i] = 1;
+        t->border_alpha[i] = 0;
+    }
+    t->bg[UI_BTN_VIS_PRESSED] = press;
+    t->fg[UI_BTN_VIS_PRESSED] = on;
+}
+
+static void ui_ebook_footer_build(Global_State *gs, Ui_Button out[4], Ui_Button_Group *group) {
+    static const wchar_t *labels[4] = { L"上页", L"下页", L"跳页", L"书签" };
+    int32_t W = (int32_t)gs->gfx->width;
+    int32_t band_h = gfx_font_line_height(gs->ui_font) + 1;
+    int32_t footer_bottom = (int32_t)gs->gfx->height - (int32_t)ui_softkbd_height();
+    int32_t footer_top = footer_bottom - band_h;
+    int32_t cell_w = W / 4;
+
+    for (int32_t i = 0; i < 4; i++) {
+        int32_t x = i * cell_w + 1;
+        int32_t w = cell_w - 2;
+        if (i == 3) w = W - x - 1;
+        ui_button_init(&out[i], i, x, footer_top, w, band_h);
+        out[i].style = UI_BTN_STYLE_ROUNDED;
+        out[i].radius = 4;
+        out[i].flags = UI_BTN_FLAG_DRAW_BG;
+        out[i].font_id = gs->ui_font;
+        out[i].press_text_dy = 0; // 页脚带高度紧，文字不做下沉
+        ui_button_set_text(&out[i], labels[i], NULL);
+    }
+
+    group->items = out;
+    group->count = 4;
+    group->theme = NULL;
+    group->clip_x0 = 0;
+    group->clip_y0 = 0;
+    group->clip_x1 = 0;
+    group->clip_y1 = 0;
+}
+
+static int32_t ui_ebook_footer_hit(Global_State *gs, int32_t x, int32_t y) {
+    Ui_Button buttons[4];
+    Ui_Button_Group group;
+    ui_ebook_footer_build(gs, buttons, &group);
+    int32_t id = ui_button_group_hit(&group, x, y);
+    return (id == UI_BTN_ID_NONE) ? -1 : id;
+}
+
+static void ui_ebook_draw_footer_buttons(Key_Event *key_event, Global_State *gs) {
+    (void)key_event;
+    Ui_Button buttons[4];
+    Ui_Button_Group group;
+    Ui_Button_Theme theme;
+    ui_ebook_footer_build(gs, buttons, &group);
+    ui_ebook_footer_theme(&theme, gs);
+    for (int32_t i = 0; i < 4; i++) {
+        ui_button_draw(gs->gfx, &buttons[i], &theme, UI_BTN_VIS_NORMAL);
+    }
 }
 
 int32_t ui_ebook_reading_render(Key_Event *key_event, Global_State *global_state) {
@@ -504,8 +618,8 @@ int32_t ui_ebook_reading_render(Key_Event *key_event, Global_State *global_state
     ui_draw_header_full(key_event, global_state, s_book_title, 1,
         ui_std_header_height(global_state->ui_font), page_info, L"返回 ");
 
-    // 页脚 4 等分触屏热点（命中判定见下方事件处理）：上页/下页/跳页/书签（书签为占位符，暂不实现）
-    ui_draw_footer_softkeys(key_event, global_state, L"上页", L"下页", L"跳页", L"书签");
+    // 页脚 4 等分按钮：上页/下页/跳页/书签（书签为占位符，暂不实现）
+    ui_ebook_draw_footer_buttons(key_event, global_state);
 
     ui_widget_textarea_draw(key_event, global_state, global_state->w_textarea_main);
 
@@ -641,18 +755,16 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
     static uint64_t s_pad_hold_ts = 0;   // 按下时刻（ms）
     static int32_t  s_pad_repeating = 0; // 1-已进入反复触发
 
-    int32_t band_h = gfx_font_line_height(global_state->ui_font) + 1; // 页脚带高度
     int32_t header_h = ui_std_header_height(global_state->ui_font);   // 页眉带高度（1.5 倍行高）
-    int32_t footer_top = (int32_t)global_state->gfx->height - (int32_t)ui_softkbd_height() - band_h;
 
     // 按下沿：命中上页/下页按钮 → 开始按住跟踪
     if (key_event->touch_edge & TOUCH_EDGE_DOWN) {
         int32_t tx = key_event->touch_down_x;
         int32_t ty = key_event->touch_down_y;
-        if (!s_goto_active && ty >= footer_top && ty < footer_top + band_h) {
-            int32_t quarter = tx / ((int32_t)global_state->gfx->width / 4);
-            if (quarter == 0 || quarter == 1) {
-                s_pad_hold = quarter + 1;
+        if (!s_goto_active) {
+            int32_t id = ui_ebook_footer_hit(global_state, tx, ty);
+            if (id == 0 || id == 1) {
+                s_pad_hold = id + 1;
                 s_pad_hold_ts = global_state->timestamp;
                 s_pad_repeating = 0;
             }
@@ -814,13 +926,10 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
         if (s_goto_active) {
             if (ty >= EBOOK_GOTO_PAD_Y0 && ty < EBOOK_GOTO_PAD_Y1
                 && tx >= EBOOK_GOTO_PAD_X0 && tx < EBOOK_GOTO_PAD_X1) {
-                int32_t pitch_x = EBOOK_GOTO_PAD_CELL_W + EBOOK_GOTO_PAD_GAP;
-                int32_t pitch_y = EBOOK_GOTO_PAD_CELL_H + EBOOK_GOTO_PAD_GAP;
-                int32_t col = (tx - EBOOK_GOTO_PAD_X0) / pitch_x;
-                int32_t row = (ty - EBOOK_GOTO_PAD_Y0) / pitch_y;
-                int32_t in_cell = ((tx - EBOOK_GOTO_PAD_X0) % pitch_x < EBOOK_GOTO_PAD_CELL_W)
-                               && ((ty - EBOOK_GOTO_PAD_Y0) % pitch_y < EBOOK_GOTO_PAD_CELL_H);
-                if (in_cell && col >= 0 && col < EBOOK_GOTO_PAD_COLS && row >= 0 && row < EBOOK_GOTO_PAD_ROWS) {
+                int32_t id = ui_ebook_goto_key_hit(tx, ty);
+                if (id >= 0) {
+                    int32_t row = id / EBOOK_GOTO_PAD_COLS;
+                    int32_t col = id % EBOOK_GOTO_PAD_COLS;
                     if (row == 0 && col == 3) {          // 退格
                         if (s_goto_len > 0) s_goto_len--;
                         ui_ebook_goto_render_input_line(key_event, global_state); // 仅重绘输入行
@@ -850,16 +959,18 @@ int32_t ui_ebook_reading_event_handler(Key_Event *key_event, Global_State *globa
             global_state->STATE = STATE_EBOOK;
             return 0;
         }
-        if (ty >= footer_top && ty < footer_top + band_h) {
-            int32_t quarter = tx / ((int32_t)global_state->gfx->width / 4);
-            // quarter 0/1（上页/下页）由上方按住跟踪分支处理，此处不再响应
-            // quarter == 3：书签（占位符，暂不实现）
-            if (quarter == 2) {
-                s_goto_active = 1;
-                s_goto_len = 0;
-                ui_ebook_goto_render_full(key_event, global_state); // 全屏跳页界面
+        {
+            int32_t id = ui_ebook_footer_hit(global_state, tx, ty);
+            if (id >= 0) {
+                // id 0/1（上页/下页）由上方按住跟踪分支处理，此处不再响应
+                // id 3：书签（占位符，暂不实现）
+                if (id == 2) {
+                    s_goto_active = 1;
+                    s_goto_len = 0;
+                    ui_ebook_goto_render_full(key_event, global_state); // 全屏跳页界面
+                }
+                return 0;
             }
-            return 0;
         }
     }
 

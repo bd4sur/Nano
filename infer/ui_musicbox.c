@@ -19,6 +19,7 @@
 
 #include "hal_audio_out.h"
 #include "hal_key.h"
+#include "ui_button.h"
 #include "ui_color.h"
 #include "vendor/minimp3.h"
 
@@ -947,6 +948,142 @@ static void musicbox_draw_vol_icon(Nano_GFX *gfx, int32_t cx, int32_t cy, int32_
 
 // ---------------- 各区域绘制 ----------------
 
+static Ui_RGB musicbox_rgb(const uint8_t c[3]) {
+    return (Ui_RGB){c[0], c[1], c[2]};
+}
+
+static void musicbox_button_theme(Ui_Button_Theme *t,
+                                   const uint8_t *bg, const uint8_t *bg_press,
+                                   const uint8_t *fg, const uint8_t *fg_press) {
+    memset(t, 0, sizeof(*t));
+    Ui_RGB nbg = musicbox_rgb(bg);
+    Ui_RGB pbg = musicbox_rgb(bg_press);
+    Ui_RGB nfg = musicbox_rgb(fg);
+    Ui_RGB pfg = musicbox_rgb(fg_press);
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = nbg;
+        t->fg[i] = nfg;
+        t->bg_alpha[i] = 1;
+        t->border_alpha[i] = 0;
+    }
+    t->bg[UI_BTN_VIS_PRESSED] = pbg;
+    t->fg[UI_BTN_VIS_PRESSED] = pfg;
+    t->bg[UI_BTN_VIS_SELECTED] = nbg;
+    t->fg[UI_BTN_VIS_SELECTED] = nfg;
+    t->bg[UI_BTN_VIS_SELECTED_PRESSED] = pbg;
+    t->fg[UI_BTN_VIS_SELECTED_PRESSED] = pfg;
+}
+
+typedef struct {
+    const Musicbox_Palette *p;
+    int32_t r;
+    int32_t dir;
+} Musicbox_Skip_Content;
+
+static void musicbox_skip_content(Nano_GFX *gfx, const Ui_Button *b,
+                                  int32_t base_cx, int32_t base_cy,
+                                  Ui_Button_Visual vis, void *user) {
+    (void)base_cx; (void)base_cy;
+    const Musicbox_Skip_Content *c = (const Musicbox_Skip_Content *)user;
+    musicbox_draw_skip_icon(gfx, b->x + b->w / 2, ui_button_icon_cy(b, vis), c->r, c->dir,
+                            c->p->text[0], c->p->text[1], c->p->text[2]);
+}
+
+typedef struct {
+    const Musicbox_Palette *p;
+    int32_t r;
+    int32_t play_ok;
+    int32_t playing;
+} Musicbox_Play_Content;
+
+static void musicbox_play_content(Nano_GFX *gfx, const Ui_Button *b,
+                                  int32_t base_cx, int32_t base_cy,
+                                  Ui_Button_Visual vis, void *user) {
+    (void)base_cx; (void)base_cy;
+    const Musicbox_Play_Content *c = (const Musicbox_Play_Content *)user;
+    if (c->play_ok) {
+        musicbox_draw_play_icon(gfx, b->x + b->w / 2, ui_button_icon_cy(b, vis), c->r,
+                                c->playing, 255, 255, 255);
+    }
+    else {
+        musicbox_draw_play_icon(gfx, b->x + b->w / 2, ui_button_icon_cy(b, vis), c->r,
+                                0, c->p->dim[0], c->p->dim[1], c->p->dim[2]);
+    }
+}
+
+typedef struct {
+    const Musicbox_Palette *p;
+    int32_t plus;
+    int32_t enabled;
+} Musicbox_Vol_Content;
+
+static void musicbox_vol_content(Nano_GFX *gfx, const Ui_Button *b,
+                                 int32_t base_cx, int32_t base_cy,
+                                 Ui_Button_Visual vis, void *user) {
+    (void)base_cx; (void)base_cy;
+    const Musicbox_Vol_Content *c = (const Musicbox_Vol_Content *)user;
+    const uint8_t *fg = c->enabled ? c->p->text : c->p->dim;
+    musicbox_draw_vol_icon(gfx, b->x + b->w / 2, ui_button_icon_cy(b, vis), c->plus,
+                           fg[0], fg[1], fg[2]);
+}
+
+static void musicbox_build_exit(const Musicbox_Ui *u, Ui_Button *b) {
+    ui_button_init(b, MB_UI_EXIT, u->exit_x, u->exit_y, u->exit_w, u->exit_h);
+    b->style = UI_BTN_STYLE_PILL;
+    b->radius = (int16_t)u->exit_r;
+    b->flags = UI_BTN_FLAG_DRAW_BG;
+    b->font_id = GFX_FONT_ALPHA_12;
+    b->hit_pad = 2;
+    ui_button_set_text(b, L"退出", NULL);
+}
+
+static void musicbox_build_transport(const Musicbox_Ui *u, Ui_Button out[3]) {
+    ui_button_init(&out[0], MB_UI_PREV,
+                   u->prev_cx - u->prev_r, u->prev_cy - u->prev_r,
+                   u->prev_r * 2, u->prev_r * 2);
+    out[0].style = UI_BTN_STYLE_CIRCLE;
+    out[0].radius = (int16_t)u->prev_r;
+    out[0].flags = UI_BTN_FLAG_DRAW_BG | UI_BTN_FLAG_HIT_CIRCLE;
+    out[0].hit_radius_pad = 6;
+    out[0].press_icon_dy = 1;
+
+    ui_button_init(&out[1], MB_UI_PLAY,
+                   u->play_cx - u->play_r, u->play_cy - u->play_r,
+                   u->play_r * 2, u->play_r * 2);
+    out[1].style = UI_BTN_STYLE_CIRCLE;
+    out[1].radius = (int16_t)u->play_r;
+    out[1].flags = UI_BTN_FLAG_DRAW_BG | UI_BTN_FLAG_SHADOW | UI_BTN_FLAG_HIT_CIRCLE;
+    out[1].hit_radius_pad = 5;
+    out[1].press_icon_dy = 1;
+
+    ui_button_init(&out[2], MB_UI_NEXT,
+                   u->next_cx - u->next_r, u->next_cy - u->next_r,
+                   u->next_r * 2, u->next_r * 2);
+    out[2].style = UI_BTN_STYLE_CIRCLE;
+    out[2].radius = (int16_t)u->next_r;
+    out[2].flags = UI_BTN_FLAG_DRAW_BG | UI_BTN_FLAG_HIT_CIRCLE;
+    out[2].hit_radius_pad = 6;
+    out[2].press_icon_dy = 1;
+}
+
+static void musicbox_build_volume(const Musicbox_Ui *u, Ui_Button out[2]) {
+    ui_button_init(&out[0], MB_UI_VOL_DN,
+                   u->vol_minus_x, u->vol_minus_y, u->vol_btn_w, u->vol_btn_h);
+    out[0].style = UI_BTN_STYLE_ROUNDED;
+    out[0].radius = (int16_t)u->vol_btn_r;
+    out[0].flags = UI_BTN_FLAG_DRAW_BG;
+    out[0].hit_pad = 2;
+    out[0].press_icon_dy = 1;
+
+    ui_button_init(&out[1], MB_UI_VOL_UP,
+                   u->vol_plus_x, u->vol_minus_y, u->vol_btn_w, u->vol_btn_h);
+    out[1].style = UI_BTN_STYLE_ROUNDED;
+    out[1].radius = (int16_t)u->vol_btn_r;
+    out[1].flags = UI_BTN_FLAG_DRAW_BG;
+    out[1].hit_pad = 2;
+    out[1].press_icon_dy = 1;
+}
+
 static void musicbox_draw_status(Nano_GFX *gfx, const Musicbox_Ui *u, const Musicbox_Palette *p,
                                  int32_t clear_first) {
     const wchar_t *st;
@@ -991,17 +1128,12 @@ static void musicbox_draw_topbar(Nano_GFX *gfx, const Musicbox_Ui *u, const Musi
                        p->text[0], p->text[1], p->text[2], 1);
 
     // 退出按钮（按下时填充强调色）
-    int32_t pressed = (s_ui_pressed == MB_UI_EXIT);
-    const uint8_t *bg = pressed ? p->accent : p->surface;
-    uint8_t fg[3];
-    if (pressed) { fg[0] = 255; fg[1] = 255; fg[2] = 255; }
-    else         { fg[0] = p->text[0]; fg[1] = p->text[1]; fg[2] = p->text[2]; }
-    gfx_draw_rounded_rectangle(gfx, u->exit_x, u->exit_y, u->exit_w, u->exit_h,
-                               u->exit_r, u->exit_r, u->exit_r, u->exit_r,
-                               bg[0], bg[1], bg[2], 1);
-    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)L"退出",
-                                u->exit_x + u->exit_w / 2, u->exit_y + u->exit_h / 2,
-                                fg[0], fg[1], fg[2], 1);
+    Ui_Button b;
+    Ui_Button_Theme t;
+    musicbox_build_exit(u, &b);
+    musicbox_button_theme(&t, p->surface, p->accent, p->text, (const uint8_t[]){255,255,255});
+    ui_button_draw(gfx, &b, &t,
+                   (s_ui_pressed == MB_UI_EXIT) ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
 }
 
 static void musicbox_draw_card(Nano_GFX *gfx, const Musicbox_Ui *u, const Musicbox_Palette *p) {
@@ -1107,36 +1239,40 @@ static void musicbox_draw_transport(Nano_GFX *gfx, const Musicbox_Ui *u, const M
     int32_t play_ok = !(s_open_failed || s_dec == NULL);
     int32_t playing = (play_ok && s_playing);
 
-    // 上/下一首
-    const uint8_t *prev_bg = (s_ui_pressed == MB_UI_PREV) ? p->surface_press : p->surface;
-    musicbox_fill_circle(gfx, u->prev_cx, u->prev_cy, u->prev_r,
-                         prev_bg[0], prev_bg[1], prev_bg[2], 1);
-    musicbox_draw_skip_icon(gfx, u->prev_cx, u->prev_cy, u->prev_r, -1,
-                            p->text[0], p->text[1], p->text[2]);
+    Ui_Button buttons[3];
+    musicbox_build_transport(u, buttons);
 
-    const uint8_t *next_bg = (s_ui_pressed == MB_UI_NEXT) ? p->surface_press : p->surface;
-    musicbox_fill_circle(gfx, u->next_cx, u->next_cy, u->next_r,
-                         next_bg[0], next_bg[1], next_bg[2], 1);
-    musicbox_draw_skip_icon(gfx, u->next_cx, u->next_cy, u->next_r, 1,
-                            p->text[0], p->text[1], p->text[2]);
+    Musicbox_Skip_Content skip_prev = { p, u->prev_r, -1 };
+    Musicbox_Skip_Content skip_next = { p, u->next_r, 1 };
+    Musicbox_Play_Content play = { p, u->play_r, play_ok, playing };
 
-    // 播放/暂停主按钮
+    buttons[0].content_draw = musicbox_skip_content;
+    buttons[0].content_user = &skip_prev;
+    buttons[1].content_draw = musicbox_play_content;
+    buttons[1].content_user = &play;
+    buttons[2].content_draw = musicbox_skip_content;
+    buttons[2].content_user = &skip_next;
+
+    Ui_Button_Theme t;
+    musicbox_button_theme(&t, p->surface, p->surface_press, p->text, p->text);
+    ui_button_draw(gfx, &buttons[0], &t,
+                   (s_ui_pressed == MB_UI_PREV) ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
+    ui_button_draw(gfx, &buttons[2], &t,
+                   (s_ui_pressed == MB_UI_NEXT) ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
+
     if (play_ok) {
-        const uint8_t *ac = (s_ui_pressed == MB_UI_PLAY) ? p->accent_press : p->accent;
-        // 轻微投影，让按钮从渐变背景上“浮”起来
-        musicbox_fill_circle(gfx, u->play_cx, u->play_cy + 2, u->play_r + 2,
-                             0, 0, 0, p->shadow_alpha);
-        musicbox_fill_circle(gfx, u->play_cx, u->play_cy, u->play_r,
-                             ac[0], ac[1], ac[2], 1);
-        musicbox_draw_play_icon(gfx, u->play_cx, u->play_cy, u->play_r, playing,
-                                255, 255, 255);
+        musicbox_button_theme(&t, p->accent, p->accent_press,
+                              (const uint8_t[]){255,255,255}, (const uint8_t[]){255,255,255});
+        t.shadow_alpha = p->shadow_alpha;
+        t.shadow_dy = 2;
+        t.shadow = (Ui_RGB){0, 0, 0};
     }
     else {
-        musicbox_fill_circle(gfx, u->play_cx, u->play_cy, u->play_r,
-                             p->surface[0], p->surface[1], p->surface[2], 1);
-        musicbox_draw_play_icon(gfx, u->play_cx, u->play_cy, u->play_r, 0,
-                                p->dim[0], p->dim[1], p->dim[2]);
+        musicbox_button_theme(&t, p->surface, p->surface, p->dim, p->dim);
+        t.shadow_alpha = 0;
     }
+    ui_button_draw(gfx, &buttons[1], &t,
+                   (s_ui_pressed == MB_UI_PLAY) ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
 }
 
 static void musicbox_draw_volume(Nano_GFX *gfx, const Musicbox_Ui *u, const Musicbox_Palette *p) {
@@ -1163,20 +1299,22 @@ static void musicbox_draw_volume(Nano_GFX *gfx, const Musicbox_Ui *u, const Musi
     // 减 / 加按钮
     int32_t can_dn = (s_volume > 0);
     int32_t can_up = (s_volume < MUSICBOX_VOLUME_MAX);
-    const uint8_t *minus_bg = (s_ui_pressed == MB_UI_VOL_DN) ? p->surface_press : p->surface;
-    const uint8_t *plus_bg  = (s_ui_pressed == MB_UI_VOL_UP) ? p->surface_press : p->surface;
-    gfx_draw_rounded_rectangle(gfx, u->vol_minus_x, u->vol_minus_y, u->vol_btn_w, u->vol_btn_h,
-                               u->vol_btn_r, u->vol_btn_r, u->vol_btn_r, u->vol_btn_r,
-                               minus_bg[0], minus_bg[1], minus_bg[2], 1);
-    gfx_draw_rounded_rectangle(gfx, u->vol_plus_x, u->vol_minus_y, u->vol_btn_w, u->vol_btn_h,
-                               u->vol_btn_r, u->vol_btn_r, u->vol_btn_r, u->vol_btn_r,
-                               plus_bg[0], plus_bg[1], plus_bg[2], 1);
-    const uint8_t *minus_fg = can_dn ? p->text : p->dim;
-    const uint8_t *plus_fg  = can_up ? p->text : p->dim;
-    musicbox_draw_vol_icon(gfx, u->vol_minus_x + u->vol_btn_w / 2, u->vol_minus_y + u->vol_btn_h / 2,
-                           0, minus_fg[0], minus_fg[1], minus_fg[2]);
-    musicbox_draw_vol_icon(gfx, u->vol_plus_x + u->vol_btn_w / 2, u->vol_minus_y + u->vol_btn_h / 2,
-                           1, plus_fg[0], plus_fg[1], plus_fg[2]);
+
+    Ui_Button buttons[2];
+    musicbox_build_volume(u, buttons);
+    Musicbox_Vol_Content vol_dn = { p, 0, can_dn };
+    Musicbox_Vol_Content vol_up = { p, 1, can_up };
+    buttons[0].content_draw = musicbox_vol_content;
+    buttons[0].content_user = &vol_dn;
+    buttons[1].content_draw = musicbox_vol_content;
+    buttons[1].content_user = &vol_up;
+
+    Ui_Button_Theme t;
+    musicbox_button_theme(&t, p->surface, p->surface_press, p->text, p->text);
+    ui_button_draw(gfx, &buttons[0], &t,
+                   (s_ui_pressed == MB_UI_VOL_DN) ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
+    ui_button_draw(gfx, &buttons[1], &t,
+                   (s_ui_pressed == MB_UI_VOL_UP) ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
 }
 
 // 全量绘制（进入播放态 / 切歌 / 暂停态切换 / 打开失败）
@@ -1265,31 +1403,29 @@ static int32_t musicbox_rect_hit(int32_t x, int32_t y, int32_t rx, int32_t ry, i
     return (x >= rx && x < rx + rw && y >= ry && y < ry + rh);
 }
 
-static int32_t musicbox_circle_hit(int32_t x, int32_t y, int32_t cx, int32_t cy, int32_t r) {
-    int32_t dx = x - cx;
-    int32_t dy = y - cy;
-    return (dx * dx + dy * dy) <= r * r;
-}
-
 static int32_t musicbox_ui_hit(const Musicbox_Ui *u, int32_t x, int32_t y) {
     // 顶栏退出
-    if (musicbox_rect_hit(x, y, u->exit_x - 2, u->exit_y - 2, u->exit_w + 4, u->exit_h + 4)) {
-        return MB_UI_EXIT;
-    }
-    // 进度面板（整块可点可拖，比细轨道好按）
+    Ui_Button exit_btn;
+    musicbox_build_exit(u, &exit_btn);
+    if (ui_button_hit(&exit_btn, x, y)) return MB_UI_EXIT;
+
+    // 进度面板（整块可点可拖，比细轨道好按；不是按钮，保留原矩形判定）
     if (musicbox_rect_hit(x, y, u->prog_x - 6, u->prog_y - 4, u->prog_w + 12, u->prog_h + 8)) {
         return MB_UI_SEEK;
     }
+
     // 播放控制
-    if (musicbox_circle_hit(x, y, u->prev_cx, u->prev_cy, u->prev_r + 6)) return MB_UI_PREV;
-    if (musicbox_circle_hit(x, y, u->play_cx, u->play_cy, u->play_r + 5)) return MB_UI_PLAY;
-    if (musicbox_circle_hit(x, y, u->next_cx, u->next_cy, u->next_r + 6)) return MB_UI_NEXT;
-    // 音量
-    if (musicbox_rect_hit(x, y, u->vol_minus_x - 2, u->vol_minus_y - 2, u->vol_btn_w + 4, u->vol_btn_h + 4)) {
-        return MB_UI_VOL_DN;
+    Ui_Button transport[3];
+    musicbox_build_transport(u, transport);
+    for (int32_t i = 0; i < 3; i++) {
+        if (ui_button_hit(&transport[i], x, y)) return transport[i].id;
     }
-    if (musicbox_rect_hit(x, y, u->vol_plus_x - 2, u->vol_minus_y - 2, u->vol_btn_w + 4, u->vol_btn_h + 4)) {
-        return MB_UI_VOL_UP;
+
+    // 音量
+    Ui_Button volume[2];
+    musicbox_build_volume(u, volume);
+    for (int32_t i = 0; i < 2; i++) {
+        if (ui_button_hit(&volume[i], x, y)) return volume[i].id;
     }
     return MB_UI_NONE;
 }
