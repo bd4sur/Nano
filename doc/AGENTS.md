@@ -18191,3 +18191,52 @@ Nano-Web/WASM、Android）上照常工作。随着各功能逐个改为直接消
 - 本工作区没有 `gol / 2048 / grayscott / lenia / particlelife` 等 App（原作者工作区有），
   依赖它们的脚本已能自动回退或跳过，不再直接抛错。
 - `infer/tools/e2e/` 整目录仍是工作区工具，不纳入 Git。
+
+# 2026-11-28（把主菜单从 ui_app.c 剥离为独立模块 ui_main_menu）
+
+`STATE_MAIN_MENU`（表驱动的应用宫格）原本整段写在 `ui_app.c` 里（852 行：条目表与点击行为、
+几何/配色、绘制、触屏与键盘交互），是 ui_app.c 里最后一块"页面级"代码。本次整体搬进
+**`infer/ui_main_menu.c` + `infer/ui_main_menu.h`**。**纯搬迁，无行为改动**；至此 ui_app.c
+只剩状态机、输入事件层、启动画面、控制台/退出确认框与公共初始化（3628 → 2777 行）。
+
+## 分层与命名
+
+| 位置 | 职责 |
+|---|---|
+| `ui_main_menu.c` | **本模块**：条目表（内置静态表 + 屏蔽表 + 灵机 App 目录扫描）、图标挑选、几何/配色、单格/滚动区/固定区绘制、触屏拖动+惯性+点按、键盘兜底、`menu_act_*` 各入口的点击行为 |
+| `ui_scheme_app.c` | 灵机 App 目录扫描/启动/在途触摸余波抑制（本模块只调它的 catalog 接口） |
+| `ui_icon.c` / `ui.c` | 图标绘制、通用控件（菜单控件 / 滚轮钳制等） |
+| `ui_app.c` | 状态机：`STATE_MAIN_MENU` 分支只调 `ui_main_menu_entry / draw / event_handler` |
+
+- 公开入口 `ui_app_main_menu_{entry,draw,event_handler}` → `ui_main_menu_*`；
+  其余内部函数 `ui_app_main_menu_*` → `menu_*`，点击行为 `ui_app_menu_act_*` → `menu_act_*`
+  （都是本模块内部 static）。
+- `Ui_App_Menu_*` 结构体与 `UI_APP_MENU_*` 宏本来就是块内私有，随代码一并搬走，未进头文件。
+- `ui_app.h` 删除主菜单的三个声明段，改为一行指路注释；`ui_app.c` 去掉已无使用者的
+  `#include "ui_icon.h"`，新增 `#include "ui_main_menu.h"`。
+- 二级菜单（小游戏 `STATE_GAME_MENU` 的 `init_game_menu` / `game_menu_item_action`）**仍留在
+  ui_app.c**：它是一条被屏蔽的二级入口，不属于主菜单页；主菜单的「小游戏」动作照旧调它。
+- 构建清单同步（`Makefile` 的 `GUI_MODULE_SRCS` + 4 个目标列表、`mp135.mk` 2 处、
+  `luckfox.mk` 1 处、`build_wasm_gui.sh`、`android/.../CMakeLists.txt`），插在
+  `ui_linglong_ctrl.c` 之后保持字母序。
+
+## 验证（WASM-GUI 目标；其它平台本轮未测）
+
+主菜单是所有页面的入口，所以这一轮把既有浏览器回归整套重跑了一遍：
+
+| 脚本 | 结果 |
+|---|---|
+| `regress_det.js`（36 个 App 逐个从主菜单点进入 + 虚拟时钟确定性渲染） | 36 行正常；仅 `mandelbrot` 报 `exitState`（已知的 App/虚拟时钟问题，与本改动无关） |
+| `regress_exit.js` / `regress_back.js` / `regress_launch.js` | 38/38、24/24、37/37 |
+| `regress_musicbox.js` / `regress_font_isolation.js` / `regress_ephemeris.js` | 31/31、40/40、36/36 |
+| `regress_spectrogram.js` / `regress_fmscroll.js` / `regress_button.js` | 34/34、42/42、15/15 |
+| `regress_linglong_ui.js` / `regress_linglong_terrain.js` / `regress_flip.js` | 全部通过 / 全部通过 / PASS |
+| `regress.js`（存活回归，snake/flip/earthport） | 3/3 正常 |
+| `probe_grid16_removal.js` / `probe_linglong_split.js` | A 阶段 11/11、12/12 |
+
+- 搬迁一致性：`git show HEAD:infer/ui_app.c` 的 501~1352 行与 `ui_main_menu.c` 正文，去掉
+  上述改名后 **diff 为空**；`ui_app.c` 的 45 个 `case STATE_*` 一个不少。
+- `bash infer/build_wasm_gui.sh` 通过；`ui_app.c` / `ui_main_menu.c` 按 `-Wall -Wextra`
+  复核无新增告警。
+- 顺带修了自建探针 `probe_linglong_split.js` 的一个时序缺陷：等运行时**就绪**（state ≠ -9999）
+  而不是"能读到数字"，否则 CPU 忙时第一次点按会被丢掉（并行跑多个浏览器时曾误报）。

@@ -96,6 +96,7 @@ $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) $(ANIMAC_HEADERS) $(ANIMAC_DIR)/am_n
                         ui_grid16kbd.c \
                         ui_linglong.c \
                         ui_linglong_ctrl.c \
+                        ui_main_menu.c \
                         ui_settings.c \
                         ui_icon.c \
                         ui_llm.c \

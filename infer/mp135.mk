@@ -84,6 +84,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         ui_grid16kbd.c \
                         ui_linglong.c \
                         ui_linglong_ctrl.c \
+                        ui_main_menu.c \
                         ui_settings.c \
                         ui_icon.c \
                         ui_llm.c \
@@ -137,6 +138,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         ui_grid16kbd.c \
                         ui_linglong.c \
                         ui_linglong_ctrl.c \
+                        ui_main_menu.c \
                         ui_settings.c \
                         ui_icon.c \
                         ui_llm.c \
