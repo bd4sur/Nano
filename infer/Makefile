@@ -22,7 +22,7 @@ ANIMAC_HOST_SRCS := am_native_Gfx.c am_native_Time.c am_native_Diag.c \
                     ui_scheme_app.c
 
 # ui_app.c 直接引用的业务模块（GUI 目标共用；同样缺一个就链接失败）
-GUI_MODULE_SRCS := ui_dict.c ui_ebook.c ui_goldminer.c \
+GUI_MODULE_SRCS := ui_dict.c ui_ebook.c ui_flip.c ui_goldminer.c \
                    ui_grid16kbd.c ui_linglong_ctrl.c ui_settings.c ui_icon.c ui_musicbox.c ui_musicbox_mp3.c ui_ofdm.c \
                    ui_ripple.c ui_water.c ofdm_modem.c
 
@@ -97,6 +97,7 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         ui_cloud.c \
                         ui_dict.c \
                         ui_ebook.c \
+                        ui_flip.c \
                         ui_goldminer.c \
                         ui_grid16kbd.c \
                         ui_linglong_ctrl.c \
@@ -160,6 +161,7 @@ $(BIN_DIR)/nano_pod_pt35: $(ANIMAC_SRCS) \
                         ui_cloud.c \
                         ui_dict.c \
                         ui_ebook.c \
+                        ui_flip.c \
                         ui_goldminer.c \
                         ui_grid16kbd.c \
                         ui_linglong_ctrl.c \
@@ -215,6 +217,7 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         ui_cloud.c \
                         ui_dict.c \
                         ui_ebook.c \
+                        ui_flip.c \
                         ui_goldminer.c \
                         ui_grid16kbd.c \
                         ui_linglong_ctrl.c \
@@ -291,6 +294,7 @@ $(BIN_DIR)/nano_web: $(BIN_DIR)/web_client_html.h $(ANIMAC_SRCS) \
                         ui_cloud.c \
                         ui_dict.c \
                         ui_ebook.c \
+                        ui_flip.c \
                         ui_goldminer.c \
                         ui_grid16kbd.c \
                         ui_linglong_ctrl.c \

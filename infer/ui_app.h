@@ -83,8 +83,6 @@ extern "C" {
 
 
 
-#define FLIP_RESOLUTION (24)
-
 
 // ===============================================================================
 // UI框架：获取输入事件（按键 + 触屏）
@@ -175,15 +173,6 @@ int32_t ui_exit_confirm_arm(Global_State *global_state, int32_t with_body, int32
                             int32_t down_x, int32_t down_y, int32_t cur_x, int32_t cur_y);
 // 清掉按下态（新弹一个模态框时调；否则上一个框的按下色会“带”到新框上）
 void    ui_exit_confirm_arm_clear(void);
-
-
-// ===============================================================================
-// FLIP流体模拟
-// ===============================================================================
-
-void ui_app_flip_init(Key_Event *key_event, Global_State *global_state);
-void ui_app_flip_render_frame(Key_Event *key_event, Global_State *global_state);
-void ui_app_flip_event_handler(Key_Event *key_event, Global_State *global_state);
 
 
 // ===============================================================================

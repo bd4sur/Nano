@@ -214,6 +214,7 @@ if [ "$WASM_LTO" = "1" ]; then WASM_OPT="$WASM_OPT -flto"; fi
     ui_cloud.c \
     ui_dict.c \
     ui_ebook.c \
+    ui_flip.c \
     ui_goldminer.c \
     ui_grid16kbd.c \
     ui_linglong_ctrl.c \

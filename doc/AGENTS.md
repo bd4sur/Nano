@@ -18056,3 +18056,43 @@ Nano-Web/WASM、Android）上照常工作。随着各功能逐个改为直接消
 - `ui_draw_footer_softkeys` 的语义随之改变：它不再是「十六宫格最底一行的键位提示」，
   而是**页脚 4 等分触屏热点**的提示（调用方电子书阅读页、词典详情页按同一几何做命中判定）。
 - `doc/AGENTS.md` 的历史条目**不改写**（它们是当时的实现记录），只追加本条目。
+
+# 2026-11-28（把「番茄表」从 ui_app.c 剥离为独立模块 ui_flip）
+
+`STATE_FLIP`（番茄表 / 电子沙漏）原本整段写在 `ui_app.c` 里（约 1390 行：布局、配色、
+控件绘制、触屏命中、计时与振动报警、自由流体模式），使 ui_app.c 长期停留在 6000+ 行。
+本次把它整体搬进 **`infer/ui_flip.c` + `infer/ui_flip.h`**，与 `ui_water.c` /
+`ui_musicbox.c` / `ui_ripple.c` 等模块同一形态。**纯搬迁，无行为改动。**
+
+## 分层与命名
+
+| 文件 | 职责 |
+|---|---|
+| `flip.c` / `flip.h` | FLIP 求解器 + 网格/粒子渲染（纯计算与像素写入，不含任何 UI 概念） |
+| `ui_flip.c` / `ui_flip.h` | 本模块：状态页（顶栏 / 4:3 舞台 / 左右仪表 / 底部控制条 / 配色弹层）、触屏热点命中、计时与振动报警、沙漏与自由流体两模式 |
+| `ui_app.c` | 只保留状态机：`STATE_FLIP` 分支调 `ui_flip_init / ui_flip_render_frame / ui_flip_event_handler` |
+
+- 公开函数由 `ui_app_flip_*` 更名为 `ui_flip_*`（与其它模块一致）；内部静态符号沿用
+  原来的 `flip_ui_*` / `s_ui_flip_*` / `s_ui_fanqie_*` 命名，搬迁时未改名。
+- `FLIP_RESOLUTION`（流体网格分辨率=24）从 `ui_app.h` 移入 `ui_flip.h`——它是本模块的
+  实现参数，全仓只有此处使用。
+- `ui_app.h` 删除 FLIP 的三个函数声明段；`ui_app.c` 的 `#include "flip.h"` 换成
+  `#include "ui_flip.h"`（模块内部自己 include `flip.h` 与 `hal_imu.h`）。
+
+## 构建清单
+
+新增源文件后同步了所有链接 `ui_app.c` 的清单：`infer/Makefile`（`GUI_MODULE_SRCS`
++ 4 个显式目标列表）、`infer/mp135.mk`（2 处）、`infer/luckfox.mk`（1 处）、
+`infer/build_wasm_gui.sh`、`android/app/src/main/cpp/CMakeLists.txt`（均插在
+`ui_ebook.c` 之后，保持字母序）。`build_wasm.sh`（LLM-only）不含 GUI，无需改。
+
+## 验证（WASM-GUI 目标）
+
+- `bash infer/build_wasm_gui.sh` 通过；`ui_app.c` / `ui_flip.c` 按 `-Wall -Wextra`
+  单独复核，只有搬迁随之带来的既有告警（如 `ui_flip.c` 的未用变量 `iy0`）。
+- 搬迁一致性：`git show HEAD:infer/ui_app.c` 的 1596~2981 行与 `ui_flip.c` 正文逐字节
+  相同（去掉 `ui_app_flip_*` → `ui_flip_*` 改名与一处过期注释后 diff 为空）；
+  `ui_app.c` 的 45 个 `case STATE_*` 一个不少，diff 中无任何非 FLIP 代码被删除。
+- 回归：`regress_flip.js` **39/39 PASS**（布局/仪表/模式切换/节流滑杆/配色弹层/
+  旧宫格位置点按无动作/复位/退出/亮色主题/重力换向）；`probe_grid16_removal.js`
+  **A 阶段 11/11 PASS**（含番茄表进出）。仅 WASM 目标验证，其它平台本轮未测。
