@@ -1,6 +1,6 @@
 ;@id=earthport
 ;@title=地球舷窗
-;@version=2026-11-25
+;@version=2026-11-27
 ;; ============================================================================
 ;; 地球舷窗（Earth Port）—— 灵机应用程序
 ;;
@@ -22,10 +22,17 @@
 ;;     详见下方「极光」常量块。
 ;;   · 反光：海面（贴图蓝通道占优处）按半角向量做镜面高光，光斑位置即真实太阳反光点
 ;;   · 星空：几十颗暗星（只画在辉光窗之外，重绘地球擦不到）
+;;   · 空间站：中国空间站（CSS / 天和核心舱，NORAD 48274）的**轨道环 + 此刻的真实位置**。
+;;     两行根数（TLE）内嵌在 app/lib/orbit.scm，位置**完全本地推算**（开普勒方程 +
+;;     J2 长期摄动，不联网），随时刻推进；时间机器拖动时也跟着走。
+;;     轨道按**真实物理比例**绘制：与地球同一把尺（1 px ≈ 70.9 km），所以 388 km 的
+;;     轨道高度在画面上只有 5.5 px —— 轨道环就贴着地球边缘外面一小圈（这是真实比例，
+;;     不是画小了）。被地球挡住的弧段不画（正交投影：天顶分量 < 0 且在视盘内）。
+;;     左下角给出推算值：距地高度 / 轨道速度 / 星下点大地纬经度。
 ;;   · HUD：左上角**北京日期 + 时刻**（YYYY-MM-DD 换行 hh:mm:ss，左对齐）；
 ;;     底部信息行：左侧**视角读数**（纬度 N/S、经度 E/W、滚转角 R±），右端时间徽标
 ;;     （暂停或 ±h:mm，琥珀色；时间机器的键位仍在，只是不再占按钮）
-;;   · 底部控制条（4 枚）：[-15°] [+15°] [复位] [有云/无云]
+;;   · 底部控制条（5 枚）：[-15°] [+15°] [复位] [有云/无云] [空间站]
 ;;   · 右上角：「退出」（app/lib/exit.scm 画在 (270,3)）
 ;;
 ;; 相机（视点在任意点、任意滚转角）：
@@ -53,7 +60,11 @@
 ;;     · 场景（球体/大气）每 SCENE_S=30 秒重算一次，且**分条渐进**绘制
 ;;       （每拍画 STRIP 行推一次屏），一次重绘跨 ~20 拍完成，看不出"刷"的感觉；
 ;;     · 只有左上角时钟每秒钟重画两行字（fill_rect + draw_text，脏区极小）。
-;;   稳态 CPU 占用几个百分点。
+;;   稳态 CPU 占用几个百分点（实测 2.6%，含空间站图层）。
+;;   空间站图层另有一条轻路径：标记在屏幕上只走 0.09 px/s（92.3 分钟绕一圈 ~600 px），
+;;   所以每 ST_UPD_TK 拍（≈10 s）只把**标记前后两个包围盒的并集**那一小片重画一遍
+;;   （窗内跑着色内核、窗外填背景渐变），不必等 30 s 的整帧重算 —— 见 st_patch。
+;;   轨道环用**置色线**画（draw_line，幂等）：三条绘制路径反复重画也不会叠加变粗。
 ;;   拖动时不能等 0.35s/帧：视点一动就先出**粗预览**（每 ST_PREV=4 像素采一个样、
 ;;   4×4 像素块一次 fill_rect 填同色，像素量 1/16 ⇒ 整帧约 33ms ≈ 30 帧/秒，够跟手）；
 ;;   松手后再走上面那条整质量的分条渐进路径（cam_settle 倒计时到 0 才开始）。
@@ -72,9 +83,11 @@
 ;;     水平方向按 1/cos(φ0) 补偿，高纬处经线收敛不打滑；竖直方向拖到 ±90° 处截住）；
 ;;     **点按**（位移 < 3px）= 显示/隐藏 HUD 文字。按下落在按钮上则不拖动。
 ;;   · 底部 [-15°]/[+15°] 滚转画面（点按 ±15°，按住每 120ms 连发一档，**在键上横向滑动
-;;     = 拨轮连续滚转**，所以旋转角是任意的）、[复位] 回 0°N 120°E 正北朝上。
+;;     = 拨轮连续滚转**，所以旋转角是任意的）、[复位] 回 0°N 120°E 正北朝上、
+;;     [空间站] 切换空间站图层（轨道环 + 位置标记 + 左下角推算值）的显隐。
 ;;   · 键盘 a/d 经度、w/s 纬度、`,`/`.` 滚转、r 复位（各 5°/15° 一档），
-;;     ←/→ = ∓2 分钟，↑ = 实时，↓ = 暂停/运行，c = 云层，空格/回车 = HUD 开关；
+;;     ←/→ = ∓2 分钟，↑ = 实时，↓ = 暂停/运行，c = 云层，i = 空间站图层，
+;;     空格/回车 = HUD 开关；
 ;;     硬 A/ESC 与**右上角「退出」**按钮 → 全局退出确认框（app/lib/exit.scm）。
 ;;
 ;; 解释器约束（manual.md + doc/AGENTS.md，逐条遵守）：算术恒二参数；无 let/list/map；
@@ -93,6 +106,7 @@
 
 (import EX "app/lib/exit.scm")      ; 硬 A/ESC + 右上角「退出」按钮 → 全局退出确认框
 (import Ephem "app/lib/ephem.scm")  ; 太阳赤纬/赤经、GMST、民用历
+(import Orb "app/lib/orbit.scm")    ; 空间站 TLE + 本地轨道推算（开普勒 + J2）
 (import ET "app/lib/earth_tex.scm") ; 地表四通道贴图（生成物，见 tools/gen_earth_tex.py）
 
 ;; ---- 版面 ------------------------------------------------------------------
@@ -239,6 +253,25 @@
 (define AUR_PL (* AUR_PLO AUR_PLO))
 (define AUR_PH (* AUR_PHI AUR_PHI))
 
+;; 空间站图层（中国空间站 CSS / 天和）：绘制参数
+;;
+;; 比例：与地球同一把尺 —— 地球半径 RAD 像素 = RE_EQ 6378.137 km ⇒ 1 px ≈ 70.9 km。
+;;   轨道半长轴 6766 km ⇒ 半径 95.5 px：**只比地球视半径大 5.5 px**。这就是真实
+;;   比例的后果（388 km / 6378 km = 6.1%），所以轨道环看起来“贴在地球边缘外面”
+;;   而不会飘得很远 —— 不要为了好看把它画大。
+;; 刷新：标记的屏幕移速 ≈ 0.09 px/s（92.3 分钟绕一圈 ~600 px），所以整帧场景
+;;   （30 s）之间只需重画**标记占用的一小片**（见 st_patch），左下角数值每秒刷一次。
+(define ST_N 180)                   ; 轨道环采样数（每段 ≈3.3px，首尾闭合）
+(define ST_UPD_TK 500)              ; 每多少拍刷新一次图层位置（≈10 s；标记只走
+                                    ;   0.09 px/s，一步不到 1 px，看着是连续移动）
+(define ST_PAD 9)                   ; 标记包围盒半边长（光晕 r=7 + 抗锯齿）
+(define ORB_R 60)                    ; 轨道环颜色（画在环上：暗底与亮地球上都是同一条
+(define ORB_G 148)                   ;   青线；**加色**混合(3)会把穿过球面的那段叠成白光，
+(define ORB_B 184)                   ;   所以用置色线）
+(define DEGR (/ PI 180.0))          ; 度 → 弧度（着色内核只用 DEG）
+(define ST_CARD_X 6)                ; 左下角信息卡：左边界
+(define ST_CARD_Y 160)              ; 首行墨迹顶（三行：160 / 174 / 188）
+
 ;; 配色
 (define BG_R 1.0)                   ; 背景（近黑深蓝）
 (define BG_G 2.0)
@@ -340,6 +373,27 @@
 (define keyv 0)                     ; Key.take_press 临时量
 (define _timer 0)                   ; 定时器编号（消费 set_interval 的返回值）
 
+;; 空间站图层的运行状态
+(define st_on 1)                    ; 1 = 显示（第 5 枚按钮 / 键位 i）
+(define st_tk 0)                    ; 拍计数（到 ST_UPD_TK 刷新一次图层）
+(define st_t 0.0)                   ; 图层采样基准时刻（相对 TLE 历元的秒数）
+(define st_dt 0.0)                  ; 采样步长（秒）
+(define st_cr 1.0)                  ; cos/sin(滚转角)：每帧算一次，逐点复用
+(define st_sr 0.0)
+(define st_mx 0.0)                  ; 标记屏幕坐标（当前）
+(define st_my 0.0)
+(define st_mv 0)                    ; 1 = 标记可见（未被地球遮挡）
+(define st_bx0 0) (define st_by0 0) ; 已画标记的包围盒（st_patch 据此擦除）
+(define st_bx1 0) (define st_by1 0)
+(define st_nx0 0) (define st_ny0 0) ; 本次重算出来的新包围盒
+(define st_nx1 0) (define st_ny1 0)
+(define PROJ_X 0.0)                 ; proj_pt 的输出（屏幕坐标 + 天顶分量）
+(define PROJ_Y 0.0)
+(define PROJ_U 0.0)
+(define st_lx '())                  ; 轨道环屏幕坐标缓存（启动时 push 一次，之后 set_item!）
+(define st_ly '())
+(define st_lv '())                  ; 1 = 该采样点可见
+
 ;; ---- 星图（只画一次；重绘地球的区域在辉光窗之内，擦不到它们） --------------
 
 (define star_x '())
@@ -356,8 +410,11 @@
       (set! xx (* (Math.random) 320.0))
       (set! yy (* (Math.random) 240.0))
       (set! dd (Math.sqrt (+ (* (- xx CX) (- xx CX)) (* (- yy CY) (- yy CY)))))
-      ;; 只取辉光窗（101.5px）之外、且避开 HUD 两条文字带与两行控制条的点
-      (if (and (> dd 108.0) (and (> yy 33.0) (< yy 196.0)))
+      ;; 只取辉光窗（101.5px）之外、且避开 HUD 两条文字带与两行控制条的点；
+      ;; 左下角留给空间站信息卡（那块会被每秒重画，星点被擦掉就补不回来）
+      (if (and (> dd 108.0)
+               (and (> yy 33.0) (< yy 196.0))
+               (not (and (< xx 102.0) (> yy 150.0))))
           {
             (push star_x (Math.floor xx))
             (push star_y (Math.floor yy))
@@ -459,18 +516,18 @@
     (display " paused=") (display paused)
     (newline)))
 
-;; ---- 底部控制条（4 枚按钮；右上角「退出」由 app/lib/exit.scm 画在 (270,3)）----
+;; ---- 底部控制条（5 枚按钮；右上角「退出」由 app/lib/exit.scm 画在 (270,3)）----
 ;;
-;; 索引：0 = [-15°]、1 = [+15°]、2 = [复位]、3 = [有云/无云]。
+;; 索引：0 = [-15°]、1 = [+15°]、2 = [复位]、3 = [有云/无云]、4 = [空间站]。
 ;; 按下落在任一按钮上就不拖动；滚转键（0/1）按住 400ms 后每 120ms 连发一档，
 ;; 在其上**横向滑动 = 拨轮**（连续滚转，任意角度）。时间机器的 -2/+2/实时/暂停
 ;; 按钮已去掉，只留键位（←/→/↑/↓），状态显示在底部信息行右端的徽标里。
 
 (define BTN_Y 219)
 (define BTN_H 18)
-(define BTN_W 75)                   ; 4×75 + 3×4 = 312（两侧各留 4px）
+(define BTN_W 60)                   ; 5×60 + 4×4 = 316（两侧各留 4px）
 (define BTN_GAP 4)
-(define BTN_N 4)
+(define BTN_N 5)
 (define INFO_Y 203)                 ; 底部信息行（视角读数 + 时间徽标）：203..216
 
 (define btn_x (lambda (i) (+ 4 (* i (+ BTN_W BTN_GAP)))))
@@ -480,15 +537,17 @@
     (if (== i 0) "-15°"
         (if (== i 1) "+15°"
             (if (== i 2) "复位"
-                (if (== clouds_on 1) "有云" "无云"))))))
+                (if (== i 3) (if (== clouds_on 1) "有云" "无云")
+                    "空间站"))))))
 
 ;; 高亮：『复位』在视点已回到默认（0°N 120°E 正北朝上）时高亮；
-;; 『有云/无云』高亮 = 当前有云；滚转键不高亮
+;; 『有云/无云』高亮 = 当前有云；『空间站』高亮 = 图层可见；滚转键不高亮
 (define btn_active
   (lambda (i)
     (if (== i 2)
         (if (and (and (== view_lat 0.0) (== view_lon 120.0)) (== view_roll 0.0)) 1 0)
-        (if (== i 3) clouds_on 0))))
+        (if (== i 3) clouds_on
+            (if (== i 4) st_on 0)))))
 
 ;; 一枚按钮（高亮版 / 常态）
 (define draw_btn
@@ -537,6 +596,7 @@
     (if (== i 1) (cam_roll CAM_ROLL) #f)
     (if (== i 2) (cam_reset) #f)
     (if (== i 3) (clouds_toggle) #f)
+    (if (== i 4) (st_toggle) #f)
     ;; 高亮/读数可能变了：补画控制条与信息行（画面本身由下一拍处理）
     (draw_btns)
     (draw_info)
@@ -619,6 +679,344 @@
     (set! QE (* (- 0.0 sl) sy))
     (set! QN (+ (* (* vlat_s sl) (Math.cos dlt)) (* vlat_c cl)))
     (set! QU (+ (* (* (- 0.0 vlat_c) sl) (Math.cos dlt)) (* vlat_s cl)))))
+
+;; ---- 空间站图层（CSS / 天和）------------------------------------------------
+;;
+;; 轨道环：卫星在**地固系**里的闭合轨迹（一个周期采样 ST_N 点）。比例与地球完全
+;;   一致（RAD 像素 = 6378.137 km），所以它不是“装饰性的一个大圈”——它就在地球
+;;   边缘外 5.5 px 处。位置标记：此刻的推算位置（发光点 + 一个细圈）；在地球背面
+;;   （天顶分量 < 0 且投影落在视盘内）的弧段不画。
+;; 数据/算法：app/lib/orbit.scm（内嵌 TLE、开普勒推进 + J2 长期项，纯本地计算）。
+;; 刷新：整帧场景每 30 s 一次；图层本身另按 ST_UPD_TK 拍重画一小片（见 st_patch）——
+;;   标记每秒才走 0.09 px，没必要每拍重算。
+
+;; 缓存槽：启动时一次性 push（模块级 '() 是静态槽，只 push 一次）
+(define mkc_orb
+  (lambda ()
+    (define k 0)
+    (while (< k ST_N) {
+      (push st_lx 0.0)
+      (push st_ly 0.0)
+      (push st_lv 0)
+      (set! k (+ k 1))
+    })))
+
+;; 地固纬经度（度）+ 半径因子 kf（1 = 地球表面）→ 屏幕坐标（写 PROJ_X/PROJ_Y/PROJ_U）。
+;;   与着色内核同一套旋转：屏幕切平面按滚转角旋到视点局部系（东/北/天），
+;;   再取东/北两个分量正交投影（天顶分量 U 只用于遮挡判定）。
+(define proj_pt
+  (lambda (latd lond kf)
+    (define d 0.0)
+    (define cl 0.0)
+    (define sl 0.0)
+    (define cd 0.0)
+    (define sd 0.0)
+    (define ee 0.0)
+    (define nn 0.0)
+    (set! d (* (- lond view_lon) DEGR))
+    (set! cl (Math.cos (* latd DEGR)))
+    (set! sl (Math.sin (* latd DEGR)))
+    (set! cd (Math.cos d))
+    (set! sd (Math.sin d))
+    (set! ee (* kf (* cl sd)))
+    (set! nn (* kf (+ (* (- 0.0 vlat_s) (* cl cd)) (* vlat_c sl))))
+    (set! PROJ_X (+ CX (* RAD (- (* ee st_cr) (* nn st_sr)))))
+    (set! PROJ_Y (- CY (* RAD (+ (* ee st_sr) (* nn st_cr)))))
+    (set! PROJ_U (* kf (+ (* vlat_c (* cl cd)) (* vlat_s sl))))))
+
+;; 正交投影下的遮挡：在地球背面（U<0）且投影点落在视盘内（距球心 < RAD）
+(define st_hidden
+  (lambda (x y u)
+    (and (< u 0.0)
+         (< (+ (* (- x CX) (- x CX)) (* (- y CY) (- y CY))) (* RAD RAD)))))
+
+;; 重建图层缓存 + 标记位置（每帧场景开始时、每次图层刷新时各一次）
+(define st_begin
+  (lambda ()
+    (define k 0)
+    (define kf 0.0)
+    (define x 0.0)
+    (define y 0.0)
+    (Orb.set_time sim_d sim_s)
+    (set! st_t Orb.orb_t)
+    (set! st_dt (/ Orb.PERIOD ST_N))
+    (set! st_cr (Math.cos (* view_roll DEGR)))
+    (set! st_sr (Math.sin (* view_roll DEGR)))
+    (set! k 0)
+    (while (< k ST_N) {
+      (Orb.ring (+ st_t (* k st_dt)))   ; 环上每点都用**当前** GMST（见 orbit.scm）
+      (set! kf (/ Orb.orb_r Orb.RE_EQ))
+      (proj_pt Orb.orb_lat Orb.orb_lon kf)
+      (set! x PROJ_X)
+      (set! y PROJ_Y)
+      (set_item! st_lx k x)
+      (set_item! st_ly k y)
+      (if (st_hidden x y PROJ_U) (set_item! st_lv k 0) (set_item! st_lv k 1))
+      (set! k (+ k 1))
+    })
+    ;; 标记 = 采样点 0（此刻）；顺带算出它的包围盒（st_patch 据此擦旧、画新）
+    (set! st_mx (get_item st_lx 0))
+    (set! st_my (get_item st_ly 0))
+    (set! st_mv (get_item st_lv 0))
+    (set! st_nx0 (Math.floor (- st_mx ST_PAD)))
+    (set! st_ny0 (Math.floor (- st_my ST_PAD)))
+    (set! st_nx1 (+ (Math.floor (+ st_mx ST_PAD)) 1))
+    (set! st_ny1 (+ (Math.floor (+ st_my ST_PAD)) 1))))
+
+;; 整帧路径（分条重绘 / 退出确认框关闭后的整屏重画）画完图层后，把"已画包围盒"
+;; 同步为当前标记的包围盒 —— 否则第一次局部重画会拿初值 0 去并集，一擦擦到整屏。
+(define st_mark_b
+  (lambda ()
+    (set! st_bx0 st_nx0) (set! st_bx1 st_nx1)
+    (set! st_by0 st_ny0) (set! st_by1 st_ny1)))
+
+;; 轨道环：只画两端都可见的弧段（被地球挡住的不画）。
+;;
+;; 为什么用**非抗锯齿**的 (Gfx.draw_line) 而不是 (Gfx.draw_line_aa)：
+;;   1. 抗锯齿直线走 blend_pixel（按覆盖率叠加），同一条线重画两次就更实一分 ——
+;;      而本 App 的图层要在"分条重绘 / 粗预览 / 局部重画"三条路径上反复重画，
+;;      叠几次之后环就会从 1px 细线变成 2~3px 的硬线（实测过）。
+;;   2. (Gfx.set_clip) 的裁剪矩形对 set_pixel/add_pixel/blend_pixel 这三个底层写入
+;;      **不生效**（只有 draw_point / fill_rect / 圆角矩形 / draw_line 查它），
+;;      所以抗锯齿线也没法用裁剪区限制在"标记那一小片"里。
+;;   ⇒ 1px 置色线是**幂等**的：画多少次都一样，且受裁剪区约束。320x240 上这条
+;;     轨道线本来就是技术线条，硬边反而更利落（与大气/极光的柔和形成对比）。
+(define st_ring
+  (lambda ()
+    (define k 0)
+    (define k2 0)
+    (if (== st_on 1)
+        {
+          (set! k 0)
+          (while (< k ST_N) {
+            (set! k2 (+ k 1))
+            (if (>= k2 ST_N) (set! k2 0) #f)
+            (if (and (== (get_item st_lv k) 1) (== (get_item st_lv k2) 1))
+                (Gfx.draw_line (Math.round (get_item st_lx k)) (Math.round (get_item st_ly k))
+                               (Math.round (get_item st_lx k2)) (Math.round (get_item st_ly k2))
+                               ORB_R ORB_G ORB_B)
+                #f)
+            (set! k (+ k 1))
+          })
+        }
+        #f)))
+
+;; 当前位置标记：一层加色光斑 + 一个细准星圈 + 亮核（画在环之后）。
+;; 注意它**不是**幂等的（光斑按 alpha 叠加）：每次都要先擦干净再画一次。
+;;
+;; 卫星在地球背面（vis=0）时，只画一个**很暗的空心圈**当"被遮挡"的指示 ——
+;; 这是刻意加的界面提示（真实的卫星此刻看不见）：不画它的话，一个周期里有近一半
+;; 时间画面上既没有标记也没有任何说明，容易被当成功能坏了。颜色压到 (34,64,80)：
+;; 在夜侧勉强可辨、在亮面上基本看不见，不会被误读成"看得见卫星"。
+(define st_marker
+  (lambda ()
+    (if (== st_on 1)
+        (if (== st_mv 1)
+            {
+              (Gfx.fill_glow_aa_add st_mx st_my 7.0 70 170 220 0.55)
+              (Gfx.draw_circle (Math.round st_mx) (Math.round st_my) 5 46 120 152)
+              (Gfx.fill_dot_aa st_mx st_my 2.0 210 246 255)
+            }
+            (Gfx.draw_circle (Math.round st_mx) (Math.round st_my) 4 42 70 86))
+        #f)))
+
+;; 把**上一次画出的**轨道环擦掉：沿旧路径用背景渐变色画一遍同样的折线。
+;; 只在球外（距球心 ≥ 渲染窗半径）的部分需要这样擦 —— 窗内的像素由着色内核重画
+;; 覆盖（分条重绘/粗预览都会重画窗内）。球外没有星点（星点半径 > 108px），所以
+;; "背景 = 那条渐变公式"是精确的。必须在 st_begin（它会覆盖缓存）之前调用。
+(define st_erase_ring
+  (lambda ()
+    (define k 0)
+    (define k2 0)
+    (define d0 0.0)
+    (define d1 0.0)
+    (define x0 0.0)
+    (define y0 0.0)
+    (define x1 0.0)
+    (define y1 0.0)
+    (define bi 0.0)
+    (while (< k ST_N) {
+      (set! k2 (+ k 1))
+      (if (>= k2 ST_N) (set! k2 0) #f)
+      (set! x0 (get_item st_lx k))
+      (set! y0 (get_item st_ly k))
+      (set! x1 (get_item st_lx k2))
+      (set! y1 (get_item st_ly k2))
+      (set! d0 (+ (* (- x0 CX) (- x0 CX)) (* (- y0 CY) (- y0 CY))))
+      (set! d1 (+ (* (- x1 CX) (- x1 CX)) (* (- y1 CY) (- y1 CY))))
+      ;; 两端都在窗外才用背景色擦（碰窗的那几段留给场景重绘去盖）
+      (if (and (> d0 XMAX2) (> d1 XMAX2))
+          {
+            (set! bi (Math.floor (/ (+ y0 y1) 12.0)))   ; 背景 6 行一条带 ⇒ 带号
+            (Gfx.draw_line (Math.round x0) (Math.round y0)
+                           (Math.round x1) (Math.round y1)
+                           (+ BG_R (* bi 0.02))
+                           (+ BG_G (* bi 0.035))
+                           (+ BG_B (* bi 0.09)))
+          }
+          #f)
+      (set! k (+ k 1))
+    })))
+
+;; 擦掉标记：用它自己的包围盒填背景渐变（窗内那部分随后的场景/预览重绘会盖掉）
+(define st_erase_marker
+  (lambda ()
+    (bg_fill st_bx0 st_by0 (- st_bx1 st_bx0) (- st_by1 st_by0))))
+
+;; 信息卡的擦除矩形（三行，宽度比文字略宽）。**卡片整体落在轨道环内侧的空隙里**
+;; （三行右边界 78/82/96；而环在那三行上分别落在 x≈81/93/113 之外），所以擦除
+;; 蹭不到环，也就不必为它重跑着色内核。
+(define st_card_erase
+  (lambda ()
+    (bg_fill ST_CARD_X (- ST_CARD_Y 2) 72 16)
+    (bg_fill ST_CARD_X (+ ST_CARD_Y 12) 76 16)
+    (bg_fill ST_CARD_X (+ ST_CARD_Y 26) 90 18)))
+
+;; 左下角推算值：距地高度 / 轨道速度 / 星下点（大地纬经度）。数值**每秒**重算一次
+;; （Orb.set_time 只有一次开普勒迭代 + 十几次三角函数，比画三行字便宜）。
+(define st_card
+  (lambda ()
+    (define ala 0.0)
+    (define alo 0.0)
+    (define s "")
+    (st_card_erase)
+    (if (and (== st_on 1) (== hud_dim 0))
+        {
+          (Orb.set_time sim_d sim_s)
+          (set! s (String.concat "距地 " (String.concat
+                     (String.atom_to_string (Math.floor (+ Orb.orb_alt 0.5))) "km")))
+          (Gfx.draw_text s ST_CARD_X ST_CARD_Y HUD_R HUD_G HUD_B)
+          (set! s (String.concat "v " (String.concat (num_fix Orb.orb_v 2) "km/s")))
+          (Gfx.draw_text s ST_CARD_X (+ ST_CARD_Y 14) 150 208 236)
+          (set! ala (Math.abs Orb.orb_latg))
+          (set! alo Orb.orb_lon)
+          (if (> alo 180.0) (set! alo (- 360.0 alo)) #f)
+          (set! s (num_fix ala 1))
+          (set! s (String.concat s (if (>= Orb.orb_latg 0.0) "N " "S ")))
+          (set! s (String.concat s (num_fix alo 1)))
+          (set! s (String.concat s (if (> Orb.orb_lon 180.0) "W" "E")))
+          (Gfx.draw_text s ST_CARD_X (+ ST_CARD_Y 28) HUD_R HUD_G HUD_B)
+        }
+        #f)))
+
+;; 把 [y0,y1) 行、[x0,x1] 列那一带重画一遍：着色窗之外填背景渐变（与 draw_bg
+;; 同一条带公式）、窗内跑同一套着色内核 —— 于是旧图层被真正擦掉，而不是拿一块纯色
+;; 去盖。**只填标记那一带的列**：背景重填是不透明的、会顺手擦掉落在里面的星点/按钮
+;; 边缘，范围越小越安全。
+(define st_repaint
+  (lambda (y0 y1 x0 x1)
+    (define y y0)
+    (define dy 0.0)
+    (define dy2 0.0)
+    (define xe 0.0)
+    (define xa 0.0)
+    (define xb 0.0)
+    (define la 0.0)
+    (define lb 0.0)
+    (while (< y y1) {
+      (set! dy (- (* 1.0 y) CY))
+      (set! dy2 (* dy dy))
+      (set! xa 0.0)
+      (set! xb (* 1.0 W))
+      (if (< dy2 XMAX2)
+          {
+            (set! xe (Math.sqrt (- XMAX2 dy2)))
+            (set! xa (- CX xe))
+            (set! xb (+ CX xe))
+          }
+          #f)
+      (if (< xa 0.0) (set! xa 0.0) #f)
+      (if (> xb (* 1.0 W)) (set! xb (* 1.0 W)) #f)
+      ;; 左段 [x0, xa) 与右段 [xb, x1] 在着色窗之外
+      (set! la x0)
+      (set! lb xa)
+      (if (> lb x1) (set! lb x1) #f)
+      (if (> lb la) (bg_fill la y (- (Math.floor lb) la) 1) #f)
+      (set! la xb)
+      (if (< la x0) (set! la x0) #f)
+      (if (< x1 la) (set! la x1) #f)
+      (if (> x1 la) (bg_fill (Math.floor la) y (+ 1 (- x1 (Math.floor la))) 1) #f)
+      (set! y (+ y 1))
+    })
+    (rnd_draw y0 y1 1.0)))
+
+;; 矩形相交（用于判定"这一带碰到了哪块 UI"）
+(define rect_hit
+  (lambda (x0 y0 x1 y1 rx0 ry0 rx1 ry1)
+    (and (< x0 rx1) (and (> x1 rx0) (and (< y0 ry1) (> y1 ry0))))))
+
+;; 图层刷新：只重画标记前后两个包围盒的并集那一小片（整帧场景 ~30 s 才重算一次）。
+;; 行内先擦（st_repaint）→ 裁到这一带重画图层 → 补被这一带碰到的 UI。
+;; 注意：按钮/退出按钮的圆角与抗锯齿边缘**不是**幂等绘制（重复画会越描越深），
+;; 所以只有真的碰到才补画；控制条（y≥219）永远不会被碰到，一律不碰。
+(define st_patch
+  (lambda ()
+    (define y0 0)
+    (define y1 0)
+    (define x0 0)
+    (define x1 0)
+    (define oy0 st_by0)
+    (define oy1 st_by1)
+    (define ox0 st_bx0)
+    (define ox1 st_bx1)
+    (st_begin)
+    (set! y0 st_ny0)
+    (if (< oy0 y0) (set! y0 oy0) #f)
+    (set! y1 st_ny1)
+    (if (> oy1 y1) (set! y1 oy1) #f)
+    (set! x0 (- st_nx0 2))
+    (if (< (- ox0 2) x0) (set! x0 (- ox0 2)) #f)
+    (set! x1 (+ st_nx1 2))
+    (if (> (+ ox1 2) x1) (set! x1 (+ ox1 2)) #f)
+    (if (< y0 0) (set! y0 0) #f)
+    (if (> y1 H) (set! y1 H) #f)
+    (if (< x0 0) (set! x0 0) #f)
+    (if (> x1 W) (set! x1 W) #f)
+    (st_repaint y0 y1 x0 x1)
+    (Gfx.set_clip x0 y0 (- x1 x0) (- y1 y0))
+    (st_ring)                       ; 置色线是幂等的 + 受裁剪区约束 ⇒ 只补这一带
+    (Gfx.reset_clip)
+    (st_marker)
+    (if (rect_hit x0 y0 x1 y1 4 156 100 204) (st_card) #f)
+    (if (rect_hit x0 y0 x1 y1 268 0 320 20)
+        (if (== hud_dim 0) (EX.draw_button_at 270 3) #f)
+        #f)
+    (if (rect_hit x0 y0 x1 y1 4 200 320 218)
+        (if (== hud_dim 0) (draw_info) #f)
+        #f)
+    (if (rect_hit x0 y0 x1 y1 4 0 84 34)
+        (if (== hud_dim 0) (draw_clock) #f)
+        #f)
+    (Gfx.refresh)
+    (set! st_bx0 st_nx0) (set! st_bx1 st_nx1)
+    (set! st_by0 st_ny0) (set! st_by1 st_ny1)
+    (st_log)))
+
+;; 图层开关（第 5 枚按钮 / 键位 i）：轨道环的显隐必须重算一帧场景才能擦干净
+(define st_toggle
+  (lambda ()
+    (set! st_on (if (== st_on 1) 0 1))
+    (set! scene_dirty 1)
+    (set! ui_dirty 1)
+    (Orb.set_time sim_d sim_s)
+    (st_log)))
+
+;; 诊断行（e2e 断言：星下点/高度/速度/屏幕坐标/TLE 历元与年龄）
+(define st_log
+  (lambda ()
+    (Orb.set_time sim_d sim_s)      ; st_begin 的 ring 采样会把 orb_* 停在第 180 个采样点上
+    (display "[earthport] station on=") (display st_on)
+    (display " lat=") (display (num_fix Orb.orb_latg 2))
+    (display " lon=") (display (num_fix Orb.orb_lon 2))
+    (display " alt=") (display (num_fix Orb.orb_alt 1))
+    (display " v=") (display (num_fix Orb.orb_v 2))
+    (display " r=") (display (num_fix (/ Orb.orb_r Orb.RE_EQ) 2))
+    (display " sx=") (display (num_fix st_mx 1))
+    (display " sy=") (display (num_fix st_my 1))
+    (display " vis=") (display st_mv)
+    (display " tle=") (display (Orb.tle_date_str))
+    (display " age=") (display (num_fix Orb.orb_age 2))
+    (newline)))
 
 ;; ---- 视点（相机）操作 ----------------------------------------------------
 
@@ -723,11 +1121,18 @@
   (lambda ()
     (sun_ephem)
     (view_update)
+    (st_erase_ring)                 ; 旧环球外那段用背景色抹掉（窗内由分条重绘覆盖）——
+                                    ;   关图层时也要擦，否则残环会一直留在窗外
+    (st_erase_marker)
+    (st_begin)                      ; 空间站图层缓存（与当前视点/时刻一致）
+    (st_mark_b)
     (set! scen_sod sim_s)
     (set! scene_dirty 0)
     (set! rnd_y ROW_Y0)
     (set! rnd_mode 1)
-    (view_log "scene start")))
+    (set! st_tk 0)
+    (view_log "scene start")
+    (st_log)))                      ; 诊断行：每帧场景开始时打一行（e2e 用）
 
 (define rnd_draw
   (lambda (y0 y1 st)
@@ -1135,22 +1540,37 @@
 ;; 整质量：每拍画 STRIP 行
 (define rnd_step
   (lambda ()
-    (define yend (+ rnd_y STRIP))
+    (define y0 rnd_y)
+    (define yend (+ y0 STRIP))
     (if (> yend ROW_Y1) (set! yend ROW_Y1) #f)
-    (rnd_draw rnd_y yend 1.0)
+    (rnd_draw y0 yend 1.0)
     (set! rnd_y yend)
     (if (>= rnd_y ROW_Y1) (set! rnd_mode 0) #f)
+    ;; 环是幂等的置色线：每拍整体补一遍（分条重绘会把落在本行的环抹掉，补上即可）；
+    ;; 标记留到 rnd_finish 一次画完（它跨好几行，分条补画会叠成更亮的光斑）。
+    (st_ring)
     (Gfx.refresh)))
 
-;; 粗预览：本拍把整帧（粗采样）画完 —— 拖动时每拍一张，够跟手
+;; 粗预览：本拍把整帧（粗采样）画完 —— 拖动时每拍一张，够跟手。
+;; 视点一变，旧图层就"错位"了：球内那部分由粗预览重画盖掉，球外那部分必须自己擦
+;; （环 → 背景色折线，标记 → 包围盒填背景），否则拖一会儿就会留下一堆残环。
 (define rnd_preview
   (lambda ()
+    (st_erase_ring)
+    (st_erase_marker)
+    (st_begin)
     (rnd_draw ROW_Y0 ROW_Y1 ST_PREV)
+    (st_ring)
+    (st_marker)
+    (st_mark_b)                     ; 下一帧要按**这一帧**的标记位置去擦（预览帧之间也在动）
     (Gfx.refresh)))
 
 ;; 一帧整质量场景画完后的收尾（诊断行；渲染窗只到第 198 行，HUD 不会被它擦到）
 (define rnd_finish
   (lambda ()
+    (st_ring)                       ; 分条路径只在每拍补环，收尾再补一次（含顶部两行）
+    (st_marker)                     ; 标记一次画完（分条绘制时不画它）
+    (st_card)
     (display "[earthport] scene done heap=")
     (display (get_item (System.memstat) 3)) (newline)))
 
@@ -1302,12 +1722,13 @@
               #f)
         })))
 
-;; 只擦 HUD 文字所在的小矩形（不碰球/辉光/控制条/退出按钮）
+;; 只擦 HUD 文字所在的小矩形（不碰球/辉光/控制条/退出按钮/空间站图层）
 (define clear_hud
   (lambda ()
     (Gfx.fill_rect 4 1 112 16 BG_R BG_G BG_B)
     (Gfx.fill_rect 4 16 96 16 BG_R BG_G BG_B)
-    (Gfx.fill_rect 4 INFO_Y (- W 8) 14 BG_R BG_G BG_B)))
+    (Gfx.fill_rect 4 INFO_Y (- W 8) 14 BG_R BG_G BG_B)
+    (st_card_erase)))
 
 ;; ---- 输入 ------------------------------------------------------------------
 
@@ -1322,6 +1743,7 @@
           (draw_clock)
           (draw_info)
         })
+    (st_card)
     (Gfx.refresh)))
 
 ;; 触屏：
@@ -1462,6 +1884,7 @@
               (if (== keyv 2) (time_toggle_pause) #f)
               ;; 云层 / 视角
               (if (or (== keyv 99) (== keyv 67)) (clouds_toggle) #f)
+              (if (or (== keyv 105) (== keyv 73)) (st_toggle) #f)   ; i = 空间站图层
               (if (or (== keyv 97) (== keyv 65)) (cam_nudge 0.0 (- 0.0 CAM_KEY)) #f)
               (if (or (== keyv 100) (== keyv 68)) (cam_nudge 0.0 CAM_KEY) #f)
               (if (or (== keyv 119) (== keyv 87)) (cam_nudge CAM_KEY 0.0) #f)
@@ -1486,6 +1909,23 @@
       (set! i (+ i 1))
     })))
 
+;; 同一套渐变重填一小块（供“只擦一小片”的场景更新用：空间站图层的行列重绘、
+;; 左下角信息卡的擦除）——颜色公式与 draw_bg 逐字一致，否则会留下色差方块。
+(define bg_fill
+  (lambda (x y w h)
+    (define yy y)
+    (define ye (+ y h))
+    (define i 0)
+    (define y2 0.0)
+    (while (< yy ye) {
+      (set! i (Math.floor (/ yy 6.0)))
+      (set! y2 (* (+ i 1) 6.0))
+      (if (> y2 ye) (set! y2 ye) #f)
+      (Gfx.fill_rect x yy w (- y2 yy)
+                     (+ BG_R (* i 0.02)) (+ BG_G (* i 0.035)) (+ BG_B (* i 0.09)))
+      (set! yy y2)
+    })))
+
 ;; ---- 每拍 ------------------------------------------------------------------
 
 (define redraw_all
@@ -1497,9 +1937,12 @@
     ;; 先补 HUD（球体由随后的分条绘制补），退出确认框关掉后立刻恢复原样
     (draw_clock)
     (draw_info)
+    (st_card)
     (set! clk_sec -1)
     (set! rnd_y ROW_Y0)
     (set! rnd_mode 1)
+    (st_begin)
+    (st_mark_b)
     (Gfx.refresh)))
 
 (define on_tick
@@ -1514,6 +1957,7 @@
         {
           (set! clk_sec sim_s)
           (draw_clock)
+          (st_card)                     ; 空间站推算值跟着每秒刷新
         })
     ;; ---- 时间机器/云层状态变了（键盘触发）：补画控制条高亮与信息行 ----
     (if (== ui_dirty 1)
@@ -1549,6 +1993,19 @@
               #f)
         }
         #f)
+    ;; ---- 空间站图层：每 ST_UPD_TK 拍把标记推到新位置（0.09 px/s，不必每拍）----
+    ;;   只重画标记占用的一小片行；正在分条重绘/拖动时跳过（那时整帧在重画）。
+    (if (and (and (== st_on 1) (== rnd_mode 0)) (and (== dragging 0) (== cam_settle 0)))
+        {
+          (set! st_tk (+ st_tk 1))
+          (if (>= st_tk ST_UPD_TK)
+              {
+                (set! st_tk 0)
+                (st_patch)
+              }
+              #f)
+        }
+        (set! st_tk 0))
     ;; ---- 场景调度（时间变化 / 云层开关）：只在空闲时重算 ----
     (if (and (and (== rnd_mode 0) (== dragging 0)) (== cam_settle 0))
         {
@@ -1565,6 +2022,7 @@
 
 (Gfx.set_font 1)            ; 12px 抗锯齿字模（HUD）
 (mkc_stars)
+(mkc_orb)                   ; 空间站图层缓存槽（一次性 push）
 (EX.install_with redraw_all)
 (view_norm)                 ; 初始视角：0°N 120°E、正北朝上（与定点俯视版逐位一致）
 (time_live)                 ; 初始：显示实时
@@ -1575,6 +2033,8 @@
 (rnd_start)                 ; 第一帧场景（分条渐进，由定时器逐拍推进）
 (draw_clock)
 (draw_info)
+(st_card)                   ; 左下角空间站推算值
+(st_log)                    ; 诊断行：星下点/高度/速度/屏幕坐标/TLE 年龄
 (Gfx.refresh)
 (set! _timer (System.set_interval TICK_MS on_tick))
 (display "[earthport] sun=(")
