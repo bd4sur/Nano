@@ -1,8 +1,10 @@
 #include <stdint.h>
+#include <string.h>
 
 #include "platform.h"
 #include "graphics.h"
 #include "ui.h" // TOUCH_EDGE_DOWN / TOUCH_EDGE_UP
+#include "ui_button.h"
 
 #include "ui_linglong_ctrl.h"
 
@@ -202,13 +204,17 @@ static int32_t ll_in_rect(int32_t x, int32_t y, int32_t rx, int32_t ry, int32_t 
     return (x >= rx && x < rx + rw && y >= ry && y < ry + rh);
 }
 
+// 通用按钮命中（定义在下方；ll_hit_test 先用）
+static int32_t ll_rect_hit(int32_t x, int32_t y, int32_t w, int32_t h,
+                           int32_t px, int32_t py);
+
 // 命中判定：返回对应动作，未命中返回 NONE
 static int32_t ll_hit_test(int32_t x, int32_t y) {
     // 顶部按钮
     if (ll_in_rect(x, y, LL_TOP_X0, LL_TOP_Y, LL_TOP_TOTAL_W, LL_TOP_BTN_H)) {
         for (int32_t i = 0; i < LL_TOP_COUNT; i++) {
             int32_t bx = LL_TOP_X0 + i * (LL_TOP_BTN_W + LL_TOP_GAP);
-            if (ll_in_rect(x, y, bx, LL_TOP_Y, LL_TOP_BTN_W, LL_TOP_BTN_H)) {
+            if (ll_rect_hit(bx, LL_TOP_Y, LL_TOP_BTN_W, LL_TOP_BTN_H, x, y)) {
                 return S_TOP_ACTION[i];
             }
         }
@@ -216,7 +222,7 @@ static int32_t ll_hit_test(int32_t x, int32_t y) {
     }
 
     // “设置”按钮（控制面板右上角空位，仅面板可见时）
-    if (s_controls_visible && ll_in_rect(x, y, LL_SETTINGS_BTN_X, LL_SETTINGS_BTN_Y, LL_SETTINGS_BTN_W, LL_SETTINGS_BTN_H)) {
+    if (s_controls_visible && ll_rect_hit(LL_SETTINGS_BTN_X, LL_SETTINGS_BTN_Y, LL_SETTINGS_BTN_W, LL_SETTINGS_BTN_H, x, y)) {
         return UI_LL_CTRL_SETTINGS;
     }
 
@@ -225,7 +231,7 @@ static int32_t ll_hit_test(int32_t x, int32_t y) {
         ll_in_rect(x, y, LL_TIME_MARGIN, LL_TIME_Y, LL_ROAM_TOTAL_W, LL_TIME_BTN_H)) {
         for (int32_t i = 0; i < LL_ROAM_COUNT; i++) {
             int32_t bx = LL_TIME_MARGIN + i * (LL_ROAM_BTN_W + LL_TIME_GAP);
-            if (ll_in_rect(x, y, bx, LL_TIME_Y, LL_ROAM_BTN_W, LL_TIME_BTN_H)) {
+            if (ll_rect_hit(bx, LL_TIME_Y, LL_ROAM_BTN_W, LL_TIME_BTN_H, x, y)) {
                 return S_ROAM_ACTION[i];
             }
         }
@@ -237,7 +243,7 @@ static int32_t ll_hit_test(int32_t x, int32_t y) {
         ll_in_rect(x, y, LL_TIME_MARGIN, LL_TIME_Y, LL_TIME_TOTAL_W, LL_TIME_BTN_H)) {
         for (int32_t i = 0; i < LL_TIME_COUNT; i++) {
             int32_t bx = LL_TIME_MARGIN + i * (LL_TIME_BTN_W + LL_TIME_GAP);
-            if (ll_in_rect(x, y, bx, LL_TIME_Y, LL_TIME_BTN_W, LL_TIME_BTN_H)) {
+            if (ll_rect_hit(bx, LL_TIME_Y, LL_TIME_BTN_W, LL_TIME_BTN_H, x, y)) {
                 return S_TIME_ACTION[i];
             }
         }
@@ -250,7 +256,7 @@ static int32_t ll_hit_test(int32_t x, int32_t y) {
             for (int32_t c = 0; c < LL_VIEW_COLS; c++) {
                 int32_t bx = LL_VIEW_X0 + c * (LL_VIEW_BTN_W + LL_VIEW_GAP);
                 int32_t by = LL_VIEW_Y0 + r * (LL_VIEW_BTN_H + LL_VIEW_GAP);
-                if (ll_in_rect(x, y, bx, by, LL_VIEW_BTN_W, LL_VIEW_BTN_H)) {
+                if (ll_rect_hit(bx, by, LL_VIEW_BTN_W, LL_VIEW_BTN_H, x, y)) {
                     return UI_LL_CTRL_VIEW_1 + r * LL_VIEW_COLS + c;
                 }
             }
@@ -262,7 +268,7 @@ static int32_t ll_hit_test(int32_t x, int32_t y) {
     if (s_controls_visible && ll_in_rect(x, y, LL_OPT_LEFT_X0, LL_VIEW_Y0,
             LL_OPT_BTN_W, LL_OPT_COUNT * LL_OPT_ROW_H - LL_VIEW_GAP)) {
         for (int32_t i = 0; i < LL_OPT_COUNT; i++) {
-            if (ll_in_rect(x, y, LL_OPT_LEFT_X0, LL_OPT_Y(i), LL_OPT_BTN_W, LL_OPT_BTN_H)) {
+            if (ll_rect_hit(LL_OPT_LEFT_X0, LL_OPT_Y(i), LL_OPT_BTN_W, LL_OPT_BTN_H, x, y)) {
                 return S_LEFT_ACTION[i];
             }
         }
@@ -273,7 +279,7 @@ static int32_t ll_hit_test(int32_t x, int32_t y) {
     if (s_controls_visible && ll_in_rect(x, y, LL_OPT_RIGHT_X0, LL_VIEW_Y0 + LL_OPT_ROW_H,
             LL_OPT_BTN_W, 2 * LL_OPT_ROW_H - LL_VIEW_GAP)) {
         for (int32_t i = 0; i < 2; i++) {
-            if (ll_in_rect(x, y, LL_OPT_RIGHT_X0, LL_OPT_Y(i + 1), LL_OPT_BTN_W, LL_OPT_BTN_H)) {
+            if (ll_rect_hit(LL_OPT_RIGHT_X0, LL_OPT_Y(i + 1), LL_OPT_BTN_W, LL_OPT_BTN_H, x, y)) {
                 return S_RIGHT_ACTION[i];
             }
         }
@@ -293,7 +299,7 @@ int32_t ui_linglong_ctrl_view_held(int32_t is_touching, int32_t x, int32_t y) {
             if (action == UI_LL_CTRL_VIEW_CENTER) continue; // 归中：单击生效，不重复
             int32_t bx = LL_VIEW_X0 + c * (LL_VIEW_BTN_W + LL_VIEW_GAP);
             int32_t by = LL_VIEW_Y0 + r * (LL_VIEW_BTN_H + LL_VIEW_GAP);
-            if (ll_in_rect(x, y, bx, by, LL_VIEW_BTN_W, LL_VIEW_BTN_H)) {
+            if (ll_rect_hit(bx, by, LL_VIEW_BTN_W, LL_VIEW_BTN_H, x, y)) {
                 return action;
             }
         }
@@ -431,7 +437,7 @@ static int32_t ll_setting_hit_test(int32_t x, int32_t y) {
         for (int32_t c = 0; c < LL_SET_COLS; c++) {
             int32_t bx = LL_SET_X0 + c * (LL_SET_BTN_W + LL_SET_GAP);
             int32_t by = LL_SET_Y0 + r * (LL_SET_BTN_H + LL_SET_GAP);
-            if (ll_in_rect(x, y, bx, by, LL_SET_BTN_W, LL_SET_BTN_H)) {
+            if (ll_rect_hit(bx, by, LL_SET_BTN_W, LL_SET_BTN_H, x, y)) {
                 return r * LL_SET_COLS + c;
             }
         }
@@ -459,27 +465,112 @@ int32_t ui_linglong_ctrl_settings_handle_touch(int32_t touch_edge, int32_t x, in
     return cell;
 }
 
+static int32_t ll_rect_hit(int32_t x, int32_t y, int32_t w, int32_t h,
+                           int32_t px, int32_t py) {
+    Ui_Button b;
+    ui_button_init(&b, 0, x, y, w, h);
+    b.style = UI_BTN_STYLE_ROUNDED;
+    b.radius = LL_COLOR_RADIUS;
+    return ui_button_hit(&b, px, py);
+}
+
+// 简单单行按钮的文本内容：常态 235、按下 255，保留原来的文字亮度差。
+static void ll_simple_content(Nano_GFX *gfx, const Ui_Button *b,
+                              int32_t base_cx, int32_t base_cy,
+                              Ui_Button_Visual vis, void *user) {
+    (void)base_cx;
+    (void)base_cy;
+    (void)user;
+    if (b->label == NULL) return;
+    int32_t cy = ui_button_label_cy(b, vis);
+    uint8_t mode = (vis == UI_BTN_VIS_PRESSED || vis == UI_BTN_VIS_SELECTED_PRESSED) ? 255 : 235;
+    gfx_font_draw_text_centered(gfx, b->font_id, (wchar_t *)b->label,
+        b->x + b->w / 2, cy,
+        LL_COLOR_TEXT_R, LL_COLOR_TEXT_G, LL_COLOR_TEXT_B, mode);
+}
+
+static void ll_simple_theme(Ui_Button_Theme *t, int32_t active, uint8_t alpha) {
+    memset(t, 0, sizeof(*t));
+    Ui_RGB base = active ? (Ui_RGB){LL_COLOR_ACTIVE_R, LL_COLOR_ACTIVE_G, LL_COLOR_ACTIVE_B}
+                         : (Ui_RGB){LL_COLOR_BG_R, LL_COLOR_BG_G, LL_COLOR_BG_B};
+    Ui_RGB press = {LL_COLOR_PRESS_R, LL_COLOR_PRESS_G, LL_COLOR_PRESS_B};
+    Ui_RGB text = {LL_COLOR_TEXT_R, LL_COLOR_TEXT_G, LL_COLOR_TEXT_B};
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = base;
+        t->fg[i] = text;
+        t->bg_alpha[i] = alpha;
+        t->border_alpha[i] = 0;
+    }
+    t->bg[UI_BTN_VIS_PRESSED] = press;
+    t->bg[UI_BTN_VIS_SELECTED] = base;
+    t->bg[UI_BTN_VIS_SELECTED_PRESSED] = press;
+}
+
+// 两行/特殊设置按钮的文本内容。颜色、字高、行偏移由调用方填入。
+typedef struct {
+    uint8_t lr, lg, lb;
+    uint8_t vr, vg, vb;
+    uint8_t label_alpha;
+    uint8_t value_alpha;
+    int16_t label_dy;
+    int16_t value_dy;
+    uint8_t has_value;
+} LL_Cell_Content;
+
+static void ll_cell_content(Nano_GFX *gfx, const Ui_Button *b,
+                            int32_t base_cx, int32_t base_cy,
+                            Ui_Button_Visual vis, void *user) {
+    (void)base_cx;
+    (void)base_cy;
+    if (b->label == NULL) return;
+    const LL_Cell_Content *c = (const LL_Cell_Content *)user;
+    int32_t cy = ui_button_label_cy(b, vis);
+    gfx_font_draw_text_centered(gfx, b->font_id, (wchar_t *)b->label,
+        b->x + b->w / 2, cy + c->label_dy,
+        c->lr, c->lg, c->lb, c->label_alpha);
+    if (c->has_value && b->value != NULL) {
+        gfx_font_draw_text_centered(gfx, b->value_font_id, (wchar_t *)b->value,
+            b->x + b->w / 2, cy + c->value_dy,
+            c->vr, c->vg, c->vb, c->value_alpha);
+    }
+}
+
+static void ll_cell_theme(Ui_Button_Theme *t, Ui_RGB normal, Ui_RGB pressed,
+                          uint8_t alpha_normal, uint8_t alpha_pressed) {
+    memset(t, 0, sizeof(*t));
+    Ui_RGB text = {LL_COLOR_TEXT_R, LL_COLOR_TEXT_G, LL_COLOR_TEXT_B};
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        t->bg[i] = normal;
+        t->fg[i] = text;
+        t->bg_alpha[i] = alpha_normal;
+        t->border_alpha[i] = 0;
+    }
+    t->bg[UI_BTN_VIS_PRESSED] = pressed;
+    t->bg_alpha[UI_BTN_VIS_PRESSED] = alpha_pressed;
+    t->bg[UI_BTN_VIS_SELECTED] = normal;
+    t->bg[UI_BTN_VIS_SELECTED_PRESSED] = pressed;
+    t->bg_alpha[UI_BTN_VIS_SELECTED_PRESSED] = alpha_pressed;
+}
+
 // 单个按钮：底色 + 居中文字（active=功能激活，pressed=当前按住）
 static void ll_draw_button(Nano_GFX *gfx, int32_t x, int32_t y, int32_t w, int32_t h,
                            const wchar_t *label, int32_t active, int32_t pressed, uint8_t alpha) {
-    uint8_t r = LL_COLOR_BG_R, g = LL_COLOR_BG_G, b = LL_COLOR_BG_B;
-    if (active) {
-        r = LL_COLOR_ACTIVE_R;
-        g = LL_COLOR_ACTIVE_G;
-        b = LL_COLOR_ACTIVE_B;
-    }
-    if (pressed) {
-        r = LL_COLOR_PRESS_R;
-        g = LL_COLOR_PRESS_G;
-        b = LL_COLOR_PRESS_B;
-    }
+    Ui_Button b;
+    ui_button_init(&b, 0, x, y, w, h);
+    b.style = UI_BTN_STYLE_ROUNDED;
+    b.radius = LL_COLOR_RADIUS;
+    b.flags = UI_BTN_FLAG_DRAW_BG;
+    b.font_id = GFX_FONT_ALPHA_12;
+    b.content_draw = ll_simple_content;
+    ui_button_set_text(&b, label, NULL);
 
-    gfx_draw_rounded_rectangle(gfx, x, y, w, h,
-        LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS,
-        r, g, b, alpha);
-    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)label,
-        x + w / 2, y + h / 2,
-        LL_COLOR_TEXT_R, LL_COLOR_TEXT_G, LL_COLOR_TEXT_B, pressed ? 255 : 235);
+    Ui_Button_Theme t;
+    ll_simple_theme(&t, active, alpha);
+
+    Ui_Button_Visual vis;
+    if (pressed) vis = active ? UI_BTN_VIS_SELECTED_PRESSED : UI_BTN_VIS_PRESSED;
+    else         vis = active ? UI_BTN_VIS_SELECTED : UI_BTN_VIS_NORMAL;
+    ui_button_draw(gfx, &b, &t, vis);
 }
 
 static void ll_draw_top(Nano_GFX *gfx) {
@@ -559,29 +650,36 @@ static void ll_draw_view(Nano_GFX *gfx) {
 static void ll_draw_option_button(Nano_GFX *gfx, int32_t x, int32_t y, int32_t w, int32_t h,
                                  const wchar_t *label, const wchar_t *value,
                                  int32_t pressed, int32_t enabled) {
-    uint8_t r = LL_COLOR_BG_R, g = LL_COLOR_BG_G, b = LL_COLOR_BG_B;
-    if (pressed) {
-        r = LL_COLOR_PRESS_R;
-        g = LL_COLOR_PRESS_G;
-        b = LL_COLOR_PRESS_B;
-    }
-    uint8_t alpha = enabled ? LL_ALPHA_OPTION : LL_ALPHA_OPTION_DIM;
-    gfx_draw_rounded_rectangle(gfx, x, y, w, h,
-        LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS,
-        r, g, b, pressed ? 205 : alpha);
-    // 名称行（白/暗灰）与现值行（淡青/暗青，突出可变量）
-    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)label,
-        x + w / 2, y + h / 2 - 9,
-        enabled ? LL_COLOR_TEXT_R : LL_COLOR_DIM_R,
-        enabled ? LL_COLOR_TEXT_G : LL_COLOR_DIM_G,
-        enabled ? LL_COLOR_TEXT_B : LL_COLOR_DIM_B,
-        enabled ? 235 : 200);
-    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)value,
-        x + w / 2, y + h / 2 + 9,
-        enabled ? 200 : LL_COLOR_DIM_R,
-        enabled ? 232 : LL_COLOR_DIM_G,
-        enabled ? 255 : LL_COLOR_DIM_B,
-        enabled ? 245 : 200);
+    Ui_Button b;
+    ui_button_init(&b, 0, x, y, w, h);
+    b.style = UI_BTN_STYLE_ROUNDED;
+    b.radius = LL_COLOR_RADIUS;
+    b.flags = UI_BTN_FLAG_DRAW_BG;
+    b.font_id = GFX_FONT_ALPHA_12;
+    b.value_font_id = GFX_FONT_ALPHA_12;
+    b.content_draw = ll_cell_content;
+    ui_button_set_text(&b, label, value);
+
+    LL_Cell_Content content;
+    content.lr = enabled ? LL_COLOR_TEXT_R : LL_COLOR_DIM_R;
+    content.lg = enabled ? LL_COLOR_TEXT_G : LL_COLOR_DIM_G;
+    content.lb = enabled ? LL_COLOR_TEXT_B : LL_COLOR_DIM_B;
+    content.vr = enabled ? 200 : LL_COLOR_DIM_R;
+    content.vg = enabled ? 232 : LL_COLOR_DIM_G;
+    content.vb = enabled ? 255 : LL_COLOR_DIM_B;
+    content.label_alpha = enabled ? 235 : 200;
+    content.value_alpha = enabled ? 245 : 200;
+    content.label_dy = -9;
+    content.value_dy = 9;
+    content.has_value = 1;
+    b.content_user = &content;
+
+    Ui_Button_Theme t;
+    Ui_RGB normal = {LL_COLOR_BG_R, LL_COLOR_BG_G, LL_COLOR_BG_B};
+    Ui_RGB press = {LL_COLOR_PRESS_R, LL_COLOR_PRESS_G, LL_COLOR_PRESS_B};
+    ll_cell_theme(&t, normal, press,
+                  enabled ? LL_ALPHA_OPTION : LL_ALPHA_OPTION_DIM, 205);
+    ui_button_draw(gfx, &b, &t, pressed ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
 }
 
 static const wchar_t *ll_option_name(const wchar_t *const *table, int32_t count, int32_t index) {
@@ -626,46 +724,49 @@ static void ll_draw_settings_button(Nano_GFX *gfx) {
 static void ll_draw_setting_button(Nano_GFX *gfx, int32_t x, int32_t y, int32_t w, int32_t h,
                                    const UiLinglongSettingCell *cell, int32_t pressed) {
     // 与两行控制按钮同一半透明底色（两行文字需要比单行视角按钮更实一点）
-    uint8_t r = LL_COLOR_BG_R, g = LL_COLOR_BG_G, b = LL_COLOR_BG_B;
-    uint8_t alpha = LL_ALPHA_OPTION;
+    Ui_RGB normal = {LL_COLOR_BG_R, LL_COLOR_BG_G, LL_COLOR_BG_B};
+    Ui_RGB press = {LL_COLOR_PRESS_R, LL_COLOR_PRESS_G, LL_COLOR_PRESS_B};
+    uint8_t alpha_normal = LL_ALPHA_OPTION;
+    uint8_t alpha_pressed = 210;
 
     if (cell->is_special) {
         // “返回”特殊样式：红色系，略实以保证亮天空上仍明显
-        r = 150; g = 60; b = 50;
-        alpha = 230;
+        normal = (Ui_RGB){150, 60, 50};
+        press = (Ui_RGB){200, 100, 80};
+        alpha_normal = 230;
     }
     else if (cell->label == NULL) {
         // 无功能备用按钮：更透、无文字，只保留 5x4 网格的占位感
-        alpha = 100;
+        alpha_normal = 100;
     }
 
-    if (pressed) {
-        if (cell->is_special) { r = 200; g = 100; b = 80; }
-        else { r = LL_COLOR_PRESS_R; g = LL_COLOR_PRESS_G; b = LL_COLOR_PRESS_B; }
-        alpha = 210;
-    }
+    Ui_Button b;
+    ui_button_init(&b, 0, x, y, w, h);
+    b.style = UI_BTN_STYLE_ROUNDED;
+    b.radius = LL_COLOR_RADIUS;
+    b.flags = UI_BTN_FLAG_DRAW_BG;
+    b.font_id = cell->is_special ? GFX_FONT_ALPHA_16 : GFX_FONT_ALPHA_12;
+    b.value_font_id = GFX_FONT_ALPHA_12;
+    b.content_draw = ll_cell_content;
+    ui_button_set_text(&b, cell->label, cell->value);
 
-    gfx_draw_rounded_rectangle(gfx, x, y, w, h,
-        LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS, LL_COLOR_RADIUS,
-        r, g, b, alpha);
+    LL_Cell_Content content;
+    content.lr = LL_COLOR_TEXT_R;
+    content.lg = LL_COLOR_TEXT_G;
+    content.lb = LL_COLOR_TEXT_B;
+    content.vr = cell->value_r;
+    content.vg = cell->value_g;
+    content.vb = cell->value_b;
+    content.label_alpha = 255;
+    content.value_alpha = 255;
+    content.label_dy = cell->is_special ? 0 : -8;
+    content.value_dy = 8;
+    content.has_value = (!cell->is_special && cell->value != NULL) ? 1 : 0;
+    b.content_user = &content;
 
-    if (cell->label == NULL) return;
-
-    if (cell->is_special) {
-        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, (wchar_t *)cell->label,
-            x + w / 2, y + h / 2,
-            LL_COLOR_TEXT_R, LL_COLOR_TEXT_G, LL_COLOR_TEXT_B, 255);
-    }
-    else {
-        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)cell->label,
-            x + w / 2, y + h / 2 - 8,
-            LL_COLOR_TEXT_R, LL_COLOR_TEXT_G, LL_COLOR_TEXT_B, 255);
-        if (cell->value != NULL) {
-            gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)cell->value,
-                x + w / 2, y + h / 2 + 8,
-                cell->value_r, cell->value_g, cell->value_b, 255);
-        }
-    }
+    Ui_Button_Theme t;
+    ll_cell_theme(&t, normal, press, alpha_normal, alpha_pressed);
+    ui_button_draw(gfx, &b, &t, pressed ? UI_BTN_VIS_PRESSED : UI_BTN_VIS_NORMAL);
 }
 
 void ui_linglong_ctrl_draw_settings(Nano_GFX *gfx, const UiLinglongSettingCell *cells) {
@@ -691,7 +792,7 @@ int32_t ui_linglong_ctrl_roam_held(int32_t is_touching, int32_t x, int32_t y) {
     int32_t mask = 0;
     for (int32_t i = 0; i < LL_ROAM_COUNT; i++) {
         int32_t bx = LL_TIME_MARGIN + i * (LL_ROAM_BTN_W + LL_TIME_GAP);
-        if (ll_in_rect(x, y, bx, LL_TIME_Y, LL_ROAM_BTN_W, LL_TIME_BTN_H)) {
+        if (ll_rect_hit(bx, LL_TIME_Y, LL_ROAM_BTN_W, LL_TIME_BTN_H, x, y)) {
             mask |= S_ROAM_BIT[i];
         }
     }
