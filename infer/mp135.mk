@@ -80,7 +80,6 @@ $(BIN_DIR)/nano_pod: $(ANIMAC_SRCS) \
                         ui_dict.c \
                         ui_ebook.c \
                         ui_flip.c \
-                        ui_goldminer.c \
                         ui_grid16kbd.c \
                         ui_linglong.c \
                         ui_linglong_ctrl.c \
@@ -134,7 +133,6 @@ $(BIN_DIR)/nano_tty: $(ANIMAC_SRCS) \
                         ui_dict.c \
                         ui_ebook.c \
                         ui_flip.c \
-                        ui_goldminer.c \
                         ui_grid16kbd.c \
                         ui_linglong.c \
                         ui_linglong_ctrl.c \

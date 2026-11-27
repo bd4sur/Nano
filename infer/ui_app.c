@@ -46,8 +46,6 @@
 
 #include "ui_genetic.h"
 
-#include "ui_tsp.h"
-
 #include "ui_cloud.h"
 #include "ui_llm.h"
 #include "ui_linglong.h"   // 玲珑天象仪（原在本文件内的 STATE_LINGLONG 状态页）
@@ -58,8 +56,6 @@
 #include "ui_app.h"
 
 #include "ui_animac.h"
-
-#include "ui_goldminer.h"
 
 #include "ui_ripple.h"
 
@@ -135,11 +131,11 @@ static Ui_Confirm_Modal s_animac_exit_modal;
 //
 // 【按键/触屏事件处理原则】（所有功能开发与修改必须遵守）
 //   1. 存量功能默认仍按硬按键语义工作。仅应响应硬按键的功能，必须显式过滤
-//      key_event->is_soft_key == 0（范式：ui_goldminer_event_handler），
+//      key_event->is_soft_key == 0（范式：ui_flip_event_handler），
 //      否则触屏虚拟键盘的键码会被误当作实体键响应。
 //   2. 需要直接消费触屏的功能状态（虚拟按钮/点按/拖动等）：点按边沿认
 //      key_event->touch_edge（TOUCH_EDGE_DOWN/UP，生产端高频检测+队列可靠投递，
-//      亚帧点按不湮灭），按下点坐标取 touch_down_x/y（范式：ui_goldminer.c、
+//      亚帧点按不湮灭），按下点坐标取 touch_down_x/y（范式：ui_flip.c、
 //      ui.c 菜单控件）；拖动轨迹逐帧读 key_event->touch_x/touch_y
 //      快照。一律不得跨层直读 hal_touch，也不再需要模块自持 prev 电平做沿检测。
 //   3. 触屏是唯一入口的状态（无实体键盘的机型上），必须自备显式触屏入口——
@@ -147,7 +143,7 @@ static Ui_Confirm_Modal s_animac_exit_modal;
 //   4. 会引发状态切换的触屏动作，必须在松手沿（touch_edge & TOUCH_EDGE_UP）
 //      触发；按下沿只允许锁存坐标/状态。如此状态切换发生在手指抬起之后，
 //      下一状态看到的触屏电平为 0，不会将本次触摸序列误当作新的点击
-//      （范式：ui.c 菜单控件、ui_goldminer.c）。
+//      （范式：ui.c 菜单控件、ui_flip.c）。
 // ===============================================================================
 void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 触屏边沿检测状态（本函数在 Core1 以 1-2ms 轮询，静态变量天然单生产者）
@@ -448,11 +444,13 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
     // 条目字符串借用字面量的静态存储，控件不复制
     static const wchar_t *game_menu_items[] = {
         L"灵机应用程序",
-        L"黄金矿工",
-        L"遗传算法求解旅行商问题",
         L"遗传算法拟合图像",
         L"水波",
         L"水池",
+        // 原“黄金矿工”入口已移除：C 版（STATE_GOLDMINER / ui_goldminer.c）退场，
+        // 黄金矿工仅保留 Scheme 实现（app/goldminer.scm，经“灵机应用程序”入口启动）
+        // 原“遗传算法求解旅行商问题”入口已移除：C 版（STATE_GENETIC_TSP / ui_tsp.h）
+        // 退场，TSP 仅保留 Scheme 实现（app/tsp.scm，经“灵机应用程序”入口启动）
         // 原“日历”入口已移除：C 版（STATE_CALENDAR / ui_calendar.c）退场，日历仅保留
         // Scheme 实现（app/calendar.scm，经“灵机应用程序”入口启动）
         // L"体积云",  // 原入口：已移除（体积云渲染保留在天象仪“大气散射”档位中，见 celestial.c）
@@ -471,19 +469,19 @@ void init_game_menu(Key_Event *key_event, Global_State *global_state) {
     };
     global_state->w_menu_main->title = L"小游戏";
     global_state->w_menu_main->items = game_menu_items;
-    global_state->w_menu_main->item_num = 6;
+    global_state->w_menu_main->item_num = 4;
     ui_widget_menu_init(key_event, global_state, global_state->w_menu_main);
 }
 
 int32_t game_menu_item_action(Key_Event *ke, Global_State *gs, Widget_Menu_State *ms) {
     switch (ms->current_item_index) {
         case 0: return STATE_SCHEME_APP_LIST;  // 灵机应用程序（Scheme App 动态列表）
-        case 1: return STATE_GOLDMINER;
-        case 2: return STATE_GENETIC_TSP;
-        case 3: return STATE_GENETIC;
-        case 4: return STATE_RIPPLE;
-        case 5: return STATE_WATER;
-        // case 6: 原“日历”入口已移除（C 版退场，日历仅保留 Scheme 实现 app/calendar.scm）
+        case 1: return STATE_GENETIC;
+        case 2: return STATE_RIPPLE;
+        case 3: return STATE_WATER;
+        // 原 case 1（STATE_GOLDMINER）已移除：C 版黄金矿工退场，仅保留 app/goldminer.scm
+        // 原 case 2（STATE_GENETIC_TSP）已移除：C 版 TSP 退场，仅保留 app/tsp.scm
+        // 原 case 6: 原“日历”入口已移除（C 版退场，日历仅保留 Scheme 实现 app/calendar.scm）
         // case 7: 原“体积云”入口已移除（保留 STATE_CLOUD 状态处理，当前无菜单入口）
         // 原“曼德博集”/“生命游戏Scheme”入口已并入“灵机应用程序”（case 0）
         // case 12: 原“小鹦鹉笼”入口已移除（并入鹦鹉笼模型菜单，条目带 [轻] 前缀）
@@ -1562,29 +1560,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
 
     /////////////////////////////////////////////
-    // 黄金矿工
-    /////////////////////////////////////////////
-
-    case STATE_GOLDMINER: {
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_goldminer_init(key_event, global_state);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        // 按键处理（A返回 / D或2放钩）；返回主菜单则跳过一帧渲染
-        ui_goldminer_event_handler(key_event, global_state);
-        if (global_state->STATE != STATE_GOLDMINER) break;
-
-        // 逻辑更新 + 渲染一帧
-        ui_goldminer_render_frame(key_event, global_state);
-
-        break;
-    }
-
-
-    /////////////////////////////////////////////
     // 水波
     /////////////////////////////////////////////
 
@@ -1953,42 +1928,6 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         break;
 
-
-    /////////////////////////////////////////////
-    // 演化算法+TSP
-    /////////////////////////////////////////////
-
-    case STATE_GENETIC_TSP:
-
-        // 首次获得焦点：初始化
-        if (global_state->PREV_STATE != global_state->STATE) {
-            ui_app_tsp_init(key_event, global_state);
-        }
-        global_state->PREV_STATE = global_state->STATE;
-
-        ui_app_tsp_refresh(key_event, global_state);
-
-        // 按键（实体键盘兜底）：A 返回主菜单；D 重新演化
-        if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
-            global_state->STATE = STATE_MAIN_MENU;
-        }
-        else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
-            ui_app_tsp_init(key_event, global_state);
-        }
-        // 触屏（全屏宫格软键退场后的显式入口，几何见 ui_tsp.h 的提示绘制）：
-        // 页眉右侧 1/4 松手=返回主菜单；底部距离曲线条带松手=重新演化。
-        else if (key_event->touch_edge & TOUCH_EDGE_UP) {
-            if (key_event->touch_down_y >= 0
-                && key_event->touch_down_y < ui_std_header_height(global_state->ui_font)
-                && key_event->touch_down_x >= UI_BACK_HOTSPOT_X0((int32_t)global_state->gfx->width)) {
-                global_state->STATE = STATE_MAIN_MENU;
-            }
-            else if (key_event->touch_down_y >= (int32_t)global_state->gfx->height - 24) {
-                ui_app_tsp_init(key_event, global_state);
-            }
-        }
-
-        break;
 
     /////////////////////////////////////////////
     // 电子词典：前缀查询（候选菜单 + 固定软键盘；统一 GFX_FONT_ALPHA_12）

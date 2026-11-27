@@ -18361,3 +18361,102 @@ Nano-Web/WASM、Android）上照常工作。随着各功能逐个改为直接消
 2. **“帧率正常”不等于“内容在更新”**：旧版 60 次推屏/秒，但地图区中位数 0 像素变化。
    判“逐帧灵敏”必须比**连续两帧的像素差**，不能只看 epoch 增量。
 3. **`Diag` 在本 App 已无用途**（帧预算机制删除后），顺手去掉 `(native Diag)`。
+
+# 2026-11-27（C 版 TSP 彻底退场：删除 ui_tsp.h + 状态机 + 「小游戏」入口）
+
+## 背景
+
+`app/tsp.scm` 已与 C 版 `ui_tsp.h` 逐帧对齐（见上一条）。两份 TSP 实现并存没有意义：
+C 版只多一份维护成本（它甚至**已无 UI 入口**——「小游戏」二级菜单本身在当前构建里被
+屏蔽，见 `ui_main_menu.c` 的内置条目表），因此按本仓历次退役的同一体例清掉 C 版。
+
+## 改动
+
+- **删除 `infer/ui_tsp.h`**（445 行，`STATE_GENETIC_TSP` / `TSP_Eden` / `ui_app_tsp_*`）。
+  它只被 `ui_app.c` 引用，构建清单（`Makefile` / `mp135.mk` / `luckfox.mk` /
+  `build_wasm_gui.sh` / android CMakeLists）里没有单独条目，故无需改构建。
+- **`ui_app.c`**：
+  - 去掉 `#include "ui_tsp.h"`；
+  - `init_game_menu`：删掉 `L"遗传算法求解旅行商问题"` 条目，`item_num` 6 → 5，
+    并留一行「原入口已移除…」注释（与俄罗斯方块/生命游戏等退役条目同格式）；
+  - `game_menu_item_action`：删 `case 2: STATE_GENETIC_TSP`，其后三个 case 前移
+    （遗传算法拟合图像 2、水波 3、水池 4）；
+  - 删掉整个 `case STATE_GENETIC_TSP:` 分支（初始化/每帧 refresh/A 返回、Enter 重跑、
+    页眉返回与底部条带「重跑」两个触屏热点）。
+- **`ui_app.h`**：`STATE_GENETIC_TSP (24)` 换成「编号 24 已退役…」注释（保留编号空缺，
+  与 26/27/32/37 的既有退役写法一致）。
+- **`infer/app/tsp.scm`**：文件头「参考实现：infer/ui_tsp.h」改为「历史参考：C 版已
+  于 2026-11-27 彻底退场，本文件是唯一实现」。
+
+## 验证（WASM-GUI；9002 服务保持运行，未启停）
+
+- `bash infer/build_wasm_gui.sh` 通过（产物 5,776,788 B，比改前小 ≈2.2 KB）。
+- 产物二进制**扫不到任何 C 版残留**：`ui_tsp` / `tsp_eden` / `tsp_path_length` /
+  `STATE_GENETIC_TSP` / `遗传算法求解旅行商问题`（UTF-8 与 UTF-32LE 两种编码）在
+  `nano_gui.wasm` 与 `nano_gui.js` 里均为 0 次命中。
+- `cc -DNANO_TTY -Wall -Wextra -fsyntax-only ui_app.c`：无新增告警/错误（`ui_app.c`
+  自身的既有告警与改前同集合）。
+- 浏览器真 wasm（`https://127.0.0.1:9002/`）：主菜单条目表仍为
+  「内置 5 项（屏蔽 4 项）+ 灵机 App 59 项 = 64 项」，Scheme App 扫描 59 个；
+  `app/tsp.scm` 端到端 **13/13 PASS**（60 帧/秒、dEpoch 恒 1、点地图重开、退出确认框、
+  无 pageerror）——C 侧删除对灵机 App 零影响。
+- `git status` 仅三项：`ui_app.c`/`ui_app.h` 修改、`ui_tsp.h` 删除（Android 的
+  `.cxx/`、`build/` 与 `webgui/manifest.json` 均为忽略的产物）。
+
+## 备注
+
+- 「小游戏」二级菜单在当前构建里本就**没有入口**（内置条目表里被屏蔽），所以这次删除
+  菜单项对今天的界面是零观感变化；但一旦将来恢复该二级菜单，它会是干净的 5 项。
+- Android 侧 `assets/linglong/app/tsp.scm` 是 gradle 任务从 `/home/bd4sur/linglong`
+  同步的**产物副本**（本次未手改）；它下次构建会自动刷新。
+
+# 2026-11-27（C 版黄金矿工退场：删除 ui_goldminer.{c,h} + 状态机 + 构建清单条目）
+
+## 背景
+
+继 C 版 TSP 退场之后，按同一理由清掉 C 版黄金矿工——`app/goldminer.scm`（灵机 App）已
+覆盖同等玩法（贴图/摆动/抗锯齿钩绳/触屏发射/关卡计分，宿主侧 `test_goldminer.py` 与浏览器
+侧 `regress_goldminer.js` 一直在测它），C 版多留一份实现只是维护成本。而且「小游戏」
+二级菜单在当前构建里本就**没有入口**（内置条目表被屏蔽），删除对今天的界面零观感变化。
+
+## 改动
+
+- **删除 `infer/ui_goldminer.c`（19,862 B）/ `ui_goldminer.h`**（`STATE_GOLDMINER` /
+  `ui_goldminer_init/event_handler/render_frame`）。
+- **`ui_app.c`**：去掉 `#include "ui_goldminer.h"`；`init_game_menu` 删条目 `L"黄金矿工"`
+  （`item_num` 5 → 4）并留退役注释；`game_menu_item_action` 删 `case 1`、后三项前移；
+  删掉整个 `case STATE_GOLDMINER:` 分支。
+- **输入原则注释去引用**：`get_input_event` 上方「按键/触屏事件处理原则」原以
+  `ui_goldminer_event_handler` / `ui_goldminer.c` 当范式（1.软键过滤、2.触屏按下点坐标、
+  4.状态切换走松手沿），改为现存等价范式 `ui_flip_event_handler` / `ui_flip.c`（同样三处
+  都符合，已逐条核对）。
+- **`ui_app.h`**：`STATE_GOLDMINER (55)` → 「编号 55 已退役…」注释（保留编号空缺）。
+- **构建清单**：`Makefile`（`GUI_MODULE_SRCS` + 4 个目标列表）、`mp135.mk`（2 处）、
+  `luckfox.mk`、`build_wasm_gui.sh`、`android/app/src/main/cpp/CMakeLists.txt`（本地忽略）
+  各删一行 `ui_goldminer.c`。
+- `tools/e2e/native/test_goldminer.py` 的一行诊断标题不再指向已删文件（改为「规则源自原
+  C 版，C 版已于 2026-11 退场」）。
+
+## 验证（WASM-GUI；9002 服务保持运行，未启停）
+
+- `bash infer/build_wasm_gui.sh` 通过；产物 `nano_gui.wasm` 5,771,450 B（再小 ≈5.3 KB）。
+- **二进制扫残余**：`ui_goldminer` / `goldminer_init|event_handler|render_frame` /
+  `STATE_GOLDMINER` / `GM_Item_Type` / `黄金矿工`（UTF-8 与 UTF-32LE）在
+  `nano_gui.wasm` 与 `nano_gui.js` 中命中数**全为 0**。
+- `cc -DNANO_TTY -Wall -Wextra -fsyntax-only ui_app.c`：无新增告警/错误。
+- `make -n` 全目标命令行里 `ui_goldminer` 0 次命中。
+- **灵机版黄金矿工端到端 21/21 PASS**（真 wasm，Chromium）：GMSTAT 开局 9 个物件、
+  天空/地面分区、HUD、金块/岩石贴图、**透明背景**（矿工盒内 1646/4160 天空色）、
+  摆动（差异像素 284）、**抗锯齿钩绳**（partial=10/aa=12）、触屏发射→GMGRAB→GMSCORE、
+  回车发射、退出确认框「留下/确认」、硬 Esc 全局确认、无 pageerror。
+
+## 踩坑记录
+
+1. **`regress_goldminer.js` 的导航与退出判据同样过期**（与 TSP 那条同源）：`7/7/Enter`
+   已不存在，App 直接摆在主菜单宫格（内置 5 项之后按 id 升序）；从宫格启动的 App
+   **退出回主菜单（-2）**，不再回「灵机应用程序」列表（79）。更坑的是回主菜单后按
+   **Enter = 关机**（STATE 99）——旧脚本的「确认后可再次启动」用例因此把机器关了。
+   临时副本按“滚动到格子 + 点按”重写导航与退出判据后 21/21。
+2. **抗锯齿钩绳判据本身有偶发性**：同一构建连续两次跑，第一次 `partial=0` 失败、
+   第二次 `partial=10` 通过——差异来自“两帧之间钩爪摆幅”恰好落在采样时刻。判失败先重跑，
+   不要先怀疑渲染。

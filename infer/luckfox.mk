@@ -92,7 +92,6 @@ $(BIN_DIR)/nano_pod_luckfox: $(ANIMAC_SRCS) $(ANIMAC_HEADERS) $(ANIMAC_DIR)/am_n
                         ui_dict.c \
                         ui_ebook.c \
                         ui_flip.c \
-                        ui_goldminer.c \
                         ui_grid16kbd.c \
                         ui_linglong.c \
                         ui_linglong_ctrl.c \

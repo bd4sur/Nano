@@ -20,7 +20,8 @@ extern "C" {
 #define STATE_LLM_AFTER_INFER   (10)
 #define STATE_ASR_RUNNING       (21)
 #define STATE_GENETIC           (23)
-#define STATE_GENETIC_TSP       (24)
+// 编号 24 已退役：原 C 版旅行商问题（STATE_GENETIC_TSP / ui_tsp.h）已移除，TSP 仅保留
+// Scheme 实现（app/tsp.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
 #define STATE_README            (25)
 // 编号 26 已退役：原 C 版 Bad Apple（STATE_BADAPPLE）已移除，Bad Apple 仅保留
 // Scheme 实现（app/badapple.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
@@ -43,7 +44,8 @@ extern "C" {
 // 编号 53 已退役：原 C 版音频频谱仪（STATE_SPECTROGRAM）已移除，声谱图仅保留
 // Scheme 实现（app/spectrogram.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
 #define STATE_GAME_MENU         (54)
-#define STATE_GOLDMINER         (55)
+// 编号 55 已退役：原 C 版黄金矿工（STATE_GOLDMINER / ui_goldminer.c）已移除，黄金矿工
+// 仅保留 Scheme 实现（app/goldminer.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
 // 编号 56 已退役：原 C 版俄罗斯方块（STATE_TETRIS）已移除，俄罗斯方块仅保留
 // Scheme 实现（app/tetris.scm，经“灵机应用程序”入口启动）。保留编号空缺避免冲突。
 #define STATE_EBOOK_READING     (57)
