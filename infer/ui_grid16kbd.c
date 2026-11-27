@@ -1,6 +1,8 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "ui_grid16kbd.h"
+#include "ui_button.h"
 
 // ===============================================================================
 // 16键虚拟键盘（硬件无关实现）
@@ -185,6 +187,32 @@ uint8_t ui_grid16kbd_poll(int32_t x, int32_t y, int32_t is_pressed) {
     return s_held_code;
 }
 
+typedef struct {
+    const wchar_t *line0;
+    const wchar_t *line1;
+    int32_t off;
+} Grid16_Content;
+
+static void grid16_key_content(Nano_GFX *gfx, const Ui_Button *b,
+                               int32_t base_cx, int32_t base_cy,
+                               Ui_Button_Visual vis, void *user) {
+    (void)base_cx;
+    (void)base_cy;
+    const Grid16_Content *c = (const Grid16_Content *)user;
+    int32_t cx = b->x + b->w / 2;
+    int32_t cy = ui_button_label_cy(b, vis);
+    if (c->line1 != NULL) {
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)c->line0,
+                                    cx, cy - c->off, UI_GRID16KBD_COLOR_LABEL, 1);
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)c->line1,
+                                    cx, cy + c->off, UI_GRID16KBD_COLOR_LABEL, 1);
+    }
+    else {
+        gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, (wchar_t *)c->line0,
+                                    cx, cy, UI_GRID16KBD_COLOR_LABEL, 1);
+    }
+}
+
 void ui_grid16kbd_draw(Nano_GFX *gfx, uint8_t is_ctrl_active) {
     if (!s_visible) return;
 
@@ -195,41 +223,46 @@ void ui_grid16kbd_draw(Nano_GFX *gfx, uint8_t is_ctrl_active) {
 
     const wchar_t *(*grid)[4][2] = (is_ctrl_active) ? S_GRID16KBD_LABEL_CTRL : S_GRID16KBD_LABEL_NORMAL;
 
+    Ui_Button_Theme theme;
+    memset(&theme, 0, sizeof(theme));
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        theme.bg[i] = (Ui_RGB){28, 28, 32};
+        theme.fg[i] = (Ui_RGB){240, 240, 240};
+        theme.bg_alpha[i] = 1;
+        theme.border_alpha[i] = 0;
+    }
+    theme.bg[UI_BTN_VIS_PRESSED] = (Ui_RGB){96, 96, 104};
+    theme.bg[UI_BTN_VIS_SELECTED] = (Ui_RGB){16, 48, 160};
+
     for (int32_t r = 0; r < UI_GRID16KBD_ROWS; r++) {
         for (int32_t c = 0; c < UI_GRID16KBD_COLS; c++) {
             int32_t x = 0, cell_w = 0;
             ui_grid16kbd_col_geometry(c, &x, &cell_w);
             int32_t y = kbd_y + UI_GRID16KBD_GAP + r * (UI_GRID16KBD_CELL_H + UI_GRID16KBD_GAP);
-            int32_t cx = x + cell_w / 2;
-            int32_t cy = y + UI_GRID16KBD_CELL_H / 2;
 
-            uint8_t bg_R = 0, bg_G = 0, bg_B = 0;
-            if (S_GRID16KBD_KEYCODE[r][c] == NANO_KEY_ctrl && is_ctrl_active) {
-                bg_R = 16; bg_G = 48; bg_B = 160;  // 全局Ctrl激活：Ctrl键高亮
-            }
-            else {
-                bg_R = 28; bg_G = 28; bg_B = 32;   // 普通键底色
-            }
-            if (r == s_press_row && c == s_press_col) {
-                bg_R = 96; bg_G = 96; bg_B = 104;  // 按住高亮
-            }
-
-            gfx_draw_rounded_rectangle(gfx, x, y, cell_w, UI_GRID16KBD_CELL_H,
-                UI_GRID16KBD_RADIUS, UI_GRID16KBD_RADIUS, UI_GRID16KBD_RADIUS, UI_GRID16KBD_RADIUS,
-                bg_R, bg_G, bg_B, 1);
-
-            // 键名：双行 12px、单行 16px，均在按钮内居中（同原提示遮罩的排版语义，
-            // 行偏移按按钮高度收缩为 cell_h/4）
             const wchar_t *line0 = grid[r][c][0];
             const wchar_t *line1 = grid[r][c][1];
-            if (line1 != NULL) {
-                int32_t off = UI_GRID16KBD_CELL_H / 4;
-                gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)line0, cx, cy - off, UI_GRID16KBD_COLOR_LABEL, 1);
-                gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)line1, cx, cy + off, UI_GRID16KBD_COLOR_LABEL, 1);
-            }
-            else {
-                gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_16, (wchar_t *)line0, cx, cy, UI_GRID16KBD_COLOR_LABEL, 1);
-            }
+            int32_t selected = (S_GRID16KBD_KEYCODE[r][c] == NANO_KEY_ctrl && is_ctrl_active) ? 1 : 0;
+            int32_t pressed = (r == s_press_row && c == s_press_col) ? 1 : 0;
+
+            Ui_Button b;
+            ui_button_init(&b, r * UI_GRID16KBD_COLS + c, x, y, cell_w, UI_GRID16KBD_CELL_H);
+            b.style = UI_BTN_STYLE_ROUNDED;
+            b.radius = UI_GRID16KBD_RADIUS;
+            b.flags = UI_BTN_FLAG_DRAW_BG;
+            b.font_id = (line1 != NULL) ? GFX_FONT_ALPHA_12 : GFX_FONT_ALPHA_16;
+            ui_button_set_text(&b, line0, NULL);
+
+            Grid16_Content content;
+            content.line0 = line0;
+            content.line1 = line1;
+            content.off = UI_GRID16KBD_CELL_H / 4;
+            b.content_draw = grid16_key_content;
+            b.content_user = &content;
+
+            Ui_Button_Visual vis = pressed ? UI_BTN_VIS_PRESSED
+                                  : (selected ? UI_BTN_VIS_SELECTED : UI_BTN_VIS_NORMAL);
+            ui_button_draw(gfx, &b, &theme, vis);
         }
     }
 }

@@ -1,6 +1,8 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "ui_softkbd.h"
+#include "ui_button.h"
 
 // ===============================================================================
 // 触屏软键盘（硬件无关实现）
@@ -298,6 +300,24 @@ uint8_t ui_softkbd_poll(int32_t x, int32_t y, int32_t is_pressed) {
     return code;
 }
 
+typedef struct {
+    const wchar_t *label;
+    int32_t cx;
+    int32_t cy;
+} Softkbd_Content;
+
+static void softkbd_key_content(Nano_GFX *gfx, const Ui_Button *b,
+                                int32_t base_cx, int32_t base_cy,
+                                Ui_Button_Visual vis, void *user) {
+    (void)base_cx;
+    (void)base_cy;
+    const Softkbd_Content *c = (const Softkbd_Content *)user;
+    int32_t pressed = (vis == UI_BTN_VIS_PRESSED || vis == UI_BTN_VIS_SELECTED_PRESSED);
+    int32_t cy = c->cy + (pressed ? b->press_text_dy : 0);
+    gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, (wchar_t *)c->label,
+                                c->cx, cy, UI_SOFTKBD_COLOR_LABEL, 1);
+}
+
 void ui_softkbd_draw(Nano_GFX *gfx, uint8_t is_ctrl_active) {
     if (!s_visible) return;
 
@@ -307,6 +327,17 @@ void ui_softkbd_draw(Nano_GFX *gfx, uint8_t is_ctrl_active) {
     // 先以边界色填充整个键盘区域，各键向内缩1px绘制，形成1px边界（同 main.cpp-ref）
     gfx_draw_rectangle(gfx, 0, kbd_y, SCREEN_WIDTH, UI_SOFTKBD_HEIGHT, UI_SOFTKBD_COLOR_BORDER, 1);
 
+    Ui_Button_Theme theme;
+    memset(&theme, 0, sizeof(theme));
+    for (int32_t i = 0; i < UI_BTN_VIS_COUNT; i++) {
+        theme.bg[i] = (Ui_RGB){28, 28, 32};
+        theme.fg[i] = (Ui_RGB){240, 240, 240};
+        theme.bg_alpha[i] = 1;
+        theme.border_alpha[i] = 0;
+    }
+    theme.bg[UI_BTN_VIS_PRESSED] = (Ui_RGB){96, 96, 104};
+    theme.bg[UI_BTN_VIS_SELECTED] = (Ui_RGB){16, 48, 160};
+
     for (int32_t r = 0; r < UI_SOFTKBD_ROWS; r++) {
         for (int32_t c = 0; c < UI_SOFTKBD_COLS; c++) {
             const UI_Softkbd_Key *k = &S_SOFTKBD[r][c];
@@ -314,23 +345,28 @@ void ui_softkbd_draw(Nano_GFX *gfx, uint8_t is_ctrl_active) {
             int32_t x1 = (c + 1) * SCREEN_WIDTH / UI_SOFTKBD_COLS;
             int32_t y0 = kbd_y + r * key_h;
 
-            uint8_t bg_R = 0, bg_G = 0, bg_B = 0;
-            if ((k->mod != UI_SOFTKBD_MOD_NONE && s_sticky == k->mod) ||
-                (k->base == NANO_KEY_ctrl && is_ctrl_active)) {
-                bg_R = 16; bg_G = 48; bg_B = 160;  // 粘滞修饰键/Ctrl全局激活：高亮
-            }
-            else {
-                bg_R = 28; bg_G = 28; bg_B = 32;   // 普通键底色
-            }
-            if (r == s_press_row && c == s_press_col) {
-                bg_R = 96; bg_G = 96; bg_B = 104;  // 按下瞬间高亮
-            }
+            int32_t selected = ((k->mod != UI_SOFTKBD_MOD_NONE && s_sticky == k->mod) ||
+                                (k->base == NANO_KEY_ctrl && is_ctrl_active)) ? 1 : 0;
+            int32_t pressed = (r == s_press_row && c == s_press_col) ? 1 : 0;
 
-            // 右侧与下侧各留1px给边界色
-            gfx_draw_rectangle(gfx, x0, y0, x1 - x0 - 1, key_h - 1, bg_R, bg_G, bg_B, 1);
+            Ui_Button b;
+            ui_button_init(&b, r * UI_SOFTKBD_COLS + c,
+                           x0, y0, x1 - x0 - 1, key_h - 1);
+            b.style = UI_BTN_STYLE_RECT;
+            b.flags = UI_BTN_FLAG_DRAW_BG;
+            b.font_id = GFX_FONT_ALPHA_12;
+            ui_button_set_text(&b, k->label, NULL);
 
-            gfx_font_draw_text_centered(gfx, GFX_FONT_ALPHA_12, k->label,
-                (x0 + x1) / 2, y0 + key_h / 2, UI_SOFTKBD_COLOR_LABEL, 1);
+            Softkbd_Content content;
+            content.label = k->label;
+            content.cx = (x0 + x1) / 2; // 保持旧版逐列中心（含 1px 边界时的取整）
+            content.cy = y0 + key_h / 2;
+            b.content_draw = softkbd_key_content;
+            b.content_user = &content;
+
+            Ui_Button_Visual vis = pressed ? UI_BTN_VIS_PRESSED
+                                  : (selected ? UI_BTN_VIS_SELECTED : UI_BTN_VIS_NORMAL);
+            ui_button_draw(gfx, &b, &theme, vis);
         }
     }
 }
