@@ -859,6 +859,16 @@ static void llm_rm_session_free(Global_State *gs) {
 // 推理过程 UI 回调（两套引擎共用：经 gs->llm_session 会话视图读取进度与输出）
 // ===============================================================================
 
+// 触屏“停止”热点：页眉右侧 1/4，松手沿 + 按下点坐标（与其它页面的返回热点同范式）。
+// 纯触屏设备上这是中止推理的唯一入口（实体键盘 A 键路径照常）；标签“停止 ”
+// 随页眉绘制（见 on_llm_prefilling/on_llm_decoding 的 ui_draw_header_full）。
+static int32_t llm_touch_stop_requested(Key_Event *key_event, Global_State *global_state) {
+    return (key_event->touch_edge & TOUCH_EDGE_UP)
+        && key_event->touch_down_y >= 0
+        && key_event->touch_down_y < ui_std_header_height(global_state->ui_font)
+        && key_event->touch_down_x >= UI_BACK_HOTSPOT_X0((int32_t)global_state->gfx->width);
+}
+
 int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
     Nano_Session *session = global_state->llm_session;
 
@@ -869,8 +879,9 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
         session->tps = (session->pos - 1) / (float)(global_state->timestamp - session->t_0) * 1000;
     }
 
-    // 长/短按A键中止推理
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
+    // 中止推理：长/短按 A 键（实体键盘），或触屏页眉右侧“停止”热点
+    if (((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc)
+        || llm_touch_stop_requested(key_event, global_state)) {
         wcscpy(global_state->llm_output_of_last_session, L"");
         global_state->tps_of_last_session = session->tps;
         global_state->token_num_of_last_session = session->pos;
@@ -892,10 +903,11 @@ int32_t on_llm_prefilling(Key_Event *key_event, Global_State *global_state) {
             gfx_soft_clear(global_state->gfx);
         }
 
-        // 显示界面标题
+        // 显示界面标题（右侧“停止”标签 = 触屏可点热点，见 llm_touch_stop_requested）
         wchar_t prefill_title_str[50];
         swprintf(prefill_title_str, 50, L"%ls Reading...", global_state->llm_model_name);
-        ui_draw_header(key_event, global_state, prefill_title_str, 1);
+        ui_draw_header_full(key_event, global_state, prefill_title_str, 1,
+            ui_std_header_height(global_state->ui_font), NULL, L"停止 ");
 
         // 显示已经处理的输入prompt（复用主文本框控件）
         ui_widget_textarea_set(key_event, global_state, global_state->w_textarea_main, session->output_text, -1, 1);
@@ -946,8 +958,9 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state) {
         session->tps = (session->pos - 1) / (float)(global_state->timestamp - session->t_0) * 1000;
     }
 
-    // 长/短按A键中止推理
-    if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
+    // 中止推理：长/短按 A 键（实体键盘），或触屏页眉右侧“停止”热点
+    if (((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc)
+        || llm_touch_stop_requested(key_event, global_state)) {
         if (session->output_text) {
             wcscpy(global_state->llm_output_of_last_session, session->output_text);
         }
@@ -960,10 +973,11 @@ int32_t on_llm_decoding(Key_Event *key_event, Global_State *global_state) {
 
     // 屏幕刷新节流
     if (global_state->timestamp - global_state->llm_refresh_timestamp > (1000 / global_state->llm_refresh_max_fps)) {
-        // 标题
+        // 标题（右侧“停止”标签 = 触屏可点热点，见 llm_touch_stop_requested）
         wchar_t title_str[50];
         swprintf(title_str, 50, L"%ls Decoding...", global_state->llm_model_name);
-        ui_draw_header(key_event, global_state, title_str, 1);
+        ui_draw_header_full(key_event, global_state, title_str, 1,
+            ui_std_header_height(global_state->ui_font), NULL, L"停止 ");
 
         // 底部
         wchar_t tps_str[50];

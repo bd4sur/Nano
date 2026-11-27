@@ -95,12 +95,6 @@ static uint8_t s_image_decode_ready = 0;
 
 
 
-// 玲珑仪主界面显式触屏控件是否接管触屏（1-接管；0-设置界面/其他状态）。
-// get_input_event（输入生产侧）据此抑制全屏 4x4 宫格软键映射；显式控件只在
-// 主天空界面使用，玲珑仪设置界面继续沿用十六宫格软键（遗留兜底），
-// 实体硬键在两种界面下均照常工作。
-static volatile int32_t s_linglong_touch_owned = 0;
-
 static uint32_t s_animac_prev_ui_font = 0; // 进入 STATE_ANIMAC_* 之前的 ui_font，退出时恢复
 // 控制台触屏序列属主：0=无序列 1=日志区 2=输入框 3=穿透（输入框无滚动余量：拖滚日志区+点按定位光标）
 //（DOWN 时按按下点归属，整个序列只喂给属主手势机）
@@ -114,189 +108,44 @@ static int32_t s_animac_touch_owner = 0;
 // ===============================================================================
 // UI框架：获取输入事件（按键 + 触屏）
 //
-// 事件层只提供原始输入：实体按键、触屏→4x4宫格兼容映射（见下方注释）、
-// 触屏电平/坐标（key_event->touch_*）。触屏手势的识别与语义解释归消费者
-// （通用跟踪器 ui_swipe_tracker_*，见 ui.c），本层不参与。
-// ===============================================================================
-
-// ===============================================================================
-// 触屏 → 4x4 宫格虚拟按键（兼容性适配层）
+// 事件层只提供原始输入：实体按键、显式虚拟键盘（触屏软键盘 ui_softkbd / 16 键虚拟键盘
+// ui_grid16kbd）派生的键码、触屏电平/坐标（key_event->touch_*）与 DOWN/UP 边沿
+// （key_event->touch_edge）。触屏手势的识别与语义解释归消费者（通用跟踪器
+// ui_swipe_tracker_*，见 ui.c），本层不参与。
 //
-// 历史沿革：项目早期仅支持实体键盘，全部业务逻辑基于 NANO_KEY_* 键码事件；
-// 后期主要设备只有触屏、无实体键盘。为复用既有键码处理逻辑，将触屏位置
-// 按屏幕 4x4 宫格映射为虚拟键码（布局与实体十六键一致），与实体键互为备份。
-// 该映射曾置于各平台按键HAL中（hal_key_m5esp/mp135/ncurses），旁路了干净的
-// 触屏路径，造成架构混乱；现上移至输入事件层——HAL 只提供原始触屏（hal_touch）
-// 与实体按键（hal_key），对触屏的一切解释（宫格映射、软键盘、滑动手势、
-// 各业务控件的直读）统一在本层及上层完成。
-//
-// 软硬来源区分：宫格映射/触屏软键盘派生的键码与实体键盘键码取值相同、无法按
-// 键码区分，故在事件上打标 Key_Event.is_soft_key（1-触屏派生软按键，0-实体键盘），
-// 供实体键与触屏并存的平台（NANO_HAS_HW_KEYBOARD==1，如 Linux TTY）的消费者区分；
-// 仅触屏设备（M5Core2/S3，NANO_HAS_HW_KEYBOARD==0）上该标记恒为 1。
+// 注：触屏不再派生任何“硬按键”事件（历史上的全屏 4x4 宫格隐式软键映射已整体退场，
+// 2026-11）。需要键码的触屏输入只有一个来源——显式绘制的虚拟键盘（软键盘/16 键键盘），
+// 其键码经 Key_Event.is_soft_key=1 打标，与实体键盘（is_soft_key=0）区分。
 // ===============================================================================
-#define GRID16_X0 (0)
-#define GRID16_X1 (SCREEN_WIDTH / 4 * 1)
-#define GRID16_X2 (SCREEN_WIDTH / 4 * 2)
-#define GRID16_X3 (SCREEN_WIDTH / 4 * 3)
-#define GRID16_X4 (SCREEN_WIDTH)
-#define GRID16_Y0 (0)
-#define GRID16_Y1 (SCREEN_HEIGHT / 4 * 1)
-#define GRID16_Y2 (SCREEN_HEIGHT / 4 * 2)
-#define GRID16_Y3 (SCREEN_HEIGHT / 4 * 3)
-#define GRID16_Y4 (SCREEN_HEIGHT)
-
-// 菜单控件激活状态表：这些状态下菜单控件（ui_widget_menu_event_handler）直接消费
-// 触屏流（拖动滚动/点按/顶栏退出），get_input_event 不再生成宫格软按键——否则同一次
-// 触摸既产生触点流又产生软按键事件，ESP32 上两者经共享快照/事件队列两条通道到达渲染核，
-// 时刻不同步，滞后的软按键事件会在菜单动作切换状态后泄漏给下一个状态造成误触发。
-// （词典候选菜单 STATE_DICT_QUERY 不在此列：该状态软键盘常驻可见，宫格映射已被软键盘
-//  路径禁用，且候选菜单依赖软键盘方向键导航。黄金矿工 STATE_GOLDMINER 非菜单控件，
-//  但同样直接消费触屏流——返回虚拟按钮/点击放钩，故一并抑制。同理：电子书阅读
-//  STATE_EBOOK_READING、本机自述 STATE_README、LLM 结果 STATE_LLM_AFTER_INFER 均经
-//  文本控件手势机/自有拖动直接消费触屏流，抑制后拖动不再产生宫格软按键——否则长按
-//  拖动的 -2 重复事件流会占满队列、触屏 DOWN/UP 可靠投递超时丢失，表现为拖动卡顿、
-//  按键提示灯在拖动时被宫格 -1 事件点亮。OFDM 发射/接收/环回状态页均已改为自绘状态页
-//  （ui_ofdm.c），触屏直接消费，故一并抑制宫格软按键——退出/停止改由页眉“返回”热点承担。）
-static int32_t ui_app_state_is_menu(int32_t state) {
-    switch (state) {
-        case STATE_MODEL_MENU:
-        case STATE_GAME_MENU:
-        case STATE_EBOOK:
-        case STATE_OFDM_MENU:
-        case STATE_MAIN_MENU:     // 主菜单：左侧为可拖动滚动的应用列表 + 右侧静态固定列，
-                                  // 全部为自绘触屏控件，十六宫格软按键整体退场
-                                  // （见 ui_app_main_menu_event_handler）
-        case STATE_SETTING_MENU:  // 系统设置：分组卡片列表直接消费触屏流（拖动滚动/点按行/
-                                  // 开关/分段控件/步进器）；十六宫格软按键整体退场。
-                                  // 实体键盘的数字键/方向键/Enter/Esc 照常可用。
-        case STATE_OFDM_RX:       // 寻呼机接收页：状态卡+滚动文本区直接消费触屏流
-                                  // （文本拖动滚动/页眉“返回”热点），宫格软键退场
-        case STATE_OFDM_TXING:    // 寻呼机发射页：页眉“返回”热点=停止发射，宫格软键退场
-        case STATE_OFDM_LOOPING:  // 寻呼机环路自测页：结果文本拖动滚动/页眉“返回”热点，宫格软键退场
-        case STATE_OFDM_MSG:      // 寻呼机消息收发页：接收/发射按钮、记录拖动滚动、页眉“返回”
-                                  // 全部为自绘触屏控件，宫格软键整体退场
-        case STATE_SETTING_INPUT: // 日期/时间/经纬度编辑器：三列步进器直接消费触屏流
-        case STATE_MUSICBOX_MENU:
-        case STATE_MUSICBOX_PLAYING: // 音乐盒播放页：显式触屏控件（播放/暂停/上下曲/音量/进度条/退出）
-                                    // 直接消费触屏流，十六宫格软按键整体退场
-                                    // （见 ui_musicbox.c 的 Musicbox_Ui / musicbox_handle_touch）
-        case STATE_GOLDMINER: // 黄金矿工同样直接消费触屏流（返回虚拟按钮/点击放钩），抑制宫格软按键
-        case STATE_FLIP:     // 番茄表（电子沙漏）：顶栏/仪表/控制条全部为自绘触屏控件，
-                             // 十六宫格软按键（旧版「节流/退出/画风/复位」角落格）已整体退场
-                             // （见 ui_app_flip_event_handler 的触屏命中判定）
-        case STATE_WATER:    // 水池：屏幕底部自绘控件栏+拖动旋转/拖球直接消费触屏流，抑制宫格软按键
-        case STATE_EBOOK_READING:  // 电子书阅读：触屏拖动滚动/页脚按钮/返回热点直接消费触屏流
-        case STATE_README:         // 本机自述：文本框拖动滚动+返回热点直接消费触屏流
-        case STATE_LLM_AFTER_INFER: // LLM 结果：文本框拖动滚动+返回热点直接消费触屏流
-        case STATE_ANIMAC_EXIT_CONFIRM: // 控制台退出确认模态框：触屏按钮直接消费触屏流（否则点按产生的宫格软按键会泄漏到下一状态误触发）
-        case STATE_SHUTDOWN:        // 安全关机：手机式滑动关机滑块直接消费触屏流（抓推钮拖动/松手结算）。
-                                    // 十六宫格软键整体退场：触屏不再能派生 enter 格直接关机；
-                                    // 实体键盘的长按 D 关机 / A 取消照常保留（见 STATE_SHUTDOWN 分支）
-        case STATE_SCHEME_APP_RUN:  // 灵机 App 运行态：触屏归 App（(native Touch) 直读），
-                                    // **宫格软按键整体退场——包括右上角 esc 格**。
-                                    // 这是 2026-10 的接口改造：A 键退出不再是宿主的统一交互，
-                                    // 触屏不再能派生出“返回”；App 想退出就自己画按钮并调
-                                    // (App.exit)（见 am_native_App.h）。
-                                    // 实体键盘的 ESC 仍由宿主拦下，但只置“返回请求”位
-                                    // （(App.back_requested)），不再直接销毁实例。
-            return 1;
-        default:
-            return 0;
-    }
-}
-
-// 文本输入控件宿主状态表：这些状态宿主 w_input_main（ui_widget_input_event_handler）。
-// 触屏软按键的唯一来源是显式键盘（触屏软键盘 ui_softkbd / 16键虚拟键盘 ui_grid16kbd，
-// 均在下方接管），全屏 4x4 宫格隐式映射在文本输入场景整体退场（见 ui_grid16kbd.h）。
-// 必须抑制：否则文本区拖动滚动穿越宫格会产生 -2 重复事件流（1kHz 生产 vs Core0 每帧
-// 仅消费 1 个键事件），挤占 8 深事件队列、触屏 DOWN/UP 可靠投递（1ms 超时）被饿死丢失，
-// 表现为拖动滚动失效而点按幸免（点按的 DOWN/UP 在洪泛前到达）。
-static int32_t ui_app_state_hosts_input_widget(int32_t state) {
-    switch (state) {
-        case STATE_LLM_INPUT:       // ui_llm.c
-        case STATE_ANIMAC_CONSOLE:  // ui_app.c
-        case STATE_OFDM_TX:         // ui_ofdm.c
-        case STATE_OFDM_LOOP:       // ui_ofdm.c
-        case STATE_OFDM_MSG_INPUT:  // ui_ofdm.c（消息收发的发报输入）
-            return 1;
-        default:
-            return 0;
-    }
-}
-
-static uint8_t ui_app_map_touch_to_grid16_key(int32_t x, int32_t y) {
-    if (y >= GRID16_Y0 && y < GRID16_Y1) {
-        if (x >= GRID16_X0 && x <  GRID16_X1) return NANO_KEY_1;
-        if (x >= GRID16_X1 && x <  GRID16_X2) return NANO_KEY_2;
-        if (x >= GRID16_X2 && x <  GRID16_X3) return NANO_KEY_3;
-        if (x >= GRID16_X3 && x <= GRID16_X4) return NANO_KEY_esc;
-        else return NANO_KEY_IDLE;
-    }
-    else if (y >= GRID16_Y1 && y < GRID16_Y2) {
-        if (x >= GRID16_X0 && x <  GRID16_X1) return NANO_KEY_4;
-        if (x >= GRID16_X1 && x <  GRID16_X2) return NANO_KEY_5;
-        if (x >= GRID16_X2 && x <  GRID16_X3) return NANO_KEY_6;
-        if (x >= GRID16_X3 && x <= GRID16_X4) return NANO_KEY_shift;
-        else return NANO_KEY_IDLE;
-    }
-    else if (y >= GRID16_Y2 && y < GRID16_Y3) {
-        if (x >= GRID16_X0 && x <  GRID16_X1) return NANO_KEY_7;
-        if (x >= GRID16_X1 && x <  GRID16_X2) return NANO_KEY_8;
-        if (x >= GRID16_X2 && x <  GRID16_X3) return NANO_KEY_9;
-        if (x >= GRID16_X3 && x <= GRID16_X4) return NANO_KEY_ctrl;
-        else return NANO_KEY_IDLE;
-    }
-    else if (y >= GRID16_Y3 && y <= GRID16_Y4) {
-        if (x >= GRID16_X0 && x <  GRID16_X1) return NANO_KEY_left;
-        if (x >= GRID16_X1 && x <  GRID16_X2) return NANO_KEY_0;
-        if (x >= GRID16_X2 && x <  GRID16_X3) return NANO_KEY_right;
-        if (x >= GRID16_X3 && x <= GRID16_X4) return NANO_KEY_enter;
-        else return NANO_KEY_IDLE;
-    }
-    else {
-        return NANO_KEY_IDLE;
-    }
-}
 
 // ===============================================================================
 // 输入事件处理：背景、现状与 AI 必读原则
 //
-// 【历史背景】（项目维护者原话）
-// “项目最开始只有硬按键，并设计了键码机制，几乎所有功能都是基于硬按键设计的。
-//  后来项目开始支持触屏，为了平滑过渡，增加了将触屏事件映射为按键键码的机制，
-//  也就是软按键机制，通过一个标记进行区分软按键和硬按键。目前正在对存量功能
-//  进行触屏化改造，这就造成了触屏事件与软按键的混淆，不得不引入
-//  ui_app_state_is_menu 作为临时修补方案。”
+// 【历史背景】
+// 项目最初只有实体十六键，全部业务基于 NANO_KEY_* 键码事件。支持触屏后为平滑过渡，
+// 曾由本层把触屏位置按屏幕 4x4 宫格映射为键码（“软按键”），使旧键码逻辑在纯触屏
+// 设备上照常工作；该机制已于 2026-11 整体退场（各状态改为直接消费触屏流）。
 //
-// 【现状：一次触摸的两条到达通道】
-// 一次触屏点击会同时经两条通道到达消费者，且时刻不同步：
-//   1) 触屏电平快照：key_event->touch_x / touch_y / is_touching，经跨核共享
-//      内存传递，快，逐帧可见；
-//   2) 宫格软按键事件：触屏按 4x4 宫格映射为 NANO_KEY_* 键码（或软键盘直接键码），
-//      经 Core1→Core0 事件队列传递，慢，其下降沿可能在状态已切换后才到达，
-//      从而“泄漏”到下一状态造成误触发（黄金矿工返回按钮曾踩此坑）。
-// 软硬来源经 Key_Event.is_soft_key 打标区分：1-触屏派生软按键（宫格映射/软键盘），
-// 0-实体键盘；仅触屏设备（M5Core2/S3，NANO_HAS_HW_KEYBOARD==0）上该标记恒为 1。
+// 【现状】
+// 触屏只有一条到达通道：触点电平/坐标/边沿（key_event->touch_* / touch_edge），
+// 经跨核共享快照 + 可靠边沿事件投递。键码事件则有两个来源：实体键盘
+// （is_soft_key=0）与显式虚拟键盘（is_soft_key=1，软键盘另置 is_softkbd=1）。
 //
-// 【按键/触屏事件处理原则】（触屏化改造过渡期，所有功能开发与修改必须遵守）
+// 【按键/触屏事件处理原则】（所有功能开发与修改必须遵守）
 //   1. 存量功能默认仍按硬按键语义工作。仅应响应硬按键的功能，必须显式过滤
 //      key_event->is_soft_key == 0（范式：ui_goldminer_event_handler），
-//      否则同一次触摸会被“触屏流 + 软按键”重复响应。
+//      否则触屏虚拟键盘的键码会被误当作实体键响应。
 //   2. 需要直接消费触屏的功能状态（虚拟按钮/点按/拖动等）：点按边沿认
 //      key_event->touch_edge（TOUCH_EDGE_DOWN/UP，生产端高频检测+队列可靠投递，
 //      亚帧点按不湮灭），按下点坐标取 touch_down_x/y（范式：ui_goldminer.c、
 //      ui.c 菜单控件）；拖动轨迹逐帧读 key_event->touch_x/touch_y
 //      快照。一律不得跨层直读 hal_touch，也不再需要模块自持 prev 电平做沿检测。
-//   3. 直接消费触屏流的状态，必须加入 ui_app_state_is_menu 抑制表，使本层不再
-//      为该触摸生成宫格软按键，从根上杜绝队列通道的滞后事件泄漏到下一状态。
+//   3. 触屏是唯一入口的状态（无实体键盘的机型上），必须自备显式触屏入口——
+//      至少一个“返回/退出”热点，否则该状态在纯触屏设备上是死路。
 //   4. 会引发状态切换的触屏动作，必须在松手沿（touch_edge & TOUCH_EDGE_UP）
 //      触发；按下沿只允许锁存坐标/状态。如此状态切换发生在手指抬起之后，
 //      下一状态看到的触屏电平为 0，不会将本次触摸序列误当作新的点击
 //      （范式：ui.c 菜单控件、ui_goldminer.c）。
-//   5. ui_app_state_is_menu 是过渡期的临时修补：随着各功能逐个完成触屏化改造、
-//      转为直接消费触屏流，该表随之扩充；存量功能全部完成改造后，软按键
-//      兼容机制预期整体退场。
 // ===============================================================================
 void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 触屏边沿检测状态（本函数在 Core1 以 1-2ms 轮询，静态变量天然单生产者）
@@ -310,10 +159,10 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     // 部分平台需在本调用内完成输入流解复用（ncurses：drain 鼠标事件并转发触屏HAL缓存），
     // 故须在触屏采样之前调用，保证下方的触屏样本为本帧最新
     uint8_t key = input_device_read_key();
-    uint8_t key_is_soft = 0; // 按键来源：0-实体键盘，1-触屏派生（宫格映射/软键盘）
+    uint8_t key_is_soft = 0; // 按键来源：0-实体键盘，1-显式虚拟键盘（软键盘/16键键盘）
 
     // 触屏统一采样（本函数在 Core1 每 1-2ms 轮询一次）：坐标与电平填入 key_event，
-    // 供本轮所有消费者（宫格映射、软键盘、手势解释及各业务状态）使用，上层不再直接调 touch_read
+    // 供本轮所有消费者（虚拟键盘、手势解释及各业务状态）使用，上层不再直接调 touch_read
     touch_read(&key_event->touch_x, &key_event->touch_y, &key_event->is_touching);
 
     // 触屏 UP 沿去抖（须在共享快照与边沿检测之前，保证三者语义一致）：松开认定要求连续
@@ -378,26 +227,12 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
     key_event->touch_down_x = s_input_touch_down_x;
     key_event->touch_down_y = s_input_touch_down_y;
 
-    // 触屏 → 4x4 宫格虚拟按键（兼容适配，见上方注释）：实体键优先，
-    // 无实体键输入时按触点所在宫格映射为虚拟键码。
-    // 菜单控件激活状态下抑制该映射（见 ui_app_state_is_menu 注释）：菜单直接消费
-    // 触屏流，不再生成软按键事件，杜绝事件队列通道的滞后事件泄漏到下一状态。
-    // 文本输入控件宿主状态同样整体抑制（见 ui_app_state_hosts_input_widget 注释）：
-    // 软按键只来自显式键盘，且避免拖动滚动产生的软按键洪泛挤占触屏边沿事件。
-    // 16键虚拟键盘（ui_grid16kbd）可见时亦抑制：触屏由键盘接管（见下）。
-    if (key == NANO_KEY_IDLE && key_event->is_touching && !ui_app_state_is_menu(global_state->STATE)
-        && !ui_app_state_hosts_input_widget(global_state->STATE)
-        && !ui_grid16kbd_is_visible()
-        && !ui_scheme_app_hosts_input_widget() // 灵机 App 的模态输入框显示期间同样抑制宫格
-        && !(global_state->STATE == STATE_LINGLONG && s_linglong_touch_owned)) { // 玲珑仪主界面：显式触屏控件接管触屏，不再生成宫格软键
-        key = ui_app_map_touch_to_grid16_key(key_event->touch_x, key_event->touch_y);
-        key_is_soft = (key != NANO_KEY_IDLE); // 宫格映射命中的键来自触屏
-    }
+    // 触屏本身不再派生键码（全屏 4x4 宫格隐式软键映射已整体退场，2026-11）。
+    // 触屏派生的键码只有一个来源：显式绘制在屏幕上的虚拟键盘（见下）。
     uint8_t key_is_softkbd = 0;
 
-    // 16键虚拟键盘（文本输入控件固有功能，文本输入场景下替代上方的全屏 4x4 宫格映射）：
-    // 可见时，键盘区域内的触摸由键盘接管——命中按钮产生对应键码（走下方统一的边沿/长按
-    // 机制，与旧宫格软按键等价）；键盘区域外的触屏不再产生任何宫格软按键。
+    // 16键虚拟键盘（文本输入控件固有输入法）：可见时，键盘区域内的触摸由键盘接管——
+    // 命中按钮产生对应键码（走下方统一的边沿/长按机制）；键盘区域外的触屏不产生键码。
     if (ui_grid16kbd_is_visible()) {
         uint8_t grid16_key = ui_grid16kbd_poll(key_event->touch_x, key_event->touch_y, key_event->is_touching);
         if (ui_grid16kbd_touch_claimed()) {
@@ -409,18 +244,15 @@ void get_input_event(Key_Event *key_event, Global_State *global_state) {
         }
     }
 
-    // 触屏软键盘：可见时，键盘区域内的触摸由软键盘接管——吞掉触屏4x4网格键映射，
-    // 改为注入软键盘键码（无边沿时为NANO_KEY_IDLE，仍走下方的边沿检测机制）。
-    // 同时禁用键盘区域以外的十六键网格（仅保留右上角Esc键），防止误触。
+    // 触屏软键盘：可见时，键盘区域内的触摸由软键盘接管——注入软键盘键码
+    //（无边沿时为NANO_KEY_IDLE，仍走下方的边沿检测机制）；键盘区域外的触屏不产生键码
+    //（实体键盘的按键不受影响）。
     if (ui_softkbd_is_visible()) {
         uint8_t softkbd_key = ui_softkbd_poll(key_event->touch_x, key_event->touch_y, key_event->is_touching);
         if (ui_softkbd_touch_claimed()) {
             key = softkbd_key;
             key_is_soft = (softkbd_key != NANO_KEY_IDLE); // 软键盘键码来自触屏
             key_is_softkbd = (softkbd_key != NANO_KEY_IDLE);
-        }
-        else if (key != NANO_KEY_esc) {
-            key = NANO_KEY_IDLE; // 软键盘激活时禁用十六键网格（Esc除外）
         }
     }
 
@@ -3174,7 +3006,6 @@ void ui_app_linglong_init(Key_Event *key_event, Global_State *global_state) {
     linglong_state = LL_STATE_SKY;
     linglong_paused_resume_state = 2;
     ui_linglong_ctrl_init();
-    s_linglong_touch_owned = 1; // 主天空界面：触屏归显式控件，抑制宫格软键
 }
 
 // 大气散射档位循环：屏蔽「简化模型(1)」「一次散射(2)」——两者分别被二次散射(3)与
@@ -4011,14 +3842,12 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
                     linglong_state = LL_STATE_SETTING;
                     ui_linglong_ctrl_reset();
                     ui_linglong_ctrl_settings_reset();
-                    s_linglong_touch_owned = 1; // 设置界面也用显式触屏控件
                     return;
 
                 case UI_LL_CTRL_EXIT:
-                    // 等价于十六宫格 A 键：退出玲珑仪
+                    // 显式控件的“退出”按钮：退出玲珑仪（实体硬 A 键同语义）
                     global_state->is_ctrl_enabled = 0;
                     global_state->STATE = STATE_MAIN_MENU;
-                    s_linglong_touch_owned = 0;
                     return;
 
                 case UI_LL_CTRL_REWIND:
@@ -4443,10 +4272,6 @@ void ui_app_linglong_event_handler(Key_Event *key_event, Global_State *global_st
         ui_app_linglong_set_timemachine_speed(key_event, global_state, 120);
     }
 
-    // 主天空界面与设置界面都由显式触屏控件接管，抑制旧 4x4 宫格软键；实体硬键兜底。
-    s_linglong_touch_owned = (linglong_state == LL_STATE_SKY ||
-                              linglong_state == LL_STATE_SETTING ||
-                              linglong_state == LL_STATE_SETTING_CALLBACK);
     if (linglong_state != LL_STATE_SKY) {
         // 设置界面不显示主界面控件；无论经控制面板还是硬 C 键进入，返回主界面时
         // 时间/视角面板都从隐藏状态开始，避免旧面板状态残留。
@@ -5177,8 +5002,12 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
             last_splash_timestamp = global_state->timestamp;
         }
 
-        // 按下任何键，不论长短按，进入主菜单
+        // 进入主菜单：实体键盘任意键（不论长短按），或触屏松手沿（任意位置点按）。
+        // 触屏入口必须有：全屏 4x4 宫格隐式软键退场后，纯触屏设备上没有别的键可按。
         if (key_event->key_edge < 0 && key_event->key_code != NANO_KEY_IDLE) {
+            global_state->STATE = STATE_MAIN_MENU;
+        }
+        else if (key_event->touch_edge & TOUCH_EDGE_UP) {
             global_state->STATE = STATE_MAIN_MENU;
         }
 
@@ -5870,13 +5699,24 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         ui_app_genetic_refresh(key_event, global_state, 10);
 
-        // 按A键返回主菜单
+        // 按键（实体键盘兜底）：A 返回主菜单；D 重新演化
         if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
             global_state->STATE = STATE_MAIN_MENU;
         }
-        // 按D键刷新
         else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
             ui_app_genetic_init(key_event, global_state);
+        }
+        // 触屏（全屏宫格软键退场后的显式入口，几何见 ui_genetic.h 的提示绘制）：
+        // 页眉右侧 1/4 松手=返回主菜单；屏幕底部 24px 条带松手=重新演化。
+        else if (key_event->touch_edge & TOUCH_EDGE_UP) {
+            if (key_event->touch_down_y >= 0
+                && key_event->touch_down_y < ui_std_header_height(global_state->ui_font)
+                && key_event->touch_down_x >= UI_BACK_HOTSPOT_X0((int32_t)global_state->gfx->width)) {
+                global_state->STATE = STATE_MAIN_MENU;
+            }
+            else if (key_event->touch_down_y >= (int32_t)global_state->gfx->height - 24) {
+                ui_app_genetic_init(key_event, global_state);
+            }
         }
 
         break;
@@ -5896,13 +5736,24 @@ int32_t main_event_handler(Key_Event *key_event, Global_State *global_state) {
 
         ui_app_tsp_refresh(key_event, global_state);
 
-        // 按A键返回主菜单
+        // 按键（实体键盘兜底）：A 返回主菜单；D 重新演化
         if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
             global_state->STATE = STATE_MAIN_MENU;
         }
-        // 按D键刷新
         else if (key_event->key_edge == -1 && key_event->key_code == NANO_KEY_enter) {
             ui_app_tsp_init(key_event, global_state);
+        }
+        // 触屏（全屏宫格软键退场后的显式入口，几何见 ui_tsp.h 的提示绘制）：
+        // 页眉右侧 1/4 松手=返回主菜单；底部距离曲线条带松手=重新演化。
+        else if (key_event->touch_edge & TOUCH_EDGE_UP) {
+            if (key_event->touch_down_y >= 0
+                && key_event->touch_down_y < ui_std_header_height(global_state->ui_font)
+                && key_event->touch_down_x >= UI_BACK_HOTSPOT_X0((int32_t)global_state->gfx->width)) {
+                global_state->STATE = STATE_MAIN_MENU;
+            }
+            else if (key_event->touch_down_y >= (int32_t)global_state->gfx->height - 24) {
+                ui_app_tsp_init(key_event, global_state);
+            }
         }
 
         break;

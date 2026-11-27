@@ -322,8 +322,16 @@ int32_t ui_ripple_init(Key_Event *key_event, Global_State *global_state) {
 }
 
 int32_t ui_ripple_event_handler(Key_Event *key_event, Global_State *global_state) {
-    // 按A键(ESC)返回小游戏菜单
+    // 返回小游戏菜单：实体键盘 A(ESC)，或触屏页眉右侧“返回”热点
+    //（松手沿 + 按下点坐标，与其它页面返回热点同范式）
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_esc) {
+        global_state->STATE = STATE_GAME_MENU;
+        return 0;
+    }
+    if ((key_event->touch_edge & TOUCH_EDGE_UP)
+        && key_event->touch_down_y >= 0
+        && key_event->touch_down_y < ui_std_header_height(global_state->ui_font)
+        && key_event->touch_down_x >= UI_BACK_HOTSPOT_X0((int32_t)global_state->gfx->width)) {
         global_state->STATE = STATE_GAME_MENU;
         return 0;
     }
@@ -333,14 +341,14 @@ int32_t ui_ripple_event_handler(Key_Event *key_event, Global_State *global_state
 int32_t ui_ripple_render_frame(Key_Event *key_event, Global_State *global_state) {
     Nano_GFX *gfx = global_state->gfx;
 
-    // 图像加载失败：黑底红字提示（只画一次），等待 A 键返回
+    // 图像加载失败：黑底红字提示（只画一次），等待页眉“返回”热点/实体键盘 A 键
     if (s_wr.load_failed) {
         if (!s_wr.error_drawn) {
             gfx_soft_clear(gfx);
             gfx_font_draw_text(gfx, GFX_FONT_ALPHA_16, L"水波", 6, 2, 255, 255, 255, 1);
             gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"读取 wallpaper/wp.png 失败", 6, 100, 255, 80, 80, 1);
             gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"请将图片放入SD卡根目录", 6, 120, 180, 180, 180, 1);
-            gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"A返回", 6, 220, 180, 180, 180, 1);
+            gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, L"点右上角返回", 6, 220, 180, 180, 180, 1);
             gfx_refresh(gfx);
             s_wr.error_drawn = 1;
         }
@@ -358,6 +366,16 @@ int32_t ui_ripple_render_frame(Key_Event *key_event, Global_State *global_state)
 
     // ---- 波场步进 + 渲染一帧 ----
     wr_render(gfx);
+    // 页眉右侧“返回”标签：叠加在波纹画面之上每帧重绘（热点命中判定见 ui_ripple_event_handler）。
+    // 壁纸亮度不可控，标签先铺一层半透明黑底（mode>=4 即 alpha）保证可读。
+    {
+        wchar_t *back_text = L"返回 ";
+        int32_t back_w = gfx_font_measure_text(GFX_FONT_ALPHA_12, back_text);
+        gfx_draw_rectangle(gfx, (uint32_t)((int32_t)gfx->width - back_w - 4), 0,
+            (uint32_t)(back_w + 4), 15, 0, 0, 0, 110);
+        gfx_font_draw_text(gfx, GFX_FONT_ALPHA_12, back_text,
+            (int32_t)gfx->width - back_w, 1, 255, 255, 255, 1);
+    }
     gfx_refresh(gfx);
     return 0;
 }

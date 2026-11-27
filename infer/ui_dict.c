@@ -4,6 +4,7 @@
 
 #include "ui_dict.h"
 #include "ui_color.h"
+#include "ui_grid16kbd.h"   // 页脚几何与 ui_draw_footer_softkeys 一致（键盘让位高度）
 
 // ===============================================================================
 // 配置
@@ -619,7 +620,8 @@ static void ui_dict_detail_open(Key_Event *key_event, Global_State *gs) {
     wcscat(s_detail_buf, L"\n\n");
     wcscat(s_detail_buf, w_def);
 
-    ui_draw_header(key_event, gs, L"电子词典", 1);
+    ui_draw_header_full(key_event, gs, L"电子词典", 1, ui_std_header_height(gs->ui_font),
+        NULL, L"返回 ");
     ui_draw_footer_softkeys(key_event, gs, L"上一个", L"", L"下一个", L"返回");
     ui_widget_textarea_set(key_event, gs, gs->w_textarea_main, s_detail_buf, 0, 1);
     ui_widget_textarea_draw(key_event, gs, gs->w_textarea_main);
@@ -635,6 +637,52 @@ static int32_t ui_dict_detail_back(Key_Event *key_event, Global_State *gs, int32
 
 int32_t ui_dict_detail_event(Key_Event *key_event, Global_State *gs,
     int32_t query_state, int32_t detail_state) {
+    // ---- 触屏（全屏 4x4 宫格隐式软键退场后的显式入口；本状态软键盘已收起）----
+    // 页眉右侧“返回”热点；页脚 4 格提示已按钮化（上 1 个/下一个/返回，与
+    // ui_draw_footer_softkeys 的 4 等分对齐）；释义区拖动滚动复用文本控件手势机。
+    {
+        Widget_Textarea_State *ts = gs->w_textarea_main;
+        if (ui_widget_textarea_touch_handler(key_event, gs, ts) == 1) {
+            ts->is_modified = 0;
+            ui_widget_textarea_draw(key_event, gs, ts);
+            ts->is_modified = 1;
+        }
+        if (key_event->touch_edge & TOUCH_EDGE_UP) {
+            const int32_t width = (int32_t)gs->gfx->width;
+            int32_t tx = key_event->touch_down_x;
+            int32_t ty = key_event->touch_down_y;
+            if (tx >= width) tx = width - 1;
+            // 页眉右侧“返回”
+            if (ty >= 0 && ty < ui_std_header_height(gs->ui_font)
+                && tx >= UI_BACK_HOTSPOT_X0(width)) {
+                return ui_dict_detail_back(key_event, gs, query_state);
+            }
+            // 页脚（几何与 ui_draw_footer_softkeys 完全一致：键盘让位后的底部一行）
+            int32_t band_h = gfx_font_line_height(gs->ui_font) + 1;
+            int32_t footer_bottom = (int32_t)gs->gfx->height - ui_softkbd_height() - ui_grid16kbd_height();
+            int32_t footer_top = footer_bottom - band_h;
+            if (ty >= footer_top && ty < footer_bottom) {
+                int32_t quarter = tx / (width / 4);
+                if (quarter == 0) {              // 上一个词条（端点钳制）
+                    if (s_detail_match_pos > 0) {
+                        s_detail_match_pos--;
+                        ui_dict_detail_open(key_event, gs);
+                    }
+                }
+                else if (quarter == 2) {         // 下一个词条（端点钳制）
+                    if (s_detail_match_pos < s_match_num - 1) {
+                        s_detail_match_pos++;
+                        ui_dict_detail_open(key_event, gs);
+                    }
+                }
+                else if (quarter == 3) {         // 返回查询界面
+                    return ui_dict_detail_back(key_event, gs, query_state);
+                }
+                return detail_state;
+            }
+        }
+    }
+
     // 长+短按*键：候选表内上一个词条（端点钳制）
     if ((key_event->key_edge == -1 || key_event->key_edge == -2) && key_event->key_code == NANO_KEY_left) {
         if (s_detail_match_pos > 0) {

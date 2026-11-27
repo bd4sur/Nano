@@ -1036,6 +1036,19 @@ void ui_app_genetic_refresh(Key_Event *key_event, Global_State *global_state, in
     gfx_draw_rectangle(global_state->gfx, 0, 0, global_state->gfx->width, 12, 39, 39, 39, 3);
     gfx_draw_textline(global_state->gfx, text, 0, 0, 255, 255, 255, 1);
 
+    // 触屏入口提示（全屏 4x4 宫格隐式软键退场后，纯触屏设备只能靠这两个热点）：
+    // 页眉右侧“返回”（松手沿：页眉右 1/4）、底部 24px 条带“点此重新演化”。
+    // 命中判定在 ui_app.c 的 STATE_GENETIC 分支，几何须与之一致。
+    {
+        wchar_t *back_text = L"返回 ";
+        int32_t back_w = gfx_font_measure_text(GFX_FONT_ALPHA_12, back_text);
+        gfx_font_draw_text(global_state->gfx, GFX_FONT_ALPHA_12, back_text,
+            (int32_t)global_state->gfx->width - back_w, 1, 255, 255, 255, 1);
+        gfx_font_draw_text_centered(global_state->gfx, GFX_FONT_ALPHA_12, L"点此重新演化",
+            (int32_t)global_state->gfx->width / 2, (int32_t)global_state->gfx->height - 12,
+            255, 255, 255, 1);
+    }
+
     gfx_refresh(global_state->gfx);
     s_g_generation += step;
 }

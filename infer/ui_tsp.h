@@ -420,6 +420,20 @@ void ui_app_tsp_refresh(Key_Event *key_event, Global_State *global_state) {
         gfx_draw_textline_mini(global_state->gfx, dist_text, 4, TSP_CURVE_TOP + 2, 255, 255, 255, 1);
     }
 
+    // 触屏入口提示（全屏 4x4 宫格隐式软键退场后，纯触屏设备只能靠这两个热点）：
+    // 页眉右侧“返回”（松手沿：页眉右 1/4）、底部距离曲线条带“重跑”。
+    // 命中判定在 ui_app.c 的 STATE_GENETIC_TSP 分支，几何须与之一致。
+    {
+        wchar_t *back_text = L"返回 ";
+        int32_t back_w = gfx_font_measure_text(GFX_FONT_ALPHA_12, back_text);
+        gfx_font_draw_text(global_state->gfx, GFX_FONT_ALPHA_12, back_text,
+            TSP_SCREEN_W - back_w, 1, 255, 255, 255, 1);
+        wchar_t *rerun_text = L"重跑 ";
+        int32_t rerun_w = gfx_font_measure_text(GFX_FONT_ALPHA_12, rerun_text);
+        gfx_font_draw_text(global_state->gfx, GFX_FONT_ALPHA_12, rerun_text,
+            TSP_SCREEN_W - rerun_w, TSP_CURVE_TOP + 2, 255, 255, 255, 1);
+    }
+
     gfx_refresh(global_state->gfx);
     s_tsp_generation += 1;
 }
