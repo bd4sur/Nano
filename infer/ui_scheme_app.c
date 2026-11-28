@@ -33,6 +33,7 @@
 #include "am_native_Audio.h"  // 音频采集 + 频谱分析（(native Audio)，见 app/spectrogram.scm）
 #include "am_native_Rec.h"    // 录音机：采集 + Aqua MP3 320kbps CBR 编码 + 落盘（(native Rec)，见 app/recorder.scm）
 #include "am_native_Net.h"    // 网络访问：HTTP(S) 请求 + 逐行流式读取（(native Net)，见 app/remotechat.scm）
+#include "am_native_Bird.h"   // 鸟鸣合成器（(native Bird)，见 app/bird.scm）
 
 // ===============================================================================
 // 运行时参数
@@ -599,7 +600,7 @@ int32_t ui_scheme_app_list_event_handler(Key_Event *key_event, Global_State *glo
 #define MB_ILCACHE_DIR            "data/ilcache"
 #define MB_ILCACHE_MAGIC          "AMILCH01"   // 8 字节
 #define MB_ILCACHE_FORMAT         1u
-#define MB_ILCACHE_ABI            3u   // 手工维护：同步 vendor / 改本地库注册表后 +1
+#define MB_ILCACHE_ABI            4u   // 手工维护：同步 vendor / 改本地库注册表后 +1（4：新增 (native Bird)）
                                        // 2 = (native Touch) 新增 wheel_available/wheel_enable/wheel
                                        // 3 = (native Net) 新增网络本地库（post/get/line/state/...）
 #define MB_ILCACHE_HDR            32u  // 头长度（之后紧接来源清单，再之后是 payload）
@@ -1303,6 +1304,10 @@ static int32_t app_instance_cold_start(Global_State *global_state) {
     // 各平台实现由 hal_net_<平台>.c 决定（WASM=浏览器 fetch；Linux=后台线程+明文 HTTP；
     // 其余平台打桩恒失败）。无网络能力的平台上 App 按「网络不可用」降级。
     am_runtime_register_native_lib(s_app->rt, &am_native_Net_lib);
+    // Bird：**鸟鸣合成器**（Mindlin–Laje 鸣管振荡器 + 鸟种/乐句调度 + 扬声器喂入，
+    // 见 am_native_Bird.h）。合成内核全在 C 侧（解释器里跑不动每采样几十步的 ODE），
+    // Scheme 只拿基频/包络/电平这些标量画星图；无音频设备时自动转"静音走带"。
+    am_runtime_register_native_lib(s_app->rt, &am_native_Bird_lib);
 
     // 清缓冲后加载并启动 Scheme 进程（首帧由 App 自行绘制接管）。
     // **这里不推黑屏**：app_load_source() 的第一件事就是画「正在启动 <App>…」并推屏
